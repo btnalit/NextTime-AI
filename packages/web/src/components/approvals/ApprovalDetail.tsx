@@ -9,10 +9,12 @@ import {
 import { auditHref } from '../../lib/audit.js';
 import { credentialReviewCount, credentialReviewPaths } from '../../lib/credential-review.js';
 import {
+  actionKindLabel,
+  actionKindRaw,
+  actionKindTagText,
   formatDateTime,
   formatRelative,
-  humanizeKind,
-  prettyJson,
+  prettyJsonVisible,
   redactSensitive,
 } from '../../lib/format.js';
 import type { ActionRequestRow } from '../../lib/governance.js';
@@ -222,7 +224,12 @@ export function ApprovalDetail({
   // as "the whole gate", never as the gate's raw id posing as the action's target.
   const scopeLabel = resourceScopeLabel(row, gatekeeperNames);
   const actionItems: KeyValueItem[] = [
-    { key: 'kind', label: t('能力', 'Capability'), value: row.actionKindTag, mono: true },
+    {
+      key: 'kind',
+      label: t('能力', 'Capability'),
+      value: actionKindRaw(row.actionKindTag),
+      mono: true,
+    },
     {
       key: 'target',
       label: t('目标', 'Target'),
@@ -326,8 +333,8 @@ export function ApprovalDetail({
           <RefChip kind="actionRequest" id={row.id} name={t('本请求', 'This request')} size="s" />
         </div>
         <div className="row-wrap" style={{ justifyContent: 'space-between' }}>
-          <h2 className="approval-detail-title">
-            {humanizeKind(row.actionKindTag)}
+          <h2 className="approval-detail-title" title={actionKindRaw(row.actionKindTag)}>
+            {actionKindLabel(row.actionKindTag)}
             {scopeLabel ? <span className="mono text-2"> · {scopeLabel}</span> : null}
           </h2>
           {canOpen(provenance) !== false ? (
@@ -386,7 +393,7 @@ export function ApprovalDetail({
         <section className="stack-s">
           <span className="section-title">{t('参数', 'Parameters')}</span>
           <pre className="code-block params-block" data-testid="approval-params">
-            {prettyJson(redactSensitive(row.params))}
+            {prettyJsonVisible(redactSensitive(row.params))}
           </pre>
         </section>
       ) : null}
@@ -492,8 +499,8 @@ export function ApprovalDetail({
                   />
                   <span>
                     {t(
-                      `总是允许门「${gateName}」上的 ${row.actionKindTag}：今后任何人发起都自动批准，不只是这次请求。`,
-                      `Always allow ${row.actionKindTag} on gate “${gateName}”: from now on it is auto-approved for every requester, not only this request.`,
+                      `总是允许门「${gateName}」上的 ${actionKindTagText(row.actionKindTag)}：今后任何人发起都自动批准，不只是这次请求。`,
+                      `Always allow ${actionKindTagText(row.actionKindTag)} on gate “${gateName}”: from now on it is auto-approved for every requester, not only this request.`,
                     )}
                     {coveredVersion !== null
                       ? t(
@@ -562,17 +569,17 @@ export function ApprovalDetail({
         title={
           pending?.kind === 'reject'
             ? t(
-                `拒绝 ${humanizeKind(row.actionKindTag)}`,
-                `Reject: ${humanizeKind(row.actionKindTag)}`,
+                `拒绝 ${actionKindLabel(row.actionKindTag)}`,
+                `Reject: ${actionKindLabel(row.actionKindTag)}`,
               )
             : pending?.alwaysAllow
               ? t(
-                  `批准并总是允许 ${humanizeKind(row.actionKindTag)}`,
-                  `Approve and always allow: ${humanizeKind(row.actionKindTag)}`,
+                  `批准并总是允许 ${actionKindLabel(row.actionKindTag)}`,
+                  `Approve and always allow: ${actionKindLabel(row.actionKindTag)}`,
                 )
               : t(
-                  `批准高影响动作 ${humanizeKind(row.actionKindTag)}`,
-                  `Approve a high-impact action: ${humanizeKind(row.actionKindTag)}`,
+                  `批准高影响动作 ${actionKindLabel(row.actionKindTag)}`,
+                  `Approve a high-impact action: ${actionKindLabel(row.actionKindTag)}`,
                 )
         }
         description={
@@ -583,15 +590,19 @@ export function ApprovalDetail({
               )
             : pending?.alwaysAllow
               ? t(
-                  `批准后门立即执行这次请求，并写入一条自动批准规则：今后门「${gateName}」上的 ${row.actionKindTag} 不论谁发起都直接执行，不再进入审批队列。规则只对这次请求所依据的定义${coveredVersion !== null ? `（v${coveredVersion}）` : ''}有效，以后发布新版本会重新走审批；其他门上的同名动作不受影响。规则可在「模型与配额 → 策略」中关闭。`,
-                  `The Gatekeeper executes this request now, and an auto-approval rule is written: from now on ${row.actionKindTag} on gate “${gateName}” runs without approval for every requester. The rule covers only the definition this request was made under${coveredVersion !== null ? ` (v${coveredVersion})` : ''} — a later version goes back through approval — and the same name on other gates is not affected. Turn the rule off under Models & Quotas → Policies.`,
+                  `批准后门立即执行这次请求，并写入一条自动批准规则：今后门「${gateName}」上的 ${actionKindTagText(row.actionKindTag)} 不论谁发起都直接执行，不再进入审批队列。规则只对这次请求所依据的定义${coveredVersion !== null ? `（v${coveredVersion}）` : ''}有效，以后发布新版本会重新走审批；其他门上的同名动作不受影响。规则可在「模型与配额 → 策略」中关闭。`,
+                  `The Gatekeeper executes this request now, and an auto-approval rule is written: from now on ${actionKindTagText(row.actionKindTag)} on gate “${gateName}” runs without approval for every requester. The rule covers only the definition this request was made under${coveredVersion !== null ? ` (v${coveredVersion})` : ''} — a later version goes back through approval — and the same name on other gates is not affected. Turn the rule off under Models & Quotas → Policies.`,
                 )
               : t(
                   '批准后门立即执行该动作，无法撤回；理由写入审计。',
                   'The Gatekeeper executes this immediately after approval; it cannot be recalled. The reason is audited.',
                 )
         }
-        target={scopeLabel ?? nameOf(gatekeeperNames, row.gatekeeperId) ?? row.actionKindTag}
+        target={
+          scopeLabel ??
+          nameOf(gatekeeperNames, row.gatekeeperId) ??
+          actionKindTagText(row.actionKindTag)
+        }
         impact={
           pending ? confirmImpact(pending, row, principalNames, gatekeeperNames, t) : undefined
         }
@@ -635,7 +646,9 @@ export function ApprovalDetail({
                       value: (
                         <span data-testid="approval-confirm-always-allow-scope">
                           {t(`门「${gateName}」上的 `, `On gate “${gateName}”, `)}
-                          <code>{row.actionKindTag}</code>{' '}
+                          <code title={actionKindRaw(row.actionKindTag)}>
+                            {actionKindTagText(row.actionKindTag)}
+                          </code>{' '}
                           {coveredVersion !== null
                             ? t(
                                 `今后对所有发起人自动批准（只对 v${coveredVersion}）`,
@@ -673,7 +686,7 @@ function confirmImpact(
   t: Translate,
 ): readonly string[] {
   const lines: string[] = [
-    `${t('动作', 'Action')}: ${row.actionKindTag}`,
+    `${t('动作', 'Action')}: ${actionKindTagText(row.actionKindTag)}`,
     `${t('目标资源', 'Target')}: ${
       resourceScopeLabel(row, gatekeeperNames) ??
       (row.resourceScope ? t('整个门', 'the whole gate') : t('未限定', 'no resource scope'))

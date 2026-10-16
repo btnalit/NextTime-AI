@@ -2,6 +2,7 @@ import { BLAST_RADIUS_VALUES, type BlastRadius, type PolicyWire } from '@nexttim
 import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { isVersionChangedError } from '../../lib/errors.js';
+import { actionKindTagText } from '../../lib/format.js';
 import { type OperationChoice, useGateOperations } from '../../lib/gate-operations.js';
 import { type GatekeeperListRow, operationKey } from '../../lib/governance.js';
 import { type Translate, useT } from '../../lib/i18n.js';
@@ -403,7 +404,7 @@ export function PolicyEditSheet({
                 id="pe-action-kind"
                 options={choices.map((choice) => ({
                   value: choice.name,
-                  label: choice.name,
+                  label: actionKindTagText(choice.name),
                   secondary: operationSecondary(choice, workspaceWide, t) || undefined,
                 }))}
                 value={actionKindTag}
@@ -451,12 +452,12 @@ export function PolicyEditSheet({
               <span>
                 {workspaceWide
                   ? t(
-                      `「${trimmedKind}」不是任何门上已发布的 Operation 名，不能保存。请从列表里选，或先发布同名 Operation。`,
-                      `“${trimmedKind}” is not a published Operation name on any gate, so it cannot be saved. Pick one from the list, or publish an Operation with that name first.`,
+                      `「${actionKindTagText(trimmedKind)}」不是任何门上已发布的 Operation 名，不能保存。请从列表里选，或先发布同名 Operation。`,
+                      `“${actionKindTagText(trimmedKind)}” is not a published Operation name on any gate, so it cannot be saved. Pick one from the list, or publish an Operation with that name first.`,
                     )
                   : t(
-                      `「${trimmedKind}」不是门「${gateName}」上已发布的 Operation 名，不能保存。请从列表里选，或先在这个门上发布它。`,
-                      `“${trimmedKind}” is not a published Operation name on gate “${gateName}”, so it cannot be saved. Pick one from the list, or publish it on this gate first.`,
+                      `「${actionKindTagText(trimmedKind)}」不是门「${gateName}」上已发布的 Operation 名，不能保存。请从列表里选，或先在这个门上发布它。`,
+                      `“${actionKindTagText(trimmedKind)}” is not a published Operation name on gate “${gateName}”, so it cannot be saved. Pick one from the list, or publish it on this gate first.`,
                     )}
               </span>
               {caseInsensitiveMatch ? (
@@ -566,8 +567,8 @@ export function PolicyEditSheet({
                 : autoApproveBlockedByVersion
                   ? isEdit
                     ? t(
-                        `门「${gateName}」上已经没有发布的「${trimmedKind}」，不能开启自动批准。`,
-                        `Gate “${gateName}” no longer publishes “${trimmedKind}”, so auto-approval cannot be turned on.`,
+                        `门「${gateName}」上已经没有发布的「${actionKindTagText(trimmedKind)}」，不能开启自动批准。`,
+                        `Gate “${gateName}” no longer publishes “${actionKindTagText(trimmedKind)}”, so auto-approval cannot be turned on.`,
                       )
                     : t(
                         '读不到这个 Operation 已发布的版本，暂时不能开启自动批准。请重试加载列表后从列表里选。',

@@ -43,12 +43,15 @@ import {
   getOperation,
   getOrCreateGatekeeperServicePrincipal,
   getPublishedOperation,
+  hasDeprecatedOperation,
   mcpAutoApproveAllowed,
   operationRecordDigest,
+  operationVisibleTo,
 } from '../../governance/gatekeepers/index.js';
 import type { GatekeeperRecord, OperationRecord } from '../../governance/gatekeepers/index.js';
 import { GATEKEEPER_RESOURCE_SCOPE_KEY } from '../../governance/policy/index.js';
 import {
+  quotedName,
   redactSuspectedSecrets,
   reviewObserveParams,
   scrubSecretLiteralsIn,
@@ -196,6 +199,30 @@ export class ActionRequestDeniedError extends ForbiddenError {
     super(`ActionRequest ${actionRequestId} was denied by policy`);
     this.name = 'ActionRequestDeniedError';
     this.actionRequestId = actionRequestId;
+  }
+}
+
+/** Legacy 232: `request_action` naming nothing this gate could run — no Operation by that name on
+ *  the gate (none, or only discarded drafts), or only a `deprecated` one. Such a request could never
+ *  execute (the executor refuses a request made against no definition, legacy K / review of #538),
+ *  so it is refused at the boundary instead of becoming a `pending_approval` row whose action name
+ *  — any caller-chosen string — lands in approvers' queues and the audit log. 404, its own code.
+ *  The message and `details` never echo the requested name: the caller already has it, and an error
+ *  body is no place for a caller-chosen string either. */
+export class UnknownOperationError extends Error {
+  readonly code = 'unknown_operation' as const;
+  readonly details: {
+    readonly gatekeeperId: string;
+    readonly operationStatus: 'none' | 'deprecated';
+  };
+  constructor(gatekeeperId: string, operationStatus: 'none' | 'deprecated') {
+    super(
+      operationStatus === 'deprecated'
+        ? `request_action: the requested Operation on gatekeeper ${gatekeeperId} is deprecated — nothing was requested. Call list_allowed_operations for what this gate runs now.`
+        : `request_action: gatekeeper ${gatekeeperId} has no Operation by the requested name — nothing was requested. Call list_allowed_operations for what this gate runs.`,
+    );
+    this.name = 'UnknownOperationError';
+    this.details = { gatekeeperId, operationStatus };
   }
 }
 
@@ -766,7 +793,7 @@ async function recordGateExecuteObservationSafely(
   } catch (err) {
     console.error(
       `[kernel] recordWorkerGateObservation (execute) failed (workerRunId=${workerRun.id}, ` +
-        `gatekeeperId=${args.gatekeeper.gatekeeperId}, operation=${args.operationName}): ` +
+        `gatekeeperId=${args.gatekeeper.gatekeeperId}, operation=${quotedName(args.operationName)}): ` +
         `${err instanceof Error ? err.message : String(err)}`,
     );
   }
@@ -978,7 +1005,7 @@ async function runGovernedRequest(
           if (operationDigest === null || operationDigest === NO_OPERATION_DEFINITION) {
             simulate = {
               unavailable: true,
-              reason: `this request names no definition of "${args.operationName}" (it is not published and has no draft) — nothing to simulate against`,
+              reason: `this request names no definition of ${quotedName(args.operationName)} (it is not published and has no draft) — nothing to simulate against`,
             };
           } else {
             const gate = await resolveGateTarget(client, workspaceId, args.gatekeeper);
@@ -1306,16 +1333,11 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
   // channel; execute-class and unclassified (I17) calls still hit `assertHumanGatekeeperAccess`
   // before anything else can reach the Gatekeeper.
   let role: Role | undefined;
-  if (channel === 'human') {
-    role = await resolvePrincipalRole(client, workspaceId, onBehalfOf);
-    assertRoleMayReachGatekeeper(role, 'request_action');
-  } else {
-    // R-35: a Handle caller is held to the role of the member it acts for, read now.
-    assertRoleMayReachGatekeeper(
-      await resolvePrincipalRole(client, workspaceId, onBehalfOf),
-      'request_action',
-    );
-  }
+  // R-35: a Handle caller is held to the role of the member it acts for, read now. Legacy 232
+  // (review #493 M1): the same role decides which Operation drafts the call may name.
+  const onBehalfOfRole = await resolvePrincipalRole(client, workspaceId, onBehalfOf);
+  if (channel === 'human') role = onBehalfOfRole;
+  assertRoleMayReachGatekeeper(onBehalfOfRole, 'request_action');
 
   const requesterScope = await resolveRequesterScope(
     client,
@@ -1442,16 +1464,41 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
   );
 
   if (!published) {
-    // I17: draft/unknown Operation → unclassified, always require_approval, never auto-executed.
-    // Legacy K: the definition it is requested against is its current draft, when there is one —
-    // the gate then runs it after approval only if it still runs that definition. With no draft
-    // the workspace holds no definition: the row says so (`NO_OPERATION_DEFINITION`), and the
-    // executor refuses it, even if the Operation is published by then — that definition was never
-    // what this request was approved against.
-    const draft = await getOperation(client, workspaceId, gatekeeperId, operationName);
+    // I17: a draft Operation → unclassified, always require_approval, never auto-executed.
+    // Legacy K: the definition it is requested against is its current draft — the gate then runs
+    // it after approval only if it still runs that definition.
+    const current = await getOperation(client, workspaceId, gatekeeperId, operationName);
+    // Legacy 232: with no draft the workspace holds no definition, and a request against none can
+    // never execute (`approvedOperationDigest`, action-executor.ts) — refused here rather than
+    // queued for approval under a caller-chosen name. Only for a gate inside the caller's governed
+    // scope: outside it the request is still recorded as `denied` below (I7, P2-1), so a 404 here
+    // cannot tell a caller which names exist on a gate it may not act on.
+    // Review #493 M1: only a draft the caller may see counts (D-26 — its proposer, or the owner /
+    // a builder; for a Handle, the member it acts for). Anyone else's draft answers exactly what no
+    // draft would — 404 `none`, or `deprecated` when the identity was once published — so the 404
+    // cannot tell an agent which names other people have drafted (I17).
+    const draft =
+      current?.status === 'draft' &&
+      operationVisibleTo({ principalId: onBehalfOf, role: onBehalfOfRole }, current)
+        ? current
+        : null;
+    if (
+      draft === null &&
+      (governedScope.resources[GATEKEEPER_RESOURCE_SCOPE_KEY] ?? []).includes(gatekeeperId)
+    ) {
+      // Review #493 on #593 (P3): one query, whatever `current` is — an unseen draft, a
+      // deprecated identity and no row at all take the same path, so their timing does not tell
+      // them apart either.
+      const deprecated = await hasDeprecatedOperation(
+        client,
+        workspaceId,
+        gatekeeperId,
+        operationName,
+      );
+      throw new UnknownOperationError(gatekeeperId, deprecated ? 'deprecated' : 'none');
+    }
     return runGovernedRequest(client, workspaceId, {
-      operationDigest:
-        draft?.status === 'draft' ? operationRecordDigest(draft) : NO_OPERATION_DEFINITION,
+      operationDigest: draft !== null ? operationRecordDigest(draft) : NO_OPERATION_DEFINITION,
       gatekeeper,
       operationName,
       operationParams: resolvedParams,
@@ -1517,7 +1564,7 @@ function observeRefusalError(
       return new OperationNotFoundError(gatekeeperId, operationName);
     case 'not_observe_class':
       return new ForbiddenError(
-        `observe_operation: "${operationName}" on gatekeeper ${gatekeeperId} is ${refusal.mode}-class — delegate it through invoke_worker (a Worker requests it via request_action)`,
+        `observe_operation: ${quotedName(operationName)} on gatekeeper ${gatekeeperId} is ${refusal.mode}-class — delegate it through invoke_worker (a Worker requests it via request_action)`,
       );
     case 'excluded_by_policy':
       return new ForbiddenError(
@@ -1536,7 +1583,7 @@ function operationDisabledError(
   connector: string | undefined,
 ): ForbiddenError {
   return new ForbiddenError(
-    `operation_disabled: "${operationName}" on gatekeeper ${gatekeeperId} is disabled by the platform for connector "${connector}"`,
+    `operation_disabled: ${quotedName(operationName)} on gatekeeper ${gatekeeperId} is disabled by the platform for connector "${connector}"`,
   );
 }
 

@@ -57,6 +57,24 @@ describe('buildTaskUpdateContent', () => {
 });
 
 describe('buildActionPendingContent', () => {
+  it('legacy 232: a long or hidden-character action kind is bounded and shown in the line; the tag stays raw', () => {
+    const actionKind = `wipe\u202E.${'x'.repeat(300)}`;
+    const content = buildActionPendingContent({
+      actionRequestId: 'ar-9',
+      gatekeeperId: 'gk-1',
+      actionKind,
+      resourceScope: 'host\n-1',
+      blastRadius: 'high',
+      awaitDecision: false,
+      isHolder: true,
+    });
+    expect(content.text).not.toMatch(/[\u202E\n]/);
+    expect(content.text).toContain('wipe\\u{202E}');
+    expect(content.text).toContain('host\\u{A}-1');
+    expect([...content.text].length).toBeLessThan(200);
+    expect(content.actionKindTag).toBe(actionKind);
+  });
+
   it('isHolder=true reads as an action item ("Approval needed")', () => {
     const content = buildActionPendingContent({
       actionRequestId: 'ar-1',

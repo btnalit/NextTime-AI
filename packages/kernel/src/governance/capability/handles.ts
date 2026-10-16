@@ -15,6 +15,7 @@ import {
 import { SignJWT } from 'jose';
 import type { CryptoKey } from 'jose';
 import type { PoolClient } from 'pg';
+import { quotedName } from '../redaction/index.js';
 import { HANDLE_SIGNING_ALG } from './keys.js';
 import { roleMayUseCapability } from './roles.js';
 
@@ -83,7 +84,7 @@ export function assertValidScope(scope: CapabilityScope): void {
   for (const name of scope.capabilities) {
     const capability = getCapability(name);
     if (!capability) {
-      throw new ScopeValidationError(`unknown capability "${name}" in scope`);
+      throw new ScopeValidationError(`unknown capability ${quotedName(name)} in scope`);
     }
     if (capability.channel !== 'handle') {
       throw new ScopeValidationError(

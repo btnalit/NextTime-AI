@@ -12,7 +12,11 @@ import {
   publishOperation,
   updateOperationDescription,
 } from '../../governance/gatekeepers/index.js';
-import { countSuspectedSecrets, credentialReviewAudit } from '../../governance/redaction/index.js';
+import {
+  boundedEcho,
+  countSuspectedSecrets,
+  credentialReviewAudit,
+} from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { currentPrincipalId } from '../chat/index.js';
@@ -87,7 +91,9 @@ export const proposeOperationHandler: CapabilityHandler = async (
   const activity = await startActivity(client, workspaceId, {
     kind: 'operation_proposal',
     principalId,
-    metadata: { gatekeeperId, operation: operation.name },
+    // Legacy 232: the name is the caller's own — stored bounded and visible, as `report_task_result`
+    // stores it (application/task/result.ts).
+    metadata: { gatekeeperId, operation: boundedEcho(operation.name) },
   });
 
   const record = await proposeOperation(client, workspaceId, {

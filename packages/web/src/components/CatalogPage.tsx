@@ -1,4 +1,5 @@
 import type { GateOwnedParamWire, SkillDetailWire } from '@nexttime/shared';
+import { visibleText } from '@nexttime/shared';
 import { type ReactNode, useId, useState } from 'react';
 import { invalidateCapability, useCapability, useCapabilityList } from '../hooks/useCapability.js';
 import { usePermissions } from '../hooks/usePermissions.js';
@@ -17,7 +18,14 @@ import {
   isForbiddenError,
   isVersionChangedError,
 } from '../lib/errors.js';
-import { formatRelative, prettyJson, shortId } from '../lib/format.js';
+import {
+  actionKindRaw,
+  actionKindTagText,
+  actionKindTagToastText,
+  formatRelative,
+  prettyJsonVisible,
+  shortId,
+} from '../lib/format.js';
 import {
   type CapabilityNameRow,
   type OperationCatalogRow,
@@ -369,12 +377,12 @@ function PublishGovernanceConfirm({
           {t('发布', 'Publish')}
         </Button>
       }
-      title={t(`发布 ${row.name}`, `Publish ${row.name}`)}
+      title={t(`发布 ${actionKindTagText(row.name)}`, `Publish ${actionKindTagText(row.name)}`)}
       description={t(
         '这个草稿改变了当前生效版本的分类——分类决定它要不要人工审批、要不要授权。发布后替换当前版本。',
         'This draft changes the classification of the version in effect — the classification decides whether it needs a person’s approval and a grant. Publishing replaces the current version.',
       )}
-      target={row.name}
+      target={actionKindTagText(row.name)}
       impact={[governanceChangeSummary(item, t)]}
       confirmLabel={t('发布', 'Publish')}
       danger={isLoosening(change.direction)}
@@ -463,9 +471,12 @@ function paramLine(
   param: { readonly name: string; readonly in?: string; readonly required: boolean },
   t: Translate,
 ): string {
-  const zh = [param.in, param.required ? '必填' : '可选'].filter(Boolean).join('，');
-  const en = [param.in, param.required ? 'required' : 'optional'].filter(Boolean).join(', ');
-  return t(`参数：${sign}${param.name}（${zh}）`, `Param: ${sign}${param.name} (${en})`);
+  // Review of #593: a param name is the gate's (or a proposer's) own text — shown visibly.
+  const where = param.in !== undefined ? visibleText(param.in) : undefined;
+  const zh = [where, param.required ? '必填' : '可选'].filter(Boolean).join('，');
+  const en = [where, param.required ? 'required' : 'optional'].filter(Boolean).join(', ');
+  const name = visibleText(param.name);
+  return t(`参数：${sign}${name}（${zh}）`, `Param: ${sign}${name} (${en})`);
 }
 
 /**
@@ -810,7 +821,12 @@ function OperationDetailView({
       <header className="stack-s">
         <div className="row-wrap">
           <StatusChip machine="publishable" status={row.status} size="s" />
-          <strong className="catalog-detail-title mono truncate">{row.name}</strong>
+          <strong
+            className="catalog-detail-title mono wrap-anywhere"
+            title={actionKindRaw(row.name)}
+          >
+            {actionKindTagText(row.name)}
+          </strong>
         </div>
       </header>
       <KeyValue items={items} />
@@ -865,7 +881,7 @@ function OperationDetailView({
         ) : canDeprecate && row.status === 'published' ? (
           <DeprecateConfirm
             busy={busy}
-            target={row.name}
+            target={actionKindTagText(row.name)}
             impact={
               usage
                 ? [
@@ -883,7 +899,11 @@ function OperationDetailView({
         {offersDiscard ? (
           <DiscardDraftConfirm
             busy={busy}
-            target={row.version !== undefined ? `${row.name} v${row.version}` : row.name}
+            target={
+              row.version !== undefined
+                ? `${actionKindTagText(row.name)} v${row.version}`
+                : actionKindTagText(row.name)
+            }
             description={t(
               '这份草稿会移出能力目录，不会被调用。它不会被删除：谁提议的、谁丢弃的、为什么，都留在审计里。之后再导入或提议这个 Operation，会作为新版本出现。',
               'This draft leaves the catalog and is never called. It is not deleted: who proposed it, who discarded it and why stay in the audit log. If this Operation is imported or proposed again, it comes back as a new version.',
@@ -1007,14 +1027,15 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
           ? { draftDigest: row.draftDigest }
           : {}),
       });
+      const shown = actionKindTagToastText(row.name);
       toast.push({
         tone: 'ok',
         title:
           action === 'publish_operation'
             ? row.version !== undefined
-              ? t(`${row.name} 已发布 v${row.version}`, `${row.name} v${row.version} published`)
-              : t(`${row.name} 已发布`, `${row.name} published`)
-            : t(`${row.name} 已弃用`, `${row.name} deprecated`),
+              ? t(`${shown} 已发布 v${row.version}`, `${shown} v${row.version} published`)
+              : t(`${shown} 已发布`, `${shown} published`)
+            : t(`${shown} 已弃用`, `${shown} deprecated`),
       });
       // A published revision draft is no longer `@draft` (UX acceptance of #538: the detail read
       // 「未找到」 after publishing) — follow it to the version now in effect.
@@ -1034,8 +1055,14 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
         // UX acceptance of #592 (P3-1): say which action failed.
         title:
           action === 'publish_operation'
-            ? t(`无法发布 ${row.name}`, `Could not publish ${row.name}`)
-            : t(`无法弃用 ${row.name}`, `Could not deprecate ${row.name}`),
+            ? t(
+                `无法发布 ${actionKindTagToastText(row.name)}`,
+                `Could not publish ${actionKindTagToastText(row.name)}`,
+              )
+            : t(
+                `无法弃用 ${actionKindTagToastText(row.name)}`,
+                `Could not deprecate ${actionKindTagToastText(row.name)}`,
+              ),
         description: errorToastText(err, t),
       });
     } finally {
@@ -1059,7 +1086,10 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       });
       toast.push({
         tone: 'ok',
-        title: t(`${row.name} v${row.version} 已丢弃`, `${row.name} v${row.version} discarded`),
+        title: t(
+          `${actionKindTagToastText(row.name)} v${row.version} 已丢弃`,
+          `${actionKindTagToastText(row.name)} v${row.version} discarded`,
+        ),
       });
       onSelectItem(null);
       refresh();
@@ -1100,7 +1130,7 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       toast.push({
         tone: 'ok',
         title: t('描述已更新', 'Description updated'),
-        description: editingRow.name,
+        description: actionKindTagToastText(editingRow.name),
       });
       setEditingRow(null);
       refresh();
@@ -1143,10 +1173,12 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
               selected={key === itemId}
               onSelect={() => onSelectItem(key)}
             >
-              <span className="row-wrap" style={{ justifyContent: 'space-between' }}>
-                <span className="row-wrap">
+              <span className="row-wrap" style={{ justifyContent: 'space-between', minWidth: 0 }}>
+                <span className="row-wrap" style={{ minWidth: 0 }}>
                   <StatusChip machine="publishable" status={row.status} size="s" />
-                  <span className="mono truncate">{row.name}</span>
+                  <span className="mono wrap-anywhere" title={actionKindRaw(row.name)}>
+                    {actionKindTagText(row.name)}
+                  </span>
                   {versioned.has(operationKey(row)) && row.version !== undefined ? (
                     <span className="text-3 text-small" data-testid={`catalog-row-version-${key}`}>
                       v{row.version}
@@ -1261,7 +1293,9 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
         <DialogContent data-testid="operation-description-dialog">
           <DialogHeader>
             <DialogTitle>{t('编辑描述', 'Edit description')}</DialogTitle>
-            <DialogDescription className="mono">{editingRow?.name}</DialogDescription>
+            <DialogDescription className="mono">
+              {editingRow ? actionKindTagText(editingRow.name) : null}
+            </DialogDescription>
           </DialogHeader>
           <Field
             id={descriptionFieldId}
@@ -1446,7 +1480,7 @@ function SkillDetailView({
       <header className="stack-s">
         <div className="row-wrap">
           <StatusChip machine="publishable" status={row.status} size="s" />
-          <strong className="catalog-detail-title truncate">{row.name}</strong>
+          <strong className="catalog-detail-title wrap-anywhere">{row.name}</strong>
           <span className="text-3 text-small">v{row.version}</span>
         </div>
         <PublishableStepper status={row.status} testId="skill-detail-stepper" />
@@ -1689,8 +1723,8 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
                 selected={row.id === itemId}
                 onSelect={() => selectRow(row.id)}
               >
-                <span className="row-wrap" style={{ justifyContent: 'space-between' }}>
-                  <span className="truncate">{row.name}</span>
+                <span className="row-wrap" style={{ justifyContent: 'space-between', minWidth: 0 }}>
+                  <span className="wrap-anywhere">{row.name}</span>
                   <StatusChip machine="publishable" status={row.status} size="s" />
                 </span>
                 <span className="truncate text-3">
@@ -1815,7 +1849,7 @@ function ProcedureDetailView({
       <header className="stack-s">
         <div className="row-wrap">
           <StatusChip machine="publishable" status={row.status} size="s" />
-          <strong className="catalog-detail-title truncate">{row.name}</strong>
+          <strong className="catalog-detail-title wrap-anywhere">{row.name}</strong>
           <span className="text-3 text-small">v{row.version}</span>
           {row.steps ? (
             <span className="tag">
@@ -1838,7 +1872,7 @@ function ProcedureDetailView({
       <div className="stack-s">
         <span className="section-title">{t('步骤', 'Steps')}</span>
         <pre className="code-block" data-testid="procedure-detail-steps">
-          {prettyJson(row.steps ?? [])}
+          {prettyJsonVisible(row.steps ?? [])}
         </pre>
       </div>
 
@@ -2063,9 +2097,9 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
                 selected={row.id === itemId}
                 onSelect={() => selectRow(row.id)}
               >
-                <span className="row-wrap" style={{ justifyContent: 'space-between' }}>
-                  <span className="row-wrap">
-                    <span className="truncate">{row.name}</span>
+                <span className="row-wrap" style={{ justifyContent: 'space-between', minWidth: 0 }}>
+                  <span className="row-wrap" style={{ minWidth: 0 }}>
+                    <span className="wrap-anywhere">{row.name}</span>
                     {row.steps ? (
                       <span className="tag">
                         {row.steps.length} {t('步', 'steps')}
@@ -2227,7 +2261,7 @@ function WorkerDetailView({
       <header className="stack-s">
         <div className="row-wrap">
           <StatusChip machine="publishable" status={row.status} size="s" />
-          <strong className="catalog-detail-title truncate">{name}</strong>
+          <strong className="catalog-detail-title wrap-anywhere">{name}</strong>
           <span className="text-3 text-small">v{row.version}</span>
           <span className="tag">{workerDefinitionKindLabel(row.kind, t)}</span>
         </div>
@@ -2249,7 +2283,7 @@ function WorkerDetailView({
       <div className="stack-s">
         <span className="section-title">{t('定义', 'Definition')}</span>
         <pre className="code-block" data-testid="worker-detail-definition">
-          {prettyJson(row.definition)}
+          {prettyJsonVisible(row.definition)}
         </pre>
       </div>
 

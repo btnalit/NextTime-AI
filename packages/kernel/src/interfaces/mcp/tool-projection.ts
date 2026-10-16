@@ -4,6 +4,7 @@ import type { ZodTypeAny } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { dispatchCapability } from '../../application/gateway/index.js';
+import { quotedName } from '../../governance/redaction/index.js';
 import { type JsonSchemaObject, MCP_TOOL_ALIASES } from './reference-tool-aliases.js';
 
 /**
@@ -100,7 +101,7 @@ function gateToolDescription(op: AllowedOperationWire, name: string): string {
   const base =
     typeof op.operation.description === 'string' && op.operation.description.trim().length > 0
       ? op.operation.description.trim()
-      : `Gatekeeper Operation "${name}".`;
+      : `Gatekeeper Operation ${quotedName(name)}.`;
   const modeSentence =
     op.operation.mode === 'execute'
       ? 'Execute-class: a governed write — calling it creates an ActionRequest that a human approves before anything happens.'

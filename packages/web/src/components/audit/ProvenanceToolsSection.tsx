@@ -13,7 +13,7 @@ import {
   provenanceNodeSource,
 } from '../../lib/audit-pickers.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
-import { formatDateTime, formatRelative } from '../../lib/format.js';
+import { actionKindTagText, formatDateTime, formatRelative } from '../../lib/format.js';
 import { auditHrefForNode } from '../../lib/graph-route.js';
 import { isoToLocalInput, localInputToIso } from '../../lib/graph-view.js';
 import { useLang, useT } from '../../lib/i18n.js';
@@ -201,7 +201,7 @@ function CausalChainTool({ http }: { readonly http: CapabilityCaller }) {
                     key={ar.id}
                     kind="actionRequest"
                     id={ar.id}
-                    name={ar.actionKindTag}
+                    name={actionKindTagText(ar.actionKindTag)}
                     href={
                       canOpen(hrefs.approval(ar.id)) !== false ? hrefs.approval(ar.id) : undefined
                     }

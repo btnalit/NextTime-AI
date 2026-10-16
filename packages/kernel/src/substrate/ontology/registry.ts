@@ -1,4 +1,5 @@
 import type { PrincipalKind } from '@nexttime/shared';
+import { boundedEcho, quotedName } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { lockOntologyFamily, mapOntologyVersionRow, nextOntologyVersion } from './loader.js';
 import type { OntologyVersionDbRow, OntologyVersionRow } from './loader.js';
@@ -504,12 +505,12 @@ export async function validateLink(
   const evaluation = evaluateLink(linkTypes, input);
   if (evaluation.kind === 'declared_and_valid') return { valid: true };
   if (evaluation.kind === 'undeclared_link_type') {
-    return { valid: false, errors: [`unknown LinkType "${input.linkType}"`] };
+    return { valid: false, errors: [`unknown LinkType ${quotedName(input.linkType)}`] };
   }
   return {
     valid: false,
     errors: [
-      `LinkType "${input.linkType}" does not permit ${input.sourceType} -> ${input.targetType} (allowed: ${evaluation.expected.join(', ')})`,
+      `LinkType ${quotedName(input.linkType)} does not permit ${boundedEcho(input.sourceType)} -> ${boundedEcho(input.targetType)} (allowed: ${evaluation.expected.join(', ')})`,
     ],
   };
 }

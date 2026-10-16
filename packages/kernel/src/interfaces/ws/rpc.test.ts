@@ -16,10 +16,12 @@ import {
   OntologyDraftNotFoundError,
   SupersedeIdentityMismatchError,
 } from '../../application/gateway/index.js';
+import { UnknownOperationError } from '../../application/gateway/index.js';
 import { TaskRuntimeNotConfiguredError } from '../../application/task/index.js';
 import { ApprovalReasonRequiredError } from '../../governance/approval/index.js';
 import { HandleIssuanceError, ScopeValidationError } from '../../governance/capability/index.js';
 import { ConnectionParamsCarryCredentialsError } from '../../governance/connections/index.js';
+import { OperationNameInvalidError } from '../../governance/gatekeepers/index.js';
 import {
   OperationDeclaresGateOwnedParamsError,
   OperationIdentityConflictError,
@@ -94,6 +96,21 @@ describe('mapDispatchError — S6-A / C25 approve.reason', () => {
     const mapped = mapDispatchError(new ApprovalReasonRequiredError('ar-1'));
     expect(mapped.code).toBe(WS_ERROR_CODES.INVALID_PARAMS);
     expect(mapped.message).toContain('reason');
+  });
+});
+
+describe('mapDispatchError — legacy 232 unknown operation', () => {
+  it('UnknownOperationError maps to NOT_FOUND with its message', () => {
+    const err = new UnknownOperationError('gk-1', 'deprecated');
+    expect(mapDispatchError(err)).toEqual({ code: WS_ERROR_CODES.NOT_FOUND, message: err.message });
+  });
+
+  it('OperationNameInvalidError maps to INVALID_PARAMS with its message', () => {
+    const err = new OperationNameInvalidError('x'.repeat(200), 'too_long');
+    expect(mapDispatchError(err)).toEqual({
+      code: WS_ERROR_CODES.INVALID_PARAMS,
+      message: err.message,
+    });
   });
 });
 

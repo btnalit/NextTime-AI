@@ -16,7 +16,7 @@ import {
   searchItems,
 } from '../lib/connections.js';
 import { usePublishCredentialReview } from '../lib/credential-review.js';
-import { prettyJson } from '../lib/format.js';
+import { actionKindTagText, prettyJsonVisible } from '../lib/format.js';
 import type { OperationCatalogRow } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
 import { capabilityHolders } from '../lib/role-holders.js';
@@ -396,7 +396,7 @@ function OperationReviewRow({
     <>
       <tr data-testid="wizard-review-row">
         <td>
-          <span className="mono">{row.name}</span>
+          <span className="mono">{actionKindTagText(row.name)}</span>
           <GateOwnedParamsMark params={gateOwnedParams} testId="wizard-review-held" />
         </td>
         <td>
@@ -411,7 +411,7 @@ function OperationReviewRow({
         <td>
           <details className="disclosure">
             <summary>{t('查看 schema', 'View schema')}</summary>
-            <pre className="code-block">{prettyJson(row.paramsSchema)}</pre>
+            <pre className="code-block">{prettyJsonVisible(row.paramsSchema)}</pre>
           </details>
         </td>
         <td>
@@ -538,7 +538,7 @@ function OperationReviewRow({
                     '分类决定这个 Operation 要不要人工审批、要不要授权。确认后发布新版本，替换当前生效的版本。',
                     'The classification decides whether this operation needs a person’s approval and a grant. Confirming publishes the new version in place of the one in effect.',
                   )}
-                  target={row.name}
+                  target={actionKindTagText(row.name)}
                   impact={changeItem ? [governanceChangeSummary(changeItem, t)] : []}
                   confirmLabel={t('发布', 'Publish')}
                   danger={changeItem !== null && isLoosening(changeItem.direction)}

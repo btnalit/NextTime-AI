@@ -211,7 +211,7 @@ graph LR
 | I14 | 审批者必须持有所审批的 `action_kind × resource_scope` | `approve` 前置检查；角色只决定能否进队列 |
 | I15 | 每用户入口容器的工作目录与 pi 目录只挂载给该用户的入口容器；其他用户的容器与任何 Worker 容器都不挂载 | 容器边界 + supervisor 的挂载规则 |
 | I16 | 平台元本体对象只能经 human 通道**发布**；Handle 通道只能写对提议者私有的草稿 | gateway 按 ObjectType 与状态判定：Handle 通道写入非 `draft` 状态或修改他人草稿一律拒绝 |
-| I17 | 未在接口清单中分类的操作一律 `require_approval`；分类只能经 human 通道发布 | 门在 `describe_operations` 之外的调用默认走审批；`propose_operation` 只产草稿 |
+| I17 | 未在接口清单中分类的操作一律 `require_approval`；分类只能经 human 通道发布 | 门在 `describe_operations` 之外、仍有草稿定义的调用默认走审批；门上没有任何定义（或只剩已弃用）的动作名在边界以 `unknown_operation` 拒绝，不建审批（遗留 232）；`propose_operation` 只产草稿 |
 | I18 | 失控防护：`invoke_worker` 派生链深度 ≤ 3；每用户并发 WorkerRun、每 Task 的 token 与时长、每工作区日成本都有上限 | 深度超限时内核拒绝 `invoke_worker` 并返回入口 agent 可转述的错误；token 到 80% 时 `llm-proxy` 上报、内核经 `context` 注入警告，到 100% 时 `llm-proxy` 返回预算耗尽错误，Worker 本轮结束、Task 进入 `failed: budget_exhausted`、入口 agent 得知；时长超限由 reaper 终止；配额是工作区策略数据，owner 可调 |
 | I19 | 模型可控进程（入口 / Worker 容器里的 pi 及其工具，同一 uid、同一 shell）读不到任何 Handle；容器持有的 Handle（`hld: container`）只在该容器的地址上有效 | **来源绑定**（§11「agent 容器」）：Handle 不进容器 env 与文件，worker-supervisor 把它按容器在 `workers` 网络上的地址写进只有平台服务能读的绑定文件；内核与 `llm-proxy` 对 `workers` 网络来的请求只认绑定在对端地址上的 Handle，请求自带凭证即拒；容器持有的 Handle 从任何其他来源出示一律拒；`workers` 网络只能到能力路由与模型路由；容器启动自检拒绝 JWT 形态的 env 值 |
 

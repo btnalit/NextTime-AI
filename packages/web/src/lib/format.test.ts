@@ -1,5 +1,13 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import {
+  ACTION_KIND_FULL_MAX,
+  ACTION_KIND_INLINE_MAX,
+  actionKindLabel,
+  actionKindRaw,
+  actionKindTagText,
+  actionKindTagToastText,
+  actionKindToastLabel,
+  clipMiddle,
   excerpt,
   formatAuditActor,
   formatDateTime,
@@ -7,6 +15,7 @@ import {
   formatRelative,
   formatTime,
   humanizeKind,
+  prettyJsonVisible,
   redactSensitive,
   shortId,
 } from './format.js';
@@ -53,6 +62,34 @@ describe('format', () => {
 
   it('humanizeKind matches the kernel label convention', () => {
     expect(humanizeKind('docker.container_restart')).toBe('docker container restart');
+  });
+
+  it('legacy 232: an approval place shows a new-rule name whole; a toast clips it in its middle', () => {
+    expect(actionKindTagText('docker.container_restart')).toBe('docker.container_restart');
+    expect(actionKindLabel('docker.container_restart')).toBe('docker container restart');
+    // Two 128-character names differing only in their middle stay different where approvers look.
+    const a = `${'a'.repeat(60)}.region-eu.${'z'.repeat(57)}`;
+    const b = `${'a'.repeat(60)}.region-us.${'z'.repeat(57)}`;
+    expect(actionKindTagText(a)).toBe(a);
+    expect(actionKindLabel(a)).not.toBe(actionKindLabel(b));
+    const long = `${'a'.repeat(200)}.delete_everything`;
+    const toast = actionKindToastLabel(long);
+    expect([...toast]).toHaveLength(ACTION_KIND_INLINE_MAX);
+    expect(toast.startsWith('aaaa')).toBe(true);
+    expect(toast.endsWith('delete everything')).toBe(true);
+    const legacy = `${'b'.repeat(1000)}.tail`;
+    expect([...actionKindTagText(legacy)]).toHaveLength(ACTION_KIND_FULL_MAX);
+    expect(actionKindTagText(legacy).endsWith('.tail')).toBe(true);
+    expect(clipMiddle('abcdefghij', 10)).toBe('abcdefghij');
+    expect(clipMiddle('abcdefghijk', 10)).toBe('abcdef…ijk');
+  });
+
+  it('legacy 232: clipMiddle never splits a surrogate pair; a hidden character is shown, not obeyed', () => {
+    expect(clipMiddle('😀'.repeat(20), 10)).toBe(`${'😀'.repeat(6)}…${'😀'.repeat(3)}`);
+    expect(actionKindTagText('delete\u202Etoor')).toBe('delete\\u{202E}toor');
+    expect(actionKindLabel('a.b\u200Bc')).toBe('a b\\u{200B}c');
+    expect(actionKindRaw('x\u202Ey')).toBe('x\\u{202E}y');
+    expect(actionKindToastLabel('x\u202Ey')).toBe('x\\u{202E}y');
   });
 
   it('formatAuditActor prefers login, falls back to the (truncated) id, then to an unattributed label (遗留 54, AU1)', () => {
@@ -210,5 +247,35 @@ describe('format — time zone label and calendar boundary across real zones', (
     expect(formatDateTime('2026-09-03T12:00:00.000Z', now)).toBe('09-03 17:30 (UTC+5:30)');
     // A day earlier at the same UTC instant is exactly one IST calendar day back.
     expect(formatRelative('2026-09-02T12:00:00.000Z', now)).toBe('昨天 17:30');
+  });
+});
+
+describe('prettyJsonVisible (review of #593)', () => {
+  it('shows a bidi override inside a value as \\u{XXXX} and keeps the indentation', () => {
+    const shown = prettyJsonVisible({ a: 'x\u202Ey', qty: 'wh-9 \u202Eqty: 0001\u202C' });
+    expect(shown).not.toMatch(/[\u202E\u202C]/);
+    expect(shown).toContain('"a": "x\\u{202E}y"');
+    expect(shown).toContain('wh-9 \\u{202E}qty: 0001\\u{202C}');
+    expect(shown.startsWith('{\n  "a"')).toBe(true);
+  });
+
+  it('a name or key carries the escape too, and a plain value is unchanged', () => {
+    expect(prettyJsonVisible({ 'op\u200B': 1 })).toBe('{\n  "op\\u{200B}": 1\n}');
+    expect(prettyJsonVisible({ a: 1 })).toBe('{\n  "a": 1\n}');
+  });
+
+  it('excerpt shows the same characters', () => {
+    expect(excerpt({ a: 'x\u202Ey' })).toBe('{"a":"x\\u{202E}y"}');
+  });
+});
+
+describe('actionKindTagToastText', () => {
+  it('keeps the raw tag, clips its middle to the toast limit, shows hidden characters', () => {
+    expect(actionKindTagToastText('stock.get')).toBe('stock.get');
+    const long = `a.${'b'.repeat(200)}.end`;
+    const shown = actionKindTagToastText(long);
+    expect([...shown]).toHaveLength(ACTION_KIND_INLINE_MAX);
+    expect(shown.endsWith('.end')).toBe(true);
+    expect(actionKindTagToastText('x\u202Ey')).toBe('x\\u{202E}y');
   });
 });

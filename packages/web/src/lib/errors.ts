@@ -90,6 +90,8 @@ export const CODE_TITLES: Readonly<Record<string, string>> = {
   operation_definition_mismatch: 'The gate runs another definition',
   operation_definition_unavailable: 'No approved definition',
   gate_owned_params: 'Declares parameters the gate sets',
+  unknown_operation: 'This gate has no such operation',
+  invalid_operation_name: 'Operation name not allowed',
   gate_unreachable: 'Not sent: the gate could not be reached',
   apply_not_received: 'Did not run: the gate has no record of it running',
   outcome_unknown: 'Outcome unknown',
@@ -140,6 +142,8 @@ export const CODE_TITLES_ZH: Readonly<Record<string, string>> = {
   operation_definition_mismatch: '门运行的定义和批准的不一样',
   operation_definition_unavailable: '没有批准过的定义',
   gate_owned_params: '声明了门自己设置的参数',
+  unknown_operation: '这个门上没有这个动作',
+  invalid_operation_name: '动作名不合规',
   gate_unreachable: '没发出：连不上门',
   apply_not_received: '没执行：门上没有执行记录',
   outcome_unknown: '结果不明',
@@ -256,6 +260,18 @@ export const ERROR_NEXT_STEPS: Readonly<
   credentials_in_connection_params: {
     zh: '地址里带了凭据（URL 里的用户名密码，或 token、key 之类的查询参数），已拒绝，什么也没保存。地址里只写地址；凭据交给门保管，不要写进任何地址。',
     en: 'An address carries a credential (a user name and password in the URL, or a token or key in its query), so it was refused and nothing was saved. Keep addresses to the address; the credential belongs to the gate, never in an address.',
+  },
+  // Legacy 232 (UX acceptance of #593): an agent's request_action naming nothing the gate runs.
+  // Said to the person reading the chat, not to the agent: nothing waits on them.
+  unknown_operation: {
+    zh: '这个门上没有这个名字的动作（或它已弃用），所以什么也没有发起，也不会进审批队列，不需要你处理。agent 一般会先查门上有哪些动作，再重新发起。如果它反复用错名字，到能力目录看这个门提供哪些 Operation；缺少需要的动作时，请 builder 提议一个。',
+    en: 'This gate has no operation by that name (or it is deprecated), so nothing was requested, nothing entered the approval queue, and nothing needs you. The agent usually looks up what the gate runs and requests again. If it keeps using a wrong name, check in the catalog which Operations this gate offers; if the one it needs is missing, ask a builder to propose it.',
+  },
+  // Legacy 232 (review #493): a new Operation name that is empty, too long or carries a hidden
+  // character — refused before anything was written.
+  invalid_operation_name: {
+    zh: '新动作的名字为空、超过 128 个字符，或含有看不见的字符（控制字符、零宽字符、会颠倒文字方向的字符），所以没有写入任何东西。换一个只用可见字符、不超过 128 个字符的名字后重新提议。已有的动作不受影响。',
+    en: 'The new operation’s name is empty, longer than 128 characters, or carries a character you cannot see (a control, zero-width or text-reversing character), so nothing was written. Propose it again under a name of visible characters, at most 128 long. Existing operations are not affected.',
   },
   // Legacy K (review of #538, G3).
   operation_definition_mismatch: {
@@ -391,6 +407,8 @@ const GATE_REASON_CODES = [
   'operation_definition_unavailable',
   'operation_refused',
   'credentials_in_observe_params',
+  'unknown_operation',
+  'invalid_operation_name',
   'gate_unreachable',
   'apply_not_received',
   'outcome_unknown',

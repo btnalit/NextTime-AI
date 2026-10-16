@@ -4,6 +4,7 @@ import type {
   SystemMessageContent,
   TaskStatus,
 } from '@nexttime/shared';
+import { boundedEcho } from '@nexttime/shared';
 
 /**
  * application/linkage/content: pure builders for the three `SystemMessageContent` shapes
@@ -56,15 +57,18 @@ export interface ActionPendingContentInput {
   readonly suspectedSecretValues?: number;
 }
 
+/** The action kind as a chat line names it: humanized, then bounded and made visible (legacy
+ *  232: an Operation name is the caller's own, so the line never carries it whole or with a hidden
+ *  character; the card's own title shows the whole name, and `actionKindTag` stays raw). */
 function humanizeActionKind(actionKind: string): string {
-  return actionKind.replace(/[._-]+/g, ' ').trim() || actionKind;
+  return boundedEcho(actionKind.replace(/[._-]+/g, ' ').trim() || actionKind);
 }
 
 export function buildActionPendingContent(
   input: ActionPendingContentInput,
 ): SystemActionPendingContent {
   const label = humanizeActionKind(input.actionKind);
-  const scopeSuffix = input.resourceScope ? ` on ${input.resourceScope}` : '';
+  const scopeSuffix = input.resourceScope ? ` on ${boundedEcho(input.resourceScope)}` : '';
   const text = input.isHolder
     ? `Approval needed: ${label}${scopeSuffix}`
     : `Waiting for approval: ${label}${scopeSuffix}`;

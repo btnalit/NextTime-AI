@@ -63,6 +63,7 @@ export {
   type RejectedResultFact,
   type RejectedResultProposal,
   type ResultFactRejectionReason,
+  type ResultProposalRejectionReason,
 } from './result.js';
 
 export { ensureWorkerAgentPrincipal } from './agent-principal.js';

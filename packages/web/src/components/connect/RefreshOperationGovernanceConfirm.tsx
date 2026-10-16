@@ -7,6 +7,7 @@ import type {
 } from '@nexttime/shared';
 import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { actionKindTagText } from '../../lib/format.js';
 import { operationKey, revisionDraftKey } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
 import { hrefs } from '../../lib/router.js';
@@ -308,7 +309,7 @@ export function RefreshOperationGovernanceConfirm({
             <ul className="stack-s" style={{ margin: 0, paddingLeft: '1.2em' }}>
               {stuckDrafts.map((op) => (
                 <li key={op.name}>
-                  <span className="mono">{op.name}</span>
+                  <span className="mono">{actionKindTagText(op.name)}</span>
                   {t('：', ': ')}
                   {gateOwnedParamsText(op.gateOwnedParams ?? [], t)}
                 </li>
@@ -356,7 +357,7 @@ export function RefreshOperationGovernanceConfirm({
                       : operationKey(row);
                     return (
                       <li key={draft.name} className="row-wrap">
-                        <span className="mono">{draft.name}</span>
+                        <span className="mono">{actionKindTagText(draft.name)}</span>
                         <span>{t(`修订 v${draft.version}`, `revision v${draft.version}`)}</span>
                         <a
                           href={hrefs.catalog('operations', key)}
@@ -386,7 +387,7 @@ export function RefreshOperationGovernanceConfirm({
                       : operationKey(row);
                     return (
                       <li key={draft.name} className="row-wrap">
-                        <span className="mono">{draft.name}</span>
+                        <span className="mono">{actionKindTagText(draft.name)}</span>
                         <a
                           href={hrefs.catalog('operations', key)}
                           data-testid={testId ? `${testId}-rewritten-link` : undefined}
@@ -415,7 +416,7 @@ export function RefreshOperationGovernanceConfirm({
                       : operationKey(row);
                     return (
                       <li key={draft.name} className="row-wrap">
-                        <span className="mono">{draft.name}</span>
+                        <span className="mono">{actionKindTagText(draft.name)}</span>
                         <span>{heldText(draft.name)}</span>
                         <a
                           href={hrefs.catalog('operations', key)}
@@ -452,30 +453,30 @@ export function RefreshOperationGovernanceConfirm({
           ...items.map((item) => governanceChangeSummary(item, t)),
           ...redefined.map((name) =>
             t(
-              `${name}：门运行的定义变了，打开修订草稿`,
-              `${name}: the definition the gate runs changed — opens a revision draft`,
+              `${actionKindTagText(name)}：门运行的定义变了，打开修订草稿`,
+              `${actionKindTagText(name)}: the definition the gate runs changed — opens a revision draft`,
             ),
           ),
           // Review #501 on #571 ③: a revision whose new definition declares a gate-owned param
           // stays a draft — said here, before the align opens it.
           ...heldRevisions.map((op) =>
             t(
-              `${op.name}：打开的修订发布不了，新定义声明了只能由门自己设置的参数 ${gateOwnedParamsText(op.gateOwnedParams ?? [], t)}`,
-              `${op.name}: the revision it opens cannot be published — the new definition declares params only the gate sets, ${gateOwnedParamsText(op.gateOwnedParams ?? [], t)}`,
+              `${actionKindTagText(op.name)}：打开的修订发布不了，新定义声明了只能由门自己设置的参数 ${gateOwnedParamsText(op.gateOwnedParams ?? [], t)}`,
+              `${actionKindTagText(op.name)}: the revision it opens cannot be published — the new definition declares params only the gate sets, ${gateOwnedParamsText(op.gateOwnedParams ?? [], t)}`,
             ),
           ),
           ...freeNames(heldDrafts).map((name) =>
             t(
-              `${name}：门的清单改了，按新清单重写待发布的草稿`,
-              `${name}: the gate’s manifest changed — rewrites the pending draft to it`,
+              `${actionKindTagText(name)}：门的清单改了，按新清单重写待发布的草稿`,
+              `${actionKindTagText(name)}: the gate’s manifest changed — rewrites the pending draft to it`,
             ),
           ),
           // Review #501 on #573: the gate changed something else but still declares the param —
           // the rewrite still runs, and the draft still cannot be published.
           ...heldNames(heldDrafts).map((name) =>
             t(
-              `${name}：门的清单改了，按新清单重写待发布的草稿；新清单仍声明只能由门自己设置的参数 ${heldText(name)}，重写后仍发布不了`,
-              `${name}: the gate’s manifest changed — rewrites the pending draft to it; the new manifest still declares params only the gate sets, ${heldText(name)}, so it still cannot be published`,
+              `${actionKindTagText(name)}：门的清单改了，按新清单重写待发布的草稿；新清单仍声明只能由门自己设置的参数 ${heldText(name)}，重写后仍发布不了`,
+              `${actionKindTagText(name)}: the gate’s manifest changed — rewrites the pending draft to it; the new manifest still declares params only the gate sets, ${heldText(name)}, so it still cannot be published`,
             ),
           ),
         ]}
@@ -496,8 +497,8 @@ export function RefreshOperationGovernanceConfirm({
         {heldRevisions.length > 0 ? (
           <Notice tone="warn" testId={testId ? `${testId}-redefined-held` : undefined}>
             {t(
-              `门运行的新定义声明了只能由门自己设置的参数：${heldRevisions.map((op) => op.name).join('、')}。对齐为它们打开的修订发布不了；门的维护者去掉这些参数、平台采用改好的清单之前，门会一直拒绝对它们的调用。`,
-              `The new definition the gate runs declares params only the gate sets: ${heldRevisions.map((op) => op.name).join(', ')}. The revisions aligning opens for them cannot be published; the gate keeps refusing calls to them until its maintainer drops those params and the platform adopts the corrected manifest.`,
+              `门运行的新定义声明了只能由门自己设置的参数：${heldRevisions.map((op) => actionKindTagText(op.name)).join('、')}。对齐为它们打开的修订发布不了；门的维护者去掉这些参数、平台采用改好的清单之前，门会一直拒绝对它们的调用。`,
+              `The new definition the gate runs declares params only the gate sets: ${heldRevisions.map((op) => actionKindTagText(op.name)).join(', ')}. The revisions aligning opens for them cannot be published; the gate keeps refusing calls to them until its maintainer drops those params and the platform adopts the corrected manifest.`,
             )}
           </Notice>
         ) : null}

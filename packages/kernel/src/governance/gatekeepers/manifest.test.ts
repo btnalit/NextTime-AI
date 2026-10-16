@@ -24,6 +24,7 @@ import {
   OperationDescriptionInvalidError,
   OperationDescriptionRequiredError,
   OperationIdentityConflictError,
+  OperationNameInvalidError,
   OperationNotFoundError,
   classifyOperationGovernanceChange,
   countOperationsByGatekeeper,
@@ -224,6 +225,94 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
       getOperation(client, workspaceId, gatekeeperId, good.name),
     );
     expect(goodRecord).toBeNull();
+  });
+
+  describe('legacy 232: a new Operation name is bounded and visible', () => {
+    const RLO_NAME = () => `delete.\u202Etoor.${randomUUID()}`;
+
+    it('propose_operation refuses a new name carrying a bidi override, or one over 128 characters, writing nothing', async () => {
+      for (const [name, problem] of [
+        [RLO_NAME(), 'invisible_or_control_characters'],
+        [`long.${'x'.repeat(130)}`, 'too_long'],
+      ] as const) {
+        const act = await newActivity();
+        const refused = await inTx((client) =>
+          proposeOperation(client, workspaceId, {
+            gatekeeperId,
+            operation: testOperation({ name }),
+            proposedBy: { id: ownerId, kind: 'human' },
+            activityId: act,
+          }),
+        ).catch((err: unknown) => err);
+        expect(refused).toBeInstanceOf(OperationNameInvalidError);
+        expect((refused as OperationNameInvalidError).details).toEqual({ problem, maxLength: 128 });
+        expect((refused as Error).message).not.toContain('\u202E');
+        expect(
+          await inTx((client) => getOperation(client, workspaceId, gatekeeperId, name)),
+        ).toBeNull();
+      }
+    });
+
+    it('importManifest refuses a manifest naming a bad new Operation before writing any of it', async () => {
+      const good = testOperation({ name: `fine.${randomUUID()}` });
+      const bad = testOperation({ name: RLO_NAME() });
+      const act = await newActivity();
+      await expect(
+        inTx((client) =>
+          importManifest(client, workspaceId, {
+            gatekeeperId,
+            operations: [good, bad],
+            proposedBy: { id: ownerId, kind: 'human' },
+            activityId: act,
+          }),
+        ),
+      ).rejects.toThrow(OperationNameInvalidError);
+      expect(
+        await inTx((client) => getOperation(client, workspaceId, gatekeeperId, good.name)),
+      ).toBeNull();
+    });
+
+    it('a name already on file keeps working — the rule binds new identities only', async () => {
+      const legacy = testOperation({ name: `legacy.${randomUUID()}` });
+      const act = await newActivity();
+      await inTx((client) =>
+        proposeOperation(client, workspaceId, {
+          gatekeeperId,
+          operation: legacy,
+          proposedBy: { id: ownerId, kind: 'human' },
+          activityId: act,
+        }),
+      );
+      // Stands in for a row written before the rule existed.
+      const onFile = `${legacy.name}\u202E`;
+      await inTx((client) =>
+        client.query(
+          `update objects
+             set identity_key = jsonb_set(identity_key, '{name}', to_jsonb($3::text)),
+                 properties = jsonb_set(properties, '{name}', to_jsonb($3::text))
+           where workspace_id = $1 and object_type = 'Operation'
+             and identity_key ->> 'gatekeeperId' = $2 and identity_key ->> 'name' = $4`,
+          [workspaceId, gatekeeperId, onFile, legacy.name],
+        ),
+      );
+      const revised = await inTx(async (client) =>
+        proposeOperation(client, workspaceId, {
+          gatekeeperId,
+          operation: testOperation({ name: onFile, description: 'revised' }),
+          proposedBy: { id: ownerId, kind: 'human' },
+          activityId: await newActivity(),
+        }),
+      );
+      expect(revised.status).toBe('draft');
+      await inTx((client) =>
+        importManifest(client, workspaceId, {
+          gatekeeperId,
+          operations: [testOperation({ name: onFile })],
+          proposedBy: { id: ownerId, kind: 'human' },
+          activityId: act,
+        }),
+      );
+    });
   });
 
   it('unknown Operation name resolves to null (I17 "unclassified")', async () => {

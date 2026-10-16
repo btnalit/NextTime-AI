@@ -5,7 +5,14 @@ import type {
   PublishableStatus,
   Role,
 } from '@nexttime/shared';
-import { IllegalTransition, OPERATION_TRANSITIONS, transition } from '@nexttime/shared';
+import {
+  IllegalTransition,
+  OPERATION_NAME_MAX,
+  OPERATION_TRANSITIONS,
+  type OperationNameProblem,
+  operationNameProblem,
+  transition,
+} from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import {
   type GraphReadViewer,
@@ -21,7 +28,7 @@ import {
   setOperationStatusObject,
 } from '../../substrate/ontology/index.js';
 import { type PublishActor, assertPublishAuthority, seesEveryDraft } from '../capability/index.js';
-import { assertDraftCredentialsReviewed } from '../redaction/index.js';
+import { assertDraftCredentialsReviewed, quotedName } from '../redaction/index.js';
 import {
   operationDefinitionDiffers,
   operationDraftDigest,
@@ -184,7 +191,7 @@ function toOperationRecord(
 
 export class OperationNotFoundError extends Error {
   constructor(gatekeeperId: string, name: string) {
-    super(`Operation not found: gatekeeper ${gatekeeperId}, name "${name}"`);
+    super(`Operation not found: gatekeeper ${gatekeeperId}, name ${quotedName(name)}`);
     this.name = 'OperationNotFoundError';
   }
 }
@@ -204,7 +211,7 @@ export class OperationIdentityConflictError extends Error {
   readonly existingStatus: OperationStatus;
   constructor(gatekeeperId: string, name: string, existingStatus: OperationStatus) {
     super(
-      `Operation "${name}" on gatekeeper ${gatekeeperId} already exists (status: ${existingStatus}) — a proposal may only create a new draft or revise the proposer’s own draft`,
+      `Operation ${quotedName(name)} on gatekeeper ${gatekeeperId} already exists (status: ${existingStatus}) — a proposal may only create a new draft or revise the proposer’s own draft`,
     );
     this.name = 'OperationIdentityConflictError';
     this.existingStatus = existingStatus;
@@ -221,7 +228,7 @@ export class OperationDraftChangedError extends Error {
   readonly code = 'draft_changed' as const;
   constructor(gatekeeperId: string, name: string, version: number) {
     super(
-      `Operation "${name}" v${version} on gatekeeper ${gatekeeperId} changed after it was read (draftDigest differs) — nothing was written; reload it and look again`,
+      `Operation ${quotedName(name)} v${version} on gatekeeper ${gatekeeperId} changed after it was read (draftDigest differs) — nothing was written; reload it and look again`,
     );
     this.name = 'OperationDraftChangedError';
   }
@@ -293,6 +300,36 @@ export interface ImportManifestInput {
   readonly requireDescription?: boolean;
 }
 
+/** Legacy 232 (review #493): a *new* Operation name that breaks `operationNameProblem`'s rule
+ *  (`@nexttime/shared`) — empty, longer than `OPERATION_NAME_MAX`, or carrying an invisible or
+ *  reordering character (an agent could otherwise dress a draft's name up on the approval card).
+ *  Thrown by `proposeOperation` and, before any write, by `importManifest`. A name already on file
+ *  is never refused by this (it keeps working and is escaped where shown). 400 `invalid_operation_name`. */
+export class OperationNameInvalidError extends Error {
+  readonly code = 'invalid_operation_name' as const;
+  readonly details: { readonly problem: OperationNameProblem; readonly maxLength: number };
+  constructor(operationName: string, problem: OperationNameProblem) {
+    const why =
+      problem === 'empty'
+        ? 'is empty'
+        : problem === 'too_long'
+          ? `is longer than ${OPERATION_NAME_MAX} characters`
+          : 'carries a control, invisible or text-reordering character';
+    super(
+      `Operation name ${quotedName(operationName)} ${why} — nothing was written. Use a visible name of at most ${OPERATION_NAME_MAX} characters.`,
+    );
+    this.name = 'OperationNameInvalidError';
+    this.details = { problem, maxLength: OPERATION_NAME_MAX };
+  }
+}
+
+/** Refuses `name` for a new identity (`existing === null`); a name already on file passes. */
+function assertNewOperationNameAllowed(name: string, existing: OperationRecord | null): void {
+  if (existing !== null) return;
+  const problem = operationNameProblem(name);
+  if (problem !== undefined) throw new OperationNameInvalidError(name, problem);
+}
+
 /** Thrown by `importManifest` when `input.requireDescription` is set and `operationName` has no
  *  (or a blank/whitespace-only) `description` — CO1's "manifest 导入时要求描述" reject, naming the
  *  offending Operation so the caller can fix its manifest entry directly. */
@@ -300,7 +337,7 @@ export class OperationDescriptionRequiredError extends Error {
   readonly operationName: string;
   constructor(operationName: string) {
     super(
-      `import_manifest: Operation "${operationName}" has no description — every imported Operation must declare a non-blank description (CO1)`,
+      `import_manifest: Operation ${quotedName(operationName)} has no description — every imported Operation must declare a non-blank description (CO1)`,
     );
     this.name = 'OperationDescriptionRequiredError';
     this.operationName = operationName;
@@ -353,6 +390,15 @@ export async function importManifest(
         throw new OperationDescriptionRequiredError(operation.name);
       }
     }
+  }
+
+  // Legacy 232: a new name breaking the name rule imports nothing (same atomic shape as above).
+  for (const operation of input.operations) {
+    if (operationNameProblem(operation.name) === undefined) continue;
+    assertNewOperationNameAllowed(
+      operation.name,
+      await getOperation(client, workspaceId, input.gatekeeperId, operation.name),
+    );
   }
 
   const imported: OperationRecord[] = [];
@@ -445,6 +491,14 @@ export async function proposeOperation(
   // row's status in a conflict error. Not the guard — the conditional write below is (two
   // dispatch transactions may interleave between this read and that write).
   const existing = await getOperation(client, workspaceId, gatekeeperId, name);
+  const refusal = proposalRefusalFor(name, existing, input.proposedBy.id);
+  if (refusal?.reason === 'invalid_operation_name') {
+    throw new OperationNameInvalidError(name, refusal.problem);
+  }
+  if (refusal?.reason === 'operation_identity_conflict') {
+    // A conflicting draft, or a fully `deprecated` identity — unchanged pre-S3.12 rule.
+    throw new OperationIdentityConflictError(gatekeeperId, name, refusal.existingStatus);
+  }
 
   let version: number;
   let draftOf: string | undefined;
@@ -464,7 +518,7 @@ export async function proposeOperation(
     // correct here for a fresh (non-revision) draft, which never had one to begin with.
     draftOf = existing.draftOf;
   } else {
-    // A conflicting draft, or a fully `deprecated` identity — unchanged pre-S3.12 rule.
+    // Unreachable: `proposalRefusalFor` refused every other current row above.
     throw new OperationIdentityConflictError(gatekeeperId, name, existing.status);
   }
 
@@ -499,6 +553,47 @@ export async function proposeOperation(
     proposedBy: input.proposedBy,
     ...(draftOf !== undefined ? { draftOf } : {}),
   };
+}
+
+/** Why `proposeOperation` would refuse a proposal of `name` by `proposerId`, read from the
+ *  identity's current row: a new identity whose name breaks the name rule (legacy 232), or a row
+ *  the proposer may not write over (outcome 2 above — a conflicting draft or a fully `deprecated`
+ *  identity). `undefined` means it would write. */
+export type OperationProposalRefusal =
+  | { readonly reason: 'invalid_operation_name'; readonly problem: OperationNameProblem }
+  | { readonly reason: 'operation_identity_conflict'; readonly existingStatus: OperationStatus };
+
+/** The one decision `proposeOperation` makes before writing, shared with
+ *  `operationProposalRefusal` so a pre-check and the write can never disagree. */
+function proposalRefusalFor(
+  name: string,
+  existing: OperationRecord | null,
+  proposerId: string,
+): OperationProposalRefusal | undefined {
+  if (existing === null) {
+    const problem = operationNameProblem(name);
+    return problem !== undefined ? { reason: 'invalid_operation_name', problem } : undefined;
+  }
+  if (existing.status === 'published' || isOwnProposalDraft(existing, proposerId)) {
+    return undefined;
+  }
+  return { reason: 'operation_identity_conflict', existingStatus: existing.status };
+}
+
+/** Review #493 on #593 (M1): what `proposeOperation` would refuse, asked before anything is
+ *  written — `report_task_result` turns each refusal into a recorded per-entry rejection
+ *  (`worker-result-handler.ts`'s `validateContract`) instead of losing the whole contract. Reads
+ *  the same row `proposeOperation` reads; a concurrent write in between is still the write's own
+ *  conditional guard to refuse. */
+export async function operationProposalRefusal(
+  client: PoolClient,
+  workspaceId: string,
+  gatekeeperId: string,
+  name: string,
+  proposerId: string,
+): Promise<OperationProposalRefusal | undefined> {
+  const existing = await getOperation(client, workspaceId, gatekeeperId, name);
+  return proposalRefusalFor(name, existing, proposerId);
 }
 
 /** The one shape `proposeOperation` may replace: a `draft` the same Principal wrote through
@@ -555,6 +650,29 @@ interface OperationObjectRow {
   id: string;
   identity_key: { gatekeeperId?: string; name?: string; version?: number } | null;
   properties: Record<string, unknown>;
+}
+
+/** Legacy 232 (review #493 M1): whether `(gatekeeperId, name)` has a `deprecated` row — what
+ *  `getOperation` would answer were there no draft. A deprecated Operation was published once, so
+ *  everyone may know it existed; a draft is private to its proposer and the reviewers (D-26). */
+export async function hasDeprecatedOperation(
+  client: PoolClient,
+  workspaceId: string,
+  gatekeeperId: string,
+  name: string,
+): Promise<boolean> {
+  const result = await client.query(
+    `select 1
+     from objects
+     where workspace_id = $1
+       and object_type = 'Operation'
+       and identity_key ->> 'gatekeeperId' = $2
+       and identity_key ->> 'name' = $3
+       and properties ->> 'status' = 'deprecated'
+     limit 1`,
+    [workspaceId, gatekeeperId, name],
+  );
+  return (result.rowCount ?? 0) > 0;
 }
 
 /**
@@ -1263,8 +1381,8 @@ export class OperationDescriptionInvalidError extends Error {
   constructor(operationName: string, reason: 'empty' | 'too_long') {
     super(
       reason === 'empty'
-        ? `update_operation_description: Operation "${operationName}" description must not be blank`
-        : `update_operation_description: Operation "${operationName}" description exceeds ${OPERATION_DESCRIPTION_MAX_LENGTH} characters`,
+        ? `update_operation_description: Operation ${quotedName(operationName)} description must not be blank`
+        : `update_operation_description: Operation ${quotedName(operationName)} description exceeds ${OPERATION_DESCRIPTION_MAX_LENGTH} characters`,
     );
     this.name = 'OperationDescriptionInvalidError';
     this.operationName = operationName;

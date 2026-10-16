@@ -1,4 +1,4 @@
-import { maskSecretFields } from '@nexttime/shared';
+import { maskSecretFields, visibleJson, visibleText } from '@nexttime/shared';
 import type { Translate } from './i18n.js';
 
 /**
@@ -148,6 +148,58 @@ export function humanizeKind(kind: string): string {
   return kind.replace(/[._-]+/g, ' ').trim() || kind;
 }
 
+/** Legacy 232: the longest an action kind is shown where an approver decides on it — the queue
+ *  rows, the approval cards, the detail title, the confirm lines and the "always allow" sentence.
+ *  Every new Operation name is at most 128 characters (`OPERATION_NAME_MAX`), so this shows a new
+ *  name whole, wrapping: an approver always sees which action they decide on, wherever two names
+ *  differ. Only a name written before that rule can be longer; it is cut in its middle here and
+ *  shown whole in the detail's own 「能力」 field and as the hover title. */
+export const ACTION_KIND_FULL_MAX = 512;
+
+/** Legacy 232: the longest an action kind is shown in a toast, after the decision was made. */
+export const ACTION_KIND_INLINE_MAX = 80;
+
+/** `text` clipped to `max` code points by cutting its middle (never inside a surrogate pair): the
+ *  head and the tail both stay, so two long names that differ only at the end still read
+ *  differently. */
+export function clipMiddle(text: string, max: number): string {
+  const points = [...text];
+  if (points.length <= max) return text;
+  const tail = Math.floor((max - 1) / 3);
+  return `${points.slice(0, max - 1 - tail).join('')}…${points.slice(points.length - tail).join('')}`;
+}
+
+/** An action kind exactly as stored, with what a reader cannot see (a bidi override, a
+ *  zero-width or control character) shown as `\u{XXXX}` — for the hover title and the 「能力」
+ *  field (legacy 232: a name written before the name rule may carry one). */
+export function actionKindRaw(kind: string): string {
+  return visibleText(kind);
+}
+
+/** An action kind for an approval place: `humanizeKind`, made visible, whole up to
+ *  `ACTION_KIND_FULL_MAX` (legacy 232). Two raw tags can humanize alike (`a.b`, `a_b`), so every
+ *  place that shows this also carries the raw tag as its hover title, or shows it beside. */
+export function actionKindLabel(kind: string): string {
+  return visibleText(clipMiddle(humanizeKind(kind), ACTION_KIND_FULL_MAX));
+}
+
+/** The raw action kind, made visible, whole up to `ACTION_KIND_FULL_MAX`, for a chip or a
+ *  sentence that names it as is (legacy 232). */
+export function actionKindTagText(kind: string): string {
+  return visibleText(clipMiddle(kind, ACTION_KIND_FULL_MAX));
+}
+
+/** `actionKindTagText`, clipped to `ACTION_KIND_INLINE_MAX`, for a toast that names the raw tag
+ *  (the catalog, where the exact name is what was published — review of #593). */
+export function actionKindTagToastText(kind: string): string {
+  return visibleText(clipMiddle(kind, ACTION_KIND_INLINE_MAX));
+}
+
+/** `actionKindLabel`, clipped to `ACTION_KIND_INLINE_MAX`, for a toast (legacy 232). */
+export function actionKindToastLabel(kind: string): string {
+  return visibleText(clipMiddle(humanizeKind(kind), ACTION_KIND_INLINE_MAX));
+}
+
 /** A platform audit row's actor, for display: the login when known, else the id (S8 W4-A ui-audit
  *  AU1/S10: truncated via `shortId` rather than shown in full — a raw platform user id has no
  *  `resolve_refs` kind to resolve through, unlike every workspace-scope reference this console
@@ -179,10 +231,23 @@ export function prettyJson(value: unknown): string {
   }
 }
 
-/** One-line excerpt of arbitrary JSON, for list rows. */
+/** `prettyJson` for display: a format character or line separator inside a value (a bidi override
+ *  that would reorder `0001` into `1000`) is shown as `\u{XXXX}` — review of #593. Every JSON block
+ *  people read goes through this; an editor's own text (`JsonEditor`) keeps `prettyJson`, so saving
+ *  never writes the escapes back. */
+export function prettyJsonVisible(value: unknown): string {
+  try {
+    const json = JSON.stringify(value, null, 2);
+    return json !== undefined ? visibleJson(json) : visibleText(String(value));
+  } catch {
+    return visibleText(String(value));
+  }
+}
+
+/** One-line excerpt of arbitrary JSON, for list rows — unseen characters shown as `\u{XXXX}`. */
 export function excerpt(value: unknown, max = 120): string | undefined {
   if (value === null || value === undefined) return undefined;
-  const text = typeof value === 'string' ? value : JSON.stringify(value);
+  const text = visibleText(typeof value === 'string' ? value : JSON.stringify(value));
   if (!text) return undefined;
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }

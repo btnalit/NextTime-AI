@@ -10,7 +10,7 @@ import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import type { DraftAsRead } from '../../lib/connections.js';
 import { isDraftChangedError } from '../../lib/errors.js';
-import { shortId } from '../../lib/format.js';
+import { actionKindTagText, shortId } from '../../lib/format.js';
 import { gateGrantMakesApprover } from '../../lib/governance.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { transportKindLabel } from '../../lib/labels.js';
@@ -210,7 +210,7 @@ function RefusedOperationsChip({ gate }: { readonly gate: ExecutionReadinessGate
   const names = (dropped: boolean, separator: string) =>
     gate.definitionMismatch
       .filter((entry) => (entry.droppedByGate === true) === dropped)
-      .map((entry) => entry.operation)
+      .map((entry) => actionKindTagText(entry.operation))
       .join(separator);
   const changed = names(false, '、');
   const gone = names(true, '、');

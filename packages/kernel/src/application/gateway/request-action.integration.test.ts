@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import http from 'node:http';
 import net from 'node:net';
 import type { AddressInfo } from 'node:net';
@@ -14,7 +14,7 @@ import {
 import type { Transport, TransportInvokeResult } from '@nexttime/gatekeeper-base';
 import type { Operation, Role } from '@nexttime/shared';
 import type { FastifyInstance } from 'fastify';
-import type { Pool } from 'pg';
+import { Client, type Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
@@ -40,6 +40,7 @@ import {
   revokeCapabilityGrant,
 } from '../../governance/capability/index.js';
 import {
+  deprecateOperation,
   importManifest,
   proposeOperation,
   publishOperation,
@@ -55,7 +56,11 @@ import {
   reapStaleExecutingActionRequests,
 } from './action-executor.js';
 import { dispatchCapability } from './dispatch.js';
-import { ActionRequestDeniedError, setRequestActionDeps } from './request-action-handler.js';
+import {
+  ActionRequestDeniedError,
+  UnknownOperationError,
+  setRequestActionDeps,
+} from './request-action-handler.js';
 import type { ResolvedCaller } from './resolve-caller.js';
 
 /**
@@ -1657,20 +1662,271 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(row?.parentWorkerRunId).toBe(workerRunId);
     });
 
-    it('an unclassified (unimported) operation → require_approval, never executes', async () => {
-      const caller = humanCaller(workspaceId, ownerId);
-      const result = (await dispatchCapability({ pool }, caller, 'request_action', {
-        gatekeeperId,
-        operation: 'totally.unknown.op',
-        params: {},
-      })) as { status: string; id: string };
-      expect(result.status).toBe('pending_approval');
+    // Legacy 232: a name that names nothing on the gate used to become a `pending_approval` row
+    // (blast_radius medium) whose action_kind — any caller-chosen string — sat in approvers' queues
+    // and the audit log, and could never execute (legacy K). It is now refused at the boundary.
+    describe('legacy 232: a name the gate holds no definition for is refused at the boundary', () => {
+      const countRows = (actionKind: string) =>
+        withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+          const result = await client.query<{ n: number }>(
+            'select count(*)::int as n from action_requests where workspace_id = $1 and action_kind = $2',
+            [workspaceId, actionKind],
+          );
+          return result.rows[0]?.n ?? 0;
+        });
 
-      const row = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
-        getActionRequest(client, workspaceId, result.id),
-      );
-      expect(row?.blastRadius).toBe('medium');
-      expect(row?.status).toBe('pending_approval');
+      function inScopeHandle(): ResolvedCaller {
+        const now = Math.floor(Date.now() / 1000);
+        return {
+          channel: 'handle',
+          claims: {
+            ws: workspaceId,
+            sid: randomUUID(),
+            obo: ownerId,
+            scope: { capabilities: ['request_action'], resources: { gatekeeper: [gatekeeperId] } },
+            jti: randomUUID(),
+            iat: now,
+            exp: now + 600,
+          },
+        };
+      }
+
+      it('an unknown name: 404 unknown_operation, no ActionRequest, an audit row without the name', async () => {
+        const name = 'password=synthetic-not-a-secret <b>approve me</b>';
+        for (const caller of [humanCaller(workspaceId, ownerId), inScopeHandle()]) {
+          const err = await dispatchCapability({ pool }, caller, 'request_action', {
+            gatekeeperId,
+            operation: name,
+            params: { note: 'x' },
+          }).catch((e: unknown) => e);
+          expect(err).toBeInstanceOf(UnknownOperationError);
+          const refused = err as UnknownOperationError;
+          expect(refused.code).toBe('unknown_operation');
+          expect(refused.details).toEqual({ gatekeeperId, operationStatus: 'none' });
+          expect(refused.message).not.toContain('synthetic');
+          expect(refused.message).toContain('list_allowed_operations');
+        }
+        expect(await countRows(name)).toBe(0);
+
+        const audit = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          queryAudit(client, workspaceId, {
+            resourceType: 'gatekeeper',
+            resourceId: gatekeeperId,
+            limit: 20,
+          }),
+        );
+        const refusals = audit.filter(
+          (row) =>
+            row.action === 'request_action' &&
+            (row.payload as { refusal?: { code?: string } }).refusal?.code === 'unknown_operation',
+        );
+        expect(refusals.length).toBeGreaterThanOrEqual(2);
+        for (const row of refusals) {
+          const payload = row.payload as Record<string, unknown>;
+          expect(JSON.stringify(payload)).not.toContain('synthetic');
+          expect(payload.outcome).toBe('refused');
+          expect(payload.requestedOperation).toEqual({
+            length: name.length,
+            sha256: createHash('sha256').update(name, 'utf8').digest('hex'),
+          });
+          expect(payload.params).toEqual({ gatekeeperId, params: { note: 'x' } });
+        }
+      });
+
+      it('a deprecated Operation: 404 unknown_operation saying so, no ActionRequest', async () => {
+        const RETIRED: Operation = { ...PENDING_OP, name: 'retired.op' };
+        await withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+          const activity = await startActivity(client, workspaceId, {
+            kind: 'test.revision',
+            principalId: ownerId,
+          });
+          await proposeOperation(client, workspaceId, {
+            gatekeeperId,
+            operation: RETIRED,
+            proposedBy: { id: ownerId, kind: 'human' },
+            activityId: activity.id,
+          });
+          await publishOperation(client, workspaceId, { gatekeeperId, name: RETIRED.name });
+          await deprecateOperation(client, workspaceId, { gatekeeperId, name: RETIRED.name });
+        });
+        const err = await dispatchCapability(
+          { pool },
+          humanCaller(workspaceId, ownerId),
+          'request_action',
+          { gatekeeperId, operation: RETIRED.name, params: {} },
+        ).catch((e: unknown) => e);
+        expect(err).toBeInstanceOf(UnknownOperationError);
+        expect((err as UnknownOperationError).details.operationStatus).toBe('deprecated');
+        expect(await countRows(RETIRED.name)).toBe(0);
+      });
+
+      it('a draft Operation still goes to approval (I17), never auto-executed', async () => {
+        const caller = humanCaller(workspaceId, ownerId);
+        const result = (await dispatchCapability({ pool }, caller, 'request_action', {
+          gatekeeperId,
+          operation: DRAFT_OP.name,
+          params: { qty: 232 },
+        })) as { status: string; id: string };
+        expect(result.status).toBe('pending_approval');
+        const row = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          getActionRequest(client, workspaceId, result.id),
+        );
+        expect(row?.blastRadius).toBe('medium');
+        expect(row?.operationDigest).not.toBe(NO_OPERATION_DEFINITION);
+      });
+
+      // Review #493 M1: a draft counts only when the caller may see it (D-26: its proposer, the
+      // owner, a builder). Anyone else's draft must answer exactly what no draft answers, or the
+      // 404 / pending difference tells a member's agent which names others have drafted (I17).
+      it("a member's agent gets the same 404 for someone else's draft as for a name that does not exist; its own draft still goes to approval", async () => {
+        const memberId = await adminInsertPrincipal(`member-232-${randomUUID()}`, 'member');
+        const OWN: Operation = { ...PENDING_OP, name: 'member.own.draft' };
+        const OTHERS_ON_RETIRED: Operation = { ...PENDING_OP, name: 'retired.then.redrafted' };
+        await withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+          await grantCapability(client, workspaceId, {
+            principalId: memberId,
+            resourceType: 'gatekeeper',
+            resourceId: gatekeeperId,
+            grantedBy: ownerId,
+          });
+          const activity = await startActivity(client, workspaceId, {
+            kind: 'test.revision',
+            principalId: ownerId,
+          });
+          await proposeOperation(client, workspaceId, {
+            gatekeeperId,
+            operation: OWN,
+            proposedBy: { id: memberId, kind: 'human' },
+            activityId: activity.id,
+          });
+          // Published, revised by the owner (a v2 draft), then v1 deprecated: the member must
+          // read "deprecated" (public history), never that a new draft exists.
+          await proposeOperation(client, workspaceId, {
+            gatekeeperId,
+            operation: OTHERS_ON_RETIRED,
+            proposedBy: { id: ownerId, kind: 'human' },
+            activityId: activity.id,
+          });
+          await publishOperation(client, workspaceId, {
+            gatekeeperId,
+            name: OTHERS_ON_RETIRED.name,
+          });
+          await proposeOperation(client, workspaceId, {
+            gatekeeperId,
+            operation: { ...OTHERS_ON_RETIRED, description: 'revised' },
+            proposedBy: { id: ownerId, kind: 'human' },
+            activityId: activity.id,
+          });
+          await deprecateOperation(client, workspaceId, {
+            gatekeeperId,
+            name: OTHERS_ON_RETIRED.name,
+          });
+        });
+
+        const now = Math.floor(Date.now() / 1000);
+        const memberHandle = (): ResolvedCaller => ({
+          channel: 'handle',
+          claims: {
+            ws: workspaceId,
+            sid: randomUUID(),
+            obo: memberId,
+            scope: { capabilities: ['request_action'], resources: { gatekeeper: [gatekeeperId] } },
+            jti: randomUUID(),
+            iat: now,
+            exp: now + 600,
+          },
+        });
+        const refusalOf = async (caller: ResolvedCaller, operation: string) => {
+          const err = await dispatchCapability({ pool }, caller, 'request_action', {
+            gatekeeperId,
+            operation,
+            params: {},
+          }).catch((e: unknown) => e);
+          expect(err).toBeInstanceOf(UnknownOperationError);
+          const refused = err as UnknownOperationError;
+          return { code: refused.code, message: refused.message, details: refused.details };
+        };
+
+        // DRAFT_OP is the owner's import draft — invisible to a member.
+        const draftRowsBefore = await countRows(DRAFT_OP.name);
+        const othersDraft = await refusalOf(memberHandle(), DRAFT_OP.name);
+        const missing = await refusalOf(memberHandle(), 'no.such.operation.anywhere');
+        expect(othersDraft).toEqual(missing);
+        expect(othersDraft.details.operationStatus).toBe('none');
+        // The same holds on the member's own console.
+        expect(
+          await refusalOf(humanCaller(workspaceId, memberId, 'member'), DRAFT_OP.name),
+        ).toEqual(
+          await refusalOf(
+            humanCaller(workspaceId, memberId, 'member'),
+            'no.such.operation.anywhere',
+          ),
+        );
+        expect(await countRows(DRAFT_OP.name)).toBe(draftRowsBefore);
+        // Review #493 on #593 (P3): nor do the two take different paths — the same statements,
+        // so the time a refusal takes does not tell them apart either.
+        const statementsFor = async (operation: string): Promise<string[]> => {
+          const original = Client.prototype.query;
+          const texts: string[] = [];
+          Client.prototype.query = function (this: Client, ...args: unknown[]) {
+            const query = args[0];
+            texts.push(
+              typeof query === 'string' ? query : ((query as { text?: string })?.text ?? ''),
+            );
+            return (original as (...rest: unknown[]) => unknown).apply(this, args);
+          } as typeof original;
+          try {
+            await refusalOf(memberHandle(), operation);
+          } finally {
+            Client.prototype.query = original;
+          }
+          return texts;
+        };
+        const draftStatements = await statementsFor(DRAFT_OP.name);
+        expect(draftStatements.length).toBeGreaterThan(0);
+        expect(draftStatements).toEqual(await statementsFor('no.such.operation.anywhere'));
+
+        const overRetired = await refusalOf(memberHandle(), OTHERS_ON_RETIRED.name);
+        expect(overRetired.details.operationStatus).toBe('deprecated');
+
+        const own = (await dispatchCapability({ pool }, memberHandle(), 'request_action', {
+          gatekeeperId,
+          operation: OWN.name,
+          params: {},
+        })) as { status: string };
+        expect(own.status).toBe('pending_approval');
+
+        // The owner's agent sees every draft (D-26): the owner's re-draft goes to approval.
+        const ownerSees = (await dispatchCapability({ pool }, inScopeHandle(), 'request_action', {
+          gatekeeperId,
+          operation: OTHERS_ON_RETIRED.name,
+          params: {},
+        })) as { status: string };
+        expect(ownerSees.status).toBe('pending_approval');
+      });
+
+      it('a Handle whose scope does not cover the gate is still denied (403), so a 404 tells it nothing about the gate', async () => {
+        const now = Math.floor(Date.now() / 1000);
+        const uncovered: ResolvedCaller = {
+          channel: 'handle',
+          claims: {
+            ws: workspaceId,
+            sid: randomUUID(),
+            obo: ownerId,
+            scope: { capabilities: ['request_action'], resources: { gatekeeper: [randomUUID()] } },
+            jti: randomUUID(),
+            iat: now,
+            exp: now + 600,
+          },
+        };
+        await expect(
+          dispatchCapability({ pool }, uncovered, 'request_action', {
+            gatekeeperId,
+            operation: 'never.heard.of.it',
+            params: {},
+          }),
+        ).rejects.toBeInstanceOf(ActionRequestDeniedError);
+      });
     });
 
     // P1-3 fix (review job 652a4abc): "crash/DB failure between apply success and
@@ -2252,14 +2508,25 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
 
       it('a request made against no definition (unpublished, no draft) is refused even once the Operation is published (review of #538)', async () => {
+        // `request_action` refuses such a name at the boundary since legacy 232; a row made before
+        // that (still pending on an upgraded deployment) is what the executor has to hold back.
         const name = 'k.published.after.request';
-        const requested = (await dispatchCapability(
-          { pool },
-          humanCaller(workspaceId, ownerId),
-          'request_action',
-          { gatekeeperId: kGatekeeperId, operation: name, params: {} },
-        )) as { status: string; id: string };
-        expect(requested.status).toBe('pending_approval');
+        const requested = await withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerId },
+          async (client) => {
+            const result = await client.query<{ id: string }>(
+              `insert into action_requests (
+                 workspace_id, status, gatekeeper_id, action_kind, blast_radius, policy_decision,
+                 await_decision, on_behalf_of, actor_runtime, params, operation_digest
+               ) values ($1, 'pending_approval', $2, $3, 'medium', 'require_approval', true, $4,
+                 'human', '{}'::jsonb, $5)
+               returning id`,
+              [workspaceId, kGatekeeperId, name, ownerId, NO_OPERATION_DEFINITION],
+            );
+            return { id: result.rows[0]?.id as string };
+          },
+        );
         expect((await readRow(requested.id)).operationDigest).toBe(NO_OPERATION_DEFINITION);
 
         // Published while the request waits — not what it was approved against.

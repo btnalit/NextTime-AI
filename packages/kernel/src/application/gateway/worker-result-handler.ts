@@ -7,12 +7,15 @@ import type {
 } from '../../application/task/index.js';
 import { findWorkerRunBySessionId, postWorkerResult } from '../../application/task/index.js';
 import {
+  OperationIdentityConflictError,
+  OperationNameInvalidError,
   getGatekeeper,
   listGatekeepers,
   listPublishedOperationsForGatekeepers,
+  operationProposalRefusal,
 } from '../../governance/gatekeepers/index.js';
 import type { GatekeeperRecord } from '../../governance/gatekeepers/index.js';
-import { redactSecrets } from '../../governance/redaction/index.js';
+import { boundedEcho, quotedName, redactSecrets } from '../../governance/redaction/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
 import {
   narrowScopeToExecutableGates,
@@ -97,7 +100,7 @@ async function checkObjectRef(
     if (err instanceof MetaOntologyWriteForbiddenError) {
       return {
         reason: 'meta_ontology_type',
-        detail: `ObjectType "${objectType}" is platform meta-ontology (I16)`,
+        detail: `ObjectType ${quotedName(objectType)} is platform meta-ontology (I16)`,
       };
     }
     throw err;
@@ -108,14 +111,16 @@ async function checkObjectRef(
 /** Checks every `factsToAssert[]`/`evidence[]`/`proposedOperations[]` entry's cross-references
  *  before any write runs (§ module doc comment) and returns the per-entry refusals for
  *  `postWorkerResult` to skip and record — a model-generated entry that names a meta-ontology
- *  type (I16), a missing `objectId`, a `gatekeeperId` that is no Gatekeeper, or an
- *  `evidence[].factIndex` out of range costs that entry, not the Task's result. Nothing here
- *  throws for a per-entry problem; contract-level shape errors are already the capability
- *  boundary's Zod validation. */
+ *  type (I16), a missing `objectId`, a `gatekeeperId` that is no Gatekeeper, a proposal
+ *  `proposeOperation` would refuse (a new name breaking the name rule, an identity `proposerId`
+ *  may not write over — review #493 on #593), or an `evidence[].factIndex` out of range costs
+ *  that entry, not the Task's result. Nothing here throws for a per-entry problem;
+ *  contract-level shape errors are already the capability boundary's Zod validation. */
 async function validateContract(
   client: PoolClient,
   workspaceId: string,
   contract: WorkerResultCapabilityParams,
+  proposerId: string,
 ): Promise<ContractPreRejections> {
   const contractFacts = contract.factsToAssert ?? [];
   const facts: RejectedResultFact[] = [];
@@ -148,6 +153,36 @@ async function validateContract(
         index,
         gatekeeperId: proposal.gatekeeperId,
         reason: 'gatekeeper_not_found',
+      });
+      continue;
+    }
+    const { name } = proposal.operation;
+    const refusal = await operationProposalRefusal(
+      client,
+      workspaceId,
+      proposal.gatekeeperId,
+      name,
+      proposerId,
+    );
+    if (refusal?.reason === 'invalid_operation_name') {
+      proposals.push({
+        index,
+        gatekeeperId: proposal.gatekeeperId,
+        reason: refusal.reason,
+        problem: refusal.problem,
+        detail: boundedEcho(new OperationNameInvalidError(name, refusal.problem).message, 400),
+      });
+    } else if (refusal?.reason === 'operation_identity_conflict') {
+      proposals.push({
+        index,
+        gatekeeperId: proposal.gatekeeperId,
+        reason: refusal.reason,
+        existingStatus: refusal.existingStatus,
+        detail: boundedEcho(
+          new OperationIdentityConflictError(proposal.gatekeeperId, name, refusal.existingStatus)
+            .message,
+          400,
+        ),
       });
     }
   }
@@ -202,13 +237,15 @@ export const reportTaskResultHandler: CapabilityHandler = async (
     );
   }
 
-  const { contract, redactedValues } = scrubReport(params as WorkerResultCapabilityParams);
-  const preRejected = await validateContract(client, workspaceId, contract);
-
   const onBehalfOf = ctx?.principalId;
   if (!onBehalfOf) {
     throw new Error('report_task_result: caller context is required (dispatch.ts must supply it)');
   }
+
+  const { contract, redactedValues } = scrubReport(params as WorkerResultCapabilityParams);
+  // Proposed Operations are owned by `onBehalfOf` (application/task/result.ts), so that is whose
+  // own draft a proposal may revise.
+  const preRejected = await validateContract(client, workspaceId, contract, onBehalfOf);
   // `agentPrincipalId` is resolved once, at spawn time (`spawn.ts`'s `ensureWorkerAgentPrincipal`),
   // and stamped on the WorkerRun row itself — `findWorkerRunBySessionId` above already read it, so
   // this handler passes it straight through rather than making `postWorkerResult` re-derive it.

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { usePublishCredentialReview } from '../../lib/credential-review.js';
 import { errorToastText } from '../../lib/errors.js';
+import { actionKindTagText, actionKindTagToastText } from '../../lib/format.js';
 import { useT } from '../../lib/i18n.js';
 import { CredentialReview } from '../kit/credential-review.js';
 import { Button } from '../ui/Button.js';
@@ -77,6 +78,9 @@ export function DraftProposed({
   const [error, setError] = useState<unknown | null>(null);
   const publishRef = useRef<HTMLButtonElement>(null);
   const credentialReview = usePublishCredentialReview(`${draft.id}@${draft.version}`);
+  // Legacy 232: a name written before the name rule may carry a hidden character; a toast
+  // carries the short form (`format.ts`).
+  const shownName = draft.name !== undefined ? actionKindTagToastText(draft.name) : draft.id;
 
   // Focuses Publish once, on mount only — a later status change (e.g. after publishing) must not
   // steal focus back.
@@ -97,7 +101,7 @@ export function DraftProposed({
       onPublished?.();
       toast.push({
         tone: 'ok',
-        title: t(`已发布 · ${draft.name ?? draft.id}`, `Published · ${draft.name ?? draft.id}`),
+        title: t(`已发布 · ${shownName}`, `Published · ${shownName}`),
       });
     } catch (err) {
       // The kernel's credential question — answered next to Publish, not as a failure.
@@ -105,10 +109,7 @@ export function DraftProposed({
       setError(err);
       toast.push({
         tone: 'danger',
-        title: t(
-          `无法发布 ${draft.name ?? draft.id}`,
-          `Could not publish ${draft.name ?? draft.id}`,
-        ),
+        title: t(`无法发布 ${shownName}`, `Could not publish ${shownName}`),
         description: errorToastText(err, t),
       });
     } finally {
@@ -120,7 +121,7 @@ export function DraftProposed({
     <div className="stack" data-testid="draft-proposed" data-draft-id={draft.id}>
       <div className="row-wrap">
         <StatusChip machine="publishable" status={status} />
-        <strong>{draft.name ?? kindLabel}</strong>
+        <strong>{draft.name !== undefined ? actionKindTagText(draft.name) : kindLabel}</strong>
         <span className="text-3">v{draft.version}</span>
         <CopyId id={draft.id} label={kindLabel} />
       </div>

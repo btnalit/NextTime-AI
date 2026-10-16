@@ -106,6 +106,31 @@ export const ResultMappingSchema = z.object({
 });
 export type ResultMapping = z.infer<typeof ResultMappingSchema>;
 
+/**
+ * Legacy 232 (review #493): the rule a *new* Operation name must meet — an Operation's name is
+ * the action kind an approver reads on the approval card, and `propose_operation` lets an agent
+ * choose it. At most `OPERATION_NAME_MAX` characters, and none that is invisible or reorders
+ * what is shown: control characters (`\p{Cc}`), format characters (`\p{Cf}` — bidi overrides
+ * such as U+202E, zero-width characters), lone surrogates (`\p{Cs}`), line / paragraph
+ * separators (`\p{Zl}`, `\p{Zp}`). Enforced where a new identity is written (`proposeOperation`,
+ * `importManifest` in the kernel), not by `OperationSchema` itself: stored and announced
+ * definitions are parsed with that schema, and a name already on file keeps working (it is
+ * escaped where shown).
+ */
+export const OPERATION_NAME_MAX = 128;
+
+const DISALLOWED_NAME_CHARACTER = /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u;
+
+export type OperationNameProblem = 'empty' | 'too_long' | 'invisible_or_control_characters';
+
+/** Why `name` may not name a new Operation, or `undefined` when it may. */
+export function operationNameProblem(name: string): OperationNameProblem | undefined {
+  if (name.trim().length === 0) return 'empty';
+  if ([...name].length > OPERATION_NAME_MAX) return 'too_long';
+  if (DISALLOWED_NAME_CHARACTER.test(name)) return 'invisible_or_control_characters';
+  return undefined;
+}
+
 export const OperationSchema = z.object({
   name: z.string(),
   /** S8 W2-K1 (leftover 71/72, audit B3/CO1): human-readable, markdown-free description of what

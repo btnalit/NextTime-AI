@@ -250,6 +250,13 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
+/* Legacy 232: a line that names an action kind wraps instead of ellipsing it — an approver must
+   see the whole name to tell two apart. */
+.wrap-anywhere {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .code-block {
   margin: 0;
   padding: var(--space-3);

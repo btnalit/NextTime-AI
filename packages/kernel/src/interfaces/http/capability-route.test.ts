@@ -39,6 +39,7 @@ import {
   WorkerResultValidationError,
   hashApiKey,
 } from '../../application/gateway/index.js';
+import { UnknownOperationError } from '../../application/gateway/index.js';
 import { TaskRuntimeNotConfiguredError } from '../../application/task/index.js';
 import {
   ProcedureStepReferenceError,
@@ -58,6 +59,7 @@ import {
   GatekeeperNotFoundError,
 } from '../../governance/connections/index.js';
 import { ConnectionParamsCarryCredentialsError } from '../../governance/connections/index.js';
+import { OperationNameInvalidError } from '../../governance/gatekeepers/index.js';
 import {
   OperationDeclaresGateOwnedParamsError,
   OperationIdentityConflictError,
@@ -98,6 +100,29 @@ describe('mapCapabilityError — S6-A / C25 approve.reason (unit)', () => {
     expect(mapCapabilityError(new ApprovalReasonRequiredError('ar-1'))).toMatchObject({
       status: 400,
       code: 'reason_required',
+    });
+  });
+});
+
+describe('mapCapabilityError — legacy 232 unknown operation (unit)', () => {
+  it('UnknownOperationError maps to 404 unknown_operation with its details, never the requested name', () => {
+    expect(mapCapabilityError(new UnknownOperationError('gk-1', 'none'))).toMatchObject({
+      status: 404,
+      code: 'unknown_operation',
+      details: { gatekeeperId: 'gk-1', operationStatus: 'none' },
+    });
+  });
+
+  it('OperationNameInvalidError maps to 400 invalid_operation_name with its details', () => {
+    expect(
+      mapCapabilityError(
+        new OperationNameInvalidError('a\u202Eb', 'invisible_or_control_characters'),
+      ),
+    ).toMatchObject({
+      status: 400,
+      code: 'invalid_operation_name',
+      details: { problem: 'invisible_or_control_characters', maxLength: 128 },
+      message: expect.stringContaining('"a\\u{202E}b"'),
     });
   });
 });

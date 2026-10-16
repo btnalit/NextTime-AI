@@ -5,6 +5,7 @@ import {
   operationDefinitionDigest,
 } from '@nexttime/gatekeeper-base';
 import type { Operation } from '@nexttime/shared';
+import { quotedName } from '../redaction/index.js';
 
 /**
  * governance/gatekeepers/definition (legacy K): which definition of an Operation this workspace
@@ -28,7 +29,7 @@ export class OperationDefinitionUnreadableError extends Error {
   readonly operationName: string;
   constructor(gatekeeperId: string, operationName: string, cause: unknown) {
     super(
-      `Operation "${operationName}" on gatekeeper ${gatekeeperId}: its stored definition is not a valid Operation, so there is no approved definition to hold the gate to — refused, nothing was sent. Publish a corrected revision of it.`,
+      `Operation ${quotedName(operationName)} on gatekeeper ${gatekeeperId}: its stored definition is not a valid Operation, so there is no approved definition to hold the gate to — refused, nothing was sent. Publish a corrected revision of it.`,
       { cause },
     );
     this.name = 'OperationDefinitionUnreadableError';

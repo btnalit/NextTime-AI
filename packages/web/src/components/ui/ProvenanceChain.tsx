@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { formatDateTime, formatRelative } from '../../lib/format.js';
+import { formatDateTime, formatRelative, prettyJsonVisible } from '../../lib/format.js';
 import { useT } from '../../lib/i18n.js';
 import { Icon } from './Icon.js';
 import { RefChip } from './RefChip.js';
@@ -333,7 +333,7 @@ export function ProvenanceChain({
             {t('原始证据', 'Raw evidence')}
           </summary>
           <div className="disclosure-body">
-            <pre className="code-block">{JSON.stringify(raw, null, 2)}</pre>
+            <pre className="code-block">{prettyJsonVisible(raw)}</pre>
           </div>
         </details>
       ) : null}

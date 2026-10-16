@@ -12,7 +12,7 @@ import {
 } from '../lib/audit.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
-import { prettyJson, redactSensitive } from '../lib/format.js';
+import { prettyJsonVisible, redactSensitive } from '../lib/format.js';
 import type { ActionRequestRow } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
 import { breadcrumbFor } from '../lib/nav.js';
@@ -221,7 +221,7 @@ function ReconstructCard({ http }: { readonly http: CapabilityCaller }) {
       ) : null}
       {state.result !== null ? (
         <pre className="code-block pre-wrap" data-testid="reconstruct-result">
-          {prettyJson(redactSensitive(state.result))}
+          {prettyJsonVisible(redactSensitive(state.result))}
         </pre>
       ) : null}
     </section>

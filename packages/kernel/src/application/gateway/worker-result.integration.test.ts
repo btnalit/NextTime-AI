@@ -17,9 +17,10 @@ import {
   generateEphemeralHandleKeyPair,
   issueHandle,
 } from '../../governance/capability/index.js';
-import { explain } from '../../substrate/epistemic/index.js';
+import { proposeOperation, registerGatekeeper } from '../../governance/gatekeepers/index.js';
+import { explain, startActivity } from '../../substrate/epistemic/index.js';
 import { publishOntologyDomainPack } from '../../substrate/ontology/index.js';
-import { invokeWorker, readWorkerRunRow } from '../task/index.js';
+import { invokeWorker, postWorkerResult, readWorkerRunRow } from '../task/index.js';
 import type { TaskRuntimeDeps } from '../task/runtime.js';
 import { listSkills, proposeWorkerDefinition, publishWorkerDefinition } from '../worker/index.js';
 import { createWorkspaceWithOwner } from '../workspace/index.js';
@@ -1212,6 +1213,304 @@ describe.runIf(DATABASE_URL !== undefined)(
           'task.result_proposal_rejected',
         ]);
         expect(stored.evidenceRows).toBe('1');
+      });
+
+      it('legacy 232: a refusal echoes the model’s own strings bounded and visible — in tasks.result and in its audit rows', async () => {
+        // The warn case above left the workspace in warn mode; this one needs the guard to refuse.
+        await withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerId },
+          (client) =>
+            client.query('update workspaces set ontology_enforcement = $2 where id = $1', [
+              workspaceId,
+              'reject',
+            ]),
+          { skipRoleSwitch: true },
+        );
+        const { taskId, claims } = await spawnWorkerRun();
+        const caller: ResolvedCaller = { channel: 'handle', claims };
+        const longLinkType = `evil\u202E${'x'.repeat(500)}`;
+        const marker = randomUUID().slice(0, 8);
+        const result = (await dispatchCapability({ pool }, caller, 'report_task_result', {
+          summary: 'odd names',
+          factsToAssert: [
+            {
+              linkType: longLinkType,
+              source: { objectType: 'Doc\u200BContainer', identity: { marker } },
+              target: { objectType: 'Host', identity: { hostname: `h-${marker}` } },
+            },
+            {
+              linkType: 'runs_on\nforged line',
+              source: { objectType: 'Task', identity: { description: 'x' } },
+              target: { objectType: 'Gatekeeper', identity: { name: 'ssh' } },
+            },
+          ],
+          proposedOperations: [
+            {
+              gatekeeperId: randomUUID(),
+              operation: {
+                name: `demo.\u202Eop.${'y'.repeat(300)}`,
+                binding: { kind: 'http', method: 'GET', path: '/uptime' },
+                params_schema: {},
+                mode: 'observe',
+                blast_radius: 'low',
+                reversibility: false,
+                auto_approvable: true,
+                await_decision: false,
+                reads: [],
+                writes: [],
+              },
+            },
+          ],
+        })) as { status: string };
+        expect(result.status).toBe('completed');
+
+        const stored = await inTx(ownerId, async (client) => {
+          const task = await client.query<{ result: { factsRejected: unknown[] } }>(
+            'select result from tasks where workspace_id = $1 and id = $2',
+            [workspaceId, taskId],
+          );
+          const audit = await client.query<{ action: string; payload: Record<string, unknown> }>(
+            "select action, payload from audit_records where workspace_id = $1 and resource_id = $2 and action in ('task.result_fact_rejected', 'task.result_proposal_rejected') order by action, payload ->> 'factIndex'",
+            [workspaceId, taskId],
+          );
+          return { factsRejected: task.rows[0]?.result.factsRejected, audit: audit.rows };
+        });
+        const echoed = JSON.stringify([stored.factsRejected, stored.audit]);
+        // Nothing unseen survives: no bidi override, no zero-width character, no raw line break.
+        expect(echoed).not.toMatch(/[\u202E\u200B]/);
+        expect(echoed).not.toContain('\\n');
+        expect(stored.factsRejected).toEqual([
+          expect.objectContaining({
+            index: 0,
+            reason: 'undeclared_link_type',
+            linkType: `evil\\u{202E}${'x'.repeat(123)}…`,
+            sourceType: 'Doc\\u{200B}Container',
+          }),
+          expect.objectContaining({
+            index: 1,
+            reason: 'meta_ontology_type',
+            linkType: 'runs_on\\u{A}forged line',
+          }),
+        ]);
+        expect(stored.audit.map((row) => row.action)).toEqual([
+          'task.result_fact_rejected',
+          'task.result_fact_rejected',
+          'task.result_proposal_rejected',
+        ]);
+        expect(stored.audit[0]?.payload.linkType).toBe(`evil\\u{202E}${'x'.repeat(123)}…`);
+        expect(stored.audit[1]?.payload).toMatchObject({
+          linkType: 'runs_on\\u{A}forged line',
+          detail: 'ObjectType "Gatekeeper" is platform meta-ontology (I16)',
+        });
+        expect(stored.audit[2]?.payload.operation).toBe(`demo.\\u{202E}op.${'y'.repeat(119)}…`);
+      });
+
+      describe('review #493 on #593 (M1): a proposal proposeOperation would refuse costs that entry, not the result', () => {
+        const proposalOperation = (name: string) => ({
+          name,
+          binding: { kind: 'http' as const, method: 'GET' as const, path: '/uptime' },
+          params_schema: {},
+          mode: 'observe' as const,
+          blast_radius: 'low' as const,
+          reversibility: false,
+          auto_approvable: true,
+          await_decision: false,
+          reads: [],
+          writes: [],
+        });
+
+        async function registerTestGate(marker: string): Promise<string> {
+          return inTx(ownerId, async (client) => {
+            const activity = await startActivity(client, workspaceId, {
+              kind: 'test.register_gatekeeper',
+              principalId: ownerId,
+            });
+            const { gatekeeperId } = await registerGatekeeper(client, workspaceId, {
+              name: `m1-gate-${marker}`,
+              transportKind: 'http',
+              target: `m1-system-${marker}`,
+              endpoint: `https://gate.m1-${marker}.invalid/`,
+              activityId: activity.id,
+              registeredBy: { id: ownerId, kind: 'human' },
+            });
+            return gatekeeperId;
+          });
+        }
+
+        /** Every row and audit entry the proposals left, read past RLS. */
+        async function readProposalOutcome(taskId: string, gatekeeperId: string) {
+          return withWorkspace(
+            pool,
+            { workspaceId, principalId: ownerId },
+            async (client) => {
+              const task = await client.query<{
+                status: string;
+                result: {
+                  factIds: string[];
+                  proposedOperationsRejected: Record<string, unknown>[];
+                };
+              }>('select status, result from tasks where workspace_id = $1 and id = $2', [
+                workspaceId,
+                taskId,
+              ]);
+              const operations = await client.query<{ name: string; proposed_by: string | null }>(
+                `select identity_key ->> 'name' as name, properties ->> 'proposedBy' as proposed_by
+                 from objects
+                 where workspace_id = $1 and object_type = 'Operation'
+                   and identity_key ->> 'gatekeeperId' = $2
+                 order by name`,
+                [workspaceId, gatekeeperId],
+              );
+              const proposalActivities = await client.query<{ operation: string }>(
+                `select metadata ->> 'operation' as operation from activities
+                 where workspace_id = $1 and kind = 'operation_proposal'
+                   and metadata ->> 'gatekeeperId' = $2`,
+                [workspaceId, gatekeeperId],
+              );
+              const audit = await client.query<{ payload: Record<string, unknown> }>(
+                `select payload from audit_records
+                 where workspace_id = $1 and resource_id = $2
+                   and action = 'task.result_proposal_rejected'
+                 order by (payload ->> 'proposalIndex')::int`,
+                [workspaceId, taskId],
+              );
+              return {
+                task: task.rows[0],
+                operations: operations.rows,
+                proposalActivities: proposalActivities.rows.map((row) => row.operation),
+                audit: audit.rows.map((row) => row.payload),
+              };
+            },
+            { skipRoleSwitch: true },
+          );
+        }
+
+        it('report_task_result: bad new names and a name held by another principal’s draft are refused per entry; the good proposal and the facts land; the Task completes', async () => {
+          const marker = randomUUID().slice(0, 8);
+          const gatekeeperId = await registerTestGate(marker);
+          const takenName = `demo.taken.${marker}`;
+          const otherId = await adminInsertPrincipal('builder', 'Other proposer');
+          await inTx(otherId, async (client) => {
+            const activity = await startActivity(client, workspaceId, {
+              kind: 'operation_proposal',
+              principalId: otherId,
+            });
+            await proposeOperation(client, workspaceId, {
+              gatekeeperId,
+              operation: proposalOperation(takenName),
+              proposedBy: { id: otherId, kind: 'agent' },
+              activityId: activity.id,
+            });
+          });
+
+          const { taskId, claims } = await spawnWorkerRun();
+          const caller: ResolvedCaller = { channel: 'handle', claims };
+          const goodName = `demo.good.${marker}`;
+          const result = (await dispatchCapability({ pool }, caller, 'report_task_result', {
+            summary: 'mixed proposals',
+            factsToAssert: [validFact()],
+            proposedOperations: [
+              { gatekeeperId, operation: proposalOperation(goodName) },
+              { gatekeeperId, operation: proposalOperation(`demo.${'y'.repeat(200)}`) },
+              { gatekeeperId, operation: proposalOperation('demo.‮flip') },
+              { gatekeeperId, operation: proposalOperation(takenName) },
+            ],
+          })) as { status: string; factIds: string[] };
+          expect(result.status).toBe('completed');
+          expect(result.factIds).toHaveLength(1);
+
+          const stored = await readProposalOutcome(taskId, gatekeeperId);
+          expect(stored.task?.status).toBe('completed');
+          expect(stored.task?.result.factIds).toEqual(result.factIds);
+          expect(stored.task?.result.proposedOperationsRejected).toEqual([
+            expect.objectContaining({
+              index: 1,
+              gatekeeperId,
+              reason: 'invalid_operation_name',
+              problem: 'too_long',
+            }),
+            expect.objectContaining({
+              index: 2,
+              gatekeeperId,
+              reason: 'invalid_operation_name',
+              problem: 'invisible_or_control_characters',
+              detail: expect.stringContaining('"demo.\\u{202E}flip"'),
+            }),
+            expect.objectContaining({
+              index: 3,
+              gatekeeperId,
+              reason: 'operation_identity_conflict',
+              existingStatus: 'draft',
+            }),
+          ]);
+          // The good draft is the Task's on_behalf_of owner's; the taken one is still the other
+          // principal's, untouched; no row for a refused name.
+          expect(stored.operations).toEqual([
+            { name: goodName, proposed_by: ownerId },
+            { name: takenName, proposed_by: otherId },
+          ]);
+          // Only the written proposal opened an operation_proposal Activity on this gate.
+          expect(stored.proposalActivities).toEqual([goodName]);
+          expect(stored.audit).toEqual([
+            expect.objectContaining({ proposalIndex: 1, reason: 'invalid_operation_name' }),
+            expect.objectContaining({
+              proposalIndex: 2,
+              reason: 'invalid_operation_name',
+              operation: 'demo.\\u{202E}flip',
+            }),
+            expect.objectContaining({ proposalIndex: 3, reason: 'operation_identity_conflict' }),
+          ]);
+          // Echoes are visible; `result.proposedOperations` is the contract as sent, by design.
+          expect(
+            JSON.stringify([stored.task?.result.proposedOperationsRejected, stored.audit]),
+          ).not.toMatch(/\u202E/);
+        });
+
+        it('postWorkerResult: a refusal the pre-check did not see (a concurrent write) still costs that entry only', async () => {
+          const marker = randomUUID().slice(0, 8);
+          const gatekeeperId = await registerTestGate(marker);
+          const { taskId, workerRunId } = await spawnWorkerRun();
+          const workerRun = await inTx(ownerId, (client) =>
+            readWorkerRunRow(client, workspaceId, workerRunId),
+          );
+          const agentPrincipalId = workerRun?.agentPrincipalId;
+          if (!agentPrincipalId) throw new Error('spawned WorkerRun has no agent principal');
+          const goodName = `demo.good.${marker}`;
+          // No `preRejected`: the write point meets the bad name itself.
+          const outcome = await inTx(ownerId, (client) =>
+            postWorkerResult(client, workspaceId, {
+              actorPrincipalId: ownerId,
+              agentPrincipalId,
+              taskId,
+              workerRunId,
+              contract: {
+                summary: 'race',
+                factsToAssert: [validFact()],
+                proposedOperations: [
+                  { gatekeeperId, operation: proposalOperation(`demo.${'y'.repeat(200)}`) },
+                  { gatekeeperId, operation: proposalOperation(goodName) },
+                ],
+              },
+            }),
+          );
+          expect(outcome.task.status).toBe('completed');
+          expect(outcome.factIds).toHaveLength(1);
+          expect(outcome.proposedOperationsRejected).toEqual([
+            expect.objectContaining({
+              index: 0,
+              reason: 'invalid_operation_name',
+              problem: 'too_long',
+            }),
+          ]);
+          const stored = await readProposalOutcome(taskId, gatekeeperId);
+          expect(stored.operations).toEqual([{ name: goodName, proposed_by: ownerId }]);
+          // The refused entry's Activity rolled back with its savepoint.
+          expect(stored.proposalActivities).toEqual([goodName]);
+          expect(stored.audit).toEqual([
+            expect.objectContaining({ proposalIndex: 0, reason: 'invalid_operation_name' }),
+          ]);
+        });
       });
     });
   },

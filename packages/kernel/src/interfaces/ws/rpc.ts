@@ -47,6 +47,7 @@ import {
   SourceNotFoundError,
   SupersedeIdentityMismatchError,
   UnauthorizedError,
+  UnknownOperationError,
 } from '../../application/gateway/index.js';
 // P-B2b: same direct-import convention as the comment above — application/platform/modules.ts is a
 // domain module, not re-exported by application/gateway/index.ts's curated surface.
@@ -97,6 +98,7 @@ import {
   OperationDeclaresGateOwnedParamsError,
   OperationDraftChangedError,
   OperationIdentityConflictError,
+  OperationNameInvalidError,
   OperationNotFoundError,
 } from '../../governance/gatekeepers/index.js';
 import {
@@ -323,6 +325,14 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   // An Operation declaring a gate-owned param, not published (see capability-route.ts's own mapping).
   if (err instanceof OperationDeclaresGateOwnedParamsError) {
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
+  }
+  // Legacy 232: mirrors HTTP 400 `invalid_operation_name` (capability-route.ts).
+  if (err instanceof OperationNameInvalidError) {
+    return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
+  }
+  // Legacy 232: mirrors HTTP 404 `unknown_operation` (capability-route.ts).
+  if (err instanceof UnknownOperationError) {
+    return { code: WS_ERROR_CODES.NOT_FOUND, message: err.message };
   }
   if (
     err instanceof ActionRequestNotFoundError ||

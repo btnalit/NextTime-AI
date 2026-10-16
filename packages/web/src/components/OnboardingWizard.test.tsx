@@ -98,10 +98,10 @@ describe('OnboardingWizard', () => {
       list_operations: () => ({
         items: [
           ...IMPORTED_DRAFTS,
-          { ...IMPORTED_DRAFTS[0], name: 'accept_s2_mcp_proposed', origin: 'agent' },
+          { ...IMPORTED_DRAFTS[0], name: 'accept_s2_mcp_\u202Eproposed', origin: 'agent' },
           {
             ...IMPORTED_DRAFTS[0],
-            name: 'accept_s2_mcp_owned',
+            name: 'accept_s2_mcp_\u200Bowned',
             gateOwnedParams: [{ path: 'tenant', reason: 'gate_sets' }],
           },
         ],
@@ -125,10 +125,14 @@ describe('OnboardingWizard', () => {
     );
     const proposals = within(publishStep).getByTestId('wizard-publish-proposals');
     expect(proposals.textContent).toMatch(/1\s*个提议草稿会被跳过/);
-    expect(proposals.textContent).toContain('accept_s2_mcp_proposed');
+    // Legacy 318: names a reader cannot fully see are shown as \\u{XXXX}, as everywhere else.
+    expect(proposals.textContent).toContain('accept_s2_mcp_\\u{202E}proposed');
+    expect(within(publishStep).getByTestId('wizard-publish-drafts').textContent).not.toMatch(
+      /[\u202E\u200B]/,
+    );
     expect(proposals.textContent).toMatch(/逐个审阅/);
     expect(within(publishStep).getByTestId('wizard-publish-gate-owned').textContent).toContain(
-      'accept_s2_mcp_owned',
+      'accept_s2_mcp_\\u{200B}owned',
     );
   });
 

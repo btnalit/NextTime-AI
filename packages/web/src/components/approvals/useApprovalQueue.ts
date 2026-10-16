@@ -13,7 +13,7 @@ import { alwaysAllowUnpublishedText } from '../../lib/always-allow.js';
 import type { CapabilityCaller, PushSource } from '../../lib/clients.js';
 import { credentialReviewParams } from '../../lib/credential-review.js';
 import { errorToastText, isForbiddenError, isVersionChangedError } from '../../lib/errors.js';
-import { humanizeKind } from '../../lib/format.js';
+import { actionKindTagText, actionKindToastLabel } from '../../lib/format.js';
 import type { ActionRequestRow } from '../../lib/governance.js';
 import type { Translate } from '../../lib/i18n.js';
 import type { ApprovalDecisionInput, PendingConfirm } from './ApprovalDetail.js';
@@ -265,7 +265,10 @@ export function useApprovalQueue({
       });
       setDecided((prev) => ({ ...prev, [id]: { ...row, ...result } }));
       settle(id, null);
-      toast.push({ tone: 'ok', title: `已批准 Approved · ${humanizeKind(row.actionKindTag)}` });
+      toast.push({
+        tone: 'ok',
+        title: `已批准 Approved · ${actionKindToastLabel(row.actionKindTag)}`,
+      });
     } catch (err) {
       revert(id);
       settle(id, err);
@@ -284,8 +287,8 @@ export function useApprovalQueue({
         toast.push({
           tone: 'info',
           title: t(
-            `今后自动批准 · 此门上的 ${row.actionKindTag}（所有发起人）`,
-            `Auto-approved from now on · ${row.actionKindTag} on this gate (every requester)`,
+            `今后自动批准 · 此门上的 ${actionKindTagText(row.actionKindTag)}（所有发起人）`,
+            `Auto-approved from now on · ${actionKindTagText(row.actionKindTag)} on this gate (every requester)`,
           ),
         });
       } catch (err) {
@@ -318,7 +321,10 @@ export function useApprovalQueue({
       });
       setDecided((prev) => ({ ...prev, [id]: { ...row, ...result } }));
       settle(id, null);
-      toast.push({ tone: 'info', title: `已拒绝 Rejected · ${humanizeKind(row.actionKindTag)}` });
+      toast.push({
+        tone: 'info',
+        title: `已拒绝 Rejected · ${actionKindToastLabel(row.actionKindTag)}`,
+      });
     } catch (err) {
       revert(id);
       settle(id, err);

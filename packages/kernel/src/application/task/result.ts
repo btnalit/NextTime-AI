@@ -1,6 +1,16 @@
-import type { WorkerResultCapabilityParams, WorkerResultObjectRef } from '@nexttime/shared';
+import type {
+  OperationNameProblem,
+  OperationStatus,
+  WorkerResultCapabilityParams,
+  WorkerResultObjectRef,
+} from '@nexttime/shared';
 import type { PoolClient } from 'pg';
-import { proposeOperation } from '../../governance/gatekeepers/index.js';
+import {
+  OperationIdentityConflictError,
+  OperationNameInvalidError,
+  proposeOperation,
+} from '../../governance/gatekeepers/index.js';
+import { boundedEcho } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import {
   attachEvidence,
@@ -90,8 +100,11 @@ import { getOrCreateWorkerRunSource } from './worker-run-source.js';
  *   - the gateway handler's pre-write findings (`worker-result-handler.ts`, passed in as
  *     `preRejected`): a ref naming a protected meta-ontology type (I16 — the entry is never
  *     attempted, so the invariant holds exactly as before), an `{objectId}` that does not exist, a
- *     `proposedOperations[].gatekeeperId` naming no Gatekeeper, an `evidence[].factIndex` out of
- *     range.
+ *     `proposedOperations[].gatekeeperId` naming no Gatekeeper, a proposal `proposeOperation`
+ *     would refuse (a new name breaking the name rule, an identity the proposer may not write
+ *     over — review #493 on #593), an `evidence[].factIndex` out of range;
+ *   - `proposeOperation`'s own refusals at the write point (a concurrent proposal the pre-check
+ *     could not see) — each proposal runs under its own savepoint, like a fact.
  * Every other error keeps the all-or-nothing rule above. I2 is untouched: a refused Link never
  * exists; I-S5-1 counts Links, so a refusal that wrote nothing does not inflate it.
  */
@@ -143,12 +156,68 @@ export interface RejectedResultFact {
   readonly detail?: string;
 }
 
-/** One refused `proposedOperations[]` entry — its `gatekeeperId` names no Gatekeeper of this
- *  workspace (a model-generated id that was never real). */
+/** `rejection` with every string bounded and made visible (legacy 232) — what `tasks.result`,
+ *  the `task.result_fact_rejected` audit row and the Worker's echo of it carry. */
+function boundedFactRejection(rejection: RejectedResultFact): RejectedResultFact {
+  return {
+    ...rejection,
+    linkType: boundedEcho(rejection.linkType),
+    ...(rejection.sourceType !== undefined && { sourceType: boundedEcho(rejection.sourceType) }),
+    ...(rejection.targetType !== undefined && { targetType: boundedEcho(rejection.targetType) }),
+    ...(rejection.expected !== undefined && {
+      expected: rejection.expected.map((name) => boundedEcho(name)),
+    }),
+    ...(rejection.detail !== undefined && { detail: boundedEcho(rejection.detail, 400) }),
+  };
+}
+
+/** Why one `proposedOperations[]` entry was refused: its `gatekeeperId` names no Gatekeeper of
+ *  this workspace (a model-generated id that was never real), or `proposeOperation` would refuse
+ *  it — a new name that breaks the name rule (legacy 232), or an identity the proposer may not
+ *  write over (another principal's draft, an import draft, a deprecated identity). */
+export type ResultProposalRejectionReason =
+  | 'gatekeeper_not_found'
+  | 'invalid_operation_name'
+  | 'operation_identity_conflict';
+
+/** One refused `proposedOperations[]` entry. `problem` is the broken name rule
+ *  (`invalid_operation_name`), `existingStatus` the row in the way (`operation_identity_conflict`);
+ *  `detail` says it in a sentence, the name in it bounded and visible. */
 export interface RejectedResultProposal {
   readonly index: number;
   readonly gatekeeperId: string;
-  readonly reason: 'gatekeeper_not_found';
+  readonly reason: ResultProposalRejectionReason;
+  readonly problem?: OperationNameProblem;
+  readonly existingStatus?: OperationStatus;
+  readonly detail?: string;
+}
+
+/** The recorded refusal for `err`, when it is one of `proposeOperation`'s own refusals — what
+ *  `validateContract`'s pre-check could not see (a concurrent write between it and this one). */
+function proposalRefusalFromError(
+  index: number,
+  gatekeeperId: string,
+  err: unknown,
+): RejectedResultProposal | undefined {
+  if (err instanceof OperationNameInvalidError) {
+    return {
+      index,
+      gatekeeperId,
+      reason: 'invalid_operation_name',
+      problem: err.details.problem,
+      detail: boundedEcho(err.message, 400),
+    };
+  }
+  if (err instanceof OperationIdentityConflictError) {
+    return {
+      index,
+      gatekeeperId,
+      reason: 'operation_identity_conflict',
+      existingStatus: err.existingStatus,
+      detail: boundedEcho(err.message, 400),
+    };
+  }
+  return undefined;
 }
 
 /** The gateway handler's pre-write findings (`worker-result-handler.ts`'s `validateContract`):
@@ -303,7 +372,10 @@ export async function postWorkerResult(
     const preRejectedFacts = new Map(
       (input.preRejected?.facts ?? []).map((rejection) => [rejection.index, rejection]),
     );
-    const recordFactRejection = async (rejection: RejectedResultFact): Promise<void> => {
+    // Legacy 232: a refusal's strings are the model's own (`linkType`, an `objectType`) or carry
+    // them (`detail`), so the stored refusal and its audit row hold bounded, visible echoes.
+    const recordFactRejection = async (raw: RejectedResultFact): Promise<void> => {
+      const rejection = boundedFactRejection(raw);
       factsRejected.push(rejection);
       await writeAudit(client, {
         workspaceId,
@@ -385,45 +457,68 @@ export async function postWorkerResult(
     }
 
     // proposed_operations -> the existing propose_operation service (S2.4), draft-only (I16). An
-    // entry whose gatekeeperId the handler found to name no Gatekeeper (a model-generated id) is
-    // skipped and recorded, same as a refused fact — the rest of the contract still lands.
+    // entry the handler refused (a gatekeeperId naming no Gatekeeper, a new name breaking the name
+    // rule, an identity the proposer may not write over) is skipped and recorded, same as a
+    // refused fact — the rest of the contract still lands.
     const proposedOperationsRejected: RejectedResultProposal[] = [];
     const preRejectedProposals = new Map(
       (input.preRejected?.proposals ?? []).map((rejection) => [rejection.index, rejection]),
     );
+    const recordProposalRejection = async (
+      rejected: RejectedResultProposal,
+      operationName: string,
+    ): Promise<void> => {
+      proposedOperationsRejected.push(rejected);
+      await writeAudit(client, {
+        workspaceId,
+        actorPrincipalId: agentPrincipalId,
+        action: 'task.result_proposal_rejected',
+        resourceType: 'task',
+        resourceId: input.taskId,
+        payload: {
+          ...rejected,
+          proposalIndex: rejected.index,
+          operation: boundedEcho(operationName),
+          workerRunId: input.workerRunId,
+          activityId: activity.id,
+          onBehalfOf: actorPrincipalId,
+        },
+      });
+    };
     for (const [proposalIndex, proposal] of (contract.proposedOperations ?? []).entries()) {
       const rejected = preRejectedProposals.get(proposalIndex);
       if (rejected) {
-        proposedOperationsRejected.push(rejected);
-        await writeAudit(client, {
-          workspaceId,
-          actorPrincipalId: agentPrincipalId,
-          action: 'task.result_proposal_rejected',
-          resourceType: 'task',
-          resourceId: input.taskId,
-          payload: {
-            ...rejected,
-            proposalIndex,
-            operation: proposal.operation.name,
-            workerRunId: input.workerRunId,
-            activityId: activity.id,
-            onBehalfOf: actorPrincipalId,
-          },
-        });
+        await recordProposalRejection(rejected, proposal.operation.name);
         continue;
       }
-      const proposalActivity = await startActivity(client, workspaceId, {
-        kind: 'operation_proposal',
-        principalId: actorPrincipalId,
-        metadata: { gatekeeperId: proposal.gatekeeperId, operation: proposal.operation.name },
-      });
-      await proposeOperation(client, workspaceId, {
-        gatekeeperId: proposal.gatekeeperId,
-        operation: proposal.operation,
-        proposedBy: { id: actorPrincipalId, kind: 'agent' },
-        activityId: proposalActivity.id,
-      });
-      await endActivity(client, workspaceId, proposalActivity.id, 'completed');
+      // Review #493 on #593 (M1): `validateContract` already refused what `proposeOperation` would
+      // refuse; a write that still loses (a concurrent proposal of the same identity) costs this
+      // entry only, under its own savepoint, like a refused fact.
+      await client.query('savepoint result_proposal');
+      try {
+        const proposalActivity = await startActivity(client, workspaceId, {
+          kind: 'operation_proposal',
+          principalId: actorPrincipalId,
+          metadata: {
+            gatekeeperId: proposal.gatekeeperId,
+            operation: boundedEcho(proposal.operation.name),
+          },
+        });
+        await proposeOperation(client, workspaceId, {
+          gatekeeperId: proposal.gatekeeperId,
+          operation: proposal.operation,
+          proposedBy: { id: actorPrincipalId, kind: 'agent' },
+          activityId: proposalActivity.id,
+        });
+        await endActivity(client, workspaceId, proposalActivity.id, 'completed');
+        await client.query('release savepoint result_proposal');
+      } catch (err) {
+        const refusal = proposalRefusalFromError(proposalIndex, proposal.gatekeeperId, err);
+        if (!refusal) throw err;
+        await client.query('rollback to savepoint result_proposal');
+        await client.query('release savepoint result_proposal');
+        await recordProposalRejection(refusal, proposal.operation.name);
+      }
     }
 
     // proposed_skill -> a real draft Skill (S2.14), owned by the Task's on_behalf_of principal —

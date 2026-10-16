@@ -5,7 +5,7 @@ import type {
 } from '@nexttime/shared';
 import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
-import { formatDateTime, formatRelative } from '../../lib/format.js';
+import { actionKindTagText, formatDateTime, formatRelative } from '../../lib/format.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { operationFieldLabel } from '../../lib/labels.js';
 import { labelText, statusChipStyle } from '../../lib/status-tone.js';
@@ -83,14 +83,16 @@ export function PendingManifestReview({
 
   const impact = [
     ...pending.added.map((op) => t(`新增 ${opLine(op, t)}`, `Adds ${opLine(op, t)}`)),
-    ...pending.removed.map((op) => t(`移除 ${op.name}`, `Removes ${op.name}`)),
+    ...pending.removed.map((op) =>
+      t(`移除 ${actionKindTagText(op.name)}`, `Removes ${actionKindTagText(op.name)}`),
+    ),
     ...governed.map((change) => governanceChangeSummary(change, t)),
     ...pending.changed
       .filter((change) => change.otherChangedFields.length > 0)
       .map((change) =>
         t(
-          `${change.name} 的定义变了：${change.otherChangedFields.map((field) => operationFieldLabel(field, t)).join('、')}`,
-          `${change.name} definition changed: ${change.otherChangedFields.map((field) => operationFieldLabel(field, t)).join(', ')}`,
+          `${actionKindTagText(change.name)} 的定义变了：${change.otherChangedFields.map((field) => operationFieldLabel(field, t)).join('、')}`,
+          `${actionKindTagText(change.name)} definition changed: ${change.otherChangedFields.map((field) => operationFieldLabel(field, t)).join(', ')}`,
         ),
       ),
     // Review #501 on #571 ③: a changed entry that now declares a gate-owned param is the costliest
@@ -100,8 +102,8 @@ export function PendingManifestReview({
       .filter((change) => (change.gateOwnedParams?.length ?? 0) > 0)
       .map((change) =>
         t(
-          `${change.name} 发布不了：新定义声明了只能由门自己设置的参数 ${gateOwnedParamsText(change.gateOwnedParams ?? [], t)}，采用后各工作区为它打开的修订会停在草稿`,
-          `${change.name} cannot be published: the new definition declares params only the gate sets, ${gateOwnedParamsText(change.gateOwnedParams ?? [], t)}; once adopted, every workspace's revision of it stays a draft`,
+          `${actionKindTagText(change.name)} 发布不了：新定义声明了只能由门自己设置的参数 ${gateOwnedParamsText(change.gateOwnedParams ?? [], t)}，采用后各工作区为它打开的修订会停在草稿`,
+          `${actionKindTagText(change.name)} cannot be published: the new definition declares params only the gate sets, ${gateOwnedParamsText(change.gateOwnedParams ?? [], t)}; once adopted, every workspace's revision of it stays a draft`,
         ),
       ),
   ];
@@ -257,5 +259,5 @@ function opLine(op: GateOperationSummaryWire, t: Translate): string {
       ),
     );
   }
-  return `${op.name} (${parts.join(' · ')})`;
+  return `${actionKindTagText(op.name)} (${parts.join(' · ')})`;
 }

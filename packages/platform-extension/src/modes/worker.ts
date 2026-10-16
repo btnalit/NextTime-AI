@@ -261,7 +261,8 @@ function extractStoredRejections(taskResult: unknown): StoredResultRejections | 
 /** One line per refused entry, in the contract's own index space so the model can match them
  *  to what it sent. `reason` is the kernel's own enum (`ResultFactRejectionReason` — the S5.1
  *  ontology guard's reasons, `meta_ontology_type` for I16, `object_not_found`;
- *  `gatekeeper_not_found` for proposals); `detail` is its free-text explanation when present. */
+ *  `gatekeeper_not_found`, `invalid_operation_name`, `operation_identity_conflict` for proposals);
+ *  `detail` is its free-text explanation when present. */
 function renderRejections(rejections: StoredResultRejections): string[] {
   const lines: string[] = [];
   for (const fact of rejections.factsRejected) {
@@ -276,8 +277,9 @@ function renderRejections(rejections: StoredResultRejections): string[] {
   for (const proposal of rejections.proposedOperationsRejected) {
     const gatekeeperId =
       typeof proposal.gatekeeperId === 'string' ? ` (gatekeeperId ${proposal.gatekeeperId})` : '';
+    const detail = typeof proposal.detail === 'string' ? ` — ${proposal.detail}` : '';
     lines.push(
-      `- proposedOperations[${String(proposal.index)}]${gatekeeperId}: ${String(proposal.reason)}`,
+      `- proposedOperations[${String(proposal.index)}]${gatekeeperId}: ${String(proposal.reason)}${detail}`,
     );
   }
   for (const index of rejections.evidenceDropped) {

@@ -2,6 +2,7 @@ import type {
   OperationGovernanceChangeDirectionWire,
   OperationGovernanceFieldsWire,
 } from '@nexttime/shared';
+import { actionKindRaw, actionKindTagText } from '../../lib/format.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { labelText, statusChipStyle } from '../../lib/status-tone.js';
 import { StatusChip } from '../kit/status-chip.js';
@@ -74,7 +75,7 @@ export function governanceFieldChanges(
 /** One impact line: `name: Mode A → B; Blast radius X → Y`. */
 export function governanceChangeSummary(item: GovernanceChangeItem, t: Translate): string {
   const changes = governanceFieldChanges(item.before, item.after, t);
-  return `${item.name}: ${changes.map((c) => `${c.label} ${c.before} → ${c.after}`).join('; ')}`;
+  return `${actionKindTagText(item.name)}: ${changes.map((c) => `${c.label} ${c.before} → ${c.after}`).join('; ')}`;
 }
 
 const BLAST_RANK: Readonly<Record<OperationGovernanceFieldsWire['blastRadius'], number>> = {
@@ -90,7 +91,8 @@ const BLAST_RANK: Readonly<Record<OperationGovernanceFieldsWire['blastRadius'], 
  *  unless the kernel's direction says the change loosens something. */
 export function governanceConsequences(item: GovernanceChangeItem, t: Translate): string[] {
   if (!isLoosening(item.direction)) return [];
-  const { before, after, name } = item;
+  const { before, after } = item;
+  const name = actionKindTagText(item.name);
   const lines: string[] = [];
   if (before.mode === 'execute' && after.mode === 'observe') {
     lines.push(
@@ -155,7 +157,9 @@ export function GovernanceChangeList({
             data-testid={`${testId}-item`}
             data-direction={item.direction}
           >
-            <span className="mono">{item.name}</span>
+            <span className="mono" title={actionKindRaw(item.name)}>
+              {actionKindTagText(item.name)}
+            </span>
             <div className="row-wrap">
               <StatusChip machine="operationMode" status={item.before.mode} size="s" />
               <span aria-hidden="true">→</span>

@@ -1,4 +1,6 @@
+import { clipCodePoints, visibleText } from '@nexttime/shared';
 import { withPlaintextTlsHint } from './errors.js';
+import { actionKindTagText } from './format.js';
 import type { Translate } from './i18n.js';
 
 /**
@@ -286,6 +288,8 @@ export function actionTargetLabel(
     value !== null && typeof value === 'object' ? (value as Record<string, unknown>) : undefined;
   const operation = typeof record?.operation === 'string' ? record.operation : toolName;
   if (operation === undefined || operation === '') return undefined;
+  // Legacy 232: the name and values are whatever the model sent — shown visibly (`format.ts`).
+  const shownOperation = actionKindTagText(operation);
   const params =
     typeof record?.operation === 'string'
       ? record.params
@@ -301,9 +305,9 @@ export function actionTargetLabel(
           .slice(0, 3)
           .map(([key, v]) => {
             const text = String(v);
-            return `${key}: ${text.length > 40 ? `${text.slice(0, 40)}…` : text}`;
+            return `${visibleText(key)}: ${visibleText(clipCodePoints(text, 40))}`;
           })
       : [];
-  if (shown.length === 0) return operation;
-  return t(`${operation}（${shown.join('，')}）`, `${operation} (${shown.join(', ')})`);
+  if (shown.length === 0) return shownOperation;
+  return t(`${shownOperation}（${shown.join('，')}）`, `${shownOperation} (${shown.join(', ')})`);
 }
