@@ -27,16 +27,24 @@ export {
 } from './invoke.js';
 
 export {
+  type ChildTokenBudget,
   type GoalRunUsage,
   type RunConfigSnapshot,
   type StepAttemptTask,
   type TaskGoalStep,
   RunConfigSnapshotSchema,
+  allotChildTokenBudget,
+  listGoalRunLiveTasks,
   listTaskWorkerRunTree,
+  lockGoalStepForNewWork,
+  readGoalRunTokenHeadroom,
   readGoalRunUsage,
   readStepAttemptTask,
   readTaskGoalStep,
+  takeChildBudgetFromCaller,
 } from './goal-step.js';
+
+export { lockTaskQuotas } from './quota-check.js';
 
 export {
   type CreateStepAttemptInput,
@@ -74,6 +82,7 @@ export {
   taskForWorkerRun,
   taskVisibleTo,
   terminateTask,
+  terminateTaskWith,
 } from './service.js';
 
 export {
@@ -143,6 +152,7 @@ export {
 } from './runtime.js';
 
 export {
+  GoalStepClosedError,
   InvokeWorkerAttenuationError,
   InvokeWorkerDefinitionNotEnabledError,
   InvokeWorkerValidationError,

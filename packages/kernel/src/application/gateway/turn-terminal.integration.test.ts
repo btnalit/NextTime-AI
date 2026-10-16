@@ -194,6 +194,11 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
       sink = createChatEventSink({ pool });
       refusingSink = createChatEventSink({ pool: refusingMessagePool() });
+      // `deliverTurnStarted` reaches its row through at most 50 polls of 20 rows, oldest first;
+      // files that run earlier against the shared database leave their outbox rows undelivered
+      // (about 900 from the goal and task suites alone, S11 GO3a), which would use that up first.
+      // Those rows are no part of this file; see interfaces/ws/server.test.ts for the same reset.
+      await pool.query('update outbox set dispatched_at = now() where dispatched_at is null');
     });
 
     afterAll(async () => {
