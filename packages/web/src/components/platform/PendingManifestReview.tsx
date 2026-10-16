@@ -51,7 +51,9 @@ export interface PendingManifestReviewProps {
  * Legacy K (UX acceptance of #538): a gate runs what it announced, so a held change to what it runs
  * (`refusedOperations`) is not "without effect until confirmed" — calls to those Operations are
  * refused from the moment it was announced. The notice says so, and the confirm names the
- * workspaces that must then align and publish the revision before calls resume.
+ * workspaces that must then align and publish the revision before calls resume — except for an
+ * Operation whose new definition declares a gate-owned param (UX acceptance of #573 P2): its
+ * revision can never be published, so that one is said to wait on the gate's maintainer instead.
  */
 export function PendingManifestReview({
   http,
@@ -101,7 +103,23 @@ export function PendingManifestReview({
         ),
       ),
   ];
-  const refused = pending.refusedOperations;
+  // UX acceptance of #573 P2: a refused Operation whose new definition declares a gate-owned
+  // param cannot come back through adopting and aligning — its revision can never be published —
+  // so it is kept out of every "calls resume once …" line and said on its own.
+  const heldByGate = new Set(
+    pending.changed
+      .filter((change) => (change.gateOwnedParams?.length ?? 0) > 0)
+      .map((change) => change.name),
+  );
+  const refused = pending.refusedOperations.filter((name) => !heldByGate.has(name));
+  const refusedHeld = pending.refusedOperations.filter((name) => heldByGate.has(name));
+  const heldLine =
+    refusedHeld.length > 0
+      ? t(
+          `对 ${refusedHeld.join('、')} 的调用会被拒绝，而且采用和对齐都恢复不了：新定义声明了只能由门自己设置的参数，修订发布不了。要等门的维护者去掉这些参数、平台采用改好的清单之后才会恢复。`,
+          `Calls to ${refusedHeld.join(', ')} are refused, and neither adopting nor aligning brings them back: the new definition declares params only the gate sets, so its revision cannot be published. They resume only once the gate's maintainer drops those params and the platform adopts the corrected manifest.`,
+        )
+      : null;
   const workspaceNames = enablingWorkspaces.map((workspace) => workspace.name);
   const moreWorkspaces = enabledWorkspaceCount - workspaceNames.length;
 
@@ -113,10 +131,13 @@ export function PendingManifestReview({
               `门已经在按新清单运行。采用、并让启用它的工作区对齐和发布修订之前，对 ${refused.join('、')} 的调用会被拒绝。`,
               `The gate already runs its new manifest. Calls to ${refused.join(', ')} are refused until it is adopted and every workspace that enabled it aligns and publishes the revision.`,
             )
-          : t(
-              `门公布了与生效清单不同的 Operation（${pending.operationCount} 个），采用之前不生效。`,
-              `The gate announced operations that differ from the manifest in effect (${pending.operationCount}); they take no effect until adopted.`,
-            )}{' '}
+          : refusedHeld.length > 0
+            ? t('门已经在按新清单运行。', 'The gate already runs its new manifest.')
+            : t(
+                `门公布了与生效清单不同的 Operation（${pending.operationCount} 个），采用之前不生效。`,
+                `The gate announced operations that differ from the manifest in effect (${pending.operationCount}); they take no effect until adopted.`,
+              )}{' '}
+        {heldLine !== null ? <>{heldLine} </> : null}
         <time title={formatDateTime(pending.announcedAt)}>
           {formatRelative(pending.announcedAt)}
         </time>
@@ -180,6 +201,11 @@ export function PendingManifestReview({
                       `采用后，${workspaceNames.join('、')} 工作区需要到「系统与授权」对齐并发布修订，对 ${refused.join('、')} 的调用才会恢复。`,
                       `After adopting, ${workspaceNames.join(', ')} must align under Systems & access and publish the revision before calls to ${refused.join(', ')} resume.`,
                     )}
+            </Notice>
+          ) : null}
+          {heldLine !== null && enabledWorkspaceCount > 0 ? (
+            <Notice tone="warn" testId="gate-instance-pending-manifest-held">
+              {heldLine}
             </Notice>
           ) : null}
           {governed.length > 0 ? <GovernanceChangeList items={governed} /> : null}

@@ -177,6 +177,9 @@ function toWireOperationSummary(record: OperationRecord, revision?: RevisionChan
     // STATUS leftover 123: whose row it is under D-24 — the console offers the description edit
     // only to that proposer and the owner (the kernel enforces it either way).
     ...(record.proposedBy !== undefined ? { proposedBy: record.proposedBy.id } : {}),
+    // UX acceptance of #573 P3-1: a held draft the gate never wrote (a proposal) is told apart
+    // from one the gate stopped announcing by who wrote it.
+    ...(record.origin !== undefined ? { origin: record.origin } : {}),
     ...(revision !== undefined ? { governanceChange: revision.governanceChange } : {}),
     ...(revision?.definitionChange !== undefined
       ? { definitionChange: revision.definitionChange }

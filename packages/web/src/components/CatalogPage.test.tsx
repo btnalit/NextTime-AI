@@ -401,6 +401,10 @@ describe('CatalogPage', () => {
 
     fireEvent.click(rewrite);
     const confirm = await screen.findByTestId('operation-gate-owned-rewrite-confirm');
+    // Legacy 280: the confirm reuses the preview that decided the button — one read, not two.
+    expect(http.calls.filter((call) => call.name === 'preview_gate_instance_enable')).toHaveLength(
+      1,
+    );
     fireEvent.click(within(confirm).getByTestId('confirm-button'));
     const receipt = await screen.findByTestId('operation-rewritten');
     expect(receipt.textContent).toContain('已按门的最新清单重写这份草稿');
@@ -424,7 +428,7 @@ describe('CatalogPage', () => {
     });
     renderPage(http, 'operations', 'gk-1::stock.reserve');
     const waiting = await screen.findByTestId('operation-gate-owned-rewrite-waiting');
-    expect(waiting.textContent).toContain('门的清单还没改');
+    expect(waiting.textContent).toContain('门的清单仍声明这些参数');
     const rewrite = screen.getByTestId('operation-gate-owned-rewrite') as HTMLButtonElement;
     expect(rewrite.disabled).toBe(true);
     expect(rewrite.getAttribute('aria-describedby')).toBe(waiting.id);
@@ -498,6 +502,77 @@ describe('CatalogPage', () => {
     await waitFor(() => expect(notice.textContent).toContain('门的当前清单里已经没有这个'));
     expect(notice.textContent).not.toContain('门的清单还没改');
     expect(screen.queryByTestId('operation-gate-owned-rewrite')).toBeNull();
+  });
+
+  it('review #501 on #573: a rewrite that would change other fields but keep the gate-owned param stays greyed out', async () => {
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [
+          { ...HELD_DRAFT, gateOwnedParams: [{ param: 'Authorization', location: 'header' }] },
+        ],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+      list_available_gate_instances: () => ({ items: [LINKED_INSTANCE] }),
+      preview_gate_instance_enable: () => {
+        const preview = heldPreview(false);
+        return {
+          ...preview,
+          operationsToImport: preview.operationsToImport.map((row) => ({
+            ...row,
+            blastRadius: 'high',
+            pendingDraft: { rewritable: true, fromGate: true },
+          })),
+        };
+      },
+    });
+    renderPage(http, 'operations', 'gk-1::stock.reserve');
+    await screen.findByTestId('operation-gate-owned-rewrite-waiting');
+    const rewrite = screen.getByTestId('operation-gate-owned-rewrite') as HTMLButtonElement;
+    expect(rewrite.disabled).toBe(true);
+  });
+
+  it('UX acceptance of #573 P3-1: a proposed name the gate never announced is a proposal, not one the gate stopped announcing', async () => {
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [
+          {
+            gatekeeperId: 'gk-1',
+            name: 'refunds.lookup',
+            status: 'draft',
+            origin: 'human',
+            gateOwnedParams: [{ param: 'Authorization', location: 'header' }],
+          },
+        ],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+      list_available_gate_instances: () => ({ items: [LINKED_INSTANCE] }),
+      preview_gate_instance_enable: () => ({ ...heldPreview(false), operationsToImport: [] }),
+    });
+    renderPage(http, 'operations', 'gk-1::refunds.lookup');
+    const notice = await screen.findByTestId('operation-gate-owned-params');
+    await waitFor(() => expect(notice.textContent).toContain('提议者去掉这些参数后重新提议'));
+    expect(notice.textContent).not.toContain('门的当前清单里已经没有这个');
+    expect(screen.queryByTestId('operation-gate-owned-rewrite')).toBeNull();
+  });
+
+  it('UX acceptance of #571 P3-2: rows of one Operation listed more than once say their version; a single row does not', async () => {
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [
+          { gatekeeperId: 'gk-1', name: 'stock.get', status: 'published', version: 3 },
+          { gatekeeperId: 'gk-1', name: 'stock.get', status: 'deprecated', version: 2 },
+          { gatekeeperId: 'gk-1', name: 'stock.get', status: 'deprecated', version: 1 },
+          { gatekeeperId: 'gk-1', name: 'orders.list', status: 'published', version: 1 },
+        ],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+    });
+    renderPage(http);
+    await screen.findAllByTestId('catalog-row');
+    expect(screen.getByTestId('catalog-row-version-gk-1::stock.get').textContent).toBe('v3');
+    expect(screen.getByTestId('catalog-row-version-gk-1::stock.get@v2').textContent).toBe('v2');
+    expect(screen.getByTestId('catalog-row-version-gk-1::stock.get@v1').textContent).toBe('v1');
+    expect(screen.queryByTestId('catalog-row-version-gk-1::orders.list')).toBeNull();
   });
 
   it('review #501 on #571 ②: two gates with the same display name are told apart in the list’s gate label', async () => {

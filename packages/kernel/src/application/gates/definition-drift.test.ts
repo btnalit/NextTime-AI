@@ -97,4 +97,34 @@ describe('definition drift', () => {
     });
     expect([...defs.running.keys()]).toEqual([STOCK.name]);
   });
+
+  it('UX acceptance of #573 P2: the gate-owned params of what the gate runs are kept, for the held one when one is held', () => {
+    const WITH_AUTH: Operation = {
+      ...STOCK,
+      params_schema: {
+        type: 'object',
+        properties: { Authorization: { type: 'string', 'x-in': 'header' } },
+      },
+    };
+    const adopted = gateRunningDefinitions({
+      operations: [WITH_AUTH, ORDER],
+      pending_operations: null,
+    });
+    expect(adopted.runningGateOwned.get(STOCK.name)).toEqual([
+      { param: 'Authorization', location: 'header' },
+    ]);
+    expect(adopted.runningGateOwned.has(ORDER.name)).toBe(false);
+    expect(definitionRefusal(adopted, STOCK.name, digest(STOCK))).toBe('workspace_revision');
+
+    // Held: what the gate runs is the held announcement, not the manifest in effect.
+    const held = gateRunningDefinitions({ operations: [WITH_AUTH], pending_operations: [STOCK] });
+    expect(held.runningGateOwned.size).toBe(0);
+    const heldWithAuth = gateRunningDefinitions({
+      operations: [STOCK],
+      pending_operations: [WITH_AUTH],
+    });
+    expect(heldWithAuth.runningGateOwned.get(STOCK.name)).toEqual([
+      { param: 'Authorization', location: 'header' },
+    ]);
+  });
 });

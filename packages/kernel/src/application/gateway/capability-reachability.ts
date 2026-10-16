@@ -285,7 +285,23 @@ export async function computeCapabilityReachability(
       for (const op of published) {
         if (disabledOperations.includes(op.name)) continue;
         const awaiting = definitionRefusal(definitions, op.name, op.digest);
-        if (awaiting !== null) definitionMismatch.push({ operation: op.name, awaiting });
+        if (awaiting === null) continue;
+        // UX acceptance of #573 P2: a definition that declares a gate-owned param can never be
+        // published, so no step of the workspace's (or the platform's) ends this refusal — said
+        // with the entry so no surface promises that aligning brings the calls back.
+        const gateOwnedParams = definitions.runningGateOwned.get(op.name) ?? [];
+        definitionMismatch.push({
+          operation: op.name,
+          awaiting,
+          ...(gateOwnedParams.length > 0
+            ? {
+                gateOwnedParams: gateOwnedParams.map(({ param, location }) => ({
+                  param,
+                  location,
+                })),
+              }
+            : {}),
+        });
       }
     }
     const refused = new Set(definitionMismatch.map((entry) => entry.operation));

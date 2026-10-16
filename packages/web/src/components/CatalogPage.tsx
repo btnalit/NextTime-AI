@@ -425,6 +425,18 @@ function operationNamesOnSeveralGates(rows: readonly OperationCatalogRow[]): Rea
   return new Set([...gates].filter(([, seen]) => seen.size > 1).map(([name]) => name));
 }
 
+/** UX acceptance of #571 P3-2: the identities listed more than once (a published version beside
+ *  the deprecated ones it replaced, a revision draft beside its published version) — their rows
+ *  say the version, which is what tells them apart. */
+function identitiesListedTwice(rows: readonly OperationCatalogRow[]): ReadonlySet<string> {
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    const identity = operationKey(row);
+    counts.set(identity, (counts.get(identity) ?? 0) + 1);
+  }
+  return new Set([...counts].filter(([, count]) => count > 1).map(([identity]) => identity));
+}
+
 function catalogOperationKey(row: OperationCatalogRow): string {
   if (row.status === 'draft' && row.governanceChange) return revisionDraftKey(row);
   if (row.status === 'deprecated' && row.version !== undefined) {
@@ -784,6 +796,7 @@ function OperationDetailView({
           name={row.name}
           status={row.status}
           params={gateOwned}
+          origin={row.origin}
           gateDisplayName={nameOf(gatekeeperNames, row.gatekeeperId) ?? row.gatekeeperId}
           onRewritten={onRewritten}
         />
@@ -911,6 +924,7 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   // UX acceptance of #567 P3 (#561's same-name class, on Operations): one name on two gates read
   // as two identical rows — those rows name their gate.
   const sharedNames = operationNamesOnSeveralGates(rows);
+  const versioned = identitiesListedTwice(rows);
 
   const selected = itemId ? rows.find((row) => catalogOperationKey(row) === itemId) : undefined;
   const credentialReview = usePublishCredentialReview(itemId ?? null);
@@ -1040,6 +1054,11 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
                 <span className="row-wrap">
                   <StatusChip machine="publishable" status={row.status} size="s" />
                   <span className="mono truncate">{row.name}</span>
+                  {versioned.has(operationKey(row)) && row.version !== undefined ? (
+                    <span className="text-3 text-small" data-testid={`catalog-row-version-${key}`}>
+                      v{row.version}
+                    </span>
+                  ) : null}
                   {gateLabel !== null ? (
                     <span className="text-3 truncate" data-testid={`catalog-row-gate-${key}`}>
                       {t(`门：${gateLabel}`, `Gate: ${gateLabel}`)}
