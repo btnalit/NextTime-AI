@@ -497,11 +497,18 @@ jobs:
           cat >"$RUNNER_TEMP/seed-always-allow.sh" <<'SH'
           set -eu
           cd "$GITHUB_WORKSPACE"
-          compose="sudo docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml"
+          # `sudo -n`, as provider-health.spec.ts: fail instead of waiting on a password prompt.
+          compose="sudo -n docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml"
           gatekeeper_id=$(cat /proc/sys/kernel/random/uuid)
           operation='{"name":"e2e.always_allow_test","description":"CI 夹具：「总是允许」端到端测试用的执行类动作","binding":{"kind":"http","method":"POST","path":"/e2e/always-allow"},"params_schema":{"type":"object","properties":{}},"mode":"execute","blast_radius":"medium","reversibility":false,"auto_approvable":true,"await_decision":false,"reads":[],"writes":[]}'
           digest=$(printf '%s' "$operation" | $compose exec -T kernel node --input-type=module -e \
             'import { operationDefinitionDigest } from "@nexttime/gatekeeper-base"; let json = ""; for await (const chunk of process.stdin) json += chunk; console.log(operationDefinitionDigest(JSON.parse(json)));')
+          # A digest that came back empty or malformed would seed a row the kernel never offers
+          # 「总是允许」 for, and the spec would fail far from the cause; stop here instead.
+          hex=${digest#sha256:}
+          if [ "$hex" = "$digest" ] || [ "${#hex}" -ne 64 ] || [ -n "$(printf '%s' "$hex" | tr -d '0-9a-f')" ]; then
+            echo "seed-always-allow: bad operation digest: '$digest'" >&2; exit 1
+          fi
           $compose exec -T postgres psql -U nexttime -d nexttime -v ON_ERROR_STOP=1 -q -At \
             -v workspace_id="$E2E_WORKSPACE_ID" -v on_behalf_of="$E2E_OWNER_PRINCIPAL_ID" \
             -v gatekeeper_id="$gatekeeper_id" -v operation="$operation" -v operation_digest="$digest" <<'SQL'

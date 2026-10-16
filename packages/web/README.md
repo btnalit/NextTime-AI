@@ -667,6 +667,10 @@ itself, from the test, by running the script `WEB_E2E_ALWAYS_ALLOW_SEED` names: 
 pending row per run, so `00-gates/`'s screenshots never see it and a retry gets its own row. The
 script must print, as its last line, `{"gatekeeperId": "…", "actionRequestId": "…"}`.
 
+**Only ever point it at a throwaway database** — CI's, or a local one you created for the run. It
+writes a Gatekeeper, a published Operation and a pending ActionRequest straight into the tables,
+past the publish flow and with no audit rows; never run it against a host's database.
+
 CI writes that script in `.github/workflows/e2e.yml` "Prepare the always-allow seed" (it reads
 `E2E_WORKSPACE_ID` / `E2E_OWNER_PRINCIPAL_ID` and runs `node` in the kernel container and `psql` in
 the postgres one). For a local run, copy its body, replace the two `$compose exec -T …` prefixes
