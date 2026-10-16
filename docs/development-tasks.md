@@ -4157,7 +4157,15 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 
 **214 — 自连门的「重新描述 → 预览差异 → 开修订」路径**（见 `global-roadmap-2026-10-16.md` §4）
 
-- 实现说明：（未开工）
+- 实现说明（#612，9a109eb，无迁移）：
+  - **真相源**：自连门（`create_connection`，无平台实例链接）没有平台公告，它的清单就是门自己的 `describe_operations`，经连接已有的凭据通道（`resolveGateTarget`）读取；kernel 不持凭证。
+  - **预览**：新能力 `preview_gatekeeper_resync{gatekeeperId}`（owner，observe，列入 `HUMAN_ONLY_CAPABILITY_NAMES`）返回 `manifestDigest`、`operationsToImport`、`operationsAlreadyPresent`、`notDescribed`；需要修订承载治理变化的行标 `governanceByRevision`。差异判定抽成 `application/gateway/announced-operations.ts` 的 `compareAnnouncedOperations`，平台预览、自连预览与写入共用。
+  - **写入**：复用 `refresh_operation_governance`，没有第二条写入路径或接入路径。未关联平台实例时：重新 describe 并核对 digest，变了返回 409 `manifest_changed` 不写；定义变了的开 import 修订草稿；被扣下的 import 草稿原地重写；门新增的名字导入为 import 草稿（审计 reason `new_on_gate`）；不自动发布。
+  - **治理字段方向（审查 #493 M1）**：`governanceChangeNeedsRevision(source, direction)`：来源为 `gate` 时，放宽或混合变化由 version + 1 的 import 修订草稿承载，已发布行保持原值直到 owner 发布（审计 `revision_drafted`，reason `governance_loosened` 或 `definition_changed`，带 `governanceDirection`）；纯收紧就地生效；平台门已采用清单的对齐不变（那份清单已由管理员审过）。
+  - **错误码**：新增 409 `gatekeeper_linked`（已关联的门引导去「与门公告对齐」）；`no_announced_manifest` 收窄为门在平台门实例地址上但不是从能力目录启用的（CLI 注册）。
+  - **控制台**：系统抽屉「门的清单」一节与「更多」菜单；确认框列出每个 Operation 的变化（新名字带 mode / 影响范围 / 审批）、门不再提供的名字，修订承载的写明「发布后生效」；结果链接到目录里的草稿；`GateOwnedParams` 的 fix 枚举、被扣下的草稿、引导向导、错误文案与 `add-gatekeeper.md` §12 的「重新接入」指引全部改为「重新读取门的清单」。`kit/confirm` 的中档 popover 限高到 Radix 测得的可用高度并自滚动，不可逆档与 `kit/dialog` 限高到视口。
+  - **验证**：`gatekeeper-resync.integration.test.ts` 用真实 gatekeeper-base 门在同一端口重启复现重建（409 → 预览 → 同步 → 发布 → 调用恢复；预览与确认之间门变了返回 `manifest_changed`；已关联返回 `gatekeeper_linked`）；web-e2e journey 2 打开超过视口高度的确认框并断言标题与放宽警告可见。
+  - **遗留**：343（已关联工作区对齐不导入新名字）、344（`await_decision` / MCP hints / reads / writes 变化不显示不应用，P1 收口）、345（已弃用行在预览里被标为将开修订）。
 
 **P0b — 连接器接入路径统一 + 评测用夹具门重设计 + 遗留 118 残余 ①**（见 `global-roadmap-2026-10-16.md` §4）
 
