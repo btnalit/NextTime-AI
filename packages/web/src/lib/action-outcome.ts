@@ -226,7 +226,7 @@ export function actionOutcomeChip(
 }
 
 /**
- * S11 GO1: what a failed request's kind means for the reader, for the approvals pages and the chat
+ * S11 GO1: what a failed request's kind means for the reader (and, legacy 328, a withdrawn one), for the approvals pages and the chat
  * status line — `short` for a list row, `title` + `message` for a detail pane. `danger` only for
  * "outcome unknown", the one a person must check before doing anything (`kit/notice`'s "an action
  * that may already have run"); `null` when the row is not failed / compensated or carries no kind.
@@ -239,12 +239,26 @@ export function failureReading(
   t: Translate,
   check?: { readonly system?: string | null; readonly action?: string | null },
 ): {
-  readonly kind: ActionRequestFailureKind;
+  readonly kind: ActionRequestFailureKind | 'withdrawn';
   readonly tone: 'danger' | 'info';
   readonly short: string;
   readonly title: string;
   readonly message: string;
 } | null {
+  // Legacy 328 (UX acceptance of #601, P2-2): a withdrawn request ended without running — say why
+  // and that nothing is owed, not only 「已撤回」. Never `executing` (the transition table refuses it).
+  if (row.status === 'withdrawn') {
+    return {
+      kind: 'withdrawn',
+      tone: 'info',
+      short: t('什么都没执行，不需要处理', 'Nothing ran — nothing to do'),
+      title: t('已撤回：什么都没执行', 'Withdrawn: nothing ran'),
+      message: t(
+        '它所属的步骤被取消，或在计划修订中被移除，平台在它执行之前把它撤回了。目标系统没有任何变化，不需要处理：待审批的不用再决定，已批准的也不会再执行。',
+        'Its step was cancelled or removed when the plan was revised, so the platform took it back before it ran. Nothing changed on the target system and nothing is needed: a pending one needs no decision, and an approved one will not run.',
+      ),
+    };
+  }
   if (row.status !== 'failed' && row.status !== 'compensated') return null;
   const kind = failureKindOf(row.failureKind);
   switch (kind) {

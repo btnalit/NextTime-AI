@@ -239,6 +239,15 @@ describe('failureKindOf / failureReading (S11 GO1)', () => {
     expect(failureReading({ status: 'failed' }, zh)).toBeNull();
     expect(failureReading({ status: 'failed', failureKind: 'something_new' }, zh)).toBeNull();
   });
+
+  it('legacy 328: a withdrawn request says nothing ran and nothing is needed', () => {
+    const read = failureReading({ status: 'withdrawn', failureKind: null }, zh);
+    expect(read?.kind).toBe('withdrawn');
+    expect(read?.tone).toBe('info');
+    expect(read?.short).toMatch(/什么都没执行/);
+    expect(read?.message).toMatch(/步骤被取消/);
+    expect(read?.message).toMatch(/不需要处理/);
+  });
 });
 
 describe('waitingReason / waitingShortLabel', () => {

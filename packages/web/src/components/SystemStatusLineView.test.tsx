@@ -60,7 +60,11 @@ describe('SystemStatusLineView', () => {
         }}
       />,
     );
-    expect(screen.queryByTestId('system-status-failure')).toBeNull();
+    // Legacy 328: a withdrawn line says nothing ran and nothing is needed, quietly.
+    const withdrawn = screen.getByTestId('system-status-failure');
+    expect(withdrawn.getAttribute('data-failure-kind')).toBe('withdrawn');
+    expect(withdrawn.textContent).toBe('什么都没执行，不需要处理');
+    expect(withdrawn.className).not.toContain('text-danger');
     expect(document.querySelector('.chip')?.textContent).toBe('已撤回');
   });
 

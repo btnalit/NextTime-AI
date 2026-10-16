@@ -241,6 +241,49 @@ describe('AuditPage entry points', () => {
     expect(http.calls.some((c) => c.name === 'get_action')).toBe(false);
   });
 
+  it.each([
+    ['failed', 'refused', '失败类别', 'gate refused\nline two'],
+    ['withdrawn', null, '结果', null],
+  ] as const)(
+    'legacy 328 / 329: a %s request reads its outcome in the approval context, with the recorded reason',
+    async (status, failureKind, label, reason) => {
+      const http = scriptedHttp({
+        get_action: () => ({
+          id: 'ar-1',
+          status,
+          gatekeeperId: 'gk-1',
+          actionKindTag: 'docker.container_restart',
+          resourceScope: 'web-1',
+          blastRadius: 'medium',
+          awaitDecision: false,
+          params: {},
+          onBehalfOf: 'p-1',
+          actorRuntime: 'worker',
+          policyDecision: 'require_approval',
+          requestedAt: '2026-09-03T00:00:00.000Z',
+          parentWorkerRunId: null,
+          approvalDecisionId: null,
+          failureKind,
+          // A withdrawn row never carries one; the console would not show it if it did.
+          failureReason: reason ?? 'never shown',
+        }),
+        audit_query: () => ({ items: [auditRow()] }),
+        list_principals: principalsPage,
+        list_gatekeepers: () => ({ items: [] }),
+      });
+      renderPage(http, { actionRequestId: 'ar-1' });
+      const failure = await screen.findByTestId('approval-context-failure');
+      expect(failure.previousElementSibling?.textContent).toBe(label);
+      const shown = screen.queryByTestId('approval-context-failure-reason');
+      if (reason === null) {
+        expect(failure.textContent).toBe('什么都没执行，不需要处理');
+        expect(shown).toBeNull();
+      } else {
+        expect(shown?.textContent).toBe(reason);
+      }
+    },
+  );
+
   it('?actionRequestId= shows the approval context, explains its decision node and filters the audit log on the request', async () => {
     const http = scriptedHttp({
       get_action: () => ({

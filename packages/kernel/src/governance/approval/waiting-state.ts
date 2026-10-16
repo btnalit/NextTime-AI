@@ -1,3 +1,4 @@
+import { clipCodePoints, visibleText } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { redactSuspectedSecrets } from '../redaction/index.js';
 import { ACTION_REQUEST_IN_DOUBT_AUDIT_ACTION } from './execution.js';
@@ -146,4 +147,55 @@ export async function readActionRequestWaitingStates(
       ];
     }),
   );
+}
+
+/** The most code points of a failure reason the wire carries (legacy 329): enough for a gate's or a
+ *  target system's error sentence, never a whole response body. */
+export const FAILURE_REASON_MAX = 1000;
+
+/**
+ * Legacy 329: why each `failed` / `compensated` row of `rows` failed —
+ * the reason the kernel audited with `action_request.fail` (`markActionRequestFailed`, written
+ * through `reasonAuditFields`), the newest one per row. Read back through the same redaction as
+ * `readActionRequestsInDoubt`, then made safe to show: clipped to {@link FAILURE_REASON_MAX} code
+ * points, and every character a reader cannot see (a bidi override, a zero-width or control
+ * character) shown as `\u{XXXX}`; line breaks stay. Derived on read, like the waiting state: the
+ * audit row is the record (I11). Keyed by row id; a row with no audited reason is absent.
+ */
+export async function readActionRequestFailureReasons(
+  client: PoolClient,
+  workspaceId: string,
+  rows: readonly Pick<ActionRequestRow, 'id' | 'status'>[],
+): Promise<ReadonlyMap<string, string>> {
+  const ids = [
+    ...new Set(
+      rows
+        .filter((row) => row.status === 'failed' || row.status === 'compensated')
+        .map((row) => row.id),
+    ),
+  ];
+  if (ids.length === 0) return new Map();
+  const result = await client.query<{ resource_id: string; reason: unknown }>(
+    `select distinct on (resource_id) resource_id, payload -> 'reason' as reason
+     from audit_records
+     where workspace_id = $1 and resource_type = 'action_request' and action = 'action_request.fail'
+       and resource_id = any($2::uuid[])
+     order by resource_id, created_at desc`,
+    [workspaceId, ids],
+  );
+  const reasons = new Map<string, string>();
+  for (const row of result.rows) {
+    if (typeof row.reason !== 'string' || row.reason.trim() === '') continue;
+    const redacted = redactSuspectedSecrets(row.reason, { secretFields: true }).value as string;
+    reasons.set(row.resource_id, shownReason(redacted));
+  }
+  return reasons;
+}
+
+/** Clipped, with unseen characters made visible line by line, so a line break still reads as one. */
+function shownReason(reason: string): string {
+  return clipCodePoints(reason, FAILURE_REASON_MAX)
+    .split('\n')
+    .map((line) => visibleText(line.replace(/\r$/, '')))
+    .join('\n');
 }
