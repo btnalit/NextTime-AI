@@ -393,8 +393,8 @@ interface OrphanedTaskRow {
 
 /**
  * Legacy 320: fails — `failure_reason='run_lost'` — every Task still `running` or
- * `waiting_approval` whose WorkerRuns are all `terminated` (or that has none), when the last of
- * them ended (or the Task was created) more than {@link ORPHANED_TASK_THRESHOLD_MS} ago. Every
+ * `waiting_approval` that has had a WorkerRun and whose WorkerRuns are all `terminated`, when the
+ * last of them ended more than {@link ORPHANED_TASK_THRESHOLD_MS} ago. Every
  * other path that ends a run decides its Task in the same transaction, or hands it to a retry
  * that does; this is the backstop for the ones that could not: a Task write that failed after
  * its run was ended (and is never retried, because later reactions see the terminated run and
@@ -403,8 +403,13 @@ interface OrphanedTaskRow {
  * transition table, `task.fail` audit row, `TaskUpdated` event, Handles revoked), so a Task a
  * concurrent writer decided in between is left as that writer left it.
  *
- * Assumes every Task is carried by WorkerRuns — true while `invoke_worker` is the only way a Task
- * is created. A Task kind that legitimately runs without one must be excluded here.
+ * Legacy 325: a Task with no WorkerRun at all is not counted. Every Task is carried by WorkerRuns
+ * — `invoke_worker` and the goal advancer's step attempts (`step-attempt.ts`, S11 GO2) both insert
+ * the Task `queued` and move it to `running` only after `spawnWorkerRun` committed its run — so a
+ * `running` Task with none never arises from them; a `queued` one that never got its run is the
+ * `spawn_lost` sweep's. Until legacy 325 a Task with no run was timed from its `created_at`, which
+ * would have failed a Task of a "create first, attach a run later" entry as soon as it existed for
+ * the threshold.
  */
 async function reapOrphanedTasks(
   deps: TaskRuntimeDeps,
@@ -424,10 +429,8 @@ async function reapOrphanedTasks(
            select 1 from worker_runs wr
            where wr.workspace_id = t.workspace_id and wr.task_id = t.id
              and wr.status in ('provisioning', 'running', 'suspended'))
-         and coalesce(
-           (select max(wr.terminated_at) from worker_runs wr
-            where wr.workspace_id = t.workspace_id and wr.task_id = t.id),
-           t.created_at) < $1::timestamptz`,
+         and (select max(wr.terminated_at) from worker_runs wr
+              where wr.workspace_id = t.workspace_id and wr.task_id = t.id) < $1::timestamptz`,
       [cutoff.toISOString()],
     );
     candidates = result.rows;

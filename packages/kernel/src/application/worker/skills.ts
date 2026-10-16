@@ -605,6 +605,25 @@ export async function resolvePublishedSkills(
   return result.rows.map(mapRow);
 }
 
+/** The exact Skill versions `refs` names, whatever their status (S11 GO2: a goal step's later
+ *  attempt mounts the versions its first attempt loaded, and refuses to start when one is no longer
+ *  published) — a ref with no such row is simply absent from the result. */
+export async function readSkillVersions(
+  client: PoolClient,
+  workspaceId: string,
+  refs: readonly { readonly skillId: string; readonly version: number }[],
+): Promise<readonly SkillRow[]> {
+  if (refs.length === 0) return [];
+  const result = await client.query<SkillDbRow>(
+    `select ${SELECT_COLUMNS} from skills s
+     join unnest($2::uuid[], $3::int[]) as r(skill_id, skill_version)
+       on s.id = r.skill_id and s.version = r.skill_version
+     where s.workspace_id = $1`,
+    [workspaceId, refs.map((ref) => ref.skillId), refs.map((ref) => ref.version)],
+  );
+  return result.rows.map(mapRow);
+}
+
 // -------------------------------------------------------------------------------------------
 // mounting (S2.14 deliverable 4) — the on-disk file content pi's `loadSkills` reads.
 // -------------------------------------------------------------------------------------------

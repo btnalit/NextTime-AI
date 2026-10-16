@@ -397,6 +397,81 @@
     {
       "additionalProperties": false,
       "properties": {
+        "goalRunId": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "proposed",
+            "running",
+            "paused",
+            "verifying",
+            "completed",
+            "cancelling",
+            "cancelled",
+            "failed"
+          ],
+          "type": "string"
+        },
+        "type": {
+          "const": "GoalRunUpdated",
+          "type": "string"
+        },
+        "workspaceId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "workspaceId",
+        "goalRunId",
+        "status"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "goalRunId": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "pending",
+            "ready",
+            "running",
+            "waiting",
+            "succeeded",
+            "failed",
+            "superseded",
+            "cancelled",
+            "skipped"
+          ],
+          "type": "string"
+        },
+        "stepRunId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "StepRunUpdated",
+          "type": "string"
+        },
+        "workspaceId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "workspaceId",
+        "goalRunId",
+        "stepRunId",
+        "status"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
         "chatId": {
           "type": "string"
         },

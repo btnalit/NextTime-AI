@@ -41,6 +41,9 @@ export interface GoalRunRow {
   readonly updatedAt: Date;
   readonly confirmedAt: Date | null;
   readonly endedAt: Date | null;
+  /** When the advancer next looks at this run (goal/0002): due once it has passed; `null` while
+   *  only an event can move it, and always on a final run. */
+  readonly nextTickAt: Date | null;
 }
 
 export interface PlanRevisionRow {
@@ -81,7 +84,7 @@ export const GOAL_RUN_ROW_COLUMNS =
   'workspace_id, id, status, pause_reason, cleanup_pending, outcome, outcome_basis, ' +
   'on_behalf_of, originated_in_turn_id, statement, current_revision, budget_max_tokens, ' +
   'budget_max_steps, budget_max_revisions, budget_max_wall_clock_seconds, created_at, ' +
-  'updated_at, confirmed_at, ended_at';
+  'updated_at, confirmed_at, ended_at, next_tick_at';
 
 export interface GoalRunDbRow {
   workspace_id: string;
@@ -103,6 +106,7 @@ export interface GoalRunDbRow {
   updated_at: Date;
   confirmed_at: Date | null;
   ended_at: Date | null;
+  next_tick_at: Date | null;
 }
 
 export function mapGoalRunRow(row: GoalRunDbRow): GoalRunRow {
@@ -129,6 +133,7 @@ export function mapGoalRunRow(row: GoalRunDbRow): GoalRunRow {
     updatedAt: row.updated_at,
     confirmedAt: row.confirmed_at,
     endedAt: row.ended_at,
+    nextTickAt: row.next_tick_at,
   };
 }
 

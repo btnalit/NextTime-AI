@@ -543,6 +543,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       }
 
       it('fails a Task left running / waiting_approval with no live WorkerRun past the threshold, run_lost, audited; a recent one is left alone', async () => {
+        // Legacy 325: a Task that never had a run is not an orphan, however old.
         const noRuns = await insertTask('running', stale());
         const allEnded = await insertTask('running', stale(), [
           { status: 'terminated', terminatedAt: stale() },
@@ -570,11 +571,12 @@ describe.runIf(DATABASE_URL !== undefined)(
           expect((err.errors as { id: string }[]).filter((e) => ours.includes(e.id))).toEqual([]);
           return undefined;
         });
-        if (result) expect(result.runLost).toBeGreaterThanOrEqual(3);
+        if (result) expect(result.runLost).toBeGreaterThanOrEqual(2);
 
-        for (const taskId of [noRuns, allEnded, waiting]) {
+        for (const taskId of [allEnded, waiting]) {
           expect(await taskState(taskId)).toEqual({ status: 'failed', failureReason: 'run_lost' });
         }
+        expect((await taskState(noRuns)).status).toBe('running');
         expect((await taskState(justEnded)).status).toBe('running');
         expect((await taskState(fresh)).status).toBe('running');
         expect((await taskState(live)).status).toBe('running');
@@ -588,13 +590,17 @@ describe.runIf(DATABASE_URL !== undefined)(
           ),
         );
         expect(new Set(audit.rows.map((row) => row.resource_id))).toEqual(
-          new Set([noRuns, allEnded, waiting]),
+          new Set([allEnded, waiting]),
         );
       });
 
       it('a candidate whose write keeps failing no longer stops the others: they are reaped, and the tick then reports it', async () => {
-        const poisoned = await insertTask('running', stale());
-        const healthy = await insertTask('running', stale());
+        const poisoned = await insertTask('running', stale(), [
+          { status: 'terminated', terminatedAt: stale() },
+        ]);
+        const healthy = await insertTask('running', stale(), [
+          { status: 'terminated', terminatedAt: stale() },
+        ]);
 
         const { privateKey } = await generateEphemeralHandleKeyPair();
         const outcome = await runTaskReaper({

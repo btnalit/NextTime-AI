@@ -3,6 +3,8 @@ import { ActionKindSchema } from './action-description.js';
 import {
   ActionRequestStatusSchema,
   EpistemicStatusSchema,
+  GoalRunStatusSchema,
+  StepRunStatusSchema,
   TaskStatusSchema,
   WorkerRunStatusSchema,
 } from './enums.js';
@@ -43,6 +45,8 @@ export const PLATFORM_EVENT_NAMES = [
   'FactAsserted',
   'EgressObserved',
   'BudgetWarning',
+  'GoalRunUpdated',
+  'StepRunUpdated',
 ] as const;
 
 export type PlatformEventName = (typeof PLATFORM_EVENT_NAMES)[number];
@@ -171,6 +175,26 @@ const BudgetWarningEvent = z.object({
   taskId: z.string().optional(),
   turnId: z.string().optional(),
   percent: z.number().min(0).max(100),
+});
+
+/** S11 GO2 (plan §4.2 item 5): every GoalRun transition — written by `application/goal` in the
+ *  transaction that moves the row, with its audit record. Ids and the resulting status only: what a
+ *  consumer (the console, a milestone message) shows is read back from the row under the reader's
+ *  own RLS, never carried in the outbox. */
+const GoalRunUpdatedEvent = z.object({
+  type: z.literal('GoalRunUpdated'),
+  workspaceId: z.string(),
+  goalRunId: z.string(),
+  status: GoalRunStatusSchema,
+});
+
+/** S11 GO2: every StepRun transition, same shape and rules as {@link GoalRunUpdatedEvent}. */
+const StepRunUpdatedEvent = z.object({
+  type: z.literal('StepRunUpdated'),
+  workspaceId: z.string(),
+  goalRunId: z.string(),
+  stepRunId: z.string(),
+  status: StepRunStatusSchema,
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -312,6 +336,8 @@ export const PlatformEventSchema = z.discriminatedUnion('type', [
   FactAssertedEvent,
   EgressObservedEvent,
   BudgetWarningEvent,
+  GoalRunUpdatedEvent,
+  StepRunUpdatedEvent,
   ChatMessageEvent,
   ChatStreamEvent,
   ChatMetadataEvent,

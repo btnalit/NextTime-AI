@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -292,6 +293,23 @@ describe.runIf(DATABASE_URL !== undefined)(
         for (const row of result.rows as { f: string; t: string; allowed: boolean }[]) {
           expect(row.allowed, `${row.f}->${row.t}`).toBe(legal.has(`${row.f}->${row.t}`));
         }
+      });
+    });
+
+    describe('goal/0002 replaces the GoalRun guard with one more changeable column (S11 GO2)', () => {
+      it('is goal/0001’s goal_runs_status_guard with next_tick_at listed, and nothing else changed', () => {
+        const guardOf = (file: string) => {
+          const text = readFileSync(path.join(MIGRATIONS_DIR, 'goal', file), 'utf8');
+          const start = text.indexOf('create or replace function goal_runs_status_guard()');
+          expect(start, file).toBeGreaterThanOrEqual(0);
+          const end = text.indexOf('\n$$;', start);
+          expect(end, file).toBeGreaterThan(start);
+          return text.slice(start, end).replace(/\s+/g, ' ');
+        };
+        const before = guardOf('0001_goal_runs.sql');
+        const after = guardOf('0002_goal_advancer.sql');
+        expect(before).toContain("'ended_at'])");
+        expect(after).toBe(before.replace("'ended_at'])", "'ended_at', 'next_tick_at'])"));
       });
     });
 

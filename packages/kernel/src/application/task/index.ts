@@ -26,7 +26,26 @@ export {
   waitForOutcome,
 } from './invoke.js';
 
-export { type TaskGoalStep, readTaskGoalStep } from './goal-step.js';
+export {
+  type GoalRunUsage,
+  type RunConfigSnapshot,
+  type StepAttemptTask,
+  type TaskGoalStep,
+  RunConfigSnapshotSchema,
+  listTaskWorkerRunTree,
+  readGoalRunUsage,
+  readStepAttemptTask,
+  readTaskGoalStep,
+} from './goal-step.js';
+
+export {
+  type CreateStepAttemptInput,
+  type CreateStepAttemptResult,
+  type PreparedStepAttempt,
+  type StepAttemptRefusal,
+  createStepAttemptTask,
+  startStepAttemptTask,
+} from './step-attempt.js';
 
 export {
   completeTaskWithResult,
