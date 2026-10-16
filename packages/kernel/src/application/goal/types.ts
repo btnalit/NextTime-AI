@@ -1,0 +1,209 @@
+import type {
+  GoalOutcomeBasis,
+  GoalRunPauseReason,
+  GoalRunStatus,
+  ObjectiveOutcome,
+  PlanRevisionStatus,
+  StepRunFailureCategory,
+  StepRunStatus,
+  StepRunWaitingReason,
+} from '@nexttime/shared';
+
+/**
+ * application/goal/types: the row shapes of migrations/goal/0001_goal_runs.sql. Each sub-state
+ * column is set exactly while its status holds (DB CHECKs): `pauseReason` while paused,
+ * `outcome` + `outcomeBasis` once completed, `waitingReason` while waiting, `failureCategory` while
+ * failed.
+ */
+
+export interface GoalRunBudget {
+  readonly maxTokens: number;
+  readonly maxSteps: number;
+  readonly maxRevisions: number;
+  readonly maxWallClockSeconds: number;
+}
+
+export interface GoalRunRow {
+  readonly workspaceId: string;
+  readonly id: string;
+  readonly status: GoalRunStatus;
+  readonly pauseReason: GoalRunPauseReason | null;
+  readonly cleanupPending: boolean;
+  readonly outcome: ObjectiveOutcome | null;
+  readonly outcomeBasis: GoalOutcomeBasis | null;
+  readonly onBehalfOf: string;
+  readonly originatedInTurnId: string | null;
+  readonly statement: string;
+  /** The plan revision in force — the fencing number (I-G2); `null` until confirmed. */
+  readonly currentRevision: number | null;
+  readonly budget: GoalRunBudget;
+  readonly createdAt: Date;
+  readonly updatedAt: Date;
+  readonly confirmedAt: Date | null;
+  readonly endedAt: Date | null;
+}
+
+export interface PlanRevisionRow {
+  readonly workspaceId: string;
+  readonly id: string;
+  readonly goalRunId: string;
+  readonly revision: number;
+  readonly status: PlanRevisionStatus;
+  readonly basedOnRevision: number | null;
+  /** `{ steps: [{ key, … }, …] }` — the rest of a step's shape belongs to the code that proposes
+   *  plans (GO2, GO5). */
+  readonly plan: Record<string, unknown>;
+  readonly proposedBy: string;
+  readonly reason: string | null;
+  readonly validation: unknown;
+  readonly decidedBy: string | null;
+  readonly decidedAt: Date | null;
+  readonly createdAt: Date;
+}
+
+export interface StepRunRow {
+  readonly workspaceId: string;
+  readonly id: string;
+  readonly goalRunId: string;
+  readonly stepKey: string;
+  readonly introducedInRevision: number;
+  readonly supersededInRevision: number | null;
+  readonly status: StepRunStatus;
+  readonly waitingReason: StepRunWaitingReason | null;
+  readonly failureCategory: StepRunFailureCategory | null;
+  readonly attemptCount: number;
+  readonly createdAt: Date;
+  readonly updatedAt: Date;
+  readonly endedAt: Date | null;
+}
+
+export const GOAL_RUN_ROW_COLUMNS =
+  'workspace_id, id, status, pause_reason, cleanup_pending, outcome, outcome_basis, ' +
+  'on_behalf_of, originated_in_turn_id, statement, current_revision, budget_max_tokens, ' +
+  'budget_max_steps, budget_max_revisions, budget_max_wall_clock_seconds, created_at, ' +
+  'updated_at, confirmed_at, ended_at';
+
+export interface GoalRunDbRow {
+  workspace_id: string;
+  id: string;
+  status: GoalRunStatus;
+  pause_reason: GoalRunPauseReason | null;
+  cleanup_pending: boolean;
+  outcome: ObjectiveOutcome | null;
+  outcome_basis: GoalOutcomeBasis | null;
+  on_behalf_of: string;
+  originated_in_turn_id: string | null;
+  statement: string;
+  current_revision: number | null;
+  budget_max_tokens: string;
+  budget_max_steps: number;
+  budget_max_revisions: number;
+  budget_max_wall_clock_seconds: number;
+  created_at: Date;
+  updated_at: Date;
+  confirmed_at: Date | null;
+  ended_at: Date | null;
+}
+
+export function mapGoalRunRow(row: GoalRunDbRow): GoalRunRow {
+  return {
+    workspaceId: row.workspace_id,
+    id: row.id,
+    status: row.status,
+    pauseReason: row.pause_reason,
+    cleanupPending: row.cleanup_pending,
+    outcome: row.outcome,
+    outcomeBasis: row.outcome_basis,
+    onBehalfOf: row.on_behalf_of,
+    originatedInTurnId: row.originated_in_turn_id,
+    statement: row.statement,
+    currentRevision: row.current_revision,
+    budget: {
+      // `bigint` arrives as a string from `pg`.
+      maxTokens: Number(row.budget_max_tokens),
+      maxSteps: row.budget_max_steps,
+      maxRevisions: row.budget_max_revisions,
+      maxWallClockSeconds: row.budget_max_wall_clock_seconds,
+    },
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    confirmedAt: row.confirmed_at,
+    endedAt: row.ended_at,
+  };
+}
+
+export const PLAN_REVISION_ROW_COLUMNS =
+  'workspace_id, id, goal_run_id, revision, status, based_on_revision, plan, proposed_by, ' +
+  'reason, validation, decided_by, decided_at, created_at';
+
+export interface PlanRevisionDbRow {
+  workspace_id: string;
+  id: string;
+  goal_run_id: string;
+  revision: number;
+  status: PlanRevisionStatus;
+  based_on_revision: number | null;
+  plan: Record<string, unknown>;
+  proposed_by: string;
+  reason: string | null;
+  validation: unknown;
+  decided_by: string | null;
+  decided_at: Date | null;
+  created_at: Date;
+}
+
+export function mapPlanRevisionRow(row: PlanRevisionDbRow): PlanRevisionRow {
+  return {
+    workspaceId: row.workspace_id,
+    id: row.id,
+    goalRunId: row.goal_run_id,
+    revision: row.revision,
+    status: row.status,
+    basedOnRevision: row.based_on_revision,
+    plan: row.plan,
+    proposedBy: row.proposed_by,
+    reason: row.reason,
+    validation: row.validation,
+    decidedBy: row.decided_by,
+    decidedAt: row.decided_at,
+    createdAt: row.created_at,
+  };
+}
+
+export const STEP_RUN_ROW_COLUMNS =
+  'workspace_id, id, goal_run_id, step_key, introduced_in_revision, superseded_in_revision, ' +
+  'status, waiting_reason, failure_category, attempt_count, created_at, updated_at, ended_at';
+
+export interface StepRunDbRow {
+  workspace_id: string;
+  id: string;
+  goal_run_id: string;
+  step_key: string;
+  introduced_in_revision: number;
+  superseded_in_revision: number | null;
+  status: StepRunStatus;
+  waiting_reason: StepRunWaitingReason | null;
+  failure_category: StepRunFailureCategory | null;
+  attempt_count: number;
+  created_at: Date;
+  updated_at: Date;
+  ended_at: Date | null;
+}
+
+export function mapStepRunRow(row: StepRunDbRow): StepRunRow {
+  return {
+    workspaceId: row.workspace_id,
+    id: row.id,
+    goalRunId: row.goal_run_id,
+    stepKey: row.step_key,
+    introducedInRevision: row.introduced_in_revision,
+    supersededInRevision: row.superseded_in_revision,
+    status: row.status,
+    waitingReason: row.waiting_reason,
+    failureCategory: row.failure_category,
+    attemptCount: row.attempt_count,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    endedAt: row.ended_at,
+  };
+}

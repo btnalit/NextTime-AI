@@ -11,6 +11,7 @@ import type { PoolLike } from '../../adapters/db/pool.js';
 import type { GatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
 import {
   findWorkerRunBySessionId,
+  readTaskGoalStep,
   recordWorkerGateObservation,
 } from '../../application/task/index.js';
 import type { WorkerRunRow } from '../../application/task/index.js';
@@ -865,6 +866,12 @@ async function runGovernedRequest(
   workspaceId: string,
   args: RunGovernedRequestArgs,
 ): Promise<CapabilityHandlerResult> {
+  // S11 GO1: a request from a Worker whose Task runs for a goal step records that StepRun (the
+  // step's own attempt and its nested child Tasks alike), so the step's requests can be withdrawn
+  // with it (I-G9) and the advancer can read them by step.
+  const goalStep = args.workerRun
+    ? await readTaskGoalStep(client, workspaceId, args.workerRun.taskId)
+    : null;
   const actionRequest = await requestAction(client, workspaceId, {
     gatekeeperId: args.gatekeeper.gatekeeperId,
     actionKind: args.operationName,
@@ -886,6 +893,7 @@ async function runGovernedRequest(
     params: args.operationParams,
     idempotencyKey: args.idempotencyKey,
     parentWorkerRunId: args.parentWorkerRunId,
+    ...(goalStep ? { stepRunId: goalStep.stepRunId } : {}),
     principalAutoApproveLowEnabled: args.principalAutoApproveLowEnabled,
     ...(args.operationDigest !== undefined ? { operationDigest: args.operationDigest } : {}),
   });

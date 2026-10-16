@@ -50,6 +50,10 @@ export interface ActionRequestRowLike {
    *  `refused` / `outcome_unknown`, shared `ActionRequestFailureKind`); `null` otherwise, absent
    *  on an older row shape (`lib/action-outcome` `failureReading`). */
   readonly failureKind?: string | null;
+  /** Legacy 329: on a `failed` / `compensated` row, the last failure's reason as the kernel
+   *  recorded it — redacted, clipped, unseen characters shown as `\u{XXXX}`; plain text with its
+   *  line breaks. `null` when none was recorded, absent on an older row shape. */
+  readonly failureReason?: string | null;
   readonly suspectedSecretValues?: number;
   /** Where in `params` (field paths only), alongside the count. */
   readonly suspectedSecretPaths?: readonly string[];

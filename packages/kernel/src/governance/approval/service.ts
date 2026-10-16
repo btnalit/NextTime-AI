@@ -81,6 +81,8 @@ export {
   roleMayDecideActionRequests,
 } from './reads.js';
 
+export { type StepActionOutcome, listStepActionOutcomes } from './step-actions.js';
+
 export {
   type UpdateActionRequestStatusInput,
   updateActionRequestStatusConditional,
@@ -92,6 +94,8 @@ export {
   type ActionRequestInDoubt,
   type ActionRequestQueueBlocker,
   type ActionRequestWaitingState,
+  FAILURE_REASON_MAX,
+  readActionRequestFailureReasons,
   readActionRequestWaitingStates,
   readActionRequestsInDoubt,
   readQueueBlockers,

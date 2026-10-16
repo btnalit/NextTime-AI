@@ -16,6 +16,7 @@ import {
 import { resolveActiveRuntimeImage } from '../platform/runtime.js';
 import { requirePublishedWorkerDefinition } from '../worker/index.js';
 import { readDefinitionContent, resolveSkillsInline } from './definition-content.js';
+import { readTaskGoalStep } from './goal-step.js';
 import {
   computeChildHandleScope,
   defaultWorkerCapabilities,
@@ -378,6 +379,12 @@ async function insertQueuedTaskWithQuotaCheck(
       const generatingTurnId = callerWorkerRun
         ? await readTaskGeneratingTurnId(client, workspaceId, callerWorkerRun.taskId)
         : (caller.turnId ?? null);
+      // S11 GO1: a nested child Task runs for the same goal step as its caller's Task — I-G4's
+      // per-step dedupe and I-G9's checks judge it by that step. It takes no attempt number:
+      // attempts are the advancer's alone (I-G1).
+      const goalStep = callerWorkerRun
+        ? await readTaskGoalStep(client, workspaceId, callerWorkerRun.taskId)
+        : null;
       const resolvedQuotas = await resolveQuotas(client, workspaceId);
 
       if (depth > resolvedQuotas.maxDepth) {
@@ -418,8 +425,9 @@ async function insertQueuedTaskWithQuotaCheck(
       const taskResult = await client.query(
         `insert into tasks (
            workspace_id, status, on_behalf_of, created_by_activity_id, worker_definition_id,
-           worker_definition_version, input, token_budget, duration_limit_sec, idempotency_key
-         ) values ($1, 'queued', $2, $3, $4, $5, $6::jsonb, $7, $8, $9)
+           worker_definition_version, input, token_budget, duration_limit_sec, idempotency_key,
+           goal_run_id, step_run_id, plan_revision
+         ) values ($1, 'queued', $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12)
          returning ${TASK_ROW_COLUMNS}`,
         [
           workspaceId,
@@ -431,6 +439,9 @@ async function insertQueuedTaskWithQuotaCheck(
           resolvedQuotas.defaultTokenBudget,
           resolvedQuotas.defaultDurationLimitSec,
           input.idempotencyKey ?? null,
+          goalStep?.goalRunId ?? null,
+          goalStep?.stepRunId ?? null,
+          goalStep?.planRevision ?? null,
         ],
       );
       const row = taskResult.rows[0];

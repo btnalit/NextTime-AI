@@ -4067,14 +4067,31 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **线上**：`ActionRequestStatus` 加 `withdrawn`；`ActionRequestWire` 加必填可空 `failureKind`；`request_action` 执行结果加可选 `failureKind`，字段顺序改为 `id`、`status`、`failureKind` 在前（控制台从截断预览里读）；聊天 `system.action_update` 加可选 `failureKind`。
   - **控制台**：审批详情、审批历史、关联审批、审计上下文、聊天状态行显示失败类别（`ActionFailure.tsx`、`action-outcome.ts`），只有「结果不明」用 danger 色并写明到哪个系统核对哪个动作（原始 Operation 名，UX P2-3）；`withdrawn` 显示「已撤回」。「核对后：已生效 / 没生效」的回写入口不在 GO1。
   - **验证**：`withdraw-failure-kind.integration.test.ts`（回填 CASE 原文逐条、回收器写入、两分钟窗口、0006 之前的行、触发器三种拒绝、旧代码不带类别）、shared `action-failure-reason.test.ts`、`action-executor.test.ts`（迁移码表与 shared 一致）；可逆性按 `reversibility-probe` 方式在本地用 v0.49.0 内核全套跑过。
+  - **后续（#609，11e27b4；遗留 328、329 关闭）**：撤回说明覆盖 `failureReading` 的四个调用方；`failureReason` 读时从该行最新一条 `action_request.fail` 审计派生（`readActionRequestFailureReasons`，与 `readActionRequestsInDoubt` 同写法，不另存列），读出时再脱敏、截断到 1000 个 code point、不可见字符可见；只在 `failed` / `compensated` 行有值。审计按 `resource_id` 的部分索引与 `outcomeInDoubt.reason` 的同样处理见遗留 338。
+- 实现说明（后半，#607，2026-10-16 合入，726f769；goal 0001 / task 0007 / governance 0022；GO1 完成）：
+  - **三张表与守卫**：`goal_runs` / `plan_revisions` / `step_runs`，状态机在 shared `transitions.ts`（`GOAL_RUN_EDGES` / `PLAN_REVISION_EDGES` / `STEP_RUN_EDGES`）；新表上数据库守整张转移图（上一版从不读写，不花可逆性），`*_transition_allowed(from, to)` 与 shared 逐对比较。每张表的守卫四部分：列出可改列、其余列（含以后新加的）一律不可改（`to_jsonb(new)` 与 `to_jsonb(old)` 去掉可改列后比较）；终态整行冻结（只剩 `updated_at` 与 `cancelled` 上 `cleanup_pending` 由 true 清成 false）；子状态列（`pause_reason`、`waiting_reason`、`failure_category`、`outcome` + `outcome_basis`）只随进入对应状态的转移改；需要看 GoalRun 状态的守卫对 GoalRun 行加 `for no key update` 锁。
+  - **计划版本链（I-G3）**：`current_revision` 是触发器检查的版本号，不是外键（互相外键成环，`purge-workspace.ts` 算不出删除顺序）。接受要求 GoalRun 在 `proposed` / `running` / `paused`、`based_on_revision` 等于当前版本、且没有另一个已接受未生效的版本；延迟约束触发器 `plan_revisions_adopted` 提交时要求 `current_revision` 已推进到它；推进时要求新版本已接受且基于旧值。被跳过的旧修订永远接受不了。`plan` 只依赖「对象、带 `steps` 数组、每项有唯一 `key`」，其余由提出计划的代码校验（GO2、GO5）。
+  - **StepRun（I-G2）**：定义固定为引入它的那版计划里的条目，终身不变；新版本删掉或改了某步就 supersede，改过的步骤以同一 `step_key` 新建（每个 key 至多一个活的，部分唯一索引）；I-G2 检查用整条 jsonb 相等（`@>` 对对象是部分匹配）。新步骤只在 GoalRun `running` / `paused` 且当前版本下建；`ready → running` 只在 `running` 时、`attempt_count` 恰好加 1。
+  - **预算全派生（I-G6）**：token = 该目标所有 Task 的 `tokens_used` 之和，步数 = 带 `step_attempt` 的 Task 数，修订数 = 第一版之后接受的版本数，墙钟从 `confirmed_at` 算；超额检查对 token / 步数 / 修订只在没有在跑的 Task、最后变化过宽限期后才计。
+  - **Task 与 ActionRequest 归属**：`task/0007` 加 `goal_run_id` / `step_run_id` / `plan_revision`（三者同有同无，外键带 GoalRun）、`step_attempt`（推进器的尝试号，与 `worker_runs.attempt` 的 Task 内崩溃重试分开）、`run_config_snapshot`（尝试 Task 必填，内容由 GO2 写，从不放凭据），五列建后不可改（`tasks_goal_step_immutable`）；I-G1 唯一索引。`application/task/invoke.ts` 嵌套子 Task 继承步骤、不带尝试号。`governance/0022` 加 `action_requests.step_run_id`，`request_action` 从发起 Worker 的 Task 读出、建行后不变（`action_requests_step_run_immutable`）。执行侧不读 `step_runs`：`governance/approval/step-actions.ts` `listStepActionOutcomes` 按列读，类型里没有 reason 字段。
+  - **定时检查**：`substrate/audit/goal-invariant-checks.ts` 的 I-G1 / I-G2（`accepted-off-chain`、`chain-not-accepted`、`guards`）/ I-G6 / I-G9 随 `runInvariantChecks` 跑；数据库已禁止的改为检查机制本身还在，触发器要求 `tgenabled in ('O','A')`（I4 / I12 同改）。step-mismatch 拆成两条走索引的查询（新索引 `worker_runs_task_idx`、`action_requests_parent_worker_run_idx`，前者也让 reaper 的活 run 查找走索引）。I-G9 暂不检查已 supersede 步骤的请求（等 GO3 的放行入口）；全量扫描见 STATUS 遗留 342。
 
 **GO2 — 确定性推进器**（见 `global-roadmap-2026-10-16.md` §4）
 
 - 实现说明：（未开工）
+- 来自 GO1（#607 与审查 #493）的输入：
+  - **尝试 Task 必须由 WorkerRun 承载**：走 `invoke` 的插入加启动路径；`reapOrphanedTasks` 的 `run_lost` 与 `spawn_lost` 会收割没有活 WorkerRun 的 `running` / `waiting_approval` Task。要建不经 WorkerRun 的 Task 必须在两个判据里显式排除；STATUS 遗留 325（`run_lost` 收窄为至少有一个已终止的 run）在新增 Task 入口时一并做。
+  - 推进器建的 Task 关掉 Task 内崩溃重试（§3.1），重试由 StepRun `failed → retry → ready` 负责；把「带 `step_attempt` 的 Task 至多一个 WorkerRun」作为 I-G1 的一个条件加上。
+  - **锁序**：写 PlanRevision 或 StepRun 前先锁 GoalRun 行（守卫也加同一把锁），否则会和取消目标的事务死锁。
+  - **接受与生效同一事务、先接受再推进**：先 `plan_revisions` 改 `accepted`，再改 `goal_runs.current_revision`（需要时连同预算）；只接受不推进，提交时被拒。
+  - **步骤写法**：新步骤在当前版本下以 `attempt_count = 0` 建；每次 `ready → running` 加 1；目标暂停时不开始新尝试（可以标 `ready`）。
+  - **`stepActionEffect` 优先级（审查 #493 P2）**：同一步一个请求被拒、另一个还在 `executing` 时现在先判 `action_refused`，人选择重试会在旧动作执行中开始新尝试（违反 I-G4），旧动作之后结果不明时步骤也不会进 `waiting(reconcile)`。二选一：`executing` 优先于 `action_refused`，或 `failed → ready` 前确认这一步没有在途请求。
+  - **进 `ready` 前复核（审查 #493 delta）**：推进器把步骤标 `ready` 前要确认它仍在当前修订里，数据库不检查这一点。
 
 **GO3 — 恢复、等待、取消与修订**（见 `global-roadmap-2026-10-16.md` §4）
 
 - 实现说明：（未开工）
+- 来自 GO1（审查 #493 delta）的输入：GoalRun 在 `cancelling` 时步骤能否从 `waiting` 回到 `running`，由 GO3 定（只允许走向终止，或写明为什么允许）；锁序同 GO2，先锁 GoalRun 再锁 StepRun。
 
 **GO4 — 验收检查**（见 `global-roadmap-2026-10-16.md` §4）
 
