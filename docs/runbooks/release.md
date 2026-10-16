@@ -1198,7 +1198,7 @@ v0.47.0、v0.48.0 不单独上主机（#554 不在 v0.47.0 里，遗留 259 的�
 
 **回滚**（§5）：回滚目标是 v0.46.0，按 §3.25 与 §3.26 的回滚说明；不需要排空 Worker。
 
-窗口目标改到 v0.49.0 之后的发版时（维护者 2026-10-16 决定窗口暂缓，开窗口时目标改为当时最新的发版），本清单按新目标刷新，并加上之后各版的小节，至少 §3.28（#589 升钉：`postgres` 与 `backup` 重建、不执行 `ALTER EXTENSION`、应用后只读核对 `vector` 扩展版本）与 §3.29（#592：governance 0020，旧「始终允许」规则可能显示「已暂停 · 待确认版本」需 owner 重新确认，契约不向后兼容、旧控制台页要刷新）与 §3.30（#601：governance 0021，窗口前估算 `audit_records` 全表扫描的锁表时间并核对回收超时，窗口后历史失败行多显示「结果不明」）与 §3.31（#607：goal 0001 / task 0007 / governance 0022，窗口前估算建索引时间）。
+窗口目标改到 v0.49.0 之后的发版时（维护者 2026-10-16 决定窗口暂缓，开窗口时目标改为当时最新的发版），本清单按新目标刷新，并加上之后各版的小节，至少 §3.28（#589 升钉：`postgres` 与 `backup` 重建、不执行 `ALTER EXTENSION`、应用后只读核对 `vector` 扩展版本）与 §3.29（#592：governance 0020，旧「始终允许」规则可能显示「已暂停 · 待确认版本」需 owner 重新确认，契约不向后兼容、旧控制台页要刷新）与 §3.30（#601：governance 0021，窗口前估算 `audit_records` 全表扫描的锁表时间并核对回收超时，窗口后历史失败行多显示「结果不明」）与 §3.31（#607：goal 0001 / task 0007 / governance 0022，窗口前估算建索引时间）与 §3.32（#615：core 0044，窗口前估算建索引期间审计写入的等待，必要时并发预建并确认索引有效）。
 
 ### 3.28 第三方镜像升钉：pgvector、node、postgres（#589，v0.49.0 之后的下一版起）
 
@@ -1241,6 +1241,25 @@ node 24.21.0 → 24.22.0，只影响平台镜像的构建，随发版重建，�
 - **窗口前只读核对**：`task/0007` 与 `governance/0022` 在 `tasks`、`action_requests` 上加 CHECK 与外键时在锁内校验全表（新列全是 NULL，很快）；两条新索引用普通 `create index`（迁移在事务里跑，不能 `CONCURRENTLY`），建索引期间阻塞对 `worker_runs`、`action_requests` 的写入。先查 `select count(*) from worker_runs;` 与 `select count(*) from action_requests;` 估算时间，和 §3.30 的 `audit_records` 估算一起记 `docs/private/`（审查 #493 在 #607 记为 P3）。
 - **应用后只读核对**：`select tgname, tgenabled from pg_trigger where tgname in ('tasks_goal_step_immutable', 'action_requests_step_run_immutable', 'action_requests_status_guard');` 都是 `O`；内核日志里 `nexttime_invariant_violations{invariant=~"I-G.*"}` 为 0。
 - **回滚**：只回退代码即可（§6）。上一版不读写三张新表，看不到新列；新列都可空、上一版写的行全为 NULL，满足 CHECK 与外键；不可改触发器只在改这些列时触发。
+
+### 3.32 审计按对象的索引（#615，core 0044，遗留 338，v0.49.0 之后的下一版起）
+
+带一个 core 迁移（`0044_audit_records_resource_idx`），随 `apply-release.sh` 的迁移步骤自动应用；线上契约形状不变。
+
+- **迁移做什么**：建部分索引 `audit_records_resource_idx`，列 `(workspace_id, resource_id, created_at)`，条件 `where resource_id is not null`。只加索引，上一版不引用它。同名索引若是无效残留（`indisvalid = false`），迁移先删掉再建。
+- **锁**：迁移在事务里跑，只能用普通 `create index`，对 `audit_records` 持 SHARE 锁直到迁移提交：读不受影响，所有审计 INSERT 等待。`apply-release.sh` 迁移时上一版内核还在服务，它的受治理写入与能力调用会排队（不会失败），时长约为 `audit_records` 一次顺序扫描加带 resource 的行的排序。
+- **窗口前只读核对**：在 §3.30 的 `select count(*) from audit_records;` 之外再查 `select count(*) from audit_records where resource_id is not null;` 与 `select pg_size_pretty(pg_relation_size('audit_records'));`，估算建索引期间审计写入要等多久，结果记 `docs/private/`。
+- **等不起时窗口前预建**：上一版还在跑时，在事务外执行
+
+  ```sql
+  create index concurrently if not exists audit_records_resource_idx
+    on audit_records (workspace_id, resource_id, created_at) where resource_id is not null;
+  ```
+
+  **必须等这条命令返回、并确认 `select indisvalid from pg_index where indexrelid = 'audit_records_resource_idx'::regclass;` 为 `t` 之后才能进窗口**：还在构建中的索引在目录里也是 `indisvalid = false`，迁移会去 drop 它，并与 `CREATE INDEX CONCURRENTLY` 互相等待（审查 #493 在 #615 记为 P3）。预建失败或被取消留下的无效索引不用手工删，迁移会处理。
+- **应用后只读核对**：同一条 `indisvalid` 查询为 `t`。
+- **行为变化（发版说明补一句）**：agent 从 `request_action` 拿到的失败原因与 wire 上的 `outcomeInDoubt.reason`，现在和 `failureReason` 一样截断到 1000 个 code point，不可见字符显示为 `\u{XXXX}`。
+- **回滚**：只回退代码即可（§6）。要连 schema 一起撤：`drop index if exists audit_records_resource_idx;` 并 `delete from schema_migrations where module = 'core' and version = 44;`（不撤也无害）。
 
 ## 4. Hotfix 流程
 
@@ -1354,6 +1373,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.49.0 之后的下一版 | goal `0001_goal_runs`（#607，S11 GO1 后半，新模块 `goal`，迁移锁键 7241000701）：新表 `goal_runs` / `plan_revisions` / `step_runs`、守卫触发器、延迟约束触发器 `plan_revisions_adopted` | 可逆 | 新模块的新表，上一版从不读写（PR 在本地按 `reversibility-probe` 方式核对） | 只需回退代码；若要连 schema 一起撤：先撤 `task/0007` 与 `governance/0022` 的外键，再 `drop table step_runs, plan_revisions, goal_runs cascade` 并 `delete from schema_migrations where module = 'goal'`（不撤也无害） |
 | v0.49.0 之后的下一版 | task `0007_task_goal_step`（#607）：`tasks` 加可空列 `goal_run_id` / `step_run_id` / `plan_revision` / `step_attempt` / `run_config_snapshot`、CHECK、外键、I-G1 唯一索引、触发器 `tasks_goal_step_immutable`，`worker_runs_task_idx` | 可逆 | 只加可空列与只约束这些列的 CHECK / 外键 / 触发器，不回填；上一版按显式列清单读写 `tasks`，写的行新列全为 NULL。建索引期间阻塞 `worker_runs` 写入（§3.31） | 只需回退代码；若要撤：`drop trigger tasks_goal_step_immutable on tasks`、删索引与五列，并 `delete from schema_migrations where module = 'task' and version = 7` |
 | v0.49.0 之后的下一版 | governance `0022_action_request_step_run`（#607）：`action_requests` 加可空列 `step_run_id`、外键、触发器 `action_requests_step_run_immutable`，`action_requests_parent_worker_run_idx` | 可逆 | 同上：可空列不回填，上一版写的行为 NULL，触发器只在改这一列时触发；建索引期间阻塞 `action_requests` 写入（§3.31） | 只需回退代码；若要撤：`drop trigger action_requests_step_run_immutable on action_requests`、删索引与列，并 `delete from schema_migrations where module = 'governance' and version = 22` |
+| v0.49.0 之后的下一版 | core `0044_audit_records_resource_idx`（#615，遗留 338）：部分索引 `audit_records_resource_idx (workspace_id, resource_id, created_at) where resource_id is not null`，同名无效残留先删再建 | 可逆 | 只加索引，上一版不引用它，规划器自己选路径；PR 在本地先应用本版全部迁移、再跑 v0.49.0 内核全套测试全过，不需要 reversibility 声明。建索引期间阻塞审计写入（§3.32） | 只需回退代码；若要撤：`drop index if exists audit_records_resource_idx` 并 `delete from schema_migrations where module = 'core' and version = 44` |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
