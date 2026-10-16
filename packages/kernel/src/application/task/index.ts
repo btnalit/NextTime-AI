@@ -26,6 +26,8 @@ export {
   waitForOutcome,
 } from './invoke.js';
 
+export { type TaskGoalStep, readTaskGoalStep } from './goal-step.js';
+
 export {
   completeTaskWithResult,
   reactToSupervisorStatus,

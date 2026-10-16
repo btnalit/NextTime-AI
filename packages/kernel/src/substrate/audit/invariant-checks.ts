@@ -1,5 +1,12 @@
 import { ACTION_REQUEST_EDGES } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
+import {
+  DEFAULT_GOAL_BUDGET_GRACE_MS,
+  checkIG1,
+  checkIG2,
+  checkIG6,
+  checkIG9,
+} from './goal-invariant-checks.js';
 
 /**
  * substrate/audit/invariant-checks: periodic, read-only, cross-workspace scans for the design
@@ -81,6 +88,15 @@ import type { PoolClient } from 'pg';
  *   their Sources are expected to go quiet. leftover 62: a Source whose owner Principal holds no
  *   active Handle is also excluded — an old/retired/superseded Source can never observe again
  *   regardless of how long it stays silent (see `checkCollectorSilent`'s own doc comment).
+ *
+ * ## S11 goal execution — I-G1, I-G2, I-G6, I-G9
+ *
+ * docs/goal-orchestration-and-admin-agent-plan-2026-10-16.md §3.3, in `goal-invariant-checks.ts`
+ * (its doc comment has the conditions each one counts): one Task per StepRun attempt (I-G1); only
+ * steps of the current plan revision advance (I-G2); a GoalRun stays within its budget or pauses
+ * (I-G6, with a grace period — default 10 minutes, `goalBudgetGraceMs`); only a live step of a
+ * live GoalRun raises actions and has them run (I-G9). I-G3/I-G4/I-G5/I-G7/I-G8 are enforced where
+ * their mechanism lives (a DB trigger for I-G3's base revision; GO2–GO4 code for the rest).
  */
 
 export interface InvariantCheckResult {
@@ -105,6 +121,9 @@ export interface RunInvariantChecksOptions {
   /** `ops.collector_silent`'s silence threshold. Default
    *  {@link DEFAULT_COLLECTOR_SILENCE_THRESHOLD_MS} (2 hours). */
   readonly collectorSilenceThresholdMs?: number;
+  /** I-G6's grace period before an over-budget running GoalRun counts. Default
+   *  {@link DEFAULT_GOAL_BUDGET_GRACE_MS} (10 minutes). */
+  readonly goalBudgetGraceMs?: number;
 }
 
 /** Each check reports its full violation count and the first `SAMPLE_LIMIT` rows. Every sampled
@@ -696,6 +715,10 @@ export const INVARIANT_CHECK_IDS: readonly string[] = [
   'I-S5-2',
   'I-S5-3',
   'I-P1',
+  'I-G1',
+  'I-G2',
+  'I-G6',
+  'I-G9',
   'ops.one_running_turn',
   'ops.outbox_stuck',
   'ops.collector_silent',
@@ -715,6 +738,7 @@ export async function runInvariantChecks(
   const thresholdMs = options.outboxStuckThresholdMs ?? DEFAULT_OUTBOX_STUCK_THRESHOLD_MS;
   const collectorSilenceMs =
     options.collectorSilenceThresholdMs ?? DEFAULT_COLLECTOR_SILENCE_THRESHOLD_MS;
+  const goalBudgetGraceMs = options.goalBudgetGraceMs ?? DEFAULT_GOAL_BUDGET_GRACE_MS;
   const client = await pool.connect();
   try {
     return [
@@ -730,6 +754,10 @@ export async function runInvariantChecks(
       await checkIS52(client),
       await checkIS53(client),
       await checkIP1(client),
+      await checkIG1(client, SAMPLE_LIMIT),
+      await checkIG2(client, SAMPLE_LIMIT),
+      await checkIG6(client, SAMPLE_LIMIT, goalBudgetGraceMs),
+      await checkIG9(client, SAMPLE_LIMIT),
       await checkOneRunningTurn(client),
       await checkOutboxStuck(client, thresholdMs),
       await checkCollectorSilent(client, collectorSilenceMs),

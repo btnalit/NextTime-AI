@@ -32,6 +32,7 @@ import {
   NO_OPERATION_DEFINITION,
   approveActionRequest,
   getActionRequest,
+  listStepActionOutcomes,
   rejectActionRequest,
 } from '../../governance/approval/index.js';
 import {
@@ -1660,6 +1661,90 @@ describe.runIf(DATABASE_URL !== undefined)(
         getActionRequest(client, workspaceId, result.id),
       );
       expect(row?.parentWorkerRunId).toBe(workerRunId);
+      expect(row?.stepRunId).toBeNull();
+    });
+
+    it('S11 GO1: a Worker whose Task runs for a goal step records that StepRun on its request', async () => {
+      // The goal rows with the guards off: the advancer that would walk them there is GO2's.
+      const seeded = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          await client.query('set local session_replication_role = replica');
+          const goal = await client.query<{ id: string }>(
+            `insert into goal_runs (workspace_id, status, on_behalf_of, statement, current_revision,
+               confirmed_at, budget_max_tokens, budget_max_steps, budget_max_revisions,
+               budget_max_wall_clock_seconds)
+             values ($1, 'running', $2, 'a goal', 1, now(), 100000, 10, 5, 3600) returning id`,
+            [workspaceId, ownerId],
+          );
+          const goalRunId = goal.rows[0]?.id as string;
+          await client.query(
+            `insert into plan_revisions (workspace_id, goal_run_id, revision, status, plan,
+               proposed_by, decided_by, decided_at)
+             values ($1, $2, 1, 'accepted', '{"steps":[{"key":"s"}]}', $3, $3, now())`,
+            [workspaceId, goalRunId, ownerId],
+          );
+          const step = await client.query<{ id: string }>(
+            `insert into step_runs (workspace_id, goal_run_id, step_key, introduced_in_revision,
+               status, attempt_count)
+             values ($1, $2, 's', 1, 'running', 1) returning id`,
+            [workspaceId, goalRunId],
+          );
+          const stepRunId = step.rows[0]?.id as string;
+          const task = await client.query<{ id: string }>(
+            `insert into tasks (workspace_id, status, on_behalf_of, worker_definition_id,
+               worker_definition_version, goal_run_id, step_run_id, plan_revision, step_attempt,
+               run_config_snapshot)
+             values ($1, 'running', $2, $3, 1, $4, $5, 1, 1, '{"definition":{"version":1}}')
+             returning id`,
+            [workspaceId, ownerId, randomUUID(), goalRunId, stepRunId],
+          );
+          const session = await client.query<{ id: string }>(
+            `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)
+             values ($1, $2, 'worker_run', $2, 'active') returning id`,
+            [workspaceId, ownerId],
+          );
+          const sessionId = session.rows[0]?.id as string;
+          await client.query(
+            `insert into worker_runs (workspace_id, status, task_id, session_id, depth, attempt)
+             values ($1, 'running', $2, $3, 1, 1)`,
+            [workspaceId, task.rows[0]?.id, sessionId],
+          );
+          return { stepRunId, sessionId };
+        },
+        { skipRoleSwitch: true },
+      );
+
+      const now = Math.floor(Date.now() / 1000);
+      const result = (await dispatchCapability(
+        { pool },
+        {
+          channel: 'handle',
+          claims: {
+            ws: workspaceId,
+            sid: seeded.sessionId,
+            obo: ownerId,
+            scope: { capabilities: ['request_action'], resources: { gatekeeper: [gatekeeperId] } },
+            jti: randomUUID(),
+            iat: now,
+            exp: now + 600,
+          },
+        },
+        'request_action',
+        { gatekeeperId, operation: PENDING_OP.name, params: { qty: 778 } },
+      )) as { status: string; id: string };
+      expect(result.status).toBe('pending_approval');
+
+      const row = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        getActionRequest(client, workspaceId, result.id),
+      );
+      expect(row?.stepRunId).toBe(seeded.stepRunId);
+      // What the advancer reads of the step: status and failure_kind, never the reason text.
+      const outcomes = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        listStepActionOutcomes(client, workspaceId, seeded.stepRunId),
+      );
+      expect(outcomes).toEqual([{ id: result.id, status: 'pending_approval', failureKind: null }]);
     });
 
     // Legacy 232: a name that names nothing on the gate used to become a `pending_approval` row

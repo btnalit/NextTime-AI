@@ -78,6 +78,8 @@ describe('platform-workspaces', () => {
     expect(purgeCountLabel('capabilityHandles', zhT)).toBe('Handle');
     expect(purgeCountLabel('auditRecords', enT)).toContain('Audit records');
     expect(purgeCountLabel('ontologyVersions', zhT)).toBe('Ontology versions');
+    expect(purgeCountLabel('goalRuns', zhT)).toBe('目标');
+    expect(purgeCountLabel('stepRuns', enT)).toBe('Goal steps');
     expect(purgeCountLabel('', zhT)).toBe('');
   });
 

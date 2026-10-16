@@ -40,6 +40,7 @@ export type {
 export { reconstruct } from './reconstruct.js';
 export type { ReconstructInput, ReconstructResult } from './reconstruct.js';
 
+export { DEFAULT_GOAL_BUDGET_GRACE_MS } from './goal-invariant-checks.js';
 export {
   DEFAULT_COLLECTOR_SILENCE_THRESHOLD_MS,
   DEFAULT_OUTBOX_STUCK_THRESHOLD_MS,

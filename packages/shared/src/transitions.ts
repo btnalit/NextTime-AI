@@ -4,9 +4,12 @@ import type {
   ConnectionRequestStatus,
   DecisionStatus,
   EpistemicStatus,
+  GoalRunStatus,
   GrantStatus,
   OperationStatus,
+  PlanRevisionStatus,
   PublishableStatus,
+  StepRunStatus,
   TaskStatus,
   TurnStatus,
   WorkerRunStatus,
@@ -431,6 +434,142 @@ export const CONNECTION_REQUEST_TRANSITIONS: TransitionTable<
   edges: CONNECTION_REQUEST_EDGES,
 };
 
+// ---------------------------------------------------------------------------------------------
+// GoalRun (S11 GO1; docs/goal-orchestration-and-admin-agent-plan-2026-10-16.md §3.4). The whole
+// graph is also enforced by the database (migrations/goal/0001 `goal_runs_status_guard`; a test
+// compares the two edge sets pair by pair) — these are new tables no earlier release writes, so
+// the guard costs no reversibility.
+//
+// Two edges beyond the §3.4 sketch: `verifying → cancelling` (a person may cancel while the
+// platform runs the acceptance checks — otherwise a cancel during a long observation would be an
+// illegal transition with nothing to wait for), and `cancelling → failed` (an unrecoverable error
+// can happen while cleaning up too: "任意非终态 → failed").
+// ---------------------------------------------------------------------------------------------
+
+export const GOAL_RUN_EVENT_VALUES = [
+  'confirm',
+  'reject',
+  'pause',
+  'resume',
+  'verify',
+  'complete',
+  'cancel',
+  'finish_cancel',
+  'fail',
+] as const;
+export type GoalRunEvent = (typeof GOAL_RUN_EVENT_VALUES)[number];
+
+export const GOAL_RUN_EDGES: readonly StateTransition<GoalRunStatus, GoalRunEvent>[] = [
+  // The requester confirms plan + acceptance checks + budget; or it is rejected / expires unconfirmed.
+  { from: 'proposed', event: 'confirm', to: 'running' },
+  { from: 'proposed', event: 'reject', to: 'cancelled' },
+  // Pause reasons are a column (`GOAL_RUN_PAUSE_REASON_VALUES`); a paused run that fails
+  // verification is paused for `needs_decision`.
+  { from: 'running', event: 'pause', to: 'paused' },
+  { from: 'verifying', event: 'pause', to: 'paused' },
+  { from: 'paused', event: 'resume', to: 'running' },
+  // Every step is done: the platform runs the goal's acceptance checks.
+  { from: 'running', event: 'verify', to: 'verifying' },
+  // `completed` carries the objective outcome: `achieved` only from verification (I-G5);
+  // `not_achieved` when the requester ends a paused run that way.
+  { from: 'verifying', event: 'complete', to: 'completed' },
+  { from: 'paused', event: 'complete', to: 'completed' },
+  // Cancel: no new step starts; `cancelling` lasts until Tasks are terminated, pending and approved
+  // actions withdrawn, and executing actions terminal — or the deadline passes
+  // (`cleanup_pending`).
+  { from: 'running', event: 'cancel', to: 'cancelling' },
+  { from: 'paused', event: 'cancel', to: 'cancelling' },
+  { from: 'verifying', event: 'cancel', to: 'cancelling' },
+  { from: 'cancelling', event: 'finish_cancel', to: 'cancelled' },
+  { from: 'proposed', event: 'fail', to: 'failed' },
+  { from: 'running', event: 'fail', to: 'failed' },
+  { from: 'paused', event: 'fail', to: 'failed' },
+  { from: 'verifying', event: 'fail', to: 'failed' },
+  { from: 'cancelling', event: 'fail', to: 'failed' },
+];
+
+export const GOAL_RUN_TRANSITIONS: TransitionTable<GoalRunStatus, GoalRunEvent> = {
+  machine: 'GoalRun',
+  edges: GOAL_RUN_EDGES,
+};
+
+// ---------------------------------------------------------------------------------------------
+// PlanRevision (S11 GO1): `proposed → accepted | rejected`. Content is immutable from creation; the
+// DB guard also refuses accepting a revision not based on the GoalRun's current one (I-G3).
+// ---------------------------------------------------------------------------------------------
+
+export const PLAN_REVISION_EVENT_VALUES = ['accept', 'reject'] as const;
+export type PlanRevisionEvent = (typeof PLAN_REVISION_EVENT_VALUES)[number];
+
+export const PLAN_REVISION_EDGES: readonly StateTransition<
+  PlanRevisionStatus,
+  PlanRevisionEvent
+>[] = [
+  { from: 'proposed', event: 'accept', to: 'accepted' },
+  { from: 'proposed', event: 'reject', to: 'rejected' },
+];
+
+export const PLAN_REVISION_TRANSITIONS: TransitionTable<PlanRevisionStatus, PlanRevisionEvent> = {
+  machine: 'PlanRevision',
+  edges: PLAN_REVISION_EDGES,
+};
+
+// ---------------------------------------------------------------------------------------------
+// StepRun (S11 GO1, §3.4). Attempts live only here: each attempt is one Task the advancer creates
+// (I-G1), and a retry is `failed → ready`, never a Task-internal retry. Waiting reasons and failure
+// categories are columns. A StepRun's definition is the plan entry of the revision that introduced
+// it, for its whole life: a revision that drops or changes a step supersedes it (a changed step
+// comes back as a new StepRun under the same key), so a live StepRun is always part of the current
+// plan (I-G2). Also enforced by the database (`step_runs_status_guard`).
+// ---------------------------------------------------------------------------------------------
+
+export const STEP_RUN_EVENT_VALUES = [
+  'unblock',
+  'start',
+  'wait',
+  'resume',
+  'succeed',
+  'fail',
+  'retry',
+  'supersede',
+  'cancel',
+  'skip',
+] as const;
+export type StepRunEvent = (typeof STEP_RUN_EVENT_VALUES)[number];
+
+export const STEP_RUN_EDGES: readonly StateTransition<StepRunStatus, StepRunEvent>[] = [
+  { from: 'pending', event: 'unblock', to: 'ready' },
+  { from: 'ready', event: 'start', to: 'running' },
+  { from: 'running', event: 'wait', to: 'waiting' },
+  { from: 'waiting', event: 'resume', to: 'running' },
+  // Success needs a valid output, every ActionRequest of the step terminal and the step's
+  // acceptance passed (§4.5) — possibly reached while waiting, after the Worker already exited.
+  { from: 'running', event: 'succeed', to: 'succeeded' },
+  { from: 'waiting', event: 'succeed', to: 'succeeded' },
+  { from: 'running', event: 'fail', to: 'failed' },
+  { from: 'waiting', event: 'fail', to: 'failed' },
+  // A new attempt: retryable category under the attempt limit, or a person's decision.
+  { from: 'failed', event: 'retry', to: 'ready' },
+  // A revision dropped or redefined it. A step that already succeeded keeps its history instead.
+  { from: 'pending', event: 'supersede', to: 'superseded' },
+  { from: 'ready', event: 'supersede', to: 'superseded' },
+  { from: 'running', event: 'supersede', to: 'superseded' },
+  { from: 'waiting', event: 'supersede', to: 'superseded' },
+  { from: 'failed', event: 'supersede', to: 'superseded' },
+  { from: 'pending', event: 'cancel', to: 'cancelled' },
+  { from: 'ready', event: 'cancel', to: 'cancelled' },
+  { from: 'running', event: 'cancel', to: 'cancelled' },
+  { from: 'waiting', event: 'cancel', to: 'cancelled' },
+  { from: 'failed', event: 'cancel', to: 'cancelled' },
+  { from: 'pending', event: 'skip', to: 'skipped' },
+  { from: 'ready', event: 'skip', to: 'skipped' },
+];
+
+export const STEP_RUN_TRANSITIONS: TransitionTable<StepRunStatus, StepRunEvent> = {
+  machine: 'StepRun',
+  edges: STEP_RUN_EDGES,
+};
+
 /** Every transition table, for generic iteration (e.g. exhaustive tests, doc generation). */
 export const ALL_TRANSITION_TABLES = [
   FACT_LIFECYCLE_TRANSITIONS,
@@ -445,4 +584,7 @@ export const ALL_TRANSITION_TABLES = [
   OPERATION_TRANSITIONS,
   GRANT_TRANSITIONS,
   CONNECTION_REQUEST_TRANSITIONS,
+  GOAL_RUN_TRANSITIONS,
+  PLAN_REVISION_TRANSITIONS,
+  STEP_RUN_TRANSITIONS,
 ] as const;
