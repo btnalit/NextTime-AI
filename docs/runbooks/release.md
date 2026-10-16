@@ -1197,7 +1197,7 @@ v0.47.0、v0.48.0 不单独上主机（#554 不在 v0.47.0 里，遗留 259 的�
 
 **回滚**（§5）：回滚目标是 v0.46.0，按 §3.25 与 §3.26 的回滚说明；不需要排空 Worker。
 
-窗口目标改到 v0.49.0 之后的发版时（维护者 2026-10-16 决定窗口暂缓，开窗口时目标改为当时最新的发版），本清单按新目标刷新，并加上之后各版的小节，至少 §3.28（#589 升钉：`postgres` 与 `backup` 重建、不执行 `ALTER EXTENSION`、应用后只读核对 `vector` 扩展版本）。
+窗口目标改到 v0.49.0 之后的发版时（维护者 2026-10-16 决定窗口暂缓，开窗口时目标改为当时最新的发版），本清单按新目标刷新，并加上之后各版的小节，至少 §3.28（#589 升钉：`postgres` 与 `backup` 重建、不执行 `ALTER EXTENSION`、应用后只读核对 `vector` 扩展版本）与 §3.29（#592：governance 0020，旧「始终允许」规则可能显示「已暂停 · 待确认版本」需 owner 重新确认，契约不向后兼容、旧控制台页要刷新）。
 
 ### 3.28 第三方镜像升钉：pgvector、node、postgres（#589，v0.49.0 之后的下一版起）
 
@@ -1211,6 +1211,16 @@ node 24.21.0 → 24.22.0，只影响平台镜像的构建，随发版重建，�
 - **应用后只读核对**：`select extversion from pg_extension where extname = 'vector';`（不执行 `ALTER EXTENSION` 时应仍是 `0.8.6`），结果记 `docs/private/`。
 - **回滚**：旧 tag 按旧 digest 引用 GHCR 副本，旧版本仍在包里（§3.19：不删 `nexttime-mirror-*` 的旧包版本），`up -d` 再重建一次即可；前提是没有执行过 `ALTER EXTENSION`（见上）。
   §3.19 回滚命令里的 postgres digest（`18cfe3ef…`）是升钉前的旧值，**保留不改**：回滚到 v0.44.0 及更早时给旧版 `restore.sh` 补本地 tag 要用它。
+
+### 3.29 「始终允许」绑定所审的定义；发布与安装绑定所审的版本（#592，governance 0020，遗留 218 / 300 / 301，v0.49.0 之后的下一版起）
+
+带一个 governance 迁移（`0020_auto_approval_definition`），随 `apply-release.sh` 的迁移步骤自动应用，无单独主机步骤；线上契约**不向后兼容**（见下）。
+
+- **迁移做什么**：`gatekeeper_policies` 加两列可空列 `operation_digest`、`operation_version`，记下按门「始终允许」所允许的那份定义。既有的按门自动批准规则按证据绑定、不会更宽：取同一门、同一动作种类上、由该规则的写入者在规则最后写入之前批准（不是驳回）的最新一条请求的摘要；找到就绑定并继续自动批准，找不到（或那条请求早于 0019、没有摘要）就**不绑定**，规则在本版显示「已暂停 · 待确认版本」，这类请求改为走审批。每条规则写一条审计：`policy.auto_approve_definition_bound` 或 `policy.auto_approve_definition_unproven`；内核日志有一行 `governance 0020: bound N auto-approval rule(s) …, suspended M`。重复执行结果不变。
+- **窗口后提醒维护者**：没有批准证据的旧「始终允许」规则会显示「已暂停 · 待确认版本」，对应 Operation 的请求会重新出现在审批队列里。这是预期（只会更窄）；需要继续自动批准的，由 owner 在控制台策略表里按当前发布的版本「重新确认」。
+- **应用后只读核对**：`select action, count(*) from audit_records where action in ('policy.auto_approve_definition_bound', 'policy.auto_approve_definition_unproven') group by action;`，与内核日志那一行的 N / M 对上，结果记 `docs/private/`。
+- **契约不向后兼容**：升级时浏览器里还开着的旧控制台页，在发布、安装、「始终允许」、发布清单时会得到 400 `invalid_params`（什么都不写），刷新页面即可。直接调 API 的脚本要带上新参数：`publish_skill` / `publish_procedure` / `install_module` / `upgrade_module` 必填 `version`；`publish_operation` 的 `draftDigest` 必填；`set_auto_approved_action_kind` 必填 `actionRequestId`；`set_policy` 按门开自动批准要 `operationVersion`，不再接受门上不存在的动作；`publish_manifest` 必填 `drafts`；`set_policy` 省略 `requesterCanApprove` 时保留原值（以前写成默认），回到默认要显式传 `null`。仓库内的 `scripts/accept_s2.sh`、`accept_s4.sh`、`drill-add-gatekeeper.sh` 已随 #592 更新，窗口里跑 S2 / S4 时一并验证。
+- **回滚**：只回退代码即可（§6）。回退后上一版写的规则不带摘要，回到本版时显示暂停、走审批；用上一版编辑一条已绑定的规则会保留旧摘要，回到本版时显示「已暂停 · 定义已变」。两种都只会更窄，回到本版后由 owner 重新确认。
 
 ## 4. Hotfix 流程
 
@@ -1319,6 +1329,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.44.0 之后的下一版 | governance `0018_container_held_handles_revoked`（#524，遗留 156）：吊销所有未过期、未吊销的 `entry` / `worker_run` Handle，每个 (工作区, 主体) 写一条审计 `principal.container_handles_revoked` | 可逆 | 无 schema 变更，只置 `capability_handles.revoked_at`（0015 的单调吊销触发器允许）。v0.44.0 的代码在入口 Handle 被吊销后于下一个 Turn 重签（`ensureEntryHandle` 检查缓存 jti 的吊销），WorkerRun 本来就在窗口前排空；被吊销的 Handle 不恢复，也不需要恢复 | 只需回退代码 |
 | v0.45.0 之后的下一版 | governance `0019_action_request_operation_digest`（#538，遗留 189）：`action_requests` 加一列可空的 `operation_digest`（text，检查约束 `action_requests_operation_digest_shape`：为空、`none` 或 `sha256:<64 hex>`），不回填 | 可逆 | 只加一列可空列和只约束这一列的检查。读了 v0.44.0 的 `governance/approval`：`action_requests` 的读写都用显式列清单（`ACTION_REQUEST_ROW_COLUMNS`），不读不写新列，旧代码插入的行恒为空，约束天然满足。回退后旧代码回到执行时不带摘要（即遗留 189 本身），新代码期间写下的摘要留在列里、旧代码看不见；重新升级后这些行照常按记下的摘要执行，回退期间写入的空值行按执行时已发布的版本执行 | 只需回退代码；若要连 schema 一起撤：`alter table action_requests drop column operation_digest`（约束随列删除），并 `delete from schema_migrations where module = 'governance' and version = 19`（不撤也无害） |
 | v0.46.0 之后的下一版 | core `0043_audit_unattributed_raw_secret_scrub`（#549，遗留 183–187）：`audit_records_actor_shape` 在 0040 的未署名主机操作名单里加上 `cli.raw_secrets_scrubbed`，其余不变；不改数据、不加列 | 可逆 | 只放宽：满足 0040 约束的行都满足新约束，重建约束不需要回填；v0.46.0 的代码从不写这个动作，回退后约束只是多允许一种它不会写的行。`scrub-raw-secrets` 改写的 3 类数据是另一回事：遮蔽是单向的，回退代码不会恢复原文，旧代码照常读遮蔽后的文本（§3.25） | 只需回退代码；恢复备份会把原文带回来，只用于灾备 |
+| v0.49.0 之后的下一版 | governance `0020_auto_approval_definition`（#592，遗留 218）：`gatekeeper_policies` 加两列可空列 `operation_digest`（检查约束 `gatekeeper_policies_operation_digest_shape`：为空或 `sha256:<64 hex>`）与 `operation_version`（`gatekeeper_policies_operation_version_positive`：为空或 > 0），并按批准证据回填既有的按门自动批准规则（无证据的不回填，各记一条审计） | 可逆 | 只加两列可空列与只约束这两列的检查，回填只写新列与审计行。上一版的 `governance/policy` 读写 `gatekeeper_policies` 都用显式列清单，看不到新列（PR 与审查 #493 核对，不需要 reversibility 声明）。回退后上一版写的规则不带摘要，重新升级后在本版显示暂停、走审批；用上一版编辑一条已绑定的规则会保留旧摘要，回到本版显示「已暂停 · 定义已变」——都只会更窄，不会更宽（§3.29） | 只需回退代码；若要连 schema 一起撤：`alter table gatekeeper_policies drop column operation_digest, drop column operation_version`（约束随列删除），并 `delete from schema_migrations where module = 'governance' and version = 20`（不撤也无害；审计行保留） |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
