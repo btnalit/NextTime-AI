@@ -51,6 +51,7 @@ export {
 
 export {
   type AttemptVerdict,
+  DEFAULT_BLOCKED_RETRY_RECHECK_MS,
   DEFAULT_QUOTA_RETRY_MS,
   type GoalAdvanceDeps,
   type GoalAdvanceOutcome,

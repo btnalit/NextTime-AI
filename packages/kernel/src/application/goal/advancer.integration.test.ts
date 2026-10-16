@@ -24,7 +24,11 @@ import {
 } from '../task/index.js';
 import { failTaskAndReapWorkerRuns } from '../task/lifecycle.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/index.js';
-import { type GoalAdvancerOptions, advanceGoalRun } from './advance.js';
+import {
+  DEFAULT_BLOCKED_RETRY_RECHECK_MS,
+  type GoalAdvancerOptions,
+  advanceGoalRun,
+} from './advance.js';
 import {
   type GoalWakeEventSource,
   claimDueGoalRuns,
@@ -414,6 +418,36 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
         return result.rows;
       });
+
+    const goalAudit = (goalRunId: string) =>
+      admin(async (client) => {
+        const result = await client.query<{ action: string; payload: Record<string, unknown> }>(
+          `select action, payload from audit_records
+            where workspace_id = $1 and resource_type = 'goal_run' and resource_id = $2
+            order by created_at, id`,
+          [workspaceId, goalRunId],
+        );
+        return result.rows;
+      });
+
+    /** Adopts a revision 2 of `steps` without superseding anything — what GO3's revise path must
+     *  never leave, written with the guards off. */
+    async function adoptUnsupersededRevision(
+      goalRunId: string,
+      requesterId: string,
+      steps: readonly StepSpec[],
+    ) {
+      await raw(
+        `insert into plan_revisions (workspace_id, goal_run_id, revision, based_on_revision, status,
+           plan, proposed_by, decided_by, decided_at)
+         values ($1, $2, 2, 1, 'accepted', $3::jsonb, $4, $4, now())`,
+        [workspaceId, goalRunId, JSON.stringify(planOf(steps)), requesterId],
+      );
+      await raw('update goal_runs set current_revision = 2 where workspace_id = $1 and id = $2', [
+        workspaceId,
+        goalRunId,
+      ]);
+    }
 
     beforeAll(async () => {
       pool = createPool();
@@ -1184,6 +1218,39 @@ describe.runIf(DATABASE_URL !== undefined)(
         });
       });
 
+      it('looks again at a retry held back by a request in flight within one period, even when the wake is lost (S12)', async () => {
+        const requester = await newPrincipal();
+        const goalRunId = await startGoal(requester, [{ key: 'only' }]);
+        await advance(goalRunId, requester);
+        const step = (await stepsOf(goalRunId)).only as StepRunRow;
+        const executing = await seedAction(step.id, null, 'executing');
+        await failStep(step.id, requester, 'worker_failed');
+
+        // By default the held-back retry is looked at again one reconcile period later, long
+        // before the wall-clock deadline.
+        const held = await advance(goalRunId, requester);
+        const inMs = (held.nextTickAt as Date).getTime() - Date.now();
+        expect(inMs).toBeGreaterThan(50_000);
+        expect(inMs).toBeLessThanOrEqual(DEFAULT_BLOCKED_RETRY_RECHECK_MS + 1000);
+
+        const recheck: GoalAdvancerOptions = { ...NO_BACKOFF, blockedRetryRecheckMs: 50 };
+        await advance(goalRunId, requester, recheck);
+        expect(await isDue(goalRunId)).toBe(false);
+        // The request ends; its ActionRequestUpdated never arrives.
+        await setActionStatus(executing, 'executed');
+        await sleep(100);
+        expect(await isDue(goalRunId)).toBe(true);
+        const claimed = (await claimDueGoalRuns(pool, { limit: 10_000 })).map(
+          (target) => target.goalRunId,
+        );
+        expect(claimed).toContain(goalRunId);
+        await advance(goalRunId, requester, recheck);
+        expect((await stepsOf(goalRunId)).only).toMatchObject({
+          status: 'running',
+          attemptCount: 2,
+        });
+      });
+
       it('a Worker that ends without a result, or a Task someone cancelled, needs a person', async () => {
         const requester = await newPrincipal();
         const noResult = await startGoal(requester, [{ key: 'only' }]);
@@ -1313,19 +1380,9 @@ describe.runIf(DATABASE_URL !== undefined)(
         ]);
         await advance(goalRunId, requester);
         // Revision 2 redefines b without superseding it — what GO3's revise path must never leave.
-        const revised = planOf([
+        await adoptUnsupersededRevision(goalRunId, requester, [
           { key: 'a' },
           { key: 'b', dependsOn: ['a'], input: { step: 'b', changed: true } },
-        ]);
-        await raw(
-          `insert into plan_revisions (workspace_id, goal_run_id, revision, based_on_revision, status,
-             plan, proposed_by, decided_by, decided_at)
-           values ($1, $2, 2, 1, 'accepted', $3::jsonb, $4, $4, now())`,
-          [workspaceId, goalRunId, JSON.stringify(revised), requester],
-        );
-        await raw('update goal_runs set current_revision = 2 where workspace_id = $1 and id = $2', [
-          workspaceId,
-          goalRunId,
         ]);
         await completeStep(((await stepsOf(goalRunId)).a as StepRunRow).id, requester);
         await advance(goalRunId, requester);
@@ -1336,6 +1393,43 @@ describe.runIf(DATABASE_URL !== undefined)(
           status: 'paused',
           pauseReason: 'needs_decision',
         });
+      });
+
+      it('a paused run records each further cause once, not on every advance', async () => {
+        const requester = await newPrincipal();
+        const steps: StepSpec[] = [{ key: 'a' }, { key: 'b', dependsOn: ['a'] }, { key: 'c' }];
+        const goalRunId = await startGoal(requester, steps);
+        await advance(goalRunId, requester);
+        await adoptUnsupersededRevision(goalRunId, requester, [
+          { key: 'a' },
+          { key: 'b', dependsOn: ['a'], input: { step: 'b', changed: true } },
+          { key: 'c' },
+        ]);
+        const before = await stepsOf(goalRunId);
+        await completeStep(before.a?.id as string, requester);
+        await advance(goalRunId, requester);
+        expect(await goalOf(goalRunId)).toMatchObject({
+          status: 'paused',
+          pauseReason: 'needs_decision',
+        });
+
+        // While paused, c's attempt fails: a new cause, noted once; b's is the pause's own.
+        await failStep(before.c?.id as string, requester, 'no_result');
+        for (let i = 0; i < 3; i += 1) await advance(goalRunId, requester);
+        expect((await stepsOf(goalRunId)).c).toMatchObject({
+          status: 'failed',
+          failureCategory: 'contract_violation',
+        });
+        const audit = await goalAudit(goalRunId);
+        expect(audit.filter((row) => row.action === 'goal_run.pause')).toHaveLength(1);
+        expect(
+          audit.filter((row) => row.action === 'goal_run.pause_noted').map((row) => row.payload),
+        ).toEqual([
+          expect.objectContaining({
+            reason: 'needs_decision',
+            detail: 'step c: attempt 1 failed (contract_violation)',
+          }),
+        ]);
       });
 
       it('a later attempt whose pinned WorkerDefinition version was deprecated does not start', async () => {

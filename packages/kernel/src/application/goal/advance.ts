@@ -75,9 +75,10 @@ import {
  *      `budget_exhausted`; lost authority pauses `authority_lost` (S9, I-G7); a pinned component no
  *      longer published pauses `needs_decision`.
  *
- * A paused GoalRun keeps its first reason (the guard refuses changing it while paused); a second
- * cause found in the same advance is in the audit log, not on the row. The advance ends by writing
- * `next_tick_at`: the earliest retry, quota retry or wall-clock deadline while running, otherwise
+ * A paused GoalRun keeps its first reason (the guard refuses changing it while paused); a further
+ * cause is in the audit log (`goal_run.pause_noted`, once per pause for each reason and detail),
+ * not on the row. The advance ends by writing `next_tick_at`: the earliest retry, quota retry,
+ * blocked-retry re-check or wall-clock deadline while running, otherwise
  * `null` — then only an event (`TaskUpdated`, `ActionRequestUpdated`), the reconcile scan or a
  * person moves the run. Attempts are started (`startStepAttemptTask`: the WorkerRun spawned, the
  * Task `running`) after the transaction commits, so the Worker's Handle is committed before its
@@ -99,9 +100,15 @@ export function defaultRetryBackoffMs(attempts: number): number {
 /** How long a step refused by the requester's concurrency quota waits before the next try. */
 export const DEFAULT_QUOTA_RETRY_MS = 30_000;
 
+/** When a retry held back by a request still in flight is looked at again. The request's
+ *  `ActionRequestUpdated` normally wakes the run first; this bounds a lost wake to one reconcile
+ *  period (S12) instead of the wall-clock deadline — the reconcile scan does not look for it. */
+export const DEFAULT_BLOCKED_RETRY_RECHECK_MS = 60 * 1000;
+
 export interface GoalAdvancerOptions {
   readonly retryBackoffMs?: (attempts: number) => number;
   readonly quotaRetryMs?: number;
+  readonly blockedRetryRecheckMs?: number;
 }
 
 export interface GoalAdvanceDeps {
@@ -273,6 +280,7 @@ class Advance {
   private readonly now: Date;
   private readonly retryBackoffMs: (attempts: number) => number;
   private readonly quotaRetryMs: number;
+  private readonly blockedRetryRecheckMs: number;
   private status: GoalRunStatus;
   private readonly timers: number[] = [];
   private readonly started: PreparedStepAttempt[] = [];
@@ -284,6 +292,7 @@ class Advance {
     this.now = now;
     this.retryBackoffMs = options.retryBackoffMs ?? defaultRetryBackoffMs;
     this.quotaRetryMs = options.quotaRetryMs ?? DEFAULT_QUOTA_RETRY_MS;
+    this.blockedRetryRecheckMs = options.blockedRetryRecheckMs ?? DEFAULT_BLOCKED_RETRY_RECHECK_MS;
     this.status = goal.status;
   }
 
@@ -451,8 +460,11 @@ class Advance {
           'awaiting_reconcile',
           `step ${step.stepKey}: an earlier action may have run (outcome unknown)`,
         );
+      } else {
+        // The request's `ActionRequestUpdated` wakes the run when it ends; the re-check bounds a
+        // lost wake (the reconcile scan does not look for a held-back retry).
+        this.timers.push(this.now.getTime() + this.blockedRetryRecheckMs);
       }
-      // An in-flight request's `ActionRequestUpdated` wakes the run when it ends.
       return;
     }
     const due = step.updatedAt.getTime() + this.retryBackoffMs(step.attemptCount);
@@ -630,9 +642,12 @@ class Advance {
   }
 
   /** Pauses a running GoalRun. A paused one keeps its reason (the guard refuses changing it); the
-   *  later cause is only audited. */
+   *  later cause is only audited — once per pause: a cause already recorded since the run paused
+   *  (by the pause itself or an earlier note, same reason and detail) is not written again, so a
+   *  paused run advanced by every wake does not repeat it. */
   private async pause(reason: GoalRunPauseReason, detail: string): Promise<void> {
     if (this.status !== 'running') {
+      if (await this.pauseCauseRecorded(reason, detail)) return;
       // Not a transition: an audit row only, no `GoalRunUpdated`.
       await writeAudit(this.client, {
         workspaceId: this.ws,
@@ -645,6 +660,21 @@ class Advance {
       return;
     }
     await this.moveGoal('pause', reason, { reason, detail });
+  }
+
+  /** Whether `reason` / `detail` is already in the audit log since the run last changed status
+   *  (`updated_at` is written by transitions only; a paused run's is its pause). Reads by
+   *  `resource_id` (`audit_records_resource_idx`, core/0044). */
+  private async pauseCauseRecorded(reason: GoalRunPauseReason, detail: string): Promise<boolean> {
+    const result = await this.client.query(
+      `select 1 from audit_records
+        where workspace_id = $1 and resource_id = $2 and created_at >= $3
+          and action in ('goal_run.pause', 'goal_run.pause_noted')
+          and payload ->> 'reason' = $4 and payload ->> 'detail' = $5
+        limit 1`,
+      [this.ws, this.goal.id, this.goal.updatedAt, reason, detail],
+    );
+    return (result.rowCount ?? 0) > 0;
   }
 
   private async moveGoal(
