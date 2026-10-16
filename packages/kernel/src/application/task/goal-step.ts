@@ -5,6 +5,9 @@ import type { PoolClient } from 'pg';
  * StepRun and plan revision a Task runs for. Written once when the Task is created — by the
  * advancer for a step's own attempt (GO2), by `invoke_worker` for a nested child Task, which
  * inherits its caller's (`invoke.ts`) — and never changed (a DB trigger).
+ *
+ * For GO2: an attempt Task must be carried by a WorkerRun (`invoke`'s insert and spawn path), or
+ * `reapOrphanedTasks` (`reaper.ts`) fails it as `spawn_lost` / `run_lost` (legacy 325).
  */
 export interface TaskGoalStep {
   readonly goalRunId: string;

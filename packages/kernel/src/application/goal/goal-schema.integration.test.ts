@@ -25,10 +25,13 @@ import { getGoalRun, listStepRuns, readStepActionEffect } from './index.js';
 /**
  * application/goal — goal-schema.integration (S11 GO1, migrations/goal/0001, task/0007,
  * governance/0022): what the database refuses. Each state machine's edge set equals the shared
- * transition table pair by pair; illegal transitions, sub-states without their status, a revision
- * accepted against a stale base (I-G3), a second Task for one attempt (I-G1) and a Task or request
- * claiming another goal's step are all refused by the database itself, whatever the writer. The
- * advancer splits a step on its requests' `status` and `failure_kind` columns only.
+ * transition table pair by pair; illegal transitions, sub-states without their status or changed
+ * without a transition, any change to a final row or to a row's identity, a revision accepted
+ * against a stale base or beside another (I-G3, in one transaction or two concurrent ones), a step
+ * created under a superseded revision (I-G2), a second Task for one attempt (I-G1) and a Task or
+ * request claiming another goal's step are all refused by the database itself — written as
+ * `nexttime_app`, the role every kernel write path uses, whatever the writer. The advancer splits a
+ * step on its requests' `status` and `failure_kind` columns only.
  *
  * Gated on `DATABASE_URL`.
  */
@@ -83,12 +86,27 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
     }
 
+    const ACCEPT = `update plan_revisions set status = 'accepted', decided_by = $3, decided_at = now()
+                    where workspace_id = $1 and goal_run_id = $2 and revision = $4`;
+    const acceptIn = (client: PoolClient, goalRunId: string, revision: number) =>
+      client.query(ACCEPT, [workspaceId, goalRunId, ownerId, revision]);
+    /** Accepts a revision in a transaction of its own — refused at commit, since nothing adopts it. */
     const acceptRevision = (goalRunId: string, revision: number) =>
-      sql(
-        `update plan_revisions set status = 'accepted', decided_by = $3, decided_at = now()
-         where workspace_id = $1 and goal_run_id = $2 and revision = $4`,
-        [workspaceId, goalRunId, ownerId, revision],
+      asApp((client) => acceptIn(client, goalRunId, revision));
+
+    const adoptIn = (client: PoolClient, goalRunId: string, revision: number, goalSet = '') =>
+      client.query(
+        `update goal_runs set current_revision = $3, updated_at = now()${goalSet ? `, ${goalSet}` : ''}
+         where workspace_id = $1 and id = $2`,
+        [workspaceId, goalRunId, revision],
       );
+    /** A revision taking effect: accepted and made current in one transaction, with `goalSet`
+     *  (more assignments to the GoalRun row) — the writes GO2 / GO5 make together. */
+    const adopt = (goalRunId: string, revision: number, goalSet = '') =>
+      asApp(async (client) => {
+        await acceptIn(client, goalRunId, revision);
+        await adoptIn(client, goalRunId, revision, goalSet);
+      });
 
     const makeCurrent = (goalRunId: string, revision: number) =>
       sql(
@@ -97,15 +115,10 @@ describe.runIf(DATABASE_URL !== undefined)(
         [workspaceId, goalRunId, revision],
       );
 
-    /** Confirms a proposed GoalRun: accepts revision 1, runs, and creates a `pending` StepRun per
-     *  step — the writes the advancer makes in one transaction (GO2). */
+    /** Confirms a proposed GoalRun: accepts revision 1 and runs on it, then creates a `pending`
+     *  StepRun per step — the writes the advancer makes (GO2). */
     async function confirmGoal(goalRunId: string, steps: readonly string[] = ['A', 'B']) {
-      await acceptRevision(goalRunId, 1);
-      await sql(
-        `update goal_runs set status = 'running', current_revision = 1, confirmed_at = now()
-         where workspace_id = $1 and id = $2`,
-        [workspaceId, goalRunId],
-      );
+      await adopt(goalRunId, 1, "status = 'running', confirmed_at = now()");
       for (const key of steps) await insertStep(goalRunId, key, 1);
     }
 
@@ -145,6 +158,70 @@ describe.runIf(DATABASE_URL !== undefined)(
         id,
         ...params,
       ]);
+
+    /** As the login role with the guards off — a row state the write path can no longer reach. */
+    const raw = (text: string, params: readonly unknown[] = []) =>
+      withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          await client.query('set local session_replication_role = replica');
+          return client.query(text, [...params]);
+        },
+        { skipRoleSwitch: true },
+      );
+
+    /** Two concurrent transactions: `first` runs its statements and holds its locks; `second` then
+     *  starts, and once it waits on a lock, `first` runs `firstRest` and commits — so `second`
+     *  carries on reading what `first` committed. Resolves to how `second` ended. */
+    async function race(
+      first: (client: PoolClient) => Promise<unknown>,
+      firstRest: (client: PoolClient) => Promise<unknown>,
+      second: (client: PoolClient) => Promise<unknown>,
+    ): Promise<{ readonly error?: unknown }> {
+      let held = () => {};
+      const firstHolds = new Promise<void>((resolve) => {
+        held = resolve;
+      });
+      let release = () => {};
+      const released = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const firstDone = asApp(async (client) => {
+        await first(client);
+        held();
+        await released;
+        await firstRest(client);
+      });
+      await Promise.race([firstHolds, firstDone]);
+      let pid: number | undefined;
+      let settled = false;
+      const secondDone = asApp(async (client) => {
+        pid = (await client.query<{ pid: number }>('select pg_backend_pid() as pid')).rows[0]?.pid;
+        return second(client);
+      }).then(
+        () => ({}),
+        (error: unknown) => ({ error }),
+      );
+      void secondDone.then(() => {
+        settled = true;
+      });
+      for (let tries = 0; !settled; tries += 1) {
+        if (pid !== undefined) {
+          const activity = await pool.query<{ wait_event_type: string | null }>(
+            'select wait_event_type from pg_stat_activity where pid = $1',
+            [pid],
+          );
+          if (activity.rows[0]?.wait_event_type === 'Lock') break;
+        }
+        if (tries > 400) break;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      expect(settled, 'the second transaction waits for the first').toBe(false);
+      release();
+      await firstDone;
+      return secondDone;
+    }
 
     /** A Task row for a step (as the advancer or `invoke_worker` writes it). */
     const insertTask = (fields: {
@@ -326,8 +403,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         ).rejects.toThrow(/revision 1 is not an accepted revision/);
         await confirmGoal(goalRunId);
         await proposeRevision(goalRunId, 2, 1, ['A', 'B', 'C']);
-        await acceptRevision(goalRunId, 2);
-        await makeCurrent(goalRunId, 2);
+        await adopt(goalRunId, 2);
         await expect(makeCurrent(goalRunId, 1)).rejects.toThrow(/never goes back/);
         await expect(
           setGoal(goalRunId, 'current_revision = null, confirmed_at = null'),
@@ -348,7 +424,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           { skipRoleSwitch: true },
         );
         await expect(setGoal(goalRunId, 'on_behalf_of = $3', [other])).rejects.toThrow(
-          /requester, the originating turn and created_at never change/,
+          /requester, the originating turn, the statement and created_at never change \(on_behalf_of\)/,
         );
       });
 
@@ -428,9 +504,8 @@ describe.runIf(DATABASE_URL !== undefined)(
         const goalRunId = await runningGoal();
         await proposeRevision(goalRunId, 2, 1, ['A', 'B', 'C']);
         await proposeRevision(goalRunId, 3, 1, ['A', 'D']);
-        await acceptRevision(goalRunId, 2);
-        await makeCurrent(goalRunId, 2);
-        await expect(acceptRevision(goalRunId, 3)).rejects.toThrow(
+        await adopt(goalRunId, 2);
+        await expect(adopt(goalRunId, 3)).rejects.toThrow(
           /revision 3 is based on 1, but the current revision is 2 \(I-G3\)/,
         );
       });
@@ -467,7 +542,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
         await proposeRevision(goalRunId, 2, 1, ['A', 'B', 'Z']);
         await expect(insertStep(goalRunId, 'Z', 2)).rejects.toThrow(
-          /step Z is not in accepted revision 2/,
+          /step Z is introduced in revision 2, but the current revision is 1 \(I-G2\)/,
         );
       });
 
@@ -483,7 +558,9 @@ describe.runIf(DATABASE_URL !== undefined)(
         await expect(setStep(a, "status = 'failed'")).rejects.toThrow(/step_runs_failure_category/);
         await setStep(a, "status = 'failed', failure_category = 'transient'");
         await setStep(a, "status = 'ready', failure_category = null");
-        await expect(setStep(a, 'attempt_count = 0')).rejects.toThrow(/never uncounted/);
+        await expect(setStep(a, 'attempt_count = 0')).rejects.toThrow(
+          /attempts are counted only when a step starts/,
+        );
         await expect(setStep(a, "step_key = 'Q'")).rejects.toThrow(/identity never changes/);
       });
 
@@ -494,7 +571,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         await setStep(a, "status = 'running', attempt_count = 1");
         await setStep(a, "status = 'succeeded', ended_at = now()");
         await proposeRevision(goalRunId, 2, 1, ['B']);
-        await acceptRevision(goalRunId, 2);
+        await adopt(goalRunId, 2);
         await expect(
           setStep(a, "status = 'superseded', superseded_in_revision = 2"),
         ).rejects.toThrow(/illegal transition succeeded -> superseded/);
@@ -507,16 +584,351 @@ describe.runIf(DATABASE_URL !== undefined)(
         await proposeRevision(goalRunId, 2, 1, [{ key: 'A', note: 'redefined' }, 'B']);
         await expect(
           setStep(a, "status = 'superseded', superseded_in_revision = 2, ended_at = now()"),
-        ).rejects.toThrow(/revision 2 is not an accepted revision/);
-        await acceptRevision(goalRunId, 2);
-        await makeCurrent(goalRunId, 2);
+        ).rejects.toThrow(/superseded by the current revision 1, not by 2 \(I-G2\)/);
+        await adopt(goalRunId, 2);
         await expect(
           setStep(a, "status = 'superseded', superseded_in_revision = 1, ended_at = now()"),
-        ).rejects.toThrow(/step_runs_superseded/);
+        ).rejects.toThrow(/superseded by the current revision 2, not by 1 \(I-G2\)/);
         await setStep(a, "status = 'superseded', superseded_in_revision = 2, ended_at = now()");
         const again = await insertStep(goalRunId, 'A', 2);
         expect(again).not.toBe(a);
         expect(await stepId(goalRunId, 'A')).toBe(again);
+      });
+    });
+
+    describe('GoalRun — what may change, and when', () => {
+      /** A completed GoalRun with revision 2 still proposed. */
+      async function completedGoal(): Promise<string> {
+        const goalRunId = await runningGoal();
+        await proposeRevision(goalRunId, 2, 1, ['A', 'B', 'C']);
+        await setGoal(goalRunId, "status = 'verifying'");
+        await setGoal(
+          goalRunId,
+          "status = 'completed', outcome = 'achieved', outcome_basis = 'verified_by_check', ended_at = now()",
+        );
+        return goalRunId;
+      }
+
+      it.each([
+        ["outcome = 'not_achieved', outcome_basis = 'requester'", 'outcome, outcome_basis'],
+        ['budget_max_tokens = 1', 'budget_max_tokens'],
+        ["confirmed_at = now() - interval '1 day'", 'confirmed_at'],
+        ["ended_at = now() - interval '1 day'", 'ended_at'],
+        ['current_revision = 2', 'current_revision'],
+      ])(
+        'a completed goal run is final: refuses %s (I-G5: the outcome is never rewritten)',
+        async (set, columns) => {
+          const goalRunId = await completedGoal();
+          await expect(setGoal(goalRunId, set)).rejects.toThrow(
+            new RegExp(`a completed goal run is final; ${columns} cannot change`),
+          );
+        },
+      );
+
+      it('a completed goal run takes no new revision and accepts none', async () => {
+        const goalRunId = await completedGoal();
+        await expect(proposeRevision(goalRunId, 3, 1, ['A'])).rejects.toThrow(
+          /a completed goal run takes no new revision/,
+        );
+        await expect(adopt(goalRunId, 2)).rejects.toThrow(
+          /a completed goal run accepts no revision \(I-G3\)/,
+        );
+        await setGoal(goalRunId, 'updated_at = now()');
+      });
+
+      it('a cancelled goal run only clears cleanup_pending', async () => {
+        const goalRunId = await runningGoal();
+        await setGoal(goalRunId, "status = 'cancelling'");
+        await setGoal(goalRunId, "status = 'cancelled', cleanup_pending = true, ended_at = now()");
+        await expect(setGoal(goalRunId, 'budget_max_steps = 99')).rejects.toThrow(
+          /a cancelled goal run is final; budget_max_steps cannot change/,
+        );
+        await setGoal(goalRunId, 'cleanup_pending = false');
+        await expect(setGoal(goalRunId, 'cleanup_pending = true')).rejects.toThrow(
+          /cleanup_pending is set by the transition into cancelled/,
+        );
+      });
+
+      it('never changes its statement: changing the goal is a revision a person proposes (§4.6)', async () => {
+        const goalRunId = await proposeGoal();
+        await expect(setGoal(goalRunId, "statement = 'another goal'")).rejects.toThrow(
+          /never change \(statement\)/,
+        );
+      });
+
+      it('keeps its pause reason while paused, and writes confirmed_at once', async () => {
+        const goalRunId = await runningGoal();
+        await setGoal(goalRunId, "status = 'paused', pause_reason = 'requested'");
+        await expect(setGoal(goalRunId, "pause_reason = 'needs_decision'")).rejects.toThrow(
+          /the pause reason is set by the transition into paused/,
+        );
+        await expect(
+          setGoal(goalRunId, "confirmed_at = now() - interval '1 hour'"),
+        ).rejects.toThrow(/confirmed_at is written once/);
+        await setGoal(goalRunId, "status = 'running', pause_reason = null");
+        await setGoal(goalRunId, "status = 'paused', pause_reason = 'needs_decision'");
+      });
+
+      it('changes its budget before confirmation, or with the revision that takes effect', async () => {
+        const goalRunId = await proposeGoal();
+        await setGoal(goalRunId, 'budget_max_tokens = 200000');
+        await confirmGoal(goalRunId);
+        await expect(setGoal(goalRunId, 'budget_max_tokens = 300000')).rejects.toThrow(
+          /the budget changes before confirmation or with the revision that takes effect/,
+        );
+        await proposeRevision(goalRunId, 2, 1, ['A', 'B', 'C']);
+        await adopt(goalRunId, 2, 'budget_max_tokens = 300000');
+        const goal = await asApp((client) => getGoalRun(client, workspaceId, goalRunId));
+        expect(goal).toMatchObject({ currentRevision: 2, budget: { maxTokens: 300000 } });
+      });
+
+      it('takes a revision only while proposed, running or paused — not while verifying or winding down', async () => {
+        const verifying = await runningGoal();
+        await proposeRevision(verifying, 2, 1, ['A']);
+        await setGoal(verifying, "status = 'verifying'");
+        await expect(adopt(verifying, 2)).rejects.toThrow(
+          /a verifying goal run accepts no revision \(I-G3\)/,
+        );
+        // Accepted with the guard off: the GoalRun still does not adopt it.
+        await raw(
+          `update plan_revisions set status = 'accepted', decided_by = $3, decided_at = now()
+           where workspace_id = $1 and goal_run_id = $2 and revision = 2`,
+          [workspaceId, verifying, ownerId],
+        );
+        await expect(makeCurrent(verifying, 2)).rejects.toThrow(
+          /a revision takes effect only while the goal run is proposed, running or paused \(verifying -> verifying\)/,
+        );
+        const cancelling = await runningGoal();
+        await setGoal(cancelling, "status = 'cancelling'");
+        await expect(proposeRevision(cancelling, 2, 1, ['A'])).rejects.toThrow(
+          /a cancelling goal run takes no new revision/,
+        );
+      });
+    });
+
+    describe('PlanRevision — the accepted revisions are one chain (I-G3)', () => {
+      const revisionStatus = async (goalRunId: string, revision: number) =>
+        (
+          await sql(
+            'select status from plan_revisions where workspace_id = $1 and goal_run_id = $2 and revision = $3',
+            [workspaceId, goalRunId, revision],
+          )
+        ).rows[0]?.status;
+
+      it('of two revisions on the same base accepted in one transaction, the second is refused', async () => {
+        const goalRunId = await runningGoal();
+        await proposeRevision(goalRunId, 2, 1, ['A', 'B', 'C']);
+        await proposeRevision(goalRunId, 3, 1, ['A', 'D']);
+        await expect(
+          asApp(async (client) => {
+            await acceptIn(client, goalRunId, 2);
+            await acceptIn(client, goalRunId, 3);
+          }),
+        ).rejects.toThrow(
+          /revision 2 is accepted but not yet current, so revision 3 cannot be accepted beside it \(I-G3\)/,
+        );
+        await expect(
+          asApp(async (client) => {
+            await acceptIn(client, goalRunId, 2);
+            await adoptIn(client, goalRunId, 2);
+            await acceptIn(client, goalRunId, 3);
+          }),
+        ).rejects.toThrow(/revision 3 is based on 1, but the current revision is 2 \(I-G3\)/);
+        // Both rolled back. Once one of the two takes effect, the one it skipped never can.
+        await adopt(goalRunId, 3);
+        await expect(adopt(goalRunId, 2)).rejects.toThrow(
+          /revision 2 is based on 1, but the current revision is 3 \(I-G3\)/,
+        );
+        expect(await revisionStatus(goalRunId, 2)).toBe('proposed');
+      });
+
+      it('of two revisions on the same base accepted concurrently, the second waits for the first and is refused', async () => {
+        const goalRunId = await runningGoal();
+        await proposeRevision(goalRunId, 2, 1, ['A', 'B', 'C']);
+        await proposeRevision(goalRunId, 3, 1, ['A', 'D']);
+        const second = await race(
+          (client) => acceptIn(client, goalRunId, 2),
+          (client) => adoptIn(client, goalRunId, 2),
+          async (client) => {
+            await acceptIn(client, goalRunId, 3);
+            await adoptIn(client, goalRunId, 3);
+          },
+        );
+        expect(String(second.error)).toMatch(
+          /revision 3 is based on 1, but the current revision is 2 \(I-G3\)/,
+        );
+        expect(await asApp((client) => getGoalRun(client, workspaceId, goalRunId))).toMatchObject({
+          currentRevision: 2,
+        });
+        expect(await revisionStatus(goalRunId, 3)).toBe('proposed');
+      });
+
+      it('takes effect in the transaction that accepts it, or the acceptance is refused at commit', async () => {
+        const goalRunId = await runningGoal();
+        await proposeRevision(goalRunId, 2, 1, ['A', 'B', 'C']);
+        await expect(acceptRevision(goalRunId, 2)).rejects.toThrow(
+          /revision 2 was accepted, but its goal run did not adopt it in the same transaction \(I-G3\)/,
+        );
+        expect(await revisionStatus(goalRunId, 2)).toBe('proposed');
+      });
+
+      it('is adopted only as the next link of the chain', async () => {
+        const goalRunId = await runningGoal();
+        await proposeRevision(goalRunId, 2, 1, ['A', 'B', 'C']);
+        await proposeRevision(goalRunId, 3, 1, ['A', 'D']);
+        await adopt(goalRunId, 2);
+        // Revision 3 accepted with the guard off, as a bug or a hand edit would.
+        await raw(
+          `update plan_revisions set status = 'accepted', decided_by = $3, decided_at = now()
+           where workspace_id = $1 and goal_run_id = $2 and revision = 3`,
+          [workspaceId, goalRunId, ownerId],
+        );
+        await expect(makeCurrent(goalRunId, 3)).rejects.toThrow(
+          /revision 3 is based on 1, not on the current revision 2 \(I-G3\)/,
+        );
+      });
+    });
+
+    describe('StepRun — what may change, and when', () => {
+      it.each([
+        ['attempt_count = 7', 'attempt_count'],
+        ["ended_at = now() - interval '1 day'", 'ended_at'],
+      ])('a skipped step run is final: refuses %s', async (set, column) => {
+        const goalRunId = await runningGoal();
+        const a = await stepId(goalRunId, 'A');
+        await setStep(a, "status = 'skipped', ended_at = now()");
+        await expect(setStep(a, set)).rejects.toThrow(
+          new RegExp(`a skipped step run is final; ${column} cannot change`),
+        );
+      });
+
+      it('keeps its waiting reason while waiting and its failure category while failed', async () => {
+        const goalRunId = await runningGoal();
+        const a = await stepId(goalRunId, 'A');
+        await setStep(a, "status = 'ready'");
+        await setStep(a, "status = 'running', attempt_count = 1");
+        await setStep(a, "status = 'waiting', waiting_reason = 'approval'");
+        await expect(setStep(a, "waiting_reason = 'reconcile'")).rejects.toThrow(
+          /the waiting reason is set by the transition into waiting/,
+        );
+        await setStep(
+          a,
+          "status = 'failed', waiting_reason = null, failure_category = 'transient'",
+        );
+        await expect(setStep(a, "failure_category = 'action_refused'")).rejects.toThrow(
+          /the failure category is set by the transition into failed/,
+        );
+      });
+
+      it('counts one attempt at each start (ready -> running), and at no other time (I-G1)', async () => {
+        const goalRunId = await proposeGoal(['A', 'B']);
+        await confirmGoal(goalRunId, ['A']);
+        await expect(
+          sql(
+            `insert into step_runs (workspace_id, goal_run_id, step_key, introduced_in_revision, attempt_count)
+             values ($1, $2, 'B', 1, 1)`,
+            [workspaceId, goalRunId],
+          ),
+        ).rejects.toThrow(/created with no attempts, not 1 \(I-G1\)/);
+        const a = await stepId(goalRunId, 'A');
+        await setStep(a, "status = 'ready'");
+        await expect(setStep(a, "status = 'running'")).rejects.toThrow(
+          /each start \(ready -> running\) is one new attempt, not 0 -> 0 \(I-G1\)/,
+        );
+        await expect(setStep(a, "status = 'running', attempt_count = 2")).rejects.toThrow(
+          /one new attempt, not 0 -> 2/,
+        );
+        await setStep(a, "status = 'running', attempt_count = 1");
+        await expect(setStep(a, 'attempt_count = 2')).rejects.toThrow(
+          /attempts are counted only when a step starts \(ready -> running\), not 1 -> 2/,
+        );
+        await setStep(a, "status = 'failed', failure_category = 'transient'");
+        await setStep(a, "status = 'ready', failure_category = null");
+        await setStep(a, "status = 'running', attempt_count = 2");
+      });
+
+      it('takes on new work only under a live goal run: ready while running or paused, an attempt only while running', async () => {
+        const goalRunId = await runningGoal();
+        const a = await stepId(goalRunId, 'A');
+        await setGoal(goalRunId, "status = 'paused', pause_reason = 'authority_lost'");
+        await setStep(a, "status = 'ready'");
+        await expect(setStep(a, "status = 'running', attempt_count = 1")).rejects.toThrow(
+          /an attempt starts only while its goal run is running, not paused/,
+        );
+        await setGoal(goalRunId, "status = 'running', pause_reason = null");
+        await setStep(a, "status = 'running', attempt_count = 1");
+        await setGoal(goalRunId, "status = 'verifying'");
+        await setStep(a, "status = 'failed', failure_category = 'transient'");
+        await expect(setStep(a, "status = 'ready', failure_category = null")).rejects.toThrow(
+          /a step becomes ready only while its goal run is running or paused, not verifying/,
+        );
+      });
+
+      it('a step of a cancelled goal run only ends', async () => {
+        const goalRunId = await runningGoal();
+        const a = await stepId(goalRunId, 'A');
+        const b = await stepId(goalRunId, 'B');
+        await setStep(a, "status = 'ready'");
+        await setStep(a, "status = 'running', attempt_count = 1");
+        await setGoal(goalRunId, "status = 'cancelling'");
+        await setGoal(goalRunId, "status = 'cancelled', cleanup_pending = true, ended_at = now()");
+        await expect(setStep(a, "status = 'waiting', waiting_reason = 'approval'")).rejects.toThrow(
+          /a step of a cancelled goal run only ends/,
+        );
+        await expect(setStep(b, "status = 'ready'")).rejects.toThrow(
+          /a step becomes ready only while its goal run is running or paused, not cancelled/,
+        );
+        await setStep(a, "status = 'cancelled', ended_at = now()");
+        await setStep(b, "status = 'cancelled', ended_at = now()");
+      });
+
+      it('is never created under a superseded revision, nor under a goal run that is not running or paused (I-G2)', async () => {
+        const goalRunId = await proposeGoal(['A', 'B']);
+        await expect(insertStep(goalRunId, 'A', 1)).rejects.toThrow(
+          /a proposed goal run takes no new step/,
+        );
+        await confirmGoal(goalRunId, ['A']);
+        await proposeRevision(goalRunId, 2, 1, ['A', 'C']);
+        // In one transaction: revision 2 takes effect, then a step of revision 1 is refused.
+        await expect(
+          asApp(async (client) => {
+            await acceptIn(client, goalRunId, 2);
+            await adoptIn(client, goalRunId, 2);
+            await client.query(
+              `insert into step_runs (workspace_id, goal_run_id, step_key, introduced_in_revision)
+               values ($1, $2, 'B', 1)`,
+              [workspaceId, goalRunId],
+            );
+          }),
+        ).rejects.toThrow(
+          /step B is introduced in revision 1, but the current revision is 2 \(I-G2\)/,
+        );
+        await setGoal(goalRunId, "status = 'failed', ended_at = now()");
+        await expect(insertStep(goalRunId, 'B', 1)).rejects.toThrow(
+          /a failed goal run takes no new step/,
+        );
+      });
+
+      it('a step of the old revision, raced against the revision that supersedes it, waits for it and is refused (I-G2)', async () => {
+        const goalRunId = await proposeGoal(['A', 'B']);
+        await confirmGoal(goalRunId, ['A']);
+        await proposeRevision(goalRunId, 2, 1, ['A', 'C']);
+        const second = await race(
+          async (client) => {
+            await acceptIn(client, goalRunId, 2);
+            await adoptIn(client, goalRunId, 2);
+          },
+          async () => undefined,
+          (client) =>
+            client.query(
+              `insert into step_runs (workspace_id, goal_run_id, step_key, introduced_in_revision)
+               values ($1, $2, 'B', 1)`,
+              [workspaceId, goalRunId],
+            ),
+        );
+        expect(String(second.error)).toMatch(
+          /step B is introduced in revision 1, but the current revision is 2 \(I-G2\)/,
+        );
       });
     });
 

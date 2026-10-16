@@ -10,7 +10,8 @@
 -- Relations (§3.2), all real foreign keys with `workspace_id` in them:
 --   * GoalRun `on_behalf_of` Principal (the requester); `originated_in` Turn (0..1 — a Turn starts
 --     at most one GoalRun, a partial unique index); `current_revision` → PlanRevision (by number,
---     checked by the guard below: an accepted revision of the same GoalRun, never decreasing).
+--     checked by the guard below: an accepted revision of the same GoalRun, based on the previous
+--     current one).
 --   * PlanRevision `belongs_to` GoalRun; `based_on` PlanRevision (0..1, same GoalRun).
 --   * StepRun `belongs_to` GoalRun; `introduced_in` PlanRevision; `superseded_in` PlanRevision
 --     (0..1, a later revision of the same GoalRun).
@@ -24,12 +25,15 @@
 --
 -- State machines: packages/shared transitions.ts `GOAL_RUN_EDGES`, `PLAN_REVISION_EDGES`,
 -- `STEP_RUN_EDGES`, reproduced as `*_transition_allowed(from, to)` below (a kernel test compares
--- every pair with the shared tables) and enforced by `*_status_guard` triggers: a row is created in
--- its initial status only and moves along an edge only. These are new tables that no earlier
--- release reads or writes, so the full guard costs no reversibility (unlike `action_requests`,
--- where governance/0021 guards only the new `withdrawn` edge). Sub-states are columns, each set
--- exactly while its status holds (CHECKs): `pause_reason`, `waiting_reason`, `failure_category`,
--- `outcome` + `outcome_basis` (I-G5: only `verified_by_check` / `requester` / `reviewer_assessed`).
+-- every pair with the shared tables) and enforced by each table's guard trigger: a row is created in
+-- its initial status only and moves along an edge only. Beyond the edges the guards freeze a row's
+-- identity and a final row whole, tie each sub-state to the transition into its status, and keep
+-- the accepted revisions one chain ending at `current_revision` (see "Guards" below). These are
+-- new tables that no earlier release reads or writes, so the full guard costs no reversibility
+-- (unlike `action_requests`, where governance/0021 guards only the new `withdrawn` edge). Sub-states
+-- are columns, each set exactly while its status holds (CHECKs): `pause_reason`, `waiting_reason`,
+-- `failure_category`, `outcome` + `outcome_basis` (I-G5: only `verified_by_check` / `requester` /
+-- `reviewer_assessed`).
 --
 -- StepRun identity (I-G2): a StepRun's definition is its entry in the plan of the revision that
 -- introduced it, for its whole life. A revision that drops or changes a step supersedes it; a
@@ -300,45 +304,117 @@ $$;
 -- ---------------------------------------------------------------------------------------------
 -- Guards
 -- ---------------------------------------------------------------------------------------------
+--
+-- Each table's guard has the same parts:
+--   * the columns that may change at all are listed; every other column (and any column added
+--     later, until its migration lists it) never changes once the row exists;
+--   * a final status freezes the whole row (`updated_at` aside);
+--   * a sub-state column changes only with the transition into its status;
+--   * what the GoalRun must be for a change under it. A guard that reads the GoalRun locks its row
+--     (`for no key update`), so a decision on the GoalRun and a change under it are serialized —
+--     whichever commits second sees the first. Writers lock the GoalRun row before they touch its
+--     revisions or steps (the guards take the same lock); a writer that locks a step first and the
+--     GoalRun second can deadlock with one that cancels the GoalRun.
 
--- goal_runs: created `proposed`; moves along an edge only; `current_revision` names an accepted
--- revision of this GoalRun, never decreases and is never cleared (the fencing number, I-G2); the
--- requester and the originating Turn never change.
+-- The columns of `new_row` outside `allowed` whose value differs in `old_row`, comma-separated, or
+-- null when there is none.
+create or replace function goal_changed_columns(new_row jsonb, old_row jsonb, allowed text[])
+returns text language sql immutable as $$
+  select string_agg(n.key, ', ' order by n.key)
+    from jsonb_each(new_row - allowed) as n
+   where n.value is distinct from old_row -> n.key
+$$;
+
+-- goal_runs: created `proposed`; moves along an edge only.
+--   * Never changes: the requester, the originating Turn, the statement (changing the goal is a
+--     revision a person proposes, §4.6) and created_at.
+--   * Final once completed / cancelled / failed: nothing changes but `updated_at`, and
+--     `cleanup_pending` clearing once the leftovers are gone. So the outcome (I-G5) is written by
+--     the transition into `completed` and never rewritten, and a final run adopts no revision.
+--   * `pause_reason` does not change while paused; `confirmed_at` is written once.
+--   * `current_revision` (the fencing number, I-G2) is never cleared and moves only while the run is
+--     proposed (its confirmation), running or paused, onto an accepted revision based on the
+--     current one: the accepted revisions form one chain (I-G3).
+--   * The budget changes before confirmation, or with the revision that takes effect (a revision
+--     that widens it is one the requester confirms, §4.6).
 create or replace function goal_runs_status_guard() returns trigger
 language plpgsql as $$
+declare
+  changed text;
+  new_base int;
 begin
   if tg_op = 'INSERT' then
     if new.status <> 'proposed' then
       raise exception 'goal_runs: a goal run is created proposed, not %', new.status;
     end if;
-  else
-    if new.status is distinct from old.status
-       and not goal_run_transition_allowed(old.status, new.status) then
-      raise exception 'goal_runs: illegal transition % -> %', old.status, new.status;
+    return new;
+  end if;
+
+  changed := goal_changed_columns(to_jsonb(new), to_jsonb(old), array[
+    'status', 'pause_reason', 'cleanup_pending', 'outcome', 'outcome_basis', 'current_revision',
+    'budget_max_tokens', 'budget_max_steps', 'budget_max_revisions',
+    'budget_max_wall_clock_seconds', 'updated_at', 'confirmed_at', 'ended_at']);
+  if changed is not null then
+    raise exception 'goal_runs: the requester, the originating turn, the statement and created_at never change (%)',
+      changed;
+  end if;
+  if new.status is distinct from old.status
+     and not goal_run_transition_allowed(old.status, new.status) then
+    raise exception 'goal_runs: illegal transition % -> %', old.status, new.status;
+  end if;
+
+  if old.status in ('completed', 'cancelled', 'failed') then
+    changed := goal_changed_columns(to_jsonb(new), to_jsonb(old), array['updated_at', 'cleanup_pending']);
+    if changed is not null then
+      raise exception 'goal_runs: a % goal run is final; % cannot change', old.status, changed;
     end if;
-    if new.on_behalf_of is distinct from old.on_behalf_of
-       or new.originated_in_turn_id is distinct from old.originated_in_turn_id
-       or new.created_at is distinct from old.created_at then
-      raise exception 'goal_runs: the requester, the originating turn and created_at never change';
+    if new.cleanup_pending and not old.cleanup_pending then
+      raise exception 'goal_runs: cleanup_pending is set by the transition into cancelled and only clears afterwards';
     end if;
-    if old.current_revision is not null
-       and (new.current_revision is null or new.current_revision < old.current_revision) then
+    return new;
+  end if;
+
+  if old.status = 'paused' and new.status = 'paused'
+     and new.pause_reason is distinct from old.pause_reason then
+    raise exception 'goal_runs: the pause reason is set by the transition into paused (% -> %)',
+      old.pause_reason, new.pause_reason;
+  end if;
+
+  if new.current_revision is distinct from old.current_revision then
+    if new.current_revision is null or new.current_revision < old.current_revision then
       raise exception 'goal_runs: the current revision never goes back (% -> %) (I-G2)',
         old.current_revision, new.current_revision;
     end if;
+    if old.status not in ('proposed', 'running', 'paused') or new.status not in ('running', 'paused') then
+      raise exception 'goal_runs: a revision takes effect only while the goal run is proposed, running or paused (% -> %)',
+        old.status, new.status;
+    end if;
+    select pr.based_on_revision into new_base
+      from plan_revisions pr
+     where pr.workspace_id = new.workspace_id
+       and pr.goal_run_id = new.id
+       and pr.revision = new.current_revision
+       and pr.status = 'accepted';
+    if not found then
+      raise exception 'goal_runs: revision % is not an accepted revision of this goal run (I-G2)',
+        new.current_revision;
+    end if;
+    if new_base is distinct from old.current_revision then
+      raise exception 'goal_runs: revision % is based on %, not on the current revision % (I-G3)',
+        new.current_revision, coalesce(new_base::text, 'none'), coalesce(old.current_revision::text, 'none');
+    end if;
   end if;
 
-  if new.current_revision is not null
-     and (tg_op = 'INSERT' or new.current_revision is distinct from old.current_revision)
-     and not exists (
-       select 1 from plan_revisions pr
-        where pr.workspace_id = new.workspace_id
-          and pr.goal_run_id = new.id
-          and pr.revision = new.current_revision
-          and pr.status = 'accepted'
-     ) then
-    raise exception 'goal_runs: revision % is not an accepted revision of this goal run (I-G2)',
-      new.current_revision;
+  if old.confirmed_at is not null and new.confirmed_at is distinct from old.confirmed_at then
+    raise exception 'goal_runs: confirmed_at is written once';
+  end if;
+
+  if (new.budget_max_tokens, new.budget_max_steps, new.budget_max_revisions, new.budget_max_wall_clock_seconds)
+       is distinct from
+     (old.budget_max_tokens, old.budget_max_steps, old.budget_max_revisions, old.budget_max_wall_clock_seconds)
+     and old.status <> 'proposed'
+     and new.current_revision is not distinct from old.current_revision then
+    raise exception 'goal_runs: the budget changes before confirmation or with the revision that takes effect (I-G6)';
   end if;
 
   return new;
@@ -349,14 +425,21 @@ create or replace trigger goal_runs_status_guard
   before insert or update on goal_runs
   for each row execute function goal_runs_status_guard();
 
--- plan_revisions: created `proposed` with a well-formed step list; content never changes
--- (`validation` only while proposed); decided once; accepted only when based on the GoalRun's
--- current revision (I-G3's optimistic concurrency — a revision proposed against an older plan is
--- refused, so two concurrent revisions cannot both take effect).
+-- plan_revisions: created `proposed` with a well-formed step list, for a GoalRun that is neither
+-- final nor winding down; content never changes (only the status, `validation` while proposed, and
+-- the decision do); decided once. Accepted (I-G3) only while its GoalRun is proposed, running or
+-- paused, only when based on the GoalRun's current revision, and only when no other accepted
+-- revision is still waiting to take effect; `plan_revisions_adopted` below then requires the
+-- GoalRun to adopt it in the same transaction. So the accepted revisions form one chain ending at
+-- `current_revision`, and of two revisions proposed on the same base the second is refused —
+-- accepted in one transaction or in two concurrent ones (the GoalRun lock orders those).
 create or replace function plan_revisions_guard() returns trigger
 language plpgsql as $$
 declare
+  goal_status text;
   current_rev int;
+  waiting_rev int;
+  changed text;
 begin
   if tg_op = 'INSERT' then
     if new.status <> 'proposed' then
@@ -380,17 +463,20 @@ begin
        <> (select count(distinct step ->> 'key') from jsonb_array_elements(new.plan -> 'steps') as step) then
       raise exception 'plan_revisions: step keys are unique within a plan';
     end if;
+    select g.status into goal_status
+      from goal_runs g
+     where g.workspace_id = new.workspace_id and g.id = new.goal_run_id
+       for no key update;
+    if goal_status in ('cancelling', 'completed', 'cancelled', 'failed') then
+      raise exception 'plan_revisions: a % goal run takes no new revision', goal_status;
+    end if;
     return new;
   end if;
 
-  if new.goal_run_id is distinct from old.goal_run_id
-     or new.revision is distinct from old.revision
-     or new.based_on_revision is distinct from old.based_on_revision
-     or new.plan is distinct from old.plan
-     or new.proposed_by is distinct from old.proposed_by
-     or new.reason is distinct from old.reason
-     or new.created_at is distinct from old.created_at then
-    raise exception 'plan_revisions: a revision''s content never changes';
+  changed := goal_changed_columns(to_jsonb(new), to_jsonb(old),
+    array['status', 'validation', 'decided_by', 'decided_at']);
+  if changed is not null then
+    raise exception 'plan_revisions: a revision''s content never changes (%)', changed;
   end if;
   if new.validation is distinct from old.validation and old.status <> 'proposed' then
     raise exception 'plan_revisions: validation is recorded before the revision is decided';
@@ -401,15 +487,26 @@ begin
       raise exception 'plan_revisions: illegal transition % -> %', old.status, new.status;
     end if;
     if new.status = 'accepted' then
-      -- Locks the GoalRun row: a second revision accepted concurrently against the same base
-      -- waits here, then reads the revision the first one made current, and is refused.
-      select g.current_revision into current_rev
+      select g.status, g.current_revision into goal_status, current_rev
         from goal_runs g
        where g.workspace_id = new.workspace_id and g.id = new.goal_run_id
-         for update;
+         for no key update;
+      if goal_status not in ('proposed', 'running', 'paused') then
+        raise exception 'plan_revisions: a % goal run accepts no revision (I-G3)', goal_status;
+      end if;
       if new.based_on_revision is distinct from current_rev then
         raise exception 'plan_revisions: revision % is based on %, but the current revision is % (I-G3)',
           new.revision, coalesce(new.based_on_revision::text, 'none'), coalesce(current_rev::text, 'none');
+      end if;
+      select max(pr.revision) into waiting_rev
+        from plan_revisions pr
+       where pr.workspace_id = new.workspace_id
+         and pr.goal_run_id = new.goal_run_id
+         and pr.status = 'accepted'
+         and (current_rev is null or pr.revision > current_rev);
+      if waiting_rev is not null then
+        raise exception 'plan_revisions: revision % is accepted but not yet current, so revision % cannot be accepted beside it (I-G3)',
+          waiting_rev, new.revision;
       end if;
     end if;
   elsif new.decided_by is distinct from old.decided_by or new.decided_at is distinct from old.decided_at then
@@ -424,15 +521,70 @@ create or replace trigger plan_revisions_guard
   before insert or update on plan_revisions
   for each row execute function plan_revisions_guard();
 
--- step_runs: created `pending`, under an accepted revision whose plan has that step; moves along
--- an edge only; superseded only by a later accepted revision of the same GoalRun; its identity
--- (GoalRun, key, introducing revision) never changes.
+-- An accepted revision takes effect in the transaction that accepts it: by commit its GoalRun's
+-- current revision has reached it (I-G3). Deferred so the acceptance and the GoalRun's update can
+-- be two statements (the acceptance first: the GoalRun guard adopts accepted revisions only).
+create or replace function plan_revisions_adopted() returns trigger
+language plpgsql as $$
+begin
+  if not exists (
+       select 1 from goal_runs g
+        where g.workspace_id = new.workspace_id
+          and g.id = new.goal_run_id
+          and g.current_revision >= new.revision
+     ) then
+    raise exception 'plan_revisions: revision % was accepted, but its goal run did not adopt it in the same transaction (I-G3)',
+      new.revision;
+  end if;
+  return null;
+end;
+$$;
+
+-- A constraint trigger cannot be created `or replace`.
+drop trigger if exists plan_revisions_adopted on plan_revisions;
+create constraint trigger plan_revisions_adopted
+  after update of status on plan_revisions
+  deferrable initially deferred
+  for each row
+  when (new.status = 'accepted')
+  execute function plan_revisions_adopted();
+
+-- step_runs: created `pending` with no attempts, while the GoalRun is running or paused, under its
+-- current revision and for a step that revision's plan holds — so no step is ever created under a
+-- superseded revision (I-G2); moves along an edge only.
+--   * Never changes: the GoalRun, the key, the introducing revision and created_at.
+--   * Final once succeeded / superseded / cancelled / skipped: nothing changes but `updated_at`.
+--   * `waiting_reason` does not change while waiting, nor `failure_category` while failed.
+--   * `attempt_count` (I-G1) goes up by exactly one at each start (`ready → running`) and at no
+--     other time.
+--   * New work needs a live GoalRun: a step becomes `ready` only while the GoalRun is running or
+--     paused, and an attempt starts (`ready → running`) only while it is running — a paused run
+--     starts nothing (I-G6, I-G7); a step of a final GoalRun only ends.
+--   * Superseded only by the GoalRun's current revision.
 create or replace function step_runs_status_guard() returns trigger
 language plpgsql as $$
+declare
+  goal_status text;
+  current_rev int;
+  changed text;
 begin
   if tg_op = 'INSERT' then
     if new.status <> 'pending' then
       raise exception 'step_runs: a step run is created pending, not %', new.status;
+    end if;
+    if new.attempt_count <> 0 then
+      raise exception 'step_runs: a step run is created with no attempts, not % (I-G1)', new.attempt_count;
+    end if;
+    select g.status, g.current_revision into goal_status, current_rev
+      from goal_runs g
+     where g.workspace_id = new.workspace_id and g.id = new.goal_run_id
+       for no key update;
+    if goal_status not in ('running', 'paused') then
+      raise exception 'step_runs: a % goal run takes no new step', goal_status;
+    end if;
+    if new.introduced_in_revision is distinct from current_rev then
+      raise exception 'step_runs: step % is introduced in revision %, but the current revision is % (I-G2)',
+        new.step_key, new.introduced_in_revision, coalesce(current_rev::text, 'none');
     end if;
     if not exists (
          select 1
@@ -449,30 +601,65 @@ begin
     return new;
   end if;
 
-  if new.goal_run_id is distinct from old.goal_run_id
-     or new.step_key is distinct from old.step_key
-     or new.introduced_in_revision is distinct from old.introduced_in_revision
-     or new.created_at is distinct from old.created_at then
-    raise exception 'step_runs: a step run''s identity never changes';
-  end if;
-  if new.attempt_count < old.attempt_count then
-    raise exception 'step_runs: attempts are never uncounted (I-G1)';
+  changed := goal_changed_columns(to_jsonb(new), to_jsonb(old), array[
+    'status', 'waiting_reason', 'failure_category', 'attempt_count', 'superseded_in_revision',
+    'updated_at', 'ended_at']);
+  if changed is not null then
+    raise exception 'step_runs: a step run''s identity never changes (%)', changed;
   end if;
   if new.status is distinct from old.status
      and not step_run_transition_allowed(old.status, new.status) then
     raise exception 'step_runs: illegal transition % -> %', old.status, new.status;
   end if;
-  if new.superseded_in_revision is not null
-     and new.superseded_in_revision is distinct from old.superseded_in_revision
-     and not exists (
-       select 1 from plan_revisions pr
-        where pr.workspace_id = new.workspace_id
-          and pr.goal_run_id = new.goal_run_id
-          and pr.revision = new.superseded_in_revision
-          and pr.status = 'accepted'
-     ) then
-    raise exception 'step_runs: revision % is not an accepted revision of this goal run',
-      new.superseded_in_revision;
+
+  if old.status in ('succeeded', 'superseded', 'cancelled', 'skipped') then
+    changed := goal_changed_columns(to_jsonb(new), to_jsonb(old), array['updated_at']);
+    if changed is not null then
+      raise exception 'step_runs: a % step run is final; % cannot change', old.status, changed;
+    end if;
+    return new;
+  end if;
+
+  if old.status = 'waiting' and new.status = 'waiting'
+     and new.waiting_reason is distinct from old.waiting_reason then
+    raise exception 'step_runs: the waiting reason is set by the transition into waiting (% -> %)',
+      old.waiting_reason, new.waiting_reason;
+  end if;
+  if old.status = 'failed' and new.status = 'failed'
+     and new.failure_category is distinct from old.failure_category then
+    raise exception 'step_runs: the failure category is set by the transition into failed (% -> %)',
+      old.failure_category, new.failure_category;
+  end if;
+  if old.status = 'ready' and new.status = 'running' then
+    if new.attempt_count <> old.attempt_count + 1 then
+      raise exception 'step_runs: each start (ready -> running) is one new attempt, not % -> % (I-G1)',
+        old.attempt_count, new.attempt_count;
+    end if;
+  elsif new.attempt_count <> old.attempt_count then
+    raise exception 'step_runs: attempts are counted only when a step starts (ready -> running), not % -> % (I-G1)',
+      old.attempt_count, new.attempt_count;
+  end if;
+
+  if new.status is distinct from old.status
+     and new.status in ('ready', 'running', 'waiting', 'superseded') then
+    select g.status, g.current_revision into goal_status, current_rev
+      from goal_runs g
+     where g.workspace_id = new.workspace_id and g.id = new.goal_run_id
+       for no key update;
+    if new.status = 'ready' and goal_status not in ('running', 'paused') then
+      raise exception 'step_runs: a step becomes ready only while its goal run is running or paused, not %',
+        goal_status;
+    end if;
+    if old.status = 'ready' and new.status = 'running' and goal_status <> 'running' then
+      raise exception 'step_runs: an attempt starts only while its goal run is running, not %', goal_status;
+    end if;
+    if new.status in ('running', 'waiting') and goal_status in ('completed', 'cancelled', 'failed') then
+      raise exception 'step_runs: a step of a % goal run only ends', goal_status;
+    end if;
+    if new.status = 'superseded' and new.superseded_in_revision is distinct from current_rev then
+      raise exception 'step_runs: a step is superseded by the current revision %, not by % (I-G2)',
+        coalesce(current_rev::text, 'none'), coalesce(new.superseded_in_revision::text, 'none');
+    end if;
   end if;
 
   return new;

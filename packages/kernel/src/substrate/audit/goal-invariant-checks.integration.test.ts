@@ -129,6 +129,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       revisionNumber: number,
       steps: readonly (string | Record<string, unknown>)[],
       status = 'accepted',
+      basedOn: number | null = revisionNumber === 1 ? null : revisionNumber - 1,
     ): Promise<string> {
       const plan = {
         steps: steps.map((step) => (typeof step === 'string' ? { key: step } : step)),
@@ -141,7 +142,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           workspaceId,
           goalRunId,
           revisionNumber,
-          revisionNumber === 1 ? null : revisionNumber - 1,
+          basedOn,
           status,
           JSON.stringify(plan),
           ownerId,
@@ -230,10 +231,21 @@ describe.runIf(DATABASE_URL !== undefined)(
       readonly stepRunId: string | null;
       readonly requestedAgo?: number;
       readonly executingAgo?: number;
-      readonly workerRunId?: string;
+      /** The WorkerRun that raised it. Default: for a request of a step, a WorkerRun of a Task of
+       *  that step (as `request_action` records it); none for a request outside a goal. */
+      readonly workerRunId?: string | null;
     }
 
     async function request(fields: RequestFields): Promise<string> {
+      let workerRunId = fields.workerRunId ?? null;
+      if (fields.workerRunId === undefined && fields.stepRunId !== null) {
+        const owner = await raw<{ goal_run_id: string }>(
+          'select goal_run_id from step_runs where workspace_id = $1 and id = $2',
+          [workspaceId, fields.stepRunId],
+        );
+        const goalRunId = owner[0]?.goal_run_id as string;
+        workerRunId = await workerRun(await task(goalRunId, fields.stepRunId, { attempt: null }));
+      }
       const policy =
         fields.status === 'pending_approval'
           ? 'require_approval'
@@ -255,7 +267,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           ago(fields.requestedAgo ?? 1200),
           fields.executingAgo === undefined ? null : ago(fields.executingAgo),
           fields.stepRunId,
-          fields.workerRunId ?? null,
+          workerRunId,
         ],
       );
       return rows[0]?.id as string;
@@ -380,8 +392,54 @@ describe.runIf(DATABASE_URL !== undefined)(
         const result = await check((client) => checkIG2(client, ALL));
         expect(mentioned(result, inWindow)).toBe(false);
         expect(flagged(result, 'task-outside-window', before)).toBe(true);
-        expect(flagged(result, 'accepted-not-current', ahead)).toBe(true);
+        expect(flagged(result, 'accepted-off-chain', ahead)).toBe(true);
       });
+
+      it('counts an accepted revision the chain skips, and a revision in force that is not accepted (I-G3: the accepted revisions are one chain)', async () => {
+        const forked = await goal({ currentRevision: 3 });
+        await revision(forked, 1, ['x']);
+        const skipped = await revision(forked, 2, ['x', 'y']);
+        await revision(forked, 3, ['x', 'z'], 'accepted', 1);
+        const unaccepted = await goal({ currentRevision: 2 });
+        await revision(unaccepted, 1, ['x']);
+        await revision(unaccepted, 2, ['x', 'y'], 'proposed');
+        const healthy = await goal({ status: 'completed', currentRevision: 2 });
+        const healthyRevisions = [
+          await revision(healthy, 1, ['x']),
+          await revision(healthy, 2, ['x', 'y']),
+          await revision(healthy, 3, ['x', 'w'], 'rejected', 2),
+          await revision(healthy, 4, ['w'], 'rejected', 1),
+        ];
+
+        const result = await check((client) => checkIG2(client, ALL));
+        expect(flagged(result, 'accepted-off-chain', skipped)).toBe(true);
+        expect(flagged(result, 'chain-not-accepted', unaccepted)).toBe(true);
+        for (const id of [healthy, ...healthyRevisions]) expect(mentioned(result, id)).toBe(false);
+      });
+
+      it.each([
+        ['goal_runs', 'goal_runs_status_guard'],
+        ['plan_revisions', 'plan_revisions_guard'],
+        ['plan_revisions', 'plan_revisions_adopted'],
+        ['step_runs', 'step_runs_status_guard'],
+        ['tasks', 'tasks_goal_step_immutable'],
+      ])(
+        'counts the guard %s.%s disabled, or switched to fire only under replica',
+        async (table, trigger) => {
+          for (const breach of [
+            `alter table ${table} disable trigger ${trigger}`,
+            `alter table ${table} enable replica trigger ${trigger}`,
+          ]) {
+            const result = await checkRolledBack(breach, (client) => checkIG2(client, ALL));
+            expect(
+              result.sample.some((line) => line.startsWith(`guards ${table}:${trigger} (`)),
+              breach,
+            ).toBe(true);
+          }
+          const intact = await check((client) => checkIG2(client, ALL));
+          expect(intact.sample.some((line) => line.startsWith('guards '))).toBe(false);
+        },
+      );
     });
 
     describe('I-G6: a GoalRun stays within its budget', () => {
@@ -508,25 +566,49 @@ describe.runIf(DATABASE_URL !== undefined)(
           stepRunId: null,
           workerRunId: run,
         });
+        const other = await step(goalRunId, 'o', { attemptCount: 0, status: 'pending' });
+        const wrongStep = await request({
+          status: 'auto_approved',
+          stepRunId: other,
+          workerRunId: run,
+        });
+        const noWorker = await request({
+          status: 'auto_approved',
+          stepRunId: other,
+          workerRunId: null,
+        });
+        const outside = await request({
+          status: 'auto_approved',
+          stepRunId: null,
+          workerRunId: await workerRun(await task(goalRunId, s, { attempt: null })),
+        });
 
         const result = await check((client) => checkIG9(client, ALL));
         expect(mentioned(result, matching)).toBe(false);
         expect(flagged(result, 'step-mismatch', unrecorded)).toBe(true);
+        expect(flagged(result, 'step-mismatch', wrongStep)).toBe(true);
+        expect(flagged(result, 'step-mismatch', noWorker)).toBe(true);
+        // A nested child Task runs for its caller's step too: its requests must record it.
+        expect(flagged(result, 'step-mismatch', outside)).toBe(true);
       });
 
-      it('counts the withdrawn guard going missing or disabled', async () => {
-        const result = await checkRolledBack(
-          'alter table action_requests disable trigger action_requests_status_guard',
-          (client) => checkIG9(client, ALL),
-        );
-        expect(
-          result.sample.some((line) =>
-            line.startsWith('guard action_requests:action_requests_status_guard'),
-          ),
-        ).toBe(true);
-        const intact = await check((client) => checkIG9(client, ALL));
-        expect(intact.sample.some((line) => line.startsWith('guard '))).toBe(false);
-      });
+      it.each([['action_requests_status_guard'], ['action_requests_step_run_immutable']])(
+        'counts the guard %s disabled, or switched to fire only under replica',
+        async (trigger) => {
+          for (const breach of [
+            `alter table action_requests disable trigger ${trigger}`,
+            `alter table action_requests enable replica trigger ${trigger}`,
+          ]) {
+            const result = await checkRolledBack(breach, (client) => checkIG9(client, ALL));
+            expect(
+              result.sample.some((line) => line.startsWith(`guard action_requests:${trigger} (`)),
+              breach,
+            ).toBe(true);
+          }
+          const intact = await check((client) => checkIG9(client, ALL));
+          expect(intact.sample.some((line) => line.startsWith('guard '))).toBe(false);
+        },
+      );
     });
 
     it('runs with every other invariant and is exported as a gauge per invariant', async () => {

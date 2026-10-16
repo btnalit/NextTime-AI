@@ -22,6 +22,10 @@
 -- Reversibility: the previous release names its columns on every insert and select of `tasks` and
 -- never sees these; the CHECKs hold for its rows (all NULL).
 --
+-- For GO2: an attempt Task must be carried by a WorkerRun — created through `invoke`'s insert and
+-- spawn path — or `reapOrphanedTasks` (application/task/reaper.ts) fails it as `spawn_lost` /
+-- `run_lost`; a Task created any other way must be excluded from both explicitly (legacy 325).
+--
 -- Runner ordering: `goal` sorts before `task`, so goal/0001's tables exist when this runs.
 -- Cross-process bootstrap lock: same `task`-module key as 0001–0006.
 select pg_advisory_xact_lock(7241000401);
@@ -76,6 +80,11 @@ create unique index if not exists tasks_step_attempt_uidx
 create index if not exists tasks_goal_run_idx
   on tasks (workspace_id, goal_run_id)
   where goal_run_id is not null;
+
+-- A Task's WorkerRuns. Nothing indexed `worker_runs.task_id` before: the reaper's live-run lookup
+-- and I-G9's step check (substrate/audit/goal-invariant-checks.ts) walk from a Task to its runs.
+create index if not exists worker_runs_task_idx
+  on worker_runs (workspace_id, task_id);
 
 -- The step-goal reference is written once, when the Task is created.
 create or replace function tasks_goal_step_immutable() returns trigger

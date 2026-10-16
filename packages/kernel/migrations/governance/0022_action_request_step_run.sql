@@ -35,6 +35,12 @@ create index if not exists action_requests_step_run_idx
   on action_requests (workspace_id, step_run_id)
   where step_run_id is not null;
 
+-- The requests a WorkerRun raised: I-G9's step check walks from a step's Task to its WorkerRuns
+-- and on to their requests (substrate/audit/goal-invariant-checks.ts).
+create index if not exists action_requests_parent_worker_run_idx
+  on action_requests (workspace_id, parent_worker_run_id)
+  where parent_worker_run_id is not null;
+
 create or replace function action_requests_step_run_immutable() returns trigger
 language plpgsql as $$
 begin

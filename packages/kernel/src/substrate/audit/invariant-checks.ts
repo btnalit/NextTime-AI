@@ -141,8 +141,9 @@ interface ExpectedTrigger {
   readonly trigger: string;
 }
 
-/** `'D'` = disabled in `pg_trigger.tgenabled` (Postgres catalog docs) — every other value
- *  (`'O'` origin, `'A'` always, `'R'` replica) counts as "enabled" for this check's purposes. */
+/** A trigger counts as present only while it fires in an ordinary session: `pg_trigger.tgenabled`
+ *  `'O'` (origin) or `'A'` (always). `'D'` is disabled, and `'R'` (`ENABLE REPLICA TRIGGER`) fires
+ *  only under `session_replication_role = replica` — off for every kernel write path. */
 async function checkTriggersPresent(
   client: PoolClient,
   invariant: string,
@@ -156,7 +157,7 @@ async function checkTriggersPresent(
       [table, trigger],
     );
     const row = result.rows[0];
-    if (!row || row.tgenabled === 'D') {
+    if (!row || (row.tgenabled !== 'O' && row.tgenabled !== 'A')) {
       missing.push(`${table}.${trigger}`);
     }
   }

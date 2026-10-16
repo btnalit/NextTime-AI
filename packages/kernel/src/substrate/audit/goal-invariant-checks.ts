@@ -12,15 +12,17 @@ import type { PoolClient } from 'pg';
  *
  * Each invariant is one gauge made of a few row-level conditions; a sampled row names the
  * condition it broke. Where the database already makes a breach unrepresentable (I-G1's unique
- * index, I-G9's `withdrawn` guard) the check watches that the mechanism is still in place, as I4 /
- * I12 do.
+ * index, the goal tables' guard triggers for I-G2, I-G9's `withdrawn` guard) the check also
+ * watches that the mechanism is still in place, as I4 / I12 do — a trigger counts only while it
+ * fires in an ordinary session (`tgenabled` `'O'` or `'A'`; `'R'` fires only under
+ * `session_replication_role = replica`).
  *
  * | # | Conditions counted |
  * |---|---|
  * | I-G1 one Task per attempt | `tasks_step_attempt_uidx` missing or not a valid unique index; a StepRun whose attempt Tasks do not number exactly 1..`attempt_count`; a StepRun with more than one unfinished attempt Task at once (attempts are sequential, one layer of retry) |
- * | I-G2 only current-plan steps advance | an unfinished StepRun (`pending` … `failed`, not superseded) whose definition is not in its GoalRun's current plan unchanged — dropped or redefined without being superseded; a finished one whose key the current plan redefines; a key of the current plan with no live StepRun while the GoalRun runs; an attempt Task started under a revision outside its StepRun's live window or under a revision never accepted; an accepted revision newer than the current one |
+ * | I-G2 only current-plan steps advance | a guard trigger of `goal_runs` / `plan_revisions` / `step_runs` (goal/0001) or `tasks_goal_step_immutable` (task/0007) missing or not enabled; an unfinished StepRun (`pending` … `failed`, not superseded) whose definition is not in its GoalRun's current plan unchanged — dropped or redefined without being superseded; a finished one whose key the current plan redefines; a key of the current plan with no live StepRun while the GoalRun runs; an attempt Task started under a revision outside its StepRun's live window or under a revision never accepted; an accepted revision off the chain that `based_on_revision` walks back from the current one (newer than it, or skipped by it — I-G3); a revision on that chain that is not accepted |
  * | I-G6 budget | a `running` GoalRun past its wall-clock budget by more than the grace period; or over its token, step or revision budget with no Task of it still running and nothing finished for the grace period — the advancer checks budgets between steps, so a Task that overshoots mid-run is not counted until it ends |
- * | I-G9 only live steps act | `action_requests_status_guard` (governance/0021, the `withdrawn` guard) missing or disabled; a request of a cancelled StepRun, or of a cancelling / cancelled GoalRun, still awaiting a decision or approved and queued (it is withdrawn in the transaction that cancels); a request of a cancelled StepRun that started executing after the step ended; a request created after its StepRun was superseded or cancelled; a request whose StepRun is not the one its Worker's Task runs for |
+ * | I-G9 only live steps act | `action_requests_status_guard` (governance/0021, the `withdrawn` guard) or `action_requests_step_run_immutable` (governance/0022) missing or not enabled; a request of a cancelled StepRun, or of a cancelling / cancelled GoalRun, still awaiting a decision or approved and queued (it is withdrawn in the transaction that cancels); a request of a cancelled StepRun that started executing after the step ended; a request created after its StepRun was superseded or cancelled; a request whose StepRun is not the one its Worker's Task runs for, or that records a StepRun with no Worker's Task behind it |
  *
  * Not covered yet, on purpose: I-G9 for requests of a *superseded* step that are still pending or
  * started after supersession — "让它跑完" lets a person release some of them one by one (§4.8), and
@@ -64,6 +66,27 @@ async function runConditions(
     }
   }
   return { invariant, violations, sample };
+}
+
+/** Each listed trigger that is missing or does not fire in an ordinary session: `tgenabled` must
+ *  be `'O'` (origin) or `'A'` (always) — `'D'` is disabled, and `'R'` fires only under
+ *  `session_replication_role = replica`, so `ENABLE REPLICA TRIGGER` switches a guard off too. */
+function triggersEnabled(
+  label: string,
+  triggers: readonly (readonly [table: string, trigger: string])[],
+): Condition {
+  return {
+    label,
+    sql: `select e.tbl as workspace_id, e.trg as id, 'missing or not enabled' as detail
+            from unnest($1::text[], $2::text[]) as e (tbl, trg)
+           where not exists (
+             select 1 from pg_trigger t
+              where t.tgrelid = to_regclass(e.tbl) and t.tgname = e.trg
+                and not t.tgisinternal and t.tgenabled in ('O', 'A')
+           )
+           order by e.tbl, e.trg`,
+    params: [triggers.map(([table]) => table), triggers.map(([, trigger]) => trigger)],
+  };
 }
 
 // -------------------------------------------------------------------------------------------
@@ -145,6 +168,23 @@ const STEP_PLAN_ENTRIES = `
      where s.status <> 'superseded'
   )`;
 
+/** The revisions in force, walked back from each GoalRun's current revision along
+ *  `based_on_revision` (which is always smaller — a CHECK — so the walk ends). Every accepted
+ *  revision is on it, and everything on it is accepted (I-G3: the accepted revisions are one chain). */
+const REVISION_CHAIN = `
+  with recursive chain as (
+    select g.workspace_id, g.id as goal_run_id, g.current_revision as revision
+      from goal_runs g
+     where g.current_revision is not null
+    union all
+    select pr.workspace_id, pr.goal_run_id, pr.based_on_revision
+      from chain c
+      join plan_revisions pr
+        on pr.workspace_id = c.workspace_id and pr.goal_run_id = c.goal_run_id
+       and pr.revision = c.revision
+     where pr.based_on_revision is not null
+  )`;
+
 export async function checkIG2(
   client: PoolClient,
   sampleLimit: number,
@@ -153,6 +193,13 @@ export async function checkIG2(
     client,
     'I-G2',
     [
+      triggersEnabled('guards', [
+        ['goal_runs', 'goal_runs_status_guard'],
+        ['plan_revisions', 'plan_revisions_guard'],
+        ['plan_revisions', 'plan_revisions_adopted'],
+        ['step_runs', 'step_runs_status_guard'],
+        ['tasks', 'tasks_goal_step_immutable'],
+      ]),
       {
         label: 'unfinished-not-in-plan',
         sql: `${STEP_PLAN_ENTRIES}
@@ -217,15 +264,34 @@ export async function checkIG2(
                order by t.created_at desc, t.id desc`,
       },
       {
-        label: 'accepted-not-current',
-        sql: `select pr.workspace_id, pr.id,
-                     'revision ' || pr.revision || ' accepted, current is '
-                       || coalesce(g.current_revision::text, 'none') as detail
+        label: 'accepted-off-chain',
+        sql: `${REVISION_CHAIN}
+              select pr.workspace_id, pr.id,
+                     'revision ' || pr.revision || ' accepted on '
+                       || coalesce(pr.based_on_revision::text, 'none') || ', current is '
+                       || coalesce(g.current_revision::text, 'none') || ', not on its chain' as detail
                 from plan_revisions pr
                 join goal_runs g on g.workspace_id = pr.workspace_id and g.id = pr.goal_run_id
                where pr.status = 'accepted'
-                 and (g.current_revision is null or pr.revision > g.current_revision)
+                 and not exists (
+                   select 1 from chain c
+                    where c.workspace_id = pr.workspace_id and c.goal_run_id = pr.goal_run_id
+                      and c.revision = pr.revision
+                 )
                order by pr.decided_at desc, pr.id desc`,
+      },
+      {
+        label: 'chain-not-accepted',
+        sql: `${REVISION_CHAIN}
+              select c.workspace_id, c.goal_run_id as id,
+                     'revision ' || c.revision || ' is on the chain but '
+                       || coalesce(pr.status, 'missing') as detail
+                from chain c
+                left join plan_revisions pr
+                  on pr.workspace_id = c.workspace_id and pr.goal_run_id = c.goal_run_id
+                 and pr.revision = c.revision
+               where pr.status is distinct from 'accepted'
+               order by c.workspace_id, c.goal_run_id, c.revision desc`,
       },
     ],
     sampleLimit,
@@ -309,17 +375,10 @@ export async function checkIG9(
     client,
     'I-G9',
     [
-      {
-        label: 'guard',
-        sql: `select 'action_requests' as workspace_id, 'action_requests_status_guard' as id,
-                     'missing or disabled' as detail
-              where not exists (
-                select 1 from pg_trigger
-                 where tgrelid = 'action_requests'::regclass
-                   and tgname = 'action_requests_status_guard'
-                   and not tgisinternal and tgenabled <> 'D'
-              )`,
-      },
+      triggersEnabled('guard', [
+        ['action_requests', 'action_requests_status_guard'],
+        ['action_requests', 'action_requests_step_run_immutable'],
+      ]),
       {
         label: 'not-withdrawn',
         sql: `select ar.workspace_id, ar.id,
@@ -352,16 +411,34 @@ export async function checkIG9(
                  and ar.requested_at > s.ended_at
                order by ar.requested_at desc, ar.id desc`,
       },
+      // One condition, two queries, so neither joins the three tables whole: a request that
+      // records a step its Worker's Task does not run for (from `action_requests_step_run_idx`),
+      // and a request that records none although its Worker's Task runs for a step (from
+      // `tasks_goal_run_idx` through `worker_runs_task_idx` and
+      // `action_requests_parent_worker_run_idx`).
       {
         label: 'step-mismatch',
         sql: `select ar.workspace_id, ar.id,
-                     'request step ' || coalesce(ar.step_run_id::text, 'none')
+                     'request step ' || ar.step_run_id
                        || ', task step ' || coalesce(t.step_run_id::text, 'none') as detail
                 from action_requests ar
-                join worker_runs wr
+                left join worker_runs wr
                   on wr.workspace_id = ar.workspace_id and wr.id = ar.parent_worker_run_id
-                join tasks t on t.workspace_id = wr.workspace_id and t.id = wr.task_id
-               where ar.step_run_id is distinct from t.step_run_id
+                left join tasks t on t.workspace_id = wr.workspace_id and t.id = wr.task_id
+               where ar.step_run_id is not null
+                 and t.step_run_id is distinct from ar.step_run_id
+               order by ar.requested_at desc, ar.id desc`,
+      },
+      {
+        label: 'step-mismatch',
+        sql: `select ar.workspace_id, ar.id,
+                     'request step none, task step ' || t.step_run_id as detail
+                from tasks t
+                join worker_runs wr on wr.workspace_id = t.workspace_id and wr.task_id = t.id
+                join action_requests ar
+                  on ar.workspace_id = wr.workspace_id and ar.parent_worker_run_id = wr.id
+               where t.goal_run_id is not null
+                 and ar.step_run_id is null
                order by ar.requested_at desc, ar.id desc`,
       },
     ],
