@@ -6,7 +6,7 @@ import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
 import type { AgentPolicy } from '../lib/agent-profile.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
-import { formatDateTime, formatRelative, shortId } from '../lib/format.js';
+import { actionKindRaw, formatDateTime, formatRelative, shortId } from '../lib/format.js';
 import type { ModelRow, SkillRow } from '../lib/governance.js';
 import { type Translate, useT } from '../lib/i18n.js';
 import { breadcrumbFor } from '../lib/nav.js';
@@ -134,7 +134,9 @@ function policyColumns(
       header: t('动作种类', 'Action kind'),
       priority: 'primary',
       cellClassName: 'mono',
-      cell: (policy) => <span data-testid="policy-action-kind">{policy.actionKindTag}</span>,
+      cell: (policy) => (
+        <span data-testid="policy-action-kind">{actionKindRaw(policy.actionKindTag)}</span>
+      ),
     },
     {
       // R-20 / D-15: a rule is either for one gate's action kind ("Always allow" writes only

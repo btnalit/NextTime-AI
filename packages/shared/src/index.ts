@@ -12,6 +12,7 @@ export * from './capabilities.js';
 export * from './envelope.js';
 export * from './events.js';
 export * from './action-description.js';
+export * from './echoed-text.js';
 export * from './http.js';
 export * from './handle-token.js';
 export * from './handle-binding.js';

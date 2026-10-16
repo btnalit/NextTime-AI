@@ -127,6 +127,7 @@ import {
   OperationDeclaresGateOwnedParamsError,
   OperationDraftChangedError,
   OperationIdentityConflictError,
+  OperationNameInvalidError,
   OperationNotFoundError,
 } from '../../governance/gatekeepers/index.js';
 import {
@@ -348,6 +349,11 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
       message: err.message,
       details: { params: err.details.params.map((entry) => ({ ...entry })) },
     };
+  }
+  // Legacy 232 (review #493): a new Operation name that is empty, too long, or carries an
+  // invisible / reordering character — 400 with its own code and `details` (problem, maxLength).
+  if (err instanceof OperationNameInvalidError) {
+    return { status: 400, code: err.code, message: err.message, details: { ...err.details } };
   }
   // Legacy 232: `request_action` naming nothing the gate could run — 404 with its own code and
   // `details` (gatekeeperId, whether the name is unknown or deprecated), never the name itself.

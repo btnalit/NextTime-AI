@@ -1,4 +1,4 @@
-import { maskSecretFields } from '@nexttime/shared';
+import { maskSecretFields, visibleText } from '@nexttime/shared';
 import type { Translate } from './i18n.js';
 
 /**
@@ -148,30 +148,50 @@ export function humanizeKind(kind: string): string {
   return kind.replace(/[._-]+/g, ' ').trim() || kind;
 }
 
-/** Legacy 232: the longest an action kind is shown inline — in a title, a chip, a toast, a
- *  confirm line or a sentence. An action kind is an Operation's name, which an agent can propose,
- *  so it can be any length; where the whole value matters it is shown in full in its own monospace
- *  field (the approval detail's 「能力」 row) and as the hover title. */
+/** Legacy 232: the longest an action kind is shown where an approver decides on it — the queue
+ *  rows, the approval cards, the detail title, the confirm lines and the "always allow" sentence.
+ *  Every new Operation name is at most 128 characters (`OPERATION_NAME_MAX`), so this shows a new
+ *  name whole, wrapping: an approver always sees which action they decide on, wherever two names
+ *  differ. Only a name written before that rule can be longer; it is cut in its middle here and
+ *  shown whole in the detail's own 「能力」 field and as the hover title. */
+export const ACTION_KIND_FULL_MAX = 512;
+
+/** Legacy 232: the longest an action kind is shown in a toast, after the decision was made. */
 export const ACTION_KIND_INLINE_MAX = 80;
 
-/** `text` clipped to `max` characters by cutting its middle: the head and the tail both stay, so
- *  two long names that differ only at the end still read differently. */
+/** `text` clipped to `max` code points by cutting its middle (never inside a surrogate pair): the
+ *  head and the tail both stay, so two long names that differ only at the end still read
+ *  differently. */
 export function clipMiddle(text: string, max: number): string {
-  if (text.length <= max) return text;
+  const points = [...text];
+  if (points.length <= max) return text;
   const tail = Math.floor((max - 1) / 3);
-  return `${text.slice(0, max - 1 - tail)}…${text.slice(text.length - tail)}`;
+  return `${points.slice(0, max - 1 - tail).join('')}…${points.slice(points.length - tail).join('')}`;
 }
 
-/** An action kind for running text: `humanizeKind`, clipped (legacy 232). Two raw tags can
- *  humanize alike (`a.b`, `a_b`), so every place that shows this also carries the raw tag as its
- *  hover title, or shows it beside. */
+/** An action kind exactly as stored, with what a reader cannot see (a bidi override, a
+ *  zero-width or control character) shown as `\u{XXXX}` — for the hover title and the 「能力」
+ *  field (legacy 232: a name written before the name rule may carry one). */
+export function actionKindRaw(kind: string): string {
+  return visibleText(kind);
+}
+
+/** An action kind for an approval place: `humanizeKind`, made visible, whole up to
+ *  `ACTION_KIND_FULL_MAX` (legacy 232). Two raw tags can humanize alike (`a.b`, `a_b`), so every
+ *  place that shows this also carries the raw tag as its hover title, or shows it beside. */
 export function actionKindLabel(kind: string): string {
-  return clipMiddle(humanizeKind(kind), ACTION_KIND_INLINE_MAX);
+  return visibleText(clipMiddle(humanizeKind(kind), ACTION_KIND_FULL_MAX));
 }
 
-/** The raw action kind, clipped, for a chip or a sentence that names it as is (legacy 232). */
+/** The raw action kind, made visible, whole up to `ACTION_KIND_FULL_MAX`, for a chip or a
+ *  sentence that names it as is (legacy 232). */
 export function actionKindTagText(kind: string): string {
-  return clipMiddle(kind, ACTION_KIND_INLINE_MAX);
+  return visibleText(clipMiddle(kind, ACTION_KIND_FULL_MAX));
+}
+
+/** `actionKindLabel`, clipped to `ACTION_KIND_INLINE_MAX`, for a toast (legacy 232). */
+export function actionKindToastLabel(kind: string): string {
+  return visibleText(clipMiddle(humanizeKind(kind), ACTION_KIND_INLINE_MAX));
 }
 
 /** A platform audit row's actor, for display: the login when known, else the id (S8 W4-A ui-audit

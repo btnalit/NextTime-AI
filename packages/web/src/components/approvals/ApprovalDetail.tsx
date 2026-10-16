@@ -5,6 +5,7 @@ import { auditHref } from '../../lib/audit.js';
 import { credentialReviewCount, credentialReviewPaths } from '../../lib/credential-review.js';
 import {
   actionKindLabel,
+  actionKindRaw,
   actionKindTagText,
   formatDateTime,
   formatRelative,
@@ -194,7 +195,12 @@ export function ApprovalDetail({
   // as "the whole gate", never as the gate's raw id posing as the action's target.
   const scopeLabel = resourceScopeLabel(row, gatekeeperNames);
   const actionItems: KeyValueItem[] = [
-    { key: 'kind', label: t('能力', 'Capability'), value: row.actionKindTag, mono: true },
+    {
+      key: 'kind',
+      label: t('能力', 'Capability'),
+      value: actionKindRaw(row.actionKindTag),
+      mono: true,
+    },
     {
       key: 'target',
       label: t('目标', 'Target'),
@@ -298,7 +304,7 @@ export function ApprovalDetail({
           <RefChip kind="actionRequest" id={row.id} name={t('本请求', 'This request')} size="s" />
         </div>
         <div className="row-wrap" style={{ justifyContent: 'space-between' }}>
-          <h2 className="approval-detail-title" title={row.actionKindTag}>
+          <h2 className="approval-detail-title" title={actionKindRaw(row.actionKindTag)}>
             {actionKindLabel(row.actionKindTag)}
             {scopeLabel ? <span className="mono text-2"> · {scopeLabel}</span> : null}
           </h2>
@@ -586,7 +592,7 @@ export function ApprovalDetail({
                       value: (
                         <span data-testid="approval-confirm-always-allow-scope">
                           {t(`门「${gateName}」上的 `, `On gate “${gateName}”, `)}
-                          <code title={row.actionKindTag}>
+                          <code title={actionKindRaw(row.actionKindTag)}>
                             {actionKindTagText(row.actionKindTag)}
                           </code>{' '}
                           {t(

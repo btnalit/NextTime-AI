@@ -7,7 +7,13 @@ import { usePermissions } from '../hooks/usePermissions.js';
 import { useRoleCan } from '../hooks/useRoleCan.js';
 import type { CapabilityCaller, PushSource } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
-import { actionKindLabel, formatDateTime, formatRelative, shortId } from '../lib/format.js';
+import {
+  actionKindLabel,
+  actionKindRaw,
+  formatDateTime,
+  formatRelative,
+  shortId,
+} from '../lib/format.js';
 import type { ActionRequestRow } from '../lib/governance.js';
 import { type Translate, useT } from '../lib/i18n.js';
 import { actorRuntimeLabel } from '../lib/labels.js';
@@ -382,11 +388,13 @@ function PendingList({
               </span>
               {/* `data-gatekeeper-id`: how a test finds a gate-scoped row now that its scope is no
                   longer printed as text (L8a-10) — an attribute, never visible copy. */}
-              <span className="truncate" data-gatekeeper-id={row.gatekeeperId}>
+              <span className="wrap-anywhere" data-gatekeeper-id={row.gatekeeperId}>
                 <span>{gateName}</span>
                 <SameNameId id={row.gatekeeperId} same={sameNames} />
                 <span className="meta-sep" />
-                <span title={row.actionKindTag}>{actionKindLabel(row.actionKindTag)}</span>
+                <span title={actionKindRaw(row.actionKindTag)}>
+                  {actionKindLabel(row.actionKindTag)}
+                </span>
                 {scopeLabel ? (
                   <>
                     {' → '}
@@ -592,11 +600,13 @@ function ApprovalHistoryTab({
                       {formatRelative(row.decidedAt ?? row.requestedAt)}
                     </time>
                   </span>
-                  <span className="truncate" data-gatekeeper-id={row.gatekeeperId}>
+                  <span className="wrap-anywhere" data-gatekeeper-id={row.gatekeeperId}>
                     <span>{gateName}</span>
                     <SameNameId id={row.gatekeeperId} same={sameNames} />
                     <span className="meta-sep" />
-                    <span title={row.actionKindTag}>{actionKindLabel(row.actionKindTag)}</span>
+                    <span title={actionKindRaw(row.actionKindTag)}>
+                      {actionKindLabel(row.actionKindTag)}
+                    </span>
                     {scopeLabel ? (
                       <>
                         {' → '}

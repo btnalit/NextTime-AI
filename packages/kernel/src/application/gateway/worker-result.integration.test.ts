@@ -1213,6 +1213,97 @@ describe.runIf(DATABASE_URL !== undefined)(
         ]);
         expect(stored.evidenceRows).toBe('1');
       });
+
+      it('legacy 232: a refusal echoes the model’s own strings bounded and visible — in tasks.result and in its audit rows', async () => {
+        // The warn case above left the workspace in warn mode; this one needs the guard to refuse.
+        await withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerId },
+          (client) =>
+            client.query('update workspaces set ontology_enforcement = $2 where id = $1', [
+              workspaceId,
+              'reject',
+            ]),
+          { skipRoleSwitch: true },
+        );
+        const { taskId, claims } = await spawnWorkerRun();
+        const caller: ResolvedCaller = { channel: 'handle', claims };
+        const longLinkType = `evil\u202E${'x'.repeat(500)}`;
+        const marker = randomUUID().slice(0, 8);
+        const result = (await dispatchCapability({ pool }, caller, 'report_task_result', {
+          summary: 'odd names',
+          factsToAssert: [
+            {
+              linkType: longLinkType,
+              source: { objectType: 'Doc\u200BContainer', identity: { marker } },
+              target: { objectType: 'Host', identity: { hostname: `h-${marker}` } },
+            },
+            {
+              linkType: 'runs_on\nforged line',
+              source: { objectType: 'Task', identity: { description: 'x' } },
+              target: { objectType: 'Gatekeeper', identity: { name: 'ssh' } },
+            },
+          ],
+          proposedOperations: [
+            {
+              gatekeeperId: randomUUID(),
+              operation: {
+                name: `demo.\u202Eop.${'y'.repeat(300)}`,
+                binding: { kind: 'http', method: 'GET', path: '/uptime' },
+                params_schema: {},
+                mode: 'observe',
+                blast_radius: 'low',
+                reversibility: false,
+                auto_approvable: true,
+                await_decision: false,
+                reads: [],
+                writes: [],
+              },
+            },
+          ],
+        })) as { status: string };
+        expect(result.status).toBe('completed');
+
+        const stored = await inTx(ownerId, async (client) => {
+          const task = await client.query<{ result: { factsRejected: unknown[] } }>(
+            'select result from tasks where workspace_id = $1 and id = $2',
+            [workspaceId, taskId],
+          );
+          const audit = await client.query<{ action: string; payload: Record<string, unknown> }>(
+            "select action, payload from audit_records where workspace_id = $1 and resource_id = $2 and action in ('task.result_fact_rejected', 'task.result_proposal_rejected') order by action, payload ->> 'factIndex'",
+            [workspaceId, taskId],
+          );
+          return { factsRejected: task.rows[0]?.result.factsRejected, audit: audit.rows };
+        });
+        const echoed = JSON.stringify([stored.factsRejected, stored.audit]);
+        // Nothing unseen survives: no bidi override, no zero-width character, no raw line break.
+        expect(echoed).not.toMatch(/[\u202E\u200B]/);
+        expect(echoed).not.toContain('\\n');
+        expect(stored.factsRejected).toEqual([
+          expect.objectContaining({
+            index: 0,
+            reason: 'undeclared_link_type',
+            linkType: `evil\\u{202E}${'x'.repeat(115)}…`,
+            sourceType: 'Doc\\u{200B}Container',
+          }),
+          expect.objectContaining({
+            index: 1,
+            reason: 'meta_ontology_type',
+            linkType: 'runs_on\\u{A}forged line',
+          }),
+        ]);
+        expect(stored.audit.map((row) => row.action)).toEqual([
+          'task.result_fact_rejected',
+          'task.result_fact_rejected',
+          'task.result_proposal_rejected',
+        ]);
+        expect(stored.audit[0]?.payload.linkType).toBe(`evil\\u{202E}${'x'.repeat(115)}…`);
+        expect(stored.audit[1]?.payload).toMatchObject({
+          linkType: 'runs_on\\u{A}forged line',
+          detail: 'ObjectType "Gatekeeper" is platform meta-ontology (I16)',
+        });
+        expect(stored.audit[2]?.payload.operation).toBe(`demo.\\u{202E}op.${'y'.repeat(111)}…`);
+      });
     });
   },
 );

@@ -59,6 +59,7 @@ import {
   GatekeeperNotFoundError,
 } from '../../governance/connections/index.js';
 import { ConnectionParamsCarryCredentialsError } from '../../governance/connections/index.js';
+import { OperationNameInvalidError } from '../../governance/gatekeepers/index.js';
 import {
   OperationDeclaresGateOwnedParamsError,
   OperationIdentityConflictError,
@@ -109,6 +110,19 @@ describe('mapCapabilityError — legacy 232 unknown operation (unit)', () => {
       status: 404,
       code: 'unknown_operation',
       details: { gatekeeperId: 'gk-1', operationStatus: 'none' },
+    });
+  });
+
+  it('OperationNameInvalidError maps to 400 invalid_operation_name with its details', () => {
+    expect(
+      mapCapabilityError(
+        new OperationNameInvalidError('a\u202Eb', 'invisible_or_control_characters'),
+      ),
+    ).toMatchObject({
+      status: 400,
+      code: 'invalid_operation_name',
+      details: { problem: 'invisible_or_control_characters', maxLength: 128 },
+      message: expect.stringContaining('"a\\u{202E}b"'),
     });
   });
 });

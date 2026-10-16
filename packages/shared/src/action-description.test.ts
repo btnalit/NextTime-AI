@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { ActionDescriptionSchema, OperationSchema } from './action-description.js';
+import {
+  ActionDescriptionSchema,
+  OPERATION_NAME_MAX,
+  OperationSchema,
+  operationNameProblem,
+} from './action-description.js';
 import type { ActionDescription, Operation } from './action-description.js';
 
 describe('ActionDescriptionSchema', () => {
@@ -128,5 +133,29 @@ describe('OperationSchema', () => {
   it('requires reads and writes arrays (possibly empty)', () => {
     const { reads, ...withoutReads } = httpOperation;
     expect(() => OperationSchema.parse(withoutReads)).toThrow();
+  });
+});
+
+describe('operationNameProblem (legacy 232)', () => {
+  it('accepts an ordinary name, spaces and non-Latin letters included', () => {
+    expect(operationNameProblem('inventory.list_items')).toBeUndefined();
+    expect(operationNameProblem('库存 查询')).toBeUndefined();
+    expect(operationNameProblem('x'.repeat(OPERATION_NAME_MAX))).toBeUndefined();
+  });
+
+  it('refuses an empty, an over-long, and an invisible-or-reordering name', () => {
+    expect(operationNameProblem('  ')).toBe('empty');
+    expect(operationNameProblem('x'.repeat(OPERATION_NAME_MAX + 1))).toBe('too_long');
+    for (const name of [
+      'delete‮toor', // right-to-left override
+      'approve​me', // zero-width space
+      'a⁦b', // left-to-right isolate
+      'line\nbreak',
+      'tab\there',
+      'para sep',
+      'lone\uD800surrogate',
+    ]) {
+      expect(operationNameProblem(name)).toBe('invisible_or_control_characters');
+    }
   });
 });

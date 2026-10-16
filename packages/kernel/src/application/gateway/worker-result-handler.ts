@@ -12,7 +12,7 @@ import {
   listPublishedOperationsForGatekeepers,
 } from '../../governance/gatekeepers/index.js';
 import type { GatekeeperRecord } from '../../governance/gatekeepers/index.js';
-import { redactSecrets } from '../../governance/redaction/index.js';
+import { quotedName, redactSecrets } from '../../governance/redaction/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
 import {
   narrowScopeToExecutableGates,
@@ -97,7 +97,7 @@ async function checkObjectRef(
     if (err instanceof MetaOntologyWriteForbiddenError) {
       return {
         reason: 'meta_ontology_type',
-        detail: `ObjectType "${objectType}" is platform meta-ontology (I16)`,
+        detail: `ObjectType ${quotedName(objectType)} is platform meta-ontology (I16)`,
       };
     }
     throw err;

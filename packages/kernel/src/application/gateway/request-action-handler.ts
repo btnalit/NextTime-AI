@@ -38,8 +38,10 @@ import {
   getOperation,
   getOrCreateGatekeeperServicePrincipal,
   getPublishedOperation,
+  hasDeprecatedOperation,
   mcpAutoApproveAllowed,
   operationRecordDigest,
+  operationVisibleTo,
 } from '../../governance/gatekeepers/index.js';
 import type { GatekeeperRecord, OperationRecord } from '../../governance/gatekeepers/index.js';
 import { GATEKEEPER_RESOURCE_SCOPE_KEY } from '../../governance/policy/index.js';
@@ -1264,16 +1266,11 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
   // channel; execute-class and unclassified (I17) calls still hit `assertHumanGatekeeperAccess`
   // before anything else can reach the Gatekeeper.
   let role: Role | undefined;
-  if (channel === 'human') {
-    role = await resolvePrincipalRole(client, workspaceId, onBehalfOf);
-    assertRoleMayReachGatekeeper(role, 'request_action');
-  } else {
-    // R-35: a Handle caller is held to the role of the member it acts for, read now.
-    assertRoleMayReachGatekeeper(
-      await resolvePrincipalRole(client, workspaceId, onBehalfOf),
-      'request_action',
-    );
-  }
+  // R-35: a Handle caller is held to the role of the member it acts for, read now. Legacy 232
+  // (review #493 M1): the same role decides which Operation drafts the call may name.
+  const onBehalfOfRole = await resolvePrincipalRole(client, workspaceId, onBehalfOf);
+  if (channel === 'human') role = onBehalfOfRole;
+  assertRoleMayReachGatekeeper(onBehalfOfRole, 'request_action');
 
   const requesterScope = await resolveRequesterScope(
     client,
@@ -1403,24 +1400,33 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
     // I17: a draft Operation → unclassified, always require_approval, never auto-executed.
     // Legacy K: the definition it is requested against is its current draft — the gate then runs
     // it after approval only if it still runs that definition.
-    const draft = await getOperation(client, workspaceId, gatekeeperId, operationName);
+    const current = await getOperation(client, workspaceId, gatekeeperId, operationName);
     // Legacy 232: with no draft the workspace holds no definition, and a request against none can
     // never execute (`approvedOperationDigest`, action-executor.ts) — refused here rather than
     // queued for approval under a caller-chosen name. Only for a gate inside the caller's governed
     // scope: outside it the request is still recorded as `denied` below (I7, P2-1), so a 404 here
     // cannot tell a caller which names exist on a gate it may not act on.
+    // Review #493 M1: only a draft the caller may see counts (D-26 — its proposer, or the owner /
+    // a builder; for a Handle, the member it acts for). Anyone else's draft answers exactly what no
+    // draft would — 404 `none`, or `deprecated` when the identity was once published — so the 404
+    // cannot tell an agent which names other people have drafted (I17).
+    const draft =
+      current?.status === 'draft' &&
+      operationVisibleTo({ principalId: onBehalfOf, role: onBehalfOfRole }, current)
+        ? current
+        : null;
     if (
-      draft?.status !== 'draft' &&
+      draft === null &&
       (governedScope.resources[GATEKEEPER_RESOURCE_SCOPE_KEY] ?? []).includes(gatekeeperId)
     ) {
-      throw new UnknownOperationError(
-        gatekeeperId,
-        draft?.status === 'deprecated' ? 'deprecated' : 'none',
-      );
+      const deprecated =
+        current?.status === 'deprecated' ||
+        (current?.status === 'draft' &&
+          (await hasDeprecatedOperation(client, workspaceId, gatekeeperId, operationName)));
+      throw new UnknownOperationError(gatekeeperId, deprecated ? 'deprecated' : 'none');
     }
     return runGovernedRequest(client, workspaceId, {
-      operationDigest:
-        draft?.status === 'draft' ? operationRecordDigest(draft) : NO_OPERATION_DEFINITION,
+      operationDigest: draft !== null ? operationRecordDigest(draft) : NO_OPERATION_DEFINITION,
       gatekeeper,
       operationName,
       operationParams: resolvedParams,

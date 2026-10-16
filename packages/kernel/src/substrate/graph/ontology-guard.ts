@@ -1,3 +1,4 @@
+import { boundedEcho, quotedName } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 // Direct file import on purpose: `substrate/audit/index.ts` re-exports `reconstruct.ts`, which
 // imports this package's `SqlGraphStore` — going through the index from here would close a
@@ -71,8 +72,8 @@ export class OntologyViolationError extends Error {
   constructor(details: OntologyViolationDetails) {
     super(
       details.reason === 'undeclared_link_type'
-        ? `ontology_violation: LinkType "${details.linkType}" is not declared by any published ontology version of this workspace (${details.sourceType} -> ${details.targetType})`
-        : `ontology_violation: LinkType "${details.linkType}" does not permit ${details.sourceType} -> ${details.targetType} (allowed: ${details.expected.join(', ')})`,
+        ? `ontology_violation: LinkType ${quotedName(details.linkType)} is not declared by any published ontology version of this workspace (${boundedEcho(details.sourceType)} -> ${boundedEcho(details.targetType)})`
+        : `ontology_violation: LinkType ${quotedName(details.linkType)} does not permit ${boundedEcho(details.sourceType)} -> ${boundedEcho(details.targetType)} (allowed: ${details.expected.join(', ')})`,
     );
     this.name = 'OntologyViolationError';
     this.details = details;

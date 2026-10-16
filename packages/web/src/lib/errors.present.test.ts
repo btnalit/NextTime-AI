@@ -159,6 +159,17 @@ describe('legacy K / J codes (review of #538, G3)', () => {
     expect(gateReasonNextStep('operation_definition_mismatch: operation "x": …', en)?.title).toBe(
       'The gate runs another definition',
     );
+    // Legacy 232 (UX acceptance of #593): the MCP text an agent gets for a wrong name.
+    const unknown = gateReasonNextStep(
+      'unknown_operation: request_action: gatekeeper gk-1 has no Operation by the requested name — nothing was requested. Call list_allowed_operations for what this gate runs.',
+      zh,
+    );
+    expect(unknown).toMatchObject({ code: 'unknown_operation', title: '这个门上没有这个动作' });
+    expect(unknown?.message).toContain('不需要你处理');
+    expect(unknown?.message).not.toMatch(/list_allowed_operations|gk-1/);
+    expect(
+      gateReasonNextStep('invalid_operation_name: Operation name "" is empty', en),
+    ).toMatchObject({ code: 'invalid_operation_name', title: 'Operation name not allowed' });
     expect(gateReasonNextStep('{"status":"executed"}', zh)).toBeNull();
     expect(gateReasonNextStep('my_operation_definition_mismatch_field', zh)).toBeNull();
   });

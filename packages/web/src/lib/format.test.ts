@@ -1,8 +1,11 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import {
+  ACTION_KIND_FULL_MAX,
   ACTION_KIND_INLINE_MAX,
   actionKindLabel,
+  actionKindRaw,
   actionKindTagText,
+  actionKindToastLabel,
   clipMiddle,
   excerpt,
   formatAuditActor,
@@ -59,17 +62,32 @@ describe('format', () => {
     expect(humanizeKind('docker.container_restart')).toBe('docker container restart');
   });
 
-  it('legacy 232: an action kind is clipped in its middle for inline display, head and tail kept', () => {
+  it('legacy 232: an approval place shows a new-rule name whole; a toast clips it in its middle', () => {
     expect(actionKindTagText('docker.container_restart')).toBe('docker.container_restart');
     expect(actionKindLabel('docker.container_restart')).toBe('docker container restart');
+    // Two 128-character names differing only in their middle stay different where approvers look.
+    const a = `${'a'.repeat(60)}.region-eu.${'z'.repeat(57)}`;
+    const b = `${'a'.repeat(60)}.region-us.${'z'.repeat(57)}`;
+    expect(actionKindTagText(a)).toBe(a);
+    expect(actionKindLabel(a)).not.toBe(actionKindLabel(b));
     const long = `${'a'.repeat(200)}.delete_everything`;
-    const clipped = actionKindTagText(long);
-    expect(clipped).toHaveLength(ACTION_KIND_INLINE_MAX);
-    expect(clipped.startsWith('aaaa')).toBe(true);
-    expect(clipped.endsWith('delete_everything')).toBe(true);
-    expect(clipped).toContain('…');
+    const toast = actionKindToastLabel(long);
+    expect([...toast]).toHaveLength(ACTION_KIND_INLINE_MAX);
+    expect(toast.startsWith('aaaa')).toBe(true);
+    expect(toast.endsWith('delete everything')).toBe(true);
+    const legacy = `${'b'.repeat(1000)}.tail`;
+    expect([...actionKindTagText(legacy)]).toHaveLength(ACTION_KIND_FULL_MAX);
+    expect(actionKindTagText(legacy).endsWith('.tail')).toBe(true);
     expect(clipMiddle('abcdefghij', 10)).toBe('abcdefghij');
     expect(clipMiddle('abcdefghijk', 10)).toBe('abcdef…ijk');
+  });
+
+  it('legacy 232: clipMiddle never splits a surrogate pair; a hidden character is shown, not obeyed', () => {
+    expect(clipMiddle('😀'.repeat(20), 10)).toBe(`${'😀'.repeat(6)}…${'😀'.repeat(3)}`);
+    expect(actionKindTagText('delete\u202Etoor')).toBe('delete\\u{202E}toor');
+    expect(actionKindLabel('a.b\u200Bc')).toBe('a b\\u{200B}c');
+    expect(actionKindRaw('x\u202Ey')).toBe('x\\u{202E}y');
+    expect(actionKindToastLabel('x\u202Ey')).toBe('x\\u{202E}y');
   });
 
   it('formatAuditActor prefers login, falls back to the (truncated) id, then to an unattributed label (遗留 54, AU1)', () => {

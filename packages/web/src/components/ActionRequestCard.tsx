@@ -7,7 +7,7 @@ import {
   isDecidable,
 } from '../lib/action-card.js';
 import { credentialReviewCount } from '../lib/credential-review.js';
-import { actionKindTagText, prettyJson, redactSensitive } from '../lib/format.js';
+import { actionKindRaw, actionKindTagText, prettyJson, redactSensitive } from '../lib/format.js';
 import { useT } from '../lib/i18n.js';
 import { actorRuntimeLabel, policyDecisionLabel } from '../lib/labels.js';
 import { capabilityHolders } from '../lib/role-holders.js';
@@ -84,7 +84,7 @@ export function ActionRequestCard({
         data-action-request-id={card.actionRequestId}
       >
         <div className="row-wrap">
-          <span className="tag action-card-kind" title={card.actionKindTag}>
+          <span className="tag action-card-kind" title={actionKindRaw(card.actionKindTag)}>
             {actionKindTagText(card.actionKindTag)}
           </span>
           {card.resourceScope ? <span className="text-3 mono">{card.resourceScope}</span> : null}

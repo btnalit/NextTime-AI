@@ -1773,6 +1773,114 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(row?.operationDigest).not.toBe(NO_OPERATION_DEFINITION);
       });
 
+      // Review #493 M1: a draft counts only when the caller may see it (D-26: its proposer, the
+      // owner, a builder). Anyone else's draft must answer exactly what no draft answers, or the
+      // 404 / pending difference tells a member's agent which names others have drafted (I17).
+      it("a member's agent gets the same 404 for someone else's draft as for a name that does not exist; its own draft still goes to approval", async () => {
+        const memberId = await adminInsertPrincipal(`member-232-${randomUUID()}`, 'member');
+        const OWN: Operation = { ...PENDING_OP, name: 'member.own.draft' };
+        const OTHERS_ON_RETIRED: Operation = { ...PENDING_OP, name: 'retired.then.redrafted' };
+        await withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+          await grantCapability(client, workspaceId, {
+            principalId: memberId,
+            resourceType: 'gatekeeper',
+            resourceId: gatekeeperId,
+            grantedBy: ownerId,
+          });
+          const activity = await startActivity(client, workspaceId, {
+            kind: 'test.revision',
+            principalId: ownerId,
+          });
+          await proposeOperation(client, workspaceId, {
+            gatekeeperId,
+            operation: OWN,
+            proposedBy: { id: memberId, kind: 'human' },
+            activityId: activity.id,
+          });
+          // Published, revised by the owner (a v2 draft), then v1 deprecated: the member must
+          // read "deprecated" (public history), never that a new draft exists.
+          await proposeOperation(client, workspaceId, {
+            gatekeeperId,
+            operation: OTHERS_ON_RETIRED,
+            proposedBy: { id: ownerId, kind: 'human' },
+            activityId: activity.id,
+          });
+          await publishOperation(client, workspaceId, {
+            gatekeeperId,
+            name: OTHERS_ON_RETIRED.name,
+          });
+          await proposeOperation(client, workspaceId, {
+            gatekeeperId,
+            operation: { ...OTHERS_ON_RETIRED, description: 'revised' },
+            proposedBy: { id: ownerId, kind: 'human' },
+            activityId: activity.id,
+          });
+          await deprecateOperation(client, workspaceId, {
+            gatekeeperId,
+            name: OTHERS_ON_RETIRED.name,
+          });
+        });
+
+        const now = Math.floor(Date.now() / 1000);
+        const memberHandle = (): ResolvedCaller => ({
+          channel: 'handle',
+          claims: {
+            ws: workspaceId,
+            sid: randomUUID(),
+            obo: memberId,
+            scope: { capabilities: ['request_action'], resources: { gatekeeper: [gatekeeperId] } },
+            jti: randomUUID(),
+            iat: now,
+            exp: now + 600,
+          },
+        });
+        const refusalOf = async (caller: ResolvedCaller, operation: string) => {
+          const err = await dispatchCapability({ pool }, caller, 'request_action', {
+            gatekeeperId,
+            operation,
+            params: {},
+          }).catch((e: unknown) => e);
+          expect(err).toBeInstanceOf(UnknownOperationError);
+          const refused = err as UnknownOperationError;
+          return { code: refused.code, message: refused.message, details: refused.details };
+        };
+
+        // DRAFT_OP is the owner's import draft — invisible to a member.
+        const draftRowsBefore = await countRows(DRAFT_OP.name);
+        const othersDraft = await refusalOf(memberHandle(), DRAFT_OP.name);
+        const missing = await refusalOf(memberHandle(), 'no.such.operation.anywhere');
+        expect(othersDraft).toEqual(missing);
+        expect(othersDraft.details.operationStatus).toBe('none');
+        // The same holds on the member's own console.
+        expect(
+          await refusalOf(humanCaller(workspaceId, memberId, 'member'), DRAFT_OP.name),
+        ).toEqual(
+          await refusalOf(
+            humanCaller(workspaceId, memberId, 'member'),
+            'no.such.operation.anywhere',
+          ),
+        );
+        expect(await countRows(DRAFT_OP.name)).toBe(draftRowsBefore);
+
+        const overRetired = await refusalOf(memberHandle(), OTHERS_ON_RETIRED.name);
+        expect(overRetired.details.operationStatus).toBe('deprecated');
+
+        const own = (await dispatchCapability({ pool }, memberHandle(), 'request_action', {
+          gatekeeperId,
+          operation: OWN.name,
+          params: {},
+        })) as { status: string };
+        expect(own.status).toBe('pending_approval');
+
+        // The owner's agent sees every draft (D-26): the owner's re-draft goes to approval.
+        const ownerSees = (await dispatchCapability({ pool }, inScopeHandle(), 'request_action', {
+          gatekeeperId,
+          operation: OTHERS_ON_RETIRED.name,
+          params: {},
+        })) as { status: string };
+        expect(ownerSees.status).toBe('pending_approval');
+      });
+
       it('a Handle whose scope does not cover the gate is still denied (403), so a 404 tells it nothing about the gate', async () => {
         const now = Math.floor(Date.now() / 1000);
         const uncovered: ResolvedCaller = {

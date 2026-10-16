@@ -1,6 +1,7 @@
 import type { WorkerResultCapabilityParams, WorkerResultObjectRef } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { proposeOperation } from '../../governance/gatekeepers/index.js';
+import { boundedEcho } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import {
   attachEvidence,
@@ -141,6 +142,21 @@ export interface RejectedResultFact {
   readonly targetType?: string;
   readonly expected?: readonly string[];
   readonly detail?: string;
+}
+
+/** `rejection` with every string bounded and made visible (legacy 232) — what `tasks.result`,
+ *  the `task.result_fact_rejected` audit row and the Worker's echo of it carry. */
+function boundedFactRejection(rejection: RejectedResultFact): RejectedResultFact {
+  return {
+    ...rejection,
+    linkType: boundedEcho(rejection.linkType),
+    ...(rejection.sourceType !== undefined && { sourceType: boundedEcho(rejection.sourceType) }),
+    ...(rejection.targetType !== undefined && { targetType: boundedEcho(rejection.targetType) }),
+    ...(rejection.expected !== undefined && {
+      expected: rejection.expected.map((name) => boundedEcho(name)),
+    }),
+    ...(rejection.detail !== undefined && { detail: boundedEcho(rejection.detail, 400) }),
+  };
 }
 
 /** One refused `proposedOperations[]` entry — its `gatekeeperId` names no Gatekeeper of this
@@ -303,7 +319,10 @@ export async function postWorkerResult(
     const preRejectedFacts = new Map(
       (input.preRejected?.facts ?? []).map((rejection) => [rejection.index, rejection]),
     );
-    const recordFactRejection = async (rejection: RejectedResultFact): Promise<void> => {
+    // Legacy 232: a refusal's strings are the model's own (`linkType`, an `objectType`) or carry
+    // them (`detail`), so the stored refusal and its audit row hold bounded, visible echoes.
+    const recordFactRejection = async (raw: RejectedResultFact): Promise<void> => {
+      const rejection = boundedFactRejection(raw);
       factsRejected.push(rejection);
       await writeAudit(client, {
         workspaceId,
@@ -404,7 +423,7 @@ export async function postWorkerResult(
           payload: {
             ...rejected,
             proposalIndex,
-            operation: proposal.operation.name,
+            operation: boundedEcho(proposal.operation.name),
             workerRunId: input.workerRunId,
             activityId: activity.id,
             onBehalfOf: actorPrincipalId,
@@ -415,7 +434,10 @@ export async function postWorkerResult(
       const proposalActivity = await startActivity(client, workspaceId, {
         kind: 'operation_proposal',
         principalId: actorPrincipalId,
-        metadata: { gatekeeperId: proposal.gatekeeperId, operation: proposal.operation.name },
+        metadata: {
+          gatekeeperId: proposal.gatekeeperId,
+          operation: boundedEcho(proposal.operation.name),
+        },
       });
       await proposeOperation(client, workspaceId, {
         gatekeeperId: proposal.gatekeeperId,

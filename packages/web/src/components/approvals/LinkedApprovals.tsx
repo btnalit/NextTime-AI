@@ -4,7 +4,13 @@ import { useCapabilityList } from '../../hooks/useCapability.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller, PushSource } from '../../lib/clients.js';
 import { isForbiddenError } from '../../lib/errors.js';
-import { actionKindLabel, formatDateTime, formatRelative, shortId } from '../../lib/format.js';
+import {
+  actionKindLabel,
+  actionKindRaw,
+  formatDateTime,
+  formatRelative,
+  shortId,
+} from '../../lib/format.js';
 import type { ActionRequestRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
 import { capabilityHolders } from '../../lib/role-holders.js';
@@ -130,7 +136,7 @@ function LinkedApprovalsList({
             >
               <span className="row-wrap">
                 <StatusChip machine="actionRequest" status={row.status} size="s" />
-                <span className="truncate" title={row.actionKindTag}>
+                <span className="wrap-anywhere" title={actionKindRaw(row.actionKindTag)}>
                   {actionKindLabel(row.actionKindTag)}
                 </span>
                 {row.blastRadius !== 'low' ? (

@@ -5,7 +5,14 @@ import type {
   PublishableStatus,
   Role,
 } from '@nexttime/shared';
-import { IllegalTransition, OPERATION_TRANSITIONS, transition } from '@nexttime/shared';
+import {
+  IllegalTransition,
+  OPERATION_NAME_MAX,
+  OPERATION_TRANSITIONS,
+  type OperationNameProblem,
+  operationNameProblem,
+  transition,
+} from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import {
   type GraphReadViewer,
@@ -293,6 +300,36 @@ export interface ImportManifestInput {
   readonly requireDescription?: boolean;
 }
 
+/** Legacy 232 (review #493): a *new* Operation name that breaks `operationNameProblem`'s rule
+ *  (`@nexttime/shared`) — empty, longer than `OPERATION_NAME_MAX`, or carrying an invisible or
+ *  reordering character (an agent could otherwise dress a draft's name up on the approval card).
+ *  Thrown by `proposeOperation` and, before any write, by `importManifest`. A name already on file
+ *  is never refused by this (it keeps working and is escaped where shown). 400 `invalid_operation_name`. */
+export class OperationNameInvalidError extends Error {
+  readonly code = 'invalid_operation_name' as const;
+  readonly details: { readonly problem: OperationNameProblem; readonly maxLength: number };
+  constructor(operationName: string, problem: OperationNameProblem) {
+    const why =
+      problem === 'empty'
+        ? 'is empty'
+        : problem === 'too_long'
+          ? `is longer than ${OPERATION_NAME_MAX} characters`
+          : 'carries a control, invisible or text-reordering character';
+    super(
+      `Operation name ${quotedName(operationName)} ${why} — nothing was written. Use a visible name of at most ${OPERATION_NAME_MAX} characters.`,
+    );
+    this.name = 'OperationNameInvalidError';
+    this.details = { problem, maxLength: OPERATION_NAME_MAX };
+  }
+}
+
+/** Refuses `name` for a new identity (`existing === null`); a name already on file passes. */
+function assertNewOperationNameAllowed(name: string, existing: OperationRecord | null): void {
+  if (existing !== null) return;
+  const problem = operationNameProblem(name);
+  if (problem !== undefined) throw new OperationNameInvalidError(name, problem);
+}
+
 /** Thrown by `importManifest` when `input.requireDescription` is set and `operationName` has no
  *  (or a blank/whitespace-only) `description` — CO1's "manifest 导入时要求描述" reject, naming the
  *  offending Operation so the caller can fix its manifest entry directly. */
@@ -353,6 +390,15 @@ export async function importManifest(
         throw new OperationDescriptionRequiredError(operation.name);
       }
     }
+  }
+
+  // Legacy 232: a new name breaking the name rule imports nothing (same atomic shape as above).
+  for (const operation of input.operations) {
+    if (operationNameProblem(operation.name) === undefined) continue;
+    assertNewOperationNameAllowed(
+      operation.name,
+      await getOperation(client, workspaceId, input.gatekeeperId, operation.name),
+    );
   }
 
   const imported: OperationRecord[] = [];
@@ -445,6 +491,7 @@ export async function proposeOperation(
   // row's status in a conflict error. Not the guard — the conditional write below is (two
   // dispatch transactions may interleave between this read and that write).
   const existing = await getOperation(client, workspaceId, gatekeeperId, name);
+  assertNewOperationNameAllowed(name, existing);
 
   let version: number;
   let draftOf: string | undefined;
@@ -555,6 +602,29 @@ interface OperationObjectRow {
   id: string;
   identity_key: { gatekeeperId?: string; name?: string; version?: number } | null;
   properties: Record<string, unknown>;
+}
+
+/** Legacy 232 (review #493 M1): whether `(gatekeeperId, name)` has a `deprecated` row — what
+ *  `getOperation` would answer were there no draft. A deprecated Operation was published once, so
+ *  everyone may know it existed; a draft is private to its proposer and the reviewers (D-26). */
+export async function hasDeprecatedOperation(
+  client: PoolClient,
+  workspaceId: string,
+  gatekeeperId: string,
+  name: string,
+): Promise<boolean> {
+  const result = await client.query(
+    `select 1
+     from objects
+     where workspace_id = $1
+       and object_type = 'Operation'
+       and identity_key ->> 'gatekeeperId' = $2
+       and identity_key ->> 'name' = $3
+       and properties ->> 'status' = 'deprecated'
+     limit 1`,
+    [workspaceId, gatekeeperId, name],
+  );
+  return (result.rowCount ?? 0) > 0;
 }
 
 /**
