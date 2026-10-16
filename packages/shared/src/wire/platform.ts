@@ -458,6 +458,11 @@ export const ConnectorWireSchema = z
     /** Distinct Operation names across this connector's announced instances. */
     operationCount: z.number().int().nonnegative(),
     instanceCount: z.number().int().nonnegative(),
+    /** P0b: gates workspaces connected themselves through this (generic) connector
+     *  (`list_self_connections`), and how many of those the platform suspended. Always 0 for a
+     *  packaged connector — `create_connection` only takes the four generic kinds. */
+    selfConnectionCount: z.number().int().nonnegative(),
+    suspendedSelfConnectionCount: z.number().int().nonnegative(),
     updatedAt: z.string().nullable(),
   })
   .strict();
@@ -671,6 +676,33 @@ export const RevokeExternalRuntimeResultWireSchema = z
   .object({ workspaceId: z.string(), sessionId: z.string(), revoked: z.boolean() })
   .strict();
 export type RevokeExternalRuntimeResultWire = z.infer<typeof RevokeExternalRuntimeResultWireSchema>;
+
+/** P0b (STATUS leftover 118 remainder ①): a gate a workspace connected itself (`create_connection`),
+ *  as the platform sees it — the origin record the one landing path writes. The catalog twin is a
+ *  gate instance's workspace link. Suspending it is the platform's cut-off: every Operation of that
+ *  Gatekeeper is refused as disabled by the platform until it is resumed. */
+export const SelfConnectionWireSchema = z
+  .object({
+    workspaceId: z.string(),
+    workspaceName: z.string(),
+    gatekeeperId: z.string(),
+    /** The generic connector of its transport kind (`http` / `mcp` / `cli` / `ssh`). */
+    connector: z.string(),
+    target: z.string(),
+    endpoint: z.string(),
+    /** Who connected it; `null` for one recorded when this list was introduced (core 0045's
+     *  backfill), whose author the old paths did not keep here. */
+    connectedByName: z.string().nullable(),
+    connectedAt: z.string(),
+    suspendedAt: z.string().nullable(),
+    suspendedByLogin: z.string().nullable(),
+    suspensionReason: z.string().nullable(),
+    /** Set when its address is a platform gate instance's (connected before that check existed):
+     *  calls to it carry the platform's credential for that instance, so it is worth a look. */
+    catalogGateId: z.string().nullable(),
+  })
+  .strict();
+export type SelfConnectionWire = z.infer<typeof SelfConnectionWireSchema>;
 
 /** Workspace side (`list_available_gate_instances`): a platform gate instance an owner may enable
  *  here, with whether this workspace already did. */

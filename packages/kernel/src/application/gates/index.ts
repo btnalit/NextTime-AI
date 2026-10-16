@@ -4,13 +4,15 @@ export type {
   ConfirmPendingManifestOutcome,
   ConnectorMode,
   GateHealth,
+  CatalogGatePolicy,
   GateInstanceStatus,
-  GateLinkPolicyView,
+  GatekeeperPlatformPolicy,
   GateLinkRow,
   GateTransportKind,
   GateTrust,
   HostedGateDefinition,
   OperationPlatformStatus,
+  SelfConnectionPolicy,
 } from './store.js';
 export {
   AnnounceBodySchema,
@@ -36,17 +38,38 @@ export {
   operationPlatformStatus,
   operationsOf,
   pendingManifestOf,
+  platformTrustOf,
   readConnectorMode,
   readDisabledOperations,
-  readGateLinkPolicy,
-  readGateLinkPoliciesForWorkspace,
+  readGatekeeperPlatformPolicies,
+  readGatekeeperPlatformPolicy,
   recordGateInstanceCheck,
   revokeEntryHandlesForConnector,
+  revokeEntryHandlesInWorkspace,
   revokeExternalRuntime,
   updateConnector,
   updateGateInstance,
   upsertAnnouncement,
 } from './store.js';
+export type { SelfConnectionListRow, SelfConnectionRow } from './self-connections.js';
+export {
+  findSelfConnection,
+  listSelfConnections,
+  setSelfConnectionSuspension,
+} from './self-connections.js';
+export type {
+  CatalogLandingSource,
+  LandingActor,
+  LandingResult,
+  LandingSource,
+  SelfLandingSource,
+} from './landing.js';
+export {
+  GatekeeperLandingRefusedError,
+  assertEndpointFreeForSelfConnection,
+  assertSelfConnectionNotSuspended,
+  landGatekeeper,
+} from './landing.js';
 export type { AnnouncedManifestDiff } from './manifest-review.js';
 export {
   canonicalJson,

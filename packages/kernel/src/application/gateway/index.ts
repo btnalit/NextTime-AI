@@ -219,6 +219,10 @@ export {
 } from './connection-handlers.js';
 export { platformGateIdForEndpoint, resolveGateTarget } from './gate-target.js';
 export type { ConnectionHandlerDeps } from './connection-handlers.js';
+// P0b: the one landing path's own refusals (application/gates/landing.ts) — a second
+// self-connection to an address, or relinking a Gatekeeper whose self connection the platform
+// suspended. Re-exported here so the transports map it alongside the connection errors.
+export { GatekeeperLandingRefusedError } from '../gates/index.js';
 
 export { publishManifestHandler } from './operation-manifest-handlers.js';
 

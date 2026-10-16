@@ -13,8 +13,6 @@ import type { PoolClient } from 'pg';
 import { parse as parseYaml } from 'yaml';
 import { createPool, withWorkspace } from '../adapters/db/pool.js';
 import type { PoolLike } from '../adapters/db/pool.js';
-import { HttpGatekeeperClient, platformGateTarget } from '../adapters/gatekeeper-client/index.js';
-import type { GatekeeperClient } from '../adapters/gatekeeper-client/index.js';
 import { generateApiKey, hashApiKey } from '../application/gateway/index.js';
 import {
   createPlatformAdmin,
@@ -37,14 +35,7 @@ import {
 } from '../application/workspace/index.js';
 import type { WorkspacePurpose } from '../application/workspace/index.js';
 import { issueHandle, loadHandleKeyPair } from '../governance/capability/index.js';
-import {
-  type GateOwnedParamDraft,
-  importManifest,
-  publishImportedDrafts,
-  registerGatekeeper,
-} from '../governance/gatekeepers/index.js';
 import { writeAudit } from '../substrate/audit/index.js';
-import { endActivity, startActivity } from '../substrate/epistemic/index.js';
 import {
   publishOntologyDomainPack,
   resolveOntologyDir,
@@ -264,115 +255,6 @@ export async function addPrincipal(
 }
 
 // -------------------------------------------------------------------------------------------
-// register-gatekeeper — S2.5's manual registration path for a running Gatekeeper instance (task
-// brief: "if only service functions exist, provide a bootstrap.js register-gatekeeper subcommand
-// ... that calls them and imports the gate's manifest by calling its describe_operations"). Real
-// automated registration is S2.13's `request_connection` card flow (governance/gatekeepers'
-// own doc comment) — this subcommand is the interim host-operator path.
-// -------------------------------------------------------------------------------------------
-
-const GATEKEEPER_TRANSPORT_KINDS = ['http', 'mcp', 'cli', 'ssh'] as const;
-type GatekeeperTransportKind = (typeof GATEKEEPER_TRANSPORT_KINDS)[number];
-
-function isGatekeeperTransportKind(value: string): value is GatekeeperTransportKind {
-  return (GATEKEEPER_TRANSPORT_KINDS as readonly string[]).includes(value);
-}
-
-export interface RegisterGatekeeperCliInput {
-  readonly workspaceId: string;
-  readonly principalId: string;
-  readonly name: string;
-  readonly endpoint: string;
-  readonly transportKind: GatekeeperTransportKind;
-  /** The connected system's own identifying label — defaults to `name` (`registerGatekeeper`'s
-   *  own `target` field, `governance/gatekeepers/registry.ts`). */
-  readonly target?: string;
-  /**
-   * Publishes every imported Operation immediately instead of leaving it as a draft (I17: an
-   * imported Operation always starts as a draft — `importManifest`'s own doc comment — so this is
-   * an explicit second step, not the default, matching the design's owner-review gate).
-   */
-  readonly publish?: boolean;
-}
-
-export interface RegisterGatekeeperCliResult {
-  readonly gatekeeperId: string;
-  readonly importedOperationNames: readonly string[];
-  /** Manifest entries `importManifest` refused to write over an already `published`/`deprecated`
-   *  Operation of the same name (always empty for the fresh Gatekeeper this command registers). */
-  readonly skippedOperationNames: readonly string[];
-  readonly publishedOperationNames: readonly string[];
-  /** Legacy J: imported drafts `--publish` left unpublished because they declare a param the gate
-   *  sets itself, with those params (always empty without `--publish`). */
-  readonly gateOwnedParamDrafts: readonly GateOwnedParamDraft[];
-}
-
-/** Fetches the target endpoint's `describe_operations`, registers it as a Gatekeeper instance,
- *  imports its manifest as drafts, and (only when `input.publish` is set) publishes every
- *  imported Operation. One Activity spans the whole registration. The HTTP fetch happens before
- *  any database work starts, so an unreachable endpoint fails fast without opening a transaction.
- *  `options.gatekeeperClient` defaults to a real `HttpGatekeeperClient` — overridable so tests
- *  can inject a fake `describeOperations` without a real gate listening on a port. */
-export async function registerGatekeeperFromCli(
-  pool: PoolLike,
-  input: RegisterGatekeeperCliInput,
-  options: { readonly gatekeeperClient?: GatekeeperClient } = {},
-): Promise<RegisterGatekeeperCliResult> {
-  const client = options.gatekeeperClient ?? new HttpGatekeeperClient();
-  // The host operator's own path, for the packaged gates (docs/runbooks/host-gatekeepers.md §5):
-  // the operator holds `gate.token` anyway, so presenting it to the endpoint they typed discloses
-  // nothing new. Calls the kernel makes later go through `gate-target.ts` like every other
-  // Gatekeeper's — the platform token only while the endpoint is a catalog instance's (R-01).
-  const described = await client.describeOperations(platformGateTarget(input.endpoint));
-
-  return withWorkspace(
-    pool,
-    { workspaceId: input.workspaceId, principalId: input.principalId },
-    async (dbClient) => {
-      const activity = await startActivity(dbClient, input.workspaceId, {
-        kind: 'governance.register_gatekeeper',
-        principalId: input.principalId,
-      });
-
-      const { gatekeeperId } = await registerGatekeeper(dbClient, input.workspaceId, {
-        name: input.name,
-        transportKind: input.transportKind,
-        target: input.target ?? input.name,
-        endpoint: input.endpoint,
-        activityId: activity.id,
-        registeredBy: { id: input.principalId, kind: 'human' },
-      });
-
-      const imported = await importManifest(dbClient, input.workspaceId, {
-        gatekeeperId,
-        operations: described.operations,
-        proposedBy: { id: input.principalId, kind: 'human' },
-        activityId: activity.id,
-        // S8 W2-K1 (leftover 71/72, audit CO1): this operator-run CLI path is the one call site
-        // that registers this repo's own hand-curated `gatekeepers/<system>/` manifests (see
-        // docs/runbooks/host-gatekeepers.md) — see `ImportManifestInput.requireDescription`'s own
-        // doc comment for why this flag is set *here* and not made the unconditional default.
-        requireDescription: true,
-      });
-
-      const published = input.publish
-        ? await publishImportedDrafts(dbClient, input.workspaceId, gatekeeperId, imported.imported)
-        : { publishedOperationNames: [], gateOwnedParamDrafts: [] };
-
-      await endActivity(dbClient, input.workspaceId, activity.id, 'completed');
-
-      return {
-        gatekeeperId,
-        importedOperationNames: imported.imported.map((record) => record.name),
-        skippedOperationNames: imported.skipped.map((entry) => entry.name),
-        publishedOperationNames: published.publishedOperationNames,
-        gateOwnedParamDrafts: published.gateOwnedParamDrafts,
-      };
-    },
-  );
-}
-
-// -------------------------------------------------------------------------------------------
 // seed-domain-pack (S3.3): publishes an `ontology/<pack>.yaml` domain pack into a workspace — the
 // operator-run step `substrate/ontology/loader.ts`'s own `publishOntologyDomainPack` doc comment
 // names as its intended caller ("not wired into `create-workspace`... it is the seam a bootstrap
@@ -424,8 +306,7 @@ export async function seedDomainPackFromCli(
 // Principal today (`issue_handle`, the one capability with that name, is `channel:'human'`-only
 // and mints a Handle for an *existing session* — S3.6/W2-B territory, not this task's — and no
 // mechanism anywhere creates a `service`-kind session at all); this is the interim, CLI-only,
-// operator-run path, the same shape `register-gatekeeper` above already established for "no
-// capability exists yet for this bootstrap need".
+// operator-run path for "no capability exists yet for this bootstrap need".
 //
 // `getOrCreateServicePrincipal` mirrors `governance/gatekeepers/service-principal.ts`'s
 // `getOrCreateGatekeeperServicePrincipal` (lookup by `kind='service'` + `display_name`, insert on
@@ -1047,66 +928,6 @@ async function runAddPrincipal(argv: readonly string[]): Promise<void> {
   }
 }
 
-async function runRegisterGatekeeper(argv: readonly string[]): Promise<void> {
-  const flags = parseFlags(argv);
-  const workspaceId = flags.workspace;
-  const principalId = flags.principal;
-  const name = flags.name;
-  const endpoint = flags.endpoint;
-  const kindFlag = flags.kind;
-  if (
-    !workspaceId ||
-    !principalId ||
-    !name ||
-    !endpoint ||
-    !kindFlag ||
-    !isGatekeeperTransportKind(kindFlag)
-  ) {
-    throw new BootstrapUsageError(
-      'usage: bootstrap register-gatekeeper --workspace <id> --principal <id> --name <name> ' +
-        '--endpoint <url> --kind <http|mcp|cli|ssh> [--target <target>] [--publish true]',
-    );
-  }
-
-  const pool = createPool();
-  try {
-    const result = await registerGatekeeperFromCli(pool, {
-      workspaceId,
-      principalId,
-      name,
-      endpoint,
-      transportKind: kindFlag,
-      target: flags.target,
-      publish: flags.publish === 'true',
-    });
-    console.log(`gatekeeper registered: ${result.gatekeeperId}`);
-    console.log(
-      `imported operations (draft): ${result.importedOperationNames.join(', ') || '(none)'}`,
-    );
-    if (result.skippedOperationNames.length > 0) {
-      console.log(
-        `skipped operations (already published/deprecated, left unchanged): ${result.skippedOperationNames.join(', ')}`,
-      );
-    }
-    console.log(
-      result.publishedOperationNames.length > 0
-        ? `published operations: ${result.publishedOperationNames.join(', ')}`
-        : flags.publish === 'true'
-          ? 'published operations: (none)'
-          : 'published operations: (none — pass --publish true to publish every imported operation)',
-    );
-    for (const draft of result.gateOwnedParamDrafts) {
-      console.log(
-        `left as draft (declares params only the gate sets — fix the manifest): ${draft.name}: ${draft.params
-          .map((entry) => `${entry.param} (${entry.location})`)
-          .join(', ')}`,
-      );
-    }
-  } finally {
-    await pool.end();
-  }
-}
-
 async function runSeedDomainPack(argv: readonly string[]): Promise<void> {
   const flags = parseFlags(argv);
   const workspaceId = flags.workspace;
@@ -1659,8 +1480,15 @@ async function run(): Promise<void> {
     return;
   }
   if (command === 'register-gatekeeper') {
-    await runRegisterGatekeeper(rest);
-    return;
+    // P0b (S10 W2): removed — it was a second way to put a Gatekeeper into a workspace, with no
+    // origin record and no audit row. Said explicitly, so an operator following an old runbook
+    // learns where it went instead of reading the generic usage text.
+    throw new BootstrapUsageError(
+      'register-gatekeeper was removed: a gate gets into a workspace only through the one landing ' +
+        'path — a platform gate instance is enabled from the catalog (console: 系统接入 → 启用, or ' +
+        'enable_gate_instance), a gate the workspace runs itself is connected with create_connection. ' +
+        'See docs/runbooks/add-gatekeeper.md.',
+    );
   }
   if (command === 'delete-workspace') {
     await runDeleteWorkspace(rest);
@@ -1698,8 +1526,6 @@ async function run(): Promise<void> {
     'usage: bootstrap create-workspace --name <ws> --owner <display-name> [--entry-model <provider/id>] ' +
       '[--purpose standard|ephemeral] [--ttl <n>m|<n>h|<n>d]\n' +
       '   or: bootstrap add-principal --workspace <id> --name <display-name> [--role <role>]\n' +
-      '   or: bootstrap register-gatekeeper --workspace <id> --principal <id> --name <name> ' +
-      '--endpoint <url> --kind <http|mcp|cli|ssh> [--target <target>] [--publish true]\n' +
       '   or: bootstrap delete-workspace <workspaceId> --yes [--name <expected name>] ' +
       '[--allow-name-pattern <regex>] [--actor <login>]\n' +
       '   or: bootstrap list-workspaces\n' +

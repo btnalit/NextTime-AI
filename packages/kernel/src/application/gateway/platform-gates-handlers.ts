@@ -1,10 +1,15 @@
-import type { GateHostedDefinitionWire, GateInstanceWire } from '@nexttime/shared';
+import type {
+  GateHostedDefinitionWire,
+  GateInstanceWire,
+  SelfConnectionWire,
+} from '@nexttime/shared';
 import { GATE_SHARED_CREDENTIAL_SLOT, mintGateHostToken } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { platformGateTarget } from '../../adapters/gatekeeper-client/index.js';
 import { assertConnectionParamsCarryNoCredentials } from '../../governance/connections/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import {
+  type SelfConnectionListRow,
   confirmPendingManifest,
   createHostedGateInstance,
   deleteHostedGateInstance,
@@ -13,15 +18,19 @@ import {
   listConnectors,
   listExternalRuntimes,
   listGateInstances,
+  listSelfConnections,
   operationsOf,
   recordGateInstanceCheck,
   revokeEntryHandlesForConnector,
+  revokeEntryHandlesInWorkspace,
   revokeExternalRuntime,
+  setSelfConnectionSuspension,
   updateConnector,
   updateGateInstance,
 } from '../gates/index.js';
 import { getConfiguredTaskRuntime } from '../task/runtime.js';
 import type { CapabilityHandler } from './capability-handler.js';
+import { urlHost } from './gate-target.js';
 import { describeGateOperations, probeGatekeeperHealth } from './gatekeeper-read-handlers.js';
 import { PlatformAdminError } from './platform-handlers.js';
 
@@ -29,7 +38,8 @@ import { PlatformAdminError } from './platform-handlers.js';
  * application/gateway/platform-gates-handlers: the P-B1 `scope:'platform'` integration
  * capabilities (docs/platform-admin-design.md §6.3; development-tasks.md P-B "拆分与决定") —
  * connectors (三态 + per-Operation deny list), gate instances (name / enable / disable / trust /
- * test) and external runtimes (inventory + revoke). Same transaction shape as
+ * test), external runtimes (inventory + revoke) and — P0b — the gates workspaces connected
+ * themselves (inventory + suspend / resume). Same transaction shape as
  * `platform-handlers.ts` (`withPlatform`, `nexttime_app`, `app.platform = on`); the catalog tables
  * are readable from every workspace transaction and writable only here (core 0023).
  *
@@ -273,6 +283,131 @@ export const revokeExternalRuntimeHandler: CapabilityHandler = async (
     resourceType: 'session',
     resourceId: input.sessionId,
   };
+};
+
+// -------------------------------------------------------------------------------------------
+// P0b (S10 W2; STATUS leftover 118 remainder ①): gates workspaces connected themselves
+// -------------------------------------------------------------------------------------------
+
+/** Platform gate instances by endpoint host — the host rule `platformGateIdForEndpoint`
+ *  (gate-target.ts) applies per call, read once for a whole list. */
+async function catalogGateIdsByHost(client: PoolClient): Promise<ReadonlyMap<string, string>> {
+  const result = await client.query<{ gate_id: string; endpoint: string }>(
+    "select gate_id, endpoint from gate_instances where endpoint <> '' order by gate_id",
+  );
+  const byHost = new Map<string, string>();
+  for (const row of result.rows) {
+    const host = urlHost(row.endpoint);
+    if (host !== null && !byHost.has(host)) byHost.set(host, row.gate_id);
+  }
+  return byHost;
+}
+
+function toSelfConnectionWire(
+  row: SelfConnectionListRow,
+  catalogByHost: ReadonlyMap<string, string>,
+): SelfConnectionWire {
+  const host = urlHost(row.endpoint);
+  return {
+    workspaceId: row.workspaceId,
+    workspaceName: row.workspaceName,
+    gatekeeperId: row.gatekeeperObjectId,
+    connector: row.connector,
+    target: row.target,
+    endpoint: row.endpoint,
+    connectedByName: row.connectedByName,
+    connectedAt: row.connectedAt.toISOString(),
+    suspendedAt: row.suspendedAt ? row.suspendedAt.toISOString() : null,
+    suspendedByLogin: row.suspendedByLogin,
+    suspensionReason: row.suspensionReason,
+    catalogGateId: host === null ? null : (catalogByHost.get(host) ?? null),
+  };
+}
+
+export const listSelfConnectionsHandler: CapabilityHandler = async (
+  client,
+  _workspaceId,
+  params,
+) => {
+  const input = params as { connector?: string; workspaceId?: string };
+  const rows = await listSelfConnections(client, input);
+  const catalogByHost = await catalogGateIdsByHost(client);
+  return { result: { items: rows.map((row) => toSelfConnectionWire(row, catalogByHost)) } };
+};
+
+/**
+ * `suspend_self_connection` / `resume_self_connection`: the platform's cut-off for one gate a
+ * workspace connected itself. The row is the whole mechanism — every call path reads it through
+ * `operationPlatformStatus` (enforcement, the agent's tool list, reachability, queued executions),
+ * the same predicate the connector deny list goes through, so nothing else is written here. A
+ * change re-issues the workspace's entry-agent Handles (`revokeEntryHandlesInWorkspace`), as a
+ * deny-list edit does for linked workspaces: the next Turn's tool projection follows at once.
+ * Dispatch writes this call's own platform audit row (params: workspace, Gatekeeper, reason); the
+ * Handle re-issue gets its own row, as `set_connector_mode`'s does.
+ */
+async function setSuspension(
+  client: PoolClient,
+  input: { workspaceId: string; gatekeeperId: string },
+  suspend: { readonly byUserId: string; readonly reason: string | null } | null,
+  actorUserId: string | undefined,
+): Promise<SelfConnectionWire> {
+  const outcome = await setSelfConnectionSuspension(
+    client,
+    input.workspaceId,
+    input.gatekeeperId,
+    suspend,
+  );
+  if (!outcome) {
+    throw new PlatformAdminError(
+      'self_connection_not_found',
+      'no gate that workspace connected itself has that id',
+    );
+  }
+  if (outcome.changed && (await revokeEntryHandlesInWorkspace(client, input.workspaceId))) {
+    await writeAudit(client, {
+      workspaceId: null,
+      actorPrincipalId: null,
+      actorUserId,
+      action: 'self_connection.entry_handles_revoked',
+      resourceType: 'gatekeeper',
+      resourceId: input.gatekeeperId,
+      payload: { workspaceId: input.workspaceId, suspended: suspend !== null },
+    });
+  }
+  const [row] = await listSelfConnections(client, input);
+  if (!row) throw new Error('setSuspension: the self connection vanished inside its transaction');
+  return toSelfConnectionWire(row, await catalogGateIdsByHost(client));
+}
+
+export const suspendSelfConnectionHandler: CapabilityHandler = async (
+  client,
+  _workspaceId,
+  params,
+  ctx,
+) => {
+  const user = ctx?.platformUser;
+  if (!user) throw new Error('suspend_self_connection: invoked outside a platform transaction');
+  const input = params as { workspaceId: string; gatekeeperId: string; reason?: string };
+  const result = await setSuspension(
+    client,
+    input,
+    { byUserId: user.id, reason: input.reason ?? null },
+    user.id,
+  );
+  return { result, resourceType: 'gatekeeper', resourceId: input.gatekeeperId };
+};
+
+export const resumeSelfConnectionHandler: CapabilityHandler = async (
+  client,
+  _workspaceId,
+  params,
+  ctx,
+) => {
+  const user = ctx?.platformUser;
+  if (!user) throw new Error('resume_self_connection: invoked outside a platform transaction');
+  const input = params as { workspaceId: string; gatekeeperId: string };
+  const result = await setSuspension(client, input, null, user.id);
+  return { result, resourceType: 'gatekeeper', resourceId: input.gatekeeperId };
 };
 
 // -------------------------------------------------------------------------------------------

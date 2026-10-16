@@ -31,7 +31,7 @@ import {
 } from '../../governance/gatekeepers/index.js';
 import { quotedName } from '../../governance/redaction/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
-import { operationPlatformStatus, readGateLinkPolicy } from '../gates/index.js';
+import { operationPlatformStatus, readGatekeeperPlatformPolicy } from '../gates/index.js';
 import { resolveGateTarget } from './gate-target.js';
 import { writeObservedFacts } from './observed-facts.js';
 
@@ -414,7 +414,11 @@ export function createGatekeeperActionExecutor(
           // *execution* time too — an ActionRequest approved (or auto-approved) before the
           // administrator disabled its Operation must not run it (review finding).
           const link = record
-            ? await readGateLinkPolicy(client, actionRequest.workspaceId, record.gatekeeperId)
+            ? await readGatekeeperPlatformPolicy(
+                client,
+                actionRequest.workspaceId,
+                record.gatekeeperId,
+              )
             : null;
           return {
             // R-01 / D-01: which credential this gate gets (gate-target.ts).

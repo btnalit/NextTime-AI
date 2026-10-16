@@ -1067,7 +1067,7 @@ const connectionCapabilities = [
       .strict(),
     resultSchema: wire.RefreshOperationGovernanceResultWireSchema,
     description:
-      'S8 W3-K1 (leftover 79, audit CO2): apply the gate’s currently-announced mode/blastRadius/autoApprovable to every selected, already-deployed Operation of this Gatekeeper whose fields disagree with it (in place — no new Operation version). operationNames narrows the selection; omitted refreshes every announced Operation. The announced manifest is the linked platform gate instance’s manifest in effect; legacy 214: for a gate the workspace connected itself it is the gate’s own describe_operations, read again now (preview_gatekeeper_resync), an Operation it describes that this Gatekeeper never had is imported as an import-origin draft (listed in revisionDrafts, audited with reason new_on_gate), and a governance change that loosens anything (direction loosened or mixed) is never written in place — the published Operation keeps its fields and an import-origin revision draft carrying the gate’s entry is opened instead (revisionDrafts, audited with reason governance_loosened or definition_changed plus governanceDirection), taking effect only when an owner publishes it; a tightening is still applied in place. Refuses 409 no_announced_manifest when this Gatekeeper is at a platform gate instance’s address but was never enabled from the catalog, and 409 manifest_changed when manifestDigest is not the digest of the manifest in effect or of the gate’s description (R-18: only the previewed values are ever applied). One AuditRecord per refreshed Operation with before/after and a loosened/tightened/mixed classification. Legacy K: a selected published Operation whose announced definition changed (the gate refuses calls under the deployed one) gets an import-origin revision draft at the next version carrying the announced definition, listed in revisionDrafts and audited as operation.revision_drafted; an owner publishes it with publish_operation / publish_manifest. A pending import-origin draft (an earlier revision, or one a bulk publish held back for a gate-owned param, legacy J) is rewritten to the announced entry at its own version when it differs, and listed the same way; an agent’s or person’s proposal is never overwritten.',
+      'S8 W3-K1 (leftover 79, audit CO2): apply the gate’s currently-announced mode/blastRadius/autoApprovable to every selected, already-deployed Operation of this Gatekeeper whose fields disagree with it (in place — no new Operation version). operationNames narrows the selection; omitted refreshes every announced Operation. The announced manifest is the linked platform gate instance’s manifest in effect, or — legacy 214, for a gate the workspace connected itself — the gate’s own describe_operations, read again now (preview_gatekeeper_resync). Either way an announced Operation this Gatekeeper never had is imported as an import-origin draft, never published here (listed in revisionDrafts, audited with reason new_in_adopted_manifest or new_on_gate); one the gate itself no longer runs is not. For a self-connected gate a governance change that loosens anything (direction loosened or mixed) is never written in place — the published Operation keeps its fields and an import-origin revision draft carrying the gate’s entry is opened instead (revisionDrafts, audited with reason governance_loosened or definition_changed plus governanceDirection), taking effect only when an owner publishes it; a tightening is still applied in place. Refuses 409 no_announced_manifest when this Gatekeeper is at a platform gate instance’s address but was never enabled from the catalog, and 409 manifest_changed when manifestDigest is not the digest of the manifest in effect or of the gate’s description (R-18: only the previewed values are ever applied). One AuditRecord per refreshed Operation with before/after and a loosened/tightened/mixed classification. Legacy K: a selected published Operation whose announced definition changed (the gate refuses calls under the deployed one) gets an import-origin revision draft at the next version carrying the announced definition, listed in revisionDrafts and audited as operation.revision_drafted; an owner publishes it with publish_operation / publish_manifest. A pending import-origin draft (an earlier revision, or one a bulk publish held back for a gate-owned param, legacy J) is rewritten to the announced entry at its own version when it differs, and listed the same way; an agent’s or person’s proposal is never overwritten.',
   },
   {
     // Legacy 214: the read half of refresh_operation_governance for a gate the workspace connected
@@ -3561,6 +3561,55 @@ const platformCapabilities = [
     description:
       'Revoke one external runtime’s session — a service Principal’s, or a member’s MCP session — and every Handle issued under it, immediately.',
   },
+  // P0b (S10 W2; STATUS leftover 118 remainder ①): the gates workspaces connected themselves, and
+  // the platform's per-connection cut-off for them. The catalog's cut-off stays the connector deny
+  // list (`set_connector_mode`) — a self connection is not a gate instance, so it gets its own.
+  {
+    name: 'list_self_connections',
+    group: 'platform',
+    mode: 'observe',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z
+      .object({
+        connector: z.string().min(1).max(64).optional(),
+        workspaceId: z.string().uuid().optional(),
+      })
+      .strict(),
+    resultSchema: listEnvelope(wire.SelfConnectionWireSchema),
+    description:
+      'Every gate a workspace connected itself (create_connection), newest first: workspace, connector, target and endpoint, who connected it and when, and whether the platform suspended it. catalogGateId flags one whose address is a platform gate instance’s.',
+  },
+  {
+    name: 'suspend_self_connection',
+    group: 'platform',
+    mode: 'write',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z
+      .object({
+        workspaceId: z.string().uuid(),
+        gatekeeperId: z.string().uuid(),
+        reason: z.string().trim().min(1).max(500).optional(),
+      })
+      .strict(),
+    resultSchema: wire.SelfConnectionWireSchema,
+    description:
+      'Cut off a gate a workspace connected itself: from the next call on, every Operation of it is refused as disabled by the platform — request_action, observe, queued executions and the agent’s tool list alike — and the workspace’s entry-agent Handles are re-issued. The connection, its Operations and its history stay; resume_self_connection lifts it. The workspace cannot lift it, delete it or reconnect the same address meanwhile. Suspending a suspended one changes nothing.',
+  },
+  {
+    name: 'resume_self_connection',
+    group: 'platform',
+    mode: 'write',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: z
+      .object({ workspaceId: z.string().uuid(), gatekeeperId: z.string().uuid() })
+      .strict(),
+    resultSchema: wire.SelfConnectionWireSchema,
+    description:
+      'Lift the platform’s suspension of a self-connected gate: its published Operations run again from the next call, and the workspace’s entry-agent Handles are re-issued. Resuming one that is not suspended changes nothing.',
+  },
   // S6-B (docs/console-completion-plan.md §5.4 / §6; docs/platform-admin-design.md §6.2): the
   // console's only kernel-side piece of provider management. The provider records live in
   // llm-proxy (web → caddy `/api/llm-admin/*` → llm-proxy admin endpoints); the kernel signs a
@@ -3913,6 +3962,9 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set<CapabilityName>
     'test_gate_instance',
     'list_external_runtimes',
     'revoke_external_runtime',
+    'list_self_connections',
+    'suspend_self_connection',
+    'resume_self_connection',
     'list_available_gate_instances',
     'enable_gate_instance',
     'preview_gate_instance_enable',

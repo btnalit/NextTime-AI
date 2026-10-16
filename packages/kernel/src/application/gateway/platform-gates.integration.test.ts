@@ -22,6 +22,7 @@ import type {
   PreviewGateInstanceEnableResultWire,
   RefreshOperationGovernanceResultWire,
   Role,
+  SelfConnectionWire,
 } from '@nexttime/shared';
 import { internalAuthorizationHeader } from '@nexttime/shared';
 import type { FastifyInstance } from 'fastify';
@@ -37,6 +38,7 @@ import {
   createGateConnectionSecrets,
 } from '../../adapters/gatekeeper-client/index.js';
 import type { GatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
+import { createOutboundTargetGuard } from '../../adapters/outbound-target/index.js';
 import { ApprovalDrainer, getActionRequest } from '../../governance/approval/index.js';
 import {
   type CapabilityScope,
@@ -60,7 +62,12 @@ import { createServer } from '../../index.js';
 import { deriveInternalCredential } from '../../interfaces/internal-auth/index.js';
 import { queryAudit } from '../../substrate/audit/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
-import { upsertAnnouncement } from '../gates/index.js';
+import {
+  GatekeeperLandingRefusedError,
+  findSelfConnection,
+  landGatekeeper,
+  upsertAnnouncement,
+} from '../gates/index.js';
 import { createPlatformAdmin } from '../identity/index.js';
 import type { UserRow } from '../identity/index.js';
 import {
@@ -1643,6 +1650,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       let cMemberId: string;
       let cGatekeeperId: string;
       let cGrantId: string;
+      let cEndpoint: string;
 
       function humanCallerFor(
         inWorkspaceId: string,
@@ -1703,6 +1711,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         await fakeGateApp.listen({ port: 0, host: '127.0.0.1' });
         const address = fakeGateApp.server.address() as AddressInfo;
         const endpoint = `http://127.0.0.1:${address.port}`;
+        cEndpoint = endpoint;
 
         // Announce + enable directly through `application/gates/store.ts` — same effect as a real
         // packaged gate's heartbeat plus an administrator's `update_gate_instance`, without needing the
@@ -2248,6 +2257,323 @@ describe.runIf(DATABASE_URL !== undefined)(
           ).rejects.toThrow(/excluded_by_profile/);
         });
       });
+
+      // -------------------------------------------------------------------------------------
+      // P0b (S10 W2; STATUS leftover 118 remainder ①): a gate a workspace connected itself has an
+      // origin record the platform reads — and suspends. The suspension goes through the same
+      // `operationPlatformStatus` predicate as the connector deny list above, so reachability and
+      // enforcement agree on it the same way.
+      // -------------------------------------------------------------------------------------
+      describe('P0b: the platform suspends a gate a workspace connected itself', () => {
+        const SELF_OP: Operation = {
+          ...OP_A,
+          name: 'selfconn.op',
+          binding: { kind: 'http', method: 'GET', path: '/self' },
+        };
+        const selfSecrets = createGateConnectionSecrets(CONSISTENCY_TOKEN);
+        let selfGateApp: FastifyInstance;
+        let selfGatekeeperId: string;
+        let selfEndpoint: string;
+
+        /** The landing exactly as `create_connection` runs it, minus the network fetch. */
+        async function landSelf(
+          inWorkspaceId: string,
+          ownerId: string,
+          endpoint: string,
+          salt: string,
+        ): Promise<string> {
+          const landed = await withWorkspace(
+            pool,
+            { workspaceId: inWorkspaceId, principalId: ownerId },
+            (client) =>
+              landGatekeeper(
+                client,
+                inWorkspaceId,
+                { id: ownerId, kind: 'human' },
+                {
+                  kind: 'self',
+                  connector: 'http',
+                  target: 'self-connected-system',
+                  endpoint,
+                  connectionSecretSalt: salt,
+                  operations: [SELF_OP],
+                },
+              ),
+          );
+          return landed.gatekeeperId;
+        }
+
+        function observeSelf(): Promise<unknown> {
+          return dispatchCapability(
+            { pool },
+            humanCallerFor(cWorkspaceId, cMemberId, 'member'),
+            'observe_operation',
+            { gatekeeperId: selfGatekeeperId, operation: SELF_OP.name, params: {} },
+          );
+        }
+
+        beforeAll(async () => {
+          const { secret, salt } = selfSecrets.mint(cWorkspaceId);
+          const gate = new GatekeeperBase({
+            manifest: [SELF_OP],
+            transport: new ConsistencyTransport(),
+            credentialResolver: { resolve: async () => ({}) },
+            idempotencyStore: new InMemoryIdempotencyStore(),
+          });
+          selfGateApp = createGatekeeperServer({ gate, token: secret });
+          await selfGateApp.listen({ port: 0, host: '127.0.0.1' });
+          selfEndpoint = `http://127.0.0.1:${(selfGateApp.server.address() as AddressInfo).port}`;
+          selfGatekeeperId = await landSelf(cWorkspaceId, cOwnerId, selfEndpoint, salt);
+          // A self-connected gate is an owner-supplied address: the outbound guard (R-27) applies
+          // to it, unlike to the catalog gate above — this loopback one is allowed explicitly.
+          const gatekeeperClient = new HttpGatekeeperClient({
+            token: CONSISTENCY_TOKEN,
+            outboundTargetGuard: createOutboundTargetGuard({
+              policy: { platformSubnets: [], allowHosts: ['127.0.0.1'] },
+            }),
+          });
+          const adminWithTransaction = createAdminWithTransaction(pool);
+          setRequestActionDeps({
+            gatekeeperClient,
+            drainer: new ApprovalDrainer({
+              executor: createGatekeeperActionExecutor({
+                gatekeeperClient,
+                withTransaction: adminWithTransaction,
+              }),
+              withTransaction: adminWithTransaction,
+            }),
+          });
+          await withWorkspace(pool, { workspaceId: cWorkspaceId, principalId: cOwnerId }, (c) =>
+            publishOperation(c, cWorkspaceId, {
+              gatekeeperId: selfGatekeeperId,
+              name: SELF_OP.name,
+            }),
+          );
+        });
+
+        afterAll(async () => {
+          await selfGateApp?.close();
+        });
+
+        it('the platform lists it with its origin, and its connector counts it', async () => {
+          const listed = await callAsAdmin<ListEnvelope<SelfConnectionWire>>(
+            'list_self_connections',
+            { workspaceId: cWorkspaceId },
+          );
+          expect(listed.items).toEqual([
+            {
+              workspaceId: cWorkspaceId,
+              workspaceName: 'consistency-fixture-workspace',
+              gatekeeperId: selfGatekeeperId,
+              connector: 'http',
+              target: 'self-connected-system',
+              endpoint: selfEndpoint,
+              connectedByName: 'Consistency Owner',
+              connectedAt: expect.any(String),
+              suspendedAt: null,
+              suspendedByLogin: null,
+              suspensionReason: null,
+              catalogGateId: null,
+            },
+          ]);
+          const connectors = await callAsAdmin<ListEnvelope<ConnectorWire>>('list_connectors');
+          const http = connectors.items.find((c) => c.name === 'http');
+          expect(http?.selfConnectionCount).toBeGreaterThanOrEqual(1);
+          expect(http?.suspendedSelfConnectionCount).toBe(0);
+        });
+
+        it('suspended: every path refuses it as disabled by the platform, the workspace cannot lift it, and resuming restores it', async () => {
+          await expect(observeSelf()).resolves.toBeDefined();
+          const before = await reachForMember();
+          expect(operationReachability(before, selfGatekeeperId, 'observe', SELF_OP.name)).toEqual({
+            status: 'direct',
+          });
+
+          const suspended = await callAsAdmin<SelfConnectionWire>('suspend_self_connection', {
+            workspaceId: cWorkspaceId,
+            gatekeeperId: selfGatekeeperId,
+            reason: 'under review',
+          });
+          try {
+            expect(suspended).toMatchObject({
+              gatekeeperId: selfGatekeeperId,
+              suspendedAt: expect.any(String),
+              suspendedByLogin: admin.login,
+              suspensionReason: 'under review',
+            });
+
+            // Enforcement and reachability: the shared predicate, so they agree.
+            await expect(observeSelf()).rejects.toMatchObject({
+              message: expect.stringMatching(/operation_disabled: .*connection to it is suspended/),
+            });
+            const reach = await reachForMember();
+            const gate = reach.gates.find((g) => g.gateId === selfGatekeeperId);
+            expect(gate?.status).toBe('unreachable');
+            expect(gate?.reason).toBe('disabled_by_platform');
+            const connectors = await callAsAdmin<ListEnvelope<ConnectorWire>>('list_connectors');
+            expect(
+              connectors.items.find((c) => c.name === 'http')?.suspendedSelfConnectionCount,
+            ).toBe(1);
+
+            // Nothing re-syncs it, and the kernel does not contact it on the workspace's behalf.
+            const resync = await dispatchCapability(
+              { pool },
+              humanCallerFor(cWorkspaceId, cOwnerId, 'owner'),
+              'preview_gatekeeper_resync',
+              { gatekeeperId: selfGatekeeperId },
+            ).catch((err: unknown) => err);
+            expect(resync).toBeInstanceOf(GatekeeperLandingRefusedError);
+            expect(resync).toMatchObject({ code: 'self_connection_suspended' });
+
+            // RLS (core 0045): a workspace transaction can neither lift nor delete it.
+            const lifted = await withWorkspace(
+              pool,
+              { workspaceId: cWorkspaceId, principalId: cOwnerId },
+              async (c) => {
+                const update = await c.query(
+                  `update workspace_self_connections
+                      set suspended_at = null, suspended_by_user_id = null, suspension_reason = null
+                    where workspace_id = $1 and gatekeeper_object_id = $2`,
+                  [cWorkspaceId, selfGatekeeperId],
+                );
+                const removed = await c.query(
+                  'delete from workspace_self_connections where workspace_id = $1 and gatekeeper_object_id = $2',
+                  [cWorkspaceId, selfGatekeeperId],
+                );
+                return {
+                  updated: update.rowCount,
+                  deleted: removed.rowCount,
+                  row: await findSelfConnection(c, cWorkspaceId, selfGatekeeperId),
+                };
+              },
+            );
+            expect(lifted.updated).toBe(0);
+            expect(lifted.deleted).toBe(0);
+            expect(lifted.row?.suspendedAt).not.toBeNull();
+
+            // Suspending again changes nothing.
+            const again = await callAsAdmin<SelfConnectionWire>('suspend_self_connection', {
+              workspaceId: cWorkspaceId,
+              gatekeeperId: selfGatekeeperId,
+              reason: 'another reason',
+            });
+            expect(again.suspendedAt).toBe(suspended.suspendedAt);
+            expect(again.suspensionReason).toBe('under review');
+
+            // The platform's own audit row carries what it was told.
+            const audited = await withAdminClient(pool, (c) =>
+              c.query<{ payload: { params?: Record<string, unknown> } }>(
+                `select payload from audit_records
+                  where action = 'suspend_self_connection' and workspace_id is null
+                    and resource_id = $1 order by created_at`,
+                [selfGatekeeperId],
+              ),
+            );
+            expect(audited.rows[0]?.payload.params).toEqual({
+              workspaceId: cWorkspaceId,
+              gatekeeperId: selfGatekeeperId,
+              reason: 'under review',
+            });
+          } finally {
+            const resumed = await callAsAdmin<SelfConnectionWire>('resume_self_connection', {
+              workspaceId: cWorkspaceId,
+              gatekeeperId: selfGatekeeperId,
+            });
+            expect(resumed).toMatchObject({
+              suspendedAt: null,
+              suspendedByLogin: null,
+              suspensionReason: null,
+            });
+          }
+          await expect(observeSelf()).resolves.toBeDefined();
+          const after = await reachForMember();
+          expect(operationReachability(after, selfGatekeeperId, 'observe', SELF_OP.name)).toEqual({
+            status: 'direct',
+          });
+        });
+
+        it('a Gatekeeper with no self connection (a catalog link, or none at all) is self_connection_not_found', async () => {
+          for (const gatekeeperId of [cGatekeeperId, randomUUID()]) {
+            await expectPlatformError(
+              () =>
+                callAsAdmin('suspend_self_connection', { workspaceId: cWorkspaceId, gatekeeperId }),
+              'self_connection_not_found',
+            );
+          }
+        });
+
+        it("one at a platform instance's address (connected before that was refused): flagged, never linked while suspended, converted to a catalog link once resumed", async () => {
+          const other = await createWorkspaceWithOwner(pool, {
+            name: 'p0b-legacy-self-connection',
+            owner: { userId: admin.id, displayName: 'Legacy Owner' },
+            ontologyDir: ONTOLOGY_DIR,
+          });
+          const ownerCaller = humanCallerFor(other.workspaceId, other.ownerPrincipalId, 'owner');
+          // `create_connection` refuses this address now (leftover 36); the landing itself does
+          // not, which is how a Gatekeeper from before that check looks after core 0045's backfill.
+          const legacyId = await landSelf(
+            other.workspaceId,
+            other.ownerPrincipalId,
+            cEndpoint,
+            selfSecrets.mint(other.workspaceId).salt,
+          );
+          const listed = await callAsAdmin<ListEnvelope<SelfConnectionWire>>(
+            'list_self_connections',
+            { workspaceId: other.workspaceId },
+          );
+          expect(listed.items).toEqual([
+            expect.objectContaining({
+              gatekeeperId: legacyId,
+              catalogGateId: CONSISTENCY_GATE_ID,
+            }),
+          ]);
+
+          await callAsAdmin('suspend_self_connection', {
+            workspaceId: other.workspaceId,
+            gatekeeperId: legacyId,
+          });
+          for (const capability of ['preview_gate_instance_enable', 'enable_gate_instance']) {
+            const refused = await dispatchCapability({ pool }, ownerCaller, capability, {
+              gateId: CONSISTENCY_GATE_ID,
+            }).catch((err: unknown) => err);
+            expect(refused).toBeInstanceOf(GatekeeperLandingRefusedError);
+            expect(refused).toMatchObject({
+              code: 'self_connection_suspended',
+              gatekeeperId: legacyId,
+            });
+          }
+
+          await callAsAdmin('resume_self_connection', {
+            workspaceId: other.workspaceId,
+            gatekeeperId: legacyId,
+          });
+          const enabled = (await dispatchCapability({ pool }, ownerCaller, 'enable_gate_instance', {
+            gateId: CONSISTENCY_GATE_ID,
+          })) as EnableGateInstanceResultWire;
+          expect(enabled).toMatchObject({ gatekeeperId: legacyId, linkedExisting: true });
+          const afterEnable = await callAsAdmin<ListEnvelope<SelfConnectionWire>>(
+            'list_self_connections',
+            { workspaceId: other.workspaceId },
+          );
+          expect(afterEnable.items).toEqual([]);
+          const converted = await withWorkspace(
+            pool,
+            { workspaceId: other.workspaceId, principalId: other.ownerPrincipalId },
+            (c) =>
+              queryAudit(c, other.workspaceId, { action: 'gatekeeper.self_connection_linked' }),
+          );
+          expect(converted).toEqual([
+            expect.objectContaining({
+              resourceId: legacyId,
+              payload: expect.objectContaining({
+                gateId: CONSISTENCY_GATE_ID,
+                connector: CONSISTENCY_CONNECTOR,
+                selfConnection: expect.objectContaining({ connector: 'http', endpoint: cEndpoint }),
+              }),
+            }),
+          ]);
+        });
+      });
     });
 
     // -----------------------------------------------------------------------------------------
@@ -2724,6 +3050,63 @@ describe.runIf(DATABASE_URL !== undefined)(
         await callAsAdmin('confirm_gate_manifest', { gateId: PENDING_GATE, digest: held.digest });
         expect(await mismatchOf()).toEqual([]);
         expect((await instance()).operations.map((op) => op.name)).not.toContain(EXECUTE_OP.name);
+      });
+
+      it('P0b (#612 P2): the align imports a name the adopted manifest gained as a draft — never published here, audited new_in_adopted_manifest', async () => {
+        const available = await callAsOwner<ListEnvelope<AvailableGateInstanceWire>>(
+          'list_available_gate_instances',
+        );
+        const gatekeeperId = available.items.find(
+          (item) => item.gateId === PENDING_GATE,
+        )?.gatekeeperId;
+        if (!gatekeeperId) throw new Error('expected the pending fixture to be enabled here');
+        // Adopted by the cases above after this workspace enabled the instance.
+        expect((await instance()).operations.map((op) => op.name)).toContain(ADDED_OP.name);
+        const preview = await callAsOwner<PreviewGateInstanceEnableResultWire>(
+          'preview_gate_instance_enable',
+          { gateId: PENDING_GATE },
+        );
+        const fresh = preview.operationsToImport.find((op) => op.name === ADDED_OP.name);
+        expect(fresh).toBeDefined();
+        expect(fresh?.pendingDraft).toBeUndefined();
+
+        const aligned = await callAsOwner<RefreshOperationGovernanceResultWire>(
+          'refresh_operation_governance',
+          {
+            gatekeeperId,
+            operationNames: [ADDED_OP.name],
+            manifestDigest: preview.manifestDigest,
+          },
+        );
+        expect(aligned.revisionDrafts).toEqual([{ name: ADDED_OP.name, version: 1 }]);
+        const imported = await withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerPrincipalId },
+          (client) => getOperation(client, workspaceId, gatekeeperId, ADDED_OP.name),
+        );
+        expect(imported).toMatchObject({ status: 'draft', origin: 'import' });
+        const audited = await withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerPrincipalId },
+          (client) => queryAudit(client, workspaceId, { action: 'operation.revision_drafted' }),
+        );
+        expect(
+          audited
+            .map((row) => row.payload as { name?: string; reason?: string })
+            .filter((payload) => payload.name === ADDED_OP.name),
+        ).toEqual([expect.objectContaining({ reason: 'new_in_adopted_manifest' })]);
+
+        // The draft now stands for it: aligning again writes nothing more.
+        const again = await callAsOwner<RefreshOperationGovernanceResultWire>(
+          'refresh_operation_governance',
+          {
+            gatekeeperId,
+            operationNames: [ADDED_OP.name],
+            manifestDigest: preview.manifestDigest,
+          },
+        );
+        expect(again.revisionDrafts).toEqual([]);
+        expect(again.unchanged).toEqual([ADDED_OP.name]);
       });
     });
   },

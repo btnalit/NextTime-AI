@@ -64,9 +64,10 @@ export async function registerGatekeeper(
   workspaceId: string,
   input: RegisterGatekeeperInput,
 ): Promise<RegisterGatekeeperResult> {
-  // Legacy 186, defense in depth: every caller (`create_connection`, `enable_gate_instance`, the
-  // operator's `register-gatekeeper` CLI) checks first; whatever the caller, no Gatekeeper or
-  // ConnectedSystem is written with a credential in its address.
+  // Legacy 186, defense in depth: the one production caller — the landing
+  // (application/gates/landing.ts, behind `create_connection` and `enable_gate_instance`) — checks
+  // first; whatever the caller, no Gatekeeper or ConnectedSystem is written with a credential in its
+  // address.
   assertConnectionParamsCarryNoCredentials('register_gatekeeper', {
     target: input.target,
     endpoint: input.endpoint,

@@ -19,7 +19,7 @@ import {
 import type { FindMeansInput, GraphObject } from '../../substrate/graph/index.js';
 import { enqueue } from '../../substrate/outbox/index.js';
 import type { ObserveExclusions } from '../gates/index.js';
-import { observeRefusal, readGateLinkPolicy } from '../gates/index.js';
+import { observeRefusal, readGatekeeperPlatformPolicy } from '../gates/index.js';
 import { getProcedure, getWorkerDefinition } from '../worker/index.js';
 import {
   type ParentAuthority,
@@ -771,7 +771,11 @@ async function stepUsableByCaller(
             gateEnabled: (await getGatekeeper(client, workspaceId, step.gatekeeperId)) !== null,
             operationName: step.operationName,
             publishedMode: operation.operation.mode,
-            gateLink: await readGateLinkPolicy(client, workspaceId, step.gatekeeperId),
+            platformPolicy: await readGatekeeperPlatformPolicy(
+              client,
+              workspaceId,
+              step.gatekeeperId,
+            ),
           }) === undefined
         );
       }

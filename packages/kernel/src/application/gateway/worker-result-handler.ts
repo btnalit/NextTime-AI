@@ -23,7 +23,7 @@ import {
   observeRefusal,
   operationPlatformStatus,
   readExecuteAccess,
-  readGateLinkPoliciesForWorkspace,
+  readGatekeeperPlatformPolicies,
   readObserveExclusions,
 } from '../gates/index.js';
 import { ForbiddenError } from './authorize.js';
@@ -393,7 +393,7 @@ export const listAllowedOperationsHandler: CapabilityHandler = async (
     workspaceId,
     gates.map((gate) => gate.gatekeeperId),
   );
-  const gateLinks = await readGateLinkPoliciesForWorkspace(client, workspaceId);
+  const platformPolicies = await readGatekeeperPlatformPolicies(client, workspaceId);
   const exclusions = await readObserveExclusions(client, workspaceId, principalId);
 
   // One `getGatekeeper` per gate (not per Operation): its display name, and — the same lookup
@@ -406,18 +406,18 @@ export const listAllowedOperationsHandler: CapabilityHandler = async (
       gatekeeper = await getGatekeeper(client, workspaceId, record.gatekeeperId);
       gateRecords.set(record.gatekeeperId, gatekeeper);
     }
-    const gateLink = gateLinks.get(record.gatekeeperId);
+    const platformPolicy = platformPolicies.get(record.gatekeeperId);
     const mode = (record.operation as { mode?: string }).mode;
     const listed =
       mode === 'execute'
         ? executeGatekeepers.has(record.gatekeeperId) &&
-          !operationPlatformStatus(gateLink, record.name).disabled
+          !operationPlatformStatus(platformPolicy, record.name).disabled
         : observeRefusal(exclusions, {
             gatekeeperId: record.gatekeeperId,
             gateEnabled: gatekeeper !== null,
             operationName: record.name,
             publishedMode: mode,
-            gateLink,
+            platformPolicy,
           }) === undefined;
     if (!listed) continue;
     operations.push(toWireOperation(record, gatekeeper?.name ?? record.gatekeeperId));

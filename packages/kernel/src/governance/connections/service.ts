@@ -1,14 +1,9 @@
-import type { Operation, PrincipalKind } from '@nexttime/shared';
+import type { PrincipalKind } from '@nexttime/shared';
 import { CONNECTION_REQUEST_TRANSITIONS, transition } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import type { CapabilityGrantRow } from '../../governance/capability/index.js';
 import { grantCapability } from '../../governance/capability/index.js';
-import {
-  GatekeeperNotFoundError,
-  getGatekeeper,
-  importManifest,
-  registerGatekeeper,
-} from '../../governance/gatekeepers/index.js';
+import { GatekeeperNotFoundError, getGatekeeper } from '../../governance/gatekeepers/index.js';
 import type { GatekeeperRecord } from '../../governance/gatekeepers/index.js';
 import { GATEKEEPER_RESOURCE_SCOPE_KEY } from '../../governance/policy/index.js';
 import { redactedForAudit } from '../../governance/redaction/index.js';
@@ -28,32 +23,25 @@ import {
  * `create_connection` → registered Gatekeeper → `connect_gatekeeper` Grant (design doc §5.1.4
  * Connection, §7.5 连接流程, §9.3; docs/development-tasks.md S2.13).
  *
- * **`complete_connection` naming crosswalk** (see final report / PR body "已知偏离"): the task
- * brief's Deliverable 2 names the owner-facing completion capability `complete_connection`, e.g.
- * `complete_connection {connectionRequestId, endpoint, credential?, credentialKind,
- * manifestSource?}`. By the time this task started, `packages/shared/src/capabilities.ts` already
- * registered `create_connection` for exactly this step (design doc §9.3's own name, added before
- * S2.13 began) — this module extends *that* capability's params additively (every new field
- * optional, `credentials` loosened from required to optional) rather than registering a second,
- * competing capability name for the same action. `completeConnection` below is this module's own
- * function name for the service half of that capability — the task brief's `complete_connection`
- * and this repo's `create_connection`/`completeConnection` name the same thing.
+ * **`complete_connection` naming crosswalk**: the S2.13 brief names the owner-facing completion
+ * capability `complete_connection`; `packages/shared/src/capabilities.ts` already registered
+ * `create_connection` for exactly this step (design doc §9.3's own name), so that capability's
+ * params were extended additively instead of registering a competing name. The brief's
+ * `complete_connection` and this repo's `create_connection` name the same thing.
+ *
+ * **What this module owns of a connection** (P0b): the `request_connection` card and its
+ * lifecycle (`claimConnectionRequest` → `markConnectionRequestCompleted`, or
+ * `cancelConnectionRequest`) and the `connect_gatekeeper` Grant. Landing the Gatekeeper itself —
+ * registering it, importing its manifest, recording its origin — is the one landing path every way
+ * into a workspace goes through (`application/gates/landing.ts`), which calls the two request
+ * functions around its own writes.
  *
  * **Layering — this module does no network I/O** (`.dependency-cruiser.cjs`
- * `kernel-adapters-imported-only-by-application-or-interfaces`: substrate/governance may not
- * import `adapters`, and `fetch`/`GatekeeperClient ` calls belong there in spirit even where not
- * literally an adapter import). `completeConnection` below takes an already-resolved
- * `operations: readonly Operation[]` — the manifest fetch (an OpenAPI document, an MCP
- * `tools/list` call, or the gate's own `describe_operations`) and the "send the credential to the
- * gate" step both happen in `application/gateway/connection-handlers.ts`, which is allowed to
- * import `adapters/gatekeeper-client`. This mirrors `governance/gatekeepers/registry.ts`'s own
- * module boundary (it never touches a gate over the network either) and
- * `cli/bootstrap.ts`'s `registerGatekeeperFromCli`, which already does the "fetch, then hand pure
- * data to a DB-only service function" split at the CLI layer for the same reason.
+ * `kernel-adapters-imported-only-by-application-or-interfaces`): the manifest fetch and the
+ * credential POST to the gate happen in `application/gateway/connection-handlers.ts`.
  *
- * **Sibling-module calls, not internals**: `registerGatekeeper`/`importManifest`
- * (`governance/gatekeepers`) and `grantCapability` (`governance/capability`) are called through
- * their published service interfaces — the same pattern `governance/approval` uses for
+ * **Sibling-module calls, not internals**: `grantCapability` (`governance/capability`) is called
+ * through its published service interface — the same pattern `governance/approval` uses for
  * `governance/policy`/`governance/capability` (§7.10 module contract: modules "互相调用公开接口，不
  * 互相读表").
  *
@@ -134,133 +122,66 @@ export async function listConnectionRequests(
 }
 
 // -------------------------------------------------------------------------------------------
-// completeConnection — `create_connection` (this repo's `complete_connection`, see module doc
-// comment). Pure DB: registers the Gatekeeper, imports the already-resolved manifest as drafts
-// (I17), resolves/transitions the ConnectionRequest (if one was given), and emits
-// `ConnectionCreated`. The credential POST to the gate itself is the caller's job, and must run
-// *after* this returns (see this function's own doc comment below for why).
+// The request half of `create_connection` (this repo's `complete_connection`, see module doc
+// comment). Registering the Gatekeeper, importing its manifest and recording its origin is the one
+// landing path (`application/gates/landing.ts`, P0b), which calls these two around its writes:
+// `claimConnectionRequest` before anything is written, `markConnectionRequestCompleted` after the
+// Gatekeeper exists — same transaction.
 // -------------------------------------------------------------------------------------------
 
-export interface CompleteConnectionInput {
-  /** The `request_connection` card being resolved, when there is one (owner may also call this
-   *  directly with no prior request — S2.4's own precedent for owner-channel testing). */
-  readonly connectionRequestId?: string;
-  readonly kind: ConnectionRequestKind;
-  readonly target: string;
-  readonly endpoint: string;
-  /** R-01 / D-01: the salt of the connection secret the owner gave this gate (verified by the
-   *  caller) — stored on the Gatekeeper Object so the kernel can re-derive the secret per call. */
-  readonly connectionSecretSalt: string;
-  /** Already resolved by the caller (OpenAPI import, MCP `tools/list`, or the gate's own
-   *  `describe_operations` — application/gateway/connection-handlers.ts). Always imported as
-   *  drafts regardless of what the transport suggested (I17) — same contract as
-   *  `governance/gatekeepers`'s own `importManifest`. */
-  readonly operations: readonly Operation[];
-  readonly activityId: string;
-  readonly completedBy: { readonly id: string; readonly kind: PrincipalKind };
-}
-
-export interface CompleteConnectionResult {
-  readonly gatekeeperId: string;
-  readonly importedOperationNames: readonly string[];
-  /** Manifest entries `importManifest` refused to write because a `published`/`deprecated`
-   *  Operation already holds that name (always empty for the freshly registered Gatekeeper this
-   *  function creates — surfaced so the caller sees it if that ever changes). */
-  readonly skippedOperationNames: readonly string[];
-  readonly connectionRequest: ConnectionRequestRow | null;
-}
-
 /**
- * Registers a Gatekeeper instance (+ its `connects_to` system Object, `governance/gatekeepers`'s
- * own placeholder-`ConnectedSystem` path when no richer system Object exists yet — S2.4's own
- * documented, expected-to-be-superseded-by-S2.13 branch, exercised here), imports `input.operations`
- * as draft Operations, resolves the ConnectionRequest to `completed` (I6: via
- * `CONNECTION_REQUEST_TRANSITIONS`, throws `IllegalTransition` if it is not currently
- * `requested`), and emits `ConnectionCreated`.
- *
- * **Never sends the credential** — that is the caller's job, and must happen *after* this
- * function returns, still inside the same DB transaction/handler call
- * (`application/gateway/connection-handlers.ts`'s own doc comment has the full ordering
- * argument): if this function's writes all commit but the credential POST that follows fails, the
- * whole transaction rolls back — no Gatekeeper is left registered with no working credential, and
- * no ConnectionRequest is left `completed` with nothing behind it. Reversing the order (POST
- * first) would instead risk an orphaned credential sitting in a gate the kernel has no record of,
- * with no transactional way to undo an already-sent HTTP call.
+ * Locks the `request_connection` card being resolved and checks it can still be completed (I6:
+ * via `CONNECTION_REQUEST_TRANSITIONS`, throws `IllegalTransition` unless it is `requested`).
+ * `for update`: two owners completing the same card concurrently must not both pass the check and
+ * each land a Gatekeeper — the second blocks here until the first commits, then reads `completed`
+ * and fails I6 (same row-lock discipline as governance/approval's `decide`). Runs before any write,
+ * so a stale or replayed call never lands a second Gatekeeper.
  */
-export async function completeConnection(
+export async function claimConnectionRequest(
   client: PoolClient,
   workspaceId: string,
-  input: CompleteConnectionInput,
-): Promise<CompleteConnectionResult> {
-  let connectionRequest: ConnectionRequestRow | null = null;
-  if (input.connectionRequestId) {
-    // `for update`: two owners completing the same card concurrently must not both pass the
-    // transition check below and each register a Gatekeeper — the second blocks here until the
-    // first commits, then reads `completed` and fails I6 (same row-lock discipline as
-    // governance/approval's `decide`).
-    const locked = await client.query(
-      `select ${CONNECTION_REQUEST_ROW_COLUMNS} from connection_requests
-       where workspace_id = $1 and id = $2
-       for update`,
-      [workspaceId, input.connectionRequestId],
-    );
-    const existing = locked.rows[0] ? mapConnectionRequestRow(locked.rows[0]) : null;
-    if (!existing) {
-      throw new ConnectionRequestNotFoundError(workspaceId, input.connectionRequestId);
-    }
-    // I6: throws IllegalTransition if `existing.status` is not `requested` — a completed or
-    // cancelled request can never be completed a second time, and this check runs *before* any
-    // write below, so a stale/replayed call never double-registers a Gatekeeper.
-    transition(CONNECTION_REQUEST_TRANSITIONS, existing.status, 'complete');
-    connectionRequest = existing;
+  connectionRequestId: string,
+): Promise<ConnectionRequestRow> {
+  const locked = await client.query(
+    `select ${CONNECTION_REQUEST_ROW_COLUMNS} from connection_requests
+     where workspace_id = $1 and id = $2
+     for update`,
+    [workspaceId, connectionRequestId],
+  );
+  const existing = locked.rows[0] ? mapConnectionRequestRow(locked.rows[0]) : null;
+  if (!existing) {
+    throw new ConnectionRequestNotFoundError(workspaceId, connectionRequestId);
   }
+  transition(CONNECTION_REQUEST_TRANSITIONS, existing.status, 'complete');
+  return existing;
+}
 
-  const { gatekeeperId } = await registerGatekeeper(client, workspaceId, {
-    name: input.target,
-    transportKind: input.kind,
-    target: input.target,
-    endpoint: input.endpoint,
-    connectionSecretSalt: input.connectionSecretSalt,
-    activityId: input.activityId,
-    registeredBy: input.completedBy,
-  });
-
-  const imported = await importManifest(client, workspaceId, {
-    gatekeeperId,
-    operations: input.operations,
-    proposedBy: input.completedBy,
-    activityId: input.activityId,
-  });
-
-  if (connectionRequest) {
-    const result = await client.query(
-      `update connection_requests
-       set status = 'completed', gatekeeper_id = $3, completed_by = $4, completed_at = now()
-       where workspace_id = $1 and id = $2 and status = 'requested'
-       returning ${CONNECTION_REQUEST_ROW_COLUMNS}`,
-      [workspaceId, connectionRequest.id, gatekeeperId, input.completedBy.id],
+/** Resolves a claimed card to `completed`, naming the Gatekeeper the landing registered. */
+export async function markConnectionRequestCompleted(
+  client: PoolClient,
+  workspaceId: string,
+  input: {
+    readonly connectionRequestId: string;
+    readonly gatekeeperId: string;
+    readonly completedBy: string;
+  },
+): Promise<ConnectionRequestRow> {
+  const result = await client.query(
+    `update connection_requests
+     set status = 'completed', gatekeeper_id = $3, completed_by = $4, completed_at = now()
+     where workspace_id = $1 and id = $2 and status = 'requested'
+     returning ${CONNECTION_REQUEST_ROW_COLUMNS}`,
+    [workspaceId, input.connectionRequestId, input.gatekeeperId, input.completedBy],
+  );
+  const row = result.rows[0];
+  // Unreachable while `claimConnectionRequest`'s row lock is held — kept as the conditional-UPDATE
+  // belt to the lock's braces (governance/approval's status-transition.ts uses the same pair).
+  if (!row) {
+    throw new Error(
+      'markConnectionRequestCompleted: connection request left `requested` under lock',
     );
-    const row = result.rows[0];
-    // Unreachable while the row lock above is held — kept as the conditional-UPDATE belt to the
-    // lock's braces (governance/approval's status-transition.ts uses the same pair).
-    if (!row) throw new Error('completeConnection: connection request left `requested` under lock');
-    connectionRequest = mapConnectionRequestRow(row);
   }
-
-  await enqueue(client, {
-    type: 'ConnectionCreated',
-    workspaceId,
-    gatekeeperId,
-    kind: input.kind,
-    target: input.target,
-  });
-
-  return {
-    gatekeeperId,
-    importedOperationNames: imported.imported.map((record) => record.name),
-    skippedOperationNames: imported.skipped.map((entry) => entry.name),
-    connectionRequest,
-  };
+  return mapConnectionRequestRow(row);
 }
 
 // -------------------------------------------------------------------------------------------
@@ -269,7 +190,7 @@ export async function completeConnection(
 // cancelled` edge of `CONNECTION_REQUEST_TRANSITIONS` this module's migration (governance/0005)
 // already reserved — "a future task can wire a `cancel_connection_request` capability onto
 // without a further migration". Same lock → transition → conditional-UPDATE discipline as
-// `completeConnection`; the row's `completed_*` columns stay null (0005's CHECK), so the wire row
+// `claimConnectionRequest`; the row's `completed_*` columns stay null (0005's CHECK), so the wire row
 // signals cancellation through `status` alone (there is no `cancelled_at` column — the
 // `connection.request_cancelled` audit row carries who and when). No outbox event: the shared
 // event vocabulary (packages/shared/src/events.ts) has no `ConnectionCancelled` type and nothing
@@ -316,7 +237,7 @@ export async function cancelConnectionRequest(
   );
   const row = result.rows[0];
   // Unreachable while the row lock above is held — the conditional-UPDATE belt to the lock's
-  // braces, same as `completeConnection`.
+  // braces, same as `markConnectionRequestCompleted`.
   if (!row) {
     throw new Error('cancelConnectionRequest: connection request left `requested` under lock');
   }

@@ -23,7 +23,6 @@ import {
   ConnectionRequestNotFoundError,
   assertConnectionParamsCarryNoCredentials,
   cancelConnectionRequest,
-  completeConnection,
   connectGatekeeper,
   getConnectionRequest,
   listConnectionRequests,
@@ -36,9 +35,12 @@ import {
   setGatekeeperConnectionSecretSalt,
 } from '../../governance/gatekeepers/index.js';
 import { scrubSecretValues } from '../../governance/redaction/index.js';
-import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { currentPrincipalId } from '../chat/index.js';
-import { readConnectorMode } from '../gates/index.js';
+import {
+  assertEndpointFreeForSelfConnection,
+  landGatekeeper,
+  readConnectorMode,
+} from '../gates/index.js';
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
 import { platformGateIdForEndpoint } from './gate-target.js';
@@ -55,19 +57,29 @@ import { toWireConnectionRequest, toWireGrant } from './resource-wire.js';
  * substrate/governance may not import adapters): resolving the manifest to import (an OpenAPI
  * document fetch, an MCP `tools/list` call, or the gate's own `describe_operations`) and sending
  * the credential to the gate's ConnectedAccount store are both real HTTP calls against the target
- * Gatekeeper instance/system — `createConnectionHandler` below does them, then hands
- * `governance/connections`'s `completeConnection` only the already-resolved data. Same DI seam
- * shape `request-action-handler.ts` already uses for its own `GatekeeperClient`
- * (`setRequestActionDeps`) — `setConnectionHandlerDeps` here is set once by the composition root
- * (`packages/kernel/src/index.ts`), reusing the *same* `GatekeeperClient` instance.
+ * Gatekeeper instance/system — `createConnectionHandler` below does them, and hands the one
+ * landing path (`application/gates/landing.ts`, P0b — the same function `enable_gate_instance`
+ * lands through) only the already-resolved data. Same DI seam shape `request-action-handler.ts`
+ * already uses for its own `GatekeeperClient` (`setRequestActionDeps`) — `setConnectionHandlerDeps`
+ * here is set once by the composition root (`packages/kernel/src/index.ts`), reusing the *same*
+ * `GatekeeperClient` instance.
  *
- * **Credential ordering (redaction + rollback)**: `createConnectionHandler` calls
- * `completeConnection` (every DB write: register the Gatekeeper, import the manifest, transition
- * the ConnectionRequest, emit `ConnectionCreated`) *before* posting the credential to the gate —
- * see `completeConnection`'s own doc comment for why. The `credentials` and `connectionSecret`
- * params never reach `audit_records` (`packages/shared/src/capabilities.ts`'s
+ * **Credential ordering (redaction + rollback)**: `createConnectionHandler` lands the Gatekeeper
+ * (every DB write: register it, import the manifest, record the self connection, transition the
+ * ConnectionRequest, emit `ConnectionCreated`) *before* posting the credential to the gate: if the
+ * POST then fails, the whole transaction rolls back — no Gatekeeper is left registered with no
+ * working credential, and no ConnectionRequest is left `completed` with nothing behind it.
+ * Reversing the order would instead risk an orphaned credential in a gate the kernel has no record
+ * of, with no transactional way to undo an already-sent HTTP call. The `credentials` and
+ * `connectionSecret` params never reach `audit_records` (`packages/shared/src/capabilities.ts`'s
  * `create_connection.redactedParamKeys`, applied generically by `dispatch.ts`) and this handler's
  * own returned `result` never echoes either back.
+ *
+ * **One Gatekeeper per address (P0b)**: an address this workspace already has a Gatekeeper at is
+ * refused (409 `endpoint_already_connected`, before any network I/O and again under the landing's
+ * lock) — the existing one re-syncs (`preview_gatekeeper_resync`) or gets a new secret
+ * (`rotate_connection_secret`); connecting it again was the duplicate leftover 73 removed for the
+ * catalog.
  *
  * **Endpoint guard (STATUS leftover 36, S5.5)**: a workspace owner who pointed a self-connected gate
  * at a *platform-catalog* instance (`gate_instances.endpoint` — a packaged gate, or `gate-host`'s
@@ -322,8 +334,8 @@ export const requestConnectionHandler: CapabilityHandler = async (
 };
 
 // -------------------------------------------------------------------------------------------
-// create_connection ("complete_connection") — manifest resolution (network) + completeConnection
-// (DB) + credential POST (network, last — see this file's own module doc comment).
+// create_connection ("complete_connection") — manifest resolution (network) + the landing (DB) +
+// credential POST (network, last — see this file's own module doc comment).
 // -------------------------------------------------------------------------------------------
 
 interface CreateConnectionParams {
@@ -349,8 +361,7 @@ function usesManifestSource(params: CreateConnectionParams): params is CreateCon
  *  mcp 从 tools/list 导入"): `manifestSource` given → fetch it directly (`http`: parse as an
  *  OpenAPI document, `importOpenApi`; `mcp`: `tools/list` against that endpoint,
  *  `importMcpTools`); omitted (any kind, including `cli`/`ssh`, which have no `manifestSource`
- *  concept) → the already-running gate's own `describe_operations` (same path
- *  `cli/bootstrap.ts`'s `registerGatekeeperFromCli` already uses — a gate started with
+ *  concept) → the already-running gate's own `describe_operations` (a gate started with
  *  `GATE_MANIFEST_FILE` set). Both `manifestSource` fetches refuse redirects (R-27). */
 async function resolveManifestOperations(
   params: CreateConnectionParams,
@@ -447,6 +458,9 @@ export const createConnectionHandler: CapabilityHandler = async (
   // Before the manifest resolution below: that is the first call the kernel would make *to* the
   // endpoint (`describeOperations`), and the whole point is never to make it.
   await assertEndpointIsNotAPlatformGate(client, params.endpoint);
+  // P0b: one Gatekeeper per address — an address this workspace already connected re-syncs or
+  // rotates its secret instead (the landing decides again, under its lock).
+  await assertEndpointFreeForSelfConnection(client, workspaceId, params.endpoint);
 
   // R-01: the gate's own secret, verified before anything is sent to it.
   if (params.connectionSecret === undefined || params.connectionSecret.trim() === '') {
@@ -472,33 +486,29 @@ export const createConnectionHandler: CapabilityHandler = async (
     fetchImpl ?? fetch,
   );
 
-  const activity = await startActivity(client, workspaceId, {
-    kind: 'governance.create_connection',
-    principalId,
-    metadata: { kind: params.kind, target: params.target },
-  });
-
-  let completion: Awaited<ReturnType<typeof completeConnection>>;
-  try {
-    completion = await completeConnection(client, workspaceId, {
-      connectionRequestId: params.connectionRequestId,
-      kind: params.kind,
+  // P0b: the one landing path — registers the Gatekeeper, imports the manifest as drafts (I17),
+  // records the self connection (the origin row the platform's cut-off reads), resolves the card
+  // and emits `ConnectionCreated`.
+  const completion = await landGatekeeper(
+    client,
+    workspaceId,
+    { id: principalId, kind: 'human' },
+    {
+      kind: 'self',
+      connector: params.kind,
       target: params.target,
       endpoint: params.endpoint,
       connectionSecretSalt: salt,
       operations,
-      activityId: activity.id,
-      completedBy: { id: principalId, kind: 'human' },
-    });
-    await endActivity(client, workspaceId, activity.id, 'completed');
-  } catch (err) {
-    await endActivity(client, workspaceId, activity.id, 'failed');
-    throw err;
-  }
+      ...(params.connectionRequestId !== undefined
+        ? { connectionRequestId: params.connectionRequestId }
+        : {}),
+    },
+  );
 
-  // Credential POST — deliberately last (this file's + completeConnection's own doc comments): a
-  // failure here throws out of this handler, and dispatch.ts's withWorkspace transaction rolls
-  // back every DB write completeConnection just made.
+  // Credential POST — deliberately last (this file's module doc comment): a failure here throws out
+  // of this handler, and dispatch.ts's withWorkspace transaction rolls back every DB write the
+  // landing just made.
   if (effectiveCredentialKind === 'connected_account') {
     const onBehalfOf =
       params.onBehalfOf ?? completion.connectionRequest?.requestedBy ?? principalId;
@@ -511,8 +521,8 @@ export const createConnectionHandler: CapabilityHandler = async (
   return {
     result: {
       gatekeeperId: completion.gatekeeperId,
-      importedOperationNames: completion.importedOperationNames,
-      skippedOperationNames: completion.skippedOperationNames,
+      importedOperationNames: [...completion.importedOperationNames],
+      skippedOperationNames: [...completion.skippedOperationNames],
       connectionRequestId: completion.connectionRequest?.id ?? null,
     },
     resourceType: 'gatekeeper',
@@ -604,7 +614,7 @@ export const listConnectionRequestsHandler: CapabilityHandler = async (
  * workspace-wide (governance/0005's own comment), so another member's request *is* visible and
  * a wrong caller gets a clean 403, never a misleading 404. The `requested`-only rule and the
  * `connection.request_cancelled` audit row are `governance/connections`'s
- * `cancelConnectionRequest` (409 `illegal_transition` otherwise — `completeConnection` on the
+ * `cancelConnectionRequest` (409 `illegal_transition` otherwise — `claimConnectionRequest` on the
  * same table already answers that way for a non-`requested` row).
  */
 export const cancelConnectionRequestHandler: CapabilityHandler = async (
