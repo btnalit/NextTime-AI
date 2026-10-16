@@ -23,8 +23,10 @@ Dependabot 的 npm 版本更新在这个 pnpm workspace 里会 `ERR_PNPM_OUTDATE
 - **第三方镜像**（基础镜像、BuildKit、Dockerfile 前端、SBOM 扫描器、compose 里的 postgres / socket-proxy 等）：全部按 digest
   引用它们在 GHCR 的副本，清单是 `deploy/image-mirrors.json`，`.github/workflows/image-mirror.yml` 负责复制，必过检查
   `quality` 里的 `scripts/guards/image-mirrors.mjs` 保证每处引用与清单同一个 digest、不再出现 Docker Hub 引用（#531）。
-  没有 bot 更新它们（Dependabot 告警也不覆盖镜像）：升级时改清单的 digest 和全部引用，同一个 PR，推送顺序见那个
-  workflow 的头部注释；镜像的安全状况看每周 `image-scan` 的 Trivy 结果。
+  没有 bot 更新它们（Dependabot 告警也不覆盖镜像）：每周 `image-pins` 把每个钉值和上游 tag 当前的 digest 比对，叠加
+  钉值与上游新 digest 的 Trivy 结果，有落后或查询失败就开（或原地更新）一个 `image-pins` 标签的 issue，列出新旧 digest、换过去能修掉
+  几个漏洞和要改的全部引用；钉值全部跟上后它自己关掉 issue（遗留 181）。升钉仍由人开 PR：改清单的 digest 和全部引用，同一个
+  PR，推送顺序见 `image-mirror` 的头部注释；本仓库构建的镜像的安全状况看每周 `image-scan` 的 Trivy 结果。
 - **镜像**：`docker-compose.yml` 里的第三方镜像全部钉 digest（2026-09-25 按主机当时在跑的镜像补齐了 pgvector /
   postgres / alpine）；升级时手动换 tag + digest。
 - **pi**：永远走 `pi.version` + `docs/runbooks/pi-upgrade.md`，不接受任何 bot 版本更新。
@@ -41,6 +43,7 @@ Dependabot 的 npm 版本更新在这个 pnpm workspace 里会 `ERR_PNPM_OUTDATE
 | **codeql.yml** | CodeQL 代码扫描（javascript-typescript，默认规则集 + security-and-quality） | push main / 每个 PR / 每周一 | Security → Code scanning alerts 里看；非必过检查 |
 | **scorecard.yml** | OpenSSF Scorecard 供应链健康度评分，结果发布到 api.scorecard.dev 并上传到 code scanning | push main / 每周六 | Security → Code scanning alerts；README 的 Scorecard 徽章会显示当前分数 |
 | **image-scan.yml** | Trivy 扫描本仓库构建的全部 10 个平台镜像（OS + npm 漏洞，HIGH/CRITICAL） | 每周一 + 手动（`gh workflow run image-scan.yml --ref <分支>`） | Security → Code scanning alerts，按 `image-scan-<镜像名>` 分类查看每个镜像各自的结果；非必过检查，一个镜像扫描失败不影响其它九个（`continue-on-error` + `fail-fast: false`） |
+| **image-pins.yml** | 比对 `deploy/image-mirrors.json` 每个钉值与上游 tag 当前 digest（manifest HEAD，不占 Docker Hub 匿名额度），叠加钉值与上游新 digest 的 Trivy HIGH/CRITICAL 结果 | 每周一 + 手动（`gh workflow run image-pins.yml`）；改清单、该 workflow 或 `scripts/image-pins.mjs` 的 PR 上也跑，只写运行摘要 | 有落后或上游查询失败：`image-pins` 标签的 issue（原地更新，标题写落后几个、失败几个），按 issue 里的引用清单开升钉 PR；全部查到且跟上后自动关闭。查询逐个间隔 1.5 秒，429 / 5xx 按 Retry-After 或 10、30、60 秒退避重试，仍失败的让运行变红；扫描失败只记「not scanned」；非必过检查 |
 | **release-please.yml** | 维护一个滚动的 "chore: release X.Y.Z" PR，合并后打 tag、发 GitHub Release；发版那次随后调用 `publish-images.yml` | push main | 见 `docs/runbooks/release.md`——合并那个 release PR 前有一步必须手动做的事（补一次 CI 触发） |
 | **publish-images.yml**（S9 D1） | 构建并推送十一个平台镜像到 GHCR（`vX.Y.Z` + `sha-<短提交>`），SBOM / provenance，cosign keyless 签名，Trivy 扫描已推送镜像（只报告）。两个 job（R-33）：`build-sign` 独占推送与签名权限，只跑构建与 cosign；`scan` 无推送 / 签名权限，按 digest 扫描；只允许从 `main` 运行 | 由 release-please.yml 在发版时调用；也可手动 `workflow_dispatch` 输入已有 tag 补发 | 主机用 `scripts/pull-images.sh vX.Y.Z` 拉取（`release.md` §3）；某个镜像失败就重跑该 tag 的 `publish-images`，主机期间退回 `build-images.sh` |
 | **pr-title.yml** | PR 标题按 conventional commits 校验 | 每个 PR 的 open/edit/reopen | 非必过检查；标题不合规范改标题重新触发就行 |

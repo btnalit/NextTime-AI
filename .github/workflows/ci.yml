@@ -131,6 +131,9 @@ jobs:
       - name: Image mirror guard unit tests
         run: node --test scripts/guards/image-mirrors.test.mjs
 
+      - name: Image pin check unit tests (scripts/image-pins.mjs, the weekly image-pins workflow)
+        run: node --test scripts/image-pins.test.mjs
+
       - name: Third-party images come from their GHCR copies by the listed digest (scripts/guards/image-mirrors.mjs, deploy/image-mirrors.json)
         run: node scripts/guards/image-mirrors.mjs
 
