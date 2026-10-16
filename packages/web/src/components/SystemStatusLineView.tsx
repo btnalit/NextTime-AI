@@ -1,3 +1,4 @@
+import { failureReading } from '../lib/action-outcome.js';
 import { useT } from '../lib/i18n.js';
 import type { SystemStatusLineData } from '../lib/system-status.js';
 import { Icon } from './ui/Icon.js';
@@ -13,15 +14,27 @@ export interface SystemStatusLineViewProps {
  *  `system.task_update` (S2.10 deliverable 2 — never a card, see `lib/system-status.ts`). */
 export function SystemStatusLineView({ line, onOpen }: SystemStatusLineViewProps) {
   const t = useT();
+  const failure = line.variant === 'action_update' ? failureReading(line, t) : null;
   const chip =
     line.variant === 'action_update' ? (
       <StatusChip machine="actionRequest" status={line.status} size="s" />
     ) : (
       <StatusChip machine="task" status={line.status} size="s" />
     );
+  // S11 GO1: the failure kind right after the chip, never cut — the kernel's line after it may be.
   const body = (
     <>
       {chip}
+      {failure ? (
+        <span
+          className={`system-status-failure ${failure.tone === 'danger' ? 'text-danger' : 'text-3'}`}
+          data-testid="system-status-failure"
+          data-failure-kind={failure.kind}
+          title={failure.message}
+        >
+          {failure.short}
+        </span>
+      ) : null}
       <span className="system-status-text">{line.text}</span>
       {line.variant === 'task_update' && line.failureReason ? (
         <span className="text-3">({line.failureReason})</span>

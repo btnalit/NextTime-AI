@@ -1,3 +1,4 @@
+import type { ActionRequestFailureKind } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import {
   markActionRequestExecuted,
@@ -16,23 +17,34 @@ import type { ActionRequestRow } from './types.js';
  * defines the interface plus the drain loop, tested against a fake `ActionExecutor`.
  */
 
-export interface ActionExecutorResult {
-  readonly ok: boolean;
-  /** Free-form result metadata on success — S2.4 defines the real shape (Gatekeeper `apply`
-   *  response); this module only threads it through to `markActionRequestExecuted`. */
-  readonly resultMetadata?: Record<string, unknown>;
-  /** Failure reason on `ok: false` — threaded through to `markActionRequestFailed`. */
-  readonly reason?: string;
-  /** `ok: false` only: the effect's outcome is *unknown*, not failed — the gate call timed out and
-   *  the gate may still finish (real-model regression 2026-10-02: an ActionRequest marked `failed`
-   *  whose container restart completed anyway), or the connection failed after the request may
-   *  have reached the gate (legacy 287). The drainer then writes no terminal state, leaves the row
-   *  `executing`, records why (`recordActionRequestInDoubt`, an audit row) and stops (R-50: the
-   *  row is now a barrier for the rest of this Gatekeeper's queue); the stale-executing reaper
-   *  (`application/gateway/action-executor.ts`'s `reapStaleExecutingActionRequests`) asks the gate
-   *  later under the same `actionRequestId`, and the gate's idempotency store answers. */
-  readonly indeterminate?: boolean;
-}
+/**
+ * What one `ActionExecutor.execute` (or the reaper's replay) came back with. A union, so a failure
+ * always says which kind it is — the row's `failure_kind` (S11 GO1) is decided where the call was
+ * made, never guessed later from its reason text:
+ *
+ *   - `ok: true`: the gate ran it. `resultMetadata` is the gate's `apply` response — S2.4 defines
+ *     its shape; this module only threads it through to `markActionRequestExecuted`.
+ *   - `ok: false`, `indeterminate: true`: the effect's outcome is *unknown*, not failed — the gate
+ *     call timed out and the gate may still finish (real-model regression 2026-10-02: an
+ *     ActionRequest marked `failed` whose container restart completed anyway), or the connection
+ *     failed after the request may have reached the gate (legacy 287). The drainer then writes no
+ *     terminal state, leaves the row `executing`, records why (`recordActionRequestInDoubt`, an
+ *     audit row) and stops (R-50: the row is now a barrier for the rest of this Gatekeeper's
+ *     queue); the stale-executing reaper (`application/gateway/action-executor.ts`'s
+ *     `reapStaleExecutingActionRequests`) asks the gate later under the same `actionRequestId`, and
+ *     the gate's idempotency store answers.
+ *   - `ok: false` otherwise: a terminal failure of `failureKind` (`not_delivered` / `refused` /
+ *     `outcome_unknown`), threaded through to `markActionRequestFailed` with its `reason`.
+ */
+export type ActionExecutorResult =
+  | { readonly ok: true; readonly resultMetadata?: Record<string, unknown> }
+  | { readonly ok: false; readonly indeterminate: true; readonly reason?: string }
+  | {
+      readonly ok: false;
+      readonly indeterminate?: false;
+      readonly failureKind: ActionRequestFailureKind;
+      readonly reason?: string;
+    };
 
 /** The port `drainGatekeeper` calls to actually perform one `executing` ActionRequest's effect
  *  against its Gatekeeper (§5.1.4 "门" protocol `apply`). */
@@ -150,7 +162,7 @@ export class ApprovalDrainer {
         // Outcome unknown (see `ActionExecutorResult.indeterminate`): no terminal transition —
         // the row stays `executing` for the stale-executing reaper to resolve by idempotent
         // replay, and it is a barrier: nothing after it on this Gatekeeper runs first (R-50).
-        if (!result.ok && result.indeterminate) {
+        if (!result.ok && result.indeterminate === true) {
           await this.deps.withTransaction(workspaceId, principalId, (client) =>
             recordActionRequestInDoubt(client, workspaceId, row.id, { reason: result.reason }),
           );
@@ -163,7 +175,10 @@ export class ApprovalDrainer {
             ? markActionRequestExecuted(client, workspaceId, row.id, {
                 resultMetadata: result.resultMetadata,
               })
-            : markActionRequestFailed(client, workspaceId, row.id, { reason: result.reason }),
+            : markActionRequestFailed(client, workspaceId, row.id, {
+                failureKind: result.failureKind,
+                reason: result.reason,
+              }),
         );
 
         processed += 1;

@@ -34,7 +34,8 @@
  *                        `recordActionRequestReplayAttempt` (R-48 — the reaper's replay counter),
  *                        `startActionRequestExecution`/`markActionRequestExecuted`/
  *                        `markActionRequestFailed`/`compensateActionRequest` (called by
- *                        `drainer.ts` and `application/gateway`'s real Gatekeeper execution path).
+ *                        `drainer.ts` and `application/gateway`'s real Gatekeeper execution path),
+ *                        `withdrawActionRequest` (S11 GO1, plan I-G9).
  *   - `await-decision.ts` — `awaitActionRequestResolution`: the `await_decision=true`
  *                        wait-until-timeout primitive (§8.2), decoupled from the DB/pool so it is
  *                        unit-testable with no Postgres and no real timers.
@@ -117,6 +118,8 @@ export {
   type MarkFailedOptions,
   type MinimalPool,
   type StaleExecutingScanOptions,
+  WITHDRAWABLE_ACTION_REQUEST_STATUSES,
+  type WithdrawOptions,
   compensateActionRequest,
   expireActionRequest,
   expireOverduePendingApprovals,
@@ -129,6 +132,7 @@ export {
   recordActionRequestReplayAttempt,
   resultAuditFields,
   startActionRequestExecution,
+  withdrawActionRequest,
 } from './execution.js';
 
 export {

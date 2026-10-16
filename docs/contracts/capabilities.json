@@ -299,6 +299,21 @@
             "null"
           ]
         },
+        "failureKind": {
+          "anyOf": [
+            {
+              "enum": [
+                "not_delivered",
+                "refused",
+                "outcome_unknown"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "gatekeeperId": {
           "type": "string"
         },
@@ -439,7 +454,8 @@
             "executed",
             "failed",
             "verified",
-            "compensated"
+            "compensated",
+            "withdrawn"
           ],
           "type": "string"
         },
@@ -473,6 +489,7 @@
         "executingAt",
         "executedAt",
         "failedAt",
+        "failureKind",
         "requesterCanApprove"
       ],
       "type": "object"
@@ -6031,6 +6048,21 @@
             "null"
           ]
         },
+        "failureKind": {
+          "anyOf": [
+            {
+              "enum": [
+                "not_delivered",
+                "refused",
+                "outcome_unknown"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "gatekeeperId": {
           "type": "string"
         },
@@ -6171,7 +6203,8 @@
             "executed",
             "failed",
             "verified",
-            "compensated"
+            "compensated",
+            "withdrawn"
           ],
           "type": "string"
         },
@@ -6205,6 +6238,7 @@
         "executingAt",
         "executedAt",
         "failedAt",
+        "failureKind",
         "requesterCanApprove"
       ],
       "type": "object"
@@ -9649,7 +9683,8 @@
                 "executed",
                 "failed",
                 "verified",
-                "compensated"
+                "compensated",
+                "withdrawn"
               ],
               "type": "string"
             },
@@ -9668,7 +9703,8 @@
                   "executed",
                   "failed",
                   "verified",
-                  "compensated"
+                  "compensated",
+                  "withdrawn"
                 ],
                 "type": "string"
               },
@@ -9748,6 +9784,21 @@
                 "type": [
                   "string",
                   "null"
+                ]
+              },
+              "failureKind": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "not_delivered",
+                      "refused",
+                      "outcome_unknown"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
               "gatekeeperId": {
@@ -9890,7 +9941,8 @@
                   "executed",
                   "failed",
                   "verified",
-                  "compensated"
+                  "compensated",
+                  "withdrawn"
                 ],
                 "type": "string"
               },
@@ -9924,6 +9976,7 @@
               "executingAt",
               "executedAt",
               "failedAt",
+              "failureKind",
               "requesterCanApprove"
             ],
             "type": "object"
@@ -12756,6 +12809,21 @@
                   "null"
                 ]
               },
+              "failureKind": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "not_delivered",
+                      "refused",
+                      "outcome_unknown"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "gatekeeperId": {
                 "type": "string"
               },
@@ -12896,7 +12964,8 @@
                   "executed",
                   "failed",
                   "verified",
-                  "compensated"
+                  "compensated",
+                  "withdrawn"
                 ],
                 "type": "string"
               },
@@ -12930,6 +12999,7 @@
               "executingAt",
               "executedAt",
               "failedAt",
+              "failureKind",
               "requesterCanApprove"
             ],
             "type": "object"
@@ -19182,6 +19252,21 @@
             "null"
           ]
         },
+        "failureKind": {
+          "anyOf": [
+            {
+              "enum": [
+                "not_delivered",
+                "refused",
+                "outcome_unknown"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "gatekeeperId": {
           "type": "string"
         },
@@ -19322,7 +19407,8 @@
             "executed",
             "failed",
             "verified",
-            "compensated"
+            "compensated",
+            "withdrawn"
           ],
           "type": "string"
         },
@@ -19356,6 +19442,7 @@
         "executingAt",
         "executedAt",
         "failedAt",
+        "failureKind",
         "requesterCanApprove"
       ],
       "type": "object"
@@ -20199,6 +20286,21 @@
                 "null"
               ]
             },
+            "failureKind": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "not_delivered",
+                    "refused",
+                    "outcome_unknown"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "gatekeeperId": {
               "type": "string"
             },
@@ -20340,7 +20442,8 @@
                 "executed",
                 "failed",
                 "verified",
-                "compensated"
+                "compensated",
+                "withdrawn"
               ],
               "type": "string"
             },
@@ -20374,6 +20477,7 @@
             "executingAt",
             "executedAt",
             "failedAt",
+            "failureKind",
             "requesterCanApprove"
           ],
           "type": "object"
@@ -20382,6 +20486,14 @@
           "additionalProperties": false,
           "properties": {
             "data": {},
+            "failureKind": {
+              "enum": [
+                "not_delivered",
+                "refused",
+                "outcome_unknown"
+              ],
+              "type": "string"
+            },
             "id": {
               "type": "string"
             },
@@ -20441,7 +20553,8 @@
                 "executed",
                 "failed",
                 "verified",
-                "compensated"
+                "compensated",
+                "withdrawn"
               ],
               "type": "string"
             }

@@ -196,7 +196,8 @@
             "executed",
             "failed",
             "verified",
-            "compensated"
+            "compensated",
+            "withdrawn"
           ],
           "type": "string"
         },
@@ -692,7 +693,8 @@
             "executed",
             "failed",
             "verified",
-            "compensated"
+            "compensated",
+            "withdrawn"
           ],
           "type": "string"
         },

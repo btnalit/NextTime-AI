@@ -46,6 +46,10 @@ export interface ActionRequestRowLike {
   readonly requestedAt?: string;
   readonly executedAt?: string | null;
   readonly failedAt?: string | null;
+  /** S11 GO1: on a `failed` / `compensated` row, which kind of failure (`not_delivered` /
+   *  `refused` / `outcome_unknown`, shared `ActionRequestFailureKind`); `null` otherwise, absent
+   *  on an older row shape (`lib/action-outcome` `failureReading`). */
+  readonly failureKind?: string | null;
   readonly suspectedSecretValues?: number;
   /** Where in `params` (field paths only), alongside the count. */
   readonly suspectedSecretPaths?: readonly string[];

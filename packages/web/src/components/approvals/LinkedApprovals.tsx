@@ -20,6 +20,7 @@ import { List, ListRow } from '../kit/list-row.js';
 import { Notice } from '../kit/notice.js';
 import { SkeletonRows } from '../kit/skeleton.js';
 import { StatusChip } from '../kit/status-chip.js';
+import { ActionFailureLine } from './ActionFailure.js';
 import { ActionWaitingLine } from './ActionWaiting.js';
 import { nameOf, resourceScopeLabel } from './useDirectoryNames.js';
 
@@ -145,6 +146,7 @@ function LinkedApprovalsList({
                 ) : null}
               </span>
               <ActionWaitingLine row={row} testId="linked-approval-waiting" />
+              <ActionFailureLine row={row} testId="linked-approval-failure" />
               <span className="row-wrap text-3">
                 {resourceScopeLabel(row, undefined) ? (
                   <>

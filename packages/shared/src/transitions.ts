@@ -219,6 +219,7 @@ export const ACTION_REQUEST_EVENT_VALUES = [
   'fail',
   'verify',
   'compensate',
+  'withdraw',
 ] as const;
 export type ActionRequestEvent = (typeof ACTION_REQUEST_EVENT_VALUES)[number];
 
@@ -239,6 +240,15 @@ export const ACTION_REQUEST_EDGES: readonly StateTransition<
   { from: 'executing', event: 'fail', to: 'failed' },
   { from: 'executed', event: 'verify', to: 'verified' },
   { from: 'failed', event: 'compensate', to: 'compensated' },
+  // S11 GO1 (plan I-G9): a request whose step was cancelled or revised away is taken back before it
+  // runs — while it awaits a decision, or once approved (by a person or by policy) and still queued
+  // behind its Gatekeeper's earlier requests (R-50). `auto_approved` is withdrawn for the same
+  // reason as `approved`: both are "approved, not yet executing", and leaving it out would let a
+  // cancelled step's queued action run. `executing` is never withdrawn: the call may already be
+  // with the gate, so it ends the R-48 way instead.
+  { from: 'pending_approval', event: 'withdraw', to: 'withdrawn' },
+  { from: 'approved', event: 'withdraw', to: 'withdrawn' },
+  { from: 'auto_approved', event: 'withdraw', to: 'withdrawn' },
 ];
 
 export const ACTION_REQUEST_TRANSITIONS: TransitionTable<ActionRequestStatus, ActionRequestEvent> =

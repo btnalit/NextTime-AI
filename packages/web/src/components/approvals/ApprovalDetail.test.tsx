@@ -108,6 +108,36 @@ describe('ApprovalDetail (S6-A B2 / B3 / C25)', () => {
     expect(screen.queryByTestId('approval-waiting')).toBeNull();
   });
 
+  it('S11 GO1: says which kind of failure a failed request is — only "outcome unknown" in danger', () => {
+    const failed = { status: 'failed', failedAt: '2026-10-16T07:00:00.000Z' } as const;
+    const { unmount } = renderDetail({ ...failed, failureKind: 'outcome_unknown' });
+    const unknown = screen.getByTestId('approval-failure');
+    expect(unknown.className).toContain('notice-danger');
+    expect(unknown.textContent).toContain('结果不明：动作可能已经执行');
+    // UX acceptance of #586 (P2-2 / P3-2): it names the system and the action to check — by the
+    // Operation's own name (UX acceptance of #601, P2-3).
+    expect(unknown.textContent).toContain(
+      '不要直接重试：先到 docker-prod 上核对 docker.container_restart（web-1）是否生效',
+    );
+    unmount();
+    const second = renderDetail({ ...failed, failureKind: 'not_delivered' });
+    const notSent = screen.getByTestId('approval-failure');
+    expect(notSent.className).toBe('notice');
+    expect(notSent.textContent).toContain('请求没有到达门，什么都没执行');
+    second.unmount();
+    const third = renderDetail({ ...failed, failureKind: 'refused' });
+    expect(screen.getByTestId('approval-failure').textContent).toContain(
+      '平台或门明确答复：不执行或执行失败',
+    );
+    third.unmount();
+    // A pending request, and an older row without the field, say nothing of the kind.
+    const fourth = renderDetail();
+    expect(screen.queryByTestId('approval-failure')).toBeNull();
+    fourth.unmount();
+    renderDetail({ ...failed });
+    expect(screen.queryByTestId('approval-failure')).toBeNull();
+  });
+
   it('L8a-10: a gate-scoped request (scope = the gate’s own id) reads as the whole gate, never the raw id', () => {
     const gatekeeperId = '3f2a9c1e-0b4d-4e6f-8a7b-1c2d3e4f5a6b';
     renderDetail(

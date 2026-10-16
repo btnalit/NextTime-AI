@@ -6,7 +6,11 @@ import {
   RoleSchema,
   WorkerDefinitionKindSchema,
 } from './enums.js';
-import { ActionRequestStatusSchema, ObjectiveOutcomeSchema } from './enums.js';
+import {
+  ActionRequestFailureKindSchema,
+  ActionRequestStatusSchema,
+  ObjectiveOutcomeSchema,
+} from './enums.js';
 import type { CapabilityChannel, Role } from './enums.js';
 import { listEnvelope } from './envelope.js';
 import { CapabilityScopeSchema } from './handle-token.js';
@@ -1768,7 +1772,7 @@ const governanceCapabilities = [
     //     projection, optionally with a `simulate` field.
     //   - `mode: 'execute'`, `afterCommit` present (auto_approved/approved/executing/executed/
     //     verified/failed, or `pending_approval && awaitDecision`) → the narrower `{id, status,
-    //     data?, reason?}` execution-outcome shape those continuations (`tryExecuteInline`/
+    //     data?, reason?, failureKind?}` execution-outcome shape those continuations (`tryExecuteInline`/
     //     `awaitConcurrentExecution`/`pollAndExecute`/`readTerminalOutcome`) resolve to — with,
     //     for a row that has not finished (legacy 287), why it waits: `outcomeInDoubt` on an
     //     `executing` one whose `apply` got no answer, `queuedBehind` on an approved one.
@@ -1784,6 +1788,8 @@ const governanceCapabilities = [
           status: ActionRequestStatusSchema,
           data: z.unknown().optional(),
           reason: z.string().optional(),
+          // S11 GO1: on a `failed` outcome, its kind (`ActionRequestWireSchema.failureKind`).
+          failureKind: ActionRequestFailureKindSchema.optional(),
           outcomeInDoubt: wire.ActionRequestOutcomeInDoubtWireSchema.optional(),
           queuedBehind: wire.ActionRequestQueuedBehindWireSchema.optional(),
         })

@@ -24,6 +24,46 @@ describe('SystemStatusLineView', () => {
     expect(screen.getByText('ActionRequest approved')).toBeTruthy();
   });
 
+  it('names the failure kind of a failed action_update line (S11 GO1)', () => {
+    const renderKind = (failureKind: string) =>
+      render(
+        <SystemStatusLineView
+          line={{
+            variant: 'action_update',
+            text: 'ActionRequest failed',
+            actionRequestId: 'ar-1',
+            status: 'failed',
+            isHolder: true,
+            failureKind,
+          }}
+        />,
+      );
+    renderKind('outcome_unknown');
+    const unknown = screen.getByTestId('system-status-failure');
+    expect(unknown.textContent).toBe('结果不明，需要核对');
+    expect(unknown.className).toContain('text-danger');
+    cleanup();
+    renderKind('not_delivered');
+    const notSent = screen.getByTestId('system-status-failure');
+    expect(notSent.getAttribute('data-failure-kind')).toBe('not_delivered');
+    expect(notSent.className).not.toContain('text-danger');
+    cleanup();
+    render(
+      <SystemStatusLineView
+        line={{
+          variant: 'action_update',
+          text: 'ActionRequest withdrawn',
+          actionRequestId: 'ar-1',
+          status: 'withdrawn',
+          isHolder: true,
+          failureKind: null,
+        }}
+      />,
+    );
+    expect(screen.queryByTestId('system-status-failure')).toBeNull();
+    expect(document.querySelector('.chip')?.textContent).toBe('已撤回');
+  });
+
   it('renders the failureReason hint for a failed task_update line', () => {
     render(
       <SystemStatusLineView

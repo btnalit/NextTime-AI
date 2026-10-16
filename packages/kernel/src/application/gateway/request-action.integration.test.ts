@@ -2072,9 +2072,11 @@ describe.runIf(DATABASE_URL !== undefined)(
       if (!row) throw new Error('seeded action request not found');
 
       const direct = await actionExecutor.execute(row);
-      expect(direct.ok).toBe(false);
-      expect(direct.indeterminate).toBe(true);
-      expect(direct.reason).toMatch(/^outcome unknown: /);
+      expect(direct).toMatchObject({
+        ok: false,
+        indeterminate: true,
+        reason: expect.stringMatching(/^outcome unknown: /),
+      });
 
       // 30 min, as every reaper test here: the reaper scans every workspace and this executor
       // fails everything, so only the hand-seeded 1-hour-old rows may qualify — never a row
@@ -2169,9 +2171,12 @@ describe.runIf(DATABASE_URL !== undefined)(
       if (!row) throw new Error('seeded action request not found');
 
       const direct = await actionExecutor.execute(row);
-      expect(direct.ok).toBe(false);
-      expect(direct.indeterminate).toBeUndefined();
-      expect(direct.reason).toMatch(/^outcome_unknown: apply for actionRequestId /);
+      expect(direct).toMatchObject({
+        ok: false,
+        failureKind: 'outcome_unknown',
+        reason: expect.stringMatching(/^outcome_unknown: apply for actionRequestId /),
+      });
+      expect(direct).not.toHaveProperty('indeterminate');
 
       await reapStaleExecutingActionRequests(pool, actionExecutor, {
         staleAfterMs: 30 * 60 * 1000,
@@ -2502,8 +2507,11 @@ describe.runIf(DATABASE_URL !== undefined)(
         const orphan = await executor.execute(
           await readRow(await seedApprovedRowWithoutDigest('k.never.published')),
         );
-        expect(orphan.ok).toBe(false);
-        expect(orphan.reason).toMatch(/^operation_definition_unavailable: "k\.never\.published"/);
+        expect(orphan).toMatchObject({
+          ok: false,
+          failureKind: 'refused',
+          reason: expect.stringMatching(/^operation_definition_unavailable: "k\.never\.published"/),
+        });
         expect(apply).not.toHaveBeenCalled();
       });
 
@@ -2558,10 +2566,13 @@ describe.runIf(DATABASE_URL !== undefined)(
           withTransaction: createAdminWithTransaction(pool),
         });
         const result = await executor.execute(await readRow(requested.id));
-        expect(result.ok).toBe(false);
-        expect(result.reason).toMatch(
-          /^operation_definition_unavailable: "k\.published\.after\.request" was requested while it was not published and had no draft/,
-        );
+        expect(result).toMatchObject({
+          ok: false,
+          failureKind: 'refused',
+          reason: expect.stringMatching(
+            /^operation_definition_unavailable: "k\.published\.after\.request" was requested while it was not published and had no draft/,
+          ),
+        });
         expect(apply).not.toHaveBeenCalled();
       });
 

@@ -4,6 +4,7 @@ import {
   ApplyNotReceivedError,
   ApplyOutcomeUnknownError,
   ApplyRequiresIdempotencyKeyError,
+  BindingKindMismatchError,
   IdempotencyConflictError,
   OperationDefinitionMismatchError,
   OperationModeMismatchError,
@@ -75,12 +76,25 @@ export interface GatekeeperBaseCallContext {
 const UNREADABLE_DEFINITION = 'unreadable';
 
 /**
- * How a failed transport call is recorded under its key (R-51, legacy 287). Outcome-unknown when
- * the transport says it cannot know (`TransportOutcomeUnknownError`: an exec timeout, an ssh session
- * that dropped mid-command), or when the call failed on the network after the request may have
- * reached the target (`networkFailureDelivery`: a reset, a closed socket, the transport's own
- * timeout) — a plain failure reads as "did not happen" and invites a second run. A plain failure
- * only when the target answered (a status, an exit code, an error result) or nothing was sent.
+ * How a failed transport call is recorded under its key (R-51, legacy 287, legacy 310). The
+ * transport says which side of the line a failure is on, by what it throws:
+ *
+ *   - `TransportOutcomeUnknownError`: it cannot know (an exec timeout, an ssh session that dropped
+ *     mid-command, a connection that broke after the request may have reached the target) —
+ *     outcome-unknown.
+ *   - `TransportInvokeError`: its own verdict that the call failed — the target answered (a status,
+ *     an exit code, an error result) or nothing was sent — a plain failure, unless its `cause`
+ *     chain shows the call failed on the network after the request may have reached the target
+ *     (`networkFailureDelivery` reads `maybe_delivered`: a reset, a closed socket, a timeout).
+ *   - `BindingKindMismatchError`: the Operation is not this transport's kind, thrown before anything
+ *     is touched — a plain failure.
+ *
+ * Anything else — an error a custom or third-party transport did not classify — is outcome-unknown
+ * unless it proves the request never left (`not_sent`: refused, no such host, a handshake-only TLS
+ * failure). Legacy 310: this used to default to a plain failure, which reads as "did not happen" and
+ * invites a second run of a call that may have reached the target; a transport that knows better
+ * says so by throwing one of the classes above. (`OperationRefusedError` never gets here: `apply`
+ * frees the key for it, since nothing ran.)
  */
 function storedTransportFailure(name: string, err: unknown): StoredApplyFailure {
   const message =
@@ -88,14 +102,27 @@ function storedTransportFailure(name: string, err: unknown): StoredApplyFailure 
       ? err.message
       : `apply for "${name}" failed inside the gate`;
   if (err instanceof TransportOutcomeUnknownError) return { message, outcomeUnknown: true };
-  if (networkFailureDelivery(err) !== 'maybe_delivered') return { message, outcomeUnknown: false };
-  const code = networkFailureCode(err);
-  const stopped =
-    code !== undefined
-      ? `its connection to the target failed (${code})`
-      : 'it stopped waiting for the answer';
+  const delivery = networkFailureDelivery(err);
+  if (delivery === 'maybe_delivered') {
+    const code = networkFailureCode(err);
+    const stopped =
+      code !== undefined
+        ? `its connection to the target failed (${code})`
+        : 'it stopped waiting for the answer';
+    return {
+      message: `${message} — ${stopped} after the request may have reached the target, so it may have run`,
+      outcomeUnknown: true,
+    };
+  }
+  if (
+    err instanceof TransportInvokeError ||
+    err instanceof BindingKindMismatchError ||
+    delivery === 'not_sent'
+  ) {
+    return { message, outcomeUnknown: false };
+  }
   return {
-    message: `${message} — ${stopped} after the request may have reached the target, so it may have run`,
+    message: `${message} — the transport did not say whether the request reached the target, so it may have run`,
     outcomeUnknown: true,
   };
 }

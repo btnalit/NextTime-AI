@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { type ActionExecutor, type ActionExecutorResult, ApprovalDrainer } from './drainer.js';
+import { withdrawActionRequest } from './execution.js';
 import { getActionRequest } from './reads.js';
 import { requestAction } from './request-action.js';
 import type { ActionRequestRow } from './types.js';
@@ -197,7 +198,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       const calls: string[] = [];
       const executor = fakeExecutor(
-        { 'test.drain.fails': { ok: false, reason: 'simulated failure' } },
+        { 'test.drain.fails': { ok: false, failureKind: 'refused', reason: 'simulated failure' } },
         calls,
       );
       const drainer = new ApprovalDrainer({ executor, withTransaction });
@@ -214,6 +215,8 @@ describe.runIf(DATABASE_URL !== undefined)(
         (client) => getActionRequest(client, workspaceId, willFail.id),
       );
       expect(failedAfter?.status).toBe('failed');
+      // S11 GO1: the executor's own kind is on the row.
+      expect(failedAfter?.failureKind).toBe('refused');
 
       const succeededAfter = await withWorkspace(
         pool,
@@ -221,6 +224,34 @@ describe.runIf(DATABASE_URL !== undefined)(
         (client) => getActionRequest(client, workspaceId, willSucceed.id),
       );
       expect(succeededAfter?.status).toBe('executed');
+    });
+
+    it('a withdrawn row never runs and holds nothing back: the drain skips it (S11 GO1, I-G9)', async () => {
+      const gatekeeperId = await insertGatekeeperObject();
+
+      const withdrawnPending = await createPending(gatekeeperId, 'test.drain.withdrawn-pending');
+      const withdrawnQueued = await createAutoApproved(gatekeeperId, 'test.drain.withdrawn-queued');
+      const after = await createAutoApproved(gatekeeperId, 'test.drain.after-withdrawn');
+      await withTransaction(workspaceId, ownerId, async (client) => {
+        await withdrawActionRequest(client, workspaceId, withdrawnPending.id);
+        await withdrawActionRequest(client, workspaceId, withdrawnQueued.id);
+      });
+
+      const calls: string[] = [];
+      const drainer = new ApprovalDrainer({ executor: fakeExecutor({}, calls), withTransaction });
+      const result = await drainer.drainGatekeeper(workspaceId, ownerId, gatekeeperId);
+
+      // The pending row that used to stop the queue is withdrawn: the row after it runs now.
+      expect(result.stoppedAtPending).toBe(false);
+      expect(calls).toEqual(['test.drain.after-withdrawn']);
+      const statuses = await withTransaction(workspaceId, ownerId, async (client) => {
+        const read: Array<string | undefined> = [];
+        for (const row of [withdrawnPending, withdrawnQueued, after]) {
+          read.push((await getActionRequest(client, workspaceId, row.id))?.status);
+        }
+        return read;
+      });
+      expect(statuses).toEqual(['withdrawn', 'withdrawn', 'executed']);
     });
 
     // Real-model regression 2026-10-02: a gate `apply` timeout is "outcome unknown", not failure —
