@@ -17,11 +17,15 @@ export interface StepActionOutcome {
 }
 
 /** Every request raised in `stepRunId` (`action_requests.step_run_id`, governance/0022), oldest
- *  first. Reads this module's own table by its own column; nothing here reads `step_runs`. */
+ *  first — or, with `raisedBy`, only those whose requesting WorkerRun (`parent_worker_run_id`) is
+ *  one of those runs: S11 GO2 judges an attempt by the requests its own runs (nested children
+ *  included) raised, not by an earlier attempt's. Reads this module's own table by its own
+ *  columns; nothing here reads `step_runs` or `worker_runs`. */
 export async function listStepActionOutcomes(
   client: PoolClient,
   workspaceId: string,
   stepRunId: string,
+  options: { readonly raisedBy?: readonly string[] } = {},
 ): Promise<readonly StepActionOutcome[]> {
   const result = await client.query<{
     id: string;
@@ -30,8 +34,9 @@ export async function listStepActionOutcomes(
   }>(
     `select id, status, failure_kind from action_requests
      where workspace_id = $1 and step_run_id = $2
+       and ($3::uuid[] is null or parent_worker_run_id = any($3::uuid[]))
      order by requested_at, id`,
-    [workspaceId, stepRunId],
+    [workspaceId, stepRunId, options.raisedBy === undefined ? null : [...options.raisedBy]],
   );
   return result.rows.map((row) => ({
     id: row.id,

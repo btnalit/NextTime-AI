@@ -444,8 +444,9 @@ export async function completeTaskWithResult(
  *     under the same Task, attenuating from the *failed* WorkerRun's own already-granted scope —
  *     see `spawnWorkerRunForRetry` below), unless the Task is `waiting_approval` (P1-6 fix: a
  *     fresh WorkerRun is not the one the outstanding ActionRequest's `parent_worker_run_id` points
- *     back to, so requeuing cannot help it) — either way, a second failure or a blocked Task marks
- *     it `failed: worker_failed`.
+ *     back to, so requeuing cannot help it), or the Task is a goal step's attempt (`stepAttempt`
+ *     set: S11 GO2 — the step retries with a new Task, never inside this one) — either way, a
+ *     second failure, a blocked Task or an attempt Task marks it `failed: worker_failed`.
  *   - `terminated` — marks the Task `failed: timeout` when `reason === 'timeout'` (the supervisor's
  *     own duration enforcement), for a Task `running` or `waiting_approval`; a `reason ===
  *     'requested'` termination is assumed already handled by whoever called `terminateTask` (this
@@ -510,7 +511,10 @@ export async function reactToSupervisorStatus(
     // back to, so a later approval could never resume the *right* run anyway (`reaper.ts`'s
     // routing consumer resolves the Task via that WorkerRun's id). Fail it directly instead of
     // spending the one retry on a run that cannot help.
-    if (task.retryCount < 1 && task.status !== 'waiting_approval') {
+    // S11 GO2 (plan §3.1, I-G1): a goal step's attempt Task never retries inside itself — the
+    // step's `failed → retry → ready` starts a new attempt (a new Task) under the attempt limit
+    // and backoff, so a crash here fails the Task and the advancer decides.
+    if (task.retryCount < 1 && task.status !== 'waiting_approval' && task.stepAttempt === null) {
       // 2026-10-02 review R-58: the reaper tick and a `wait:true` poll can react to the same crash
       // at once, and a cancel can land between the reads above and here. Both writes are guarded,
       // and the retry is spawned only when *this* call terminated the run and won the

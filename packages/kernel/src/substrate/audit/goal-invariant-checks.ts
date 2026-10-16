@@ -19,7 +19,7 @@ import type { PoolClient } from 'pg';
  *
  * | # | Conditions counted |
  * |---|---|
- * | I-G1 one Task per attempt | `tasks_step_attempt_uidx` missing or not a valid unique index; a StepRun whose attempt Tasks do not number exactly 1..`attempt_count`; a StepRun with more than one unfinished attempt Task at once (attempts are sequential, one layer of retry) |
+ * | I-G1 one Task per attempt | `tasks_step_attempt_uidx` missing or not a valid unique index; a StepRun whose attempt Tasks do not number exactly 1..`attempt_count`; a StepRun with more than one unfinished attempt Task at once (attempts are sequential, one layer of retry); an attempt Task with more than one WorkerRun (S11 GO2: the advancer's Tasks have no Task-internal retry, so a second run means a retry layer under the StepRun's) |
  * | I-G2 only current-plan steps advance | a guard trigger of `goal_runs` / `plan_revisions` / `step_runs` (goal/0001) or `tasks_goal_step_immutable` (task/0007) missing or not enabled; an unfinished StepRun (`pending` … `failed`, not superseded) whose definition is not in its GoalRun's current plan unchanged — dropped or redefined without being superseded; a finished one whose key the current plan redefines; a key of the current plan with no live StepRun while the GoalRun runs; an attempt Task started under a revision outside its StepRun's live window or under a revision never accepted; an accepted revision off the chain that `based_on_revision` walks back from the current one (newer than it, or skipped by it — I-G3); a revision on that chain that is not accepted |
  * | I-G6 budget | a `running` GoalRun past its wall-clock budget by more than the grace period; or over its token, step or revision budget with no Task of it still running and nothing finished for the grace period — the advancer checks budgets between steps, so a Task that overshoots mid-run is not counted until it ends |
  * | I-G9 only live steps act | `action_requests_status_guard` (governance/0021, the `withdrawn` guard) or `action_requests_step_run_immutable` (governance/0022) missing or not enabled; a request of a cancelled StepRun, or of a cancelling / cancelled GoalRun, still awaiting a decision or approved and queued (it is withdrawn in the transaction that cancels); a request of a cancelled StepRun that started executing after the step ended; a request created after its StepRun was superseded or cancelled; a request whose StepRun is not the one its Worker's Task runs for, or that records a StepRun with no Worker's Task behind it |
@@ -136,6 +136,17 @@ export async function checkIG1(
                group by t.workspace_id, t.step_run_id
               having count(*) > 1
                order by t.workspace_id, t.step_run_id`,
+      },
+      {
+        label: 'runs',
+        sql: `select t.workspace_id, t.id,
+                     count(wr.id) || ' worker runs for attempt ' || t.step_attempt as detail
+                from tasks t
+                join worker_runs wr on wr.workspace_id = t.workspace_id and wr.task_id = t.id
+               where t.step_attempt is not null
+               group by t.workspace_id, t.id, t.step_attempt
+              having count(wr.id) > 1
+               order by t.workspace_id, t.id`,
       },
     ],
     sampleLimit,
