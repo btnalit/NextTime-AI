@@ -3584,7 +3584,7 @@ const platformCapabilities = [
       .strict(),
     resultSchema: listEnvelope(wire.SelfConnectionWireSchema),
     description:
-      'Every gate a workspace connected itself (create_connection), newest first: workspace, connector, target and endpoint, who connected it and when, and whether the platform suspended it. catalogGateId flags one whose address is a platform gate instance’s.',
+      'Every gate a workspace connected itself (create_connection), newest first: workspace, connector, target and endpoint (scheme, host and port only — the path, query and fragment stay in the workspace’s own views), who connected it and when, and whether the platform suspended it. catalogGateId flags one whose address is a platform gate instance’s.',
   },
   {
     name: 'suspend_self_connection',

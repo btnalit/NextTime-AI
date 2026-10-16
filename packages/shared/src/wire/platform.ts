@@ -688,6 +688,8 @@ export const SelfConnectionWireSchema = z
     gatekeeperId: z.string(),
     /** The generic connector of its transport kind (`http` / `mcp` / `cli` / `ssh`). */
     connector: z.string(),
+    /** `target` and `endpoint`: scheme, host and port only (the kernel's `gateAddressOrigin`) —
+     *  the path, query and fragment are the workspace's, shown only in its own views. */
     target: z.string(),
     endpoint: z.string(),
     /** Who connected it; `null` for one recorded when this list was introduced (core 0045's

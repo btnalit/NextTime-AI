@@ -7,6 +7,7 @@ import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import {
   findGatekeepersByEndpoint,
+  gateAddressOrigin,
   gateEndpointHost,
   getGatekeeper,
   normalizeGateEndpoint,
@@ -256,7 +257,8 @@ describe('normalizeGateEndpoint (pure)', () => {
     ['http://gate.invalid:80/', 'http://gate.invalid'],
     ['https://gate.invalid:443/base/', 'https://gate.invalid/base'],
     ['http://GATE.invalid:8090/Base//', 'http://gate.invalid:8090/Base'],
-    ['ssh://DB-1.invalid:22/', 'ssh://db-1.invalid:22'],
+    ['ssh://DB-1.invalid:22/', 'ssh://db-1.invalid'],
+    ['ssh://db-1.invalid:2222/', 'ssh://db-1.invalid:2222'],
     ['http://[::1]:8090/', 'http://[::1]:8090'],
     // User info, query and fragment are never sent: they do not name another gate.
     ['https://ops@gate.invalid/base', 'https://gate.invalid/base'],
@@ -277,8 +279,24 @@ describe('normalizeGateEndpoint (pure)', () => {
   it('gateEndpointHost is the same rule, by host: name and non-default port', () => {
     expect(gateEndpointHost('HTTP://Gate-Host.:8083/i/x')).toBe('gate-host:8083');
     expect(gateEndpointHost('https://ops@gate.invalid:443/')).toBe('gate.invalid');
-    expect(gateEndpointHost('ssh://bücher.invalid:22')).toBe('xn--bcher-kva.invalid:22');
+    expect(gateEndpointHost('ssh://bücher.invalid:22')).toBe('xn--bcher-kva.invalid');
+    expect(gateEndpointHost('ssh://bücher.invalid:2222')).toBe('xn--bcher-kva.invalid:2222');
     expect(gateEndpointHost('not a url')).toBeNull();
+  });
+
+  it('gateAddressOrigin is what the platform plane shows: scheme, host and port, nothing after', () => {
+    const fake = 'abcdefghijklmnopqrstuvwxyz0123';
+    expect(
+      gateAddressOrigin(`https://ops:${fake}@Gate.invalid:443/t/${fake}/api?token=${fake}#${fake}`),
+    ).toBe('https://gate.invalid');
+    expect(gateAddressOrigin(`http://gate.invalid:8090/i/${fake}`)).toBe(
+      'http://gate.invalid:8090',
+    );
+    expect(gateAddressOrigin('ssh://DB-1.invalid:22/srv')).toBe('ssh://db-1.invalid');
+    // A target that is a host or a service name: what comes before a path, after any `…@`.
+    expect(gateAddressOrigin('accept_s2_api')).toBe('accept_s2_api');
+    expect(gateAddressOrigin(`db-1.invalid:5432/${fake}?k=${fake}`)).toBe('db-1.invalid:5432');
+    expect(gateAddressOrigin(`ops:${fake}@db-1.invalid/x`)).toBe('db-1.invalid');
   });
 
   it('keeps addresses that differ apart', () => {

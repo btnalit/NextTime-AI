@@ -10,6 +10,7 @@ import {
   assertConnectionParamsCarryNoCredentials,
   redactConnectionAddress,
 } from '../../governance/connections/index.js';
+import { gateAddressOrigin } from '../../governance/gatekeepers/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import {
   type SelfConnectionListRow,
@@ -322,9 +323,16 @@ async function catalogGateIdsByHost(client: PoolClient): Promise<ReadonlyMap<str
   return byHost;
 }
 
-/** One row as the platform sees it. The address goes through `redactConnectionAddress` here too,
- *  so a copy core 0045 backfilled before `scrub-raw-secrets` ran never shows a credential (#620
- *  review M2) — the scrub then fixes the row itself. */
+/** One row as the platform sees it. Of the target and the gate address only the scheme, host and
+ *  port (`gateAddressOrigin`, #620 review): the workspace's path, query and fragment are not the
+ *  platform's to read, and a token can sit there that the credential rule does not look for. What
+ *  is left still goes through `redactConnectionAddress`, so a copy core 0045 backfilled before
+ *  `scrub-raw-secrets` ran never shows a credential (review M2) — the scrub then fixes the row. */
+function platformShownAddress(field: 'target' | 'endpoint', address: string): string {
+  return redactConnectionAddress(field, gateAddressOrigin(address));
+}
+
+/** One row as the platform sees it — its addresses as `platformShownAddress` shows them. */
 function toSelfConnectionWire(
   row: SelfConnectionListRow,
   catalogByHost: ReadonlyMap<string, string>,
@@ -335,8 +343,8 @@ function toSelfConnectionWire(
     workspaceName: row.workspaceName,
     gatekeeperId: row.gatekeeperObjectId,
     connector: row.connector,
-    target: redactConnectionAddress('target', row.target),
-    endpoint: redactConnectionAddress('endpoint', row.endpoint),
+    target: platformShownAddress('target', row.target),
+    endpoint: platformShownAddress('endpoint', row.endpoint),
     connectedByName: row.connectedByName,
     connectedAt: row.connectedAt.toISOString(),
     suspendedAt: row.suspendedAt ? row.suspendedAt.toISOString() : null,

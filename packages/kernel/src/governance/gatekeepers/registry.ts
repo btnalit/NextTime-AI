@@ -283,10 +283,13 @@ export interface GatekeeperByEndpointEntry {
 
 /** RFC 3986 §2.3's unreserved characters: a percent-encoding of one of them means the character. */
 const UNRESERVED = /^[A-Za-z0-9\-._~]$/;
+/** Default ports `URL` does not know (it drops http / https / ws / wss / ftp's itself). */
+const DEFAULT_PORTS: Readonly<Record<string, string>> = { 'ssh:': '22' };
 
 /** The parts of a gate address that say which gate process is called, each in one canonical
  *  spelling — `null` for text that is not a URL with a host. `URL` already lower-cases the scheme,
  *  converts an http(s) host to punycode and drops a special scheme's default port; on top of it:
+ *    - `ssh`'s default port (22) dropped too;
  *    - the host lower-cased and converted to punycode for a scheme `URL` does not know (`ssh`), and
  *      a trailing dot dropped (`gate.example.` is the same DNS name);
  *    - the user info, the query and the fragment dropped — the kernel never sends them (a call
@@ -315,7 +318,8 @@ function canonicalGateAddress(
     hostname = domainToASCII(decoded) || decoded;
   }
   hostname = hostname.replace(/\.$/, '');
-  const host = url.port !== '' ? `${hostname}:${url.port}` : hostname;
+  const port = url.port === DEFAULT_PORTS[url.protocol] ? '' : url.port;
+  const host = port !== '' ? `${hostname}:${port}` : hostname;
   const path = url.pathname
     .replace(/%[0-9A-Fa-f]{2}/g, (encoded) => {
       const char = String.fromCharCode(Number.parseInt(encoded.slice(1), 16));
@@ -344,6 +348,18 @@ export function normalizeGateEndpoint(endpoint: string): string {
  *  (application/gateway/gate-target.ts `platformGateIdForEndpoint`). */
 export function gateEndpointHost(endpoint: string): string | null {
   return canonicalGateAddress(endpoint)?.host ?? null;
+}
+
+/** What the platform plane shows of an address a workspace connected itself (#620 review): the
+ *  scheme, host and a non-default port in `normalizeGateEndpoint`'s spelling — never the path,
+ *  query, fragment or user info, where a token can sit that the credential rule does not look for.
+ *  Text that is not a URL with a host (a target may be a host or a service name) keeps what comes
+ *  before its first `/`, `?` or `#`, after any `…@`. The full address stays in the workspace's
+ *  own views. */
+export function gateAddressOrigin(address: string): string {
+  const canonical = canonicalGateAddress(address);
+  if (canonical !== null) return `${canonical.scheme}//${canonical.host}`;
+  return address.replace(/^[^@/?#]*@/, '').split(/[/?#]/, 1)[0] ?? '';
 }
 
 /** Every `Gatekeeper` Object in `workspaceId` whose own `endpoint` property equals `endpoint`

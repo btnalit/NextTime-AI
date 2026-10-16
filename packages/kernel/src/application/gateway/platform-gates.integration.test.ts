@@ -2833,8 +2833,8 @@ describe.runIf(DATABASE_URL !== undefined)(
           expect(listed.items).toEqual([
             expect.objectContaining({
               gatekeeperId,
-              target: `https://${host}/d`,
-              endpoint: `https://${host}/gate`,
+              target: `https://${host}`,
+              endpoint: `https://${host}`,
             }),
           ]);
           expect(JSON.stringify(listed)).not.toContain(fake);
@@ -2848,6 +2848,60 @@ describe.runIf(DATABASE_URL !== undefined)(
           expect(stored.rows).toEqual([
             { target: `https://${host}/d`, endpoint: `https://${host}/gate` },
           ]);
+        });
+
+        it('the platform sees a self connection by scheme, host and port only — never a token in its path or query (#620 review)', async () => {
+          const other = await createWorkspaceWithOwner(pool, {
+            name: 'p0b-platform-origin',
+            owner: { userId: admin.id, displayName: 'Origin Owner' },
+            ontologyDir: ONTOLOGY_DIR,
+          });
+          const ownerCaller = humanCallerFor(other.workspaceId, other.ownerPrincipalId, 'owner');
+          const fake = 'abcdefghijklmnopqrstuvwxyz0123';
+          const host = `path-${randomUUID().slice(0, 8)}.example.invalid`;
+          // A token in the path is not something the credential rule looks for: it lands.
+          const endpoint = `https://${host}:8443/t/${fake}/gate`;
+          const gatekeeperId = await landSelf(
+            other.workspaceId,
+            other.ownerPrincipalId,
+            endpoint,
+            selfSecrets.mint(other.workspaceId).salt,
+          );
+          await pool.query(
+            `update workspace_self_connections set target = $3
+              where workspace_id = $1 and gatekeeper_object_id = $2`,
+            [other.workspaceId, gatekeeperId, `https://${host}/api/${fake}?q=${fake}#${fake}`],
+          );
+
+          const listed = await callAsAdmin<ListEnvelope<SelfConnectionWire>>(
+            'list_self_connections',
+            { workspaceId: other.workspaceId },
+          );
+          expect(listed.items).toEqual([
+            expect.objectContaining({
+              gatekeeperId,
+              target: `https://${host}`,
+              endpoint: `https://${host}:8443`,
+            }),
+          ]);
+          const suspended = await callAsAdmin<SelfConnectionWire>('suspend_self_connection', {
+            workspaceId: other.workspaceId,
+            gatekeeperId,
+          });
+          const resumed = await callAsAdmin<SelfConnectionWire>('resume_self_connection', {
+            workspaceId: other.workspaceId,
+            gatekeeperId,
+          });
+          for (const result of [listed, suspended, resumed]) {
+            expect(JSON.stringify(result)).not.toContain(fake);
+          }
+          expect(suspended).toMatchObject({ endpoint: `https://${host}:8443` });
+
+          // The workspace's own view keeps the whole address (the credential rule's redaction only).
+          const gatekeeper = (await dispatchCapability({ pool }, ownerCaller, 'get_object', {
+            objectId: gatekeeperId,
+          })) as { properties: Record<string, unknown> };
+          expect(gatekeeper.properties.endpoint).toBe(endpoint);
         });
 
         it('every capability that shows a gate address shows it through the same redaction (#620 review M2)', async () => {

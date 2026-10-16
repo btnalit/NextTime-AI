@@ -950,8 +950,8 @@ function SelfConnectionsTab({
     <div className="stack" data-testid="integrations-self-connections">
       <p className="text-3 text-small" style={{ margin: 0 }}>
         {t(
-          '工作区在「系统与授权」里自己接入的门。接入包的模式只管新的接入；要切断某一个正在用的，在这里暂停它：它的全部 Operation 从下一次调用起被拒绝，连接、Operation 和历史都保留，恢复后照常可用。',
-          'Gates workspaces connected themselves in Systems & access. A connector’s mode only governs new connections; to cut off one in use, suspend it here: every Operation of it is refused from the next call, while the connection, its Operations and their history stay, and resuming it brings them back.',
+          '工作区在「系统与授权」里自己接入的门。接入包的模式只管新的接入；要切断某一个正在用的，在这里暂停它：它的全部 Operation 从下一次调用起被拒绝，连接、Operation 和历史都保留，恢复后照常可用。目标与门地址这里只显示协议、主机和端口，路径和参数只有工作区自己看得到。',
+          'Gates workspaces connected themselves in Systems & access. A connector’s mode only governs new connections; to cut off one in use, suspend it here: every Operation of it is refused from the next call, while the connection, its Operations and their history stay, and resuming it brings them back. Targets and gate addresses show their scheme, host and port only; the path and parameters are visible to the workspace alone.',
         )}
       </p>
       <div className="row-wrap" style={{ justifyContent: 'space-between' }}>
