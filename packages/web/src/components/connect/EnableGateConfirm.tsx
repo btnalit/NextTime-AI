@@ -5,6 +5,7 @@ import type {
 } from '@nexttime/shared';
 import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { actionKindTagText } from '../../lib/format.js';
 import { useT } from '../../lib/i18n.js';
 import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
@@ -237,7 +238,7 @@ function EnablePreviewBody({
           <ul className="stack-s" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
             {toPublish.map((operation) => (
               <li key={operation.name} className="row-wrap">
-                <span className="mono">{operation.name}</span>
+                <span className="mono">{actionKindTagText(operation.name)}</span>
                 <StatusChip machine="operationMode" status={operation.mode} size="s" />
                 <StatusChip machine="blastRadius" status={operation.blastRadius} size="s" />
               </li>
@@ -257,7 +258,7 @@ function EnablePreviewBody({
             <ul className="stack-s" style={{ margin: 0, paddingLeft: '1.2em' }}>
               {heldBack.map((operation) => (
                 <li key={operation.name}>
-                  <span className="mono">{operation.name}</span>
+                  <span className="mono">{actionKindTagText(operation.name)}</span>
                   {t('：', ': ')}
                   {gateOwnedParamsText(operation.gateOwnedParams ?? [], t)}
                 </li>
@@ -275,7 +276,7 @@ function EnablePreviewBody({
           <ul className="stack-s" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
             {preview.operationsAlreadyPresent.map((operation) => (
               <li key={operation.name} className="row-wrap">
-                <span className="mono">{operation.name}</span>
+                <span className="mono">{actionKindTagText(operation.name)}</span>
                 <StatusChip machine="publishable" status={operation.existing.status} size="s" />
                 {operation.differs ? (
                   <span className="tag" data-testid="enable-preview-differs">

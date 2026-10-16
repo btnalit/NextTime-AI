@@ -1,6 +1,6 @@
 import { useCapability } from '../hooks/useCapability.js';
 import type { CapabilityCaller } from '../lib/clients.js';
-import { formatDateTime, formatRelative } from '../lib/format.js';
+import { actionKindRaw, actionKindTagText, formatDateTime, formatRelative } from '../lib/format.js';
 import type { GatekeeperDetail } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
 import { gateOwnedParamsText } from './connect/GateOwnedParams.js';
@@ -92,9 +92,9 @@ export function GatekeeperDetailDrawer({ http, gatekeeperId }: GatekeeperDetailD
             <div
               className="op-item"
               key={`${operation.name}@${operation.version ?? `#${index}`}`}
-              title={operation.name}
+              title={actionKindRaw(operation.name)}
             >
-              <span className="op-name">{operation.name}</span>
+              <span className="op-name">{actionKindTagText(operation.name)}</span>
               {(nameCounts.get(operation.name) ?? 0) > 1 && operation.version !== undefined ? (
                 <span
                   className="text-3 text-small"

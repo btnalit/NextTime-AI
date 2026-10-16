@@ -7,6 +7,7 @@ import type {
 } from '@nexttime/shared';
 import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { actionKindTagText } from '../../lib/format.js';
 import { operationKey, revisionDraftKey } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
 import { hrefs } from '../../lib/router.js';
@@ -308,7 +309,7 @@ export function RefreshOperationGovernanceConfirm({
             <ul className="stack-s" style={{ margin: 0, paddingLeft: '1.2em' }}>
               {stuckDrafts.map((op) => (
                 <li key={op.name}>
-                  <span className="mono">{op.name}</span>
+                  <span className="mono">{actionKindTagText(op.name)}</span>
                   {t('：', ': ')}
                   {gateOwnedParamsText(op.gateOwnedParams ?? [], t)}
                 </li>
@@ -460,8 +461,8 @@ export function RefreshOperationGovernanceConfirm({
           // stays a draft — said here, before the align opens it.
           ...heldRevisions.map((op) =>
             t(
-              `${op.name}：打开的修订发布不了，新定义声明了只能由门自己设置的参数 ${gateOwnedParamsText(op.gateOwnedParams ?? [], t)}`,
-              `${op.name}: the revision it opens cannot be published — the new definition declares params only the gate sets, ${gateOwnedParamsText(op.gateOwnedParams ?? [], t)}`,
+              `${actionKindTagText(op.name)}：打开的修订发布不了，新定义声明了只能由门自己设置的参数 ${gateOwnedParamsText(op.gateOwnedParams ?? [], t)}`,
+              `${actionKindTagText(op.name)}: the revision it opens cannot be published — the new definition declares params only the gate sets, ${gateOwnedParamsText(op.gateOwnedParams ?? [], t)}`,
             ),
           ),
           ...freeNames(heldDrafts).map((name) =>
@@ -496,8 +497,8 @@ export function RefreshOperationGovernanceConfirm({
         {heldRevisions.length > 0 ? (
           <Notice tone="warn" testId={testId ? `${testId}-redefined-held` : undefined}>
             {t(
-              `门运行的新定义声明了只能由门自己设置的参数：${heldRevisions.map((op) => op.name).join('、')}。对齐为它们打开的修订发布不了；门的维护者去掉这些参数、平台采用改好的清单之前，门会一直拒绝对它们的调用。`,
-              `The new definition the gate runs declares params only the gate sets: ${heldRevisions.map((op) => op.name).join(', ')}. The revisions aligning opens for them cannot be published; the gate keeps refusing calls to them until its maintainer drops those params and the platform adopts the corrected manifest.`,
+              `门运行的新定义声明了只能由门自己设置的参数：${heldRevisions.map((op) => actionKindTagText(op.name)).join('、')}。对齐为它们打开的修订发布不了；门的维护者去掉这些参数、平台采用改好的清单之前，门会一直拒绝对它们的调用。`,
+              `The new definition the gate runs declares params only the gate sets: ${heldRevisions.map((op) => actionKindTagText(op.name)).join(', ')}. The revisions aligning opens for them cannot be published; the gate keeps refusing calls to them until its maintainer drops those params and the platform adopts the corrected manifest.`,
             )}
           </Notice>
         ) : null}

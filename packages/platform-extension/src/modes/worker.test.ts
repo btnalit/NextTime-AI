@@ -547,6 +547,13 @@ describe('registerWorkerMode', () => {
           ],
           proposedOperationsRejected: [
             { index: 0, gatekeeperId: MADE_UP_GATEKEEPER_ID, reason: 'gatekeeper_not_found' },
+            {
+              index: 1,
+              gatekeeperId: MADE_UP_GATEKEEPER_ID,
+              reason: 'invalid_operation_name',
+              problem: 'too_long',
+              detail: 'Operation name "demo.long…" is longer than 128 characters',
+            },
           ],
           evidenceDropped: [1],
         },
@@ -593,6 +600,9 @@ describe('registerWorkerMode', () => {
     );
     expect(text).toContain(
       `proposedOperations[0] (gatekeeperId ${MADE_UP_GATEKEEPER_ID}): gatekeeper_not_found`,
+    );
+    expect(text).toContain(
+      `proposedOperations[1] (gatekeeperId ${MADE_UP_GATEKEEPER_ID}): invalid_operation_name — Operation name "demo.long…" is longer than 128 characters`,
     );
     expect(text).toContain('evidence[1]: dropped');
     expect(kernel.requests.filter((r) => r.capability === 'get_task')).toHaveLength(1);

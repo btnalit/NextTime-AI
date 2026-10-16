@@ -491,7 +491,14 @@ export async function proposeOperation(
   // row's status in a conflict error. Not the guard — the conditional write below is (two
   // dispatch transactions may interleave between this read and that write).
   const existing = await getOperation(client, workspaceId, gatekeeperId, name);
-  assertNewOperationNameAllowed(name, existing);
+  const refusal = proposalRefusalFor(name, existing, input.proposedBy.id);
+  if (refusal?.reason === 'invalid_operation_name') {
+    throw new OperationNameInvalidError(name, refusal.problem);
+  }
+  if (refusal?.reason === 'operation_identity_conflict') {
+    // A conflicting draft, or a fully `deprecated` identity — unchanged pre-S3.12 rule.
+    throw new OperationIdentityConflictError(gatekeeperId, name, refusal.existingStatus);
+  }
 
   let version: number;
   let draftOf: string | undefined;
@@ -511,7 +518,7 @@ export async function proposeOperation(
     // correct here for a fresh (non-revision) draft, which never had one to begin with.
     draftOf = existing.draftOf;
   } else {
-    // A conflicting draft, or a fully `deprecated` identity — unchanged pre-S3.12 rule.
+    // Unreachable: `proposalRefusalFor` refused every other current row above.
     throw new OperationIdentityConflictError(gatekeeperId, name, existing.status);
   }
 
@@ -546,6 +553,47 @@ export async function proposeOperation(
     proposedBy: input.proposedBy,
     ...(draftOf !== undefined ? { draftOf } : {}),
   };
+}
+
+/** Why `proposeOperation` would refuse a proposal of `name` by `proposerId`, read from the
+ *  identity's current row: a new identity whose name breaks the name rule (legacy 232), or a row
+ *  the proposer may not write over (outcome 2 above — a conflicting draft or a fully `deprecated`
+ *  identity). `undefined` means it would write. */
+export type OperationProposalRefusal =
+  | { readonly reason: 'invalid_operation_name'; readonly problem: OperationNameProblem }
+  | { readonly reason: 'operation_identity_conflict'; readonly existingStatus: OperationStatus };
+
+/** The one decision `proposeOperation` makes before writing, shared with
+ *  `operationProposalRefusal` so a pre-check and the write can never disagree. */
+function proposalRefusalFor(
+  name: string,
+  existing: OperationRecord | null,
+  proposerId: string,
+): OperationProposalRefusal | undefined {
+  if (existing === null) {
+    const problem = operationNameProblem(name);
+    return problem !== undefined ? { reason: 'invalid_operation_name', problem } : undefined;
+  }
+  if (existing.status === 'published' || isOwnProposalDraft(existing, proposerId)) {
+    return undefined;
+  }
+  return { reason: 'operation_identity_conflict', existingStatus: existing.status };
+}
+
+/** Review #493 on #593 (M1): what `proposeOperation` would refuse, asked before anything is
+ *  written — `report_task_result` turns each refusal into a recorded per-entry rejection
+ *  (`worker-result-handler.ts`'s `validateContract`) instead of losing the whole contract. Reads
+ *  the same row `proposeOperation` reads; a concurrent write in between is still the write's own
+ *  conditional guard to refuse. */
+export async function operationProposalRefusal(
+  client: PoolClient,
+  workspaceId: string,
+  gatekeeperId: string,
+  name: string,
+  proposerId: string,
+): Promise<OperationProposalRefusal | undefined> {
+  const existing = await getOperation(client, workspaceId, gatekeeperId, name);
+  return proposalRefusalFor(name, existing, proposerId);
 }
 
 /** The one shape `proposeOperation` may replace: a `draft` the same Principal wrote through

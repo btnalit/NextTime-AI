@@ -1486,10 +1486,15 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
       draft === null &&
       (governedScope.resources[GATEKEEPER_RESOURCE_SCOPE_KEY] ?? []).includes(gatekeeperId)
     ) {
-      const deprecated =
-        current?.status === 'deprecated' ||
-        (current?.status === 'draft' &&
-          (await hasDeprecatedOperation(client, workspaceId, gatekeeperId, operationName)));
+      // Review #493 on #593 (P3): one query, whatever `current` is — an unseen draft, a
+      // deprecated identity and no row at all take the same path, so their timing does not tell
+      // them apart either.
+      const deprecated = await hasDeprecatedOperation(
+        client,
+        workspaceId,
+        gatekeeperId,
+        operationName,
+      );
       throw new UnknownOperationError(gatekeeperId, deprecated ? 'deprecated' : 'none');
     }
     return runGovernedRequest(client, workspaceId, {

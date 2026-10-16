@@ -18,7 +18,7 @@ import type {
 } from '@nexttime/shared';
 import { CAPABILITY_REGISTRY } from '@nexttime/shared';
 import type { CapabilityCaller } from './clients.js';
-import { formatRelative } from './format.js';
+import { actionKindTagText, formatRelative } from './format.js';
 import { objectDisplayName } from './graph-view.js';
 import type { Translate } from './i18n.js';
 import { roleLabel } from './labels.js';
@@ -230,7 +230,7 @@ export function operationNameSource(): PickerSource {
       }
       return [...byName.entries()].map(([name, gateSet]) => ({
         id: name,
-        label: name,
+        label: actionKindTagText(name),
         detail: [...gateSet].join(', '),
       }));
     },

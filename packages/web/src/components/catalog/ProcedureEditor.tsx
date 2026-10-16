@@ -16,6 +16,7 @@ import {
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { reviewFieldNames } from '../../lib/credential-review.js';
 import { isForbiddenError } from '../../lib/errors.js';
+import { actionKindTagText } from '../../lib/format.js';
 import { type OperationChoice, useGateOperations } from '../../lib/gate-operations.js';
 import type { GatekeeperListRow, ProcedureRow } from '../../lib/governance.js';
 import { type Translate, useT } from '../../lib/i18n.js';
@@ -186,7 +187,7 @@ function OperationStepFields({
               id={`${prefix}-operation`}
               options={choices.map((choice) => ({
                 value: choice.name,
-                label: choice.name,
+                label: actionKindTagText(choice.name),
                 secondary: operationSecondary(choice, t),
               }))}
               value={step.operationName}
@@ -229,8 +230,8 @@ function OperationStepFields({
       {gate && notOnList && choices.length > 0 ? (
         <Notice tone="warn" testId="procedure-step-unknown-operation">
           {t(
-            `门「${gate.name}」上没有已发布的「${name}」；发布这个 Procedure 时会失败。请从列表选择，或检查拼写。`,
-            `Gate “${gate.name}” publishes no “${name}”; publishing this Procedure would fail. Choose from the list or check the spelling.`,
+            `门「${gate.name}」上没有已发布的「${actionKindTagText(name)}」；发布这个 Procedure 时会失败。请从列表选择，或检查拼写。`,
+            `Gate “${gate.name}” publishes no “${actionKindTagText(name)}”; publishing this Procedure would fail. Choose from the list or check the spelling.`,
           )}
         </Notice>
       ) : null}

@@ -192,6 +192,16 @@ describe('actionTargetLabel', () => {
     ).toBe('docker_container_restart（name: a）');
   });
 
+  it('shows a hidden character in the name or a value as \\u{XXXX} (legacy 232)', () => {
+    expect(
+      actionTargetLabel(
+        'request_action',
+        { operation: 'container.\u202Erestart', params: { name: 'me\u200Bdia' } },
+        en,
+      ),
+    ).toBe('container.\\u{202E}restart (name: me\\u{200B}dia)');
+  });
+
   it('falls back to the name alone when the arguments were cut short, and to nothing without one', () => {
     expect(actionTargetLabel('docker_container_restart', '{"name":"me', zh)).toBe(
       'docker_container_restart',

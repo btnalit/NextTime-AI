@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { OPERATION_NAME_MAX } from './action-description.js';
 import { ECHO_MAX, boundedEcho, clipCodePoints, quotedName, visibleText } from './echoed-text.js';
 
 describe('quotedName (legacy 232)', () => {
@@ -37,6 +38,12 @@ describe('boundedEcho / visibleText / clipCodePoints (legacy 232)', () => {
     expect(visibleText('a\nb\u202Ec\u200Bd\u2028e\uD800')).toBe(
       'a\\u{A}b\\u{202E}c\\u{200B}d\\u{2028}e\\u{D800}',
     );
+  });
+
+  it('never clips a legal Operation name (review #493 on #593)', () => {
+    const longest = `a.${'b'.repeat(OPERATION_NAME_MAX - 2)}`;
+    expect(boundedEcho(longest)).toBe(longest);
+    expect(quotedName(longest)).toBe(`"${longest}"`);
   });
 
   it('clips before escaping, by code point', () => {

@@ -3,6 +3,7 @@ import { useRef, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { actionKindTagText } from '../../lib/format.js';
 import {
   type GatekeeperListRow,
   type GrantRow,
@@ -479,7 +480,7 @@ function GrantGateFormBody({
             >
               {operationOptions.map((operation) => (
                 <li key={operation.name} className="row-wrap">
-                  <span className="mono">{operation.name}</span>
+                  <span className="mono">{actionKindTagText(operation.name)}</span>
                   <StatusChip machine="operationMode" status={operation.mode} size="s" />
                   <StatusChip machine="blastRadius" status={operation.blastRadius} size="s" />
                 </li>

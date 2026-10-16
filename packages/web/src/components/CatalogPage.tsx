@@ -12,7 +12,13 @@ import {
   usePublishCredentialReview,
 } from '../lib/credential-review.js';
 import { errorToastText, isDraftChangedError, isForbiddenError } from '../lib/errors.js';
-import { formatRelative, prettyJson, shortId } from '../lib/format.js';
+import {
+  actionKindRaw,
+  actionKindTagText,
+  formatRelative,
+  prettyJson,
+  shortId,
+} from '../lib/format.js';
 import {
   type CapabilityNameRow,
   type OperationCatalogRow,
@@ -359,12 +365,12 @@ function PublishGovernanceConfirm({
           {t('发布', 'Publish')}
         </Button>
       }
-      title={t(`发布 ${row.name}`, `Publish ${row.name}`)}
+      title={t(`发布 ${actionKindTagText(row.name)}`, `Publish ${actionKindTagText(row.name)}`)}
       description={t(
         '这个草稿改变了当前生效版本的分类——分类决定它要不要人工审批、要不要授权。发布后替换当前版本。',
         'This draft changes the classification of the version in effect — the classification decides whether it needs a person’s approval and a grant. Publishing replaces the current version.',
       )}
-      target={row.name}
+      target={actionKindTagText(row.name)}
       impact={[governanceChangeSummary(item, t)]}
       confirmLabel={t('发布', 'Publish')}
       danger={isLoosening(change.direction)}
@@ -796,7 +802,9 @@ function OperationDetailView({
       <header className="stack-s">
         <div className="row-wrap">
           <StatusChip machine="publishable" status={row.status} size="s" />
-          <strong className="catalog-detail-title mono truncate">{row.name}</strong>
+          <strong className="catalog-detail-title mono truncate" title={actionKindRaw(row.name)}>
+            {actionKindTagText(row.name)}
+          </strong>
         </div>
       </header>
       <KeyValue items={items} />
@@ -851,7 +859,7 @@ function OperationDetailView({
         ) : canDeprecate && row.status === 'published' ? (
           <DeprecateConfirm
             busy={busy}
-            target={row.name}
+            target={actionKindTagText(row.name)}
             impact={
               usage
                 ? [
@@ -867,7 +875,11 @@ function OperationDetailView({
         {offersDiscard ? (
           <DiscardDraftConfirm
             busy={busy}
-            target={row.version !== undefined ? `${row.name} v${row.version}` : row.name}
+            target={
+              row.version !== undefined
+                ? `${actionKindTagText(row.name)} v${row.version}`
+                : actionKindTagText(row.name)
+            }
             description={t(
               '这份草稿会移出能力目录，不会被调用。它不会被删除：谁提议的、谁丢弃的、为什么，都留在审计里。之后再导入或提议这个 Operation，会作为新版本出现。',
               'This draft leaves the catalog and is never called. It is not deleted: who proposed it, who discarded it and why stay in the audit log. If this Operation is imported or proposed again, it comes back as a new version.',
@@ -991,14 +1003,15 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
           ? { draftDigest: row.draftDigest }
           : {}),
       });
+      const shown = actionKindTagText(row.name);
       toast.push({
         tone: 'ok',
         title:
           action === 'publish_operation'
             ? row.version !== undefined
-              ? t(`${row.name} 已发布 v${row.version}`, `${row.name} v${row.version} published`)
-              : t(`${row.name} 已发布`, `${row.name} published`)
-            : t(`${row.name} 已弃用`, `${row.name} deprecated`),
+              ? t(`${shown} 已发布 v${row.version}`, `${shown} v${row.version} published`)
+              : t(`${shown} 已发布`, `${shown} published`)
+            : t(`${shown} 已弃用`, `${shown} deprecated`),
       });
       // A published revision draft is no longer `@draft` (UX acceptance of #538: the detail read
       // 「未找到」 after publishing) — follow it to the version now in effect.
@@ -1015,7 +1028,10 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       // C14: carry the kernel's own text — the generic title alone dropped the actual reason.
       toast.push({
         tone: 'danger',
-        title: t(`无法更新 ${row.name}`, `Could not update ${row.name}`),
+        title: t(
+          `无法更新 ${actionKindTagText(row.name)}`,
+          `Could not update ${actionKindTagText(row.name)}`,
+        ),
         description: errorToastText(err, t),
       });
     } finally {
@@ -1039,7 +1055,10 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       });
       toast.push({
         tone: 'ok',
-        title: t(`${row.name} v${row.version} 已丢弃`, `${row.name} v${row.version} discarded`),
+        title: t(
+          `${actionKindTagText(row.name)} v${row.version} 已丢弃`,
+          `${actionKindTagText(row.name)} v${row.version} discarded`,
+        ),
       });
       onSelectItem(null);
       refresh();
@@ -1126,7 +1145,9 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
               <span className="row-wrap" style={{ justifyContent: 'space-between' }}>
                 <span className="row-wrap">
                   <StatusChip machine="publishable" status={row.status} size="s" />
-                  <span className="mono truncate">{row.name}</span>
+                  <span className="mono truncate" title={actionKindRaw(row.name)}>
+                    {actionKindTagText(row.name)}
+                  </span>
                   {versioned.has(operationKey(row)) && row.version !== undefined ? (
                     <span className="text-3 text-small" data-testid={`catalog-row-version-${key}`}>
                       v{row.version}
@@ -1219,7 +1240,9 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
         <DialogContent data-testid="operation-description-dialog">
           <DialogHeader>
             <DialogTitle>{t('编辑描述', 'Edit description')}</DialogTitle>
-            <DialogDescription className="mono">{editingRow?.name}</DialogDescription>
+            <DialogDescription className="mono">
+              {editingRow ? actionKindTagText(editingRow.name) : null}
+            </DialogDescription>
           </DialogHeader>
           <Field
             id={descriptionFieldId}

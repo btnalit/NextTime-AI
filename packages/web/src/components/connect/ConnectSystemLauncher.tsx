@@ -10,7 +10,7 @@ import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { useCapability, useCapabilityList } from '../../hooks/useCapability.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
-import { formatDateTime, formatRelative } from '../../lib/format.js';
+import { actionKindTagText, formatDateTime, formatRelative } from '../../lib/format.js';
 import { normalizeGateIdInput, suggestedGateId } from '../../lib/gate-input.js';
 import {
   type GatePath,
@@ -959,7 +959,7 @@ function PolicyStep({
                 {gate.platform.operations.map((operation) => (
                   <tr key={operation.name}>
                     <td>
-                      <span className="mono">{operation.name}</span>
+                      <span className="mono">{actionKindTagText(operation.name)}</span>
                       {/* UX acceptance of #567 P3: an entry the bulk publish will hold back is
                        *  marked where it is first listed, not only in the enable preview. */}
                       <GateOwnedParamsMark

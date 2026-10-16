@@ -1,5 +1,5 @@
 import type { DefinitionMismatchWire } from '@nexttime/shared';
-import { formatDateTime, formatRelative } from '../../lib/format.js';
+import { actionKindTagText, formatDateTime, formatRelative } from '../../lib/format.js';
 import { useT } from '../../lib/i18n.js';
 import { hrefs } from '../../lib/router.js';
 import { Notice } from '../kit/notice.js';
@@ -134,13 +134,13 @@ export function DefinitionMismatchNotice({
   const heldByGate = mismatch.filter((entry) => (entry.gateOwnedParams?.length ?? 0) > 0);
   const recoverable = mismatch.filter((entry) => (entry.gateOwnedParams?.length ?? 0) === 0);
   const adoptionEntries = recoverable.filter((entry) => entry.awaiting === 'platform_adoption');
-  const adoption = adoptionEntries.map((entry) => entry.operation);
+  const adoption = adoptionEntries.map((entry) => actionKindTagText(entry.operation));
   const dropped = adoptionEntries
     .filter((entry) => entry.droppedByGate === true)
-    .map((entry) => entry.operation);
+    .map((entry) => actionKindTagText(entry.operation));
   const revision = recoverable
     .filter((entry) => entry.awaiting === 'workspace_revision')
-    .map((entry) => entry.operation);
+    .map((entry) => actionKindTagText(entry.operation));
   if (adoption.length === 0 && revision.length === 0 && heldByGate.length === 0) return null;
   return (
     <div className="stack-s" data-testid={testId}>
@@ -148,23 +148,23 @@ export function DefinitionMismatchNotice({
         <Notice tone="warn" testId={testId ? `${testId}-gate-owned` : undefined}>
           {t(
             `门已经按新定义运行，对 ${joined(
-              heldByGate.map((entry) => entry.operation),
+              heldByGate.map((entry) => actionKindTagText(entry.operation)),
               true,
             )} 的调用会被拒绝。新定义声明了只能由门自己设置的参数（${heldByGate
               .map(
                 (entry) =>
-                  `${entry.operation}：${gateOwnedParamsText(entry.gateOwnedParams ?? [], t)}`,
+                  `${actionKindTagText(entry.operation)}：${gateOwnedParamsText(entry.gateOwnedParams ?? [], t)}`,
               )
               .join(
                 '；',
               )}），修订发布不了，对齐也恢复不了这些调用；要等门的维护者去掉这些参数、平台采用改好的清单之后才会恢复。`,
             `The gate already runs a new definition, so calls to ${joined(
-              heldByGate.map((entry) => entry.operation),
+              heldByGate.map((entry) => actionKindTagText(entry.operation)),
               false,
             )} are refused. The new definition declares params only the gate sets (${heldByGate
               .map(
                 (entry) =>
-                  `${entry.operation}: ${gateOwnedParamsText(entry.gateOwnedParams ?? [], t)}`,
+                  `${actionKindTagText(entry.operation)}: ${gateOwnedParamsText(entry.gateOwnedParams ?? [], t)}`,
               )
               .join(
                 '; ',

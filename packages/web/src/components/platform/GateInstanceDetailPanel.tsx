@@ -8,7 +8,7 @@ import type {
 import { useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
-import { formatDateTime, formatRelative } from '../../lib/format.js';
+import { actionKindTagText, formatDateTime, formatRelative } from '../../lib/format.js';
 import { useT } from '../../lib/i18n.js';
 import { transportKindLabel } from '../../lib/labels.js';
 import { hrefs } from '../../lib/router.js';
@@ -274,7 +274,7 @@ export function GateInstanceDetailPanel({
                     {instance.operations.map((operation) => (
                       <tr key={operation.name}>
                         <td>
-                          <span className="mono">{operation.name}</span>
+                          <span className="mono">{actionKindTagText(operation.name)}</span>
                           <GateOwnedParamsMark
                             params={operation.gateOwnedParams}
                             testId={`gate-instance-operation-held-${operation.name}`}

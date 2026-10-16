@@ -14,7 +14,7 @@ import {
 import type { Transport, TransportInvokeResult } from '@nexttime/gatekeeper-base';
 import type { Operation, Role } from '@nexttime/shared';
 import type { FastifyInstance } from 'fastify';
-import type { Pool } from 'pg';
+import { Client, type Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
@@ -1863,6 +1863,28 @@ describe.runIf(DATABASE_URL !== undefined)(
           ),
         );
         expect(await countRows(DRAFT_OP.name)).toBe(draftRowsBefore);
+        // Review #493 on #593 (P3): nor do the two take different paths — the same statements,
+        // so the time a refusal takes does not tell them apart either.
+        const statementsFor = async (operation: string): Promise<string[]> => {
+          const original = Client.prototype.query;
+          const texts: string[] = [];
+          Client.prototype.query = function (this: Client, ...args: unknown[]) {
+            const query = args[0];
+            texts.push(
+              typeof query === 'string' ? query : ((query as { text?: string })?.text ?? ''),
+            );
+            return (original as (...rest: unknown[]) => unknown).apply(this, args);
+          } as typeof original;
+          try {
+            await refusalOf(memberHandle(), operation);
+          } finally {
+            Client.prototype.query = original;
+          }
+          return texts;
+        };
+        const draftStatements = await statementsFor(DRAFT_OP.name);
+        expect(draftStatements.length).toBeGreaterThan(0);
+        expect(draftStatements).toEqual(await statementsFor('no.such.operation.anywhere'));
 
         const overRetired = await refusalOf(memberHandle(), OTHERS_ON_RETIRED.name);
         expect(overRetired.details.operationStatus).toBe('deprecated');

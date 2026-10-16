@@ -8,8 +8,11 @@
  * so both show the same string the same way.
  */
 
-/** The most code points of a caller-chosen string any echo carries. */
-export const ECHO_MAX = 120;
+import { OPERATION_NAME_MAX } from './action-description.js';
+
+/** The most code points of a caller-chosen string any echo carries — `OPERATION_NAME_MAX`
+ *  (action-description.ts), so a legal Operation name is never clipped (review #493 on #593). */
+export const ECHO_MAX = OPERATION_NAME_MAX;
 
 /** Characters a reader cannot see, or sees reorder the text around them. */
 const UNSEEN = /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/gu;

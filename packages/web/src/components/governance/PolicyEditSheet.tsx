@@ -1,6 +1,7 @@
 import { BLAST_RADIUS_VALUES, type BlastRadius, type PolicyWire } from '@nexttime/shared';
 import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { actionKindTagText } from '../../lib/format.js';
 import { type OperationChoice, useGateOperations } from '../../lib/gate-operations.js';
 import type { GatekeeperListRow } from '../../lib/governance.js';
 import { type Translate, useT } from '../../lib/i18n.js';
@@ -292,7 +293,7 @@ export function PolicyEditSheet({
                 id="pe-action-kind"
                 options={choices.map((choice) => ({
                   value: choice.name,
-                  label: choice.name,
+                  label: actionKindTagText(choice.name),
                   secondary: operationSecondary(choice, workspaceWide, t) || undefined,
                 }))}
                 value={actionKindTag}

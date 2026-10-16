@@ -48,6 +48,22 @@ describe('GatekeeperDetailDrawer', () => {
     expect(screen.getByText('docker.restart')).toBeTruthy();
   });
 
+  it('legacy 232: an old Operation name with a hidden character shows it as \\u{XXXX}', async () => {
+    const http = callerReturning({
+      id: 'gk-1',
+      name: 'docker',
+      kind: 'mcp',
+      status: 'active',
+      operationCount: 1,
+      createdAt: '2026-09-01T00:00:00.000Z',
+      operations: [{ name: 'docker.\u202Erestart', status: 'published', mode: 'execute' }],
+      health: 'ok',
+    });
+    renderDrawer(http);
+    expect(await screen.findByText('docker.\\u{202E}restart')).toBeTruthy();
+    expect(screen.queryByText('docker.\u202Erestart')).toBeNull();
+  });
+
   it('legacy 271: an unreachable gate reads 不可达, not 未知', async () => {
     const http = callerReturning({
       id: 'gk-1',
