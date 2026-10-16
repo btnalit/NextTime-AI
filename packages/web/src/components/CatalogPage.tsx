@@ -1020,7 +1020,11 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       // C14: carry the kernel's own text — the generic title alone dropped the actual reason.
       toast.push({
         tone: 'danger',
-        title: t(`无法更新 ${row.name}`, `Could not update ${row.name}`),
+        // UX acceptance of #592 (P3-1): say which action failed.
+        title:
+          action === 'publish_operation'
+            ? t(`无法发布 ${row.name}`, `Could not publish ${row.name}`)
+            : t(`无法弃用 ${row.name}`, `Could not deprecate ${row.name}`),
         description: errorToastText(err, t),
       });
     } finally {
@@ -1499,7 +1503,11 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       // C14: carry the kernel's own text — the generic title alone dropped the actual reason.
       toast.push({
         tone: 'danger',
-        title: t(`无法更新 ${row.name}`, `Could not update ${row.name}`),
+        // UX acceptance of #592 (P3-1): say which action failed.
+        title:
+          action === 'publish_skill'
+            ? t(`无法发布 ${row.name}`, `Could not publish ${row.name}`)
+            : t(`无法弃用 ${row.name}`, `Could not deprecate ${row.name}`),
         description: errorToastText(err, t),
       });
     } finally {
@@ -1856,7 +1864,11 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       // C14: carry the kernel's own text — the generic title alone dropped the actual reason.
       toast.push({
         tone: 'danger',
-        title: t(`无法更新 ${row.name}`, `Could not update ${row.name}`),
+        // UX acceptance of #592 (P3-1): say which action failed.
+        title:
+          action === 'publish_procedure'
+            ? t(`无法发布 ${row.name}`, `Could not publish ${row.name}`)
+            : t(`无法弃用 ${row.name}`, `Could not deprecate ${row.name}`),
         description: errorToastText(err, t),
       });
     } finally {

@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import type { GatekeeperListRow } from '../../lib/governance.js';
+import { HttpError } from '../../lib/http-client.js';
 import { PolicyEditSheet } from './PolicyEditSheet.js';
 
 afterEach(cleanup);
@@ -320,11 +321,24 @@ describe('PolicyEditSheet — legacy 218: "always allow" names the version it al
     autoApproveConsent: 'definition_changed',
   });
 
+  /** The gate's `list_operations` read with `docker.restart` published at `version`. */
+  const publishedAt =
+    (version: number, extra: Partial<OperationSummaryWire> = {}) =>
+    async () => ({
+      items: [operation({ name: 'docker.restart', blastRadius: 'medium', version, ...extra })],
+    });
+
   it('a rule given for v1 while v2 is published says it is suspended; saving reconfirms v2 as a loosening', async () => {
-    const { call } = renderSheet(suspendedRule);
+    const { call } = renderSheet(suspendedRule, publishedAt(2));
     const notice = screen.getByTestId('policy-edit-suspended');
     expect(notice.textContent).toContain('v1');
     expect(notice.textContent).toContain('v2');
+    // UX acceptance of #592 (P2-2): the version to reconfirm is one click away.
+    const view = (await screen.findByTestId('policy-edit-view-operation')) as HTMLAnchorElement;
+    expect(view.textContent).toContain('v2');
+    expect(view.getAttribute('href')).toBe(
+      `#/govern/catalog/operations/${encodeURIComponent('gk-lab::docker.restart')}`,
+    );
     const autoApprove = screen.getByTestId('policy-edit-auto-approve') as HTMLInputElement;
     expect(autoApprove.checked).toBe(true);
     expect(autoApprove.parentElement?.textContent).toContain('v2');
@@ -363,15 +377,18 @@ describe('PolicyEditSheet — legacy 218: "always allow" names the version it al
     expect(screen.getByTestId('policy-edit-suspended').textContent).toContain('升级前');
   });
 
-  it('auto-approval cannot be turned on when the gate no longer publishes the Operation', () => {
-    renderSheet(
+  it('a rule whose Operation the gate no longer offers can only be turned off (review #501 P2-2)', async () => {
+    const { call } = renderSheet(
       savedPolicy({
         gatekeeperId: 'gk-lab',
         autoApprove: true,
+        blastRadius: 'medium',
+        requesterCanApprove: false,
         operationVersion: 1,
         publishedOperationVersion: null,
         autoApproveConsent: 'definition_changed',
       }),
+      async () => ({ items: [] }),
     );
     const autoApprove = screen.getByTestId('policy-edit-auto-approve') as HTMLInputElement;
     expect(autoApprove.disabled).toBe(true);
@@ -379,5 +396,89 @@ describe('PolicyEditSheet — legacy 218: "always allow" names the version it al
     expect(screen.getByTestId('policy-edit-auto-approve-hint').textContent).toContain(
       '已经没有发布',
     );
+    const notice = screen.getByTestId('policy-edit-suspended');
+    expect(notice.textContent).toContain('门已不再提供');
+    expect(screen.queryByTestId('policy-edit-view-operation')).toBeNull();
+    // Loosening is not on offer: the kernel accepts only a tightening here.
+    const yes = screen.getByRole('option', { name: '是' }) as HTMLOptionElement;
+    expect(yes.disabled).toBe(true);
+
+    const submit = screen.getByTestId('policy-edit-submit');
+    expect(submit.textContent).toBe('停用');
+    fireEvent.click(submit);
+    const confirm = await screen.findByTestId('policy-edit-confirm');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    await waitFor(() =>
+      expect(call).toHaveBeenCalledWith('set_policy', {
+        policy: {
+          actionKindTag: 'docker.restart',
+          autoApprove: false,
+          gatekeeperId: 'gk-lab',
+          blastRadius: 'medium',
+          requesterCanApprove: false,
+        },
+      }),
+    );
+  });
+
+  it('a version published after the sheet opened: nothing saved, it re-reads and says which version is now confirmed (review #501 P2-1)', async () => {
+    let reads = 0;
+    let saves = 0;
+    const call = vi.fn(async (name: string, params?: unknown) => {
+      if (name === 'list_operations') {
+        reads += 1;
+        return publishedAt(reads === 1 ? 2 : 3)();
+      }
+      saves += 1;
+      if (saves === 1) {
+        throw new HttpError('capability_error', 'v3 is published now', 'version_changed');
+      }
+      return { ...suspendedRule, ...(params as object) };
+    });
+    render(
+      <PolicyEditSheet
+        http={{ call } as unknown as CapabilityCaller}
+        open
+        onOpenChange={vi.fn()}
+        editing={suspendedRule}
+        gatekeepers={GATES}
+        onSaved={vi.fn()}
+      />,
+    );
+    await screen.findByTestId('policy-edit-view-operation');
+    const confirmAndSave = async () => {
+      fireEvent.click(screen.getByTestId('policy-edit-submit'));
+      await screen.findByTestId('policy-edit-confirm');
+      fireEvent.change(screen.getByTestId('confirm-typed-name'), {
+        target: { value: 'docker.restart' },
+      });
+      fireEvent.click(screen.getByTestId('confirm-acknowledge'));
+      fireEvent.click(screen.getByTestId('confirm-button'));
+    };
+    await confirmAndSave();
+    const moved = await screen.findByTestId('policy-edit-version-moved');
+    await waitFor(() => expect(moved.textContent).toMatch(/现在确认的是\s*v3/));
+    expect(moved.textContent).toMatch(/不再是\s*v2/);
+    expect(
+      (screen.getByTestId('policy-edit-auto-approve') as HTMLInputElement).parentElement
+        ?.textContent,
+    ).toContain('v3');
+
+    await confirmAndSave();
+    await waitFor(() =>
+      expect(call).toHaveBeenLastCalledWith('set_policy', {
+        policy: expect.objectContaining({ operationVersion: 3 }),
+      }),
+    );
+  });
+
+  it('a version now published at high impact cannot be auto-approved (review #501 P3-2)', async () => {
+    renderSheet(suspendedRule, publishedAt(2, { blastRadius: 'high' }));
+    await waitFor(() =>
+      expect((screen.getByTestId('policy-edit-auto-approve') as HTMLInputElement).disabled).toBe(
+        true,
+      ),
+    );
+    expect(screen.getByTestId('policy-edit-auto-approve-hint').textContent).toContain('高影响');
   });
 });

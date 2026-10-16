@@ -10,12 +10,15 @@ import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import {
   ActionRequestNotFoundError,
   type ActionRequestRow,
+  ApprovalScopeError,
+  SelfApprovalNotAllowedError,
   requestAction,
 } from '../../governance/approval/index.js';
 import { ReviewedVersionChangedError, grantCapability } from '../../governance/capability/index.js';
 import {
   GatekeeperNotFoundError,
   OperationNotFoundError,
+  deprecateOperation,
   getPublishedOperation,
   importManifest,
   operationRecordDigest,
@@ -28,7 +31,6 @@ import {
   SetPolicyValidationError,
 } from '../../governance/policy/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
-import { ForbiddenError } from './authorize.js';
 import { dispatchCapability } from './dispatch.js';
 import type { ResolvedCaller } from './resolve-caller.js';
 
@@ -64,6 +66,7 @@ function operation(overrides: Partial<Operation> & Pick<Operation, 'name'>): Ope
 const SHARED_OP = operation({ name: 'shared.restart' });
 const HIGH_OP = operation({ name: 'shared.wipe', blast_radius: 'high' });
 const CARRY_OP = operation({ name: 'carry.kind' });
+const SELF_OP = operation({ name: 'self.kind' });
 // Legacy 218: the action kind the old "always allow" check confused with a gate grant.
 const NAMED_GATEKEEPER_OP = operation({ name: 'gatekeeper' });
 
@@ -192,6 +195,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           SHARED_OP,
           HIGH_OP,
           CARRY_OP,
+          SELF_OP,
         ]);
         prodGateId = await registerGateWithOperations(workspaceId, ownerId, 'prod-gate', [
           SHARED_OP,
@@ -338,7 +342,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             'set_auto_approved_action_kind',
             await alwaysAllowParams(prodGateId, SHARED_OP.name, operatorId),
           ),
-        ).rejects.toThrow(ForbiddenError);
+        ).rejects.toThrow(ApprovalScopeError);
 
         // A grant on the lab gate covers the lab gate only.
         const labOperator = humanCaller(workspaceId, labOperatorId, 'operator');
@@ -349,7 +353,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             'set_auto_approved_action_kind',
             await alwaysAllowParams(prodGateId, SHARED_OP.name, labOperatorId),
           ),
-        ).rejects.toThrow(ForbiddenError);
+        ).rejects.toThrow(ApprovalScopeError);
         // The old check matched any grant whose resource type equals the action kind: an
         // Operation named "gatekeeper" passed on every gate for anyone holding one gate grant.
         await expect(
@@ -359,7 +363,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             'set_auto_approved_action_kind',
             await alwaysAllowParams(prodGateId, NAMED_GATEKEEPER_OP.name, labOperatorId),
           ),
-        ).rejects.toThrow(ForbiddenError);
+        ).rejects.toThrow(ApprovalScopeError);
         expect(
           (await listPolicies()).filter((row) => row.actionKindTag === NAMED_GATEKEEPER_OP.name),
         ).toEqual([]);
@@ -391,6 +395,65 @@ describe.runIf(DATABASE_URL !== undefined)(
         )) as PolicyWire;
         expect(reset).toMatchObject({ id: rule.id, autoApprove: false });
         expect(await requestStatus(prodGateId, SHARED_OP.name)).toBe('pending_approval');
+      });
+
+      it('who may tick it: the self-approval rule applies as it does to approve (review #493 M2)', async () => {
+        const owner = humanCaller(workspaceId, ownerId, 'owner');
+        const labOperator = humanCaller(workspaceId, labOperatorId, 'operator');
+        // Requesters may not approve their own SELF_OP requests on the lab gate.
+        await dispatchCapability({ pool }, owner, 'set_policy', {
+          policy: {
+            gatekeeperId: labGateId,
+            actionKindTag: SELF_OP.name,
+            autoApprove: false,
+            requesterCanApprove: false,
+          },
+        });
+        const own = await request(labGateId, SELF_OP.name, labOperatorId);
+        await expect(
+          dispatchCapability({ pool }, labOperator, 'approve', { actionRequestId: own.id }),
+        ).rejects.toThrow(SelfApprovalNotAllowedError);
+        await expect(
+          dispatchCapability({ pool }, labOperator, 'set_auto_approved_action_kind', {
+            gatekeeperId: labGateId,
+            actionKindTag: SELF_OP.name,
+            actionRequestId: own.id,
+          }),
+        ).rejects.toThrow(SelfApprovalNotAllowedError);
+        expect((await request(labGateId, SELF_OP.name, labOperatorId)).status).toBe(
+          'pending_approval',
+        );
+
+        // A request made before the narrowing carries no snapshot of it, but "always allow"
+        // outlives the request: the narrowing in force now applies too.
+        await dispatchCapability({ pool }, owner, 'set_policy', {
+          policy: { gatekeeperId: labGateId, actionKindTag: SELF_OP.name, autoApprove: false },
+        });
+        const before = await request(labGateId, SELF_OP.name, labOperatorId);
+        await dispatchCapability({ pool }, owner, 'set_policy', {
+          policy: {
+            gatekeeperId: labGateId,
+            actionKindTag: SELF_OP.name,
+            autoApprove: false,
+            requesterCanApprove: false,
+          },
+        });
+        await expect(
+          dispatchCapability({ pool }, labOperator, 'set_auto_approved_action_kind', {
+            gatekeeperId: labGateId,
+            actionKindTag: SELF_OP.name,
+            actionRequestId: before.id,
+          }),
+        ).rejects.toThrow(SelfApprovalNotAllowedError);
+
+        // Someone else's request it may approve: allowed, as approving it would be.
+        const rule = (await dispatchCapability(
+          { pool },
+          labOperator,
+          'set_auto_approved_action_kind',
+          await alwaysAllowParams(labGateId, SELF_OP.name),
+        )) as PolicyWire;
+        expect(rule).toMatchObject({ autoApprove: true, requesterCanApprove: false });
       });
 
       it('set_policy: a workspace-wide rule can only require approval; a gate rule wins over it', async () => {
@@ -453,7 +516,8 @@ describe.runIf(DATABASE_URL !== undefined)(
           { pool },
           owner,
           'set_auto_approved_action_kind',
-          await alwaysAllowParams(labGateId, CARRY_OP.name),
+          // Someone else's request: the owner may not allow its own (review #493 M2).
+          await alwaysAllowParams(labGateId, CARRY_OP.name, operatorId),
         )) as PolicyWire;
         expect(rule).toMatchObject({ autoApprove: true, requesterCanApprove: false });
       });
@@ -537,6 +601,29 @@ describe.runIf(DATABASE_URL !== undefined)(
           autoApproveConsent: 'definition_changed',
         });
 
+        // The approval page is told before anyone ticks (UX acceptance of #592 P2-1).
+        const onV2 = await request();
+        const read = (id: string) =>
+          dispatchCapability({ pool }, owner(), 'get_action', { actionRequestId: id }) as Promise<{
+            publishedDefinition?: { version: number; requestIsCurrent: boolean };
+          }>;
+        expect((await read(onV2.id)).publishedDefinition).toEqual({
+          version: 2,
+          requestIsCurrent: true,
+        });
+        // `ticked` is still pending, and was made against v1.
+        expect((await read(ticked.id)).publishedDefinition).toEqual({
+          version: 2,
+          requestIsCurrent: false,
+        });
+        const listed = (await dispatchCapability({ pool }, owner(), 'list_pending', {})) as {
+          items: readonly { id: string; publishedDefinition?: unknown }[];
+        };
+        expect(listed.items.find((row) => row.id === ticked.id)?.publishedDefinition).toEqual({
+          version: 2,
+          requestIsCurrent: false,
+        });
+
         // The request it was ticked on was made against v1: allowing "the latest" from it is refused.
         await expect(
           dispatchCapability({ pool }, owner(), 'set_auto_approved_action_kind', {
@@ -612,6 +699,61 @@ describe.runIf(DATABASE_URL !== undefined)(
         ).toEqual([]);
       });
 
+      it('a rule whose Operation the gate no longer publishes can be turned off, never loosened (review #501 P2-2)', async () => {
+        const GONE = operation({ name: `rev.gone.${randomUUID().slice(0, 8)}` });
+        await withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+          const activity = await startActivity(client, workspaceId, {
+            kind: 'test.gone',
+            principalId: ownerId,
+          });
+          await importManifest(client, workspaceId, {
+            gatekeeperId: gateId,
+            operations: [GONE],
+            proposedBy: { id: ownerId, kind: 'human' },
+            activityId: activity.id,
+          });
+          await publishOperation(client, workspaceId, { gatekeeperId: gateId, name: GONE.name });
+        });
+        const key = { gatekeeperId: gateId, actionKindTag: GONE.name };
+        await dispatchCapability({ pool }, owner(), 'set_policy', {
+          policy: { ...key, autoApprove: true, operationVersion: 1, requesterCanApprove: false },
+        });
+        await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          deprecateOperation(client, workspaceId, { gatekeeperId: gateId, name: GONE.name }),
+        );
+        expect(await ruleFor(GONE.name)).toMatchObject({
+          autoApprove: true,
+          publishedOperationVersion: null,
+          autoApproveConsent: 'definition_changed',
+        });
+
+        // Loosening still names a published definition: 404.
+        for (const policy of [
+          { ...key, autoApprove: true, operationVersion: 1 },
+          { ...key, autoApprove: false, requesterCanApprove: true },
+        ]) {
+          await expect(
+            dispatchCapability({ pool }, owner(), 'set_policy', { policy }),
+          ).rejects.toThrow(OperationNotFoundError);
+        }
+        // Turning it off is allowed, and leaves an ordinary rule.
+        const off = (await dispatchCapability({ pool }, owner(), 'set_policy', {
+          policy: { ...key, autoApprove: false, requesterCanApprove: false },
+        })) as PolicyWire;
+        expect(off).toMatchObject({
+          autoApprove: false,
+          requesterCanApprove: false,
+          operationVersion: null,
+          autoApproveConsent: 'current',
+        });
+        // No rule to tighten: still 404, nothing written.
+        await expect(
+          dispatchCapability({ pool }, owner(), 'set_policy', {
+            policy: { gatekeeperId: gateId, actionKindTag: 'rev.never.ruled', autoApprove: false },
+          }),
+        ).rejects.toThrow(OperationNotFoundError);
+      });
+
       it('"always allow" must be ticked on a request for that gate and action kind', async () => {
         const other = await request('rev.sibling');
         await expect(
@@ -642,41 +784,42 @@ describe.runIf(DATABASE_URL !== undefined)(
         const wsOwner = await adminInsertPrincipal(ws, 'owner', 'owner');
         const proven = operation({ name: 'mig.proven' });
         const unproven = operation({ name: 'mig.unproven' });
-        const gate = await registerGateWithOperations(ws, wsOwner, 'mig-gate', [proven, unproven]);
+        // Review #493 M1: its writer turned this definition down — no evidence of allowing it.
+        const rejected = operation({ name: 'mig.rejected' });
+        const gate = await registerGateWithOperations(ws, wsOwner, 'mig-gate', [
+          proven,
+          unproven,
+          rejected,
+        ]);
         const asOwner = humanCaller(ws, wsOwner, 'owner');
 
-        const digest = await withWorkspace(
-          pool,
-          { workspaceId: ws, principalId: wsOwner },
-          async (client) => {
-            const published = await getPublishedOperation(client, ws, gate, proven.name);
+        const requestOn = (actionKind: string) =>
+          withWorkspace(pool, { workspaceId: ws, principalId: wsOwner }, async (client) => {
+            const published = await getPublishedOperation(client, ws, gate, actionKind);
             if (!published) throw new Error('not published');
-            return operationRecordDigest(published);
-          },
-        );
-        const approvedRequest = await withWorkspace(
-          pool,
-          { workspaceId: ws, principalId: wsOwner },
-          (client) =>
-            requestAction(client, ws, {
+            return requestAction(client, ws, {
               gatekeeperId: gate,
-              actionKind: proven.name,
+              actionKind,
               blastRadius: 'medium',
               operationAutoApprovable: true,
               awaitDecision: false,
               onBehalfOf: wsOwner,
               actorRuntime: 'pi',
               requesterScope: scopeCovering(gate),
-              operationDigest: digest,
-            }),
-        );
+              operationDigest: operationRecordDigest(published),
+            });
+          });
         await dispatchCapability({ pool }, asOwner, 'approve', {
-          actionRequestId: approvedRequest.id,
+          actionRequestId: (await requestOn(proven.name)).id,
           reason: 'looked at it',
+        });
+        await dispatchCapability({ pool }, asOwner, 'reject', {
+          actionRequestId: (await requestOn(rejected.name)).id,
+          reason: 'not this one',
         });
         // Rules as the previous release wrote them: no definition on file.
         await withWorkspace(pool, { workspaceId: ws, principalId: wsOwner }, async (client) => {
-          for (const actionKind of [proven.name, unproven.name]) {
+          for (const actionKind of [proven.name, unproven.name, rejected.name]) {
             await client.query(
               `insert into gatekeeper_policies (workspace_id, gatekeeper_id, action_kind, blast_radius, auto_approve, set_by)
                values ($1, $2, $3, 'medium', true, $4)`,
@@ -696,10 +839,12 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(items.find((row) => row.actionKindTag === proven.name)).toMatchObject({
           autoApproveConsent: 'current',
         });
-        expect(items.find((row) => row.actionKindTag === unproven.name)).toMatchObject({
-          operationVersion: null,
-          autoApproveConsent: 'not_recorded',
-        });
+        for (const name of [unproven.name, rejected.name]) {
+          expect(items.find((row) => row.actionKindTag === name)).toMatchObject({
+            operationVersion: null,
+            autoApproveConsent: 'not_recorded',
+          });
+        }
         const audits = await withWorkspace(
           pool,
           { workspaceId: ws, principalId: wsOwner },
@@ -713,27 +858,12 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
         expect(audits.rows).toEqual([
           { action: 'policy.auto_approve_definition_bound', count: '1' },
-          { action: 'policy.auto_approve_definition_unproven', count: '1' },
+          { action: 'policy.auto_approve_definition_unproven', count: '2' },
         ]);
 
-        const call = (actionKind: string) =>
-          withWorkspace(pool, { workspaceId: ws, principalId: wsOwner }, async (client) => {
-            const published = await getPublishedOperation(client, ws, gate, actionKind);
-            if (!published) throw new Error('not published');
-            return requestAction(client, ws, {
-              gatekeeperId: gate,
-              actionKind,
-              blastRadius: 'medium',
-              operationAutoApprovable: true,
-              awaitDecision: false,
-              onBehalfOf: wsOwner,
-              actorRuntime: 'pi',
-              requesterScope: scopeCovering(gate),
-              operationDigest: operationRecordDigest(published),
-            });
-          });
-        expect((await call(proven.name)).status).toBe('auto_approved');
-        expect((await call(unproven.name)).status).toBe('pending_approval');
+        expect((await requestOn(proven.name)).status).toBe('auto_approved');
+        expect((await requestOn(unproven.name)).status).toBe('pending_approval');
+        expect((await requestOn(rejected.name)).status).toBe('pending_approval');
       });
     });
 

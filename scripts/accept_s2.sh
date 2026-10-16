@@ -432,7 +432,7 @@ connections_step() {
   [ -n "$GATEKEEPER_ID_SSH" ] || fail "connect-ssh-create" "no gatekeeperId in response: $(parse_kv "$out" BODY)"
   pass "connect-ssh-create" "gatekeeperId=$GATEKEEPER_ID_SSH"
 
-  out=$(cap "$ALICE_KEY" publish_manifest "{\"gatekeeperId\":\"$GATEKEEPER_ID_SSH\"}" "")
+  out=$(publish_manifest_as_read "$ALICE_KEY" "$GATEKEEPER_ID_SSH")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "connect-ssh-publish" "publish_manifest(ssh) HTTP $status: $(parse_kv "$out" BODY)"
   pass "connect-ssh-publish" "ssh manifest published"
@@ -468,7 +468,7 @@ connections_step() {
   [ "$pre_count" = "0" ] || fail "s213-find-operations-pre-publish" "find_operations('stock') returned $pre_count results before publish_manifest — draft manifest is visible (I16/I17 violation)"
   pass "s213-find-operations-pre-publish" "find_operations('stock') misses before publish_manifest, as required"
 
-  out=$(cap "$ALICE_KEY" publish_manifest "{\"gatekeeperId\":\"$GATEKEEPER_ID_HTTP\"}" "")
+  out=$(publish_manifest_as_read "$ALICE_KEY" "$GATEKEEPER_ID_HTTP")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "connect-http-publish" "publish_manifest(http) HTTP $status: $(parse_kv "$out" BODY)"
   pass "connect-http-publish" "http manifest published"
@@ -1134,7 +1134,7 @@ step8_mcp_connect() {
   [ "$pre_count" = "0" ] || fail "connect-mcp-find-operations-pre-publish" "find_operations('accept_s2_mcp') returned $pre_count of its own accept_s2_mcp_* operations before publish_manifest — draft manifest is visible (I16/I17 violation)"
   pass "connect-mcp-find-operations-pre-publish" "find_operations('accept_s2_mcp') misses before publish_manifest, as required"
 
-  out=$(cap "$ALICE_KEY" publish_manifest "{\"gatekeeperId\":\"$GATEKEEPER_ID_MCP\"}" "")
+  out=$(publish_manifest_as_read "$ALICE_KEY" "$GATEKEEPER_ID_MCP")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "connect-mcp-publish" "publish_manifest(mcp) HTTP $status: $(parse_kv "$out" BODY)"
   pass "connect-mcp-publish" "mcp manifest published"

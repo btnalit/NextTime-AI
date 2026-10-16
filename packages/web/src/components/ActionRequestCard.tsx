@@ -98,7 +98,13 @@ export function ActionRequestCard({
   const blastRadius = card.blastRadius ?? FALLBACK_BLAST_RADIUS;
   // Kernel I8: a `high` blast radius can never be auto-approved — no rule to offer. R-20 / D-15:
   // the rule is keyed by (gate, action kind), so a card whose gate is not known offers none.
-  const offerAlwaysAllow = canAlwaysAllow && blastRadius !== 'high' && card.gatekeeperId !== '';
+  // Legacy 218: never on a request made under a definition no longer published (the kernel would
+  // write no rule).
+  const offerAlwaysAllow =
+    canAlwaysAllow &&
+    blastRadius !== 'high' &&
+    card.gatekeeperId !== '' &&
+    card.publishedDefinition?.requestIsCurrent !== false;
   const hasParams = card.params !== undefined && Object.keys(card.params).length > 0;
   // Decision 2026-10-09 "二次确认": the kernel's count, from the card's own content, else from its
   // 400 on an approve (a card written before the count existed carries none). Either way the card
@@ -188,13 +194,13 @@ export function ActionRequestCard({
           `Approve and always allow ${card.actionKindTag}`,
         )}
         description={t(
-          `批准这次请求，并写入一条自动批准规则：今后此门上的 ${card.actionKindTag} 不论谁发起都直接执行，不再进入审批。其他门上的同名动作不受影响；规则可在「模型与配额 → 策略」中关闭。`,
-          `Approves this request and writes an auto-approval rule: from now on ${card.actionKindTag} on this gate runs without approval for every requester. The same name on other gates is not affected; turn the rule off under Models & Quotas → Policies.`,
+          `批准这次请求，并写入一条自动批准规则：今后此门上的 ${card.actionKindTag} 不论谁发起都直接执行，不再进入审批。规则只对这次请求所依据的定义有效：以后发布新版本会重新走审批；如果这之后门上已经发布了新版本，规则不会写入。其他门上的同名动作不受影响；规则可在「模型与配额 → 策略」中关闭。`,
+          `Approves this request and writes an auto-approval rule: from now on ${card.actionKindTag} on this gate runs without approval for every requester. The rule covers only the definition this request was made under: a later version goes back through approval, and if one has been published since, no rule is written. The same name on other gates is not affected; turn the rule off under Models & Quotas → Policies.`,
         )}
         target={card.actionKindTag}
         impact={[
           `${t('门', 'Gatekeeper')}: ${card.gatekeeperId}`,
-          `${t('规则范围', 'Rule scope')}: ${t('此门 · 所有发起人 · 今后', 'this gate · every requester · from now on')}`,
+          `${t('规则范围', 'Rule scope')}: ${t('此门 · 所有发起人 · 今后 · 只对这次请求的定义', 'this gate · every requester · from now on · this request’s definition only')}`,
         ]}
         confirmLabel={t('批准并总是允许', 'Approve and always allow')}
         danger

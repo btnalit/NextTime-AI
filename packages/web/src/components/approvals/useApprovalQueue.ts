@@ -364,7 +364,7 @@ export type { DecisionState };
  *  than the one this request was made against — shared by the approvals page and chat cards. */
 export function alwaysAllowStaleText(t: Translate): string {
   return t(
-    '这个操作在你批准的请求之后发布了新的定义，「始终允许」只能给你看过的定义。请在新定义的请求上再选「始终允许」，或到「模型与配额」的策略表里重新确认。',
-    'This operation has a newer published definition than the request you approved, and "Always allow" covers only a definition you have seen. Choose "Always allow" on a request made under the new definition, or reconfirm it in the policy table under Models.',
+    '这个操作在你批准的请求之后发布了新的定义，「始终允许」只能给你看过的定义。请在新定义的请求上再选「始终允许」；工作区所有者也可以在「模型与配额」的策略表里重新确认。',
+    'This operation has a newer published definition than the request you approved, and "Always allow" covers only a definition you have seen. Choose "Always allow" on a request made under the new definition; the workspace owner can also reconfirm it in the policy table under Models.',
   );
 }

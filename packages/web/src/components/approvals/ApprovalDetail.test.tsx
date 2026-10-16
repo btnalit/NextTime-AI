@@ -23,6 +23,7 @@ function row(overrides: Partial<ActionRequestRow> = {}): ActionRequestRow {
     policyDecision: 'require_approval',
     parentWorkerRunId: 'run-1',
     requestedAt: '2026-09-03T00:00:00.000Z',
+    publishedDefinition: { version: 2, requestIsCurrent: true },
     ...overrides,
   };
 }
@@ -109,6 +110,13 @@ describe('ApprovalDetail (S6-A B2 / B3 / C25)', () => {
       within(alwaysConfirm).getByTestId('approval-confirm-always-allow-scope').textContent,
     ).toContain('docker-prod');
     expect(alwaysConfirm.textContent).toContain('其他门上的同名动作不受影响');
+    // UX acceptance of #592 (P2-1): the rule covers the version published now, and says so.
+    expect(screen.getByTestId('approval-always-allow-option').textContent).toContain(
+      '只对现在发布的 v2 有效',
+    );
+    expect(
+      within(alwaysConfirm).getByTestId('approval-confirm-always-allow-scope').textContent,
+    ).toMatch(/只对\s*v2/);
     fireEvent.click(within(alwaysConfirm).getByTestId('confirm-button'));
     await waitFor(() =>
       expect(onApprove).toHaveBeenCalledWith({
@@ -126,6 +134,21 @@ describe('ApprovalDetail (S6-A B2 / B3 / C25)', () => {
     await waitFor(() =>
       expect(onReject).toHaveBeenCalledWith({ actionRequestId: 'ar-1', reason: 'why' }),
     );
+  });
+
+  it('a request made under a definition no longer published: "总是允许" is not offered, and the page says why (UX acceptance of #592 P2-1)', () => {
+    renderDetail({ publishedDefinition: { version: 3, requestIsCurrent: false } });
+    expect(screen.queryByTestId('approval-always-allow-option')).toBeNull();
+    const stale = screen.getByTestId('approval-always-allow-stale');
+    expect(stale.textContent).toMatch(/门上现在发布的是\s*v3/);
+    expect(stale.textContent).toContain('工作区所有者');
+  });
+
+  it('with no published version to name, "总是允许" stays on offer without a version (the kernel answers)', () => {
+    renderDetail({ publishedDefinition: undefined });
+    const option = screen.getByTestId('approval-always-allow-option');
+    expect(option.textContent).not.toContain('只对现在发布的');
+    expect(screen.queryByTestId('approval-always-allow-stale')).toBeNull();
   });
 
   it('a medium approval without "总是允许" still goes straight through, no confirm', async () => {

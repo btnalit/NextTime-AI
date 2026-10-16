@@ -48,6 +48,9 @@ export interface ActionRequestRowLike {
   readonly suspectedSecretValues?: number;
   /** Where in `params` (field paths only), alongside the count. */
   readonly suspectedSecretPaths?: readonly string[];
+  /** Legacy 218 (UX acceptance of #592): on a pending row — the version published now, and
+   *  whether this request was made against it; "总是允许" is offered only then, for that version. */
+  readonly publishedDefinition?: { readonly version: number; readonly requestIsCurrent: boolean };
 }
 
 export interface ActionCardData {
@@ -81,6 +84,9 @@ export interface ActionCardData {
    *  the persisted card content or the wire row; `undefined` from a live push, which carries
    *  none (the 400 `credentials_review_required` then supplies it, lib/credential-review.ts). */
   readonly suspectedSecretValues?: number | undefined;
+  /** Legacy 218: from a `list_pending`/`get_action` row only — see `ActionRequestRowLike`. A card
+   *  from a push or chat message was made against the definition published at that moment. */
+  readonly publishedDefinition?: ActionRequestRowLike['publishedDefinition'];
 }
 
 /** "docker.container_restart" -> "docker container restart" — the kernel's own convention
@@ -206,6 +212,9 @@ export function actionCardFromRow(
     executedAt: row.executedAt,
     failedAt: row.failedAt,
     suspectedSecretValues: row.suspectedSecretValues,
+    ...(row.publishedDefinition !== undefined
+      ? { publishedDefinition: row.publishedDefinition }
+      : {}),
   };
 }
 

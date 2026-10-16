@@ -86,6 +86,7 @@ export type {
   ProposeOperationInput,
   PublishOperationInput,
   PublishManifestInput,
+  ReviewedDraft,
   PublishManifestResult,
   DeprecateOperationInput,
   DiscardOperationDraftInput,

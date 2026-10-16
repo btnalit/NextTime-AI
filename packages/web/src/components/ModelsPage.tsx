@@ -182,9 +182,11 @@ function policyColumns(
               data-testid="policy-auto-approve"
               data-consent={policy.autoApproveConsent}
             >
-              {policy.autoApproveConsent === 'not_recorded'
-                ? t('已暂停 · 待确认版本', 'suspended · version unconfirmed')
-                : t('已暂停 · 定义已变', 'suspended · definition changed')}
+              {isOrphaned(policy)
+                ? t('已暂停 · 门已不再提供', 'suspended · gate no longer offers it')
+                : policy.autoApproveConsent === 'not_recorded'
+                  ? t('已暂停 · 待确认版本', 'suspended · version unconfirmed')
+                  : t('已暂停 · 定义已变', 'suspended · definition changed')}
             </span>
           );
         }
@@ -242,24 +244,35 @@ function policyColumns(
             priority: 'high' as const,
             cell: (policy: PolicyWire) => (
               <Button
-                variant={
-                  policy.autoApprove && policy.autoApproveConsent !== 'current'
-                    ? 'primary'
-                    : 'secondary'
-                }
+                variant={isSuspended(policy) && !isOrphaned(policy) ? 'primary' : 'secondary'}
                 size="s"
                 onClick={() => options.onEdit(policy)}
                 data-testid={`policy-edit-${policy.id}`}
               >
-                {policy.autoApprove && policy.autoApproveConsent !== 'current'
-                  ? t('重新确认', 'Reconfirm')
-                  : t('编辑', 'Edit')}
+                {isOrphaned(policy)
+                  ? t('停用', 'Turn off')
+                  : isSuspended(policy)
+                    ? t('重新确认', 'Reconfirm')
+                    : t('编辑', 'Edit')}
               </Button>
             ),
           },
         ]
       : []),
   ];
+}
+
+/** Legacy 218: an "always allow" given for another definition (or none on record). */
+function isSuspended(policy: PolicyWire): boolean {
+  return policy.autoApprove && policy.autoApproveConsent !== 'current';
+}
+
+/** Review #501 on #592 (P2-2): suspended, and the gate no longer publishes the Operation at all —
+ *  nothing to reconfirm, only to turn off. */
+function isOrphaned(policy: PolicyWire): boolean {
+  return (
+    isSuspended(policy) && policy.gatekeeperId !== null && policy.publishedOperationVersion === null
+  );
 }
 
 /** Legacy 218: how many "always allow" rules are suspended because the definition they were
@@ -272,21 +285,35 @@ function SuspendedPoliciesNotice({
   readonly isOwner: boolean;
 }) {
   const t = useT();
-  const count = items.filter(
-    (policy) => policy.autoApprove && policy.autoApproveConsent !== 'current',
-  ).length;
-  if (count === 0) return null;
+  const suspended = items.filter(isSuspended);
+  const orphaned = suspended.filter(isOrphaned).length;
+  const count = suspended.length - orphaned;
+  if (suspended.length === 0) return null;
   return (
     <Notice tone="warn" testId="policies-suspended">
-      {isOwner
-        ? t(
-            `有 ${count} 条「始终允许」已暂停：它们允许的版本已不是门上现在发布的版本，相关请求重新走审批。看过新版本后，点该行的「重新确认」。`,
-            `${count} “Always allow” rule(s) are suspended: the version they allow is no longer the one the gate publishes, so those requests go back through approval. Once you have looked at the new version, use “Reconfirm” on the row.`,
-          )
-        : t(
-            `有 ${count} 条「始终允许」已暂停：它们允许的版本已不是门上现在发布的版本，相关请求重新走审批。需要工作区所有者重新确认；在审批队列里批准新版本的请求时，你也可以再选「始终允许」。`,
-            `${count} “Always allow” rule(s) are suspended: the version they allow is no longer the one the gate publishes, so those requests go back through approval. The workspace owner can reconfirm them; you can also choose “Always allow” again when approving a request under the new version.`,
-          )}
+      {count > 0
+        ? isOwner
+          ? t(
+              `有 ${count} 条「始终允许」已暂停：它们允许的版本已不是门上现在发布的版本，相关请求重新走审批。看过新版本后，点该行的「重新确认」。`,
+              `${count} “Always allow” rule(s) are suspended: the version they allow is no longer the one the gate publishes, so those requests go back through approval. Once you have looked at the new version, use “Reconfirm” on the row.`,
+            )
+          : t(
+              `有 ${count} 条「始终允许」已暂停：它们允许的版本已不是门上现在发布的版本，相关请求重新走审批。需要工作区所有者重新确认；在那个门上有审批权的人，批准新版本的请求时也可以再选「始终允许」。`,
+              `${count} “Always allow” rule(s) are suspended: the version they allow is no longer the one the gate publishes, so those requests go back through approval. The workspace owner can reconfirm them; whoever may approve on that gate can also choose “Always allow” again when approving a request under the new version.`,
+            )
+        : null}
+      {count > 0 && orphaned > 0 ? ' ' : null}
+      {orphaned > 0
+        ? isOwner
+          ? t(
+              `有 ${orphaned} 条「始终允许」对应的 Operation 门已不再提供，无法重新确认：点该行的「停用」，把它改为要求审批。`,
+              `${orphaned} “Always allow” rule(s) name an Operation the gate no longer offers, so they cannot be reconfirmed: use “Turn off” on the row to make them require approval.`,
+            )
+          : t(
+              `有 ${orphaned} 条「始终允许」对应的 Operation 门已不再提供，已失效；工作区所有者可以停用它们。`,
+              `${orphaned} “Always allow” rule(s) name an Operation the gate no longer offers and no longer apply; the workspace owner can turn them off.`,
+            )
+        : null}
     </Notice>
   );
 }

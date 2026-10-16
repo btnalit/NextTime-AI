@@ -305,3 +305,30 @@ export function cancelConnectionRequestOverrides(t: Translate): ErrorOverrides {
     Object.entries(CONNECTION_ERROR_MESSAGES).map(([code, entry]) => [code, t(entry.zh, entry.en)]),
   );
 }
+
+/** One draft as `publish_manifest` names it back: what the person's `list_operations` read said. */
+export interface DraftAsRead {
+  readonly name: string;
+  readonly draftDigest: string;
+}
+
+/** Review #493 on #592 (P2): `publish_manifest` publishes a gate's drafts only as they were read —
+ *  the kernel refuses 409 `draft_changed`, publishing nothing, when one it would publish is not in
+ *  this list or was revised since. These are one gate's draft rows of a `list_operations` read. */
+export function draftsAsRead(
+  rows: readonly {
+    readonly gatekeeperId: string;
+    readonly name: string;
+    readonly status: string;
+    readonly draftDigest?: string | undefined;
+  }[],
+  gatekeeperId: string,
+): DraftAsRead[] {
+  const drafts: DraftAsRead[] = [];
+  for (const row of rows) {
+    if (row.gatekeeperId !== gatekeeperId || row.status !== 'draft') continue;
+    if (row.draftDigest === undefined) continue;
+    drafts.push({ name: row.name, draftDigest: row.draftDigest });
+  }
+  return drafts;
+}

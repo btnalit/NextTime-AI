@@ -198,7 +198,7 @@ describe('CatalogPage', () => {
     const detail = await selectRow(row);
     fireEvent.click(within(detail).getByRole('button', { name: /发布/ }));
     const toast = await screen.findByTestId('toast');
-    expect(toast.textContent).toContain('无法更新');
+    expect(toast.textContent).toContain('无法发布');
     expect(toast.textContent).toContain('docker.restart');
     // P1-1: the readable next step for the code, the code itself in brackets for a report.
     expect(toast.textContent).toContain('刷新后再试');

@@ -346,6 +346,42 @@ describe('ModelsPage', () => {
     expect(screen.getByTestId('policies-suspended').textContent).toContain('点该行的「重新确认」');
   });
 
+  it('review #501 on #592 (P2-2): a suspended rule whose Operation the gate no longer offers says so and offers 「停用」, not 「重新确认」', async () => {
+    const http = scriptedHttp({
+      list_models: () => ({ items: [] }),
+      list_quotas: () => ({ items: [] }),
+      list_policies: () => ({
+        items: [
+          {
+            id: 'pol-gone',
+            gatekeeperId: 'gk-lab-0001',
+            actionKindTag: 'docker.stop_container',
+            blastRadius: 'medium',
+            autoApprove: true,
+            requesterCanApprove: null,
+            setBy: 'owner-1',
+            createdAt: '2026-09-01T00:00:00.000Z',
+            updatedAt: '2026-09-01T00:00:00.000Z',
+            operationVersion: 1,
+            publishedOperationVersion: null,
+            autoApproveConsent: 'definition_changed',
+          },
+        ],
+      }),
+      get_workspace: () => workspace('owner'),
+      get_agent_policy: () => agentPolicy({}),
+    });
+    renderPage(http);
+    const row = await screen.findByTestId('policy-row-pol-gone');
+    const chip = within(row).getByTestId('policy-auto-approve');
+    expect(chip.textContent).toContain('门已不再提供');
+    expect(chip.getAttribute('title')).toContain('门已不再提供');
+    expect(within(row).getByTestId('policy-edit-pol-gone').textContent).toBe('停用');
+    const notice = screen.getByTestId('policies-suspended').textContent ?? '';
+    expect(notice).toContain('点该行的「停用」');
+    expect(notice).not.toContain('重新确认」。');
+  });
+
   it('C11: un-ticking the current default when one allowed model is left makes that model the default, on screen and on submit', async () => {
     const http = scriptedHttp({
       list_models: () => ({

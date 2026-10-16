@@ -988,8 +988,21 @@ export async function publishOperation(
   return { ...existing, status: 'published', ...(supersedes !== undefined ? { supersedes } : {}) };
 }
 
+/** One draft as the caller read it: its name and the `operationDraftDigest` its listing returned
+ *  (`list_operations`' `draftDigest`). */
+export interface ReviewedDraft {
+  readonly name: string;
+  readonly draftDigest: string;
+}
+
 export interface PublishManifestInput {
   readonly gatekeeperId: string;
+  /** Review #493 on #592 (P2, the bulk form of legacy 300): the drafts the caller read before
+   *  publishing. Every draft this call would publish must be listed here with its current digest;
+   *  one revised since, or one the caller never read (a gate re-import added it), refuses the
+   *  whole call with `OperationDraftChangedError` before anything is written. Entries for drafts
+   *  that are gone, or that this call does not publish anyway, are ignored. */
+  readonly drafts: readonly ReviewedDraft[];
 }
 
 export interface PublishManifestResult {
@@ -1014,7 +1027,8 @@ export interface PublishManifestResult {
  * proposal's `mode`/`auto_approvable` used to become live); it is reported in
  * `skippedDraftOperationNames` and waits for an owner's per-Operation `publishOperation`. Zero
  * drafts to publish is a successful, not an error, result — a bulk call over zero rows is
- * trivially a no-op.
+ * trivially a no-op. Every draft it publishes must be one the caller read, unchanged
+ * (`input.drafts`, review #493 on #592).
  */
 export async function publishManifest(
   client: PoolClient,
@@ -1022,7 +1036,8 @@ export async function publishManifest(
   input: PublishManifestInput,
 ): Promise<PublishManifestResult> {
   const drafts = await listDraftOperationsForGatekeeper(client, workspaceId, input.gatekeeperId);
-  const publishedOperationNames: string[] = [];
+  const reviewed = new Map(input.drafts.map((d) => [d.name, d.draftDigest]));
+  const toPublish: { readonly name: string; readonly draftDigest: string }[] = [];
   const skippedDraftOperationNames: string[] = [];
   const gateOwnedParamDrafts: GateOwnedParamDraft[] = [];
   for (const draft of drafts) {
@@ -1035,9 +1050,20 @@ export async function publishManifest(
       gateOwnedParamDrafts.push({ name: draft.name, params });
       continue;
     }
+    // Checked for every draft before any is published: a refusal leaves the whole manifest as it was.
+    const seen = reviewed.get(draft.name);
+    if (seen === undefined) {
+      throw new OperationDraftChangedError(draft.gatekeeperId, draft.name, draft.version);
+    }
+    assertDraftUnchanged(draft, seen);
+    toPublish.push({ name: draft.name, draftDigest: seen });
+  }
+  const publishedOperationNames: string[] = [];
+  for (const draft of toPublish) {
     await publishOperation(client, workspaceId, {
       gatekeeperId: input.gatekeeperId,
       name: draft.name,
+      draftDigest: draft.draftDigest,
     });
     publishedOperationNames.push(draft.name);
   }

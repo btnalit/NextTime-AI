@@ -1,11 +1,14 @@
-import type { PublishManifestResultWire } from '@nexttime/shared';
+import type { OperationSummaryWire, PublishManifestResultWire } from '@nexttime/shared';
 import { useState } from 'react';
 import type { CapabilityCaller } from '../lib/clients.js';
 import {
   CONNECTION_KIND_VALUES,
   type ConnectionKind,
   type CreateConnectionResult,
+  type DraftAsRead,
+  draftsAsRead,
 } from '../lib/connections.js';
+import { isDraftChangedError } from '../lib/errors.js';
 import { type Translate, useT } from '../lib/i18n.js';
 import { transportKindLabel } from '../lib/labels.js';
 import { CompleteConnectionForm } from './CompleteConnectionForm.js';
@@ -80,20 +83,40 @@ export function OnboardingWizard({ http, onCancel, onFinished }: OnboardingWizar
   const [publishing, setPublishing] = useState(false);
   const [publishError, setPublishError] = useState<unknown | null>(null);
   const [published, setPublished] = useState<PublishManifestResultWire | null>(null);
+  // Review #493 on #592: the drafts step ③ lists, as read — exactly what 「发布清单」 publishes.
+  const [drafts, setDrafts] = useState<readonly DraftAsRead[] | null>(null);
+  const [draftsError, setDraftsError] = useState<unknown | null>(null);
+
+  async function loadDrafts(gatekeeperId: string): Promise<void> {
+    setDrafts(null);
+    setDraftsError(null);
+    try {
+      const result = await http.call<{ readonly items: readonly OperationSummaryWire[] }>(
+        'list_operations',
+        { gatekeeperId },
+      );
+      setDrafts(draftsAsRead(result.items, gatekeeperId));
+    } catch (err) {
+      setDraftsError(err);
+    }
+  }
 
   async function publish(): Promise<void> {
-    if (!connection) return;
+    if (!connection || drafts === null) return;
     setPublishing(true);
     setPublishError(null);
     try {
       setPublished(
         await http.call<PublishManifestResultWire>('publish_manifest', {
           gatekeeperId: connection.gatekeeperId,
+          drafts,
         }),
       );
       setStep('review');
     } catch (err) {
       setPublishError(err);
+      // A draft changed after the list below was read: nothing was published; show what is there now.
+      if (isDraftChangedError(err)) void loadDrafts(connection.gatekeeperId);
     } finally {
       setPublishing(false);
     }
@@ -156,6 +179,7 @@ export function OnboardingWizard({ http, onCancel, onFinished }: OnboardingWizar
             onDone={(result) => {
               setConnection(result);
               setStep('publish');
+              void loadDrafts(result.gatekeeperId);
             }}
           />
         </div>
@@ -183,6 +207,30 @@ export function OnboardingWizard({ http, onCancel, onFinished }: OnboardingWizar
               </>,
             )}
           </Notice>
+          {drafts !== null ? (
+            <div className="stack" data-testid="wizard-publish-drafts">
+              <span className="field-label">
+                {t(
+                  `「发布清单」会发布这 ${drafts.length} 个草稿：`,
+                  `Publish manifest publishes these ${drafts.length} drafts:`,
+                )}
+              </span>
+              <ul className="m-0 flex list-none flex-wrap gap-2 p-0">
+                {drafts.map((draft) => (
+                  <li key={draft.name}>
+                    <code>{draft.name}</code>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+          {draftsError !== null ? (
+            <ErrorBanner
+              error={draftsError}
+              title={t('无法读取导入的草稿', 'Could not read the imported drafts')}
+              onRetry={() => void loadDrafts(connection.gatekeeperId)}
+            />
+          ) : null}
           {publishError !== null ? (
             <ErrorBanner
               error={publishError}
@@ -193,7 +241,13 @@ export function OnboardingWizard({ http, onCancel, onFinished }: OnboardingWizar
             <Button variant="ghost" onClick={() => setStep('review')}>
               {t('暂不发布，稍后再说', 'Skip for now')}
             </Button>
-            <Button variant="primary" loading={publishing} onClick={() => void publish()}>
+            {/* ux-lint-allow-disabled: the draft list above is still loading, or its read failed (the banner says so). */}
+            <Button
+              variant="primary"
+              loading={publishing}
+              disabled={drafts === null}
+              onClick={() => void publish()}
+            >
               {t('发布清单', 'Publish manifest')}
             </Button>
           </div>

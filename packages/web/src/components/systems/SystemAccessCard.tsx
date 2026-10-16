@@ -8,6 +8,8 @@ import type {
 } from '@nexttime/shared';
 import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import type { DraftAsRead } from '../../lib/connections.js';
+import { isDraftChangedError } from '../../lib/errors.js';
 import { shortId } from '../../lib/format.js';
 import { gateGrantMakesApprover } from '../../lib/governance.js';
 import { type Translate, useT } from '../../lib/i18n.js';
@@ -88,7 +90,9 @@ export interface SystemAccessCardProps {
   readonly http: CapabilityCaller;
   readonly gate: ExecutionReadinessGateWire;
   readonly healthInfo: SystemAccessHealth;
-  readonly draftCount: number;
+  /** This gate's drafts as the page's `list_operations` read saw them — what 「发布清单」 publishes
+   *  (review #493 on #592: the kernel publishes nothing when one changed since). */
+  readonly drafts: readonly DraftAsRead[];
   readonly canPublish: boolean;
   readonly onPublished: () => void;
   /** `workerDefinitionId -> name`, from the same baseline `execution_readiness` read this card's
@@ -287,7 +291,7 @@ export function SystemAccessCard({
   http,
   gate,
   healthInfo,
-  draftCount,
+  drafts,
   canPublish,
   onPublished,
   workerNames,
@@ -306,6 +310,7 @@ export function SystemAccessCard({
   const reader = useReadinessReader(http);
   const [grantOpen, setGrantOpen] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
+  const draftCount = drafts.length;
   const [publishing, setPublishing] = useState(false);
   const [publishError, setPublishError] = useState<unknown | null>(null);
   const [publishResult, setPublishResult] = useState<PublishManifestResultWire | null>(null);
@@ -324,12 +329,16 @@ export function SystemAccessCard({
       setPublishResult(
         await http.call<PublishManifestResultWire>('publish_manifest', {
           gatekeeperId: gate.gateId,
+          drafts,
         }),
       );
       announceReadinessChange(http);
       onPublished();
     } catch (err) {
       setPublishError(err);
+      // A draft changed after this page read it: nothing was published; read the drafts again so
+      // the next 「发布清单」 names what is there now.
+      if (isDraftChangedError(err)) onPublished();
     } finally {
       setPublishing(false);
     }

@@ -22,6 +22,7 @@ function row(overrides: Partial<ActionRequestRow> = {}): ActionRequestRow {
     onBehalfOf: 'principal-a',
     actorRuntime: 'worker',
     requestedAt: '2026-09-03T00:00:00.000Z',
+    publishedDefinition: { version: 2, requestIsCurrent: true },
     ...overrides,
   };
 }

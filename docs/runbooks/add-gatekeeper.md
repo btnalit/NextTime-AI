@@ -296,10 +296,15 @@ curl -s https://<host>:8443/api/cap/create_connection \
 #    -d "{...,\"manifestSource\":\"http://<system>:8080/openapi.json\"}"
 
 # 4. publish_manifest —— 逐条 Operation 分类审核之前，先把导入的草稿整体或逐条看一遍（web 控制台
-#    "系统接入"页的接入向导第④步——mode/blast_radius/auto_approvable 预览，见 §8）；确认无误后发布：
-curl -s https://<host>:8443/api/cap/publish_manifest \
+#    "系统接入"页的接入向导第④步——mode/blast_radius/auto_approvable 预览，见 §8）；确认无误后发布。
+#    drafts 是你刚看过的草稿：list_operations 返回的 name + draftDigest（#592 起必填）。之后有草稿
+#    被改过或新导入了草稿时返回 409 draft_changed，什么都不发布；重新 list_operations 看过再发：
+curl -s https://<host>:8443/api/cap/list_operations \
   -H "Authorization: Bearer ${OWNER_KEY}" -H 'content-type: application/json' \
   -d "{\"gatekeeperId\":\"<gk-uuid>\"}"
+curl -s https://<host>:8443/api/cap/publish_manifest \
+  -H "Authorization: Bearer ${OWNER_KEY}" -H 'content-type: application/json' \
+  -d "{\"gatekeeperId\":\"<gk-uuid>\",\"drafts\":[{\"name\":\"<op-name>\",\"draftDigest\":\"<draftDigest>\"}]}"
 
 # 5. connect_gatekeeper —— 授予某个用户的入口 agent 使用权（写一条 CapabilityGrant）
 curl -s https://<host>:8443/api/cap/connect_gatekeeper \

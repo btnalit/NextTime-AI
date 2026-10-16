@@ -139,6 +139,21 @@ cap() {
   run_driver cap "$1" "$2" "$3" "${4:-}"
 }
 
+# publish_manifest_as_read <token> <gatekeeperId>: reads the gatekeeper's drafts with
+# list_operations, then publishes the manifest naming exactly those (name + draftDigest) — review
+# #493 on #592: the kernel refuses 409 draft_changed, publishing nothing, when a draft it would
+# publish is not named or changed since. Prints publish_manifest's blob (or list_operations' on a
+# failed read); callers check HTTP_STATUS with parse_kv as for cap.
+publish_manifest_as_read() {
+  drafts_out=$(cap "$1" list_operations "{\"gatekeeperId\":\"$2\"}" \
+    "JSON.stringify(d.result.items.filter(o=>o.status==='draft'&&o.draftDigest).map(o=>({name:o.name,draftDigest:o.draftDigest})))")
+  if [ "$(parse_kv "$drafts_out" HTTP_STATUS)" != "200" ]; then
+    printf '%s\n' "$drafts_out"
+    return 0
+  fi
+  cap "$1" publish_manifest "{\"gatekeeperId\":\"$2\",\"drafts\":$(parse_kv "$drafts_out" EXTRACTED)}" ""
+}
+
 # Polls one gate's /gate/health (control-network-only, no host port) from inside the kernel
 # image, sending the kernel container's own gate token as Bearer (the driver's gate-health
 # subcommand). Retries for up to ~30s — gate containers take a few seconds to bind their port

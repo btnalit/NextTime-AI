@@ -33,6 +33,15 @@ function operationObject(overrides: Partial<GraphObjectRow['properties']> = {}):
   };
 }
 
+const IMPORTED_DRAFTS = ['accept_s2_mcp_echo', 'accept_s2_mcp_note'].map((name) => ({
+  gatekeeperId: 'gk-1',
+  name,
+  mode: 'observe',
+  blastRadius: 'low',
+  status: 'draft',
+  draftDigest: `digest-${name}`,
+}));
+
 function scriptedHttp(
   handlers: Record<string, (params: unknown) => unknown | Promise<unknown>>,
 ): CapabilityCaller & { readonly calls: { readonly name: string; readonly params: unknown }[] } {
@@ -45,6 +54,8 @@ function scriptedHttp(
       if (name === 'mint_connection_secret' && !handlers[name]) {
         return { connectionSecret: `ntgc1_${'a'.repeat(32)}_${'b'.repeat(64)}` };
       }
+      // Step ③ reads the imported drafts it lists (and publishes, review #493 on #592).
+      if (name === 'list_operations' && !handlers[name]) return { items: IMPORTED_DRAFTS };
       const handler = handlers[name];
       if (!handler) throw new Error(`unscripted capability ${name}`);
       return handler(params);
@@ -65,6 +76,7 @@ async function walkToReview(): Promise<void> {
   });
   fireEvent.click(within(connectStep).getByRole('button', { name: '注册门' }));
   const publishStep = await screen.findByTestId('wizard-step-publish');
+  await within(publishStep).findByTestId('wizard-publish-drafts');
   fireEvent.click(within(publishStep).getByRole('button', { name: /发布清单/ }));
   await screen.findByTestId('wizard-review-table');
 }
@@ -91,7 +103,13 @@ describe('OnboardingWizard', () => {
         };
       },
       publish_manifest: (params) => {
-        expect(params).toEqual({ gatekeeperId: 'gk-1' });
+        expect(params).toEqual({
+          gatekeeperId: 'gk-1',
+          drafts: [
+            { name: 'accept_s2_mcp_echo', draftDigest: 'digest-accept_s2_mcp_echo' },
+            { name: 'accept_s2_mcp_note', draftDigest: 'digest-accept_s2_mcp_note' },
+          ],
+        });
         return { publishedOperationNames: ['accept_s2_mcp_echo', 'accept_s2_mcp_note'] };
       },
       search: () => [operationObject()],
@@ -116,6 +134,7 @@ describe('OnboardingWizard', () => {
 
     // Step ③ publish
     const publishStep = await screen.findByTestId('wizard-step-publish');
+    await within(publishStep).findByTestId('wizard-publish-drafts');
     fireEvent.click(within(publishStep).getByRole('button', { name: /发布清单/ }));
 
     // Step ④ review
@@ -134,6 +153,64 @@ describe('OnboardingWizard', () => {
 
     expect(http.calls.some((c) => c.name === 'create_connection')).toBe(true);
     expect(http.calls.some((c) => c.name === 'publish_manifest')).toBe(true);
+  });
+
+  it('publishes only the drafts it listed; a draft changed since is refused and the list is read again (review #493 on #592)', async () => {
+    let reads = 0;
+    let publishes = 0;
+    const http = scriptedHttp({
+      ...CONNECTION_HANDLERS,
+      list_operations: () => {
+        reads += 1;
+        // The gate re-imports after the first read: a third draft appears.
+        const items =
+          reads === 1
+            ? IMPORTED_DRAFTS
+            : [...IMPORTED_DRAFTS, { ...IMPORTED_DRAFTS[0], name: 'accept_s2_mcp_third' }];
+        return { items };
+      },
+      publish_manifest: (params) => {
+        publishes += 1;
+        if (publishes === 1) {
+          return Promise.reject(
+            new HttpError('capability_error', 'changed after it was read', 'draft_changed'),
+          );
+        }
+        expect((params as { drafts: { name: string }[] }).drafts.map((d) => d.name)).toContain(
+          'accept_s2_mcp_third',
+        );
+        return { publishedOperationNames: ['accept_s2_mcp_echo'] };
+      },
+      search: () => [operationObject()],
+    });
+    render(<OnboardingWizard http={http} onCancel={vi.fn()} onFinished={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: /下一步/ }));
+    const connectStep = await screen.findByTestId('wizard-step-connect');
+    await within(connectStep).findByTestId('cc-connection-secret-reveal');
+    fireEvent.change(within(connectStep).getByLabelText(/目标系统/), {
+      target: { value: 'accept_s2_mcp' },
+    });
+    fireEvent.change(within(connectStep).getByLabelText(/门端点/), {
+      target: { value: 'http://accept-s2-mcp:8080' },
+    });
+    fireEvent.click(within(connectStep).getByRole('button', { name: '注册门' }));
+    const publishStep = await screen.findByTestId('wizard-step-publish');
+    const listed = await within(publishStep).findByTestId('wizard-publish-drafts');
+    expect(listed.textContent).toContain('2 个草稿');
+    expect(listed.textContent).toContain('accept_s2_mcp_note');
+
+    fireEvent.click(within(publishStep).getByRole('button', { name: /发布清单/ }));
+    await waitFor(() =>
+      expect(within(publishStep).getByTestId('wizard-publish-drafts').textContent).toContain(
+        'accept_s2_mcp_third',
+      ),
+    );
+    expect(within(publishStep).getByText(/这份草稿在你查看之后被修改过/)).toBeTruthy();
+    expect(screen.queryByTestId('wizard-review-table')).toBeNull();
+
+    fireEvent.click(within(publishStep).getByRole('button', { name: /发布清单/ }));
+    await screen.findByTestId('wizard-review-table');
+    expect(publishes).toBe(2);
   });
 
   it('console G4: the publish step says which drafts it held back for a gate-owned param, and that this self-connected system is connected again once the gate is fixed', async () => {
@@ -165,6 +242,7 @@ describe('OnboardingWizard', () => {
     });
     fireEvent.click(within(connectStep).getByRole('button', { name: '注册门' }));
     const publishStep = await screen.findByTestId('wizard-step-publish');
+    await within(publishStep).findByTestId('wizard-publish-drafts');
     fireEvent.click(within(publishStep).getByRole('button', { name: /发布清单/ }));
 
     const held = await screen.findByTestId('wizard-publish-result-held');
@@ -229,6 +307,7 @@ describe('OnboardingWizard', () => {
     });
     fireEvent.click(within(connectStep).getByRole('button', { name: '注册门' }));
     const publishStep = await screen.findByTestId('wizard-step-publish');
+    await within(publishStep).findByTestId('wizard-publish-drafts');
     fireEvent.click(within(publishStep).getByRole('button', { name: /发布清单/ }));
 
     await screen.findByTestId('wizard-review-table');
@@ -364,6 +443,7 @@ describe('OnboardingWizard', () => {
     });
     fireEvent.click(within(connectStep).getByRole('button', { name: '注册门' }));
     const publishStep = await screen.findByTestId('wizard-step-publish');
+    await within(publishStep).findByTestId('wizard-publish-drafts');
     fireEvent.click(within(publishStep).getByRole('button', { name: /发布清单/ }));
 
     await screen.findByTestId('wizard-review-table');

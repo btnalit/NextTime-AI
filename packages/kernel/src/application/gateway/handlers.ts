@@ -69,8 +69,9 @@ import {
   ActionRequestNotFoundError,
   type ActionRequestRow,
   MAX_ACTION_REQUEST_LIST_LIMIT,
+  SelfApprovalNotAllowedError,
   approveActionRequest,
-  approverHasScope,
+  assertMayApprove,
   getActionRequestVisibleTo,
   listActionRequestsForApprover,
   listPendingForApprover,
@@ -101,6 +102,8 @@ import {
   autoApproveConsent,
   listPolicies,
   parseSetPolicyPayload,
+  readEffectivePolicy,
+  readGatekeeperPolicy,
   setAutoApprovedActionKind,
   setPolicy,
 } from '../../governance/policy/index.js';
@@ -1160,15 +1163,53 @@ async function withApprovalDecision(
     workspaceId,
     rows.flatMap((row) => (row.approvalDecisionId ? [row.approvalDecisionId] : [])),
   );
+  const published = await publishedDefinitions(client, workspaceId, rows);
   return rows.map((row) => {
     const decision = row.approvalDecisionId ? decisions.get(row.approvalDecisionId) : undefined;
+    const inForce = published.get(definitionKey(row));
     return {
       ...toWireActionRequest(row),
       decisionReason: decision?.reason ?? null,
       decidedBy: decision?.decidedBy ?? null,
       decidedAt: decision ? decision.decidedAt.toISOString() : null,
+      ...(row.status === 'pending_approval' && inForce
+        ? {
+            publishedDefinition: {
+              version: inForce.version,
+              requestIsCurrent:
+                row.operationDigest !== null && row.operationDigest === inForce.digest,
+            },
+          }
+        : {}),
     };
   });
+}
+
+function definitionKey(row: Pick<ActionRequestRow, 'gatekeeperId' | 'actionKind'>): string {
+  return `${row.gatekeeperId}\u0000${row.actionKind}`;
+}
+
+/** Legacy 218 / UX acceptance of #592: for each pending row's (gate, action kind), the version
+ *  published now and its digest — what "Always allow" on that request would have to match. */
+async function publishedDefinitions(
+  client: PoolClient,
+  workspaceId: string,
+  rows: readonly ActionRequestRow[],
+): Promise<ReadonlyMap<string, { readonly version: number; readonly digest: string | null }>> {
+  const byKey = new Map<string, { readonly version: number; readonly digest: string | null }>();
+  for (const row of rows) {
+    const key = definitionKey(row);
+    if (row.status !== 'pending_approval' || byKey.has(key)) continue;
+    const record = await getPublishedOperation(
+      client,
+      workspaceId,
+      row.gatekeeperId,
+      row.actionKind,
+    );
+    if (record)
+      byKey.set(key, { version: record.version, digest: operationRecordDigestOrNull(record) });
+  }
+  return byKey;
 }
 
 async function oneWithApprovalDecision(
@@ -1333,8 +1374,10 @@ const listActionRequestsHandler: CapabilityHandler = async (client, workspaceId,
  *  (400), visible to the caller (404, like `get_action`), and made against the definition published
  *  now (409 `version_changed` otherwise: allowing "the latest" would allow one nobody saw).
  *
- *  Who may tick it (legacy 218, found by the leftover-232 sweep): whoever may approve that call —
- *  I14's `approverHasScope` on the target gate, the predicate `approve` itself applies. `minRole:
+ *  Who may tick it (legacy 218, found by the leftover-232 sweep and review #493): whoever may
+ *  approve that very request — `assertMayApprove`, the gates `approve` itself applies: the
+ *  self-approval rule (`requesterCanApprove: false` keeps a requester from allowing their own
+ *  request, the owner included, as in `decide.ts`), I14 scope on the target gate, and R-17. `minRole:
  *  'operator'` only gates entry (`authorize.ts`); the owner holds every scope; an operator needs a
  *  grant on this gate (or a historical one naming this action kind). Item 5 (review job 652a4abc)
  *  used to check `hasAnyActiveGrant(resourceType: actionKindTag)`, which no grant written since
@@ -1360,17 +1403,20 @@ const setAutoApprovedActionKindHandler: CapabilityHandler = async (client, works
       `set_auto_approved_action_kind: action request ${actionRequestId} is not a "${actionKindTag}" call on gatekeeper ${gatekeeperId}`,
     );
   }
-  const mayApprove = await approverHasScope(
+  // Exactly the gates `approve` applies to this request (self-approval, I14, R-17).
+  await assertMayApprove(
     client,
     workspaceId,
     { principalId: caller.id, role: caller.role },
-    { actionKind: actionKindTag, resourceScope: gatekeeperId },
+    request,
   );
-  if (!mayApprove) {
-    throw new ForbiddenError(
-      `set_auto_approved_action_kind: principal ${caller.id} may not approve "${actionKindTag}" ` +
-        `on gatekeeper ${gatekeeperId} (I14)`,
-    );
+  // An "always allow" outlives this request: the self-approval narrowing in force now applies too,
+  // even if it was set after the request was made (its own snapshot is what `approve` reads).
+  if (caller.id === request.onBehalfOf) {
+    const rule = await readEffectivePolicy(client, workspaceId, gatekeeperId, actionKindTag);
+    if (rule?.requesterCanApprove === false) {
+      throw new SelfApprovalNotAllowedError(request.id, caller.id);
+    }
   }
   const published = await getPublishedOperation(client, workspaceId, gatekeeperId, actionKindTag);
   if (!published) throw new OperationNotFoundError(gatekeeperId, actionKindTag);
@@ -1423,7 +1469,9 @@ async function definitionInForce(client: PoolClient, workspaceId: string, row: P
 }
 
 /** `set_policy` (owner). With `gatekeeperId` the rule is gate-scoped (R-20 / D-15): the Gatekeeper
- *  must exist and publish the Operation (404 otherwise), whose own `blast_radius` is checked (a
+ *  must exist and publish the Operation (404 otherwise — except that an existing rule for an
+ *  Operation it no longer publishes may still be rewritten without loosening it: auto-approval
+ *  off, the requester's self-approval not newly allowed), whose own `blast_radius` is checked (a
  *  `high` one is never opted in, I8) and fills the snapshot the payload left out. Without it the
  *  rule is workspace-wide, `actionKindTag` must be an Operation some gate publishes (400
  *  otherwise), and `setPolicy` refuses `autoApprove: true`.
@@ -1450,7 +1498,36 @@ const setPolicyHandler: CapabilityHandler = async (client, workspaceId, params) 
       payload.gatekeeperId,
       payload.actionKindTag,
     );
-    if (!published) throw new OperationNotFoundError(payload.gatekeeperId, payload.actionKindTag);
+    if (!published) {
+      // Review #501 on #592 (P2-2): a rule kept for an Operation the gate no longer publishes can
+      // still be turned off — tightening only, so it never waits on a definition to name.
+      const existing = await readGatekeeperPolicy(
+        client,
+        workspaceId,
+        payload.gatekeeperId,
+        payload.actionKindTag,
+      );
+      const loosens =
+        payload.autoApprove ||
+        (payload.requesterCanApprove === true && existing?.requesterCanApprove !== true);
+      if (!existing || loosens) {
+        throw new OperationNotFoundError(payload.gatekeeperId, payload.actionKindTag);
+      }
+      const keptBlastRadius = blastRadius ?? existing.blastRadius;
+      const result = await setPolicy(client, workspaceId, {
+        gatekeeperId: payload.gatekeeperId,
+        actionKind: payload.actionKindTag,
+        ...(keptBlastRadius !== null ? { blastRadius: keptBlastRadius } : {}),
+        autoApprove: false,
+        requesterCanApprove: payload.requesterCanApprove,
+        setBy,
+      });
+      return {
+        result: toWirePolicy(result, await definitionInForce(client, workspaceId, result)),
+        resourceType: 'policy',
+        resourceId: result.id,
+      };
+    }
     assertPolicyWriteAllowed({
       actionKind: payload.actionKindTag,
       blastRadius: published.operation.blast_radius,

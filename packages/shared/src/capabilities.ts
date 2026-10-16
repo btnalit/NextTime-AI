@@ -892,10 +892,19 @@ const connectionCapabilities = [
     mode: 'execute',
     channel: 'human',
     minRole: 'owner',
-    paramsSchema: z.object({ gatekeeperId: id }).strict(),
+    // Review #493 on #592 (P2, the bulk form of legacy 300): `drafts` names every draft as the
+    // caller read it — list_operations' `name` + `draftDigest` for this gatekeeper's drafts.
+    paramsSchema: z
+      .object({
+        gatekeeperId: id,
+        drafts: z
+          .array(z.object({ name: z.string().min(1), draftDigest: z.string().min(1) }).strict())
+          .max(1000),
+      })
+      .strict(),
     resultSchema: wire.PublishManifestResultWireSchema,
     description:
-      'Publish every draft Operation in a Gatekeeper’s interface manifest (I16/I17): the gate’s own import-origin drafts; an agent’s or person’s proposal stays a draft (skippedDraftOperationNames) for publish_operation. Legacy J: a draft declaring a param only the gate sets (an identity/routing header, a credential query param, a cookie, a query param its binding fixes) stays a draft and is listed in gateOwnedParamDrafts with those params.',
+      'Publish every draft Operation in a Gatekeeper’s interface manifest (I16/I17): the gate’s own import-origin drafts; an agent’s or person’s proposal stays a draft (skippedDraftOperationNames) for publish_operation. drafts lists the drafts as you read them (name + draftDigest from list_operations); refused 409 draft_changed, with nothing published, when a draft it would publish is missing from drafts or was revised since. Legacy J: a draft declaring a param only the gate sets (an identity/routing header, a credential query param, a cookie, a query param its binding fixes) stays a draft and is listed in gateOwnedParamDrafts with those params.',
   },
   {
     name: 'connect_gatekeeper',
@@ -1943,7 +1952,7 @@ const governanceCapabilities = [
     paramsSchema: z.object({ policy: jsonRecord }).strict(),
     resultSchema: wire.PolicyWireSchema,
     description:
-      'Write a Policy rule: policy = {gatekeeperId?, actionKindTag, blastRadius?, autoApprove, requesterCanApprove?, operationVersion?}. With gatekeeperId the rule covers that Gatekeeper’s action kind; without it, the action kind on every Gatekeeper — such a workspace-wide rule can only require approval (autoApprove: true needs a gatekeeperId, R-20 / D-15). A gate rule wins over the workspace-wide one. The rule names a real Operation: on a gate it must be published there (404 otherwise); workspace-wide some gate must publish one of that name (400 otherwise). autoApprove: true on a gate allows one published definition: operationVersion is required and must be the version published now (409 version_changed when another is); a revision published later goes back through approval.',
+      'Write a Policy rule: policy = {gatekeeperId?, actionKindTag, blastRadius?, autoApprove, requesterCanApprove?, operationVersion?}. With gatekeeperId the rule covers that Gatekeeper’s action kind; without it, the action kind on every Gatekeeper — such a workspace-wide rule can only require approval (autoApprove: true needs a gatekeeperId, R-20 / D-15). A gate rule wins over the workspace-wide one. The rule names a real Operation: on a gate it must be published there (404 otherwise — except that an existing rule for an Operation the gate no longer publishes may still be rewritten with autoApprove: false, as long as requesterCanApprove is not newly set true); workspace-wide some gate must publish one of that name (400 otherwise). autoApprove: true on a gate allows one published definition: operationVersion is required and must be the version published now (409 version_changed when another is); a revision published later goes back through approval.',
   },
   {
     name: 'set_quota',

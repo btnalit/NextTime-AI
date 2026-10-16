@@ -57,6 +57,15 @@ export const ActionRequestWireSchema = z
     // Where in `params` they are: dot paths (`headers.Authorization`, `[i]` for array items, at
     // most 20) naming fields only, never a fragment of a value. Present exactly when the count is.
     suspectedSecretPaths: z.array(z.string()).max(20).optional(),
+    // Legacy 218 / UX acceptance of #592 (P2-1): on a `pending_approval` row (the handlers that
+    // add the decision fields) — the version of this Operation its gate publishes now, and whether
+    // this request was made against that definition. "Always allow" from a request is accepted
+    // only when it was (409 `version_changed` otherwise), and covers that version only. Absent on
+    // other rows, and when the gate publishes no such Operation.
+    publishedDefinition: z
+      .object({ version: z.number().int().positive(), requestIsCurrent: z.boolean() })
+      .strict()
+      .optional(),
   })
   .strict();
 export type ActionRequestWire = z.infer<typeof ActionRequestWireSchema>;

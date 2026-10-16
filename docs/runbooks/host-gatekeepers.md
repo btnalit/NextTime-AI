@@ -415,10 +415,15 @@ curl -s http://kernel:8080/api/cap/create_connection \
 GATEKEEPER_ID_2=<gk-uuid>
 
 # 4. publish_manifest —— 一次性发布这份新导入的整份草稿清单（§5 的 register-gatekeeper --publish
-#    true 等价物；也可以用 meta 分组的 publish_operation 逐条发）
+#    true 等价物；也可以用 meta 分组的 publish_operation 逐条发）。drafts 是先用 list_operations
+#    读到的草稿（name + draftDigest，#592 起必填）；读完之后草稿有变时 409 draft_changed，不发布任何草稿
+DRAFTS=$(curl -s http://kernel:8080/api/cap/list_operations \
+  -H "Authorization: Bearer ${OWNER_KEY}" -H 'content-type: application/json' \
+  -d "{\"gatekeeperId\":\"${GATEKEEPER_ID_2}\"}" \
+  | jq -c '[.result.items[] | select(.status == "draft") | {name, draftDigest}]')
 curl -s http://kernel:8080/api/cap/publish_manifest \
   -H "Authorization: Bearer ${OWNER_KEY}" -H 'content-type: application/json' \
-  -d "{\"gatekeeperId\":\"${GATEKEEPER_ID_2}\"}"
+  -d "{\"gatekeeperId\":\"${GATEKEEPER_ID_2}\",\"drafts\":${DRAFTS}}"
 
 # 5. connect_gatekeeper —— 把这个门授予 member 的入口 agent（写一条 capability_grants）
 curl -s http://kernel:8080/api/cap/connect_gatekeeper \

@@ -18,8 +18,8 @@
 --   2. Existing gate-scoped auto-approval rules are bound from evidence, never wider. "Always
 --      allow" is ticked on an ActionRequest, right after approving it: the definition the person
 --      saw is that request's `operation_digest`. So a rule takes the digest of the latest request
---      for its gate and action kind that its own writer approved at or before the rule was last
---      written. No such request, or one made before 0019 (no digest), binds nothing and the rule
+--      for its gate and action kind that its own writer approved (never one they rejected) at or
+--      before the rule was last written. No such request, or one made before 0019 (no digest), binds nothing and the rule
 --      is suspended: the definition it was meant for cannot be proven. One audit record per rule
 --      says which.
 --
@@ -66,6 +66,10 @@ begin
        and ar.action_kind = gp.action_kind
        and d.decided_by = gp.set_by
        and d.decided_at <= gp.updated_at
+       -- A decision that turned the request down is no evidence of allowing it (review #493 M1).
+       -- Not `= 'approved'`: an approval moves on to executed / verified / failed / superseded.
+       and d.status <> 'rejected'
+       and ar.status <> 'rejected'
      order by d.decided_at desc
      limit 1;
 

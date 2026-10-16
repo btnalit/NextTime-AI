@@ -52,6 +52,7 @@ export {
   ApprovalReasonRequiredError,
   ApprovalScopeError,
   NO_OPERATION_DEFINITION,
+  SelfApprovalNotAllowedError,
   type ActionRequestRow,
 } from './types.js';
 
@@ -91,6 +92,7 @@ export { type RequestActionInput, requestAction } from './request-action.js';
 export {
   type DecideActionRequestInput,
   approveActionRequest,
+  assertMayApprove,
   rejectActionRequest,
 } from './decide.js';
 

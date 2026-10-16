@@ -112,7 +112,15 @@ export function ApprovalDetail({
   const reasonRequired = row.blastRadius === 'high';
   // R-20 / D-15: a `high` blast radius is never auto-approved (kernel I8 refuses the rule too), so
   // there is no rule to offer — the chat card already hid it.
-  const offerAlwaysAllow = canAlwaysAllow && row.blastRadius !== 'high';
+  // Legacy 218 (UX acceptance of #592 P2-1): "总是允许" allows the definition this request was made
+  // against, and only while it is the one published — a request known to be made under an
+  // earlier one gets no offer (the kernel would write no rule, 409), and the page says why. With
+  // no published version to name (`publishedDefinition` absent) the offer stays as it was and the
+  // kernel's own refusal answers.
+  const published = row.publishedDefinition;
+  const alwaysAllowPossible = canAlwaysAllow && row.blastRadius !== 'high';
+  const alwaysAllowStale = alwaysAllowPossible && published?.requestIsCurrent === false;
+  const offerAlwaysAllow = alwaysAllowPossible && !alwaysAllowStale;
   const alwaysAllowChosen = offerAlwaysAllow && alwaysAllow;
   const gateName = nameOf(gatekeeperNames, row.gatekeeperId) ?? row.gatekeeperId;
   // The kernel's count (the wire row's, else its 400 on a first attempt) — never the console's own.
@@ -457,8 +465,22 @@ export function ApprovalDetail({
                       `总是允许门「${gateName}」上的 ${row.actionKindTag}：今后任何人发起都自动批准，不只是这次请求。`,
                       `Always allow ${row.actionKindTag} on gate “${gateName}”: from now on it is auto-approved for every requester, not only this request.`,
                     )}
+                    {published !== undefined
+                      ? t(
+                          `只对现在发布的 v${published.version} 有效；以后发布新版本，请求会重新走审批。`,
+                          ` It covers the v${published.version} published now; once a new version is published, requests go back through approval.`,
+                        )
+                      : null}
                   </span>
                 </label>
+              ) : null}
+              {alwaysAllowStale ? (
+                <p className="field-hint" data-testid="approval-always-allow-stale">
+                  {t(
+                    `这条请求是按旧定义发起的，门上现在发布的是 v${published.version}，所以这里不能选「总是允许」：它只能给你看过的定义。在 v${published.version} 的请求上再选，工作区所有者也可以在「模型与配额」的策略表里确认。`,
+                    `This request was made under an earlier definition, and the gate now publishes v${published.version}, so “Always allow” is not offered here: it covers only a definition you have seen. Choose it on a request made under v${published.version}; the workspace owner can also confirm it in the policy table under Models & Quotas.`,
+                  )}
+                </p>
               ) : null}
 
               <CredentialReview
@@ -529,8 +551,8 @@ export function ApprovalDetail({
               )
             : pending?.alwaysAllow
               ? t(
-                  `批准后门立即执行这次请求，并写入一条自动批准规则：今后门「${gateName}」上的 ${row.actionKindTag} 不论谁发起都直接执行，不再进入审批队列。其他门上的同名动作不受影响。规则可在「模型与配额 → 策略」中关闭。`,
-                  `The Gatekeeper executes this request now, and an auto-approval rule is written: from now on ${row.actionKindTag} on gate “${gateName}” runs without approval for every requester. The same name on other gates is not affected. Turn the rule off under Models & Quotas → Policies.`,
+                  `批准后门立即执行这次请求，并写入一条自动批准规则：今后门「${gateName}」上的 ${row.actionKindTag} 不论谁发起都直接执行，不再进入审批队列。规则只对这次请求所依据的定义${published !== undefined ? `（v${published.version}）` : ''}有效，以后发布新版本会重新走审批；其他门上的同名动作不受影响。规则可在「模型与配额 → 策略」中关闭。`,
+                  `The Gatekeeper executes this request now, and an auto-approval rule is written: from now on ${row.actionKindTag} on gate “${gateName}” runs without approval for every requester. The rule covers only the definition this request was made under${published !== undefined ? ` (v${published.version})` : ''} — a later version goes back through approval — and the same name on other gates is not affected. Turn the rule off under Models & Quotas → Policies.`,
                 )
               : t(
                   '批准后门立即执行该动作，无法撤回；理由写入审计。',
@@ -582,10 +604,15 @@ export function ApprovalDetail({
                         <span data-testid="approval-confirm-always-allow-scope">
                           {t(`门「${gateName}」上的 `, `On gate “${gateName}”, `)}
                           <code>{row.actionKindTag}</code>{' '}
-                          {t(
-                            '今后对所有发起人自动批准',
-                            'will be auto-approved for every requester',
-                          )}
+                          {published !== undefined
+                            ? t(
+                                `今后对所有发起人自动批准（只对 v${published.version}）`,
+                                `will be auto-approved for every requester (v${published.version} only)`,
+                              )
+                            : t(
+                                '今后对所有发起人自动批准（只对这次请求的定义）',
+                                'will be auto-approved for every requester (this request’s definition only)',
+                              )}
                         </span>
                       ),
                     },

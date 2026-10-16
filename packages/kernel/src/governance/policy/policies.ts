@@ -99,7 +99,7 @@ async function readWorkspacePolicy(
 }
 
 /** The gate-scoped `gatekeeper_policies` row for `(gatekeeperId, actionKind)`, or `null`. */
-async function readGatekeeperPolicy(
+export async function readGatekeeperPolicy(
   client: PoolClient,
   workspaceId: string,
   gatekeeperId: string,

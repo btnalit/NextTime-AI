@@ -775,6 +775,42 @@ describe('SystemsPage', () => {
     await waitFor(() => expect(screen.queryByTestId('connection-secret-value')).toBeNull());
   });
 
+  it('「发布清单」 publishes the drafts this page read; a draft changed since reads them again (review #493 on #592)', async () => {
+    let reads = 0;
+    const draftRow = (name: string, draftDigest: string) => ({
+      gatekeeperId: 'gk-1',
+      name,
+      mode: 'observe',
+      blastRadius: 'low',
+      status: 'draft',
+      draftDigest,
+    });
+    const http = scriptedHttp({
+      execution_readiness: () => readiness({ principalId: 'p-self', gates: [gate()] }),
+      list_operations: () => {
+        reads += 1;
+        return { items: [draftRow('stock.get', reads === 1 ? 'd-1' : 'd-2')] };
+      },
+      publish_manifest: (params) => {
+        expect(params).toEqual({
+          gatekeeperId: 'gk-1',
+          drafts: [{ name: 'stock.get', draftDigest: 'd-1' }],
+        });
+        return Promise.reject(
+          new HttpError('capability_error', 'changed after it was read', 'draft_changed'),
+        );
+      },
+    });
+    renderPage(http);
+    const card = (await screen.findAllByTestId('gatekeeper-card'))[0] as HTMLElement;
+    fireEvent.pointerDown(within(card).getByTestId('gatekeeper-more'), { button: 0 });
+    const item = await screen.findByTestId('gatekeeper-publish-manifest');
+    expect(item.textContent).toContain('(1)');
+    fireEvent.click(item);
+    await waitFor(() => expect(reads).toBe(2));
+    expect(within(card).getByText(/这份草稿在你查看之后被修改过/)).toBeTruthy();
+  });
+
   it('offers no connection secret for a gate linked from the platform catalog', async () => {
     const http = scriptedHttp({
       execution_readiness: () => readiness({ principalId: 'p-self', gates: [gate()] }),
