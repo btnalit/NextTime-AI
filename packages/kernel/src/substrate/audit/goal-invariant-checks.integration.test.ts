@@ -334,6 +334,27 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(flagged(result, 'attempts', both)).toBe(false);
       });
 
+      it('counts an attempt Task carried by more than one WorkerRun (S11 GO2)', async () => {
+        const goalRunId = await goal();
+        await revision(goalRunId, 1, ['one-run', 'two-runs']);
+        const oneRunStep = await step(goalRunId, 'one-run', { attemptCount: 1 });
+        const oneRun = await task(goalRunId, oneRunStep, { attempt: 1, status: 'running' });
+        await workerRun(oneRun);
+        const twoRunsStep = await step(goalRunId, 'two-runs', { attemptCount: 1 });
+        const twoRuns = await task(goalRunId, twoRunsStep, { attempt: 1, status: 'running' });
+        await workerRun(twoRuns);
+        await workerRun(twoRuns);
+        // A nested child Task (no attempt number) keeps Task-internal retry: not counted.
+        const child = await task(goalRunId, oneRunStep, { attempt: null, status: 'running' });
+        await workerRun(child);
+        await workerRun(child);
+
+        const result = await check((client) => checkIG1(client, ALL));
+        expect(flagged(result, 'runs', twoRuns)).toBe(true);
+        expect(mentioned(result, oneRun)).toBe(false);
+        expect(mentioned(result, child)).toBe(false);
+      });
+
       it('counts the unique index going missing', async () => {
         const result = await checkRolledBack('drop index tasks_step_attempt_uidx', (client) =>
           checkIG1(client, ALL),

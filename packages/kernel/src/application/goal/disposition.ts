@@ -83,8 +83,13 @@ export function actionDisposition(action: ActionOutcomeColumns): ActionDispositi
  *     none. Whether the step succeeds still depends on its output and acceptance (§4.5).
  *
  * Precedence, first match wins: `reconcile` (the platform can act on it now, and a person deciding
- * anything else needs its answer), then `action_refused`, then `approval` (do not start another
- * attempt while one of this attempt's requests may still run — I-G4), then `transient`.
+ * anything else needs its answer), then `approval` (a request may still run — I-G4: nothing is
+ * decided about the step, and no new attempt starts, while one can), then `action_refused`, then
+ * `transient`. S11 GO2 (review #493 P2 on GO1): `approval` used to come after `action_refused`, so a
+ * step with one refused request and another still `executing` went to a person, whose retry would
+ * start a new attempt beside the running action, and that action's later outcome-unknown never
+ * reached `waiting(reconcile)`. The advancer also re-checks, before any `failed → ready`, that no
+ * request of the step — of any attempt — is in flight.
  */
 export type StepActionEffect =
   | {
@@ -100,9 +105,9 @@ export type StepActionEffect =
 export function stepActionEffect(actions: readonly ActionOutcomeColumns[]): StepActionEffect {
   const dispositions = new Set(actions.map(actionDisposition));
   if (dispositions.has('reconcile')) return { kind: 'wait', waitingReason: 'reconcile' };
+  if (dispositions.has('in_flight')) return { kind: 'wait', waitingReason: 'approval' };
   if (dispositions.has('needs_decision'))
     return { kind: 'fail', failureCategory: 'action_refused' };
-  if (dispositions.has('in_flight')) return { kind: 'wait', waitingReason: 'approval' };
   if (dispositions.has('retry')) return { kind: 'fail', failureCategory: 'transient' };
   return { kind: 'clear' };
 }

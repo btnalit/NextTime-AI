@@ -23,6 +23,10 @@ export interface TaskRow {
   readonly budgetWarnedAt: Date | null;
   readonly failureReason: string | null;
   readonly retryCount: number;
+  /** S11 GO2: the goal advancer's attempt number when this Task is a step's attempt
+   *  (migrations/task/0007 `step_attempt`), else `null` — a Task outside a goal, or a nested child
+   *  Task of a step. An attempt Task never retries inside itself: a new attempt is the step's. */
+  readonly stepAttempt: number | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
   readonly completedAt: Date | null;
@@ -46,6 +50,7 @@ interface TaskDbRow {
   budget_warned_at: Date | null;
   failure_reason: string | null;
   retry_count: number;
+  step_attempt: number | null;
   created_at: Date;
   updated_at: Date;
   completed_at: Date | null;
@@ -70,6 +75,7 @@ export function mapTaskRow(row: TaskDbRow): TaskRow {
     budgetWarnedAt: row.budget_warned_at,
     failureReason: row.failure_reason,
     retryCount: row.retry_count,
+    stepAttempt: row.step_attempt,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     completedAt: row.completed_at,
@@ -80,8 +86,8 @@ export function mapTaskRow(row: TaskDbRow): TaskRow {
 
 export const TASK_ROW_COLUMNS = `workspace_id, id, status, on_behalf_of, created_by_activity_id,
   worker_definition_id, worker_definition_version, input, result, token_budget,
-  duration_limit_sec, tokens_used, budget_warned_at, failure_reason, retry_count, created_at,
-  updated_at, completed_at, failed_at, cancelled_at`;
+  duration_limit_sec, tokens_used, budget_warned_at, failure_reason, retry_count, step_attempt,
+  created_at, updated_at, completed_at, failed_at, cancelled_at`;
 
 export interface WorkerRunRow {
   readonly workspaceId: string;

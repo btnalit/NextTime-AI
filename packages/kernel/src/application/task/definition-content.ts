@@ -1,6 +1,10 @@
 import type { PoolClient } from 'pg';
 import type { TaskSkillInlineMountInput } from '../../adapters/supervisor-client/index.js';
-import { renderSkillMarkdownFile, resolvePublishedSkills } from '../worker/index.js';
+import {
+  readSkillVersions,
+  renderSkillMarkdownFile,
+  resolvePublishedSkills,
+} from '../worker/index.js';
 
 /**
  * application/task/definition-content: reads a WorkerDefinition's own content fields
@@ -105,5 +109,46 @@ export async function resolveSkillsInline(
       files: { 'SKILL.md': renderSkillMarkdownFile(skill) },
     })),
     loadedSkills: skills.map((skill) => ({ skillId: skill.id, version: skill.version })),
+  };
+}
+
+/**
+ * S11 GO2: mounts exactly the Skill versions `refs` names — a goal step's later attempt loads what
+ * its first attempt loaded (`RunConfigSnapshot.skills`). Returns the refs that are not published
+ * any more (deprecated, or gone) instead of mounting anything when there is one: a pinned
+ * component that was withdrawn means the attempt does not start (plan §4.4).
+ */
+export async function resolvePinnedSkillsInline(
+  client: PoolClient,
+  workspaceId: string,
+  refs: readonly LoadedSkillRef[],
+): Promise<
+  | { readonly kind: 'resolved'; readonly skills: ResolvedRunSkills }
+  | { readonly kind: 'unavailable'; readonly refs: readonly LoadedSkillRef[] }
+> {
+  const rows = await readSkillVersions(
+    client,
+    workspaceId,
+    refs.map((ref) => ({ skillId: ref.skillId, version: ref.version })),
+  );
+  const published = new Map(
+    rows
+      .filter((row) => row.status === 'published')
+      .map((row) => [`${row.id}@${row.version}`, row] as const),
+  );
+  const unavailable = refs.filter((ref) => !published.has(`${ref.skillId}@${ref.version}`));
+  if (unavailable.length > 0) return { kind: 'unavailable', refs: unavailable };
+  const ordered = refs
+    .map((ref) => published.get(`${ref.skillId}@${ref.version}`))
+    .filter((row): row is NonNullable<typeof row> => row !== undefined);
+  return {
+    kind: 'resolved',
+    skills: {
+      skillsInline: ordered.map((skill) => ({
+        name: skill.name,
+        files: { 'SKILL.md': renderSkillMarkdownFile(skill) },
+      })),
+      loadedSkills: ordered.map((skill) => ({ skillId: skill.id, version: skill.version })),
+    },
   };
 }

@@ -41,6 +41,7 @@ export {
   listSkills,
   proposeSkill,
   publishSkill,
+  readSkillVersions,
   renderSkillMarkdownFile,
   skillReviewContent,
   resolvePublishedSkills,
