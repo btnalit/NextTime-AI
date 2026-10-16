@@ -9,9 +9,10 @@ import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import {
   compensateActionRequest,
   markActionRequestFailed,
+  recordActionRequestInDoubt,
   startActionRequestExecution,
 } from '../../governance/approval/execution.js';
-import { FAILURE_REASON_MAX } from '../../governance/approval/service.js';
+import { SHOWN_REASON_MAX } from '../../governance/approval/service.js';
 import { registerGatekeeper } from '../../governance/gatekeepers/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
 import { dispatchCapability } from './dispatch.js';
@@ -70,6 +71,7 @@ interface ActionRequestWire {
   decidedAt?: string | null;
   failureReason?: string | null;
   failureReasonTruncated?: boolean;
+  outcomeInDoubt?: { since: string; reason: string | null } | null;
 }
 
 /** A synthetic credential-shaped value — never a real one. */
@@ -285,7 +287,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         await startActionRequestExecution(client, workspaceId, longId);
         await markActionRequestFailed(client, workspaceId, longId, {
           failureKind: 'refused',
-          reason: `Authorization: Bearer ${FAKE_TOKEN}\n${'x'.repeat(FAILURE_REASON_MAX)}`,
+          reason: `Authorization: Bearer ${FAKE_TOKEN}\n${'x'.repeat(SHOWN_REASON_MAX)}`,
         });
       });
       const long = (await dispatchCapability({ pool }, owner, 'get_action', {
@@ -293,7 +295,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       })) as ActionRequestWire;
       expect(long.failureReason).toMatch(/^Authorization: ?\[redacted\]\nx+…$/);
       expect(long.failureReason).not.toContain(FAKE_TOKEN);
-      expect([...(long.failureReason ?? '')]).toHaveLength(FAILURE_REASON_MAX + 1);
+      expect([...(long.failureReason ?? '')]).toHaveLength(SHOWN_REASON_MAX + 1);
       // Legacy 339: the wire says it is only the head, so the console can say where the rest is.
       expect(long.failureReasonTruncated).toBe(true);
       expect(read.failureReasonTruncated).toBe(false);
@@ -348,6 +350,9 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(either).not.toContain(refused);
       expect(either).not.toContain(pending);
 
+      // An empty list matches no row, the same as `status: []`.
+      expect(await ids({ failureKind: [] })).toEqual([]);
+
       const compensatedOnly = await ids({ failureKind: 'outcome_unknown', status: 'compensated' });
       expect(compensatedOnly).toContain(compensatedUnknown);
       expect(compensatedOnly).not.toContain(unknown);
@@ -355,6 +360,54 @@ describe.runIf(DATABASE_URL !== undefined)(
       await expect(
         dispatchCapability({ pool }, owner, 'list_action_requests', { failureKind: 'withdrawn' }),
       ).rejects.toThrow();
+    });
+
+    it('legacy 338: an in-doubt reason reads like a failure reason — redacted, clipped, unseen characters shown — on get_action and the list alike', async () => {
+      const owner = humanCaller(workspaceId, ownerId, 'owner');
+      const id = await seedPendingActionRequest({
+        blastRadius: 'medium',
+        actionKind: 'ah.in_doubt_reason',
+      });
+      await dispatchCapability({ pool }, owner, 'approve', { actionRequestId: id });
+      const longId = await seedPendingActionRequest({
+        blastRadius: 'medium',
+        actionKind: 'ah.in_doubt_reason.long',
+      });
+      await dispatchCapability({ pool }, owner, 'approve', { actionRequestId: longId });
+
+      await admin(async (client) => {
+        await startActionRequestExecution(client, workspaceId, id);
+        await recordActionRequestInDoubt(client, workspaceId, id, {
+          reason: `no answer‮: Authorization: Bearer ${FAKE_TOKEN}\r\nasked again later`,
+        });
+        await startActionRequestExecution(client, workspaceId, longId);
+        await recordActionRequestInDoubt(client, workspaceId, longId, {
+          reason: `Authorization: Bearer ${FAKE_TOKEN}\n${'y'.repeat(SHOWN_REASON_MAX)}\u200B`,
+        });
+      });
+
+      const read = (await dispatchCapability({ pool }, owner, 'get_action', {
+        actionRequestId: id,
+      })) as ActionRequestWire;
+      expect(read.status).toBe('executing');
+      expect(read.outcomeInDoubt?.reason).toMatch(
+        /^no answer\\u\{202E\}: Authorization: ?\[redacted\]\nasked again later$/,
+      );
+      expect(read.outcomeInDoubt?.reason).not.toContain(FAKE_TOKEN);
+
+      // Clipped before the unseen character past the cut could be shown: none of it survives.
+      const long = (await dispatchCapability({ pool }, owner, 'get_action', {
+        actionRequestId: longId,
+      })) as ActionRequestWire;
+      expect(long.outcomeInDoubt?.reason).toMatch(/^Authorization: ?\[redacted\]\ny+…$/);
+      expect([...(long.outcomeInDoubt?.reason ?? '')]).toHaveLength(SHOWN_REASON_MAX + 1);
+
+      const page = (await dispatchCapability({ pool }, owner, 'list_action_requests', {
+        limit: 200,
+      })) as { items: ActionRequestWire[] };
+      const listed = new Map(page.items.map((row) => [row.id, row]));
+      expect(listed.get(id)?.outcomeInDoubt).toEqual(read.outcomeInDoubt);
+      expect(listed.get(longId)?.outcomeInDoubt).toEqual(long.outcomeInDoubt);
     });
 
     it('list_action_requests{taskId} finds a decided request through its WorkerRun; parentWorkerRunId narrows; unknown taskId is an empty page', async () => {

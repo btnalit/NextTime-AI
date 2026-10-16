@@ -95,12 +95,13 @@ export {
   type ActionRequestInDoubt,
   type ActionRequestQueueBlocker,
   type ActionRequestWaitingState,
-  FAILURE_REASON_MAX,
   readActionRequestFailureReasons,
   readActionRequestWaitingStates,
   readActionRequestsInDoubt,
   readQueueBlockers,
 } from './waiting-state.js';
+
+export { SHOWN_REASON_MAX, shownAuditReason } from './shown-reason.js';
 
 export { type RequestActionInput, requestAction } from './request-action.js';
 

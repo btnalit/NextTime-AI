@@ -22,7 +22,9 @@ import {
  *  gate's protocol. Whether it ran is unknown until the platform asks the gate (the
  *  stale-executing reaper, past its stale timeout); until then the row holds its Gatekeeper's
  *  queue (R-50). `since`: when the first such call was recorded. `reason`: the kernel's reason,
- *  as audited (`action_request.outcome_in_doubt`). */
+ *  as audited (`action_request.outcome_in_doubt`) and shown like `failureReason` (legacy 338):
+ *  redacted, clipped to 1000 code points, unseen characters shown as `\u{XXXX}`, line breaks
+ *  kept; `null` when none was recorded. */
 export const ActionRequestOutcomeInDoubtWireSchema = z
   .object({
     since: z.string(),
@@ -100,7 +102,7 @@ export const ActionRequestWireSchema = z
     // overrides, zero-width and control characters) shown as `\u{XXXX}`; line breaks kept. `null`
     // when none was recorded or on any other status; absent from `request_action`'s own results.
     failureReason: z.string().nullable().optional(),
-    // Legacy 340: `true` when `failureReason` is the head of a longer reason (it then ends in
+    // Legacy 339: `true` when `failureReason` is the head of a longer reason (it then ends in
     // `…`); the whole is in the request's `action_request.fail` audit record. `false` otherwise.
     failureReasonTruncated: z.boolean().optional(),
     // Legacy 218 / UX acceptance of #592 (P2-1): on a `pending_approval` row (the handlers that

@@ -1,5 +1,6 @@
 import type { PoolClient } from 'pg';
 import { describe, expect, it } from 'vitest';
+import { SHOWN_REASON_MAX } from '../../governance/approval/service.js';
 import type { WithTransactionFn } from './action-executor.js';
 import { readTerminalOutcome } from './request-action-handler.js';
 
@@ -64,6 +65,28 @@ describe('readTerminalOutcome (review of #549, B4)', () => {
       'ar-1',
     );
     expect(outcome.reason).toBe('mysql: PGPASSWORD=[redacted] rejected');
+  });
+
+  it('legacy 338: shows the reason as the console shows a failure reason — clipped, unseen characters made visible', async () => {
+    const outcome = await readTerminalOutcome(
+      withRows('action_request.fail', {
+        resultingStatus: 'failed',
+        reason: `gate said no\u202E\r\n${'x'.repeat(2000)}`,
+      }),
+      'ws',
+      'p',
+      'ar-1',
+    );
+    // 15 code points before the x's (the CR among them, dropped after the cut).
+    expect(outcome.reason).toBe(`gate said no\\u{202E}\n${'x'.repeat(SHOWN_REASON_MAX - 15)}…`);
+
+    const blank = await readTerminalOutcome(
+      withRows('action_request.fail', { resultingStatus: 'failed', reason: '  ' }),
+      'ws',
+      'p',
+      'ar-1',
+    );
+    expect(blank.reason).toBeUndefined();
   });
 
   it('returns a row written since as it is', async () => {
