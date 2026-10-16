@@ -4033,6 +4033,18 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **取舍**：去掉了「最多扫 `limit` 行」的隐性上限，最坏一次 `find_*` 翻完工作区里所有匹配候选（每个 1–3 次查询）；目录规模受发布审批约束。弃用版本仍在候选集里见 STATUS 遗留 321；查过未改的 `queryRecentPlatformWrites` 1000 行上限与 Explorer 5000 批次见遗留 322、323。
   - **验证**：`application/task/find-means-limit.integration.test.ts`（真 Postgres；旧代码 4 个用例全部失败）、`reconstruct.test.ts`、`explorer-decisions.test.ts`。
 
+**320 — 字符串含 U+0000 时在写库前处理，Task 不再停在 `running`**（STATUS 遗留 320，S11 W0）
+
+- 实现说明（#602，2026-10-16 合入，4398d6a；遗留 320 关闭）：
+  - **边界规则**：看字符串是被比较或被执行的（身份、名称、引用、地址、设置），还是已经在别处产出的内容。前者拒绝：`dispatchCapability` 在事务开始前对全部能力 params 默认检查，announce 地址（`target` / `endpoint` / `healthEndpoint`）、manifest 除描述外的字段、`/api/auth/claim` / `login` / `me` 的名字同样拒绝，统一抛 `UnstorableTextError` → HTTP 400 `unstorable_text`（`details: {path, in}`）、WS `INVALID_PARAMS`、MCP `unstorable_text:` 前缀；理由是转义后存下的会是另一个名字或地址。Operation 名走 #593 的名称规则（`invalid_operation_name`），`report_task_result` 只拒那一条。后者转义为 `\u{0}`（与 `echoed-text.ts` 的显示写法一致）并计数 `unstorableEscaped`。
+  - **转义的能力**：`HANDLERS_SETTLING_UNSTORABLE_TEXT` 列出 `report_task_result`、`report_turn`、`submit_observations` 三类，它们跳过默认拒绝、在 handler 里转义；计数写在 `worker_result` Activity、Turn metadata 与审计行。
+  - **门的回答**：`HttpGatekeeperClient` 对 observe / apply / lookup / revert 的结果与错误信息转义（apply 写不进去会卡在 `executing`，replay 拿回同一份回答）；`describe_operations` 的返回走 manifest 规则，不在这里转义。对话 event sink、spawn 失败审计 `message`、manifest 与 announce 的描述和显示名也转义。
+  - **工具**：`@nexttime/shared` 的 `storable-text.ts`（`findUnstorableText`、`storableText`、`storableValue`，只复制改动的路径，键也处理）。`/internal/llm-usage`、`/internal/egress`、`/internal/llm-admin-audit` 不改（来源受配置、allow-list 或 URL 解析器约束）。
+  - **reaper**：`runTaskReaper` 与 `spawn_lost` / `run_lost` 清扫都逐个候选隔离，失败汇总为 `TaskReaperCandidateErrors` 交给组合根的 `onTaskReaperError`。新增 `reapOrphanedTasks`：Task 在 `running` / `waiting_approval`、没有非 terminated 的 WorkerRun，且最后一个 run 结束（或 Task 创建）超过 `ORPHANED_TASK_THRESHOLD_MS` = 5 分钟，经 `failTaskAndReapWorkerRuns` 失败为 `run_lost`（转换表、`task.fail` 审计、`TaskUpdated` 事件、吊销 Handle）。
+  - **给 GO1 的假设**：`run_lost` 清扫默认每个 Task 都由 WorkerRun 承载（今天 `invoke_worker` 是唯一创建入口）；GO1 引入 Task / StepRun 新关联或不靠 WorkerRun 运行的 Task 时必须复核并在清扫里排除（STATUS 遗留 325）。
+  - **控制台**：`packages/web/src/lib/errors.ts` 加 `unstorable_text` 中英文标题与下一步，并进 `GATE_REASON_CODES`；Task 失败原因无中文标签见遗留 324。
+  - **验证**：真 Postgres 集成测试 `worker-result`、`ingest-handlers`、`turn-terminal`、`reaper`（孤儿清扫 6 种形态与候选隔离）、`platform-gates`；legacy 128 的「写不进去的消息」改为注入 22P05。
+
 **H1 — 主机窗口：升到当时最新发版，含控制台核对**（见 `global-roadmap-2026-10-16.md` §4）
 
 - 实现说明：（未开工）
