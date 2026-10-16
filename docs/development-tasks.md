@@ -4057,7 +4057,15 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 
 **GO1 — 数据模型与转移：GoalRun、PlanRevision、StepRun**（见 `global-roadmap-2026-10-16.md` §4）
 
-- 实现说明：（未开工）
+- 实现说明（前半，#601，2026-10-16 合入，47a88b8；governance 0021；遗留 310 关闭。后半 GoalRun / PlanRevision / StepRun 三张表、Task 与 ActionRequest 的归属列、I-G1 / I-G2 / I-G6 / I-G9 定时检查随下一个 PR）：
+  - **撤回**：新终态 `withdrawn`，`withdrawActionRequest`（`governance/approval/service.ts`）只从 `pending_approval` / `approved` / `auto_approved` 进入（含 `auto_approved`：策略自动批准、排在门后还没开始的请求同样未执行，撤不回就会在步骤取消后照常执行，正是 I-G9 要防的）。`executing` 不能撤回，走 R-48 结果不明路径。数据库只守 `withdrawn` 这一个口子（触发器 `action_requests_status_guard`），整张转移图仍由 `transitions.ts` 转移表与 I6 事后检查守——整图触发器会让回滚后的旧代码（测试直接 UPDATE 状态）失败。drain、请求等待循环、聊天联动、控制台都处理了 `withdrawn`；目前没有生产调用方。
+  - **给 GO3 的约束**（已写进 `withdrawActionRequest` 注释）：撤回和步骤转移同一事务；行已 `executing` 时撤回抛 `IllegalTransition`，整个步骤转移回滚。GO3 必须先在行锁下读状态，只撤回 `WITHDRAWABLE_ACTION_REQUEST_STATUSES` 里的行，`executing` 的走核对路径、步骤等待核对。撤回说明（遗留 328）须在 GO3 合入前补上；遗留 330 一并看。
+  - **失败类别**：列 `failure_kind`，在发起门调用的地方决定（`action-executor.ts` `DEFINITE_FAILURE_KIND_BY_CODE`、过期执行回收器），作为 `markActionRequestFailed` 的必填参数同时写行和审计；`ActionExecutorResult` 改为联合类型。码表只在 shared `action-failure-reason.ts`：`not_delivered` = `gate_unreachable`、`gate_token_unavailable`、`connection_secret_missing`、`gate_not_found`、回收器查到的 `apply_not_received`、调用离开内核前的非门客户端错误；`refused` = 平台执行前的拒绝与门在 transport 运行前的拒绝码（`unauthorized`、`operation_not_found`、`invalid_params`、`invalid_operation_schema`、`operation_definition_mismatch`、`operation_refused`、`credential_unavailable`）及门判定的 `transport_error`（假设门是 287 之后的 gatekeeper-base，见遗留 332）；`outcome_unknown` = 门 409 `apply_outcome_unknown`、`response_too_large`、门没有 `apply_lookup` 路由、回收器重试到上限仍无答复。不在白名单的码留在途，由回收器按 key 去问门。
+  - **存量回填（审查 M1 后）**：同一份白名单，只有确认什么都没执行的码才记 `not_delivered` / `refused`，且只对 `replay_attempts = 0`、开始执行两分钟内失败的行有效（回收器在 v0.35 及以前直接重跑 `execute`，0013 之后再发 `apply`，它们写的拒绝说明不了第一次调用）；`executing_at` 为空（早于 0006）的行按白名单读；`apply_not_received` 是门对这个 key 本身的答复，回收器写的也可信。其余（没码的、`outcome unknown:` 空格写法、裸超时、`network_error:`、`response_too_large:`、`invalid_response:`、`internal_error:`、`unrecognized_gate_error:`、287 之前的 `transport_error:`）全记 `outcome_unknown`。控制台读老工具结果用同一个 `failureKindOfReason`。
+  - **310**：`gatekeeper-base` 对 transport 没有分类的异常默认记结果不明（`TransportInvokeError`、`BindingKindMismatchError`、`not_sent` 网络错误仍是普通失败）；ssh 与 cli 的前置失败（缺参数、`command_pattern` 编译失败、cli flag 注入拦截）改抛 `TransportInvokeError`；六个 transport 逐一核对。
+  - **线上**：`ActionRequestStatus` 加 `withdrawn`；`ActionRequestWire` 加必填可空 `failureKind`；`request_action` 执行结果加可选 `failureKind`，字段顺序改为 `id`、`status`、`failureKind` 在前（控制台从截断预览里读）；聊天 `system.action_update` 加可选 `failureKind`。
+  - **控制台**：审批详情、审批历史、关联审批、审计上下文、聊天状态行显示失败类别（`ActionFailure.tsx`、`action-outcome.ts`），只有「结果不明」用 danger 色并写明到哪个系统核对哪个动作（原始 Operation 名，UX P2-3）；`withdrawn` 显示「已撤回」。「核对后：已生效 / 没生效」的回写入口不在 GO1。
+  - **验证**：`withdraw-failure-kind.integration.test.ts`（回填 CASE 原文逐条、回收器写入、两分钟窗口、0006 之前的行、触发器三种拒绝、旧代码不带类别）、shared `action-failure-reason.test.ts`、`action-executor.test.ts`（迁移码表与 shared 一致）；可逆性按 `reversibility-probe` 方式在本地用 v0.49.0 内核全套跑过。
 
 **GO2 — 确定性推进器**（见 `global-roadmap-2026-10-16.md` §4）
 
