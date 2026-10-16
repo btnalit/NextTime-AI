@@ -4081,7 +4081,17 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 
 **GO2 — 确定性推进器**（见 `global-roadmap-2026-10-16.md` §4）
 
-- 实现说明：（未开工）
+- 实现说明（#619，2026-10-16 合入，bf933cf；goal 0002；遗留 325 关闭）：
+  - **调度状态只在库里**：`goal_runs.next_tick_at` 是唯一的调度状态（没有队列表、没有进程内定时器）；`claimDueGoalRuns` 用 `for no key update skip locked` 认领并在同一语句把 `next_tick_at` 推后一个租约（默认 60 s），推进中崩溃则回滚、租约到期再认领（S2）；每次推进写回下一次要看的时间（运行中取最早的重试退避、被挡重试的复查与墙钟截止，其他状态 `null`）。CHECK `goal_runs_next_tick` 保证终态行为空；守卫 `goal_runs_status_guard` 按 0001 重建只多放行这一列，`goal-schema.integration.test.ts` 比对两份函数文本。
+  - **确认（I-G3）**：`createGoalRun` 建 `proposed` 的 GoalRun 与 revision 1；`confirmGoalRun` 只许请求者本人，先锁 GoalRun、复验计划，再接受 revision 1 → 推进 `current_revision` → 进 `running` 并立即到期 → 每步建 `pending` StepRun（`attempt_count = 0`）。计划（`plan.ts`）：key 唯一、依赖存在无环（报出环路径）、worker 为已发布的 worker 类版本、拒绝未知字段、≤ 256 KiB；步骤字段 `key` / `worker` / `input` / `dependsOn` / `nested`（默认 false）/ `maxAttempts`（默认 3，最多 5）。
+  - **一次推进（`advance.ts`）**：请求者的 workspace 上下文、一个事务，锁序 GoalRun → 按建立顺序的 StepRun。A 记录已结束的尝试（按本次尝试自己的 WorkerRun 树发起的请求判定，`listStepActionOutcomes` 加 `raisedBy`）；B 重试 transient（未到上限、这一步所有尝试都没有在途请求（I-G4）、退避 30 s 起翻倍最多 10 分钟、仍在当前计划里；被在途请求挡住时一个扫描周期后复查）；C 解锁依赖（进 `ready` 前复核引入修订与当前修订的条目完全相同）；D 开始尝试（尝试 Task 与 `ready → running` 同一事务，I-G1；目标暂停时不开新尝试）。`stepActionEffect` 在途优先于 `action_refused`，任何 `failed → ready` 前再确认无在途请求。转移都走 shared 转移表与 `transition-log.ts`，payload 带 `by: 'advancer'`，时间取数据库 `now()`。
+  - **尝试 Task（`task/step-attempt.ts`）**：与 `invoke_worker` 共用配额锁（抽出 `quota-check.ts`）、`spawnWorkerRun` 与 Handle 铸造；推进事务内插入 `queued` Task（带步骤、尝试号与 `run_config_snapshot`，无凭据），提交后 spawn WorkerRun；spawn 失败记 `spawn_failed`，提交后 spawn 前内核死掉由 reaper 的 `spawn_lost` 收掉、推进器视为 transient。
+  - **授权（I-G7，S9）**：每次尝试 Handle 的父范围是请求者此刻的入口范围；子范围用 `computeChildHandleScope`，未写 `nested` 时去掉 `invoke_worker` / `find_workers`。请求者 / 平台用户 / workspace 被停用、角色不能再启动 Worker、缺 WorkerDefinition 声明的门或执行类能力时不开始，暂停 `authority_lost`。
+  - **钉住配置（§4.4）与预算（I-G6，S10）**：第一次尝试解析 WorkerDefinition 版本、Skill、模型与运行时镜像写进快照，之后从快照读；实例指令每次现读，快照只记组合 prompt 的摘要。墙钟从确认算，token 为该 GoalRun 所有 Task（含嵌套）之和，步数为已开始的尝试数；超出暂停 `budget_exhausted`，尝试 Task 预算取工作区默认与目标剩余量的较小者。
+  - **唤醒与对账（S3、S12，`advancer.ts`）**：outbox 消费者对 `TaskUpdated` / `ActionRequestUpdated` 只把 GoalRun 置为到期、从不抛错（dispatcher 串行全平台共用），`lock_timeout` 5 s；对账扫描每分钟把 (a) 当前尝试 Task 已结束的 `running` 步骤、(b) 已无在途请求的 `waiting(approval)`、(c) 运行中却没有 `next_tick_at`、(d) 运行中 token 已达预算的 GoalRun 置为到期。接入条件同 task reaper（有 `handleKeyPair`），tick 1 s、对账 60 s。
+  - **Task 侧（来自 GO1 的输入）**：带 `step_attempt` 的 Task 崩溃直接 `worker_failed`，不在 Task 内 requeue；I-G1 加「带 `step_attempt` 的 Task 至多一个 WorkerRun」；`run_lost` 收窄为至少有过一个 WorkerRun 且全部已终止（遗留 325），没拿到 run 的 `queued` Task 归 `spawn_lost`。shared 新增 `GoalRunUpdated` / `StepRunUpdated`（`docs/contracts/events.json` 纯新增）。
+  - **与设计的偏离（审查 #493 认可）**：① `contract_violation` 不自动返工，直接暂停 `needs_decision`（遗留 358，随 GO5）；② **钉住的组件被弃用时尝试不开始**（不建 Task），步骤留在 `ready`、GoalRun 暂停 `needs_decision`——**取代 roadmap GO2 行原来的「本次尝试失败」**（建一个注定失败的 Task 会白占配额、白铸 Handle）；③ 缺任何声明的门就不开始（比 `invoke_worker` 静默去掉观察门更严）；④ Task 被目标之外取消记 transient 并暂停 `needs_decision`；⑤ 步骤预算计已开始的尝试数；⑥ token 预算只在开新尝试前检查（遗留 357，随 GO3）；⑦ 暂停中发现的第二个原因只写审计 `goal_run.pause_noted`，同一原因与说明只写一次；⑧ 推进一直抛错不会自动停下（遗留 356）；⑨ 尝试 Task 的 `created_by_activity_id` 为空，溯源靠步骤审计与事件；⑩ 间隔没有环境变量，只有 `createBackgroundServices` 选项。
+  - **验证**：`advancer.integration.test.ts`（25 个，真 Postgres + 真 Task 路径）覆盖确认、S1、S2(a–c)、S3、S9、S10、S12(a–d)、重试、等待、fencing、暂停中审计与钉住配置；`plan.test.ts`、`advance.test.ts`、`disposition.test.ts` 单测；内核全量 213 个文件 3642 个测试通过。
 - 来自 GO1（#607 与审查 #493）的输入：
   - **尝试 Task 必须由 WorkerRun 承载**：走 `invoke` 的插入加启动路径；`reapOrphanedTasks` 的 `run_lost` 与 `spawn_lost` 会收割没有活 WorkerRun 的 `running` / `waiting_approval` Task。要建不经 WorkerRun 的 Task 必须在两个判据里显式排除；STATUS 遗留 325（`run_lost` 收窄为至少有一个已终止的 run）在新增 Task 入口时一并做。
   - 推进器建的 Task 关掉 Task 内崩溃重试（§3.1），重试由 StepRun `failed → retry → ready` 负责；把「带 `step_attempt` 的 Task 至多一个 WorkerRun」作为 I-G1 的一个条件加上。
@@ -4094,6 +4104,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 **GO3 — 恢复、等待、取消与修订**（见 `global-roadmap-2026-10-16.md` §4）
 
 - 实现说明：（未开工）
+- 来自 GO2（#619 与审查 #493）的输入：一步在嵌套子 Task 还在跑时就会判 `succeeded`（§3.4 要求名下动作都到终态）；A 段记录尝试结果时补 `inCurrentPlan` fencing；解锁也要认 `skipped` 的依赖；token 超出的取消路径与同一次推进的尝试均分剩余量（遗留 357）；推进连续抛错后自动暂停（遗留 356）。
 - 来自 GO1（审查 #493 delta）的输入：GoalRun 在 `cancelling` 时步骤能否从 `waiting` 回到 `running`，由 GO3 定（只允许走向终止，或写明为什么允许）；锁序同 GO2，先锁 GoalRun 再锁 StepRun。
 
 **GO4 — 验收检查**（见 `global-roadmap-2026-10-16.md` §4）
@@ -4103,6 +4114,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 **GO5 — 能力与入口 prompt**（见 `global-roadmap-2026-10-16.md` §4）
 
 - 实现说明：（未开工）
+- 来自 GO2（#619 与审查 #493）的输入：确认卡片要预检请求者是否持有步骤声明的门，否则第一次尝试会以 `authority_lost` 暂停；`contract_violation` 返工一次需要步骤输出与输入绑定（遗留 358）；幂等键（S3 的另一半）。
 
 **GO6 — 控制台：我的目标、确认卡片、目标详情**（见 `global-roadmap-2026-10-16.md` §4）
 
