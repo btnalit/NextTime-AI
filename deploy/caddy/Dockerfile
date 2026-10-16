@@ -32,7 +32,7 @@ ARG EXPLORER_BUILD=0
 ARG SEMANTICA_REF=v0.6.7
 
 # node:24-bookworm-slim by digest, from its GHCR copy (deploy/image-mirrors.json)
-FROM ghcr.io/btnalit/nexttime-mirror-node@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS web-build
+FROM ghcr.io/btnalit/nexttime-mirror-node@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5 AS web-build
 RUN corepack enable
 WORKDIR /workspace
 
@@ -82,7 +82,7 @@ RUN corepack pnpm --filter @nexttime/web... build
 # needs beyond its bundled node/npm (build.sh's own "Requires: node + npm ... git only when
 # SEMANTICA_SRC is unset" — this stage always clones, never sets SEMANTICA_SRC).
 # node:24-bookworm-slim by digest, from its GHCR copy (deploy/image-mirrors.json)
-FROM ghcr.io/btnalit/nexttime-mirror-node@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS explorer-build
+FROM ghcr.io/btnalit/nexttime-mirror-node@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5 AS explorer-build
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*

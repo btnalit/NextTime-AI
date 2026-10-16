@@ -63,7 +63,7 @@ jobs:
     # limit failed this job before any test ran (2026-10-09).
     services:
       postgres:
-        image: ghcr.io/btnalit/nexttime-mirror-pgvector@sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f
+        image: ghcr.io/btnalit/nexttime-mirror-pgvector@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d
         env:
           POSTGRES_USER: nexttime
           POSTGRES_PASSWORD: nexttime

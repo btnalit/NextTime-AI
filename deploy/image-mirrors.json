@@ -7,14 +7,14 @@
       "upstream": "pgvector/pgvector:pg17",
       "source": "mirror.gcr.io/pgvector/pgvector",
       "tag": "pg17",
-      "digest": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f"
+      "digest": "sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d"
     },
     {
       "name": "node",
       "upstream": "node:24-bookworm-slim",
       "source": "mirror.gcr.io/library/node",
       "tag": "24-bookworm-slim",
-      "digest": "sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20"
+      "digest": "sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5"
     },
     {
       "name": "caddy",
@@ -35,7 +35,7 @@
       "upstream": "postgres:17-alpine",
       "source": "mirror.gcr.io/library/postgres",
       "tag": "17-alpine",
-      "digest": "sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73"
+      "digest": "sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24"
     },
     {
       "name": "docker-socket-proxy",
