@@ -24,6 +24,19 @@
 - **看得见、接得上。** 图有 Explorer（Graph / Decision / Lineage 三工作区）与 MCP gateway：
   Claude Code 或任何 MCP 客户端凭 Handle 接到同一份图。
 
+## 方向（目标架构，尚未实现）
+
+2026-10-16 起的主线是两件事，设计与排号见 [`docs/goal-orchestration-and-admin-agent-plan-2026-10-16.md`](docs/goal-orchestration-and-admin-agent-plan-2026-10-16.md)
+与 [`docs/global-roadmap-2026-10-16.md`](docs/global-roadmap-2026-10-16.md)：
+
+- **目标级执行。** 多步、跨系统、需要等待的需求成为一个目标：平台持有计划版本，按依赖开步骤、按需组建 Worker，
+  根据结果修订分工与流程，由平台执行的验收证据判定完成；用户离开、内核重启、审批跨小时、外部响应丢失时都走到已知状态，
+  同一业务动作在一步里至多执行一次。
+- **平台管理员 Agent。** 管理员自己的 agent 能探索、起草、试验并提交平台配置变更（例如接入一个新系统：门实例、Operation 分类、
+  WorkerDefinition、Skill、本体），不必每次靠外部 AI agent；它只是提议者：变更计划按授权分段（平台段由平台管理员、每个工作区段由该
+  工作区 owner）干跑、审阅、应用，可回滚，授权扩大项逐项确认，它不能扩大自己的权限，也没有写平台代码的能力。代码层是否开放是 W5
+  开工前的决策门，部署始终由维护者执行。
+
 ## 状态
 
 当前版本见上方 Release 徽章与 [`CHANGELOG.md`](CHANGELOG.md)（自 v0.3.0 起已持续发版；README 不再写死版本号）。
@@ -114,7 +127,7 @@ CHANGELOG 与版本；依赖升级按计划波次手动进行（Dependabot 安�
 ## 文档
 
 [进度入口](docs/STATUS.md) · [架构设计](docs/graph-ai-middle-platform-design.md) ·
-[任务清单](docs/development-tasks.md) · [Runbooks](docs/runbooks/README.md) ·
+[推进计划](docs/global-roadmap-2026-10-16.md) · [任务清单](docs/development-tasks.md) · [Runbooks](docs/runbooks/README.md) ·
 [测试](docs/testing.md) · [Changelog](CHANGELOG.md)
 
 参考项目借概念与协议，不 fork 代码：pi（agent 运行底层）、cloudflare-os（审批与分权蓝本）、

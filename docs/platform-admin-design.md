@@ -280,6 +280,12 @@ skills 也是 `SKILL.md` frontmatter。**三家共用 `SKILL.md` 格式**，我�
 - `instanceInstructions` 是 prompt 的一部分：仅管理员可改、每次改动审计、页面提示"这会进入所有 agent 的
   system prompt"。
 - 平台设置存 `platform_settings`（单行 JSONB + 版本号），每次写审计并保留上一版以便回滚。
+- **平台管理员 Agent（2026-10-16 目标架构，尚未实现）**：管理员可以让自己的 agent 探索、起草、试验平台配置变更（接入新系统、
+  Operation 分类、WorkerDefinition、Skill、本体），但它只是提议者——上面这条"`scope:'platform'` 只放行 cookie 会话"的边界不变，
+  它的 Handle 结构上带不了 human 通道与平台写能力。正因为平台面与工作区面互不可达（P-A1），变更计划按授权分段：平台段由平台管理员
+  在平台面应用，每个工作区段由该工作区 owner 在该工作区应用，段内单事务、段间不单事务，应用的必须是审阅时的那一份（内容摘要绑定）。
+  它没有写平台代码的能力（代码层是 W5 开工前的决策门），部署仍由维护者。它不签 API key、不走 service Principal。方案与防自扩权的
+  不变量见 `goal-orchestration-and-admin-agent-plan-2026-10-16.md` §5。
 
 ## 8. 生效表
 
