@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { expect, test } from '@playwright/test';
 import { loginWithApiKey, reachLoginForm } from './auth-helpers.js';
 
@@ -26,6 +27,14 @@ import { loginWithApiKey, reachLoginForm } from './auth-helpers.js';
  * run the `psql` seed block(s) below (and, for the isolation scenario, created a second
  * principal) — the manual local setup is unchanged.
  *
+ * Legacy 317 (UX acceptance of #592): the third scenario covers the 「总是允许」 branch the first
+ * one cannot — offered, ticked, confirmed and written. Its row must be one the kernel really offers
+ * it for (made under the Operation definition its gate publishes now), so it carries a published
+ * Operation and that definition's digest; it is seeded by the test itself through
+ * `WEB_E2E_ALWAYS_ALLOW_SEED` (the script `.github/workflows/e2e.yml` writes), not before the
+ * suite, so `00-gates/` never sees it. It runs last in this file: with no pending card to pin to,
+ * the decision's status line falls back to the owner's most recent chat, which the first one reads.
+ *
  * Requires: `WEB_E2E_BASE_URL`, `WEB_E2E_API_KEY` (workspace owner — `grant_capability` is
  * `minRole:'owner'`), `WEB_E2E_API_KEY_B` (a second principal, role `operator` — `list_pending`/
  * `approve` are `minRole:'operator'`), and a kernel started `AGENT_RUNTIME=fake` (unused by this
@@ -42,6 +51,12 @@ const E2E_APPROVE_SCOPE = 'e2e-approve-flow';
  *  its queue row's `data-gatekeeper-id` (the queue no longer prints a gate-scoped scope as text,
  *  L8a-10) (README "Seeding a pending ActionRequest"; `.github/workflows/e2e.yml` exports it). */
 const E2E_ISOLATION_GATEKEEPER_ID = process.env.WEB_E2E_ISOLATION_GATEKEEPER_ID;
+/** Legacy 317: a script that seeds one pending request the kernel offers 「总是允许」 for and prints
+ *  `{"gatekeeperId", "actionRequestId"}` (`.github/workflows/e2e.yml` "Prepare the always-allow
+ *  seed" writes it; README "Seeding the always-allow scenario"). */
+const ALWAYS_ALLOW_SEED = process.env.WEB_E2E_ALWAYS_ALLOW_SEED;
+/** The Operation that script publishes — must match its `operation` JSON. */
+const ALWAYS_ALLOW_ACTION_KIND = 'e2e.always_allow_test';
 
 async function login(page: import('@playwright/test').Page, apiKey: string): Promise<void> {
   await page.goto('/');
@@ -247,5 +262,89 @@ test.describe('S2.10 acceptance: holder isolation (G4) — B cannot see or act o
       { timeout: 15_000 },
     );
     await expect(chatCardForA.getByRole('button', { name: '批准' })).toHaveCount(0);
+  });
+});
+
+/** Runs the always-allow seed script and returns what it seeded (its last stdout line). Run from
+ *  the test, not before the suite: see the workflow step's comment for why. */
+function seedAlwaysAllowRequest(script: string): {
+  readonly gatekeeperId: string;
+  readonly actionRequestId: string;
+} {
+  const lines = execFileSync('sh', [script], { encoding: 'utf8' }).trim().split('\n');
+  return JSON.parse(lines[lines.length - 1] ?? '');
+}
+
+test.describe('legacy 317: 「总是允许」 is offered on a request made under the published definition, and the rule is written', () => {
+  test.skip(
+    !API_KEY || !ALWAYS_ALLOW_SEED,
+    'set WEB_E2E_BASE_URL and WEB_E2E_API_KEY, and WEB_E2E_ALWAYS_ALLOW_SEED to a seed script (see README.md "Seeding the always-allow scenario") to run this suite',
+  );
+
+  test('the owner ticks 总是允许, confirms, approves — the request is decided and the gate rule allows v1', async ({
+    page,
+    request,
+  }) => {
+    const apiKey = API_KEY as string;
+    // A fresh gate per attempt, so a retry never finds the previous attempt's row decided.
+    const seeded = seedAlwaysAllowRequest(ALWAYS_ALLOW_SEED as string);
+    await login(page, apiKey);
+
+    // --- the request was made under the version its gate publishes now (v1), so the kernel
+    //     reports `publishedDefinition: {version: 1, requestIsCurrent: true}` and the drawer
+    //     offers the option, naming the version it covers — neither "why not" sentence shows ---
+    await page.goto('/#/work/approvals');
+    const row = queueRowByGate(page, seeded.gatekeeperId);
+    await expect(row).toBeVisible({ timeout: 15_000 });
+    const drawer = await openRow(page, row);
+    const option = drawer.getByTestId('approval-always-allow-option');
+    await expect(option).toBeVisible();
+    await expect(option).toContainText('v1');
+    await expect(drawer.getByTestId('approval-always-allow-unpublished')).toHaveCount(0);
+    await expect(drawer.getByTestId('approval-always-allow-stale')).toHaveCount(0);
+
+    // --- tick it: approving now goes through the confirm (R-20: a rule that outlives this
+    //     request is never one click), which says what the rule covers ---
+    await drawer.getByRole('checkbox', { name: /总是允许/ }).check();
+    await drawer.getByRole('button', { name: '批准' }).click();
+    const confirm = page.getByTestId('approval-confirm');
+    await expect(confirm).toBeVisible();
+    await expect(confirm.getByTestId('approval-confirm-always-allow-scope')).toContainText(
+      ALWAYS_ALLOW_ACTION_KIND,
+    );
+    await expect(confirm.getByTestId('approval-confirm-always-allow-scope')).toContainText('v1');
+    await confirm.getByRole('button', { name: '批准并总是允许', exact: true }).click();
+
+    // --- `approve`, then `set_auto_approved_action_kind` against the real kernel: the rule was
+    //     written (the info toast), not refused after the approval (the warn toast) ---
+    await expect(page.getByText(/^今后自动批准/)).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('已批准，但自动批准规则未写入')).toHaveCount(0);
+    await expect(row).toHaveCount(0, { timeout: 15_000 });
+
+    // --- the request itself is decided (the seeded gate has no endpoint, so the kernel's own
+    //     execution then fails it — any post-decision state proves the approval) ---
+    const action = await request.post('/api/cap/get_action', {
+      headers: { authorization: `Bearer ${apiKey}` },
+      data: { actionRequestId: seeded.actionRequestId },
+    });
+    expect(action.ok()).toBe(true);
+    const actionBody = (await action.json()) as { ok: boolean; result?: { status?: string } };
+    expect(actionBody.ok).toBe(true);
+    expect(actionBody.result?.status).toMatch(/^(approved|executing|executed|failed)$/);
+
+    // --- and the rule is where the console says it can be turned off (模型与配额 → 策略): this
+    //     gate's action kind, auto-approved for v1, the consent current ---
+    await page.goto('/#/govern/models');
+    const policyRow = page
+      .getByTestId('policies-table')
+      .locator('[data-testid^="policy-row-"]')
+      .filter({
+        has: page.locator(`[data-testid="policy-scope"][data-ref-id="${seeded.gatekeeperId}"]`),
+      });
+    await expect(policyRow).toHaveCount(1, { timeout: 15_000 });
+    await expect(policyRow.getByTestId('policy-action-kind')).toHaveText(ALWAYS_ALLOW_ACTION_KIND);
+    const autoApprove = policyRow.getByTestId('policy-auto-approve');
+    await expect(autoApprove).toHaveAttribute('data-consent', 'current');
+    await expect(autoApprove).toHaveText('自动批准 · v1');
   });
 });
