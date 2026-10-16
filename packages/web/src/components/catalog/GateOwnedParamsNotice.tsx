@@ -78,16 +78,20 @@ export function GateOwnedParamsNotice({
     { gateId: linked?.gateId ?? '' },
     { enabled: offersRewrite && readsPreview },
   );
-  // `false` only when the preview said this draft would not be rewritten; while it loads nothing
-  // is offered yet, and when it cannot be read the confirm reads it itself and says what it finds.
-  const rewritable =
-    preview.state.status === 'ready'
-      ? preview.state.data.operationsToImport.some(
-          (row) => row.name === name && row.pendingDraft?.rewritable === true,
-        )
+  // Why the rewrite is or is not offered, read from the same preview the align reads. While it
+  // loads nothing is offered yet; when it cannot be read the confirm reads it itself and says what
+  // it finds. A draft the align would not rewrite is one of three cases (review #501 on #571 ①):
+  // the gate still declares the params (`waiting`: the button greys out until it changes), the
+  // draft is an agent's or member's proposal the align never rewrites (`proposal`), or the gate no
+  // longer announces this Operation at all (`gone`) — the last two never become rewritable, so
+  // no button is shown for them.
+  const rewrite: RewriteState = !offersRewrite
+    ? 'none'
+    : preview.state.status === 'ready'
+      ? rewriteStateOf(preview.state.data, name)
       : preview.state.status === 'loading' && readsPreview
-        ? undefined
-        : true;
+        ? 'loading'
+        : 'ready';
   const fix: GateOwnedParamsFix =
     linked === undefined
       ? 'either'
@@ -114,51 +118,77 @@ export function GateOwnedParamsNotice({
         </span>
         <span className="text-3">
           {draft
-            ? gateOwnedParamsNextStep(fix, t)
+            ? rewrite === 'proposal'
+              ? t(
+                  '这份草稿是 agent 或成员提议的，不是门自己导入的，按门的清单重写不会改它。要发布，需要提议者去掉这些参数后重新提议一份。',
+                  'This draft was proposed by an agent or a member, not imported by the gate, so rewriting from the gate’s manifest never changes it. To publish, its proposer has to propose it again without these params.',
+                )
+              : rewrite === 'gone'
+                ? t(
+                    '门的当前清单里已经没有这个 Operation，没有可以重写成的新版本，这份草稿也就发布不了。',
+                    'The gate’s current manifest no longer announces this Operation, so there is no new version to rewrite this draft to, and it cannot be published.',
+                  )
+                : gateOwnedParamsNextStep(fix, t)
             : t(
                 '门的维护者从门的清单里去掉它们之后，平台提供的系统到「系统与授权」对齐并发布修订；工作区自己接入的系统需要重新接入。',
                 'Once the gate’s maintainer drops them from its manifest, align a platform-provided system under Systems & access and publish the revision; a system the workspace connected itself has to be connected again.',
               )}
         </span>
-        {offersRewrite && linked ? (
-          rewritable === false ? (
-            <span className="stack-s">
-              <span>
-                <Button
-                  variant="secondary"
-                  size="s"
-                  disabled
-                  aria-describedby={waitingId}
-                  data-testid="operation-gate-owned-rewrite"
-                >
-                  {t('按门的最新清单重写', 'Rewrite from the gate’s latest manifest')}
-                </Button>
-              </span>
-              <span
-                id={waitingId}
-                className="text-3 text-small"
-                data-testid="operation-gate-owned-rewrite-waiting"
+        {linked && rewrite === 'waiting' ? (
+          <span className="stack-s">
+            <span>
+              <Button
+                variant="secondary"
+                size="s"
+                disabled
+                aria-describedby={waitingId}
+                data-testid="operation-gate-owned-rewrite"
               >
-                {t(
-                  '门的清单还没改：它仍声明这些参数。门的维护者改好、平台采用新清单之后才能重写。',
-                  'The gate’s manifest has not changed yet: it still declares these params. The rewrite becomes possible once the gate’s maintainer fixes it and the platform adopts the new manifest.',
-                )}
-              </span>
+                {t('按门的最新清单重写', 'Rewrite from the gate’s latest manifest')}
+              </Button>
             </span>
-          ) : rewritable === true ? (
-            <RefreshOperationGovernanceConfirm
-              http={http}
-              gatekeeperId={gatekeeperId}
-              platformGateId={linked.gateId}
-              gateDisplayName={gateDisplayName}
-              operationNames={[name]}
-              label={t('按门的最新清单重写', 'Rewrite from the gate’s latest manifest')}
-              onRefreshed={onRewritten}
-              testId="operation-gate-owned-rewrite"
-            />
-          ) : null
+            <span
+              id={waitingId}
+              className="text-3 text-small"
+              data-testid="operation-gate-owned-rewrite-waiting"
+            >
+              {t(
+                '门的清单还没改：它仍声明这些参数。门的维护者改好、平台采用新清单之后才能重写。',
+                'The gate’s manifest has not changed yet: it still declares these params. The rewrite becomes possible once the gate’s maintainer fixes it and the platform adopts the new manifest.',
+              )}
+            </span>
+          </span>
+        ) : linked && rewrite === 'ready' ? (
+          <RefreshOperationGovernanceConfirm
+            http={http}
+            gatekeeperId={gatekeeperId}
+            platformGateId={linked.gateId}
+            gateDisplayName={gateDisplayName}
+            operationNames={[name]}
+            label={t('按门的最新清单重写', 'Rewrite from the gate’s latest manifest')}
+            onRefreshed={onRewritten}
+            testId="operation-gate-owned-rewrite"
+          />
         ) : null}
       </span>
     </Notice>
   );
+}
+
+export type RewriteState = 'none' | 'loading' | 'ready' | 'waiting' | 'proposal' | 'gone';
+
+/** What the enable preview says about rewriting this one held draft. `pendingDraft.rewritable` is
+ *  `false` both when the gate still declares the params and when the draft is not the gate's own;
+ *  `pendingDraft.fromGate` tells them apart, and an older kernel without it falls back to the row's
+ *  own `gateOwnedParams` (still declared → the gate has not changed). */
+export function rewriteStateOf(
+  preview: PreviewGateInstanceEnableResultWire,
+  name: string,
+): RewriteState {
+  const row = preview.operationsToImport.find((entry) => entry.name === name);
+  if (!row) return 'gone';
+  if (row.pendingDraft?.rewritable === true) return 'ready';
+  if (row.pendingDraft?.fromGate === false) return 'proposal';
+  if (row.gateOwnedParams && row.gateOwnedParams.length > 0) return 'waiting';
+  return 'proposal';
 }

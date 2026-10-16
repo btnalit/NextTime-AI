@@ -125,6 +125,7 @@ export const GatekeeperDetailWireSchema = GatekeeperSummaryWireSchema.extend({
   operations: z.array(OperationSummaryWireSchema),
   health: z.enum(['ok', 'unreachable', 'unauthorized']),
 });
+export type GatekeeperDetailWire = z.infer<typeof GatekeeperDetailWireSchema>;
 
 export const OperationStatsWireSchema = z
   .object({

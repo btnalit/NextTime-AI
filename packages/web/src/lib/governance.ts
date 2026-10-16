@@ -1,5 +1,6 @@
 import {
   type GateOwnedParamWire,
+  type GatekeeperDetailWire,
   type GrantStatus,
   type OperationDefinitionChangeWire,
   type OperationGovernanceChangeWire,
@@ -146,51 +147,15 @@ export interface GatekeeperDetailOperation {
   readonly gateOwnedParams?: readonly GateOwnedParamWire[];
 }
 
-/** `get_gatekeeper`'s `health` is not a wire enum anywhere in `@nexttime/shared` today — read
- *  defensively (`healthToneOf` below) instead of assuming a fixed shape from a capability that, as
- *  of this PR, is still being implemented in the parallel kernel PR. */
-export type GatekeeperHealth = unknown;
+/** `get_gatekeeper`'s live health probe (`GatekeeperDetailWireSchema.health`): `'ok' |
+ *  'unreachable' | 'unauthorized'`, rendered with the same `gateHealth` chip every other gate
+ *  health in the console uses (legacy 271 — an earlier lenient reader of guessed shapes showed
+ *  every gate as 未知). */
+export type GatekeeperHealth = GatekeeperDetailWire['health'];
 
 export interface GatekeeperDetail extends GatekeeperListRow {
   readonly operations: readonly GatekeeperDetailOperation[];
   readonly health: GatekeeperHealth;
-}
-
-export interface HealthView {
-  readonly tone: 'ok' | 'danger' | 'neutral';
-  readonly label: string;
-}
-
-/** Reads `get_gatekeeper`'s `health` leniently: `{ok: boolean}`, `{status: 'healthy'|...}`, a bare
- *  boolean, or anything else it might turn out to be — never throws, never crashes the drawer on a
- *  shape this PR guessed wrong while the kernel half was still being written in parallel. W1-A12:
- *  takes `t` (a plain function, not a hook — `useT()`'s return value, callable outside a component)
- *  to localize its own fixed vocabulary (`Healthy`/`Unhealthy`/`Unknown`); a `record.status` string
- *  is the kernel's own free-text value and is shown verbatim in both languages, same as before. */
-export function healthView(health: GatekeeperHealth, t: Translate): HealthView {
-  const healthy = t('健康', 'Healthy');
-  const unhealthy = t('不健康', 'Unhealthy');
-  const unknown = t('未知', 'Unknown');
-  if (typeof health === 'boolean') {
-    return health ? { tone: 'ok', label: healthy } : { tone: 'danger', label: unhealthy };
-  }
-  if (health && typeof health === 'object') {
-    const record = health as Record<string, unknown>;
-    if (typeof record.ok === 'boolean') {
-      return record.ok ? { tone: 'ok', label: healthy } : { tone: 'danger', label: unhealthy };
-    }
-    if (typeof record.status === 'string') {
-      const status = record.status.toLowerCase();
-      if (status.includes('unhealthy') || status.includes('down') || status.includes('fail')) {
-        return { tone: 'danger', label: record.status };
-      }
-      if (status.includes('healthy') || status.includes('ok') || status.includes('up')) {
-        return { tone: 'ok', label: record.status };
-      }
-      return { tone: 'neutral', label: record.status };
-    }
-  }
-  return { tone: 'neutral', label: unknown };
 }
 
 // -------------------------------------------------------------------------------------------

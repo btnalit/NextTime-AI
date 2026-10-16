@@ -658,6 +658,50 @@ describe('RefreshOperationGovernanceConfirm', () => {
     expect(http.calls.some((call) => call.name === 'refresh_operation_governance')).toBe(false);
   });
 
+  it('review #501 on #571 ①: an agent’s or member’s proposal is never said to wait on the gate', async () => {
+    const http = scriptedHttp({
+      preview_gate_instance_enable: () => ({
+        ...preview([ALIGNED_ROW]),
+        operationsToImport: [
+          {
+            name: 'stock.reserve',
+            mode: 'execute',
+            blastRadius: 'medium',
+            autoApprovable: false,
+            gateOwnedParams: [{ param: 'Authorization', location: 'header' }],
+            pendingDraft: { rewritable: false, fromGate: false },
+          },
+        ],
+      }),
+    });
+    renderConfirm(http);
+
+    fireEvent.click(screen.getByTestId('align-gk-1'));
+    await screen.findByTestId('align-gk-1-aligned');
+    expect(screen.queryByTestId('align-gk-1-held')).toBeNull();
+  });
+
+  it('review #501 on #571 ③: a revision whose new definition declares a gate-owned param is said to stay a draft, before the align opens it', async () => {
+    const http = scriptedHttp({
+      preview_gate_instance_enable: () =>
+        preview([
+          {
+            ...ALIGNED_ROW,
+            name: 'orders.lookup',
+            definitionDiffers: true,
+            gateOwnedParams: [{ param: 'Authorization', location: 'header' }],
+          },
+        ]),
+    });
+    renderConfirm(http);
+
+    fireEvent.click(screen.getByTestId('align-gk-1'));
+    const confirm = await screen.findByTestId('align-gk-1-confirm');
+    expect(confirm.textContent).toContain(
+      'orders.lookup：打开的修订发布不了，新定义声明了只能由门自己设置的参数 Authorization（请求头）',
+    );
+  });
+
   it('console G4: narrowed to one draft (the catalog’s), it aligns only that one, under its own label', async () => {
     const http = scriptedHttp({
       preview_gate_instance_enable: () => ({

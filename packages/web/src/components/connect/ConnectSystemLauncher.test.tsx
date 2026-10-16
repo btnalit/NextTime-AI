@@ -970,6 +970,39 @@ describe('ConnectSystemLauncher — what an administrator sees about workspace v
     expect(screen.queryByTestId('launcher-announced-held-invoices.list')).toBeNull();
   });
 
+  it('review #501 on #571 ④: on a workspace page the badge is about this workspace — enabled only elsewhere reads 本工作区看不到', async () => {
+    const http = scriptedHttp({
+      get_workspace: () => ({ id: 'ws-1', name: 'Acme', caller: { id: 'p-1', role: 'owner' } }),
+      list_gate_instances: () => ({
+        items: [
+          announced({
+            status: 'enabled',
+            enabledWorkspaceCount: 1,
+            enablingWorkspaces: [{ id: 'ws-2', name: 'Other' }],
+          }),
+          announced({
+            gateId: 'billing-2',
+            displayName: 'Billing two',
+            status: 'enabled',
+            enabledWorkspaceCount: 1,
+            enablingWorkspaces: [{ id: 'ws-1', name: 'Acme' }],
+          }),
+        ],
+      }),
+      list_connectors: () => ({ items: [connector({ mode: 'self_serve' })] }),
+    });
+    renderLauncher({ http, origin: 'workspace', platformAdmin: true });
+    fireEvent.click(screen.getByTestId('launcher-kind-http'));
+    next();
+
+    await waitFor(() =>
+      expect(screen.getByTestId('launcher-gate-hidden-billing').textContent).toBe('本工作区看不到'),
+    );
+    expect(screen.getByTestId('launcher-gate-hidden-billing-2').textContent).toBe(
+      '其他工作区看不到',
+    );
+  });
+
   it('a workspace reader (no platform role) reads no connectors and sees no such badge', async () => {
     const http = scriptedHttp({
       list_available_gate_instances: () => ({ items: [availableRow()] }),

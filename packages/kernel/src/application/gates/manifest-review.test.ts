@@ -160,6 +160,34 @@ describe('toWireGateOperation (console G4, UX acceptance of #567 P3)', () => {
   });
 });
 
+describe('diffAnnouncedManifest changed[] (review #501 on #571 ③)', () => {
+  it('marks a changed entry whose announced definition now declares a gate-owned param', () => {
+    const clean = op({
+      name: 'orders.lookup',
+      binding: { kind: 'http', method: 'GET', path: '/orders' },
+      params_schema: { type: 'object', properties: { id: { type: 'string', 'x-in': 'query' } } },
+    });
+    const withHeader = op({
+      ...clean,
+      params_schema: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', 'x-in': 'query' },
+          Authorization: { type: 'string', 'x-in': 'header' },
+        },
+      },
+    });
+    const diff = diffAnnouncedManifest([clean], [withHeader]);
+    expect(diff.changed).toHaveLength(1);
+    expect(diff.changed[0]?.gateOwnedParams).toEqual([
+      { param: 'Authorization', location: 'header' },
+    ]);
+    // A change that keeps the definition clean carries no mark.
+    const relaxed = diffAnnouncedManifest([clean], [op({ ...clean, blast_radius: 'low' })]);
+    expect(relaxed.changed[0]).not.toHaveProperty('gateOwnedParams');
+  });
+});
+
 describe('manifestDigest / canonicalJson', () => {
   it('digests the same stored manifest the same, whatever its key order', () => {
     const a = [{ name: 'x', mode: 'observe', nested: { b: 1, a: 2 } }];
