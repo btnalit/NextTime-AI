@@ -77,6 +77,7 @@ export {
 export type { DefinitionAwaiting, GateRunningDefinitions } from './definition-drift.js';
 export {
   definitionRefusal,
+  droppedUntilAdopted,
   gateRunningDefinitions,
   operationsRefusedUntilAdopted,
   readGateDefinitions,

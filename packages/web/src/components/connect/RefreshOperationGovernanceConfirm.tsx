@@ -276,6 +276,7 @@ export function RefreshOperationGovernanceConfirm({
       {awaitingAdoption !== null && !confirmOpen ? (
         <AwaitingAdoptionNotice
           operations={awaitingAdoption.operations}
+          dropped={awaitingAdoption.dropped}
           announcedAt={awaitingAdoption.announcedAt}
           platformAdmin={platformAdmin}
           platformGateId={platformGateId}
@@ -514,6 +515,7 @@ export function RefreshOperationGovernanceConfirm({
         {awaitingAdoption !== null ? (
           <AwaitingAdoptionNotice
             operations={awaitingAdoption.operations}
+            dropped={awaitingAdoption.dropped}
             announcedAt={awaitingAdoption.announcedAt}
             platformAdmin={platformAdmin}
             platformGateId={platformGateId}

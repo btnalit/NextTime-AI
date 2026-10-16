@@ -3,6 +3,7 @@ import type { Operation } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
 import {
   definitionRefusal,
+  droppedUntilAdopted,
   gateRunningDefinitions,
   operationsRefusedUntilAdopted,
 } from './definition-drift.js';
@@ -78,6 +79,19 @@ describe('definition drift', () => {
     expect(definitionRefusal(defs, STOCK.name, digest(STOCK))).toBe('platform_adoption');
     expect(operationsRefusedUntilAdopted(defs)).toEqual([STOCK.name]);
     expect(definitionRefusal(defs, 'never.announced', digest(STOCK))).toBeNull();
+    // UX acceptance of #579 (legacy 297): adopting removes it rather than restoring its calls —
+    // said apart from a redefined one, whose calls adopting (and a revision) does bring back.
+    expect(droppedUntilAdopted(defs, STOCK.name)).toBe(true);
+    expect(droppedUntilAdopted(defs, ORDER.name)).toBe(false);
+    expect(droppedUntilAdopted(defs, 'never.announced')).toBe(false);
+    const redefined = gateRunningDefinitions({
+      operations: [STOCK],
+      pending_operations: [STOCK_V2],
+    });
+    expect(droppedUntilAdopted(redefined, STOCK.name)).toBe(false);
+    // Once adopted nothing is held, so nothing reads as dropped.
+    const adopted = gateRunningDefinitions({ operations: [ORDER], pending_operations: null });
+    expect(droppedUntilAdopted(adopted, STOCK.name)).toBe(false);
   });
 
   it('a governance-only held change (description, auto_approvable) refuses nothing', () => {

@@ -545,6 +545,65 @@ describe('SystemsPage', () => {
     expect(within(drawer).queryByTestId('system-definition-mismatch-revision')).toBeNull();
   });
 
+  it('UX acceptance of #579 (legacy 297): an Operation the gate dropped is said apart — adopting removes it, it never reads as coming back', async () => {
+    const http = scriptedHttp({
+      execution_readiness: () =>
+        readiness({
+          principalId: 'p-self',
+          gates: [
+            gate({
+              name: '库存',
+              status: 'unreachable',
+              reason: 'definition_mismatch',
+              definitionMismatch: [
+                { operation: 'stock.get', awaiting: 'platform_adoption' },
+                { operation: 'orders.cancel', awaiting: 'platform_adoption', droppedByGate: true },
+              ],
+            }),
+          ],
+        }),
+      list_available_gate_instances: () => ({ items: [LINKED_STOCK_INSTANCE] }),
+    });
+    renderPage(http, true);
+    const card = (await screen.findAllByTestId('gatekeeper-card'))[0] as HTMLElement;
+    fireEvent.click(within(card).getByTestId('system-access-summary'));
+    const drawer = await screen.findByTestId('system-access-drawer');
+    const notice = await within(drawer).findByTestId('system-definition-mismatch-adoption');
+    // The redefined one waits on adoption; the dropped one is not in that line.
+    expect(notice.textContent).toContain(
+      '采用之前这里对齐不了，对 stock.get 的调用会被拒绝。门已经不再提供',
+    );
+    expect(
+      within(notice).getByTestId('system-definition-mismatch-adoption-dropped').textContent,
+    ).toBe(
+      '门已经不再提供 orders.cancel，对它的调用会被拒绝，采用和对齐都恢复不了：采用后它会从清单里移除。',
+    );
+  });
+
+  it('UX acceptance of #579 (legacy 297): when every refused Operation was dropped, nothing reads as waiting to come back', async () => {
+    const http = scriptedHttp({
+      execution_readiness: () =>
+        readiness({
+          principalId: 'p-self',
+          gates: [
+            gate({
+              definitionMismatch: [
+                { operation: 'orders.cancel', awaiting: 'platform_adoption', droppedByGate: true },
+              ],
+            }),
+          ],
+        }),
+      list_available_gate_instances: () => ({ items: [LINKED_STOCK_INSTANCE] }),
+    });
+    renderPage(http);
+    const card = (await screen.findAllByTestId('gatekeeper-card'))[0] as HTMLElement;
+    fireEvent.click(within(card).getByTestId('system-access-summary'));
+    const drawer = await screen.findByTestId('system-access-drawer');
+    const notice = await within(drawer).findByTestId('system-definition-mismatch-adoption');
+    expect(notice.textContent).not.toContain('采用之前');
+    expect(notice.textContent).toContain('平台管理员还没采用。门已经不再提供 orders.cancel');
+  });
+
   it('legacy K: a gate refusing some Operations keeps its status but flags them, and the drawer names the workspace step', async () => {
     const http = scriptedHttp({
       execution_readiness: () =>

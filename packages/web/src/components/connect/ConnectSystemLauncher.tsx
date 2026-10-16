@@ -592,7 +592,7 @@ function ConnectionStep({
                 )}
                 {gateIdAdjusted && intendedGateId.length > 0 ? (
                   <span data-testid="launcher-intended-gate-id-adjusted">
-                    {' '}
+                    {t('', ' ')}
                     {t(`已调整为 ${intendedGateId}。`, `Adjusted to ${intendedGateId}.`)}
                   </span>
                 ) : null}

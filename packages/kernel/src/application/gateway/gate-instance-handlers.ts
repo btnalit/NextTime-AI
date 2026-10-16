@@ -22,6 +22,7 @@ import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { enqueue } from '../../substrate/outbox/index.js';
 import {
   definitionRefusal,
+  droppedUntilAdopted,
   findGateLinkByGate,
   findGateLinkByGatekeeper,
   getConnector,
@@ -443,12 +444,15 @@ export const previewGateInstanceEnableHandler: CapabilityHandler = async (
   // platform adopts its held announcement (definition-drift.ts).
   const definitions = await readGateDefinitions(client, gateId);
   const awaitingAdoption: string[] = [];
+  // UX acceptance of #579 (legacy 297): the subset adopting removes rather than restores.
+  const droppedByGate: string[] = [];
   const noteAdoption = (name: string, approvedDigest: string | null) => {
     if (
       definitions &&
       definitionRefusal(definitions, name, approvedDigest) === 'platform_adoption'
     ) {
       awaitingAdoption.push(name);
+      if (droppedUntilAdopted(definitions, name)) droppedByGate.push(name);
     }
   };
   const operationsToImport: {
@@ -567,6 +571,7 @@ export const previewGateInstanceEnableHandler: CapabilityHandler = async (
           ? {
               announcedAt: definitions.pendingAnnouncedAt.toISOString(),
               operations: awaitingAdoption.sort(),
+              ...(droppedByGate.length > 0 ? { dropped: droppedByGate.sort() } : {}),
             }
           : null,
     },

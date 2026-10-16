@@ -19,6 +19,7 @@ import {
 } from '../../governance/gatekeepers/index.js';
 import {
   definitionRefusal,
+  droppedUntilAdopted,
   observeExclusionsOf,
   observeGateExclusion,
   observeRefusal,
@@ -293,6 +294,8 @@ export async function computeCapabilityReachability(
         definitionMismatch.push({
           operation: op.name,
           awaiting,
+          // UX acceptance of #579 (legacy 297): adopting ends the mismatch but not the refusal.
+          ...(droppedUntilAdopted(definitions, op.name) ? { droppedByGate: true } : {}),
           ...(gateOwnedParams.length > 0
             ? {
                 gateOwnedParams: gateOwnedParams.map(({ param, location }) => ({

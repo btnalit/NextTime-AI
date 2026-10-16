@@ -144,6 +144,27 @@ describe('RefreshOperationGovernanceConfirm', () => {
     expect(screen.queryByTestId('align-gk-1-confirm')).toBeNull();
   });
 
+  it('UX acceptance of #579 (legacy 297): an Operation the gate dropped is never promised back by adoption', async () => {
+    const http = scriptedHttp({
+      preview_gate_instance_enable: () => ({
+        ...preview([ALIGNED_ROW]),
+        awaitingPlatformAdoption: {
+          announcedAt: '2026-10-10T04:00:00.000Z',
+          operations: ['orders.cancel', 'stock.get'],
+          dropped: ['orders.cancel'],
+        },
+      }),
+    });
+    renderConfirm(http);
+    fireEvent.click(screen.getByTestId('align-gk-1'));
+    const notice = await screen.findByTestId('align-gk-1-awaiting-adoption');
+    expect(notice.textContent).toContain('对 stock.get 的调用会被拒绝。');
+    expect(notice.textContent).not.toContain('对 orders.cancel、stock.get');
+    expect(screen.getByTestId('align-gk-1-awaiting-adoption-dropped').textContent).toContain(
+      '门已经不再提供 orders.cancel，对它的调用会被拒绝，采用和对齐都恢复不了',
+    );
+  });
+
   it('UX acceptance of #538: anyone but a platform admin is told who to ask, with no link', async () => {
     const http = scriptedHttp({
       preview_gate_instance_enable: () => ({

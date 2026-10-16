@@ -233,7 +233,7 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
             )}
             {gateIdSource !== null ? (
               <span data-testid="cgi-gate-id-derived">
-                {' '}
+                {t('', ' ')}
                 {gateIdSource === 'name'
                   ? t(
                       '已根据名称自动生成，可直接修改。',
@@ -246,7 +246,7 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
               </span>
             ) : gateIdEdited && gateIdAdjusted ? (
               <span data-testid="cgi-gate-id-adjusted">
-                {' '}
+                {t('', ' ')}
                 {t(`已调整为 ${gateId}。`, `Adjusted to ${gateId}.`)}
               </span>
             ) : null}
