@@ -4044,6 +4044,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **给 GO1 的假设**：`run_lost` 清扫默认每个 Task 都由 WorkerRun 承载（今天 `invoke_worker` 是唯一创建入口）；GO1 引入 Task / StepRun 新关联或不靠 WorkerRun 运行的 Task 时必须复核并在清扫里排除（STATUS 遗留 325）。
   - **控制台**：`packages/web/src/lib/errors.ts` 加 `unstorable_text` 中英文标题与下一步，并进 `GATE_REASON_CODES`；Task 失败原因无中文标签见遗留 324。
   - **验证**：真 Postgres 集成测试 `worker-result`、`ingest-handlers`、`turn-terminal`、`reaper`（孤儿清扫 6 种形态与候选隔离）、`platform-gates`；legacy 128 的「写不进去的消息」改为注入 22P05。
+  - **后续（#605，cbb17a5；遗留 327 关闭）**：WS 用 `WS_ERROR_CODES.UNSTORABLE_TEXT` = -32017（原来落到 -32602），控制台 `RPC_CODE_NAMES` 映射为 `unstorable_text`；控制台从内核消息 `the text|key at … "<path>" holds U+0000` 里取字段位置写进提示（HTTP、WS、工具行同一解析，兼容 JSON 转义引号）；`gateReasonNextStep` 的 `aboutTheSystem` 让这条提示不带门链接；`visibleJson` 把 JSON 写出的替身显示为 `\u{0}`，非 JSON 的工具结果走 `visibleLines`；WS 码 -32014 / -32015 / -32016 补了控制台映射（-32016 的中文文案见遗留 333）。
 
 **H1 — 主机窗口：升到当时最新发版，含控制台核对**（见 `global-roadmap-2026-10-16.md` §4）
 
