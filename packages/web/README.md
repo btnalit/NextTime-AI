@@ -536,7 +536,9 @@ suites:
   CI — the workflow itself creates the second (operator) principal and seeds both pending
   ActionRequests (see `.github/workflows/e2e.yml`'s two W7 steps after the bootstrap step). A
   local run still needs "Seeding a pending ActionRequest" below plus
-  `WEB_E2E_SEED_ACTION_REQUESTS=1`.
+  `WEB_E2E_SEED_ACTION_REQUESTS=1`. Its third scenario (legacy 317) is the 「总是允许」 branch that
+  is offered and written: tick it, confirm, approve, then the gate rule shows `自动批准 · v1` under
+  模型与配额 → 策略. It seeds its own row at run time — see "Seeding the always-allow scenario".
 - `e2e/explorer.spec.ts` (S4.1 rewrite) — the Explorer's cookie-based auth: no credentials → 401;
   a password login (owner) installs the console session + `nexttime_workspace` selector cookies
   and `/api/graph/nodes` answers 200; signing out clears both → 401 again. An API-key session has
@@ -653,3 +655,22 @@ already-running kernel — it writes the `system.action_pending` chat message an
 `action.pending` push exactly as a real `request_action` would; a bare `action_requests` insert
 alone produces neither. Sanity-check the column list against
 `migrations/governance/000{3,4,5}_*.sql` on first run.
+
+### Seeding the always-allow scenario
+
+The kernel offers 「总是允许」 only on a request made under the Operation definition its gate
+publishes now (`list_pending`'s `publishedDefinition.requestIsCurrent`), so the rows above — which
+name no published Operation — get no offer. This scenario's row carries a published `Operation`
+object on its own gate and the request's `operation_digest`, the digest the kernel's own
+`@nexttime/gatekeeper-base` `operationDefinitionDigest` gives that definition. The spec seeds it
+itself, from the test, by running the script `WEB_E2E_ALWAYS_ALLOW_SEED` names: one fresh gate and
+pending row per run, so `00-gates/`'s screenshots never see it and a retry gets its own row. The
+script must print, as its last line, `{"gatekeeperId": "…", "actionRequestId": "…"}`.
+
+CI writes that script in `.github/workflows/e2e.yml` "Prepare the always-allow seed" (it reads
+`E2E_WORKSPACE_ID` / `E2E_OWNER_PRINCIPAL_ID` and runs `node` in the kernel container and `psql` in
+the postgres one). For a local run, copy its body, replace the two `$compose exec -T …` prefixes
+with a local `node` run from `packages/kernel` (after `corepack pnpm --filter
+@nexttime/gatekeeper-base build`) and `psql "$DATABASE_URL"`, and export
+`WEB_E2E_ALWAYS_ALLOW_SEED` with that file's path alongside `E2E_WORKSPACE_ID` and
+`E2E_OWNER_PRINCIPAL_ID`.
