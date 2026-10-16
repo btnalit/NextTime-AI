@@ -132,10 +132,12 @@ describe('lib/labels', () => {
     expect(new Set(zh).size).toBe(zh.length);
   });
 
-  it('legacy 355: an audit resource type reads the same term the purge counts use for its table', () => {
+  it('legacy 355 / 359: an audit resource type reads the same term the purge counts use for its table', () => {
     const sameTerm: ReadonlyArray<readonly [AuditResourceType, string]> = [
+      ['action_request', 'actionRequests'],
       ['agent_policy', 'agentPolicies'],
       ['agent_profile', 'agentProfiles'],
+      ['capability_grant', 'capabilityGrants'],
       ['policy', 'policies'],
       ['procedure', 'procedures'],
       ['skill', 'skills'],

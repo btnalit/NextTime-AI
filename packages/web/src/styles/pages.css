@@ -334,6 +334,31 @@
   flex-shrink: 0;
 }
 
+/* Legacy 363 (#609 UX P3-3): at phone width the model pill, menu and Stop take most of the row, and
+ * the status line beside them was squeezed into a column a few characters wide — a dozen lines
+ * tall. Below 640 px they move to a row of their own under the title, and each status item keeps
+ * to one line (a long workspace name is cut with an ellipsis rather than broken mid-word). */
+@media (max-width: 640px) {
+  .chat-header {
+    flex-wrap: wrap;
+    row-gap: var(--space-2);
+  }
+
+  .chat-header-side {
+    flex-basis: 100%;
+    flex-shrink: 1;
+    min-width: 0;
+    justify-content: flex-end;
+  }
+
+  .chat-header-status > span {
+    white-space: nowrap;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
 .chat-scroll {
   flex: 1;
   min-height: 0;

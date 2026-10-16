@@ -609,6 +609,61 @@ describe('ChatPage send refused for U+0000 (legacy 334)', () => {
     expect(body).toContain('这条消息没有发出');
     expect(body).not.toContain('「text」');
     expect(body).not.toContain('agent');
+    // The draft holds no U+0000 (the stub refused it anyway), so there is nothing to take out.
+    expect(screen.queryByTestId('composer-remove-unstorable')).toBeNull();
+  });
+
+  // Legacy 335 (UX review of #605, P3-3): while the draft still holds U+0000, the banner offers to
+  // take it out; doing so clears the refusal and keeps the message unsent for the person to check.
+  it('offers 「移除看不见的字符」, which strips U+0000 from the draft without sending it', async () => {
+    const fake = fakeClient();
+    (fake.client.sendChatMessage as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new RpcError(
+        -32017,
+        new UnstorableTextError('capability "send_chat_message"', { path: ['text'], in: 'value' })
+          .message,
+      ),
+    );
+    renderChat(fake.client, scriptedHttp({}));
+    await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled());
+    act(() => fake.caughtUp());
+
+    const box = screen.getByLabelText('Message') as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: 'pasted\u0000 log\u0000' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    const banner = await screen.findByRole('alert');
+    const body = banner.querySelector('.error-banner-message')?.textContent ?? '';
+    expect(body).toContain('点「移除看不见的字符」');
+    expect(body).not.toContain('纯文本编辑器');
+
+    fireEvent.click(within(banner).getByTestId('composer-remove-unstorable'));
+    expect(box.value).toBe('pasted log');
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(await screen.findByText('已移除 2 个看不见的字符')).toBeTruthy();
+    expect(fake.client.sendChatMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops the offer once the person has edited the character out themselves', async () => {
+    const fake = fakeClient();
+    (fake.client.sendChatMessage as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new RpcError(
+        -32017,
+        new UnstorableTextError('capability "send_chat_message"', { path: ['text'], in: 'value' })
+          .message,
+      ),
+    );
+    renderChat(fake.client, scriptedHttp({}));
+    await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled());
+    act(() => fake.caughtUp());
+
+    const box = screen.getByLabelText('Message') as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: 'a\u0000b' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    const banner = await screen.findByRole('alert');
+    expect(within(banner).getByTestId('composer-remove-unstorable')).toBeTruthy();
+    fireEvent.change(box, { target: { value: 'ab' } });
+    expect(screen.queryByTestId('composer-remove-unstorable')).toBeNull();
+    expect(screen.getByRole('alert').textContent).toContain('纯文本编辑器');
   });
 });
 

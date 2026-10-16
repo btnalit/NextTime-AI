@@ -44,7 +44,7 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
   // (`PlatformError.tsx`) so the two cases stay distinguishable either way.
   self_disable: { zh: '不能停用自己', en: 'You cannot disable your own account' },
   last_owner: {
-    zh: '不能移出或降级工作区的最后一个所有者',
+    zh: '不能移出或降级工作区的最后一位有效的所有者',
     en: 'The last owner of a workspace cannot be removed or demoted',
   },
   protected_admin: {

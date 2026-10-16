@@ -8,7 +8,7 @@ import { Button } from './kit/button.js';
 import { Confirm } from './kit/confirm.js';
 import { CopyButton } from './kit/copy-button.js';
 import { ErrorBanner } from './kit/error-banner.js';
-import { Field } from './kit/field.js';
+import { Field, describedBy } from './kit/field.js';
 import { Notice } from './kit/notice.js';
 import { Select } from './kit/select.js';
 import { StillNeeded } from './kit/still-needed.js';
@@ -37,6 +37,11 @@ export interface CreatePrincipalFormProps {
  * spells out what an owner-level key can do; the call only runs from that confirm, so cancelling
  * creates nothing. Every other role submits straight away, as before.
  */
+/** The kernel's reserved display names (`members-handlers.ts` `INTERNAL_PRINCIPAL_DISPLAY_NAME_PATTERN`,
+ *  checked on the trimmed name this form sends): two underscores at each end mark the platform's
+ *  internal identities, and `create_principal` refuses them with `reserved_name`. */
+const RESERVED_DISPLAY_NAME = /^__.+__$/;
+
 export function CreatePrincipalForm({ http, onDone, onCancel }: CreatePrincipalFormProps) {
   const t = useT();
   const [displayName, setDisplayName] = useState('');
@@ -47,6 +52,8 @@ export function CreatePrincipalForm({ http, onDone, onCancel }: CreatePrincipalF
   const [acknowledged, setAcknowledged] = useState(false);
   const [confirmingOwner, setConfirmingOwner] = useState(false);
   const ownerCopy = ownerCredentialConfirmCopy(t);
+  // Legacy 362: say so while typing instead of after a refused submit.
+  const reservedName = RESERVED_DISPLAY_NAME.test(displayName.trim());
 
   async function createPrincipal(trimmed: string): Promise<void> {
     const result = await http.call<CreatePrincipalResult>('create_principal', {
@@ -59,7 +66,7 @@ export function CreatePrincipalForm({ http, onDone, onCancel }: CreatePrincipalF
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     const trimmed = displayName.trim();
-    if (!trimmed || submitting) return;
+    if (!trimmed || reservedName || submitting) return;
     if (role === 'owner') {
       setError(null);
       setConfirmingOwner(true);
@@ -89,7 +96,7 @@ export function CreatePrincipalForm({ http, onDone, onCancel }: CreatePrincipalF
           <span className="mono" data-testid="created-api-key">
             {created.apiKey}
           </span>
-          <CopyButton value={created.apiKey} label={t('API 密钥', 'API key')} />
+          <CopyButton value={created.apiKey} label={t('API key', 'API key')} />
         </div>
         <div className="row" style={{ justifyContent: 'flex-end' }}>
           {/* ux-lint-allow-disabled: already acknowledged — the key is no longer shown. */}
@@ -122,11 +129,25 @@ export function CreatePrincipalForm({ http, onDone, onCancel }: CreatePrincipalF
         )}
       </Notice>
 
-      <Field id="cp-name" label={t('显示名', 'Display name')} required>
+      <Field
+        id="cp-name"
+        label={t('显示名', 'Display name')}
+        required
+        error={
+          reservedName
+            ? t(
+                '前后各带两个下划线的显示名留给平台内部的身份，换一个名字。',
+                'Names with two underscores at each end are reserved for the platform’s internal identities; choose another.',
+              )
+            : null
+        }
+      >
         <input
           id="cp-name"
           className="input"
           value={displayName}
+          aria-invalid={reservedName || undefined}
+          aria-describedby={describedBy('cp-name', false, reservedName)}
           onChange={(event) => setDisplayName(event.target.value)}
           disabled={submitting}
         />
@@ -163,7 +184,18 @@ export function CreatePrincipalForm({ http, onDone, onCancel }: CreatePrincipalF
 
       <div className="row" style={{ justifyContent: 'flex-end' }}>
         <StillNeeded
-          items={displayName.trim() ? [] : [t('填写显示名', 'enter a display name')]}
+          items={
+            !displayName.trim()
+              ? [t('填写显示名', 'enter a display name')]
+              : reservedName
+                ? [
+                    t(
+                      '换一个不是前后双下划线的显示名',
+                      'a display name without two underscores at each end',
+                    ),
+                  ]
+                : []
+          }
           hidden={submitting}
           testId="create-principal-missing"
         />
@@ -179,7 +211,7 @@ export function CreatePrincipalForm({ http, onDone, onCancel }: CreatePrincipalF
               type="submit"
               variant="primary"
               aria-busy={submitting}
-              disabled={!displayName.trim()}
+              disabled={!displayName.trim() || reservedName}
             >
               {t('创建', 'Create')}
             </Button>

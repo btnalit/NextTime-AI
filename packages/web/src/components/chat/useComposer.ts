@@ -1,3 +1,4 @@
+import { UNSTORABLE_CHAR } from '@nexttime/shared';
 import {
   type Dispatch,
   type FormEvent,
@@ -13,6 +14,11 @@ import type { WsClient } from '../../lib/ws-client.js';
 export interface ComposerState {
   readonly composerText: string;
   readonly setComposerText: (text: string) => void;
+  /** The draft holds U+0000, which the kernel refuses to store (`unstorable_text`). */
+  readonly hasUnstorableChar: boolean;
+  /** Legacy 335: takes every U+0000 out of the draft, clears the refusal and returns focus to the
+   *  box; it does not send — the person checks the message first. Returns how many it removed. */
+  readonly removeUnstorableChars: () => number;
   readonly busy: boolean;
   readonly textareaRef: RefObject<HTMLTextAreaElement>;
   readonly composerDisabled: boolean;
@@ -82,11 +88,21 @@ export function useComposer(
     }
   }
 
+  function removeUnstorableChars(): number {
+    const removed = composerText.split(UNSTORABLE_CHAR).length - 1;
+    setComposerText(composerText.replaceAll(UNSTORABLE_CHAR, ''));
+    setSendError(null);
+    textareaRef.current?.focus();
+    return removed;
+  }
+
   const composerDisabled = turnStatus === 'running' || busy || archived;
 
   return {
     composerText,
     setComposerText,
+    hasUnstorableChar: composerText.includes(UNSTORABLE_CHAR),
+    removeUnstorableChars,
     busy,
     textareaRef,
     composerDisabled,
