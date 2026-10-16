@@ -3,7 +3,7 @@ import { PLATFORM_EVENT_NAMES, PlatformEventNameSchema, PlatformEventSchema } fr
 import type { PlatformEvent } from './events.js';
 
 describe('PLATFORM_EVENT_NAMES', () => {
-  it('lists the eleven canonical domain events from design doc §7.10 (S2.7 adds WorkerRunUpdated, S2.13 adds ConnectionRequested)', () => {
+  it('lists the canonical domain events from design doc §7.10 (S2.7 adds WorkerRunUpdated, S2.13 adds ConnectionRequested, S11 GO2 adds GoalRunUpdated and StepRunUpdated)', () => {
     expect(PLATFORM_EVENT_NAMES).toEqual([
       'TurnStarted',
       'TurnCompleted',
@@ -16,6 +16,8 @@ describe('PLATFORM_EVENT_NAMES', () => {
       'FactAsserted',
       'EgressObserved',
       'BudgetWarning',
+      'GoalRunUpdated',
+      'StepRunUpdated',
     ]);
   });
 
@@ -81,6 +83,14 @@ const SAMPLE_EVENTS: PlatformEvent[] = [
   { type: 'FactAsserted', workspaceId: 'ws1', factId: 'fact1', epistemicStatus: 'observed' },
   { type: 'EgressObserved', workspaceId: 'ws1', activityId: 'act1', domain: 'example.com' },
   { type: 'BudgetWarning', workspaceId: 'ws1', scope: 'task', taskId: 'task1', percent: 80 },
+  { type: 'GoalRunUpdated', workspaceId: 'ws1', goalRunId: 'g1', status: 'running' },
+  {
+    type: 'StepRunUpdated',
+    workspaceId: 'ws1',
+    goalRunId: 'g1',
+    stepRunId: 's1',
+    status: 'ready',
+  },
   {
     type: 'chat.message',
     chatId: 'chat1',
@@ -171,9 +181,9 @@ describe('PlatformEventSchema', () => {
     }
   });
 
-  it('covers all seventeen variants (11 domain + 6 chat/ws)', () => {
+  it('covers all nineteen variants (13 domain + 6 chat/ws)', () => {
     const seenTypes = new Set(SAMPLE_EVENTS.map((e) => e.type));
-    expect(seenTypes.size).toBe(17);
+    expect(seenTypes.size).toBe(19);
   });
 
   it('rejects an event with an unknown discriminant', () => {

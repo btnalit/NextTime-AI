@@ -36,6 +36,7 @@ function createFakeClient(options: { taskStatus: TaskStatus; updateRowCount: num
     budget_warned_at: null,
     failure_reason: null,
     retry_count: 0,
+    step_attempt: null,
     created_at: new Date(),
     updated_at: new Date(),
     completed_at: null,

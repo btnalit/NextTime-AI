@@ -104,8 +104,21 @@ describe('stepActionEffect — a step with several requests', () => {
     ).toEqual({ kind: 'wait', waitingReason: 'reconcile' });
   });
 
-  it('asks a person before waiting on the rest: a rejection outranks a pending request', () => {
-    expect(stepActionEffect([at('pending_approval'), at('rejected')])).toEqual({
+  it('waits for a request that may still run before asking a person (review #493 P2): a pending or executing request outranks a refusal', () => {
+    for (const running of ['pending_approval', 'approved', 'executing'] as const) {
+      expect(stepActionEffect([at(running), at('rejected')])).toEqual({
+        kind: 'wait',
+        waitingReason: 'approval',
+      });
+      expect(stepActionEffect([failed('refused'), at(running)])).toEqual({
+        kind: 'wait',
+        waitingReason: 'approval',
+      });
+    }
+  });
+
+  it('asks a person once nothing can still run: a rejection beside finished requests', () => {
+    expect(stepActionEffect([at('executed'), at('rejected'), failed('not_delivered')])).toEqual({
       kind: 'fail',
       failureCategory: 'action_refused',
     });

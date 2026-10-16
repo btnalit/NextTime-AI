@@ -37,6 +37,14 @@ import {
   setRequestActionDeps,
 } from './application/gateway/index.js';
 import type { GatekeeperActionExecutorDeps } from './application/gateway/index.js';
+import {
+  DEFAULT_GOAL_ADVANCER_INTERVAL_MS,
+  DEFAULT_GOAL_RECONCILE_INTERVAL_MS,
+  type GoalAdvancerOptions,
+  markReconcileDue,
+  registerGoalWakeConsumer,
+  runGoalAdvancerTick,
+} from './application/goal/index.js';
 import type {
   AgentRuntime,
   FakeDelegateOutcome,
@@ -469,6 +477,22 @@ export interface CreateBackgroundServicesOptions {
    *  `onApprovalReaperError`. Defaults to a no-op; `main()` passes `app.log.error`. */
   readonly onTaskReaperError?: (error: unknown) => void;
   /**
+   * S11 GO2: how often the goal advancer claims and advances due GoalRuns
+   * (`application/goal/advancer.ts`'s `runGoalAdvancerTick`). Default
+   * `DEFAULT_GOAL_ADVANCER_INTERVAL_MS` (1 s — the latency between a wake and the advance it asks
+   * for). Wired only with `handleKeyPair`, like the task reaper: an advance starts attempts, and an
+   * attempt mints its Worker's Handle.
+   */
+  readonly goalAdvancerIntervalMs?: number;
+  /** S11 GO2: how often the goal reconcile scan (`markReconcileDue`) runs. Default
+   *  `DEFAULT_GOAL_RECONCILE_INTERVAL_MS` (1 minute — the most a lost wake delays a GoalRun). */
+  readonly goalReconcileIntervalMs?: number;
+  /** S11 GO2: the advancer's retry backoff and quota retry delay — for tests. */
+  readonly goalAdvancerOptions?: GoalAdvancerOptions;
+  /** Called with every goal advancer, wake-consumer or reconcile-scan failure — same shape as
+   *  `onTaskReaperError`. Defaults to a no-op; `main()` passes `app.log.error`. */
+  readonly onGoalAdvancerError?: (error: unknown) => void;
+  /**
    * `OutboxDispatcher.pruneDispatched`'s `olderThanDays` — deletes dispatched outbox rows older
    * than this many days on a periodic tick (fix/invoke-worker-wait-and-outbox-prune: `pruneDispatched`
    * itself landed in PR #76 with nothing calling it yet). Default `DEFAULT_OUTBOX_PRUNE_DAYS` (7).
@@ -808,6 +832,15 @@ export function createBackgroundServices(
   const onTaskReaperError = options.onTaskReaperError ?? (() => {});
   let taskReaperTimer: NodeJS.Timeout | undefined;
   let unsubscribeActionRequestRouting: (() => void) | undefined;
+
+  // S11 GO2: the goal advancer — the wake consumer here, the tick and the reconcile scan in
+  // `start()`. Same condition as the task reaper (needs the Task runtime). `goalAdvancerRunning`
+  // keeps ticks from overlapping: a tick that starts attempts waits for their spawns.
+  const onGoalAdvancerError = options.onGoalAdvancerError ?? (() => {});
+  let goalAdvancerTimer: NodeJS.Timeout | undefined;
+  let goalReconcileTimer: NodeJS.Timeout | undefined;
+  let goalAdvancerRunning = false;
+  let unsubscribeGoalWake: (() => void) | undefined;
   let taskDeps:
     | {
         pool: typeof options.pool;
@@ -830,6 +863,7 @@ export function createBackgroundServices(
     };
     configureTaskRuntime(taskDeps);
     unsubscribeActionRequestRouting = registerActionRequestRoutingConsumer(dispatcher, taskDeps);
+    unsubscribeGoalWake = registerGoalWakeConsumer(dispatcher, options.pool, onGoalAdvancerError);
   }
 
   return {
@@ -934,6 +968,31 @@ export function createBackgroundServices(
           options.taskReaperIntervalMs ?? DEFAULT_TASK_REAPER_INTERVAL_MS,
         );
         taskReaperTimer.unref?.();
+
+        const goalDeps = {
+          pool: options.pool,
+          taskRuntime: taskDeps,
+          options: options.goalAdvancerOptions,
+          onStartError: onGoalAdvancerError,
+        };
+        const goalAdvancerTick = (): void => {
+          if (goalAdvancerRunning) return;
+          goalAdvancerRunning = true;
+          runGoalAdvancerTick(goalDeps, { onError: (err) => onGoalAdvancerError(err) })
+            .catch(onGoalAdvancerError)
+            .finally(() => {
+              goalAdvancerRunning = false;
+            });
+        };
+        goalAdvancerTimer = setInterval(
+          goalAdvancerTick,
+          options.goalAdvancerIntervalMs ?? DEFAULT_GOAL_ADVANCER_INTERVAL_MS,
+        );
+        goalAdvancerTimer.unref?.();
+        goalReconcileTimer = setInterval(() => {
+          markReconcileDue(options.pool).catch(onGoalAdvancerError);
+        }, options.goalReconcileIntervalMs ?? DEFAULT_GOAL_RECONCILE_INTERVAL_MS);
+        goalReconcileTimer.unref?.();
       }
 
       // S8 W3 K2 (leftover 82): the draft-expiry sweep — `draftExpiryDays === 0` is a deliberate
@@ -1018,6 +1077,7 @@ export function createBackgroundServices(
       unsubscribeLinkage();
       unsubscribeActionRequestDrain();
       unsubscribeActionRequestRouting?.();
+      unsubscribeGoalWake?.();
       if (gateLivenessTimer) {
         clearInterval(gateLivenessTimer);
         gateLivenessTimer = undefined;
@@ -1037,6 +1097,14 @@ export function createBackgroundServices(
       if (taskReaperTimer) {
         clearInterval(taskReaperTimer);
         taskReaperTimer = undefined;
+      }
+      if (goalAdvancerTimer) {
+        clearInterval(goalAdvancerTimer);
+        goalAdvancerTimer = undefined;
+      }
+      if (goalReconcileTimer) {
+        clearInterval(goalReconcileTimer);
+        goalReconcileTimer = undefined;
       }
       if (draftExpiryTimer) {
         clearInterval(draftExpiryTimer);
@@ -1401,6 +1469,7 @@ export function main(): void {
       fakeAgentRuntimeOnDelegate,
       taskReaperIntervalMs,
       onTaskReaperError: (err: unknown) => app.log.error(err),
+      onGoalAdvancerError: (err: unknown) => app.log.error(err),
       kind,
       handleKeyPair,
       kernelLlmUrl: process.env.KERNEL_LLM_URL,

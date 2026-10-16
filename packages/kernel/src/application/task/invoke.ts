@@ -8,7 +8,6 @@ import {
 } from '../../governance/agent-profile/index.js';
 import { WORKER_CEILING_CAPABILITIES } from '../../governance/capability/index.js';
 import { getGatekeeper } from '../../governance/gatekeepers/index.js';
-import { sumTodayCostUsd } from '../../governance/llm-usage/index.js';
 import {
   composeSystemPrompt,
   readInstanceInstructions,
@@ -25,14 +24,13 @@ import {
 } from './handle-mint.js';
 import type { DeclaredGateRecord, MintWorkerRunHandleInput } from './handle-mint.js';
 import { failTaskAndReapWorkerRuns, reactToSupervisorStatus } from './lifecycle.js';
-import { HARD_MAX_DEPTH, resolveQuotas } from './quotas.js';
+import { assertTaskQuotas, lockTaskQuotas } from './quota-check.js';
 import type { TaskRuntimeDeps } from './runtime.js';
 import { spawnWorkerRun } from './spawn.js';
 import { recordTaskTransition } from './transition-log.js';
 import {
   InvokeWorkerDefinitionNotEnabledError,
   InvokeWorkerValidationError,
-  QuotaExceededError,
   TASK_ROW_COLUMNS,
   type TaskRow,
   WORKER_RUN_ROW_COLUMNS,
@@ -355,9 +353,7 @@ async function insertQueuedTaskWithQuotaCheck(
     deps.pool,
     { workspaceId, principalId: caller.principalId },
     async (client) => {
-      await client.query('select pg_advisory_xact_lock(hashtext($1::text))', [
-        `${workspaceId}:${caller.principalId}`,
-      ]);
+      await lockTaskQuotas(client, workspaceId, caller.principalId);
 
       if (input.idempotencyKey) {
         const existing = await replayableTaskByIdempotencyKey(
@@ -385,42 +381,13 @@ async function insertQueuedTaskWithQuotaCheck(
       const goalStep = callerWorkerRun
         ? await readTaskGoalStep(client, workspaceId, callerWorkerRun.taskId)
         : null;
-      const resolvedQuotas = await resolveQuotas(client, workspaceId);
-
-      if (depth > resolvedQuotas.maxDepth) {
-        throw new QuotaExceededError(
-          'depth_exceeded',
-          `${input.definitionId}: derivation depth ${depth} exceeds the workspace's max depth (${resolvedQuotas.maxDepth}, hard ceiling ${HARD_MAX_DEPTH}) — invoke from a shallower WorkerRun or reduce nesting`,
-        );
-      }
-
-      const concurrentResult = await client.query<{ count: string }>(
-        `select count(*)::bigint as count
-         from tasks
-         where workspace_id = $1
-           and on_behalf_of = $2
-           and status in ('queued', 'running', 'waiting_approval')`,
-        [workspaceId, caller.principalId],
+      const resolvedQuotas = await assertTaskQuotas(
+        client,
+        workspaceId,
+        caller.principalId,
+        input.definitionId,
+        depth,
       );
-      const concurrentCount = Number(concurrentResult.rows[0]?.count ?? 0);
-      if (concurrentCount >= resolvedQuotas.maxConcurrentWorkerRunsPerUser) {
-        throw new QuotaExceededError(
-          'concurrency_exceeded',
-          `${concurrentCount} WorkerRun(s)/queued Task(s) already active for this user, at or above ` +
-            `the workspace limit (${resolvedQuotas.maxConcurrentWorkerRunsPerUser})`,
-        );
-      }
-
-      if (resolvedQuotas.dailyCostBudgetUsd !== null) {
-        const spentToday = await sumTodayCostUsd(client, workspaceId);
-        if (spentToday >= resolvedQuotas.dailyCostBudgetUsd) {
-          throw new QuotaExceededError(
-            'daily_cost_exceeded',
-            `workspace has spent $${spentToday.toFixed(2)} today, at or above the daily cost budget ` +
-              `($${resolvedQuotas.dailyCostBudgetUsd.toFixed(2)})`,
-          );
-        }
-      }
 
       const taskResult = await client.query(
         `insert into tasks (
