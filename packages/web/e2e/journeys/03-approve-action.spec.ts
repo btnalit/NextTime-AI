@@ -82,6 +82,8 @@ async function runJourney(page: import('@playwright/test').Page, scope: string):
   // modal to dismiss) and closes the narrow test's `kit/sheet` (≤1179px — a real dialog over the
   // list) so the 历史 tab below is reachable either way.
   await page.keyboard.press('Escape');
+  const openSheet = page.getByRole('dialog');
+  await expect(openSheet).toHaveCount(0);
 
   await page.getByRole('tab', { name: '历史' }).click();
   const historyRows = page.getByTestId('approval-history-row');
@@ -98,6 +100,11 @@ async function runJourney(page: import('@playwright/test').Page, scope: string):
     // overlay) releases the next row underneath it; on the wide layout it is again a harmless
     // no-op, since the list was never covered to begin with.
     await page.keyboard.press('Escape');
+    // Wait for the sheet to be gone before the next row. #628's CI pressed the next row while the
+    // closing sheet was still mounted and the URL stayed with no selection — most likely the
+    // sheet's focus trap pulled focus back inside, so Enter hit its own close button. It showed up
+    // once 317's always-allow row sorted first in 历史 and the narrow loop had to move past row 0.
+    await expect(openSheet).toHaveCount(0);
     await historyRows.nth(i).press('Enter');
     await expect(detail).toBeVisible({ timeout: 15_000 });
     // The wide pane is always mounted, so "visible" can still be the *previous* row's detail —
