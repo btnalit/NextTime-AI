@@ -314,6 +314,12 @@
             }
           ]
         },
+        "failureReason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "gatekeeperId": {
           "type": "string"
         },
@@ -6063,6 +6069,12 @@
             }
           ]
         },
+        "failureReason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "gatekeeperId": {
           "type": "string"
         },
@@ -9801,6 +9813,12 @@
                   }
                 ]
               },
+              "failureReason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "gatekeeperId": {
                 "type": "string"
               },
@@ -12822,6 +12840,12 @@
                   {
                     "type": "null"
                   }
+                ]
+              },
+              "failureReason": {
+                "type": [
+                  "string",
+                  "null"
                 ]
               },
               "gatekeeperId": {
@@ -19267,6 +19291,12 @@
             }
           ]
         },
+        "failureReason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "gatekeeperId": {
           "type": "string"
         },
@@ -20299,6 +20329,12 @@
                 {
                   "type": "null"
                 }
+              ]
+            },
+            "failureReason": {
+              "type": [
+                "string",
+                "null"
               ]
             },
             "gatekeeperId": {

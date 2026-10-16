@@ -170,7 +170,9 @@ export function ApprovalContext({
             {failure ? (
               <>
                 <dt className={failure.tone === 'danger' ? 'text-danger' : undefined}>
-                  {t('失败类别', 'Failure kind')}
+                  {failure.kind === 'withdrawn'
+                    ? t('结果', 'Outcome')
+                    : t('失败类别', 'Failure kind')}
                 </dt>
                 <dd
                   className={failure.tone === 'danger' ? 'text-danger' : undefined}
@@ -179,6 +181,14 @@ export function ApprovalContext({
                   title={failure.message}
                 >
                   {failure.short}
+                </dd>
+              </>
+            ) : null}
+            {failure && failure.kind !== 'withdrawn' && row.failureReason ? (
+              <>
+                <dt>{t('失败原因', 'Failure reason')}</dt>
+                <dd className="pre-wrap" data-testid="approval-context-failure-reason">
+                  {row.failureReason}
                 </dd>
               </>
             ) : null}

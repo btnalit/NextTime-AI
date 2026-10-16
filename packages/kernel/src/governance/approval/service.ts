@@ -92,6 +92,8 @@ export {
   type ActionRequestInDoubt,
   type ActionRequestQueueBlocker,
   type ActionRequestWaitingState,
+  FAILURE_REASON_MAX,
+  readActionRequestFailureReasons,
   readActionRequestWaitingStates,
   readActionRequestsInDoubt,
   readQueueBlockers,

@@ -95,6 +95,11 @@ export const ActionRequestWireSchema = z
     // else `null`. Optional for the same reason as `decisionReason`.
     outcomeInDoubt: ActionRequestOutcomeInDoubtWireSchema.nullable().optional(),
     queuedBehind: ActionRequestQueuedBehindWireSchema.nullable().optional(),
+    // Legacy 329: on a `failed` / `compensated` row, the reason the kernel audited when it failed
+    // — redacted like every audited reason, clipped to 1000 code points, unseen characters (bidi
+    // overrides, zero-width and control characters) shown as `\u{XXXX}`; line breaks kept. `null`
+    // when none was recorded or on any other status; absent from `request_action`'s own results.
+    failureReason: z.string().nullable().optional(),
     // Legacy 218 / UX acceptance of #592 (P2-1): on a `pending_approval` row (the handlers that
     // add the decision fields) — the version of this Operation its gate publishes now (`null`: the
     // gate no longer publishes it), and whether this request was made against that definition.
