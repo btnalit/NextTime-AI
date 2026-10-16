@@ -1,11 +1,18 @@
-import { actionCardFromPendingContent, isPendingCardMessage } from '../../lib/action-card.js';
+import { useEffect, useState } from 'react';
+import { useRoleCan } from '../../hooks/useRoleCan.js';
+import {
+  type ActionRequestRowLike,
+  actionCardFromPendingContent,
+  isDecidable,
+  isPendingCardMessage,
+} from '../../lib/action-card.js';
 import { messageRoleLabel } from '../../lib/chat-messages.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatTime } from '../../lib/format.js';
 import { useT } from '../../lib/i18n.js';
 import { systemStatusLineFromMessage } from '../../lib/system-status.js';
 import type { ChatMessage } from '../../lib/ws-client.js';
-import { ActionRequestCard } from '../ActionRequestCard.js';
+import { ActionRequestCard, type ActionRequestCardProps } from '../ActionRequestCard.js';
 import { SystemStatusLineView } from '../SystemStatusLineView.js';
 import { MessageBody } from './MessageBody.js';
 import { MessageReferences } from './MessageReferences.js';
@@ -18,6 +25,8 @@ export interface ChatMessageRowProps {
   readonly cardErrors: Readonly<Record<string, unknown>>;
   readonly canAlwaysAllow: boolean;
   readonly canDecide: boolean;
+  /** The reader's own principal (`hooks/useWorkspaceIdentity`), when known. */
+  readonly viewerId?: string | null;
   readonly onApprove: (
     id: string,
     options: { readonly reason: string | undefined; readonly alwaysAllow: boolean },
@@ -45,6 +54,7 @@ export function ChatMessageRow({
   cardErrors,
   canAlwaysAllow,
   canDecide,
+  viewerId,
   onApprove,
   onReject,
   onOpenApproval,
@@ -59,14 +69,16 @@ export function ChatMessageRow({
         latestActionStatus.get(card.actionRequestId) ??
         card.status;
       return (
-        <ActionRequestCard
+        <ChatActionCard
           key={message.sequence}
+          http={http}
           card={{ ...card, status: effectiveStatus }}
           error={cardErrors[card.actionRequestId] ?? null}
           onApprove={onApprove}
           onReject={onReject}
           canAlwaysAllow={canAlwaysAllow}
           canDecide={canDecide}
+          callerPrincipalId={viewerId ?? null}
         />
       );
     }
@@ -114,5 +126,71 @@ export function ChatMessageRow({
         </div>
       ) : null}
     </div>
+  );
+}
+
+/** The governance fields a chat message's card lacks (`lib/action-card`): whether it may be
+ *  self-decided and which definition it was made under. */
+type CardGovernance = Pick<
+  ActionRequestRowLike,
+  'onBehalfOf' | 'requesterCanApprove' | 'publishedDefinition'
+>;
+
+/**
+ * A chat card the reader may decide, completed from its `get_action` row (dead-end sweep of
+ * #592): a persisted `system.action_pending` message carries neither the self-approval rule nor
+ * the published definition, so without the row the card would offer decisions or "总是允许" the
+ * kernel must refuse. One read per decidable card; until it lands "总是允许" is simply not offered.
+ */
+function ChatActionCard({
+  http,
+  card,
+  ...rest
+}: ActionRequestCardProps & { readonly http: CapabilityCaller }) {
+  const canGetAction = useRoleCan(http)('get_action') === true;
+  const decidable = card.isHolder && rest.canDecide && canGetAction && isDecidable(card.status);
+  const [governance, setGovernance] = useState<CardGovernance | null>(null);
+  const id = card.actionRequestId;
+  useEffect(() => {
+    if (!decidable) return;
+    let live = true;
+    http
+      .call<ActionRequestRowLike>('get_action', { actionRequestId: id })
+      .then((row) => {
+        if (!live) return;
+        setGovernance({
+          ...(row.onBehalfOf !== undefined ? { onBehalfOf: row.onBehalfOf } : {}),
+          ...(row.requesterCanApprove !== undefined
+            ? { requesterCanApprove: row.requesterCanApprove }
+            : {}),
+          ...(row.publishedDefinition !== undefined
+            ? { publishedDefinition: row.publishedDefinition }
+            : {}),
+        });
+      })
+      // Unreadable: the card keeps its decisions, offers no "总是允许", and links to the page.
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [http, id, decidable]);
+  return (
+    <ActionRequestCard
+      {...rest}
+      card={
+        governance
+          ? {
+              ...card,
+              onBehalfOf: governance.onBehalfOf ?? card.onBehalfOf,
+              ...(governance.requesterCanApprove !== undefined
+                ? { requesterCanApprove: governance.requesterCanApprove }
+                : {}),
+              ...(governance.publishedDefinition !== undefined
+                ? { publishedDefinition: governance.publishedDefinition }
+                : {}),
+            }
+          : card
+      }
+    />
   );
 }

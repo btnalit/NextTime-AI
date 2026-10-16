@@ -359,6 +359,30 @@
             }
           ]
         },
+        "publishedDefinition": {
+          "additionalProperties": false,
+          "properties": {
+            "requestIsCurrent": {
+              "type": "boolean"
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "version",
+            "requestIsCurrent"
+          ],
+          "type": "object"
+        },
         "queuedBehind": {
           "anyOf": [
             {
@@ -6067,6 +6091,30 @@
             }
           ]
         },
+        "publishedDefinition": {
+          "additionalProperties": false,
+          "properties": {
+            "requestIsCurrent": {
+              "type": "boolean"
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "version",
+            "requestIsCurrent"
+          ],
+          "type": "object"
+        },
         "queuedBehind": {
           "anyOf": [
             {
@@ -8893,10 +8941,15 @@
         "name": {
           "minLength": 1,
           "type": "string"
+        },
+        "version": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
         }
       },
       "required": [
-        "name"
+        "name",
+        "version"
       ],
       "type": "object"
     },
@@ -9756,6 +9809,30 @@
                     "type": "null"
                   }
                 ]
+              },
+              "publishedDefinition": {
+                "additionalProperties": false,
+                "properties": {
+                  "requestIsCurrent": {
+                    "type": "boolean"
+                  },
+                  "version": {
+                    "anyOf": [
+                      {
+                        "exclusiveMinimum": 0,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "version",
+                  "requestIsCurrent"
+                ],
+                "type": "object"
               },
               "queuedBehind": {
                 "anyOf": [
@@ -12739,6 +12816,30 @@
                   }
                 ]
               },
+              "publishedDefinition": {
+                "additionalProperties": false,
+                "properties": {
+                  "requestIsCurrent": {
+                    "type": "boolean"
+                  },
+                  "version": {
+                    "anyOf": [
+                      {
+                        "exclusiveMinimum": 0,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "version",
+                  "requestIsCurrent"
+                ],
+                "type": "object"
+              },
               "queuedBehind": {
                 "anyOf": [
                   {
@@ -12959,6 +13060,14 @@
               "autoApprove": {
                 "type": "boolean"
               },
+              "autoApproveConsent": {
+                "enum": [
+                  "current",
+                  "definition_changed",
+                  "not_recorded"
+                ],
+                "type": "string"
+              },
               "blastRadius": {
                 "anyOf": [
                   {
@@ -12986,6 +13095,28 @@
               "id": {
                 "type": "string"
               },
+              "operationVersion": {
+                "anyOf": [
+                  {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "publishedOperationVersion": {
+                "anyOf": [
+                  {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "requesterCanApprove": {
                 "type": [
                   "boolean",
@@ -13008,7 +13139,10 @@
               "requesterCanApprove",
               "setBy",
               "createdAt",
-              "updatedAt"
+              "updatedAt",
+              "operationVersion",
+              "publishedOperationVersion",
+              "autoApproveConsent"
             ],
             "type": "object"
           },
@@ -17299,13 +17433,36 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "drafts": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "draftDigest": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "name": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "draftDigest"
+            ],
+            "type": "object"
+          },
+          "maxItems": 1000,
+          "type": "array"
+        },
         "gatekeeperId": {
           "minLength": 1,
           "type": "string"
         }
       },
       "required": [
-        "gatekeeperId"
+        "gatekeeperId",
+        "drafts"
       ],
       "type": "object"
     },
@@ -17476,7 +17633,8 @@
       },
       "required": [
         "gatekeeperId",
-        "name"
+        "name",
+        "draftDigest"
       ],
       "type": "object"
     },
@@ -17762,10 +17920,15 @@
         "procedureId": {
           "minLength": 1,
           "type": "string"
+        },
+        "version": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
         }
       },
       "required": [
-        "procedureId"
+        "procedureId",
+        "version"
       ],
       "type": "object"
     },
@@ -17814,10 +17977,15 @@
         "skillId": {
           "minLength": 1,
           "type": "string"
+        },
+        "version": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
         }
       },
       "required": [
-        "skillId"
+        "skillId",
+        "version"
       ],
       "type": "object"
     },
@@ -19074,6 +19242,30 @@
             }
           ]
         },
+        "publishedDefinition": {
+          "additionalProperties": false,
+          "properties": {
+            "requestIsCurrent": {
+              "type": "boolean"
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "version",
+            "requestIsCurrent"
+          ],
+          "type": "object"
+        },
         "queuedBehind": {
           "anyOf": [
             {
@@ -20066,6 +20258,30 @@
                   "type": "null"
                 }
               ]
+            },
+            "publishedDefinition": {
+              "additionalProperties": false,
+              "properties": {
+                "requestIsCurrent": {
+                  "type": "boolean"
+                },
+                "version": {
+                  "anyOf": [
+                    {
+                      "exclusiveMinimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "version",
+                "requestIsCurrent"
+              ],
+              "type": "object"
             },
             "queuedBehind": {
               "anyOf": [
@@ -21937,6 +22153,10 @@
           "minLength": 1,
           "type": "string"
         },
+        "actionRequestId": {
+          "minLength": 1,
+          "type": "string"
+        },
         "gatekeeperId": {
           "minLength": 1,
           "type": "string"
@@ -21944,7 +22164,8 @@
       },
       "required": [
         "gatekeeperId",
-        "actionKindTag"
+        "actionKindTag",
+        "actionRequestId"
       ],
       "type": "object"
     },
@@ -21957,6 +22178,14 @@
         },
         "autoApprove": {
           "type": "boolean"
+        },
+        "autoApproveConsent": {
+          "enum": [
+            "current",
+            "definition_changed",
+            "not_recorded"
+          ],
+          "type": "string"
         },
         "blastRadius": {
           "anyOf": [
@@ -21985,6 +22214,28 @@
         "id": {
           "type": "string"
         },
+        "operationVersion": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "publishedOperationVersion": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "requesterCanApprove": {
           "type": [
             "boolean",
@@ -22007,7 +22258,10 @@
         "requesterCanApprove",
         "setBy",
         "createdAt",
-        "updatedAt"
+        "updatedAt",
+        "operationVersion",
+        "publishedOperationVersion",
+        "autoApproveConsent"
       ],
       "type": "object"
     },
@@ -22489,6 +22743,14 @@
         "autoApprove": {
           "type": "boolean"
         },
+        "autoApproveConsent": {
+          "enum": [
+            "current",
+            "definition_changed",
+            "not_recorded"
+          ],
+          "type": "string"
+        },
         "blastRadius": {
           "anyOf": [
             {
@@ -22516,6 +22778,28 @@
         "id": {
           "type": "string"
         },
+        "operationVersion": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "publishedOperationVersion": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "requesterCanApprove": {
           "type": [
             "boolean",
@@ -22538,7 +22822,10 @@
         "requesterCanApprove",
         "setBy",
         "createdAt",
-        "updatedAt"
+        "updatedAt",
+        "operationVersion",
+        "publishedOperationVersion",
+        "autoApproveConsent"
       ],
       "type": "object"
     },
@@ -25212,10 +25499,15 @@
         "name": {
           "minLength": 1,
           "type": "string"
+        },
+        "version": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
         }
       },
       "required": [
-        "name"
+        "name",
+        "version"
       ],
       "type": "object"
     },

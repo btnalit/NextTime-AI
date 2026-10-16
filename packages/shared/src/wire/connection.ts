@@ -123,9 +123,9 @@ export const OperationSummaryWireSchema = z
     /** Review #493 on #583 (P2): on a `draft` only — the digest of everything this draft says (its
      *  whole definition, governance fields and description included, and who wrote it). A draft is
      *  revised in place at the same version (its proposer re-proposing, a gate re-import), so the
-     *  version alone does not name what the reader looked at: `discard_operation_draft` requires
-     *  this back, `publish_operation` takes it, and either refuses 409 `draft_changed` when the
-     *  draft is no longer the one shown. Opaque to the console. */
+     *  version alone does not name what the reader looked at: `discard_operation_draft` and
+     *  `publish_operation` (legacy 300) require this back, and either refuses 409 `draft_changed`
+     *  when the draft is no longer the one shown. Opaque to the console. */
     draftDigest: z.string().optional(),
   })
   .strict();

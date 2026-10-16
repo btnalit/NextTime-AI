@@ -194,7 +194,12 @@ export function SkillEditor({ http, copyOf, onProposed, onDone, onPublished }: S
           can('publish_skill') === false
             ? undefined
             : (review) =>
-                http.call<{ status: string }>('publish_skill', { skillId: proposed.id, ...review })
+                // Legacy 300: publishes exactly the version this screen proposed.
+                http.call<{ status: string }>('publish_skill', {
+                  skillId: proposed.id,
+                  version: proposed.version,
+                  ...review,
+                })
         }
         onDone={onDone}
         onPublished={onPublished}

@@ -90,6 +90,15 @@ export const ActionRequestWireSchema = z
     // else `null`. Optional for the same reason as `decisionReason`.
     outcomeInDoubt: ActionRequestOutcomeInDoubtWireSchema.nullable().optional(),
     queuedBehind: ActionRequestQueuedBehindWireSchema.nullable().optional(),
+    // Legacy 218 / UX acceptance of #592 (P2-1): on a `pending_approval` row (the handlers that
+    // add the decision fields) — the version of this Operation its gate publishes now (`null`: the
+    // gate no longer publishes it), and whether this request was made against that definition.
+    // "Always allow" from a request is accepted only when it was (409 `version_changed`, or 404
+    // when nothing is published), and covers that version only. Absent on other rows.
+    publishedDefinition: z
+      .object({ version: z.number().int().positive().nullable(), requestIsCurrent: z.boolean() })
+      .strict()
+      .optional(),
   })
   .strict();
 export type ActionRequestWire = z.infer<typeof ActionRequestWireSchema>;
@@ -119,6 +128,10 @@ export type CapabilityGrantWire = z.infer<typeof CapabilityGrantWireSchema>;
  *  `toWirePolicy` does the rename; `governance/policy/policies.ts` itself is untouched).
  *  `gatekeeperId` (R-20 / D-15): the gate a gate-scoped rule applies to — "Always allow" writes
  *  only these — or `null` for a workspace-wide rule (every gate; it can only require approval). */
+/** Legacy 218: whether a gate-scoped "always allow" still applies — see `PolicyWireSchema`. */
+export const AutoApproveConsentSchema = z.enum(['current', 'definition_changed', 'not_recorded']);
+export type AutoApproveConsent = z.infer<typeof AutoApproveConsentSchema>;
+
 export const PolicyWireSchema = z
   .object({
     id: z.string(),
@@ -130,6 +143,17 @@ export const PolicyWireSchema = z
     setBy: z.string(),
     createdAt: z.string(),
     updatedAt: z.string(),
+    // Legacy 218: an "always allow" (gate-scoped `autoApprove: true`) allows one definition of the
+    // Operation — `operationVersion` is the published version it was given for (`null` on every
+    // other rule, and on one written before the definition was recorded).
+    // `publishedOperationVersion` is the version published on the gate now (`null` for a
+    // workspace-wide rule or when none is). `autoApproveConsent` says whether the rule applies:
+    // `current` (or not an "always allow"), `definition_changed` (another definition was
+    // published since, or its blast radius went up — calls go back through approval until a
+    // person allows the current one), `not_recorded` (no definition on file — likewise suspended).
+    operationVersion: z.number().int().positive().nullable(),
+    publishedOperationVersion: z.number().int().positive().nullable(),
+    autoApproveConsent: AutoApproveConsentSchema,
   })
   .strict();
 export type PolicyWire = z.infer<typeof PolicyWireSchema>;

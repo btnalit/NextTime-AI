@@ -545,6 +545,66 @@ describe('SystemsPage', () => {
     expect(within(drawer).queryByTestId('system-definition-mismatch-revision')).toBeNull();
   });
 
+  it('legacy 301: a gate that dropped every published Operation reads 「门已不再提供」 on the chip and in 「你的可达性」, not 「定义不一样」', async () => {
+    const http = scriptedHttp({
+      execution_readiness: () =>
+        readiness({
+          principalId: 'p-self',
+          gates: [
+            gate({
+              name: '库存',
+              status: 'unreachable',
+              reason: 'definition_mismatch',
+              definitionMismatch: [
+                { operation: 'stock.get', awaiting: 'platform_adoption', droppedByGate: true },
+                { operation: 'orders.cancel', awaiting: 'platform_adoption', droppedByGate: true },
+              ],
+            }),
+          ],
+        }),
+      list_available_gate_instances: () => ({ items: [LINKED_STOCK_INSTANCE] }),
+    });
+    renderPage(http, true);
+    const card = (await screen.findAllByTestId('gatekeeper-card'))[0] as HTMLElement;
+    const chip = within(card).getByTestId('gatekeeper-reachability');
+    expect(chip.textContent).toBe('用不了');
+    expect(chip.getAttribute('title')).toBe(
+      '门已不再提供这个系统已发布的操作，对它们的调用正被拒绝。',
+    );
+
+    fireEvent.click(within(card).getByTestId('system-access-summary'));
+    const drawer = await screen.findByTestId('system-access-drawer');
+    const detail = within(drawer).getByTestId('system-access-my-reachability');
+    expect(detail.textContent).toContain('门已不再提供这个系统已发布的操作');
+    expect(detail.textContent).not.toContain('定义和已发布的不一样');
+  });
+
+  it('legacy 301: some dropped and some redefined — the chip says both', async () => {
+    const http = scriptedHttp({
+      execution_readiness: () =>
+        readiness({
+          principalId: 'p-self',
+          gates: [
+            gate({
+              name: '库存',
+              status: 'unreachable',
+              reason: 'definition_mismatch',
+              definitionMismatch: [
+                { operation: 'stock.get', awaiting: 'platform_adoption' },
+                { operation: 'orders.cancel', awaiting: 'platform_adoption', droppedByGate: true },
+              ],
+            }),
+          ],
+        }),
+      list_available_gate_instances: () => ({ items: [LINKED_STOCK_INSTANCE] }),
+    });
+    renderPage(http, true);
+    const card = (await screen.findAllByTestId('gatekeeper-card'))[0] as HTMLElement;
+    expect(within(card).getByTestId('gatekeeper-reachability').getAttribute('title')).toBe(
+      '门已不再提供其中一些已发布的操作，其余运行的定义和已发布的不一样，对它们的调用正被拒绝。',
+    );
+  });
+
   it('UX acceptance of #579 (legacy 297): an Operation the gate dropped is said apart — adopting removes it, it never reads as coming back', async () => {
     const http = scriptedHttp({
       execution_readiness: () =>
@@ -713,6 +773,43 @@ describe('SystemsPage', () => {
     expect(within(sheet).getByTestId('connection-secret-value').textContent).toBe(secret);
     fireEvent.click(within(sheet).getByRole('button', { name: '我已复制' }));
     await waitFor(() => expect(screen.queryByTestId('connection-secret-value')).toBeNull());
+  });
+
+  it('「发布清单」 publishes the drafts this page read; a draft changed since reads them again (review #493 on #592)', async () => {
+    let reads = 0;
+    const draftRow = (name: string, draftDigest: string) => ({
+      gatekeeperId: 'gk-1',
+      name,
+      mode: 'observe',
+      blastRadius: 'low',
+      status: 'draft',
+      origin: 'import',
+      draftDigest,
+    });
+    const http = scriptedHttp({
+      execution_readiness: () => readiness({ principalId: 'p-self', gates: [gate()] }),
+      list_operations: () => {
+        reads += 1;
+        return { items: [draftRow('stock.get', reads === 1 ? 'd-1' : 'd-2')] };
+      },
+      publish_manifest: (params) => {
+        expect(params).toEqual({
+          gatekeeperId: 'gk-1',
+          drafts: [{ name: 'stock.get', draftDigest: 'd-1' }],
+        });
+        return Promise.reject(
+          new HttpError('capability_error', 'changed after it was read', 'draft_changed'),
+        );
+      },
+    });
+    renderPage(http);
+    const card = (await screen.findAllByTestId('gatekeeper-card'))[0] as HTMLElement;
+    fireEvent.pointerDown(within(card).getByTestId('gatekeeper-more'), { button: 0 });
+    const item = await screen.findByTestId('gatekeeper-publish-manifest');
+    expect(item.textContent).toContain('(1)');
+    fireEvent.click(item);
+    await waitFor(() => expect(reads).toBe(2));
+    expect(within(card).getByText(/这份草稿在你查看之后被修改过/)).toBeTruthy();
   });
 
   it('offers no connection secret for a gate linked from the platform catalog', async () => {

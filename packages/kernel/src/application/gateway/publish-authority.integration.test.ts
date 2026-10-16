@@ -6,7 +6,10 @@ import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
-import { proposeSkill as proposeSkillVersion } from '../../application/worker/index.js';
+import {
+  proposeProcedure as proposeProcedureVersion,
+  proposeSkill as proposeSkillVersion,
+} from '../../application/worker/index.js';
 import { NotProposerError } from '../../governance/capability/index.js';
 import { registerGatekeeper } from '../../governance/gatekeepers/index.js';
 import { queryAudit } from '../../substrate/audit/index.js';
@@ -123,11 +126,13 @@ describe.runIf(DATABASE_URL !== undefined)(
     /** An Operation `builderId` proposed and published (its own draft — allowed). */
     async function publishedOperationOfBuilder(): Promise<string> {
       const name = `d24.op.${randomUUID().slice(0, 8)}`;
-      await call(builderId, 'builder', 'propose_operation', {
-        gatekeeperId,
-        operation: testOperation(name),
-      });
-      await call(builderId, 'builder', 'publish_operation', { gatekeeperId, name });
+      const { draftDigest } = await call<{ draftDigest: string }>(
+        builderId,
+        'builder',
+        'propose_operation',
+        { gatekeeperId, operation: testOperation(name) },
+      );
+      await call(builderId, 'builder', 'publish_operation', { gatekeeperId, name, draftDigest });
       return name;
     }
 
@@ -177,15 +182,15 @@ describe.runIf(DATABASE_URL !== undefined)(
     describe('publish_skill', () => {
       it('member: refused by the builder floor (403 forbidden)', async () => {
         const skillId = await proposeSkill();
-        await expect(call(memberId, 'member', 'publish_skill', { skillId })).rejects.toBeInstanceOf(
-          ForbiddenError,
-        );
+        await expect(
+          call(memberId, 'member', 'publish_skill', { skillId, version: 1 }),
+        ).rejects.toBeInstanceOf(ForbiddenError);
       });
 
       it('another builder: sees the draft (D-26 reviewer rule) but it is not theirs — 403 not_proposer', async () => {
         const skillId = await proposeSkill();
         await expect(
-          call(otherBuilderId, 'builder', 'publish_skill', { skillId }),
+          call(otherBuilderId, 'builder', 'publish_skill', { skillId, version: 1 }),
         ).rejects.toBeInstanceOf(NotProposerError);
         // Nothing was published by the refused call.
         const asProposer = await call<{ status: string } | null>(
@@ -203,6 +208,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         const skillId = await proposeSkill();
         const published = await call<{ status: string }>(builderId, 'builder', 'publish_skill', {
           skillId,
+          version: 1,
         });
         expect(published.status).toBe('published');
       });
@@ -211,6 +217,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         const skillId = await proposeSkill();
         const published = await call<{ status: string }>(ownerId, 'owner', 'publish_skill', {
           skillId,
+          version: 1,
         });
         expect(published.status).toBe('published');
       });
@@ -260,36 +267,47 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       it('another builder cannot publish a builder’s Operation draft either (403 not_proposer)', async () => {
         const name = `d24.op.${randomUUID().slice(0, 8)}`;
-        await call(builderId, 'builder', 'propose_operation', {
-          gatekeeperId,
-          operation: testOperation(name),
-        });
+        const { draftDigest } = await call<{ draftDigest: string }>(
+          builderId,
+          'builder',
+          'propose_operation',
+          { gatekeeperId, operation: testOperation(name) },
+        );
         await expect(
-          call(otherBuilderId, 'builder', 'publish_operation', { gatekeeperId, name }),
+          call(otherBuilderId, 'builder', 'publish_operation', { gatekeeperId, name, draftDigest }),
         ).rejects.toBeInstanceOf(NotProposerError);
       });
 
       it('a builder’s own revision of an Operation the owner published needs the owner to publish it', async () => {
         const name = `d24.op.${randomUUID().slice(0, 8)}`;
-        await call(ownerId, 'owner', 'propose_operation', {
+        const first = await call<{ draftDigest: string }>(ownerId, 'owner', 'propose_operation', {
           gatekeeperId,
           operation: testOperation(name),
         });
-        await call(ownerId, 'owner', 'publish_operation', { gatekeeperId, name });
+        await call(ownerId, 'owner', 'publish_operation', {
+          gatekeeperId,
+          name,
+          draftDigest: first.draftDigest,
+        });
         // The builder's revision loosens nothing here, but publishing it would deprecate the
         // owner's row — deprecate authority over that row is required too.
-        await call(builderId, 'builder', 'propose_operation', {
-          gatekeeperId,
-          operation: { ...testOperation(name), description: 'A revised description.' },
-        });
+        const { draftDigest } = await call<{ draftDigest: string }>(
+          builderId,
+          'builder',
+          'propose_operation',
+          {
+            gatekeeperId,
+            operation: { ...testOperation(name), description: 'A revised description.' },
+          },
+        );
         await expect(
-          call(builderId, 'builder', 'publish_operation', { gatekeeperId, name }),
+          call(builderId, 'builder', 'publish_operation', { gatekeeperId, name, draftDigest }),
         ).rejects.toBeInstanceOf(NotProposerError);
         const published = await call<{ status: string; version: number }>(
           ownerId,
           'owner',
           'publish_operation',
-          { gatekeeperId, name },
+          { gatekeeperId, name, draftDigest },
         );
         expect(published.status).toBe('published');
         expect(published.version).toBe(2);
@@ -430,7 +448,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     describe('a new version in someone else’s family', () => {
       it('Skill: another builder may propose a version, may not publish it; the owner may', async () => {
         const skillId = await proposeSkill();
-        await call(builderId, 'builder', 'publish_skill', { skillId });
+        await call(builderId, 'builder', 'publish_skill', { skillId, version: 1 });
 
         const v2 = await withWorkspace(
           pool,
@@ -445,16 +463,80 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
         expect(v2.version).toBe(2);
         await expect(
-          call(otherBuilderId, 'builder', 'publish_skill', { skillId }),
+          call(otherBuilderId, 'builder', 'publish_skill', { skillId, version: 2 }),
         ).rejects.toBeInstanceOf(NotProposerError);
 
         const published = await call<{ status: string; version: number }>(
           ownerId,
           'owner',
           'publish_skill',
-          { skillId },
+          { skillId, version: 2 },
         );
         expect(published).toMatchObject({ status: 'published', version: 2 });
+      });
+
+      it('legacy 300: Skill — the owner reviewed v2; a v3 proposed under the same id since is not published in its place (409 version_changed)', async () => {
+        const skillId = await proposeSkill();
+        const proposeVersion = (markdown: string) =>
+          withWorkspace(pool, { workspaceId, principalId: otherBuilderId }, (client) =>
+            proposeSkillVersion(client, workspaceId, otherBuilderId, {
+              skillId,
+              name: `d24-skill-${randomUUID().slice(0, 8)}`,
+              description: 'Another builder’s version of the family.',
+              markdown,
+            }),
+          );
+        expect((await proposeVersion('# v2\n\nWhat the owner reviewed.')).version).toBe(2);
+        expect((await proposeVersion('# v3\n\nNobody reviewed this.')).version).toBe(3);
+
+        await expect(
+          call(ownerId, 'owner', 'publish_skill', { skillId, version: 2 }),
+        ).rejects.toMatchObject({ code: 'version_changed', reviewedVersion: 2, currentVersion: 3 });
+        // Nothing was published: the family's latest is still the v3 draft, and nothing is live.
+        const latest = await call<{ status: string; version: number } | null>(
+          ownerId,
+          'owner',
+          'get_skill',
+          { skillId },
+        );
+        expect(latest).toMatchObject({ status: 'draft', version: 3 });
+        const live = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          client.query<{ n: string }>(
+            `select count(*) as n from skills
+             where workspace_id = $1 and id = $2 and status = 'published'`,
+            [workspaceId, skillId],
+          ),
+        );
+        expect(live.rows[0]?.n).toBe('0');
+
+        const published = await call<{ status: string; version: number }>(
+          ownerId,
+          'owner',
+          'publish_skill',
+          { skillId, version: 3 },
+        );
+        expect(published).toMatchObject({ status: 'published', version: 3 });
+      });
+
+      it('legacy 300: Procedure — the same binding on publish_procedure', async () => {
+        const v1 = await call<{ id: string; version: number }>(
+          builderId,
+          'builder',
+          'propose_procedure',
+          { procedure: { name: 'd24-proc', description: 'v1', steps: [] } },
+        );
+        const v2 = await withWorkspace(pool, { workspaceId, principalId: builderId }, (client) =>
+          proposeProcedureVersion(client, workspaceId, builderId, {
+            procedureId: v1.id,
+            name: 'd24-proc',
+            description: 'v2 — proposed after the owner looked at v1',
+            steps: [],
+          }),
+        );
+        expect(v2.version).toBe(2);
+        await expect(
+          call(ownerId, 'owner', 'publish_procedure', { procedureId: v1.id, version: 1 }),
+        ).rejects.toMatchObject({ code: 'version_changed', reviewedVersion: 1, currentVersion: 2 });
       });
 
       it('WorkerDefinition: propose_worker_definition{definitionId} is allowed, publishing it is not; the owner may', async () => {

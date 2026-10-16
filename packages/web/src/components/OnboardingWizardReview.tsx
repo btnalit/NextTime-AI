@@ -329,12 +329,16 @@ function OperationReviewRow({
   const credentialReview = usePublishCredentialReview(`${row.gatekeeperId}:${row.name}`);
 
   async function publish(): Promise<void> {
+    // Only ever reached after this row's Submit proposed a draft (the confirm or the credential
+    // question follows it), so the digest is that draft's.
+    const draftDigest = draftDigestRef.current;
+    if (draftDigest === null) throw new Error('publish_operation: no proposed draft to publish');
     try {
       await http.call('publish_operation', {
         gatekeeperId: row.gatekeeperId,
         name: row.name,
         ...credentialReview.params(),
-        ...(draftDigestRef.current !== null ? { draftDigest: draftDigestRef.current } : {}),
+        draftDigest,
       });
     } catch (err) {
       // The kernel's credential question: the draft stays; the row asks, then Submit again.
@@ -361,9 +365,9 @@ function OperationReviewRow({
       const operation = reclassifiedOperationPayload(row, { mode, blastRadius, autoApprovable });
       const proposed = await http.call<{
         governanceChange: OperationGovernanceChangeWire | null;
-        draftDigest?: string;
+        draftDigest: string;
       }>('propose_operation', { gatekeeperId: row.gatekeeperId, operation });
-      draftDigestRef.current = proposed.draftDigest ?? null;
+      draftDigestRef.current = proposed.draftDigest;
       const change = proposed.governanceChange ?? null;
       if (change !== null && change.direction !== 'neutral') {
         setPendingChange(change);

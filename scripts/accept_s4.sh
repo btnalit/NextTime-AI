@@ -295,7 +295,7 @@ setup_one_gate() {
   # Defensive re-check: make sure every Operation of this Gatekeeper is published (see the function
   # doc comment above — expected to be a no-op on a fresh workspace).
   ops_out=$(cap "$OWNER_KEY" list_operations "{\"gatekeeperId\":\"$gk_id\"}" \
-    "d.result.items.map(o=>[o.name,o.status].map(x=>String(x).replace(/[\u0000-\u001f]/g,' ')).join('\u001f')).join('\u001e')")
+    "d.result.items.map(o=>[o.name,o.status,o.draftDigest??''].map(x=>String(x).replace(/[\u0000-\u001f]/g,' ')).join('\u001f')).join('\u001e')")
   ops_status=$(parse_kv "$ops_out" HTTP_STATUS)
   if [ "$ops_status" = "200" ]; then
     ops_records=$(parse_kv "$ops_out" EXTRACTED)
@@ -310,8 +310,11 @@ setup_one_gate() {
       [ -n "$op_rec" ] || continue
       op_n=$(field "$op_rec" 1)
       op_status=$(field "$op_rec" 2)
-      if [ "$op_status" != "published" ] && [ -n "$op_n" ]; then
-        pub_out=$(cap "$OWNER_KEY" publish_operation "{\"gatekeeperId\":\"$gk_id\",\"name\":\"$(json_escape "$op_n")\"}" "")
+      op_digest=$(field "$op_rec" 3)
+      # Only a draft can be published, and publish_operation names the draft it publishes by the
+      # draftDigest this listing returned (legacy 300) — a draft rewritten since is refused 409.
+      if [ "$op_status" = "draft" ] && [ -n "$op_n" ] && [ -n "$op_digest" ]; then
+        pub_out=$(cap "$OWNER_KEY" publish_operation "{\"gatekeeperId\":\"$gk_id\",\"name\":\"$(json_escape "$op_n")\",\"draftDigest\":\"$(json_escape "$op_digest")\"}" "")
         pub_status=$(parse_kv "$pub_out" HTTP_STATUS)
         if [ "$pub_status" = "200" ]; then
           pass "publish-operation:$gk_id:$op_n" "was $op_status, now published"

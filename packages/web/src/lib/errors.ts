@@ -576,6 +576,12 @@ export function isDraftChangedError(err: unknown): boolean {
   return describeError(err).code === 'draft_changed';
 }
 
+/** Legacy 300: a publish / install named the version the reader reviewed, and a newer one is there
+ *  now (`version_changed`) — nothing was written, and the reader needs the current one. */
+export function isVersionChangedError(err: unknown): boolean {
+  return describeError(err).code === 'version_changed';
+}
+
 /** `gatekeeper_timeout` → `Gatekeeper timeout` for codes this file has no curated title for. */
 function titleFromCode(code: string): string {
   const words = code.replace(/[_-]+/g, ' ').trim();

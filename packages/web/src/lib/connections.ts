@@ -305,3 +305,62 @@ export function cancelConnectionRequestOverrides(t: Translate): ErrorOverrides {
     Object.entries(CONNECTION_ERROR_MESSAGES).map(([code, entry]) => [code, t(entry.zh, entry.en)]),
   );
 }
+
+/** One draft as `publish_manifest` names it back: what the person's `list_operations` read said. */
+export interface DraftAsRead {
+  readonly name: string;
+  readonly draftDigest: string;
+}
+
+/** Review #493 on #592 (P2): `publish_manifest` publishes a gate's drafts only as they were read —
+ *  the kernel refuses 409 `draft_changed`, publishing nothing, when one it would publish is not in
+ *  this list or was revised since. These are one gate's draft rows of a `list_operations` read. */
+export function draftsAsRead(
+  rows: readonly {
+    readonly gatekeeperId: string;
+    readonly name: string;
+    readonly status: string;
+    readonly draftDigest?: string | undefined;
+  }[],
+  gatekeeperId: string,
+): DraftAsRead[] {
+  const drafts: DraftAsRead[] = [];
+  for (const row of rows) {
+    if (row.gatekeeperId !== gatekeeperId || row.status !== 'draft') continue;
+    if (row.draftDigest === undefined) continue;
+    drafts.push({ name: row.name, draftDigest: row.draftDigest });
+  }
+  return drafts;
+}
+
+/** What 「发布清单」 (`publish_manifest`) will do with one gate's drafts as read (review #501 on
+ *  #592, P3): it publishes the gate's own (`import`) drafts, holds back one with params only the
+ *  gate sets, and never sweeps up a proposal — an agent's or a person's draft, or a legacy row with
+ *  no origin on file — which waits for its own review in the catalog (kernel `publishManifest`). */
+export interface ManifestPublishPlan {
+  readonly publishable: readonly string[];
+  readonly proposals: readonly string[];
+  readonly gateOwned: readonly string[];
+}
+
+export function manifestPublishPlan(
+  rows: readonly {
+    readonly gatekeeperId: string;
+    readonly name: string;
+    readonly status: string;
+    readonly origin?: string | undefined;
+    readonly gateOwnedParams?: readonly unknown[] | undefined;
+  }[],
+  gatekeeperId: string,
+): ManifestPublishPlan {
+  const publishable: string[] = [];
+  const proposals: string[] = [];
+  const gateOwned: string[] = [];
+  for (const row of rows) {
+    if (row.gatekeeperId !== gatekeeperId || row.status !== 'draft') continue;
+    if (row.origin !== 'import') proposals.push(row.name);
+    else if ((row.gateOwnedParams?.length ?? 0) > 0) gateOwned.push(row.name);
+    else publishable.push(row.name);
+  }
+  return { publishable, proposals, gateOwned };
+}

@@ -282,12 +282,15 @@ describe.runIf(DATABASE_URL !== undefined)(
           markdown: `# Steps\n\nRun \`psql --password ${FAKE}\` first.`,
         },
       });
-      await expect(call('publish_skill', { skillId: proposed.id })).rejects.toMatchObject({
+      await expect(
+        call('publish_skill', { skillId: proposed.id, version: 1 }),
+      ).rejects.toMatchObject({
         code: 'credentials_review_required',
         details: { subject: 'skill', suspectedSecretValues: 1, suspectedSecretPaths: ['markdown'] },
       });
       const published = await call<{ status: string }>('publish_skill', {
         skillId: proposed.id,
+        version: 1,
         credentialsReviewed: true,
       });
       expect(published.status).toBe('published');
@@ -300,23 +303,24 @@ describe.runIf(DATABASE_URL !== undefined)(
 
     it('publish_operation: values in the definition count, a schema property named password does not', async () => {
       const clean = `cr.op.${randomUUID().slice(0, 8)}`;
-      await call('propose_operation', {
+      const cleanDraft = await call<{ draftDigest: string }>('propose_operation', {
         gatekeeperId,
         operation: testOperation(clean, 'Rotates a password.'),
       });
       const cleanPublished = await call<{ status: string }>('publish_operation', {
         gatekeeperId,
         name: clean,
+        draftDigest: cleanDraft.draftDigest,
       });
       expect(cleanPublished.status).toBe('published');
 
       const suspect = `cr.op.${randomUUID().slice(0, 8)}`;
-      await call('propose_operation', {
+      const { draftDigest } = await call<{ draftDigest: string }>('propose_operation', {
         gatekeeperId,
         operation: testOperation(suspect, `Calls the API with X-Api-Key: ${FAKE}`),
       });
       await expect(
-        call('publish_operation', { gatekeeperId, name: suspect }),
+        call('publish_operation', { gatekeeperId, name: suspect, draftDigest }),
       ).rejects.toMatchObject({
         code: 'credentials_review_required',
         details: { subject: 'operation', suspectedSecretValues: 1 },
@@ -324,6 +328,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const published = await call<{ status: string }>('publish_operation', {
         gatekeeperId,
         name: suspect,
+        draftDigest,
         credentialsReviewed: true,
       });
       expect(published.status).toBe('published');
@@ -335,7 +340,10 @@ describe.runIf(DATABASE_URL !== undefined)(
 
     it('publish_operation: a proposer revising the draft in place while the publish runs cannot slip unchecked content through', async () => {
       const name = `cr.op.${randomUUID().slice(0, 8)}`;
-      await call('propose_operation', { gatekeeperId, operation: testOperation(name, 'Clean.') });
+      const reviewed = await call<{ draftDigest: string }>('propose_operation', {
+        gatekeeperId,
+        operation: testOperation(name, 'Clean.'),
+      });
 
       // Revision transaction: rewrites the same draft (same version) with a credential and holds
       // its row lock until released.
@@ -368,8 +376,14 @@ describe.runIf(DATABASE_URL !== undefined)(
       await revisedP;
 
       // The publish starts while the revision is uncommitted: it must wait for that row, then see
-      // (and count) the revised content — not publish it on the strength of the clean read.
-      const publish = call('publish_operation', { gatekeeperId, name }).then(
+      // the revised content — not publish it on the strength of the clean read. It names the clean
+      // draft it reviewed (legacy 300: `draftDigest` is required), so what it sees is refused as
+      // not the draft reviewed.
+      const publish = call('publish_operation', {
+        gatekeeperId,
+        name,
+        draftDigest: reviewed.draftDigest,
+      }).then(
         (value) => ({ ok: true as const, value }),
         (error: unknown) => ({ ok: false as const, error }),
       );
@@ -387,10 +401,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       const outcome = await publish;
       expect(outcome.ok).toBe(false);
-      expect(outcome.ok ? null : outcome.error).toMatchObject({
-        code: 'credentials_review_required',
-        details: { subject: 'operation', suspectedSecretValues: 1 },
-      });
+      expect(outcome.ok ? null : outcome.error).toMatchObject({ code: 'draft_changed' });
       const status = await admin((client) =>
         client.query<{ status: string }>(
           `select properties ->> 'status' as status from objects

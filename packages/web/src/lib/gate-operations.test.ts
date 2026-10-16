@@ -25,12 +25,13 @@ describe('operationChoices', () => {
         op({ name: 'inspect', mode: 'observe' }),
       ]),
     ).toEqual([
-      { name: 'inspect', blastRadius: 'low', gateCount: 1 },
+      { name: 'inspect', blastRadius: 'low', gateCount: 1, version: 1 },
       {
         name: 'restart',
         blastRadius: 'medium',
         description: 'Restart a container',
         gateCount: 1,
+        version: 1,
       },
     ]);
   });
@@ -44,8 +45,9 @@ describe('operationChoices', () => {
         op({ gatekeeperId: 'gk-2', name: 'inspect' }),
       ]),
     ).toEqual([
-      { name: 'inspect', blastRadius: 'low', gateCount: 2 },
-      { name: 'restart', blastRadius: null, gateCount: 2 },
+      // Legacy 218: a version names one gate's Operation, so folded names carry none.
+      { name: 'inspect', blastRadius: 'low', gateCount: 2, version: null },
+      { name: 'restart', blastRadius: null, gateCount: 2, version: null },
     ]);
   });
 });

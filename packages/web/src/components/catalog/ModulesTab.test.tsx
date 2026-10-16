@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { WorkspaceModuleWire } from '@nexttime/shared';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { PermissionsProvider } from '../../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
@@ -42,5 +42,40 @@ describe('ModulesTab', () => {
     const banner = await screen.findByTestId('catalog-module-error-knowledge');
     expect(banner.textContent).toContain('重名');
     expect(banner.textContent).toContain('ontology_namespace_conflict');
+  });
+
+  it('legacy 300: install names the version the row offered; a newer one since installs nothing, says so and reloads', async () => {
+    const sent: unknown[] = [];
+    let listed = 0;
+    const http: CapabilityCaller = {
+      call: <T,>(name: string, params?: unknown): Promise<T> => {
+        if (name === 'list_workspace_modules') {
+          listed += 1;
+          return Promise.resolve({ items: [KNOWLEDGE] } as T);
+        }
+        sent.push({ name, params });
+        return Promise.reject(
+          new HttpError(
+            'capability_error',
+            'install_module: module knowledge is at v2 now, not the v1 that was reviewed',
+            'version_changed',
+          ),
+        );
+      },
+    };
+    render(
+      <PermissionsProvider>
+        <ModulesTab http={http} />
+      </PermissionsProvider>,
+    );
+
+    fireEvent.click(await screen.findByTestId('catalog-module-action-knowledge'));
+
+    const banner = await screen.findByTestId('catalog-module-error-knowledge');
+    expect(banner.textContent).toContain('在你查看之后它有了新版本，本次没有写入任何内容');
+    expect(sent.filter((call) => (call as { name: string }).name.endsWith('_module'))).toEqual([
+      { name: 'install_module', params: { name: 'knowledge', version: 1 } },
+    ]);
+    await waitFor(() => expect(listed).toBe(2));
   });
 });

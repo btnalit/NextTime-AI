@@ -4,6 +4,7 @@ import { invalidateCapability, useCapabilityList } from '../../hooks/useCapabili
 import { usePermissions } from '../../hooks/usePermissions.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { isVersionChangedError } from '../../lib/errors.js';
 import { useT } from '../../lib/i18n.js';
 import { Confirm } from '../kit/confirm.js';
 import { DashboardCard } from '../kit/section.js';
@@ -90,17 +91,24 @@ export function ModulesTab({ http }: ModulesTabProps) {
     setPending(name);
     setRowError((prev) => ({ ...prev, [name]: undefined }));
     try {
-      const capability =
-        rows.find((m) => m.name === name)?.status === 'not_installed'
-          ? 'install_module'
-          : 'upgrade_module';
-      await http.call(capability, confirm ? { name, confirm: true } : { name });
+      const shown = rows.find((m) => m.name === name);
+      if (!shown) throw new Error(`module ${name} is not in the list shown`);
+      const capability = shown.status === 'not_installed' ? 'install_module' : 'upgrade_module';
+      // Legacy 300: the version this row offered — the kernel refuses 409 `version_changed` when
+      // the latest indexed version is another one by now, and nothing is installed.
+      await http.call(capability, {
+        name,
+        version: shown.latestVersion,
+        ...(confirm ? { confirm: true } : {}),
+      });
       permissions.markAllowed(capability);
       reload();
     } catch (err) {
       // I-P1 `ontology_namespace_conflict` (and any other mapped code) reads as its own sentence
       // (`ErrorBanner` → `lib/errors.ts` `presentError`), the kernel's text under 「技术细节」.
       setRowError((prev) => ({ ...prev, [name]: err }));
+      // The inline error says it was reloaded: show the version offered now.
+      if (isVersionChangedError(err)) reload();
       throw err;
     } finally {
       setPending(null);

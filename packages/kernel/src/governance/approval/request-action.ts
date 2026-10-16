@@ -239,7 +239,13 @@ export async function requestAction(
     mcpTrustBlocked: input.mcpTrustBlocked,
     paramsCarrySuspectedSecrets:
       countSuspectedSecrets(input.params ?? {}, { secretFields: true }) > 0,
-    workspacePolicy: policyRow ? toPolicyEvaluationInput(policyRow) : undefined,
+    // Legacy 218: an "always allow" applies only to the definition it was given for.
+    workspacePolicy: policyRow
+      ? toPolicyEvaluationInput(policyRow, {
+          operationDigest: input.operationDigest,
+          blastRadius: input.blastRadius,
+        })
+      : undefined,
     requesterScope: input.requesterScope,
     principalAutoApproveLowEnabled: input.principalAutoApproveLowEnabled,
   });

@@ -223,6 +223,29 @@ async function assertPersonDecidesWhenRequired(
   }
 }
 
+/**
+ * Whether `approver` may approve `request` — the same gates `approveActionRequest` applies before
+ * any approve-specific requirement (reason, credential confirmation, transition): the self-approval
+ * rule (`requesterCanApprove`), I14 scope, and R-17 "a person decides". Exported for every other
+ * entry point whose effect is an approval (legacy 218: "always allow", ticked on a request, must
+ * not let someone allow what they could not approve). Throws as `approveActionRequest` does.
+ */
+export async function assertMayApprove(
+  client: PoolClient,
+  workspaceId: string,
+  approver: { readonly principalId: string; readonly role: Role },
+  request: ActionRequestRow,
+): Promise<void> {
+  await assertApproverScope(client, workspaceId, approver, request);
+  await assertPersonDecidesWhenRequired(
+    client,
+    workspaceId,
+    approver.principalId,
+    request,
+    'approve',
+  );
+}
+
 /** Throws `ApprovalScopeError` (403) if the approver does not hold the required scope (or, as its
  *  `HumanDecisionRequiredError` subclass, is not a person and the row needs one — R-17),
  *  `ActionRequestNotFoundError` (404) if the id does not resolve, or `IllegalTransition` (409,
@@ -238,20 +261,13 @@ export async function approveActionRequest(
     workspaceId,
     input.actionRequestId,
   );
-  await assertApproverScope(
+  // Self-approval, I14 scope, then R-17 — before the reason gate, so a service Principal is not
+  // told to add a reason it still could not use.
+  await assertMayApprove(
     client,
     workspaceId,
     { principalId: input.approverPrincipalId, role: input.approverRole },
     existing,
-  );
-  // R-17: before the reason gate, so a service Principal is not told to add a reason it still
-  // could not use.
-  await assertPersonDecidesWhenRequired(
-    client,
-    workspaceId,
-    input.approverPrincipalId,
-    existing,
-    'approve',
   );
 
   // S6-A C25 (docs/console-completion-plan.md §12 item 6): high blast radius needs a stated

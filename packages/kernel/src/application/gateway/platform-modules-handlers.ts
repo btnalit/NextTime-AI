@@ -141,7 +141,7 @@ async function runInstallOrUpgrade(
   readonly resourceType: string;
   readonly resourceId: string;
 }> {
-  const input = params as { name: string; confirm?: boolean };
+  const input = params as { name: string; confirm?: boolean; version: number };
   if (!context?.principalId) {
     throw new Error('install_module/upgrade_module: no calling principal in context');
   }

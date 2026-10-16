@@ -87,6 +87,7 @@ import {
   GrantNotFoundError,
   HandleIssuanceError,
   NotProposerError,
+  ReviewedVersionChangedError,
   ScopeValidationError,
 } from '../../governance/capability/index.js';
 import {
@@ -363,6 +364,10 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   }
   // Review #493 on #583: mirrors HTTP 409 `draft_changed` (capability-route.ts).
   if (err instanceof OperationDraftChangedError) {
+    return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
+  }
+  // Legacy 300: mirrors HTTP 409 `version_changed` (capability-route.ts).
+  if (err instanceof ReviewedVersionChangedError) {
     return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
   }
   // R-60 `publish_ontology_version`: mirrors HTTP 409 `ontology_base_moved` (capability-route.ts).

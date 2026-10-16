@@ -149,7 +149,7 @@ export const publishOperationHandler: CapabilityHandler = async (
     gatekeeperId: string;
     name: string;
     credentialsReviewed?: boolean;
-    draftDigest?: string;
+    draftDigest: string;
   };
   // D-24: the draft's proposer or the owner (checked on the row being published).
   const actor = { ...publishActorOf('publish_operation', ctx), credentialsReviewed };
@@ -157,7 +157,7 @@ export const publishOperationHandler: CapabilityHandler = async (
     gatekeeperId,
     name,
     actor,
-    ...(draftDigest !== undefined ? { draftDigest } : {}),
+    draftDigest,
   });
 
   const activity = await startActivity(client, workspaceId, {
@@ -308,15 +308,19 @@ export const updateOperationDescriptionHandler: CapabilityHandler = async (
   };
 };
 
-/** `publish_manifest(gatekeeperId)` — publishes every `origin: 'import'` draft Operation of one
- *  Gatekeeper instance (`governance/gatekeepers`'s `publishManifest`); agent/human proposals stay
+/** `publish_manifest(gatekeeperId, drafts)` — publishes every `origin: 'import'` draft Operation of
+ *  one Gatekeeper instance (`governance/gatekeepers`'s `publishManifest`), each only as the caller
+ *  read it (`drafts`; 409 `draft_changed` otherwise); agent/human proposals stay
  *  drafts and are listed in `skippedDraftOperationNames`. Empty `publishedOperationNames` (no
  *  import drafts to publish) is a successful, not an error, result — the same "nothing to do"
  *  tolerance `deprecateOperation`'s own transition table would otherwise reject one-at-a-time; a
  *  bulk call over zero rows is trivially a no-op. */
 export const publishManifestHandler: CapabilityHandler = async (client, workspaceId, params) => {
-  const { gatekeeperId } = params as { gatekeeperId: string };
-  const published = await publishManifest(client, workspaceId, { gatekeeperId });
+  const { gatekeeperId, drafts } = params as {
+    gatekeeperId: string;
+    drafts: readonly { name: string; draftDigest: string }[];
+  };
+  const published = await publishManifest(client, workspaceId, { gatekeeperId, drafts });
   return {
     result: {
       gatekeeperId,

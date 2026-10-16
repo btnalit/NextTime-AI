@@ -1,11 +1,17 @@
-import type { PublishManifestResultWire } from '@nexttime/shared';
+import type { OperationSummaryWire, PublishManifestResultWire } from '@nexttime/shared';
 import { useState } from 'react';
 import type { CapabilityCaller } from '../lib/clients.js';
 import {
   CONNECTION_KIND_VALUES,
   type ConnectionKind,
   type CreateConnectionResult,
+  type DraftAsRead,
+  type ManifestPublishPlan,
+  draftsAsRead,
+  manifestPublishPlan,
 } from '../lib/connections.js';
+import { isDraftChangedError } from '../lib/errors.js';
+import { actionKindTagText } from '../lib/format.js';
 import { type Translate, useT } from '../lib/i18n.js';
 import { transportKindLabel } from '../lib/labels.js';
 import { CompleteConnectionForm } from './CompleteConnectionForm.js';
@@ -80,20 +86,43 @@ export function OnboardingWizard({ http, onCancel, onFinished }: OnboardingWizar
   const [publishing, setPublishing] = useState(false);
   const [publishError, setPublishError] = useState<unknown | null>(null);
   const [published, setPublished] = useState<PublishManifestResultWire | null>(null);
+  // Review #493 on #592: the drafts step ③ lists, as read — exactly what 「发布清单」 publishes.
+  const [drafts, setDrafts] = useState<readonly DraftAsRead[] | null>(null);
+  const [plan, setPlan] = useState<ManifestPublishPlan | null>(null);
+  const [draftsError, setDraftsError] = useState<unknown | null>(null);
+
+  async function loadDrafts(gatekeeperId: string): Promise<void> {
+    setDrafts(null);
+    setPlan(null);
+    setDraftsError(null);
+    try {
+      const result = await http.call<{ readonly items: readonly OperationSummaryWire[] }>(
+        'list_operations',
+        { gatekeeperId },
+      );
+      setDrafts(draftsAsRead(result.items, gatekeeperId));
+      setPlan(manifestPublishPlan(result.items, gatekeeperId));
+    } catch (err) {
+      setDraftsError(err);
+    }
+  }
 
   async function publish(): Promise<void> {
-    if (!connection) return;
+    if (!connection || drafts === null) return;
     setPublishing(true);
     setPublishError(null);
     try {
       setPublished(
         await http.call<PublishManifestResultWire>('publish_manifest', {
           gatekeeperId: connection.gatekeeperId,
+          drafts,
         }),
       );
       setStep('review');
     } catch (err) {
       setPublishError(err);
+      // A draft changed after the list below was read: nothing was published; show what is there now.
+      if (isDraftChangedError(err)) void loadDrafts(connection.gatekeeperId);
     } finally {
       setPublishing(false);
     }
@@ -156,6 +185,7 @@ export function OnboardingWizard({ http, onCancel, onFinished }: OnboardingWizar
             onDone={(result) => {
               setConnection(result);
               setStep('publish');
+              void loadDrafts(result.gatekeeperId);
             }}
           />
         </div>
@@ -183,6 +213,46 @@ export function OnboardingWizard({ http, onCancel, onFinished }: OnboardingWizar
               </>,
             )}
           </Notice>
+          {drafts !== null && plan !== null ? (
+            <div className="stack" data-testid="wizard-publish-drafts">
+              <span className="field-label" data-testid="wizard-publish-count">
+                {t(
+                  `「发布清单」会发布这 ${plan.publishable.length} 个草稿：`,
+                  `Publish manifest publishes these ${plan.publishable.length} drafts:`,
+                )}
+              </span>
+              <ul className="m-0 flex list-none flex-wrap gap-2 p-0">
+                {plan.publishable.map((name) => (
+                  <li key={name}>
+                    <code>{actionKindTagText(name)}</code>
+                  </li>
+                ))}
+              </ul>
+              {plan.proposals.length > 0 ? (
+                <p className="field-hint" data-testid="wizard-publish-proposals">
+                  {t(
+                    `另有 ${plan.proposals.length} 个提议草稿会被跳过：${plan.proposals.map(actionKindTagText).join('、')}。它们不是门自己声明的，而是智能体或成员提议的，要在能力目录里逐个审阅后发布，不会被整份清单一起发布。`,
+                    `${plan.proposals.length} proposed draft(s) will be skipped: ${plan.proposals.map(actionKindTagText).join(', ')}. The gate did not declare them; an agent or a member proposed them, so each is reviewed and published on its own in the catalog, never with the whole manifest.`,
+                  )}
+                </p>
+              ) : null}
+              {plan.gateOwned.length > 0 ? (
+                <p className="field-hint" data-testid="wizard-publish-gate-owned">
+                  {t(
+                    `另有 ${plan.gateOwned.length} 个草稿暂不发布：${plan.gateOwned.map(actionKindTagText).join('、')}。它们声明了只能由门设置的参数，发布后的结果页会说明怎么处理。`,
+                    `${plan.gateOwned.length} draft(s) are held back: ${plan.gateOwned.map(actionKindTagText).join(', ')}. They declare params only the gate sets; the result page after publishing says what to do.`,
+                  )}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+          {draftsError !== null ? (
+            <ErrorBanner
+              error={draftsError}
+              title={t('无法读取导入的草稿', 'Could not read the imported drafts')}
+              onRetry={() => void loadDrafts(connection.gatekeeperId)}
+            />
+          ) : null}
           {publishError !== null ? (
             <ErrorBanner
               error={publishError}
@@ -193,7 +263,13 @@ export function OnboardingWizard({ http, onCancel, onFinished }: OnboardingWizar
             <Button variant="ghost" onClick={() => setStep('review')}>
               {t('暂不发布，稍后再说', 'Skip for now')}
             </Button>
-            <Button variant="primary" loading={publishing} onClick={() => void publish()}>
+            {/* ux-lint-allow-disabled: the draft list above is still loading, or its read failed (the banner says so). */}
+            <Button
+              variant="primary"
+              loading={publishing}
+              disabled={drafts === null}
+              onClick={() => void publish()}
+            >
               {t('发布清单', 'Publish manifest')}
             </Button>
           </div>

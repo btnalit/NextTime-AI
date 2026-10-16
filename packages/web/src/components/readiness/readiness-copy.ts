@@ -1,4 +1,5 @@
 import {
+  type DefinitionMismatchWire,
   type ExecutionReadinessMissingWire,
   type GateUnreachableReason,
   type Role,
@@ -25,6 +26,32 @@ import { type CatalogTab, hrefs } from '../../lib/router.js';
  * needs.
  */
 export type GateNameLookup = ReadonlyMap<string, string>;
+
+/** Legacy 301: what a gate's refused Operations (`definitionMismatch`) have in common — it runs
+ *  another definition for them (`changed`), it no longer provides them at all (`dropped`,
+ *  `droppedByGate`), or some of each (`mixed`). `definition_mismatch` copy says which: a gate that
+ *  dropped everything is not "running another definition" (the drawer's own notice already says
+ *  「门已经不再提供」). */
+export type RefusalKind = 'changed' | 'dropped' | 'mixed';
+
+export function refusalKind(entries: readonly DefinitionMismatchWire[]): RefusalKind {
+  const dropped = entries.filter((entry) => entry.droppedByGate === true).length;
+  if (dropped === 0) return 'changed';
+  return dropped === entries.length ? 'dropped' : 'mixed';
+}
+
+/** Per gate id, `refusalKind` of its `definitionMismatch` — from the same `execution_readiness`
+ *  response's own `gates[]`, like `GateNameLookup`. */
+export type RefusalKindLookup = ReadonlyMap<string, RefusalKind>;
+
+export function refusalKindsOf(
+  gates: readonly {
+    readonly gateId: string;
+    readonly definitionMismatch: readonly DefinitionMismatchWire[];
+  }[],
+): RefusalKindLookup {
+  return new Map(gates.map((gate) => [gate.gateId, refusalKind(gate.definitionMismatch)]));
+}
 
 const CATALOG_WORKERS_TAB: CatalogTab = 'workers';
 
@@ -191,6 +218,7 @@ export function missingCauseText(
   item: ExecutionReadinessMissingWire,
   gateNames: GateNameLookup,
   t: Translate,
+  refusalKinds?: RefusalKindLookup,
 ): string {
   switch (item.code) {
     case 'no_enabled_gate':
@@ -261,6 +289,29 @@ export function missingCauseText(
     }
     case 'definition_mismatch': {
       const name = item.gateId ? gateNames.get(item.gateId) : undefined;
+      const kind = item.gateId ? refusalKinds?.get(item.gateId) : undefined;
+      if (kind === 'dropped') {
+        return name
+          ? t(
+              `门「${name}」已不再提供其中一些已发布的操作，对它们的调用正被拒绝。`,
+              `The “${name}” gate no longer provides some of its published operations, so calls to them are refused.`,
+            )
+          : t(
+              '有系统已不再提供一些已发布的操作，对它们的调用正被拒绝。',
+              'A system no longer provides some of its published operations, so calls to them are refused.',
+            );
+      }
+      if (kind === 'mixed') {
+        return name
+          ? t(
+              `门「${name}」已不再提供其中一些已发布的操作，另一些运行的定义和已发布的不一样，对它们的调用正被拒绝。`,
+              `The “${name}” gate no longer provides some of its published operations and runs another definition for others, so calls to them are refused.`,
+            )
+          : t(
+              '有系统已不再提供一些已发布的操作，另一些运行的定义和已发布的不一样，对它们的调用正被拒绝。',
+              'A system no longer provides some of its published operations and runs another definition for others, so calls to them are refused.',
+            );
+      }
       return name
         ? t(
             `门「${name}」运行的定义和已发布的不一样，对其中的操作调用正被拒绝。`,
@@ -339,6 +390,8 @@ export function gateReasonText(
   reason: GateUnreachableReason | undefined,
   t: Translate,
   about: ReasonSubject = 'me',
+  /** `definition_mismatch` only: `refusalKind` of the gate's `definitionMismatch` (legacy 301). */
+  refusal: RefusalKind = 'changed',
 ): string {
   if (about === 'them') {
     if (reason === 'not_granted') {
@@ -380,6 +433,18 @@ export function gateReasonText(
         'A platform administrator disabled operations on this system under Platform · Integrations — a workspace cannot fix this.',
       );
     case 'definition_mismatch':
+      if (refusal === 'dropped') {
+        return t(
+          '门已不再提供这个系统已发布的操作，对它们的调用正被拒绝。',
+          'The gate no longer provides this system’s published operations, so calls to them are refused.',
+        );
+      }
+      if (refusal === 'mixed') {
+        return t(
+          '门已不再提供其中一些已发布的操作，其余运行的定义和已发布的不一样，对它们的调用正被拒绝。',
+          'The gate no longer provides some of the published operations and runs another definition for the rest, so calls to them are refused.',
+        );
+      }
       return t(
         '门运行的定义和已发布的不一样，对它的调用正被拒绝。',
         'The gate runs another definition than the published one, so calls to it are refused.',

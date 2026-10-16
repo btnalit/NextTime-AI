@@ -14,7 +14,7 @@ import { QUOTA_KEY_INFO, type QuotaKey } from '../lib/quotas.js';
 import { AgentPolicyForm } from './AgentPolicyForm.js';
 import { ModelsTable } from './ModelsTable.js';
 import { nameOf, useGatekeeperDirectory } from './approvals/useDirectoryNames.js';
-import { PolicyEditSheet } from './governance/PolicyEditSheet.js';
+import { PolicyEditSheet, suspendedText } from './governance/PolicyEditSheet.js';
 import { QuotaEditSheet } from './governance/QuotaEditSheet.js';
 import { Button } from './kit/button.js';
 import { DataTable, type DataTableColumn } from './kit/data-table.js';
@@ -171,16 +171,49 @@ function policyColumns(
         ),
     },
     {
+      // Legacy 218: an "always allow" covers the definition it was given for; one given for an
+      // earlier version (or written before that was recorded) is suspended until reconfirmed.
       id: 'autoApprove',
       header: t('自动批准', 'Auto-approve'),
-      cell: (policy) => (
-        <span
-          className={`chip chip-s ${policy.autoApprove ? 'chip-ok' : 'chip-warn'}`}
-          data-testid="policy-auto-approve"
-        >
-          {policy.autoApprove ? t('自动批准', 'auto') : t('需审批', 'requires approval')}
-        </span>
-      ),
+      cell: (policy) => {
+        if (policy.autoApprove && policy.autoApproveConsent !== 'current') {
+          return (
+            <span
+              className="chip chip-s chip-warn"
+              title={suspendedText(policy, t)}
+              data-testid="policy-auto-approve"
+              data-consent={policy.autoApproveConsent}
+            >
+              {isOrphaned(policy)
+                ? t('已暂停 · 已不再发布', 'suspended · no longer published')
+                : policy.autoApproveConsent === 'not_recorded'
+                  ? t('已暂停 · 待确认版本', 'suspended · version unconfirmed')
+                  : t('已暂停 · 定义已变', 'suspended · definition changed')}
+            </span>
+          );
+        }
+        return (
+          <span
+            className={`chip chip-s ${policy.autoApprove ? 'chip-ok' : 'chip-warn'}`}
+            title={
+              policy.autoApprove && policy.operationVersion !== null
+                ? t(
+                    `对门上发布的 v${policy.operationVersion} 自动批准`,
+                    `Auto-approves v${policy.operationVersion} as published on the gate`,
+                  )
+                : undefined
+            }
+            data-testid="policy-auto-approve"
+            data-consent={policy.autoApproveConsent}
+          >
+            {policy.autoApprove
+              ? policy.operationVersion !== null
+                ? t(`自动批准 · v${policy.operationVersion}`, `auto · v${policy.operationVersion}`)
+                : t('自动批准', 'auto')
+              : t('需审批', 'requires approval')}
+          </span>
+        );
+      },
     },
     {
       id: 'requesterCanApprove',
@@ -213,18 +246,78 @@ function policyColumns(
             priority: 'high' as const,
             cell: (policy: PolicyWire) => (
               <Button
-                variant="secondary"
+                variant={isSuspended(policy) && !isOrphaned(policy) ? 'primary' : 'secondary'}
                 size="s"
                 onClick={() => options.onEdit(policy)}
                 data-testid={`policy-edit-${policy.id}`}
               >
-                {t('编辑', 'Edit')}
+                {isOrphaned(policy)
+                  ? t('停用', 'Turn off')
+                  : isSuspended(policy)
+                    ? t('重新确认', 'Reconfirm')
+                    : t('编辑', 'Edit')}
               </Button>
             ),
           },
         ]
       : []),
   ];
+}
+
+/** Legacy 218: an "always allow" given for another definition (or none on record). */
+function isSuspended(policy: PolicyWire): boolean {
+  return policy.autoApprove && policy.autoApproveConsent !== 'current';
+}
+
+/** Review #501 on #592 (P2-2): suspended, and the gate no longer publishes the Operation at all —
+ *  nothing to reconfirm, only to turn off. */
+function isOrphaned(policy: PolicyWire): boolean {
+  return (
+    isSuspended(policy) && policy.gatekeeperId !== null && policy.publishedOperationVersion === null
+  );
+}
+
+/** Legacy 218: how many "always allow" rules are suspended because the definition they were
+ *  given for is no longer the one published (or was never recorded), and who can reconfirm them. */
+function SuspendedPoliciesNotice({
+  items,
+  isOwner,
+}: {
+  readonly items: readonly PolicyWire[];
+  readonly isOwner: boolean;
+}) {
+  const t = useT();
+  const suspended = items.filter(isSuspended);
+  const orphaned = suspended.filter(isOrphaned).length;
+  const count = suspended.length - orphaned;
+  if (suspended.length === 0) return null;
+  return (
+    <Notice tone="warn" testId="policies-suspended">
+      {count > 0
+        ? isOwner
+          ? t(
+              `有 ${count} 条「始终允许」已暂停：它们允许的版本已不是门上现在发布的版本，相关请求重新走审批。看过新版本后，点该行的「重新确认」。`,
+              `${count} “Always allow” rule(s) are suspended: the version they allow is no longer the one the gate publishes, so those requests go back through approval. Once you have looked at the new version, use “Reconfirm” on the row.`,
+            )
+          : t(
+              `有 ${count} 条「始终允许」已暂停：它们允许的版本已不是门上现在发布的版本，相关请求重新走审批。需要工作区所有者重新确认；在那个门上有审批权的人，批准新版本的请求时也可以再选「始终允许」。`,
+              `${count} “Always allow” rule(s) are suspended: the version they allow is no longer the one the gate publishes, so those requests go back through approval. The workspace owner can reconfirm them; whoever may approve on that gate can also choose “Always allow” again when approving a request under the new version.`,
+            )
+        : null}
+      {count > 0 && orphaned > 0 ? ' ' : null}
+      {orphaned > 0
+        ? isOwner
+          ? t(
+              `有 ${orphaned} 条「始终允许」对应的 Operation 已不再发布，无法重新确认：点该行的「停用」，把它改为要求审批。`,
+              `${orphaned} “Always allow” rule(s) name an Operation that is no longer published, so they cannot be reconfirmed: use “Turn off” on the row to make them require approval.`,
+            )
+          : t(
+              `有 ${orphaned} 条「始终允许」对应的 Operation 已不再发布，已失效；工作区所有者可以停用它们。`,
+              `${orphaned} “Always allow” rule(s) name an Operation that is no longer published and no longer apply; the workspace owner can turn them off.`,
+            )
+        : null}
+    </Notice>
+  );
 }
 
 export interface ModelsPageProps {
@@ -481,19 +574,22 @@ export function ModelsPage({ http }: ModelsPageProps) {
               testId="policies-empty"
             />
           ) : (
-            <DataTable
-              columns={policyColumns(t, {
-                canManage: isOwner,
-                onEdit: (row) => setPolicyEditor({ kind: 'edit', row }),
-                gateNames: gatekeepers.names,
-              })}
-              data={policies.state.data.items}
-              getRowId={(policy) => policy.id}
-              ariaLabel="Policies"
-              testId="policies-table"
-              rowTestId={(policy) => `policy-row-${policy.id}`}
-              rowDataAttrs={(policy) => ({ 'data-policy-id': policy.id })}
-            />
+            <>
+              <SuspendedPoliciesNotice items={policies.state.data.items} isOwner={isOwner} />
+              <DataTable
+                columns={policyColumns(t, {
+                  canManage: isOwner,
+                  onEdit: (row) => setPolicyEditor({ kind: 'edit', row }),
+                  gateNames: gatekeepers.names,
+                })}
+                data={policies.state.data.items}
+                getRowId={(policy) => policy.id}
+                ariaLabel="Policies"
+                testId="policies-table"
+                rowTestId={(policy) => `policy-row-${policy.id}`}
+                rowDataAttrs={(policy) => ({ 'data-policy-id': policy.id })}
+              />
+            </>
           )}
         </DashboardCard>
       ) : null}

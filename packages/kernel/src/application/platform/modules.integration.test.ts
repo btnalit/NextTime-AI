@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { withPlatform } from '../../adapters/db/platform-context.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import { ReviewedVersionChangedError } from '../../governance/capability/index.js';
 import { deriveOntologyPackId, publishOntologyDomainPack } from '../../substrate/ontology/index.js';
 import { withAdminClient } from '../gateway/auth.js';
 import { createWorkspaceWithOwner } from '../workspace/create.js';
@@ -127,7 +128,7 @@ describe.runIf(DATABASE_URL !== undefined)('modules (integration, real Postgres)
   async function install(
     workspaceId: string,
     principalId: string,
-    input: { readonly name: string; readonly confirm?: boolean },
+    input: { readonly name: string; readonly confirm?: boolean; readonly version?: number },
   ) {
     return inWorkspace(workspaceId, principalId, (client) =>
       installOrUpgradeModule(client, workspaceId, principalId, registry, input, fixtureDir),
@@ -252,6 +253,23 @@ describe.runIf(DATABASE_URL !== undefined)('modules (integration, real Postgres)
     const state = await install(workspaceId, principalId, { name: 'test-mod', confirm: true });
     expect(state.installedVersion).toBe(4);
     expect(state.status).toBe('up_to_date');
+  });
+
+  it('legacy 300: the version the owner was offered must still be the latest — otherwise nothing is installed (409 version_changed)', async () => {
+    const { workspaceId, principalId } = await newWorkspace('modules-reviewed-version');
+    await expect(
+      install(workspaceId, principalId, { name: 'test-mod', version: 3 }),
+    ).rejects.toThrow(ReviewedVersionChangedError);
+    const rows = await inWorkspace(workspaceId, principalId, (client) =>
+      client.query('select 1 from ontology_versions where workspace_id = $1 and id = $2', [
+        workspaceId,
+        deriveOntologyPackId('test-mod'),
+      ]),
+    );
+    expect(rows.rows).toHaveLength(0);
+
+    const state = await install(workspaceId, principalId, { name: 'test-mod', version: 4 });
+    expect(state).toMatchObject({ installedVersion: 4, status: 'up_to_date' });
   });
 
   it('D3: a confirm-required error is a ModuleConfirmRequiredError instance', async () => {

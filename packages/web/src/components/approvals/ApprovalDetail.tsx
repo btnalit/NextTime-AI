@@ -1,6 +1,11 @@
 import { useId, useRef, useState } from 'react';
 import { useCanOpen } from '../../hooks/useCanOpen.js';
 import { isDecidable } from '../../lib/action-card.js';
+import {
+  alwaysAllowOffer,
+  alwaysAllowStaleRequestText,
+  alwaysAllowUnpublishedText,
+} from '../../lib/always-allow.js';
 import { auditHref } from '../../lib/audit.js';
 import { credentialReviewCount, credentialReviewPaths } from '../../lib/credential-review.js';
 import {
@@ -46,6 +51,10 @@ export interface ApprovalDetailProps {
   /** `false` hides "总是允许" — `set_auto_approved_action_kind` is operator+, and the session has
    *  already been told 403 for it (hooks/usePermissions). */
   readonly canAlwaysAllow: boolean;
+  /** The reader's own principal (`hooks/useWorkspaceIdentity`), when known — a request made on
+   *  their behalf that may not be self-approved gets no decision controls (kernel decide.ts
+   *  `SelfApprovalNotAllowedError`, which refuses reject as well as approve). */
+  readonly callerPrincipalId?: string | null;
   /** The confirmed decision — throws so the confirm stays open with the kernel's error (awaited
    *  so the direct low/medium Approve's own button shows busy while it is in flight). */
   readonly onApprove: (input: ApprovalDecisionInput) => Promise<void>;
@@ -93,6 +102,7 @@ export function ApprovalDetail({
   principalNames,
   gatekeeperNames,
   canAlwaysAllow,
+  callerPrincipalId,
   onApprove,
   onReject,
   error,
@@ -110,12 +120,30 @@ export function ApprovalDetail({
 
   const decidable = isDecidable(row.status);
   const blocking = row.awaitDecision && decidable;
+  // Dead-end sweep of #592: the kernel refuses both decisions from the requester themselves when
+  // the policy says requesters may not approve (`requesterCanApprove === false`; a high blast
+  // radius by default) — the owner is not exempt. Say whose decision it is instead of offering
+  // buttons that can only fail.
+  const ownRequestLocked =
+    decidable &&
+    row.requesterCanApprove === false &&
+    callerPrincipalId !== undefined &&
+    callerPrincipalId !== null &&
+    row.onBehalfOf === callerPrincipalId;
   const decided = row.decidedBy !== undefined && row.decidedBy !== null;
   const decisionReason = row.decisionReason ?? null;
   const reasonRequired = row.blastRadius === 'high';
   // R-20 / D-15: a `high` blast radius is never auto-approved (kernel I8 refuses the rule too), so
   // there is no rule to offer — the chat card already hid it.
-  const offerAlwaysAllow = canAlwaysAllow && row.blastRadius !== 'high';
+  // Legacy 218 (UX acceptance of #592): "总是允许" allows the definition this request was made
+  // against, and only while it is the one published (`lib/always-allow`). A request made under an
+  // earlier one, or on an Operation with no published version, gets no offer (the kernel would
+  // write no rule: 409 / 404), and the page says why — never an option refused after it is clicked.
+  const alwaysAllowPossible = canAlwaysAllow && row.blastRadius !== 'high';
+  const { offer, block, coveredVersion } = alwaysAllowOffer(row.publishedDefinition);
+  const offerAlwaysAllow = alwaysAllowPossible && offer;
+  const alwaysAllowBlock = alwaysAllowPossible ? block : null;
+  const publishedVersion = row.publishedDefinition?.version ?? null;
   const alwaysAllowChosen = offerAlwaysAllow && alwaysAllow;
   const gateName = nameOf(gatekeeperNames, row.gatekeeperId) ?? row.gatekeeperId;
   // The kernel's count (the wire row's, else its 400 on a first attempt) — never the console's own.
@@ -350,7 +378,7 @@ export function ApprovalDetail({
 
       <ActionWaitingNotice row={row} testId="approval-waiting" />
 
-      {blocking ? (
+      {blocking && !ownRequestLocked ? (
         <Notice tone="warn" testId="approval-blocking">
           {t('Worker 已暂停，等待你的决定。', 'The Worker is blocked until you decide.')}
         </Notice>
@@ -422,7 +450,14 @@ export function ApprovalDetail({
           if (!open) onPendingChange(null);
         }}
         anchor={
-          decidable ? (
+          decidable && ownRequestLocked ? (
+            <Notice testId="approval-own-request">
+              {t(
+                '这条请求是代表你发起的，策略不允许发起人自己批准或拒绝（高影响的动作默认如此），所以这里没有决定按钮：要由另一位有审批权的人决定。',
+                'This request was made on your behalf, and the policy does not let the requester approve or reject it (the default for high-impact actions), so there are no decision buttons here: someone else with approval rights decides.',
+              )}
+            </Notice>
+          ) : decidable ? (
             <div className="stack-s approval-decision-footer">
               <Field
                 id={reasonId}
@@ -467,8 +502,24 @@ export function ApprovalDetail({
                       `总是允许门「${gateName}」上的 ${actionKindTagText(row.actionKindTag)}：今后任何人发起都自动批准，不只是这次请求。`,
                       `Always allow ${actionKindTagText(row.actionKindTag)} on gate “${gateName}”: from now on it is auto-approved for every requester, not only this request.`,
                     )}
+                    {coveredVersion !== null
+                      ? t(
+                          `只对现在发布的 v${coveredVersion} 有效；以后发布新版本，请求会重新走审批。`,
+                          ` It covers the v${coveredVersion} published now; once a new version is published, requests go back through approval.`,
+                        )
+                      : null}
                   </span>
                 </label>
+              ) : null}
+              {alwaysAllowBlock === 'stale' && publishedVersion !== null ? (
+                <p className="field-hint" data-testid="approval-always-allow-stale">
+                  {alwaysAllowStaleRequestText(t, publishedVersion)}
+                </p>
+              ) : null}
+              {alwaysAllowBlock === 'unpublished' ? (
+                <p className="field-hint" data-testid="approval-always-allow-unpublished">
+                  {alwaysAllowUnpublishedText(t, row.actionKindTag, gateName)}
+                </p>
               ) : null}
 
               <CredentialReview
@@ -539,8 +590,8 @@ export function ApprovalDetail({
               )
             : pending?.alwaysAllow
               ? t(
-                  `批准后门立即执行这次请求，并写入一条自动批准规则：今后门「${gateName}」上的 ${actionKindTagText(row.actionKindTag)} 不论谁发起都直接执行，不再进入审批队列。其他门上的同名动作不受影响。规则可在「模型与配额 → 策略」中关闭。`,
-                  `The Gatekeeper executes this request now, and an auto-approval rule is written: from now on ${actionKindTagText(row.actionKindTag)} on gate “${gateName}” runs without approval for every requester. The same name on other gates is not affected. Turn the rule off under Models & Quotas → Policies.`,
+                  `批准后门立即执行这次请求，并写入一条自动批准规则：今后门「${gateName}」上的 ${actionKindTagText(row.actionKindTag)} 不论谁发起都直接执行，不再进入审批队列。规则只对这次请求所依据的定义${coveredVersion !== null ? `（v${coveredVersion}）` : ''}有效，以后发布新版本会重新走审批；其他门上的同名动作不受影响。规则可在「模型与配额 → 策略」中关闭。`,
+                  `The Gatekeeper executes this request now, and an auto-approval rule is written: from now on ${actionKindTagText(row.actionKindTag)} on gate “${gateName}” runs without approval for every requester. The rule covers only the definition this request was made under${coveredVersion !== null ? ` (v${coveredVersion})` : ''} — a later version goes back through approval — and the same name on other gates is not affected. Turn the rule off under Models & Quotas → Policies.`,
                 )
               : t(
                   '批准后门立即执行该动作，无法撤回；理由写入审计。',
@@ -598,10 +649,15 @@ export function ApprovalDetail({
                           <code title={actionKindRaw(row.actionKindTag)}>
                             {actionKindTagText(row.actionKindTag)}
                           </code>{' '}
-                          {t(
-                            '今后对所有发起人自动批准',
-                            'will be auto-approved for every requester',
-                          )}
+                          {coveredVersion !== null
+                            ? t(
+                                `今后对所有发起人自动批准（只对 v${coveredVersion}）`,
+                                `will be auto-approved for every requester (v${coveredVersion} only)`,
+                              )
+                            : t(
+                                '今后对所有发起人自动批准（只对这次请求的定义）',
+                                'will be auto-approved for every requester (this request’s definition only)',
+                              )}
                         </span>
                       ),
                     },

@@ -12,7 +12,12 @@ import {
   reviewFieldNames,
   usePublishCredentialReview,
 } from '../lib/credential-review.js';
-import { errorToastText, isDraftChangedError, isForbiddenError } from '../lib/errors.js';
+import {
+  errorToastText,
+  isDraftChangedError,
+  isForbiddenError,
+  isVersionChangedError,
+} from '../lib/errors.js';
 import {
   actionKindRaw,
   actionKindTagText,
@@ -34,6 +39,11 @@ import {
 import { type Translate, useT } from '../lib/i18n.js';
 import { operationFieldLabel, workerDefinitionKindLabel } from '../lib/labels.js';
 import { breadcrumbFor } from '../lib/nav.js';
+import {
+  type ProposerOnlyAction,
+  proposerOnlyText,
+  provenNotProposer,
+} from '../lib/publish-authority.js';
 import { type WorkspaceRole, isProvenMember } from '../lib/role.js';
 import type { CatalogTab } from '../lib/router.js';
 import { hrefs } from '../lib/router.js';
@@ -691,6 +701,7 @@ function OperationDetailView({
   gatekeeperNames,
   canPublish,
   canDeprecate,
+  proposerOnly,
   canDiscard,
   canEditDescription,
   busy,
@@ -708,6 +719,9 @@ function OperationDetailView({
   readonly gatekeeperNames: ReadonlyMap<string, string>;
   readonly canPublish: boolean;
   readonly canDeprecate: boolean;
+  /** D-24: Publish / Deprecate withheld on this row because the caller is proven not its proposer
+   *  (nor the owner) — the reason shown in their place. */
+  readonly proposerOnly: ProposerOnlyAction | null;
   /** Legacy 278: this caller may discard this draft (`discard_operation_draft` — its proposer or
    *  the owner, `mayActOnOwnOperation`). */
   readonly canDiscard: boolean;
@@ -879,6 +893,8 @@ function OperationDetailView({
             onConfirm={onDeprecate}
             testId={`operation-deprecate-confirm-${key}`}
           />
+        ) : proposerOnly !== null && !heldBack ? (
+          <ProposerOnlyHint action={proposerOnly} />
         ) : null}
         {offersDiscard ? (
           <DiscardDraftConfirm
@@ -1036,10 +1052,17 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       // C14: carry the kernel's own text — the generic title alone dropped the actual reason.
       toast.push({
         tone: 'danger',
-        title: t(
-          `无法更新 ${actionKindTagToastText(row.name)}`,
-          `Could not update ${actionKindTagToastText(row.name)}`,
-        ),
+        // UX acceptance of #592 (P3-1): say which action failed.
+        title:
+          action === 'publish_operation'
+            ? t(
+                `无法发布 ${actionKindTagToastText(row.name)}`,
+                `Could not publish ${actionKindTagToastText(row.name)}`,
+              )
+            : t(
+                `无法弃用 ${actionKindTagToastText(row.name)}`,
+                `Could not deprecate ${actionKindTagToastText(row.name)}`,
+              ),
         description: errorToastText(err, t),
       });
     } finally {
@@ -1183,14 +1206,36 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       </List>
     );
 
+  // D-24: a revision draft's publish also deprecates the version in effect — that row's
+  // proposer counts too.
+  const selectedLive =
+    selected?.status === 'draft'
+      ? rows.find(
+          (row) => row.status === 'published' && operationKey(row) === operationKey(selected),
+        )
+      : undefined;
+  const proposerOnly = selected
+    ? proposerOnlyFor(
+        selected,
+        role,
+        principalId,
+        {
+          publish: can('publish_operation') !== false,
+          deprecate: can('deprecate_operation') !== false,
+        },
+        selectedLive,
+      )
+    : null;
+
   const detailContent = selected ? (
     <OperationDetailView
       http={http}
       row={selected}
       usage={statsFor(selected)}
       gatekeeperNames={gatekeeperNames}
-      canPublish={can('publish_operation') !== false}
-      canDeprecate={can('deprecate_operation') !== false}
+      canPublish={can('publish_operation') !== false && proposerOnly === null}
+      canDeprecate={can('deprecate_operation') !== false && proposerOnly === null}
+      proposerOnly={proposerOnly}
       canEditDescription={
         can('update_operation_description') !== false &&
         mayActOnOwnOperation(selected, role, principalId)
@@ -1331,12 +1376,51 @@ function isOwnDraftOrUnknown(
   );
 }
 
+/**
+ * D-24 (kernel `publish-authority.ts`): which of Publish / Deprecate this row withholds because
+ * the caller is proven neither its proposer nor the owner (`provenNotProposer`) — the kernel
+ * refuses those with 403 `not_proposer`. Only an action the role could otherwise take is
+ * withheld (the role floor is `useRoleCan`'s own). `live`: an Operation revision draft's
+ * published version, which publishing it also deprecates — the caller needs authority over it too.
+ */
+function proposerOnlyFor(
+  row: { readonly status: string; readonly proposedBy?: string },
+  role: WorkspaceRole,
+  callerPrincipalId: string | null,
+  roleCan: { readonly publish: boolean; readonly deprecate: boolean },
+  live?: { readonly proposedBy?: string },
+): ProposerOnlyAction | null {
+  if (row.status === 'draft' && roleCan.publish) {
+    if (provenNotProposer(row, role, callerPrincipalId)) return 'publish';
+    if (live !== undefined && provenNotProposer(live, role, callerPrincipalId)) return 'replace';
+  }
+  if (
+    row.status === 'published' &&
+    roleCan.deprecate &&
+    provenNotProposer(row, role, callerPrincipalId)
+  ) {
+    return 'deprecate';
+  }
+  return null;
+}
+
+/** Said where Publish / Deprecate would have been (D-24), so the action is not just missing. */
+function ProposerOnlyHint({ action }: { readonly action: ProposerOnlyAction }) {
+  const t = useT();
+  return (
+    <span className="text-3 text-small" data-testid="catalog-proposer-only">
+      {proposerOnlyText(action, t)}
+    </span>
+  );
+}
+
 function SkillDetailView({
   http,
   row,
   canPropose,
   canPublish,
   canDeprecate,
+  proposerOnly,
   canDiscard,
   busy,
   credentialReview,
@@ -1350,6 +1434,8 @@ function SkillDetailView({
   readonly canPropose: boolean;
   readonly canPublish: boolean;
   readonly canDeprecate: boolean;
+  /** D-24: as `OperationDetailView`'s. */
+  readonly proposerOnly: ProposerOnlyAction | null;
   readonly canDiscard: boolean;
   readonly busy: boolean;
   readonly credentialReview: PublishCredentialReview;
@@ -1448,6 +1534,8 @@ function SkillDetailView({
             onConfirm={onDeprecate}
             testId={`skill-deprecate-confirm-${row.id}`}
           />
+        ) : proposerOnly !== null ? (
+          <ProposerOnlyHint action={proposerOnly} />
         ) : null}
         {canDiscard && row.status === 'draft' ? (
           <DiscardDraftConfirm
@@ -1468,7 +1556,7 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   const can = useRoleCan(http);
   const toast = useToast();
   const skills = useCapabilityList<SkillRow>(http, 'list_skills');
-  const { principalId } = useWorkspaceIdentity(http);
+  const { role, principalId } = useWorkspaceIdentity(http);
   const [busy, setBusy] = useState<string | null>(null);
   const [editor, setEditor] = useState<EditorState<SkillRow>>(null);
 
@@ -1508,6 +1596,8 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       await http.call(action, {
         skillId: row.id,
         ...(action === 'publish_skill' ? credentialReview.params() : {}),
+        // Legacy 300: the version this detail shows, not a newer one proposed since.
+        ...(action === 'publish_skill' ? { version: row.version } : {}),
       });
       toast.push({
         tone: 'ok',
@@ -1518,10 +1608,16 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       // The kernel's credential question — answered next to Publish, not as a failure toast.
       if (action === 'publish_skill' && credentialReview.capture(err)) return;
       if (isForbiddenError(err)) permissions.markDenied(action);
+      // The toast says it was reloaded: show what is there now.
+      if (isVersionChangedError(err)) refresh();
       // C14: carry the kernel's own text — the generic title alone dropped the actual reason.
       toast.push({
         tone: 'danger',
-        title: t(`无法更新 ${row.name}`, `Could not update ${row.name}`),
+        // UX acceptance of #592 (P3-1): say which action failed.
+        title:
+          action === 'publish_skill'
+            ? t(`无法发布 ${row.name}`, `Could not publish ${row.name}`)
+            : t(`无法弃用 ${row.name}`, `Could not deprecate ${row.name}`),
         description: errorToastText(err, t),
       });
     } finally {
@@ -1559,6 +1655,13 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   const canPublish = can('publish_skill') !== false;
   const canDeprecate = can('deprecate_skill') !== false;
   const canDiscard = can('discard_draft') !== false;
+  // D-24: Publish / Deprecate on a row another principal proposed is the owner's.
+  const selectedProposerOnly = selected
+    ? proposerOnlyFor(selected, role, principalId, {
+        publish: canPublish,
+        deprecate: canDeprecate,
+      })
+    : null;
 
   const editorPane = editor ? (
     <div className="stack">
@@ -1668,8 +1771,9 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       http={http}
       row={selected}
       canPropose={canPropose}
-      canPublish={canPublish}
-      canDeprecate={canDeprecate}
+      canPublish={canPublish && selectedProposerOnly === null}
+      canDeprecate={canDeprecate && selectedProposerOnly === null}
+      proposerOnly={selectedProposerOnly}
       canDiscard={canDiscard && isOwnDraftOrUnknown(selected, principalId)}
       busy={busy === selected.id}
       credentialReview={credentialReview}
@@ -1715,6 +1819,7 @@ function ProcedureDetailView({
   canPropose,
   canPublish,
   canDeprecate,
+  proposerOnly,
   canDiscard,
   busy,
   credentialReview,
@@ -1728,6 +1833,8 @@ function ProcedureDetailView({
   readonly canPropose: boolean;
   readonly canPublish: boolean;
   readonly canDeprecate: boolean;
+  /** D-24: as `OperationDetailView`'s. */
+  readonly proposerOnly: ProposerOnlyAction | null;
   readonly canDiscard: boolean;
   readonly busy: boolean;
   readonly credentialReview: PublishCredentialReview;
@@ -1804,6 +1911,8 @@ function ProcedureDetailView({
             onConfirm={onDeprecate}
             testId={`procedure-deprecate-confirm-${row.id}`}
           />
+        ) : proposerOnly !== null ? (
+          <ProposerOnlyHint action={proposerOnly} />
         ) : null}
         {canDiscard && row.status === 'draft' ? (
           <DiscardDraftConfirm
@@ -1824,7 +1933,7 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   const can = useRoleCan(http);
   const toast = useToast();
   const procedures = useCapabilityList<ProcedureRow>(http, 'list_procedures');
-  const { principalId } = useWorkspaceIdentity(http);
+  const { role, principalId } = useWorkspaceIdentity(http);
   const [busy, setBusy] = useState<string | null>(null);
   const [editor, setEditor] = useState<EditorState<ProcedureRow>>(null);
 
@@ -1861,6 +1970,8 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       await http.call(action, {
         procedureId: row.id,
         ...(action === 'publish_procedure' ? credentialReview.params() : {}),
+        // Legacy 300: the version this detail shows, not a newer one proposed since.
+        ...(action === 'publish_procedure' ? { version: row.version } : {}),
       });
       toast.push({
         tone: 'ok',
@@ -1871,10 +1982,16 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       // The kernel's credential question — answered next to Publish, not as a failure toast.
       if (action === 'publish_procedure' && credentialReview.capture(err)) return;
       if (isForbiddenError(err)) permissions.markDenied(action);
+      // The toast says it was reloaded: show what is there now.
+      if (isVersionChangedError(err)) refresh();
       // C14: carry the kernel's own text — the generic title alone dropped the actual reason.
       toast.push({
         tone: 'danger',
-        title: t(`无法更新 ${row.name}`, `Could not update ${row.name}`),
+        // UX acceptance of #592 (P3-1): say which action failed.
+        title:
+          action === 'publish_procedure'
+            ? t(`无法发布 ${row.name}`, `Could not publish ${row.name}`)
+            : t(`无法弃用 ${row.name}`, `Could not deprecate ${row.name}`),
         description: errorToastText(err, t),
       });
     } finally {
@@ -1912,6 +2029,13 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   const canPublish = can('publish_procedure') !== false;
   const canDeprecate = can('deprecate_procedure') !== false;
   const canDiscard = can('discard_draft') !== false;
+  // D-24: Publish / Deprecate on a row another principal proposed is the owner's.
+  const selectedProposerOnly = selected
+    ? proposerOnlyFor(selected, role, principalId, {
+        publish: canPublish,
+        deprecate: canDeprecate,
+      })
+    : null;
 
   const editorPane = editor ? (
     <div className="stack">
@@ -2028,8 +2152,9 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       http={http}
       row={selected}
       canPropose={canPropose}
-      canPublish={canPublish}
-      canDeprecate={canDeprecate}
+      canPublish={canPublish && selectedProposerOnly === null}
+      canDeprecate={canDeprecate && selectedProposerOnly === null}
+      proposerOnly={selectedProposerOnly}
       canDiscard={canDiscard && isOwnDraftOrUnknown(selected, principalId)}
       busy={busy === selected.id}
       credentialReview={credentialReview}
@@ -2088,6 +2213,11 @@ function workerLabel(row: WorkerDefinitionSummary, t: Translate): string {
 /** Workers tab local editor state — a superset of the shared `EditorState<Row>` used by the
  *  Skills/Procedures tabs above: adds `'template'` for J7/CW1 "从模板创建（ops-runner）", which
  *  prefills a brand-new draft rather than starting blank or copying a published row. */
+/** A `list_worker_definitions` row as the catalog reads it: `proposedBy` (required on the wire,
+ *  `WorkerDefinitionWireSchema`) decides who may publish / deprecate it (D-24). Optional only so
+ *  older fixtures still type-check. */
+type CatalogWorkerRow = WorkerDefinitionSummary & { readonly proposedBy?: string };
+
 type WorkerEditorState =
   | { readonly kind: 'new' }
   | { readonly kind: 'copy'; readonly row: WorkerDefinitionSummary }
@@ -2100,6 +2230,7 @@ function WorkerDetailView({
   canPropose,
   canPublish,
   canDeprecate,
+  proposerOnly,
   canDiscard,
   busy,
   credentialReview,
@@ -2113,6 +2244,8 @@ function WorkerDetailView({
   readonly canPropose: boolean;
   readonly canPublish: boolean;
   readonly canDeprecate: boolean;
+  /** D-24: as `OperationDetailView`'s. */
+  readonly proposerOnly: ProposerOnlyAction | null;
   readonly canDiscard: boolean;
   readonly busy: boolean;
   readonly credentialReview: PublishCredentialReview;
@@ -2171,6 +2304,8 @@ function WorkerDetailView({
               >
                 {t('发布', 'Publish')}
               </Button>
+            ) : proposerOnly !== null ? (
+              <ProposerOnlyHint action={proposerOnly} />
             ) : null}
             {canDiscard ? (
               <DiscardDraftConfirm
@@ -2200,6 +2335,8 @@ function WorkerDetailView({
                 onConfirm={onDeprecate}
                 testId={`worker-deprecate-confirm-${workerKey(row)}`}
               />
+            ) : row.kind !== 'entry' && proposerOnly !== null ? (
+              <ProposerOnlyHint action={proposerOnly} />
             ) : null}
           </>
         )}
@@ -2213,12 +2350,13 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   const permissions = usePermissions();
   const can = useRoleCan(http);
   const toast = useToast();
+  const { role, principalId } = useWorkspaceIdentity(http);
   // `itemId` is the row's `id@version` (`workerKey`), so a new version asks afresh.
   const credentialReview = usePublishCredentialReview(itemId ?? null);
-  const workers = useCapabilityList<WorkerDefinitionSummary>(http, 'list_worker_definitions', {});
+  const workers = useCapabilityList<CatalogWorkerRow>(http, 'list_worker_definitions', {});
   // S8 W2-U2b (audit R6): a dedicated own-drafts read — `includeOwnDrafts` is additive (published
   // rows come back too, S8 W2-U2b) — only the caller's own draft rows are this section's concern.
-  const myDrafts = useCapabilityList<WorkerDefinitionSummary>(
+  const myDrafts = useCapabilityList<CatalogWorkerRow>(
     http,
     'list_worker_definitions',
     { includeOwnDrafts: true },
@@ -2426,6 +2564,13 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   // Same-name definitions (a template instantiated twice) differ only by id: show it on those.
   const sameName = sameNameDefinitionIds(allRows);
   const selected = itemId ? allRows.find((row) => workerKey(row) === itemId) : undefined;
+  // D-24: Publish / Deprecate on a definition another principal proposed is the owner's.
+  const selectedProposerOnly = selected
+    ? proposerOnlyFor(selected, role, principalId, {
+        publish: canPublish,
+        deprecate: canDeprecate && selected.kind !== 'entry',
+      })
+    : null;
 
   const list = (
     <div className="stack-s">
@@ -2626,8 +2771,9 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       row={selected}
       isMyDraft={selected.status === 'draft'}
       canPropose={canPropose}
-      canPublish={canPublish}
-      canDeprecate={canDeprecate}
+      canPublish={canPublish && selectedProposerOnly === null}
+      canDeprecate={canDeprecate && selectedProposerOnly === null}
+      proposerOnly={selectedProposerOnly}
       canDiscard={canDiscard}
       busy={busy === workerKey(selected)}
       credentialReview={credentialReview}

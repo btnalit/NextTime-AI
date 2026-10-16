@@ -359,3 +359,51 @@ describe('evaluate — params carrying suspected credentials (decision 2026-10-0
     expect(evaluate(baseInput({ paramsCarrySuspectedSecrets: false })).decision).toBe('allow');
   });
 });
+
+describe('evaluate — legacy 218: "always allow" applies to the definition it was given for', () => {
+  const allowRule = { scope: 'gatekeeper' as const, autoApprove: true };
+
+  it('a medium Operation goes back through approval when the rule was given for another definition', () => {
+    const result = evaluate(
+      baseInput({
+        blastRadius: 'medium',
+        workspacePolicy: { ...allowRule, allowsThisDefinition: false },
+      }),
+    );
+    expect(result.decision).toBe('require_approval');
+    expect(result.reason).toBe('auto_approve_rule_for_another_definition');
+  });
+
+  it('the same rule allows the definition it was given for', () => {
+    const result = evaluate(
+      baseInput({
+        blastRadius: 'medium',
+        workspacePolicy: { ...allowRule, allowsThisDefinition: true },
+      }),
+    );
+    expect(result.decision).toBe('allow');
+    expect(result.reason).toBe('auto_approved_by_operation_and_workspace_policy');
+  });
+
+  it('a stale rule counts as no rule: a low Operation keeps the compiled-in default', () => {
+    const result = evaluate(
+      baseInput({
+        blastRadius: 'low',
+        workspacePolicy: { ...allowRule, allowsThisDefinition: false },
+      }),
+    );
+    expect(result.decision).toBe('allow');
+    expect(result.reason).toBe('auto_approved_by_operation_and_low_blast_radius_default');
+  });
+
+  it('an opt-out needs no consent and always applies', () => {
+    const result = evaluate(
+      baseInput({
+        blastRadius: 'low',
+        workspacePolicy: { scope: 'gatekeeper', autoApprove: false, allowsThisDefinition: false },
+      }),
+    );
+    expect(result.decision).toBe('require_approval');
+    expect(result.reason).toBe('workspace_policy_disables_auto_approve');
+  });
+});

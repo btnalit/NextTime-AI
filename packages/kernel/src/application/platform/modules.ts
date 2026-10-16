@@ -6,6 +6,7 @@ import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { setWorkspaceContext } from '../../adapters/db/platform-context.js';
 import type { PoolLike } from '../../adapters/db/pool.js';
+import { assertReviewedVersion } from '../../governance/capability/index.js';
 import {
   type OntologyDefinition,
   type OntologyVersionDbRow,
@@ -344,6 +345,12 @@ export class ModuleConfirmRequiredError extends Error {
 export interface InstallOrUpgradeModuleInput {
   readonly name: string;
   readonly confirm?: boolean;
+  /** Legacy 300: the indexed version the owner was shown as the target (`WorkspaceModuleWire.
+   *  latestVersion`). The call always targets the index's latest, and refuses
+   *  `ReviewedVersionChangedError` (409 `version_changed`) when that is another one — an upgrade
+   *  shipped a newer index between the read and the click. Internal callers (workspace creation's
+   *  default modules) omit it. */
+  readonly version?: number;
 }
 
 /**
@@ -405,6 +412,12 @@ export async function installOrUpgradeModule(
   ]);
   const installedRow = await loadInstalledPackVersion(client, workspaceId, packId);
   const target = latestVersion(entry);
+  assertReviewedVersion(
+    installedRow ? 'upgrade_module' : 'install_module',
+    `module ${entry.name}`,
+    input.version,
+    target.version,
+  );
 
   if (!installedRow) {
     const published = await publishOntologyDomainPack(client, workspaceId, {

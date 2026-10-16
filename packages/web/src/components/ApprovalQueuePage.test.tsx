@@ -22,6 +22,7 @@ function row(overrides: Partial<ActionRequestRow> = {}): ActionRequestRow {
     onBehalfOf: 'principal-a',
     actorRuntime: 'worker',
     requestedAt: '2026-09-03T00:00:00.000Z',
+    publishedDefinition: { version: 2, requestIsCurrent: true },
     ...overrides,
   };
 }
@@ -597,6 +598,8 @@ describe('ApprovalQueuePage decisions (S6-A B2 / C25)', () => {
       expect(setAuto).toHaveBeenCalledWith({
         gatekeeperId: row().gatekeeperId,
         actionKindTag: 'docker.container_restart',
+        // Legacy 218: the rule allows the definition this request was made against.
+        actionRequestId: row().id,
       }),
     );
   });

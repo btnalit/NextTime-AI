@@ -287,9 +287,15 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       // 4. publish_operation (owner's explicit per-Operation publish, per the task brief: "publish
       //    remains the owner's explicit publish_operation (I16/I17)").
+      // Legacy 300: the publish names the draft reviewed, by the digest the catalog lists for it.
+      const drafts = (await dispatchCapability({ pool }, owner, 'list_operations', {
+        gatekeeperId: created.gatekeeperId,
+      })) as { items: readonly { name: string; status: string; draftDigest?: string }[] };
       await dispatchCapability({ pool }, owner, 'publish_operation', {
         gatekeeperId: created.gatekeeperId,
         name: 'get_stocks',
+        draftDigest: drafts.items.find((op) => op.name === 'get_stocks' && op.status === 'draft')
+          ?.draftDigest,
       });
 
       // 5. After publish, find_operations("stock") hits.

@@ -5,6 +5,7 @@ import { useAskForAccess } from '../hooks/useAskForAccess.js';
 import { useCapabilityList } from '../hooks/useCapability.js';
 import { usePermissions } from '../hooks/usePermissions.js';
 import { useRoleCan } from '../hooks/useRoleCan.js';
+import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
 import type { CapabilityCaller, PushSource } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
 import {
@@ -88,6 +89,7 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
   const t = useT();
   const permissions = usePermissions();
   const can = useRoleCan(http);
+  const { principalId } = useWorkspaceIdentity(http);
   const ask = useAskForAccess(http);
   const toast = useToast();
   const principals = usePrincipalDirectory(http);
@@ -116,6 +118,7 @@ export function ApprovalQueuePage({ http, pushes, selectedId, onSelect }: Approv
       principalNames={principalNames}
       gatekeeperNames={gatekeeperNames}
       canAlwaysAllow={can('set_auto_approved_action_kind') !== false}
+      callerPrincipalId={principalId}
       onApprove={queue.handleApprove}
       onReject={queue.handleReject}
       decisionError={selectedRow ? (queue.decision[selectedRow.id]?.error ?? null) : null}
@@ -223,6 +226,7 @@ interface ApprovalDetailContentProps {
   readonly detailError: unknown | null;
   readonly principalNames: ReadonlyMap<string, string>;
   readonly gatekeeperNames: ReadonlyMap<string, string>;
+  readonly callerPrincipalId: string | null;
   readonly canAlwaysAllow: boolean;
   readonly onApprove: Parameters<typeof ApprovalDetail>[0]['onApprove'];
   readonly onReject: Parameters<typeof ApprovalDetail>[0]['onReject'];
@@ -243,6 +247,7 @@ function ApprovalDetailContent({
   principalNames,
   gatekeeperNames,
   canAlwaysAllow,
+  callerPrincipalId,
   onApprove,
   onReject,
   decisionError,
@@ -257,6 +262,7 @@ function ApprovalDetailContent({
         principalNames={principalNames}
         gatekeeperNames={gatekeeperNames}
         canAlwaysAllow={canAlwaysAllow}
+        callerPrincipalId={callerPrincipalId}
         onApprove={onApprove}
         onReject={onReject}
         error={decisionError}

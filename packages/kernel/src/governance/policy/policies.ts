@@ -36,6 +36,13 @@ export interface PolicyRow {
   readonly setBy: string;
   readonly createdAt: Date;
   readonly updatedAt: Date;
+  /** Legacy 218 (migrations/governance/0020): for a gate-scoped rule that turns auto-approval on,
+   *  the definition it allows — the digest a gate checks on every call, as an ActionRequest
+   *  records it (`operationDigest`) — and the published version that was. `null` on a
+   *  workspace-wide row, on a rule that does not auto-approve, and on one written before the
+   *  definition was recorded (suspended until allowed again). */
+  readonly operationDigest: string | null;
+  readonly operationVersion: number | null;
 }
 
 interface PolicyDbRow {
@@ -49,6 +56,8 @@ interface PolicyDbRow {
   set_by: string;
   created_at: Date;
   updated_at: Date;
+  operation_digest: string | null;
+  operation_version: number | null;
 }
 
 function mapPolicyRow(row: PolicyDbRow): PolicyRow {
@@ -63,15 +72,17 @@ function mapPolicyRow(row: PolicyDbRow): PolicyRow {
     setBy: row.set_by,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    operationDigest: row.operation_digest,
+    operationVersion: row.operation_version,
   };
 }
 
 const RULE_COLUMNS =
   'id, action_kind, blast_radius, auto_approve, requester_can_approve, set_by, created_at, updated_at';
-/** `policies` has no `gatekeeper_id` column — projected as `null` so both tables map through
- *  `mapPolicyRow`. */
-const WORKSPACE_POLICY_COLUMNS = `workspace_id, null::uuid as gatekeeper_id, ${RULE_COLUMNS}`;
-const GATEKEEPER_POLICY_COLUMNS = `workspace_id, gatekeeper_id, ${RULE_COLUMNS}`;
+/** `policies` has no `gatekeeper_id` column, nor the allowed definition (a workspace-wide rule
+ *  never turns auto-approval on) — projected as `null` so both tables map through `mapPolicyRow`. */
+const WORKSPACE_POLICY_COLUMNS = `workspace_id, null::uuid as gatekeeper_id, ${RULE_COLUMNS}, null::text as operation_digest, null::integer as operation_version`;
+const GATEKEEPER_POLICY_COLUMNS = `workspace_id, gatekeeper_id, ${RULE_COLUMNS}, operation_digest, operation_version`;
 
 /** The workspace-wide `policies` row for `actionKind`, or `null` if none exists. */
 async function readWorkspacePolicy(
@@ -88,7 +99,7 @@ async function readWorkspacePolicy(
 }
 
 /** The gate-scoped `gatekeeper_policies` row for `(gatekeeperId, actionKind)`, or `null`. */
-async function readGatekeeperPolicy(
+export async function readGatekeeperPolicy(
   client: PoolClient,
   workspaceId: string,
   gatekeeperId: string,
@@ -120,12 +131,54 @@ export async function readEffectivePolicy(
   );
 }
 
-/** A rule row as `evaluate()`'s `workspacePolicy` input. */
-export function toPolicyEvaluationInput(row: PolicyRow): WorkspacePolicyInput {
+const BLAST_RADIUS_RANK: Record<BlastRadius, number> = { low: 0, medium: 1, high: 2 };
+
+/** What a request is made against — the published definition's digest (`operationRecordDigest`)
+ *  and its declared blast radius — or, for a rule's list entry, the definition published now. */
+export interface DefinitionInForce {
+  readonly operationDigest: string | undefined;
+  readonly blastRadius: BlastRadius;
+}
+
+/**
+ * Legacy 218: whether a gate-scoped auto-approval rule still allows what is in force. It allows
+ * the definition recorded when it was written (`operationDigest`), at no more than the blast
+ * radius it recorded then: a revision with another definition, or a governance edit raising the
+ * blast radius in place (`refresh_operation_governance` keeps the digest), was never seen by the
+ * person who allowed it. A rule naming no definition (written before 0020 without evidence, or by
+ * the previous release after a rollback) allows nothing. Only a gate-scoped `autoApprove: true`
+ * row has a consent to outlive — every other row is `'current'`.
+ */
+export type AutoApproveConsent = 'current' | 'definition_changed' | 'not_recorded';
+
+export function autoApproveConsent(
+  row: PolicyRow,
+  current: DefinitionInForce | null,
+): AutoApproveConsent {
+  if (row.gatekeeperId === null || !row.autoApprove) return 'current';
+  if (row.operationDigest === null) return 'not_recorded';
+  if (current === null || current.operationDigest !== row.operationDigest) {
+    return 'definition_changed';
+  }
+  if (
+    row.blastRadius !== null &&
+    BLAST_RADIUS_RANK[current.blastRadius] > BLAST_RADIUS_RANK[row.blastRadius]
+  ) {
+    return 'definition_changed';
+  }
+  return 'current';
+}
+
+/** A rule row as `evaluate()`'s `workspacePolicy` input, for a request made against `request`. */
+export function toPolicyEvaluationInput(
+  row: PolicyRow,
+  request: DefinitionInForce,
+): WorkspacePolicyInput {
   return {
     scope: row.gatekeeperId === null ? 'workspace' : 'gatekeeper',
     autoApprove: row.autoApprove,
     requesterCanApprove: row.requesterCanApprove,
+    allowsThisDefinition: autoApproveConsent(row, request) === 'current',
   };
 }
 
@@ -169,7 +222,12 @@ export const SetPolicyPayloadSchema = z
     actionKindTag: z.string().min(1),
     blastRadius: BlastRadiusSchema.optional(),
     autoApprove: z.boolean(),
-    requesterCanApprove: z.boolean().optional(),
+    // Omitted: the rule keeps what it has (#493 review of #592 — omission never resets it to the
+    // default, which is looser for a non-high action). `null`: clear it, inheriting the default.
+    requesterCanApprove: z.boolean().nullable().optional(),
+    // Legacy 218: with `gatekeeperId` and `autoApprove: true`, the published version of the
+    // Operation the caller looked at — the rule allows that definition only.
+    operationVersion: z.number().int().positive().optional(),
   })
   .strict();
 export type SetPolicyPayload = z.infer<typeof SetPolicyPayloadSchema>;
@@ -198,6 +256,12 @@ export function parseSetPolicyPayload(raw: unknown): SetPolicyPayload {
   return parsed.data;
 }
 
+/** Legacy 218: the published definition a gate-scoped auto-approval rule allows. */
+export interface AllowedDefinition {
+  readonly operationDigest: string;
+  readonly operationVersion: number;
+}
+
 /** This module's own internal parameter shape for `setPolicy` — deliberately independent of
  *  `SetPolicyPayload` above (see that type's own doc comment): `actionKind` here matches the
  *  `action_kind` DB column, the name every other governance/policy|approval internal type
@@ -208,8 +272,13 @@ export interface SetPolicyInput {
   readonly actionKind: string;
   readonly blastRadius?: BlastRadius;
   readonly autoApprove: boolean;
-  readonly requesterCanApprove?: boolean;
+  /** Omitted: an existing row keeps its value (a new row gets `null`); `null`: clear it, so the
+   *  compiled-in default applies (`engine.ts` `resolveRequesterCanApprove`). */
+  readonly requesterCanApprove?: boolean | null;
   readonly setBy: string;
+  /** Legacy 218: required for a gate-scoped rule with `autoApprove: true` — the definition the
+   *  person allowed. Ignored otherwise (such a row records none: it has no consent to outlive). */
+  readonly allows?: AllowedDefinition;
 }
 
 /**
@@ -222,7 +291,7 @@ export interface SetPolicyInput {
  *     per gate, so a workspace-wide rule may only require approval.
  *
  * A repeat call for the same key replaces the row's tunable columns
- * (`blastRadius`/`autoApprove`/`requesterCanApprove`) — a rule is configuration, not an
+ * (`blastRadius`/`autoApprove`; `requesterCanApprove` only when given — omitted, it is kept) — a rule is configuration, not an
  * append-only governed record (0002's own "delete is granted" comment, same reasoning extends to
  * update-in-place); every write is audited by the capability dispatch.
  */
@@ -241,6 +310,13 @@ export async function setPolicy(
       `policy for action_kind "${input.actionKind}": auto-approval is granted per gate (R-20 / D-15) — a workspace-wide rule can only require approval; pass gatekeeperId`,
     );
   }
+  if (input.gatekeeperId !== undefined && input.autoApprove && input.allows === undefined) {
+    // The handlers always resolve it; a rule naming no definition would allow nothing.
+    throw new Error(
+      `setPolicy: an auto-approval rule for "${input.actionKind}" must name the definition it allows (legacy 218)`,
+    );
+  }
+  const allows = input.gatekeeperId !== undefined && input.autoApprove ? input.allows : undefined;
 
   const values = [
     workspaceId,
@@ -249,6 +325,7 @@ export async function setPolicy(
     input.autoApprove,
     input.requesterCanApprove ?? null,
     input.setBy,
+    input.requesterCanApprove !== undefined,
   ];
   const result =
     input.gatekeeperId === undefined
@@ -258,7 +335,8 @@ export async function setPolicy(
            on conflict (workspace_id, action_kind) do update
              set blast_radius = excluded.blast_radius,
                  auto_approve = excluded.auto_approve,
-                 requester_can_approve = excluded.requester_can_approve,
+                 requester_can_approve = case when $7::boolean then excluded.requester_can_approve
+                                              else policies.requester_can_approve end,
                  set_by = excluded.set_by,
                  updated_at = now()
            returning ${WORKSPACE_POLICY_COLUMNS}`,
@@ -267,17 +345,25 @@ export async function setPolicy(
       : await client.query<PolicyDbRow>(
           `insert into gatekeeper_policies (
              workspace_id, action_kind, blast_radius, auto_approve, requester_can_approve, set_by,
-             gatekeeper_id
+             gatekeeper_id, operation_digest, operation_version
            )
-           values ($1, $2, $3, $4, $5, $6, $7)
+           values ($1, $2, $3, $4, $5, $6, $8, $9, $10)
            on conflict (workspace_id, gatekeeper_id, action_kind) do update
              set blast_radius = excluded.blast_radius,
                  auto_approve = excluded.auto_approve,
-                 requester_can_approve = excluded.requester_can_approve,
+                 requester_can_approve = case when $7::boolean then excluded.requester_can_approve
+                                              else gatekeeper_policies.requester_can_approve end,
                  set_by = excluded.set_by,
+                 operation_digest = excluded.operation_digest,
+                 operation_version = excluded.operation_version,
                  updated_at = now()
            returning ${GATEKEEPER_POLICY_COLUMNS}`,
-          [...values, input.gatekeeperId],
+          [
+            ...values,
+            input.gatekeeperId,
+            allows?.operationDigest ?? null,
+            allows?.operationVersion ?? null,
+          ],
         );
   const row = result.rows[0];
   if (!row) throw new Error('setPolicy: INSERT ... RETURNING produced no row');
@@ -298,6 +384,8 @@ export interface SetAutoApprovedActionKindInput {
   /** The published Operation's own `blast_radius` on that gate. */
   readonly blastRadius: BlastRadius;
   readonly setBy: string;
+  /** Legacy 218: the published definition the person allowed. */
+  readonly allows: AllowedDefinition;
 }
 
 /** Writes the gate-scoped auto-approval rule. A `requesterCanApprove` already in force for this
@@ -321,5 +409,6 @@ export async function setAutoApprovedActionKind(
     autoApprove: true,
     requesterCanApprove: existing?.requesterCanApprove ?? undefined,
     setBy: input.setBy,
+    allows: input.allows,
   });
 }

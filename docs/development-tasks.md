@@ -3996,7 +3996,13 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 
 **218 — 「始终允许」策略与 Operation 定义摘要绑定，修订发布后失效**（见 `global-roadmap-2026-10-16.md` §4）
 
-- 实现说明：（未开工）
+- 实现说明（#592，2026-10-16 合入，085c93a；遗留 218，连同 300、301 关闭）：
+  - **绑定**：governance `0020_auto_approval_definition` 给 `gatekeeper_policies` 加可空 `operation_digest`（与门每次调用核对、ActionRequest 自 0019 记录的同一摘要）与 `operation_version`（显示用）。内核在按门规则打开自动批准时两者都写；`governance/policy/policies.ts` 的引擎只在请求摘要等于规则摘要时认 `auto_approve = true`，不带摘要的规则从不自动批准，显示为暂停。迁移按证据回填：同门、同动作种类、规则写入者在规则最后写入前批准（`d.status <> 'rejected' and ar.status <> 'rejected'`）的最新请求的摘要；无证据或早于 0019 的不绑定；每条规则一条审计（`policy.auto_approve_definition_bound` / `_unproven`），幂等。
+  - **同一套检查**：「始终允许」与 approve 共用 `assertMayApprove`（自批、I14、R-17）；`set_auto_approved_action_kind` 按目标门做 I14（修复越权）并必填 `actionRequestId`；`set_policy` 拒绝门上不存在的 Operation 与动作种类，按门开自动批准必填 `operationVersion`（不是现行版本 409 `version_changed`），门已不再提供的 Operation 上的已有规则只许改为 `autoApprove: false` 且不放宽自批；省略 `requesterCanApprove` 保留原值，`null` 才清空，收紧分支拒绝把 `false` 清成 `null`（404，不泄露 Operation 是否存在）。
+  - **300（发布绑定版本）**：`publish_skill` / `publish_procedure` / `install_module` / `upgrade_module` 必填 `version`，`publish_operation` 的 `draftDigest` 必填，`publish_manifest` 必填 `drafts`（只发布调用方读到的草稿，任一漏列或被改过整体 409 `draft_changed`），不一致 409、不写入。同类入口已在 PR 中逐个盘点。
+  - **301 与控制台**：门删光 Operation 时芯片、「你的可达性」、就绪提示都说「门已不再提供」；审批页与对话卡片只在请求按现在发布的版本发起时提供「总是允许」并写明版本（wire `publishedDefinition {version | null, requestIsCurrent}`），没有已发布版本时说明原因；策略表显示「已暂停 · 待确认版本 / 定义已变」并可重新确认，编辑面板读门上当前版本、遇 409 就地重读；门已不再提供的规则按钮为「停用」；隐藏服务端必拒的三类按钮（自批、目录非提议人发布 / 弃用、零 Operation 门启用）。
+  - **主机**：`release.md` §3.29（迁移、窗口后旧规则可能「待确认版本」、契约不向后兼容、只读核对、回滚）与 §6 的 0020 一行。脚本 `accept_s2.sh` / `accept_s4.sh` / `drill-add-gatekeeper.sh` / `lib/accept-common.sh` 已带新参数（审查 #488 范围），窗口里跑 S2 / S4 时验证。
+  - **遗留**：STATUS 311–318（`enable_gate_instance` 的 `manifestDigest` 可选、无删除策略能力、两条 UX P3、目录 `not_proposer` 按钮、测试意图漂移、e2e 覆盖、向导清单名字转义）。
 
 **232 — `request_action` 在边界拒绝未知动作名，回显经转义与限长**（见 `global-roadmap-2026-10-16.md` §4）
 

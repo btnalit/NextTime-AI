@@ -9,10 +9,11 @@ import {
 } from 'react';
 import type { Permissions } from '../../hooks/usePermissions.js';
 import { type Resource, useResource } from '../../hooks/useResource.js';
+import { alwaysAllowUnpublishedText } from '../../lib/always-allow.js';
 import type { CapabilityCaller, PushSource } from '../../lib/clients.js';
 import { credentialReviewParams } from '../../lib/credential-review.js';
-import { isForbiddenError } from '../../lib/errors.js';
-import { actionKindTagText, actionKindToastLabel } from '../../lib/format.js';
+import { errorToastText, isForbiddenError, isVersionChangedError } from '../../lib/errors.js';
+import { actionKindTagText, actionKindToastLabel, humanizeKind } from '../../lib/format.js';
 import type { ActionRequestRow } from '../../lib/governance.js';
 import type { Translate } from '../../lib/i18n.js';
 import type { ApprovalDecisionInput, PendingConfirm } from './ApprovalDetail.js';
@@ -276,10 +277,12 @@ export function useApprovalQueue({
     }
     if (input.alwaysAllow) {
       try {
-        // R-20 / D-15: the rule is keyed by this request's gate and action kind.
+        // R-20 / D-15: the rule is keyed by this request's gate and action kind. Legacy 218: it
+        // allows the definition this request was made against, and no later revision.
         await http.call('set_auto_approved_action_kind', {
           gatekeeperId: row.gatekeeperId,
           actionKindTag: row.actionKindTag,
+          actionRequestId: id,
         });
         toast.push({
           tone: 'info',
@@ -296,6 +299,12 @@ export function useApprovalQueue({
             '已批准，但自动批准规则未写入',
             'Approved, but the auto-approval rule was not written',
           ),
+          // Every refusal says why (UX acceptance of #592), not only a definition change.
+          description: isVersionChangedError(err)
+            ? alwaysAllowStaleText(t)
+            : errorToastText(err, t, {
+                not_found: alwaysAllowUnpublishedText(t, row.actionKindTag),
+              }),
         });
       }
     }
@@ -362,3 +371,12 @@ export function useApprovalQueue({
 
 export { IDLE };
 export type { DecisionState };
+
+/** Legacy 218: "always allow" was refused because the Operation has a newer published definition
+ *  than the one this request was made against — shared by the approvals page and chat cards. */
+export function alwaysAllowStaleText(t: Translate): string {
+  return t(
+    '这个操作在你批准的请求之后发布了新的定义，「始终允许」只能给你看过的定义。请在新定义的请求上再选「始终允许」；工作区所有者也可以在「模型与配额」的策略表里重新确认。',
+    'This operation has a newer published definition than the request you approved, and "Always allow" covers only a definition you have seen. Choose "Always allow" on a request made under the new definition; the workspace owner can also reconfirm it in the policy table under Models.',
+  );
+}

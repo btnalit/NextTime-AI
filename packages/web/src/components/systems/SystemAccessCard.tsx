@@ -8,6 +8,8 @@ import type {
 } from '@nexttime/shared';
 import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import type { DraftAsRead } from '../../lib/connections.js';
+import { isDraftChangedError } from '../../lib/errors.js';
 import { actionKindTagText, shortId } from '../../lib/format.js';
 import { gateGrantMakesApprover } from '../../lib/governance.js';
 import { type Translate, useT } from '../../lib/i18n.js';
@@ -39,6 +41,7 @@ import {
   gateReasonHref,
   gateReasonLink,
   gateReasonText,
+  refusalKind,
 } from '../readiness/readiness-copy.js';
 import { announceReadinessChange } from '../readiness/useExecutionReadiness.js';
 
@@ -87,7 +90,13 @@ export interface SystemAccessCardProps {
   readonly http: CapabilityCaller;
   readonly gate: ExecutionReadinessGateWire;
   readonly healthInfo: SystemAccessHealth;
-  readonly draftCount: number;
+  /** This gate's drafts as the page's `list_operations` read saw them — what 「发布清单」 publishes
+   *  (review #493 on #592: the kernel publishes nothing when one changed since). */
+  readonly drafts: readonly DraftAsRead[];
+  /** How many of them 「发布清单」 actually publishes — the gate's own drafts, not proposals or
+   *  ones held back for a gate-owned param (`lib/connections` `manifestPublishPlan`); defaults to
+   *  every draft. */
+  readonly publishableCount?: number;
   readonly canPublish: boolean;
   readonly onPublished: () => void;
   /** `workerDefinitionId -> name`, from the same baseline `execution_readiness` read this card's
@@ -172,7 +181,10 @@ function isSelfPageHref(href: string | undefined): boolean {
  * 可达性" section) so it is available on demand without crowding the row. */
 function MyReachability({ gate }: { readonly gate: ExecutionReadinessGateWire }) {
   const t = useT();
-  const reason = gate.status === 'unreachable' ? gateReasonText(gate.reason, t) : undefined;
+  const reason =
+    gate.status === 'unreachable'
+      ? gateReasonText(gate.reason, t, 'me', refusalKind(gate.definitionMismatch))
+      : undefined;
   return (
     <span
       className={`chip chip-s ${GATE_STATUS_TONE[gate.status]}`}
@@ -245,7 +257,9 @@ function MyReachabilityDetail({
       </span>
       {gate.status === 'unreachable' ? (
         <>
-          <span className="text-3 text-small">{gateReasonText(gate.reason, t)}</span>
+          <span className="text-3 text-small">
+            {gateReasonText(gate.reason, t, 'me', refusalKind(gate.definitionMismatch))}
+          </span>
           {gate.reason !== undefined ? (
             <FixHint
               href={isSelfPageHref(href) ? undefined : href}
@@ -281,7 +295,8 @@ export function SystemAccessCard({
   http,
   gate,
   healthInfo,
-  draftCount,
+  drafts,
+  publishableCount,
   canPublish,
   onPublished,
   workerNames,
@@ -300,6 +315,7 @@ export function SystemAccessCard({
   const reader = useReadinessReader(http);
   const [grantOpen, setGrantOpen] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
+  const draftCount = publishableCount ?? drafts.length;
   const [publishing, setPublishing] = useState(false);
   const [publishError, setPublishError] = useState<unknown | null>(null);
   const [publishResult, setPublishResult] = useState<PublishManifestResultWire | null>(null);
@@ -318,12 +334,16 @@ export function SystemAccessCard({
       setPublishResult(
         await http.call<PublishManifestResultWire>('publish_manifest', {
           gatekeeperId: gate.gateId,
+          drafts,
         }),
       );
       announceReadinessChange(http);
       onPublished();
     } catch (err) {
       setPublishError(err);
+      // A draft changed after this page read it: nothing was published; read the drafts again so
+      // the next 「发布清单」 names what is there now.
+      if (isDraftChangedError(err)) onPublished();
     } finally {
       setPublishing(false);
     }
@@ -684,7 +704,14 @@ function GranteeRow({
       ) : (
         <>
           <span className="chip chip-warn chip-s">{t('用不了', 'Not usable')}</span>
-          <span className="text-3 text-small">{gateReasonText(gateStatus.reason, t, about)}</span>
+          <span className="text-3 text-small">
+            {gateReasonText(
+              gateStatus.reason,
+              t,
+              about,
+              refusalKind(gateStatus.definitionMismatch),
+            )}
+          </span>
           {gateStatus.reason !== undefined ? (
             <FixHint
               href={

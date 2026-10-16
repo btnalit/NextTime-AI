@@ -117,6 +117,7 @@ import {
   GrantNotFoundError,
   HandleIssuanceError,
   NotProposerError,
+  ReviewedVersionChangedError,
   ScopeValidationError,
 } from '../../governance/capability/index.js';
 import {
@@ -409,6 +410,11 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // Review #493 on #583: `discard_operation_draft` / `publish_operation` on a draft revised in
   // place since the caller read it (`draftDigest`). Nothing was written; reload and look again.
   if (err instanceof OperationDraftChangedError) {
+    return { status: 409, code: err.code, message: err.message };
+  }
+  // Legacy 300: `publish_skill` / `publish_procedure` / `install_module` / `upgrade_module` would
+  // write a version other than the one the caller reviewed. Nothing was written.
+  if (err instanceof ReviewedVersionChangedError) {
     return { status: 409, code: err.code, message: err.message };
   }
   // S5.3 `register_source` (ingest-handlers.ts): the (kind, name) is another owner's Source, has
