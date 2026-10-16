@@ -98,6 +98,7 @@ const NOTABLE_UPDATE_STATUSES: ReadonlySet<ActionRequestStatus> = new Set([
   'executed',
   'failed',
   'compensated',
+  'withdrawn',
 ]);
 
 async function writeActionMessage(
@@ -263,6 +264,7 @@ export function registerActionRequestConsumers(
         actionKind: actionRequest.actionKind,
         status: event.status,
         isHolder,
+        failureKind: actionRequest.failureKind,
       });
       await writeActionMessage(
         deps,

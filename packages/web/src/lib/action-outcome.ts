@@ -1,4 +1,10 @@
-import { clipCodePoints, visibleText } from '@nexttime/shared';
+import {
+  ACTION_REQUEST_FAILURE_KIND_VALUES,
+  type ActionRequestFailureKind,
+  clipCodePoints,
+  failureKindOfReason,
+  visibleText,
+} from '@nexttime/shared';
 import { withPlaintextTlsHint } from './errors.js';
 import { actionKindTagText } from './format.js';
 import type { Translate } from './i18n.js';
@@ -8,11 +14,13 @@ import type { Translate } from './i18n.js';
  * stands, shared by the chat's tool row (`components/ToolCallRowView`) and the approvals pages, so
  * the chip, the notice and the raw result never say different things about the same request.
  *
- * The kernel records a request whose outcome nobody can confirm as `failed` with a reason that
- * starts `outcome_unknown:` (GO1 will give it a structured category; until then the reason prefix
- * is the signal). A request that never ran fails `gate_unreachable:` (nothing was sent) or
- * `apply_not_received:` (the gate has no record of it running). An `executing` row whose call got
- * no answer carries `outcomeInDoubt`; an approved row held back by an earlier one carries
+ * A `failed` request says which kind of failure it was in `failureKind` (S11 GO1, the row's own
+ * column): `not_delivered` (it never reached the gate, nothing ran), `refused` (the platform or the
+ * gate said no, or its target answered with an error), `outcome_unknown` (it may have run). A tool
+ * result from before that field reads its kind from its reason the way the 0021 backfill reads old
+ * rows (shared `failureKindOfReason`): not delivered or refused only when the reason's code says
+ * nothing ran, outcome unknown otherwise (review of #601, M1). An `executing` row whose call
+ * got no answer carries `outcomeInDoubt`; an approved row held back by an earlier one carries
  * `queuedBehind` (`ActionRequestWireSchema`).
  */
 
@@ -28,12 +36,12 @@ export interface ActionWaitingFields {
 export type ActionOutcomeKind =
   /** executed / verified. */
   | 'done'
-  /** failed, and nothing ran: not sent (`gate_unreachable`) or no record on the gate
-   *  (`apply_not_received`). Safe to request again. */
+  /** failed, and nothing ran (`failureKind: 'not_delivered'`). Safe to request again. */
   | 'not_run'
   /** failed with `outcome_unknown`: it may have run. Check the target before anything else. */
   | 'outcome_unknown'
-  /** failed for any other reason the gate or its target gave. */
+  /** failed: refused, by the platform or the gate, or its target answered with an error
+   *  (`failureKind: 'refused'`). */
   | 'failed'
   /** executing with no answer from the gate yet: the platform will ask the gate. */
   | 'in_doubt'
@@ -42,7 +50,9 @@ export type ActionOutcomeKind =
   | 'queued'
   | 'pending_approval'
   | 'rejected'
-  | 'expired';
+  | 'expired'
+  /** taken back before it ran (S11 GO1): its step was cancelled or revised away. */
+  | 'withdrawn';
 
 export interface ActionOutcome extends ActionWaitingFields {
   readonly kind: ActionOutcomeKind;
@@ -51,19 +61,45 @@ export interface ActionOutcome extends ActionWaitingFields {
   readonly id?: string;
 }
 
-/** The code a failure reason starts with (`outcome_unknown: …`). */
-const REASON_CODE = /^(outcome_unknown|gate_unreachable|apply_not_received):/;
+/** What each failure kind reads as (S11 GO1). */
+const FAILURE_KIND_OUTCOME: Readonly<Record<ActionRequestFailureKind, ActionOutcomeKind>> = {
+  not_delivered: 'not_run',
+  refused: 'failed',
+  outcome_unknown: 'outcome_unknown',
+};
 /** A cut-short preview of the outcome object as the Worker's tool writes it
  *  (`JSON.stringify(result, null, 2)`, `id` then `status`): only its own top-level `status`, never
  *  one inside a simulated effect or the gate's data. */
 const PREVIEW_STATUS = /^\{\s*"id":\s*"([^"]*)",\s*"status":\s*"([a-z_]+)"/;
-const PREVIEW_REASON_CODE =
-  /\n {2}"reason":\s*"(outcome_unknown|gate_unreachable|apply_not_received):/;
+/** The start of the reason a cut-short preview still shows, as JSON string content. */
+const PREVIEW_REASON = /\n {2}"reason":\s*"((?:[^"\\]|\\.)*)/;
 const PREVIEW_IN_DOUBT = /\n {2}"outcomeInDoubt":\s*\{/;
+const PREVIEW_FAILURE_KIND = /\n {2}"failureKind":\s*"([a-z_]+)"/;
+
+/** `value` as a failure kind, or `undefined` for anything else (an older result has none). */
+export function failureKindOf(value: unknown): ActionRequestFailureKind | undefined {
+  return typeof value === 'string' &&
+    (ACTION_REQUEST_FAILURE_KIND_VALUES as readonly string[]).includes(value)
+    ? (value as ActionRequestFailureKind)
+    : undefined;
+}
+
+/** A preview's reason as text — `null` when there is none; what a cut-short preview still shows
+ *  (enough for its code: a reason cut before it ends reads as outcome unknown). */
+function previewReason(text: string): string | null {
+  const raw = PREVIEW_REASON.exec(text)?.[1];
+  if (raw === undefined) return null;
+  try {
+    return JSON.parse(`"${raw}"`) as string;
+  } catch {
+    return raw;
+  }
+}
 
 function kindOf(
   status: string,
-  reasonCode: string | undefined,
+  failureKind: ActionRequestFailureKind | undefined,
+  reason: string | null,
   inDoubt: boolean,
 ): ActionOutcomeKind | null {
   switch (status) {
@@ -71,10 +107,7 @@ function kindOf(
     case 'verified':
       return 'done';
     case 'failed':
-      if (reasonCode === 'outcome_unknown') return 'outcome_unknown';
-      if (reasonCode === 'gate_unreachable' || reasonCode === 'apply_not_received')
-        return 'not_run';
-      return 'failed';
+      return FAILURE_KIND_OUTCOME[failureKind ?? failureKindOfReason(reason)];
     case 'executing':
       return inDoubt ? 'in_doubt' : 'running';
     case 'approved':
@@ -86,6 +119,8 @@ function kindOf(
       return 'rejected';
     case 'expired':
       return 'expired';
+    case 'withdrawn':
+      return 'withdrawn';
     default:
       return null;
   }
@@ -128,9 +163,14 @@ export function actionOutcomeOfToolResult(text: string): ActionOutcome | null {
   const object = outcomeObjectOf(parsed);
   if (object) {
     const status = object.status as string;
-    const reason = typeof object.reason === 'string' ? object.reason : '';
+    const reason = typeof object.reason === 'string' ? object.reason : null;
     const waiting = object as ActionWaitingFields;
-    const kind = kindOf(status, REASON_CODE.exec(reason)?.[1], Boolean(waiting.outcomeInDoubt));
+    const kind = kindOf(
+      status,
+      failureKindOf(object.failureKind),
+      reason,
+      Boolean(waiting.outcomeInDoubt),
+    );
     return kind
       ? {
           kind,
@@ -145,7 +185,12 @@ export function actionOutcomeOfToolResult(text: string): ActionOutcome | null {
   const id = preview?.[1];
   const status = preview?.[2];
   if (id === undefined || status === undefined) return null;
-  const kind = kindOf(status, PREVIEW_REASON_CODE.exec(text)?.[1], PREVIEW_IN_DOUBT.test(text));
+  const kind = kindOf(
+    status,
+    failureKindOf(PREVIEW_FAILURE_KIND.exec(text)?.[1]),
+    previewReason(text),
+    PREVIEW_IN_DOUBT.test(text),
+  );
   return kind ? { kind, status, id } : null;
 }
 
@@ -175,7 +220,87 @@ export function actionOutcomeChip(
       return { className: 'chip-danger', label: t('已拒绝', 'rejected') };
     case 'expired':
       return { className: 'chip-neutral', label: t('已过期', 'expired') };
+    case 'withdrawn':
+      return { className: 'chip-neutral', label: t('已撤回', 'withdrawn') };
   }
+}
+
+/**
+ * S11 GO1: what a failed request's kind means for the reader, for the approvals pages and the chat
+ * status line — `short` for a list row, `title` + `message` for a detail pane. `danger` only for
+ * "outcome unknown", the one a person must check before doing anything (`kit/notice`'s "an action
+ * that may already have run"); `null` when the row is not failed / compensated or carries no kind.
+ * `check` names what to check where, when the caller knows it (UX acceptance of #586, P2-2 / P3-2):
+ * the system by name and the action with its target, so "outcome unknown" says exactly what to look
+ * at.
+ */
+export function failureReading(
+  row: { readonly status: string; readonly failureKind?: string | null },
+  t: Translate,
+  check?: { readonly system?: string | null; readonly action?: string | null },
+): {
+  readonly kind: ActionRequestFailureKind;
+  readonly tone: 'danger' | 'info';
+  readonly short: string;
+  readonly title: string;
+  readonly message: string;
+} | null {
+  if (row.status !== 'failed' && row.status !== 'compensated') return null;
+  const kind = failureKindOf(row.failureKind);
+  switch (kind) {
+    case 'not_delivered':
+      return {
+        kind,
+        tone: 'info',
+        short: t('没发出，什么都没执行', 'Not sent — nothing ran'),
+        title: t(
+          '请求没有到达门，什么都没执行',
+          'The request never reached the gate — nothing ran',
+        ),
+        message: t(
+          '连不上门、平台无法向门认证，或门确认从没收到这次请求。目标系统没有任何变化；仍然需要的话，可以重新发起。',
+          'The gate could not be reached, the platform could not authenticate to it, or the gate confirmed it never received this request. Nothing changed on the target system; request it again if it is still wanted.',
+        ),
+      };
+    case 'refused':
+      return {
+        kind,
+        tone: 'info',
+        short: t('被拒绝或执行失败', 'Refused or failed'),
+        title: t(
+          '平台或门明确答复：不执行或执行失败',
+          'The platform or the gate answered: refused, or it failed',
+        ),
+        message: t(
+          '例如操作已被停用、批准的定义已不存在、门拒绝了参数或凭据，或目标系统返回了错误。原样重试会得到同样的结果：先按原因处理，再决定是否重新发起。',
+          'For example the Operation was disabled, the approved definition is gone, the gate refused the parameters or had no credential, or the target system answered with an error. Asking again unchanged gets the same answer: deal with the reason first, then decide whether to request it again.',
+        ),
+      };
+    case 'outcome_unknown':
+      return {
+        kind,
+        tone: 'danger',
+        short: t('结果不明，需要核对', 'Outcome unknown — check it'),
+        title: t('结果不明：动作可能已经执行', 'Outcome unknown: the action may have run'),
+        message: outcomeUnknownMessage(t, check?.system ?? undefined, check?.action ?? undefined),
+      };
+    default:
+      return null;
+  }
+}
+
+/** The "outcome unknown" next step, naming the system and the action when known. */
+function outcomeUnknownMessage(t: Translate, system?: string, action?: string): string {
+  const where = system
+    ? t(`到 ${system} 上`, `on ${system}`)
+    : t('到目标系统', 'on the target system');
+  const what = action
+    ? t(`核对 ${action}${/）$/.test(action) ? '' : ' '}是否生效`, `whether ${action} took effect`)
+    : t('核对它是否生效', 'whether it took effect');
+  return t(
+    `平台无法确认这个动作是否生效。不要直接重试：先${where}${what}，再决定要不要重新发起。`,
+    `The platform cannot tell whether this action took effect. Do not just retry: check ${where} ${what}, then decide whether to request it again.`,
+  );
 }
 
 /** Why a request that has not finished is waiting, said in the viewer's language: an `executing`

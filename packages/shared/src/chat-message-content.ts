@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { ActionRequestStatusSchema, BlastRadiusSchema, TaskStatusSchema } from './enums.js';
+import {
+  ActionRequestFailureKindSchema,
+  ActionRequestStatusSchema,
+  BlastRadiusSchema,
+  TaskStatusSchema,
+} from './enums.js';
 
 /**
  * Chat message `kind`/`content` vocabulary for the three system-message kinds `application/
@@ -65,6 +70,9 @@ const SystemActionUpdateContent = z.object({
   status: ActionRequestStatusSchema,
   actionKindTag: z.string(),
   isHolder: z.boolean(),
+  // S11 GO1: on a `failed` / `compensated` update, why it failed (the row's `failure_kind`).
+  // Optional: messages written before it carry none.
+  failureKind: ActionRequestFailureKindSchema.optional(),
 });
 
 export const SystemMessageContentSchema = z.discriminatedUnion('kind', [

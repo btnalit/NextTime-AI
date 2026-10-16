@@ -640,6 +640,12 @@
   white-space: nowrap;
 }
 
+/* S11 GO1: a failed action's kind, beside the chip — kept whole while the text after it is cut. */
+.system-status-failure {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 .chat-empty {
   margin: auto;
   padding: var(--space-6) var(--gutter);

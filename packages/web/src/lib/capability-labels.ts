@@ -1198,9 +1198,10 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
   'action_request.fail': {
     zh: '动作没有成功',
     en: 'Action failed',
-    zhHint: '门拒绝或执行失败、请求没有发出，或结果不明。看详情里的原因。',
+    zhHint:
+      '三种之一，详情里的「失败类别」写明是哪种：没发出（什么都没执行）、被平台或门拒绝或执行失败、结果不明（可能已经执行，需要核对）。',
     enHint:
-      'The gate refused or failed it, the request was never sent, or its outcome is unknown. See the reason in the details.',
+      'One of three, named by "failure kind" in the details: not sent (nothing ran), refused or failed by the platform or the gate, or outcome unknown (it may have run — check it).',
   },
   'action_request.compensate': {
     zh: '动作已补偿',
@@ -1213,6 +1214,13 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     en: 'Action expired',
     zhHint: '动作请求没有在时限内处理，已过期。',
     enHint: 'The action request was not decided in time and expired.',
+  },
+  'action_request.withdraw': {
+    zh: '动作请求已撤回',
+    en: 'Action withdrawn',
+    zhHint: '动作还没开始执行就被撤回（它所属的步骤被取消或在计划修订中移除），什么都没执行。',
+    enHint:
+      'The action was taken back before it started running (the step it belongs to was cancelled or revised away), so nothing ran.',
   },
   'task.queue': {
     zh: '任务已排队',

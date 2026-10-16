@@ -1,5 +1,6 @@
 import { IllegalTransition, getCapability, namesASecretField } from '@nexttime/shared';
 import type {
+  ActionRequestFailureKind,
   ActionRequestStatus,
   CapabilityChannel,
   CapabilityScope,
@@ -405,10 +406,16 @@ async function runObserve(
 // `ActionExecutor.execute`) always runs outside all of them. See module doc comment.
 // -------------------------------------------------------------------------------------------
 
+/** What a phase-2 continuation resolves to; the result returned to the caller is `{id, ...this}`,
+ *  key order kept (`id`, `status`, `failureKind`, then the rest): the Worker's tool shows it as
+ *  pretty JSON cut to a length, and the console reads a cut preview by those leading fields
+ *  (web `lib/action-outcome`). */
 interface ExecutionOutcome {
   readonly status: ActionRequestStatus;
   readonly data?: unknown;
   readonly reason?: string;
+  /** S11 GO1: on a `failed` outcome, the row's own failure kind (never derived from `reason`). */
+  readonly failureKind?: ActionRequestFailureKind;
   /** Legacy 287: why a row that has not finished waits (`withWaitingState`). */
   readonly outcomeInDoubt?: NonNullable<ActionRequestWaitingState['outcomeInDoubt']>;
   readonly queuedBehind?: NonNullable<ActionRequestWaitingState['queuedBehind']>;
@@ -512,6 +519,17 @@ export async function readTerminalOutcome(
   };
 }
 
+/** A `failed` row's outcome: its failure kind from the row itself (S11 GO1 — set on every `failed`
+ *  row, governance/0021), and the reason read back from its audit record. The kind goes first, so
+ *  a preview of the result cut short after a long reason still says it (the console's tool row). */
+function failedOutcome(row: ActionRequestRow, reason: string | undefined): ExecutionOutcome {
+  return {
+    status: 'failed',
+    ...(row.failureKind !== null ? { failureKind: row.failureKind } : {}),
+    reason,
+  };
+}
+
 /** Waits (short polling transactions, never one held open) for a *concurrently* executing row —
  *  one `tryExecuteInline` lost the `startActionRequestExecution` race on — to reach a terminal
  *  state, then reads the winner's result back. See `CONCURRENT_EXECUTION_WAIT_TIMEOUT_MS`'s own
@@ -544,8 +562,9 @@ async function awaitConcurrentExecution(
         systemActorId,
         actionRequestId,
       );
-      return { status: 'failed', reason: outcome.reason };
+      return failedOutcome(row, outcome.reason);
     }
+    if (row?.status === 'withdrawn') return { status: 'withdrawn' };
     if (Date.now() >= deadline) {
       // P2-8 fix: report the row's *actual* last-observed status, not a fabricated 'failed' — the
       // winner may simply still be executing (or, once phase-2 inline execution is routed through
@@ -638,8 +657,9 @@ async function tryExecuteInline(
       systemActorId,
       actionRequestId,
     );
-    return { status: 'failed', reason: outcome.reason };
+    return failedOutcome(row, outcome.reason);
   }
+  if (row?.status === 'withdrawn') return { status: 'withdrawn' };
   if ((row?.status === 'approved' || row?.status === 'auto_approved') && stoppedAtPending) {
     return { status: row.status };
   }
@@ -679,7 +699,8 @@ async function pollAndExecute(
     );
     if (!row) return { status: 'pending_approval' };
 
-    if (row.status === 'rejected' || row.status === 'expired') {
+    // Terminal without a result: turned down, timed out, or taken back (S11 GO1 `withdrawn`).
+    if (row.status === 'rejected' || row.status === 'expired' || row.status === 'withdrawn') {
       return { status: row.status };
     }
     if (row.status === 'executed' || row.status === 'verified') {
@@ -698,7 +719,7 @@ async function pollAndExecute(
         systemActorId,
         actionRequestId,
       );
-      return { status: 'failed', reason: outcome.reason };
+      return failedOutcome(row, outcome.reason);
     }
     if (row.status === 'approved' || row.status === 'auto_approved') {
       if (Date.now() < deadline) {
@@ -774,7 +795,12 @@ async function recordGateExecuteObservationSafely(
   workspaceId: string,
   systemActorId: string,
   args: RunGovernedRequestArgs,
-  outcome: { readonly status: string; readonly data?: unknown; readonly reason?: string },
+  outcome: {
+    readonly status: string;
+    readonly data?: unknown;
+    readonly reason?: string;
+    readonly failureKind?: ActionRequestFailureKind;
+  },
 ): Promise<void> {
   const workerRun = args.workerRun;
   if (!workerRun?.agentPrincipalId) return;
@@ -791,7 +817,13 @@ async function recordGateExecuteObservationSafely(
         operation: args.operationName,
         mode: 'execute',
         status: outcome.status,
-        payload: outcome.status === 'executed' ? outcome.data : { reason: outcome.reason },
+        payload:
+          outcome.status === 'executed'
+            ? outcome.data
+            : {
+                reason: outcome.reason,
+                ...(outcome.failureKind ? { failureKind: outcome.failureKind } : {}),
+              },
       }),
     );
   } catch (err) {
@@ -877,10 +909,13 @@ async function runGovernedRequest(
     case 'rejected':
     case 'expired':
     case 'compensated':
+    case 'withdrawn':
     case 'proposed':
     case 'policy_evaluated':
       // Terminal (or, for the last two, never actually persisted mid-resolution — request-
-      // action.ts's own doc comment) — nothing left to do; report the status as-is.
+      // action.ts's own doc comment) — nothing left to do; report the status as-is. A replay of
+      // an explicit idempotency key can land on a `withdrawn` row (S11 GO1): it was taken back
+      // before it ran, and stays that way.
       return phase1Result(actionRequest);
 
     case 'auto_approved':
@@ -911,6 +946,7 @@ async function runGovernedRequest(
             outcome,
           );
           return {
+            id: actionRequest.id,
             ...(await withWaitingState(
               withTransaction,
               workspaceId,
@@ -918,7 +954,6 @@ async function runGovernedRequest(
               actionRequest.id,
               outcome,
             )),
-            id: actionRequest.id,
           };
         },
       };
@@ -945,6 +980,7 @@ async function runGovernedRequest(
             outcome,
           );
           return {
+            id: actionRequest.id,
             ...(await withWaitingState(
               withTransaction,
               workspaceId,
@@ -952,7 +988,6 @@ async function runGovernedRequest(
               actionRequest.id,
               outcome,
             )),
-            id: actionRequest.id,
           };
         },
       };
@@ -975,6 +1010,11 @@ async function runGovernedRequest(
           );
           const status: ExecutionOutcome['status'] =
             actionRequest.status === 'failed' ? 'failed' : 'executed';
+          // S11 GO1: a failed row's kind comes from the row, as on every other path.
+          const failureKind =
+            actionRequest.status === 'failed' && actionRequest.failureKind !== null
+              ? { failureKind: actionRequest.failureKind }
+              : {};
           await recordGateExecuteObservationSafely(
             withTransaction,
             workspaceId,
@@ -982,13 +1022,15 @@ async function runGovernedRequest(
             args,
             {
               status,
+              ...failureKind,
               ...outcome,
             },
           );
           return {
-            status,
-            ...outcome,
             id: actionRequest.id,
+            status,
+            ...failureKind,
+            ...outcome,
           };
         },
       };
@@ -1063,6 +1105,7 @@ async function runGovernedRequest(
             outcome,
           );
           return {
+            id: actionRequest.id,
             ...(await withWaitingState(
               withTransaction,
               workspaceId,
@@ -1070,7 +1113,6 @@ async function runGovernedRequest(
               actionRequest.id,
               outcome,
             )),
-            id: actionRequest.id,
           };
         },
       };

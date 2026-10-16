@@ -339,6 +339,19 @@ export function assertClassificationAllowed(
   }
 }
 
+/** An Operation's `command_pattern` as a RegExp — a pattern that does not compile is the gate's own
+ *  misconfiguration, found before the target is touched (legacy 310: a plain failure). */
+function commandPatternOf(operationName: string, pattern: string): RegExp {
+  try {
+    return new RegExp(pattern);
+  } catch (err) {
+    throw new TransportInvokeError(
+      `ssh transport: operation "${operationName}"'s command_pattern is not a valid regular expression`,
+      { cause: err },
+    );
+  }
+}
+
 function resolveCommand(operation: Operation, params: unknown): string {
   if (operation.binding.kind !== 'ssh') {
     throw new BindingKindMismatchError(operation.name, 'ssh', operation.binding.kind);
@@ -348,7 +361,10 @@ function resolveCommand(operation: Operation, params: unknown): string {
     return operation.binding.command_template.replace(/\{([^}]+)\}/g, (_m, name: string) => {
       const value = bag[name];
       if (value === undefined) {
-        throw new Error(`ssh transport: missing param "${name}" for operation "${operation.name}"`);
+        // Before the target is touched (legacy 310): a plain failure, not an unclassified one.
+        throw new TransportInvokeError(
+          `ssh transport: missing param "${name}" for operation "${operation.name}"`,
+        );
       }
       // One shell *word* per param: the template is a remote shell line, so a raw value like
       // `eth0; reload` would run two commands. POSIX single-quoting makes the value inert
@@ -358,12 +374,12 @@ function resolveCommand(operation: Operation, params: unknown): string {
   }
   const command = bag.command;
   if (typeof command !== 'string' || command.length === 0) {
-    throw new Error(
+    throw new TransportInvokeError(
       `ssh transport: operation "${operation.name}" requires a string "command" param`,
     );
   }
   const pattern = operation.binding.command_pattern;
-  if (pattern && !new RegExp(pattern).test(command)) {
+  if (pattern && !commandPatternOf(operation.name, pattern).test(command)) {
     throw new SshCommandRejectedError(
       `command does not match operation "${operation.name}"'s own command_pattern`,
     );

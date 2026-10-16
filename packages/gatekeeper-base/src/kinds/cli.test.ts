@@ -21,6 +21,12 @@ describe('renderCommandTemplate', () => {
 
   it('throws when a referenced param is missing', () => {
     expect(() => renderCommandTemplate('echo {msg}', {})).toThrow(/missing param "msg"/);
+    // Legacy 310: a failure before anything ran says so — a plain transport failure, which the gate
+    // records as "failed", not an unclassified error it would have to record as outcome unknown.
+    expect(() => renderCommandTemplate('echo {msg}', {})).toThrow(TransportInvokeError);
+    expect(() =>
+      renderCommandTemplate('fake-cli restart {container}', { container: '--privileged' }),
+    ).toThrow(TransportInvokeError);
   });
 
   it('refuses a positional value that starts with "-" (flag injection, review lane 5 P1-2)', () => {

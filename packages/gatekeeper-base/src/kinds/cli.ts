@@ -66,14 +66,15 @@ export function renderCommandTemplate(template: string, params: Record<string, u
       const rendered = token.replace(/\{([^}]+)\}/g, (_match, name: string) => {
         const value = params[name];
         if (value === undefined) {
-          throw new Error(
+          // Before anything runs (legacy 310): a plain failure, not an unclassified one.
+          throw new TransportInvokeError(
             `renderCommandTemplate: missing param "${name}" for template "${template}"`,
           );
         }
         return String(value);
       });
       if (!isFlagToken && rendered.startsWith('-')) {
-        throw new Error(
+        throw new TransportInvokeError(
           `renderCommandTemplate: positional value "${rendered}" for template "${template}" must not start with "-" (flag injection) — use a --flag={name} template token if a flag-shaped value is actually intended`,
         );
       }

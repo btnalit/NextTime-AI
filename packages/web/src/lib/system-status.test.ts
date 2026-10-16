@@ -32,7 +32,23 @@ describe('systemStatusLineFromMessage', () => {
       actionRequestId: 'ar-1',
       status: 'approved',
       isHolder: true,
+      failureKind: null,
     });
+  });
+
+  it('parses a failed system.action_update with its failure kind (S11 GO1)', () => {
+    const line = systemStatusLineFromMessage(
+      chatMessage({
+        kind: 'system.action_update',
+        text: 'ActionRequest failed',
+        actionRequestId: 'ar-1',
+        status: 'failed',
+        actionKindTag: 'docker.container_restart',
+        isHolder: true,
+        failureKind: 'outcome_unknown',
+      }),
+    );
+    expect(line).toMatchObject({ status: 'failed', failureKind: 'outcome_unknown' });
   });
 
   it('parses system.task_update including failureReason/summary', () => {

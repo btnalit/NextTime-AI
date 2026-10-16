@@ -131,6 +131,7 @@ describe('buildActionUpdateContent', () => {
     ['failed', /fail/i],
     ['compensated', /rolled back|compensated/i],
     ['auto_approved', /auto-approved/i],
+    ['withdrawn', /withdrawn before it ran/i],
   ] as const)('status=%s produces readable text', (status, pattern) => {
     const content = buildActionUpdateContent({
       actionRequestId: 'ar-1',
@@ -141,6 +142,37 @@ describe('buildActionUpdateContent', () => {
     expect(content.kind).toBe('system.action_update');
     expect(content.text).toMatch(pattern);
     expect(content.status).toBe(status);
+  });
+
+  it.each([
+    ['not_delivered', /never reached the gate, so nothing ran/],
+    ['refused', /refused by the platform or the gate/],
+    ['outcome_unknown', /unknown outcome: it may have run — check the target system/],
+  ] as const)(
+    'S11 GO1: a failed update says its kind (%s) in the text and the content',
+    (failureKind, pattern) => {
+      const content = buildActionUpdateContent({
+        actionRequestId: 'ar-1',
+        actionKind: 'docker.container_restart',
+        status: 'failed',
+        isHolder: true,
+        failureKind,
+      });
+      expect(content.text).toMatch(pattern);
+      expect(content.failureKind).toBe(failureKind);
+    },
+  );
+
+  it('S11 GO1: a kind on a status that is not a failure is not carried', () => {
+    const content = buildActionUpdateContent({
+      actionRequestId: 'ar-1',
+      actionKind: 'docker.container_restart',
+      status: 'executed',
+      isHolder: true,
+      failureKind: 'refused',
+    });
+    expect(content).not.toHaveProperty('failureKind');
+    expect(content.text).toMatch(/executed/i);
   });
 
   it('carries isHolder through unchanged', () => {

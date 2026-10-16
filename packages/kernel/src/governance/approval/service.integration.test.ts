@@ -322,7 +322,10 @@ describe.runIf(DATABASE_URL !== undefined)(
 
         await withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
           await startActionRequestExecution(client, workspaceId, first.id);
-          await markActionRequestFailed(client, workspaceId, first.id, { reason: 'gate error' });
+          await markActionRequestFailed(client, workspaceId, first.id, {
+            failureKind: 'refused',
+            reason: 'gate error',
+          });
         });
 
         const retry = await request(key, 'low');

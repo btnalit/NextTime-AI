@@ -1,4 +1,5 @@
 import type {
+  ActionRequestFailureKind,
   ActionRequestStatus,
   BlastRadius,
   SystemMessageContent,
@@ -97,6 +98,16 @@ const ACTION_REQUEST_STATUS_TEXT: Partial<Record<ActionRequestStatus, string>> =
   executed: 'was executed',
   failed: 'failed to execute',
   compensated: 'was rolled back (compensated)',
+  withdrawn: 'was withdrawn before it ran',
+};
+
+/** S11 GO1: a failed update says which kind of failure it was — the one thing a reader must know
+ *  before doing anything about it (`ACTION_REQUEST_FAILURE_KIND_VALUES`). */
+const ACTION_REQUEST_FAILURE_TEXT: Record<ActionRequestFailureKind, string> = {
+  not_delivered: 'failed: it never reached the gate, so nothing ran',
+  refused: 'failed: refused by the platform or the gate, or its target answered with an error',
+  outcome_unknown:
+    'failed with an unknown outcome: it may have run — check the target system before requesting it again',
 };
 
 export interface ActionUpdateContentInput {
@@ -104,13 +115,22 @@ export interface ActionUpdateContentInput {
   readonly actionKind: string;
   readonly status: ActionRequestStatus;
   readonly isHolder: boolean;
+  /** The row's `failure_kind` (S11 GO1): read on a `failed` / `compensated` update only. */
+  readonly failureKind?: ActionRequestFailureKind | null;
 }
 
 export function buildActionUpdateContent(
   input: ActionUpdateContentInput,
 ): SystemActionUpdateContent {
   const label = humanizeActionKind(input.actionKind);
-  const verb = ACTION_REQUEST_STATUS_TEXT[input.status] ?? `is now "${input.status}"`;
+  const failureKind =
+    (input.status === 'failed' || input.status === 'compensated') && input.failureKind
+      ? input.failureKind
+      : undefined;
+  const verb =
+    input.status === 'failed' && failureKind
+      ? ACTION_REQUEST_FAILURE_TEXT[failureKind]
+      : (ACTION_REQUEST_STATUS_TEXT[input.status] ?? `is now "${input.status}"`);
   return {
     kind: 'system.action_update',
     text: `${label}: ${verb}`,
@@ -118,5 +138,6 @@ export function buildActionUpdateContent(
     status: input.status,
     actionKindTag: input.actionKind,
     isHolder: input.isHolder,
+    ...(failureKind ? { failureKind } : {}),
   };
 }

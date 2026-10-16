@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  ActionRequestFailureKindSchema,
   ActionRequestStatusSchema,
   BlastRadiusSchema,
   GrantStatusSchema,
@@ -61,6 +62,10 @@ export const ActionRequestWireSchema = z
     executingAt: z.string().nullable(),
     executedAt: z.string().nullable(),
     failedAt: z.string().nullable(),
+    // S11 GO1: why a `failed` (or later `compensated`) row failed — `not_delivered` / `refused` /
+    // `outcome_unknown` (`ACTION_REQUEST_FAILURE_KIND_VALUES`), the row's own column; `null` on
+    // every other status.
+    failureKind: ActionRequestFailureKindSchema.nullable(),
     // Nullable: rows written before migrations/governance/0007 have no value on file
     // (governance/approval/types.ts's own `ActionRequestRow.requesterCanApprove` doc comment).
     requesterCanApprove: z.boolean().nullable(),

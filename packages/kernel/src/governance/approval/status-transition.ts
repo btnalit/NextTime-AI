@@ -1,4 +1,4 @@
-import type { ActionRequestStatus } from '@nexttime/shared';
+import type { ActionRequestFailureKind, ActionRequestStatus } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import {
   ACTION_REQUEST_ROW_COLUMNS,
@@ -12,7 +12,7 @@ import {
  * governance/approval/status-transition: the one conditional-UPDATE primitive every governed
  * ActionRequest transition uses to actually change `status` (I6/I11 concurrency hardening).
  * Shared by `decide.ts` (`approve`/`reject`, which also pass `approvalDecisionId`) and
- * `execution.ts` (`start_execution`/`mark_executed`/`mark_failed`/`compensate`/`expire`) so there
+ * `execution.ts` (`start_execution`/`mark_executed`/`mark_failed`/`compensate`/`expire`/`withdraw`) so there
  * is exactly one place that writes this column.
  *
  * The `and status = $expectedStatus` clause is the actual correctness guarantee, not a
@@ -40,6 +40,8 @@ export interface UpdateActionRequestStatusInput {
   readonly executingAt?: Date;
   readonly executedAt?: Date;
   readonly failedAt?: Date;
+  /** `execution.ts`'s `markActionRequestFailed` only (S11 GO1, governance/0021). */
+  readonly failureKind?: ActionRequestFailureKind;
 }
 
 /** Throws {@link ActionRequestConcurrentTransitionError} (a subclass of `@nexttime/shared`'s
@@ -56,7 +58,8 @@ export async function updateActionRequestStatusConditional(
          approval_decision_id = coalesce($4::uuid, approval_decision_id),
          executing_at = coalesce($5::timestamptz, executing_at),
          executed_at = coalesce($6::timestamptz, executed_at),
-         failed_at = coalesce($7::timestamptz, failed_at)
+         failed_at = coalesce($7::timestamptz, failed_at),
+         failure_kind = coalesce($9::text, failure_kind)
      where workspace_id = $1 and id = $2 and status = $8
      returning ${ACTION_REQUEST_ROW_COLUMNS}`,
     [
@@ -68,6 +71,7 @@ export async function updateActionRequestStatusConditional(
       next.executedAt ?? null,
       next.failedAt ?? null,
       next.expectedStatus,
+      next.failureKind ?? null,
     ],
   );
   const row = result.rows[0];

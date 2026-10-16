@@ -38,7 +38,7 @@ function setup(drainGatekeeper: ApprovalDrainer['drainGatekeeper']) {
   return { consumer, drainer, onError };
 }
 
-function approved(status: 'approved' | 'auto_approved' | 'rejected' = 'approved') {
+function approved(status: 'approved' | 'auto_approved' | 'rejected' | 'withdrawn' = 'approved') {
   return {
     type: 'ActionRequestUpdated' as const,
     workspaceId: 'ws-1',
@@ -81,5 +81,11 @@ describe('registerActionRequestDrainConsumer', () => {
     const { consumer, drainer } = setup(() => new Promise<DrainResult>(() => {}));
     await consumer(approved('rejected'));
     expect(drainer.drainGatekeeper).not.toHaveBeenCalled();
+  });
+
+  it('S11 GO1: drains again when a row is withdrawn — a withdrawn pending row no longer holds the queue', async () => {
+    const { consumer, drainer } = setup(() => new Promise<DrainResult>(() => {}));
+    await consumer(approved('withdrawn'));
+    expect(drainer.drainGatekeeper).toHaveBeenCalledWith('ws-1', SYSTEM_ACTOR_PLACEHOLDER, 'gk-1');
   });
 });

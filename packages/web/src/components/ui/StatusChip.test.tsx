@@ -86,8 +86,8 @@ const MACHINES: readonly { readonly machine: StatusMachine; readonly values: rea
   ];
 
 describe('StatusChip', () => {
-  it('covers the 13 ActionRequest states, and every other machine, with a known tone', () => {
-    expect(ACTION_REQUEST_STATUS_VALUES).toHaveLength(13);
+  it('covers the 14 ActionRequest states (S11 GO1: withdrawn), and every other machine, with a known tone', () => {
+    expect(ACTION_REQUEST_STATUS_VALUES).toHaveLength(14);
     for (const { machine, values } of MACHINES) {
       expect(statusValues(machine)).toEqual(values);
       for (const status of values) {
