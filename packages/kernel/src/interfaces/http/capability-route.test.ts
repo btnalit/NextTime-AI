@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { UnstorableTextError } from '@nexttime/shared';
+import { PRINCIPAL_REFUSAL_REASON_VALUES, UnstorableTextError } from '@nexttime/shared';
 import { generateKeyPair } from 'jose';
 import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -369,7 +369,7 @@ describe('mapCapabilityError — S2.13 create_connection errors (unit)', () => {
 
   // A member-management refusal keeps the 409 `conflict` code every client already handles, and
   // says which refusal it was in `details.reason` (additive) so the console can explain it.
-  it.each(['last_owner', 'self_disable', 'platform_managed', 'human_api_key', 'reserved_name'])(
+  it.each(PRINCIPAL_REFUSAL_REASON_VALUES)(
     'PrincipalOperationRefusedError(%s) → 409 conflict with details.reason',
     (reason) => {
       const mapped = mapCapabilityError(new PrincipalOperationRefusedError(reason, 'refused'));

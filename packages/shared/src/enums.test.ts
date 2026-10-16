@@ -37,10 +37,12 @@ import {
   PLAN_REVISION_STATUS_VALUES,
   POLICY_DECISION_VALUES,
   PRINCIPAL_KIND_VALUES,
+  PRINCIPAL_REFUSAL_REASON_VALUES,
   PUBLISHABLE_STATUS_VALUES,
   PlanRevisionStatusSchema,
   PolicyDecisionSchema,
   PrincipalKindSchema,
+  PrincipalRefusalReasonSchema,
   PublishableStatusSchema,
   ROLE_VALUES,
   RoleSchema,
@@ -67,6 +69,12 @@ import {
 
 const enumsUnderTest = [
   ['PrincipalKind', PRINCIPAL_KIND_VALUES, PrincipalKindSchema, ['human', 'agent', 'service']],
+  [
+    'PrincipalRefusalReason',
+    PRINCIPAL_REFUSAL_REASON_VALUES,
+    PrincipalRefusalReasonSchema,
+    ['last_owner', 'self_disable', 'platform_managed', 'human_api_key', 'reserved_name'],
+  ],
   ['Role', ROLE_VALUES, RoleSchema, ['owner', 'builder', 'operator', 'member', 'auditor']],
   [
     'SessionKind',
@@ -286,8 +294,8 @@ const enumsUnderTest = [
 ] as const;
 
 describe('enums', () => {
-  it('covers all 31 domain enums required by R4 + S2.2 + S2.6 + R-55 (TurnStatus) + legacy 278 (OperationStatus) + S11 GO1 (ActionRequestFailureKind and the GoalRun / PlanRevision / StepRun vocabulary) + legacy 324 (TaskFailureReason)', () => {
-    expect(enumsUnderTest).toHaveLength(31);
+  it('covers all 32 domain enums required by R4 + S2.2 + S2.6 + R-55 (TurnStatus) + legacy 278 (OperationStatus) + S11 GO1 (ActionRequestFailureKind and the GoalRun / PlanRevision / StepRun vocabulary) + legacy 324 (TaskFailureReason) + the member-management refusal reasons (PrincipalRefusalReason)', () => {
+    expect(enumsUnderTest).toHaveLength(32);
   });
 
   for (const [name, values, schema, expected] of enumsUnderTest) {

@@ -1,3 +1,4 @@
+import { PRINCIPAL_REFUSAL_REASON_VALUES, type PrincipalRefusalReason } from '@nexttime/shared';
 import { HttpError } from './http-client.js';
 import type { Translate } from './i18n.js';
 import { LlmAdminError, llmAdminErrorMessage } from './llm-admin.js';
@@ -26,6 +27,53 @@ export interface ErrorDescription {
   readonly title: string;
   readonly message: string;
 }
+
+/** `PrincipalOperationRefusedError`'s reasons (kernel `application/gateway/members-handlers.ts`),
+ *  read from the 409 `conflict`'s `details.reason` (`principalRefusalCode`). Keyed by the shared
+ *  `PrincipalRefusalReason`, so a reason added there does not compile until it has a title and a
+ *  next step here; spread into `CODE_TITLES`, `CODE_TITLES_ZH` and `ERROR_NEXT_STEPS` below. */
+const PRINCIPAL_REFUSAL_TITLES: Readonly<Record<PrincipalRefusalReason, string>> = {
+  last_owner: 'Last owner',
+  self_disable: 'Cannot disable yourself',
+  platform_managed: 'Managed by the platform',
+  human_api_key: 'People sign in with a password',
+  reserved_name: 'Name reserved',
+};
+
+const PRINCIPAL_REFUSAL_TITLES_ZH: Readonly<Record<PrincipalRefusalReason, string>> = {
+  last_owner: '最后一个所有者',
+  self_disable: '不能停用自己',
+  platform_managed: '由平台管理',
+  human_api_key: '真人成员用密码登录',
+  reserved_name: '名称被保留',
+};
+
+/** The platform plane's own `last_owner` / `self_disable` keep their `lib/platform-errors.ts` copy,
+ *  which wins over these. */
+const PRINCIPAL_REFUSAL_NEXT_STEPS: Readonly<
+  Record<PrincipalRefusalReason, { readonly zh: string; readonly en: string }>
+> = {
+  last_owner: {
+    zh: '工作区至少要保留一位启用中的真人所有者，这一步会让它一个都不剩，所以什么也没有改。先把另一位成员设为所有者，再来做这一步。',
+    en: 'A workspace always keeps at least one active human owner, and this would leave it with none, so nothing changed. Make another member an owner first, then do this.',
+  },
+  self_disable: {
+    zh: '不能停用你自己，什么也没有改。确实需要的话，请另一位所有者来停用。',
+    en: 'You cannot disable yourself, so nothing changed. If it is really needed, ask another owner to do it.',
+  },
+  platform_managed: {
+    zh: '这是平台自己管理的身份（智能体，或平台内部的服务账号），不能在工作区里改角色、停用、轮换密钥或签发凭证，什么也没有改。',
+    en: 'This identity is managed by the platform (an agent, or one of the platform’s internal service accounts): its role, status, key and credentials cannot be changed from a workspace, and nothing changed.',
+  },
+  human_api_key: {
+    zh: '这是一位真人成员，真人用密码登录，不发 API 密钥，什么也没有改。要给自动化程序用的密钥，请创建一个服务账号。',
+    en: 'This is a person, and people sign in with a password rather than an API key, so nothing changed. For a key an automation can use, create a service account.',
+  },
+  reserved_name: {
+    zh: '前后各带两个下划线的显示名留给平台内部的身份，什么也没有创建。换一个名字后重新创建。',
+    en: 'Display names with two underscores at each end are reserved for the platform’s internal identities, so nothing was created. Choose another name and create it again.',
+  },
+};
 
 /** JSON-RPC error code → the same stable name the HTTP transport uses for the equivalent failure
  *  (`interfaces/ws/rpc.ts` `WS_ERROR_CODES`; the HTTP names come from `mapCapabilityError`). */
@@ -123,11 +171,7 @@ export const CODE_TITLES: Readonly<Record<string, string>> = {
   daily_cost_exceeded: 'Daily cost budget reached',
   // `PrincipalOperationRefusedError`'s reasons (`principalRefusalCode`); `last_owner` and
   // `self_disable` are platform-plane codes too.
-  last_owner: 'Last owner',
-  self_disable: 'Cannot disable yourself',
-  platform_managed: 'Managed by the platform',
-  human_api_key: 'People sign in with a password',
-  reserved_name: 'Name reserved',
+  ...PRINCIPAL_REFUSAL_TITLES,
   unknown: 'Error',
 };
 
@@ -197,11 +241,7 @@ export const CODE_TITLES_ZH: Readonly<Record<string, string>> = {
   depth_exceeded: '派生链太深',
   concurrency_exceeded: '同时运行的任务太多',
   daily_cost_exceeded: '今日成本已达上限',
-  last_owner: '最后一个所有者',
-  self_disable: '不能停用自己',
-  platform_managed: '由平台管理',
-  human_api_key: '真人成员用密码登录',
-  reserved_name: '名称被保留',
+  ...PRINCIPAL_REFUSAL_TITLES_ZH,
   unknown: '出错了',
 };
 
@@ -503,29 +543,7 @@ export const ERROR_NEXT_STEPS: Readonly<
     zh: '工作区今天的花费已经达到「每工作区日成本」，这次没有创建任务。等预算按天重置后再试；急需的话，请工作区所有者在「模型与配额」调高它。',
     en: 'The workspace’s spending today has reached its daily cost budget, so no task was created. Retry once the budget resets for the next day; if it cannot wait, ask a workspace owner to raise it under Models.',
   },
-  // `PrincipalOperationRefusedError`'s reasons, read from the 409's `details.reason`
-  // (`principalRefusalCode`). The platform plane's own `last_owner` / `self_disable` keep their
-  // `lib/platform-errors.ts` copy, which wins over these.
-  last_owner: {
-    zh: '工作区至少要保留一位启用中的真人所有者，这一步会让它一个都不剩，所以什么也没有改。先把另一位成员设为所有者，再来做这一步。',
-    en: 'A workspace always keeps at least one active human owner, and this would leave it with none, so nothing changed. Make another member an owner first, then do this.',
-  },
-  self_disable: {
-    zh: '不能停用你自己，什么也没有改。确实需要的话，请另一位所有者来停用。',
-    en: 'You cannot disable yourself, so nothing changed. If it is really needed, ask another owner to do it.',
-  },
-  platform_managed: {
-    zh: '这是平台自己管理的身份（智能体，或平台内部的服务账号），不能在工作区里改角色、停用、轮换密钥或签发凭证，什么也没有改。',
-    en: 'This identity is managed by the platform (an agent, or one of the platform’s internal service accounts): its role, status, key and credentials cannot be changed from a workspace, and nothing changed.',
-  },
-  human_api_key: {
-    zh: '这是一位真人成员，真人用密码登录，不发 API 密钥，什么也没有改。要给自动化程序用的密钥，请创建一个服务账号。',
-    en: 'This is a person, and people sign in with a password rather than an API key, so nothing changed. For a key an automation can use, create a service account.',
-  },
-  reserved_name: {
-    zh: '前后各带两个下划线的显示名留给平台内部的身份，什么也没有创建。换一个名字后重新创建。',
-    en: 'Display names with two underscores at each end are reserved for the platform’s internal identities, so nothing was created. Choose another name and create it again.',
-  },
+  ...PRINCIPAL_REFUSAL_NEXT_STEPS,
 };
 
 /**
@@ -753,15 +771,11 @@ function upstreamCodeName(message: string): string {
   return 'gatekeeper_error';
 }
 
-/** The kernel's `PrincipalOperationRefusedError` reasons (`application/gateway/members-handlers.ts`),
- *  sent as 409 `conflict` with `details.reason`. */
-const PRINCIPAL_REFUSAL_REASONS: ReadonlySet<string> = new Set([
-  'last_owner',
-  'self_disable',
-  'platform_managed',
-  'human_api_key',
-  'reserved_name',
-]);
+/** The kernel's `PrincipalOperationRefusedError` reasons, sent as 409 `conflict` with
+ *  `details.reason`. */
+const PRINCIPAL_REFUSAL_REASONS: ReadonlySet<string> = new Set<string>(
+  PRINCIPAL_REFUSAL_REASON_VALUES,
+);
 
 /** A member-management refusal's own reason as the code to show, so it reads as what it is rather
  *  than a generic conflict; `undefined` for any other `conflict` (or a kernel too old to send it). */
