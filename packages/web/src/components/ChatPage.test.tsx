@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../lib/clients.js';
+import { HttpError } from '../lib/http-client.js';
 import type { ChatMessage, ChatSubscriptionHandlers, WsClient } from '../lib/ws-client.js';
 import { ChatPage } from './ChatPage.js';
 import { ToastProvider } from './ui/Toast.js';
@@ -81,6 +82,9 @@ const HEADER_READS = new Set([
   'list_models',
   'get_workspace',
   'list_chat_turns',
+  // A decidable card reads its own row (`chat/ChatMessageRow` `ChatActionCard`, #592) — a read,
+  // not a decision.
+  'get_action',
 ]);
 
 interface ScriptedHttp extends CapabilityCaller {
@@ -151,6 +155,13 @@ describe('ChatPage inline approval card (C8)', () => {
     const http = scriptedHttp({
       approve: () => ({ status: 'approved' }),
       set_auto_approved_action_kind: () => ({}),
+      // Legacy 218 (#592): "总是允许" is offered once the row says this request is current.
+      get_action: () => ({
+        id: 'ar-1',
+        onBehalfOf: 'someone-else',
+        requesterCanApprove: null,
+        publishedDefinition: { version: 1, requestIsCurrent: true },
+      }),
     });
     renderChat(fake.client, http);
     await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled());
@@ -160,7 +171,7 @@ describe('ChatPage inline approval card (C8)', () => {
     });
 
     const card = await screen.findByTestId('action-request-card');
-    fireEvent.click(within(card).getByRole('button', { name: /总是允许/ }));
+    fireEvent.click(await within(card).findByRole('button', { name: /总是允许/ }));
     // R-20 / D-15: the rule outlives this request and covers every requester — confirmed first.
     const confirm = await screen.findByTestId('action-card-always-allow-confirm');
     expect(http.decisions()).toEqual([]);
@@ -190,6 +201,33 @@ describe('ChatPage inline approval card (C8)', () => {
         'approved',
       ),
     );
+  });
+
+  it('a refused "always allow" says why in the toast — not only that no rule was written (UX acceptance of #592)', async () => {
+    const fake = fakeClient();
+    const http = scriptedHttp({
+      approve: () => ({ status: 'approved' }),
+      set_auto_approved_action_kind: () => {
+        throw new HttpError('capability_error', 'Operation not found', 'not_found');
+      },
+      get_action: () => ({
+        id: 'ar-1',
+        requesterCanApprove: null,
+        publishedDefinition: { version: 1, requestIsCurrent: true },
+      }),
+    });
+    renderChat(fake.client, http);
+    await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled());
+    act(() => {
+      fake.deliver(pendingCardMessage(1, 'ar-1'));
+      fake.caughtUp();
+    });
+    const card = await screen.findByTestId('action-request-card');
+    fireEvent.click(await within(card).findByRole('button', { name: /总是允许/ }));
+    const confirm = await screen.findByTestId('action-card-always-allow-confirm');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    await screen.findByText('已批准，但未写入自动批准规则');
+    expect(await screen.findByText(/没有已发布的「docker\.container_restart」/)).toBeTruthy();
   });
 
   it('passes the typed reason through to approve (C25) and surfaces a kernel error on the card', async () => {

@@ -374,8 +374,8 @@ describe('ModelsPage', () => {
     renderPage(http);
     const row = await screen.findByTestId('policy-row-pol-gone');
     const chip = within(row).getByTestId('policy-auto-approve');
-    expect(chip.textContent).toContain('门已不再提供');
-    expect(chip.getAttribute('title')).toContain('门已不再提供');
+    expect(chip.textContent).toContain('已不再发布');
+    expect(chip.getAttribute('title')).toContain('已不再发布');
     expect(within(row).getByTestId('policy-edit-pol-gone').textContent).toBe('停用');
     const notice = screen.getByTestId('policies-suspended').textContent ?? '';
     expect(notice).toContain('点该行的「停用」');

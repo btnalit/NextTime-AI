@@ -366,8 +366,15 @@
               "type": "boolean"
             },
             "version": {
-              "exclusiveMinimum": 0,
-              "type": "integer"
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "required": [
@@ -6091,8 +6098,15 @@
               "type": "boolean"
             },
             "version": {
-              "exclusiveMinimum": 0,
-              "type": "integer"
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "required": [
@@ -9803,8 +9817,15 @@
                     "type": "boolean"
                   },
                   "version": {
-                    "exclusiveMinimum": 0,
-                    "type": "integer"
+                    "anyOf": [
+                      {
+                        "exclusiveMinimum": 0,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   }
                 },
                 "required": [
@@ -12802,8 +12823,15 @@
                     "type": "boolean"
                   },
                   "version": {
-                    "exclusiveMinimum": 0,
-                    "type": "integer"
+                    "anyOf": [
+                      {
+                        "exclusiveMinimum": 0,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   }
                 },
                 "required": [
@@ -19221,8 +19249,15 @@
               "type": "boolean"
             },
             "version": {
-              "exclusiveMinimum": 0,
-              "type": "integer"
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "required": [
@@ -20230,8 +20265,15 @@
                   "type": "boolean"
                 },
                 "version": {
-                  "exclusiveMinimum": 0,
-                  "type": "integer"
+                  "anyOf": [
+                    {
+                      "exclusiveMinimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               },
               "required": [

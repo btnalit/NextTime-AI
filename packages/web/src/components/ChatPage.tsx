@@ -188,6 +188,7 @@ export function ChatPage({
                       cardErrors={actionCards.cardErrors}
                       canAlwaysAllow={canAlwaysAllow}
                       canDecide={canDecide}
+                      viewerId={viewerId}
                       onApprove={actionCards.handleApprove}
                       onReject={actionCards.handleReject}
                       onOpenApproval={onOpenApproval}

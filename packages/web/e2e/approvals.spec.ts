@@ -120,12 +120,15 @@ test.describe('S2.10 acceptance: approval card -> approve -> status update', () 
     await login(page, apiKey);
 
     // --- approval queue: the seeded request is a row; selecting it opens the drawer with
-    //     Approve / Reject / "Always allow" ---
+    //     Approve / Reject. The seeded row's action is not an Operation its gate publishes, so
+    //     "Always allow" is not offered and the drawer says why (#592: never an option the
+    //     kernel refuses only after it is clicked) ---
     await page.goto('/#/work/approvals');
     await expect(queueRowByMarker(page, E2E_APPROVE_SCOPE)).toBeVisible({ timeout: 15_000 });
     const drawer = await openQueueRow(page, E2E_APPROVE_SCOPE);
     await expect(drawer.getByRole('button', { name: '批准' })).toBeVisible();
-    await expect(drawer.getByRole('checkbox', { name: /总是允许/ })).toBeVisible();
+    await expect(drawer.getByTestId('approval-always-allow-gone')).toBeVisible();
+    await expect(drawer.getByRole('checkbox', { name: /总是允许/ })).toHaveCount(0);
 
     // --- approve from the drawer; the row leaves the Pending tab optimistically and
     //     `list_pending` (pending rows only) confirms it on reconcile — the durable record of

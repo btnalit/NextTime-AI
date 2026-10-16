@@ -169,11 +169,38 @@ describe('ApprovalDetail (S6-A B2 / B3 / C25)', () => {
     expect(stale.textContent).toContain('工作区所有者');
   });
 
-  it('with no published version to name, "总是允许" stays on offer without a version (the kernel answers)', () => {
-    renderDetail({ publishedDefinition: undefined });
-    const option = screen.getByTestId('approval-always-allow-option');
-    expect(option.textContent).not.toContain('只对现在发布的');
+  it('no published version of the action (a draft, deprecated or removed): "总是允许" is not offered, and the page says why (UX acceptance of #592)', () => {
+    renderDetail(
+      { publishedDefinition: { version: null, requestIsCurrent: false } },
+      { gatekeeperNames: new Map([['gk-1', 'docker-prod']]) },
+    );
+    expect(screen.queryByTestId('approval-always-allow-option')).toBeNull();
     expect(screen.queryByTestId('approval-always-allow-stale')).toBeNull();
+    const hint = screen.getByTestId('approval-always-allow-unpublished');
+    expect(hint.textContent).toContain('门「docker-prod」上没有已发布的');
+    expect(hint.textContent).toMatch(/草稿/);
+  });
+
+  it('a row that says nothing about the definition offers no "总是允许" — nothing to bind the rule to', () => {
+    renderDetail({ publishedDefinition: undefined });
+    expect(screen.queryByTestId('approval-always-allow-option')).toBeNull();
+    expect(screen.getByTestId('approval-approve')).toBeTruthy();
+  });
+
+  it('the requester’s own request that may not be self-decided shows no decision buttons and says who decides (dead-end sweep of #592)', () => {
+    renderDetail({ requesterCanApprove: false }, { callerPrincipalId: 'principal-a' });
+    expect(screen.queryByTestId('approval-approve')).toBeNull();
+    expect(screen.queryByTestId('approval-always-allow-option')).toBeNull();
+    expect(screen.getByTestId('approval-own-request').textContent).toMatch(/另一位有审批权的人/);
+    expect(screen.queryByTestId('approval-blocking')).toBeNull();
+  });
+
+  it('someone else’s request, or one the requester may decide, keeps the buttons', () => {
+    renderDetail({ requesterCanApprove: false }, { callerPrincipalId: 'principal-b' });
+    expect(screen.getByTestId('approval-approve')).toBeTruthy();
+    cleanup();
+    renderDetail({ requesterCanApprove: null }, { callerPrincipalId: 'principal-a' });
+    expect(screen.getByTestId('approval-approve')).toBeTruthy();
   });
 
   it('a medium approval without "总是允许" still goes straight through, no confirm', async () => {

@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Permissions } from '../../hooks/usePermissions.js';
 import { actionCardFromPendingContent } from '../../lib/action-card.js';
+import { alwaysAllowUnpublishedText } from '../../lib/always-allow.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
-import { isForbiddenError, isVersionChangedError } from '../../lib/errors.js';
+import { errorToastText, isForbiddenError, isVersionChangedError } from '../../lib/errors.js';
 import { humanizeKind } from '../../lib/format.js';
 import type { Translate } from '../../lib/i18n.js';
 import { systemStatusLineFromMessage } from '../../lib/system-status.js';
@@ -147,7 +148,12 @@ export function useActionCards(
           '已批准，但未写入自动批准规则',
           'Approved, but the auto-approval rule was not written',
         ),
-        ...(isVersionChangedError(err) ? { description: alwaysAllowStaleText(t) } : {}),
+        // Every refusal says why (UX acceptance of #592), not only a definition change.
+        description: isVersionChangedError(err)
+          ? alwaysAllowStaleText(t)
+          : errorToastText(err, t, {
+              not_found: alwaysAllowUnpublishedText(t, card.actionKindTag),
+            }),
       });
     }
   }

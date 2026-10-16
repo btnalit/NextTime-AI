@@ -93,6 +93,10 @@ export interface SystemAccessCardProps {
   /** This gate's drafts as the page's `list_operations` read saw them — what 「发布清单」 publishes
    *  (review #493 on #592: the kernel publishes nothing when one changed since). */
   readonly drafts: readonly DraftAsRead[];
+  /** How many of them 「发布清单」 actually publishes — the gate's own drafts, not proposals or
+   *  ones held back for a gate-owned param (`lib/connections` `manifestPublishPlan`); defaults to
+   *  every draft. */
+  readonly publishableCount?: number;
   readonly canPublish: boolean;
   readonly onPublished: () => void;
   /** `workerDefinitionId -> name`, from the same baseline `execution_readiness` read this card's
@@ -292,6 +296,7 @@ export function SystemAccessCard({
   gate,
   healthInfo,
   drafts,
+  publishableCount,
   canPublish,
   onPublished,
   workerNames,
@@ -310,7 +315,7 @@ export function SystemAccessCard({
   const reader = useReadinessReader(http);
   const [grantOpen, setGrantOpen] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
-  const draftCount = drafts.length;
+  const draftCount = publishableCount ?? drafts.length;
   const [publishing, setPublishing] = useState(false);
   const [publishError, setPublishError] = useState<unknown | null>(null);
   const [publishResult, setPublishResult] = useState<PublishManifestResultWire | null>(null);

@@ -39,6 +39,7 @@ const IMPORTED_DRAFTS = ['accept_s2_mcp_echo', 'accept_s2_mcp_note'].map((name) 
   mode: 'observe',
   blastRadius: 'low',
   status: 'draft',
+  origin: 'import',
   draftDigest: `digest-${name}`,
 }));
 
@@ -91,6 +92,46 @@ const CONNECTION_HANDLERS = {
 };
 
 describe('OnboardingWizard', () => {
+  it('step ③ counts only the drafts the manifest publishes, and says which proposals are skipped and why (review #501 on #592)', async () => {
+    const http = scriptedHttp({
+      ...CONNECTION_HANDLERS,
+      list_operations: () => ({
+        items: [
+          ...IMPORTED_DRAFTS,
+          { ...IMPORTED_DRAFTS[0], name: 'accept_s2_mcp_proposed', origin: 'agent' },
+          {
+            ...IMPORTED_DRAFTS[0],
+            name: 'accept_s2_mcp_owned',
+            gateOwnedParams: [{ path: 'tenant', reason: 'gate_sets' }],
+          },
+        ],
+      }),
+    });
+    render(<OnboardingWizard http={http} onCancel={vi.fn()} onFinished={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: /下一步/ }));
+    const connectStep = await screen.findByTestId('wizard-step-connect');
+    await within(connectStep).findByTestId('cc-connection-secret-reveal');
+    fireEvent.change(within(connectStep).getByLabelText(/目标系统/), {
+      target: { value: 'accept_s2_mcp' },
+    });
+    fireEvent.change(within(connectStep).getByLabelText(/门端点/), {
+      target: { value: 'http://accept-s2-mcp:8080' },
+    });
+    fireEvent.click(within(connectStep).getByRole('button', { name: '注册门' }));
+    const publishStep = await screen.findByTestId('wizard-step-publish');
+    await within(publishStep).findByTestId('wizard-publish-drafts');
+    expect(within(publishStep).getByTestId('wizard-publish-count').textContent).toMatch(
+      /会发布这\s*2\s*个草稿/,
+    );
+    const proposals = within(publishStep).getByTestId('wizard-publish-proposals');
+    expect(proposals.textContent).toMatch(/1\s*个提议草稿会被跳过/);
+    expect(proposals.textContent).toContain('accept_s2_mcp_proposed');
+    expect(proposals.textContent).toMatch(/逐个审阅/);
+    expect(within(publishStep).getByTestId('wizard-publish-gate-owned').textContent).toContain(
+      'accept_s2_mcp_owned',
+    );
+  });
+
   it('walks kind → connect → publish → review → done, calling create_connection/publish_manifest', async () => {
     const onFinished = vi.fn();
     const http = scriptedHttp({

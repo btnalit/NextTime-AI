@@ -1181,12 +1181,14 @@ async function withApprovalDecision(
       decidedAt: decision ? decision.decidedAt.toISOString() : null,
       outcomeInDoubt: waits?.outcomeInDoubt ?? null,
       queuedBehind: waits?.queuedBehind ?? null,
-      ...(row.status === 'pending_approval' && inForce
+      ...(row.status === 'pending_approval'
         ? {
             publishedDefinition: {
-              version: inForce.version,
+              version: inForce?.version ?? null,
               requestIsCurrent:
-                row.operationDigest !== null && row.operationDigest === inForce.digest,
+                inForce !== undefined &&
+                row.operationDigest !== null &&
+                row.operationDigest === inForce.digest,
             },
           }
         : {}),
@@ -1199,7 +1201,8 @@ function definitionKey(row: Pick<ActionRequestRow, 'gatekeeperId' | 'actionKind'
 }
 
 /** Legacy 218 / UX acceptance of #592: for each pending row's (gate, action kind), the version
- *  published now and its digest — what "Always allow" on that request would have to match. */
+ *  published now and its digest — what "Always allow" on that request would have to match. A key
+ *  missing from the map: the gate publishes no such Operation now. */
 async function publishedDefinitions(
   client: PoolClient,
   workspaceId: string,
@@ -1516,9 +1519,14 @@ const setPolicyHandler: CapabilityHandler = async (client, workspaceId, params) 
         payload.gatekeeperId,
         payload.actionKindTag,
       );
+      // The self-approval rule may only narrow here too (#493 review of #592): `true` loosens
+      // anything but `true`, and clearing it (`null` — the default, which lets the requester
+      // approve below `high`) loosens a `false`. Omitted, `setPolicy` keeps what the row has.
+      const nextRequesterCanApprove = payload.requesterCanApprove;
       const loosens =
         payload.autoApprove ||
-        (payload.requesterCanApprove === true && existing?.requesterCanApprove !== true);
+        (nextRequesterCanApprove === true && existing?.requesterCanApprove !== true) ||
+        (nextRequesterCanApprove === null && existing?.requesterCanApprove === false);
       if (!existing || loosens) {
         throw new OperationNotFoundError(payload.gatekeeperId, payload.actionKindTag);
       }

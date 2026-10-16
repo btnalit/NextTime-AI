@@ -714,6 +714,8 @@ describe.runIf(DATABASE_URL !== undefined)(
           });
           await publishOperation(client, workspaceId, { gatekeeperId: gateId, name: GONE.name });
         });
+        const pendingOnGone = await request(GONE.name);
+        expect(pendingOnGone.status).toBe('pending_approval');
         const key = { gatekeeperId: gateId, actionKindTag: GONE.name };
         await dispatchCapability({ pool }, owner(), 'set_policy', {
           policy: { ...key, autoApprove: true, operationVersion: 1, requesterCanApprove: false },
@@ -721,24 +723,32 @@ describe.runIf(DATABASE_URL !== undefined)(
         await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
           deprecateOperation(client, workspaceId, { gatekeeperId: gateId, name: GONE.name }),
         );
+        // The approval page is told nothing is published to allow (coordinator on #592).
+        const pendingRead = (await dispatchCapability({ pool }, owner(), 'get_action', {
+          actionRequestId: pendingOnGone.id,
+        })) as { publishedDefinition?: unknown };
+        expect(pendingRead.publishedDefinition).toEqual({ version: null, requestIsCurrent: false });
         expect(await ruleFor(GONE.name)).toMatchObject({
           autoApprove: true,
           publishedOperationVersion: null,
           autoApproveConsent: 'definition_changed',
         });
 
-        // Loosening still names a published definition: 404.
+        // Loosening still names a published definition: 404 — clearing a `false` included, since
+        // the default lets the requester approve below `high` (#493 review of #592).
         for (const policy of [
           { ...key, autoApprove: true, operationVersion: 1 },
           { ...key, autoApprove: false, requesterCanApprove: true },
+          { ...key, autoApprove: false, requesterCanApprove: null },
         ]) {
           await expect(
             dispatchCapability({ pool }, owner(), 'set_policy', { policy }),
           ).rejects.toThrow(OperationNotFoundError);
         }
-        // Turning it off is allowed, and leaves an ordinary rule.
+        // Turning it off is allowed, and leaves an ordinary rule; omitting the self-approval rule
+        // keeps its `false` rather than writing the looser default.
         const off = (await dispatchCapability({ pool }, owner(), 'set_policy', {
-          policy: { ...key, autoApprove: false, requesterCanApprove: false },
+          policy: { ...key, autoApprove: false },
         })) as PolicyWire;
         expect(off).toMatchObject({
           autoApprove: false,
@@ -752,6 +762,50 @@ describe.runIf(DATABASE_URL !== undefined)(
             policy: { gatekeeperId: gateId, actionKindTag: 'rev.never.ruled', autoApprove: false },
           }),
         ).rejects.toThrow(OperationNotFoundError);
+      });
+
+      it('set_policy keeps requesterCanApprove when omitted, and clears it only on null (#493 review of #592)', async () => {
+        const KEEP = operation({ name: `rev.keep.${randomUUID().slice(0, 8)}` });
+        await withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+          const activity = await startActivity(client, workspaceId, {
+            kind: 'test.keep',
+            principalId: ownerId,
+          });
+          await importManifest(client, workspaceId, {
+            gatekeeperId: gateId,
+            operations: [KEEP],
+            proposedBy: { id: ownerId, kind: 'human' },
+            activityId: activity.id,
+          });
+          await publishOperation(client, workspaceId, { gatekeeperId: gateId, name: KEEP.name });
+        });
+        const key = { gatekeeperId: gateId, actionKindTag: KEEP.name };
+        const write = async (policy: Record<string, unknown>) =>
+          (await dispatchCapability({ pool }, owner(), 'set_policy', {
+            policy: { ...key, ...policy },
+          })) as PolicyWire;
+        expect(await write({ autoApprove: false, requesterCanApprove: false })).toMatchObject({
+          requesterCanApprove: false,
+        });
+        // Omitted: kept — on the gate rule and on a workspace-wide one alike.
+        expect(await write({ autoApprove: true, operationVersion: 1 })).toMatchObject({
+          autoApprove: true,
+          requesterCanApprove: false,
+        });
+        expect(await write({ autoApprove: false })).toMatchObject({ requesterCanApprove: false });
+        const wide = { actionKindTag: KEEP.name };
+        await dispatchCapability({ pool }, owner(), 'set_policy', {
+          policy: { ...wide, autoApprove: false, requesterCanApprove: false },
+        });
+        expect(
+          await dispatchCapability({ pool }, owner(), 'set_policy', {
+            policy: { ...wide, autoApprove: false },
+          }),
+        ).toMatchObject({ requesterCanApprove: false });
+        // `null` clears it, on a published Operation, where loosening is the owner's call.
+        expect(await write({ autoApprove: false, requesterCanApprove: null })).toMatchObject({
+          requesterCanApprove: null,
+        });
       });
 
       it('"always allow" must be ticked on a request for that gate and action kind', async () => {

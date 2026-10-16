@@ -783,6 +783,7 @@ describe('SystemsPage', () => {
       mode: 'observe',
       blastRadius: 'low',
       status: 'draft',
+      origin: 'import',
       draftDigest,
     });
     const http = scriptedHttp({

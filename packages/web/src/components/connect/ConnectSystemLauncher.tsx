@@ -103,7 +103,8 @@ interface TrackedGate {
   readonly health: GateInstanceWire['health'];
   readonly operationCount: number;
   /** Heard from and described Operations (`lib/gate-instances.ts` `gateInstanceAnnounced`). A
-   *  workspace-catalog row is enabled, hence announced. */
+   *  workspace-catalog row carries no `lastSeenAt`: it counts as announced once it lists any
+   *  Operation (the kernel's `enable_gate_instance` refuses 409 `gate_not_ready` otherwise). */
   readonly announced: boolean;
   /** The full platform row when the reader is an administrator; `null` from the workspace catalog. */
   readonly platform: GateInstanceWire | null;
@@ -132,7 +133,7 @@ function fromAvailableRow(row: AvailableGateInstanceWire): TrackedGate {
     status: row.status,
     health: row.health,
     operationCount: row.operationCount,
-    announced: true,
+    announced: row.operationCount > 0,
     platform: null,
   };
 }
@@ -1217,7 +1218,16 @@ function WorkspaceEnableSection({
           </ul>
         </Notice>
       ) : null}
-      {linkedGatekeeperId === null ? (
+      {linkedGatekeeperId === null && !gate.announced ? (
+        // The kernel refuses a workspace enable before the gate has announced its Operations
+        // (`requireAvailable`'s 409 `gate_not_ready`) — say so instead of offering the button.
+        <span className="text-3" data-testid="launcher-workspace-enable-not-ready">
+          {t(
+            '还不能在本工作区启用：它还没有声明任何 Operation。等门自注册后再来。',
+            'Cannot be enabled here yet — it has announced no Operations. Come back once the gate announces.',
+          )}
+        </span>
+      ) : linkedGatekeeperId === null ? (
         canEnable ? (
           <div className="row" style={{ justifyContent: 'space-between' }}>
             <span className="text-2">

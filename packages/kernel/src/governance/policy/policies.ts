@@ -222,7 +222,9 @@ export const SetPolicyPayloadSchema = z
     actionKindTag: z.string().min(1),
     blastRadius: BlastRadiusSchema.optional(),
     autoApprove: z.boolean(),
-    requesterCanApprove: z.boolean().optional(),
+    // Omitted: the rule keeps what it has (#493 review of #592 — omission never resets it to the
+    // default, which is looser for a non-high action). `null`: clear it, inheriting the default.
+    requesterCanApprove: z.boolean().nullable().optional(),
     // Legacy 218: with `gatekeeperId` and `autoApprove: true`, the published version of the
     // Operation the caller looked at — the rule allows that definition only.
     operationVersion: z.number().int().positive().optional(),
@@ -270,7 +272,9 @@ export interface SetPolicyInput {
   readonly actionKind: string;
   readonly blastRadius?: BlastRadius;
   readonly autoApprove: boolean;
-  readonly requesterCanApprove?: boolean;
+  /** Omitted: an existing row keeps its value (a new row gets `null`); `null`: clear it, so the
+   *  compiled-in default applies (`engine.ts` `resolveRequesterCanApprove`). */
+  readonly requesterCanApprove?: boolean | null;
   readonly setBy: string;
   /** Legacy 218: required for a gate-scoped rule with `autoApprove: true` — the definition the
    *  person allowed. Ignored otherwise (such a row records none: it has no consent to outlive). */
@@ -287,7 +291,7 @@ export interface SetPolicyInput {
  *     per gate, so a workspace-wide rule may only require approval.
  *
  * A repeat call for the same key replaces the row's tunable columns
- * (`blastRadius`/`autoApprove`/`requesterCanApprove`) — a rule is configuration, not an
+ * (`blastRadius`/`autoApprove`; `requesterCanApprove` only when given — omitted, it is kept) — a rule is configuration, not an
  * append-only governed record (0002's own "delete is granted" comment, same reasoning extends to
  * update-in-place); every write is audited by the capability dispatch.
  */
@@ -321,6 +325,7 @@ export async function setPolicy(
     input.autoApprove,
     input.requesterCanApprove ?? null,
     input.setBy,
+    input.requesterCanApprove !== undefined,
   ];
   const result =
     input.gatekeeperId === undefined
@@ -330,7 +335,8 @@ export async function setPolicy(
            on conflict (workspace_id, action_kind) do update
              set blast_radius = excluded.blast_radius,
                  auto_approve = excluded.auto_approve,
-                 requester_can_approve = excluded.requester_can_approve,
+                 requester_can_approve = case when $7::boolean then excluded.requester_can_approve
+                                              else policies.requester_can_approve end,
                  set_by = excluded.set_by,
                  updated_at = now()
            returning ${WORKSPACE_POLICY_COLUMNS}`,
@@ -341,11 +347,12 @@ export async function setPolicy(
              workspace_id, action_kind, blast_radius, auto_approve, requester_can_approve, set_by,
              gatekeeper_id, operation_digest, operation_version
            )
-           values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           values ($1, $2, $3, $4, $5, $6, $8, $9, $10)
            on conflict (workspace_id, gatekeeper_id, action_kind) do update
              set blast_radius = excluded.blast_radius,
                  auto_approve = excluded.auto_approve,
-                 requester_can_approve = excluded.requester_can_approve,
+                 requester_can_approve = case when $7::boolean then excluded.requester_can_approve
+                                              else gatekeeper_policies.requester_can_approve end,
                  set_by = excluded.set_by,
                  operation_digest = excluded.operation_digest,
                  operation_version = excluded.operation_version,

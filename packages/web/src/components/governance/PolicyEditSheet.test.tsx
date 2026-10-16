@@ -397,11 +397,15 @@ describe('PolicyEditSheet — legacy 218: "always allow" names the version it al
       '已经没有发布',
     );
     const notice = screen.getByTestId('policy-edit-suspended');
-    expect(notice.textContent).toContain('门已不再提供');
+    expect(notice.textContent).toContain('门上已不再发布');
     expect(screen.queryByTestId('policy-edit-view-operation')).toBeNull();
     // Loosening is not on offer: the kernel accepts only a tightening here.
     const yes = screen.getByRole('option', { name: '是' }) as HTMLOptionElement;
     expect(yes.disabled).toBe(true);
+    // Back to the default from 「否」 loosens as well (#493 review of #592), and says why.
+    const inherit = screen.getByRole('option', { name: '（工作区默认）' }) as HTMLOptionElement;
+    expect(inherit.disabled).toBe(true);
+    expect(document.body.textContent).toContain('这条规则只能收紧');
 
     const submit = screen.getByTestId('policy-edit-submit');
     expect(submit.textContent).toBe('停用');
@@ -417,6 +421,26 @@ describe('PolicyEditSheet — legacy 218: "always allow" names the version it al
           blastRadius: 'medium',
           requesterCanApprove: false,
         },
+      }),
+    );
+  });
+
+  it('back to the workspace default from 「否」 is a loosening and sends null; untouched, nothing is sent (#493 review of #592)', async () => {
+    const { call } = renderSheet(
+      savedPolicy({ gatekeeperId: 'gk-lab', blastRadius: 'medium', requesterCanApprove: false }),
+    );
+    fireEvent.change(screen.getByLabelText('申请人可自批'), { target: { value: '__inherit__' } });
+    fireEvent.click(screen.getByTestId('policy-edit-submit'));
+    const confirm = await screen.findByTestId('policy-edit-confirm');
+    expect(confirm.textContent).toMatch(/放松策略/);
+    fireEvent.change(screen.getByTestId('confirm-typed-name'), {
+      target: { value: 'docker.restart' },
+    });
+    fireEvent.click(screen.getByTestId('confirm-acknowledge'));
+    fireEvent.click(screen.getByTestId('confirm-button'));
+    await waitFor(() =>
+      expect(call).toHaveBeenCalledWith('set_policy', {
+        policy: expect.objectContaining({ requesterCanApprove: null }),
       }),
     );
   });
@@ -459,6 +483,11 @@ describe('PolicyEditSheet — legacy 218: "always allow" names the version it al
     const moved = await screen.findByTestId('policy-edit-version-moved');
     await waitFor(() => expect(moved.textContent).toMatch(/现在确认的是\s*v3/));
     expect(moved.textContent).toMatch(/不再是\s*v2/);
+    // The suspended note above follows the re-read too (UX acceptance of #592, P2).
+    const suspendedNote = screen.getByTestId('policy-edit-suspended').textContent ?? '';
+    expect(suspendedNote).toMatch(/重新确认/);
+    expect(suspendedNote).not.toMatch(/对\s*v2\s*重新确认/);
+    expect(suspendedNote).toMatch(/对\s*v3\s*重新确认/);
     expect(
       (screen.getByTestId('policy-edit-auto-approve') as HTMLInputElement).parentElement
         ?.textContent,

@@ -183,7 +183,7 @@ function policyColumns(
               data-consent={policy.autoApproveConsent}
             >
               {isOrphaned(policy)
-                ? t('已暂停 · 门已不再提供', 'suspended · gate no longer offers it')
+                ? t('已暂停 · 已不再发布', 'suspended · no longer published')
                 : policy.autoApproveConsent === 'not_recorded'
                   ? t('已暂停 · 待确认版本', 'suspended · version unconfirmed')
                   : t('已暂停 · 定义已变', 'suspended · definition changed')}
@@ -306,12 +306,12 @@ function SuspendedPoliciesNotice({
       {orphaned > 0
         ? isOwner
           ? t(
-              `有 ${orphaned} 条「始终允许」对应的 Operation 门已不再提供，无法重新确认：点该行的「停用」，把它改为要求审批。`,
-              `${orphaned} “Always allow” rule(s) name an Operation the gate no longer offers, so they cannot be reconfirmed: use “Turn off” on the row to make them require approval.`,
+              `有 ${orphaned} 条「始终允许」对应的 Operation 已不再发布，无法重新确认：点该行的「停用」，把它改为要求审批。`,
+              `${orphaned} “Always allow” rule(s) name an Operation that is no longer published, so they cannot be reconfirmed: use “Turn off” on the row to make them require approval.`,
             )
           : t(
-              `有 ${orphaned} 条「始终允许」对应的 Operation 门已不再提供，已失效；工作区所有者可以停用它们。`,
-              `${orphaned} “Always allow” rule(s) name an Operation the gate no longer offers and no longer apply; the workspace owner can turn them off.`,
+              `有 ${orphaned} 条「始终允许」对应的 Operation 已不再发布，已失效；工作区所有者可以停用它们。`,
+              `${orphaned} “Always allow” rule(s) name an Operation that is no longer published and no longer apply; the workspace owner can turn them off.`,
             )
         : null}
     </Notice>

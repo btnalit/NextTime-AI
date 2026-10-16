@@ -2059,3 +2059,200 @@ describe('CatalogPage — credential confirmation on Publish', () => {
     );
   });
 });
+
+// D-24 (kernel governance/capability/publish-authority.ts): publish_* / deprecate_* on a row
+// another principal proposed is refused 403 not_proposer unless the caller is the owner — the
+// catalog does not offer it to a builder there, and says why in its place.
+describe('CatalogPage — proposer-only Publish / Deprecate (D-24)', () => {
+  function workspaceAs(role: string, callerId = 'p-me') {
+    return () => ({
+      id: 'ws-1',
+      name: 'Acme',
+      createdAt: '2026-01-01T00:00:00Z',
+      principalCount: 3,
+      gatekeeperCount: 1,
+      caller: { id: callerId, role, displayName: 'Me', kind: 'human' },
+    });
+  }
+  const refs = () => ({ items: [] });
+
+  it.each([
+    ['the owner, on a draft someone else proposed', 'owner', 'draft', 'p-other', true],
+    ['a builder, on their own draft', 'builder', 'draft', 'p-me', true],
+    ['a builder, on another principal’s draft', 'builder', 'draft', 'p-other', false],
+    ['the owner, on a published row someone else proposed', 'owner', 'published', 'p-other', true],
+    ['a builder, on their own published row', 'builder', 'published', 'p-me', true],
+    ['a builder, on another principal’s published row', 'builder', 'published', 'p-other', false],
+  ] as const)(
+    'Operations: Publish / Deprecate for %s → offered: %s',
+    async (_label, role, status, proposedBy, offered) => {
+      const http = scriptedHttp({
+        get_workspace: workspaceAs(role),
+        list_operations: () => ({
+          items: [{ gatekeeperId: 'gk-1', name: 'docker.restart', status, proposedBy }],
+        }),
+        get_operation_stats: () => ({ items: [] }),
+        resolve_refs: refs,
+      });
+      renderPage(http);
+      const row = await screen.findByTestId('catalog-row');
+      await waitFor(() => expect(http.calls.some((c) => c.name === 'get_workspace')).toBe(true));
+      const detail = await selectRow(row);
+      const action = status === 'draft' ? /^发布$/ : /^弃用/;
+      await waitFor(() =>
+        expect(within(detail).queryByRole('button', { name: action }) !== null).toBe(offered),
+      );
+      const hint = within(detail).queryByTestId('catalog-proposer-only');
+      expect(hint !== null).toBe(!offered);
+      if (hint) {
+        expect(hint.textContent).toMatch(status === 'draft' ? /提议人.*发布/ : /提议人.*弃用/);
+      }
+    },
+  );
+
+  it('Operations: with the role still unknown, Publish stays offered (the kernel decides)', async () => {
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [
+          { gatekeeperId: 'gk-1', name: 'docker.restart', status: 'draft', proposedBy: 'p-x' },
+        ],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+      resolve_refs: refs,
+    });
+    renderPage(http);
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    expect(within(detail).getByRole('button', { name: /^发布$/ })).toBeTruthy();
+    expect(within(detail).queryByTestId('catalog-proposer-only')).toBeNull();
+  });
+
+  it('Operations: a builder’s own revision draft over a live version someone else proposed is not offered Publish', async () => {
+    const http = scriptedHttp({
+      get_workspace: workspaceAs('builder'),
+      list_operations: () => ({
+        items: [
+          { gatekeeperId: 'gk-1', name: 'docker.restart', status: 'published', proposedBy: 'p-o' },
+          {
+            gatekeeperId: 'gk-1',
+            name: 'docker.restart',
+            status: 'draft',
+            version: 2,
+            proposedBy: 'p-me',
+            governanceChange: {
+              before: { mode: 'execute', blastRadius: 'low', autoApprovable: false },
+              after: { mode: 'execute', blastRadius: 'low', autoApprovable: false },
+              direction: 'neutral',
+            },
+          },
+        ],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+      resolve_refs: refs,
+    });
+    renderPage(http, 'operations', 'gk-1::docker.restart@draft');
+    const detail = await screen.findByTestId('catalog-detail');
+    await waitFor(() => expect(within(detail).getByTestId('catalog-proposer-only')).toBeTruthy());
+    expect(within(detail).getByTestId('catalog-proposer-only').textContent).toMatch(/替换/);
+    expect(within(detail).queryByRole('button', { name: /发布/ })).toBeNull();
+  });
+
+  it('Skills: a builder reviewing another principal’s draft gets the reason, not Publish', async () => {
+    const http = scriptedHttp({
+      get_workspace: workspaceAs('builder'),
+      list_skills: () => ({
+        items: [
+          {
+            id: 'sk-1',
+            version: 1,
+            status: 'draft',
+            name: 'n',
+            description: 'd',
+            proposedBy: 'p-o',
+          },
+        ],
+      }),
+      get_skill: () => null,
+      resolve_refs: refs,
+    });
+    renderPage(http, 'skills');
+    await waitFor(() => expect(http.calls.some((c) => c.name === 'get_workspace')).toBe(true));
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    await waitFor(() =>
+      expect(within(detail).getByTestId('catalog-proposer-only').textContent).toMatch(/发布/),
+    );
+    expect(within(detail).queryByRole('button', { name: /^发布$/ })).toBeNull();
+  });
+
+  it('Procedures: a builder on another principal’s published Procedure gets the reason, not Deprecate', async () => {
+    const http = scriptedHttp({
+      get_workspace: workspaceAs('builder'),
+      list_procedures: () => ({
+        items: [
+          {
+            id: 'pr-1',
+            version: 1,
+            status: 'published',
+            name: 'n',
+            description: 'd',
+            steps: [],
+            proposedBy: 'p-o',
+          },
+        ],
+      }),
+      resolve_refs: refs,
+    });
+    renderPage(http, 'procedures');
+    await waitFor(() => expect(http.calls.some((c) => c.name === 'get_workspace')).toBe(true));
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    await waitFor(() =>
+      expect(within(detail).getByTestId('catalog-proposer-only').textContent).toMatch(/弃用/),
+    );
+    expect(within(detail).queryByRole('button', { name: /弃用/ })).toBeNull();
+  });
+
+  it('Workers: a builder on another principal’s published definition gets the reason, not Deprecate', async () => {
+    const http = scriptedHttp({
+      get_workspace: workspaceAs('builder'),
+      list_worker_definitions: () => ({
+        items: [
+          {
+            id: 'wd-1',
+            version: 1,
+            kind: 'worker',
+            status: 'published',
+            definition: { name: 'Fixer' },
+            proposedBy: 'p-o',
+          },
+        ],
+      }),
+    });
+    renderPage(http, 'workers');
+    await waitFor(() => expect(http.calls.some((c) => c.name === 'get_workspace')).toBe(true));
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    await waitFor(() =>
+      expect(within(detail).getByTestId('catalog-proposer-only').textContent).toMatch(/弃用/),
+    );
+    expect(within(detail).queryByRole('button', { name: /弃用/ })).toBeNull();
+  });
+
+  it('a not_proposer refusal on Publish does not close Publish for the session', async () => {
+    const http = scriptedHttp({
+      list_skills: () => ({
+        items: [
+          { id: 'sk-1', version: 1, status: 'draft', name: 'a', description: 'd' },
+          { id: 'sk-2', version: 1, status: 'draft', name: 'b', description: 'd' },
+        ],
+      }),
+      get_skill: () => null,
+      publish_skill: () =>
+        Promise.reject(new HttpError('capability_error', 'proposed by another', 'not_proposer')),
+    });
+    renderPage(http, 'skills');
+    const rows = await screen.findAllByTestId('catalog-row');
+    const detail = await selectRow(rows[0] as HTMLElement);
+    fireEvent.click(within(detail).getByRole('button', { name: /^发布$/ }));
+    await screen.findByTestId('toast');
+    const other = await selectRow(screen.getAllByTestId('catalog-row')[1] as HTMLElement);
+    await waitFor(() => expect(within(other).getByRole('button', { name: /^发布$/ })).toBeTruthy());
+  });
+});

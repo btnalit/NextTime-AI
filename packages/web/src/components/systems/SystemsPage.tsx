@@ -13,6 +13,7 @@ import {
   type DraftAsRead,
   cancelConnectionRequestOverrides,
   draftsAsRead,
+  manifestPublishPlan,
 } from '../../lib/connections.js';
 import { describeError, isForbiddenError } from '../../lib/errors.js';
 import { formatDateTime, formatRelative, shortId } from '../../lib/format.js';
@@ -176,6 +177,17 @@ export function SystemsPage({
       const rows = operationsList.state.data.items;
       for (const gatekeeperId of new Set(rows.map((op) => op.gatekeeperId))) {
         map.set(gatekeeperId, draftsAsRead(rows, gatekeeperId));
+      }
+    }
+    return map;
+  }, [operationsList.state]);
+  // Review #501 on #592 (P3): the count 「发布清单」 shows is what it publishes, not every draft.
+  const publishableByGate = useMemo(() => {
+    const map = new Map<string, number>();
+    if (operationsList.state.status === 'ready') {
+      const rows = operationsList.state.data.items;
+      for (const gatekeeperId of new Set(rows.map((op) => op.gatekeeperId))) {
+        map.set(gatekeeperId, manifestPublishPlan(rows, gatekeeperId).publishable.length);
       }
     }
     return map;
@@ -481,6 +493,7 @@ export function SystemsPage({
                 gate={gate}
                 healthInfo={healthByGate.get(gate.gateId) ?? { linked: false }}
                 drafts={draftsByGate.get(gate.gateId) ?? NO_DRAFTS}
+                publishableCount={publishableByGate.get(gate.gateId) ?? 0}
                 canPublish={can('publish_manifest') !== false}
                 onPublished={reloadRegistry}
                 workerNames={workerNames}

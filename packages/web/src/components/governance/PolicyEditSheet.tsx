@@ -218,9 +218,14 @@ export function PolicyEditSheet({
   const prevRequesterCanApprove = editing?.requesterCanApprove ?? null;
   const nextRequesterCanApprove =
     requesterCanApprove === REQUESTER_INHERIT ? null : requesterCanApprove === 'true';
+  // #493 review of #592: back to the workspace default from 「否」 loosens too — the default lets
+  // the requester approve anything below high.
   const isLoosening =
     (effectiveAutoApprove && (!prevAutoApprove || suspended)) ||
-    (nextRequesterCanApprove === true && prevRequesterCanApprove !== true);
+    (nextRequesterCanApprove === true && prevRequesterCanApprove !== true) ||
+    (nextRequesterCanApprove === null && prevRequesterCanApprove === false);
+  /** A rule the gate no longer backs may only be tightened, so 「否」 stays 「否」 there. */
+  const requesterLocked = orphaned && prevRequesterCanApprove === false;
 
   const canSubmit =
     trimmedKind.length > 0 && !unknownManualKind && !nothingPublished && !submitting;
@@ -239,7 +244,11 @@ export function PolicyEditSheet({
     if (!workspaceWide) policy.gatekeeperId = gateScope;
     if (effectiveAutoApprove && allowedVersion !== null) policy.operationVersion = allowedVersion;
     if (blastRadius !== UNSET) policy.blastRadius = blastRadius;
-    if (nextRequesterCanApprove !== null) policy.requesterCanApprove = nextRequesterCanApprove;
+    // Omitted, the kernel keeps the rule's value; `null` clears it to the workspace default — so an
+    // edit sends `null` only when the reader chose that, and a new rule sends only a real choice.
+    if (nextRequesterCanApprove !== null || prevRequesterCanApprove !== null) {
+      policy.requesterCanApprove = nextRequesterCanApprove;
+    }
 
     setSubmitting(true);
     try {
@@ -270,7 +279,13 @@ export function PolicyEditSheet({
         <div className="stack">
           {suspended ? (
             <Notice tone="warn" testId="policy-edit-suspended">
-              <span>{orphaned ? orphanedText(editing, t) : suspendedText(editing, t)}</span>
+              {/* UX acceptance of #592 (P2): the version named here is the one just read, so a
+                  re-read after a newer publish updates this sentence with the notice below. */}
+              <span>
+                {orphaned
+                  ? orphanedText(editing, t)
+                  : suspendedText({ ...editing, publishedOperationVersion: allowedVersion }, t)}
+              </span>
               {/* UX acceptance of #592 (P2-2): the version to reconfirm is one click away. */}
               {!orphaned && allowedVersion !== null && editing.gatekeeperId !== null ? (
                 <>
@@ -575,10 +590,17 @@ export function PolicyEditSheet({
           <Field
             id="pe-requester-can-approve"
             label={t('申请人可自批', 'Requester may approve')}
-            hint={t(
-              '是否允许发起这类请求的人批准自己的请求；不设置则按工作区默认规则。',
-              'Whether the person who made the request may approve it themselves; unset falls back to the workspace default.',
-            )}
+            hint={
+              requesterLocked
+                ? t(
+                    '门上已不再发布这个 Operation，这条规则只能收紧：现在是「否」，改回「工作区默认」会让发起人可以批准自己的请求（非高影响的动作默认如此），所以不能选。',
+                    'The gate no longer publishes this Operation, so this rule can only be tightened: it is “No” now, and going back to the workspace default would let requesters approve their own requests (the default below high impact), so it is not offered.',
+                  )
+                : t(
+                    '是否允许发起这类请求的人批准自己的请求；不设置则按工作区默认规则。',
+                    'Whether the person who made the request may approve it themselves; unset falls back to the workspace default.',
+                  )
+            }
           >
             <Select
               id="pe-requester-can-approve"
@@ -591,7 +613,7 @@ export function PolicyEditSheet({
               }
               disabled={submitting}
             >
-              <option value={REQUESTER_INHERIT}>
+              <option value={REQUESTER_INHERIT} disabled={requesterLocked}>
                 {t('（工作区默认）', '(workspace default)')}
               </option>
               {/* A rule the gate no longer backs can only be tightened (review #501 P2-2). */}
@@ -679,8 +701,8 @@ export function orphanedText(policy: Pick<PolicyWire, 'operationVersion'>, t: Tr
   return (
     given +
     t(
-      '门已不再提供这个 Operation，所以已暂停，也无法重新确认。停用它：自动批准关闭，规则保留为要求审批。',
-      'and the gate no longer offers this Operation, so it is suspended and cannot be reconfirmed. Turning it off sets auto-approval off and keeps the rule, requiring approval.',
+      '门上已不再发布这个 Operation（工作区弃用了它，或门删掉了它），所以已暂停，也无法重新确认。停用它：自动批准关闭，规则保留为要求审批。',
+      'and the gate no longer publishes this Operation (the workspace deprecated it, or the gate removed it), so it is suspended and cannot be reconfirmed. Turning it off sets auto-approval off and keeps the rule, requiring approval.',
     )
   );
 }

@@ -91,12 +91,12 @@ export const ActionRequestWireSchema = z
     outcomeInDoubt: ActionRequestOutcomeInDoubtWireSchema.nullable().optional(),
     queuedBehind: ActionRequestQueuedBehindWireSchema.nullable().optional(),
     // Legacy 218 / UX acceptance of #592 (P2-1): on a `pending_approval` row (the handlers that
-    // add the decision fields) — the version of this Operation its gate publishes now, and whether
-    // this request was made against that definition. "Always allow" from a request is accepted
-    // only when it was (409 `version_changed` otherwise), and covers that version only. Absent on
-    // other rows, and when the gate publishes no such Operation.
+    // add the decision fields) — the version of this Operation its gate publishes now (`null`: the
+    // gate no longer publishes it), and whether this request was made against that definition.
+    // "Always allow" from a request is accepted only when it was (409 `version_changed`, or 404
+    // when nothing is published), and covers that version only. Absent on other rows.
     publishedDefinition: z
-      .object({ version: z.number().int().positive(), requestIsCurrent: z.boolean() })
+      .object({ version: z.number().int().positive().nullable(), requestIsCurrent: z.boolean() })
       .strict()
       .optional(),
   })
