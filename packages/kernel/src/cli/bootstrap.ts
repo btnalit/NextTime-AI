@@ -1485,7 +1485,7 @@ async function run(): Promise<void> {
     // learns where it went instead of reading the generic usage text.
     throw new BootstrapUsageError(
       'register-gatekeeper was removed: a gate gets into a workspace only through the one landing ' +
-        'path — a platform gate instance is enabled from the catalog (console: 系统接入 → 启用, or ' +
+        'path — a platform gate instance is enabled from the catalog (console: 系统与授权 → 接入一个系统, or ' +
         'enable_gate_instance), a gate the workspace runs itself is connected with create_connection. ' +
         'See docs/runbooks/add-gatekeeper.md.',
     );
