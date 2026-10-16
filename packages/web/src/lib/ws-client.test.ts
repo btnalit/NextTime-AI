@@ -712,7 +712,7 @@ describe('WsClient', () => {
       expect((err as RpcError).code).toBe(-32017);
       expect(describeError(err).code).toBe('unstorable_text');
       expect(presentError(err, (zh) => zh).message).toMatch(
-        /^字段「text」里有一个看不见的 U\+0000/,
+        /^字段「text」里有看不见的 U\+0000/,
       );
     });
   });
