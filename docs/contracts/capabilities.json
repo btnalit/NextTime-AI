@@ -12752,6 +12752,14 @@
               "autoApprove": {
                 "type": "boolean"
               },
+              "autoApproveConsent": {
+                "enum": [
+                  "current",
+                  "definition_changed",
+                  "not_recorded"
+                ],
+                "type": "string"
+              },
               "blastRadius": {
                 "anyOf": [
                   {
@@ -12779,6 +12787,28 @@
               "id": {
                 "type": "string"
               },
+              "operationVersion": {
+                "anyOf": [
+                  {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "publishedOperationVersion": {
+                "anyOf": [
+                  {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "requesterCanApprove": {
                 "type": [
                   "boolean",
@@ -12801,7 +12831,10 @@
               "requesterCanApprove",
               "setBy",
               "createdAt",
-              "updatedAt"
+              "updatedAt",
+              "operationVersion",
+              "publishedOperationVersion",
+              "autoApproveConsent"
             ],
             "type": "object"
           },
@@ -21595,6 +21628,10 @@
           "minLength": 1,
           "type": "string"
         },
+        "actionRequestId": {
+          "minLength": 1,
+          "type": "string"
+        },
         "gatekeeperId": {
           "minLength": 1,
           "type": "string"
@@ -21602,7 +21639,8 @@
       },
       "required": [
         "gatekeeperId",
-        "actionKindTag"
+        "actionKindTag",
+        "actionRequestId"
       ],
       "type": "object"
     },
@@ -21615,6 +21653,14 @@
         },
         "autoApprove": {
           "type": "boolean"
+        },
+        "autoApproveConsent": {
+          "enum": [
+            "current",
+            "definition_changed",
+            "not_recorded"
+          ],
+          "type": "string"
         },
         "blastRadius": {
           "anyOf": [
@@ -21643,6 +21689,28 @@
         "id": {
           "type": "string"
         },
+        "operationVersion": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "publishedOperationVersion": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "requesterCanApprove": {
           "type": [
             "boolean",
@@ -21665,7 +21733,10 @@
         "requesterCanApprove",
         "setBy",
         "createdAt",
-        "updatedAt"
+        "updatedAt",
+        "operationVersion",
+        "publishedOperationVersion",
+        "autoApproveConsent"
       ],
       "type": "object"
     },
@@ -22147,6 +22218,14 @@
         "autoApprove": {
           "type": "boolean"
         },
+        "autoApproveConsent": {
+          "enum": [
+            "current",
+            "definition_changed",
+            "not_recorded"
+          ],
+          "type": "string"
+        },
         "blastRadius": {
           "anyOf": [
             {
@@ -22174,6 +22253,28 @@
         "id": {
           "type": "string"
         },
+        "operationVersion": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "publishedOperationVersion": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "requesterCanApprove": {
           "type": [
             "boolean",
@@ -22196,7 +22297,10 @@
         "requesterCanApprove",
         "setBy",
         "createdAt",
-        "updatedAt"
+        "updatedAt",
+        "operationVersion",
+        "publishedOperationVersion",
+        "autoApproveConsent"
       ],
       "type": "object"
     },

@@ -30,6 +30,9 @@ function savedPolicy(overrides: Partial<PolicyWire> = {}): PolicyWire {
     setBy: 'owner-1',
     createdAt: '2026-09-01T00:00:00.000Z',
     updatedAt: '2026-09-01T00:00:00.000Z',
+    operationVersion: null,
+    publishedOperationVersion: null,
+    autoApproveConsent: 'current',
     ...overrides,
   };
 }
@@ -151,13 +154,22 @@ describe('PolicyEditSheet — R-20 / D-15 rule scope', () => {
           autoApprove: true,
           gatekeeperId: 'gk-lab',
           blastRadius: 'medium',
+          // Legacy 218: the published version the person looked at.
+          operationVersion: 1,
         },
       }),
     );
   });
 
   it('editing a gate rule keeps its gate (read-only) and sends it back', async () => {
-    const { call } = renderSheet(savedPolicy({ gatekeeperId: 'gk-lab', autoApprove: true }));
+    const { call } = renderSheet(
+      savedPolicy({
+        gatekeeperId: 'gk-lab',
+        autoApprove: true,
+        operationVersion: 1,
+        publishedOperationVersion: 1,
+      }),
+    );
     const scope = screen.getByTestId('policy-edit-gate-scope') as HTMLSelectElement;
     expect(scope.value).toBe('gk-lab');
     expect(scope.disabled).toBe(true);
@@ -234,7 +246,7 @@ describe('PolicyEditSheet — the action kind is picked from the gate’s publis
     );
   });
 
-  it('a gate with no published Operation shows the manual input directly and says why', async () => {
+  it('a gate with no published Operation says why no rule can be added for it', async () => {
     renderSheet(undefined, async () => ({ items: [] }));
     fireEvent.change(screen.getByTestId('policy-edit-gate-scope'), {
       target: { value: 'gk-lab' },
@@ -242,8 +254,13 @@ describe('PolicyEditSheet — the action kind is picked from the gate’s publis
     expect((await screen.findByTestId('policy-edit-operations-empty')).textContent).toContain(
       'lab-docker',
     );
-    expect(screen.getByTestId('policy-edit-action-kind-input')).toBeTruthy();
     expect(screen.queryByTestId('policy-edit-manual-toggle')).toBeNull();
+    // Legacy 218: the kernel refuses a rule naming no published Operation.
+    fireEvent.change(screen.getByTestId('policy-edit-action-kind-input'), {
+      target: { value: 'docker.restart' },
+    });
+    expect((screen.getByTestId('policy-edit-submit') as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByTestId('policy-edit-missing').textContent).toContain('先发布一个');
   });
 
   it('manual entry warns about a name no gate publishes and offers the case-insensitive match', async () => {
@@ -257,6 +274,8 @@ describe('PolicyEditSheet — the action kind is picked from the gate’s publis
       target: { value: 'Docker.Restart' },
     });
     expect(screen.getByTestId('policy-edit-unknown-kind').textContent).toContain('lab-docker');
+    // Legacy 218: such a rule is refused by the kernel, so it cannot be saved.
+    expect((screen.getByTestId('policy-edit-submit') as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(screen.getByTestId('policy-edit-use-match'));
     expect((screen.getByTestId('policy-edit-action-kind-input') as HTMLInputElement).value).toBe(
       'docker.restart',
@@ -287,6 +306,78 @@ describe('PolicyEditSheet — the action kind is picked from the gate’s publis
     expect(input.value).toBe('');
     expect((screen.getByTestId('policy-edit-blast-radius') as HTMLSelectElement).value).toBe(
       '__unset__',
+    );
+  });
+});
+
+describe('PolicyEditSheet — legacy 218: "always allow" names the version it allows', () => {
+  const suspendedRule = savedPolicy({
+    gatekeeperId: 'gk-lab',
+    autoApprove: true,
+    blastRadius: 'medium',
+    operationVersion: 1,
+    publishedOperationVersion: 2,
+    autoApproveConsent: 'definition_changed',
+  });
+
+  it('a rule given for v1 while v2 is published says it is suspended; saving reconfirms v2 as a loosening', async () => {
+    const { call } = renderSheet(suspendedRule);
+    const notice = screen.getByTestId('policy-edit-suspended');
+    expect(notice.textContent).toContain('v1');
+    expect(notice.textContent).toContain('v2');
+    const autoApprove = screen.getByTestId('policy-edit-auto-approve') as HTMLInputElement;
+    expect(autoApprove.checked).toBe(true);
+    expect(autoApprove.parentElement?.textContent).toContain('v2');
+
+    fireEvent.click(screen.getByTestId('policy-edit-submit'));
+    const confirm = await screen.findByTestId('policy-edit-confirm');
+    expect(confirm.textContent).toContain('已暂停');
+    expect(confirm.textContent).toContain('v2');
+    fireEvent.change(screen.getByTestId('confirm-typed-name'), {
+      target: { value: 'docker.restart' },
+    });
+    fireEvent.click(screen.getByTestId('confirm-acknowledge'));
+    fireEvent.click(screen.getByTestId('confirm-button'));
+    await waitFor(() =>
+      expect(call).toHaveBeenCalledWith('set_policy', {
+        policy: {
+          actionKindTag: 'docker.restart',
+          autoApprove: true,
+          gatekeeperId: 'gk-lab',
+          blastRadius: 'medium',
+          operationVersion: 2,
+        },
+      }),
+    );
+  });
+
+  it('a rule written before the version was recorded asks for a confirmation', () => {
+    renderSheet(
+      savedPolicy({
+        gatekeeperId: 'gk-lab',
+        autoApprove: true,
+        publishedOperationVersion: 3,
+        autoApproveConsent: 'not_recorded',
+      }),
+    );
+    expect(screen.getByTestId('policy-edit-suspended').textContent).toContain('升级前');
+  });
+
+  it('auto-approval cannot be turned on when the gate no longer publishes the Operation', () => {
+    renderSheet(
+      savedPolicy({
+        gatekeeperId: 'gk-lab',
+        autoApprove: true,
+        operationVersion: 1,
+        publishedOperationVersion: null,
+        autoApproveConsent: 'definition_changed',
+      }),
+    );
+    const autoApprove = screen.getByTestId('policy-edit-auto-approve') as HTMLInputElement;
+    expect(autoApprove.disabled).toBe(true);
+    expect(autoApprove.checked).toBe(false);
+    expect(screen.getByTestId('policy-edit-auto-approve-hint').textContent).toContain(
+      '已经没有发布',
     );
   });
 });

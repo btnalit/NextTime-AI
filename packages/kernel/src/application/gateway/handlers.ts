@@ -70,6 +70,7 @@ import {
   type ActionRequestRow,
   MAX_ACTION_REQUEST_LIST_LIMIT,
   approveActionRequest,
+  approverHasScope,
   getActionRequestVisibleTo,
   listActionRequestsForApprover,
   listPendingForApprover,
@@ -77,9 +78,9 @@ import {
   rejectActionRequest,
 } from '../../governance/approval/index.js';
 import {
+  ReviewedVersionChangedError,
   WORKER_CEILING_CAPABILITIES,
   grantCapability,
-  hasAnyActiveGrant,
   listGrants,
   revokeCapabilityGrant,
 } from '../../governance/capability/index.js';
@@ -88,9 +89,16 @@ import {
   OperationNotFoundError,
   getGatekeeper,
   getPublishedOperation,
+  isPublishedOperationName,
+  operationRecordDigest,
+  operationRecordDigestOrNull,
 } from '../../governance/gatekeepers/index.js';
 import {
+  type AllowedDefinition,
+  type PolicyRow,
+  SetPolicyValidationError,
   assertPolicyWriteAllowed,
+  autoApproveConsent,
   listPolicies,
   parseSetPolicyPayload,
   setAutoApprovedActionKind,
@@ -1316,52 +1324,122 @@ const listActionRequestsHandler: CapabilityHandler = async (client, workspaceId,
  *  actionKindTag)` — it used to be the bare Operation name on every gate). The Operation must be
  *  published on that Gatekeeper (404 otherwise: an unclassified action can never be auto-approved,
  *  I17), and its own `blast_radius` is the rule's snapshot, so a `high` Operation is refused (400,
- *  I8 — `setAutoApprovedActionKind` → `assertPolicyWriteAllowed`). */
-// Item 5 fix (review job 652a4abc lane2 P1: "operator flips I8 workspace signal for medium
-// action_kind across all gates, no I14 scope check"): `minRole:'operator'` only gates *entry* to
-// this capability (`authorize.ts`) — a non-owner operator must additionally hold an active grant
-// covering `actionKind` (`hasAnyActiveGrant`, any `resourceScope` — unchanged by R-20, which
-// narrowed what the rule covers, not who may write it). `owner` bypasses, the same "workspace
-// owner counts as holding every scope" convention I14 already uses elsewhere. Checked before the
-// Operation lookup, so an unauthorized caller learns nothing about which Operations exist.
+ *  I8 — `setAutoApprovedActionKind` → `assertPolicyWriteAllowed`).
+ *
+ *  Legacy 218: it is ticked on one ActionRequest (`actionRequestId`), and allows the definition
+ *  that request was made against — the one the person looked at — only: the rule records its
+ *  digest, and a later revision with another definition goes back through approval
+ *  (`policies.ts` `autoApproveConsent`). The request must be on the same gate and action kind
+ *  (400), visible to the caller (404, like `get_action`), and made against the definition published
+ *  now (409 `version_changed` otherwise: allowing "the latest" would allow one nobody saw).
+ *
+ *  Who may tick it (legacy 218, found by the leftover-232 sweep): whoever may approve that call —
+ *  I14's `approverHasScope` on the target gate, the predicate `approve` itself applies. `minRole:
+ *  'operator'` only gates entry (`authorize.ts`); the owner holds every scope; an operator needs a
+ *  grant on this gate (or a historical one naming this action kind). Item 5 (review job 652a4abc)
+ *  used to check `hasAnyActiveGrant(resourceType: actionKindTag)`, which no grant written since
+ *  R-26 / D-14 can satisfy (they are all `resourceType: 'gatekeeper'`) — so every operator was
+ *  refused — except for an Operation named `gatekeeper`, where a grant on any gate passed without
+ *  the target gate ever being checked. */
 const setAutoApprovedActionKindHandler: CapabilityHandler = async (client, workspaceId, params) => {
-  const { gatekeeperId, actionKindTag } = params as {
+  const { gatekeeperId, actionKindTag, actionRequestId } = params as {
     gatekeeperId: string;
     actionKindTag: string;
+    actionRequestId: string;
   };
   const caller = await currentPrincipalRole(client, workspaceId);
-  if (caller.role !== 'owner') {
-    const covered = await hasAnyActiveGrant(client, workspaceId, {
-      principalId: caller.id,
-      resourceType: actionKindTag,
-    });
-    if (!covered) {
-      throw new ForbiddenError(
-        `set_auto_approved_action_kind: principal ${caller.id} holds no active grant for ` +
-          `action_kind "${actionKindTag}" (I14)`,
-      );
-    }
+  const request = await getActionRequestVisibleTo(
+    client,
+    workspaceId,
+    { principalId: caller.id, role: caller.role },
+    actionRequestId,
+  );
+  if (!request) throw new ActionRequestNotFoundError(workspaceId, actionRequestId);
+  if (request.gatekeeperId !== gatekeeperId || request.actionKind !== actionKindTag) {
+    throw new SetPolicyValidationError(
+      `set_auto_approved_action_kind: action request ${actionRequestId} is not a "${actionKindTag}" call on gatekeeper ${gatekeeperId}`,
+    );
+  }
+  const mayApprove = await approverHasScope(
+    client,
+    workspaceId,
+    { principalId: caller.id, role: caller.role },
+    { actionKind: actionKindTag, resourceScope: gatekeeperId },
+  );
+  if (!mayApprove) {
+    throw new ForbiddenError(
+      `set_auto_approved_action_kind: principal ${caller.id} may not approve "${actionKindTag}" ` +
+        `on gatekeeper ${gatekeeperId} (I14)`,
+    );
   }
   const published = await getPublishedOperation(client, workspaceId, gatekeeperId, actionKindTag);
   if (!published) throw new OperationNotFoundError(gatekeeperId, actionKindTag);
+  const operationDigest = operationRecordDigest(published);
+  if (request.operationDigest !== operationDigest) {
+    throw new ReviewedVersionChangedError(
+      'set_auto_approved_action_kind',
+      `Operation "${actionKindTag}"`,
+      null,
+      published.version,
+    );
+  }
   const result = await setAutoApprovedActionKind(client, workspaceId, {
     gatekeeperId,
     actionKind: actionKindTag,
     blastRadius: published.operation.blast_radius,
     setBy: caller.id,
+    allows: { operationDigest, operationVersion: published.version },
   });
-  return { result: toWirePolicy(result), resourceType: 'policy', resourceId: result.id };
+  return {
+    result: toWirePolicy(result, await definitionInForce(client, workspaceId, result)),
+    resourceType: 'policy',
+    resourceId: result.id,
+  };
 };
 
+/** Legacy 218: what a policy row's list entry reports about the definition in force — the
+ *  version published now on its gate, and whether a gate-scoped "always allow" was given for it
+ *  (`autoApproveConsent`; a stored definition that no longer parses counts as another one). */
+async function definitionInForce(client: PoolClient, workspaceId: string, row: PolicyRow) {
+  if (row.gatekeeperId === null) {
+    return { publishedOperationVersion: null, autoApproveConsent: autoApproveConsent(row, null) };
+  }
+  const published = await getPublishedOperation(
+    client,
+    workspaceId,
+    row.gatekeeperId,
+    row.actionKind,
+  );
+  const digest = published ? operationRecordDigestOrNull(published) : null;
+  return {
+    publishedOperationVersion: published?.version ?? null,
+    autoApproveConsent: autoApproveConsent(
+      row,
+      published && digest !== null
+        ? { operationDigest: digest, blastRadius: published.operation.blast_radius }
+        : null,
+    ),
+  };
+}
+
 /** `set_policy` (owner). With `gatekeeperId` the rule is gate-scoped (R-20 / D-15): the Gatekeeper
- *  must exist, and when the Operation is published there its own `blast_radius` is checked (a
+ *  must exist and publish the Operation (404 otherwise), whose own `blast_radius` is checked (a
  *  `high` one is never opted in, I8) and fills the snapshot the payload left out. Without it the
- *  rule is workspace-wide and `setPolicy` refuses `autoApprove: true`. */
+ *  rule is workspace-wide, `actionKindTag` must be an Operation some gate publishes (400
+ *  otherwise), and `setPolicy` refuses `autoApprove: true`.
+ *
+ *  Legacy 218 (the existence checks found by the leftover-232 sweep): a rule naming no real
+ *  Operation used to be written anyway — on a gate it skipped the blast-radius check, and
+ *  workspace-wide any string became a row in the policy list every member reads. A gate-scoped
+ *  `autoApprove: true` allows one published definition — the `operationVersion` the caller looked
+ *  at (400 without it, 409 `version_changed` when another version is published now). The rule
+ *  records that version's digest; a revision published later goes back through approval. */
 const setPolicyHandler: CapabilityHandler = async (client, workspaceId, params) => {
   const { policy } = params as { policy: unknown };
   const payload = parseSetPolicyPayload(policy);
   const setBy = await currentPrincipalId(client);
   let blastRadius = payload.blastRadius;
+  let allows: AllowedDefinition | undefined;
   if (payload.gatekeeperId !== undefined) {
     if (!(await getGatekeeper(client, workspaceId, payload.gatekeeperId))) {
       throw new GatekeeperNotFoundError(payload.gatekeeperId);
@@ -1372,14 +1450,36 @@ const setPolicyHandler: CapabilityHandler = async (client, workspaceId, params) 
       payload.gatekeeperId,
       payload.actionKindTag,
     );
-    if (published) {
-      assertPolicyWriteAllowed({
-        actionKind: payload.actionKindTag,
-        blastRadius: published.operation.blast_radius,
-        autoApprove: payload.autoApprove,
-      });
-      blastRadius ??= published.operation.blast_radius;
+    if (!published) throw new OperationNotFoundError(payload.gatekeeperId, payload.actionKindTag);
+    assertPolicyWriteAllowed({
+      actionKind: payload.actionKindTag,
+      blastRadius: published.operation.blast_radius,
+      autoApprove: payload.autoApprove,
+    });
+    blastRadius ??= published.operation.blast_radius;
+    if (payload.autoApprove) {
+      if (payload.operationVersion === undefined) {
+        throw new SetPolicyValidationError(
+          `set_policy: auto-approving "${payload.actionKindTag}" on a gate needs operationVersion — the published version it allows (legacy 218)`,
+        );
+      }
+      if (payload.operationVersion !== published.version) {
+        throw new ReviewedVersionChangedError(
+          'set_policy',
+          `Operation "${payload.actionKindTag}"`,
+          payload.operationVersion,
+          published.version,
+        );
+      }
+      allows = {
+        operationDigest: operationRecordDigest(published),
+        operationVersion: published.version,
+      };
     }
+  } else if (!(await isPublishedOperationName(client, workspaceId, payload.actionKindTag))) {
+    throw new SetPolicyValidationError(
+      `set_policy: no Gatekeeper in this workspace publishes an Operation named "${payload.actionKindTag}" — a policy rule names a real action kind`,
+    );
   }
   const result = await setPolicy(client, workspaceId, {
     ...(payload.gatekeeperId !== undefined ? { gatekeeperId: payload.gatekeeperId } : {}),
@@ -1388,8 +1488,13 @@ const setPolicyHandler: CapabilityHandler = async (client, workspaceId, params) 
     autoApprove: payload.autoApprove,
     requesterCanApprove: payload.requesterCanApprove,
     setBy,
+    ...(allows !== undefined ? { allows } : {}),
   });
-  return { result: toWirePolicy(result), resourceType: 'policy', resourceId: result.id };
+  return {
+    result: toWirePolicy(result, await definitionInForce(client, workspaceId, result)),
+    resourceType: 'policy',
+    resourceId: result.id,
+  };
 };
 
 /** R-26 / D-14: the registry's `paramsSchema` admits only the per-gate grant the console shows and
@@ -1466,7 +1571,11 @@ const listCapabilityNamesHandler: CapabilityHandler = async () => {
  *  module doc comment). */
 const listPoliciesHandler: CapabilityHandler = async (client, workspaceId) => {
   const rows = await listPolicies(client, workspaceId);
-  return { result: { items: rows.map(toWirePolicy) } };
+  const items = [];
+  for (const row of rows) {
+    items.push(toWirePolicy(row, await definitionInForce(client, workspaceId, row)));
+  }
+  return { result: { items } };
 };
 
 /** `list_quotas` (S3.11) — every I18 quota key with its resolved value and whether that value is

@@ -567,6 +567,8 @@ describe('ApprovalQueuePage decisions (S6-A B2 / C25)', () => {
       expect(setAuto).toHaveBeenCalledWith({
         gatekeeperId: row().gatekeeperId,
         actionKindTag: 'docker.container_restart',
+        // Legacy 218: the rule allows the definition this request was made against.
+        actionRequestId: row().id,
       }),
     );
   });

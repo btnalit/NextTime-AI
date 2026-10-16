@@ -414,6 +414,8 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       it('a gate-scoped policy row changes request_action resolution for a medium-blast-radius kind on that gate only (R-20 / D-15)', async () => {
         const otherGatekeeperId = await insertGatekeeperObject(workspaceId, ownerId);
+        // Legacy 218: an opt-in names the definition it allows; requests carry the same digest.
+        const operationDigest = `sha256:${'a'.repeat(64)}`;
         await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
           setPolicy(client, workspaceId, {
             gatekeeperId,
@@ -421,6 +423,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             blastRadius: 'medium',
             autoApprove: true,
             setBy: ownerId,
+            allows: { operationDigest, operationVersion: 1 },
           }),
         );
 
@@ -435,6 +438,7 @@ describe.runIf(DATABASE_URL !== undefined)(
               onBehalfOf: ownerId,
               actorRuntime: 'pi',
               requesterScope: scopeCovering(gatekeeperId, otherGatekeeperId),
+              operationDigest,
             }),
           );
         expect((await requestOn(gatekeeperId)).status).toBe('auto_approved');

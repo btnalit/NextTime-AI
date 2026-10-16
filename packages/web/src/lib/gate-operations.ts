@@ -20,13 +20,21 @@ export interface OperationChoice {
   readonly blastRadius: BlastRadius | null;
   readonly description?: string;
   readonly gateCount: number;
+  /** The published version — what an "always allow" rule on one gate names (legacy 218, the
+   *  policy editor's `operationVersion`); `null` once the name folds several gates together. */
+  readonly version: number | null;
 }
 
 /** Published rows → one choice per name, sorted by name. */
 export function operationChoices(items: readonly OperationSummaryWire[]): OperationChoice[] {
   const byName = new Map<
     string,
-    { blastRadius: BlastRadius | null; description?: string; gates: Set<string> }
+    {
+      blastRadius: BlastRadius | null;
+      description?: string;
+      gates: Set<string>;
+      version: number | null;
+    }
   >();
   for (const item of items) {
     if (item.status !== 'published') continue;
@@ -36,10 +44,12 @@ export function operationChoices(items: readonly OperationSummaryWire[]): Operat
         blastRadius: item.blastRadius,
         ...(item.description ? { description: item.description } : {}),
         gates: new Set([item.gatekeeperId]),
+        version: item.version,
       });
       continue;
     }
     existing.gates.add(item.gatekeeperId);
+    existing.version = null;
     if (existing.blastRadius !== item.blastRadius) existing.blastRadius = null;
     if (existing.description === undefined && item.description) {
       existing.description = item.description;
@@ -51,6 +61,7 @@ export function operationChoices(items: readonly OperationSummaryWire[]): Operat
       blastRadius: entry.blastRadius,
       ...(entry.description !== undefined ? { description: entry.description } : {}),
       gateCount: entry.gates.size,
+      version: entry.version,
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }

@@ -412,41 +412,6 @@ export async function listGrantHolderPrincipalIds(
   return result.rows.map((row) => row.principal_id);
 }
 
-/**
- * Whether `query.principalId` holds ANY active, unexpired `capability_grants` row for
- * `query.resourceType` — regardless of `resourceId` (wildcard or a specific one alike). Distinct
- * from `hasActiveGrant`, which matches a *specific* target `resourceId` (or the wildcard-null
- * convention for it); this answers "does the principal hold this resource type at all, on any
- * resource" — item 5's `set_auto_approved_action_kind` check needs exactly this shape: the
- * workspace-wide auto-approval rule it writes is not itself resource-scoped (it is not "for gate
- * G", it is "for every gate"), so the write-time authorization check cannot narrow to one
- * `resourceId` either — any grant naming this `action_kind`, at any gate (or wildcard), is
- * sufficient (§5.8 "能批哪条由 capability 范围决定" extended to "能设自动批准规则的范围由 capability 范围
- * 决定").
- */
-export interface AnyActiveGrantQuery {
-  readonly principalId: string;
-  readonly resourceType: string;
-}
-
-export async function hasAnyActiveGrant(
-  client: PoolClient,
-  workspaceId: string,
-  query: AnyActiveGrantQuery,
-): Promise<boolean> {
-  const result = await client.query(
-    `select 1 from capability_grants
-     where workspace_id = $1
-       and principal_id = $2
-       and resource_type = $3
-       and status = 'active'
-       and (expires_at is null or expires_at > now())
-     limit 1`,
-    [workspaceId, query.principalId, query.resourceType],
-  );
-  return (result.rowCount ?? 0) > 0;
-}
-
 // -------------------------------------------------------------------------------------------
 // listActiveGrantResourceScopes (S2.13): the mechanism that flows a `connect_gatekeeper` Grant
 // into an entry Handle's own `resources.gatekeeper` scope at issuance time

@@ -14,7 +14,7 @@ import { QUOTA_KEY_INFO, type QuotaKey } from '../lib/quotas.js';
 import { AgentPolicyForm } from './AgentPolicyForm.js';
 import { ModelsTable } from './ModelsTable.js';
 import { nameOf, useGatekeeperDirectory } from './approvals/useDirectoryNames.js';
-import { PolicyEditSheet } from './governance/PolicyEditSheet.js';
+import { PolicyEditSheet, suspendedText } from './governance/PolicyEditSheet.js';
 import { QuotaEditSheet } from './governance/QuotaEditSheet.js';
 import { Button } from './kit/button.js';
 import { DataTable, type DataTableColumn } from './kit/data-table.js';
@@ -169,16 +169,47 @@ function policyColumns(
         ),
     },
     {
+      // Legacy 218: an "always allow" covers the definition it was given for; one given for an
+      // earlier version (or written before that was recorded) is suspended until reconfirmed.
       id: 'autoApprove',
       header: t('自动批准', 'Auto-approve'),
-      cell: (policy) => (
-        <span
-          className={`chip chip-s ${policy.autoApprove ? 'chip-ok' : 'chip-warn'}`}
-          data-testid="policy-auto-approve"
-        >
-          {policy.autoApprove ? t('自动批准', 'auto') : t('需审批', 'requires approval')}
-        </span>
-      ),
+      cell: (policy) => {
+        if (policy.autoApprove && policy.autoApproveConsent !== 'current') {
+          return (
+            <span
+              className="chip chip-s chip-warn"
+              title={suspendedText(policy, t)}
+              data-testid="policy-auto-approve"
+              data-consent={policy.autoApproveConsent}
+            >
+              {policy.autoApproveConsent === 'not_recorded'
+                ? t('已暂停 · 待确认版本', 'suspended · version unconfirmed')
+                : t('已暂停 · 定义已变', 'suspended · definition changed')}
+            </span>
+          );
+        }
+        return (
+          <span
+            className={`chip chip-s ${policy.autoApprove ? 'chip-ok' : 'chip-warn'}`}
+            title={
+              policy.autoApprove && policy.operationVersion !== null
+                ? t(
+                    `对门上发布的 v${policy.operationVersion} 自动批准`,
+                    `Auto-approves v${policy.operationVersion} as published on the gate`,
+                  )
+                : undefined
+            }
+            data-testid="policy-auto-approve"
+            data-consent={policy.autoApproveConsent}
+          >
+            {policy.autoApprove
+              ? policy.operationVersion !== null
+                ? t(`自动批准 · v${policy.operationVersion}`, `auto · v${policy.operationVersion}`)
+                : t('自动批准', 'auto')
+              : t('需审批', 'requires approval')}
+          </span>
+        );
+      },
     },
     {
       id: 'requesterCanApprove',
@@ -211,18 +242,53 @@ function policyColumns(
             priority: 'high' as const,
             cell: (policy: PolicyWire) => (
               <Button
-                variant="secondary"
+                variant={
+                  policy.autoApprove && policy.autoApproveConsent !== 'current'
+                    ? 'primary'
+                    : 'secondary'
+                }
                 size="s"
                 onClick={() => options.onEdit(policy)}
                 data-testid={`policy-edit-${policy.id}`}
               >
-                {t('编辑', 'Edit')}
+                {policy.autoApprove && policy.autoApproveConsent !== 'current'
+                  ? t('重新确认', 'Reconfirm')
+                  : t('编辑', 'Edit')}
               </Button>
             ),
           },
         ]
       : []),
   ];
+}
+
+/** Legacy 218: how many "always allow" rules are suspended because the definition they were
+ *  given for is no longer the one published (or was never recorded), and who can reconfirm them. */
+function SuspendedPoliciesNotice({
+  items,
+  isOwner,
+}: {
+  readonly items: readonly PolicyWire[];
+  readonly isOwner: boolean;
+}) {
+  const t = useT();
+  const count = items.filter(
+    (policy) => policy.autoApprove && policy.autoApproveConsent !== 'current',
+  ).length;
+  if (count === 0) return null;
+  return (
+    <Notice tone="warn" testId="policies-suspended">
+      {isOwner
+        ? t(
+            `有 ${count} 条「始终允许」已暂停：它们允许的版本已不是门上现在发布的版本，相关请求重新走审批。看过新版本后，点该行的「重新确认」。`,
+            `${count} “Always allow” rule(s) are suspended: the version they allow is no longer the one the gate publishes, so those requests go back through approval. Once you have looked at the new version, use “Reconfirm” on the row.`,
+          )
+        : t(
+            `有 ${count} 条「始终允许」已暂停：它们允许的版本已不是门上现在发布的版本，相关请求重新走审批。需要工作区所有者重新确认；在审批队列里批准新版本的请求时，你也可以再选「始终允许」。`,
+            `${count} “Always allow” rule(s) are suspended: the version they allow is no longer the one the gate publishes, so those requests go back through approval. The workspace owner can reconfirm them; you can also choose “Always allow” again when approving a request under the new version.`,
+          )}
+    </Notice>
+  );
 }
 
 export interface ModelsPageProps {
@@ -479,19 +545,22 @@ export function ModelsPage({ http }: ModelsPageProps) {
               testId="policies-empty"
             />
           ) : (
-            <DataTable
-              columns={policyColumns(t, {
-                canManage: isOwner,
-                onEdit: (row) => setPolicyEditor({ kind: 'edit', row }),
-                gateNames: gatekeepers.names,
-              })}
-              data={policies.state.data.items}
-              getRowId={(policy) => policy.id}
-              ariaLabel="Policies"
-              testId="policies-table"
-              rowTestId={(policy) => `policy-row-${policy.id}`}
-              rowDataAttrs={(policy) => ({ 'data-policy-id': policy.id })}
-            />
+            <>
+              <SuspendedPoliciesNotice items={policies.state.data.items} isOwner={isOwner} />
+              <DataTable
+                columns={policyColumns(t, {
+                  canManage: isOwner,
+                  onEdit: (row) => setPolicyEditor({ kind: 'edit', row }),
+                  gateNames: gatekeepers.names,
+                })}
+                data={policies.state.data.items}
+                getRowId={(policy) => policy.id}
+                ariaLabel="Policies"
+                testId="policies-table"
+                rowTestId={(policy) => `policy-row-${policy.id}`}
+                rowDataAttrs={(policy) => ({ 'data-policy-id': policy.id })}
+              />
+            </>
           )}
         </DashboardCard>
       ) : null}

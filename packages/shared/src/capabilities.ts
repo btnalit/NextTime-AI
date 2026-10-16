@@ -1883,10 +1883,15 @@ const governanceCapabilities = [
     mode: 'execute',
     channel: 'human',
     minRole: 'operator',
-    paramsSchema: z.object({ gatekeeperId: id, actionKindTag: z.string().min(1) }).strict(),
+    // Legacy 218: ticked on one ActionRequest, it allows the definition that request was made
+    // against only (the rule records its digest); a revision published later goes back through
+    // approval until someone allows it again.
+    paramsSchema: z
+      .object({ gatekeeperId: id, actionKindTag: z.string().min(1), actionRequestId: id })
+      .strict(),
     resultSchema: wire.PolicyWireSchema,
     description:
-      '"Always allow" — auto-approve this Gatekeeper’s published Operation `actionKindTag` from now on, for every requester (a gate-scoped Policy rule; the same name on other Gatekeepers is not affected). 404 for an Operation not published on that Gatekeeper; 400 for a high-blast-radius Operation, which is never auto-approved (I8).',
+      '"Always allow" — auto-approve this Gatekeeper’s published Operation `actionKindTag` from now on, for every requester (a gate-scoped Policy rule; the same name on other Gatekeepers is not affected), for as long as its published definition is the one `actionRequestId` was made against: a later revision with another definition goes back through approval. Whoever may approve that call may tick it: the owner, or an operator holding a grant on that Gatekeeper (I14; 403 otherwise). 404 for an Operation not published on that Gatekeeper or a request the caller cannot see; 400 for a request on another gate or action kind, or a high-blast-radius Operation, which is never auto-approved (I8); 409 version_changed when the request was made against a definition other than the one published now.',
   },
   {
     // 2026-09-08 wire-contract-conventions §1(c): a Grant points at a resource (`resourceType` +
@@ -1938,7 +1943,7 @@ const governanceCapabilities = [
     paramsSchema: z.object({ policy: jsonRecord }).strict(),
     resultSchema: wire.PolicyWireSchema,
     description:
-      'Write a Policy rule: policy = {gatekeeperId?, actionKindTag, blastRadius?, autoApprove, requesterCanApprove?}. With gatekeeperId the rule covers that Gatekeeper’s action kind; without it, the action kind on every Gatekeeper — such a workspace-wide rule can only require approval (autoApprove: true needs a gatekeeperId, R-20 / D-15). A gate rule wins over the workspace-wide one.',
+      'Write a Policy rule: policy = {gatekeeperId?, actionKindTag, blastRadius?, autoApprove, requesterCanApprove?, operationVersion?}. With gatekeeperId the rule covers that Gatekeeper’s action kind; without it, the action kind on every Gatekeeper — such a workspace-wide rule can only require approval (autoApprove: true needs a gatekeeperId, R-20 / D-15). A gate rule wins over the workspace-wide one. The rule names a real Operation: on a gate it must be published there (404 otherwise); workspace-wide some gate must publish one of that name (400 otherwise). autoApprove: true on a gate allows one published definition: operationVersion is required and must be the version published now (409 version_changed when another is); a revision published later goes back through approval.',
   },
   {
     name: 'set_quota',

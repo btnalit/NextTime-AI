@@ -2,11 +2,12 @@ import { useEffect, useMemo, useState } from 'react';
 import type { Permissions } from '../../hooks/usePermissions.js';
 import { actionCardFromPendingContent } from '../../lib/action-card.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
-import { isForbiddenError } from '../../lib/errors.js';
+import { isForbiddenError, isVersionChangedError } from '../../lib/errors.js';
 import { humanizeKind } from '../../lib/format.js';
 import type { Translate } from '../../lib/i18n.js';
 import { systemStatusLineFromMessage } from '../../lib/system-status.js';
 import type { ChatMessage, WsClient } from '../../lib/ws-client.js';
+import { alwaysAllowStaleText } from '../approvals/useApprovalQueue.js';
 
 /** The minimum shape `useActionCards` needs from `useToast()` — kept local (not `ToastApi` from
  *  `components/ui/Toast`) so this file imports nothing from `components/ui/*`
@@ -122,9 +123,11 @@ export function useActionCards(
       return;
     }
     try {
+      // Legacy 218: the rule allows the definition this request was made against only.
       await http.call('set_auto_approved_action_kind', {
         gatekeeperId: card.gatekeeperId,
         actionKindTag: card.actionKindTag,
+        actionRequestId: id,
       });
       // S8 W4 i18n baseline: was a raw un-t()'d template literal splicing the enum value
       // (`actionKindTag`) straight into glued zh/en text — `humanizeKind` (same helper
@@ -144,6 +147,7 @@ export function useActionCards(
           '已批准，但未写入自动批准规则',
           'Approved, but the auto-approval rule was not written',
         ),
+        ...(isVersionChangedError(err) ? { description: alwaysAllowStaleText(t) } : {}),
       });
     }
   }

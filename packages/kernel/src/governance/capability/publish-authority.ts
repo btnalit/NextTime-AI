@@ -112,13 +112,22 @@ export class NotProposerError extends Error {
  */
 export class ReviewedVersionChangedError extends Error {
   readonly code = 'version_changed' as const;
-  readonly reviewedVersion: number;
+  /** `null` when what was reviewed names no version — legacy 218's "always allow", given on an
+   *  ActionRequest made against another definition (the request records its digest only). */
+  readonly reviewedVersion: number | null;
   readonly currentVersion: number;
 
   /** `action` is the capability name; `subject` names the family (`Skill <id>`, `module <name>`). */
-  constructor(action: string, subject: string, reviewedVersion: number, currentVersion: number) {
+  constructor(
+    action: string,
+    subject: string,
+    reviewedVersion: number | null,
+    currentVersion: number,
+  ) {
     super(
-      `${action}: ${subject} is at v${currentVersion} now, not the v${reviewedVersion} that was reviewed — nothing was written; reload it and look again`,
+      reviewedVersion === null
+        ? `${action}: ${subject} is at v${currentVersion} now, a different definition from the one that was reviewed — nothing was written; reload it and look again`
+        : `${action}: ${subject} is at v${currentVersion} now, not the v${reviewedVersion} that was reviewed — nothing was written; reload it and look again`,
     );
     this.name = 'ReviewedVersionChangedError';
     this.reviewedVersion = reviewedVersion;

@@ -634,6 +634,26 @@ export async function getPublishedOperation(
   return toOperationRecord(gatekeeperId, name, row.id, row.properties);
 }
 
+/** Whether some Gatekeeper in the workspace publishes an Operation named `name` — what makes it
+ *  an action kind a workspace-wide policy rule can name (`set_policy`, legacy 218). */
+export async function isPublishedOperationName(
+  client: PoolClient,
+  workspaceId: string,
+  name: string,
+): Promise<boolean> {
+  const result = await client.query(
+    `select 1
+     from objects
+     where workspace_id = $1
+       and object_type = 'Operation'
+       and identity_key ->> 'name' = $2
+       and properties ->> 'status' = 'published'
+     limit 1`,
+    [workspaceId, name],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
 /**
  * `list_allowed_operations` (S2.9, task brief: "the published Operations of the Gatekeepers in
  * the Handle's resources.gatekeeper scope") — every **published** Operation across a set of

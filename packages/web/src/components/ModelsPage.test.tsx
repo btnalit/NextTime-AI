@@ -103,6 +103,9 @@ describe('ModelsPage', () => {
             setBy: 'owner-1',
             createdAt: '2026-09-01T00:00:00.000Z',
             updatedAt: '2026-09-02T00:00:00.000Z',
+            operationVersion: null,
+            publishedOperationVersion: null,
+            autoApproveConsent: 'current',
           },
           {
             id: 'pol-2',
@@ -114,6 +117,23 @@ describe('ModelsPage', () => {
             setBy: 'owner-1',
             createdAt: '2026-09-01T00:00:00.000Z',
             updatedAt: '2026-09-01T00:00:00.000Z',
+            operationVersion: 2,
+            publishedOperationVersion: 2,
+            autoApproveConsent: 'current',
+          },
+          {
+            id: 'pol-3',
+            gatekeeperId: 'gk-lab-0001',
+            actionKindTag: 'docker.stop_container',
+            blastRadius: 'medium',
+            autoApprove: true,
+            requesterCanApprove: null,
+            setBy: 'owner-1',
+            createdAt: '2026-09-01T00:00:00.000Z',
+            updatedAt: '2026-09-01T00:00:00.000Z',
+            operationVersion: 1,
+            publishedOperationVersion: 2,
+            autoApproveConsent: 'definition_changed',
           },
         ],
       }),
@@ -145,7 +165,15 @@ describe('ModelsPage', () => {
     expect(within(row).getByTestId('policy-scope').textContent).toContain('所有门');
     const gateRow = within(policies).getByTestId('policy-row-pol-2');
     expect(within(gateRow).getByTestId('policy-scope').textContent).toContain('gk-lab-0');
-    expect(within(gateRow).getByTestId('policy-auto-approve').textContent).toContain('自动批准');
+    const gateChip = within(gateRow).getByTestId('policy-auto-approve').textContent ?? '';
+    expect(gateChip).toContain('自动批准');
+    expect(gateChip).toContain('v2');
+    // Legacy 218: an "always allow" given for v1 while v2 is published is suspended, and says so.
+    const staleRow = within(policies).getByTestId('policy-row-pol-3');
+    const staleChip = within(staleRow).getByTestId('policy-auto-approve');
+    expect(staleChip.textContent).toContain('已暂停');
+    expect(staleChip.getAttribute('title')).toContain('v2');
+    expect(screen.getByTestId('policies-suspended').textContent).toContain('1 条');
   });
 
   it('each section degrades to its own error banner independently on 404 not_found (B6: no "not live yet" branch)', async () => {
@@ -284,6 +312,38 @@ describe('ModelsPage', () => {
     fireEvent.click(within(form).getByRole('button', { name: /保存策略/ }));
     expect(await within(form).findByText(/必须从中选一个默认模型/)).toBeTruthy();
     expect(http.calls.some((c) => c.name === 'set_agent_policy')).toBe(false);
+  });
+
+  it('legacy 218: an owner gets "Reconfirm" on a suspended "always allow" row', async () => {
+    const http = scriptedHttp({
+      list_models: () => ({ items: [] }),
+      list_quotas: () => ({ items: [] }),
+      list_policies: () => ({
+        items: [
+          {
+            id: 'pol-stale',
+            gatekeeperId: 'gk-lab-0001',
+            actionKindTag: 'docker.stop_container',
+            blastRadius: 'medium',
+            autoApprove: true,
+            requesterCanApprove: null,
+            setBy: 'owner-1',
+            createdAt: '2026-09-01T00:00:00.000Z',
+            updatedAt: '2026-09-01T00:00:00.000Z',
+            operationVersion: null,
+            publishedOperationVersion: 1,
+            autoApproveConsent: 'not_recorded',
+          },
+        ],
+      }),
+      get_workspace: () => workspace('owner'),
+      get_agent_policy: () => agentPolicy({}),
+    });
+    renderPage(http);
+    const row = await screen.findByTestId('policy-row-pol-stale');
+    expect(within(row).getByTestId('policy-auto-approve').textContent).toContain('待确认版本');
+    expect(within(row).getByTestId('policy-edit-pol-stale').textContent).toContain('重新确认');
+    expect(screen.getByTestId('policies-suspended').textContent).toContain('点该行的「重新确认」');
   });
 
   it('C11: un-ticking the current default when one allowed model is left makes that model the default, on screen and on submit', async () => {

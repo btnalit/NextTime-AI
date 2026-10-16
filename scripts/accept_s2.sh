@@ -900,8 +900,9 @@ step4_step5_ssh_always_allow() {
   [ "$executed" = "1" ] || fail "step4-executed-1" "ActionRequest $AR_ID_SSH1 did not reach executed within 30s (last: $ar_status)"
   pass "step4-executed-1" "first ssh run executed"
 
-  # --- "always allow this kind" (R-20 / D-15: keyed by gate + action kind) ---
-  out=$(cap "$ALICE_KEY" set_auto_approved_action_kind "{\"gatekeeperId\":\"$GATEKEEPER_ID_SSH\",\"actionKindTag\":\"ssh.run_command\"}" "")
+  # --- "always allow this kind" (R-20 / D-15: keyed by gate + action kind; legacy 218: ticked on
+  # the request just approved, it allows that request's definition only) ---
+  out=$(cap "$ALICE_KEY" set_auto_approved_action_kind "{\"gatekeeperId\":\"$GATEKEEPER_ID_SSH\",\"actionKindTag\":\"ssh.run_command\",\"actionRequestId\":\"$AR_ID_SSH1\"}" "")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "step4-always-allow" "set_auto_approved_action_kind HTTP $status: $(parse_kv "$out" BODY)"
   pass "step4-always-allow" "gate policy: ssh.run_command on the ssh gate auto-approved from now on"
@@ -1664,7 +1665,10 @@ real_scenarios_step() {
     [ -z "$DENY_OPEN_TASKS" ] || echo "NOTE deny Tasks not terminal before always-allow:$DENY_OPEN_TASKS"
   fi
 
-  out=$(cap "$ALICE_KEY" set_auto_approved_action_kind "{\"gatekeeperId\":\"$GATEKEEPER_ID_SSH\",\"actionKindTag\":\"ssh.run_command\"}" "")
+  # Legacy 218: "always allow" is ticked on a request — the latest one approved above.
+  approved_ar=$(psql_ws "select id from action_requests where workspace_id='$WORKSPACE_ID' and gatekeeper_id='$GATEKEEPER_ID_SSH' and action_kind='ssh.run_command' and status in ('approved','executing','executed','failed') order by requested_at desc limit 1")
+  [ -n "$approved_ar" ] || fail "real-always-allow" "no approved ssh.run_command ActionRequest to tick \"always allow\" on"
+  out=$(cap "$ALICE_KEY" set_auto_approved_action_kind "{\"gatekeeperId\":\"$GATEKEEPER_ID_SSH\",\"actionKindTag\":\"ssh.run_command\",\"actionRequestId\":\"$approved_ar\"}" "")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "real-always-allow" "set_auto_approved_action_kind HTTP $status: $(parse_kv "$out" BODY)"
   pass "real-always-allow" "gate policy: ssh.run_command on the ssh gate auto-approved from now on"

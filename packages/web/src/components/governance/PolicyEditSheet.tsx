@@ -66,6 +66,12 @@ export interface PolicyEditSheetProps {
  * a gate rule can turn auto-approval on (the kernel refuses it workspace-wide — the approver must
  * see which gate, since Operation names collide across gates), so the checkbox is disabled while
  * "every gate" is selected.
+ *
+ * Legacy 218: auto-approval on a gate allows one published definition — the version shown here
+ * (`operationVersion`: the chosen Operation's, or for an edited row the one published now). An
+ * "always allow" given for an earlier definition is suspended (`autoApproveConsent`); saving it
+ * with auto-approval on reconfirms it for the version in force, which is a loosening. The kernel
+ * refuses a rule naming no published Operation, so an unknown name cannot be saved.
  */
 export function PolicyEditSheet({
   http,
@@ -130,6 +136,8 @@ export function PolicyEditSheet({
   const caseInsensitiveMatch = unknownManualKind
     ? choices.find((choice) => choice.name.toLowerCase() === trimmedKind.toLowerCase())
     : undefined;
+  /** Nothing published to name: the kernel refuses every new rule here. */
+  const nothingPublished = !isEdit && operations.state.status === 'ready' && choices.length === 0;
 
   function pickOperation(name: string): void {
     setActionKindTag(name);
@@ -164,18 +172,30 @@ export function PolicyEditSheet({
   const gateName = workspaceWide
     ? null
     : (gatekeepers.find((gate) => gate.id === gateScope)?.name ?? gateScope);
+  // Legacy 218: the published version an auto-approval would allow — `null` when there is none
+  // to name (no longer published, or the list could not be read), which blocks turning it on.
+  const allowedVersion: number | null = isEdit
+    ? (editing.publishedOperationVersion ?? null)
+    : (choices.find((choice) => choice.name === trimmedKind)?.version ?? null);
+  const autoApproveBlockedByVersion =
+    !workspaceWide && allowedVersion === null && trimmedKind !== '';
   const effectiveAutoApprove =
-    autoApproveBlockedByBlastRadius || workspaceWide ? false : autoApprove;
+    autoApproveBlockedByBlastRadius || workspaceWide || autoApproveBlockedByVersion
+      ? false
+      : autoApprove;
+  /** An "always allow" given for another definition (or none on record): suspended until saved. */
+  const suspended = isEdit && editing.autoApprove && editing.autoApproveConsent !== 'current';
 
   const prevAutoApprove = editing?.autoApprove ?? false;
   const prevRequesterCanApprove = editing?.requesterCanApprove ?? null;
   const nextRequesterCanApprove =
     requesterCanApprove === REQUESTER_INHERIT ? null : requesterCanApprove === 'true';
   const isLoosening =
-    (effectiveAutoApprove && !prevAutoApprove) ||
+    (effectiveAutoApprove && (!prevAutoApprove || suspended)) ||
     (nextRequesterCanApprove === true && prevRequesterCanApprove !== true);
 
-  const canSubmit = trimmedKind.length > 0 && !submitting;
+  const canSubmit =
+    trimmedKind.length > 0 && !unknownManualKind && !nothingPublished && !submitting;
 
   function resetAndClose(): void {
     setConfirmOpen(false);
@@ -188,6 +208,7 @@ export function PolicyEditSheet({
       autoApprove: effectiveAutoApprove,
     };
     if (!workspaceWide) policy.gatekeeperId = gateScope;
+    if (effectiveAutoApprove && allowedVersion !== null) policy.operationVersion = allowedVersion;
     if (blastRadius !== UNSET) policy.blastRadius = blastRadius;
     if (nextRequesterCanApprove !== null) policy.requesterCanApprove = nextRequesterCanApprove;
 
@@ -211,6 +232,11 @@ export function PolicyEditSheet({
         </SheetHeader>
 
         <div className="stack">
+          {suspended ? (
+            <Notice tone="warn" testId="policy-edit-suspended">
+              {suspendedText(editing, t)}
+            </Notice>
+          ) : null}
           <Field
             id="pe-gate-scope"
             label={t('适用范围', 'Applies to')}
@@ -326,12 +352,12 @@ export function PolicyEditSheet({
             <p className="field-hint" data-testid="policy-edit-operations-empty">
               {workspaceWide
                 ? t(
-                    '工作区还没有已发布的 Operation，请手动输入名称。',
-                    'No Operation is published in this workspace yet — type the name manually.',
+                    '工作区还没有已发布的 Operation，策略要对应一个已发布的动作，所以现在还不能新增。先在「系统」里接入门并发布 Operation。',
+                    'No Operation is published in this workspace yet, and a policy must name a published action, so none can be added yet. Connect a gate and publish its Operations under Systems first.',
                   )
                 : t(
-                    `门「${gateName}」还没有已发布的 Operation，请手动输入名称。`,
-                    `Gate “${gateName}” has no published Operation yet — type the name manually.`,
+                    `门「${gateName}」还没有已发布的 Operation，不能为它新增策略。请换一个门，或先发布它的 Operation。`,
+                    `Gate “${gateName}” has no published Operation yet, so no policy can be added for it. Pick another gate, or publish its Operations first.`,
                   )}
             </p>
           ) : null}
@@ -340,12 +366,12 @@ export function PolicyEditSheet({
               <span>
                 {workspaceWide
                   ? t(
-                      `「${trimmedKind}」不是任何门上已发布的 Operation 名；在同名 Operation 发布之前，这条规则不会命中。`,
-                      `“${trimmedKind}” is not a published Operation name on any gate; the rule matches nothing until one with that name is published.`,
+                      `「${trimmedKind}」不是任何门上已发布的 Operation 名，不能保存。请从列表里选，或先发布同名 Operation。`,
+                      `“${trimmedKind}” is not a published Operation name on any gate, so it cannot be saved. Pick one from the list, or publish an Operation with that name first.`,
                     )
                   : t(
-                      `「${trimmedKind}」不是门「${gateName}」上已发布的 Operation 名；在同名 Operation 发布之前，这条规则不会命中。`,
-                      `“${trimmedKind}” is not a published Operation name on gate “${gateName}”; the rule matches nothing until one with that name is published.`,
+                      `「${trimmedKind}」不是门「${gateName}」上已发布的 Operation 名，不能保存。请从列表里选，或先在这个门上发布它。`,
+                      `“${trimmedKind}” is not a published Operation name on gate “${gateName}”, so it cannot be saved. Pick one from the list, or publish it on this gate first.`,
                     )}
               </span>
               {caseInsensitiveMatch ? (
@@ -426,21 +452,40 @@ export function PolicyEditSheet({
               type="checkbox"
               checked={effectiveAutoApprove}
               onChange={(event) => setAutoApprove(event.target.checked)}
-              disabled={submitting || autoApproveBlockedByBlastRadius || workspaceWide}
+              disabled={
+                submitting ||
+                autoApproveBlockedByBlastRadius ||
+                workspaceWide ||
+                autoApproveBlockedByVersion
+              }
               data-testid="policy-edit-auto-approve"
             />
-            <span>{t('自动批准', 'Auto-approve')}</span>
+            <span>
+              {allowedVersion !== null && !workspaceWide
+                ? t(`自动批准（v${allowedVersion}）`, `Auto-approve (v${allowedVersion})`)
+                : t('自动批准', 'Auto-approve')}
+            </span>
           </label>
-          <p className="field-hint">
+          <p className="field-hint" data-testid="policy-edit-auto-approve-hint">
             {workspaceWide
               ? t(
                   '自动批准只能按门开启：先在「适用范围」里选一个门。',
                   'Auto-approval is turned on per gate: pick a gate under “Applies to” first.',
                 )
-              : t(
-                  `开启后，门「${gateName}」上这个动作的新请求，不论谁发起都会被自动批准，不再进入人工审批队列。`,
-                  `When on, new requests for this action on gate “${gateName}” are approved automatically for every requester and never reach the human approval queue.`,
-                )}
+              : autoApproveBlockedByVersion
+                ? isEdit
+                  ? t(
+                      `门「${gateName}」上已经没有发布的「${trimmedKind}」，不能开启自动批准。`,
+                      `Gate “${gateName}” no longer publishes “${trimmedKind}”, so auto-approval cannot be turned on.`,
+                    )
+                  : t(
+                      '读不到这个 Operation 已发布的版本，暂时不能开启自动批准。请重试加载列表后从列表里选。',
+                      'The published version of this Operation could not be read, so auto-approval cannot be turned on yet. Retry loading the list and pick it from there.',
+                    )
+                : t(
+                    `开启后，门「${gateName}」上这个动作的新请求，不论谁发起都会被自动批准，不再进入人工审批队列。只对现在发布的 v${allowedVersion ?? '?'} 生效：以后发布新版本，请求会重新走审批，直到有人再次确认。`,
+                    `When on, new requests for this action on gate “${gateName}” are approved automatically for every requester and never reach the human approval queue. It covers the v${allowedVersion ?? '?'} published now: once a new version is published, requests go back through approval until someone confirms again.`,
+                  )}
           </p>
           {autoApproveBlockedByBlastRadius ? (
             <Notice tone="warn">
@@ -509,7 +554,10 @@ export function PolicyEditSheet({
             target={actionKindTag.trim() || undefined}
             impact={[
               `${t('适用范围', 'Applies to')}: ${gateName === null ? t('所有门上的同名动作', 'the same name on every gate') : t(`门「${gateName}」· 所有发起人`, `gate “${gateName}” · every requester`)}`,
-              `${t('自动批准', 'Auto-approve')}: ${prevAutoApprove ? t('开', 'on') : t('关', 'off')} → ${effectiveAutoApprove ? t('开', 'on') : t('关', 'off')}`,
+              `${t('自动批准', 'Auto-approve')}: ${prevAutoApprove ? (suspended ? t('已暂停', 'suspended') : t('开', 'on')) : t('关', 'off')} → ${effectiveAutoApprove ? t('开', 'on') : t('关', 'off')}`,
+              ...(effectiveAutoApprove && allowedVersion !== null
+                ? [`${t('允许的版本', 'Allows version')}: v${allowedVersion}`]
+                : []),
             ]}
             danger={isLoosening}
             confirmLabel={t('确认保存', 'Confirm save')}
@@ -521,12 +569,49 @@ export function PolicyEditSheet({
           </Button>
           {/* Audit P1-9: a disabled 保存 says what it still waits for. */}
           <StillNeeded
-            items={trimmedKind.length === 0 ? [t('选择动作', 'pick an action')] : []}
+            items={
+              nothingPublished
+                ? [t('先发布一个 Operation', 'publish an Operation first')]
+                : trimmedKind.length === 0
+                  ? [t('选择动作', 'pick an action')]
+                  : unknownManualKind
+                    ? [t('选一个已发布的动作', 'pick a published action')]
+                    : []
+            }
             hidden={submitting}
             testId="policy-edit-missing"
           />
         </SheetFooter>
       </SheetContent>
     </Sheet>
+  );
+}
+
+/** Legacy 218: why an "always allow" rule is suspended — shown in the editor and the policy list. */
+export function suspendedText(
+  policy: Pick<PolicyWire, 'autoApproveConsent' | 'operationVersion' | 'publishedOperationVersion'>,
+  t: Translate,
+): string {
+  if (policy.autoApproveConsent === 'not_recorded') {
+    return t(
+      '这条「始终允许」是升级前写下的，没有记录当时允许的是哪个版本，所以已暂停：这个动作的请求照常走审批。勾选自动批准并保存，即对现在发布的版本重新确认。',
+      'This “Always allow” was written before the platform recorded which version it allows, so it is suspended: requests for this action go through approval as usual. Save it with auto-approve on to reconfirm it for the version published now.',
+    );
+  }
+  if (policy.publishedOperationVersion === null) {
+    return t(
+      `这条「始终允许」给的是 v${policy.operationVersion ?? '?'}，门上现在已没有发布的版本，所以已暂停。`,
+      `This “Always allow” was given for v${policy.operationVersion ?? '?'}, and the gate no longer publishes a version, so it is suspended.`,
+    );
+  }
+  if (policy.operationVersion === policy.publishedOperationVersion) {
+    return t(
+      `这条「始终允许」给的是 v${policy.operationVersion}，之后这个版本的影响被调高了，所以已暂停：请求重新走审批。勾选自动批准并保存，即按新的影响重新确认。`,
+      `This “Always allow” was given for v${policy.operationVersion}, whose blast radius has since been raised, so it is suspended: requests go back through approval. Save it with auto-approve on to reconfirm it at the new blast radius.`,
+    );
+  }
+  return t(
+    `这条「始终允许」给的是 v${policy.operationVersion ?? '?'}，门上现在发布的是 v${policy.publishedOperationVersion}，所以已暂停：请求重新走审批。勾选自动批准并保存，即对 v${policy.publishedOperationVersion} 重新确认。`,
+    `This “Always allow” was given for v${policy.operationVersion ?? '?'}, and the gate now publishes v${policy.publishedOperationVersion}, so it is suspended: requests go back through approval. Save it with auto-approve on to reconfirm it for v${policy.publishedOperationVersion}.`,
   );
 }

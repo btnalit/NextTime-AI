@@ -35,6 +35,7 @@ export {
   proposeOperation,
   getOperation,
   getPublishedOperation,
+  isPublishedOperationName,
   listPublishedOperationsForGatekeepers,
   listDraftOperationsForGatekeeper,
   listOperations,

@@ -176,6 +176,8 @@ describe('ChatPage inline approval card (C8)', () => {
     expect(http.decisions()[1]?.params).toEqual({
       gatekeeperId: 'gk-1',
       actionKindTag: 'docker.container_restart',
+      // Legacy 218: the rule allows the definition this request was made against.
+      actionRequestId: 'ar-1',
     });
     // S8 W4 i18n baseline fix: the toast now goes through `t()` (one language, default zh-CN
     // here), no more always-glued zh/en text.
