@@ -1,10 +1,15 @@
 import type {
+  ConflictType,
+  DecisionStatus,
+  EpistemicStatus,
   ExecutionReadinessMissingCode,
   GateTransportKindWire,
   PrincipalKind,
+  TaskFailureReason,
+  TurnStatus,
   WorkerDefinitionKind,
 } from '@nexttime/shared';
-import type { AuditResourceType } from './audit.js';
+import type { AuditResourceType, PlatformAuditResourceType } from './audit.js';
 import type { Translate } from './i18n.js';
 import { ownEntry } from './own.js';
 import { labelText, statusChipStyle } from './status-tone.js';
@@ -124,7 +129,11 @@ export const AUDIT_RESOURCE_TYPE_LABELS: Readonly<Record<AuditResourceType, Bili
   connection_request: { zh: '连接申请', en: 'Connection request' },
   decision: { zh: '决策', en: 'Decision' },
   fact: { zh: '事实', en: 'Fact' },
-  gatekeeper: { zh: '门实例', en: 'Gatekeeper' },
+  // Legacy sweep (console batch, 2026-10-16): `gatekeeper` reads 门 now that `gate_instance` (the
+  // platform's instance, also written on workspace rows) has its own 门实例 option.
+  gate_instance: { zh: '门实例', en: 'Gate instance' },
+  gatekeeper: { zh: '门', en: 'Gatekeeper' },
+  module: { zh: '模块', en: 'Module' },
   object: { zh: '对象', en: 'Object' },
   ontology_type: { zh: '本体类型', en: 'Ontology type' },
   ontology_version: { zh: '本体版本', en: 'Ontology version' },
@@ -142,11 +151,32 @@ export const AUDIT_RESOURCE_TYPE_LABELS: Readonly<Record<AuditResourceType, Bili
   workspace: { zh: '工作区', en: 'Workspace' },
 };
 
+/** Legacy sweep (console batch, 2026-10-16): the platform-only audit resource types
+ *  (`lib/audit.ts` `PLATFORM_AUDIT_RESOURCE_TYPES`) — the platform audit list's row meta. */
+export const PLATFORM_AUDIT_RESOURCE_TYPE_LABELS: Readonly<
+  Record<PlatformAuditResourceType, BilingualLabel>
+> = {
+  connector: { zh: '连接器', en: 'Connector' },
+  llm_admin_token: { zh: '模型管理令牌', en: 'LLM admin token' },
+  llm_provider: { zh: '模型服务商', en: 'LLM provider' },
+  observations: { zh: '观测', en: 'Observations' },
+  platform: { zh: '平台', en: 'Platform' },
+  platform_settings: { zh: '平台设置', en: 'Platform settings' },
+  user: { zh: '用户', en: 'User' },
+};
+
+/** Either stream's resource type — a workspace one first, then a platform-only one; anything
+ *  else stays visible as the raw value. */
 export function auditResourceTypeLabel(resourceType: string, t: Translate): string {
-  const entry = ownEntry(
-    AUDIT_RESOURCE_TYPE_LABELS as Readonly<Record<string, BilingualLabel>>,
-    resourceType,
-  );
+  const entry =
+    ownEntry(
+      AUDIT_RESOURCE_TYPE_LABELS as Readonly<Record<string, BilingualLabel>>,
+      resourceType,
+    ) ??
+    ownEntry(
+      PLATFORM_AUDIT_RESOURCE_TYPE_LABELS as Readonly<Record<string, BilingualLabel>>,
+      resourceType,
+    );
   return entry ? label(entry, t) : resourceType;
 }
 
@@ -284,4 +314,244 @@ export const OPERATION_FIELD_LABELS: Readonly<Record<string, BilingualLabel>> = 
 export function operationFieldLabel(field: string, t: Translate): string {
   const entry = ownEntry(OPERATION_FIELD_LABELS, field);
   return entry ? label(entry, t) : field;
+}
+
+// -------------------------------------------------------------------------------------------
+// Task failure reason (`@nexttime/shared` `TASK_FAILURE_REASON_VALUES`, legacy 324) — the task
+// list row, TaskDetail's overview, and the chat status line of a failed Task.
+// -------------------------------------------------------------------------------------------
+
+export const TASK_FAILURE_REASON_LABELS: Readonly<
+  Record<TaskFailureReason, { readonly short: BilingualLabel; readonly detail: BilingualLabel }>
+> = {
+  timeout: {
+    short: { zh: '超时', en: 'Timed out' },
+    detail: {
+      zh: '运行超过了任务的时长上限，平台把它结束了。',
+      en: 'The run went past the task’s duration limit, and the platform ended it.',
+    },
+  },
+  no_result: {
+    short: { zh: '没有交回结果', en: 'No result' },
+    detail: {
+      zh: 'Worker 的运行结束了，但没有交回结果。',
+      en: 'The Worker’s run ended without handing back a result.',
+    },
+  },
+  worker_failed: {
+    short: { zh: 'Worker 运行失败', en: 'Worker failed' },
+    detail: {
+      zh: 'Worker 的运行出错，自动重试也没有成功。',
+      en: 'The Worker’s run failed, and the automatic retry did not succeed either.',
+    },
+  },
+  spawn_failed: {
+    short: { zh: 'Worker 没能启动', en: 'Worker did not start' },
+    detail: {
+      zh: '平台没能启动这次 Worker 运行，什么都没执行。',
+      en: 'The platform could not start the Worker run; nothing ran.',
+    },
+  },
+  spawn_lost: {
+    short: { zh: '排队后没有启动', en: 'Never started' },
+    detail: {
+      zh: '任务排队后一直没有启动（平台在启动它之前中断了），平台把它结束了，不会自动重试。',
+      en: 'The task was queued but never started (the platform stopped before starting it); the platform ended it and will not retry it.',
+    },
+  },
+  run_lost: {
+    short: { zh: '运行丢失', en: 'Run lost' },
+    detail: {
+      zh: '任务还显示在运行，但它的 Worker 运行都已经结束了，平台把它结束了。',
+      en: 'The task still showed as running, but every Worker run of it had already ended; the platform ended it.',
+    },
+  },
+  budget_exhausted: {
+    short: { zh: 'token 预算用完', en: 'Token budget used up' },
+    detail: {
+      zh: '任务用完了它的 token 预算，平台把它结束了。',
+      en: 'The task used up its token budget, and the platform ended it.',
+    },
+  },
+  terminated: {
+    short: { zh: '运行被终止', en: 'Run terminated' },
+    detail: {
+      zh: '运行环境结束了这次 Worker 运行。',
+      en: 'The runtime ended the Worker run.',
+    },
+  },
+};
+
+/** A failed Task's reason as a short label and one sentence. A value an earlier release wrote and
+ *  this one does not know reads as "another reason", never as the raw value. */
+export function taskFailureReasonText(
+  reason: string,
+  t: Translate,
+): { readonly short: string; readonly detail: string } {
+  const entry = ownEntry(TASK_FAILURE_REASON_LABELS, reason);
+  if (entry) return { short: label(entry.short, t), detail: label(entry.detail, t) };
+  return {
+    short: t('其他原因', 'Another reason'),
+    detail: t(
+      '这个失败原因是平台的较早版本记下的，当前版本没有它的说明。',
+      'An earlier platform release recorded this failure reason, and this release has no description for it.',
+    ),
+  };
+}
+
+// -------------------------------------------------------------------------------------------
+// Legacy sweep (console batch, 2026-10-16): the provenance / graph / audit vocabulary that still
+// rendered as the kernel's raw value — a Fact's epistemic status, a Conflict's type, a Decision's
+// status, an Activity's kind and status, a Source's kind and visibility — and the Docker state of
+// a platform container. Every lookup falls back to the raw value for a value this table does not
+// know (visible, never blanked), the same as `auditResourceTypeLabel` above.
+// -------------------------------------------------------------------------------------------
+
+function lookup(
+  map: Readonly<Record<string, BilingualLabel>>,
+  value: string,
+  t: Translate,
+): string {
+  const entry = ownEntry(map, value);
+  return entry ? label(entry, t) : value;
+}
+
+/** `@nexttime/shared` `EPISTEMIC_STATUS_VALUES` (§5.6) — how a Fact came to be believed. */
+export const EPISTEMIC_STATUS_LABELS: Readonly<Record<EpistemicStatus, BilingualLabel>> = {
+  observed: { zh: '观测', en: 'Observed' },
+  extracted: { zh: '抽取', en: 'Extracted' },
+  inferred: { zh: '推断', en: 'Inferred' },
+  asserted: { zh: '断言', en: 'Asserted' },
+  verified: { zh: '已验证', en: 'Verified' },
+  contradicted: { zh: '被反驳', en: 'Contradicted' },
+};
+
+export function epistemicStatusLabel(status: string, t: Translate): string {
+  return lookup(EPISTEMIC_STATUS_LABELS, status, t);
+}
+
+/** `@nexttime/shared` `CONFLICT_TYPE_VALUES` (§5.5, Semantica's taxonomy). */
+export const CONFLICT_TYPE_LABELS: Readonly<Record<ConflictType, BilingualLabel>> = {
+  value: { zh: '取值冲突', en: 'Value conflict' },
+  type: { zh: '类型冲突', en: 'Type conflict' },
+  relationship: { zh: '关系冲突', en: 'Relationship conflict' },
+  temporal: { zh: '时间冲突', en: 'Temporal conflict' },
+  logical: { zh: '逻辑冲突', en: 'Logical conflict' },
+};
+
+export function conflictTypeLabel(type: string, t: Translate): string {
+  return lookup(CONFLICT_TYPE_LABELS, type, t);
+}
+
+/** `@nexttime/shared` `DECISION_STATUS_VALUES` (§5.5). */
+export const DECISION_STATUS_LABELS: Readonly<Record<DecisionStatus, BilingualLabel>> = {
+  proposed: { zh: '已提议', en: 'Proposed' },
+  approved: { zh: '已批准', en: 'Approved' },
+  rejected: { zh: '已拒绝', en: 'Rejected' },
+  executed: { zh: '已执行', en: 'Executed' },
+  verified: { zh: '已验证', en: 'Verified' },
+  failed: { zh: '失败', en: 'Failed' },
+  superseded: { zh: '已被取代', en: 'Superseded' },
+  archived: { zh: '已归档', en: 'Archived' },
+};
+
+export function decisionStatusLabel(status: string, t: Translate): string {
+  return lookup(DECISION_STATUS_LABELS, status, t);
+}
+
+/** An Activity's `status` (`substrate/epistemic/activities.ts`: `startActivity` writes `running`,
+ *  `endActivity` / Turn recovery write `completed` / `failed` / `interrupted`) — the same four
+ *  values as `@nexttime/shared` `TURN_STATUS_VALUES`, a Turn being one kind of Activity. */
+export const ACTIVITY_STATUS_LABELS: Readonly<Record<TurnStatus, BilingualLabel>> = {
+  running: { zh: '运行中', en: 'Running' },
+  completed: { zh: '已完成', en: 'Completed' },
+  failed: { zh: '失败', en: 'Failed' },
+  interrupted: { zh: '已中断', en: 'Interrupted' },
+};
+
+export function activityStatusLabel(status: string, t: Translate): string {
+  return lookup(ACTIVITY_STATUS_LABELS, status, t);
+}
+
+/** An Activity's `kind` — the kernel names it freely (no enum, no DB CHECK), so this keys the
+ *  kinds the kernel writes today; a new one keeps its raw name. */
+export const ACTIVITY_KIND_LABELS: Readonly<Record<string, BilingualLabel>> = {
+  agent_turn: { zh: '入口 agent 回合', en: 'Entry agent turn' },
+  gatekeeper_apply: { zh: '门执行', en: 'Gate apply' },
+  gatekeeper_observe: { zh: '门观测', en: 'Gate observation' },
+  worker_run: { zh: 'Worker 运行', en: 'Worker run' },
+  worker_session: { zh: 'Worker 会话', en: 'Worker session' },
+  worker_result: { zh: 'Worker 结果', en: 'Worker result' },
+  worker_gate_call: { zh: 'Worker 调用门', en: 'Worker gate call' },
+  operation_proposal: { zh: 'Operation 提议', en: 'Operation proposal' },
+  operation_publish: { zh: 'Operation 发布', en: 'Operation publish' },
+  skill_publish: { zh: 'Skill 发布', en: 'Skill publish' },
+  procedure_publish: { zh: '流程发布', en: 'Procedure publish' },
+  'governance.approval_decision': { zh: '审批决定', en: 'Approval decision' },
+  'governance.create_connection': { zh: '建立连接', en: 'Connection created' },
+  'governance.enable_gate_instance': { zh: '启用门实例', en: 'Gate instance enabled' },
+  'governance.refresh_operation_governance': {
+    zh: '刷新 Operation 治理',
+    en: 'Operation governance refreshed',
+  },
+  'governance.register_gatekeeper': { zh: '注册门', en: 'Gatekeeper registered' },
+  'epistemic.conflict_resolution': { zh: '冲突裁决', en: 'Conflict resolution' },
+  'epistemic.human_attestation': { zh: '人工确认', en: 'Human attestation' },
+  'ingest.submit_observations': { zh: '提交观测', en: 'Observations submitted' },
+};
+
+export function activityKindLabel(kind: string, t: Translate): string {
+  return lookup(ACTIVITY_KIND_LABELS, kind, t);
+}
+
+/** A Source's `kind` the kernel registers itself (`observed-facts.ts` `gatekeeper`,
+ *  `worker-run-source.ts` `worker_run`, `task/result.ts`'s private `worker_session` transcript);
+ *  an ingest client names its own kinds freely, and those keep their raw name. */
+export const SOURCE_KIND_LABELS: Readonly<Record<string, BilingualLabel>> = {
+  gatekeeper: { zh: '门', en: 'Gatekeeper' },
+  worker_run: { zh: 'Worker 运行', en: 'Worker run' },
+  worker_session: { zh: 'Worker 会话', en: 'Worker session' },
+};
+
+export function sourceKindLabel(kind: string, t: Translate): string {
+  return lookup(SOURCE_KIND_LABELS, kind, t);
+}
+
+/** A Source's `visibility` (`substrate/epistemic/sources.ts`: `'private' | 'workspace'`; the shared
+ *  `wire/ingest.ts` schema's own `z.enum`). */
+export const SOURCE_VISIBILITY_VALUES = ['workspace', 'private'] as const;
+export type SourceVisibility = (typeof SOURCE_VISIBILITY_VALUES)[number];
+export const SOURCE_VISIBILITY_LABELS: Readonly<Record<SourceVisibility, BilingualLabel>> = {
+  workspace: { zh: '工作区可见', en: 'Workspace' },
+  private: { zh: '仅自己', en: 'Private' },
+};
+
+export function sourceVisibilityLabel(visibility: string, t: Translate): string {
+  return lookup(SOURCE_VISIBILITY_LABELS, visibility, t);
+}
+
+/** A platform container's Docker state (`platform_status` runtime containers — Docker's own
+ *  `State.Status` vocabulary, not a kernel enum). */
+export const CONTAINER_STATE_VALUES = [
+  'created',
+  'running',
+  'paused',
+  'restarting',
+  'removing',
+  'exited',
+  'dead',
+] as const;
+export type ContainerState = (typeof CONTAINER_STATE_VALUES)[number];
+export const CONTAINER_STATE_LABELS: Readonly<Record<ContainerState, BilingualLabel>> = {
+  created: { zh: '已创建', en: 'Created' },
+  running: { zh: '运行中', en: 'Running' },
+  paused: { zh: '已暂停', en: 'Paused' },
+  restarting: { zh: '重启中', en: 'Restarting' },
+  removing: { zh: '删除中', en: 'Removing' },
+  exited: { zh: '已退出', en: 'Exited' },
+  dead: { zh: '已失效', en: 'Dead' },
+};
+
+export function containerStateLabel(state: string, t: Translate): string {
+  return lookup(CONTAINER_STATE_LABELS, state, t);
 }

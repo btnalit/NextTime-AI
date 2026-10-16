@@ -31,7 +31,7 @@ import { Notice } from '../kit/notice.js';
 import { RefChip } from '../kit/ref-chip.js';
 import { StatusChip } from '../kit/status-chip.js';
 import { Textarea } from '../kit/textarea.js';
-import { ActionFailureNotice } from './ActionFailure.js';
+import { ActionFailureNotice, FailureReasonWhere } from './ActionFailure.js';
 import { ActionWaitingNotice } from './ActionWaiting.js';
 import { nameOf, resourceScopeLabel } from './useDirectoryNames.js';
 
@@ -279,9 +279,8 @@ export function ApprovalDetail({
       key: 'policy',
       label: t('策略', 'Policy'),
       value: (
-        <span data-testid="approval-policy" title={row.policyDecision}>
-          {policyDecisionLabel(row.policyDecision, t)}
-        </span>
+        // Legacy sweep (console batch, 2026-10-16): no raw-value tooltip.
+        <span data-testid="approval-policy">{policyDecisionLabel(row.policyDecision, t)}</span>
       ),
     });
   }
@@ -371,7 +370,13 @@ export function ApprovalDetail({
             <>
               <span className="meta-sep" />
               <span>{t('Worker 运行', 'Worker run')}</span>
-              <RefChip kind="object" id={row.parentWorkerRunId} name={null} size="s" />
+              {/* Legacy 314 sweep: a WorkerRun is no graph Object `resolve_refs` can name. */}
+              <RefChip
+                kind="object"
+                id={row.parentWorkerRunId}
+                name={t('发起本请求的运行', 'The run that made this request')}
+                size="s"
+              />
             </>
           ) : null}
         </div>
@@ -391,6 +396,7 @@ export function ApprovalDetail({
               )
             : actionKindTagText(row.actionKindTag),
         }}
+        reasonWhere={<FailureReasonWhere actionRequestId={row.id} />}
         testId="approval-failure"
       />
 
@@ -643,7 +649,16 @@ export function ApprovalDetail({
               {
                 key: 'request',
                 label: t('请求', 'Request'),
-                value: <RefChip kind="actionRequest" id={row.id} name={null} size="s" />,
+                // Legacy 314: named as the request on screen — `name={null}` with nothing to
+                // resolve it read 「未知 / 已删除」 about a request that exists.
+                value: (
+                  <RefChip
+                    kind="actionRequest"
+                    id={row.id}
+                    name={t('本请求', 'This request')}
+                    size="s"
+                  />
+                ),
               },
               {
                 key: 'reason',

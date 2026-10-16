@@ -6,7 +6,7 @@ import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
 import type { AgentPolicy } from '../lib/agent-profile.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
-import { actionKindRaw, formatDateTime, formatRelative, shortId } from '../lib/format.js';
+import { actionKindRaw, formatDateTime, formatRelative } from '../lib/format.js';
 import type { ModelRow, SkillRow } from '../lib/governance.js';
 import { type Translate, useT } from '../lib/i18n.js';
 import { breadcrumbFor } from '../lib/nav.js';
@@ -48,7 +48,11 @@ function quotaValue(row: QuotaListEntryWire, t: Translate): string {
  *  effective value reads as the row's "status" here. */
 function quotaColumns(
   t: Translate,
-  options: { readonly canManage: boolean; readonly onEdit: (row: QuotaListEntryWire) => void },
+  options: {
+    readonly canManage: boolean;
+    readonly onEdit: (row: QuotaListEntryWire) => void;
+    readonly http: CapabilityCaller;
+  },
 ): readonly DataTableColumn<QuotaListEntryWire>[] {
   return [
     {
@@ -81,8 +85,13 @@ function quotaColumns(
     {
       id: 'updatedBy',
       header: t('设置人', 'Set by'),
-      cellClassName: 'mono text-3',
-      cell: (row) => (row.updatedBy ? shortId(row.updatedBy) : '—'),
+      // Legacy 313 sweep: who set it, by name (self-resolving), never a bare id.
+      cell: (row) =>
+        row.updatedBy ? (
+          <RefChip kind="principal" id={row.updatedBy} http={options.http} size="s" />
+        ) : (
+          '—'
+        ),
     },
     {
       id: 'updatedAt',
@@ -126,6 +135,7 @@ function policyColumns(
     readonly canManage: boolean;
     readonly onEdit: (row: PolicyWire) => void;
     readonly gateNames: ReadonlyMap<string, string>;
+    readonly http: CapabilityCaller;
   },
 ): readonly DataTableColumn<PolicyWire>[] {
   return [
@@ -228,8 +238,7 @@ function policyColumns(
     {
       id: 'setBy',
       header: t('设置人', 'Set by'),
-      cellClassName: 'mono text-3',
-      cell: (policy) => shortId(policy.setBy),
+      cell: (policy) => <RefChip kind="principal" id={policy.setBy} http={options.http} size="s" />,
     },
     {
       id: 'updatedAt',
@@ -519,7 +528,7 @@ export function ModelsPage({ http }: ModelsPageProps) {
             />
           ) : (
             <DataTable
-              columns={quotaColumns(t, { canManage: isOwner, onEdit: setQuotaEditor })}
+              columns={quotaColumns(t, { canManage: isOwner, onEdit: setQuotaEditor, http })}
               data={quotas.state.data.items}
               getRowId={(row) => row.key}
               ariaLabel="Quotas"
@@ -581,6 +590,7 @@ export function ModelsPage({ http }: ModelsPageProps) {
                   canManage: isOwner,
                   onEdit: (row) => setPolicyEditor({ kind: 'edit', row }),
                   gateNames: gatekeepers.names,
+                  http,
                 })}
                 data={policies.state.data.items}
                 getRowId={(policy) => policy.id}

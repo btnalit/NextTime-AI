@@ -389,6 +389,59 @@ describe('MembersPage', () => {
     expect(http.calls.some((call) => call.name === 'rotate_api_key')).toBe(false);
   });
 
+  it('console sweep: your own drawer offers no 「停用成员」 (the kernel refuses self_disable) and says why', async () => {
+    const me = principal({ id: 'p-owner', role: 'owner', displayName: 'Alice' });
+    const other = principal({ id: 'p-2', role: 'owner', displayName: 'Carol' });
+    const http = scriptedHttp({ list_principals: () => ({ items: [me, other] }) });
+    renderPage(http);
+    await waitFor(() => expect(http.calls.some((c) => c.name === 'get_workspace')).toBe(true));
+    fireEvent.click((await screen.findAllByTestId('member-row'))[0] as HTMLElement);
+    const drawer = await screen.findByTestId('principal-detail');
+
+    expect(within(drawer).queryByRole('button', { name: '停用成员' })).toBeNull();
+    expect(within(drawer).getByTestId('principal-self-no-disable').textContent).toContain(
+      '另一位所有者',
+    );
+    // Two active owners: the role stays editable.
+    expect(within(drawer).getByLabelText(/角色/)).toBeTruthy();
+  });
+
+  it('console sweep: the last active human owner gets no role change and no disable (kernel last_owner), only the reason', async () => {
+    const carol = principal({ id: 'p-2', role: 'owner', displayName: 'Carol' });
+    const formerOwner = principal({
+      id: 'p-3',
+      role: 'owner',
+      displayName: 'Dan',
+      disabledAt: '2026-09-02T00:00:00.000Z',
+    });
+    const service = principal({ id: 'p-svc', kind: 'service', role: 'owner', displayName: 'CI' });
+    const http = scriptedHttp({
+      list_principals: () => ({ items: [carol, formerOwner, service] }),
+    });
+    renderPage(http);
+    fireEvent.click((await screen.findAllByTestId('member-row'))[0] as HTMLElement);
+    const drawer = await screen.findByTestId('principal-detail');
+
+    expect(within(drawer).queryByLabelText(/角色/)).toBeNull();
+    expect(within(drawer).queryByRole('button', { name: '停用成员' })).toBeNull();
+    expect(within(drawer).getByTestId('principal-last-owner').textContent).toContain(
+      '最后一位有效的所有者',
+    );
+  });
+
+  it('console sweep: with more pages still unloaded, the last-owner rule is not claimed', async () => {
+    const carol = principal({ id: 'p-2', role: 'owner', displayName: 'Carol' });
+    const http = scriptedHttp({
+      list_principals: () => ({ items: [carol], nextCursor: 'c-2' }),
+    });
+    renderPage(http);
+    fireEvent.click(await screen.findByTestId('member-row'));
+    const drawer = await screen.findByTestId('principal-detail');
+
+    expect(within(drawer).queryByTestId('principal-last-owner')).toBeNull();
+    expect(within(drawer).getByRole('button', { name: '停用成员' })).toBeTruthy();
+  });
+
   it('R-06: promoting a service credential to owner opens the irreversible confirm; cancelling calls nothing', async () => {
     const service = principal({ id: 'p-svc', kind: 'service', displayName: 'CI runner' });
     const http = scriptedHttp({

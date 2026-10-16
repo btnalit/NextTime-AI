@@ -131,7 +131,9 @@ test.describe('Journey ⑧: 非所有者角色走一遍', () => {
       const settled = trackCapabilityCalls(page);
       await switcher.selectOption(workspaceId as string);
       await expect(switcher).toHaveValue(workspaceId as string, { timeout: 15_000 });
-      await expect(page.getByTestId('role-badge')).toHaveAttribute('title', `Role: ${role}`, {
+      // The tooltip names the role in words (legacy sweep, 2026-10-16); the raw role is on
+      // `data-role`.
+      await expect(page.getByTestId('role-badge')).toHaveAttribute('data-role', role, {
         timeout: 15_000,
       });
 

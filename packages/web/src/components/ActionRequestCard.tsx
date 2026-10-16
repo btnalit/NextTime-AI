@@ -147,7 +147,8 @@ export function ActionRequestCard({
       onBehalfOf={card.onBehalfOf !== undefined ? { id: card.onBehalfOf } : undefined}
       policySummary={
         card.policyDecision ? (
-          <span title={card.policyDecision}>{policyDecisionLabel(card.policyDecision, t)}</span>
+          // Legacy sweep (console batch, 2026-10-16): no raw-value tooltip — the label is the text.
+          <span>{policyDecisionLabel(card.policyDecision, t)}</span>
         ) : undefined
       }
       approvalsHref={

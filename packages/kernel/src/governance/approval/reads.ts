@@ -1,4 +1,9 @@
-import { type ActionRequestStatus, type Role, getCapability } from '@nexttime/shared';
+import {
+  type ActionRequestFailureKind,
+  type ActionRequestStatus,
+  type Role,
+  getCapability,
+} from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { queryAuditActionOperationStats } from '../../substrate/audit/index.js';
 import {
@@ -202,6 +207,9 @@ export const MAX_ACTION_REQUEST_LIST_LIMIT = 200;
 
 export interface ListActionRequestsFilter {
   readonly status?: ActionRequestStatus | readonly ActionRequestStatus[];
+  /** Legacy 331: only rows whose `failure_kind` is one of these (so only `failed` / `compensated`
+   *  rows — the column is null on every other status). */
+  readonly failureKind?: ActionRequestFailureKind | readonly ActionRequestFailureKind[];
   readonly gatekeeperId?: string;
   /** S6-A C28: `parent_worker_run_id in (...)`. `undefined` = no narrowing; an *empty* array
    *  matches nothing (the handler passes `[]` for a `taskId` with no WorkerRuns or that does not
@@ -249,6 +257,12 @@ export async function listActionRequestsForApprover(
       : Array.isArray(filter.status)
         ? [...filter.status]
         : [filter.status];
+  const failureKinds =
+    filter.failureKind === undefined
+      ? null
+      : Array.isArray(filter.failureKind)
+        ? [...filter.failureKind]
+        : [filter.failureKind];
   const cursor = decodeActionRequestCursor(filter.cursor);
   const isOwner = approver.role === 'owner';
 
@@ -260,6 +274,7 @@ export async function listActionRequestsForApprover(
        and ($2::text[] is null or ar.status = any($2::text[]))
        and ($3::uuid is null or ar.gatekeeper_id = $3::uuid)
        and ($9::uuid[] is null or ar.parent_worker_run_id = any($9::uuid[]))
+       and ($10::text[] is null or ar.failure_kind = any($10::text[]))
        and (
          $5::timestamptz is null
          or (date_trunc('milliseconds', ar.requested_at), ar.id) < ($5::timestamptz, $6::uuid)
@@ -277,6 +292,7 @@ export async function listActionRequestsForApprover(
       isOwner,
       approver.principalId,
       filter.parentWorkerRunIds === undefined ? null : [...filter.parentWorkerRunIds],
+      failureKinds,
     ],
   );
 

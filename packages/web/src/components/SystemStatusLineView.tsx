@@ -1,5 +1,6 @@
 import { failureReading } from '../lib/action-outcome.js';
 import { useT } from '../lib/i18n.js';
+import { taskFailureReasonText } from '../lib/labels.js';
 import type { SystemStatusLineData } from '../lib/system-status.js';
 import { Icon } from './ui/Icon.js';
 import { StatusChip } from './ui/StatusChip.js';
@@ -37,7 +38,9 @@ export function SystemStatusLineView({ line, onOpen }: SystemStatusLineViewProps
       ) : null}
       <span className="system-status-text">{line.text}</span>
       {line.variant === 'task_update' && line.failureReason ? (
-        <span className="text-3">({line.failureReason})</span>
+        <span className="text-3" title={taskFailureReasonText(line.failureReason, t).detail}>
+          ({taskFailureReasonText(line.failureReason, t).short})
+        </span>
       ) : null}
       {onOpen ? <Icon name="chevron-right" size="s" className="text-3" /> : null}
     </>

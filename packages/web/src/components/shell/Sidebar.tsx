@@ -199,7 +199,13 @@ export function SidebarContent({
           <span>{t('工作区', 'Workspace')}</span>
           <span aria-hidden>·</span>
           {role.kind === 'known' ? (
-            <span data-testid="role-badge" title={`Role: ${role.role}`}>
+            // Legacy sweep (console batch, 2026-10-16): the tooltip names the role in words; the
+            // raw value stays machine-readable on `data-role` (e2e journey ⑧ keys on it).
+            <span
+              data-testid="role-badge"
+              data-role={role.role}
+              title={t(`角色：${roleLabel(role.role, t)}`, `Role: ${roleLabel(role.role, t)}`)}
+            >
               <StatusChip machine="role" status={role.role} size="s" />
             </span>
           ) : (

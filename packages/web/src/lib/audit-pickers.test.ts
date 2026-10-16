@@ -72,8 +72,27 @@ describe('resourceIdSource', () => {
     });
     const options = await resourceIdSource('operation', t)?.load(http, ' restart ');
     expect(options).toEqual([
-      { id: 'gk-1:restart', label: 'restart', detail: 'docker-prod · published' },
+      // Legacy sweep (console batch, 2026-10-16): the status reads as its label.
+      { id: 'gk-1:restart', label: 'restart', detail: 'docker-prod · 已发布' },
     ]);
+  });
+
+  it('legacy sweep: a Decision picker option shows its status as a label, never the raw value', async () => {
+    const http = caller({
+      query_decisions: () => ({
+        items: [
+          {
+            id: 'dec-1',
+            status: 'superseded',
+            summary: 'restart web',
+            createdAt: '2026-09-03T00:00:00.000Z',
+          },
+        ],
+      }),
+    });
+    const [option] = await provenanceNodeSource('decision', t).load(http, '');
+    expect(option?.detail).toContain('已被取代');
+    expect(option?.detail).not.toContain('superseded');
   });
 
   it('maps an ontology type to its name (the kernel’s resourceId for it)', async () => {
@@ -101,7 +120,8 @@ describe('resourceIdSource', () => {
       resolve_refs: () => ({ items: [] }),
     });
     const options = await provenanceNodeSource('fact', t).load(http, '');
-    expect(options.map((o) => [o.id, o.label])).toEqual([['f-1', 'verify_fact']]);
+    // Legacy sweep (console batch, 2026-10-16): the action reads as its label, not the raw name.
+    expect(options.map((o) => [o.id, o.label])).toEqual([['f-1', '验证事实']]);
   });
 });
 

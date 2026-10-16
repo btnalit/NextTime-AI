@@ -309,6 +309,14 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
+/* Legacy 339: a long value (a failure reason) stacks under its label on a narrow screen instead
+   of folding into a strip beside it. */
+@media (max-width: 768px) {
+  .definition-list > .definition-list-wide {
+    grid-column: 1 / -1;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

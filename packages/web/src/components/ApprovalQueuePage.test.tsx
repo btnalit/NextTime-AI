@@ -349,6 +349,42 @@ describe('ApprovalHistoryTab (list_action_requests, S5.5 leftover 21)', () => {
     expect(calls[1]).toMatchObject({ limit: 50, status: 'approved' });
   });
 
+  it('legacy 331: narrows the history by failure kind, and a kind never pairs with a status that cannot fail', async () => {
+    const calls: Array<Record<string, unknown> | undefined> = [];
+    const http = scriptedHttp([() => Promise.resolve([])], {
+      list_action_requests: (params) => {
+        calls.push(params as Record<string, unknown> | undefined);
+        return Promise.resolve({ items: [row({ status: 'failed', failureKind: 'refused' })] });
+      },
+    });
+    render(<ApprovalQueuePage http={http} pushes={SILENT_PUSH_SOURCE} onSelect={vi.fn()} />);
+    await screen.findByTestId('approvals-empty');
+    fireEvent.click(screen.getByRole('tab', { name: /历史/ }));
+    await screen.findByTestId('approval-history-row');
+
+    const kind = screen.getByLabelText('失败类别') as HTMLSelectElement;
+    expect([...kind.options].map((option) => option.textContent)).toEqual([
+      '全部',
+      '没发出（什么都没执行）',
+      '被拒绝或执行失败',
+      '结果不明（需要核对）',
+    ]);
+    fireEvent.change(kind, { target: { value: 'outcome_unknown' } });
+    await waitFor(() => expect(calls).toHaveLength(2));
+    expect(calls[1]).toEqual({ limit: 50, failureKind: 'outcome_unknown' });
+
+    // A status that cannot fail clears the kind; picking a kind then clears that status.
+    fireEvent.change(screen.getByLabelText(/状态/), { target: { value: 'approved' } });
+    await waitFor(() => expect(calls.at(-1)).toEqual({ limit: 50, status: 'approved' }));
+    expect(kind.value).toBe('all');
+    fireEvent.change(kind, { target: { value: 'refused' } });
+    await waitFor(() => expect(calls.at(-1)).toEqual({ limit: 50, failureKind: 'refused' }));
+    fireEvent.change(screen.getByLabelText(/状态/), { target: { value: 'compensated' } });
+    await waitFor(() =>
+      expect(calls.at(-1)).toEqual({ limit: 50, status: 'compensated', failureKind: 'refused' }),
+    );
+  });
+
   // Legacy 287 (review of #586): a row that has not finished says why it waits.
   it('says why an unfinished row waits: an executing one in doubt, an approved one queued behind', async () => {
     const http = scriptedHttp([() => Promise.resolve([])], {

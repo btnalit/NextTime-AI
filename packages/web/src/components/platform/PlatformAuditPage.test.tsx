@@ -77,7 +77,9 @@ describe('PlatformAuditPage', () => {
     const list = await screen.findByTestId('platform-audit-list');
     expect(list.textContent).toContain('create_user');
     expect(list.textContent).toContain('admin');
-    expect(list.textContent).toContain('user:u-2');
+    // Legacy sweep (console batch, 2026-10-16): the resource type reads as a label.
+    expect(list.textContent).toContain('用户:u-2');
+    expect(list.textContent).not.toContain('user:u-2');
   });
 
   it('applying the action/actorUserId filters re-queries with only the non-empty ones', async () => {
@@ -147,7 +149,7 @@ describe('PlatformAuditPage', () => {
     // The row's own actorUserId ('u-admin') resolves through list_users, not a truncated id.
     expect(list.textContent).toContain('Administrator (admin)');
     // resourceId is truncated (shortId), never the full UUID.
-    expect(list.textContent).toContain('user:12345678');
+    expect(list.textContent).toContain('用户:12345678');
     expect(list.textContent).not.toContain('12345678-abcd-4321-8888-000000000000');
   });
 

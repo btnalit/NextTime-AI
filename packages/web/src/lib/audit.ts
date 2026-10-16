@@ -77,7 +77,9 @@ export function isEmptyEntry(entry: AuditEntry): boolean {
  * `resourceType: '…'` literal under `packages/kernel/src/{application,governance,substrate}` as
  * of S6-A — `writeAudit` callers and the capability handlers' `resourceType` results). Offered
  * as a `<select>` on the audit page; the kernel does not publish this as an enum, so an unknown
- * value still works through the filter's free-text path.
+ * value still works through the filter's free-text path. Legacy sweep (console batch,
+ * 2026-10-16): `gate_instance` (`gate-instance-handlers.ts`) and `module`
+ * (`platform-modules-handlers.ts`) are written on workspace rows too.
  */
 export const AUDIT_RESOURCE_TYPES = [
   'action_request',
@@ -90,7 +92,9 @@ export const AUDIT_RESOURCE_TYPES = [
   'connection_request',
   'decision',
   'fact',
+  'gate_instance',
   'gatekeeper',
+  'module',
   'object',
   'ontology_type',
   'ontology_version',
@@ -108,6 +112,25 @@ export const AUDIT_RESOURCE_TYPES = [
   'workspace',
 ] as const;
 export type AuditResourceType = (typeof AUDIT_RESOURCE_TYPES)[number];
+
+/**
+ * Legacy sweep (console batch, 2026-10-16): the `resourceType` values only the platform audit
+ * stream carries (`workspaceId: null` rows — user and connector administration, platform
+ * settings, the LLM provider / admin-token events, `cli.*` maintenance). Not offered on the
+ * workspace page's `<select>`; `lib/labels.ts` labels them so the platform audit list never
+ * shows the raw value. A type both streams write (`gate_instance`, `workspace`, …) stays in
+ * `AUDIT_RESOURCE_TYPES` above.
+ */
+export const PLATFORM_AUDIT_RESOURCE_TYPES = [
+  'connector',
+  'llm_admin_token',
+  'llm_provider',
+  'observations',
+  'platform',
+  'platform_settings',
+  'user',
+] as const;
+export type PlatformAuditResourceType = (typeof PLATFORM_AUDIT_RESOURCE_TYPES)[number];
 
 /**
  * Lifecycle audit actions the kernel writes *outside* a capability dispatch (which audits under

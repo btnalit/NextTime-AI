@@ -1771,7 +1771,7 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
         workspaceId,
         principalId,
         first.taskId,
-        'r54_test_terminal',
+        'worker_failed',
       );
 
       const next = await invokeWorker(workspaceId, caller, input, deps(supervisorClient));
@@ -1828,7 +1828,7 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
         workspaceId,
         principalId,
         first.taskId,
-        'r54_test_terminal',
+        'worker_failed',
       );
       const replay = await invokeWorker(
         workspaceId,
@@ -1840,7 +1840,7 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
         taskId: first.taskId,
         workerRunId: first.workerRunId,
         status: 'failed',
-        failureReason: 'r54_test_terminal',
+        failureReason: 'worker_failed',
       });
       expect(supervisorClient.spawnCalls).toHaveLength(1);
 

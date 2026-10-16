@@ -54,6 +54,8 @@ export interface ActionRequestRowLike {
    *  recorded it — redacted, clipped, unseen characters shown as `\u{XXXX}`; plain text with its
    *  line breaks. `null` when none was recorded, absent on an older row shape. */
   readonly failureReason?: string | null;
+  /** Legacy 339: `failureReason` is the head of a longer reason (the whole is audited). */
+  readonly failureReasonTruncated?: boolean;
   readonly suspectedSecretValues?: number;
   /** Where in `params` (field paths only), alongside the count. */
   readonly suspectedSecretPaths?: readonly string[];

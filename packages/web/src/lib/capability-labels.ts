@@ -1361,6 +1361,14 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '操作的模式与影响面已按门的公告更新。',
     enHint: "An operation's mode and blast radius were aligned to the gate.",
   },
+  // Legacy sweep (console batch, 2026-10-16): `gate-instance-handlers.ts` writes one per revision
+  // draft a gate's changed manifest opened (`reason: 'definition_changed'`).
+  'operation.revision_drafted': {
+    zh: '已生成修订草稿',
+    en: 'Revision draft opened',
+    zhHint: '门的定义变了，平台为这个操作生成了一份待发布的修订草稿。',
+    enHint: "The gate's definition changed, so a revision draft of the operation was opened.",
+  },
   'draft.expired': {
     zh: '过期草稿已清理',
     en: 'Stale draft removed',
@@ -1532,6 +1540,13 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     en: 'Password set via CLI',
     zhHint: '主机命令行为一个用户设置了密码。',
     enHint: "The host CLI set a user's password.",
+  },
+  // Legacy sweep (console batch, 2026-10-16): `application/platform/scrub-raw-secrets.ts`.
+  'cli.raw_secrets_scrubbed': {
+    zh: '命令行清除明文凭据',
+    en: 'Raw secrets scrubbed via CLI',
+    zhHint: '主机命令行把历史记录里的明文凭据替换成了掩码。',
+    enHint: 'The host CLI masked raw secrets left in stored records.',
   },
 };
 

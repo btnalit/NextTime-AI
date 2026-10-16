@@ -183,14 +183,18 @@ describe('TaskDetail', () => {
         };
       },
     });
-    const { onOpenApproval } = renderDetail({ failureReason: 'worker refused' }, http);
+    const { onOpenApproval } = renderDetail({ failureReason: 'spawn_lost' }, http);
     const row = await screen.findByTestId('linked-approval-row');
     expect(row.textContent).toContain('docker container restart');
     expect(row.textContent).toContain('not now');
     expect(within(row).getByText('Alice')).toBeTruthy();
     fireEvent.click(row);
     expect(onOpenApproval).toHaveBeenCalledWith('ar-1');
-    expect(screen.getByText('worker refused')).toBeTruthy();
+    // Legacy 324: the reason reads as a label and a sentence, never the raw code.
+    const reason = screen.getByTestId('task-detail-failure-reason');
+    expect(reason.textContent).toContain('排队后没有启动');
+    expect(reason.textContent).toContain('不会自动重试');
+    expect(reason.textContent).not.toContain('spawn_lost');
   });
 
   it('a thrown onCancel keeps the confirm open with its own inline error (data-error-code)', async () => {

@@ -2564,12 +2564,30 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   // Same-name definitions (a template instantiated twice) differ only by id: show it on those.
   const sameName = sameNameDefinitionIds(allRows);
   const selected = itemId ? allRows.find((row) => workerKey(row) === itemId) : undefined;
-  // D-24: Publish / Deprecate on a definition another principal proposed is the owner's.
+  // D-24: Publish / Deprecate on a definition another principal proposed is the owner's — and
+  // publishing a new version of a family supersedes its published version, so that version's
+  // proposer counts too (legacy 315; kernel `assertFamilyPublishAuthority`: any published version
+  // of the same id that someone else proposed).
+  const selectedLive =
+    selected?.status === 'draft'
+      ? allRows.find(
+          (row) =>
+            row.id === selected.id &&
+            row.status === 'published' &&
+            provenNotProposer(row, role, principalId),
+        )
+      : undefined;
   const selectedProposerOnly = selected
-    ? proposerOnlyFor(selected, role, principalId, {
-        publish: canPublish,
-        deprecate: canDeprecate && selected.kind !== 'entry',
-      })
+    ? proposerOnlyFor(
+        selected,
+        role,
+        principalId,
+        {
+          publish: canPublish,
+          deprecate: canDeprecate && selected.kind !== 'entry',
+        },
+        selectedLive,
+      )
     : null;
 
   const list = (

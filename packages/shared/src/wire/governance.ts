@@ -102,6 +102,9 @@ export const ActionRequestWireSchema = z
     // overrides, zero-width and control characters) shown as `\u{XXXX}`; line breaks kept. `null`
     // when none was recorded or on any other status; absent from `request_action`'s own results.
     failureReason: z.string().nullable().optional(),
+    // Legacy 339: `true` when `failureReason` is the head of a longer reason (it then ends in
+    // `…`); the whole is in the request's `action_request.fail` audit record. `false` otherwise.
+    failureReasonTruncated: z.boolean().optional(),
     // Legacy 218 / UX acceptance of #592 (P2-1): on a `pending_approval` row (the handlers that
     // add the decision fields) — the version of this Operation its gate publishes now (`null`: the
     // gate no longer publishes it), and whether this request was made against that definition.

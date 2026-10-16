@@ -363,7 +363,11 @@ export function Routed({
       );
       break;
     case 'platformUsers':
-      page = requireAdmin(session, <PlatformUsersPage http={session.http} />, t);
+      page = requireAdmin(
+        session,
+        <PlatformUsersPage http={session.http} ownUserId={session.user?.id ?? null} />,
+        t,
+      );
       break;
     case 'platformWorkspaces':
       page = requireAdmin(

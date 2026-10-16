@@ -210,6 +210,27 @@ describe('TasksPage linked approvals (C28) and push reconciliation (C7)', () => 
     expect(screen.queryByTestId('linked-approvals-error')).toBeNull();
   });
 
+  it('legacy 324: a failed row shows why as a label, with the sentence as its tooltip', async () => {
+    const http = scriptedHttp({
+      list_tasks: () => ({
+        items: [
+          task({
+            status: 'failed',
+            failureReason: 'run_lost',
+            failedAt: '2026-09-03T00:01:00.000Z',
+          }),
+        ],
+      }),
+      list_worker_definitions: () => ({ items: [] }),
+      resolve_refs: () => ({ items: [] }),
+    });
+    renderPage(http, pushSource());
+    const reason = await screen.findByTestId('task-failure-reason');
+    expect(reason.textContent).toBe('运行丢失');
+    expect(reason.getAttribute('title')).toContain('Worker 运行都已经结束');
+    expect(screen.getByTestId('task-row').textContent).not.toContain('run_lost');
+  });
+
   it('task.updated re-reads only that Task (get_task), never the whole list', async () => {
     const pushes = pushSource();
     const http = scriptedHttp({
