@@ -23,8 +23,9 @@ name: image-mirror
 # `upstream` when the version moves) and every reference in one PR. That PR's own run of this
 # workflow (pull_request trigger below) copies the new digest; push the list change first and the
 # references once the copy exists, or the PR's checks race the copy. The guard names every reference
-# that still carries the old digest. Nothing updates these pins automatically (no Dependabot or
-# Renovate for images; maintainer decision 2026-09-25 — routine upgrades go by hand, in waves).
+# that still carries the old digest. Nothing moves these pins automatically (no Dependabot or
+# Renovate for images; maintainer decision 2026-09-25): the weekly image-pins.yml compares each pin
+# with its upstream tag and keeps an `image-pins` issue open, with Trivy's view, while any is behind.
 #
 # Triggers:
 #   - push to main that changes the list or this file: a merged pin change is copied right away;

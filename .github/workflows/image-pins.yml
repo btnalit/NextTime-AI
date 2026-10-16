@@ -1,0 +1,148 @@
+name: image-pins
+
+# Weekly check that the third-party image pins in deploy/image-mirrors.json still match their
+# upstream tags (STATUS 遗留 181). Pinning by digest (#531) froze those images, security rebuilds
+# included: `postgres:17-alpine` gets a new digest whenever upstream rebuilds it, and the pin stays on
+# the old one. This workflow compares every pin with the digest its upstream tag points at now
+# (manifest HEAD; Docker Hub does not count HEAD requests against its anonymous limit), overlays
+# Trivy's HIGH/CRITICAL findings on the pinned and the current digest, and keeps one `image-pins`
+# issue open while any pin is behind — with the digests, what moving fixes, and every reference to
+# change. It never moves a pin: that stays a reviewed PR (image-mirror.yml's header has the order of
+# pushes), and routine upgrades are not handed to a bot (2026-09-25 / 2026-10-02 decisions; no
+# Dependabot or Renovate). The logic is scripts/image-pins.mjs; its unit tests run in `quality`.
+#
+# Triggers:
+#   - weekly schedule (Monday, after image-mirror's weekly run) and workflow_dispatch: compare,
+#     scan, then open / update / close the issue;
+#   - pull_request changing the list, this file or the script: the same compare and scan, reported
+#     in the run summary only (the issue job does not run on pull requests), so a pin-moving PR shows
+#     its pins are now current and what the move fixed.
+# Not a required check. A failed upstream lookup fails the run after the report is written; a failed
+# Trivy scan is a warning and shows as "not scanned" (the digest comparison is the check).
+#
+# Credentials: only GITHUB_TOKEN — `contents: read` for the compare job, `issues: write` on the
+# issue job alone. Every action is pinned to a full commit SHA (setup-trivy at the commit
+# trivy-action v0.36.0 itself pins, image-scan.yml / publish-images.yml).
+
+on:
+  schedule:
+    - cron: '41 5 * * 1' # weekly, Monday, after image-mirror (04:23) and off the hour
+  workflow_dispatch: {}
+  pull_request:
+    paths:
+      - deploy/image-mirrors.json
+      - .github/workflows/image-pins.yml
+      - scripts/image-pins.mjs
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compare:
+    name: compare
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      behind: ${{ steps.report.outputs.behind }}
+      errors: ${{ steps.report.outputs.errors }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Node only (the script has no dependencies, so no install).
+      - name: Setup Node 22
+        uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2 # v2.0.2
+        with:
+          runtime: node@22
+          install: false
+
+      - name: Resolve the upstream digest of every pin
+        run: |
+          mkdir -p "$RUNNER_TEMP/image-pins"
+          node scripts/image-pins.mjs resolve --out "$RUNNER_TEMP/image-pins/status.json"
+
+      - name: Install Trivy
+        uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514 # v0.2.6
+        with:
+          version: v0.70.0
+          cache: true
+
+      - name: Scan pinned and upstream digests with Trivy
+        run: node scripts/image-pins.mjs scan --status "$RUNNER_TEMP/image-pins/status.json" --dir "$RUNNER_TEMP/image-pins/scans"
+
+      - name: Report
+        id: report
+        run: |
+          out="$RUNNER_TEMP/image-pins"
+          node scripts/image-pins.mjs report --status "$out/status.json" --dir "$out/scans" --out "$out/report.md"
+          cat "$out/report.md" >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: image-pins
+          path: |
+            ${{ runner.temp }}/image-pins/report.md
+            ${{ runner.temp }}/image-pins/status.json
+          retention-days: 14
+
+      - name: Fail on lookup errors
+        if: steps.report.outputs.errors != '0'
+        env:
+          ERRORS: ${{ steps.report.outputs.errors }}
+        run: |
+          echo "::error::${ERRORS} upstream digest lookup(s) failed; see the report in the run summary"
+          exit 1
+
+  # One open `image-pins` issue while any pin is behind, updated in place; closed once every pin is
+  # current. A run with lookup errors and nothing behind leaves an open issue as it is.
+  issue:
+    name: issue
+    needs: compare
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.compare.outputs.behind != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      BEHIND: ${{ needs.compare.outputs.behind }}
+      ERRORS: ${{ needs.compare.outputs.errors }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Download the report
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: image-pins
+          path: ${{ runner.temp }}/image-pins
+
+      - name: Open, update or close the image-pins issue
+        env:
+          BODY_FILE: ${{ runner.temp }}/image-pins/report.md
+        run: |
+          set -eu
+          EXISTING=$(gh issue list --state open --label image-pins --json number --jq '.[0].number // empty')
+          if [ "$BEHIND" -gt 0 ]; then
+            TITLE="image pins: ${BEHIND} third-party image(s) behind their upstream tag"
+            if [ -n "$EXISTING" ]; then
+              gh issue edit "$EXISTING" --title "$TITLE" --body-file "$BODY_FILE"
+              echo "updated issue #${EXISTING}" >>"$GITHUB_STEP_SUMMARY"
+            else
+              gh label create image-pins --color D93F0B \
+                --description "a pinned third-party image in deploy/image-mirrors.json is behind its upstream tag" \
+                2>/dev/null || true
+              gh issue create --title "$TITLE" --label image-pins --body-file "$BODY_FILE" >>"$GITHUB_STEP_SUMMARY"
+            fi
+          elif [ "$ERRORS" = 0 ] && [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "Every pin in \`deploy/image-mirrors.json\` matches its upstream tag as of ${RUN_URL} — closing."
+            gh issue close "$EXISTING"
+            echo "closed issue #${EXISTING}" >>"$GITHUB_STEP_SUMMARY"
+          fi
