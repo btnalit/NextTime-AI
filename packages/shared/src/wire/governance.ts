@@ -22,7 +22,9 @@ import {
  *  gate's protocol. Whether it ran is unknown until the platform asks the gate (the
  *  stale-executing reaper, past its stale timeout); until then the row holds its Gatekeeper's
  *  queue (R-50). `since`: when the first such call was recorded. `reason`: the kernel's reason,
- *  as audited (`action_request.outcome_in_doubt`). */
+ *  as audited (`action_request.outcome_in_doubt`) and shown like `failureReason` (legacy 338):
+ *  redacted, clipped to 1000 code points, unseen characters shown as `\u{XXXX}`, line breaks
+ *  kept; `null` when none was recorded. */
 export const ActionRequestOutcomeInDoubtWireSchema = z
   .object({
     since: z.string(),

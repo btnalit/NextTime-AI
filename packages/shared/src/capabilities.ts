@@ -1787,6 +1787,9 @@ const governanceCapabilities = [
           id: z.string(),
           status: ActionRequestStatusSchema,
           data: z.unknown().optional(),
+          // On a `failed` outcome, the reason read back from its audit row, shown like
+          // `ActionRequestWireSchema.failureReason` (legacy 338): redacted, clipped to 1000 code
+          // points, unseen characters shown as `\u{XXXX}`, line breaks kept.
           reason: z.string().optional(),
           // S11 GO1: on a `failed` outcome, its kind (`ActionRequestWireSchema.failureKind`).
           failureKind: ActionRequestFailureKindSchema.optional(),

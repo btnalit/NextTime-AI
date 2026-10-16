@@ -31,6 +31,7 @@ import {
   getActionRequest,
   readActionRequestWaitingStates,
   requestAction,
+  shownAuditReason,
 } from '../../governance/approval/index.js';
 import {
   hasActiveGrant,
@@ -502,21 +503,20 @@ export async function readTerminalOutcome(
   );
   const terminalRow = rows.find((row) => TERMINAL_OUTCOME_ACTIONS.includes(row.action));
   const payload = terminalRow?.payload as
-    | { resultMetadata?: { data?: unknown }; reason?: string }
+    | { resultMetadata?: { data?: unknown }; reason?: unknown }
     | undefined;
   // Review of #549 (B4): a row written before legacy 187 was fixed holds the gate's output and
   // error text as given, and audit rows are never rewritten (I11) — so the read-back applies the
   // audit copy's rule again (`resultAuditFields` / `reasonAuditFields`, governance/approval). A row
-  // written since is already in that form, and the rule replaces nothing twice.
+  // written since is already in that form, and the rule replaces nothing twice. The reason is
+  // shown as the console's `failureReason` shows it (`shownAuditReason`, legacy 338): redacted,
+  // clipped, unseen characters made visible — one audit row, one reading, for the agent and the
+  // person alike.
   const data = payload?.resultMetadata?.data;
-  const reason = payload?.reason;
   return {
     data:
       data === undefined ? undefined : redactSuspectedSecrets(data, { secretFields: true }).value,
-    reason:
-      typeof reason === 'string'
-        ? (redactSuspectedSecrets(reason, { secretFields: true }).value as string)
-        : reason,
+    reason: shownAuditReason(payload?.reason) ?? undefined,
   };
 }
 
