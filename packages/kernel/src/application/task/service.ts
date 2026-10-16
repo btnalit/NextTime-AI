@@ -27,7 +27,7 @@ import {
   defaultWorkerCapabilities,
 } from './handle-mint.js';
 import { failTaskRow, readTaskRow, readWorkerRunRow, terminateWorkerRunRow } from './lifecycle.js';
-import { getConfiguredTaskRuntime } from './runtime.js';
+import { type TaskRuntimeDeps, getConfiguredTaskRuntime } from './runtime.js';
 import { recordTaskTransition } from './transition-log.js';
 import {
   InvokeWorkerAttenuationError,
@@ -306,8 +306,17 @@ export async function terminateTask(
   actorPrincipalId: string,
   taskId: string,
 ): Promise<TaskRow> {
-  const deps = getConfiguredTaskRuntime();
+  return terminateTaskWith(getConfiguredTaskRuntime(), workspaceId, actorPrincipalId, taskId);
+}
 
+/** {@link terminateTask} with the task runtime passed in — the goal advancer (S11 GO3a) terminates
+ *  a cancelled GoalRun's Tasks with the runtime it was given, like the attempts it starts. */
+export async function terminateTaskWith(
+  deps: TaskRuntimeDeps,
+  workspaceId: string,
+  actorPrincipalId: string,
+  taskId: string,
+): Promise<TaskRow> {
   const task = await withWorkspace(
     deps.pool,
     { workspaceId, principalId: actorPrincipalId },

@@ -11,6 +11,7 @@ import type { PoolLike } from '../../adapters/db/pool.js';
 import type { GatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
 import {
   findWorkerRunBySessionId,
+  lockGoalStepForNewWork,
   readTaskGoalStep,
   recordWorkerGateObservation,
 } from '../../application/task/index.js';
@@ -872,6 +873,12 @@ async function runGovernedRequest(
   const goalStep = args.workerRun
     ? await readTaskGoalStep(client, workspaceId, args.workerRun.taskId)
     : null;
+  // S11 GO3a (I-G9): only a running or waiting step raises actions. The StepRun stays share-locked
+  // until this transaction commits, so a cancel (or revision) that closes the step either sees the
+  // new row and withdraws it, or this call finds the step closed (409, nothing created).
+  if (goalStep) {
+    await lockGoalStepForNewWork(client, workspaceId, goalStep.stepRunId, 'request_action');
+  }
   const actionRequest = await requestAction(client, workspaceId, {
     gatekeeperId: args.gatekeeper.gatekeeperId,
     actionKind: args.operationName,

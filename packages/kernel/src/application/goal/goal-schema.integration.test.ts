@@ -313,6 +313,29 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
     });
 
+    describe('goal/0003 lets a step of a cancelling goal run only end (S11 GO3a)', () => {
+      it('is goal/0001’s step_runs_status_guard with cancelling among the ending statuses, and nothing else changed', () => {
+        const guardOf = (file: string) => {
+          const text = readFileSync(path.join(MIGRATIONS_DIR, 'goal', file), 'utf8');
+          const start = text.indexOf('create or replace function step_runs_status_guard()');
+          expect(start, file).toBeGreaterThanOrEqual(0);
+          const end = text.indexOf('\n$$;', start);
+          expect(end, file).toBeGreaterThan(start);
+          return text.slice(start, end).replace(/\s+/g, ' ');
+        };
+        const before = guardOf('0001_goal_runs.sql');
+        const after = guardOf('0003_goal_cancelling.sql');
+        const ending = "goal_status in ('completed', 'cancelled', 'failed') then";
+        expect(before.split(ending)).toHaveLength(2);
+        expect(after).toBe(
+          before.replace(
+            ending,
+            "goal_status in ('cancelling', 'completed', 'cancelled', 'failed') then",
+          ),
+        );
+      });
+    });
+
     describe('GoalRun', () => {
       it('walks proposed → running → paused → running → verifying → completed(achieved)', async () => {
         const goalRunId = await runningGoal();
@@ -880,6 +903,24 @@ describe.runIf(DATABASE_URL !== undefined)(
         await expect(setStep(a, "status = 'ready', failure_category = null")).rejects.toThrow(
           /a step becomes ready only while its goal run is running or paused, not verifying/,
         );
+      });
+
+      it('a step of a cancelling goal run only ends: a waiting step never resumes (goal/0003)', async () => {
+        const goalRunId = await runningGoal();
+        const a = await stepId(goalRunId, 'A');
+        const b = await stepId(goalRunId, 'B');
+        await setStep(a, "status = 'ready'");
+        await setStep(a, "status = 'running', attempt_count = 1");
+        await setStep(a, "status = 'waiting', waiting_reason = 'approval'");
+        await setGoal(goalRunId, "status = 'cancelling'");
+        await expect(setStep(a, "status = 'running', waiting_reason = null")).rejects.toThrow(
+          /a step of a cancelling goal run only ends/,
+        );
+        await expect(setStep(b, "status = 'ready'")).rejects.toThrow(
+          /a step becomes ready only while its goal run is running or paused, not cancelling/,
+        );
+        await setStep(a, "status = 'cancelled', waiting_reason = null, ended_at = now()");
+        await setStep(b, "status = 'cancelled', ended_at = now()");
       });
 
       it('a step of a cancelled goal run only ends', async () => {

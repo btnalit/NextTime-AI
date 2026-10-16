@@ -12,6 +12,7 @@ import { withWorkspace } from '../../adapters/db/pool.js';
 import { GatekeeperClientError, gateRefusalOf } from '../../adapters/gatekeeper-client/index.js';
 import { quotedName, redactSuspectedSecrets } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
+import { GoalStepClosedError } from '../task/index.js';
 import { ForbiddenError, authorizeCapabilityCall } from './authorize.js';
 import { CAPABILITY_HANDLERS } from './handlers.js';
 import { UnknownOperationError } from './request-action-handler.js';
@@ -316,6 +317,59 @@ async function auditGateRefusal(
 }
 
 /**
+ * S11 GO3a (I-G9): a call refused because the goal step it would add work to is closed
+ * (`GoalStepClosedError` — a `request_action`, or a nested `invoke_worker`, from a Worker whose step
+ * was cancelled or has ended) leaves an audit row, written in its own transaction like
+ * `auditGateRefusal`'s, since the call's own rolled back with the refusal: the call's action, its
+ * redacted params, `outcome: 'refused'`, and `refusal` with the step and the status it was in.
+ * Failing to write it is logged and never replaces the refusal itself.
+ */
+async function auditGoalStepClosed(
+  deps: DispatchDeps,
+  call: {
+    readonly workspaceId: string;
+    readonly principalId: string;
+    readonly channel: string;
+    readonly capability: Capability;
+    readonly name: string;
+    readonly params: Record<string, unknown>;
+    readonly err: unknown;
+  },
+): Promise<void> {
+  const err = call.err;
+  if (!(err instanceof GoalStepClosedError)) return;
+  try {
+    await withWorkspace(
+      deps.pool,
+      { workspaceId: call.workspaceId, principalId: call.principalId },
+      (client) =>
+        writeAudit(client, {
+          workspaceId: call.workspaceId,
+          actorPrincipalId: call.principalId,
+          action: call.name,
+          resourceType: 'step_run',
+          resourceId: err.stepRunId,
+          payload: {
+            channel: call.channel,
+            onBehalfOf: call.principalId,
+            ...auditParams(call.capability, call.params),
+            outcome: 'refused',
+            refusal: { code: 'goal_step_closed', status: 409, stepStatus: err.stepStatus },
+          },
+        }),
+    );
+  } catch (auditErr) {
+    const detail = auditErr instanceof Error ? auditErr.message : String(auditErr);
+    console.error(
+      `[kernel] audit of a closed-goal-step refusal failed (capability=${call.name}): ${detail}`.replace(
+        /\n|\r/g,
+        '',
+      ),
+    );
+  }
+}
+
+/**
  * Legacy 232: a `request_action` refused for naming nothing the gate runs (`UnknownOperationError`)
  * leaves an audit row, as such a call did when it still became an ActionRequest ("审计只增不减"),
  * written in its own transaction like `auditGateRefusal`'s. The requested name is caller-chosen
@@ -542,6 +596,7 @@ export async function dispatchCapability(
     };
     await auditGateRefusal(deps, refused);
     await auditUnknownOperation(deps, refused);
+    await auditGoalStepClosed(deps, refused);
     throw err;
   });
 
