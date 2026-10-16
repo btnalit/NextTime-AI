@@ -1179,13 +1179,14 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '动作在门上执行成功。',
     enHint: 'The action ran successfully on the gate.',
   },
+  // UX acceptance of #586 (P3-2): the name says who is checking — the platform, not the reader.
   'action_request.outcome_in_doubt': {
-    zh: '动作结果不明，等待核对',
-    en: 'Action outcome in doubt',
+    zh: '结果不明，平台向门查询中',
+    en: 'Action outcome unknown; the platform is asking the gate',
     zhHint:
-      '第一次执行没有收到门的答复（超时，或请求可能已发出后连接断开）。动作留在「执行中」，平台稍后向门查询这次请求，不会重新执行。',
+      '执行请求发出后没有收到门的答复（超时，或请求可能已发出后连接断开），动作可能已经执行。动作留在「执行中」，平台约 10 分钟后向门查询这次请求并记下结果，不会重新执行；门说不清时标为「结果不明」交人核对。在这之前，同一个系统上排在后面的请求都会等它。',
     enHint:
-      'The first run got no answer from the gate (a timeout, or the connection failed after the request may have been sent). The action stays executing; the platform asks the gate about it later and never runs it again.',
+      'The call got no answer from the gate after it was sent (a timeout, or the connection failed after the request may have been sent), so the action may have run. It stays executing; about 10 minutes later the platform asks the gate about it and records the answer, never running it again; if the gate cannot say, it is marked "outcome unknown" for a person to check. Until then, later requests on the same system wait for it.',
   },
   'action_request.fail': {
     zh: '动作没有成功',

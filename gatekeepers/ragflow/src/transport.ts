@@ -4,6 +4,8 @@ import {
   NO_REDIRECTS,
   TransportInvokeError,
   encodePathSegment,
+  failedAfterAnswer,
+  failedBeforeAnswer,
   refuseRedirect,
   resolveBindingUrl,
 } from '@nexttime/gatekeeper-base';
@@ -141,35 +143,45 @@ export class RagflowTransport implements Transport {
     form.set('file', new Blob([bytes]), name);
 
     const fetchImpl = this.options.fetchImpl ?? fetch;
+    const what = `ragflow transport: POST ${url.pathname}`;
+    const headers = { ...credentialAuthorizationHeader(ctx.credential) };
     const controller = new AbortController();
     const timeout = setTimeout(
       () => controller.abort(),
       this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     );
     try {
-      const response = await fetchImpl(url, {
-        method: 'POST',
-        headers: { ...credentialAuthorizationHeader(ctx.credential) },
-        body: form,
-        signal: controller.signal,
-        // Same redirect policy as HttpTransport.invoke (kinds/http.ts) — never resend a credential
-        // header to a 3xx-named host; the failure says where it pointed.
-        redirect: NO_REDIRECTS,
-      });
-      await refuseRedirect(`ragflow transport: POST ${url.pathname}`, response, url);
-      const text = await response.text();
-      const data: unknown = text.length > 0 ? safeJsonParse(text) : undefined;
-      if (!response.ok) {
-        throw new TransportInvokeError(
-          `ragflow transport: POST ${url.pathname} responded ${response.status}`,
-        );
+      // Legacy 287 (review of #586, #493 M3): the same before / after-answer rule as
+      // `HttpTransport.invoke` (`@nexttime/gatekeeper-base`'s `kinds/call-failure.ts`) — an upload
+      // that may have reached RAGFlow and has no verdict is "outcome unknown", never a plain
+      // failure the kernel could record as failed and run again.
+      let response: Response;
+      try {
+        response = await fetchImpl(url, {
+          method: 'POST',
+          headers,
+          body: form,
+          signal: controller.signal,
+          // Same redirect policy as HttpTransport.invoke (kinds/http.ts) — never resend a
+          // credential header to a 3xx-named host; the failure says where it pointed.
+          redirect: NO_REDIRECTS,
+        });
+      } catch (err) {
+        throw failedBeforeAnswer(what, err);
       }
+      await refuseRedirect(what, response, url);
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
+        throw new TransportInvokeError(`${what} responded ${response.status}`);
+      }
+      let text: string;
+      try {
+        text = await response.text();
+      } catch (err) {
+        throw failedAfterAnswer(what, response.status, 'its answer could not be read', err);
+      }
+      const data: unknown = text.length > 0 ? safeJsonParse(text) : undefined;
       return { data };
-    } catch (err) {
-      if (err instanceof TransportInvokeError) throw err;
-      throw new TransportInvokeError('ragflow transport: multipart upload request failed', {
-        cause: err,
-      });
     } finally {
       clearTimeout(timeout);
     }

@@ -28,6 +28,13 @@ import { removeStaleTempFiles, writeFileAtomic } from './atomic-file.js';
  *     concurrent duplicate, same tuple or not) — refuse with `IdempotencyConflictError` (409
  *     `idempotency_conflict`) rather than invoke the transport a second time or silently block.
  *
+ * Lookup (legacy 287, review of #586): `lookup` answers what a key holds without ever reserving it
+ * for a call — the kernel reaper's question about an `apply` whose answer it never got
+ * (`GatekeeperBase.lookupApply`, route `gate/apply_lookup`). A key that holds nothing is closed in
+ * the same write (`not_received`), so an `apply` for it that only arrives after the kernel was
+ * told "not received" is refused rather than run: once the kernel recorded the request as failed,
+ * this gate can never perform it.
+ *
  * Durable reservations (R-51, maintainer decision D-11): a `'reserved'` key is written to disk
  * *before* `reserve` returns, so the transport is never invoked for a key the file does not know
  * about. A gate that crashes mid-call restarts with that key still pending; it is loaded as
@@ -75,6 +82,18 @@ export type IdempotencyReserveResult =
   | { readonly status: 'unknown' }
   | { readonly status: 'conflict' };
 
+/** What `lookup` found under a key (legacy 287) — `reserve`'s answers, without the reservation:
+ *   - `'absent'` — nothing ever ran under the key; it is now closed (`not_received`) for good.
+ *   - `'pending'` — a call for it is still running in this process.
+ *   - `'replay'` / `'failed'` / `'unknown'` / `'conflict'` — as for `reserve`. */
+export type IdempotencyLookupResult =
+  | { readonly status: 'absent' }
+  | { readonly status: 'pending' }
+  | { readonly status: 'replay'; readonly entry: IdempotencyEntry }
+  | { readonly status: 'failed'; readonly failure: StoredApplyFailure }
+  | { readonly status: 'unknown' }
+  | { readonly status: 'conflict' };
+
 export interface IdempotencyStore {
   /** Atomically checks `key` and, if free, claims it for `descriptor` — must be called (and its
    *  result acted on) before the transport is invoked. */
@@ -88,6 +107,10 @@ export interface IdempotencyStore {
    *  credential that could not be resolved), so a retry starts clean rather than 409. A key in any
    *  other state is never released. */
   release(key: string): Promise<void>;
+  /** Legacy 287: what `key` holds for `descriptor`, never reserving it for a call. A key that holds
+   *  nothing is closed (`not_received`, written before this returns), so a later `reserve` of it
+   *  is refused. */
+  lookup(key: string, descriptor: IdempotencyDescriptor): Promise<IdempotencyLookupResult>;
 }
 
 /** Stable (key-sorted) JSON stringify so `{a:1,b:2}` and `{b:2,a:1}` hash identically —
@@ -121,7 +144,17 @@ type Pending = { readonly status: 'pending' } & IdempotencyDescriptor;
 type Orphaned = { readonly status: 'orphaned' } & IdempotencyDescriptor;
 type Done = { readonly status: 'done' } & IdempotencyEntry;
 type Failed = { readonly status: 'failed' } & IdempotencyDescriptor & StoredApplyFailure;
-type StoreEntryState = Pending | Orphaned | Done | Failed;
+/** Closed by a `lookup` that found nothing (legacy 287): nothing ran, and nothing ever will. */
+type NotReceived = { readonly status: 'not_received' } & IdempotencyDescriptor;
+type StoreEntryState = Pending | Orphaned | Done | Failed | NotReceived;
+
+/** The answer a `reserve` of a closed key gets: the kernel was already told nothing ran. */
+function notReceivedFailure(key: string): StoredApplyFailure {
+  return {
+    message: `apply for actionRequestId "${key}" arrived after the kernel was told this gate never received it — it was closed then and is never run; request it again if it is still wanted`,
+    outcomeUnknown: false,
+  };
+}
 
 function descriptorOf(entry: IdempotencyDescriptor): IdempotencyDescriptor {
   return {
@@ -149,6 +182,8 @@ function reserveOrConflict(
     return { status: 'conflict' };
   }
   if (existing.status === 'orphaned') return { status: 'unknown' };
+  if (existing.status === 'not_received')
+    return { status: 'failed', failure: notReceivedFailure(key) };
   if (existing.status === 'failed') {
     return {
       status: 'failed',
@@ -157,6 +192,36 @@ function reserveOrConflict(
   }
   const { status: _status, ...entry } = existing;
   return { status: 'replay', entry };
+}
+
+/** `lookup`'s check-and-close: like `reserveOrConflict`, but an absent key is closed rather than
+ *  reserved. `closed` says whether the map changed (and must be written). */
+function lookupOrClose(
+  map: Map<string, StoreEntryState>,
+  key: string,
+  descriptor: IdempotencyDescriptor,
+): { readonly result: IdempotencyLookupResult; readonly closed: boolean } {
+  const existing = map.get(key);
+  if (existing === undefined) {
+    map.set(key, { status: 'not_received', ...descriptor });
+    return { result: { status: 'absent' }, closed: true };
+  }
+  if (!sameDescriptor(existing, descriptor))
+    return { result: { status: 'conflict' }, closed: false };
+  if (existing.status === 'pending') return { result: { status: 'pending' }, closed: false };
+  if (existing.status === 'not_received') return { result: { status: 'absent' }, closed: false };
+  if (existing.status === 'orphaned') return { result: { status: 'unknown' }, closed: false };
+  if (existing.status === 'failed') {
+    return {
+      result: {
+        status: 'failed',
+        failure: { message: existing.message, outcomeUnknown: existing.outcomeUnknown },
+      },
+      closed: false,
+    };
+  }
+  const { status: _status, ...entry } = existing;
+  return { result: { status: 'replay', entry }, closed: false };
 }
 
 /** The descriptor `reserve` claimed `key` for. Defensive fallback only — `complete`/`fail` are
@@ -209,6 +274,9 @@ function loadedEntry(entry: unknown): StoreEntryState | undefined {
   const record = entry as { readonly status?: unknown };
   if (record.status === 'done' || record.status === 'failed') {
     return record as Done | Failed;
+  }
+  if (record.status === 'not_received') {
+    return { status: 'not_received', ...descriptorOf(record as unknown as IdempotencyDescriptor) };
   }
   if (record.status === 'pending' || record.status === 'orphaned') {
     return { status: 'orphaned', ...descriptorOf(record as unknown as IdempotencyDescriptor) };
@@ -298,6 +366,22 @@ export class JsonFileIdempotencyStore implements IdempotencyStore {
     if (releaseEntry(map, key)) await this.flush(map);
   }
 
+  async lookup(key: string, descriptor: IdempotencyDescriptor): Promise<IdempotencyLookupResult> {
+    const map = await this.load();
+    // No `await` between `load()` resolving and this call, as for `reserve`.
+    const { result, closed } = lookupOrClose(map, key, descriptor);
+    if (closed) {
+      try {
+        await this.flush(map);
+      } catch (err) {
+        // Not on disk, so not closed: the caller must not answer "not received".
+        map.delete(key);
+        throw err;
+      }
+    }
+    return result;
+  }
+
   private flush(map: Map<string, StoreEntryState>): Promise<void> {
     const write = this.writeChain.then(() => this.writeSnapshot(map));
     // A failed write is reported to its own caller; it must not wedge every later write.
@@ -336,5 +420,9 @@ export class InMemoryIdempotencyStore implements IdempotencyStore {
 
   async release(key: string): Promise<void> {
     releaseEntry(this.map, key);
+  }
+
+  async lookup(key: string, descriptor: IdempotencyDescriptor): Promise<IdempotencyLookupResult> {
+    return lookupOrClose(this.map, key, descriptor).result;
   }
 }

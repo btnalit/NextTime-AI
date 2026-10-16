@@ -83,6 +83,7 @@ export {
 } from './gate-token.js';
 
 export {
+  ApplyLookupRequestSchema,
   ApplyRequestSchema,
   DescribeOperationsRequestSchema,
   DescribeOperationsResponseSchema,
@@ -96,6 +97,7 @@ export {
   SimulateResponseSchema,
 } from './protocol.js';
 export type {
+  ApplyLookupRequest,
   ApplyRequest,
   ApplyResponse,
   DescribeOperationsRequest,
@@ -114,6 +116,7 @@ export * from './errors.js';
 
 export { networkFailureCode, networkFailureDelivery } from './network-failure.js';
 export type { NetworkFailureDelivery } from './network-failure.js';
+export { failedAfterAnswer, failedBeforeAnswer } from './kinds/call-failure.js';
 
 export {
   canonicalJson,
@@ -134,7 +137,7 @@ export {
   JsonFileIdempotencyStore,
   InMemoryIdempotencyStore,
 } from './idempotency-store.js';
-export type { IdempotencyStore } from './idempotency-store.js';
+export type { IdempotencyLookupResult, IdempotencyStore } from './idempotency-store.js';
 
 export {
   HostedCredentialResolver,

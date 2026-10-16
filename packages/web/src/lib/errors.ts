@@ -91,7 +91,7 @@ export const CODE_TITLES: Readonly<Record<string, string>> = {
   operation_definition_unavailable: 'No approved definition',
   gate_owned_params: 'Declares parameters the gate sets',
   gate_unreachable: 'Not sent: the gate could not be reached',
-  apply_not_received: 'Not sent: the gate never received it',
+  apply_not_received: 'Did not run: the gate has no record of it running',
   outcome_unknown: 'Outcome unknown',
   unknown: 'Error',
 };
@@ -141,7 +141,7 @@ export const CODE_TITLES_ZH: Readonly<Record<string, string>> = {
   operation_definition_unavailable: '没有批准过的定义',
   gate_owned_params: '声明了门自己设置的参数',
   gate_unreachable: '没发出：连不上门',
-  apply_not_received: '没发出：门没有收到',
+  apply_not_received: '没执行：门上没有执行记录',
   outcome_unknown: '结果不明',
   unknown: '出错了',
 };
@@ -279,8 +279,8 @@ export const ERROR_NEXT_STEPS: Readonly<
     en: 'This call was not sent: the system’s gate could not be reached, so nothing ran. Request it again once the gate is back; if it keeps happening, check this gate instance.',
   },
   apply_not_received: {
-    zh: '门上没有这次请求的记录：第一次调用没有到达门，动作没有执行。仍然需要的话，重新发起。',
-    en: 'The gate has no record of this request: its first call never reached the gate, so nothing ran. Request it again if it is still wanted.',
+    zh: '门上没有这次请求执行过的记录，所以什么都没跑。仍然需要的话，重新发起。',
+    en: 'The gate has no record of this request having run, so nothing ran. Request it again if it is still wanted.',
   },
   outcome_unknown: {
     zh: '这个动作可能已经执行，也可能没有，平台无法确认。不要直接重试：先到目标系统核对它是否生效，再决定要不要重新发起。',
@@ -397,13 +397,29 @@ const GATE_REASON_CODES = [
 ] as const;
 const GATE_REASON_PATTERN = new RegExp(`\\b(${GATE_REASON_CODES.join('|')})\\b`);
 
+/** How loud each reason's note is (UX acceptance of #586): not sent ran nothing and may be
+ *  requested again, so it is a plain note; outcome unknown may have run, and a blind retry can
+ *  do it twice, so it is the loudest; the gate's refusals ask for care. */
+const GATE_REASON_TONES: Readonly<Record<string, 'info' | 'warn' | 'danger'>> = {
+  gate_unreachable: 'info',
+  apply_not_received: 'info',
+  outcome_unknown: 'danger',
+};
+
 /** What to do about a gate refusal a tool call's result names (review of #538, G3) — the chat's
- *  tool row shows it above the raw result, which stays as the agent saw it. `null` for any other
- *  result. */
+ *  tool row shows it above the raw result, which stays as the agent saw it. `target` names what
+ *  the call did (`lib/action-outcome`'s `actionTargetLabel`, "container.restart（name: media）"),
+ *  so an outcome-unknown note says what to check. `null` for any other result. */
 export function gateReasonNextStep(
   text: string,
   t: Translate,
-): { readonly code: string; readonly title: string; readonly message: string } | null {
+  target?: string,
+): {
+  readonly code: string;
+  readonly title: string;
+  readonly message: string;
+  readonly tone: 'info' | 'warn' | 'danger';
+} | null {
   const code = GATE_REASON_PATTERN.exec(text)?.[1];
   if (code === undefined) return null;
   const step = ownEntry(ERROR_NEXT_STEPS, code);
@@ -411,7 +427,14 @@ export function gateReasonNextStep(
   return {
     code,
     title: t(ownEntry(CODE_TITLES_ZH, code) ?? code, ownEntry(CODE_TITLES, code) ?? code),
-    message: t(step.zh, step.en),
+    message:
+      code === 'outcome_unknown' && target !== undefined
+        ? t(
+            `这个动作可能已经执行，也可能没有，平台无法确认。不要直接重试：先到目标系统核对 ${target}${target.endsWith('）') ? '' : ' '}是否已生效，再决定要不要重新发起。`,
+            `This action may or may not have run, and the platform cannot tell which. Do not just retry: check on the target system whether ${target} took effect, then decide whether to request it again.`,
+          )
+        : t(step.zh, step.en),
+    tone: ownEntry(GATE_REASON_TONES, code) ?? 'warn',
   };
 }
 

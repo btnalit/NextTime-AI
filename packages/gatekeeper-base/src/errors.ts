@@ -84,6 +84,19 @@ export class ApplyOutcomeUnknownError extends Error {
   }
 }
 
+/** Legacy 287: `GatekeeperBase.lookupApply` found no record of this `apply` — no call for the key
+ *  ever reached this gate's idempotency store, which records a key durably before it runs anything
+ *  (D-11), so nothing ran. The key is closed by the same lookup, so an `apply` that arrives later
+ *  is refused, never run. `server.ts` maps it to 404 `apply_not_received`. */
+export class ApplyNotReceivedError extends Error {
+  constructor(key: string) {
+    super(
+      `apply for actionRequestId "${key}" has no record on this gate: no call for it ran here, so nothing ran — the key is now closed, and an apply for it that arrives later is refused`,
+    );
+    this.name = 'ApplyNotReceivedError';
+  }
+}
+
 /** R-04: the gate itself refuses the call — its target is outside what this gate serves (the
  *  docker gate's platform agent containers, `gatekeepers/docker/src/transport.ts`). A transport
  *  throws it *before* touching the target system, so nothing ran: `GatekeeperBase.apply` releases

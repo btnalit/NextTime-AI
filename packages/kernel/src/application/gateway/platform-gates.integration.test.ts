@@ -596,20 +596,21 @@ describe.runIf(DATABASE_URL !== undefined)(
       // only — the effect may already have happened, so the replay must still ask the gate rather
       // than end the row `failed: operation_disabled` without asking.
       it('the reaper replay still asks the gate after the Operation was disabled; a first execution is refused', async () => {
-        const applied: { actionRequestId: string; operation: string; lookupOnly: boolean }[] = [];
-        const gatekeeperClient = {
-          apply: async (
-            _endpoint: string,
-            input: { actionRequestId: string; operation: string; operationDigest?: string },
-          ) => {
+        // Legacy 287: the replay is a lookup (`gate/apply_lookup`), never an `apply`.
+        const applied: { actionRequestId: string; operation: string; via: string }[] = [];
+        const record =
+          (via: string) =>
+          async (_endpoint: unknown, input: { actionRequestId: string; operation: string }) => {
             applied.push({
               actionRequestId: input.actionRequestId,
               operation: input.operation,
-              // Legacy 287: the replay names no definition, so the gate only answers from its store.
-              lookupOnly: input.operationDigest === undefined,
+              via,
             });
             return { data: { restarted: true }, observedFacts: [], replayed: true };
-          },
+          };
+        const gatekeeperClient = {
+          apply: record('apply'),
+          lookupApply: record('lookupApply'),
         } as unknown as GatekeeperClient;
         const actionExecutor = createGatekeeperActionExecutor({
           gatekeeperClient,
@@ -655,7 +656,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           });
           expect(reaped).toEqual({ scanned: 1, reaped: 1 });
           expect(applied).toEqual([
-            { actionRequestId, operation: 'restart_thing', lookupOnly: true },
+            { actionRequestId, operation: 'restart_thing', via: 'lookupApply' },
           ]);
           const after = await withWorkspace(
             pool,
@@ -1192,6 +1193,9 @@ describe.runIf(DATABASE_URL !== undefined)(
           throw reached;
         },
         apply: async () => {
+          throw reached;
+        },
+        lookupApply: async () => {
           throw reached;
         },
         revert: async () => {

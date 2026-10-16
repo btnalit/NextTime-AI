@@ -7,7 +7,7 @@ package.
 
 ## Protocol
 
-An HTTP server (`createGatekeeperServer`, Fastify) exposes six operations under `/gate/<op>`:
+An HTTP server (`createGatekeeperServer`, Fastify) exposes seven operations under `/gate/<op>`:
 
 | Method | Path | Body | Notes |
 |---|---|---|---|
@@ -15,8 +15,9 @@ An HTTP server (`createGatekeeperServer`, Fastify) exposes six operations under 
 | GET | `/gate/health` | — | `{status: 'ok'\|'degraded'\|'down'}`. |
 | POST | `/gate/observe` | `{operation, params, onBehalfOf?, operationDigest}` | Only `mode: 'observe'` Operations. |
 | POST | `/gate/simulate` | `{operation, params, onBehalfOf?, operationDigest}` | Dry-run description, never executes. |
-| POST | `/gate/apply` | `{operation, params, onBehalfOf?, idempotencyKey, operationDigest}` | Only `mode: 'execute'`; idempotent by `idempotencyKey`. |
-| POST | `/gate/revert` | `{operation, params, onBehalfOf?, idempotencyKey?, operationDigest}` | Only `reversibility: true` Operations whose transport implements `revert`. |
+| POST | `/gate/apply` | `{operation, params, onBehalfOf?, actionRequestId, operationDigest}` | Only `mode: 'execute'`; idempotent by `actionRequestId`. |
+| POST | `/gate/apply_lookup` | `{operation, params, onBehalfOf?, actionRequestId}` | Legacy 287: what this gate holds for that `apply`, read from the idempotency store only — never the transport. See below. |
+| POST | `/gate/revert` | `{operation, params, onBehalfOf?, actionRequestId?, operationDigest}` | Only `reversibility: true` Operations whose transport implements `revert`. |
 
 Every response is `{ok: true, result}` or `{ok: false, error: {code, message}}` — the kernel's
 `adapters/gatekeeper-client` (`packages/kernel/src/adapters/gatekeeper-client`) parses this shape.
@@ -29,6 +30,18 @@ the definition it runs and refuses a missing or different one with 409
 approved is what runs. The one exception is an `apply` whose key already holds a stored answer:
 that answer is returned, because the call did run. The schema marks the field optional only so a
 missing one gets that readable 409 rather than a 400.
+
+`apply_lookup` (legacy 287) is the kernel reaper's question about an `apply` it never got an answer
+to (the connection broke or timed out after the request may have been sent). It reads the
+idempotency store only — no transport, no credential, no definition check — and answers what the
+`apply` would answer now: the stored result (`replayed: true`), the stored failure (502
+`transport_error`), 409 `apply_outcome_unknown`, 409 `idempotency_conflict` while the call still
+runs, or 404 `apply_not_received` when no call for the key ran here. A gate records a key durably
+before it runs anything (D-11), so "no record" means nothing ran; the same lookup closes the key, so
+an `apply` for it that only arrives afterwards is refused, never run. It is a route of its own, not
+a flag on `/gate/apply`, because `ApplyRequestSchema` ignores unknown fields: a gate built before
+the route answers 404 here instead of running the call, and the kernel then records "outcome
+unknown" for a person to reconcile rather than asking again.
 
 ## Auth
 

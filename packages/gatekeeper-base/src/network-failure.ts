@@ -4,15 +4,16 @@
  * gate calling its target system (`GatekeeperBase.apply`) — so both draw the line in one place:
  *
  *   - `not_sent`: the request provably never left — the name did not resolve, the connection was
- *     refused or timed out while connecting, or the TLS handshake failed. Nothing ran, so the call
- *     can be recorded as failed and made again.
+ *     refused or timed out while connecting, or the TLS handshake failed (an allow-list of the
+ *     codes only a handshake raises). Nothing ran, so the call can be recorded as failed and made
+ *     again.
  *   - `maybe_delivered`: the connection broke, or the caller stopped waiting, after the request may
  *     have been sent — before the answer came back, or while it was being read. Whether it ran is
  *     unknown; recording it as failed would invite a second run.
- *   - `undefined`: the error carries no network signal (a target's own answer, a programming
- *     error). Each hop decides what that means: the kernel's `fetch` only throws on the network, so
- *     it reads an unrecognised throw as `maybe_delivered`; a gate's transport failure without a
- *     network signal is the target's own answer, a plain failure.
+ *   - `undefined`: the error carries no network signal this module knows. A caller that knows
+ *     the error came from sending the request reads it as `maybe_delivered` (the kernel's gate
+ *     client, a gate's http / mcp transports: anything but a proven `not_sent` may have been
+ *     delivered); `GatekeeperBase` reads it on a transport's failure as the target's own answer.
  *
  * Read from the error's `code` / `syscall` / `name` (Node's and undici's own, never the message),
  * across its `cause` chain and an `AggregateError`'s `errors` (Node's happy-eyeballs connect). When
@@ -36,10 +37,55 @@ const NOT_SENT_CODES = new Set([
  *  `EHOSTUNREACH` from `connect`, unlike the same codes on an open socket). */
 const NOT_SENT_SYSCALLS = new Set(['connect', 'getaddrinfo', 'getnameinfo']);
 
-/** The TLS handshake fails before any request byte is written: OpenSSL's certificate checks and
- *  Node's own TLS / SSL errors. */
-const TLS_HANDSHAKE_CODE =
-  /^(?:ERR_SSL_|ERR_TLS_)|^(?:CERT_|UNABLE_TO_|DEPTH_ZERO_SELF_SIGNED_CERT$|SELF_SIGNED_CERT_IN_CHAIN$|HOSTNAME_MISMATCH$|INVALID_CA$)/;
+/** OpenSSL's certificate verification results, as Node names them on the error: the client
+ *  decides them during the handshake, before any request byte is written. */
+const CERT_VERIFY_CODES = new Set([
+  'UNABLE_TO_GET_ISSUER_CERT',
+  'UNABLE_TO_GET_CRL',
+  'UNABLE_TO_DECRYPT_CERT_SIGNATURE',
+  'UNABLE_TO_DECRYPT_CRL_SIGNATURE',
+  'UNABLE_TO_DECODE_ISSUER_PUBLIC_KEY',
+  'CERT_SIGNATURE_FAILURE',
+  'CRL_SIGNATURE_FAILURE',
+  'CERT_NOT_YET_VALID',
+  'CERT_HAS_EXPIRED',
+  'CRL_NOT_YET_VALID',
+  'CRL_HAS_EXPIRED',
+  'ERROR_IN_CERT_NOT_BEFORE_FIELD',
+  'ERROR_IN_CERT_NOT_AFTER_FIELD',
+  'ERROR_IN_CRL_LAST_UPDATE_FIELD',
+  'ERROR_IN_CRL_NEXT_UPDATE_FIELD',
+  'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'SELF_SIGNED_CERT_IN_CHAIN',
+  'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'CERT_CHAIN_TOO_LONG',
+  'CERT_REVOKED',
+  'INVALID_CA',
+  'PATH_LENGTH_EXCEEDED',
+  'INVALID_PURPOSE',
+  'CERT_UNTRUSTED',
+  'CERT_REJECTED',
+  'HOSTNAME_MISMATCH',
+  'ERR_TLS_CERT_ALTNAME_INVALID',
+]);
+
+/** TLS failures only a handshake raises (legacy 287 review: an allow-list, never a prefix): the
+ *  peer is not speaking TLS or no protocol version is shared, the handshake timed out, or the
+ *  server refused it — in TLS 1.3 the server's alert can arrive after the client wrote its first
+ *  bytes, but a server that failed the handshake never hands them to its application. */
+const TLS_HANDSHAKE_CODES = new Set([
+  'ERR_TLS_HANDSHAKE_TIMEOUT',
+  'ERR_SSL_WRONG_VERSION_NUMBER',
+  'ERR_SSL_NO_PROTOCOLS_AVAILABLE',
+  'ERR_SSL_UNSUPPORTED_PROTOCOL',
+]);
+const TLS_HANDSHAKE_ALERT =
+  /^ERR_SSL_(?:SSLV3|TLSV1|TLSV13)_ALERT_(?:HANDSHAKE_FAILURE|PROTOCOL_VERSION|CERTIFICATE_REQUIRED)$/;
+
+/** Every other TLS / SSL error — a bad record MAC, a renegotiation, a decryption failure — can be
+ *  raised on a record read or written once the request is on its way. */
+const TLS_ANY_CODE = /^ERR_(?:SSL|TLS)_/;
 
 /** Codes of a connection that broke, or a wait that ended, once a request may have been written —
  *  undici's socket and timeout errors, Node's reset / broken pipe / aborted connection. */
@@ -59,7 +105,13 @@ const MAYBE_DELIVERED_CODES = new Set([
   'UND_ERR_HEADERS_TIMEOUT',
   'UND_ERR_BODY_TIMEOUT',
   'UND_ERR_RES_CONTENT_LENGTH_MISMATCH',
+  'UND_ERR_REQ_CONTENT_LENGTH_MISMATCH',
+  'UND_ERR_RESPONSE_EXCEEDED_MAX_SIZE',
 ]);
+
+/** llhttp's parse errors of a malformed answer (`HPE_*`) and zlib's errors decompressing one
+ *  (`Z_*`): the target answered, so it had the request. */
+const ANSWER_READ_CODE = /^(?:HPE_|Z_)[A-Z0-9_]+$/;
 
 /** A caller that stopped waiting (`AbortController#abort`, `AbortSignal.timeout`): the request may
  *  already be with the target. */
@@ -71,9 +123,17 @@ function ownDelivery(err: object): NetworkFailureDelivery | undefined {
   const { code, syscall, name } = err as { code?: unknown; syscall?: unknown; name?: unknown };
   if (typeof name === 'string' && MAYBE_DELIVERED_NAMES.has(name)) return 'maybe_delivered';
   if (typeof code !== 'string') return undefined;
-  if (NOT_SENT_CODES.has(code) || TLS_HANDSHAKE_CODE.test(code)) return 'not_sent';
+  if (
+    NOT_SENT_CODES.has(code) ||
+    CERT_VERIFY_CODES.has(code) ||
+    TLS_HANDSHAKE_CODES.has(code) ||
+    TLS_HANDSHAKE_ALERT.test(code)
+  ) {
+    return 'not_sent';
+  }
+  if (TLS_ANY_CODE.test(code)) return 'maybe_delivered';
   if (typeof syscall === 'string' && NOT_SENT_SYSCALLS.has(syscall)) return 'not_sent';
-  if (MAYBE_DELIVERED_CODES.has(code)) return 'maybe_delivered';
+  if (MAYBE_DELIVERED_CODES.has(code) || ANSWER_READ_CODE.test(code)) return 'maybe_delivered';
   return undefined;
 }
 

@@ -174,9 +174,9 @@ describe('legacy 287: not sent, or outcome unknown', () => {
       '没发出：连不上门',
     ],
     [
-      'apply_not_received: the gate holds no record of this request — its first call never reached the gate, so nothing ran.',
+      'apply_not_received: the gate holds no record of this request having run, so nothing ran. Request it again if it is still wanted.',
       'apply_not_received',
-      '没发出：门没有收到',
+      '没执行：门上没有执行记录',
     ],
     [
       'outcome_unknown: apply for actionRequestId "a1" has an unknown outcome: … (409 apply_outcome_unknown)',
@@ -190,12 +190,40 @@ describe('legacy 287: not sent, or outcome unknown', () => {
   });
 
   it('tells the two apart: not sent ran nothing, outcome unknown says not to retry blindly', () => {
+    expect(ERROR_NEXT_STEPS.gate_unreachable?.zh).toContain('什么都没有执行');
+    // Review of #586 (#493 P3): the gate's record is about what ran, not what arrived.
+    expect(ERROR_NEXT_STEPS.apply_not_received?.zh).toBe(
+      '门上没有这次请求执行过的记录，所以什么都没跑。仍然需要的话，重新发起。',
+    );
     for (const code of ['gate_unreachable', 'apply_not_received']) {
-      expect(ERROR_NEXT_STEPS[code]?.zh).toContain('没有执行');
       expect(ERROR_NEXT_STEPS[code]?.zh).toContain('重新发起');
     }
     expect(ERROR_NEXT_STEPS.outcome_unknown?.zh).toContain('不要直接重试');
     expect(ERROR_NEXT_STEPS.outcome_unknown?.zh).toContain('目标系统');
+  });
+
+  it('not sent is a plain note, outcome unknown the loudest, a gate refusal asks for care (UX acceptance of #586)', () => {
+    const tone = (reason: string) => gateReasonNextStep(reason, zh)?.tone;
+    expect(tone('gate_unreachable: …')).toBe('info');
+    expect(tone('apply_not_received: …')).toBe('info');
+    expect(tone('outcome_unknown: …')).toBe('danger');
+    expect(tone('operation_refused: …')).toBe('warn');
+  });
+
+  it('an outcome-unknown note names what to check when it is given', () => {
+    expect(
+      gateReasonNextStep('outcome_unknown: …', zh, 'container.restart（name: media）')?.message,
+    ).toContain('先到目标系统核对 container.restart（name: media）是否已生效');
+    expect(
+      gateReasonNextStep('outcome_unknown: …', en, 'container.restart (name: media)')?.message,
+    ).toContain('whether container.restart (name: media) took effect');
+    // Without one, the general sentence; the target only changes outcome unknown.
+    expect(gateReasonNextStep('outcome_unknown: …', zh)?.message).toBe(
+      ERROR_NEXT_STEPS.outcome_unknown?.zh,
+    );
+    expect(gateReasonNextStep('gate_unreachable: …', zh, 'x')?.message).toBe(
+      ERROR_NEXT_STEPS.gate_unreachable?.zh,
+    );
   });
 
   it('the gate’s own error code inside another word is not a reason', () => {

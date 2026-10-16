@@ -82,6 +82,31 @@ describe('HttpGatekeeperClient', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  it('lookupApply asks gate/apply_lookup with the apply key and no definition (legacy 287)', async () => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toBe('https://example.test/gate/apply_lookup');
+      expect(init?.method).toBe('POST');
+      expect(JSON.parse(init?.body as string)).toEqual({
+        operation: 'stock.adjust',
+        params: { qty: 1 },
+        onBehalfOf: 'user-a',
+        actionRequestId: 'req-1',
+      });
+      return jsonResponse({
+        ok: true,
+        result: { data: { ok: 1 }, observedFacts: [], replayed: true },
+      });
+    });
+    const client = new HttpGatekeeperClient({ fetchImpl });
+    const result = await client.lookupApply(GATE, {
+      operation: 'stock.adjust',
+      params: { qty: 1 },
+      onBehalfOf: 'user-a',
+      actionRequestId: 'req-1',
+    });
+    expect(result).toEqual({ data: { ok: 1 }, observedFacts: [], replayed: true });
+  });
+
   it('throws GatekeeperClientError with the envelope code/message on ok:false', async () => {
     const fetchImpl = vi.fn(async () =>
       jsonResponse({ ok: false, error: { code: 'operation_not_found', message: 'nope' } }, 404),

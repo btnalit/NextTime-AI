@@ -597,15 +597,19 @@ describe('GatekeeperBase: a transport call that failed on the network (legacy 28
       await expect(gate.apply('stock.adjust', { qty: 1 }, 'req-n1')).rejects.toSatisfy(
         (err) =>
           err instanceof ApplyOutcomeUnknownError &&
-          /its connection to the target failed \(UND_ERR_SOCKET\) after the request may have reached the target, so it may have run/.test(
+          /http transport: POST \/stock\/adjust failed after the request may have reached the target \(UND_ERR_SOCKET\) — it may have run/.test(
             (err as Error).message,
           ),
       );
     }
-    // A lookup without a definition (the kernel reaper's) gets the same answer.
+    // An apply without a definition gets the same answer, and so does the kernel reaper's
+    // lookup (`gate/apply_lookup`).
     await expect(
       gate.apply('stock.adjust', { qty: 1 }, 'req-n1', { operationDigest: null }),
     ).rejects.toBeInstanceOf(ApplyOutcomeUnknownError);
+    await expect(gate.lookupApply('stock.adjust', { qty: 1 }, 'req-n1', {})).rejects.toBeInstanceOf(
+      ApplyOutcomeUnknownError,
+    );
     expect(invoke).toHaveBeenCalledTimes(1);
     expect(received).toBe(1);
   });

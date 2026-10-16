@@ -4,6 +4,7 @@ import {
   GateOwnedParamRefusedError,
   TransportInvokeError,
 } from '../errors.js';
+import { failedAfterAnswer, failedBeforeAnswer } from './call-failure.js';
 import { NO_REDIRECTS, refuseRedirect } from './redirect.js';
 import type { Transport, TransportInvokeContext, TransportInvokeResult } from './types.js';
 
@@ -466,6 +467,14 @@ export class HttpTransport implements Transport {
     ctx: TransportInvokeContext,
   ): Promise<TransportInvokeResult> {
     const { url, method, body, headerParams } = await this.request(operation, params, ctx);
+    const what = `http transport: ${method} ${url.pathname}`;
+    // Built before the call (review of #586, #501 P2-2): a failure here sent nothing, and must not
+    // read as a call that failed on the way.
+    const headers = {
+      ...(body ? { 'content-type': 'application/json' } : {}),
+      ...headerParams,
+      ...credentialHeaders(ctx.credential),
+    };
     const fetchImpl = this.options.fetchImpl ?? fetch;
     const controller = new AbortController();
     const timeout = setTimeout(
@@ -473,33 +482,37 @@ export class HttpTransport implements Transport {
       this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     );
     try {
-      const response = await fetchImpl(url, {
-        method,
-        headers: {
-          ...(body ? { 'content-type': 'application/json' } : {}),
-          ...headerParams,
-          ...credentialHeaders(ctx.credential),
-        },
-        body,
-        signal: controller.signal,
-        // Review lane 5, P2-2: 'follow' (the fetch default) resends every header — including the
-        // credential header just above — to whatever host a 3xx response names, cross-origin or
-        // not. A redirect is a failure instead of silently leaking the credential to an
-        // unintended target, and it says where it pointed (`redirect.ts`).
-        redirect: NO_REDIRECTS,
-      });
-      await refuseRedirect(`http transport: ${method} ${url.pathname}`, response, url);
-      const text = await response.text();
-      const data: unknown = text.length > 0 ? safeJsonParse(text) : undefined;
-      if (!response.ok) {
-        throw new TransportInvokeError(
-          `http transport: ${method} ${url.pathname} responded ${response.status}`,
-        );
+      let response: Response;
+      try {
+        response = await fetchImpl(url, {
+          method,
+          headers,
+          body,
+          signal: controller.signal,
+          // Review lane 5, P2-2: 'follow' (the fetch default) resends every header — including
+          // the credential header above — to whatever host a 3xx response names, cross-origin or
+          // not. A redirect is a failure instead of silently leaking the credential to an
+          // unintended target, and it says where it pointed (`redirect.ts`).
+          redirect: NO_REDIRECTS,
+        });
+      } catch (err) {
+        // Legacy 287: only a proven "not sent" is a plain failure (`call-failure.ts`).
+        throw failedBeforeAnswer(what, err);
       }
+      // The target's own answers — a redirect, a non-2xx status — are plain failures.
+      await refuseRedirect(what, response, url);
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => {});
+        throw new TransportInvokeError(`${what} responded ${response.status}`);
+      }
+      let text: string;
+      try {
+        text = await response.text();
+      } catch (err) {
+        throw failedAfterAnswer(what, response.status, 'its answer could not be read', err);
+      }
+      const data: unknown = text.length > 0 ? safeJsonParse(text) : undefined;
       return { data };
-    } catch (err) {
-      if (err instanceof TransportInvokeError) throw err;
-      throw new TransportInvokeError('http transport: request failed', { cause: err });
     } finally {
       clearTimeout(timeout);
     }

@@ -1,3 +1,4 @@
+import { TransportInvokeError, TransportOutcomeUnknownError } from '@nexttime/gatekeeper-base';
 import type { Operation } from '@nexttime/shared';
 import { describe, expect, it, vi } from 'vitest';
 import { RagflowTransport } from './transport.js';
@@ -164,6 +165,73 @@ describe('RagflowTransport', () => {
           {},
         ),
       ).rejects.toThrow(/responded 500/);
+    });
+
+    // Legacy 287 (review of #586, #493 M3): an upload that may have reached RAGFlow and has no
+    // verdict is outcome unknown; only a proven "not sent" and RAGFlow's own status are plain.
+    const uploadParams = { dataset_id: 'ds1', name: 'note.txt', content: 'x' };
+    async function uploadFailure(fetchImpl: unknown): Promise<Error> {
+      const transport = new RagflowTransport({ baseUrl: BASE_URL, fetchImpl: fetchImpl as never });
+      const thrown = await transport.invoke(uploadOperation, uploadParams, {}).then(
+        () => undefined,
+        (err: unknown) => err,
+      );
+      if (!(thrown instanceof Error)) throw new Error('expected the upload to fail');
+      return thrown;
+    }
+
+    it('a refused connection was not sent: a plain failure', async () => {
+      const err = await uploadFailure(async () => {
+        throw new TypeError('fetch failed', {
+          cause: Object.assign(new Error('connect ECONNREFUSED'), {
+            code: 'ECONNREFUSED',
+            syscall: 'connect',
+          }),
+        });
+      });
+      expect(err).toBeInstanceOf(TransportInvokeError);
+      expect(err).not.toBeInstanceOf(TransportOutcomeUnknownError);
+      expect(err.message).toBe(
+        'ragflow transport: POST /api/v1/datasets/ds1/documents not sent — could not connect to the target (ECONNREFUSED); nothing reached it',
+      );
+    });
+
+    it.each([
+      [
+        'a reset while sending',
+        async () => {
+          throw new TypeError('fetch failed', {
+            cause: Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' }),
+          });
+        },
+        /failed after the request may have reached the target \(UND_ERR_SOCKET\)/,
+      ],
+      [
+        'an error nobody recognises',
+        async () => {
+          throw new Error('something new');
+        },
+        /failed after the request may have reached the target — it may have run/,
+      ],
+      [
+        'an answer that could not be read',
+        async () =>
+          new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.error(
+                  Object.assign(new Error('terminated'), { code: 'UND_ERR_SOCKET' }),
+                );
+              },
+            }),
+            { status: 200 },
+          ),
+        /answered \(status 200\) but its answer could not be read/,
+      ],
+    ])('%s is outcome unknown', async (_label, fetchImpl, message) => {
+      const err = await uploadFailure(fetchImpl);
+      expect(err).toBeInstanceOf(TransportOutcomeUnknownError);
+      expect(err.message).toMatch(message);
     });
 
     it('simulate describes the upload without calling fetch (no side effects)', async () => {

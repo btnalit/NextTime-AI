@@ -1,4 +1,7 @@
 import { execFile } from 'node:child_process';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { promisify } from 'node:util';
 import type { BlastRadius, Operation, OperationMode } from '@nexttime/shared';
 import {
@@ -8,6 +11,7 @@ import {
   TransportOutcomeUnknownError,
   TransportTimeoutError,
 } from '../errors.js';
+import { execFailureOf } from './exec-failure.js';
 import { DEFAULT_EXEC_TIMEOUT_MS, runWithExecTimeout } from './exec-timeout.js';
 import type { Transport, TransportInvokeContext, TransportInvokeResult } from './types.js';
 import { boundUntrustedText } from './untrusted-text.js';
@@ -89,7 +93,10 @@ export function classifyCommand(
   return UNCLASSIFIED_DEFAULT;
 }
 
-/** `options.signal` aborts when the transport's exec timeout passes — an impl kills the child. */
+/** `options.signal` aborts when the transport's exec timeout passes — an impl kills the child. A
+ *  rejection carries what `execFile` puts on its error (`code`, `signal`, `stderr`) and — from the
+ *  default impl — `sshClientLog`: what the ssh client itself logged (`-E`), kept apart from the
+ *  remote command's stderr (legacy 287, `sshFailureOutcomeUnknown`). */
 export type SshExecFn = (
   target: SshTarget,
   command: string,
@@ -102,7 +109,10 @@ const execFileAsync = promisify(execFile);
  *  remote command an empty stdin (a command that reads stdin gets EOF instead of hanging), and
  *  `ConnectTimeout` / `ServerAliveInterval` bound an unreachable or silently dead peer well inside
  *  the transport's exec timeout. */
-export function sshConnectionArgs(target: SshTarget): string[] {
+export function sshConnectionArgs(
+  target: SshTarget,
+  options: { readonly clientLogFile?: string } = {},
+): string[] {
   const args: string[] = ['-n'];
   if (target.identityFile) args.push('-i', target.identityFile);
   if (target.port) args.push('-p', String(target.port));
@@ -110,31 +120,45 @@ export function sshConnectionArgs(target: SshTarget): string[] {
     args.push('-o', `StrictHostKeyChecking=${target.strictHostKeyChecking}`);
   }
   if (target.knownHostsFile) args.push('-o', `UserKnownHostsFile=${target.knownHostsFile}`);
-  args.push(
-    '-o',
-    'BatchMode=yes',
-    '-o',
-    'ConnectTimeout=10',
-    '-o',
-    'ServerAliveInterval=15',
-    `${target.user}@${target.host}`,
-  );
+  args.push('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'ServerAliveInterval=15');
+  // Legacy 287: `-E` sends the ssh client's own messages to this file instead of stderr — "Permission
+  // denied", "Host key verification failed", "connect to host … refused" — so they can never be
+  // confused with the remote command's stderr, which stays on stderr.
+  if (options.clientLogFile !== undefined) args.push('-E', options.clientLogFile);
+  args.push(`${target.user}@${target.host}`);
   return args;
 }
 
 const defaultSshExec: SshExecFn = async (target, command, { signal }) => {
-  // `--` ends option parsing: OpenSSH keeps parsing options after the destination, so a command
-  // beginning with `-o` (e.g. `-oProxyCommand=…`) would otherwise be consumed as a *client* option
-  // and run locally inside the gate with its identity file (review lane 5, P0-1).
-  const args = [...sshConnectionArgs(target), '--', command];
-  const pending = execFileAsync('ssh', args, {
-    maxBuffer: 10 * 1024 * 1024,
-    signal,
-    killSignal: 'SIGKILL',
-  });
-  pending.child.stdin?.end();
-  const { stdout, stderr } = await pending;
-  return { stdout, stderr };
+  // Legacy 287: a private file for the ssh client's own log (`-E`), read back on failure and
+  // removed either way. Without a writable temp dir the command still runs, with no client log —
+  // every exit 255 then reads as "outcome unknown" (`sshFailureOutcomeUnknown`), the safe side.
+  const logDir = await mkdtemp(join(tmpdir(), 'nt-ssh-')).catch(() => undefined);
+  const clientLogFile = logDir !== undefined ? join(logDir, 'client.log') : undefined;
+  try {
+    // `--` ends option parsing: OpenSSH keeps parsing options after the destination, so a command
+    // beginning with `-o` (e.g. `-oProxyCommand=…`) would otherwise be consumed as a *client*
+    // option and run locally inside the gate with its identity file (review lane 5, P0-1).
+    const args = [...sshConnectionArgs(target, { clientLogFile }), '--', command];
+    const pending = execFileAsync('ssh', args, {
+      maxBuffer: 10 * 1024 * 1024,
+      signal,
+      killSignal: 'SIGKILL',
+    });
+    pending.child.stdin?.end();
+    try {
+      const { stdout, stderr } = await pending;
+      return { stdout, stderr };
+    } catch (err) {
+      if (clientLogFile !== undefined && err !== null && typeof err === 'object') {
+        const sshClientLog = await readFile(clientLogFile, 'utf8').catch(() => undefined);
+        if (sshClientLog !== undefined) Object.assign(err, { sshClientLog });
+      }
+      throw err;
+    }
+  } finally {
+    if (logDir !== undefined) await rm(logDir, { recursive: true, force: true }).catch(() => {});
+  }
 };
 
 /** `execFile` rejections carry the child's stderr and exit code — the only place ssh explains
@@ -156,10 +180,18 @@ function describeExecFailure(err: unknown): string {
     code?: unknown;
     signal?: unknown;
     cmd?: unknown;
+    sshClientLog?: unknown;
   };
   const stderr = typeof withIo.stderr === 'string' ? withIo.stderr.trim() : '';
   const code = withIo.code !== undefined ? ` (exit ${String(withIo.code)})` : '';
   const signal = typeof withIo.signal === 'string' ? ` (signal ${withIo.signal})` : '';
+  // Legacy 287: the ssh client's own last word (`-E`) — once on stderr, now in its own log.
+  const clientLine =
+    typeof withIo.sshClientLog === 'string' ? sshFailureLine(withIo.sshClientLog) : undefined;
+  const client =
+    clientLine !== undefined ? `ssh client: ${boundUntrustedText(clientLine, 512)}` : '';
+  if (stderr && client) return `${client}; ${boundUntrustedText(stderr)}${code}${signal}`;
+  if (client) return `${client}${code}${signal}`;
   if (stderr) return `${boundUntrustedText(stderr)}${code}${signal}`;
   if (withIo.cmd !== undefined || typeof withIo.code === 'number' || signal !== '') {
     return `the command failed with no output on stderr${code}${signal}`;
@@ -172,21 +204,22 @@ function describeExecFailure(err: unknown): string {
  * not resolve or refused the connection, its key did not verify, authentication failed: nothing
  * ran), or during it (the connection dropped while the command was running — a RouterOS address
  * change that cuts its own session, a reboot, a dead peer `ServerAliveInterval` gave up on: it may
- * have run). ssh's own fatal message is the last line it writes, after anything the remote command
- * wrote; these are the client's messages for the first kind. Any other exit 255 is read as the
- * second, an outcome nobody knows — a remote command that itself exits 255 reads the same way, the
- * conservative side, since it did run.
+ * have run). These are the ssh client's own messages for the first kind, matched whole against
+ * its own log (`-E`, `sshClientLog`) — never against stderr, where the remote command writes
+ * whatever it likes (review of #586: `Error: Permission denied (os error 13)` from the command
+ * itself once read as "never started"). A session that dropped mid-command logs nothing there
+ * ("Connection to … closed by remote host." goes to stderr), so it reads as the second kind.
  */
 const SSH_SESSION_NEVER_STARTED: readonly RegExp[] = [
-  /^ssh: Could not resolve hostname /,
-  /^ssh: connect to host \S+ port \d+: /,
+  /^ssh: Could not resolve hostname \S+: .+$/,
+  /^ssh: connect to host \S+ port \d+: .+$/,
   /^Host key verification failed\.$/,
-  /^\S+: Permission denied \(/,
-  /^kex_exchange_identification: /,
-  /^banner exchange: /,
+  /^\S+@\S+: Permission denied \((?:[\w-]+,)*[\w-]+\)\.$/,
+  /^kex_exchange_identification: .+$/,
+  /^banner exchange: .+$/,
   /^Connection timed out during banner exchange$/,
-  /^Unable to negotiate with /,
-  /^Bad owner or permissions on /,
+  /^Unable to negotiate with \S+ port \d+: .+$/,
+  /^Bad owner or permissions on .+$/,
 ];
 
 /** The generic line OpenSSH adds after the specific one ("kex_exchange_identification: read:
@@ -197,9 +230,9 @@ const SSH_GENERIC_LAST_LINE =
 
 const SSH_CLIENT_FAILURE_EXIT = 255;
 
-/** ssh's own last word in `stderr`: its last line, or the one before a generic trailer. */
-function sshFailureLine(stderr: string): string | undefined {
-  const lines = stderr
+/** ssh's own last word in its log: its last line, or the one before a generic trailer. */
+function sshFailureLine(log: string): string | undefined {
+  const lines = log
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter((line) => line.length > 0);
@@ -207,12 +240,24 @@ function sshFailureLine(stderr: string): string | undefined {
   return last !== undefined && SSH_GENERIC_LAST_LINE.test(last) ? lines.pop() : last;
 }
 
-/** Whether a failed `ssh` run may have run its command (see `SSH_SESSION_NEVER_STARTED`). */
-export function sshFailureMayHaveRun(err: unknown): boolean {
-  if (err === null || typeof err !== 'object') return false;
-  const { code, stderr } = err as { code?: unknown; stderr?: unknown };
-  if (code !== SSH_CLIENT_FAILURE_EXIT) return false;
-  const line = sshFailureLine(typeof stderr === 'string' ? stderr : '');
+/**
+ * Whether a failed `ssh` run's outcome is unknown — it may have run its command and gave no
+ * answer (legacy 287; review of #586, #501 P2-2):
+ *   - an exit status other than 255 is the remote command's own answer: no;
+ *   - ssh itself could not be spawned: no, nothing ran;
+ *   - 255 with a never-started message as ssh's own last word in its log
+ *     (`SSH_SESSION_NEVER_STARTED`): no. Any other 255 — a dropped session, a remote command
+ *     that itself exits 255, or no client log to read: yes;
+ *   - killed by a signal, stopped past the output limit, anything else: yes.
+ */
+export function sshFailureOutcomeUnknown(err: unknown): boolean {
+  const failure = execFailureOf(err);
+  if (failure.kind === 'not_started') return false;
+  if (failure.kind === 'stopped') return true;
+  if (failure.exitCode !== SSH_CLIENT_FAILURE_EXIT) return false;
+  const log = (err as { sshClientLog?: unknown }).sshClientLog;
+  if (typeof log !== 'string') return true;
+  const line = sshFailureLine(log);
   return line === undefined || !SSH_SESSION_NEVER_STARTED.some((pattern) => pattern.test(line));
 }
 
@@ -356,9 +401,14 @@ export class SshTransport implements Transport {
       return { data: { stdout, stderr }, detail: { command, classification } };
     } catch (err) {
       if (err instanceof TransportTimeoutError) throw err;
-      if (sshFailureMayHaveRun(err)) {
+      if (sshFailureOutcomeUnknown(err)) {
+        const failure = execFailureOf(err);
+        const what =
+          failure.kind === 'stopped'
+            ? `the ssh command for "${operation.name}" was stopped before it answered (${failure.why})`
+            : `the ssh connection for "${operation.name}" failed after the command may have started`;
         throw new TransportOutcomeUnknownError(
-          `ssh transport: the ssh connection for "${operation.name}" failed after the command may have started: ${describeExecFailure(err)} — it may have partially or fully run`,
+          `ssh transport: ${what}: ${describeExecFailure(err)} — it may have partially or fully run`,
           { cause: err },
         );
       }

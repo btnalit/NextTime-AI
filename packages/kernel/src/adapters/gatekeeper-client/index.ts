@@ -213,13 +213,23 @@ export interface GatekeeperCallInput {
    * Legacy K: the digest of the Operation definition the kernel approved
    * (`governance/gatekeepers`'s `operationRecordDigest`); the gate refuses the call when it runs
    * another one (409 `operation_definition_mismatch`). Required, so no call site can forget it.
-   * `undefined` only on the reaper's replay of a row that names no definition: the gate then
-   * answers from its idempotency store and refuses anything else.
    */
   readonly operationDigest: string | undefined;
 }
 
 export interface GatekeeperApplyInput extends GatekeeperCallInput {
+  readonly actionRequestId: string;
+  /** Legacy 287: an `apply` always names the definition it runs — the reaper's question about an
+   *  earlier call is `lookupApply`, never a digest-less `apply`. */
+  readonly operationDigest: string;
+}
+
+/** Legacy 287: `lookupApply`'s question — the `apply` the kernel never got an answer to, by the
+ *  fields its idempotency record is keyed on (`@nexttime/gatekeeper-base` `ApplyLookupRequest`). */
+export interface GatekeeperApplyLookupInput {
+  readonly operation: string;
+  readonly params?: unknown;
+  readonly onBehalfOf?: string;
   readonly actionRequestId: string;
 }
 
@@ -242,6 +252,10 @@ export interface GatekeeperClient {
   observe(target: GateTarget, input: GatekeeperCallInput): Promise<ObserveResponse>;
   simulate(target: GateTarget, input: GatekeeperCallInput): Promise<SimulateResponse>;
   apply(target: GateTarget, input: GatekeeperApplyInput): Promise<ApplyResponse>;
+  /** Legacy 287: `gate/apply_lookup` — what the gate holds for an earlier `apply`, read from its
+   *  idempotency store only; it never runs anything. 404 `apply_not_received`: no call for the key
+   *  ran there. A gate built before the route answers a 404 of another shape. */
+  lookupApply(target: GateTarget, input: GatekeeperApplyLookupInput): Promise<ApplyResponse>;
   revert(target: GateTarget, input: GatekeeperRevertInput): Promise<RevertResponse>;
   health(target: GateTarget): Promise<HealthResponse>;
   /** S2.13: stores a ConnectedAccount credential on the gate instance, keyed by `onBehalfOf` —
@@ -598,6 +612,10 @@ export class HttpGatekeeperClient implements GatekeeperClient {
       this.applyTimeoutMs,
       input,
     )) as ApplyResponse;
+  }
+
+  async lookupApply(target: GateTarget, input: GatekeeperApplyLookupInput): Promise<ApplyResponse> {
+    return (await this.request(target, 'gate/apply_lookup', 'POST', input)) as ApplyResponse;
   }
 
   async revert(target: GateTarget, input: GatekeeperRevertInput): Promise<RevertResponse> {

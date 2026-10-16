@@ -1,6 +1,7 @@
 import type { Operation } from '@nexttime/shared';
 import type { CredentialResolver } from './credentials/index.js';
 import {
+  ApplyNotReceivedError,
   ApplyOutcomeUnknownError,
   ApplyRequiresIdempotencyKeyError,
   IdempotencyConflictError,
@@ -227,9 +228,9 @@ export class GatekeeperBase {
     if (!actionRequestId) throw new ApplyRequiresIdempotencyKeyError(name);
     const operation = this.getOperation(name);
     // Legacy K: a call for a definition this gate does not run is refused — but only once its key
-    // is known to hold no answer. A replay of an apply that already ran (the kernel reaper's) gets
-    // that run's answer even when the manifest changed since: refusing it would report as failed
-    // an action that took effect. So the mismatch is decided here and thrown after the
+    // is known to hold no answer. A repeat of an apply that already ran gets that run's answer even
+    // when the manifest changed since: refusing it would report as failed an action that took
+    // effect. (The kernel reaper asks `lookupApply` instead, legacy 287.) So the mismatch is decided here and thrown after the
     // reservation below; the mode and params checks, which read this gate's definition, are
     // skipped for it.
     const mismatch = this.definitionMismatch(operation, ctx);
@@ -309,6 +310,47 @@ export class GatekeeperBase {
       observedFacts,
     });
     return { data: result.data, observedFacts, replayed: false };
+  }
+
+  /**
+   * Legacy 287: what this gate holds for an `apply` — the kernel reaper's question about a call it
+   * never got an answer to. Reads the idempotency store only: never the transport, never a
+   * credential, and no definition or params check (the answer is whatever ran under the key, even
+   * if the manifest changed since). The stored result (`replayed: true`); the stored failure, or
+   * "outcome unknown", as the `apply` would answer now; 409 `idempotency_conflict` while the call
+   * still runs or when the key holds a different call; and `ApplyNotReceivedError` when no call
+   * for the key ran here — the key is closed in the same step, so an `apply` that only arrives now
+   * is refused, never run.
+   */
+  async lookupApply(
+    name: string,
+    params: unknown,
+    actionRequestId: string,
+    ctx: Pick<GatekeeperBaseCallContext, 'onBehalfOf'> = {},
+  ): Promise<ApplyResult> {
+    if (!actionRequestId) throw new ApplyRequiresIdempotencyKeyError(name);
+    const found = await this.options.idempotencyStore.lookup(actionRequestId, {
+      operation: name,
+      paramsHash: hashIdempotencyParams(params),
+      onBehalfOf: ctx.onBehalfOf,
+    });
+    switch (found.status) {
+      case 'replay':
+        return {
+          data: found.entry.data,
+          observedFacts: found.entry.observedFacts as ObservedFactCandidate[],
+          replayed: true,
+        };
+      case 'failed':
+        throw storedFailureError(actionRequestId, found.failure);
+      case 'unknown':
+        throw new ApplyOutcomeUnknownError(actionRequestId);
+      case 'pending':
+      case 'conflict':
+        throw new IdempotencyConflictError(actionRequestId);
+      case 'absent':
+        throw new ApplyNotReceivedError(actionRequestId);
+    }
   }
 
   async revert(

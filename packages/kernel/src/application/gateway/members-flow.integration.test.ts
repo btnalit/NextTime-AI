@@ -1028,6 +1028,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           observe: async () => ({ data: null }),
           simulate: async () => ({ description: 'no-op (test fake)' }),
           apply: async () => ({ data: null, replayed: false }),
+          lookupApply: async () => ({ data: null, replayed: true }),
           revert: async () => ({ data: null }),
           health: async () => ({ status: 'ok' }),
           storeConnectedAccount: async () => {},

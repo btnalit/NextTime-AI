@@ -1,6 +1,11 @@
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import http from 'node:http';
+import https from 'node:https';
 import net from 'node:net';
 import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { TransportInvokeError } from './errors.js';
 import { networkFailureCode, networkFailureDelivery } from './network-failure.js';
@@ -127,7 +132,14 @@ describe('networkFailureDelivery (Node error shapes)', () => {
     ['a certificate the handshake refused', sysError('DEPTH_ZERO_SELF_SIGNED_CERT')],
     ['an expired certificate', sysError('CERT_HAS_EXPIRED')],
     ['a host name the certificate does not cover', sysError('ERR_TLS_CERT_ALTNAME_INVALID')],
-    ['a TLS protocol error', sysError('ERR_SSL_WRONG_VERSION_NUMBER')],
+    ['a peer that does not speak TLS', sysError('ERR_SSL_WRONG_VERSION_NUMBER')],
+    ['a handshake that timed out', sysError('ERR_TLS_HANDSHAKE_TIMEOUT')],
+    ['no shared protocol version', sysError('ERR_SSL_TLSV1_ALERT_PROTOCOL_VERSION')],
+    ["the server's handshake failure", sysError('ERR_SSL_SSLV3_ALERT_HANDSHAKE_FAILURE')],
+    [
+      'a server that wants a client certificate',
+      sysError('ERR_SSL_TLSV13_ALERT_CERTIFICATE_REQUIRED'),
+    ],
   ])('%s was not sent', (_label, cause) => {
     expect(networkFailureDelivery(fetchFailed(cause))).toBe('not_sent');
   });
@@ -150,6 +162,17 @@ describe('networkFailureDelivery (Node error shapes)', () => {
     ['a host that became unreachable mid-call', sysError('EHOSTUNREACH', 'read')],
     ['a TLS socket closed before the handshake (no syscall to tell)', sysError('ECONNRESET')],
     ["undici's header timeout", Object.assign(new Error('x'), { code: 'UND_ERR_HEADERS_TIMEOUT' })],
+    // Legacy 287 review (#493 M2, #501 P2-1): TLS errors outside the handshake allow-list.
+    ['a bad record MAC', sysError('ERR_SSL_DECRYPTION_FAILED_OR_BAD_RECORD_MAC')],
+    ["the peer's bad record MAC alert", sysError('ERR_SSL_SSLV3_ALERT_BAD_RECORD_MAC')],
+    ['a renegotiation attack', sysError('ERR_TLS_SESSION_ATTACK')],
+    ['a refused renegotiation', sysError('ERR_TLS_RENEGOTIATION_DISABLED')],
+    ['a record too long to be TLS', sysError('ERR_SSL_PACKET_LENGTH_TOO_LONG')],
+    // #501 P2-2: undici's answer-side errors.
+    ['a malformed answer', sysError('HPE_INVALID_CONSTANT')],
+    ['an answer that does not decompress', sysError('Z_DATA_ERROR')],
+    ['an answer over the size limit', sysError('UND_ERR_RESPONSE_EXCEEDED_MAX_SIZE')],
+    ['a request body shorter than announced', sysError('UND_ERR_REQ_CONTENT_LENGTH_MISMATCH')],
   ])('%s may have been delivered', (_label, cause) => {
     expect(networkFailureDelivery(fetchFailed(cause))).toBe('maybe_delivered');
   });
@@ -189,5 +212,82 @@ describe('networkFailureDelivery (Node error shapes)', () => {
       undefined,
     );
     expect(networkFailureCode(new Error('connect ECONNREFUSED 127.0.0.1:1'))).toBeUndefined();
+  });
+});
+
+/** A throwaway self-signed certificate for the real-handshake cases, made by the `openssl` CLI at
+ *  test time (never a key in the repository); the cases are skipped where it is missing. */
+function selfSignedCertificate(): { key: string; cert: string } | undefined {
+  const dir = mkdtempSync(join(tmpdir(), 'nt-tls-'));
+  try {
+    const made = spawnSync(
+      'openssl',
+      [
+        'req',
+        '-x509',
+        '-newkey',
+        'ec',
+        '-pkeyopt',
+        'ec_paramgen_curve:prime256v1',
+        '-nodes',
+        '-days',
+        '1',
+        '-subj',
+        '/CN=localhost',
+        '-keyout',
+        join(dir, 'key.pem'),
+        '-out',
+        join(dir, 'cert.pem'),
+      ],
+      { stdio: 'ignore' },
+    );
+    if (made.status !== 0) return undefined;
+    return {
+      key: readFileSync(join(dir, 'key.pem'), 'utf8'),
+      cert: readFileSync(join(dir, 'cert.pem'), 'utf8'),
+    };
+  } catch {
+    return undefined;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const certificate = selfSignedCertificate();
+
+describe.skipIf(certificate === undefined)('networkFailureDelivery (real TLS handshakes)', () => {
+  const tlsServer = https.createServer(certificate ?? {}, (req, res) => {
+    req.resume();
+    req.on('end', () => res.end('{}'));
+  });
+  const plainServer = http.createServer((req, res) => {
+    req.resume();
+    req.on('end', () => res.end('{}'));
+  });
+  let tlsPort: number;
+  let plainPort: number;
+
+  beforeAll(async () => {
+    tlsPort = await listen(tlsServer);
+    plainPort = await listen(plainServer);
+  });
+
+  afterAll(async () => {
+    for (const server of [tlsServer, plainServer]) {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('a certificate the client refuses was not sent', async () => {
+    const err = await fetchError(`https://127.0.0.1:${tlsPort}/gate/apply`);
+    expect(networkFailureCode(err)).toBe('DEPTH_ZERO_SELF_SIGNED_CERT');
+    expect(networkFailureDelivery(err)).toBe('not_sent');
+  });
+
+  it('TLS spoken to a plain HTTP port reads as maybe delivered — its code is not handshake-only', async () => {
+    const err = await fetchError(`https://127.0.0.1:${plainPort}/gate/apply`);
+    expect(networkFailureCode(err)).toMatch(/^ERR_SSL_/);
+    expect(networkFailureDelivery(err)).toBe('maybe_delivered');
   });
 });

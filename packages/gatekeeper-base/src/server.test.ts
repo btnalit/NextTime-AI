@@ -325,6 +325,83 @@ describe('gatekeeper protocol server', () => {
     expect(invocations).toBe(1);
   });
 
+  // Legacy 287 (review of #586, #493 P2): the reaper's question is its own route, read from the
+  // idempotency store only — it never reaches the transport, and a key it finds empty is closed.
+  it('POST /gate/apply_lookup answers what ran under a key and never runs anything', async () => {
+    let invocations = 0;
+    app = buildApp({
+      kind: 'http',
+      async invoke(_operation, params) {
+        invocations += 1;
+        if ((params as { fail?: boolean }).fail)
+          throw new TransportInvokeError('target responded 500');
+        return { data: { applied: params } };
+      },
+    });
+    const lookup = (actionRequestId: string, params: Record<string, unknown> = {}) =>
+      app?.inject({
+        method: 'POST',
+        url: '/gate/apply_lookup',
+        headers: AUTH_HEADERS,
+        payload: { operation: 'stock.adjust', params, actionRequestId },
+      });
+    const apply = (actionRequestId: string, params: Record<string, unknown> = {}) =>
+      app?.inject({
+        method: 'POST',
+        url: '/gate/apply',
+        headers: AUTH_HEADERS,
+        payload: {
+          operation: 'stock.adjust',
+          operationDigest: EXECUTE_DIGEST,
+          params,
+          actionRequestId,
+        },
+      });
+
+    expect((await apply('req-ran', { qty: 1 }))?.statusCode).toBe(200);
+    const ran = await lookup('req-ran', { qty: 1 });
+    expect(ran?.statusCode).toBe(200);
+    expect(ran?.json()).toEqual({
+      ok: true,
+      result: { data: { applied: { qty: 1 } }, observedFacts: [], replayed: true },
+    });
+
+    expect((await apply('req-failed', { fail: true }))?.statusCode).toBe(502);
+    const failed = await lookup('req-failed', { fail: true });
+    expect(failed?.statusCode).toBe(502);
+    expect(failed?.json().error).toEqual({
+      code: 'transport_error',
+      message: 'target responded 500',
+    });
+
+    const other = await lookup('req-ran', { qty: 2 });
+    expect(other?.statusCode).toBe(409);
+    expect(other?.json().error.code).toBe('idempotency_conflict');
+
+    const never = await lookup('req-never');
+    expect(never?.statusCode).toBe(404);
+    expect(never?.json().error.code).toBe('apply_not_received');
+    // The key is closed: an apply that only arrives now is refused, never run.
+    const late = await apply('req-never');
+    expect(late?.statusCode).toBe(502);
+    expect(late?.json().error.message).toMatch(
+      /arrived after the kernel was told this gate never received it/,
+    );
+    expect((await lookup('req-never'))?.statusCode).toBe(404);
+
+    expect(invocations).toBe(2);
+  });
+
+  it('POST /gate/apply_lookup is a /gate/ route: refused without the gate token', async () => {
+    app = buildApp(fakeTransport);
+    const response = await app.inject({
+      method: 'POST',
+      url: '/gate/apply_lookup',
+      payload: { operation: 'stock.adjust', params: {}, actionRequestId: 'req-1' },
+    });
+    expect(response.statusCode).toBe(401);
+  });
+
   it('POST /gate/* refuses a call without the approved definition digest, or with another one (legacy K)', async () => {
     let invoked = 0;
     app = buildApp({
