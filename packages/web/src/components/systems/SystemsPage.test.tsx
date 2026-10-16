@@ -574,6 +574,38 @@ describe('SystemsPage', () => {
     expect(within(drawer).queryByTestId('system-definition-mismatch-adoption')).toBeNull();
   });
 
+  it('UX acceptance of #573 P2: a refused Operation whose running definition declares a gate-owned param is said to wait on the gate, not on an align', async () => {
+    const http = scriptedHttp({
+      execution_readiness: () =>
+        readiness({
+          principalId: 'p-self',
+          gates: [
+            gate({
+              definitionMismatch: [
+                {
+                  operation: 'stock.get',
+                  awaiting: 'workspace_revision',
+                  gateOwnedParams: [{ param: 'Authorization', location: 'header' }],
+                },
+                { operation: 'stock.put', awaiting: 'workspace_revision' },
+              ],
+            }),
+          ],
+        }),
+      list_available_gate_instances: () => ({ items: [LINKED_STOCK_INSTANCE] }),
+    });
+    renderPage(http);
+    const card = (await screen.findAllByTestId('gatekeeper-card'))[0] as HTMLElement;
+    fireEvent.click(within(card).getByTestId('system-access-summary'));
+    const drawer = await screen.findByTestId('system-access-drawer');
+    const held = within(drawer).getByTestId('system-definition-mismatch-gate-owned');
+    expect(held.textContent).toContain('stock.get：Authorization（请求头）');
+    expect(held.textContent).toContain('对齐也恢复不了这些调用');
+    const revision = within(drawer).getByTestId('system-definition-mismatch-revision');
+    expect(revision.textContent).toContain('对 stock.put 的调用会被拒绝');
+    expect(revision.textContent).not.toContain('stock.get');
+  });
+
   // R-01 (maintainer decision D-01): a gate the workspace connected itself (no catalog link) gets
   // its own connection secret; the owner issues a new one from the row's menu, shown once.
   it('lets the owner issue a new connection secret for a self-connected gate, and shows it once', async () => {

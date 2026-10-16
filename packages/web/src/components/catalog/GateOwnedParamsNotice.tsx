@@ -1,6 +1,7 @@
 import type {
   AvailableGateInstanceWire,
   GateOwnedParamWire,
+  OperationSummaryWire,
   PreviewGateInstanceEnableResultWire,
 } from '@nexttime/shared';
 import { useId } from 'react';
@@ -42,6 +43,7 @@ export function GateOwnedParamsNotice({
   name,
   status,
   params,
+  origin,
   gateDisplayName,
   onRewritten,
 }: {
@@ -50,6 +52,8 @@ export function GateOwnedParamsNotice({
   readonly name: string;
   readonly status: string;
   readonly params: readonly GateOwnedParamWire[];
+  /** Who wrote this version (`OperationSummaryWire.origin`) — absent on a legacy row. */
+  readonly origin?: OperationSummaryWire['origin'];
   readonly gateDisplayName: string;
   /** The align rewrote the draft — the caller reloads the catalog and says so. */
   readonly onRewritten: () => void;
@@ -88,7 +92,7 @@ export function GateOwnedParamsNotice({
   const rewrite: RewriteState = !offersRewrite
     ? 'none'
     : preview.state.status === 'ready'
-      ? rewriteStateOf(preview.state.data, name)
+      ? rewriteStateOf(preview.state.data, name, origin)
       : preview.state.status === 'loading' && readsPreview
         ? 'loading'
         : 'ready';
@@ -125,8 +129,8 @@ export function GateOwnedParamsNotice({
                 )
               : rewrite === 'gone'
                 ? t(
-                    '门的当前清单里已经没有这个 Operation，没有可以重写成的新版本，这份草稿也就发布不了。',
-                    'The gate’s current manifest no longer announces this Operation, so there is no new version to rewrite this draft to, and it cannot be published.',
+                    '门的当前清单里已经没有这个 Operation，没有可以重写成的新版本，这份草稿也就发布不了。草稿不会被调用，可以不管它。',
+                    'The gate’s current manifest no longer announces this Operation, so there is no new version to rewrite this draft to, and it cannot be published. A draft is never called, so it can be left as it is.',
                   )
                 : gateOwnedParamsNextStep(fix, t)
             : t(
@@ -153,8 +157,8 @@ export function GateOwnedParamsNotice({
               data-testid="operation-gate-owned-rewrite-waiting"
             >
               {t(
-                '门的清单还没改：它仍声明这些参数。门的维护者改好、平台采用新清单之后才能重写。',
-                'The gate’s manifest has not changed yet: it still declares these params. The rewrite becomes possible once the gate’s maintainer fixes it and the platform adopts the new manifest.',
+                '门的清单仍声明这些参数，按它重写也还是发布不了。门的维护者去掉它们、平台采用改好的清单之后才能重写。',
+                'The gate’s manifest still declares these params, so a rewrite from it could not be published either. The rewrite becomes possible once the gate’s maintainer drops them and the platform adopts the corrected manifest.',
               )}
             </span>
           </span>
@@ -166,6 +170,9 @@ export function GateOwnedParamsNotice({
             gateDisplayName={gateDisplayName}
             operationNames={[name]}
             label={t('按门的最新清单重写', 'Rewrite from the gate’s latest manifest')}
+            // Legacy 280: the preview this notice just read decided the button; the confirm
+            // reuses it rather than reading it again on the click.
+            preview={preview.state.status === 'ready' ? preview.state.data : undefined}
             onRefreshed={onRewritten}
             testId="operation-gate-owned-rewrite"
           />
@@ -177,18 +184,28 @@ export function GateOwnedParamsNotice({
 
 export type RewriteState = 'none' | 'loading' | 'ready' | 'waiting' | 'proposal' | 'gone';
 
-/** What the enable preview says about rewriting this one held draft. `pendingDraft.rewritable` is
- *  `false` both when the gate still declares the params and when the draft is not the gate's own;
- *  `pendingDraft.fromGate` tells them apart, and an older kernel without it falls back to the row's
- *  own `gateOwnedParams` (still declared → the gate has not changed). */
+/** What the enable preview says about rewriting this one held draft.
+ *
+ *  - A draft the gate did not write is a proposal, whatever the preview says — first, so a
+ *    proposed name the gate never announced is not called one it stopped announcing (UX acceptance
+ *    of #573 P3-1). `origin` is the draft's own; `pendingDraft.fromGate` says the same where the
+ *    gate still announces the name.
+ *  - The gate no longer announcing the name: `gone`.
+ *  - The gate's entry still declaring a gate-owned param: `waiting`, even when the rewrite would
+ *    change other fields (`pendingDraft.rewritable`) — the rewritten draft could not be published
+ *    either (review #501 on #573).
+ *  - Otherwise `rewritable` decides; an older kernel without `fromGate` falls back to the row's
+ *    own params. */
 export function rewriteStateOf(
   preview: PreviewGateInstanceEnableResultWire,
   name: string,
+  origin?: OperationSummaryWire['origin'],
 ): RewriteState {
+  if (origin !== undefined && origin !== 'import') return 'proposal';
   const row = preview.operationsToImport.find((entry) => entry.name === name);
   if (!row) return 'gone';
-  if (row.pendingDraft?.rewritable === true) return 'ready';
   if (row.pendingDraft?.fromGate === false) return 'proposal';
   if (row.gateOwnedParams && row.gateOwnedParams.length > 0) return 'waiting';
+  if (row.pendingDraft?.rewritable === true) return 'ready';
   return 'proposal';
 }

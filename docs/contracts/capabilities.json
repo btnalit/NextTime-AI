@@ -4364,6 +4364,31 @@
                       ],
                       "type": "string"
                     },
+                    "gateOwnedParams": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "location": {
+                            "enum": [
+                              "header",
+                              "query",
+                              "cookie",
+                              "binding"
+                            ],
+                            "type": "string"
+                          },
+                          "param": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "param",
+                          "location"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
                     "operation": {
                       "type": "string"
                     }
@@ -7338,6 +7363,14 @@
                 "type": "string"
               },
               "name": {
+                "type": "string"
+              },
+              "origin": {
+                "enum": [
+                  "import",
+                  "agent",
+                  "human"
+                ],
                 "type": "string"
               },
               "proposedBy": {
@@ -12276,6 +12309,14 @@
                 "type": "string"
               },
               "name": {
+                "type": "string"
+              },
+              "origin": {
+                "enum": [
+                  "import",
+                  "agent",
+                  "human"
+                ],
                 "type": "string"
               },
               "proposedBy": {

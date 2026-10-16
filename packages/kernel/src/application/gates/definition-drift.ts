@@ -1,4 +1,8 @@
-import { operationDefinitionDigest } from '@nexttime/gatekeeper-base';
+import {
+  type GateOwnedParam,
+  gateOwnedParamsOf,
+  operationDefinitionDigest,
+} from '@nexttime/gatekeeper-base';
 import { type DefinitionAwaiting, OperationSchema } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 
@@ -35,13 +39,24 @@ export interface GateRunningDefinitions {
   readonly adopted: ReadonlyMap<string, string>;
   /** Whether a held announcement exists (`pending_operations` is set). */
   readonly pending: boolean;
+  /** Operation name → the params only the gate sets that the definition it runs now declares
+   *  (legacy J), for the names that declare any. A revision carrying that definition can never be
+   *  published (`publish_operation` refuses 400 `gate_owned_params`), so calls to it stay refused
+   *  until the gate's maintainer drops them — whatever a workspace aligns (UX acceptance of #573
+   *  P2). */
+  readonly runningGateOwned: ReadonlyMap<string, readonly GateOwnedParam[]>;
 }
 
-/** Name → digest of each Operation in a stored manifest. An entry that does not parse is left
- *  out, as `store.ts`'s `operationsOf` leaves it out of everything else. */
-function digestsOf(stored: unknown): Map<string, string> {
+/** Name → digest of each Operation in a stored manifest, and name → the gate-owned params of
+ *  those that declare any. An entry that does not parse is left out, as `store.ts`'s
+ *  `operationsOf` leaves it out of everything else. */
+function definitionsOf(stored: unknown): {
+  readonly digests: Map<string, string>;
+  readonly gateOwned: Map<string, readonly GateOwnedParam[]>;
+} {
   const digests = new Map<string, string>();
-  if (!Array.isArray(stored)) return digests;
+  const gateOwned = new Map<string, readonly GateOwnedParam[]>();
+  if (!Array.isArray(stored)) return { digests, gateOwned };
   for (const entry of stored) {
     const parsed = OperationSchema.safeParse(entry);
     if (!parsed.success) continue;
@@ -49,18 +64,27 @@ function digestsOf(stored: unknown): Map<string, string> {
       digests.set(parsed.data.name, operationDefinitionDigest(parsed.data));
     } catch {
       // Parsed as an Operation, so its definition parses too; kept defensive all the same.
+      continue;
     }
+    const params = gateOwnedParamsOf(parsed.data);
+    if (params.length > 0) gateOwned.set(parsed.data.name, params);
   }
-  return digests;
+  return { digests, gateOwned };
 }
 
 export function gateRunningDefinitions(row: {
   readonly operations: unknown;
   readonly pending_operations: unknown;
 }): GateRunningDefinitions {
-  const adopted = digestsOf(row.operations);
+  const adopted = definitionsOf(row.operations);
   const pending = row.pending_operations !== null && row.pending_operations !== undefined;
-  return { running: pending ? digestsOf(row.pending_operations) : adopted, adopted, pending };
+  const running = pending ? definitionsOf(row.pending_operations) : adopted;
+  return {
+    running: running.digests,
+    adopted: adopted.digests,
+    pending,
+    runningGateOwned: running.gateOwned,
+  };
 }
 
 /**

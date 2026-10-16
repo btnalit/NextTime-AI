@@ -702,6 +702,78 @@ describe('RefreshOperationGovernanceConfirm', () => {
     );
   });
 
+  it('UX acceptance of #573 P2: a held revision is kept out of "calls resume once published", in the confirm and in the result', async () => {
+    const http = scriptedHttp({
+      preview_gate_instance_enable: () =>
+        preview([
+          {
+            ...ALIGNED_ROW,
+            name: 'orders.lookup',
+            definitionDiffers: true,
+            gateOwnedParams: [{ param: 'Authorization', location: 'header' }],
+          },
+          { ...ALIGNED_ROW, name: 'orders.list', definitionDiffers: true },
+        ]),
+      refresh_operation_governance: () => ({
+        gatekeeperId: 'gk-1',
+        refreshed: [],
+        revisionDrafts: [
+          { name: 'orders.lookup', version: 2 },
+          { name: 'orders.list', version: 2 },
+        ],
+        unchanged: [],
+      }),
+    });
+    renderConfirm(http);
+
+    fireEvent.click(screen.getByTestId('align-gk-1'));
+    const confirm = await screen.findByTestId('align-gk-1-confirm');
+    const redefined = within(confirm).getByTestId('align-gk-1-redefined');
+    expect(redefined.textContent).toContain('orders.list');
+    expect(redefined.textContent).not.toContain('orders.lookup');
+    expect(within(confirm).getByTestId('align-gk-1-redefined-held').textContent).toContain(
+      '门的维护者去掉这些参数、平台采用改好的清单之前，门会一直拒绝对它们的调用',
+    );
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+
+    const drafts = await screen.findByTestId('align-gk-1-drafts');
+    expect(drafts.textContent).toContain('orders.list');
+    expect(drafts.textContent).not.toContain('orders.lookup');
+    const held = screen.getByTestId('align-gk-1-held-drafts');
+    expect(held.textContent).toContain('orders.lookup');
+    expect(held.textContent).toContain('Authorization（请求头）');
+    expect(held.textContent).toContain('对它们的调用不会恢复');
+    expect(within(held).getByTestId('align-gk-1-held-draft-link').textContent).toBe(
+      '去能力目录看说明',
+    );
+  });
+
+  it('review #501 on #573: a rewrite that keeps the gate-owned param still runs, and says the draft still cannot be published', async () => {
+    const http = scriptedHttp({
+      preview_gate_instance_enable: () => ({
+        ...preview([]),
+        operationsToImport: [
+          {
+            name: 'stock.reserve',
+            mode: 'execute',
+            blastRadius: 'high',
+            autoApprovable: false,
+            gateOwnedParams: [{ param: 'Authorization', location: 'header' }],
+            pendingDraft: { rewritable: true, fromGate: true },
+          },
+        ],
+      }),
+    });
+    renderConfirm(http);
+
+    fireEvent.click(screen.getByTestId('align-gk-1'));
+    const confirm = await screen.findByTestId('align-gk-1-confirm');
+    expect(confirm.textContent).toContain(
+      'stock.reserve：门的清单改了，按新清单重写待发布的草稿；新清单仍声明只能由门自己设置的参数 Authorization（请求头），重写后仍发布不了',
+    );
+    expect(within(confirm).queryByTestId('align-gk-1-rewrites')).toBeNull();
+  });
+
   it('console G4: narrowed to one draft (the catalog’s), it aligns only that one, under its own label', async () => {
     const http = scriptedHttp({
       preview_gate_instance_enable: () => ({
