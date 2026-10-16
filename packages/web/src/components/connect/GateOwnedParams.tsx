@@ -3,6 +3,8 @@ import type {
   GateOwnedParamWire,
   PublishManifestResultWire,
 } from '@nexttime/shared';
+import { visibleText } from '@nexttime/shared';
+import { actionKindTagText } from '../../lib/format.js';
 import { operationKey } from '../../lib/governance.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { hrefs } from '../../lib/router.js';
@@ -37,7 +39,9 @@ export function gateOwnedParamsText(params: readonly GateOwnedParamWire[], t: Tr
   return params
     .map((entry) => {
       const label = LOCATION_LABEL[entry.location];
-      return t(`${entry.param}（${label.zh}）`, `${entry.param} (${label.en})`);
+      // Legacy 232: a param name is the gate's own text — shown visibly, as Operation names are.
+      const param = visibleText(entry.param);
+      return t(`${param}（${label.zh}）`, `${param} (${label.en})`);
     })
     .join(t('、', ', '));
 }
@@ -135,7 +139,7 @@ export function HeldDraftsNotice({
               <RouteLink
                 href={hrefs.catalog('operations', operationKey({ gatekeeperId, name: draft.name }))}
               >
-                <span className="mono">{draft.name}</span>
+                <span className="mono">{actionKindTagText(draft.name)}</span>
               </RouteLink>
               {t('：', ': ')}
               {gateOwnedParamsText(draft.params, t)}
@@ -198,7 +202,7 @@ export function ManifestPublishResultNotice({
                     operationKey({ gatekeeperId: result.gatekeeperId, name }),
                   )}
                 >
-                  <span className="mono">{name}</span>
+                  <span className="mono">{actionKindTagText(name)}</span>
                 </RouteLink>
               ))}
             </span>

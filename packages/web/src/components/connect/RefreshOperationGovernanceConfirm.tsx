@@ -357,7 +357,7 @@ export function RefreshOperationGovernanceConfirm({
                       : operationKey(row);
                     return (
                       <li key={draft.name} className="row-wrap">
-                        <span className="mono">{draft.name}</span>
+                        <span className="mono">{actionKindTagText(draft.name)}</span>
                         <span>{t(`修订 v${draft.version}`, `revision v${draft.version}`)}</span>
                         <a
                           href={hrefs.catalog('operations', key)}
@@ -387,7 +387,7 @@ export function RefreshOperationGovernanceConfirm({
                       : operationKey(row);
                     return (
                       <li key={draft.name} className="row-wrap">
-                        <span className="mono">{draft.name}</span>
+                        <span className="mono">{actionKindTagText(draft.name)}</span>
                         <a
                           href={hrefs.catalog('operations', key)}
                           data-testid={testId ? `${testId}-rewritten-link` : undefined}
@@ -416,7 +416,7 @@ export function RefreshOperationGovernanceConfirm({
                       : operationKey(row);
                     return (
                       <li key={draft.name} className="row-wrap">
-                        <span className="mono">{draft.name}</span>
+                        <span className="mono">{actionKindTagText(draft.name)}</span>
                         <span>{heldText(draft.name)}</span>
                         <a
                           href={hrefs.catalog('operations', key)}
@@ -453,8 +453,8 @@ export function RefreshOperationGovernanceConfirm({
           ...items.map((item) => governanceChangeSummary(item, t)),
           ...redefined.map((name) =>
             t(
-              `${name}：门运行的定义变了，打开修订草稿`,
-              `${name}: the definition the gate runs changed — opens a revision draft`,
+              `${actionKindTagText(name)}：门运行的定义变了，打开修订草稿`,
+              `${actionKindTagText(name)}: the definition the gate runs changed — opens a revision draft`,
             ),
           ),
           // Review #501 on #571 ③: a revision whose new definition declares a gate-owned param
@@ -467,16 +467,16 @@ export function RefreshOperationGovernanceConfirm({
           ),
           ...freeNames(heldDrafts).map((name) =>
             t(
-              `${name}：门的清单改了，按新清单重写待发布的草稿`,
-              `${name}: the gate’s manifest changed — rewrites the pending draft to it`,
+              `${actionKindTagText(name)}：门的清单改了，按新清单重写待发布的草稿`,
+              `${actionKindTagText(name)}: the gate’s manifest changed — rewrites the pending draft to it`,
             ),
           ),
           // Review #501 on #573: the gate changed something else but still declares the param —
           // the rewrite still runs, and the draft still cannot be published.
           ...heldNames(heldDrafts).map((name) =>
             t(
-              `${name}：门的清单改了，按新清单重写待发布的草稿；新清单仍声明只能由门自己设置的参数 ${heldText(name)}，重写后仍发布不了`,
-              `${name}: the gate’s manifest changed — rewrites the pending draft to it; the new manifest still declares params only the gate sets, ${heldText(name)}, so it still cannot be published`,
+              `${actionKindTagText(name)}：门的清单改了，按新清单重写待发布的草稿；新清单仍声明只能由门自己设置的参数 ${heldText(name)}，重写后仍发布不了`,
+              `${actionKindTagText(name)}: the gate’s manifest changed — rewrites the pending draft to it; the new manifest still declares params only the gate sets, ${heldText(name)}, so it still cannot be published`,
             ),
           ),
         ]}
