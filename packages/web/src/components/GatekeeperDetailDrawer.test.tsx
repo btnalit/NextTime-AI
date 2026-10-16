@@ -25,7 +25,7 @@ function renderDrawer(http: CapabilityCaller) {
 }
 
 describe('GatekeeperDetailDrawer', () => {
-  it('renders a healthy gate (boolean health) with its operations', async () => {
+  it('renders a healthy gate (wire health "ok") with its operations', async () => {
     const http = callerReturning({
       id: 'gk-1',
       name: 'docker',
@@ -38,7 +38,7 @@ describe('GatekeeperDetailDrawer', () => {
         { name: 'docker.status', status: 'published', mode: 'observe' },
         { name: 'docker.restart', status: 'draft', mode: 'execute' },
       ],
-      health: true,
+      health: 'ok',
     });
     renderDrawer(http);
     const health = await screen.findByTestId('gatekeeper-health');
@@ -48,7 +48,7 @@ describe('GatekeeperDetailDrawer', () => {
     expect(screen.getByText('docker.restart')).toBeTruthy();
   });
 
-  it('renders an unhealthy gate ({ok:false} health)', async () => {
+  it('legacy 271: an unreachable gate reads 不可达, not 未知', async () => {
     const http = callerReturning({
       id: 'gk-1',
       name: 'docker',
@@ -57,16 +57,16 @@ describe('GatekeeperDetailDrawer', () => {
       operationCount: 0,
       createdAt: '2026-09-01T00:00:00.000Z',
       operations: [],
-      health: { ok: false, message: 'timeout' },
+      health: 'unreachable',
     });
     renderDrawer(http);
     const health = await screen.findByTestId('gatekeeper-health');
-    expect(health.textContent).toBe('不健康');
+    expect(health.textContent).toBe('不可达');
     expect(health.className).toContain('chip-danger');
     expect(screen.getByText('这个门没有 Operation')).toBeTruthy();
   });
 
-  it('renders an unrecognized health shape as neutral "Unknown" rather than guessing', async () => {
+  it('legacy 271: a gate whose credential is refused reads 未授权', async () => {
     const http = callerReturning({
       id: 'gk-1',
       name: 'docker',
@@ -75,12 +75,13 @@ describe('GatekeeperDetailDrawer', () => {
       operationCount: 0,
       createdAt: '2026-09-01T00:00:00.000Z',
       operations: [],
-      health: 'this-is-not-a-documented-shape',
+      health: 'unauthorized',
     });
     renderDrawer(http);
     const health = await screen.findByTestId('gatekeeper-health');
-    expect(health.textContent).toBe('未知');
-    expect(health.className).toContain('chip-neutral');
+    expect(health.textContent).toBe('未授权');
+    expect(health.getAttribute('data-status')).toBe('unauthorized');
+    expect(health.className).toContain('chip-danger');
   });
 
   it('renders the error banner when get_gatekeeper answers not_found (B6: no "not live yet" placeholder)', async () => {
@@ -109,7 +110,7 @@ describe('GatekeeperDetailDrawer', () => {
           gateOwnedParams: [{ param: 'Authorization', location: 'header' }],
         },
       ],
-      health: true,
+      health: 'ok',
     });
     renderDrawer(http);
     const chip = await screen.findByTestId('gatekeeper-op-held-orders.lookup');

@@ -115,7 +115,7 @@ function heldPreview(rewritable: boolean) {
         ...(rewritable
           ? {}
           : { gateOwnedParams: [{ param: 'Authorization', location: 'header' }] }),
-        pendingDraft: { rewritable },
+        pendingDraft: { rewritable, fromGate: true },
       },
     ],
     operationsAlreadyPresent: [],
@@ -450,6 +450,85 @@ describe('CatalogPage', () => {
     );
     expect(screen.getByTestId('catalog-row-gate-gk-2::orders.lookup')).toBeTruthy();
     expect(screen.queryByTestId('catalog-row-gate-gk-1::stock.get')).toBeNull();
+  });
+
+  it('review #501 on #571 ①: a held draft someone proposed is never rewritten by the gate, so the rewrite is not offered and the text says who has to fix it', async () => {
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [
+          { ...HELD_DRAFT, gateOwnedParams: [{ param: 'Authorization', location: 'header' }] },
+        ],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+      list_available_gate_instances: () => ({ items: [LINKED_INSTANCE] }),
+      preview_gate_instance_enable: () => ({
+        ...heldPreview(true),
+        operationsToImport: [
+          {
+            name: 'stock.reserve',
+            mode: 'execute',
+            blastRadius: 'medium',
+            autoApprovable: false,
+            pendingDraft: { rewritable: false, fromGate: false },
+          },
+        ],
+      }),
+    });
+    renderPage(http, 'operations', 'gk-1::stock.reserve');
+    const notice = await screen.findByTestId('operation-gate-owned-params');
+    await waitFor(() => expect(notice.textContent).toContain('提议者去掉这些参数后重新提议'));
+    expect(notice.textContent).not.toContain('门的清单还没改');
+    expect(screen.queryByTestId('operation-gate-owned-rewrite')).toBeNull();
+    expect(screen.queryByTestId('operation-gate-owned-rewrite-waiting')).toBeNull();
+  });
+
+  it('review #501 on #571 ①: when the gate no longer announces the Operation, nothing can be rewritten and the text says so', async () => {
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [
+          { ...HELD_DRAFT, gateOwnedParams: [{ param: 'Authorization', location: 'header' }] },
+        ],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+      list_available_gate_instances: () => ({ items: [LINKED_INSTANCE] }),
+      preview_gate_instance_enable: () => ({ ...heldPreview(false), operationsToImport: [] }),
+    });
+    renderPage(http, 'operations', 'gk-1::stock.reserve');
+    const notice = await screen.findByTestId('operation-gate-owned-params');
+    await waitFor(() => expect(notice.textContent).toContain('门的当前清单里已经没有这个'));
+    expect(notice.textContent).not.toContain('门的清单还没改');
+    expect(screen.queryByTestId('operation-gate-owned-rewrite')).toBeNull();
+  });
+
+  it('review #501 on #571 ②: two gates with the same display name are told apart in the list’s gate label', async () => {
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [
+          { gatekeeperId: 'gk-1', name: 'orders.lookup', status: 'draft' },
+          { gatekeeperId: 'gk-2', name: 'orders.lookup', status: 'draft' },
+        ],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+      list_gatekeepers: () => ({
+        items: [
+          { id: 'gk-1', name: 'orders' },
+          { id: 'gk-2', name: 'orders' },
+        ],
+      }),
+    });
+    renderPage(http);
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId('catalog-row-gate-gk-1::orders.lookup')).queryByTestId(
+          'same-name-id',
+        ),
+      ).not.toBeNull(),
+    );
+    const first = screen.getByTestId('catalog-row-gate-gk-1::orders.lookup');
+    const second = screen.getByTestId('catalog-row-gate-gk-2::orders.lookup');
+    expect(first.textContent).toContain('orders');
+    expect(within(second).getByTestId('same-name-id')).toBeTruthy();
+    expect(first.textContent).not.toBe(second.textContent);
   });
 
   it('console G4: on a gate the workspace connected itself, the held draft is told to connect again — no rewrite offered', async () => {

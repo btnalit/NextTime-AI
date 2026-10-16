@@ -23,6 +23,7 @@ import { EmptyState } from './kit/empty-state.js';
 import { RouteLink } from './kit/route-link.js';
 import { GateCredentialEntry } from './platform/GateCredentialEntry.js';
 import {
+  enabledHere,
   hiddenFromWorkspaces,
   useConnectorsByName,
 } from './platform/integrations/connector-visibility.js';
@@ -197,11 +198,8 @@ function HiddenInstancesForAdmin({ http }: { readonly http: CapabilityCaller }) 
   // system card, and keeps working — only the ones this workspace has not enabled are missing
   // here. The enabling-workspace list is capped (`enablingWorkspaces`), so a row whose list is
   // cut short and does not name this workspace is left out rather than claimed missing.
-  const notEnabledHere = (row: GateInstanceWire): boolean => {
-    const listed = row.enablingWorkspaces ?? [];
-    if (listed.some((workspace) => workspace.id === workspaceId)) return false;
-    return listed.length >= row.enabledWorkspaceCount;
-  };
+  const notEnabledHere = (row: GateInstanceWire): boolean =>
+    enabledHere(row, workspaceId) === false;
   const hidden =
     instances.state.status === 'ready' && workspaceId !== null
       ? instances.state.data.items.filter(

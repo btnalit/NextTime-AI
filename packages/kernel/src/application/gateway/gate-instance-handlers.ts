@@ -458,7 +458,7 @@ export const previewGateInstanceEnableHandler: CapabilityHandler = async (
     autoApprovable: boolean;
     description?: string;
     gateOwnedParams?: { param: string; location: string }[];
-    pendingDraft?: { rewritable: boolean };
+    pendingDraft?: { rewritable: boolean; fromGate: boolean };
   }[] = [];
   const operationsAlreadyPresent: {
     name: string;
@@ -476,6 +476,7 @@ export const previewGateInstanceEnableHandler: CapabilityHandler = async (
     differs: boolean;
     direction: ReturnType<typeof operationGovernanceChangeDirection>;
     definitionDiffers: boolean;
+    gateOwnedParams?: { param: string; location: string }[];
   }[] = [];
 
   for (const operation of operations) {
@@ -501,6 +502,7 @@ export const previewGateInstanceEnableHandler: CapabilityHandler = async (
           ? {
               pendingDraft: {
                 rewritable: importDraftDiffersFromAnnounced(existingRecord, operation),
+                fromGate: existingRecord.origin === 'import',
               },
             }
           : {}),
@@ -518,6 +520,9 @@ export const previewGateInstanceEnableHandler: CapabilityHandler = async (
       autoApprovable: existingRecord.operation.auto_approvable,
       status: existingRecord.status,
     };
+    // Review #501 on #571 ③: the revision an align opens for this entry is held back when the
+    // announced definition declares a gate-owned param — said before the align, not after.
+    const presentGateOwnedParams = gateOwnedParamsOfDefinition(operation);
     // S8 W3-K1: the exact comparison `refresh_operation_governance` (governance/gatekeepers/
     // manifest.ts's `diffOperationGovernanceFields`) reuses for its own write decision — one
     // judgment function, never two that could drift.
@@ -531,6 +536,14 @@ export const previewGateInstanceEnableHandler: CapabilityHandler = async (
       // Legacy K: the gate refuses calls made under the deployed definition until a revision
       // carrying the announced one is published (`refresh_operation_governance` opens it).
       definitionDiffers: operationDefinitionDiffers(existingRecord, operation),
+      ...(presentGateOwnedParams.length > 0
+        ? {
+            gateOwnedParams: presentGateOwnedParams.map(({ param, location }) => ({
+              param,
+              location,
+            })),
+          }
+        : {}),
     });
     noteAdoption(operation.name, operationRecordDigestOrNull(existingRecord));
   }

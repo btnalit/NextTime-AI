@@ -126,6 +126,9 @@ export function RefreshOperationGovernanceConfirm({
   const [publishedNames, setPublishedNames] = useState<ReadonlySet<string>>(new Set());
   const items = (diffs ?? []).filter((op) => op.differs).map(changeItem);
   const redefined = (diffs ?? []).filter((op) => op.definitionDiffers).map((op) => op.name);
+  const heldRevisions = (diffs ?? []).filter(
+    (op) => op.definitionDiffers && (op.gateOwnedParams?.length ?? 0) > 0,
+  );
   // R-19 (D-17): the kernel's direction decides the danger case; the consequences say what it means.
   const consequences = items.flatMap((item) => governanceConsequences(item, t));
   const loosens = items.some((item) => isLoosening(item.direction));
@@ -163,8 +166,13 @@ export function RefreshOperationGovernanceConfirm({
       );
       const held = pending.filter((op) => op.pendingDraft?.rewritable).map((op) => op.name);
       setHeldDrafts(held);
+      // Only the gate's own drafts wait on the gate: a proposal is never rewritten, so it is not
+      // said to be waiting for the manifest to change (review #501 on #571 ①).
       const stuck = pending.filter(
-        (op) => !op.pendingDraft?.rewritable && (op.gateOwnedParams?.length ?? 0) > 0,
+        (op) =>
+          !op.pendingDraft?.rewritable &&
+          op.pendingDraft?.fromGate !== false &&
+          (op.gateOwnedParams?.length ?? 0) > 0,
       );
       setPublishedNames(
         new Set(
@@ -370,6 +378,14 @@ export function RefreshOperationGovernanceConfirm({
             t(
               `${name}：门运行的定义变了，打开修订草稿`,
               `${name}: the definition the gate runs changed — opens a revision draft`,
+            ),
+          ),
+          // Review #501 on #571 ③: a revision whose new definition declares a gate-owned param
+          // stays a draft — said here, before the align opens it.
+          ...heldRevisions.map((op) =>
+            t(
+              `${op.name}：打开的修订发布不了，新定义声明了只能由门自己设置的参数 ${gateOwnedParamsText(op.gateOwnedParams ?? [], t)}`,
+              `${op.name}: the revision it opens cannot be published — the new definition declares params only the gate sets, ${gateOwnedParamsText(op.gateOwnedParams ?? [], t)}`,
             ),
           ),
           ...heldDrafts.map((name) =>

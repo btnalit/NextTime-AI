@@ -1,7 +1,7 @@
 import { useCapability } from '../hooks/useCapability.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { formatDateTime, formatRelative } from '../lib/format.js';
-import { type GatekeeperDetail, healthView } from '../lib/governance.js';
+import type { GatekeeperDetail } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
 import { gateOwnedParamsText } from './connect/GateOwnedParams.js';
 import { EmptyState } from './ui/EmptyState.js';
@@ -18,8 +18,9 @@ export interface GatekeeperDetailDrawerProps {
  * components/GatekeeperDetailDrawer: `get_gatekeeper` (S3.11, new) — health + the Operation list,
  * inside the Systems page's (`/govern/systems`) detail drawer. Additive to the existing S2.13
  * `search`-based Gatekeeper/Operation flow (`lib/connections.ts`, `RegisteredSystemsSection.tsx`)
- * that page keeps unchanged — this is the one new read this PR adds to it. `health`'s shape is
- * read defensively (`lib/governance.ts` `healthView`) since no schema for it exists anywhere yet.
+ * that page keeps unchanged — this is the one new read this PR adds to it. `health` is the wire's
+ * `'ok' | 'unreachable' | 'unauthorized'`, shown with the `gateHealth` chip the system card and
+ * the gate instance lists use, so the drawer and the card never disagree (legacy 271).
  */
 export function GatekeeperDetailDrawer({ http, gatekeeperId }: GatekeeperDetailDrawerProps) {
   const t = useT();
@@ -48,16 +49,18 @@ export function GatekeeperDetailDrawer({ http, gatekeeperId }: GatekeeperDetailD
   }
 
   const gate = detail.state.data;
-  const health = healthView(gate.health, t);
 
   return (
     <div className="stack" data-testid="gatekeeper-detail">
       <dl className="definition-list">
         <dt>{t('健康', 'Health')}</dt>
         <dd>
-          <span className={`chip chip-s chip-${health.tone}`} data-testid="gatekeeper-health">
-            {health.label}
-          </span>
+          <StatusChip
+            machine="gateHealth"
+            status={gate.health}
+            size="s"
+            testId="gatekeeper-health"
+          />
         </dd>
         <dt>{t('清单版本', 'Manifest version')}</dt>
         <dd>{gate.manifestVersion ?? '—'}</dd>

@@ -433,6 +433,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       async function seedHeldDraft(
         held: Operation,
         announced: Operation,
+        as: 'import' | 'proposal' = 'import',
       ): Promise<{ gatekeeperId: string; gateId: string }> {
         const act = await newActivity();
         // One endpoint for both, as `enable_gate_instance` registers it — the preview finds the
@@ -448,14 +449,23 @@ describe.runIf(DATABASE_URL !== undefined)(
             registeredBy: { id: ownerId, kind: 'human' },
           }),
         );
-        await inTx((client) =>
-          importManifest(client, workspaceId, {
-            gatekeeperId: registered.gatekeeperId,
-            operations: [held],
-            proposedBy: { id: ownerId, kind: 'human' },
-            activityId: act,
-          }),
-        );
+        await inTx(async (client) => {
+          if (as === 'import') {
+            await importManifest(client, workspaceId, {
+              gatekeeperId: registered.gatekeeperId,
+              operations: [held],
+              proposedBy: { id: ownerId, kind: 'human' },
+              activityId: act,
+            });
+          } else {
+            await proposeOperation(client, workspaceId, {
+              gatekeeperId: registered.gatekeeperId,
+              operation: held,
+              proposedBy: { id: ownerId, kind: 'human' },
+              activityId: act,
+            });
+          }
+        });
         const gateId = `g4-instance-${randomUUID().slice(0, 8)}`;
         await asAdmin(async (client) => {
           await upsertAnnouncement(
@@ -487,7 +497,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       interface PreviewRow {
         name: string;
         gateOwnedParams?: { param: string; location: string }[];
-        pendingDraft?: { rewritable: boolean };
+        pendingDraft?: { rewritable: boolean; fromGate?: boolean };
       }
 
       it('the preview names the held params and says the held draft is not rewritable yet; the catalog row carries them', async () => {
@@ -504,7 +514,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           expect.objectContaining({
             name: held.name,
             gateOwnedParams: [{ param: 'Authorization', location: 'header' }],
-            pendingDraft: { rewritable: false },
+            pendingDraft: { rewritable: false, fromGate: true },
           }),
         ]);
 
@@ -535,7 +545,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           { gateId },
         );
         const row = preview.operationsToImport.find((entry) => entry.name === held.name);
-        expect(row?.pendingDraft).toEqual({ rewritable: true });
+        expect(row?.pendingDraft).toEqual({ rewritable: true, fromGate: true });
         expect(row?.gateOwnedParams).toBeUndefined();
 
         const result = await callAs<{
@@ -553,6 +563,30 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(listed.items.find((entry) => entry.name === held.name)?.gateOwnedParams).toBe(
           undefined,
         );
+      });
+
+      it('review #501 on #571 ①: a proposal with a gate-owned param is never rewritable, and the preview says it is not the gate’s own draft', async () => {
+        const held = withGateOwnedParams(`g4.proposal.${randomUUID()}`);
+        const fixed: Operation = {
+          ...held,
+          params_schema: {
+            type: 'object',
+            properties: { sku: { type: 'string', 'x-in': 'query' } },
+          },
+        };
+        const { gateId } = await seedHeldDraft(held, fixed, 'proposal');
+
+        const preview = await callAs<{ operationsToImport: PreviewRow[] }>(
+          ownerId,
+          'owner',
+          'preview_gate_instance_enable',
+          { gateId },
+        );
+        const row = preview.operationsToImport.find((entry) => entry.name === held.name);
+        // The gate fixed its manifest, yet the align would not touch this draft: it is not the
+        // gate's import.
+        expect(row?.gateOwnedParams).toBeUndefined();
+        expect(row?.pendingDraft).toEqual({ rewritable: false, fromGate: false });
       });
     });
 

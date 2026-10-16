@@ -2060,6 +2060,31 @@
                         ],
                         "type": "string"
                       },
+                      "gateOwnedParams": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "location": {
+                              "enum": [
+                                "header",
+                                "query",
+                                "cookie",
+                                "binding"
+                              ],
+                              "type": "string"
+                            },
+                            "param": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "param",
+                            "location"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
                       "name": {
                         "type": "string"
                       },
@@ -2836,6 +2861,31 @@
                           "neutral"
                         ],
                         "type": "string"
+                      },
+                      "gateOwnedParams": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "location": {
+                              "enum": [
+                                "header",
+                                "query",
+                                "cookie",
+                                "binding"
+                              ],
+                              "type": "string"
+                            },
+                            "param": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "param",
+                            "location"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
                       },
                       "name": {
                         "type": "string"
@@ -6814,6 +6864,31 @@
                           "neutral"
                         ],
                         "type": "string"
+                      },
+                      "gateOwnedParams": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "location": {
+                              "enum": [
+                                "header",
+                                "query",
+                                "cookie",
+                                "binding"
+                              ],
+                              "type": "string"
+                            },
+                            "param": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "param",
+                            "location"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
                       },
                       "name": {
                         "type": "string"
@@ -11017,6 +11092,31 @@
                                 "neutral"
                               ],
                               "type": "string"
+                            },
+                            "gateOwnedParams": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "location": {
+                                    "enum": [
+                                      "header",
+                                      "query",
+                                      "cookie",
+                                      "binding"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "param": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "param",
+                                  "location"
+                                ],
+                                "type": "object"
+                              },
+                              "type": "array"
                             },
                             "name": {
                               "type": "string"
@@ -16108,6 +16208,31 @@
                 ],
                 "type": "object"
               },
+              "gateOwnedParams": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "location": {
+                      "enum": [
+                        "header",
+                        "query",
+                        "cookie",
+                        "binding"
+                      ],
+                      "type": "string"
+                    },
+                    "param": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "param",
+                    "location"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
               "name": {
                 "type": "string"
               }
@@ -16180,6 +16305,9 @@
               "pendingDraft": {
                 "additionalProperties": false,
                 "properties": {
+                  "fromGate": {
+                    "type": "boolean"
+                  },
                   "rewritable": {
                     "type": "boolean"
                   }
@@ -23823,6 +23951,31 @@
                           "neutral"
                         ],
                         "type": "string"
+                      },
+                      "gateOwnedParams": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "location": {
+                              "enum": [
+                                "header",
+                                "query",
+                                "cookie",
+                                "binding"
+                              ],
+                              "type": "string"
+                            },
+                            "param": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "param",
+                            "location"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
                       },
                       "name": {
                         "type": "string"

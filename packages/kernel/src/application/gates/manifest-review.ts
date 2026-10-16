@@ -108,10 +108,16 @@ export function diffAnnouncedManifest(
       (key) => canonicalJson(previousReviewed[key]) !== canonicalJson(nextReviewed[key]),
     );
     if (differing.length === 0) continue;
+    const gateOwnedParams = gateOwnedParamsOfDefinition(operation);
     changed.push({
       name,
       ...operationGovernanceChange(previous, operation),
       otherChangedFields: differing.filter((key) => !GOVERNANCE_KEYS.has(key)).sort(),
+      ...(gateOwnedParams.length > 0
+        ? {
+            gateOwnedParams: gateOwnedParams.map(({ param, location }) => ({ param, location })),
+          }
+        : {}),
     });
   }
   for (const [name, operation] of before) {

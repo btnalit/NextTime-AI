@@ -89,6 +89,17 @@ export function PendingManifestReview({
           `${change.name} definition changed: ${change.otherChangedFields.map((field) => operationFieldLabel(field, t)).join(', ')}`,
         ),
       ),
+    // Review #501 on #571 ③: a changed entry that now declares a gate-owned param is the costliest
+    // case — every enabling workspace's revision of it would be held back — so it is said before
+    // adopting, like an added one.
+    ...pending.changed
+      .filter((change) => (change.gateOwnedParams?.length ?? 0) > 0)
+      .map((change) =>
+        t(
+          `${change.name} 发布不了：新定义声明了只能由门自己设置的参数 ${gateOwnedParamsText(change.gateOwnedParams ?? [], t)}，采用后各工作区为它打开的修订会停在草稿`,
+          `${change.name} cannot be published: the new definition declares params only the gate sets, ${gateOwnedParamsText(change.gateOwnedParams ?? [], t)}; once adopted, every workspace's revision of it stays a draft`,
+        ),
+      ),
   ];
   const refused = pending.refusedOperations;
   const workspaceNames = enablingWorkspaces.map((workspace) => workspace.name);
