@@ -224,6 +224,24 @@ export type TaskFailureReason = (typeof TASK_FAILURE_REASON_VALUES)[number];
 export const TaskFailureReasonSchema = asEnum(TASK_FAILURE_REASON_VALUES);
 
 /**
+ * Why a member-management capability refused a well-formed request (`PrincipalOperationRefusedError`,
+ * sent as 409 `conflict` with `details.reason`): `last_owner` (it would leave the workspace with no
+ * active human owner), `self_disable` (disabling yourself), `platform_managed` (an agent or a
+ * platform service account), `human_api_key` (a person signs in with a password, not an API key),
+ * `reserved_name` (a display name reserved for platform identities). The console's copy is keyed
+ * by this type, so a new reason does not compile until it has copy.
+ */
+export const PRINCIPAL_REFUSAL_REASON_VALUES = [
+  'last_owner',
+  'self_disable',
+  'platform_managed',
+  'human_api_key',
+  'reserved_name',
+] as const;
+export type PrincipalRefusalReason = (typeof PRINCIPAL_REFUSAL_REASON_VALUES)[number];
+export const PrincipalRefusalReasonSchema = asEnum(PRINCIPAL_REFUSAL_REASON_VALUES);
+
+/**
  * EntryAgent session status (§5.5): `starting → ready → busy → ready …`; `crashed → starting`
  * (host auto-recovery, §7.2); `stopped` (idle timeout).
  */

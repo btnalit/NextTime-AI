@@ -3,6 +3,7 @@ import { usePermissions } from '../hooks/usePermissions.js';
 import { useRoleCan } from '../hooks/useRoleCan.js';
 import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
 import type { CapabilityCaller } from '../lib/clients.js';
+import { composerUnstorableTextStep } from '../lib/errors.js';
 import { useT } from '../lib/i18n.js';
 import { liveOutputPaused } from '../lib/live-stream.js';
 import { persistedToolCallIds, threadItems } from '../lib/tool-call-record.js';
@@ -278,7 +279,14 @@ export function ChatPage({
                   </span>
                 </Notice>
               ) : null}
-              {sendError !== null ? <ErrorBanner error={sendError} /> : null}
+              {/* Legacy 334: U+0000 in what the person typed is named as the message, not the
+                  wire param `text`, and without the note about an agent's call. */}
+              {sendError !== null ? (
+                <ErrorBanner
+                  error={sendError}
+                  overrides={{ unstorable_text: composerUnstorableTextStep(t) }}
+                />
+              ) : null}
               <div className="composer-box">
                 <Textarea
                   ref={composer.textareaRef}

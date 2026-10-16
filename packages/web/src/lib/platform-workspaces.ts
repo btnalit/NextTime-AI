@@ -100,9 +100,12 @@ const PURGE_WORKSPACE_REASON_LABELS: Readonly<
 };
 
 /** `PurgeWorkspaceResultWire.counts` keys — the workspace-scoped tables, camel-cased by the kernel
- *  (`wireTableKey`). The cascade order of §4 in labels; a table this map does not know (the
- *  kernel derives the set from the schema) falls back to its humanized key so nothing is hidden. */
-const PURGE_COUNT_LABELS: Readonly<Record<string, { readonly zh: string; readonly en: string }>> = {
+ *  (`wireTableKey`). The cascade order of §4 first, then the rest alphabetically; a table this map
+ *  does not know (the kernel derives the set from the schema) falls back to its humanized key so
+ *  nothing is hidden. The wire types `counts` as a plain string record, so `tsc` cannot hold this
+ *  map to the schema: `platform-workspaces.test.ts` does, reading every table with a
+ *  `workspace_id` column out of the kernel's migrations (legacy 337). */
+const PURGE_COUNT_LABELS = {
   capabilityHandles: { zh: 'Handle', en: 'Handle' },
   sessions: { zh: '会话', en: 'Sessions' },
   tasks: { zh: '任务', en: 'Tasks' },
@@ -122,7 +125,35 @@ const PURGE_COUNT_LABELS: Readonly<Record<string, { readonly zh: string; readonl
   evidence: { zh: '证据', en: 'Evidence' },
   auditRecords: { zh: '审计记录', en: 'Audit records' },
   principals: { zh: '成员', en: 'Principals' },
-};
+  // Legacy 337: the tables §4 does not order, under the names the console uses for them elsewhere
+  // (capability labels, the navigation, the quota and profile pages).
+  actionRequests: { zh: '动作请求', en: 'Action requests' },
+  agentPolicies: { zh: '工作区策略', en: 'Agent policies' },
+  agentProfiles: { zh: '智能体配置', en: 'Agent profiles' },
+  capabilityGrants: { zh: '授权', en: 'Grants' },
+  connectionRequests: { zh: '连接申请', en: 'Connection requests' },
+  gatekeeperPolicies: { zh: '按门的审批策略', en: 'Per-gate approval policies' },
+  llmUsage: { zh: '模型用量记录', en: 'Model usage records' },
+  ontologyVersions: { zh: '本体版本', en: 'Ontology versions' },
+  outbox: { zh: '待投递事件', en: 'Outbox events' },
+  pendingContextItems: { zh: '待告知智能体的事项', en: 'Pending context items' },
+  policies: { zh: '审批策略', en: 'Approval policies' },
+  procedures: { zh: '流程', en: 'Procedures' },
+  quotas: { zh: '配额', en: 'Quotas' },
+  skills: { zh: 'Skill', en: 'Skills' },
+  turnOutcomes: { zh: '对话结果标记', en: 'Turn outcomes' },
+  turnProcedureClaims: { zh: '流程使用记录', en: 'Procedure usage records' },
+  workerDefinitions: { zh: 'Worker 定义', en: 'Worker definitions' },
+  workerRunSkills: { zh: 'Skill 使用记录', en: 'Skill usage records' },
+  workspaceGateLinks: { zh: '已启用的门实例', en: 'Enabled gate instances' },
+} as const satisfies Readonly<Record<string, { readonly zh: string; readonly en: string }>>;
+
+export type PurgeCountKey = keyof typeof PURGE_COUNT_LABELS;
+
+/** Whether `key` has its own label (else `purgeCountLabel` humanizes it). */
+export function isLabelledPurgeCountKey(key: string): key is PurgeCountKey {
+  return ownEntry(PURGE_COUNT_LABELS, key) !== undefined;
+}
 
 export function purgeCountLabel(key: string, t: Translate): string {
   const known = ownEntry(PURGE_COUNT_LABELS, key);

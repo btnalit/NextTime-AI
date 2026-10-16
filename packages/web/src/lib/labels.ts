@@ -121,8 +121,11 @@ export function executionReadinessMissingCodeLabel(
 export const AUDIT_RESOURCE_TYPE_LABELS: Readonly<Record<AuditResourceType, BilingualLabel>> = {
   action_request: { zh: '审批请求', en: 'Action request' },
   activity: { zh: '活动', en: 'Activity' },
+  // Legacy 355: one term per concept, the same the pages use — 工作区策略 (the models page card),
+  // 智能体配置 (「我的智能体」 and the purge counts), 审批策略 (an always-allow rule; the purge
+  // counts), 流程 (every Procedure surface).
   agent_policy: { zh: '工作区策略', en: 'Agent policy' },
-  agent_profile: { zh: '入口 / Worker 定义', en: 'Agent profile' },
+  agent_profile: { zh: '智能体配置', en: 'Agent profile' },
   capability_grant: { zh: '能力授权', en: 'Capability grant' },
   chat: { zh: '对话', en: 'Chat' },
   conflict: { zh: '冲突', en: 'Conflict' },
@@ -138,7 +141,7 @@ export const AUDIT_RESOURCE_TYPE_LABELS: Readonly<Record<AuditResourceType, Bili
   ontology_type: { zh: '本体类型', en: 'Ontology type' },
   ontology_version: { zh: '本体版本', en: 'Ontology version' },
   operation: { zh: 'Operation', en: 'Operation' },
-  policy: { zh: '策略', en: 'Policy' },
+  policy: { zh: '审批策略', en: 'Approval policy' },
   principal: { zh: '成员', en: 'Member' },
   procedure: { zh: '流程', en: 'Procedure' },
   quota: { zh: '配额', en: 'Quota' },

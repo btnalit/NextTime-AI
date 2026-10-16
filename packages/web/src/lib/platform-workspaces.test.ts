@@ -1,9 +1,13 @@
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { PurgeUserSkipReasonWireSchema, PurgeWorkspaceReasonWireSchema } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
 import type { Translate } from './i18n.js';
 import {
   WORKSPACE_PURGE_RETENTION_DAYS,
   isExpiredEphemeral,
+  isLabelledPurgeCountKey,
   isResidueWorkspace,
   purgeCountLabel,
   purgeRetention,
@@ -77,10 +81,35 @@ describe('platform-workspaces', () => {
   it('purgeCountLabel knows the cascade tables and humanizes anything else', () => {
     expect(purgeCountLabel('capabilityHandles', zhT)).toBe('Handle');
     expect(purgeCountLabel('auditRecords', enT)).toContain('Audit records');
-    expect(purgeCountLabel('ontologyVersions', zhT)).toBe('Ontology versions');
     expect(purgeCountLabel('goalRuns', zhT)).toBe('目标运行');
+    expect(purgeCountLabel('planRevisions', zhT)).toBe('计划版本');
+    expect(purgeCountLabel('stepRuns', zhT)).toBe('步骤运行');
     expect(purgeCountLabel('stepRuns', enT)).toBe('Step runs');
+    expect(purgeCountLabel('brandNewTable', zhT)).toBe('Brand new table');
     expect(purgeCountLabel('', zhT)).toBe('');
+  });
+
+  // Legacy 337 (UX acceptance of #607): these three read as their English fallback in Chinese.
+  it.each([
+    ['agentPolicies', '工作区策略', 'Agent policies'],
+    ['ontologyVersions', '本体版本', 'Ontology versions'],
+    ['workerDefinitions', 'Worker 定义', 'Worker definitions'],
+  ])('purgeCountLabel names %s in Chinese, not by its English fallback', (key, zh, fallback) => {
+    expect(purgeCountLabel(key, zhT)).toBe(zh);
+    expect(purgeCountLabel(key, zhT)).not.toBe(fallback);
+  });
+
+  // Legacy 337: the wire types `counts` as a string record, so this is what holds the label map
+  // to the schema — every table the kernel's purge discovers (a `workspace_id` column,
+  // `discoverWorkspaceScopedSchema`), read from the migrations that create it.
+  it('every workspace-scoped table in the kernel migrations has a purge count label', () => {
+    const tables = workspaceScopedTables();
+    // The parser reads what the purge preview shows today, S11 GO1's tables included.
+    expect(tables).toEqual(expect.arrayContaining(['goal_runs', 'plan_revisions', 'step_runs']));
+    const unlabelled = tables
+      .map((table) => table.replace(/_([a-z0-9])/g, (_match, ch: string) => ch.toUpperCase()))
+      .filter((key) => !isLabelledPurgeCountKey(key));
+    expect(unlabelled).toEqual([]);
   });
 
   it('every wire reason has bilingual copy', () => {
@@ -94,3 +123,43 @@ describe('platform-workspaces', () => {
     }
   });
 });
+
+const MIGRATIONS = fileURLToPath(new URL('../../../kernel/migrations/', import.meta.url));
+
+/** The tables the kernel's migrations leave with a `workspace_id` column: created with one, given
+ *  one later, minus any dropped or renamed since. Read in path order — module directory, then
+ *  version — the order the migrator runs them in (`adapters/db/migrate.ts`). */
+function workspaceScopedTables(): string[] {
+  const files: string[] = [];
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) walk(path);
+      else if (entry.name.endsWith('.sql')) files.push(path);
+    }
+  };
+  walk(MIGRATIONS);
+  const tables = new Set<string>();
+  for (const file of files.sort()) {
+    const sql = readFileSync(file, 'utf8').replace(/--[^\n]*/g, '');
+    for (const [, name, body] of sql.matchAll(
+      /create table (?:if not exists )?(?:public\.)?(\w+)\s*\(([\s\S]*?)\n\);/gi,
+    )) {
+      if (name && body && /(^|[\s,(])workspace_id\s/i.test(body)) tables.add(name);
+    }
+    for (const [, name] of sql.matchAll(
+      /alter table (?:if exists )?(?:only )?(?:public\.)?(\w+)\s+add column (?:if not exists )?workspace_id\b/gi,
+    )) {
+      if (name) tables.add(name);
+    }
+    for (const [, name] of sql.matchAll(/drop table (?:if exists )?(?:public\.)?(\w+)/gi)) {
+      if (name) tables.delete(name);
+    }
+    for (const [, from, to] of sql.matchAll(
+      /alter table (?:if exists )?(?:public\.)?(\w+)\s+rename to (\w+)/gi,
+    )) {
+      if (from && to && tables.delete(from)) tables.add(to);
+    }
+  }
+  return [...tables].sort();
+}
