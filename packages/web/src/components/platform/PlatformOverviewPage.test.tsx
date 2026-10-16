@@ -363,6 +363,46 @@ describe('PlatformOverviewPage', () => {
     );
   });
 
+  it('self-service visibility: an enabled instance of a connector that is not a platform preset is listed under 需要人处理', async () => {
+    const http = scriptedHttp({
+      platform_overview: () => overview({ health: [] }),
+      list_workspaces: () => ({ items: [defaultWorkspaceRow()] }),
+      list_gate_instances: () => ({
+        items: [
+          {
+            gateId: 'gate-hidden',
+            displayName: 'Docker prod',
+            connector: 'docker',
+            status: 'enabled',
+            pendingManifest: null,
+          },
+          {
+            gateId: 'gate-seen',
+            displayName: 'Stock',
+            connector: 'openapi',
+            status: 'enabled',
+            pendingManifest: null,
+          },
+        ],
+      }),
+      list_connectors: () => ({
+        items: [
+          { name: 'docker', mode: 'self_serve' },
+          { name: 'openapi', mode: 'platform_preset' },
+        ],
+      }),
+    });
+    renderPage(http);
+    const list = await screen.findByTestId('platform-attention-items');
+    await waitFor(() =>
+      expect(list.textContent).toContain('门实例「Docker prod」已启用，但工作区看不到它'),
+    );
+    expect(list.textContent).not.toContain('「Stock」');
+    expect(Array.from(list.querySelectorAll('a')).map((a) => a.getAttribute('href'))).toContain(
+      '#/platform/integrations/gate-hidden',
+    );
+  });
+
   // UX acceptance of #538: a gate already running a manifest the platform has not adopted refuses
   // calls; the overview says so (from `refusedOperations`) and links to where it is adopted.
   it('lists a gate whose new manifest waits to be adopted, saying when calls are already refused', async () => {

@@ -50,6 +50,7 @@ import { StatusChip } from '../ui/StatusChip.js';
 import { useToast } from '../ui/Toast.js';
 import { AskOwnerToEnable } from './AskOwnerToEnable.js';
 import { EnableGateConfirm } from './EnableGateConfirm.js';
+import { HeldDraftsNotice } from './GateOwnedParams.js';
 import { PackagedGateChecklist } from './PackagedGateChecklist.js';
 
 const CATALOG_WORKERS_TAB: CatalogTab = 'workers';
@@ -340,14 +341,15 @@ export function ConnectSystemLauncher({
   function handleEnabled(result: EnableGateInstanceResultWire): void {
     setEnabled(result);
     const skipped = result.skippedOperationNames.length;
+    const held = result.gateOwnedParamDrafts?.length ?? 0;
     toast.push({
       tone: 'ok',
       title: result.linkedExisting
         ? t('已关联已有的注册（旧路径）', 'Linked the existing (legacy) registration')
         : t('已在本工作区启用', 'Enabled in this workspace'),
       description: t(
-        `已发布 ${result.publishedOperationNames.length} 个 Operation${skipped > 0 ? `，跳过 ${skipped} 个已存在的` : ''}。`,
-        `Published ${result.publishedOperationNames.length} operation(s)${skipped > 0 ? `, skipped ${skipped} already there` : ''}.`,
+        `已发布 ${result.publishedOperationNames.length} 个 Operation${skipped > 0 ? `，跳过 ${skipped} 个已存在的` : ''}${held > 0 ? `，${held} 个没有发布（见下方）` : ''}。`,
+        `Published ${result.publishedOperationNames.length} operation(s)${skipped > 0 ? `, skipped ${skipped} already there` : ''}${held > 0 ? `, ${held} not published (see below)` : ''}.`,
       ),
     });
     onEnabled?.(result);
@@ -723,7 +725,7 @@ function ExistingGatePicker({
       ) : pollState === 'error' ? (
         <Notice tone="warn" testId="launcher-gates-error">
           {t(
-            `读不到门实例列表（${isAdmin ? 'list_gate_instances' : 'list_available_gate_instances'}）；仍在重试。`,
+            '读不到门实例列表；仍在重试。',
             'Could not read the gate-instance list; still retrying.',
           )}
         </Notice>
@@ -1216,6 +1218,14 @@ function WorkspaceEnableSection({
           ) : null}
         </div>
       )}
+      {enabled ? (
+        <HeldDraftsNotice
+          drafts={enabled.gateOwnedParamDrafts}
+          gatekeeperId={enabled.gatekeeperId}
+          fix="align"
+          testId="launcher-held-drafts"
+        />
+      ) : null}
 
       {linkedGatekeeperId !== null ? (
         <>

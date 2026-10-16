@@ -1,5 +1,6 @@
 import type {
   GateInstanceEnablePreviewOperationPresentWire,
+  GateInstanceEnablePreviewOperationWire,
   PreviewGateInstanceEnableResultWire,
   RefreshOperationGovernanceResultWire,
 } from '@nexttime/shared';
@@ -13,6 +14,7 @@ import { Confirm } from '../kit/confirm.js';
 import { NoticeErrorBody } from '../kit/inline-error.js';
 import { Notice } from '../kit/notice.js';
 import { AwaitingAdoptionNotice } from './DefinitionDrift.js';
+import { gateOwnedParamsNextStep, gateOwnedParamsText } from './GateOwnedParams.js';
 import {
   type GovernanceChangeItem,
   GovernanceChangeList,
@@ -40,6 +42,11 @@ export interface RefreshOperationGovernanceConfirmProps {
   /** `session.user?.platformRole === 'admin'` — when the gate's new manifest still waits for the
    *  platform, the notice links a platform admin to it (UX acceptance of #538). */
   readonly platformAdmin?: boolean;
+  /** Narrows the align to these Operation names (the catalog's one held draft); omitted aligns
+   *  everything that drifts. */
+  readonly operationNames?: readonly string[];
+  /** Trigger label override — defaults to 与门公告对齐. */
+  readonly label?: string;
   readonly testId?: string;
 }
 
@@ -78,6 +85,13 @@ export interface RefreshOperationGovernanceConfirmProps {
  * there is nothing to align yet — and saying 「已一致」 would leave the reader stuck while every
  * call is refused. The preview's `awaitingPlatformAdoption` names those Operations; this says the
  * platform admin has to adopt it first (`AwaitingAdoptionNotice`), never 「已一致」.
+ *
+ * **A draft held back for a gate-owned param is reached too** (console G4, legacy 219): a bulk
+ * publish leaves the gate's own draft unpublished when it declares a param only the gate sets. Once
+ * the gate's manifest drops it, the preview marks that draft `pendingDraft.rewritable` (the kernel's
+ * own judgment) and the align rewrites it to the new announcement — still a draft, published in the
+ * catalog. While the gate still announces the param, the draft is not rewritable and this says so
+ * instead of 「已一致」.
  */
 export function RefreshOperationGovernanceConfirm({
   http,
@@ -86,6 +100,8 @@ export function RefreshOperationGovernanceConfirm({
   gateDisplayName,
   onRefreshed,
   platformAdmin = false,
+  operationNames,
+  label,
   testId,
 }: RefreshOperationGovernanceConfirmProps) {
   const t = useT();
@@ -94,6 +110,13 @@ export function RefreshOperationGovernanceConfirm({
   const [diffs, setDiffs] = useState<
     readonly GateInstanceEnablePreviewOperationPresentWire[] | null
   >(null);
+  // Console G4: the gate's own held drafts the announcement now differs from (rewritten by the
+  // align), and those it still announces with a gate-owned param (nothing to rewrite yet).
+  const [heldDrafts, setHeldDrafts] = useState<readonly string[]>([]);
+  const [stuckDrafts, setStuckDrafts] = useState<readonly GateInstanceEnablePreviewOperationWire[]>(
+    [],
+  );
+  const [rewrittenNames, setRewrittenNames] = useState<ReadonlySet<string>>(new Set());
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [alignedNotice, setAlignedNotice] = useState(false);
   const [awaitingAdoption, setAwaitingAdoption] =
@@ -107,6 +130,12 @@ export function RefreshOperationGovernanceConfirm({
   const consequences = items.flatMap((item) => governanceConsequences(item, t));
   const loosens = items.some((item) => isLoosening(item.direction));
   const [lastResult, setLastResult] = useState<RefreshOperationGovernanceResultWire | null>(null);
+  const revisions = (lastResult?.revisionDrafts ?? []).filter(
+    (draft) => !rewrittenNames.has(draft.name),
+  );
+  const rewritten = (lastResult?.revisionDrafts ?? []).filter((draft) =>
+    rewrittenNames.has(draft.name),
+  );
 
   async function loadPreviewAndOpen(): Promise<void> {
     if (checking) return;
@@ -115,17 +144,28 @@ export function RefreshOperationGovernanceConfirm({
     setAlignedNotice(false);
     setAwaitingAdoption(null);
     setLastResult(null);
+    setStuckDrafts([]);
     try {
       const preview = await http.call<PreviewGateInstanceEnableResultWire>(
         'preview_gate_instance_enable',
         { gateId: platformGateId },
       );
+      const inScope = (name: string) =>
+        operationNames === undefined || operationNames.includes(name);
       // Legacy K (G1): a definition-only change drifts as well — "already aligned" would leave the
       // gate refusing those Operations with no way to open the revision that fixes it.
       const drifting = preview.operationsAlreadyPresent.filter(
-        (op) => op.differs || op.definitionDiffers,
+        (op) => (op.differs || op.definitionDiffers) && inScope(op.name),
       );
       setDiffs(drifting);
+      const pending = preview.operationsToImport.filter(
+        (op) => op.pendingDraft !== undefined && inScope(op.name),
+      );
+      const held = pending.filter((op) => op.pendingDraft?.rewritable).map((op) => op.name);
+      setHeldDrafts(held);
+      const stuck = pending.filter(
+        (op) => !op.pendingDraft?.rewritable && (op.gateOwnedParams?.length ?? 0) > 0,
+      );
       setPublishedNames(
         new Set(
           preview.operationsAlreadyPresent
@@ -136,7 +176,8 @@ export function RefreshOperationGovernanceConfirm({
       setManifestDigest(preview.manifestDigest);
       const awaiting = preview.awaitingPlatformAdoption ?? null;
       setAwaitingAdoption(awaiting);
-      if (drifting.length > 0) setConfirmOpen(true);
+      if (drifting.length > 0 || held.length > 0) setConfirmOpen(true);
+      else if (stuck.length > 0) setStuckDrafts(stuck);
       else if (awaiting === null) setAlignedNotice(true);
     } catch (err) {
       setCheckError(err);
@@ -151,10 +192,16 @@ export function RefreshOperationGovernanceConfirm({
     // maps a known platform code to its copy and keeps the kernel's text in 「技术细节」.
     const result = await http.call<RefreshOperationGovernanceResultWire>(
       'refresh_operation_governance',
-      { gatekeeperId, operationNames: diffs.map((op) => op.name), manifestDigest },
+      {
+        gatekeeperId,
+        operationNames: [...diffs.map((op) => op.name), ...heldDrafts],
+        manifestDigest,
+      },
     );
+    setRewrittenNames(new Set(heldDrafts));
     setLastResult(result);
     setDiffs(null);
+    setHeldDrafts([]);
     onRefreshed(result);
   }
 
@@ -166,7 +213,7 @@ export function RefreshOperationGovernanceConfirm({
       disabled={checking}
       data-testid={testId}
     >
-      {t('与门公告对齐', "Align with the gate's announcement")}
+      {label ?? t('与门公告对齐', "Align with the gate's announcement")}
     </Button>
   );
 
@@ -195,6 +242,28 @@ export function RefreshOperationGovernanceConfirm({
           )}
         </Notice>
       ) : null}
+      {stuckDrafts.length > 0 ? (
+        <Notice tone="warn" testId={testId ? `${testId}-held` : undefined}>
+          <span className="stack-s">
+            <span>
+              {t(
+                '门的清单还没改：下面的草稿仍声明只能由门自己设置的参数，没有可重写的内容，也发布不了。',
+                'The gate’s manifest has not changed yet: these drafts still declare params only the gate sets, so there is nothing to rewrite and they cannot be published.',
+              )}
+            </span>
+            <ul className="stack-s" style={{ margin: 0, paddingLeft: '1.2em' }}>
+              {stuckDrafts.map((op) => (
+                <li key={op.name}>
+                  <span className="mono">{op.name}</span>
+                  {t('：', ': ')}
+                  {gateOwnedParamsText(op.gateOwnedParams ?? [], t)}
+                </li>
+              ))}
+            </ul>
+            <span className="text-3">{gateOwnedParamsNextStep('align', t)}</span>
+          </span>
+        </Notice>
+      ) : null}
       {lastResult !== null ? (
         <Notice
           tone={lastResult.revisionDrafts.length > 0 ? 'warn' : 'info'}
@@ -217,16 +286,16 @@ export function RefreshOperationGovernanceConfirm({
                 )}
               </span>
             ) : null}
-            {lastResult.revisionDrafts.length > 0 ? (
+            {revisions.length > 0 ? (
               <div className="stack-s" data-testid={testId ? `${testId}-drafts` : undefined}>
                 <span>
                   {t(
-                    `已为 ${lastResult.revisionDrafts.length} 个 Operation 打开修订草稿。发布之前，门会拒绝对它们的调用——到能力目录核对改了什么，再发布：`,
-                    `Opened a revision draft for ${lastResult.revisionDrafts.length} operation(s). The gate refuses calls to them until it is published — check what changed in the catalog, then publish it:`,
+                    `已为 ${revisions.length} 个 Operation 打开修订草稿。发布之前，门会拒绝对它们的调用——到能力目录核对改了什么，再发布：`,
+                    `Opened a revision draft for ${revisions.length} operation(s). The gate refuses calls to them until it is published — check what changed in the catalog, then publish it:`,
                   )}
                 </span>
                 <ul className="stack-s" style={{ margin: 0, paddingLeft: '1.2em' }}>
-                  {lastResult.revisionDrafts.map((draft) => {
+                  {revisions.map((draft) => {
                     const row = { gatekeeperId, name: draft.name };
                     const key = publishedNames.has(draft.name)
                       ? revisionDraftKey(row)
@@ -238,6 +307,35 @@ export function RefreshOperationGovernanceConfirm({
                         <a
                           href={hrefs.catalog('operations', key)}
                           data-testid={testId ? `${testId}-draft-link` : undefined}
+                        >
+                          {t('去能力目录发布', 'Publish in the catalog')}
+                        </a>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            ) : null}
+            {rewritten.length > 0 ? (
+              <div className="stack-s" data-testid={testId ? `${testId}-rewritten` : undefined}>
+                <span>
+                  {t(
+                    `已按门的新清单重写 ${rewritten.length} 份待发布的草稿。到能力目录核对后发布：`,
+                    `Rewrote ${rewritten.length} pending draft(s) to the gate’s new manifest. Check them in the catalog, then publish:`,
+                  )}
+                </span>
+                <ul className="stack-s" style={{ margin: 0, paddingLeft: '1.2em' }}>
+                  {rewritten.map((draft) => {
+                    const row = { gatekeeperId, name: draft.name };
+                    const key = publishedNames.has(draft.name)
+                      ? revisionDraftKey(row)
+                      : operationKey(row);
+                    return (
+                      <li key={draft.name} className="row-wrap">
+                        <span className="mono">{draft.name}</span>
+                        <a
+                          href={hrefs.catalog('operations', key)}
+                          data-testid={testId ? `${testId}-rewritten-link` : undefined}
                         >
                           {t('去能力目录发布', 'Publish in the catalog')}
                         </a>
@@ -274,6 +372,12 @@ export function RefreshOperationGovernanceConfirm({
               `${name}: the definition the gate runs changed — opens a revision draft`,
             ),
           ),
+          ...heldDrafts.map((name) =>
+            t(
+              `${name}：门的清单改了，按新清单重写待发布的草稿`,
+              `${name}: the gate’s manifest changed — rewrites the pending draft to it`,
+            ),
+          ),
         ]}
         confirmLabel={t('对齐', 'Align')}
         danger={loosens}
@@ -294,6 +398,14 @@ export function RefreshOperationGovernanceConfirm({
             {t(
               `门运行的定义（绑定、参数或结果映射）已经变了：${redefined.join('、')}。对齐只会为它们打开修订草稿；在你到能力目录发布修订之前，门会拒绝对它们的调用。`,
               `The definition the gate runs (binding, params or result mapping) has changed: ${redefined.join(', ')}. Aligning only opens a revision draft for each; the gate refuses calls to them until you publish it in the catalog.`,
+            )}
+          </Notice>
+        ) : null}
+        {heldDrafts.length > 0 ? (
+          <Notice testId={testId ? `${testId}-rewrites` : undefined}>
+            {t(
+              `门的清单已经改了：${heldDrafts.join('、')}。对齐会按新清单重写这些还没发布的草稿，不会发布它们；之后到能力目录核对再发布。`,
+              `The gate’s manifest has changed: ${heldDrafts.join(', ')}. Aligning rewrites these unpublished drafts to it without publishing them; check and publish them in the catalog afterwards.`,
             )}
           </Notice>
         ) : null}

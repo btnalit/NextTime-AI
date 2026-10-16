@@ -1,4 +1,9 @@
-import type { ConnectorModeWire, ConnectorWire, ExternalRuntimeWire } from '@nexttime/shared';
+import type {
+  ConnectorModeWire,
+  ConnectorWire,
+  ExternalRuntimeWire,
+  GateInstanceWire,
+} from '@nexttime/shared';
 import { useEffect, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
@@ -22,6 +27,7 @@ import { Tabs } from '../ui/Tabs.js';
 import { CreateGateInstanceForm } from './CreateGateInstanceForm.js';
 import { GateInstanceDetailPanel } from './GateInstanceDetailPanel.js';
 import { PlatformError } from './PlatformError.js';
+import { hiddenFromWorkspaces, useConnectorsByName } from './integrations/connector-visibility.js';
 import { useConnectorDenyList } from './integrations/useConnectorDenyList.js';
 import { useConnectorMode } from './integrations/useConnectorMode.js';
 import { useGateInstancesPanel } from './integrations/useGateInstancesPanel.js';
@@ -158,7 +164,15 @@ export function PlatformIntegrationsPage({
 
       {tab === 'connectors' ? <ConnectorsTab http={http} /> : null}
       {tab === 'instances' ? (
-        <GateInstancesTab http={http} selectedGateId={openGateId} onSelectGate={selectGate} />
+        <GateInstancesTab
+          http={http}
+          selectedGateId={openGateId}
+          onSelectGate={selectGate}
+          onShowConnectors={() => {
+            selectGate(null);
+            setTab('connectors');
+          }}
+        />
       ) : null}
       {tab === 'runtimes' ? <ExternalRuntimesTab http={http} /> : null}
     </div>
@@ -173,6 +187,20 @@ function ConnectorsTab({ http }: { readonly http: CapabilityCaller }) {
   const t = useT();
   const connectors = useCapabilityList<ConnectorWire>(http, 'list_connectors', {});
   const rows = connectors.state.status === 'ready' ? connectors.state.data.items : [];
+  // UX acceptance of #538 (out of scope there): which connectors have enabled instances — those
+  // vanish from every workspace's catalog unless the connector is platform preset. A failed read
+  // just leaves the hint out.
+  const instances = useCapabilityList<GateInstanceWire>(http, 'list_gate_instances', ALL_INSTANCES);
+  const enabledByConnector = new Map<string, number>();
+  if (instances.state.status === 'ready') {
+    for (const instance of instances.state.data.items) {
+      if (instance.status !== 'enabled') continue;
+      enabledByConnector.set(
+        instance.connector,
+        (enabledByConnector.get(instance.connector) ?? 0) + 1,
+      );
+    }
+  }
 
   function replace(updated: ConnectorWire): void {
     connectors.mutate((data) => ({
@@ -218,7 +246,13 @@ function ConnectorsTab({ http }: { readonly http: CapabilityCaller }) {
             </thead>
             <tbody>
               {rows.map((row) => (
-                <ConnectorRow key={row.name} http={http} connector={row} onChanged={replace} />
+                <ConnectorRow
+                  key={row.name}
+                  http={http}
+                  connector={row}
+                  enabledInstanceCount={enabledByConnector.get(row.name) ?? 0}
+                  onChanged={replace}
+                />
               ))}
             </tbody>
           </table>
@@ -235,6 +269,24 @@ function ConnectorsTab({ http }: { readonly http: CapabilityCaller }) {
  *  the same confirm offers (`useConnectorMode`'s `alsoDisableOperations`). A gate a workspace
  *  connected itself is outside both. */
 function connectorModeDescription(
+  pendingMode: ConnectorModeWire | null,
+  packaged: boolean,
+  t: Translate,
+  hidesEnabled = 0,
+): string {
+  // Leaving platform preset takes its enabled instances out of every workspace's catalog — said
+  // first, with the count (UX acceptance of #538: nothing said so).
+  const hides =
+    hidesEnabled > 0
+      ? t(
+          `这个接入包有 ${hidesEnabled} 个已启用的实例，切换后它们会从各工作区的「待启用的平台实例」里消失，工作区也不能再启用它们。`,
+          `This connector has ${hidesEnabled} enabled instance(s); after the switch they disappear from every workspace's “Platform instances pending enable” and can no longer be enabled there. `,
+        )
+      : '';
+  return `${hides}${connectorModeDescriptionBody(pendingMode, packaged, t)}`;
+}
+
+function connectorModeDescriptionBody(
   pendingMode: ConnectorModeWire | null,
   packaged: boolean,
   t: Translate,
@@ -269,10 +321,13 @@ const CONNECTOR_MODE_SELECT_STYLE = { minWidth: '11rem' } as const;
 function ConnectorRow({
   http,
   connector,
+  enabledInstanceCount,
   onChanged,
 }: {
   readonly http: CapabilityCaller;
   readonly connector: ConnectorWire;
+  /** Instances of this connector the platform has enabled (`list_gate_instances`). */
+  readonly enabledInstanceCount: number;
   readonly onChanged: (connector: ConnectorWire) => void;
 }) {
   const t = useT();
@@ -313,7 +368,14 @@ function ConnectorRow({
               </Select>
             }
             title={`${t('切换模式为', 'Switch mode to')} ${connectorModeLabel(mode.pendingMode ?? connector.mode, t)}`}
-            description={connectorModeDescription(mode.pendingMode, connector.packaged, t)}
+            description={connectorModeDescription(
+              mode.pendingMode,
+              connector.packaged,
+              t,
+              connector.mode === 'platform_preset' && mode.pendingMode !== 'platform_preset'
+                ? enabledInstanceCount
+                : 0,
+            )}
             target={connector.name}
             impact={[
               t(`${instanceCount} 个门实例`, `${instanceCount} gate instance(s)`),
@@ -347,6 +409,18 @@ function ConnectorRow({
             title={t('无法设置模式', 'Could not set the mode')}
             testId={`connector-mode-error-${connector.name}`}
           />
+          {connector.mode !== 'platform_preset' && enabledInstanceCount > 0 ? (
+            <p
+              className="text-3 text-small"
+              style={{ margin: 0 }}
+              data-testid={`connector-hidden-instances-${connector.name}`}
+            >
+              {t(
+                `${enabledInstanceCount} 个已启用的实例工作区看不到：不是「平台预置」时，实例不会出现在工作区的「待启用的平台实例」里。`,
+                `${enabledInstanceCount} enabled instance(s) no workspace can see: unless the connector is platform preset, its instances do not show up in a workspace's “Platform instances pending enable”.`,
+              )}
+            </p>
+          ) : null}
         </td>
         <td className="mono">{connector.instanceCount}</td>
         <td className="mono">{connector.operationCount}</td>
@@ -536,14 +610,18 @@ function GateInstancesTab({
   http,
   selectedGateId,
   onSelectGate,
+  onShowConnectors,
 }: {
   readonly http: CapabilityCaller;
   readonly selectedGateId?: string;
   readonly onSelectGate?: (gateId: string | null) => void;
+  /** Leaves the instance drawer for the 接入包 tab, where a connector's mode is switched. */
+  readonly onShowConnectors: () => void;
 }) {
   const t = useT();
   const panel = useGateInstancesPanel(http, selectedGateId, onSelectGate);
   const { instances, rows, open, setPanel } = panel;
+  const connectors = useConnectorsByName(http);
 
   return (
     <div className="stack" data-testid="integrations-instances">
@@ -578,7 +656,7 @@ function GateInstancesTab({
       ) : rows.length === 0 ? (
         <EmptyState
           icon="connections"
-          title={t('还没有门实例announce过', 'No gate instance has announced itself yet')}
+          title={t('还没有门实例公布过自己', 'No gate instance has announced itself yet')}
           testId="gate-instances-empty"
         />
       ) : (
@@ -593,7 +671,7 @@ function GateInstancesTab({
                 <th>{t('健康', 'Health')}</th>
                 <th>{t('最近心跳', 'Last seen')}</th>
                 <th>Operation 数</th>
-                <th>启用它的工作区数</th>
+                <th>{t('启用它的工作区数', 'Enabling workspaces')}</th>
                 <th aria-label="Trust" />
                 <th aria-label="Actions" />
               </tr>
@@ -642,6 +720,14 @@ function GateInstancesTab({
                                   'New manifest to adopt · calls refused',
                                 )
                               : t('新清单待采用', 'New manifest to adopt')}
+                          </span>
+                        ) : null}
+                        {hiddenFromWorkspaces(row, connectors) !== null ? (
+                          <span
+                            className="chip chip-s chip-warn"
+                            data-testid="gate-hidden-from-workspaces-badge"
+                          >
+                            {t('工作区看不到', 'Hidden from workspaces')}
                           </span>
                         ) : null}
                       </span>
@@ -731,6 +817,8 @@ function GateInstancesTab({
             key={open.gateId}
             http={http}
             instance={open}
+            connector={connectors?.get(open.connector)}
+            onShowConnectors={onShowConnectors}
             onChanged={panel.replace}
             onDeleted={panel.handleDeleted}
           />
@@ -739,6 +827,8 @@ function GateInstancesTab({
     </div>
   );
 }
+
+const ALL_INSTANCES: Readonly<Record<string, unknown>> = {};
 
 // -------------------------------------------------------------------------------------------
 // 外部运行时 External runtimes

@@ -578,4 +578,129 @@ describe('RefreshOperationGovernanceConfirm', () => {
     const error = await within(confirm).findByTestId('confirm-error');
     expect(error.textContent).toContain('没有可对齐的公告清单');
   });
+  it('console G4: a draft held back for a gate-owned param, once the gate’s manifest drops it, is rewritten by the align — said in the confirm, sent with the rest, linked to the catalog after', async () => {
+    const http = scriptedHttp({
+      preview_gate_instance_enable: () => ({
+        ...preview([ALIGNED_ROW]),
+        operationsToImport: [
+          {
+            name: 'stock.reserve',
+            mode: 'execute',
+            blastRadius: 'medium',
+            autoApprovable: false,
+            pendingDraft: { rewritable: true },
+          },
+          // New on the gate, never imported here: not this align's concern.
+          { name: 'stock.audit', mode: 'observe', blastRadius: 'low', autoApprovable: true },
+        ],
+      }),
+      refresh_operation_governance: (params) => {
+        expect(params).toEqual({
+          gatekeeperId: 'gk-1',
+          operationNames: ['stock.reserve'],
+          manifestDigest: 'digest-1',
+        });
+        return {
+          gatekeeperId: 'gk-1',
+          refreshed: [],
+          revisionDrafts: [{ name: 'stock.reserve', version: 1 }],
+          unchanged: [],
+        };
+      },
+    });
+    const onRefreshed = renderConfirm(http);
+
+    fireEvent.click(screen.getByTestId('align-gk-1'));
+    const confirm = await screen.findByTestId('align-gk-1-confirm');
+    expect(within(confirm).getByTestId('align-gk-1-rewrites').textContent).toContain(
+      'stock.reserve',
+    );
+    expect(confirm.textContent).toContain('stock.reserve：门的清单改了，按新清单重写待发布的草稿');
+    expect(confirm.textContent).not.toContain('stock.audit');
+
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    await waitFor(() => expect(onRefreshed).toHaveBeenCalledTimes(1));
+    const result = await screen.findByTestId('align-gk-1-result');
+    // A rewritten draft is not a revision of a published version.
+    expect(within(result).queryByTestId('align-gk-1-drafts')).toBeNull();
+    const rewritten = within(result).getByTestId('align-gk-1-rewritten');
+    expect(rewritten.textContent).toContain('已按门的新清单重写 1 份待发布的草稿');
+    expect(within(rewritten).getByTestId('align-gk-1-rewritten-link').getAttribute('href')).toBe(
+      '#/govern/catalog/operations/gk-1%3A%3Astock.reserve',
+    );
+  });
+
+  it('console G4: a held draft the gate still announces with the param is not 「已一致」 — it names the param and who fixes it', async () => {
+    const http = scriptedHttp({
+      preview_gate_instance_enable: () => ({
+        ...preview([ALIGNED_ROW]),
+        operationsToImport: [
+          {
+            name: 'stock.reserve',
+            mode: 'execute',
+            blastRadius: 'medium',
+            autoApprovable: false,
+            gateOwnedParams: [{ param: 'Authorization', location: 'header' }],
+            pendingDraft: { rewritable: false },
+          },
+        ],
+      }),
+    });
+    renderConfirm(http);
+
+    fireEvent.click(screen.getByTestId('align-gk-1'));
+    const held = await screen.findByTestId('align-gk-1-held');
+    expect(held.textContent).toContain('门的清单还没改');
+    expect(held.textContent).toContain('stock.reserve：Authorization（请求头）');
+    expect(held.textContent).toContain('门的维护者');
+    expect(screen.queryByTestId('align-gk-1-aligned')).toBeNull();
+    expect(screen.queryByTestId('align-gk-1-confirm')).toBeNull();
+    expect(http.calls.some((call) => call.name === 'refresh_operation_governance')).toBe(false);
+  });
+
+  it('console G4: narrowed to one draft (the catalog’s), it aligns only that one, under its own label', async () => {
+    const http = scriptedHttp({
+      preview_gate_instance_enable: () => ({
+        ...preview([{ ...ALIGNED_ROW, name: 'stock.get', definitionDiffers: true }]),
+        operationsToImport: [
+          {
+            name: 'stock.reserve',
+            mode: 'execute',
+            blastRadius: 'medium',
+            autoApprovable: false,
+            pendingDraft: { rewritable: true },
+          },
+        ],
+      }),
+      refresh_operation_governance: (params) => {
+        expect((params as { operationNames: string[] }).operationNames).toEqual(['stock.reserve']);
+        return {
+          gatekeeperId: 'gk-1',
+          refreshed: [],
+          revisionDrafts: [{ name: 'stock.reserve', version: 1 }],
+          unchanged: [],
+        };
+      },
+    });
+    const onRefreshed = vi.fn();
+    render(
+      <RefreshOperationGovernanceConfirm
+        http={http}
+        gatekeeperId="gk-1"
+        platformGateId="gate-1"
+        gateDisplayName="Docker prod"
+        onRefreshed={onRefreshed}
+        operationNames={['stock.reserve']}
+        label="按门的最新清单重写"
+        testId="align-one"
+      />,
+    );
+
+    expect(screen.getByTestId('align-one').textContent).toBe('按门的最新清单重写');
+    fireEvent.click(screen.getByTestId('align-one'));
+    const confirm = await screen.findByTestId('align-one-confirm');
+    expect(confirm.textContent).not.toContain('stock.get');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    await waitFor(() => expect(onRefreshed).toHaveBeenCalledTimes(1));
+  });
 });

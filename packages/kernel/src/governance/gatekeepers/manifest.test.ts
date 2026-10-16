@@ -29,6 +29,7 @@ import {
   diffOperationGovernanceFields,
   getOperation,
   getPublishedOperation,
+  importDraftDiffersFromAnnounced,
   importManifest,
   listOperations,
   listPublishedOperationsForGatekeepers,
@@ -1681,6 +1682,33 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
       );
       expect(published.status).toBe('published');
       expect(operationDefinitionDigest(published.operation)).toBe(operationDefinitionDigest(fixed));
+    });
+
+    it('importDraftDiffersFromAnnounced is the judgment the refresh rewrites by (console G4)', async () => {
+      const held = withGateOwnedParams(`j.judge.${randomUUID()}`);
+      const act = await newActivity();
+      await inTx((client) =>
+        importManifest(client, workspaceId, {
+          gatekeeperId,
+          operations: [held],
+          proposedBy: { id: ownerId, kind: 'human' },
+          activityId: act,
+        }),
+      );
+      const draft = await inTx((client) =>
+        getOperation(client, workspaceId, gatekeeperId, held.name),
+      );
+      if (!draft) throw new Error('expected the held draft');
+      const fixed = {
+        ...held,
+        params_schema: { type: 'object', properties: { sku: { type: 'string', 'x-in': 'query' } } },
+      };
+      // The gate still announces what was held back: nothing to rewrite yet.
+      expect(importDraftDiffersFromAnnounced(draft, held)).toBe(false);
+      expect(importDraftDiffersFromAnnounced(draft, fixed)).toBe(true);
+      // Never an agent's or person's proposal, never a row that is not a draft.
+      expect(importDraftDiffersFromAnnounced({ ...draft, origin: 'agent' }, fixed)).toBe(false);
+      expect(importDraftDiffersFromAnnounced({ ...draft, status: 'published' }, fixed)).toBe(false);
     });
   });
 });

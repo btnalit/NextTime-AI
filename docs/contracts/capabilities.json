@@ -6924,6 +6924,31 @@
               "description": {
                 "type": "string"
               },
+              "gateOwnedParams": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "location": {
+                      "enum": [
+                        "header",
+                        "query",
+                        "cookie",
+                        "binding"
+                      ],
+                      "type": "string"
+                    },
+                    "param": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "param",
+                    "location"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
               "gatekeeperId": {
                 "type": "string"
               },
@@ -11737,6 +11762,31 @@
               "description": {
                 "type": "string"
               },
+              "gateOwnedParams": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "location": {
+                      "enum": [
+                        "header",
+                        "query",
+                        "cookie",
+                        "binding"
+                      ],
+                      "type": "string"
+                    },
+                    "param": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "param",
+                    "location"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
               "gatekeeperId": {
                 "type": "string"
               },
@@ -15792,6 +15842,31 @@
               "description": {
                 "type": "string"
               },
+              "gateOwnedParams": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "location": {
+                      "enum": [
+                        "header",
+                        "query",
+                        "cookie",
+                        "binding"
+                      ],
+                      "type": "string"
+                    },
+                    "param": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "param",
+                    "location"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
               "mode": {
                 "enum": [
                   "observe",
@@ -15801,6 +15876,18 @@
               },
               "name": {
                 "type": "string"
+              },
+              "pendingDraft": {
+                "additionalProperties": false,
+                "properties": {
+                  "rewritable": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "rewritable"
+                ],
+                "type": "object"
               }
             },
             "required": [

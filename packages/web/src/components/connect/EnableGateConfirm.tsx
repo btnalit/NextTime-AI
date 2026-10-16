@@ -14,6 +14,7 @@ import { RefChip } from '../kit/ref-chip.js';
 import { StatusChip } from '../kit/status-chip.js';
 import { announceReadinessChange } from '../readiness/useExecutionReadiness.js';
 import { AwaitingAdoptionNotice } from './DefinitionDrift.js';
+import { gateOwnedParamsNextStep, gateOwnedParamsText } from './GateOwnedParams.js';
 
 export interface EnableGateConfirmProps {
   readonly http: CapabilityCaller;
@@ -192,7 +193,15 @@ function EnablePreviewBody({
   readonly testId?: string;
 }) {
   const t = useT();
-  const toImportCount = preview.operationsToImport.length;
+  // Console G4 (legacy 219): an announced entry declaring a param only the gate sets stays a draft —
+  // said here, before the click, not counted among what will be published.
+  const toPublish = preview.operationsToImport.filter(
+    (operation) => (operation.gateOwnedParams?.length ?? 0) === 0,
+  );
+  const heldBack = preview.operationsToImport.filter(
+    (operation) => (operation.gateOwnedParams?.length ?? 0) > 0,
+  );
+  const toImportCount = toPublish.length;
   const presentCount = preview.operationsAlreadyPresent.length;
   const noOperations = toImportCount === 0 && presentCount === 0;
   // Read as absent when a kernel without it answers — never as "awaiting".
@@ -219,13 +228,13 @@ function EnablePreviewBody({
           <DriftList drift={preview.wouldLink.drift} />
         </div>
       ) : null}
-      {preview.operationsToImport.length > 0 ? (
+      {toPublish.length > 0 ? (
         <div className="stack-s" data-testid="enable-preview-import">
           <span className="text-12 font-medium text-text-2">
             {t(`将发布 ${toImportCount} 个 Operation`, `Will publish ${toImportCount}`)}
           </span>
           <ul className="stack-s" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
-            {preview.operationsToImport.map((operation) => (
+            {toPublish.map((operation) => (
               <li key={operation.name} className="row-wrap">
                 <span className="mono">{operation.name}</span>
                 <StatusChip machine="operationMode" status={operation.mode} size="s" />
@@ -234,6 +243,28 @@ function EnablePreviewBody({
             ))}
           </ul>
         </div>
+      ) : null}
+      {heldBack.length > 0 ? (
+        <Notice tone="warn" testId="enable-preview-held">
+          <span className="stack-s">
+            <span>
+              {t(
+                `${heldBack.length} 个 Operation 不会发布，只导入为草稿：门的清单给它们声明了只能由门自己设置的参数，门会拒绝带这些参数的每一次调用。`,
+                `${heldBack.length} operation(s) will not be published, only imported as drafts: the gate’s manifest declares params on them that only the gate sets, and the gate refuses every call that passes one.`,
+              )}
+            </span>
+            <ul className="stack-s" style={{ margin: 0, paddingLeft: '1.2em' }}>
+              {heldBack.map((operation) => (
+                <li key={operation.name}>
+                  <span className="mono">{operation.name}</span>
+                  {t('：', ': ')}
+                  {gateOwnedParamsText(operation.gateOwnedParams ?? [], t)}
+                </li>
+              ))}
+            </ul>
+            <span className="text-3">{gateOwnedParamsNextStep('align', t)}</span>
+          </span>
+        </Notice>
       ) : null}
       {preview.operationsAlreadyPresent.length > 0 ? (
         <div className="stack-s" data-testid="enable-preview-present">

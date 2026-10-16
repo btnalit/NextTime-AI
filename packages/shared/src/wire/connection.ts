@@ -6,7 +6,11 @@ import {
   PublishableStatusSchema,
 } from '../enums.js';
 import { BlastRadiusSchema, PrincipalKindSchema } from '../enums.js';
-import { GateOwnedParamDraftWireSchema, OperationGovernanceChangeWireSchema } from './platform.js';
+import {
+  GateOwnedParamDraftWireSchema,
+  GateOwnedParamWireSchema,
+  OperationGovernanceChangeWireSchema,
+} from './platform.js';
 
 /**
  * wire/connection: Gatekeeper / ConnectionRequest / Operation wire shapes
@@ -106,6 +110,12 @@ export const OperationSummaryWireSchema = z
      *  publishing it changes in the definition the gate runs, so the catalog can show what a
      *  revision is before it is published. Absent when either version's definition does not parse. */
     definitionChange: OperationDefinitionChangeWireSchema.optional(),
+    /** Legacy J (console G4, legacy 219): the params this version's definition declares that only
+     *  the gate sets — the same judgment `publish_operation` refuses with 400 `gate_owned_params`.
+     *  Absent when there are none. On a draft it says why the draft cannot be published; on a
+     *  published row (published before the check existed) the gate refuses every call that passes
+     *  one of them. */
+    gateOwnedParams: z.array(GateOwnedParamWireSchema).optional(),
   })
   .strict();
 export type OperationSummaryWire = z.infer<typeof OperationSummaryWireSchema>;
@@ -191,6 +201,7 @@ export const PublishManifestResultWireSchema = z
     gateOwnedParamDrafts: z.array(GateOwnedParamDraftWireSchema),
   })
   .strict();
+export type PublishManifestResultWire = z.infer<typeof PublishManifestResultWireSchema>;
 
 /** `mint_connection_secret`'s result (R-01) — shown once, never audited. */
 export const MintConnectionSecretResultWireSchema = z

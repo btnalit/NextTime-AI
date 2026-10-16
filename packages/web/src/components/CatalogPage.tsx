@@ -38,6 +38,7 @@ import {
 import { nameOf, useGatekeeperNames } from './approvals/useDirectoryNames.js';
 import { DraftExpiryNote, type EditorState } from './catalog/CatalogShared.js';
 import { DiscardReasonField } from './catalog/DiscardReasonField.js';
+import { GateOwnedParamsNotice } from './catalog/GateOwnedParamsNotice.js';
 import { MarkdownPreview } from './catalog/MarkdownPreview.js';
 import { ModulesTab } from './catalog/ModulesTab.js';
 import { ProcedureEditorHost } from './catalog/ProcedureEditorHost.js';
@@ -641,6 +642,7 @@ function SelectionPlaceholder({
 // -------------------------------------------------------------------------------------------
 
 function OperationDetailView({
+  http,
   row,
   usage,
   gatekeeperNames,
@@ -652,7 +654,9 @@ function OperationDetailView({
   onPublish,
   onDeprecate,
   onEditDescription,
+  onRewritten,
 }: {
+  readonly http: CapabilityCaller;
   readonly row: OperationCatalogRow;
   readonly usage: OperationStatsRow | undefined;
   readonly gatekeeperNames: ReadonlyMap<string, string>;
@@ -664,9 +668,15 @@ function OperationDetailView({
   readonly onPublish: () => Promise<void>;
   readonly onDeprecate: () => Promise<void>;
   readonly onEditDescription: () => void;
+  /** Console G4: the held draft was rewritten from the gate's latest manifest — reload the list. */
+  readonly onRewritten: () => void;
 }) {
   const t = useT();
   const key = catalogOperationKey(row);
+  // Console G4 (legacy 219): publishing a definition with a gate-owned param is refused by the
+  // kernel (400 gate_owned_params), so the button is not offered as if it would work.
+  const gateOwned = row.gateOwnedParams ?? [];
+  const heldBack = row.status === 'draft' && gateOwned.length > 0;
   const items: KeyValueItem[] = [
     {
       key: 'gatekeeper',
@@ -742,14 +752,25 @@ function OperationDetailView({
       </header>
       <KeyValue items={items} />
       {row.status === 'draft' && row.governanceChange ? <RevisionDiff row={row} /> : null}
-      {canPublish && row.status === 'draft' ? (
+      {gateOwned.length > 0 && row.status !== 'deprecated' ? (
+        <GateOwnedParamsNotice
+          http={http}
+          gatekeeperId={row.gatekeeperId}
+          name={row.name}
+          status={row.status}
+          params={gateOwned}
+          gateDisplayName={nameOf(gatekeeperNames, row.gatekeeperId) ?? row.gatekeeperId}
+          onRewritten={onRewritten}
+        />
+      ) : null}
+      {canPublish && row.status === 'draft' && !heldBack ? (
         <PublishCredentialSlot review={credentialReview} busy={busy} />
       ) : null}
       <div className="row-wrap">
-        {canPublish &&
-        row.status === 'draft' &&
-        row.governanceChange &&
-        row.governanceChange.direction !== 'neutral' ? (
+        {heldBack ? null : canPublish &&
+          row.status === 'draft' &&
+          row.governanceChange &&
+          row.governanceChange.direction !== 'neutral' ? (
           <PublishGovernanceConfirm
             row={row}
             change={row.governanceChange}
@@ -997,6 +1018,7 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
 
   const detailContent = selected ? (
     <OperationDetailView
+      http={http}
       row={selected}
       usage={statsFor(selected)}
       gatekeeperNames={gatekeeperNames}
@@ -1011,6 +1033,7 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       onPublish={() => act(selected, 'publish_operation')}
       onDeprecate={() => act(selected, 'deprecate_operation')}
       onEditDescription={() => openDescriptionEditor(selected)}
+      onRewritten={() => void operations.reload()}
     />
   ) : (
     <SelectionPlaceholder

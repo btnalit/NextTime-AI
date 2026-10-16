@@ -6,7 +6,9 @@ import {
   type GatekeeperByEndpointEntry,
   diffOperationGovernanceFields,
   findGatekeepersByEndpoint,
+  gateOwnedParamsOfDefinition,
   getOperation,
+  importDraftDiffersFromAnnounced,
   importManifest,
   operationDefinitionDiffers,
   operationGovernanceChangeDirection,
@@ -455,6 +457,8 @@ export const previewGateInstanceEnableHandler: CapabilityHandler = async (
     blastRadius: Operation['blast_radius'];
     autoApprovable: boolean;
     description?: string;
+    gateOwnedParams?: { param: string; location: string }[];
+    pendingDraft?: { rewritable: boolean };
   }[] = [];
   const operationsAlreadyPresent: {
     name: string;
@@ -481,12 +485,25 @@ export const previewGateInstanceEnableHandler: CapabilityHandler = async (
     if (existingRecord === null || existingRecord.status === 'draft') {
       // Importing publishes the manifest in effect's definition.
       noteAdoption(operation.name, definitions?.adopted.get(operation.name) ?? null);
+      // Legacy J (console G4, legacy 219): the bulk publish holds such an entry back as a draft,
+      // and align can rewrite a held draft once the gate's manifest changes — both said up front.
+      const gateOwnedParams = gateOwnedParamsOfDefinition(operation);
       operationsToImport.push({
         name: operation.name,
         mode: operation.mode,
         blastRadius: operation.blast_radius,
         autoApprovable: operation.auto_approvable,
         ...(operation.description !== undefined ? { description: operation.description } : {}),
+        ...(gateOwnedParams.length > 0
+          ? { gateOwnedParams: gateOwnedParams.map(({ param, location }) => ({ param, location })) }
+          : {}),
+        ...(existingRecord !== null
+          ? {
+              pendingDraft: {
+                rewritable: importDraftDiffersFromAnnounced(existingRecord, operation),
+              },
+            }
+          : {}),
       });
       continue;
     }

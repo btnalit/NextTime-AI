@@ -294,4 +294,45 @@ describe('EnableGateConfirm', () => {
     expect(notice.textContent).toContain('一个门只能关联一个实例');
     expect(screen.queryByTestId('enable-gate-1-confirm')).toBeNull();
   });
+  it('console G4: an announced entry with a gate-owned param is not counted as published — it is named with its params before the click', async () => {
+    const http = scriptedHttp({
+      preview_gate_instance_enable: () =>
+        emptyPreview({
+          operationsToImport: [
+            { name: 'stock.get', mode: 'observe', blastRadius: 'low', autoApprovable: true },
+            {
+              name: 'stock.reserve',
+              mode: 'execute',
+              blastRadius: 'medium',
+              autoApprovable: false,
+              gateOwnedParams: [
+                { param: 'Authorization', location: 'header' },
+                { param: 'api-version', location: 'binding' },
+              ],
+            },
+          ],
+        }),
+    });
+    render(
+      <EnableGateConfirm
+        http={http}
+        gateId="gate-1"
+        gateDisplayName="Stock"
+        onEnabled={vi.fn()}
+        testId="enable-gate-1"
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('enable-gate-1'));
+    const confirm = await screen.findByTestId('enable-gate-1-confirm');
+    const toPublish = within(confirm).getByTestId('enable-preview-import');
+    expect(toPublish.textContent).toContain('将发布 1 个');
+    expect(toPublish.textContent).not.toContain('stock.reserve');
+    const held = within(confirm).getByTestId('enable-preview-held');
+    expect(held.textContent).toContain('1 个 Operation 不会发布');
+    expect(held.textContent).toContain(
+      'stock.reserve：Authorization（请求头）、api-version（调用地址已固定的查询参数）',
+    );
+    expect(held.textContent).toContain('与门公告对齐');
+  });
 });

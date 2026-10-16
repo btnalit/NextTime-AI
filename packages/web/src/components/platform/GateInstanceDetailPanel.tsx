@@ -1,5 +1,6 @@
 import type {
   AvailableGateInstanceWire,
+  ConnectorWire,
   GateHostTokenWire,
   GateInstanceWire,
   GateTrustWire,
@@ -23,6 +24,10 @@ import { StatusChip } from '../ui/StatusChip.js';
 import { GateCredentialEntry } from './GateCredentialEntry.js';
 import { PendingManifestReview } from './PendingManifestReview.js';
 import { PlatformError } from './PlatformError.js';
+import {
+  canBePlatformPreset,
+  hiddenInstanceExplanation,
+} from './integrations/connector-visibility.js';
 
 /** `GateInstanceTestResultWireSchema`'s shape (`packages/shared/src/wire/platform.ts`) — no
  *  `export type` alongside that schema, so it is redefined locally the way `lib/governance.ts`
@@ -42,6 +47,11 @@ export interface GateInstanceDetailPanelProps {
   readonly onChanged: (instance: GateInstanceWire) => void;
   /** `delete_gate_instance` succeeded — the caller drops the row and closes this drawer. */
   readonly onDeleted: (gateId: string) => void;
+  /** This instance's connector (`list_connectors`) — `undefined` while unknown, and then nothing
+   *  is said about workspace visibility. */
+  readonly connector?: ConnectorWire;
+  /** Opens the 接入包 tab, where the connector's mode is switched. */
+  readonly onShowConnectors?: () => void;
 }
 
 /**
@@ -80,8 +90,14 @@ export function GateInstanceDetailPanel({
   instance,
   onChanged,
   onDeleted,
+  connector,
+  onShowConnectors,
 }: GateInstanceDetailPanelProps) {
   const t = useT();
+  // UX acceptance of #538 (out of scope there): a workspace sees this instance only while its
+  // connector is platform preset — said here, before and after enabling it.
+  const hiddenMode =
+    connector !== undefined && connector.mode !== 'platform_preset' ? connector.mode : null;
   const [displayName, setDisplayName] = useState(instance.displayName);
   const [savingName, setSavingName] = useState(false);
   const [nameError, setNameError] = useState<unknown | null>(null);
@@ -332,6 +348,33 @@ export function GateInstanceDetailPanel({
 
           <div className="divider" />
 
+          {hiddenMode !== null && connector !== undefined ? (
+            <Notice tone="warn" testId="gate-instance-hidden-from-workspaces">
+              <span className="stack-s">
+                <span>
+                  {instance.status === 'enabled'
+                    ? t('工作区看不到这个实例。', 'No workspace can see this instance. ')
+                    : t(
+                        '启用之后工作区也看不到它。',
+                        'Even once enabled, no workspace will see it. ',
+                      )}
+                  {hiddenInstanceExplanation(connector, hiddenMode, t)}
+                </span>
+                {onShowConnectors && canBePlatformPreset(connector.name) ? (
+                  <span>
+                    <Button
+                      variant="secondary"
+                      size="s"
+                      onClick={onShowConnectors}
+                      data-testid="gate-instance-show-connectors"
+                    >
+                      {t('去接入包', 'Open connectors')}
+                    </Button>
+                  </span>
+                ) : null}
+              </span>
+            </Notice>
+          ) : null}
           <PlatformError
             error={statusError}
             title={t('无法修改状态', 'Could not change the status')}

@@ -1,3 +1,4 @@
+import type { PublishManifestResultWire } from '@nexttime/shared';
 import { useState } from 'react';
 import type { CapabilityCaller } from '../lib/clients.js';
 import {
@@ -9,6 +10,7 @@ import { type Translate, useT } from '../lib/i18n.js';
 import { transportKindLabel } from '../lib/labels.js';
 import { CompleteConnectionForm } from './CompleteConnectionForm.js';
 import { OnboardingWizardReview } from './OnboardingWizardReview.js';
+import { ManifestPublishResultNotice } from './connect/GateOwnedParams.js';
 import { Button } from './ui/Button.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { Notice } from './ui/Notice.js';
@@ -77,18 +79,18 @@ export function OnboardingWizard({ http, onCancel, onFinished }: OnboardingWizar
   const [connection, setConnection] = useState<CreateConnectionResult | null>(null);
   const [publishing, setPublishing] = useState(false);
   const [publishError, setPublishError] = useState<unknown | null>(null);
-  const [publishedCount, setPublishedCount] = useState<number | null>(null);
+  const [published, setPublished] = useState<PublishManifestResultWire | null>(null);
 
   async function publish(): Promise<void> {
     if (!connection) return;
     setPublishing(true);
     setPublishError(null);
     try {
-      const result = await http.call<{ publishedOperationNames?: readonly string[] }>(
-        'publish_manifest',
-        { gatekeeperId: connection.gatekeeperId },
+      setPublished(
+        await http.call<PublishManifestResultWire>('publish_manifest', {
+          gatekeeperId: connection.gatekeeperId,
+        }),
       );
-      setPublishedCount(result.publishedOperationNames?.length ?? 0);
       setStep('review');
     } catch (err) {
       setPublishError(err);
@@ -200,15 +202,16 @@ export function OnboardingWizard({ http, onCancel, onFinished }: OnboardingWizar
 
       {step === 'review' && connection ? (
         <div data-testid="wizard-step-review">
-          {publishedCount !== null ? (
-            <Notice tone="info">
-              {t(
-                `已发布 Operation 共 ${publishedCount} 个`,
-                publishedCount === 1
-                  ? 'Published 1 operation.'
-                  : `Published ${publishedCount} operations.`,
-              )}
-            </Notice>
+          {/* Console G4: what was published, and what was not — the gate's drafts held back for a
+           *  gate-owned param, and proposals that wait for a one-by-one publish. This wizard
+           *  connects a system for the workspace itself, so such a gate is connected again once
+           *  its manifest is fixed. */}
+          {published !== null ? (
+            <ManifestPublishResultNotice
+              result={published}
+              fix="reconnect"
+              testId="wizard-publish-result"
+            />
           ) : null}
           <OnboardingWizardReview
             http={http}

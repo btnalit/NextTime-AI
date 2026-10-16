@@ -829,7 +829,7 @@ const WRITE_GATED_AT_ENTRY: Readonly<Record<string, AllowedNames>> = {
   },
   'components/connect/RefreshOperationGovernanceConfirm.tsx': {
     names: ['refresh_operation_governance'],
-    why: "SystemAccessCard's canManage",
+    why: "SystemAccessCard's canManage; the catalog's GateOwnedParamsNotice mounts it only when can('refresh_operation_governance') !== false",
   },
   'components/account/IssueOwnHandleSection.tsx': {
     names: ['issue_handle'],
@@ -927,7 +927,7 @@ const READ_GATED_AT_ENTRY: Readonly<Record<string, AllowedNames>> = {
   },
   'components/connect/RefreshOperationGovernanceConfirm.tsx': {
     names: ['preview_gate_instance_enable'],
-    why: "SystemAccessCard's canManage",
+    why: "SystemAccessCard's canManage; the catalog's GateOwnedParamsNotice mounts it only after list_available_gate_instances (=== true) found the gate linked",
   },
   'components/readiness/useExecutionReadiness.ts': {
     names: ['execution_readiness'],

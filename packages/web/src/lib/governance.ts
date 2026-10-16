@@ -1,4 +1,5 @@
 import {
+  type GateOwnedParamWire,
   type GrantStatus,
   type OperationDefinitionChangeWire,
   type OperationGovernanceChangeWire,
@@ -227,6 +228,9 @@ export interface OperationCatalogRow {
   /** Legacy K (UX acceptance of #538): on the same drafts — what publishing it changes in the
    *  definition the gate runs (`OperationSummaryWire.definitionChange`). */
   readonly definitionChange?: OperationDefinitionChangeWire;
+  /** Console G4 (legacy 219): params this version declares that only the gate sets
+   *  (`OperationSummaryWire.gateOwnedParams`) — a draft carrying them cannot be published. */
+  readonly gateOwnedParams?: readonly GateOwnedParamWire[];
 }
 
 /** The stable identity of an Operation row — no dedicated id column exists (see
