@@ -264,7 +264,7 @@ describe('failureKindOf / failureReading (S11 GO1)', () => {
       { status: 'withdrawn', approvalDecisionId: null, policyDecision: 'require_approval' },
       zh,
     );
-    expect(waiting?.message).toMatch(/还在等审批，现在不用再决定了/);
+    expect(waiting?.message).toMatch(/撤回时它还在等审批，现在不用再决定了/);
     expect(waiting?.message).not.toMatch(/批准过/);
   });
 });

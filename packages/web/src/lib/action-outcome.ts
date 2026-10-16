@@ -267,7 +267,7 @@ export function failureReading(
         ? t('它已经批准过，但不会再执行。', 'It had been approved, and it will not run now.')
         : approved === false
           ? t(
-              '它还在等审批，现在不用再决定了。',
+              '撤回时它还在等审批，现在不用再决定了。',
               'It was waiting for a decision, and none is needed now.',
             )
           : '';
