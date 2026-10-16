@@ -20,6 +20,8 @@
 
 **你要的平台（权威表述）**：一个 Web 中台入口。每个用户登录后有一个属于自己的、隔离的 AI agent（pi）和一个对话框。说出需求，这个 agent 在图上找到能干活的 Worker（也是 pi），动态拉起它们，各自通过统一的门对接不同系统，把结果和决策带着来龙去脉写回图里，再决定下一步。所有 agent 共享同一份图，受同一套规则约束，每一步可追溯、可审批、可重建。
 
+**目标扩展（2026-10-16，目标架构，尚未实现）**：在上面这段之上加两件事。① **平台持有目标与推进**：多步、跨系统、需要等待的需求成为一个目标（GoalRun），由内核里不调模型的推进器按计划版本推进，用户不再发消息、内核重启、审批跨小时、外部响应丢失时都走到已知状态；是否达成只由平台执行的验收证据判定；Worker 按步骤动态组队，组合不增权；执行结果不对时修订计划（版本化）而不是靠对话记忆。② **平台管理员有自己的 Agent 改造平台**：它能探索、起草、试验并提交平台配置变更（接入新系统、Operation 分类、WorkerDefinition、Skill、本体），但永远只是提议者——变更计划按授权分段（平台段由平台管理员、每个工作区段由该工作区 owner）干跑、审阅、应用，段内单事务、可回滚，授权扩大项逐项确认；它不能扩大自己的权限，也没有写平台代码的能力（I-N1 继续有效，代码层是否开放是 W5 开工前的决策门）；部署仍由维护者执行。方案、不变量与分阶段验收见 `goal-orchestration-and-admin-agent-plan-2026-10-16.md`，排号见 `global-roadmap-2026-10-16.md`。
+
 **设计重心（不可偏移）**：(a) 基于 Graph 的 AI 中台，一份带类型、双时态、逐边溯源的共享图，既是记忆也是控制面；(b) 模块化，内核 / 宿主 / 门 / Worker 各自独立部署、独立失效；(c) 分权，读写分离、capability 授权、审批、审计、用户隔离，靠系统边界不靠 prompt；(d) 随时调用独立的 AI Worker，`invoke_worker` 是一等能力，Worker 在图上可被发现；(e) pi 是入口 agent 与 Worker 的运行底层。
 
 判断：
@@ -365,13 +367,13 @@ flowchart TB
 
 | 模式 | 运行处 | 注册的工具 | `context` 注入 | 会话回传 |
 |------|--------|-----------|---------------|---------|
-| `entry` | 每用户入口容器 | 图的 observe 组（含 `get_task`）、Handle 内各门的 **observe 类 Operation**（投影为 `<gate>.<op>` 工具）、`find_operations` / `find_workers` / `find_procedures`、`invoke_worker`、`request_connection`、`record_decision`、`propose_*`；与 §5.1.4 能力上限一致；S1 只注册图的 observe 组 | 该用户的待审批、进行中 Task 及其结果、相关 Fact、先例、可用的门与 Procedure 摘要 | 每轮回传 Turn 与决策 |
-| `worker` | Worker 容器 | 门的 Operation（observe 经 `observe_operation` 直接调、不看门范围，§11"门上的观察"；execute 经 `request_action`、限 Handle 内的门）、图的 observe 与 `assert_fact`、`propose_*` | Task 输入、相关 Fact、装载的 Skill | 全量 JSONL + 结果契约 |
+| `entry` | 每用户入口容器 | 图的 observe 组（含 `get_task`）、Handle 内各门的 **observe 类 Operation**（投影为 `<gate>.<op>` 工具）、`find_operations` / `find_workers` / `find_procedures`、`invoke_worker`、`request_connection`、`record_decision`、`propose_*`；与 §5.1.4 能力上限一致；S1 只注册图的 observe 组 | 该用户的待审批、进行中的 Task、图概览（按关系类型的事实计数）、最近记录的 Fact、先例（目前恒为空，`gateway/handlers.ts` 的 `precedents: []`）；不含门与 Procedure 摘要，入口 agent 用 `find_operations` / `find_procedures` 现查 | 每轮回传 Turn 与决策 |
+| `worker` | Worker 容器 | 门的 Operation（observe 经 `observe_operation` 直接调、不看门范围，§11"门上的观察"；execute 经 `request_action`、限 Handle 内的门）、`report_result`（事实与提议经结果契约的 `factsToAssert` / `proposedSkill` / `proposedOperations` 交回，不注册独立的 `assert_fact` / `propose_*` 工具） | Task 输入、相关 Fact、装载的 Skill | 全量 JSONL + 结果契约 |
 | `interactive` | 你本机的 pi | 同 `entry` 或按 Handle | 同 `entry`，但只读不消费（无 Turn，跨对话 peek） | 默认不回传 |
 
 **接口注入的机制**：扩展启动时向内核请求 Handle 内允许的 Operation 列表（含参数 schema 与说明），逐个注册为 pi 工具 `<gate>.<op>`；工具调用 → observe 类直接经内核转门；execute 类由 `tool_call` 拦截转 `request_action`。Worker 从头到尾只看到工具名与参数，看不到传输、地址、凭证。拦截是便利闸门，安全边界在 gateway。
 
-**注入位置与提示缓存**：`context` 注入的消息不持久化，每次调用重算。`entry` / `interactive` 的注入是实时状态，按快照放置：一次运行（`before_agent_start`）的首次调用把它放在最新一条消息（即用户这一轮的输入）之后，之后每次调用都在同一位置逐字节重复同一条，于是它和它之前的历史一起落在上一次调用写下的缓存前缀里；每次调用仍读一次内核，内容没变就什么都不加，运行中途某段变了（Task 结束、新的审批）只把变了的段作为"更新"放在最后（不缓存，缓存断点留在它之前的历史上，`before_provider_request` 把 pi-ai 放在最后一条消息上的断点前移）；下一次运行开始时内容变了才在新输入之后重新放置、旧快照撤掉（代价是旧快照之后的历史重写一次缓存，计在这一 Turn 的首次调用里），没变就留在原位。快照加更新始终等于当前状态；某次读内核失败（出错、超时、结果不成形）时快照留在原位，最后放上一次的更新并注明「本次未刷新、可能已过期」，不把旧状态当成当前状态。渲染时去掉 Fact 的观测簿记字段（`activityId`、`observationId`、`lastObservationId`、`lastObservedAt`）和空值，采集器重复观测同一 Fact 不再改变注入内容（这些字段 `explain` 仍可查）。`worker` 的注入每次运行只算一次，放在启动消息之前的固定位置，随前缀一起缓存。按前缀自动缓存的 provider（DeepSeek、OpenAI）不带断点，同样只有快照之后的部分是新的。实现见 `packages/platform-extension/src/modes/live-context.ts` 与 `prompt-cache.ts`，回归测试 `prompt-cache.sdk.test.ts` 用真实 pi-ai 构造的请求逐字节比对；预发真实模型阶段的 `STEP real-usage-entry turn_call=first|later|unattributed` 按"每个 Turn 首次 / 后续调用"拆分入口用量（按调用时刻归属 Turn，未归属的单独计数）。
+**注入位置与提示缓存**：`context` 注入的消息不持久化，每次调用重算。`entry` / `interactive` 的注入是实时状态，按快照放置：一次运行（`before_agent_start`）的首次调用把它放在最新一条消息（即用户这一轮的输入）之后，之后每次调用都在同一位置逐字节重复同一条，于是它和它之前的历史一起落在上一次调用写下的缓存前缀里；每次调用仍读一次内核，内容没变就什么都不加，运行中途某段变了（Task 结束、新的审批、新记录的 Fact）只把变了的部分作为"更新"放在最后——列表段只列新增或改变的条目和已不在的条目（有 id 的只写 id），图概览只列变了的计数，比整段还长时才整段重发（不缓存，缓存断点留在它之前的历史上，`before_provider_request` 把 pi-ai 放在最后一条消息上的断点前移）；下一次运行开始时内容变了才在新输入之后重新放置、旧快照撤掉（代价是旧快照之后的历史重写一次缓存，计在这一 Turn 的首次调用里），没变就留在原位。快照加更新始终等于当前状态；某次读内核失败（出错、超时、结果不成形）时快照留在原位，最后放上一次的更新并注明「本次未刷新、可能已过期」，不把旧状态当成当前状态。渲染时去掉 Fact 的观测簿记字段（`activityId`、`observationId`、`lastObservationId`、`lastObservedAt`）和空值，采集器重复观测同一 Fact 不再改变注入内容（这些字段 `explain` 仍可查）。`worker` 的注入每次运行只算一次，放在启动消息之前的固定位置，随前缀一起缓存。按前缀自动缓存的 provider（DeepSeek、OpenAI）不带断点，同样只有快照之后的部分是新的。实现见 `packages/platform-extension/src/modes/live-context.ts` 与 `prompt-cache.ts`，回归测试 `prompt-cache.sdk.test.ts` 用真实 pi-ai 构造的请求逐字节比对；预发真实模型阶段的 `STEP real-usage-entry turn_call=first|later|unattributed` 按"每个 Turn 首次 / 后续调用"拆分入口用量（按调用时刻归属 Turn，未归属的单独计数），`STEP real-usage-entry-call` 逐次列出每次调用。
 
 ### 7.5 Gatekeeper：通用传输种类 + 接口清单
 
@@ -638,6 +640,8 @@ sequenceDiagram
 | **直接观察** | 一次 observe 类 Operation 就能回答 | 入口 agent 自己调 `<gate>.<op>` | 「库存里 SKU X 还有多少」→ `inventory.stock.get` |
 | **委派任务** | 多步、需要探索、含写入、跨少数系统 | `invoke_worker(定义, 任务, gates=[…])`，Handle 衰减到所需的门 | 「查最大流量 IP 并找出进程」；「把这张发票提交报销」 |
 | **沉淀流程** | 跨系统且重复、有固定审批点 | 第一次作为委派任务跑通 → `propose_procedure` → 人发布 → P5 起由 Workflow 持久执行、Trigger 驱动 | 「每周一生成排班并通知」 |
+
+> 目标架构扩展（2026-10-16，尚未实现）：多步且需要等待或跨系统依赖的需求升为第四档**目标**——入口 agent 提目标与计划，请求者确认后由内核推进器按计划推进、平台执行验收，"顺序依赖逐轮推进"不再依赖用户继续发消息；"沉淀流程"一档的持久执行也由它承担（Procedure 作为计划模板）。见 `goal-orchestration-and-admin-agent-plan-2026-10-16.md` §4。
 
 入口 agent 的循环：理解需求 → 查图（Fact、先例、Procedure、可用手段）→ 单次观察够就直接答 → 否则选 Procedure 或 Worker 定义（没有专用就用通用 `ops-runner`）→ 衰减出只含所需门的 Handle → `invoke_worker` → 缺手段就 `request_connection` 或问用户 → 收到结果后把持久知识写图、记 Decision、成功且新颖时提议 Skill / Procedure。没有预画的流程图；顺序依赖逐轮推进，独立子任务并行拉起。
 
@@ -1019,7 +1023,7 @@ nexttime explain <turn_activity_id>
 | **S3 图有内容、看得见、找得到** | 本体 v1 + 采集器让图有真实服务与依赖；Explorer 浏览；Claude Code 经 MCP 接入 | 领域包 `ontology/ops-assets/`（含 Process 与身份键）；采集器；冲突检测；`ragflow` 采集扩展与本体 v2；Explorer 契约与挂载；MCP gateway；`interactive` 模式；运行手册 | 入口 agent 能回答「哪个服务依赖哪个」并 explain；Explorer 展示图与决策链；Claude Code 经 MCP 观察同一图 |
 | P3 | Semantica 抽取 Worker（Python） | `submit_observations`；语义级冲突 | 两个矛盾文档产生 Conflict |
 | P4 | Code Graph 联邦与影响分析 | | |
-| P5 | Trigger 与 Workflow 引擎（Procedure 的持久执行）；`db` / `browser` 门；ConnectedAccount 的 OAuth 流程；turn 挂起式审批评估；OIDC；各业务领域本体模块（库存 / 报销 / 排班）按需 | | |
+| P5 | Trigger 与 Workflow 引擎（Procedure 的持久执行；2026-10-16 起由目标级执行 GoalRun 吸收，见 `goal-orchestration-and-admin-agent-plan-2026-10-16.md`，Trigger 仍推迟）；`db` / `browser` 门；ConnectedAccount 的 OAuth 流程；turn 挂起式审批评估；OIDC；各业务领域本体模块（库存 / 报销 / 排班）按需 | | |
 | P6 | 加固：备份恢复演练常态化、AGE 或图库投影、ReBAC 评估、性能基线、每门熔断器 | | |
 
 S1 + S2 + S3 = 最小当前版本。
