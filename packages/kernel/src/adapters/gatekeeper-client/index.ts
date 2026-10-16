@@ -9,6 +9,8 @@ import {
   type SimulateResponse,
   gateAuthorizationHeader,
   isRedirectStatus,
+  networkFailureCode,
+  networkFailureDelivery,
   normalizeGateToken,
   redirectRefusalMessage,
 } from '@nexttime/gatekeeper-base';
@@ -149,6 +151,32 @@ export function gateRefusalOf(
   return status !== undefined && err.status === status ? { status, code: err.code } : undefined;
 }
 
+/**
+ * Legacy 287: a gate call that failed on the network, as the kernel repeats it — two codes, because
+ * the two mean opposite things for an `apply`:
+ *   - `gate_unreachable`: the connection could not be set up (`networkFailureDelivery` reads
+ *     `not_sent`: refused, no such host, connect timeout, TLS handshake). Nothing reached the gate,
+ *     so nothing ran.
+ *   - `gate_connection_lost`: anything else — a reset or closed socket after the request may have
+ *     been written, or an error the classifier does not recognise (the safe reading). The gate may
+ *     have the request; for an `apply`, whether it ran is unknown until the gate is asked again.
+ * Only Node's / undici's error code is repeated, never its message (which names the address).
+ */
+function networkFailure(path: string, err: unknown): GatekeeperClientError {
+  const code = networkFailureCode(err);
+  const detail = code !== undefined ? ` (${code})` : '';
+  if (networkFailureDelivery(err) === 'not_sent') {
+    return new GatekeeperClientError(
+      `gatekeeper client: ${path} not sent — could not connect to the gate${detail}; nothing reached it`,
+      { code: 'gate_unreachable', status: 0 },
+    );
+  }
+  return new GatekeeperClientError(
+    `gatekeeper client: ${path}: the connection to the gate failed after the request may have been sent${detail} — the gate may have received it`,
+    { code: 'gate_connection_lost', status: 0 },
+  );
+}
+
 export class GatekeeperTimeoutError extends Error {
   /** The gate path that timed out (`gate/apply`, `gate/observe`, …) — `action-executor.ts` treats a
    *  `gate/apply` timeout as "outcome unknown" rather than a failure (the gate may still finish). */
@@ -185,13 +213,23 @@ export interface GatekeeperCallInput {
    * Legacy K: the digest of the Operation definition the kernel approved
    * (`governance/gatekeepers`'s `operationRecordDigest`); the gate refuses the call when it runs
    * another one (409 `operation_definition_mismatch`). Required, so no call site can forget it.
-   * `undefined` only on the reaper's replay of a row that names no definition: the gate then
-   * answers from its idempotency store and refuses anything else.
    */
   readonly operationDigest: string | undefined;
 }
 
 export interface GatekeeperApplyInput extends GatekeeperCallInput {
+  readonly actionRequestId: string;
+  /** Legacy 287: an `apply` always names the definition it runs — the reaper's question about an
+   *  earlier call is `lookupApply`, never a digest-less `apply`. */
+  readonly operationDigest: string;
+}
+
+/** Legacy 287: `lookupApply`'s question — the `apply` the kernel never got an answer to, by the
+ *  fields its idempotency record is keyed on (`@nexttime/gatekeeper-base` `ApplyLookupRequest`). */
+export interface GatekeeperApplyLookupInput {
+  readonly operation: string;
+  readonly params?: unknown;
+  readonly onBehalfOf?: string;
   readonly actionRequestId: string;
 }
 
@@ -214,6 +252,10 @@ export interface GatekeeperClient {
   observe(target: GateTarget, input: GatekeeperCallInput): Promise<ObserveResponse>;
   simulate(target: GateTarget, input: GatekeeperCallInput): Promise<SimulateResponse>;
   apply(target: GateTarget, input: GatekeeperApplyInput): Promise<ApplyResponse>;
+  /** Legacy 287: `gate/apply_lookup` — what the gate holds for an earlier `apply`, read from its
+   *  idempotency store only; it never runs anything. 404 `apply_not_received`: no call for the key
+   *  ran there. A gate built before the route answers a 404 of another shape. */
+  lookupApply(target: GateTarget, input: GatekeeperApplyLookupInput): Promise<ApplyResponse>;
   revert(target: GateTarget, input: GatekeeperRevertInput): Promise<RevertResponse>;
   health(target: GateTarget): Promise<HealthResponse>;
   /** S2.13: stores a ConnectedAccount credential on the gate instance, keyed by `onBehalfOf` —
@@ -451,10 +493,7 @@ export class HttpGatekeeperClient implements GatekeeperClient {
         });
       } catch (err) {
         if ((err as { name?: string }).name === 'AbortError') throw timedOut();
-        throw new GatekeeperClientError(`gatekeeper client: ${path} request failed`, {
-          code: 'network_error',
-          status: 0,
-        });
+        throw networkFailure(path, err);
       }
       // Never followed (an owner-supplied endpoint's fetch is `withoutRedirects`); said so, with
       // where it pointed, instead of failing to parse the 3xx body (review of #532, item 4).
@@ -483,10 +522,13 @@ export class HttpGatekeeperClient implements GatekeeperClient {
           );
         }
         if (controller.signal.aborted) throw timedOut();
-        throw new GatekeeperClientError(`gatekeeper client: ${path} response failed`, {
-          code: 'network_error',
-          status: 0,
-        });
+        // Legacy 287: the gate answered — it had the request — and the connection failed while
+        // its answer was read. Never `gate_unreachable`, whatever the socket error says.
+        const code = networkFailureCode(err);
+        throw new GatekeeperClientError(
+          `gatekeeper client: ${path}: the gate answered (status ${response.status}) but the connection failed while its answer was read${code !== undefined ? ` (${code})` : ''} — the gate had the request`,
+          { code: 'gate_connection_lost', status: 0 },
+        );
       }
     } finally {
       clearTimeout(timeout);
@@ -570,6 +612,10 @@ export class HttpGatekeeperClient implements GatekeeperClient {
       this.applyTimeoutMs,
       input,
     )) as ApplyResponse;
+  }
+
+  async lookupApply(target: GateTarget, input: GatekeeperApplyLookupInput): Promise<ApplyResponse> {
+    return (await this.request(target, 'gate/apply_lookup', 'POST', input)) as ApplyResponse;
   }
 
   async revert(target: GateTarget, input: GatekeeperRevertInput): Promise<RevertResponse> {

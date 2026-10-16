@@ -1,6 +1,7 @@
 import type { Operation } from '@nexttime/shared';
 import type { CredentialResolver } from './credentials/index.js';
 import {
+  ApplyNotReceivedError,
   ApplyOutcomeUnknownError,
   ApplyRequiresIdempotencyKeyError,
   IdempotencyConflictError,
@@ -10,11 +11,12 @@ import {
   OperationRefusedError,
   RevertNotSupportedError,
   TransportInvokeError,
-  TransportTimeoutError,
+  TransportOutcomeUnknownError,
 } from './errors.js';
 import { hashIdempotencyParams } from './idempotency-store.js';
 import type { IdempotencyStore, StoredApplyFailure } from './idempotency-store.js';
 import type { Transport, TransportInvokeResult } from './kinds/types.js';
+import { networkFailureCode, networkFailureDelivery } from './network-failure.js';
 import { operationDefinitionDigest } from './operation-digest.js';
 import { assertParamsValid } from './params-validation.js';
 import type { ObservedFactCandidate } from './protocol.js';
@@ -71,6 +73,32 @@ export interface GatekeeperBaseCallContext {
 /** What a gate's own definition hashes to when it does not parse: equal to no digest a caller
  *  can send, so every call to it is refused. */
 const UNREADABLE_DEFINITION = 'unreadable';
+
+/**
+ * How a failed transport call is recorded under its key (R-51, legacy 287). Outcome-unknown when
+ * the transport says it cannot know (`TransportOutcomeUnknownError`: an exec timeout, an ssh session
+ * that dropped mid-command), or when the call failed on the network after the request may have
+ * reached the target (`networkFailureDelivery`: a reset, a closed socket, the transport's own
+ * timeout) — a plain failure reads as "did not happen" and invites a second run. A plain failure
+ * only when the target answered (a status, an exit code, an error result) or nothing was sent.
+ */
+function storedTransportFailure(name: string, err: unknown): StoredApplyFailure {
+  const message =
+    err instanceof TransportInvokeError
+      ? err.message
+      : `apply for "${name}" failed inside the gate`;
+  if (err instanceof TransportOutcomeUnknownError) return { message, outcomeUnknown: true };
+  if (networkFailureDelivery(err) !== 'maybe_delivered') return { message, outcomeUnknown: false };
+  const code = networkFailureCode(err);
+  const stopped =
+    code !== undefined
+      ? `its connection to the target failed (${code})`
+      : 'it stopped waiting for the answer';
+  return {
+    message: `${message} — ${stopped} after the request may have reached the target, so it may have run`,
+    outcomeUnknown: true,
+  };
+}
 
 /** The error a stored failed `apply` answers with on every later call for its key (R-51): the
  *  same transport failure (502), or "outcome unknown" (409) when a timeout killed the call. */
@@ -200,9 +228,9 @@ export class GatekeeperBase {
     if (!actionRequestId) throw new ApplyRequiresIdempotencyKeyError(name);
     const operation = this.getOperation(name);
     // Legacy K: a call for a definition this gate does not run is refused — but only once its key
-    // is known to hold no answer. A replay of an apply that already ran (the kernel reaper's) gets
-    // that run's answer even when the manifest changed since: refusing it would report as failed
-    // an action that took effect. So the mismatch is decided here and thrown after the
+    // is known to hold no answer. A repeat of an apply that already ran gets that run's answer even
+    // when the manifest changed since: refusing it would report as failed an action that took
+    // effect. (The kernel reaper asks `lookupApply` instead, legacy 287.) So the mismatch is decided here and thrown after the
     // reservation below; the mode and params checks, which read this gate's definition, are
     // skipped for it.
     const mismatch = this.definitionMismatch(operation, ctx);
@@ -271,14 +299,8 @@ export class GatekeeperBase {
       }
       // R-51: any other failure may have acted before it failed — record it under the key, so a
       // retry (the kernel reaper's replay) gets this same answer instead of 409 forever or a
-      // second run. A timeout killed the command mid-call: its outcome is unknown, not failed.
-      const failure: StoredApplyFailure = {
-        message:
-          err instanceof TransportInvokeError
-            ? err.message
-            : `apply for "${name}" failed inside the gate`,
-        outcomeUnknown: err instanceof TransportTimeoutError,
-      };
+      // second run. One that stopped without an answer is outcome-unknown, not failed.
+      const failure = storedTransportFailure(name, err);
       await store.fail(actionRequestId, failure);
       throw failure.outcomeUnknown ? storedFailureError(actionRequestId, failure) : err;
     }
@@ -288,6 +310,47 @@ export class GatekeeperBase {
       observedFacts,
     });
     return { data: result.data, observedFacts, replayed: false };
+  }
+
+  /**
+   * Legacy 287: what this gate holds for an `apply` — the kernel reaper's question about a call it
+   * never got an answer to. Reads the idempotency store only: never the transport, never a
+   * credential, and no definition or params check (the answer is whatever ran under the key, even
+   * if the manifest changed since). The stored result (`replayed: true`); the stored failure, or
+   * "outcome unknown", as the `apply` would answer now; 409 `idempotency_conflict` while the call
+   * still runs or when the key holds a different call; and `ApplyNotReceivedError` when no call
+   * for the key ran here — the key is closed in the same step, so an `apply` that only arrives now
+   * is refused, never run.
+   */
+  async lookupApply(
+    name: string,
+    params: unknown,
+    actionRequestId: string,
+    ctx: Pick<GatekeeperBaseCallContext, 'onBehalfOf'> = {},
+  ): Promise<ApplyResult> {
+    if (!actionRequestId) throw new ApplyRequiresIdempotencyKeyError(name);
+    const found = await this.options.idempotencyStore.lookup(actionRequestId, {
+      operation: name,
+      paramsHash: hashIdempotencyParams(params),
+      onBehalfOf: ctx.onBehalfOf,
+    });
+    switch (found.status) {
+      case 'replay':
+        return {
+          data: found.entry.data,
+          observedFacts: found.entry.observedFacts as ObservedFactCandidate[],
+          replayed: true,
+        };
+      case 'failed':
+        throw storedFailureError(actionRequestId, found.failure);
+      case 'unknown':
+        throw new ApplyOutcomeUnknownError(actionRequestId);
+      case 'pending':
+      case 'conflict':
+        throw new IdempotencyConflictError(actionRequestId);
+      case 'absent':
+        throw new ApplyNotReceivedError(actionRequestId);
+    }
   }
 
   async revert(

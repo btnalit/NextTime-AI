@@ -198,3 +198,77 @@ describe('JsonFileIdempotencyStore', () => {
     }
   });
 });
+
+/**
+ * Legacy 287 (review of #586, #493 P2): `lookup` answers what a key holds without reserving it,
+ * and closes a key that holds nothing — once the kernel was told "not received", an `apply` for
+ * the key that only arrives now is refused, never run.
+ */
+describe.each([
+  ['InMemoryIdempotencyStore', async () => new InMemoryIdempotencyStore()],
+  [
+    'JsonFileIdempotencyStore',
+    async () => new JsonFileIdempotencyStore(await mkdtemp(join(tmpdir(), 'gatekeeper-lookup-'))),
+  ],
+])('%s lookup (legacy 287)', (_name, makeStore) => {
+  it('a key that holds nothing is absent, and closed: a later reserve is refused', async () => {
+    const store = await makeStore();
+    expect(await store.lookup('k1', descriptorA)).toEqual({ status: 'absent' });
+    expect(await store.lookup('k1', descriptorA)).toEqual({ status: 'absent' });
+    const late = await store.reserve('k1', descriptorA);
+    expect(late).toMatchObject({ status: 'failed', failure: { outcomeUnknown: false } });
+    expect(late.status === 'failed' && late.failure.message).toMatch(
+      /arrived after the kernel was told this gate never received it/,
+    );
+    expect(await store.reserve('k1', descriptorB)).toEqual({ status: 'conflict' });
+  });
+
+  it('answers what ran, without reserving anything', async () => {
+    const store = await makeStore();
+    await store.reserve('done', descriptorA);
+    await store.complete('done', { data: { ok: 1 }, observedFacts: [] });
+    expect(await store.lookup('done', descriptorA)).toEqual({
+      status: 'replay',
+      entry: { ...descriptorA, data: { ok: 1 }, observedFacts: [] },
+    });
+
+    await store.reserve('failed', descriptorA);
+    await store.fail('failed', { message: 'refused', outcomeUnknown: false });
+    expect(await store.lookup('failed', descriptorA)).toEqual({
+      status: 'failed',
+      failure: { message: 'refused', outcomeUnknown: false },
+    });
+
+    await store.reserve('running', descriptorA);
+    expect(await store.lookup('running', descriptorA)).toEqual({ status: 'pending' });
+    // Still this call's: the lookup took nothing from it.
+    await store.complete('running', { data: 2, observedFacts: [] });
+    expect(await store.lookup('running', descriptorA)).toMatchObject({ status: 'replay' });
+
+    expect(await store.lookup('done', descriptorB)).toEqual({ status: 'conflict' });
+  });
+});
+
+describe('JsonFileIdempotencyStore lookup across a restart (legacy 287)', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'gatekeeper-lookup-restart-'));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('a closed key stays closed, and an orphaned reservation reads as unknown', async () => {
+    const store1 = new JsonFileIdempotencyStore(dir);
+    expect(await store1.lookup('closed', descriptorA)).toEqual({ status: 'absent' });
+    await store1.reserve('orphan', descriptorA);
+    // The process dies here.
+
+    const store2 = new JsonFileIdempotencyStore(dir);
+    expect(await store2.lookup('closed', descriptorA)).toEqual({ status: 'absent' });
+    expect(await store2.reserve('closed', descriptorA)).toMatchObject({ status: 'failed' });
+    expect(await store2.lookup('orphan', descriptorA)).toEqual({ status: 'unknown' });
+  });
+});

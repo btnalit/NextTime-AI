@@ -112,6 +112,9 @@ function createFakeGatekeeperClient() {
     apply: async () => {
       throw new Error('not implemented');
     },
+    lookupApply: async () => {
+      throw new Error('not implemented');
+    },
     revert: async () => {
       throw new Error('not implemented');
     },

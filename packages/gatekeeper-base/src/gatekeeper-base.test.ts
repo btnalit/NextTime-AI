@@ -1,8 +1,11 @@
 import { mkdtemp, rm } from 'node:fs/promises';
+import http from 'node:http';
+import net from 'node:net';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Operation } from '@nexttime/shared';
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   ApplyOutcomeUnknownError,
   CredentialResolutionError,
@@ -10,6 +13,7 @@ import {
   OperationDefinitionMismatchError,
   OperationRefusedError,
   TransportInvokeError,
+  TransportOutcomeUnknownError,
   TransportTimeoutError,
 } from './errors.js';
 import { GatekeeperBase } from './gatekeeper-base.js';
@@ -18,6 +22,7 @@ import {
   JsonFileIdempotencyStore,
   hashIdempotencyParams,
 } from './idempotency-store.js';
+import { HttpTransport } from './kinds/http.js';
 import type { Transport } from './kinds/types.js';
 import { operationDefinitionDigest } from './operation-digest.js';
 
@@ -525,5 +530,144 @@ describe('GatekeeperBase: the approved definition (legacy K)', () => {
       gate.apply('stock.adjust', {}, 'req-k9', { operationDigest: approvedDigest }),
     ).rejects.toThrow(/is not the one this gate runs \(unreadable\)/);
     expect(invoke).not.toHaveBeenCalled();
+  });
+});
+
+// Legacy 287: the gate→target hop. A transport failure is outcome-unknown when the request may have
+// reached the target, a plain failure only when the target answered or nothing was sent — decided
+// from the real errors `HttpTransport` gets from a target on loopback.
+describe('GatekeeperBase: a transport call that failed on the network (legacy 287)', () => {
+  const op = executeOp({ binding: { kind: 'http', method: 'POST', path: '/stock/adjust' } });
+  let received = 0;
+  /** Reads the whole request (the target has it), then drops the connection unanswered. */
+  const dropsAfterRequest = http.createServer((req) => {
+    req.resume();
+    req.on('end', () => {
+      received += 1;
+      req.socket.destroy();
+    });
+  });
+  /** Answers every request with its own failure. */
+  const answers500 = http.createServer((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      received += 1;
+      res.writeHead(500).end('{"error":"stock locked"}');
+    });
+  });
+  let dropsAfterRequestPort: number;
+  let answers500Port: number;
+  let refusedPort: number;
+
+  const listen = (server: net.Server) =>
+    new Promise<number>((resolve) => {
+      server.listen(0, '127.0.0.1', () => resolve((server.address() as AddressInfo).port));
+    });
+
+  beforeAll(async () => {
+    dropsAfterRequestPort = await listen(dropsAfterRequest);
+    answers500Port = await listen(answers500);
+    const closed = net.createServer();
+    refusedPort = await listen(closed);
+    await new Promise<void>((resolve) => closed.close(() => resolve()));
+  });
+
+  afterAll(async () => {
+    for (const server of [dropsAfterRequest, answers500]) {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  function gateCalling(port: number) {
+    const transport = new HttpTransport({ baseUrl: `http://127.0.0.1:${port}` });
+    const invoke = vi.spyOn(transport, 'invoke');
+    const gate = new GatekeeperBase({
+      manifest: [op],
+      transport,
+      credentialResolver: { resolve: async () => ({}) },
+      idempotencyStore: new InMemoryIdempotencyStore(),
+    });
+    return { gate, invoke };
+  }
+
+  it('a connection the target dropped after it had the request is outcome unknown, for every later call too', async () => {
+    received = 0;
+    const { gate, invoke } = gateCalling(dropsAfterRequestPort);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await expect(gate.apply('stock.adjust', { qty: 1 }, 'req-n1')).rejects.toSatisfy(
+        (err) =>
+          err instanceof ApplyOutcomeUnknownError &&
+          /http transport: POST \/stock\/adjust failed after the request may have reached the target \(UND_ERR_SOCKET\) — it may have run/.test(
+            (err as Error).message,
+          ),
+      );
+    }
+    // An apply without a definition gets the same answer, and so does the kernel reaper's
+    // lookup (`gate/apply_lookup`).
+    await expect(
+      gate.apply('stock.adjust', { qty: 1 }, 'req-n1', { operationDigest: null }),
+    ).rejects.toBeInstanceOf(ApplyOutcomeUnknownError);
+    await expect(gate.lookupApply('stock.adjust', { qty: 1 }, 'req-n1', {})).rejects.toBeInstanceOf(
+      ApplyOutcomeUnknownError,
+    );
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(received).toBe(1);
+  });
+
+  it('a refused connection sent nothing: a plain failure, never outcome unknown', async () => {
+    const { gate, invoke } = gateCalling(refusedPort);
+    const first = gate.apply('stock.adjust', { qty: 1 }, 'req-n2');
+    await expect(first).rejects.toBeInstanceOf(TransportInvokeError);
+    await expect(first).rejects.not.toBeInstanceOf(ApplyOutcomeUnknownError);
+    await expect(gate.apply('stock.adjust', { qty: 1 }, 'req-n2')).rejects.toSatisfy(
+      (err) => err instanceof TransportInvokeError && !(err instanceof ApplyOutcomeUnknownError),
+    );
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it("the target's own failure answer is a plain failure", async () => {
+    received = 0;
+    const { gate } = gateCalling(answers500Port);
+    const first = gate.apply('stock.adjust', { qty: 1 }, 'req-n3');
+    await expect(first).rejects.toThrow('http transport: POST /stock/adjust responded 500');
+    await expect(first).rejects.not.toBeInstanceOf(ApplyOutcomeUnknownError);
+    expect(received).toBe(1);
+  });
+
+  it('a transport that says it cannot know is outcome unknown', async () => {
+    const invoke = vi.fn(async () => {
+      throw new TransportOutcomeUnknownError('ssh transport: the ssh connection dropped');
+    });
+    const gate = new GatekeeperBase({
+      manifest: [op],
+      transport: fakeTransport(invoke),
+      credentialResolver: { resolve: async () => ({}) },
+      idempotencyStore: new InMemoryIdempotencyStore(),
+    });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await expect(gate.apply('stock.adjust', {}, 'req-n4')).rejects.toSatisfy(
+        (err) =>
+          err instanceof ApplyOutcomeUnknownError &&
+          /the ssh connection dropped/.test((err as Error).message),
+      );
+    }
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('a transport that stopped waiting is outcome unknown', async () => {
+    const invoke = vi.fn(async () => {
+      throw new TransportInvokeError('mcp transport: request failed', {
+        cause: new DOMException('This operation was aborted', 'AbortError'),
+      });
+    });
+    const gate = new GatekeeperBase({
+      manifest: [op],
+      transport: fakeTransport(invoke),
+      credentialResolver: { resolve: async () => ({}) },
+      idempotencyStore: new InMemoryIdempotencyStore(),
+    });
+    await expect(gate.apply('stock.adjust', {}, 'req-n5')).rejects.toThrow(
+      /it stopped waiting for the answer after the request may have reached the target/,
+    );
   });
 });

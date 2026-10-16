@@ -90,6 +90,9 @@ export const CODE_TITLES: Readonly<Record<string, string>> = {
   operation_definition_mismatch: 'The gate runs another definition',
   operation_definition_unavailable: 'No approved definition',
   gate_owned_params: 'Declares parameters the gate sets',
+  gate_unreachable: 'Not sent: the gate could not be reached',
+  apply_not_received: 'Did not run: the gate has no record of it running',
+  outcome_unknown: 'Outcome unknown',
   unknown: 'Error',
 };
 
@@ -137,6 +140,9 @@ export const CODE_TITLES_ZH: Readonly<Record<string, string>> = {
   operation_definition_mismatch: '门运行的定义和批准的不一样',
   operation_definition_unavailable: '没有批准过的定义',
   gate_owned_params: '声明了门自己设置的参数',
+  gate_unreachable: '没发出：连不上门',
+  apply_not_received: '没执行：门上没有执行记录',
+  outcome_unknown: '结果不明',
   unknown: '出错了',
 };
 
@@ -266,6 +272,20 @@ export const ERROR_NEXT_STEPS: Readonly<
     zh: '这个 Operation 声明了只能由门自己设置的参数（说明调用者或去向的请求头、查询参数里的凭据、cookie，或调用地址已经固定的查询参数），门每次都会拒绝，所以没有发布。要门的维护者从门的清单里去掉它们：平台提供的系统去掉后到「系统与授权」点「与门公告对齐」重写草稿再发布，工作区自己接入的系统要重新接入。',
     en: 'This Operation declares params only the gate sets (a header saying who calls or where the call goes, a credential in the query, a cookie, or a query parameter the call address fixes); the gate would refuse every call, so it was not published. The gate’s maintainer has to drop them from the gate’s manifest: for a platform-provided system, then align it under Systems & access to rewrite the draft and publish it; a system the workspace connected itself has to be connected again.',
   },
+  // Legacy 287: an ActionRequest's failure reason says whether the call left the platform. The
+  // first two ran nothing and may be requested again; the third may have run.
+  gate_unreachable: {
+    zh: '这次调用没有发出：连不上这个系统的门，门上什么都没有执行。门恢复后可以重新发起；反复出现时，请检查这个门实例的状态。',
+    en: 'This call was not sent: the system’s gate could not be reached, so nothing ran. Request it again once the gate is back; if it keeps happening, check this gate instance.',
+  },
+  apply_not_received: {
+    zh: '门上没有这次请求执行过的记录，所以什么都没跑。仍然需要的话，重新发起。',
+    en: 'The gate has no record of this request having run, so nothing ran. Request it again if it is still wanted.',
+  },
+  outcome_unknown: {
+    zh: '这个动作可能已经执行，也可能没有，平台无法确认。不要直接重试：先到目标系统核对它是否生效，再决定要不要重新发起。',
+    en: 'This action may or may not have run, and the platform cannot tell which. Do not just retry: check on the target system whether it took effect, then decide whether to request it again.',
+  },
   not_proposer: {
     zh: '只有它的提议人或工作区所有者能做这一步。',
     en: 'Only its proposer or a workspace owner can do this.',
@@ -363,31 +383,91 @@ export function errorToastText(err: unknown, t: Translate, overrides?: ErrorOver
 }
 
 /** Gate refusals a tool call's result can name (`request_action`'s failure reason, an observe
- *  call's error) — the codes the reason starts with or the result carries. */
+ *  call's error) — the codes the reason starts with or the result carries. Legacy 287 adds what a
+ *  failed `request_action` says about delivery: not sent (`gate_unreachable`,
+ *  `apply_not_received`) or outcome unknown (`outcome_unknown`). */
 const GATE_REASON_CODES = [
   'operation_definition_mismatch',
   'operation_definition_unavailable',
   'operation_refused',
   'credentials_in_observe_params',
+  'gate_unreachable',
+  'apply_not_received',
+  'outcome_unknown',
 ] as const;
 const GATE_REASON_PATTERN = new RegExp(`\\b(${GATE_REASON_CODES.join('|')})\\b`);
 
+/** How loud each reason's note is (UX acceptance of #586): not sent ran nothing and may be
+ *  requested again, so it is a plain note; outcome unknown may have run, and a blind retry can
+ *  do it twice, so it is the loudest; the gate's refusals ask for care. */
+const GATE_REASON_TONES: Readonly<Record<string, 'info' | 'warn' | 'danger'>> = {
+  gate_unreachable: 'info',
+  apply_not_received: 'info',
+  outcome_unknown: 'danger',
+};
+
 /** What to do about a gate refusal a tool call's result names (review of #538, G3) — the chat's
- *  tool row shows it above the raw result, which stays as the agent saw it. `null` for any other
- *  result. */
+ *  tool row shows it above the raw result, which stays as the agent saw it. `target` names what
+ *  the call did (`lib/action-outcome`'s `actionTargetLabel`, "container.restart（name: media）")
+ *  and `system` the system (gate) it went to, so an outcome-unknown note says what to check and
+ *  where — one Operation name can exist on two systems. `null` for any other result. */
 export function gateReasonNextStep(
   text: string,
   t: Translate,
-): { readonly code: string; readonly title: string; readonly message: string } | null {
+  target?: string,
+  system?: string,
+): {
+  readonly code: string;
+  readonly title: string;
+  readonly message: string;
+  readonly tone: 'info' | 'warn' | 'danger';
+} | null {
   const code = GATE_REASON_PATTERN.exec(text)?.[1];
   if (code === undefined) return null;
   const step = ownEntry(ERROR_NEXT_STEPS, code);
   if (!step) return null;
+  const message =
+    code === 'outcome_unknown' && (target !== undefined || system !== undefined)
+      ? outcomeUnknownStep(t, target, system)
+      : t(step.zh, step.en);
   return {
     code,
     title: t(ownEntry(CODE_TITLES_ZH, code) ?? code, ownEntry(CODE_TITLES, code) ?? code),
-    message: t(step.zh, step.en),
+    message: withPlaintextTlsHint(message, text, t),
+    tone: ownEntry(GATE_REASON_TONES, code) ?? 'warn',
   };
+}
+
+/** TLS record-layer errors a peer that does not speak TLS raises (which one depends on the OpenSSL
+ *  version). Since legacy 287 they read as "may have been delivered" — the same error can come
+ *  from plain text written into an established session — so the note adds the usual cause
+ *  (#501's review of #586). */
+const PLAINTEXT_TLS = /\bERR_SSL_(?:WRONG_VERSION_NUMBER|PACKET_LENGTH_TOO_LONG)\b/;
+
+/** `message`, followed by the usual cause when `text` (a failure reason) names a TLS record-layer
+ *  error. */
+export function withPlaintextTlsHint(
+  message: string,
+  text: string | null | undefined,
+  t: Translate,
+): string {
+  if (!text || !PLAINTEXT_TLS.test(text)) return message;
+  return `${message}${t('', ' ')}${t(
+    '常见原因：https 地址指到了只讲明文 HTTP 的端口。',
+    'A common cause: an https address pointing at a port that only speaks plain HTTP.',
+  )}`;
+}
+
+/** The outcome-unknown next step naming what to check (`target`) and where (`system`). */
+function outcomeUnknownStep(t: Translate, target?: string, system?: string): string {
+  const whereZh = system !== undefined ? `系统「${system}」` : '目标系统';
+  const whereEn = system !== undefined ? `the system "${system}"` : 'the target system';
+  const whatZh =
+    target !== undefined ? ` ${target}${target.endsWith('）') ? '' : ' '}是否已生效` : '它是否生效';
+  return t(
+    `这个动作可能已经执行，也可能没有，平台无法确认。不要直接重试：先到${whereZh}核对${whatZh}，再决定要不要重新发起。`,
+    `This action may or may not have run, and the platform cannot tell which. Do not just retry: check on ${whereEn} whether ${target ?? 'it'} took effect, then decide whether to request it again.`,
+  );
 }
 
 /** The error's short title in the viewer's language. Known codes use the curated tables; an

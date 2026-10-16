@@ -308,6 +308,32 @@
         "onBehalfOf": {
           "type": "string"
         },
+        "outcomeInDoubt": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "reason": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "since": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "since",
+                "reason"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "params": {
           "additionalProperties": {},
           "type": "object"
@@ -327,6 +353,33 @@
                 "deny"
               ],
               "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "queuedBehind": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "outcomeInDoubt": {
+                  "type": "boolean"
+                },
+                "status": {
+                  "enum": [
+                    "pending_approval",
+                    "executing"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "status",
+                "outcomeInDoubt"
+              ],
+              "type": "object"
             },
             {
               "type": "null"
@@ -5963,6 +6016,32 @@
         "onBehalfOf": {
           "type": "string"
         },
+        "outcomeInDoubt": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "reason": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "since": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "since",
+                "reason"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "params": {
           "additionalProperties": {},
           "type": "object"
@@ -5982,6 +6061,33 @@
                 "deny"
               ],
               "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "queuedBehind": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "outcomeInDoubt": {
+                  "type": "boolean"
+                },
+                "status": {
+                  "enum": [
+                    "pending_approval",
+                    "executing"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "status",
+                "outcomeInDoubt"
+              ],
+              "type": "object"
             },
             {
               "type": "null"
@@ -9600,6 +9706,32 @@
               "onBehalfOf": {
                 "type": "string"
               },
+              "outcomeInDoubt": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "reason": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "since": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "since",
+                      "reason"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "params": {
                 "additionalProperties": {},
                 "type": "object"
@@ -9619,6 +9751,33 @@
                       "deny"
                     ],
                     "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "queuedBehind": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "outcomeInDoubt": {
+                        "type": "boolean"
+                      },
+                      "status": {
+                        "enum": [
+                          "pending_approval",
+                          "executing"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "status",
+                      "outcomeInDoubt"
+                    ],
+                    "type": "object"
                   },
                   {
                     "type": "null"
@@ -12529,6 +12688,32 @@
               "onBehalfOf": {
                 "type": "string"
               },
+              "outcomeInDoubt": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "reason": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "since": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "since",
+                      "reason"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "params": {
                 "additionalProperties": {},
                 "type": "object"
@@ -12548,6 +12733,33 @@
                       "deny"
                     ],
                     "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "queuedBehind": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "outcomeInDoubt": {
+                        "type": "boolean"
+                      },
+                      "status": {
+                        "enum": [
+                          "pending_approval",
+                          "executing"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "status",
+                      "outcomeInDoubt"
+                    ],
+                    "type": "object"
                   },
                   {
                     "type": "null"
@@ -18811,6 +19023,32 @@
         "onBehalfOf": {
           "type": "string"
         },
+        "outcomeInDoubt": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "reason": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "since": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "since",
+                "reason"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "params": {
           "additionalProperties": {},
           "type": "object"
@@ -18830,6 +19068,33 @@
                 "deny"
               ],
               "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "queuedBehind": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "outcomeInDoubt": {
+                  "type": "boolean"
+                },
+                "status": {
+                  "enum": [
+                    "pending_approval",
+                    "executing"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "status",
+                "outcomeInDoubt"
+              ],
+              "type": "object"
             },
             {
               "type": "null"
@@ -19750,6 +20015,32 @@
             "onBehalfOf": {
               "type": "string"
             },
+            "outcomeInDoubt": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "reason": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "since": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "since",
+                    "reason"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "params": {
               "additionalProperties": {},
               "type": "object"
@@ -19769,6 +20060,33 @@
                     "deny"
                   ],
                   "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "queuedBehind": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "outcomeInDoubt": {
+                      "type": "boolean"
+                    },
+                    "status": {
+                      "enum": [
+                        "pending_approval",
+                        "executing"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "outcomeInDoubt"
+                  ],
+                  "type": "object"
                 },
                 {
                   "type": "null"
@@ -19849,6 +20167,45 @@
             "data": {},
             "id": {
               "type": "string"
+            },
+            "outcomeInDoubt": {
+              "additionalProperties": false,
+              "properties": {
+                "reason": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "since": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "since",
+                "reason"
+              ],
+              "type": "object"
+            },
+            "queuedBehind": {
+              "additionalProperties": false,
+              "properties": {
+                "outcomeInDoubt": {
+                  "type": "boolean"
+                },
+                "status": {
+                  "enum": [
+                    "pending_approval",
+                    "executing"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "status",
+                "outcomeInDoubt"
+              ],
+              "type": "object"
             },
             "reason": {
               "type": "string"

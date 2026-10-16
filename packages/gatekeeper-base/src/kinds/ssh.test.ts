@@ -1,6 +1,14 @@
+import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { Operation } from '@nexttime/shared';
-import { describe, expect, it, vi } from 'vitest';
-import { OperationRefusedError, TransportTimeoutError } from '../errors.js';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import {
+  OperationRefusedError,
+  TransportInvokeError,
+  TransportOutcomeUnknownError,
+  TransportTimeoutError,
+} from '../errors.js';
 import {
   SshCommandRejectedError,
   type SshPolicyRule,
@@ -10,6 +18,7 @@ import {
   classifyCommand,
   shellQuote,
   sshConnectionArgs,
+  sshFailureOutcomeUnknown,
 } from './ssh.js';
 
 describe('ssh hardening (review lane 5 P0-1/2/3)', () => {
@@ -126,6 +135,10 @@ describe('SshTransport', () => {
       ...BOUNDED_SESSION_ARGS,
       'u@h',
     ]);
+    // Legacy 287: the ssh client's own log goes to its own file, before the destination.
+    expect(
+      sshConnectionArgs({ host: 'h', user: 'u' }, { clientLogFile: '/tmp/x/client.log' }),
+    ).toEqual(['-n', ...BOUNDED_SESSION_ARGS, '-E', '/tmp/x/client.log', 'u@h']);
     expect(
       sshConnectionArgs({
         host: 'h',
@@ -195,10 +208,11 @@ describe('SshTransport', () => {
     expect(execImpl).not.toHaveBeenCalled();
   });
 
-  it('surfaces ssh stderr and exit code in the transport error (diagnosable failure reason)', async () => {
+  it("surfaces ssh's own message and exit code in the transport error (diagnosable failure reason)", async () => {
     const execImpl = vi.fn(async () => {
       throw Object.assign(new Error('Command failed: ssh'), {
-        stderr: 'Host key verification failed.\n',
+        stderr: '',
+        sshClientLog: 'Host key verification failed.\n',
         code: 255,
       });
     });
@@ -209,7 +223,7 @@ describe('SshTransport', () => {
     });
     await expect(
       transport.invoke(patternOperation, { command: 'show interfaces' }, {}),
-    ).rejects.toThrow(/Host key verification failed\. \(exit 255\)/);
+    ).rejects.toThrow(/ssh client: untrusted: Host key verification failed\. \(exit 255\)/);
   });
 
   it('never repeats the command line Node puts in a failed command’s message (identity file, target, rendered params)', async () => {
@@ -294,5 +308,250 @@ describe('SshTransport', () => {
       'show interface eth0',
       { signal: expect.any(AbortSignal) },
     );
+  });
+});
+
+// Legacy 287: ssh exits 255 both when the session never started (nothing ran) and when it dropped
+// mid-command (it may have run). Only ssh's own last word, in its own log (`-E`), tells them apart.
+describe('sshFailureOutcomeUnknown', () => {
+  const exit255 = (sshClientLog: string | undefined, stderr = '') =>
+    Object.assign(new Error('Command failed: ssh'), {
+      code: 255,
+      stderr,
+      ...(sshClientLog !== undefined ? { sshClientLog } : {}),
+    });
+
+  it.each([
+    ['ssh: Could not resolve hostname router-a: Name or service not known\n'],
+    ['ssh: connect to host 198.51.100.10 port 22: Connection refused\n'],
+    ['ssh: connect to host 198.51.100.10 port 22: Connection timed out\n'],
+    [
+      'Host key for [198.51.100.10]:22 has changed and you have requested strict checking.\nHost key verification failed.\n',
+    ],
+    [
+      "Warning: Permanently added '198.51.100.10' (ED25519) to the list of known hosts.\nadmin@198.51.100.10: Permission denied (publickey).\n",
+    ],
+    ['root@127.0.0.1: Permission denied (publickey,keyboard-interactive).\n'],
+    [
+      'kex_exchange_identification: read: Connection reset by peer\nConnection reset by 198.51.100.10 port 22\n',
+    ],
+    [
+      'Connection timed out during banner exchange\nConnection to 198.51.100.10 port 22 timed out\n',
+    ],
+    ['Unable to negotiate with 198.51.100.10 port 22: no matching host key type found.\n'],
+    ['Bad owner or permissions on /root/.ssh/config\n'],
+  ])('a session that never started ran nothing — client log %j', (log) => {
+    expect(sshFailureOutcomeUnknown(exit255(log))).toBe(false);
+  });
+
+  it.each([
+    // A session that dropped mid-command: ssh says so on stderr, not in its log.
+    ['', 'Connection to 198.51.100.10 closed by remote host.\n'],
+    ['client_loop: send disconnect: Broken pipe\n', ''],
+    ['Timeout, server 198.51.100.10 not responding.\n', ''],
+    // The same generic words end a session that dropped mid-command.
+    ['Connection closed by 198.51.100.10 port 22\n', ''],
+    ['Connection reset by 198.51.100.10 port 22\n', ''],
+    // The remote command's own output that looks like ssh's never-started words: it is on stderr,
+    // never in ssh's log (review of #586: a Rust program's `io::Error`, a nested ssh).
+    ['', 'Error: Permission denied (os error 13)\nConnection reset by 198.51.100.10 port 22\n'],
+    ['', 'root@x: Permission denied (publickey).\n'],
+    ['', 'ssh: connect to host inner port 22: Connection refused\n'],
+    // A remote command that exits 255 with no word from ssh.
+    ['', ''],
+  ])('a session that may have run its command — client log %j, stderr %j', (log, stderr) => {
+    expect(sshFailureOutcomeUnknown(exit255(log, stderr))).toBe(true);
+  });
+
+  it('a lookalike line only counts whole: a near miss in the log reads as may-have-run', () => {
+    expect(sshFailureOutcomeUnknown(exit255('Error: Permission denied (os error 13)\n'))).toBe(
+      true,
+    );
+  });
+
+  it('without a client log, ssh cannot be told from the remote command: outcome unknown', () => {
+    expect(
+      sshFailureOutcomeUnknown(
+        exit255(undefined, 'ssh: connect to host 198.51.100.10 port 22: Connection refused\n'),
+      ),
+    ).toBe(true);
+  });
+
+  it("an exit code other than 255 is the command's own answer; a missing ssh binary ran nothing", () => {
+    expect(
+      sshFailureOutcomeUnknown(Object.assign(new Error('x'), { code: 1, stderr: 'no such file' })),
+    ).toBe(false);
+    expect(
+      sshFailureOutcomeUnknown(
+        Object.assign(new Error('spawn ssh ENOENT'), { code: 'ENOENT', syscall: 'spawn ssh' }),
+      ),
+    ).toBe(false);
+  });
+
+  it.each([
+    [
+      'output past the limit (#501 P2-2)',
+      Object.assign(new Error('maxBuffer'), { code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' }),
+    ],
+    ['killed by a signal', Object.assign(new Error('killed'), { code: null, signal: 'SIGKILL' })],
+    ['an error nobody recognises', new Error('something else')],
+  ])('a command stopped before it answered is outcome unknown: %s', (_label, err) => {
+    expect(sshFailureOutcomeUnknown(err)).toBe(true);
+  });
+
+  const operation: Operation = {
+    name: 'run_command',
+    binding: { kind: 'ssh', command_pattern: '.*' },
+    params_schema: {},
+    mode: 'execute',
+    blast_radius: 'high',
+    reversibility: false,
+    auto_approvable: false,
+    await_decision: true,
+    reads: [],
+    writes: [],
+  };
+
+  function transportFailingWith(err: Error) {
+    return new SshTransport({
+      target: { host: '198.51.100.10', user: 'admin' },
+      policyTable: POLICY_TABLE,
+      execImpl: vi.fn(async () => {
+        throw err;
+      }),
+    });
+  }
+
+  it('the transport reports a session dropped mid-command as outcome unknown', async () => {
+    const failure = transportFailingWith(
+      exit255('', 'Connection to 198.51.100.10 closed by remote host.\n'),
+    ).invoke(operation, { command: 'ip address set ether1 address=192.0.2.9/24' }, {});
+    await expect(failure).rejects.toBeInstanceOf(TransportOutcomeUnknownError);
+    await expect(failure).rejects.toThrow(
+      /failed after the command may have started: .*closed by remote host\. \(exit 255\) — it may have partially or fully run/,
+    );
+  });
+
+  it('the transport reports a session that never started, or a command that answered, as a plain failure', async () => {
+    for (const err of [
+      exit255('ssh: connect to host 198.51.100.10 port 22: Connection refused\n'),
+      Object.assign(new Error('Command failed: ssh'), { code: 1, stderr: 'bad command\n' }),
+      Object.assign(new Error('spawn ssh ENOENT'), { code: 'ENOENT', syscall: 'spawn ssh' }),
+    ]) {
+      const failure = transportFailingWith(err).invoke(operation, { command: 'show x' }, {});
+      await expect(failure).rejects.toBeInstanceOf(TransportInvokeError);
+      await expect(failure).rejects.not.toBeInstanceOf(TransportOutcomeUnknownError);
+    }
+  });
+
+  it('the transport reports output past the limit as outcome unknown, naming why (#501 P2-2)', async () => {
+    const failure = transportFailingWith(
+      Object.assign(new Error('stdout maxBuffer length exceeded'), {
+        code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
+        stderr: '',
+      }),
+    ).invoke(operation, { command: 'cat /var/log/huge.log' }, {});
+    await expect(failure).rejects.toBeInstanceOf(TransportOutcomeUnknownError);
+    await expect(failure).rejects.toThrow(
+      /was stopped before it answered \(its output passed the limit and the gate stopped it\)/,
+    );
+  });
+});
+
+// Legacy 287: the default exec gives ssh a private log file (`-E`) and reads it back on failure.
+// A stand-in `ssh` on PATH plays the client: it writes its own words to the `-E` file and the
+// "remote" words to stderr, so the plumbing is exercised without an ssh server.
+describe('SshTransport default exec: the ssh client log (legacy 287)', () => {
+  let fakeBinDir: string;
+  let originalPath: string | undefined;
+  const operation: Operation = {
+    name: 'run_command',
+    binding: { kind: 'ssh', command_pattern: '.*' },
+    params_schema: {},
+    mode: 'execute',
+    blast_radius: 'high',
+    reversibility: false,
+    auto_approvable: false,
+    await_decision: true,
+    reads: [],
+    writes: [],
+  };
+
+  beforeAll(() => {
+    fakeBinDir = mkdtempSync(join(tmpdir(), 'nt-fake-ssh-'));
+    const script = join(fakeBinDir, 'ssh');
+    writeFileSync(
+      script,
+      `#!/usr/bin/env node
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+const log = args[args.indexOf('-E') + 1];
+const command = args[args.length - 1];
+fs.writeFileSync(${JSON.stringify(join(fakeBinDir, 'last-log-path'))}, log);
+if (command === 'auth-fails') {
+  fs.appendFileSync(log, 'admin@router-a: Permission denied (publickey).\\n');
+  process.exit(255);
+}
+if (command === 'drops') {
+  process.stdout.write('started\\n');
+  process.stderr.write('Connection to router-a closed by remote host.\\n');
+  process.exit(255);
+}
+if (command === 'lookalike') {
+  process.stderr.write('admin@router-a: Permission denied (publickey).\\n');
+  process.exit(255);
+}
+process.stdout.write('ok\\n');
+`,
+    );
+    chmodSync(script, 0o755);
+    originalPath = process.env.PATH;
+    process.env.PATH = `${fakeBinDir}:${originalPath ?? ''}`;
+  });
+
+  afterAll(() => {
+    process.env.PATH = originalPath;
+    rmSync(fakeBinDir, { recursive: true, force: true });
+  });
+
+  const transport = () =>
+    new SshTransport({ target: { host: 'router-a', user: 'admin' }, policyTable: POLICY_TABLE });
+
+  async function failureOf(command: string): Promise<Error> {
+    const thrown = await transport()
+      .invoke(operation, { command }, {})
+      .then(
+        () => undefined,
+        (err: unknown) => err,
+      );
+    if (!(thrown instanceof Error)) throw new Error('expected the call to fail');
+    return thrown;
+  }
+
+  it("reads a never-started session from ssh's own log: a plain failure", async () => {
+    const err = await failureOf('auth-fails');
+    expect(err).toBeInstanceOf(TransportInvokeError);
+    expect(err).not.toBeInstanceOf(TransportOutcomeUnknownError);
+    expect(err.message).toContain(
+      'ssh client: untrusted: admin@router-a: Permission denied (publickey). (exit 255)',
+    );
+  });
+
+  it('a session that dropped, or a remote command that only looks like ssh, is outcome unknown', async () => {
+    for (const command of ['drops', 'lookalike']) {
+      const err = await failureOf(command);
+      expect(err).toBeInstanceOf(TransportOutcomeUnknownError);
+    }
+  });
+
+  it('removes its log file either way', async () => {
+    await failureOf('auth-fails');
+    const failedLog = readFileSync(join(fakeBinDir, 'last-log-path'), 'utf8');
+    await transport().invoke(operation, { command: 'show version' }, {});
+    const okLog = readFileSync(join(fakeBinDir, 'last-log-path'), 'utf8');
+    for (const logPath of [failedLog, okLog]) {
+      const dir = logPath.slice(0, logPath.lastIndexOf('/'));
+      expect(readdirSync(tmpdir())).not.toContain(dir.slice(dir.lastIndexOf('/') + 1));
+    }
   });
 });

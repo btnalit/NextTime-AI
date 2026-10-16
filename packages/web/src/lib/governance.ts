@@ -10,6 +10,7 @@ import {
   getCapability,
 } from '@nexttime/shared';
 import type { ActionRequestRowLike } from './action-card.js';
+import type { ActionWaitingFields } from './action-outcome.js';
 import type { Translate } from './i18n.js';
 import { principalKindLabel, roleLabel } from './labels.js';
 
@@ -357,8 +358,11 @@ export interface ActionRequestDecisionFields {
   readonly approvalDecisionId?: string | null;
 }
 
-/** `ActionRequestRowLike` (lib/action-card.ts, unchanged) plus the decision fields above — what
- *  `ApprovalQueuePage` / `TaskDetail`'s linked approvals render. Named `Row` rather than `Wire`
- *  because the older `ActionRequestRowLike` is deliberately looser than the wire schema (every
- *  field beyond the S2.10 set optional, so an older row shape still renders). */
-export type ActionRequestRow = ActionRequestRowLike & ActionRequestDecisionFields;
+/** `ActionRequestRowLike` (lib/action-card.ts, unchanged) plus the decision fields above and why
+ *  an unfinished row waits (`lib/action-outcome`, legacy 287) — what `ApprovalQueuePage` /
+ *  `TaskDetail`'s linked approvals render. Named `Row` rather than `Wire` because the older
+ *  `ActionRequestRowLike` is deliberately looser than the wire schema (every field beyond the S2.10
+ *  set optional, so an older row shape still renders). */
+export type ActionRequestRow = ActionRequestRowLike &
+  ActionRequestDecisionFields &
+  ActionWaitingFields;

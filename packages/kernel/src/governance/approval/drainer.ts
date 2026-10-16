@@ -2,6 +2,7 @@ import type { PoolClient } from 'pg';
 import {
   markActionRequestExecuted,
   markActionRequestFailed,
+  recordActionRequestInDoubt,
   startActionRequestExecution,
 } from './execution.js';
 import { listExecutableQueue } from './reads.js';
@@ -24,11 +25,12 @@ export interface ActionExecutorResult {
   readonly reason?: string;
   /** `ok: false` only: the effect's outcome is *unknown*, not failed — the gate call timed out and
    *  the gate may still finish (real-model regression 2026-10-02: an ActionRequest marked `failed`
-   *  whose container restart completed anyway). The drainer then writes no terminal state, leaves
-   *  the row `executing` and stops (R-50: the row is now a barrier for the rest of this
-   *  Gatekeeper's queue); the stale-executing reaper (`application/gateway/action-executor.ts`'s
-   *  `reapStaleExecutingActionRequests`) replays `apply` later under the same `actionRequestId`,
-   *  and the gate's idempotency store answers with the stored result if the first call completed. */
+   *  whose container restart completed anyway), or the connection failed after the request may
+   *  have reached the gate (legacy 287). The drainer then writes no terminal state, leaves the row
+   *  `executing`, records why (`recordActionRequestInDoubt`, an audit row) and stops (R-50: the
+   *  row is now a barrier for the rest of this Gatekeeper's queue); the stale-executing reaper
+   *  (`application/gateway/action-executor.ts`'s `reapStaleExecutingActionRequests`) asks the gate
+   *  later under the same `actionRequestId`, and the gate's idempotency store answers. */
   readonly indeterminate?: boolean;
 }
 
@@ -149,6 +151,9 @@ export class ApprovalDrainer {
         // the row stays `executing` for the stale-executing reaper to resolve by idempotent
         // replay, and it is a barrier: nothing after it on this Gatekeeper runs first (R-50).
         if (!result.ok && result.indeterminate) {
+          await this.deps.withTransaction(workspaceId, principalId, (client) =>
+            recordActionRequestInDoubt(client, workspaceId, row.id, { reason: result.reason }),
+          );
           processed += 1;
           return stopped('executing');
         }

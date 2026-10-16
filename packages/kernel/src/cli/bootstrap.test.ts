@@ -415,6 +415,7 @@ function fakeGatekeeperClient(operations: readonly Operation[]): GatekeeperClien
     observe: notImplemented('observe'),
     simulate: notImplemented('simulate'),
     apply: notImplemented('apply'),
+    lookupApply: notImplemented('lookupApply'),
     revert: notImplemented('revert'),
     health: notImplemented('health'),
     storeConnectedAccount: notImplemented('storeConnectedAccount'),
