@@ -382,12 +382,14 @@ export function ApprovalDetail({
         row={row}
         check={{
           system: nameOf(gatekeeperNames, row.gatekeeperId),
+          // The Operation's own name, not its humanized label (UX acceptance of #601, P2-3):
+          // `stock.adjust` and `stock_adjust` read alike, and this is what a person checks for.
           action: scopeLabel
             ? t(
-                `${actionKindLabel(row.actionKindTag)}（${scopeLabel}）`,
-                `${actionKindLabel(row.actionKindTag)} (${scopeLabel})`,
+                `${actionKindTagText(row.actionKindTag)}（${scopeLabel}）`,
+                `${actionKindTagText(row.actionKindTag)} (${scopeLabel})`,
               )
-            : actionKindLabel(row.actionKindTag),
+            : actionKindTagText(row.actionKindTag),
         }}
         testId="approval-failure"
       />

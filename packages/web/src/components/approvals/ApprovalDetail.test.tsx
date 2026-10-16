@@ -114,9 +114,10 @@ describe('ApprovalDetail (S6-A B2 / B3 / C25)', () => {
     const unknown = screen.getByTestId('approval-failure');
     expect(unknown.className).toContain('notice-danger');
     expect(unknown.textContent).toContain('结果不明：动作可能已经执行');
-    // UX acceptance of #586 (P2-2 / P3-2): it names the system and the action to check.
+    // UX acceptance of #586 (P2-2 / P3-2): it names the system and the action to check — by the
+    // Operation's own name (UX acceptance of #601, P2-3).
     expect(unknown.textContent).toContain(
-      '不要直接重试：先到 docker-prod 上核对 docker container restart（web-1）是否生效',
+      '不要直接重试：先到 docker-prod 上核对 docker.container_restart（web-1）是否生效',
     );
     unmount();
     const second = renderDetail({ ...failed, failureKind: 'not_delivered' });

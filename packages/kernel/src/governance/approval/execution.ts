@@ -463,6 +463,11 @@ export interface WithdrawOptions extends ActionRequestActorOptions {
  * no check of its own: `startActionRequestExecution` reads only the row. The `ActionRequestUpdated`
  * event `recordTransition` enqueues lets the drain consumer re-drain this row's Gatekeeper at once
  * — a withdrawn `pending_approval` head no longer holds the queue (R-50) until the next tick.
+ *
+ * The caller (GO3) reads the row first, under its lock (`getActionRequestForUpdate`), and withdraws
+ * only a status in {@link WITHDRAWABLE_ACTION_REQUEST_STATUSES}: on a row that started executing
+ * this throws `IllegalTransition`, which would roll back the whole step transition with it (review
+ * of #601). Such a row is left to finish, or to the R-48 reaper, and its step waits to reconcile.
  */
 export async function withdrawActionRequest(
   client: PoolClient,

@@ -1,5 +1,10 @@
 import { createHash } from 'node:crypto';
-import { type ActionRequestFailureKind, IllegalTransition } from '@nexttime/shared';
+import {
+  type ActionRequestFailureKind,
+  IllegalTransition,
+  NOT_DELIVERED_FAILURE_CODES,
+  REFUSED_BEFORE_RUNNING_FAILURE_CODES,
+} from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { withWorkspace } from '../../adapters/db/pool.js';
@@ -215,31 +220,30 @@ async function approvedOperationDigest(
 }
 
 /**
- * S11 GO1: the gate client codes of a call that never reached a gate, so nothing ran there — a
- * failure of kind `not_delivered` (`ACTION_REQUEST_FAILURE_KIND_VALUES`). `gate_unreachable`: the
- * connection could not be set up (legacy 287). `gate_token_unavailable` /
- * `connection_secret_missing`: the kernel had nothing to authenticate with, so it sent nothing.
- * `gate_not_found`: a gate host answered that it serves no such gate instance. `apply_not_received`
- * (the reaper's lookup): the gate holds no record of the key, and has closed it. Every other code a
- * failed call ends with is a definitive answer — the platform refused to send it (`target_refused`)
- * or the gate refused or failed it in its own protocol — of kind `refused`. migrations/governance/
- * 0021 backfills existing rows with this same list (`action-executor.test.ts` holds them equal).
+ * S11 GO1 (review of #601, M1): which kind of failure a gate client code that ends a call names — a
+ * whitelist; a code not on it leaves the call in doubt (`applyErrorVerdict`).
+ *   - `not_delivered`: shared `NOT_DELIVERED_FAILURE_CODES` — `gate_unreachable` (the connection
+ *     could not be set up, legacy 287), `gate_token_unavailable` / `connection_secret_missing` (the
+ *     kernel had nothing to authenticate with, so it sent nothing), `gate_not_found` (a gate host
+ *     answered that it serves no such gate instance), `apply_not_received` (the gate holds no
+ *     record of the key, and has closed it).
+ *   - `refused`: shared `REFUSED_BEFORE_RUNNING_FAILURE_CODES` (the platform refused to send it, or
+ *     the gate refused it before its transport ran), and `transport_error`: the gate's own answer
+ *     that its transport failed without reaching the target or the target answered with a
+ *     failure — one that may have reached it is `apply_outcome_unknown` since legacy 287
+ *     (gatekeeper-base `storedTransportFailure`). migrations/governance/0021 backfills old rows from
+ *     the shared lists alone: a `transport_error` from a gate before that may have run.
  */
-export const NOT_DELIVERED_GATE_CODES: ReadonlySet<string> = new Set([
-  'gate_unreachable',
-  'gate_token_unavailable',
-  'connection_secret_missing',
-  'gate_not_found',
-  'apply_not_received',
+const DEFINITE_FAILURE_KIND_BY_CODE: ReadonlyMap<string, 'not_delivered' | 'refused'> = new Map([
+  ...NOT_DELIVERED_FAILURE_CODES.map((code) => [code, 'not_delivered'] as const),
+  ...REFUSED_BEFORE_RUNNING_FAILURE_CODES.map((code) => [code, 'refused'] as const),
+  ['transport_error', 'refused'],
 ]);
 
-function definitiveFailureKind(code: string): 'not_delivered' | 'refused' {
-  return NOT_DELIVERED_GATE_CODES.has(code) ? 'not_delivered' : 'refused';
-}
-
 export type ApplyErrorVerdict =
-  /** The gate gave no verdict on this key: the call timed out, or the answer is one of
-   *  `APPLY_IN_DOUBT_CODES` (legacy 287). */
+  /** The gate gave no verdict on this key: the call timed out, the answer is one of
+   *  `APPLY_IN_DOUBT_CODES` (legacy 287), or its code is not one this kernel knows (review of
+   *  #601, M1). */
   | { readonly kind: 'in_doubt'; readonly message: string }
   /** The gate says it cannot know (409 `apply_outcome_unknown`, R-51 / D-11): its exec timeout
    *  killed the call, its connection to the target broke mid-call, or a gate process stopped
@@ -271,14 +275,15 @@ export function applyErrorVerdict(err: unknown): ApplyErrorVerdict {
         message: `${message} — the gate had the call and answered, and its answer cannot be read; asking again returns the same answer`,
       };
     }
+    const failureKind = DEFINITE_FAILURE_KIND_BY_CODE.get(err.code);
+    // A code this kernel does not know (a newer or a foreign gate): the gate answered, but not in
+    // words that say whether anything ran — in doubt, like `unrecognized_gate_error`, so the
+    // reaper asks the gate about the key (review of #601, M1).
+    if (failureKind === undefined) return { kind: 'in_doubt', message: `${err.code}: ${message}` };
     // The gate's code leads the reason (`operation_definition_mismatch: …`), as on the MCP and WS
     // surfaces — the same reason-prefix convention as `outcome_unknown` / `operation_disabled`, so a
     // reader (the console's tool row, an agent) can tell which refusal it was (review of #538, G3).
-    return {
-      kind: 'failed',
-      failureKind: definitiveFailureKind(err.code),
-      message: `${err.code}: ${message}`,
-    };
+    return { kind: 'failed', failureKind, message: `${err.code}: ${message}` };
   }
   // Not the gate client's own error: thrown before the call left the kernel (the client wraps
   // every failure of a sent call in `GatekeeperClientError` / `GatekeeperTimeoutError`).

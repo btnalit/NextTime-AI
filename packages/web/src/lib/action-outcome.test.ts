@@ -28,9 +28,20 @@ describe('actionOutcomeOfToolResult (legacy 287)', () => {
       { id: 'a1', status: 'failed', reason: 'apply_not_received: the gate holds no record' },
       'not_run',
     ],
-    [{ id: 'a1', status: 'failed', reason: 'transport_error: … responded 500' }, 'failed'],
+    // A result from before `failureKind` reads as the 0021 backfill reads old rows (review of
+    // #601, M1): refused or not run only when its code says nothing ran, else outcome unknown.
+    [{ id: 'a1', status: 'failed', reason: 'operation_disabled: …' }, 'failed'],
+    [{ id: 'a1', status: 'failed', reason: 'gatekeeper "g1" is not registered' }, 'failed'],
     // A reason that only mentions a code later on is not that reason.
     [{ id: 'a1', status: 'failed', reason: 'operation_refused: not outcome_unknown:' }, 'failed'],
+    [{ id: 'a1', status: 'failed', reason: 'transport_error: … responded 500' }, 'outcome_unknown'],
+    [{ id: 'a1', status: 'failed', reason: 'network_error: … socket hang up' }, 'outcome_unknown'],
+    [
+      { id: 'a1', status: 'failed', reason: 'outcome unknown: … may still complete it' },
+      'outcome_unknown',
+    ],
+    [{ id: 'a1', status: 'failed', reason: 'gatekeeper client: timed out' }, 'outcome_unknown'],
+    [{ id: 'a1', status: 'failed' }, 'outcome_unknown'],
     [{ id: 'a1', status: 'executing' }, 'running'],
     [
       {
@@ -126,6 +137,26 @@ describe('actionOutcomeOfToolResult (legacy 287)', () => {
       reason: `gate_token_unavailable: ${'z'.repeat(400)}`,
     });
     expect(actionOutcomeOfToolResult(kinded.slice(0, 120))?.kind).toBe('not_run');
+    // Without a kind, the reason's start decides — refused only when its whole code is shown.
+    const refused = pretty({
+      id: 'a1',
+      status: 'failed',
+      reason: `gatekeeper "g1" is not registered`,
+    });
+    expect(actionOutcomeOfToolResult(`${refused.slice(0, -3)}…`)?.kind).toBe('outcome_unknown');
+    expect(
+      actionOutcomeOfToolResult(
+        pretty({
+          id: 'a1',
+          status: 'failed',
+          reason: `operation_disabled: ${'w'.repeat(400)}`,
+        }).slice(0, 120),
+      )?.kind,
+    ).toBe('failed');
+    const cutInCode = pretty({ id: 'a1', status: 'failed', reason: 'operation_disabled: …' });
+    expect(
+      actionOutcomeOfToolResult(cutInCode.slice(0, cutInCode.indexOf('_disabled')))?.kind,
+    ).toBe('outcome_unknown');
   });
 
   it('is null for a result that is not an action outcome', () => {

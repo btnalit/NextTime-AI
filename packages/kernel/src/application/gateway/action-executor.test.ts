@@ -1,13 +1,16 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  NOT_DELIVERED_FAILURE_CODES,
+  REFUSED_BEFORE_RUNNING_FAILURE_CODES,
+} from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
 import {
   GatekeeperClientError,
   GatekeeperTimeoutError,
 } from '../../adapters/gatekeeper-client/index.js';
 import {
-  NOT_DELIVERED_GATE_CODES,
   applyErrorVerdict,
   deriveDefaultIdempotencyKey,
   hashStableParams,
@@ -104,12 +107,7 @@ describe('failure kinds of a gate call (S11 GO1)', () => {
     new GatekeeperClientError(`gate answered ${code}`, { code, status });
 
   it('not_delivered: nothing reached the gate, or the gate closed a key it never ran', () => {
-    for (const code of [
-      'gate_unreachable',
-      'gate_token_unavailable',
-      'connection_secret_missing',
-      'gate_not_found',
-    ]) {
+    for (const code of NOT_DELIVERED_FAILURE_CODES) {
       expect(applyErrorVerdict(gateError(code, 503)), code).toMatchObject({
         kind: 'failed',
         failureKind: 'not_delivered',
@@ -129,15 +127,11 @@ describe('failure kinds of a gate call (S11 GO1)', () => {
   });
 
   it('refused: the platform or the gate answered no, or the target answered with a failure', () => {
-    for (const code of [
-      'transport_error',
-      'target_refused',
-      'operation_definition_mismatch',
-      'invalid_params',
-    ]) {
+    for (const code of [...REFUSED_BEFORE_RUNNING_FAILURE_CODES, 'transport_error']) {
       expect(applyErrorVerdict(gateError(code, 422)), code).toMatchObject({
         kind: 'failed',
         failureKind: 'refused',
+        message: expect.stringMatching(new RegExp(`^${code}: `)),
       });
     }
     expect(lookupErrorVerdict(gateError('transport_error', 502))).toMatchObject({
@@ -161,6 +155,15 @@ describe('failure kinds of a gate call (S11 GO1)', () => {
     });
   });
 
+  it('a code this kernel does not know is in doubt, never a refusal (review of #601, M1)', () => {
+    for (const code of ['network_error', 'some_future_code', 'not_found', 'conflict']) {
+      expect(applyErrorVerdict(gateError(code, 400)), code).toEqual({
+        kind: 'in_doubt',
+        message: `${code}: gate answered ${code}`,
+      });
+    }
+  });
+
   it('a call with no verdict yet is not a failure of any kind (legacy 287)', () => {
     expect(applyErrorVerdict(new GatekeeperTimeoutError('timed out', 'gate/apply')).kind).toBe(
       'in_doubt',
@@ -170,7 +173,7 @@ describe('failure kinds of a gate call (S11 GO1)', () => {
     expect(lookupErrorVerdict(new Error('socket hang up')).kind).toBe('indeterminate');
   });
 
-  it('migration governance/0021 backfills existing rows with the same not-delivered codes', () => {
+  it('migration governance/0021 backfills existing rows from the shared lists of codes', () => {
     const migration = readFileSync(
       path.resolve(
         path.dirname(fileURLToPath(import.meta.url)),
@@ -178,8 +181,14 @@ describe('failure kinds of a gate call (S11 GO1)', () => {
       ),
       'utf8',
     );
-    const match = /when f\.reason ~ '\^\(([a-z_|]+)\):' then 'not_delivered'/.exec(migration);
-    expect(match).not.toBeNull();
-    expect(new Set(match?.[1]?.split('|'))).toEqual(new Set(NOT_DELIVERED_GATE_CODES));
+    const codes = (kind: string) => {
+      const match = new RegExp(`when f\\.reason ~ '\\^\\(([a-z_|]+)\\):' then '${kind}'`).exec(
+        migration,
+      );
+      expect(match, kind).not.toBeNull();
+      return new Set(match?.[1]?.split('|'));
+    };
+    expect(codes('not_delivered')).toEqual(new Set(NOT_DELIVERED_FAILURE_CODES));
+    expect(codes('refused')).toEqual(new Set(REFUSED_BEFORE_RUNNING_FAILURE_CODES));
   });
 });

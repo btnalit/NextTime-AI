@@ -2,6 +2,7 @@ import {
   ACTION_REQUEST_FAILURE_KIND_VALUES,
   type ActionRequestFailureKind,
   clipCodePoints,
+  failureKindOfReason,
   visibleText,
 } from '@nexttime/shared';
 import { withPlaintextTlsHint } from './errors.js';
@@ -16,8 +17,9 @@ import type { Translate } from './i18n.js';
  * A `failed` request says which kind of failure it was in `failureKind` (S11 GO1, the row's own
  * column): `not_delivered` (it never reached the gate, nothing ran), `refused` (the platform or the
  * gate said no, or its target answered with an error), `outcome_unknown` (it may have run). A tool
- * result from before that field reads the same from its reason prefix: `outcome_unknown:`, or
- * `gate_unreachable:` / `apply_not_received:` for one that never ran. An `executing` row whose call
+ * result from before that field reads its kind from its reason the way the 0021 backfill reads old
+ * rows (shared `failureKindOfReason`): not delivered or refused only when the reason's code says
+ * nothing ran, outcome unknown otherwise (review of #601, M1). An `executing` row whose call
  * got no answer carries `outcomeInDoubt`; an approved row held back by an earlier one carries
  * `queuedBehind` (`ActionRequestWireSchema`).
  */
@@ -34,12 +36,12 @@ export interface ActionWaitingFields {
 export type ActionOutcomeKind =
   /** executed / verified. */
   | 'done'
-  /** failed, and nothing ran (`failureKind: 'not_delivered'`; before it, the reason
-   *  `gate_unreachable` / `apply_not_received`). Safe to request again. */
+  /** failed, and nothing ran (`failureKind: 'not_delivered'`). Safe to request again. */
   | 'not_run'
   /** failed with `outcome_unknown`: it may have run. Check the target before anything else. */
   | 'outcome_unknown'
-  /** failed for any other reason the gate or its target gave. */
+  /** failed: refused, by the platform or the gate, or its target answered with an error
+   *  (`failureKind: 'refused'`). */
   | 'failed'
   /** executing with no answer from the gate yet: the platform will ask the gate. */
   | 'in_doubt'
@@ -59,9 +61,6 @@ export interface ActionOutcome extends ActionWaitingFields {
   readonly id?: string;
 }
 
-/** The code a failure reason starts with (`outcome_unknown: …`) — the signal of a result from
- *  before `failureKind`. */
-const REASON_CODE = /^(outcome_unknown|gate_unreachable|apply_not_received):/;
 /** What each failure kind reads as (S11 GO1). */
 const FAILURE_KIND_OUTCOME: Readonly<Record<ActionRequestFailureKind, ActionOutcomeKind>> = {
   not_delivered: 'not_run',
@@ -72,8 +71,8 @@ const FAILURE_KIND_OUTCOME: Readonly<Record<ActionRequestFailureKind, ActionOutc
  *  (`JSON.stringify(result, null, 2)`, `id` then `status`): only its own top-level `status`, never
  *  one inside a simulated effect or the gate's data. */
 const PREVIEW_STATUS = /^\{\s*"id":\s*"([^"]*)",\s*"status":\s*"([a-z_]+)"/;
-const PREVIEW_REASON_CODE =
-  /\n {2}"reason":\s*"(outcome_unknown|gate_unreachable|apply_not_received):/;
+/** The start of the reason a cut-short preview still shows, as JSON string content. */
+const PREVIEW_REASON = /\n {2}"reason":\s*"((?:[^"\\]|\\.)*)/;
 const PREVIEW_IN_DOUBT = /\n {2}"outcomeInDoubt":\s*\{/;
 const PREVIEW_FAILURE_KIND = /\n {2}"failureKind":\s*"([a-z_]+)"/;
 
@@ -85,10 +84,22 @@ export function failureKindOf(value: unknown): ActionRequestFailureKind | undefi
     : undefined;
 }
 
+/** A preview's reason as text — `null` when there is none; what a cut-short preview still shows
+ *  (enough for its code: a reason cut before it ends reads as outcome unknown). */
+function previewReason(text: string): string | null {
+  const raw = PREVIEW_REASON.exec(text)?.[1];
+  if (raw === undefined) return null;
+  try {
+    return JSON.parse(`"${raw}"`) as string;
+  } catch {
+    return raw;
+  }
+}
+
 function kindOf(
   status: string,
   failureKind: ActionRequestFailureKind | undefined,
-  reasonCode: string | undefined,
+  reason: string | null,
   inDoubt: boolean,
 ): ActionOutcomeKind | null {
   switch (status) {
@@ -96,11 +107,7 @@ function kindOf(
     case 'verified':
       return 'done';
     case 'failed':
-      if (failureKind) return FAILURE_KIND_OUTCOME[failureKind];
-      if (reasonCode === 'outcome_unknown') return 'outcome_unknown';
-      if (reasonCode === 'gate_unreachable' || reasonCode === 'apply_not_received')
-        return 'not_run';
-      return 'failed';
+      return FAILURE_KIND_OUTCOME[failureKind ?? failureKindOfReason(reason)];
     case 'executing':
       return inDoubt ? 'in_doubt' : 'running';
     case 'approved':
@@ -156,12 +163,12 @@ export function actionOutcomeOfToolResult(text: string): ActionOutcome | null {
   const object = outcomeObjectOf(parsed);
   if (object) {
     const status = object.status as string;
-    const reason = typeof object.reason === 'string' ? object.reason : '';
+    const reason = typeof object.reason === 'string' ? object.reason : null;
     const waiting = object as ActionWaitingFields;
     const kind = kindOf(
       status,
       failureKindOf(object.failureKind),
-      REASON_CODE.exec(reason)?.[1],
+      reason,
       Boolean(waiting.outcomeInDoubt),
     );
     return kind
@@ -181,7 +188,7 @@ export function actionOutcomeOfToolResult(text: string): ActionOutcome | null {
   const kind = kindOf(
     status,
     failureKindOf(PREVIEW_FAILURE_KIND.exec(text)?.[1]),
-    PREVIEW_REASON_CODE.exec(text)?.[1],
+    previewReason(text),
     PREVIEW_IN_DOUBT.test(text),
   );
   return kind ? { kind, status, id } : null;

@@ -281,34 +281,134 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
       });
 
-      it('the backfill reads each existing row’s kind from its last recorded reason', async () => {
-        // The CASE migration 0021 runs over existing rows, evaluated on sample reasons.
+      describe('the backfill of existing rows (review of #601, M1)', () => {
+        // The CASE migration 0021 runs over existing rows, evaluated on sample rows: the last
+        // recorded reason, how many times the reaper asked again, and when the row started
+        // executing and failed.
         const migration = readFileSync(MIGRATION_0021, 'utf8');
         const caseExpression = /set failure_kind = (case[\s\S]*?\bend)\n/.exec(migration)?.[1];
-        expect(caseExpression).toBeDefined();
-        const samples: ReadonlyArray<readonly [string | null, string]> = [
-          [null, 'outcome_unknown'],
-          ['outcome_unknown: apply for "restart" … may have run', 'outcome_unknown'],
-          ['gate_unreachable: … not sent', 'not_delivered'],
-          ['gate_token_unavailable: …', 'not_delivered'],
-          ['connection_secret_missing: …', 'not_delivered'],
-          ['gate_not_found: …', 'not_delivered'],
-          ['apply_not_received: the gate holds no record', 'not_delivered'],
-          ['transport_error: target answered 500', 'refused'],
-          ['operation_disabled: the Operation was disabled', 'refused'],
-          ['boom', 'refused'],
-          // A code later in the text is not the reason's code.
-          ['operation_refused: not outcome_unknown:', 'refused'],
-        ];
-        const { rows } = await asOwner((client) =>
-          client.query<{ kind: string }>(
-            `select ${(caseExpression as string).replaceAll('f.reason', 'v.reason')} as kind
-               from unnest($1::text[]) with ordinality as v(reason, n)
-              order by v.n`,
-            [samples.map(([reason]) => reason)],
-          ),
-        );
-        expect(rows.map((row) => row.kind)).toEqual(samples.map(([, kind]) => kind));
+
+        interface Sample {
+          readonly reason: string | null;
+          readonly replayAttempts?: number;
+          /** Seconds from starting to execute to failing; `null`: no `executing_at` (before 0006). */
+          readonly failedAfterSeconds?: number | null;
+        }
+
+        async function backfill(samples: readonly Sample[]): Promise<string[]> {
+          expect(caseExpression).toBeDefined();
+          const { rows } = await asOwner((client) =>
+            client.query<{ kind: string }>(
+              `select ${(caseExpression as string)
+                .replaceAll('f.reason', 'v.reason')
+                .replaceAll('target.', 'v.')} as kind
+                 from (
+                   select s.reason, s.replay_attempts,
+                          case when s.after is null then null else now() - make_interval(secs => s.after) end
+                            as executing_at,
+                          now() as failed_at, s.n
+                     from unnest($1::text[], $2::int[], $3::float8[]) with ordinality
+                       as s(reason, replay_attempts, after, n)
+                 ) v
+                order by v.n`,
+              [
+                samples.map((sample) => sample.reason),
+                samples.map((sample) => sample.replayAttempts ?? 0),
+                samples.map((sample) =>
+                  sample.failedAfterSeconds === undefined ? 3 : sample.failedAfterSeconds,
+                ),
+              ],
+            ),
+          );
+          return rows.map((row) => row.kind);
+        }
+
+        it('reads a reason as not delivered or refused only when its code says nothing ran', async () => {
+          const samples: ReadonlyArray<readonly [string | null, string]> = [
+            [null, 'outcome_unknown'],
+            ['gate_unreachable: … not sent', 'not_delivered'],
+            ['gate_token_unavailable: …', 'not_delivered'],
+            ['connection_secret_missing: …', 'not_delivered'],
+            ['gate_not_found: …', 'not_delivered'],
+            ['apply_not_received: the gate holds no record', 'not_delivered'],
+            ['operation_disabled: the Operation was disabled', 'refused'],
+            ['operation_definition_unavailable: …', 'refused'],
+            ['operation_definition_mismatch: the gate runs another definition', 'refused'],
+            ['operation_refused: the gate refused it', 'refused'],
+            ['invalid_params: …', 'refused'],
+            ['credential_unavailable: …', 'refused'],
+            ['target_refused: …', 'refused'],
+            ['redirect_refused: …', 'refused'],
+            ['gatekeeper "6f1c9a52-3d2b-4c1e-9a8f-0b7d5e4c3a21" is not registered', 'refused'],
+          ];
+          expect(await backfill(samples.map(([reason]) => ({ reason })))).toEqual(
+            samples.map(([, kind]) => kind),
+          );
+        });
+
+        it('reads every reason an earlier release wrote for a call that may have run as outcome unknown', async () => {
+          const reasons = [
+            'outcome_unknown: apply for "restart" … may have run',
+            // v0.35.0: the reaper wrote an indeterminate replay as failed — a space, not `_`.
+            'outcome unknown: gatekeeper client: gate/apply timed out after 60000ms — the gate may still complete it',
+            // v0.20–v0.30: a timeout written as failed, with no code.
+            'gatekeeper client: gate/apply timed out after 15000ms',
+            // Before legacy 287: may have been delivered.
+            'network_error: gatekeeper client: gate/apply request failed: socket hang up',
+            'gatekeeper client: gate/apply request failed',
+            'response_too_large: gatekeeper client: gate/apply response exceeds 1048576 bytes',
+            'invalid_response: gatekeeper client: gate/apply answered 502 with no gate envelope',
+            'internal_error: internal error',
+            'unrecognized_gate_error: gatekeeper client: gate/apply answered 504',
+            // A gate before legacy 287 called a failure after sending a transport error too.
+            'transport_error: ssh: connection reset by peer',
+            'boom',
+            // A code later in the text is not the reason's code.
+            'the gate said operation_refused: no',
+          ];
+          expect(await backfill(reasons.map((reason) => ({ reason })))).toEqual(
+            reasons.map(() => 'outcome_unknown'),
+          );
+        });
+
+        it('trusts a refusal or a not-sent code only from the first call: a row the reaper ended may have run', async () => {
+          const refusal = 'operation_disabled: the Operation was disabled';
+          const notSent = 'gate_not_found: no such gate instance';
+          expect(
+            await backfill([
+              // Asked again by the reaper (since governance/0013).
+              { reason: refusal, replayAttempts: 1 },
+              { reason: notSent, replayAttempts: 2 },
+              // Up to v0.35 the reaper ran `execute` again without counting: failed long after it
+              // started executing.
+              { reason: refusal, failedAfterSeconds: 600 },
+              {
+                reason: 'gatekeeper "6f1c9a52-3d2b-4c1e-9a8f-0b7d5e4c3a21" is not registered',
+                failedAfterSeconds: 900,
+              },
+              { reason: notSent, failedAfterSeconds: 120 },
+              // The gate's own answer about the key, from the reaper's lookup: nothing ran.
+              {
+                reason: 'apply_not_received: the gate holds no record',
+                replayAttempts: 3,
+                failedAfterSeconds: 900,
+              },
+              // Started before governance/0006 brought the reaper, which never picks such a row.
+              { reason: refusal, failedAfterSeconds: null },
+              // The first call's own answer.
+              { reason: refusal, failedAfterSeconds: 119 },
+            ]),
+          ).toEqual([
+            'outcome_unknown',
+            'outcome_unknown',
+            'outcome_unknown',
+            'outcome_unknown',
+            'outcome_unknown',
+            'not_delivered',
+            'refused',
+            'refused',
+          ]);
+        });
       });
     });
   },

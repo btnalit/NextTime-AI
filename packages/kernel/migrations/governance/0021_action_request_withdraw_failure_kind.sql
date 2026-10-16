@@ -14,9 +14,10 @@
 --      on (it used to be only the reason prefix in the `action_request.fail` audit payload):
 --      `not_delivered` (the request never reached the gate — nothing ran), `refused` (the platform
 --      or the gate said no, or the gate's target answered with a failure), `outcome_unknown` (it may
---      have run). Set exactly when the row is `failed` or `compensated`. Existing rows take the kind
---      their recorded reason already said (the prefix the console reads today); a row with no
---      recorded reason is `outcome_unknown`, since nothing says it did not run.
+--      have run). Set exactly when the row is `failed` or `compensated`. Existing rows are read
+--      from their last recorded reason by a whitelist (below): only a reason whose code says for
+--      certain nothing ran is `not_delivered` or `refused`; every other row is `outcome_unknown`,
+--      since nothing says it did not run.
 --
 -- Reversibility (release.md §6): the previous release reads and writes `action_requests` with an
 -- explicit column list and never sees `failure_kind`; it never writes `withdrawn`. A `failed` row it
@@ -74,9 +75,26 @@ create or replace trigger action_requests_status_guard
   before insert or update on action_requests
   for each row execute function action_requests_status_guard();
 
--- Existing failed / compensated rows: the kind their last `action_request.fail` reason said. One
--- pass over the audit trail (no index on its resource), then idempotent: only rows without a kind
--- are touched.
+-- Existing failed / compensated rows: the kind their last `action_request.fail` reason says for
+-- certain, else `outcome_unknown` (review of #601, M1). The codes are packages/shared
+-- action-failure-reason.ts's two lists (`action-executor.test.ts` holds them equal); any other
+-- reason — no code, `outcome unknown: …` with a space (v0.35), a bare timeout, `network_error`,
+-- `response_too_large`, `invalid_response`, `internal_error`, `unrecognized_gate_error`, and
+-- `transport_error` from gates before legacy 287 — is a call that may have run.
+--
+-- A reason only speaks for the call that wrote it. The stale-`executing` reaper ends a row long
+-- after its first call, by asking again: up to v0.35 through `execute` itself, so with the platform's
+-- own pre-checks (`operation_disabled`, an unregistered gatekeeper) and the gate's refusals of a
+-- second call, whatever the first did. So a refusal or a not-sent code counts only for a row no
+-- replay touched (`replay_attempts`, since governance/0013) that failed within two minutes of
+-- starting to execute — longer than one call's timeout, shorter than any stale threshold (default
+-- ten minutes). A row with no `executing_at` started before governance/0006 brought the reaper,
+-- which never picks such a row, so its reason is its first call's. The exception is
+-- `apply_not_received`: the gate's own answer about the call's key — nothing ran under it, and it
+-- is closed.
+--
+-- One pass over the audit trail (no index on its resource), then idempotent: only rows without a
+-- kind are touched.
 with fail as materialized (
   select distinct on (workspace_id, resource_id)
          workspace_id, resource_id, payload ->> 'reason' as reason
@@ -88,9 +106,15 @@ with fail as materialized (
 update action_requests ar
    set failure_kind = case
      when f.reason is null then 'outcome_unknown'
-     when f.reason ~ '^outcome_unknown:' then 'outcome_unknown'
+     when f.reason ~ '^apply_not_received:' then 'not_delivered'
+     when target.replay_attempts > 0
+       or (target.executing_at is not null
+           and (target.failed_at is null
+                or target.failed_at >= target.executing_at + interval '2 minutes')) then 'outcome_unknown'
      when f.reason ~ '^(gate_unreachable|gate_token_unavailable|connection_secret_missing|gate_not_found|apply_not_received):' then 'not_delivered'
-     else 'refused'
+     when f.reason ~ '^(operation_disabled|operation_definition_unavailable|target_refused|redirect_refused|unauthorized|operation_not_found|invalid_params|invalid_operation_schema|operation_definition_mismatch|operation_refused|credential_unavailable):' then 'refused'
+     when f.reason ~ '^gatekeeper "[^"]*" is not registered$' then 'refused'
+     else 'outcome_unknown'
    end
   from action_requests target
   left join fail f
