@@ -20,6 +20,14 @@
 -- the administrator deciding on a cut-off needs to see what the connection points at. A landing
 -- never copies a credential (`create_connection` and `registerGatekeeper` refuse one, legacy 186).
 --
+-- One address, one self connection: the landing refuses a second Gatekeeper at an address this
+-- workspace already has (`endpoint_already_connected`, any spelling — `normalizeGateEndpoint`, under
+-- an advisory lock on that spelling), and `endpoint_key` carries the same spelling into a unique
+-- index, so the database holds it too for every row a workspace inserts (RLS requires the key).
+-- A backfilled row has no key: two Gatekeepers at one address from before leftover 73 can both
+-- exist, and refusing one here would leave it with no origin, out of the platform's sight; a new
+-- connection at such an address is still refused by the landing's own check (it reads `objects`).
+--
 -- Who may write what (RLS, forced like 0023): a workspace transaction inserts its own rows (the
 -- landing) and may delete an unsuspended one once the Gatekeeper has a `workspace_gate_links` row
 -- (the landing converts a self-connected Gatekeeper into a catalog link when its owner enables the
@@ -57,6 +65,9 @@ create table if not exists workspace_self_connections (
   connector text not null references connectors (name),
   target text not null,
   endpoint text not null,
+  -- `endpoint` in the kernel's one gate-address spelling (`normalizeGateEndpoint`); null only on a
+  -- backfilled row (below).
+  endpoint_key text,
   connected_by uuid,
   connected_at timestamptz not null default now(),
   suspended_at timestamptz,
@@ -72,6 +83,8 @@ create table if not exists workspace_self_connections (
 );
 create index if not exists workspace_self_connections_connector_idx
   on workspace_self_connections (connector);
+create unique index if not exists workspace_self_connections_endpoint_key_uniq
+  on workspace_self_connections (workspace_id, endpoint_key) where endpoint_key is not null;
 
 alter table workspace_self_connections enable row level security;
 alter table workspace_self_connections force row level security;
@@ -83,6 +96,7 @@ drop policy if exists workspace_self_connections_workspace_insert on workspace_s
 create policy workspace_self_connections_workspace_insert on workspace_self_connections
   for insert with check (
     workspace_id = app_workspace()
+    and endpoint_key is not null
     and suspended_at is null and suspended_by_user_id is null and suspension_reason is null
   );
 drop policy if exists workspace_self_connections_workspace_delete on workspace_self_connections;

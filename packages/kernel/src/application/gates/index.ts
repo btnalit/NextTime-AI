@@ -23,6 +23,7 @@ export {
   confirmPendingManifest,
   createHostedGateInstance,
   deleteHostedGateInstance,
+  displayedGateInstance,
   findGateLinkByGate,
   findGateLinkByGatekeeper,
   hostedDefinitionOf,

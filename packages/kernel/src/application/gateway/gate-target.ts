@@ -1,7 +1,7 @@
 import type { PoolClient } from 'pg';
 import type { GateTarget } from '../../adapters/gatekeeper-client/index.js';
 import { isConnectionSecretSalt } from '../../adapters/gatekeeper-client/index.js';
-import type { GatekeeperRecord } from '../../governance/gatekeepers/index.js';
+import { type GatekeeperRecord, gateEndpointHost } from '../../governance/gatekeepers/index.js';
 
 /**
  * application/gateway/gate-target: which credential the kernel presents to a registered
@@ -26,14 +26,11 @@ import type { GatekeeperRecord } from '../../governance/gatekeepers/index.js';
  * instance (`http://gate-host:8083/i/<id>`) covers every `/i/*` under that host.
  */
 
-/** `host` (hostname plus a non-default port) of a URL, lower-cased; `null` when the string is not
- *  a URL at all. */
+/** The host (name plus a non-default port) of a URL, in the one gate-address spelling
+ *  (`gateEndpointHost`: lower case, punycode, no trailing dot); `null` when the string is not a URL
+ *  with a host. */
 export function urlHost(value: string): string | null {
-  try {
-    return new URL(value).host.toLowerCase();
-  } catch {
-    return null;
-  }
+  return gateEndpointHost(value);
 }
 
 /** The `gate_id` of the platform-catalog instance whose endpoint host `endpoint` shares, or `null`.

@@ -1,4 +1,5 @@
 import type { PoolClient } from 'pg';
+import { normalizeGateEndpoint } from '../../governance/gatekeepers/index.js';
 
 /**
  * application/gates/self-connections: the origin record of a gate a workspace connected itself
@@ -69,6 +70,9 @@ function mapSelfConnection(row: SelfConnectionDbRow): SelfConnectionRow {
   };
 }
 
+/** The landing's origin row. `endpoint_key` is the address in `normalizeGateEndpoint`'s spelling:
+ *  core 0045's unique index on it holds "one address, one self connection" in the database too,
+ *  behind the landing's own check (#620 review P2-1). */
 export async function insertSelfConnection(
   client: PoolClient,
   input: {
@@ -82,16 +86,36 @@ export async function insertSelfConnection(
 ): Promise<void> {
   await client.query(
     `insert into workspace_self_connections
-       (workspace_id, gatekeeper_object_id, connector, target, endpoint, connected_by)
-     values ($1, $2, $3, $4, $5, $6)`,
+       (workspace_id, gatekeeper_object_id, connector, target, endpoint, endpoint_key, connected_by)
+     values ($1, $2, $3, $4, $5, $6, $7)`,
     [
       input.workspaceId,
       input.gatekeeperObjectId,
       input.connector,
       input.target,
       input.endpoint,
+      normalizeGateEndpoint(input.endpoint),
       input.connectedBy,
     ],
+  );
+}
+
+/** Serializes the platform's suspend / resume of one self connection with every workspace path
+ *  that checks it before acting on it — the catalog claim, the re-sync — so what such a check saw
+ *  still holds when its transaction commits (#620 review M1, and the same check-then-act class).
+ *  Shared for a check (many at once), exclusive for a change. A held check delays a suspension by
+ *  at most that transaction — a re-sync's, at most its one `describe_operations` call. */
+export async function lockSelfConnectionState(
+  client: PoolClient,
+  workspaceId: string,
+  gatekeeperObjectId: string,
+  mode: 'check' | 'change',
+): Promise<void> {
+  await client.query(
+    mode === 'change'
+      ? 'select pg_advisory_xact_lock(hashtext($1::text))'
+      : 'select pg_advisory_xact_lock_shared(hashtext($1::text))',
+    [`self_connection:${workspaceId}:${gatekeeperObjectId}`],
   );
 }
 
@@ -194,6 +218,7 @@ export async function setSelfConnectionSuspension(
   gatekeeperObjectId: string,
   suspend: { readonly byUserId: string; readonly reason: string | null } | null,
 ): Promise<{ readonly row: SelfConnectionRow; readonly changed: boolean } | null> {
+  await lockSelfConnectionState(client, workspaceId, gatekeeperObjectId, 'change');
   const updated = await client.query<SelfConnectionDbRow>(
     suspend
       ? `update workspace_self_connections s

@@ -73,6 +73,7 @@ import {
 } from '../gates/index.js';
 import { createPlatformAdmin } from '../identity/index.js';
 import type { UserRow } from '../identity/index.js';
+import { scrubRawSecrets } from '../platform/scrub-raw-secrets.js';
 import {
   InvokeWorkerAttenuationError,
   computeChildHandleScope,
@@ -2720,6 +2721,223 @@ describe.runIf(DATABASE_URL !== undefined)(
             disabled: true,
             reason: 'self_connection_suspended',
           });
+        });
+
+        /** Waits until some other session is blocked on an advisory lock. */
+        async function untilWaitingOnAdvisoryLock(what: string): Promise<void> {
+          const deadline = Date.now() + 15_000;
+          for (;;) {
+            const waiting = await pool.query<{ count: number }>(
+              `select count(*)::int as count from pg_stat_activity
+                where wait_event_type = 'Lock' and wait_event = 'advisory'`,
+            );
+            if ((waiting.rows[0]?.count ?? 0) > 0) return;
+            if (Date.now() > deadline) throw new Error(`${what} never waited on the lock`);
+            await new Promise((resolve) => setTimeout(resolve, 25));
+          }
+        }
+
+        it('a suspension and a check of it are serialized: a re-sync waits for a suspension in progress and is refused; a suspension waits for a check in progress (#620 review M1 class)', async () => {
+          const other = await createWorkspaceWithOwner(pool, {
+            name: 'p0b-suspend-vs-resync',
+            owner: { userId: admin.id, displayName: 'Resync Owner' },
+            ontologyDir: ONTOLOGY_DIR,
+          });
+          const ownerCaller = humanCallerFor(other.workspaceId, other.ownerPrincipalId, 'owner');
+          const gatekeeperId = await landSelf(
+            other.workspaceId,
+            other.ownerPrincipalId,
+            `http://127.0.0.1:9/resync-${randomUUID().slice(0, 8)}`,
+            selfSecrets.mint(other.workspaceId).salt,
+          );
+          const lockKey = `self_connection:${other.workspaceId}:${gatekeeperId}`;
+
+          // A suspension in progress (its lock held, its row written, not committed yet).
+          const suspender = await pool.connect();
+          let resync: Promise<unknown> | undefined;
+          try {
+            await suspender.query('begin');
+            await suspender.query('select pg_advisory_xact_lock(hashtext($1::text))', [lockKey]);
+            await suspender.query(
+              `update workspace_self_connections set suspended_at = now(), suspended_by_user_id = $3
+                where workspace_id = $1 and gatekeeper_object_id = $2`,
+              [other.workspaceId, gatekeeperId, admin.id],
+            );
+            resync = dispatchCapability({ pool }, ownerCaller, 'preview_gatekeeper_resync', {
+              gatekeeperId,
+            }).catch((err: unknown) => err);
+            await untilWaitingOnAdvisoryLock('the re-sync');
+            await suspender.query('commit');
+          } finally {
+            suspender.release();
+          }
+          // Refused on the committed suspension — never sent to the gate.
+          expect(await resync).toMatchObject({ code: 'self_connection_suspended', gatekeeperId });
+
+          // A check in progress (a workspace path holding the shared lock): resuming waits for it.
+          const checker = await pool.connect();
+          let resumed = false;
+          let resume: Promise<SelfConnectionWire> | undefined;
+          try {
+            await checker.query('begin');
+            await checker.query('select pg_advisory_xact_lock_shared(hashtext($1::text))', [
+              lockKey,
+            ]);
+            resume = callAsAdmin<SelfConnectionWire>('resume_self_connection', {
+              workspaceId: other.workspaceId,
+              gatekeeperId,
+            }).then((wire) => {
+              resumed = true;
+              return wire;
+            });
+            await untilWaitingOnAdvisoryLock('the resume');
+            expect(resumed).toBe(false);
+            await checker.query('commit');
+          } finally {
+            checker.release();
+          }
+          expect(await resume).toMatchObject({ gatekeeperId, suspendedAt: null });
+        });
+
+        it('a copy backfilled with a credential in its address never shows it, and scrub-raw-secrets rewrites it (#620 review M2)', async () => {
+          const other = await createWorkspaceWithOwner(pool, {
+            name: 'p0b-credential-copy',
+            owner: { userId: admin.id, displayName: 'Copy Owner' },
+            ontologyDir: ONTOLOGY_DIR,
+          });
+          const host = `legacy-${randomUUID().slice(0, 8)}.example.invalid`;
+          const gatekeeperId = await landSelf(
+            other.workspaceId,
+            other.ownerPrincipalId,
+            `https://${host}/gate`,
+            selfSecrets.mint(other.workspaceId).salt,
+          );
+          // As core 0045 copies an address written before legacy 186 on a database that never ran
+          // the scrub (the backfill cuts what its patterns find; this one is past them).
+          const fake = 'abcdefghijklmnopqrstuvwxyz0123';
+          await pool.query(
+            `update workspace_self_connections set target = $3, endpoint = $4
+              where workspace_id = $1 and gatekeeper_object_id = $2`,
+            [
+              other.workspaceId,
+              gatekeeperId,
+              `https://${host}/d?key=${fake}`,
+              `https://ops:${fake}@${host}/gate?api_key=${fake}`,
+            ],
+          );
+
+          const listed = await callAsAdmin<ListEnvelope<SelfConnectionWire>>(
+            'list_self_connections',
+            { workspaceId: other.workspaceId },
+          );
+          expect(listed.items).toEqual([
+            expect.objectContaining({
+              gatekeeperId,
+              target: `https://${host}/d`,
+              endpoint: `https://${host}/gate`,
+            }),
+          ]);
+          expect(JSON.stringify(listed)).not.toContain(fake);
+
+          await scrubRawSecrets(pool, { confirm: true });
+          const stored = await pool.query<{ target: string; endpoint: string }>(
+            `select target, endpoint from workspace_self_connections
+              where workspace_id = $1 and gatekeeper_object_id = $2`,
+            [other.workspaceId, gatekeeperId],
+          );
+          expect(stored.rows).toEqual([
+            { target: `https://${host}/d`, endpoint: `https://${host}/gate` },
+          ]);
+        });
+
+        it('every capability that shows a gate address shows it through the same redaction (#620 review M2)', async () => {
+          const other = await createWorkspaceWithOwner(pool, {
+            name: 'p0b-address-displays',
+            owner: { userId: admin.id, displayName: 'Display Owner' },
+            ontologyDir: ONTOLOGY_DIR,
+          });
+          const ownerCaller = humanCallerFor(other.workspaceId, other.ownerPrincipalId, 'owner');
+          const fake = 'abcdefghijklmnopqrstuvwxyz0123';
+          const host = `old-${randomUUID().slice(0, 8)}.example.invalid`;
+          const carrying = `https://ops:${fake}@${host}/api?token=${fake}`;
+          const shown = `https://${host}/api`;
+
+          // Rows written before legacy 186 / #549, as an upgraded database can still hold them.
+          const gatekeeperId = await landSelf(
+            other.workspaceId,
+            other.ownerPrincipalId,
+            `https://${host}/gate`,
+            selfSecrets.mint(other.workspaceId).salt,
+          );
+          await pool.query(
+            `update objects set properties = properties || jsonb_build_object('target', $3::text, 'endpoint', $3::text)
+              where workspace_id = $1 and id = $2`,
+            [other.workspaceId, gatekeeperId, carrying],
+          );
+          await pool.query(
+            `insert into connection_requests (workspace_id, kind, target, requested_by)
+             values ($1, 'http', $2, $3)`,
+            [other.workspaceId, carrying, other.ownerPrincipalId],
+          );
+          const gateId = `p0b-old-${randomUUID().slice(0, 8)}`;
+          expect(
+            (await announce({ ...announceBody, gateId, displayName: 'Old Gate' })).statusCode,
+          ).toBe(200);
+          await pool.query(
+            `update gate_instances
+                set target = $2, endpoint = $2, status = 'enabled', hosted = true,
+                    definition = jsonb_build_object('transportKind', 'http', 'target', $2::text,
+                      'credentialMode', 'shared', 'manifestSource', $2::text)
+              where gate_id = $1`,
+            [gateId, carrying],
+          );
+
+          try {
+            const gatekeeper = (await dispatchCapability({ pool }, ownerCaller, 'get_object', {
+              objectId: gatekeeperId,
+            })) as { properties: Record<string, unknown> };
+            expect(gatekeeper.properties).toMatchObject({ target: shown, endpoint: shown });
+
+            const requests = (await dispatchCapability(
+              { pool },
+              ownerCaller,
+              'list_connection_requests',
+              {},
+            )) as ListEnvelope<{ target: string }>;
+            expect(requests.items.map((request) => request.target)).toEqual([shown]);
+
+            const available = (await dispatchCapability(
+              { pool },
+              ownerCaller,
+              'list_available_gate_instances',
+              {},
+            )) as ListEnvelope<AvailableGateInstanceWire>;
+            expect(available.items.find((item) => item.gateId === gateId)?.target).toBe(shown);
+
+            const instance = await callAsAdmin<GateInstanceWire>('get_gate_instance', { gateId });
+            expect(instance).toMatchObject({
+              target: shown,
+              endpoint: shown,
+              definition: { target: shown, manifestSource: shown },
+            });
+            const listed = await callAsAdmin<ListEnvelope<GateInstanceWire>>('list_gate_instances');
+            expect(listed.items.find((item) => item.gateId === gateId)).toMatchObject({
+              target: shown,
+              endpoint: shown,
+            });
+
+            for (const result of [gatekeeper, requests, available, instance, listed]) {
+              expect(JSON.stringify(result)).not.toContain(fake);
+            }
+            // Shown redacted, kept as stored: the gate is called at the stored value.
+            const stored = await pool.query<{ endpoint: string }>(
+              'select endpoint from gate_instances where gate_id = $1',
+              [gateId],
+            );
+            expect(stored.rows[0]?.endpoint).toBe(carrying);
+          } finally {
+            await pool.query('delete from gate_instances where gate_id = $1', [gateId]);
+          }
         });
       });
     });

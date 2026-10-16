@@ -17,6 +17,7 @@ export {
   listGatekeepers,
   countGatekeepers,
   findGatekeepersByEndpoint,
+  gateEndpointHost,
   normalizeGateEndpoint,
   setGatekeeperConnectionSecretSalt,
   findGatekeeperIdByConnectionSecretSalt,

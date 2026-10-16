@@ -132,19 +132,19 @@ export function assertConnectionParamsCarryNoCredentials(
   }
 }
 
-/** `address` (a `target` or an `endpoint`) with what could carry a credential cut out, by
- *  `findConnectionParamsCredential`'s rule — unchanged when the rule finds nothing: a URL loses its
- *  user name and password, query and fragment; what is left still looking like a secret is masked
- *  (`scrubSecretValues`), and if the rule would still refuse it, the whole value is
- *  (`SECRET_FIELD_MASK`). The result always passes the rule, so a second pass changes nothing.
+/** `address` (a `target`, an `endpoint` or a `manifestSource`) with what could carry a credential
+ *  cut out, by `findConnectionParamsCredential`'s rule — unchanged when the rule finds nothing: a
+ *  URL loses its user name and password, query and fragment; what is left still looking like a
+ *  secret is masked (`scrubSecretValues`), and if the rule would still refuse it, the whole value
+ *  is (`SECRET_FIELD_MASK`). The result always passes the rule, so a second pass changes nothing.
  *
- *  For a copy of an address someone reads — `workspace_self_connections`' (core 0045), which the
- *  platform plane shows — never for one the kernel calls or the gate is registered at: that one is
- *  refused on write and counted by the scrub for its owner to fix. */
-export function redactConnectionAddress(field: 'target' | 'endpoint', address: string): string {
-  const carries = (value: string) =>
-    findConnectionParamsCredential(field === 'target' ? { target: value } : { endpoint: value }) !==
-    null;
+ *  The one rule for a gate address someone reads (#620 review M2): the copy in
+ *  `workspace_self_connections` (core 0045, rewritten by the scrub too) and every capability that
+ *  shows an address — a self connection, a gate instance, the workspace catalog, a connection
+ *  request, a Gatekeeper or ConnectedSystem Object. Never for the value the kernel calls or a gate
+ *  is registered at: that one is refused on write and counted by the scrub for its owner to fix. */
+export function redactConnectionAddress(field: ConnectionCredentialField, address: string): string {
+  const carries = (value: string) => findConnectionParamsCredential({ [field]: value }) !== null;
   if (!carries(address)) return address;
   let cut: string;
   try {

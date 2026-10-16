@@ -5,6 +5,7 @@ import {
   type ConnectionRequestRow,
   claimConnectionRequest,
   markConnectionRequestCompleted,
+  redactConnectionAddress,
 } from '../../governance/connections/index.js';
 import {
   type GateOwnedParamDraft,
@@ -22,6 +23,7 @@ import {
   deleteSelfConnection,
   findSelfConnection,
   insertSelfConnection,
+  lockSelfConnectionState,
 } from './self-connections.js';
 import { insertGateLink } from './store.js';
 
@@ -145,13 +147,16 @@ export async function assertEndpointFreeForSelfConnection(
   );
 }
 
-/** Refuses linking a self-connected Gatekeeper the platform suspended (module doc comment). The
- *  preview calls it too, so it never offers a link the enable would refuse. */
+/** Refuses linking (or re-syncing) a self-connected Gatekeeper the platform suspended (module doc
+ *  comment). The previews call it too, so they never offer what the write would refuse. */
 export async function assertSelfConnectionNotSuspended(
   client: PoolClient,
   workspaceId: string,
   gatekeeperId: string,
 ): Promise<void> {
+  // Held to the end of the caller's transaction: a suspension waits for it, so the answer below
+  // stays true while the caller acts on it (`lockSelfConnectionState`).
+  await lockSelfConnectionState(client, workspaceId, gatekeeperId, 'check');
   const selfConnection = await findSelfConnection(client, workspaceId, gatekeeperId);
   if (selfConnection?.suspendedAt) throw selfConnectionSuspended(gatekeeperId);
 }
@@ -262,10 +267,10 @@ export async function landGatekeeper(
       ? await findSelfConnection(client, workspaceId, gatekeeperId)
       : null;
     if (before) {
-      // `assertSelfConnectionNotSuspended` ran before the import; a suspension committed since
-      // leaves the row undeletable (RLS: only unsuspended rows), and linking anyway would put a
-      // catalog link next to a suspended connection (#620 review M1) — refuse, so the whole
-      // landing rolls back.
+      // `assertSelfConnectionNotSuspended` holds the suspension off until this commits; should
+      // the row still be undeletable (RLS: only unsuspended rows of a linked Gatekeeper) — a
+      // suspension that skipped that lock — linking anyway would put a catalog link next to a
+      // suspended connection (#620 review M1): refuse, so the whole landing rolls back.
       if (!(await deleteSelfConnection(client, workspaceId, gatekeeperId))) {
         throw selfConnectionSuspended(gatekeeperId);
       }
@@ -281,8 +286,8 @@ export async function landGatekeeper(
           connector: source.instance.connector,
           selfConnection: {
             connector: before.connector,
-            target: before.target,
-            endpoint: before.endpoint,
+            target: redactConnectionAddress('target', before.target),
+            endpoint: redactConnectionAddress('endpoint', before.endpoint),
             connectedBy: before.connectedBy,
             connectedAt: before.connectedAt.toISOString(),
           },

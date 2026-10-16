@@ -21,6 +21,7 @@ import { revokeEntrySessionHandles, revokeSession } from '../../governance/capab
 import {
   type ConnectionCredentialField,
   findConnectionParamsCredential,
+  redactConnectionAddress,
 } from '../../governance/connections/index.js';
 import {
   isOperationDisabled,
@@ -225,6 +226,33 @@ export function toWireGateInstance(
     pendingManifest: pendingManifestOf(row),
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
+  };
+}
+
+/** A gate instance as a capability shows it (#620 review M2): its addresses — `target`,
+ *  `endpoint`, and a gate-host definition's `target` / `manifestSource` — through
+ *  `redactConnectionAddress`, the rule every display of a gate address uses. One created or
+ *  announced before #549 can still carry a credential (`scrub-raw-secrets` counts it,
+ *  `gateInstanceAddresses`, for an administrator to recreate). `toWireGateInstance` stays the
+ *  stored value: the kernel's own reads (the test probe, the enable landing and its credential
+ *  refusal) need where the gate really is. No capability takes an address back from this view
+ *  (`update_gate_instance` patches name, status and trust only). */
+export function displayedGateInstance(instance: GateInstanceWire): GateInstanceWire {
+  return {
+    ...instance,
+    target: redactConnectionAddress('target', instance.target),
+    endpoint: redactConnectionAddress('endpoint', instance.endpoint),
+    definition:
+      instance.definition === null
+        ? null
+        : {
+            ...instance.definition,
+            target: redactConnectionAddress('target', instance.definition.target),
+            manifestSource:
+              instance.definition.manifestSource === null
+                ? null
+                : redactConnectionAddress('manifestSource', instance.definition.manifestSource),
+          },
   };
 }
 
@@ -1087,7 +1115,8 @@ export async function listAvailableGateInstances(
     connector: row.connector,
     displayName: row.display_name,
     transportKind: row.transport_kind,
-    target: row.target,
+    // Shown to every member of the workspace — as every gate address is (`displayedGateInstance`).
+    target: redactConnectionAddress('target', row.target),
     status: row.status,
     trust: row.trust,
     health: row.health,

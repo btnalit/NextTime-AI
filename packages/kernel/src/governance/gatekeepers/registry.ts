@@ -1,3 +1,4 @@
+import { domainToASCII } from 'node:url';
 import type { PrincipalKind } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
@@ -280,33 +281,69 @@ export interface GatekeeperByEndpointEntry {
   readonly createdAt: Date;
 }
 
-/** The association key's normalisation — and P0b's "one address, one Gatekeeper" (the landing's
- *  `endpoint_already_connected` and its lock): two spellings of one gate's address compare equal.
- *  Parsed as a URL: scheme and host lower-cased (a scheme `URL` does not know, such as `ssh`,
- *  included), a trailing dot dropped from the host, the scheme's default port dropped (`URL` knows
- *  http / https / ws / wss / ftp), every trailing `/` of the path trimmed (`http://x:80//` →
- *  `http://x`); the path's case, the query and the fragment are kept (an endpoint carries neither of
- *  the last two — `findConnectionParamsCredential`). Text that is not a URL with a host keeps the
- *  older rule: one trailing `/` trimmed. A different name or IP for the same host is a different
- *  address — what the platform's per-connection suspension means for it is in
- *  `suspend_self_connection`'s description (#620 review P2-1). Exported so
- *  `findGatekeepersByEndpoint`'s callers and its own SQL-free comparison agree on one rule. */
-export function normalizeGateEndpoint(endpoint: string): string {
+/** RFC 3986 §2.3's unreserved characters: a percent-encoding of one of them means the character. */
+const UNRESERVED = /^[A-Za-z0-9\-._~]$/;
+
+/** The parts of a gate address that say which gate process is called, each in one canonical
+ *  spelling — `null` for text that is not a URL with a host. `URL` already lower-cases the scheme,
+ *  converts an http(s) host to punycode and drops a special scheme's default port; on top of it:
+ *    - the host lower-cased and converted to punycode for a scheme `URL` does not know (`ssh`), and
+ *      a trailing dot dropped (`gate.example.` is the same DNS name);
+ *    - the user info, the query and the fragment dropped — the kernel never sends them (a call
+ *      resolves a path against the base, which drops the query; an address with user info is
+ *      refused on write, legacy 186), so they do not name another gate;
+ *    - in the path, a percent-encoded unreserved character decoded and every other
+ *      percent-encoding upper-cased (RFC 3986 §6.2.2), and every trailing `/` trimmed. */
+function canonicalGateAddress(
+  endpoint: string,
+): { readonly scheme: string; readonly host: string; readonly path: string } | null {
   let url: URL;
   try {
     url = new URL(endpoint);
   } catch {
-    return endpoint.endsWith('/') ? endpoint.slice(0, -1) : endpoint;
+    return null;
   }
-  if (url.host === '') return endpoint.endsWith('/') ? endpoint.slice(0, -1) : endpoint;
-  const userinfo =
-    url.username !== '' || url.password !== ''
-      ? `${url.username}${url.password !== '' ? `:${url.password}` : ''}@`
-      : '';
-  const host = url.hostname.toLowerCase().replace(/\.$/, '');
-  const port = url.port !== '' ? `:${url.port}` : '';
-  const path = url.pathname.replace(/\/+$/, '');
-  return `${url.protocol.toLowerCase()}//${userinfo}${host}${port}${path}${url.search}${url.hash}`;
+  if (url.hostname === '') return null;
+  let hostname = url.hostname.toLowerCase();
+  if (!hostname.startsWith('[')) {
+    let decoded = hostname;
+    try {
+      decoded = decodeURIComponent(hostname);
+    } catch {
+      // Keep the encoded text.
+    }
+    hostname = domainToASCII(decoded) || decoded;
+  }
+  hostname = hostname.replace(/\.$/, '');
+  const host = url.port !== '' ? `${hostname}:${url.port}` : hostname;
+  const path = url.pathname
+    .replace(/%[0-9A-Fa-f]{2}/g, (encoded) => {
+      const char = String.fromCharCode(Number.parseInt(encoded.slice(1), 16));
+      return UNRESERVED.test(char) ? char : encoded.toUpperCase();
+    })
+    .replace(/\/+$/, '');
+  return { scheme: url.protocol, host, path };
+}
+
+/** The one address comparison for gates (P0b, #620 review P2-1): two spellings of one gate's
+ *  address compare equal — `canonicalGateAddress` has the rule. Used for "one address, one
+ *  Gatekeeper" (the landing's `endpoint_already_connected`, its lock and core 0045's
+ *  `endpoint_key`), for leftover 73's association (`findGatekeepersByEndpoint`, which the catalog
+ *  claim of a self connection goes through), and — by host, `gateEndpointHost` — for the
+ *  platform-gate rule. Text that is not a URL with a host keeps the older rule: one trailing `/`
+ *  trimmed. A different name or IP for the same host is a different address: what the platform's
+ *  per-connection suspension means for it is in `suspend_self_connection`'s description. */
+export function normalizeGateEndpoint(endpoint: string): string {
+  const address = canonicalGateAddress(endpoint);
+  if (address === null) return endpoint.endsWith('/') ? endpoint.slice(0, -1) : endpoint;
+  return `${address.scheme}//${address.host}${address.path}`;
+}
+
+/** The host (name plus a non-default port) of a gate address in `normalizeGateEndpoint`'s
+ *  spelling, or `null` for text that is not a URL with a host — the platform-gate rule's key
+ *  (application/gateway/gate-target.ts `platformGateIdForEndpoint`). */
+export function gateEndpointHost(endpoint: string): string | null {
+  return canonicalGateAddress(endpoint)?.host ?? null;
 }
 
 /** Every `Gatekeeper` Object in `workspaceId` whose own `endpoint` property equals `endpoint`

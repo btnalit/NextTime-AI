@@ -6,13 +6,17 @@ import type {
 import { GATE_SHARED_CREDENTIAL_SLOT, mintGateHostToken } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { platformGateTarget } from '../../adapters/gatekeeper-client/index.js';
-import { assertConnectionParamsCarryNoCredentials } from '../../governance/connections/index.js';
+import {
+  assertConnectionParamsCarryNoCredentials,
+  redactConnectionAddress,
+} from '../../governance/connections/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import {
   type SelfConnectionListRow,
   confirmPendingManifest,
   createHostedGateInstance,
   deleteHostedGateInstance,
+  displayedGateInstance,
   getConnector,
   getGateInstance,
   listConnectors,
@@ -49,6 +53,8 @@ import { PlatformAdminError } from './platform-handlers.js';
  * credential (the platform never holds one).
  */
 
+/** The instance as stored — what the handlers below decide on. What they return goes through
+ *  `displayedGateInstance` (its addresses as every gate address is shown). */
 async function requireGateInstance(client: PoolClient, gateId: string): Promise<GateInstanceWire> {
   const instance = await getGateInstance(client, gateId);
   if (!instance) throw new PlatformAdminError('gate_not_found', 'gate instance not found');
@@ -136,13 +142,18 @@ export const listGateInstancesHandler: CapabilityHandler = async (client, _works
     status?: 'discovered' | 'enabled' | 'disabled' | 'lost';
     connector?: string;
   };
-  return { result: { items: await listGateInstances(client, input) } };
+  const items = await listGateInstances(client, input);
+  return { result: { items: items.map(displayedGateInstance) } };
 };
 
 export const getGateInstanceHandler: CapabilityHandler = async (client, _workspaceId, params) => {
   const input = params as { gateId: string };
   const instance = await requireGateInstance(client, input.gateId);
-  return { result: instance, resourceType: 'gate_instance', resourceId: instance.gateId };
+  return {
+    result: displayedGateInstance(instance),
+    resourceType: 'gate_instance',
+    resourceId: instance.gateId,
+  };
 };
 
 export const updateGateInstanceHandler: CapabilityHandler = async (
@@ -165,7 +176,11 @@ export const updateGateInstanceHandler: CapabilityHandler = async (
   }
   await updateGateInstance(client, input.gateId, input);
   const after = await requireGateInstance(client, input.gateId);
-  return { result: after, resourceType: 'gate_instance', resourceId: after.gateId };
+  return {
+    result: displayedGateInstance(after),
+    resourceType: 'gate_instance',
+    resourceId: after.gateId,
+  };
 };
 
 /**
@@ -216,7 +231,11 @@ export const confirmGateManifestHandler: CapabilityHandler = async (
     },
   });
   const after = await requireGateInstance(client, input.gateId);
-  return { result: after, resourceType: 'gate_instance', resourceId: after.gateId };
+  return {
+    result: displayedGateInstance(after),
+    resourceType: 'gate_instance',
+    resourceId: after.gateId,
+  };
 };
 
 export const testGateInstanceHandler: CapabilityHandler = async (client, _workspaceId, params) => {
@@ -303,6 +322,9 @@ async function catalogGateIdsByHost(client: PoolClient): Promise<ReadonlyMap<str
   return byHost;
 }
 
+/** One row as the platform sees it. The address goes through `redactConnectionAddress` here too,
+ *  so a copy core 0045 backfilled before `scrub-raw-secrets` ran never shows a credential (#620
+ *  review M2) — the scrub then fixes the row itself. */
 function toSelfConnectionWire(
   row: SelfConnectionListRow,
   catalogByHost: ReadonlyMap<string, string>,
@@ -313,8 +335,8 @@ function toSelfConnectionWire(
     workspaceName: row.workspaceName,
     gatekeeperId: row.gatekeeperObjectId,
     connector: row.connector,
-    target: row.target,
-    endpoint: row.endpoint,
+    target: redactConnectionAddress('target', row.target),
+    endpoint: redactConnectionAddress('endpoint', row.endpoint),
     connectedByName: row.connectedByName,
     connectedAt: row.connectedAt.toISOString(),
     suspendedAt: row.suspendedAt ? row.suspendedAt.toISOString() : null,
@@ -459,7 +481,11 @@ export const createGateInstanceHandler: CapabilityHandler = async (
     );
   }
   const instance = await requireGateInstance(client, input.gateId);
-  return { result: instance, resourceType: 'gate_instance', resourceId: instance.gateId };
+  return {
+    result: displayedGateInstance(instance),
+    resourceType: 'gate_instance',
+    resourceId: instance.gateId,
+  };
 };
 
 export const deleteGateInstanceHandler: CapabilityHandler = async (

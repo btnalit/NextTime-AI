@@ -1,7 +1,10 @@
 import type { GateInstanceWire, Operation } from '@nexttime/shared';
 import { mintGateHostToken } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
-import { assertConnectionParamsCarryNoCredentials } from '../../governance/connections/index.js';
+import {
+  assertConnectionParamsCarryNoCredentials,
+  redactConnectionAddress,
+} from '../../governance/connections/index.js';
 import {
   type GatekeeperByEndpointEntry,
   GatekeeperNotFoundError,
@@ -190,7 +193,11 @@ function computeGateLinkDrift(
     drift.name = { existing: existing.name, instance: instance.displayName };
   }
   if (existing.target !== instance.target) {
-    drift.target = { existing: existing.target, instance: instance.target };
+    // Compared as stored, shown as every gate address is (`redactConnectionAddress`, #620 review M2).
+    drift.target = {
+      existing: redactConnectionAddress('target', existing.target),
+      instance: redactConnectionAddress('target', instance.target),
+    };
   }
   if (existing.transportKind !== instance.transportKind) {
     drift.transportKind = { existing: existing.transportKind, instance: instance.transportKind };

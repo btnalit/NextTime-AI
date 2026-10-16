@@ -12,6 +12,7 @@ import {
   OperationNameInvalidError,
   getGatekeeper,
   getOperation,
+  normalizeGateEndpoint,
   registerGatekeeper,
 } from '../../governance/gatekeepers/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
@@ -171,6 +172,66 @@ describe.runIf(DATABASE_URL !== undefined)('application/gates/landing (integrati
         gatekeeperId: first.gatekeeperId,
       });
     }
+  });
+
+  it('self: a suspended connection cannot be connected again under another spelling — case, default port, user info (#620 review P2-1)', async () => {
+    const at = endpoint();
+    const first = await landSelf(at);
+    await asSuperuser((client) =>
+      client.query(
+        `update workspace_self_connections set suspended_at = now(), suspended_by_user_id = $3
+          where workspace_id = $1 and gatekeeper_object_id = $2`,
+        [workspaceId, first.gatekeeperId, randomUUID()],
+      ),
+    );
+    const host = new URL(at).host;
+    for (const spelling of [
+      `HTTPS://${host.toUpperCase()}`,
+      `https://${host}:443/`,
+      `https://ops@${host}`,
+    ]) {
+      const thrown = await landSelf(spelling).catch((err: unknown) => err);
+      expect(thrown, spelling).toBeInstanceOf(GatekeeperLandingRefusedError);
+      expect(thrown, spelling).toMatchObject({
+        code: 'endpoint_already_connected',
+        gatekeeperId: first.gatekeeperId,
+      });
+    }
+  });
+
+  it('self: the database holds one address per workspace too — a second row with the same endpoint_key, or one without a key, is refused', async () => {
+    const at = endpoint();
+    const first = await landSelf(at);
+    const other = await inTx(async (client) => {
+      const activity = await startActivity(client, workspaceId, {
+        kind: 'test.endpoint_key',
+        principalId: ownerId,
+      });
+      const registered = await registerGatekeeper(client, workspaceId, {
+        name: 'endpoint-key-system',
+        transportKind: 'http',
+        target: 'endpoint-key-system',
+        endpoint: endpoint(),
+        activityId: activity.id,
+        registeredBy: { id: ownerId, kind: 'human' },
+      });
+      await endActivity(client, workspaceId, activity.id, 'completed');
+      return registered.gatekeeperId;
+    });
+    const insert = (key: string | null) =>
+      inTx((client) =>
+        client.query(
+          `insert into workspace_self_connections
+             (workspace_id, gatekeeper_object_id, connector, target, endpoint, endpoint_key, connected_by)
+           values ($1, $2, 'http', 'endpoint-key-system', $3, $4, $5)`,
+          [workspaceId, other, `${at.toUpperCase()}/`, key, ownerId],
+        ),
+      );
+    expect(first.gatekeeperId).not.toBe(other);
+    await expect(insert(normalizeGateEndpoint(`${at}/`))).rejects.toThrow(
+      /workspace_self_connections_endpoint_key_uniq/,
+    );
+    await expect(insert(null)).rejects.toThrow(/row-level security/);
   });
 
   it('self: one bad manifest entry rejects the whole landing — no Gatekeeper, no Operation, no origin row', async () => {

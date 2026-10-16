@@ -7,6 +7,7 @@ import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import {
   findGatekeepersByEndpoint,
+  gateEndpointHost,
   getGatekeeper,
   normalizeGateEndpoint,
   registerGatekeeper,
@@ -257,8 +258,27 @@ describe('normalizeGateEndpoint (pure)', () => {
     ['http://GATE.invalid:8090/Base//', 'http://gate.invalid:8090/Base'],
     ['ssh://DB-1.invalid:22/', 'ssh://db-1.invalid:22'],
     ['http://[::1]:8090/', 'http://[::1]:8090'],
-  ])('%s → %s (default port dropped, path case kept)', (spelling, normal) => {
+    // User info, query and fragment are never sent: they do not name another gate.
+    ['https://ops@gate.invalid/base', 'https://gate.invalid/base'],
+    [
+      'https://ops:abcdefghijklmnopqrstuvwxyz0123@gate.invalid/base?x=1#y',
+      'https://gate.invalid/base',
+    ],
+    // IDN: one punycode spelling, for a scheme URL knows and one it does not.
+    ['https://BÜCHER.invalid/', 'https://xn--bcher-kva.invalid'],
+    ['ssh://bücher.invalid', 'ssh://xn--bcher-kva.invalid'],
+    // Percent-encoding (RFC 3986 §6.2.2): unreserved decoded, the rest upper-cased.
+    ['https://gate.invalid/%7Eops/%61pi', 'https://gate.invalid/~ops/api'],
+    ['https://gate.invalid/a%2fb', 'https://gate.invalid/a%2Fb'],
+  ])('%s → %s', (spelling, normal) => {
     expect(normalizeGateEndpoint(spelling)).toBe(normal);
+  });
+
+  it('gateEndpointHost is the same rule, by host: name and non-default port', () => {
+    expect(gateEndpointHost('HTTP://Gate-Host.:8083/i/x')).toBe('gate-host:8083');
+    expect(gateEndpointHost('https://ops@gate.invalid:443/')).toBe('gate.invalid');
+    expect(gateEndpointHost('ssh://bücher.invalid:22')).toBe('xn--bcher-kva.invalid:22');
+    expect(gateEndpointHost('not a url')).toBeNull();
   });
 
   it('keeps addresses that differ apart', () => {

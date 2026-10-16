@@ -1,7 +1,10 @@
 import type { ChatRow } from '../../application/chat/index.js';
 import type { QuotaRow } from '../../application/task/index.js';
 import type { CapabilityGrantRow } from '../../governance/capability/index.js';
-import type { ConnectionRequestRow } from '../../governance/connections/index.js';
+import {
+  type ConnectionRequestRow,
+  redactConnectionAddress,
+} from '../../governance/connections/index.js';
 import type { AutoApproveConsent, PolicyRow } from '../../governance/policy/index.js';
 import type { AuditRecordRow } from '../../substrate/audit/index.js';
 import type { SourceRow } from '../../substrate/epistemic/index.js';
@@ -33,12 +36,33 @@ import type { Fact, GraphObject } from '../../substrate/graph/index.js';
  * object (`packages/shared/src/wire/governance.ts`'s `PolicyWireSchema` has the fuller note).
  */
 
+/** The address properties of the Object types the kernel writes for a connection: where a gate is
+ *  reached. Every read shows them through `redactConnectionAddress` (#620 review M2), the rule
+ *  every other display of a gate address uses — one written before legacy 186 can still carry a
+ *  credential (`scrub-raw-secrets` counts it for its owner, `gatekeeperAddresses`). The stored
+ *  value is untouched: the gate is called at it. */
+const ADDRESS_PROPERTIES: Readonly<Record<string, readonly ('target' | 'endpoint')[]>> = {
+  Gatekeeper: ['target', 'endpoint'],
+  ConnectedSystem: ['target'],
+};
+
+function displayedProperties(object: GraphObject): GraphObject['properties'] {
+  const fields = ADDRESS_PROPERTIES[object.objectType];
+  if (!fields) return object.properties;
+  const shown: Record<string, unknown> = { ...object.properties };
+  for (const field of fields) {
+    const value = shown[field];
+    if (typeof value === 'string') shown[field] = redactConnectionAddress(field, value);
+  }
+  return shown;
+}
+
 export function toWireObject(object: GraphObject) {
   return {
     id: object.id,
     objectType: object.objectType,
     identityKey: object.identityKey,
-    properties: object.properties,
+    properties: displayedProperties(object),
     createdAt: object.createdAt.toISOString(),
     updatedAt: object.updatedAt.toISOString(),
     lastObservedAt: object.lastObservedAt ? object.lastObservedAt.toISOString() : null,
@@ -171,7 +195,9 @@ export function toWireConnectionRequest(row: ConnectionRequestRow) {
     id: row.id,
     status: row.status,
     kind: row.kind,
-    target: row.target,
+    // Shown as every gate address is (`redactConnectionAddress`): a request from before legacy 186
+    // can still carry a credential (`scrub-raw-secrets` counts it, `connectionTargets`).
+    target: redactConnectionAddress('target', row.target),
     requestedBy: row.requestedBy,
     gatekeeperId: row.gatekeeperId,
     completedBy: row.completedBy,
