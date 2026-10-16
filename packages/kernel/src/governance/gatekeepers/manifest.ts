@@ -1645,6 +1645,40 @@ export interface RefreshOperationGovernanceInput {
    *  no revision is opened — publishing either would bring no call back. Governance fields of a
    *  published row are still aligned in place. */
   readonly droppedByGate?: ReadonlySet<string>;
+  /** Where `announcedOperations` comes from (`AnnouncedManifestSource`); `'platform'` when
+   *  omitted. Legacy 214, `'gate'` (the self-connected resync): a selected announced Operation this
+   *  Gatekeeper has no row for at all is imported as an `'import'`-origin draft (`importManifest`,
+   *  the same write `create_connection` makes) instead of being reported `unchanged` — connecting
+   *  again would register a second Gatekeeper; and a governance change that loosens anything is
+   *  carried by a revision draft, never written in place (`governanceChangeNeedsRevision`). A
+   *  platform gate's align leaves new names to the catalog enable, as before. */
+  readonly source?: AnnouncedManifestSource;
+}
+
+/**
+ * Who stands behind an announced manifest. `'platform'`: the manifest in effect of a platform gate
+ * instance, which a platform administrator adopted (R-18) before any workspace aligns to it.
+ * `'gate'` (legacy 214): a self-connected gate's own `describe_operations` — nobody reviewed it
+ * before the workspace owner reads the preview.
+ */
+export type AnnouncedManifestSource = 'platform' | 'gate';
+
+/**
+ * Review #493 on #612 (M1): whether a published Operation's governance change must wait for a
+ * revision to be published instead of being written in place. The in-place refresh exists for a
+ * platform gate's adopted manifest — reviewed twice, by the administrator who adopted it and the
+ * owner who aligns. A self-connected gate's own description has had no review at all, so anything
+ * it loosens (`loosened`, or `mixed`: something loosens) reaches the published Operation only
+ * through the catalog publish of an `'import'` revision (`publish_operation` /
+ * `publish_manifest`), as a changed definition does. A tightening is still applied in place: it
+ * only adds approval, and a gate that tightens does not wait on a publish for it. The preview
+ * (`compareAnnouncedOperations`'s `governanceByRevision`) and the write use this one judgment.
+ */
+export function governanceChangeNeedsRevision(
+  source: AnnouncedManifestSource,
+  direction: OperationGovernanceChangeDirection,
+): boolean {
+  return source === 'gate' && (direction === 'loosened' || direction === 'mixed');
 }
 
 export interface RefreshedOperationGovernance {
@@ -1673,13 +1707,24 @@ export interface OperationRevisionDraft {
   /** `true` when an existing `'import'`-origin draft was rewritten in place (same version),
    *  `false` when a new revision was opened at `version + 1`. */
   readonly replaced: boolean;
+  /** Legacy 214 (`source: 'gate'`): a name the gate describes that this Gatekeeper had no row for
+   *  — imported as a first draft, not a revision of anything. */
+  readonly newOnGate?: true;
+  /** Review #493 on #612 (M1): the revision carries a governance change that loosens something
+   *  (`governanceChangeNeedsRevision`), held back from the published row until it is published.
+   *  `definitionChanged`: the gate also runs another definition (it refuses calls until then). */
+  readonly governanceLoosened?: {
+    readonly direction: OperationGovernanceDirection;
+    readonly definitionChanged: boolean;
+  };
 }
 
 export interface RefreshOperationGovernanceResult {
   readonly refreshed: readonly RefreshedOperationGovernance[];
   /** Legacy K: one `'import'`-origin draft per selected name carrying the announced entry — a
-   *  revision opened for a published Operation whose definition differs from it, or the gate's
-   *  own pending draft rewritten to it. */
+   *  revision opened for a published Operation whose definition differs from it, the gate's own
+   *  pending draft rewritten to it, or (legacy 214, `source: 'gate'`) a name it had no row for, or a
+   *  self-connected gate's loosened governance fields (review #493 on #612). */
   readonly revisionDrafts: readonly OperationRevisionDraft[];
   /** Every selected name that was neither refreshed nor given a draft — already matching the
    *  manifest, not present at all under this identity, or a pending draft that is someone's
@@ -1696,13 +1741,16 @@ export interface RefreshOperationGovernanceResult {
  *   - `getOperation` resolves the identity's *current* row (draft-first priority, `manifest.ts`'s
  *     own module doc comment) — `null` means there is nothing "already present" to refresh
  *     (exactly `preview_gate_instance_enable`'s own branch), so the name goes to `unchanged`
- *     untouched; a `draft` row is not refreshed in place either (see the legacy K note below for
+ *     untouched — unless `source: 'gate'` (legacy 214, the self-connected resync) imports it as a
+ *     first draft; a `draft` row is not refreshed in place either (see the legacy K note below for
  *     the one kind that is rewritten);
  *   - otherwise `diffOperationGovernanceFields` (the exact function `preview_gate_instance_enable`
  *     uses) decides whether it differs; no difference → `unchanged`; a difference → the announced
  *     fields are written **in place** (no new `version` — this module's own doc comment on why)
  *     and the entry is classified (`classifyOperationGovernanceChange`) and returned in
- *     `refreshed`.
+ *     `refreshed` — except a change that loosens anything under `source: 'gate'` (review #493 on
+ *     #612, `governanceChangeNeedsRevision`): the published row is left as it is and the change
+ *     goes into an `'import'` revision draft below, which an owner publishes in the catalog.
  *
  * Writes nothing for a name that never appears in the announced manifest (silently absent from
  * both `refreshed` and `unchanged` — there is no governance drift to report for an Operation the
@@ -1780,6 +1828,31 @@ async function rewriteImportDraft(
   };
 }
 
+/** Legacy 214 (`source: 'gate'`): the one new name as `importManifest` writes it — the next version
+ *  above every row (legacy 278), the name rule for a new name (legacy 232), origin `import`. */
+async function importNewOperation(
+  client: PoolClient,
+  workspaceId: string,
+  input: RefreshOperationGovernanceInput,
+  announced: Operation,
+): Promise<OperationRevisionDraft | null> {
+  const { imported } = await importManifest(client, workspaceId, {
+    gatekeeperId: input.gatekeeperId,
+    operations: [announced],
+    proposedBy: input.proposedBy,
+    activityId: input.activityId,
+  });
+  const [written] = imported;
+  if (!written) return null;
+  return {
+    id: written.id,
+    name: written.name,
+    version: written.version,
+    replaced: false,
+    newOnGate: true,
+  };
+}
+
 export async function refreshOperationGovernance(
   client: PoolClient,
   workspaceId: string,
@@ -1794,6 +1867,7 @@ export async function refreshOperationGovernance(
   const refreshed: RefreshedOperationGovernance[] = [];
   const revisionDrafts: OperationRevisionDraft[] = [];
   const unchanged: string[] = [];
+  const source = input.source ?? 'platform';
 
   for (const operation of selected) {
     const existingRecord = await getOperation(
@@ -1802,11 +1876,16 @@ export async function refreshOperationGovernance(
       input.gatekeeperId,
       operation.name,
     );
+    const dropped = input.droppedByGate?.has(operation.name) ?? false;
     if (existingRecord === null) {
-      unchanged.push(operation.name);
+      const imported =
+        source === 'gate' && !dropped
+          ? await importNewOperation(client, workspaceId, input, operation)
+          : null;
+      if (imported) revisionDrafts.push(imported);
+      else unchanged.push(operation.name);
       continue;
     }
-    const dropped = input.droppedByGate?.has(operation.name) ?? false;
     if (existingRecord.status === 'draft') {
       const rewritten = dropped
         ? null
@@ -1818,7 +1897,13 @@ export async function refreshOperationGovernance(
     const before = operationGovernanceFieldsOf(existingRecord.operation);
     const after = operationGovernanceFieldsOf(operation);
     const diff = diffOperationGovernanceFields(before, after);
-    if (diff.differs) {
+    const direction = diff.differs
+      ? classifyOperationGovernanceChange(before, after, diff.changedFields)
+      : null;
+    // Review #493 on #612 (M1): a loosening from an unreviewed source waits for a publish.
+    const byRevision = direction !== null && governanceChangeNeedsRevision(source, direction);
+    const inPlace = direction !== null && !byRevision;
+    if (inPlace) {
       await setOperationGovernanceFieldsObject(
         client,
         workspaceId,
@@ -1830,13 +1915,13 @@ export async function refreshOperationGovernance(
         name: operation.name,
         before,
         after,
-        direction: classifyOperationGovernanceChange(before, after, diff.changedFields),
+        direction,
       });
     }
 
     // Compared as it stands after the in-place write: a `mode` (or an ssh `blast_radius`) the
     // governance refresh just aligned is no longer a difference in definition.
-    const deployed: OperationRecord = diff.differs
+    const deployed: OperationRecord = inPlace
       ? {
           ...existingRecord,
           operation: {
@@ -1848,10 +1933,9 @@ export async function refreshOperationGovernance(
         }
       : existingRecord;
     // Legacy 278: above a discarded revision too, never on top of it.
+    const definitionChanged = operationDefinitionDiffers(deployed, operation);
     const revisionVersion =
-      !dropped &&
-      existingRecord.status === 'published' &&
-      operationDefinitionDiffers(deployed, operation)
+      !dropped && existingRecord.status === 'published' && (byRevision || definitionChanged)
         ? await nextOperationVersion(client, workspaceId, input.gatekeeperId, operation.name)
         : null;
     const revision =
@@ -1874,8 +1958,12 @@ export async function refreshOperationGovernance(
         version: revisionVersion ?? existingRecord.version + 1,
         draftOf: existingRecord.id,
         replaced: false,
+        ...(byRevision && direction !== null
+          ? { governanceLoosened: { direction, definitionChanged } }
+          : {}),
       });
-    } else if (!diff.differs) {
+    } else if (!inPlace) {
+      // A loosening with no revision to carry it (a deprecated row) is not written either.
       unchanged.push(operation.name);
     }
   }

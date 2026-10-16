@@ -141,13 +141,19 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
     zh: '这个端点上已有的门已经关联到另一个平台门实例；一个门只能关联一个实例，本次没有写入任何内容。请先解除旧实例的关联',
     en: 'The existing Gatekeeper at this endpoint is already linked to another platform gate instance — one Gatekeeper takes one instance, and nothing was written. Remove the old instance’s link first',
   },
-  // S8 W3-K1 (leftover 79, closing wave C6, G3): `refresh_operation_governance`'s target Gatekeeper
-  // has no linked platform gate instance — the console only renders the "对齐" action when
-  // `healthInfo.linked`, so this is defense-in-depth for the race (the link is removed between
-  // page load and the confirm), not the ordinary path.
+  // S8 W3-K1 (leftover 79, closing wave C6, G3); legacy 214 narrowed it: the Gatekeeper sits at a
+  // platform gate instance's address but was never enabled from the catalog (a CLI registration),
+  // so neither the instance's announcement nor the gate's own description is its manifest. A gate
+  // the workspace connected itself re-syncs from its own description instead.
   no_announced_manifest: {
-    zh: '这个门没有关联的平台实例，没有可对齐的公告清单',
-    en: 'This Gatekeeper has no linked platform gate instance — there is no announced manifest to align with',
+    zh: '这个门在平台门实例的地址上，但不是从能力目录启用的，没有可对齐的清单；请到能力目录启用这个平台门',
+    en: 'This Gatekeeper is at a platform gate instance’s address but was never enabled from the catalog, so there is no manifest to align with — enable that platform gate from the catalog',
+  },
+  // Legacy 214: re-reading the gate's own manifest was asked of a Gatekeeper enabled from a platform
+  // gate instance (the link appeared between page load and the click). Nothing was written.
+  gatekeeper_linked: {
+    zh: '这个门是从平台门实例启用的，要按平台公告对齐，不能直接读门的清单；本次没有写入任何内容。请用「与门公告对齐」',
+    en: 'This Gatekeeper was enabled from a platform gate instance — it aligns with the platform’s announcement, not the gate’s own description, and nothing was written. Use “Align with the gate’s announcement”',
   },
   // R-18 (D-18): the manifest shown is no longer the one that would be applied — a workspace
   // enable / refresh after an administrator confirmed a newer manifest, or a platform confirm

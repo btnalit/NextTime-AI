@@ -802,6 +802,12 @@ export const GateInstanceEnablePreviewOperationPresentWireSchema = z
      *  published: `refresh_operation_governance` opens that revision as a draft for an owner to
      *  publish. Independent of `differs`, which compares only the governance fields. */
     definitionDiffers: z.boolean(),
+    /** Review #493 on #612 (M1, `preview_gatekeeper_resync` only): this governance change loosens
+     *  something and comes from a self-connected gate's own description, which nobody reviewed —
+     *  `refresh_operation_governance` does not apply it in place but opens a revision draft that
+     *  carries it (published rows), so it takes effect only once an owner publishes that draft.
+     *  Absent when the change is applied in place (a tightening, or any platform manifest). */
+    governanceByRevision: z.literal(true).optional(),
     /** Review #501 on #571 ③ (the workspace side): the params the announced definition declares
      *  that only the gate sets. Present only when there are some — the revision an align opens for
      *  a `definitionDiffers` entry would then be held back as an unpublished draft. */
@@ -851,6 +857,32 @@ export const PreviewGateInstanceEnableResultWireSchema = z
   .strict();
 export type PreviewGateInstanceEnableResultWire = z.infer<
   typeof PreviewGateInstanceEnableResultWireSchema
+>;
+
+// -------------------------------------------------------------------------------------------
+// preview_gatekeeper_resync (legacy 214): the same comparison for a gate the workspace connected
+// itself — re-described from the gate's own `describe_operations` instead of a platform manifest.
+// -------------------------------------------------------------------------------------------
+
+export const PreviewGatekeeperResyncResultWireSchema = z
+  .object({
+    gatekeeperId: z.string(),
+    /** Digest of the description this preview was computed from — `refresh_operation_governance`
+     *  requires it back and refuses `manifest_changed` when the gate describes something else by
+     *  then. */
+    manifestDigest: z.string(),
+    /** What the gate describes that this Gatekeeper holds no row for (no `pendingDraft`: the
+     *  resync imports it as a draft) or holds only a draft of (`pendingDraft`, as in
+     *  `preview_gate_instance_enable`). */
+    operationsToImport: z.array(GateInstanceEnablePreviewOperationWireSchema),
+    operationsAlreadyPresent: z.array(GateInstanceEnablePreviewOperationPresentWireSchema),
+    /** Published Operations of this Gatekeeper the gate no longer describes — it refuses calls to
+     *  them; the resync writes nothing for them. Sorted. */
+    notDescribed: z.array(z.string()),
+  })
+  .strict();
+export type PreviewGatekeeperResyncResultWire = z.infer<
+  typeof PreviewGatekeeperResyncResultWireSchema
 >;
 
 // -------------------------------------------------------------------------------------------

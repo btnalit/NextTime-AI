@@ -381,6 +381,15 @@ export function SystemAccessCard({
               {draftCount > 0 ? ` (${draftCount})` : ''}
             </DropdownMenuItem>
           ) : null}
+          {canManage && !healthInfo.linked ? (
+            // Legacy 214: the re-sync lives in the drawer, next to who can use the gate.
+            <DropdownMenuItem
+              onSelect={() => setDetailOpen(true)}
+              data-testid="gatekeeper-resync-open"
+            >
+              {t('重新读取门的清单', 'Re-read the gate’s manifest')}
+            </DropdownMenuItem>
+          ) : null}
           {canRotateSecret ? (
             <DropdownMenuItem
               onSelect={() => setRotateOpen(true)}
@@ -402,15 +411,18 @@ export function SystemAccessCard({
           {healthInfo.transportKind !== undefined ? (
             <span className="tag">{transportKindLabel(healthInfo.transportKind, t)}</span>
           ) : null}
+          {/* UX acceptance of #612 (P2-3): a gate the workspace connected itself is a first-class
+              system with its own resync, not something being phased out — never 「旧注册」. */}
           {!healthInfo.linked ? (
             <span
               className="tag"
+              data-testid="gatekeeper-self-connected-tag"
               title={t(
-                '旧注册：不经平台门实例目录接入',
-                'Legacy: registered outside the platform gate-instance catalog',
+                '工作区自己接入的门，不经平台门实例目录；门改了清单后用「重新读取门的清单」同步',
+                'Connected by this workspace, outside the platform gate-instance catalog — re-sync it with “Re-read the gate’s manifest” after the gate changes',
               )}
             >
-              {t('旧注册', 'Legacy')}
+              {t('自己接入', 'Self-connected')}
             </span>
           ) : null}
         </div>
@@ -493,7 +505,7 @@ export function SystemAccessCard({
       {publishResult !== null ? (
         <ManifestPublishResultNotice
           result={publishResult}
-          fix={healthInfo.linked ? 'align' : 'reconnect'}
+          fix={healthInfo.linked ? 'align' : 'resync'}
           testId="gatekeeper-publish-result"
         />
       ) : null}
@@ -629,6 +641,27 @@ export function SystemAccessCard({
                   platformAdmin={platformAdmin}
                   onRefreshed={() => onPublished()}
                   testId="system-governance-refresh"
+                />
+              </div>
+            ) : null}
+            {canManage && !healthInfo.linked ? (
+              // Legacy 214: a gate the workspace connected itself, rebuilt or with a changed
+              // manifest, is re-synced here — the gate is asked what it runs now, the diff is
+              // shown, and the revisions it needs are opened as drafts to publish.
+              <div className="stack-s" data-testid="system-gate-resync">
+                <span className="field-label">{t('门的清单', 'The gate’s manifest')}</span>
+                <p className="field-hint">
+                  {t(
+                    '门重建或改了清单之后，对它的调用可能被拒绝。重新读取门现在运行的清单，看清和已发布的哪里不同，再为变了的打开修订草稿、把新增的导入为草稿，到能力目录发布。',
+                    'After the gate is rebuilt or its manifest changes, calls to it can be refused. Re-read what the gate runs now, see how it differs from what is published, then open revision drafts for what changed and import what is new, and publish them in the catalog.',
+                  )}
+                </p>
+                <RefreshOperationGovernanceConfirm
+                  http={http}
+                  gatekeeperId={gate.gateId}
+                  gateDisplayName={gate.name}
+                  onRefreshed={() => onPublished()}
+                  testId="system-gate-resync-refresh"
                 />
               </div>
             ) : null}

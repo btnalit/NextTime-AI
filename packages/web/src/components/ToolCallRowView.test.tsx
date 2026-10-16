@@ -461,3 +461,76 @@ describe('legacy 287: the outcome-unknown note names the system', () => {
     expect(calls.some((call) => call.name === 'get_action')).toBe(false);
   });
 });
+
+// UX acceptance of #612 (P2-4): the call names its system, so a definition mismatch says only what
+// applies to that kind of gate — read off whether the system is linked to a platform gate instance.
+describe('PersistedToolCallRowView: a definition mismatch on a named system', () => {
+  const mismatch =
+    '{"status":"failed","reason":"operation_definition_mismatch: operation \\"stock.get\\": refused, nothing ran"}';
+  const record = {
+    toolCallId: 'c612',
+    name: 'request_action',
+    outcome: 'done' as const,
+    args: {
+      text: '{"gatekeeperId":"gk-self","operation":"stock.get"}',
+      truncated: false,
+      totalChars: 50,
+    },
+    result: { text: mismatch, truncated: false, totalChars: mismatch.length },
+    redactedValues: 0,
+    startedAt: null,
+    endedAt: null,
+  };
+  const instancesHttp = (role: string, linkedGatekeeperId: string | null) =>
+    ({
+      call: vi.fn(async (name: string) => {
+        if (name === 'get_workspace')
+          return { id: 'ws-1', name: 'Acme', caller: { id: 'p', role } };
+        if (name === 'list_available_gate_instances') {
+          return {
+            items:
+              linkedGatekeeperId === null
+                ? []
+                : [{ gateId: 'gate-1', gatekeeperId: linkedGatekeeperId }],
+            nextCursor: null,
+          };
+        }
+        throw new Error(`unscripted ${name}`);
+      }) as CapabilityCaller['call'],
+    }) satisfies CapabilityCaller;
+
+  it('a self-connected gate: points at re-reading the gate’s manifest, not at the platform', async () => {
+    render(
+      <PermissionsProvider>
+        <PersistedToolCallRowView http={instancesHttp('member', null)} record={record} />
+      </PermissionsProvider>,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('tool-call-gate-reason').textContent).toContain(
+        '这是工作区自己接入的门',
+      ),
+    );
+    const note = screen.getByTestId('tool-call-gate-reason');
+    expect(note.textContent).toContain('重新读取门的清单');
+    expect(note.textContent).not.toContain('与门公告对齐');
+    expect(screen.getByTestId('tool-call-gate-reason-link').getAttribute('href')).toBe(
+      '#/govern/systems/gk-self',
+    );
+  });
+
+  it('a platform-provided system: the platform admin adopts first, then align — no resync', async () => {
+    render(
+      <PermissionsProvider>
+        <PersistedToolCallRowView http={instancesHttp('member', 'gk-self')} record={record} />
+      </PermissionsProvider>,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('tool-call-gate-reason').textContent).toContain(
+        '这是平台提供的系统',
+      ),
+    );
+    const note = screen.getByTestId('tool-call-gate-reason');
+    expect(note.textContent).toContain('与门公告对齐');
+    expect(note.textContent).not.toContain('重新读取门的清单');
+  });
+});

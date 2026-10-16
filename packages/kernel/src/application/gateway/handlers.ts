@@ -199,6 +199,7 @@ import {
   issueGateCredentialTokenHandler,
   listAvailableGateInstancesHandler,
   previewGateInstanceEnableHandler,
+  previewGatekeeperResyncHandler,
   refreshOperationGovernanceHandler,
 } from './gate-instance-handlers.js';
 import {
@@ -2145,6 +2146,7 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['preview_gate_instance_enable', previewGateInstanceEnableHandler],
   // S8 W3-K1 (leftover 79) — the write half of preview_gate_instance_enable's `differs`.
   ['refresh_operation_governance', refreshOperationGovernanceHandler],
+  ['preview_gatekeeper_resync', previewGatekeeperResyncHandler],
   ['issue_service_handle', issueServiceHandleHandler],
   // P-B2a gate-host instances
   ['create_gate_instance', createGateInstanceHandler],

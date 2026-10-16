@@ -35,11 +35,12 @@ describe('HeldDraftsNotice', () => {
     );
   });
 
-  it('a self-connected gate is told to connect again, never to align', () => {
-    render(<HeldDraftsNotice drafts={HELD} gatekeeperId="gk-1" fix="reconnect" testId="held" />);
+  it('a self-connected gate is told to re-read its manifest, never to align or connect again (legacy 214)', () => {
+    render(<HeldDraftsNotice drafts={HELD} gatekeeperId="gk-1" fix="resync" testId="held" />);
     const notice = screen.getByTestId('held');
-    expect(notice.textContent).toContain('重新接入');
+    expect(notice.textContent).toContain('重新读取门的清单');
     expect(notice.textContent).not.toContain('与门公告对齐');
+    expect(notice.textContent).not.toContain('重新接入');
   });
 
   it('renders nothing when nothing was held back (or an older kernel left the field out)', () => {
@@ -63,7 +64,7 @@ describe('ManifestPublishResultNotice', () => {
           skippedDraftOperationNames: ['stock.export'],
           gateOwnedParamDrafts: HELD,
         }}
-        fix="reconnect"
+        fix="resync"
         testId="result"
       />,
     );
