@@ -49,6 +49,13 @@ export function GatekeeperDetailDrawer({ http, gatekeeperId }: GatekeeperDetailD
   }
 
   const gate = detail.state.data;
+  // Review #501 on #577 ② (the drawer's case of legacy 281): the gate's published and deprecated
+  // versions of one name are listed side by side, so where a name repeats each row says its
+  // version — and the row key carries it, so React never sees two rows under one key.
+  const nameCounts = new Map<string, number>();
+  for (const operation of gate.operations) {
+    nameCounts.set(operation.name, (nameCounts.get(operation.name) ?? 0) + 1);
+  }
 
   return (
     <div className="stack" data-testid="gatekeeper-detail">
@@ -81,9 +88,21 @@ export function GatekeeperDetailDrawer({ http, gatekeeperId }: GatekeeperDetailD
         />
       ) : (
         <div className="gatekeeper-ops">
-          {gate.operations.map((operation) => (
-            <div className="op-item" key={operation.name} title={operation.name}>
+          {gate.operations.map((operation, index) => (
+            <div
+              className="op-item"
+              key={`${operation.name}@${operation.version ?? `#${index}`}`}
+              title={operation.name}
+            >
               <span className="op-name">{operation.name}</span>
+              {(nameCounts.get(operation.name) ?? 0) > 1 && operation.version !== undefined ? (
+                <span
+                  className="text-3 text-small"
+                  data-testid={`gatekeeper-op-version-${operation.name}-${operation.version}`}
+                >
+                  v{operation.version}
+                </span>
+              ) : null}
               <StatusChip machine="publishable" status={operation.status} size="s" />
               {/* UX acceptance of #567 P3: a draft held back for a gate-owned param is not an
                *  ordinary draft — it cannot be published until the gate's manifest changes. */}

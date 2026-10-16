@@ -51,7 +51,8 @@ export interface RefreshOperationGovernanceConfirmProps {
   /** Legacy 280 (acceptance of #571 P3-1): the preview the caller already read for this gate, used
    *  for the confirm instead of reading it again on the click. The kernel still refuses the write
    *  with `manifest_changed` when the gate's manifest moved since (the confirm sends this
-   *  preview's `manifestDigest`), so a stale one is never applied unseen. */
+   *  preview's `manifestDigest`), so a stale one is never applied unseen. First open only: after a
+   *  write is sent under its digest, reopening reads the preview again. */
   readonly preview?: PreviewGateInstanceEnableResultWire;
   readonly testId?: string;
 }
@@ -136,6 +137,10 @@ export function RefreshOperationGovernanceConfirm({
   const [awaitingAdoption, setAwaitingAdoption] =
     useState<PreviewGateInstanceEnableResultWire['awaitingPlatformAdoption']>(null);
   const [manifestDigest, setManifestDigest] = useState<string | null>(null);
+  // Review #501 on #577 ①: the caller's preview serves the first open only. Once a write was sent
+  // under its digest — applied, or refused with `manifest_changed` — it no longer describes the
+  // gate, so reopening reads the preview afresh instead of being refused on the same digest again.
+  const [knownPreviewSpent, setKnownPreviewSpent] = useState(false);
   // Which previewed rows are published — a revision draft of one is its own catalog row.
   const [publishedNames, setPublishedNames] = useState<ReadonlySet<string>>(new Set());
   const items = (diffs ?? []).filter((op) => op.differs).map(changeItem);
@@ -173,7 +178,7 @@ export function RefreshOperationGovernanceConfirm({
     setStillHeld(new Map());
     try {
       const preview =
-        knownPreview ??
+        (knownPreviewSpent ? undefined : knownPreview) ??
         (await http.call<PreviewGateInstanceEnableResultWire>('preview_gate_instance_enable', {
           gateId: platformGateId,
         }));
@@ -232,6 +237,7 @@ export function RefreshOperationGovernanceConfirm({
     if (diffs === null || manifestDigest === null) return;
     // A refused refresh propagates as-is: `kit/confirm` renders it through `presentError`, which
     // maps a known platform code to its copy and keeps the kernel's text in 「技术细节」.
+    setKnownPreviewSpent(true);
     const result = await http.call<RefreshOperationGovernanceResultWire>(
       'refresh_operation_governance',
       {

@@ -118,4 +118,31 @@ describe('GatekeeperDetailDrawer', () => {
     expect(chip.getAttribute('title')).toContain('Authorization（请求头）');
     expect(screen.queryByTestId('gatekeeper-op-held-stock.get')).toBeNull();
   });
+  it('review #501 on #577 ②: versions of one name listed side by side each say their version; a name listed once does not', async () => {
+    const http = callerReturning({
+      id: 'gk-1',
+      name: 'orders',
+      kind: 'http',
+      status: 'active',
+      manifestVersion: 4,
+      operationCount: 3,
+      createdAt: '2026-09-01T00:00:00.000Z',
+      operations: [
+        { name: 'stock.get', version: 1, status: 'published', mode: 'observe' },
+        { name: 'orders.lookup', version: 3, status: 'published', mode: 'observe' },
+        { name: 'orders.lookup', version: 2, status: 'deprecated', mode: 'observe' },
+      ],
+      health: 'ok',
+    });
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    renderDrawer(http);
+    expect((await screen.findByTestId('gatekeeper-op-version-orders.lookup-3')).textContent).toBe(
+      'v3',
+    );
+    expect(screen.getByTestId('gatekeeper-op-version-orders.lookup-2').textContent).toBe('v2');
+    expect(screen.queryByTestId('gatekeeper-op-version-stock.get-1')).toBeNull();
+    // Rows keyed by name alone would make React warn about two children with one key.
+    expect(error.mock.calls.some((call) => String(call[0]).includes('same key'))).toBe(false);
+    error.mockRestore();
+  });
 });

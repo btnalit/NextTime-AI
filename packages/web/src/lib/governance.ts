@@ -140,6 +140,8 @@ export interface GatekeeperListRow {
 
 export interface GatekeeperDetailOperation {
   readonly name: string;
+  /** `OperationSummaryWire.version` — told apart only where one name is listed more than once. */
+  readonly version?: number;
   readonly status: string;
   readonly mode?: string;
   readonly blastRadius?: string;

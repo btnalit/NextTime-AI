@@ -226,11 +226,13 @@ export function ApprovalCard({
                   `含 ${suspectedSecretValues} 处疑似凭据。`,
                   `${suspectedSecretValues} suspected credential value(s).`,
                 )}
-              </strong>{' '}
+              </strong>
+              {t('', ' ')}
               {t(
                 '批准前要看清参数并确认，这一步只能在审批页做。',
                 'Approving needs the parameters in view and an explicit confirmation — only on the approvals page.',
-              )}{' '}
+              )}
+              {t('', ' ')}
               {approvalsHref !== undefined ? (
                 <a href={approvalsHref} data-testid="approval-review-on-page">
                   {t('去审批页核对', 'Review on the approvals page')}
