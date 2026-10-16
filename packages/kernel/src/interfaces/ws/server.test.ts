@@ -499,6 +499,13 @@ describe.runIf(DATABASE_URL !== undefined)(
       ownerId = await adminInsertPrincipalWithKey(ownerApiKey);
 
       app = createServer({ pool });
+      // STATUS.md 遗留 25's cause, not just its symptom: files that run earlier against the shared
+      // database leave their outbox rows undelivered (they deliver events by hand, with no
+      // dispatcher), and this file's dispatcher — one kernel serves every workspace — works
+      // through them in id order at most 20 rows per 200 ms poll before reaching this file's own
+      // events. About 900 left by the goal and task suites delayed `chat.metadata` past the
+      // end-to-end test's 12 s on CI (S11 GO3a, #626). Those rows are no part of this file.
+      await pool.query('update outbox set dispatched_at = now() where dispatched_at is null');
       // Small but nonzero delay: exercises real asynchronous streaming without slowing the suite.
       background = createBackgroundServices({
         pool,
