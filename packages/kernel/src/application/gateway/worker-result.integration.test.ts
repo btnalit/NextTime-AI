@@ -1467,6 +1467,81 @@ describe.runIf(DATABASE_URL !== undefined)(
           ).not.toMatch(/\u202E/);
         });
 
+        it('legacy 320: U+0000 in the report is stored as \\u{0} and counted; a proposed name holding it costs that entry only', async () => {
+          const marker = randomUUID().slice(0, 8);
+          const gatekeeperId = await registerTestGate(marker);
+          const { taskId, claims } = await spawnWorkerRun();
+          const caller: ResolvedCaller = { channel: 'handle', claims };
+          const goodName = `demo.good.${marker}`;
+          const hostname = `h-${marker}\u0000x`;
+          const result = (await dispatchCapability({ pool }, caller, 'report_task_result', {
+            summary: 'read a binary file: \u0000\u0000',
+            findings: ['first \u0000'],
+            factsToAssert: [
+              {
+                linkType: 'runs_on',
+                source: { objectType: 'Container', identity: { containerId: randomUUID() } },
+                target: { objectType: 'Host', identity: { hostname } },
+              },
+            ],
+            proposedOperations: [
+              { gatekeeperId, operation: proposalOperation(`demo.nul\u0000.${marker}`) },
+              { gatekeeperId, operation: proposalOperation(goodName) },
+            ],
+          })) as { status: string; activityId: string; factIds: string[] };
+          // Before: the first write failed (22021 / 22P05), the call was a 500 and the Task stayed
+          // `running` until its run exited.
+          expect(result.status).toBe('completed');
+          expect(result.factIds).toHaveLength(1);
+
+          const stored = await readProposalOutcome(taskId, gatekeeperId);
+          expect(stored.task?.status).toBe('completed');
+          expect(stored.task?.result.proposedOperationsRejected).toEqual([
+            expect.objectContaining({
+              index: 0,
+              gatekeeperId,
+              reason: 'invalid_operation_name',
+              problem: 'invisible_or_control_characters',
+            }),
+          ]);
+          // No row for the refused name — not under its escaped spelling either.
+          expect(stored.operations).toEqual([{ name: goodName, proposed_by: ownerId }]);
+
+          const written = await inTx(ownerId, async (client) => {
+            const task = await client.query<{ result: { summary: string; findings: string[] } }>(
+              'select result from tasks where workspace_id = $1 and id = $2',
+              [workspaceId, taskId],
+            );
+            const activity = await client.query<{ metadata: Record<string, unknown> }>(
+              'select metadata from activities where workspace_id = $1 and id = $2',
+              [workspaceId, result.activityId],
+            );
+            const host = await client.query<{ hostname: string }>(
+              `select identity_key ->> 'hostname' as hostname from objects
+               where workspace_id = $1 and object_type = 'Host'
+                 and identity_key ->> 'hostname' like $2`,
+              [workspaceId, `h-${marker}%`],
+            );
+            const audit = await client.query<{ payload: Record<string, unknown> }>(
+              `select payload from audit_records
+               where workspace_id = $1 and action = 'report_task_result' and resource_id = $2`,
+              [workspaceId, taskId],
+            );
+            return {
+              task: task.rows[0],
+              activity: activity.rows[0],
+              hosts: host.rows.map((row) => row.hostname),
+              audit: audit.rows.map((row) => row.payload),
+            };
+          });
+          expect(written.task?.result.summary).toBe('read a binary file: \\u{0}\\u{0}');
+          expect(written.task?.result.findings).toEqual(['first \\u{0}']);
+          expect(written.hosts).toEqual([`h-${marker}\\u{0}x`]);
+          // summary 2 + findings 1 + hostname 1 + the refused name 1.
+          expect(written.activity?.metadata.unstorableEscaped).toBe(5);
+          expect(written.audit).toEqual([expect.objectContaining({ unstorableEscaped: 5 })]);
+        });
+
         it('postWorkerResult: a refusal the pre-check did not see (a concurrent write) still costs that entry only', async () => {
           const marker = randomUUID().slice(0, 8);
           const gatekeeperId = await registerTestGate(marker);

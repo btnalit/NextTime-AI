@@ -4,7 +4,7 @@ import type {
   Role,
   WorkerDefinitionKind,
 } from '@nexttime/shared';
-import { getCapability } from '@nexttime/shared';
+import { getCapability, storableValue } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import {
   type ChatMessageRow,
@@ -880,7 +880,13 @@ const reportTurnHandler: CapabilityHandler = async (client, workspaceId, params)
     summary: string;
     decisions?: string[];
   };
-  const metadataPatch: Record<string, unknown> = { summary: scrubAgentText(summary) };
+  // Legacy 320 (`HANDLERS_SETTLING_UNSTORABLE_TEXT`, dispatch.ts): the summary is the agent's own
+  // account of a Turn that already happened, so U+0000 in it is stored as the visible `\u{0}`
+  // (counted on the Turn) rather than refusing the report and leaving the Turn's end unrecorded.
+  // `turnId` and `decisions` are ids, which the schema already holds to uuid shape.
+  const storableSummary = storableValue(scrubAgentText(summary));
+  const metadataPatch: Record<string, unknown> = { summary: storableSummary.value };
+  if (storableSummary.escaped > 0) metadataPatch.unstorableEscaped = storableSummary.escaped;
   if (decisions !== undefined) metadataPatch.decisions = decisions.map(scrubAgentText);
 
   // R-55: the status move goes through the one Turn transition (application/chat's `endTurn`): a

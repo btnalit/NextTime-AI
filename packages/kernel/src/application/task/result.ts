@@ -133,6 +133,10 @@ export interface PostWorkerResultInput {
    *  before this write (`worker-result-handler.ts`'s `scrubReport`) — recorded on the
    *  `worker_result` Activity so `explain` shows the report was altered. */
   readonly redactedValues?: number;
+  /** How many U+0000 characters the gateway handler stored as the visible `\u{0}` (legacy 320,
+   *  `@nexttime/shared` `storable-text.ts`) — recorded on the `worker_result` Activity, like
+   *  `redactedValues`, so `explain` shows the report was altered and how. */
+  readonly unstorableEscaped?: number;
 }
 
 /** Why one `factsToAssert[]` entry was refused (module doc comment, "per-entry refusals"):
@@ -280,6 +284,9 @@ export async function postWorkerResult(
   }
   if (input.redactedValues !== undefined && input.redactedValues > 0) {
     activityMetadata.redactedValues = input.redactedValues;
+  }
+  if (input.unstorableEscaped !== undefined && input.unstorableEscaped > 0) {
+    activityMetadata.unstorableEscaped = input.unstorableEscaped;
   }
 
   const activity = await startActivity(client, workspaceId, {

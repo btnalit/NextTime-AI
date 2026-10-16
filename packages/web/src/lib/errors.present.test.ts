@@ -20,6 +20,23 @@ const zh: Translate = (z) => z;
 const en: Translate = (_z, e) => e;
 
 describe('presentError', () => {
+  it('legacy 320: unstorable_text reads as what happened and what to do; the field stays in raw', () => {
+    const err = new HttpError(
+      'capability_error',
+      'capability "create_chat": the text at params "title" holds U+0000 (NUL), which cannot be stored — nothing was written; send it again without that character',
+      'unstorable_text',
+    );
+    const shown = presentError(err, zh);
+    expect(shown).toMatchObject({
+      code: 'unstorable_text',
+      title: '文字里有存不了的字符',
+      curated: true,
+    });
+    expect(shown.message).toContain('什么也没有写入');
+    expect(shown.raw).toContain('params "title"');
+    expect(presentError(err, en).title).toBe('Text holds a character that cannot be stored');
+  });
+
   it('a known code reads as its next step in the viewer’s language; the kernel text is kept raw', () => {
     const err = new HttpError(
       'capability_error',
@@ -170,6 +187,13 @@ describe('legacy K / J codes (review of #538, G3)', () => {
     expect(
       gateReasonNextStep('invalid_operation_name: Operation name "" is empty', en),
     ).toMatchObject({ code: 'invalid_operation_name', title: 'Operation name not allowed' });
+    // Legacy 320: the MCP text an agent gets for params holding U+0000.
+    const unstorable = gateReasonNextStep(
+      'unstorable_text: capability "propose_operation": the text at params "operation.name" holds U+0000 (NUL), which cannot be stored — nothing was written; send it again without that character',
+      zh,
+    );
+    expect(unstorable).toMatchObject({ code: 'unstorable_text', title: '文字里有存不了的字符' });
+    expect(unstorable?.message).toContain('不需要你处理');
     expect(gateReasonNextStep('{"status":"executed"}', zh)).toBeNull();
     expect(gateReasonNextStep('my_operation_definition_mismatch_field', zh)).toBeNull();
   });

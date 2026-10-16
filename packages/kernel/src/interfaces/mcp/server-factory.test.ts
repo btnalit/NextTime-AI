@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { UnstorableTextError } from '@nexttime/shared';
 import type { HandleClaims } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { describe, expect, it } from 'vitest';
@@ -140,6 +141,16 @@ describe('mapCapabilityErrorToToolResult', () => {
     const text = (result.content[0] as { text: string }).text;
     expect(text).toMatch(/^unknown_operation: request_action: gatekeeper gk-1 /);
     expect(text).toMatch(/list_allowed_operations/);
+  });
+
+  it('prefixes params holding U+0000 with its code (legacy 320)', () => {
+    const result = mapCapabilityErrorToToolResult(
+      new UnstorableTextError('capability "x"', { path: ['name'], in: 'value' }),
+    );
+    expect(result.isError).toBe(true);
+    expect((result.content[0] as { text: string }).text).toMatch(
+      /^unstorable_text: capability "x": the text at params "name" holds U\+0000/,
+    );
   });
 
   it('prefixes a refused new Operation name with its code (legacy 232)', () => {

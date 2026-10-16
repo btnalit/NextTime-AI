@@ -1,3 +1,4 @@
+import { UnstorableTextError } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
 import {
   GatekeeperClientError,
@@ -107,6 +108,14 @@ describe('mapDispatchError — legacy 232 unknown operation', () => {
 
   it('OperationNameInvalidError maps to INVALID_PARAMS with its message', () => {
     const err = new OperationNameInvalidError('x'.repeat(200), 'too_long');
+    expect(mapDispatchError(err)).toEqual({
+      code: WS_ERROR_CODES.INVALID_PARAMS,
+      message: err.message,
+    });
+  });
+
+  it('UnstorableTextError (legacy 320) maps to INVALID_PARAMS with its message', () => {
+    const err = new UnstorableTextError('capability "x"', { path: ['a', 0], in: 'key' });
     expect(mapDispatchError(err)).toEqual({
       code: WS_ERROR_CODES.INVALID_PARAMS,
       message: err.message,

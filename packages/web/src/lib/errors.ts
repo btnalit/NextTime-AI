@@ -92,6 +92,7 @@ export const CODE_TITLES: Readonly<Record<string, string>> = {
   gate_owned_params: 'Declares parameters the gate sets',
   unknown_operation: 'This gate has no such operation',
   invalid_operation_name: 'Operation name not allowed',
+  unstorable_text: 'Text holds a character that cannot be stored',
   gate_unreachable: 'Not sent: the gate could not be reached',
   apply_not_received: 'Did not run: the gate has no record of it running',
   outcome_unknown: 'Outcome unknown',
@@ -144,6 +145,7 @@ export const CODE_TITLES_ZH: Readonly<Record<string, string>> = {
   gate_owned_params: '声明了门自己设置的参数',
   unknown_operation: '这个门上没有这个动作',
   invalid_operation_name: '动作名不合规',
+  unstorable_text: '文字里有存不了的字符',
   gate_unreachable: '没发出：连不上门',
   apply_not_received: '没执行：门上没有执行记录',
   outcome_unknown: '结果不明',
@@ -273,6 +275,12 @@ export const ERROR_NEXT_STEPS: Readonly<
     zh: '新动作的名字为空、超过 128 个字符，或含有看不见的字符（控制字符、零宽字符、会颠倒文字方向的字符），所以没有写入任何东西。换一个只用可见字符、不超过 128 个字符的名字后重新提议。已有的动作不受影响。',
     en: 'The new operation’s name is empty, longer than 128 characters, or carries a character you cannot see (a control, zero-width or text-reversing character), so nothing was written. Propose it again under a name of visible characters, at most 128 long. Existing operations are not affected.',
   },
+  // Legacy 320: U+0000 in a name, an id or a setting — refused before anything was written. The
+  // same note serves a form the person sent and an agent's call shown in the chat.
+  unstorable_text: {
+    zh: '提交的文字里有 U+0000（空字符），数据库存不了它，所以这次什么也没有写入。报错里写了它在哪个字段；去掉这个字符后重新提交。如果是 agent 的调用，它一般会改好后重新发起，不需要你处理。',
+    en: 'The text sent holds U+0000 (a null character), which the database cannot store, so nothing was written. The error names the field it is in; remove the character and send it again. If this was an agent’s call, it usually fixes it and calls again, and nothing needs you.',
+  },
   // Legacy K (review of #538, G3).
   operation_definition_mismatch: {
     zh: '门现在运行的定义和这次调用批准的那一版不一样，调用没有执行。平台提供的系统：先由平台管理员在「集成」采用门的新清单；再在「系统与授权」打开它，点「与门公告对齐」，到能力目录发布打开的修订草稿，然后重新发起。自己接入的门：在能力目录发布和门一致的定义，然后重新发起。如果门运行的新定义声明了只能由门自己设置的参数，修订发布不了，要等门的维护者去掉这些参数。',
@@ -401,7 +409,8 @@ export function errorToastText(err: unknown, t: Translate, overrides?: ErrorOver
 /** Gate refusals a tool call's result can name (`request_action`'s failure reason, an observe
  *  call's error) — the codes the reason starts with or the result carries. Legacy 287 adds what a
  *  failed `request_action` says about delivery: not sent (`gate_unreachable`,
- *  `apply_not_received`) or outcome unknown (`outcome_unknown`). */
+ *  `apply_not_received`) or outcome unknown (`outcome_unknown`). Legacy 320 adds a call refused
+ *  for U+0000 (`unstorable_text`). */
 const GATE_REASON_CODES = [
   'operation_definition_mismatch',
   'operation_definition_unavailable',
@@ -409,6 +418,7 @@ const GATE_REASON_CODES = [
   'credentials_in_observe_params',
   'unknown_operation',
   'invalid_operation_name',
+  'unstorable_text',
   'gate_unreachable',
   'apply_not_received',
   'outcome_unknown',

@@ -344,6 +344,25 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(bad.statusCode).toBe(400);
       });
 
+      it('legacy 320: U+0000 in an address or an Operation name is refused 400 with where, nothing written', async () => {
+        const nulGate = { ...announceBody, gateId: 'nul-fixture-gate' };
+        const address = await announce({ ...nulGate, target: 'http://fixture-mcp:9000/\u0000' });
+        expect(address.statusCode).toBe(400);
+        expect(address.json().error).toMatchObject({
+          code: 'unstorable_text',
+          details: { path: ['target'], in: 'value' },
+        });
+        const name = await announce({
+          ...nulGate,
+          operations: [{ ...OBSERVE_OP, name: `${OBSERVE_OP.name}\u0000` }],
+        });
+        expect(name.statusCode).toBe(400);
+        expect(name.json().error).toMatchObject({ code: 'invalid_operation_name' });
+        await expect(
+          callAsAdmin('get_gate_instance', { gateId: 'nul-fixture-gate' }),
+        ).rejects.toThrow();
+      });
+
       it('creates the packaged connector as platform_preset next to the four generic kinds', async () => {
         const connectors = await callAsAdmin<ListEnvelope<ConnectorWire>>('list_connectors');
         const names = connectors.items.map((c) => c.name).sort();

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { UnstorableTextError } from '@nexttime/shared';
 import { generateKeyPair } from 'jose';
 import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -123,6 +124,19 @@ describe('mapCapabilityError — legacy 232 unknown operation (unit)', () => {
       code: 'invalid_operation_name',
       details: { problem: 'invisible_or_control_characters', maxLength: 128 },
       message: expect.stringContaining('"a\\u{202E}b"'),
+    });
+  });
+
+  it('UnstorableTextError (legacy 320) maps to 400 unstorable_text with where', () => {
+    expect(
+      mapCapabilityError(
+        new UnstorableTextError('capability "create_chat"', { path: ['title'], in: 'value' }),
+      ),
+    ).toMatchObject({
+      status: 400,
+      code: 'unstorable_text',
+      details: { path: ['title'], in: 'value' },
+      message: expect.stringContaining('params "title" holds U+0000'),
     });
   });
 });

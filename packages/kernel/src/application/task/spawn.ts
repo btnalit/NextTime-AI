@@ -1,4 +1,4 @@
-import { IllegalTransition, TASK_TRANSITIONS } from '@nexttime/shared';
+import { IllegalTransition, TASK_TRANSITIONS, storableText } from '@nexttime/shared';
 import { withWorkspace } from '../../adapters/db/pool.js';
 import { TaskSupervisorError } from '../../adapters/supervisor-client/index.js';
 import type { TaskSkillInlineMountInput } from '../../adapters/supervisor-client/index.js';
@@ -291,7 +291,9 @@ export async function spawnWorkerRun(
           resultingStatus: 'terminated',
           extraAuditPayload: {
             reason: err instanceof TaskSupervisorError ? err.kind : 'unknown',
-            message: err instanceof Error ? err.message : String(err),
+            // Legacy 320: the supervisor's text — stored with U+0000 as the visible `\u{0}`, so
+            // this cleanup cannot fail on it and leave the run `provisioning`.
+            message: storableText(err instanceof Error ? err.message : String(err)),
           },
         });
       },

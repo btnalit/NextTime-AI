@@ -14,6 +14,7 @@ export type {
 } from './store.js';
 export {
   AnnounceBodySchema,
+  storableAnnouncement,
   CONNECTOR_NAME_PATTERN,
   GATE_ID_PATTERN,
   GENERIC_CONNECTOR_NAMES,

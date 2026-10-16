@@ -1,3 +1,4 @@
+import { storableValue } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { writeAudit } from '../../substrate/audit/index.js';
 import {
@@ -420,7 +421,12 @@ export const submitObservationsHandler: CapabilityHandler = async (
   rawParams,
   ctx,
 ) => {
-  const params = rawParams as SubmitObservationsParams;
+  // Legacy 320 (`HANDLERS_SETTLING_UNSTORABLE_TEXT`, dispatch.ts): observed data comes from the
+  // system a collector reads, which the collector cannot change — U+0000 in it would otherwise fail
+  // the whole submission on every run. It is stored as the visible `\u{0}`; the call's audit row
+  // counts it (`unstorableEscaped`). An identity key or ObjectType changed this way no longer
+  // matches the ontology and is refused below like any other unknown one.
+  const params = storableValue(rawParams as SubmitObservationsParams).value;
   const principalId = ctx?.principalId ?? (await currentPrincipalId(client));
 
   // I5.6 / RLS: a Source this caller cannot see (unknown id, or a private Source owned by someone
