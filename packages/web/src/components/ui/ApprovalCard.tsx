@@ -1,5 +1,6 @@
 import type { BlastRadius, OperationMode } from '@nexttime/shared';
 import { type ReactNode, useId, useRef, useState } from 'react';
+import { actionKindTagText } from '../../lib/format.js';
 import { useT } from '../../lib/i18n.js';
 import { Button } from './Button.js';
 import { Field, Textarea } from './Field.js';
@@ -122,8 +123,8 @@ export function ApprovalCard({
       <header className="approval-card-header">
         <div className="approval-card-heading">
           <span className="section-title">{t('审批', 'Approval')}</span>
-          <h3 className="approval-card-title mono" id={titleId}>
-            {actionKind}
+          <h3 className="approval-card-title mono" id={titleId} title={actionKind}>
+            {actionKindTagText(actionKind)}
           </h3>
         </div>
         <div className="row-wrap">

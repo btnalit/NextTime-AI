@@ -39,6 +39,7 @@ import {
   WorkerResultValidationError,
   hashApiKey,
 } from '../../application/gateway/index.js';
+import { UnknownOperationError } from '../../application/gateway/index.js';
 import { TaskRuntimeNotConfiguredError } from '../../application/task/index.js';
 import {
   ProcedureStepReferenceError,
@@ -98,6 +99,16 @@ describe('mapCapabilityError — S6-A / C25 approve.reason (unit)', () => {
     expect(mapCapabilityError(new ApprovalReasonRequiredError('ar-1'))).toMatchObject({
       status: 400,
       code: 'reason_required',
+    });
+  });
+});
+
+describe('mapCapabilityError — legacy 232 unknown operation (unit)', () => {
+  it('UnknownOperationError maps to 404 unknown_operation with its details, never the requested name', () => {
+    expect(mapCapabilityError(new UnknownOperationError('gk-1', 'none'))).toMatchObject({
+      status: 404,
+      code: 'unknown_operation',
+      details: { gatekeeperId: 'gk-1', operationStatus: 'none' },
     });
   });
 });

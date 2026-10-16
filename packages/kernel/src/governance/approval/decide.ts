@@ -12,6 +12,7 @@ import {
   assertCredentialsReviewed,
   credentialReviewAudit,
   findSuspectedSecrets,
+  quotedName,
   redactedForAudit,
 } from '../redaction/index.js';
 import { approverHasScope, getActionRequestForUpdateOrThrow } from './reads.js';
@@ -154,7 +155,7 @@ async function assertApproverScope(
       ? ` × resource_scope "${existing.resourceScope}"`
       : '';
     throw new ApprovalScopeError(
-      `principal ${approver.principalId} does not hold action_kind "${existing.actionKind}"${resourceScopeSuffix} (I14)`,
+      `principal ${approver.principalId} does not hold action_kind ${quotedName(existing.actionKind)}${resourceScopeSuffix} (I14)`,
     );
   }
 }
@@ -209,7 +210,7 @@ async function assertPersonDecidesWhenRequired(
       existing.id,
       approverPrincipalId,
       event,
-      `targets Operation "${existing.actionKind}", which is not published (unclassified, I17)`,
+      `targets Operation ${quotedName(existing.actionKind)}, which is not published (unclassified, I17)`,
     );
   }
   if (!published.operation.auto_approvable) {
@@ -217,7 +218,7 @@ async function assertPersonDecidesWhenRequired(
       existing.id,
       approverPrincipalId,
       event,
-      `targets Operation "${existing.actionKind}", which is not auto_approvable`,
+      `targets Operation ${quotedName(existing.actionKind)}, which is not auto_approvable`,
     );
   }
 }

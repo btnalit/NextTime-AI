@@ -7,7 +7,7 @@ import {
   isDecidable,
 } from '../lib/action-card.js';
 import { credentialReviewCount } from '../lib/credential-review.js';
-import { prettyJson, redactSensitive } from '../lib/format.js';
+import { actionKindTagText, prettyJson, redactSensitive } from '../lib/format.js';
 import { useT } from '../lib/i18n.js';
 import { actorRuntimeLabel, policyDecisionLabel } from '../lib/labels.js';
 import { capabilityHolders } from '../lib/role-holders.js';
@@ -84,7 +84,9 @@ export function ActionRequestCard({
         data-action-request-id={card.actionRequestId}
       >
         <div className="row-wrap">
-          <span className="tag">{card.actionKindTag}</span>
+          <span className="tag action-card-kind" title={card.actionKindTag}>
+            {actionKindTagText(card.actionKindTag)}
+          </span>
           {card.resourceScope ? <span className="text-3 mono">{card.resourceScope}</span> : null}
         </div>
         <p className="text-2 text-small pre-wrap">{card.description}</p>
@@ -184,14 +186,14 @@ export function ActionRequestCard({
         }}
         anchor={approvalCard}
         title={t(
-          `批准并总是允许 ${card.actionKindTag}`,
-          `Approve and always allow ${card.actionKindTag}`,
+          `批准并总是允许 ${actionKindTagText(card.actionKindTag)}`,
+          `Approve and always allow ${actionKindTagText(card.actionKindTag)}`,
         )}
         description={t(
-          `批准这次请求，并写入一条自动批准规则：今后此门上的 ${card.actionKindTag} 不论谁发起都直接执行，不再进入审批。其他门上的同名动作不受影响；规则可在「模型与配额 → 策略」中关闭。`,
-          `Approves this request and writes an auto-approval rule: from now on ${card.actionKindTag} on this gate runs without approval for every requester. The same name on other gates is not affected; turn the rule off under Models & Quotas → Policies.`,
+          `批准这次请求，并写入一条自动批准规则：今后此门上的 ${actionKindTagText(card.actionKindTag)} 不论谁发起都直接执行，不再进入审批。其他门上的同名动作不受影响；规则可在「模型与配额 → 策略」中关闭。`,
+          `Approves this request and writes an auto-approval rule: from now on ${actionKindTagText(card.actionKindTag)} on this gate runs without approval for every requester. The same name on other gates is not affected; turn the rule off under Models & Quotas → Policies.`,
         )}
-        target={card.actionKindTag}
+        target={actionKindTagText(card.actionKindTag)}
         impact={[
           `${t('门', 'Gatekeeper')}: ${card.gatekeeperId}`,
           `${t('规则范围', 'Rule scope')}: ${t('此门 · 所有发起人 · 今后', 'this gate · every requester · from now on')}`,

@@ -1,5 +1,9 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import {
+  ACTION_KIND_INLINE_MAX,
+  actionKindLabel,
+  actionKindTagText,
+  clipMiddle,
   excerpt,
   formatAuditActor,
   formatDateTime,
@@ -53,6 +57,19 @@ describe('format', () => {
 
   it('humanizeKind matches the kernel label convention', () => {
     expect(humanizeKind('docker.container_restart')).toBe('docker container restart');
+  });
+
+  it('legacy 232: an action kind is clipped in its middle for inline display, head and tail kept', () => {
+    expect(actionKindTagText('docker.container_restart')).toBe('docker.container_restart');
+    expect(actionKindLabel('docker.container_restart')).toBe('docker container restart');
+    const long = `${'a'.repeat(200)}.delete_everything`;
+    const clipped = actionKindTagText(long);
+    expect(clipped).toHaveLength(ACTION_KIND_INLINE_MAX);
+    expect(clipped.startsWith('aaaa')).toBe(true);
+    expect(clipped.endsWith('delete_everything')).toBe(true);
+    expect(clipped).toContain('…');
+    expect(clipMiddle('abcdefghij', 10)).toBe('abcdefghij');
+    expect(clipMiddle('abcdefghijk', 10)).toBe('abcdef…ijk');
   });
 
   it('formatAuditActor prefers login, falls back to the (truncated) id, then to an unattributed label (遗留 54, AU1)', () => {

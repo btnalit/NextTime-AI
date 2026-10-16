@@ -1,13 +1,15 @@
+import { createHash } from 'node:crypto';
 import type { Capability } from '@nexttime/shared';
 import { getCapability } from '@nexttime/shared';
 import { withPlatform } from '../../adapters/db/platform-context.js';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { withWorkspace } from '../../adapters/db/pool.js';
 import { GatekeeperClientError, gateRefusalOf } from '../../adapters/gatekeeper-client/index.js';
-import { redactSuspectedSecrets } from '../../governance/redaction/index.js';
+import { quotedName, redactSuspectedSecrets } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { ForbiddenError, authorizeCapabilityCall } from './authorize.js';
 import { CAPABILITY_HANDLERS } from './handlers.js';
+import { UnknownOperationError } from './request-action-handler.js';
 import type { ResolvedCaller } from './resolve-caller.js';
 
 /**
@@ -47,7 +49,7 @@ import type { ResolvedCaller } from './resolve-caller.js';
 
 export class CapabilityNotFoundError extends Error {
   constructor(name: string) {
-    super(`unknown capability "${name}"`);
+    super(`unknown capability ${quotedName(name)}`);
     this.name = 'CapabilityNotFoundError';
   }
 }
@@ -272,6 +274,73 @@ async function auditGateRefusal(
 }
 
 /**
+ * Legacy 232: a `request_action` refused for naming nothing the gate runs (`UnknownOperationError`)
+ * leaves an audit row, as such a call did when it still became an ActionRequest ("审计只增不减"),
+ * written in its own transaction like `auditGateRefusal`'s. The requested name is caller-chosen
+ * text, so the row holds its length and sha256 instead of the name — enough to match a name you
+ * already have, nothing an auditor's view echoes back. Failing to write it is logged and never
+ * replaces the refusal itself.
+ */
+async function auditUnknownOperation(
+  deps: DispatchDeps,
+  call: {
+    readonly workspaceId: string;
+    readonly principalId: string;
+    readonly channel: string;
+    readonly capability: Capability;
+    readonly name: string;
+    readonly params: Record<string, unknown>;
+    readonly err: unknown;
+  },
+): Promise<void> {
+  const err = call.err;
+  if (!(err instanceof UnknownOperationError)) return;
+  const { operation, ...rest } = call.params;
+  const requested = typeof operation === 'string' ? operation : '';
+  const resourceRef = auditResourceRef(err.details.gatekeeperId);
+  try {
+    await withWorkspace(
+      deps.pool,
+      { workspaceId: call.workspaceId, principalId: call.principalId },
+      (client) =>
+        writeAudit(client, {
+          workspaceId: call.workspaceId,
+          actorPrincipalId: call.principalId,
+          action: call.name,
+          resourceType: 'gatekeeper',
+          resourceId: resourceRef.resourceId,
+          payload: {
+            channel: call.channel,
+            onBehalfOf: call.principalId,
+            ...auditParams(call.capability, rest),
+            ...(resourceRef.resourceRef !== undefined
+              ? { resourceRef: resourceRef.resourceRef }
+              : {}),
+            requestedOperation: {
+              length: requested.length,
+              sha256: createHash('sha256').update(requested, 'utf8').digest('hex'),
+            },
+            outcome: 'refused',
+            refusal: {
+              code: err.code,
+              status: 404,
+              operationStatus: err.details.operationStatus,
+            },
+          },
+        }),
+    );
+  } catch (auditErr) {
+    const detail = auditErr instanceof Error ? auditErr.message : String(auditErr);
+    console.error(
+      `[kernel] audit of an unknown-operation refusal failed (capability=${call.name}): ${detail}`.replace(
+        /\n|\r/g,
+        '',
+      ),
+    );
+  }
+}
+
+/**
  * Dispatches one capability call. Throws `CapabilityNotFoundError` (404), `ForbiddenError` (403,
  * authorize.ts), `InvalidCapabilityParamsError` (400), `CapabilityNotImplementedError` (501), or —
  * only when `KERNEL_VALIDATE_RESULTS=1` — `CapabilityResultValidationError`; resolves with the
@@ -415,7 +484,7 @@ export async function dispatchCapability(
       return result;
     },
   ).catch(async (err: unknown) => {
-    await auditGateRefusal(deps, {
+    const refused = {
       workspaceId,
       principalId,
       channel: caller.channel,
@@ -423,7 +492,9 @@ export async function dispatchCapability(
       name,
       params: parsed.data as Record<string, unknown>,
       err,
-    });
+    };
+    await auditGateRefusal(deps, refused);
+    await auditUnknownOperation(deps, refused);
     throw err;
   });
 

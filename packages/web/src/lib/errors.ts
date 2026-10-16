@@ -90,6 +90,7 @@ export const CODE_TITLES: Readonly<Record<string, string>> = {
   operation_definition_mismatch: 'The gate runs another definition',
   operation_definition_unavailable: 'No approved definition',
   gate_owned_params: 'Declares parameters the gate sets',
+  unknown_operation: 'This gate has no such operation',
   unknown: 'Error',
 };
 
@@ -137,6 +138,7 @@ export const CODE_TITLES_ZH: Readonly<Record<string, string>> = {
   operation_definition_mismatch: '门运行的定义和批准的不一样',
   operation_definition_unavailable: '没有批准过的定义',
   gate_owned_params: '声明了门自己设置的参数',
+  unknown_operation: '这个门上没有这个动作',
   unknown: '出错了',
 };
 

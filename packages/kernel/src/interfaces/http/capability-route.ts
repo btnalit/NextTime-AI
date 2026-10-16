@@ -58,6 +58,7 @@ import {
   SourceNotFoundError,
   SupersedeIdentityMismatchError,
   UnauthorizedError,
+  UnknownOperationError,
   WorkerResultValidationError,
   WorkspaceRequiredError,
   dispatchCapability,
@@ -347,6 +348,11 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
       message: err.message,
       details: { params: err.details.params.map((entry) => ({ ...entry })) },
     };
+  }
+  // Legacy 232: `request_action` naming nothing the gate could run — 404 with its own code and
+  // `details` (gatekeeperId, whether the name is unknown or deprecated), never the name itself.
+  if (err instanceof UnknownOperationError) {
+    return { status: 404, code: err.code, message: err.message, details: { ...err.details } };
   }
   if (
     err instanceof ActionRequestNotFoundError ||

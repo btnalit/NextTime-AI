@@ -19643,6 +19643,7 @@
           "type": "string"
         },
         "operation": {
+          "minLength": 1,
           "type": "string"
         },
         "params": {

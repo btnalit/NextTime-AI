@@ -148,6 +148,32 @@ export function humanizeKind(kind: string): string {
   return kind.replace(/[._-]+/g, ' ').trim() || kind;
 }
 
+/** Legacy 232: the longest an action kind is shown inline — in a title, a chip, a toast, a
+ *  confirm line or a sentence. An action kind is an Operation's name, which an agent can propose,
+ *  so it can be any length; where the whole value matters it is shown in full in its own monospace
+ *  field (the approval detail's 「能力」 row) and as the hover title. */
+export const ACTION_KIND_INLINE_MAX = 80;
+
+/** `text` clipped to `max` characters by cutting its middle: the head and the tail both stay, so
+ *  two long names that differ only at the end still read differently. */
+export function clipMiddle(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const tail = Math.floor((max - 1) / 3);
+  return `${text.slice(0, max - 1 - tail)}…${text.slice(text.length - tail)}`;
+}
+
+/** An action kind for running text: `humanizeKind`, clipped (legacy 232). Two raw tags can
+ *  humanize alike (`a.b`, `a_b`), so every place that shows this also carries the raw tag as its
+ *  hover title, or shows it beside. */
+export function actionKindLabel(kind: string): string {
+  return clipMiddle(humanizeKind(kind), ACTION_KIND_INLINE_MAX);
+}
+
+/** The raw action kind, clipped, for a chip or a sentence that names it as is (legacy 232). */
+export function actionKindTagText(kind: string): string {
+  return clipMiddle(kind, ACTION_KIND_INLINE_MAX);
+}
+
 /** A platform audit row's actor, for display: the login when known, else the id (S8 W4-A ui-audit
  *  AU1/S10: truncated via `shortId` rather than shown in full — a raw platform user id has no
  *  `resolve_refs` kind to resolve through, unlike every workspace-scope reference this console

@@ -1715,7 +1715,9 @@ const governanceCapabilities = [
     paramsSchema: z
       .object({
         gatekeeperId: id,
-        operation: z.string(),
+        // Legacy 232: non-empty like `observe_operation`'s; a name the gate holds no definition
+        // for is refused by the handler (404 `unknown_operation`), not queued for approval.
+        operation: z.string().min(1),
         params: jsonRecord,
         // P1-1 fix (review job 652a4abc): scoped to (workspace, on_behalf_of, sid, key) by the
         // handler before it reaches the DB's (workspace_id, idempotency_key) unique index — a

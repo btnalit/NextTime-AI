@@ -166,6 +166,7 @@ export {
 export {
   ActionRequestDeniedError,
   GatekeeperNotFoundError,
+  UnknownOperationError,
   requestActionHandler,
   setRequestActionDeps,
 } from './request-action-handler.js';

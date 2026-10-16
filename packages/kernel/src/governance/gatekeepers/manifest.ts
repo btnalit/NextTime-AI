@@ -21,7 +21,7 @@ import {
   setOperationStatusObject,
 } from '../../substrate/ontology/index.js';
 import { type PublishActor, assertPublishAuthority, seesEveryDraft } from '../capability/index.js';
-import { assertDraftCredentialsReviewed } from '../redaction/index.js';
+import { assertDraftCredentialsReviewed, quotedName } from '../redaction/index.js';
 import {
   operationDefinitionDiffers,
   operationDraftDigest,
@@ -184,7 +184,7 @@ function toOperationRecord(
 
 export class OperationNotFoundError extends Error {
   constructor(gatekeeperId: string, name: string) {
-    super(`Operation not found: gatekeeper ${gatekeeperId}, name "${name}"`);
+    super(`Operation not found: gatekeeper ${gatekeeperId}, name ${quotedName(name)}`);
     this.name = 'OperationNotFoundError';
   }
 }
@@ -204,7 +204,7 @@ export class OperationIdentityConflictError extends Error {
   readonly existingStatus: OperationStatus;
   constructor(gatekeeperId: string, name: string, existingStatus: OperationStatus) {
     super(
-      `Operation "${name}" on gatekeeper ${gatekeeperId} already exists (status: ${existingStatus}) — a proposal may only create a new draft or revise the proposer’s own draft`,
+      `Operation ${quotedName(name)} on gatekeeper ${gatekeeperId} already exists (status: ${existingStatus}) — a proposal may only create a new draft or revise the proposer’s own draft`,
     );
     this.name = 'OperationIdentityConflictError';
     this.existingStatus = existingStatus;
@@ -221,7 +221,7 @@ export class OperationDraftChangedError extends Error {
   readonly code = 'draft_changed' as const;
   constructor(gatekeeperId: string, name: string, version: number) {
     super(
-      `Operation "${name}" v${version} on gatekeeper ${gatekeeperId} changed after it was read (draftDigest differs) — nothing was written; reload it and look again`,
+      `Operation ${quotedName(name)} v${version} on gatekeeper ${gatekeeperId} changed after it was read (draftDigest differs) — nothing was written; reload it and look again`,
     );
     this.name = 'OperationDraftChangedError';
   }
@@ -300,7 +300,7 @@ export class OperationDescriptionRequiredError extends Error {
   readonly operationName: string;
   constructor(operationName: string) {
     super(
-      `import_manifest: Operation "${operationName}" has no description — every imported Operation must declare a non-blank description (CO1)`,
+      `import_manifest: Operation ${quotedName(operationName)} has no description — every imported Operation must declare a non-blank description (CO1)`,
     );
     this.name = 'OperationDescriptionRequiredError';
     this.operationName = operationName;
@@ -1216,8 +1216,8 @@ export class OperationDescriptionInvalidError extends Error {
   constructor(operationName: string, reason: 'empty' | 'too_long') {
     super(
       reason === 'empty'
-        ? `update_operation_description: Operation "${operationName}" description must not be blank`
-        : `update_operation_description: Operation "${operationName}" description exceeds ${OPERATION_DESCRIPTION_MAX_LENGTH} characters`,
+        ? `update_operation_description: Operation ${quotedName(operationName)} description must not be blank`
+        : `update_operation_description: Operation ${quotedName(operationName)} description exceeds ${OPERATION_DESCRIPTION_MAX_LENGTH} characters`,
     );
     this.name = 'OperationDescriptionInvalidError';
     this.operationName = operationName;

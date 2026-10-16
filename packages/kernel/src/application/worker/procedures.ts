@@ -8,7 +8,7 @@ import {
 import type { PoolClient } from 'pg';
 import { type PublishActor, assertPublishAuthority } from '../../governance/capability/index.js';
 import { getPublishedOperation } from '../../governance/gatekeepers/index.js';
-import { assertDraftCredentialsReviewed } from '../../governance/redaction/index.js';
+import { assertDraftCredentialsReviewed, quotedName } from '../../governance/redaction/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
 import { projectProcedureObject } from '../../substrate/ontology/index.js';
@@ -241,7 +241,7 @@ async function resolveStepTargets(
       if (!operation) {
         throw new ProcedureStepReferenceError(
           stepIndex,
-          `Operation "${step.operationName}" on Gatekeeper ${step.gatekeeperId} is not published (or does not exist)`,
+          `Operation ${quotedName(step.operationName)} on Gatekeeper ${step.gatekeeperId} is not published (or does not exist)`,
         );
       }
       // `getPublishedOperation` already resolved this Object and carries its own id (S3.12:

@@ -10,6 +10,7 @@ import {
   HttpGatekeeperClient,
   platformGateTarget,
 } from '../../adapters/gatekeeper-client/index.js';
+import { UnknownOperationError } from '../../application/gateway/index.js';
 import { ConnectionParamsCarryCredentialsError } from '../../governance/connections/index.js';
 import { ObserveParamsCarryCredentialsError } from '../../governance/redaction/index.js';
 import { buildMcpServer, mapCapabilityErrorToToolResult } from './server-factory.js';
@@ -130,6 +131,14 @@ describe('mapCapabilityErrorToToolResult', () => {
     const text = (result.content[0] as { text: string }).text;
     expect(text).toMatch(/^credentials_in_observe_params: inventory\.list_items: /);
     expect(text).toMatch(/Do not pass credentials/);
+  });
+
+  it('prefixes a request_action naming nothing the gate runs with its code (legacy 232)', () => {
+    const result = mapCapabilityErrorToToolResult(new UnknownOperationError('gk-1', 'none'));
+    expect(result.isError).toBe(true);
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toMatch(/^unknown_operation: request_action: gatekeeper gk-1 /);
+    expect(text).toMatch(/list_allowed_operations/);
   });
 
   it('prefixes a refused connection’s credential-carrying field with its code (legacy 186)', () => {

@@ -24,6 +24,7 @@ import {
   getPublishedOperation,
   operationRecordDigest,
 } from '../../governance/gatekeepers/index.js';
+import { quotedName } from '../../governance/redaction/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { operationPlatformStatus, readGateLinkPolicy } from '../gates/index.js';
 import { resolveGateTarget } from './gate-target.js';
@@ -179,7 +180,7 @@ async function approvedOperationDigest(
 ): Promise<{ readonly digest: string } | { readonly refusal: string }> {
   if (actionRequest.operationDigest === NO_OPERATION_DEFINITION) {
     return {
-      refusal: `operation_definition_unavailable: "${actionRequest.actionKind}" was requested while it was not published and had no draft, so it was approved without a definition — nothing was sent. Publish the Operation (its definition is what gets approved), then request it again.`,
+      refusal: `operation_definition_unavailable: ${quotedName(actionRequest.actionKind)} was requested while it was not published and had no draft, so it was approved without a definition — nothing was sent. Publish the Operation (its definition is what gets approved), then request it again.`,
     };
   }
   if (actionRequest.operationDigest !== null) return { digest: actionRequest.operationDigest };
@@ -191,7 +192,7 @@ async function approvedOperationDigest(
   );
   if (!published) {
     return {
-      refusal: `operation_definition_unavailable: "${actionRequest.actionKind}" names no definition (it was requested before requests recorded one) and is not published now — this workspace holds no definition to hold the gate to, so nothing was sent. Publish the Operation (its definition is what gets approved), then request it again.`,
+      refusal: `operation_definition_unavailable: ${quotedName(actionRequest.actionKind)} names no definition (it was requested before requests recorded one) and is not published now — this workspace holds no definition to hold the gate to, so nothing was sent. Publish the Operation (its definition is what gets approved), then request it again.`,
     };
   }
   try {
@@ -323,7 +324,7 @@ export function createGatekeeperActionExecutor(
       if (disabled) {
         return {
           ok: false,
-          reason: `operation_disabled: "${actionRequest.actionKind}" was disabled by the platform after this request was made`,
+          reason: `operation_disabled: ${quotedName(actionRequest.actionKind)} was disabled by the platform after this request was made`,
         };
       }
       if ('refusal' in approved) return { ok: false, reason: approved.refusal };

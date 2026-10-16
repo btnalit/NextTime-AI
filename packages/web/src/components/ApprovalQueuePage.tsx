@@ -7,7 +7,7 @@ import { usePermissions } from '../hooks/usePermissions.js';
 import { useRoleCan } from '../hooks/useRoleCan.js';
 import type { CapabilityCaller, PushSource } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
-import { formatDateTime, formatRelative, humanizeKind, shortId } from '../lib/format.js';
+import { actionKindLabel, formatDateTime, formatRelative, shortId } from '../lib/format.js';
 import type { ActionRequestRow } from '../lib/governance.js';
 import { type Translate, useT } from '../lib/i18n.js';
 import { actorRuntimeLabel } from '../lib/labels.js';
@@ -386,7 +386,7 @@ function PendingList({
                 <span>{gateName}</span>
                 <SameNameId id={row.gatekeeperId} same={sameNames} />
                 <span className="meta-sep" />
-                <span>{humanizeKind(row.actionKindTag)}</span>
+                <span title={row.actionKindTag}>{actionKindLabel(row.actionKindTag)}</span>
                 {scopeLabel ? (
                   <>
                     {' → '}
@@ -596,7 +596,7 @@ function ApprovalHistoryTab({
                     <span>{gateName}</span>
                     <SameNameId id={row.gatekeeperId} same={sameNames} />
                     <span className="meta-sep" />
-                    <span>{humanizeKind(row.actionKindTag)}</span>
+                    <span title={row.actionKindTag}>{actionKindLabel(row.actionKindTag)}</span>
                     {scopeLabel ? (
                       <>
                         {' → '}
