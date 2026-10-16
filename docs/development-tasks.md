@@ -4004,7 +4004,13 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 
 **287 — 第一次执行时的网络错误分开处理（发送后断开记 `in_doubt`）；W1 硬前置**（见 `global-roadmap-2026-10-16.md` §4）
 
-- 实现说明：（未开工）
+- 实现说明（#586，2026-10-16 合入，b19d0c2；遗留 287 关闭）：两跳共用 `packages/gatekeeper-base/src/network-failure.ts` 判定 `not_sent` / `maybe_delivered`（只读 Node / undici 的 `code` / `syscall` / `name`，从不读 message，沿 `cause` 链与 `AggregateError`，冲突取 `maybe_delivered`；TLS 白名单：证书校验结果、`ERR_TLS_CERT_ALTNAME_INVALID` 与只在握手阶段出现的码算没发出，其余 `ERR_SSL_*` / `ERR_TLS_*` 含记录层错误一律结果不明）。
+  - **内核→门**：没发出记 `failed: gate_unreachable`，不当队头屏障；in-doubt 码集合 `APPLY_IN_DOUBT_CODES` = `gate_connection_lost`、`idempotency_conflict`、`invalid_response`、`unrecognized_gate_error`、`internal_error`，加 `GatekeeperTimeoutError`，行留 `executing`（R-50），审计 `action_request.outcome_in_doubt`；门自己明确的拒绝（`operation_refused`、`operation_definition_mismatch`、4xx 校验、`redirect_refused`）仍记 `failed`。
+  - **门→目标**：`kinds/call-failure.ts` 统一「目标答复前 / 答复后」：答复前只有证明没发出才记普通失败，答复后只有目标的 `!ok` 状态与 JSON-RPC `error` 记普通失败，其余（body 截断、`HPE_*`、`Z_*`、200 但非 JSON 或无 `result`）记 409 `apply_outcome_unknown`；`kinds/exec-failure.ts` 处理 ssh / cli：超 `maxBuffer`、被信号杀记结果不明，spawn `ENOENT` / `EACCES` 记普通失败；ssh「从没启动」只认客户端经 `-E` 写到私有临时文件的整行报错；docker 已做过变更后的失败记结果不明。凭据头 `credentialHeaders` 移到 `try` 之前（http、mcp、ragflow），凭据解析失败不再被当成网络失败。
+  - **reaper 只查不跑**：新路由 `gate/apply_lookup` 与幂等存储的 `lookup`（`GatekeeperBase.lookupApply` 作答）：有结果 → `executed`；absent → 写 `not_received` 墓碑并关闭键（重启后仍在，迟到的 `apply` 被拒）→ 行 `failed: apply_not_received`；门答结果不明、旧门 404（码不是 `apply_not_received` / `gate_not_found`）或查询 3 次未答 → `failed: outcome_unknown`；`gate_not_found` 的 404 按查询失败重试。用独立路由而不加 `lookupOnly` 标志，因为 `ApplyRequestSchema` 非 strict，旧门会忽略标志照常执行。首次查询在进入 `executing` 后 10–15 分钟（stale 10 分钟、reaper 每 5 分钟）。
+  - **wire 与控制台**：`ActionRequest` 与 `request_action` 结果加可选 `outcomeInDoubt {{since, reason}}`、`queuedBehind {{status, outcomeInDoubt}}`（`waiting-state.ts` 读取时派生；`queuedBehind` 不给挡路行的 id 或内容，I14）；控制台在工具行、审批历史、审批详情、任务关联审批四处区分「没执行」「结果不明」「结果不明·查询中」「排队中」，新增 `data-action-outcome` 与 testid `tool-call-waiting` 等六个；ssh stderr 2 KB 上限沿用普通失败的脱敏链（`scrubSecretValues` → `reasonAuditFields` → `redactSuspectedSecrets`）。
+  - **测试**：真实 socket / 子进程 / Postgres，无付费实测：`request-action.integration.test.ts`（gate_unreachable、断连只执行一次、`proxy_502`、未到门、`old_gate`、queuedBehind）、`kinds/call-failure.test.ts`、docker / ragflow `transport.test.ts`、`ssh.test.ts`、`cli.test.ts`、`idempotency-store.test.ts`、`server.test.ts`。设计文档 §7.5 与 §13 故障表、`packages/gatekeeper-base/README.md` 同步。
+  - **留给 GO1 的输入**：结构化失败类别列（DS1，本 PR 仍走原因前缀 `gate_unreachable:` / `apply_not_received:` / `outcome_unknown:`）；门与目标之间代理的 502/504 与目标答复分不开、按目标答复记普通失败（§13 已写为取舍）；「核对后：已生效 / 没生效」的回填入口（UX P2-2 后半）；自定义 transport 抛未识别错误默认记普通失败（STATUS 遗留 310）。聊天动作卡片与系统状态行来自推送、不带等待原因。
 
 **291 — `find_workers` 先过滤后截断**（见 `global-roadmap-2026-10-16.md` §4）
 
