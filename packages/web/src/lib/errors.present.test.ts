@@ -174,3 +174,100 @@ describe('legacy K / J codes (review of #538, G3)', () => {
     expect(gateReasonNextStep('my_operation_definition_mismatch_field', zh)).toBeNull();
   });
 });
+
+// Legacy 287: a failed `request_action` says whether the call left the platform — not sent (it
+// ran nothing, request it again) or outcome unknown (it may have run, check before retrying).
+describe('legacy 287: not sent, or outcome unknown', () => {
+  it.each([
+    [
+      'gate_unreachable: gatekeeper client: gate/apply not sent — could not connect to the gate (ECONNREFUSED); nothing reached it',
+      'gate_unreachable',
+      '没发出：连不上门',
+    ],
+    [
+      'apply_not_received: the gate holds no record of this request having run, so nothing ran. Request it again if it is still wanted.',
+      'apply_not_received',
+      '没执行：门上没有执行记录',
+    ],
+    [
+      'outcome_unknown: apply for actionRequestId "a1" has an unknown outcome: … (409 apply_outcome_unknown)',
+      'outcome_unknown',
+      '结果不明',
+    ],
+  ])('reads the reason %j', (reason, code, title) => {
+    const step = gateReasonNextStep(JSON.stringify({ status: 'failed', reason }), zh);
+    expect(step).toMatchObject({ code, title });
+    expect(gateReasonNextStep(reason, en)?.title).toBe(CODE_TITLES[code]);
+  });
+
+  it('tells the two apart: not sent ran nothing, outcome unknown says not to retry blindly', () => {
+    expect(ERROR_NEXT_STEPS.gate_unreachable?.zh).toContain('什么都没有执行');
+    // Review of #586 (#493 P3): the gate's record is about what ran, not what arrived.
+    expect(ERROR_NEXT_STEPS.apply_not_received?.zh).toBe(
+      '门上没有这次请求执行过的记录，所以什么都没跑。仍然需要的话，重新发起。',
+    );
+    for (const code of ['gate_unreachable', 'apply_not_received']) {
+      expect(ERROR_NEXT_STEPS[code]?.zh).toContain('重新发起');
+    }
+    expect(ERROR_NEXT_STEPS.outcome_unknown?.zh).toContain('不要直接重试');
+    expect(ERROR_NEXT_STEPS.outcome_unknown?.zh).toContain('目标系统');
+  });
+
+  it('not sent is a plain note, outcome unknown the loudest, a gate refusal asks for care (UX acceptance of #586)', () => {
+    const tone = (reason: string) => gateReasonNextStep(reason, zh)?.tone;
+    expect(tone('gate_unreachable: …')).toBe('info');
+    expect(tone('apply_not_received: …')).toBe('info');
+    expect(tone('outcome_unknown: …')).toBe('danger');
+    expect(tone('operation_refused: …')).toBe('warn');
+  });
+
+  it('an outcome-unknown note names what to check when it is given', () => {
+    expect(
+      gateReasonNextStep('outcome_unknown: …', zh, 'container.restart（name: media）')?.message,
+    ).toContain('先到目标系统核对 container.restart（name: media）是否已生效');
+    expect(
+      gateReasonNextStep('outcome_unknown: …', en, 'container.restart (name: media)')?.message,
+    ).toContain('whether container.restart (name: media) took effect');
+    // Without one, the general sentence; the target only changes outcome unknown.
+    expect(gateReasonNextStep('outcome_unknown: …', zh)?.message).toBe(
+      ERROR_NEXT_STEPS.outcome_unknown?.zh,
+    );
+    expect(gateReasonNextStep('gate_unreachable: …', zh, 'x')?.message).toBe(
+      ERROR_NEXT_STEPS.gate_unreachable?.zh,
+    );
+  });
+
+  it('an outcome-unknown note names the system to check when it is given (UX acceptance of #586, P3)', () => {
+    expect(
+      gateReasonNextStep('outcome_unknown: …', zh, 'container.restart（name: media）', 'docker')
+        ?.message,
+    ).toContain('先到系统「docker」核对 container.restart（name: media）是否已生效');
+    expect(gateReasonNextStep('outcome_unknown: …', zh, undefined, 'docker')?.message).toContain(
+      '先到系统「docker」核对它是否生效',
+    );
+    expect(gateReasonNextStep('outcome_unknown: …', en, 'x', 'docker')?.message).toContain(
+      'check on the system "docker" whether x took effect',
+    );
+  });
+
+  it('names the usual cause of a TLS record-layer error (#501 review of #586)', () => {
+    const reason =
+      'outcome_unknown: … http transport: POST /x failed after the request may have reached the target (ERR_SSL_WRONG_VERSION_NUMBER) — it may have run';
+    expect(gateReasonNextStep(reason, zh)?.message).toMatch(
+      /再决定要不要重新发起。常见原因：https 地址指到了只讲明文 HTTP 的端口。$/,
+    );
+    expect(
+      gateReasonNextStep('outcome_unknown: … (ERR_SSL_PACKET_LENGTH_TOO_LONG)', en)?.message,
+    ).toContain(
+      ' A common cause: an https address pointing at a port that only speaks plain HTTP.',
+    );
+    expect(gateReasonNextStep('outcome_unknown: … (ECONNRESET)', zh)?.message).not.toContain(
+      '常见原因',
+    );
+  });
+
+  it('the gate’s own error code inside another word is not a reason', () => {
+    expect(gateReasonNextStep('{"code":"apply_outcome_unknown"}', zh)).toBeNull();
+    expect(gateReasonNextStep('outcome unknown: the gate may still complete it', zh)).toBeNull();
+  });
+});

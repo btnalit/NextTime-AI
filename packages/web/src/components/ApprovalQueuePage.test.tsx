@@ -348,6 +348,36 @@ describe('ApprovalHistoryTab (list_action_requests, S5.5 leftover 21)', () => {
     expect(calls[1]).toMatchObject({ limit: 50, status: 'approved' });
   });
 
+  // Legacy 287 (review of #586): a row that has not finished says why it waits.
+  it('says why an unfinished row waits: an executing one in doubt, an approved one queued behind', async () => {
+    const http = scriptedHttp([() => Promise.resolve([])], {
+      list_action_requests: historyOf([
+        row({
+          id: 'ar-1',
+          status: 'executing',
+          outcomeInDoubt: { since: '2026-10-16T07:00:00.000Z', reason: 'gate_connection_lost: …' },
+        }),
+        row({
+          id: 'ar-2',
+          status: 'approved',
+          requestedAt: '2026-10-16T07:01:00.000Z',
+          queuedBehind: { status: 'executing', outcomeInDoubt: true },
+        }),
+        row({ id: 'ar-3', status: 'approved', queuedBehind: null }),
+      ]),
+    });
+    render(<ApprovalQueuePage http={http} pushes={SILENT_PUSH_SOURCE} onSelect={vi.fn()} />);
+    await screen.findByTestId('approvals-empty');
+    fireEvent.click(screen.getByRole('tab', { name: /历史/ }));
+    await screen.findAllByTestId('approval-history-row');
+    const waiting = screen.getAllByTestId('approval-history-waiting');
+    expect(waiting.map((line) => [line.getAttribute('data-waiting'), line.textContent])).toEqual([
+      ['outcome_in_doubt', '结果不明，平台向门查询中'],
+      ['queued_behind', '排队中：同一系统上更早的请求结果不明'],
+    ]);
+    expect(waiting[0]?.className).toContain('text-warn');
+  });
+
   it('P3-4 V6/V8: the status select renders human labels, never the raw wire value, while the option value itself stays the wire status', async () => {
     const http = scriptedHttp([() => Promise.resolve([])], {
       list_action_requests: () => Promise.resolve({ items: [] }),

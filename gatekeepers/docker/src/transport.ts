@@ -5,6 +5,9 @@ import {
   type TransportInvokeContext,
   TransportInvokeError,
   type TransportInvokeResult,
+  TransportOutcomeUnknownError,
+  networkFailureCode,
+  networkFailureDelivery,
 } from '@nexttime/gatekeeper-base';
 import type { Operation } from '@nexttime/shared';
 import type { ContainerSummary, DockerClient, ListContainersOptions } from './docker-client.js';
@@ -133,10 +136,91 @@ async function composeTargets(
   return all.filter((c) => (wantRunning ? c.state !== 'running' : c.state === 'running'));
 }
 
+/**
+ * Legacy 287 (review of #586, #493 M3): the calls that change the target (`restart`, `start`,
+ * `stop`), so a failure of an execute Operation can say whether it may have acted. Every other
+ * call this transport makes (inspect, list, logs) only reads.
+ */
+interface Effects {
+  /** Effect calls the daemon answered with success. */
+  done: number;
+  /** The effect call in flight when the Operation failed, if any. */
+  inFlight: string | undefined;
+}
+
+async function effect(effects: Effects, what: string, call: () => Promise<void>): Promise<void> {
+  effects.inFlight = what;
+  await call();
+  effects.inFlight = undefined;
+  effects.done += 1;
+}
+
+/** The Docker daemon's own answer to a call: dockerode / docker-modem put its HTTP status on the
+ *  error (`404 no such container`, `500 …`). A connection that broke has no status. */
+function daemonStatus(err: unknown): number | undefined {
+  if (err === null || typeof err !== 'object') return undefined;
+  const { statusCode } = err as { statusCode?: unknown };
+  return typeof statusCode === 'number' ? statusCode : undefined;
+}
+
+/**
+ * How a failed Operation reads (legacy 287), the same rule as the base package's http / mcp
+ * transports (`kinds/call-failure.ts`):
+ *
+ *   - It failed before any effect call, or on the first effect call with the daemon's own error
+ *     status or a connection that provably never opened: nothing changed — a plain failure.
+ *   - An effect call failed without the daemon's answer (the connection broke, an error nobody
+ *     recognises), or any call failed after an effect call succeeded (`container.restart`'s
+ *     inspect after the restart; `compose.up` / `compose.down` part-way through their containers):
+ *     the target may have changed — "outcome unknown", never a failure the kernel could record as
+ *     failed and run again.
+ *
+ * A `docker-socket-proxy` between this gate and the daemon answers 502 / 504 with a status of its
+ * own when the daemon does not answer it; that reads as the daemon's answer here — the design
+ * trade-off docs/graph-ai-middle-platform-design.md §13 records for the gate→target hop.
+ */
+function operationFailure(
+  operationName: string,
+  err: unknown,
+  effects: Effects,
+): TransportInvokeError {
+  const label = `docker transport: operation "${operationName}"`;
+  const code = networkFailureCode(err);
+  const codeDetail = code !== undefined ? ` (${code})` : '';
+  if (effects.done > 0) {
+    return new TransportOutcomeUnknownError(
+      `${label} failed after it had already changed the target (${effects.done} change call(s) succeeded)${codeDetail} — it partially or fully ran`,
+      { cause: err },
+    );
+  }
+  if (effects.inFlight !== undefined) {
+    const status = daemonStatus(err);
+    if (status !== undefined) {
+      return new TransportInvokeError(
+        `${label} failed: the Docker daemon answered ${effects.inFlight} with status ${status}`,
+        { cause: err },
+      );
+    }
+    if (networkFailureDelivery(err) === 'not_sent') {
+      return new TransportInvokeError(
+        `${label} not sent — could not connect to the Docker daemon${codeDetail}; nothing changed`,
+        { cause: err },
+      );
+    }
+    return new TransportOutcomeUnknownError(
+      `${label} failed while its ${effects.inFlight} call was in flight${codeDetail} — it may have run`,
+      { cause: err },
+    );
+  }
+  if (err instanceof TransportInvokeError || err instanceof OperationRefusedError) return err;
+  return new TransportInvokeError(`${label} failed`, { cause: err });
+}
+
 async function invokeOperation(
   client: DockerClient,
   operation: Operation,
   params: Record<string, unknown>,
+  effects: Effects,
 ): Promise<TransportInvokeResult> {
   switch (operation.name) {
     case 'containers.list': {
@@ -178,21 +262,21 @@ async function invokeOperation(
       const id = requireString(params, 'id', operation.name);
       const timeoutSeconds = optionalNumber(params, 'timeoutSeconds', 10);
       const target = await resolveServedContainer(client, operation.name, id);
-      await client.restart(target.id, timeoutSeconds);
+      await effect(effects, 'restart', () => client.restart(target.id, timeoutSeconds));
       const item = await client.inspectContainer(target.id);
       return { data: item };
     }
     case 'compose.up': {
       const project = requireString(params, 'project', operation.name);
       const targets = await composeTargets(client, project, true);
-      for (const target of targets) await client.start(target.id);
+      for (const target of targets) await effect(effects, 'start', () => client.start(target.id));
       const containers = await listServedContainers(client, { all: true, project });
       return { data: { project, started: targets.map((t) => t.id), containers } };
     }
     case 'compose.down': {
       const project = requireString(params, 'project', operation.name);
       const targets = await composeTargets(client, project, false);
-      for (const target of targets) await client.stop(target.id);
+      for (const target of targets) await effect(effects, 'stop', () => client.stop(target.id));
       const containers = await listServedContainers(client, { all: true, project });
       return { data: { project, stopped: targets.map((t) => t.id), containers } };
     }
@@ -258,13 +342,11 @@ export function createDockerTransport(client: DockerClient): Transport {
       _ctx: TransportInvokeContext,
     ): Promise<TransportInvokeResult> {
       assertCliBinding(operation);
+      const effects: Effects = { done: 0, inFlight: undefined };
       try {
-        return await invokeOperation(client, operation, asRecord(params));
+        return await invokeOperation(client, operation, asRecord(params), effects);
       } catch (err) {
-        if (err instanceof TransportInvokeError || err instanceof OperationRefusedError) throw err;
-        throw new TransportInvokeError(`docker transport: operation "${operation.name}" failed`, {
-          cause: err,
-        });
+        throw operationFailure(operation.name, err, effects);
       }
     },
 

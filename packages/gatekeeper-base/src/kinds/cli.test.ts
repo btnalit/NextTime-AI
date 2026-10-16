@@ -1,6 +1,10 @@
 import type { Operation } from '@nexttime/shared';
 import { describe, expect, it, vi } from 'vitest';
-import { TransportTimeoutError } from '../errors.js';
+import {
+  TransportInvokeError,
+  TransportOutcomeUnknownError,
+  TransportTimeoutError,
+} from '../errors.js';
 import { CliTransport, renderCommandTemplate } from './cli.js';
 
 describe('renderCommandTemplate', () => {
@@ -101,6 +105,47 @@ describe('CliTransport', () => {
         ),
       ).rejects.toBeInstanceOf(TransportTimeoutError);
       expect(Date.now() - startedAt).toBeLessThan(5_000);
+    });
+
+    // Legacy 287 (review of #586, #501 P2-2): an exit status is the command's own answer; a
+    // command stopped before it answered may have run.
+    async function failureOf(params: Record<string, string>): Promise<Error> {
+      const thrown = await new CliTransport({ execTimeoutMs: 10_000 })
+        .invoke(nodeOperation, params, {})
+        .then(
+          () => undefined,
+          (err: unknown) => err,
+        );
+      if (!(thrown instanceof Error)) throw new Error('expected the call to fail');
+      return thrown;
+    }
+
+    it('a command that exits with a status is a plain failure', async () => {
+      const err = await failureOf({ node: process.execPath, script: 'process.exit(3)' });
+      expect(err).toBeInstanceOf(TransportInvokeError);
+      expect(err).not.toBeInstanceOf(TransportOutcomeUnknownError);
+    });
+
+    it('a binary that cannot be spawned ran nothing: a plain failure', async () => {
+      const err = await failureOf({ node: '/nonexistent/nt-no-such-binary', script: '1' });
+      expect(err).not.toBeInstanceOf(TransportOutcomeUnknownError);
+    });
+
+    it.each([
+      [
+        'killed by a signal',
+        "process.kill(process.pid, 'SIGKILL')",
+        /stopped before it answered \(it was killed by SIGKILL\)/,
+      ],
+      [
+        'its output past the 10 MB limit',
+        "process.stdout.write('x'.repeat(11 * 1024 * 1024))",
+        /stopped before it answered \(its output passed the limit and the gate stopped it\)/,
+      ],
+    ])('a command %s is outcome unknown', async (_label, script, message) => {
+      const err = await failureOf({ node: process.execPath, script });
+      expect(err).toBeInstanceOf(TransportOutcomeUnknownError);
+      expect(err.message).toMatch(message);
     });
   });
 

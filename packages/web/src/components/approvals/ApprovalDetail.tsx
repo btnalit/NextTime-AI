@@ -26,6 +26,7 @@ import { Notice } from '../kit/notice.js';
 import { RefChip } from '../kit/ref-chip.js';
 import { StatusChip } from '../kit/status-chip.js';
 import { Textarea } from '../kit/textarea.js';
+import { ActionWaitingNotice } from './ActionWaiting.js';
 import { nameOf, resourceScopeLabel } from './useDirectoryNames.js';
 
 export interface ApprovalDecisionInput {
@@ -346,6 +347,8 @@ export function ApprovalDetail({
           ) : null}
         </div>
       </header>
+
+      <ActionWaitingNotice row={row} testId="approval-waiting" />
 
       {blocking ? (
         <Notice tone="warn" testId="approval-blocking">

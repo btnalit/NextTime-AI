@@ -20,6 +20,7 @@ import { List, ListRow } from '../kit/list-row.js';
 import { Notice } from '../kit/notice.js';
 import { SkeletonRows } from '../kit/skeleton.js';
 import { StatusChip } from '../kit/status-chip.js';
+import { ActionWaitingLine } from './ActionWaiting.js';
 import { nameOf, resourceScopeLabel } from './useDirectoryNames.js';
 
 export interface LinkedApprovalsProps {
@@ -143,6 +144,7 @@ function LinkedApprovalsList({
                   <StatusChip machine="blastRadius" status={row.blastRadius} size="s" />
                 ) : null}
               </span>
+              <ActionWaitingLine row={row} testId="linked-approval-waiting" />
               <span className="row-wrap text-3">
                 {resourceScopeLabel(row, undefined) ? (
                   <>

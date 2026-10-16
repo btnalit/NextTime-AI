@@ -40,8 +40,9 @@ import { writeObservedFacts } from './observed-facts.js';
  *
  * `apply`'s `actionRequestId` is the ActionRequest's own id — the stale-executing reaper's replay
  * (`replay` below; e.g. after a crash between `apply` succeeding and `markActionRequestExecuted`
- * committing) asks again under the same key, so the gate's own idempotency store (design doc
- * §5.1.4 "apply 幂等") returns the stored result instead of re-running the effect. Observed facts
+ * committing) asks the gate about that key (`gate/apply_lookup`, legacy 287), and the gate's own
+ * idempotency store (design doc §5.1.4 "apply 幂等") answers with the stored result — the effect
+ * is never run again. Observed facts
  * from a successful `apply` are written in their own short Activity, opened and closed around the
  * write — separate from whatever Activity (if any) the original `request_action` call ran under,
  * since execution can happen well after and in a different transaction (a human approving
@@ -146,25 +147,33 @@ export interface GatekeeperActionExecutorDeps {
 }
 
 /** R-48: the stale-executing reaper's port (`reapStaleExecutingActionRequests` below). `replay`
- *  asks the gate again about an `executing` row whose first `apply` gave no answer — never a fresh
- *  execution decision. `ok: false` with `indeterminate: true` means the gate still gave no verdict
- *  on the call's key (the row stays `executing`); any other `ok: false` is terminal. */
+ *  asks the gate again about an `executing` row whose first `apply` gave no answer — a lookup,
+ *  never an execution (legacy 287). `ok: false` with `indeterminate: true` means the gate still
+ *  gave no verdict on the call's key (the row stays `executing`); any other `ok: false` is
+ *  terminal. */
 export interface ActionReplayer {
   replay(actionRequest: ActionRequestRow): Promise<ActionExecutorResult>;
 }
 
 export type GatekeeperActionExecutor = ActionExecutor & ActionReplayer;
 
-/** Gate error codes (`@nexttime/gatekeeper-base` `server.ts`) that settle an `apply` for its key on
- *  a replay (R-48): the call's own stored failure (502 `transport_error`, R-51), or a refusal that
- *  ran nothing and freed the key (403 `operation_refused`, 424 `credential_unavailable`, 409
- *  `operation_definition_mismatch` — legacy K: the gate answers a key that holds a result before
- *  it compares definitions, so this one means the key holds none). */
-const SETTLED_FAILURE_CODES = new Set([
-  'transport_error',
-  'operation_refused',
-  'credential_unavailable',
-  'operation_definition_mismatch',
+/**
+ * Answers to `gate/apply` that do not say whether the call ran (legacy 287, review of #586 M1): the
+ * gate may have the request and may have run it, so the row stays `executing` and the reaper asks
+ * the gate (`replay`). `gate_connection_lost`: the connection failed after the request may have
+ * been sent. `idempotency_conflict`: an apply for this key is still running there.
+ * `invalid_response` / `unrecognized_gate_error`: an HTTP answer came back that is not the gate's
+ * protocol — a gate that answers badly, or a reverse proxy in front of an owner's gate that
+ * forwarded the call and then answered 502 / 504 itself. `internal_error`: the gate failed in a
+ * way it does not name — before it reserved the key, or after the transport ran (a failed write
+ * of the result).
+ */
+const APPLY_IN_DOUBT_CODES = new Set([
+  'gate_connection_lost',
+  'idempotency_conflict',
+  'invalid_response',
+  'unrecognized_gate_error',
+  'internal_error',
 ]);
 
 /** Legacy K: the digest the gate is told was approved for `actionRequest` — the one recorded when
@@ -206,39 +215,88 @@ async function approvedOperationDigest(
 }
 
 type ApplyErrorVerdict =
-  /** The gate gave no verdict on this key: the call timed out, or the gate answered 409
-   *  `idempotency_conflict` — an apply for this key is still running there. */
+  /** The gate gave no verdict on this key: the call timed out, or the answer is one of
+   *  `APPLY_IN_DOUBT_CODES` (legacy 287). */
   | { readonly kind: 'in_doubt'; readonly message: string }
   /** The gate says it cannot know (409 `apply_outcome_unknown`, R-51 / D-11): its exec timeout
-   *  killed the call, or a gate process stopped mid-call. Never re-run — a person reconciles. */
+   *  killed the call, its connection to the target broke mid-call, or a gate process stopped
+   *  mid-call. Or it answered and the answer cannot be read (`response_too_large`): the gate had
+   *  the call, and asking again returns the same stored answer. Never re-run — a person
+   *  reconciles. */
   | { readonly kind: 'outcome_unknown'; readonly message: string }
-  /** `settled`: the gate answered from the key's own record (`SETTLED_FAILURE_CODES`). */
-  | { readonly kind: 'failed'; readonly message: string; readonly settled: boolean };
+  /** Nothing ran, or the gate said the call failed: nothing was sent (`gate_unreachable`, a
+   *  refused target, no credential to present — legacy 287), or the gate refused or failed the
+   *  call in its own protocol (`transport_error`: its target answered with a failure). */
+  | { readonly kind: 'failed'; readonly message: string };
 
-/** How one failed `gate/apply` call reads — shared by the first execution and the reaper's replay,
- *  so both draw the same line between "failed", "outcome unknown" and "no answer yet". */
+/** How one failed `gate/apply` call reads. The line (legacy 287): a call that may have reached the
+ *  gate is never "failed" unless the gate said so in its own protocol. */
 function applyErrorVerdict(err: unknown): ApplyErrorVerdict {
   const message = err instanceof Error ? err.message : String(err);
   if (err instanceof GatekeeperTimeoutError) return { kind: 'in_doubt', message };
   if (err instanceof GatekeeperClientError) {
     if (err.code === 'apply_outcome_unknown') return { kind: 'outcome_unknown', message };
-    if (err.code === 'idempotency_conflict') return { kind: 'in_doubt', message };
+    if (APPLY_IN_DOUBT_CODES.has(err.code)) return { kind: 'in_doubt', message };
+    if (err.code === 'response_too_large') {
+      return {
+        kind: 'outcome_unknown',
+        message: `${message} — the gate had the call and answered, and its answer cannot be read; asking again returns the same answer`,
+      };
+    }
     // The gate's code leads the reason (`operation_definition_mismatch: …`), as on the MCP and WS
     // surfaces — the same reason-prefix convention as `outcome_unknown` / `operation_disabled`, so a
     // reader (the console's tool row, an agent) can tell which refusal it was (review of #538, G3).
-    return {
-      kind: 'failed',
-      message: `${err.code}: ${message}`,
-      settled: SETTLED_FAILURE_CODES.has(err.code),
-    };
+    return { kind: 'failed', message: `${err.code}: ${message}` };
   }
-  return { kind: 'failed', message, settled: false };
+  // Not the gate client's own error: thrown before the call left the kernel (the client wraps
+  // every failure of a sent call).
+  return { kind: 'failed', message };
+}
+
+/** How the reaper's `gate/apply_lookup` answer reads (legacy 287). `indeterminate`: the gate gave
+ *  no verdict yet — ask again next tick, up to the reaper's cap. */
+type LookupVerdict =
+  | { readonly kind: 'failed'; readonly reason: string }
+  | { readonly kind: 'indeterminate'; readonly reason: string };
+
+function lookupErrorVerdict(err: unknown): LookupVerdict {
+  const message = err instanceof Error ? err.message : String(err);
+  if (!(err instanceof GatekeeperClientError)) return { kind: 'indeterminate', reason: message };
+  // No call for the key ran on the gate, and the gate closed the key so none ever will.
+  if (err.code === 'apply_not_received' && err.status === 404) {
+    return { kind: 'failed', reason: notReceivedReason() };
+  }
+  // The first call's own stored answer.
+  if (err.code === 'apply_outcome_unknown') {
+    return { kind: 'failed', reason: outcomeUnknownReason(message) };
+  }
+  if (err.code === 'transport_error') return { kind: 'failed', reason: `${err.code}: ${message}` };
+  // A 404 that is not the gate's own (`gate_not_found` is a gate host that does not serve this
+  // instance right now): the gate has no `gate/apply_lookup` route — it predates it, so it cannot
+  // be asked. It is never asked with `gate/apply` instead: a gate that old would run the call.
+  if (err.status === 404 && err.code !== 'gate_not_found') {
+    return { kind: 'failed', reason: outcomeUnknownReason(cannotAskDetail()) };
+  }
+  return { kind: 'indeterminate', reason: message };
 }
 
 /** The `failed` reason for an apply whose effect nobody can confirm (R-48): `outcome_unknown`, the
  *  same reason-prefix convention as `operation_disabled` below. */
 function outcomeUnknownReason(detail: string): string {
   return `outcome_unknown: ${detail}`;
+}
+
+/** Legacy 287: the `failed` reason for a row whose replay found no record of it on the gate — no
+ *  call for it ran there (a gate records a key durably before it runs anything, D-11, and one it
+ *  refused it frees), so nothing ran. The same verdict as a first call that could not connect
+ *  (`gate_unreachable`). */
+function notReceivedReason(): string {
+  return 'apply_not_received: the gate holds no record of this request having run, so nothing ran. Request it again if it is still wanted.';
+}
+
+/** Legacy 287: why a row whose gate cannot be asked ends `outcome_unknown`. */
+function cannotAskDetail(): string {
+  return 'this gate cannot be asked whether the request ran — it has no gate/apply_lookup route (its gatekeeper-base predates it), and asking with apply could run it again. Check the target system and reconcile by hand; a gate on a current gatekeeper-base can be asked.';
 }
 
 export function createGatekeeperActionExecutor(
@@ -278,13 +336,13 @@ export function createGatekeeperActionExecutor(
     };
   }
 
-  function applyInput(actionRequest: ActionRequestRow, operationDigest: string | undefined) {
+  /** The fields the gate keys an `apply` on — the reaper's lookup asks about the same ones. */
+  function applyKey(actionRequest: ActionRequestRow) {
     return {
       operation: actionRequest.actionKind,
       params: actionRequest.params,
       onBehalfOf: actionRequest.onBehalfOf,
       actionRequestId: actionRequest.id,
-      operationDigest,
     };
   }
 
@@ -331,17 +389,17 @@ export function createGatekeeperActionExecutor(
 
       let applyResult: Awaited<ReturnType<GatekeeperClient['apply']>>;
       try {
-        applyResult = await deps.gatekeeperClient.apply(
-          gate,
-          applyInput(actionRequest, approved.digest),
-        );
+        applyResult = await deps.gatekeeperClient.apply(gate, {
+          ...applyKey(actionRequest),
+          operationDigest: approved.digest,
+        });
       } catch (err) {
         const verdict = applyErrorVerdict(err);
         if (verdict.kind === 'in_doubt') {
-          // The gate may still be performing the effect — the outcome is unknown, not failed.
-          // The drainer leaves the row `executing` (a barrier for this Gatekeeper's queue, R-50);
-          // `reapStaleExecutingActionRequests` (below) asks the gate again later under this same
-          // `actionRequestId` and the gate's idempotency store answers.
+          // The gate may have the request, or still be performing the effect — the outcome is
+          // unknown, not failed. The drainer leaves the row `executing` (a barrier for this
+          // Gatekeeper's queue, R-50); `reapStaleExecutingActionRequests` (below) asks the gate
+          // later about this same `actionRequestId` and the gate's idempotency store answers.
           return {
             ok: false,
             indeterminate: true,
@@ -358,19 +416,29 @@ export function createGatekeeperActionExecutor(
     },
 
     /**
-     * R-48: the reaper's replay. Unlike `execute`, no deny-list or registration pre-check may end
-     * the row here: the first call may already have taken effect, so only the gate can say what
-     * happened. It always asks the gate — an idempotent `apply` under the same `actionRequestId`,
-     * which the gate's idempotency store answers with the first call's stored result, its stored
-     * failure (R-51), or "outcome unknown" (a key a gate process left pending, D-11). A gate with
-     * no verdict yet (409 still applying, a timeout, unreachable, any other error) leaves the row
-     * `executing` for the next tick — the reaper's attempt cap bounds that.
+     * R-48 / legacy 287: the reaper's replay — a lookup, never an execution. It asks
+     * `gate/apply_lookup` about this row's `actionRequestId`, which the gate answers from its
+     * idempotency store only, never touching the transport: the first call's stored result, its
+     * stored failure (R-51), "outcome unknown" for a key a gate process left pending (D-11), 409
+     * while that call still runs, or 404 `apply_not_received` for a key that holds nothing. A gate
+     * records a key durably before it runs anything (D-11), so a key that holds nothing means no
+     * call for it ran: the row is `failed` (`apply_not_received`) — the verdict a first call that
+     * could not connect gets — and the gate closes the key in the same step, so a first call that
+     * only arrives now is refused there rather than run. Running it here instead would be a fresh
+     * execution that skipped `execute`'s checks (the platform deny list, the approved definition)
+     * long after it was approved.
      *
-     * Known edge: a key the first call never reserved (its request never reached the gate) is
-     * free, so this replay runs the effect fresh — `apply` is the only lookup the gate protocol has.
+     * A gate without the lookup route (built before it) answers a 404 of another shape: it cannot
+     * be asked, and the row ends `failed: outcome_unknown` for a person to reconcile. It is never
+     * asked with a digest-less `gate/apply` instead — a gate from before legacy K would run that.
+     *
+     * No deny-list or registration pre-check may end the row here: the first call may already have
+     * taken effect, so only the gate can say what happened. A gate with no verdict yet (409 still
+     * applying, a timeout, unreachable, any other error) leaves the row `executing` for the next
+     * tick — the reaper's attempt cap bounds that.
      */
     async replay(actionRequest: ActionRequestRow): Promise<ActionExecutorResult> {
-      const { gate, approved } = await deps.withTransaction(
+      const gate = await deps.withTransaction(
         actionRequest.workspaceId,
         actionRequest.onBehalfOf,
         async (client) => {
@@ -379,12 +447,7 @@ export function createGatekeeperActionExecutor(
             actionRequest.workspaceId,
             actionRequest.gatekeeperId,
           );
-          return {
-            gate: record
-              ? await resolveGateTarget(client, actionRequest.workspaceId, record)
-              : null,
-            approved: await approvedOperationDigest(client, actionRequest),
-          };
+          return record ? resolveGateTarget(client, actionRequest.workspaceId, record) : null;
         },
       );
       if (!gate) {
@@ -395,25 +458,14 @@ export function createGatekeeperActionExecutor(
         };
       }
 
-      // Legacy K: unlike `execute`, no refusal here — the first call may have run, and the gate
-      // answers a key that holds a result whatever digest comes with it. With none to send, it
-      // answers only from its store and refuses (settles) a key that holds nothing.
-      const operationDigest = 'digest' in approved ? approved.digest : undefined;
-      let applyResult: Awaited<ReturnType<GatekeeperClient['apply']>>;
+      let applyResult: Awaited<ReturnType<GatekeeperClient['lookupApply']>>;
       try {
-        applyResult = await deps.gatekeeperClient.apply(
-          gate,
-          applyInput(actionRequest, operationDigest),
-        );
+        applyResult = await deps.gatekeeperClient.lookupApply(gate, applyKey(actionRequest));
       } catch (err) {
-        const verdict = applyErrorVerdict(err);
-        if (verdict.kind === 'outcome_unknown') {
-          return { ok: false, reason: outcomeUnknownReason(verdict.message) };
-        }
-        if (verdict.kind === 'failed' && verdict.settled) {
-          return { ok: false, reason: verdict.message };
-        }
-        return { ok: false, indeterminate: true, reason: verdict.message };
+        const verdict = lookupErrorVerdict(err);
+        return verdict.kind === 'failed'
+          ? { ok: false, reason: verdict.reason }
+          : { ok: false, indeterminate: true, reason: verdict.reason };
       }
 
       return recordApplied(actionRequest, applyResult);
@@ -454,8 +506,9 @@ export interface ReapStaleExecutingActionRequestsResult {
  * `ActionReplayer.replay` (R-48 — not `execute`: no pre-check may end a row whose first call may
  * already have taken effect). The gate's own idempotency store (keyed by `actionRequestId`,
  * `apply`'s own field of that name) is what makes this safe: a completed `apply` returns its
- * stored result instead of re-running the effect, a failed one its stored failure, and a key a
- * gate process left pending answers "outcome unknown" (R-51 / D-11) — this function does not
+ * stored result instead of re-running the effect, a failed one its stored failure, a key a gate
+ * process left pending answers "outcome unknown" (R-51 / D-11), and a key that holds nothing is
+ * closed rather than run (legacy 287: the replay is `gate/apply_lookup`) — this function does not
  * re-implement that guarantee, it only decides *when* to ask and when to stop asking.
  *
  * Bounded (R-48): each replay is counted on the row before it runs

@@ -1,5 +1,6 @@
 import { ACTION_REQUEST_TRANSITIONS, namesASecretField, transition } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
+import { writeAudit } from '../../substrate/audit/index.js';
 import {
   redactSuspectedSecrets,
   redactedForAudit,
@@ -380,6 +381,41 @@ export async function markActionRequestFailed(
   });
 
   return updated;
+}
+
+/** The audit action of an `executing` row whose first `apply` ended without an answer
+ *  (`recordActionRequestInDoubt`). */
+export const ACTION_REQUEST_IN_DOUBT_AUDIT_ACTION = 'action_request.outcome_in_doubt';
+
+/**
+ * Legacy 287: records that an `executing` row's first `apply` ended without an answer — the gate
+ * call timed out, the connection to the gate failed after the request may have been sent, or the
+ * gate was still applying the key — so the row stays `executing` (R-50: a barrier for its
+ * Gatekeeper's queue) until the stale-executing reaper asks the gate again (R-48). Not a state
+ * transition — the row keeps its status and no outbox event fires — only an audit row, so the wait
+ * is visible and can be reconstructed (`executing_at` alone never said why a row sat there). The
+ * reason gets the same redaction as a failure's (`reasonAuditFields`). A no-op when the row is no
+ * longer `executing` (another path resolved it meanwhile).
+ */
+export async function recordActionRequestInDoubt(
+  client: PoolClient,
+  workspaceId: string,
+  actionRequestId: string,
+  options: { readonly reason?: string } = {},
+): Promise<void> {
+  const existing = await getActionRequestForUpdate(client, workspaceId, actionRequestId);
+  if (!existing || existing.status !== 'executing') return;
+  await writeAudit(client, {
+    workspaceId,
+    actorPrincipalId: existing.onBehalfOf,
+    action: ACTION_REQUEST_IN_DOUBT_AUDIT_ACTION,
+    resourceType: 'action_request',
+    resourceId: existing.id,
+    payload: {
+      resultingStatus: existing.status,
+      ...(options.reason ? reasonAuditFields(options.reason, existing.params) : {}),
+    },
+  });
 }
 
 /** `failed -> compensated`. */

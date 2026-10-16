@@ -165,7 +165,13 @@ export function ChatPage({
               ) : null}
               {items.map((item) => {
                 if (item.kind === 'tools') {
-                  return <ToolCallGroupView key={`tools-${item.key}`} records={item.records} />;
+                  return (
+                    <ToolCallGroupView
+                      key={`tools-${item.key}`}
+                      records={item.records}
+                      http={http}
+                    />
+                  );
                 }
                 const { message } = item;
                 const turnAttribution =
@@ -228,7 +234,7 @@ export function ChatPage({
                   {liveToolCalls.length > 0 ? (
                     <div className="tool-calls">
                       {liveToolCalls.map((row) => (
-                        <ToolCallRowView key={row.toolCallId} row={row} />
+                        <ToolCallRowView key={row.toolCallId} row={row} http={http} />
                       ))}
                     </div>
                   ) : null}

@@ -73,6 +73,7 @@ import {
   getActionRequestVisibleTo,
   listActionRequestsForApprover,
   listPendingForApprover,
+  readActionRequestWaitingStates,
   readApprovalDecisions,
   rejectActionRequest,
 } from '../../governance/approval/index.js';
@@ -1141,6 +1142,10 @@ async function currentPrincipalRole(
  * returns ActionRequest rows a human may have decided; `request_action`'s own projections
  * (request-action-handler.ts) are request-time and untouched, which is why the wire fields are
  * optional rather than required.
+ *
+ * Legacy 287: the same rows also say why one that has not finished is waiting
+ * (`governance/approval`'s `readActionRequestWaitingStates`): `outcomeInDoubt` on an `executing`
+ * row whose `apply` got no answer, `queuedBehind` on an approved row an earlier one holds back.
  */
 async function withApprovalDecision(
   client: PoolClient,
@@ -1152,13 +1157,17 @@ async function withApprovalDecision(
     workspaceId,
     rows.flatMap((row) => (row.approvalDecisionId ? [row.approvalDecisionId] : [])),
   );
+  const waiting = await readActionRequestWaitingStates(client, workspaceId, rows);
   return rows.map((row) => {
     const decision = row.approvalDecisionId ? decisions.get(row.approvalDecisionId) : undefined;
+    const waits = waiting.get(row.id);
     return {
       ...toWireActionRequest(row),
       decisionReason: decision?.reason ?? null,
       decidedBy: decision?.decidedBy ?? null,
       decidedAt: decision ? decision.decidedAt.toISOString() : null,
+      outcomeInDoubt: waits?.outcomeInDoubt ?? null,
+      queuedBehind: waits?.queuedBehind ?? null,
     };
   });
 }

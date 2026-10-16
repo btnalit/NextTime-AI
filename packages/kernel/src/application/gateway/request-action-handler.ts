@@ -18,11 +18,16 @@ import {
   readAgentProfile,
   resolveAutoApproveLow,
 } from '../../governance/agent-profile/index.js';
-import type { ActionRequestRow, ApprovalDrainer } from '../../governance/approval/index.js';
+import type {
+  ActionRequestRow,
+  ActionRequestWaitingState,
+  ApprovalDrainer,
+} from '../../governance/approval/index.js';
 import {
   NO_OPERATION_DEFINITION,
   awaitActionRequestResolution,
   getActionRequest,
+  readActionRequestWaitingStates,
   requestAction,
 } from '../../governance/approval/index.js';
 import {
@@ -404,6 +409,41 @@ interface ExecutionOutcome {
   readonly status: ActionRequestStatus;
   readonly data?: unknown;
   readonly reason?: string;
+  /** Legacy 287: why a row that has not finished waits (`withWaitingState`). */
+  readonly outcomeInDoubt?: NonNullable<ActionRequestWaitingState['outcomeInDoubt']>;
+  readonly queuedBehind?: NonNullable<ActionRequestWaitingState['queuedBehind']>;
+}
+
+/** Legacy 287: a `request_action` outcome that has not finished — `executing` with no answer from
+ *  the gate, or `approved` / `auto_approved` behind an earlier row — says why it waits, so the
+ *  caller (an agent, the console's tool row) can tell "the platform is asking the gate whether it
+ *  ran" or "queued behind another request" from a bare status. Read once, after the outcome is
+ *  known; a finished outcome is returned as it is. */
+async function withWaitingState(
+  withTransaction: WithTransactionFn,
+  workspaceId: string,
+  systemActorId: string,
+  actionRequestId: string,
+  outcome: ExecutionOutcome,
+): Promise<ExecutionOutcome> {
+  if (
+    outcome.status !== 'executing' &&
+    outcome.status !== 'approved' &&
+    outcome.status !== 'auto_approved'
+  ) {
+    return outcome;
+  }
+  const states = await withTransaction(workspaceId, systemActorId, (client) =>
+    readActionRequestWaitingStates(client, workspaceId, [
+      { id: actionRequestId, status: outcome.status },
+    ]),
+  );
+  const state = states.get(actionRequestId);
+  return {
+    ...outcome,
+    ...(state?.outcomeInDoubt ? { outcomeInDoubt: state.outcomeInDoubt } : {}),
+    ...(state?.queuedBehind ? { queuedBehind: state.queuedBehind } : {}),
+  };
 }
 
 /** The two `action` values `readTerminalOutcome` trusts as carrying a real terminal payload
@@ -627,7 +667,7 @@ async function pollAndExecute(
   gatekeeperId: string,
   actionRequestId: string,
   timeoutMs: number,
-): Promise<{ status: string; data?: unknown; reason?: string }> {
+): Promise<ExecutionOutcome> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const row = await withTransaction(workspaceId, systemActorId, (client) =>
@@ -866,7 +906,16 @@ async function runGovernedRequest(
             args,
             outcome,
           );
-          return { ...outcome, id: actionRequest.id };
+          return {
+            ...(await withWaitingState(
+              withTransaction,
+              workspaceId,
+              systemActorId,
+              actionRequest.id,
+              outcome,
+            )),
+            id: actionRequest.id,
+          };
         },
       };
 
@@ -891,7 +940,16 @@ async function runGovernedRequest(
             args,
             outcome,
           );
-          return { ...outcome, id: actionRequest.id };
+          return {
+            ...(await withWaitingState(
+              withTransaction,
+              workspaceId,
+              systemActorId,
+              actionRequest.id,
+              outcome,
+            )),
+            id: actionRequest.id,
+          };
         },
       };
 
@@ -1000,7 +1058,16 @@ async function runGovernedRequest(
             args,
             outcome,
           );
-          return { ...outcome, id: actionRequest.id };
+          return {
+            ...(await withWaitingState(
+              withTransaction,
+              workspaceId,
+              systemActorId,
+              actionRequest.id,
+              outcome,
+            )),
+            id: actionRequest.id,
+          };
         },
       };
 

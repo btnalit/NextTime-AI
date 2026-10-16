@@ -99,6 +99,13 @@ export const ApplyRequestSchema = z.object({
 });
 export type ApplyRequest = z.infer<typeof ApplyRequestSchema>;
 
+/** Legacy 287: `gate/apply_lookup` — what this gate holds for an `apply` with these fields, read
+ *  from its idempotency store only (no definition is checked: the answer is whatever ran). Its
+ *  answer is `ApplyResponse` (`replayed: true`) or the error the `apply` would answer with now;
+ *  404 `apply_not_received` when no call for the key ran here. */
+export const ApplyLookupRequestSchema = ApplyRequestSchema.omit({ operationDigest: true });
+export type ApplyLookupRequest = z.infer<typeof ApplyLookupRequestSchema>;
+
 export const ApplyResponseSchema = z.object({
   data: z.unknown(),
   observedFacts: z.array(ObservedFactCandidateSchema).optional(),

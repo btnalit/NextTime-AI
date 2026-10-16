@@ -1,4 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
+import http from 'node:http';
+import net from 'node:net';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1910,43 +1912,95 @@ describe.runIf(DATABASE_URL !== undefined)(
     // (simulating exactly that crash) with a stale `executing_at` must be picked up, replayed
     // (idempotently, via the same ActionExecutor.execute every other execution path uses), and
     // marked to a terminal status.
-    it('the stale-executing reaper replays apply and marks a crashed-mid-execution row', async () => {
-      const actionRequestId = await withWorkspace(
+    // R-48 / legacy 287: the reaper's replay is a lookup, never an execution. A row left
+    // `executing` whose first `apply` ran on the gate (the kernel lost track of it after) gets the
+    // gate's stored result; one whose first `apply` never reached the gate (the kernel stopped
+    // between marking it and sending it) finds nothing there and fails `apply_not_received` — and
+    // the gate closes the key, so that first `apply` arriving late is refused: nothing runs late,
+    // outside `execute`'s checks.
+    it('the stale-executing reaper records the result of a first apply that ran, without running it again', async () => {
+      const params = { qty: 5150, marker: randomUUID() };
+      const actionRequestId = await seedStaleExecutingRow(params);
+      const gatekeeperClient = testGatekeeperClient();
+      // The first `apply` reached the gate and ran; its answer never made it back to the row.
+      await gatekeeperClient.apply(gateTarget, {
+        operation: AUTO_OP.name,
+        params,
+        onBehalfOf: ownerId,
+        actionRequestId,
+        operationDigest: operationDefinitionDigest(AUTO_OP),
+      });
+      const before = transport.calls[AUTO_OP.name] ?? 0;
+
+      const reapResult = await reapStaleExecutingActionRequests(
         pool,
-        { workspaceId, principalId: ownerId },
-        async (client) => {
-          const result = await client.query<{ id: string }>(
-            `insert into action_requests (
-               workspace_id, status, gatekeeper_id, action_kind, blast_radius, policy_decision,
-               await_decision, on_behalf_of, actor_runtime, executing_at, params
-             ) values ($1, 'executing', $2, $3, 'low', 'allow', false, $4, 'pi',
-               now() - interval '1 hour', $5::jsonb)
-             returning id`,
-            [workspaceId, gatekeeperId, AUTO_OP.name, ownerId, JSON.stringify({ qty: 5150 })],
-          );
-          return result.rows[0]?.id as string;
-        },
+        createGatekeeperActionExecutor({
+          gatekeeperClient,
+          withTransaction: createAdminWithTransaction(pool),
+        }),
+        { staleAfterMs: 30 * 60 * 1000 },
       );
 
-      const before = transport.calls[AUTO_OP.name] ?? 0;
-      const withTransactionAdmin = createAdminWithTransaction(pool);
-      const actionExecutor = createGatekeeperActionExecutor({
-        gatekeeperClient: testGatekeeperClient(),
-        withTransaction: withTransactionAdmin,
-      });
-
-      const reapResult = await reapStaleExecutingActionRequests(pool, actionExecutor, {
-        staleAfterMs: 1000,
-      });
-
-      expect(reapResult.scanned).toBeGreaterThanOrEqual(1);
       expect(reapResult.reaped).toBeGreaterThanOrEqual(1);
-      expect(transport.calls[AUTO_OP.name]).toBe(before + 1); // the gate was called (the replay)
-
+      expect(transport.calls[AUTO_OP.name]).toBe(before); // answered from the gate's store
       const row = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
         getActionRequest(client, workspaceId, actionRequestId),
       );
       expect(row?.status).toBe('executed');
+      const audit = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        queryAudit(client, workspaceId, {
+          resourceType: 'action_request',
+          resourceId: actionRequestId,
+          action: 'action_request.complete',
+        }),
+      );
+      expect(
+        (audit[0]?.payload as { resultMetadata?: { replayed?: boolean } } | undefined)
+          ?.resultMetadata?.replayed,
+      ).toBe(true);
+    });
+
+    it('the stale-executing reaper fails a row whose first apply never reached the gate as apply_not_received, runs nothing, and a late first apply is refused', async () => {
+      const params = { qty: 5151, marker: randomUUID() };
+      const actionRequestId = await seedStaleExecutingRow(params);
+      const before = transport.calls[AUTO_OP.name] ?? 0;
+      const gatekeeperClient = testGatekeeperClient();
+
+      await reapStaleExecutingActionRequests(
+        pool,
+        createGatekeeperActionExecutor({
+          gatekeeperClient,
+          withTransaction: createAdminWithTransaction(pool),
+        }),
+        { staleAfterMs: 30 * 60 * 1000 },
+      );
+
+      expect(transport.calls[AUTO_OP.name]).toBe(before);
+      // The first `apply` only arrives now: the gate closed the key when it answered the lookup.
+      await expect(
+        gatekeeperClient.apply(gateTarget, {
+          operation: AUTO_OP.name,
+          params,
+          onBehalfOf: ownerId,
+          actionRequestId,
+          operationDigest: operationDefinitionDigest(AUTO_OP),
+        }),
+      ).rejects.toMatchObject({ code: 'transport_error' });
+      expect(transport.calls[AUTO_OP.name]).toBe(before);
+      const row = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        getActionRequest(client, workspaceId, actionRequestId),
+      );
+      expect(row?.status).toBe('failed');
+      const audit = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        queryAudit(client, workspaceId, {
+          resourceType: 'action_request',
+          resourceId: actionRequestId,
+          action: 'action_request.fail',
+        }),
+      );
+      expect((audit[0]?.payload as { reason?: string } | undefined)?.reason).toBe(
+        'apply_not_received: the gate holds no record of this request having run, so nothing ran. Request it again if it is still wanted.',
+      );
     });
 
     // Real-model regression 2026-10-02: a `gate/apply` timeout is "outcome unknown" — the executor
@@ -1960,6 +2014,12 @@ describe.runIf(DATABASE_URL !== undefined)(
           throw new GatekeeperTimeoutError(
             'gatekeeper client: gate/apply timed out after 60000ms',
             'gate/apply',
+          );
+        },
+        lookupApply: async () => {
+          throw new GatekeeperTimeoutError(
+            'gatekeeper client: gate/apply_lookup timed out after 15000ms',
+            'gate/apply_lookup',
           );
         },
       } as unknown as GatekeeperClient;
@@ -1994,9 +2054,9 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(direct.indeterminate).toBe(true);
       expect(direct.reason).toMatch(/^outcome unknown: /);
 
-      // 30 min, not the 1 s the crash test above uses: the reaper scans every workspace and this
-      // executor fails everything, so only the hand-seeded 1-hour-old rows may qualify — never a
-      // row another test file running against the same database just left `executing`.
+      // 30 min, as every reaper test here: the reaper scans every workspace and this executor
+      // fails everything, so only the hand-seeded 1-hour-old rows may qualify — never a row
+      // another test file running against the same database just left `executing`.
       const reapOptions = { staleAfterMs: 30 * 60 * 1000, maxReplayAttempts: 2 };
       await reapStaleExecutingActionRequests(pool, actionExecutor, reapOptions);
       const afterFirst = await readReplayState(actionRequestId);
@@ -2015,7 +2075,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         }),
       );
       expect((audit[0]?.payload as { reason?: string } | undefined)?.reason).toMatch(
-        /^outcome_unknown: no answer from the gate after 2 replays \(last: gatekeeper client: gate\/apply timed out/,
+        /^outcome_unknown: no answer from the gate after 2 replays \(last: gatekeeper client: gate\/apply_lookup timed out/,
       );
     });
 
@@ -2496,6 +2556,465 @@ describe.runIf(DATABASE_URL !== undefined)(
             ),
           ),
         ).rejects.toMatchObject({ constraint: 'action_requests_operation_digest_shape' });
+      });
+    });
+
+    // Legacy 287: a `gate/apply` that failed on the network is one of two things, never one class.
+    // Not sent (the connection to the gate could not be set up): nothing ran, the row fails at once
+    // and the queue moves on. Lost after it may have been sent: the outcome is unknown — the row
+    // stays `executing` (a barrier, R-50), the reason is audited, and the reaper's lookup records
+    // whatever the gate did. Real sockets throughout: the kernel's own `HttpGatekeeperClient`
+    // reaches the gate directly, through a port nothing listens on, or through a proxy that cuts
+    // the kernel's side of the connection the moment the gate answers.
+    describe('legacy 287: a gate call that failed on the network — not sent, or in doubt', () => {
+      const NET_OP: Operation = {
+        ...AUTO_OP,
+        name: 'net.op',
+        binding: { kind: 'http', method: 'POST', path: '/net' },
+      };
+      const NET_SALT = 'd'.repeat(32);
+      const reapOptions = { staleAfterMs: 30 * 60 * 1000 };
+
+      let netGatekeeperId: string;
+      let netTransport: RecordingTransport;
+      let netGateApp: FastifyInstance;
+      let refusedPort: number;
+      /** Forwards each connection to the gate, and cuts the kernel's side as soon as the gate
+       *  answers: the gate ran the call, the kernel never hears back. */
+      let losesAnswers: net.Server;
+      let losesAnswersPort: number;
+      /** A reverse proxy in front of the gate (review of #586, M1): forwards the call and, once the
+       *  gate has answered, sends back a 502 page of its own instead. */
+      let answers502: http.Server;
+      let answers502Port: number;
+      /** A gate from before `gate/apply_lookup` (review of #586, P2): Fastify's own 404 for a
+       *  route it does not have, or a proxy's 404 page in front of one — or `gate_not_found`, a
+       *  gate host that does not serve the instance right now. */
+      let oldGate: http.Server;
+      let oldGatePort: number;
+      let oldGateAnswer: 'route_not_found' | 'html_404' | 'gate_not_found' = 'route_not_found';
+      let route: 'direct' | 'refused' | 'loses_answer' | 'proxy_502' | 'old_gate' = 'direct';
+
+      const routedFetch: typeof fetch = (input, init) => {
+        const url = new URL(input instanceof Request ? input.url : input.toString());
+        if (route === 'refused') url.port = String(refusedPort);
+        if (route === 'loses_answer') url.port = String(losesAnswersPort);
+        if (route === 'proxy_502') url.port = String(answers502Port);
+        if (route === 'old_gate') url.port = String(oldGatePort);
+        return fetch(url, init);
+      };
+
+      function routedDrainer(): ApprovalDrainer {
+        return new ApprovalDrainer({ executor: routedExecutor(), withTransaction: adminTx() });
+      }
+
+      function routedExecutor() {
+        return createGatekeeperActionExecutor({
+          gatekeeperClient: new HttpGatekeeperClient({
+            token: GATE_TEST_TOKEN,
+            outboundTargetGuard: ALLOW_LOOPBACK,
+            fetchImpl: routedFetch,
+          }),
+          withTransaction: adminTx(),
+        });
+      }
+
+      function adminTx() {
+        return createAdminWithTransaction(pool);
+      }
+
+      async function seedApprovedRow(): Promise<string> {
+        return withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+          const result = await client.query<{ id: string }>(
+            `insert into action_requests (
+               workspace_id, status, gatekeeper_id, action_kind, blast_radius, policy_decision,
+               await_decision, on_behalf_of, actor_runtime, params, operation_digest
+             ) values ($1, 'auto_approved', $2, $3, 'low', 'allow', false, $4, 'pi', $5::jsonb, $6)
+             returning id`,
+            [
+              workspaceId,
+              netGatekeeperId,
+              NET_OP.name,
+              ownerId,
+              JSON.stringify({ marker: randomUUID() }),
+              operationDefinitionDigest(NET_OP),
+            ],
+          );
+          return result.rows[0]?.id as string;
+        });
+      }
+
+      /** The reaper only replays a row that has been `executing` longer than `reapOptions`. */
+      async function makeStale(id: string): Promise<void> {
+        await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          client.query(
+            `update action_requests set executing_at = now() - interval '1 hour'
+             where workspace_id = $1 and id = $2`,
+            [workspaceId, id],
+          ),
+        );
+      }
+
+      async function readRow(id: string) {
+        const row = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          getActionRequest(client, workspaceId, id),
+        );
+        if (!row) throw new Error(`action request ${id} not found`);
+        return row;
+      }
+
+      async function auditReasons(id: string, action: string): Promise<(string | undefined)[]> {
+        const audit = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          queryAudit(client, workspaceId, {
+            resourceType: 'action_request',
+            resourceId: id,
+            action,
+          }),
+        );
+        return audit.map((record) => (record.payload as { reason?: string }).reason);
+      }
+
+      const ranOnGate = () => netTransport.calls[NET_OP.name] ?? 0;
+
+      /** `list_action_requests` as the console calls it: each row's status and why it waits. */
+      async function listedWaitingStates(): Promise<
+        Map<string, { status: string; outcomeInDoubt: unknown; queuedBehind: unknown }>
+      > {
+        const listed = (await dispatchCapability(
+          { pool },
+          humanCaller(workspaceId, ownerId),
+          'list_action_requests',
+          { gatekeeperId: netGatekeeperId },
+        )) as {
+          items: { id: string; status: string; outcomeInDoubt?: unknown; queuedBehind?: unknown }[];
+        };
+        return new Map(
+          listed.items.map((item) => [
+            item.id,
+            {
+              status: item.status,
+              outcomeInDoubt: item.outcomeInDoubt,
+              queuedBehind: item.queuedBehind,
+            },
+          ]),
+        );
+      }
+
+      beforeAll(async () => {
+        netTransport = new RecordingTransport(pool, workspaceId);
+        netGateApp = createGatekeeperServer({
+          gate: new GatekeeperBase({
+            manifest: [NET_OP],
+            transport: netTransport,
+            credentialResolver: { resolve: async () => ({}) },
+            idempotencyStore: new InMemoryIdempotencyStore(),
+          }),
+          token: deriveConnectionSecret(GATE_TEST_TOKEN, workspaceId, NET_SALT),
+        });
+        await netGateApp.listen({ port: 0, host: '127.0.0.1' });
+        const gatePort = (netGateApp.server.address() as AddressInfo).port;
+
+        const listen = (server: net.Server) =>
+          new Promise<number>((resolve) => {
+            server.listen(0, '127.0.0.1', () => resolve((server.address() as AddressInfo).port));
+          });
+        const closed = net.createServer();
+        refusedPort = await listen(closed);
+        await new Promise<void>((resolve) => closed.close(() => resolve()));
+        losesAnswers = net.createServer((kernelSide) => {
+          const gateSide = net.connect(gatePort, '127.0.0.1');
+          kernelSide.on('error', () => {});
+          gateSide.on('error', () => {});
+          kernelSide.on('close', () => gateSide.destroy());
+          kernelSide.pipe(gateSide);
+          gateSide.once('data', () => kernelSide.destroy());
+        });
+        losesAnswersPort = await listen(losesAnswers);
+        answers502 = http.createServer((req, res) => {
+          const forwarded = http.request(
+            {
+              host: '127.0.0.1',
+              port: gatePort,
+              method: req.method,
+              path: req.url,
+              headers: req.headers,
+            },
+            (gateAnswer) => {
+              gateAnswer.resume();
+              gateAnswer.on('end', () =>
+                res
+                  .writeHead(502, { 'content-type': 'text/html' })
+                  .end('<html><body><h1>502 Bad Gateway</h1></body></html>'),
+              );
+            },
+          );
+          forwarded.on('error', () => res.writeHead(502).end());
+          req.pipe(forwarded);
+        });
+        answers502Port = await listen(answers502);
+        oldGate = http.createServer((req, res) => {
+          req.resume();
+          req.on('end', () => {
+            if (oldGateAnswer === 'html_404') {
+              res.writeHead(404, { 'content-type': 'text/html' }).end('<html>404 Not Found</html>');
+              return;
+            }
+            res.writeHead(404, { 'content-type': 'application/json' });
+            res.end(
+              JSON.stringify(
+                oldGateAnswer === 'gate_not_found'
+                  ? {
+                      ok: false,
+                      error: { code: 'gate_not_found', message: 'no such gate instance' },
+                    }
+                  : {
+                      message: `Route ${req.method}:${req.url} not found`,
+                      error: 'Not Found',
+                      statusCode: 404,
+                    },
+              ),
+            );
+          });
+        });
+        oldGatePort = await listen(oldGate);
+
+        await withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+          const activity = await startActivity(client, workspaceId, {
+            kind: 'test.connection',
+            principalId: ownerId,
+          });
+          const registered = await registerGatekeeper(client, workspaceId, {
+            name: 'net-gate',
+            transportKind: 'http',
+            target: 'net-system',
+            endpoint: `http://127.0.0.1:${gatePort}`,
+            connectionSecretSalt: NET_SALT,
+            activityId: activity.id,
+            registeredBy: { id: ownerId, kind: 'human' },
+          });
+          netGatekeeperId = registered.gatekeeperId;
+          await importManifest(client, workspaceId, {
+            gatekeeperId: netGatekeeperId,
+            operations: [NET_OP],
+            proposedBy: { id: ownerId, kind: 'human' },
+            activityId: activity.id,
+          });
+          await publishOperation(client, workspaceId, {
+            gatekeeperId: netGatekeeperId,
+            name: NET_OP.name,
+          });
+        });
+      });
+
+      afterAll(async () => {
+        await new Promise<void>((resolve) => losesAnswers.close(() => resolve()));
+        answers502.closeAllConnections();
+        await new Promise<void>((resolve) => answers502.close(() => resolve()));
+        oldGate.closeAllConnections();
+        await new Promise<void>((resolve) => oldGate.close(() => resolve()));
+        await netGateApp.close();
+      });
+
+      it('a gate that could not be reached never had the request: each row fails gate_unreachable and the queue moves on', async () => {
+        route = 'refused';
+        const before = ranOnGate();
+        const first = await seedApprovedRow();
+        const second = await seedApprovedRow();
+
+        const drained = await routedDrainer().drainGatekeeper(
+          workspaceId,
+          ownerId,
+          netGatekeeperId,
+        );
+
+        expect(drained).toMatchObject({ processed: 2, stoppedAtExecuting: false });
+        expect(ranOnGate()).toBe(before);
+        for (const id of [first, second]) {
+          expect((await readRow(id)).status).toBe('failed');
+          expect(await auditReasons(id, 'action_request.fail')).toEqual([
+            'gate_unreachable: gatekeeper client: gate/apply not sent — could not connect to the gate (ECONNREFUSED); nothing reached it',
+          ]);
+          expect(await auditReasons(id, 'action_request.outcome_in_doubt')).toEqual([]);
+        }
+      });
+
+      it('a connection lost after the gate had the request is in doubt: the row stays executing and blocks the queue, the reason is audited, and the reaper records what the gate did — the effect ran once', async () => {
+        route = 'loses_answer';
+        const before = ranOnGate();
+        const id = await seedApprovedRow();
+        const behind = await seedApprovedRow();
+
+        const drained = await routedDrainer().drainGatekeeper(
+          workspaceId,
+          ownerId,
+          netGatekeeperId,
+        );
+
+        // The gate ran it; the kernel does not know that, and says so instead of "failed".
+        expect(ranOnGate()).toBe(before + 1);
+        expect(drained).toMatchObject({ processed: 1, stoppedAtExecuting: true });
+        expect((await readRow(id)).status).toBe('executing');
+        expect((await readRow(behind)).status).toBe('auto_approved'); // R-50: nothing jumps it
+        expect(await auditReasons(id, 'action_request.fail')).toEqual([]);
+        const [inDoubt, ...more] = await auditReasons(id, 'action_request.outcome_in_doubt');
+        expect(more).toEqual([]);
+        expect(inDoubt).toMatch(
+          /^outcome unknown: gatekeeper client: gate\/apply: the connection to the gate failed after the request may have been sent \(UND_ERR_SOCKET\) — the gate may have received it/,
+        );
+
+        // What the console reads (review of #586): why each row waits.
+        const waiting = await listedWaitingStates();
+        expect(waiting.get(id)).toEqual({
+          status: 'executing',
+          outcomeInDoubt: { since: expect.any(String), reason: inDoubt },
+          queuedBehind: null,
+        });
+        expect(waiting.get(behind)).toEqual({
+          status: 'auto_approved',
+          outcomeInDoubt: null,
+          queuedBehind: { status: 'executing', outcomeInDoubt: true },
+        });
+
+        // The same connection loss on the reaper's lookup is no answer either.
+        await makeStale(id);
+        await reapStaleExecutingActionRequests(pool, routedExecutor(), reapOptions);
+        expect((await readRow(id)).status).toBe('executing');
+
+        route = 'direct';
+        await reapStaleExecutingActionRequests(pool, routedExecutor(), reapOptions);
+        expect(await readReplayState(id)).toEqual({ status: 'executed', replayAttempts: 2 });
+        expect(ranOnGate()).toBe(before + 1); // answered from the gate's store, never re-run
+
+        // The barrier is gone: the row behind it runs now.
+        await routedDrainer().drainGatekeeper(workspaceId, ownerId, netGatekeeperId);
+        expect((await readRow(behind)).status).toBe('executed');
+        expect(ranOnGate()).toBe(before + 2);
+      });
+
+      it('an answer that is not the gate protocol is in doubt: a proxy that answered 502 after the gate ran the call leaves the row executing, and the reaper records what the gate did', async () => {
+        route = 'proxy_502';
+        const before = ranOnGate();
+        const id = await seedApprovedRow();
+        const behind = await seedApprovedRow();
+
+        const drained = await routedDrainer().drainGatekeeper(
+          workspaceId,
+          ownerId,
+          netGatekeeperId,
+        );
+
+        expect(ranOnGate()).toBe(before + 1);
+        expect(drained).toMatchObject({ processed: 1, stoppedAtExecuting: true });
+        expect((await readRow(id)).status).toBe('executing');
+        expect((await readRow(behind)).status).toBe('auto_approved');
+        expect(await auditReasons(id, 'action_request.fail')).toEqual([]);
+        expect((await auditReasons(id, 'action_request.outcome_in_doubt'))[0]).toMatch(
+          /^outcome unknown: gatekeeper client: gate\/apply returned a non-JSON response/,
+        );
+
+        await makeStale(id);
+        route = 'direct';
+        await reapStaleExecutingActionRequests(pool, routedExecutor(), reapOptions);
+        expect((await readRow(id)).status).toBe('executed');
+        expect(ranOnGate()).toBe(before + 1);
+
+        await routedDrainer().drainGatekeeper(workspaceId, ownerId, netGatekeeperId);
+        expect((await readRow(behind)).status).toBe('executed');
+      });
+
+      it('a gate that cannot be asked (no apply_lookup route) ends outcome unknown and is never asked with apply; a gate host that does not serve it right now is no answer', async () => {
+        const before = ranOnGate();
+        route = 'old_gate';
+        for (const answer of ['route_not_found', 'html_404'] as const) {
+          oldGateAnswer = answer;
+          const id = await seedApprovedRow();
+          await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+            client.query(
+              `update action_requests set status = 'executing', executing_at = now() - interval '1 hour'
+               where workspace_id = $1 and id = $2`,
+              [workspaceId, id],
+            ),
+          );
+          await reapStaleExecutingActionRequests(pool, routedExecutor(), reapOptions);
+          expect((await readRow(id)).status).toBe('failed');
+          expect((await auditReasons(id, 'action_request.fail'))[0]).toMatch(
+            /^outcome_unknown: this gate cannot be asked whether the request ran — it has no gate\/apply_lookup route/,
+          );
+        }
+
+        oldGateAnswer = 'gate_not_found';
+        const id = await seedApprovedRow();
+        await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          client.query(
+            `update action_requests set status = 'executing', executing_at = now() - interval '1 hour'
+             where workspace_id = $1 and id = $2`,
+            [workspaceId, id],
+          ),
+        );
+        await reapStaleExecutingActionRequests(pool, routedExecutor(), reapOptions);
+        expect((await readRow(id)).status).toBe('executing');
+        route = 'direct';
+        await reapStaleExecutingActionRequests(pool, routedExecutor(), reapOptions);
+        expect((await auditReasons(id, 'action_request.fail'))[0]).toMatch(/^apply_not_received: /);
+        expect(ranOnGate()).toBe(before);
+      });
+
+      it('an approved row behind one awaiting approval says so; the rows ahead say nothing', async () => {
+        route = 'direct';
+        const before = ranOnGate();
+        const ahead = await seedApprovedRow();
+        await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          client.query(
+            `update action_requests set status = 'pending_approval' where workspace_id = $1 and id = $2`,
+            [workspaceId, ahead],
+          ),
+        );
+        const behind = await seedApprovedRow();
+
+        const waiting = await listedWaitingStates();
+        expect(waiting.get(ahead)).toEqual({
+          status: 'pending_approval',
+          outcomeInDoubt: null,
+          queuedBehind: null,
+        });
+        expect(waiting.get(behind)).toEqual({
+          status: 'auto_approved',
+          outcomeInDoubt: null,
+          queuedBehind: { status: 'pending_approval', outcomeInDoubt: false },
+        });
+
+        await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          client.query(
+            `update action_requests set status = 'expired' where workspace_id = $1 and id = $2`,
+            [workspaceId, ahead],
+          ),
+        );
+        await routedDrainer().drainGatekeeper(workspaceId, ownerId, netGatekeeperId);
+        expect((await readRow(behind)).status).toBe('executed');
+        expect((await listedWaitingStates()).get(behind)?.queuedBehind).toBeNull();
+        expect(ranOnGate()).toBe(before + 1);
+      });
+
+      it('a lookup that cannot reach the gate is no answer: the row stays executing until the gate can say', async () => {
+        const id = await seedApprovedRow();
+        await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          client.query(
+            `update action_requests set status = 'executing', executing_at = now() - interval '1 hour'
+             where workspace_id = $1 and id = $2`,
+            [workspaceId, id],
+          ),
+        );
+        const before = ranOnGate();
+
+        route = 'refused';
+        await reapStaleExecutingActionRequests(pool, routedExecutor(), reapOptions);
+        expect((await readRow(id)).status).toBe('executing');
+
+        route = 'direct';
+        await reapStaleExecutingActionRequests(pool, routedExecutor(), reapOptions);
+        expect((await readRow(id)).status).toBe('failed');
+        expect((await auditReasons(id, 'action_request.fail'))[0]).toMatch(/^apply_not_received: /);
+        expect(ranOnGate()).toBe(before);
       });
     });
   },

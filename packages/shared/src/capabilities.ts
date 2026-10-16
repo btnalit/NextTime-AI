@@ -1744,7 +1744,9 @@ const governanceCapabilities = [
     //   - `mode: 'execute'`, `afterCommit` present (auto_approved/approved/executing/executed/
     //     verified/failed, or `pending_approval && awaitDecision`) → the narrower `{id, status,
     //     data?, reason?}` execution-outcome shape those continuations (`tryExecuteInline`/
-    //     `awaitConcurrentExecution`/`pollAndExecute`/`readTerminalOutcome`) resolve to.
+    //     `awaitConcurrentExecution`/`pollAndExecute`/`readTerminalOutcome`) resolve to — with,
+    //     for a row that has not finished (legacy 287), why it waits: `outcomeInDoubt` on an
+    //     `executing` one whose `apply` got no answer, `queuedBehind` on an approved one.
     // Modeled as a union rather than "fixed" into one shape — unifying them is a real, larger
     // behavior change to a heavily fought-over handler (see that file's own module doc comment),
     // out of this task's "no runtime behaviour change" scope.
@@ -1757,6 +1759,8 @@ const governanceCapabilities = [
           status: ActionRequestStatusSchema,
           data: z.unknown().optional(),
           reason: z.string().optional(),
+          outcomeInDoubt: wire.ActionRequestOutcomeInDoubtWireSchema.optional(),
+          queuedBehind: wire.ActionRequestQueuedBehindWireSchema.optional(),
         })
         .strict(),
     ]),

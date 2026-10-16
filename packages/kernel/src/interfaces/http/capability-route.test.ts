@@ -326,8 +326,9 @@ describe('mapCapabilityError — S2.13 create_connection errors (unit)', () => {
     // not pick the kernel's status.
     ['operation_refused', 401],
     ['operation_refused', 200],
-    // Not a gate answer at all.
-    ['network_error', 0],
+    // Not a gate answer at all (legacy 287: not sent, or lost after it may have been sent).
+    ['gate_unreachable', 0],
+    ['gate_connection_lost', 0],
     ['redirect_refused', 307],
     // Unknown codes, including an own-property name of a plain object.
     ['forbidden', 403],

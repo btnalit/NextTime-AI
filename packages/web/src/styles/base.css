@@ -205,6 +205,10 @@ button:disabled {
   color: var(--danger);
 }
 
+.text-warn {
+  color: var(--warn);
+}
+
 .stack {
   display: flex;
   flex-direction: column;
