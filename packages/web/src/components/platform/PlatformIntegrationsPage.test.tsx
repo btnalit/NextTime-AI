@@ -276,7 +276,9 @@ describe('PlatformIntegrationsPage', () => {
     });
     renderPage(http);
     const hint = await screen.findByTestId('connector-hidden-instances-docker');
-    expect(hint.textContent).toContain('1 个已启用的实例工作区看不到');
+    expect(hint.textContent).toContain('1 个已启用的实例不会出现在工作区的「待启用的平台实例」里');
+    // UX acceptance of #567 P2: workspaces that already enabled it keep using it.
+    expect(hint.textContent).toContain('已经启用的工作区照常使用');
   });
 
   it('self-service visibility: switching a preset with enabled instances away says they will disappear from workspaces', async () => {
@@ -328,6 +330,56 @@ describe('PlatformIntegrationsPage', () => {
     expect(notice.textContent).toContain('到「接入包」把「docker」改成「平台预置」');
     fireEvent.click(within(notice).getByTestId('gate-instance-show-connectors'));
     expect(await screen.findByTestId('connectors-table')).toBeTruthy();
+  });
+
+  it('UX acceptance of #567 P2: an instance some workspace already enabled is flagged as hidden from the other workspaces, and its drawer says the enabled ones keep using it', async () => {
+    const http = scriptedHttp({
+      list_connectors: () => ({ items: [connector({ mode: 'self_serve' })] }),
+      list_gate_instances: () => ({
+        items: [gateInstance({ status: 'enabled', enabledWorkspaceCount: 1 })],
+      }),
+    });
+    renderPage(http);
+    fireEvent.click(screen.getByTestId('integrations-tab-instances'));
+    const table = await screen.findByTestId('gate-instances-table');
+    const badge = await within(table).findByTestId('gate-hidden-from-workspaces-badge');
+    expect(badge.textContent).toBe('其他工作区看不到');
+    fireEvent.click(within(table).getByTestId('gate-instance-open-gate-1'));
+    const notice = await screen.findByTestId('gate-instance-hidden-from-workspaces');
+    expect(notice.textContent).toContain('已在 1 个工作区启用，那里照常使用');
+    expect(notice.textContent).not.toContain('工作区看不到这个实例。');
+  });
+
+  it('UX acceptance of #567 P3: the instance drawer marks an Operation in effect that no workspace can publish', async () => {
+    const http = scriptedHttp({
+      list_connectors: () => ({ items: [connector({ mode: 'platform_preset' })] }),
+      list_gate_instances: () => ({
+        items: [
+          gateInstance({
+            status: 'enabled',
+            operations: [
+              {
+                name: 'orders.lookup',
+                mode: 'observe',
+                blastRadius: 'low',
+                autoApprovable: true,
+                readOnlyHint: true,
+                destructiveHint: false,
+                idempotentHint: true,
+                gateOwnedParams: [{ param: 'Authorization', location: 'header' }],
+              },
+            ],
+          }),
+        ],
+      }),
+    });
+    renderPage(http);
+    fireEvent.click(screen.getByTestId('integrations-tab-instances'));
+    const table = await screen.findByTestId('gate-instances-table');
+    fireEvent.click(within(table).getByTestId('gate-instance-open-gate-1'));
+    const mark = await screen.findByTestId('gate-instance-operation-held-orders.lookup');
+    expect(mark.textContent).toContain('发布不了');
+    expect(mark.textContent).toContain('Authorization（请求头）');
   });
 
   it('self-service visibility: a cli instance is never offered the preset switch — the drawer says workspaces connect it themselves', async () => {

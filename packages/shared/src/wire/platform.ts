@@ -474,6 +474,18 @@ export type GateTrustWire = z.infer<typeof GateTrustWireSchema>;
 export const GateHealthWireSchema = z.enum(['ok', 'unreachable', 'unauthorized', 'unknown']);
 export type GateHealthWire = z.infer<typeof GateHealthWireSchema>;
 
+/** Legacy J: a param an `http` Operation declares that only the gate sets — a request header that
+ *  says who is calling, on whose account or where the call goes (`header`), a credential in the
+ *  query string (`query`), a cookie (`cookie`), or a query parameter the binding fixes
+ *  (`binding`). The gate refuses it on every call that passes it. */
+export const GateOwnedParamWireSchema = z
+  .object({
+    param: z.string(),
+    location: z.enum(['header', 'query', 'cookie', 'binding']),
+  })
+  .strict();
+export type GateOwnedParamWire = z.infer<typeof GateOwnedParamWireSchema>;
+
 /** One announced Operation, as the gate described it (a subset of `OperationSchema`). */
 export const GateOperationSummaryWireSchema = z
   .object({
@@ -484,6 +496,9 @@ export const GateOperationSummaryWireSchema = z
     readOnlyHint: z.boolean().nullable(),
     destructiveHint: z.boolean().nullable(),
     idempotentHint: z.boolean().nullable(),
+    /** Console G4: present when the entry declares a param only the gate sets — the bulk publish
+     *  leaves it a draft and `publish_operation` refuses it until the gate's manifest drops it. */
+    gateOwnedParams: z.array(GateOwnedParamWireSchema).optional(),
   })
   .strict();
 export type GateOperationSummaryWire = z.infer<typeof GateOperationSummaryWireSchema>;
@@ -689,18 +704,6 @@ export const GateLinkDriftWireSchema = z
   })
   .strict();
 export type GateLinkDriftWire = z.infer<typeof GateLinkDriftWireSchema>;
-
-/** Legacy J: a param an `http` Operation declares that only the gate sets — a request header that
- *  says who is calling, on whose account or where the call goes (`header`), a credential in the
- *  query string (`query`), a cookie (`cookie`), or a query parameter the binding fixes
- *  (`binding`). The gate refuses it on every call that passes it. */
-export const GateOwnedParamWireSchema = z
-  .object({
-    param: z.string(),
-    location: z.enum(['header', 'query', 'cookie', 'binding']),
-  })
-  .strict();
-export type GateOwnedParamWire = z.infer<typeof GateOwnedParamWireSchema>;
 
 /** Legacy J: a gate's imported draft a bulk publish left unpublished, and the params that kept it
  *  back. It stays a draft until the gate's manifest drops them (then a refresh rewrites it). */

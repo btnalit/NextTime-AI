@@ -7,6 +7,7 @@ import type {
 import { useEffect, useState } from 'react';
 import { type CapabilityListResult, useCapabilityList } from '../hooks/useCapability.js';
 import { usePermissions } from '../hooks/usePermissions.js';
+import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
 import { useT } from '../lib/i18n.js';
@@ -191,16 +192,28 @@ function HiddenInstancesForAdmin({ http }: { readonly http: CapabilityCaller }) 
     ALL_GATE_INSTANCES,
   );
   const connectors = useConnectorsByName(http);
+  const { workspaceId } = useWorkspaceIdentity(http);
+  // UX acceptance of #567 P2: an instance this workspace already enabled is right above, as a
+  // system card, and keeps working — only the ones this workspace has not enabled are missing
+  // here. The enabling-workspace list is capped (`enablingWorkspaces`), so a row whose list is
+  // cut short and does not name this workspace is left out rather than claimed missing.
+  const notEnabledHere = (row: GateInstanceWire): boolean => {
+    const listed = row.enablingWorkspaces ?? [];
+    if (listed.some((workspace) => workspace.id === workspaceId)) return false;
+    return listed.length >= row.enabledWorkspaceCount;
+  };
   const hidden =
-    instances.state.status === 'ready'
-      ? instances.state.data.items.filter((row) => hiddenFromWorkspaces(row, connectors) !== null)
+    instances.state.status === 'ready' && workspaceId !== null
+      ? instances.state.data.items.filter(
+          (row) => hiddenFromWorkspaces(row, connectors) !== null && notEnabledHere(row),
+        )
       : [];
   if (hidden.length === 0) return null;
   return (
     <Notice testId="available-gates-hidden">
       {t(
-        `平台上另有 ${hidden.length} 个已启用的门实例这里看不到：${hidden.map((row) => row.displayName).join('、')}。它们的接入包不是「平台预置」。`,
-        `${hidden.length} more enabled gate instance(s) on the platform do not show up here: ${hidden.map((row) => row.displayName).join(', ')}. Their connectors are not platform preset.`,
+        `平台上另有 ${hidden.length} 个已启用、但本工作区还没启用的门实例这里看不到：${hidden.map((row) => row.displayName).join('、')}。它们的接入包不是「平台预置」。`,
+        `${hidden.length} more enabled gate instance(s) this workspace has not enabled do not show up here: ${hidden.map((row) => row.displayName).join(', ')}. Their connectors are not platform preset.`,
       )}{' '}
       <RouteLink
         href={hrefs.platformIntegrations()}

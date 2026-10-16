@@ -645,7 +645,7 @@ function buildAttentionItems(
   for (const gate of hiddenGates) {
     items.push({
       key: `gate-hidden-${gate.gateId}`,
-      title: hiddenInstanceTitle(gate.displayName, t),
+      title: hiddenInstanceTitle(gate, t),
       href: hrefs.platformGateInstance(gate.gateId),
     });
   }

@@ -30,6 +30,11 @@ import { RouteLink } from '../kit/route-link.js';
 import { CreateGateInstanceForm } from '../platform/CreateGateInstanceForm.js';
 import { GateCredentialEntry } from '../platform/GateCredentialEntry.js';
 import { PlatformError } from '../platform/PlatformError.js';
+import {
+  hiddenFromWorkspaces,
+  hiddenInstanceBadge,
+  useConnectorsByName,
+} from '../platform/integrations/connector-visibility.js';
 import { FixHint, useReadinessReader } from '../readiness/FixHint.js';
 import {
   type ReadinessReader,
@@ -50,7 +55,7 @@ import { StatusChip } from '../ui/StatusChip.js';
 import { useToast } from '../ui/Toast.js';
 import { AskOwnerToEnable } from './AskOwnerToEnable.js';
 import { EnableGateConfirm } from './EnableGateConfirm.js';
-import { HeldDraftsNotice } from './GateOwnedParams.js';
+import { GateOwnedParamsMark, HeldDraftsNotice } from './GateOwnedParams.js';
 import { PackagedGateChecklist } from './PackagedGateChecklist.js';
 
 const CATALOG_WORKERS_TAB: CatalogTab = 'workers';
@@ -557,6 +562,9 @@ function ConnectionStep({
   /** The last keystroke in the GATE_ID field was normalized (capitals, `_`, …) — said under it. */
   const [gateIdAdjusted, setGateIdAdjusted] = useState(false);
   const showCreateForm = path === 'hosted' && isAdmin && creating;
+  // Review N2 of #567: platform-side only — a non-administrator's catalog never lists such an
+  // instance, so nothing is read for them.
+  const connectors = useConnectorsByName(http, { enabled: isAdmin });
 
   return (
     <div className="stack" data-testid="launcher-step-connection-body">
@@ -656,6 +664,7 @@ function ConnectionStep({
         pollState={pollState}
         selectedGateId={selected?.gateId ?? null}
         onSelect={onSelect}
+        connectors={connectors}
       />
 
       {path === 'hosted' && isAdmin ? (
@@ -698,6 +707,7 @@ function ExistingGatePicker({
   pollState,
   selectedGateId,
   onSelect,
+  connectors,
 }: {
   readonly kind: LauncherKind;
   readonly path: GatePath;
@@ -707,6 +717,9 @@ function ExistingGatePicker({
   readonly pollState: 'loading' | 'error' | 'ready';
   readonly selectedGateId: string | null;
   readonly onSelect: (gateId: string | null) => void;
+  /** Review N2 of #567: an administrator's rows say when no workspace (or no other workspace)
+   *  can see the instance — `null` for a non-administrator or while the connectors load. */
+  readonly connectors: ReadonlyMap<string, ConnectorWire> | null;
 }) {
   const t = useT();
   const title =
@@ -758,6 +771,14 @@ function ExistingGatePicker({
                 <span className="tag">{row.connector}</span>
                 <StatusChip machine="gateInstance" status={row.status} size="s" />
                 <StatusChip machine="gateHealth" status={row.health} size="s" />
+                {row.platform && hiddenFromWorkspaces(row.platform, connectors) !== null ? (
+                  <span
+                    className="chip chip-s chip-warn"
+                    data-testid={`launcher-gate-hidden-${row.gateId}`}
+                  >
+                    {hiddenInstanceBadge(row.platform, t)}
+                  </span>
+                ) : null}
               </span>
             </label>
           ))}
@@ -927,7 +948,15 @@ function PolicyStep({
               <tbody>
                 {gate.platform.operations.map((operation) => (
                   <tr key={operation.name}>
-                    <td className="mono">{operation.name}</td>
+                    <td>
+                      <span className="mono">{operation.name}</span>
+                      {/* UX acceptance of #567 P3: an entry the bulk publish will hold back is
+                       *  marked where it is first listed, not only in the enable preview. */}
+                      <GateOwnedParamsMark
+                        params={operation.gateOwnedParams}
+                        testId={`launcher-announced-held-${operation.name}`}
+                      />
+                    </td>
                     <td>
                       <StatusChip machine="operationMode" status={operation.mode} size="s" />
                     </td>

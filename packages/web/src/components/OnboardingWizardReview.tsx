@@ -1,5 +1,6 @@
 import {
   BLAST_RADIUS_VALUES,
+  type GateOwnedParamWire,
   OPERATION_MODE_VALUES,
   type OperationGovernanceChangeWire,
 } from '@nexttime/shared';
@@ -16,10 +17,12 @@ import {
 } from '../lib/connections.js';
 import { usePublishCredentialReview } from '../lib/credential-review.js';
 import { prettyJson } from '../lib/format.js';
+import type { OperationCatalogRow } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
 import { capabilityHolders } from '../lib/role-holders.js';
 import { hrefs } from '../lib/router.js';
 import { BLAST_RADIUS_TONES, OPERATION_MODE_TONES, labelText } from '../lib/status-tone.js';
+import { GateOwnedParamsMark } from './connect/GateOwnedParams.js';
 import {
   GovernanceChangeList,
   governanceChangeSummary,
@@ -160,6 +163,40 @@ export function currentRevisions(
   return rows.filter((row) => byName.get(row.name) === row);
 }
 
+const NO_HELD: ReadonlyMap<string, readonly GateOwnedParamWire[]> = new Map();
+
+function heldKey(row: { readonly name: string; readonly status: string }): string {
+  return `${row.status}\u0000${row.name}`;
+}
+
+/** `list_operations` for this gate, keyed by status and name (a name has at most one draft and
+ *  one published revision): the rows declaring a gate-owned param. A failed read marks nothing —
+ *  the reclassification then fails the way it always did, with the kernel's own refusal. */
+async function loadGateOwnedParams(
+  http: CapabilityCaller,
+  gatekeeperId: string,
+): Promise<ReadonlyMap<string, readonly GateOwnedParamWire[]>> {
+  try {
+    const result = await http.call<{ readonly items: readonly OperationCatalogRow[] }>(
+      'list_operations',
+      { gatekeeperId },
+    );
+    const held = new Map<string, readonly GateOwnedParamWire[]>();
+    for (const row of result.items) {
+      if (
+        row.gatekeeperId === gatekeeperId &&
+        row.gateOwnedParams &&
+        row.gateOwnedParams.length > 0
+      ) {
+        held.set(heldKey(row), row.gateOwnedParams);
+      }
+    }
+    return held;
+  } catch {
+    return NO_HELD;
+  }
+}
+
 /** Reviewing the classification proposes and publishes Operations (builder, owner): any other
  *  role is told whose step it is instead (#541 review N1). */
 export function OnboardingWizardReview(props: OnboardingWizardReviewProps) {
@@ -185,10 +222,17 @@ function OnboardingWizardReviewBody({
   showDone = true,
 }: OnboardingWizardReviewProps) {
   const t = useT();
-  const loadOperations = useCallback(
-    async () => currentRevisions(await loadGateOperations(http, gatekeeperId)),
-    [http, gatekeeperId],
-  );
+  const can = useRoleCan(http);
+  // Review N1 of #567: which rows declare a param only the gate sets — `list_operations` carries
+  // the kernel's own judgment (`gateOwnedParams`), read only when the role surely may.
+  const readsCatalog = can('list_operations') === true;
+  const loadOperations = useCallback(async () => {
+    const [rows, held] = await Promise.all([
+      loadGateOperations(http, gatekeeperId),
+      readsCatalog ? loadGateOwnedParams(http, gatekeeperId) : Promise.resolve(NO_HELD),
+    ]);
+    return { rows: currentRevisions(rows), held };
+  }, [http, gatekeeperId, readsCatalog]);
   const operations = useResource(loadOperations);
 
   return (
@@ -206,7 +250,7 @@ function OnboardingWizardReviewBody({
           onRetry={() => void operations.reload()}
           testId="wizard-review-error"
         />
-      ) : operations.state.data.length === 0 ? (
+      ) : operations.state.data.rows.length === 0 ? (
         <EmptyState
           icon="grid"
           title={t('这个门没有导入任何 Operation', 'No operations imported for this gate')}
@@ -224,11 +268,16 @@ function OnboardingWizardReviewBody({
             </tr>
           </thead>
           <tbody>
-            {operations.state.data.map((row) => (
+            {operations.state.data.rows.map((row) => (
               <OperationReviewRow
                 key={row.objectId}
                 http={http}
                 row={row}
+                gateOwnedParams={
+                  operations.state.status === 'ready'
+                    ? operations.state.data.held.get(heldKey(row))
+                    : undefined
+                }
                 onChanged={() => void operations.reload()}
               />
             ))}
@@ -250,10 +299,14 @@ function OnboardingWizardReviewBody({
 function OperationReviewRow({
   http,
   row,
+  gateOwnedParams,
   onChanged,
 }: {
   readonly http: CapabilityCaller;
   readonly row: OperationDetailView;
+  /** Review N1 of #567: set when this revision declares a param only the gate sets — then no
+   *  reclassification is offered (a proposed draft of it could never be published). */
+  readonly gateOwnedParams: readonly GateOwnedParamWire[] | undefined;
   readonly onChanged: () => void;
 }) {
   const t = useT();
@@ -326,13 +379,17 @@ function OperationReviewRow({
     setPendingChange(null);
   }
 
+  const held = gateOwnedParams !== undefined && gateOwnedParams.length > 0;
   const changeItem = pendingChange ? { name: row.name, ...pendingChange } : null;
   const consequences = changeItem ? governanceConsequences(changeItem, t) : [];
 
   return (
     <>
       <tr data-testid="wizard-review-row">
-        <td className="mono">{row.name}</td>
+        <td>
+          <span className="mono">{row.name}</span>
+          <GateOwnedParamsMark params={gateOwnedParams} testId="wizard-review-held" />
+        </td>
         <td>
           <StatusChip machine="operationMode" status={row.mode} size="s" />
         </td>
@@ -349,12 +406,21 @@ function OperationReviewRow({
           </details>
         </td>
         <td>
-          <Button variant="ghost" size="s" onClick={() => setEditing((v) => !v)}>
-            {editing ? t('取消', 'Cancel') : t('提议重分类', 'Propose reclassification')}
-          </Button>
+          {held ? (
+            <span className="text-3 text-small" data-testid="wizard-review-reclassify-held">
+              {t(
+                '门的清单去掉这些参数之前，不能重分类，也发布不了',
+                'Cannot be reclassified or published until the gate’s manifest drops these params',
+              )}
+            </span>
+          ) : (
+            <Button variant="ghost" size="s" onClick={() => setEditing((v) => !v)}>
+              {editing ? t('取消', 'Cancel') : t('提议重分类', 'Propose reclassification')}
+            </Button>
+          )}
         </td>
       </tr>
-      {editing ? (
+      {editing && !held ? (
         <tr>
           <td colSpan={6}>
             <div className="stack-s" data-testid="wizard-review-reclassify-form">

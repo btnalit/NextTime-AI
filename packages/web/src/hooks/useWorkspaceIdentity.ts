@@ -15,6 +15,8 @@ export interface WorkspaceIdentity {
    *  loading/failed/not yet deployed — lets a page mark the row matching the signed-in caller
    *  without a second read. */
   readonly principalId: string | null;
+  /** `get_workspace.id` once loaded, `null` before (or when it failed). */
+  readonly workspaceId: string | null;
   /** `get_workspace` has answered (or failed): `role` is as good as it will get this session. */
   readonly roleSettled: boolean;
 }
@@ -56,10 +58,12 @@ export function useWorkspaceIdentity(http: CapabilityCaller): WorkspaceIdentity 
       ? { kind: 'known', role: workspace.state.data.caller.role }
       : { kind: 'inferred', role: inferRole(permissions) };
   const principalId = workspace.state.status === 'ready' ? workspace.state.data.caller.id : null;
+  const workspaceId = workspace.state.status === 'ready' ? workspace.state.data.id : null;
   return {
     workspaceName,
     role,
     principalId,
+    workspaceId,
     roleSettled: workspace.state.status !== 'loading',
   };
 }

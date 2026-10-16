@@ -142,6 +142,8 @@ export interface GatekeeperDetailOperation {
   readonly status: string;
   readonly mode?: string;
   readonly blastRadius?: string;
+  /** Console G4: params only the gate sets (`OperationSummaryWire.gateOwnedParams`). */
+  readonly gateOwnedParams?: readonly GateOwnedParamWire[];
 }
 
 /** `get_gatekeeper`'s `health` is not a wire enum anywhere in `@nexttime/shared` today — read

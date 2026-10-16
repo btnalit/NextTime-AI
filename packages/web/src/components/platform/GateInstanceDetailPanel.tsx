@@ -13,6 +13,7 @@ import { useT } from '../../lib/i18n.js';
 import { transportKindLabel } from '../../lib/labels.js';
 import { hrefs } from '../../lib/router.js';
 import { deriveGateInstanceStatus } from '../../lib/status-tone.js';
+import { GateOwnedParamsMark } from '../connect/GateOwnedParams.js';
 import { Confirm } from '../kit/confirm.js';
 import { DrawerSection, DrawerSections } from '../kit/drawer-section.js';
 import { Button } from '../ui/Button.js';
@@ -27,6 +28,7 @@ import { PlatformError } from './PlatformError.js';
 import {
   canBePlatformPreset,
   hiddenInstanceExplanation,
+  hiddenInstanceLead,
 } from './integrations/connector-visibility.js';
 
 /** `GateInstanceTestResultWireSchema`'s shape (`packages/shared/src/wire/platform.ts`) — no
@@ -271,7 +273,13 @@ export function GateInstanceDetailPanel({
                   <tbody>
                     {instance.operations.map((operation) => (
                       <tr key={operation.name}>
-                        <td className="mono">{operation.name}</td>
+                        <td>
+                          <span className="mono">{operation.name}</span>
+                          <GateOwnedParamsMark
+                            params={operation.gateOwnedParams}
+                            testId={`gate-instance-operation-held-${operation.name}`}
+                          />
+                        </td>
                         <td>
                           <StatusChip machine="operationMode" status={operation.mode} size="s" />
                         </td>
@@ -352,12 +360,7 @@ export function GateInstanceDetailPanel({
             <Notice tone="warn" testId="gate-instance-hidden-from-workspaces">
               <span className="stack-s">
                 <span>
-                  {instance.status === 'enabled'
-                    ? t('工作区看不到这个实例。', 'No workspace can see this instance. ')
-                    : t(
-                        '启用之后工作区也看不到它。',
-                        'Even once enabled, no workspace will see it. ',
-                      )}
+                  {hiddenInstanceLead(instance, t)}
                   {hiddenInstanceExplanation(connector, hiddenMode, t)}
                 </span>
                 {onShowConnectors && canBePlatformPreset(connector.name) ? (
