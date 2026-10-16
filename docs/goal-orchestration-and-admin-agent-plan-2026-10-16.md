@@ -8,7 +8,9 @@
 > GPT 的分析基于 `07775fe`；核实在 `61d5735` 上做，行号以该提交为准（之后到 `0390041` 的提交只动控制台与 STATUS，不影响本文引用的代码）。
 > **修订（2026-10-16，同日）**：按独立审查（#580 的 PR 评论）修订——变更计划按授权分段应用（§5.4）、授权扩大改为白名单分类（I-A4）、
 > 新增"旧步骤不能产生动作"不变量 I-G9、代码层改为 W5 开工前的决策门（§5.5）、遗留改用 287–293、任务号改用 `GO*` / `AA*` 前缀，
-> 并改正 K2 / K5 / K6 与产物、溯源两处事实表述。
+> 并改正 K2 / K5 / K6 与产物、溯源两处事实表述。增量复审后再修订：白名单写明逐字段比较、治理三字段的方向只是其中一部分（I-A4）；
+> 段间依赖绑定平台段摘要、回滚按反向依赖、工作区段的差异只在该工作区可见（§3.4、§5.4）；I-G9 补上执行中动作的例外，撤回与步骤转移同事务、
+> 执行侧只靠行状态；ActionRequest 加结构化失败类别。
 > 编号：本文不带阶段前缀的 W0–W5 指建议新阶段 S11 的波次；任务号（`GO*` 目标级编排线、`AA*` 管理员 Agent 线、遗留号）与依赖、验收见
 > `global-roadmap-2026-10-16.md`；S10 的波次与目标一律写全称（S10 W2a、S10 G4）；本文的目标编号 O1–O8 与任务号是两套。
 
@@ -126,7 +128,7 @@ Task / WorkerRun 与转移日志（每次转移发 `TaskUpdated`，`task/transit
 | **WorkerSpec**（期望组合，W2） | Governance | 规划者想要的 Worker 组合：职责说明、Skill、门与 Operation 子集、模型、预算、停止条件、输出 Schema；经准入（§4.4）后解析成一份 RunConfigSnapshot | WorkerDefinition 是经发布的可复用模板；WorkerSpec 是这一次想要的组合；RunConfigSnapshot 是准入后实际跑的 |
 | **AcceptanceCheck** | Epistemic | 验收条件的一项：`observe_predicate`（一个观察类 Operation + 参数 + 对结果的判定式）、`fact_predicate`（图上事实 + 新鲜度）、`requester_confirm`、`review`（独立评审，W4） | 判定式由入口 agent 或规划器起草，**经请求者确认后才生效**（F2）；执行者自报不是一种验收（I-G5） |
 | **业务动作身份** | Governance | StepRun 内一个外部动作的去重键：（`step_run_id`, 门, Operation, 参数摘要） | 现有幂等键（`action-executor.ts:125,139`）里的会话身份 `sid` 换成 `step_run_id`；连续创建三张工单这类参数不同的合法调用不受影响 |
-| **ChangePlan / ChangeSegment / ChangeItem** | Governance | 一组意图变更，按授权分段：**平台段**（平台管理员应用）与**每个工作区一段**（该工作区 owner 应用）；每项 ChangeItem 是对一个现有发布 / 配置能力的调用意图（参数不含凭证）、干跑差异、授权影响分类、逆操作；每段绑定审阅时的内容摘要 | 能力包安装计划是 ChangePlan 的一种来源；管理员 Agent 的提案是另一种 |
+| **ChangePlan / ChangeSegment / ChangeItem** | Governance | 一组意图变更，按授权分段：**平台段**（平台管理员应用）与**每个工作区一段**（该工作区 owner 应用）；每项 ChangeItem 是对一个现有发布 / 配置能力的调用意图（参数不含凭证）、干跑差异、授权影响分类、逆操作；每段绑定审阅时的内容摘要，工作区段还绑定它所依赖平台段应用时的摘要 | 能力包安装计划是 ChangePlan 的一种来源；管理员 Agent 的提案是另一种 |
 | **ChangeProposal（代码层，待定）** | Governance | 一个代码改动提议的平台侧记录：仓库、分支、PR 引用、头提交、CI 与审查状态、关联的 GoalRun | W5 决策门通过后才引入；Git 与 PR 是真源，平台只存引用与状态快照 |
 | **管理员 Agent** | 主体 | 由平台管理员启动、代表该管理员（`on_behalf_of`）运行的 agent 实例；能力上限是代码里的常量 `ADMIN_AGENT_CEILING` | 与入口 agent 同一运行时与镜像，不同的能力上限、不同的对话与容器 |
 | **试验工作区** | World | 管理员 Agent 探索与试运行用的普通工作区（RLS 隔离），生产工作区的变化只经 ChangePlan 进入 | 不是 2026-09 否决的"平台工作区"（那是身份方案）；它没有特权 |
@@ -138,7 +140,7 @@ Task / WorkerRun 与转移日志（每次转移发 `TaskUpdated`，`task/transit
 - `Task executes StepRun`（N:1，带 `plan_revision` 与尝试号）；`Task ran_with RunConfigSnapshot`（1:1）；`ActionRequest raised_in StepRun`（经 Task）。
 - `AcceptanceCheck belongs_to GoalRun | StepRun`；`AcceptanceCheck confirmed_by` 人；`AcceptanceCheck evidenced_by Observation`（平台执行检查时产生）。
 - `ChangePlan proposed_by` 管理员 Agent（或能力包清单）`on_behalf_of` 人；`ChangePlan contains ChangeSegment`（1..N，按授权排序）；`ChangeSegment approved_by` / `applied_by` 该段的有权者；
-  `ChangeSegment requires ChangeSegment`（工作区段依赖平台段已生效）；`ChangeItem targets` 对象（门实例、Operation、WorkerDefinition、Skill、本体族、平台设置项）。
+  `ChangeSegment requires ChangeSegment@digest`（工作区段依赖平台段的某个已应用版本，按摘要绑定；回滚按反向依赖）；`ChangeItem targets` 对象（门实例、Operation、WorkerDefinition、Skill、本体族、平台设置项）。
 - `Object changed_by ChangeItem`（溯源，与 S10 的 `installed_from` 同构）。
 
 **永不允许**：
@@ -154,7 +156,7 @@ Task / WorkerRun 与转移日志（每次转移发 `TaskUpdated`，`task/transit
 
 | # | 不变量 | 机制 |
 |---|---|---|
-| I-G1 | 每个 StepRun 的每次尝试至多对应一个 Task | `tasks (step_run_id, attempt)` 唯一索引；推进在同一事务里写 StepRun 转移与 Task；推进器建的 Task 关掉 Task 内部重试 |
+| I-G1 | 每个 StepRun 的每次尝试至多对应一个 Task | `tasks (step_run_id, attempt)` 唯一索引（只约束推进器直接建的 Task；步骤声明的嵌套子 Task 记录所属 `step_run_id`，不占尝试号）；推进在同一事务里写 StepRun 转移与 Task；推进器建的 Task 关掉 Task 内部重试 |
 | I-G2 | 只有当前计划版本的步骤能被推进；旧版本 Task 的结果入库、入审计，但不改变步骤状态 | Task 带 `plan_revision`；推进时比较（fencing），不一致只记录 |
 | I-G3 | 计划修订基于当前版本（乐观并发），无环、引用可解析、在预算内 | 修订校验函数；`based_on ≠ current` 拒绝（同本体 R-60 的做法） |
 | I-G4 | 同一步骤内，同一业务动作身份（§3.1）至多执行一次，除非有显式、留痕的"重新执行"决定；同一 Operation 在本步骤有结果不明的动作时，先核对完再放行同类请求 | 步骤范围的去重键（跨 WorkerRun、跨状态）；`outcome_unknown` / `in_doubt` 先核对；重新执行需要人或（W2）规划器提议 + 平台接受 |
@@ -162,15 +164,15 @@ Task / WorkerRun 与转移日志（每次转移发 `TaskUpdated`，`task/transit
 | I-G6 | GoalRun 累计花费、步骤数、修订次数、墙钟时长不超过预算；超出即暂停，不是失败 | 推进前检查；`paused(budget_exhausted)` |
 | I-G7 | 每一步开始时按请求者**当前**授权铸 Handle；授权缩小后不再开始新步骤 | 复用现有函数：`entryGatekeeperIds` 现算请求者入口范围作父 Handle，再 `computeChildHandleScope`；执行时 R-37 照常复核；`paused(authority_lost)` |
 | I-G8 | WorkerSpec 组合不增权：直接运行的组合只能由已发布组件、请求者已有的门与模型构成 | 准入函数（§4.4），拒绝或转审批 |
-| I-G9 | 只有属于当前计划版本、且 GoalRun 未取消的步骤能产生或执行外部动作：被修订移除或取消的步骤，其 Task 默认被终止；若选择"让它跑完"，它的新 `request_action` 被拒绝；已批准未执行的动作在执行前重新校验所属步骤，不通过即撤回 | `request_action` 查所属 StepRun 是否当前且未取消；排水器出队执行前同一检查；新增 ActionRequest 转移 `pending_approval → withdrawn` 与 `approved → withdrawn`（共享转移表 + DB 约束 + I6 检查同步）；场景 S7、S8 |
+| I-G9 | 只有属于当前计划版本、且 GoalRun 未取消的步骤能产生外部动作，它的动作才能开始执行：被修订移除或取消的步骤，其 Task 默认被终止（子孙 Handle 一并吊销）；若选择"让它跑完"，它和它声明的嵌套子 Task 的新 `request_action` 被拒绝；它名下 `pending_approval` 与 `approved` 的动作改为 `withdrawn`（"让它跑完"时人逐条放行的除外）。**例外**：已经 `executing` 的动作不能撤回，按 R-48 收尾——首个请求若没到达门，重放会真正执行一次（`action-executor.ts:368-369`）；GoalRun 要等它们到终态（§4.8） | 入口：`request_action` 查所属 StepRun 是否当前且未取消（嵌套子 Task 记录所属 `step_run_id`）。执行侧只靠行状态：撤回在写 StepRun 转移的**同一事务**里完成，`startActionRequestExecution` 本来就 `FOR UPDATE` 锁行并按转移表检查（`approval/execution.ts:253-259`），见 `withdrawn` 即拒绝；排水器不读 StepRun（governance 不能依赖 application，`.dependency-cruiser.cjs:46-51`），也就没有先读再执行的竞态。新增转移 `pending_approval → withdrawn`、`approved → withdrawn`（共享转移表 + DB 约束 + I6 检查同步）；撤回后发 `ActionRequestUpdated` 触发该门重新排水；场景 S7、S8 |
 | I-A1 | 管理员 Agent 永远是提议者，不是授权者：它的 Handle 不含 human 通道能力，不能调 `scope:'platform'` 写能力；它不是 service API key | 现有 `assertValidScope` 与 `authorizeCapabilityCall`；新增守卫测试；身份用 Handle（来源绑定），不签 API key |
 | I-A2 | 管理员 Agent 的能力上限只在代码里，且它没有任何写平台代码的能力；改上限只能经人合入代码、由维护者部署 | `ADMIN_AGENT_CEILING` 常量 + CI 守卫断言上限不含 human 通道 / 审批 / 授权 / 策略类能力与代码托管类能力。今天唯一只能由人做的关口是部署；W5 若开工，前提是有 agent 拿不到的审批身份（§5.5） |
 | I-A3 | 管理员 Agent 的权力随人：每次调用检查其 `on_behalf_of` 的用户当前仍是平台管理员 | 调用时检查（不是签发时）；降级或停用立即失效 |
-| I-A4 | 凡是无法确定性证明"不扩大授权"的 ChangeItem，一律标 `authority_widening`，逐项人工确认，不能随其他项一键应用 | **白名单**分类器（§5.4），不信 agent 自己的标注；Operation 治理字段复用 `OperationGovernanceDirection`；应用接口要求逐项确认，审计记录 |
+| I-A4 | 凡是无法确定性证明"不扩大授权"的 ChangeItem，一律标 `authority_widening`，逐项人工确认，不能随其他项一键应用 | **白名单**分类器（§5.4）：对 ChangeItem 的全部字段逐字段比较，只有落在"已证明不扩大"集合里的变化才放行，不信 agent 自己的标注。`operationGovernanceChangeDirection` 只是其中一部分，只判 `mode` / `blast_radius` / `auto_approvable` 三个字段的方向；它返回 `neutral` 不证明任何事。应用接口要求逐项确认，审计记录 |
 | I-A5 | ChangePlan 不含凭证值；凭证只由人直接录入门宿主或 llm-proxy | ChangePlan schema 无凭证字段 + #526 的疑似凭据计数 |
 | I-A6 | 管理员 Agent 的探索只发生在试验工作区；生产工作区只经已应用的 ChangePlan 改变 | 它在生产工作区没有 Principal |
 | I-A7 | agent 起草的东西在溯源上可区分：起草者种类与批准人分开记录 | 扩展现有 `origin` / `proposer_kind` 到 Skill / Procedure / WorkerDefinition 草稿与 ChangePlan（遗留 293），不新增平行字段；审计记录两者 |
-| I-A8 | 应用的必须是人审过的那一份：每段应用时重算干跑，内容摘要与审阅时不同即拒绝 | 段级 `reviewedDigest`；沿用门清单 `manifestDigest` / 409 `manifest_changed` 与 ActionRequest `operation_digest` 的模式 |
+| I-A8 | 应用的必须是人审过的那一份：每段应用时重算干跑，内容摘要与审阅时不同即拒绝；工作区段的摘要包含它依赖的平台段 id 与该段应用时的摘要，平台段之后改过即拒绝 | 段级 `reviewedDigest`，在该段的应用事务里复查；沿用 `enable_gate_instance` 已有的 `manifestDigest` 同事务校验（`gate-instance-handlers.ts:306,337`，R-18）与 ActionRequest `operation_digest` 的模式 |
 
 ### 3.4 状态机
 
@@ -181,13 +183,14 @@ proposed ──confirm(人：计划 + 验收检查 + 预算)──▶ running �
     │                                              │  (原因：人要求 / 预算 / 无进展 / 授权失效 /        │
     └─expire / reject─▶ cancelled                    需要决定 / 待核对)                         └─验收未过─▶ paused(needs_decision)
                     paused(needs_decision) ──人：按未达成结束──▶ completed(not_achieved)
-                    running / paused ──cancel(人)──▶ cancelling ──(Task 已终止、动作已撤回)──▶ cancelled
-                    cancelling ──截止时间到、仍有 Task 未确认终止──▶ cancelled(cleanup_pending)（告警；I-G9 保证不再有动作）
+                    running / paused ──cancel(人)──▶ cancelling ──(Task 已终止、待批与已批动作已撤回、执行中动作已到终态)──▶ cancelled
+                    cancelling ──截止时间到、仍有 Task 未终止或执行中动作未到终态──▶ cancelled(cleanup_pending)（告警，逐条列出残留项）
                     任意非终态 ──引擎不可恢复错误──▶ failed
 ```
 
 目标结果 `unknown → achieved | not_achieved`，带依据（`verified_by_check` / `requester` / `reviewer_assessed`）；`completed` 可以是
-`not_achieved`（人选择按未达成结束），但 `achieved` 只能来自 I-G5 的依据。
+`not_achieved`（人选择按未达成结束），但 `achieved` 只能来自 I-G5 的依据。`cleanup_pending` 不等于"不会再有动作"：吊销了 Handle 的 Worker
+提不了新动作，`withdrawn` 的行执行不了，但列出的 `executing` 行仍会按 R-48 收尾，结果照常入审计并显示在目标详情里。
 
 **StepRun**：`pending`（依赖未满足）→ `ready` → `running`（有 Task 在跑）→ `waiting`（子原因：`approval` / `reconcile` / `external`）→
 `running` → `succeeded`（输出通过 Schema 校验、名下所有 ActionRequest 都到终态、步骤验收通过）| `failed`（带失败分类，§4.7）；`superseded`
@@ -195,8 +198,11 @@ proposed ──confirm(人：计划 + 验收检查 + 预算)──▶ running �
 
 **ChangePlan**（按段）：每个 ChangeSegment 走 `draft → submitted → validated | invalid → approved | rejected | expired → applying → applied |
 apply_failed（本段整体回滚）→ verifying → verified | verification_failed → rolled_back`；段内单事务。整份 ChangePlan 的状态由各段派生：
-`partially_applied`（有段已应用、有段未应用）是合法状态，控制台按段显示；工作区段在 `applying` 前检查它依赖的平台段已生效（沿用 S10 的
-"是否已就位"检查）。任何未应用的段可 `withdrawn`。需要人录凭证的项落成"待配置"，属于验证状态，不是应用失败。
+`partially_applied`（有段已应用、有段未应用）是合法状态，按段显示。**段间依赖绑定版本**：工作区段依赖平台段时，它的审阅摘要包含平台段 id
+与平台段应用时的摘要（对门实例就是 manifest 摘要），在工作区段 `applying` 的同一事务里复查——"平台段已生效"不够，平台段之后改过再应用
+（例如换了地址），owner 的批准就会落到他没看过的版本上，所以摘要对不上即 409，要求重新审阅。**回滚按反向依赖**：有依赖它的工作区段处于
+`approved` / `applied` / `verified` 时，平台段不能 `rolled_back`，要先按应用的相反顺序回滚这些工作区段。任何未应用的段可 `withdrawn`。需要人
+录凭证的项落成"待配置"，属于验证状态，不是应用失败。
 
 ## 4. 目标架构 A：目标级编排
 
@@ -248,7 +254,7 @@ apply_failed（本段整体回滚）→ verifying → verified | verification_fa
 
 **步骤 Handle（W1）**：推进器为每次尝试铸一个 Handle：用 `entryGatekeeperIds` 现算请求者此刻的入口范围作父 Handle，再用
 `computeChildHandleScope` 收窄到步骤所需的门（I-G7）。不引入新的计算公式。步骤 Handle 默认**不含** `invoke_worker` / `find_workers`——
-组队由推进器与规划器负责，预算与依赖才有单一的管理者；需要嵌套派生的步骤在计划里显式声明，并计入同一 GoalRun 预算。目标之外的 Task
+组队由推进器与规划器负责，预算与依赖才有单一的管理者；需要嵌套派生的步骤在计划里显式声明，并计入同一 GoalRun 预算；嵌套子 Task 记录所属 `step_run_id`，动作去重（I-G4）与 I-G9 都按它判断。目标之外的 Task
 是否也改默认值是另一个决定（遗留 288），不阻塞 W1。
 
 **WorkerSpec 与准入（W2）——原则：组合不增权**。准入函数对一个 WorkerSpec 给出三种结论：
@@ -290,9 +296,13 @@ apply_failed（本段整体回滚）→ verifying → verified | verification_fa
 | 授权不足 | 铸 Handle 失败、403 | `paused(authority_lost)`，通知人 |
 | 契约不合格 | 输出 Schema 校验失败、`no_result` | 返工一次；再失败 → 需要决定 |
 | 业务验证失败 | 验收检查为假 | 需要决定（W1 人，W2 规划器） |
-| 结果未知 | ActionRequest `failed` 且原因 `outcome_unknown`，或发送后断开（修复后为 `in_doubt`） | `waiting(reconcile)`：执行该步骤声明的核对观察；看到效果 → 视为已执行并记 Decision（附证据）；看不到 → `paused(needs_decision)`，由人决定是否重新执行，**不自动重新执行** |
+| 结果未知 | ActionRequest 的结构化失败类别为"结果不明"（GO1 新增，见下），或发送后断开（287 修复后为 `in_doubt`） | `waiting(reconcile)`：执行该步骤声明的核对观察；看到效果 → 视为已执行并记 Decision（附证据）；看不到 → `paused(needs_decision)`，由人决定是否重新执行，**不自动重新执行** |
 | 被拒绝或过期 | ActionRequest `rejected` / `expired` | 需要决定（场景 S11） |
 | 预算耗尽 | 步骤或目标预算 | `paused(budget_exhausted)` |
+
+**结果类别要可查询**（GO1）：今天 `outcome_unknown: …` 只写在审计负载里（`approval/execution.ts:372-379`；`action-executor.ts:239-241`），行上只有
+`failed`；让推进器读审计负载来驱动状态是错的。GO1 在 ActionRequest 上加结构化的失败类别（列，或独立的终态，实现时定），至少区分三种：门明确
+拒绝、结果不明、发送前就失败（287），推进器按它分流。
 
 **发送前与发送后要分开**（遗留 287）：连接被拒、DNS 解析失败这类请求根本没发出的错误，可以安全判 `failed`；只有请求发出后断开、或收到
 响应头后读响应体失败，才是 `in_doubt`。一律改成 `in_doubt` 会让门一宕机，每个动作都在队头当约 25 分钟的屏障。
@@ -314,12 +324,18 @@ apply_failed（本段整体回滚）→ verifying → verified | verification_fa
   继续（按 §4.5 的条件判成功，或按声明开一次续作 Task 做后续动作）；被拒或过期 → 需要决定。这样审批等多久都不受 Task 时长限制，也不需要
   WorkerRun 的 `suspended`。
 - **恢复时复查**：从等待恢复、开始新步骤前，检查计划版本仍是当前、目标未取消、请求者授权仍在（I-G2、I-G7）。
-- **取消**：GoalRun 进入 `cancelling`，不再开新步骤；运行中的 Task 走现有 `terminateTask`；本 GoalRun 的 `pending_approval` 动作撤回
-  （新增 `pending_approval → withdrawn`）；**已批准、还在门队列里排队的动作也撤回**（新增 `approved → withdrawn`），排水器出队执行前按 I-G9
-  再查一次，防止竞态。`cancelling` 有截止时间，到期仍有 Task 未确认终止 → `cancelled(cleanup_pending)` 并告警；因为 I-G9 在动作入口与执行前
-  两处拦截，残留的 Worker 也产生不了动作。已执行的外部动作不自动回滚；补偿是一个新计划步骤，按普通执行动作审批。
-- **修订移除步骤**：被移除步骤的 Task 默认终止，待批与已批未执行的动作撤回（同取消）。人可以对某一步选择"让它跑完"：它的结果照常入库，
-  但它的新 `request_action` 被拒绝（I-G9），已提交的动作撤回或由人逐条放行（放行记审计）。
+- **取消**：GoalRun 进入 `cancelling`，不再开新步骤；运行中的 Task 走现有 `terminateTask`（`revokeWorkerRunAndDescendants` 把子孙 Handle 一并
+  吊销，`task/lifecycle.ts:68-90`）。在写 StepRun 转移的**同一个事务**里，把本 GoalRun 名下 `pending_approval` 的动作和**已批准、还在门队列里
+  排队**的动作改为 `withdrawn`（新增 `pending_approval → withdrawn`、`approved → withdrawn`）。执行侧不另加检查：`startActionRequestExecution`
+  锁行后按转移表判断，见 `withdrawn` 即拒绝，排水器不需要知道步骤的存在。撤回后发 `ActionRequestUpdated`，让消费者立刻重新排水这个门——
+  撤回的若是队头的待审批动作，不这样做同门后续动作要等下一次周期 tick（`drainer.ts:139-140`）。**已经 `executing` 的动作不能撤回**：它们按
+  R-48 收尾，首个请求若没到达门，重放会真正执行一次（`action-executor.ts:368-369`）；所以 `cancelling` 要等本 GoalRun 名下的 Task 与 `executing`
+  行都到终态才进 `cancelled`，截止时间到仍未到终态 → `cancelled(cleanup_pending)` 并告警，逐条列出残留项。已执行的外部动作不自动回滚；补偿是
+  一个新计划步骤，按普通执行动作审批。
+- **修订移除步骤**：被移除步骤的 Task 默认终止，待批与已批未执行的动作在修订生效的同一事务里撤回，`executing` 的按 R-48 收尾（同取消）。人可以
+  对某一步选择"让它跑完"：它的结果照常入库，但它的新 `request_action` 被拒绝（I-G9）；它声明过的嵌套子 Task 记录同一 `step_run_id`，同样被拒
+  （"让它跑完"不吊销 Handle，不这样做子 Task 会绕过检查）。已提交的动作在**确认修订的同一步**逐条决定：放行的行保持原状态，其余改为
+  `withdrawn`——不新增"放行"状态，放行记审计。
 - **迟到结果**：属于被取代版本或已取消步骤的 Task 结果照常入库、入审计，不推进（I-G2）。
 - **重启**：推进状态全在库里，租约过期即被重新认领；outbox 至少一次投递导致的重复事件被 I-G1 与状态守卫的 UPDATE 吸收；丢失的事件由周期
   对账补上。
@@ -386,7 +402,7 @@ I-N1，列为待定（§5.5）。
 
 | 层 | 管理员 Agent 能做 | 生效需要谁 | 证据 | 回滚 | 审计 |
 |---|---|---|---|---|---|
-| **配置层** | 在试验工作区：`request_connection`、导入 OpenAPI / MCP 工具清单、观察试探、试跑 Worker；起草 Operation 分类、WorkerDefinition、Skill、Procedure、本体变更、门实例配置（无凭证）、连接器预设；组装 ChangePlan 提交 | 按段：平台段由平台管理员应用，每个工作区段由该工作区 owner 应用。授权扩大项逐项确认（I-A4）；凭证由人直接录入门宿主（I-A5）；应用的必须是审过的那份（I-A8） | 试验工作区里的 Task、观察、审计；每段的干跑差异与授权影响分类；（W4 后）评测判定；应用后的验证检查 | 弃用组件（只弃用不删，I-P4 同义）、停用门实例、平台设置回到上一版（`platform_settings` 已保留上一版）；每项记录逆操作；段内整体回滚 | 每个 ChangeItem 一条审计：起草者种类、批准人、应用人分开记录（I-A7） |
+| **配置层** | 在试验工作区：`request_connection`、导入 OpenAPI / MCP 工具清单、观察试探、试跑 Worker；起草 Operation 分类、WorkerDefinition、Skill、Procedure、本体变更、门实例配置（无凭证）、连接器预设；组装 ChangePlan 提交 | 按段：平台段由平台管理员应用，每个工作区段由该工作区 owner 应用。授权扩大项逐项确认（I-A4）；凭证由人直接录入门宿主（I-A5）；应用的必须是审过的那份（I-A8） | 试验工作区里的 Task、观察、审计；授权影响分类；平台段的干跑差异在平台面，工作区段的干跑差异只在该工作区 owner 的会话里生成和显示（§5.4）；（W4 后）评测判定；应用后的验证检查 | 弃用组件（只弃用不删，I-P4 同义）、停用门实例、平台设置回到上一版（`platform_settings` 已保留上一版）；每项记录逆操作，**先比较再写**：只在当前版本仍是本段写入的版本时才回退，中间有人改过就停下交人；段内整体回滚；有依赖段已应用时平台段不能先回滚（§3.4） | 每个 ChangeItem 一条审计：起草者种类、批准人、应用人分开记录（I-A7） |
 | **代码层（待定）** | W5 决策门通过之前：**无**。通过之后的设想见 §5.5 | — | — | — | — |
 | **部署层** | 只读准备：目标版本、迁移、breaking、对应 runbook 小节、前置检查（备份新鲜度、预发运行链接），生成部署请求 | 维护者在主机执行（S10 决定 3：不做一键升级；无 docker socket） | 主机输出按 runbook 记 `docs/private/` | `apply-release.sh` 与 `release.md` 的回滚 | 主机记录 + STATUS |
 
@@ -397,19 +413,34 @@ I-N1，列为待定（§5.5）。
 - **必须分段**（已核实）：平台调用者只能调 `scope:'platform'` 的能力、够不到任何工作区能力；工作区 Principal 也调不到平台能力
   （`authorize.ts:84-98`，P-A1）。S10 的 PackInstallation 本来就是"每个工作区 × 包族一行"，单事务只在一个工作区内成立，平台级组件只做
   "是否已就位"检查（S10 方案 §3.1、§3.3、§6.3）。所以一个 ChangePlan 拆成按授权排序的段：先平台段（平台管理员在平台面应用），再每个工作区一段
-  （该工作区 owner 在该工作区应用）；**段内单事务、段间不单事务**；工作区段应用前检查它依赖的平台段已生效；整份计划可以处于"部分应用"。
+  （该工作区 owner 在该工作区应用）；**段内单事务、段间不单事务**；工作区段绑定它依赖的平台段的版本与摘要，在应用事务里复查（§3.4、I-A8）；
+  整份计划可以处于"部分应用"。
+- **工作区段的内容只在该工作区可见**（隔离只增不减）：工作区段的校验与干跑要读生产工作区的内容（引用能否解析、命名空间是否冲突），而平台面
+  今天只看得到工作区的 id 与名称（`shared/src/wire/platform.ts:618-627`；P-A1）。所以工作区段的校验、干跑与差异只在该工作区 owner 的会话里执行
+  和显示；平台面与管理员 Agent 只看到段的状态（已提交、已应用、被拒等）和 owner 愿意写下的理由，不回传校验细节——否则就开了一条跨租户的读
+  通道，管理员 Agent 也能借提交或校验结果试探生产工作区里有什么。平台把一个段递给工作区，沿用"平台提供、工作区自取"的模式（同
+  `list_available_gate_instances` / `enable_gate_instance`）。管理员 Agent 起草时的引用检查只针对试验工作区与平台目录。
 - **ChangeItem 只能是对现有发布 / 配置能力的调用意图**（`publish_operation`、`publish_worker_definition`、`publish_skill`、`publish_ontology_version`、
   `create_gate_instance`、`enable_gate_instance`、`set_connector_mode`……），应用时由该段有权者的会话在一个事务里调用这些能力的内部函数——agent
   没有新的写路径，人点"应用"等于逐项替 agent 调了一遍已有能力，授权仍按那个人的角色判。
 - **应用绑定摘要**（I-A8）：人审阅时记下该段的内容摘要；应用时重跑干跑，摘要不同就拒绝（409，提示重新审阅）。
-- **授权扩大分类器是白名单**（I-A4）：分类器只放行能确定性证明"不扩大授权"的项，其余一律 `authority_widening`。至少这些字段的变化按扩大处理
-  或逐项确认：Operation 的 `mode`（execute → observe 即免审，`manifest.ts` 的 `MODE_STRICTNESS`）、`blast_radius` 降级、`auto_approvable`、
-  `await_decision`、`requester_can_approve`——Operation 治理字段直接复用 `classifyOperationGovernanceChange`（`loosened` / `mixed` 均算扩大）；
-  **新建的执行类 Operation 的分类**本身（分类就是审批边界，且是 agent 起草的）；已有门实例的地址或传输（凭证会随之发往新地址）；WorkerDefinition
-  的执行类 `capabilities` 与 `egressDeny`；Skill 正文（会进入所有加载它的 Worker 的 prompt）；策略、「始终允许」、MCP `vetted`、连接器三态放宽、
-  允许模型、出网放行、`instanceInstructions`。mode 的权威在内核登记的已发布定义：门侧按摘要绑定的定义校验 mode（`gatekeeper-base.ts:161,210`，#538），
-  所以门侧拒绝是第二道，不是分类器可以省掉的理由。
-- **校验**：引用可解析、命名空间不冲突（I-P1）、无凭证（I-A5）、非自指（§3.2）、段内只含一个授权主体。
+- **授权扩大分类器是白名单**（I-A4）：对 ChangeItem 的**全部字段**逐字段比较，只有落在"已证明不扩大授权"集合里的变化才放行，其余一律
+  `authority_widening`。现有的 `operationGovernanceChangeDirection` / `classifyOperationGovernanceChange` 只是其中一部分：它只比较 `mode`、
+  `blast_radius`、`auto_approvable` 三个字段（`manifest.ts:1086-1121`，注释写明有意不含 `await_decision`、`reversibility` 与 MCP 提示），三者都
+  不变时返回 `neutral`（`:1185-1194`）——`neutral` 不证明任何事，`loosened` / `mixed` 算扩大。至少下列变化必须逐项确认：
+  - **Operation**：三个治理字段的放宽（execute → observe 即免审，`MODE_STRICTNESS`；`blast_radius` 降级；`auto_approvable`）；已有执行类 Operation
+    的 `binding`（ssh 的命令模板 / 命令模式，http 的路径与方法）；`params_schema` 放宽；门侧固定参数（gate-owned params，遗留 J）；`reversibility`；
+    `await_decision`；MCP 的 `destructive_hint` / `idempotent_hint`（MCP 执行动作能否免审正取决于这两个提示，`request-action-handler.ts:1405-1425`）；
+    **新建执行类 Operation 的分类**本身（分类就是审批边界，且是 agent 起草的）。反例：一个 `auto_approvable`、低影响的 Operation，名字和三个治理
+    字段都不变、只换了命令——不逐项确认，新命令就会在没人审的情况下执行。
+  - **门实例与组件**：已有门实例的地址或传输（凭证会随之发往新地址）；WorkerDefinition 的执行类 `capabilities` 与 `egressDeny`；Skill 正文（会进入
+    所有加载它的 Worker 的 prompt）。
+  - **策略与平台设置**：工作区策略的 `requester_can_approve`（它是工作区策略与本体 ActionType 的字段，不是 Operation 字段，
+    `governance/policy/engine.ts:64`）、「始终允许」、MCP `vetted`、连接器三态放宽、允许模型、出网放行、`instanceInstructions`。
+  mode 的权威在内核登记的已发布定义：门侧按摘要绑定的定义校验 mode（`gatekeeper-base.ts:161,210`，#538），所以门侧拒绝是第二道，不是分类器
+  可以省掉的理由。
+- **校验**：引用可解析、命名空间不冲突（I-P1）、无凭证（I-A5）、非自指（§3.2）、段内只含一个授权主体；工作区段的校验在该工作区 owner 的会话里
+  执行（见上）。
 - **第一版收窄**（建议）：P1 先做工作区段（含"平台组件是否已就位"检查），平台项保留为人工清单（S10 原本就是这么做的）；平台段随 AA3 再做。
 - 一个验证有效的 ChangePlan 可以"导出为能力包"——管理员 Agent 接进来的系统，能变成别的部署可以装的包。这是产品化的出口。
 
@@ -450,8 +481,9 @@ W5 之前的路线（W0–W4）不依赖这一层；管理员 Agent 在配置层
 | 走 service API key 绕过人 | 管理员 Agent 只用来源绑定的 Handle；守卫测试断言其身份不是 API key、上限不含 human 通道能力 | 新增 |
 | 改自己的能力上限 | 上限是代码常量；它没有代码托管类能力；改上限 = 人合入代码 + 维护者部署 | 新增常量与 CI 守卫 |
 | 改约束自己的配置 | ChangePlan 自指校验：不能改它自己的定义、Skill、试验工作区授权、策略 | 新增 |
-| 借合法变更夹带授权扩大 | 白名单分类器 + 逐项确认 + 不能与其他项一键应用；被确认的项写审计 | 新增（模式同 #526「已核对凭据」；Operation 字段复用 `OperationGovernanceDirection`） |
-| 审过 A、应用的是 B | 段级内容摘要绑定，应用时重跑干跑，不同即 409 | 新增（模式同 `manifest_changed`） |
+| 借合法变更夹带授权扩大 | 白名单分类器（全字段比较，治理三字段的方向只是其中一部分）+ 逐项确认 + 不能与其他项一键应用；被确认的项写审计 | 新增（模式同 #526「已核对凭据」；三字段方向复用 `operationGovernanceChangeDirection`，`neutral` 不算证明） |
+| 审过 A、应用的是 B | 段级内容摘要绑定，应用时重跑干跑，不同即 409；工作区段还绑定所依赖平台段的摘要 | 新增（模式同 `enable_gate_instance` 的 `manifestDigest` / `manifest_changed`） |
+| 借提交或校验结果试探生产工作区 | 工作区段的校验、干跑与差异只在该工作区 owner 的会话里；平台面与管理员 Agent 只见段状态 | 新增 |
 | 管理员降级后 agent 继续工作 | 每次调用检查 `on_behalf_of` 用户的当前平台角色 | 新增（签发时检查不够） |
 | 凭证经过 agent | ChangePlan 无凭证字段；凭证页面直达门宿主 | 已有路径（`platform-admin-design.md` §6.3）+ 新 schema |
 | 改 CI 或治理代码偷渡 | W5 决策门之前没有代码层；之后见 §5.5 的前提与默认拒绝 | 待定 |
@@ -466,16 +498,18 @@ W5 之前的路线（W0–W4）不依赖这一层；管理员 Agent 在配置层
 4. 它起草一个"工单助手"WorkerDefinition 与两个 Skill，在试验工作区试跑（建单的动作照常走审批，管理员在试验工作区批）。
 5. 它组装 ChangePlan，分两段：**平台段**（`http` 门实例配置，无凭证）；**运维工作区段**（启用门、发布 Operation 分类、发布 WorkerDefinition 与 Skill）。
    分类器把"新建执行类 Operation `POST /tickets` 的分类"和 Skill 正文标为需要逐项确认。
-6. 平台管理员在平台面审阅平台段、录入生产凭证、应用；运维工作区 owner 在该工作区审阅工作区段（看差异、试验证据、逐项确认）、应用——
-   工作区段应用前检查平台段已生效；验证检查跑一次观察 → `verified`。管理员本人若也是该工作区 owner，就是同一个人在两个面上各点一次。
+6. 平台管理员在平台面审阅平台段、录入生产凭证、应用；运维工作区 owner 在该工作区审阅工作区段（差异在他的会话里生成；看差异、试验证据、逐项
+   确认）、应用——工作区段的审阅摘要绑定平台段应用时的摘要，在应用事务里复查；验证检查跑一次观察 → `verified`。平台面与管理员 Agent 只看到
+   工作区段"已应用"。管理员本人若也是该工作区 owner，就是同一个人在两个面上各点一次。
 7. （可选）把这个 ChangePlan 导出为 `tickets` 能力包。
 
 人做的事：录两次凭证、批一次试验动作、按段审阅与逐项确认、每段点一次应用。其余由它完成，全程有审计与溯源。
 
 ### 5.9 控制台
 
-管理组新增：**管理员 Agent**（对话 + 它的目标与在途提案）、**变更计划**（列表与详情：按段显示差异、授权影响分类、逐项确认、证据、应用、验证、
-回滚、部分应用状态）。生产工作区的 owner 在"能力目录"里看到待自己确认的工作区段。代码提案页随 W5 决策门再定。
+管理组新增：**管理员 Agent**（对话 + 它的目标与在途提案）、**变更计划**（列表与详情：平台段显示差异、授权影响分类、逐项确认、证据、应用、验证、
+回滚；工作区段只显示状态与 owner 写下的理由；部分应用状态）。生产工作区的 owner 在"能力目录"里看到待自己确认的工作区段，它的差异、校验结果与
+逐项确认只在这里生成和显示。代码提案页随 W5 决策门再定。
 
 ## 6. 与现有路线的关系
 
@@ -538,12 +572,13 @@ W5 之前的路线（W0–W4）不依赖这一层；管理员 Agent 在配置层
 
 1. **数据与状态**：GoalRun、PlanRevision、StepRun 三张表（新内核模块，迁移归该模块）；转移表进 `shared/src/transitions.ts`，DB 约束与定时
    不变量检查同步加（I-G1、I-G2、I-G6、I-G9）；Task 新增 `goal_run_id`、`step_run_id`、`plan_revision`、尝试号与 RunConfigSnapshot；ActionRequest
-   新增所属 StepRun；`pending_approval → withdrawn`、`approved → withdrawn` 转移。
+   新增所属 StepRun 与结构化失败类别（门明确拒绝 / 结果不明 / 发送前失败）；`pending_approval → withdrawn`、`approved → withdrawn` 转移。
 2. **能力**：`propose_goal`（handle，入口上限，带幂等键；计划只能引用已发布的 WorkerDefinition@version 或已发布 Procedure）、`confirm_goal`（带幂等键）/
    `pause_goal` / `resume_goal` / `cancel_goal` / `revise_goal`（human）、`get_goal` / `list_goals`（读，入口上限内可读自己的）。
 3. **推进器**：`next_tick_at` + 租约认领；outbox 消费者只在自己的短事务里置到期；周期对账扫描；步骤用内部 `invokeStep` 建 Task（同一事务写 StepRun
    转移，I-G1），Task 关掉内部重试；每步按 I-G7 铸 Handle（默认不含派生能力）；新尝试读快照；步骤范围的动作去重与 `waiting(reconcile)`；等待挂在
-   步骤上；取消、修订移除、暂停、继续；`request_action` 与排水器执行前的 I-G9 检查；迟到结果 fencing；GoalRun 预算（token、步骤数、墙钟）超出即暂停。
+   步骤上；取消、修订移除、暂停、继续；`request_action` 的 I-G9 检查，撤回与 StepRun 转移同事务、执行侧靠行状态，撤回后发 `ActionRequestUpdated`
+   触发重新排水；`cancelling` 等执行中动作到终态；迟到结果 fencing；GoalRun 预算（token、步骤数、墙钟）超出即暂停。
 4. **验收**：`observe_predicate`、`fact_predicate`、`requester_confirm`；确认卡片的可读渲染与恒真告警；不过即 `paused(needs_decision)`。
 5. **控制台**：我的目标、确认卡片、目标详情（步骤图、等待原因、版本时间线、验收证据、费用、操作按钮）、对话里的里程碑消息。
 6. **入口 agent 的 prompt**：何时提目标（多步、跨系统、需要等待）而不是逐轮推进；怎么写人能确认的验收检查。
@@ -561,8 +596,8 @@ S1（用户不再发消息）、S2（服务重启）、S3（重复事件）、S4
 | S4 | 夹具门执行成功但丢掉响应，且门的幂等重放也返回 `apply_outcome_unknown`（绕过 R-48 重放，否则走不到核对路径） | 步骤进入 `waiting(reconcile)`；核对观察看到效果后判成功；门侧该动作执行计数为 1。反向：核对观察看不到效果 → `paused(needs_decision)`，不自动重新执行，门侧计数仍为 1 |
 | S5 | 一步含需审批的执行动作，审批时间超过 Task 时长上限（测试里调短）；`await_decision` 为 true 与 false 各跑一次 | Worker 退出后步骤 `waiting(approval)`，目标不失败；批准并执行后，名下动作都到终态、步骤验收通过才判成功，下一步自动开始 |
 | S6 | 各步都报告成功，但验收观察为假 | 目标不进入 `completed(achieved)`；暂停并附证据；人选"按未达成结束"后为 `completed(not_achieved)` |
-| S7 | 运行中取消目标，此时有一条待审批动作、一条已批准还在门队列里排队的动作 | 不再开新 Task；运行中的被终止；两条动作都变 `withdrawn`，门侧执行计数为 0 |
-| S8 | 人改计划移除一个运行中的步骤；另一次对该步骤选"让它跑完" | 默认：其 Task 被终止、动作撤回；"让它跑完"：结果入库入审计但不推进，它的新 `request_action` 被拒绝 |
+| S7 | 运行中取消目标，此时有一条待审批动作（在门队列队头）、一条已批准还在门队列里排队的动作；另一次取消时，有一条动作处于 `executing` 且结果不明 | 不再开新 Task；运行中的被终止；两条动作都变 `withdrawn`，门侧执行计数为 0；同门里别的目标的后续动作随即被排水，不等周期 tick。另一次：目标停在 `cancelling`，截止后为 `cleanup_pending` 并列出那条 `executing` 动作；它按 R-48 收尾，结果入审计 |
+| S8 | 人改计划移除一个运行中的步骤；另一次对该步骤选"让它跑完"，并在确认修订时放行一条已提交的动作 | 默认：其 Task 与子孙被终止、动作撤回；"让它跑完"：结果入库入审计但不推进，它和它的嵌套子 Task 的新 `request_action` 被拒绝；放行的那条照常走审批与执行，其余变 `withdrawn` |
 | S9 | 运行中把请求者降为无该门授权的角色 | 下一步不开始，目标 `paused(authority_lost)` |
 | S10 | 累计 token 超出目标预算 | 目标 `paused(budget_exhausted)`，不是失败 |
 | S11 | 一步的执行动作被拒绝；另一次审批过期 | 步骤与目标进入需要决定，不自动重试同一动作 |
@@ -581,23 +616,26 @@ PR 走 xhigh 审查（状态完整性与授权）。
 | 自动推进放大治理缺口（「始终允许」不绑摘要、未知动作名） | 218、232 与 287 都在 W0，先于 W1 |
 | 推进器成为新的单点与复杂度来源 | 状态全在库、租约认领、周期对账、无进程内状态；推进规则全部确定性、可单测 |
 | 目标在人不在场时花钱，或"通过了但没做对" | 计划、验收检查、预算都需确认；恒真判定式告警；GoalRun 预算与无进展熔断；超出即暂停不重试；请求者可标未达成；W4 用真实达成率校准 |
-| 被取消或被修订掉的步骤仍产生动作 | I-G9：动作入口与执行前两处检查；`approved → withdrawn`；场景 S7、S8 |
+| 被取消或被修订掉的步骤仍产生动作 | I-G9：`request_action` 入口检查；撤回与步骤转移同事务，执行侧靠行状态；`executing` 的按 R-48 收尾并在 `cleanup_pending` 列出；场景 S7、S8 |
 | 一步等审批挡住同门其他动作 | W1 接受（与今天一致），在目标详情里写明"在等谁"；W2 按目标资源细化 |
 | 管理员 Agent 被注入后提出看似合理的变更 | 它只能提议；白名单分类 + 逐项确认；摘要绑定；自指拒绝；试验与生产分离；变更有逆操作 |
 | 人对 ChangePlan 走过场 | 授权影响分类由平台算、差异与证据同页；授权扩大项不能一键通过；（W4 后）评测判定 |
-| 变更计划部分应用后不一致 | 段间显式依赖与"是否已就位"检查；部分应用是可见状态；每段可回滚 |
+| 变更计划部分应用后不一致 | 段间依赖绑定平台段摘要；部分应用是可见状态；回滚按反向依赖，逆操作先比较再写 |
 | 代码层在没有可强制的人审身份时被打开 | W5 决策门的两条前提；W0–W4 不依赖它 |
 
 ## 9. 验证
 
 - **功能**：§7.2 场景 S1–S12；W2、W3 各自的出口与 `global-roadmap-2026-10-16.md` 的逐项验收。
 - **状态**：GoalRun、StepRun、ChangeSegment 只沿 §3.4 的转移走（转移表 + DB 约束 + 定时检查 + 测试）。
-- **授权**：每步的 Handle 是请求者当前授权与步骤所需的交集（集成测试改角色后断言）；非当前步骤的 Task 提交动作得 403（I-G9）；管理员 Agent 的
+- **授权**：每步的 Handle 是请求者当前授权与步骤所需的交集（集成测试改角色后断言）；非当前步骤的 Task（含其嵌套子 Task）提交动作得 403（I-G9）；管理员 Agent 的
   Handle 调任何 human 通道或平台写能力得 403（守卫测试）；上限常量不含禁止类能力（CI 守卫）；分类器对未列入白名单的字段变化一律给出
-  `authority_widening`（表驱动测试）。
+  `authority_widening`（表驱动测试，至少覆盖 `binding`、`params_schema`、门侧固定参数、`reversibility`、`await_decision`、MCP 两个提示各自单独变化、
+  治理三字段 `neutral` 时）。
+- **隔离**：工作区段的校验结果与差异在平台面与管理员 Agent 的任何读接口里不可见（测试）。
 - **溯源**：任一外部动作能答出"属于哪个目标的哪一步、哪个计划版本、谁批的"；任一经 ChangePlan 进入生产的对象能答出"哪类起草者、
   谁批准、谁应用、证据在哪、应用的是哪个摘要"。
-- **失败**：结果未知的动作在核对前不会被重新执行（门侧计数断言）；取消或修订后不会有新动作执行；丢事件不会让目标永久卡住。
+- **失败**：结果未知的动作在核对前不会被重新执行（门侧计数断言）；取消或修订后 `withdrawn` 的动作不会执行，`executing` 的只经 R-48 收尾；
+  丢事件不会让目标永久卡住。
 - **语义一致**：控制台、读模型、能力描述与本文对"目标 / 步骤 / 任务""执行状态 / 目标结果""运行配置快照 / WorkerSpec""起草者 / 批准人"用同一套词，
   目标结果依据沿用 `OBJECTIVE_OUTCOME_BASIS_VALUES`。
 
