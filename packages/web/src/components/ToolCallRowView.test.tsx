@@ -66,6 +66,27 @@ describe('ToolCallRowView', () => {
     );
   });
 
+  // UX acceptance of #602 (P2-3): U+0000 in the call's own text is refused before any system is
+  // asked, so the note names the field and does not point at the system.
+  it('explains an unstorable_text refusal without linking the system the call names', () => {
+    render(
+      <ToolCallRowView
+        row={{
+          toolCallId: 'c1',
+          name: 'nexttime_request_action',
+          status: 'ended',
+          isError: true,
+          args: { gatekeeperId: 'gk-1', name: 'media.restart', params: { name: 'media\u0000-1' } },
+          result:
+            'unstorable_text: capability "request_action": the text at params "params.name" holds U+0000 (NUL), which cannot be stored — nothing was written; send it again without that character',
+        }}
+      />,
+    );
+    const note = screen.getByTestId('tool-call-gate-reason');
+    expect(note.textContent).toMatch(/字段「params\.name」里有一个看不见的 U\+0000/);
+    expect(screen.queryByTestId('tool-call-gate-reason-link')).toBeNull();
+  });
+
   it('has nothing to add to a result that names no gate refusal', () => {
     render(
       <ToolCallRowView

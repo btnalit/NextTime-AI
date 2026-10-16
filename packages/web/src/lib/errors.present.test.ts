@@ -1,3 +1,4 @@
+import { UnstorableTextError } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
 import {
   CODE_TITLES,
@@ -12,6 +13,7 @@ import { HttpError } from './http-client.js';
 import type { Translate } from './i18n.js';
 import { LlmAdminError } from './llm-admin.js';
 import { LocalizedError } from './localized-error.js';
+import { RpcError } from './ws-client.js';
 
 /** errors.present.test (console audit P1-1): the readable body for an error, never the kernel's
  *  own text, which moves to the technical details with the code. */
@@ -35,6 +37,37 @@ describe('presentError', () => {
     expect(shown.message).toContain('什么也没有写入');
     expect(shown.raw).toContain('params "title"');
     expect(presentError(err, en).title).toBe('Text holds a character that cannot be stored');
+  });
+
+  // UX acceptance of #602 (P2-1): the note names the field the kernel names, says the character
+  // cannot be seen, and says how to get rid of it — the same over HTTP and over WS (the composer).
+  it('legacy 320: the unstorable_text note names the field and how to remove an invisible character', () => {
+    const message = new UnstorableTextError('capability "send_chat_message"', {
+      path: ['text'],
+      in: 'value',
+    }).message;
+    for (const err of [
+      new HttpError('capability_error', message, 'unstorable_text'),
+      new RpcError(-32017, message),
+    ]) {
+      const shown = presentError(err, zh);
+      expect(shown.code).toBe('unstorable_text');
+      expect(shown.message).toMatch(/^字段「text」里有一个看不见的 U\+0000（空字符）/);
+      expect(shown.message).toContain('纯文本编辑器');
+      expect(shown.message).not.toContain('数据库');
+      expect(presentError(err, en).message).toMatch(/^The field "text" holds an invisible U\+0000/);
+    }
+    const key = new UnstorableTextError('capability "x"', {
+      path: ['labels', 'a\u0000b'],
+      in: 'key',
+    });
+    expect(
+      presentError(new HttpError('capability_error', key.message, 'unstorable_text'), zh).message,
+    ).toMatch(/^键名「labels\.a\\u0000b」里有一个看不见的 U\+0000/);
+    const whole = new UnstorableTextError('capability "x"', { path: [], in: 'value' });
+    expect(
+      presentError(new HttpError('capability_error', whole.message, 'unstorable_text'), zh).message,
+    ).toMatch(/^提交的文字里有一个看不见的 U\+0000/);
   });
 
   it('a known code reads as its next step in the viewer’s language; the kernel text is kept raw', () => {
@@ -192,8 +225,23 @@ describe('legacy K / J codes (review of #538, G3)', () => {
       'unstorable_text: capability "propose_operation": the text at params "operation.name" holds U+0000 (NUL), which cannot be stored — nothing was written; send it again without that character',
       zh,
     );
-    expect(unstorable).toMatchObject({ code: 'unstorable_text', title: '文字里有存不了的字符' });
+    expect(unstorable).toMatchObject({
+      code: 'unstorable_text',
+      title: '文字里有存不了的字符',
+      aboutTheSystem: false,
+    });
     expect(unstorable?.message).toContain('不需要你处理');
+    expect(unstorable?.message).toMatch(/^字段「operation\.name」里/);
+    // The same text inside a tool result shown as JSON: its quotes arrive escaped.
+    expect(
+      gateReasonNextStep(
+        JSON.stringify({
+          error: 'unstorable_text: capability "x": the text at params "a.b" holds U+0000 (NUL)',
+        }),
+        zh,
+      )?.message,
+    ).toMatch(/^字段「a\.b」里/);
+    expect(gateReasonNextStep('operation_refused: no', zh)?.aboutTheSystem).toBe(true);
     expect(gateReasonNextStep('{"status":"executed"}', zh)).toBeNull();
     expect(gateReasonNextStep('my_operation_definition_mismatch_field', zh)).toBeNull();
   });

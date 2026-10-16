@@ -1,4 +1,4 @@
-import { visibleJson } from '@nexttime/shared';
+import { visibleJson, visibleLines } from '@nexttime/shared';
 import type {
   ToolCallMessageContent,
   ToolCallOutcome,
@@ -125,13 +125,16 @@ export function persistedToolCallIds(messages: readonly ChatMessage[]): Readonly
  *  A cut preview is not valid JSON and stays as it came. */
 export function previewDisplayText(value: ToolCallPayloadPreview): string {
   // Review of #593: a format character or line separator (a bidi override) is shown as
-  // `\u{XXXX}`; the text's own line breaks stay.
-  if (value.truncated) return visibleJson(value.text);
+  // `\u{XXXX}`; the text's own line breaks stay. Review #493 on #605: only JSON text goes through
+  // `visibleJson` — plain output (a shell tool's) goes through `visibleLines`, which also shows
+  // its control characters and leaves its backslashes as they are.
   const trimmed = value.text.trim();
-  if (!(trimmed.startsWith('{') || trimmed.startsWith('['))) return visibleJson(value.text);
+  const looksJson = trimmed.startsWith('{') || trimmed.startsWith('[');
+  if (value.truncated) return looksJson ? visibleJson(value.text) : visibleLines(value.text);
+  if (!looksJson) return visibleLines(value.text);
   try {
     return visibleJson(JSON.stringify(JSON.parse(trimmed), null, 2));
   } catch {
-    return visibleJson(value.text);
+    return visibleLines(value.text);
   }
 }

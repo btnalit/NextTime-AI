@@ -6,8 +6,10 @@ import {
   clipCodePoints,
   quotedName,
   visibleJson,
+  visibleLines,
   visibleText,
 } from './echoed-text.js';
+import { storableText, storableValue } from './storable-text.js';
 
 describe('quotedName (legacy 232)', () => {
   it('quotes an ordinary name as before', () => {
@@ -54,6 +56,25 @@ describe('boundedEcho / visibleText / clipCodePoints (legacy 232)', () => {
     expect(shown).toContain('wh-9 \\u{202E}qty: 0001\\u{202C}');
     expect(shown).toContain('a\\u{2028}b');
     expect(shown.split('\n')).toHaveLength(4);
+  });
+
+  // UX acceptance of #602 (P2-2): a stored U+0000 stand-in reads `\u{0}` in a JSON block, as in
+  // running text and as the format characters beside it — not JSON's doubled backslash.
+  it('visibleJson shows a stored U+0000 stand-in with one backslash, like the escapes beside it', () => {
+    const stored = storableValue({ name: 'media\u0000-1', note: 'restart\u202Egnp.exe' }).value;
+    const shown = visibleJson(JSON.stringify(stored, null, 2));
+    expect(shown).toContain('"media\\u{0}-1"');
+    expect(shown).toContain('"restart\\u{202E}gnp.exe"');
+    expect(shown).toBe(visibleJson(shown));
+    // A backslash of the text's own stays JSON's pair, in front of the stand-in too.
+    expect(visibleJson(JSON.stringify(`a\\${storableText('\u0000')}`))).toBe('"a\\\\\\u{0}"');
+    expect(visibleJson(JSON.stringify('a\\b'))).toBe('"a\\\\b"');
+  });
+
+  it('visibleLines keeps line breaks and tabs, shows other control characters, keeps backslashes', () => {
+    expect(visibleLines('a\tb\r\nc\nd')).toBe('a\tb\r\nc\nd');
+    expect(visibleLines('cr\ronly\u0000\u202E')).toBe('cr\\u{D}only\\u{0}\\u{202E}');
+    expect(visibleLines('C:\\\\u{0}')).toBe('C:\\\\u{0}');
   });
 
   it('never clips a legal Operation name (review #493 on #593)', () => {

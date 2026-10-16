@@ -42,6 +42,13 @@ const RPC_CODE_NAMES: Readonly<Record<number, string>> = {
   [-32011]: 'illegal_transition',
   [-32012]: 'quota_exceeded',
   [-32013]: 'attenuation_denied',
+  // `UPSTREAM_ERROR` stands for HTTP's `gatekeeper_error` / `gatekeeper_timeout` /
+  // `manifest_fetch_failed` together; the first is the one whose copy fits all three.
+  [-32014]: 'gatekeeper_error',
+  [-32015]: 'service_unavailable',
+  [-32016]: 'worker_definition_not_enabled',
+  // Legacy 320 (UX acceptance of #602): the composer's own path for text holding U+0000.
+  [-32017]: 'unstorable_text',
   // Client-side only (lib/ws-client.ts `RPC_TIMEOUT_CODE`, C5): the kernel never answered.
   [-32000]: 'timeout',
 };
@@ -151,6 +158,38 @@ export const CODE_TITLES_ZH: Readonly<Record<string, string>> = {
   outcome_unknown: '结果不明',
   unknown: '出错了',
 };
+
+/** Legacy 320 (UX acceptance of #602): the shared part of the `unstorable_text` note, after the
+ *  place it names. U+0000 cannot be seen, so "remove the character" alone cannot be followed: the
+ *  note says where it usually comes from and two ways to get rid of it. */
+const UNSTORABLE_TEXT_STEP = {
+  zh: '有一个看不见的 U+0000（空字符），系统存不了它，所以这次什么也没有写入。它通常来自粘贴的日志、终端输出或二进制内容：删掉粘贴进来的那一段重新输入，或先粘贴到纯文本编辑器里再复制过来，然后重新提交。如果是 agent 的调用，它一般会改好后重新发起，不需要你处理。',
+  en: 'holds an invisible U+0000 (a null character), which the system cannot store, so nothing was written. It usually comes from pasted logs, terminal output or binary content: delete the pasted part and type it again, or paste it into a plain-text editor first and copy it from there, then send it again. If this was an agent’s call, it usually fixes it and calls again, and nothing needs you.',
+} as const;
+
+/** Where the kernel's `unstorable_text` message (`@nexttime/shared` `UnstorableTextError`) says
+ *  the character is: `the text at params "title" holds U+0000` names a value, `the key at …` a key.
+ *  The quotes may arrive escaped (`\"`), when the message sits inside a tool result shown as
+ *  JSON. A message naming no field (the whole params were one string) matches nothing. */
+const UNSTORABLE_TEXT_PLACE = /\bthe (key|text) at [^"\\]*\\?"(.+?)\\?" holds U\+0000/;
+
+/** The `unstorable_text` note for `text` (the kernel's message, or a tool result carrying it),
+ *  naming the field or key it is in when the message says. */
+export function unstorableTextNextStep(text: string, t: Translate): string {
+  const place = UNSTORABLE_TEXT_PLACE.exec(text);
+  if (!place)
+    return t(`提交的文字里${UNSTORABLE_TEXT_STEP.zh}`, `The text sent ${UNSTORABLE_TEXT_STEP.en}`);
+  const [, kind, path] = place;
+  return kind === 'key'
+    ? t(
+        `键名「${path}」里${UNSTORABLE_TEXT_STEP.zh}`,
+        `The key "${path}" ${UNSTORABLE_TEXT_STEP.en}`,
+      )
+    : t(
+        `字段「${path}」里${UNSTORABLE_TEXT_STEP.zh}`,
+        `The field "${path}" ${UNSTORABLE_TEXT_STEP.en}`,
+      );
+}
 
 /**
  * Console audit P1-1: what to do next, per stable code — the line an error banner shows as its
@@ -276,10 +315,11 @@ export const ERROR_NEXT_STEPS: Readonly<
     en: 'The new operation’s name is empty, longer than 128 characters, or carries a character you cannot see (a control, zero-width or text-reversing character), so nothing was written. Propose it again under a name of visible characters, at most 128 long. Existing operations are not affected.',
   },
   // Legacy 320: U+0000 in a name, an id or a setting — refused before anything was written. The
-  // same note serves a form the person sent and an agent's call shown in the chat.
+  // same note serves a form the person sent and an agent's call shown in the chat. This is the
+  // wording when the error names no field; `unstorableTextNextStep` says which one when it does.
   unstorable_text: {
-    zh: '提交的文字里有 U+0000（空字符），数据库存不了它，所以这次什么也没有写入。报错里写了它在哪个字段；去掉这个字符后重新提交。如果是 agent 的调用，它一般会改好后重新发起，不需要你处理。',
-    en: 'The text sent holds U+0000 (a null character), which the database cannot store, so nothing was written. The error names the field it is in; remove the character and send it again. If this was an agent’s call, it usually fixes it and calls again, and nothing needs you.',
+    zh: `提交的文字里${UNSTORABLE_TEXT_STEP.zh}`,
+    en: `The text sent ${UNSTORABLE_TEXT_STEP.en}`,
   },
   // Legacy K (review of #538, G3).
   operation_definition_mismatch: {
@@ -381,7 +421,11 @@ export function presentError(
     platformErrorMessage(err, t) ??
     llmAdminErrorMessage(err, t) ??
     transportErrorMessage(err, t) ??
-    (step ? t(step.zh, step.en) : null);
+    (described.code === 'unstorable_text'
+      ? unstorableTextNextStep(described.message, t)
+      : step
+        ? t(step.zh, step.en)
+        : null);
   const message =
     curated ??
     t(
@@ -425,6 +469,11 @@ const GATE_REASON_CODES = [
 ] as const;
 const GATE_REASON_PATTERN = new RegExp(`\\b(${GATE_REASON_CODES.join('|')})\\b`);
 
+/** Reasons that say nothing about the system the call went to (UX acceptance of #602, P2-3): U+0000
+ *  in the call's own text is refused by the kernel before any system is asked, so a link to the
+ *  system would point the reader at the wrong place. */
+const NOT_ABOUT_THE_SYSTEM: ReadonlySet<string> = new Set(['unstorable_text']);
+
 /** How loud each reason's note is (UX acceptance of #586): not sent ran nothing and may be
  *  requested again, so it is a plain note; outcome unknown may have run, and a blind retry can
  *  do it twice, so it is the loudest; the gate's refusals ask for care. */
@@ -449,6 +498,8 @@ export function gateReasonNextStep(
   readonly title: string;
   readonly message: string;
   readonly tone: 'info' | 'warn' | 'danger';
+  /** Whether the system the call went to is where to look (the tool row links it). */
+  readonly aboutTheSystem: boolean;
 } | null {
   const code = GATE_REASON_PATTERN.exec(text)?.[1];
   if (code === undefined) return null;
@@ -457,12 +508,15 @@ export function gateReasonNextStep(
   const message =
     code === 'outcome_unknown' && (target !== undefined || system !== undefined)
       ? outcomeUnknownStep(t, target, system)
-      : t(step.zh, step.en);
+      : code === 'unstorable_text'
+        ? unstorableTextNextStep(text, t)
+        : t(step.zh, step.en);
   return {
     code,
     title: t(ownEntry(CODE_TITLES_ZH, code) ?? code, ownEntry(CODE_TITLES, code) ?? code),
     message: withPlaintextTlsHint(message, text, t),
     tone: ownEntry(GATE_REASON_TONES, code) ?? 'warn',
+    aboutTheSystem: !NOT_ABOUT_THE_SYSTEM.has(code),
   };
 }
 

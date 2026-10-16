@@ -845,6 +845,28 @@ describe.runIf(DATABASE_URL !== undefined)(
       client.close();
     });
 
+    // Legacy 320 (UX acceptance of #602): the console's composer sends over this transport, so
+    // pasted text holding U+0000 must come back as its own code naming the field, not as
+    // INVALID_PARAMS — and nothing is written, so the chat takes the next message as usual.
+    it('send_chat_message whose text holds U+0000 is refused with UNSTORABLE_TEXT naming the field', async () => {
+      const client = await WsRpcClient.connect(wsUrl, { authorization: `Bearer ${ownerApiKey}` });
+      const chatId = await newChat(client);
+
+      await expect(
+        client.call('send_chat_message', { chatId, text: 'pasted\u0000log' }),
+      ).rejects.toMatchObject({
+        code: WS_ERROR_CODES.UNSTORABLE_TEXT,
+        message: expect.stringContaining('the text at params "text" holds U+0000'),
+      });
+      const sent = await client.call<{ sequence: number }>('send_chat_message', {
+        chatId,
+        text: 'pasted log',
+      });
+      expect(sent.sequence).toBe(1);
+
+      client.close();
+    });
+
     // Own testTimeout (STATUS.md 遗留 25): flaky under runner contention at vitest's 5s default —
     // this case's own `waitUntil` already waits up to 5s internally, leaving no margin. The
     // testTimeout alone was not enough (recurred 2026-09-18 as `waitUntil timed out` at 5.2s),
