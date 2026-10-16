@@ -234,6 +234,27 @@ describe('kit/Confirm — medium', () => {
     expect(error.textContent).toContain('kernel said no');
     expect(screen.getByTestId('confirm')).toBeTruthy();
   });
+
+  it('UX acceptance of #579 P2: reopening after a failed attempt starts without the stale error', async () => {
+    let attempt = 0;
+    const onConfirm = vi.fn(async () => {
+      attempt += 1;
+      if (attempt === 1) throw new Error('kernel said no');
+    });
+    renderTier('medium', { onConfirm });
+
+    fireEvent.click(screen.getByTestId('trigger'));
+    fireEvent.click(await screen.findByTestId('confirm-button'));
+    expect((await screen.findByTestId('confirm-error')).textContent).toContain('kernel said no');
+    fireEvent.click(screen.getByTestId('confirm-cancel'));
+    await waitFor(() => expect(screen.queryByTestId('confirm')).toBeNull());
+
+    fireEvent.click(screen.getByTestId('trigger'));
+    await screen.findByTestId('confirm-button');
+    expect(screen.queryByTestId('confirm-error')).toBeNull();
+    fireEvent.click(screen.getByTestId('confirm-button'));
+    await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(2));
+  });
 });
 
 describe('kit/Confirm — irreversible', () => {

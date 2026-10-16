@@ -109,6 +109,15 @@ export function definitionRefusal(
   return 'workspace_revision';
 }
 
+/** UX acceptance of #579 (legacy 297): the held announcement drops `operationName`, which the
+ *  manifest in effect still has. `definitionRefusal` reads that as `platform_adoption` — adopting
+ *  is the next step — but adopting does not bring the calls back: the adopted manifest no longer
+ *  lists it, so the gate answers `operation_not_found` from then on. Every surface that says "until
+ *  it is adopted" says this one apart. */
+export function droppedUntilAdopted(defs: GateRunningDefinitions, operationName: string): boolean {
+  return defs.pending && defs.adopted.has(operationName) && !defs.running.has(operationName);
+}
+
 /** The platform's side: Operations of the manifest in effect the gate refuses until the held
  *  announcement is adopted (and each enabling workspace then publishes a revision). Sorted. */
 export function operationsRefusedUntilAdopted(defs: GateRunningDefinitions): string[] {

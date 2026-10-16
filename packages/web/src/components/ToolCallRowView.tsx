@@ -236,7 +236,8 @@ export const ToolCallGroupView = memo(function ToolCallGroupView({
           {t(
             'agent 自己报告的调用，参数和结果已脱敏、截断。能力调用的权威记录在',
             'Reported by the agent; arguments and results are redacted and shortened. The authoritative record of capability calls is the',
-          )}{' '}
+          )}
+          {t('', ' ')}
           <RouteLink href={hrefs.audit()}>{t('审计', 'audit log')}</RouteLink>
           {t('。', '.')}
         </span>

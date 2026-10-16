@@ -124,6 +124,7 @@ import {
 } from '../../governance/connections/index.js';
 import {
   OperationDeclaresGateOwnedParamsError,
+  OperationDraftChangedError,
   OperationIdentityConflictError,
   OperationNotFoundError,
 } from '../../governance/gatekeepers/index.js';
@@ -392,6 +393,11 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // IllegalTransition / not_published: well-formed request, the row's *state* forbids it.
   if (err instanceof OperationIdentityConflictError) {
     return { status: 409, code: 'conflict', message: err.message };
+  }
+  // Review #493 on #583: `discard_operation_draft` / `publish_operation` on a draft revised in
+  // place since the caller read it (`draftDigest`). Nothing was written; reload and look again.
+  if (err instanceof OperationDraftChangedError) {
+    return { status: 409, code: err.code, message: err.message };
   }
   // S5.3 `register_source` (ingest-handlers.ts): the (kind, name) is another owner's Source, has
   // the other visibility, or is a private Source the caller cannot see — its own code so a

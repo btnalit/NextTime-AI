@@ -44,6 +44,7 @@ export function GateOwnedParamsNotice({
   status,
   params,
   origin,
+  canDiscard = false,
   gateDisplayName,
   onRewritten,
 }: {
@@ -54,6 +55,9 @@ export function GateOwnedParamsNotice({
   readonly params: readonly GateOwnedParamWire[];
   /** Who wrote this version (`OperationSummaryWire.origin`) — absent on a legacy row. */
   readonly origin?: OperationSummaryWire['origin'];
+  /** Legacy 278: the reader may discard this draft right below (`discard_operation_draft`), so a
+   *  draft that can never be published names that way out instead of "leave it". */
+  readonly canDiscard?: boolean;
   readonly gateDisplayName: string;
   /** The align rewrote the draft — the caller reloads the catalog and says so. */
   readonly onRewritten: () => void;
@@ -105,6 +109,18 @@ export function GateOwnedParamsNotice({
           ? 'align-here'
           : 'align';
   const named = gateOwnedParamsText(params, t);
+  // Legacy 278 (UX acceptance of #577): a draft that will never be published can leave the catalog.
+  const discardLine =
+    t('', ' ') +
+    (canDiscard
+      ? t(
+          '不再需要的话，可以用下面的「丢弃」把它移出目录。',
+          'If it is no longer needed, “Discard” below takes it out of the catalog.',
+        )
+      : t(
+          '不再需要的话，它的提议者或工作区所有者可以把它丢弃。',
+          'If it is no longer needed, its proposer or the workspace owner can discard it.',
+        ));
 
   return (
     <Notice tone="warn" testId="operation-gate-owned-params">
@@ -123,15 +139,15 @@ export function GateOwnedParamsNotice({
         <span className="text-3">
           {draft
             ? rewrite === 'proposal'
-              ? t(
+              ? `${t(
                   '这份草稿是 agent 或成员提议的，不是门自己导入的，按门的清单重写不会改它。要发布，需要提议者去掉这些参数后重新提议一份。',
                   'This draft was proposed by an agent or a member, not imported by the gate, so rewriting from the gate’s manifest never changes it. To publish, its proposer has to propose it again without these params.',
-                )
+                )}${discardLine}`
               : rewrite === 'gone'
-                ? t(
-                    '门的当前清单里已经没有这个 Operation，没有可以重写成的新版本，这份草稿也就发布不了。草稿不会被调用，可以不管它。',
-                    'The gate’s current manifest no longer announces this Operation, so there is no new version to rewrite this draft to, and it cannot be published. A draft is never called, so it can be left as it is.',
-                  )
+                ? `${t(
+                    '门的当前清单里已经没有这个 Operation，没有可以重写成的新版本，这份草稿也就发布不了。草稿不会被调用。',
+                    'The gate’s current manifest no longer announces this Operation, so there is no new version to rewrite this draft to, and it cannot be published. A draft is never called.',
+                  )}${discardLine}`
                 : gateOwnedParamsNextStep(fix, t)
             : t(
                 '门的维护者从门的清单里去掉它们之后，平台提供的系统到「系统与授权」对齐并发布修订；工作区自己接入的系统需要重新接入。',
@@ -190,7 +206,9 @@ export type RewriteState = 'none' | 'loading' | 'ready' | 'waiting' | 'proposal'
  *    proposed name the gate never announced is not called one it stopped announcing (UX acceptance
  *    of #573 P3-1). `origin` is the draft's own; `pendingDraft.fromGate` says the same where the
  *    gate still announces the name.
- *  - The gate no longer announcing the name: `gone`.
+ *  - The gate no longer announcing the name, or no longer running it while the platform has not
+ *    adopted its new manifest yet (`awaitingPlatformAdoption.dropped`, UX acceptance of #583): `gone`
+ *    — the align does not rewrite such a draft, and adopting removes the name.
  *  - The gate's entry still declaring a gate-owned param: `waiting`, even when the rewrite would
  *    change other fields (`pendingDraft.rewritable`) — the rewritten draft could not be published
  *    either (review #501 on #573).
@@ -203,7 +221,7 @@ export function rewriteStateOf(
 ): RewriteState {
   if (origin !== undefined && origin !== 'import') return 'proposal';
   const row = preview.operationsToImport.find((entry) => entry.name === name);
-  if (!row) return 'gone';
+  if (!row || preview.awaitingPlatformAdoption?.dropped?.includes(name) === true) return 'gone';
   if (row.pendingDraft?.fromGate === false) return 'proposal';
   if (row.gateOwnedParams && row.gateOwnedParams.length > 0) return 'waiting';
   if (row.pendingDraft?.rewritable === true) return 'ready';

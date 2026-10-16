@@ -22,6 +22,7 @@ import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { enqueue } from '../../substrate/outbox/index.js';
 import {
   definitionRefusal,
+  droppedUntilAdopted,
   findGateLinkByGate,
   findGateLinkByGatekeeper,
   getConnector,
@@ -443,12 +444,17 @@ export const previewGateInstanceEnableHandler: CapabilityHandler = async (
   // platform adopts its held announcement (definition-drift.ts).
   const definitions = await readGateDefinitions(client, gateId);
   const awaitingAdoption: string[] = [];
+  // UX acceptance of #579 (legacy 297): the subset adopting removes rather than restores.
+  const droppedByGate: string[] = [];
+  const droppedFromGate = (name: string) =>
+    definitions !== null && droppedUntilAdopted(definitions, name);
   const noteAdoption = (name: string, approvedDigest: string | null) => {
     if (
       definitions &&
       definitionRefusal(definitions, name, approvedDigest) === 'platform_adoption'
     ) {
       awaitingAdoption.push(name);
+      if (droppedFromGate(name)) droppedByGate.push(name);
     }
   };
   const operationsToImport: {
@@ -501,7 +507,11 @@ export const previewGateInstanceEnableHandler: CapabilityHandler = async (
         ...(existingRecord !== null
           ? {
               pendingDraft: {
-                rewritable: importDraftDiffersFromAnnounced(existingRecord, operation),
+                // UX acceptance of #583 (P3-2): an Operation the gate no longer runs is never
+                // rewritten by the align (`refreshOperationGovernance`'s `droppedByGate`).
+                rewritable:
+                  !droppedFromGate(operation.name) &&
+                  importDraftDiffersFromAnnounced(existingRecord, operation),
                 fromGate: existingRecord.origin === 'import',
               },
             }
@@ -567,6 +577,7 @@ export const previewGateInstanceEnableHandler: CapabilityHandler = async (
           ? {
               announcedAt: definitions.pendingAnnouncedAt.toISOString(),
               operations: awaitingAdoption.sort(),
+              ...(droppedByGate.length > 0 ? { dropped: droppedByGate.sort() } : {}),
             }
           : null,
     },
@@ -630,6 +641,17 @@ export const refreshOperationGovernanceHandler: CapabilityHandler = async (
     link.gateId,
     expectedDigest,
   );
+  // UX acceptance of #583 (P3-2): what the gate itself no longer runs gets no draft — adopting
+  // its held manifest removes it, so publishing one would bring no call back (the preview's
+  // `awaitingPlatformAdoption.dropped` and `pendingDraft.rewritable` say the same).
+  const definitions = await readGateDefinitions(client, link.gateId);
+  const droppedByGate = new Set(
+    definitions === null
+      ? []
+      : announcedOperations
+          .map((operation) => operation.name)
+          .filter((name) => droppedUntilAdopted(definitions, name)),
+  );
   // Legacy K: the revision drafts a changed definition gets are written under this Activity.
   const activity = await startActivity(client, workspaceId, {
     kind: 'governance.refresh_operation_governance',
@@ -642,6 +664,7 @@ export const refreshOperationGovernanceHandler: CapabilityHandler = async (
     ...(operationNames !== undefined ? { operationNames } : {}),
     proposedBy: { id: ctx.principal.id, kind: ctx.principal.kind },
     activityId: activity.id,
+    droppedByGate,
   });
   await endActivity(client, workspaceId, activity.id, 'completed');
 

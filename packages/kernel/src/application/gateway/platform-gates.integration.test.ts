@@ -47,10 +47,12 @@ import {
   revokeCapabilityGrant,
 } from '../../governance/capability/index.js';
 import {
+  getOperation,
   getPublishedOperation,
   importManifest,
   proposeOperation,
   publishOperation,
+  refreshOperationGovernance,
   registerGatekeeper,
 } from '../../governance/gatekeepers/index.js';
 import { evaluate } from '../../governance/policy/index.js';
@@ -2587,6 +2589,102 @@ describe.runIf(DATABASE_URL !== undefined)(
           { gateId: PENDING_GATE },
         );
         expect(present(OBSERVE_OP.name, after)).toMatchObject({ definitionDiffers: false });
+      });
+
+      it('UX acceptance of #579 (legacy 297): a held manifest that drops a published Operation is flagged as dropped — adopting removes it rather than restoring its calls', async () => {
+        const available = await callAsOwner<ListEnvelope<AvailableGateInstanceWire>>(
+          'list_available_gate_instances',
+        );
+        const gatekeeperId = available.items.find(
+          (item) => item.gateId === PENDING_GATE,
+        )?.gatekeeperId;
+        if (!gatekeeperId) throw new Error('expected the pending fixture to be enabled here');
+        // What the case above adopted; the gate now stops offering the execute Operation.
+        const filteredObserve: Operation = {
+          ...OBSERVE_OP,
+          params_schema: { type: 'object', properties: { filter: { type: 'string' } } },
+        };
+        expect((await instance()).operations.map((op) => op.name).sort()).toEqual(
+          [OBSERVE_OP.name, EXECUTE_OP.name, ADDED_OP.name].sort(),
+        );
+        await announce({ ...pendingBody, operations: [filteredObserve, ADDED_OP] });
+        const held = (await instance()).pendingManifest;
+        if (!held) throw new Error('expected the removal to be held for review');
+        expect(held.removed.map((op) => op.name)).toEqual([EXECUTE_OP.name]);
+
+        const mismatchOf = async () =>
+          (await callAsOwner<ExecutionReadinessWire>('execution_readiness', {})).gates.find(
+            (gate) => gate.gateId === gatekeeperId,
+          )?.definitionMismatch;
+        expect(await mismatchOf()).toEqual([
+          { operation: EXECUTE_OP.name, awaiting: 'platform_adoption', droppedByGate: true },
+        ]);
+        const beforeAdoption = await callAsOwner<PreviewGateInstanceEnableResultWire>(
+          'preview_gate_instance_enable',
+          { gateId: PENDING_GATE },
+        );
+        expect(beforeAdoption.awaitingPlatformAdoption).toEqual({
+          announcedAt: held.announcedAt,
+          operations: [EXECUTE_OP.name],
+          dropped: [EXECUTE_OP.name],
+        });
+
+        // UX acceptance of #583 (P3-2): a pending draft of the gate's own for the dropped Operation
+        // (here a revision an earlier align opened) is not rewritten by the align — publishing it
+        // would bring no call back once the platform adopts.
+        const earlierExecute: Operation = {
+          ...EXECUTE_OP,
+          params_schema: { type: 'object', properties: { force: { type: 'boolean' } } },
+        };
+        const opened = await withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerPrincipalId },
+          async (client) => {
+            const activity = await startActivity(client, workspaceId, {
+              kind: 'test.legacy_297_revision',
+              principalId: ownerPrincipalId,
+            });
+            return refreshOperationGovernance(client, workspaceId, {
+              gatekeeperId,
+              announcedOperations: [earlierExecute],
+              operationNames: [EXECUTE_OP.name],
+              proposedBy: { id: ownerPrincipalId, kind: 'human' },
+              activityId: activity.id,
+            });
+          },
+        );
+        expect(opened.revisionDrafts).toEqual([
+          expect.objectContaining({ name: EXECUTE_OP.name, replaced: false }),
+        ]);
+        const withDraft = await callAsOwner<PreviewGateInstanceEnableResultWire>(
+          'preview_gate_instance_enable',
+          { gateId: PENDING_GATE },
+        );
+        expect(
+          withDraft.operationsToImport.find((op) => op.name === EXECUTE_OP.name)?.pendingDraft,
+        ).toEqual({ rewritable: false, fromGate: true });
+        expect(withDraft.awaitingPlatformAdoption?.dropped).toEqual([EXECUTE_OP.name]);
+        const aligned = await callAsOwner<RefreshOperationGovernanceResultWire>(
+          'refresh_operation_governance',
+          {
+            gatekeeperId,
+            operationNames: [EXECUTE_OP.name],
+            manifestDigest: withDraft.manifestDigest,
+          },
+        );
+        expect(aligned.revisionDrafts).toEqual([]);
+        const stillEarlier = await withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerPrincipalId },
+          (client) => getOperation(client, workspaceId, gatekeeperId, EXECUTE_OP.name),
+        );
+        expect(stillEarlier).toMatchObject({ status: 'draft' });
+        expect(stillEarlier?.operation.params_schema).toEqual(earlierExecute.params_schema);
+
+        // Adopting ends the mismatch, not the refusal: the gate no longer lists it at all.
+        await callAsAdmin('confirm_gate_manifest', { gateId: PENDING_GATE, digest: held.digest });
+        expect(await mismatchOf()).toEqual([]);
+        expect((await instance()).operations.map((op) => op.name)).not.toContain(EXECUTE_OP.name);
       });
     });
   },

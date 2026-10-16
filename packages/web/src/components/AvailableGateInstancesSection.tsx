@@ -212,7 +212,8 @@ function HiddenInstancesForAdmin({ http }: { readonly http: CapabilityCaller }) 
       {t(
         `平台上另有 ${hidden.length} 个已启用、但本工作区还没启用的门实例这里看不到：${hidden.map((row) => row.displayName).join('、')}。它们的接入包不是「平台预置」。`,
         `${hidden.length} more enabled gate instance(s) this workspace has not enabled do not show up here: ${hidden.map((row) => row.displayName).join(', ')}. Their connectors are not platform preset.`,
-      )}{' '}
+      )}
+      {t('', ' ')}
       <RouteLink
         href={hrefs.platformIntegrations()}
         testId="available-gates-hidden-link"

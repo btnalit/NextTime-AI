@@ -5,6 +5,7 @@ import type {
   DecisionStatus,
   EpistemicStatus,
   GrantStatus,
+  OperationStatus,
   PublishableStatus,
   TaskStatus,
   TurnStatus,
@@ -362,6 +363,25 @@ export const PUBLISHABLE_TRANSITIONS: TransitionTable<PublishableStatus, Publish
 };
 
 // ---------------------------------------------------------------------------------------------
+// Operation (legacy 278): the publishable lifecycle plus `draft → discarded` — a draft the
+// workspace decided not to publish, kept as a marked row rather than deleted (enums.ts's
+// `OPERATION_STATUS_VALUES`). `discarded` is terminal.
+// ---------------------------------------------------------------------------------------------
+
+export const OPERATION_EVENT_VALUES = [...PUBLISHABLE_EVENT_VALUES, 'discard'] as const;
+export type OperationEvent = (typeof OPERATION_EVENT_VALUES)[number];
+
+export const OPERATION_EDGES: readonly StateTransition<OperationStatus, OperationEvent>[] = [
+  ...PUBLISHABLE_EDGES,
+  { from: 'draft', event: 'discard', to: 'discarded' },
+];
+
+export const OPERATION_TRANSITIONS: TransitionTable<OperationStatus, OperationEvent> = {
+  machine: 'Operation',
+  edges: OPERATION_EDGES,
+};
+
+// ---------------------------------------------------------------------------------------------
 // CapabilityGrant (§5.5): `active → revoked | expired`.
 // ---------------------------------------------------------------------------------------------
 
@@ -412,6 +432,7 @@ export const ALL_TRANSITION_TABLES = [
   WORKER_RUN_TRANSITIONS,
   TURN_TRANSITIONS,
   PUBLISHABLE_TRANSITIONS,
+  OPERATION_TRANSITIONS,
   GRANT_TRANSITIONS,
   CONNECTION_REQUEST_TRANSITIONS,
 ] as const;
