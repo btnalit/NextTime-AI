@@ -6,9 +6,9 @@ import {
 } from '@nexttime/shared';
 import { type KernelClient, KernelError } from '../kernel-client.js';
 import { gateToolParameters, toToolParameters } from '../tool-schema.js';
-import { type EntryContextResult, renderEntryContext } from './entry-context.js';
+import type { EntryContextResult } from './entry-context.js';
 import { type AllowedOperationWire, gateToolDescription, gateToolName } from './gate-tools.js';
-import { keepCacheBreakpointOnHistory } from './prompt-cache.js';
+import { installLiveContext } from './live-context.js';
 
 /**
  * `interactive` mode (design doc §7.4 row "interactive | 你本机的 pi | 同 entry 或按 Handle | 同
@@ -234,34 +234,25 @@ export function registerInteractiveMode(pi: ExtensionAPI, options: InteractiveMo
   // context injection (§7.4 "同 entry") — no turn-id correlation, no report_turn: see this file's
   // own module doc comment for why interactive mode has neither. Without a `turnId` the kernel
   // answers with a read-only peek (R-57 / D-23), so this never consumes the entry agent's items.
-  // The context goes last on every call; the cache breakpoint stays on the history before it
-  // (`prompt-cache.ts`).
-  const noteAppendedContext = keepCacheBreakpointOnHistory(pi);
-  pi.on('context', async (event) => {
-    noteAppendedContext(undefined);
-    let entryContext: EntryContextResult;
-    try {
-      entryContext = await options.kernelClient.call<EntryContextResult>('get_entry_context', {});
-    } catch (error) {
-      // context fires before every LLM call; a kernel outage must degrade to "no injected
-      // context", never break the turn.
-      logKernelError(error, 'get_entry_context');
-      return undefined;
-    }
-
-    const text = renderEntryContext(entryContext, 'NextTime interactive-session context');
-    if (!text) return undefined;
-
-    // Non-persisted per pi semantics (design doc §7.2): a `custom`-role message returned from
-    // `context` is used for this LLM call only, never written back to the session file.
-    const contextMessage: (typeof event.messages)[number] = {
-      role: 'custom',
-      customType: 'nexttime-interactive-context',
-      content: text,
-      display: false,
-      timestamp: Date.now(),
-    };
-    noteAppendedContext(text);
-    return { messages: [...event.messages, contextMessage] };
+  // Placed once and repeated so the provider serves it from cache, with only what changed since
+  // appended last (`live-context.ts`, legacy 229); never written back to the session file.
+  const liveContext = installLiveContext(pi, {
+    title: 'NextTime interactive-session context',
+    customType: 'nexttime-interactive-context',
+    component: 'interactive',
+    async read() {
+      try {
+        return await options.kernelClient.call<EntryContextResult>('get_entry_context', {});
+      } catch (error) {
+        // context fires before every LLM call; a kernel outage must degrade to "no injected
+        // context", never break the turn.
+        logKernelError(error, 'get_entry_context');
+        return undefined;
+      }
+    },
+  });
+  pi.on('before_agent_start', () => {
+    liveContext.startRun();
+    return undefined;
   });
 }
