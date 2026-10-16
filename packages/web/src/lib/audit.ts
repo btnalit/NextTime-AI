@@ -121,6 +121,7 @@ export const AUDIT_LIFECYCLE_ACTIONS = [
   'action_request.approve',
   'action_request.reject',
   'action_request.start_execution',
+  'action_request.outcome_in_doubt',
   'action_request.complete',
   'action_request.fail',
   'action_request.compensate',

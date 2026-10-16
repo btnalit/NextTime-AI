@@ -5,6 +5,7 @@ import {
   BindingKindMismatchError,
   OperationRefusedError,
   TransportInvokeError,
+  TransportOutcomeUnknownError,
   TransportTimeoutError,
 } from '../errors.js';
 import { DEFAULT_EXEC_TIMEOUT_MS, runWithExecTimeout } from './exec-timeout.js';
@@ -166,6 +167,55 @@ function describeExecFailure(err: unknown): string {
   return `${err.message}${code}`;
 }
 
+/**
+ * Legacy 287: OpenSSH exits 255 when ssh itself fails — before the session started (the host did
+ * not resolve or refused the connection, its key did not verify, authentication failed: nothing
+ * ran), or during it (the connection dropped while the command was running — a RouterOS address
+ * change that cuts its own session, a reboot, a dead peer `ServerAliveInterval` gave up on: it may
+ * have run). ssh's own fatal message is the last line it writes, after anything the remote command
+ * wrote; these are the client's messages for the first kind. Any other exit 255 is read as the
+ * second, an outcome nobody knows — a remote command that itself exits 255 reads the same way, the
+ * conservative side, since it did run.
+ */
+const SSH_SESSION_NEVER_STARTED: readonly RegExp[] = [
+  /^ssh: Could not resolve hostname /,
+  /^ssh: connect to host \S+ port \d+: /,
+  /^Host key verification failed\.$/,
+  /^\S+: Permission denied \(/,
+  /^kex_exchange_identification: /,
+  /^banner exchange: /,
+  /^Connection timed out during banner exchange$/,
+  /^Unable to negotiate with /,
+  /^Bad owner or permissions on /,
+];
+
+/** The generic line OpenSSH adds after the specific one ("kex_exchange_identification: read:
+ *  Connection reset by peer" then "Connection reset by … port 22"). On its own it says nothing
+ *  about when the connection broke — the same words end a session that dropped mid-command. */
+const SSH_GENERIC_LAST_LINE =
+  /^(?:Connection (?:closed|reset) by \S+ port \d+|Connection to \S+ port \d+ timed out)$/;
+
+const SSH_CLIENT_FAILURE_EXIT = 255;
+
+/** ssh's own last word in `stderr`: its last line, or the one before a generic trailer. */
+function sshFailureLine(stderr: string): string | undefined {
+  const lines = stderr
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  const last = lines.pop();
+  return last !== undefined && SSH_GENERIC_LAST_LINE.test(last) ? lines.pop() : last;
+}
+
+/** Whether a failed `ssh` run may have run its command (see `SSH_SESSION_NEVER_STARTED`). */
+export function sshFailureMayHaveRun(err: unknown): boolean {
+  if (err === null || typeof err !== 'object') return false;
+  const { code, stderr } = err as { code?: unknown; stderr?: unknown };
+  if (code !== SSH_CLIENT_FAILURE_EXIT) return false;
+  const line = sshFailureLine(typeof stderr === 'string' ? stderr : '');
+  return line === undefined || !SSH_SESSION_NEVER_STARTED.some((pattern) => pattern.test(line));
+}
+
 export interface SshTransportOptions {
   readonly target: SshTarget;
   readonly policyTable: readonly SshPolicyRule[];
@@ -306,6 +356,12 @@ export class SshTransport implements Transport {
       return { data: { stdout, stderr }, detail: { command, classification } };
     } catch (err) {
       if (err instanceof TransportTimeoutError) throw err;
+      if (sshFailureMayHaveRun(err)) {
+        throw new TransportOutcomeUnknownError(
+          `ssh transport: the ssh connection for "${operation.name}" failed after the command may have started: ${describeExecFailure(err)} — it may have partially or fully run`,
+          { cause: err },
+        );
+      }
       throw new TransportInvokeError(
         `ssh transport: command failed for "${operation.name}": ${describeExecFailure(err)}`,
         { cause: err },

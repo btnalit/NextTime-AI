@@ -1179,11 +1179,20 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '动作在门上执行成功。',
     enHint: 'The action ran successfully on the gate.',
   },
+  'action_request.outcome_in_doubt': {
+    zh: '动作结果不明，等待核对',
+    en: 'Action outcome in doubt',
+    zhHint:
+      '第一次执行没有收到门的答复（超时，或请求可能已发出后连接断开）。动作留在「执行中」，平台稍后向门查询这次请求，不会重新执行。',
+    enHint:
+      'The first run got no answer from the gate (a timeout, or the connection failed after the request may have been sent). The action stays executing; the platform asks the gate about it later and never runs it again.',
+  },
   'action_request.fail': {
-    zh: '动作执行失败',
+    zh: '动作没有成功',
     en: 'Action failed',
-    zhHint: '动作在门上执行失败。',
-    enHint: 'The action failed on the gate.',
+    zhHint: '门拒绝或执行失败、请求没有发出，或结果不明。看详情里的原因。',
+    enHint:
+      'The gate refused or failed it, the request was never sent, or its outcome is unknown. See the reason in the details.',
   },
   'action_request.compensate': {
     zh: '动作已补偿',

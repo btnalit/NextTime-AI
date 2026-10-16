@@ -90,6 +90,9 @@ export const CODE_TITLES: Readonly<Record<string, string>> = {
   operation_definition_mismatch: 'The gate runs another definition',
   operation_definition_unavailable: 'No approved definition',
   gate_owned_params: 'Declares parameters the gate sets',
+  gate_unreachable: 'Not sent: the gate could not be reached',
+  apply_not_received: 'Not sent: the gate never received it',
+  outcome_unknown: 'Outcome unknown',
   unknown: 'Error',
 };
 
@@ -137,6 +140,9 @@ export const CODE_TITLES_ZH: Readonly<Record<string, string>> = {
   operation_definition_mismatch: '门运行的定义和批准的不一样',
   operation_definition_unavailable: '没有批准过的定义',
   gate_owned_params: '声明了门自己设置的参数',
+  gate_unreachable: '没发出：连不上门',
+  apply_not_received: '没发出：门没有收到',
+  outcome_unknown: '结果不明',
   unknown: '出错了',
 };
 
@@ -266,6 +272,20 @@ export const ERROR_NEXT_STEPS: Readonly<
     zh: '这个 Operation 声明了只能由门自己设置的参数（说明调用者或去向的请求头、查询参数里的凭据、cookie，或调用地址已经固定的查询参数），门每次都会拒绝，所以没有发布。要门的维护者从门的清单里去掉它们：平台提供的系统去掉后到「系统与授权」点「与门公告对齐」重写草稿再发布，工作区自己接入的系统要重新接入。',
     en: 'This Operation declares params only the gate sets (a header saying who calls or where the call goes, a credential in the query, a cookie, or a query parameter the call address fixes); the gate would refuse every call, so it was not published. The gate’s maintainer has to drop them from the gate’s manifest: for a platform-provided system, then align it under Systems & access to rewrite the draft and publish it; a system the workspace connected itself has to be connected again.',
   },
+  // Legacy 287: an ActionRequest's failure reason says whether the call left the platform. The
+  // first two ran nothing and may be requested again; the third may have run.
+  gate_unreachable: {
+    zh: '这次调用没有发出：连不上这个系统的门，门上什么都没有执行。门恢复后可以重新发起；反复出现时，请检查这个门实例的状态。',
+    en: 'This call was not sent: the system’s gate could not be reached, so nothing ran. Request it again once the gate is back; if it keeps happening, check this gate instance.',
+  },
+  apply_not_received: {
+    zh: '门上没有这次请求的记录：第一次调用没有到达门，动作没有执行。仍然需要的话，重新发起。',
+    en: 'The gate has no record of this request: its first call never reached the gate, so nothing ran. Request it again if it is still wanted.',
+  },
+  outcome_unknown: {
+    zh: '这个动作可能已经执行，也可能没有，平台无法确认。不要直接重试：先到目标系统核对它是否生效，再决定要不要重新发起。',
+    en: 'This action may or may not have run, and the platform cannot tell which. Do not just retry: check on the target system whether it took effect, then decide whether to request it again.',
+  },
   not_proposer: {
     zh: '只有它的提议人或工作区所有者能做这一步。',
     en: 'Only its proposer or a workspace owner can do this.',
@@ -363,12 +383,17 @@ export function errorToastText(err: unknown, t: Translate, overrides?: ErrorOver
 }
 
 /** Gate refusals a tool call's result can name (`request_action`'s failure reason, an observe
- *  call's error) — the codes the reason starts with or the result carries. */
+ *  call's error) — the codes the reason starts with or the result carries. Legacy 287 adds what a
+ *  failed `request_action` says about delivery: not sent (`gate_unreachable`,
+ *  `apply_not_received`) or outcome unknown (`outcome_unknown`). */
 const GATE_REASON_CODES = [
   'operation_definition_mismatch',
   'operation_definition_unavailable',
   'operation_refused',
   'credentials_in_observe_params',
+  'gate_unreachable',
+  'apply_not_received',
+  'outcome_unknown',
 ] as const;
 const GATE_REASON_PATTERN = new RegExp(`\\b(${GATE_REASON_CODES.join('|')})\\b`);
 

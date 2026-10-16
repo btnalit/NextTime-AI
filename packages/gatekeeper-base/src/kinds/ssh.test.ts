@@ -1,6 +1,11 @@
 import type { Operation } from '@nexttime/shared';
 import { describe, expect, it, vi } from 'vitest';
-import { OperationRefusedError, TransportTimeoutError } from '../errors.js';
+import {
+  OperationRefusedError,
+  TransportInvokeError,
+  TransportOutcomeUnknownError,
+  TransportTimeoutError,
+} from '../errors.js';
 import {
   SshCommandRejectedError,
   type SshPolicyRule,
@@ -10,6 +15,7 @@ import {
   classifyCommand,
   shellQuote,
   sshConnectionArgs,
+  sshFailureMayHaveRun,
 } from './ssh.js';
 
 describe('ssh hardening (review lane 5 P0-1/2/3)', () => {
@@ -294,5 +300,104 @@ describe('SshTransport', () => {
       'show interface eth0',
       { signal: expect.any(AbortSignal) },
     );
+  });
+});
+
+// Legacy 287: ssh exits 255 both when the session never started (nothing ran) and when it dropped
+// mid-command (it may have run). Only ssh's own last word tells them apart.
+describe('sshFailureMayHaveRun', () => {
+  const exit255 = (stderr: string) =>
+    Object.assign(new Error('Command failed: ssh'), { code: 255, stderr });
+
+  it.each([
+    ['ssh: Could not resolve hostname router-a: Name or service not known\n'],
+    ['ssh: connect to host 198.51.100.10 port 22: Connection refused\n'],
+    ['ssh: connect to host 198.51.100.10 port 22: Connection timed out\n'],
+    [
+      '@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\nHost key verification failed.\n',
+    ],
+    [
+      "Warning: Permanently added '198.51.100.10' (ED25519) to the list of known hosts.\nadmin@198.51.100.10: Permission denied (publickey).\n",
+    ],
+    [
+      'kex_exchange_identification: read: Connection reset by peer\nConnection reset by 198.51.100.10 port 22\n',
+    ],
+    [
+      'Connection timed out during banner exchange\nConnection to 198.51.100.10 port 22 timed out\n',
+    ],
+    ['Unable to negotiate with 198.51.100.10 port 22: no matching host key type found.\n'],
+    ['Bad owner or permissions on /root/.ssh/config\n'],
+  ])('a session that never started ran nothing: %j', (stderr) => {
+    expect(sshFailureMayHaveRun(exit255(stderr))).toBe(false);
+  });
+
+  it.each([
+    ['Connection to 198.51.100.10 closed by remote host.\n'],
+    ['client_loop: send disconnect: Broken pipe\n'],
+    ['Timeout, server 198.51.100.10 not responding.\n'],
+    // The same generic words end a session that dropped mid-command.
+    ['Connection closed by 198.51.100.10 port 22\n'],
+    ['Connection reset by 198.51.100.10 port 22\n'],
+    // The remote command's own output that looks like a never-started session does not count:
+    // ssh's last word is the drop.
+    [
+      'ssh: connect to host inner port 22: Connection refused\nConnection to 198.51.100.10 closed by remote host.\n',
+    ],
+    // A remote command that exits 255 with no word from ssh.
+    [''],
+  ])('a session that may have run its command: %j', (stderr) => {
+    expect(sshFailureMayHaveRun(exit255(stderr))).toBe(true);
+  });
+
+  it("an exit code other than 255 is the command's own answer", () => {
+    expect(
+      sshFailureMayHaveRun(Object.assign(new Error('x'), { code: 1, stderr: 'no such file' })),
+    ).toBe(false);
+    expect(sshFailureMayHaveRun(Object.assign(new Error('x'), { code: 'ENOENT' }))).toBe(false);
+    expect(sshFailureMayHaveRun(undefined)).toBe(false);
+  });
+
+  const operation: Operation = {
+    name: 'run_command',
+    binding: { kind: 'ssh', command_pattern: '.*' },
+    params_schema: {},
+    mode: 'execute',
+    blast_radius: 'high',
+    reversibility: false,
+    auto_approvable: false,
+    await_decision: true,
+    reads: [],
+    writes: [],
+  };
+
+  function transportFailingWith(err: Error) {
+    return new SshTransport({
+      target: { host: '198.51.100.10', user: 'admin' },
+      policyTable: POLICY_TABLE,
+      execImpl: vi.fn(async () => {
+        throw err;
+      }),
+    });
+  }
+
+  it('the transport reports a session dropped mid-command as outcome unknown', async () => {
+    const failure = transportFailingWith(
+      exit255('Connection to 198.51.100.10 closed by remote host.\n'),
+    ).invoke(operation, { command: 'ip address set ether1 address=192.0.2.9/24' }, {});
+    await expect(failure).rejects.toBeInstanceOf(TransportOutcomeUnknownError);
+    await expect(failure).rejects.toThrow(
+      /failed after the command may have started: .*closed by remote host\. \(exit 255\) — it may have partially or fully run/,
+    );
+  });
+
+  it('the transport reports a session that never started, or a command that answered, as a plain failure', async () => {
+    for (const err of [
+      exit255('ssh: connect to host 198.51.100.10 port 22: Connection refused\n'),
+      Object.assign(new Error('Command failed: ssh'), { code: 1, stderr: 'bad command\n' }),
+    ]) {
+      const failure = transportFailingWith(err).invoke(operation, { command: 'show x' }, {});
+      await expect(failure).rejects.toBeInstanceOf(TransportInvokeError);
+      await expect(failure).rejects.not.toBeInstanceOf(TransportOutcomeUnknownError);
+    }
   });
 });

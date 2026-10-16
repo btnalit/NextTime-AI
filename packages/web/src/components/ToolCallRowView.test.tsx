@@ -128,4 +128,42 @@ describe('PersistedToolCallRowView', () => {
     expect(screen.getByTestId('tool-call-gate-reason')).toBeTruthy();
     expect(screen.queryByTestId('tool-call-gate-reason-link')).toBeNull();
   });
+
+  // Legacy 287: a failed action says whether it left the platform — not sent, or outcome unknown.
+  it.each([
+    [
+      'gate_unreachable: gatekeeper client: gate/apply not sent — could not connect to the gate (ECONNREFUSED); nothing reached it',
+      '没发出：连不上门',
+      '什么都没有执行',
+    ],
+    [
+      'outcome_unknown: apply for actionRequestId \\"a1\\" has an unknown outcome',
+      '结果不明',
+      '不要直接重试',
+    ],
+  ])(
+    'tells a failed action that was not sent from one whose outcome is unknown (%#)',
+    (reason, title, step) => {
+      render(
+        <PersistedToolCallRowView
+          record={{
+            toolCallId: 'c287',
+            name: 'nexttime_request_action',
+            outcome: 'done',
+            result: {
+              text: `{"status":"failed","reason":"${reason}"}`,
+              truncated: false,
+              totalChars: 160,
+            },
+            redactedValues: 0,
+            startedAt: null,
+            endedAt: null,
+          }}
+        />,
+      );
+      const note = screen.getByTestId('tool-call-gate-reason');
+      expect(note.textContent).toContain(title);
+      expect(note.textContent).toContain(step);
+    },
+  );
 });

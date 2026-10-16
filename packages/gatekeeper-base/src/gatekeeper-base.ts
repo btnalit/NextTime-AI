@@ -10,11 +10,12 @@ import {
   OperationRefusedError,
   RevertNotSupportedError,
   TransportInvokeError,
-  TransportTimeoutError,
+  TransportOutcomeUnknownError,
 } from './errors.js';
 import { hashIdempotencyParams } from './idempotency-store.js';
 import type { IdempotencyStore, StoredApplyFailure } from './idempotency-store.js';
 import type { Transport, TransportInvokeResult } from './kinds/types.js';
+import { networkFailureCode, networkFailureDelivery } from './network-failure.js';
 import { operationDefinitionDigest } from './operation-digest.js';
 import { assertParamsValid } from './params-validation.js';
 import type { ObservedFactCandidate } from './protocol.js';
@@ -71,6 +72,32 @@ export interface GatekeeperBaseCallContext {
 /** What a gate's own definition hashes to when it does not parse: equal to no digest a caller
  *  can send, so every call to it is refused. */
 const UNREADABLE_DEFINITION = 'unreadable';
+
+/**
+ * How a failed transport call is recorded under its key (R-51, legacy 287). Outcome-unknown when
+ * the transport says it cannot know (`TransportOutcomeUnknownError`: an exec timeout, an ssh session
+ * that dropped mid-command), or when the call failed on the network after the request may have
+ * reached the target (`networkFailureDelivery`: a reset, a closed socket, the transport's own
+ * timeout) — a plain failure reads as "did not happen" and invites a second run. A plain failure
+ * only when the target answered (a status, an exit code, an error result) or nothing was sent.
+ */
+function storedTransportFailure(name: string, err: unknown): StoredApplyFailure {
+  const message =
+    err instanceof TransportInvokeError
+      ? err.message
+      : `apply for "${name}" failed inside the gate`;
+  if (err instanceof TransportOutcomeUnknownError) return { message, outcomeUnknown: true };
+  if (networkFailureDelivery(err) !== 'maybe_delivered') return { message, outcomeUnknown: false };
+  const code = networkFailureCode(err);
+  const stopped =
+    code !== undefined
+      ? `its connection to the target failed (${code})`
+      : 'it stopped waiting for the answer';
+  return {
+    message: `${message} — ${stopped} after the request may have reached the target, so it may have run`,
+    outcomeUnknown: true,
+  };
+}
 
 /** The error a stored failed `apply` answers with on every later call for its key (R-51): the
  *  same transport failure (502), or "outcome unknown" (409) when a timeout killed the call. */
@@ -271,14 +298,8 @@ export class GatekeeperBase {
       }
       // R-51: any other failure may have acted before it failed — record it under the key, so a
       // retry (the kernel reaper's replay) gets this same answer instead of 409 forever or a
-      // second run. A timeout killed the command mid-call: its outcome is unknown, not failed.
-      const failure: StoredApplyFailure = {
-        message:
-          err instanceof TransportInvokeError
-            ? err.message
-            : `apply for "${name}" failed inside the gate`,
-        outcomeUnknown: err instanceof TransportTimeoutError,
-      };
+      // second run. One that stopped without an answer is outcome-unknown, not failed.
+      const failure = storedTransportFailure(name, err);
       await store.fail(actionRequestId, failure);
       throw failure.outcomeUnknown ? storedFailureError(actionRequestId, failure) : err;
     }

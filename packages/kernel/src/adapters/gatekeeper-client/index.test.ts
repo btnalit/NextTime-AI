@@ -1,7 +1,10 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import http from 'node:http';
+import net from 'node:net';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { runWithCorrelationId } from '../../substrate/correlation/index.js';
 import { OutboundTargetRefusedError } from '../outbound-target/index.js';
 import {
@@ -537,5 +540,123 @@ describe('HttpGatekeeperClient — a gate’s error text', () => {
     const fetchImpl = vi.fn(async () => jsonResponse(body, 500));
     const client = new HttpGatekeeperClient({ fetchImpl });
     await expect(client.health(GATE)).rejects.toBeInstanceOf(GatekeeperClientError);
+  });
+});
+
+// Legacy 287: a gate call that failed on the network, against a real gate socket on loopback (the
+// errors Node's own `fetch` throws, not a fake's). "Not sent" only when the connection could not be
+// set up; once the gate may have the request, never — the kernel must not read it as "nothing ran".
+describe('HttpGatekeeperClient — a call that failed on the network (legacy 287)', () => {
+  let received = 0;
+  /** Reads the whole request (the gate has it), then drops the connection unanswered. */
+  const dropsAfterRequest = http.createServer((req) => {
+    req.resume();
+    req.on('end', () => {
+      received += 1;
+      req.socket.destroy();
+    });
+  });
+  /** Answers with headers and part of its body, then drops the connection. */
+  const dropsMidAnswer = http.createServer((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      received += 1;
+      res.writeHead(200, { 'content-type': 'application/json', 'content-length': '200' });
+      res.write('{"ok":true,"result":');
+      setTimeout(() => req.socket.destroy(), 10);
+    });
+  });
+  let refusedPort: number;
+  let dropsAfterRequestPort: number;
+  let dropsMidAnswerPort: number;
+
+  const listen = (server: net.Server) =>
+    new Promise<number>((resolve) => {
+      server.listen(0, '127.0.0.1', () => resolve((server.address() as AddressInfo).port));
+    });
+
+  beforeAll(async () => {
+    const closed = net.createServer();
+    refusedPort = await listen(closed);
+    await new Promise<void>((resolve) => closed.close(() => resolve()));
+    dropsAfterRequestPort = await listen(dropsAfterRequest);
+    dropsMidAnswerPort = await listen(dropsMidAnswer);
+  });
+
+  afterAll(async () => {
+    for (const server of [dropsAfterRequest, dropsMidAnswer]) {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  const applyTo = (port: number) =>
+    new HttpGatekeeperClient({ token: 'gate-token-for-tests' }).apply(
+      platformGateTarget(`http://127.0.0.1:${port}`),
+      {
+        operation: 'stock.adjust',
+        params: {},
+        actionRequestId: 'req-287',
+        operationDigest: DIGEST,
+      },
+    );
+
+  async function failureOf(call: Promise<unknown>): Promise<GatekeeperClientError> {
+    const failure = await call.then(
+      () => undefined,
+      (err: unknown) => err,
+    );
+    expect(failure).toBeInstanceOf(GatekeeperClientError);
+    return failure as GatekeeperClientError;
+  }
+
+  it('a gate that refused the connection never had the request: gate_unreachable', async () => {
+    const failure = await failureOf(applyTo(refusedPort));
+    expect(failure).toMatchObject({ code: 'gate_unreachable', status: 0 });
+    expect(failure.message).toBe(
+      'gatekeeper client: gate/apply not sent — could not connect to the gate (ECONNREFUSED); nothing reached it',
+    );
+  });
+
+  it('a connection dropped after the gate read the request: gate_connection_lost', async () => {
+    received = 0;
+    const failure = await failureOf(applyTo(dropsAfterRequestPort));
+    expect(failure).toMatchObject({ code: 'gate_connection_lost', status: 0 });
+    expect(failure.message).toMatch(
+      /^gatekeeper client: gate\/apply: the connection to the gate failed after the request may have been sent \(UND_ERR_SOCKET\) — the gate may have received it$/,
+    );
+    expect(received).toBe(1);
+  });
+
+  it('a connection dropped while the answer was read: gate_connection_lost, never a timeout', async () => {
+    received = 0;
+    const failure = await failureOf(applyTo(dropsMidAnswerPort));
+    expect(failure).not.toBeInstanceOf(GatekeeperTimeoutError);
+    expect(failure).toMatchObject({ code: 'gate_connection_lost', status: 0 });
+    expect(failure.message).toMatch(
+      /^gatekeeper client: gate\/apply: the gate answered \(status 200\) but the connection failed while its answer was read( \([A-Z_]+\))? — the gate had the request$/,
+    );
+    expect(received).toBe(1);
+  });
+
+  it('an error the classifier does not recognise is read as "may have been sent"', async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new TypeError('fetch failed');
+    });
+    const failure = await failureOf(
+      new HttpGatekeeperClient({ fetchImpl }).apply(GATE, {
+        operation: 'stock.adjust',
+        params: {},
+        actionRequestId: 'req-287',
+        operationDigest: DIGEST,
+      }),
+    );
+    expect(failure.code).toBe('gate_connection_lost');
+  });
+
+  it('never repeats the address the error names', async () => {
+    for (const port of [refusedPort, dropsAfterRequestPort, dropsMidAnswerPort]) {
+      const failure = await failureOf(applyTo(port));
+      expect(failure.message).not.toMatch(/127\.0\.0\.1|:\d{2,5}\b/);
+    }
   });
 });

@@ -596,13 +596,18 @@ describe.runIf(DATABASE_URL !== undefined)(
       // only — the effect may already have happened, so the replay must still ask the gate rather
       // than end the row `failed: operation_disabled` without asking.
       it('the reaper replay still asks the gate after the Operation was disabled; a first execution is refused', async () => {
-        const applied: { actionRequestId: string; operation: string }[] = [];
+        const applied: { actionRequestId: string; operation: string; lookupOnly: boolean }[] = [];
         const gatekeeperClient = {
           apply: async (
             _endpoint: string,
-            input: { actionRequestId: string; operation: string },
+            input: { actionRequestId: string; operation: string; operationDigest?: string },
           ) => {
-            applied.push({ actionRequestId: input.actionRequestId, operation: input.operation });
+            applied.push({
+              actionRequestId: input.actionRequestId,
+              operation: input.operation,
+              // Legacy 287: the replay names no definition, so the gate only answers from its store.
+              lookupOnly: input.operationDigest === undefined,
+            });
             return { data: { restarted: true }, observedFacts: [], replayed: true };
           },
         } as unknown as GatekeeperClient;
@@ -649,7 +654,9 @@ describe.runIf(DATABASE_URL !== undefined)(
             staleAfterMs: 30 * 60 * 1000,
           });
           expect(reaped).toEqual({ scanned: 1, reaped: 1 });
-          expect(applied).toEqual([{ actionRequestId, operation: 'restart_thing' }]);
+          expect(applied).toEqual([
+            { actionRequestId, operation: 'restart_thing', lookupOnly: true },
+          ]);
           const after = await withWorkspace(
             pool,
             { workspaceId, principalId: ownerPrincipalId },

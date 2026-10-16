@@ -163,3 +163,43 @@ describe('legacy K / J codes (review of #538, G3)', () => {
     expect(gateReasonNextStep('my_operation_definition_mismatch_field', zh)).toBeNull();
   });
 });
+
+// Legacy 287: a failed `request_action` says whether the call left the platform — not sent (it
+// ran nothing, request it again) or outcome unknown (it may have run, check before retrying).
+describe('legacy 287: not sent, or outcome unknown', () => {
+  it.each([
+    [
+      'gate_unreachable: gatekeeper client: gate/apply not sent — could not connect to the gate (ECONNREFUSED); nothing reached it',
+      'gate_unreachable',
+      '没发出：连不上门',
+    ],
+    [
+      'apply_not_received: the gate holds no record of this request — its first call never reached the gate, so nothing ran.',
+      'apply_not_received',
+      '没发出：门没有收到',
+    ],
+    [
+      'outcome_unknown: apply for actionRequestId "a1" has an unknown outcome: … (409 apply_outcome_unknown)',
+      'outcome_unknown',
+      '结果不明',
+    ],
+  ])('reads the reason %j', (reason, code, title) => {
+    const step = gateReasonNextStep(JSON.stringify({ status: 'failed', reason }), zh);
+    expect(step).toMatchObject({ code, title });
+    expect(gateReasonNextStep(reason, en)?.title).toBe(CODE_TITLES[code]);
+  });
+
+  it('tells the two apart: not sent ran nothing, outcome unknown says not to retry blindly', () => {
+    for (const code of ['gate_unreachable', 'apply_not_received']) {
+      expect(ERROR_NEXT_STEPS[code]?.zh).toContain('没有执行');
+      expect(ERROR_NEXT_STEPS[code]?.zh).toContain('重新发起');
+    }
+    expect(ERROR_NEXT_STEPS.outcome_unknown?.zh).toContain('不要直接重试');
+    expect(ERROR_NEXT_STEPS.outcome_unknown?.zh).toContain('目标系统');
+  });
+
+  it('the gate’s own error code inside another word is not a reason', () => {
+    expect(gateReasonNextStep('{"code":"apply_outcome_unknown"}', zh)).toBeNull();
+    expect(gateReasonNextStep('outcome unknown: the gate may still complete it', zh)).toBeNull();
+  });
+});

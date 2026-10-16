@@ -9,6 +9,8 @@ import {
   type SimulateResponse,
   gateAuthorizationHeader,
   isRedirectStatus,
+  networkFailureCode,
+  networkFailureDelivery,
   normalizeGateToken,
   redirectRefusalMessage,
 } from '@nexttime/gatekeeper-base';
@@ -147,6 +149,32 @@ export function gateRefusalOf(
     ? GATE_REFUSAL_STATUS[err.code]
     : undefined;
   return status !== undefined && err.status === status ? { status, code: err.code } : undefined;
+}
+
+/**
+ * Legacy 287: a gate call that failed on the network, as the kernel repeats it — two codes, because
+ * the two mean opposite things for an `apply`:
+ *   - `gate_unreachable`: the connection could not be set up (`networkFailureDelivery` reads
+ *     `not_sent`: refused, no such host, connect timeout, TLS handshake). Nothing reached the gate,
+ *     so nothing ran.
+ *   - `gate_connection_lost`: anything else — a reset or closed socket after the request may have
+ *     been written, or an error the classifier does not recognise (the safe reading). The gate may
+ *     have the request; for an `apply`, whether it ran is unknown until the gate is asked again.
+ * Only Node's / undici's error code is repeated, never its message (which names the address).
+ */
+function networkFailure(path: string, err: unknown): GatekeeperClientError {
+  const code = networkFailureCode(err);
+  const detail = code !== undefined ? ` (${code})` : '';
+  if (networkFailureDelivery(err) === 'not_sent') {
+    return new GatekeeperClientError(
+      `gatekeeper client: ${path} not sent — could not connect to the gate${detail}; nothing reached it`,
+      { code: 'gate_unreachable', status: 0 },
+    );
+  }
+  return new GatekeeperClientError(
+    `gatekeeper client: ${path}: the connection to the gate failed after the request may have been sent${detail} — the gate may have received it`,
+    { code: 'gate_connection_lost', status: 0 },
+  );
 }
 
 export class GatekeeperTimeoutError extends Error {
@@ -451,10 +479,7 @@ export class HttpGatekeeperClient implements GatekeeperClient {
         });
       } catch (err) {
         if ((err as { name?: string }).name === 'AbortError') throw timedOut();
-        throw new GatekeeperClientError(`gatekeeper client: ${path} request failed`, {
-          code: 'network_error',
-          status: 0,
-        });
+        throw networkFailure(path, err);
       }
       // Never followed (an owner-supplied endpoint's fetch is `withoutRedirects`); said so, with
       // where it pointed, instead of failing to parse the 3xx body (review of #532, item 4).
@@ -483,10 +508,13 @@ export class HttpGatekeeperClient implements GatekeeperClient {
           );
         }
         if (controller.signal.aborted) throw timedOut();
-        throw new GatekeeperClientError(`gatekeeper client: ${path} response failed`, {
-          code: 'network_error',
-          status: 0,
-        });
+        // Legacy 287: the gate answered — it had the request — and the connection failed while
+        // its answer was read. Never `gate_unreachable`, whatever the socket error says.
+        const code = networkFailureCode(err);
+        throw new GatekeeperClientError(
+          `gatekeeper client: ${path}: the gate answered (status ${response.status}) but the connection failed while its answer was read${code !== undefined ? ` (${code})` : ''} — the gate had the request`,
+          { code: 'gate_connection_lost', status: 0 },
+        );
       }
     } finally {
       clearTimeout(timeout);

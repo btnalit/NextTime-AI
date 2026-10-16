@@ -112,6 +112,9 @@ export type {
 
 export * from './errors.js';
 
+export { networkFailureCode, networkFailureDelivery } from './network-failure.js';
+export type { NetworkFailureDelivery } from './network-failure.js';
+
 export {
   canonicalJson,
   operationDefinition,
