@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { Capability, UnstorableTextLocation } from '@nexttime/shared';
+import type { Capability } from '@nexttime/shared';
 import {
   UnstorableTextError,
   findUnstorableText,
@@ -10,11 +10,7 @@ import { withPlatform } from '../../adapters/db/platform-context.js';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { withWorkspace } from '../../adapters/db/pool.js';
 import { GatekeeperClientError, gateRefusalOf } from '../../adapters/gatekeeper-client/index.js';
-import {
-  boundedEcho,
-  quotedName,
-  redactSuspectedSecrets,
-} from '../../governance/redaction/index.js';
+import { quotedName, redactSuspectedSecrets } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { ForbiddenError, authorizeCapabilityCall } from './authorize.js';
 import { CAPABILITY_HANDLERS } from './handlers.js';
