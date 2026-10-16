@@ -7,8 +7,9 @@
  * plus:
  *   - adapters may be imported only by application and interfaces (they implement ports
  *     declared by those upper layers).
- *   - application/chat and application/host-bridge must never import governance/approval or
- *     application/task — they consume domain events and read-only views instead.
+ *   - application/chat and application/host-bridge must never import governance/approval,
+ *     application/task or application/goal — they consume domain events and read-only views
+ *     instead.
  *   - no package may reach into another package's internal src/ files; only the published
  *     @nexttime/<pkg> entry point is a legal cross-package import.
  *
@@ -81,10 +82,11 @@ module.exports = {
         'chat and web only consume events and read-only views, never governance/approval or application/task directly (§7.10 rule paragraph). ' +
         'application/linkage (S2.11) is the one place allowed to read both — it exists precisely ' +
         'so chat/host-bridge never have to — so it is included here too: chat/host-bridge must ' +
-        'not reach approval/task transitively through it either.',
+        'not reach approval/task transitively through it either. application/goal (S11 GO1) is ' +
+        'execution state like application/task and is excluded the same way.',
       from: { path: '^packages/kernel/src/application/(chat|host-bridge)/' },
       to: {
-        path: '^packages/kernel/src/(governance/approval|application/task|application/linkage)/',
+        path: '^packages/kernel/src/(governance/approval|application/task|application/goal|application/linkage)/',
       },
     },
     {

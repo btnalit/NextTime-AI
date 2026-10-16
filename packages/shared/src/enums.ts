@@ -234,6 +234,129 @@ export type ObjectiveOutcome = (typeof OBJECTIVE_OUTCOME_VALUES)[number];
 export const ObjectiveOutcomeSchema = asEnum(OBJECTIVE_OUTCOME_VALUES);
 
 // ---------------------------------------------------------------------------------------------
+// S11 GoalRun, PlanRevision, StepRun (docs/goal-orchestration-and-admin-agent-plan-2026-10-16.md
+// §3.1–§3.4; migrations/goal/0001). Execution state and objective outcome stay apart, as for Task.
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * GoalRun execution status (§3.4): `proposed → running ⇄ paused → verifying → completed`;
+ * `running | paused | verifying → cancelling → cancelled`; `proposed → cancelled` (rejected or
+ * expired before confirmation); any non-terminal status → `failed` (an unrecoverable engine error).
+ * Terminal: `completed`, `cancelled`, `failed`.
+ */
+export const GOAL_RUN_STATUS_VALUES = [
+  'proposed',
+  'running',
+  'paused',
+  'verifying',
+  'completed',
+  'cancelling',
+  'cancelled',
+  'failed',
+] as const;
+export type GoalRunStatus = (typeof GOAL_RUN_STATUS_VALUES)[number];
+export const GoalRunStatusSchema = asEnum(GOAL_RUN_STATUS_VALUES);
+
+/**
+ * Why a GoalRun is `paused` (§3.4, §4.7, §4.9) — set exactly while it is paused: the requester asked
+ * (`requested`), its budget ran out (`budget_exhausted`, I-G6 — a pause, never a failure), no step
+ * made progress for K decision points (`no_progress`), the requester no longer holds the authority
+ * a next step needs (`authority_lost`, I-G7), a person must choose (`needs_decision`: verification
+ * failed, an action was rejected or expired, a reconcile saw no effect), or someone has to check a
+ * target system by hand before anything else runs (`awaiting_reconcile`).
+ */
+export const GOAL_RUN_PAUSE_REASON_VALUES = [
+  'requested',
+  'budget_exhausted',
+  'no_progress',
+  'authority_lost',
+  'needs_decision',
+  'awaiting_reconcile',
+] as const;
+export type GoalRunPauseReason = (typeof GOAL_RUN_PAUSE_REASON_VALUES)[number];
+export const GoalRunPauseReasonSchema = asEnum(GOAL_RUN_PAUSE_REASON_VALUES);
+
+/**
+ * What a `completed` GoalRun's objective outcome (`achieved` / `not_achieved`,
+ * {@link OBJECTIVE_OUTCOME_VALUES}) rests on (I-G5): a platform-run acceptance check the requester
+ * confirmed (`verified_by_check`), the requester's own word (`requester`), or an independent review
+ * (`reviewer_assessed`, W4). `agent_reported` — a Task outcome's basis in `wire/attribution.ts` —
+ * is deliberately not one of them: neither a step's Worker nor the entry agent can declare a goal
+ * achieved. Kept to these three by a DB CHECK.
+ */
+export const GOAL_OUTCOME_BASIS_VALUES = [
+  'verified_by_check',
+  'requester',
+  'reviewer_assessed',
+] as const;
+export type GoalOutcomeBasis = (typeof GOAL_OUTCOME_BASIS_VALUES)[number];
+export const GoalOutcomeBasisSchema = asEnum(GOAL_OUTCOME_BASIS_VALUES);
+
+/**
+ * PlanRevision status: `proposed → accepted | rejected`. A revision's content never changes; which
+ * accepted revision is in force is the GoalRun's `current_revision`, so "superseded" is derived
+ * (an accepted revision older than the current one), not a status. Accepting requires the revision
+ * to be based on the current one (I-G3's optimistic concurrency, a DB trigger).
+ */
+export const PLAN_REVISION_STATUS_VALUES = ['proposed', 'accepted', 'rejected'] as const;
+export type PlanRevisionStatus = (typeof PLAN_REVISION_STATUS_VALUES)[number];
+export const PlanRevisionStatusSchema = asEnum(PLAN_REVISION_STATUS_VALUES);
+
+/**
+ * StepRun status (§3.4): `pending` (dependencies not met) `→ ready → running` (a Task runs an
+ * attempt) `⇄ waiting → succeeded | failed`; `failed → ready` for a retryable failure under the
+ * attempt limit; `superseded` (a revision removed or redefined the step), `cancelled` (its GoalRun
+ * was cancelled), `skipped`. Terminal: `succeeded`, `superseded`, `cancelled`, `skipped`.
+ */
+export const STEP_RUN_STATUS_VALUES = [
+  'pending',
+  'ready',
+  'running',
+  'waiting',
+  'succeeded',
+  'failed',
+  'superseded',
+  'cancelled',
+  'skipped',
+] as const;
+export type StepRunStatus = (typeof STEP_RUN_STATUS_VALUES)[number];
+export const StepRunStatusSchema = asEnum(STEP_RUN_STATUS_VALUES);
+
+/**
+ * What a `waiting` StepRun waits on (§3.4, §4.8) — set exactly while it waits: an ActionRequest's
+ * decision or execution (`approval`), a reconcile observation after an outcome-unknown action
+ * (`reconcile`, §4.7), or something outside the platform (`external`).
+ */
+export const STEP_RUN_WAITING_REASON_VALUES = ['approval', 'reconcile', 'external'] as const;
+export type StepRunWaitingReason = (typeof STEP_RUN_WAITING_REASON_VALUES)[number];
+export const StepRunWaitingReasonSchema = asEnum(STEP_RUN_WAITING_REASON_VALUES);
+
+/**
+ * Why a StepRun is `failed` (§4.7's failure classification) — set exactly while it is failed:
+ *   - `transient`: the attempt's Task could not run or died (spawn failure, container crash), or
+ *     an action of the step was not delivered (ActionRequest `failure_kind = not_delivered`) — a
+ *     new attempt is safe;
+ *   - `authority_lost`: the requester no longer holds what the step needs (Handle mint failed, 403);
+ *   - `contract_violation`: the output failed its schema, or no result was reported;
+ *   - `verification_failed`: the step's acceptance check came back false;
+ *   - `outcome_unknown`: an action may have run and the reconcile observation could not confirm
+ *     it either way — never retried automatically;
+ *   - `action_refused`: an action was refused by the gate or its target, rejected, expired or
+ *     denied — asking again unchanged gets the same answer.
+ * Only `transient` is retried without a decision; the others pause the GoalRun for one.
+ */
+export const STEP_RUN_FAILURE_CATEGORY_VALUES = [
+  'transient',
+  'authority_lost',
+  'contract_violation',
+  'verification_failed',
+  'outcome_unknown',
+  'action_refused',
+] as const;
+export type StepRunFailureCategory = (typeof STEP_RUN_FAILURE_CATEGORY_VALUES)[number];
+export const StepRunFailureCategorySchema = asEnum(STEP_RUN_FAILURE_CATEGORY_VALUES);
+
+// ---------------------------------------------------------------------------------------------
 // §5.5 Publishable lifecycle (OntologyVersion / WorkerDefinition / Skill / Procedure / Manifest)
 // ---------------------------------------------------------------------------------------------
 
