@@ -463,10 +463,10 @@ describe('kernel codes with no console copy before', () => {
 // `details.reason` says which one; without it, it reads as any other conflict.
 describe('member-management refusals', () => {
   it.each([
-    ['last_owner', '最后一个所有者', '先把另一位成员设为所有者'],
+    ['last_owner', '最后一位有效的所有者', '先把另一位成员设为所有者'],
     ['self_disable', '不能停用自己', '请另一位所有者来停用'],
     ['platform_managed', '由平台管理', '平台自己管理的身份'],
-    ['human_api_key', '真人成员用密码登录', '创建一个服务账号'],
+    ['human_api_key', '人类用户用密码登录', '创建一个服务账号'],
     ['reserved_name', '名称被保留', '换一个名字'],
   ])('%s reads as its own refusal, not a generic conflict', (reason, title, step) => {
     const err = new HttpError('capability_error', 'kernel text in English', 'conflict', {
@@ -495,7 +495,7 @@ describe('member-management refusals', () => {
 
   it('the platform plane’s own last_owner keeps its copy, with the shared title', () => {
     const shown = presentError(new HttpError('capability_error', 'x', 'last_owner'), zh);
-    expect(shown.message).toBe('不能移出或降级工作区的最后一个所有者');
-    expect(shown.title).toBe('最后一个所有者');
+    expect(shown.message).toBe('不能移出或降级工作区的最后一位有效的所有者');
+    expect(shown.title).toBe('最后一位有效的所有者');
   });
 });

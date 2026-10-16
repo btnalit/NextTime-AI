@@ -41,10 +41,10 @@ const PRINCIPAL_REFUSAL_TITLES: Readonly<Record<PrincipalRefusalReason, string>>
 };
 
 const PRINCIPAL_REFUSAL_TITLES_ZH: Readonly<Record<PrincipalRefusalReason, string>> = {
-  last_owner: '最后一个所有者',
+  last_owner: '最后一位有效的所有者',
   self_disable: '不能停用自己',
   platform_managed: '由平台管理',
-  human_api_key: '真人成员用密码登录',
+  human_api_key: '人类用户用密码登录',
   reserved_name: '名称被保留',
 };
 
@@ -54,7 +54,7 @@ const PRINCIPAL_REFUSAL_NEXT_STEPS: Readonly<
   Record<PrincipalRefusalReason, { readonly zh: string; readonly en: string }>
 > = {
   last_owner: {
-    zh: '工作区至少要保留一位启用中的真人所有者，这一步会让它一个都不剩，所以什么也没有改。先把另一位成员设为所有者，再来做这一步。',
+    zh: '工作区至少要保留一位有效的人类所有者，这一步会让它一个都不剩，所以什么也没有改。先把另一位成员设为所有者，再来做这一步。',
     en: 'A workspace always keeps at least one active human owner, and this would leave it with none, so nothing changed. Make another member an owner first, then do this.',
   },
   self_disable: {
@@ -66,7 +66,7 @@ const PRINCIPAL_REFUSAL_NEXT_STEPS: Readonly<
     en: 'This identity is managed by the platform (an agent, or one of the platform’s internal service accounts): its role, status, key and credentials cannot be changed from a workspace, and nothing changed.',
   },
   human_api_key: {
-    zh: '这是一位真人成员，真人用密码登录，不发 API 密钥，什么也没有改。要给自动化程序用的密钥，请创建一个服务账号。',
+    zh: '这是一位人类用户，人类用户用密码登录，不签发 API key，什么也没有改。要给自动化程序用的 API key，请创建一个服务账号。',
     en: 'This is a person, and people sign in with a password rather than an API key, so nothing changed. For a key an automation can use, create a service account.',
   },
   reserved_name: {
@@ -417,7 +417,7 @@ export const ERROR_NEXT_STEPS: Readonly<
   // Legacy 232 (UX acceptance of #593): an agent's request_action naming nothing the gate runs.
   // Said to the person reading the chat, not to the agent: nothing waits on them.
   unknown_operation: {
-    zh: '这个门上没有这个名字的动作（或它已弃用），所以什么也没有发起，也不会进审批队列，不需要你处理。agent 一般会先查门上有哪些动作，再重新发起。如果它反复用错名字，到能力目录看这个门提供哪些 Operation；缺少需要的动作时，请 builder 提议一个。',
+    zh: '这个门上没有这个名字的动作（或它已弃用），所以什么也没有发起，也不会进审批队列，不需要你处理。agent 一般会先查门上有哪些动作，再重新发起。如果它反复用错名字，到能力目录看这个门提供哪些 Operation；缺少需要的动作时，请构建者提议一个。',
     en: 'This gate has no operation by that name (or it is deprecated), so nothing was requested, nothing entered the approval queue, and nothing needs you. The agent usually looks up what the gate runs and requests again. If it keeps using a wrong name, check in the catalog which Operations this gate offers; if the one it needs is missing, ask a builder to propose it.',
   },
   // Legacy 232 (review #493): a new Operation name that is empty, too long or carries a hidden
@@ -526,11 +526,11 @@ export const ERROR_NEXT_STEPS: Readonly<
     en: 'The requested scope names a capability that does not exist, or one only a person can use in the console, so nothing was issued. Reload the page, choose the scope again, and retry.',
   },
   service_principal_required: {
-    zh: '外部运行时凭证只能签发给启用中的服务账号；这个身份是真人、智能体，或已停用，什么也没有签发。选一个启用中的服务账号，或先创建一个。',
+    zh: '外部运行时凭证只能签发给启用中的服务账号；这个身份是人类用户、智能体，或已停用，什么也没有签发。选一个启用中的服务账号，或先创建一个。',
     en: 'An external-runtime credential can only be issued to an active service account; this one is a person, an agent, or disabled, so nothing was issued. Pick an active service account, or create one first.',
   },
   ontology_violation: {
-    zh: '工作区已发布的本体没有声明这种关系，或不允许它连接这两类对象，所以没有写入。到「图谱」查看本体允许的关系类型；需要新的关系类型时，请 builder 提议本体修订。',
+    zh: '工作区已发布的本体没有声明这种关系，或不允许它连接这两类对象，所以没有写入。到「图谱」查看本体允许的关系类型；需要新的关系类型时，请构建者提议本体修订。',
     en: 'The workspace’s published ontology does not declare this link type, or does not let it join these two kinds of object, so nothing was written. Check the link types the ontology allows under Graph; if a new one is needed, ask a builder to propose an ontology revision.',
   },
   source_identity_conflict: {
