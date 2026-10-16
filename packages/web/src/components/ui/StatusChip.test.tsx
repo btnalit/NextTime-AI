@@ -28,6 +28,7 @@ import {
   AUTO_APPROVABLE_VALUES,
   type ChipStyle,
   GATE_INSTANCE_STATUS_VALUES,
+  SELF_CONNECTION_STATUS_VALUES,
   type StatusMachine,
   USER_STATUS_VALUES,
   deriveGateInstanceStatus,
@@ -83,6 +84,8 @@ const MACHINES: readonly { readonly machine: StatusMachine; readonly values: rea
     { machine: 'piDrift', values: PiDriftStatusWireSchema.options },
     { machine: 'backupFreshness', values: PlatformBackupStatusWireSchema.options },
     { machine: 'updateFeed', values: PlatformUpdateFeedStatusWireSchema.options },
+    // P0b: derived from `suspendedAt` (no wire enum).
+    { machine: 'selfConnection', values: SELF_CONNECTION_STATUS_VALUES },
   ];
 
 describe('StatusChip', () => {

@@ -141,6 +141,23 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
     zh: '这个端点上已有的门已经关联到另一个平台门实例；一个门只能关联一个实例，本次没有写入任何内容。请先解除旧实例的关联',
     en: 'The existing Gatekeeper at this endpoint is already linked to another platform gate instance — one Gatekeeper takes one instance, and nothing was written. Remove the old instance’s link first',
   },
+  // P0b (one landing path): `create_connection` at an address this workspace already connected —
+  // a second Gatekeeper there was leftover 73's duplicate. Nothing was written.
+  endpoint_already_connected: {
+    zh: '这个工作区已经接入了这个地址上的门，没有再接一次，什么也没保存。到「系统与授权」打开它：要更新清单点「重新读取门的清单」；如果已经把这次的新密钥配到了门上，在 ⋯ 里「重新签发连接密钥」，把签发的密钥换到门上',
+    en: 'This workspace already connected the gate at this address, so nothing was saved. Open it in Systems & access: “Re-read the gate’s manifest” updates its manifest; if you already put this new secret on the gate, use ⋯ → “Issue a new connection secret” and put that one on the gate instead',
+  },
+  // P0b (leftover 118 remainder ①): the platform administrator suspended this self-connected gate;
+  // enabling the platform instance at its address (or re-reading its manifest) would get around
+  // that. Nothing was written.
+  self_connection_suspended: {
+    zh: '平台管理员暂停了这个工作区自己接入的门，暂停期间不能启用同地址的平台实例，也不能重新读取它的清单；本次没有写入任何内容。请联系平台管理员',
+    en: 'The platform administrator suspended this self-connected gate — while it is suspended, the platform instance at its address cannot be enabled and its manifest cannot be re-read. Nothing was written; contact the platform administrator',
+  },
+  self_connection_not_found: {
+    zh: '找不到这个工作区自己接入的门，可能已被删除或已改由平台实例接入；刷新列表',
+    en: 'No such self-connected gate — it may be gone or now come from a platform instance; refresh the list',
+  },
   // S8 W3-K1 (leftover 79, closing wave C6, G3); legacy 214 narrowed it: the Gatekeeper sits at a
   // platform gate instance's address but was never enabled from the catalog (a CLI registration),
   // so neither the instance's announcement nor the gate's own description is its manifest. A gate

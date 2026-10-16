@@ -3,6 +3,7 @@ import type {
   ConnectorWire,
   ExternalRuntimeWire,
   GateInstanceWire,
+  SelfConnectionWire,
 } from '@nexttime/shared';
 import { useEffect, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
@@ -11,7 +12,7 @@ import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { connectorModeLabel, transportKindLabel } from '../../lib/labels.js';
 import { breadcrumbFor } from '../../lib/nav.js';
-import { deriveGateInstanceStatus } from '../../lib/status-tone.js';
+import { deriveGateInstanceStatus, deriveSelfConnectionStatus } from '../../lib/status-tone.js';
 import { ConnectSystemLauncher } from '../connect/ConnectSystemLauncher.js';
 import { Confirm } from '../kit/confirm.js';
 import { PageHeader } from '../kit/page-header.js';
@@ -19,7 +20,7 @@ import { Button } from '../ui/Button.js';
 import { Drawer } from '../ui/Drawer.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
-import { Input, Select } from '../ui/Field.js';
+import { Field, Input, Select, describedBy } from '../ui/Field.js';
 import { Notice } from '../ui/Notice.js';
 import { SkeletonRows } from '../ui/Skeleton.js';
 import { StatusChip } from '../ui/StatusChip.js';
@@ -36,6 +37,10 @@ import { useConnectorDenyList } from './integrations/useConnectorDenyList.js';
 import { useConnectorMode } from './integrations/useConnectorMode.js';
 import { useGateInstancesPanel } from './integrations/useGateInstancesPanel.js';
 import { useRevokeRuntime } from './integrations/useRevokeRuntime.js';
+import {
+  SUSPENSION_REASON_MAX,
+  useSelfConnectionSuspension,
+} from './integrations/useSelfConnectionSuspension.js';
 
 const CONNECTOR_MODE_VALUES: readonly ConnectorModeWire[] = [
   'disabled',
@@ -43,7 +48,7 @@ const CONNECTOR_MODE_VALUES: readonly ConnectorModeWire[] = [
   'platform_preset',
 ];
 
-type Tab = 'connectors' | 'instances' | 'runtimes';
+type Tab = 'connectors' | 'instances' | 'self' | 'runtimes';
 
 export interface PlatformIntegrationsPageProps {
   readonly http: CapabilityCaller;
@@ -58,8 +63,10 @@ export interface PlatformIntegrationsPageProps {
  * components/platform/PlatformIntegrationsPage: 集成 Integrations (`/platform/integrations`,
  * docs/platform-admin-design.md §6.3 集成) — P-B1's platform-scope half: the connector catalog
  * (three-state mode + a per-connector Operation deny-list), every gate instance that has
- * announced itself (rename / enable-disable / MCP trust / test connection), and the inventory of
- * external runtimes (Claude Code, a local pi over `/mcp`, a collector) across every workspace.
+ * announced itself (rename / enable-disable / MCP trust / test connection), the gates workspaces
+ * connected themselves (P0b: the platform's per-connection 暂停 / 恢复 cut-off for them — the
+ * connector mode only gates new connections), and the inventory of external runtimes (Claude
+ * Code, a local pi over `/mcp`, a collector) across every workspace.
  * The workspace-side "enable from platform catalog" and "issue a service Handle" halves live on
  * `ConnectionsPage`/`AccessPage` instead — they need a workspace and a Principal, which this
  * platform-scope page has neither of (design §6.3's own split, `development-tasks.md` §P-B
@@ -84,6 +91,8 @@ export function PlatformIntegrationsPage({
   const t = useT();
   const [tab, setTab] = useState<Tab>(selectedGateId !== undefined ? 'instances' : 'connectors');
   const [launcherOpen, setLauncherOpen] = useState(false);
+  // The 自己接入的门 tab's connector filter — set from a connector row's count, or the tab's own select.
+  const [selfConnector, setSelfConnector] = useState<string | null>(null);
   // The instance drawer to open: the route's (deep link) or, until `lib/router.ts` carries that
   // segment, a local one the launcher's finish sets — so "finish → see the instance" works either way.
   const [localGateId, setLocalGateId] = useState<string | undefined>(undefined);
@@ -103,8 +112,8 @@ export function PlatformIntegrationsPage({
       <PageHeader
         title={t('集成', 'Integrations')}
         description={t(
-          '平台的集成目录：接入包、已公布的门实例，以及正在使用它们的外部运行时。',
-          "The platform's integration catalog: connectors, the gate instances that announced themselves, and the external runtimes using them.",
+          '平台的集成目录：接入包、已公布的门实例、工作区自己接入的门，以及正在使用它们的外部运行时。',
+          "The platform's integration catalog: connectors, the gate instances that announced themselves, the gates workspaces connected themselves, and the external runtimes using them.",
         )}
         breadcrumb={breadcrumbFor('platformIntegrations')}
         primaryAction={
@@ -159,6 +168,11 @@ export function PlatformIntegrationsPage({
             testId: 'integrations-tab-instances',
           },
           {
+            value: 'self',
+            label: t('自己接入的门', 'Self-connected gates'),
+            testId: 'integrations-tab-self',
+          },
+          {
             value: 'runtimes',
             label: t('外部运行时', 'External runtimes'),
             testId: 'integrations-tab-runtimes',
@@ -166,7 +180,15 @@ export function PlatformIntegrationsPage({
         ]}
       />
 
-      {tab === 'connectors' ? <ConnectorsTab http={http} /> : null}
+      {tab === 'connectors' ? (
+        <ConnectorsTab
+          http={http}
+          onShowSelfConnections={(connector) => {
+            setSelfConnector(connector);
+            setTab('self');
+          }}
+        />
+      ) : null}
       {tab === 'instances' ? (
         <GateInstancesTab
           http={http}
@@ -175,6 +197,17 @@ export function PlatformIntegrationsPage({
           onShowConnectors={() => {
             selectGate(null);
             setTab('connectors');
+          }}
+        />
+      ) : null}
+      {tab === 'self' ? (
+        <SelfConnectionsTab
+          http={http}
+          connector={selfConnector}
+          onConnectorChange={setSelfConnector}
+          onShowInstance={(gateId) => {
+            setTab('instances');
+            selectGate(gateId);
           }}
         />
       ) : null}
@@ -187,7 +220,14 @@ export function PlatformIntegrationsPage({
 // 接入包 Connectors
 // -------------------------------------------------------------------------------------------
 
-function ConnectorsTab({ http }: { readonly http: CapabilityCaller }) {
+function ConnectorsTab({
+  http,
+  onShowSelfConnections,
+}: {
+  readonly http: CapabilityCaller;
+  /** Opens 自己接入的门 filtered to one connector (its row's count). */
+  readonly onShowSelfConnections: (connector: string) => void;
+}) {
   const t = useT();
   const connectors = useCapabilityList<ConnectorWire>(http, 'list_connectors', {});
   const rows = connectors.state.status === 'ready' ? connectors.state.data.items : [];
@@ -244,6 +284,7 @@ function ConnectorsTab({ http }: { readonly http: CapabilityCaller }) {
                 <th>{t('来源', 'Origin')}</th>
                 <th>{t('模式', 'Mode')}</th>
                 <th>{t('实例数', 'Instances')}</th>
+                <th>{t('工作区自接', 'Self-connected')}</th>
                 <th>Operation 数</th>
                 <th aria-label="Actions" />
               </tr>
@@ -256,6 +297,7 @@ function ConnectorsTab({ http }: { readonly http: CapabilityCaller }) {
                   connector={row}
                   enabledInstanceCount={enabledByConnector.get(row.name) ?? 0}
                   onChanged={replace}
+                  onShowSelfConnections={() => onShowSelfConnections(row.name)}
                 />
               ))}
             </tbody>
@@ -271,7 +313,7 @@ function ConnectorsTab({ http }: { readonly http: CapabilityCaller }) {
  *  generic kinds `create_connection` / `request_connection`, R-40); it never touches a workspace
  *  that already enabled the connector. The real cut-off for those is the Operation deny list, which
  *  the same confirm offers (`useConnectorMode`'s `alsoDisableOperations`). A gate a workspace
- *  connected itself is outside both. */
+ *  connected itself is outside both; P0b gave it its own cut-off (自己接入的门 → 暂停). */
 function connectorModeDescription(
   pendingMode: ConnectorModeWire | null,
   packaged: boolean,
@@ -302,8 +344,8 @@ function connectorModeDescriptionBody(
           'Disabling only stops new use: the catalog stops listing it and workspaces can no longer enable its instances. Workspaces that already enabled it keep calling it — to cut them off now, tick "Also disable all operations" below.',
         )
       : t(
-          '禁用只拦新的：目录里不再列出它，工作区不能再启用它的实例，也不能再自己连这一类系统。已经启用它的工作区照常可以调用——要立即切断，勾选下面的「同时禁用全部 Operation」。工作区此前自己连的同类系统不受接入包状态影响。',
-          'Disabling only stops new use: the catalog stops listing it, and workspaces can no longer enable its instances or connect this kind of system themselves. Workspaces that already enabled it keep calling it — to cut them off now, tick "Also disable all operations" below. Systems of this kind a workspace already connected itself are not affected by the connector state.',
+          '禁用只拦新的：目录里不再列出它，工作区不能再启用它的实例，也不能再自己连这一类系统。已经启用它的工作区照常可以调用——要立即切断，勾选下面的「同时禁用全部 Operation」。工作区此前自己连的同类系统不受接入包状态影响；要切断其中某一个，到「自己接入的门」里暂停它。',
+          'Disabling only stops new use: the catalog stops listing it, and workspaces can no longer enable its instances or connect this kind of system themselves. Workspaces that already enabled it keep calling it — to cut them off now, tick "Also disable all operations" below. Systems of this kind a workspace already connected itself are not affected by the connector state; to cut one of them off, suspend it under "Self-connected gates".',
         );
   }
   if (pendingMode === 'platform_preset' && !packaged) {
@@ -327,12 +369,14 @@ function ConnectorRow({
   connector,
   enabledInstanceCount,
   onChanged,
+  onShowSelfConnections,
 }: {
   readonly http: CapabilityCaller;
   readonly connector: ConnectorWire;
   /** Instances of this connector the platform has enabled (`list_gate_instances`). */
   readonly enabledInstanceCount: number;
   readonly onChanged: (connector: ConnectorWire) => void;
+  readonly onShowSelfConnections: () => void;
 }) {
   const t = useT();
   const [expanded, setExpanded] = useState(false);
@@ -427,6 +471,28 @@ function ConnectorRow({
           ) : null}
         </td>
         <td className="mono">{connector.instanceCount}</td>
+        <td>
+          {connector.packaged ? (
+            // `create_connection` takes only the four generic kinds — a packaged connector has none.
+            <span className="text-3">—</span>
+          ) : connector.selfConnectionCount === 0 ? (
+            <span className="mono">0</span>
+          ) : (
+            <Button
+              variant="ghost"
+              size="s"
+              onClick={onShowSelfConnections}
+              data-testid={`connector-self-connections-${connector.name}`}
+            >
+              {connector.suspendedSelfConnectionCount > 0
+                ? t(
+                    `${connector.selfConnectionCount} 个（${connector.suspendedSelfConnectionCount} 个已暂停）`,
+                    `${connector.selfConnectionCount} (${connector.suspendedSelfConnectionCount} suspended)`,
+                  )
+                : t(`${connector.selfConnectionCount} 个`, `${connector.selfConnectionCount}`)}
+            </Button>
+          )}
+        </td>
         <td className="mono">{connector.operationCount}</td>
         <td>
           <Button
@@ -441,7 +507,7 @@ function ConnectorRow({
       </tr>
       {expanded ? (
         <tr>
-          <td colSpan={7}>
+          <td colSpan={8}>
             <ConnectorDenyList http={http} connector={connector} onChanged={onChanged} />
           </td>
         </tr>
@@ -833,6 +899,289 @@ function GateInstancesTab({
 }
 
 const ALL_INSTANCES: Readonly<Record<string, unknown>> = {};
+
+// -------------------------------------------------------------------------------------------
+// 自己接入的门 Self-connected gates (P0b, STATUS leftover 118 remainder ①)
+// -------------------------------------------------------------------------------------------
+
+const ALL_SELF_CONNECTIONS: Readonly<Record<string, unknown>> = {};
+
+/** Every gate a workspace connected itself (`create_connection` in 系统与授权), and the platform's
+ *  cut-off for one of them: 暂停 refuses every Operation of it from the next call until 恢复. The
+ *  connector's mode only gates new connections and its deny list only reaches gates enabled from
+ *  the catalog, so before this an administrator had no way to stop one that was already running.
+ *  The connector filter is chosen, never typed: its options are the connectors in the list. */
+function SelfConnectionsTab({
+  http,
+  connector,
+  onConnectorChange,
+  onShowInstance,
+}: {
+  readonly http: CapabilityCaller;
+  readonly connector: string | null;
+  readonly onConnectorChange: (connector: string | null) => void;
+  /** Opens a platform gate instance's drawer (a self connection at that instance's address). */
+  readonly onShowInstance: (gateId: string) => void;
+}) {
+  const t = useT();
+  const connections = useCapabilityList<SelfConnectionWire>(
+    http,
+    'list_self_connections',
+    ALL_SELF_CONNECTIONS,
+  );
+  const all = connections.state.status === 'ready' ? connections.state.data.items : [];
+  const connectorOptions = [
+    ...new Set([...all.map((row) => row.connector), ...(connector ? [connector] : [])]),
+  ].sort();
+  const rows = connector === null ? all : all.filter((row) => row.connector === connector);
+
+  function replace(updated: SelfConnectionWire): void {
+    connections.mutate((data) => ({
+      ...data,
+      items: data.items.map((row) =>
+        row.workspaceId === updated.workspaceId && row.gatekeeperId === updated.gatekeeperId
+          ? updated
+          : row,
+      ),
+    }));
+  }
+
+  return (
+    <div className="stack" data-testid="integrations-self-connections">
+      <p className="text-3 text-small" style={{ margin: 0 }}>
+        {t(
+          '工作区在「系统与授权」里自己接入的门。接入包的模式只管新的接入；要切断某一个正在用的，在这里暂停它：它的全部 Operation 从下一次调用起被拒绝，连接、Operation 和历史都保留，恢复后照常可用。',
+          'Gates workspaces connected themselves in Systems & access. A connector’s mode only governs new connections; to cut off one in use, suspend it here: every Operation of it is refused from the next call, while the connection, its Operations and their history stay, and resuming it brings them back.',
+        )}
+      </p>
+      <div className="row-wrap" style={{ justifyContent: 'space-between' }}>
+        <Select
+          aria-label={t('按接入包筛选', 'Filter by connector')}
+          value={connector ?? ''}
+          onChange={(event) => onConnectorChange(event.target.value || null)}
+          data-testid="self-connections-connector-filter"
+        >
+          <option value="">{t('全部接入包', 'All connectors')}</option>
+          {connectorOptions.map((name) => (
+            <option key={name} value={name}>
+              {transportKindLabel(name, t)}
+            </option>
+          ))}
+        </Select>
+        <Button
+          variant="ghost"
+          size="s"
+          icon="refresh"
+          onClick={() => void connections.reload()}
+          loading={connections.state.status === 'ready' && connections.state.refreshing}
+        >
+          {t('刷新', 'Refresh')}
+        </Button>
+      </div>
+
+      {connections.state.status === 'loading' ? (
+        <SkeletonRows
+          count={2}
+          label={t('正在加载工作区自己接入的门…', 'Loading self-connected gates')}
+          testId="self-connections-loading"
+        />
+      ) : connections.state.status === 'error' ? (
+        <ErrorBanner
+          error={connections.state.error}
+          title={t('无法加载工作区自己接入的门', 'Could not load the self-connected gates')}
+          onRetry={() => void connections.reload()}
+          testId="self-connections-error"
+        />
+      ) : rows.length === 0 ? (
+        <EmptyState
+          icon="link"
+          title={
+            connector === null
+              ? t('还没有工作区自己接入的门', 'No self-connected gates yet')
+              : t(
+                  `没有经「${transportKindLabel(connector, t)}」自己接入的门`,
+                  `No gates self-connected through “${transportKindLabel(connector, t)}”`,
+                )
+          }
+          body={t(
+            '工作区所有者在「系统与授权」里用通用接入包（HTTP、MCP、命令行、SSH）接入自己的门后，会出现在这里。',
+            'A gate shows up here once a workspace owner connects it in Systems & access through a generic connector (HTTP, MCP, CLI, SSH).',
+          )}
+          testId="self-connections-empty"
+        />
+      ) : (
+        <div className="table-scroll">
+          <table className="data-table" data-testid="self-connections-table">
+            <thead>
+              <tr>
+                <th>{t('工作区', 'Workspace')}</th>
+                <th>{t('系统', 'System')}</th>
+                <th>{t('种类', 'Kind')}</th>
+                <th>{t('接入', 'Connected')}</th>
+                <th>{t('状态', 'Status')}</th>
+                <th aria-label="Actions" />
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <SelfConnectionRow
+                  key={`${row.workspaceId}:${row.gatekeeperId}`}
+                  http={http}
+                  connection={row}
+                  onChanged={replace}
+                  onShowInstance={onShowInstance}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SelfConnectionRow({
+  http,
+  connection,
+  onChanged,
+  onShowInstance,
+}: {
+  readonly http: CapabilityCaller;
+  readonly connection: SelfConnectionWire;
+  readonly onChanged: (updated: SelfConnectionWire) => void;
+  readonly onShowInstance: (gateId: string) => void;
+}) {
+  const t = useT();
+  const suspension = useSelfConnectionSuspension(http, connection, onChanged);
+  const suspended = connection.suspendedAt !== null;
+  const rowId = connection.gatekeeperId;
+  const reasonId = `self-connection-reason-${rowId}`;
+
+  return (
+    <tr data-testid={`self-connection-row-${rowId}`}>
+      <td>{connection.workspaceName}</td>
+      <td>
+        <div>{connection.target}</div>
+        <div className="mono text-3 text-small">{connection.endpoint}</div>
+        {connection.catalogGateId !== null ? (
+          <p
+            className="text-3 text-small"
+            style={{ margin: 0 }}
+            data-testid={`self-connection-catalog-${rowId}`}
+          >
+            {t(
+              `地址与平台门实例「${connection.catalogGateId}」相同（在这项检查出现之前接入的）：调用会用平台给这个实例的凭证。工作区从目录启用该实例后，它会改由实例接入；不该这样用时，暂停它。`,
+              `Same address as platform gate instance “${connection.catalogGateId}” (connected before that check existed): calls to it use the credential the platform holds for that instance. Once the workspace enables that instance from the catalog it comes from the instance instead; if it should not be used this way, suspend it.`,
+            )}{' '}
+            <Button
+              variant="ghost"
+              size="s"
+              onClick={() => onShowInstance(connection.catalogGateId ?? '')}
+              data-testid={`self-connection-show-instance-${rowId}`}
+            >
+              {t('查看实例', 'View instance')}
+            </Button>
+          </p>
+        ) : null}
+      </td>
+      <td>{transportKindLabel(connection.connector, t)}</td>
+      <td>
+        <div>
+          {connection.connectedByName ?? (
+            <span className="text-3">
+              {t('升级前接入，未记录接入人', 'Before this list; not recorded')}
+            </span>
+          )}
+        </div>
+        <time className="text-3 text-small" title={formatDateTime(connection.connectedAt)}>
+          {formatRelative(connection.connectedAt)}
+        </time>
+      </td>
+      <td>
+        <StatusChip machine="selfConnection" status={deriveSelfConnectionStatus(connection)} />
+        {suspended ? (
+          <div className="text-3 text-small" data-testid={`self-connection-suspension-${rowId}`}>
+            <div>
+              {connection.suspendedByLogin ?? t('平台管理员', 'A platform administrator')}
+              {' · '}
+              <time title={formatDateTime(connection.suspendedAt ?? '')}>
+                {formatRelative(connection.suspendedAt ?? '')}
+              </time>
+            </div>
+            {connection.suspensionReason !== null ? (
+              <div style={{ overflowWrap: 'anywhere' }}>
+                {t('原因：', 'Reason: ')}
+                {connection.suspensionReason}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </td>
+      <td>
+        <Confirm
+          tier="medium"
+          open={suspension.confirmOpen}
+          onOpenChange={suspension.onConfirmOpenChange}
+          anchor={
+            <Button
+              variant={suspended ? 'secondary' : 'danger'}
+              size="s"
+              onClick={() => suspension.onConfirmOpenChange(true)}
+              data-testid={`self-connection-${suspended ? 'resume' : 'suspend'}-${rowId}`}
+            >
+              {suspended ? t('恢复', 'Resume') : t('暂停', 'Suspend')}
+            </Button>
+          }
+          title={
+            suspended
+              ? t(`恢复「${connection.target}」`, `Resume “${connection.target}”`)
+              : t(`暂停「${connection.target}」`, `Suspend “${connection.target}”`)
+          }
+          description={
+            suspended
+              ? t(
+                  '它已发布的 Operation 从下一次调用起恢复可调用，这个工作区的入口智能体凭证会重新签发。',
+                  'Its published Operations run again from the next call, and this workspace’s entry-agent Handles are re-issued.',
+                )
+              : t(
+                  '从下一次调用起，这个门的全部 Operation 都被拒绝：智能体的调用、成员的读取和已排队的执行都一样，这个工作区的入口智能体凭证会重新签发。连接、它的 Operation 和历史都保留；暂停期间工作区不能自己解除、删除它或重新接入同一地址。随时可以恢复。',
+                  'From the next call on, every Operation of this gate is refused — agent calls, members’ reads and queued executions alike — and this workspace’s entry-agent Handles are re-issued. The connection, its Operations and their history stay; while it is suspended the workspace cannot lift it, delete it or connect the same address again. You can resume it at any time.',
+                )
+          }
+          target={`${connection.workspaceName} · ${connection.target}`}
+          impact={[
+            t(`工作区「${connection.workspaceName}」`, `Workspace “${connection.workspaceName}”`),
+            connection.endpoint,
+          ]}
+          confirmLabel={suspended ? t('恢复', 'Resume') : t('暂停', 'Suspend')}
+          danger={!suspended}
+          onConfirm={suspension.apply}
+          testId={`self-connection-confirm-${rowId}`}
+        >
+          {suspended ? null : (
+            <Field
+              id={reasonId}
+              label={t('原因（可选）', 'Reason (optional)')}
+              hint={t(
+                '记在这次暂停上，列表和平台审计里都能看到。',
+                'Kept with this suspension; shown in this list and in the platform audit.',
+              )}
+            >
+              <Input
+                id={reasonId}
+                value={suspension.reason}
+                maxLength={SUSPENSION_REASON_MAX}
+                onChange={(event) => suspension.setReason(event.target.value)}
+                aria-describedby={describedBy(reasonId, true, false)}
+                data-testid={`self-connection-reason-input-${rowId}`}
+              />
+            </Field>
+          )}
+        </Confirm>
+      </td>
+    </tr>
+  );
+}
 
 // -------------------------------------------------------------------------------------------
 // 外部运行时 External runtimes

@@ -729,14 +729,15 @@ describe('RefreshOperationGovernanceConfirm', () => {
             autoApprovable: false,
             pendingDraft: { rewritable: true },
           },
-          // New on the gate, never imported here: not this align's concern.
+          // P0b (#612 P2): new in the adopted manifest — imported as a draft by the same align,
+          // covered by its own test below.
           { name: 'stock.audit', mode: 'observe', blastRadius: 'low', autoApprovable: true },
         ],
       }),
       refresh_operation_governance: (params) => {
         expect(params).toEqual({
           gatekeeperId: 'gk-1',
-          operationNames: ['stock.reserve'],
+          operationNames: ['stock.reserve', 'stock.audit'],
           manifestDigest: 'digest-1',
         });
         return {
@@ -755,7 +756,6 @@ describe('RefreshOperationGovernanceConfirm', () => {
       'stock.reserve',
     );
     expect(confirm.textContent).toContain('stock.reserve：门的清单改了，按新清单重写待发布的草稿');
-    expect(confirm.textContent).not.toContain('stock.audit');
 
     fireEvent.click(within(confirm).getByTestId('confirm-button'));
     await waitFor(() => expect(onRefreshed).toHaveBeenCalledTimes(1));
@@ -766,6 +766,53 @@ describe('RefreshOperationGovernanceConfirm', () => {
     expect(rewritten.textContent).toContain('已按门的新清单重写 1 份待发布的草稿');
     expect(within(rewritten).getByTestId('align-gk-1-rewritten-link').getAttribute('href')).toBe(
       '#/govern/catalog/operations/gk-1%3A%3Astock.reserve',
+    );
+  });
+
+  it('P0b (#612 P2): what the platform adopted after this workspace enabled the gate is imported as a draft by the align — never published, a dropped name left out', async () => {
+    const http = scriptedHttp({
+      preview_gate_instance_enable: () => ({
+        ...preview([ALIGNED_ROW]),
+        operationsToImport: [
+          { name: 'stock.audit', mode: 'observe', blastRadius: 'low', autoApprovable: true },
+          // Adopted, but the gate no longer runs it: the kernel does not import it either.
+          { name: 'stock.legacy', mode: 'execute', blastRadius: 'high', autoApprovable: false },
+        ],
+        awaitingPlatformAdoption: {
+          announcedAt: '2026-10-10T04:00:00.000Z',
+          operations: ['stock.legacy'],
+          dropped: ['stock.legacy'],
+        },
+      }),
+      refresh_operation_governance: (params) => {
+        expect(params).toEqual({
+          gatekeeperId: 'gk-1',
+          operationNames: ['stock.audit'],
+          manifestDigest: 'digest-1',
+        });
+        return {
+          gatekeeperId: 'gk-1',
+          refreshed: [],
+          revisionDrafts: [{ name: 'stock.audit', version: 1 }],
+          unchanged: [],
+        };
+      },
+    });
+    const onRefreshed = renderConfirm(http);
+
+    fireEvent.click(screen.getByTestId('align-gk-1'));
+    const confirm = await screen.findByTestId('align-gk-1-confirm');
+    expect(confirm.textContent).toContain('stock.audit：平台采用的清单新增的');
+    expect(confirm.textContent).toContain('导入为草稿，发布后才能调用');
+    expect(confirm.textContent).not.toContain('stock.legacy：');
+
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    await waitFor(() => expect(onRefreshed).toHaveBeenCalledTimes(1));
+    const result = await screen.findByTestId('align-gk-1-result');
+    const imported = within(result).getByTestId('align-gk-1-imported');
+    expect(imported.textContent).toContain('已把平台采用的清单新增的 1 个 Operation 导入为草稿');
+    expect(within(imported).getByTestId('align-gk-1-imported-link').getAttribute('href')).toBe(
+      '#/govern/catalog/operations/gk-1%3A%3Astock.audit',
     );
   });
 

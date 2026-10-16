@@ -26,6 +26,8 @@ const OTHER_AUDIT_ACTIONS = [
   'user.identity_claimed',
   'principal.user_rebound',
   'connector.entry_handles_revoked',
+  'self_connection.entry_handles_revoked',
+  'gatekeeper.self_connection_linked',
   'gate_instance.manifest_confirmed',
   'platform.llm_admin_token_issued',
   'platform.llm_provider_created',

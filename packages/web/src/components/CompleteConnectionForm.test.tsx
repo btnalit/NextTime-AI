@@ -363,6 +363,32 @@ describe('CompleteConnectionForm', () => {
     expect(fieldError?.textContent).not.toContain('is refused');
   });
 
+  // P0b (one landing path): an address this workspace already connected is refused, not connected a
+  // second time — said on the endpoint field, with where that connection is and what to do instead.
+  it('shows an endpoint_already_connected 409 on the endpoint field', async () => {
+    const http = httpWith(async () => {
+      throw new HttpError(
+        'capability_error',
+        'this workspace already has Gatekeeper "grafana" (gk-1) at endpoint "https://gate.example" — re-sync it (preview_gatekeeper_resync) or give its gate a new secret (rotate_connection_secret) instead of connecting it again',
+        'endpoint_already_connected',
+        { gatekeeperId: 'gk-1' },
+      );
+    });
+    render(<CompleteConnectionForm http={http} onDone={vi.fn()} onCancel={vi.fn()} />);
+    await secretShown();
+    fireEvent.change(screen.getByLabelText(/目标系统/), { target: { value: 'grafana' } });
+    fireEvent.change(screen.getByLabelText(/门端点/), {
+      target: { value: 'https://gate.example' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '注册门' }));
+    const raw = await screen.findByTestId('cc-endpoint-error-detail');
+    expect(raw.textContent).toContain('already has Gatekeeper');
+    const fieldError = document.getElementById('cc-endpoint-error');
+    expect(fieldError?.textContent).toContain('已经接入了这个地址上的门');
+    expect(fieldError?.textContent).toContain('重新读取门的清单');
+    expect(fieldError?.textContent).not.toContain('already has');
+  });
+
   // Legacy 186: a credential in the target, the endpoint or the manifest source is refused on the
   // field the kernel names in `details.field` — never on Credentials, though the message mentions
   // credentials. Review of #549: the kernel's English stays in the field's 「技术细节」, and the

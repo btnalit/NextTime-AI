@@ -307,16 +307,23 @@ export function CompleteConnectionForm({
       const field =
         described.code === 'credentials_in_connection_params'
           ? connectionCredentialField(err)
-          : FIELD_ERROR_CODES.has(described.code)
-            ? fieldForInvalidParams(described.message)
-            : undefined;
+          : described.code === 'endpoint_already_connected'
+            ? 'endpoint'
+            : FIELD_ERROR_CODES.has(described.code)
+              ? fieldForInvalidParams(described.message)
+              : undefined;
       if (field) {
         // The field says what is wrong in the viewer's language; the kernel's own (English) text
         // sits in the field's collapsed 「技术细节」 (#537 convention), never in the line itself.
-        setFieldErrors({
-          [field]: fieldErrorExplanation(field, described.code, t, credentialKind),
-        });
         const shown = presentError(err, t);
+        setFieldErrors({
+          // P0b: an address this workspace already connected — `lib/platform-errors.ts`'s copy
+          // says where that connection is and what to do with it instead.
+          [field]:
+            described.code === 'endpoint_already_connected'
+              ? shown.message
+              : fieldErrorExplanation(field, described.code, t, credentialKind),
+        });
         setServerFieldError({ field, code: shown.code, raw: shown.raw ?? described.message });
       } else {
         setSubmitError(err);
