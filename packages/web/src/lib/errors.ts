@@ -323,8 +323,8 @@ export const ERROR_NEXT_STEPS: Readonly<
   },
   // Legacy K (review of #538, G3).
   operation_definition_mismatch: {
-    zh: '门现在运行的定义和这次调用批准的那一版不一样，调用没有执行。平台提供的系统：先由平台管理员在「集成」采用门的新清单；再在「系统与授权」打开它，点「与门公告对齐」，到能力目录发布打开的修订草稿，然后重新发起。自己接入的门：在能力目录发布和门一致的定义，然后重新发起。如果门运行的新定义声明了只能由门自己设置的参数，修订发布不了，要等门的维护者去掉这些参数。',
-    en: 'The gate now runs a different definition from the one this call was approved under, so nothing ran. For a platform-provided system: first a platform admin adopts the gate’s new manifest under Integrations; then open the system in Systems, choose “Align with the gate’s announcement”, publish the revision draft it opens in the catalog, and request again. For a gate you connected yourself: publish the definition the gate runs in the catalog, then request again. If the new definition the gate runs declares params only the gate sets, its revision cannot be published until the gate’s maintainer drops them.',
+    zh: '门现在运行的定义和这次调用批准的那一版不一样，调用没有执行。平台提供的系统：先由平台管理员在「集成」采用门的新清单；再在「系统与授权」打开它，点「与门公告对齐」，到能力目录发布打开的修订草稿，然后重新发起。自己接入的门：在「系统与授权」打开它，点「重新读取门的清单」，到能力目录发布打开的修订草稿，然后重新发起。如果门运行的新定义声明了只能由门自己设置的参数，修订发布不了，要等门的维护者去掉这些参数。',
+    en: 'The gate now runs a different definition from the one this call was approved under, so nothing ran. For a platform-provided system: first a platform admin adopts the gate’s new manifest under Integrations; then open the system in Systems, choose “Align with the gate’s announcement”, publish the revision draft it opens in the catalog, and request again. For a gate you connected yourself: open it in Systems, choose “Re-read the gate’s manifest”, publish the revision draft it opens in the catalog, and request again. If the new definition the gate runs declares params only the gate sets, its revision cannot be published until the gate’s maintainer drops them.',
   },
   operation_definition_unavailable: {
     zh: '发起请求时这个 Operation 还没有发布，也没有草稿，所以批准时没有对应的定义，调用没有执行。先在能力目录发布它，再重新发起。',
@@ -333,8 +333,8 @@ export const ERROR_NEXT_STEPS: Readonly<
   // Console G4: a gate's own draft is fixed in the gate's manifest, not here — the old copy said
   // "remove them from the parameters and publish again", which no console form can do.
   gate_owned_params: {
-    zh: '这个 Operation 声明了只能由门自己设置的参数（说明调用者或去向的请求头、查询参数里的凭据、cookie，或调用地址已经固定的查询参数），门每次都会拒绝，所以没有发布。要门的维护者从门的清单里去掉它们：平台提供的系统去掉后到「系统与授权」点「与门公告对齐」重写草稿再发布，工作区自己接入的系统要重新接入。',
-    en: 'This Operation declares params only the gate sets (a header saying who calls or where the call goes, a credential in the query, a cookie, or a query parameter the call address fixes); the gate would refuse every call, so it was not published. The gate’s maintainer has to drop them from the gate’s manifest: for a platform-provided system, then align it under Systems & access to rewrite the draft and publish it; a system the workspace connected itself has to be connected again.',
+    zh: '这个 Operation 声明了只能由门自己设置的参数（说明调用者或去向的请求头、查询参数里的凭据、cookie，或调用地址已经固定的查询参数），门每次都会拒绝，所以没有发布。要门的维护者从门的清单里去掉它们：去掉后到「系统与授权」打开这个系统，平台提供的系统点「与门公告对齐」，工作区自己接入的系统点「重新读取门的清单」，重写草稿再发布。',
+    en: 'This Operation declares params only the gate sets (a header saying who calls or where the call goes, a credential in the query, a cookie, or a query parameter the call address fixes); the gate would refuse every call, so it was not published. The gate’s maintainer has to drop them from the gate’s manifest: then open the system under Systems & access — “Align with the gate’s announcement” for a platform-provided system, “Re-read the gate’s manifest” for one the workspace connected itself — to rewrite the draft, and publish it.',
   },
   // Legacy 287: an ActionRequest's failure reason says whether the call left the platform. The
   // first two ran nothing and may be requested again; the third may have run.
@@ -488,6 +488,21 @@ const GATE_REASON_TONES: Readonly<Record<string, 'info' | 'warn' | 'danger'>> = 
  *  the call did (`lib/action-outcome`'s `actionTargetLabel`, "container.restart（name: media）")
  *  and `system` the system (gate) it went to, so an outcome-unknown note says what to check and
  *  where — one Operation name can exist on two systems. `null` for any other result. */
+/** UX acceptance of #612 (P2-4): `operation_definition_mismatch` said for the one kind of gate the
+ *  call went to, when the reader knows which (the chat's tool row reads whether the system is linked
+ *  to a platform gate instance) — the generic note above covers both for when it does not. */
+export function definitionMismatchStep(source: 'platform' | 'self', t: Translate): string {
+  return source === 'platform'
+    ? t(
+        '门现在运行的定义和这次调用批准的那一版不一样，调用没有执行。这是平台提供的系统：先由平台管理员在「集成」采用门的新清单；再在「系统与授权」打开它，点「与门公告对齐」，到能力目录发布打开的修订草稿，然后重新发起。如果门运行的新定义声明了只能由门自己设置的参数，修订发布不了，要等门的维护者去掉这些参数。',
+        'The gate now runs a different definition from the one this call was approved under, so nothing ran. This is a platform-provided system: first a platform admin adopts the gate’s new manifest under Integrations; then open the system in Systems, choose “Align with the gate’s announcement”, publish the revision draft it opens in the catalog, and request again. If the new definition the gate runs declares params only the gate sets, its revision cannot be published until the gate’s maintainer drops them.',
+      )
+    : t(
+        '门现在运行的定义和这次调用批准的那一版不一样，调用没有执行。这是工作区自己接入的门：打开这个系统，在「门的清单」点「重新读取门的清单」，到能力目录发布打开的修订草稿，然后重新发起。如果门运行的新定义声明了只能由门自己设置的参数，修订发布不了，要等门的维护者去掉这些参数。',
+        'The gate now runs a different definition from the one this call was approved under, so nothing ran. This is a gate the workspace connected itself: open the system, choose “Re-read the gate’s manifest” under its manifest section, publish the revision draft it opens in the catalog, and request again. If the new definition the gate runs declares params only the gate sets, its revision cannot be published until the gate’s maintainer drops them.',
+      );
+}
+
 export function gateReasonNextStep(
   text: string,
   t: Translate,

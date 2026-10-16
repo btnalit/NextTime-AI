@@ -22,8 +22,8 @@ import { RouteLink } from '../kit/route-link.js';
  *
  * Only the gate's maintainer can fix it, by dropping the params from the gate's manifest. What
  * follows depends on the gate: for a platform gate the workspace's 「与门公告对齐」 then rewrites
- * the held draft to the new announcement (`refresh_operation_governance`); a gate the workspace
- * connected itself has no in-place re-sync yet, so it has to be connected again.
+ * the held draft to the new announcement (`refresh_operation_governance`); for a gate the workspace
+ * connected itself 「重新读取门的清单」 does the same from what the gate describes now (legacy 214).
  */
 
 const LOCATION_LABEL: Readonly<Record<GateOwnedParamWire['location'], { zh: string; en: string }>> =
@@ -46,10 +46,11 @@ export function gateOwnedParamsText(params: readonly GateOwnedParamWire[], t: Tr
     .join(t('、', ', '));
 }
 
-/** Which next step applies: a platform gate re-syncs through align, a self-connected one does not.
- *  `align-here`: the same as `align`, said next to the one-draft rewrite button itself (the
- *  catalog), so the reader is not sent to another page for it (UX acceptance of #567 P3). */
-export type GateOwnedParamsFix = 'align' | 'align-here' | 'reconnect' | 'either';
+/** Which next step applies: a platform gate re-syncs through align, a self-connected one by
+ *  re-reading the gate's manifest (legacy 214). `align-here` / `resync-here`: the same, said next to
+ *  the one-draft rewrite button itself (the catalog), so the reader is not sent to another page for
+ *  it (UX acceptance of #567 P3). */
+export type GateOwnedParamsFix = 'align' | 'align-here' | 'resync' | 'resync-here' | 'either';
 
 /** The sentence after "the gate's maintainer drops them from its manifest". */
 export function gateOwnedParamsNextStep(fix: GateOwnedParamsFix, t: Translate): string {
@@ -65,15 +66,21 @@ export function gateOwnedParamsNextStep(fix: GateOwnedParamsFix, t: Translate): 
       'The gate’s maintainer has to drop these params from the gate’s manifest; once that is done and adopted by the platform, use “Rewrite from the gate’s latest manifest” below, then publish.',
     );
   }
-  if (fix === 'reconnect') {
+  if (fix === 'resync') {
     return t(
-      '要门的维护者从门的清单里去掉这些参数；这是工作区自己接入的系统，控制台还不能就地同步它的清单，改好之后需要重新接入。',
-      'The gate’s maintainer has to drop these params from the gate’s manifest. This system was connected by the workspace itself and its manifest cannot be re-synced in place yet, so connect it again once the manifest is fixed.',
+      '要门的维护者从门的清单里去掉这些参数并重启门；之后到「系统与授权」打开这个系统，点「重新读取门的清单」按新清单重写草稿，再到能力目录发布。',
+      'The gate’s maintainer has to drop these params from the gate’s manifest and restart it; then open this system under Systems & access, use “Re-read the gate’s manifest” to rewrite the draft, and publish it in the catalog.',
+    );
+  }
+  if (fix === 'resync-here') {
+    return t(
+      '要门的维护者从门的清单里去掉这些参数并重启门；之后点下面的「按门的最新清单重写」，再发布。',
+      'The gate’s maintainer has to drop these params from the gate’s manifest and restart it; then use “Rewrite from the gate’s latest manifest” below, and publish.',
     );
   }
   return t(
-    '要门的维护者从门的清单里去掉这些参数。平台提供的系统，去掉之后到「系统与授权」点「与门公告对齐」重写这份草稿再发布；工作区自己接入的系统，改好清单后需要重新接入。',
-    'The gate’s maintainer has to drop these params from the gate’s manifest. For a platform-provided system, then use “Align with the gate’s announcement” under Systems & access to rewrite this draft and publish it; a system the workspace connected itself has to be connected again once the manifest is fixed.',
+    '要门的维护者从门的清单里去掉这些参数。之后到「系统与授权」打开这个系统：平台提供的系统点「与门公告对齐」，工作区自己接入的系统点「重新读取门的清单」，按新清单重写这份草稿再发布。',
+    'The gate’s maintainer has to drop these params from the gate’s manifest. Then open this system under Systems & access — “Align with the gate’s announcement” for a platform-provided system, “Re-read the gate’s manifest” for one the workspace connected itself — to rewrite this draft, and publish it.',
   );
 }
 

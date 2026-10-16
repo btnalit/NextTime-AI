@@ -1039,7 +1039,8 @@ Operation 一律 409，不执行任何东西（fail closed）。
    ```
 
    判读：基于旧 gatekeeper-base 的自连门不校验摘要，升级后照常工作。只有 owner 用新 base 重建、且门的清单与导入副本不一致的
-   自连门会被拒，处理见 `add-gatekeeper.md` §12；产品内没有同步路径（STATUS 遗留）。
+   自连门会被拒，处理见 `add-gatekeeper.md` §12。v0.49.0 及以前产品内没有同步路径；#612 起（v0.49.0 之后的下一版）系统抽屉有
+   「重新读取门的清单」，按门自己的描述预览差异并开修订 / 导入草稿，由 owner 发布后生效，见 §12 那一行。
 
 3. §3.20 的候选参数查询照跑，判读时门拥有的头名单补上：`es-security-runas-user`、`X-Run-As`、`X-Hasura-*`、`x-functions-key`、
    `*-jwt-assertion`、`X-Forwarded-Email`、`X-Forwarded-Groups`。**这份查询只是预估**：SQL 算不了摘要，哪些 Operation 的定义变了，

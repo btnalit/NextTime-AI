@@ -139,6 +139,13 @@ function requireDeps(): ConnectionHandlerDeps {
   return deps;
 }
 
+/** Legacy 214: the same gate client `create_connection` describes a self-connected gate with —
+ *  `preview_gatekeeper_resync` / `refresh_operation_governance` (gate-instance-handlers.ts) read
+ *  that gate's `describe_operations` again through it. */
+export function connectionGatekeeperClient(): GatekeeperClient {
+  return requireDeps().gatekeeperClient;
+}
+
 function outboundTargetGuard(current: ConnectionHandlerDeps): OutboundTargetGuard {
   if (current.outboundTargetGuard) return current.outboundTargetGuard;
   defaultGuard ??= createOutboundTargetGuard();

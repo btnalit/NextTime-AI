@@ -1,17 +1,14 @@
-import type { GateInstanceWire, Operation, PublishableStatus } from '@nexttime/shared';
+import type { GateInstanceWire, Operation } from '@nexttime/shared';
 import { mintGateHostToken } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { assertConnectionParamsCarryNoCredentials } from '../../governance/connections/index.js';
 import {
   type GatekeeperByEndpointEntry,
-  diffOperationGovernanceFields,
+  GatekeeperNotFoundError,
   findGatekeepersByEndpoint,
-  gateOwnedParamsOfDefinition,
-  getOperation,
-  importDraftDiffersFromAnnounced,
+  getGatekeeper,
   importManifest,
-  operationDefinitionDiffers,
-  operationGovernanceChangeDirection,
+  listPublishedOperationsForGatekeepers,
   operationRecordDigestOrNull,
   publishImportedDrafts,
   refreshOperationGovernance,
@@ -34,7 +31,10 @@ import {
   readGateDefinitions,
 } from '../gates/index.js';
 import { getConfiguredTaskRuntime } from '../task/runtime.js';
+import { compareAnnouncedOperations } from './announced-operations.js';
 import type { CapabilityHandler } from './capability-handler.js';
+import { connectionGatekeeperClient } from './connection-handlers.js';
+import { platformGateIdForEndpoint, resolveGateTarget } from './gate-target.js';
 import { gateHostCredentialUrl } from './platform-gates-handlers.js';
 
 /**
@@ -94,8 +94,13 @@ export class GateInstanceNotAvailableError extends Error {
     // instance's prior registration.
     | 'ambiguous_existing_gatekeeper'
     // S8 W3-K1 (leftover 79): `refresh_operation_governance`'s target Gatekeeper has no linked
-    // platform gate instance (`findGateLinkByGatekeeper` returned null) — nothing to refresh from.
+    // platform gate instance and is no gate the workspace connected itself either — its endpoint
+    // is a catalog instance's, registered outside the catalog (legacy 214 narrowed it to this).
     | 'no_announced_manifest'
+    // Legacy 214: `preview_gatekeeper_resync` on a Gatekeeper linked to a platform gate instance —
+    // its manifest is the one the platform adopted, aligned through `preview_gate_instance_enable`;
+    // asking the gate directly would skip the administrator's review (R-18).
+    | 'gatekeeper_linked'
     // R-18 (D-18): the caller's `manifestDigest` (from `preview_gate_instance_enable`) is not the
     // digest of the manifest in effect any more — an administrator confirmed a newer one since.
     | 'manifest_changed'
@@ -457,106 +462,25 @@ export const previewGateInstanceEnableHandler: CapabilityHandler = async (
       if (droppedFromGate(name)) droppedByGate.push(name);
     }
   };
-  const operationsToImport: {
-    name: string;
-    mode: Operation['mode'];
-    blastRadius: Operation['blast_radius'];
-    autoApprovable: boolean;
-    description?: string;
-    gateOwnedParams?: { param: string; location: string }[];
-    pendingDraft?: { rewritable: boolean; fromGate: boolean };
-  }[] = [];
-  const operationsAlreadyPresent: {
-    name: string;
-    existing: {
-      mode: Operation['mode'];
-      blastRadius: Operation['blast_radius'];
-      autoApprovable: boolean;
-      status: PublishableStatus;
-    };
-    announced: {
-      mode: Operation['mode'];
-      blastRadius: Operation['blast_radius'];
-      autoApprovable: boolean;
-    };
-    differs: boolean;
-    direction: ReturnType<typeof operationGovernanceChangeDirection>;
-    definitionDiffers: boolean;
-    gateOwnedParams?: { param: string; location: string }[];
-  }[] = [];
-
-  for (const operation of operations) {
-    const existingRecord = targetGatekeeperId
-      ? await getOperation(client, workspaceId, targetGatekeeperId, operation.name)
-      : null;
-    if (existingRecord === null || existingRecord.status === 'draft') {
-      // Importing publishes the manifest in effect's definition.
-      noteAdoption(operation.name, definitions?.adopted.get(operation.name) ?? null);
-      // Legacy J (console G4, legacy 219): the bulk publish holds such an entry back as a draft,
-      // and align can rewrite a held draft once the gate's manifest changes — both said up front.
-      const gateOwnedParams = gateOwnedParamsOfDefinition(operation);
-      operationsToImport.push({
-        name: operation.name,
-        mode: operation.mode,
-        blastRadius: operation.blast_radius,
-        autoApprovable: operation.auto_approvable,
-        ...(operation.description !== undefined ? { description: operation.description } : {}),
-        ...(gateOwnedParams.length > 0
-          ? { gateOwnedParams: gateOwnedParams.map(({ param, location }) => ({ param, location })) }
-          : {}),
-        ...(existingRecord !== null
-          ? {
-              pendingDraft: {
-                // UX acceptance of #583 (P3-2): an Operation the gate no longer runs is never
-                // rewritten by the align (`refreshOperationGovernance`'s `droppedByGate`).
-                rewritable:
-                  !droppedFromGate(operation.name) &&
-                  importDraftDiffersFromAnnounced(existingRecord, operation),
-                fromGate: existingRecord.origin === 'import',
-              },
-            }
-          : {}),
-      });
-      continue;
-    }
-    const announced = {
-      mode: operation.mode,
-      blastRadius: operation.blast_radius,
-      autoApprovable: operation.auto_approvable,
-    };
-    const existingFields = {
-      mode: existingRecord.operation.mode,
-      blastRadius: existingRecord.operation.blast_radius,
-      autoApprovable: existingRecord.operation.auto_approvable,
-      status: existingRecord.status,
-    };
-    // Review #501 on #571 ③: the revision an align opens for this entry is held back when the
-    // announced definition declares a gate-owned param — said before the align, not after.
-    const presentGateOwnedParams = gateOwnedParamsOfDefinition(operation);
-    // S8 W3-K1: the exact comparison `refresh_operation_governance` (governance/gatekeepers/
-    // manifest.ts's `diffOperationGovernanceFields`) reuses for its own write decision — one
-    // judgment function, never two that could drift.
-    operationsAlreadyPresent.push({
-      name: operation.name,
-      existing: existingFields,
-      announced,
-      differs: diffOperationGovernanceFields(existingFields, announced).differs,
-      // R-19 (D-17): the kernel's own classification, so the console's confirm never re-ranks it.
-      direction: operationGovernanceChangeDirection(existingFields, announced),
-      // Legacy K: the gate refuses calls made under the deployed definition until a revision
-      // carrying the announced one is published (`refresh_operation_governance` opens it).
-      definitionDiffers: operationDefinitionDiffers(existingRecord, operation),
-      ...(presentGateOwnedParams.length > 0
-        ? {
-            gateOwnedParams: presentGateOwnedParams.map(({ param, location }) => ({
-              param,
-              location,
-            })),
-          }
-        : {}),
-    });
-    noteAdoption(operation.name, operationRecordDigestOrNull(existingRecord));
-  }
+  const { operationsToImport, operationsAlreadyPresent, records } =
+    await compareAnnouncedOperations(
+      client,
+      workspaceId,
+      targetGatekeeperId,
+      operations,
+      droppedFromGate,
+      'platform',
+    );
+  operations.forEach((operation, index) => {
+    const existingRecord = records[index] ?? null;
+    // Importing publishes the manifest in effect's definition; a deployed row runs its own.
+    noteAdoption(
+      operation.name,
+      existingRecord === null || existingRecord.status === 'draft'
+        ? (definitions?.adopted.get(operation.name) ?? null)
+        : operationRecordDigestOrNull(existingRecord),
+    );
+  });
 
   return {
     result: {
@@ -594,8 +518,11 @@ export const previewGateInstanceEnableHandler: CapabilityHandler = async (
  * is the workspace's own Gatekeeper Object id (not a platform `gateId`) — `findGateLinkByGatekeeper`
  * resolves which platform gate instance's manifest (if any) it was enabled from.
  *
- * No linked gate instance (a legacy `register-gatekeeper`/`create_connection` registration, or one
- * this workspace never enabled through the platform catalog) → `GateInstanceNotAvailableError`
+ * No linked gate instance: a gate the workspace connected itself (`create_connection`) re-syncs to
+ * what it describes now (legacy 214, `gatekeeper-resync.ts` — the preview is
+ * `preview_gatekeeper_resync`, and a name it describes that the workspace never had is imported as
+ * a draft); one whose endpoint is a catalog instance's but was never enabled through the catalog
+ * (a legacy `register-gatekeeper` registration) → `GateInstanceNotAvailableError`
  * (`no_announced_manifest`), before any write. The domain write itself
  * (`governance/gatekeepers/manifest.ts`'s `refreshOperationGovernance`) is in-place, not a new
  * Operation version — see that module's own doc comment for why. R-18 (D-18): `manifestDigest`
@@ -627,36 +554,44 @@ export const refreshOperationGovernanceHandler: CapabilityHandler = async (
   };
 
   const link = await findGateLinkByGatekeeper(client, workspaceId, gatekeeperId);
-  if (!link) {
-    throw new GateInstanceNotAvailableError(
-      'no_announced_manifest',
-      `gatekeeper "${gatekeeperId}" has no linked platform gate instance — there is no announced manifest to refresh from`,
+  let announcedOperations: Operation[];
+  let droppedByGate: ReadonlySet<string>;
+  if (link) {
+    // R-18 (D-18): apply exactly the reviewed manifest — the digest the owner's preview showed
+    // must still be the manifest in effect, and the operations applied come from that same read.
+    ({ operations: announcedOperations } = await readManifestInEffect(
+      client,
+      link.gateId,
+      expectedDigest,
+    ));
+    // UX acceptance of #583 (P3-2): what the gate itself no longer runs gets no draft — adopting
+    // its held manifest removes it, so publishing one would bring no call back (the preview's
+    // `awaitingPlatformAdoption.dropped` and `pendingDraft.rewritable` say the same).
+    const definitions = await readGateDefinitions(client, link.gateId);
+    droppedByGate = new Set(
+      definitions === null
+        ? []
+        : announcedOperations
+            .map((operation) => operation.name)
+            .filter((name) => droppedUntilAdopted(definitions, name)),
     );
+  } else {
+    // Legacy 214: a gate the workspace connected itself has no platform manifest — what it runs
+    // is what it describes now. The same digest binding: the gate re-described between the
+    // owner's `preview_gatekeeper_resync` and this confirm refuses `manifest_changed`.
+    ({ operations: announcedOperations } = await readSelfConnectedManifest(
+      client,
+      workspaceId,
+      gatekeeperId,
+      expectedDigest,
+    ));
+    droppedByGate = new Set();
   }
-
-  // R-18 (D-18): apply exactly the reviewed manifest — the digest the owner's preview showed must
-  // still be the manifest in effect, and the operations applied come from that same read.
-  const { operations: announcedOperations } = await readManifestInEffect(
-    client,
-    link.gateId,
-    expectedDigest,
-  );
-  // UX acceptance of #583 (P3-2): what the gate itself no longer runs gets no draft — adopting
-  // its held manifest removes it, so publishing one would bring no call back (the preview's
-  // `awaitingPlatformAdoption.dropped` and `pendingDraft.rewritable` say the same).
-  const definitions = await readGateDefinitions(client, link.gateId);
-  const droppedByGate = new Set(
-    definitions === null
-      ? []
-      : announcedOperations
-          .map((operation) => operation.name)
-          .filter((name) => droppedUntilAdopted(definitions, name)),
-  );
   // Legacy K: the revision drafts a changed definition gets are written under this Activity.
   const activity = await startActivity(client, workspaceId, {
     kind: 'governance.refresh_operation_governance',
     principalId: ctx.principal.id,
-    metadata: { gatekeeperId, gateId: link.gateId },
+    metadata: link ? { gatekeeperId, gateId: link.gateId } : { gatekeeperId, source: 'gate' },
   });
   const outcome = await refreshOperationGovernance(client, workspaceId, {
     gatekeeperId,
@@ -665,6 +600,11 @@ export const refreshOperationGovernanceHandler: CapabilityHandler = async (
     proposedBy: { id: ctx.principal.id, kind: ctx.principal.kind },
     activityId: activity.id,
     droppedByGate,
+    // Legacy 214: connecting a self-connected gate again would register a second Gatekeeper, so
+    // the resync also imports what the gate now describes and the workspace never had; and since
+    // nobody reviewed the gate's own description, what it loosens waits for a publish (review
+    // #493 on #612).
+    source: link ? 'platform' : 'gate',
   });
   await endActivity(client, workspaceId, activity.id, 'completed');
 
@@ -702,7 +642,15 @@ export const refreshOperationGovernanceHandler: CapabilityHandler = async (
         version: draft.version,
         draftOf: draft.draftOf ?? null,
         replaced: draft.replaced,
-        reason: 'definition_changed',
+        reason: draft.newOnGate
+          ? 'new_on_gate'
+          : draft.governanceLoosened && !draft.governanceLoosened.definitionChanged
+            ? 'governance_loosened'
+            : 'definition_changed',
+        // Review #493 on #612 (M1): a loosening the revision carries instead of an in-place write.
+        ...(draft.governanceLoosened
+          ? { governanceDirection: draft.governanceLoosened.direction }
+          : {}),
       },
     });
   }
@@ -715,6 +663,111 @@ export const refreshOperationGovernanceHandler: CapabilityHandler = async (
       refreshed: outcome.refreshed.map(({ id: _id, ...rest }) => rest),
       revisionDrafts: outcome.revisionDrafts.map(({ name, version }) => ({ name, version })),
       unchanged: outcome.unchanged,
+    },
+    resourceType: 'gatekeeper',
+    resourceId: gatekeeperId,
+  };
+};
+
+// -------------------------------------------------------------------------------------------
+// Legacy 214: a gate the workspace connected itself — re-describe → preview the diff → open the
+// revisions. The same comparison (`compareAnnouncedOperations`) and the same write
+// (`refresh_operation_governance` → `refreshOperationGovernance`) as a platform gate's align; only
+// where the announced manifest comes from differs.
+// -------------------------------------------------------------------------------------------
+
+/**
+ * What a self-connected gate runs right now: its own `describe_operations`, read through the
+ * credential every call to it carries (`resolveGateTarget` — the Gatekeeper's connection secret).
+ * The gate refuses calls made under any other definition (legacy K), so this, not the copy
+ * `create_connection` imported (possibly from a `manifestSource` that never matched the gate's own
+ * file), is what the workspace has to publish for its calls to run.
+ *
+ * Refused before contacting anything: a Gatekeeper linked to a platform gate instance
+ * (`gatekeeper_linked` — its manifest is the one the platform adopted, R-18; asking the gate
+ * directly would skip that review), and one whose endpoint is a catalog instance's but was never
+ * enabled through the catalog (`no_announced_manifest` — that gate is called with the platform
+ * credential, and only the catalog's adopted manifest speaks for it). `manifestDigest` binds a
+ * write to the description the owner previewed, as `readManifestInEffect` does for a platform gate.
+ * Entries that do not parse as an Operation are left out, as `operationsOf` does for a stored
+ * manifest.
+ */
+export async function readSelfConnectedManifest(
+  client: PoolClient,
+  workspaceId: string,
+  gatekeeperId: string,
+  expectedDigest: string | undefined,
+): Promise<{ operations: Operation[]; digest: string }> {
+  const record = await getGatekeeper(client, workspaceId, gatekeeperId);
+  if (!record) throw new GatekeeperNotFoundError(gatekeeperId);
+  const link = await findGateLinkByGatekeeper(client, workspaceId, gatekeeperId);
+  if (link) {
+    throw new GateInstanceNotAvailableError(
+      'gatekeeper_linked',
+      `gatekeeper "${gatekeeperId}" is enabled from platform gate instance "${link.gateId}" — align it with that instance's announcement (preview_gate_instance_enable) instead`,
+    );
+  }
+  const platformGateId = await platformGateIdForEndpoint(client, record.endpoint);
+  if (platformGateId !== null) {
+    throw new GateInstanceNotAvailableError(
+      'no_announced_manifest',
+      `gatekeeper "${gatekeeperId}" is at the address of platform gate instance "${platformGateId}" but was not enabled from the catalog — enable that instance (enable_gate_instance) to align with its announcement`,
+    );
+  }
+  const target = await resolveGateTarget(client, workspaceId, record);
+  const described = await connectionGatekeeperClient().describeOperations(target);
+  const operations = operationsOf(described.operations);
+  const digest = manifestDigest(operations);
+  if (expectedDigest !== undefined && expectedDigest !== digest) {
+    throw new GateInstanceNotAvailableError(
+      'manifest_changed',
+      `the gate behind gatekeeper "${gatekeeperId}" describes another manifest than the one previewed — preview it again`,
+    );
+  }
+  return { operations, digest };
+}
+
+/**
+ * `preview_gatekeeper_resync(gatekeeperId)` (legacy 214): the read-only half — the gate's current
+ * description compared with what the workspace holds, through the same `compareAnnouncedOperations`
+ * `preview_gate_instance_enable` uses. `operationsToImport` without `pendingDraft` are names the
+ * workspace never had (the resync imports them as drafts); `notDescribed` are published names the
+ * gate no longer describes (it refuses calls to them; nothing here deprecates them). Writes nothing.
+ */
+export const previewGatekeeperResyncHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+) => {
+  const { gatekeeperId } = params as { gatekeeperId: string };
+  const { operations, digest } = await readSelfConnectedManifest(
+    client,
+    workspaceId,
+    gatekeeperId,
+    undefined,
+  );
+  const { operationsToImport, operationsAlreadyPresent } = await compareAnnouncedOperations(
+    client,
+    workspaceId,
+    gatekeeperId,
+    operations,
+    () => false,
+    'gate',
+  );
+  const described = new Set(operations.map((operation) => operation.name));
+  const published = await listPublishedOperationsForGatekeepers(client, workspaceId, [
+    gatekeeperId,
+  ]);
+  const notDescribed = [
+    ...new Set(published.map((row) => row.name).filter((name) => !described.has(name))),
+  ].sort();
+  return {
+    result: {
+      gatekeeperId,
+      manifestDigest: digest,
+      operationsToImport,
+      operationsAlreadyPresent,
+      notDescribed,
     },
     resourceType: 'gatekeeper',
     resourceId: gatekeeperId,
