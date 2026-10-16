@@ -2388,6 +2388,40 @@ describe.runIf(DATABASE_URL !== undefined)(
           expect(operationReachability(before, selfGatekeeperId, 'observe', SELF_OP.name)).toEqual({
             status: 'direct',
           });
+          // An entry-agent Handle already issued in this workspace, minted the way the
+          // set_connector_mode propagation test above does it: the suspension must reach it now,
+          // not at its next natural re-issue.
+          const entrySessionId = randomUUID();
+          await withWorkspace(pool, { workspaceId: cWorkspaceId, principalId: cOwnerId }, (c) =>
+            c.query(
+              `insert into sessions (workspace_id, id, principal_id, kind, on_behalf_of, status)
+               values ($1, $2, $3, 'entry', $3, 'ready')`,
+              [cWorkspaceId, entrySessionId, cOwnerId],
+            ),
+          );
+          const entryHandle = await withWorkspace(
+            pool,
+            { workspaceId: cWorkspaceId, principalId: cOwnerId },
+            (c) =>
+              issueHandle(c, {
+                sessionId: entrySessionId,
+                scope: {
+                  capabilities: ['observe_operation'],
+                  resources: { gatekeeper: [selfGatekeeperId] },
+                },
+                ttlSeconds: 3600,
+                privateKey,
+              }),
+          );
+          const entryHandleRevokedAt = (): Promise<Date | null> =>
+            withWorkspace(pool, { workspaceId: cWorkspaceId, principalId: cOwnerId }, async (c) => {
+              const result = await c.query<{ revoked_at: Date | null }>(
+                'select revoked_at from capability_handles where workspace_id = $1 and jti = $2',
+                [cWorkspaceId, entryHandle.jti],
+              );
+              return result.rows[0]?.revoked_at ?? null;
+            });
+          expect(await entryHandleRevokedAt()).toBeNull();
 
           const suspended = await callAsAdmin<SelfConnectionWire>('suspend_self_connection', {
             workspaceId: cWorkspaceId,
@@ -2402,8 +2436,34 @@ describe.runIf(DATABASE_URL !== undefined)(
               suspensionReason: 'under review',
             });
 
-            // Enforcement and reachability: the shared predicate, so they agree.
+            // The workspace's entry Handles are re-issued, with a platform audit row saying why.
+            expect(await entryHandleRevokedAt()).not.toBeNull();
+            const revocations = await withAdminClient(pool, (c) =>
+              c.query<{ payload: Record<string, unknown> }>(
+                `select payload from audit_records
+                  where action = 'self_connection.entry_handles_revoked' and workspace_id is null
+                    and resource_id = $1 order by created_at`,
+                [selfGatekeeperId],
+              ),
+            );
+            expect(revocations.rows.at(-1)?.payload).toMatchObject({
+              workspaceId: cWorkspaceId,
+              suspended: true,
+            });
+
+            // Enforcement and reachability: the shared predicate, so they agree — on
+            // `observe_operation` and on `request_action`, whose check also guards the execute path.
             await expect(observeSelf()).rejects.toMatchObject({
+              message: expect.stringMatching(/operation_disabled: .*connection to it is suspended/),
+            });
+            await expect(
+              dispatchCapability(
+                { pool },
+                humanCallerFor(cWorkspaceId, cMemberId, 'member'),
+                'request_action',
+                { gatekeeperId: selfGatekeeperId, operation: SELF_OP.name, params: {} },
+              ),
+            ).rejects.toMatchObject({
               message: expect.stringMatching(/operation_disabled: .*connection to it is suspended/),
             });
             const reach = await reachForMember();
