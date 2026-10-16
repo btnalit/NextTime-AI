@@ -320,6 +320,9 @@
             "null"
           ]
         },
+        "failureReasonTruncated": {
+          "type": "boolean"
+        },
         "gatekeeperId": {
           "type": "string"
         },
@@ -6075,6 +6078,9 @@
             "null"
           ]
         },
+        "failureReasonTruncated": {
+          "type": "boolean"
+        },
         "gatekeeperId": {
           "type": "string"
         },
@@ -9667,6 +9673,29 @@
         "cursor": {
           "type": "string"
         },
+        "failureKind": {
+          "anyOf": [
+            {
+              "enum": [
+                "not_delivered",
+                "refused",
+                "outcome_unknown"
+              ],
+              "type": "string"
+            },
+            {
+              "items": {
+                "enum": [
+                  "not_delivered",
+                  "refused",
+                  "outcome_unknown"
+                ],
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ]
+        },
         "gatekeeperId": {
           "minLength": 1,
           "type": "string"
@@ -9818,6 +9847,9 @@
                   "string",
                   "null"
                 ]
+              },
+              "failureReasonTruncated": {
+                "type": "boolean"
               },
               "gatekeeperId": {
                 "type": "string"
@@ -12847,6 +12879,9 @@
                   "string",
                   "null"
                 ]
+              },
+              "failureReasonTruncated": {
+                "type": "boolean"
               },
               "gatekeeperId": {
                 "type": "string"
@@ -19297,6 +19332,9 @@
             "null"
           ]
         },
+        "failureReasonTruncated": {
+          "type": "boolean"
+        },
         "gatekeeperId": {
           "type": "string"
         },
@@ -20336,6 +20374,9 @@
                 "string",
                 "null"
               ]
+            },
+            "failureReasonTruncated": {
+              "type": "boolean"
             },
             "gatekeeperId": {
               "type": "string"

@@ -6,6 +6,7 @@ import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { freshnessOf } from '../../lib/graph-freshness.js';
 import { type FactDirection, factDirection, neighbourId } from '../../lib/graph-view.js';
 import { useT } from '../../lib/i18n.js';
+import { epistemicStatusLabel } from '../../lib/labels.js';
 import { Confirm } from '../kit/confirm.js';
 import {
   DropdownMenu,
@@ -177,8 +178,12 @@ export function FactRow({
           ) : null}
         </div>
         <div className="data-row-meta">
-          <span className="tag mono" title={t('认知状态', 'Epistemic status')}>
-            {fact.epistemicStatus}
+          <span
+            className="tag"
+            title={t('认知状态', 'Epistemic status')}
+            data-testid="graph-fact-epistemic-status"
+          >
+            {epistemicStatusLabel(fact.epistemicStatus, t)}
           </span>
           {fact.confidence !== null ? (
             <span className="meta-sep" title={t('置信度', 'Confidence')}>

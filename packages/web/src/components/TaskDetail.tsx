@@ -11,6 +11,7 @@ import {
   shortId,
 } from '../lib/format.js';
 import { useT } from '../lib/i18n.js';
+import { taskFailureReasonText } from '../lib/labels.js';
 import { hrefs } from '../lib/router.js';
 import {
   type TaskSummary,
@@ -164,7 +165,12 @@ export function TaskDetail({
     overviewItems.push({
       key: 'failure',
       label: <span className="text-danger">{t('失败原因', 'Failure')}</span>,
-      value: <span className="text-danger">{task.failureReason}</span>,
+      value: (
+        <span className="stack-s" data-testid="task-detail-failure-reason">
+          <span className="text-danger">{taskFailureReasonText(task.failureReason, t).short}</span>
+          <span className="text-3">{taskFailureReasonText(task.failureReason, t).detail}</span>
+        </span>
+      ),
     });
   }
 
@@ -173,7 +179,7 @@ export function TaskDetail({
       <header className="stack-s">
         <div className="row-wrap">
           <StatusChip machine="task" status={task.status} size="s" />
-          <RefChip kind="task" id={task.id} name={null} size="s" />
+          <RefChip kind="task" id={task.id} name={t('本任务', 'This task')} size="s" />
           {canCancel && isCancellable(task.status) ? (
             <Confirm
               tier="medium"

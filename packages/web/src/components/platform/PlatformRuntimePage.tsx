@@ -14,6 +14,7 @@ import type { CapabilityCaller } from '../../lib/clients.js';
 import { errorToastText } from '../../lib/errors.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { useT } from '../../lib/i18n.js';
+import { containerStateLabel } from '../../lib/labels.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { piUpstreamStateText } from '../../lib/platform-updates.js';
 import { Confirm } from '../kit/confirm.js';
@@ -421,9 +422,10 @@ function RuntimeBody({
             {t('运行中', 'Running')}
           </span>
         ) : (
+          // Legacy sweep (console batch, 2026-10-16): the tooltip names Docker's own state in words.
           <span
             className="chip chip-neutral"
-            title={resident.status}
+            title={containerStateLabel(resident.status, t)}
             data-testid="runtime-resident-exited"
           >
             {t('已退出', 'Exited')}

@@ -211,6 +211,10 @@ describe('GateInstanceDetailPanel', () => {
     );
     const definition = screen.getByTestId('gate-instance-hosted-definition');
     expect(definition.textContent).toContain('共享');
+    // Legacy sweep (console batch, 2026-10-16): the hosted transport reads as its label.
+    expect(within(definition).getByTestId('gate-instance-hosted-transport').textContent).toBe(
+      'HTTP',
+    );
     expect(within(definition).getByTestId('gate-credential-token-button')).toBeTruthy();
     fireEvent.click(screen.getByTestId('gate-instance-delete'));
     // R-46: irreversible — states the credential loss, needs the gate id retyped + acknowledged.

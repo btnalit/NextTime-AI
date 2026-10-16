@@ -37,6 +37,9 @@ import { UserMembershipsPanel } from './UserMembershipsPanel.js';
 
 export interface PlatformUsersPageProps {
   readonly http: CapabilityCaller;
+  /** The signed-in user's id (`session.user.id`; `null` for an apiKey session) — the kernel
+   *  refuses `self_disable`, so that row's drawer offers no 「停用」. */
+  readonly ownUserId?: string | null;
 }
 
 const PAGE_SIZE = 50;
@@ -77,7 +80,7 @@ type Panel =
  * the toggle shows them. The "清理待激活用户" entry (`PurgeUsersDialog`) lists the `pendingOnly`
  * candidates and hands a selection to `purge_user`; the directory is re-read afterwards.
  */
-export function PlatformUsersPage({ http }: PlatformUsersPageProps) {
+export function PlatformUsersPage({ http, ownUserId = null }: PlatformUsersPageProps) {
   const t = useT();
   const toast = useToast();
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
@@ -338,6 +341,7 @@ export function PlatformUsersPage({ http }: PlatformUsersPageProps) {
             http={http}
             user={openUser}
             envAdmins={envAdmins}
+            isSelf={ownUserId !== null && openUser.id === ownUserId}
             onChanged={replaceUser}
             onMerged={() => {
               setPanel({ kind: 'closed' });

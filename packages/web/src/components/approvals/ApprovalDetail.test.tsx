@@ -2,8 +2,12 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { RouteAccessProvider } from '../../hooks/useCanOpen.js';
+import { PermissionsProvider } from '../../hooks/usePermissions.js';
+import type { CapabilityCaller } from '../../lib/clients.js';
 import type { ActionRequestRow } from '../../lib/governance.js';
 import { HttpError } from '../../lib/http-client.js';
+import { FailureReasonWhere } from './ActionFailure.js';
 import { ApprovalDetail, type PendingConfirm } from './ApprovalDetail.js';
 
 afterEach(cleanup);
@@ -76,6 +80,8 @@ describe('ApprovalDetail (S6-A B2 / B3 / C25)', () => {
     expect(screen.getByTestId('approval-blocking')).toBeTruthy();
     // Audit P1-13: the policy decision reads as words, the raw value only as a tooltip.
     expect(screen.getByTestId('approval-policy').textContent).toBe('策略要求人工审批');
+    // Legacy sweep (console batch, 2026-10-16): the raw value is not kept as a tooltip either.
+    expect(screen.getByTestId('approval-policy').getAttribute('title')).toBeNull();
     const whole = screen.getByTestId('approval-detail');
     expect(whole.textContent).toContain('Worker（被委派执行）');
     const self = whole.querySelector('[data-ref-kind="actionRequest"]');
@@ -145,12 +151,59 @@ describe('ApprovalDetail (S6-A B2 / B3 / C25)', () => {
       failureKind: 'refused',
       failureReason: 'gate refused: <b>credential</b> missing\nAuthorization: [redacted]',
     });
-    const reason = screen.getByTestId('approval-failure-reason');
+    const reason = screen.getByTestId('approval-failure-reason-text');
     expect(reason.textContent).toBe(
       '原因：gate refused: <b>credential</b> missing\nAuthorization: [redacted]',
     );
     expect(reason.className).toBe('pre-wrap');
     expect(reason.querySelector('b')).toBeNull();
+    // Short: not folded, nothing truncated.
+    expect(screen.queryByTestId('approval-failure-reason-toggle')).toBeNull();
+    expect(screen.queryByTestId('approval-failure-reason-truncated')).toBeNull();
+  });
+
+  it('legacy 339: a long reason starts folded with a toggle; a truncated one says where the whole is, by what the reader may open', async () => {
+    const long = Array.from({ length: 8 }, (_, i) => `line ${i + 1}: refused_by_target`).join('\n');
+    const failed = {
+      status: 'failed',
+      failedAt: '2026-10-16T07:00:00.000Z',
+      failureKind: 'refused',
+      failureReason: `${long}…`,
+      failureReasonTruncated: true,
+    } as const;
+    const first = renderDetail(failed);
+    const text = screen.getByTestId('approval-failure-reason-text');
+    expect(text.className).toContain('line-clamp-4');
+    const toggle = screen.getByTestId('approval-failure-reason-toggle');
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(toggle.textContent).toBe('展开全部');
+    fireEvent.click(toggle);
+    expect(text.className).not.toContain('line-clamp-4');
+    expect(toggle.textContent).toBe('收起');
+    const truncated = screen.getByTestId('approval-failure-reason-truncated');
+    expect(truncated.textContent).toContain('只显示了开头的 1000 个字符');
+    expect(within(truncated).getByTestId('failure-reason-audit-link').getAttribute('href')).toBe(
+      '#/govern/audit?actionRequestId=ar-1',
+    );
+    first.unmount();
+
+    // A role that may not read the audit gets who can, never a link it would be refused at.
+    const member: CapabilityCaller = {
+      call: vi.fn(async (name: string) =>
+        name === 'get_workspace'
+          ? { id: 'ws-1', name: 'Acme', caller: { id: 'p-1', role: 'member' } }
+          : {},
+      ) as CapabilityCaller['call'],
+    };
+    render(
+      <PermissionsProvider>
+        <RouteAccessProvider http={member} platformAdmin={false}>
+          <FailureReasonWhere actionRequestId="ar-1" />
+        </RouteAccessProvider>
+      </PermissionsProvider>,
+    );
+    const told = await screen.findByText(/完整内容在这条请求的审计记录里，只有.+能看/);
+    expect(told.closest('a')).toBeNull();
   });
 
   it('legacy 328: a withdrawn request says nothing ran and nothing is needed, and offers no decision', () => {
@@ -210,6 +263,10 @@ describe('ApprovalDetail (S6-A B2 / B3 / C25)', () => {
     fireEvent.click(screen.getByTestId('approval-reject'));
     const confirm = await screen.findByTestId('approval-confirm');
     expect(within(confirm).getByTestId('approval-confirm-reason').textContent).toBe('why');
+    // Legacy 314: the request row names the request on screen, never 「未知 / 已删除」.
+    const requestChip = within(confirm).getByText('本请求').closest('[data-ref-kind]');
+    expect(requestChip?.getAttribute('data-ref-id')).toBe('ar-1');
+    expect(confirm.textContent).not.toContain('未知 / 已删除');
     fireEvent.click(within(confirm).getByTestId('confirm-button'));
     await waitFor(() =>
       expect(onReject).toHaveBeenCalledWith({ actionRequestId: 'ar-1', reason: 'why' }),

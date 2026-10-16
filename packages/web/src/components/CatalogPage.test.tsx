@@ -1184,7 +1184,7 @@ describe('CatalogPage', () => {
       target: { value: 'new description' },
     });
     fireEvent.click(within(dialog).getByTestId('operation-description-save'));
-    await within(dialog).findByText(/只有它的提议人或工作区所有者能做这一步/);
+    await within(dialog).findByText(/这一步只能由提议人或工作区所有者来做/);
     // Not a `forbidden`: the capability is not marked denied for the session.
     expect(
       within(detail).queryByTestId('operation-edit-description-gk-1::docker.restart'),
@@ -2234,6 +2234,42 @@ describe('CatalogPage — proposer-only Publish / Deprecate (D-24)', () => {
     );
     expect(within(detail).queryByRole('button', { name: /弃用/ })).toBeNull();
   });
+
+  it.each([
+    ['a builder, over a published version someone else proposed', 'builder', 'p-o', false],
+    ['a builder, over their own published version', 'builder', 'p-me', true],
+    ['the owner, over a published version someone else proposed', 'owner', 'p-o', true],
+  ] as const)(
+    'Workers: Publish on a new version of a family for %s → offered: %s (legacy 315)',
+    async (_label, role, liveProposedBy, offered) => {
+      const published = {
+        id: 'wd-1',
+        version: 1,
+        kind: 'worker',
+        status: 'published',
+        definition: { name: 'Fixer' },
+        proposedBy: liveProposedBy,
+      };
+      const draft = { ...published, version: 2, status: 'draft', proposedBy: 'p-me' };
+      const http = scriptedHttp({
+        get_workspace: workspaceAs(role),
+        list_worker_definitions: (params) => ({
+          items: (params as { includeOwnDrafts?: boolean } | undefined)?.includeOwnDrafts
+            ? [published, draft]
+            : [published],
+        }),
+      });
+      renderPage(http, 'workers', 'wd-1@2');
+      await waitFor(() => expect(http.calls.some((c) => c.name === 'get_workspace')).toBe(true));
+      const detail = await screen.findByTestId('catalog-detail');
+      await waitFor(() =>
+        expect(within(detail).queryByRole('button', { name: /^发布/ }) !== null).toBe(offered),
+      );
+      const hint = within(detail).queryByTestId('catalog-proposer-only');
+      expect(hint !== null).toBe(!offered);
+      if (hint) expect(hint.textContent).toMatch(/替换/);
+    },
+  );
 
   it('a not_proposer refusal on Publish does not close Publish for the session', async () => {
     const http = scriptedHttp({

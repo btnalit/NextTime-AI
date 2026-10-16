@@ -89,6 +89,7 @@ export {
 export { type RecordTransitionParams, recordTransition } from './transition-log.js';
 
 export {
+  type ActionRequestFailureReason,
   type ActionRequestInDoubt,
   type ActionRequestQueueBlocker,
   type ActionRequestWaitingState,

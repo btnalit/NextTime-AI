@@ -4,6 +4,7 @@ import { useRoleCan } from '../hooks/useRoleCan.js';
 import type { CapabilityCaller, PushSource } from '../lib/clients.js';
 import { excerpt, formatDateTime, formatDuration, formatRelative, shortId } from '../lib/format.js';
 import { type Translate, useT } from '../lib/i18n.js';
+import { taskFailureReasonText } from '../lib/labels.js';
 import { breadcrumbFor } from '../lib/nav.js';
 import {
   type TaskSummary,
@@ -404,7 +405,13 @@ function TasksList({
                 {task.failureReason ? (
                   <>
                     <span className="meta-sep" />
-                    <span className="text-danger truncate">{task.failureReason}</span>
+                    <span
+                      className="text-danger truncate"
+                      title={taskFailureReasonText(task.failureReason, t).detail}
+                      data-testid="task-failure-reason"
+                    >
+                      {taskFailureReasonText(task.failureReason, t).short}
+                    </span>
                   </>
                 ) : null}
               </span>

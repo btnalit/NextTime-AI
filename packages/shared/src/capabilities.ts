@@ -1881,6 +1881,11 @@ const governanceCapabilities = [
         // `gatekeeperId`). Both given → intersection.
         taskId: id.optional(),
         parentWorkerRunId: id.optional(),
+        // Legacy 331: narrows to failed / compensated rows of these failure kinds (not sent /
+        // refused / outcome unknown); intersects with `status`.
+        failureKind: z
+          .union([ActionRequestFailureKindSchema, z.array(ActionRequestFailureKindSchema)])
+          .optional(),
         // Same default/max as `search` (docs/wire-contract-conventions.md §3;
         // substrate/graph/store.ts `DEFAULT_SEARCH_LIMIT`/`MAX_SEARCH_LIMIT`).
         limit: z.number().int().positive().optional(),
@@ -1890,7 +1895,8 @@ const governanceCapabilities = [
     resultSchema: listEnvelope(wire.ActionRequestWireSchema),
     description:
       'List ActionRequests regardless of status (the approval history), optionally filtered by ' +
-      'status, gatekeeperId, taskId (every WorkerRun of that Task) or parentWorkerRunId; ' +
+      'status, failureKind, gatekeeperId, taskId (every WorkerRun of that Task) or ' +
+      'parentWorkerRunId; ' +
       'keyset-paginated (limit, cursor → nextCursor). Same visibility as get_action: the owner ' +
       'sees every row, anyone else rows matching one of their own active grants (I14) or that ' +
       'they requested. Decided rows carry decisionReason / decidedBy / decidedAt.',

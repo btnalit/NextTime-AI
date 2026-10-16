@@ -51,6 +51,11 @@ describe('ProvenanceDrawer', () => {
     expect(screen.getByTestId('graph-provenance-conflicts').textContent).toContain(
       '1 个未解决冲突中',
     );
+    // Legacy sweep (console batch, 2026-10-16): the conflict chip names its type in words.
+    expect(screen.getByTestId('graph-provenance-conflicts').textContent).toContain(
+      '冲突 · 取值冲突',
+    );
+    expect(screen.getByTestId('graph-provenance-conflicts').textContent).not.toContain('value');
     expect(screen.getByTestId('graph-provenance-freshness').getAttribute('data-freshness')).toBe(
       'conflict',
     );

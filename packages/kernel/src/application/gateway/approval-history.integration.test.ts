@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import {
+  compensateActionRequest,
   markActionRequestFailed,
   startActionRequestExecution,
 } from '../../governance/approval/execution.js';
@@ -68,6 +69,7 @@ interface ActionRequestWire {
   decidedBy?: string | null;
   decidedAt?: string | null;
   failureReason?: string | null;
+  failureReasonTruncated?: boolean;
 }
 
 /** A synthetic credential-shaped value — never a real one. */
@@ -292,6 +294,9 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(long.failureReason).toMatch(/^Authorization: ?\[redacted\]\nx+…$/);
       expect(long.failureReason).not.toContain(FAKE_TOKEN);
       expect([...(long.failureReason ?? '')]).toHaveLength(FAILURE_REASON_MAX + 1);
+      // Legacy 339: the wire says it is only the head, so the console can say where the rest is.
+      expect(long.failureReasonTruncated).toBe(true);
+      expect(read.failureReasonTruncated).toBe(false);
 
       const page = (await dispatchCapability({ pool }, owner, 'list_action_requests', {
         limit: 200,
@@ -300,6 +305,56 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(listed.get(id)?.failureReason).toBe(read.failureReason);
       expect(listed.get(longId)?.failureReason).toBe(long.failureReason);
       expect(listed.get(pending)?.failureReason).toBeNull();
+      expect(listed.get(pending)?.failureReasonTruncated).toBe(false);
+    });
+
+    it('legacy 331: list_action_requests{failureKind} narrows to failed rows of those kinds, and intersects with status', async () => {
+      const owner = humanCaller(workspaceId, ownerId, 'owner');
+      const failedAs = async (failureKind: 'not_delivered' | 'refused' | 'outcome_unknown') => {
+        const id = await seedPendingActionRequest({
+          blastRadius: 'medium',
+          actionKind: `ah.failure_kind.${failureKind}`,
+        });
+        await dispatchCapability({ pool }, owner, 'approve', { actionRequestId: id });
+        await admin(async (client) => {
+          await startActionRequestExecution(client, workspaceId, id);
+          await markActionRequestFailed(client, workspaceId, id, { failureKind });
+        });
+        return id;
+      };
+      const notSent = await failedAs('not_delivered');
+      const refused = await failedAs('refused');
+      const unknown = await failedAs('outcome_unknown');
+      const pending = await seedPendingActionRequest({ blastRadius: 'medium' });
+      const compensatedUnknown = await failedAs('outcome_unknown');
+      await admin((client) => compensateActionRequest(client, workspaceId, compensatedUnknown));
+
+      const ids = async (params: Record<string, unknown>) =>
+        (
+          (await dispatchCapability({ pool }, owner, 'list_action_requests', {
+            limit: 200,
+            ...params,
+          })) as { items: ActionRequestWire[] }
+        ).items.map((row) => row.id);
+
+      const onlyRefused = await ids({ failureKind: 'refused' });
+      expect(onlyRefused).toContain(refused);
+      expect(onlyRefused).not.toContain(notSent);
+      expect(onlyRefused).not.toContain(unknown);
+      expect(onlyRefused).not.toContain(pending);
+
+      const either = await ids({ failureKind: ['not_delivered', 'outcome_unknown'] });
+      expect(either).toEqual(expect.arrayContaining([notSent, unknown, compensatedUnknown]));
+      expect(either).not.toContain(refused);
+      expect(either).not.toContain(pending);
+
+      const compensatedOnly = await ids({ failureKind: 'outcome_unknown', status: 'compensated' });
+      expect(compensatedOnly).toContain(compensatedUnknown);
+      expect(compensatedOnly).not.toContain(unknown);
+
+      await expect(
+        dispatchCapability({ pool }, owner, 'list_action_requests', { failureKind: 'withdrawn' }),
+      ).rejects.toThrow();
     });
 
     it('list_action_requests{taskId} finds a decided request through its WorkerRun; parentWorkerRunId narrows; unknown taskId is an empty page', async () => {

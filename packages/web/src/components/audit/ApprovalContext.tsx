@@ -7,6 +7,7 @@ import type { ActionRequestRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
 import { policyDecisionLabel } from '../../lib/labels.js';
 import { hrefs } from '../../lib/router.js';
+import { FailureReasonText } from '../approvals/ActionFailure.js';
 import { nameOf, resourceScopeLabel } from '../approvals/useDirectoryNames.js';
 import { ApprovalCard } from '../ui/ApprovalCard.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
@@ -108,7 +109,8 @@ export function ApprovalContext({
           }
           policySummary={
             row.policyDecision ? (
-              <span title={row.policyDecision}>{policyDecisionLabel(row.policyDecision, t)}</span>
+              // Legacy sweep (console batch, 2026-10-16): no raw-value tooltip.
+              <span>{policyDecisionLabel(row.policyDecision, t)}</span>
             ) : undefined
           }
           readOnly
@@ -186,9 +188,17 @@ export function ApprovalContext({
             ) : null}
             {failure && failure.kind !== 'withdrawn' && row.failureReason ? (
               <>
-                <dt>{t('失败原因', 'Failure reason')}</dt>
-                <dd className="pre-wrap" data-testid="approval-context-failure-reason">
-                  {row.failureReason}
+                <dt className="definition-list-wide">{t('失败原因', 'Failure reason')}</dt>
+                <dd className="definition-list-wide" data-testid="approval-context-failure-reason">
+                  <FailureReasonText
+                    reason={row.failureReason}
+                    truncated={row.failureReasonTruncated === true}
+                    where={t(
+                      '完整内容在下方这条请求的审计记录里（action_request.fail 一行的详情）。',
+                      'The whole reason is in this request’s audit records below (the details of the action_request.fail row).',
+                    )}
+                    testId="approval-context-failure-reason-body"
+                  />
                 </dd>
               </>
             ) : null}

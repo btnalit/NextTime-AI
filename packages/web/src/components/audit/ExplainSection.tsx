@@ -14,6 +14,7 @@ import {
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { isForbiddenError } from '../../lib/errors.js';
 import { useT } from '../../lib/i18n.js';
+import { decisionStatusLabel } from '../../lib/labels.js';
 import { capabilityHolders } from '../../lib/role-holders.js';
 import { hrefs } from '../../lib/router.js';
 import { nameOf } from '../approvals/useDirectoryNames.js';
@@ -232,7 +233,7 @@ function ExplainResultView({
               <RefChip kind="object" id={decision.id} name={decision.summary} size="s" />
             </dd>
             <dt>{t('状态', 'Status')}</dt>
-            <dd className="mono">{decision.status}</dd>
+            <dd data-testid="explain-decision-status">{decisionStatusLabel(decision.status, t)}</dd>
             <dt>{t('决定者', 'Decided by')}</dt>
             <dd>
               {decision.decidedByPrincipal ? (

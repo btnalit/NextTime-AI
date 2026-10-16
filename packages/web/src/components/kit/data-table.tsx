@@ -229,7 +229,11 @@ export function DataTable<T>({
     const high = columns.filter((col) => (col.priority ?? 'low') === 'high');
     const low = columns.filter((col) => (col.priority ?? 'low') === 'low' && !col.hideInCard);
     return (
-      <ul className="flex flex-col gap-2" aria-label={ariaLabel} data-testid={testId}>
+      <ul
+        className="m-0 flex list-none flex-col gap-2 p-0"
+        aria-label={ariaLabel}
+        data-testid={testId}
+      >
         {rows.map((row) => {
           const id = getRowId(row);
           const props = rowProps(row);
@@ -245,8 +249,10 @@ export function DataTable<T>({
               {...rowDataAttrs?.(row)}
               {...props}
             >
-              <div className="flex items-center justify-between gap-2">
-                <div className="min-w-0 flex-1 truncate font-medium text-text">
+              {/* Legacy 313: the title keeps room for itself — the `high` columns wrap below it
+                  rather than squeeze it to nothing on a narrow card. */}
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="min-w-32 flex-1 truncate font-medium text-text">
                   {primary.map((col) => (
                     <span key={col.id} className={col.cellClassName}>
                       {col.cell(row)}

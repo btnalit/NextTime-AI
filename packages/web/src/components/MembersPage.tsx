@@ -143,6 +143,19 @@ export function MembersPage({ http, platformAdmin }: MembersPageProps) {
   // D3: unfiltered — `IssueServiceHandleSection` does its own `kind === 'service'` (+ internal /
   // disabled) filtering, same as it did fed from `AccessPage`'s own `principals`.
   const allPrincipals = principals.state.status === 'ready' ? principals.state.data.items : [];
+  // Console legacy sweep (2026-10-16): the kernel refuses (`last_owner`) demoting or disabling a
+  // workspace's last active human owner. Only claimed once the whole list is loaded (no
+  // `nextCursor`) — a partial page could hide a second owner, and then the kernel decides.
+  const activeHumanOwners =
+    principals.state.status === 'ready' && principals.state.data.nextCursor === undefined
+      ? allPrincipals.filter(
+          (row) => row.kind === 'human' && row.role === 'owner' && !row.disabledAt,
+        )
+      : null;
+  const lastActiveOwnerId =
+    activeHumanOwners !== null && activeHumanOwners.length === 1
+      ? (activeHumanOwners[0]?.id ?? null)
+      : null;
   const forbidden = principals.state.status === 'error' && isForbiddenError(principals.state.error);
 
   return (
@@ -416,6 +429,8 @@ export function MembersPage({ http, platformAdmin }: MembersPageProps) {
               http={http}
               principal={drawer.principal}
               canManage={canManage}
+              isSelf={ownPrincipalId !== null && drawer.principal.id === ownPrincipalId}
+              lastActiveOwner={lastActiveOwnerId === drawer.principal.id}
               onChanged={handlePrincipalChanged}
               onForbidden={permissions.markDenied}
             />

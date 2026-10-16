@@ -1,6 +1,13 @@
 import type { ReactNode } from 'react';
 import { formatDateTime, formatRelative, prettyJsonVisible } from '../../lib/format.js';
 import { useT } from '../../lib/i18n.js';
+import {
+  activityKindLabel,
+  activityStatusLabel,
+  epistemicStatusLabel,
+  sourceKindLabel,
+  sourceVisibilityLabel,
+} from '../../lib/labels.js';
 import { Icon } from './Icon.js';
 import { RefChip } from './RefChip.js';
 
@@ -210,7 +217,9 @@ export function ProvenanceChain({
                 {fact.epistemicStatus !== undefined ? (
                   <>
                     <dt>{t('状态', 'Status')}</dt>
-                    <dd className="mono">{fact.epistemicStatus}</dd>
+                    <dd data-testid="prov-fact-epistemic-status">
+                      {epistemicStatusLabel(fact.epistemicStatus, t)}
+                    </dd>
                   </>
                 ) : null}
                 <dt>{t('断言者', 'Asserted by')}</dt>
@@ -256,7 +265,7 @@ export function ProvenanceChain({
               <RefChip
                 kind="object"
                 id={activity.id}
-                name={activity.kind ?? null}
+                name={activity.kind !== undefined ? activityKindLabel(activity.kind, t) : null}
                 href={hrefFor?.('object', activity.id)}
                 size="s"
               />
@@ -264,7 +273,9 @@ export function ProvenanceChain({
                 {activity.status !== undefined ? (
                   <>
                     <dt>{t('状态', 'Status')}</dt>
-                    <dd className="mono">{activity.status}</dd>
+                    <dd data-testid="prov-activity-status">
+                      {activityStatusLabel(activity.status, t)}
+                    </dd>
                   </>
                 ) : null}
                 <dt>{t('发起者', 'Started by')}</dt>
@@ -293,7 +304,9 @@ export function ProvenanceChain({
               <RefChip
                 kind="object"
                 id={resolvedSource.id}
-                name={resolvedSource.kind ?? null}
+                name={
+                  resolvedSource.kind !== undefined ? sourceKindLabel(resolvedSource.kind, t) : null
+                }
                 href={hrefFor?.('object', resolvedSource.id)}
                 size="s"
               />
@@ -309,7 +322,9 @@ export function ProvenanceChain({
                 {resolvedSource.visibility !== undefined ? (
                   <>
                     <dt>{t('可见性', 'Visibility')}</dt>
-                    <dd className="mono">{resolvedSource.visibility}</dd>
+                    <dd data-testid="prov-source-visibility">
+                      {sourceVisibilityLabel(resolvedSource.visibility, t)}
+                    </dd>
                   </>
                 ) : null}
                 {resolvedSource.ownerPrincipal ? (

@@ -183,7 +183,12 @@ export function ApprovalCard({
         ) : null}
         <dt>{t('请求', 'Request')}</dt>
         <dd>
-          <RefChip kind="actionRequest" id={actionRequestId} name={null} size="s" />
+          <RefChip
+            kind="actionRequest"
+            id={actionRequestId}
+            name={t('本请求', 'This request')}
+            size="s"
+          />
         </dd>
       </dl>
 

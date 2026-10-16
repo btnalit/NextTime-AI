@@ -5,6 +5,7 @@ import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { auditHrefForNode } from '../../lib/graph-route.js';
 import { explainToProvenance } from '../../lib/graph-view.js';
 import { useT } from '../../lib/i18n.js';
+import { conflictTypeLabel } from '../../lib/labels.js';
 import { RouteLink } from '../kit/route-link.js';
 import { Drawer } from '../ui/Drawer.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
@@ -128,7 +129,10 @@ function ProvenanceBody({
                   key={conflict.id}
                   kind="object"
                   id={conflict.id}
-                  name={`Conflict · ${conflict.conflictType}`}
+                  name={t(
+                    `冲突 · ${conflictTypeLabel(conflict.conflictType, t)}`,
+                    `Conflict · ${conflictTypeLabel(conflict.conflictType, t)}`,
+                  )}
                   size="s"
                 />
               ))}

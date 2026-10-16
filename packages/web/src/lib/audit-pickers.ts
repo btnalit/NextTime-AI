@@ -17,13 +17,15 @@ import type {
   WorkerDefinitionWire,
 } from '@nexttime/shared';
 import { CAPABILITY_REGISTRY } from '@nexttime/shared';
+import { actionLabel } from './capability-labels.js';
 import type { CapabilityCaller } from './clients.js';
 import { actionKindTagText, formatRelative } from './format.js';
 import { objectDisplayName } from './graph-view.js';
 import type { Translate } from './i18n.js';
-import { roleLabel } from './labels.js';
+import { decisionStatusLabel, roleLabel, workerDefinitionKindLabel } from './labels.js';
 import { ownEntry } from './own.js';
 import { sameNameIds, withSameNameId } from './same-name.js';
+import { type StatusMachine, labelText, statusChipStyle } from './status-tone.js';
 
 /**
  * lib/audit-pickers: where the audit pages' id / name filters get their candidates from, so a
@@ -100,10 +102,16 @@ async function resolveNames(
   }
 }
 
+/** A state-machine value as its chip label (legacy sweep, console batch, 2026-10-16) — a
+ *  picker's `detail` is plain text, so it reads the label `<StatusChip>` would render. */
+function statusText(machine: StatusMachine, status: string, t: Translate): string {
+  return labelText(statusChipStyle(machine, status), t);
+}
+
 /** Ids of `resourceType` that appear in the newest audit rows (`audit_query`, auditor), newest
- *  first, labelled with the action that touched them — and with a name when `resolve_refs`
- *  knows the kind (principal, chat, task, …). */
-export function auditRecentSource(resourceType: string): PickerSource {
+ *  first, labelled with the action that touched them (`actionLabel`, never the raw name) — and
+ *  with a name when `resolve_refs` knows the kind (principal, chat, task, …). */
+export function auditRecentSource(resourceType: string, t: Translate): PickerSource {
   return {
     key: `audit_query:resource:${resourceType}`,
     searchable: false,
@@ -118,11 +126,12 @@ export function auditRecentSource(resourceType: string): PickerSource {
         rows.map((row) => {
           const id = row.resourceId ?? '';
           const name = names.get(id);
+          const action = actionLabel(row.action, t);
           return {
             id,
-            label: name ?? row.action,
+            label: name ?? action,
             detail: name
-              ? `${row.action} · ${formatRelative(row.createdAt)}`
+              ? `${action} · ${formatRelative(row.createdAt)}`
               : formatRelative(row.createdAt),
           };
         }),
@@ -172,7 +181,7 @@ export function decisionSource(t: Translate): PickerSource {
         page.items.map((decision) => ({
           id: decision.id,
           label: decision.summary ?? t('（无摘要）', '(no summary)'),
-          detail: `${decision.status} · ${formatRelative(decision.createdAt)}`,
+          detail: `${decisionStatusLabel(decision.status, t)} · ${formatRelative(decision.createdAt)}`,
         })),
       );
     },
@@ -242,7 +251,7 @@ export function operationNameSource(): PickerSource {
 export type ProvenanceNodeKind = 'decision' | 'fact' | 'activity';
 
 export function provenanceNodeSource(kind: ProvenanceNodeKind, t: Translate): PickerSource {
-  return kind === 'decision' ? decisionSource(t) : auditRecentSource(kind);
+  return kind === 'decision' ? decisionSource(t) : auditRecentSource(kind, t);
 }
 
 type SourceFactory = (t: Translate) => PickerSource;
@@ -305,7 +314,7 @@ const RESOURCE_SOURCES: Readonly<Record<string, SourceFactory>> = {
         page.items.map((op) => ({
           id: `${op.gatekeeperId}:${op.name}`,
           label: op.name,
-          detail: `${gates.get(op.gatekeeperId) ?? t('未知门', 'Unknown gate')} · ${op.status}`,
+          detail: `${gates.get(op.gatekeeperId) ?? t('未知门', 'Unknown gate')} · ${statusText('publishable', op.status, t)}`,
         })),
       );
     },
@@ -321,25 +330,29 @@ const RESOURCE_SOURCES: Readonly<Record<string, SourceFactory>> = {
     'q',
     withSameNameIds,
   ),
-  skill: listSource<SkillSummaryWire>('list_skills', { limit: PICKER_LIMIT }, (skill) => ({
+  skill: listSource<SkillSummaryWire>('list_skills', { limit: PICKER_LIMIT }, (skill, t) => ({
     id: skill.id,
     label: skill.name,
-    detail: skill.status,
+    detail: statusText('publishable', skill.status, t),
   })),
   procedure: listSource<ProcedureSummaryWire>(
     'list_procedures',
     { limit: PICKER_LIMIT },
-    (procedure) => ({ id: procedure.id, label: procedure.name, detail: procedure.status }),
+    (procedure, t) => ({
+      id: procedure.id,
+      label: procedure.name,
+      detail: statusText('publishable', procedure.status, t),
+    }),
   ),
   worker_definition: listSource<WorkerDefinitionWire>(
     'list_worker_definitions',
     { limit: PICKER_LIMIT },
-    (definition) => {
+    (definition, t) => {
       const name = definition.definition.name;
       return {
         id: definition.id,
         label: typeof name === 'string' && name !== '' ? name : definition.id.slice(0, 8),
-        detail: definition.kind,
+        detail: workerDefinitionKindLabel(definition.kind, t),
       };
     },
     undefined,
@@ -348,7 +361,11 @@ const RESOURCE_SOURCES: Readonly<Record<string, SourceFactory>> = {
   action_request: listSource<ActionRequestWire>(
     'list_action_requests',
     { limit: PICKER_LIMIT },
-    (request) => ({ id: request.id, label: request.actionKindTag, detail: request.status }),
+    (request, t) => ({
+      id: request.id,
+      label: request.actionKindTag,
+      detail: statusText('actionRequest', request.status, t),
+    }),
   ),
   chat: listSource<ChatWire>('list_chats', { includeArchived: true }, (chat, t) => ({
     id: chat.id,
@@ -365,11 +382,15 @@ const RESOURCE_SOURCES: Readonly<Record<string, SourceFactory>> = {
   connection_request: listSource<ConnectionRequestWire>(
     'list_connection_requests',
     {},
-    (request) => ({ id: request.id, label: request.target, detail: request.status }),
+    (request, t) => ({
+      id: request.id,
+      label: request.target,
+      detail: statusText('connectionRequest', request.status, t),
+    }),
   ),
-  task: listSource<TaskWire>('list_tasks', { limit: PICKER_LIMIT }, (task) => ({
+  task: listSource<TaskWire>('list_tasks', { limit: PICKER_LIMIT }, (task, t) => ({
     id: task.id,
-    label: task.status,
+    label: statusText('task', task.status, t),
     detail: formatRelative(task.createdAt),
   })),
   decision: (t) => decisionSource(t),
@@ -379,7 +400,7 @@ const RESOURCE_SOURCES: Readonly<Record<string, SourceFactory>> = {
  *  audit log as the fallback, or the audit log alone. `null` until a type is chosen. */
 export function resourceIdSource(resourceType: string, t: Translate): PickerSource | null {
   if (resourceType.trim() === '') return null;
-  const recent = auditRecentSource(resourceType);
+  const recent = auditRecentSource(resourceType, t);
   const factory = ownEntry(RESOURCE_SOURCES, resourceType);
   return factory ? { ...factory(t), fallback: recent } : recent;
 }

@@ -504,7 +504,9 @@ export function GateInstanceDetailPanel({
                 </span>
                 <dl className="definition-list">
                   <dt>{t('种类', 'Transport')}</dt>
-                  <dd>{instance.definition.transportKind}</dd>
+                  <dd data-testid="gate-instance-hosted-transport">
+                    {transportKindLabel(instance.definition.transportKind, t)}
+                  </dd>
                   <dt>{t('目标', 'Target')}</dt>
                   <dd className="mono">{instance.definition.target}</dd>
                   <dt>{t('凭证模式', 'Credential mode')}</dt>

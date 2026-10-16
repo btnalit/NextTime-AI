@@ -11,7 +11,7 @@ import {
   gateGrantMakesApprover,
 } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
-import { roleLabel } from '../../lib/labels.js';
+import { roleLabel, transportKindLabel } from '../../lib/labels.js';
 import { sameNameIds, withSameNameId } from '../../lib/same-name.js';
 import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
@@ -399,7 +399,7 @@ function GrantGateFormBody({
                     {row.name}
                     <SameNameId id={row.id} same={gateSame} />
                   </span>
-                  <span className="text-3 text-small">{row.kind}</span>
+                  <span className="text-3 text-small">{transportKindLabel(row.kind, t)}</span>
                 </label>
               ))
             )}

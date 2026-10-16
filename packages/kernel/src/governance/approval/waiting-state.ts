@@ -161,12 +161,19 @@ export const FAILURE_REASON_MAX = 1000;
  * points, and every character a reader cannot see (a bidi override, a zero-width or control
  * character) shown as `\u{XXXX}`; line breaks stay. Derived on read, like the waiting state: the
  * audit row is the record (I11). Keyed by row id; a row with no audited reason is absent.
+ * `truncated` (legacy 340): the shown text is the head of a longer reason, whose whole lives in
+ * the audit record.
  */
+export interface ActionRequestFailureReason {
+  readonly text: string;
+  readonly truncated: boolean;
+}
+
 export async function readActionRequestFailureReasons(
   client: PoolClient,
   workspaceId: string,
   rows: readonly Pick<ActionRequestRow, 'id' | 'status'>[],
-): Promise<ReadonlyMap<string, string>> {
+): Promise<ReadonlyMap<string, ActionRequestFailureReason>> {
   const ids = [
     ...new Set(
       rows
@@ -183,11 +190,14 @@ export async function readActionRequestFailureReasons(
      order by resource_id, created_at desc`,
     [workspaceId, ids],
   );
-  const reasons = new Map<string, string>();
+  const reasons = new Map<string, ActionRequestFailureReason>();
   for (const row of result.rows) {
     if (typeof row.reason !== 'string' || row.reason.trim() === '') continue;
     const redacted = redactSuspectedSecrets(row.reason, { secretFields: true }).value as string;
-    reasons.set(row.resource_id, shownReason(redacted));
+    reasons.set(row.resource_id, {
+      text: shownReason(redacted),
+      truncated: [...redacted].length > FAILURE_REASON_MAX,
+    });
   }
   return reasons;
 }

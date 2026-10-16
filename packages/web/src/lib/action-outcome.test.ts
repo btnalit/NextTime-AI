@@ -247,6 +247,25 @@ describe('failureKindOf / failureReading (S11 GO1)', () => {
     expect(read?.short).toMatch(/什么都没执行/);
     expect(read?.message).toMatch(/步骤被取消/);
     expect(read?.message).toMatch(/不需要处理/);
+    // Legacy 341: a row that does not say how far it got names neither case.
+    expect(read?.message).not.toMatch(/批准|等审批/);
+  });
+
+  it('legacy 341: a withdrawn request names only the case that happened', () => {
+    const approved = failureReading(
+      { status: 'withdrawn', approvalDecisionId: 'dec-1', policyDecision: 'require_approval' },
+      zh,
+    );
+    expect(approved?.message).toMatch(/已经批准过，但不会再执行/);
+    expect(approved?.message).not.toMatch(/等审批/);
+    const auto = failureReading({ status: 'withdrawn', policyDecision: 'allow' }, zh);
+    expect(auto?.message).toMatch(/已经批准过/);
+    const waiting = failureReading(
+      { status: 'withdrawn', approvalDecisionId: null, policyDecision: 'require_approval' },
+      zh,
+    );
+    expect(waiting?.message).toMatch(/还在等审批，现在不用再决定了/);
+    expect(waiting?.message).not.toMatch(/批准过/);
   });
 });
 
