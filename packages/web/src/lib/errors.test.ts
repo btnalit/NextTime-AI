@@ -65,11 +65,24 @@ describe('describeError', () => {
     expect(describeError(new RpcError(-32602, 'bad')).code).toBe('invalid_params');
     expect(describeError(new TurnAlreadyRunningError('busy')).code).toBe('turn_already_running');
     expect(describeError(new RpcError(-32099, 'weird')).code).toBe('rpc_-32099');
+    expect(describeError(new RpcError(-32016, 'excluded')).code).toBe(
+      'worker_definition_not_enabled',
+    );
+    // Legacy 336: -32014 by its message, `gatekeeper_error` when the message says nothing.
+    expect(describeError(new RpcError(-32014, 'gate_error: boom')).code).toBe('gatekeeper_error');
+    expect(
+      describeError(new RpcError(-32014, 'gatekeeper client: gate/apply timed out after 30000ms'))
+        .code,
+    ).toBe('gatekeeper_timeout');
   });
 
   it('derives a readable title for a wire code it has no curated label for', () => {
+    expect(describeError(new HttpError('capability_error', 'x', 'brand_new_code')).title).toBe(
+      'Brand new code',
+    );
+    // `depth_exceeded` used to be the example here; it has a curated title now.
     expect(describeError(new HttpError('capability_error', 'x', 'depth_exceeded')).title).toBe(
-      'Depth exceeded',
+      'Delegation too deep',
     );
   });
 

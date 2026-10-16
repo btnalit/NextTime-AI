@@ -150,7 +150,7 @@ export const SURFACES: readonly Surface[] = [
   },
   {
     id: 'catalog-procedures',
-    labelZh: '能力目录 · Procedure',
+    labelZh: '能力目录 · 流程',
     hash: '#/govern/catalog/procedures',
     role: 'owner',
     ready: (page) => heading(page, '能力目录'),

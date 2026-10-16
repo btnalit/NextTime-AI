@@ -452,7 +452,8 @@ describe('RefreshOperationGovernanceConfirm', () => {
     fireEvent.click(screen.getByTestId('align-gk-1'));
     const confirm = await screen.findByTestId('align-gk-1-confirm');
     expect(within(confirm).getAllByTestId('governance-diff-list-item')).toHaveLength(1);
-    expect(confirm.textContent).toContain('就地修正');
+    expect(confirm.textContent).toContain('直接改写');
+    expect(confirm.textContent).not.toContain('就地');
     const redefined = within(confirm).getByTestId('align-gk-1-redefined');
     expect(redefined.textContent).toContain('container.restart、container.logs');
 
@@ -1087,6 +1088,81 @@ describe('RefreshOperationGovernanceConfirm', () => {
       const held = await screen.findByTestId('resync-gk-1-held');
       expect(held.textContent).toContain('重新读取门的清单');
       expect(held.textContent).not.toContain('平台采用');
+    });
+
+    // Legacy 346 (UX re-check of #612): only what the gate tightens is written in place, so the
+    // description says 「就地」 of those names alone and names the loosened ones as revisions.
+    it('legacy 346: the sync description says 「就地」 only of what the gate tightens, and names what it loosens as revisions', async () => {
+      const tightened = {
+        name: 'stock.adjust',
+        existing: {
+          mode: 'execute',
+          blastRadius: 'low',
+          autoApprovable: true,
+          status: 'published',
+        },
+        announced: { mode: 'execute', blastRadius: 'high', autoApprovable: false },
+        differs: true,
+        definitionDiffers: false,
+        direction: 'tightened',
+      };
+      const loosened = {
+        name: 'stock.reserve',
+        existing: {
+          mode: 'execute',
+          blastRadius: 'high',
+          autoApprovable: false,
+          status: 'published',
+        },
+        announced: { mode: 'execute', blastRadius: 'low', autoApprovable: false },
+        differs: true,
+        definitionDiffers: false,
+        direction: 'loosened',
+        governanceByRevision: true,
+      };
+      const http = scriptedHttp({
+        preview_gatekeeper_resync: () =>
+          resyncPreview({ operationsAlreadyPresent: [tightened, loosened] }),
+      });
+      renderResync(http);
+      fireEvent.click(screen.getByTestId('resync-gk-1'));
+      const confirm = await screen.findByTestId('resync-gk-1-confirm');
+      expect(confirm.textContent).toContain('就地收紧 stock.adjust 的治理字段');
+      expect(confirm.textContent).toContain(
+        '门放宽的 stock.reserve 不就地改：只打开修订草稿，发布后才生效。',
+      );
+      expect(confirm.textContent).not.toContain('就地修正');
+      expect(confirm.textContent).not.toMatch(/就地收紧[^。]*stock\.reserve/);
+      expect(confirm.textContent).not.toContain('不再需要授权');
+    });
+
+    it('legacy 346: a sync that only tightens says so without a word about revisions', async () => {
+      const http = scriptedHttp({
+        preview_gatekeeper_resync: () =>
+          resyncPreview({
+            operationsAlreadyPresent: [
+              {
+                name: 'stock.adjust',
+                existing: {
+                  mode: 'execute',
+                  blastRadius: 'medium',
+                  autoApprovable: false,
+                  status: 'published',
+                },
+                announced: { mode: 'execute', blastRadius: 'high', autoApprovable: false },
+                differs: true,
+                definitionDiffers: false,
+                direction: 'tightened',
+              },
+            ],
+          }),
+      });
+      renderResync(http);
+      fireEvent.click(screen.getByTestId('resync-gk-1'));
+      const confirm = await screen.findByTestId('resync-gk-1-confirm');
+      expect(confirm.textContent).toContain('就地收紧 stock.adjust 的治理字段');
+      expect(confirm.textContent).not.toContain('门放宽的');
+      expect(confirm.textContent).not.toContain('就地修正');
     });
 
     it('review #493 on #612: a loosening the gate describes is not applied in place — the confirm says it opens a revision that takes effect once published, without danger styling, and the result links the draft', async () => {

@@ -194,6 +194,24 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
     zh: '这个版本里有对象类型或动作类型与本工作区另一个已发布的本体族重名；本次没有发布任何内容。请改名，或改动拥有该类型的那个本体族',
     en: 'An object type or action type in this version is already declared by another published ontology family in this workspace — nothing was published. Rename it, or change the family that owns it',
   },
+  // S7-E (`application/platform/runtime.ts`): the 运行层 page's refusals. Nothing changed in any of
+  // them. The allowlist is the host's configuration, so the operator is who widens it.
+  image_not_in_inventory: {
+    zh: '这个镜像不在已构建的镜像列表里，没有设为活动；先在主机或 CI 上构建它（见运维手册），再回来设置',
+    en: 'That image is not in the list of built images, so it was not set active — build it on the host or in CI first (see the operations runbook), then come back',
+  },
+  image_not_allowed: {
+    zh: '这个镜像不在运行层的镜像允许列表里，用它启动的容器都会被拒绝，所以没有改动；请运维把它加进主机配置的允许列表后再试',
+    en: 'That image is not in the runtime’s image allowlist — every container started from it would be refused, so nothing changed. Ask the operator to add it to the host’s allowlist, then retry',
+  },
+  runtime_unreachable: {
+    zh: '连不上运行层（worker-supervisor），没有做任何改动；稍后重试，反复出现时到「运行状态」查看它是否在运行',
+    en: 'The runtime (worker-supervisor) could not be reached, so nothing changed — retry shortly; if it keeps happening, check under Status whether it is running',
+  },
+  no_previous_settings_version: {
+    zh: '平台设置的历史里没有另一个活动镜像可以回滚，没有改动',
+    en: 'The platform settings history has no other active image to roll back to, so nothing changed',
+  },
 };
 
 /** The bilingual message for a platform capability failure, or `null` when the code is not one of
