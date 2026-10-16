@@ -1144,8 +1144,8 @@ function SelfConnectionRow({
                   'Its published Operations run again from the next call, and this workspace’s entry-agent Handles are re-issued.',
                 )
               : t(
-                  '从下一次调用起，这个门的全部 Operation 都被拒绝：智能体的调用、成员的读取和已排队的执行都一样，这个工作区的入口智能体凭证会重新签发。连接、它的 Operation 和历史都保留；暂停期间工作区不能自己解除、删除它或重新接入同一地址。随时可以恢复。',
-                  'From the next call on, every Operation of this gate is refused — agent calls, members’ reads and queued executions alike — and this workspace’s entry-agent Handles are re-issued. The connection, its Operations and their history stay; while it is suspended the workspace cannot lift it, delete it or connect the same address again. You can resume it at any time.',
+                  '从下一次调用起，这个门的全部 Operation 都被拒绝：智能体的调用、成员的读取和已排队的执行都一样，这个工作区的入口智能体凭证会重新签发。连接、它的 Operation 和历史都保留；暂停期间工作区不能自己解除、删除它或重新接入同一地址。暂停只管这一条连接，换个主机名或 IP 接入算新连接；要让工作区不能再自己接入这类门，在「接入包」里改它的模式。随时可以恢复。',
+                  'From the next call on, every Operation of this gate is refused — agent calls, members’ reads and queued executions alike — and this workspace’s entry-agent Handles are re-issued. The connection, its Operations and their history stay; while it is suspended the workspace cannot lift it, delete it or connect the same address again. The suspension covers this connection only — the gate under another host name or IP is a new connection; to stop workspaces connecting this kind of gate themselves, change its mode under Connectors. You can resume it at any time.',
                 )
           }
           target={`${connection.workspaceName} · ${connection.target}`}

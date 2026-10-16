@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { IllegalTransition, type Operation } from '@nexttime/shared';
+import { ADDRESS_CREDENTIAL_SQL, IllegalTransition, type Operation } from '@nexttime/shared';
 import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
@@ -33,6 +33,16 @@ const MIGRATION_0045 = path.join(MIGRATIONS_DIR, 'core', '0045_workspace_self_co
 const DATABASE_URL = process.env.DATABASE_URL;
 
 const SALT = 'e'.repeat(32);
+/** Synthetic — `.gitleaks.toml` allows fixtures spelled out from the alphabet. */
+const FAKE = 'abcdefghijklmnopqrstuvwxyz0123';
+
+describe('core 0045 backfill (no DB): judges addresses by the scrub preflight patterns', () => {
+  it('carries @nexttime/shared ADDRESS_CREDENTIAL_SQL verbatim, so the two cannot drift', async () => {
+    const migration = await readFile(MIGRATION_0045, 'utf8');
+    expect(migration).toContain(`'${ADDRESS_CREDENTIAL_SQL.password}'`);
+    expect(migration).toContain(`'${ADDRESS_CREDENTIAL_SQL.query}'`);
+  });
+});
 
 const OBSERVE_OP: Operation = {
   name: 'example.observe_thing',
@@ -150,15 +160,17 @@ describe.runIf(DATABASE_URL !== undefined)('application/gates/landing (integrati
     });
   });
 
-  it('self: a second landing at the same address (trailing slash or not) is refused, naming the Gatekeeper there', async () => {
+  it('self: a second landing at the same address, however it is spelled, is refused, naming the Gatekeeper there (#620 review P2-1)', async () => {
     const at = endpoint();
     const first = await landSelf(at);
-    const thrown = await landSelf(`${at}/`).catch((err: unknown) => err);
-    expect(thrown).toBeInstanceOf(GatekeeperLandingRefusedError);
-    expect(thrown).toMatchObject({
-      code: 'endpoint_already_connected',
-      gatekeeperId: first.gatekeeperId,
-    });
+    for (const spelling of [`${at}/`, `${at}//`, at.toUpperCase(), `${at}.:443/`]) {
+      const thrown = await landSelf(spelling).catch((err: unknown) => err);
+      expect(thrown, spelling).toBeInstanceOf(GatekeeperLandingRefusedError);
+      expect(thrown, spelling).toMatchObject({
+        code: 'endpoint_already_connected',
+        gatekeeperId: first.gatekeeperId,
+      });
+    }
   });
 
   it('self: one bad manifest entry rejects the whole landing — no Gatekeeper, no Operation, no origin row', async () => {
@@ -252,6 +264,68 @@ describe.runIf(DATABASE_URL !== undefined)('application/gates/landing (integrati
     expect(rows).toBe(1);
   });
 
+  it('core 0045 backfill: an address written before legacy 186 is copied with the credential cut out; the Gatekeeper keeps its own (#620 review M2)', async () => {
+    const orphanId = await inTx(async (client) => {
+      const activity = await startActivity(client, workspaceId, {
+        kind: 'test.orphan_gatekeeper',
+        principalId: ownerId,
+      });
+      const { gatekeeperId } = await registerGatekeeper(client, workspaceId, {
+        name: 'orphan-with-credential',
+        transportKind: 'http',
+        target: 'orphan-with-credential',
+        endpoint: endpoint(),
+        activityId: activity.id,
+        registeredBy: { id: ownerId, kind: 'human' },
+      });
+      await endActivity(client, workspaceId, activity.id, 'completed');
+      return gatekeeperId;
+    });
+    const host = `old-${randomUUID()}.example.invalid`;
+    const written = {
+      target: `https://ops:${FAKE}@${host}/d?token=${FAKE}`,
+      endpoint: `https://ops:${FAKE}@${host}/?api_key=${FAKE}#x`,
+    };
+    // What a Gatekeeper written before legacy 186 can hold (registerGatekeeper refuses it now).
+    await asSuperuser((client) =>
+      client.query(
+        `update objects set properties = properties || $3::jsonb
+          where workspace_id = $1 and id = $2`,
+        [workspaceId, orphanId, JSON.stringify(written)],
+      ),
+    );
+
+    const notices: string[] = [];
+    await asSuperuser(async (client) => {
+      const onNotice = (notice: { message?: string }) => notices.push(notice.message ?? '');
+      client.on('notice', onNotice);
+      try {
+        await client.query(await readFile(MIGRATION_0045, 'utf8'));
+      } finally {
+        client.off('notice', onNotice);
+      }
+    });
+
+    const { origin, properties } = await asSuperuser(async (client) => ({
+      origin: await findSelfConnection(client, workspaceId, orphanId),
+      properties: (
+        await client.query<{ properties: Record<string, unknown> }>(
+          'select properties from objects where workspace_id = $1 and id = $2',
+          [workspaceId, orphanId],
+        )
+      ).rows[0]?.properties,
+    }));
+    expect(origin).toMatchObject({
+      target: `https://ops@${host}/d`,
+      endpoint: `https://${host}/`,
+    });
+    expect(JSON.stringify(origin)).not.toContain(FAKE);
+    expect(properties).toMatchObject(written);
+    expect(notices.join('\n')).toMatch(
+      /core 0045: recorded \d+ self-connected Gatekeeper\(s\), [1-9]\d* of them with a credential cut out/,
+    );
+  });
+
   it('RLS: a workspace transaction can insert only an unsuspended row and never suspend one', async () => {
     const at = endpoint();
     const { gatekeeperId } = await landSelf(at);
@@ -291,5 +365,19 @@ describe.runIf(DATABASE_URL !== undefined)('application/gates/landing (integrati
         ),
       ),
     ).rejects.toThrow(/row-level security/);
+  });
+
+  it('RLS: a workspace transaction cannot delete a self row whose Gatekeeper has no catalog link — it would drop out of the platform’s sight (#620 review P3-1)', async () => {
+    const { gatekeeperId } = await landSelf(endpoint());
+    const deleted = await inTx((client) =>
+      client.query(
+        'delete from workspace_self_connections where workspace_id = $1 and gatekeeper_object_id = $2',
+        [workspaceId, gatekeeperId],
+      ),
+    );
+    expect(deleted.rowCount).toBe(0);
+    expect(
+      await inTx((client) => findSelfConnection(client, workspaceId, gatekeeperId)),
+    ).not.toBeNull();
   });
 });

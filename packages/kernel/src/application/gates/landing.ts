@@ -153,13 +153,15 @@ export async function assertSelfConnectionNotSuspended(
   gatekeeperId: string,
 ): Promise<void> {
   const selfConnection = await findSelfConnection(client, workspaceId, gatekeeperId);
-  if (selfConnection?.suspendedAt) {
-    throw new GatekeeperLandingRefusedError(
-      'self_connection_suspended',
-      gatekeeperId,
-      `Gatekeeper ${gatekeeperId} is a self connection the platform administrator suspended — it cannot be linked to a platform gate instance or re-synced until the administrator resumes it`,
-    );
-  }
+  if (selfConnection?.suspendedAt) throw selfConnectionSuspended(gatekeeperId);
+}
+
+function selfConnectionSuspended(gatekeeperId: string): GatekeeperLandingRefusedError {
+  return new GatekeeperLandingRefusedError(
+    'self_connection_suspended',
+    gatekeeperId,
+    `Gatekeeper ${gatekeeperId} is a self connection the platform administrator suspended — it cannot be linked to a platform gate instance or re-synced until the administrator resumes it`,
+  );
 }
 
 export async function landGatekeeper(
@@ -248,36 +250,45 @@ export async function landGatekeeper(
   // The origin record — exactly one per Gatekeeper.
   let resolvedRequest: ConnectionRequestRow | null = null;
   if (source.kind === 'catalog') {
-    if (source.existing) {
-      const before = await findSelfConnection(client, workspaceId, gatekeeperId);
-      if (before && (await deleteSelfConnection(client, workspaceId, gatekeeperId))) {
-        convertedSelfConnection = true;
-        await writeAudit(client, {
-          workspaceId,
-          actorPrincipalId: actor.id,
-          action: 'gatekeeper.self_connection_linked',
-          resourceType: 'gatekeeper',
-          resourceId: gatekeeperId,
-          payload: {
-            gateId: source.instance.gateId,
-            connector: source.instance.connector,
-            selfConnection: {
-              connector: before.connector,
-              target: before.target,
-              endpoint: before.endpoint,
-              connectedBy: before.connectedBy,
-              connectedAt: before.connectedAt.toISOString(),
-            },
-          },
-        });
-      }
-    }
+    // The link first: core 0045 lets a workspace delete its self-connection row only once the
+    // Gatekeeper has a link, so it never drops out of the platform's view (#620 review P3-1).
     await insertGateLink(client, {
       workspaceId,
       gateId: source.instance.gateId,
       gatekeeperObjectId: gatekeeperId,
       enabledBy: actor.id,
     });
+    const before = source.existing
+      ? await findSelfConnection(client, workspaceId, gatekeeperId)
+      : null;
+    if (before) {
+      // `assertSelfConnectionNotSuspended` ran before the import; a suspension committed since
+      // leaves the row undeletable (RLS: only unsuspended rows), and linking anyway would put a
+      // catalog link next to a suspended connection (#620 review M1) — refuse, so the whole
+      // landing rolls back.
+      if (!(await deleteSelfConnection(client, workspaceId, gatekeeperId))) {
+        throw selfConnectionSuspended(gatekeeperId);
+      }
+      convertedSelfConnection = true;
+      await writeAudit(client, {
+        workspaceId,
+        actorPrincipalId: actor.id,
+        action: 'gatekeeper.self_connection_linked',
+        resourceType: 'gatekeeper',
+        resourceId: gatekeeperId,
+        payload: {
+          gateId: source.instance.gateId,
+          connector: source.instance.connector,
+          selfConnection: {
+            connector: before.connector,
+            target: before.target,
+            endpoint: before.endpoint,
+            connectedBy: before.connectedBy,
+            connectedAt: before.connectedAt.toISOString(),
+          },
+        },
+      });
+    }
   } else {
     await insertSelfConnection(client, {
       workspaceId,

@@ -941,9 +941,8 @@ interface PlatformPolicyDbRow {
 }
 
 /** Both origins in one statement — a Gatekeeper has at most one row across the two (the landing
- *  deletes the self row when it links an existing Gatekeeper); were both ever present, the catalog
- *  row is the one `mapPlatformPolicy` keeps (`order by` below), since the platform credential and
- *  the deny list go with it. */
+ *  deletes the self row when it links an existing Gatekeeper, and rolls back when it cannot);
+ *  were both ever present, `pickPlatformPolicy` decides, not the row order. */
 const PLATFORM_POLICY_SELECT = `
   select l.gatekeeper_object_id, 'catalog' as origin, l.gate_id, g.connector, g.trust, g.status,
          c.disabled_operations, null::boolean as suspended
@@ -955,8 +954,19 @@ const PLATFORM_POLICY_SELECT = `
   select s.gatekeeper_object_id, 'self' as origin, null, s.connector, null, null, null,
          s.suspended_at is not null
     from workspace_self_connections s
-   where s.workspace_id = $1 and ($2::uuid is null or s.gatekeeper_object_id = $2::uuid)
-   order by 2`;
+   where s.workspace_id = $1 and ($2::uuid is null or s.gatekeeper_object_id = $2::uuid)`;
+
+/** One Gatekeeper's rows → its policy, fail-closed: a suspended self connection wins over
+ *  everything (the platform cut it off — a catalog link written next to it must not lift that,
+ *  #620 review M1); otherwise the catalog row, since the platform credential and the deny list go
+ *  with it; otherwise the self row. */
+function pickPlatformPolicy(rows: readonly PlatformPolicyDbRow[]): GatekeeperPlatformPolicy | null {
+  const row =
+    rows.find((candidate) => candidate.origin === 'self' && candidate.suspended === true) ??
+    rows.find((candidate) => candidate.origin === 'catalog') ??
+    rows[0];
+  return row ? mapPlatformPolicy(row) : null;
+}
 
 function mapPlatformPolicy(row: PlatformPolicyDbRow): GatekeeperPlatformPolicy {
   if (row.origin === 'self') {
@@ -981,8 +991,7 @@ export async function readGatekeeperPlatformPolicy(
     workspaceId,
     gatekeeperObjectId,
   ]);
-  const row = result.rows[0];
-  return row ? mapPlatformPolicy(row) : null;
+  return pickPlatformPolicy(result.rows);
 }
 
 /** `readGatekeeperPlatformPolicy`, batched across every Gatekeeper of the workspace in one query —
@@ -997,11 +1006,16 @@ export async function readGatekeeperPlatformPolicies(
     workspaceId,
     null,
   ]);
-  const byGatekeeperId = new Map<string, GatekeeperPlatformPolicy>();
+  const rowsByGatekeeperId = new Map<string, PlatformPolicyDbRow[]>();
   for (const row of result.rows) {
-    if (!byGatekeeperId.has(row.gatekeeper_object_id)) {
-      byGatekeeperId.set(row.gatekeeper_object_id, mapPlatformPolicy(row));
-    }
+    const rows = rowsByGatekeeperId.get(row.gatekeeper_object_id);
+    if (rows) rows.push(row);
+    else rowsByGatekeeperId.set(row.gatekeeper_object_id, [row]);
+  }
+  const byGatekeeperId = new Map<string, GatekeeperPlatformPolicy>();
+  for (const [gatekeeperId, rows] of rowsByGatekeeperId) {
+    const policy = pickPlatformPolicy(rows);
+    if (policy) byGatekeeperId.set(gatekeeperId, policy);
   }
   return byGatekeeperId;
 }

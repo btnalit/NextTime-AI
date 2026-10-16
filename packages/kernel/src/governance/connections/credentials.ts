@@ -1,4 +1,4 @@
-import { type AddressCredential, addressCredential } from '@nexttime/shared';
+import { type AddressCredential, SECRET_FIELD_MASK, addressCredential } from '@nexttime/shared';
 import { scrubSecretValues } from '../redaction/index.js';
 
 /**
@@ -130,4 +130,35 @@ export function assertConnectionParamsCarryNoCredentials(
   if (found !== null) {
     throw new ConnectionParamsCarryCredentialsError(capability, found.field, found.problem);
   }
+}
+
+/** `address` (a `target` or an `endpoint`) with what could carry a credential cut out, by
+ *  `findConnectionParamsCredential`'s rule — unchanged when the rule finds nothing: a URL loses its
+ *  user name and password, query and fragment; what is left still looking like a secret is masked
+ *  (`scrubSecretValues`), and if the rule would still refuse it, the whole value is
+ *  (`SECRET_FIELD_MASK`). The result always passes the rule, so a second pass changes nothing.
+ *
+ *  For a copy of an address someone reads — `workspace_self_connections`' (core 0045), which the
+ *  platform plane shows — never for one the kernel calls or the gate is registered at: that one is
+ *  refused on write and counted by the scrub for its owner to fix. */
+export function redactConnectionAddress(field: 'target' | 'endpoint', address: string): string {
+  const carries = (value: string) =>
+    findConnectionParamsCredential(field === 'target' ? { target: value } : { endpoint: value }) !==
+    null;
+  if (!carries(address)) return address;
+  let cut: string;
+  try {
+    const url = new URL(address);
+    url.username = '';
+    url.password = '';
+    url.search = '';
+    url.hash = '';
+    cut = url.href;
+  } catch {
+    cut = address;
+  }
+  // A bare trailing `?` / `#` survives `URL` (its `search` / `hash` are already ''), and text that
+  // is not a URL keeps its parameters until here.
+  cut = scrubSecretValues(cut.replace(/[?#][\s\S]*$/, '')).value;
+  return carries(cut) ? SECRET_FIELD_MASK : cut;
 }

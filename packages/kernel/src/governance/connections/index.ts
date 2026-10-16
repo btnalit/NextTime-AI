@@ -37,6 +37,7 @@ export {
   ConnectionParamsCarryCredentialsError,
   assertConnectionParamsCarryNoCredentials,
   findConnectionParamsCredential,
+  redactConnectionAddress,
 } from './credentials.js';
 export type { ConnectionCredentialField } from './credentials.js';
 export type { ConnectionRequestKind, ConnectionRequestRow } from './types.js';

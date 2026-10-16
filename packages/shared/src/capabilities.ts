@@ -3601,7 +3601,7 @@ const platformCapabilities = [
       .strict(),
     resultSchema: wire.SelfConnectionWireSchema,
     description:
-      'Cut off a gate a workspace connected itself: from the next call on, every Operation of it is refused as disabled by the platform — request_action, observe, queued executions and the agent’s tool list alike — and the workspace’s entry-agent Handles are re-issued. The connection, its Operations and its history stay; resume_self_connection lifts it. The workspace cannot lift it, delete it or reconnect the same address meanwhile. Suspending a suspended one changes nothing.',
+      'Cut off a gate a workspace connected itself: from the next call on, every Operation of it is refused as disabled by the platform — request_action, observe, queued executions and the agent’s tool list alike — and the workspace’s entry-agent Handles are re-issued. The connection, its Operations and its history stay; resume_self_connection lifts it. The workspace cannot lift it, delete it or connect the same address again meanwhile — another spelling of it included (scheme and host case, a trailing dot, the default port, trailing slashes). The suspension is this one connection’s: the gate reached under another host name or IP is a new connection; to stop workspaces connecting gates of a kind themselves, take that kind’s connector out of self_serve (set_connector_mode). Suspending a suspended one changes nothing.',
   },
   {
     name: 'resume_self_connection',

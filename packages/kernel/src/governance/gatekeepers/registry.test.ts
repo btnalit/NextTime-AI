@@ -241,9 +241,40 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/registry (int
 });
 
 describe('normalizeGateEndpoint (pure)', () => {
-  it('trims exactly one trailing slash', () => {
-    expect(normalizeGateEndpoint('https://x.invalid:8080')).toBe('https://x.invalid:8080');
-    expect(normalizeGateEndpoint('https://x.invalid:8080/')).toBe('https://x.invalid:8080');
-    expect(normalizeGateEndpoint('https://x.invalid:8080//')).toBe('https://x.invalid:8080/');
+  it.each([
+    'https://x.invalid:8080',
+    'https://x.invalid:8080/',
+    'https://x.invalid:8080//',
+    'HTTPS://X.Invalid:8080',
+    'https://x.invalid.:8080/',
+  ])('%s is the same address as https://x.invalid:8080', (spelling) => {
+    expect(normalizeGateEndpoint(spelling)).toBe('https://x.invalid:8080');
+  });
+
+  it.each([
+    ['http://gate.invalid:80/', 'http://gate.invalid'],
+    ['https://gate.invalid:443/base/', 'https://gate.invalid/base'],
+    ['http://GATE.invalid:8090/Base//', 'http://gate.invalid:8090/Base'],
+    ['ssh://DB-1.invalid:22/', 'ssh://db-1.invalid:22'],
+    ['http://[::1]:8090/', 'http://[::1]:8090'],
+  ])('%s → %s (default port dropped, path case kept)', (spelling, normal) => {
+    expect(normalizeGateEndpoint(spelling)).toBe(normal);
+  });
+
+  it('keeps addresses that differ apart', () => {
+    const distinct = [
+      'https://x.invalid:8080',
+      'http://x.invalid:8080',
+      'https://x.invalid:8081',
+      'https://y.invalid:8080',
+      'https://x.invalid:8080/base',
+      'https://x.invalid:8080/Base',
+    ];
+    expect(new Set(distinct.map(normalizeGateEndpoint)).size).toBe(distinct.length);
+  });
+
+  it('text that is not a URL with a host keeps the older rule: one trailing slash trimmed', () => {
+    expect(normalizeGateEndpoint('gate-host:8090/')).toBe('gate-host:8090');
+    expect(normalizeGateEndpoint('not a url//')).toBe('not a url/');
   });
 });

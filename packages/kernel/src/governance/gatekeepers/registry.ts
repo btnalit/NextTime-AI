@@ -280,11 +280,33 @@ export interface GatekeeperByEndpointEntry {
   readonly createdAt: Date;
 }
 
-/** Trims exactly one trailing `/`, nothing more (`http://x:80//` stays `http://x:80/`) — the
- *  association key's normalisation. Exported so `findGatekeepersByEndpoint`'s caller and its own
- *  SQL-free, single-source-of-truth comparison agree on the same rule without restating it. */
+/** The association key's normalisation — and P0b's "one address, one Gatekeeper" (the landing's
+ *  `endpoint_already_connected` and its lock): two spellings of one gate's address compare equal.
+ *  Parsed as a URL: scheme and host lower-cased (a scheme `URL` does not know, such as `ssh`,
+ *  included), a trailing dot dropped from the host, the scheme's default port dropped (`URL` knows
+ *  http / https / ws / wss / ftp), every trailing `/` of the path trimmed (`http://x:80//` →
+ *  `http://x`); the path's case, the query and the fragment are kept (an endpoint carries neither of
+ *  the last two — `findConnectionParamsCredential`). Text that is not a URL with a host keeps the
+ *  older rule: one trailing `/` trimmed. A different name or IP for the same host is a different
+ *  address — what the platform's per-connection suspension means for it is in
+ *  `suspend_self_connection`'s description (#620 review P2-1). Exported so
+ *  `findGatekeepersByEndpoint`'s callers and its own SQL-free comparison agree on one rule. */
 export function normalizeGateEndpoint(endpoint: string): string {
-  return endpoint.endsWith('/') ? endpoint.slice(0, -1) : endpoint;
+  let url: URL;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    return endpoint.endsWith('/') ? endpoint.slice(0, -1) : endpoint;
+  }
+  if (url.host === '') return endpoint.endsWith('/') ? endpoint.slice(0, -1) : endpoint;
+  const userinfo =
+    url.username !== '' || url.password !== ''
+      ? `${url.username}${url.password !== '' ? `:${url.password}` : ''}@`
+      : '';
+  const host = url.hostname.toLowerCase().replace(/\.$/, '');
+  const port = url.port !== '' ? `:${url.port}` : '';
+  const path = url.pathname.replace(/\/+$/, '');
+  return `${url.protocol.toLowerCase()}//${userinfo}${host}${port}${path}${url.search}${url.hash}`;
 }
 
 /** Every `Gatekeeper` Object in `workspaceId` whose own `endpoint` property equals `endpoint`

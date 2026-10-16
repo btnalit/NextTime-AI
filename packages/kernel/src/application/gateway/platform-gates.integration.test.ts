@@ -64,8 +64,11 @@ import { queryAudit } from '../../substrate/audit/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import {
   GatekeeperLandingRefusedError,
+  findGateLinkByGatekeeper,
   findSelfConnection,
   landGatekeeper,
+  operationPlatformStatus,
+  readGatekeeperPlatformPolicy,
   upsertAnnouncement,
 } from '../gates/index.js';
 import { createPlatformAdmin } from '../identity/index.js';
@@ -2632,6 +2635,91 @@ describe.runIf(DATABASE_URL !== undefined)(
               }),
             }),
           ]);
+        });
+
+        it('a suspension committed while the enable is converting it: the enable is refused and rolls back, and a catalog link next to a suspended row still cuts the gate off (#620 review M1)', async () => {
+          const other = await createWorkspaceWithOwner(pool, {
+            name: 'p0b-suspend-during-enable',
+            owner: { userId: admin.id, displayName: 'Racing Owner' },
+            ontologyDir: ONTOLOGY_DIR,
+          });
+          const ownerCaller = humanCallerFor(other.workspaceId, other.ownerPrincipalId, 'owner');
+          const legacyId = await landSelf(
+            other.workspaceId,
+            other.ownerPrincipalId,
+            cEndpoint,
+            selfSecrets.mint(other.workspaceId).salt,
+          );
+
+          // The administrator's suspension, held open: its row lock makes the enable's delete wait
+          // until it commits — after the enable's own "not suspended" check has already passed.
+          const suspender = await pool.connect();
+          let enable: Promise<unknown> | undefined;
+          try {
+            await suspender.query('begin');
+            await suspender.query(
+              `update workspace_self_connections set suspended_at = now(), suspended_by_user_id = $3
+                where workspace_id = $1 and gatekeeper_object_id = $2`,
+              [other.workspaceId, legacyId, admin.id],
+            );
+            enable = dispatchCapability({ pool }, ownerCaller, 'enable_gate_instance', {
+              gateId: CONSISTENCY_GATE_ID,
+            }).catch((err: unknown) => err);
+            const deadline = Date.now() + 15_000;
+            for (;;) {
+              const waiting = await pool.query<{ count: number }>(
+                `select count(*)::int as count from pg_stat_activity
+                  where wait_event_type = 'Lock' and query ilike '%delete from workspace_self_connections%'`,
+              );
+              if ((waiting.rows[0]?.count ?? 0) > 0) break;
+              if (Date.now() > deadline) throw new Error('the enable never reached the delete');
+              await new Promise((resolve) => setTimeout(resolve, 25));
+            }
+            await suspender.query('commit');
+          } finally {
+            suspender.release();
+          }
+
+          const refused = await enable;
+          expect(refused).toBeInstanceOf(GatekeeperLandingRefusedError);
+          expect(refused).toMatchObject({
+            code: 'self_connection_suspended',
+            gatekeeperId: legacyId,
+          });
+          const asOwner = <T>(fn: (c: PoolClient) => Promise<T>) =>
+            withWorkspace(
+              pool,
+              { workspaceId: other.workspaceId, principalId: other.ownerPrincipalId },
+              fn,
+            );
+          // Rolled back whole: no link, the suspended row is still there, nothing published.
+          expect(
+            await asOwner((c) => findGateLinkByGatekeeper(c, other.workspaceId, legacyId)),
+          ).toBeNull();
+          expect(
+            await asOwner((c) => findSelfConnection(c, other.workspaceId, legacyId)),
+          ).toMatchObject({ suspendedByUserId: admin.id });
+          expect(
+            await asOwner((c) =>
+              queryAudit(c, other.workspaceId, { action: 'gatekeeper.self_connection_linked' }),
+            ),
+          ).toEqual([]);
+
+          // The fail-closed read: were a catalog link ever written next to the suspended row, the
+          // suspension still decides — not the row order.
+          await pool.query(
+            `insert into workspace_gate_links (workspace_id, gate_id, gatekeeper_object_id, enabled_by)
+             values ($1, $2, $3, $4)`,
+            [other.workspaceId, CONSISTENCY_GATE_ID, legacyId, other.ownerPrincipalId],
+          );
+          const policy = await asOwner((c) =>
+            readGatekeeperPlatformPolicy(c, other.workspaceId, legacyId),
+          );
+          expect(policy).toMatchObject({ origin: 'self', suspended: true });
+          expect(operationPlatformStatus(policy, SELF_OP.name)).toMatchObject({
+            disabled: true,
+            reason: 'self_connection_suspended',
+          });
         });
       });
     });

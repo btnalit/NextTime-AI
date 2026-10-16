@@ -9,8 +9,11 @@ import type { PoolClient } from 'pg';
  * (application/gateway/platform-gates-handlers.ts).
  *
  * RLS (core 0045): a workspace transaction reads and inserts its own rows and deletes an
- * unsuspended one; only a platform transaction updates a row. `setSelfConnectionSuspension` is
- * therefore a platform-plane call — from a workspace transaction it would match no row.
+ * unsuspended one of a Gatekeeper that already has a catalog link; only a platform transaction
+ * updates a row. `setSelfConnectionSuspension` is therefore a platform-plane call — from a
+ * workspace transaction it would match no row. The one other writer is the raw-secret scrub's
+ * address rewrite (`selfConnectionAddressRewrite`, on the login role). Every statement that writes
+ * this table is in this file (`landing-path.guard.test.ts`).
  */
 
 export interface SelfConnectionRow {
@@ -107,8 +110,9 @@ export async function findSelfConnection(
 }
 
 /** The landing's origin conversion (a self-connected Gatekeeper linked to the platform instance at
- *  its address). `false` when no unsuspended row was deleted — RLS never lets a workspace delete a
- *  suspended one, and the landing refuses that case before it gets here. */
+ *  its address). `false` when no row was deleted — RLS lets a workspace delete only an unsuspended
+ *  row of a Gatekeeper that already has its catalog link, so a suspension committed since the
+ *  landing's check (or a link not written yet) ends here, and the landing refuses (#620 review M1). */
 export async function deleteSelfConnection(
   client: PoolClient,
   workspaceId: string,
@@ -120,6 +124,28 @@ export async function deleteSelfConnection(
     [workspaceId, gatekeeperObjectId],
   );
   return (result.rowCount ?? 0) > 0;
+}
+
+/** The raw-secret scrub's rewrite of one row's address copy (`scrub-raw-secrets`,
+ *  `selfConnectionAddresses`), conditional on the values it read — a row changed in between is left
+ *  for the next run. Runs on the login role, like the rest of the scrub. */
+export function selfConnectionAddressRewrite(
+  row: { readonly workspaceId: string; readonly gatekeeperObjectId: string },
+  read: { readonly target: string; readonly endpoint: string },
+  write: { readonly target: string; readonly endpoint: string },
+): { readonly sql: string; readonly params: readonly unknown[] } {
+  return {
+    sql: `update workspace_self_connections set target = $3, endpoint = $4
+           where workspace_id = $1 and gatekeeper_object_id = $2 and target = $5 and endpoint = $6`,
+    params: [
+      row.workspaceId,
+      row.gatekeeperObjectId,
+      write.target,
+      write.endpoint,
+      read.target,
+      read.endpoint,
+    ],
+  };
 }
 
 /** Platform plane: every self connection, newest first, optionally one connector's, one

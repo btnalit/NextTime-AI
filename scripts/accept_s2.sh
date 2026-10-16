@@ -641,7 +641,7 @@ landing_step() {
          and suspended_at is not null
       returning 1)
     select count(*) from u")
-  [ "$resumed" = "1" ] || fail "landing-suspend-refuses" "could not resume the http self connection (rows updated: '$resumed') — resume it on the integrations page before the next run"
+  [ "$resumed" = "1" ] || fail "landing-suspend-refuses" "could not resume the http self connection (rows updated: '$resumed') — this only affects this run's acceptance workspace; resume it on the integrations page before the next run"
   [ "$status" = "403" ] || fail "landing-suspend-refuses" "observe_operation while the self connection was suspended must be refused (403), got HTTP $status: $body"
   case "$body" in
     *operation_disabled*suspended*) : ;;
