@@ -7,7 +7,7 @@ import type {
   GateInstanceWire,
 } from '@nexttime/shared';
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
-import { useCapabilityList } from '../../hooks/useCapability.js';
+import { useCapability, useCapabilityList } from '../../hooks/useCapability.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
@@ -18,7 +18,7 @@ import {
   gatePathForKind,
   useGateInstancePoll,
 } from '../../lib/gate-instances.js';
-import type { GrantRow } from '../../lib/governance.js';
+import type { GrantRow, WorkspaceInfo } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
 import { GATE_ID_PATTERN } from '../../lib/platform-errors.js';
 import { type CatalogTab, hrefs } from '../../lib/router.js';
@@ -565,6 +565,12 @@ function ConnectionStep({
   // Review N2 of #567: platform-side only — a non-administrator's catalog never lists such an
   // instance, so nothing is read for them.
   const connectors = useConnectorsByName(http, { enabled: isAdmin });
+  // Review #501 on #571 ④: on a workspace page, "other workspaces" is said only of an instance this
+  // workspace enabled — read for an administrator only, the one who sees these badges.
+  const workspace = useCapability<WorkspaceInfo>(http, 'get_workspace', undefined, {
+    enabled: isAdmin && onWorkspace,
+  });
+  const workspaceId = workspace.state.status === 'ready' ? workspace.state.data.id : null;
 
   return (
     <div className="stack" data-testid="launcher-step-connection-body">
@@ -665,6 +671,7 @@ function ConnectionStep({
         selectedGateId={selected?.gateId ?? null}
         onSelect={onSelect}
         connectors={connectors}
+        workspaceId={workspaceId}
       />
 
       {path === 'hosted' && isAdmin ? (
@@ -708,6 +715,7 @@ function ExistingGatePicker({
   selectedGateId,
   onSelect,
   connectors,
+  workspaceId,
 }: {
   readonly kind: LauncherKind;
   readonly path: GatePath;
@@ -720,6 +728,8 @@ function ExistingGatePicker({
   /** Review N2 of #567: an administrator's rows say when no workspace (or no other workspace)
    *  can see the instance — `null` for a non-administrator or while the connectors load. */
   readonly connectors: ReadonlyMap<string, ConnectorWire> | null;
+  /** The workspace page's own id (review #501 on #571 ④), `null` on the platform side. */
+  readonly workspaceId: string | null;
 }) {
   const t = useT();
   const title =
@@ -776,7 +786,7 @@ function ExistingGatePicker({
                     className="chip chip-s chip-warn"
                     data-testid={`launcher-gate-hidden-${row.gateId}`}
                   >
-                    {hiddenInstanceBadge(row.platform, t)}
+                    {hiddenInstanceBadge(row.platform, t, workspaceId)}
                   </span>
                 ) : null}
               </span>

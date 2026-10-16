@@ -35,7 +35,7 @@ import {
   definitionName,
   sameNameDefinitionIds,
 } from '../lib/tasks.js';
-import { nameOf, useGatekeeperNames } from './approvals/useDirectoryNames.js';
+import { nameOf, useGatekeeperDirectory } from './approvals/useDirectoryNames.js';
 import { DraftExpiryNote, type EditorState } from './catalog/CatalogShared.js';
 import { DiscardReasonField } from './catalog/DiscardReasonField.js';
 import { GateOwnedParamsNotice } from './catalog/GateOwnedParamsNotice.js';
@@ -73,6 +73,7 @@ import { MasterDetail, nothingToPick } from './kit/master-detail.js';
 import { Notice } from './kit/notice.js';
 import { PageHeader } from './kit/page-header.js';
 import { RefChip } from './kit/ref-chip.js';
+import { SameNameId } from './kit/same-name-id.js';
 import { SkeletonRows } from './kit/skeleton.js';
 import { StatusChip } from './kit/status-chip.js';
 import { Tabs } from './kit/tabs.js';
@@ -885,7 +886,11 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   // transient error, whatever) never blocks the Operations list itself; a row simply renders "—"
   // for its usage columns when no matching stats entry comes back (see `statsFor` below).
   const stats = useCapabilityList<OperationStatsRow>(http, 'get_operation_stats');
-  const gatekeeperNames = useGatekeeperNames(http);
+  // Review #501 on #571 ②: two gates of one connector can carry the same display name too, so the
+  // list's gate label takes #561's same-name short id (the directory's own `same`).
+  const gatekeeperDirectory = useGatekeeperDirectory(http);
+  const gatekeeperNames = gatekeeperDirectory.names;
+  const gateSame = gatekeeperDirectory.same;
   const [rewritten, setRewritten] = useState<{
     readonly key: string;
     readonly params: readonly GateOwnedParamWire[];
@@ -906,6 +911,7 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   // UX acceptance of #567 P3 (#561's same-name class, on Operations): one name on two gates read
   // as two identical rows — those rows name their gate.
   const sharedNames = operationNamesOnSeveralGates(rows);
+
   const selected = itemId ? rows.find((row) => catalogOperationKey(row) === itemId) : undefined;
   const credentialReview = usePublishCredentialReview(itemId ?? null);
 
@@ -1037,6 +1043,7 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
                   {gateLabel !== null ? (
                     <span className="text-3 truncate" data-testid={`catalog-row-gate-${key}`}>
                       {t(`门：${gateLabel}`, `Gate: ${gateLabel}`)}
+                      <SameNameId id={row.gatekeeperId} same={gateSame} />
                     </span>
                   ) : null}
                 </span>

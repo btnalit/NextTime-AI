@@ -567,6 +567,11 @@ export type OperationGovernanceChangeWire = z.infer<typeof OperationGovernanceCh
 export const PendingGateManifestChangeWireSchema = OperationGovernanceChangeWireSchema.extend({
   name: z.string(),
   otherChangedFields: z.array(z.string()),
+  /** Review #501 on #571 ③: the params the *announced* definition declares that only the gate sets
+   *  (`GateOperationSummaryWire.gateOwnedParams`'s judgment). Present only when there are some:
+   *  once adopted, the revision each enabling workspace opens for this Operation is held back as
+   *  an unpublished draft. */
+  gateOwnedParams: z.array(GateOwnedParamWireSchema).optional(),
 }).strict();
 export type PendingGateManifestChangeWire = z.infer<typeof PendingGateManifestChangeWireSchema>;
 
@@ -757,8 +762,14 @@ export const GateInstanceEnablePreviewOperationWireSchema = z
      *  is `true` when `refresh_operation_governance` would rewrite it to the announced entry: it is
      *  the gate's own (`import`-origin) draft and the announcement differs from it (the same
      *  judgment, `importDraftDiffersFromAnnounced`). An agent's or person's proposal is never
-     *  rewritten. */
-    pendingDraft: z.object({ rewritable: z.boolean() }).strict().optional(),
+     *  rewritten. `fromGate` (review #501 on #571 ①) says which kind the draft is: `true` for the
+     *  gate's own import, `false` for a proposal the align never rewrites — so a console can tell
+     *  "the gate has not changed yet" from "this draft is not the gate's" when `rewritable` is
+     *  false. Absent from an older kernel. */
+    pendingDraft: z
+      .object({ rewritable: z.boolean(), fromGate: z.boolean().optional() })
+      .strict()
+      .optional(),
   })
   .strict();
 export type GateInstanceEnablePreviewOperationWire = z.infer<
@@ -791,6 +802,10 @@ export const GateInstanceEnablePreviewOperationPresentWireSchema = z
      *  published: `refresh_operation_governance` opens that revision as a draft for an owner to
      *  publish. Independent of `differs`, which compares only the governance fields. */
     definitionDiffers: z.boolean(),
+    /** Review #501 on #571 ③ (the workspace side): the params the announced definition declares
+     *  that only the gate sets. Present only when there are some — the revision an align opens for
+     *  a `definitionDiffers` entry would then be held back as an unpublished draft. */
+    gateOwnedParams: z.array(GateOwnedParamWireSchema).optional(),
   })
   .strict();
 export type GateInstanceEnablePreviewOperationPresentWire = z.infer<

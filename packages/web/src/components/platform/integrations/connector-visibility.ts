@@ -63,11 +63,35 @@ export function hiddenInstanceTitle(
       );
 }
 
-/** The list-row badge. */
+/** Whether `workspaceId` is one of the workspaces that enabled `instance`: `undefined` when that
+ *  cannot be told — no workspace in context, or the capped `enablingWorkspaces` list is cut short
+ *  and does not name it (an older kernel's row without the list reads as none enabled). */
+export function enabledHere(
+  instance: {
+    readonly enabledWorkspaceCount?: number;
+    readonly enablingWorkspaces?: readonly { readonly id: string }[];
+  },
+  workspaceId: string | null | undefined,
+): boolean | undefined {
+  if (!workspaceId) return undefined;
+  const listed = instance.enablingWorkspaces ?? [];
+  if (listed.some((workspace) => workspace.id === workspaceId)) return true;
+  return listed.length >= enabledIn(instance) ? false : undefined;
+}
+
+/** The list-row badge. With a workspace in context (the launcher on a workspace page), "the other
+ *  workspaces" is said only when this one enabled it; one this workspace has not enabled is
+ *  hidden from it too (review #501 on #571 ④). */
 export function hiddenInstanceBadge(
-  instance: { readonly enabledWorkspaceCount?: number },
+  instance: {
+    readonly enabledWorkspaceCount?: number;
+    readonly enablingWorkspaces?: readonly { readonly id: string }[];
+  },
   t: Translate,
+  workspaceId?: string | null,
 ): string {
+  const here = enabledHere(instance, workspaceId);
+  if (here === false) return t('本工作区看不到', 'Hidden from this workspace');
   return enabledIn(instance) > 0
     ? t('其他工作区看不到', 'Hidden from other workspaces')
     : t('工作区看不到', 'Hidden from workspaces');
