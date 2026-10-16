@@ -15,6 +15,7 @@ import { breadcrumbFor } from '../../lib/nav.js';
 import { isResidueWorkspace, residueWorkspacesHref } from '../../lib/platform-workspaces.js';
 import { type ProviderStatusKind, describeProviderHealth } from '../../lib/provider-status.js';
 import { hrefs } from '../../lib/router.js';
+import { labelText, statusChipStyle } from '../../lib/status-tone.js';
 import { BindApiKeyForm } from '../BindApiKeyForm.js';
 import { EmptyState as KitEmptyState } from '../kit/empty-state.js';
 import { KeyValue } from '../kit/key-value.js';
@@ -473,16 +474,22 @@ function PlatformOverviewBody({
 
       <DashboardCard title={t('服务健康', 'Health')}>
         <div className="row-wrap" data-testid="platform-health">
-          {data.health.map((entry) => (
-            <span
-              key={entry.service}
-              className={`chip ${HEALTH_CHIP_CLASS[entry.status]}`}
-              title={entry.detail ?? entry.status}
-              data-testid="platform-health-chip"
-            >
-              {entry.service}: {entry.status}
-            </span>
-          ))}
+          {data.health.map((entry) => {
+            // Legacy sweep (console batch, 2026-10-16): the status reads as the `serviceHealth`
+            // machine's label; the service's own `detail` stays as the tooltip.
+            const statusLabel = labelText(statusChipStyle('serviceHealth', entry.status), t);
+            return (
+              <span
+                key={entry.service}
+                className={`chip ${HEALTH_CHIP_CLASS[entry.status]}`}
+                title={entry.detail ?? statusLabel}
+                data-testid="platform-health-chip"
+                data-status={entry.status}
+              >
+                {entry.service}: {statusLabel}
+              </span>
+            );
+          })}
         </div>
       </DashboardCard>
 

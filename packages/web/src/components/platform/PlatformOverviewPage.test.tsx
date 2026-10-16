@@ -171,7 +171,10 @@ describe('PlatformOverviewPage', () => {
 
     const health = screen.getByTestId('platform-health');
     expect(health.textContent).toContain('kernel');
-    expect(health.textContent).toContain('degraded');
+    // Legacy sweep (console batch, 2026-10-16): the status reads as the serviceHealth label.
+    expect(health.textContent).toContain('kernel: 健康');
+    expect(health.textContent).toContain('llm-proxy: 降级');
+    expect(health.textContent).not.toContain('degraded');
 
     const audit = screen.getByTestId('platform-overview-audit');
     // P1-14: a row is named for what happened, never by its interface name.

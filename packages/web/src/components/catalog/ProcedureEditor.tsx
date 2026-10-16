@@ -20,6 +20,7 @@ import { actionKindTagText } from '../../lib/format.js';
 import { type OperationChoice, useGateOperations } from '../../lib/gate-operations.js';
 import type { GatekeeperListRow, ProcedureRow } from '../../lib/governance.js';
 import { type Translate, useT } from '../../lib/i18n.js';
+import { transportKindLabel } from '../../lib/labels.js';
 import { hrefs } from '../../lib/router.js';
 import { sameNameIds, withSameNameId } from '../../lib/same-name.js';
 import { BLAST_RADIUS_TONES } from '../../lib/status-tone.js';
@@ -140,7 +141,7 @@ function OperationStepFields({
               <option value="">{t('选择一个门…', 'Choose a gate…')}</option>
               {gatekeepers.map((row) => (
                 <option key={row.id} value={row.id}>
-                  {withSameNameId(row.name, row.id, gateSame)} · {row.kind}
+                  {withSameNameId(row.name, row.id, gateSame)} · {transportKindLabel(row.kind, t)}
                 </option>
               ))}
             </Select>

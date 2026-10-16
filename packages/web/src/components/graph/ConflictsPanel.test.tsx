@@ -76,6 +76,8 @@ describe('ConflictsPanel — R-47: the two Facts are on screen before a side is 
     expect(http.callsTo('explain')).toEqual([]);
     // No resolve control until the comparison is open.
     expect(screen.queryByTestId('graph-conflict-resolve')).toBeNull();
+    // Legacy sweep (console batch, 2026-10-16): the conflict type reads as a label.
+    expect(screen.getByTestId('graph-conflict-type').textContent).toBe('取值冲突');
 
     fireEvent.click(screen.getByTestId('graph-conflict-review'));
     const sides = await screen.findAllByTestId('graph-conflict-side');
@@ -86,6 +88,7 @@ describe('ConflictsPanel — R-47: the two Facts are on screen before a side is 
 
     const [a, b] = sides as [HTMLElement, HTMLElement];
     expect(a.textContent).toContain('runs_on');
+    expect(a.textContent).toContain('观测');
     // Each side links to its Objects' own view (the object view of the graph page).
     // (Once the two Objects' names have resolved — a bare-id chip carries no link.)
     await waitFor(() => {

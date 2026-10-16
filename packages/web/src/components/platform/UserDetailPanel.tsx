@@ -24,6 +24,9 @@ export interface UserDetailPanelProps {
   readonly user: UserWire;
   /** `NEXTTIME_PLATFORM_ADMINS` logins (design §6.6) — never disabled, never demoted. */
   readonly envAdmins: readonly string[];
+  /** This row is the signed-in user — the kernel refuses `self_disable`, so no 「停用」 is offered
+   *  (console legacy sweep 2026-10-16: a button that is always refused is not shown). */
+  readonly isSelf?: boolean;
   /** A capability that answered with a fresh `UserWire` for this row. */
   readonly onChanged: (user: UserWire) => void;
   /** `merge_user` folded this row into another — the row is gone, the list must be re-read. */
@@ -76,6 +79,7 @@ export function UserDetailPanel({
   http,
   user,
   envAdmins,
+  isSelf = false,
   onChanged,
   onMerged,
   onTemporaryPassword,
@@ -437,6 +441,13 @@ export function UserDetailPanel({
             </Button>
           </div>
         </div>
+      ) : isSelf ? (
+        <p className="text-3 text-small" data-testid="user-self-no-disable">
+          {t(
+            '这是你自己的账户，不能在这里停用；需要停用时请另一位管理员来操作。',
+            'This is your own account, so it cannot be disabled here — ask another administrator.',
+          )}
+        </p>
       ) : (
         <div className="row" style={{ justifyContent: 'flex-end' }}>
           <span title={protectedAdmin ? envAdminTitle(t) : undefined}>

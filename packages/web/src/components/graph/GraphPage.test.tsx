@@ -135,7 +135,9 @@ describe('GraphPage', () => {
       within(byId.get('f-2') as HTMLElement).getByTestId('graph-fact-conflict').textContent,
     ).toBe('冲突 ×1');
     expect(byId.get('f-3')?.getAttribute('data-freshness')).toBe('unobserved');
-    expect(within(byId.get('f-3') as HTMLElement).getByText('asserted')).toBeTruthy();
+    // Legacy sweep (console batch, 2026-10-16): the epistemic status reads as a label.
+    expect(within(byId.get('f-3') as HTMLElement).getByText('断言')).toBeTruthy();
+    expect(within(byId.get('f-3') as HTMLElement).queryByText('asserted')).toBeNull();
     expect(within(byId.get('f-1') as HTMLElement).getByText('置信 0.95')).toBeTruthy();
 
     // Neighbour names: the Containers were not in the Host-only search, so they resolve through

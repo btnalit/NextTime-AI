@@ -114,7 +114,14 @@ describe('ProcedureEditor (S6-A A2)', () => {
     fireEvent.change(within(first).getByTestId('procedure-step-kind'), {
       target: { value: 'operation' },
     });
-    fireEvent.change(within(first).getByLabelText(/门/), { target: { value: 'gk-1' } });
+    const gateSelect = within(first).getByLabelText(/门/) as HTMLSelectElement;
+    // Legacy sweep (console batch, 2026-10-16): the gate option names its kind as HTTP, not http.
+    await waitFor(() =>
+      expect([...gateSelect.options].map((option) => option.textContent)).toContain(
+        'docker-prod · HTTP',
+      ),
+    );
+    fireEvent.change(gateSelect, { target: { value: 'gk-1' } });
     const operationInput = within(first).getByTestId(
       'procedure-step-operation',
     ) as HTMLInputElement;

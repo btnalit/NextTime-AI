@@ -235,7 +235,12 @@ export function actionOutcomeChip(
  * at.
  */
 export function failureReading(
-  row: { readonly status: string; readonly failureKind?: string | null },
+  row: {
+    readonly status: string;
+    readonly failureKind?: string | null;
+    readonly approvalDecisionId?: string | null;
+    readonly policyDecision?: string | null;
+  },
   t: Translate,
   check?: { readonly system?: string | null; readonly action?: string | null },
 ): {
@@ -248,14 +253,32 @@ export function failureReading(
   // Legacy 328 (UX acceptance of #601, P2-2): a withdrawn request ended without running — say why
   // and that nothing is owed, not only 「已撤回」. Never `executing` (the transition table refuses it).
   if (row.status === 'withdrawn') {
+    // Legacy 341 (UX acceptance of #609, P3-1): only the case that happened — approved (by a
+    // person, or by policy) before it was withdrawn, or still waiting for a decision; a row that
+    // does not say which gets neither.
+    const approved =
+      typeof row.approvalDecisionId === 'string' || row.policyDecision === 'allow'
+        ? true
+        : row.policyDecision === 'require_approval'
+          ? false
+          : null;
+    const owed =
+      approved === true
+        ? t('它已经批准过，但不会再执行。', 'It had been approved, and it will not run now.')
+        : approved === false
+          ? t(
+              '撤回时它还在等审批，现在不用再决定了。',
+              'It was waiting for a decision, and none is needed now.',
+            )
+          : '';
     return {
       kind: 'withdrawn',
       tone: 'info',
       short: t('什么都没执行，不需要处理', 'Nothing ran — nothing to do'),
       title: t('已撤回：什么都没执行', 'Withdrawn: nothing ran'),
       message: t(
-        '它所属的步骤被取消，或在计划修订中被移除，平台在它执行之前把它撤回了。目标系统没有任何变化，不需要处理：待审批的不用再决定，已批准的也不会再执行。',
-        'Its step was cancelled or removed when the plan was revised, so the platform took it back before it ran. Nothing changed on the target system and nothing is needed: a pending one needs no decision, and an approved one will not run.',
+        `它所属的步骤被取消，或在计划修订中被移除，平台在它执行之前把它撤回了。目标系统没有任何变化，不需要处理。${owed}`,
+        `Its step was cancelled or removed when the plan was revised, so the platform took it back before it ran. Nothing changed on the target system and nothing is needed. ${owed}`.trimEnd(),
       ),
     };
   }

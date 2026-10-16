@@ -17,6 +17,7 @@ import { actionKindTagText, formatDateTime, formatRelative } from '../../lib/for
 import { auditHrefForNode } from '../../lib/graph-route.js';
 import { isoToLocalInput, localInputToIso } from '../../lib/graph-view.js';
 import { useLang, useT } from '../../lib/i18n.js';
+import { decisionStatusLabel } from '../../lib/labels.js';
 import { capabilityHolders } from '../../lib/role-holders.js';
 import { hrefs } from '../../lib/router.js';
 import { Button } from '../kit/button.js';
@@ -397,7 +398,9 @@ function PrecedentsTool({ http }: { readonly http: CapabilityCaller }) {
                     <RouteLink href={auditHrefForNode(decision.id)} className="mono">
                       {decision.id.slice(0, 8)}
                     </RouteLink>
-                    <span className="tag mono">{decision.status}</span>
+                    <span className="tag" data-testid="precedent-status">
+                      {decisionStatusLabel(decision.status, t)}
+                    </span>
                   </div>
                   <div className="data-row-meta">
                     {decision.summary ? <span>{decision.summary}</span> : null}

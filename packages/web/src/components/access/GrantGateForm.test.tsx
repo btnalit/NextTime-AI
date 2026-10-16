@@ -172,6 +172,10 @@ describe('GrantGateForm', () => {
     render(<GrantGateForm http={http} onGranted={vi.fn()} />);
 
     await selectMember('p-1');
+    // Legacy sweep (console batch, 2026-10-16): the gate's kind reads as its label (CLI).
+    const gateRow = (await screen.findByTestId('ggf-gate-gk-1')).closest('label') as HTMLElement;
+    expect(gateRow.textContent).toContain('CLI');
+    expect(gateRow.textContent).not.toContain('cli');
     fireEvent.click(await screen.findByTestId('ggf-gate-gk-1'));
     const list = await screen.findByTestId('ggf-operations-list');
     expect(list.textContent).toContain('container.restart');

@@ -293,6 +293,30 @@ describe('SystemsPage', () => {
     expect(allTab.getAttribute('aria-selected')).toBe('false');
   });
 
+  it('legacy sweep (console batch, 2026-10-16): a connection request names its kind as SSH, not the raw ssh', async () => {
+    const http = scriptedHttp({
+      list_connection_requests: () => ({
+        items: [
+          {
+            id: 'cr-1',
+            status: 'requested',
+            kind: 'ssh',
+            target: 'ops@build-01',
+            requestedBy: 'p-2',
+            gatekeeperId: null,
+            completedBy: null,
+            requestedAt: '2026-09-01T00:00:00.000Z',
+            completedAt: null,
+          },
+        ],
+      }),
+    });
+    renderPage(http);
+    const row = await screen.findByTestId('request-row');
+    expect(within(row).getByTestId('request-kind').textContent).toBe('SSH');
+    expect(within(row).queryByText('ssh')).toBeNull();
+  });
+
   it('owner view: shows every grantee with a reachability chip and reason, and wires grant + revoke', async () => {
     const http = scriptedHttp({
       execution_readiness: (params) => {

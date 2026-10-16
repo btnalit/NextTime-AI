@@ -1,5 +1,5 @@
-import { ACTION_REQUEST_STATUS_VALUES } from '@nexttime/shared';
-import type { ActionRequestStatus } from '@nexttime/shared';
+import { ACTION_REQUEST_FAILURE_KIND_VALUES, ACTION_REQUEST_STATUS_VALUES } from '@nexttime/shared';
+import type { ActionRequestFailureKind, ActionRequestStatus } from '@nexttime/shared';
 import { useEffect, useMemo, useState } from 'react';
 import { useAskForAccess } from '../hooks/useAskForAccess.js';
 import { useCapabilityList } from '../hooks/useCapability.js';
@@ -58,6 +58,20 @@ export interface ApprovalQueuePageProps {
 
 type Filter = 'pending' | 'history';
 type HistoryStatusFilter = 'all' | ActionRequestStatus;
+/** Legacy 331: the history narrowed to one kind of failure (`list_action_requests{failureKind}`). */
+type HistoryFailureFilter = 'all' | ActionRequestFailureKind;
+
+/** The failure kinds as a person would sort them — the same words `failureReading` uses. */
+function failureKindOptionText(kind: ActionRequestFailureKind, t: Translate): string {
+  switch (kind) {
+    case 'not_delivered':
+      return t('没发出（什么都没执行）', 'Not sent (nothing ran)');
+    case 'refused':
+      return t('被拒绝或执行失败', 'Refused or failed');
+    case 'outcome_unknown':
+      return t('结果不明（需要核对）', 'Outcome unknown (check it)');
+  }
+}
 
 const HISTORY_PAGE_SIZE = 50;
 
@@ -483,11 +497,17 @@ function ApprovalHistoryTab({
   const t = useT();
   const ask = useAskForAccess(http);
   const [statusFilter, setStatusFilter] = useState<HistoryStatusFilter>('all');
+  const [failureFilter, setFailureFilter] = useState<HistoryFailureFilter>('all');
+  // A failure kind is only on a failed or compensated row: any other status with a kind is an
+  // empty list, so choosing a kind clears such a status rather than leaving a dead combination.
+  const statusCanFail =
+    statusFilter === 'all' || statusFilter === 'failed' || statusFilter === 'compensated';
   const params = useMemo(() => {
     const next: Record<string, unknown> = { limit: HISTORY_PAGE_SIZE };
     if (statusFilter !== 'all') next.status = statusFilter;
+    if (failureFilter !== 'all') next.failureKind = failureFilter;
     return next;
-  }, [statusFilter]);
+  }, [statusFilter, failureFilter]);
   const history = useCapabilityList<ActionRequestRow>(http, 'list_action_requests', params);
   const forbidden = history.state.status === 'error' && isForbiddenError(history.state.error);
   const rows = history.state.status === 'ready' ? history.state.data.items : [];
@@ -507,13 +527,38 @@ function ApprovalHistoryTab({
             id="approval-history-status"
             label={t('状态', 'Status')}
             value={statusFilter}
-            onChange={(event) => setStatusFilter(event.target.value as HistoryStatusFilter)}
+            onChange={(event) => {
+              const next = event.target.value as HistoryStatusFilter;
+              setStatusFilter(next);
+              if (next !== 'all' && next !== 'failed' && next !== 'compensated') {
+                setFailureFilter('all');
+              }
+            }}
             className="approvals-status-select"
           >
             <option value="all">{t('全部', 'All statuses')}</option>
             {ACTION_REQUEST_STATUS_VALUES.map((status) => (
               <option key={status} value={status}>
                 {labelText(statusChipStyle('actionRequest', status), t)}
+              </option>
+            ))}
+          </Select>
+          <Select
+            id="approval-history-failure-kind"
+            label={t('失败类别', 'Failure kind')}
+            value={failureFilter}
+            onChange={(event) => {
+              const next = event.target.value as HistoryFailureFilter;
+              setFailureFilter(next);
+              if (next !== 'all' && !statusCanFail) setStatusFilter('all');
+            }}
+            className="approvals-status-select"
+            data-testid="approval-history-failure-kind"
+          >
+            <option value="all">{t('全部', 'Any')}</option>
+            {ACTION_REQUEST_FAILURE_KIND_VALUES.map((kind) => (
+              <option key={kind} value={kind}>
+                {failureKindOptionText(kind, t)}
               </option>
             ))}
           </Select>

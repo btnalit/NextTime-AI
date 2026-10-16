@@ -186,6 +186,13 @@ describe('UserDetailPanel', () => {
     expect((screen.getByLabelText(/重置密码/) as HTMLInputElement).value).toBe('');
   });
 
+  it('console sweep: your own account offers no 「停用」 (the kernel refuses self_disable) and says why', () => {
+    const http = scriptedHttp({});
+    renderPanel(http, user(), { isSelf: true });
+    expect(screen.queryByRole('button', { name: '停用' })).toBeNull();
+    expect(screen.getByTestId('user-self-no-disable').textContent).toContain('另一位管理员');
+  });
+
   it('disable: a confirm step, then set_user_status; enable acts directly', async () => {
     const row = user();
     const http = scriptedHttp({

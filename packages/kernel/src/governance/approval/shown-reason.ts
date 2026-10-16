@@ -23,12 +23,26 @@ import { redactSuspectedSecrets } from '../redaction/index.js';
  *  error sentence, never a whole response body. */
 export const SHOWN_REASON_MAX = 1000;
 
-/** An audited reason as it is shown; `null` when there is none (not a string, or blank). */
-export function shownAuditReason(reason: unknown): string | null {
+/** An audited reason as it is shown, plus whether step 2 cut it (legacy 339: the wire's
+ *  `failureReasonTruncated`, so the console can say the rest is in the audit record) — measured on
+ *  the same redacted text step 2 clips, so the flag and the shown text never disagree. */
+export interface ShownAuditReason {
+  readonly text: string;
+  readonly truncated: boolean;
+}
+
+/** {@link shownAuditReason} with whether it was clipped; `null` when there is no reason. */
+export function shownAuditReasonWithTruncation(reason: unknown): ShownAuditReason | null {
   if (typeof reason !== 'string' || reason.trim() === '') return null;
   const redacted = redactSuspectedSecrets(reason, { secretFields: true }).value as string;
-  return clipCodePoints(redacted, SHOWN_REASON_MAX)
+  const text = clipCodePoints(redacted, SHOWN_REASON_MAX)
     .split('\n')
     .map((line) => visibleText(line.replace(/\r$/, '')))
     .join('\n');
+  return { text, truncated: [...redacted].length > SHOWN_REASON_MAX };
+}
+
+/** An audited reason as it is shown; `null` when there is none (not a string, or blank). */
+export function shownAuditReason(reason: unknown): string | null {
+  return shownAuditReasonWithTruncation(reason)?.text ?? null;
 }

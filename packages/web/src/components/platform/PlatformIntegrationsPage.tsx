@@ -739,7 +739,7 @@ function GateInstancesTab({
                     </div>
                   </td>
                   <td className="mono">{row.connector}</td>
-                  <td>{row.transportKind}</td>
+                  <td>{transportKindLabel(row.transportKind, t)}</td>
                   <td>
                     <StatusChip
                       machine="gateInstance"

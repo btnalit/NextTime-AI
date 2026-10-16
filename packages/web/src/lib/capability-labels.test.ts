@@ -16,6 +16,7 @@ const CAPABILITY_NAMES = CAPABILITY_REGISTRY.map((capability) => capability.name
 const OTHER_AUDIT_ACTIONS = [
   'operation.description_updated',
   'operation.governance_refreshed',
+  'operation.revision_drafted',
   'draft.expired',
   'agent_profile.lists_reset_to_follow_grants',
   'policy.auto_approve_rescoped',
@@ -44,6 +45,7 @@ const OTHER_AUDIT_ACTIONS = [
   'cli.service_handle_issued',
   'cli.platform_admin_created',
   'cli.password_set',
+  'cli.raw_secrets_scrubbed',
 ] as const;
 
 describe('lib/capability-labels', () => {
@@ -106,6 +108,9 @@ describe('lib/capability-labels', () => {
     expect(actionLabel('list_platform_models', zhT)).toBe('列出平台模型');
     expect(actionLabel('list_platform_models', enT)).toBe('List platform models');
     expect(actionLabel('action_request.approve', zhT)).toBe('动作请求已批准');
+    // Legacy sweep (console batch, 2026-10-16): two kernel audit actions that showed raw.
+    expect(actionLabel('operation.revision_drafted', zhT)).toBe('已生成修订草稿');
+    expect(actionLabel('cli.raw_secrets_scrubbed', zhT)).toBe('命令行清除明文凭据');
   });
 
   it('actionLabel falls back to the raw name for an unknown action', () => {

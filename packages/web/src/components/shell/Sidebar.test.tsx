@@ -276,6 +276,9 @@ describe('Sidebar', () => {
     const badge = screen.getByTestId('role-badge');
     // S8 W1-A10: the role StatusChip is bilingual now; default zh-CN renders '审计员'.
     expect(badge.textContent).toBe('审计员');
+    // Legacy sweep (console batch, 2026-10-16): so does its tooltip, never the raw role.
+    expect(badge.getAttribute('title')).toBe('角色：审计员');
+    expect(badge.getAttribute('title')).not.toContain('auditor');
   });
 
   it('renders the kernel version and current user in the footer only when known (S6-A0)', () => {

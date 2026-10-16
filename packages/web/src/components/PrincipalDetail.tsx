@@ -27,6 +27,12 @@ export interface PrincipalDetailProps {
   readonly http: CapabilityCaller;
   readonly principal: PrincipalRow;
   readonly canManage: boolean;
+  /** The drawer shows the caller's own Principal — the kernel refuses `self_disable`, so no
+   *  「停用成员」 is offered (console legacy sweep 2026-10-16: an always-refused button is not shown). */
+  readonly isSelf?: boolean;
+  /** This is the workspace's last active human owner — the kernel refuses (`last_owner`) moving
+   *  it off owner or disabling it, so neither is offered; the drawer says why instead. */
+  readonly lastActiveOwner?: boolean;
   readonly onChanged: (principal: PrincipalRow) => void;
   readonly onForbidden: (capabilityName: CapabilityName) => void;
 }
@@ -59,6 +65,8 @@ export function PrincipalDetail({
   http,
   principal,
   canManage,
+  isSelf = false,
+  lastActiveOwner = false,
   onChanged,
   onForbidden,
 }: PrincipalDetailProps) {
@@ -231,57 +239,68 @@ export function PrincipalDetail({
 
         {canManage && !platformManaged ? (
           <DrawerSection title={t('编辑', 'Edit')}>
-            <Field
-              id="principal-role"
-              label={t('角色', 'Role')}
-              hint={roleDescription(role, t) ?? undefined}
-            >
-              <div className="row">
-                <Select
+            {lastActiveOwner ? (
+              <p className="text-3 text-small" data-testid="principal-last-owner">
+                {t(
+                  '这是工作区里最后一位有效的所有者，不能改成其他角色，也不能停用；请先把另一位成员设为所有者。',
+                  "This is the workspace's last active owner, so the role cannot change and it cannot be disabled — make another member an owner first.",
+                )}
+              </p>
+            ) : (
+              <>
+                <Field
                   id="principal-role"
-                  aria-label={t('角色', 'Role')}
-                  className="select-fit"
-                  value={role}
-                  onChange={(event) => setRole(event.target.value as Role)}
-                  disabled={savingRole || disabled}
+                  label={t('角色', 'Role')}
+                  hint={roleDescription(role, t) ?? undefined}
                 >
-                  {ROLE_VALUES.map((value) => (
-                    <option key={value} value={value}>
-                      {roleLabel(value, t)}
-                    </option>
-                  ))}
-                </Select>
-                <Confirm
-                  tier="irreversible"
-                  open={confirmingOwner}
-                  onOpenChange={setConfirmingOwner}
-                  anchor={
-                    // ux-lint-allow-disabled: the picked role is the current one.
-                    <Button
-                      variant="secondary"
-                      onClick={() => void saveRole()}
-                      aria-busy={savingRole}
-                      disabled={role === principal.role || disabled}
+                  <div className="row">
+                    <Select
+                      id="principal-role"
+                      aria-label={t('角色', 'Role')}
+                      className="select-fit"
+                      value={role}
+                      onChange={(event) => setRole(event.target.value as Role)}
+                      disabled={savingRole || disabled}
                     >
-                      {t('保存', 'Save')}
-                    </Button>
-                  }
-                  title={t('把服务凭证提升为所有者', 'Promote a service credential to owner')}
-                  description={ownerCopy.description}
-                  target={principal.displayName}
-                  impact={ownerCopy.impact}
-                  confirmLabel={t('提升为所有者', 'Promote to owner')}
-                  onConfirm={promoteServiceToOwner}
-                  testId="principal-owner-confirm"
-                />
-              </div>
-            </Field>
-            {roleError !== null ? (
-              <ErrorBanner
-                error={roleError}
-                title={t('无法修改角色', 'Could not change the role')}
-              />
-            ) : null}
+                      {ROLE_VALUES.map((value) => (
+                        <option key={value} value={value}>
+                          {roleLabel(value, t)}
+                        </option>
+                      ))}
+                    </Select>
+                    <Confirm
+                      tier="irreversible"
+                      open={confirmingOwner}
+                      onOpenChange={setConfirmingOwner}
+                      anchor={
+                        // ux-lint-allow-disabled: the picked role is the current one.
+                        <Button
+                          variant="secondary"
+                          onClick={() => void saveRole()}
+                          aria-busy={savingRole}
+                          disabled={role === principal.role || disabled}
+                        >
+                          {t('保存', 'Save')}
+                        </Button>
+                      }
+                      title={t('把服务凭证提升为所有者', 'Promote a service credential to owner')}
+                      description={ownerCopy.description}
+                      target={principal.displayName}
+                      impact={ownerCopy.impact}
+                      confirmLabel={t('提升为所有者', 'Promote to owner')}
+                      onConfirm={promoteServiceToOwner}
+                      testId="principal-owner-confirm"
+                    />
+                  </div>
+                </Field>
+                {roleError !== null ? (
+                  <ErrorBanner
+                    error={roleError}
+                    title={t('无法修改角色', 'Could not change the role')}
+                  />
+                ) : null}
+              </>
+            )}
 
             <div className="row-wrap">
               <StatusChip machine="role" status={principal.role} size="s" />
@@ -329,7 +348,14 @@ export function PrincipalDetail({
 
             <div className="divider" />
 
-            {disabled ? null : confirmingDisable ? (
+            {disabled || lastActiveOwner ? null : isSelf ? (
+              <p className="text-3 text-small" data-testid="principal-self-no-disable">
+                {t(
+                  '这是你自己，不能在这里停用自己；需要时请另一位所有者来操作。',
+                  'This is you — you cannot disable yourself here; ask another owner.',
+                )}
+              </p>
+            ) : confirmingDisable ? (
               <div className="stack-s">
                 <Notice tone="warn">
                   {t(

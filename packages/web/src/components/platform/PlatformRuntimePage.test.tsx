@@ -204,6 +204,10 @@ describe('PlatformRuntimePage', () => {
 
     const exitedRow = await screen.findByTestId('runtime-resident-row-p-exited');
     expect(within(exitedRow).getByTestId('runtime-resident-exited')).toBeTruthy();
+    // Legacy sweep (console batch, 2026-10-16): Docker's state reads as a label in the tooltip.
+    expect(within(exitedRow).getByTestId('runtime-resident-exited').getAttribute('title')).toBe(
+      '已退出',
+    );
     expect(within(exitedRow).queryByTestId('runtime-resident-running')).toBeNull();
   });
 
