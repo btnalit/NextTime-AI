@@ -312,8 +312,17 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
   refresh_operation_governance: {
     zh: '同步操作治理设置',
     en: 'Sync operation governance',
-    zhHint: '按门当前的公告更新已部署操作的模式与影响面。',
-    enHint: "Updates deployed operations' mode and blast radius to the gate's announcement.",
+    zhHint:
+      '按门当前的公告（自己接入的门：门现在运行的清单）更新已部署操作的模式与影响面，并为定义变了的操作打开修订草稿。',
+    enHint:
+      "Updates deployed operations' mode and blast radius to the gate's announcement (for a self-connected gate, what it runs now) and opens revision drafts for changed definitions.",
+  },
+  preview_gatekeeper_resync: {
+    zh: '预览门清单同步',
+    en: 'Preview gate manifest sync',
+    zhHint: '只读预览：重新读取自己接入的门现在运行的清单，和已发布的操作对比。',
+    enHint:
+      'Read-only: re-reads what a self-connected gate runs now and compares it with the published operations.',
   },
   issue_gate_credential_token: {
     zh: '签发凭证录入令牌',

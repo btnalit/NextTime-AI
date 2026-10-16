@@ -1645,6 +1645,12 @@ export interface RefreshOperationGovernanceInput {
    *  no revision is opened — publishing either would bring no call back. Governance fields of a
    *  published row are still aligned in place. */
   readonly droppedByGate?: ReadonlySet<string>;
+  /** Legacy 214: a selected announced Operation this Gatekeeper has no row for at all is imported
+   *  as an `'import'`-origin draft (`importManifest`, the same write `create_connection` makes),
+   *  instead of being reported `unchanged`. Only the self-connected resync passes it: there the
+   *  gate's own description is the manifest, and connecting again would register a second
+   *  Gatekeeper. A platform gate's align leaves new names to the catalog enable, as before. */
+  readonly importNew?: boolean;
 }
 
 export interface RefreshedOperationGovernance {
@@ -1673,13 +1679,16 @@ export interface OperationRevisionDraft {
   /** `true` when an existing `'import'`-origin draft was rewritten in place (same version),
    *  `false` when a new revision was opened at `version + 1`. */
   readonly replaced: boolean;
+  /** Legacy 214 (`importNew`): a name the gate describes that this Gatekeeper had no row for —
+   *  imported as a first draft, not a revision of anything. */
+  readonly newOnGate?: true;
 }
 
 export interface RefreshOperationGovernanceResult {
   readonly refreshed: readonly RefreshedOperationGovernance[];
   /** Legacy K: one `'import'`-origin draft per selected name carrying the announced entry — a
-   *  revision opened for a published Operation whose definition differs from it, or the gate's
-   *  own pending draft rewritten to it. */
+   *  revision opened for a published Operation whose definition differs from it, the gate's own
+   *  pending draft rewritten to it, or (legacy 214, `importNew`) a name it had no row for. */
   readonly revisionDrafts: readonly OperationRevisionDraft[];
   /** Every selected name that was neither refreshed nor given a draft — already matching the
    *  manifest, not present at all under this identity, or a pending draft that is someone's
@@ -1696,7 +1705,8 @@ export interface RefreshOperationGovernanceResult {
  *   - `getOperation` resolves the identity's *current* row (draft-first priority, `manifest.ts`'s
  *     own module doc comment) — `null` means there is nothing "already present" to refresh
  *     (exactly `preview_gate_instance_enable`'s own branch), so the name goes to `unchanged`
- *     untouched; a `draft` row is not refreshed in place either (see the legacy K note below for
+ *     untouched — unless `importNew` (legacy 214, the self-connected resync) imports it as a first
+ *     draft; a `draft` row is not refreshed in place either (see the legacy K note below for
  *     the one kind that is rewritten);
  *   - otherwise `diffOperationGovernanceFields` (the exact function `preview_gate_instance_enable`
  *     uses) decides whether it differs; no difference → `unchanged`; a difference → the announced
@@ -1780,6 +1790,31 @@ async function rewriteImportDraft(
   };
 }
 
+/** Legacy 214 (`importNew`): the one new name as `importManifest` writes it — the next version
+ *  above every row (legacy 278), the name rule for a new name (legacy 232), origin `import`. */
+async function importNewOperation(
+  client: PoolClient,
+  workspaceId: string,
+  input: RefreshOperationGovernanceInput,
+  announced: Operation,
+): Promise<OperationRevisionDraft | null> {
+  const { imported } = await importManifest(client, workspaceId, {
+    gatekeeperId: input.gatekeeperId,
+    operations: [announced],
+    proposedBy: input.proposedBy,
+    activityId: input.activityId,
+  });
+  const [written] = imported;
+  if (!written) return null;
+  return {
+    id: written.id,
+    name: written.name,
+    version: written.version,
+    replaced: false,
+    newOnGate: true,
+  };
+}
+
 export async function refreshOperationGovernance(
   client: PoolClient,
   workspaceId: string,
@@ -1802,11 +1837,16 @@ export async function refreshOperationGovernance(
       input.gatekeeperId,
       operation.name,
     );
+    const dropped = input.droppedByGate?.has(operation.name) ?? false;
     if (existingRecord === null) {
-      unchanged.push(operation.name);
+      const imported =
+        input.importNew === true && !dropped
+          ? await importNewOperation(client, workspaceId, input, operation)
+          : null;
+      if (imported) revisionDrafts.push(imported);
+      else unchanged.push(operation.name);
       continue;
     }
-    const dropped = input.droppedByGate?.has(operation.name) ?? false;
     if (existingRecord.status === 'draft') {
       const rewritten = dropped
         ? null

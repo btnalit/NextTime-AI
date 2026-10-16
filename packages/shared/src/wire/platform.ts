@@ -854,6 +854,32 @@ export type PreviewGateInstanceEnableResultWire = z.infer<
 >;
 
 // -------------------------------------------------------------------------------------------
+// preview_gatekeeper_resync (legacy 214): the same comparison for a gate the workspace connected
+// itself — re-described from the gate's own `describe_operations` instead of a platform manifest.
+// -------------------------------------------------------------------------------------------
+
+export const PreviewGatekeeperResyncResultWireSchema = z
+  .object({
+    gatekeeperId: z.string(),
+    /** Digest of the description this preview was computed from — `refresh_operation_governance`
+     *  requires it back and refuses `manifest_changed` when the gate describes something else by
+     *  then. */
+    manifestDigest: z.string(),
+    /** What the gate describes that this Gatekeeper holds no row for (no `pendingDraft`: the
+     *  resync imports it as a draft) or holds only a draft of (`pendingDraft`, as in
+     *  `preview_gate_instance_enable`). */
+    operationsToImport: z.array(GateInstanceEnablePreviewOperationWireSchema),
+    operationsAlreadyPresent: z.array(GateInstanceEnablePreviewOperationPresentWireSchema),
+    /** Published Operations of this Gatekeeper the gate no longer describes — it refuses calls to
+     *  them; the resync writes nothing for them. Sorted. */
+    notDescribed: z.array(z.string()),
+  })
+  .strict();
+export type PreviewGatekeeperResyncResultWire = z.infer<
+  typeof PreviewGatekeeperResyncResultWireSchema
+>;
+
+// -------------------------------------------------------------------------------------------
 // refresh_operation_governance (S8 W3-K1, leftover 79, audit CO2): the write half of the preview
 // above — applies the announced manifest's governance fields to every selected Operation whose
 // fields differ, in place (governance/gatekeepers/manifest.ts's own doc comment on why).

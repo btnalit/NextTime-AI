@@ -280,12 +280,12 @@ export function OnboardingWizard({ http, onCancel, onFinished }: OnboardingWizar
         <div data-testid="wizard-step-review">
           {/* Console G4: what was published, and what was not — the gate's drafts held back for a
            *  gate-owned param, and proposals that wait for a one-by-one publish. This wizard
-           *  connects a system for the workspace itself, so such a gate is connected again once
-           *  its manifest is fixed. */}
+           *  connects a system for the workspace itself, so such a gate is re-synced from its
+           *  fixed manifest under Systems & access (legacy 214). */}
           {published !== null ? (
             <ManifestPublishResultNotice
               result={published}
-              fix="reconnect"
+              fix="resync"
               testId="wizard-publish-result"
             />
           ) : null}

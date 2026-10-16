@@ -715,7 +715,7 @@ describe('RefreshOperationGovernanceConfirm', () => {
     const confirm = await screen.findByTestId('align-gk-1-confirm');
     fireEvent.click(within(confirm).getByTestId('confirm-button'));
     const error = await within(confirm).findByTestId('confirm-error');
-    expect(error.textContent).toContain('没有可对齐的公告清单');
+    expect(error.textContent).toContain('没有可对齐的清单');
   });
   it('console G4: a draft held back for a gate-owned param, once the gate’s manifest drops it, is rewritten by the align — said in the confirm, sent with the rest, linked to the catalog after', async () => {
     const http = scriptedHttp({
@@ -957,5 +957,143 @@ describe('RefreshOperationGovernanceConfirm', () => {
     expect(confirm.textContent).not.toContain('stock.get');
     fireEvent.click(within(confirm).getByTestId('confirm-button'));
     await waitFor(() => expect(onRefreshed).toHaveBeenCalledTimes(1));
+  });
+
+  describe('legacy 214: a gate the workspace connected itself', () => {
+    function renderResync(http: CapabilityCaller, onRefreshed = vi.fn()) {
+      render(
+        <RefreshOperationGovernanceConfirm
+          http={http}
+          gatekeeperId="gk-1"
+          gateDisplayName="库存"
+          onRefreshed={onRefreshed}
+          testId="resync-gk-1"
+        />,
+      );
+      return onRefreshed;
+    }
+
+    function resyncPreview(
+      overrides: Partial<{
+        operationsToImport: Record<string, unknown>[];
+        operationsAlreadyPresent: Record<string, unknown>[];
+        notDescribed: string[];
+      }> = {},
+    ) {
+      return {
+        gatekeeperId: 'gk-1',
+        manifestDigest: 'described-1',
+        operationsToImport: [],
+        operationsAlreadyPresent: [],
+        notDescribed: [],
+        ...overrides,
+      };
+    }
+
+    it('re-reads the gate itself, lists a changed definition and a new Operation, and opens the revision and the import in one sync', async () => {
+      const http = scriptedHttp({
+        preview_gatekeeper_resync: (params) => {
+          expect(params).toEqual({ gatekeeperId: 'gk-1' });
+          return resyncPreview({
+            operationsAlreadyPresent: [{ ...ALIGNED_ROW, definitionDiffers: true }],
+            operationsToImport: [
+              { name: 'stock.count', mode: 'observe', blastRadius: 'low', autoApprovable: true },
+            ],
+            notDescribed: ['stock.gone'],
+          });
+        },
+        refresh_operation_governance: (params) => {
+          expect(params).toEqual({
+            gatekeeperId: 'gk-1',
+            operationNames: ['stock.get', 'stock.count'],
+            manifestDigest: 'described-1',
+          });
+          return {
+            gatekeeperId: 'gk-1',
+            refreshed: [],
+            revisionDrafts: [
+              { name: 'stock.get', version: 2 },
+              { name: 'stock.count', version: 1 },
+            ],
+            unchanged: [],
+          };
+        },
+      });
+      const onRefreshed = renderResync(http);
+
+      const trigger = screen.getByTestId('resync-gk-1');
+      expect(trigger.textContent).toBe('重新读取门的清单');
+      fireEvent.click(trigger);
+      const confirm = await screen.findByTestId('resync-gk-1-confirm');
+      expect(confirm.textContent).toContain('按门的清单同步');
+      expect(confirm.textContent).toContain('stock.get：门运行的定义变了，打开修订草稿');
+      expect(confirm.textContent).toContain('stock.count：门新增的 Operation，导入为草稿');
+      expect(
+        within(confirm).getByTestId('resync-gk-1-confirm-not-described').textContent,
+      ).toContain('stock.gone');
+      expect(http.calls.some((call) => call.name === 'preview_gate_instance_enable')).toBe(false);
+
+      fireEvent.click(within(confirm).getByTestId('confirm-button'));
+      await waitFor(() => expect(onRefreshed).toHaveBeenCalledTimes(1));
+      const drafts = await screen.findByTestId('resync-gk-1-drafts');
+      expect(drafts.textContent).toContain('stock.get');
+      expect(drafts.textContent).not.toContain('stock.count');
+      const imported = screen.getByTestId('resync-gk-1-imported');
+      expect(imported.textContent).toContain('已把门新增的 1 个 Operation 导入为草稿');
+      expect(within(imported).getByTestId('resync-gk-1-imported-link').getAttribute('href')).toBe(
+        '#/govern/catalog/operations/gk-1%3A%3Astock.count',
+      );
+    });
+
+    it('in step with the gate: says so (never the platform’s announcement) and still names what the gate stopped providing', async () => {
+      const http = scriptedHttp({
+        preview_gatekeeper_resync: () =>
+          resyncPreview({ operationsAlreadyPresent: [ALIGNED_ROW], notDescribed: ['stock.gone'] }),
+      });
+      renderResync(http);
+      fireEvent.click(screen.getByTestId('resync-gk-1'));
+      const aligned = await screen.findByTestId('resync-gk-1-aligned');
+      expect(aligned.textContent).toContain('已与门当前运行的清单一致');
+      expect(aligned.textContent).not.toContain('公告');
+      expect(screen.getByTestId('resync-gk-1-not-described').textContent).toContain('stock.gone');
+      expect(screen.queryByTestId('resync-gk-1-confirm')).toBeNull();
+    });
+
+    it('a held draft the gate still declares a gate-owned param for waits on the gate’s maintainer, not on the platform', async () => {
+      const http = scriptedHttp({
+        preview_gatekeeper_resync: () =>
+          resyncPreview({
+            operationsToImport: [
+              {
+                name: 'stock.reserve',
+                mode: 'execute',
+                blastRadius: 'medium',
+                autoApprovable: false,
+                gateOwnedParams: [{ param: 'access_token', location: 'query' }],
+                pendingDraft: { rewritable: false, fromGate: true },
+              },
+            ],
+          }),
+      });
+      renderResync(http);
+      fireEvent.click(screen.getByTestId('resync-gk-1'));
+      const held = await screen.findByTestId('resync-gk-1-held');
+      expect(held.textContent).toContain('重新读取门的清单');
+      expect(held.textContent).not.toContain('平台采用');
+    });
+
+    it('a gate that was linked to a platform instance meanwhile: the refused preview says to align instead, and no confirm opens', async () => {
+      const http = scriptedHttp({
+        preview_gatekeeper_resync: () => {
+          throw new HttpError('capability_error', 'linked', 'gatekeeper_linked');
+        },
+      });
+      renderResync(http);
+      fireEvent.click(screen.getByTestId('resync-gk-1'));
+      await waitFor(() => expect(document.body.textContent).toContain('与门公告对齐'));
+      expect(document.body.textContent).toContain('读不到门的清单');
+      expect(screen.queryByTestId('resync-gk-1-confirm')).toBeNull();
+      expect(http.calls.some((call) => call.name === 'refresh_operation_governance')).toBe(false);
+    });
   });
 });

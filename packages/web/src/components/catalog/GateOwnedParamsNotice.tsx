@@ -36,6 +36,10 @@ const ALL: Readonly<Record<string, unknown>> = {};
  * UX acceptance of #567 P2: whether that rewrite would change anything is known before the click,
  * from the same preview the align reads (`preview_gate_instance_enable`, `pendingDraft.rewritable`).
  * While the gate's manifest still declares the params, the button is greyed out and says why.
+ *
+ * Legacy 214: a gate the workspace connected itself gets the same rewrite, from what the gate
+ * describes now (`preview_gatekeeper_resync`) — read on the click rather than for every catalog row,
+ * since it asks the gate itself; the confirm then says whether the gate still declares the params.
  */
 export function GateOwnedParamsNotice({
   http,
@@ -94,17 +98,26 @@ export function GateOwnedParamsNotice({
   // longer announces this Operation at all (`gone`) — the last two never become rewritable, so
   // no button is shown for them.
   const rewrite: RewriteState = !offersRewrite
-    ? 'none'
+    ? // Legacy 214: a self-connected gate's re-read never rewrites a proposal either.
+      linked === null && draft && origin !== undefined && origin !== 'import'
+      ? 'proposal'
+      : 'none'
     : preview.state.status === 'ready'
       ? rewriteStateOf(preview.state.data, name, origin)
       : preview.state.status === 'loading' && readsPreview
         ? 'loading'
         : 'ready';
+  // Legacy 214: a gate the workspace connected itself is re-read on the click (the preview asks
+  // the gate itself, so it is not read for every row of the catalog) — a proposal is never
+  // rewritten, so it gets no button.
+  const offersResync = draft && mayAlign && linked === null && rewrite !== 'proposal';
   const fix: GateOwnedParamsFix =
     linked === undefined
       ? 'either'
       : linked === null
-        ? 'reconnect'
+        ? offersResync
+          ? 'resync-here'
+          : 'resync'
         : offersRewrite
           ? 'align-here'
           : 'align';
@@ -150,11 +163,21 @@ export function GateOwnedParamsNotice({
                   )}${discardLine}`
                 : gateOwnedParamsNextStep(fix, t)
             : t(
-                '门的维护者从门的清单里去掉它们之后，平台提供的系统到「系统与授权」对齐并发布修订；工作区自己接入的系统需要重新接入。',
-                'Once the gate’s maintainer drops them from its manifest, align a platform-provided system under Systems & access and publish the revision; a system the workspace connected itself has to be connected again.',
+                '门的维护者从门的清单里去掉它们之后，到「系统与授权」打开这个系统，对齐（平台提供的系统）或重新读取门的清单（工作区自己接入的系统），再发布修订。',
+                'Once the gate’s maintainer drops them from its manifest, open this system under Systems & access, align it (a platform-provided system) or re-read the gate’s manifest (one the workspace connected itself), and publish the revision.',
               )}
         </span>
-        {linked && rewrite === 'waiting' ? (
+        {offersResync ? (
+          <RefreshOperationGovernanceConfirm
+            http={http}
+            gatekeeperId={gatekeeperId}
+            gateDisplayName={gateDisplayName}
+            operationNames={[name]}
+            label={t('按门的最新清单重写', 'Rewrite from the gate’s latest manifest')}
+            onRefreshed={onRewritten}
+            testId="operation-gate-owned-resync"
+          />
+        ) : linked && rewrite === 'waiting' ? (
           <span className="stack-s">
             <span>
               <Button

@@ -320,14 +320,31 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(stillOld?.operation.auto_approvable).toBe(false);
       });
 
-      it('a Gatekeeper with no linked gate instance refuses no_announced_manifest, before any write', async () => {
+      it('a Gatekeeper at a platform gate instance’s address that was never enabled from the catalog refuses no_announced_manifest, before any write', async () => {
+        // Legacy 214: a gate with no link that the workspace connected itself re-syncs from its
+        // own description (gatekeeper-resync.integration.test.ts); one registered outside the
+        // catalog at a catalog instance's address (the operator CLI) still has nothing to align to.
+        const endpoint = `https://unlinked-${randomUUID()}.example.invalid`;
+        await asAdmin((client) =>
+          upsertAnnouncement(
+            client,
+            {
+              gateId: `unlinked-instance-${randomUUID().slice(0, 8)}`,
+              connector: 'http',
+              transportKind: 'http',
+              endpoint,
+              operations: [testOperation()],
+            },
+            'gate',
+          ),
+        );
         const act = await newActivity();
         const registered = await inTx((client) =>
           registerGatekeeper(client, workspaceId, {
             name: `unlinked-gate-${randomUUID().slice(0, 8)}`,
             transportKind: 'http',
             target: 'example-system',
-            endpoint: `https://unlinked-${randomUUID()}.example.invalid`,
+            endpoint,
             activityId: act,
             registeredBy: { id: ownerId, kind: 'human' },
           }),
