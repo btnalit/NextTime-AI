@@ -119,11 +119,22 @@ export interface LandingResult {
 export class GatekeeperLandingRefusedError extends Error {
   readonly code: 'endpoint_already_connected' | 'self_connection_suspended';
   readonly gatekeeperId: string;
-  constructor(code: GatekeeperLandingRefusedError['code'], gatekeeperId: string, message: string) {
+  /** `endpoint_already_connected`: the Gatekeeper already at that address, by the name its card
+   *  shows, so the console can say which system it is (UX acceptance of #620, P2-3). A self
+   *  connection is named after its target, so it is shown the way every target is
+   *  (`redactConnectionAddress`). */
+  readonly gatekeeperName: string | null;
+  constructor(
+    code: GatekeeperLandingRefusedError['code'],
+    gatekeeperId: string,
+    message: string,
+    gatekeeperName: string | null = null,
+  ) {
     super(message);
     this.name = 'GatekeeperLandingRefusedError';
     this.code = code;
     this.gatekeeperId = gatekeeperId;
+    this.gatekeeperName = gatekeeperName;
   }
 }
 
@@ -140,10 +151,12 @@ export async function assertEndpointFreeForSelfConnection(
 ): Promise<void> {
   const [existing] = await findGatekeepersByEndpoint(client, workspaceId, endpoint);
   if (!existing) return;
+  const name = redactConnectionAddress('target', existing.name);
   throw new GatekeeperLandingRefusedError(
     'endpoint_already_connected',
     existing.gatekeeperId,
-    `this workspace already has Gatekeeper "${existing.name}" (${existing.gatekeeperId}) at endpoint "${endpoint}" — re-sync it (preview_gatekeeper_resync) or give its gate a new secret (rotate_connection_secret) instead of connecting it again`,
+    `this workspace already has Gatekeeper "${name}" (${existing.gatekeeperId}) at endpoint "${endpoint}" — re-sync it (preview_gatekeeper_resync) or give its gate a new secret (rotate_connection_secret) instead of connecting it again`,
+    name,
   );
 }
 

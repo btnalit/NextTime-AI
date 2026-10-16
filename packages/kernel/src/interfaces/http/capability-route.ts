@@ -500,13 +500,16 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // P0b (application/gates/landing.ts): the address already has a Gatekeeper in this workspace
   // (`endpoint_already_connected` — one Gatekeeper per address), or the Gatekeeper an enable would
   // link is a self connection the platform suspended (`self_connection_suspended`). State, not
-  // input: 409, with the Gatekeeper so the console can point at it.
+  // input: 409, with the Gatekeeper (and, for the first, its name) so the console can point at it.
   if (err instanceof GatekeeperLandingRefusedError) {
     return {
       status: 409,
       code: err.code,
       message: err.message,
-      details: { gatekeeperId: err.gatekeeperId },
+      details: {
+        gatekeeperId: err.gatekeeperId,
+        ...(err.gatekeeperName !== null ? { gatekeeperName: err.gatekeeperName } : {}),
+      },
     };
   }
   // R-27: an owner-supplied `endpoint` / `manifestSource` that points at the platform's own

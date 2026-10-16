@@ -234,6 +234,21 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
 /** The bilingual message for a platform capability failure, or `null` when the code is not one of
  *  ours (a transport failure, a 403, an unmapped kernel code) and the caller should fall back to
  *  `ErrorBanner`. A pure helper, not a component — takes `t` from its caller. */
+/** UX acceptance of #620 (P2-3): `endpoint_already_connected` naming the system already at that
+ *  address (`details.gatekeeperName`) — the 系统与授权 cards show names, not addresses, so the
+ *  sentence above alone cannot say which card. Without a name (`details` is additive,
+ *  docs/wire-contract-conventions.md) it is that sentence. */
+export function endpointAlreadyConnectedMessage(name: string | null, t: Translate): string {
+  if (name === null) {
+    const entry = ownEntry(PLATFORM_ERROR_MESSAGES, 'endpoint_already_connected');
+    return entry ? t(entry.zh, entry.en) : '';
+  }
+  return t(
+    `这个地址已经接入为「${name}」，没有再接一次，什么也没保存。在「系统与授权」里找到「${name}」：要更新清单点「重新读取门的清单」；如果已经把这次的新密钥配到了门上，在 ⋯ 里「重新签发连接密钥」，把签发的密钥换到门上`,
+    `This address is already connected as “${name}”, so nothing was saved. Find “${name}” in Systems & access: “Re-read the gate’s manifest” updates its manifest; if you already put this new secret on the gate, use ⋯ → “Issue a new connection secret” and put that one on the gate instead`,
+  );
+}
+
 export function platformErrorMessage(err: unknown, t: Translate): string | null {
   if (!(err instanceof HttpError) || err.kind !== 'capability_error') return null;
   if (err.code === undefined) return null;

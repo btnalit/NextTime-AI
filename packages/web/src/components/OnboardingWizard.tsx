@@ -27,6 +27,9 @@ export interface OnboardingWizardProps {
   /** Closes the wizard and opens the new gate's health/operations detail drawer
    *  (`GatekeeperDetailDrawer`, already on `/govern/systems/<id>`). */
   readonly onFinished: (gatekeeperId: string) => void;
+  /** Step ②'s refused duplicate connection: brings the card of the Gatekeeper already at that
+   *  address into view (`CompleteConnectionForm`'s own prop). */
+  readonly onShowGatekeeper?: (gatekeeperId: string) => void;
 }
 
 type WizardStep = 'kind' | 'connect' | 'publish' | 'review' | 'done';
@@ -78,7 +81,12 @@ function kindCopy(kind: ConnectionKind, t: Translate): string {
  * (`CompleteConnectionForm`/`OnboardingWizardReview`'s own error handling) rather than blocking
  * the whole wizard on one capability.
  */
-export function OnboardingWizard({ http, onCancel, onFinished }: OnboardingWizardProps) {
+export function OnboardingWizard({
+  http,
+  onCancel,
+  onFinished,
+  onShowGatekeeper,
+}: OnboardingWizardProps) {
   const t = useT();
   const [step, setStep] = useState<WizardStep>('kind');
   const [kind, setKind] = useState<ConnectionKind>('http');
@@ -182,6 +190,7 @@ export function OnboardingWizard({ http, onCancel, onFinished }: OnboardingWizar
             initialKind={kind}
             hideKindField
             onCancel={() => setStep('kind')}
+            onShowGatekeeper={onShowGatekeeper}
             onDone={(result) => {
               setConnection(result);
               setStep('publish');

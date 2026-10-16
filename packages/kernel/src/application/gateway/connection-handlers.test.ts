@@ -537,6 +537,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(thrown).toMatchObject({
         code: 'endpoint_already_connected',
         gatekeeperId: first.gatekeeperId,
+        // The card's name for it, so the console can say which system the address already is.
+        gatekeeperName: 'twice-system',
       });
       expect(fake.targets).toEqual([]);
     });

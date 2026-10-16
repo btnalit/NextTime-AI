@@ -199,6 +199,45 @@ describe.runIf(DATABASE_URL !== undefined)('application/gates/landing (integrati
     }
   });
 
+  it('self: the refusal names the Gatekeeper there as its card shows it — a name written before legacy 186 keeps no credential (UX acceptance of #620, P2-3)', async () => {
+    const at = endpoint();
+    const secret = 'abcdefghijklmnopqrstuvwxyz0123';
+    // A self connection is named after its target; one written before legacy 186 can carry a
+    // credential (written directly — registration refuses such a target now).
+    const legacyName = `https://ops:${secret}@legacy.invalid/inventory?token=${secret}`;
+    const existing = await inTx(async (client) => {
+      const activity = await startActivity(client, workspaceId, {
+        kind: 'test.legacy_name',
+        principalId: ownerId,
+      });
+      const registered = await registerGatekeeper(client, workspaceId, {
+        name: 'legacy-name-system',
+        transportKind: 'http',
+        target: 'legacy-name-system',
+        endpoint: at,
+        activityId: activity.id,
+        registeredBy: { id: ownerId, kind: 'human' },
+      });
+      await endActivity(client, workspaceId, activity.id, 'completed');
+      return registered.gatekeeperId;
+    });
+    await asSuperuser((client) =>
+      client.query(
+        `update objects set properties = properties || jsonb_build_object('name', $2::text, 'target', $2::text)
+          where id = $1`,
+        [existing, legacyName],
+      ),
+    );
+    const thrown = await landSelf(at).catch((err: unknown) => err);
+    expect(thrown).toBeInstanceOf(GatekeeperLandingRefusedError);
+    expect(thrown).toMatchObject({
+      code: 'endpoint_already_connected',
+      gatekeeperId: existing,
+      gatekeeperName: 'https://legacy.invalid/inventory',
+    });
+    expect((thrown as Error).message).not.toContain(secret);
+  });
+
   it('self: the database holds one address per workspace too — a second row with the same endpoint_key, or one without a key, is refused', async () => {
     const at = endpoint();
     const first = await landSelf(at);

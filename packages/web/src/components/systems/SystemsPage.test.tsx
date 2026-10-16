@@ -836,6 +836,80 @@ describe('SystemsPage', () => {
     expect(within(card).getByText(/这份草稿在你查看之后被修改过/)).toBeTruthy();
   });
 
+  it('UX acceptance of #620 (P2-3): a refused duplicate connection finds the card of the system already at that address', async () => {
+    const http = scriptedHttp({
+      execution_readiness: () =>
+        readiness({
+          principalId: 'p-self',
+          gates: [gate(), gate({ gateId: 'gk-2', name: 'Grafana 生产' })],
+        }),
+      mint_connection_secret: () => ({
+        connectionSecret: `ntgc1_${'c'.repeat(32)}_${'d'.repeat(64)}`,
+      }),
+      create_connection: () => {
+        throw new HttpError(
+          'capability_error',
+          'this workspace already has Gatekeeper "Grafana 生产" (gk-2) at endpoint "https://gate.example"',
+          'endpoint_already_connected',
+          { gatekeeperId: 'gk-2', gatekeeperName: 'Grafana 生产' },
+        );
+      },
+    });
+    renderPage(http);
+    await screen.findAllByTestId('gatekeeper-card');
+    openConnectMoreMenu();
+    fireEvent.click(await screen.findByRole('menuitem', { name: /直接注册门/ }));
+    const drawer = await screen.findByTestId('complete-connection-drawer');
+    await within(drawer).findByTestId('cc-connection-secret-reveal');
+    fireEvent.change(within(drawer).getByLabelText(/目标系统/), { target: { value: 'grafana' } });
+    fireEvent.change(within(drawer).getByLabelText(/门端点/), {
+      target: { value: 'https://gate.example' },
+    });
+    fireEvent.click(within(drawer).getByRole('button', { name: '注册门' }));
+    fireEvent.click(await within(drawer).findByTestId('cc-show-existing-gatekeeper'));
+
+    await waitFor(() => expect(screen.queryByTestId('complete-connection-drawer')).toBeNull());
+    const cards = screen.getAllByTestId('gatekeeper-card');
+    const card = (id: string) => cards.find((element) => element.dataset.gatekeeperId === id);
+    expect(card('gk-2')?.getAttribute('aria-current')).toBe('true');
+    expect(card('gk-1')?.getAttribute('aria-current')).toBeNull();
+  });
+
+  it('UX acceptance of #620 (P2-3): a Gatekeeper with no card in the list opens its 健康与操作 drawer instead', async () => {
+    const http = scriptedHttp({
+      execution_readiness: () => readiness({ principalId: 'p-self', gates: [gate()] }),
+      mint_connection_secret: () => ({
+        connectionSecret: `ntgc1_${'c'.repeat(32)}_${'d'.repeat(64)}`,
+      }),
+      create_connection: () => {
+        throw new HttpError('capability_error', 'already', 'endpoint_already_connected', {
+          gatekeeperId: 'gk-9',
+        });
+      },
+    });
+    const onSelectGatekeeper = vi.fn();
+    render(
+      <PermissionsProvider>
+        <SystemsPage http={http} onSelectGatekeeper={onSelectGatekeeper} />
+      </PermissionsProvider>,
+    );
+    await screen.findAllByTestId('gatekeeper-card');
+    openConnectMoreMenu();
+    fireEvent.click(await screen.findByRole('menuitem', { name: /直接注册门/ }));
+    const drawer = await screen.findByTestId('complete-connection-drawer');
+    await within(drawer).findByTestId('cc-connection-secret-reveal');
+    fireEvent.change(within(drawer).getByLabelText(/目标系统/), { target: { value: 'x' } });
+    fireEvent.change(within(drawer).getByLabelText(/门端点/), {
+      target: { value: 'https://gate.example' },
+    });
+    fireEvent.click(within(drawer).getByRole('button', { name: '注册门' }));
+    const find = await within(drawer).findByTestId('cc-show-existing-gatekeeper');
+    // No name in `details`: the field and the button still work, without it.
+    expect(find.textContent).toBe('在列表里找到它');
+    fireEvent.click(find);
+    await waitFor(() => expect(onSelectGatekeeper).toHaveBeenCalledWith('gk-9'));
+  });
+
   it('offers no connection secret for a gate linked from the platform catalog', async () => {
     const http = scriptedHttp({
       execution_readiness: () => readiness({ principalId: 'p-self', gates: [gate()] }),

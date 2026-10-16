@@ -15,6 +15,7 @@ import { breadcrumbFor } from '../../lib/nav.js';
 import { deriveGateInstanceStatus, deriveSelfConnectionStatus } from '../../lib/status-tone.js';
 import { ConnectSystemLauncher } from '../connect/ConnectSystemLauncher.js';
 import { Confirm } from '../kit/confirm.js';
+import { DataTable, type DataTableColumn } from '../kit/data-table.js';
 import { PageHeader } from '../kit/page-header.js';
 import { Button } from '../ui/Button.js';
 import { Drawer } from '../ui/Drawer.js';
@@ -948,10 +949,18 @@ function SelfConnectionsTab({
 
   return (
     <div className="stack" data-testid="integrations-self-connections">
+      {/* UX acceptance of #620 (P2-2): what a suspension does and does not cover is said here,
+          once, so the 暂停 confirm keeps to what happens next and still fits its popover. */}
       <p className="text-3 text-small" style={{ margin: 0 }}>
         {t(
-          '工作区在「系统与授权」里自己接入的门。接入包的模式只管新的接入；要切断某一个正在用的，在这里暂停它：它的全部 Operation 从下一次调用起被拒绝，连接、Operation 和历史都保留，恢复后照常可用。目标与门地址这里只显示协议、主机和端口，路径和参数只有工作区自己看得到。',
-          'Gates workspaces connected themselves in Systems & access. A connector’s mode only governs new connections; to cut off one in use, suspend it here: every Operation of it is refused from the next call, while the connection, its Operations and their history stay, and resuming it brings them back. Targets and gate addresses show their scheme, host and port only; the path and parameters are visible to the workspace alone.',
+          '工作区在「系统与授权」里自己接入的门。接入包的模式只管新的接入；要切断某一个正在用的，在这里暂停它：它的全部 Operation 从下一次调用起被拒绝，智能体的调用、成员的读取和已排队的执行都一样；连接、Operation 和历史都保留，恢复后照常可用。',
+          'Gates workspaces connected themselves in Systems & access. A connector’s mode only governs new connections; to cut off one in use, suspend it here: every Operation of it is refused from the next call — agent calls, members’ reads and queued executions alike — while the connection, its Operations and their history stay, and resuming it brings them back.',
+        )}
+      </p>
+      <p className="text-3 text-small" style={{ margin: 0 }}>
+        {t(
+          '暂停只管这一条连接：暂停期间工作区不能自己解除、删除它或重新接入同一地址，但换个主机名或 IP 接入算新连接；要让工作区不能再自己接入这类门，在「接入包」里改它的模式。目标与门地址这里只显示协议、主机和端口，路径和参数只有工作区自己看得到。',
+          'A suspension covers this one connection: while it lasts the workspace cannot lift it, delete it or connect the same address again, but the gate under another host name or IP is a new connection; to stop workspaces connecting this kind of gate themselves, change its mode under Connectors. Targets and gate addresses show their scheme, host and port only; the path and parameters are visible to the workspace alone.',
         )}
       </p>
       <div className="row-wrap" style={{ justifyContent: 'space-between' }}>
@@ -1010,46 +1019,143 @@ function SelfConnectionsTab({
           testId="self-connections-empty"
         />
       ) : (
-        <div className="table-scroll">
-          <table className="data-table" data-testid="self-connections-table">
-            <thead>
-              <tr>
-                <th>{t('工作区', 'Workspace')}</th>
-                <th>{t('系统', 'System')}</th>
-                <th>{t('种类', 'Kind')}</th>
-                <th>{t('接入', 'Connected')}</th>
-                <th>{t('状态', 'Status')}</th>
-                <th aria-label="Actions" />
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <SelfConnectionRow
-                  key={`${row.workspaceId}:${row.gatekeeperId}`}
-                  http={http}
-                  connection={row}
-                  onChanged={replace}
-                  onShowInstance={onShowInstance}
-                />
-              ))}
-            </tbody>
-          </table>
-        </div>
+        // UX acceptance of #620 (P2-1): at ≤ 768px each row is one card — the system and its
+        // 暂停 / 恢复 in its header, workspace, kind, connection and status under it — instead of a
+        // six-column table whose status and action sat off-screen to the right.
+        <DataTable
+          columns={selfConnectionColumns(http, replace, onShowInstance, t)}
+          data={rows}
+          getRowId={(row) => `${row.workspaceId}:${row.gatekeeperId}`}
+          ariaLabel={t('工作区自己接入的门', 'Self-connected gates')}
+          testId="self-connections-table"
+          rowTestId={(row) => `self-connection-row-${row.gatekeeperId}`}
+        />
       )}
     </div>
   );
 }
 
-function SelfConnectionRow({
+/** The 自己接入的门 table's columns (`kit/data-table`): the system is the card title and 暂停 /
+ *  恢复 sits next to it (`primary` / `high`); workspace, kind, connection and status become label /
+ *  value pairs at ≤ 768px. Cells that can run long wrap instead of being cut (`whitespace-normal` —
+ *  a card's title and values are single-line by default). */
+function selfConnectionColumns(
+  http: CapabilityCaller,
+  onChanged: (updated: SelfConnectionWire) => void,
+  onShowInstance: (gateId: string) => void,
+  t: Translate,
+): readonly DataTableColumn<SelfConnectionWire>[] {
+  return [
+    {
+      id: 'workspace',
+      header: t('工作区', 'Workspace'),
+      cell: (connection) => connection.workspaceName,
+    },
+    {
+      id: 'system',
+      header: t('系统', 'System'),
+      priority: 'primary',
+      cell: (connection) => (
+        <div className="whitespace-normal">
+          <div>{connection.target}</div>
+          <div className="mono text-3 text-small font-normal">{connection.endpoint}</div>
+          {connection.catalogGateId !== null ? (
+            <p
+              className="text-3 text-small font-normal"
+              style={{ margin: 0 }}
+              data-testid={`self-connection-catalog-${connection.gatekeeperId}`}
+            >
+              {t(
+                `地址与平台门实例「${connection.catalogGateId}」相同（在这项检查出现之前接入的）：调用会用平台给这个实例的凭证。工作区从目录启用该实例后，它会改由实例接入；不该这样用时，暂停它。`,
+                `Same address as platform gate instance “${connection.catalogGateId}” (connected before that check existed): calls to it use the credential the platform holds for that instance. Once the workspace enables that instance from the catalog it comes from the instance instead; if it should not be used this way, suspend it.`,
+              )}{' '}
+              <Button
+                variant="ghost"
+                size="s"
+                onClick={() => onShowInstance(connection.catalogGateId ?? '')}
+                data-testid={`self-connection-show-instance-${connection.gatekeeperId}`}
+              >
+                {t('查看实例', 'View instance')}
+              </Button>
+            </p>
+          ) : null}
+        </div>
+      ),
+    },
+    {
+      id: 'kind',
+      header: t('种类', 'Kind'),
+      cell: (connection) => transportKindLabel(connection.connector, t),
+    },
+    {
+      id: 'connected',
+      header: t('接入', 'Connected'),
+      cell: (connection) => (
+        <div className="whitespace-normal">
+          <div>
+            {connection.connectedByName ?? (
+              <span className="text-3">
+                {t('升级前接入，未记录接入人', 'Before this list; not recorded')}
+              </span>
+            )}
+          </div>
+          <time className="text-3 text-small" title={formatDateTime(connection.connectedAt)}>
+            {formatRelative(connection.connectedAt)}
+          </time>
+        </div>
+      ),
+    },
+    {
+      id: 'status',
+      header: t('状态', 'Status'),
+      cell: (connection) => (
+        <div className="whitespace-normal">
+          <StatusChip machine="selfConnection" status={deriveSelfConnectionStatus(connection)} />
+          {connection.suspendedAt !== null ? (
+            <div
+              className="text-3 text-small"
+              data-testid={`self-connection-suspension-${connection.gatekeeperId}`}
+            >
+              <div>
+                {connection.suspendedByLogin ?? t('平台管理员', 'A platform administrator')}
+                {' · '}
+                <time title={formatDateTime(connection.suspendedAt)}>
+                  {formatRelative(connection.suspendedAt)}
+                </time>
+              </div>
+              {connection.suspensionReason !== null ? (
+                <div style={{ overflowWrap: 'anywhere' }}>
+                  {t('原因：', 'Reason: ')}
+                  {connection.suspensionReason}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      ),
+    },
+    {
+      id: 'actions',
+      header: '',
+      priority: 'high',
+      hideInCard: true,
+      cell: (connection) => (
+        <SelfConnectionAction http={http} connection={connection} onChanged={onChanged} />
+      ),
+    },
+  ];
+}
+
+/** One row's 暂停 / 恢复 and its confirm — a component, not a cell function, because it owns the
+ *  row's confirm state (`useSelfConnectionSuspension`). */
+function SelfConnectionAction({
   http,
   connection,
   onChanged,
-  onShowInstance,
 }: {
   readonly http: CapabilityCaller;
   readonly connection: SelfConnectionWire;
   readonly onChanged: (updated: SelfConnectionWire) => void;
-  readonly onShowInstance: (gateId: string) => void;
 }) {
   const t = useT();
   const suspension = useSelfConnectionSuspension(http, connection, onChanged);
@@ -1058,128 +1164,65 @@ function SelfConnectionRow({
   const reasonId = `self-connection-reason-${rowId}`;
 
   return (
-    <tr data-testid={`self-connection-row-${rowId}`}>
-      <td>{connection.workspaceName}</td>
-      <td>
-        <div>{connection.target}</div>
-        <div className="mono text-3 text-small">{connection.endpoint}</div>
-        {connection.catalogGateId !== null ? (
-          <p
-            className="text-3 text-small"
-            style={{ margin: 0 }}
-            data-testid={`self-connection-catalog-${rowId}`}
-          >
-            {t(
-              `地址与平台门实例「${connection.catalogGateId}」相同（在这项检查出现之前接入的）：调用会用平台给这个实例的凭证。工作区从目录启用该实例后，它会改由实例接入；不该这样用时，暂停它。`,
-              `Same address as platform gate instance “${connection.catalogGateId}” (connected before that check existed): calls to it use the credential the platform holds for that instance. Once the workspace enables that instance from the catalog it comes from the instance instead; if it should not be used this way, suspend it.`,
-            )}{' '}
-            <Button
-              variant="ghost"
-              size="s"
-              onClick={() => onShowInstance(connection.catalogGateId ?? '')}
-              data-testid={`self-connection-show-instance-${rowId}`}
-            >
-              {t('查看实例', 'View instance')}
-            </Button>
-          </p>
-        ) : null}
-      </td>
-      <td>{transportKindLabel(connection.connector, t)}</td>
-      <td>
-        <div>
-          {connection.connectedByName ?? (
-            <span className="text-3">
-              {t('升级前接入，未记录接入人', 'Before this list; not recorded')}
-            </span>
-          )}
-        </div>
-        <time className="text-3 text-small" title={formatDateTime(connection.connectedAt)}>
-          {formatRelative(connection.connectedAt)}
-        </time>
-      </td>
-      <td>
-        <StatusChip machine="selfConnection" status={deriveSelfConnectionStatus(connection)} />
-        {suspended ? (
-          <div className="text-3 text-small" data-testid={`self-connection-suspension-${rowId}`}>
-            <div>
-              {connection.suspendedByLogin ?? t('平台管理员', 'A platform administrator')}
-              {' · '}
-              <time title={formatDateTime(connection.suspendedAt ?? '')}>
-                {formatRelative(connection.suspendedAt ?? '')}
-              </time>
-            </div>
-            {connection.suspensionReason !== null ? (
-              <div style={{ overflowWrap: 'anywhere' }}>
-                {t('原因：', 'Reason: ')}
-                {connection.suspensionReason}
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-      </td>
-      <td>
-        <Confirm
-          tier="medium"
-          open={suspension.confirmOpen}
-          onOpenChange={suspension.onConfirmOpenChange}
-          anchor={
-            <Button
-              variant={suspended ? 'secondary' : 'danger'}
-              size="s"
-              onClick={() => suspension.onConfirmOpenChange(true)}
-              data-testid={`self-connection-${suspended ? 'resume' : 'suspend'}-${rowId}`}
-            >
-              {suspended ? t('恢复', 'Resume') : t('暂停', 'Suspend')}
-            </Button>
-          }
-          title={
-            suspended
-              ? t(`恢复「${connection.target}」`, `Resume “${connection.target}”`)
-              : t(`暂停「${connection.target}」`, `Suspend “${connection.target}”`)
-          }
-          description={
-            suspended
-              ? t(
-                  '它已发布的 Operation 从下一次调用起恢复可调用，这个工作区的入口智能体凭证会重新签发。',
-                  'Its published Operations run again from the next call, and this workspace’s entry-agent Handles are re-issued.',
-                )
-              : t(
-                  '从下一次调用起，这个门的全部 Operation 都被拒绝：智能体的调用、成员的读取和已排队的执行都一样，这个工作区的入口智能体凭证会重新签发。连接、它的 Operation 和历史都保留；暂停期间工作区不能自己解除、删除它或重新接入同一地址。暂停只管这一条连接，换个主机名或 IP 接入算新连接；要让工作区不能再自己接入这类门，在「接入包」里改它的模式。随时可以恢复。',
-                  'From the next call on, every Operation of this gate is refused — agent calls, members’ reads and queued executions alike — and this workspace’s entry-agent Handles are re-issued. The connection, its Operations and their history stay; while it is suspended the workspace cannot lift it, delete it or connect the same address again. The suspension covers this connection only — the gate under another host name or IP is a new connection; to stop workspaces connecting this kind of gate themselves, change its mode under Connectors. You can resume it at any time.',
-                )
-          }
-          target={`${connection.workspaceName} · ${connection.target}`}
-          impact={[
-            t(`工作区「${connection.workspaceName}」`, `Workspace “${connection.workspaceName}”`),
-            connection.endpoint,
-          ]}
-          confirmLabel={suspended ? t('恢复', 'Resume') : t('暂停', 'Suspend')}
-          danger={!suspended}
-          onConfirm={suspension.apply}
-          testId={`self-connection-confirm-${rowId}`}
+    <Confirm
+      tier="medium"
+      open={suspension.confirmOpen}
+      onOpenChange={suspension.onConfirmOpenChange}
+      anchor={
+        <Button
+          variant={suspended ? 'secondary' : 'danger'}
+          size="s"
+          onClick={() => suspension.onConfirmOpenChange(true)}
+          data-testid={`self-connection-${suspended ? 'resume' : 'suspend'}-${rowId}`}
         >
-          {suspended ? null : (
-            <Field
-              id={reasonId}
-              label={t('原因（可选）', 'Reason (optional)')}
-              hint={t(
-                '记在这次暂停上，列表和平台审计里都能看到。',
-                'Kept with this suspension; shown in this list and in the platform audit.',
-              )}
-            >
-              <Input
-                id={reasonId}
-                value={suspension.reason}
-                maxLength={SUSPENSION_REASON_MAX}
-                onChange={(event) => suspension.setReason(event.target.value)}
-                aria-describedby={describedBy(reasonId, true, false)}
-                data-testid={`self-connection-reason-input-${rowId}`}
-              />
-            </Field>
+          {suspended ? t('恢复', 'Resume') : t('暂停', 'Suspend')}
+        </Button>
+      }
+      title={
+        suspended
+          ? t(`恢复「${connection.target}」`, `Resume “${connection.target}”`)
+          : t(`暂停「${connection.target}」`, `Suspend “${connection.target}”`)
+      }
+      // UX acceptance of #620 (P2-2): only what happens next — what a suspension covers is in the
+      // tab's own introduction, so the confirm button stays in view at 1440×900.
+      description={
+        suspended
+          ? t(
+              '它已发布的 Operation 从下一次调用起恢复可调用，这个工作区的入口智能体凭证会重新签发。',
+              'Its published Operations run again from the next call, and this workspace’s entry-agent Handles are re-issued.',
+            )
+          : t(
+              '从下一次调用起，这个门的全部 Operation 都被拒绝，这个工作区的入口智能体凭证会重新签发。连接、它的 Operation 和历史都保留，随时可以恢复。',
+              'From the next call on, every Operation of this gate is refused, and this workspace’s entry-agent Handles are re-issued. The connection, its Operations and their history stay; you can resume it at any time.',
+            )
+      }
+      target={`${connection.workspaceName} · ${connection.target}`}
+      impact={[connection.endpoint]}
+      confirmLabel={suspended ? t('恢复', 'Resume') : t('暂停', 'Suspend')}
+      danger={!suspended}
+      onConfirm={suspension.apply}
+      testId={`self-connection-confirm-${rowId}`}
+    >
+      {suspended ? null : (
+        <Field
+          id={reasonId}
+          label={t('原因（可选）', 'Reason (optional)')}
+          hint={t(
+            '记在这次暂停上，列表和平台审计里都能看到。',
+            'Kept with this suspension; shown in this list and in the platform audit.',
           )}
-        </Confirm>
-      </td>
-    </tr>
+        >
+          <Input
+            id={reasonId}
+            value={suspension.reason}
+            maxLength={SUSPENSION_REASON_MAX}
+            onChange={(event) => suspension.setReason(event.target.value)}
+            aria-describedby={describedBy(reasonId, true, false)}
+            data-testid={`self-connection-reason-input-${rowId}`}
+          />
+        </Field>
+      )}
+    </Confirm>
   );
 }
 

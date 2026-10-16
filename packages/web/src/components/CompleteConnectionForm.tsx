@@ -16,6 +16,7 @@ import type { PrincipalRow } from '../lib/governance.js';
 import { HttpError } from '../lib/http-client.js';
 import { type Translate, useT } from '../lib/i18n.js';
 import { roleLabel } from '../lib/labels.js';
+import { endpointAlreadyConnectedMessage } from '../lib/platform-errors.js';
 import { sameNameIds, withSameNameId } from '../lib/same-name.js';
 import { ConnectionSecretReveal } from './connect/ConnectionSecretReveal.js';
 import { ErrorDetails } from './kit/error-details.js';
@@ -37,9 +38,27 @@ export interface CompleteConnectionFormProps {
   /** Hides the Kind field entirely (the wizard's step ① already showed it) — `false` for every
    *  pre-existing caller (`ConnectionsPage`'s own two drawers), so this is purely additive. */
   readonly hideKindField?: boolean;
+  /** A refused duplicate connection (`endpoint_already_connected`): brings the card of the
+   *  Gatekeeper already at that address into view. Omitted where there is no list to show it in;
+   *  the field still names it. */
+  readonly onShowGatekeeper?: (gatekeeperId: string) => void;
 }
 
 type CredentialKind = 'shared' | 'connected_account';
+
+/** `endpoint_already_connected`'s `details` (#620): the Gatekeeper already at the address. */
+interface ExistingGatekeeper {
+  readonly id: string;
+  readonly name: string | null;
+}
+
+function existingGatekeeperOf(err: unknown): ExistingGatekeeper | null {
+  if (!(err instanceof HttpError)) return null;
+  const id = err.details?.gatekeeperId;
+  if (typeof id !== 'string' || id === '') return null;
+  const name = err.details?.gatekeeperName;
+  return { id, name: typeof name === 'string' && name !== '' ? name : null };
+}
 
 interface FieldErrors {
   readonly endpoint?: string;
@@ -193,6 +212,7 @@ export function CompleteConnectionForm({
   onCancel,
   initialKind,
   hideKindField = false,
+  onShowGatekeeper,
 }: CompleteConnectionFormProps) {
   const t = useT();
   const [kind, setKind] = useState<ConnectionKind>(request?.kind ?? initialKind ?? 'http');
@@ -206,6 +226,7 @@ export function CompleteConnectionForm({
   const [manifestSource, setManifestSource] = useState('');
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [serverFieldError, setServerFieldError] = useState<ServerFieldError | null>(null);
+  const [existingGatekeeper, setExistingGatekeeper] = useState<ExistingGatekeeper | null>(null);
   const [submitError, setSubmitError] = useState<unknown | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [connectionSecret, setConnectionSecret] = useState<string | null>(null);
@@ -273,6 +294,7 @@ export function CompleteConnectionForm({
     const errors = validate();
     setFieldErrors(errors);
     setServerFieldError(null);
+    setExistingGatekeeper(null);
     setSubmitError(null);
     if (Object.keys(errors).length > 0) return;
     if (connectionSecret === null) return;
@@ -316,12 +338,15 @@ export function CompleteConnectionForm({
         // The field says what is wrong in the viewer's language; the kernel's own (English) text
         // sits in the field's collapsed 「技术细节」 (#537 convention), never in the line itself.
         const shown = presentError(err, t);
+        // P0b: an address this workspace already connected — the field names that system and
+        // says what to do with it instead (`lib/platform-errors.ts`).
+        const existing =
+          described.code === 'endpoint_already_connected' ? existingGatekeeperOf(err) : null;
+        setExistingGatekeeper(existing);
         setFieldErrors({
-          // P0b: an address this workspace already connected — `lib/platform-errors.ts`'s copy
-          // says where that connection is and what to do with it instead.
           [field]:
             described.code === 'endpoint_already_connected'
-              ? shown.message
+              ? endpointAlreadyConnectedMessage(existing?.name ?? null, t)
               : fieldErrorExplanation(field, described.code, t, credentialKind),
         });
         setServerFieldError({ field, code: shown.code, raw: shown.raw ?? described.message });
@@ -417,7 +442,27 @@ export function CompleteConnectionForm({
         label={t('门端点', 'Gatekeeper endpoint')}
         required
         error={fieldErrors.endpoint}
-        errorDetails={serverDetails('endpoint')}
+        errorDetails={
+          <>
+            {existingGatekeeper && onShowGatekeeper ? (
+              <div className="row">
+                <Button
+                  size="s"
+                  onClick={() => onShowGatekeeper(existingGatekeeper.id)}
+                  data-testid="cc-show-existing-gatekeeper"
+                >
+                  {existingGatekeeper.name !== null
+                    ? t(
+                        `在列表里找到「${existingGatekeeper.name}」`,
+                        `Find “${existingGatekeeper.name}” in the list`,
+                      )
+                    : t('在列表里找到它', 'Find it in the list')}
+                </Button>
+              </div>
+            ) : null}
+            {serverDetails('endpoint')}
+          </>
+        }
         hint={
           <>
             {t(
