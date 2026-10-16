@@ -408,12 +408,14 @@ const GATE_REASON_TONES: Readonly<Record<string, 'info' | 'warn' | 'danger'>> = 
 
 /** What to do about a gate refusal a tool call's result names (review of #538, G3) — the chat's
  *  tool row shows it above the raw result, which stays as the agent saw it. `target` names what
- *  the call did (`lib/action-outcome`'s `actionTargetLabel`, "container.restart（name: media）"),
- *  so an outcome-unknown note says what to check. `null` for any other result. */
+ *  the call did (`lib/action-outcome`'s `actionTargetLabel`, "container.restart（name: media）")
+ *  and `system` the system (gate) it went to, so an outcome-unknown note says what to check and
+ *  where — one Operation name can exist on two systems. `null` for any other result. */
 export function gateReasonNextStep(
   text: string,
   t: Translate,
   target?: string,
+  system?: string,
 ): {
   readonly code: string;
   readonly title: string;
@@ -424,18 +426,48 @@ export function gateReasonNextStep(
   if (code === undefined) return null;
   const step = ownEntry(ERROR_NEXT_STEPS, code);
   if (!step) return null;
+  const message =
+    code === 'outcome_unknown' && (target !== undefined || system !== undefined)
+      ? outcomeUnknownStep(t, target, system)
+      : t(step.zh, step.en);
   return {
     code,
     title: t(ownEntry(CODE_TITLES_ZH, code) ?? code, ownEntry(CODE_TITLES, code) ?? code),
-    message:
-      code === 'outcome_unknown' && target !== undefined
-        ? t(
-            `这个动作可能已经执行，也可能没有，平台无法确认。不要直接重试：先到目标系统核对 ${target}${target.endsWith('）') ? '' : ' '}是否已生效，再决定要不要重新发起。`,
-            `This action may or may not have run, and the platform cannot tell which. Do not just retry: check on the target system whether ${target} took effect, then decide whether to request it again.`,
-          )
-        : t(step.zh, step.en),
+    message: withPlaintextTlsHint(message, text, t),
     tone: ownEntry(GATE_REASON_TONES, code) ?? 'warn',
   };
+}
+
+/** TLS record-layer errors a peer that does not speak TLS raises (which one depends on the OpenSSL
+ *  version). Since legacy 287 they read as "may have been delivered" — the same error can come
+ *  from plain text written into an established session — so the note adds the usual cause
+ *  (#501's review of #586). */
+const PLAINTEXT_TLS = /\bERR_SSL_(?:WRONG_VERSION_NUMBER|PACKET_LENGTH_TOO_LONG)\b/;
+
+/** `message`, followed by the usual cause when `text` (a failure reason) names a TLS record-layer
+ *  error. */
+export function withPlaintextTlsHint(
+  message: string,
+  text: string | null | undefined,
+  t: Translate,
+): string {
+  if (!text || !PLAINTEXT_TLS.test(text)) return message;
+  return `${message}${t('', ' ')}${t(
+    '常见原因：https 地址指到了只讲明文 HTTP 的端口。',
+    'A common cause: an https address pointing at a port that only speaks plain HTTP.',
+  )}`;
+}
+
+/** The outcome-unknown next step naming what to check (`target`) and where (`system`). */
+function outcomeUnknownStep(t: Translate, target?: string, system?: string): string {
+  const whereZh = system !== undefined ? `系统「${system}」` : '目标系统';
+  const whereEn = system !== undefined ? `the system "${system}"` : 'the target system';
+  const whatZh =
+    target !== undefined ? ` ${target}${target.endsWith('）') ? '' : ' '}是否已生效` : '它是否生效';
+  return t(
+    `这个动作可能已经执行，也可能没有，平台无法确认。不要直接重试：先到${whereZh}核对${whatZh}，再决定要不要重新发起。`,
+    `This action may or may not have run, and the platform cannot tell which. Do not just retry: check on ${whereEn} whether ${target ?? 'it'} took effect, then decide whether to request it again.`,
+  );
 }
 
 /** The error's short title in the viewer's language. Known codes use the curated tables; an

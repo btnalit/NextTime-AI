@@ -324,6 +324,20 @@ docker inspect nexttime-gate-test --format '{{.State.StartedAt}}'
 期望第二次调用：`"replayed":true`，`data` 与第一次完全相同；`StartedAt` **不变**（没有二次重
 启）——这正是 S2.5 验收原文"对自建测试容器 apply container.restart 生效且重复不重启"的字面验证。
 
+### 8.1 门的幂等文件是「没执行」的依据（遗留 287）
+
+门的数据目录（`${NEXTTIME_DATA}/gatekeepers/<门>/`，`gate-host` 下每个实例一个子目录）里的幂等
+文件，是内核判断「门上没有记录 ⇒ 什么都没跑」的唯一依据。reaper 查询一条结果不明的请求时，门答
+`apply_not_received`，内核就记「没执行」，人或 agent 可能据此重新发起。这个推断只在文件完整时成立：
+条目被清掉、文件被删除、清空，或被旧备份覆盖，都会把「执行过」误报成「没执行」。
+
+- 这个门上还有 `executing` 的 ActionRequest 时，**不清理旧条目，不删除、清空、替换或恢复门的数据
+  目录**。确认方法：`list_action_requests`（`status: "executing"`，带这个门的 id），或控制台审批历史
+  里的「结果不明，平台向门查询中」。
+- 要控制文件大小，只清理内核已经结束（`executed` / `failed`）的请求对应的条目。
+- 文件已经丢失或回滚时：当时处于 `executing` 的请求一律按「结果不明」处理，到目标系统人工核对，
+  不要重新发起。
+
 ## 9. 收尾
 
 ```bash

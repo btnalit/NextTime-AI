@@ -56,6 +56,10 @@ describe('actionOutcomeOfToolResult (legacy 287)', () => {
     ).toBe('outcome_unknown');
   });
 
+  it('carries the request id through', () => {
+    expect(actionOutcomeOfToolResult(pretty({ id: 'a7', status: 'executed' }))?.id).toBe('a7');
+  });
+
   it('carries the waiting fields through', () => {
     const outcome = actionOutcomeOfToolResult(
       pretty({
@@ -76,7 +80,10 @@ describe('actionOutcomeOfToolResult (legacy 287)', () => {
       status: 'failed',
       reason: `outcome_unknown: ${'x'.repeat(400)}`,
     });
-    expect(actionOutcomeOfToolResult(full.slice(0, 120))?.kind).toBe('outcome_unknown');
+    expect(actionOutcomeOfToolResult(full.slice(0, 120))).toMatchObject({
+      kind: 'outcome_unknown',
+      id: 'a1',
+    });
     const executing = pretty({
       id: 'a1',
       status: 'executing',
@@ -104,7 +111,8 @@ describe('actionOutcomeChip', () => {
       actionOutcomeChip({ kind, status: 'failed' }, zh);
     expect(chip('outcome_unknown')).toEqual({ className: 'chip-danger', label: '结果不明' });
     expect(chip('not_run')).toEqual({ className: 'chip-neutral', label: '没执行' });
-    expect(chip('in_doubt')).toEqual({ className: 'chip-danger', label: '结果不明·查询中' });
+    // UX acceptance of #586 (P3): red only for the final state a person has to check.
+    expect(chip('in_doubt')).toEqual({ className: 'chip-warn', label: '结果不明·查询中' });
     expect(chip('done').label).toBe('完成');
     expect(actionOutcomeChip({ kind: 'not_run', status: 'failed' }, en).label).toBe('did not run');
   });
@@ -113,14 +121,23 @@ describe('actionOutcomeChip', () => {
 describe('waitingReason / waitingShortLabel', () => {
   const since = '2026-10-16T00:00:00Z';
 
-  it('an executing row in doubt: danger, says the platform asks the gate and never re-runs', () => {
+  it('an executing row in doubt: warn, says the platform asks the gate and never re-runs', () => {
     const row = { status: 'executing', outcomeInDoubt: { since, reason: null } };
     const reason = waitingReason(row, zh);
-    expect(reason?.tone).toBe('danger');
+    expect(reason?.tone).toBe('warn');
     expect(reason?.title).toBe('动作结果不明，平台正在向门查询');
     expect(reason?.message).toContain('从不重新执行');
     expect(reason?.message).toContain('排在它后面的请求都会等它');
-    expect(waitingShortLabel(row, zh)?.tone).toBe('danger');
+    expect(waitingShortLabel(row, zh)?.tone).toBe('warn');
+  });
+
+  it('names the usual cause when the doubt came from a TLS record-layer error', () => {
+    const reason = (text: string) =>
+      waitingReason({ status: 'executing', outcomeInDoubt: { since, reason: text } }, zh)?.message;
+    expect(
+      reason('gate_connection_lost: … may have been sent (ERR_SSL_WRONG_VERSION_NUMBER) — …'),
+    ).toContain('常见原因：https 地址指到了只讲明文 HTTP 的端口');
+    expect(reason('gate_connection_lost: … (ECONNRESET) — …')).not.toContain('常见原因');
   });
 
   it('an approved row says what holds it back, without naming that request', () => {

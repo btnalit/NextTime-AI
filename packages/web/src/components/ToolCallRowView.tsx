@@ -1,4 +1,6 @@
 import { memo } from 'react';
+import { useCapability } from '../hooks/useCapability.js';
+import { useRoleCan } from '../hooks/useRoleCan.js';
 import {
   type ActionOutcome,
   actionOutcomeChip,
@@ -6,12 +8,14 @@ import {
   actionTargetLabel,
   waitingReason,
 } from '../lib/action-outcome.js';
+import type { CapabilityCaller } from '../lib/clients.js';
 import { gateReasonNextStep } from '../lib/errors.js';
-import { formatTime, prettyJson } from '../lib/format.js';
+import { formatTime, prettyJson, shortId } from '../lib/format.js';
 import { type Translate, useT } from '../lib/i18n.js';
 import { hrefs } from '../lib/router.js';
 import type { ToolCallRow } from '../lib/streaming-reducer.js';
 import { type ToolCallRecord, previewDisplayText } from '../lib/tool-call-record.js';
+import { useGatekeeperDirectory } from './approvals/useDirectoryNames.js';
 import { Notice } from './kit/notice.js';
 import { RouteLink } from './kit/route-link.js';
 import { Icon } from './ui/Icon.js';
@@ -38,20 +42,72 @@ function gatekeeperIdOf(args: unknown): string | undefined {
  *  system the call went to when its arguments name it (UX acceptance of #538).
  *
  *  Legacy 287 (UX acceptance of #586): "not sent" is a plain note — nothing ran; "outcome unknown"
- *  is the loudest — it may have run — names what to check on the target (`target`), says what the
- *  raw `"status": "failed"` below means, and has no link: the system's console page cannot tell
- *  whether the action took effect. */
+ *  is the loudest — it may have run — names what to check (`target`) and on which system, says
+ *  what the raw `"status": "failed"` below means, and has no link: the system's console page
+ *  cannot tell whether the action took effect. */
 function GateReasonNote({
-  text,
-  gatekeeperId,
-  target,
-}: {
+  http,
+  actionRequestId,
+  ...note
+}: GateReasonNoteProps & {
+  readonly http?: CapabilityCaller;
+  readonly actionRequestId?: string;
+}) {
+  const t = useT();
+  if (http !== undefined && gateReasonNextStep(note.text, t)?.code === 'outcome_unknown') {
+    return <NamedGateReasonNote http={http} actionRequestId={actionRequestId} {...note} />;
+  }
+  return <GateReasonNoteBody {...note} />;
+}
+
+interface GateReasonNoteProps {
   readonly text: string;
   readonly gatekeeperId?: string;
   readonly target?: string;
+}
+
+/** An outcome-unknown note that names the system the call went to (UX acceptance of #586, P3):
+ *  from the call's own `gatekeeperId` argument (`request_action`), else — a gate tool's arguments
+ *  carry none — from the ActionRequest the result names (`get_action`, operator and up; another
+ *  reader gets the note without the name). Two systems with one name add the short id. */
+function NamedGateReasonNote({
+  http,
+  actionRequestId,
+  ...note
+}: GateReasonNoteProps & {
+  readonly http: CapabilityCaller;
+  readonly actionRequestId?: string;
 }) {
+  const directory = useGatekeeperDirectory(http);
+  const canGetAction = useRoleCan(http)('get_action') === true;
+  const lookUp = note.gatekeeperId === undefined && actionRequestId !== undefined && canGetAction;
+  const action = useCapability<{ readonly gatekeeperId: string }>(
+    http,
+    'get_action',
+    { actionRequestId: actionRequestId ?? '' },
+    { enabled: lookUp },
+  );
+  const gatekeeperId =
+    note.gatekeeperId ??
+    (lookUp && action.state.status === 'ready' ? action.state.data.gatekeeperId : undefined);
+  const name = gatekeeperId !== undefined ? directory.names.get(gatekeeperId) : undefined;
+  const system =
+    gatekeeperId !== undefined && name !== undefined
+      ? directory.same.has(gatekeeperId)
+        ? `${name} · ${shortId(gatekeeperId)}`
+        : name
+      : undefined;
+  return <GateReasonNoteBody {...note} system={system} />;
+}
+
+function GateReasonNoteBody({
+  text,
+  gatekeeperId,
+  target,
+  system,
+}: GateReasonNoteProps & { readonly system?: string }) {
   const t = useT();
-  const step = gateReasonNextStep(text, t, target);
+  const step = gateReasonNextStep(text, t, target, system);
   if (!step) return null;
   const outcomeUnknown = step.code === 'outcome_unknown';
   return (
@@ -81,18 +137,14 @@ function GateReasonNote({
 }
 
 /** Why an action the result reports has not finished (legacy 287, review of #586): an
- *  `executing` one whose call got no answer, or an approved one held back by an earlier request
- *  on the same system. */
+ *  `executing` one whose call got no answer (warn — the platform is still asking the gate), or an
+ *  approved one held back by an earlier request on the same system. */
 function WaitingNote({ outcome }: { readonly outcome: ActionOutcome | null }) {
   const t = useT();
   const reason = outcome ? waitingReason(outcome, t) : null;
   if (!reason) return null;
   return (
-    <Notice
-      tone={reason.tone}
-      testId="tool-call-waiting"
-      icon={reason.tone === 'danger' ? <Icon name="alert" size="s" /> : undefined}
-    >
+    <Notice tone={reason.tone} testId="tool-call-waiting">
       <span className="stack-s">
         <span className="font-medium">{reason.title}</span>
         <span>{reason.message}</span>
@@ -104,7 +156,14 @@ function WaitingNote({ outcome }: { readonly outcome: ActionOutcome | null }) {
 /** components/ToolCallRowView: one `toolCallStarted`/`toolCallEnded` pair (S1.8 deliverable 1:
  *  "tool-call rows from toolCallStarted/Ended") as a collapsed disclosure — name and state on the
  *  summary line, arguments and result inside. */
-export function ToolCallRowView({ row }: { readonly row: ToolCallRow }) {
+export function ToolCallRowView({
+  row,
+  http,
+}: {
+  readonly row: ToolCallRow;
+  /** Names the system an outcome-unknown note points at; without it the note names none. */
+  readonly http?: CapabilityCaller;
+}) {
   const t = useT();
   const running = row.status === 'started';
   // W7: a tool call the runtime flagged `isError` reads "failed" instead of "done" — the model saw
@@ -156,6 +215,8 @@ export function ToolCallRowView({ row }: { readonly row: ToolCallRow }) {
           <>
             <span className="section-title">{t('结果', 'Result')}</span>
             <GateReasonNote
+              http={http}
+              actionRequestId={action?.id}
               text={resultText}
               gatekeeperId={gatekeeperIdOf(row.args)}
               target={actionTargetLabel(row.name, row.args, t)}
@@ -201,7 +262,13 @@ function outcomeChip(record: ToolCallRecord, t: Translate): { className: string;
 
 /** One persisted tool call (`lib/tool-call-record`) — the same disclosure as a live row, plus what
  *  the kernel did to the preview (cut, values hidden) and when the call started and ended. */
-export function PersistedToolCallRowView({ record }: { readonly record: ToolCallRecord }) {
+export function PersistedToolCallRowView({
+  record,
+  http,
+}: {
+  readonly record: ToolCallRecord;
+  readonly http?: CapabilityCaller;
+}) {
   const t = useT();
   const action = actionOutcomeOfRecord(record);
   const chip = action ? actionOutcomeChip(action, t) : outcomeChip(record, t);
@@ -248,6 +315,8 @@ export function PersistedToolCallRowView({ record }: { readonly record: ToolCall
           <>
             <span className="section-title">{t('结果', 'Result')}</span>
             <GateReasonNote
+              http={http}
+              actionRequestId={action?.id}
               text={record.result.text}
               gatekeeperId={record.args ? gatekeeperIdOf(record.args.text) : undefined}
               target={actionTargetLabel(record.name ?? undefined, record.args?.text, t)}
@@ -294,20 +363,24 @@ export function PersistedToolCallRowView({ record }: { readonly record: ToolCall
  *  delta. */
 export const ToolCallGroupView = memo(function ToolCallGroupView({
   records,
-}: { readonly records: readonly ToolCallRecord[] }) {
+  http,
+}: {
+  readonly records: readonly ToolCallRecord[];
+  readonly http?: CapabilityCaller;
+}) {
   const t = useT();
   const failed = records.filter((r) => r.outcome === 'failed').length;
   const unfinished = records.filter((r) => r.outcome === 'not_finished').length;
   // Legacy 287: an action whose outcome is unknown came back from a call that finished, but it is
-  // the case a reader most needs to see — counted and opened like a failure.
-  const outcomeUnknown = records.filter((r) => {
-    const kind = actionOutcomeOfRecord(r)?.kind;
-    return kind === 'outcome_unknown' || kind === 'in_doubt';
-  }).length;
+  // the case a reader most needs to see — counted and opened like a failure; one the platform is
+  // still asking the gate about is counted apart, in the waiting tone.
+  const kinds = records.map((r) => actionOutcomeOfRecord(r)?.kind);
+  const outcomeUnknown = kinds.filter((kind) => kind === 'outcome_unknown').length;
+  const inDoubt = kinds.filter((kind) => kind === 'in_doubt').length;
   return (
     <details
       className="tool-call-group"
-      open={failed + unfinished + outcomeUnknown > 0}
+      open={failed + unfinished + outcomeUnknown + inDoubt > 0}
       data-testid="tool-call-group"
     >
       <summary>
@@ -328,6 +401,11 @@ export const ToolCallGroupView = memo(function ToolCallGroupView({
             {t(`${outcomeUnknown} 个结果不明`, `${outcomeUnknown} outcome unknown`)}
           </span>
         ) : null}
+        {inDoubt > 0 ? (
+          <span className="chip chip-s chip-warn" data-testid="tool-call-group-in-doubt">
+            {t(`${inDoubt} 个结果不明·查询中`, `${inDoubt} outcome unknown · asking`)}
+          </span>
+        ) : null}
       </summary>
       <div className="tool-calls">
         <span className="text-3 text-small">
@@ -340,7 +418,7 @@ export const ToolCallGroupView = memo(function ToolCallGroupView({
           {t('。', '.')}
         </span>
         {records.map((record) => (
-          <PersistedToolCallRowView key={record.toolCallId} record={record} />
+          <PersistedToolCallRowView key={record.toolCallId} record={record} http={http} />
         ))}
       </div>
     </details>

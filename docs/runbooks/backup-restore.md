@@ -182,7 +182,8 @@ docker compose exec -T postgres psql -U nexttime -d postgres -c 'DROP DATABASE "
 只有临时库路径（`drill-restore.sh`）能在主机上实测；活库路径除改名一步外与它完全相同。`--files` 恢复到暂存目录 `${NEXTTIME_DATA}/restore/<ts>/`，从不覆盖 `workspaces/
 config/ gatekeepers/ caddy/ llm-proxy/ models/` 任何一个活目录——把 `llm-proxy/keys.json` 之类
 的供应商 key 挪回 `${NEXTTIME_DATA}/llm-proxy/` 前先核对是不是真要覆盖当前值，覆盖前建议先把
-当前 `keys.json` 另存一份；暂存目录本身继承了归档里 `keys.json` 的 `0600`，但目录本身按当前
+当前 `keys.json` 另存一份；`gatekeepers/` 下门的幂等文件不要在还有 `executing` 请求时挪回——旧文件
+缺了备份之后执行过的条目，内核会把它们误记成「没执行」（见 `host-gatekeepers.md` §8.1）；暂存目录本身继承了归档里 `keys.json` 的 `0600`，但目录本身按当前
 umask 创建，操作完成后记得清理 `${NEXTTIME_DATA}/restore/<ts>/`（同一份密钥材料，不要留在暂存区）。
 
 ## 验证（自动化演练：`scripts/drill-restore.sh`）

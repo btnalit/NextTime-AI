@@ -89,7 +89,7 @@ describe('ApprovalDetail (S6-A B2 / B3 / C25)', () => {
       outcomeInDoubt: { since: '2026-10-16T07:00:00.000Z', reason: 'gate_connection_lost: …' },
     });
     const notice = screen.getByTestId('approval-waiting');
-    expect(notice.className).toContain('notice-danger');
+    expect(notice.className).toContain('notice-warn');
     expect(notice.textContent).toContain('动作结果不明，平台正在向门查询');
     expect(notice.textContent).toContain('动作可能已经执行');
   });

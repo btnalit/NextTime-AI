@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { PermissionsProvider } from '../hooks/usePermissions.js';
+import type { CapabilityCaller } from '../lib/clients.js';
 import { PersistedToolCallRowView, ToolCallGroupView, ToolCallRowView } from './ToolCallRowView.js';
 
 afterEach(cleanup);
@@ -233,7 +235,7 @@ describe('legacy 287: one reading of a gate action', () => {
     expect(screen.getByText('没执行').getAttribute('data-action-outcome')).toBe('not_run');
   });
 
-  it('a live row stuck in executing with no answer says the outcome is unknown and the platform is asking', () => {
+  it('a live row stuck in executing with no answer says the outcome is unknown and the platform is asking — in the waiting tone', () => {
     const outcome = {
       id: 'ar-2',
       status: 'executing',
@@ -256,11 +258,12 @@ describe('legacy 287: one reading of a gate action', () => {
         }}
       />,
     );
+    // UX acceptance of #586 (P3): nothing for the reader to do yet — orange, not the final red.
     const chip = screen.getByText('结果不明·查询中');
-    expect(chip.className).toContain('chip-danger');
+    expect(chip.className).toContain('chip-warn');
     expect(chip.getAttribute('data-action-outcome')).toBe('in_doubt');
     const waiting = screen.getByTestId('tool-call-waiting');
-    expect(waiting.className).toContain('notice-danger');
+    expect(waiting.className).toContain('notice-warn');
     expect(waiting.textContent).toContain('动作结果不明，平台正在向门查询');
     expect(waiting.textContent).toContain('从不重新执行');
   });
@@ -301,6 +304,32 @@ describe('legacy 287: one reading of a gate action', () => {
     const group = screen.getByTestId('tool-call-group') as HTMLDetailsElement;
     expect(group.open).toBe(true);
     expect(screen.getByTestId('tool-call-group-outcome-unknown').textContent).toBe('1 个结果不明');
+    expect(screen.queryByTestId('tool-call-group-in-doubt')).toBeNull();
+  });
+
+  it('opens the group and counts an action the platform is still asking about apart, in the waiting tone', () => {
+    render(
+      <ToolCallGroupView
+        records={[
+          persisted(
+            JSON.stringify(
+              {
+                id: 'ar-1',
+                status: 'executing',
+                outcomeInDoubt: { since: '2026-10-16T07:00:00.000Z', reason: null },
+              },
+              null,
+              2,
+            ),
+          ),
+        ]}
+      />,
+    );
+    expect((screen.getByTestId('tool-call-group') as HTMLDetailsElement).open).toBe(true);
+    const chip = screen.getByTestId('tool-call-group-in-doubt');
+    expect(chip.textContent).toBe('1 个结果不明·查询中');
+    expect(chip.className).toContain('chip-warn');
+    expect(screen.queryByTestId('tool-call-group-outcome-unknown')).toBeNull();
   });
 
   it('a plain tool result keeps the plain chip', () => {
@@ -311,5 +340,103 @@ describe('legacy 287: one reading of a gate action', () => {
     );
     const chip = screen.getByText('完成');
     expect(chip.hasAttribute('data-action-outcome')).toBe(false);
+  });
+});
+
+// UX acceptance of #586 (P3): an outcome-unknown note says which system to check — one Operation
+// name can exist on two systems.
+describe('legacy 287: the outcome-unknown note names the system', () => {
+  const outcomeUnknown = JSON.stringify(
+    { id: 'ar-9', status: 'failed', reason: 'outcome_unknown: apply for actionRequestId "ar-9"' },
+    null,
+    2,
+  );
+  const record = (name: string, argsText: string) => ({
+    toolCallId: 'c9',
+    name,
+    outcome: 'done' as const,
+    args: { text: argsText, truncated: false, totalChars: argsText.length },
+    result: { text: outcomeUnknown, truncated: false, totalChars: outcomeUnknown.length },
+    redactedValues: 0,
+    startedAt: null,
+    endedAt: null,
+  });
+  const gateHttp = (role: string) => {
+    const calls: { name: string; params: unknown }[] = [];
+    const http: CapabilityCaller = {
+      call: vi.fn(async (name: string, params?: unknown) => {
+        calls.push({ name, params });
+        if (name === 'get_workspace')
+          return { id: 'ws-1', name: 'Acme', caller: { id: 'p', role } };
+        if (name === 'list_gatekeepers') {
+          return {
+            items: [
+              { id: 'gk-1', name: 'docker' },
+              { id: 'gk-2', name: 'nas-docker' },
+            ],
+            nextCursor: null,
+          };
+        }
+        if (name === 'get_action') return { id: 'ar-9', status: 'failed', gatekeeperId: 'gk-2' };
+        throw new Error(`unscripted ${name}`);
+      }) as CapabilityCaller['call'],
+    };
+    return { http, calls };
+  };
+
+  it('from a request_action call’s own gatekeeperId argument', async () => {
+    const { http, calls } = gateHttp('owner');
+    render(
+      <PermissionsProvider>
+        <PersistedToolCallRowView
+          http={http}
+          record={record(
+            'request_action',
+            '{"gatekeeperId":"gk-1","operation":"container.restart","params":{"name":"media"}}',
+          )}
+        />
+      </PermissionsProvider>,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('tool-call-gate-reason').textContent).toContain(
+        '先到系统「docker」核对 container.restart（name: media）是否已生效',
+      ),
+    );
+    expect(calls.some((call) => call.name === 'get_action')).toBe(false);
+  });
+
+  it('from the ActionRequest a gate tool’s result names, whose arguments carry no gate', async () => {
+    const { http, calls } = gateHttp('owner');
+    render(
+      <PermissionsProvider>
+        <PersistedToolCallRowView
+          http={http}
+          record={record('nas_docker_container_restart', '{"name":"media"}')}
+        />
+      </PermissionsProvider>,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('tool-call-gate-reason').textContent).toContain(
+        '先到系统「nas-docker」核对 nas_docker_container_restart（name: media）是否已生效',
+      ),
+    );
+    expect(calls).toContainEqual({ name: 'get_action', params: { actionRequestId: 'ar-9' } });
+  });
+
+  it('a reader whose role cannot open the request gets the note without a name, and no request', async () => {
+    const { http, calls } = gateHttp('member');
+    render(
+      <PermissionsProvider>
+        <PersistedToolCallRowView
+          http={http}
+          record={record('nas_docker_container_restart', '{"name":"media"}')}
+        />
+      </PermissionsProvider>,
+    );
+    await waitFor(() => expect(calls.some((call) => call.name === 'get_workspace')).toBe(true));
+    expect(screen.getByTestId('tool-call-gate-reason').textContent).toContain(
+      '先到目标系统核对 nas_docker_container_restart（name: media）是否已生效',
+    );
+    expect(calls.some((call) => call.name === 'get_action')).toBe(false);
   });
 });

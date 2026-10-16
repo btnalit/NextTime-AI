@@ -1,3 +1,4 @@
+import { withPlaintextTlsHint } from './errors.js';
 import type { Translate } from './i18n.js';
 
 /**
@@ -44,6 +45,8 @@ export type ActionOutcomeKind =
 export interface ActionOutcome extends ActionWaitingFields {
   readonly kind: ActionOutcomeKind;
   readonly status: string;
+  /** The ActionRequest's id, when the result shows it. */
+  readonly id?: string;
 }
 
 /** The code a failure reason starts with (`outcome_unknown: …`). */
@@ -51,7 +54,7 @@ const REASON_CODE = /^(outcome_unknown|gate_unreachable|apply_not_received):/;
 /** A cut-short preview of the outcome object as the Worker's tool writes it
  *  (`JSON.stringify(result, null, 2)`, `id` then `status`): only its own top-level `status`, never
  *  one inside a simulated effect or the gate's data. */
-const PREVIEW_STATUS = /^\{\s*"id":\s*"[^"]*",\s*"status":\s*"([a-z_]+)"/;
+const PREVIEW_STATUS = /^\{\s*"id":\s*"([^"]*)",\s*"status":\s*"([a-z_]+)"/;
 const PREVIEW_REASON_CODE =
   /\n {2}"reason":\s*"(outcome_unknown|gate_unreachable|apply_not_received):/;
 const PREVIEW_IN_DOUBT = /\n {2}"outcomeInDoubt":\s*\{/;
@@ -130,15 +133,18 @@ export function actionOutcomeOfToolResult(text: string): ActionOutcome | null {
       ? {
           kind,
           status,
+          id: object.id as string,
           outcomeInDoubt: waiting.outcomeInDoubt ?? null,
           queuedBehind: waiting.queuedBehind ?? null,
         }
       : null;
   }
-  const status = PREVIEW_STATUS.exec(text)?.[1];
-  if (status === undefined) return null;
+  const preview = PREVIEW_STATUS.exec(text);
+  const id = preview?.[1];
+  const status = preview?.[2];
+  if (id === undefined || status === undefined) return null;
   const kind = kindOf(status, PREVIEW_REASON_CODE.exec(text)?.[1], PREVIEW_IN_DOUBT.test(text));
-  return kind ? { kind, status } : null;
+  return kind ? { kind, status, id } : null;
 }
 
 /** The chip a tool row shows for an action outcome — the same words as its notice. */
@@ -156,7 +162,7 @@ export function actionOutcomeChip(
     case 'failed':
       return { className: 'chip-danger', label: t('失败', 'failed') };
     case 'in_doubt':
-      return { className: 'chip-danger', label: t('结果不明·查询中', 'outcome unknown · asking') };
+      return { className: 'chip-warn', label: t('结果不明·查询中', 'outcome unknown · asking') };
     case 'running':
       return { className: 'chip-info', label: t('执行中', 'running') };
     case 'queued':
@@ -171,26 +177,31 @@ export function actionOutcomeChip(
 }
 
 /** Why a request that has not finished is waiting, said in the viewer's language: an `executing`
- *  one in doubt (danger — it may have run), or an approved one queued behind an earlier request
- *  (info). `null` when the row says neither. */
+ *  one in doubt (warn — the platform is still asking the gate, nothing for the reader to do yet;
+ *  danger is kept for the final "outcome unknown" a person has to check, UX acceptance of #586),
+ *  or an approved one queued behind an earlier request (info). `null` when the row says neither. */
 export function waitingReason(
   row: { readonly status: string } & ActionWaitingFields,
   t: Translate,
 ): {
-  readonly tone: 'danger' | 'info';
+  readonly tone: 'warn' | 'info';
   readonly title: string;
   readonly message: string;
 } | null {
   if (row.status === 'executing' && row.outcomeInDoubt) {
     return {
-      tone: 'danger',
+      tone: 'warn',
       title: t(
         '动作结果不明，平台正在向门查询',
         'Outcome unknown — the platform is asking the gate',
       ),
-      message: t(
-        '执行请求发出后没有收到门的答复，动作可能已经执行。平台约 10 分钟后向门查询这次请求，查到就记下结果，从不重新执行；查不到会标为「结果不明」交你核对。在这之前，同一个系统上排在它后面的请求都会等它。',
-        'The call got no answer from the gate after it was sent, so the action may have run. About 10 minutes after the call the platform asks the gate about this request and records what it says — it never runs it again; if the gate cannot say, it is marked "outcome unknown" for you to check. Until then, later requests on the same system wait for it.',
+      message: withPlaintextTlsHint(
+        t(
+          '执行请求发出后没有收到门的答复，动作可能已经执行。平台约 10 分钟后向门查询这次请求，查到就记下结果，从不重新执行；查不到会标为「结果不明」交你核对。在这之前，同一个系统上排在它后面的请求都会等它。',
+          'The call got no answer from the gate after it was sent, so the action may have run. About 10 minutes after the call the platform asks the gate about this request and records what it says — it never runs it again; if the gate cannot say, it is marked "outcome unknown" for you to check. Until then, later requests on the same system wait for it.',
+        ),
+        row.outcomeInDoubt.reason,
+        t,
       ),
     };
   }
@@ -223,10 +234,10 @@ export function waitingReason(
 export function waitingShortLabel(
   row: { readonly status: string } & ActionWaitingFields,
   t: Translate,
-): { readonly tone: 'danger' | 'info'; readonly label: string } | null {
+): { readonly tone: 'warn' | 'info'; readonly label: string } | null {
   if (row.status === 'executing' && row.outcomeInDoubt) {
     return {
-      tone: 'danger',
+      tone: 'warn',
       label: t('结果不明，平台向门查询中', 'Outcome unknown — the platform is asking the gate'),
     };
   }

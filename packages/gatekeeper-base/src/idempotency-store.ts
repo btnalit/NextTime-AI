@@ -53,7 +53,9 @@ import { removeStaleTempFiles, writeFileAtomic } from './atomic-file.js';
  * processes sharing the same file (no cross-process locking) and is O(n) per write in the number
  * of stored keys (no compaction/pruning here — an operator wanting bounded growth should
  * periodically prune old entries out-of-band, or a future task should replace this with a real
- * embedded KV store).
+ * embedded KV store). Legacy 287: `lookup`'s "absent" is read as "nothing ran", so a key may be
+ * pruned only once the kernel has finished its ActionRequest, and the file is never deleted or
+ * replaced while one on this gate is still executing (README, "Idempotent apply store").
  */
 
 export interface IdempotencyDescriptor {

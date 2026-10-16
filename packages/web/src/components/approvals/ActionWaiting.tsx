@@ -11,9 +11,10 @@ type WaitingRow = { readonly status: string } & ActionWaitingFields;
 /**
  * components/approvals/ActionWaiting (legacy 287, review of #586): why an ActionRequest that has
  * not finished is waiting, from the `outcomeInDoubt` / `queuedBehind` the kernel derives on read
- * (`lib/action-outcome`). An `executing` row whose call got no answer may already have run (danger);
- * an approved row is queued behind an earlier request on the same system (info). Renders nothing
- * for a row that says neither.
+ * (`lib/action-outcome`). An `executing` row whose call got no answer may already have run, and the
+ * platform is asking the gate (warn — nothing for the reader to do yet); an approved row is queued
+ * behind an earlier request on the same system (info). Renders nothing for a row that says
+ * neither.
  */
 
 /** A few words under a list row's status chip. */
@@ -29,9 +30,9 @@ export function ActionWaitingLine({
   if (!waiting) return null;
   return (
     <span
-      className={`text-small ${waiting.tone === 'danger' ? 'text-danger' : 'text-3'}`}
+      className={`text-small ${waiting.tone === 'warn' ? 'text-warn' : 'text-3'}`}
       data-testid={testId}
-      data-waiting={waiting.tone === 'danger' ? 'outcome_in_doubt' : 'queued_behind'}
+      data-waiting={waiting.tone === 'warn' ? 'outcome_in_doubt' : 'queued_behind'}
     >
       {waiting.label}
     </span>

@@ -123,8 +123,19 @@ ActionRequest `failed: outcome_unknown` for a person to reconcile. The same answ
 **Durability limits**: safe for one gate
 process; not safe for multiple gate processes sharing the same data directory (no cross-process
 locking); no compaction — an operator wanting bounded growth should prune old entries
-out-of-band. `InMemoryIdempotencyStore` is available for tests or a gate that deliberately opts
-out of on-disk idempotency.
+out-of-band, within the limit below. `InMemoryIdempotencyStore` is available for tests or a gate
+that deliberately opts out of on-disk idempotency.
+
+**"No record" rests on this file being complete** (legacy 287). `apply_lookup` answers 404
+`apply_not_received`, and the kernel records "nothing ran", only because every `apply` that ran
+left its key here first. A key pruned, or a file deleted, emptied or replaced by an older copy,
+turns that answer into a wrong "nothing ran" — and the request may then be made again. So, while
+any ActionRequest on this gate is still `executing` (`list_action_requests` with
+`status: "executing"` and the gate's id; the console shows one in doubt as 「结果不明，平台向门查询中」):
+never prune its key, and never delete, empty, replace or restore `GATE_DATA_DIR`. Prune only keys
+of requests the kernel has finished (`executed` / `failed`). If the file was lost or rolled back
+anyway, read every request on that gate that was executing at the time as outcome unknown and
+check the target by hand.
 
 ## Data directory
 

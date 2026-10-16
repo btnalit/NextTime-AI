@@ -226,6 +226,35 @@ describe('legacy 287: not sent, or outcome unknown', () => {
     );
   });
 
+  it('an outcome-unknown note names the system to check when it is given (UX acceptance of #586, P3)', () => {
+    expect(
+      gateReasonNextStep('outcome_unknown: …', zh, 'container.restart（name: media）', 'docker')
+        ?.message,
+    ).toContain('先到系统「docker」核对 container.restart（name: media）是否已生效');
+    expect(gateReasonNextStep('outcome_unknown: …', zh, undefined, 'docker')?.message).toContain(
+      '先到系统「docker」核对它是否生效',
+    );
+    expect(gateReasonNextStep('outcome_unknown: …', en, 'x', 'docker')?.message).toContain(
+      'check on the system "docker" whether x took effect',
+    );
+  });
+
+  it('names the usual cause of a TLS record-layer error (#501 review of #586)', () => {
+    const reason =
+      'outcome_unknown: … http transport: POST /x failed after the request may have reached the target (ERR_SSL_WRONG_VERSION_NUMBER) — it may have run';
+    expect(gateReasonNextStep(reason, zh)?.message).toMatch(
+      /再决定要不要重新发起。常见原因：https 地址指到了只讲明文 HTTP 的端口。$/,
+    );
+    expect(
+      gateReasonNextStep('outcome_unknown: … (ERR_SSL_PACKET_LENGTH_TOO_LONG)', en)?.message,
+    ).toContain(
+      ' A common cause: an https address pointing at a port that only speaks plain HTTP.',
+    );
+    expect(gateReasonNextStep('outcome_unknown: … (ECONNRESET)', zh)?.message).not.toContain(
+      '常见原因',
+    );
+  });
+
   it('the gate’s own error code inside another word is not a reason', () => {
     expect(gateReasonNextStep('{"code":"apply_outcome_unknown"}', zh)).toBeNull();
     expect(gateReasonNextStep('outcome unknown: the gate may still complete it', zh)).toBeNull();
