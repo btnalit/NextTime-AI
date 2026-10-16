@@ -186,6 +186,18 @@ export const OperationDeprecateResultWireSchema = z
   })
   .strict();
 
+/** `discard_operation_draft`'s result (legacy 278): the exact draft version that was marked
+ *  `discarded` (`OperationStatus`) — kept as a row, left out of every directory read. */
+export const OperationDiscardResultWireSchema = z
+  .object({
+    gatekeeperId: z.string(),
+    name: z.string(),
+    version: z.number().int().positive(),
+    status: z.literal('discarded'),
+  })
+  .strict();
+export type OperationDiscardResultWire = z.infer<typeof OperationDiscardResultWireSchema>;
+
 /** `update_operation_description`'s result (S8 W3-K1, leftover 81) — the Operation's new
  *  description, so the catalog row can refresh without a full reload. */
 export const UpdateOperationDescriptionResultWireSchema = z

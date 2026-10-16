@@ -25,8 +25,10 @@ import {
   OperationIdentityConflictError,
   OperationNotFoundError,
   classifyOperationGovernanceChange,
+  countOperationsByGatekeeper,
   deprecateOperation,
   diffOperationGovernanceFields,
+  discardOperationDraft,
   getOperation,
   getPublishedOperation,
   importDraftDiffersFromAnnounced,
@@ -1709,6 +1711,217 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
       // Never an agent's or person's proposal, never a row that is not a draft.
       expect(importDraftDiffersFromAnnounced({ ...draft, origin: 'agent' }, fixed)).toBe(false);
       expect(importDraftDiffersFromAnnounced({ ...draft, status: 'published' }, fixed)).toBe(false);
+    });
+  });
+
+  describe('legacy 278: discardOperationDraft — draft → discarded, kept, never deleted', () => {
+    async function importDraft(name: string): Promise<OperationRecord> {
+      const act = await newActivity();
+      const result = await inTx((client) =>
+        importManifest(client, workspaceId, {
+          gatekeeperId,
+          operations: [testOperation({ name })],
+          proposedBy: { id: ownerId, kind: 'human' },
+          activityId: act,
+        }),
+      );
+      const draft = result.imported[0];
+      if (!draft) throw new Error('expected an imported draft');
+      return draft;
+    }
+
+    const owner = () => ({ principalId: ownerId, role: 'owner' as const });
+
+    it('marks the row discarded and leaves it out of every read of the Operation; the exposes Fact stays; the next import opens a new version', async () => {
+      const name = `discard.import.${randomUUID()}`;
+      const draft = await importDraft(name);
+      const discarded = await inTx((client) =>
+        discardOperationDraft(client, workspaceId, {
+          gatekeeperId,
+          name,
+          version: draft.version,
+          actor: owner(),
+        }),
+      );
+      expect(discarded).toMatchObject({
+        id: draft.id,
+        version: 1,
+        status: 'discarded',
+        origin: 'import',
+        proposedBy: { id: ownerId, kind: 'human' },
+      });
+      expect(discarded.definitionDigest).toBe(operationDefinitionDigest(draft.operation));
+
+      expect(await inTx((client) => getOperation(client, workspaceId, gatekeeperId, name))).toBe(
+        null,
+      );
+      const listed = await inTx((client) => listOperations(client, workspaceId, { gatekeeperId }));
+      expect(listed.some((record) => record.name === name)).toBe(false);
+      const counted = await inTx((client) => countOperationsByGatekeeper(client, workspaceId));
+      const countedBefore = listed.filter(
+        (record, index, all) => all.findIndex((other) => other.name === record.name) === index,
+      ).length;
+      expect(counted.get(gatekeeperId)).toBe(countedBefore);
+
+      // Kept, not deleted: the row and the Fact its registration asserted are still there.
+      const kept = await inTx((client) =>
+        client.query<{ status: string; exposes: string }>(
+          `select o.properties ->> 'status' as status,
+                  (select count(*) from links l
+                    where l.workspace_id = o.workspace_id and l.target_object_id = o.id
+                      and l.link_type = 'exposes')::text as exposes
+             from objects o where o.workspace_id = $1 and o.id = $2`,
+          [workspaceId, draft.id],
+        ),
+      );
+      expect(kept.rows[0]).toEqual({ status: 'discarded', exposes: '1' });
+
+      // The gate's next import (or an align) opens a fresh draft above it — never on top of it.
+      const again = await importDraft(name);
+      expect(again.version).toBe(2);
+      expect(again.id).not.toBe(draft.id);
+      const current = await inTx((client) => getOperation(client, workspaceId, gatekeeperId, name));
+      expect(current).toMatchObject({ id: again.id, status: 'draft', version: 2 });
+    });
+
+    it('discarding a revision draft leaves the published version live; the next proposal takes the version above the discarded one', async () => {
+      const name = `discard.revision.${randomUUID()}`;
+      await importDraft(name);
+      await inTx((client) => publishManifest(client, workspaceId, { gatekeeperId }));
+      const live = await inTx((client) =>
+        getPublishedOperation(client, workspaceId, gatekeeperId, name),
+      );
+      const proposeAct = await newActivity();
+      const revision = await inTx((client) =>
+        proposeOperation(client, workspaceId, {
+          gatekeeperId,
+          operation: testOperation({ name, blast_radius: 'medium' }),
+          proposedBy: { id: attackerId, kind: 'agent' },
+          activityId: proposeAct,
+        }),
+      );
+      expect(revision.version).toBe(2);
+
+      await inTx((client) =>
+        discardOperationDraft(client, workspaceId, {
+          gatekeeperId,
+          name,
+          version: 2,
+          actor: { principalId: attackerId, role: 'builder' },
+        }),
+      );
+      const current = await inTx((client) => getOperation(client, workspaceId, gatekeeperId, name));
+      expect(current).toMatchObject({ id: live?.id, status: 'published', version: 1 });
+
+      const againAct = await newActivity();
+      const next = await inTx((client) =>
+        proposeOperation(client, workspaceId, {
+          gatekeeperId,
+          operation: testOperation({ name, blast_radius: 'high' }),
+          proposedBy: { id: attackerId, kind: 'agent' },
+          activityId: againAct,
+        }),
+      );
+      expect(next).toMatchObject({ version: 3, draftOf: live?.id, status: 'draft' });
+    });
+
+    it('refuses a published version, a version that is not there, a second discard, and a caller who is neither the proposer nor the owner — writing nothing', async () => {
+      const name = `discard.refusals.${randomUUID()}`;
+      const draft = await importDraft(name);
+      // The proposer (ownerId here) is not this builder.
+      await expect(
+        inTx((client) =>
+          discardOperationDraft(client, workspaceId, {
+            gatekeeperId,
+            name,
+            version: draft.version,
+            actor: { principalId: attackerId, role: 'builder' },
+          }),
+        ),
+      ).rejects.toMatchObject({ name: 'NotProposerError', code: 'not_proposer' });
+      await expect(
+        inTx((client) =>
+          discardOperationDraft(client, workspaceId, {
+            gatekeeperId,
+            name,
+            version: draft.version + 1,
+            actor: owner(),
+          }),
+        ),
+      ).rejects.toBeInstanceOf(OperationNotFoundError);
+      expect(
+        (await inTx((client) => getOperation(client, workspaceId, gatekeeperId, name)))?.status,
+      ).toBe('draft');
+
+      await inTx((client) => publishManifest(client, workspaceId, { gatekeeperId }));
+      await expect(
+        inTx((client) =>
+          discardOperationDraft(client, workspaceId, {
+            gatekeeperId,
+            name,
+            version: draft.version,
+            actor: owner(),
+          }),
+        ),
+      ).rejects.toBeInstanceOf(IllegalTransition);
+      expect(
+        (await inTx((client) => getOperation(client, workspaceId, gatekeeperId, name)))?.status,
+      ).toBe('published');
+
+      const other = `discard.twice.${randomUUID()}`;
+      const once = await importDraft(other);
+      await inTx((client) =>
+        discardOperationDraft(client, workspaceId, {
+          gatekeeperId,
+          name: other,
+          version: once.version,
+          actor: owner(),
+        }),
+      );
+      await expect(
+        inTx((client) =>
+          discardOperationDraft(client, workspaceId, {
+            gatekeeperId,
+            name: other,
+            version: once.version,
+            actor: owner(),
+          }),
+        ),
+      ).rejects.toBeInstanceOf(IllegalTransition);
+    });
+
+    it('an align over a discarded revision opens the next one above it', async () => {
+      const name = `discard.align.${randomUUID()}`;
+      await importDraft(name);
+      await inTx((client) => publishManifest(client, workspaceId, { gatekeeperId }));
+      const changed = testOperation({
+        name,
+        params_schema: { type: 'object', properties: { sku: { type: 'string' } } },
+      });
+      const refresh = async () => {
+        const act = await newActivity();
+        return inTx((client) =>
+          refreshOperationGovernance(client, workspaceId, {
+            gatekeeperId,
+            announcedOperations: [changed],
+            operationNames: [name],
+            proposedBy: { id: ownerId, kind: 'human' },
+            activityId: act,
+          }),
+        );
+      };
+      const first = await refresh();
+      expect(first.revisionDrafts).toEqual([expect.objectContaining({ name, version: 2 })]);
+      await inTx((client) =>
+        discardOperationDraft(client, workspaceId, {
+          gatekeeperId,
+          name,
+          version: 2,
+          actor: owner(),
+        }),
+      );
+      const second = await refresh();
+      expect(second.revisionDrafts).toEqual([expect.objectContaining({ name, version: 3 })]);
     });
   });
 });

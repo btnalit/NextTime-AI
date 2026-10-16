@@ -504,6 +504,114 @@ describe('CatalogPage', () => {
     expect(screen.queryByTestId('operation-gate-owned-rewrite')).toBeNull();
   });
 
+  it('legacy 278: a held draft the gate no longer announces points at Discard, and Discard takes it out of the catalog — kept, not deleted', async () => {
+    let listed = 0;
+    const http = scriptedHttp({
+      list_operations: () => {
+        listed += 1;
+        return {
+          items:
+            listed === 1
+              ? [
+                  {
+                    ...HELD_DRAFT,
+                    version: 2,
+                    gateOwnedParams: [{ param: 'Authorization', location: 'header' }],
+                  },
+                ]
+              : [],
+        };
+      },
+      get_operation_stats: () => ({ items: [] }),
+      list_available_gate_instances: () => ({ items: [LINKED_INSTANCE] }),
+      preview_gate_instance_enable: () => ({ ...heldPreview(false), operationsToImport: [] }),
+      discard_operation_draft: (params) => {
+        expect(params).toEqual({
+          gatekeeperId: 'gk-1',
+          name: 'stock.reserve',
+          version: 2,
+          reason: 'The gate dropped it.',
+        });
+        return { gatekeeperId: 'gk-1', name: 'stock.reserve', version: 2, status: 'discarded' };
+      },
+    });
+    renderPage(http, 'operations', 'gk-1::stock.reserve');
+    const notice = await screen.findByTestId('operation-gate-owned-params');
+    await waitFor(() =>
+      expect(notice.textContent).toContain(
+        '草稿不会被调用。不再需要的话，可以用下面的「丢弃」把它移出目录。',
+      ),
+    );
+    expect(notice.textContent).not.toContain('可以不管它');
+
+    fireEvent.click(
+      await screen.findByTestId('operation-discard-confirm-gk-1::stock.reserve-trigger'),
+    );
+    expect(http.calls.some((c) => c.name === 'discard_operation_draft')).toBe(false);
+    const confirm = await screen.findByTestId('operation-discard-confirm-gk-1::stock.reserve');
+    expect(confirm.getAttribute('data-tier')).toBe('medium');
+    expect(within(confirm).getByTestId('confirm-target').textContent).toBe('stock.reserve v2');
+    // Not the other registries' "deleted for good": an Operation draft is kept and marked.
+    expect(confirm.textContent).toContain('它不会被删除');
+    expect(confirm.textContent).not.toContain('无法恢复');
+    fireEvent.change(within(confirm).getByRole('textbox'), {
+      target: { value: 'The gate dropped it.' },
+    });
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    await waitFor(() =>
+      expect(http.calls.some((c) => c.name === 'discard_operation_draft')).toBe(true),
+    );
+    await waitFor(() => expect(listed).toBe(2));
+  });
+
+  it.each([
+    ['the owner, on a gate-imported draft', 'owner', 'p-owner', true],
+    ['a builder, on a draft they proposed', 'builder', 'p-me', true],
+    ['a builder, on the owner’s imported draft', 'builder', 'p-owner', false],
+    ['a member', 'member', 'p-me', false],
+  ] as const)(
+    'legacy 278: Discard on an Operation draft for %s → offered: %s',
+    async (_label, role, proposedBy, offered) => {
+      const http = scriptedHttp({
+        get_workspace: () => ({
+          id: 'ws-1',
+          name: 'Acme',
+          createdAt: '2026-01-01T00:00:00Z',
+          principalCount: 3,
+          gatekeeperCount: 1,
+          caller: { id: 'p-me', role, displayName: 'Me', kind: 'human' },
+        }),
+        list_operations: () => ({
+          items: [{ ...HELD_DRAFT, version: 1, proposedBy }],
+        }),
+        get_operation_stats: () => ({ items: [] }),
+      });
+      renderPage(http);
+      const row = await screen.findByTestId('catalog-row');
+      await waitFor(() => expect(http.calls.some((c) => c.name === 'get_workspace')).toBe(true));
+      const detail = await selectRow(row);
+      await waitFor(() =>
+        expect(
+          within(detail).queryByTestId('operation-discard-confirm-gk-1::stock.reserve-trigger') !==
+            null,
+        ).toBe(offered),
+      );
+    },
+  );
+
+  it('legacy 278: a published Operation is never offered Discard (it is deprecated instead)', async () => {
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [{ gatekeeperId: 'gk-1', name: 'docker.restart', status: 'published', version: 1 }],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+    });
+    renderPage(http);
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    expect(within(detail).getByRole('button', { name: /弃用/ })).toBeTruthy();
+    expect(within(detail).queryByRole('button', { name: /丢弃/ })).toBeNull();
+  });
+
   it('review #501 on #573: a rewrite that would change other fields but keep the gate-owned param stays greyed out', async () => {
     const http = scriptedHttp({
       list_operations: () => ({

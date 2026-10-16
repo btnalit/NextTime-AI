@@ -1209,6 +1209,33 @@ const metaCapabilities = [
       'Deprecate a published Operation. Builder floor; only its proposer or the workspace owner may deprecate it (403 not_proposer otherwise).',
   },
   {
+    // Legacy 278 (UX acceptance of #577): a draft Operation nobody will publish — the gate no longer
+    // announces it, or it declares a param only the gate sets — had no way out of the catalog.
+    // Discarding is a lifecycle transition (`OPERATION_TRANSITIONS`, `draft → discarded`), not a
+    // delete: the row, its `exposes` Fact and provenance stay; directory reads leave it out. Same
+    // D-24 authority as publish/deprecate (builder floor, then the draft's proposer or the owner),
+    // checked on the locked row. `version` names the exact draft the caller looked at, so a draft
+    // replaced in the meantime is never discarded by mistake (404 until the caller reloads).
+    // `reason` lands in this call's AuditRecord (dispatch.ts) — the same signal `discard_draft`
+    // keeps for the evolution loop.
+    name: 'discard_operation_draft',
+    group: 'meta',
+    mode: 'execute',
+    channel: 'human',
+    minRole: 'builder',
+    paramsSchema: z
+      .object({
+        gatekeeperId: id,
+        name: z.string().min(1),
+        version: z.number().int().positive(),
+        reason: z.string().max(500).optional(),
+      })
+      .strict(),
+    resultSchema: wire.OperationDiscardResultWireSchema,
+    description:
+      'Discard one draft Operation version (draft → discarded): it stays recorded but leaves the catalog, and the next draft of that Operation takes a new version. Builder floor; only the draft’s proposer or the workspace owner may discard it (403 not_proposer otherwise); a published or deprecated version is 409 (deprecate it instead). Optional reason, kept in the audit record.',
+  },
+  {
     // S8 W3-K1 (leftover 81). `mode:'write'` (not `execute`, unlike publish/deprecate): an
     // immediate, audited in-platform change with no approval gate — editing documentation is not a
     // lifecycle transition. STATUS leftover 123: it still gets D-24's authority rule — an
@@ -3727,6 +3754,7 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set<CapabilityName>
   'deprecate_procedure',
   'publish_operation',
   'deprecate_operation',
+  'discard_operation_draft',
   'update_operation_description',
   // STATUS leftover 89: a human attestation is a person's own word — never reachable by a Handle.
   'attest_fact',

@@ -544,11 +544,15 @@ function RevisionDiff({ row }: { readonly row: OperationCatalogRow }) {
 function DiscardDraftConfirm({
   busy,
   target,
+  description,
   onConfirm,
   testId,
 }: {
   readonly busy: boolean;
   readonly target: string;
+  /** What discarding does to this kind of draft — deleted outright by default (`discard_draft`);
+   *  an Operation draft is kept and marked instead (legacy 278, `discard_operation_draft`). */
+  readonly description?: string;
   /** `reason` is the discarder's optional why (S10 E1 结果归因) — kept with the call's own
    *  AuditRecord, `undefined` when left blank. */
   readonly onConfirm: (reason: string | undefined) => Promise<void>;
@@ -578,10 +582,13 @@ function DiscardDraftConfirm({
         </Button>
       }
       title={t(`丢弃 ${target}`, `Discard ${target}`)}
-      description={t(
-        '草稿将被删除，无法恢复。',
-        'This draft will be permanently deleted and cannot be recovered.',
-      )}
+      description={
+        description ??
+        t(
+          '草稿将被删除，无法恢复。',
+          'This draft will be permanently deleted and cannot be recovered.',
+        )
+      }
       target={target}
       confirmLabel={t('丢弃', 'Discard')}
       danger
@@ -673,11 +680,13 @@ function OperationDetailView({
   gatekeeperNames,
   canPublish,
   canDeprecate,
+  canDiscard,
   canEditDescription,
   busy,
   credentialReview,
   onPublish,
   onDeprecate,
+  onDiscard,
   onEditDescription,
   onRewritten,
   rewrittenFrom,
@@ -688,11 +697,15 @@ function OperationDetailView({
   readonly gatekeeperNames: ReadonlyMap<string, string>;
   readonly canPublish: boolean;
   readonly canDeprecate: boolean;
+  /** Legacy 278: this caller may discard this draft (`discard_operation_draft` — its proposer or
+   *  the owner, `mayActOnOwnOperation`). */
+  readonly canDiscard: boolean;
   readonly canEditDescription: boolean;
   readonly busy: boolean;
   readonly credentialReview: PublishCredentialReview;
   readonly onPublish: () => Promise<void>;
   readonly onDeprecate: () => Promise<void>;
+  readonly onDiscard: (reason: string | undefined) => Promise<void>;
   readonly onEditDescription: () => void;
   /** Console G4: the held draft was rewritten from the gate's latest manifest — reload the list. */
   readonly onRewritten: () => void;
@@ -706,6 +719,9 @@ function OperationDetailView({
   // kernel (400 gate_owned_params), so the button is not offered as if it would work.
   const gateOwned = row.gateOwnedParams ?? [];
   const heldBack = row.status === 'draft' && gateOwned.length > 0;
+  // Legacy 278: the exact version is what the kernel discards, so a row without one (an older
+  // kernel) is not offered it.
+  const offersDiscard = canDiscard && row.status === 'draft' && row.version !== undefined;
   const items: KeyValueItem[] = [
     {
       key: 'gatekeeper',
@@ -797,6 +813,7 @@ function OperationDetailView({
           status={row.status}
           params={gateOwned}
           origin={row.origin}
+          canDiscard={offersDiscard}
           gateDisplayName={nameOf(gatekeeperNames, row.gatekeeperId) ?? row.gatekeeperId}
           onRewritten={onRewritten}
         />
@@ -843,6 +860,18 @@ function OperationDetailView({
             testId={`operation-deprecate-confirm-${key}`}
           />
         ) : null}
+        {offersDiscard ? (
+          <DiscardDraftConfirm
+            busy={busy}
+            target={row.version !== undefined ? `${row.name} v${row.version}` : row.name}
+            description={t(
+              '这份草稿会移出能力目录，不会被调用。它不会被删除：谁提议的、谁丢弃的、为什么，都留在审计里。之后再导入或提议这个 Operation，会作为新版本出现。',
+              'This draft leaves the catalog and is never called. It is not deleted: who proposed it, who discarded it and why stay in the audit log. If this Operation is imported or proposed again, it comes back as a new version.',
+            )}
+            onConfirm={onDiscard}
+            testId={`operation-discard-confirm-${key}`}
+          />
+        ) : null}
         {canEditDescription ? (
           <Button
             variant="ghost"
@@ -861,12 +890,13 @@ function OperationDetailView({
 /**
  * STATUS leftover 123 (D-24): `update_operation_description` is `minRole: 'builder'`, and only the
  * Operation's proposer or the owner may edit it — its description reaches every agent's tool list.
+ * Legacy 278: `discard_operation_draft` takes the same rule on the draft, so it shares this check.
  * Offered only where it can succeed: the owner; a builder on a row they proposed. A caller proven
  * below the builder floor (a known member / operator / auditor, or an inferred member) is never
  * offered it. Unknown either side (role or proposer not loaded, an older kernel) keeps the action,
  * as `isOwnDraftOrUnknown` does — the kernel refuses it anyway.
  */
-function mayEditOperationDescription(
+function mayActOnOwnOperation(
   row: Pick<OperationCatalogRow, 'proposedBy'>,
   role: WorkspaceRole,
   callerPrincipalId: string | null,
@@ -983,6 +1013,36 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
     }
   }
 
+  // Legacy 278: `discard_operation_draft{gatekeeperId, name, version}` — the exact version shown,
+  // so a draft replaced since is never discarded by mistake (the kernel answers 404 instead).
+  async function discardOperation(row: OperationCatalogRow, reason?: string): Promise<void> {
+    if (row.version === undefined) return;
+    setBusy(catalogOperationKey(row));
+    try {
+      await http.call('discard_operation_draft', {
+        gatekeeperId: row.gatekeeperId,
+        name: row.name,
+        version: row.version,
+        ...(reason !== undefined ? { reason } : {}),
+      });
+      toast.push({
+        tone: 'ok',
+        title: t(`${row.name} v${row.version} 已丢弃`, `${row.name} v${row.version} discarded`),
+      });
+      onSelectItem(null);
+      refresh();
+    } catch (err) {
+      if (isForbiddenError(err)) permissions.markDenied('discard_operation_draft');
+      toast.push({
+        tone: 'danger',
+        title: t('无法丢弃该草稿', 'Could not discard this draft'),
+        description: errorToastText(err, t),
+      });
+    } finally {
+      setBusy(null);
+    }
+  }
+
   function openDescriptionEditor(row: OperationCatalogRow): void {
     setEditingRow(row);
     setDescriptionDraft(row.description ?? '');
@@ -1091,12 +1151,17 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       canDeprecate={can('deprecate_operation') !== false}
       canEditDescription={
         can('update_operation_description') !== false &&
-        mayEditOperationDescription(selected, role, principalId)
+        mayActOnOwnOperation(selected, role, principalId)
+      }
+      canDiscard={
+        can('discard_operation_draft') !== false &&
+        mayActOnOwnOperation(selected, role, principalId)
       }
       busy={busy === catalogOperationKey(selected)}
       credentialReview={credentialReview}
       onPublish={() => act(selected, 'publish_operation')}
       onDeprecate={() => act(selected, 'deprecate_operation')}
+      onDiscard={(reason) => discardOperation(selected, reason)}
       onEditDescription={() => openDescriptionEditor(selected)}
       onRewritten={() => {
         setRewritten({

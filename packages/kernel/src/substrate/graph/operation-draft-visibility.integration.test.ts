@@ -27,7 +27,8 @@ const DATABASE_URL = process.env.DATABASE_URL;
 const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
 
-const STATUSES = ['draft', 'published', 'deprecated', undefined] as const;
+// Legacy 278: `discarded` stays as private as the draft it was.
+const STATUSES = ['draft', 'published', 'deprecated', 'discarded', undefined] as const;
 const PROPOSERS = ['viewer', 'other', undefined] as const;
 const KINDS = ['agent', undefined] as const;
 

@@ -2,6 +2,7 @@ import { OperationSchema } from '@nexttime/shared';
 import { z } from 'zod';
 import {
   deprecateOperation,
+  discardOperationDraft,
   getOperation,
   getPublishedOperation,
   operationGovernanceChange,
@@ -43,6 +44,9 @@ import { type CapabilityHandler, publishActorOf } from './capability-handler.js'
  * itself asserts no Fact and previously needed no Activity at all (`substrate/ontology/
  * meta-objects.ts`'s own doc comment: Objects carry no provenance chain of their own) — this one
  * exists purely for that audit trail, not to satisfy an `activityId` requirement.
+ *
+ * Legacy 278: `discard_operation_draft` — a draft nobody will publish leaves the catalog as a
+ * `draft → discarded` transition (kept, never deleted), under the same D-24 rule.
  *
  * D-24 (review 2026-10-02): `publish_operation`/`deprecate_operation` are `minRole: 'builder'` and
  * only the row's proposer or the workspace owner may act (`governance/capability/
@@ -179,6 +183,48 @@ export const deprecateOperationHandler: CapabilityHandler = async (
     result: { gatekeeperId: record.gatekeeperId, name: record.name, status: record.status },
     resourceType: 'operation',
     resourceId: `${record.gatekeeperId}:${record.name}`,
+  };
+};
+
+/** `discard_operation_draft(gatekeeperId, name, version, reason?)` (legacy 278): marks one draft
+ *  version `discarded` (`governance/gatekeepers/manifest.ts`'s `discardOperationDraft` doc comment
+ *  — a transition, not a delete). The AuditRecord is dispatch.ts's own per-call row, which already
+ *  carries the params (`reason` included, redacted like every audited param); this adds what was
+ *  discarded — the draft's origin, proposer, revision target and definition digest, never the
+ *  definition itself. */
+export const discardOperationDraftHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+) => {
+  const { gatekeeperId, name, version } = params as {
+    gatekeeperId: string;
+    name: string;
+    version: number;
+  };
+  const discarded = await discardOperationDraft(client, workspaceId, {
+    gatekeeperId,
+    name,
+    version,
+    actor: publishActorOf('discard_operation_draft', ctx),
+  });
+  return {
+    result: {
+      gatekeeperId: discarded.gatekeeperId,
+      name: discarded.name,
+      version: discarded.version,
+      status: discarded.status,
+    },
+    resourceType: 'operation',
+    resourceId: `${discarded.gatekeeperId}:${discarded.name}`,
+    auditPayload: {
+      operationObjectId: discarded.id,
+      origin: discarded.origin ?? null,
+      proposedBy: discarded.proposedBy ?? null,
+      draftOf: discarded.draftOf ?? null,
+      definitionDigest: discarded.definitionDigest,
+    },
   };
 };
 

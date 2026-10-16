@@ -1,4 +1,9 @@
-import type { Operation, PrincipalKind, PublishableStatus } from '@nexttime/shared';
+import type {
+  Operation,
+  OperationStatus,
+  PrincipalKind,
+  PublishableStatus,
+} from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import type { GraphObject } from '../graph/index.js';
 import { SqlGraphStore } from '../graph/index.js';
@@ -234,7 +239,8 @@ export interface RegisterOperationDraftInput extends OperationIdentity {
   /**
    * Conditional-write guard chosen by the caller (`governance/gatekeepers/manifest.ts`): an
    * existing row is only ever replaced when it is currently a `draft` — a `published`/`deprecated`
-   * row is never written by this function, whatever the caller passes. When this is set, the
+   * row, and a `discarded` one (legacy 278: its version is never reused), is never written by this
+   * function, whatever the caller passes. When this is set, the
    * existing draft must additionally carry `proposedBy` equal to it *and* an `origin` of
    * `'agent'`/`'human'` (the Handle channel's own-draft rule); when omitted, any draft may be
    * replaced (the owner/CLI import path).
@@ -401,7 +407,7 @@ export async function projectProcedureObject(
 }
 
 /** Merges `{status}` into one specific, already-versioned Operation Object's properties
- *  (publish/deprecate — targets exactly the `{gatekeeperId, name, version}` row `identity` names,
+ *  (publish/deprecate/discard — targets exactly the `{gatekeeperId, name, version}` row `identity` names,
  *  never "whichever row currently has this name", which matters once a `published` row and a
  *  revision `draft` row can coexist for the same identity, S3.12). Callers must have already
  *  confirmed the Object exists and the transition is legal (`governance/gatekeepers/manifest.ts`
@@ -415,7 +421,7 @@ export async function setOperationStatusObject(
   client: PoolClient,
   workspaceId: string,
   identity: OperationIdentity,
-  status: PublishableStatus,
+  status: OperationStatus,
 ): Promise<GraphObject> {
   return graphStore.upsertObject(client, workspaceId, {
     objectType: 'Operation',

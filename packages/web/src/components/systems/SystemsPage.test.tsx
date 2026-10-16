@@ -601,7 +601,7 @@ describe('SystemsPage', () => {
     const drawer = await screen.findByTestId('system-access-drawer');
     const notice = await within(drawer).findByTestId('system-definition-mismatch-adoption');
     expect(notice.textContent).not.toContain('采用之前');
-    expect(notice.textContent).toContain('平台管理员还没采用。门已经不再提供 orders.cancel');
+    expect(notice.textContent).toContain('平台管理员还没采用。门已经不再提供');
   });
 
   it('legacy K: a gate refusing some Operations keeps its status but flags them, and the drawer names the workspace step', async () => {

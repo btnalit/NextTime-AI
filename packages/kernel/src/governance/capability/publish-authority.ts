@@ -82,9 +82,14 @@ export function assertPublishAuthority(
 export class NotProposerError extends Error {
   readonly code = 'not_proposer' as const;
 
-  /** `action` is the capability name (`publish_skill`, `deprecate_operation`, ...). */
+  /** `action` is the capability name (`publish_skill`, `deprecate_operation`,
+   *  `discard_operation_draft`, ...). */
   constructor(action: string, subject: string) {
-    const verb = action.startsWith('deprecate_') ? 'deprecate' : 'publish';
+    const verb = action.startsWith('deprecate_')
+      ? 'deprecate'
+      : action.startsWith('discard_')
+        ? 'discard'
+        : 'publish';
     super(
       `${action}: ${subject} was proposed by another principal — only its proposer or the workspace owner may ${verb} it`,
     );

@@ -4173,6 +4173,69 @@
   },
   {
     "channel": "human",
+    "group": "meta",
+    "minRole": "builder",
+    "mode": "execute",
+    "name": "discard_operation_draft",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "gatekeeperId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "name": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "reason": {
+          "maxLength": 500,
+          "type": "string"
+        },
+        "version": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "gatekeeperId",
+        "name",
+        "version"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "gatekeeperId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "status": {
+          "const": "discarded",
+          "type": "string"
+        },
+        "version": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "gatekeeperId",
+        "name",
+        "version",
+        "status"
+      ],
+      "type": "object"
+    },
+    "sideEffects": true
+  },
+  {
+    "channel": "human",
     "group": "connection",
     "minRole": "owner",
     "mode": "write",
@@ -4363,6 +4426,10 @@
                         "workspace_revision"
                       ],
                       "type": "string"
+                    },
+                    "droppedByGate": {
+                      "const": true,
+                      "type": "boolean"
                     },
                     "gateOwnedParams": {
                       "items": {
@@ -16138,6 +16205,12 @@
               "properties": {
                 "announcedAt": {
                   "type": "string"
+                },
+                "dropped": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
                 },
                 "operations": {
                   "items": {

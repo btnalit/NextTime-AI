@@ -159,7 +159,7 @@ describe('RefreshOperationGovernanceConfirm', () => {
     fireEvent.click(screen.getByTestId('align-gk-1'));
     const notice = await screen.findByTestId('align-gk-1-awaiting-adoption');
     expect(notice.textContent).toContain('对 stock.get 的调用会被拒绝。');
-    expect(notice.textContent).not.toContain('对 orders.cancel、stock.get');
+    expect(notice.textContent).not.toContain('orders.cancel、stock.get');
     expect(screen.getByTestId('align-gk-1-awaiting-adoption-dropped').textContent).toContain(
       '门已经不再提供 orders.cancel，对它的调用会被拒绝，采用和对齐都恢复不了',
     );
