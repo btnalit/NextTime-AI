@@ -81,7 +81,13 @@ export {
   roleMayDecideActionRequests,
 } from './reads.js';
 
-export { type StepActionOutcome, listStepActionOutcomes } from './step-actions.js';
+export {
+  type ExecutingStepAction,
+  type StepActionOutcome,
+  listExecutingStepActions,
+  listStepActionOutcomes,
+  withdrawStepActions,
+} from './step-actions.js';
 
 export {
   type UpdateActionRequestStatusInput,

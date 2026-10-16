@@ -44,6 +44,7 @@ import {
   markReconcileDue,
   registerGoalWakeConsumer,
   runGoalAdvancerTick,
+  sweepGoalCancelCleanup,
 } from './application/goal/index.js';
 import type {
   AgentRuntime,
@@ -484,10 +485,12 @@ export interface CreateBackgroundServicesOptions {
    * attempt mints its Worker's Handle.
    */
   readonly goalAdvancerIntervalMs?: number;
-  /** S11 GO2: how often the goal reconcile scan (`markReconcileDue`) runs. Default
+  /** S11 GO2: how often the goal reconcile scan (`markReconcileDue`) runs — and, S11 GO3a, the
+   *  cancelled runs' cleanup sweep (`sweepGoalCancelCleanup`). Default
    *  `DEFAULT_GOAL_RECONCILE_INTERVAL_MS` (1 minute — the most a lost wake delays a GoalRun). */
   readonly goalReconcileIntervalMs?: number;
-  /** S11 GO2: the advancer's retry backoff and quota retry delay — for tests. */
+  /** S11 GO2: the advancer's retry backoff and quota retry delay — and, S11 GO3a, its cancel
+   *  deadline and re-check — for tests. */
   readonly goalAdvancerOptions?: GoalAdvancerOptions;
   /** Called with every goal advancer, wake-consumer or reconcile-scan failure — same shape as
    *  `onTaskReaperError`. Defaults to a no-op; `main()` passes `app.log.error`. */
@@ -991,6 +994,8 @@ export function createBackgroundServices(
         goalAdvancerTimer.unref?.();
         goalReconcileTimer = setInterval(() => {
           markReconcileDue(options.pool).catch(onGoalAdvancerError);
+          // S11 GO3a: a cancelled run's leftovers, on the same period.
+          sweepGoalCancelCleanup(goalDeps).catch(onGoalAdvancerError);
         }, options.goalReconcileIntervalMs ?? DEFAULT_GOAL_RECONCILE_INTERVAL_MS);
         goalReconcileTimer.unref?.();
       }

@@ -1,6 +1,7 @@
 import type { TaskStatus } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { z } from 'zod';
+import { GoalStepClosedError } from './types.js';
 
 /**
  * application/task/goal-step (S11 GO1, migrations/task/0007_task_goal_step.sql): which GoalRun,
@@ -41,6 +42,38 @@ export async function readTaskGoalStep(
     stepRunId: row.step_run_id,
     planRevision: row.plan_revision,
   };
+}
+
+/** The StepRun statuses that take new work for the step (I-G9): its attempt is running, or it
+ *  waits on its actions. */
+const STEP_STATUSES_TAKING_WORK: ReadonlySet<string> = new Set(['running', 'waiting']);
+
+/**
+ * S11 GO3a (plan I-G9, §4.8): the entry check for new work under a goal step — `request_action`
+ * and a nested `invoke_worker` from a Worker whose Task runs for `stepRunId`. Locks the StepRun
+ * `for share` and refuses ({@link GoalStepClosedError}) unless it is `running` or `waiting`.
+ *
+ * Cancelling a GoalRun (or, GO3b, superseding a step) cancels the step and withdraws its pending
+ * and approved actions in one transaction, under a `for no key update` lock on the StepRun. The
+ * share lock here conflicts with that one, so the two serialize: new work either commits first —
+ * and its ActionRequest or Task is there for the cancel to withdraw or terminate — or finds the
+ * step closed. A step that ended for another reason (succeeded, failed awaiting a retry) takes no
+ * new work either: its attempt's Task is over.
+ */
+export async function lockGoalStepForNewWork(
+  client: PoolClient,
+  workspaceId: string,
+  stepRunId: string,
+  work: 'request_action' | 'invoke_worker',
+): Promise<void> {
+  const result = await client.query<{ status: string }>(
+    'select status from step_runs where workspace_id = $1 and id = $2 for share',
+    [workspaceId, stepRunId],
+  );
+  const status = result.rows[0]?.status ?? 'missing';
+  if (!STEP_STATUSES_TAKING_WORK.has(status)) {
+    throw new GoalStepClosedError(stepRunId, status, work);
+  }
 }
 
 /**
@@ -159,4 +192,49 @@ export async function readGoalRunUsage(
   );
   const row = result.rows[0];
   return { tokens: Number(row?.tokens ?? 0), steps: Number(row?.steps ?? 0) };
+}
+
+/**
+ * S11 GO3a (I-G6, #619 deviation 6): how many tokens of its budget a GoalRun can still hand to a
+ * new Task. Every Task of the run holds what it may spend: a finished Task what it used, a live one
+ * the larger of its budget and what it used (a live Task with no budget, only what it used). The
+ * headroom is the budget less all of that, never below zero.
+ *
+ * New Tasks of the run take their budget out of it — the attempts one advance starts split it, and
+ * a nested child Task of a step is capped by it — so the live Tasks' budgets together never exceed
+ * what is left of the goal's. A live Task's unspent budget comes back when it ends.
+ */
+export async function readGoalRunTokenHeadroom(
+  client: PoolClient,
+  workspaceId: string,
+  goalRunId: string,
+): Promise<number> {
+  const result = await client.query<{ headroom: string }>(
+    `select greatest(0, g.budget_max_tokens - coalesce((
+              select sum(case when t.status in ('completed', 'failed', 'cancelled') then t.tokens_used
+                              else greatest(t.tokens_used, coalesce(t.token_budget, 0)) end)
+                from tasks t
+               where t.workspace_id = g.workspace_id and t.goal_run_id = g.id), 0))::bigint as headroom
+       from goal_runs g
+      where g.workspace_id = $1 and g.id = $2`,
+    [workspaceId, goalRunId],
+  );
+  return Number(result.rows[0]?.headroom ?? 0);
+}
+
+/** The Tasks of a GoalRun that have not ended — step attempts and nested child Tasks alike — oldest
+ *  first. What a cancelling GoalRun terminates and waits for (S11 GO3a, plan §4.8). */
+export async function listGoalRunLiveTasks(
+  client: PoolClient,
+  workspaceId: string,
+  goalRunId: string,
+): Promise<readonly string[]> {
+  const result = await client.query<{ id: string }>(
+    `select id from tasks
+     where workspace_id = $1 and goal_run_id = $2
+       and status not in ('completed', 'failed', 'cancelled')
+     order by created_at, id`,
+    [workspaceId, goalRunId],
+  );
+  return result.rows.map((row) => row.id);
 }

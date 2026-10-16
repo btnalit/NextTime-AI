@@ -1,15 +1,12 @@
-import {
-  GOAL_RUN_TRANSITIONS,
-  type GoalRunEvent,
-  type GoalRunPauseReason,
-  type GoalRunStatus,
-  STEP_RUN_TRANSITIONS,
-  type StepRunEvent,
-  type StepRunFailureCategory,
-  type StepRunStatus,
-  type StepRunWaitingReason,
-  type TaskStatus,
-  transition,
+import type {
+  GoalRunEvent,
+  GoalRunPauseReason,
+  GoalRunStatus,
+  StepRunEvent,
+  StepRunFailureCategory,
+  StepRunStatus,
+  StepRunWaitingReason,
+  TaskStatus,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { type PoolLike, withWorkspace } from '../../adapters/db/pool.js';
@@ -21,23 +18,22 @@ import {
   type StepAttemptRefusal,
   type TaskRuntimeDeps,
   createStepAttemptTask,
+  listGoalRunLiveTasks,
   listTaskWorkerRunTree,
+  lockTaskQuotas,
+  readGoalRunTokenHeadroom,
   readGoalRunUsage,
   readStepAttemptTask,
   startStepAttemptTask,
+  terminateTaskWith,
 } from '../task/index.js';
+import { type CancellingOptions, advanceCancellingGoalRun } from './cancelling.js';
 import { type StepActionEffect, stepActionEffect } from './disposition.js';
+import { type GoalMoveActor, moveGoalRun, moveStepRun } from './moves.js';
 import { DEFAULT_MAX_ATTEMPTS, type PlanStep, planStep, samePlanEntry } from './plan.js';
-import { getPlanRevision } from './reads.js';
+import { getPlanRevision, lockStepRuns } from './reads.js';
 import { lockGoalRun } from './service.js';
-import { recordGoalRunTransition, recordStepRunTransition } from './transition-log.js';
-import {
-  type GoalRunRow,
-  STEP_RUN_ROW_COLUMNS,
-  type StepRunDbRow,
-  type StepRunRow,
-  mapStepRunRow,
-} from './types.js';
+import type { GoalRunRow, StepRunRow } from './types.js';
 
 /**
  * application/goal/advance (S11 GO2; plan §4.2, §4.7, §4.9): one advance of one GoalRun — the
@@ -46,8 +42,10 @@ import {
  * StepRun's; the guards take it too). The advancer calls no model and holds no credential: every
  * rule below reads rows and moves rows.
  *
- * Only a `running` or `paused` GoalRun is advanced; any other status just loses its `next_tick_at`
- * (verification is GO4, cancelling GO3). Then, in order:
+ * A `cancelling` GoalRun is advanced by `cancelling.ts` (S11 GO3a): it waits for its Tasks to end
+ * — terminating them after the commit — and its executing actions to end, then is `cancelled`.
+ * Otherwise only a `running` or `paused` GoalRun is advanced; any other status just loses its
+ * `next_tick_at` (verification is GO4). Then, in order:
  *
  *   A. **Record finished attempts** (running or paused). A `running` / `waiting` step whose current
  *      attempt Task has finished is judged by that Task and by what the ActionRequests raised by
@@ -55,8 +53,10 @@ import {
  *      earlier attempt's requests never decide this one). A request still in flight or awaiting
  *      a reconcile holds the step in `waiting` (§4.8: the wait is on the step, not on the Worker);
  *      a reconcile also pauses the GoalRun `awaiting_reconcile` (the reconcile observation is
- *      GO3). Otherwise {@link judgeFinishedAttempt}: success, or a failure category — only
- *      `transient` is retried without a person; every other category pauses the GoalRun.
+ *      GO3b). Otherwise {@link judgeFinishedAttempt}: success, or a failure category — only
+ *      `transient` is retried without a person; every other category pauses the GoalRun. A step
+ *      no longer part of the current plan is not judged at all (I-G2: a late result is kept on
+ *      its Task, it moves nothing) and the GoalRun pauses `needs_decision`.
  *   B. **Retry transient failures** (running only). Under the step's attempt limit (plan
  *      `maxAttempts`, default 3), once no request of the step — of any attempt — is still in flight
  *      (I-G4: no new attempt beside an action that may still run), after an exponential backoff
@@ -64,11 +64,14 @@ import {
  *      Past the limit, the GoalRun pauses `needs_decision`.
  *   C. **Unblock** (running or paused). A `pending` step whose dependencies all succeeded becomes
  *      `ready` — after re-checking that its definition is still the current plan's entry (the
- *      database does not check this on `ready`).
+ *      database does not check this on `ready`). A skipped dependency counts as done.
  *   D. **Start** (running only). Every live step succeeded → `verifying` (GO4 runs the acceptance
  *      checks). Otherwise the budget is checked (I-G6: wall clock from confirmation, tokens used by
  *      the GoalRun's Tasks; past either → `paused(budget_exhausted)`, never failed), then each
- *      `ready` step starts one attempt while the step budget allows: `createStepAttemptTask` inserts
+ *      `ready` step starts one attempt while the step budget allows, the attempts of one advance
+ *      splitting the goal's token headroom (`readGoalRunTokenHeadroom`: the budget less what every
+ *      Task of the run holds — a live Task its own budget), so the live Tasks' budgets together
+ *      never exceed what is left of the goal's: `createStepAttemptTask` inserts
  *      the attempt's Task in this transaction and the step moves `ready → running` with
  *      `attempt_count + 1` (I-G1). A refusal leaves the step `ready`: the requester's concurrency
  *      quota retries after {@link DEFAULT_QUOTA_RETRY_MS}; the daily cost quota pauses
@@ -105,7 +108,7 @@ export const DEFAULT_QUOTA_RETRY_MS = 30_000;
  *  period (S12) instead of the wall-clock deadline — the reconcile scan does not look for it. */
 export const DEFAULT_BLOCKED_RETRY_RECHECK_MS = 60 * 1000;
 
-export interface GoalAdvancerOptions {
+export interface GoalAdvancerOptions extends CancellingOptions {
   readonly retryBackoffMs?: (attempts: number) => number;
   readonly quotaRetryMs?: number;
   readonly blockedRetryRecheckMs?: number;
@@ -117,7 +120,8 @@ export interface GoalAdvanceDeps {
   readonly taskRuntime: TaskRuntimeDeps;
   readonly options?: GoalAdvancerOptions;
   /** Called when starting an attempt after the commit fails other than by a spawn failure (which
-   *  `startStepAttemptTask` turns into a failed Task itself). */
+   *  `startStepAttemptTask` turns into a failed Task itself), or when terminating a cancelled
+   *  run's Task fails (the next advance tries again). */
   readonly onStartError?: (error: unknown) => void;
 }
 
@@ -134,19 +138,21 @@ export interface GoalAdvanceOutcome {
   readonly status: GoalRunStatus | null;
   /** The attempt Tasks this advance created (started after the commit). */
   readonly startedTaskIds: readonly string[];
+  /** A cancelling run's Tasks this advance terminates after the commit. */
+  readonly terminatedTaskIds: readonly string[];
   readonly nextTickAt: Date | null;
+}
+
+/** What one advance's transaction decided, and the work it leaves for after the commit. */
+interface AdvanceResult {
+  readonly outcome: GoalAdvanceOutcome;
+  readonly attempts: readonly PreparedStepAttempt[];
 }
 
 const FINISHED_TASK_STATUSES: ReadonlySet<TaskStatus> = new Set([
   'completed',
   'failed',
   'cancelled',
-]);
-const FINAL_STEP_STATUSES: ReadonlySet<StepRunStatus> = new Set([
-  'succeeded',
-  'superseded',
-  'cancelled',
-  'skipped',
 ]);
 const DONE_STEP_STATUSES: ReadonlySet<StepRunStatus> = new Set(['succeeded', 'skipped']);
 
@@ -216,7 +222,9 @@ export function refusalPause(refusal: StepAttemptRefusal): GoalRunPauseReason | 
       return 'needs_decision';
     case 'quota':
       if (refusal.code === 'concurrency_exceeded') return null;
-      if (refusal.code === 'daily_cost_exceeded') return 'budget_exhausted';
+      if (refusal.code === 'daily_cost_exceeded' || refusal.code === 'goal_budget_exhausted') {
+        return 'budget_exhausted';
+      }
       return 'needs_decision';
   }
 }
@@ -226,31 +234,52 @@ export async function advanceGoalRun(
   deps: GoalAdvanceDeps,
   target: GoalAdvanceTarget,
 ): Promise<GoalAdvanceOutcome> {
-  const { outcome, attempts } = await withWorkspace(
+  const { outcome, attempts } = await withWorkspace<AdvanceResult>(
     deps.pool,
     { workspaceId: target.workspaceId, principalId: target.requesterId },
     async (client) => {
       const goal = await lockGoalRun(client, target.workspaceId, target.goalRunId);
       if (!goal) {
         return {
-          outcome: { status: null, startedTaskIds: [], nextTickAt: null },
-          attempts: [] as PreparedStepAttempt[],
+          outcome: { status: null, startedTaskIds: [], terminatedTaskIds: [], nextTickAt: null },
+          attempts: [],
+        };
+      }
+      const now = await databaseNow(client);
+      if (goal.status === 'cancelling') {
+        const cancelling = await advanceCancellingGoalRun(client, goal, now, deps.options ?? {});
+        await writeNextTick(client, goal, cancelling.nextTickAt);
+        return {
+          outcome: { ...cancelling, startedTaskIds: [] },
+          attempts: [],
         };
       }
       if (goal.status !== 'running' && goal.status !== 'paused') {
         if (goal.nextTickAt !== null) await writeNextTick(client, goal, null);
         return {
-          outcome: { status: goal.status, startedTaskIds: [], nextTickAt: null },
-          attempts: [] as PreparedStepAttempt[],
+          outcome: {
+            status: goal.status,
+            startedTaskIds: [],
+            terminatedTaskIds: [],
+            nextTickAt: null,
+          },
+          attempts: [],
         };
       }
-      const advance = new Advance(client, goal, await databaseNow(client), deps.options ?? {});
+      const advance = new Advance(client, goal, now, deps.options ?? {});
       return advance.run();
     },
   );
   for (const attempt of attempts) {
     try {
       await startStepAttemptTask(deps.taskRuntime, target.workspaceId, attempt);
+    } catch (err) {
+      deps.onStartError?.(err);
+    }
+  }
+  for (const taskId of outcome.terminatedTaskIds) {
+    try {
+      await terminateTaskWith(deps.taskRuntime, target.workspaceId, target.requesterId, taskId);
     } catch (err) {
       deps.onStartError?.(err);
     }
@@ -310,7 +339,7 @@ class Advance {
     return confirmed.getTime() + this.goal.budget.maxWallClockSeconds * 1000;
   }
 
-  async run(): Promise<{ outcome: GoalAdvanceOutcome; attempts: PreparedStepAttempt[] }> {
+  async run(): Promise<AdvanceResult> {
     for (const step of await this.lockSteps()) {
       if (step.status === 'running' || step.status === 'waiting') await this.recordAttempt(step);
     }
@@ -332,6 +361,7 @@ class Advance {
       outcome: {
         status: this.status,
         startedTaskIds: this.started.map((attempt) => attempt.task.id),
+        terminatedTaskIds: [],
         nextTickAt,
       },
       attempts: this.started,
@@ -342,14 +372,7 @@ class Advance {
    *  GoalRun, then its StepRuns), in creation order. Read again between phases: a phase moves rows
    *  the next one judges. */
   private async lockSteps(): Promise<readonly StepRunRow[]> {
-    const result = await this.client.query<StepRunDbRow>(
-      `select ${STEP_RUN_ROW_COLUMNS} from step_runs
-       where workspace_id = $1 and goal_run_id = $2
-       order by created_at, id
-       for no key update`,
-      [this.ws, this.goal.id],
-    );
-    return result.rows.map(mapStepRunRow);
+    return lockStepRuns(this.client, this.ws, this.goal.id);
   }
 
   private async plan(revision: number): Promise<unknown> {
@@ -388,6 +411,13 @@ class Advance {
       return;
     }
     if (!FINISHED_TASK_STATUSES.has(task.status)) return;
+    // I-G2: a step out of the current plan is not judged — its attempt's result stays on its Task
+    // and moves nothing (review #493 on #619). A revision supersedes such a step first (GO3b), so
+    // this is the backstop.
+    if (!(await this.inCurrentPlan(step))) {
+      await this.pause('needs_decision', `step ${step.stepKey}: no longer in the current plan`);
+      return;
+    }
     const runs = await listTaskWorkerRunTree(this.client, this.ws, task.id);
     const effect = stepActionEffect(
       await listStepActionOutcomes(this.client, this.ws, step.id, { raisedBy: runs }),
@@ -482,8 +512,9 @@ class Advance {
   // ----- C ------------------------------------------------------------------------------------
 
   private async unblockSteps(steps: readonly StepRunRow[]): Promise<void> {
-    const succeeded = new Set(
-      steps.filter((step) => step.status === 'succeeded').map((step) => step.stepKey),
+    // A dependency is met by a step that succeeded or was skipped (review #493 on #619).
+    const done = new Set(
+      steps.filter((step) => DONE_STEP_STATUSES.has(step.status)).map((step) => step.stepKey),
     );
     for (const step of steps) {
       if (step.status !== 'pending') continue;
@@ -492,7 +523,7 @@ class Advance {
         await this.pause('needs_decision', `step ${step.stepKey}: its plan entry is unreadable`);
         continue;
       }
-      if (!(entry.dependsOn ?? []).every((key) => succeeded.has(key))) continue;
+      if (!(entry.dependsOn ?? []).every((key) => done.has(key))) continue;
       if (!(await this.inCurrentPlan(step))) {
         await this.pause('needs_decision', `step ${step.stepKey}: no longer in the current plan`);
         continue;
@@ -524,9 +555,35 @@ class Advance {
       );
       return;
     }
+    const ready = live.filter((step) => step.status === 'ready');
+    if (ready.length === 0) return;
     let attemptsSoFar = usage.steps;
-    for (const step of live) {
-      if (step.status !== 'ready') continue;
+    if (attemptsSoFar >= this.goal.budget.maxSteps) {
+      await this.pause(
+        'budget_exhausted',
+        `steps: ${attemptsSoFar} of ${this.goal.budget.maxSteps} attempts started`,
+      );
+      return;
+    }
+    // #619 deviation 6 (I-G6): the attempts this advance starts split what the goal can still hand
+    // out, read under the quota lock that every Task of the requester is created under — a nested
+    // child Task's `invoke_worker` included — so nothing claims the same tokens twice.
+    await lockTaskQuotas(this.client, this.ws, this.requester);
+    const headroom = await readGoalRunTokenHeadroom(this.client, this.ws, this.goal.id);
+    const starting = Math.min(ready.length, this.goal.budget.maxSteps - attemptsSoFar);
+    const share = Math.floor(headroom / starting);
+    if (share < 1) {
+      // Held by live Tasks: their unspent budget comes back when they end, and their end wakes
+      // the run. Otherwise the goal's tokens are all but spent.
+      if ((await listGoalRunLiveTasks(this.client, this.ws, this.goal.id)).length === 0) {
+        await this.pause(
+          'budget_exhausted',
+          `tokens: ${headroom} left of ${this.goal.budget.maxTokens}, not enough for ${starting} attempt(s)`,
+        );
+      }
+      return;
+    }
+    for (const step of ready) {
       if (attemptsSoFar >= this.goal.budget.maxSteps) {
         await this.pause(
           'budget_exhausted',
@@ -534,13 +591,14 @@ class Advance {
         );
         return;
       }
-      if (!(await this.startAttempt(step, usage.tokens))) return;
+      if (!(await this.startAttempt(step, share))) return;
       attemptsSoFar += 1;
     }
   }
 
-  /** Starts one attempt of a `ready` step; `false` when nothing more starts in this advance. */
-  private async startAttempt(step: StepRunRow, tokensUsed: number): Promise<boolean> {
+  /** Starts one attempt of a `ready` step with at most `tokenCap` tokens; `false` when nothing more
+   *  starts in this advance. */
+  private async startAttempt(step: StepRunRow, tokenCap: number): Promise<boolean> {
     const entry = await this.entry(step);
     if (!entry || !(await this.inCurrentPlan(step))) {
       await this.pause('needs_decision', `step ${step.stepKey}: no longer in the current plan`);
@@ -571,7 +629,7 @@ class Advance {
       input: entry.input,
       nested: entry.nested ?? false,
       previous,
-      tokenCap: this.goal.budget.maxTokens - tokensUsed,
+      tokenCap,
       durationCapSec: Math.max(1, Math.floor((this.deadline - this.now.getTime()) / 1000)),
     });
     if (result.kind === 'refused') {
@@ -592,6 +650,10 @@ class Advance {
 
   // ----- transitions --------------------------------------------------------------------------
 
+  private get actor(): GoalMoveActor {
+    return { principalId: this.requester, by: 'advancer' };
+  }
+
   private async moveStep(
     step: StepRunRow,
     event: StepRunEvent,
@@ -601,44 +663,7 @@ class Advance {
       readonly audit?: Record<string, unknown>;
     },
   ): Promise<StepRunRow> {
-    const to = transition(STEP_RUN_TRANSITIONS, step.status, event);
-    const result = await this.client.query<StepRunDbRow>(
-      `update step_runs
-          set status = $3, waiting_reason = $4, failure_category = $5,
-              attempt_count = attempt_count + $6, updated_at = now(),
-              ended_at = case when $7 then now() else null end
-        where workspace_id = $1 and id = $2 and status = $8
-        returning ${STEP_RUN_ROW_COLUMNS}`,
-      [
-        this.ws,
-        step.id,
-        to,
-        to === 'waiting' ? (params.waitingReason ?? null) : null,
-        to === 'failed' ? (params.failureCategory ?? null) : null,
-        event === 'start' ? 1 : 0,
-        FINAL_STEP_STATUSES.has(to),
-        step.status,
-      ],
-    );
-    const row = result.rows[0];
-    if (!row) {
-      throw new Error(`advanceGoalRun: step run ${step.id} is no longer ${step.status}`);
-    }
-    await recordStepRunTransition(this.client, this.ws, {
-      actorPrincipalId: this.requester,
-      action: `step_run.${event}`,
-      goalRunId: this.goal.id,
-      stepRunId: step.id,
-      resultingStatus: to,
-      extraAuditPayload: {
-        by: 'advancer',
-        stepKey: step.stepKey,
-        ...(to === 'waiting' ? { waitingReason: params.waitingReason } : {}),
-        ...(to === 'failed' ? { failureCategory: params.failureCategory } : {}),
-        ...params.audit,
-      },
-    });
-    return mapStepRunRow(row);
+    return moveStepRun(this.client, this.actor, step, event, params);
   }
 
   /** Pauses a running GoalRun. A paused one keeps its reason (the guard refuses changing it); the
@@ -682,19 +707,9 @@ class Advance {
     pauseReason: GoalRunPauseReason | null,
     audit: Record<string, unknown>,
   ): Promise<void> {
-    const to = transition(GOAL_RUN_TRANSITIONS, this.status, event);
-    await this.client.query(
-      `update goal_runs set status = $3, pause_reason = $4, updated_at = now()
-        where workspace_id = $1 and id = $2`,
-      [this.ws, this.goal.id, to, pauseReason],
-    );
-    await recordGoalRunTransition(this.client, this.ws, {
-      actorPrincipalId: this.requester,
-      action: `goal_run.${event}`,
-      goalRunId: this.goal.id,
-      resultingStatus: to,
-      extraAuditPayload: { by: 'advancer', ...audit },
+    this.status = await moveGoalRun(this.client, this.actor, this.goal, this.status, event, {
+      ...(pauseReason ? { pauseReason } : {}),
+      audit,
     });
-    this.status = to;
   }
 }

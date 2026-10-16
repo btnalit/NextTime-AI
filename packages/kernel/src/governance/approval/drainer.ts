@@ -1,4 +1,4 @@
-import type { ActionRequestFailureKind } from '@nexttime/shared';
+import { type ActionRequestFailureKind, IllegalTransition } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import {
   markActionRequestExecuted,
@@ -153,9 +153,22 @@ export class ApprovalDrainer {
         if (row.status === 'pending_approval') return stopped('pending');
         if (row.status === 'executing') return stopped('executing');
 
-        const executing = await this.deps.withTransaction(workspaceId, principalId, (client) =>
-          startActionRequestExecution(client, workspaceId, row.id),
-        );
+        // Legacy 330: the head can move between the read above and this start — withdrawn with
+        // its goal step (S11 GO3a), or started by another trigger. `startActionRequestExecution`
+        // re-checks the row under its lock and refuses (`IllegalTransition`); read the queue again
+        // rather than end the drain, or the rows behind a withdrawn head wait for the next tick
+        // whenever the withdrawal's own drain was skipped as in flight. Bounded: every refusal is
+        // a row that left the executable statuses for good, or now sits `executing` at the head,
+        // which the next read stops at.
+        let executing: ActionRequestRow;
+        try {
+          executing = await this.deps.withTransaction(workspaceId, principalId, (client) =>
+            startActionRequestExecution(client, workspaceId, row.id),
+          );
+        } catch (err) {
+          if (err instanceof IllegalTransition) continue;
+          throw err;
+        }
 
         const result = await this.deps.executor.execute(executing);
 

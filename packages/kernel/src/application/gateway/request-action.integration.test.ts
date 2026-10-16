@@ -51,6 +51,7 @@ import { ObserveParamsCarryCredentialsError } from '../../governance/redaction/i
 import { queryAudit } from '../../substrate/audit/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
+import { GoalStepClosedError } from '../task/index.js';
 import {
   createAdminWithTransaction,
   createGatekeeperActionExecutor,
@@ -1664,9 +1665,13 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(row?.stepRunId).toBeNull();
     });
 
-    it('S11 GO1: a Worker whose Task runs for a goal step records that StepRun on its request', async () => {
-      // The goal rows with the guards off: the advancer that would walk them there is GO2's.
-      const seeded = await withWorkspace(
+    /** A running GoalRun, one StepRun in `stepStatus` and its attempt's running Worker — written
+     *  with the guards off, as the advancer would leave them. */
+    const seedGoalStepWorker = (
+      goalStatus: 'running' | 'cancelling',
+      stepStatus: 'running' | 'cancelled',
+    ) =>
+      withWorkspace(
         pool,
         { workspaceId, principalId: ownerId },
         async (client) => {
@@ -1675,8 +1680,8 @@ describe.runIf(DATABASE_URL !== undefined)(
             `insert into goal_runs (workspace_id, status, on_behalf_of, statement, current_revision,
                confirmed_at, budget_max_tokens, budget_max_steps, budget_max_revisions,
                budget_max_wall_clock_seconds)
-             values ($1, 'running', $2, 'a goal', 1, now(), 100000, 10, 5, 3600) returning id`,
-            [workspaceId, ownerId],
+             values ($1, $3, $2, 'a goal', 1, now(), 100000, 10, 5, 3600) returning id`,
+            [workspaceId, ownerId, goalStatus],
           );
           const goalRunId = goal.rows[0]?.id as string;
           await client.query(
@@ -1687,9 +1692,10 @@ describe.runIf(DATABASE_URL !== undefined)(
           );
           const step = await client.query<{ id: string }>(
             `insert into step_runs (workspace_id, goal_run_id, step_key, introduced_in_revision,
-               status, attempt_count)
-             values ($1, $2, 's', 1, 'running', 1) returning id`,
-            [workspaceId, goalRunId],
+               status, attempt_count, ended_at)
+             values ($1, $2, 's', 1, $3, 1, case when $3 = 'running' then null else now() end)
+             returning id`,
+            [workspaceId, goalRunId, stepStatus],
           );
           const stepRunId = step.rows[0]?.id as string;
           const task = await client.query<{ id: string }>(
@@ -1715,6 +1721,9 @@ describe.runIf(DATABASE_URL !== undefined)(
         },
         { skipRoleSwitch: true },
       );
+
+    it('S11 GO1: a Worker whose Task runs for a goal step records that StepRun on its request', async () => {
+      const seeded = await seedGoalStepWorker('running', 'running');
 
       const now = Math.floor(Date.now() / 1000);
       const result = (await dispatchCapability(
@@ -1745,6 +1754,55 @@ describe.runIf(DATABASE_URL !== undefined)(
         listStepActionOutcomes(client, workspaceId, seeded.stepRunId),
       );
       expect(outcomes).toEqual([{ id: result.id, status: 'pending_approval', failureKind: null }]);
+    });
+
+    it('S11 GO3a (I-G9): a Worker of a cancelled goal step raises nothing — refused 409, no request written', async () => {
+      const seeded = await seedGoalStepWorker('cancelling', 'cancelled');
+      const now = Math.floor(Date.now() / 1000);
+      await expect(
+        dispatchCapability(
+          { pool },
+          {
+            channel: 'handle',
+            claims: {
+              ws: workspaceId,
+              sid: seeded.sessionId,
+              obo: ownerId,
+              scope: {
+                capabilities: ['request_action'],
+                resources: { gatekeeper: [gatekeeperId] },
+              },
+              jti: randomUUID(),
+              iat: now,
+              exp: now + 600,
+            },
+          },
+          'request_action',
+          { gatekeeperId, operation: PENDING_OP.name, params: { qty: 779 } },
+        ),
+      ).rejects.toBeInstanceOf(GoalStepClosedError);
+      const outcomes = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        listStepActionOutcomes(client, workspaceId, seeded.stepRunId),
+      );
+      expect(outcomes).toEqual([]);
+      // The refused call is still in the audit log ("审计只增不减"), against the step.
+      const audit = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        client.query<{ action: string; resource_type: string; payload: Record<string, unknown> }>(
+          `select action, resource_type, payload from audit_records
+            where workspace_id = $1 and resource_id = $2`,
+          [workspaceId, seeded.stepRunId],
+        ),
+      );
+      expect(audit.rows).toEqual([
+        expect.objectContaining({
+          action: 'request_action',
+          resource_type: 'step_run',
+          payload: expect.objectContaining({
+            outcome: 'refused',
+            refusal: { code: 'goal_step_closed', status: 409, stepStatus: 'cancelled' },
+          }),
+        }),
+      ]);
     });
 
     // Legacy 232: a name that names nothing on the gate used to become a `pending_approval` row
