@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { describeError, presentError } from './errors.js';
 import type {
   ActionPendingPush,
   ChatMessage,
@@ -690,6 +691,29 @@ describe('WsClient', () => {
       expect(err).toBeInstanceOf(RpcError);
       expect(err).not.toBeInstanceOf(TurnAlreadyRunningError);
       expect((err as RpcError).code).toBe(-32602);
+    });
+
+    // Legacy 320 (UX acceptance of #602): the composer's send refused for U+0000 comes back as
+    // its own code, which the console reads as `unstorable_text`, not `invalid_params`.
+    it('surfaces a -32017 refusal of a send as an RpcError the console reads as unstorable_text', async () => {
+      const { client, sockets } = harness;
+      const socket = await connectAndAuth(client, sockets);
+
+      const sendPromise = client.sendChatMessage('chat-1', 'pasted\u0000log');
+      const frame = sentFrame(socket, socket.sent.length - 1);
+      respondError(socket, frame, {
+        code: -32017,
+        message:
+          'capability "send_chat_message": the text at params "text" holds U+0000 (NUL), which cannot be stored — nothing was written; send it again without that character',
+      });
+
+      const err = await sendPromise.catch((caught: unknown) => caught);
+      expect(err).toBeInstanceOf(RpcError);
+      expect((err as RpcError).code).toBe(-32017);
+      expect(describeError(err).code).toBe('unstorable_text');
+      expect(presentError(err, (zh) => zh).message).toMatch(
+        /^字段「text」里有一个看不见的 U\+0000/,
+      );
     });
   });
 

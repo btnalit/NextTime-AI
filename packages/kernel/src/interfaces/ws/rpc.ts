@@ -218,6 +218,11 @@ export const WS_ERROR_CODES = {
    *  `AgentProfile.excludedWorkerDefinitions`. A distinct code from `ATTENUATION_DENIED` — the two
    *  403 reasons are unrelated and an entry agent relaying this verbatim should not conflate them. */
   WORKER_DEFINITION_NOT_ENABLED: -32016,
+  /** Legacy 320 (UX acceptance of #602) — mirrors HTTP 400 `unstorable_text`: text holding U+0000
+   *  where it is compared or acted on, refused before anything was written. A code of its own,
+   *  not INVALID_PARAMS: the console's chat composer sends over WS, and a person who pasted it
+   *  needs to be told what the invisible character is, not "the request is invalid". */
+  UNSTORABLE_TEXT: -32017,
 } as const;
 
 /** A passed-through gate refusal's HTTP status (`gateRefusalOf`) as its WS code: 400, 403, 404
@@ -253,9 +258,9 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   if (err instanceof InvalidCapabilityParamsError) {
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
-  // Legacy 320: mirrors HTTP 400 `unstorable_text` (capability-route.ts).
+  // Legacy 320: mirrors HTTP 400 `unstorable_text` (capability-route.ts); the message says where.
   if (err instanceof UnstorableTextError) {
-    return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
+    return { code: WS_ERROR_CODES.UNSTORABLE_TEXT, message: err.message };
   }
   if (err instanceof CapabilityNotImplementedError) {
     return { code: WS_ERROR_CODES.NOT_IMPLEMENTED, message: err.message };

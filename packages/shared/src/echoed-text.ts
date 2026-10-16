@@ -34,12 +34,21 @@ export function visibleText(value: string): string {
   return value.replace(UNSEEN, escapeCodePoint);
 }
 
+/** `storable-text.ts`'s `UNSTORABLE_CHAR_STAND_IN` (`\u{0}`, what U+0000 is stored as) as
+ *  `JSON.stringify` writes it: its backslash doubled. A backslash JSON writes on its own always
+ *  comes as such a pair, so a match never starts halfway through one. */
+const STAND_IN_AFTER_JSON = /\\\\u\{0\}/g;
+
 /** JSON text (`JSON.stringify` output) with every unseen character it left raw — format characters
  *  and line / paragraph separators — shown as `\u{XXXX}`. Control characters and lone surrogates
  *  are already escaped by `JSON.stringify`, and pretty-printing's own line breaks stay as they are
- *  (review of #593: a bidi override inside a value reordered what an approver read). */
+ *  (review of #593: a bidi override inside a value reordered what an approver read).
+ *
+ *  A stored U+0000 stand-in reads `\u{0}` here too, as in running text and beside the `\u{XXXX}`
+ *  above, instead of JSON's `\\u{0}` (UX acceptance of #602): one character, one spelling. It was
+ *  already indistinguishable from someone typing `\u{0}`, so this adds no new ambiguity. */
 export function visibleJson(json: string): string {
-  return json.replace(UNSEEN_AFTER_JSON, escapeCodePoint);
+  return json.replace(UNSEEN_AFTER_JSON, escapeCodePoint).replace(STAND_IN_AFTER_JSON, '\\u{0}');
 }
 
 /** An unquoted echo: clipped, then made visible — for a stored field or an audit payload. */
