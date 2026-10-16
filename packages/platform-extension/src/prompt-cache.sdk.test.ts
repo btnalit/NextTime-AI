@@ -379,6 +379,39 @@ describe('prompt cache: what the real pi-ai request repeats between calls', () =
     },
   );
 
+  it('entry mode: a failed read keeps the snapshot cached and goes last as an uncached not-refreshed notice', async () => {
+    process.env.NEXTTIME_MODE = 'entry';
+    let reads = 0;
+    kernel.setHandler('get_entry_context', () => {
+      reads += 1;
+      return reads === 2
+        ? { ok: false, error: { code: 'internal', message: 'kernel unavailable' } }
+        : { ok: true, result: { tasks: [{ taskId: 't-1', status: 'running' }] } };
+    });
+    kernel.setHandler('list_allowed_operations', () => ({ ok: true, result: { items: [] } }));
+    kernel.setHandler('get_object', () => ({ ok: true, result: { id: 'obj-1', type: 'Host' } }));
+    kernel.setHandler('report_turn', () => ({ ok: true, result: {} }));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    anthropic = await startFakeAnthropic([
+      { toolUse: { name: 'get_object', input: { objectId: 'obj-1' } } },
+      { text: 'obj-1 is a host.' },
+    ]);
+    ({ session } = await sessionAgainst(anthropic, tmpDir, true));
+    await session.prompt('<!--nexttime:turn_id=turn-1-->\nWhat is obj-1?');
+    errorSpy.mockRestore();
+
+    const [first, second] = anthropic.requests as [Json, Json];
+    const messages = messagesOf(second);
+    expect(contextMessageIndexes(second, 'NextTime entry context')).toEqual([
+      1,
+      messages.length - 1,
+    ]);
+    expect(textOf(messages[messages.length - 1])).toContain('not refreshed');
+    expect(JSON.stringify(messages[messages.length - 1])).not.toContain('cache_control');
+    expect(breakpoints(second)[0]?.[0]).toBe(messages.length - 2);
+    expectEachRequestReadsThePreviousWrite([first, second]);
+  });
+
   it('worker mode: the Task context sits before the kickoff, identical on every call, so the cached prefix covers it', async () => {
     process.env.NEXTTIME_MODE = 'worker';
     process.env.TASK_ID = 'task-cache-test';

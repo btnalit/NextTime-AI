@@ -40,7 +40,7 @@ function linkTypeCounts(items: unknown[] | undefined): LinkTypeCount[] | undefin
 }
 
 function renderSection(title: string, items: unknown[] | undefined): string | undefined {
-  if (!items || items.length === 0) return undefined;
+  if (!Array.isArray(items) || items.length === 0) return undefined;
   return [`### ${title}`, ...items.map((item) => `- ${JSON.stringify(item)}`)].join('\n');
 }
 
@@ -122,7 +122,7 @@ function renderRecentFacts(
   facts: unknown[] | undefined,
   counts: readonly LinkTypeCount[] | undefined,
 ): string | undefined {
-  if (!facts || facts.length === 0) return undefined;
+  if (!Array.isArray(facts) || facts.length === 0) return undefined;
   const total = counts?.reduce((sum, { count }) => sum + count, 0);
   const sampled =
     total !== undefined && total >= facts.length

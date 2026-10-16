@@ -188,20 +188,88 @@ describe('installLiveContext', () => {
     expect(logSpy).toHaveBeenLastCalledWith(expect.stringContaining('reason=anchor_lost'));
   });
 
-  it('a failed read keeps the snapshot in place and adds nothing; with no snapshot it injects nothing', async () => {
+  it('a failed read with no snapshot injects nothing', async () => {
     next = undefined;
     live.startRun();
     expect(await call([user('Hi', 1)])).toBeUndefined();
+  });
 
-    next = { tasks: [{ taskId: 't-1' }] };
+  // #575 review must-fix, case 1: the update already said t-1 completed; a failed read must not
+  // fall back to the snapshot's "running" as if it were current.
+  it('a failed read mid-run keeps the snapshot in place and repeats the last update under a not-refreshed notice', async () => {
+    const history = [user('Restart it', 1)];
+    live.startRun();
+    const first = await call(history);
+    history.push(...toolTurn(2));
+    next = { tasks: [{ taskId: 't-1', status: 'completed' }] };
+    const second = await call(history);
+    const update = textOf(second?.[second.length - 1]);
+
+    history.push(...toolTurn(4));
+    next = undefined;
+    const third = await call(history);
+    expect(contextIndexes(third ?? [])).toEqual([1, history.length + 1]);
+    expect(third?.[1]).toEqual(first?.[1]);
+    const notice = textOf(third?.[third.length - 1]);
+    expect(notice).toContain(`## ${TITLE} — not refreshed`);
+    expect(notice).toContain('may be out of date');
+    expect(notice).toContain(update);
+    expect(notice).toContain('"status":"completed"');
+    expect(errorSpy).toHaveBeenLastCalledWith(
+      expect.stringContaining('nexttime-entry check=live_context result=kept_on_read_error'),
+    );
+  });
+
+  // #575 review must-fix, case 2: a new run whose first read fails must not present the previous
+  // run's snapshot (an approval report_turn may already have acknowledged) as current.
+  it('a failed read at the start of a run marks the previous snapshot as not refreshed', async () => {
+    next = { pendingApprovals: [{ actionRequestId: 'ar-1' }] };
+    const history = [user('Turn 1', 1)];
+    live.startRun();
+    await call(history);
+    history.push(...toolTurn(2), user('Turn 2', 10));
+    live.startRun();
+    next = undefined;
+    const result = await call(history);
+    expect(contextIndexes(result ?? [])).toEqual([1, history.length + 1]);
+    const notice = textOf(result?.[result.length - 1]);
+    expect(notice).toContain('not refreshed');
+    expect(notice).toContain(`The ${TITLE} above is from an earlier call`);
+    expect(notice).not.toContain('— update');
+  });
+
+  it.each([
+    ['null', null],
+    ['an array', []],
+    ['a string', 'oops'],
+  ])('a result that is %s counts as a failed read', async (_label, value) => {
     const history = [user('Hi', 1)];
+    live.startRun();
+    await call(history);
+    history.push(...toolTurn(2));
+    next = value as unknown as EntryContextResult;
+    const result = await call(history);
+    expect(textOf(result?.[result.length - 1])).toContain('not refreshed');
+  });
+
+  it('a field of the wrong type renders as an empty section instead of throwing', async () => {
+    next = { tasks: 'not-a-list' as unknown as unknown[], pendingApprovals: [{ id: 'ar-1' }] };
+    live.startRun();
+    const result = await call([user('Hi', 1)]);
+    expect(textOf(result?.[1])).toContain('Pending approvals');
+    expect(textOf(result?.[1])).not.toContain('Running tasks');
+  });
+
+  it('after a successful read the not-refreshed notice is gone', async () => {
+    const history = [user('Hi', 1)];
+    live.startRun();
     await call(history);
     history.push(...toolTurn(2));
     next = undefined;
+    await call(history);
+    history.push(...toolTurn(4));
+    next = { tasks: [{ taskId: 't-1', status: 'running' }] };
     expect(contextIndexes((await call(history)) ?? [])).toEqual([1]);
-    expect(errorSpy).toHaveBeenLastCalledWith(
-      'nexttime-entry check=live_context result=kept_on_read_error',
-    );
   });
 
   it('a run whose first read fails still decides at its first successful read', async () => {

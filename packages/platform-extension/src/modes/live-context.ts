@@ -101,6 +101,8 @@ export function installLiveContext(pi: ExtensionAPI, options: LiveContextOptions
   const prefix = `nexttime-${options.component} check=live_context`;
   const noteAppendedUpdate = keepCacheBreakpointOnHistory(pi);
   let snapshot: Snapshot | undefined;
+  /** The update sent with the snapshot on the last successful read (`''` when none). */
+  let lastUpdate = '';
   let runStarted = false;
 
   function customMessage(content: string): Message {
@@ -124,18 +126,44 @@ export function installLiveContext(pi: ExtensionAPI, options: LiveContextOptions
     return message;
   }
 
+  /** Whether the read is a usable `get_entry_context` result; anything else is a failed read. */
+  function isResult(value: unknown): value is EntryContextResult {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+  }
+
   pi.on('context', async (event) => {
     noteAppendedUpdate(undefined);
     const messages = event.messages;
     const context = await options.read();
     const at = snapshot ? insertionIndex(messages, snapshot.afterKey) : -1;
 
-    if (context === undefined) {
-      // A failed read: keep what this conversation already has in place (still the prefix the
-      // previous call wrote), add nothing. Without a snapshot there is nothing to inject.
+    if (!isResult(context)) {
+      // A failed read (kernel error, timeout, malformed result). Without a snapshot in this
+      // conversation there is nothing to inject. With one, it stays in place — still the prefix
+      // the previous call wrote — but this call cannot say it is current: the last update goes
+      // last again, under a notice that neither is fresh (#575 review: without it the model read
+      // the snapshot's older state, or a finished Turn's items, as the current one). A run that
+      // starts on a failed read still decides at its first successful one (`runStarted` kept).
       if (!snapshot || at < 0) return undefined;
-      console.error(`${prefix} result=kept_on_read_error`);
-      return { messages: [...messages.slice(0, at), snapshot.message, ...messages.slice(at)] };
+      const notice = [
+        `## ${options.title} — not refreshed`,
+        `The live context could not be read for this call. The ${options.title} above${
+          lastUpdate ? ' and the update below are' : ' is'
+        } from an earlier call and may be out of date: treat nothing in ${
+          lastUpdate ? 'them' : 'it'
+        } as new, and check with a tool before relying on an approval or task status shown there.`,
+        ...(lastUpdate ? [lastUpdate] : []),
+      ].join('\n\n');
+      console.error(`${prefix} result=kept_on_read_error update_chars=${lastUpdate.length}`);
+      noteAppendedUpdate(notice);
+      return {
+        messages: [
+          ...messages.slice(0, at),
+          snapshot.message,
+          ...messages.slice(at),
+          customMessage(notice),
+        ],
+      };
     }
 
     const sections = renderEntryContextSections(context);
@@ -145,6 +173,7 @@ export function installLiveContext(pi: ExtensionAPI, options: LiveContextOptions
 
     if (!snapshot || at < 0 || (startsRun && changed.length > 0)) {
       const reason = !snapshot ? 'first' : at < 0 ? 'anchor_lost' : 'changed';
+      lastUpdate = '';
       if (sections.length === 0) {
         snapshot = undefined;
         console.log(`${prefix} result=empty reason=${reason}`);
@@ -161,6 +190,7 @@ export function installLiveContext(pi: ExtensionAPI, options: LiveContextOptions
 
     const withSnapshot = [...messages.slice(0, at), snapshot.message, ...messages.slice(at)];
     const update = renderEntryContextUpdate(snapshot.sections, sections, options.title);
+    lastUpdate = update;
     console.log(
       `${prefix} result=reused changed=${formatKeys(changed)} update_chars=${update.length}`,
     );
