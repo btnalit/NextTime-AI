@@ -368,7 +368,10 @@ kernel 的 HTTP/WS capability 接口。它和 §5 背后是同一个落地函数
 暂停（暂停后它的每个 Operation 都被拒，观察也一样，并吊销仍在用它的入口 Handle）、再恢复。同一个
 工作区在同一个地址上已经有 Gatekeeper 时，`create_connection` 返回 `409 endpoint_already_connected`
 （`details.gatekeeperId` 指向已有的那个），什么也不保存——要更新清单用「重新读取门的清单」，换密钥用
-`rotate_connection_secret`。
+`rotate_connection_secret`（控制台「系统与授权 → ⋯ →「重新签发连接密钥」」）。"同一地址"按归一化比较：
+scheme 与主机名不分大小写，主机名末尾的点、默认端口（http 80 / https 443）、路径末尾的斜杠都不算不同。
+暂停只管这一条连接：同一个门换一个主机名或 IP 再接入，算一条新连接。要让工作区不能再自己接入某一类门，
+在「集成 → 接入包」里把对应接入包的模式从「自助」改掉。
 
 本节复用 §4 建好的 workspace/owner（`WORKSPACE_ID`/`OWNER_ID`/`OWNER_KEY`），并需要一个第二个用户
 （`member` 角色）——没有的话先用 `bootstrap.js add-principal` 建一个：
