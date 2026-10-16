@@ -42,8 +42,10 @@ export function gateOwnedParamsText(params: readonly GateOwnedParamWire[], t: Tr
     .join(t('、', ', '));
 }
 
-/** Which next step applies: a platform gate re-syncs through align, a self-connected one does not. */
-export type GateOwnedParamsFix = 'align' | 'reconnect' | 'either';
+/** Which next step applies: a platform gate re-syncs through align, a self-connected one does not.
+ *  `align-here`: the same as `align`, said next to the one-draft rewrite button itself (the
+ *  catalog), so the reader is not sent to another page for it (UX acceptance of #567 P3). */
+export type GateOwnedParamsFix = 'align' | 'align-here' | 'reconnect' | 'either';
 
 /** The sentence after "the gate's maintainer drops them from its manifest". */
 export function gateOwnedParamsNextStep(fix: GateOwnedParamsFix, t: Translate): string {
@@ -51,6 +53,12 @@ export function gateOwnedParamsNextStep(fix: GateOwnedParamsFix, t: Translate): 
     return t(
       '要门的维护者从门的清单里去掉这些参数；去掉之后，到「系统与授权」打开这个系统，点「与门公告对齐」按新清单重写草稿，再到能力目录发布。',
       'The gate’s maintainer has to drop these params from the gate’s manifest; then open this system under Systems & access, use “Align with the gate’s announcement” to rewrite the draft, and publish it in the catalog.',
+    );
+  }
+  if (fix === 'align-here') {
+    return t(
+      '要门的维护者从门的清单里去掉这些参数；改好并由平台采用之后，点下面的「按门的最新清单重写」，再发布。',
+      'The gate’s maintainer has to drop these params from the gate’s manifest; once that is done and adopted by the platform, use “Rewrite from the gate’s latest manifest” below, then publish.',
     );
   }
   if (fix === 'reconnect') {
@@ -62,6 +70,35 @@ export function gateOwnedParamsNextStep(fix: GateOwnedParamsFix, t: Translate): 
   return t(
     '要门的维护者从门的清单里去掉这些参数。平台提供的系统，去掉之后到「系统与授权」点「与门公告对齐」重写这份草稿再发布；工作区自己接入的系统，改好清单后需要重新接入。',
     'The gate’s maintainer has to drop these params from the gate’s manifest. For a platform-provided system, then use “Align with the gate’s announcement” under Systems & access to rewrite this draft and publish it; a system the workspace connected itself has to be connected again once the manifest is fixed.',
+  );
+}
+
+/**
+ * One announced entry the bulk publish will hold back (UX acceptance of #567 P3) — marked in the
+ * table that first lists it (the launcher's announced Operations, the instance drawer's manifest
+ * in effect), not only in the enable preview.
+ */
+export function GateOwnedParamsMark({
+  params,
+  testId,
+}: {
+  readonly params: readonly GateOwnedParamWire[] | undefined;
+  readonly testId?: string;
+}) {
+  const t = useT();
+  if (!params || params.length === 0) return null;
+  return (
+    <span className="stack-s" data-testid={testId}>
+      <span>
+        <span className="chip chip-s chip-warn">{t('发布不了', 'Cannot be published')}</span>
+      </span>
+      <span className="text-3 text-small">
+        {t(
+          `声明了只能由门自己设置的参数：${gateOwnedParamsText(params, t)}`,
+          `Declares params only the gate sets: ${gateOwnedParamsText(params, t)}`,
+        )}
+      </span>
+    </span>
   );
 }
 

@@ -403,6 +403,34 @@ describe('PlatformOverviewPage', () => {
     );
   });
 
+  it('UX acceptance of #567 P2: an instance some workspace already enabled is not called invisible — only the other workspaces cannot see it', async () => {
+    const http = scriptedHttp({
+      platform_overview: () => overview({ health: [] }),
+      list_workspaces: () => ({ items: [defaultWorkspaceRow()] }),
+      list_gate_instances: () => ({
+        items: [
+          {
+            gateId: 'gate-used',
+            displayName: 'Docker prod',
+            connector: 'docker',
+            status: 'enabled',
+            enabledWorkspaceCount: 2,
+            pendingManifest: null,
+          },
+        ],
+      }),
+      list_connectors: () => ({ items: [{ name: 'docker', mode: 'self_serve' }] }),
+    });
+    renderPage(http);
+    const list = await screen.findByTestId('platform-attention-items');
+    await waitFor(() =>
+      expect(list.textContent).toContain(
+        '门实例「Docker prod」已在 2 个工作区启用；其他工作区看不到它，也启用不了',
+      ),
+    );
+    expect(list.textContent).not.toContain('已启用，但工作区看不到它');
+  });
+
   // UX acceptance of #538: a gate already running a manifest the platform has not adopted refuses
   // calls; the overview says so (from `refusedOperations`) and links to where it is adopted.
   it('lists a gate whose new manifest waits to be adopted, saying when calls are already refused', async () => {

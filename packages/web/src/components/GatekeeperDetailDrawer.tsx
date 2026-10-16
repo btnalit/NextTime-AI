@@ -3,6 +3,7 @@ import type { CapabilityCaller } from '../lib/clients.js';
 import { formatDateTime, formatRelative } from '../lib/format.js';
 import { type GatekeeperDetail, healthView } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
+import { gateOwnedParamsText } from './connect/GateOwnedParams.js';
 import { EmptyState } from './ui/EmptyState.js';
 import { ErrorBanner } from './ui/ErrorBanner.js';
 import { SkeletonRows } from './ui/Skeleton.js';
@@ -81,6 +82,22 @@ export function GatekeeperDetailDrawer({ http, gatekeeperId }: GatekeeperDetailD
             <div className="op-item" key={operation.name} title={operation.name}>
               <span className="op-name">{operation.name}</span>
               <StatusChip machine="publishable" status={operation.status} size="s" />
+              {/* UX acceptance of #567 P3: a draft held back for a gate-owned param is not an
+               *  ordinary draft — it cannot be published until the gate's manifest changes. */}
+              {operation.status === 'draft' &&
+              operation.gateOwnedParams &&
+              operation.gateOwnedParams.length > 0 ? (
+                <span
+                  className="chip chip-s chip-warn"
+                  title={t(
+                    `声明了只能由门自己设置的参数：${gateOwnedParamsText(operation.gateOwnedParams, t)}`,
+                    `Declares params only the gate sets: ${gateOwnedParamsText(operation.gateOwnedParams, t)}`,
+                  )}
+                  data-testid={`gatekeeper-op-held-${operation.name}`}
+                >
+                  {t('发布不了', 'Cannot be published')}
+                </span>
+              ) : null}
               {/* S8 W1-A11 (audit L3): mode through the shared StatusChip machine, not a bare tag. */}
               {operation.mode ? (
                 <StatusChip machine="operationMode" status={operation.mode} size="s" />

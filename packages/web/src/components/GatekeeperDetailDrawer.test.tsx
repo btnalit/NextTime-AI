@@ -90,4 +90,31 @@ describe('GatekeeperDetailDrawer', () => {
     renderDrawer(http);
     await screen.findByTestId('gatekeeper-detail-error');
   });
+
+  it('UX acceptance of #567 P3: a draft held back for a gate-owned param is marked, not shown as an ordinary draft', async () => {
+    const http = callerReturning({
+      id: 'gk-1',
+      name: 'orders',
+      kind: 'http',
+      status: 'active',
+      manifestVersion: 1,
+      operationCount: 2,
+      createdAt: '2026-09-01T00:00:00.000Z',
+      operations: [
+        { name: 'stock.get', status: 'published', mode: 'observe' },
+        {
+          name: 'orders.lookup',
+          status: 'draft',
+          mode: 'observe',
+          gateOwnedParams: [{ param: 'Authorization', location: 'header' }],
+        },
+      ],
+      health: true,
+    });
+    renderDrawer(http);
+    const chip = await screen.findByTestId('gatekeeper-op-held-orders.lookup');
+    expect(chip.textContent).toBe('发布不了');
+    expect(chip.getAttribute('title')).toContain('Authorization（请求头）');
+    expect(screen.queryByTestId('gatekeeper-op-held-stock.get')).toBeNull();
+  });
 });

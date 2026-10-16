@@ -141,6 +141,45 @@ describe('OnboardingWizardReview', () => {
   });
 });
 
+// Review N1 of #567: an Operation whose definition declares a param only the gate sets can never be
+// published, so a reclassification of it would only leave one more stuck draft behind.
+describe('OnboardingWizardReview — an Operation held back for a gate-owned param', () => {
+  it('is marked with its params and offers no reclassification; the others still do', async () => {
+    const held = operationObject('gk-1', 'orders.lookup');
+    const heldDraft = { ...held, properties: { ...held.properties, status: 'draft' } };
+    const http = {
+      call: vi.fn(async (name: string) => {
+        if (name === 'search') return { items: [operationObject('gk-1', 'stock.get'), heldDraft] };
+        if (name === 'list_operations') {
+          return {
+            items: [
+              { gatekeeperId: 'gk-1', name: 'stock.get', status: 'published' },
+              {
+                gatekeeperId: 'gk-1',
+                name: 'orders.lookup',
+                status: 'draft',
+                gateOwnedParams: [{ param: 'Authorization', location: 'header' }],
+              },
+            ],
+          };
+        }
+        throw new Error(`unscripted ${name}`);
+      }) as CapabilityCaller['call'],
+    } as CapabilityCaller;
+    render(<OnboardingWizardReview http={http} gatekeeperId="gk-1" onDone={vi.fn()} />);
+    const mark = await screen.findByTestId('wizard-review-held');
+    expect(mark.textContent).toContain('Authorization（请求头）');
+    const rows = screen.getAllByTestId('wizard-review-row');
+    const heldRow = rows.find((row) => row.textContent?.includes('orders.lookup')) as HTMLElement;
+    const okRow = rows.find((row) => row.textContent?.includes('stock.get')) as HTMLElement;
+    expect(within(heldRow).queryByRole('button', { name: '提议重分类' })).toBeNull();
+    expect(within(heldRow).getByTestId('wizard-review-reclassify-held').textContent).toContain(
+      '不能重分类',
+    );
+    expect(within(okRow).getByRole('button', { name: '提议重分类' })).toBeTruthy();
+  });
+});
+
 // Decision 2026-10-09 "二次确认": the reclassification's publish is refused while its definition
 // carries suspected credentials; the row asks, and the next Submit carries the confirmation.
 describe('OnboardingWizardReview — credential confirmation', () => {

@@ -78,6 +78,52 @@ async function selectRow(row: HTMLElement): Promise<HTMLElement> {
   return screen.findByTestId('catalog-detail');
 }
 
+const HELD_DRAFT = {
+  gatekeeperId: 'gk-1',
+  name: 'stock.reserve',
+  status: 'draft',
+  mode: 'execute',
+  blastRadius: 'medium',
+  autoApprovable: false,
+};
+
+const LINKED_INSTANCE = {
+  gateId: 'gate-1',
+  connector: 'openapi',
+  displayName: 'Stock',
+  transportKind: 'http',
+  target: 'https://stock.example',
+  status: 'enabled',
+  trust: 'vetted',
+  health: 'ok',
+  operationCount: 2,
+  gatekeeperId: 'gk-1',
+};
+
+/** The align's preview of the linked gate: the held draft, rewritable or not. */
+function heldPreview(rewritable: boolean) {
+  return {
+    gateId: 'gate-1',
+    wouldLink: null,
+    ambiguousCandidates: [],
+    operationsToImport: [
+      {
+        name: 'stock.reserve',
+        mode: 'execute',
+        blastRadius: 'medium',
+        autoApprovable: false,
+        ...(rewritable
+          ? {}
+          : { gateOwnedParams: [{ param: 'Authorization', location: 'header' }] }),
+        pendingDraft: { rewritable },
+      },
+    ],
+    operationsAlreadyPresent: [],
+    manifestDigest: 'digest-1',
+    awaitingPlatformAdoption: null,
+  };
+}
+
 describe('CatalogPage', () => {
   it('defaults to the Operations tab and switches on click, loading each tab’s own capability', async () => {
     const http = scriptedHttp({
@@ -307,38 +353,36 @@ describe('CatalogPage', () => {
     expect(screen.queryByTestId('operation-revision-diff')).toBeNull();
   });
 
-  it('console G4 (legacy 219): a draft held back for a gate-owned param says why before anyone clicks Publish, and offers the rewrite on a platform gate', async () => {
+  it('console G4 (legacy 219): a draft held back for a gate-owned param says why before anyone clicks Publish; once the gate’s manifest is fixed the rewrite is one click, and says what it did', async () => {
+    let rewritten = false;
     const http = scriptedHttp({
       list_operations: () => ({
         items: [
           {
-            gatekeeperId: 'gk-1',
-            name: 'stock.reserve',
-            status: 'draft',
-            mode: 'execute',
-            blastRadius: 'medium',
-            autoApprovable: false,
-            gateOwnedParams: [{ param: 'Authorization', location: 'header' }],
+            ...HELD_DRAFT,
+            ...(rewritten
+              ? {}
+              : { gateOwnedParams: [{ param: 'Authorization', location: 'header' }] }),
           },
         ],
       }),
       get_operation_stats: () => ({ items: [] }),
-      list_available_gate_instances: () => ({
-        items: [
-          {
-            gateId: 'gate-1',
-            connector: 'openapi',
-            displayName: 'Stock',
-            transportKind: 'http',
-            target: 'https://stock.example',
-            status: 'enabled',
-            trust: 'trusted',
-            health: 'healthy',
-            operationCount: 2,
-            gatekeeperId: 'gk-1',
-          },
-        ],
-      }),
+      list_available_gate_instances: () => ({ items: [LINKED_INSTANCE] }),
+      preview_gate_instance_enable: () => heldPreview(true),
+      refresh_operation_governance: (params) => {
+        expect(params).toEqual({
+          gatekeeperId: 'gk-1',
+          operationNames: ['stock.reserve'],
+          manifestDigest: 'digest-1',
+        });
+        rewritten = true;
+        return {
+          gatekeeperId: 'gk-1',
+          refreshed: [],
+          revisionDrafts: [{ name: 'stock.reserve', version: 1 }],
+          unchanged: [],
+        };
+      },
     });
     // The same key the bulk publish's held-drafts notice links to.
     renderPage(http, 'operations', 'gk-1::stock.reserve');
@@ -350,7 +394,62 @@ describe('CatalogPage', () => {
     expect(within(detail).queryByRole('button', { name: '发布' })).toBeNull();
     const rewrite = await within(notice).findByTestId('operation-gate-owned-rewrite');
     expect(rewrite.textContent).toBe('按门的最新清单重写');
-    expect(notice.textContent).toContain('与门公告对齐');
+    expect((rewrite as HTMLButtonElement).disabled).toBe(false);
+    // UX acceptance of #567 P3: the button is right here — not "go to Systems & access".
+    expect(notice.textContent).toContain('点下面的「按门的最新清单重写」');
+    expect(notice.textContent).not.toContain('与门公告对齐');
+
+    fireEvent.click(rewrite);
+    const confirm = await screen.findByTestId('operation-gate-owned-rewrite-confirm');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    const receipt = await screen.findByTestId('operation-rewritten');
+    expect(receipt.textContent).toContain('已按门的最新清单重写这份草稿');
+    expect(receipt.textContent).toContain('Authorization（请求头）');
+    expect(screen.queryByTestId('operation-gate-owned-params')).toBeNull();
+    expect(
+      within(screen.getByTestId('catalog-detail')).getByRole('button', { name: '发布' }),
+    ).toBeTruthy();
+  });
+
+  it('UX acceptance of #567 P2: while the gate’s manifest still declares the param, the rewrite is greyed out and says what it waits for', async () => {
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [
+          { ...HELD_DRAFT, gateOwnedParams: [{ param: 'Authorization', location: 'header' }] },
+        ],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+      list_available_gate_instances: () => ({ items: [LINKED_INSTANCE] }),
+      preview_gate_instance_enable: () => heldPreview(false),
+    });
+    renderPage(http, 'operations', 'gk-1::stock.reserve');
+    const waiting = await screen.findByTestId('operation-gate-owned-rewrite-waiting');
+    expect(waiting.textContent).toContain('门的清单还没改');
+    const rewrite = screen.getByTestId('operation-gate-owned-rewrite') as HTMLButtonElement;
+    expect(rewrite.disabled).toBe(true);
+    expect(rewrite.getAttribute('aria-describedby')).toBe(waiting.id);
+    fireEvent.click(rewrite);
+    expect(http.calls.some((call) => call.name === 'refresh_operation_governance')).toBe(false);
+  });
+
+  it('UX acceptance of #567 P3: two gates declaring the same Operation name are told apart by gate in the list', async () => {
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [
+          { gatekeeperId: 'gk-1', name: 'orders.lookup', status: 'draft' },
+          { gatekeeperId: 'gk-2', name: 'orders.lookup', status: 'draft' },
+          { gatekeeperId: 'gk-1', name: 'stock.get', status: 'published' },
+        ],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+    });
+    renderPage(http);
+    await screen.findAllByTestId('catalog-row');
+    expect(screen.getByTestId('catalog-row-gate-gk-1::orders.lookup').textContent).toContain(
+      '门：',
+    );
+    expect(screen.getByTestId('catalog-row-gate-gk-2::orders.lookup')).toBeTruthy();
+    expect(screen.queryByTestId('catalog-row-gate-gk-1::stock.get')).toBeNull();
   });
 
   it('console G4: on a gate the workspace connected itself, the held draft is told to connect again — no rewrite offered', async () => {

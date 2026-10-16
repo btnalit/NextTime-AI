@@ -1843,6 +1843,31 @@
                   "null"
                 ]
               },
+              "gateOwnedParams": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "location": {
+                      "enum": [
+                        "header",
+                        "query",
+                        "cookie",
+                        "binding"
+                      ],
+                      "type": "string"
+                    },
+                    "param": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "param",
+                    "location"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
               "idempotentHint": {
                 "type": [
                   "boolean",
@@ -1899,6 +1924,31 @@
                           "boolean",
                           "null"
                         ]
+                      },
+                      "gateOwnedParams": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "location": {
+                              "enum": [
+                                "header",
+                                "query",
+                                "cookie",
+                                "binding"
+                              ],
+                              "type": "string"
+                            },
+                            "param": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "param",
+                            "location"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
                       },
                       "idempotentHint": {
                         "type": [
@@ -2059,6 +2109,31 @@
                           "boolean",
                           "null"
                         ]
+                      },
+                      "gateOwnedParams": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "location": {
+                              "enum": [
+                                "header",
+                                "query",
+                                "cookie",
+                                "binding"
+                              ],
+                              "type": "string"
+                            },
+                            "param": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "param",
+                            "location"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
                       },
                       "idempotentHint": {
                         "type": [
@@ -2545,6 +2620,31 @@
                   "null"
                 ]
               },
+              "gateOwnedParams": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "location": {
+                      "enum": [
+                        "header",
+                        "query",
+                        "cookie",
+                        "binding"
+                      ],
+                      "type": "string"
+                    },
+                    "param": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "param",
+                    "location"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
               "idempotentHint": {
                 "type": [
                   "boolean",
@@ -2601,6 +2701,31 @@
                           "boolean",
                           "null"
                         ]
+                      },
+                      "gateOwnedParams": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "location": {
+                              "enum": [
+                                "header",
+                                "query",
+                                "cookie",
+                                "binding"
+                              ],
+                              "type": "string"
+                            },
+                            "param": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "param",
+                            "location"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
                       },
                       "idempotentHint": {
                         "type": [
@@ -2761,6 +2886,31 @@
                           "boolean",
                           "null"
                         ]
+                      },
+                      "gateOwnedParams": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "location": {
+                              "enum": [
+                                "header",
+                                "query",
+                                "cookie",
+                                "binding"
+                              ],
+                              "type": "string"
+                            },
+                            "param": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "param",
+                            "location"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
                       },
                       "idempotentHint": {
                         "type": [
@@ -6448,6 +6598,31 @@
                   "null"
                 ]
               },
+              "gateOwnedParams": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "location": {
+                      "enum": [
+                        "header",
+                        "query",
+                        "cookie",
+                        "binding"
+                      ],
+                      "type": "string"
+                    },
+                    "param": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "param",
+                    "location"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
               "idempotentHint": {
                 "type": [
                   "boolean",
@@ -6504,6 +6679,31 @@
                           "boolean",
                           "null"
                         ]
+                      },
+                      "gateOwnedParams": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "location": {
+                              "enum": [
+                                "header",
+                                "query",
+                                "cookie",
+                                "binding"
+                              ],
+                              "type": "string"
+                            },
+                            "param": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "param",
+                            "location"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
                       },
                       "idempotentHint": {
                         "type": [
@@ -6664,6 +6864,31 @@
                           "boolean",
                           "null"
                         ]
+                      },
+                      "gateOwnedParams": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "location": {
+                              "enum": [
+                                "header",
+                                "query",
+                                "cookie",
+                                "binding"
+                              ],
+                              "type": "string"
+                            },
+                            "param": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "param",
+                            "location"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
                       },
                       "idempotentHint": {
                         "type": [
@@ -10576,6 +10801,31 @@
                         "null"
                       ]
                     },
+                    "gateOwnedParams": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "location": {
+                            "enum": [
+                              "header",
+                              "query",
+                              "cookie",
+                              "binding"
+                            ],
+                            "type": "string"
+                          },
+                          "param": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "param",
+                          "location"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
                     "idempotentHint": {
                       "type": [
                         "boolean",
@@ -10632,6 +10882,31 @@
                                 "boolean",
                                 "null"
                               ]
+                            },
+                            "gateOwnedParams": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "location": {
+                                    "enum": [
+                                      "header",
+                                      "query",
+                                      "cookie",
+                                      "binding"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "param": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "param",
+                                  "location"
+                                ],
+                                "type": "object"
+                              },
+                              "type": "array"
                             },
                             "idempotentHint": {
                               "type": [
@@ -10792,6 +11067,31 @@
                                 "boolean",
                                 "null"
                               ]
+                            },
+                            "gateOwnedParams": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "location": {
+                                    "enum": [
+                                      "header",
+                                      "query",
+                                      "cookie",
+                                      "binding"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "param": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "param",
+                                  "location"
+                                ],
+                                "type": "object"
+                              },
+                              "type": "array"
                             },
                             "idempotentHint": {
                               "type": [
@@ -23307,6 +23607,31 @@
                   "null"
                 ]
               },
+              "gateOwnedParams": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "location": {
+                      "enum": [
+                        "header",
+                        "query",
+                        "cookie",
+                        "binding"
+                      ],
+                      "type": "string"
+                    },
+                    "param": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "param",
+                    "location"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
               "idempotentHint": {
                 "type": [
                   "boolean",
@@ -23363,6 +23688,31 @@
                           "boolean",
                           "null"
                         ]
+                      },
+                      "gateOwnedParams": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "location": {
+                              "enum": [
+                                "header",
+                                "query",
+                                "cookie",
+                                "binding"
+                              ],
+                              "type": "string"
+                            },
+                            "param": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "param",
+                            "location"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
                       },
                       "idempotentHint": {
                         "type": [
@@ -23523,6 +23873,31 @@
                           "boolean",
                           "null"
                         ]
+                      },
+                      "gateOwnedParams": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "location": {
+                              "enum": [
+                                "header",
+                                "query",
+                                "cookie",
+                                "binding"
+                              ],
+                              "type": "string"
+                            },
+                            "param": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "param",
+                            "location"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
                       },
                       "idempotentHint": {
                         "type": [

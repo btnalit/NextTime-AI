@@ -1,4 +1,4 @@
-import type { SkillDetailWire } from '@nexttime/shared';
+import type { GateOwnedParamWire, SkillDetailWire } from '@nexttime/shared';
 import { type ReactNode, useId, useState } from 'react';
 import { invalidateCapability, useCapability, useCapabilityList } from '../hooks/useCapability.js';
 import { usePermissions } from '../hooks/usePermissions.js';
@@ -44,6 +44,7 @@ import { ModulesTab } from './catalog/ModulesTab.js';
 import { ProcedureEditorHost } from './catalog/ProcedureEditorHost.js';
 import { SkillEditor } from './catalog/SkillEditor.js';
 import { WorkerEditorHost } from './catalog/WorkerEditorHost.js';
+import { gateOwnedParamsText } from './connect/GateOwnedParams.js';
 import {
   GovernanceChangeList,
   governanceChangeSummary,
@@ -412,6 +413,17 @@ function PublishCredentialSlot({
  *  selectable on its own to be published from here (R-19) — and a retired (`deprecated`) version,
  *  which shares it with the version that replaced it (UX acceptance of #538: the two rows had one
  *  React key), so it is keyed by its version. */
+/** Operation names that more than one gate declares. */
+function operationNamesOnSeveralGates(rows: readonly OperationCatalogRow[]): ReadonlySet<string> {
+  const gates = new Map<string, Set<string>>();
+  for (const row of rows) {
+    const seen = gates.get(row.name) ?? new Set<string>();
+    seen.add(row.gatekeeperId);
+    gates.set(row.name, seen);
+  }
+  return new Set([...gates].filter(([, seen]) => seen.size > 1).map(([name]) => name));
+}
+
 function catalogOperationKey(row: OperationCatalogRow): string {
   if (row.status === 'draft' && row.governanceChange) return revisionDraftKey(row);
   if (row.status === 'deprecated' && row.version !== undefined) {
@@ -655,6 +667,7 @@ function OperationDetailView({
   onDeprecate,
   onEditDescription,
   onRewritten,
+  rewrittenFrom,
 }: {
   readonly http: CapabilityCaller;
   readonly row: OperationCatalogRow;
@@ -670,6 +683,9 @@ function OperationDetailView({
   readonly onEditDescription: () => void;
   /** Console G4: the held draft was rewritten from the gate's latest manifest — reload the list. */
   readonly onRewritten: () => void;
+  /** UX acceptance of #567 P3: this draft was just rewritten here — the params it dropped, said
+   *  until another row is opened (the draft is not a revision, so no diff block shows it). */
+  readonly rewrittenFrom: readonly GateOwnedParamWire[] | null;
 }) {
   const t = useT();
   const key = catalogOperationKey(row);
@@ -752,6 +768,14 @@ function OperationDetailView({
       </header>
       <KeyValue items={items} />
       {row.status === 'draft' && row.governanceChange ? <RevisionDiff row={row} /> : null}
+      {rewrittenFrom !== null && gateOwned.length === 0 ? (
+        <Notice testId="operation-rewritten">
+          {t(
+            `已按门的最新清单重写这份草稿：去掉了只能由门自己设置的参数 ${gateOwnedParamsText(rewrittenFrom, t)}。核对后可以发布。`,
+            `Rewritten from the gate’s latest manifest: the params only the gate sets are gone (${gateOwnedParamsText(rewrittenFrom, t)}). Check it, then publish.`,
+          )}
+        </Notice>
+      ) : null}
       {gateOwned.length > 0 && row.status !== 'deprecated' ? (
         <GateOwnedParamsNotice
           http={http}
@@ -862,6 +886,10 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   // for its usage columns when no matching stats entry comes back (see `statsFor` below).
   const stats = useCapabilityList<OperationStatsRow>(http, 'get_operation_stats');
   const gatekeeperNames = useGatekeeperNames(http);
+  const [rewritten, setRewritten] = useState<{
+    readonly key: string;
+    readonly params: readonly GateOwnedParamWire[];
+  } | null>(null);
   const { role, principalId } = useWorkspaceIdentity(http);
   const [busy, setBusy] = useState<string | null>(null);
   // S8 W3-K1 (leftover 81): the "编辑描述" dialog — one instance shared across rows, controlled by
@@ -875,6 +903,9 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   const descriptionFieldId = useId();
 
   const rows = operations.state.status === 'ready' ? operations.state.data.items : [];
+  // UX acceptance of #567 P3 (#561's same-name class, on Operations): one name on two gates read
+  // as two identical rows — those rows name their gate.
+  const sharedNames = operationNamesOnSeveralGates(rows);
   const selected = itemId ? rows.find((row) => catalogOperationKey(row) === itemId) : undefined;
   const credentialReview = usePublishCredentialReview(itemId ?? null);
 
@@ -989,6 +1020,9 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       <List ariaLabel="Operations" testId="catalog-list">
         {rows.map((row) => {
           const key = catalogOperationKey(row);
+          const gateLabel = sharedNames.has(row.name)
+            ? (nameOf(gatekeeperNames, row.gatekeeperId) ?? shortId(row.gatekeeperId))
+            : null;
           return (
             <ListRow
               key={key}
@@ -1000,6 +1034,11 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
                 <span className="row-wrap">
                   <StatusChip machine="publishable" status={row.status} size="s" />
                   <span className="mono truncate">{row.name}</span>
+                  {gateLabel !== null ? (
+                    <span className="text-3 truncate" data-testid={`catalog-row-gate-${key}`}>
+                      {t(`门：${gateLabel}`, `Gate: ${gateLabel}`)}
+                    </span>
+                  ) : null}
                 </span>
                 {row.mode ? (
                   <StatusChip machine="operationMode" status={row.mode} size="s" />
@@ -1033,7 +1072,18 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       onPublish={() => act(selected, 'publish_operation')}
       onDeprecate={() => act(selected, 'deprecate_operation')}
       onEditDescription={() => openDescriptionEditor(selected)}
-      onRewritten={() => void operations.reload()}
+      onRewritten={() => {
+        setRewritten({
+          key: catalogOperationKey(selected),
+          params: selected.gateOwnedParams ?? [],
+        });
+        void operations.reload();
+      }}
+      rewrittenFrom={
+        rewritten !== null && rewritten.key === catalogOperationKey(selected)
+          ? rewritten.params
+          : null
+      }
     />
   ) : (
     <SelectionPlaceholder

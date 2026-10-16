@@ -9,6 +9,7 @@ import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { operationFieldLabel } from '../../lib/labels.js';
 import { labelText, statusChipStyle } from '../../lib/status-tone.js';
+import { gateOwnedParamsText } from '../connect/GateOwnedParams.js';
 import {
   GovernanceChangeList,
   governanceChangeSummary,
@@ -183,5 +184,15 @@ function opLine(op: GateOperationSummaryWire, t: Translate): string {
     labelText(statusChipStyle('blastRadius', op.blastRadius), t),
   ];
   if (op.autoApprovable) parts.push(labelText(statusChipStyle('autoApprovable', 'true'), t));
+  // UX acceptance of #567 P3: an entry that will stay a draft in every workspace says so here,
+  // before it is adopted.
+  if (op.gateOwnedParams && op.gateOwnedParams.length > 0) {
+    parts.push(
+      t(
+        `发布不了：声明了只能由门自己设置的参数 ${gateOwnedParamsText(op.gateOwnedParams, t)}`,
+        `cannot be published: declares params only the gate sets, ${gateOwnedParamsText(op.gateOwnedParams, t)}`,
+      ),
+    );
+  }
   return `${op.name} (${parts.join(' · ')})`;
 }

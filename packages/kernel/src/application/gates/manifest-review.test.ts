@@ -9,6 +9,7 @@ import {
   diffAnnouncedManifest,
   isReviewedManifestChange,
   manifestDigest,
+  toWireGateOperation,
 } from './manifest-review.js';
 
 function op(overrides: Partial<Operation> = {}): Operation {
@@ -132,6 +133,30 @@ describe('diffAnnouncedManifest', () => {
     const restart = op();
     const diff = diffAnnouncedManifest([restart], [{ ...restart, description: 'Reworded.' }]);
     expect(diff).toEqual({ added: [], removed: [], changed: [] });
+  });
+});
+
+describe('toWireGateOperation (console G4, UX acceptance of #567 P3)', () => {
+  it('carries the gate-owned params publish_operation refuses by, and nothing for a clean entry', () => {
+    const held = op({
+      name: 'orders.lookup',
+      binding: { kind: 'http', method: 'GET', path: '/orders' },
+      params_schema: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', 'x-in': 'query' },
+          Authorization: { type: 'string', 'x-in': 'header' },
+        },
+      },
+    });
+    expect(toWireGateOperation(held).gateOwnedParams).toEqual([
+      { param: 'Authorization', location: 'header' },
+    ]);
+    expect(toWireGateOperation(op())).not.toHaveProperty('gateOwnedParams');
+    // The pending-manifest diff lists added entries the same way.
+    expect(diffAnnouncedManifest([], [held]).added[0]?.gateOwnedParams).toEqual([
+      { param: 'Authorization', location: 'header' },
+    ]);
   });
 });
 

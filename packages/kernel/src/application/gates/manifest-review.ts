@@ -5,7 +5,10 @@ import type {
   Operation,
   PendingGateManifestChangeWire,
 } from '@nexttime/shared';
-import { operationGovernanceChange } from '../../governance/gatekeepers/index.js';
+import {
+  gateOwnedParamsOfDefinition,
+  operationGovernanceChange,
+} from '../../governance/gatekeepers/index.js';
 
 /**
  * application/gates/manifest-review: the R-18 review rules for a gate's announced manifest
@@ -55,8 +58,10 @@ export function isReviewedManifestChange(
   return reviewedKey(inEffect) !== reviewedKey(announced);
 }
 
-/** One Operation as `GateInstanceWire.operations` lists it. */
+/** One Operation as `GateInstanceWire.operations` lists it. `gateOwnedParams` (console G4) is the
+ *  same judgment `publish_operation` refuses by — an entry carrying it is never published. */
 export function toWireGateOperation(operation: Operation): GateOperationSummaryWire {
+  const gateOwnedParams = gateOwnedParamsOfDefinition(operation);
   return {
     name: operation.name,
     mode: operation.mode,
@@ -65,6 +70,11 @@ export function toWireGateOperation(operation: Operation): GateOperationSummaryW
     readOnlyHint: operation.read_only_hint ?? null,
     destructiveHint: operation.destructive_hint ?? null,
     idempotentHint: operation.idempotent_hint ?? null,
+    ...(gateOwnedParams.length > 0
+      ? {
+          gateOwnedParams: gateOwnedParams.map(({ param, location }) => ({ param, location })),
+        }
+      : {}),
   };
 }
 

@@ -912,3 +912,73 @@ describe('ConnectSystemLauncher — "我的智能体现在能用它吗？" (cons
     expect(screen.getByTestId('launcher-try-in-chat-button')).toBeTruthy();
   });
 });
+
+describe('ConnectSystemLauncher — what an administrator sees about workspace visibility and held entries (#567 review N2, UX P3)', () => {
+  it('flags an enabled instance no workspace can see in the picker, and marks an announced entry no workspace can publish', async () => {
+    const http = scriptedHttp({
+      list_gate_instances: () => ({
+        items: [
+          announced({
+            status: 'enabled',
+            operations: [
+              {
+                name: 'invoices.list',
+                mode: 'observe',
+                blastRadius: 'low',
+                autoApprovable: true,
+                readOnlyHint: true,
+                destructiveHint: false,
+                idempotentHint: true,
+              },
+              {
+                name: 'invoices.lookup',
+                mode: 'observe',
+                blastRadius: 'low',
+                autoApprovable: true,
+                readOnlyHint: true,
+                destructiveHint: false,
+                idempotentHint: true,
+                gateOwnedParams: [{ param: 'Authorization', location: 'header' }],
+              },
+            ],
+          }),
+          announced({
+            gateId: 'billing-2',
+            displayName: 'Billing two',
+            status: 'enabled',
+            enabledWorkspaceCount: 1,
+          }),
+        ],
+      }),
+      list_connectors: () => ({ items: [connector({ mode: 'self_serve' })] }),
+    });
+    renderLauncher({ http, origin: 'platform' });
+    fireEvent.click(screen.getByTestId('launcher-kind-http'));
+    next();
+
+    const badge = await screen.findByTestId('launcher-gate-hidden-billing');
+    expect(badge.textContent).toBe('工作区看不到');
+    expect((await screen.findByTestId('launcher-gate-hidden-billing-2')).textContent).toBe(
+      '其他工作区看不到',
+    );
+
+    fireEvent.click(screen.getByTestId('launcher-gate-billing'));
+    next();
+    const held = await screen.findByTestId('launcher-announced-held-invoices.lookup');
+    expect(held.textContent).toContain('发布不了');
+    expect(held.textContent).toContain('Authorization（请求头）');
+    expect(screen.queryByTestId('launcher-announced-held-invoices.list')).toBeNull();
+  });
+
+  it('a workspace reader (no platform role) reads no connectors and sees no such badge', async () => {
+    const http = scriptedHttp({
+      list_available_gate_instances: () => ({ items: [availableRow()] }),
+    });
+    renderLauncher({ http, origin: 'workspace' });
+    fireEvent.click(screen.getByTestId('launcher-kind-http'));
+    next();
+    await screen.findByTestId('launcher-existing-gates');
+    expect(http.calls.some((call) => call.name === 'list_connectors')).toBe(false);
+    expect(document.querySelector('[data-testid^="launcher-gate-hidden-"]')).toBeNull();
+  });
+});

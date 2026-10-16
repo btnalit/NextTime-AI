@@ -48,8 +48,18 @@ describe('AvailableGateInstancesSection — a platform instance this workspace h
     expect(screen.queryByTestId('enable-gate-ci-fixture-mcp')).toBeNull();
   });
 
-  it('self-service visibility: a platform administrator is told which enabled instances the catalog leaves out, and why', async () => {
+  it('self-service visibility: a platform administrator is told which enabled instances the catalog leaves out — not the ones this workspace already enabled (UX acceptance of #567 P2)', async () => {
     const call = vi.fn(async (name: string) => {
+      if (name === 'get_workspace') {
+        return {
+          id: 'ws-1',
+          name: 'Acme',
+          createdAt: '2026-09-01T00:00:00.000Z',
+          principalCount: 1,
+          gatekeeperCount: 1,
+          caller: { id: 'p-1', role: 'owner' },
+        };
+      }
       if (name === 'list_gate_instances') {
         return {
           items: [
@@ -58,18 +68,30 @@ describe('AvailableGateInstancesSection — a platform instance this workspace h
               displayName: 'CI fixture MCP',
               connector: 'fixture-mcp',
               status: 'enabled',
+              enabledWorkspaceCount: 0,
             },
             {
               gateId: 'gate-2',
               displayName: 'Docker prod',
               connector: 'docker',
               status: 'enabled',
+              enabledWorkspaceCount: 1,
+              enablingWorkspaces: [{ id: 'ws-other', name: 'Other' }],
             },
             {
               gateId: 'gate-3',
               displayName: 'Docker lab',
               connector: 'docker',
               status: 'discovered',
+              enabledWorkspaceCount: 0,
+            },
+            {
+              gateId: 'gate-4',
+              displayName: 'Docker here',
+              connector: 'docker',
+              status: 'enabled',
+              enabledWorkspaceCount: 1,
+              enablingWorkspaces: [{ id: 'ws-1', name: 'Acme' }],
             },
           ],
         };
@@ -94,9 +116,13 @@ describe('AvailableGateInstancesSection — a platform instance this workspace h
       />,
     );
     const hidden = await screen.findByTestId('available-gates-hidden');
-    expect(hidden.textContent).toContain('平台上另有 1 个已启用的门实例这里看不到：');
+    expect(hidden.textContent).toContain(
+      '平台上另有 1 个已启用、但本工作区还没启用的门实例这里看不到：',
+    );
     expect(hidden.textContent).toContain('Docker prod');
     expect(hidden.textContent).not.toContain('Docker lab');
+    // Enabled here: it is a system card above, and keeps working.
+    expect(hidden.textContent).not.toContain('Docker here');
   });
 
   it('self-service visibility: a workspace reader who is not a platform administrator reads nothing on the platform', async () => {

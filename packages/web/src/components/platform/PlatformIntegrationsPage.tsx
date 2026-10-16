@@ -27,7 +27,11 @@ import { Tabs } from '../ui/Tabs.js';
 import { CreateGateInstanceForm } from './CreateGateInstanceForm.js';
 import { GateInstanceDetailPanel } from './GateInstanceDetailPanel.js';
 import { PlatformError } from './PlatformError.js';
-import { hiddenFromWorkspaces, useConnectorsByName } from './integrations/connector-visibility.js';
+import {
+  hiddenFromWorkspaces,
+  hiddenInstanceBadge,
+  useConnectorsByName,
+} from './integrations/connector-visibility.js';
 import { useConnectorDenyList } from './integrations/useConnectorDenyList.js';
 import { useConnectorMode } from './integrations/useConnectorMode.js';
 import { useGateInstancesPanel } from './integrations/useGateInstancesPanel.js';
@@ -416,8 +420,8 @@ function ConnectorRow({
               data-testid={`connector-hidden-instances-${connector.name}`}
             >
               {t(
-                `${enabledInstanceCount} 个已启用的实例工作区看不到：不是「平台预置」时，实例不会出现在工作区的「待启用的平台实例」里。`,
-                `${enabledInstanceCount} enabled instance(s) no workspace can see: unless the connector is platform preset, its instances do not show up in a workspace's “Platform instances pending enable”.`,
+                `${enabledInstanceCount} 个已启用的实例不会出现在工作区的「待启用的平台实例」里（不是「平台预置」），还没启用它们的工作区看不到，也启用不了；已经启用的工作区照常使用。`,
+                `${enabledInstanceCount} enabled instance(s) do not show up in a workspace's “Platform instances pending enable” (not platform preset): a workspace that has not enabled them can neither see nor enable them; workspaces that already did keep using them.`,
               )}
             </p>
           ) : null}
@@ -727,7 +731,7 @@ function GateInstancesTab({
                             className="chip chip-s chip-warn"
                             data-testid="gate-hidden-from-workspaces-badge"
                           >
-                            {t('工作区看不到', 'Hidden from workspaces')}
+                            {hiddenInstanceBadge(row, t)}
                           </span>
                         ) : null}
                       </span>

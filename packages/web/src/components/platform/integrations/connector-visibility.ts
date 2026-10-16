@@ -38,12 +38,56 @@ export function hiddenFromWorkspaces(
   return mode === undefined || mode === 'platform_preset' ? null : mode;
 }
 
-/** The short label for a list row or a 需要人处理 entry. */
-export function hiddenInstanceTitle(displayName: string, t: Translate): string {
-  return t(
-    `门实例「${displayName}」已启用，但工作区看不到它`,
-    `Gate instance "${displayName}" is enabled, but no workspace can see it`,
-  );
+/** How many workspaces already enabled it — they keep calling it whatever the connector mode
+ *  (the mode decides only what `list_available_gate_instances` offers). An older kernel's row
+ *  without the count reads as none. */
+function enabledIn(instance: { readonly enabledWorkspaceCount?: number }): number {
+  return instance.enabledWorkspaceCount ?? 0;
+}
+
+/** The short label for a 需要人处理 entry. UX acceptance of #567 P2: an instance some workspace
+ *  already enabled keeps working there, so it is only the others that cannot see it. */
+export function hiddenInstanceTitle(
+  instance: Pick<GateInstanceWire, 'displayName'> & { readonly enabledWorkspaceCount?: number },
+  t: Translate,
+): string {
+  const count = enabledIn(instance);
+  return count > 0
+    ? t(
+        `门实例「${instance.displayName}」已在 ${count} 个工作区启用；其他工作区看不到它，也启用不了`,
+        `Gate instance "${instance.displayName}" is enabled in ${count} workspace(s); no other workspace can see or enable it`,
+      )
+    : t(
+        `门实例「${instance.displayName}」已启用，但工作区看不到它`,
+        `Gate instance "${instance.displayName}" is enabled, but no workspace can see it`,
+      );
+}
+
+/** The list-row badge. */
+export function hiddenInstanceBadge(
+  instance: { readonly enabledWorkspaceCount?: number },
+  t: Translate,
+): string {
+  return enabledIn(instance) > 0
+    ? t('其他工作区看不到', 'Hidden from other workspaces')
+    : t('工作区看不到', 'Hidden from workspaces');
+}
+
+/** The drawer's first sentence, before `hiddenInstanceExplanation`. */
+export function hiddenInstanceLead(
+  instance: Pick<GateInstanceWire, 'status'> & { readonly enabledWorkspaceCount?: number },
+  t: Translate,
+): string {
+  const count = enabledIn(instance);
+  if (instance.status !== 'enabled') {
+    return t('启用之后工作区也看不到它。', 'Even once enabled, no workspace will see it. ');
+  }
+  return count > 0
+    ? t(
+        `已在 ${count} 个工作区启用，那里照常使用；其他工作区看不到这个实例，也启用不了。`,
+        `Enabled in ${count} workspace(s), which keep using it; no other workspace can see or enable this instance. `,
+      )
+    : t('工作区看不到这个实例。', 'No workspace can see this instance. ');
 }
 
 /** Why, and what to change — the instance drawer and the connector row say this. */
@@ -53,8 +97,8 @@ export function hiddenInstanceExplanation(
   t: Translate,
 ): string {
   const why = t(
-    `接入包「${connector.name}」是「${connectorModeLabel(mode, t)}」：只有「平台预置」接入包的实例才会出现在工作区的「待启用的平台实例」里，所以已启用的实例工作区看不到，也启用不了。`,
-    `Connector "${connector.name}" is ${connectorModeLabel(mode, t)}: only instances of a platform-preset connector show up in a workspace's “Platform instances pending enable”, so no workspace can see or enable an enabled instance of it.`,
+    `接入包「${connector.name}」是「${connectorModeLabel(mode, t)}」：只有「平台预置」接入包的实例才会出现在工作区的「待启用的平台实例」里，还没启用它的工作区看不到它，也启用不了。`,
+    `Connector "${connector.name}" is ${connectorModeLabel(mode, t)}: only instances of a platform-preset connector show up in a workspace's “Platform instances pending enable”, so a workspace that has not enabled it yet can neither see nor enable it.`,
   );
   if (!canBePlatformPreset(connector.name)) {
     return `${why}${t(
@@ -79,8 +123,11 @@ export function hiddenInstanceExplanation(
  *  nothing is flagged rather than guessed). */
 export function useConnectorsByName(
   http: CapabilityCaller,
+  options: { readonly enabled?: boolean } = {},
 ): ReadonlyMap<string, ConnectorWire> | null {
-  const connectors = useCapabilityList<ConnectorWire>(http, 'list_connectors', ALL);
+  const connectors = useCapabilityList<ConnectorWire>(http, 'list_connectors', ALL, {
+    enabled: options.enabled ?? true,
+  });
   const items = connectors.state.status === 'ready' ? connectors.state.data.items : null;
   return useMemo(
     () => (items === null ? null : new Map(items.map((row) => [row.name, row]))),
