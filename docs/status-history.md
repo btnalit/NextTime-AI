@@ -164,6 +164,8 @@
 
 ### 页首更新记录（2026-10-04 精简时移出，原文照搬）
 
+上一版 2026-10-16（**`request_action` 在边界拒绝门上没有定义的动作名（#593，a372f7b，无迁移，未发版；遗留 232 关闭，S11 W0）**：返回 404 `unknown_operation`、不建审批、不回显名字（审计只记长度与 sha256）；别人的草稿对看不见它的调用方等同于不存在；新 Operation 名限 128 字符且不含不可见字符；内核消息、审计与控制台的回显统一走 `@nexttime/shared` 的 `echoed-text.ts` 转义限长；`report_task_result` 里坏提议按条拒绝、不再整次失败。同时补上 #592 带进来的接入向导发布清单转义，关闭遗留 318；新登遗留 319。主机窗口仍暂缓）。
+
 上一版 2026-10-16（**「始终允许」与发布绑定所审的版本（#592，085c93a，governance 0020，feat，下一版 minor；线上契约不向后兼容；遗留 218 / 300 / 301 关闭，S11 W0 的 218）**：「始终允许」记下所允许的定义摘要，定义变了就暂停、重新走审批；`publish_skill` / `publish_procedure` / `install_module` / `upgrade_module` / `publish_operation` / `publish_manifest` 都绑定调用方看过的版本或摘要，不一致 409；线上契约不向后兼容。主机步骤写进 `release.md` §3.29（旧规则可能显示「已暂停 · 待确认版本」，需 owner 重新确认）与 §6。新登遗留 311–318。主机窗口仍暂缓）。
 
 上一版 2026-10-16（**门调用失败分清「没发出」与「结果不明」（#586，b19d0c2，无迁移，feat，下一版 minor；遗留 287 关闭，S11 W1 硬前置解除）**：内核→门、门→目标两跳共用 `gatekeeper-base` 的 `network-failure.ts` 判定；没发出记 `failed: gate_unreachable`，结果不明的行留 `executing` 当队头屏障并记审计 `action_request.outcome_in_doubt`；reaper 改经新路由 `gate/apply_lookup` 只查不跑，绝不重新执行；控制台分开显示两类并写明等待原因。新登遗留 310（GO1 输入）。主机窗口仍暂缓）。
