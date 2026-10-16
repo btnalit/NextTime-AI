@@ -126,6 +126,7 @@ export const AUDIT_LIFECYCLE_ACTIONS = [
   'action_request.fail',
   'action_request.compensate',
   'action_request.expire',
+  'action_request.withdraw',
   'task.queue',
   'task.start',
   'task.await_approval',

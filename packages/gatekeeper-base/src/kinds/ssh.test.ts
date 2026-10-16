@@ -291,6 +291,39 @@ describe('SshTransport', () => {
     );
   });
 
+  it('fails before touching the target, as a plain transport failure, on a missing param or a command_pattern that does not compile (legacy 310)', async () => {
+    const execImpl = vi.fn();
+    const transport = new SshTransport({
+      target: { host: '198.51.100.10', user: 'admin' },
+      policyTable: POLICY_TABLE,
+      execImpl,
+    });
+    const badPattern: Operation = {
+      ...patternOperation,
+      binding: { kind: 'ssh', command_pattern: '^show(' },
+    };
+    await expect(transport.invoke(badPattern, { command: 'show x' }, {})).rejects.toThrow(
+      /command_pattern is not a valid regular expression/,
+    );
+    await expect(transport.invoke(badPattern, { command: 'show x' }, {})).rejects.toBeInstanceOf(
+      TransportInvokeError,
+    );
+    await expect(transport.invoke(patternOperation, {}, {})).rejects.toBeInstanceOf(
+      TransportInvokeError,
+    );
+    const templateOperation: Operation = {
+      ...patternOperation,
+      binding: { kind: 'ssh', command_template: 'show interface {name}' },
+    };
+    await expect(transport.invoke(templateOperation, {}, {})).rejects.toThrow(
+      /missing param "name"/,
+    );
+    await expect(transport.invoke(templateOperation, {}, {})).rejects.toBeInstanceOf(
+      TransportInvokeError,
+    );
+    expect(execImpl).not.toHaveBeenCalled();
+  });
+
   it('renders a command_template binding like the cli transport', async () => {
     const templateOperation: Operation = {
       ...patternOperation,

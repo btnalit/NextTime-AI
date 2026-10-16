@@ -17,6 +17,9 @@ export interface ActionUpdateStatusLine {
   readonly actionRequestId: string;
   readonly status: string;
   readonly isHolder: boolean;
+  /** S11 GO1: on a failed / compensated update, which kind of failure (shared
+   *  `ActionRequestFailureKind`); `null` otherwise or on an older message. */
+  readonly failureKind?: string | null;
 }
 
 export interface TaskUpdateStatusLine {
@@ -55,6 +58,7 @@ export function systemStatusLineFromMessage(
       actionRequestId,
       status,
       isHolder,
+      failureKind: typeof content.failureKind === 'string' ? content.failureKind : null,
     };
   }
 

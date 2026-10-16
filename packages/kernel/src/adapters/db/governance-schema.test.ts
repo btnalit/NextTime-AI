@@ -28,6 +28,7 @@ const NEW_MIGRATION_FILES = [
   path.join(MIGRATIONS_DIR, 'governance', '0002_policy.sql'),
   path.join(MIGRATIONS_DIR, 'governance', '0003_action_requests.sql'),
   path.join(MIGRATIONS_DIR, 'governance', '0016_auto_approval_scope.sql'),
+  path.join(MIGRATIONS_DIR, 'governance', '0021_action_request_withdraw_failure_kind.sql'),
   path.join(MIGRATIONS_DIR, 'task', '0001_tasks.sql'),
   path.join(MIGRATIONS_DIR, 'worker', '0001_worker_definitions.sql'),
 ];
@@ -55,14 +56,25 @@ function stripLeadingLineComments(text: string): string {
   }
 }
 
+/** The table a statement defines CHECKs on: `create table …`, or `alter table … add constraint …`
+ *  (a later migration recreating an enum CHECK — governance/0021's `withdrawn`). */
+function checkedTableOf(statement: string): string | undefined {
+  const text = stripLeadingLineComments(statement);
+  return (
+    /^create table (?:if not exists )?(\w+)/i.exec(text)?.[1] ??
+    /^alter table (?:if exists )?(\w+)\s+add constraint\b/i.exec(text)?.[1] ??
+    /^alter table (?:if exists )?(\w+)\s+add column (?:if not exists )?\w+[^;]*\bcheck\b/i.exec(
+      text,
+    )?.[1]
+  );
+}
+
 function extractTableChecks(sql: string): TableCheck[] {
   const checks: TableCheck[] = [];
   const checkRe = /check\s*\(\s*(\w+)\s+in\s*\(([^()]*)\)\s*\)/gi;
 
   for (const statement of splitSqlStatements(sql)) {
-    const table = /^create table (?:if not exists )?(\w+)/i.exec(
-      stripLeadingLineComments(statement),
-    )?.[1];
+    const table = checkedTableOf(statement);
     if (!table) continue;
 
     checkRe.lastIndex = 0;
@@ -107,6 +119,11 @@ const EXPECTED_ENUM_CHECKS: ReadonlyArray<{ table: string; column: string; enumE
   { table: 'gatekeeper_policies', column: 'blast_radius', enumExport: 'BLAST_RADIUS_VALUES' },
   { table: 'capability_grants', column: 'status', enumExport: 'GRANT_STATUS_VALUES' },
   { table: 'action_requests', column: 'status', enumExport: 'ACTION_REQUEST_STATUS_VALUES' },
+  {
+    table: 'action_requests',
+    column: 'failure_kind',
+    enumExport: 'ACTION_REQUEST_FAILURE_KIND_VALUES',
+  },
   { table: 'action_requests', column: 'blast_radius', enumExport: 'BLAST_RADIUS_VALUES' },
   { table: 'action_requests', column: 'policy_decision', enumExport: 'POLICY_DECISION_VALUES' },
   { table: 'tasks', column: 'status', enumExport: 'TASK_STATUS_VALUES' },
@@ -126,11 +143,16 @@ const KNOWN_UNMAPPED_CHECKS = new Set<string>([]);
 
 describe('S2.1 governance/task/worker migrations — CHECK enum lists match packages/shared (static, no DB)', () => {
   it('every enum-shaped CHECK constraint matches its packages/shared *_VALUES array exactly', async () => {
-    const allChecks: TableCheck[] = [];
+    // In migration order, a later definition of the same `table.column` CHECK replacing the
+    // earlier one (governance/0021 recreates `action_requests.status` with `withdrawn`).
+    const byKey = new Map<string, TableCheck>();
     for (const filePath of NEW_MIGRATION_FILES) {
       const content = await readFile(filePath, 'utf8');
-      allChecks.push(...extractTableChecks(content));
+      for (const check of extractTableChecks(content)) {
+        byKey.set(`${check.table}.${check.column}`, check);
+      }
     }
+    const allChecks = [...byKey.values()];
 
     const enumsSource = await readFile(SHARED_ENUMS_PATH, 'utf8');
     const sharedEnums = extractSharedEnumValues(enumsSource);

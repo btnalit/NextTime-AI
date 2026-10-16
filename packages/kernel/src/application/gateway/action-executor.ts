@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { IllegalTransition } from '@nexttime/shared';
+import { type ActionRequestFailureKind, IllegalTransition } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { withWorkspace } from '../../adapters/db/pool.js';
@@ -214,7 +214,30 @@ async function approvedOperationDigest(
   }
 }
 
-type ApplyErrorVerdict =
+/**
+ * S11 GO1: the gate client codes of a call that never reached a gate, so nothing ran there — a
+ * failure of kind `not_delivered` (`ACTION_REQUEST_FAILURE_KIND_VALUES`). `gate_unreachable`: the
+ * connection could not be set up (legacy 287). `gate_token_unavailable` /
+ * `connection_secret_missing`: the kernel had nothing to authenticate with, so it sent nothing.
+ * `gate_not_found`: a gate host answered that it serves no such gate instance. `apply_not_received`
+ * (the reaper's lookup): the gate holds no record of the key, and has closed it. Every other code a
+ * failed call ends with is a definitive answer — the platform refused to send it (`target_refused`)
+ * or the gate refused or failed it in its own protocol — of kind `refused`. migrations/governance/
+ * 0021 backfills existing rows with this same list (`action-executor.test.ts` holds them equal).
+ */
+export const NOT_DELIVERED_GATE_CODES: ReadonlySet<string> = new Set([
+  'gate_unreachable',
+  'gate_token_unavailable',
+  'connection_secret_missing',
+  'gate_not_found',
+  'apply_not_received',
+]);
+
+function definitiveFailureKind(code: string): 'not_delivered' | 'refused' {
+  return NOT_DELIVERED_GATE_CODES.has(code) ? 'not_delivered' : 'refused';
+}
+
+export type ApplyErrorVerdict =
   /** The gate gave no verdict on this key: the call timed out, or the answer is one of
    *  `APPLY_IN_DOUBT_CODES` (legacy 287). */
   | { readonly kind: 'in_doubt'; readonly message: string }
@@ -224,14 +247,19 @@ type ApplyErrorVerdict =
    *  the call, and asking again returns the same stored answer. Never re-run — a person
    *  reconciles. */
   | { readonly kind: 'outcome_unknown'; readonly message: string }
-  /** Nothing ran, or the gate said the call failed: nothing was sent (`gate_unreachable`, a
-   *  refused target, no credential to present — legacy 287), or the gate refused or failed the
-   *  call in its own protocol (`transport_error`: its target answered with a failure). */
-  | { readonly kind: 'failed'; readonly message: string };
+  /** Nothing ran, or the gate said the call failed: nothing was sent (`gate_unreachable`, no
+   *  credential to present — legacy 287 — `not_delivered`), or the platform refused the endpoint
+   *  or the gate refused or failed the call in its own protocol (`transport_error`: its target
+   *  answered with a failure — `refused`). */
+  | {
+      readonly kind: 'failed';
+      readonly failureKind: 'not_delivered' | 'refused';
+      readonly message: string;
+    };
 
 /** How one failed `gate/apply` call reads. The line (legacy 287): a call that may have reached the
- *  gate is never "failed" unless the gate said so in its own protocol. */
-function applyErrorVerdict(err: unknown): ApplyErrorVerdict {
+ *  gate is never "failed" unless the gate said so in its own protocol. Exported for its unit test. */
+export function applyErrorVerdict(err: unknown): ApplyErrorVerdict {
   const message = err instanceof Error ? err.message : String(err);
   if (err instanceof GatekeeperTimeoutError) return { kind: 'in_doubt', message };
   if (err instanceof GatekeeperClientError) {
@@ -246,36 +274,56 @@ function applyErrorVerdict(err: unknown): ApplyErrorVerdict {
     // The gate's code leads the reason (`operation_definition_mismatch: …`), as on the MCP and WS
     // surfaces — the same reason-prefix convention as `outcome_unknown` / `operation_disabled`, so a
     // reader (the console's tool row, an agent) can tell which refusal it was (review of #538, G3).
-    return { kind: 'failed', message: `${err.code}: ${message}` };
+    return {
+      kind: 'failed',
+      failureKind: definitiveFailureKind(err.code),
+      message: `${err.code}: ${message}`,
+    };
   }
   // Not the gate client's own error: thrown before the call left the kernel (the client wraps
-  // every failure of a sent call).
-  return { kind: 'failed', message };
+  // every failure of a sent call in `GatekeeperClientError` / `GatekeeperTimeoutError`).
+  return { kind: 'failed', failureKind: 'not_delivered', message };
 }
 
 /** How the reaper's `gate/apply_lookup` answer reads (legacy 287). `indeterminate`: the gate gave
  *  no verdict yet — ask again next tick, up to the reaper's cap. */
-type LookupVerdict =
-  | { readonly kind: 'failed'; readonly reason: string }
+export type LookupVerdict =
+  | {
+      readonly kind: 'failed';
+      readonly failureKind: ActionRequestFailureKind;
+      readonly reason: string;
+    }
   | { readonly kind: 'indeterminate'; readonly reason: string };
 
-function lookupErrorVerdict(err: unknown): LookupVerdict {
+/** Exported for its unit test. */
+export function lookupErrorVerdict(err: unknown): LookupVerdict {
   const message = err instanceof Error ? err.message : String(err);
   if (!(err instanceof GatekeeperClientError)) return { kind: 'indeterminate', reason: message };
   // No call for the key ran on the gate, and the gate closed the key so none ever will.
   if (err.code === 'apply_not_received' && err.status === 404) {
-    return { kind: 'failed', reason: notReceivedReason() };
+    return { kind: 'failed', failureKind: 'not_delivered', reason: notReceivedReason() };
   }
   // The first call's own stored answer.
   if (err.code === 'apply_outcome_unknown') {
-    return { kind: 'failed', reason: outcomeUnknownReason(message) };
+    return {
+      kind: 'failed',
+      failureKind: 'outcome_unknown',
+      reason: outcomeUnknownReason(message),
+    };
   }
-  if (err.code === 'transport_error') return { kind: 'failed', reason: `${err.code}: ${message}` };
+  // The first call's stored failure: its target answered with one, or the gate could not reach it.
+  if (err.code === 'transport_error') {
+    return { kind: 'failed', failureKind: 'refused', reason: `${err.code}: ${message}` };
+  }
   // A 404 that is not the gate's own (`gate_not_found` is a gate host that does not serve this
   // instance right now): the gate has no `gate/apply_lookup` route — it predates it, so it cannot
   // be asked. It is never asked with `gate/apply` instead: a gate that old would run the call.
   if (err.status === 404 && err.code !== 'gate_not_found') {
-    return { kind: 'failed', reason: outcomeUnknownReason(cannotAskDetail()) };
+    return {
+      kind: 'failed',
+      failureKind: 'outcome_unknown',
+      reason: outcomeUnknownReason(cannotAskDetail()),
+    };
   }
   return { kind: 'indeterminate', reason: message };
 }
@@ -373,19 +421,25 @@ export function createGatekeeperActionExecutor(
           };
         },
       );
+      // The platform's own refusals at execution time: nothing was sent, and asking again
+      // unchanged gets the same answer (S11 GO1 `refused`).
       if (!gate) {
         return {
           ok: false,
+          failureKind: 'refused',
           reason: `gatekeeper "${actionRequest.gatekeeperId}" is not registered`,
         };
       }
       if (disabled) {
         return {
           ok: false,
+          failureKind: 'refused',
           reason: `operation_disabled: ${quotedName(actionRequest.actionKind)} was disabled by the platform after this request was made`,
         };
       }
-      if ('refusal' in approved) return { ok: false, reason: approved.refusal };
+      if ('refusal' in approved) {
+        return { ok: false, failureKind: 'refused', reason: approved.refusal };
+      }
 
       let applyResult: Awaited<ReturnType<GatekeeperClient['apply']>>;
       try {
@@ -407,9 +461,13 @@ export function createGatekeeperActionExecutor(
           };
         }
         if (verdict.kind === 'outcome_unknown') {
-          return { ok: false, reason: outcomeUnknownReason(verdict.message) };
+          return {
+            ok: false,
+            failureKind: 'outcome_unknown',
+            reason: outcomeUnknownReason(verdict.message),
+          };
         }
-        return { ok: false, reason: verdict.message };
+        return { ok: false, failureKind: verdict.failureKind, reason: verdict.message };
       }
 
       return recordApplied(actionRequest, applyResult);
@@ -464,7 +522,7 @@ export function createGatekeeperActionExecutor(
       } catch (err) {
         const verdict = lookupErrorVerdict(err);
         return verdict.kind === 'failed'
-          ? { ok: false, reason: verdict.reason }
+          ? { ok: false, failureKind: verdict.failureKind, reason: verdict.reason }
           : { ok: false, indeterminate: true, reason: verdict.reason };
       }
 
@@ -494,6 +552,9 @@ export interface ReapStaleExecutingActionRequestsOptions {
    *  index.ts` passes `app.log.error`. */
   readonly onRowError?: (actionRequestId: string, error: unknown) => void;
 }
+
+/** An `ActionExecutorResult` that ends the row: executed, or failed with its kind. */
+type TerminalActionResult = Exclude<ActionExecutorResult, { readonly indeterminate: true }>;
 
 export interface ReapStaleExecutingActionRequestsResult {
   readonly scanned: number;
@@ -553,20 +614,26 @@ export async function reapStaleExecutingActionRequests(
           : await actionReplayer.replay(row);
       const noAnswer = !replayed.ok && replayed.indeterminate === true;
       if (noAnswer && attempt < maxReplayAttempts) continue; // still `executing`: next tick.
-      const outcome: ActionExecutorResult = noAnswer
-        ? {
-            ok: false,
-            reason: outcomeUnknownReason(
-              `no answer from the gate after ${attempt} replays (last: ${replayed.reason}) — check the target system and reconcile by hand`,
-            ),
-          }
-        : replayed;
+      // Past the cap without an answer: nobody can say whether it ran (S11 GO1 `outcome_unknown`).
+      const outcome: TerminalActionResult =
+        replayed.ok || replayed.indeterminate !== true
+          ? replayed
+          : {
+              ok: false,
+              failureKind: 'outcome_unknown',
+              reason: outcomeUnknownReason(
+                `no answer from the gate after ${attempt} replays (last: ${replayed.reason}) — check the target system and reconcile by hand`,
+              ),
+            };
       await withTransaction(row.workspaceId, row.onBehalfOf, (client) =>
         outcome.ok
           ? markActionRequestExecuted(client, row.workspaceId, row.id, {
               resultMetadata: outcome.resultMetadata,
             })
-          : markActionRequestFailed(client, row.workspaceId, row.id, { reason: outcome.reason }),
+          : markActionRequestFailed(client, row.workspaceId, row.id, {
+              failureKind: outcome.failureKind,
+              reason: outcome.reason,
+            }),
       );
       reaped += 1;
     } catch (err) {

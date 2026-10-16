@@ -31,6 +31,7 @@ import { Notice } from '../kit/notice.js';
 import { RefChip } from '../kit/ref-chip.js';
 import { StatusChip } from '../kit/status-chip.js';
 import { Textarea } from '../kit/textarea.js';
+import { ActionFailureNotice } from './ActionFailure.js';
 import { ActionWaitingNotice } from './ActionWaiting.js';
 import { nameOf, resourceScopeLabel } from './useDirectoryNames.js';
 
@@ -377,6 +378,19 @@ export function ApprovalDetail({
       </header>
 
       <ActionWaitingNotice row={row} testId="approval-waiting" />
+      <ActionFailureNotice
+        row={row}
+        check={{
+          system: nameOf(gatekeeperNames, row.gatekeeperId),
+          action: scopeLabel
+            ? t(
+                `${actionKindLabel(row.actionKindTag)}（${scopeLabel}）`,
+                `${actionKindLabel(row.actionKindTag)} (${scopeLabel})`,
+              )
+            : actionKindLabel(row.actionKindTag),
+        }}
+        testId="approval-failure"
+      />
 
       {blocking && !ownRequestLocked ? (
         <Notice tone="warn" testId="approval-blocking">

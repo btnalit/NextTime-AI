@@ -1,4 +1,9 @@
-import { ACTION_REQUEST_TRANSITIONS, namesASecretField, transition } from '@nexttime/shared';
+import {
+  ACTION_REQUEST_TRANSITIONS,
+  type ActionRequestFailureKind,
+  namesASecretField,
+  transition,
+} from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { writeAudit } from '../../substrate/audit/index.js';
 import {
@@ -22,9 +27,10 @@ import {
  * governance/approval/execution: the execution-lifecycle transitions (design doc §5.4 I6/I11,
  * §5.5 ActionRequest state graph; docs/development-tasks.md S2.3 "`expire`（reaper）；
  * `mark_executed` / `mark_failed` / `compensate`（called by the gate execution path — S2.4 —
- * expose them as service methods now）"). `startActionRequestExecution` is called by `drainer.ts`;
- * `markActionRequestExecuted`/`markActionRequestFailed`/`compensateActionRequest` are called by
- * both the drainer and, eventually, S2.4's real Gatekeeper execution path directly.
+ * expose them as service methods now）"), and S11 GO1's `withdraw` (plan I-G9).
+ * `startActionRequestExecution` is called by `drainer.ts`; `markActionRequestExecuted`/
+ * `markActionRequestFailed`/`compensateActionRequest` are called by both the drainer and,
+ * eventually, S2.4's real Gatekeeper execution path directly.
  *
  * Every transition here follows the same lock -> transition-check -> conditional-UPDATE ->
  * `recordTransition` order `decide.ts` uses (see that file's own doc comment for the full
@@ -352,15 +358,20 @@ export async function markActionRequestExecuted(
 }
 
 export interface MarkFailedOptions extends ActionRequestActorOptions {
+  /** Why it failed — the row's `failure_kind` column (S11 GO1, governance/0021), which whatever
+   *  acts on a failure splits on. Required: only the caller knows whether the call reached the gate
+   *  (`@nexttime/shared`'s `ACTION_REQUEST_FAILURE_KIND_VALUES` has what each kind means). */
+  readonly failureKind: ActionRequestFailureKind;
   readonly reason?: string;
 }
 
-/** `executing -> failed`. */
+/** `executing -> failed`, with its failure kind on the row and, with the reason, in the audit
+ *  record. */
 export async function markActionRequestFailed(
   client: PoolClient,
   workspaceId: string,
   actionRequestId: string,
-  options: MarkFailedOptions = {},
+  options: MarkFailedOptions,
 ): Promise<ActionRequestRow> {
   const existing = await getActionRequestForUpdateOrThrow(client, workspaceId, actionRequestId);
   const nextStatus = transition(ACTION_REQUEST_TRANSITIONS, existing.status, 'fail');
@@ -368,6 +379,7 @@ export async function markActionRequestFailed(
     status: nextStatus,
     expectedStatus: existing.status,
     failedAt: new Date(),
+    failureKind: options.failureKind,
   });
 
   await recordTransition(client, workspaceId, {
@@ -375,9 +387,10 @@ export async function markActionRequestFailed(
     action: 'action_request.fail',
     actionRequestId: existing.id,
     resultingStatus: nextStatus,
-    extraAuditPayload: options.reason
-      ? reasonAuditFields(options.reason, existing.params)
-      : undefined,
+    extraAuditPayload: {
+      failureKind: options.failureKind,
+      ...(options.reason ? reasonAuditFields(options.reason, existing.params) : {}),
+    },
   });
 
   return updated;
@@ -416,6 +429,66 @@ export async function recordActionRequestInDoubt(
       ...(options.reason ? reasonAuditFields(options.reason, existing.params) : {}),
     },
   });
+}
+
+// -------------------------------------------------------------------------------------------
+// withdraw — S11 GO1 (plan I-G9)
+// -------------------------------------------------------------------------------------------
+
+/** The ActionRequest statuses `withdrawActionRequest` takes back — the `from` side of the
+ *  `withdraw` edges in `ACTION_REQUEST_TRANSITIONS`: awaiting a decision, or approved (by a person
+ *  or by policy) and not started. */
+export const WITHDRAWABLE_ACTION_REQUEST_STATUSES = [
+  'pending_approval',
+  'approved',
+  'auto_approved',
+] as const;
+
+export interface WithdrawOptions extends ActionRequestActorOptions {
+  /** Why it was taken back — the step it belongs to was cancelled or revised away. Audited, with
+   *  the same redaction as a failure's reason. */
+  readonly reason?: string;
+}
+
+/**
+ * `pending_approval | approved | auto_approved -> withdrawn` (S11 GO1, plan I-G9): a request whose
+ * step was cancelled or revised away is taken back before it runs. Same lock -> transition-check ->
+ * conditional-UPDATE -> `recordTransition` order as every other mutator here, so it serializes
+ * against `startActionRequestExecution` on the row lock: whichever commits first wins, and the other
+ * finds the row moved on (`IllegalTransition`). A row that started executing is never withdrawn —
+ * the transition table refuses it, and so does the database (governance/0021's
+ * `action_requests_status_guard`); it ends the R-48 way instead.
+ *
+ * Called in the same transaction as the step's own transition (GO3), so the execution side needs
+ * no check of its own: `startActionRequestExecution` reads only the row. The `ActionRequestUpdated`
+ * event `recordTransition` enqueues lets the drain consumer re-drain this row's Gatekeeper at once
+ * — a withdrawn `pending_approval` head no longer holds the queue (R-50) until the next tick.
+ */
+export async function withdrawActionRequest(
+  client: PoolClient,
+  workspaceId: string,
+  actionRequestId: string,
+  options: WithdrawOptions = {},
+): Promise<ActionRequestRow> {
+  const existing = await getActionRequestForUpdateOrThrow(client, workspaceId, actionRequestId);
+  const nextStatus = transition(ACTION_REQUEST_TRANSITIONS, existing.status, 'withdraw');
+  const updated = await updateActionRequestStatusConditional(client, workspaceId, existing.id, {
+    status: nextStatus,
+    expectedStatus: existing.status,
+  });
+
+  await recordTransition(client, workspaceId, {
+    actorPrincipalId: options.actorPrincipalId ?? existing.onBehalfOf,
+    action: 'action_request.withdraw',
+    actionRequestId: existing.id,
+    resultingStatus: nextStatus,
+    extraAuditPayload: {
+      withdrawnFrom: existing.status,
+      ...(options.reason ? reasonAuditFields(options.reason, existing.params) : {}),
+    },
+  });
+
+  return updated;
 }
 
 /** `failed -> compensated`. */

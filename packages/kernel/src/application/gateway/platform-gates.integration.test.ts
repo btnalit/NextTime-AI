@@ -648,8 +648,11 @@ describe.runIf(DATABASE_URL !== undefined)(
 
           // A first execution is refused before the gate is asked …
           const refused = await actionExecutor.execute(row);
-          expect(refused).toMatchObject({ ok: false });
-          expect(refused.reason).toMatch(/^operation_disabled: /);
+          expect(refused).toMatchObject({
+            ok: false,
+            failureKind: 'refused',
+            reason: expect.stringMatching(/^operation_disabled: /),
+          });
           expect(applied).toEqual([]);
 
           // … the replay asks the gate (this file's database is private: only this row is stale).

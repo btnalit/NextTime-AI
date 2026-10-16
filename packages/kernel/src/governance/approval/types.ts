@@ -1,5 +1,10 @@
 import { IllegalTransition } from '@nexttime/shared';
-import type { ActionRequestStatus, BlastRadius, PolicyDecision } from '@nexttime/shared';
+import type {
+  ActionRequestFailureKind,
+  ActionRequestStatus,
+  BlastRadius,
+  PolicyDecision,
+} from '@nexttime/shared';
 
 /**
  * governance/approval/types: the `ActionRequestRow` shape every other file in this module reads
@@ -32,6 +37,12 @@ export interface ActionRequestRow {
   readonly executingAt: Date | null;
   readonly executedAt: Date | null;
   readonly failedAt: Date | null;
+  /** S11 GO1 (migrations/governance/0021_action_request_withdraw_failure_kind.sql): why a `failed`
+   *  (or later `compensated`) row failed — `not_delivered` / `refused` / `outcome_unknown`
+   *  (`@nexttime/shared`'s `ACTION_REQUEST_FAILURE_KIND_VALUES` has what each means). `null` on
+   *  every other status (a DB CHECK). Whatever acts on a failure splits on this column, never on
+   *  the reason text in the audit payload. */
+  readonly failureKind: ActionRequestFailureKind | null;
   /** The Operation call's own arguments (migrations/governance/0004_action_request_params.sql,
    *  S2.4) — `ActionExecutor.execute()` (`application/gateway/action-executor.ts`) needs these
    *  again at `apply` time, which may run in a different transaction than `request_action` (auto-
@@ -79,6 +90,7 @@ export interface ActionRequestDbRow {
   executing_at: Date | null;
   executed_at: Date | null;
   failed_at: Date | null;
+  failure_kind: ActionRequestFailureKind | null;
   params: Record<string, unknown>;
   requester_can_approve: boolean | null;
   operation_digest: string | null;
@@ -104,6 +116,7 @@ export function mapActionRequestRow(row: ActionRequestDbRow): ActionRequestRow {
     executingAt: row.executing_at,
     executedAt: row.executed_at,
     failedAt: row.failed_at,
+    failureKind: row.failure_kind,
     params: row.params,
     requesterCanApprove: row.requester_can_approve,
     operationDigest: row.operation_digest,
@@ -113,8 +126,8 @@ export function mapActionRequestRow(row: ActionRequestDbRow): ActionRequestRow {
 export const ACTION_REQUEST_ROW_COLUMNS =
   'workspace_id, id, status, gatekeeper_id, action_kind, resource_scope, blast_radius, ' +
   'policy_decision, approval_decision_id, await_decision, on_behalf_of, parent_worker_run_id, ' +
-  'actor_runtime, idempotency_key, requested_at, executing_at, executed_at, failed_at, params, ' +
-  'requester_can_approve, operation_digest';
+  'actor_runtime, idempotency_key, requested_at, executing_at, executed_at, failed_at, ' +
+  'failure_kind, params, requester_can_approve, operation_digest';
 
 export class ActionRequestNotFoundError extends Error {
   constructor(workspaceId: string, actionRequestId: string) {

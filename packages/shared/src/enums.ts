@@ -119,10 +119,13 @@ export type DecisionStatus = (typeof DECISION_STATUS_VALUES)[number];
 export const DecisionStatusSchema = asEnum(DECISION_STATUS_VALUES);
 
 // ---------------------------------------------------------------------------------------------
-// §5.5 ActionRequest — all 13 states
+// §5.5 ActionRequest — the 13 states of §9.2, plus `withdrawn` (S11 GO1)
 // ---------------------------------------------------------------------------------------------
 
-/** ActionRequest status: the 13 states of the v0.1 §9.2 state graph, carried forward by v0.3 §5.5. */
+/** ActionRequest status: the 13 states of the v0.1 §9.2 state graph, carried forward by v0.3 §5.5,
+ *  plus `withdrawn` (S11 GO1, docs/goal-orchestration-and-admin-agent-plan-2026-10-16.md I-G9): a
+ *  request that had not started executing and was taken back because the step it belongs to was
+ *  cancelled or revised away. Terminal; nothing ran. */
 export const ACTION_REQUEST_STATUS_VALUES = [
   'proposed',
   'policy_evaluated',
@@ -137,9 +140,38 @@ export const ACTION_REQUEST_STATUS_VALUES = [
   'failed',
   'verified',
   'compensated',
+  'withdrawn',
 ] as const;
 export type ActionRequestStatus = (typeof ACTION_REQUEST_STATUS_VALUES)[number];
 export const ActionRequestStatusSchema = asEnum(ACTION_REQUEST_STATUS_VALUES);
+
+/**
+ * Why a `failed` ActionRequest failed (S11 GO1, plan §4.7) — a column on the row
+ * (`action_requests.failure_kind`, migrations/governance/0021), never read out of an audit payload,
+ * so whatever acts on a failure (the goal advancer, the console, an agent) splits on one value:
+ *
+ *   - `not_delivered` (发送前失败): the request never reached the gate, so nothing ran — the
+ *     connection could not be set up, the kernel could not authenticate to or address the gate, or
+ *     the gate later confirmed it holds no record of the request (`apply_not_received`). Making the
+ *     same request again is safe.
+ *   - `refused` (明确拒绝): a definitive "no" — the platform refused to send it at execution time
+ *     (the Operation was disabled, its approved definition is gone, the gate is no longer
+ *     registered, the gate endpoint is refused), or the gate answered in its own protocol that the
+ *     call will not run or failed (refused, invalid params, definition mismatch, no credential, the
+ *     target answered with an error). Asking again unchanged gets the same answer.
+ *   - `outcome_unknown` (结果不明): it may or may not have run, and nobody can confirm which. Never
+ *     re-run automatically: someone checks the target system first.
+ *
+ * Set exactly when the row is `failed` or `compensated` (a DB CHECK). A writer that does not name a
+ * kind — code from before this column — gets `outcome_unknown`, the safe reading (the 0021 trigger).
+ */
+export const ACTION_REQUEST_FAILURE_KIND_VALUES = [
+  'not_delivered',
+  'refused',
+  'outcome_unknown',
+] as const;
+export type ActionRequestFailureKind = (typeof ACTION_REQUEST_FAILURE_KIND_VALUES)[number];
+export const ActionRequestFailureKindSchema = asEnum(ACTION_REQUEST_FAILURE_KIND_VALUES);
 
 // ---------------------------------------------------------------------------------------------
 // §5.5 Task, WorkerRun, EntryAgent session

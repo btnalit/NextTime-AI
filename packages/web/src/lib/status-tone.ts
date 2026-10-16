@@ -135,6 +135,8 @@ export const ACTION_REQUEST_TONES: Readonly<Record<ActionRequestStatus, ChipStyl
   failed: { tone: 'danger', label: { zh: '已失败', en: 'Failed' } },
   verified: { tone: 'ok', label: { zh: '已验证', en: 'Verified' } },
   compensated: { tone: 'warn', label: { zh: '已补偿', en: 'Compensated' } },
+  // S11 GO1: taken back before it ran (its step was cancelled or revised away) — nothing ran.
+  withdrawn: { tone: 'neutral', label: { zh: '已撤回', en: 'Withdrawn' } },
 };
 
 export const TASK_TONES: Readonly<Record<TaskStatus, ChipStyle>> = {

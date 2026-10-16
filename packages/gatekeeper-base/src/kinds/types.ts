@@ -32,8 +32,21 @@ export interface Transport {
    *  observe/simulate/apply with CredentialResolutionError (S2.12 host run: the ssh fixture gate). */
   readonly credentialRequired?: boolean;
 
-  /** Executes one Operation call (used for both `observe` and `apply` — GatekeeperBase is what
-   *  restricts which Operations may reach either protocol method). */
+  /**
+   * Executes one Operation call (used for both `observe` and `apply` — GatekeeperBase is what
+   * restricts which Operations may reach either protocol method).
+   *
+   * A failure says which side of the line it is on, by its class (legacy 287 / 310 —
+   * `GatekeeperBase`'s `storedTransportFailure` records an `apply` by it, and the kernel decides
+   * whether to ever run the request again on that record):
+   *   - `TransportInvokeError`: the call failed and the transport knows it — the target answered
+   *     with a failure, or nothing was sent (`kinds/call-failure.ts` for calls over the network).
+   *   - `TransportOutcomeUnknownError`: the call may have run — it broke, or stopped waiting,
+   *     after the request may have reached the target.
+   *   - `OperationRefusedError`: refused before the target was touched.
+   * Any other error is recorded as outcome unknown unless it proves nothing was sent: a transport
+   * that knows a call did not happen must say so.
+   */
   invoke(
     operation: Operation,
     params: unknown,

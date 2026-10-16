@@ -8,6 +8,7 @@ import type { Operation } from '@nexttime/shared';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   ApplyOutcomeUnknownError,
+  BindingKindMismatchError,
   CredentialResolutionError,
   IdempotencyConflictError,
   OperationDefinitionMismatchError,
@@ -227,7 +228,9 @@ describe('GatekeeperBase', () => {
     expect(invoke).toHaveBeenCalledTimes(1);
   });
 
-  it('a non-transport error inside the gate is stored too, with a generic message (R-51)', async () => {
+  // Legacy 310: an error a transport did not classify used to be stored as a plain failure — "did
+  // not happen", which invites a second run of a call that may have reached the target.
+  it('an unclassified error inside the gate is stored as outcome unknown, with a generic message, never re-run (R-51, legacy 310)', async () => {
     const invoke = vi.fn(async () => {
       throw new Error('internal detail');
     });
@@ -238,11 +241,57 @@ describe('GatekeeperBase', () => {
       idempotencyStore: new InMemoryIdempotencyStore(),
     });
 
-    await expect(gate.apply('stock.adjust', {}, 'req-plain')).rejects.toThrow('internal detail');
-    const retry = gate.apply('stock.adjust', {}, 'req-plain');
-    await expect(retry).rejects.toBeInstanceOf(TransportInvokeError);
-    await expect(retry).rejects.toThrow('apply for "stock.adjust" failed inside the gate');
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const call = gate.apply('stock.adjust', {}, 'req-plain');
+      await expect(call).rejects.toBeInstanceOf(ApplyOutcomeUnknownError);
+      await expect(call).rejects.toThrow(
+        /apply for "stock\.adjust" failed inside the gate — the transport did not say whether the request reached the target, so it may have run/,
+      );
+      await expect(call).rejects.not.toThrow(/internal detail/);
+    }
     expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('an unclassified error that proves nothing was sent stays a plain failure (legacy 287 / 310)', async () => {
+    const invoke = vi.fn(async () => {
+      throw Object.assign(new Error('connect ECONNREFUSED'), {
+        code: 'ECONNREFUSED',
+        syscall: 'connect',
+      });
+    });
+    const gate = new GatekeeperBase({
+      manifest: [executeOp()],
+      transport: fakeTransport(invoke),
+      credentialResolver: { resolve: async () => ({}) },
+      idempotencyStore: new InMemoryIdempotencyStore(),
+    });
+
+    await expect(gate.apply('stock.adjust', {}, 'req-not-sent')).rejects.toThrow(
+      'connect ECONNREFUSED',
+    );
+    const retry = gate.apply('stock.adjust', {}, 'req-not-sent');
+    await expect(retry).rejects.toBeInstanceOf(TransportInvokeError);
+    await expect(retry).rejects.not.toBeInstanceOf(TransportOutcomeUnknownError);
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('a transport thrown on the wrong binding kind is a plain failure: nothing was touched (legacy 310)', async () => {
+    const invoke = vi.fn(async () => {
+      throw new BindingKindMismatchError('stock.adjust', 'ssh', 'http');
+    });
+    const gate = new GatekeeperBase({
+      manifest: [executeOp()],
+      transport: fakeTransport(invoke),
+      credentialResolver: { resolve: async () => ({}) },
+      idempotencyStore: new InMemoryIdempotencyStore(),
+    });
+
+    await expect(gate.apply('stock.adjust', {}, 'req-kind')).rejects.toBeInstanceOf(
+      BindingKindMismatchError,
+    );
+    const retry = gate.apply('stock.adjust', {}, 'req-kind');
+    await expect(retry).rejects.toBeInstanceOf(TransportInvokeError);
+    await expect(retry).rejects.not.toBeInstanceOf(TransportOutcomeUnknownError);
   });
 
   // D-11: a gate that dies mid-apply restarts with the key still pending on disk — it answers

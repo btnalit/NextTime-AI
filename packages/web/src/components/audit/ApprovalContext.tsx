@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useCanOpen } from '../../hooks/useCanOpen.js';
+import { failureReading } from '../../lib/action-outcome.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import type { ActionRequestRow } from '../../lib/governance.js';
@@ -62,6 +63,10 @@ export function ApprovalContext({
       cancelled = true;
     };
   }, [http, actionRequestId]);
+
+  const failure = row
+    ? failureReading(row, t, { system: nameOf(gatekeeperNames, row.gatekeeperId) })
+    : null;
 
   return (
     <section
@@ -160,6 +165,21 @@ export function ApprovalContext({
               <>
                 <dt className="text-danger">{t('失败于', 'Failed')}</dt>
                 <dd className="text-danger">{formatDateTime(row.failedAt)}</dd>
+              </>
+            ) : null}
+            {failure ? (
+              <>
+                <dt className={failure.tone === 'danger' ? 'text-danger' : undefined}>
+                  {t('失败类别', 'Failure kind')}
+                </dt>
+                <dd
+                  className={failure.tone === 'danger' ? 'text-danger' : undefined}
+                  data-testid="approval-context-failure"
+                  data-failure-kind={failure.kind}
+                  title={failure.message}
+                >
+                  {failure.short}
+                </dd>
               </>
             ) : null}
           </dl>

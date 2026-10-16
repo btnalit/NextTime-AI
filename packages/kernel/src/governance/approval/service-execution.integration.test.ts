@@ -256,10 +256,15 @@ describe.runIf(DATABASE_URL !== undefined)(
           startActionRequestExecution(client, workspaceId, autoApproved2.id),
         );
         const failed = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
-          markActionRequestFailed(client, workspaceId, autoApproved2.id, { reason: 'boom' }),
+          markActionRequestFailed(client, workspaceId, autoApproved2.id, {
+            failureKind: 'refused',
+            reason: 'boom',
+          }),
         );
         expect(failed.status).toBe('failed');
         expect(failed.failedAt).not.toBeNull();
+        // S11 GO1: the kind is on the row itself.
+        expect(failed.failureKind).toBe('refused');
 
         const compensated = await withWorkspace(
           pool,
@@ -348,6 +353,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
         const failed = await runToTerminal('test.exec.secret-reason', (client, id) =>
           markActionRequestFailed(client, workspaceId, id, {
+            failureKind: 'refused',
             reason: `Command failed: mysql -ubob -p${PLAIN} (token=${ISSUED})`,
           }),
         );

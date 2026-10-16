@@ -21,6 +21,7 @@ import { actorRuntimeLabel } from '../lib/labels.js';
 import { breadcrumbFor } from '../lib/nav.js';
 import { capabilityHolders } from '../lib/role-holders.js';
 import { labelText, statusChipStyle } from '../lib/status-tone.js';
+import { ActionFailureLine } from './approvals/ActionFailure.js';
 import { ActionWaitingLine } from './approvals/ActionWaiting.js';
 import { ApprovalDetail } from './approvals/ApprovalDetail.js';
 import { useApprovalQueue } from './approvals/useApprovalQueue.js';
@@ -608,6 +609,7 @@ function ApprovalHistoryTab({
                     </time>
                   </span>
                   <ActionWaitingLine row={row} testId="approval-history-waiting" />
+                  <ActionFailureLine row={row} testId="approval-history-failure" />
                   <span className="wrap-anywhere" data-gatekeeper-id={row.gatekeeperId}>
                     <span>{gateName}</span>
                     <SameNameId id={row.gatekeeperId} same={sameNames} />

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ACTION_REQUEST_FAILURE_KIND_VALUES,
   ACTION_REQUEST_STATUS_VALUES,
+  ActionRequestFailureKindSchema,
   ActionRequestStatusSchema,
   BLAST_RADIUS_VALUES,
   BlastRadiusSchema,
@@ -107,7 +109,14 @@ const enumsUnderTest = [
       'failed',
       'verified',
       'compensated',
+      'withdrawn',
     ],
+  ],
+  [
+    'ActionRequestFailureKind',
+    ACTION_REQUEST_FAILURE_KIND_VALUES,
+    ActionRequestFailureKindSchema,
+    ['not_delivered', 'refused', 'outcome_unknown'],
   ],
   [
     'TaskStatus',
@@ -171,8 +180,8 @@ const enumsUnderTest = [
 ] as const;
 
 describe('enums', () => {
-  it('covers all 22 domain enums required by R4 + S2.2 + S2.6 + R-55 (TurnStatus) + legacy 278 (OperationStatus)', () => {
-    expect(enumsUnderTest).toHaveLength(22);
+  it('covers all 23 domain enums required by R4 + S2.2 + S2.6 + R-55 (TurnStatus) + legacy 278 (OperationStatus) + S11 GO1 (ActionRequestFailureKind)', () => {
+    expect(enumsUnderTest).toHaveLength(23);
   });
 
   for (const [name, values, schema, expected] of enumsUnderTest) {

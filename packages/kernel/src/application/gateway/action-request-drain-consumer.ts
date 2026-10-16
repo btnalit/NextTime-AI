@@ -8,9 +8,10 @@ import type { WithTransactionFn } from './action-executor.js';
 /**
  * application/gateway/action-request-drain-consumer: triggers `ApprovalDrainer.drainGatekeeper`
  * whenever an ActionRequest becomes executable — `ActionRequestUpdated{status:'approved'}` (a
- * human just approved a `pending_approval` row) or `{status:'auto_approved'}` (belt-and-suspenders
+ * human just approved a `pending_approval` row), `{status:'auto_approved'}` (belt-and-suspenders
  * for an `auto_approved` row nobody is synchronously waiting on — e.g. an `await_decision:false`
- * `request_action` call) — design doc §7.10 "领域事件与 outbox"; docs/development-tasks.md S2.4
+ * `request_action` call), or `{status:'withdrawn'}` (S11 GO1: the queue behind it may move) —
+ * design doc §7.10 "领域事件与 outbox"; docs/development-tasks.md S2.4
  * "drain the Gatekeeper's queue after every successful approve ... prefer the outbox consumer, it
  * survives crashes".
  *
@@ -49,7 +50,10 @@ export interface ActionRequestUpdatedSource {
   ): () => void;
 }
 
-const DRAINABLE_STATUSES = new Set(['auto_approved', 'approved']);
+/** The statuses after which a Gatekeeper's queue may move: a row became executable, or (S11 GO1,
+ *  plan I-G9) one was withdrawn — a withdrawn `pending_approval` head no longer holds the queue
+ *  (R-50), so the rows behind it run now rather than at the next periodic tick. */
+const DRAINABLE_STATUSES = new Set(['auto_approved', 'approved', 'withdrawn']);
 
 export function registerActionRequestDrainConsumer(
   dispatcher: ActionRequestUpdatedSource,

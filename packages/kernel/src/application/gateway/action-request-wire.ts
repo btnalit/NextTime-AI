@@ -43,6 +43,7 @@ export function toWireActionRequest(row: ActionRequestRow) {
     executingAt: row.executingAt ? row.executingAt.toISOString() : null,
     executedAt: row.executedAt ? row.executedAt.toISOString() : null,
     failedAt: row.failedAt ? row.failedAt.toISOString() : null,
+    failureKind: row.failureKind,
     requesterCanApprove: row.requesterCanApprove,
     ...(suspected.count > 0
       ? { suspectedSecretValues: suspected.count, suspectedSecretPaths: suspected.paths }
