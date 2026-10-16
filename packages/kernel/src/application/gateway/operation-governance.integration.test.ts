@@ -524,6 +524,8 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(listed.items.find((row) => row.name === held.name)).toMatchObject({
           status: 'draft',
           gateOwnedParams: [{ param: 'Authorization', location: 'header' }],
+          // UX acceptance of #573 P3-1: the catalog tells the gate's own draft from a proposal.
+          origin: 'import',
         });
       });
 
@@ -574,7 +576,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             properties: { sku: { type: 'string', 'x-in': 'query' } },
           },
         };
-        const { gateId } = await seedHeldDraft(held, fixed, 'proposal');
+        const { gateId, gatekeeperId } = await seedHeldDraft(held, fixed, 'proposal');
 
         const preview = await callAs<{ operationsToImport: PreviewRow[] }>(
           ownerId,
@@ -587,6 +589,86 @@ describe.runIf(DATABASE_URL !== undefined)(
         // gate's import.
         expect(row?.gateOwnedParams).toBeUndefined();
         expect(row?.pendingDraft).toEqual({ rewritable: false, fromGate: false });
+        // UX acceptance of #573 P3-1: the catalog row says so too, even where the gate does not
+        // announce the name at all.
+        const listed = await callAs<{ items: { name: string; origin?: string }[] }>(
+          ownerId,
+          'owner',
+          'list_operations',
+          { gatekeeperId },
+        );
+        expect(listed.items.find((entry) => entry.name === held.name)?.origin).toBe('human');
+      });
+
+      it('UX acceptance of #573 P2: a refusal whose running definition declares a gate-owned param says so', async () => {
+        const name = `g4.refused.${randomUUID()}`;
+        const running = withGateOwnedParams(name);
+        const published: Operation = {
+          ...running,
+          params_schema: {
+            type: 'object',
+            properties: { sku: { type: 'string', 'x-in': 'query' } },
+          },
+        };
+        const act = await newActivity();
+        const endpoint = `https://gate-${randomUUID()}.example.invalid`;
+        const { gatekeeperId } = await inTx((client) =>
+          registerGatekeeper(client, workspaceId, {
+            name: `g4-refused-${randomUUID().slice(0, 8)}`,
+            transportKind: 'http',
+            target: 'example-system',
+            endpoint,
+            activityId: act,
+            registeredBy: { id: ownerId, kind: 'human' },
+          }),
+        );
+        await inTx((client) =>
+          importManifest(client, workspaceId, {
+            gatekeeperId,
+            operations: [published],
+            proposedBy: { id: ownerId, kind: 'human' },
+            activityId: act,
+          }),
+        );
+        await inTx((client) => publishOperation(client, workspaceId, { gatekeeperId, name }));
+        const gateId = `g4-refused-${randomUUID().slice(0, 8)}`;
+        await asAdmin(async (client) => {
+          await upsertAnnouncement(
+            client,
+            {
+              gateId,
+              connector: `g4-${randomUUID().slice(0, 8)}`,
+              transportKind: 'http',
+              endpoint,
+              operations: [running],
+            },
+            'gate',
+          );
+          await client.query(`update gate_instances set status = 'enabled' where gate_id = $1`, [
+            gateId,
+          ]);
+        });
+        await inTx((client) =>
+          insertGateLink(client, {
+            workspaceId,
+            gateId,
+            gatekeeperObjectId: gatekeeperId,
+            enabledBy: ownerId,
+          }),
+        );
+
+        const readiness = await callAs<{
+          gates: { gateId: string; definitionMismatch: unknown[] }[];
+        }>(ownerId, 'owner', 'execution_readiness', {});
+        expect(
+          readiness.gates.find((gate) => gate.gateId === gatekeeperId)?.definitionMismatch,
+        ).toEqual([
+          {
+            operation: name,
+            awaiting: 'workspace_revision',
+            gateOwnedParams: [{ param: 'Authorization', location: 'header' }],
+          },
+        ]);
       });
     });
 

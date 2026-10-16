@@ -1,6 +1,7 @@
 import type {
   GateInstanceEnablePreviewOperationPresentWire,
   GateInstanceEnablePreviewOperationWire,
+  GateOwnedParamWire,
   PreviewGateInstanceEnableResultWire,
   RefreshOperationGovernanceResultWire,
 } from '@nexttime/shared';
@@ -47,6 +48,12 @@ export interface RefreshOperationGovernanceConfirmProps {
   readonly operationNames?: readonly string[];
   /** Trigger label override — defaults to 与门公告对齐. */
   readonly label?: string;
+  /** Legacy 280 (acceptance of #571 P3-1): the preview the caller already read for this gate, used
+   *  for the confirm instead of reading it again on the click. The kernel still refuses the write
+   *  with `manifest_changed` when the gate's manifest moved since (the confirm sends this
+   *  preview's `manifestDigest`), so a stale one is never applied unseen. First open only: after a
+   *  write is sent under its digest, reopening reads the preview again. */
+  readonly preview?: PreviewGateInstanceEnableResultWire;
   readonly testId?: string;
 }
 
@@ -102,6 +109,7 @@ export function RefreshOperationGovernanceConfirm({
   platformAdmin = false,
   operationNames,
   label,
+  preview: knownPreview,
   testId,
 }: RefreshOperationGovernanceConfirmProps) {
   const t = useT();
@@ -117,27 +125,46 @@ export function RefreshOperationGovernanceConfirm({
     [],
   );
   const [rewrittenNames, setRewrittenNames] = useState<ReadonlySet<string>>(new Set());
+  // UX acceptance of #573 P2 / review #501 on #573: the drafts this align opens or rewrites that
+  // will still declare a gate-owned param — they stay unpublishable, so nothing here promises the
+  // calls come back once they are published. Name → the params, kept past the confirm so the
+  // result can say it too.
+  const [stillHeld, setStillHeld] = useState<ReadonlyMap<string, readonly GateOwnedParamWire[]>>(
+    new Map(),
+  );
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [alignedNotice, setAlignedNotice] = useState(false);
   const [awaitingAdoption, setAwaitingAdoption] =
     useState<PreviewGateInstanceEnableResultWire['awaitingPlatformAdoption']>(null);
   const [manifestDigest, setManifestDigest] = useState<string | null>(null);
+  // Review #501 on #577 ①: the caller's preview serves the first open only. Once a write was sent
+  // under its digest — applied, or refused with `manifest_changed` — it no longer describes the
+  // gate, so reopening reads the preview afresh instead of being refused on the same digest again.
+  const [knownPreviewSpent, setKnownPreviewSpent] = useState(false);
   // Which previewed rows are published — a revision draft of one is its own catalog row.
   const [publishedNames, setPublishedNames] = useState<ReadonlySet<string>>(new Set());
   const items = (diffs ?? []).filter((op) => op.differs).map(changeItem);
-  const redefined = (diffs ?? []).filter((op) => op.definitionDiffers).map((op) => op.name);
   const heldRevisions = (diffs ?? []).filter(
     (op) => op.definitionDiffers && (op.gateOwnedParams?.length ?? 0) > 0,
   );
+  const redefined = (diffs ?? [])
+    .filter((op) => op.definitionDiffers && (op.gateOwnedParams?.length ?? 0) === 0)
+    .map((op) => op.name);
+  const heldNames = (names: readonly string[]) => names.filter((name) => stillHeld.has(name));
+  const freeNames = (names: readonly string[]) => names.filter((name) => !stillHeld.has(name));
+  const heldText = (name: string) => gateOwnedParamsText(stillHeld.get(name) ?? [], t);
   // R-19 (D-17): the kernel's direction decides the danger case; the consequences say what it means.
   const consequences = items.flatMap((item) => governanceConsequences(item, t));
   const loosens = items.some((item) => isLoosening(item.direction));
   const [lastResult, setLastResult] = useState<RefreshOperationGovernanceResultWire | null>(null);
   const revisions = (lastResult?.revisionDrafts ?? []).filter(
-    (draft) => !rewrittenNames.has(draft.name),
+    (draft) => !rewrittenNames.has(draft.name) && !stillHeld.has(draft.name),
   );
-  const rewritten = (lastResult?.revisionDrafts ?? []).filter((draft) =>
-    rewrittenNames.has(draft.name),
+  const rewritten = (lastResult?.revisionDrafts ?? []).filter(
+    (draft) => rewrittenNames.has(draft.name) && !stillHeld.has(draft.name),
+  );
+  const heldResults = (lastResult?.revisionDrafts ?? []).filter((draft) =>
+    stillHeld.has(draft.name),
   );
 
   async function loadPreviewAndOpen(): Promise<void> {
@@ -148,11 +175,13 @@ export function RefreshOperationGovernanceConfirm({
     setAwaitingAdoption(null);
     setLastResult(null);
     setStuckDrafts([]);
+    setStillHeld(new Map());
     try {
-      const preview = await http.call<PreviewGateInstanceEnableResultWire>(
-        'preview_gate_instance_enable',
-        { gateId: platformGateId },
-      );
+      const preview =
+        (knownPreviewSpent ? undefined : knownPreview) ??
+        (await http.call<PreviewGateInstanceEnableResultWire>('preview_gate_instance_enable', {
+          gateId: platformGateId,
+        }));
       const inScope = (name: string) =>
         operationNames === undefined || operationNames.includes(name);
       // Legacy K (G1): a definition-only change drifts as well — "already aligned" would leave the
@@ -166,6 +195,16 @@ export function RefreshOperationGovernanceConfirm({
       );
       const held = pending.filter((op) => op.pendingDraft?.rewritable).map((op) => op.name);
       setHeldDrafts(held);
+      setStillHeld(
+        new Map([
+          ...drifting
+            .filter((op) => op.definitionDiffers && (op.gateOwnedParams?.length ?? 0) > 0)
+            .map((op) => [op.name, op.gateOwnedParams ?? []] as const),
+          ...pending
+            .filter((op) => op.pendingDraft?.rewritable && (op.gateOwnedParams?.length ?? 0) > 0)
+            .map((op) => [op.name, op.gateOwnedParams ?? []] as const),
+        ]),
+      );
       // Only the gate's own drafts wait on the gate: a proposal is never rewritten, so it is not
       // said to be waiting for the manifest to change (review #501 on #571 ①).
       const stuck = pending.filter(
@@ -198,6 +237,7 @@ export function RefreshOperationGovernanceConfirm({
     if (diffs === null || manifestDigest === null) return;
     // A refused refresh propagates as-is: `kit/confirm` renders it through `presentError`, which
     // maps a known platform code to its copy and keeps the kernel's text in 「技术细节」.
+    setKnownPreviewSpent(true);
     const result = await http.call<RefreshOperationGovernanceResultWire>(
       'refresh_operation_governance',
       {
@@ -353,6 +393,36 @@ export function RefreshOperationGovernanceConfirm({
                 </ul>
               </div>
             ) : null}
+            {heldResults.length > 0 ? (
+              <div className="stack-s" data-testid={testId ? `${testId}-held-drafts` : undefined}>
+                <span>
+                  {t(
+                    `${heldResults.length} 份草稿已按门的清单打开或重写，但仍声明只能由门自己设置的参数，发布不了：门的维护者去掉这些参数、平台采用改好的清单之前，对它们的调用不会恢复。`,
+                    `${heldResults.length} draft(s) were opened or rewritten from the gate’s manifest but still declare params only the gate sets, so they cannot be published: calls to them do not resume until the gate’s maintainer drops those params and the platform adopts the corrected manifest.`,
+                  )}
+                </span>
+                <ul className="stack-s" style={{ margin: 0, paddingLeft: '1.2em' }}>
+                  {heldResults.map((draft) => {
+                    const row = { gatekeeperId, name: draft.name };
+                    const key = publishedNames.has(draft.name)
+                      ? revisionDraftKey(row)
+                      : operationKey(row);
+                    return (
+                      <li key={draft.name} className="row-wrap">
+                        <span className="mono">{draft.name}</span>
+                        <span>{heldText(draft.name)}</span>
+                        <a
+                          href={hrefs.catalog('operations', key)}
+                          data-testid={testId ? `${testId}-held-draft-link` : undefined}
+                        >
+                          {t('去能力目录看说明', 'See it in the catalog')}
+                        </a>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            ) : null}
           </div>
         </Notice>
       ) : null}
@@ -388,10 +458,18 @@ export function RefreshOperationGovernanceConfirm({
               `${op.name}: the revision it opens cannot be published — the new definition declares params only the gate sets, ${gateOwnedParamsText(op.gateOwnedParams ?? [], t)}`,
             ),
           ),
-          ...heldDrafts.map((name) =>
+          ...freeNames(heldDrafts).map((name) =>
             t(
               `${name}：门的清单改了，按新清单重写待发布的草稿`,
               `${name}: the gate’s manifest changed — rewrites the pending draft to it`,
+            ),
+          ),
+          // Review #501 on #573: the gate changed something else but still declares the param —
+          // the rewrite still runs, and the draft still cannot be published.
+          ...heldNames(heldDrafts).map((name) =>
+            t(
+              `${name}：门的清单改了，按新清单重写待发布的草稿；新清单仍声明只能由门自己设置的参数 ${heldText(name)}，重写后仍发布不了`,
+              `${name}: the gate’s manifest changed — rewrites the pending draft to it; the new manifest still declares params only the gate sets, ${heldText(name)}, so it still cannot be published`,
             ),
           ),
         ]}
@@ -409,6 +487,14 @@ export function RefreshOperationGovernanceConfirm({
             </ul>
           </Notice>
         ) : null}
+        {heldRevisions.length > 0 ? (
+          <Notice tone="warn" testId={testId ? `${testId}-redefined-held` : undefined}>
+            {t(
+              `门运行的新定义声明了只能由门自己设置的参数：${heldRevisions.map((op) => op.name).join('、')}。对齐为它们打开的修订发布不了；门的维护者去掉这些参数、平台采用改好的清单之前，门会一直拒绝对它们的调用。`,
+              `The new definition the gate runs declares params only the gate sets: ${heldRevisions.map((op) => op.name).join(', ')}. The revisions aligning opens for them cannot be published; the gate keeps refusing calls to them until its maintainer drops those params and the platform adopts the corrected manifest.`,
+            )}
+          </Notice>
+        ) : null}
         {redefined.length > 0 ? (
           <Notice tone="warn" testId={testId ? `${testId}-redefined` : undefined}>
             {t(
@@ -417,11 +503,11 @@ export function RefreshOperationGovernanceConfirm({
             )}
           </Notice>
         ) : null}
-        {heldDrafts.length > 0 ? (
+        {freeNames(heldDrafts).length > 0 ? (
           <Notice testId={testId ? `${testId}-rewrites` : undefined}>
             {t(
-              `门的清单已经改了：${heldDrafts.join('、')}。对齐会按新清单重写这些还没发布的草稿，不会发布它们；之后到能力目录核对再发布。`,
-              `The gate’s manifest has changed: ${heldDrafts.join(', ')}. Aligning rewrites these unpublished drafts to it without publishing them; check and publish them in the catalog afterwards.`,
+              `门的清单已经改了：${freeNames(heldDrafts).join('、')}。对齐会按新清单重写这些还没发布的草稿，不会发布它们；之后到能力目录核对再发布。`,
+              `The gate’s manifest has changed: ${freeNames(heldDrafts).join(', ')}. Aligning rewrites these unpublished drafts to it without publishing them; check and publish them in the catalog afterwards.`,
             )}
           </Notice>
         ) : null}

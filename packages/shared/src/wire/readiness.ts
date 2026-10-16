@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ObjectWireSchema } from './graph.js';
+import { GateOwnedParamWireSchema } from './platform.js';
 
 /**
  * wire/readiness: `execution_readiness`'s result shape (S8 W1-C, docs/development-tasks.md §5e
@@ -65,7 +66,14 @@ export const DefinitionAwaitingSchema = z.enum(['platform_adoption', 'workspace_
 export type DefinitionAwaiting = z.infer<typeof DefinitionAwaitingSchema>;
 
 export const DefinitionMismatchWireSchema = z
-  .object({ operation: z.string(), awaiting: DefinitionAwaitingSchema })
+  .object({
+    operation: z.string(),
+    awaiting: DefinitionAwaitingSchema,
+    /** UX acceptance of #573 P2: present when the definition the gate runs declares params only
+     *  the gate sets (legacy J). A revision carrying it can never be published, so neither step
+     *  above ends the refusal — the gate's maintainer has to drop them first. */
+    gateOwnedParams: z.array(GateOwnedParamWireSchema).optional(),
+  })
   .strict();
 export type DefinitionMismatchWire = z.infer<typeof DefinitionMismatchWireSchema>;
 

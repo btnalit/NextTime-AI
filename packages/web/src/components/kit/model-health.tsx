@@ -131,7 +131,8 @@ export function ModelHealthNote({
             `所选模型的供应商「${selected.provider}」：${health.zh}。${health.detailZh}。`,
             `The chosen model's provider "${selected.provider}": ${health.en}. ${health.detailEn}.`,
           )}
-        </span>{' '}
+        </span>
+        {t('', ' ')}
         <NextStep health={health} provider={selected.provider} canFix={canFix} testId={testId} />
       </Notice>
     );
@@ -152,7 +153,8 @@ export function ModelHealthNote({
           {t(
             `${blocked.length} 个模型不能选：供应商 ${blockedProviders.join('、')} 当前调用会失败。`,
             `${blocked.length} model(s) cannot be chosen: calls to ${blockedProviders.join(', ')} fail right now.`,
-          )}{' '}
+          )}
+          {t('', ' ')}
         </span>
       ) : null}
       {unknown.length > 0 ? (
@@ -160,7 +162,8 @@ export function ModelHealthNote({
           {t(
             `${unknown.length} 个模型状态未知：读不到供应商 ${unknownProviders.join('、')} 的测试状态。`,
             `${unknown.length} model(s) have an unknown status: the test status of ${unknownProviders.join(', ')} cannot be read.`,
-          )}{' '}
+          )}
+          {t('', ' ')}
         </span>
       ) : null}
       <NextStep

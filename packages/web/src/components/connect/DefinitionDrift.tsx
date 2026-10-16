@@ -4,6 +4,7 @@ import { useT } from '../../lib/i18n.js';
 import { hrefs } from '../../lib/router.js';
 import { Notice } from '../kit/notice.js';
 import { RouteLink } from '../kit/route-link.js';
+import { gateOwnedParamsText } from './GateOwnedParams.js';
 
 /**
  * components/connect/DefinitionDrift (legacy K, UX acceptance of #538): what a workspace reads when
@@ -16,6 +17,11 @@ import { RouteLink } from '../kit/route-link.js';
  * Until the platform adopts the gate's new manifest, aligning here cannot help (it reads the
  * manifest in effect, which still holds the old definition), so that case names the platform admin
  * first: a platform admin gets the link to the gate instance, anyone else is told who to ask.
+ *
+ * UX acceptance of #573 P2: an entry carrying `gateOwnedParams` is neither — the definition the
+ * gate runs declares params only the gate sets, so its revision can never be published and no
+ * align or adoption brings the calls back. Those are said on their own, waiting on the gate's
+ * maintainer, and kept out of the "align and publish" line.
  */
 
 function joined(names: readonly string[], zh: boolean): string {
@@ -96,15 +102,45 @@ export function DefinitionMismatchNotice({
   readonly testId?: string;
 }) {
   const t = useT();
-  const adoption = mismatch
+  const heldByGate = mismatch.filter((entry) => (entry.gateOwnedParams?.length ?? 0) > 0);
+  const recoverable = mismatch.filter((entry) => (entry.gateOwnedParams?.length ?? 0) === 0);
+  const adoption = recoverable
     .filter((entry) => entry.awaiting === 'platform_adoption')
     .map((entry) => entry.operation);
-  const revision = mismatch
+  const revision = recoverable
     .filter((entry) => entry.awaiting === 'workspace_revision')
     .map((entry) => entry.operation);
-  if (adoption.length === 0 && revision.length === 0) return null;
+  if (adoption.length === 0 && revision.length === 0 && heldByGate.length === 0) return null;
   return (
     <div className="stack-s" data-testid={testId}>
+      {heldByGate.length > 0 ? (
+        <Notice tone="warn" testId={testId ? `${testId}-gate-owned` : undefined}>
+          {t(
+            `门已经按新定义运行，对 ${joined(
+              heldByGate.map((entry) => entry.operation),
+              true,
+            )} 的调用会被拒绝。新定义声明了只能由门自己设置的参数（${heldByGate
+              .map(
+                (entry) =>
+                  `${entry.operation}：${gateOwnedParamsText(entry.gateOwnedParams ?? [], t)}`,
+              )
+              .join(
+                '；',
+              )}），修订发布不了，对齐也恢复不了这些调用；要等门的维护者去掉这些参数、平台采用改好的清单之后才会恢复。`,
+            `The gate already runs a new definition, so calls to ${joined(
+              heldByGate.map((entry) => entry.operation),
+              false,
+            )} are refused. The new definition declares params only the gate sets (${heldByGate
+              .map(
+                (entry) =>
+                  `${entry.operation}: ${gateOwnedParamsText(entry.gateOwnedParams ?? [], t)}`,
+              )
+              .join(
+                '; ',
+              )}), so its revision cannot be published and aligning does not bring the calls back; they resume only once the gate's maintainer drops those params and the platform adopts the corrected manifest.`,
+          )}
+        </Notice>
+      ) : null}
       {adoption.length > 0 ? (
         <AwaitingAdoptionNotice
           operations={adoption}
@@ -118,7 +154,8 @@ export function DefinitionMismatchNotice({
           {t(
             `门已经按新定义运行，对 ${joined(revision, true)} 的调用会被拒绝，直到这个工作区对齐并发布修订。`,
             `The gate already runs a new definition, so calls to ${joined(revision, false)} are refused until this workspace aligns and publishes the revision.`,
-          )}{' '}
+          )}
+          {t('', ' ')}
           {canManage
             ? t(
                 '点下面的「与门公告对齐」打开修订，再到能力目录发布。',

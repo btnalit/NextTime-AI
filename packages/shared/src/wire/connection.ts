@@ -116,6 +116,10 @@ export const OperationSummaryWireSchema = z
      *  published row (published before the check existed) the gate refuses every call that passes
      *  one of them. */
     gateOwnedParams: z.array(GateOwnedParamWireSchema).optional(),
+    /** UX acceptance of #573 P3-1: who wrote this version — `import` for the gate's own manifest,
+     *  `agent` / `human` for a proposal. Absent on a legacy row with none recorded. A held draft
+     *  the gate never wrote is told apart from one the gate stopped announcing by this. */
+    origin: z.enum(['import', 'agent', 'human']).optional(),
   })
   .strict();
 export type OperationSummaryWire = z.infer<typeof OperationSummaryWireSchema>;

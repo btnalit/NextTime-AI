@@ -140,6 +140,8 @@ export interface GatekeeperListRow {
 
 export interface GatekeeperDetailOperation {
   readonly name: string;
+  /** `OperationSummaryWire.version` — told apart only where one name is listed more than once. */
+  readonly version?: number;
   readonly status: string;
   readonly mode?: string;
   readonly blastRadius?: string;
@@ -198,6 +200,9 @@ export interface OperationCatalogRow {
   /** Console G4 (legacy 219): params this version declares that only the gate sets
    *  (`OperationSummaryWire.gateOwnedParams`) — a draft carrying them cannot be published. */
   readonly gateOwnedParams?: readonly GateOwnedParamWire[];
+  /** UX acceptance of #573 P3-1 (`OperationSummaryWire.origin`): `import` for the gate's own
+   *  manifest, `agent` / `human` for a proposal. Absent on an older kernel or a legacy row. */
+  readonly origin?: 'import' | 'agent' | 'human';
 }
 
 /** The stable identity of an Operation row — no dedicated id column exists (see
