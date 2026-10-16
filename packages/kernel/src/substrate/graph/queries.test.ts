@@ -427,7 +427,9 @@ describe('Operation-draft viewer filter', () => {
     const q = buildGetObjectQuery('ws1', 'obj1', viewer);
     expect(q.values).toEqual(['ws1', 'obj1', false, 'p1']);
     expect(q.text).toContain("and not (objects.object_type = 'Operation'");
-    expect(q.text).toContain("coalesce(objects.properties ->> 'status', 'draft') = 'draft'");
+    expect(q.text).toContain(
+      "coalesce(objects.properties ->> 'status', 'draft') in ('draft', 'discarded')",
+    );
     expect(q.text).toContain('not $3::boolean');
     expect(q.text).toContain("objects.properties ->> 'proposedBy' is distinct from $4::text");
     expect(q.text).not.toContain('hidden_op');

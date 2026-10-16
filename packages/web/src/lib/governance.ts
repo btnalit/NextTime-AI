@@ -203,6 +203,9 @@ export interface OperationCatalogRow {
   /** UX acceptance of #573 P3-1 (`OperationSummaryWire.origin`): `import` for the gate's own
    *  manifest, `agent` / `human` for a proposal. Absent on an older kernel or a legacy row. */
   readonly origin?: 'import' | 'agent' | 'human';
+  /** Review #493 on #583 (`OperationSummaryWire.draftDigest`): on a draft only — which content
+   *  this row shows, handed back to discard / publish so a draft revised since is refused. */
+  readonly draftDigest?: string;
 }
 
 /** The stable identity of an Operation row — no dedicated id column exists (see

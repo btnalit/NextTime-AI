@@ -23,7 +23,9 @@ import {
   META_ONTOLOGY_OBJECT_TYPE_VALUES,
   MetaOntologyObjectTypeSchema,
   OPERATION_MODE_VALUES,
+  OPERATION_STATUS_VALUES,
   OperationModeSchema,
+  OperationStatusSchema,
   POLICY_DECISION_VALUES,
   PRINCIPAL_KIND_VALUES,
   PUBLISHABLE_STATUS_VALUES,
@@ -137,6 +139,12 @@ const enumsUnderTest = [
     PublishableStatusSchema,
     ['draft', 'published', 'deprecated'],
   ],
+  [
+    'OperationStatus',
+    OPERATION_STATUS_VALUES,
+    OperationStatusSchema,
+    ['draft', 'published', 'deprecated', 'discarded'],
+  ],
   ['GrantStatus', GRANT_STATUS_VALUES, GrantStatusSchema, ['active', 'revoked', 'expired']],
   ['OperationMode', OPERATION_MODE_VALUES, OperationModeSchema, ['observe', 'execute']],
   ['BlastRadius', BLAST_RADIUS_VALUES, BlastRadiusSchema, ['low', 'medium', 'high']],
@@ -163,8 +171,8 @@ const enumsUnderTest = [
 ] as const;
 
 describe('enums', () => {
-  it('covers all 21 domain enums required by R4 + S2.2 + S2.6 + R-55 (TurnStatus)', () => {
-    expect(enumsUnderTest).toHaveLength(21);
+  it('covers all 22 domain enums required by R4 + S2.2 + S2.6 + R-55 (TurnStatus) + legacy 278 (OperationStatus)', () => {
+    expect(enumsUnderTest).toHaveLength(22);
   });
 
   for (const [name, values, schema, expected] of enumsUnderTest) {

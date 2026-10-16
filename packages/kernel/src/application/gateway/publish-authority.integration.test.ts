@@ -9,6 +9,7 @@ import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { proposeSkill as proposeSkillVersion } from '../../application/worker/index.js';
 import { NotProposerError } from '../../governance/capability/index.js';
 import { registerGatekeeper } from '../../governance/gatekeepers/index.js';
+import { queryAudit } from '../../substrate/audit/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
 import { ForbiddenError } from './authorize.js';
 import { dispatchCapability } from './dispatch.js';
@@ -292,6 +293,137 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
         expect(published.status).toBe('published');
         expect(published.version).toBe(2);
+      });
+    });
+
+    describe('discard_operation_draft (legacy 278)', () => {
+      /** The draft's `draftDigest`, as the catalog lists it (review #493 on #583). */
+      async function listedDigest(name: string): Promise<string> {
+        const listed = await call<{
+          items: readonly { name: string; status: string; draftDigest?: string }[];
+        }>(ownerId, 'owner', 'list_operations', { gatekeeperId });
+        const digest = listed.items.find(
+          (op) => op.name === name && op.status === 'draft',
+        )?.draftDigest;
+        if (digest === undefined) throw new Error(`expected ${name} listed with a draftDigest`);
+        return digest;
+      }
+      async function draftOfBuilder(): Promise<{
+        name: string;
+        version: number;
+        draftDigest: string;
+      }> {
+        const name = `d24.discard.${randomUUID().slice(0, 8)}`;
+        const proposed = await call<{ version: number }>(
+          builderId,
+          'builder',
+          'propose_operation',
+          {
+            gatekeeperId,
+            operation: testOperation(name),
+          },
+        );
+        return { name, version: proposed.version, draftDigest: await listedDigest(name) };
+      }
+      const listedNames = async () =>
+        (
+          await call<{ items: readonly { name: string }[] }>(ownerId, 'owner', 'list_operations', {
+            gatekeeperId,
+          })
+        ).items.map((op) => op.name);
+
+      it('member: refused by the builder floor (403 forbidden)', async () => {
+        const draft = await draftOfBuilder();
+        await expect(
+          call(memberId, 'member', 'discard_operation_draft', { gatekeeperId, ...draft }),
+        ).rejects.toBeInstanceOf(ForbiddenError);
+      });
+
+      it('another builder: sees the draft but it is not theirs — 403 not_proposer, and it stays listed', async () => {
+        const draft = await draftOfBuilder();
+        await expect(
+          call(otherBuilderId, 'builder', 'discard_operation_draft', { gatekeeperId, ...draft }),
+        ).rejects.toBeInstanceOf(NotProposerError);
+        expect(await listedNames()).toContain(draft.name);
+      });
+
+      it('the proposer discards their own draft: it leaves the catalog, and the audit record says what was discarded and why', async () => {
+        const draft = await draftOfBuilder();
+        const discarded = await call<{ status: string; version: number }>(
+          builderId,
+          'builder',
+          'discard_operation_draft',
+          { gatekeeperId, ...draft, reason: 'The gate no longer offers it.' },
+        );
+        expect(discarded).toMatchObject({ status: 'discarded', version: draft.version });
+        expect(await listedNames()).not.toContain(draft.name);
+        const audited = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          queryAudit(client, workspaceId, { action: 'discard_operation_draft' }),
+        );
+        const row = audited.find(
+          (entry) => (entry.payload as { params?: { name?: string } }).params?.name === draft.name,
+        );
+        expect(row?.actorPrincipalId).toBe(builderId);
+        expect(row?.payload).toMatchObject({
+          params: { gatekeeperId, name: draft.name, reason: 'The gate no longer offers it.' },
+          // propose_operation over the human channel records a person's proposal.
+          origin: 'human',
+          proposedBy: { id: builderId },
+          definitionDigest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+        });
+        // Never the definition itself.
+        expect(JSON.stringify(row?.payload)).not.toContain('binding');
+      });
+
+      it('the owner discards a builder’s draft', async () => {
+        const draft = await draftOfBuilder();
+        const discarded = await call<{ status: string }>(
+          ownerId,
+          'owner',
+          'discard_operation_draft',
+          { gatekeeperId, ...draft },
+        );
+        expect(discarded.status).toBe('discarded');
+      });
+
+      it('a published Operation is refused (409 illegal transition): it is deprecated, not discarded', async () => {
+        const name = await publishedOperationOfBuilder();
+        await expect(
+          call(builderId, 'builder', 'discard_operation_draft', {
+            gatekeeperId,
+            name,
+            version: 1,
+            draftDigest: 'sha256:any',
+          }),
+        ).rejects.toMatchObject({ name: 'IllegalTransition' });
+      });
+
+      it('review #493 on #583: a draft its proposer revised in place since it was listed is refused draft_changed and stays listed', async () => {
+        const draft = await draftOfBuilder();
+        await call(builderId, 'builder', 'propose_operation', {
+          gatekeeperId,
+          operation: { ...testOperation(draft.name), description: 'Revised after it was listed.' },
+        });
+        await expect(
+          call(ownerId, 'owner', 'discard_operation_draft', { gatekeeperId, ...draft }),
+        ).rejects.toMatchObject({ code: 'draft_changed' });
+        expect(await listedNames()).toContain(draft.name);
+        const fresh = await listedDigest(draft.name);
+        expect(fresh).not.toBe(draft.draftDigest);
+        await expect(
+          call(ownerId, 'owner', 'publish_operation', {
+            gatekeeperId,
+            name: draft.name,
+            draftDigest: draft.draftDigest,
+          }),
+        ).rejects.toMatchObject({ code: 'draft_changed' });
+        const discarded = await call<{ status: string }>(
+          ownerId,
+          'owner',
+          'discard_operation_draft',
+          { gatekeeperId, ...draft, draftDigest: fresh },
+        );
+        expect(discarded.status).toBe('discarded');
       });
     });
 

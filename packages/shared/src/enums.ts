@@ -214,12 +214,25 @@ export type PublishableStatus = (typeof PUBLISHABLE_STATUS_VALUES)[number];
 export const PublishableStatusSchema = asEnum(PUBLISHABLE_STATUS_VALUES);
 
 /**
+ * Operation status (legacy 278, UX acceptance of #577): the publishable lifecycle plus one terminal
+ * state, `discarded` — a draft the workspace decided not to publish (`discard_operation_draft`).
+ * Unlike the other registries' drafts (`DRAFT_KIND_VALUES` below, deleted outright), an Operation
+ * draft is a graph Object with an `exposes` Fact and provenance pointing at it, so it is never
+ * deleted: the row stays, marked, and every directory read leaves it out. A discarded row's
+ * `version` is never reused — the identity's next draft takes the version above it.
+ */
+export const OPERATION_STATUS_VALUES = [...PUBLISHABLE_STATUS_VALUES, 'discarded'] as const;
+export type OperationStatus = (typeof OPERATION_STATUS_VALUES)[number];
+export const OperationStatusSchema = asEnum(OPERATION_STATUS_VALUES);
+
+/**
  * Draft kind (S8 W3 K2, leftover 82; `ontology_version` added by leftover 99): the
  * `Publishable`-lifecycle registries whose `draft` rows are proposer-private (I16) and can be
  * discarded (`discard_draft`, manual). The periodic expiry sweep covers only the first three
  * (`ontology_version` drafts are discard-only) — see `packages/kernel/src/application/worker/draft-lifecycle.ts`. Not
  * a fourth `PublishableStatus` value: discard/expiry delete the row outright rather than adding a
- * `discarded`/`expired` terminal status.
+ * `discarded`/`expired` terminal status. Operation drafts are not one of these kinds: they are
+ * discarded as a status (`OPERATION_STATUS_VALUES` above, `discard_operation_draft`).
  */
 export const DRAFT_KIND_VALUES = [
   'worker_definition',

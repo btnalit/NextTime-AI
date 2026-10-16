@@ -10,7 +10,9 @@
  * projected only when a version is published, so the graph never holds their drafts.)
  *
  * The rule: a draft is visible to its proposer and to the workspace's draft reviewers; published
- * and deprecated rows are visible to everyone; a row with no `status` reads as a draft (as
+ * and deprecated rows are visible to everyone; a `discarded` row (legacy 278, `discard_operation_
+ * draft` — a draft nobody published, kept rather than deleted) stays exactly as private as the
+ * draft was; a row with no `status` reads as a draft (as
  * `toOperationRecord` reads it), and a draft with no recorded proposer is nobody's — reviewers
  * only. A proposer is **recorded** only when the row carries both `proposedBy` and
  * `proposedByKind`: `registerOperationDraftObject` always writes the two together, and
@@ -51,12 +53,16 @@ export interface OperationVisibilityRow {
   readonly proposedByKind: string | null | undefined;
 }
 
+/** The statuses read as a draft: `draft`, and (legacy 278) `discarded` — a draft the workspace
+ *  decided not to publish stays as private as it was. */
+const PRIVATE_STATUSES: ReadonlySet<string> = new Set(['draft', 'discarded']);
+
 /** Whether `viewer` may see an Operation row — the TS form of `operationDraftHiddenSql`. */
 export function operationDraftVisibleTo(
   viewer: GraphReadViewer,
   row: OperationVisibilityRow,
 ): boolean {
-  if ((row.status ?? 'draft') !== 'draft') return true;
+  if (!PRIVATE_STATUSES.has(row.status ?? 'draft')) return true;
   if (viewer.seesEveryDraft) return true;
   const proposerRecorded =
     row.proposedBy !== undefined &&
@@ -79,7 +85,7 @@ export function operationDraftHiddenSql(
   principalParam: string,
 ): string {
   return `(${alias}.object_type = 'Operation'
-    and coalesce(${alias}.properties ->> 'status', 'draft') = 'draft'
+    and coalesce(${alias}.properties ->> 'status', 'draft') in ('draft', 'discarded')
     and not ${seesEveryParam}::boolean
     and (${alias}.properties ->> 'proposedBy' is distinct from ${principalParam}::text
          or ${alias}.properties ->> 'proposedByKind' is null))`;

@@ -318,6 +318,9 @@ function OperationReviewRow({
   const [error, setError] = useState<unknown | null>(null);
   // R-19 (D-17): the proposed draft's change, waiting for the confirm before it is published.
   const [pendingChange, setPendingChange] = useState<OperationGovernanceChangeWire | null>(null);
+  // Review #493 on #583: the draft this Submit proposed — published only if it is still that draft
+  // (a gate re-import writes over any pending draft, also while the change waits for its confirm).
+  const draftDigestRef = useRef<string | null>(null);
   const [draftKept, setDraftKept] = useState(false);
   const publishedRef = useRef(false);
   // Decision 2026-10-09 "二次确认": a definition carrying suspected credentials publishes only with
@@ -331,6 +334,7 @@ function OperationReviewRow({
         gatekeeperId: row.gatekeeperId,
         name: row.name,
         ...credentialReview.params(),
+        ...(draftDigestRef.current !== null ? { draftDigest: draftDigestRef.current } : {}),
       });
     } catch (err) {
       // The kernel's credential question: the draft stays; the row asks, then Submit again.
@@ -355,10 +359,11 @@ function OperationReviewRow({
     publishedRef.current = false;
     try {
       const operation = reclassifiedOperationPayload(row, { mode, blastRadius, autoApprovable });
-      const proposed = await http.call<{ governanceChange: OperationGovernanceChangeWire | null }>(
-        'propose_operation',
-        { gatekeeperId: row.gatekeeperId, operation },
-      );
+      const proposed = await http.call<{
+        governanceChange: OperationGovernanceChangeWire | null;
+        draftDigest?: string;
+      }>('propose_operation', { gatekeeperId: row.gatekeeperId, operation });
+      draftDigestRef.current = proposed.draftDigest ?? null;
       const change = proposed.governanceChange ?? null;
       if (change !== null && change.direction !== 'neutral') {
         setPendingChange(change);

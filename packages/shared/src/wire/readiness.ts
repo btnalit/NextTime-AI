@@ -73,6 +73,11 @@ export const DefinitionMismatchWireSchema = z
      *  the gate sets (legacy J). A revision carrying it can never be published, so neither step
      *  above ends the refusal — the gate's maintainer has to drop them first. */
     gateOwnedParams: z.array(GateOwnedParamWireSchema).optional(),
+    /** UX acceptance of #579 (legacy 297): `true` when the gate's held manifest no longer lists
+     *  the Operation at all (`awaiting` is then `platform_adoption`). Adopting ends the mismatch
+     *  but not the refusal — the adopted manifest drops it — so no surface promises the calls
+     *  come back. Absent otherwise. */
+    droppedByGate: z.literal(true).optional(),
   })
   .strict();
 export type DefinitionMismatchWire = z.infer<typeof DefinitionMismatchWireSchema>;
