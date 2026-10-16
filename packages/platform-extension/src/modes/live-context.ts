@@ -25,10 +25,11 @@ import { keepCacheBreakpointOnHistory } from './prompt-cache.js';
  *     message back right after that same message. Everything up to and including it is then part
  *     of the prefix the previous call already wrote, and the provider serves it from cache.
  *   - Every call still reads the kernel. If the context is unchanged, the snapshot is current and
- *     nothing else is sent. If a section changed in the middle of a run (a Task finished, an
- *     approval arrived), only the changed sections go last as an update that says it replaces them
- *     — uncached, like the whole context was before, but only what changed; the cache breakpoint
- *     stays on the history before it (`prompt-cache.ts`).
+ *     nothing else is sent. If something changed in the middle of a run (a Task finished, an
+ *     approval arrived, a Fact was recorded), only what changed goes last as an update — the new,
+ *     changed and gone entries of each changed section (`renderEntryContextUpdate`) — uncached,
+ *     like the whole context was before, but only what changed; the cache breakpoint stays on the
+ *     history before it (`prompt-cache.ts`).
  *   - At the start of the next run (`startRun`, the mode's `before_agent_start`), a context that
  *     differs from the snapshot is placed again after the new prompt and the old one disappears,
  *     so a run never starts from an update stacked on stale state. That costs one cache write of
