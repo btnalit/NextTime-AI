@@ -13,7 +13,10 @@ import {
   gateReasonAsk,
   gateReasonHref,
   missingAsk,
+  missingCauseText,
   missingLinkHref,
+  refusalKind,
+  refusalKindsOf,
 } from './readiness-copy.js';
 
 const t: Translate = (zh) => zh;
@@ -130,5 +133,39 @@ describe('readiness fix links follow the kernel authorization (#541 review R1)',
     expect(
       missingLinkHref({ code: 'no_grant' }, { role: 'owner', currentHref: hrefs.access() }),
     ).toBeUndefined();
+  });
+});
+
+describe('legacy 301: definition_mismatch copy says what the refused Operations have in common', () => {
+  const changed = { operation: 'stock.get', awaiting: 'platform_adoption' as const };
+  const dropped = { ...changed, operation: 'orders.cancel', droppedByGate: true as const };
+
+  it('classifies a gate’s refused Operations', () => {
+    expect(refusalKind([])).toBe('changed');
+    expect(refusalKind([changed])).toBe('changed');
+    expect(refusalKind([dropped])).toBe('dropped');
+    expect(refusalKind([changed, dropped])).toBe('mixed');
+  });
+
+  it('the readiness strip’s cause line names a dropped gate as no longer providing them', () => {
+    const kinds = refusalKindsOf([
+      { gateId: 'g-dropped', definitionMismatch: [dropped] },
+      { gateId: 'g-mixed', definitionMismatch: [changed, dropped] },
+      { gateId: 'g-changed', definitionMismatch: [changed] },
+    ]);
+    const names = new Map([
+      ['g-dropped', '库存'],
+      ['g-mixed', '订单'],
+      ['g-changed', '工单'],
+    ]);
+    const cause = (gateId: string) =>
+      missingCauseText({ code: 'definition_mismatch', gateId }, names, t, kinds);
+    expect(cause('g-dropped')).toBe(
+      '门「库存」已不再提供其中一些已发布的操作，对它们的调用正被拒绝。',
+    );
+    expect(cause('g-mixed')).toContain('已不再提供其中一些已发布的操作，另一些运行的定义');
+    expect(cause('g-changed')).toBe(
+      '门「工单」运行的定义和已发布的不一样，对其中的操作调用正被拒绝。',
+    );
   });
 });

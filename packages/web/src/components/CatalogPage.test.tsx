@@ -1610,6 +1610,55 @@ describe('CatalogPage', () => {
     await waitFor(() =>
       expect(http.calls.find((c) => c.name === 'publish_skill')?.params).toEqual({
         skillId: 'sk-9',
+        version: 1,
+      }),
+    );
+  });
+
+  it('legacy 300: Publish names the Skill version shown; a newer one since is not published — the toast says so and the list reloads', async () => {
+    let listed = 0;
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_skills: () => {
+        listed += 1;
+        return {
+          items: [{ id: 'sk-9', version: 2, status: 'draft', name: 'rotate', description: 'd' }],
+        };
+      },
+      get_skill: () => null,
+      publish_skill: () =>
+        Promise.reject(
+          new HttpError('capability_error', 'is at v3 now, not the v2', 'version_changed'),
+        ),
+    });
+    renderPage(http, 'skills');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    fireEvent.click(within(detail).getByRole('button', { name: /^发布$/ }));
+    const toast = await screen.findByTestId('toast');
+    expect(toast.textContent).toContain('在你查看之后它有了新版本，本次没有写入任何内容');
+    expect(http.calls.find((c) => c.name === 'publish_skill')?.params).toEqual({
+      skillId: 'sk-9',
+      version: 2,
+    });
+    await waitFor(() => expect(listed).toBe(2));
+  });
+
+  it('legacy 300: Publish names the Procedure version shown', async () => {
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_procedures: () => ({
+        items: [{ id: 'pr-9', version: 4, status: 'draft', name: 'deploy', description: 'd' }],
+      }),
+      get_procedure: () => null,
+      publish_procedure: () => ({ id: 'pr-9', version: 4, status: 'published' }),
+    });
+    renderPage(http, 'procedures');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    fireEvent.click(within(detail).getByRole('button', { name: /^发布$/ }));
+    await waitFor(() =>
+      expect(http.calls.find((c) => c.name === 'publish_procedure')?.params).toEqual({
+        procedureId: 'pr-9',
+        version: 4,
       }),
     );
   });
@@ -1896,7 +1945,14 @@ describe('CatalogPage — credential confirmation on Publish', () => {
     const seen: unknown[] = [];
     const http = scriptedHttp({
       list_operations: () => ({
-        items: [{ gatekeeperId: 'gk-1', name: 'docker.restart', status: 'draft' }],
+        items: [
+          {
+            gatekeeperId: 'gk-1',
+            name: 'docker.restart',
+            status: 'draft',
+            draftDigest: 'sha256:d1',
+          },
+        ],
       }),
       get_operation_stats: () => ({ items: [] }),
       publish_operation: (params) => {
@@ -1919,8 +1975,13 @@ describe('CatalogPage — credential confirmation on Publish', () => {
     fireEvent.click(publish);
     await waitFor(() => expect(seen).toHaveLength(2));
     expect(seen).toEqual([
-      { gatekeeperId: 'gk-1', name: 'docker.restart' },
-      { gatekeeperId: 'gk-1', name: 'docker.restart', credentialsReviewed: true },
+      { gatekeeperId: 'gk-1', name: 'docker.restart', draftDigest: 'sha256:d1' },
+      {
+        gatekeeperId: 'gk-1',
+        name: 'docker.restart',
+        credentialsReviewed: true,
+        draftDigest: 'sha256:d1',
+      },
     ]);
   });
 
@@ -1953,7 +2014,10 @@ describe('CatalogPage — credential confirmation on Publish', () => {
     fireEvent.click(within(detail).getByTestId('credential-review-confirm'));
     fireEvent.click(within(detail).getByRole('button', { name: /^发布$/ }));
     await waitFor(() =>
-      expect(seen).toEqual([{ skillId: 'sk-9' }, { skillId: 'sk-9', credentialsReviewed: true }]),
+      expect(seen).toEqual([
+        { skillId: 'sk-9', version: 2 },
+        { skillId: 'sk-9', version: 2, credentialsReviewed: true },
+      ]),
     );
   });
 

@@ -42,6 +42,7 @@ import {
   gateReasonHref,
   gateReasonLink,
   gateReasonText,
+  refusalKind,
 } from '../readiness/readiness-copy.js';
 import { useExecutionReadiness } from '../readiness/useExecutionReadiness.js';
 import { Button } from '../ui/Button.js';
@@ -1667,7 +1668,9 @@ function AgentUsabilityResult({
     outcome = (
       <Notice tone="warn" testId="launcher-agent-usability-blocked">
         <div className="stack-s">
-          <span>{gateReasonText(gateRow.reason, t)}</span>
+          <span>
+            {gateReasonText(gateRow.reason, t, 'me', refusalKind(gateRow.definitionMismatch))}
+          </span>
           {gateRow.reason !== undefined ? (
             <FixHint
               href={gateReasonHref(gateRow.reason, reader)}

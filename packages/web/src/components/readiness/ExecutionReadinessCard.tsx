@@ -20,6 +20,8 @@ import {
   missingKey,
   missingLinkHref,
   missingLinkLabel,
+  refusalKind,
+  refusalKindsOf,
 } from './readiness-copy.js';
 import { useExecutionReadiness } from './useExecutionReadiness.js';
 
@@ -133,6 +135,7 @@ function ExecutionReadinessStrip({
   const t = useT();
   const [expanded, setExpanded] = useState(false);
   const gateNames = new Map(data.gates.map((gate) => [gate.gateId, gate.name]));
+  const refusalKinds = refusalKindsOf(data.gates);
   const displayNames = gateDisplayNames(data.gates);
   const workerNames = new Map(
     data.workers.map((worker) => [worker.definitionId, worker.name ?? worker.definitionId]),
@@ -152,7 +155,7 @@ function ExecutionReadinessStrip({
         >
           {first ? (
             <li className="row-wrap" data-testid="execution-readiness-missing-item">
-              <span>{missingCauseText(first, gateNames, t)}</span>
+              <span>{missingCauseText(first, gateNames, t, refusalKinds)}</span>
               <FixHint
                 href={missingLinkHref(first, reader)}
                 label={missingLinkLabel(first, t)}
@@ -267,7 +270,7 @@ function ExecutionReadinessStrip({
                 <span className="chip chip-warn chip-s">
                   {executionReadinessMissingCodeLabel(item.code, t)}
                 </span>
-                <span>{missingCauseText(item, gateNames, t)}</span>
+                <span>{missingCauseText(item, gateNames, t, refusalKinds)}</span>
                 <FixHint
                   href={missingLinkHref(item, reader)}
                   label={missingLinkLabel(item, t)}
@@ -330,7 +333,7 @@ function GateRow({
       ) : (
         <>
           <span className="chip chip-warn chip-s">{t('用不了', 'Not usable')}</span>
-          <span>{gateReasonText(gate.reason, t)}</span>
+          <span>{gateReasonText(gate.reason, t, 'me', refusalKind(gate.definitionMismatch))}</span>
           {gate.reason !== undefined ? (
             <FixHint
               href={gateReasonHref(gate.reason, reader)}

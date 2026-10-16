@@ -545,6 +545,66 @@ describe('SystemsPage', () => {
     expect(within(drawer).queryByTestId('system-definition-mismatch-revision')).toBeNull();
   });
 
+  it('legacy 301: a gate that dropped every published Operation reads 「门已不再提供」 on the chip and in 「你的可达性」, not 「定义不一样」', async () => {
+    const http = scriptedHttp({
+      execution_readiness: () =>
+        readiness({
+          principalId: 'p-self',
+          gates: [
+            gate({
+              name: '库存',
+              status: 'unreachable',
+              reason: 'definition_mismatch',
+              definitionMismatch: [
+                { operation: 'stock.get', awaiting: 'platform_adoption', droppedByGate: true },
+                { operation: 'orders.cancel', awaiting: 'platform_adoption', droppedByGate: true },
+              ],
+            }),
+          ],
+        }),
+      list_available_gate_instances: () => ({ items: [LINKED_STOCK_INSTANCE] }),
+    });
+    renderPage(http, true);
+    const card = (await screen.findAllByTestId('gatekeeper-card'))[0] as HTMLElement;
+    const chip = within(card).getByTestId('gatekeeper-reachability');
+    expect(chip.textContent).toBe('用不了');
+    expect(chip.getAttribute('title')).toBe(
+      '门已不再提供这个系统已发布的操作，对它们的调用正被拒绝。',
+    );
+
+    fireEvent.click(within(card).getByTestId('system-access-summary'));
+    const drawer = await screen.findByTestId('system-access-drawer');
+    const detail = within(drawer).getByTestId('system-access-my-reachability');
+    expect(detail.textContent).toContain('门已不再提供这个系统已发布的操作');
+    expect(detail.textContent).not.toContain('定义和已发布的不一样');
+  });
+
+  it('legacy 301: some dropped and some redefined — the chip says both', async () => {
+    const http = scriptedHttp({
+      execution_readiness: () =>
+        readiness({
+          principalId: 'p-self',
+          gates: [
+            gate({
+              name: '库存',
+              status: 'unreachable',
+              reason: 'definition_mismatch',
+              definitionMismatch: [
+                { operation: 'stock.get', awaiting: 'platform_adoption' },
+                { operation: 'orders.cancel', awaiting: 'platform_adoption', droppedByGate: true },
+              ],
+            }),
+          ],
+        }),
+      list_available_gate_instances: () => ({ items: [LINKED_STOCK_INSTANCE] }),
+    });
+    renderPage(http, true);
+    const card = (await screen.findAllByTestId('gatekeeper-card'))[0] as HTMLElement;
+    expect(within(card).getByTestId('gatekeeper-reachability').getAttribute('title')).toBe(
+      '门已不再提供其中一些已发布的操作，其余运行的定义和已发布的不一样，对它们的调用正被拒绝。',
+    );
+  });
+
   it('UX acceptance of #579 (legacy 297): an Operation the gate dropped is said apart — adopting removes it, it never reads as coming back', async () => {
     const http = scriptedHttp({
       execution_readiness: () =>

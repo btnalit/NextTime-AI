@@ -755,10 +755,40 @@ describe.runIf(DATABASE_URL !== undefined)(
         method: 'POST',
         url: '/api/cap/publish_procedure',
         headers: { authorization: `Bearer ${ownerApiKey}` },
-        payload: { procedureId },
+        payload: { procedureId, version: 1 },
       });
       expect(published.statusCode).toBe(400);
       expect(published.json().error.code).toBe('invalid_step_reference');
+    });
+
+    it('legacy 300: publish_skill names the version reviewed — another one is 409 version_changed, none is 400', async () => {
+      const app = createServer({ pool });
+      const proposed = await app.inject({
+        method: 'POST',
+        url: '/api/cap/propose_skill',
+        headers: { authorization: `Bearer ${ownerApiKey}` },
+        payload: {
+          skill: { name: 'bound-skill', description: 'publish binds the version', markdown: 'Hi.' },
+        },
+      });
+      expect(proposed.statusCode).toBe(200);
+      const skillId = proposed.json().result.id as string;
+      const publish = (payload: Record<string, unknown>) =>
+        app.inject({
+          method: 'POST',
+          url: '/api/cap/publish_skill',
+          headers: { authorization: `Bearer ${ownerApiKey}` },
+          payload,
+        });
+
+      const unbound = await publish({ skillId });
+      expect(unbound.statusCode).toBe(400);
+      const other = await publish({ skillId, version: 2 });
+      expect(other.statusCode).toBe(409);
+      expect(other.json().error.code).toBe('version_changed');
+      const bound = await publish({ skillId, version: 1 });
+      expect(bound.statusCode).toBe(200);
+      expect(bound.json().result).toMatchObject({ status: 'published', version: 1 });
     });
 
     it('assert_fact writes a real Fact end-to-end (S3.3)', async () => {

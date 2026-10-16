@@ -11,7 +11,12 @@ import {
   reviewFieldNames,
   usePublishCredentialReview,
 } from '../lib/credential-review.js';
-import { errorToastText, isDraftChangedError, isForbiddenError } from '../lib/errors.js';
+import {
+  errorToastText,
+  isDraftChangedError,
+  isForbiddenError,
+  isVersionChangedError,
+} from '../lib/errors.js';
 import { formatRelative, prettyJson, shortId } from '../lib/format.js';
 import {
   type CapabilityNameRow,
@@ -1477,6 +1482,8 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       await http.call(action, {
         skillId: row.id,
         ...(action === 'publish_skill' ? credentialReview.params() : {}),
+        // Legacy 300: the version this detail shows, not a newer one proposed since.
+        ...(action === 'publish_skill' ? { version: row.version } : {}),
       });
       toast.push({
         tone: 'ok',
@@ -1487,6 +1494,8 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       // The kernel's credential question — answered next to Publish, not as a failure toast.
       if (action === 'publish_skill' && credentialReview.capture(err)) return;
       if (isForbiddenError(err)) permissions.markDenied(action);
+      // The toast says it was reloaded: show what is there now.
+      if (isVersionChangedError(err)) refresh();
       // C14: carry the kernel's own text — the generic title alone dropped the actual reason.
       toast.push({
         tone: 'danger',
@@ -1830,6 +1839,8 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       await http.call(action, {
         procedureId: row.id,
         ...(action === 'publish_procedure' ? credentialReview.params() : {}),
+        // Legacy 300: the version this detail shows, not a newer one proposed since.
+        ...(action === 'publish_procedure' ? { version: row.version } : {}),
       });
       toast.push({
         tone: 'ok',
@@ -1840,6 +1851,8 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       // The kernel's credential question — answered next to Publish, not as a failure toast.
       if (action === 'publish_procedure' && credentialReview.capture(err)) return;
       if (isForbiddenError(err)) permissions.markDenied(action);
+      // The toast says it was reloaded: show what is there now.
+      if (isVersionChangedError(err)) refresh();
       // C14: carry the kernel's own text — the generic title alone dropped the actual reason.
       toast.push({
         tone: 'danger',

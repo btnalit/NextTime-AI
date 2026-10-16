@@ -871,9 +871,10 @@ export interface PublishOperationInput {
    *  internal callers (`publishManifest`, `enable_gate_instance`, the CLI). Operation drafts are
    *  reviewed by builders and owners (D-26), so a refusal is a 403, never a not-found. */
   readonly actor?: PublishActor;
-  /** Review #493 on #583: the `operationDraftDigest` of the draft the caller reviewed, when it
-   *  names one (`publish_operation`'s optional `draftDigest`). A draft revised in place since
-   *  refuses `OperationDraftChangedError`. Internal callers publish what is there and omit it. */
+  /** Review #493 on #583: the `operationDraftDigest` of the draft the caller reviewed
+   *  (`publish_operation`'s `draftDigest`, required on the wire since legacy 300). A draft revised
+   *  in place since refuses `OperationDraftChangedError`. Internal callers publish what is there and
+   *  omit it. */
   readonly draftDigest?: string;
 }
 

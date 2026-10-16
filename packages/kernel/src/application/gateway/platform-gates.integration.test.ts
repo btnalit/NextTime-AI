@@ -2575,7 +2575,13 @@ describe.runIf(DATABASE_URL !== undefined)(
             ?.definitionChange,
         ).toBeUndefined();
 
-        await callAsOwner('publish_operation', { gatekeeperId, name: OBSERVE_OP.name });
+        await callAsOwner('publish_operation', {
+          gatekeeperId,
+          name: OBSERVE_OP.name,
+          draftDigest: listed.items.find(
+            (op) => op.name === OBSERVE_OP.name && op.status === 'draft',
+          )?.draftDigest,
+        });
         expect(await mismatchOf()).toEqual([]);
         const published = await withWorkspace(
           pool,

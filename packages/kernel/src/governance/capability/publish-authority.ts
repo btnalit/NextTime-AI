@@ -38,6 +38,10 @@ export interface PublishActor {
    *  governance/redaction/credential-review.ts) — required by `publish_*` when the draft carries
    *  any, ignored otherwise. */
   readonly credentialsReviewed?: boolean;
+  /** Legacy 300: the version the caller reviewed — `publish_skill` / `publish_procedure` publish
+   *  the family's latest version, and refuse `ReviewedVersionChangedError` when that is another
+   *  one. Internal callers omit the actor, and so the check. */
+  readonly reviewedVersion?: number;
 }
 
 /**
@@ -94,5 +98,42 @@ export class NotProposerError extends Error {
       `${action}: ${subject} was proposed by another principal — only its proposer or the workspace owner may ${verb} it`,
     );
     this.name = 'NotProposerError';
+  }
+}
+
+/**
+ * Legacy 300 (same class as review #493 on #583's `draft_changed`): a publish names the version the
+ * person reviewed, and the version it would publish now is a different one — a newer draft under
+ * the same Skill / Procedure family, a newer indexed module version. Raised after the row (or the
+ * module's install lock) is held, before anything is written; the caller reloads and decides on
+ * what is there now. Rows are immutable per version (only `status` changes), so the version alone
+ * binds the content reviewed; an Operation draft is revised in place and binds by `draftDigest`
+ * instead (`OperationDraftChangedError`).
+ */
+export class ReviewedVersionChangedError extends Error {
+  readonly code = 'version_changed' as const;
+  readonly reviewedVersion: number;
+  readonly currentVersion: number;
+
+  /** `action` is the capability name; `subject` names the family (`Skill <id>`, `module <name>`). */
+  constructor(action: string, subject: string, reviewedVersion: number, currentVersion: number) {
+    super(
+      `${action}: ${subject} is at v${currentVersion} now, not the v${reviewedVersion} that was reviewed — nothing was written; reload it and look again`,
+    );
+    this.name = 'ReviewedVersionChangedError';
+    this.reviewedVersion = reviewedVersion;
+    this.currentVersion = currentVersion;
+  }
+}
+
+/** Refuses with `ReviewedVersionChangedError` unless `reviewed` is the version about to change. */
+export function assertReviewedVersion(
+  action: string,
+  subject: string,
+  reviewed: number | undefined,
+  current: number,
+): void {
+  if (reviewed !== undefined && reviewed !== current) {
+    throw new ReviewedVersionChangedError(action, subject, reviewed, current);
   }
 }

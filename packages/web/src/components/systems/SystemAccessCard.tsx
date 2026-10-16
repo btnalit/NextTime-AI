@@ -39,6 +39,7 @@ import {
   gateReasonHref,
   gateReasonLink,
   gateReasonText,
+  refusalKind,
 } from '../readiness/readiness-copy.js';
 import { announceReadinessChange } from '../readiness/useExecutionReadiness.js';
 
@@ -172,7 +173,10 @@ function isSelfPageHref(href: string | undefined): boolean {
  * 可达性" section) so it is available on demand without crowding the row. */
 function MyReachability({ gate }: { readonly gate: ExecutionReadinessGateWire }) {
   const t = useT();
-  const reason = gate.status === 'unreachable' ? gateReasonText(gate.reason, t) : undefined;
+  const reason =
+    gate.status === 'unreachable'
+      ? gateReasonText(gate.reason, t, 'me', refusalKind(gate.definitionMismatch))
+      : undefined;
   return (
     <span
       className={`chip chip-s ${GATE_STATUS_TONE[gate.status]}`}
@@ -245,7 +249,9 @@ function MyReachabilityDetail({
       </span>
       {gate.status === 'unreachable' ? (
         <>
-          <span className="text-3 text-small">{gateReasonText(gate.reason, t)}</span>
+          <span className="text-3 text-small">
+            {gateReasonText(gate.reason, t, 'me', refusalKind(gate.definitionMismatch))}
+          </span>
           {gate.reason !== undefined ? (
             <FixHint
               href={isSelfPageHref(href) ? undefined : href}
@@ -684,7 +690,14 @@ function GranteeRow({
       ) : (
         <>
           <span className="chip chip-warn chip-s">{t('用不了', 'Not usable')}</span>
-          <span className="text-3 text-small">{gateReasonText(gateStatus.reason, t, about)}</span>
+          <span className="text-3 text-small">
+            {gateReasonText(
+              gateStatus.reason,
+              t,
+              about,
+              refusalKind(gateStatus.definitionMismatch),
+            )}
+          </span>
           {gateStatus.reason !== undefined ? (
             <FixHint
               href={

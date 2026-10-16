@@ -92,9 +92,11 @@ export const EXECUTION_READINESS_MISSING_CODE_LABELS: Readonly<
   excluded_by_profile: { zh: '在我的智能体里被取消', en: 'Unticked on My Agent' },
   excluded_by_policy: { zh: '工作区策略未包含', en: 'Left out by workspace policy' },
   disabled_by_platform: { zh: '被平台停用', en: 'Disabled by the platform' },
+  // Legacy 301: also a gate that no longer provides them (`droppedByGate`) — the cause line under
+  // it (`missingCauseText`) says which.
   definition_mismatch: {
-    zh: '门拒绝调用（定义不一致）',
-    en: 'Refused by the gate (definition changed)',
+    zh: '门拒绝调用',
+    en: 'Refused by the gate',
   },
 };
 

@@ -143,7 +143,7 @@ export const publishOperationHandler: CapabilityHandler = async (
     gatekeeperId: string;
     name: string;
     credentialsReviewed?: boolean;
-    draftDigest?: string;
+    draftDigest: string;
   };
   // D-24: the draft's proposer or the owner (checked on the row being published).
   const actor = { ...publishActorOf('publish_operation', ctx), credentialsReviewed };
@@ -151,7 +151,7 @@ export const publishOperationHandler: CapabilityHandler = async (
     gatekeeperId,
     name,
     actor,
-    ...(draftDigest !== undefined ? { draftDigest } : {}),
+    draftDigest,
   });
 
   const activity = await startActivity(client, workspaceId, {

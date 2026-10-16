@@ -163,6 +163,13 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
     zh: '这份草稿在你查看之后被修改过，本次没有写入任何内容。请先看它现在的内容，再决定是否操作',
     en: 'This draft was changed after you looked at it — nothing was written. Look at what it says now before acting on it',
   },
+  // Legacy 300: a publish / install named the version the person looked at, and what it would
+  // write now is a newer one (another draft under the same Skill or Procedure, a newer module
+  // index). Nothing was written; the page reloads it.
+  version_changed: {
+    zh: '在你查看之后它有了新版本，本次没有写入任何内容。请先看最新版本，再决定是否操作',
+    en: 'A newer version appeared after you looked at it — nothing was written. Look at the latest version before acting on it',
+  },
   no_pending_manifest: {
     zh: '这个门实例没有待确认的公告清单',
     en: 'This gate instance has no announced manifest awaiting confirmation',

@@ -8787,10 +8787,15 @@
         "name": {
           "minLength": 1,
           "type": "string"
+        },
+        "version": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
         }
       },
       "required": [
-        "name"
+        "name",
+        "version"
       ],
       "type": "object"
     },
@@ -17264,7 +17269,8 @@
       },
       "required": [
         "gatekeeperId",
-        "name"
+        "name",
+        "draftDigest"
       ],
       "type": "object"
     },
@@ -17550,10 +17556,15 @@
         "procedureId": {
           "minLength": 1,
           "type": "string"
+        },
+        "version": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
         }
       },
       "required": [
-        "procedureId"
+        "procedureId",
+        "version"
       ],
       "type": "object"
     },
@@ -17602,10 +17613,15 @@
         "skillId": {
           "minLength": 1,
           "type": "string"
+        },
+        "version": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
         }
       },
       "required": [
-        "skillId"
+        "skillId",
+        "version"
       ],
       "type": "object"
     },
@@ -24854,10 +24870,15 @@
         "name": {
           "minLength": 1,
           "type": "string"
+        },
+        "version": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
         }
       },
       "required": [
-        "name"
+        "name",
+        "version"
       ],
       "type": "object"
     },

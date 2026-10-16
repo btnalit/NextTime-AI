@@ -6,7 +6,11 @@ import {
   transition,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
-import { type PublishActor, assertPublishAuthority } from '../../governance/capability/index.js';
+import {
+  type PublishActor,
+  assertPublishAuthority,
+  assertReviewedVersion,
+} from '../../governance/capability/index.js';
 import { getPublishedOperation } from '../../governance/gatekeepers/index.js';
 import { assertDraftCredentialsReviewed } from '../../governance/redaction/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
@@ -311,6 +315,13 @@ export async function publishProcedure(
 ): Promise<ProcedureRow> {
   const row = await getLatestForUpdate(client, workspaceId, procedureId);
   requireProcedureAuthority('publish_procedure', actor, row);
+  // Legacy 300: publish what the person reviewed — a newer version under this id since refuses.
+  assertReviewedVersion(
+    'publish_procedure',
+    `Procedure ${row.id}`,
+    actor?.reviewedVersion,
+    row.version,
+  );
   transition(PUBLISHABLE_TRANSITIONS, row.status, 'publish');
   await assertFamilyPublishAuthority(client, workspaceId, {
     table: 'procedures',

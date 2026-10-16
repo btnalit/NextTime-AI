@@ -57,11 +57,16 @@ const proposeSkillHandler: CapabilityHandler = async (client, workspaceId, param
 };
 
 const publishSkillHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
-  const { skillId, credentialsReviewed } = params as {
+  const { skillId, version, credentialsReviewed } = params as {
     skillId: string;
+    version: number;
     credentialsReviewed?: boolean;
   };
-  const actor = { ...publishActorOf('publish_skill', ctx), credentialsReviewed };
+  const actor = {
+    ...publishActorOf('publish_skill', ctx),
+    credentialsReviewed,
+    reviewedVersion: version,
+  };
   const record = await publishSkill(client, workspaceId, actor.principalId, skillId, actor);
   return {
     result: { id: record.id, version: record.version, status: record.status },
@@ -153,11 +158,16 @@ const proposeProcedureHandler: CapabilityHandler = async (client, workspaceId, p
 };
 
 const publishProcedureHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
-  const { procedureId, credentialsReviewed } = params as {
+  const { procedureId, version, credentialsReviewed } = params as {
     procedureId: string;
+    version: number;
     credentialsReviewed?: boolean;
   };
-  const actor = { ...publishActorOf('publish_procedure', ctx), credentialsReviewed };
+  const actor = {
+    ...publishActorOf('publish_procedure', ctx),
+    credentialsReviewed,
+    reviewedVersion: version,
+  };
   const record = await publishProcedure(client, workspaceId, actor.principalId, procedureId, actor);
   return {
     result: { id: record.id, version: record.version, status: record.status },

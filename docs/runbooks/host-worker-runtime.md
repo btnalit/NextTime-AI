@@ -752,12 +752,14 @@ docker compose exec -T kernel node -e "
 fetch('http://localhost:8080/api/cap/publish_skill', {
   method: 'POST',
   headers: {'content-type': 'application/json', authorization: 'Bearer ${OWNER_KEY}'},
-  body: JSON.stringify({ skillId: '${SKILL_ID}' }),
+  body: JSON.stringify({ skillId: '${SKILL_ID}', version: 1 }),
 }).then(r => r.json()).then(b => console.log(JSON.stringify(b)))
 "
 ```
 
-期望：第二条调用返回 `{"ok":true, "result":{"status":"published", ...}}`。
+期望：第二条调用返回 `{"ok":true, "result":{"status":"published", ...}}`。`version` 是所审的版本
+（新提议的 Skill 总是 v1）：同一 Skill 下之后又有了更新的版本时，发布返回 409 `version_changed`，
+什么都不发布（遗留 300）。
 
 ### 14.2 发布一个引用该 Skill 的 WorkerDefinition
 

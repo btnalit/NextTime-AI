@@ -46,7 +46,7 @@ async function pickObjectType(name: string) {
 }
 
 describe('SkillEditor (S6-A A2)', () => {
-  it('submits propose_skill{skill} in the ProposeSkillContentSchema shape, then publishes via publish_skill{skillId}', async () => {
+  it('submits propose_skill{skill} in the ProposeSkillContentSchema shape, then publishes via publish_skill{skillId, version}', async () => {
     const { caller, calls } = http({
       propose_skill: () => ({ id: 'sk-1', version: 1, status: 'draft', name: 'restart-web' }),
       publish_skill: () => ({ id: 'sk-1', version: 1, status: 'published' }),
@@ -81,7 +81,10 @@ describe('SkillEditor (S6-A A2)', () => {
     expect(screen.getByTestId('draft-private-notice').textContent).toContain('只有你');
     fireEvent.click(screen.getByTestId('draft-publish'));
     await waitFor(() =>
-      expect(calls[1]).toEqual({ name: 'publish_skill', params: { skillId: 'sk-1' } }),
+      expect(calls[1]).toEqual({
+        name: 'publish_skill',
+        params: { skillId: 'sk-1', version: 1 },
+      }),
     );
     await waitFor(() => expect(screen.queryByTestId('draft-publish')).toBeNull());
   });
