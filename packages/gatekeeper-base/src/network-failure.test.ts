@@ -132,7 +132,6 @@ describe('networkFailureDelivery (Node error shapes)', () => {
     ['a certificate the handshake refused', sysError('DEPTH_ZERO_SELF_SIGNED_CERT')],
     ['an expired certificate', sysError('CERT_HAS_EXPIRED')],
     ['a host name the certificate does not cover', sysError('ERR_TLS_CERT_ALTNAME_INVALID')],
-    ['a peer that does not speak TLS', sysError('ERR_SSL_WRONG_VERSION_NUMBER')],
     ['a handshake that timed out', sysError('ERR_TLS_HANDSHAKE_TIMEOUT')],
     ['no shared protocol version', sysError('ERR_SSL_TLSV1_ALERT_PROTOCOL_VERSION')],
     ["the server's handshake failure", sysError('ERR_SSL_SSLV3_ALERT_HANDSHAKE_FAILURE')],
@@ -167,7 +166,10 @@ describe('networkFailureDelivery (Node error shapes)', () => {
     ["the peer's bad record MAC alert", sysError('ERR_SSL_SSLV3_ALERT_BAD_RECORD_MAC')],
     ['a renegotiation attack', sysError('ERR_TLS_SESSION_ATTACK')],
     ['a refused renegotiation', sysError('ERR_TLS_RENEGOTIATION_DISABLED')],
+    // The record layer's checks: raised by a peer that does not speak TLS, and by plain text
+    // written into an established session. Which one a given OpenSSL raises differs by version.
     ['a record too long to be TLS', sysError('ERR_SSL_PACKET_LENGTH_TOO_LONG')],
+    ['a record that is not TLS', sysError('ERR_SSL_WRONG_VERSION_NUMBER')],
     // #501 P2-2: undici's answer-side errors.
     ['a malformed answer', sysError('HPE_INVALID_CONSTANT')],
     ['an answer that does not decompress', sysError('Z_DATA_ERROR')],
@@ -285,6 +287,8 @@ describe.skipIf(certificate === undefined)('networkFailureDelivery (real TLS han
     expect(networkFailureDelivery(err)).toBe('not_sent');
   });
 
+  // The code differs by OpenSSL version (`ERR_SSL_PACKET_LENGTH_TOO_LONG` with 3.5,
+  // `ERR_SSL_WRONG_VERSION_NUMBER` with others): neither is handshake-only.
   it('TLS spoken to a plain HTTP port reads as maybe delivered — its code is not handshake-only', async () => {
     const err = await fetchError(`https://127.0.0.1:${plainPort}/gate/apply`);
     expect(networkFailureCode(err)).toMatch(/^ERR_SSL_/);

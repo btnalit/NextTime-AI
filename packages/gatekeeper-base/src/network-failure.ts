@@ -70,13 +70,19 @@ const CERT_VERIFY_CODES = new Set([
   'ERR_TLS_CERT_ALTNAME_INVALID',
 ]);
 
-/** TLS failures only a handshake raises (legacy 287 review: an allow-list, never a prefix): the
- *  peer is not speaking TLS or no protocol version is shared, the handshake timed out, or the
- *  server refused it — in TLS 1.3 the server's alert can arrive after the client wrote its first
- *  bytes, but a server that failed the handshake never hands them to its application. */
+/** TLS failures only a handshake raises (legacy 287 review: an allow-list, never a prefix): no
+ *  protocol version is shared, the handshake timed out, or the server refused it — in TLS 1.3 the
+ *  server's alert can arrive after the client wrote its first bytes, but a server that failed the
+ *  handshake never hands them to its application.
+ *
+ *  Not here: the record layer's own checks (`ERR_SSL_WRONG_VERSION_NUMBER`,
+ *  `ERR_SSL_PACKET_LENGTH_TOO_LONG`, …). A peer that does not speak TLS raises them during the
+ *  handshake, but so does plain text written into an established session — a proxy's error page
+ *  after the request went out — and which of them a given OpenSSL raises for the same bytes
+ *  differs between versions. So they read as `maybe_delivered`: an https URL pointed at a plain
+ *  port is reported as outcome unknown, the conservative side. */
 const TLS_HANDSHAKE_CODES = new Set([
   'ERR_TLS_HANDSHAKE_TIMEOUT',
-  'ERR_SSL_WRONG_VERSION_NUMBER',
   'ERR_SSL_NO_PROTOCOLS_AVAILABLE',
   'ERR_SSL_UNSUPPORTED_PROTOCOL',
 ]);
