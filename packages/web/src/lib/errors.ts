@@ -488,6 +488,21 @@ const GATE_REASON_TONES: Readonly<Record<string, 'info' | 'warn' | 'danger'>> = 
  *  the call did (`lib/action-outcome`'s `actionTargetLabel`, "container.restart（name: media）")
  *  and `system` the system (gate) it went to, so an outcome-unknown note says what to check and
  *  where — one Operation name can exist on two systems. `null` for any other result. */
+/** UX acceptance of #612 (P2-4): `operation_definition_mismatch` said for the one kind of gate the
+ *  call went to, when the reader knows which (the chat's tool row reads whether the system is linked
+ *  to a platform gate instance) — the generic note above covers both for when it does not. */
+export function definitionMismatchStep(source: 'platform' | 'self', t: Translate): string {
+  return source === 'platform'
+    ? t(
+        '门现在运行的定义和这次调用批准的那一版不一样，调用没有执行。这是平台提供的系统：先由平台管理员在「集成」采用门的新清单；再在「系统与授权」打开它，点「与门公告对齐」，到能力目录发布打开的修订草稿，然后重新发起。如果门运行的新定义声明了只能由门自己设置的参数，修订发布不了，要等门的维护者去掉这些参数。',
+        'The gate now runs a different definition from the one this call was approved under, so nothing ran. This is a platform-provided system: first a platform admin adopts the gate’s new manifest under Integrations; then open the system in Systems, choose “Align with the gate’s announcement”, publish the revision draft it opens in the catalog, and request again. If the new definition the gate runs declares params only the gate sets, its revision cannot be published until the gate’s maintainer drops them.',
+      )
+    : t(
+        '门现在运行的定义和这次调用批准的那一版不一样，调用没有执行。这是工作区自己接入的门：打开这个系统，在「门的清单」点「重新读取门的清单」，到能力目录发布打开的修订草稿，然后重新发起。如果门运行的新定义声明了只能由门自己设置的参数，修订发布不了，要等门的维护者去掉这些参数。',
+        'The gate now runs a different definition from the one this call was approved under, so nothing ran. This is a gate the workspace connected itself: open the system, choose “Re-read the gate’s manifest” under its manifest section, publish the revision draft it opens in the catalog, and request again. If the new definition the gate runs declares params only the gate sets, its revision cannot be published until the gate’s maintainer drops them.',
+      );
+}
+
 export function gateReasonNextStep(
   text: string,
   t: Translate,

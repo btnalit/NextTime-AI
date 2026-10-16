@@ -2,6 +2,7 @@ import type {
   GateInstanceEnablePreviewOperationPresentWire,
   GateInstanceEnablePreviewOperationWire,
   GateOwnedParamWire,
+  OperationGovernanceFieldsWire,
   PreviewGateInstanceEnableResultWire,
   PreviewGatekeeperResyncResultWire,
   RefreshOperationGovernanceResultWire,
@@ -23,6 +24,7 @@ import {
   GovernanceChangeList,
   governanceChangeSummary,
   governanceConsequences,
+  governanceFieldsText,
   isLoosening,
 } from './GovernanceChange.js';
 
@@ -149,6 +151,10 @@ export function RefreshOperationGovernanceConfirm({
   // Legacy 214 (a gate the workspace connected itself): what the gate describes that the workspace
   // never had — the resync imports it as a draft — and published Operations it no longer describes.
   const [newNames, setNewNames] = useState<readonly string[]>([]);
+  // UX acceptance of #612 (P2-2): what each new Operation would be allowed to do once published.
+  const [newFields, setNewFields] = useState<ReadonlyMap<string, OperationGovernanceFieldsWire>>(
+    new Map(),
+  );
   const [importedNames, setImportedNames] = useState<ReadonlySet<string>>(new Set());
   const [notDescribed, setNotDescribed] = useState<readonly string[]>([]);
   // Review #493 on #612 (M1): the revisions this resync opened only to carry a loosening the gate
@@ -160,6 +166,10 @@ export function RefreshOperationGovernanceConfirm({
   // announcement (adopted by the platform) or what a self-connected gate describes it runs.
   const source = (platform: [string, string], own: [string, string]) =>
     self ? t(own[0], own[1]) : t(platform[0], platform[1]);
+  // UX acceptance of #612 (P2-1): one verb per flow — the button says 同步 for a self-connected
+  // gate, so nothing in its confirm or result says 对齐.
+  const verbZh = self ? '同步' : '对齐';
+  const verbEn = self ? 'Syncing' : 'Aligning';
   // Who has to act before a param only the gate sets goes away.
   const heldUntil = source(
     [
@@ -198,6 +208,10 @@ export function RefreshOperationGovernanceConfirm({
   const heldNames = (names: readonly string[]) => names.filter((name) => stillHeld.has(name));
   const freeNames = (names: readonly string[]) => names.filter((name) => !stillHeld.has(name));
   const heldText = (name: string) => gateOwnedParamsText(stillHeld.get(name) ?? [], t);
+  const newFieldsText = (name: string) => {
+    const fields = newFields.get(name);
+    return fields ? governanceFieldsText(fields, t) : '';
+  };
   // R-19 (D-17): the kernel's direction decides the danger case; the consequences say what it means.
   const consequences = items.flatMap((item) => governanceConsequences(item, t));
   const loosens = items.some((item) => isLoosening(item.direction));
@@ -271,6 +285,14 @@ export function RefreshOperationGovernanceConfirm({
           )
         : [];
       setNewNames(fresh.map((op) => op.name));
+      setNewFields(
+        new Map(
+          fresh.map((op) => [
+            op.name,
+            { mode: op.mode, blastRadius: op.blastRadius, autoApprovable: op.autoApprovable },
+          ]),
+        ),
+      );
       setNotDescribed(
         'notDescribed' in preview ? preview.notDescribed.filter((name) => inScope(name)) : [],
       );
@@ -439,12 +461,12 @@ export function RefreshOperationGovernanceConfirm({
             {lastResult.refreshed.length > 0 || lastResult.revisionDrafts.length === 0 ? (
               <span>
                 {t(
-                  `已对齐 ${lastResult.refreshed.length} 个 Operation${
+                  `已${verbZh} ${lastResult.refreshed.length} 个 Operation${
                     lastResult.unchanged.length > 0
                       ? `，${lastResult.unchanged.length} 个未变化`
                       : ''
                   }。`,
-                  `Aligned ${lastResult.refreshed.length} operation(s)${
+                  `${self ? 'Synced' : 'Aligned'} ${lastResult.refreshed.length} operation(s)${
                     lastResult.unchanged.length > 0
                       ? `, ${lastResult.unchanged.length} unchanged`
                       : ''
@@ -664,13 +686,13 @@ export function RefreshOperationGovernanceConfirm({
           // Legacy 214: what a self-connected gate now provides and the workspace never had.
           ...freeNames(newNames).map((name) =>
             t(
-              `${actionKindTagText(name)}：门新增的 Operation，导入为草稿`,
-              `${actionKindTagText(name)}: new on the gate — imported as a draft`,
+              `${actionKindTagText(name)}：门新增的 Operation（${newFieldsText(name)}），导入为草稿`,
+              `${actionKindTagText(name)}: new on the gate (${newFieldsText(name)}) — imported as a draft`,
             ),
           ),
           ...heldNames(newNames).map((name) =>
             t(
-              `${actionKindTagText(name)}：门新增的 Operation，导入为草稿；它声明了只能由门自己设置的参数 ${heldText(name)}，导入后发布不了`,
+              `${actionKindTagText(name)}：门新增的 Operation（${newFieldsText(name)}），导入为草稿；它声明了只能由门自己设置的参数 ${heldText(name)}，导入后发布不了`,
               `${actionKindTagText(name)}: new on the gate — imported as a draft; it declares params only the gate sets, ${heldText(name)}, so it cannot be published`,
             ),
           ),
@@ -714,24 +736,24 @@ export function RefreshOperationGovernanceConfirm({
         {heldRevisions.length > 0 ? (
           <Notice tone="warn" testId={testId ? `${testId}-redefined-held` : undefined}>
             {t(
-              `门运行的新定义声明了只能由门自己设置的参数：${heldRevisions.map((op) => actionKindTagText(op.name)).join('、')}。对齐为它们打开的修订发布不了；${heldUntil}，门会一直拒绝对它们的调用。`,
-              `The new definition the gate runs declares params only the gate sets: ${heldRevisions.map((op) => actionKindTagText(op.name)).join(', ')}. The revisions aligning opens for them cannot be published; the gate keeps refusing calls to them ${heldUntil}.`,
+              `门运行的新定义声明了只能由门自己设置的参数：${heldRevisions.map((op) => actionKindTagText(op.name)).join('、')}。${verbZh}为它们打开的修订发布不了；${heldUntil}，门会一直拒绝对它们的调用。`,
+              `The new definition the gate runs declares params only the gate sets: ${heldRevisions.map((op) => actionKindTagText(op.name)).join(', ')}. The revisions ${verbEn.toLowerCase()} opens for them cannot be published; the gate keeps refusing calls to them ${heldUntil}.`,
             )}
           </Notice>
         ) : null}
         {redefined.length > 0 ? (
           <Notice tone="warn" testId={testId ? `${testId}-redefined` : undefined}>
             {t(
-              `门运行的定义（绑定、参数或结果映射）已经变了：${redefined.join('、')}。对齐只会为它们打开修订草稿；在你到能力目录发布修订之前，门会拒绝对它们的调用。`,
-              `The definition the gate runs (binding, params or result mapping) has changed: ${redefined.join(', ')}. Aligning only opens a revision draft for each; the gate refuses calls to them until you publish it in the catalog.`,
+              `门运行的定义（绑定、参数或结果映射）已经变了：${redefined.join('、')}。${verbZh}只会为它们打开修订草稿；在你到能力目录发布修订之前，门会拒绝对它们的调用。`,
+              `The definition the gate runs (binding, params or result mapping) has changed: ${redefined.join(', ')}. ${verbEn} only opens a revision draft for each; the gate refuses calls to them until you publish it in the catalog.`,
             )}
           </Notice>
         ) : null}
         {freeNames(heldDrafts).length > 0 ? (
           <Notice testId={testId ? `${testId}-rewrites` : undefined}>
             {t(
-              `门的清单已经改了：${freeNames(heldDrafts).join('、')}。对齐会按新清单重写这些还没发布的草稿，不会发布它们；之后到能力目录核对再发布。`,
-              `The gate’s manifest has changed: ${freeNames(heldDrafts).join(', ')}. Aligning rewrites these unpublished drafts to it without publishing them; check and publish them in the catalog afterwards.`,
+              `门的清单已经改了：${freeNames(heldDrafts).join('、')}。${verbZh}会按新清单重写这些还没发布的草稿，不会发布它们；之后到能力目录核对再发布。`,
+              `The gate’s manifest has changed: ${freeNames(heldDrafts).join(', ')}. ${verbEn} rewrites these unpublished drafts to it without publishing them; check and publish them in the catalog afterwards.`,
             )}
           </Notice>
         ) : null}

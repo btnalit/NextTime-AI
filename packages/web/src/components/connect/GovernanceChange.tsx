@@ -72,6 +72,17 @@ export function governanceFieldChanges(
   return changes;
 }
 
+/** UX acceptance of #612 (P2-2): an Operation's governance as one short label —
+ *  「执行 · 高影响 · 需人工审批」 — for a line that introduces it rather than changes it (an Operation
+ *  new on the gate, imported as a draft). */
+export function governanceFieldsText(fields: OperationGovernanceFieldsWire, t: Translate): string {
+  return [
+    labelText(statusChipStyle('operationMode', fields.mode), t),
+    labelText(statusChipStyle('blastRadius', fields.blastRadius), t),
+    labelText(statusChipStyle('autoApprovable', String(fields.autoApprovable)), t),
+  ].join(' · ');
+}
+
 /** One impact line: `name: Mode A → B; Blast radius X → Y`. */
 export function governanceChangeSummary(item: GovernanceChangeItem, t: Translate): string {
   const changes = governanceFieldChanges(item.before, item.after, t);

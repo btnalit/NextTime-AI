@@ -323,8 +323,12 @@ function MediumTier({
             onInteractOutside={(event) => {
               if (busy) event.preventDefault();
             }}
+            // UX acceptance of #612 (MUST-1): a tall confirm (a long impact list, a loosening
+            // warning) never runs off the viewport where nothing can scroll it back — it is capped
+            // to the space Radix measured on its side and scrolls itself, title first.
             className={cn(
               'z-50 flex w-80 flex-col gap-3 rounded-m border border-border bg-surface-1 p-4 shadow-1',
+              'max-h-[var(--radix-popover-content-available-height)] overflow-y-auto overscroll-contain',
             )}
           >
             <div id={titleId} className="text-14 font-semibold text-text">
@@ -435,6 +439,8 @@ function IrreversibleTier({
             className={cn(
               'fixed left-1/2 top-1/2 z-50 flex w-full max-w-md -translate-x-1/2 -translate-y-1/2',
               'flex-col gap-3 rounded-l border border-border bg-surface-1 p-5 shadow-1',
+              // UX acceptance of #612 (MUST-1): centred, a tall one would overflow both edges.
+              'max-h-[calc(100dvh-2rem)] overflow-y-auto overscroll-contain',
             )}
           >
             <AlertDialogPrimitive.Title id={titleId} className="text-16 font-semibold text-text">

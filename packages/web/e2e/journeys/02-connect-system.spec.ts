@@ -186,6 +186,7 @@ test.describe('Journey ②: 接入一个新系统', () => {
     // gate already runs it, the manifest in effect still holds the old definition, so the preview
     // names EXECUTE_OP as awaiting adoption and nothing differs yet.
     let platformAdopted = false;
+    let tallConfirm = false;
     let refreshParams: { gatekeeperId?: string; operationNames?: string[] } | undefined;
     await page.route('**/api/cap/preview_gate_instance_enable', async (route) => {
       const response = await route.fetch();
@@ -197,7 +198,28 @@ test.describe('Journey ②: 接入一个新系统', () => {
         };
       };
       if (body.ok && body.result) {
-        if (platformAdopted) {
+        if (tallConfirm) {
+          // UX acceptance of #612 (MUST-1): enough loosened rows that the confirm is taller than
+          // the viewport — each adds an impact line and its consequences to the warning.
+          const loosened = Array.from({ length: 8 }, (_, index) => ({
+            name: `${EXECUTE_OP}.tall${index}`,
+            existing: {
+              mode: 'execute',
+              blastRadius: 'high',
+              autoApprovable: false,
+              status: 'published',
+            },
+            announced: { mode: 'observe', blastRadius: 'low', autoApprovable: true },
+            differs: true,
+            direction: 'loosened',
+            definitionDiffers: false,
+          }));
+          body.result.operationsAlreadyPresent = [
+            ...body.result.operationsAlreadyPresent,
+            ...loosened,
+          ];
+          body.result.awaitingPlatformAdoption = null;
+        } else if (platformAdopted) {
           body.result.operationsAlreadyPresent = body.result.operationsAlreadyPresent.map((op) =>
             op.name === EXECUTE_OP ? { ...op, definitionDiffers: true } : op,
           );
@@ -275,6 +297,35 @@ test.describe('Journey ②: 接入一个新系统', () => {
 
     await draftLink.click();
     await expect(page).toHaveURL(/#\/govern\/catalog\/operations\//, { timeout: 15_000 });
+
+    // --- UX acceptance of #612 (MUST-1): a confirm taller than the viewport stays readable ------
+    // Before, kit/confirm's popover ran off the top of the screen with nothing to scroll it back:
+    // the title, the impact list and the loosening warning were cut off, only the red button left.
+    // Now it is capped to the space it has and scrolls itself.
+    tallConfirm = true;
+    await goToByLabel(page, '系统与授权');
+    await page
+      .getByTestId('gatekeeper-card')
+      .filter({ hasText: GATE_DISPLAY_NAME })
+      .getByTestId('system-access-summary')
+      .click();
+    await page.getByTestId('system-access-drawer').getByTestId('system-governance-refresh').click();
+    const tall = page.getByTestId('system-governance-refresh-confirm');
+    await expect(tall).toBeVisible({ timeout: 15_000 });
+    const viewport = page.viewportSize();
+    const box = await tall.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box?.y ?? -1).toBeGreaterThanOrEqual(0);
+    expect((box?.y ?? 0) + (box?.height ?? 0)).toBeLessThanOrEqual(viewport?.height ?? 0);
+    await expect(tall.getByText('与门公告对齐', { exact: true })).toBeInViewport();
+    const warning = tall.getByTestId('system-governance-refresh-loosens');
+    await warning.scrollIntoViewIfNeeded();
+    await expect(warning).toBeInViewport();
+    await expect(warning).toContainText('改为只读调用');
+    await page.screenshot({ path: 'test-results/review/k-tall-confirm.png' });
+    await tall.getByTestId('confirm-cancel').click();
+    await expect(tall).toBeHidden();
+
     await page.unroute('**/api/cap/preview_gate_instance_enable');
     await page.unroute('**/api/cap/refresh_operation_governance');
   });

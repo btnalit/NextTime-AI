@@ -1027,7 +1027,13 @@ describe('RefreshOperationGovernanceConfirm', () => {
       const confirm = await screen.findByTestId('resync-gk-1-confirm');
       expect(confirm.textContent).toContain('按门的清单同步');
       expect(confirm.textContent).toContain('stock.get：门运行的定义变了，打开修订草稿');
-      expect(confirm.textContent).toContain('stock.count：门新增的 Operation，导入为草稿');
+      // UX acceptance of #612: what the new Operation may do is said before it is imported, and
+      // the flow says 同步 throughout, never 对齐.
+      expect(confirm.textContent).toContain(
+        'stock.count：门新增的 Operation（观察 · 低影响 · 可自动批准），导入为草稿',
+      );
+      expect(confirm.textContent).toContain('同步只会为它们打开修订草稿');
+      expect(confirm.textContent).not.toContain('对齐');
       expect(
         within(confirm).getByTestId('resync-gk-1-confirm-not-described').textContent,
       ).toContain('stock.gone');
@@ -1038,6 +1044,7 @@ describe('RefreshOperationGovernanceConfirm', () => {
       const drafts = await screen.findByTestId('resync-gk-1-drafts');
       expect(drafts.textContent).toContain('stock.get');
       expect(drafts.textContent).not.toContain('stock.count');
+      expect(screen.getByTestId('resync-gk-1-result').textContent).not.toContain('对齐');
       const imported = screen.getByTestId('resync-gk-1-imported');
       expect(imported.textContent).toContain('已把门新增的 1 个 Operation 导入为草稿');
       expect(within(imported).getByTestId('resync-gk-1-imported-link').getAttribute('href')).toBe(

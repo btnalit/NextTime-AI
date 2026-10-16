@@ -411,15 +411,18 @@ export function SystemAccessCard({
           {healthInfo.transportKind !== undefined ? (
             <span className="tag">{transportKindLabel(healthInfo.transportKind, t)}</span>
           ) : null}
+          {/* UX acceptance of #612 (P2-3): a gate the workspace connected itself is a first-class
+              system with its own resync, not something being phased out — never 「旧注册」. */}
           {!healthInfo.linked ? (
             <span
               className="tag"
+              data-testid="gatekeeper-self-connected-tag"
               title={t(
-                '旧注册：不经平台门实例目录接入',
-                'Legacy: registered outside the platform gate-instance catalog',
+                '工作区自己接入的门，不经平台门实例目录；门改了清单后用「重新读取门的清单」同步',
+                'Connected by this workspace, outside the platform gate-instance catalog — re-sync it with “Re-read the gate’s manifest” after the gate changes',
               )}
             >
-              {t('旧注册', 'Legacy')}
+              {t('自己接入', 'Self-connected')}
             </span>
           ) : null}
         </div>
