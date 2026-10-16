@@ -4103,7 +4103,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 
 **GO3 — 恢复、等待、取消与修订**（见 `global-roadmap-2026-10-16.md` §4）
 
-- **拆分**（2026-10-16，协调线程同意）：GO3a「停下来」（#626）与 GO3b「修订与恢复」，同一条 lane 顺序做，GO3b 合入后 GO3 才算完成。
+- **拆分**（2026-10-16，协调线程定）：GO3a「停下来」（#626）、GO3b「修订与 hold」、GO3c「核对与去重」三个 PR，同一条 lane 顺序做，GO3c 合入后 GO3 才算完成，GO4 排在 GO3c 之后。
 - GO3a 实现说明（#626，2026-10-16 合入，37ae610；goal 0003；遗留 330、357 关闭）：
   - **人的三个操作**（`application/goal/control.ts`，锁序 GoalRun → StepRun）：暂停、取消允许请求者或工作区 owner（同 `cancel_task` 的 D-21）；继续与继续时的重试只有请求者（propose → authorize → execute，§4.3）。`pauseGoalRun`：`running | verifying → paused(requested)`，只拦新尝试与重试，在跑的尝试与它已发起的请求照常（撤回不可逆，留给取消）。`resumeGoalRun`：`paused → running` 并立即到期，下一次推进复查预算与计划；`retrySteps` 走 StepRun 转移表「人的决定」那条边，可超尝试上限，但仍查 I-G4、I-G2，结果不明的步骤要先核对。`cancelGoalRun`：`running | paused | verifying → cancelling`，同一事务取消每个未结束的步骤、把各步骤下还没开始执行的请求改 `withdrawn`。已在目标状态的调用返回 `changed: false`；`proposed` 的目标走 `reject`（入口随 GO5）。
   - **撤回**（`governance/approval/step-actions.ts`）：`withdrawStepActions` 先在行锁下读状态再撤回（`for update`，`order by requested_at, id`，与排水器同序），排水器刚开始执行的行不会被选中，按 R-48 收尾；每次撤回写脱敏审计并发 `ActionRequestUpdated`，排水消费者见 `withdrawn` 立刻重新排水那个门。执行侧不读 StepRun，`startActionRequestExecution` 锁行后按转移表拒绝 `withdrawn`。
@@ -4115,7 +4115,8 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **GO2 审查小项**：A 段记录尝试结果前做 `inCurrentPlan` fencing（不在当前计划里就暂停 `needs_decision`）；解锁时 `skipped` 的依赖算完成。推进器与人的操作共用 `moves.ts` 的 `moveStepRun` / `moveGoalRun`，审计 `by` 分 `advancer` / `person`。
   - **测试稳定性**：goal / task 集成测试手动投递事件、不起 dispatcher，留下约 900 条未投递 outbox；`ws/server.test.ts` 与 `turn-terminal.integration.test.ts` 起的 dispatcher 要先排空它们，CI 上超时。两个文件在启动前把已有未投递行标为已投递（有数据库时测试文件串行跑）；遗留 123 里两条偶发超时的尾巴随之关闭。
   - **验证**：`advancer.integration.test.ts`「stopping a run」8 个（权限、继续时重试、S7 取消、`cleanup_pending` 与清理、执行中动作结束唤醒、I-G9 与在途事务串行、余量均分、fencing）；`goal-schema` 2 个；`request-action` 1 个；`invoke` 2 个（含 P2-1 端到端：目标 150000，子 Task 75000，总花费 ≤ 150000）；`drainer` 1 个（330）；内核全量 213 个文件通过。
-- GO3b 输入（来自 #626 与审查 #493）：修订移除步骤（默认终止、「让它跑完」、逐条放行），复用 `withdrawStepActions` 与 `lockGoalStepForNewWork`，「让它跑完」的步骤只拒绝新工作；I-G4 步骤范围去重；`waiting(reconcile)` 与核对观察、人的「重新执行」标记（`resumeGoalRun` 现在拒绝重试结果不明的步骤）；步骤成功要求名下动作含嵌套子 Task 都到终态；`await_decision` 两条路径；场景 S4、S5、S8、S11；遗留 356、364；I-G9 监控补上已 supersede 步骤的请求；被取消目标下结果不明的动作仍要能核对、能列出，reconcile 入口不要只看 `running` / `paused` 的目标；**owner 暂停是 hold**（协调线程拍板，赶在 GO5 暴露能力之前做）：owner 暂停别人的目标时请求者不能直接继续，必须等 owner（或权限更高的人）解除，请求者自己的暂停可以自己继续；记录 `paused_by` 与暂停方的权限级别并写审计。
+- GO3b「修订与 hold」输入（来自 #626 与审查 #493）：修订移除步骤（`reviseGoalRun`：默认终止、「让它跑完」、逐条放行），复用 `withdrawStepActions` 与 `lockGoalStepForNewWork`，「让它跑完」的步骤只拒绝新工作；步骤成功要求名下动作含嵌套子 Task 都到终态；遗留 356、364；I-G9 定时检查补上已 supersede 步骤的请求；场景 S8；**owner 暂停是 hold**（协调线程拍板，赶在 GO5 暴露能力之前做）：owner 暂停别人的目标时请求者不能直接继续，必须等 owner（或权限更高的人）解除，请求者自己的暂停可以自己继续；记录 `paused_by` 与暂停方的权限级别并写审计。
+- GO3c「核对与去重」输入（来自 #626 与审查 #493）：I-G4 步骤范围去重；`waiting(reconcile)` 用平台观察加判定式（GO4 的验收检查复用这套引擎），以及人的「重新执行」标记（`resumeGoalRun` 现在拒绝重试结果不明的步骤）；被取消目标下结果不明的动作仍要能核对、能列出，reconcile 入口不要只看 `running` / `paused` 的目标；`await_decision` 两条路径；场景 S4、S5、S11。
 - 来自 GO2（#619 与审查 #493）的输入：一步在嵌套子 Task 还在跑时就会判 `succeeded`（§3.4 要求名下动作都到终态）；A 段记录尝试结果时补 `inCurrentPlan` fencing；解锁也要认 `skipped` 的依赖；token 超出的取消路径与同一次推进的尝试均分剩余量（遗留 357）；推进连续抛错后自动暂停（遗留 356）。
 - 来自 GO1（审查 #493 delta）的输入：GoalRun 在 `cancelling` 时步骤能否从 `waiting` 回到 `running`，由 GO3 定（只允许走向终止，或写明为什么允许）；锁序同 GO2，先锁 GoalRun 再锁 StepRun。
 
