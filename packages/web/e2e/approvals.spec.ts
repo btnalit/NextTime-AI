@@ -127,7 +127,7 @@ test.describe('S2.10 acceptance: approval card -> approve -> status update', () 
     await expect(queueRowByMarker(page, E2E_APPROVE_SCOPE)).toBeVisible({ timeout: 15_000 });
     const drawer = await openQueueRow(page, E2E_APPROVE_SCOPE);
     await expect(drawer.getByRole('button', { name: '批准' })).toBeVisible();
-    await expect(drawer.getByTestId('approval-always-allow-gone')).toBeVisible();
+    await expect(drawer.getByTestId('approval-always-allow-unpublished')).toBeVisible();
     await expect(drawer.getByRole('checkbox', { name: /总是允许/ })).toHaveCount(0);
 
     // --- approve from the drawer; the row leaves the Pending tab optimistically and
