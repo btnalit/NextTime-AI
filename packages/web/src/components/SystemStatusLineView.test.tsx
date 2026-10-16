@@ -81,7 +81,10 @@ describe('SystemStatusLineView', () => {
         }}
       />,
     );
-    expect(screen.getByText('(worker_failed)')).toBeTruthy();
+    // Legacy 324: the label, with the sentence as its tooltip — never the raw code.
+    const reason = screen.getByText('(Worker 运行失败)');
+    expect(reason.getAttribute('title')).toContain('自动重试也没有成功');
+    expect(document.body.textContent).not.toContain('worker_failed');
     expect(document.querySelector('.chip')?.getAttribute('data-status')).toBe('failed');
   });
 

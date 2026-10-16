@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { SHOWN_REASON_MAX, shownAuditReason } from './shown-reason.js';
+import {
+  SHOWN_REASON_MAX,
+  shownAuditReason,
+  shownAuditReasonWithTruncation,
+} from './shown-reason.js';
 
 /** Synthetic: an alphabet-spelled key. */
 const FAKE = 'abcdefghijklmnopqrstuvwxyz0123';
@@ -42,5 +46,24 @@ describe('shownAuditReason (legacy 338)', () => {
     expect(shownAuditReason(`${lead}😀tail`)).toBe(`${lead}😀…`);
     // Short enough: unchanged, no ellipsis.
     expect(shownAuditReason(`${lead}y`)).toBe(`${lead}y`);
+  });
+
+  it('legacy 339: says it was clipped exactly when the shown text is clipped, measured after redacting', () => {
+    const lead = 'x'.repeat(SHOWN_REASON_MAX - 1);
+    expect(shownAuditReasonWithTruncation(undefined)).toBeNull();
+    expect(shownAuditReasonWithTruncation(`${lead}y`)).toEqual({
+      text: `${lead}y`,
+      truncated: false,
+    });
+    const clipped = shownAuditReasonWithTruncation(`${lead}yz`);
+    expect(clipped?.truncated).toBe(true);
+    expect(clipped?.text).toBe(shownAuditReason(`${lead}yz`));
+    // Longer than the cap as given, but not once the secret is masked: not clipped, and the text
+    // carries no ellipsis either.
+    const masked = shownAuditReasonWithTruncation(
+      `${'x'.repeat(SHOWN_REASON_MAX - 30)} PGPASSWORD=${FAKE}${'k'.repeat(40)}`,
+    );
+    expect(masked?.truncated).toBe(false);
+    expect(masked?.text.endsWith('PGPASSWORD=[redacted]')).toBe(true);
   });
 });

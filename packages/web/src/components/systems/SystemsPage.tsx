@@ -19,6 +19,7 @@ import { describeError, isForbiddenError } from '../../lib/errors.js';
 import { formatDateTime, formatRelative, shortId } from '../../lib/format.js';
 import type { GrantRow, PrincipalRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
+import { transportKindLabel } from '../../lib/labels.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { labelText, statusChipStyle, statusValues } from '../../lib/status-tone.js';
 import { AvailableGateInstancesSection } from '../AvailableGateInstancesSection.js';
@@ -587,7 +588,9 @@ export function SystemsPage({
               {requestRows.map((row) => (
                 <div className="row-wrap" key={row.id} data-testid="request-row">
                   <StatusChip machine="connectionRequest" status={row.status} size="s" />
-                  <span className="tag">{row.kind}</span>
+                  <span className="tag" data-testid="request-kind">
+                    {transportKindLabel(row.kind, t)}
+                  </span>
                   <span className="mono truncate">{row.target}</span>
                   <span className="text-3 text-small" title={row.requestedBy}>
                     {t('由', 'by')} {shortId(row.requestedBy)}
@@ -630,7 +633,7 @@ export function SystemsPage({
                           '申请回到「已取消」；门与已导入的 Operation 不受影响。只能取消自己的申请，所有者可取消任何申请。',
                           'The request becomes cancelled; nothing registered is touched. Only your own request — the owner may cancel any.',
                         )}
-                        target={`${row.kind} · ${row.target}`}
+                        target={`${transportKindLabel(row.kind, t)} · ${row.target}`}
                         confirmLabel={t('取消申请', 'Cancel request')}
                         cancelLabel={t('保留', 'Keep')}
                         danger

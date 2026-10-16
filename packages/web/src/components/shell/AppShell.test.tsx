@@ -265,16 +265,20 @@ describe('AppShell follows a role change without a reload (#541 review M2)', () 
       roleGate: true,
     });
     renderShell(http, { authMode: 'apiKey' });
+    // Legacy sweep (console batch, 2026-10-16): the tooltip names the role in words (zh by
+    // default); the raw role is on `data-role`.
     await waitFor(() =>
-      expect(screen.getByTestId('role-badge').getAttribute('title')).toBe('Role: member'),
+      expect(screen.getByTestId('role-badge').getAttribute('data-role')).toBe('member'),
     );
+    expect(screen.getByTestId('role-badge').getAttribute('title')).toBe('角色：成员');
     expect(screen.queryByTestId('nav-section-govern')).toBeNull();
 
     role = 'builder';
     // Some page's own read (or the request layer's re-read) — not the shell's.
     await http.call('get_workspace', {});
     await waitFor(() => expect(screen.getByTestId('nav-section-govern')).toBeTruthy());
-    expect(screen.getByTestId('role-badge').getAttribute('title')).toBe('Role: builder');
+    expect(screen.getByTestId('role-badge').getAttribute('data-role')).toBe('builder');
+    expect(screen.getByTestId('role-badge').getAttribute('title')).toBe('角色：构建者');
     expect(screen.getByTestId('nav-catalog')).toBeTruthy();
     // 成员与授权 reads list_principals: still not a builder's page.
     expect(screen.queryByTestId('nav-members')).toBeNull();

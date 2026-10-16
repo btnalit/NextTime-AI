@@ -340,15 +340,19 @@ describe('AuditPage entry points', () => {
     await waitFor(() => expect(card.textContent).toContain('docker-prod'));
     expect(within(card).getByTestId('approval-context-decided-by').textContent).toContain('Alice');
     expect(card.textContent).toContain('change window');
-    // #541 review R3: the policy decision reads as its label, the raw value only as a tooltip.
+    // #541 review R3: the policy decision reads as its label — and (legacy sweep, console batch,
+    // 2026-10-16) the raw value is no longer kept as a tooltip.
     expect(within(card).getByTestId('approval-policy').textContent).toBe('策略要求人工审批');
+    expect(within(card).getByTestId('approval-policy').querySelector('[title]')).toBeNull();
     expect(within(card).getByTestId('approval-open-page').getAttribute('href')).toBe(
       '#/work/approvals/ar-1',
     );
 
     const result = await screen.findByTestId('explain-result');
     expect(http.calls.find((c) => c.name === 'explain')?.params).toEqual({ nodeId: 'dec-1' });
-    expect(within(result).getByTestId('explain-decision').textContent).toContain('approved');
+    // Legacy sweep (console batch, 2026-10-16): the Decision status reads as a label.
+    expect(within(result).getByTestId('explain-decision-status').textContent).toBe('已批准');
+    expect(within(result).getByTestId('explain-decision').textContent).not.toContain('approved');
     expect(
       within(result).getByTestId('explain-link-action-request').getAttribute('data-ref-id'),
     ).toBe('ar-1');
@@ -574,7 +578,10 @@ describe('AuditPage pickers', () => {
     const pick = await screen.findByTestId('audit-resource-id-pick');
     await waitFor(() => expect(optionValues(pick)).toEqual(['', 'f-1', 'f-2']));
 
-    fireEvent.change(screen.getByLabelText('资源 ID'), { target: { value: 'verify' } });
+    // Legacy sweep (console batch, 2026-10-16): an option reads as the action's label (验证事实),
+    // never its raw name, so that is what typing narrows on.
+    expect(pick.textContent).not.toContain('verify_fact');
+    fireEvent.change(screen.getByLabelText('资源 ID'), { target: { value: '验证' } });
     await waitFor(() => expect(optionValues(pick)).toEqual(['', 'f-2']));
     fireEvent.change(screen.getByLabelText('资源 ID'), { target: { value: 'zzz' } });
     await screen.findByTestId('audit-resource-id-empty');

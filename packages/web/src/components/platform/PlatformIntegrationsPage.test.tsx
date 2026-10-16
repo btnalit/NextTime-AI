@@ -719,7 +719,11 @@ describe('PlatformIntegrationsPage', () => {
 
     fireEvent.click(screen.getByTestId('integrations-tab-instances'));
     const table = await screen.findByTestId('gate-instances-table');
-    fireEvent.click(within(table).getByTestId('gate-instance-row-gate-1'));
+    // Legacy sweep (console batch, 2026-10-16): the transport column reads MCP, not mcp.
+    const instanceRow = within(table).getByTestId('gate-instance-row-gate-1');
+    expect(within(instanceRow).getByText('MCP')).toBeTruthy();
+    expect(within(instanceRow).queryByText('mcp')).toBeNull();
+    fireEvent.click(instanceRow);
 
     const detail = await screen.findByTestId('gate-instance-detail');
     fireEvent.click(within(detail).getByTestId('gate-instance-status-toggle'));

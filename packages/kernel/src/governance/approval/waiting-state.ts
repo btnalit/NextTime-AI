@@ -1,6 +1,10 @@
 import type { PoolClient } from 'pg';
 import { ACTION_REQUEST_IN_DOUBT_AUDIT_ACTION } from './execution.js';
-import { shownAuditReason } from './shown-reason.js';
+import {
+  type ShownAuditReason,
+  shownAuditReason,
+  shownAuditReasonWithTruncation,
+} from './shown-reason.js';
 import type { ActionRequestRow } from './types.js';
 
 /**
@@ -149,13 +153,15 @@ export async function readActionRequestWaitingStates(
  * through `reasonAuditFields`), the newest one per row, as `shownAuditReason` shows it: redacted,
  * clipped, every character a reader cannot see shown as `\u{XXXX}`, line breaks kept. Derived on
  * read, like the waiting state: the audit row is the record (I11). Keyed by row id; a row with no
- * audited reason is absent.
+ * audited reason is absent. `truncated` (legacy 339) comes out of the same call as the text.
  */
+export type ActionRequestFailureReason = ShownAuditReason;
+
 export async function readActionRequestFailureReasons(
   client: PoolClient,
   workspaceId: string,
   rows: readonly Pick<ActionRequestRow, 'id' | 'status'>[],
-): Promise<ReadonlyMap<string, string>> {
+): Promise<ReadonlyMap<string, ActionRequestFailureReason>> {
   const ids = [
     ...new Set(
       rows
@@ -172,9 +178,9 @@ export async function readActionRequestFailureReasons(
      order by resource_id, created_at desc`,
     [workspaceId, ids],
   );
-  const reasons = new Map<string, string>();
+  const reasons = new Map<string, ActionRequestFailureReason>();
   for (const row of result.rows) {
-    const reason = shownAuditReason(row.reason);
+    const reason = shownAuditReasonWithTruncation(row.reason);
     if (reason !== null) reasons.set(row.resource_id, reason);
   }
   return reasons;

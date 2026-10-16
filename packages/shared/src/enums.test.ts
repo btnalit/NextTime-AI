@@ -52,8 +52,10 @@ import {
   StepRunFailureCategorySchema,
   StepRunStatusSchema,
   StepRunWaitingReasonSchema,
+  TASK_FAILURE_REASON_VALUES,
   TASK_STATUS_VALUES,
   TURN_STATUS_VALUES,
+  TaskFailureReasonSchema,
   TaskStatusSchema,
   TurnStatusSchema,
   WORKER_DEFINITION_KIND_VALUES,
@@ -137,6 +139,21 @@ const enumsUnderTest = [
     TASK_STATUS_VALUES,
     TaskStatusSchema,
     ['created', 'queued', 'running', 'waiting_approval', 'completed', 'failed', 'cancelled'],
+  ],
+  [
+    'TaskFailureReason',
+    TASK_FAILURE_REASON_VALUES,
+    TaskFailureReasonSchema,
+    [
+      'timeout',
+      'no_result',
+      'worker_failed',
+      'spawn_failed',
+      'spawn_lost',
+      'run_lost',
+      'budget_exhausted',
+      'terminated',
+    ],
   ],
   [
     'WorkerRunStatus',
@@ -269,8 +286,8 @@ const enumsUnderTest = [
 ] as const;
 
 describe('enums', () => {
-  it('covers all 30 domain enums required by R4 + S2.2 + S2.6 + R-55 (TurnStatus) + legacy 278 (OperationStatus) + S11 GO1 (ActionRequestFailureKind and the GoalRun / PlanRevision / StepRun vocabulary)', () => {
-    expect(enumsUnderTest).toHaveLength(30);
+  it('covers all 31 domain enums required by R4 + S2.2 + S2.6 + R-55 (TurnStatus) + legacy 278 (OperationStatus) + S11 GO1 (ActionRequestFailureKind and the GoalRun / PlanRevision / StepRun vocabulary) + legacy 324 (TaskFailureReason)', () => {
+    expect(enumsUnderTest).toHaveLength(31);
   });
 
   for (const [name, values, schema, expected] of enumsUnderTest) {

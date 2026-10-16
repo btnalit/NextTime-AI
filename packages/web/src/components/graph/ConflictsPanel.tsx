@@ -12,6 +12,7 @@ import {
   conflictValueRows,
 } from '../../lib/graph-view.js';
 import { useT } from '../../lib/i18n.js';
+import { conflictTypeLabel, epistemicStatusLabel } from '../../lib/labels.js';
 import { LocalizedError } from '../../lib/localized-error.js';
 import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
@@ -114,7 +115,9 @@ function ConflictRow({
     >
       <div className="data-row-main">
         <div className="data-row-title row-wrap">
-          <span className="tag mono">{conflict.conflictType}</span>
+          <span className="tag" data-testid="graph-conflict-type">
+            {conflictTypeLabel(conflict.conflictType, t)}
+          </span>
           <span className="text-13 text-text-2">{t('两条事实不一致', 'Two Facts disagree')}</span>
         </div>
         <div className="data-row-meta">
@@ -234,8 +237,8 @@ function ConflictSide({
         {side ? (
           <>
             <span className="mono text-13">{side.linkType}</span>
-            <span className="tag mono" title={t('认知状态', 'Epistemic status')}>
-              {side.epistemicStatus}
+            <span className="tag" title={t('认知状态', 'Epistemic status')}>
+              {epistemicStatusLabel(side.epistemicStatus, t)}
             </span>
           </>
         ) : (

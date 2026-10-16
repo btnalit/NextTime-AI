@@ -1,4 +1,5 @@
 import type {
+  ActionRequestFailureKind,
   ActionRequestStatus,
   HandleClaims,
   Role,
@@ -1195,7 +1196,8 @@ async function withApprovalDecision(
       decidedAt: decision ? decision.decidedAt.toISOString() : null,
       outcomeInDoubt: waits?.outcomeInDoubt ?? null,
       queuedBehind: waits?.queuedBehind ?? null,
-      failureReason: failureReasons.get(row.id) ?? null,
+      failureReason: failureReasons.get(row.id)?.text ?? null,
+      failureReasonTruncated: failureReasons.get(row.id)?.truncated ?? false,
       ...(row.status === 'pending_approval'
         ? {
             publishedDefinition: {
@@ -1358,14 +1360,16 @@ async function resolveParentWorkerRunFilter(
  *  (docs/wire-contract-conventions.md §3), the same convention `search`'s own handler
  *  (`searchHandler` above) follows. §3 envelope — `{items, nextCursor?}`, never a bare array. */
 const listActionRequestsHandler: CapabilityHandler = async (client, workspaceId, params) => {
-  const { status, gatekeeperId, taskId, parentWorkerRunId, limit, cursor } = params as {
-    status?: ActionRequestStatus | ActionRequestStatus[];
-    gatekeeperId?: string;
-    taskId?: string;
-    parentWorkerRunId?: string;
-    limit?: number;
-    cursor?: string;
-  };
+  const { status, failureKind, gatekeeperId, taskId, parentWorkerRunId, limit, cursor } =
+    params as {
+      status?: ActionRequestStatus | ActionRequestStatus[];
+      failureKind?: ActionRequestFailureKind | ActionRequestFailureKind[];
+      gatekeeperId?: string;
+      taskId?: string;
+      parentWorkerRunId?: string;
+      limit?: number;
+      cursor?: string;
+    };
   const caller = await currentPrincipalRole(client, workspaceId);
   const parentWorkerRunIds = await resolveParentWorkerRunFilter(client, workspaceId, {
     taskId,
@@ -1375,7 +1379,7 @@ const listActionRequestsHandler: CapabilityHandler = async (client, workspaceId,
     client,
     workspaceId,
     { principalId: caller.id, role: caller.role },
-    { status, gatekeeperId, parentWorkerRunIds, limit, cursor },
+    { status, failureKind, gatekeeperId, parentWorkerRunIds, limit, cursor },
   );
   const truncated = limit !== undefined && limit > MAX_ACTION_REQUEST_LIST_LIMIT;
   return {

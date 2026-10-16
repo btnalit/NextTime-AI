@@ -2,6 +2,7 @@ import {
   IllegalTransition,
   TASK_TRANSITIONS,
   type TaskEvent,
+  type TaskFailureReason,
   type TaskStatus,
   WORKER_RUN_TRANSITIONS,
   transition,
@@ -224,7 +225,7 @@ export async function failTaskRow(
   workspaceId: string,
   actorPrincipalId: string,
   taskId: string,
-  reason: string,
+  reason: TaskFailureReason,
 ): Promise<void> {
   const row = await readTaskRow(client, workspaceId, taskId);
   if (!row || row.status === 'completed' || row.status === 'failed' || row.status === 'cancelled') {
@@ -287,7 +288,7 @@ export async function failTaskAndReapWorkerRuns(
   workspaceId: string,
   actorPrincipalId: string,
   taskId: string,
-  reason: string,
+  reason: TaskFailureReason,
 ): Promise<void> {
   const workerRunIds = await withWorkspace(
     deps.pool,

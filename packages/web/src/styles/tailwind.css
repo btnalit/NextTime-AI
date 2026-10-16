@@ -4,16 +4,21 @@
  * would restyle every existing page (it sets margins, borders, form-control appearance, etc. on
  * bare elements with no class at all).
  *
- * Scanning is restricted to components/kit/: `source(none)` on the utilities import disables
- * Tailwind's automatic project-wide source detection, then the `@source` line below re-enables
- * scanning for only that one directory. Without this, Tailwind would scan every .tsx in the app
- * and could start generating a utility for an old, unrelated class name that happens to look like
- * one (`className="hidden"` / `"truncate"` / `"grid"` all exist already in pre-S8 markup) — this
- * is S8 risk ① (docs/development-tasks.md §5e). Utilities land in the Tailwind `utilities` layer;
- * every existing stylesheet (tokens/base/shell/ui/pages/graph) stays unlayered, and per the CSS
- * Cascading Layers spec an unlayered declaration always wins over a layered one for the same
- * property on the same element, regardless of source order or specificity — so an existing page
- * is unaffected even if a kit utility and an old hand-written rule ever target the same element.
+ * Scanned sources: all of `src/` except test files. `source(none)` on the utilities import turns
+ * off Tailwind's automatic detection (which would also read e2e specs, docs and build output), and
+ * the `@source` lines below name what to read instead. Until UX acceptance of #614 this was only
+ * `components/kit/` (S8 risk ①, docs/development-tasks.md §5e: an old class name that happens to
+ * look like a utility — `hidden` / `truncate` / `grid` — could start getting one); but that left a
+ * utility written outside kit (`line-clamp-4` on a failure reason, legacy 339) silently compiled
+ * to nothing, with every unit test still green. Widening it was checked against a build diff: the
+ * only utilities it adds that an element carries are `line-clamp-4`, `wrap-anywhere` (the same
+ * declaration `base.css` already has) and `flex-row` (what `cn()` already resolved the sheet
+ * header to); the rest (`absolute`, `filter`, `transition`, …) come from words in code no element
+ * has as a class. Note the cascade: `styles.css` puts every hand-written sheet in the `legacy`
+ * layer *below* `utilities`, so a class name that is also a Tailwind utility now gets the
+ * utility, and it wins over a legacy rule for the same property — name new hand-written classes
+ * so they cannot be read as one. Test files are left out: their strings (test ids such as
+ * `row-1`) are not markup.
  *
  * The @theme block resets Tailwind's default palette/scale namespaces to empty and re-declares
  * them as `var()` aliases onto the §5.9 design tokens (tokens.css) — `tokens.css` stays the only
@@ -27,7 +32,9 @@
 @import "tailwindcss/theme.css" layer(theme);
 @import "tailwindcss/utilities.css" layer(utilities) source(none);
 
-@source "../components/kit";
+@source "..";
+@source not "../**/*.test.ts";
+@source not "../**/*.test.tsx";
 
 @theme inline {
   /* Reset every namespace we alias below so only token-backed utilities exist — `bg-red-500`,

@@ -201,6 +201,29 @@ export type WorkerRunStatus = (typeof WORKER_RUN_STATUS_VALUES)[number];
 export const WorkerRunStatusSchema = asEnum(WORKER_RUN_STATUS_VALUES);
 
 /**
+ * Why a Task failed (`tasks.failure_reason`, legacy 324) — every value the kernel writes
+ * (`application/task`'s `failTaskRow` takes only these): `timeout` (its run outlived the duration
+ * limit), `no_result` (the run ended without handing back a result), `worker_failed` (the run
+ * failed and its retry is used up, or the retry could not start), `spawn_failed` (the first run
+ * could not start), `spawn_lost` (stuck queued — the kernel died before the run started),
+ * `run_lost` (running, but every run of it is gone), `budget_exhausted` (the token budget ran
+ * out), `terminated` (the runtime ended its run). The column is free text, so a row an earlier
+ * release wrote may carry something else; readers keep a fallback.
+ */
+export const TASK_FAILURE_REASON_VALUES = [
+  'timeout',
+  'no_result',
+  'worker_failed',
+  'spawn_failed',
+  'spawn_lost',
+  'run_lost',
+  'budget_exhausted',
+  'terminated',
+] as const;
+export type TaskFailureReason = (typeof TASK_FAILURE_REASON_VALUES)[number];
+export const TaskFailureReasonSchema = asEnum(TASK_FAILURE_REASON_VALUES);
+
+/**
  * EntryAgent session status (§5.5): `starting → ready → busy → ready …`; `crashed → starting`
  * (host auto-recovery, §7.2); `stopped` (idle timeout).
  */

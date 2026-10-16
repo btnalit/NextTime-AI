@@ -15,6 +15,7 @@ import {
   shortId,
 } from '../../lib/format.js';
 import { useT } from '../../lib/i18n.js';
+import { auditResourceTypeLabel } from '../../lib/labels.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { PageHeader } from '../kit/page-header.js';
 import { Button } from '../ui/Button.js';
@@ -318,7 +319,7 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
                     {(row.actorUserId ? userName(row.actorUserId) : undefined) ??
                       formatAuditActor(row, t)}
                     {row.resourceType
-                      ? ` · ${row.resourceType}${row.resourceId ? `:${shortId(row.resourceId)}` : ''}`
+                      ? ` · ${auditResourceTypeLabel(row.resourceType, t)}${row.resourceId ? `:${shortId(row.resourceId)}` : ''}`
                       : ''}
                   </div>
                   <details className="platform-audit-payload">

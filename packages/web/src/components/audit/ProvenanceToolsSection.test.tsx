@@ -113,7 +113,9 @@ describe('ProvenanceToolsSection pickers', () => {
     render(<ProvenanceToolsSection http={http} />);
 
     const pick = await screen.findByTestId('causal-chain-node-id-pick');
-    await waitFor(() => expect(pick.textContent).toContain('attest_fact'));
+    // Legacy sweep (console batch, 2026-10-16): the option names the action, not its raw name.
+    await waitFor(() => expect(pick.textContent).toContain('人工确认事实'));
+    expect(pick.textContent).not.toContain('attest_fact');
     expect(http.calls.find((c) => c.name === 'audit_query')?.params).toEqual({
       filter: { resourceType: 'fact' },
       limit: 200,
@@ -164,6 +166,9 @@ describe('ProvenanceToolsSection pickers', () => {
       objectId: 'o-1',
       actionKindTag: 'container_restart',
     });
+    // Legacy sweep (console batch, 2026-10-16): a precedent's status reads as a label.
+    expect(screen.getByTestId('precedent-status').textContent).toBe('已批准');
+    expect(screen.getByTestId('precedents-result').textContent).not.toContain('approved');
   });
 
   it('precedents: typing an operation name re-asks list_operations{q}', async () => {

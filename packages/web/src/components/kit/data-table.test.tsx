@@ -85,6 +85,12 @@ describe('kit/DataTable', () => {
     const list = screen.getByRole('list', { name: 'Test rows' });
     const items = within(list).getAllByRole('listitem');
     expect(items).toHaveLength(2);
+    // Legacy 313: cards, not bullets — and a title that keeps room beside the high columns,
+    // which wrap below it instead of squeezing it away on a narrow card.
+    expect(list.className).toContain('list-none');
+    const title = items[0]?.firstElementChild;
+    expect(title?.className).toContain('flex-wrap');
+    expect(title?.firstElementChild?.className).toContain('min-w-32');
   });
 
   it('shows primary/high columns in the card header and low columns as label/value pairs', () => {

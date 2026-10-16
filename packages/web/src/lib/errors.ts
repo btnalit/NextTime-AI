@@ -354,9 +354,11 @@ export const ERROR_NEXT_STEPS: Readonly<
     zh: '这个动作可能已经执行，也可能没有，平台无法确认。不要直接重试：先到目标系统核对它是否生效，再决定要不要重新发起。',
     en: 'This action may or may not have run, and the platform cannot tell which. Do not just retry: check on the target system whether it took effect, then decide whether to request it again.',
   },
+  // Legacy 315: the kernel also refuses a publish that would supersede a live version someone
+  // else proposed — then "its proposer" is the caller, so the sentence names both cases.
   not_proposer: {
-    zh: '只有它的提议人或工作区所有者能做这一步。',
-    en: 'Only its proposer or a workspace owner can do this.',
+    zh: '这一步只能由提议人或工作区所有者来做：这一项，或它要替换的现行版本，是别人提议的。请那位提议人或工作区所有者来操作。',
+    en: 'Only the proposer or a workspace owner can do this: this item, or the live version it would replace, was proposed by someone else. Ask that proposer or a workspace owner.',
   },
   not_published: { zh: '先发布，再做这一步。', en: 'Publish it first.' },
   invalid_step_reference: {
