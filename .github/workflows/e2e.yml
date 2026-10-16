@@ -476,6 +476,68 @@ jobs:
           done
           echo "WEB_E2E_SEED_ACTION_REQUESTS=1" >>"$GITHUB_ENV"
 
+      # Legacy 317: approvals.spec.ts's 「总是允许」 scenario needs a pending request the kernel
+      # really offers "always allow" for — one made under the Operation definition its gate
+      # publishes now (handlers.ts `withApprovalDecision` → `publishedDefinition.requestIsCurrent`;
+      # `set_auto_approved_action_kind` refuses 409 `version_changed` otherwise). So this seed adds
+      # what the rows above lack: a published `Operation` object on its own gate, and the request's
+      # `operation_digest` — computed inside the kernel container by the kernel's own
+      # `@nexttime/gatekeeper-base` `operationDefinitionDigest`, never a hand-copied hash, so a
+      # change to the digest's field list cannot silently leave this seed behind.
+      #
+      # Written here as a script and run by the spec itself (WEB_E2E_ALWAYS_ALLOW_SEED), not seeded
+      # now: 00-gates/ runs first and screenshots this workspace's approvals queue, catalog and
+      # systems — a sixth pending row and a published Operation would change those baselines.
+      # Every run makes a fresh gate, so a Playwright retry gets its own pending row. No `outbox`
+      # row: the scenario reads the queue and the policy table, not a chat card. The script prints
+      # one JSON line, `{"gatekeeperId", "actionRequestId"}`.
+      - name: Prepare the always-allow seed (approvals.spec.ts, legacy 317)
+        run: |
+          set -euo pipefail
+          cat >"$RUNNER_TEMP/seed-always-allow.sh" <<'SH'
+          set -eu
+          cd "$GITHUB_WORKSPACE"
+          # `sudo -n`, as provider-health.spec.ts: fail instead of waiting on a password prompt.
+          compose="sudo -n docker compose -f docker-compose.yml -f deploy/ci/docker-compose.ci.yml"
+          gatekeeper_id=$(cat /proc/sys/kernel/random/uuid)
+          operation='{"name":"e2e.always_allow_test","description":"CI 夹具：「总是允许」端到端测试用的执行类动作","binding":{"kind":"http","method":"POST","path":"/e2e/always-allow"},"params_schema":{"type":"object","properties":{}},"mode":"execute","blast_radius":"medium","reversibility":false,"auto_approvable":true,"await_decision":false,"reads":[],"writes":[]}'
+          digest=$(printf '%s' "$operation" | $compose exec -T kernel node --input-type=module -e \
+            'import { operationDefinitionDigest } from "@nexttime/gatekeeper-base"; let json = ""; for await (const chunk of process.stdin) json += chunk; console.log(operationDefinitionDigest(JSON.parse(json)));')
+          # A digest that came back empty or malformed would seed a row the kernel never offers
+          # 「总是允许」 for, and the spec would fail far from the cause; stop here instead.
+          hex=${digest#sha256:}
+          if [ "$hex" = "$digest" ] || [ "${#hex}" -ne 64 ] || [ -n "$(printf '%s' "$hex" | tr -d '0-9a-f')" ]; then
+            echo "seed-always-allow: bad operation digest: '$digest'" >&2; exit 1
+          fi
+          $compose exec -T postgres psql -U nexttime -d nexttime -v ON_ERROR_STOP=1 -q -At \
+            -v workspace_id="$E2E_WORKSPACE_ID" -v on_behalf_of="$E2E_OWNER_PRINCIPAL_ID" \
+            -v gatekeeper_id="$gatekeeper_id" -v operation="$operation" -v operation_digest="$digest" <<'SQL'
+          begin;
+
+          insert into objects (workspace_id, id, object_type, properties)
+          values (:'workspace_id'::uuid, :'gatekeeper_id'::uuid, 'Gatekeeper', '{"name":"e2e-always-allow-gate"}'::jsonb);
+
+          insert into objects (workspace_id, object_type, identity_key, properties)
+          values (
+            :'workspace_id'::uuid, 'Operation',
+            jsonb_build_object('gatekeeperId', :'gatekeeper_id', 'name', :'operation'::jsonb ->> 'name', 'version', 1),
+            :'operation'::jsonb || '{"status":"published","version":1,"origin":"import"}'::jsonb
+          );
+
+          insert into action_requests
+            (workspace_id, status, gatekeeper_id, action_kind, resource_scope, blast_radius,
+             policy_decision, await_decision, on_behalf_of, actor_runtime, params, operation_digest)
+          values
+            (:'workspace_id'::uuid, 'pending_approval', :'gatekeeper_id'::uuid, :'operation'::jsonb ->> 'name',
+             :'gatekeeper_id', 'medium', 'require_approval', false, :'on_behalf_of'::uuid, 'worker',
+             '{}'::jsonb, :'operation_digest')
+          returning json_build_object('gatekeeperId', gatekeeper_id, 'actionRequestId', id);
+
+          commit;
+          SQL
+          SH
+          echo "WEB_E2E_ALWAYS_ALLOW_SEED=$RUNNER_TEMP/seed-always-allow.sh" >>"$GITHUB_ENV"
+
       # --- the actual e2e suite ----------------------------------------------------------------
 
       # Runs every file under packages/web/e2e/ for real: chat.spec.ts and governance.spec.ts
