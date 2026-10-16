@@ -138,6 +138,31 @@ describe('ApprovalDetail (S6-A B2 / B3 / C25)', () => {
     expect(screen.queryByTestId('approval-failure')).toBeNull();
   });
 
+  it('legacy 329: a refused request shows the reason the kernel recorded, as plain text with its line breaks', () => {
+    renderDetail({
+      status: 'failed',
+      failedAt: '2026-10-16T07:00:00.000Z',
+      failureKind: 'refused',
+      failureReason: 'gate refused: <b>credential</b> missing\nAuthorization: [redacted]',
+    });
+    const reason = screen.getByTestId('approval-failure-reason');
+    expect(reason.textContent).toBe(
+      '原因：gate refused: <b>credential</b> missing\nAuthorization: [redacted]',
+    );
+    expect(reason.className).toBe('pre-wrap');
+    expect(reason.querySelector('b')).toBeNull();
+  });
+
+  it('legacy 328: a withdrawn request says nothing ran and nothing is needed, and offers no decision', () => {
+    renderDetail({ status: 'withdrawn' });
+    const notice = screen.getByTestId('approval-failure');
+    expect(notice.className).toBe('notice');
+    expect(notice.textContent).toContain('已撤回：什么都没执行');
+    expect(notice.textContent).toContain('不需要处理');
+    expect(screen.queryByTestId('approval-failure-reason')).toBeNull();
+    expect(screen.queryByRole('button', { name: /批准|拒绝/ })).toBeNull();
+  });
+
   it('L8a-10: a gate-scoped request (scope = the gate’s own id) reads as the whole gate, never the raw id', () => {
     const gatekeeperId = '3f2a9c1e-0b4d-4e6f-8a7b-1c2d3e4f5a6b';
     renderDetail(

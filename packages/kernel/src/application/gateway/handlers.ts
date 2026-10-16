@@ -75,6 +75,7 @@ import {
   getActionRequestVisibleTo,
   listActionRequestsForApprover,
   listPendingForApprover,
+  readActionRequestFailureReasons,
   readActionRequestWaitingStates,
   readApprovalDecisions,
   rejectActionRequest,
@@ -1163,6 +1164,8 @@ async function currentPrincipalRole(
  * Legacy 287: the same rows also say why one that has not finished is waiting
  * (`governance/approval`'s `readActionRequestWaitingStates`): `outcomeInDoubt` on an `executing`
  * row whose `apply` got no answer, `queuedBehind` on an approved row an earlier one holds back.
+ * Legacy 329: a failed row also says why (`failureReason`, from its `action_request.fail` audit
+ * row, redacted and made safe to show).
  */
 async function withApprovalDecision(
   client: PoolClient,
@@ -1175,6 +1178,7 @@ async function withApprovalDecision(
     rows.flatMap((row) => (row.approvalDecisionId ? [row.approvalDecisionId] : [])),
   );
   const waiting = await readActionRequestWaitingStates(client, workspaceId, rows);
+  const failureReasons = await readActionRequestFailureReasons(client, workspaceId, rows);
   const published = await publishedDefinitions(client, workspaceId, rows);
   return rows.map((row) => {
     const decision = row.approvalDecisionId ? decisions.get(row.approvalDecisionId) : undefined;
@@ -1187,6 +1191,7 @@ async function withApprovalDecision(
       decidedAt: decision ? decision.decidedAt.toISOString() : null,
       outcomeInDoubt: waits?.outcomeInDoubt ?? null,
       queuedBehind: waits?.queuedBehind ?? null,
+      failureReason: failureReasons.get(row.id) ?? null,
       ...(row.status === 'pending_approval'
         ? {
             publishedDefinition: {

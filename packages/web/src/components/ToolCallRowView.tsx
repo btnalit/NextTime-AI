@@ -40,7 +40,8 @@ function gatekeeperIdOf(args: unknown): string | undefined {
 /** A gate refusal the result names (`operation_definition_mismatch`, an ActionRequest's
  *  `operation_definition_unavailable:` reason, …), said in the viewer's language with what to do —
  *  above the raw result, which stays as the agent saw it (review of #538, G3). With a link to the
- *  system the call went to when its arguments name it (UX acceptance of #538).
+ *  system the call went to when its arguments name it (UX acceptance of #538) and the reason is
+ *  about that system — not for `unstorable_text`, refused before any system was asked (#602).
  *
  *  Legacy 287 (UX acceptance of #586): "not sent" is a plain note — nothing ran; "outcome unknown"
  *  is the loudest — it may have run — names what to check (`target`) and on which system, says
@@ -127,7 +128,7 @@ function GateReasonNoteBody({
               'The raw result below says "status": "failed" only because the platform stopped following this request, not because the action did not run.',
             )}
           </span>
-        ) : gatekeeperId !== undefined ? (
+        ) : gatekeeperId !== undefined && step.aboutTheSystem ? (
           <a href={hrefs.gatekeeper(gatekeeperId)} data-testid="tool-call-gate-reason-link">
             {t('打开这个系统', 'Open this system')}
           </a>

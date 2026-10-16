@@ -34,12 +34,35 @@ export function visibleText(value: string): string {
   return value.replace(UNSEEN, escapeCodePoint);
 }
 
-/** JSON text (`JSON.stringify` output) with every unseen character it left raw — format characters
+/** `value` as `visibleText` shows it, but keeping the text's own line breaks and tabs (`\n`,
+ *  `\t`, and `\r` before `\n`) — for multi-line text read as a block, such as a tool's plain
+ *  output. Every other unseen character is shown as `\u{XXXX}`; backslashes stay as they are,
+ *  so what is shown is what the text holds (review #493 on #605). */
+export function visibleLines(value: string): string {
+  return value.replace(UNSEEN, (ch, offset: number, whole: string) =>
+    ch === '\n' || ch === '\t' || (ch === '\r' && whole[offset + 1] === '\n')
+      ? ch
+      : escapeCodePoint(ch),
+  );
+}
+
+/** `storable-text.ts`'s `UNSTORABLE_CHAR_STAND_IN` (`\u{0}`, what U+0000 is stored as) as
+ *  `JSON.stringify` writes it: its backslash doubled. A backslash JSON writes on its own always
+ *  comes as such a pair, so a match never starts halfway through one. */
+const STAND_IN_AFTER_JSON = /\\\\u\{0\}/g;
+
+/** JSON text (`JSON.stringify` output, or a cut of it) with every unseen character it left raw — format characters
  *  and line / paragraph separators — shown as `\u{XXXX}`. Control characters and lone surrogates
  *  are already escaped by `JSON.stringify`, and pretty-printing's own line breaks stay as they are
- *  (review of #593: a bidi override inside a value reordered what an approver read). */
+ *  (review of #593: a bidi override inside a value reordered what an approver read).
+ *
+ *  A stored U+0000 stand-in reads `\u{0}` here too, as in running text and beside the `\u{XXXX}`
+ *  above, instead of JSON's `\\u{0}` (UX acceptance of #602): one character, one spelling. It was
+ *  already indistinguishable from someone typing `\u{0}`, so this adds no new ambiguity. Only for
+ *  JSON text: on any other text it would leave control characters raw and turn a real `\\u{0}`
+ *  into `\u{0}` — use `visibleText` / `visibleLines` there. */
 export function visibleJson(json: string): string {
-  return json.replace(UNSEEN_AFTER_JSON, escapeCodePoint);
+  return json.replace(UNSEEN_AFTER_JSON, escapeCodePoint).replace(STAND_IN_AFTER_JSON, '\\u{0}');
 }
 
 /** An unquoted echo: clipped, then made visible — for a stored field or an audit payload. */

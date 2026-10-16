@@ -6,6 +6,11 @@ import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import {
+  markActionRequestFailed,
+  startActionRequestExecution,
+} from '../../governance/approval/execution.js';
+import { FAILURE_REASON_MAX } from '../../governance/approval/service.js';
 import { registerGatekeeper } from '../../governance/gatekeepers/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
 import { dispatchCapability } from './dispatch.js';
@@ -62,7 +67,11 @@ interface ActionRequestWire {
   decisionReason?: string | null;
   decidedBy?: string | null;
   decidedAt?: string | null;
+  failureReason?: string | null;
 }
+
+/** A synthetic credential-shaped value — never a real one. */
+const FAKE_TOKEN = 'abcdefghijklmnopqrstuvwxyz0123';
 
 describe.runIf(DATABASE_URL !== undefined)(
   'S6-A approve.reason (C25) and list_action_requests taskId / parentWorkerRunId (C28) (integration, real Postgres)',
@@ -236,6 +245,61 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(rejected.status).toBe('rejected');
       expect(rejected.decisionReason).toBe('not in this change window');
       expect(rejected.decidedBy).toBe(ownerId);
+    });
+
+    it('legacy 329: a failed request carries its audited reason — redacted, clipped, unseen characters shown — and every other row null', async () => {
+      const owner = humanCaller(workspaceId, ownerId, 'owner');
+      const id = await seedPendingActionRequest({
+        blastRadius: 'medium',
+        actionKind: 'ah.failure_reason',
+      });
+      await dispatchCapability({ pool }, owner, 'approve', { actionRequestId: id });
+      const pending = await seedPendingActionRequest({ blastRadius: 'medium' });
+
+      await admin(async (client) => {
+        await startActionRequestExecution(client, workspaceId, id);
+        await markActionRequestFailed(client, workspaceId, id, {
+          failureKind: 'refused',
+          reason: `gate said no‮: Authorization: Bearer ${FAKE_TOKEN}\r\nretry later`,
+        });
+      });
+      const read = (await dispatchCapability({ pool }, owner, 'get_action', {
+        actionRequestId: id,
+      })) as ActionRequestWire;
+      expect(read.status).toBe('failed');
+      // The bidi override is shown, not obeyed; the CR of the CRLF is dropped, the line break kept.
+      expect(read.failureReason).toMatch(
+        /^gate said no\\u\{202E\}: Authorization: ?\[redacted\]\nretry later$/,
+      );
+      expect(read.failureReason).not.toContain(FAKE_TOKEN);
+
+      // An over-long reason is clipped (the redacted line before it stays whole).
+      const longId = await seedPendingActionRequest({
+        blastRadius: 'medium',
+        actionKind: 'ah.failure_reason.long',
+      });
+      await dispatchCapability({ pool }, owner, 'approve', { actionRequestId: longId });
+      await admin(async (client) => {
+        await startActionRequestExecution(client, workspaceId, longId);
+        await markActionRequestFailed(client, workspaceId, longId, {
+          failureKind: 'refused',
+          reason: `Authorization: Bearer ${FAKE_TOKEN}\n${'x'.repeat(FAILURE_REASON_MAX)}`,
+        });
+      });
+      const long = (await dispatchCapability({ pool }, owner, 'get_action', {
+        actionRequestId: longId,
+      })) as ActionRequestWire;
+      expect(long.failureReason).toMatch(/^Authorization: ?\[redacted\]\nx+…$/);
+      expect(long.failureReason).not.toContain(FAKE_TOKEN);
+      expect([...(long.failureReason ?? '')]).toHaveLength(FAILURE_REASON_MAX + 1);
+
+      const page = (await dispatchCapability({ pool }, owner, 'list_action_requests', {
+        limit: 200,
+      })) as { items: ActionRequestWire[] };
+      const listed = new Map(page.items.map((row) => [row.id, row]));
+      expect(listed.get(id)?.failureReason).toBe(read.failureReason);
+      expect(listed.get(longId)?.failureReason).toBe(long.failureReason);
+      expect(listed.get(pending)?.failureReason).toBeNull();
     });
 
     it('list_action_requests{taskId} finds a decided request through its WorkerRun; parentWorkerRunId narrows; unknown taskId is an empty page', async () => {
