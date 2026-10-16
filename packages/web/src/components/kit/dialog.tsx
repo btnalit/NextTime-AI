@@ -38,6 +38,8 @@ export const DialogContent = forwardRef<
         className={cn(
           'fixed left-1/2 top-1/2 z-50 w-full max-w-md -translate-x-1/2 -translate-y-1/2',
           'rounded-l border border-border bg-surface-1 p-5 shadow-1',
+          // UX acceptance of #612 (MUST-1): centred, a tall one would overflow both edges.
+          'max-h-[calc(100dvh-2rem)] overflow-y-auto overscroll-contain',
           className,
         )}
         {...rest}

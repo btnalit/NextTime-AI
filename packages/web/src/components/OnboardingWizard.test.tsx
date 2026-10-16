@@ -258,7 +258,7 @@ describe('OnboardingWizard', () => {
     expect(publishes).toBe(2);
   });
 
-  it('console G4: the publish step says which drafts it held back for a gate-owned param, and that this self-connected system is connected again once the gate is fixed', async () => {
+  it('console G4: the publish step says which drafts it held back for a gate-owned param, and that this self-connected system is re-synced from the fixed manifest (legacy 214)', async () => {
     const http = scriptedHttp({
       create_connection: () => ({
         gatekeeperId: 'gk-1',
@@ -295,7 +295,8 @@ describe('OnboardingWizard', () => {
       '已发布 1 个',
     );
     expect(held.textContent).toContain('accept_s2_mcp_note：Authorization（请求头）');
-    expect(held.textContent).toContain('重新接入');
+    expect(held.textContent).toContain('重新读取门的清单');
+    expect(held.textContent).not.toContain('重新接入');
   });
 
   it('review step: "propose reclassification" proposes, shows old → new behind a confirm, and publishes only on confirm (R-19, D-17)', async () => {

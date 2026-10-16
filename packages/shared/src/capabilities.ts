@@ -1067,7 +1067,21 @@ const connectionCapabilities = [
       .strict(),
     resultSchema: wire.RefreshOperationGovernanceResultWireSchema,
     description:
-      'S8 W3-K1 (leftover 79, audit CO2): apply the gate’s currently-announced mode/blastRadius/autoApprovable to every selected, already-deployed Operation of this Gatekeeper whose fields disagree with it (in place — no new Operation version). operationNames narrows the selection; omitted refreshes every announced Operation. Refuses 400 no_announced_manifest when this Gatekeeper has no linked platform gate instance, and 409 manifest_changed when manifestDigest is not the digest of the manifest in effect (R-18: only the previewed values are ever applied). One AuditRecord per refreshed Operation with before/after and a loosened/tightened/mixed classification. Legacy K: a selected published Operation whose announced definition changed (the gate refuses calls under the deployed one) gets an import-origin revision draft at the next version carrying the announced definition, listed in revisionDrafts and audited as operation.revision_drafted; an owner publishes it with publish_operation / publish_manifest. A pending import-origin draft (an earlier revision, or one a bulk publish held back for a gate-owned param, legacy J) is rewritten to the announced entry at its own version when it differs, and listed the same way; an agent’s or person’s proposal is never overwritten.',
+      'S8 W3-K1 (leftover 79, audit CO2): apply the gate’s currently-announced mode/blastRadius/autoApprovable to every selected, already-deployed Operation of this Gatekeeper whose fields disagree with it (in place — no new Operation version). operationNames narrows the selection; omitted refreshes every announced Operation. The announced manifest is the linked platform gate instance’s manifest in effect; legacy 214: for a gate the workspace connected itself it is the gate’s own describe_operations, read again now (preview_gatekeeper_resync), an Operation it describes that this Gatekeeper never had is imported as an import-origin draft (listed in revisionDrafts, audited with reason new_on_gate), and a governance change that loosens anything (direction loosened or mixed) is never written in place — the published Operation keeps its fields and an import-origin revision draft carrying the gate’s entry is opened instead (revisionDrafts, audited with reason governance_loosened or definition_changed plus governanceDirection), taking effect only when an owner publishes it; a tightening is still applied in place. Refuses 409 no_announced_manifest when this Gatekeeper is at a platform gate instance’s address but was never enabled from the catalog, and 409 manifest_changed when manifestDigest is not the digest of the manifest in effect or of the gate’s description (R-18: only the previewed values are ever applied). One AuditRecord per refreshed Operation with before/after and a loosened/tightened/mixed classification. Legacy K: a selected published Operation whose announced definition changed (the gate refuses calls under the deployed one) gets an import-origin revision draft at the next version carrying the announced definition, listed in revisionDrafts and audited as operation.revision_drafted; an owner publishes it with publish_operation / publish_manifest. A pending import-origin draft (an earlier revision, or one a bulk publish held back for a gate-owned param, legacy J) is rewritten to the announced entry at its own version when it differs, and listed the same way; an agent’s or person’s proposal is never overwritten.',
+  },
+  {
+    // Legacy 214: the read half of refresh_operation_governance for a gate the workspace connected
+    // itself — same scope/minRole as the write; `observe` since it writes nothing (it does call the
+    // gate's own describe_operations, as create_connection does).
+    name: 'preview_gatekeeper_resync',
+    group: 'connection',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'owner',
+    paramsSchema: z.object({ gatekeeperId: id }).strict(),
+    resultSchema: wire.PreviewGatekeeperResyncResultWireSchema,
+    description:
+      'Legacy 214: read-only preview of re-syncing a gate the workspace connected itself (create_connection) — asks the gate what it runs now (describe_operations, with the connection’s own secret) and compares it with this Gatekeeper’s Operations by the same rules as preview_gate_instance_enable: drafts and names it never had (operationsToImport; without pendingDraft the resync imports them as drafts), deployed ones with governance drift (differs, direction; governanceByRevision when the change loosens anything — the resync then opens a revision instead of writing it in place) or another definition (definitionDiffers — the gate refuses calls under the deployed one until a revision is published), and published names the gate no longer describes (notDescribed). manifestDigest goes back to refresh_operation_governance, which opens the revisions. Refuses 409 gatekeeper_linked for a Gatekeeper enabled from a platform gate instance (align with its announcement instead) and 409 no_announced_manifest for one at a platform instance’s address that was never enabled from the catalog. Writes nothing.',
   },
   {
     name: 'issue_gate_credential_token',
@@ -3905,6 +3919,7 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set<CapabilityName>
     'list_available_gate_instances',
     'enable_gate_instance',
     'preview_gate_instance_enable',
+    'preview_gatekeeper_resync',
     'refresh_operation_governance',
     'issue_service_handle',
     'create_gate_instance',

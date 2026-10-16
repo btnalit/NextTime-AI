@@ -75,6 +75,9 @@ export interface RequestActionInput {
   readonly actorRuntime: string;
   readonly idempotencyKey?: string;
   readonly parentWorkerRunId?: string;
+  /** S11 GO1: the StepRun the requesting Worker's Task executes (its own attempt or a nested child
+   *  Task of it) — resolved by the caller from that Task; omitted outside a goal. */
+  readonly stepRunId?: string;
   /** Legacy K: the digest of the Operation definition this request is made against
    *  (`ActionRequestRow.operationDigest`); omitted when there is none to name. */
   readonly operationDigest?: string;
@@ -179,8 +182,8 @@ async function insertActionRequestRow(
     `insert into action_requests (
        workspace_id, status, gatekeeper_id, action_kind, resource_scope, blast_radius,
        policy_decision, await_decision, on_behalf_of, parent_worker_run_id, actor_runtime,
-       idempotency_key, params, requester_can_approve, operation_digest
-     ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14, $15)
+       idempotency_key, params, requester_can_approve, operation_digest, step_run_id
+     ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14, $15, $16)
      returning ${ACTION_REQUEST_ROW_COLUMNS}`,
     [
       workspaceId,
@@ -198,6 +201,7 @@ async function insertActionRequestRow(
       JSON.stringify(input.params ?? {}),
       requesterCanApprove,
       input.operationDigest ?? null,
+      input.stepRunId ?? null,
     ],
   );
   const row = result.rows[0];

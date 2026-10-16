@@ -73,6 +73,12 @@ describe.runIf(DATABASE_URL !== undefined)('deleteWorkspace (integration, real P
     before('evidence', 'links');
     before('conflicts', 'links');
     before('links', 'objects');
+    // S11 GO1 (migrations/goal/0001, task/0007, governance/0022).
+    before('step_runs', 'goal_runs');
+    before('plan_revisions', 'goal_runs');
+    before('step_runs', 'plan_revisions');
+    before('tasks', 'step_runs');
+    before('action_requests', 'step_runs');
   });
 
   it('deletes a Workspace and every row of its own across all workspace-scoped tables, leaving another Workspace untouched', async () => {

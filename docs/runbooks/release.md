@@ -1197,7 +1197,7 @@ v0.47.0、v0.48.0 不单独上主机（#554 不在 v0.47.0 里，遗留 259 的�
 
 **回滚**（§5）：回滚目标是 v0.46.0，按 §3.25 与 §3.26 的回滚说明；不需要排空 Worker。
 
-窗口目标改到 v0.49.0 之后的发版时（维护者 2026-10-16 决定窗口暂缓，开窗口时目标改为当时最新的发版），本清单按新目标刷新，并加上之后各版的小节，至少 §3.28（#589 升钉：`postgres` 与 `backup` 重建、不执行 `ALTER EXTENSION`、应用后只读核对 `vector` 扩展版本）与 §3.29（#592：governance 0020，旧「始终允许」规则可能显示「已暂停 · 待确认版本」需 owner 重新确认，契约不向后兼容、旧控制台页要刷新）与 §3.30（#601：governance 0021，窗口前估算 `audit_records` 全表扫描的锁表时间并核对回收超时，窗口后历史失败行多显示「结果不明」）。
+窗口目标改到 v0.49.0 之后的发版时（维护者 2026-10-16 决定窗口暂缓，开窗口时目标改为当时最新的发版），本清单按新目标刷新，并加上之后各版的小节，至少 §3.28（#589 升钉：`postgres` 与 `backup` 重建、不执行 `ALTER EXTENSION`、应用后只读核对 `vector` 扩展版本）与 §3.29（#592：governance 0020，旧「始终允许」规则可能显示「已暂停 · 待确认版本」需 owner 重新确认，契约不向后兼容、旧控制台页要刷新）与 §3.30（#601：governance 0021，窗口前估算 `audit_records` 全表扫描的锁表时间并核对回收超时，窗口后历史失败行多显示「结果不明」）与 §3.31（#607：goal 0001 / task 0007 / governance 0022，窗口前估算建索引时间）。
 
 ### 3.28 第三方镜像升钉：pgvector、node、postgres（#589，v0.49.0 之后的下一版起）
 
@@ -1231,6 +1231,15 @@ node 24.21.0 → 24.22.0，只影响平台镜像的构建，随发版重建，�
 - **窗口后提醒维护者**：历史失败行里拿不准的会显示红色「结果不明，需要核对」，数量可能不少。这是有意的保守读法（方向是让人核对，而不是诱导重试），不是新故障；历史行没有关联 StepRun，推进器不读它们。应用后只读核对：`select failure_kind, count(*) from action_requests where status in ('failed', 'compensated') group by failure_kind;`，结果记 `docs/private/`。
 - **契约**：`ActionRequestStatus` 新增 `withdrawn`，`ActionRequestWire` 新增必填可空字段 `failureKind`。仓库内消费方已同步；升级时还开着的旧控制台页遇到这两个值时显示可能不全，刷新即可。发版说明人工补一句：`markActionRequestFailed` 现在要求 `failureKind`，`ActionExecutorResult` 改为联合类型（只影响仓库内调用方）。
 - **回滚**：只回退代码即可（§6）。上一版写失败行不带类别，触发器补 `outcome_unknown`；残留的 `withdrawn` 行对上一版是终态（它的 drain 与过期只按名字挑 `auto_approved` / `approved` / `pending_approval` / `executing`）。
+
+### 3.31 目标级执行的数据模型（#607，goal 0001、task 0007、governance 0022，S11 GO1 后半，v0.49.0 之后的下一版起）
+
+带三个迁移，随 `apply-release.sh` 的迁移步骤自动应用，无单独主机步骤；线上契约无变化。
+
+- **迁移做什么**：`goal/0001` 是新模块 `goal`（迁移锁键 7241000701）的三张新表 `goal_runs` / `plan_revisions` / `step_runs` 与它们的守卫触发器、延迟约束触发器 `plan_revisions_adopted`；`task/0007` 给 `tasks` 加可空列 `goal_run_id` / `step_run_id` / `plan_revision` / `step_attempt` / `run_config_snapshot`、CHECK、外键、I-G1 唯一索引、触发器 `tasks_goal_step_immutable` 与索引 `worker_runs_task_idx`；`governance/0022` 给 `action_requests` 加可空列 `step_run_id`、外键、触发器 `action_requests_step_run_immutable` 与索引 `action_requests_parent_worker_run_idx`。都不回填。
+- **窗口前只读核对**：`task/0007` 与 `governance/0022` 在 `tasks`、`action_requests` 上加 CHECK 与外键时在锁内校验全表（新列全是 NULL，很快）；两条新索引用普通 `create index`（迁移在事务里跑，不能 `CONCURRENTLY`），建索引期间阻塞对 `worker_runs`、`action_requests` 的写入。先查 `select count(*) from worker_runs;` 与 `select count(*) from action_requests;` 估算时间，和 §3.30 的 `audit_records` 估算一起记 `docs/private/`（审查 #493 在 #607 记为 P3）。
+- **应用后只读核对**：`select tgname, tgenabled from pg_trigger where tgname in ('tasks_goal_step_immutable', 'action_requests_step_run_immutable', 'action_requests_status_guard');` 都是 `O`；内核日志里 `nexttime_invariant_violations{invariant=~"I-G.*"}` 为 0。
+- **回滚**：只回退代码即可（§6）。上一版不读写三张新表，看不到新列；新列都可空、上一版写的行全为 NULL，满足 CHECK 与外键；不可改触发器只在改这些列时触发。
 
 ## 4. Hotfix 流程
 
@@ -1341,6 +1350,9 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.46.0 之后的下一版 | core `0043_audit_unattributed_raw_secret_scrub`（#549，遗留 183–187）：`audit_records_actor_shape` 在 0040 的未署名主机操作名单里加上 `cli.raw_secrets_scrubbed`，其余不变；不改数据、不加列 | 可逆 | 只放宽：满足 0040 约束的行都满足新约束，重建约束不需要回填；v0.46.0 的代码从不写这个动作，回退后约束只是多允许一种它不会写的行。`scrub-raw-secrets` 改写的 3 类数据是另一回事：遮蔽是单向的，回退代码不会恢复原文，旧代码照常读遮蔽后的文本（§3.25） | 只需回退代码；恢复备份会把原文带回来，只用于灾备 |
 | v0.49.0 之后的下一版 | governance `0020_auto_approval_definition`（#592，遗留 218）：`gatekeeper_policies` 加两列可空列 `operation_digest`（检查约束 `gatekeeper_policies_operation_digest_shape`：为空或 `sha256:<64 hex>`）与 `operation_version`（`gatekeeper_policies_operation_version_positive`：为空或 > 0），并按批准证据回填既有的按门自动批准规则（无证据的不回填，各记一条审计） | 可逆 | 只加两列可空列与只约束这两列的检查，回填只写新列与审计行。上一版的 `governance/policy` 读写 `gatekeeper_policies` 都用显式列清单，看不到新列（PR 与审查 #493 核对，不需要 reversibility 声明）。回退后上一版写的规则不带摘要，重新升级后在本版显示暂停、走审批；用上一版编辑一条已绑定的规则会保留旧摘要，回到本版显示「已暂停 · 定义已变」——都只会更窄，不会更宽（§3.29） | 只需回退代码；若要连 schema 一起撤：`alter table gatekeeper_policies drop column operation_digest, drop column operation_version`（约束随列删除），并 `delete from schema_migrations where module = 'governance' and version = 20`（不撤也无害；审计行保留） |
 | v0.49.0 之后的下一版 | governance `0021_action_request_withdraw_failure_kind`（#601，S11 GO1 前半）：重建 `action_requests_status_check` 加 `withdrawn`，加列 `failure_kind` 与 CHECK `action_requests_failure_kind_check`，加触发器 `action_requests_status_guard`，按白名单回填存量失败行 | 可逆 | 上一版按显式列清单读写 `action_requests`，看不到 `failure_kind`，也从不写 `withdrawn`；它写的失败行由触发器补 `outcome_unknown`（从不诱导重试的读法）；残留的 `withdrawn` 行对它是终态。PR 在本地先应用本版全部迁移、再跑 v0.49.0 内核全套测试（199 个文件 3343 个测试）全过，不需要 reversibility 声明。回填和 `ALTER TABLE` 同一事务、全表扫描 `audit_records`，窗口前估算锁表时间（§3.30） | 只需回退代码；若要连 schema 一起撤：`drop trigger action_requests_status_guard on action_requests` 与 `drop function action_requests_status_guard()`、`alter table action_requests drop column failure_kind`，把 `withdrawn` 行先改到终态后按 0003 重建状态 CHECK，并 `delete from schema_migrations where module = 'governance' and version = 21`（不撤也无害） |
+| v0.49.0 之后的下一版 | goal `0001_goal_runs`（#607，S11 GO1 后半，新模块 `goal`，迁移锁键 7241000701）：新表 `goal_runs` / `plan_revisions` / `step_runs`、守卫触发器、延迟约束触发器 `plan_revisions_adopted` | 可逆 | 新模块的新表，上一版从不读写（PR 在本地按 `reversibility-probe` 方式核对） | 只需回退代码；若要连 schema 一起撤：先撤 `task/0007` 与 `governance/0022` 的外键，再 `drop table step_runs, plan_revisions, goal_runs cascade` 并 `delete from schema_migrations where module = 'goal'`（不撤也无害） |
+| v0.49.0 之后的下一版 | task `0007_task_goal_step`（#607）：`tasks` 加可空列 `goal_run_id` / `step_run_id` / `plan_revision` / `step_attempt` / `run_config_snapshot`、CHECK、外键、I-G1 唯一索引、触发器 `tasks_goal_step_immutable`，`worker_runs_task_idx` | 可逆 | 只加可空列与只约束这些列的 CHECK / 外键 / 触发器，不回填；上一版按显式列清单读写 `tasks`，写的行新列全为 NULL。建索引期间阻塞 `worker_runs` 写入（§3.31） | 只需回退代码；若要撤：`drop trigger tasks_goal_step_immutable on tasks`、删索引与五列，并 `delete from schema_migrations where module = 'task' and version = 7` |
+| v0.49.0 之后的下一版 | governance `0022_action_request_step_run`（#607）：`action_requests` 加可空列 `step_run_id`、外键、触发器 `action_requests_step_run_immutable`，`action_requests_parent_worker_run_idx` | 可逆 | 同上：可空列不回填，上一版写的行为 NULL，触发器只在改这一列时触发；建索引期间阻塞 `action_requests` 写入（§3.31） | 只需回退代码；若要撤：`drop trigger action_requests_step_run_immutable on action_requests`、删索引与列，并 `delete from schema_migrations where module = 'governance' and version = 22` |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：

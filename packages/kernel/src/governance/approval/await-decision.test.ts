@@ -33,6 +33,7 @@ function actionRequest(overrides: Partial<ActionRequestRow> = {}): ActionRequest
     params: {},
     requesterCanApprove: true,
     operationDigest: null,
+    stepRunId: null,
     ...overrides,
   };
 }

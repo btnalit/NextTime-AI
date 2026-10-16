@@ -81,6 +81,8 @@ export {
   roleMayDecideActionRequests,
 } from './reads.js';
 
+export { type StepActionOutcome, listStepActionOutcomes } from './step-actions.js';
+
 export {
   type UpdateActionRequestStatusInput,
   updateActionRequestStatusConditional,

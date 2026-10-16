@@ -1,6 +1,6 @@
-import { visibleText } from '@nexttime/shared';
+import { type AvailableGateInstanceWire, visibleText } from '@nexttime/shared';
 import { memo } from 'react';
-import { useCapability } from '../hooks/useCapability.js';
+import { useCapability, useCapabilityList } from '../hooks/useCapability.js';
 import { useRoleCan } from '../hooks/useRoleCan.js';
 import {
   type ActionOutcome,
@@ -10,7 +10,7 @@ import {
   waitingReason,
 } from '../lib/action-outcome.js';
 import type { CapabilityCaller } from '../lib/clients.js';
-import { gateReasonNextStep } from '../lib/errors.js';
+import { definitionMismatchStep, gateReasonNextStep } from '../lib/errors.js';
 import { formatTime, prettyJsonVisible, shortId } from '../lib/format.js';
 import { type Translate, useT } from '../lib/i18n.js';
 import { hrefs } from '../lib/router.js';
@@ -56,10 +56,44 @@ function GateReasonNote({
   readonly actionRequestId?: string;
 }) {
   const t = useT();
-  if (http !== undefined && gateReasonNextStep(note.text, t)?.code === 'outcome_unknown') {
+  const code = gateReasonNextStep(note.text, t)?.code;
+  if (http !== undefined && code === 'outcome_unknown') {
     return <NamedGateReasonNote http={http} actionRequestId={actionRequestId} {...note} />;
   }
+  if (http !== undefined && code === 'operation_definition_mismatch' && note.gatekeeperId) {
+    return <DefinitionMismatchNote http={http} gatekeeperId={note.gatekeeperId} {...note} />;
+  }
   return <GateReasonNoteBody {...note} />;
+}
+
+const ALL_INSTANCES: Readonly<Record<string, unknown>> = {};
+
+/** UX acceptance of #612 (P2-4): the call names its system, so the note says only what applies to
+ *  it — a platform gate's align, or a self-connected gate's 「重新读取门的清单」 — read off
+ *  `list_available_gate_instances` (a linked system is one of its rows). A reader who may not
+ *  list them, or before the read answers, gets the note covering both. */
+function DefinitionMismatchNote({
+  http,
+  ...note
+}: GateReasonNoteProps & { readonly http: CapabilityCaller; readonly gatekeeperId: string }) {
+  const t = useT();
+  const canList = useRoleCan(http)('list_available_gate_instances') === true;
+  const instances = useCapabilityList<AvailableGateInstanceWire>(
+    http,
+    'list_available_gate_instances',
+    ALL_INSTANCES,
+    { enabled: canList, autoLoadAll: true },
+  );
+  const message =
+    canList && instances.state.status === 'ready'
+      ? definitionMismatchStep(
+          instances.state.data.items.some((row) => row.gatekeeperId === note.gatekeeperId)
+            ? 'platform'
+            : 'self',
+          t,
+        )
+      : undefined;
+  return <GateReasonNoteBody {...note} message={message} />;
 }
 
 interface GateReasonNoteProps {
@@ -107,7 +141,8 @@ function GateReasonNoteBody({
   gatekeeperId,
   target,
   system,
-}: GateReasonNoteProps & { readonly system?: string }) {
+  message,
+}: GateReasonNoteProps & { readonly system?: string; readonly message?: string }) {
   const t = useT();
   const step = gateReasonNextStep(text, t, target, system);
   if (!step) return null;
@@ -120,7 +155,7 @@ function GateReasonNoteBody({
     >
       <span className="stack-s" data-error-code={step.code}>
         <span className="font-medium">{step.title}</span>
-        <span>{step.message}</span>
+        <span>{message ?? step.message}</span>
         {outcomeUnknown ? (
           <span className="text-3" data-testid="tool-call-gate-reason-raw-status">
             {t(

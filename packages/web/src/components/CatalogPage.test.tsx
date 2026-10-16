@@ -794,7 +794,8 @@ describe('CatalogPage', () => {
     expect(first.textContent).not.toBe(second.textContent);
   });
 
-  it('console G4: on a gate the workspace connected itself, the held draft is told to connect again — no rewrite offered', async () => {
+  it('legacy 214: on a gate the workspace connected itself, the held draft is rewritten from what the gate describes now', async () => {
+    const refreshes: Record<string, unknown>[] = [];
     const http = scriptedHttp({
       list_operations: () => ({
         items: [
@@ -802,6 +803,64 @@ describe('CatalogPage', () => {
             gatekeeperId: 'gk-1',
             name: 'stock.reserve',
             status: 'draft',
+            origin: 'import',
+            gateOwnedParams: [{ param: 'access_token', location: 'query' }],
+          },
+        ],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+      list_available_gate_instances: () => ({ items: [] }),
+      preview_gatekeeper_resync: () => ({
+        gatekeeperId: 'gk-1',
+        manifestDigest: 'digest-1',
+        operationsToImport: [
+          {
+            name: 'stock.reserve',
+            mode: 'execute',
+            blastRadius: 'medium',
+            autoApprovable: false,
+            pendingDraft: { rewritable: true, fromGate: true },
+          },
+        ],
+        operationsAlreadyPresent: [],
+        notDescribed: [],
+      }),
+      refresh_operation_governance: (params) => {
+        refreshes.push(params as Record<string, unknown>);
+        return {
+          gatekeeperId: 'gk-1',
+          refreshed: [],
+          revisionDrafts: [{ name: 'stock.reserve', version: 1 }],
+          unchanged: [],
+        };
+      },
+    });
+    // The same key the bulk publish's held-drafts notice links to.
+    renderPage(http, 'operations', 'gk-1::stock.reserve');
+    const notice = await screen.findByTestId('operation-gate-owned-params');
+    await waitFor(() => expect(notice.textContent).toContain('重启门'));
+    expect(notice.textContent).not.toContain('重新接入');
+    expect(notice.textContent).not.toContain('与门公告对齐');
+    fireEvent.click(await screen.findByTestId('operation-gate-owned-resync'));
+    const confirm = await screen.findByTestId('operation-gate-owned-resync-confirm');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    await waitFor(() => expect(refreshes).toHaveLength(1));
+    expect(refreshes[0]).toEqual({
+      gatekeeperId: 'gk-1',
+      operationNames: ['stock.reserve'],
+      manifestDigest: 'digest-1',
+    });
+  });
+
+  it('legacy 214: a proposal on a self-connected gate is never offered the re-read', async () => {
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [
+          {
+            gatekeeperId: 'gk-1',
+            name: 'stock.reserve',
+            status: 'draft',
+            origin: 'agent',
             gateOwnedParams: [{ param: 'access_token', location: 'query' }],
           },
         ],
@@ -809,12 +868,10 @@ describe('CatalogPage', () => {
       get_operation_stats: () => ({ items: [] }),
       list_available_gate_instances: () => ({ items: [] }),
     });
-    // The same key the bulk publish's held-drafts notice links to.
     renderPage(http, 'operations', 'gk-1::stock.reserve');
     const notice = await screen.findByTestId('operation-gate-owned-params');
-    await waitFor(() => expect(notice.textContent).toContain('重新接入'));
-    expect(notice.textContent).not.toContain('与门公告对齐');
-    expect(screen.queryByTestId('operation-gate-owned-rewrite')).toBeNull();
+    await waitFor(() => expect(notice.textContent).toContain('agent 或成员提议的'));
+    expect(screen.queryByTestId('operation-gate-owned-resync')).toBeNull();
   });
 
   it('legacy K: a revision draft whose definition and classification match says so', async () => {

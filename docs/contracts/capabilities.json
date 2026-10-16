@@ -16833,6 +16833,10 @@
                 },
                 "type": "array"
               },
+              "governanceByRevision": {
+                "const": true,
+                "type": "boolean"
+              },
               "name": {
                 "type": "string"
               }
@@ -17011,6 +17015,264 @@
         "operationsAlreadyPresent",
         "manifestDigest",
         "awaitingPlatformAdoption"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
+    "channel": "human",
+    "group": "connection",
+    "minRole": "owner",
+    "mode": "observe",
+    "name": "preview_gatekeeper_resync",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "gatekeeperId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "gatekeeperId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "gatekeeperId": {
+          "type": "string"
+        },
+        "manifestDigest": {
+          "type": "string"
+        },
+        "notDescribed": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "operationsAlreadyPresent": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "announced": {
+                "additionalProperties": false,
+                "properties": {
+                  "autoApprovable": {
+                    "type": "boolean"
+                  },
+                  "blastRadius": {
+                    "enum": [
+                      "low",
+                      "medium",
+                      "high"
+                    ],
+                    "type": "string"
+                  },
+                  "mode": {
+                    "enum": [
+                      "observe",
+                      "execute"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "blastRadius",
+                  "autoApprovable"
+                ],
+                "type": "object"
+              },
+              "definitionDiffers": {
+                "type": "boolean"
+              },
+              "differs": {
+                "type": "boolean"
+              },
+              "direction": {
+                "enum": [
+                  "loosened",
+                  "tightened",
+                  "mixed",
+                  "neutral"
+                ],
+                "type": "string"
+              },
+              "existing": {
+                "additionalProperties": false,
+                "properties": {
+                  "autoApprovable": {
+                    "type": "boolean"
+                  },
+                  "blastRadius": {
+                    "enum": [
+                      "low",
+                      "medium",
+                      "high"
+                    ],
+                    "type": "string"
+                  },
+                  "mode": {
+                    "enum": [
+                      "observe",
+                      "execute"
+                    ],
+                    "type": "string"
+                  },
+                  "status": {
+                    "enum": [
+                      "draft",
+                      "published",
+                      "deprecated"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "blastRadius",
+                  "autoApprovable",
+                  "status"
+                ],
+                "type": "object"
+              },
+              "gateOwnedParams": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "location": {
+                      "enum": [
+                        "header",
+                        "query",
+                        "cookie",
+                        "binding"
+                      ],
+                      "type": "string"
+                    },
+                    "param": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "param",
+                    "location"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "governanceByRevision": {
+                "const": true,
+                "type": "boolean"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "existing",
+              "announced",
+              "differs",
+              "direction",
+              "definitionDiffers"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "operationsToImport": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "autoApprovable": {
+                "type": "boolean"
+              },
+              "blastRadius": {
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ],
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "gateOwnedParams": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "location": {
+                      "enum": [
+                        "header",
+                        "query",
+                        "cookie",
+                        "binding"
+                      ],
+                      "type": "string"
+                    },
+                    "param": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "param",
+                    "location"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "mode": {
+                "enum": [
+                  "observe",
+                  "execute"
+                ],
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "pendingDraft": {
+                "additionalProperties": false,
+                "properties": {
+                  "fromGate": {
+                    "type": "boolean"
+                  },
+                  "rewritable": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "rewritable"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "name",
+              "mode",
+              "blastRadius",
+              "autoApprovable"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "gatekeeperId",
+        "manifestDigest",
+        "operationsToImport",
+        "operationsAlreadyPresent",
+        "notDescribed"
       ],
       "type": "object"
     },

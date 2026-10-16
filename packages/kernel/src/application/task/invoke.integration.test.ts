@@ -289,6 +289,107 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
     expect(supervisorClient.spawnCalls).toHaveLength(0);
   });
 
+  it('S11 GO1: a nested child Task runs for its caller’s goal step, without an attempt number of its own', async () => {
+    // A principal of its own: this test leaves running Tasks behind, and `ownerId`'s count against
+    // the per-user concurrency limit is shared by the whole file (see the P2-6 test below).
+    const stepOwnerId = await adminInsertPrincipal('member', 'goal-step');
+    // The step's own attempt Task (the advancer's, GO2) and its Worker, seeded directly; the goal
+    // rows with the guards off, since the advancer that would walk them there is GO2's.
+    const stepSessionId = await insertSession('worker_run', stepOwnerId, stepOwnerId);
+    const stepHandle = await issueTestHandle(stepSessionId, {
+      capabilities: ['get_object', 'invoke_worker'],
+      resources: {},
+    });
+    const seeded = await withWorkspace(
+      pool,
+      { workspaceId, principalId: stepOwnerId },
+      async (client) => {
+        await client.query('set local session_replication_role = replica');
+        const goal = await client.query<{ id: string }>(
+          `insert into goal_runs (workspace_id, status, on_behalf_of, statement, current_revision,
+             confirmed_at, budget_max_tokens, budget_max_steps, budget_max_revisions,
+             budget_max_wall_clock_seconds)
+           values ($1, 'running', $2, 'a goal', 2, now(), 100000, 10, 5, 3600) returning id`,
+          [workspaceId, stepOwnerId],
+        );
+        const goalRunId = goal.rows[0]?.id as string;
+        for (const revision of [1, 2]) {
+          await client.query(
+            `insert into plan_revisions (workspace_id, goal_run_id, revision, based_on_revision,
+               status, plan, proposed_by, decided_by, decided_at)
+             values ($1, $2, $3, $4, 'accepted', '{"steps":[{"key":"s"}]}', $5, $5, now())`,
+            [workspaceId, goalRunId, revision, revision === 1 ? null : revision - 1, stepOwnerId],
+          );
+        }
+        const step = await client.query<{ id: string }>(
+          `insert into step_runs (workspace_id, goal_run_id, step_key, introduced_in_revision,
+             status, attempt_count)
+           values ($1, $2, 's', 1, 'running', 1) returning id`,
+          [workspaceId, goalRunId],
+        );
+        const stepRunId = step.rows[0]?.id as string;
+        const task = await client.query<{ id: string }>(
+          `insert into tasks (workspace_id, status, on_behalf_of, worker_definition_id,
+             worker_definition_version, goal_run_id, step_run_id, plan_revision, step_attempt,
+             run_config_snapshot)
+           values ($1, 'running', $2, $3, 1, $4, $5, 2, 1, '{"definition":{"version":1}}')
+           returning id`,
+          [workspaceId, stepOwnerId, workerDefinitionId, goalRunId, stepRunId],
+        );
+        await client.query(
+          `insert into worker_runs (workspace_id, status, task_id, session_id, depth, attempt)
+           values ($1, 'running', $2, $3, 1, 1)`,
+          [workspaceId, task.rows[0]?.id, stepSessionId],
+        );
+        return { goalRunId, stepRunId };
+      },
+      { skipRoleSwitch: true },
+    );
+
+    const result = await invokeWorker(
+      workspaceId,
+      { principalId: stepOwnerId, channel: 'handle', claims: claimsFromIssued(stepHandle) },
+      { definitionId: workerDefinitionId, version: 1, input: {}, wait: false },
+      deps(new FakeTaskSupervisorClient()),
+    );
+
+    const child = await inTx(stepOwnerId, async (client) => {
+      const rows = await client.query(
+        `select goal_run_id, step_run_id, plan_revision, step_attempt, run_config_snapshot
+           from tasks where workspace_id = $1 and id = $2`,
+        [workspaceId, result.taskId],
+      );
+      return rows.rows[0];
+    });
+    expect(child).toEqual({
+      goal_run_id: seeded.goalRunId,
+      step_run_id: seeded.stepRunId,
+      plan_revision: 2,
+      step_attempt: null,
+      run_config_snapshot: null,
+    });
+
+    // An invoke from outside a goal (an entry session) creates a Task outside it.
+    const entrySessionId = await insertSession('entry', stepOwnerId, stepOwnerId);
+    const entry = await invokeWorker(
+      workspaceId,
+      {
+        principalId: stepOwnerId,
+        channel: 'handle',
+        claims: claimsFromIssued(await issueTestHandle(entrySessionId, entryScope())),
+      },
+      { definitionId: workerDefinitionId, version: 1, input: {}, wait: false },
+      deps(new FakeTaskSupervisorClient()),
+    );
+    const outside = await inTx(stepOwnerId, (client) =>
+      client.query(
+        'select goal_run_id, step_run_id from tasks where workspace_id = $1 and id = $2',
+        [workspaceId, entry.taskId],
+      ),
+    );
+    expect(outside.rows[0]).toEqual({ goal_run_id: null, step_run_id: null });
+  });
+
   // P2-6 fix (review job 652a4abc: "quota checks in separate txns, no lock → concurrent invokes
   // exceed maxConcurrentWorkerRunsPerUser"). A fresh principal (not ownerId, which accumulates
   // running Tasks across this whole suite) seeded to exactly one below the default concurrency

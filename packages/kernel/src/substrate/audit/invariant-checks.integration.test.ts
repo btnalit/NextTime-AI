@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
@@ -458,6 +458,29 @@ describe.runIf(DATABASE_URL !== undefined)(
       const results = await runInvariantChecks(pool);
       expect(results.find((r) => r.invariant === 'I4')?.violations).toBe(0);
       expect(results.find((r) => r.invariant === 'I12')?.violations).toBe(0);
+    });
+
+    it('I4: a trigger switched to fire only under replica (ENABLE REPLICA TRIGGER) counts as missing — it is off for every ordinary session', async () => {
+      const client = await pool.connect();
+      try {
+        await client.query('begin');
+        await client.query('alter table links enable replica trigger links_immutable_content');
+        // The checks run on this one connection, inside the transaction rolled back below.
+        const results = await runInvariantChecks({
+          connect: async () =>
+            ({
+              query: client.query.bind(client),
+              release: () => undefined,
+            }) as unknown as PoolClient,
+        });
+        expect(results.find((r) => r.invariant === 'I4')).toMatchObject({
+          violations: 1,
+          sample: ['links.links_immutable_content'],
+        });
+      } finally {
+        await client.query('rollback');
+        client.release();
+      }
     });
 
     it('I-P1: two published families declaring the same ObjectType name count once; a LinkType or a draft sharing a name does not (S10 P0)', async () => {
