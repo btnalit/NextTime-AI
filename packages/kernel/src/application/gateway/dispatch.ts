@@ -1,6 +1,11 @@
 import { createHash } from 'node:crypto';
 import type { Capability } from '@nexttime/shared';
-import { getCapability } from '@nexttime/shared';
+import {
+  UnstorableTextError,
+  findUnstorableText,
+  getCapability,
+  storableValue,
+} from '@nexttime/shared';
 import { withPlatform } from '../../adapters/db/platform-context.js';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { withWorkspace } from '../../adapters/db/pool.js';
@@ -62,6 +67,32 @@ export class InvalidCapabilityParamsError extends Error {
     this.issues = issues;
   }
 }
+
+/**
+ * Legacy 320: params holding U+0000, which Postgres `text` / `jsonb` cannot store
+ * (`@nexttime/shared` `storable-text.ts`), are refused with `UnstorableTextError` — before the
+ * call's transaction opens — for every capability whose handler does not settle it itself
+ * (`HANDLERS_SETTLING_UNSTORABLE_TEXT`): the field may be a name, an id or a setting, and storing a
+ * stand-in would act on something other than what was asked; the caller is told where and can send
+ * it again. Before this, the call reached its first write (at the latest its own audit row) and
+ * failed as a bare 500 after doing nothing. Re-exported here for the interfaces' error mapping.
+ */
+export { UnstorableTextError } from '@nexttime/shared';
+
+/**
+ * Legacy 320: capabilities whose params are content already produced elsewhere — a Worker's final
+ * report, the entry agent's Turn summary, a collector's observed data — so their handler stores
+ * U+0000 as the visible `\u{0}` (`storableValue`) and records that it did, instead of the call
+ * being refused: refusing would lose the work behind it (the Task's result, the Turn's end, a
+ * collection run every cycle), and the sender cannot always produce the text any other way. Each
+ * handler decides field by field (`worker-result-handler.ts` still refuses a proposed Operation
+ * name holding it, by the name rule). Every other capability is refused by `UnstorableTextError`.
+ */
+export const HANDLERS_SETTLING_UNSTORABLE_TEXT: ReadonlySet<string> = new Set([
+  'report_task_result',
+  'report_turn',
+  'submit_observations',
+]);
 
 export class CapabilityNotImplementedError extends Error {
   constructor(name: string) {
@@ -181,7 +212,11 @@ function lookupCapabilityOrThrow(name: string): Capability {
 function auditParams(
   capability: Capability,
   params: Record<string, unknown>,
-): { readonly params: Record<string, unknown>; readonly redactedValues?: number } {
+): {
+  readonly params: Record<string, unknown>;
+  readonly redactedValues?: number;
+  readonly unstorableEscaped?: number;
+} {
   // Unbounded walk: the params already passed their schema, and the copy keeps their shape.
   const redacted = redactSuspectedSecrets(params, { secretFields: true });
   let audited = redacted.value as Record<string, unknown>;
@@ -191,9 +226,16 @@ function auditParams(
       if (key in audited) audited[key] = '[redacted]';
     }
   }
-  return redacted.count > 0
-    ? { params: audited, redactedValues: redacted.count }
-    : { params: audited };
+  // Legacy 320: only a capability in `HANDLERS_SETTLING_UNSTORABLE_TEXT` gets here with U+0000 in
+  // its params (every other one was refused); the audit copy stores it as `\u{0}` and says how
+  // many, so the row records the call instead of failing it.
+  const storable = storableValue(audited);
+  audited = storable.value;
+  return {
+    params: audited,
+    ...(redacted.count > 0 ? { redactedValues: redacted.count } : {}),
+    ...(storable.escaped > 0 ? { unstorableEscaped: storable.escaped } : {}),
+  };
 }
 
 /**
@@ -342,7 +384,8 @@ async function auditUnknownOperation(
 
 /**
  * Dispatches one capability call. Throws `CapabilityNotFoundError` (404), `ForbiddenError` (403,
- * authorize.ts), `InvalidCapabilityParamsError` (400), `CapabilityNotImplementedError` (501), or —
+ * authorize.ts), `InvalidCapabilityParamsError` (400), `UnstorableTextError` (400, legacy 320),
+ * `CapabilityNotImplementedError` (501), or —
  * only when `KERNEL_VALIDATE_RESULTS=1` — `CapabilityResultValidationError`; resolves with the
  * handler's `result` on success.
  */
@@ -358,6 +401,10 @@ export async function dispatchCapability(
 
   const parsed = capability.paramsSchema.safeParse(rawParams ?? {});
   if (!parsed.success) throw new InvalidCapabilityParamsError(name, parsed.error.issues);
+  if (!HANDLERS_SETTLING_UNSTORABLE_TEXT.has(name)) {
+    const unstorable = findUnstorableText(parsed.data);
+    if (unstorable) throw new UnstorableTextError(`capability "${name}"`, unstorable);
+  }
 
   const handler = CAPABILITY_HANDLERS.get(name);
   // `typeof … === 'function'` rather than a truthiness check: the registry lookup above already

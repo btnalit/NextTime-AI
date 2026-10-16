@@ -59,6 +59,7 @@ import {
   SupersedeIdentityMismatchError,
   UnauthorizedError,
   UnknownOperationError,
+  UnstorableTextError,
   WorkerResultValidationError,
   WorkspaceRequiredError,
   dispatchCapability,
@@ -282,6 +283,16 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   }
   if (err instanceof InvalidCapabilityParamsError) {
     return { status: 400, code: 'invalid_params', message: err.message };
+  }
+  // Legacy 320: params holding U+0000, which cannot be stored — 400 with its own code and
+  // `details` (where it sits), refused before anything was written.
+  if (err instanceof UnstorableTextError) {
+    return {
+      status: 400,
+      code: err.code,
+      message: err.message,
+      details: { path: [...err.details.path], in: err.details.in },
+    };
   }
   if (err instanceof CapabilityNotImplementedError) {
     return { status: 501, code: 'not_implemented', message: err.message };

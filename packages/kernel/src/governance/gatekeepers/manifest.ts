@@ -10,7 +10,11 @@ import {
   OPERATION_NAME_MAX,
   OPERATION_TRANSITIONS,
   type OperationNameProblem,
+  UNSTORABLE_CHAR,
+  UnstorableTextError,
+  findUnstorableText,
   operationNameProblem,
+  storableText,
   transition,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
@@ -357,6 +361,34 @@ export interface ImportManifestResult {
   readonly skipped: readonly SkippedOperation[];
 }
 
+/**
+ * Legacy 320: one manifest entry made storable, or refused. A manifest comes from outside the
+ * kernel (a gate's `describe_operations`, an OpenAPI document, an MCP `tools/list`, a hand-written
+ * 接入包), and Postgres cannot store U+0000. Its `description` is prose for a reader, so U+0000
+ * there is stored as the visible `\u{0}`; every other field — the name, the binding the gate runs,
+ * the params schema's keys, the ObjectTypes it reads and writes — is something the kernel or the
+ * gate acts on, so U+0000 there refuses the import before any write: a name by the name rule
+ * (`OperationNameInvalidError`, as any other control character — and without the lookup that
+ * would itself fail on it), anything else by `UnstorableTextError`.
+ */
+export function storableManifestOperation(operation: Operation): Operation {
+  if (operation.name.includes(UNSTORABLE_CHAR)) {
+    throw new OperationNameInvalidError(operation.name, 'invisible_or_control_characters');
+  }
+  const { description, ...acted } = operation;
+  const unstorable = findUnstorableText(acted);
+  if (unstorable !== undefined) {
+    throw new UnstorableTextError(
+      `import_manifest: Operation ${quotedName(operation.name)}`,
+      unstorable,
+      'the field',
+    );
+  }
+  return description?.includes(UNSTORABLE_CHAR)
+    ? { ...operation, description: storableText(description) }
+    : operation;
+}
+
 /** Imports a whole manifest (e.g. from `importOpenApi`/`importMcpTools`, or a hand-written YAML
  *  接入包) as `'import'`-origin draft Operation Objects — one per entry, all `status: 'draft'`
  *  regardless of the transport's own suggested defaults (I17: nothing is auto-approvable until an
@@ -381,11 +413,12 @@ export async function importManifest(
   workspaceId: string,
   input: ImportManifestInput,
 ): Promise<ImportManifestResult> {
+  const operations = input.operations.map(storableManifestOperation);
   if (input.requireDescription) {
     // Validated up front, before any write — a manifest with one bad entry imports nothing
     // rather than a confusing partial import (same "reject atomically" shape `manifest.ts`'s own
     // draft-isolation conditional writes already use elsewhere in this file).
-    for (const operation of input.operations) {
+    for (const operation of operations) {
       if (!operation.description || operation.description.trim().length === 0) {
         throw new OperationDescriptionRequiredError(operation.name);
       }
@@ -393,7 +426,7 @@ export async function importManifest(
   }
 
   // Legacy 232: a new name breaking the name rule imports nothing (same atomic shape as above).
-  for (const operation of input.operations) {
+  for (const operation of operations) {
     if (operationNameProblem(operation.name) === undefined) continue;
     assertNewOperationNameAllowed(
       operation.name,
@@ -403,7 +436,7 @@ export async function importManifest(
 
   const imported: OperationRecord[] = [];
   const skipped: SkippedOperation[] = [];
-  for (const operation of input.operations) {
+  for (const operation of operations) {
     const existing = await getOperation(client, workspaceId, input.gatekeeperId, operation.name);
     // Legacy 278: a fresh draft takes the next version above every row, discarded ones included.
     const version =

@@ -1,3 +1,4 @@
+import { storableValue } from '@nexttime/shared';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { withWorkspace } from '../../adapters/db/pool.js';
 import {
@@ -279,10 +280,13 @@ export function createChatEventSink(deps: ChatEventSinkDeps): AgentRuntimeEventS
         async (client) => {
           const rows: ChatMessageRow[] = [];
           for (const content of records) {
+            // Legacy 320: a tool call's args and result come from the model and the tool; U+0000
+            // in them (or in the call's id) is stored as the visible `\u{0}`, never the reason a
+            // record is lost.
             const row = await insertToolCallMessage(client, event.workspaceId, {
               chatId: event.chatId,
               turnId: event.turnId,
-              content,
+              content: storableValue(content).value,
             });
             if (row !== null) rows.push(row);
           }
@@ -431,7 +435,9 @@ export function createChatEventSink(deps: ChatEventSinkDeps): AgentRuntimeEventS
                   chatId: event.chatId,
                   turnId: event.turnId,
                   role: event.role,
-                  content: scrubbed.value,
+                  // Legacy 320: the model's text, stored with U+0000 as the visible `\u{0}` —
+                  // before, it failed the insert (22P05) and the message was lost.
+                  content: storableValue(scrubbed.value).value,
                 }),
             );
           } catch (err) {

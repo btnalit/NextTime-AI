@@ -282,6 +282,77 @@ describe.runIf(DATABASE_URL !== undefined)(
       ).rejects.toMatchObject({ name: 'ObservationIdentityError' });
     });
 
+    describe('legacy 320: U+0000, which Postgres cannot store', () => {
+      it('register_source (a name, compared and looked up) is refused with where, nothing written', async () => {
+        const caller = handleCaller(workspaceId, servicePrincipalId, INGEST_CAPABILITIES);
+        const name = `nul-source-${randomUUID().slice(0, 8)}`;
+        await expect(
+          dispatchCapability({ pool }, caller, 'register_source', {
+            kind: 'host-inventory-collector',
+            name: `${name}\u0000`,
+            visibility: 'workspace',
+          }),
+        ).rejects.toMatchObject({
+          name: 'UnstorableTextError',
+          code: 'unstorable_text',
+          details: { path: ['name'], in: 'value' },
+          message: expect.stringContaining('params "name" holds U+0000'),
+        });
+        const written = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+          client.query(
+            `select 1 from audit_records where workspace_id = $1 and action = 'register_source'
+               and payload -> 'params' ->> 'name' like $2`,
+            [workspaceId, `${name}%`],
+          ),
+        );
+        expect(written.rowCount).toBe(0);
+      });
+
+      it('submit_observations (observed data) is stored with it as \\u{0}, and the audit row counts it', async () => {
+        const caller = handleCaller(workspaceId, servicePrincipalId, INGEST_CAPABILITIES);
+        const source = (await dispatchCapability({ pool }, caller, 'register_source', {
+          kind: 'host-inventory-collector',
+          name: `nul-observations-${randomUUID().slice(0, 8)}`,
+          visibility: 'workspace',
+        })) as { id: string };
+        const hostname = `test-host-${randomUUID()}`;
+        const result = (await dispatchCapability({ pool }, caller, 'submit_observations', {
+          sourceId: source.id,
+          observations: [
+            { objectType: 'Host', identity: { hostname } },
+            {
+              objectType: 'Container',
+              identity: { composeProjectId: randomUUID(), serviceName: 'web' },
+              properties: { image: 'nginx:\u0000latest' },
+              links: [
+                { linkType: 'runs_on', target: { objectType: 'Host', identity: { hostname } } },
+              ],
+            },
+          ],
+        })) as SubmitObservationsResult;
+        expect(result.objectsUpserted).toBe(2);
+
+        const stored = await withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerId },
+          async (client) => {
+            const container = await client.query<{ image: string }>(
+              "select properties ->> 'image' as image from objects where workspace_id = $1 and id = $2",
+              [workspaceId, result.objects.find((o) => o.objectType === 'Container')?.id],
+            );
+            const audit = await client.query<{ payload: Record<string, unknown> }>(
+              `select payload from audit_records where workspace_id = $1
+               and action = 'submit_observations' and payload -> 'params' ->> 'sourceId' = $2`,
+              [workspaceId, source.id],
+            );
+            return { image: container.rows[0]?.image, audit: audit.rows.map((row) => row.payload) };
+          },
+        );
+        expect(stored.image).toBe('nginx:\\u{0}latest');
+        expect(stored.audit).toEqual([expect.objectContaining({ unstorableEscaped: 1 })]);
+      });
+    });
+
     it('submit_observations: unknown ObjectType → 400 (ObservationIdentityError)', async () => {
       const caller = handleCaller(workspaceId, servicePrincipalId, INGEST_CAPABILITIES);
       const source = (await dispatchCapability({ pool }, caller, 'register_source', {

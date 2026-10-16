@@ -107,6 +107,50 @@ describe('HttpGatekeeperClient', () => {
     expect(result).toEqual({ data: { ok: 1 }, observedFacts: [], replayed: true });
   });
 
+  it("stores U+0000 in a gate's answer and error message as the visible \\u{0} (legacy 320)", async () => {
+    const answer = vi.fn(async () =>
+      jsonResponse({
+        ok: true,
+        result: {
+          data: { out: 'a\u0000b' },
+          observedFacts: [{ objectType: 'Host', identity: { hostname: 'h\u0000' } }],
+          replayed: false,
+        },
+      }),
+    );
+    const applied = await new HttpGatekeeperClient({ fetchImpl: answer }).apply(GATE, {
+      operation: 'stock.adjust',
+      params: {},
+      actionRequestId: 'req-1',
+      operationDigest: DIGEST,
+    });
+    expect(applied).toEqual({
+      data: { out: 'a\\u{0}b' },
+      observedFacts: [{ objectType: 'Host', identity: { hostname: 'h\\u{0}' } }],
+      replayed: false,
+    });
+
+    const refusal = vi.fn(async () =>
+      jsonResponse(
+        { ok: false, error: { code: 'upstream_error', message: 'bad \u0000 byte' } },
+        502,
+      ),
+    );
+    await expect(
+      new HttpGatekeeperClient({ fetchImpl: refusal }).observe(GATE, {
+        operation: 'x',
+        operationDigest: DIGEST,
+      }),
+    ).rejects.toMatchObject({ code: 'upstream_error', message: 'bad \\u{0} byte' });
+  });
+
+  it('keeps a describe_operations manifest as sent — importManifest decides it field by field (legacy 320)', async () => {
+    const operations = [{ name: 'x\u0000', description: 'd\u0000' }];
+    const fetchImpl = vi.fn(async () => jsonResponse({ ok: true, result: { operations } }));
+    const result = await new HttpGatekeeperClient({ fetchImpl }).describeOperations(GATE);
+    expect(result).toEqual({ operations });
+  });
+
   it('throws GatekeeperClientError with the envelope code/message on ok:false', async () => {
     const fetchImpl = vi.fn(async () =>
       jsonResponse({ ok: false, error: { code: 'operation_not_found', message: 'nope' } }, 404),

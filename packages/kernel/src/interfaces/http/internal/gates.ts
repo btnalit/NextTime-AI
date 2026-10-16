@@ -1,11 +1,15 @@
+import { UnstorableTextError } from '@nexttime/shared';
 import type { FastifyInstance } from 'fastify';
 import type { PoolLike } from '../../../adapters/db/pool.js';
 import { withWorkspace } from '../../../adapters/db/pool.js';
 import {
+  type AnnounceBody,
   AnnounceBodySchema,
   listHostedGateDefinitions,
+  storableAnnouncement,
   upsertAnnouncement,
 } from '../../../application/gates/index.js';
+import { OperationNameInvalidError } from '../../../governance/gatekeepers/index.js';
 
 /**
  * interfaces/http/internal/gates: `POST /internal/gates/announce` (P-B1; docs/platform-admin-
@@ -55,10 +59,27 @@ export async function registerGatesRoutes(
         },
       });
     }
+    let announcement: AnnounceBody;
+    try {
+      announcement = storableAnnouncement(parsed.data);
+    } catch (err) {
+      if (!(err instanceof UnstorableTextError || err instanceof OperationNameInvalidError)) {
+        throw err;
+      }
+      // Legacy 320: U+0000 in a field the kernel acts on — refused with where, nothing written.
+      request.log?.warn?.(
+        { gateId: parsed.data.gateId, caller: announcer, code: err.code },
+        `gates/announce: ${err.message}`,
+      );
+      return reply.status(400).send({
+        ok: false,
+        error: { code: err.code, message: err.message, details: err.details },
+      });
+    }
     const outcome = await withWorkspace(
       deps.pool,
       { workspaceId: ADMIN_PLACEHOLDER, principalId: ADMIN_PLACEHOLDER },
-      (client) => upsertAnnouncement(client, parsed.data, announcer),
+      (client) => upsertAnnouncement(client, announcement, announcer),
       { skipRoleSwitch: true },
     );
     if (outcome.announcerMismatch) {
