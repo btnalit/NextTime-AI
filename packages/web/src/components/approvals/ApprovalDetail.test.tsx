@@ -83,6 +83,31 @@ describe('ApprovalDetail (S6-A B2 / B3 / C25)', () => {
     expect(self?.textContent).not.toContain('未知 / 已删除');
   });
 
+  // Legacy 287 (review of #586): the detail says why an unfinished request waits.
+  it('says an executing request in doubt may have run and that the platform is asking the gate', () => {
+    renderDetail({
+      status: 'executing',
+      outcomeInDoubt: { since: '2026-10-16T07:00:00.000Z', reason: 'gate_connection_lost: …' },
+    });
+    const notice = screen.getByTestId('approval-waiting');
+    expect(notice.className).toContain('notice-warn');
+    expect(notice.textContent).toContain('动作结果不明，平台正在向门查询');
+    expect(notice.textContent).toContain('动作可能已经执行');
+  });
+
+  it('says an approved request is queued behind an earlier one awaiting approval, and nothing for one that is not', () => {
+    const { unmount } = renderDetail({
+      status: 'approved',
+      queuedBehind: { status: 'pending_approval', outcomeInDoubt: false },
+    });
+    const notice = screen.getByTestId('approval-waiting');
+    expect(notice.className).toBe('notice');
+    expect(notice.textContent).toContain('更早的一条请求还在等审批');
+    unmount();
+    renderDetail({ status: 'approved', queuedBehind: null });
+    expect(screen.queryByTestId('approval-waiting')).toBeNull();
+  });
+
   it('L8a-10: a gate-scoped request (scope = the gate’s own id) reads as the whole gate, never the raw id', () => {
     const gatekeeperId = '3f2a9c1e-0b4d-4e6f-8a7b-1c2d3e4f5a6b';
     renderDetail(

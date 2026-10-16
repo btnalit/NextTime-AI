@@ -1,5 +1,6 @@
 import type { Operation } from '@nexttime/shared';
 import { BindingKindMismatchError, TransportInvokeError } from '../errors.js';
+import { failedAfterAnswer, failedBeforeAnswer } from './call-failure.js';
 import { NO_REDIRECTS, refuseRedirect } from './redirect.js';
 import type { Transport, TransportInvokeContext, TransportInvokeResult } from './types.js';
 import { boundUntrustedText } from './untrusted-text.js';
@@ -38,6 +39,10 @@ export class McpTransport implements Transport {
   }
 
   private async call<T>(method: string, params: unknown, credential: unknown): Promise<T> {
+    const what = `mcp transport: ${method}`;
+    // Built before the call (review of #586, #501 P2-2): a failure here sent nothing.
+    const headers = { 'content-type': 'application/json', ...credentialHeaders(credential) };
+    const requestBody = JSON.stringify({ jsonrpc: '2.0', id: this.nextId++, method, params });
     const fetchImpl = this.options.fetchImpl ?? fetch;
     const controller = new AbortController();
     const timeout = setTimeout(
@@ -45,36 +50,47 @@ export class McpTransport implements Transport {
       this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     );
     try {
-      const response = await fetchImpl(this.options.endpoint, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          ...credentialHeaders(credential),
-        },
-        body: JSON.stringify({ jsonrpc: '2.0', id: this.nextId++, method, params }),
-        signal: controller.signal,
-        // As in `http.ts` (review lane 5, P2-2): 'follow' would resend the credential header above
-        // to whatever host a 3xx names; a redirect is a failure that says where it pointed
-        // (`redirect.ts`).
-        redirect: NO_REDIRECTS,
-      });
-      await refuseRedirect(`mcp transport: ${method}`, response, this.options.endpoint);
-      if (!response.ok) {
-        throw new TransportInvokeError(`mcp transport: ${method} responded ${response.status}`);
+      let response: Response;
+      try {
+        response = await fetchImpl(this.options.endpoint, {
+          method: 'POST',
+          headers,
+          body: requestBody,
+          signal: controller.signal,
+          // As in `http.ts` (review lane 5, P2-2): 'follow' would resend the credential header
+          // above to whatever host a 3xx names; a redirect is a failure that says where it pointed
+          // (`redirect.ts`).
+          redirect: NO_REDIRECTS,
+        });
+      } catch (err) {
+        // Legacy 287: only a proven "not sent" is a plain failure (`call-failure.ts`).
+        throw failedBeforeAnswer(what, err);
       }
-      const body = (await response.json()) as JsonRpcResponse<T>;
+      // The server's own answers — a redirect, a non-2xx status, a JSON-RPC `error` — are plain
+      // failures; an answer that cannot be read as JSON-RPC is "outcome unknown".
+      await refuseRedirect(what, response, this.options.endpoint);
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => {});
+        throw new TransportInvokeError(`${what} responded ${response.status}`);
+      }
+      let body: JsonRpcResponse<T> | null;
+      try {
+        body = (await response.json()) as JsonRpcResponse<T> | null;
+      } catch (err) {
+        throw failedAfterAnswer(what, response.status, 'its answer is not JSON', err);
+      }
+      if (body === null || typeof body !== 'object') {
+        throw failedAfterAnswer(what, response.status, 'its answer is not a JSON-RPC response');
+      }
       if (body.error) {
         throw new TransportInvokeError(
-          `mcp transport: ${method} error: ${boundUntrustedText(body.error.message)}`,
+          `${what} error: ${boundUntrustedText(String(body.error.message))}`,
         );
       }
       if (body.result === undefined) {
-        throw new TransportInvokeError(`mcp transport: ${method} returned no result`);
+        throw failedAfterAnswer(what, response.status, 'its JSON-RPC response has no result');
       }
       return body.result;
-    } catch (err) {
-      if (err instanceof TransportInvokeError) throw err;
-      throw new TransportInvokeError('mcp transport: request failed', { cause: err });
     } finally {
       clearTimeout(timeout);
     }

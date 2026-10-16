@@ -6,6 +6,7 @@ import {
 import Fastify, { type FastifyInstance, type FastifyRequest, LogController } from 'fastify';
 import type { ConnectedAccountStore } from './credentials/index.js';
 import {
+  ApplyNotReceivedError,
   ApplyOutcomeUnknownError,
   ApplyRequiresIdempotencyKeyError,
   ConnectedAccountStoreNotConfiguredError,
@@ -24,6 +25,7 @@ import { registerGateAuthGuard } from './gate-auth.js';
 import type { GatekeeperBase } from './gatekeeper-base.js';
 import { type GateMetrics, createGateMetrics } from './metrics.js';
 import {
+  ApplyLookupRequestSchema,
   ApplyRequestSchema,
   DeleteConnectedAccountRequestSchema,
   DescribeOperationsResponseSchema,
@@ -85,6 +87,9 @@ export function mapGatekeeperError(err: unknown): ErrorMapping {
   }
   if (err instanceof ApplyOutcomeUnknownError) {
     return { status: 409, code: 'apply_outcome_unknown', message: err.message };
+  }
+  if (err instanceof ApplyNotReceivedError) {
+    return { status: 404, code: 'apply_not_received', message: err.message };
   }
   if (err instanceof OperationDefinitionMismatchError) {
     return {
@@ -335,6 +340,34 @@ export function registerGateRoutes(app: FastifyInstance, options: RegisterGateRo
           onBehalfOf: parsed.data.onBehalfOf,
           operationDigest: parsed.data.operationDigest ?? null,
         },
+      );
+      return ok(reply, result);
+    } catch (err) {
+      return fail(reply, err);
+    }
+  });
+
+  // Legacy 287: what this gate holds for an `apply` the kernel never got an answer to — read from
+  // the idempotency store only, never the transport (`GatekeeperBase.lookupApply`). Its own route,
+  // not a flag on `gate/apply`: a gate from before it answers 404 here and runs nothing, where an
+  // unknown field on `gate/apply` would be ignored and the call run.
+  app.post(`${prefix}/gate/apply_lookup`, async (request, reply) => {
+    const ctx = resolve(request);
+    if (!ctx) return notFound(reply);
+    const parsed = ApplyLookupRequestSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      reply.code(400);
+      return {
+        ok: false,
+        error: { code: 'invalid_params', message: 'invalid apply lookup request' },
+      };
+    }
+    try {
+      const result = await ctx.gate.lookupApply(
+        parsed.data.operation,
+        parsed.data.params,
+        parsed.data.actionRequestId,
+        { onBehalfOf: parsed.data.onBehalfOf },
       );
       return ok(reply, result);
     } catch (err) {

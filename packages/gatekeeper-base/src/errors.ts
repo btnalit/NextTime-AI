@@ -44,11 +44,23 @@ export class TransportInvokeError extends Error {
   }
 }
 
+/** R-51 / legacy 287: a transport stopped without knowing whether the call took effect on the
+ *  target — the ssh session dropped after the command may have started, the connection broke
+ *  after the request may have been sent. `GatekeeperBase.apply` records the call's key as
+ *  outcome-unknown, never as a plain failure (a plain failure reads as "did not happen" and invites
+ *  a second run). Extends `TransportInvokeError`: on `observe` it maps like any other transport
+ *  failure (502). */
+export class TransportOutcomeUnknownError extends TransportInvokeError {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'TransportOutcomeUnknownError';
+  }
+}
+
 /** R-51: an exec transport (`ssh`, `cli`) killed a command that ran past its exec timeout
- *  (`kinds/exec-timeout.ts`). The command may have partially or fully run on the target, so
- *  `GatekeeperBase.apply` records the call's key as outcome-unknown, never as a plain failure.
- *  Extends `TransportInvokeError`: on `observe` it maps like any other transport failure (502). */
-export class TransportTimeoutError extends TransportInvokeError {
+ *  (`kinds/exec-timeout.ts`). The command may have partially or fully run on the target — an
+ *  outcome-unknown failure like any other (`TransportOutcomeUnknownError`). */
+export class TransportTimeoutError extends TransportOutcomeUnknownError {
   constructor(message: string, options?: { cause?: unknown }) {
     super(message, options);
     this.name = 'TransportTimeoutError';
@@ -56,10 +68,11 @@ export class TransportTimeoutError extends TransportInvokeError {
 }
 
 /** R-51 / D-11: the gate cannot say whether this `apply` took effect — an earlier gate process
- *  reserved the key and stopped before recording a result, or the transport timed out mid-call
- *  (`TransportTimeoutError`). The call is never re-run automatically: the kernel marks the
- *  ActionRequest `failed` with an `outcome_unknown` reason for a person to reconcile against the
- *  target. `server.ts` maps it to 409 `apply_outcome_unknown`. */
+ *  reserved the key and stopped before recording a result, or the transport stopped mid-call
+ *  without an answer (`TransportOutcomeUnknownError`: a timeout, a connection to the target that
+ *  broke after the request may have been sent). The call is never re-run automatically: the
+ *  kernel marks the ActionRequest `failed` with an `outcome_unknown` reason for a person to
+ *  reconcile against the target. `server.ts` maps it to 409 `apply_outcome_unknown`. */
 export class ApplyOutcomeUnknownError extends Error {
   constructor(key: string, detail?: string) {
     super(
@@ -68,6 +81,19 @@ export class ApplyOutcomeUnknownError extends Error {
       } — it is not re-run automatically; check the target system and reconcile by hand`,
     );
     this.name = 'ApplyOutcomeUnknownError';
+  }
+}
+
+/** Legacy 287: `GatekeeperBase.lookupApply` found no record of this `apply` — no call for the key
+ *  ever reached this gate's idempotency store, which records a key durably before it runs anything
+ *  (D-11), so nothing ran. The key is closed by the same lookup, so an `apply` that arrives later
+ *  is refused, never run. `server.ts` maps it to 404 `apply_not_received`. */
+export class ApplyNotReceivedError extends Error {
+  constructor(key: string) {
+    super(
+      `apply for actionRequestId "${key}" has no record on this gate: no call for it ran here, so nothing ran — the key is now closed, and an apply for it that arrives later is refused`,
+    );
+    this.name = 'ApplyNotReceivedError';
   }
 }
 

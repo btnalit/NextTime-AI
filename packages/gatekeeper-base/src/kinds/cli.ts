@@ -4,8 +4,10 @@ import type { Operation } from '@nexttime/shared';
 import {
   BindingKindMismatchError,
   TransportInvokeError,
+  TransportOutcomeUnknownError,
   TransportTimeoutError,
 } from '../errors.js';
+import { execFailureOf } from './exec-failure.js';
 import { DEFAULT_EXEC_TIMEOUT_MS, runWithExecTimeout } from './exec-timeout.js';
 import type { Transport, TransportInvokeContext, TransportInvokeResult } from './types.js';
 
@@ -126,6 +128,16 @@ export class CliTransport implements Transport {
       return { data: { stdout, stderr } };
     } catch (err) {
       if (err instanceof TransportTimeoutError) throw err;
+      // Legacy 287 (review of #586, #501 P2-2): an exit status is the command's own answer, and a
+      // binary that could not be spawned ran nothing — plain failures. A command stopped before it
+      // answered (killed by a signal, past the output limit) may have partially or fully run.
+      const failure = execFailureOf(err);
+      if (failure.kind === 'stopped') {
+        throw new TransportOutcomeUnknownError(
+          `cli transport: the command for "${operation.name}" was stopped before it answered (${failure.why}) — it may have partially or fully run`,
+          { cause: err },
+        );
+      }
       throw new TransportInvokeError(`cli transport: command failed for "${operation.name}"`, {
         cause: err,
       });

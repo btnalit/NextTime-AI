@@ -87,6 +87,15 @@ export {
 
 export { type RecordTransitionParams, recordTransition } from './transition-log.js';
 
+export {
+  type ActionRequestInDoubt,
+  type ActionRequestQueueBlocker,
+  type ActionRequestWaitingState,
+  readActionRequestWaitingStates,
+  readActionRequestsInDoubt,
+  readQueueBlockers,
+} from './waiting-state.js';
+
 export { type RequestActionInput, requestAction } from './request-action.js';
 
 export {
@@ -100,6 +109,7 @@ export {
   DEFAULT_APPROVAL_TIMEOUT_MS,
   DEFAULT_MAX_REPLAY_ATTEMPTS,
   DEFAULT_STALE_EXECUTING_TIMEOUT_MS,
+  ACTION_REQUEST_IN_DOUBT_AUDIT_ACTION,
   type ActionRequestActorOptions,
   type DrainableGatekeeper,
   type ExpireOverdueOptions,
@@ -115,6 +125,7 @@ export {
   markActionRequestExecuted,
   markActionRequestFailed,
   reasonAuditFields,
+  recordActionRequestInDoubt,
   recordActionRequestReplayAttempt,
   resultAuditFields,
   startActionRequestExecution,

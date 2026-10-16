@@ -2,8 +2,10 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  ApplyOutcomeUnknownError,
   GatekeeperBase,
   InMemoryIdempotencyStore,
+  TransportInvokeError,
   createGatekeeperServer,
   operationDefinitionDigest,
 } from '@nexttime/gatekeeper-base';
@@ -218,6 +220,125 @@ describe('docker gate transport (via GatekeeperBase, fake dockerode)', () => {
     if (!first) throw new Error('manifest.json is empty');
     const bogus: Operation = { ...first, name: 'nonexistent.op' };
     await expect(transport.invoke(bogus, {}, {})).rejects.toThrow(/unknown operation/);
+  });
+});
+
+/**
+ * Legacy 287 (review of #586, #493 M3): a failed execute Operation is a plain failure only when
+ * nothing changed — it failed before its first change call, or the daemon answered that call with
+ * an error status, or the connection provably never opened. A change call without the daemon's
+ * answer, or any failure after a change call succeeded, is "outcome unknown" (409
+ * `apply_outcome_unknown` for its key), never a failure the kernel could record and run again.
+ */
+describe('docker gate: a failed execute Operation (legacy 287)', () => {
+  const daemonError = (statusCode: number) =>
+    Object.assign(new Error(`(HTTP code ${statusCode}) server error`), { statusCode });
+  const networkError = (code: string, syscall?: string) =>
+    Object.assign(new Error(`socket ${code}`), { code, ...(syscall ? { syscall } : {}) });
+
+  async function applyFailure(
+    gate: GatekeeperBase,
+    name: string,
+    params: Record<string, unknown>,
+  ): Promise<Error> {
+    const thrown = await gate
+      .apply(name, params, 'req-1', { operationDigest: approvedDigest(name) })
+      .then(
+        () => undefined,
+        (err: unknown) => err,
+      );
+    if (!(thrown instanceof Error)) throw new Error('expected the apply to fail');
+    return thrown;
+  }
+
+  const web = { id: 'c1', name: 'web', image: 'nginx:latest', running: true };
+
+  it('the daemon refusing the restart is a plain failure', async () => {
+    const { gate, client } = buildGate([web]);
+    client.restart = async () => {
+      throw daemonError(500);
+    };
+    const err = await applyFailure(gate, 'container.restart', { id: 'c1' });
+    expect(err).toBeInstanceOf(TransportInvokeError);
+    expect(err.message).toBe(
+      'docker transport: operation "container.restart" failed: the Docker daemon answered restart with status 500',
+    );
+  });
+
+  it('a daemon that cannot be reached changed nothing: a plain failure', async () => {
+    const { gate, client } = buildGate([web]);
+    client.restart = async () => {
+      throw networkError('ENOENT', 'connect');
+    };
+    const err = await applyFailure(gate, 'container.restart', { id: 'c1' });
+    expect(err).toBeInstanceOf(TransportInvokeError);
+    expect(err.message).toBe(
+      'docker transport: operation "container.restart" not sent — could not connect to the Docker daemon (ENOENT); nothing changed',
+    );
+  });
+
+  it('a container that does not exist fails before any change: a plain failure', async () => {
+    const { gate, client } = buildGate([web]);
+    const err = await applyFailure(gate, 'container.restart', { id: 'nope' });
+    expect(err).toBeInstanceOf(TransportInvokeError);
+    expect(err).not.toBeInstanceOf(ApplyOutcomeUnknownError);
+    expect(client.restartCalls).toEqual([]);
+  });
+
+  it('a connection that broke during the restart is outcome unknown', async () => {
+    const { gate, client } = buildGate([web]);
+    client.restart = async () => {
+      throw networkError('ECONNRESET');
+    };
+    const err = await applyFailure(gate, 'container.restart', { id: 'c1' });
+    expect(err).toBeInstanceOf(ApplyOutcomeUnknownError);
+    expect(err.message).toContain(
+      'docker transport: operation "container.restart" failed while its restart call was in flight (ECONNRESET) — it may have run',
+    );
+  });
+
+  it('a failure after the restart succeeded is outcome unknown, whatever the daemon answered', async () => {
+    const { gate, client } = buildGate([web]);
+    const inspect = client.inspectContainer.bind(client);
+    let calls = 0;
+    client.inspectContainer = async (id: string) => {
+      calls += 1;
+      if (calls > 1) throw daemonError(404);
+      return inspect(id);
+    };
+    const err = await applyFailure(gate, 'container.restart', { id: 'c1' });
+    expect(client.restartCalls).toHaveLength(1);
+    expect(err).toBeInstanceOf(ApplyOutcomeUnknownError);
+    expect(err.message).toContain(
+      'failed after it had already changed the target (1 change call(s) succeeded)',
+    );
+  });
+
+  it('compose.up failing part-way through its containers is outcome unknown', async () => {
+    const { gate, client } = buildGate([
+      {
+        id: 'a1',
+        name: 'a',
+        image: 'x',
+        running: false,
+        labels: { 'com.docker.compose.project': 'p' },
+      },
+      {
+        id: 'b1',
+        name: 'b',
+        image: 'x',
+        running: false,
+        labels: { 'com.docker.compose.project': 'p' },
+      },
+    ]);
+    const start = client.start.bind(client);
+    client.start = async (id: string) => {
+      if (id === 'b1') throw daemonError(500);
+      return start(id);
+    };
+    const err = await applyFailure(gate, 'compose.up', { project: 'p' });
+    expect(err).toBeInstanceOf(ApplyOutcomeUnknownError);
+    expect(err.message).toContain('1 change call(s) succeeded');
   });
 });
 
