@@ -29,7 +29,8 @@ import { type FakeKernel, startFakeKernel } from './test-support/fake-kernel.js'
  * breakpoint. So for every pair of consecutive requests in a session this asserts that the system
  * prompt and tools are byte-identical, and that the earlier request's messages up to its
  * breakpoint are repeated byte for byte at the start of the later one — across tool calls within a
- * turn and across turns, with the entry context changing on every call.
+ * turn and across turns. The live context (legacy 229) is part of that repeated prefix: placed
+ * once, then repeated unchanged, with only what changed since appended last.
  */
 
 const EXTENSION_PATH = join(import.meta.dirname, 'index.ts');
@@ -209,75 +210,207 @@ describe('prompt cache: what the real pi-ai request repeats between calls', () =
   });
 
   // Interactive mode injects the same live context the same way (no Turn correlation).
-  it.each([
+  const MODES = [
     { mode: 'entry', heading: 'NextTime entry context', turnMarker: true },
     { mode: 'interactive', heading: 'NextTime interactive-session context', turnMarker: false },
-  ])(
-    '$mode mode: the live context stays last and uncached; every call reads what the previous one wrote, within a turn and across turns',
-    async ({ mode, heading, turnMarker }) => {
-      process.env.NEXTTIME_MODE = mode;
-      // The context changes on every call, as live state does.
-      let contextCalls = 0;
-      kernel.setHandler('get_entry_context', () => {
-        contextCalls += 1;
-        return {
-          ok: true,
-          result: {
-            pendingApprovals: [
-              { actionRequestId: `ar-${contextCalls}`, title: `Approval ${contextCalls}` },
-            ],
-            tasks: [],
-            facts: [],
-            precedents: [],
-          },
-        };
-      });
-      kernel.setHandler('list_allowed_operations', () => ({ ok: true, result: { items: [] } }));
-      kernel.setHandler('get_object', () => ({ ok: true, result: { id: 'obj-1', type: 'Host' } }));
-      kernel.setHandler('report_turn', () => ({ ok: true, result: {} }));
+  ] as const;
 
-      const replies: FakeAnthropicReply[] = [
-        // Turn 1: a tool call, then the answer.
-        { toolUse: { name: 'get_object', input: { objectId: 'obj-1' } } },
-        { text: 'obj-1 is a host.' },
-        // Turn 2: a tool call, then the answer.
-        { toolUse: { name: 'get_object', input: { objectId: 'obj-1' } } },
-        { text: 'Still a host.' },
-      ];
-      anthropic = await startFakeAnthropic(replies);
-      ({ session } = await sessionAgainst(anthropic, tmpDir));
+  /** Two gate Operations; entry mode re-reads them every turn (legacy 228). */
+  const GATE_OPERATIONS = [
+    {
+      gatekeeperId: 'gk-1',
+      gateName: 'inventory',
+      name: 'list',
+      operation: { mode: 'observe', params_schema: { type: 'object', properties: {} } },
+    },
+    {
+      gatekeeperId: 'gk-1',
+      gateName: 'inventory',
+      name: 'get',
+      operation: { mode: 'observe', params_schema: { type: 'object', properties: {} } },
+    },
+  ];
 
-      const marker = (turnId: string) => (turnMarker ? `<!--nexttime:turn_id=${turnId}-->\n` : '');
-      await session.prompt(`${marker('turn-1')}What is obj-1?`);
-      await session.prompt(`${marker('turn-2')}And now?`);
+  /** A recent Fact whose observation bookkeeping moves on every read, as it does while a collector
+   *  keeps re-observing it. */
+  function reobservedFact(read: number) {
+    return {
+      id: 'fact-1',
+      linkType: 'runs_on',
+      sourceObjectId: 'obj-1',
+      targetObjectId: 'obj-2',
+      properties: {},
+      epistemicStatus: 'observed',
+      lastObservationId: `obs-${read}`,
+      lastObservedAt: new Date(Date.UTC(2026, 9, 16, 0, read)).toISOString(),
+    };
+  }
 
-      const requests = anthropic.requests;
-      expect(requests).toHaveLength(4);
+  async function runTwoTurns(
+    mode: (typeof MODES)[number],
+    context: (read: number) => Record<string, unknown>,
+  ): Promise<Json[]> {
+    process.env.NEXTTIME_MODE = mode.mode;
+    let reads = 0;
+    kernel.setHandler('get_entry_context', () => {
+      reads += 1;
+      return { ok: true, result: context(reads) };
+    });
+    // The same Operations on every read, in a different order from the second read on — the
+    // projection keeps its own order, so the declared tools stay byte-identical.
+    let operationReads = 0;
+    kernel.setHandler('list_allowed_operations', () => {
+      operationReads += 1;
+      const items = operationReads === 1 ? GATE_OPERATIONS : [...GATE_OPERATIONS].reverse();
+      return { ok: true, result: { items } };
+    });
+    kernel.setHandler('get_object', () => ({ ok: true, result: { id: 'obj-1', type: 'Host' } }));
+    kernel.setHandler('report_turn', () => ({ ok: true, result: {} }));
+
+    anthropic = await startFakeAnthropic([
+      // Turn 1: a tool call, then the answer.
+      { toolUse: { name: 'get_object', input: { objectId: 'obj-1' } } },
+      { text: 'obj-1 is a host.' },
+      // Turn 2: a tool call, then the answer.
+      { toolUse: { name: 'get_object', input: { objectId: 'obj-1' } } },
+      { text: 'Still a host.' },
+    ]);
+    ({ session } = await sessionAgainst(anthropic, tmpDir, true));
+
+    const marker = (turnId: string) =>
+      mode.turnMarker ? `<!--nexttime:turn_id=${turnId}-->\n` : '';
+    await session.prompt(`${marker('turn-1')}What is obj-1?`);
+    await session.prompt(`${marker('turn-2')}And now?`);
+    expect(anthropic.requests).toHaveLength(4);
+    if (mode.mode === 'entry') expect(operationReads).toBeGreaterThanOrEqual(2);
+    for (const request of anthropic.requests) {
+      expect((request.tools as Json[]).map((tool) => tool.name)).toEqual(
+        expect.arrayContaining(['inventory_list', 'inventory_get']),
+      );
+    }
+    return anthropic.requests;
+  }
+
+  function contextMessageIndexes(request: Json, heading: string): number[] {
+    return messagesOf(request).flatMap((message, index) =>
+      textOf(message).includes(heading) ? [index] : [],
+    );
+  }
+
+  it.each(MODES)(
+    '$mode mode: an unchanged live context is placed once and read from cache on every later call, within a turn and across turns',
+    async (mode) => {
+      const requests = await runTwoTurns(mode, (read) => ({
+        pendingApprovals: [{ actionRequestId: 'ar-1', title: 'Approval 1' }],
+        tasks: [],
+        facts: [reobservedFact(read)],
+        precedents: [],
+      }));
+
       for (const [index, request] of requests.entries()) {
-        const messages = messagesOf(request);
-        // The context is the last message, with the context of this very call, and carries no
-        // breakpoint.
-        const last = messages[messages.length - 1];
-        expect(textOf(last)).toContain(heading);
-        expect(textOf(last)).toContain(`Approval ${index + 1}`);
-        expect(JSON.stringify(last)).not.toContain('cache_control');
-        // Exactly one message-level breakpoint, on the last block before the context.
+        // Exactly one context, right after the first prompt, byte-identical on every call — a
+        // collector's re-observation does not change it.
+        expect(contextMessageIndexes(request, mode.heading)).toEqual([1]);
+        expect(stripMarkers(messagesOf(request)[1])).toBe(
+          stripMarkers(messagesOf(requests[0] as Json)[1]),
+        );
+        expect(textOf(messagesOf(request)[1])).not.toContain('lastObservedAt');
+        expect(textOf(messagesOf(request)[1])).not.toContain(' — update');
+        // One message-level breakpoint, on the last message (pi-ai's own placement).
         const points = breakpoints(request);
         expect(points).toHaveLength(1);
-        const [messageIndex, blockIndex] = points[0] as [number, number];
-        expect(messageIndex).toBe(messages.length - 2);
-        const before = messages[messageIndex];
-        expect(Array.isArray(before?.content) && blockIndex).toBe(
-          Array.isArray(before?.content) ? before.content.length - 1 : false,
-        );
-        // No earlier context survives in the history (it is never persisted).
-        for (const message of messages.slice(0, -1)) {
-          expect(textOf(message)).not.toContain(heading);
-        }
+        expect(points[0]?.[0]).toBe(messagesOf(request).length - 1);
+        // From the second call on, the context lies inside what the previous call wrote.
+        if (index > 0) expect(cachedPrefix(requests[index - 1] as Json)).toContain('Approval 1');
       }
       expectEachRequestReadsThePreviousWrite(requests);
+      // The system prompt and tools never change either (legacy 228: the per-turn tool refresh
+      // re-reads the same Operations in another order and leaves the declarations alone).
+      expect(new Set(requests.map((request) => JSON.stringify(request.tools))).size).toBe(1);
     },
   );
+
+  it.each(MODES)(
+    '$mode mode: a change in the middle of a turn goes last as an update of that section only; a change at the next turn is placed after its prompt',
+    async (mode) => {
+      const requests = await runTwoTurns(mode, (read) => ({
+        // Turn 1's second call sees a second approval; turn 2 sees a finished Task instead.
+        pendingApprovals:
+          read === 1
+            ? [{ actionRequestId: 'ar-1', title: 'Approval 1' }]
+            : read === 2
+              ? [
+                  { actionRequestId: 'ar-1', title: 'Approval 1' },
+                  { actionRequestId: 'ar-2', title: 'Approval 2' },
+                ]
+              : [],
+        tasks: read >= 3 ? [{ taskId: 't-1', status: 'completed' }] : [],
+        facts: [reobservedFact(read)],
+        precedents: [],
+      }));
+      const [first, second, third, fourth] = requests as [Json, Json, Json, Json];
+
+      // Turn 1, call 2: the snapshot stays put and inside the cached prefix; the update is last,
+      // uncached, and carries the changed section only.
+      expect(contextMessageIndexes(second, mode.heading)).toEqual([
+        1,
+        messagesOf(second).length - 1,
+      ]);
+      const update = textOf(messagesOf(second)[messagesOf(second).length - 1]);
+      expect(update).toContain(`${mode.heading} — update`);
+      expect(update).toContain('Approval 2');
+      expect(update).not.toContain('recorded facts');
+      expect(JSON.stringify(messagesOf(second)[messagesOf(second).length - 1])).not.toContain(
+        'cache_control',
+      );
+      expect(breakpoints(second)[0]?.[0]).toBe(messagesOf(second).length - 2);
+      expectEachRequestReadsThePreviousWrite([first, second]);
+
+      // Turn 2: the changed context is placed after the new prompt and the old one is gone — the
+      // one cache write this costs is turn 1's messages after its prompt.
+      const thirdMessages = messagesOf(third);
+      expect(contextMessageIndexes(third, mode.heading)).toEqual([thirdMessages.length - 1]);
+      expect(textOf(thirdMessages[thirdMessages.length - 1])).toContain('t-1');
+      expect(textOf(thirdMessages[thirdMessages.length - 1])).not.toContain('Approval');
+      expect(prefixThrough(third, 0, 0)).toBe(prefixThrough(second, 0, 0));
+      // Turn 2, call 2: unchanged since the turn started — no update, read from cache.
+      expect(contextMessageIndexes(fourth, mode.heading)).toEqual([thirdMessages.length - 1]);
+      expectEachRequestReadsThePreviousWrite([third, fourth]);
+    },
+  );
+
+  it('entry mode: a failed read keeps the snapshot cached and goes last as an uncached not-refreshed notice', async () => {
+    process.env.NEXTTIME_MODE = 'entry';
+    let reads = 0;
+    kernel.setHandler('get_entry_context', () => {
+      reads += 1;
+      return reads === 2
+        ? { ok: false, error: { code: 'internal', message: 'kernel unavailable' } }
+        : { ok: true, result: { tasks: [{ taskId: 't-1', status: 'running' }] } };
+    });
+    kernel.setHandler('list_allowed_operations', () => ({ ok: true, result: { items: [] } }));
+    kernel.setHandler('get_object', () => ({ ok: true, result: { id: 'obj-1', type: 'Host' } }));
+    kernel.setHandler('report_turn', () => ({ ok: true, result: {} }));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    anthropic = await startFakeAnthropic([
+      { toolUse: { name: 'get_object', input: { objectId: 'obj-1' } } },
+      { text: 'obj-1 is a host.' },
+    ]);
+    ({ session } = await sessionAgainst(anthropic, tmpDir, true));
+    await session.prompt('<!--nexttime:turn_id=turn-1-->\nWhat is obj-1?');
+    errorSpy.mockRestore();
+
+    const [first, second] = anthropic.requests as [Json, Json];
+    const messages = messagesOf(second);
+    expect(contextMessageIndexes(second, 'NextTime entry context')).toEqual([
+      1,
+      messages.length - 1,
+    ]);
+    expect(textOf(messages[messages.length - 1])).toContain('not refreshed');
+    expect(JSON.stringify(messages[messages.length - 1])).not.toContain('cache_control');
+    expect(breakpoints(second)[0]?.[0]).toBe(messages.length - 2);
+    expectEachRequestReadsThePreviousWrite([first, second]);
+  });
 
   it('worker mode: the Task context sits before the kickoff, identical on every call, so the cached prefix covers it', async () => {
     process.env.NEXTTIME_MODE = 'worker';

@@ -10,14 +10,14 @@ import {
 } from '@nexttime/shared';
 import { type KernelClient, KernelError } from '../kernel-client.js';
 import { gateToolParameters, toToolParameters } from '../tool-schema.js';
-import { type EntryContextResult, renderEntryContext } from './entry-context.js';
+import type { EntryContextResult } from './entry-context.js';
 import { createGateToolProjector } from './gate-tool-projection.js';
 import {
   type AllowedOperationWire,
   gateToolDescription,
   truncateToolResult,
 } from './gate-tools.js';
-import { keepCacheBreakpointOnHistory } from './prompt-cache.js';
+import { installLiveContext } from './live-context.js';
 
 /** An entry agent's projected observe tool — calls `observe_operation` (never `request_action`,
  *  which an entry Handle does not hold) and returns the observed data verbatim (truncated — S8
@@ -304,15 +304,6 @@ export function registerEntryMode(pi: ExtensionAPI, options: EntryModeOptions): 
     return { action: 'transform' as const, text: event.text.slice(match[0].length) };
   });
 
-  // Runs after `input` (so `currentTurnId` is this prompt's Turn) and before pi builds the run's
-  // first request — pi then takes the live loadout set here for the tool declarations it sends.
-  // Once per prompt, not per LLM call: a queued follow-up / steer joins the running loop without
-  // a new `before_agent_start`, and so keeps the set this run started with.
-  pi.on('before_agent_start', async () => {
-    await gateTools.refresh({ reason: 'turn', turnId: currentTurnId });
-    return undefined;
-  });
-
   // 2026-10-02 review R-57 (decision D-23): every call names the Turn it serves. The kernel returns
   // that Turn's chat's items on every LLM call of the Turn — a second call, a provider-error retry
   // — and drops them only once `report_turn` (agent_settled below) acknowledges the Turn. Without
@@ -321,24 +312,19 @@ export function registerEntryMode(pi: ExtensionAPI, options: EntryModeOptions): 
   // active) rejects the param as `invalid_params`; this process then falls back to `{}`, the only
   // form that kernel accepts, for the rest of its life.
   let sendTurnIdToEntryContext = true;
-  // The context goes last on every call; the cache breakpoint stays on the history before it
-  // (`prompt-cache.ts`).
-  const noteAppendedContext = keepCacheBreakpointOnHistory(pi);
-  pi.on('context', async (event) => {
-    noteAppendedContext(undefined);
-    let entryContext: EntryContextResult;
+  async function readEntryContext(): Promise<EntryContextResult | undefined> {
     try {
       const turnParams =
         sendTurnIdToEntryContext && currentTurnId ? { turnId: currentTurnId } : undefined;
       try {
-        entryContext = await options.kernelClient.call<EntryContextResult>(
+        return await options.kernelClient.call<EntryContextResult>(
           'get_entry_context',
           turnParams ?? {},
         );
       } catch (error) {
         if (!turnParams || !isInvalidParams(error)) throw error;
         sendTurnIdToEntryContext = false;
-        entryContext = await options.kernelClient.call<EntryContextResult>('get_entry_context', {});
+        return await options.kernelClient.call<EntryContextResult>('get_entry_context', {});
       }
     } catch (error) {
       // context fires before every LLM call; a kernel outage must degrade to "no injected
@@ -346,22 +332,29 @@ export function registerEntryMode(pi: ExtensionAPI, options: EntryModeOptions): 
       logKernelError(error, 'get_entry_context');
       return undefined;
     }
+  }
 
-    const text = renderEntryContext(entryContext, 'NextTime entry context');
-    if (!text) return undefined;
+  // Before every LLM call (`context`): the live context, placed once and repeated so the provider
+  // serves it from cache, with only what changed since appended last (`live-context.ts`, legacy
+  // 229). Non-persisted per pi semantics (design doc §7.2): a `custom`-role message returned from
+  // `context` is used for that LLM call only, never written back to the session file — which is
+  // why the kernel keeps returning the same items for the Turn until it is reported (above).
+  const liveContext = installLiveContext(pi, {
+    title: 'NextTime entry context',
+    customType: 'nexttime-entry-context',
+    component: 'entry',
+    read: readEntryContext,
+  });
 
-    // Non-persisted per pi semantics (design doc §7.2): a `custom`-role message returned from
-    // `context` is used for this LLM call only, never written back to the session file — which is
-    // why the kernel keeps returning the same items for the Turn until it is reported (above).
-    const contextMessage: (typeof event.messages)[number] = {
-      role: 'custom',
-      customType: 'nexttime-entry-context',
-      content: text,
-      display: false,
-      timestamp: Date.now(),
-    };
-    noteAppendedContext(text);
-    return { messages: [...event.messages, contextMessage] };
+  // Runs after `input` (so `currentTurnId` is this prompt's Turn) and before pi builds the run's
+  // first request — pi then takes the live loadout set here for the tool declarations it sends.
+  // Once per prompt, not per LLM call: a queued follow-up / steer joins the running loop without
+  // a new `before_agent_start`, and so keeps the set this run started with. The same boundary is
+  // where a changed live context is placed again after the new prompt.
+  pi.on('before_agent_start', async () => {
+    liveContext.startRun();
+    await gateTools.refresh({ reason: 'turn', turnId: currentTurnId });
+    return undefined;
   });
 
   // §7.2 "扩展每轮把 turn_id 写入会话条目": one platform Turn = one pi agent run
