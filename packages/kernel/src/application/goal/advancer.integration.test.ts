@@ -35,6 +35,7 @@ import {
   GoalStepClosedError,
   RunConfigSnapshotSchema,
   type TaskRuntimeDeps,
+  allotChildTokenBudget,
   completeTaskWithResult,
   lockGoalStepForNewWork,
   reactToSupervisorStatus,
@@ -152,6 +153,7 @@ interface StepSpec {
   readonly dependsOn?: readonly string[];
   readonly maxAttempts?: number;
   readonly input?: unknown;
+  readonly nested?: boolean;
 }
 
 interface AttemptTaskRow {
@@ -232,6 +234,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           input: step.input ?? { step: step.key },
           ...(step.dependsOn ? { dependsOn: step.dependsOn } : {}),
           ...(step.maxAttempts ? { maxAttempts: step.maxAttempts } : {}),
+          ...(step.nested ? { nested: true } : {}),
         })),
       };
     }
@@ -2053,6 +2056,26 @@ describe.runIf(DATABASE_URL !== undefined)(
         steps = await stepsOf(goalRunId);
         expect(steps.b).toMatchObject({ status: 'running', attemptCount: 2 });
         expect(Number((await latestAttempt(steps.b?.id as string)).token_budget)).toBe(700);
+
+        // A lone nested step holds all of a goal smaller than the workspace default (200000), and
+        // its Worker can still start a child: half of what the attempt has not spent (review #493
+        // P2-1 on #626).
+        const nested = await startGoal(requester, [{ key: 'n', nested: true }], {
+          ...BUDGET,
+          maxTokens: 150_000,
+        });
+        await advance(nested, requester);
+        const lone = await latestAttempt((await stepsOf(nested)).n?.id as string);
+        expect(Number(lone.token_budget)).toBe(150_000);
+        expect(
+          await admin((tx) =>
+            allotChildTokenBudget(tx, workspaceId, {
+              goalRunId: nested,
+              callerTaskId: lone.id,
+              defaultTokenBudget: 200_000,
+            }),
+          ),
+        ).toEqual({ tokenBudget: 75_000, fromCaller: 75_000 });
 
         // Nothing live, less than one token for each ready step: the run pauses.
         const starved = await startGoal(requester, [{ key: 'a' }, { key: 'b' }], {

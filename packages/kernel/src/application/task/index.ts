@@ -27,11 +27,13 @@ export {
 } from './invoke.js';
 
 export {
+  type ChildTokenBudget,
   type GoalRunUsage,
   type RunConfigSnapshot,
   type StepAttemptTask,
   type TaskGoalStep,
   RunConfigSnapshotSchema,
+  allotChildTokenBudget,
   listGoalRunLiveTasks,
   listTaskWorkerRunTree,
   lockGoalStepForNewWork,
@@ -39,6 +41,7 @@ export {
   readGoalRunUsage,
   readStepAttemptTask,
   readTaskGoalStep,
+  takeChildBudgetFromCaller,
 } from './goal-step.js';
 
 export { lockTaskQuotas } from './quota-check.js';

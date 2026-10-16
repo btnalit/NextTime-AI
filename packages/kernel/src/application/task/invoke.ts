@@ -15,7 +15,12 @@ import {
 import { resolveActiveRuntimeImage } from '../platform/runtime.js';
 import { requirePublishedWorkerDefinition } from '../worker/index.js';
 import { readDefinitionContent, resolveSkillsInline } from './definition-content.js';
-import { lockGoalStepForNewWork, readGoalRunTokenHeadroom, readTaskGoalStep } from './goal-step.js';
+import {
+  allotChildTokenBudget,
+  lockGoalStepForNewWork,
+  readTaskGoalStep,
+  takeChildBudgetFromCaller,
+} from './goal-step.js';
 import {
   computeChildHandleScope,
   defaultWorkerCapabilities,
@@ -396,19 +401,26 @@ async function insertQueuedTaskWithQuotaCheck(
         input.definitionId,
         depth,
       );
-      // S11 GO3a (I-G6, #619 deviation 6): a child Task of a goal step spends the goal's tokens, so
-      // its budget is capped by what the goal can still hand out — read under the quota lock, which
-      // the advancer's attempts take too.
+      // S11 GO3a (I-G6, #619 deviation 6; review #493 P2-1 on #626): a child Task of a goal step
+      // spends the goal's tokens: its budget comes out of the goal's free headroom, then out of its
+      // caller's unspent budget (`allotChildTokenBudget`) — read under the quota lock, which the
+      // advancer's attempts take too.
       let tokenBudget = resolvedQuotas.defaultTokenBudget;
-      if (goalStep) {
-        const headroom = await readGoalRunTokenHeadroom(client, workspaceId, goalStep.goalRunId);
-        if (headroom < 1) {
+      let fromCaller = 0;
+      if (goalStep && callerWorkerRun) {
+        const allotted = await allotChildTokenBudget(client, workspaceId, {
+          goalRunId: goalStep.goalRunId,
+          callerTaskId: callerWorkerRun.taskId,
+          defaultTokenBudget: tokenBudget,
+        });
+        if (!allotted) {
           throw new QuotaExceededError(
             'goal_budget_exhausted',
             `${input.definitionId}: goal run ${goalStep.goalRunId} has no token budget left`,
           );
         }
-        tokenBudget = tokenBudget === null ? headroom : Math.min(tokenBudget, headroom);
+        tokenBudget = allotted.tokenBudget;
+        fromCaller = allotted.fromCaller;
       }
 
       const taskResult = await client.query(
@@ -445,6 +457,14 @@ async function insertQueuedTaskWithQuotaCheck(
         taskId: mappedTask.id,
         resultingStatus: 'queued',
       });
+      if (callerWorkerRun && fromCaller > 0) {
+        await takeChildBudgetFromCaller(client, workspaceId, {
+          callerTaskId: callerWorkerRun.taskId,
+          childTaskId: mappedTask.id,
+          tokens: fromCaller,
+          actorPrincipalId: caller.principalId,
+        });
+      }
 
       return {
         kind: 'created' as const,

@@ -1,6 +1,7 @@
 import type { TaskStatus } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { z } from 'zod';
+import { writeAudit } from '../../substrate/audit/index.js';
 import { GoalStepClosedError } from './types.js';
 
 /**
@@ -47,6 +48,7 @@ export async function readTaskGoalStep(
 /** The StepRun statuses that take new work for the step (I-G9): its attempt is running, or it
  *  waits on its actions. */
 const STEP_STATUSES_TAKING_WORK: ReadonlySet<string> = new Set(['running', 'waiting']);
+const ENDED_TASK_STATUSES: ReadonlySet<TaskStatus> = new Set(['completed', 'failed', 'cancelled']);
 
 /**
  * S11 GO3a (plan I-G9, §4.8): the entry check for new work under a goal step — `request_action`
@@ -201,8 +203,9 @@ export async function readGoalRunUsage(
  * headroom is the budget less all of that, never below zero.
  *
  * New Tasks of the run take their budget out of it — the attempts one advance starts split it, and
- * a nested child Task of a step is capped by it — so the live Tasks' budgets together never exceed
- * what is left of the goal's. A live Task's unspent budget comes back when it ends.
+ * a nested child Task of a step draws on it before its caller's unspent budget
+ * ({@link allotChildTokenBudget}) — so the live Tasks' budgets together never exceed what is left
+ * of the goal's. A live Task's unspent budget comes back when it ends.
  */
 export async function readGoalRunTokenHeadroom(
   client: PoolClient,
@@ -220,6 +223,101 @@ export async function readGoalRunTokenHeadroom(
     [workspaceId, goalRunId],
   );
   return Number(result.rows[0]?.headroom ?? 0);
+}
+
+/** What a nested child Task of a goal step may spend, and what its caller's Task gives up for it
+ *  ({@link allotChildTokenBudget}). */
+export interface ChildTokenBudget {
+  readonly tokenBudget: number;
+  /** The part of `tokenBudget` the goal's free headroom could not cover: taken out of the caller
+   *  Task's own unspent budget by {@link takeChildBudgetFromCaller}. */
+  readonly fromCaller: number;
+}
+
+/**
+ * S11 GO3a (I-G6; review #493 P2-1 on #626): the token budget of a nested child Task that a goal
+ * step's Worker invokes, or `null` when the goal has nothing left to give it. A step's attempt
+ * holds its share of the goal (with one ready step, all of it), so the child draws first on the
+ * goal's free headroom ({@link readGoalRunTokenHeadroom}) and then on what its caller's Task has
+ * not spent — at most half of that: the caller still has to read the child's result and finish,
+ * and an even split is the rule the advance uses between the attempts it starts. The caller is
+ * the invoking Worker's Task (a step attempt, or a child one level down — the same rule at every
+ * depth). The workspace's per-Task default still caps the result.
+ *
+ * Takes the caller Task's row lock (`for no key update`) before reading the headroom, so what it
+ * has spent cannot change underneath (the usage hook updates the same row). Lock order: the
+ * StepRun's share lock, then the quota lock, then this — `invoke.ts`'s order; the advance takes
+ * no existing Task's lock. An ended caller holds only what it used: it gives nothing.
+ */
+export async function allotChildTokenBudget(
+  client: PoolClient,
+  workspaceId: string,
+  input: {
+    readonly goalRunId: string;
+    readonly callerTaskId: string;
+    readonly defaultTokenBudget: number | null;
+  },
+): Promise<ChildTokenBudget | null> {
+  const caller = await client.query<{
+    status: TaskStatus;
+    token_budget: string | null;
+    tokens_used: string;
+  }>(
+    `select status, token_budget, tokens_used from tasks
+      where workspace_id = $1 and id = $2
+      for no key update`,
+    [workspaceId, input.callerTaskId],
+  );
+  const row = caller.rows[0];
+  const unspent =
+    row && row.token_budget !== null && !ENDED_TASK_STATUSES.has(row.status)
+      ? Math.max(0, Number(row.token_budget) - Number(row.tokens_used))
+      : 0;
+  const free = await readGoalRunTokenHeadroom(client, workspaceId, input.goalRunId);
+  const cap = free + Math.floor(unspent / 2);
+  if (cap < 1) return null;
+  const tokenBudget =
+    input.defaultTokenBudget === null ? cap : Math.min(input.defaultTokenBudget, cap);
+  return { tokenBudget, fromCaller: Math.max(0, tokenBudget - free) };
+}
+
+/**
+ * Lowers the caller Task's budget by what {@link allotChildTokenBudget} took from it for
+ * `childTaskId`, in the transaction that inserted the child (still holding the caller's row lock),
+ * and audits it on the caller (`task.budget_handed_down`). The usage hook reads the row's budget on
+ * every record, so the lower budget applies to the caller's next model call.
+ */
+export async function takeChildBudgetFromCaller(
+  client: PoolClient,
+  workspaceId: string,
+  input: {
+    readonly callerTaskId: string;
+    readonly childTaskId: string;
+    readonly tokens: number;
+    readonly actorPrincipalId: string;
+  },
+): Promise<void> {
+  if (input.tokens < 1) return;
+  const result = await client.query<{ token_budget: string }>(
+    `update tasks set token_budget = token_budget - $3
+      where workspace_id = $1 and id = $2 and token_budget >= $3
+      returning token_budget`,
+    [workspaceId, input.callerTaskId, input.tokens],
+  );
+  const row = result.rows[0];
+  if (!row) throw new Error(`task ${input.callerTaskId} cannot give ${input.tokens} tokens`);
+  await writeAudit(client, {
+    workspaceId,
+    actorPrincipalId: input.actorPrincipalId,
+    action: 'task.budget_handed_down',
+    resourceType: 'task',
+    resourceId: input.callerTaskId,
+    payload: {
+      childTaskId: input.childTaskId,
+      tokens: input.tokens,
+      tokenBudget: Number(row.token_budget),
+    },
+  });
 }
 
 /** The Tasks of a GoalRun that have not ended — step attempts and nested child Tasks alike — oldest
