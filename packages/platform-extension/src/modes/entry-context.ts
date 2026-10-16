@@ -92,6 +92,32 @@ function renderGraphOverview(counts: readonly LinkTypeCount[] | undefined): stri
   ].join('\n');
 }
 
+/**
+ * Fact fields left out of the context (legacy 229): the per-observation bookkeeping a collector
+ * rewrites every time it sees the same Fact again (`queries.ts` sets `last_observation_id` and
+ * `last_observed_at = now()` on each re-observation), and the Activity that recorded it. They
+ * made the section — and with it the whole context — differ between two model calls with nothing
+ * new in the graph, so it could never be served from the prompt cache; and three of the four are
+ * UUIDs, the most expensive tokens in the section. `explain` on the Fact id still returns all of
+ * them. Null-valued fields (an active Fact's `supersededAt`, `invalidatedAt`, …) carry nothing and
+ * are left out too. Everything else, including fields a newer kernel adds, is kept.
+ */
+export const CONTEXT_OMITTED_FACT_FIELDS: ReadonlySet<string> = new Set([
+  'activityId',
+  'observationId',
+  'lastObservationId',
+  'lastObservedAt',
+]);
+
+function contextFact(fact: unknown): unknown {
+  if (typeof fact !== 'object' || fact === null || Array.isArray(fact)) return fact;
+  return Object.fromEntries(
+    Object.entries(fact).filter(
+      ([key, value]) => value !== null && !CONTEXT_OMITTED_FACT_FIELDS.has(key),
+    ),
+  );
+}
+
 function renderRecentFacts(
   facts: unknown[] | undefined,
   counts: readonly LinkTypeCount[] | undefined,
@@ -104,21 +130,92 @@ function renderRecentFacts(
       : `${facts.length}`;
   return renderSection(
     `Most recently recorded facts (${sampled}; a recency sample, not chosen for this question and not the whole graph)`,
-    facts,
+    facts.map(contextFact),
   );
+}
+
+/** The context's sections, in the order they are rendered. A section's key is stable while its
+ *  heading may carry counts, so two renderings are compared section by section by key. */
+export type EntryContextSectionKey =
+  | 'pendingApprovals'
+  | 'tasks'
+  | 'graphOverview'
+  | 'recentFacts'
+  | 'precedents';
+
+export interface EntryContextSection {
+  readonly key: EntryContextSectionKey;
+  readonly text: string;
+}
+
+/** Heading of a section that was present and is now empty (`renderEntryContextUpdate`). */
+const SECTION_NAMES: Readonly<Record<EntryContextSectionKey, string>> = {
+  pendingApprovals: 'Pending approvals',
+  tasks: 'Running tasks',
+  graphOverview: 'Knowledge graph overview',
+  recentFacts: 'Most recently recorded facts',
+  precedents: 'Precedents',
+};
+
+const SECTION_ORDER = Object.keys(SECTION_NAMES) as EntryContextSectionKey[];
+
+/** The non-empty sections of `context`, in render order. */
+export function renderEntryContextSections(context: EntryContextResult): EntryContextSection[] {
+  const counts = linkTypeCounts(context.factCountsByLinkType);
+  const texts: Record<EntryContextSectionKey, string | undefined> = {
+    pendingApprovals: renderSection(SECTION_NAMES.pendingApprovals, context.pendingApprovals),
+    tasks: renderSection(SECTION_NAMES.tasks, context.tasks),
+    graphOverview: renderGraphOverview(counts),
+    recentFacts: renderRecentFacts(context.facts, counts),
+    precedents: renderSection(SECTION_NAMES.precedents, context.precedents),
+  };
+  return SECTION_ORDER.flatMap((key) => {
+    const text = texts[key];
+    return text === undefined ? [] : [{ key, text }];
+  });
+}
+
+/** `title` is the mode's own heading (`NextTime entry context`, `NextTime interactive-session
+ *  context`). Empty string when there are no sections. */
+export function joinEntryContext(sections: readonly EntryContextSection[], title: string): string {
+  if (sections.length === 0) return '';
+  return [`## ${title}`, ...sections.map((section) => section.text)].join('\n\n');
 }
 
 /** `title` is the mode's own heading (`NextTime entry context`, `NextTime interactive-session
  *  context`). Empty string when there is nothing to inject. */
 export function renderEntryContext(context: EntryContextResult, title: string): string {
-  const counts = linkTypeCounts(context.factCountsByLinkType);
-  const sections = [
-    renderSection('Pending approvals', context.pendingApprovals),
-    renderSection('Running tasks', context.tasks),
-    renderGraphOverview(counts),
-    renderRecentFacts(context.facts, counts),
-    renderSection('Precedents', context.precedents),
-  ].filter((section): section is string => section !== undefined);
-  if (sections.length === 0) return '';
-  return [`## ${title}`, ...sections].join('\n\n');
+  return joinEntryContext(renderEntryContextSections(context), title);
+}
+
+/** The keys whose text differs between two renderings, in render order. */
+export function changedSectionKeys(
+  a: readonly EntryContextSection[],
+  b: readonly EntryContextSection[],
+): EntryContextSectionKey[] {
+  const left = new Map(a.map((section) => [section.key, section.text]));
+  const right = new Map(b.map((section) => [section.key, section.text]));
+  return SECTION_ORDER.filter((key) => left.get(key) !== right.get(key));
+}
+
+/**
+ * The sections of `current` that differ from `snapshot` (`live-context.ts`: the context already
+ * placed earlier in the conversation), worded as replacing those sections there — a section that
+ * is gone now reads "(none now)". Empty string when nothing differs.
+ */
+export function renderEntryContextUpdate(
+  snapshot: readonly EntryContextSection[],
+  current: readonly EntryContextSection[],
+  title: string,
+): string {
+  const now = new Map(current.map((section) => [section.key, section.text]));
+  const changed = changedSectionKeys(snapshot, current).map(
+    (key) => now.get(key) ?? `### ${SECTION_NAMES[key]}\n(none now)`,
+  );
+  if (changed.length === 0) return '';
+  return [
+    `## ${title} — update`,
+    `These sections changed since the ${title} earlier in this conversation and replace the same sections there; every section not repeated here is unchanged.`,
+    ...changed,
+  ].join('\n\n');
 }

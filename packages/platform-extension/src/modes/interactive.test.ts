@@ -99,8 +99,9 @@ describe('registerInteractiveMode', () => {
     expect(fake.tools.has('request_action')).toBe(false);
   });
 
-  it('subscribes only to session_start, context and before_provider_request (prompt cache) — no input/agent_start/agent_end/agent_settled (no Turn to correlate)', () => {
+  it('subscribes only to session_start, context, before_agent_start (live-context run boundary) and before_provider_request (prompt cache) — no input/agent_start/agent_end/agent_settled (no Turn to correlate)', () => {
     expect([...fake.handlers.keys()].sort()).toEqual([
+      'before_agent_start',
       'before_provider_request',
       'context',
       'session_start',

@@ -568,6 +568,21 @@ EOF
     coalesce(sum(cache_read_tokens),0), coalesce(sum(cache_write_tokens),0), coalesce(sum(cost_usd),0)
     from llm_usage where started_at >= '$real_since' and provider <> 'fake'")
   printf '%s\n' "$usage" | awk -F'|' '{ printf "STEP real-usage calls=%s input_tokens=%s output_tokens=%s cache_read_tokens=%s cache_write_tokens=%s cost_usd=%s\n", $1, $2, $3, $4, $5, $6 }'
+  # The entry agent's share, by where a call sits in its Turn (legacy 228 / 229): a Turn's first
+  # call writes what the previous Turn left (and the live context when it changed); its later
+  # calls should read the history and the live context from cache, leaving little fresh input.
+  # Counts only.
+  psql_q "with calls as (
+      select u.input_tokens, u.cache_read_tokens, u.cache_write_tokens,
+        row_number() over (partition by u.turn_id order by u.started_at, u.id) as call_no
+      from llm_usage u
+      join sessions s on s.workspace_id = u.workspace_id and s.id = u.session_id
+      where u.started_at >= '$real_since' and u.provider <> 'fake' and s.kind = 'entry'
+        and u.turn_id is not null)
+    select case when call_no = 1 then 'first' else 'later' end, count(*),
+      coalesce(sum(input_tokens),0), coalesce(sum(cache_read_tokens),0), coalesce(sum(cache_write_tokens),0)
+    from calls group by 1 order by 1" |
+    awk -F'|' '{ printf "STEP real-usage-entry turn_call=%s calls=%s input_tokens=%s cache_read_tokens=%s cache_write_tokens=%s\n", $1, $2, $3, $4, $5 }'
   if [ "$real_fail" -gt 0 ]; then echo "RESULT real-model-failures=$real_fail"; exit 1; fi
 fi
 

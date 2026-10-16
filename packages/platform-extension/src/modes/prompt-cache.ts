@@ -13,11 +13,11 @@ import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
  * the breakpoint always sat on text that is gone from the next request — no later request ever
  * matched a written prefix, and every call paid the cache-write rate for the whole conversation.
  *
- * The context stays last — it is live state (pending approvals, running tasks) the model should
- * read right before it answers, and a prefix-matching provider (DeepSeek, OpenAI) already caches
- * everything before it. Only the breakpoint moves: `before_provider_request` takes it off the
- * context message and puts it on the last block before it, which the next request repeats byte
- * for byte. The context itself is then sent uncached on each call (it is small and changes).
+ * Since legacy 229 the full context is a snapshot placed once and repeated at the same place
+ * (`live-context.ts`); what still goes last is an update carrying only the sections that changed
+ * since. The breakpoint moves off that update: `before_provider_request` takes it off the trailing
+ * message and puts it on the last block before it, which the next request repeats byte for byte.
+ * The update itself is sent uncached on each call (it is small and changes).
  *
  * A payload whose last message is not the context this mode just injected, or that carries no
  * breakpoint there (a provider without explicit cache control), is passed through untouched.
@@ -116,9 +116,9 @@ export function moveCacheBreakpointOffContext(payload: unknown, contextText: str
 }
 
 /**
- * Installs the `before_provider_request` half for a mode that appends its context last. The mode
- * reports what it appended on every `context` call — `undefined` when it appended nothing — so a
- * request is only rewritten when its last message is exactly that context.
+ * Installs the `before_provider_request` half for a mode that appends a context update last. The
+ * mode reports what it appended on every `context` call — `undefined` when it appended nothing —
+ * so a request is only rewritten when its last message is exactly that update.
  */
 export function keepCacheBreakpointOnHistory(
   pi: ExtensionAPI,

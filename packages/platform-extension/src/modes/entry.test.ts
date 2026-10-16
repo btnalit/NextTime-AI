@@ -651,6 +651,9 @@ Hi`,
 
     await agentSettledHandler({}, fakeCtx());
     inputHandler({ text: '<!--nexttime:turn_id=turn-b-->\nNext', source: 'rpc' }, fakeCtx());
+    // The next run starts (pi emits before_agent_start between input and the first call): the
+    // context has nothing left, so the earlier snapshot is not carried into it.
+    await handlerFor('before_agent_start')({}, fakeCtx());
     expect(await contextHandler({ messages: [] }, fakeCtx())).toBeUndefined();
 
     expect(

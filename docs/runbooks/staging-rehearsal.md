@@ -131,7 +131,7 @@ llm-proxy 写出 models.json 后，脚本确认这个 provider 和模型都在�
 `accept_s3.sh --real` 不再运行。真实模型场景里没通过的那几次（`ok=x/N` 里缺的部分）各有一行 `RUN scenario=… run=… outcome=fail …`
 转印到 job 日志，只含结果、计数和工具名，不含回复正文；完整日志在上传的 artifact 里。
 
-真实模型阶段跑完打印一行 `STEP real-usage calls=… input_tokens=… output_tokens=… cache_read_tokens=… cache_write_tokens=… cost_usd=…`：取自内核自己的 `llm_usage` 账本，只算真实 provider（不含脚本随后在 fake provider 上跑的部分），不含 provider / 模型名；`cost_usd` 只在 providers yaml 给模型配了 `cost` 时非 0。控制台"测试"直连上游、不经 proxy，不计入这一行，也不受 `token_budget` 约束（两次很小的调用）。runner 跑完即销毁，这一行是唯一留下的用量记录。
+真实模型阶段跑完打印一行 `STEP real-usage calls=… input_tokens=… output_tokens=… cache_read_tokens=… cache_write_tokens=… cost_usd=…`：取自内核自己的 `llm_usage` 账本，只算真实 provider（不含脚本随后在 fake provider 上跑的部分），不含 provider / 模型名；`cost_usd` 只在 providers yaml 给模型配了 `cost` 时非 0。控制台"测试"直连上游、不经 proxy，不计入这一行，也不受 `token_budget` 约束（两次很小的调用）。紧接着两行 `STEP real-usage-entry turn_call=first|later calls=… input_tokens=… cache_read_tokens=… cache_write_tokens=…` 只算入口 agent（`sessions.kind = entry`），按调用在所属 Turn 里的位置拆开：`first` 是每个 Turn 的首次调用（写入上一轮留下的历史、上下文变了时的新快照），`later` 是同一 Turn 的后续调用——实时上下文与历史应从缓存读，`later` 的 `input_tokens` 每次调用只剩新消息与上下文更新的量（遗留 228 / 229）。runner 跑完即销毁，这几行是唯一留下的用量记录。
 
 secret 缺任何一个时，真实模型部分在 job 摘要里标 **SKIPPED** 并打 warning，不会显示为通过；预演本身
 照常运行、照常判定。
