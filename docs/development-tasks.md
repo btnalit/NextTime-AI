@@ -4067,6 +4067,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **线上**：`ActionRequestStatus` 加 `withdrawn`；`ActionRequestWire` 加必填可空 `failureKind`；`request_action` 执行结果加可选 `failureKind`，字段顺序改为 `id`、`status`、`failureKind` 在前（控制台从截断预览里读）；聊天 `system.action_update` 加可选 `failureKind`。
   - **控制台**：审批详情、审批历史、关联审批、审计上下文、聊天状态行显示失败类别（`ActionFailure.tsx`、`action-outcome.ts`），只有「结果不明」用 danger 色并写明到哪个系统核对哪个动作（原始 Operation 名，UX P2-3）；`withdrawn` 显示「已撤回」。「核对后：已生效 / 没生效」的回写入口不在 GO1。
   - **验证**：`withdraw-failure-kind.integration.test.ts`（回填 CASE 原文逐条、回收器写入、两分钟窗口、0006 之前的行、触发器三种拒绝、旧代码不带类别）、shared `action-failure-reason.test.ts`、`action-executor.test.ts`（迁移码表与 shared 一致）；可逆性按 `reversibility-probe` 方式在本地用 v0.49.0 内核全套跑过。
+  - **后续（#609，11e27b4；遗留 328、329 关闭）**：撤回说明覆盖 `failureReading` 的四个调用方；`failureReason` 读时从该行最新一条 `action_request.fail` 审计派生（`readActionRequestFailureReasons`，与 `readActionRequestsInDoubt` 同写法，不另存列），读出时再脱敏、截断到 1000 个 code point、不可见字符可见；只在 `failed` / `compensated` 行有值。审计按 `resource_id` 的部分索引与 `outcomeInDoubt.reason` 的同样处理见遗留 338。
 
 **GO2 — 确定性推进器**（见 `global-roadmap-2026-10-16.md` §4）
 
