@@ -13,7 +13,7 @@ import { alwaysAllowUnpublishedText } from '../../lib/always-allow.js';
 import type { CapabilityCaller, PushSource } from '../../lib/clients.js';
 import { credentialReviewParams } from '../../lib/credential-review.js';
 import { errorToastText, isForbiddenError, isVersionChangedError } from '../../lib/errors.js';
-import { actionKindTagText, actionKindToastLabel, humanizeKind } from '../../lib/format.js';
+import { actionKindTagText, actionKindToastLabel } from '../../lib/format.js';
 import type { ActionRequestRow } from '../../lib/governance.js';
 import type { Translate } from '../../lib/i18n.js';
 import type { ApprovalDecisionInput, PendingConfirm } from './ApprovalDetail.js';
