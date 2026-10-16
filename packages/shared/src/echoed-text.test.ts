@@ -6,6 +6,7 @@ import {
   clipCodePoints,
   quotedName,
   visibleJson,
+  visibleLines,
   visibleText,
 } from './echoed-text.js';
 import { storableText, storableValue } from './storable-text.js';
@@ -68,6 +69,12 @@ describe('boundedEcho / visibleText / clipCodePoints (legacy 232)', () => {
     // A backslash of the text's own stays JSON's pair, in front of the stand-in too.
     expect(visibleJson(JSON.stringify(`a\\${storableText('\u0000')}`))).toBe('"a\\\\\\u{0}"');
     expect(visibleJson(JSON.stringify('a\\b'))).toBe('"a\\\\b"');
+  });
+
+  it('visibleLines keeps line breaks and tabs, shows other control characters, keeps backslashes', () => {
+    expect(visibleLines('a\tb\r\nc\nd')).toBe('a\tb\r\nc\nd');
+    expect(visibleLines('cr\ronly\u0000\u202E')).toBe('cr\\u{D}only\\u{0}\\u{202E}');
+    expect(visibleLines('C:\\\\u{0}')).toBe('C:\\\\u{0}');
   });
 
   it('never clips a legal Operation name (review #493 on #593)', () => {

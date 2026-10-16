@@ -136,4 +136,22 @@ describe('previewDisplayText', () => {
       'line 1\nb\\u{2066}c',
     );
   });
+
+  // Review #493 on #605: plain output is shown as it is — a real `\\u{0}` keeps both backslashes,
+  // and a control character is shown, not left raw — whether whole, cut or JSON-looking but not JSON.
+  it('shows plain text as it holds it: backslashes kept, control characters shown', () => {
+    const plain = 'C:\\\\u{0}\tok\r\nbell\u0007 esc\u001b[0m';
+    const shown = 'C:\\\\u{0}\tok\r\nbell\\u{7} esc\\u{1B}[0m';
+    expect(previewDisplayText({ text: plain, totalChars: plain.length, truncated: false })).toBe(
+      shown,
+    );
+    expect(previewDisplayText({ text: plain, totalChars: 900, truncated: true })).toBe(shown);
+    expect(
+      previewDisplayText({ text: `{${plain}`, totalChars: plain.length + 1, truncated: false }),
+    ).toBe(`{${shown}`);
+    // Whole JSON still reads its stored stand-in with one backslash.
+    expect(
+      previewDisplayText({ text: '{"name":"media\\\\u{0}-1"}', totalChars: 25, truncated: false }),
+    ).toBe('{\n  "name": "media\\u{0}-1"\n}');
+  });
 });
