@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { type ErrorOverrides, presentError } from '../../lib/errors.js';
 import { useT } from '../../lib/i18n.js';
 import { ErrorDetails } from '../kit/error-details.js';
@@ -15,6 +16,9 @@ export interface ErrorBannerProps {
   /** This page's own body copy for particular codes (P1-1), e.g. `{ forbidden: '只有所有者能…' }`;
    *  it wins over the shared copy for that code. */
   readonly overrides?: ErrorOverrides;
+  /** A fix the page can apply itself (legacy 335: the composer's 「移除看不见的字符」), shown beside
+   *  Retry. */
+  readonly action?: ReactNode;
   readonly testId?: string;
 }
 
@@ -31,6 +35,7 @@ export function ErrorBanner({
   retrying = false,
   title,
   overrides,
+  action,
   testId,
 }: ErrorBannerProps) {
   const t = useT();
@@ -45,11 +50,20 @@ export function ErrorBanner({
         <p className="error-banner-message">{shown.message}</p>
         <ErrorDetails code={shown.code} raw={shown.raw} testId={testId} />
       </div>
-      {onRetry ? (
+      {onRetry || action ? (
         <div className="error-banner-actions">
-          <Button variant="secondary" size="s" icon="refresh" onClick={onRetry} loading={retrying}>
-            {retryLabel ?? t('重试', 'Retry')}
-          </Button>
+          {action}
+          {onRetry ? (
+            <Button
+              variant="secondary"
+              size="s"
+              icon="refresh"
+              onClick={onRetry}
+              loading={retrying}
+            >
+              {retryLabel ?? t('重试', 'Retry')}
+            </Button>
+          ) : null}
         </div>
       ) : null}
     </div>

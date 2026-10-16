@@ -264,7 +264,15 @@ const UNSTORABLE_TEXT_STEP = {
 /** Legacy 334 (UX review of #605, P3-2): the note as the chat composer shows it. The person typed
  *  the message themselves, so it names the message, not the wire param `text`, and drops the
  *  sentence about an agent's call — nobody but them sent it. */
-export function composerUnstorableTextStep(t: Translate): string {
+export function composerUnstorableTextStep(t: Translate, canStrip = false): string {
+  // Legacy 335 (UX review of #605, P3-3): while the draft still holds the character, the banner
+  // offers 「移除看不见的字符」, so the note points at it instead of the manual workarounds.
+  if (canStrip) {
+    return t(
+      `消息内容里${UNSTORABLE_TEXT_WHAT.zh}，所以这条消息没有发出。点「移除看不见的字符」把它去掉，检查一遍后重新发送。`,
+      `The message ${UNSTORABLE_TEXT_WHAT.en}, so it was not sent. Choose “Remove invisible characters” to take it out, check the message, then send it again.`,
+    );
+  }
   return t(
     `消息内容里${UNSTORABLE_TEXT_WHAT.zh}，所以这条消息没有发出。${UNSTORABLE_TEXT_FIX.zh}，然后重新发送。`,
     `The message ${UNSTORABLE_TEXT_WHAT.en}, so it was not sent. ${UNSTORABLE_TEXT_FIX.en}, then send it again.`,

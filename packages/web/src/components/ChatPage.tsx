@@ -3,7 +3,7 @@ import { usePermissions } from '../hooks/usePermissions.js';
 import { useRoleCan } from '../hooks/useRoleCan.js';
 import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
 import type { CapabilityCaller } from '../lib/clients.js';
-import { composerUnstorableTextStep } from '../lib/errors.js';
+import { composerUnstorableTextStep, describeError } from '../lib/errors.js';
 import { useT } from '../lib/i18n.js';
 import { liveOutputPaused } from '../lib/live-stream.js';
 import { persistedToolCallIds, threadItems } from '../lib/tool-call-record.js';
@@ -284,7 +284,36 @@ export function ChatPage({
               {sendError !== null ? (
                 <ErrorBanner
                   error={sendError}
-                  overrides={{ unstorable_text: composerUnstorableTextStep(t) }}
+                  overrides={{
+                    unstorable_text: composerUnstorableTextStep(t, composer.hasUnstorableChar),
+                  }}
+                  action={
+                    // Legacy 335: the character is in the draft, so the page can take it out.
+                    describeError(sendError).code === 'unstorable_text' &&
+                    composer.hasUnstorableChar ? (
+                      <Button
+                        variant="secondary"
+                        size="s"
+                        data-testid="composer-remove-unstorable"
+                        onClick={() => {
+                          const removed = composer.removeUnstorableChars();
+                          toast.push({
+                            tone: 'ok',
+                            title: t(
+                              `已移除 ${removed} 个看不见的字符`,
+                              `Removed ${removed} invisible character${removed === 1 ? '' : 's'}`,
+                            ),
+                            description: t(
+                              '消息还没有发出，检查一遍后再发送。',
+                              'The message has not been sent; check it, then send it.',
+                            ),
+                          });
+                        }}
+                      >
+                        {t('移除看不见的字符', 'Remove invisible characters')}
+                      </Button>
+                    ) : undefined
+                  }
                 />
               ) : null}
               <div className="composer-box">
