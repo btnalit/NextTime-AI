@@ -48,6 +48,7 @@ import {
   SupersedeIdentityMismatchError,
   UnauthorizedError,
   UnknownOperationError,
+  UnstorableTextError,
 } from '../../application/gateway/index.js';
 // P-B2b: same direct-import convention as the comment above — application/platform/modules.ts is a
 // domain module, not re-exported by application/gateway/index.ts's curated surface.
@@ -250,6 +251,10 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
     return { code: WS_ERROR_CODES.METHOD_NOT_FOUND, message: err.message };
   }
   if (err instanceof InvalidCapabilityParamsError) {
+    return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
+  }
+  // Legacy 320: mirrors HTTP 400 `unstorable_text` (capability-route.ts).
+  if (err instanceof UnstorableTextError) {
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
   if (err instanceof CapabilityNotImplementedError) {

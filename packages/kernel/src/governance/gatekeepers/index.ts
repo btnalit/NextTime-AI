@@ -32,6 +32,7 @@ export type {
 
 export {
   importManifest,
+  storableManifestOperation,
   proposeOperation,
   getOperation,
   getPublishedOperation,

@@ -1,3 +1,4 @@
+import { UnstorableTextError, findUnstorableText } from '@nexttime/shared';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { CryptoKey } from 'jose';
 import { z } from 'zod';
@@ -116,6 +117,23 @@ type Envelope =
 function fail(reply: FastifyReply, status: number, code: string, message: string): Envelope {
   reply.code(status);
   return { ok: false, error: { code, message } };
+}
+
+/** Legacy 320: a login or display name holding U+0000 cannot be stored or looked up — refused
+ *  400 `unstorable_text` before any query, instead of failing inside one as a 500. */
+function unstorableField(
+  reply: FastifyReply,
+  route: string,
+  fields: Record<string, string>,
+): Envelope | undefined {
+  const found = findUnstorableText(fields);
+  if (found === undefined) return undefined;
+  return fail(
+    reply,
+    400,
+    'unstorable_text',
+    new UnstorableTextError(route, found, 'the field').message,
+  );
 }
 
 function firstHeader(value: string | string[] | undefined): string | undefined {
@@ -261,6 +279,11 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
     const body = ClaimBody.safeParse(request.body ?? {});
     if (!body.success)
       return fail(reply, 400, 'invalid_params', 'login, displayName and password are required');
+    const claimRefused = unstorableField(reply, 'auth/claim', {
+      login: body.data.login,
+      displayName: body.data.displayName,
+    });
+    if (claimRefused) return claimRefused;
     // The API key *is* the proof of identity here — never the cookie (a cookie user already has
     // a password and nothing to claim).
     let caller: Awaited<ReturnType<typeof resolveCaller>>;
@@ -297,6 +320,8 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
     }
     const body = LoginBody.safeParse(request.body ?? {});
     if (!body.success) return fail(reply, 400, 'invalid_params', 'login and password are required');
+    const loginRefused = unstorableField(reply, 'auth/login', { login: body.data.login });
+    if (loginRefused) return loginRefused;
     const key = await signingKeyOr503(request, reply, deps);
     if (isEnvelope(key)) return key;
     try {
@@ -370,6 +395,10 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
     }
     const body = ProfileBody.safeParse(request.body ?? {});
     if (!body.success) return fail(reply, 400, 'invalid_params', 'displayName is required');
+    const profileRefused = unstorableField(reply, 'auth/me', {
+      displayName: body.data.displayName,
+    });
+    if (profileRefused) return profileRefused;
     try {
       const consoleUser = await resolveConsoleUser(request.headers.cookie, deps);
       const user = await updateUserDisplayName(deps.pool, consoleUser.id, body.data.displayName);

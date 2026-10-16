@@ -113,6 +113,7 @@ export {
   CapabilityNotFoundError,
   InvalidCapabilityParamsError,
   CapabilityNotImplementedError,
+  UnstorableTextError,
 } from './dispatch.js';
 export type { DispatchDeps } from './dispatch.js';
 

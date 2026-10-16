@@ -7,7 +7,13 @@ import type {
   Operation,
   PendingGateManifestWire,
 } from '@nexttime/shared';
-import { GateHostedDefinitionWireSchema, OperationSchema } from '@nexttime/shared';
+import {
+  GateHostedDefinitionWireSchema,
+  OperationSchema,
+  UnstorableTextError,
+  findUnstorableText,
+  storableValue,
+} from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { z } from 'zod';
 import { setWorkspaceContext } from '../../adapters/db/platform-context.js';
@@ -16,7 +22,10 @@ import {
   type ConnectionCredentialField,
   findConnectionParamsCredential,
 } from '../../governance/connections/index.js';
-import { isOperationDisabled } from '../../governance/gatekeepers/index.js';
+import {
+  isOperationDisabled,
+  storableManifestOperation,
+} from '../../governance/gatekeepers/index.js';
 import { gateRunningDefinitions, operationsRefusedUntilAdopted } from './definition-drift.js';
 import {
   type AnnouncedManifestDiff,
@@ -64,6 +73,28 @@ export const AnnounceBodySchema = z
   })
   .strict();
 export type AnnounceBody = z.infer<typeof AnnounceBodySchema>;
+
+/**
+ * Legacy 320: an announcement made storable, or refused (`UnstorableTextError`, or
+ * `OperationNameInvalidError` for an Operation name — both 400, nothing written). Postgres cannot
+ * store U+0000, and a heartbeat that fails on it would leave the instance to go `lost`. The display
+ * name is a label for a reader, so U+0000 there is stored as the visible `\u{0}`; the addresses
+ * (`target`, `endpoint`, `healthEndpoint`) are settings the kernel acts on and refuse; each
+ * Operation is decided as an import decides it (`storableManifestOperation`: description escaped,
+ * anything else refused). `gateId` and `connector` are already held to their patterns.
+ */
+export function storableAnnouncement(body: AnnounceBody): AnnounceBody {
+  const { displayName, operations, ...settings } = body;
+  const unstorable = findUnstorableText(settings);
+  if (unstorable !== undefined) {
+    throw new UnstorableTextError('gates/announce', unstorable, 'the field');
+  }
+  return {
+    ...body,
+    ...(displayName !== undefined ? { displayName: storableValue(displayName).value } : {}),
+    operations: operations.map(storableManifestOperation),
+  };
+}
 
 interface ConnectorDbRow {
   name: string;

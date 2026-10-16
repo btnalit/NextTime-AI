@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
-import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import { type PoolLike, createPool, withWorkspace } from '../../adapters/db/pool.js';
 import type { TaskSupervisorClientPort } from '../../adapters/supervisor-client/index.js';
 import { entryScope, generateEphemeralHandleKeyPair } from '../../governance/capability/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
@@ -14,6 +14,8 @@ import { readTaskRow } from './lifecycle.js';
 import {
   type ActionRequestEventMeta,
   type ActionRequestEventSource,
+  ORPHANED_TASK_THRESHOLD_MS,
+  TaskReaperCandidateErrors,
   registerActionRequestRoutingConsumer,
   runTaskReaper,
 } from './reaper.js';
@@ -466,6 +468,151 @@ describe.runIf(DATABASE_URL !== undefined)(
           readTaskRow(client, workspaceId, freshTaskId),
         );
         expect(stillQueued?.status).toBe('queued');
+      });
+    });
+
+    describe('runTaskReaper — orphaned-Task sweep and per-candidate isolation (legacy 320)', () => {
+      const stale = () => new Date(Date.now() - ORPHANED_TASK_THRESHOLD_MS - 60 * 1000);
+
+      /** A Task at `status` created at `createdAt`, with one WorkerRun per entry of `runs`. */
+      async function insertTask(
+        status: 'running' | 'waiting_approval',
+        createdAt: Date,
+        runs: readonly { status: 'running' | 'terminated'; terminatedAt?: Date }[] = [],
+      ): Promise<string> {
+        const taskId = randomUUID();
+        await inTx(ownerId, async (client) => {
+          await client.query(
+            `insert into tasks (
+               workspace_id, id, status, on_behalf_of, worker_definition_id,
+               worker_definition_version, created_at, updated_at
+             ) values ($1, $2, $3, $4, $5, 1, $6, $6)`,
+            [workspaceId, taskId, status, ownerId, randomUUID(), createdAt],
+          );
+          for (const run of runs) {
+            await client.query(
+              `insert into worker_runs (workspace_id, status, task_id, started_at, terminated_at)
+               values ($1, $2, $3, $4, $5)`,
+              [workspaceId, run.status, taskId, createdAt, run.terminatedAt ?? null],
+            );
+          }
+        });
+        return taskId;
+      }
+
+      async function taskState(taskId: string) {
+        const row = await inTx(ownerId, (client) => readTaskRow(client, workspaceId, taskId));
+        return { status: row?.status, failureReason: row?.failureReason ?? null };
+      }
+
+      /** `pool`, except that any `update tasks` naming `taskId` fails — a Task write Postgres
+       *  refuses on every attempt. */
+      function poolRefusingTaskWrites(taskId: string): PoolLike {
+        return {
+          async connect() {
+            const client = await pool.connect();
+            return new Proxy(client, {
+              get(target, prop) {
+                if (prop === 'query') {
+                  return (text: unknown, values?: unknown) => {
+                    if (
+                      typeof text === 'string' &&
+                      /update\s+tasks/i.test(text) &&
+                      Array.isArray(values) &&
+                      values.includes(taskId)
+                    ) {
+                      return Promise.reject(new Error(`refused write for ${taskId}`));
+                    }
+                    return (target.query as (t: unknown, v?: unknown) => unknown)(text, values);
+                  };
+                }
+                const value = Reflect.get(target, prop, target);
+                return typeof value === 'function' ? value.bind(target) : value;
+              },
+            });
+          },
+        };
+      }
+
+      function noopSupervisorClient(): TaskSupervisorClientPort {
+        return {
+          spawn: () => Promise.reject(new Error('unexpected spawn() in orphaned-Task sweep test')),
+          terminate: async () => true,
+          status: async () => undefined,
+        };
+      }
+
+      it('fails a Task left running / waiting_approval with no live WorkerRun past the threshold, run_lost, audited; a recent one is left alone', async () => {
+        const noRuns = await insertTask('running', stale());
+        const allEnded = await insertTask('running', stale(), [
+          { status: 'terminated', terminatedAt: stale() },
+        ]);
+        const waiting = await insertTask('waiting_approval', stale(), [
+          { status: 'terminated', terminatedAt: stale() },
+        ]);
+        // A run that ended just now: a retry may still be spawning its replacement.
+        const justEnded = await insertTask('running', stale(), [
+          { status: 'terminated', terminatedAt: new Date() },
+        ]);
+        const fresh = await insertTask('running', new Date());
+        // A live run: the run sweep, not this one, decides it.
+        const live = await insertTask('running', stale(), [{ status: 'running' }]);
+
+        const { privateKey } = await generateEphemeralHandleKeyPair();
+        const result = await runTaskReaper({
+          pool,
+          privateKey,
+          supervisorClient: noopSupervisorClient(),
+        }).catch((err: unknown) => {
+          // A row another test file left behind may fail on its own; this test's rows must not.
+          if (!(err instanceof TaskReaperCandidateErrors)) throw err;
+          const ours = [noRuns, allEnded, waiting, justEnded, fresh, live];
+          expect((err.errors as { id: string }[]).filter((e) => ours.includes(e.id))).toEqual([]);
+          return undefined;
+        });
+        if (result) expect(result.runLost).toBeGreaterThanOrEqual(3);
+
+        for (const taskId of [noRuns, allEnded, waiting]) {
+          expect(await taskState(taskId)).toEqual({ status: 'failed', failureReason: 'run_lost' });
+        }
+        expect((await taskState(justEnded)).status).toBe('running');
+        expect((await taskState(fresh)).status).toBe('running');
+        expect((await taskState(live)).status).toBe('running');
+
+        const audit = await inTx(ownerId, (client) =>
+          client.query<{ resource_id: string }>(
+            `select resource_id from audit_records
+             where workspace_id = $1 and resource_type = 'task' and action = 'task.fail'
+               and resource_id = any($2::uuid[])`,
+            [workspaceId, [noRuns, allEnded, waiting]],
+          ),
+        );
+        expect(new Set(audit.rows.map((row) => row.resource_id))).toEqual(
+          new Set([noRuns, allEnded, waiting]),
+        );
+      });
+
+      it('a candidate whose write keeps failing no longer stops the others: they are reaped, and the tick then reports it', async () => {
+        const poisoned = await insertTask('running', stale());
+        const healthy = await insertTask('running', stale());
+
+        const { privateKey } = await generateEphemeralHandleKeyPair();
+        const outcome = await runTaskReaper({
+          pool: poolRefusingTaskWrites(poisoned) as Pool,
+          privateKey,
+          supervisorClient: noopSupervisorClient(),
+        }).then(
+          () => undefined,
+          (err: unknown) => err,
+        );
+
+        expect(outcome).toBeInstanceOf(TaskReaperCandidateErrors);
+        expect((outcome as TaskReaperCandidateErrors).errors).toEqual(
+          expect.arrayContaining([expect.objectContaining({ sweep: 'run_lost', id: poisoned })]),
+        );
+        expect((outcome as Error).message).toContain(`run_lost ${poisoned}: refused write`);
+        expect(await taskState(healthy)).toEqual({ status: 'failed', failureReason: 'run_lost' });
+        expect((await taskState(poisoned)).status).toBe('running');
       });
     });
   },

@@ -5,7 +5,7 @@ import type { KernelToAgentHostFrame } from '@nexttime/shared';
 import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
-import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import { type PoolLike, createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { generateEphemeralHandleKeyPair } from '../../governance/capability/keys.js';
 import { createBackgroundServices } from '../../index.js';
 import {
@@ -44,6 +44,8 @@ describe.runIf(DATABASE_URL !== undefined)(
     let workspaceId: string;
     let ownerId: string;
     let sink: AgentRuntimeEventSink;
+    /** `sink` on `refusingMessagePool()` — see `UNSTORABLE`. */
+    let refusingSink: AgentRuntimeEventSink;
 
     function admin<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
       return withWorkspace(pool, { workspaceId, principalId: randomUUID() }, fn, {
@@ -191,6 +193,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
       });
       sink = createChatEventSink({ pool });
+      refusingSink = createChatEventSink({ pool: refusingMessagePool() });
     });
 
     afterAll(async () => {
@@ -475,10 +478,42 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(runtime.ownsTurnEnd(turnId)).toBe(false);
     });
 
-    /** Text Postgres cannot store: `jsonb` has no representation for U+0000, so the insert fails
-     *  with SQLSTATE 22P05 — one real way an agent's output (a tool reading a binary file, say)
-     *  fails to persist after its frame was acknowledged. */
-    const UNSTORABLE = 'before \u0000 after';
+    /** An answer whose insert Postgres refuses after its frame was acknowledged. U+0000 used to be
+     *  the real way (`jsonb` refuses it, SQLSTATE 22P05); since legacy 320 the sink stores it as
+     *  `\u{0}`, so the refusal is injected — `refusingSink` fails any `chat_messages` insert
+     *  carrying this text with that same SQLSTATE — and the loss handling stays covered for
+     *  whatever else may refuse an insert. */
+    const UNSTORABLE = 'before [an insert the database refuses] after';
+    /** `pool`, except that a `chat_messages` insert carrying `UNSTORABLE` fails with 22P05. */
+    function refusingMessagePool(): PoolLike {
+      return {
+        async connect() {
+          const client = await pool.connect();
+          return new Proxy(client, {
+            get(target, prop) {
+              if (prop === 'query') {
+                return (text: unknown, values?: unknown) => {
+                  if (
+                    typeof text === 'string' &&
+                    /insert\s+into\s+chat_messages/i.test(text) &&
+                    JSON.stringify(values ?? []).includes(UNSTORABLE)
+                  ) {
+                    return Promise.reject(
+                      Object.assign(new Error('unsupported Unicode escape sequence'), {
+                        code: '22P05',
+                      }),
+                    );
+                  }
+                  return (target.query as (t: unknown, v?: unknown) => unknown)(text, values);
+                };
+              }
+              const value = Reflect.get(target, prop, target);
+              return typeof value === 'function' ? value.bind(target) : value;
+            },
+          });
+        },
+      };
+    }
 
     function messageEvent(chatId: string, turnId: string, text: string) {
       return {
@@ -493,7 +528,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     }
 
     it('legacy 128: an answer the kernel could not store ends the Turn failed, with the failure on the Turn, not completed', async () => {
-      const { chatId, turnId, answer, end } = await acceptedRuntimeTurn(sink);
+      const { chatId, turnId, answer, end } = await acceptedRuntimeTurn(refusingSink);
       const pushes: ChatPushEvent[] = [];
       const unsubscribe = subscribeToChatPushEvents(chatId, (event) => pushes.push(event));
       try {
@@ -534,7 +569,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       setAgentRuntimeForHandlers({ startTurn: async () => {}, stopTurn: async () => true });
       const { chatId, turnId } = await startTurn();
 
-      await sink.handle(messageEvent(chatId, turnId, UNSTORABLE));
+      await refusingSink.handle(messageEvent(chatId, turnId, UNSTORABLE));
       expect((await turnRow(turnId))?.status).toBe('running');
       const reported = (await dispatchCapability({ pool }, entryHandle(), 'report_turn', {
         turnId,
@@ -546,14 +581,33 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(await turnCompletedStatuses(turnId)).toEqual(['failed']);
     });
 
+    it('legacy 320: an answer and a Turn summary holding U+0000 are stored with it shown as \\u{0}', async () => {
+      setAgentRuntimeForHandlers({ startTurn: async () => {}, stopTurn: async () => true });
+      const { chatId, turnId } = await startTurn();
+
+      await sink.handle(messageEvent(chatId, turnId, 'read a binary file: \u0000'));
+      const reported = (await dispatchCapability({ pool }, entryHandle(), 'report_turn', {
+        turnId,
+        summary: 'answered \u0000',
+      })) as { status: string };
+
+      // Before: both writes failed (22P05) — the answer was lost and the Turn ended `failed`.
+      expect(reported.status).toBe('completed');
+      expect(await assistantTexts(chatId)).toEqual(['read a binary file: \\u{0}']);
+      const row = await turnRow(turnId);
+      expect(row?.metadata.summary).toBe('answered \\u{0}');
+      expect(row?.metadata.unstorableEscaped).toBe(1);
+      expect(row?.metadata.messagePersistFailure).toBeUndefined();
+    });
+
     it('legacy 128: a Stop still ends the Turn interrupted when a message was lost; the loss stays on the Turn', async () => {
       setAgentRuntimeForHandlers({ startTurn: async () => {}, stopTurn: async () => true });
       const { chatId, turnId } = await startTurn();
 
       await dispatchCapability({ pool }, human(), 'stop_agent', { chatId });
-      await sink.handle(messageEvent(chatId, turnId, UNSTORABLE));
-      await sink.handle(messageEvent(chatId, turnId, UNSTORABLE));
-      await sink.handle(turnEnded(chatId, turnId, 'completed'));
+      await refusingSink.handle(messageEvent(chatId, turnId, UNSTORABLE));
+      await refusingSink.handle(messageEvent(chatId, turnId, UNSTORABLE));
+      await refusingSink.handle(turnEnded(chatId, turnId, 'completed'));
 
       const row = await turnRow(turnId);
       expect(row?.status).toBe('interrupted');

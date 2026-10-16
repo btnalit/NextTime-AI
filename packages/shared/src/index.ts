@@ -14,6 +14,7 @@ export * from './events.js';
 export * from './action-description.js';
 export * from './action-failure-reason.js';
 export * from './echoed-text.js';
+export * from './storable-text.js';
 export * from './http.js';
 export * from './handle-token.js';
 export * from './handle-binding.js';

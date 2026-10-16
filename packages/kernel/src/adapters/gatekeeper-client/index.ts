@@ -14,7 +14,7 @@ import {
   normalizeGateToken,
   redirectRefusalMessage,
 } from '@nexttime/gatekeeper-base';
-import { correlationHeaders } from '@nexttime/shared';
+import { correlationHeaders, storableText, storableValue } from '@nexttime/shared';
 import { scrubSecretValues } from '../../governance/redaction/index.js';
 import { currentCorrelationId } from '../../substrate/correlation/index.js';
 import {
@@ -556,7 +556,9 @@ export class HttpGatekeeperClient implements GatekeeperClient {
       const error = (envelope as { error?: unknown }).error;
       const { code, message } = gateErrorOf(error, path);
       const runningDigest = gateRunningDigestOf(error);
-      throw new GatekeeperClientError(message, {
+      // Legacy 320: the gate's message is kept as a reason (an ActionRequest's `failed` /
+      // in-doubt reason, an Activity's error) — U+0000 in it is stored as the visible `\u{0}`.
+      throw new GatekeeperClientError(storableText(message), {
         code,
         status: response.status,
         ...(call !== undefined
@@ -570,7 +572,16 @@ export class HttpGatekeeperClient implements GatekeeperClient {
           : {}),
       });
     }
-    return envelope.result;
+    // Legacy 320: a gate's answer is content from the system behind it — observed Facts, an
+    // apply's result data — and is stored as received, so U+0000 in it (which Postgres `text` /
+    // `jsonb` refuses) is stored as the visible `\u{0}` rather than failing the write that keeps
+    // it: for an `apply` that write is what moves the ActionRequest out of `executing`, and
+    // replaying it brings the same answer back. `describe_operations` is the exception: a manifest
+    // is definitions the kernel acts on, and `importManifest` decides field by field
+    // (`governance/gatekeepers/manifest.ts`, `storableManifestOperation`).
+    return path === 'gate/describe_operations'
+      ? envelope.result
+      : storableValue(envelope.result).value;
   }
 
   async describeOperations(target: GateTarget): Promise<DescribeOperationsResponse> {

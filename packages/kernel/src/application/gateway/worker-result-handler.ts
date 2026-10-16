@@ -1,4 +1,5 @@
 import type { WorkerResultCapabilityParams, WorkerResultObjectRef } from '@nexttime/shared';
+import { UNSTORABLE_CHAR, storableValue } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import type {
   ContractPreRejections,
@@ -190,6 +191,47 @@ async function validateContract(
   return { facts, proposals, evidenceDropped };
 }
 
+/** Legacy 320: `proposedOperations[]` entries whose Operation name holds U+0000, by index, with
+ *  the name as sent — the one field of the contract refused rather than escaped (see the handler). */
+function unstorableProposalNames(
+  contract: WorkerResultCapabilityParams,
+): ReadonlyMap<number, { readonly gatekeeperId: string; readonly name: string }> {
+  const found = new Map<number, { gatekeeperId: string; name: string }>();
+  for (const [index, proposal] of (contract.proposedOperations ?? []).entries()) {
+    if (proposal.operation.name.includes(UNSTORABLE_CHAR)) {
+      found.set(index, { gatekeeperId: proposal.gatekeeperId, name: proposal.operation.name });
+    }
+  }
+  return found;
+}
+
+/** `preRejected` plus an `invalid_operation_name` refusal for every proposal whose name held
+ *  U+0000 and that `validateContract` did not already refuse for another reason — the same reason
+ *  and problem the name rule gives any other control character (`operationNameProblem`). */
+function withUnstorableNameRefusals(
+  preRejected: ContractPreRejections,
+  unstorableNames: ReadonlyMap<number, { readonly gatekeeperId: string; readonly name: string }>,
+): ContractPreRejections {
+  if (unstorableNames.size === 0) return preRejected;
+  const refused = new Set(preRejected.proposals.map((rejection) => rejection.index));
+  const added: RejectedResultProposal[] = [];
+  for (const [index, { gatekeeperId, name }] of unstorableNames) {
+    if (refused.has(index)) continue;
+    const problem = 'invisible_or_control_characters' as const;
+    added.push({
+      index,
+      gatekeeperId,
+      reason: 'invalid_operation_name',
+      problem,
+      detail: boundedEcho(new OperationNameInvalidError(name, problem).message, 400),
+    });
+  }
+  return {
+    ...preRejected,
+    proposals: [...preRejected.proposals, ...added].sort((a, b) => a.index - b.index),
+  };
+}
+
 /**
  * The report half of a result contract — what the Worker says it did and found, written where
  * people read it (the Task's stored result and its chat card, Facts, evidence, artifacts) — with
@@ -242,10 +284,22 @@ export const reportTaskResultHandler: CapabilityHandler = async (
     throw new Error('report_task_result: caller context is required (dispatch.ts must supply it)');
   }
 
-  const { contract, redactedValues } = scrubReport(params as WorkerResultCapabilityParams);
+  const sent = params as WorkerResultCapabilityParams;
+  // Legacy 320 (`HANDLERS_SETTLING_UNSTORABLE_TEXT`, dispatch.ts): the contract is the report of
+  // work already done, so U+0000 in it — text Postgres cannot store — must not cost the whole
+  // result (and leave the Task `running` until its run exits). It is stored as the visible `\u{0}`
+  // and the count goes on the `worker_result` Activity. One exception, by field: a proposed
+  // Operation *name* holding it is refused for that entry, as the name rule refuses any other
+  // control character — an escaped name would be a different name than the one proposed.
+  const unstorableNames = unstorableProposalNames(sent);
+  const storable = storableValue(sent);
+  const { contract, redactedValues } = scrubReport(storable.value);
   // Proposed Operations are owned by `onBehalfOf` (application/task/result.ts), so that is whose
   // own draft a proposal may revise.
-  const preRejected = await validateContract(client, workspaceId, contract, onBehalfOf);
+  const preRejected = withUnstorableNameRefusals(
+    await validateContract(client, workspaceId, contract, onBehalfOf),
+    unstorableNames,
+  );
   // `agentPrincipalId` is resolved once, at spawn time (`spawn.ts`'s `ensureWorkerAgentPrincipal`),
   // and stamped on the WorkerRun row itself — `findWorkerRunBySessionId` above already read it, so
   // this handler passes it straight through rather than making `postWorkerResult` re-derive it.
@@ -265,6 +319,7 @@ export const reportTaskResultHandler: CapabilityHandler = async (
     contract,
     preRejected,
     redactedValues,
+    unstorableEscaped: storable.escaped,
   });
 
   return {
