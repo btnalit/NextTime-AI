@@ -5,7 +5,7 @@
 
 services:
   postgres:
-    image: ghcr.io/btnalit/nexttime-mirror-pgvector@sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f
+    image: ghcr.io/btnalit/nexttime-mirror-pgvector@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d
     # user: postgres (uid/gid 999) — 遗留20/S5.5 加固. pgvector/pgvector:pg17 is `FROM
     # postgres:17-bookworm` plus only the pgvector extension build — its own Dockerfile does no
     # useradd/groupadd/chown (verified by reading it at its current tag), so this 'postgres' system
@@ -1318,7 +1318,7 @@ services:
     restart: "no"
 
   backup:
-    image: ghcr.io/btnalit/nexttime-mirror-postgres@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73 # 与 postgres 同大版本
+    image: ghcr.io/btnalit/nexttime-mirror-postgres@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24 # 与 postgres 同大版本
     entrypoint: ["/bin/sh", "/backup.sh"] # 每日 pg_dump + workspaces/config/gatekeepers/caddy/llm-proxy/models tar.gz，保留 N 份（S1.12；leftover 58 补 llm-proxy/models）
     # Mounts narrowed (lane-7 P2 fix) from one blanket rw `${NEXTTIME_DATA}:/data` (which handed
     # this container write access to pgdata/, secrets/, and every other host-data subtree it never
