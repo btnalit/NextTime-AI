@@ -32,6 +32,13 @@ describe('operationDraftVisibleTo', () => {
     expect(operationDraftVisibleTo(member(OTHER), draft)).toBe(false);
   });
 
+  it('legacy 278: a discarded draft stays as private as the draft was', () => {
+    const discarded = { status: 'discarded', ...recorded };
+    expect(operationDraftVisibleTo(member(PROPOSER), discarded)).toBe(true);
+    expect(operationDraftVisibleTo(reviewer(OTHER), discarded)).toBe(true);
+    expect(operationDraftVisibleTo(member(OTHER), discarded)).toBe(false);
+  });
+
   it('a row with no status reads as a draft', () => {
     expect(operationDraftVisibleTo(member(OTHER), { status: undefined, ...recorded })).toBe(false);
     expect(operationDraftVisibleTo(member(OTHER), { status: null, ...recorded })).toBe(false);
@@ -57,7 +64,7 @@ describe('SQL form', () => {
   it('names only Operation drafts, and binds the reviewer bit and the principal by placeholder', () => {
     const sql = operationDraftHiddenSql('o', '$5', '$6');
     expect(sql).toContain("o.object_type = 'Operation'");
-    expect(sql).toContain("coalesce(o.properties ->> 'status', 'draft') = 'draft'");
+    expect(sql).toContain("coalesce(o.properties ->> 'status', 'draft') in ('draft', 'discarded')");
     expect(sql).toContain('not $5::boolean');
     expect(sql).toContain("o.properties ->> 'proposedBy' is distinct from $6::text");
     expect(sql).toContain("o.properties ->> 'proposedByKind' is null");

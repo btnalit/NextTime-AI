@@ -469,7 +469,7 @@ export function UserDetailPanel({
                 )}
                 {sameNameCandidates.length > 0 ? (
                   <span data-testid="user-merge-same-name">
-                    {' '}
+                    {t('', ' ')}
                     {t(
                       `同显示名的账户排在最前：${sameNameCandidates.map((c) => c.login).join('、')}。`,
                       `Accounts with the same display name are listed first: ${sameNameCandidates.map((c) => c.login).join(', ')}.`,

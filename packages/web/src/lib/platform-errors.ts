@@ -156,6 +156,13 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
     zh: '门的清单在你查看之后变了，没有写入任何内容；请重新打开查看',
     en: "The gate's manifest changed after you looked at it — nothing was written; open it again to review",
   },
+  // Review #493 on #583: an Operation draft was revised in place (its proposer re-proposing, a gate
+  // re-import) after it was read — discarding or publishing it would have acted on content the
+  // reader never saw. Nothing was written; the catalog reloads it.
+  draft_changed: {
+    zh: '这份草稿在你查看之后被修改过，本次没有写入任何内容。请先看它现在的内容，再决定是否操作',
+    en: 'This draft was changed after you looked at it — nothing was written. Look at what it says now before acting on it',
+  },
   no_pending_manifest: {
     zh: '这个门实例没有待确认的公告清单',
     en: 'This gate instance has no announced manifest awaiting confirmation',

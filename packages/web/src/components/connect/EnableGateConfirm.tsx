@@ -211,6 +211,7 @@ function EnablePreviewBody({
       {awaiting ? (
         <AwaitingAdoptionNotice
           operations={awaiting.operations}
+          dropped={awaiting.dropped}
           announcedAt={awaiting.announcedAt}
           platformAdmin={platformAdmin}
           platformGateId={preview.gateId}

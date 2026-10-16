@@ -19,6 +19,7 @@ import {
   listGatekeepers,
   listOperations,
   operationDefinitionChange,
+  operationDraftDigest,
   operationGovernanceChange,
   operationVisibleTo,
 } from '../../governance/gatekeepers/index.js';
@@ -180,6 +181,9 @@ function toWireOperationSummary(record: OperationRecord, revision?: RevisionChan
     // UX acceptance of #573 P3-1: a held draft the gate never wrote (a proposal) is told apart
     // from one the gate stopped announcing by who wrote it.
     ...(record.origin !== undefined ? { origin: record.origin } : {}),
+    // Review #493 on #583: what the catalog shows of a draft, handed back to discard / publish it
+    // so a draft revised in place since is refused rather than acted on unseen.
+    ...(record.status === 'draft' ? { draftDigest: operationDraftDigest(record) } : {}),
     ...(revision !== undefined ? { governanceChange: revision.governanceChange } : {}),
     ...(revision?.definitionChange !== undefined
       ? { definitionChange: revision.definitionChange }

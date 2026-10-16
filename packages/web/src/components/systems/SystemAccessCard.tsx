@@ -188,19 +188,38 @@ function MyReachability({ gate }: { readonly gate: ExecutionReadinessGateWire })
 /** Legacy K (UX acceptance of #538): the gate refuses calls to some of this system's Operations
  *  — it runs another definition — while the system itself still reads usable through the others.
  *  When every one is refused the reachability chip already says so (`definition_mismatch`). The
- *  drawer's `DefinitionMismatchNotice` says which, and whose step it is. */
+ *  drawer's `DefinitionMismatchNotice` says which, and whose step it is. Review #501 on #583: an
+ *  Operation the gate dropped (`droppedByGate`) is not running another definition — it is named as
+ *  no longer provided. */
 function RefusedOperationsChip({ gate }: { readonly gate: ExecutionReadinessGateWire }) {
   const t = useT();
   const count = gate.definitionMismatch.length;
   if (count === 0 || gate.reason === 'definition_mismatch') return null;
+  const names = (dropped: boolean, separator: string) =>
+    gate.definitionMismatch
+      .filter((entry) => (entry.droppedByGate === true) === dropped)
+      .map((entry) => entry.operation)
+      .join(separator);
+  const changed = names(false, '、');
+  const gone = names(true, '、');
+  const title = [
+    changed.length > 0
+      ? t(
+          `门运行的定义和已发布的不一样：${changed}`,
+          `The gate runs another definition than the published one: ${names(false, ', ')}`,
+        )
+      : null,
+    gone.length > 0
+      ? t(`门已不再提供：${gone}`, `The gate no longer provides: ${names(true, ', ')}`)
+      : null,
+  ]
+    .filter((line): line is string => line !== null)
+    .join(t('；', '; '));
   return (
     <span
       className="chip chip-s chip-warn"
       data-testid="gatekeeper-refused-operations"
-      title={t(
-        `门运行的定义和已发布的不一样：${gate.definitionMismatch.map((entry) => entry.operation).join('、')}`,
-        `The gate runs another definition than the published one: ${gate.definitionMismatch.map((entry) => entry.operation).join(', ')}`,
-      )}
+      title={title}
     >
       {t(`${count} 个 Operation 调用被拒`, `${count} operation(s) refused`)}
     </span>

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   canonicalJson,
   operationDefinition,
@@ -54,6 +55,33 @@ export function operationRecordDigestOrNull(record: OperationDefinitionRecord): 
     if (err instanceof OperationDefinitionUnreadableError) return null;
     throw err;
   }
+}
+
+/** What `operationDraftDigest` covers of an `OperationRecord`: everything a draft says. */
+export interface OperationDraftContent {
+  readonly operation: unknown;
+  readonly origin?: string;
+  readonly proposedBy?: { readonly id: string; readonly kind: string };
+  readonly draftOf?: string;
+}
+
+/**
+ * Review #493 on #583 (P2): which draft a reader looked at, as one comparable string. A draft is
+ * revised in place at its own version (its proposer re-proposing, a gate re-import, an align
+ * rewriting the gate's own draft), so `{gatekeeperId, name, version}` does not name its content.
+ * Unlike `operationRecordDigest`, which covers only what a gate acts on, this covers the whole
+ * stored definition (governance fields and description included) and who wrote it. Opaque: the
+ * catalog hands it back to `discard_operation_draft` / `publish_operation`, which compare it on the
+ * locked row. Never fails: an unparsable definition still hashes as stored.
+ */
+export function operationDraftDigest(record: OperationDraftContent): string {
+  const content = canonicalJson({
+    operation: record.operation,
+    origin: record.origin,
+    proposedBy: record.proposedBy,
+    draftOf: record.draftOf,
+  });
+  return `sha256:${createHash('sha256').update(content).digest('hex')}`;
 }
 
 /** Whether `announced` (a gate's manifest entry) defines something other than `record`: `true`

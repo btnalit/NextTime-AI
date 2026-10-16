@@ -221,6 +221,7 @@ import {
 } from './ontology-handlers.js';
 import {
   deprecateOperationHandler,
+  discardOperationDraftHandler,
   proposeOperationHandler,
   publishManifestHandler,
   publishOperationHandler,
@@ -2019,6 +2020,7 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['propose_operation', proposeOperationHandler],
   ['publish_operation', publishOperationHandler],
   ['deprecate_operation', deprecateOperationHandler],
+  ['discard_operation_draft', discardOperationDraftHandler],
   // S8 W3-K1 (leftover 81) — documentation-only edit, no draft/publish step.
   ['update_operation_description', updateOperationDescriptionHandler],
   // S2.14 (docs/development-tasks.md S2.14) — skill-procedure-handlers.ts.

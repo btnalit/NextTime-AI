@@ -835,9 +835,16 @@ export const PreviewGateInstanceEnableResultWireSchema = z
      *  adopted, and it defines these Operations (listed above, to import or already deployed)
      *  differently from the manifest in effect — so calls to them are refused, and nothing this
      *  workspace aligns or publishes can fix that until a platform admin adopts it (Integrations).
-     *  `null` when no listed Operation is affected (`application/gates/definition-drift.ts`). */
+     *  `null` when no listed Operation is affected (`application/gates/definition-drift.ts`).
+     *  `dropped` (UX acceptance of #579, legacy 297): the subset of `operations` the held
+     *  manifest no longer lists — adopting removes them rather than bringing their calls back.
+     *  Present only when non-empty. */
     awaitingPlatformAdoption: z
-      .object({ announcedAt: z.string(), operations: z.array(z.string()) })
+      .object({
+        announcedAt: z.string(),
+        operations: z.array(z.string()),
+        dropped: z.array(z.string()).optional(),
+      })
       .strict()
       .nullable(),
   })

@@ -144,6 +144,77 @@ describe('RefreshOperationGovernanceConfirm', () => {
     expect(screen.queryByTestId('align-gk-1-confirm')).toBeNull();
   });
 
+  it('UX acceptance of #579 (legacy 297): an Operation the gate dropped is never promised back by adoption', async () => {
+    const http = scriptedHttp({
+      preview_gate_instance_enable: () => ({
+        ...preview([ALIGNED_ROW]),
+        awaitingPlatformAdoption: {
+          announcedAt: '2026-10-10T04:00:00.000Z',
+          operations: ['orders.cancel', 'stock.get'],
+          dropped: ['orders.cancel'],
+        },
+      }),
+    });
+    renderConfirm(http);
+    fireEvent.click(screen.getByTestId('align-gk-1'));
+    const notice = await screen.findByTestId('align-gk-1-awaiting-adoption');
+    expect(notice.textContent).toContain('对 stock.get 的调用会被拒绝。');
+    expect(notice.textContent).not.toContain('orders.cancel、stock.get');
+    expect(screen.getByTestId('align-gk-1-awaiting-adoption-dropped').textContent).toContain(
+      '门已经不再提供 orders.cancel，对它的调用会被拒绝，采用和对齐都恢复不了',
+    );
+  });
+
+  it('UX acceptance of #583 (P3-2): for an Operation the gate dropped, the align offers no revision and no rewrite to publish — only that adoption removes it', async () => {
+    const http = scriptedHttp({
+      preview_gate_instance_enable: () => ({
+        ...preview([
+          {
+            name: 'orders.cancel',
+            existing: {
+              mode: 'execute',
+              blastRadius: 'medium',
+              autoApprovable: false,
+              status: 'published',
+            },
+            announced: { mode: 'execute', blastRadius: 'medium', autoApprovable: false },
+            differs: false,
+            direction: 'neutral',
+            definitionDiffers: true,
+          },
+        ]),
+        operationsToImport: [
+          {
+            name: 'stock.reserve',
+            mode: 'execute',
+            blastRadius: 'medium',
+            autoApprovable: false,
+            gateOwnedParams: [{ param: 'Authorization', location: 'header' }],
+            // The kernel never marks a dropped Operation's draft rewritable.
+            pendingDraft: { rewritable: false, fromGate: true },
+          },
+        ],
+        awaitingPlatformAdoption: {
+          announcedAt: '2026-10-10T04:00:00.000Z',
+          operations: ['orders.cancel', 'stock.reserve'],
+          dropped: ['orders.cancel', 'stock.reserve'],
+        },
+      }),
+    });
+    renderConfirm(http);
+    fireEvent.click(screen.getByTestId('align-gk-1'));
+    const notice = await screen.findByTestId('align-gk-1-awaiting-adoption');
+    expect(screen.getByTestId('align-gk-1-awaiting-adoption-dropped').textContent).toContain(
+      '采用和对齐都恢复不了',
+    );
+    expect(notice.textContent).not.toContain('发布');
+    // Neither a revision to publish nor a draft said to wait on the gate's manifest.
+    expect(screen.queryByTestId('align-gk-1-confirm')).toBeNull();
+    expect(screen.queryByTestId('align-gk-1-held')).toBeNull();
+    expect(screen.queryByTestId('align-gk-1-aligned')).toBeNull();
+    expect(http.calls.some((call) => call.name === 'refresh_operation_governance')).toBe(false);
+  });
+
   it('UX acceptance of #538: anyone but a platform admin is told who to ask, with no link', async () => {
     const http = scriptedHttp({
       preview_gate_instance_enable: () => ({

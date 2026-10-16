@@ -234,7 +234,11 @@ describe('CreateGateInstanceForm', () => {
     expect(within(form).queryByText(/需要一个完整的地址/)).toBeNull();
     fireEvent.blur(target);
     expect(target.value).toBe('https://billing.internal:8080');
-    expect(within(form).getByTestId('cgi-target-scheme-note').textContent).toContain('https://');
+    const note = within(form).getByTestId('cgi-target-scheme-note');
+    expect(note.textContent).toContain('https://');
+    // UX acceptance of #583 P3-1: no half-width space between the two Chinese sentences.
+    expect(note.textContent?.startsWith(' ')).toBe(false);
+    expect(note.parentElement?.textContent).toContain('会自动补上。已自动补上 https://');
 
     fireEvent.click(within(form).getByTestId('create-gate-instance-submit'));
     await waitFor(() =>

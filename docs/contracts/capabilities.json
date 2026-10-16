@@ -4226,6 +4226,74 @@
   },
   {
     "channel": "human",
+    "group": "meta",
+    "minRole": "builder",
+    "mode": "execute",
+    "name": "discard_operation_draft",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "draftDigest": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "gatekeeperId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "name": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "reason": {
+          "maxLength": 500,
+          "type": "string"
+        },
+        "version": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "gatekeeperId",
+        "name",
+        "version",
+        "draftDigest"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "gatekeeperId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "status": {
+          "const": "discarded",
+          "type": "string"
+        },
+        "version": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "gatekeeperId",
+        "name",
+        "version",
+        "status"
+      ],
+      "type": "object"
+    },
+    "sideEffects": true
+  },
+  {
+    "channel": "human",
     "group": "connection",
     "minRole": "owner",
     "mode": "write",
@@ -4416,6 +4484,10 @@
                         "workspace_revision"
                       ],
                       "type": "string"
+                    },
+                    "droppedByGate": {
+                      "const": true,
+                      "type": "boolean"
                     },
                     "gateOwnedParams": {
                       "items": {
@@ -7353,6 +7425,9 @@
                 "type": "object"
               },
               "description": {
+                "type": "string"
+              },
+              "draftDigest": {
                 "type": "string"
               },
               "gateOwnedParams": {
@@ -12354,6 +12429,9 @@
               "description": {
                 "type": "string"
               },
+              "draftDigest": {
+                "type": "string"
+              },
               "gateOwnedParams": {
                 "items": {
                   "additionalProperties": false,
@@ -16351,6 +16429,12 @@
                 "announcedAt": {
                   "type": "string"
                 },
+                "dropped": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
                 "operations": {
                   "items": {
                     "type": "string"
@@ -16877,6 +16961,9 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "draftDigest": {
+          "type": "string"
+        },
         "draftOf": {
           "type": [
             "string",
@@ -16993,7 +17080,8 @@
         "version",
         "status",
         "draftOf",
-        "governanceChange"
+        "governanceChange",
+        "draftDigest"
       ],
       "type": "object"
     },
@@ -17372,6 +17460,10 @@
       "properties": {
         "credentialsReviewed": {
           "type": "boolean"
+        },
+        "draftDigest": {
+          "minLength": 1,
+          "type": "string"
         },
         "gatekeeperId": {
           "minLength": 1,

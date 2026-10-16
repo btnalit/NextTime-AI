@@ -361,6 +361,13 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '弃用一个已发布的操作。',
     enHint: 'Deprecates a published operation.',
   },
+  discard_operation_draft: {
+    zh: '丢弃操作草稿',
+    en: 'Discard operation draft',
+    zhHint: '把不再发布的操作草稿移出目录；记录保留在审计里。',
+    enHint:
+      'Takes an operation draft that will not be published out of the catalog; the record stays in the audit log.',
+  },
   update_operation_description: {
     zh: '修改操作说明',
     en: 'Edit operation description',

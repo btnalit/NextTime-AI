@@ -728,6 +728,7 @@ create table worker_definitions (
 | | `create_connection`（填凭证、注册门、导入清单草稿）/ `publish_manifest` / `connect_gatekeeper` | human（owner） | 凭证直达门；`connect_gatekeeper` = CapabilityGrant |
 | meta | `propose_operation` / `propose_skill` / `propose_procedure` | propose | 私有草稿（I16）；Operation 草稿另对 owner、builder 可见（D-26：成员 Worker 的提案要由 owner 在能力目录审核发布） |
 | | `publish_skill` / `publish_procedure` / `deprecate_*` | human | D-24：所有 `publish_*` / `deprecate_*` 为 `minRole: builder`，且只有该行的提案人或 owner 能发布 / 弃用；发布会替代（或弃用）别人提议的在用版本时，也要那位提案人或 owner（`publish_ontology_version` 仍只认提案人，`publish_manifest` 仍是 owner） |
+| | `discard_operation_draft` | human | 把一份不再发布的 Operation 草稿转成 `discarded`（`draft → discarded`，Operation 状态机多出的终态）：行、`exposes` Fact 和来源都保留，目录读取不再列出，版本号不复用（下次导入或提议在它之上开新版本）；同 D-24 规则，原因记在审计里（遗留 278）。草稿会在同一版本上原地修订，所以调用要带目录给出的 `draftDigest`：草稿在查看之后被改过，就以 409 `draft_changed` 拒绝、不写入；`publish_operation` 也接受同一个可选参数 |
 | | `update_operation_description` | human（write） | 原地改描述、不走草稿；描述会进每个 agent 的工具列表，所以同 D-24：`minRole: builder`，且只有该 Operation 的提案人或 owner 能改（门导入的 Operation 提案人是 owner）（遗留 123） |
 | | `assert_fact` / `supersede_fact` / `invalidate_fact` | write | 直接写入图（不是 `propose` 草稿）；认知状态由调用方类型决定 |
 | epistemic | `explain` / `record_decision` / `query_decisions` / `find_precedents` / `causal_chain` / `decision_impact` / `list_conflicts` / `resolve_conflict` / `verify_fact` | observe / write | Semantica 工具名与必填参数保持一致（`get_provenance`=`explain`，`get_causal_chain`=`causal_chain`，`analyze_decision_impact`=`decision_impact`） |

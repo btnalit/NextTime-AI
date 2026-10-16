@@ -419,7 +419,7 @@ export function CompleteConnectionForm({
             )}
             {endpointSchemeAdded ? (
               <span data-testid="cc-endpoint-scheme-note">
-                {' '}
+                {t('', ' ')}
                 {t(
                   '已自动补上 http://；如果门走 https，请改成 https://。',
                   'Added http:// for you — change it to https:// if the gate serves https.',

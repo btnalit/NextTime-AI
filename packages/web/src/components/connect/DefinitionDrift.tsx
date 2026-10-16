@@ -22,6 +22,10 @@ import { gateOwnedParamsText } from './GateOwnedParams.js';
  * gate runs declares params only the gate sets, so its revision can never be published and no
  * align or adoption brings the calls back. Those are said on their own, waiting on the gate's
  * maintainer, and kept out of the "align and publish" line.
+ *
+ * UX acceptance of #579 (legacy 297): an Operation the gate's held manifest no longer lists reads
+ * `platform_adoption` too, but adopting removes it instead of bringing its calls back — the
+ * kernel flags it (`droppedByGate`, the preview's `dropped`) and it is said on its own.
  */
 
 function joined(names: readonly string[], zh: boolean): string {
@@ -30,6 +34,7 @@ function joined(names: readonly string[], zh: boolean): string {
 
 export function AwaitingAdoptionNotice({
   operations,
+  dropped = [],
   announcedAt,
   platformAdmin,
   platformGateId,
@@ -37,6 +42,10 @@ export function AwaitingAdoptionNotice({
   testId,
 }: {
   readonly operations: readonly string[];
+  /** UX acceptance of #579 (legacy 297): the subset of `operations` the gate's new manifest no
+   *  longer lists. Adopting removes them rather than bringing their calls back, so they are said
+   *  apart and never in the "until it is adopted" line. */
+  readonly dropped?: readonly string[];
   /** Said in front of `enable_gate_instance` rather than an align: enabling now imports the
    *  definitions the gate no longer runs. */
   readonly enabling?: boolean;
@@ -51,19 +60,39 @@ export function AwaitingAdoptionNotice({
     announcedAt !== undefined
       ? t(`（${formatRelative(announcedAt)}）`, ` (${formatDateTime(announcedAt)})`)
       : '';
+  const droppedSet = new Set(dropped);
+  const restorable = operations.filter((name) => !droppedSet.has(name));
+  const gone = operations.filter((name) => droppedSet.has(name));
+  const one = gone.length === 1;
   return (
     <Notice tone="warn" testId={testId}>
       <span className="stack-s">
         <span>
-          {enabling
+          {restorable.length === 0
             ? t(
-                `门公布了新清单${when}，平台管理员还没采用。现在启用的话，采用之前对 ${joined(operations, true)} 的调用会被拒绝。`,
-                `The gate announced a new manifest${when} that a platform admin has not adopted yet. If you enable it now, calls to ${joined(operations, false)} are refused until it is adopted.`,
+                `门公布了新清单${when}，平台管理员还没采用。`,
+                `The gate announced a new manifest${when} that a platform admin has not adopted yet.`,
               )
-            : t(
-                `门公布了新清单${when}，平台管理员还没采用。采用之前这里对齐不了，对 ${joined(operations, true)} 的调用会被拒绝。`,
-                `The gate announced a new manifest${when} that a platform admin has not adopted yet. Until it is adopted nothing can be aligned here, and calls to ${joined(operations, false)} are refused.`,
-              )}
+            : enabling
+              ? t(
+                  `门公布了新清单${when}，平台管理员还没采用。现在启用的话，采用之前对 ${joined(restorable, true)} 的调用会被拒绝。`,
+                  `The gate announced a new manifest${when} that a platform admin has not adopted yet. If you enable it now, calls to ${joined(restorable, false)} are refused until it is adopted.`,
+                )
+              : t(
+                  `门公布了新清单${when}，平台管理员还没采用。采用之前这里对齐不了，对 ${joined(restorable, true)} 的调用会被拒绝。`,
+                  `The gate announced a new manifest${when} that a platform admin has not adopted yet. Until it is adopted nothing can be aligned here, and calls to ${joined(restorable, false)} are refused.`,
+                )}
+          {gone.length > 0 ? (
+            <>
+              {t('', ' ')}
+              <span data-testid={testId ? `${testId}-dropped` : undefined}>
+                {t(
+                  `门已经不再提供 ${joined(gone, true)}，对${one ? '它' : '它们'}的调用会被拒绝，采用和对齐都恢复不了：采用后${one ? '它' : '它们'}会从清单里移除。`,
+                  `The gate no longer offers ${joined(gone, false)}, so calls to ${one ? 'it' : 'them'} are refused, and neither adopting nor aligning brings ${one ? 'it' : 'them'} back: adopting removes ${one ? 'it' : 'them'} from the manifest.`,
+                )}
+              </span>
+            </>
+          ) : null}
         </span>
         {platformAdmin && platformGateId !== undefined ? (
           <RouteLink
@@ -104,8 +133,10 @@ export function DefinitionMismatchNotice({
   const t = useT();
   const heldByGate = mismatch.filter((entry) => (entry.gateOwnedParams?.length ?? 0) > 0);
   const recoverable = mismatch.filter((entry) => (entry.gateOwnedParams?.length ?? 0) === 0);
-  const adoption = recoverable
-    .filter((entry) => entry.awaiting === 'platform_adoption')
+  const adoptionEntries = recoverable.filter((entry) => entry.awaiting === 'platform_adoption');
+  const adoption = adoptionEntries.map((entry) => entry.operation);
+  const dropped = adoptionEntries
+    .filter((entry) => entry.droppedByGate === true)
     .map((entry) => entry.operation);
   const revision = recoverable
     .filter((entry) => entry.awaiting === 'workspace_revision')
@@ -144,6 +175,7 @@ export function DefinitionMismatchNotice({
       {adoption.length > 0 ? (
         <AwaitingAdoptionNotice
           operations={adoption}
+          dropped={dropped}
           platformAdmin={platformAdmin}
           platformGateId={platformGateId}
           testId={testId ? `${testId}-adoption` : undefined}
