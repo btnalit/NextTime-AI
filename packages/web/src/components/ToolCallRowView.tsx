@@ -1,3 +1,4 @@
+import { visibleText } from '@nexttime/shared';
 import { memo } from 'react';
 import { useCapability } from '../hooks/useCapability.js';
 import { useRoleCan } from '../hooks/useRoleCan.js';
@@ -10,7 +11,7 @@ import {
 } from '../lib/action-outcome.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { gateReasonNextStep } from '../lib/errors.js';
-import { formatTime, prettyJson, shortId } from '../lib/format.js';
+import { formatTime, prettyJsonVisible, shortId } from '../lib/format.js';
 import { type Translate, useT } from '../lib/i18n.js';
 import { hrefs } from '../lib/router.js';
 import type { ToolCallRow } from '../lib/streaming-reducer.js';
@@ -172,7 +173,7 @@ export function ToolCallRowView({
   // Legacy 287 (UX acceptance of #586): a gate action's result says where the action stands, and
   // the chip says the same — not 「完成」 over an action whose outcome is unknown.
   const resultText =
-    row.status === 'ended' && row.result !== undefined ? prettyJson(row.result) : undefined;
+    row.status === 'ended' && row.result !== undefined ? prettyJsonVisible(row.result) : undefined;
   const action =
     row.status === 'ended' && !failed && row.result !== undefined
       ? outcomeOfLiveResult(row.result)
@@ -195,7 +196,7 @@ export function ToolCallRowView({
     >
       <summary>
         <Icon name="chevron-right" size="s" className="icon-chevron" />
-        <span className="tool-call-name">{row.name}</span>
+        <span className="tool-call-name">{visibleText(row.name)}</span>
         <span
           className={`chip chip-s ${chipClass}`}
           data-tool-outcome={running ? 'running' : failed ? 'failed' : 'ok'}
@@ -208,7 +209,7 @@ export function ToolCallRowView({
         {row.args !== undefined ? (
           <>
             <span className="section-title">{t('参数', 'Arguments')}</span>
-            <pre className="code-block">{prettyJson(row.args)}</pre>
+            <pre className="code-block">{prettyJsonVisible(row.args)}</pre>
           </>
         ) : null}
         {resultText !== undefined ? (
@@ -272,7 +273,7 @@ export function PersistedToolCallRowView({
   const t = useT();
   const action = actionOutcomeOfRecord(record);
   const chip = action ? actionOutcomeChip(action, t) : outcomeChip(record, t);
-  const name = record.name ?? t('（未知工具）', '(unknown tool)');
+  const name = record.name != null ? visibleText(record.name) : t('（未知工具）', '(unknown tool)');
   return (
     <details
       className={`tool-call-row tool-call-row-${record.outcome}`}

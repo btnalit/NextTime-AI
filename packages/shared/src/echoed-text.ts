@@ -34,6 +34,14 @@ export function visibleText(value: string): string {
   return value.replace(UNSEEN, escapeCodePoint);
 }
 
+/** JSON text (`JSON.stringify` output) with every unseen character it left raw — format characters
+ *  and line / paragraph separators — shown as `\u{XXXX}`. Control characters and lone surrogates
+ *  are already escaped by `JSON.stringify`, and pretty-printing's own line breaks stay as they are
+ *  (review of #593: a bidi override inside a value reordered what an approver read). */
+export function visibleJson(json: string): string {
+  return json.replace(UNSEEN_AFTER_JSON, escapeCodePoint);
+}
+
 /** An unquoted echo: clipped, then made visible — for a stored field or an audit payload. */
 export function boundedEcho(value: string, max: number = ECHO_MAX): string {
   return visibleText(clipCodePoints(value, max));
@@ -43,5 +51,5 @@ export function boundedEcho(value: string, max: number = ECHO_MAX): string {
  *  control characters escaped, so it can neither end the quote nor forge a log line), with
  *  format characters shown as `\u{XXXX}` too. */
 export function quotedName(name: string): string {
-  return JSON.stringify(clipCodePoints(name)).replace(UNSEEN_AFTER_JSON, escapeCodePoint);
+  return visibleJson(JSON.stringify(clipCodePoints(name)));
 }

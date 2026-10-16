@@ -9,7 +9,7 @@ import {
   actionKindTagText,
   formatDateTime,
   formatRelative,
-  prettyJson,
+  prettyJsonVisible,
   redactSensitive,
 } from '../../lib/format.js';
 import type { ActionRequestRow } from '../../lib/governance.js';
@@ -365,7 +365,7 @@ export function ApprovalDetail({
         <section className="stack-s">
           <span className="section-title">{t('参数', 'Parameters')}</span>
           <pre className="code-block params-block" data-testid="approval-params">
-            {prettyJson(redactSensitive(row.params))}
+            {prettyJsonVisible(redactSensitive(row.params))}
           </pre>
         </section>
       ) : null}

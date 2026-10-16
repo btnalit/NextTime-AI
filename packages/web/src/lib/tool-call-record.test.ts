@@ -120,4 +120,20 @@ describe('previewDisplayText', () => {
       '{not json',
     );
   });
+
+  it('shows a bidi override as \\u{XXXX} whether the text is JSON, cut or plain (review of #593)', () => {
+    expect(
+      previewDisplayText({
+        text: '{"op":"restart\u202Egnp.exe"}',
+        totalChars: 26,
+        truncated: false,
+      }),
+    ).toBe('{\n  "op": "restart\\u{202E}gnp.exe"\n}');
+    expect(previewDisplayText({ text: '{"op":"a\u202E', totalChars: 900, truncated: true })).toBe(
+      '{"op":"a\\u{202E}',
+    );
+    expect(previewDisplayText({ text: 'line 1\nb\u2066c', totalChars: 10, truncated: false })).toBe(
+      'line 1\nb\\u{2066}c',
+    );
+  });
 });

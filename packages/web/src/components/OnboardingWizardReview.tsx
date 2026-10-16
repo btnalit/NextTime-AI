@@ -16,7 +16,7 @@ import {
   searchItems,
 } from '../lib/connections.js';
 import { usePublishCredentialReview } from '../lib/credential-review.js';
-import { actionKindTagText, prettyJson } from '../lib/format.js';
+import { actionKindTagText, prettyJsonVisible } from '../lib/format.js';
 import type { OperationCatalogRow } from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
 import { capabilityHolders } from '../lib/role-holders.js';
@@ -407,7 +407,7 @@ function OperationReviewRow({
         <td>
           <details className="disclosure">
             <summary>{t('查看 schema', 'View schema')}</summary>
-            <pre className="code-block">{prettyJson(row.paramsSchema)}</pre>
+            <pre className="code-block">{prettyJsonVisible(row.paramsSchema)}</pre>
           </details>
         </td>
         <td>

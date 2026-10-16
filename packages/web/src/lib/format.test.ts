@@ -5,6 +5,7 @@ import {
   actionKindLabel,
   actionKindRaw,
   actionKindTagText,
+  actionKindTagToastText,
   actionKindToastLabel,
   clipMiddle,
   excerpt,
@@ -14,6 +15,7 @@ import {
   formatRelative,
   formatTime,
   humanizeKind,
+  prettyJsonVisible,
   redactSensitive,
   shortId,
 } from './format.js';
@@ -245,5 +247,35 @@ describe('format — time zone label and calendar boundary across real zones', (
     expect(formatDateTime('2026-09-03T12:00:00.000Z', now)).toBe('09-03 17:30 (UTC+5:30)');
     // A day earlier at the same UTC instant is exactly one IST calendar day back.
     expect(formatRelative('2026-09-02T12:00:00.000Z', now)).toBe('昨天 17:30');
+  });
+});
+
+describe('prettyJsonVisible (review of #593)', () => {
+  it('shows a bidi override inside a value as \\u{XXXX} and keeps the indentation', () => {
+    const shown = prettyJsonVisible({ a: 'x\u202Ey', qty: 'wh-9 \u202Eqty: 0001\u202C' });
+    expect(shown).not.toMatch(/[\u202E\u202C]/);
+    expect(shown).toContain('"a": "x\\u{202E}y"');
+    expect(shown).toContain('wh-9 \\u{202E}qty: 0001\\u{202C}');
+    expect(shown.startsWith('{\n  "a"')).toBe(true);
+  });
+
+  it('a name or key carries the escape too, and a plain value is unchanged', () => {
+    expect(prettyJsonVisible({ 'op\u200B': 1 })).toBe('{\n  "op\\u{200B}": 1\n}');
+    expect(prettyJsonVisible({ a: 1 })).toBe('{\n  "a": 1\n}');
+  });
+
+  it('excerpt shows the same characters', () => {
+    expect(excerpt({ a: 'x\u202Ey' })).toBe('{"a":"x\\u{202E}y"}');
+  });
+});
+
+describe('actionKindTagToastText', () => {
+  it('keeps the raw tag, clips its middle to the toast limit, shows hidden characters', () => {
+    expect(actionKindTagToastText('stock.get')).toBe('stock.get');
+    const long = `a.${'b'.repeat(200)}.end`;
+    const shown = actionKindTagToastText(long);
+    expect([...shown]).toHaveLength(ACTION_KIND_INLINE_MAX);
+    expect(shown.endsWith('.end')).toBe(true);
+    expect(actionKindTagToastText('x\u202Ey')).toBe('x\\u{202E}y');
   });
 });

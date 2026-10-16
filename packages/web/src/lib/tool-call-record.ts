@@ -1,3 +1,4 @@
+import { visibleJson } from '@nexttime/shared';
 import type {
   ToolCallMessageContent,
   ToolCallOutcome,
@@ -123,12 +124,14 @@ export function persistedToolCallIds(messages: readonly ChatMessage[]): Readonly
 /** A preview's text, indented when it is JSON (a capability tool's result is), as-is otherwise.
  *  A cut preview is not valid JSON and stays as it came. */
 export function previewDisplayText(value: ToolCallPayloadPreview): string {
-  if (value.truncated) return value.text;
+  // Review of #593: a format character or line separator (a bidi override) is shown as
+  // `\u{XXXX}`; the text's own line breaks stay.
+  if (value.truncated) return visibleJson(value.text);
   const trimmed = value.text.trim();
-  if (!(trimmed.startsWith('{') || trimmed.startsWith('['))) return value.text;
+  if (!(trimmed.startsWith('{') || trimmed.startsWith('['))) return visibleJson(value.text);
   try {
-    return JSON.stringify(JSON.parse(trimmed), null, 2);
+    return visibleJson(JSON.stringify(JSON.parse(trimmed), null, 2));
   } catch {
-    return value.text;
+    return visibleJson(value.text);
   }
 }

@@ -18,7 +18,12 @@ import {
 import { actionLabel } from '../../lib/capability-labels.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { isForbiddenError } from '../../lib/errors.js';
-import { formatDateTime, formatRelative, prettyJson, redactSensitive } from '../../lib/format.js';
+import {
+  formatDateTime,
+  formatRelative,
+  prettyJsonVisible,
+  redactSensitive,
+} from '../../lib/format.js';
 import type { PrincipalRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
 import { auditResourceTypeLabel, roleLabel } from '../../lib/labels.js';
@@ -370,7 +375,7 @@ export function AuditLogSection({
                       <details className="platform-audit-payload">
                         <summary>{t('负载', 'Payload')}</summary>
                         <pre className="code-block pre-wrap">
-                          {prettyJson(redactSensitive(row.payload))}
+                          {prettyJsonVisible(redactSensitive(row.payload))}
                         </pre>
                       </details>
                     </div>

@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { OPERATION_NAME_MAX } from './action-description.js';
-import { ECHO_MAX, boundedEcho, clipCodePoints, quotedName, visibleText } from './echoed-text.js';
+import {
+  ECHO_MAX,
+  boundedEcho,
+  clipCodePoints,
+  quotedName,
+  visibleJson,
+  visibleText,
+} from './echoed-text.js';
 
 describe('quotedName (legacy 232)', () => {
   it('quotes an ordinary name as before', () => {
@@ -38,6 +45,15 @@ describe('boundedEcho / visibleText / clipCodePoints (legacy 232)', () => {
     expect(visibleText('a\nb\u202Ec\u200Bd\u2028e\uD800')).toBe(
       'a\\u{A}b\\u{202E}c\\u{200B}d\\u{2028}e\\u{D800}',
     );
+  });
+
+  it('visibleJson shows what JSON.stringify left raw and keeps its own line breaks', () => {
+    const json = JSON.stringify({ qty: 'wh-9 \u202Eqty: 0001\u202C', sep: 'a\u2028b' }, null, 2);
+    const shown = visibleJson(json);
+    expect(shown).not.toMatch(/[\u202E\u202C\u2028]/);
+    expect(shown).toContain('wh-9 \\u{202E}qty: 0001\\u{202C}');
+    expect(shown).toContain('a\\u{2028}b');
+    expect(shown.split('\n')).toHaveLength(4);
   });
 
   it('never clips a legal Operation name (review #493 on #593)', () => {

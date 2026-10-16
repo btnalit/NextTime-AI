@@ -1,4 +1,4 @@
-import { maskSecretFields, visibleText } from '@nexttime/shared';
+import { maskSecretFields, visibleJson, visibleText } from '@nexttime/shared';
 import type { Translate } from './i18n.js';
 
 /**
@@ -189,6 +189,12 @@ export function actionKindTagText(kind: string): string {
   return visibleText(clipMiddle(kind, ACTION_KIND_FULL_MAX));
 }
 
+/** `actionKindTagText`, clipped to `ACTION_KIND_INLINE_MAX`, for a toast that names the raw tag
+ *  (the catalog, where the exact name is what was published — review of #593). */
+export function actionKindTagToastText(kind: string): string {
+  return visibleText(clipMiddle(kind, ACTION_KIND_INLINE_MAX));
+}
+
 /** `actionKindLabel`, clipped to `ACTION_KIND_INLINE_MAX`, for a toast (legacy 232). */
 export function actionKindToastLabel(kind: string): string {
   return visibleText(clipMiddle(humanizeKind(kind), ACTION_KIND_INLINE_MAX));
@@ -225,10 +231,23 @@ export function prettyJson(value: unknown): string {
   }
 }
 
-/** One-line excerpt of arbitrary JSON, for list rows. */
+/** `prettyJson` for display: a format character or line separator inside a value (a bidi override
+ *  that would reorder `0001` into `1000`) is shown as `\u{XXXX}` — review of #593. Every JSON block
+ *  people read goes through this; an editor's own text (`JsonEditor`) keeps `prettyJson`, so saving
+ *  never writes the escapes back. */
+export function prettyJsonVisible(value: unknown): string {
+  try {
+    const json = JSON.stringify(value, null, 2);
+    return json !== undefined ? visibleJson(json) : visibleText(String(value));
+  } catch {
+    return visibleText(String(value));
+  }
+}
+
+/** One-line excerpt of arbitrary JSON, for list rows — unseen characters shown as `\u{XXXX}`. */
 export function excerpt(value: unknown, max = 120): string | undefined {
   if (value === null || value === undefined) return undefined;
-  const text = typeof value === 'string' ? value : JSON.stringify(value);
+  const text = visibleText(typeof value === 'string' ? value : JSON.stringify(value));
   if (!text) return undefined;
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { usePublishCredentialReview } from '../../lib/credential-review.js';
 import { errorToastText } from '../../lib/errors.js';
-import { actionKindTagText } from '../../lib/format.js';
+import { actionKindTagText, actionKindTagToastText } from '../../lib/format.js';
 import { useT } from '../../lib/i18n.js';
 import { CredentialReview } from '../kit/credential-review.js';
 import { Button } from '../ui/Button.js';
@@ -78,8 +78,9 @@ export function DraftProposed({
   const [error, setError] = useState<unknown | null>(null);
   const publishRef = useRef<HTMLButtonElement>(null);
   const credentialReview = usePublishCredentialReview(`${draft.id}@${draft.version}`);
-  // Legacy 232: a name written before the name rule may carry a hidden character.
-  const shownName = draft.name !== undefined ? actionKindTagText(draft.name) : draft.id;
+  // Legacy 232: a name written before the name rule may carry a hidden character; a toast
+  // carries the short form (`format.ts`).
+  const shownName = draft.name !== undefined ? actionKindTagToastText(draft.name) : draft.id;
 
   // Focuses Publish once, on mount only — a later status change (e.g. after publishing) must not
   // steal focus back.

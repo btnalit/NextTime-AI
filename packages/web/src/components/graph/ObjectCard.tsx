@@ -1,6 +1,11 @@
 import type { ObjectWire } from '@nexttime/shared';
 import type { ReactNode } from 'react';
-import { formatDateTime, formatRelative, prettyJson, redactSensitive } from '../../lib/format.js';
+import {
+  formatDateTime,
+  formatRelative,
+  prettyJsonVisible,
+  redactSensitive,
+} from '../../lib/format.js';
 import { objectDisplayName } from '../../lib/graph-view.js';
 import { useT } from '../../lib/i18n.js';
 import { DataRow } from '../ui/DataList.js';
@@ -133,7 +138,7 @@ export function ObjectCard({
         </summary>
         <div className="disclosure-body">
           <pre className="code-block pre-wrap">
-            {prettyJson(redactSensitive(object.properties))}
+            {prettyJsonVisible(redactSensitive(object.properties))}
           </pre>
         </div>
       </details>

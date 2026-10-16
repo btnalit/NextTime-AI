@@ -7,7 +7,12 @@ import {
   isDecidable,
 } from '../lib/action-card.js';
 import { credentialReviewCount } from '../lib/credential-review.js';
-import { actionKindRaw, actionKindTagText, prettyJson, redactSensitive } from '../lib/format.js';
+import {
+  actionKindRaw,
+  actionKindTagText,
+  prettyJsonVisible,
+  redactSensitive,
+} from '../lib/format.js';
 import { useT } from '../lib/i18n.js';
 import { actorRuntimeLabel, policyDecisionLabel } from '../lib/labels.js';
 import { capabilityHolders } from '../lib/role-holders.js';
@@ -154,13 +159,17 @@ export function ActionRequestCard({
       {hasParams && card.params ? (
         <div className="stack-s">
           <span className="section-title">{t('参数', 'Parameters')}</span>
-          <pre className="code-block params-block">{prettyJson(redactSensitive(card.params))}</pre>
+          <pre className="code-block params-block">
+            {prettyJsonVisible(redactSensitive(card.params))}
+          </pre>
         </div>
       ) : null}
       {card.simulated !== undefined ? (
         <div className="stack-s">
           <span className="section-title">{t('模拟效果', 'Simulated effect')}</span>
-          <pre className="code-block action-card-simulated">{prettyJson(card.simulated)}</pre>
+          <pre className="code-block action-card-simulated">
+            {prettyJsonVisible(card.simulated)}
+          </pre>
         </div>
       ) : null}
       {blocking ? (

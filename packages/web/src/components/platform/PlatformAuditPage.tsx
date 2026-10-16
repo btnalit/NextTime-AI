@@ -10,7 +10,7 @@ import { isForbiddenError } from '../../lib/errors.js';
 import {
   formatAuditActor,
   formatDateTime,
-  prettyJson,
+  prettyJsonVisible,
   redactSensitive,
   shortId,
 } from '../../lib/format.js';
@@ -324,7 +324,7 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
                   <details className="platform-audit-payload">
                     <summary>{t('负载', 'Payload')}</summary>
                     <pre className="code-block pre-wrap">
-                      {prettyJson(redactSensitive(row.payload))}
+                      {prettyJsonVisible(redactSensitive(row.payload))}
                     </pre>
                   </details>
                 </div>

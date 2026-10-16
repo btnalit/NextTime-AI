@@ -1,3 +1,4 @@
+import { visibleText } from '@nexttime/shared';
 import type { ReactNode } from 'react';
 import { namedReviewPath } from '../../lib/credential-review.js';
 import { useT } from '../../lib/i18n.js';
@@ -76,7 +77,7 @@ export function CredentialReview({
         >
           {paths.map((path) => (
             <li key={path}>
-              <code className="mono">{namedReviewPath(path, fieldNames)}</code>
+              <code className="mono">{visibleText(namedReviewPath(path, fieldNames))}</code>
             </li>
           ))}
           {more ? <li className="text-3">{t('等', 'and more')}</li> : null}

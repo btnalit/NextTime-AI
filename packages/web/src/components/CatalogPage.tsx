@@ -1,4 +1,5 @@
 import type { GateOwnedParamWire, SkillDetailWire } from '@nexttime/shared';
+import { visibleText } from '@nexttime/shared';
 import { type ReactNode, useId, useState } from 'react';
 import { invalidateCapability, useCapability, useCapabilityList } from '../hooks/useCapability.js';
 import { usePermissions } from '../hooks/usePermissions.js';
@@ -15,8 +16,9 @@ import { errorToastText, isDraftChangedError, isForbiddenError } from '../lib/er
 import {
   actionKindRaw,
   actionKindTagText,
+  actionKindTagToastText,
   formatRelative,
-  prettyJson,
+  prettyJsonVisible,
   shortId,
 } from '../lib/format.js';
 import {
@@ -459,9 +461,12 @@ function paramLine(
   param: { readonly name: string; readonly in?: string; readonly required: boolean },
   t: Translate,
 ): string {
-  const zh = [param.in, param.required ? '必填' : '可选'].filter(Boolean).join('，');
-  const en = [param.in, param.required ? 'required' : 'optional'].filter(Boolean).join(', ');
-  return t(`参数：${sign}${param.name}（${zh}）`, `Param: ${sign}${param.name} (${en})`);
+  // Review of #593: a param name is the gate's (or a proposer's) own text — shown visibly.
+  const where = param.in !== undefined ? visibleText(param.in) : undefined;
+  const zh = [where, param.required ? '必填' : '可选'].filter(Boolean).join('，');
+  const en = [where, param.required ? 'required' : 'optional'].filter(Boolean).join(', ');
+  const name = visibleText(param.name);
+  return t(`参数：${sign}${name}（${zh}）`, `Param: ${sign}${name} (${en})`);
 }
 
 /**
@@ -802,7 +807,10 @@ function OperationDetailView({
       <header className="stack-s">
         <div className="row-wrap">
           <StatusChip machine="publishable" status={row.status} size="s" />
-          <strong className="catalog-detail-title mono truncate" title={actionKindRaw(row.name)}>
+          <strong
+            className="catalog-detail-title mono wrap-anywhere"
+            title={actionKindRaw(row.name)}
+          >
             {actionKindTagText(row.name)}
           </strong>
         </div>
@@ -1003,7 +1011,7 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
           ? { draftDigest: row.draftDigest }
           : {}),
       });
-      const shown = actionKindTagText(row.name);
+      const shown = actionKindTagToastText(row.name);
       toast.push({
         tone: 'ok',
         title:
@@ -1029,8 +1037,8 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       toast.push({
         tone: 'danger',
         title: t(
-          `无法更新 ${actionKindTagText(row.name)}`,
-          `Could not update ${actionKindTagText(row.name)}`,
+          `无法更新 ${actionKindTagToastText(row.name)}`,
+          `Could not update ${actionKindTagToastText(row.name)}`,
         ),
         description: errorToastText(err, t),
       });
@@ -1056,8 +1064,8 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       toast.push({
         tone: 'ok',
         title: t(
-          `${actionKindTagText(row.name)} v${row.version} 已丢弃`,
-          `${actionKindTagText(row.name)} v${row.version} discarded`,
+          `${actionKindTagToastText(row.name)} v${row.version} 已丢弃`,
+          `${actionKindTagToastText(row.name)} v${row.version} discarded`,
         ),
       });
       onSelectItem(null);
@@ -1099,7 +1107,7 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       toast.push({
         tone: 'ok',
         title: t('描述已更新', 'Description updated'),
-        description: editingRow.name,
+        description: actionKindTagToastText(editingRow.name),
       });
       setEditingRow(null);
       refresh();
@@ -1142,10 +1150,10 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
               selected={key === itemId}
               onSelect={() => onSelectItem(key)}
             >
-              <span className="row-wrap" style={{ justifyContent: 'space-between' }}>
-                <span className="row-wrap">
+              <span className="row-wrap" style={{ justifyContent: 'space-between', minWidth: 0 }}>
+                <span className="row-wrap" style={{ minWidth: 0 }}>
                   <StatusChip machine="publishable" status={row.status} size="s" />
-                  <span className="mono truncate" title={actionKindRaw(row.name)}>
+                  <span className="mono wrap-anywhere" title={actionKindRaw(row.name)}>
                     {actionKindTagText(row.name)}
                   </span>
                   {versioned.has(operationKey(row)) && row.version !== undefined ? (
@@ -1386,7 +1394,7 @@ function SkillDetailView({
       <header className="stack-s">
         <div className="row-wrap">
           <StatusChip machine="publishable" status={row.status} size="s" />
-          <strong className="catalog-detail-title truncate">{row.name}</strong>
+          <strong className="catalog-detail-title wrap-anywhere">{row.name}</strong>
           <span className="text-3 text-small">v{row.version}</span>
         </div>
         <PublishableStepper status={row.status} testId="skill-detail-stepper" />
@@ -1612,8 +1620,8 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
                 selected={row.id === itemId}
                 onSelect={() => selectRow(row.id)}
               >
-                <span className="row-wrap" style={{ justifyContent: 'space-between' }}>
-                  <span className="truncate">{row.name}</span>
+                <span className="row-wrap" style={{ justifyContent: 'space-between', minWidth: 0 }}>
+                  <span className="wrap-anywhere">{row.name}</span>
                   <StatusChip machine="publishable" status={row.status} size="s" />
                 </span>
                 <span className="truncate text-3">
@@ -1734,7 +1742,7 @@ function ProcedureDetailView({
       <header className="stack-s">
         <div className="row-wrap">
           <StatusChip machine="publishable" status={row.status} size="s" />
-          <strong className="catalog-detail-title truncate">{row.name}</strong>
+          <strong className="catalog-detail-title wrap-anywhere">{row.name}</strong>
           <span className="text-3 text-small">v{row.version}</span>
           {row.steps ? (
             <span className="tag">
@@ -1757,7 +1765,7 @@ function ProcedureDetailView({
       <div className="stack-s">
         <span className="section-title">{t('步骤', 'Steps')}</span>
         <pre className="code-block" data-testid="procedure-detail-steps">
-          {prettyJson(row.steps ?? [])}
+          {prettyJsonVisible(row.steps ?? [])}
         </pre>
       </div>
 
@@ -1965,9 +1973,9 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
                 selected={row.id === itemId}
                 onSelect={() => selectRow(row.id)}
               >
-                <span className="row-wrap" style={{ justifyContent: 'space-between' }}>
-                  <span className="row-wrap">
-                    <span className="truncate">{row.name}</span>
+                <span className="row-wrap" style={{ justifyContent: 'space-between', minWidth: 0 }}>
+                  <span className="row-wrap" style={{ minWidth: 0 }}>
+                    <span className="wrap-anywhere">{row.name}</span>
                     {row.steps ? (
                       <span className="tag">
                         {row.steps.length} {t('步', 'steps')}
@@ -2120,7 +2128,7 @@ function WorkerDetailView({
       <header className="stack-s">
         <div className="row-wrap">
           <StatusChip machine="publishable" status={row.status} size="s" />
-          <strong className="catalog-detail-title truncate">{name}</strong>
+          <strong className="catalog-detail-title wrap-anywhere">{name}</strong>
           <span className="text-3 text-small">v{row.version}</span>
           <span className="tag">{workerDefinitionKindLabel(row.kind, t)}</span>
         </div>
@@ -2142,7 +2150,7 @@ function WorkerDetailView({
       <div className="stack-s">
         <span className="section-title">{t('定义', 'Definition')}</span>
         <pre className="code-block" data-testid="worker-detail-definition">
-          {prettyJson(row.definition)}
+          {prettyJsonVisible(row.definition)}
         </pre>
       </div>
 

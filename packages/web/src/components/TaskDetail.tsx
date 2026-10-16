@@ -7,7 +7,7 @@ import {
   formatDateTime,
   formatDuration,
   formatRelative,
-  prettyJson,
+  prettyJsonVisible,
   shortId,
 } from '../lib/format.js';
 import { useT } from '../lib/i18n.js';
@@ -275,7 +275,10 @@ export function TaskDetail({
               <summary>{t('事实与证据', 'Facts and evidence')}</summary>
               <div className="disclosure-body">
                 <pre className="code-block">
-                  {prettyJson({ facts: contract.factsToAssert, evidence: contract.evidence })}
+                  {prettyJsonVisible({
+                    facts: contract.factsToAssert,
+                    evidence: contract.evidence,
+                  })}
                 </pre>
               </div>
             </details>
@@ -315,7 +318,7 @@ export function TaskDetail({
       ) : task.result !== null && task.result !== undefined ? (
         <div className="stack-s">
           <span className="section-title">{t('结果', 'Result')}</span>
-          <pre className="code-block">{prettyJson(task.result)}</pre>
+          <pre className="code-block">{prettyJsonVisible(task.result)}</pre>
         </div>
       ) : null}
 
@@ -323,7 +326,7 @@ export function TaskDetail({
         <details className="disclosure">
           <summary>{t('输入', 'Input')}</summary>
           <div className="disclosure-body">
-            <pre className="code-block">{prettyJson(task.input)}</pre>
+            <pre className="code-block">{prettyJsonVisible(task.input)}</pre>
           </div>
         </details>
       ) : null}
