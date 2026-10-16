@@ -8,7 +8,11 @@ import {
   WORKER_DEFINITION_KIND_VALUES,
 } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
-import { AUDIT_RESOURCE_TYPES, PLATFORM_AUDIT_RESOURCE_TYPES } from './audit.js';
+import {
+  AUDIT_RESOURCE_TYPES,
+  type AuditResourceType,
+  PLATFORM_AUDIT_RESOURCE_TYPES,
+} from './audit.js';
 import type { Translate } from './i18n.js';
 import {
   ACTIVITY_KIND_LABELS,
@@ -42,6 +46,7 @@ import {
   taskFailureReasonText,
   workerDefinitionKindLabel,
 } from './labels.js';
+import { purgeCountLabel } from './platform-workspaces.js';
 
 /** Fixed zh/en pickers — every helper here is a pure function (not a component) that takes `t`
  *  from its caller, so tests supply their own rather than rendering under a `LangProvider`. */
@@ -125,6 +130,23 @@ describe('lib/labels', () => {
     // No two workspace types read the same in the `<select>`.
     const zh = AUDIT_RESOURCE_TYPES.map((type) => AUDIT_RESOURCE_TYPE_LABELS[type].zh);
     expect(new Set(zh).size).toBe(zh.length);
+  });
+
+  it('legacy 355: an audit resource type reads the same term the purge counts use for its table', () => {
+    const sameTerm: ReadonlyArray<readonly [AuditResourceType, string]> = [
+      ['agent_policy', 'agentPolicies'],
+      ['agent_profile', 'agentProfiles'],
+      ['policy', 'policies'],
+      ['procedure', 'procedures'],
+      ['skill', 'skills'],
+      ['worker_definition', 'workerDefinitions'],
+    ];
+    for (const [type, table] of sameTerm) {
+      expect(auditResourceTypeLabel(type, zhT)).toBe(purgeCountLabel(table, zhT));
+    }
+    expect(auditResourceTypeLabel('procedure', zhT)).toBe('流程');
+    expect(auditResourceTypeLabel('agent_profile', zhT)).toBe('智能体配置');
+    expect(auditResourceTypeLabel('policy', zhT)).toBe('审批策略');
   });
 
   it('auditResourceTypeLabel falls back to the raw value for an unrecognized type (visible, not hidden)', () => {

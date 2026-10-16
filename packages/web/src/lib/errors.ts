@@ -1,3 +1,4 @@
+import { PRINCIPAL_REFUSAL_REASON_VALUES, type PrincipalRefusalReason } from '@nexttime/shared';
 import { HttpError } from './http-client.js';
 import type { Translate } from './i18n.js';
 import { LlmAdminError, llmAdminErrorMessage } from './llm-admin.js';
@@ -16,7 +17,8 @@ export function errorMessage(err: unknown): string {
 /**
  * A thrown value normalized for display: `code` is the kernel's stable wire code (HTTP
  * `error.code` from `interfaces/http/capability-route.ts`'s `mapCapabilityError`, or the JSON-RPC
- * code name from `interfaces/ws/rpc.ts`'s `WS_ERROR_CODES`), `title` a short human label for that
+ * code name from `interfaces/ws/rpc.ts`'s `WS_ERROR_CODES`; a member-management `conflict` that names
+ * its reason in `details.reason` is shown under that reason), `title` a short human label for that
  * code, `message` the kernel's own text verbatim. The UI shows all three (`ErrorBanner`) so a
  * report from the field carries the identifier and not only prose.
  */
@@ -25,6 +27,53 @@ export interface ErrorDescription {
   readonly title: string;
   readonly message: string;
 }
+
+/** `PrincipalOperationRefusedError`'s reasons (kernel `application/gateway/members-handlers.ts`),
+ *  read from the 409 `conflict`'s `details.reason` (`principalRefusalCode`). Keyed by the shared
+ *  `PrincipalRefusalReason`, so a reason added there does not compile until it has a title and a
+ *  next step here; spread into `CODE_TITLES`, `CODE_TITLES_ZH` and `ERROR_NEXT_STEPS` below. */
+const PRINCIPAL_REFUSAL_TITLES: Readonly<Record<PrincipalRefusalReason, string>> = {
+  last_owner: 'Last owner',
+  self_disable: 'Cannot disable yourself',
+  platform_managed: 'Managed by the platform',
+  human_api_key: 'People sign in with a password',
+  reserved_name: 'Name reserved',
+};
+
+const PRINCIPAL_REFUSAL_TITLES_ZH: Readonly<Record<PrincipalRefusalReason, string>> = {
+  last_owner: '最后一个所有者',
+  self_disable: '不能停用自己',
+  platform_managed: '由平台管理',
+  human_api_key: '真人成员用密码登录',
+  reserved_name: '名称被保留',
+};
+
+/** The platform plane's own `last_owner` / `self_disable` keep their `lib/platform-errors.ts` copy,
+ *  which wins over these. */
+const PRINCIPAL_REFUSAL_NEXT_STEPS: Readonly<
+  Record<PrincipalRefusalReason, { readonly zh: string; readonly en: string }>
+> = {
+  last_owner: {
+    zh: '工作区至少要保留一位启用中的真人所有者，这一步会让它一个都不剩，所以什么也没有改。先把另一位成员设为所有者，再来做这一步。',
+    en: 'A workspace always keeps at least one active human owner, and this would leave it with none, so nothing changed. Make another member an owner first, then do this.',
+  },
+  self_disable: {
+    zh: '不能停用你自己，什么也没有改。确实需要的话，请另一位所有者来停用。',
+    en: 'You cannot disable yourself, so nothing changed. If it is really needed, ask another owner to do it.',
+  },
+  platform_managed: {
+    zh: '这是平台自己管理的身份（智能体，或平台内部的服务账号），不能在工作区里改角色、停用、轮换密钥或签发凭证，什么也没有改。',
+    en: 'This identity is managed by the platform (an agent, or one of the platform’s internal service accounts): its role, status, key and credentials cannot be changed from a workspace, and nothing changed.',
+  },
+  human_api_key: {
+    zh: '这是一位真人成员，真人用密码登录，不发 API 密钥，什么也没有改。要给自动化程序用的密钥，请创建一个服务账号。',
+    en: 'This is a person, and people sign in with a password rather than an API key, so nothing changed. For a key an automation can use, create a service account.',
+  },
+  reserved_name: {
+    zh: '前后各带两个下划线的显示名留给平台内部的身份，什么也没有创建。换一个名字后重新创建。',
+    en: 'Display names with two underscores at each end are reserved for the platform’s internal identities, so nothing was created. Choose another name and create it again.',
+  },
+};
 
 /** JSON-RPC error code → the same stable name the HTTP transport uses for the equivalent failure
  *  (`interfaces/ws/rpc.ts` `WS_ERROR_CODES`; the HTTP names come from `mapCapabilityError`). */
@@ -43,7 +92,8 @@ const RPC_CODE_NAMES: Readonly<Record<number, string>> = {
   [-32012]: 'quota_exceeded',
   [-32013]: 'attenuation_denied',
   // `UPSTREAM_ERROR` stands for HTTP's `gatekeeper_error` / `gatekeeper_timeout` /
-  // `manifest_fetch_failed` together; the first is the one whose copy fits all three.
+  // `manifest_fetch_failed` together; `upstreamCodeName` tells them apart by the kernel's message,
+  // and this is its fallback (the one whose copy fits all three).
   [-32014]: 'gatekeeper_error',
   [-32015]: 'service_unavailable',
   [-32016]: 'worker_definition_not_enabled',
@@ -105,6 +155,25 @@ export const CODE_TITLES: Readonly<Record<string, string>> = {
   gate_unreachable: 'Not sent: the gate could not be reached',
   apply_not_received: 'Did not run: the gate has no record of it running',
   outcome_unknown: 'Outcome unknown',
+  worker_definition_not_enabled: 'Worker not enabled for your agent',
+  endpoint_is_platform_gate: 'A platform gate is at this address',
+  connector_not_self_serve: 'Cannot be connected by a workspace',
+  module_not_found: 'No such module',
+  not_a_draft: 'No longer a draft',
+  invalid_scope: 'Scope not allowed',
+  service_principal_required: 'Not an active service account',
+  ontology_violation: 'The ontology does not allow this link',
+  source_identity_conflict: 'Source name taken',
+  image_not_allowed: 'Image not allowed',
+  image_not_in_inventory: 'Image not built',
+  runtime_unreachable: 'Runtime unreachable',
+  no_previous_settings_version: 'Nothing to roll back to',
+  depth_exceeded: 'Delegation too deep',
+  concurrency_exceeded: 'Too many running at once',
+  daily_cost_exceeded: 'Daily cost budget reached',
+  // `PrincipalOperationRefusedError`'s reasons (`principalRefusalCode`); `last_owner` and
+  // `self_disable` are platform-plane codes too.
+  ...PRINCIPAL_REFUSAL_TITLES,
   unknown: 'Error',
 };
 
@@ -160,16 +229,51 @@ export const CODE_TITLES_ZH: Readonly<Record<string, string>> = {
   gate_unreachable: '没发出：连不上门',
   apply_not_received: '没执行：门上没有执行记录',
   outcome_unknown: '结果不明',
+  worker_definition_not_enabled: '这个 Worker 没有对你的智能体启用',
+  endpoint_is_platform_gate: '这个地址是平台提供的门',
+  connector_not_self_serve: '这类系统不能由工作区自行接入',
+  module_not_found: '找不到这个模块',
+  not_a_draft: '已经不是草稿',
+  invalid_scope: '权限范围无效',
+  service_principal_required: '不是启用中的服务账号',
+  ontology_violation: '本体不允许这条关系',
+  source_identity_conflict: '来源名称已被占用',
+  image_not_allowed: '镜像不在允许列表里',
+  image_not_in_inventory: '镜像还没有构建',
+  runtime_unreachable: '连不上运行层',
+  no_previous_settings_version: '没有可回滚的版本',
+  depth_exceeded: '派生链太深',
+  concurrency_exceeded: '同时运行的任务太多',
+  daily_cost_exceeded: '今日成本已达上限',
+  ...PRINCIPAL_REFUSAL_TITLES_ZH,
   unknown: '出错了',
 };
 
 /** Legacy 320 (UX acceptance of #602): the shared part of the `unstorable_text` note, after the
  *  place it names. U+0000 cannot be seen, so "remove the character" alone cannot be followed: the
  *  note says where it usually comes from and two ways to get rid of it. */
-const UNSTORABLE_TEXT_STEP = {
-  zh: '有一个看不见的 U+0000（空字符），系统存不了它，所以这次什么也没有写入。它通常来自粘贴的日志、终端输出或二进制内容：删掉粘贴进来的那一段重新输入，或先粘贴到纯文本编辑器里再复制过来，然后重新提交。如果是 agent 的调用，它一般会改好后重新发起，不需要你处理。',
-  en: 'holds an invisible U+0000 (a null character), which the system cannot store, so nothing was written. It usually comes from pasted logs, terminal output or binary content: delete the pasted part and type it again, or paste it into a plain-text editor first and copy it from there, then send it again. If this was an agent’s call, it usually fixes it and calls again, and nothing needs you.',
+const UNSTORABLE_TEXT_WHAT = {
+  zh: '有一个看不见的 U+0000（空字符），系统存不了它',
+  en: 'holds an invisible U+0000 (a null character), which the system cannot store',
 } as const;
+const UNSTORABLE_TEXT_FIX = {
+  zh: '它通常来自粘贴的日志、终端输出或二进制内容：删掉粘贴进来的那一段重新输入，或先粘贴到纯文本编辑器里再复制过来',
+  en: 'It usually comes from pasted logs, terminal output or binary content: delete the pasted part and type it again, or paste it into a plain-text editor first and copy it from there',
+} as const;
+const UNSTORABLE_TEXT_STEP = {
+  zh: `${UNSTORABLE_TEXT_WHAT.zh}，所以这次什么也没有写入。${UNSTORABLE_TEXT_FIX.zh}，然后重新提交。如果是 agent 的调用，它一般会改好后重新发起，不需要你处理。`,
+  en: `${UNSTORABLE_TEXT_WHAT.en}, so nothing was written. ${UNSTORABLE_TEXT_FIX.en}, then send it again. If this was an agent’s call, it usually fixes it and calls again, and nothing needs you.`,
+} as const;
+
+/** Legacy 334 (UX review of #605, P3-2): the note as the chat composer shows it. The person typed
+ *  the message themselves, so it names the message, not the wire param `text`, and drops the
+ *  sentence about an agent's call — nobody but them sent it. */
+export function composerUnstorableTextStep(t: Translate): string {
+  return t(
+    `消息内容里${UNSTORABLE_TEXT_WHAT.zh}，所以这条消息没有发出。${UNSTORABLE_TEXT_FIX.zh}，然后重新发送。`,
+    `The message ${UNSTORABLE_TEXT_WHAT.en}, so it was not sent. ${UNSTORABLE_TEXT_FIX.en}, then send it again.`,
+  );
+}
 
 /** Where the kernel's `unstorable_text` message (`@nexttime/shared` `UnstorableTextError`) says
  *  the character is: `the text at params "title" holds U+0000` names a value, `the key at …` a key.
@@ -389,6 +493,61 @@ export const ERROR_NEXT_STEPS: Readonly<
     zh: '和平台的连接断了。刷新页面重新连接。',
     en: 'The connection to the platform closed. Reload the page to reconnect.',
   },
+  // Legacy 333 (UX review of #605, P3-1): the caller's own AgentProfile excludes the Worker. The
+  // profile is the person's own preference, so the person is the one who turns it back on.
+  worker_definition_not_enabled: {
+    zh: '你在「我的智能体」里排除了这个 Worker，智能体不能委派给它，这次什么也没有创建。需要它的话，到「我的智能体」的「Worker 定义」里重新勾选并保存，然后重新发起。',
+    en: 'You excluded this Worker in My Agent, so your agent cannot delegate to it and nothing was created. If you need it, tick it again under Worker definitions in My Agent, save, and request again.',
+  },
+  // Sweep of kernel codes with no console copy (legacy 333 follow-up): each says what was refused,
+  // that nothing was written, and who acts next and where.
+  endpoint_is_platform_gate: {
+    zh: '这个地址是平台已经提供的门实例，工作区不能自己再接入一遍，什么也没有保存。到能力目录启用这个平台门；在那里看不到它时，请平台管理员处理。',
+    en: 'This address belongs to a gate instance the platform already provides; a workspace cannot connect it again itself, and nothing was saved. Enable that platform gate from the catalog; if it is not there, ask a platform administrator.',
+  },
+  connector_not_self_serve: {
+    zh: '平台目前不允许工作区自己接入这类系统（平台管理员关闭了它，或改由平台提供），什么也没有保存。平台提供的话，到能力目录启用它的门实例；否则请平台管理员在「集成」里开放。',
+    en: 'The platform does not let a workspace connect this kind of system itself right now (a platform administrator turned it off, or provides it as a preset), and nothing was saved. If the platform provides it, enable one of its gate instances from the catalog; otherwise ask a platform administrator to allow it under Integrations.',
+  },
+  module_not_found: {
+    zh: '这个平台部署的模块索引里没有它，什么也没有改。刷新页面后重新选择；仍然需要它时，请平台管理员确认部署里带了这个模块。',
+    en: 'This deployment’s module index does not carry it, and nothing changed. Reload the page and choose again; if it is still needed, ask a platform administrator to check the deployment ships this module.',
+  },
+  not_a_draft: {
+    zh: '它已经发布或弃用了，只有草稿才能丢弃，什么也没有改。刷新后查看它现在的状态。',
+    en: 'It has been published or deprecated meanwhile; only a draft can be discarded, and nothing changed. Refresh to see its current state.',
+  },
+  invalid_scope: {
+    zh: '申请的权限范围里有不存在的能力，或只能由人在控制台使用的能力，什么也没有签发。刷新页面，重新选择范围后再试。',
+    en: 'The requested scope names a capability that does not exist, or one only a person can use in the console, so nothing was issued. Reload the page, choose the scope again, and retry.',
+  },
+  service_principal_required: {
+    zh: '外部运行时凭证只能签发给启用中的服务账号；这个身份是真人、智能体，或已停用，什么也没有签发。选一个启用中的服务账号，或先创建一个。',
+    en: 'An external-runtime credential can only be issued to an active service account; this one is a person, an agent, or disabled, so nothing was issued. Pick an active service account, or create one first.',
+  },
+  ontology_violation: {
+    zh: '工作区已发布的本体没有声明这种关系，或不允许它连接这两类对象，所以没有写入。到「图谱」查看本体允许的关系类型；需要新的关系类型时，请 builder 提议本体修订。',
+    en: 'The workspace’s published ontology does not declare this link type, or does not let it join these two kinds of object, so nothing was written. Check the link types the ontology allows under Graph; if a new one is needed, ask a builder to propose an ontology revision.',
+  },
+  source_identity_conflict: {
+    zh: '同一类型下已经有一个同名的来源（别人的，或可见范围不同），什么也没有创建。换一个名称后重新注册。',
+    en: 'A Source of this kind with that name already exists (someone else’s, or with the other visibility), so nothing was created. Register it again under another name.',
+  },
+  // The three `QuotaExceededError` codes (HTTP 429; WS `quota_exceeded` above), each naming the
+  // quota the 「模型与配额」 page edits under the same label (`lib/quotas.ts`).
+  depth_exceeded: {
+    zh: 'Worker 一层层委派下去，超过了工作区的「派生链深度上限」，这次没有创建任务。让智能体少嵌套几层后重新发起，或请工作区所有者在「模型与配额」调高这个上限。',
+    en: 'Workers delegating to Workers went past the workspace’s max delegation depth, so no task was created. Have the agent nest less and request again, or ask a workspace owner to raise the limit under Models.',
+  },
+  concurrency_exceeded: {
+    zh: '你同时在运行的 Worker 任务已经达到工作区的「每用户并发 WorkerRun 数」，这次没有创建任务。等一些任务结束（可以在「任务」里查看或取消），或请工作区所有者在「模型与配额」调高这个上限。',
+    en: 'You already have as many Worker tasks running as the workspace’s concurrent WorkerRuns per user allows, so no task was created. Wait for some to finish (see or cancel them under Tasks), or ask a workspace owner to raise the limit under Models.',
+  },
+  daily_cost_exceeded: {
+    zh: '工作区今天的花费已经达到「每工作区日成本」，这次没有创建任务。等预算按天重置后再试；急需的话，请工作区所有者在「模型与配额」调高它。',
+    en: 'The workspace’s spending today has reached its daily cost budget, so no task was created. Retry once the budget resets for the next day; if it cannot wait, ask a workspace owner to raise it under Models.',
+  },
+  ...PRINCIPAL_REFUSAL_NEXT_STEPS,
 };
 
 /**
@@ -602,9 +761,40 @@ export function transportErrorMessage(err: unknown, t: Translate): string | null
   return null;
 }
 
+/** Legacy 336 (review #493, recorded in #605): which of HTTP's three codes a WS `UPSTREAM_ERROR`
+ *  (-32014) stands for, read off the kernel's message (`interfaces/ws/rpc.ts`): a manifest fetch
+ *  says `<capability>: failed to fetch manifestSource …` (`ConnectionManifestFetchError`), a gate
+ *  timeout `gatekeeper client: <path> timed out after <n>ms` (`GatekeeperTimeoutError`), and a gate
+ *  error starts with the gate's own code instead. Anything else keeps the copy that fits all three. */
+const MANIFEST_FETCH_FAILED_MESSAGE = /^[^\s:]+: failed to fetch manifestSource\b/;
+const GATEKEEPER_TIMEOUT_MESSAGE = /^gatekeeper client: \S+ timed out after \d+ ?ms\b/;
+
+function upstreamCodeName(message: string): string {
+  if (MANIFEST_FETCH_FAILED_MESSAGE.test(message)) return 'manifest_fetch_failed';
+  if (GATEKEEPER_TIMEOUT_MESSAGE.test(message)) return 'gatekeeper_timeout';
+  return 'gatekeeper_error';
+}
+
+/** The kernel's `PrincipalOperationRefusedError` reasons, sent as 409 `conflict` with
+ *  `details.reason`. */
+const PRINCIPAL_REFUSAL_REASONS: ReadonlySet<string> = new Set<string>(
+  PRINCIPAL_REFUSAL_REASON_VALUES,
+);
+
+/** A member-management refusal's own reason as the code to show, so it reads as what it is rather
+ *  than a generic conflict; `undefined` for any other `conflict` (or a kernel too old to send it). */
+function principalRefusalCode(err: HttpError): string | undefined {
+  if (err.code !== 'conflict') return undefined;
+  const reason = err.details?.reason;
+  return typeof reason === 'string' && PRINCIPAL_REFUSAL_REASONS.has(reason) ? reason : undefined;
+}
+
 export function describeError(err: unknown): ErrorDescription {
   if (err instanceof HttpError) {
-    const code = err.kind === 'capability_error' ? (err.code ?? 'unknown') : err.kind;
+    const code =
+      err.kind === 'capability_error'
+        ? (principalRefusalCode(err) ?? err.code ?? 'unknown')
+        : err.kind;
     return {
       code,
       title: ownEntry(CODE_TITLES, code) ?? titleFromCode(code),
@@ -635,7 +825,10 @@ export function describeError(err: unknown): ErrorDescription {
     };
   }
   if (err instanceof RpcError) {
-    const code = ownEntry(RPC_CODE_NAMES, err.code) ?? `rpc_${err.code}`;
+    const code =
+      err.code === -32014
+        ? upstreamCodeName(err.message)
+        : (ownEntry(RPC_CODE_NAMES, err.code) ?? `rpc_${err.code}`);
     return {
       code,
       title: ownEntry(CODE_TITLES, code) ?? titleFromCode(code),

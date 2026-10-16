@@ -1,4 +1,4 @@
-import type { PrincipalKind, Role } from '@nexttime/shared';
+import type { PrincipalKind, PrincipalRefusalReason, Role } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import {
   revokeOnBehalfOfSessionHandles,
@@ -62,8 +62,8 @@ export class PrincipalNotFoundError extends Error {
  *  capability-route.ts, interfaces/ws/rpc.ts), the same family `OperationIdentityConflictError`/
  *  `IllegalTransition` are already mapped to. */
 export class PrincipalOperationRefusedError extends Error {
-  readonly reason: string;
-  constructor(reason: string, message: string) {
+  readonly reason: PrincipalRefusalReason;
+  constructor(reason: PrincipalRefusalReason, message: string) {
     super(message);
     this.name = 'PrincipalOperationRefusedError';
     this.reason = reason;

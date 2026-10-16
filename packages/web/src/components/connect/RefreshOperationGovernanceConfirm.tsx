@@ -218,6 +218,27 @@ export function RefreshOperationGovernanceConfirm({
   const loosens = items.some((item) => isLoosening(item.direction));
   // What publishing the revisions that carry a loosening would change — said now, not after.
   const byRevisionConsequences = byRevision.flatMap((item) => governanceConsequences(item, t));
+  // UX re-check of #612 (legacy 346): what a self-connected gate loosens opens a revision
+  // (`byRevision`), so what its sync writes in place is only what the gate tightens — the
+  // description says 「就地」 of those names alone, and that the loosened ones wait for their
+  // revision. (`loosens` cannot hold here; if a kernel ever sent one, the general wording stays.)
+  // The general wording (a platform manifest, applied as a whole, loosenings included) says
+  // 「直接改写」, not 「就地」: 「就地」 is kept for the self-connected sentence above, where it can
+  // only mean a tightening.
+  const tagList = (list: readonly GovernanceChangeItem[], separator: string) =>
+    list.map((item) => actionKindTagText(item.name)).join(separator);
+  const tightensInPlace = self && !loosens;
+  const tightenedInPlaceText = `${t(
+    `按门现在描述的模式 / 影响级 / 是否可自动批准，就地收紧 ${tagList(items, '、')} 的治理字段（不产生新版本），同步后立即生效。这决定它们要不要人工审批。`,
+    `Tightens the mode / blast radius / auto-approvable of ${tagList(items, ', ')} in place, to what the gate describes now (no new Operation version), effective once synced. This decides whether they need a person’s approval.`,
+  )}${
+    byRevision.length > 0
+      ? t(
+          `门放宽的 ${tagList(byRevision, '、')} 不就地改：只打开修订草稿，发布后才生效。`,
+          ` What the gate loosens — ${tagList(byRevision, ', ')} — is not changed in place: it only opens revision drafts, which take effect once published.`,
+        )
+      : ''
+  }`;
   const [lastResult, setLastResult] = useState<RefreshOperationGovernanceResultWire | null>(null);
   const revisions = (lastResult?.revisionDrafts ?? []).filter(
     (draft) =>
@@ -640,18 +661,20 @@ export function RefreshOperationGovernanceConfirm({
         )}
         description={
           // A definition-only change is said once, by the notice below (UX acceptance of #538).
-          items.length > 0
-            ? source(
-                [
-                  '按门当前生效清单的模式 / 影响级 / 是否可自动批准，就地修正下列已发布 Operation 的治理字段（不产生新版本）。这决定它们要不要人工审批；改为只读调用的 Operation 也不再需要授权。',
-                  'Corrects the mode / blast radius / auto-approvable of the published operations below in place, to the manifest in effect (no new Operation version). This decides whether they need a person’s approval — and an operation that becomes an observe call no longer needs a grant either.',
-                ],
-                [
-                  '按门现在描述的模式 / 影响级 / 是否可自动批准，就地修正下列已发布 Operation 的治理字段（不产生新版本）。这决定它们要不要人工审批；改为只读调用的 Operation 也不再需要授权。',
-                  'Corrects the mode / blast radius / auto-approvable of the published operations below in place, to what the gate describes now (no new Operation version). This decides whether they need a person’s approval — and an operation that becomes an observe call no longer needs a grant either.',
-                ],
-              )
-            : undefined
+          items.length > 0 && tightensInPlace
+            ? tightenedInPlaceText
+            : items.length > 0
+              ? source(
+                  [
+                    '按门当前生效清单的模式 / 影响级 / 是否可自动批准，直接改写下列已发布 Operation 的治理字段（不产生新版本，确认后立即生效）。这决定它们要不要人工审批；改为只读调用的 Operation 也不再需要授权。',
+                    'Rewrites the mode / blast radius / auto-approvable of the published operations below to the manifest in effect (no new Operation version; effective once confirmed). This decides whether they need a person’s approval — and an operation that becomes an observe call no longer needs a grant either.',
+                  ],
+                  [
+                    '按门现在描述的模式 / 影响级 / 是否可自动批准，直接改写下列已发布 Operation 的治理字段（不产生新版本，确认后立即生效）。这决定它们要不要人工审批；改为只读调用的 Operation 也不再需要授权。',
+                    'Rewrites the mode / blast radius / auto-approvable of the published operations below to what the gate describes now (no new Operation version; effective once confirmed). This decides whether they need a person’s approval — and an operation that becomes an observe call no longer needs a grant either.',
+                  ],
+                )
+              : undefined
         }
         target={gateDisplayName}
         impact={[

@@ -5,7 +5,7 @@
 > 拆解与实现说明在 `development-tasks.md`，评估在 `retrospective-*.md` / `code-review-*.md`，
 > 本文只链接不复制。与代码冲突时以代码为准，并修正本文。
 
-最后更新：2026-10-16（**S11 W1 GO2 确定性推进器合入（#619，bf933cf，goal 0002，未发版；遗留 325 关闭）**：确认后的 GoalRun 由内核一步步推进到 `verifying`，不经聊天、不调模型、不持凭据；调度状态只在库里（`next_tick_at` + 租约认领），丢失的唤醒最多晚一个对账周期；每次尝试按请求者此刻的入口范围铸 Handle，授权丢失、预算用尽、结果不明都暂停而不失败。新登遗留 356–358。W1 下一步 GO3；主机窗口仍暂缓）。 上一版 2026-10-16（**控制台 PR B：失败原因与状态码都有中文、必被拒的按钮不再出现（#614，47f6e27，无迁移，未发版；遗留 313、314、315、324、331、339、341 关闭）**：Task 失败原因按共享枚举显示中文，审批历史可按失败类别筛，长失败原因默认折叠并在截断时指向审计记录，撤回说明只写实际情况；同类排查补齐内核状态码的中文标签，自己的账户与最后一位所有者不再显示必被拒的控制。新登遗留 352–355。主机窗口仍暂缓）。 更早的页首更新记录见 `status-history.md`「页首更新记录」。
+最后更新：2026-10-16（**控制台文案与错误码批次合入（#622，bdc6a8d，无迁移，未发版；遗留 333、334、336、337、346、355 关闭）**：好几个内核错误码有了中文标题和下一步，成员管理被拒时说明是哪种情况（409 `details.reason`，共享枚举 `PrincipalRefusalReason`），全控制台统一用「流程」「智能体配置」「审批策略」。新登遗留 359–363。W1 下一步 GO3，W3 P0b 在审；主机窗口仍暂缓）。 上一版 2026-10-16（**S11 W1 GO2 确定性推进器合入（#619，bf933cf，goal 0002，未发版；遗留 325 关闭）**：确认后的 GoalRun 由内核一步步推进到 `verifying`，不经聊天、不调模型、不持凭据；调度状态只在库里（`next_tick_at` + 租约认领），丢失的唤醒最多晚一个对账周期；每次尝试按请求者此刻的入口范围铸 Handle，授权丢失、预算用尽、结果不明都暂停而不失败。新登遗留 356–358。W1 下一步 GO3；主机窗口仍暂缓）。 更早的页首更新记录见 `status-history.md`「页首更新记录」。
 
 ## 1. 入口指引
 
@@ -146,6 +146,7 @@
 | 2026-10-16 | 审计按对象索引与原因统一读法合入（#615，8a735f7，core 0044，未发版；遗留 338 关闭）：新迁移 `core/0044_audit_records_resource_idx` 建部分索引 `audit_records_resource_idx (workspace_id, resource_id, created_at) where resource_id is not null`，失败原因（329）、结果不明原因（287）、`request_action` 的终态回读（`readTerminalOutcome`）、所有按 `resourceId` 过滤的 `queryAudit` / `queryAuditPage` 与 I11 都走它；迁移在事务里用普通 `create index`（持 SHARE 锁、写入排队），窗口前可在事务外并发预建（release.md §3.32），迁移会删掉同名无效残留后重建。新函数 `shownAuditReason`（`governance/approval/shown-reason.ts`）按脱敏 → 截断到 `SHOWN_REASON_MAX`（1000 个 code point）→ 不可见字符显示为 `\u{XXXX}` 的顺序处理，`failureReason`、`outcomeInDoubt.reason` 与 `request_action` 失败 `reason` 共用（后两者原来只脱敏）；schema 形状不变。审查 #493 常规通过（100 万行实测命中、预建与重放幂等），CI 全绿合入；无主机动作 | PR #615 |
 | 2026-10-16 | 控制台 PR B 合入（#614，47f6e27，无迁移，内核 + 控制台，未发版；遗留 313、314、315、324、331、339、341 关闭）：契约（都向后兼容）：shared 新增 `TASK_FAILURE_REASON_VALUES` / `TaskFailureReason`（8 个值，`failTaskRow` / `failTaskAndReapWorkerRuns` 按它类型化，取值集合不变）；`list_action_requests` 新增可选 `failureKind`（单值或数组，空数组不匹配任何行，与 `status` 一致）；`get_action` / `list_pending` / `list_action_requests` 的行新增可选 `failureReasonTruncated`（与 `shownAuditReason` 同源，按同一次脱敏后的长度判断）。控制台：任务列表、详情与对话状态行显示中文失败原因；审批历史新增「失败类别」；Worker 现行版本由别人提议时草稿不显示「发布」（315）；永远解析不到名字的引用芯片改为「本请求」「本任务」等（314）；卡片表格窄屏换行、设置人用引用芯片（313）；失败原因超过 4 行或 280 字默认折叠、截断时说明完整内容在审计记录里（339）；撤回说明只写实际情况（341）。同类排查：溯源、图谱、审计（决策状态、资源类型、动作）、门类型、服务健康与容器状态补中文标签；成员抽屉与平台用户抽屉对自己、对最后一位有效所有者不显示必被拒的停用与改角色。Tailwind 扫描范围从 `components/kit/` 扩到整个 `src/`（UX MUST-1：`line-clamp-4` 此前没有生成），新增 390 宽度折叠 e2e。审查 #493（含 delta）与 UX 验收（含复验）通过，CI 全绿合入；317 未在本 PR | PR #614 |
 | 2026-10-16 | S11 W1 GO2 确定性推进器合入（#619，bf933cf，goal 0002，未发版；遗留 325 关闭）：`goal/0002_goal_advancer` 给 `goal_runs` 加 `next_tick_at`（唯一的调度状态，终态行为空，部分索引），守卫按 0001 重建只多放行这一列。`confirmGoalRun`（只有请求者本人，I-G3）先锁 GoalRun、复验计划，再接受 revision 1、推进 `current_revision`、进 `running` 并为每步建 `pending` StepRun；计划校验 key 唯一、依赖无环、worker 为已发布版本、拒绝未知字段、≤ 256 KiB。一次推进在请求者的 workspace 上下文里一个事务完成，锁序 GoalRun → StepRun：记录已结束的尝试（按本次尝试自己的 WorkerRun 树的请求判定，在途 → `waiting(approval)`，结果不明 → `waiting(reconcile)` 并暂停 `awaiting_reconcile`）→ 重试 transient（未到上限、这一步所有尝试都没有在途请求、退避已过、仍在当前计划里）→ 解锁依赖（进 `ready` 前复核修订条目相同）→ 开始尝试（尝试 Task 与 `ready → running` 同一事务，提交后再 spawn WorkerRun）；`stepActionEffect` 在途优先于 `action_refused`。授权（I-G7）每次尝试按请求者此刻的入口范围算，未写 `nested` 时去掉 `invoke_worker` / `find_workers`；授权丢失暂停 `authority_lost`。配置在第一次尝试钉住（`run_config_snapshot`，无凭据）。预算（I-G6）超出暂停 `budget_exhausted`。outbox 消费者只置到期、从不抛错，对账扫描每分钟补漏（S12）。Task 侧：带 `step_attempt` 的 Task 关掉 Task 内崩溃重试；I-G1 加「至多一个 WorkerRun」；`run_lost` 收窄为至少有过一个 WorkerRun 且全部已终止（325）。shared 新增事件 `GoalRunUpdated` / `StepRunUpdated`。审查 #493 xhigh（含 delta）通过，CI 全绿合入；无主机动作 | PR #619 |
+| 2026-10-16 | 控制台文案与错误码批次合入（#622，bdc6a8d，无迁移，内核 + shared + 控制台，未发版；遗留 333、334、336、337、346、355 关闭）：内核：`PrincipalOperationRefusedError` 仍映射 409 `conflict`、`message` 不变，另在 `details.reason` 带拒绝原因（`last_owner` / `self_disable` / `platform_managed` / `human_api_key` / `reserved_name`），取值为 shared 新枚举 `PRINCIPAL_REFUSAL_REASON_VALUES`（只增不改，契约快照不变）。控制台：`worker_definition_not_enabled`（333）等 16 个错误码与 4 个运行层错误补中文标题和下一步；成员管理被拒按 `details.reason` 显示五种文案；输入框不可存储字符提示写「消息内容」（334）；WS `UPSTREAM_ERROR` 按消息分清单拉取失败 / 门超时 / 门出错（336）；清除预览为所有带 `workspace_id` 的表配中文名，测试解析内核迁移防漏配（337）；同步确认只对纯收紧说「就地」（346）；审计资源类型与能力目录统一用「流程」「智能体配置」「审批策略」，测试断言同一张表同一个词（355）。审查 #493（含 bf42fd1 delta）通过，UX 验收 PASS（1440 / 390，`console-ux/acceptance-622.md`），CI 全绿合入；无主机动作 | PR #622 |
 
 ### 2.2 验收证明了什么，没证明什么
 
@@ -430,11 +431,11 @@
 | 330 | 排水器读完队列、开始执行队首前队首刚被撤回时，`drainGatekeeper` 因 `IllegalTransition` 结束本轮；撤回触发的那次 drain 恰好被单飞跳过时，后面的行要等下一次周期 tick。不影响正确性；建议 `startActionRequestExecution` 抛 `IllegalTransition` 时重读队列继续（审查 #493 在 #601 记为 P3） | P3 | S11 W1（GO3 一并看） | 开放（#601 审查记录） |
 | 331 | 审批历史只能按状态筛，不能按失败类别筛；「结果不明」多了以后需要「只看需要核对的」（#601 UX 验收 P3-1） | P3 | 控制台 | 关闭（#614，47f6e27，未发版） |
 | 332 | 成员自接入、停在 287 之前 gatekeeper-base 的门，其 `transport_error` 可能是发出后的网络失败，内核运行时按 `refused` 记；要区分需要门在答复里带协议版本，或在 `transport_error` 上标明是否已送达。平台自己开的门不受影响（#601 作者记录） | P3 | S11 L 车道 | 开放（#601 记录） |
-| 333 | WS 码 -32016 `worker_definition_not_enabled` 在控制台没有中文标题和下一步，显示成「出错了」（#605 UX 复核 P3-1，审查 #493 同样提出） | P3 | 控制台 | 开放（#605 记录） |
-| 334 | 对话输入框场景里，`unstorable_text` 提示写的是参数名「text」，应显示为「消息内容」，并去掉面向 agent 的那一句（#605 UX 复核 P3-2） | P3 | 控制台 | 开放（#605 记录） |
+| 333 | WS 码 -32016 `worker_definition_not_enabled` 在控制台没有中文标题和下一步，显示成「出错了」（#605 UX 复核 P3-1，审查 #493 同样提出） | P3 | 控制台 | 关闭（#622，bdc6a8d，未发版） |
+| 334 | 对话输入框场景里，`unstorable_text` 提示写的是参数名「text」，应显示为「消息内容」，并去掉面向 agent 的那一句（#605 UX 复核 P3-2） | P3 | 控制台 | 关闭（#622，bdc6a8d，未发版） |
 | 335 | `unstorable_text` 提示可加一键「移除看不见的字符」按钮（#605 UX 复核 P3-3） | P3 | 控制台 | 开放（#605 记录） |
-| 336 | WS 码 -32014（`UPSTREAM_ERROR`）对应 HTTP 的三个码，控制台统一映射为 `gatekeeper_error`；可按消息细分成三种文案（审查 #493 在 #605 记为 P3） | P3 | 控制台 | 开放（#605 审查记录） |
-| 337 | 「清除工作区」预览里 `agentPolicies`、`ontologyVersions`、`workerDefinitions` 三张表没有中文名，中文界面下走 `purgeCountLabel` 的英文兜底（#607 之前已存在，UX 在 #607 验收时发现） | P3 | 控制台 | 开放（#607 UX 验收记录） |
+| 336 | WS 码 -32014（`UPSTREAM_ERROR`）对应 HTTP 的三个码，控制台统一映射为 `gatekeeper_error`；可按消息细分成三种文案（审查 #493 在 #605 记为 P3） | P3 | 控制台 | 关闭（#622，bdc6a8d，未发版） |
+| 337 | 「清除工作区」预览里 `agentPolicies`、`ontologyVersions`、`workerDefinitions` 三张表没有中文名，中文界面下走 `purgeCountLabel` 的英文兜底（#607 之前已存在，UX 在 #607 验收时发现） | P3 | 控制台 | 关闭（#622，bdc6a8d，未发版） |
 | 338 | `audit_records` 只有 `(workspace_id, created_at)` 索引：每读一条失败行的 `failureReason`（#609）与 287 的 `outcomeInDoubt` 读取都要扫整个工作区的审计，需加按 `resource_id` 的部分索引；同时 287 的 `outcomeInDoubt.reason`（`waiting-state.ts`）只脱敏、没截断也没做可见字符转换，改为与 `failureReason` 相同的处理（脱敏、截断到 1000 个 code point、不可见字符可见）。这也影响 release.md §3.30 的审计扫描时间估算（审查 #493 在 #609 记录，协调方定级） | P2 | S11 W1（GO 链里 #607 之后的小 PR，GO1 线程顺带做） | 关闭（#615，8a735f7，未发版） |
 | 339 | 失败原因（最多 1000 字）在审批详情与审计上下文里不折叠：390 宽度下审批详情的 Notice 约 750px 高，审计上下文变成 210px 宽的窄条；截断只在末尾留「…」，读者看不出被截断、也不知道去哪看全文（#609 UX 验收 P2 两条合并） | P2 | 控制台 | 关闭（#614，47f6e27，未发版） |
 | 340 | `readActionRequestFailureReasons` 的 `distinct on` 可把 `id` 加进排序作平手决胜（防御性，审查 #493 在 #609 记为 P3） | P3 | S11 L 车道 | 开放（#609 审查记录） |
@@ -443,7 +444,7 @@
 | 343 | 平台门清单被采用后新增了 Operation 名字时，已关联的工作区「与门公告对齐」不会导入这些名字（align 只处理已有名字，`importNew` 只对自连门开启），新名字目前只能靠重新启用实例进入工作区（#612 作者提出，审查 #493 定级） | P2 | S11 W3（交 P0b 线程：统一接入路径时自然覆盖则随 P0b 关闭） | 开放（#612 记录） |
 | 344 | 门改了 `await_decision`、MCP hints 或 reads / writes 时，对齐 / 同步预览既不显示也不应用这些变化（既有问题，自连门与平台门都存在；审查 #493 在 #612 记为 P2） | P2 | S11 W3（P1 收口） | 开放（#612 审查记录） |
 | 345 | 同步预览把已弃用的行标为「将打开修订」，实际写入时这些行什么都不写（审查 #493 在 #612 delta 记为 P3） | P3 | S11 L 车道 | 开放（#612 审查记录） |
-| 346 | 同步确认框的说明句仍写「就地修正」，但 #612 起放宽项走修订、不是就地改的；说明句应只对纯收紧说「就地」（#612 UX 复验 P3） | P3 | 控制台 | 开放（#612 UX 复验记录） |
+| 346 | 同步确认框的说明句仍写「就地修正」，但 #612 起放宽项走修订、不是就地改的；说明句应只对纯收紧说「就地」（#612 UX 复验 P3） | P3 | 控制台 | 关闭（#622，bdc6a8d，未发版） |
 | 347 | 通用确认框（`kit/confirm`）在 1440 与 390 下都翻到触发按钮上方、只有约 440px 高，而下方还有大片空白；能滚动、不影响使用，但首屏内容偏少（#612 UX 复验 P3） | P3 | 控制台 | 开放（#612 UX 复验记录） |
 | 348 | 内核 409 `operation_definition_mismatch` 的英文原文（agent 读到的）只说「发布门运行的定义后再调」与平台门的做法，没提自连门的「重新读取门的清单」入口；控制台中文映射已提到（#612 UX 验收 P3） | P3 | 控制台 | 开放（#612 UX 验收记录） |
 | 349 | 在能力目录发布新导入的执行 / 高影响 Operation 一键完成、没有确认（#612 之前就有，#612 UX 验收 P3） | P3 | 控制台 | 开放（#612 UX 验收记录） |
@@ -452,10 +453,15 @@
 | 352 | Skill / Procedure 发布没有「现行版本由别人提议」的检查（Worker 已在 #614 处理）；控制台列表每个 id 只有一行，目前从线上触发不了必被拒的情况，只记录（#614 同类排查） | P3 | 控制台 | 开放（#614 记录） |
 | 353 | 平台「成员资格」面板对最后一位所有者的 `last_owner` 拒绝没有提前提示，仍显示必被拒的控制（#614 同类排查，出现概率低） | P3 | 控制台 | 开放（#614 记录） |
 | 354 | 侧栏的推断角色徽章（角色未知时）仍是英文（#614 同类排查） | P3 | 控制台 | 开放（#614 记录） |
-| 355 | 审计资源标签用词混用：`procedure` 译「流程」而能力目录标签页写「Procedure」；`agent_profile`「入口 / Worker 定义」与 `worker_definition`「Worker 定义」；`agent_policy`「工作区策略」与 `policy`「策略」（#614 之前就有，随文案批次 333 / 334 / 336 / 337 统一；#614 UX 验收 P3-2） | P3 | 控制台 | 开放（#614 UX 验收记录） |
+| 355 | 审计资源标签用词混用：`procedure` 译「流程」而能力目录标签页写「Procedure」；`agent_profile`「入口 / Worker 定义」与 `worker_definition`「Worker 定义」；`agent_policy`「工作区策略」与 `policy`「策略」（#614 之前就有，随文案批次 333 / 334 / 336 / 337 统一；#614 UX 验收 P3-2） | P3 | 控制台 | 关闭（#622，bdc6a8d，未发版） |
 | 356 | 推进一直抛错的 GoalRun 不会自动停下：每次租约过期（默认 60 s）重试一次并记错误日志；连续失败若干次后应暂停 `needs_decision`（#619 偏离 8） | P2 | S11 W1（GO3） | 开放（#619 记录） |
 | 357 | GoalRun 的 token 预算只在开新尝试前检查：同一次推进开的多个尝试各以剩余量为上限，并行时最多超出「并行数 × 剩余量」；运行中超出由对账发现并暂停，但不终止在跑的 Task；嵌套子 Task 用工作区默认预算、不受目标剩余量约束。随 GO3：同一次推进的尝试均分剩余量，对账发现超出后走取消路径（#619 偏离 6，审查 #493 定级） | P2 | S11 W1（GO3） | 开放（#619 审查记录） |
 | 358 | `contract_violation` 不自动返工：设计 §4.7 允许返工一次，W1 直接暂停 `needs_decision`；返工要把上次输出与违规说明喂回去，依赖 GO5 的步骤输出与输入绑定（#619 偏离 1） | P2 | S11 W1（GO5） | 开放（#619 记录） |
+| 359 | 清除预览与审计资源类型还有两组同一概念两种叫法：`actionRequests`「动作请求」与 `action_request`「审批请求」；`capabilityGrants`「授权」与 `capability_grant`「能力授权」。建议统一为「动作请求」「授权」（#622 UX P3-1，与 355 同类） | P3 | 控制台 | 开放（#622 UX 记录） |
+| 360 | `ontology_violation` 的下一步写「请 builder 提议本体修订」，中文界面里这个角色叫「构建者」（#622 UX P3-2） | P3 | 控制台 | 开放（#622 UX 记录） |
+| 361 | 错误文案与已有界面用词不一致：「最后一个所有者」与成员抽屉「最后一位有效的所有者」；「真人成员」与成员类型「人类用户」；「API 密钥」与成员页「API key」（#622 UX P3-3） | P3 | 控制台 | 开放（#622 UX 记录） |
+| 362 | 服务凭证表单可在输入时就提示保留名规则（显示名前后各带两个下划线），不必等提交后被拒（#622 UX P3-4，可选优化） | P3 | 控制台 | 开放（#622 UX 记录） |
+| 363 | 390 宽度下对话页头部「入口 agent · 常驻 · 工作区 …」被竖着折成十几行，把模型选择器挤到右边（#609 UX P3-3，当时未登记；#622 UX 验收复现） | P3 | 控制台 | 开放（#622 UX 记录） |
 
 ## 5. 更新规则
 

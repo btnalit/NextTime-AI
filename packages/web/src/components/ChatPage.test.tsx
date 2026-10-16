@@ -1,11 +1,16 @@
 // @vitest-environment jsdom
-import type { ChatStreamPayload, ChatWire } from '@nexttime/shared';
+import { type ChatStreamPayload, type ChatWire, UnstorableTextError } from '@nexttime/shared';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { HttpError } from '../lib/http-client.js';
-import type { ChatMessage, ChatSubscriptionHandlers, WsClient } from '../lib/ws-client.js';
+import {
+  type ChatMessage,
+  type ChatSubscriptionHandlers,
+  RpcError,
+  type WsClient,
+} from '../lib/ws-client.js';
 import { ChatPage } from './ChatPage.js';
 import { ToastProvider } from './ui/Toast.js';
 
@@ -576,6 +581,34 @@ describe('ChatPage send and stream (C22)', () => {
     const line = screen.getByTestId('system-status-line');
     expect(line.querySelector('[data-status="executed"]')).toBeTruthy();
     expect(line.textContent).toContain('docker container restart executed');
+  });
+});
+
+// Legacy 334 (UX review of #605, P3-2): U+0000 in what the person typed is named as the message,
+// not the wire param `text`, and without the sentence about an agent's call.
+describe('ChatPage send refused for U+0000 (legacy 334)', () => {
+  it('says the message content holds it, not the parameter text, and nothing about an agent', async () => {
+    const fake = fakeClient();
+    (fake.client.sendChatMessage as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new RpcError(
+        -32017,
+        new UnstorableTextError('capability "send_chat_message"', { path: ['text'], in: 'value' })
+          .message,
+      ),
+    );
+    renderChat(fake.client, scriptedHttp({}));
+    await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled());
+    act(() => fake.caughtUp());
+
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'pasted log' } });
+    fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Enter' });
+    const banner = await screen.findByRole('alert');
+    const body = banner.querySelector('.error-banner-message')?.textContent ?? '';
+    expect(banner.textContent).toContain('文字里有存不了的字符');
+    expect(body).toMatch(/^消息内容里有一个看不见的 U\+0000/);
+    expect(body).toContain('这条消息没有发出');
+    expect(body).not.toContain('「text」');
+    expect(body).not.toContain('agent');
   });
 });
 

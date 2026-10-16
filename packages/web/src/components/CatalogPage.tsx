@@ -120,13 +120,14 @@ export interface CatalogPageProps {
   readonly onSelectItem: (itemId: string | null) => void;
 }
 
-/** S8 W1-A10 (i18n remainder): `Operation`/`Skill`/`Procedure`/`Worker` stay English proper nouns
- *  even in zh copy (the page's own description above does the same); `Module` has an established
- *  zh term ("模块", `lib/nav.ts`'s catalog nav group). */
+/** S8 W1-A10 (i18n remainder): `Operation`/`Skill`/`Worker` stay English proper nouns even in zh
+ *  copy (the page's own description above does the same); `Procedure` reads 流程 and `Module` 模块,
+ *  the zh terms the rest of the console uses (legacy 355: capability names, audit resource types,
+ *  task detail, purge counts; `lib/nav.ts`'s catalog nav group). */
 const TAB_LABEL: Readonly<Record<CatalogTab, { readonly zh: string; readonly en: string }>> = {
   operations: { zh: 'Operation', en: 'Operations' },
   skills: { zh: 'Skill', en: 'Skills' },
-  procedures: { zh: 'Procedure', en: 'Procedures' },
+  procedures: { zh: '流程', en: 'Procedures' },
   workers: { zh: 'Worker', en: 'Workers' },
   modules: { zh: '模块', en: 'Modules' },
 };
@@ -173,7 +174,7 @@ export function CatalogPage({ http, tab, onTabChange, itemId, onSelectItem }: Ca
         breadcrumb={breadcrumbFor('catalog')}
         title={t('能力目录', 'Catalog')}
         description={t(
-          '工作区里已发布的 Operation、Skill、Procedure 与 Worker 定义，以及你自己的草稿。',
+          '工作区里已发布的 Operation、Skill、流程与 Worker 定义，以及你自己的草稿。',
           'Published Operations, Skills, Procedures and Worker definitions across the workspace, plus your own drafts.',
         )}
       />
@@ -2042,7 +2043,7 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       <h2 className="catalog-detail-title">
         {editor.kind === 'copy'
           ? t('编辑为新草稿', 'Edit as new draft')
-          : t('新建 Procedure 草稿', 'New Procedure draft')}
+          : t('新建流程草稿', 'New Procedure draft')}
       </h2>
       <p className="text-3 text-small">
         {t('名称、描述与有序步骤', 'name, description and ordered steps')}
@@ -2081,7 +2082,7 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
         <DraftExpiryNote testId="procedures-draft-expiry-note" />
         {rows.length === 0 ? (
           <EmptyState
-            title={t('还没有 Procedure', 'No Procedures yet')}
+            title={t('还没有流程', 'No Procedures yet')}
             body={t(
               '用「新建草稿」写第一条有序步骤，或让 Worker 从成功的任务里蒸馏。',
               'Write the first one with New draft, or let a Worker distil one from a successful Task.',
@@ -2130,7 +2131,7 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
         {procedures.state.data.truncated === true ? (
           <p className="text-3 text-small" data-testid="procedures-truncated">
             {t(
-              '已达到单次读取上限，继续点“加载更多”查看其余 Procedure。',
+              '已达到单次读取上限，继续点“加载更多”查看其余流程。',
               'Reached the per-page limit — keep loading more to see the rest.',
             )}
           </p>
@@ -2138,7 +2139,7 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
         {procedures.loadMoreError !== null ? (
           <ErrorBanner
             error={procedures.loadMoreError}
-            title={t('无法加载更多 Procedure', 'Could not load more procedures')}
+            title={t('无法加载更多流程', 'Could not load more procedures')}
             testId="procedures-load-more-error"
           />
         ) : null}
@@ -2168,7 +2169,7 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       itemId={itemId}
       ready={procedures.state.status === 'ready'}
       emptyTitle={t(
-        '选择左侧一个 Procedure，查看步骤',
+        '选择左侧一个流程，查看步骤',
         'Select a Procedure on the left to see its steps',
       )}
     />
@@ -2184,7 +2185,7 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       }
       open={itemId !== undefined}
       onClose={closeEditor}
-      sheetTitle={t('Procedure 详情', 'Procedure detail')}
+      sheetTitle={t('流程详情', 'Procedure detail')}
       detailTestId={showEditor ? 'procedure-editor-drawer' : 'catalog-detail'}
     />
   );

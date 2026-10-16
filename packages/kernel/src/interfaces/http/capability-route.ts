@@ -439,9 +439,11 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // 409 "well-formed request, the row's current state forbids it" family as
   // OperationIdentityConflictError/IllegalTransition above (last-owner protection, self-disable,
   // an agent or internal target for set_principal_role/rotate_api_key/disable_principal, a
-  // reserved create_principal display name).
+  // reserved create_principal display name). `details.reason` (`last_owner`, `self_disable`,
+  // `platform_managed`, `human_api_key`, `reserved_name`) is additive: the code stays `conflict`
+  // for every existing client, and the console says which refusal it was.
   if (err instanceof PrincipalOperationRefusedError) {
-    return { status: 409, code: 'conflict', message: err.message };
+    return { status: 409, code: 'conflict', message: err.message, details: { reason: err.reason } };
   }
   // Error-mapping followup (docs/development-tasks.md "unmapped error classes → 500"): S3.2
   // `verify_fact`'s I3.6 precondition (epistemic-handlers.ts's own doc comment on this class) —
