@@ -8,7 +8,7 @@ import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { startActivity } from '../epistemic/index.js';
 import { SqlGraphStore } from '../graph/index.js';
 import { reconstruct } from './reconstruct.js';
-import { writeAudit } from './writer.js';
+import { queryAudit, writeAudit } from './writer.js';
 
 /**
  * substrate/audit/reconstruct.test: integration tests (real Postgres; auto-skip without
@@ -152,5 +152,38 @@ describe.runIf(DATABASE_URL !== undefined)('reconstruct (integration, real Postg
 
     expect(result.auditRecords.map((r) => r.action)).toEqual(['before_cutoff']);
     expect(result.facts.map((f) => f.linkType)).not.toContain('test.after-cutoff');
+  });
+
+  it('legacy 291: the action set and the time cutoff narrow the query, so newer rows of other actions never take the slots', async () => {
+    const resourceId = randomUUID();
+    const write = (action: string) =>
+      withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        writeAudit(client, {
+          workspaceId,
+          actorPrincipalId: ownerId,
+          action,
+          resourceType: 'action_request',
+          resourceId,
+        }),
+      );
+    await write('action_request.complete');
+    // One audited `get_action` poll per transaction — more than any small page would hold.
+    for (let i = 0; i < 12; i += 1) await write('get_action');
+
+    const [terminal] = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+      queryAudit(client, workspaceId, {
+        resourceId,
+        actions: ['action_request.complete', 'action_request.fail'],
+        limit: 1,
+      }),
+    );
+    expect(terminal?.action).toBe('action_request.complete');
+
+    const cutoff = terminal?.createdAt;
+    if (!cutoff) throw new Error('terminal row missing');
+    const upToCutoff = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+      queryAudit(client, workspaceId, { resourceId, createdAtOrBefore: cutoff, limit: 1 }),
+    );
+    expect(upToCutoff.map((r) => r.action)).toEqual(['action_request.complete']);
   });
 });

@@ -43,14 +43,14 @@ export async function reconstruct(
 
   const state = await graphStore.stateAt(client, workspaceId, { objectId: input.objectId, at });
 
-  // queryAudit orders newest-first and has no upper-bound-by-time filter of its own — apply the
-  // `at` cutoff here rather than growing that general-purpose filter for this one caller.
-  const auditRecords = (
-    await queryAudit(client, workspaceId, {
-      resourceId: input.objectId,
-      limit: MAX_RECONSTRUCT_AUDIT_RECORDS,
-    })
-  ).filter((record) => record.createdAt <= at);
+  // The `at` cutoff is part of the query, not a filter over its capped newest-first page (legacy
+  // 291): with more than MAX_RECONSTRUCT_AUDIT_RECORDS rows newer than `at`, that page held none
+  // of the rows this call is asked for.
+  const auditRecords = await queryAudit(client, workspaceId, {
+    resourceId: input.objectId,
+    createdAtOrBefore: at,
+    limit: MAX_RECONSTRUCT_AUDIT_RECORDS,
+  });
 
   return { object: state.object, facts: state.facts, auditRecords };
 }

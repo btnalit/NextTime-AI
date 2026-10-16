@@ -124,6 +124,15 @@ export interface AuditQueryFilter {
   readonly action?: string;
   readonly resourceType?: string;
   readonly resourceId?: string;
+  /** Any one of these `action` values (legacy 291: a set the caller would otherwise pick out of a
+   *  capped page afterwards, where newer rows of other actions could take every slot). Internal
+   *  only — `audit_query`'s wire filter never sets it. */
+  readonly actions?: readonly string[];
+  /** Only rows recorded at or before this instant (legacy 291: `reconstruct`'s `at` cutoff, which
+   *  a newest-first capped page filtered afterwards could miss entirely). Compared at millisecond
+   *  precision like the cursor below — a JS `Date` taken from a row's own `createdAt` must still
+   *  include that row. Internal only. */
+  readonly createdAtOrBefore?: Date;
   /** Defaults to {@link DEFAULT_AUDIT_QUERY_LIMIT}; capped at {@link MAX_AUDIT_QUERY_LIMIT}. */
   readonly limit?: number;
   /** S6-A (docs/console-completion-plan.md §5.5 "`audit_query` 加 keyset 分页"): the opaque
@@ -204,6 +213,8 @@ export async function queryAuditPage(
        and ($3::text is null or action = $3)
        and ($4::text is null or resource_type = $4)
        and ($5::uuid is null or resource_id = $5)
+       and ($9::text[] is null or action = any($9))
+       and ($10::timestamptz is null or date_trunc('milliseconds', created_at) <= $10)
        and (
          $7::timestamptz is null
          or (date_trunc('milliseconds', created_at), id) < ($7::timestamptz, $8::uuid)
@@ -219,6 +230,8 @@ export async function queryAuditPage(
       limit + 1,
       cursor?.createdAt ?? null,
       cursor?.id ?? null,
+      filter.actions ? [...filter.actions] : null,
+      filter.createdAtOrBefore ?? null,
     ],
   );
   const rows = result.rows.slice(0, limit).map(mapAuditRecordRow);
