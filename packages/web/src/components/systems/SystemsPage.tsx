@@ -10,7 +10,10 @@ import {
   type CancelConnectionRequestResult,
   type ConnectionRequestRow,
   type CreateConnectionResult,
+  type DraftAsRead,
   cancelConnectionRequestOverrides,
+  draftsAsRead,
+  manifestPublishPlan,
 } from '../../lib/connections.js';
 import { describeError, isForbiddenError } from '../../lib/errors.js';
 import { formatDateTime, formatRelative, shortId } from '../../lib/format.js';
@@ -75,6 +78,7 @@ const REQUEST_FILTERS: readonly RequestFilter[] = [
 ];
 
 const EMPTY_NAMES: ReadonlyMap<string, string> = new Map();
+const NO_DRAFTS: readonly DraftAsRead[] = [];
 
 /** The 待启用的平台实例 section, scrolled to from the empty state when it has rows (audit P1-16). */
 const AVAILABLE_SECTION_ID = 'systems-available-instances';
@@ -166,12 +170,24 @@ export function SystemsPage({
     return map;
   }, [availableRows]);
 
-  const draftCountByGate = useMemo(() => {
+  // Review #493 on #592: the drafts each gate's 「发布清单」 publishes, as this read saw them.
+  const draftsByGate = useMemo(() => {
+    const map = new Map<string, DraftAsRead[]>();
+    if (operationsList.state.status === 'ready') {
+      const rows = operationsList.state.data.items;
+      for (const gatekeeperId of new Set(rows.map((op) => op.gatekeeperId))) {
+        map.set(gatekeeperId, draftsAsRead(rows, gatekeeperId));
+      }
+    }
+    return map;
+  }, [operationsList.state]);
+  // Review #501 on #592 (P3): the count 「发布清单」 shows is what it publishes, not every draft.
+  const publishableByGate = useMemo(() => {
     const map = new Map<string, number>();
     if (operationsList.state.status === 'ready') {
-      for (const op of operationsList.state.data.items) {
-        if (op.status !== 'draft') continue;
-        map.set(op.gatekeeperId, (map.get(op.gatekeeperId) ?? 0) + 1);
+      const rows = operationsList.state.data.items;
+      for (const gatekeeperId of new Set(rows.map((op) => op.gatekeeperId))) {
+        map.set(gatekeeperId, manifestPublishPlan(rows, gatekeeperId).publishable.length);
       }
     }
     return map;
@@ -476,7 +492,8 @@ export function SystemsPage({
                 http={http}
                 gate={gate}
                 healthInfo={healthByGate.get(gate.gateId) ?? { linked: false }}
-                draftCount={draftCountByGate.get(gate.gateId) ?? 0}
+                drafts={draftsByGate.get(gate.gateId) ?? NO_DRAFTS}
+                publishableCount={publishableByGate.get(gate.gateId) ?? 0}
                 canPublish={can('publish_manifest') !== false}
                 onPublished={reloadRegistry}
                 workerNames={workerNames}

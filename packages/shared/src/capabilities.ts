@@ -892,10 +892,19 @@ const connectionCapabilities = [
     mode: 'execute',
     channel: 'human',
     minRole: 'owner',
-    paramsSchema: z.object({ gatekeeperId: id }).strict(),
+    // Review #493 on #592 (P2, the bulk form of legacy 300): `drafts` names every draft as the
+    // caller read it — list_operations' `name` + `draftDigest` for this gatekeeper's drafts.
+    paramsSchema: z
+      .object({
+        gatekeeperId: id,
+        drafts: z
+          .array(z.object({ name: z.string().min(1), draftDigest: z.string().min(1) }).strict())
+          .max(1000),
+      })
+      .strict(),
     resultSchema: wire.PublishManifestResultWireSchema,
     description:
-      'Publish every draft Operation in a Gatekeeper’s interface manifest (I16/I17): the gate’s own import-origin drafts; an agent’s or person’s proposal stays a draft (skippedDraftOperationNames) for publish_operation. Legacy J: a draft declaring a param only the gate sets (an identity/routing header, a credential query param, a cookie, a query param its binding fixes) stays a draft and is listed in gateOwnedParamDrafts with those params.',
+      'Publish every draft Operation in a Gatekeeper’s interface manifest (I16/I17): the gate’s own import-origin drafts; an agent’s or person’s proposal stays a draft (skippedDraftOperationNames) for publish_operation. drafts lists the drafts as you read them (name + draftDigest from list_operations); refused 409 draft_changed, with nothing published, when a draft it would publish is missing from drafts or was revised since. Legacy J: a draft declaring a param only the gate sets (an identity/routing header, a credential query param, a cookie, a query param its binding fixes) stays a draft and is listed in gateOwnedParamDrafts with those params.',
   },
   {
     name: 'connect_gatekeeper',
@@ -1192,12 +1201,13 @@ const metaCapabilities = [
         name: z.string().min(1),
         credentialsReviewed: z.boolean().optional(),
         // Review #493 on #583: the draft the caller reviewed (`OperationSummaryWire.draftDigest`).
-        draftDigest: z.string().min(1).optional(),
+        // Legacy 300: required — a publish names what was reviewed, never "whatever is there now".
+        draftDigest: z.string().min(1),
       })
       .strict(),
     resultSchema: wire.OperationPublishResultWireSchema,
     description:
-      'Publish a draft Operation (I16). Builder floor; only the draft’s proposer or the workspace owner may publish it (403 not_proposer otherwise). When the draft carries suspected credentials, credentialsReviewed: true is required — 400 credentials_review_required (details: subject, suspectedSecretValues) otherwise. Legacy J: an http Operation declaring a param only the gate sets (an identity/routing header, a credential query param, a cookie, a query param its binding fixes) is never published — 400 gate_owned_params (details: params [{param, location}]). Optional draftDigest (the catalog’s draftDigest for the draft reviewed): when the draft was revised in place since, 409 draft_changed and nothing is published.',
+      'Publish a draft Operation (I16). Builder floor; only the draft’s proposer or the workspace owner may publish it (403 not_proposer otherwise). When the draft carries suspected credentials, credentialsReviewed: true is required — 400 credentials_review_required (details: subject, suspectedSecretValues) otherwise. Legacy J: an http Operation declaring a param only the gate sets (an identity/routing header, a credential query param, a cookie, a query param its binding fixes) is never published — 400 gate_owned_params (details: params [{param, location}]). draftDigest is the catalog’s draftDigest for the draft reviewed: when the draft was revised in place since, 409 draft_changed and nothing is published.',
   },
   {
     name: 'deprecate_operation',
@@ -1293,10 +1303,20 @@ const metaCapabilities = [
     mode: 'execute',
     channel: 'human',
     minRole: 'builder',
-    paramsSchema: z.object({ skillId: id, credentialsReviewed: z.boolean().optional() }).strict(),
+    // Legacy 300: `version` is the version the caller reviewed (`SkillSummaryWire.version`, or the
+    // propose result's). The kernel publishes the family's latest version, and refuses 409
+    // `version_changed` when that is another one — nothing is written. A version row is immutable
+    // (only its `status` changes), so the version alone binds the content reviewed.
+    paramsSchema: z
+      .object({
+        skillId: id,
+        version: z.number().int().positive(),
+        credentialsReviewed: z.boolean().optional(),
+      })
+      .strict(),
     resultSchema: wire.SkillPublishResultWireSchema,
     description:
-      'Publish your draft Skill (I16) — the latest version under skillId. Builder floor; the workspace owner may publish anyone’s draft (e.g. one a member’s Worker proposed); another builder’s draft is 403 not_proposer. When the draft carries suspected credentials, credentialsReviewed: true is required — 400 credentials_review_required (details: subject, suspectedSecretValues) otherwise.',
+      'Publish your draft Skill (I16) — the latest version under skillId, which must be the version given (the one reviewed): a newer version under skillId since is 409 version_changed and nothing is published. Builder floor; the workspace owner may publish anyone’s draft (e.g. one a member’s Worker proposed); another builder’s draft is 403 not_proposer. When the draft carries suspected credentials, credentialsReviewed: true is required — 400 credentials_review_required (details: subject, suspectedSecretValues) otherwise.',
   },
   {
     name: 'publish_procedure',
@@ -1305,11 +1325,16 @@ const metaCapabilities = [
     channel: 'human',
     minRole: 'builder', // D-24 — see publish_skill.
     paramsSchema: z
-      .object({ procedureId: id, credentialsReviewed: z.boolean().optional() })
+      .object({
+        procedureId: id,
+        // Legacy 300 — see publish_skill.
+        version: z.number().int().positive(),
+        credentialsReviewed: z.boolean().optional(),
+      })
       .strict(),
     resultSchema: wire.ProcedurePublishResultWireSchema,
     description:
-      'Publish your draft Procedure (I16) — the latest version under procedureId. Builder floor; the workspace owner may publish anyone’s draft; another builder’s draft is 403 not_proposer. When the draft carries suspected credentials, credentialsReviewed: true is required — 400 credentials_review_required (details: subject, suspectedSecretValues) otherwise.',
+      'Publish your draft Procedure (I16) — the latest version under procedureId, which must be the version given (the one reviewed): a newer version under procedureId since is 409 version_changed and nothing is published. Builder floor; the workspace owner may publish anyone’s draft; another builder’s draft is 403 not_proposer. When the draft carries suspected credentials, credentialsReviewed: true is required — 400 credentials_review_required (details: subject, suspectedSecretValues) otherwise.',
   },
   {
     name: 'deprecate_skill',
@@ -1871,10 +1896,15 @@ const governanceCapabilities = [
     mode: 'execute',
     channel: 'human',
     minRole: 'operator',
-    paramsSchema: z.object({ gatekeeperId: id, actionKindTag: z.string().min(1) }).strict(),
+    // Legacy 218: ticked on one ActionRequest, it allows the definition that request was made
+    // against only (the rule records its digest); a revision published later goes back through
+    // approval until someone allows it again.
+    paramsSchema: z
+      .object({ gatekeeperId: id, actionKindTag: z.string().min(1), actionRequestId: id })
+      .strict(),
     resultSchema: wire.PolicyWireSchema,
     description:
-      '"Always allow" — auto-approve this Gatekeeper’s published Operation `actionKindTag` from now on, for every requester (a gate-scoped Policy rule; the same name on other Gatekeepers is not affected). 404 for an Operation not published on that Gatekeeper; 400 for a high-blast-radius Operation, which is never auto-approved (I8).',
+      '"Always allow" — auto-approve this Gatekeeper’s published Operation `actionKindTag` from now on, for every requester (a gate-scoped Policy rule; the same name on other Gatekeepers is not affected), for as long as its published definition is the one `actionRequestId` was made against: a later revision with another definition goes back through approval. Whoever may approve that call may tick it: the owner, or an operator holding a grant on that Gatekeeper (I14; 403 otherwise). 404 for an Operation not published on that Gatekeeper or a request the caller cannot see; 400 for a request on another gate or action kind, or a high-blast-radius Operation, which is never auto-approved (I8); 409 version_changed when the request was made against a definition other than the one published now.',
   },
   {
     // 2026-09-08 wire-contract-conventions §1(c): a Grant points at a resource (`resourceType` +
@@ -1926,7 +1956,7 @@ const governanceCapabilities = [
     paramsSchema: z.object({ policy: jsonRecord }).strict(),
     resultSchema: wire.PolicyWireSchema,
     description:
-      'Write a Policy rule: policy = {gatekeeperId?, actionKindTag, blastRadius?, autoApprove, requesterCanApprove?}. With gatekeeperId the rule covers that Gatekeeper’s action kind; without it, the action kind on every Gatekeeper — such a workspace-wide rule can only require approval (autoApprove: true needs a gatekeeperId, R-20 / D-15). A gate rule wins over the workspace-wide one.',
+      'Write a Policy rule: policy = {gatekeeperId?, actionKindTag, blastRadius?, autoApprove, requesterCanApprove?, operationVersion?}. requesterCanApprove omitted keeps the rule’s current value; null clears it (the default: the requester may approve below high). With gatekeeperId the rule covers that Gatekeeper’s action kind; without it, the action kind on every Gatekeeper — such a workspace-wide rule can only require approval (autoApprove: true needs a gatekeeperId, R-20 / D-15). A gate rule wins over the workspace-wide one. The rule names a real Operation: on a gate it must be published there (404 otherwise — except that an existing rule for an Operation the gate no longer publishes may still be rewritten with autoApprove: false, as long as requesterCanApprove is not loosened: not newly set true, and not cleared to null when it is false); workspace-wide some gate must publish one of that name (400 otherwise). autoApprove: true on a gate allows one published definition: operationVersion is required and must be the version published now (409 version_changed when another is); a revision published later goes back through approval.',
   },
   {
     name: 'set_quota',
@@ -3698,11 +3728,14 @@ const modulesCapabilities = [
          *  current one and the latest is `breaking` (400 `module_confirm_required` otherwise, with
          *  the exact versions in `details`). */
         confirm: z.boolean().optional(),
+        /** Legacy 300: the version the owner was shown as the target (`latestVersion` of
+         *  `list_workspace_modules`) — 409 `version_changed` when the latest is another one. */
+        version: z.number().int().positive(),
       })
       .strict(),
     resultSchema: wire.WorkspaceModuleWireSchema,
     description:
-      'Install a module into this workspace — publishes its latest `OntologyDefinition` (the same mechanism `seed-domain-pack` uses) with this owner as `proposed_by`/`published_by`. Already installed → identical to `upgrade_module` (same underlying call, D3). An ObjectType or ActionType name another installed ontology family already declares refuses 409 ontology_namespace_conflict (I-P1).',
+      'Install a module into this workspace — publishes its latest `OntologyDefinition` (the same mechanism `seed-domain-pack` uses) with this owner as `proposed_by`/`published_by`. version is the latestVersion the owner was shown: when the latest indexed version is another one now (an upgrade shipped a newer index), 409 version_changed and nothing is published. Already installed → identical to `upgrade_module` (same underlying call, D3). An ObjectType or ActionType name another installed ontology family already declares refuses 409 ontology_namespace_conflict (I-P1).',
   },
   {
     name: 'upgrade_module',
@@ -3710,10 +3743,16 @@ const modulesCapabilities = [
     mode: 'write',
     channel: 'human',
     minRole: 'owner',
-    paramsSchema: z.object({ name: z.string().min(1), confirm: z.boolean().optional() }).strict(),
+    paramsSchema: z
+      .object({
+        name: z.string().min(1),
+        confirm: z.boolean().optional(),
+        version: z.number().int().positive(), // Legacy 300 — see install_module.
+      })
+      .strict(),
     resultSchema: wire.WorkspaceModuleWireSchema,
     description:
-      'Advance this workspace’s installed module directly to its latest indexed version (one publish, never stepping through intermediate versions). Not installed yet → identical to `install_module` (same underlying call, D3). Already at the latest content → a no-op returning the current state (never wastes a version number). An ObjectType or ActionType name another installed ontology family already declares refuses 409 ontology_namespace_conflict (I-P1).',
+      'Advance this workspace’s installed module directly to its latest indexed version (one publish, never stepping through intermediate versions). version is the latestVersion the owner was shown — 409 version_changed when the latest is another one now, nothing published. Not installed yet → identical to `install_module` (same underlying call, D3). Already at the latest content → a no-op returning the current state (never wastes a version number). An ObjectType or ActionType name another installed ontology family already declares refuses 409 ontology_namespace_conflict (I-P1).',
   },
 ] as const satisfies readonly Capability[];
 

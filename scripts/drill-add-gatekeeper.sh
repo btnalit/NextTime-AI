@@ -213,7 +213,7 @@ connection_flow_step() {
   pass "create-connection" "gatekeeperId=$GATEKEEPER_ID (imported stock.get from OpenAPI manifest)"
 
   # 3. publish_manifest — add-gatekeeper.md §7 step 4.
-  out=$(cap "$OWNER_KEY" publish_manifest "{\"gatekeeperId\":\"$GATEKEEPER_ID\"}" "")
+  out=$(publish_manifest_as_read "$OWNER_KEY" "$GATEKEEPER_ID")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "publish-manifest" "publish_manifest HTTP $status: $(parse_kv "$out" BODY)"
   pass "publish-manifest" "manifest published"

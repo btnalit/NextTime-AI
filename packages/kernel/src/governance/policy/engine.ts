@@ -63,6 +63,14 @@ export interface WorkspacePolicyInput {
   readonly autoApprove: boolean;
   /** `requester_can_approve` — `undefined`/`null` means "use the blast-radius default". */
   readonly requesterCanApprove?: boolean | null;
+  /**
+   * Legacy 218: whether a gate-scoped rule's `autoApprove: true` was given for the definition this
+   * request is made against (`policies.ts` `autoApproveConsent`). `false` turns that opt-in into
+   * "no opinion" — the compiled-in default applies, exactly as if the rule did not exist — because
+   * the person who allowed it never saw this definition. An opt-out (`autoApprove: false`) needs
+   * no consent and always applies. `undefined` (callers predating 218, unit tests) means `true`.
+   */
+  readonly allowsThisDefinition?: boolean;
 }
 
 export interface PolicyEvaluationInput {
@@ -144,6 +152,10 @@ export type PolicyEvaluationReason =
   | 'params_carry_suspected_credentials'
   | 'workspace_policy_disables_auto_approve'
   | 'no_workspace_policy_and_not_low_blast_radius'
+  // Legacy 218: a gate-scoped "always allow" exists, but for another definition of this Operation
+  // (a revision published since, or a blast radius raised in place) — or names none — so it does
+  // not apply and the compiled-in default required approval.
+  | 'auto_approve_rule_for_another_definition'
   // S3.13 / D-16: the requester's resolved autoApproveLow is false — the workspace AgentPolicy's
   // allowMemberAutoApproveLow is off (enforced for everyone) or the principal's own AgentProfile
   // says false — which narrows an otherwise-`allow` low-blast-radius outcome back to
@@ -158,13 +170,24 @@ function hasGatekeeperScope(scope: CapabilityScope, gatekeeperId: string): boole
 
 /**
  * A rule row's own say on auto-approval for this action_kind (I8 signal 2): `true` / `false` when
- * it opts in / out, `undefined` when it has none and the compiled-in default applies — no row, or
- * (R-20 / D-15) a workspace-wide row's `autoApprove: true`, see `WorkspacePolicyInput.scope`.
+ * it opts in / out, `undefined` when it has none and the compiled-in default applies — no row,
+ * (R-20 / D-15) a workspace-wide row's `autoApprove: true`, see `WorkspacePolicyInput.scope`, or
+ * (legacy 218) a gate-scoped opt-in given for another definition, see `allowsThisDefinition`.
  */
 function ruleAutoApprove(workspacePolicy: WorkspacePolicyInput | undefined): boolean | undefined {
   if (!workspacePolicy) return undefined;
   if (workspacePolicy.scope === 'workspace' && workspacePolicy.autoApprove) return undefined;
+  if (isOptInForAnotherDefinition(workspacePolicy)) return undefined;
   return workspacePolicy.autoApprove;
+}
+
+function isOptInForAnotherDefinition(workspacePolicy: WorkspacePolicyInput | undefined): boolean {
+  return (
+    workspacePolicy !== undefined &&
+    workspacePolicy.scope === 'gatekeeper' &&
+    workspacePolicy.autoApprove &&
+    workspacePolicy.allowsThisDefinition === false
+  );
 }
 
 /** I8/§5.8: `requester_can_approve` defaults `false` for `high`, `true` otherwise; a workspace row
@@ -234,7 +257,9 @@ export function evaluate(input: PolicyEvaluationInput): PolicyEvaluationResult {
     const reason: PolicyEvaluationReason =
       ruleOpinion === false
         ? 'workspace_policy_disables_auto_approve'
-        : 'no_workspace_policy_and_not_low_blast_radius';
+        : isOptInForAnotherDefinition(input.workspacePolicy)
+          ? 'auto_approve_rule_for_another_definition'
+          : 'no_workspace_policy_and_not_low_blast_radius';
     return { decision: 'require_approval', reason, requesterCanApprove };
   }
 

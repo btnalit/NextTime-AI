@@ -34,6 +34,7 @@ import {
   getPublishedOperation,
   importDraftDiffersFromAnnounced,
   importManifest,
+  listDraftOperationsForGatekeeper,
   listOperations,
   listPublishedOperationsForGatekeepers,
   operationGovernanceFieldsOf,
@@ -114,6 +115,15 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
 
   async function inTx<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
     return withWorkspace(pool, { workspaceId, principalId: ownerId }, fn);
+  }
+
+  /** `publish_manifest` by an owner who read this gate's drafts just before (review #493 on #592). */
+  async function publishAsRead(client: PoolClient, gk: string) {
+    const drafts = await listDraftOperationsForGatekeeper(client, workspaceId, gk);
+    return publishManifest(client, workspaceId, {
+      gatekeeperId: gk,
+      drafts: drafts.map((d) => ({ name: d.name, draftDigest: operationDraftDigest(d) })),
+    });
   }
 
   async function newActivity(): Promise<string> {
@@ -317,9 +327,7 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
         }),
       );
 
-      const published = await inTx((client) =>
-        publishManifest(client, workspaceId, { gatekeeperId }),
-      );
+      const published = await inTx((client) => publishAsRead(client, gatekeeperId));
       expect(published.publishedOperationNames).toContain(op.name);
       expect(published.skippedDraftOperationNames).not.toContain(op.name);
 
@@ -330,6 +338,49 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
       expect(record?.operation.mode).toBe('execute');
       expect(record?.operation.blast_radius).toBe('high');
       expect(record?.operation.auto_approvable).toBe(false);
+    });
+
+    it('publishManifest publishes only drafts as the caller read them; otherwise nothing (review #493 on #592)', async () => {
+      const first = testOperation({ name: `bulk.first.${randomUUID()}` });
+      const second = testOperation({ name: `bulk.second.${randomUUID()}` });
+      const act = await newActivity();
+      const importOps = (operations: Operation[]) =>
+        inTx((client) =>
+          importManifest(client, workspaceId, {
+            gatekeeperId,
+            operations,
+            proposedBy: { id: ownerId, kind: 'human' },
+            activityId: act,
+          }),
+        );
+      await importOps([first]);
+      const read = await inTx(async (client) =>
+        (await listDraftOperationsForGatekeeper(client, workspaceId, gatekeeperId)).map((d) => ({
+          name: d.name,
+          draftDigest: operationDraftDigest(d),
+        })),
+      );
+      const isDraft = async (name: string) =>
+        (await inTx((client) => getOperation(client, workspaceId, gatekeeperId, name)))?.status ===
+        'draft';
+
+      // The gate re-imports `first` with another description after it was read, and adds `second`.
+      await importOps([{ ...first, description: 'Rewritten after it was read.' }, second]);
+      await expect(
+        inTx((client) => publishManifest(client, workspaceId, { gatekeeperId, drafts: read })),
+      ).rejects.toMatchObject({ code: 'draft_changed' });
+      expect(await isDraft(first.name)).toBe(true);
+      expect(await isDraft(second.name)).toBe(true);
+
+      // Read again: only now are both published.
+      const published = await inTx((client) => publishAsRead(client, gatekeeperId));
+      expect(published.publishedOperationNames).toEqual(
+        expect.arrayContaining([first.name, second.name]),
+      );
+      const live = await inTx((client) =>
+        getPublishedOperation(client, workspaceId, gatekeeperId, first.name),
+      );
+      expect(live?.operation.description).toBe('Rewritten after it was read.');
     });
 
     it('S3.12: proposing over a published Operation opens a new revision draft (never demotes/rewrites the published row)', async () => {
@@ -348,7 +399,7 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
           activityId: act,
         }),
       );
-      await inTx((client) => publishManifest(client, workspaceId, { gatekeeperId }));
+      await inTx((client) => publishAsRead(client, gatekeeperId));
       const published = await inTx((client) =>
         getPublishedOperation(client, workspaceId, gatekeeperId, op.name),
       );
@@ -417,7 +468,7 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
           activityId: importAct,
         }),
       );
-      await inTx((client) => publishManifest(client, workspaceId, { gatekeeperId }));
+      await inTx((client) => publishAsRead(client, gatekeeperId));
       const published = await inTx((client) =>
         getPublishedOperation(client, workspaceId, gatekeeperId, op.name),
       );
@@ -493,7 +544,7 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
           activityId: importAct,
         }),
       );
-      await inTx((client) => publishManifest(client, workspaceId, { gatekeeperId }));
+      await inTx((client) => publishAsRead(client, gatekeeperId));
       const v1 = await inTx((client) =>
         getPublishedOperation(client, workspaceId, gatekeeperId, op.name),
       );
@@ -569,7 +620,7 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
           activityId: importAct,
         }),
       );
-      await inTx((client) => publishManifest(client, workspaceId, { gatekeeperId }));
+      await inTx((client) => publishAsRead(client, gatekeeperId));
 
       const reviseAct = await newActivity();
       await inTx((client) =>
@@ -609,7 +660,7 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
           activityId: importAct,
         }),
       );
-      await inTx((client) => publishManifest(client, workspaceId, { gatekeeperId }));
+      await inTx((client) => publishAsRead(client, gatekeeperId));
       const v1 = await inTx((client) =>
         getPublishedOperation(client, workspaceId, gatekeeperId, op.name),
       );
@@ -861,9 +912,7 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
         }),
       );
 
-      const publishResult = await inTx((client) =>
-        publishManifest(client, workspaceId, { gatekeeperId }),
-      );
+      const publishResult = await inTx((client) => publishAsRead(client, gatekeeperId));
       expect(publishResult.publishedOperationNames).toContain(publishedName);
       expect(publishResult.publishedOperationNames).not.toContain(agentDraftName);
       expect(publishResult.skippedDraftOperationNames).toContain(agentDraftName);
@@ -1627,7 +1676,7 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
           activityId: act,
         }),
       );
-      const result = await inTx((client) => publishManifest(client, workspaceId, { gatekeeperId }));
+      const result = await inTx((client) => publishAsRead(client, gatekeeperId));
       expect(result.publishedOperationNames).toContain(good.name);
       expect(result.publishedOperationNames).not.toContain(bad.name);
       expect(result.gateOwnedParamDrafts).toContainEqual({
@@ -1797,7 +1846,7 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
     it('discarding a revision draft leaves the published version live; the next proposal takes the version above the discarded one', async () => {
       const name = `discard.revision.${randomUUID()}`;
       await importDraft(name);
-      await inTx((client) => publishManifest(client, workspaceId, { gatekeeperId }));
+      await inTx((client) => publishAsRead(client, gatekeeperId));
       const live = await inTx((client) =>
         getPublishedOperation(client, workspaceId, gatekeeperId, name),
       );
@@ -1868,7 +1917,7 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
         (await inTx((client) => getOperation(client, workspaceId, gatekeeperId, name)))?.status,
       ).toBe('draft');
 
-      await inTx((client) => publishManifest(client, workspaceId, { gatekeeperId }));
+      await inTx((client) => publishAsRead(client, gatekeeperId));
       await expect(
         inTx((client) =>
           discardOperationDraft(client, workspaceId, {
@@ -1912,7 +1961,7 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
     it('an align over a discarded revision opens the next one above it', async () => {
       const name = `discard.align.${randomUUID()}`;
       await importDraft(name);
-      await inTx((client) => publishManifest(client, workspaceId, { gatekeeperId }));
+      await inTx((client) => publishAsRead(client, gatekeeperId));
       const changed = testOperation({
         name,
         params_schema: { type: 'object', properties: { sku: { type: 'string' } } },

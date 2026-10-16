@@ -33,6 +33,34 @@ function ready(items: readonly AvailableGateInstanceWire[]) {
 }
 
 describe('AvailableGateInstancesSection — a platform instance this workspace has not enabled', () => {
+  it('an instance that has announced no Operations yet is not offered 启用 — the row says why (409 gate_not_ready)', () => {
+    render(
+      <AvailableGateInstancesSection
+        http={{ call: vi.fn() } as unknown as CapabilityCaller}
+        available={ready([{ ...ROW, operationCount: 0 }])}
+        onEnabled={vi.fn()}
+        canEnable
+      />,
+    );
+    expect(screen.queryByTestId('enable-gate-ci-fixture-mcp')).toBeNull();
+    expect(screen.getByTestId('available-gate-not-ready-ci-fixture-mcp').textContent).toMatch(
+      /还没有声明任何 Operation/,
+    );
+  });
+
+  it('an instance with announced Operations still offers 启用 to an owner', () => {
+    render(
+      <AvailableGateInstancesSection
+        http={{ call: vi.fn() } as unknown as CapabilityCaller}
+        available={ready([ROW])}
+        onEnabled={vi.fn()}
+        canEnable
+      />,
+    );
+    expect(screen.getByTestId('enable-gate-ci-fixture-mcp')).toBeTruthy();
+    expect(screen.queryByTestId('available-gate-not-ready-ci-fixture-mcp')).toBeNull();
+  });
+
   it('a reader who may not enable it gets the request to send the owner, not a bare "owner enables" (242① class)', () => {
     render(
       <AvailableGateInstancesSection

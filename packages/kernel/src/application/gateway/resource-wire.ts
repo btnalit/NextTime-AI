@@ -2,7 +2,7 @@ import type { ChatRow } from '../../application/chat/index.js';
 import type { QuotaRow } from '../../application/task/index.js';
 import type { CapabilityGrantRow } from '../../governance/capability/index.js';
 import type { ConnectionRequestRow } from '../../governance/connections/index.js';
-import type { PolicyRow } from '../../governance/policy/index.js';
+import type { AutoApproveConsent, PolicyRow } from '../../governance/policy/index.js';
 import type { AuditRecordRow } from '../../substrate/audit/index.js';
 import type { SourceRow } from '../../substrate/epistemic/index.js';
 import type { Fact, GraphObject } from '../../substrate/graph/index.js';
@@ -112,7 +112,15 @@ export function toWireGrant(row: CapabilityGrantRow) {
   };
 }
 
-export function toWirePolicy(row: PolicyRow) {
+/** `inForce` (legacy 218): the version published on the rule's gate now, and whether an "always
+ *  allow" rule was given for it — computed by the handler, which reads the Operation. */
+export function toWirePolicy(
+  row: PolicyRow,
+  inForce: {
+    readonly publishedOperationVersion: number | null;
+    readonly autoApproveConsent: AutoApproveConsent;
+  },
+) {
   return {
     id: row.id,
     gatekeeperId: row.gatekeeperId,
@@ -123,6 +131,9 @@ export function toWirePolicy(row: PolicyRow) {
     setBy: row.setBy,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
+    operationVersion: row.operationVersion,
+    publishedOperationVersion: inForce.publishedOperationVersion,
+    autoApproveConsent: inForce.autoApproveConsent,
   };
 }
 

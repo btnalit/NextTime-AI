@@ -274,6 +274,10 @@ function AvailableGateRow({
   // that is here only because this workspace linked it earlier (platform `disabled` / `lost`)
   // shows its link but no button.
   const platformEnabled = row.status === 'enabled';
+  // The kernel refuses a workspace enable of an instance that has announced no Operations yet
+  // (`requireAvailable`'s 409 `gate_not_ready`: it would publish nothing and leave a useless link),
+  // so that row says so instead of offering the button.
+  const announcedOperations = row.operationCount > 0;
 
   return (
     <tr data-testid={`available-gate-${row.gateId}`}>
@@ -314,6 +318,13 @@ function AvailableGateRow({
         ) : !platformEnabled ? (
           <span className="muted" data-testid={`available-gate-not-enableable-${row.gateId}`}>
             {t('平台侧未启用', 'Not enabled on the platform')}
+          </span>
+        ) : !announcedOperations ? (
+          <span className="muted" data-testid={`available-gate-not-ready-${row.gateId}`}>
+            {t(
+              '还没有声明任何 Operation，暂不能启用：等门自注册后再来。',
+              'No Operations announced yet, so it cannot be enabled — come back once the gate announces.',
+            )}
           </span>
         ) : canEnable ? (
           <EnableGateConfirm

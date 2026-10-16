@@ -360,8 +360,10 @@ export function ProcedureEditor({
           can('publish_procedure') === false
             ? undefined
             : (review) =>
+                // Legacy 300: publishes exactly the version this screen proposed.
                 http.call<{ status: string }>('publish_procedure', {
                   procedureId: proposed.id,
+                  version: proposed.version,
                   ...review,
                 })
         }

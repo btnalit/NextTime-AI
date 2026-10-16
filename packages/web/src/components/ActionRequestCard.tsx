@@ -6,6 +6,11 @@ import {
   FALLBACK_BLAST_RADIUS,
   isDecidable,
 } from '../lib/action-card.js';
+import {
+  alwaysAllowOffer,
+  alwaysAllowStaleRequestText,
+  alwaysAllowUnpublishedText,
+} from '../lib/always-allow.js';
 import { credentialReviewCount } from '../lib/credential-review.js';
 import { prettyJson, redactSensitive } from '../lib/format.js';
 import { useT } from '../lib/i18n.js';
@@ -41,6 +46,10 @@ export interface ActionRequestCardProps {
    *  card shows the request and its progress, says who decides, and offers no button the kernel
    *  must refuse (#541 review M3). */
   readonly canDecide: boolean;
+  /** The reader's own principal, when known: a request made on their behalf that may not be
+   *  self-decided (`card.requesterCanApprove === false`) gets no decision buttons — the kernel
+   *  refuses approve and reject alike (decide.ts `SelfApprovalNotAllowedError`). */
+  readonly callerPrincipalId?: string | null;
 }
 
 /**
@@ -63,6 +72,7 @@ export function ActionRequestCard({
   onReject,
   canAlwaysAllow,
   canDecide,
+  callerPrincipalId,
 }: ActionRequestCardProps) {
   const t = useT();
   const canOpen = useCanOpen();
@@ -96,9 +106,24 @@ export function ActionRequestCard({
   const decidable = isDecidable(card.status);
   const blocking = card.awaitDecision && decidable;
   const blastRadius = card.blastRadius ?? FALLBACK_BLAST_RADIUS;
+  // Dead-end sweep of #592: the requester's own request, when the policy forbids self-decision.
+  const ownRequestLocked =
+    decidable &&
+    card.requesterCanApprove === false &&
+    callerPrincipalId !== undefined &&
+    callerPrincipalId !== null &&
+    card.onBehalfOf === callerPrincipalId;
+  const mayDecide = canDecide && !ownRequestLocked;
   // Kernel I8: a `high` blast radius can never be auto-approved — no rule to offer. R-20 / D-15:
   // the rule is keyed by (gate, action kind), so a card whose gate is not known offers none.
-  const offerAlwaysAllow = canAlwaysAllow && blastRadius !== 'high' && card.gatekeeperId !== '';
+  // Legacy 218 (UX acceptance of #592): only on a request read as made under the definition
+  // published now (`lib/always-allow`) — the kernel writes no rule otherwise, and a card from a
+  // chat message carries no such read until the chat fetches its row.
+  const alwaysAllowPossible =
+    canAlwaysAllow && mayDecide && blastRadius !== 'high' && card.gatekeeperId !== '';
+  const alwaysAllow = alwaysAllowOffer(card.publishedDefinition);
+  const offerAlwaysAllow = alwaysAllowPossible && alwaysAllow.offer;
+  const alwaysAllowBlock = alwaysAllowPossible ? alwaysAllow.block : null;
   const hasParams = card.params !== undefined && Object.keys(card.params).length > 0;
   // Decision 2026-10-09 "二次确认": the kernel's count, from the card's own content, else from its
   // 400 on an approve (a card written before the count existed carries none). Either way the card
@@ -123,15 +148,31 @@ export function ActionRequestCard({
           ? hrefs.approval(card.actionRequestId)
           : undefined
       }
-      readOnly={!decidable || !canDecide}
+      readOnly={!decidable || !mayDecide}
       suspectedSecretValues={suspectedSecretValues}
       onApprove={(reason) => onApprove(card.actionRequestId, { reason, alwaysAllow: false })}
       onReject={(reason) => onReject(card.actionRequestId, reason)}
-      onAlwaysAllow={
-        offerAlwaysAllow && canDecide ? (reason) => setPendingAlwaysAllow({ reason }) : undefined
-      }
+      onAlwaysAllow={offerAlwaysAllow ? (reason) => setPendingAlwaysAllow({ reason }) : undefined}
       testId="action-request-card"
     >
+      {ownRequestLocked && canDecide ? (
+        <Notice testId="action-card-own-request">
+          {t(
+            '这条请求是代表你发起的，策略不允许发起人自己批准或拒绝（高影响的动作默认如此）：要由另一位有审批权的人决定。',
+            'This request was made on your behalf, and the policy does not let the requester approve or reject it (the default for high-impact actions): someone else with approval rights decides.',
+          )}
+        </Notice>
+      ) : null}
+      {alwaysAllowBlock === 'stale' && card.publishedDefinition?.version != null ? (
+        <p className="field-hint" data-testid="action-card-always-allow-stale">
+          {alwaysAllowStaleRequestText(t, card.publishedDefinition.version)}
+        </p>
+      ) : null}
+      {alwaysAllowBlock === 'unpublished' ? (
+        <p className="field-hint" data-testid="action-card-always-allow-unpublished">
+          {alwaysAllowUnpublishedText(t, card.actionKindTag)}
+        </p>
+      ) : null}
       {decidable && !canDecide ? (
         <Notice testId="action-card-awaits-approver">
           {t(
@@ -188,13 +229,13 @@ export function ActionRequestCard({
           `Approve and always allow ${card.actionKindTag}`,
         )}
         description={t(
-          `批准这次请求，并写入一条自动批准规则：今后此门上的 ${card.actionKindTag} 不论谁发起都直接执行，不再进入审批。其他门上的同名动作不受影响；规则可在「模型与配额 → 策略」中关闭。`,
-          `Approves this request and writes an auto-approval rule: from now on ${card.actionKindTag} on this gate runs without approval for every requester. The same name on other gates is not affected; turn the rule off under Models & Quotas → Policies.`,
+          `批准这次请求，并写入一条自动批准规则：今后此门上的 ${card.actionKindTag} 不论谁发起都直接执行，不再进入审批。规则只对这次请求所依据的定义有效：以后发布新版本会重新走审批；如果这之后门上已经发布了新版本，规则不会写入。其他门上的同名动作不受影响；规则可在「模型与配额 → 策略」中关闭。`,
+          `Approves this request and writes an auto-approval rule: from now on ${card.actionKindTag} on this gate runs without approval for every requester. The rule covers only the definition this request was made under: a later version goes back through approval, and if one has been published since, no rule is written. The same name on other gates is not affected; turn the rule off under Models & Quotas → Policies.`,
         )}
         target={card.actionKindTag}
         impact={[
           `${t('门', 'Gatekeeper')}: ${card.gatekeeperId}`,
-          `${t('规则范围', 'Rule scope')}: ${t('此门 · 所有发起人 · 今后', 'this gate · every requester · from now on')}`,
+          `${t('规则范围', 'Rule scope')}: ${t('此门 · 所有发起人 · 今后 · 只对这次请求的定义', 'this gate · every requester · from now on · this request’s definition only')}`,
         ]}
         confirmLabel={t('批准并总是允许', 'Approve and always allow')}
         danger

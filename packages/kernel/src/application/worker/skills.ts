@@ -9,7 +9,11 @@ import {
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { stringify as stringifyYaml } from 'yaml';
-import { type PublishActor, assertPublishAuthority } from '../../governance/capability/index.js';
+import {
+  type PublishActor,
+  assertPublishAuthority,
+  assertReviewedVersion,
+} from '../../governance/capability/index.js';
 import { assertDraftCredentialsReviewed } from '../../governance/redaction/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
@@ -210,9 +214,10 @@ export async function proposeSkill(
 }
 
 // -------------------------------------------------------------------------------------------
-// publish / deprecate — resolve to the *latest* version under `skillId` (the registered
-// `publish_skill`/`deprecate_skill` capabilities take `{skillId}` alone, no `version` —
-// packages/shared/src/capabilities.ts).
+// publish / deprecate — resolve to the *latest* version under `skillId`. `publish_skill` also
+// names the version its caller reviewed (legacy 300, `PublishActor.reviewedVersion`) and refuses
+// when the latest is another one; `deprecate_skill` takes `{skillId}` alone —
+// packages/shared/src/capabilities.ts.
 // -------------------------------------------------------------------------------------------
 
 async function getLatestForUpdate(
@@ -283,6 +288,8 @@ export async function publishSkill(
 ): Promise<SkillRow> {
   const row = await getLatestForUpdate(client, workspaceId, skillId);
   requireSkillAuthority('publish_skill', actor, row);
+  // Legacy 300: publish what the person reviewed — a newer version under this id since refuses.
+  assertReviewedVersion('publish_skill', `Skill ${row.id}`, actor?.reviewedVersion, row.version);
   transition(PUBLISHABLE_TRANSITIONS, row.status, 'publish');
   await assertFamilyPublishAuthority(client, workspaceId, {
     table: 'skills',

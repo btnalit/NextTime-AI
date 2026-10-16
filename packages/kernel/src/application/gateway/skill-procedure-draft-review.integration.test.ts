@@ -204,6 +204,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
         const published = await call<{ status: string }>(ownerId, 'owner', 'publish_skill', {
           skillId,
+          version: 1,
         });
         expect(published.status).toBe('published');
         expect(await listedSkill(otherMemberId, 'member', skillId)).toMatchObject({
@@ -223,9 +224,9 @@ describe.runIf(DATABASE_URL !== undefined)(
         const skillId = await workerProposedSkillOfMember();
 
         expect(await listedSkill(memberId, 'member', skillId)).toMatchObject({ status: 'draft' });
-        await expect(call(memberId, 'member', 'publish_skill', { skillId })).rejects.toBeInstanceOf(
-          ForbiddenError,
-        );
+        await expect(
+          call(memberId, 'member', 'publish_skill', { skillId, version: 1 }),
+        ).rejects.toBeInstanceOf(ForbiddenError);
       });
 
       it('a builder sees it but cannot publish it (403 not_proposer), and it stays a draft', async () => {
@@ -235,7 +236,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           status: 'draft',
           proposedBy: memberId,
         });
-        const refusal = call(builderId, 'builder', 'publish_skill', { skillId });
+        const refusal = call(builderId, 'builder', 'publish_skill', { skillId, version: 1 });
         await expect(refusal).rejects.toBeInstanceOf(NotProposerError);
         await expect(refusal).rejects.toMatchObject({ code: 'not_proposer' });
         expect(await listedSkill(ownerId, 'owner', skillId)).toMatchObject({ status: 'draft' });
@@ -297,6 +298,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         });
         const published = await call<{ status: string }>(ownerId, 'owner', 'publish_procedure', {
           procedureId,
+          version: 1,
         });
         expect(published.status).toBe('published');
         expect(await listedProcedure(memberId, 'member', procedureId)).toMatchObject({
@@ -325,7 +327,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           proposedBy: builderId,
         });
         await expect(
-          call(otherBuilderId, 'builder', 'publish_procedure', { procedureId }),
+          call(otherBuilderId, 'builder', 'publish_procedure', { procedureId, version: 1 }),
         ).rejects.toBeInstanceOf(NotProposerError);
         expect(await listedProcedure(builderId, 'builder', procedureId)).toMatchObject({
           status: 'draft',

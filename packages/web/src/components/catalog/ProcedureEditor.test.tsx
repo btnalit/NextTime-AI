@@ -163,7 +163,7 @@ describe('ProcedureEditor (S6-A A2)', () => {
     await waitFor(() =>
       expect(calls.at(-1)).toEqual({
         name: 'publish_procedure',
-        params: { procedureId: 'pr-1' },
+        params: { procedureId: 'pr-1', version: 1 },
       }),
     );
   });

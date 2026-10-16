@@ -495,6 +495,20 @@ describe('ConnectSystemLauncher — hosted path from the workspace page (non-adm
     expect(ids.every((element) => element.hasAttribute('data-volatile'))).toBe(true);
   });
 
+  it('a gate that has announced no Operations yet is not offered 在本工作区启用 — the step says why (409 gate_not_ready)', async () => {
+    const row = availableRow({ operationCount: 0 });
+    const http = scriptedHttp({ list_available_gate_instances: () => ({ items: [row] }) });
+    renderLauncher({ http, origin: 'workspace', canEnable: true, available: [row] });
+    fireEvent.click(screen.getByTestId('launcher-kind-mcp'));
+    next();
+    fireEvent.click(await screen.findByTestId('launcher-gate-docker-prod'));
+    next();
+    expect(screen.getByTestId('launcher-workspace-enable-not-ready').textContent).toMatch(
+      /还没有声明任何 Operation/,
+    );
+    expect(screen.queryByTestId('launcher-workspace-enable-button')).toBeNull();
+  });
+
   it('a workspace member who is not an owner sees the owner-only notice instead of the enable button', async () => {
     const http = scriptedHttp({
       list_available_gate_instances: () => ({ items: [availableRow()] }),

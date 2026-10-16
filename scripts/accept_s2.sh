@@ -432,7 +432,7 @@ connections_step() {
   [ -n "$GATEKEEPER_ID_SSH" ] || fail "connect-ssh-create" "no gatekeeperId in response: $(parse_kv "$out" BODY)"
   pass "connect-ssh-create" "gatekeeperId=$GATEKEEPER_ID_SSH"
 
-  out=$(cap "$ALICE_KEY" publish_manifest "{\"gatekeeperId\":\"$GATEKEEPER_ID_SSH\"}" "")
+  out=$(publish_manifest_as_read "$ALICE_KEY" "$GATEKEEPER_ID_SSH")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "connect-ssh-publish" "publish_manifest(ssh) HTTP $status: $(parse_kv "$out" BODY)"
   pass "connect-ssh-publish" "ssh manifest published"
@@ -468,7 +468,7 @@ connections_step() {
   [ "$pre_count" = "0" ] || fail "s213-find-operations-pre-publish" "find_operations('stock') returned $pre_count results before publish_manifest — draft manifest is visible (I16/I17 violation)"
   pass "s213-find-operations-pre-publish" "find_operations('stock') misses before publish_manifest, as required"
 
-  out=$(cap "$ALICE_KEY" publish_manifest "{\"gatekeeperId\":\"$GATEKEEPER_ID_HTTP\"}" "")
+  out=$(publish_manifest_as_read "$ALICE_KEY" "$GATEKEEPER_ID_HTTP")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "connect-http-publish" "publish_manifest(http) HTTP $status: $(parse_kv "$out" BODY)"
   pass "connect-http-publish" "http manifest published"
@@ -900,8 +900,9 @@ step4_step5_ssh_always_allow() {
   [ "$executed" = "1" ] || fail "step4-executed-1" "ActionRequest $AR_ID_SSH1 did not reach executed within 30s (last: $ar_status)"
   pass "step4-executed-1" "first ssh run executed"
 
-  # --- "always allow this kind" (R-20 / D-15: keyed by gate + action kind) ---
-  out=$(cap "$ALICE_KEY" set_auto_approved_action_kind "{\"gatekeeperId\":\"$GATEKEEPER_ID_SSH\",\"actionKindTag\":\"ssh.run_command\"}" "")
+  # --- "always allow this kind" (R-20 / D-15: keyed by gate + action kind; legacy 218: ticked on
+  # the request just approved, it allows that request's definition only) ---
+  out=$(cap "$ALICE_KEY" set_auto_approved_action_kind "{\"gatekeeperId\":\"$GATEKEEPER_ID_SSH\",\"actionKindTag\":\"ssh.run_command\",\"actionRequestId\":\"$AR_ID_SSH1\"}" "")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "step4-always-allow" "set_auto_approved_action_kind HTTP $status: $(parse_kv "$out" BODY)"
   pass "step4-always-allow" "gate policy: ssh.run_command on the ssh gate auto-approved from now on"
@@ -1133,7 +1134,7 @@ step8_mcp_connect() {
   [ "$pre_count" = "0" ] || fail "connect-mcp-find-operations-pre-publish" "find_operations('accept_s2_mcp') returned $pre_count of its own accept_s2_mcp_* operations before publish_manifest — draft manifest is visible (I16/I17 violation)"
   pass "connect-mcp-find-operations-pre-publish" "find_operations('accept_s2_mcp') misses before publish_manifest, as required"
 
-  out=$(cap "$ALICE_KEY" publish_manifest "{\"gatekeeperId\":\"$GATEKEEPER_ID_MCP\"}" "")
+  out=$(publish_manifest_as_read "$ALICE_KEY" "$GATEKEEPER_ID_MCP")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "connect-mcp-publish" "publish_manifest(mcp) HTTP $status: $(parse_kv "$out" BODY)"
   pass "connect-mcp-publish" "mcp manifest published"
@@ -1664,7 +1665,10 @@ real_scenarios_step() {
     [ -z "$DENY_OPEN_TASKS" ] || echo "NOTE deny Tasks not terminal before always-allow:$DENY_OPEN_TASKS"
   fi
 
-  out=$(cap "$ALICE_KEY" set_auto_approved_action_kind "{\"gatekeeperId\":\"$GATEKEEPER_ID_SSH\",\"actionKindTag\":\"ssh.run_command\"}" "")
+  # Legacy 218: "always allow" is ticked on a request — the latest one approved above.
+  approved_ar=$(psql_ws "select id from action_requests where workspace_id='$WORKSPACE_ID' and gatekeeper_id='$GATEKEEPER_ID_SSH' and action_kind='ssh.run_command' and status in ('approved','executing','executed','failed') order by requested_at desc limit 1")
+  [ -n "$approved_ar" ] || fail "real-always-allow" "no approved ssh.run_command ActionRequest to tick \"always allow\" on"
+  out=$(cap "$ALICE_KEY" set_auto_approved_action_kind "{\"gatekeeperId\":\"$GATEKEEPER_ID_SSH\",\"actionKindTag\":\"ssh.run_command\",\"actionRequestId\":\"$approved_ar\"}" "")
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "real-always-allow" "set_auto_approved_action_kind HTTP $status: $(parse_kv "$out" BODY)"
   pass "real-always-allow" "gate policy: ssh.run_command on the ssh gate auto-approved from now on"

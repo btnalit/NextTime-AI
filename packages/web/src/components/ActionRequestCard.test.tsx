@@ -38,6 +38,7 @@ function baseCard(overrides: Partial<ActionCardData> = {}): ActionCardData {
     requestedAt: undefined,
     executedAt: undefined,
     failedAt: undefined,
+    publishedDefinition: { version: 2, requestIsCurrent: true },
     ...overrides,
   };
 }
@@ -56,6 +57,37 @@ function renderCard(overrides: Partial<ActionRequestCardProps> = {}) {
 }
 
 describe('ActionRequestCard', () => {
+  it('no published version: no "总是允许", and the card says why (UX acceptance of #592)', () => {
+    renderCard({
+      card: baseCard({ publishedDefinition: { version: null, requestIsCurrent: false } }),
+    });
+    expect(screen.queryByRole('button', { name: /总是允许/ })).toBeNull();
+    expect(screen.getByTestId('action-card-always-allow-unpublished').textContent).toMatch(/草稿/);
+  });
+
+  it('a request made under an older definition: no "总是允许", and the card names the version', () => {
+    renderCard({
+      card: baseCard({ publishedDefinition: { version: 3, requestIsCurrent: false } }),
+    });
+    expect(screen.queryByRole('button', { name: /总是允许/ })).toBeNull();
+    expect(screen.getByTestId('action-card-always-allow-stale').textContent).toMatch(/v3/);
+  });
+
+  it('nothing read about the definition yet: no "总是允许", decisions stay', () => {
+    renderCard({ card: baseCard({ publishedDefinition: undefined }) });
+    expect(screen.queryByRole('button', { name: /总是允许/ })).toBeNull();
+    expect(screen.getByRole('button', { name: /批准/ })).toBeTruthy();
+  });
+
+  it('the reader’s own request that may not be self-decided: no decision buttons, says who decides', () => {
+    renderCard({
+      card: baseCard({ onBehalfOf: 'me', requesterCanApprove: false }),
+      callerPrincipalId: 'me',
+    });
+    expect(screen.queryByRole('button', { name: /批准|拒绝|总是允许/ })).toBeNull();
+    expect(screen.getByTestId('action-card-own-request').textContent).toMatch(/另一位有审批权的人/);
+  });
+
   it('renders the shared card — kind, target, blast radius, description, decision buttons and the approvals link — for a holder-pending card', () => {
     renderCard();
     expect(screen.getByTestId('action-request-card')).toBeTruthy();
