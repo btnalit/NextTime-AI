@@ -1197,6 +1197,21 @@ v0.47.0、v0.48.0 不单独上主机（#554 不在 v0.47.0 里，遗留 259 的�
 
 **回滚**（§5）：回滚目标是 v0.46.0，按 §3.25 与 §3.26 的回滚说明；不需要排空 Worker。
 
+窗口目标改到 v0.49.0 之后的发版时（维护者 2026-10-16 决定窗口暂缓，开窗口时目标改为当时最新的发版），本清单按新目标刷新，并加上之后各版的小节，至少 §3.28（#589 升钉：`postgres` 与 `backup` 重建、不执行 `ALTER EXTENSION`、应用后只读核对 `vector` 扩展版本）。
+
+### 3.28 第三方镜像升钉：pgvector、node、postgres（#589，v0.49.0 之后的下一版起）
+
+无迁移。按 issue #587（`image-pins` 每周比对，遗留 181）把三个钉值移到上游 tag 当前 digest：pgvector（主库 `postgres` 服务）
+PostgreSQL 仍是 17.11，扩展 0.8.6 → 0.8.7；postgres（`backup` 服务与 `restore.sh` 的 dry-run 工具镜像）仍是 17.11，只是 Alpine 包重建；
+node 24.21.0 → 24.22.0，只影响平台镜像的构建，随发版重建，没有主机步骤。没有大版本或数据格式变化，不需要 `pg_upgrade` 或 dump/restore。
+
+- **应用**：镜像引用变了，`up -d` 会重建 `postgres` 与 `backup` 容器（数据卷不动，`postgres` 停几秒，`apply-release.sh` 在 `up` 之前已做 dump），属预期。
+- **pgvector 不需要 `ALTER EXTENSION`**：换镜像后新的 0.8.7 共享库直接加载库里登记为 0.8.6 的扩展，照常可用；上游 `vector--0.8.6--0.8.7.sql` 只有 `COMMENT ON`。
+  **不要执行 `ALTER EXTENSION vector UPDATE`**；如果执行过（登记版本变成 0.8.7），就**不能再回滚到旧镜像**：旧镜像没有 0.8.7 的控制文件，扩展相关的 SQL 会报版本不存在。
+- **应用后只读核对**：`select extversion from pg_extension where extname = 'vector';`（不执行 `ALTER EXTENSION` 时应仍是 `0.8.6`），结果记 `docs/private/`。
+- **回滚**：旧 tag 按旧 digest 引用 GHCR 副本，旧版本仍在包里（§3.19：不删 `nexttime-mirror-*` 的旧包版本），`up -d` 再重建一次即可；前提是没有执行过 `ALTER EXTENSION`（见上）。
+  §3.19 回滚命令里的 postgres digest（`18cfe3ef…`）是升钉前的旧值，**保留不改**：回滚到 v0.44.0 及更早时给旧版 `restore.sh` 补本地 tag 要用它。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
