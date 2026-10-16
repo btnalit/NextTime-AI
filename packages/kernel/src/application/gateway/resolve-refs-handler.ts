@@ -2,6 +2,7 @@ import { GATEKEEPER_GRANT_CAPABILITY } from '../../governance/capability/index.j
 import { SqlGraphStore, objectDisplayName } from '../../substrate/graph/index.js';
 import type { CapabilityHandler } from './capability-handler.js';
 import { graphReadViewerOf } from './draft-viewer.js';
+import { displayedObject } from './resource-wire.js';
 
 /**
  * application/gateway/resolve-refs-handler: `resolve_refs` (S8 W1-C, leftover 48 "无批量 Object
@@ -109,7 +110,7 @@ export const resolveRefsHandler: CapabilityHandler = async (client, workspaceId,
     resolved.push({
       id: object.id,
       kind,
-      name: objectDisplayName(object),
+      name: objectDisplayName(displayedObject(object)),
       typeName: object.objectType,
     });
   }

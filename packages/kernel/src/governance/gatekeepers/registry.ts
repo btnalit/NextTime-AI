@@ -7,7 +7,10 @@ import {
   setGatekeeperConnectionSecretSaltObject,
 } from '../../substrate/ontology/index.js';
 // The rule module itself, not `../connections/index.js`: `connections/service.ts` calls this module.
-import { assertConnectionParamsCarryNoCredentials } from '../connections/credentials.js';
+import {
+  assertConnectionParamsCarryNoCredentials,
+  redactConnectionAddress,
+} from '../connections/credentials.js';
 
 /**
  * governance/gatekeepers/registry: Gatekeeper instance registration + lookup (design doc §5.1.4
@@ -136,8 +139,19 @@ export async function findGatekeeperIdByConnectionSecretSalt(
   return result.rows[0]?.id ?? null;
 }
 
+/** A Gatekeeper's name as every reader of this module gets it (#620, review #493 P2): a self-
+ *  connected gate is named after the target its owner typed (application/gates/landing.ts), so a
+ *  name written before legacy 186 can carry the credential its address did — shown through
+ *  `redactConnectionAddress`, the rule for every gate address someone reads. A name is a label:
+ *  no gate is called and no row is found by it, so no reader needs the stored text. The stored
+ *  value is untouched until the scrub rewrites it. */
+function displayedGatekeeperName(name: string | undefined, gatekeeperId: string): string {
+  return name === undefined ? gatekeeperId : redactConnectionAddress('target', name);
+}
+
 export interface GatekeeperRecord {
   readonly gatekeeperId: string;
+  /** `displayedGatekeeperName`'s: redacted, never the stored text. */
   readonly name: string;
   readonly transportKind: 'http' | 'mcp' | 'cli' | 'ssh';
   readonly target: string;
@@ -169,7 +183,7 @@ export async function getGatekeeper(
   if (!props.transportKind || !props.target || !props.endpoint) return null;
   return {
     gatekeeperId: object.id,
-    name: props.name ?? object.id,
+    name: displayedGatekeeperName(props.name, object.id),
     transportKind: props.transportKind as GatekeeperRecord['transportKind'],
     target: props.target,
     endpoint: props.endpoint,
@@ -204,6 +218,7 @@ export class GatekeeperNotFoundError extends Error {
 
 export interface GatekeeperListEntry {
   readonly gatekeeperId: string;
+  /** Redacted, as `GatekeeperRecord.name`. */
   readonly name: string;
   readonly transportKind: 'http' | 'mcp' | 'cli' | 'ssh';
   readonly endpoint: string | null;
@@ -239,7 +254,7 @@ export async function listGatekeepers(
     };
     return {
       gatekeeperId: row.id,
-      name: props.name ?? row.id,
+      name: displayedGatekeeperName(props.name, row.id),
       transportKind: (props.transportKind as GatekeeperListEntry['transportKind']) ?? 'http',
       endpoint: props.endpoint ?? null,
       createdAt: row.created_at,
@@ -274,6 +289,7 @@ export async function countGatekeepers(client: PoolClient, workspaceId: string):
 
 export interface GatekeeperByEndpointEntry {
   readonly gatekeeperId: string;
+  /** Redacted, as `GatekeeperRecord.name`. */
   readonly name: string;
   readonly target: string;
   readonly transportKind: 'http' | 'mcp' | 'cli' | 'ssh';
@@ -391,7 +407,7 @@ export async function findGatekeepersByEndpoint(
     if (!props.endpoint || normalizeGateEndpoint(props.endpoint) !== target) continue;
     matches.push({
       gatekeeperId: row.id,
-      name: props.name ?? row.id,
+      name: displayedGatekeeperName(props.name, row.id),
       target: props.target ?? '',
       transportKind: (props.transportKind as GatekeeperByEndpointEntry['transportKind']) ?? 'http',
       endpoint: props.endpoint,

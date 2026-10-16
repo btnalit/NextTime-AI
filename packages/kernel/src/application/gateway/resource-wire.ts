@@ -2,6 +2,7 @@ import type { ChatRow } from '../../application/chat/index.js';
 import type { QuotaRow } from '../../application/task/index.js';
 import type { CapabilityGrantRow } from '../../governance/capability/index.js';
 import {
+  type ConnectionCredentialField,
   type ConnectionRequestRow,
   redactConnectionAddress,
 } from '../../governance/connections/index.js';
@@ -36,36 +37,65 @@ import type { Fact, GraphObject } from '../../substrate/graph/index.js';
  * object (`packages/shared/src/wire/governance.ts`'s `PolicyWireSchema` has the fuller note).
  */
 
-/** The address properties of the Object types the kernel writes for a connection: where a gate is
- *  reached. Every read shows them through `redactConnectionAddress` (#620 review M2), the rule
- *  every other display of a gate address uses — one written before legacy 186 can still carry a
- *  credential (`scrub-raw-secrets` counts it for its owner, `gatekeeperAddresses`). The stored
- *  value is untouched: the gate is called at it. */
-const ADDRESS_PROPERTIES: Readonly<Record<string, readonly ('target' | 'endpoint')[]>> = {
-  Gatekeeper: ['target', 'endpoint'],
-  ConnectedSystem: ['target'],
+/** The Object types the kernel writes for a connection, and which of their fields every read
+ *  shows through `redactConnectionAddress` (by the rule of the field named): the addresses — where
+ *  a gate is reached (#620 review M2) — and the names, since a self-connected gate and its system
+ *  are named after the target its owner typed (application/gates/landing.ts, review #493 P2). One
+ *  written before legacy 186 can still carry a credential (`scrub-raw-secrets` counts it for its
+ *  owner, `gatekeeperAddresses`). The stored value is untouched: the gate is called at it. */
+const CONNECTION_OBJECT_FIELDS: Readonly<
+  Record<
+    string,
+    {
+      readonly properties: Readonly<Record<string, ConnectionCredentialField>>;
+      readonly identityKey: Readonly<Record<string, ConnectionCredentialField>>;
+    }
+  >
+> = {
+  Gatekeeper: {
+    properties: { target: 'target', endpoint: 'endpoint', name: 'target' },
+    identityKey: {},
+  },
+  ConnectedSystem: {
+    properties: { target: 'target', name: 'target' },
+    identityKey: { name: 'target' },
+  },
 };
 
-function displayedProperties(object: GraphObject): GraphObject['properties'] {
-  const fields = ADDRESS_PROPERTIES[object.objectType];
-  if (!fields) return object.properties;
-  const shown: Record<string, unknown> = { ...object.properties };
-  for (const field of fields) {
+function redactedFields<T extends Record<string, unknown>>(
+  values: T,
+  fields: Readonly<Record<string, ConnectionCredentialField>>,
+): T {
+  const shown: Record<string, unknown> = { ...values };
+  for (const [field, rule] of Object.entries(fields)) {
     const value = shown[field];
-    if (typeof value === 'string') shown[field] = redactConnectionAddress(field, value);
+    if (typeof value === 'string') shown[field] = redactConnectionAddress(rule, value);
   }
-  return shown;
+  return shown as T;
+}
+
+/** `object` as every read shows it — `toWireObject`, and the display names `traverse`,
+ *  `list_facts` and `resolve_refs` derive from it (`objectDisplayName`). */
+export function displayedObject(object: GraphObject): GraphObject {
+  const fields = CONNECTION_OBJECT_FIELDS[object.objectType];
+  if (!fields) return object;
+  return {
+    ...object,
+    identityKey: object.identityKey && redactedFields(object.identityKey, fields.identityKey),
+    properties: redactedFields(object.properties, fields.properties),
+  };
 }
 
 export function toWireObject(object: GraphObject) {
+  const shown = displayedObject(object);
   return {
-    id: object.id,
-    objectType: object.objectType,
-    identityKey: object.identityKey,
-    properties: displayedProperties(object),
-    createdAt: object.createdAt.toISOString(),
-    updatedAt: object.updatedAt.toISOString(),
-    lastObservedAt: object.lastObservedAt ? object.lastObservedAt.toISOString() : null,
+    id: shown.id,
+    objectType: shown.objectType,
+    identityKey: shown.identityKey,
+    properties: shown.properties,
+    createdAt: shown.createdAt.toISOString(),
+    updatedAt: shown.updatedAt.toISOString(),
+    lastObservedAt: shown.lastObservedAt ? shown.lastObservedAt.toISOString() : null,
   };
 }
 

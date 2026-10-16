@@ -97,6 +97,7 @@ import {
   setConnectionHandlerDeps,
 } from './connection-handlers.js';
 import { dispatchCapability } from './dispatch.js';
+import { listGraphNodesForExplorer } from './explorer-read-service.js';
 import { GateInstanceNotAvailableError } from './gate-instance-handlers.js';
 import { PrincipalOperationRefusedError } from './members-handlers.js';
 import { PlatformAdminError } from './platform-handlers.js';
@@ -2992,6 +2993,115 @@ describe.runIf(DATABASE_URL !== undefined)(
           } finally {
             await pool.query('delete from gate_instances where gate_id = $1', [gateId]);
           }
+        });
+
+        it('a self-connected gate named after an address written before legacy 186 shows that name redacted on every read (#620, review #493 P2)', async () => {
+          const other = await createWorkspaceWithOwner(pool, {
+            name: 'p0b-name-displays',
+            owner: { userId: admin.id, displayName: 'Name Owner' },
+            ontologyDir: ONTOLOGY_DIR,
+          });
+          const ownerCaller = humanCallerFor(other.workspaceId, other.ownerPrincipalId, 'owner');
+          const call = <T>(capability: string, params: Record<string, unknown>) =>
+            dispatchCapability({ pool }, ownerCaller, capability, params) as Promise<T>;
+          const fake = 'abcdefghijklmnopqrstuvwxyz0123';
+          const host = `named-${randomUUID().slice(0, 8)}.example.invalid`;
+          const carrying = `https://ops:${fake}@${host}/inventory?token=${fake}`;
+          const shown = `https://${host}/inventory`;
+
+          // The landing names the Gatekeeper and its ConnectedSystem after the target the owner
+          // typed; before legacy 186 that target could carry a credential.
+          const gatekeeperId = await landSelf(
+            other.workspaceId,
+            other.ownerPrincipalId,
+            `https://${host}/gate`,
+            selfSecrets.mint(other.workspaceId).salt,
+          );
+          await pool.query(
+            `update objects set properties = properties || jsonb_build_object('name', $3::text, 'target', $3::text)
+              where workspace_id = $1 and id = $2`,
+            [other.workspaceId, gatekeeperId, carrying],
+          );
+          const system = await pool.query<{ id: string }>(
+            `update objects
+                set identity_key = jsonb_build_object('name', $2::text),
+                    properties = properties || jsonb_build_object('target', $2::text)
+              where workspace_id = $1 and object_type = 'ConnectedSystem'
+              returning id`,
+            [other.workspaceId, carrying],
+          );
+          expect(system.rows).toHaveLength(1);
+          const systemId = system.rows[0]?.id as string;
+
+          type Shown = { id: string; name?: string };
+          const listed = await call<ListEnvelope<Shown>>('list_gatekeepers', {});
+          expect(listed.items.find((item) => item.id === gatekeeperId)?.name).toBe(shown);
+          const gatekeeper = await call<Shown>('get_gatekeeper', { gatekeeperId });
+          expect(gatekeeper.name).toBe(shown);
+          const readiness = await call<ExecutionReadinessWire>('execution_readiness', {});
+          expect(readiness.gates.find((gate) => gate.gateId === gatekeeperId)?.name).toBe(shown);
+
+          type WireObject = {
+            id: string;
+            identityKey: Record<string, unknown> | null;
+            properties: Record<string, unknown>;
+          };
+          const gateObject = await call<WireObject>('get_object', { objectId: gatekeeperId });
+          expect(gateObject.properties).toMatchObject({ name: shown, target: shown });
+          const systemObject = await call<WireObject>('get_object', { objectId: systemId });
+          expect(systemObject.identityKey).toEqual({ name: shown });
+          expect(systemObject.properties).toMatchObject({ target: shown });
+          const searched = await call<ListEnvelope<WireObject>>('search', {
+            query: '',
+            objectType: 'ConnectedSystem',
+          });
+          expect(searched.items.map((item) => item.identityKey)).toEqual([{ name: shown }]);
+
+          const walked = await call<{ nodeDetails: readonly Shown[] }>('traverse', {
+            fromId: gatekeeperId,
+            depth: 1,
+          });
+          const facts = await call<{ nodeDetails: readonly Shown[] }>('list_facts', {
+            linkType: 'connects_to',
+          });
+          const refs = await call<{ items: readonly Shown[] }>('resolve_refs', {
+            ids: [gatekeeperId, systemId],
+          });
+          // `traverse` details the nodes it reached, not the one it started from.
+          expect(walked.nodeDetails.find((node) => node.id === systemId)?.name).toBe(shown);
+          for (const named of [facts.nodeDetails, refs.items]) {
+            expect(named.find((node) => node.id === gatekeeperId)?.name).toBe(shown);
+            expect(named.find((node) => node.id === systemId)?.name).toBe(shown);
+          }
+
+          const explorer = await listGraphNodesForExplorer(
+            pool,
+            other.workspaceId,
+            other.ownerPrincipalId,
+            { type: 'ConnectedSystem' },
+          );
+          expect(explorer.items.map((node) => node.properties.target)).toEqual([shown]);
+
+          for (const result of [
+            listed,
+            gatekeeper,
+            readiness,
+            gateObject,
+            systemObject,
+            searched,
+            walked,
+            facts,
+            refs,
+            explorer,
+          ]) {
+            expect(JSON.stringify(result)).not.toContain(fake);
+          }
+          // A label only: the stored name stays until the scrub rewrites it.
+          const stored = await pool.query<{ name: string }>(
+            `select properties ->> 'name' as name from objects where id = $1`,
+            [gatekeeperId],
+          );
+          expect(stored.rows[0]?.name).toBe(carrying);
         });
       });
     });

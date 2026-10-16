@@ -14,6 +14,7 @@ import {
 import type { Fact, GraphObject } from '../../substrate/graph/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
 import { type ProvGraph, buildProvenanceGraph } from './provenance-graph.js';
+import { displayedObject } from './resource-wire.js';
 
 // Re-exported so `interfaces/explorer-contract` (which may not import `substrate/**` directly,
 // `.dependency-cruiser.cjs`'s `kernel-interfaces-must-not-reach-into-substrate-directly`) can type
@@ -199,7 +200,11 @@ export async function listGraphNodesForExplorer(
       objectType: params.type,
       limit: EXPLORER_MAX_FETCH,
     });
-    const domainOnly = batch.filter((object) => !PLATFORM_META_OBJECT_TYPES.has(object.objectType));
+    // Shown as every other read shows an Object (`displayedObject`: a ConnectedSystem's name and
+    // address, #620 review M2 / review #493 P2).
+    const domainOnly = batch
+      .filter((object) => !PLATFORM_META_OBJECT_TYPES.has(object.objectType))
+      .map(displayedObject);
     return paginateBatch(domainOnly, offset, limit);
   });
 }
@@ -263,7 +268,9 @@ export async function searchGraphForExplorer(
       limit: EXPLORER_MAX_FETCH,
     });
     const domainOnly = batch.filter((object) => !PLATFORM_META_OBJECT_TYPES.has(object.objectType));
-    const results = domainOnly.slice(0, limit).map((node) => ({ node, score: 1 }));
+    const results = domainOnly
+      .slice(0, limit)
+      .map((node) => ({ node: displayedObject(node), score: 1 }));
     return { results, total: results.length };
   });
 }

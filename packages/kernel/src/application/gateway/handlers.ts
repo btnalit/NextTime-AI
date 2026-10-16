@@ -296,6 +296,7 @@ import { platformDraftResidueHandler } from './platform-residue-handler.js';
 import { observeOperationHandler, requestActionHandler } from './request-action-handler.js';
 import { resolveRefsHandler } from './resolve-refs-handler.js';
 import {
+  displayedObject,
   toWireAuditRecord,
   toWireChat,
   toWireFact,
@@ -399,7 +400,7 @@ function toNodeDetails(
     return {
       id: nodeId,
       typeName: object?.objectType ?? 'Object',
-      ...(object ? { name: objectDisplayName(object) } : {}),
+      ...(object ? { name: objectDisplayName(displayedObject(object)) } : {}),
     };
   });
 }
