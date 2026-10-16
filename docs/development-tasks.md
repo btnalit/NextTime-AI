@@ -3991,7 +3991,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 
 **181 — 第三方镜像 digest 每周比对工作流**（见 `global-roadmap-2026-10-16.md` §4）
 
-- 实现说明：（未开工）
+- 实现说明（#585，2026-10-16 合入，9bf7f0b；遗留 181 关闭）：`scripts/image-pins.mjs`（单测 `scripts/image-pins.test.mjs` 在 `quality` 里跑）+ `.github/workflows/image-pins.yml`；每周一 05:41 UTC 与 `workflow_dispatch`，比对 `deploy/image-mirrors.json` 每个钉值与上游 tag 当前 digest，叠加 Trivy 对钉值与当前 digest 的 HIGH / CRITICAL；只开 issue、不改钉值，改清单、列表或脚本的 PR 上只写运行摘要（issue job 不在 PR 上跑）。查询逐个间隔并对 429 / 5xx 退避重试（按 `Retry-After`，否则 10 / 30 / 60 秒），仍失败的也开 / 更新 issue 并让运行变红；扫描失败只告警；issue 里的错误文本截断且不含上游响应内容。权限只用 `GITHUB_TOKEN`（compare `contents: read`，issue job `issues: write`），action 钉完整 commit SHA。合入后在 main 手动跑一次（run 38863473146），开出 issue #587（pgvector、node、postgres 落后）；后续按 issue 开升钉 PR，走正常审查。
 
 **218 — 「始终允许」策略与 Operation 定义摘要绑定，修订发布后失效**（见 `global-roadmap-2026-10-16.md` §4）
 
