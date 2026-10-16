@@ -6,10 +6,10 @@ name: image-pins
 # the old one. This workflow compares every pin with the digest its upstream tag points at now
 # (manifest HEAD; Docker Hub does not count HEAD requests against its anonymous limit), overlays
 # Trivy's HIGH/CRITICAL findings on the pinned and the current digest, and keeps one `image-pins`
-# issue open while any pin is behind — with the digests, what moving fixes, and every reference to
-# change. It never moves a pin: that stays a reviewed PR (image-mirror.yml's header has the order of
-# pushes), and routine upgrades are not handed to a bot (2026-09-25 / 2026-10-02 decisions; no
-# Dependabot or Renovate). The logic is scripts/image-pins.mjs; its unit tests run in `quality`.
+# issue open while any pin is behind or could not be looked up — with the digests, what moving
+# fixes, and every reference to change. It never moves a pin: that stays a reviewed PR
+# (image-mirror.yml's header has the order of pushes), and routine upgrades are not handed to a bot
+# (2026-09-25 / 2026-10-02 decisions; no Dependabot or Renovate). The logic is scripts/image-pins.mjs; its unit tests run in `quality`.
 #
 # Triggers:
 #   - weekly schedule (Monday, after image-mirror's weekly run) and workflow_dispatch: compare,
@@ -17,8 +17,9 @@ name: image-pins
 #   - pull_request changing the list, this file or the script: the same compare and scan, reported
 #     in the run summary only (the issue job does not run on pull requests), so a pin-moving PR shows
 #     its pins are now current and what the move fixed.
-# Not a required check. A failed upstream lookup fails the run after the report is written; a failed
-# Trivy scan is a warning and shows as "not scanned" (the digest comparison is the check).
+# Not a required check. Lookups are paced and retried on 429 / 5xx (Docker Hub throttles HEADs too).
+# A lookup that still fails opens / updates the issue and fails the run after the report is written;
+# a failed Trivy scan is a warning and shows as "not scanned" (the digest comparison is the check).
 #
 # Credentials: only GITHUB_TOKEN — `contents: read` for the compare job, `issues: write` on the
 # issue job alone. Every action is pinned to a full commit SHA (setup-trivy at the commit
@@ -100,8 +101,8 @@ jobs:
           echo "::error::${ERRORS} upstream digest lookup(s) failed; see the report in the run summary"
           exit 1
 
-  # One open `image-pins` issue while any pin is behind, updated in place; closed once every pin is
-  # current. A run with lookup errors and nothing behind leaves an open issue as it is.
+  # One open `image-pins` issue while any pin is behind or any lookup failed, updated in place (the
+  # title counts both); closed once every pin resolved and is current.
   issue:
     name: issue
     needs: compare
@@ -130,18 +131,23 @@ jobs:
         run: |
           set -eu
           EXISTING=$(gh issue list --state open --label image-pins --json number --jq '.[0].number // empty')
-          if [ "$BEHIND" -gt 0 ]; then
-            TITLE="image pins: ${BEHIND} third-party image(s) behind their upstream tag"
+          # A failed lookup opens or updates the issue too: a pin that is behind but failed this
+          # week's lookup must not read as "nothing to do".
+          if [ "$BEHIND" -gt 0 ] || [ "$ERRORS" -gt 0 ]; then
+            PARTS=""
+            if [ "$BEHIND" -gt 0 ]; then PARTS="${BEHIND} third-party image(s) behind their upstream tag"; fi
+            if [ "$ERRORS" -gt 0 ]; then PARTS="${PARTS:+${PARTS}, }${ERRORS} upstream lookup(s) failed"; fi
+            TITLE="image pins: ${PARTS}"
             if [ -n "$EXISTING" ]; then
               gh issue edit "$EXISTING" --title "$TITLE" --body-file "$BODY_FILE"
               echo "updated issue #${EXISTING}" >>"$GITHUB_STEP_SUMMARY"
             else
               gh label create image-pins --color D93F0B \
-                --description "a pinned third-party image in deploy/image-mirrors.json is behind its upstream tag" \
+                --description "a pin in deploy/image-mirrors.json is behind its upstream tag or failed its lookup" \
                 2>/dev/null || true
               gh issue create --title "$TITLE" --label image-pins --body-file "$BODY_FILE" >>"$GITHUB_STEP_SUMMARY"
             fi
-          elif [ "$ERRORS" = 0 ] && [ -n "$EXISTING" ]; then
+          elif [ -n "$EXISTING" ]; then
             gh issue comment "$EXISTING" --body "Every pin in \`deploy/image-mirrors.json\` matches its upstream tag as of ${RUN_URL} — closing."
             gh issue close "$EXISTING"
             echo "closed issue #${EXISTING}" >>"$GITHUB_STEP_SUMMARY"

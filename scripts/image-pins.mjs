@@ -13,7 +13,11 @@
 //   resolve --out status.json     For every entry, ask the upstream registry (the entry's `upstream`,
 //                                 Docker Hub when it names no host) which digest the tag points at
 //                                 now. A manifest HEAD: Docker Hub does not count HEAD requests
-//                                 against its anonymous pull limit. An entry is `current`, `behind`
+//                                 against its anonymous pull limit, but it does throttle them (429),
+//                                 so lookups run one at a time, 1.5 s apart, and a 429 / 5xx /
+//                                 network error is retried after Retry-After or 10, 30, 60 s. Error
+//                                 text in the report is this script's own (status codes, names), one
+//                                 line, truncated; no upstream response content. An entry is `current`, `behind`
 //                                 (the tag moved) or `error` (lookup failed, or the entry's `tag`
 //                                 disagrees with its `upstream`).
 //   scan --status status.json --dir scans
@@ -37,6 +41,8 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
+/** A lookup failure whose message this script wrote (status codes, names); safe to show as is. */
+class LookupError extends Error {}
 const MANIFEST_ACCEPT = [
   'application/vnd.oci.image.index.v1+json',
   'application/vnd.docker.distribution.manifest.list.v2+json',
@@ -75,7 +81,8 @@ export function loadPins(json) {
  */
 export function parseUpstream(ref) {
   const m = /^([^@\s]+):([A-Za-z0-9_][A-Za-z0-9_.-]*)$/.exec(ref);
-  if (!m || m[1].endsWith('/')) throw new Error(`upstream ${ref}: expected <repository>:<tag>`);
+  if (!m || m[1].endsWith('/'))
+    throw new LookupError(`upstream ${ref}: expected <repository>:<tag>`);
   const parts = m[1].split('/');
   const first = parts[0];
   const hasHost =
@@ -97,44 +104,126 @@ export function parseBearerChallenge(header) {
   return out.realm ? out : null;
 }
 
-async function headManifest(fetchImpl, url, token) {
-  const headers = { accept: MANIFEST_ACCEPT };
-  if (token) headers.authorization = `Bearer ${token}`;
-  return fetchImpl(url, { method: 'HEAD', headers, signal: AbortSignal.timeout(20_000) });
+const RETRY_DELAYS_S = [10, 30, 60];
+const MAX_RETRY_AFTER_S = 120;
+const defaultSleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Seconds a `Retry-After` header asks for (delta-seconds or HTTP date), capped; null if absent or bad. */
+export function retryAfterSeconds(value, now = Date.now()) {
+  if (!value) return null;
+  const v = value.trim();
+  const secs = /^\d+$/.test(v) ? Number(v) : (Date.parse(v) - now) / 1000;
+  if (!Number.isFinite(secs)) return null;
+  return Math.min(Math.max(0, Math.ceil(secs)), MAX_RETRY_AFTER_S);
+}
+
+/**
+ * fetch with backoff on 429, 5xx and network errors: wait `Retry-After` when given, else 10, 30,
+ * then 60 seconds; the fourth failure is returned (a response) or thrown (a network error). Docker
+ * Hub answered 429 to manifest HEADs in review (#585), so one throttled answer must not count as a
+ * failed lookup.
+ */
+export async function fetchWithRetry(fetchImpl, url, init, sleep = defaultSleep) {
+  for (let attempt = 0; ; attempt++) {
+    const last = attempt === RETRY_DELAYS_S.length;
+    let res;
+    try {
+      res = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(20_000) });
+    } catch (err) {
+      if (last) throw err;
+      await sleep(RETRY_DELAYS_S[attempt] * 1000);
+      continue;
+    }
+    if ((res.status !== 429 && res.status < 500) || last) return res;
+    const after = retryAfterSeconds(res.headers.get('retry-after'));
+    await sleep((after ?? RETRY_DELAYS_S[attempt]) * 1000);
+  }
 }
 
 /**
  * The digest `host/repo:tag` points at now, by manifest HEAD with an anonymous token when the
- * registry asks for one. Throws with a short reason otherwise.
+ * registry asks for one. Throws a LookupError with a short reason otherwise; no response body is
+ * ever read into a message.
  */
-export async function resolveDigest({ host, repo, tag }, fetchImpl = fetch) {
+export async function resolveDigest({ host, repo, tag }, fetchImpl = fetch, sleep = defaultSleep) {
   const url = `https://${host}/v2/${repo}/manifests/${tag}`;
-  let res = await headManifest(fetchImpl, url);
+  const head = (token) =>
+    fetchWithRetry(
+      fetchImpl,
+      url,
+      {
+        method: 'HEAD',
+        headers: token
+          ? { accept: MANIFEST_ACCEPT, authorization: `Bearer ${token}` }
+          : { accept: MANIFEST_ACCEPT },
+      },
+      sleep,
+    );
+  let res = await head();
   if (res.status === 401) {
     const ch = parseBearerChallenge(res.headers.get('www-authenticate'));
-    if (!ch) throw new Error(`${host}: 401 without a Bearer challenge`);
-    const tokenUrl = new URL(ch.realm);
+    if (!ch) throw new LookupError(`${host}: 401 without a Bearer challenge`);
+    let tokenUrl;
+    try {
+      tokenUrl = new URL(ch.realm);
+    } catch {
+      throw new LookupError(`${host}: Bearer challenge with an invalid realm`);
+    }
     if (ch.service) tokenUrl.searchParams.set('service', ch.service);
     tokenUrl.searchParams.set('scope', ch.scope ?? `repository:${repo}:pull`);
-    const tr = await fetchImpl(tokenUrl, { signal: AbortSignal.timeout(20_000) });
-    if (!tr.ok) throw new Error(`${host}: token request HTTP ${tr.status}`);
-    const body = await tr.json();
-    const token = body.token ?? body.access_token;
-    if (!token) throw new Error(`${host}: token response without a token`);
-    res = await headManifest(fetchImpl, url, token);
+    const tr = await fetchWithRetry(fetchImpl, tokenUrl, {}, sleep);
+    if (!tr.ok) throw new LookupError(`${host}: token request HTTP ${tr.status}`);
+    let body;
+    try {
+      body = await tr.json();
+    } catch {
+      throw new LookupError(`${host}: token response is not JSON`);
+    }
+    const token = body?.token ?? body?.access_token;
+    if (typeof token !== 'string' || token === '')
+      throw new LookupError(`${host}: token response without a token`);
+    res = await head(token);
   }
   if (res.status !== 200)
-    throw new Error(`${host}/${repo}:${tag}: manifest HEAD HTTP ${res.status}`);
+    throw new LookupError(`${host}/${repo}:${tag}: manifest HEAD HTTP ${res.status}`);
   const digest = res.headers.get('docker-content-digest') ?? '';
   if (!DIGEST_RE.test(digest))
-    throw new Error(`${host}/${repo}:${tag}: no Docker-Content-Digest header`);
+    throw new LookupError(`${host}/${repo}:${tag}: no Docker-Content-Digest header`);
   return digest;
 }
 
-/** One status row per entry. `lookup(entry)` returns the current digest or throws. */
-export async function resolveAll(pins, lookup) {
+/**
+ * A lookup error as it may appear in the issue: this script's own messages kept, anything else
+ * (a network error, whose text can carry upstream content) reduced to its kind and code; then one
+ * line, no Markdown table or code delimiters, at most 160 characters.
+ */
+export function safeError(err) {
+  let msg;
+  if (err instanceof LookupError) msg = err.message;
+  else {
+    const code = err?.cause?.code ?? err?.code;
+    const kind = err?.name === 'TimeoutError' ? 'timeout' : 'network error';
+    msg = typeof code === 'string' && /^[A-Z0-9_]{2,40}$/.test(code) ? `${kind} (${code})` : kind;
+  }
+  return oneLine(msg);
+}
+
+/** One line, no Markdown table or code delimiters, at most 160 characters. */
+export function oneLine(text) {
+  const t = String(text)
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/[|`<>]/g, '');
+  return t.length > 160 ? `${t.slice(0, 157)}...` : t;
+}
+
+/**
+ * One status row per entry. `lookup(entry)` returns the current digest or throws. Lookups run one
+ * after another, `paceMs` apart, so a run never bursts the upstream registry.
+ */
+export async function resolveAll(pins, lookup, { sleep = defaultSleep, paceMs = 1500 } = {}) {
   const rows = [];
-  for (const e of pins.images) {
+  for (const [i, e] of pins.images.entries()) {
+    if (i > 0 && paceMs > 0) await sleep(paceMs);
     const row = {
       name: e.name,
       upstream: e.upstream,
@@ -154,7 +243,7 @@ export async function resolveAll(pins, lookup) {
     try {
       const up = parseUpstream(e.upstream);
       if (up.tag !== e.tag)
-        throw new Error(`upstream tag ${up.tag} is not the entry's tag ${e.tag}`);
+        throw new LookupError(`upstream tag ${up.tag} is not the entry's tag ${e.tag}`);
       row.current = await lookup(up);
       row.status = row.current === e.digest ? 'current' : 'behind';
       if (row.status === 'behind') {
@@ -163,7 +252,7 @@ export async function resolveAll(pins, lookup) {
         );
       }
     } catch (err) {
-      row.error = String(err?.message ?? err);
+      row.error = safeError(err);
     }
     rows.push(row);
   }
@@ -228,7 +317,7 @@ export function renderReport(rows, scans, refs, runUrl) {
   );
   for (const r of rows) {
     const s = scans[r.name] ?? {};
-    const state = r.status === 'error' ? `error: ${r.error}` : r.status;
+    const state = r.status === 'error' ? `error: ${oneLine(r.error ?? '')}` : r.status;
     const fixed = r.status === 'behind' ? (fixedByMoving(s.pinned, s.current) ?? '—') : '';
     out.push(
       `| ${r.name} | \`${r.upstream}\` | ${state} | \`${short(r.pinned)}\` | \`${short(r.current)}\` | ` +

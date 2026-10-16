@@ -3,6 +3,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  fetchWithRetry,
   fixedByMoving,
   loadPins,
   parseBearerChallenge,
@@ -10,8 +11,12 @@ import {
   renderReport,
   resolveAll,
   resolveDigest,
+  retryAfterSeconds,
+  safeError,
   summarizeTrivy,
 } from './image-pins.mjs';
+
+const noSleep = async () => {};
 
 const A = `sha256:${'a'.repeat(64)}`;
 const B = `sha256:${'b'.repeat(64)}`;
@@ -105,7 +110,7 @@ function fakeRegistry({ digest = B, status = 200, challenge = true } = {}) {
 
 test('resolveDigest: HEAD, anonymous token on 401, HEAD again with it; the digest header is the answer', async () => {
   const { fetchImpl, calls } = fakeRegistry();
-  const d = await resolveDigest(parseUpstream('postgres:17-alpine'), fetchImpl);
+  const d = await resolveDigest(parseUpstream('postgres:17-alpine'), fetchImpl, noSleep);
   assert.equal(d, B);
   assert.deepEqual(
     calls.map((c) => [c.method, new URL(c.url).hostname, c.auth ?? '']),
@@ -124,20 +129,113 @@ test('resolveDigest: HEAD, anonymous token on 401, HEAD again with it; the diges
 
 test('resolveDigest fails on a missing tag, a missing or malformed digest header', async () => {
   await assert.rejects(
-    resolveDigest(parseUpstream('postgres:17-alpine'), fakeRegistry({ status: 404 }).fetchImpl),
+    resolveDigest(
+      parseUpstream('postgres:17-alpine'),
+      fakeRegistry({ status: 404 }).fetchImpl,
+      noSleep,
+    ),
     /HTTP 404/,
   );
   await assert.rejects(
-    resolveDigest(parseUpstream('postgres:17-alpine'), fakeRegistry({ digest: null }).fetchImpl),
+    resolveDigest(
+      parseUpstream('postgres:17-alpine'),
+      fakeRegistry({ digest: null }).fetchImpl,
+      noSleep,
+    ),
     /no Docker-Content-Digest/,
   );
   await assert.rejects(
     resolveDigest(
       parseUpstream('postgres:17-alpine'),
       fakeRegistry({ digest: 'sha256:x' }).fetchImpl,
+      noSleep,
     ),
     /no Docker-Content-Digest/,
   );
+});
+
+/** Answers `statuses` in order (a number, or 'throw' for a network error), recording the waits. */
+function scripted(statuses, headers = {}) {
+  const seen = [];
+  const fetchImpl = async () => {
+    const s = statuses[Math.min(seen.length, statuses.length - 1)];
+    seen.push(s);
+    if (s === 'throw') throw new TypeError('fetch failed', { cause: { code: 'ECONNREFUSED' } });
+    return new Response(null, {
+      status: s,
+      headers: s === 200 ? { 'docker-content-digest': B } : headers,
+    });
+  };
+  const waits = [];
+  return { fetchImpl, seen, waits, sleep: async (ms) => waits.push(ms) };
+}
+
+test('fetchWithRetry: 429 / 5xx / network errors back off 10, 30, 60 s, or Retry-After when given', async () => {
+  const a = scripted([429, 503, 'throw', 200]);
+  assert.equal((await fetchWithRetry(a.fetchImpl, 'https://r/x', {}, a.sleep)).status, 200);
+  assert.deepEqual(a.waits, [10_000, 30_000, 60_000]);
+
+  const b = scripted([429, 200], { 'retry-after': '7' });
+  await fetchWithRetry(b.fetchImpl, 'https://r/x', {}, b.sleep);
+  assert.deepEqual(b.waits, [7_000]);
+
+  // The fourth failure is the answer: a response is returned, a network error thrown.
+  const c = scripted([503]);
+  assert.equal((await fetchWithRetry(c.fetchImpl, 'https://r/x', {}, c.sleep)).status, 503);
+  assert.equal(c.seen.length, 4);
+  const d = scripted(['throw']);
+  await assert.rejects(fetchWithRetry(d.fetchImpl, 'https://r/x', {}, d.sleep), /fetch failed/);
+
+  // 4xx other than 429 is an answer, not retried.
+  const e = scripted([404, 200]);
+  assert.equal((await fetchWithRetry(e.fetchImpl, 'https://r/x', {}, e.sleep)).status, 404);
+  assert.deepEqual(e.waits, []);
+});
+
+test('retryAfterSeconds: delta-seconds or HTTP date, capped at 120 s; junk is ignored', () => {
+  const now = Date.parse('2026-10-16T00:00:00Z');
+  assert.equal(retryAfterSeconds('5', now), 5);
+  assert.equal(retryAfterSeconds('9999', now), 120);
+  assert.equal(retryAfterSeconds('Fri, 16 Oct 2026 00:00:30 GMT', now), 30);
+  assert.equal(retryAfterSeconds('soon', now), null);
+  assert.equal(retryAfterSeconds(null, now), null);
+});
+
+test('resolveDigest retries a throttled lookup instead of failing it', async () => {
+  const a = scripted([429, 429, 200]);
+  assert.equal(await resolveDigest(parseUpstream('alpine:3.20'), a.fetchImpl, a.sleep), B);
+  const b = scripted([429]);
+  await assert.rejects(
+    resolveDigest(parseUpstream('alpine:3.20'), b.fetchImpl, b.sleep),
+    /manifest HEAD HTTP 429/,
+  );
+});
+
+test('safeError: own messages kept on one line and truncated; foreign errors reduced to kind and code', async () => {
+  // A token endpoint that answers HTML: its content never reaches the message.
+  const html = async (url, init = {}) =>
+    new URL(String(url)).hostname === 'auth.example'
+      ? new Response('<html><b>secret | `body`</b></html>', { status: 200 })
+      : new Response(null, {
+          status: init.headers?.authorization ? 200 : 401,
+          headers: { 'www-authenticate': 'Bearer realm="https://auth.example/token"' },
+        });
+  const err = await resolveDigest(parseUpstream('alpine:3.20'), html, noSleep).catch((x) => x);
+  assert.equal(safeError(err), 'registry-1.docker.io: token response is not JSON');
+
+  assert.equal(safeError(new Error('<script>| `x`\nsecond line')), 'network error');
+  assert.equal(safeError(Object.assign(new Error('x'), { name: 'TimeoutError' })), 'timeout');
+  assert.equal(
+    safeError(new TypeError('fetch failed', { cause: { code: 'not a code; <b>' } })),
+    'network error',
+  );
+  const long = await resolveAll(
+    loadPins(pinsJson([entry({ upstream: `postgres:${'y'.repeat(300)}` })])),
+    async () => A,
+    { sleep: noSleep },
+  );
+  assert.equal(long[0].status, 'error');
+  assert.ok(long[0].error.length <= 160 && long[0].error.endsWith('...'));
 });
 
 test('resolveAll: current, behind (with scan refs for the new digest), and errors kept per entry', async () => {
@@ -154,10 +252,17 @@ test('resolveAll: current, behind (with scan refs for the new digest), and error
       entry({ name: 'down', upstream: 'postgres:18-alpine', tag: '18-alpine' }),
     ]),
   );
-  const rows = await resolveAll(pins, async (up) => {
-    if (up.tag === '18-alpine') throw new Error('HTTP 503');
-    return up.repo === 'library/postgres' ? A : B;
-  });
+  const slept = [];
+  const rows = await resolveAll(
+    pins,
+    async (up) => {
+      if (up.tag === '18-alpine')
+        throw new TypeError('fetch failed', { cause: { code: 'ECONNRESET' } });
+      return up.repo === 'library/postgres' ? A : B;
+    },
+    { sleep: async (ms) => slept.push(ms) },
+  );
+  assert.deepEqual(slept, [1500, 1500, 1500], 'lookups are paced, none before the first');
   const by = Object.fromEntries(rows.map((r) => [r.name, r]));
   assert.equal(by.postgres.status, 'current');
   assert.deepEqual(by.postgres.currentRefs, []);
@@ -174,7 +279,7 @@ test('resolveAll: current, behind (with scan refs for the new digest), and error
   assert.equal(by.bad.status, 'error');
   assert.match(by.bad.error, /upstream tag 16-alpine is not the entry's tag 17-alpine/);
   assert.equal(by.down.status, 'error');
-  assert.match(by.down.error, /HTTP 503/);
+  assert.equal(by.down.error, 'network error (ECONNRESET)');
 });
 
 const trivy = (vulns) => ({ Results: [{ Vulnerabilities: vulns }] });
