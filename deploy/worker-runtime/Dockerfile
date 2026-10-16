@@ -68,7 +68,7 @@
 # service is never itself `up`).
 
 # node:24-bookworm-slim by digest, from its GHCR copy (deploy/image-mirrors.json)
-FROM ghcr.io/btnalit/nexttime-mirror-node@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS build
+FROM ghcr.io/btnalit/nexttime-mirror-node@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5 AS build
 RUN corepack enable
 WORKDIR /workspace
 
@@ -105,7 +105,7 @@ RUN corepack pnpm --filter @nexttime/platform-extension... build
 RUN corepack pnpm --filter @nexttime/platform-extension deploy --prod --legacy /out/platform-extension
 
 # node:24-bookworm-slim by digest, from its GHCR copy (deploy/image-mirrors.json)
-FROM ghcr.io/btnalit/nexttime-mirror-node@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS runtime
+FROM ghcr.io/btnalit/nexttime-mirror-node@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5 AS runtime
 
 # Toolchain the entry/Worker agent's own bash/python tool use needs (docs/development-tasks.md
 # S1.5 task brief) — not a pi runtime requirement (see header). One apt layer, cleaned after.

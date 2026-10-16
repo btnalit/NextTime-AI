@@ -78,7 +78,7 @@ TARGET_CREATED=0
 CONTAINER_DUMP_PATH=""
 # postgres:17-alpine by digest, from its GHCR copy (deploy/image-mirrors.json): the backup service's
 # own image (docker-compose.yml), already on the host, so the dry run pulls nothing.
-PG_TOOLS_IMAGE=ghcr.io/btnalit/nexttime-mirror-postgres@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
+PG_TOOLS_IMAGE=ghcr.io/btnalit/nexttime-mirror-postgres@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
 
 psql_admin() {
 	docker compose exec -T postgres psql -U nexttime -d postgres -v ON_ERROR_STOP=1 -t -A "$@" </dev/null
