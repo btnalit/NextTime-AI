@@ -4006,7 +4006,14 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 
 **232 — `request_action` 在边界拒绝未知动作名，回显经转义与限长**（见 `global-roadmap-2026-10-16.md` §4）
 
-- 实现说明：（未开工）
+- 实现说明（#593，2026-10-16 合入，a372f7b；遗留 232 关闭）：
+  - **边界拒绝**：`request-action-handler.ts` 在 `!published` 分支里拿不到调用方看得见的草稿（`operationVisibleTo`：提出者或 builder 及以上）就抛 `UnknownOperationError` → 404 `unknown_operation`，details 只含 `gatekeeperId` 与 `operationStatus: "none" | "deprecated"`，消息不回显名字并提示调 `list_allowed_operations`；不建 ActionRequest。只对调用方治理范围内的门生效，范围外照旧记 `denied`（I7）。HTTP（`capability-route.ts`）、WS（`rpc.ts`，NOT_FOUND）、MCP（`server-factory.ts`，`unknown_operation:` 前缀）三处映射。404 分支三种情况（别人的草稿、已弃用、没有这行）执行同一条 SQL，集成测试比对语句序列。
+  - **审计**：`dispatch.ts` 的 `auditUnknownOperation` 在独立事务里写，参数照常脱敏，`operation` 换成 `requestedOperation: {length, sha256}`，带 `refusal: {code, status, operationStatus}`。`request_action.operation` 改为 `z.string().min(1)`（契约快照只多 `minLength: 1`）。
+  - **新 Operation 名**：`propose_operation` 与 `import_manifest`（写入前整体检查）要求非空、≤ 128 字符（`OPERATION_NAME_MAX`）、不含控制 / 格式（含 bidi override、零宽）/ 行段分隔字符与代理项，违反返回 400 `invalid_operation_name`（details `{problem, maxLength}`），什么都不写；已在库里的名字不受影响。
+  - **回显统一**：`@nexttime/shared` 的 `echoed-text.ts`（`quotedName`、`boundedEcho`、`visibleText`、`clipCodePoints`；JSON 转义、看不见的字符显示为 `\u{XXXX}`、按码点截到 `ECHO_MAX` = 128），内核经 `governance/redaction/quoted-name.ts` 重新导出。覆盖执行器失败原因与审计、simulate、`observe_operation`、`decide.ts` 审批拒绝、各类 NotFound / Conflict / DraftChanged 错误、发布校验、工具投影描述、ontology_violation、`task.result_fact_rejected` / `task.result_proposal_rejected` 与 `tasks.result.factsRejected[]`、对话卡片正文。普通名字输出逐字不变。
+  - **控制台**：`lib/format.ts` 的 `actionKindLabel` / `actionKindTagText` / `actionKindRaw` / `actionKindToastLabel`；审批位置完整显示并换行（`.wrap-anywhere`，上限 512，超长旧名从中间截断、原值在「能力」字段与悬停），toast 截到 80；能力目录、草稿提交页、治理变化、门详情、门实例详情、接入、启用门确认、授权表单、刷新治理确认、待审查清单、定义漂移、系统访问卡、接入向导、流程与策略编辑、审计筛选器、`actionTargetLabel` 都走同一转义（key、testid、请求参数与比较仍用原值）。`lib/errors.ts` 给 `unknown_operation`、`invalid_operation_name` 补中英文标题与下一步并进工具行说明。全仓库无 `dangerouslySetInnerHTML` / innerHTML。
+  - **`report_task_result`**：`validateContract` 用 `manifest.ts` 的 `proposalRefusalFor` / `operationProposalRefusal`（与 `proposeOperation` 同一判断）逐条预检，新名字不合规记 `invalid_operation_name`、同名被别人的草稿 / import 草稿 / 已弃用身份占用记 `operation_identity_conflict`，进 `proposedOperationsRejected[]` 并写审计；每条提议在自己的 savepoint 里写，预检后被并发抢先的拒绝只回滚这一条。Worker 端 `report_result` 回显带 `detail`。
+  - **未在本 PR**：合同任何字符串含 U+0000 时 Postgres text / jsonb 存不下、整次调用失败（所有能力共有，已报主线程决定）；共享命名空间的一位信息与两处导入草稿名未转义见 STATUS 遗留 319；同类排查已登记为遗留 302–309；两处「始终允许」问题并入 218。
 
 **287 — 第一次执行时的网络错误分开处理（发送后断开记 `in_doubt`）；W1 硬前置**（见 `global-roadmap-2026-10-16.md` §4）
 
