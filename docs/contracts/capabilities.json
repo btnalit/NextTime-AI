@@ -16774,6 +16774,10 @@
                 },
                 "type": "array"
               },
+              "governanceByRevision": {
+                "const": true,
+                "type": "boolean"
+              },
               "name": {
                 "type": "string"
               }
@@ -17103,6 +17107,10 @@
                   "type": "object"
                 },
                 "type": "array"
+              },
+              "governanceByRevision": {
+                "const": true,
+                "type": "boolean"
               },
               "name": {
                 "type": "string"

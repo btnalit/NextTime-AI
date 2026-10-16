@@ -802,6 +802,12 @@ export const GateInstanceEnablePreviewOperationPresentWireSchema = z
      *  published: `refresh_operation_governance` opens that revision as a draft for an owner to
      *  publish. Independent of `differs`, which compares only the governance fields. */
     definitionDiffers: z.boolean(),
+    /** Review #493 on #612 (M1, `preview_gatekeeper_resync` only): this governance change loosens
+     *  something and comes from a self-connected gate's own description, which nobody reviewed —
+     *  `refresh_operation_governance` does not apply it in place but opens a revision draft that
+     *  carries it (published rows), so it takes effect only once an owner publishes that draft.
+     *  Absent when the change is applied in place (a tightening, or any platform manifest). */
+    governanceByRevision: z.literal(true).optional(),
     /** Review #501 on #571 ③ (the workspace side): the params the announced definition declares
      *  that only the gate sets. Present only when there are some — the revision an align opens for
      *  a `definitionDiffers` entry would then be held back as an unpublished draft. */

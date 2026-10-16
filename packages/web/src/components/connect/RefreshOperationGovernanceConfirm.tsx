@@ -151,6 +151,10 @@ export function RefreshOperationGovernanceConfirm({
   const [newNames, setNewNames] = useState<readonly string[]>([]);
   const [importedNames, setImportedNames] = useState<ReadonlySet<string>>(new Set());
   const [notDescribed, setNotDescribed] = useState<readonly string[]>([]);
+  // Review #493 on #612 (M1): the revisions this resync opened only to carry a loosening the gate
+  // describes (its definition did not change) — kept past the confirm so the result says what
+  // publishing them changes instead of "the gate refuses calls until then", which is not so.
+  const [loosenedOnlyNames, setLoosenedOnlyNames] = useState<ReadonlySet<string>>(new Set());
   const self = platformGateId === undefined;
   // The same sentence for both sources, naming where the manifest comes from: a platform gate's
   // announcement (adopted by the platform) or what a self-connected gate describes it runs.
@@ -167,12 +171,29 @@ export function RefreshOperationGovernanceConfirm({
       'until the gate’s maintainer drops those params from its manifest and restarts it',
     ],
   );
-  const items = (diffs ?? []).filter((op) => op.differs).map(changeItem);
+  // Applied in place: everything a platform manifest changes, and what a self-connected gate
+  // tightens. Review #493 on #612 (M1): what a self-connected gate loosens is the kernel's
+  // `governanceByRevision` — carried by a revision draft, live only once it is published.
+  const items = (diffs ?? [])
+    .filter((op) => op.differs && op.governanceByRevision !== true)
+    .map(changeItem);
+  const byRevision = (diffs ?? [])
+    .filter(
+      (op) =>
+        op.differs && op.governanceByRevision === true && (op.gateOwnedParams?.length ?? 0) === 0,
+    )
+    .map(changeItem);
+  const byRevisionNames = new Set(byRevision.map((item) => item.name));
   const heldRevisions = (diffs ?? []).filter(
     (op) => op.definitionDiffers && (op.gateOwnedParams?.length ?? 0) > 0,
   );
   const redefined = (diffs ?? [])
-    .filter((op) => op.definitionDiffers && (op.gateOwnedParams?.length ?? 0) === 0)
+    .filter(
+      (op) =>
+        op.definitionDiffers &&
+        (op.gateOwnedParams?.length ?? 0) === 0 &&
+        !byRevisionNames.has(op.name),
+    )
     .map((op) => op.name);
   const heldNames = (names: readonly string[]) => names.filter((name) => stillHeld.has(name));
   const freeNames = (names: readonly string[]) => names.filter((name) => !stillHeld.has(name));
@@ -180,12 +201,18 @@ export function RefreshOperationGovernanceConfirm({
   // R-19 (D-17): the kernel's direction decides the danger case; the consequences say what it means.
   const consequences = items.flatMap((item) => governanceConsequences(item, t));
   const loosens = items.some((item) => isLoosening(item.direction));
+  // What publishing the revisions that carry a loosening would change — said now, not after.
+  const byRevisionConsequences = byRevision.flatMap((item) => governanceConsequences(item, t));
   const [lastResult, setLastResult] = useState<RefreshOperationGovernanceResultWire | null>(null);
   const revisions = (lastResult?.revisionDrafts ?? []).filter(
     (draft) =>
       !rewrittenNames.has(draft.name) &&
       !importedNames.has(draft.name) &&
+      !loosenedOnlyNames.has(draft.name) &&
       !stillHeld.has(draft.name),
+  );
+  const loosenedRevisions = (lastResult?.revisionDrafts ?? []).filter(
+    (draft) => loosenedOnlyNames.has(draft.name) && !stillHeld.has(draft.name),
   );
   const imported = (lastResult?.revisionDrafts ?? []).filter(
     (draft) => importedNames.has(draft.name) && !stillHeld.has(draft.name),
@@ -304,6 +331,19 @@ export function RefreshOperationGovernanceConfirm({
     );
     setRewrittenNames(new Set(heldDrafts));
     setImportedNames(new Set(newNames));
+    setLoosenedOnlyNames(
+      new Set(
+        diffs
+          .filter(
+            (op) =>
+              op.differs &&
+              op.governanceByRevision === true &&
+              !op.definitionDiffers &&
+              (op.gateOwnedParams?.length ?? 0) === 0,
+          )
+          .map((op) => op.name),
+      ),
+    );
     setLastResult(result);
     setDiffs(null);
     setHeldDrafts([]);
@@ -468,6 +508,36 @@ export function RefreshOperationGovernanceConfirm({
                 </ul>
               </div>
             ) : null}
+            {loosenedRevisions.length > 0 ? (
+              <div
+                className="stack-s"
+                data-testid={testId ? `${testId}-loosened-drafts` : undefined}
+              >
+                <span>
+                  {t(
+                    `门放宽了 ${loosenedRevisions.length} 个 Operation 的治理字段，已为它们打开修订草稿。已发布的版本没有变，审批要求照旧；到能力目录核对后再决定是否发布：`,
+                    `The gate loosened the governance of ${loosenedRevisions.length} operation(s); a revision draft carries it. The published versions are unchanged and keep their approval requirements — check the drafts in the catalog before deciding whether to publish:`,
+                  )}
+                </span>
+                <ul className="stack-s" style={{ margin: 0, paddingLeft: '1.2em' }}>
+                  {loosenedRevisions.map((draft) => (
+                    <li key={draft.name} className="row-wrap">
+                      <span className="mono">{actionKindTagText(draft.name)}</span>
+                      <span>{t(`修订 v${draft.version}`, `revision v${draft.version}`)}</span>
+                      <a
+                        href={hrefs.catalog(
+                          'operations',
+                          revisionDraftKey({ gatekeeperId, name: draft.name }),
+                        )}
+                        data-testid={testId ? `${testId}-loosened-draft-link` : undefined}
+                      >
+                        {t('去能力目录核对', 'Review in the catalog')}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
             {rewritten.length > 0 ? (
               <div className="stack-s" data-testid={testId ? `${testId}-rewritten` : undefined}>
                 <span>
@@ -557,6 +627,12 @@ export function RefreshOperationGovernanceConfirm({
         target={gateDisplayName}
         impact={[
           ...items.map((item) => governanceChangeSummary(item, t)),
+          ...byRevision.map((item) =>
+            t(
+              `${governanceChangeSummary(item, t)}（门放宽了，不就地改：打开修订草稿，发布后才生效）`,
+              `${governanceChangeSummary(item, t)} (loosened by the gate — not applied in place: opens a revision draft that takes effect once published)`,
+            ),
+          ),
           ...redefined.map((name) =>
             t(
               `${actionKindTagText(name)}：门运行的定义变了，打开修订草稿`,
@@ -611,6 +687,28 @@ export function RefreshOperationGovernanceConfirm({
                 <li key={line}>{line}</li>
               ))}
             </ul>
+          </Notice>
+        ) : null}
+        {byRevision.length > 0 ? (
+          <Notice tone="warn" testId={testId ? `${testId}-loosens-by-revision` : undefined}>
+            <span className="stack-s">
+              <span>
+                {t(
+                  `门放宽了这些 Operation 的治理字段：${byRevision.map((item) => actionKindTagText(item.name)).join('、')}。门的描述没有人审过，所以同步不会就地放宽：已发布的版本保持现在的审批要求，同步只打开修订草稿，到能力目录核对后由你决定是否发布。`,
+                  `The gate loosened the governance of: ${byRevision.map((item) => actionKindTagText(item.name)).join(', ')}. Nobody reviewed the gate’s description, so syncing does not loosen anything in place: the published versions keep their approval requirements, and syncing only opens revision drafts for you to check and decide on in the catalog.`,
+                )}
+              </span>
+              {byRevisionConsequences.length > 0 ? (
+                <>
+                  <span>{t('发布这些修订之后：', 'Once those revisions are published:')}</span>
+                  <ul className="stack-s" style={{ margin: 0, paddingLeft: '1.2em' }}>
+                    {byRevisionConsequences.map((line) => (
+                      <li key={line}>{line}</li>
+                    ))}
+                  </ul>
+                </>
+              ) : null}
+            </span>
           </Notice>
         ) : null}
         {heldRevisions.length > 0 ? (

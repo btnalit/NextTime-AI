@@ -327,6 +327,120 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(after.operationsToImport).toEqual([]);
     });
 
+    // Review #493 on #612 (M1): nobody reviewed a self-connected gate's own description, so what it
+    // loosens never lands on the published Operation in place — the resync opens a revision, and
+    // only the owner's publish of it changes who may call what. One case per loosened field.
+    const strict = { mode: 'execute', blast_radius: 'high', auto_approvable: false } as const;
+    it.each([
+      {
+        field: 'mode execute → observe',
+        before: strict,
+        after: { ...strict, mode: 'observe' },
+        direction: 'loosened',
+        // `mode` is part of the definition the gate checks (legacy K).
+        reason: 'definition_changed',
+      },
+      {
+        field: 'blast_radius high → low',
+        before: strict,
+        after: { ...strict, blast_radius: 'low' },
+        direction: 'loosened',
+        reason: 'governance_loosened',
+      },
+      {
+        field: 'auto_approvable false → true',
+        before: strict,
+        after: { ...strict, auto_approvable: true },
+        direction: 'loosened',
+        reason: 'governance_loosened',
+      },
+      {
+        field: 'mixed (blast_radius low → high, auto_approvable false → true)',
+        before: { ...strict, blast_radius: 'low' },
+        after: { ...strict, blast_radius: 'high', auto_approvable: true },
+        direction: 'mixed',
+        reason: 'governance_loosened',
+      },
+    ] as const)(
+      'a loosened $field opens a revision; the published Operation keeps its fields until the owner publishes it',
+      async ({ before, after, direction, reason }) => {
+        const name = `stock.loosen.${randomUUID().slice(0, 8)}`;
+        await startNewGate([stockOperation(name, '/stocks', before)]);
+        const gatekeeperId = await connect();
+        await startGate([stockOperation(name, '/stocks', after)]);
+
+        const preview = await call<PreviewGatekeeperResyncResultWire>('preview_gatekeeper_resync', {
+          gatekeeperId,
+        });
+        expect(preview.operationsAlreadyPresent).toEqual([
+          expect.objectContaining({ name, differs: true, direction, governanceByRevision: true }),
+        ]);
+
+        const result = await call<RefreshOperationGovernanceResultWire>(
+          'refresh_operation_governance',
+          { gatekeeperId, manifestDigest: preview.manifestDigest },
+        );
+        expect(result.refreshed).toEqual([]);
+        expect(result.revisionDrafts).toEqual([{ name, version: 2 }]);
+
+        const live = await inTx((c) => getPublishedOperation(c, workspaceId, gatekeeperId, name));
+        expect(live?.version).toBe(1);
+        expect(live?.operation.mode).toBe(before.mode);
+        expect(live?.operation.blast_radius).toBe(before.blast_radius);
+        expect(live?.operation.auto_approvable).toBe(before.auto_approvable);
+        const audit = await inTx((c) =>
+          queryAudit(c, workspaceId, { action: 'operation.revision_drafted' }),
+        );
+        expect(
+          audit
+            .map((row) => row.payload as { name?: string })
+            .filter((payload) => payload.name === name),
+        ).toEqual([expect.objectContaining({ reason, governanceDirection: direction })]);
+        const refreshedAudit = await inTx((c) =>
+          queryAudit(c, workspaceId, { action: 'operation.governance_refreshed' }),
+        );
+        expect(refreshedAudit.some((row) => (row.payload as { name?: string }).name === name)).toBe(
+          false,
+        );
+
+        await inTx((c) => publishOperation(c, workspaceId, { gatekeeperId, name }));
+        const published = await inTx((c) =>
+          getPublishedOperation(c, workspaceId, gatekeeperId, name),
+        );
+        expect(published?.version).toBe(2);
+        expect(published?.operation.mode).toBe(after.mode);
+        expect(published?.operation.blast_radius).toBe(after.blast_radius);
+        expect(published?.operation.auto_approvable).toBe(after.auto_approvable);
+      },
+    );
+
+    it('a tightening the gate describes is still applied in place — no revision, no new version', async () => {
+      const name = `stock.tighten.${randomUUID().slice(0, 8)}`;
+      await startNewGate([stockOperation(name, '/stocks')]);
+      const gatekeeperId = await connect();
+      await startGate([
+        stockOperation(name, '/stocks', { blast_radius: 'medium', auto_approvable: false }),
+      ]);
+
+      const preview = await call<PreviewGatekeeperResyncResultWire>('preview_gatekeeper_resync', {
+        gatekeeperId,
+      });
+      const row = preview.operationsAlreadyPresent[0];
+      expect(row).toEqual(expect.objectContaining({ name, differs: true, direction: 'tightened' }));
+      expect(row?.governanceByRevision).toBeUndefined();
+
+      const result = await call<RefreshOperationGovernanceResultWire>(
+        'refresh_operation_governance',
+        { gatekeeperId, manifestDigest: preview.manifestDigest },
+      );
+      expect(result.revisionDrafts).toEqual([]);
+      expect(result.refreshed).toEqual([expect.objectContaining({ name, direction: 'tightened' })]);
+      const live = await inTx((c) => getPublishedOperation(c, workspaceId, gatekeeperId, name));
+      expect(live?.version).toBe(1);
+      expect(live?.operation.blast_radius).toBe('medium');
+      expect(live?.operation.auto_approvable).toBe(false);
+    });
+
     it('the gate describing another manifest between preview and confirm refuses manifest_changed and writes nothing', async () => {
       const name = `stock.race.${randomUUID().slice(0, 8)}`;
       await startNewGate([stockOperation(name, '/stocks')]);

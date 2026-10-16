@@ -1,10 +1,12 @@
 import type { Operation, PublishableStatus } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import {
+  type AnnouncedManifestSource,
   type OperationRecord,
   diffOperationGovernanceFields,
   gateOwnedParamsOfDefinition,
   getOperation,
+  governanceChangeNeedsRevision,
   importDraftDiffersFromAnnounced,
   operationDefinitionDiffers,
   operationGovernanceChangeDirection,
@@ -51,6 +53,7 @@ export interface AnnouncedOperationPresent {
   differs: boolean;
   direction: ReturnType<typeof operationGovernanceChangeDirection>;
   definitionDiffers: boolean;
+  governanceByRevision?: true;
   gateOwnedParams?: { param: string; location: string }[];
 }
 
@@ -69,13 +72,15 @@ function gateOwnedParamsWire(operation: Operation) {
 
 /** `droppedFromGate`: an Operation the gate itself no longer runs (a platform gate's held
  *  announcement, `application/gates`' `droppedUntilAdopted`) — its held draft is never rewritable,
- *  as `refreshOperationGovernance`'s `droppedByGate` never rewrites it. */
+ *  as `refreshOperationGovernance`'s `droppedByGate` never rewrites it. `source`: who stands behind
+ *  `operations` (`AnnouncedManifestSource`) — it decides `governanceByRevision`. */
 export async function compareAnnouncedOperations(
   client: PoolClient,
   workspaceId: string,
   gatekeeperId: string | undefined,
   operations: readonly Operation[],
   droppedFromGate: (name: string) => boolean,
+  source: AnnouncedManifestSource,
 ): Promise<AnnouncedOperationsComparison> {
   const operationsToImport: AnnouncedOperationToImport[] = [];
   const operationsAlreadyPresent: AnnouncedOperationPresent[] = [];
@@ -122,6 +127,8 @@ export async function compareAnnouncedOperations(
       autoApprovable: existingRecord.operation.auto_approvable,
       status: existingRecord.status,
     };
+    // R-19 (D-17): the kernel's own classification, so the console's confirm never re-ranks it.
+    const direction = operationGovernanceChangeDirection(existingFields, announced);
     operationsAlreadyPresent.push({
       name: operation.name,
       existing: existingFields,
@@ -129,11 +136,15 @@ export async function compareAnnouncedOperations(
       // S8 W3-K1: the exact comparison `refresh_operation_governance` reuses for its own write
       // decision — one judgment function, never two that could drift.
       differs: diffOperationGovernanceFields(existingFields, announced).differs,
-      // R-19 (D-17): the kernel's own classification, so the console's confirm never re-ranks it.
-      direction: operationGovernanceChangeDirection(existingFields, announced),
+      direction,
       // Legacy K: the gate refuses calls made under the deployed definition until a revision
       // carrying the announced one is published (`refresh_operation_governance` opens it).
       definitionDiffers: operationDefinitionDiffers(existingRecord, operation),
+      // Review #493 on #612 (M1): the write's own judgment — this change opens a revision (on a
+      // published row) instead of being applied in place.
+      ...(governanceChangeNeedsRevision(source, direction)
+        ? { governanceByRevision: true as const }
+        : {}),
       // Review #501 on #571 ③: the revision an align opens for this entry is held back when the
       // announced definition declares a gate-owned param — said before the align, not after.
       ...gateOwnedParamsWire(operation),

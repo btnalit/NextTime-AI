@@ -1082,6 +1082,57 @@ describe('RefreshOperationGovernanceConfirm', () => {
       expect(held.textContent).not.toContain('平台采用');
     });
 
+    it('review #493 on #612: a loosening the gate describes is not applied in place — the confirm says it opens a revision that takes effect once published, without danger styling, and the result links the draft', async () => {
+      const loosened = {
+        name: 'stock.reserve',
+        existing: {
+          mode: 'execute',
+          blastRadius: 'high',
+          autoApprovable: false,
+          status: 'published',
+        },
+        announced: { mode: 'execute', blastRadius: 'low', autoApprovable: false },
+        differs: true,
+        definitionDiffers: false,
+        direction: 'loosened',
+        governanceByRevision: true,
+      };
+      const http = scriptedHttp({
+        preview_gatekeeper_resync: () => resyncPreview({ operationsAlreadyPresent: [loosened] }),
+        refresh_operation_governance: (params) => {
+          expect(params).toEqual({
+            gatekeeperId: 'gk-1',
+            operationNames: ['stock.reserve'],
+            manifestDigest: 'described-1',
+          });
+          return {
+            gatekeeperId: 'gk-1',
+            refreshed: [],
+            revisionDrafts: [{ name: 'stock.reserve', version: 2 }],
+            unchanged: [],
+          };
+        },
+      });
+      renderResync(http);
+      fireEvent.click(screen.getByTestId('resync-gk-1'));
+      const confirm = await screen.findByTestId('resync-gk-1-confirm');
+      expect(confirm.textContent).toContain('打开修订草稿，发布后才生效');
+      expect(confirm.textContent).not.toContain('就地修正');
+      const notice = within(confirm).getByTestId('resync-gk-1-loosens-by-revision');
+      expect(notice.textContent).toContain('不会就地放宽');
+      expect(notice.textContent).toContain('发布这些修订之后');
+      expect(within(confirm).getByTestId('confirm-button').className).not.toContain('text-danger');
+
+      fireEvent.click(within(confirm).getByTestId('confirm-button'));
+      const drafts = await screen.findByTestId('resync-gk-1-loosened-drafts');
+      expect(drafts.textContent).toContain('已发布的版本没有变');
+      expect(drafts.textContent).not.toContain('门会拒绝');
+      expect(screen.queryByTestId('resync-gk-1-drafts')).toBeNull();
+      expect(
+        within(drafts).getByTestId('resync-gk-1-loosened-draft-link').getAttribute('href'),
+      ).toContain('stock.reserve');
+    });
+
     it('a gate that was linked to a platform instance meanwhile: the refused preview says to align instead, and no confirm opens', async () => {
       const http = scriptedHttp({
         preview_gatekeeper_resync: () => {

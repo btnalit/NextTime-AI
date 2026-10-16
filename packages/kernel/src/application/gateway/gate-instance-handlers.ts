@@ -469,6 +469,7 @@ export const previewGateInstanceEnableHandler: CapabilityHandler = async (
       targetGatekeeperId,
       operations,
       droppedFromGate,
+      'platform',
     );
   operations.forEach((operation, index) => {
     const existingRecord = records[index] ?? null;
@@ -600,8 +601,10 @@ export const refreshOperationGovernanceHandler: CapabilityHandler = async (
     activityId: activity.id,
     droppedByGate,
     // Legacy 214: connecting a self-connected gate again would register a second Gatekeeper, so
-    // the resync also imports what the gate now describes and the workspace never had.
-    importNew: link === null,
+    // the resync also imports what the gate now describes and the workspace never had; and since
+    // nobody reviewed the gate's own description, what it loosens waits for a publish (review
+    // #493 on #612).
+    source: link ? 'platform' : 'gate',
   });
   await endActivity(client, workspaceId, activity.id, 'completed');
 
@@ -639,7 +642,15 @@ export const refreshOperationGovernanceHandler: CapabilityHandler = async (
         version: draft.version,
         draftOf: draft.draftOf ?? null,
         replaced: draft.replaced,
-        reason: draft.newOnGate ? 'new_on_gate' : 'definition_changed',
+        reason: draft.newOnGate
+          ? 'new_on_gate'
+          : draft.governanceLoosened && !draft.governanceLoosened.definitionChanged
+            ? 'governance_loosened'
+            : 'definition_changed',
+        // Review #493 on #612 (M1): a loosening the revision carries instead of an in-place write.
+        ...(draft.governanceLoosened
+          ? { governanceDirection: draft.governanceLoosened.direction }
+          : {}),
       },
     });
   }
@@ -741,6 +752,7 @@ export const previewGatekeeperResyncHandler: CapabilityHandler = async (
     gatekeeperId,
     operations,
     () => false,
+    'gate',
   );
   const described = new Set(operations.map((operation) => operation.name));
   const published = await listPublishedOperationsForGatekeepers(client, workspaceId, [
