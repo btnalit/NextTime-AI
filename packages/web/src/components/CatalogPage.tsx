@@ -11,7 +11,7 @@ import {
   reviewFieldNames,
   usePublishCredentialReview,
 } from '../lib/credential-review.js';
-import { errorToastText, isForbiddenError } from '../lib/errors.js';
+import { errorToastText, isDraftChangedError, isForbiddenError } from '../lib/errors.js';
 import { formatRelative, prettyJson, shortId } from '../lib/format.js';
 import {
   type CapabilityNameRow,
@@ -721,7 +721,11 @@ function OperationDetailView({
   const heldBack = row.status === 'draft' && gateOwned.length > 0;
   // Legacy 278: the exact version is what the kernel discards, so a row without one (an older
   // kernel) is not offered it.
-  const offersDiscard = canDiscard && row.status === 'draft' && row.version !== undefined;
+  const offersDiscard =
+    canDiscard &&
+    row.status === 'draft' &&
+    row.version !== undefined &&
+    row.draftDigest !== undefined;
   const items: KeyValueItem[] = [
     {
       key: 'gatekeeper',
@@ -982,6 +986,10 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
         gatekeeperId: row.gatekeeperId,
         name: row.name,
         ...(action === 'publish_operation' ? credentialReview.params() : {}),
+        // Review #493 on #583: the draft this detail shows, not whatever replaced it since.
+        ...(action === 'publish_operation' && row.draftDigest !== undefined
+          ? { draftDigest: row.draftDigest }
+          : {}),
       });
       toast.push({
         tone: 'ok',
@@ -1002,6 +1010,8 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       // The kernel's credential question — answered next to Publish, not as a failure toast.
       if (action === 'publish_operation' && credentialReview.capture(err)) return;
       if (isForbiddenError(err)) permissions.markDenied(action);
+      // The toast says it was reloaded: show what is there now.
+      if (isDraftChangedError(err)) refresh();
       // C14: carry the kernel's own text — the generic title alone dropped the actual reason.
       toast.push({
         tone: 'danger',
@@ -1013,16 +1023,18 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
     }
   }
 
-  // Legacy 278: `discard_operation_draft{gatekeeperId, name, version}` — the exact version shown,
-  // so a draft replaced since is never discarded by mistake (the kernel answers 404 instead).
+  // Legacy 278: `discard_operation_draft{gatekeeperId, name, version, draftDigest}` — the version
+  // and content shown. A draft revised in place since (same version) is refused `draft_changed`
+  // (review #493 on #583); the catalog then reloads it.
   async function discardOperation(row: OperationCatalogRow, reason?: string): Promise<void> {
-    if (row.version === undefined) return;
+    if (row.version === undefined || row.draftDigest === undefined) return;
     setBusy(catalogOperationKey(row));
     try {
       await http.call('discard_operation_draft', {
         gatekeeperId: row.gatekeeperId,
         name: row.name,
         version: row.version,
+        draftDigest: row.draftDigest,
         ...(reason !== undefined ? { reason } : {}),
       });
       toast.push({
@@ -1033,6 +1045,7 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       refresh();
     } catch (err) {
       if (isForbiddenError(err)) permissions.markDenied('discard_operation_draft');
+      if (isDraftChangedError(err)) refresh();
       toast.push({
         tone: 'danger',
         title: t('无法丢弃该草稿', 'Could not discard this draft'),

@@ -203,10 +203,16 @@ describe('OnboardingWizard', () => {
             after: { mode: 'execute', blastRadius: 'medium', autoApprovable: true },
             direction: 'tightened',
           },
+          draftDigest: 'sha256:proposed',
         };
       },
       publish_operation: (params) => {
-        expect(params).toEqual({ gatekeeperId: 'gk-1', name: 'accept_s2_mcp_echo' });
+        // Review #493 on #583: published only if it is still the draft this Submit proposed.
+        expect(params).toEqual({
+          gatekeeperId: 'gk-1',
+          name: 'accept_s2_mcp_echo',
+          draftDigest: 'sha256:proposed',
+        });
         return { gatekeeperId: 'gk-1', name: 'accept_s2_mcp_echo', status: 'published' };
       },
     });
@@ -249,6 +255,9 @@ describe('OnboardingWizard', () => {
     await waitFor(() => expect(http.calls.some((c) => c.name === 'publish_operation')).toBe(true));
     const names = http.calls.map((c) => c.name);
     expect(names.indexOf('propose_operation')).toBeLessThan(names.indexOf('publish_operation'));
+    expect(http.calls.find((c) => c.name === 'publish_operation')?.params).toMatchObject({
+      draftDigest: 'sha256:proposed',
+    });
   });
 
   it('review step: a loosening reclassification is danger-styled with what it means; cancelling keeps the draft unpublished', async () => {

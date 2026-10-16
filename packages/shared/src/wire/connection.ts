@@ -120,6 +120,13 @@ export const OperationSummaryWireSchema = z
      *  `agent` / `human` for a proposal. Absent on a legacy row with none recorded. A held draft
      *  the gate never wrote is told apart from one the gate stopped announcing by this. */
     origin: z.enum(['import', 'agent', 'human']).optional(),
+    /** Review #493 on #583 (P2): on a `draft` only — the digest of everything this draft says (its
+     *  whole definition, governance fields and description included, and who wrote it). A draft is
+     *  revised in place at the same version (its proposer re-proposing, a gate re-import), so the
+     *  version alone does not name what the reader looked at: `discard_operation_draft` requires
+     *  this back, `publish_operation` takes it, and either refuses 409 `draft_changed` when the
+     *  draft is no longer the one shown. Opaque to the console. */
+    draftDigest: z.string().optional(),
   })
   .strict();
 export type OperationSummaryWire = z.infer<typeof OperationSummaryWireSchema>;
@@ -156,6 +163,10 @@ export const OperationProposeResultWireSchema = z
      *  (`null` when there is none). The onboarding wizard confirms a non-`neutral` change before
      *  its `publish_operation` step. */
     governanceChange: OperationGovernanceChangeWireSchema.nullable(),
+    /** Review #493 on #583: the draft just written, as `OperationSummaryWire.draftDigest` names it
+     *  — the wizard hands it to its `publish_operation` step, so a draft replaced in between (a
+     *  gate re-import writes over any pending draft) is refused rather than published unseen. */
+    draftDigest: z.string(),
   })
   .strict();
 

@@ -4181,6 +4181,10 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "draftDigest": {
+          "minLength": 1,
+          "type": "string"
+        },
         "gatekeeperId": {
           "minLength": 1,
           "type": "string"
@@ -4201,7 +4205,8 @@
       "required": [
         "gatekeeperId",
         "name",
-        "version"
+        "version",
+        "draftDigest"
       ],
       "type": "object"
     },
@@ -7314,6 +7319,9 @@
                 "type": "object"
               },
               "description": {
+                "type": "string"
+              },
+              "draftDigest": {
                 "type": "string"
               },
               "gateOwnedParams": {
@@ -12262,6 +12270,9 @@
               "description": {
                 "type": "string"
               },
+              "draftDigest": {
+                "type": "string"
+              },
               "gateOwnedParams": {
                 "items": {
                   "additionalProperties": false,
@@ -16738,6 +16749,9 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "draftDigest": {
+          "type": "string"
+        },
         "draftOf": {
           "type": [
             "string",
@@ -16854,7 +16868,8 @@
         "version",
         "status",
         "draftOf",
-        "governanceChange"
+        "governanceChange",
+        "draftDigest"
       ],
       "type": "object"
     },
@@ -17233,6 +17248,10 @@
       "properties": {
         "credentialsReviewed": {
           "type": "boolean"
+        },
+        "draftDigest": {
+          "minLength": 1,
+          "type": "string"
         },
         "gatekeeperId": {
           "minLength": 1,

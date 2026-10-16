@@ -317,7 +317,10 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
               "The target system's base URL (http) or MCP endpoint (mcp); https:// is added if you leave it out.",
             )}
             {targetSchemeAdded ? (
-              <span data-testid="cgi-target-scheme-note"> {schemeNote}</span>
+              <>
+                {t('', ' ')}
+                <span data-testid="cgi-target-scheme-note">{schemeNote}</span>
+              </>
             ) : null}
           </>
         }
@@ -398,7 +401,10 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
                 'Required — the OpenAPI document URL the host imports Operations from.',
               )}
               {manifestSchemeAdded ? (
-                <span data-testid="cgi-manifest-scheme-note"> {schemeNote}</span>
+                <>
+                  {t('', ' ')}
+                  <span data-testid="cgi-manifest-scheme-note">{schemeNote}</span>
+                </>
               ) : null}
             </>
           }

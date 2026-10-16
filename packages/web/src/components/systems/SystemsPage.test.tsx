@@ -633,6 +633,31 @@ describe('SystemsPage', () => {
     expect(within(drawer).queryByTestId('system-definition-mismatch-adoption')).toBeNull();
   });
 
+  it('review #501 on #583: the refused-calls chip names an Operation the gate dropped as no longer provided, not as running another definition', async () => {
+    const http = scriptedHttp({
+      execution_readiness: () =>
+        readiness({
+          principalId: 'p-self',
+          gates: [
+            gate({
+              definitionMismatch: [
+                { operation: 'stock.get', awaiting: 'workspace_revision' },
+                { operation: 'orders.cancel', awaiting: 'platform_adoption', droppedByGate: true },
+              ],
+            }),
+          ],
+        }),
+      list_available_gate_instances: () => ({ items: [LINKED_STOCK_INSTANCE] }),
+    });
+    renderPage(http);
+    const card = (await screen.findAllByTestId('gatekeeper-card'))[0] as HTMLElement;
+    const chip = within(card).getByTestId('gatekeeper-refused-operations');
+    expect(chip.textContent).toBe('2 个 Operation 调用被拒');
+    expect(chip.getAttribute('title')).toBe(
+      ['门运行的定义和已发布的不一样：', 'stock.get', '；门已不再提供：', 'orders.cancel'].join(''),
+    );
+  });
+
   it('UX acceptance of #573 P2: a refused Operation whose running definition declares a gate-owned param is said to wait on the gate, not on an align', async () => {
     const http = scriptedHttp({
       execution_readiness: () =>

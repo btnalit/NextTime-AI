@@ -85,6 +85,7 @@ const HELD_DRAFT = {
   mode: 'execute',
   blastRadius: 'medium',
   autoApprovable: false,
+  draftDigest: 'sha256:held-draft',
 };
 
 const LINKED_INSTANCE = {
@@ -530,6 +531,7 @@ describe('CatalogPage', () => {
           gatekeeperId: 'gk-1',
           name: 'stock.reserve',
           version: 2,
+          draftDigest: 'sha256:held-draft',
           reason: 'The gate dropped it.',
         });
         return { gatekeeperId: 'gk-1', name: 'stock.reserve', version: 2, status: 'discarded' };
@@ -598,6 +600,84 @@ describe('CatalogPage', () => {
       );
     },
   );
+
+  it('review #493 on #583: a draft revised since it was listed is not discarded — the toast says nothing was written and the catalog reloads it', async () => {
+    let listed = 0;
+    const http = scriptedHttp({
+      list_operations: () => {
+        listed += 1;
+        return { items: [{ ...HELD_DRAFT, version: 1, proposedBy: 'p-owner' }] };
+      },
+      get_operation_stats: () => ({ items: [] }),
+      discard_operation_draft: () =>
+        Promise.reject(
+          new HttpError('capability_error', 'changed after it was read', 'draft_changed'),
+        ),
+    });
+    renderPage(http);
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    fireEvent.click(
+      await within(detail).findByTestId('operation-discard-confirm-gk-1::stock.reserve-trigger'),
+    );
+    const confirm = await screen.findByTestId('operation-discard-confirm-gk-1::stock.reserve');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    const toast = await screen.findByTestId('toast');
+    expect(toast.textContent).toContain('这份草稿在你查看之后被修改过，本次没有写入任何内容');
+    await waitFor(() => expect(listed).toBe(2));
+  });
+
+  it('review #493 on #583: Publish sends the draftDigest of the draft shown', async () => {
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [
+          {
+            gatekeeperId: 'gk-1',
+            name: 'docker.restart',
+            status: 'draft',
+            version: 1,
+            draftDigest: 'sha256:shown',
+          },
+        ],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+      publish_operation: () => ({}),
+    });
+    renderPage(http);
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    fireEvent.click(within(detail).getByRole('button', { name: /发布/ }));
+    await waitFor(() =>
+      expect(http.calls.find((c) => c.name === 'publish_operation')?.params).toEqual({
+        gatekeeperId: 'gk-1',
+        name: 'docker.restart',
+        draftDigest: 'sha256:shown',
+      }),
+    );
+  });
+
+  it('UX acceptance of #583 (P3-2): a held draft of an Operation the gate dropped (not yet adopted) reads as gone — no rewrite offered', async () => {
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [
+          { ...HELD_DRAFT, gateOwnedParams: [{ param: 'Authorization', location: 'header' }] },
+        ],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+      list_available_gate_instances: () => ({ items: [LINKED_INSTANCE] }),
+      preview_gate_instance_enable: () => ({
+        ...heldPreview(false),
+        awaitingPlatformAdoption: {
+          announcedAt: '2026-10-16T00:00:00Z',
+          operations: ['stock.reserve'],
+          dropped: ['stock.reserve'],
+        },
+      }),
+    });
+    renderPage(http, 'operations', 'gk-1::stock.reserve');
+    const notice = await screen.findByTestId('operation-gate-owned-params');
+    await waitFor(() => expect(notice.textContent).toContain('门的当前清单里已经没有这个'));
+    expect(notice.textContent).not.toContain('门的清单还没改');
+    expect(screen.queryByTestId('operation-gate-owned-rewrite')).toBeNull();
+  });
 
   it('legacy 278: a published Operation is never offered Discard (it is deprecated instead)', async () => {
     const http = scriptedHttp({

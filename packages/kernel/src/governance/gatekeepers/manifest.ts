@@ -22,7 +22,11 @@ import {
 } from '../../substrate/ontology/index.js';
 import { type PublishActor, assertPublishAuthority, seesEveryDraft } from '../capability/index.js';
 import { assertDraftCredentialsReviewed } from '../redaction/index.js';
-import { operationDefinitionDiffers, operationRecordDigestOrNull } from './definition.js';
+import {
+  operationDefinitionDiffers,
+  operationDraftDigest,
+  operationRecordDigestOrNull,
+} from './definition.js';
 import {
   type GateOwnedParamDraft,
   assertNoGateOwnedParams,
@@ -197,14 +201,64 @@ export class OperationNotFoundError extends Error {
  * existing row's status, never its proposer or its content.
  */
 export class OperationIdentityConflictError extends Error {
-  readonly existingStatus: PublishableStatus;
-  constructor(gatekeeperId: string, name: string, existingStatus: PublishableStatus) {
+  readonly existingStatus: OperationStatus;
+  constructor(gatekeeperId: string, name: string, existingStatus: OperationStatus) {
     super(
       `Operation "${name}" on gatekeeper ${gatekeeperId} already exists (status: ${existingStatus}) — a proposal may only create a new draft or revise the proposer’s own draft`,
     );
     this.name = 'OperationIdentityConflictError';
     this.existingStatus = existingStatus;
   }
+}
+
+/**
+ * Review #493 on #583 (P2): the draft named by `{gatekeeperId, name, version}` is no longer the one
+ * the caller looked at — revised in place since (its proposer re-proposing, a gate re-import, an
+ * align rewriting the gate's own draft), so its `operationDraftDigest` differs from the
+ * `draftDigest` sent. Nothing was written; the caller reloads and decides on what is there now.
+ */
+export class OperationDraftChangedError extends Error {
+  readonly code = 'draft_changed' as const;
+  constructor(gatekeeperId: string, name: string, version: number) {
+    super(
+      `Operation "${name}" v${version} on gatekeeper ${gatekeeperId} changed after it was read (draftDigest differs) — nothing was written; reload it and look again`,
+    );
+    this.name = 'OperationDraftChangedError';
+  }
+}
+
+/** Refuses with `OperationDraftChangedError` unless `expected` is `record`'s current draft digest. */
+function assertDraftUnchanged(record: OperationRecord, expected: string): void {
+  if (operationDraftDigest(record) !== expected) {
+    throw new OperationDraftChangedError(record.gatekeeperId, record.name, record.version);
+  }
+}
+
+/**
+ * Review #493 on #583 (P3): the status of exactly `{gatekeeperId, name, version}`, discarded
+ * included — what a conditional write that lost a race reports as blocking it. `getOperation`
+ * leaves a discarded row out and so could not say which row refused the write.
+ */
+async function operationStatusAt(
+  client: PoolClient,
+  workspaceId: string,
+  gatekeeperId: string,
+  name: string,
+  version: number,
+): Promise<OperationStatus | null> {
+  const result = await client.query<{ status: OperationStatus | null }>(
+    `select properties ->> 'status' as status
+     from objects
+     where workspace_id = $1
+       and object_type = 'Operation'
+       and identity_key ->> 'gatekeeperId' = $2
+       and identity_key ->> 'name' = $3
+       and coalesce((properties ->> 'version')::int, 1) = $4
+     limit 1`,
+    [workspaceId, gatekeeperId, name, version],
+  );
+  const row = result.rows[0];
+  return row ? (row.status ?? 'draft') : null;
 }
 
 // -------------------------------------------------------------------------------------------
@@ -255,8 +309,8 @@ export class OperationDescriptionRequiredError extends Error {
 
 export interface SkippedOperation {
   readonly name: string;
-  /** `published` or `deprecated` — the row `importManifest` refused to write over. */
-  readonly status: PublishableStatus;
+  /** `published`, `deprecated` or `discarded` — the row `importManifest` refused to write over. */
+  readonly status: OperationStatus;
 }
 
 export interface ImportManifestResult {
@@ -328,10 +382,16 @@ export async function importManifest(
       origin: 'import',
     });
     if (!written) {
-      // The conditional write refused: the row exists and is not a draft. Read it back only to
-      // report which terminal status blocked the import.
-      const blocked = await getOperation(client, workspaceId, input.gatekeeperId, operation.name);
-      skipped.push({ name: operation.name, status: blocked?.status ?? 'published' });
+      // The conditional write refused: the row at this version exists and is not a draft (it may
+      // have been discarded since the pre-read). Read that exact row back to report its status.
+      const blocked = await operationStatusAt(
+        client,
+        workspaceId,
+        input.gatekeeperId,
+        operation.name,
+        version,
+      );
+      skipped.push({ name: operation.name, status: blocked ?? 'published' });
       continue;
     }
     imported.push({
@@ -422,9 +482,10 @@ export async function proposeOperation(
   });
   if (!written) {
     // Lost a race with a concurrent write on the same identity/version (the row changed between
-    // the pre-read and the conditional write); report whatever is there now.
-    const current = await getOperation(client, workspaceId, gatekeeperId, name);
-    throw new OperationIdentityConflictError(gatekeeperId, name, current?.status ?? 'draft');
+    // the pre-read and the conditional write); report what that exact row is now — a discard in
+    // between reads as `discarded`, which the "Operation now" reads leave out.
+    const current = await operationStatusAt(client, workspaceId, gatekeeperId, name, version);
+    throw new OperationIdentityConflictError(gatekeeperId, name, current ?? 'draft');
   }
 
   return {
@@ -810,6 +871,10 @@ export interface PublishOperationInput {
    *  internal callers (`publishManifest`, `enable_gate_instance`, the CLI). Operation drafts are
    *  reviewed by builders and owners (D-26), so a refusal is a 403, never a not-found. */
   readonly actor?: PublishActor;
+  /** Review #493 on #583: the `operationDraftDigest` of the draft the caller reviewed, when it
+   *  names one (`publish_operation`'s optional `draftDigest`). A draft revised in place since
+   *  refuses `OperationDraftChangedError`. Internal callers publish what is there and omit it. */
+  readonly draftDigest?: string;
 }
 
 /**
@@ -852,6 +917,9 @@ export async function publishOperation(
     `Operation ${input.gatekeeperId}/${input.name}@${existing.version}`,
   );
   transition(OPERATION_TRANSITIONS, existing.status, 'publish');
+  // Review #493 on #583: before the gate-owned and credentials checks — those are about the
+  // content the caller reviewed, and this says it is not the content here.
+  if (input.draftDigest !== undefined) assertDraftUnchanged(existing, input.draftDigest);
   // Legacy J: a definition offering a param the gate refuses on every call is never published,
   // whoever publishes it (`gate-owned-params.ts`). Before the credentials question: a draft that
   // cannot be published as it stands is not worth confirming.
@@ -1030,9 +1098,13 @@ export async function deprecateOperation(
 export interface DiscardOperationDraftInput {
   readonly gatekeeperId: string;
   readonly name: string;
-  /** The exact draft version the caller looked at — a draft replaced since (a re-import, the
-   *  proposer revising it) is another version and is never discarded by mistake. */
+  /** The draft version the caller looked at. A draft is revised in place at its own version (the
+   *  proposer re-proposing, a gate re-import), so this alone does not name its content —
+   *  `draftDigest` does (review #493 on #583). */
   readonly version: number;
+  /** The `operationDraftDigest` of the draft the caller looked at (`OperationSummaryWire.
+   *  draftDigest`); a draft revised in place since refuses `OperationDraftChangedError`. */
+  readonly draftDigest: string;
   /** D-24: the `discard_operation_draft` caller — the draft's proposer or the owner (see
    *  `PublishOperationInput.actor`). */
   readonly actor?: PublishActor;
@@ -1067,9 +1139,10 @@ export interface DiscardedOperationDraft {
  * reused (`nextOperationVersion`): a later import, proposal or align opens a fresh draft above it.
  *
  * Targets exactly `{gatekeeperId, name, version}`, locked: `OperationNotFoundError` when there is
- * no such row, `IllegalTransition` (409) when it is not a draft (a published row is deprecated,
- * not discarded), and D-24's rule on the locked row — the draft's proposer or the owner
- * (`NotProposerError`, 403). Operation drafts are visible to every caller over the builder floor
+ * no such row, D-24's rule on the locked row — the draft's proposer or the owner
+ * (`NotProposerError`, 403) — `IllegalTransition` (409) when it is not a draft (a published row is
+ * deprecated, not discarded), and `OperationDraftChangedError` (409) when the draft was revised in
+ * place since the caller read it (`draftDigest`, review #493 on #583). Operation drafts are visible to every caller over the builder floor
  * (D-26), so a refusal is never a not-found. A revision draft's published row is untouched.
  */
 export async function discardOperationDraft(
@@ -1102,6 +1175,7 @@ export async function discardOperationDraft(
     `Operation ${input.gatekeeperId}/${input.name}@${existing.version}`,
   );
   transition(OPERATION_TRANSITIONS, status, 'discard');
+  assertDraftUnchanged(existing, input.draftDigest);
   await setOperationStatusObject(
     client,
     workspaceId,
@@ -1367,6 +1441,12 @@ export interface RefreshOperationGovernanceInput {
    *  and the Activity they are written under. */
   readonly proposedBy: { readonly id: string; readonly kind: PrincipalKind };
   readonly activityId: string;
+  /** UX acceptance of #583 (P3-2): the announced Operations the gate itself no longer runs, held
+   *  until the platform adopts its new manifest (`application/gates`' `droppedUntilAdopted`).
+   *  Adopting removes them, so no draft is written for them: an import draft is not rewritten and
+   *  no revision is opened — publishing either would bring no call back. Governance fields of a
+   *  published row are still aligned in place. */
+  readonly droppedByGate?: ReadonlySet<string>;
 }
 
 export interface RefreshedOperationGovernance {
@@ -1528,14 +1608,11 @@ export async function refreshOperationGovernance(
       unchanged.push(operation.name);
       continue;
     }
+    const dropped = input.droppedByGate?.has(operation.name) ?? false;
     if (existingRecord.status === 'draft') {
-      const rewritten = await rewriteImportDraft(
-        client,
-        workspaceId,
-        input,
-        existingRecord,
-        operation,
-      );
+      const rewritten = dropped
+        ? null
+        : await rewriteImportDraft(client, workspaceId, input, existingRecord, operation);
       if (rewritten) revisionDrafts.push(rewritten);
       else unchanged.push(operation.name);
       continue;
@@ -1574,7 +1651,9 @@ export async function refreshOperationGovernance(
       : existingRecord;
     // Legacy 278: above a discarded revision too, never on top of it.
     const revisionVersion =
-      existingRecord.status === 'published' && operationDefinitionDiffers(deployed, operation)
+      !dropped &&
+      existingRecord.status === 'published' &&
+      operationDefinitionDiffers(deployed, operation)
         ? await nextOperationVersion(client, workspaceId, input.gatekeeperId, operation.name)
         : null;
     const revision =

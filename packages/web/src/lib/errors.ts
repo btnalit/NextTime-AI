@@ -472,6 +472,12 @@ export function isForbiddenError(err: unknown): boolean {
   return describeError(err).code === 'forbidden';
 }
 
+/** Review #493 on #583: the Operation draft acted on was revised in place since it was read
+ *  (`draftDigest`) — nothing was written, and the reader needs the current one. */
+export function isDraftChangedError(err: unknown): boolean {
+  return describeError(err).code === 'draft_changed';
+}
+
 /** `gatekeeper_timeout` → `Gatekeeper timeout` for codes this file has no curated title for. */
 function titleFromCode(code: string): string {
   const words = code.replace(/[_-]+/g, ' ').trim();

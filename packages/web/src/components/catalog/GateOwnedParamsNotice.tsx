@@ -206,7 +206,9 @@ export type RewriteState = 'none' | 'loading' | 'ready' | 'waiting' | 'proposal'
  *    proposed name the gate never announced is not called one it stopped announcing (UX acceptance
  *    of #573 P3-1). `origin` is the draft's own; `pendingDraft.fromGate` says the same where the
  *    gate still announces the name.
- *  - The gate no longer announcing the name: `gone`.
+ *  - The gate no longer announcing the name, or no longer running it while the platform has not
+ *    adopted its new manifest yet (`awaitingPlatformAdoption.dropped`, UX acceptance of #583): `gone`
+ *    — the align does not rewrite such a draft, and adopting removes the name.
  *  - The gate's entry still declaring a gate-owned param: `waiting`, even when the rewrite would
  *    change other fields (`pendingDraft.rewritable`) — the rewritten draft could not be published
  *    either (review #501 on #573).
@@ -219,7 +221,7 @@ export function rewriteStateOf(
 ): RewriteState {
   if (origin !== undefined && origin !== 'import') return 'proposal';
   const row = preview.operationsToImport.find((entry) => entry.name === name);
-  if (!row) return 'gone';
+  if (!row || preview.awaitingPlatformAdoption?.dropped?.includes(name) === true) return 'gone';
   if (row.pendingDraft?.fromGate === false) return 'proposal';
   if (row.gateOwnedParams && row.gateOwnedParams.length > 0) return 'waiting';
   if (row.pendingDraft?.rewritable === true) return 'ready';

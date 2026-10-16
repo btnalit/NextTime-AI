@@ -297,7 +297,22 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     describe('discard_operation_draft (legacy 278)', () => {
-      async function draftOfBuilder(): Promise<{ name: string; version: number }> {
+      /** The draft's `draftDigest`, as the catalog lists it (review #493 on #583). */
+      async function listedDigest(name: string): Promise<string> {
+        const listed = await call<{
+          items: readonly { name: string; status: string; draftDigest?: string }[];
+        }>(ownerId, 'owner', 'list_operations', { gatekeeperId });
+        const digest = listed.items.find(
+          (op) => op.name === name && op.status === 'draft',
+        )?.draftDigest;
+        if (digest === undefined) throw new Error(`expected ${name} listed with a draftDigest`);
+        return digest;
+      }
+      async function draftOfBuilder(): Promise<{
+        name: string;
+        version: number;
+        draftDigest: string;
+      }> {
         const name = `d24.discard.${randomUUID().slice(0, 8)}`;
         const proposed = await call<{ version: number }>(
           builderId,
@@ -308,7 +323,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             operation: testOperation(name),
           },
         );
-        return { name, version: proposed.version };
+        return { name, version: proposed.version, draftDigest: await listedDigest(name) };
       }
       const listedNames = async () =>
         (
@@ -374,8 +389,41 @@ describe.runIf(DATABASE_URL !== undefined)(
       it('a published Operation is refused (409 illegal transition): it is deprecated, not discarded', async () => {
         const name = await publishedOperationOfBuilder();
         await expect(
-          call(builderId, 'builder', 'discard_operation_draft', { gatekeeperId, name, version: 1 }),
+          call(builderId, 'builder', 'discard_operation_draft', {
+            gatekeeperId,
+            name,
+            version: 1,
+            draftDigest: 'sha256:any',
+          }),
         ).rejects.toMatchObject({ name: 'IllegalTransition' });
+      });
+
+      it('review #493 on #583: a draft its proposer revised in place since it was listed is refused draft_changed and stays listed', async () => {
+        const draft = await draftOfBuilder();
+        await call(builderId, 'builder', 'propose_operation', {
+          gatekeeperId,
+          operation: { ...testOperation(draft.name), description: 'Revised after it was listed.' },
+        });
+        await expect(
+          call(ownerId, 'owner', 'discard_operation_draft', { gatekeeperId, ...draft }),
+        ).rejects.toMatchObject({ code: 'draft_changed' });
+        expect(await listedNames()).toContain(draft.name);
+        const fresh = await listedDigest(draft.name);
+        expect(fresh).not.toBe(draft.draftDigest);
+        await expect(
+          call(ownerId, 'owner', 'publish_operation', {
+            gatekeeperId,
+            name: draft.name,
+            draftDigest: draft.draftDigest,
+          }),
+        ).rejects.toMatchObject({ code: 'draft_changed' });
+        const discarded = await call<{ status: string }>(
+          ownerId,
+          'owner',
+          'discard_operation_draft',
+          { gatekeeperId, ...draft, draftDigest: fresh },
+        );
+        expect(discarded.status).toBe('discarded');
       });
     });
 

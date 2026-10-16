@@ -17,6 +17,7 @@ import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { publishOperationHandler } from '../../application/gateway/operation-manifest-handlers.js';
 import { findOperationCandidates } from '../../substrate/graph/index.js';
 import { setOperationStatusObject } from '../../substrate/ontology/index.js';
+import { operationDraftDigest } from './definition.js';
 import { OperationDeclaresGateOwnedParamsError } from './gate-owned-params.js';
 import type { OperationRecord } from './manifest.js';
 import {
@@ -1732,14 +1733,23 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
 
     const owner = () => ({ principalId: ownerId, role: 'owner' as const });
 
+    /** What the catalog lists for the current draft of `name` (`OperationSummaryWire.draftDigest`). */
+    async function draftDigestOf(name: string): Promise<string> {
+      const record = await inTx((client) => getOperation(client, workspaceId, gatekeeperId, name));
+      if (record?.status !== 'draft') throw new Error(`expected a draft of ${name}`);
+      return operationDraftDigest(record);
+    }
+
     it('marks the row discarded and leaves it out of every read of the Operation; the exposes Fact stays; the next import opens a new version', async () => {
       const name = `discard.import.${randomUUID()}`;
       const draft = await importDraft(name);
+      const draftDigest = await draftDigestOf(name);
       const discarded = await inTx((client) =>
         discardOperationDraft(client, workspaceId, {
           gatekeeperId,
           name,
           version: draft.version,
+          draftDigest,
           actor: owner(),
         }),
       );
@@ -1802,11 +1812,13 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
       );
       expect(revision.version).toBe(2);
 
+      const revisionDigest = await draftDigestOf(name);
       await inTx((client) =>
         discardOperationDraft(client, workspaceId, {
           gatekeeperId,
           name,
           version: 2,
+          draftDigest: revisionDigest,
           actor: { principalId: attackerId, role: 'builder' },
         }),
       );
@@ -1828,6 +1840,7 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
     it('refuses a published version, a version that is not there, a second discard, and a caller who is neither the proposer nor the owner — writing nothing', async () => {
       const name = `discard.refusals.${randomUUID()}`;
       const draft = await importDraft(name);
+      const draftDigest = await draftDigestOf(name);
       // The proposer (ownerId here) is not this builder.
       await expect(
         inTx((client) =>
@@ -1835,6 +1848,7 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
             gatekeeperId,
             name,
             version: draft.version,
+            draftDigest,
             actor: { principalId: attackerId, role: 'builder' },
           }),
         ),
@@ -1845,6 +1859,7 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
             gatekeeperId,
             name,
             version: draft.version + 1,
+            draftDigest,
             actor: owner(),
           }),
         ),
@@ -1860,6 +1875,7 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
             gatekeeperId,
             name,
             version: draft.version,
+            draftDigest,
             actor: owner(),
           }),
         ),
@@ -1870,11 +1886,13 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
 
       const other = `discard.twice.${randomUUID()}`;
       const once = await importDraft(other);
+      const onceDigest = await draftDigestOf(other);
       await inTx((client) =>
         discardOperationDraft(client, workspaceId, {
           gatekeeperId,
           name: other,
           version: once.version,
+          draftDigest: onceDigest,
           actor: owner(),
         }),
       );
@@ -1884,6 +1902,7 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
             gatekeeperId,
             name: other,
             version: once.version,
+            draftDigest: onceDigest,
             actor: owner(),
           }),
         ),
@@ -1912,16 +1931,205 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
       };
       const first = await refresh();
       expect(first.revisionDrafts).toEqual([expect.objectContaining({ name, version: 2 })]);
+      const revisionDigest = await draftDigestOf(name);
       await inTx((client) =>
         discardOperationDraft(client, workspaceId, {
           gatekeeperId,
           name,
           version: 2,
+          draftDigest: revisionDigest,
           actor: owner(),
         }),
       );
       const second = await refresh();
       expect(second.revisionDrafts).toEqual([expect.objectContaining({ name, version: 3 })]);
+    });
+
+    async function proposeAs(principalId: string, operation: Operation): Promise<OperationRecord> {
+      const act = await newActivity();
+      return inTx((client) =>
+        proposeOperation(client, workspaceId, {
+          gatekeeperId,
+          operation,
+          proposedBy: { id: principalId, kind: 'agent' },
+          activityId: act,
+        }),
+      );
+    }
+
+    it('review #493 on #583 (P2): a draft revised in place since it was read is refused draft_changed — nothing discarded; the digest of what is there now discards it', async () => {
+      const name = `discard.revised.${randomUUID()}`;
+      await proposeAs(attackerId, testOperation({ name }));
+      const seen = await draftDigestOf(name);
+      // The proposer revises it in place — same version — changing only the description, which
+      // the gate's own definition digest leaves out.
+      const revised = await proposeAs(
+        attackerId,
+        testOperation({ name, description: 'Revised after it was read.' }),
+      );
+      expect(revised.version).toBe(1);
+      const now = await draftDigestOf(name);
+      expect(now).not.toBe(seen);
+
+      const discard = (draftDigest: string) =>
+        inTx((client) =>
+          discardOperationDraft(client, workspaceId, {
+            gatekeeperId,
+            name,
+            version: 1,
+            draftDigest,
+            actor: { principalId: attackerId, role: 'builder' },
+          }),
+        );
+      await expect(discard(seen)).rejects.toMatchObject({
+        name: 'OperationDraftChangedError',
+        code: 'draft_changed',
+      });
+      const kept = await inTx((client) => getOperation(client, workspaceId, gatekeeperId, name));
+      expect(kept).toMatchObject({ status: 'draft', version: 1 });
+      expect(kept?.operation.description).toBe('Revised after it was read.');
+
+      await expect(discard(now)).resolves.toMatchObject({ status: 'discarded', version: 1 });
+    });
+
+    it('review #493 on #583 (P2, same class): publishOperation with the digest of an earlier read publishes nothing; the current digest publishes', async () => {
+      const name = `publish.revised.${randomUUID()}`;
+      await proposeAs(attackerId, testOperation({ name }));
+      const seen = await draftDigestOf(name);
+      await proposeAs(attackerId, testOperation({ name, mode: 'execute', auto_approvable: false }));
+      const now = await draftDigestOf(name);
+
+      const publish = (draftDigest: string) =>
+        inTx((client) =>
+          publishOperation(client, workspaceId, {
+            gatekeeperId,
+            name,
+            draftDigest,
+            actor: { principalId: ownerId, role: 'owner' },
+          }),
+        );
+      await expect(publish(seen)).rejects.toMatchObject({ code: 'draft_changed' });
+      expect(
+        await inTx((client) => getPublishedOperation(client, workspaceId, gatekeeperId, name)),
+      ).toBe(null);
+      await expect(publish(now)).resolves.toMatchObject({ status: 'published', version: 1 });
+    });
+
+    /** Runs `discard` in its own transaction and holds it open (row locked, not committed) until
+     *  `loser` — started in a second transaction once the discard holds the row — is blocked on
+     *  that lock; then commits, so `loser`'s conditional write sees the row discarded. */
+    async function raceAgainstDiscard<T>(
+      name: string,
+      loser: (client: PoolClient) => Promise<T>,
+    ): Promise<PromiseSettledResult<T>> {
+      const draftDigest = await draftDigestOf(name);
+      let locked!: () => void;
+      const lockedNow = new Promise<void>((resolve) => {
+        locked = resolve;
+      });
+      let release!: () => void;
+      const released = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const discarding = inTx(async (client) => {
+        await discardOperationDraft(client, workspaceId, {
+          gatekeeperId,
+          name,
+          version: 1,
+          draftDigest,
+          actor: owner(),
+        });
+        locked();
+        await released;
+      });
+      await lockedNow;
+      let loserPid: number | undefined;
+      const losing = inTx(async (client) => {
+        const pid = await client.query<{ pid: number }>('select pg_backend_pid() as pid');
+        loserPid = pid.rows[0]?.pid;
+        return loser(client);
+      });
+      // Wait until the second transaction is blocked on the discard's row lock.
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        if (loserPid !== undefined) {
+          const waiting = await pool.query<{ wait_event_type: string | null }>(
+            'select wait_event_type from pg_stat_activity where pid = $1',
+            [loserPid],
+          );
+          if (waiting.rows[0]?.wait_event_type === 'Lock') break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      release();
+      await discarding;
+      const [settled] = await Promise.allSettled([losing]);
+      if (!settled) throw new Error('expected a settled result');
+      return settled;
+    }
+
+    it('review #493 on #583 (P3): an in-place revision that loses to a discard reports the row as discarded', async () => {
+      const name = `race.propose.${randomUUID()}`;
+      await proposeAs(ownerId, testOperation({ name }));
+      const act = await newActivity();
+      const outcome = await raceAgainstDiscard(name, (client) =>
+        proposeOperation(client, workspaceId, {
+          gatekeeperId,
+          operation: testOperation({ name, description: 'Revised meanwhile.' }),
+          proposedBy: { id: ownerId, kind: 'agent' },
+          activityId: act,
+        }),
+      );
+      expect(outcome.status).toBe('rejected');
+      const reason = outcome.status === 'rejected' ? outcome.reason : undefined;
+      expect(reason).toBeInstanceOf(OperationIdentityConflictError);
+      expect((reason as OperationIdentityConflictError).existingStatus).toBe('discarded');
+    });
+
+    it('review #493 on #583 (P3): a re-import that loses to a discard is skipped as discarded, not published', async () => {
+      const name = `race.import.${randomUUID()}`;
+      await importDraft(name);
+      const act = await newActivity();
+      const outcome = await raceAgainstDiscard(name, (client) =>
+        importManifest(client, workspaceId, {
+          gatekeeperId,
+          operations: [testOperation({ name, description: 'Announced again meanwhile.' })],
+          proposedBy: { id: ownerId, kind: 'human' },
+          activityId: act,
+        }),
+      );
+      expect(outcome.status).toBe('fulfilled');
+      const result = outcome.status === 'fulfilled' ? outcome.value : undefined;
+      expect(result?.imported).toEqual([]);
+      expect(result?.skipped).toEqual([{ name, status: 'discarded' }]);
+    });
+
+    it('UX acceptance of #583 (P3-2): an align writes no draft for an Operation the gate dropped — the import draft is not rewritten and no revision is opened', async () => {
+      const keptDraft = `dropped.draft.${randomUUID()}`;
+      const live = `dropped.live.${randomUUID()}`;
+      await importDraft(keptDraft);
+      await importDraft(live);
+      await inTx((client) => publishOperation(client, workspaceId, { gatekeeperId, name: live }));
+      const before = await draftDigestOf(keptDraft);
+      const changed = (name: string) =>
+        testOperation({
+          name,
+          params_schema: { type: 'object', properties: { sku: { type: 'string' } } },
+        });
+      const act = await newActivity();
+      const outcome = await inTx((client) =>
+        refreshOperationGovernance(client, workspaceId, {
+          gatekeeperId,
+          announcedOperations: [changed(keptDraft), changed(live)],
+          proposedBy: { id: ownerId, kind: 'human' },
+          activityId: act,
+          droppedByGate: new Set([keptDraft, live]),
+        }),
+      );
+      expect(outcome.revisionDrafts).toEqual([]);
+      expect(await draftDigestOf(keptDraft)).toBe(before);
+      expect(
+        await inTx((client) => getOperation(client, workspaceId, gatekeeperId, live)),
+      ).toMatchObject({ status: 'published', version: 1 });
     });
   });
 });

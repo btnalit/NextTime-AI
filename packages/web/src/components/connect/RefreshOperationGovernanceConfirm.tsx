@@ -184,11 +184,15 @@ export function RefreshOperationGovernanceConfirm({
         }));
       const inScope = (name: string) =>
         operationNames === undefined || operationNames.includes(name);
+      // UX acceptance of #583 (P3-2): the align opens no revision for an Operation the gate no
+      // longer runs (the kernel's `droppedByGate`; its held draft is not `rewritable` either) —
+      // adopting removes it, so nothing here offers a revision to publish for it.
+      const dropped = new Set(preview.awaitingPlatformAdoption?.dropped ?? []);
       // Legacy K (G1): a definition-only change drifts as well — "already aligned" would leave the
       // gate refusing those Operations with no way to open the revision that fixes it.
-      const drifting = preview.operationsAlreadyPresent.filter(
-        (op) => (op.differs || op.definitionDiffers) && inScope(op.name),
-      );
+      const drifting = preview.operationsAlreadyPresent
+        .map((op) => (dropped.has(op.name) ? { ...op, definitionDiffers: false } : op))
+        .filter((op) => (op.differs || op.definitionDiffers) && inScope(op.name));
       setDiffs(drifting);
       const pending = preview.operationsToImport.filter(
         (op) => op.pendingDraft !== undefined && inScope(op.name),
@@ -209,6 +213,7 @@ export function RefreshOperationGovernanceConfirm({
       // said to be waiting for the manifest to change (review #501 on #571 ①).
       const stuck = pending.filter(
         (op) =>
+          !dropped.has(op.name) &&
           !op.pendingDraft?.rewritable &&
           op.pendingDraft?.fromGate !== false &&
           (op.gateOwnedParams?.length ?? 0) > 0,

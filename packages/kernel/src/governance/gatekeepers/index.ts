@@ -56,6 +56,7 @@ export {
   OPERATION_DESCRIPTION_MAX_LENGTH,
   OperationNotFoundError,
   OperationIdentityConflictError,
+  OperationDraftChangedError,
   OperationDescriptionRequiredError,
   OperationDescriptionInvalidError,
   IllegalTransition,
@@ -65,6 +66,7 @@ export {
   OperationDefinitionUnreadableError,
   operationDefinitionChange,
   operationDefinitionDiffers,
+  operationDraftDigest,
   operationRecordDigest,
   operationRecordDigestOrNull,
 } from './definition.js';

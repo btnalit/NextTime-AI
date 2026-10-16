@@ -5,6 +5,7 @@ import {
   discardOperationDraft,
   getOperation,
   getPublishedOperation,
+  operationDraftDigest,
   operationGovernanceChange,
   proposeOperation,
   publishManifest,
@@ -99,6 +100,9 @@ export const proposeOperationHandler: CapabilityHandler = async (
   // R-19 (D-17): what publishing this draft would change on the version in effect — the wizard
   // confirms a non-neutral change before it takes the `publish_operation` step.
   const live = await getPublishedOperation(client, workspaceId, gatekeeperId, record.name);
+  // Review #493 on #583: the digest of the row as stored (what `list_operations` hands out), not of
+  // the parsed input — the draft just written is this identity's newest draft.
+  const stored = await getOperation(client, workspaceId, gatekeeperId, record.name);
 
   return {
     result: {
@@ -111,6 +115,7 @@ export const proposeOperationHandler: CapabilityHandler = async (
       // this call; `publish_operation` is the separate, explicit second step, unchanged).
       draftOf: record.draftOf ?? null,
       governanceChange: live ? operationGovernanceChange(live.operation, record.operation) : null,
+      draftDigest: operationDraftDigest(stored ?? record),
     },
     resourceType: 'operation',
     resourceId: `${record.gatekeeperId}:${record.name}`,
@@ -134,14 +139,20 @@ export const publishOperationHandler: CapabilityHandler = async (
   params,
   ctx,
 ) => {
-  const { gatekeeperId, name, credentialsReviewed } = params as {
+  const { gatekeeperId, name, credentialsReviewed, draftDigest } = params as {
     gatekeeperId: string;
     name: string;
     credentialsReviewed?: boolean;
+    draftDigest?: string;
   };
   // D-24: the draft's proposer or the owner (checked on the row being published).
   const actor = { ...publishActorOf('publish_operation', ctx), credentialsReviewed };
-  const record = await publishOperation(client, workspaceId, { gatekeeperId, name, actor });
+  const record = await publishOperation(client, workspaceId, {
+    gatekeeperId,
+    name,
+    actor,
+    ...(draftDigest !== undefined ? { draftDigest } : {}),
+  });
 
   const activity = await startActivity(client, workspaceId, {
     kind: 'operation_publish',
@@ -198,15 +209,17 @@ export const discardOperationDraftHandler: CapabilityHandler = async (
   params,
   ctx,
 ) => {
-  const { gatekeeperId, name, version } = params as {
+  const { gatekeeperId, name, version, draftDigest } = params as {
     gatekeeperId: string;
     name: string;
     version: number;
+    draftDigest: string;
   };
   const discarded = await discardOperationDraft(client, workspaceId, {
     gatekeeperId,
     name,
     version,
+    draftDigest,
     actor: publishActorOf('discard_operation_draft', ctx),
   });
   return {

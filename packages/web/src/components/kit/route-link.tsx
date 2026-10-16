@@ -49,7 +49,10 @@ export function RouteLink({
       <span className={anchor.className} data-testid={testId} data-route-refused="true">
         {children}
         {whenRefused === 'text' ? (
-          <span className="text-3"> {whoCanOpen(routeRequirement(href), t)}</span>
+          <span className="text-3">
+            {t('', ' ')}
+            {whoCanOpen(routeRequirement(href), t)}
+          </span>
         ) : null}
       </span>
     );

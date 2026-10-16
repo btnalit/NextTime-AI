@@ -1191,11 +1191,13 @@ const metaCapabilities = [
         gatekeeperId: id,
         name: z.string().min(1),
         credentialsReviewed: z.boolean().optional(),
+        // Review #493 on #583: the draft the caller reviewed (`OperationSummaryWire.draftDigest`).
+        draftDigest: z.string().min(1).optional(),
       })
       .strict(),
     resultSchema: wire.OperationPublishResultWireSchema,
     description:
-      'Publish a draft Operation (I16). Builder floor; only the draft’s proposer or the workspace owner may publish it (403 not_proposer otherwise). When the draft carries suspected credentials, credentialsReviewed: true is required — 400 credentials_review_required (details: subject, suspectedSecretValues) otherwise. Legacy J: an http Operation declaring a param only the gate sets (an identity/routing header, a credential query param, a cookie, a query param its binding fixes) is never published — 400 gate_owned_params (details: params [{param, location}]).',
+      'Publish a draft Operation (I16). Builder floor; only the draft’s proposer or the workspace owner may publish it (403 not_proposer otherwise). When the draft carries suspected credentials, credentialsReviewed: true is required — 400 credentials_review_required (details: subject, suspectedSecretValues) otherwise. Legacy J: an http Operation declaring a param only the gate sets (an identity/routing header, a credential query param, a cookie, a query param its binding fixes) is never published — 400 gate_owned_params (details: params [{param, location}]). Optional draftDigest (the catalog’s draftDigest for the draft reviewed): when the draft was revised in place since, 409 draft_changed and nothing is published.',
   },
   {
     name: 'deprecate_operation',
@@ -1214,8 +1216,10 @@ const metaCapabilities = [
     // Discarding is a lifecycle transition (`OPERATION_TRANSITIONS`, `draft → discarded`), not a
     // delete: the row, its `exposes` Fact and provenance stay; directory reads leave it out. Same
     // D-24 authority as publish/deprecate (builder floor, then the draft's proposer or the owner),
-    // checked on the locked row. `version` names the exact draft the caller looked at, so a draft
-    // replaced in the meantime is never discarded by mistake (404 until the caller reloads).
+    // checked on the locked row. `version` and `draftDigest` (`OperationSummaryWire.draftDigest`)
+    // together name the draft the caller looked at: a draft is revised in place at the same version
+    // (its proposer re-proposing, a gate re-import), so the version alone does not (review #493 on
+    // #583) — a draft whose digest differs is refused 409 `draft_changed` and nothing is written.
     // `reason` lands in this call's AuditRecord (dispatch.ts) — the same signal `discard_draft`
     // keeps for the evolution loop.
     name: 'discard_operation_draft',
@@ -1228,12 +1232,13 @@ const metaCapabilities = [
         gatekeeperId: id,
         name: z.string().min(1),
         version: z.number().int().positive(),
+        draftDigest: z.string().min(1),
         reason: z.string().max(500).optional(),
       })
       .strict(),
     resultSchema: wire.OperationDiscardResultWireSchema,
     description:
-      'Discard one draft Operation version (draft → discarded): it stays recorded but leaves the catalog, and the next draft of that Operation takes a new version. Builder floor; only the draft’s proposer or the workspace owner may discard it (403 not_proposer otherwise); a published or deprecated version is 409 (deprecate it instead). Optional reason, kept in the audit record.',
+      'Discard one draft Operation version (draft → discarded): it stays recorded but leaves the catalog, and the next draft of that Operation takes a new version. Builder floor; only the draft’s proposer or the workspace owner may discard it (403 not_proposer otherwise); a published or deprecated version is 409 (deprecate it instead). draftDigest is the draftDigest the catalog listed for that draft: a draft revised in place since refuses 409 draft_changed and nothing is discarded. Optional reason, kept in the audit record.',
   },
   {
     // S8 W3-K1 (leftover 81). `mode:'write'` (not `execute`, unlike publish/deprecate): an
