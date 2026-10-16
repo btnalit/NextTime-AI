@@ -3945,6 +3945,16 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 - 旅程：`packages/web/e2e/journeys/08-least-privilege.spec.ts` 用 operator / builder / member / auditor 四个账户打开侧栏可见的每一页并跟过所有站内链接，断言零 403、零本地拦截、没有只写着「你的角色不能看」的页；系统卡 gate 短 id 加 `data-volatile` 后截图时遮掉。
 - 未改与后续：13 个多字段表单的灰按钮（遗留 244）；验收与审查的 P2 / P3 见遗留 242、243、245、246。
 
+**入口实时上下文只放一次、进缓存前缀（#575，2026-10-16 合入，61d5735，无迁移；遗留 228、229 关闭）**
+
+- **快照放置**（`platform-extension/src/modes/live-context.ts`，entry 与 interactive 共用）：一次运行的首次调用把上下文放在最新一条消息（本轮用户输入）之后；之后每次调用在同一位置逐字节重复这条消息，于是它和之前的历史一起落在上次调用写下的缓存前缀里。每次调用仍读一次内核（R-57 租约语义不变）：没变就不加东西；运行中途某段变了，只把变了的段作为「更新」放在最后（声明替换前面的同名段，变空写 `(none now)`），这条不缓存，断点留在它之前（沿用 `prompt-cache.ts`）。下一次运行开始（`before_agent_start`）时内容变了才在新输入之后重新放置、撤掉旧快照；锚点消息被 pi 压缩掉时重新放置。快照加更新始终等于当前状态。
+- **读失败**（内核出错、超时、结果不是对象）：快照留在原位，最后放上一次的更新（如有）并注明「本次未刷新、可能已过期」，断点挪开；没有快照则不注入。运行开始时首次读失败，到第一次成功读时再决定是否重新放置（审查 #481 must-fix）。
+- **Fact 簿记字段剔除**（`entry-context.ts`）：最近 Fact 渲染去掉 `activityId`、`observationId`、`lastObservationId`、`lastObservedAt` 与空值字段（`explain` 仍可查），采集器重复观测不再改变上下文；按 20 条 UUID 形 Fact 估算这一段缩小约 44%。段字段类型不对时按空段渲染，不再抛错；`renderEntryContext` 输出不变。worker 模式本来每次运行算一次、放在启动消息之前，未改。
+- **228 结论**：门工具集合不变时每轮刷新不改变 tools 声明（按名字稳定、只追加、指纹不变不重注册，SDK 测试覆盖）；集合变化时 system 与工具合成一条放在开头、整段 miss，属预期且少见。
+- **度量**：`prompt-cache.sdk.test.ts` 用真实 pi-ai 构造的 Anthropic 请求逐字节断言放置与断点；预发真实模型阶段新增 `STEP real-usage-entry turn_call=first|later|unattributed …`（只算 `sessions.kind = entry`，每次调用按调用时刻归到当时开着的 `agent_turn`，不用上报时解析的 `llm_usage.turn_id`）；入口容器 stderr 每次调用一行 `nexttime-entry check=live_context result=placed|reused|empty|kept_on_read_error`（只有段名与字符数）。
+- **取舍**：下一次运行开始时上下文变了，旧快照之后的历史要重写一次缓存（计在 `turn_call=first`）；按候选运行约 88% 是同一 Turn 的后续调用，净收益为正。若多 Turn 数据显示 `first` 写入偏大，另评估「旧快照留在原位」。`entry-agent.yaml` 的措辞留给下一个改提示词的 PR（遗留 282）。
+- **未做**：付费实测（维护者 2026-10-16 04:03Z 已同意，合入后从 main 跑）；估算 v0.46.0 那轮入口上下文部分约 $1.48 → $0.3–0.4 属推断。
+
 **U0 — pi 0.99.2 → 1.1.0（#481，2026-10-08 合入）**
 
 - **目标版本**：方案写 1.0.2，开工时 npm `latest` 已是 1.1.0，直接升 1.1.0；核对覆盖 1.0.0–1.1.0 全部变更。逐行核对表在
