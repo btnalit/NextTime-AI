@@ -359,6 +359,32 @@
   flex-shrink: 0;
 }
 
+.error-banner-actions > * + * {
+  margin-left: var(--space-2);
+}
+
+/* Legacy 335 (#628 UX P2-1): at phone width a right-hand action column squeezed the body to a
+ * ~170px strip. Below 640px the actions drop under the body (aligned with it, past the icon) and
+ * the body keeps the full width. */
+@media (max-width: 640px) {
+  .error-banner {
+    flex-wrap: wrap;
+    row-gap: var(--space-2);
+  }
+
+  .error-banner-actions {
+    flex-basis: 100%;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    padding-left: calc(16px + var(--space-3));
+  }
+
+  .error-banner-actions > * + * {
+    margin-left: 0;
+  }
+}
+
 /* Console audit P1-1: the kernel's raw code and text, folded under the readable body. */
 .error-details {
   margin-top: var(--space-1);
@@ -371,6 +397,7 @@
   align-items: center;
   gap: var(--space-2);
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .error-details-raw {
