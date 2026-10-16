@@ -286,6 +286,36 @@ describe('MembersPage', () => {
     await waitFor(() => expect(screen.getAllByTestId('member-row')).toHaveLength(2));
   });
 
+  // Legacy 362 (#622 UX P3-4): the reserved `__…__` name is caught while typing, not by a refused submit.
+  it('a reserved __…__ display name is flagged in place and cannot be submitted', async () => {
+    const http = scriptedHttp({
+      list_principals: () => ({ items: [principal()] }),
+      create_principal: () => {
+        throw new Error('create_principal must not run for a reserved name');
+      },
+    });
+    renderPage(http);
+    await screen.findByTestId('member-row');
+
+    openMembersHeaderMenu();
+    fireEvent.click(screen.getByTestId('members-service-credential-trigger'));
+    const form = await screen.findByTestId('create-principal-form');
+    const name = within(form).getByLabelText(/显示名/);
+    fireEvent.change(name, { target: { value: ' __ci_bot__ ' } });
+    expect(form.textContent).toContain('前后各带两个下划线的显示名留给平台内部的身份');
+    expect(name.getAttribute('aria-invalid')).toBe('true');
+    const create = within(form).getByRole('button', { name: '创建' }) as HTMLButtonElement;
+    expect(create.disabled).toBe(true);
+    expect(within(form).getByTestId('create-principal-missing').textContent).toContain('双下划线');
+    fireEvent.submit(form);
+    expect(http.calls.some((call) => call.name === 'create_principal')).toBe(false);
+
+    // One underscore pair short is an ordinary name.
+    fireEvent.change(name, { target: { value: '__ci_bot' } });
+    expect(form.textContent).not.toContain('留给平台内部的身份');
+    expect(create.disabled).toBe(false);
+  });
+
   it('R-06: choosing owner for a new service credential opens the irreversible confirm; cancelling creates nothing', async () => {
     const http = scriptedHttp({
       list_principals: () => ({ items: [principal()] }),

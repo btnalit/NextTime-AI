@@ -774,7 +774,7 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
   create_principal: {
     zh: '创建服务账号',
     en: 'Create service account',
-    zhHint: '创建自动化用的服务账号及其 API 密钥。',
+    zhHint: '创建自动化用的服务账号及其 API key。',
     enHint: 'Creates a service account for automation, with its API key.',
   },
   add_member: {
@@ -790,9 +790,9 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     enHint: "Changes a member's or service principal's role here.",
   },
   rotate_api_key: {
-    zh: '轮换 API 密钥',
+    zh: 'API key 轮换',
     en: 'Rotate API key',
-    zhHint: '为服务账号换新密钥，旧密钥立即失效。',
+    zhHint: '为服务账号换新 API key，旧 key 立即失效。',
     enHint: "Rotates a service principal's key; the old one stops working at once.",
   },
   disable_principal: {
@@ -1446,7 +1446,7 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
   'user.identity_claimed': {
     zh: '账号已认领',
     en: 'Account claimed',
-    zhHint: '一个 API 密钥身份被认领为平台登录账号。',
+    zhHint: '一个 API key 身份被认领为平台登录账号。',
     enHint: 'An API-key identity was claimed as a platform login.',
   },
   'principal.user_rebound': {
