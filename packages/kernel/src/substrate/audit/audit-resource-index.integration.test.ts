@@ -16,6 +16,12 @@ import { queryAuditPage } from './writer.js';
  * `audit_records_resource_idx` instead of walking the workspace's whole trail. The readers' own
  * SQL is planned (a client that EXPLAINs what it is given), so a reader whose query stops
  * matching the partial index fails here rather than turning back into a scan on the host.
+ *
+ * The workspace gets a trail of its own first ({@link TRAIL_ROWS} rows, one resource each) and the
+ * table is analyzed: an empty workspace makes every index on `workspace_id` look as cheap as this
+ * one, and which of them the planner picks then depends on whatever else the shared test database
+ * holds. With a trail, the other path (`audit_records_workspace_created_idx`, then a filter) reads
+ * the whole trail, which is what the host would do without this index.
  * Integration (real Postgres; auto-skip without DATABASE_URL).
  */
 
@@ -25,6 +31,7 @@ const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
 
 const INDEX = 'audit_records_resource_idx';
+const TRAIL_ROWS = 5000;
 
 describe.runIf(DATABASE_URL !== undefined)('audit_records_resource_idx (legacy 338)', () => {
   let pool: Pool;
@@ -48,9 +55,17 @@ describe.runIf(DATABASE_URL !== undefined)('audit_records_resource_idx (legacy 3
           'insert into principals (workspace_id, id, kind, role, display_name) values ($1, $2, $3, $4, $5)',
           [workspaceId, ownerId, 'human', 'owner', 'owner'],
         );
+        await client.query(
+          `insert into audit_records (workspace_id, actor_principal_id, action, resource_type, resource_id, payload)
+           select $1, $2, case when n % 2 = 0 then 'action_request.fail' else 'action_request.outcome_in_doubt' end,
+                  'action_request', gen_random_uuid(), '{}'::jsonb
+             from generate_series(1, $3::int) as n`,
+          [workspaceId, ownerId, TRAIL_ROWS],
+        );
       },
       { skipRoleSwitch: true },
     );
+    await pool.query('analyze audit_records');
   });
 
   afterAll(async () => {
