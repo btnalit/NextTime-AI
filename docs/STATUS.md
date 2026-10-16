@@ -5,7 +5,7 @@
 > 拆解与实现说明在 `development-tasks.md`，评估在 `retrospective-*.md` / `code-review-*.md`，
 > 本文只链接不复制。与代码冲突时以代码为准，并修正本文。
 
-最后更新：2026-10-16（**第三方镜像首次升钉（#589，4dfc673，无迁移，未发版；遗留 181 的第一次闭环）**：按 issue #587 把 pgvector（扩展 0.8.6 → 0.8.7，PG 仍 17.11）、node（24.21.0 → 24.22.0）、postgres（17-alpine 重建）移到上游当前 digest，共修掉 16 个 HIGH；合入后在 main 跑 image-pins，issue #587 已自动关闭（run 38868739621，0 落后）。主机步骤写进 `release.md` §3.28（不执行 `ALTER EXTENSION`，应用后只读核对扩展版本）。主机窗口仍暂缓）。 上一版 2026-10-16（**Operation 草稿可丢弃与控制台批次（#583，6dfb6b3，无迁移，未发版；feat → 下一版 minor；遗留 278、294–297 关闭）**：Operation 草稿可以在能力目录里丢弃（状态转换 `draft → discarded`，保留行与来源，只有提议者或工作区所有者能丢），共享确认框每次打开从干净状态开始，门删掉的 Operation 由内核单独标出、提示不再暗示采用后会恢复。新遗留 300（P1，Skill / Procedure 发布不绑版本）与 301（P3）。主机窗口仍暂缓）。 更早的页首更新记录见 `status-history.md`「页首更新记录」。
+最后更新：2026-10-16（**登记引用与名字字段校验缺口（遗留 302–309）**：审查 #493 在审查 #593（遗留 232）时做的同类排查，按分级登记——P2 三条（Worker 定义引用不校验，须在 S11 W2 WorkerSpec 之前做；本体 LinkType 的 domain / range 不校验；旧工作区 `ontology-guard` 仍是 warn，先在主机窗口统计命中量再定），P3 五条。Operation 名字符约束与 `report_task_result` 原串进审计已并入 #593，不另登记。主机窗口仍暂缓）。 上一版 2026-10-16（**第三方镜像首次升钉（#589，4dfc673，无迁移，未发版；遗留 181 的第一次闭环）**：按 issue #587 把 pgvector（扩展 0.8.6 → 0.8.7，PG 仍 17.11）、node（24.21.0 → 24.22.0）、postgres（17-alpine 重建）移到上游当前 digest，共修掉 16 个 HIGH；合入后在 main 跑 image-pins，issue #587 已自动关闭（run 38868739621，0 落后）。主机步骤写进 `release.md` §3.28（不执行 `ALTER EXTENSION`，应用后只读核对扩展版本）。主机窗口仍暂缓）。 更早的页首更新记录见 `status-history.md`「页首更新记录」。
 
 ## 1. 入口指引
 
@@ -386,6 +386,14 @@
 | 299 | `goal-orchestration-and-admin-agent-plan-2026-10-16.md` §3.4、§5.8 两处用「他」指代 owner，改为「owner」（#580 复审记录） | P3 | 下一个改该方案的 docs PR | 开放（#580 审查记录） |
 | 300 | `publish_skill` / `publish_procedure` 只按 id 发布最新版本，而同一 id 下任何人都能插入新版本：owner 审完 v2 点发布，发出去的可能是没看过的 v3。修法同 #583（发布时带 version 或 digest，不一致得 409） | P1 | 下一个内核治理 PR | 开放（#583 的 #493 复核记录） |
 | 301 | 门的 Operation 被全部删掉时，卡片上的「用不了」芯片与抽屉「你的可达性」一节仍写「门运行的定义和已发布的不一样」，与抽屉顶部「门已经不再提供」对不上 | P3 | 下一个控制台批次 | 开放（#583 UX 补看记录） |
+| 302 | WorkerDefinition 的 `skills[]` / `capabilities[]` / `gates[]` / `model` 在提出和发布时不校验：应在发布时拒绝不存在的 capability 名（固定集合，`getCapability`）、gatekeeper 与 skill id；S11 的动态组建会直接消费这些引用，否则要到编排期才失败（审查 #493 在 #593 的同类排查） | P2 | S11 W2 WorkerSpec（GO8+）之前 | 开放（#593 审查记录） |
+| 303 | 本体 LinkType 的 `domain` / `range` 不校验是否为已声明的 ObjectType：发布出去的本体可能自相矛盾，下游 `ontology-guard` 失去判断依据；应在 `publish_ontology_version` 时拒绝（审查 #493 在 #593 的同类排查） | P2 | 下一个内核治理批次 | 开放（#593 审查记录） |
+| 304 | core 0025 之前的工作区 `ontology-guard` 仍是 `warn` 模式，是治理缺口；直接改成 enforce 可能打断老工作区的 agent，先在主机窗口统计 warn 命中量再决定（审查 #493 在 #593 的同类排查） | P2 | 主机窗口后（先统计再决定） | 开放（#593 审查记录） |
+| 305 | AgentProfile 的 `excluded*` 不校验引用、长度无上限：只会收窄，无提权风险，补长度上限即可（审查 #493 在 #593 的同类排查） | P3 | S11 L 车道 | 开放（#593 审查记录） |
+| 306 | AgentPolicy 的 `allowedSkills` / `allowedGatekeepers` 不校验引用：是上限，未知值只会让范围更窄（审查 #493 在 #593 的同类排查） | P3 | S11 L 车道 | 开放（#593 审查记录） |
+| 307 | Skill 的 `applicable.gateKinds` / `objectTypes` 不校验：只是匹配提示，不涉及授权（审查 #493 在 #593 的同类排查） | P3 | S11 L 车道 | 开放（#593 审查记录） |
+| 308 | `record_decision` / `report_turn` 的 `relatedFactIds` 不检查对应 Fact 是否存在：悬空引用影响溯源质量，不影响安全（审查 #493 在 #593 的同类排查） | P3 | S11 L 车道 | 开放（#593 审查记录） |
+| 309 | Operation 名以外的名字字段没有长度上限，只影响显示与存储（Operation 名的长度与字符约束已并入 #593）（审查 #493 在 #593 的同类排查） | P3 | S11 L 车道 | 开放（#593 审查记录） |
 
 ## 5. 更新规则
 
