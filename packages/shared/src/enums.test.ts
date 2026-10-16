@@ -286,8 +286,8 @@ const enumsUnderTest = [
 ] as const;
 
 describe('enums', () => {
-  it('covers all 30 domain enums required by R4 + S2.2 + S2.6 + R-55 (TurnStatus) + legacy 278 (OperationStatus) + S11 GO1 (ActionRequestFailureKind and the GoalRun / PlanRevision / StepRun vocabulary)', () => {
-    expect(enumsUnderTest).toHaveLength(30);
+  it('covers all 31 domain enums required by R4 + S2.2 + S2.6 + R-55 (TurnStatus) + legacy 278 (OperationStatus) + S11 GO1 (ActionRequestFailureKind and the GoalRun / PlanRevision / StepRun vocabulary) + legacy 324 (TaskFailureReason)', () => {
+    expect(enumsUnderTest).toHaveLength(31);
   });
 
   for (const [name, values, schema, expected] of enumsUnderTest) {
