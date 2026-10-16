@@ -38,6 +38,7 @@ import type { TaskRuntimeDeps } from './runtime.js';
 import { recordWorkerRunUsage, terminateTask } from './service.js';
 import { spawnWorkerRun } from './spawn.js';
 import {
+  GoalStepClosedError,
   InvokeWorkerAttenuationError,
   InvokeWorkerDefinitionNotEnabledError,
   QuotaExceededError,
@@ -289,18 +290,22 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
     expect(supervisorClient.spawnCalls).toHaveLength(0);
   });
 
-  it('S11 GO1: a nested child Task runs for its caller’s goal step, without an attempt number of its own', async () => {
-    // A principal of its own: this test leaves running Tasks behind, and `ownerId`'s count against
-    // the per-user concurrency limit is shared by the whole file (see the P2-6 test below).
-    const stepOwnerId = await adminInsertPrincipal('member', 'goal-step');
-    // The step's own attempt Task (the advancer's, GO2) and its Worker, seeded directly; the goal
-    // rows with the guards off, since the advancer that would walk them there is GO2's.
-    const stepSessionId = await insertSession('worker_run', stepOwnerId, stepOwnerId);
-    const stepHandle = await issueTestHandle(stepSessionId, {
-      capabilities: ['get_object', 'invoke_worker'],
-      resources: {},
-    });
-    const seeded = await withWorkspace(
+  /** A GoalRun, one StepRun and its attempt's Task running on `stepSessionId`'s WorkerRun — the
+   *  advancer's rows (GO2), seeded directly with the guards off. The attempt Task holds
+   *  `attemptTokenBudget` of the goal's `goalMaxTokens` (100000) and has used
+   *  `attemptTokensUsed` (0). */
+  const seedGoalStepWorker = (
+    stepOwnerId: string,
+    stepSessionId: string,
+    options: {
+      readonly goalStatus?: 'running' | 'cancelling';
+      readonly stepStatus?: 'running' | 'cancelled';
+      readonly attemptTokenBudget?: number | null;
+      readonly attemptTokensUsed?: number;
+      readonly goalMaxTokens?: number;
+    } = {},
+  ) =>
+    withWorkspace(
       pool,
       { workspaceId, principalId: stepOwnerId },
       async (client) => {
@@ -309,8 +314,13 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
           `insert into goal_runs (workspace_id, status, on_behalf_of, statement, current_revision,
              confirmed_at, budget_max_tokens, budget_max_steps, budget_max_revisions,
              budget_max_wall_clock_seconds)
-           values ($1, 'running', $2, 'a goal', 2, now(), 100000, 10, 5, 3600) returning id`,
-          [workspaceId, stepOwnerId],
+           values ($1, $3, $2, 'a goal', 2, now(), $4, 10, 5, 3600) returning id`,
+          [
+            workspaceId,
+            stepOwnerId,
+            options.goalStatus ?? 'running',
+            options.goalMaxTokens ?? 100_000,
+          ],
         );
         const goalRunId = goal.rows[0]?.id as string;
         for (const revision of [1, 2]) {
@@ -323,28 +333,49 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
         }
         const step = await client.query<{ id: string }>(
           `insert into step_runs (workspace_id, goal_run_id, step_key, introduced_in_revision,
-             status, attempt_count)
-           values ($1, $2, 's', 1, 'running', 1) returning id`,
-          [workspaceId, goalRunId],
+             status, attempt_count, ended_at)
+           values ($1, $2, 's', 1, $3, 1, case when $3 = 'running' then null else now() end)
+           returning id`,
+          [workspaceId, goalRunId, options.stepStatus ?? 'running'],
         );
         const stepRunId = step.rows[0]?.id as string;
         const task = await client.query<{ id: string }>(
           `insert into tasks (workspace_id, status, on_behalf_of, worker_definition_id,
              worker_definition_version, goal_run_id, step_run_id, plan_revision, step_attempt,
-             run_config_snapshot)
-           values ($1, 'running', $2, $3, 1, $4, $5, 2, 1, '{"definition":{"version":1}}')
+             run_config_snapshot, token_budget, tokens_used)
+           values ($1, 'running', $2, $3, 1, $4, $5, 2, 1, '{"definition":{"version":1}}', $6, $7)
            returning id`,
-          [workspaceId, stepOwnerId, workerDefinitionId, goalRunId, stepRunId],
+          [
+            workspaceId,
+            stepOwnerId,
+            workerDefinitionId,
+            goalRunId,
+            stepRunId,
+            options.attemptTokenBudget ?? null,
+            options.attemptTokensUsed ?? 0,
+          ],
         );
         await client.query(
           `insert into worker_runs (workspace_id, status, task_id, session_id, depth, attempt)
            values ($1, 'running', $2, $3, 1, 1)`,
           [workspaceId, task.rows[0]?.id, stepSessionId],
         );
-        return { goalRunId, stepRunId };
+        return { goalRunId, stepRunId, attemptTaskId: task.rows[0]?.id as string };
       },
       { skipRoleSwitch: true },
     );
+
+  it('S11 GO1: a nested child Task runs for its caller’s goal step, without an attempt number of its own', async () => {
+    // A principal of its own: this test leaves running Tasks behind, and `ownerId`'s count against
+    // the per-user concurrency limit is shared by the whole file (see the P2-6 test below).
+    const stepOwnerId = await adminInsertPrincipal('member', 'goal-step');
+    // The step's own attempt Task and its Worker (`seedGoalStepWorker`).
+    const stepSessionId = await insertSession('worker_run', stepOwnerId, stepOwnerId);
+    const stepHandle = await issueTestHandle(stepSessionId, {
+      capabilities: ['get_object', 'invoke_worker'],
+      resources: {},
+    });
+    const seeded = await seedGoalStepWorker(stepOwnerId, stepSessionId);
 
     const result = await invokeWorker(
       workspaceId,
@@ -388,6 +419,198 @@ describe.runIf(DATABASE_URL !== undefined)('invoke_worker — integration (real 
       ),
     );
     expect(outside.rows[0]).toEqual({ goal_run_id: null, step_run_id: null });
+  });
+
+  it('S11 GO3a: a nested child Task takes its budget from what its goal has left, then from its caller’s unspent budget (#619 deviation 6, review #493 P2-1), and a closed step takes none (I-G9)', async () => {
+    // A principal per case: each leaves an attempt Task and a child running, and they count against
+    // the per-user concurrency limit (5).
+    const childOf = async (seed: Parameters<typeof seedGoalStepWorker>[2]) => {
+      const stepOwnerId = await adminInsertPrincipal('member', 'goal-step-budget');
+      const sessionId = await insertSession('worker_run', stepOwnerId, stepOwnerId);
+      const handle = await issueTestHandle(sessionId, {
+        capabilities: ['get_object', 'invoke_worker'],
+        resources: {},
+      });
+      const seeded = await seedGoalStepWorker(stepOwnerId, sessionId, seed);
+      const supervisor = new FakeTaskSupervisorClient();
+      const invoked = invokeWorker(
+        workspaceId,
+        { principalId: stepOwnerId, channel: 'handle', claims: claimsFromIssued(handle) },
+        { definitionId: workerDefinitionId, version: 1, input: {}, wait: false },
+        deps(supervisor),
+      );
+      return { seeded: { ...seeded, stepOwnerId }, supervisor, invoked };
+    };
+    /** The step's child Tasks' budgets, its attempt's budget, and the attempt's hand-down audit. */
+    const budgetsOf = (seeded: {
+      readonly stepOwnerId: string;
+      readonly stepRunId: string;
+      readonly attemptTaskId: string;
+    }) =>
+      inTx(seeded.stepOwnerId, async (client) => {
+        const children = await client.query<{ id: string; token_budget: string | null }>(
+          `select id, token_budget from tasks
+            where workspace_id = $1 and step_run_id = $2 and step_attempt is null`,
+          [workspaceId, seeded.stepRunId],
+        );
+        const attempt = await client.query<{ token_budget: string | null }>(
+          'select token_budget from tasks where workspace_id = $1 and id = $2',
+          [workspaceId, seeded.attemptTaskId],
+        );
+        const handedDown = await client.query<{ payload: Record<string, unknown> }>(
+          `select payload from audit_records
+            where workspace_id = $1 and resource_type = 'task' and resource_id = $2
+              and action = 'task.budget_handed_down'`,
+          [workspaceId, seeded.attemptTaskId],
+        );
+        return {
+          children: children.rows.map((row) => ({
+            id: row.id,
+            tokenBudget: row.token_budget === null ? null : Number(row.token_budget),
+          })),
+          attempt: Number(attempt.rows[0]?.token_budget),
+          handedDown: handedDown.rows.map((row) => row.payload),
+        };
+      });
+
+    // The goal's free headroom covers the workspace default (200000): the caller gives nothing.
+    const free = await childOf({ goalMaxTokens: 500_000, attemptTokenBudget: 100_000 });
+    await free.invoked;
+    expect(await budgetsOf(free.seeded)).toMatchObject({
+      children: [{ tokenBudget: 200_000 }],
+      attempt: 100_000,
+      handedDown: [],
+    });
+
+    // One nested step whose attempt holds all of a goal smaller than the default — what the advance
+    // gives a lone ready step — and has used 20000: its child gets half of the 130000 unspent, and
+    // the attempt's budget drops by as much, audited on the attempt.
+    const lone = await childOf({
+      goalMaxTokens: 150_000,
+      attemptTokenBudget: 150_000,
+      attemptTokensUsed: 20_000,
+    });
+    await lone.invoked;
+    const loneBudgets = await budgetsOf(lone.seeded);
+    expect(loneBudgets).toMatchObject({ children: [{ tokenBudget: 65_000 }], attempt: 85_000 });
+    expect(loneBudgets.handedDown).toEqual([
+      { childTaskId: loneBudgets.children[0]?.id, tokens: 65_000, tokenBudget: 85_000 },
+    ]);
+
+    // Free headroom first, then the caller: 1000 free plus half of the attempt's 99000.
+    const mixed = await childOf({ attemptTokenBudget: 99_000 });
+    await mixed.invoked;
+    expect(await budgetsOf(mixed.seeded)).toMatchObject({
+      children: [{ tokenBudget: 50_500 }],
+      attempt: 49_500,
+    });
+
+    // Nothing free and one unspent token, which the caller keeps: no child Task, and the refusal
+    // says why.
+    const exhausted = await childOf({ attemptTokenBudget: 100_000, attemptTokensUsed: 99_999 });
+    const err = await exhausted.invoked.catch((caught: unknown) => caught);
+    expect(err).toBeInstanceOf(QuotaExceededError);
+    expect((err as InstanceType<typeof QuotaExceededError>).code).toBe('goal_budget_exhausted');
+    expect(await budgetsOf(exhausted.seeded)).toMatchObject({ children: [], attempt: 100_000 });
+    expect(exhausted.supervisor.spawnCalls).toHaveLength(0);
+
+    // The step was cancelled with its goal: its Worker starts no child.
+    const closed = await childOf({ goalStatus: 'cancelling', stepStatus: 'cancelled' });
+    await expect(closed.invoked).rejects.toBeInstanceOf(GoalStepClosedError);
+    expect((await budgetsOf(closed.seeded)).children).toEqual([]);
+    expect(closed.supervisor.spawnCalls).toHaveLength(0);
+  });
+
+  it('S11 GO3a (review #493 P2-1): a lone nested step of a 150000-token goal starts a child that runs to its end, and the goal spends no more than its budget', async () => {
+    const stepOwnerId = await adminInsertPrincipal('member', 'goal-step-nested');
+    const sessionId = await insertSession('worker_run', stepOwnerId, stepOwnerId);
+    const handle = await issueTestHandle(sessionId, {
+      capabilities: ['get_object', 'invoke_worker'],
+      resources: {},
+    });
+    // What the advance gives the one ready step of a goal smaller than the workspace default
+    // (200000): all of it.
+    const seeded = await seedGoalStepWorker(stepOwnerId, sessionId, {
+      goalMaxTokens: 150_000,
+      attemptTokenBudget: 150_000,
+    });
+    const runtimeDeps = deps(new FakeTaskSupervisorClient());
+    const child = await invokeWorker(
+      workspaceId,
+      { principalId: stepOwnerId, channel: 'handle', claims: claimsFromIssued(handle) },
+      { definitionId: workerDefinitionId, version: 1, input: {}, wait: false },
+      runtimeDeps,
+    );
+    const goalTasks = () =>
+      inTx(stepOwnerId, async (client) => {
+        const rows = await client.query<{
+          id: string;
+          status: string;
+          token_budget: string;
+          tokens_used: string;
+        }>(
+          `select id, status, token_budget, tokens_used from tasks
+            where workspace_id = $1 and goal_run_id = $2`,
+          [workspaceId, seeded.goalRunId],
+        );
+        return new Map(
+          rows.rows.map((row) => [
+            row.id,
+            {
+              status: row.status,
+              tokenBudget: Number(row.token_budget),
+              tokensUsed: Number(row.tokens_used),
+            },
+          ]),
+        );
+      });
+    let tasks = await goalTasks();
+    expect(tasks.get(child.taskId)).toMatchObject({ status: 'running', tokenBudget: 75_000 });
+    expect(tasks.get(seeded.attemptTaskId)).toMatchObject({ tokenBudget: 75_000 });
+
+    const childRun = await inTx(stepOwnerId, (client) =>
+      readWorkerRunRow(client, workspaceId, child.workerRunId),
+    );
+    const { configureTaskRuntime, resetTaskRuntimeForTests } = await import('./runtime.js');
+    configureTaskRuntime(runtimeDeps);
+    try {
+      // The child spends 70000 of its 75000 and reports its result.
+      await inTx(stepOwnerId, (client) =>
+        recordWorkerRunUsage(client, workspaceId, childRun?.sessionId as string, {
+          inputTokens: 50_000,
+          outputTokens: 20_000,
+        }),
+      );
+      await inTx(stepOwnerId, (client) =>
+        completeTaskWithResult(client, workspaceId, stepOwnerId, child.taskId, child.workerRunId, {
+          summary: 'done',
+        }),
+      );
+      // The attempt goes on within the budget it kept …
+      await inTx(stepOwnerId, (client) =>
+        recordWorkerRunUsage(client, workspaceId, sessionId, {
+          inputTokens: 74_999,
+          outputTokens: 0,
+        }),
+      );
+      expect((await goalTasks()).get(seeded.attemptTaskId)).toMatchObject({ status: 'running' });
+      // … and the call that reaches it ends the attempt: its budget is 75000 now, not 150000.
+      await inTx(stepOwnerId, (client) =>
+        recordWorkerRunUsage(client, workspaceId, sessionId, { inputTokens: 1, outputTokens: 0 }),
+      );
+    } finally {
+      resetTaskRuntimeForTests();
+    }
+
+    tasks = await goalTasks();
+    expect(tasks.get(child.taskId)).toMatchObject({ status: 'completed', tokensUsed: 70_000 });
+    expect(tasks.get(seeded.attemptTaskId)).toMatchObject({
+      status: 'failed',
+      tokensUsed: 75_000,
+    });
+    const spent = [...tasks.values()].reduce((sum, task) => sum + task.tokensUsed, 0);
+    expect(spent).toBe(145_000);
+    expect(spent).toBeLessThanOrEqual(150_000);
   });
 
   // P2-6 fix (review job 652a4abc: "quota checks in separate txns, no lock → concurrent invokes

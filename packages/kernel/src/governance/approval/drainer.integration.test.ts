@@ -254,6 +254,51 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(statuses).toEqual(['withdrawn', 'withdrawn', 'executed']);
     });
 
+    // Legacy 330 (S11 GO3a): the head can be withdrawn — its goal step cancelled — between the
+    // drain's read of the queue and its start of that row. The start refuses it; the drain reads the
+    // queue again and carries on rather than ending, so the rows behind it do not wait for the next
+    // tick when the withdrawal's own drain was skipped as in flight.
+    it('legacy 330: a head withdrawn between the read and the start does not end the drain; the rows behind it run now', async () => {
+      const gatekeeperId = await insertGatekeeperObject();
+      const head = await createAutoApproved(gatekeeperId, 'test.drain330.head');
+      await createAutoApproved(gatekeeperId, 'test.drain330.after');
+
+      // The drain's second transaction is the start of `head`: withdraw it just before.
+      let opened = 0;
+      async function racingTransaction<T>(
+        ws: string,
+        principalId: string,
+        fn: (client: PoolClient) => Promise<T>,
+      ): Promise<T> {
+        opened += 1;
+        if (opened === 2) {
+          await withTransaction(workspaceId, ownerId, (client) =>
+            withdrawActionRequest(client, workspaceId, head.id),
+          );
+        }
+        return withTransaction(ws, principalId, fn);
+      }
+
+      const calls: string[] = [];
+      const drainer = new ApprovalDrainer({
+        executor: fakeExecutor({}, calls),
+        withTransaction: racingTransaction,
+      });
+      const result = await drainer.drainGatekeeper(workspaceId, ownerId, gatekeeperId);
+
+      expect(result).toEqual({
+        processed: 1,
+        stoppedAtPending: false,
+        stoppedAtExecuting: false,
+        skippedInFlight: false,
+      });
+      expect(calls).toEqual(['test.drain330.after']);
+      const headAfter = await withTransaction(workspaceId, ownerId, (client) =>
+        getActionRequest(client, workspaceId, head.id),
+      );
+      expect(headAfter?.status).toBe('withdrawn');
+    });
+
     // Real-model regression 2026-10-02: a gate `apply` timeout is "outcome unknown", not failure —
     // the row must stay `executing` (for the stale-executing reaper's idempotent replay), never be
     // written `failed` while the gate may still be completing the effect. R-50 (D-10): that row is

@@ -15,7 +15,12 @@ import {
 import { resolveActiveRuntimeImage } from '../platform/runtime.js';
 import { requirePublishedWorkerDefinition } from '../worker/index.js';
 import { readDefinitionContent, resolveSkillsInline } from './definition-content.js';
-import { readTaskGoalStep } from './goal-step.js';
+import {
+  allotChildTokenBudget,
+  lockGoalStepForNewWork,
+  readTaskGoalStep,
+  takeChildBudgetFromCaller,
+} from './goal-step.js';
 import {
   computeChildHandleScope,
   defaultWorkerCapabilities,
@@ -31,6 +36,7 @@ import { recordTaskTransition } from './transition-log.js';
 import {
   InvokeWorkerDefinitionNotEnabledError,
   InvokeWorkerValidationError,
+  QuotaExceededError,
   TASK_ROW_COLUMNS,
   type TaskRow,
   WORKER_RUN_ROW_COLUMNS,
@@ -353,6 +359,22 @@ async function insertQueuedTaskWithQuotaCheck(
     deps.pool,
     { workspaceId, principalId: caller.principalId },
     async (client) => {
+      const callerWorkerRun = caller.claims
+        ? await resolveCallerWorkerRun(client, workspaceId, caller.claims.sid)
+        : null;
+      // S11 GO1: a nested child Task runs for the same goal step as its caller's Task — I-G4's
+      // per-step dedupe and I-G9's checks judge it by that step. It takes no attempt number:
+      // attempts are the advancer's alone (I-G1).
+      const goalStep = callerWorkerRun
+        ? await readTaskGoalStep(client, workspaceId, callerWorkerRun.taskId)
+        : null;
+      // S11 GO3a (I-G9): only a running or waiting step takes a new child Task. The StepRun's share
+      // lock is taken before the quota lock below — the advancer takes its StepRun locks before
+      // the same quota lock, so both lock in one order.
+      if (goalStep) {
+        await lockGoalStepForNewWork(client, workspaceId, goalStep.stepRunId, 'invoke_worker');
+      }
+
       await lockTaskQuotas(client, workspaceId, caller.principalId);
 
       if (input.idempotencyKey) {
@@ -364,9 +386,6 @@ async function insertQueuedTaskWithQuotaCheck(
         if (existing) return { kind: 'replay' as const, task: existing };
       }
 
-      const callerWorkerRun = caller.claims
-        ? await resolveCallerWorkerRun(client, workspaceId, caller.claims.sid)
-        : null;
       const depth = (callerWorkerRun?.depth ?? 0) + 1;
       // S10 E1 (leftover 123 "嵌套 Worker 的 Task 没有 Turn 归属"): a Worker's own `invoke_worker`
       // belongs to the Turn that generated its root Task — read off the caller's own Task, never
@@ -375,12 +394,6 @@ async function insertQueuedTaskWithQuotaCheck(
       const generatingTurnId = callerWorkerRun
         ? await readTaskGeneratingTurnId(client, workspaceId, callerWorkerRun.taskId)
         : (caller.turnId ?? null);
-      // S11 GO1: a nested child Task runs for the same goal step as its caller's Task — I-G4's
-      // per-step dedupe and I-G9's checks judge it by that step. It takes no attempt number:
-      // attempts are the advancer's alone (I-G1).
-      const goalStep = callerWorkerRun
-        ? await readTaskGoalStep(client, workspaceId, callerWorkerRun.taskId)
-        : null;
       const resolvedQuotas = await assertTaskQuotas(
         client,
         workspaceId,
@@ -388,6 +401,27 @@ async function insertQueuedTaskWithQuotaCheck(
         input.definitionId,
         depth,
       );
+      // S11 GO3a (I-G6, #619 deviation 6; review #493 P2-1 on #626): a child Task of a goal step
+      // spends the goal's tokens: its budget comes out of the goal's free headroom, then out of its
+      // caller's unspent budget (`allotChildTokenBudget`) — read under the quota lock, which the
+      // advancer's attempts take too.
+      let tokenBudget = resolvedQuotas.defaultTokenBudget;
+      let fromCaller = 0;
+      if (goalStep && callerWorkerRun) {
+        const allotted = await allotChildTokenBudget(client, workspaceId, {
+          goalRunId: goalStep.goalRunId,
+          callerTaskId: callerWorkerRun.taskId,
+          defaultTokenBudget: tokenBudget,
+        });
+        if (!allotted) {
+          throw new QuotaExceededError(
+            'goal_budget_exhausted',
+            `${input.definitionId}: goal run ${goalStep.goalRunId} has no token budget left`,
+          );
+        }
+        tokenBudget = allotted.tokenBudget;
+        fromCaller = allotted.fromCaller;
+      }
 
       const taskResult = await client.query(
         `insert into tasks (
@@ -403,7 +437,7 @@ async function insertQueuedTaskWithQuotaCheck(
           input.definitionId,
           input.version,
           JSON.stringify(input.input ?? null),
-          resolvedQuotas.defaultTokenBudget,
+          tokenBudget,
           resolvedQuotas.defaultDurationLimitSec,
           input.idempotencyKey ?? null,
           goalStep?.goalRunId ?? null,
@@ -423,6 +457,14 @@ async function insertQueuedTaskWithQuotaCheck(
         taskId: mappedTask.id,
         resultingStatus: 'queued',
       });
+      if (callerWorkerRun && fromCaller > 0) {
+        await takeChildBudgetFromCaller(client, workspaceId, {
+          callerTaskId: callerWorkerRun.taskId,
+          childTaskId: mappedTask.id,
+          tokens: fromCaller,
+          actorPrincipalId: caller.principalId,
+        });
+      }
 
       return {
         kind: 'created' as const,

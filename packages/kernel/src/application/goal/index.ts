@@ -9,7 +9,9 @@
  * (`disposition.ts`). GO2 adds the plan's shape and checks (`plan.ts`), proposing and confirming a
  * run (`service.ts`), the deterministic advancer (`advance.ts`: one advance of one run;
  * `advancer.ts`: due claims, the outbox wake consumer and the reconcile scan) and its transition
- * log (`transition-log.ts`). The recovery, cancel and revise paths (GO3) build on these.
+ * log (`transition-log.ts`). GO3a adds a person stopping a run (`control.ts`: pause, resume,
+ * cancel), the advance of a cancelling run (`cancelling.ts`) and the transition helpers both writers
+ * share (`moves.ts`); revision and the reconcile path (GO3b) build on these.
  *
  * Boundaries: it lives in `application` because the advancer creates Tasks (`application/task`) and
  * withdraws ActionRequests (`governance/approval`) in the transaction that moves a StepRun.
@@ -26,7 +28,13 @@ export {
   stepActionEffect,
 } from './disposition.js';
 
-export { getGoalRun, getPlanRevision, listStepRuns, readStepActionEffect } from './reads.js';
+export {
+  getGoalRun,
+  getPlanRevision,
+  listStepRuns,
+  lockStepRuns,
+  readStepActionEffect,
+} from './reads.js';
 
 export {
   DEFAULT_MAX_ATTEMPTS,
@@ -64,8 +72,27 @@ export {
 } from './advance.js';
 
 export {
+  type CancelLeftovers,
+  type CancellingOptions,
+  DEFAULT_CANCEL_DEADLINE_MS,
+  DEFAULT_CANCEL_RECHECK_MS,
+  GOAL_CANCELLED_WITHDRAW_REASON,
+  readCancelLeftovers,
+} from './cancelling.js';
+
+export {
+  type GoalControlActor,
+  type GoalControlInput,
+  type GoalControlResult,
+  cancelGoalRun,
+  pauseGoalRun,
+  resumeGoalRun,
+} from './control.js';
+
+export {
   ADVANCED_GOAL_RUN_STATUSES,
   DEFAULT_GOAL_ADVANCE_BATCH,
+  DEFAULT_GOAL_CLEANUP_BATCH,
   DEFAULT_GOAL_ADVANCE_LEASE_MS,
   DEFAULT_GOAL_ADVANCER_INTERVAL_MS,
   DEFAULT_GOAL_RECONCILE_INTERVAL_MS,
@@ -75,6 +102,7 @@ export {
   markReconcileDue,
   registerGoalWakeConsumer,
   runGoalAdvancerTick,
+  sweepGoalCancelCleanup,
 } from './advancer.js';
 
 export type { GoalRunBudget, GoalRunRow, PlanRevisionRow, StepRunRow } from './types.js';

@@ -8,9 +8,12 @@ import { type PoolLike, withWorkspace } from '../../adapters/db/pool.js';
 import { getActionRequest } from '../../governance/approval/index.js';
 import { SYSTEM_ACTOR_PLACEHOLDER } from '../../governance/gatekeepers/index.js';
 import type { DomainEvent } from '../../substrate/outbox/index.js';
-import { readTaskGoalStep } from '../task/index.js';
+import { readTaskGoalStep, terminateTaskWith } from '../task/index.js';
 import { type GoalAdvanceDeps, type GoalAdvanceTarget, advanceGoalRun } from './advance.js';
+import { readCancelLeftovers } from './cancelling.js';
 import { actionDisposition } from './disposition.js';
+import { lockGoalRun } from './service.js';
+import { recordGoalRunTransition } from './transition-log.js';
 
 /**
  * application/goal/advancer (S11 GO2; plan §4.2): what makes advances happen — all of it state in
@@ -31,9 +34,12 @@ import { actionDisposition } from './disposition.js';
  *   3. {@link markReconcileDue} — the periodic reconcile scan (S12): sets due every advanced
  *      GoalRun whose rows say an advance has work the run is not scheduled for — so a dead-lettered
  *      or failed wake delays a run by at most one scan period.
+ *   4. {@link sweepGoalCancelCleanup} — on the same period (S11 GO3a): a run cancelled with
+ *      `cleanup_pending` gets its remaining Tasks terminated again, and the flag cleared once
+ *      neither Tasks nor executing requests are left.
  *
- * Only `running` and `paused` runs are advanced ({@link ADVANCED_GOAL_RUN_STATUSES}); GO3
- * (`cancelling`) and GO4 (`verifying`) extend the list with the advance steps they add.
+ * `running`, `paused` and `cancelling` runs are advanced ({@link ADVANCED_GOAL_RUN_STATUSES});
+ * GO4 (`verifying`) extends the list with the advance step it adds.
  *
  * The claim and the scan are raw cross-workspace statements on a pooled connection with no
  * workspace context, the same posture as the task reaper's scans and the invariant monitors: they
@@ -41,7 +47,7 @@ import { actionDisposition } from './disposition.js';
  * advance, inside the requester's workspace context.
  */
 
-export const ADVANCED_GOAL_RUN_STATUSES = ['running', 'paused'] as const;
+export const ADVANCED_GOAL_RUN_STATUSES = ['running', 'paused', 'cancelling'] as const;
 
 /** How often the composition root runs {@link runGoalAdvancerTick}. */
 export const DEFAULT_GOAL_ADVANCER_INTERVAL_MS = 1000;
@@ -124,17 +130,18 @@ export async function runGoalAdvancerTick(
 }
 
 /**
- * The reconcile scan (§4.2 item 3, S12): sets due — `next_tick_at = now()` — every `running` or
- * `paused` GoalRun not already due, and not held by an advance (`skip locked`: an advance in
- * progress re-reads everything anyway), that has
+ * The reconcile scan (§4.2 item 3, S12): sets due — `next_tick_at = now()` — every advanced
+ * GoalRun ({@link ADVANCED_GOAL_RUN_STATUSES}) not already due, and not held by an advance
+ * (`skip locked`: an advance in progress re-reads everything anyway), that has
  *   (a) a `running` step whose current attempt's Task has finished;
  *   (b) a step `waiting(approval)` with no request of the step still in flight;
- *   (c) while running: no `next_tick_at` at all (an advance of a running run always leaves one —
- *       the wall-clock deadline at the latest);
+ *   (c) while running or cancelling: no `next_tick_at` at all (an advance of such a run always
+ *       leaves one — the wall-clock or cancel deadline at the latest);
  *   (d) while running: Tokens used by its Tasks at or past its token budget (usage has no event of
- *       its own; nested child Tasks' budgets are not capped by the goal's).
+ *       its own; each Task's budget is capped by the goal's headroom, but the model call that
+ *       crosses a Task's budget lands before the usage hook fails the Task).
  * Returns how many runs it set due. A `waiting(reconcile)` step is not counted: its GoalRun is
- * paused for a person (GO3 runs the reconcile observation).
+ * paused for a person (GO3b runs the reconcile observation).
  */
 export async function markReconcileDue(pool: PoolLike): Promise<number> {
   const client = await pool.connect();
@@ -163,7 +170,7 @@ export async function markReconcileDue(pool: PoolLike): Promise<number> {
                             select 1 from action_requests ar
                              where ar.workspace_id = s.workspace_id and ar.step_run_id = s.id
                                and ar.status = any($2::text[])))
-                     or (c.status = 'running' and c.next_tick_at is null)
+                     or (c.status in ('running', 'cancelling') and c.next_tick_at is null)
                      or (c.status = 'running'
                          and (select coalesce(sum(t.tokens_used), 0) from tasks t
                                where t.workspace_id = c.workspace_id and t.goal_run_id = c.id)
@@ -176,6 +183,83 @@ export async function markReconcileDue(pool: PoolLike): Promise<number> {
   } finally {
     client.release();
   }
+}
+
+/** Cancelled runs with `cleanup_pending` looked at per sweep. */
+export const DEFAULT_GOAL_CLEANUP_BATCH = 20;
+
+/**
+ * The cleanup sweep (§3.4 `cleanup_pending`, S11 GO3a): a run whose cancel deadline passed with
+ * Tasks or executing requests left was `cancelled` with `cleanup_pending` (`cancelling.ts`). For
+ * each such run, in the requester's workspace context and under the GoalRun lock: when nothing is
+ * left, the flag is cleared (`goal_run.cleanup_finished`, with a `GoalRunUpdated` so a page showing
+ * the leftovers refreshes); otherwise its live Tasks are terminated again after the commit.
+ * Executing requests need nothing from here: the R-48 reaper ends them. Returns how many runs had
+ * their flag cleared.
+ */
+export async function sweepGoalCancelCleanup(
+  deps: GoalAdvanceDeps,
+  options: { readonly limit?: number } = {},
+): Promise<number> {
+  const client = await deps.pool.connect();
+  let targets: readonly GoalAdvanceTarget[];
+  try {
+    const result = await client.query<{ workspace_id: string; id: string; on_behalf_of: string }>(
+      `select workspace_id, id, on_behalf_of from goal_runs
+        where status = 'cancelled' and cleanup_pending
+        order by updated_at, id
+        limit $1`,
+      [options.limit ?? DEFAULT_GOAL_CLEANUP_BATCH],
+    );
+    targets = result.rows.map((row) => ({
+      workspaceId: row.workspace_id,
+      goalRunId: row.id,
+      requesterId: row.on_behalf_of,
+    }));
+  } finally {
+    client.release();
+  }
+  let cleared = 0;
+  for (const target of targets) {
+    try {
+      const swept = await withWorkspace(
+        deps.pool,
+        { workspaceId: target.workspaceId, principalId: target.requesterId },
+        async (tx) => {
+          const goal = await lockGoalRun(tx, target.workspaceId, target.goalRunId);
+          if (!goal || goal.status !== 'cancelled' || !goal.cleanupPending) {
+            return { liveTaskIds: [], cleared: false };
+          }
+          const leftovers = await readCancelLeftovers(tx, goal);
+          if (leftovers.liveTaskIds.length > 0 || leftovers.executingActions.length > 0) {
+            return { liveTaskIds: leftovers.liveTaskIds, cleared: false };
+          }
+          await tx.query(
+            `update goal_runs set cleanup_pending = false
+              where workspace_id = $1 and id = $2 and status = 'cancelled' and cleanup_pending`,
+            [goal.workspaceId, goal.id],
+          );
+          // Not a transition (the status stays `cancelled`); recorded the same way so the audit
+          // log and the event stream say the leftovers are gone.
+          await recordGoalRunTransition(tx, goal.workspaceId, {
+            actorPrincipalId: goal.onBehalfOf,
+            action: 'goal_run.cleanup_finished',
+            goalRunId: goal.id,
+            resultingStatus: 'cancelled',
+            extraAuditPayload: { by: 'advancer' },
+          });
+          return { liveTaskIds: [], cleared: true };
+        },
+      );
+      if (swept.cleared) cleared += 1;
+      for (const taskId of swept.liveTaskIds) {
+        await terminateTaskWith(deps.taskRuntime, target.workspaceId, target.requesterId, taskId);
+      }
+    } catch (err) {
+      deps.onStartError?.(err);
+    }
+  }
+  return cleared;
 }
 
 type GoalWakeEventType = 'TaskUpdated' | 'ActionRequestUpdated';

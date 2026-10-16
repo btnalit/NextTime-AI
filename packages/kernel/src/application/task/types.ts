@@ -1,4 +1,4 @@
-import type { TaskStatus, WorkerRunStatus } from '@nexttime/shared';
+import { IllegalTransition, type TaskStatus, type WorkerRunStatus } from '@nexttime/shared';
 
 /**
  * application/task/types: `TaskRow`/`WorkerRunRow` — the shapes every other file in this module
@@ -168,7 +168,13 @@ export class WorkerRunNotFoundError extends Error {
  *  stable, machine-readable identifier the entry agent's tool-call result can relay verbatim
  *  (task brief: "a violated quota returns an error the entry agent can relay verbatim (stable code
  *  + readable message)"); `message` is the human-readable half. */
-export type QuotaViolationCode = 'depth_exceeded' | 'concurrency_exceeded' | 'daily_cost_exceeded';
+export type QuotaViolationCode =
+  | 'depth_exceeded'
+  | 'concurrency_exceeded'
+  | 'daily_cost_exceeded'
+  /** S11 GO3a: a nested child Task of a goal step, when the goal's live Tasks hold all of what is
+   *  left of its token budget (`readGoalRunTokenHeadroom`). */
+  | 'goal_budget_exhausted';
 
 export class QuotaExceededError extends Error {
   readonly code: QuotaViolationCode;
@@ -177,6 +183,30 @@ export class QuotaExceededError extends Error {
     super(message);
     this.name = 'QuotaExceededError';
     this.code = code;
+  }
+}
+
+/**
+ * S11 GO3a (plan I-G9): a Worker acting for a goal step asked for new work — an ActionRequest
+ * (`request_action`) or a nested child Task (`invoke_worker`) — but the step no longer takes any:
+ * it was cancelled with its GoalRun, superseded by a revision, or has already ended. Only a step
+ * that is `running` or `waiting` takes new work. Nothing was created.
+ *
+ * An `IllegalTransition` (409 `illegal_transition` on both the HTTP and WS routes): a well-formed
+ * request the step's current state forbids — the same family as an ActionRequest that moved on
+ * under the caller.
+ */
+export class GoalStepClosedError extends IllegalTransition {
+  readonly stepRunId: string;
+  readonly stepStatus: string;
+
+  constructor(stepRunId: string, stepStatus: string, work: 'request_action' | 'invoke_worker') {
+    super('StepRun', stepStatus, work);
+    this.name = 'GoalStepClosedError';
+    this.stepRunId = stepRunId;
+    this.stepStatus = stepStatus;
+    // I-G9: only a running or waiting step takes new work.
+    this.message = `${work}: goal step ${stepRunId} is ${stepStatus} and takes no new work (I-G9)`;
   }
 }
 
