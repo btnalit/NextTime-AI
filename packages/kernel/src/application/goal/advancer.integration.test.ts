@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { TaskFailureReason } from '@nexttime/shared';
 import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
@@ -339,7 +340,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       return task.id;
     }
 
-    async function failStep(stepRunId: string, requesterId: string, reason: string) {
+    async function failStep(stepRunId: string, requesterId: string, reason: TaskFailureReason) {
       const task = await latestAttempt(stepRunId);
       await failTaskAndReapWorkerRuns(taskRuntime(), workspaceId, requesterId, task.id, reason);
       return task.id;
