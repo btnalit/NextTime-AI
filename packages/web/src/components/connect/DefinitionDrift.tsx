@@ -154,7 +154,8 @@ export function DefinitionMismatchNotice({
           {t(
             `门已经按新定义运行，对 ${joined(revision, true)} 的调用会被拒绝，直到这个工作区对齐并发布修订。`,
             `The gate already runs a new definition, so calls to ${joined(revision, false)} are refused until this workspace aligns and publishes the revision.`,
-          )}{' '}
+          )}
+          {t('', ' ')}
           {canManage
             ? t(
                 '点下面的「与门公告对齐」打开修订，再到能力目录发布。',

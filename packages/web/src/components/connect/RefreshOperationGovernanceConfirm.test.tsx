@@ -540,6 +540,74 @@ describe('RefreshOperationGovernanceConfirm', () => {
     expect(error.textContent).toContain('门的清单在你查看之后变了');
   });
 
+  it('review #501 on #577 ①: a preview handed in serves the first open only — after a manifest_changed refusal, reopening reads it again and sends the new digest', async () => {
+    const held = {
+      name: 'stock.reserve',
+      mode: 'execute',
+      blastRadius: 'medium',
+      autoApprovable: false,
+      pendingDraft: { rewritable: true, fromGate: true },
+    } as const;
+    const stale = {
+      gateId: 'gate-1',
+      wouldLink: null,
+      ambiguousCandidates: [],
+      operationsToImport: [held],
+      operationsAlreadyPresent: [],
+      manifestDigest: 'digest-old',
+      awaitingPlatformAdoption: null,
+    };
+    const sentDigests: string[] = [];
+    const http = scriptedHttp({
+      preview_gate_instance_enable: () => ({
+        ...preview(),
+        operationsToImport: [held],
+        manifestDigest: 'digest-new',
+      }),
+      refresh_operation_governance: (params) => {
+        const { manifestDigest } = params as { manifestDigest: string };
+        sentDigests.push(manifestDigest);
+        if (manifestDigest === 'digest-old') {
+          throw new HttpError('capability_error', 'changed', 'manifest_changed');
+        }
+        return {
+          gatekeeperId: 'gk-1',
+          refreshed: [],
+          revisionDrafts: [{ name: 'stock.reserve', version: 2 }],
+          unchanged: [],
+        };
+      },
+    });
+    const onRefreshed = vi.fn();
+    render(
+      <RefreshOperationGovernanceConfirm
+        http={http}
+        gatekeeperId="gk-1"
+        platformGateId="gate-1"
+        gateDisplayName="Docker prod"
+        onRefreshed={onRefreshed}
+        operationNames={['stock.reserve']}
+        preview={stale}
+        testId="align-one"
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('align-one'));
+    let confirm = await screen.findByTestId('align-one-confirm');
+    expect(http.calls.filter((c) => c.name === 'preview_gate_instance_enable')).toHaveLength(0);
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    await within(confirm).findByTestId('confirm-error');
+    fireEvent.click(within(confirm).getByTestId('confirm-cancel'));
+    await waitFor(() => expect(screen.queryByTestId('align-one-confirm')).toBeNull());
+
+    fireEvent.click(screen.getByTestId('align-one'));
+    confirm = await screen.findByTestId('align-one-confirm');
+    expect(http.calls.filter((c) => c.name === 'preview_gate_instance_enable')).toHaveLength(1);
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    await waitFor(() => expect(onRefreshed).toHaveBeenCalledTimes(1));
+    expect(sentDigests).toEqual(['digest-old', 'digest-new']);
+  });
+
   it('maps no_announced_manifest on the confirmed call to its bilingual copy', async () => {
     const http = scriptedHttp({
       preview_gate_instance_enable: () =>

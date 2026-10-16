@@ -484,7 +484,8 @@ export function GateInstanceDetailPanel({
                           '门拒绝了凭证：请重新录入共享凭证，或检查目标系统上的权限。',
                           'The gate refused the credential — re-enter the shared credential or check the permissions on the target system.',
                         )
-                      : t('探测没有得出结论。', 'The probe was inconclusive.')}{' '}
+                      : t('探测没有得出结论。', 'The probe was inconclusive.')}
+                  {t('', ' ')}
                   {t(
                     '服务端目前不返回具体错误，详情请查看门宿主（或门服务）的日志。',
                     'The server does not return the underlying error yet — see the gate host (or gate service) logs for details.',
