@@ -4027,7 +4027,11 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 
 **291 — `find_workers` 先过滤后截断**（见 `global-roadmap-2026-10-16.md` §4）
 
-- 实现说明：（未开工）
+- 实现说明（#599，2026-10-16 合入，62a0208；遗留 291 关闭）：
+  - **翻页收集**：`substrate/graph/find-means.ts` 的候选查询加 `offset`，排序稳定为 rank、`updated_at`、`id`；`application/task/service.ts` 的三个 `find_*` 经同一个 `collectUsable` 按 50 行一页翻候选，过滤（kind、现行已发布、调用方 Handle 范围的 attenuation 预演、AgentProfile 排除、Procedure 每一步可执行、execute Operation 在调用方门范围内）之后计数，凑够 `limit`（固定 20，调用方不可控）或候选取完为止；翻页间因并发写挪位的同一行只算一次。`find_workers` 把不读库的排除检查提到读定义之前。
+  - **同类修复**：`request-action-handler.ts` `readTerminalOutcome` 经 `queryAudit` 内部过滤 `actions` 直接取 `action_request.complete/fail`；`substrate/audit/reconstruct.ts` 的 `at` 截止经内部过滤 `createdAtOrBefore`（毫秒精度，与 cursor 一致）下推；`explorer-read-service.ts` `listDecisionsForExplorer` 翻页时按 `category` 计数，扫描上限仍是 5000。两个新 `AuditQueryFilter` 字段线上 `toAuditQueryFilter` 不读，契约不变。
+  - **取舍**：去掉了「最多扫 `limit` 行」的隐性上限，最坏一次 `find_*` 翻完工作区里所有匹配候选（每个 1–3 次查询）；目录规模受发布审批约束。弃用版本仍在候选集里见 STATUS 遗留 321；查过未改的 `queryRecentPlatformWrites` 1000 行上限与 Explorer 5000 批次见遗留 322、323。
+  - **验证**：`application/task/find-means-limit.integration.test.ts`（真 Postgres；旧代码 4 个用例全部失败）、`reconstruct.test.ts`、`explorer-decisions.test.ts`。
 
 **H1 — 主机窗口：升到当时最新发版，含控制台核对**（见 `global-roadmap-2026-10-16.md` §4）
 
