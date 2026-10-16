@@ -575,8 +575,9 @@ EOF
   # time here, not llm_usage.turn_id, which the kernel resolves when the usage batch arrives and can
   # give a Turn's last calls to the next Turn. Calls no open Turn covers are counted as
   # `unattributed`, so the split's coverage shows. Counts only.
-  psql_q "with calls as (
-      select u.id, u.started_at, u.input_tokens, u.cache_read_tokens, u.cache_write_tokens, t.id as turn
+  entry_calls="with calls as (
+      select u.id, u.started_at, u.input_tokens, u.output_tokens, u.cache_read_tokens,
+        u.cache_write_tokens, t.id as turn
       from llm_usage u
       join sessions s on s.workspace_id = u.workspace_id and s.id = u.session_id
       left join lateral (
@@ -587,12 +588,25 @@ EOF
         order by a.created_at desc limit 1) t on true
       where u.started_at >= '$real_since' and u.provider <> 'fake' and s.kind = 'entry'),
     numbered as (
-      select *, row_number() over (partition by turn order by started_at, id) as call_no from calls)
+      select *, row_number() over (partition by turn order by started_at, id) as call_no from calls),
+    turns as (
+      select turn, row_number() over (order by min(started_at), turn) as turn_no
+      from calls where turn is not null group by turn)"
+  psql_q "$entry_calls
     select case when turn is null then 'unattributed' when call_no = 1 then 'first' else 'later' end,
       count(*), coalesce(sum(input_tokens),0), coalesce(sum(cache_read_tokens),0),
       coalesce(sum(cache_write_tokens),0)
     from numbered group by 1 order by 1" |
     awk -F'|' '{ printf "STEP real-usage-entry turn_call=%s calls=%s input_tokens=%s cache_read_tokens=%s cache_write_tokens=%s\n", $1, $2, $3, $4, $5 }'
+  # The same calls one per line, in call order: the Turn (numbered in the order Turns started) and
+  # the call of it, so fresh input left on a later call can be traced to that call instead of
+  # inferred from the totals above. An unattributed call reads turn=- call=-. Counts only.
+  psql_q "$entry_calls
+    select coalesce(t.turn_no::text, '-'), case when n.turn is null then '-' else n.call_no::text end,
+      n.input_tokens, n.cache_read_tokens, n.cache_write_tokens, n.output_tokens
+    from numbered n left join turns t on t.turn = n.turn
+    order by n.started_at, n.id" |
+    awk -F'|' '{ printf "STEP real-usage-entry-call turn=%s call=%s input_tokens=%s cache_read_tokens=%s cache_write_tokens=%s output_tokens=%s\n", $1, $2, $3, $4, $5, $6 }'
   if [ "$real_fail" -gt 0 ]; then echo "RESULT real-model-failures=$real_fail"; exit 1; fi
 fi
 

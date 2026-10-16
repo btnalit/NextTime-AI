@@ -359,6 +359,7 @@ describe('prompt cache: what the real pi-ai request repeats between calls', () =
       const update = textOf(messagesOf(second)[messagesOf(second).length - 1]);
       expect(update).toContain(`${mode.heading} — update`);
       expect(update).toContain('Approval 2');
+      expect(update).not.toContain('Approval 1');
       expect(update).not.toContain('recorded facts');
       expect(JSON.stringify(messagesOf(second)[messagesOf(second).length - 1])).not.toContain(
         'cache_control',
@@ -376,6 +377,42 @@ describe('prompt cache: what the real pi-ai request repeats between calls', () =
       // Turn 2, call 2: unchanged since the turn started — no update, read from cache.
       expect(contextMessageIndexes(fourth, mode.heading)).toEqual([thirdMessages.length - 1]);
       expectEachRequestReadsThePreviousWrite([third, fourth]);
+    },
+  );
+
+  it.each(MODES)(
+    '$mode mode: a Fact recorded in the middle of a turn — the snapshot stays byte-identical in the cached prefix and the update carries only that Fact',
+    async (mode) => {
+      /** A 20-Fact recency sample, newest first, with `newest` the latest recorded. */
+      const sampleOf = (newest: number) => ({
+        facts: Array.from({ length: 20 }, (_, index) => {
+          const n = newest - index;
+          return {
+            id: `fact-${String(n).padStart(2, '0')}`,
+            linkType: 'runs_on',
+            sourceObjectId: `obj-${n}`,
+            targetObjectId: 'host-1',
+            properties: { port: 8000 + n },
+          };
+        }),
+        factCountsByLinkType: [{ linkType: 'runs_on', count: newest + 20 }],
+      });
+      // Turn 1's second call: a collector recorded fact-21 while the agent was calling a tool.
+      const requests = await runTwoTurns(mode, (read) => sampleOf(read === 1 ? 20 : 21));
+      const [first, second] = requests as [Json, Json];
+
+      expect(stripMarkers(messagesOf(second)[1])).toBe(stripMarkers(messagesOf(first)[1]));
+      expectEachRequestReadsThePreviousWrite([first, second]);
+      const last = messagesOf(second)[messagesOf(second).length - 1];
+      const update = textOf(last);
+      expect(update).toContain(`${mode.heading} — update`);
+      expect(update.match(/"id":"fact-\d+"/g)).toEqual(['"id":"fact-21"']);
+      expect(update).toContain('- id "fact-01"');
+      expect(update.length).toBeLessThan(textOf(messagesOf(first)[1]).length / 2);
+      expect(update).toContain('- "runs_on": 41');
+      expect(update).not.toContain('enumerate the link type');
+      expect(JSON.stringify(last)).not.toContain('cache_control');
+      expect(breakpoints(second)[0]?.[0]).toBe(messagesOf(second).length - 2);
     },
   );
 

@@ -195,9 +195,9 @@ describe('renderEntryContextUpdate', () => {
     expect(update.split('\n').filter((line) => line.startsWith('#'))).toEqual([
       '## NextTime entry context — update',
       '### Running tasks',
-      '### Knowledge graph overview — active Facts per link type (complete counts)',
+      '### Knowledge graph overview — active Facts per link type (complete counts) — changes since the same section above',
     ]);
-    expect(update).toContain('replace the same sections there');
+    expect(update).toContain('replaces the same section there in full');
   });
 
   it('a section that is gone reads "(none now)"; a section that appears is repeated in full', () => {
@@ -213,5 +213,97 @@ describe('renderEntryContextUpdate', () => {
   it('is empty when nothing changed', () => {
     const sections = renderEntryContextSections({ tasks: [{ taskId: 't-1' }] });
     expect(renderEntryContextUpdate(sections, sections, title)).toBe('');
+  });
+
+  /** A 20-Fact recency sample, newest first, as `listRecentFacts` returns it. */
+  function sample(newest: number, total: number) {
+    const facts = Array.from({ length: 20 }, (_, index) => {
+      const n = newest - index;
+      return {
+        id: `fact-${String(n).padStart(2, '0')}`,
+        linkType: 'runs_on',
+        sourceObjectId: `obj-${n}`,
+        targetObjectId: 'host-1',
+        properties: { port: 8000 + n },
+      };
+    });
+    return { facts, factCountsByLinkType: [{ linkType: 'runs_on', count: total }] };
+  }
+
+  it('a Fact recorded in the middle of a Turn: the update carries that Fact and the id that left the sample, not the sample again', () => {
+    const snapshot = renderEntryContextSections(sample(20, 40));
+    const current = renderEntryContextSections(sample(21, 41));
+    const update = renderEntryContextUpdate(snapshot, current, title);
+    const facts = update.slice(update.indexOf('### Most recently recorded facts'));
+    expect(facts.split('\n')).toEqual([
+      '### Most recently recorded facts (20 of 41; a recency sample, not chosen for this question and not the whole graph) — changes since the same section above',
+      'New:',
+      expect.stringContaining('"id":"fact-21"'),
+      'No longer in this recency sample (newer Facts pushed them out, or they are no longer active: `explain` tells which):',
+      '- id "fact-01"',
+    ]);
+    // The overview's count moved too: that one count, not the overview and its guidance again.
+    expect(update).toContain(
+      'New or changed (a count here replaces the count above for the same link type):\n- "runs_on": 41',
+    );
+    expect(update).not.toContain('enumerate the link type');
+    const fullSection = current.find((section) => section.key === 'recentFacts')?.text ?? '';
+    expect(facts.length).toBeLessThan(fullSection.length / 5);
+  });
+
+  it('a Fact that changed under the same id is listed once, as the replacement, not also as gone', () => {
+    const before = sample(20, 40);
+    const after = structuredClone(before);
+    (after.facts[3] as { properties: unknown }).properties = { port: 1 };
+    const update = renderEntryContextUpdate(
+      renderEntryContextSections(before),
+      renderEntryContextSections(after),
+      title,
+    );
+    expect(update).toContain('"id":"fact-17"');
+    expect(update).toContain('"port":1');
+    expect(update).not.toContain('No longer');
+    expect(update.match(/"id":"fact-/g)).toHaveLength(1);
+  });
+
+  it('an approval that is no longer pending is named under "No longer pending"; the others are not repeated', () => {
+    const approvals = Array.from({ length: 5 }, (_, index) => ({
+      actionRequestId: `ar-${index}`,
+      status: 'pending',
+      title: `Restart service number ${index} on the staging host`,
+    }));
+    const update = renderEntryContextUpdate(
+      renderEntryContextSections({ pendingApprovals: approvals }),
+      renderEntryContextSections({ pendingApprovals: approvals.slice(1) }),
+      title,
+    );
+    expect(update).toContain('### Pending approvals — changes since the same section above');
+    expect(update).toContain('No longer pending:\n- {"actionRequestId":"ar-0"');
+    expect(update).not.toContain('ar-1');
+  });
+
+  it('a section whose only entry changed is repeated in full — shorter than saying what changed', () => {
+    const update = renderEntryContextUpdate(
+      renderEntryContextSections({ tasks: [{ taskId: 't-1', status: 'running' }] }),
+      renderEntryContextSections({ tasks: [{ taskId: 't-1', status: 'completed' }] }),
+      title,
+    );
+    expect(update).toContain('### Running tasks\n- {"taskId":"t-1","status":"completed"}');
+    expect(update).not.toContain('— changes since');
+  });
+
+  it('entries without an id that are gone are repeated in full, so the model can tell which', () => {
+    const tasks = Array.from({ length: 4 }, (_, index) => ({
+      taskId: `t-${index}`,
+      kind: 'task_completed',
+      summary: `Collected the inventory of rack ${index} without errors`,
+    }));
+    const update = renderEntryContextUpdate(
+      renderEntryContextSections({ tasks }),
+      renderEntryContextSections({ tasks: tasks.slice(0, 3) }),
+      title,
+    );
+    expect(update).toContain('No longer listed:\n- {"taskId":"t-3"');
+    expect(update).not.toContain('"t-0"');
   });
 });
