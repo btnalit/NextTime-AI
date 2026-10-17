@@ -1,7 +1,7 @@
 import { visibleText } from '@nexttime/shared';
 import type { ReactNode } from 'react';
 import { namedReviewPath } from '../../lib/credential-review.js';
-import { useT } from '../../lib/i18n.js';
+import { sentenceGap, useT } from '../../lib/i18n.js';
 
 /** The kernel's own cap on `suspectedSecretPaths` (governance/redaction/credential-review.ts). */
 const MAX_LISTED_PATHS = 20;
@@ -59,7 +59,7 @@ export function CredentialReview({
     >
       <p className="m-0" data-testid="credential-review-warning">
         <strong>{t(`含 ${count} 处疑似凭据。`, `${count} suspected credential value(s).`)}</strong>
-        {t('', ' ')}
+        {sentenceGap(t)}
         {subject === 'approve'
           ? t(
               '下列参数字段的值看起来像密钥、令牌或密码，批准后会原样用于执行。按字段名识别的值在参数里显示为 [redacted]，不显示原文。',

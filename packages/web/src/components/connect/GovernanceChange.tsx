@@ -134,16 +134,10 @@ export function firstPublishConsequence(
       );
 }
 
-/** One impact line: `name: Mode A → B; Blast radius X → Y`. `named: false` drops the leading
- *  name, for a confirm about a single Operation that already names it in its target. */
-export function governanceChangeSummary(
-  item: GovernanceChangeItem,
-  t: Translate,
-  named = true,
-): string {
+/** One impact line: `name: Mode A → B; Blast radius X → Y`. */
+export function governanceChangeSummary(item: GovernanceChangeItem, t: Translate): string {
   const changes = governanceFieldChanges(item.before, item.after, t);
-  const text = changes.map((c) => `${c.label} ${c.before} → ${c.after}`).join('; ');
-  return named ? `${actionKindTagText(item.name)}: ${text}` : text;
+  return `${actionKindTagText(item.name)}: ${changes.map((c) => `${c.label} ${c.before} → ${c.after}`).join('; ')}`;
 }
 
 const BLAST_RANK: Readonly<Record<OperationGovernanceFieldsWire['blastRadius'], number>> = {
@@ -214,19 +208,28 @@ export function governanceConsequences(
 }
 
 /** Old → new chips per Operation (all three fields, so the reader sees the whole classification),
- *  tagged with the kernel's direction (`data-direction`). */
+ *  tagged with the kernel's direction (`data-direction`). `single`: a confirm about one Operation
+ *  that already names it in its target — the heading drops the count and the item its name
+ *  (legacy 400: the name and the change were each said twice in that confirm). */
 export function GovernanceChangeList({
   items,
   testId = 'governance-diff-list',
+  single = false,
 }: {
   readonly items: readonly GovernanceChangeItem[];
   readonly testId?: string;
+  readonly single?: boolean;
 }) {
   const t = useT();
   return (
     <div className="stack-s" data-testid={testId}>
       <span className="text-12 font-medium text-text-2">
-        {t(`${items.length} 个 Operation 的分类变化`, `Classification changes (${items.length})`)}
+        {single
+          ? t('分类变化', 'Classification change')
+          : t(
+              `${items.length} 个 Operation 的分类变化`,
+              `Classification changes (${items.length})`,
+            )}
       </span>
       <ul className="stack-s" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
         {items.map((item) => (
@@ -236,9 +239,11 @@ export function GovernanceChangeList({
             data-testid={`${testId}-item`}
             data-direction={item.direction}
           >
-            <span className="mono" title={actionKindRaw(item.name)}>
-              {actionKindTagText(item.name)}
-            </span>
+            {single ? null : (
+              <span className="mono" title={actionKindRaw(item.name)}>
+                {actionKindTagText(item.name)}
+              </span>
+            )}
             <div className="row-wrap">
               <StatusChip machine="operationMode" status={item.before.mode} size="s" />
               <span aria-hidden="true">→</span>

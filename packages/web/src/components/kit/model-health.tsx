@@ -1,5 +1,5 @@
 import type { ProviderHealthWire } from '@nexttime/shared';
-import { useT } from '../../lib/i18n.js';
+import { sentenceGap, useT } from '../../lib/i18n.js';
 import { type ProviderStatus, describeProviderHealth } from '../../lib/provider-status.js';
 import { hrefs } from '../../lib/router.js';
 import { Notice } from './notice.js';
@@ -132,7 +132,7 @@ export function ModelHealthNote({
             `The chosen model's provider "${selected.provider}": ${health.en}. ${health.detailEn}.`,
           )}
         </span>
-        {t('', ' ')}
+        {sentenceGap(t)}
         <NextStep health={health} provider={selected.provider} canFix={canFix} testId={testId} />
       </Notice>
     );
@@ -154,7 +154,7 @@ export function ModelHealthNote({
             `${blocked.length} 个模型不能选：供应商 ${blockedProviders.join('、')} 当前调用会失败。`,
             `${blocked.length} model(s) cannot be chosen: calls to ${blockedProviders.join(', ')} fail right now.`,
           )}
-          {t('', ' ')}
+          {sentenceGap(t)}
         </span>
       ) : null}
       {unknown.length > 0 ? (
@@ -163,7 +163,7 @@ export function ModelHealthNote({
             `${unknown.length} 个模型状态未知：读不到供应商 ${unknownProviders.join('、')} 的测试状态。`,
             `${unknown.length} model(s) have an unknown status: the test status of ${unknownProviders.join(', ')} cannot be read.`,
           )}
-          {t('', ' ')}
+          {sentenceGap(t)}
         </span>
       ) : null}
       <NextStep

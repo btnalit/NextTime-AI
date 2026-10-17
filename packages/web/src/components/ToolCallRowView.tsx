@@ -12,7 +12,7 @@ import {
 import type { CapabilityCaller } from '../lib/clients.js';
 import { definitionMismatchStep, gateReasonNextStep } from '../lib/errors.js';
 import { formatTime, prettyJsonVisible, shortId } from '../lib/format.js';
-import { type Translate, useT } from '../lib/i18n.js';
+import { type Translate, sentenceGap, useT } from '../lib/i18n.js';
 import { hrefs } from '../lib/router.js';
 import type { ToolCallRow } from '../lib/streaming-reducer.js';
 import { type ToolCallRecord, previewDisplayText } from '../lib/tool-call-record.js';
@@ -450,7 +450,7 @@ export const ToolCallGroupView = memo(function ToolCallGroupView({
             'agent 自己报告的调用，参数和结果已脱敏、截断。能力调用的权威记录在',
             'Reported by the agent; arguments and results are redacted and shortened. The authoritative record of capability calls is the',
           )}
-          {t('', ' ')}
+          {sentenceGap(t)}
           <RouteLink href={hrefs.audit()}>{t('审计', 'audit log')}</RouteLink>
           {t('。', '.')}
         </span>

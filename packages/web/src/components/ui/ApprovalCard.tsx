@@ -1,7 +1,7 @@
 import type { BlastRadius, OperationMode } from '@nexttime/shared';
 import { type ReactNode, useId, useRef, useState } from 'react';
 import { actionKindRaw, actionKindTagText } from '../../lib/format.js';
-import { useT } from '../../lib/i18n.js';
+import { sentenceGap, useT } from '../../lib/i18n.js';
 import { Button } from './Button.js';
 import { Field, Textarea } from './Field.js';
 import { RefChip } from './RefChip.js';
@@ -233,12 +233,12 @@ export function ApprovalCard({
                   `${suspectedSecretValues} suspected credential value(s).`,
                 )}
               </strong>
-              {t('', ' ')}
+              {sentenceGap(t)}
               {t(
                 '批准前要看清参数并确认，这一步只能在审批页做。',
                 'Approving needs the parameters in view and an explicit confirmation — only on the approvals page.',
               )}
-              {t('', ' ')}
+              {sentenceGap(t)}
               {approvalsHref !== undefined ? (
                 <a href={approvalsHref} data-testid="approval-review-on-page">
                   {t('去审批页核对', 'Review on the approvals page')}
