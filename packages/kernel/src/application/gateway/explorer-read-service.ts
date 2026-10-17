@@ -15,6 +15,7 @@ import type { Fact, GraphObject } from '../../substrate/graph/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
 import { type ProvGraph, buildProvenanceGraph } from './provenance-graph.js';
 import { displayedObject } from './resource-wire.js';
+import { shownForSearch } from './shown-search.js';
 
 // Re-exported so `interfaces/explorer-contract` (which may not import `substrate/**` directly,
 // `.dependency-cruiser.cjs`'s `kernel-interfaces-must-not-reach-into-substrate-directly`) can type
@@ -193,13 +194,18 @@ export async function listGraphNodesForExplorer(
   const limit = clamp(params.limit ?? 100, 1, EXPLORER_MAX_FETCH);
   const offset = resolveOffset(params);
   return withWorkspace(pool, { workspaceId, principalId }, async (client) => {
-    const batch = await graphStore.search(client, workspaceId, {
-      // Empty query -> the `ILIKE '%%'` pattern (queries.ts's `buildSearchQuery`) matches every
-      // row — "list all objects" has no dedicated GraphStore method, so `search('')` stands in.
-      query: params.search ?? '',
-      objectType: params.type,
-      limit: EXPLORER_MAX_FETCH,
-    });
+    // Empty query -> the `ILIKE '%%'` pattern (queries.ts's `buildSearchQuery`) matches every
+    // row — "list all objects" has no dedicated GraphStore method, so `search('')` stands in.
+    const input = { query: params.search ?? '', objectType: params.type };
+    // A connection Object matches on what it shows, not what is stored (legacy 387).
+    const shown = await shownForSearch(client, workspaceId, input);
+    const batch = await graphStore.search(
+      client,
+      workspaceId,
+      { ...input, limit: EXPLORER_MAX_FETCH },
+      undefined,
+      shown,
+    );
     // Shown as every other read shows an Object (`displayedObject`: a ConnectedSystem's name and
     // address, #620 review M2 / review #493 P2).
     const domainOnly = batch
@@ -262,11 +268,16 @@ export async function searchGraphForExplorer(
     // Fetches a bounded batch and filters+slices in memory — same shape as
     // `listGraphNodesForExplorer` above, so a query that matches many platform meta-objects still
     // returns up to `limit` genuine domain results rather than under-filling the page.
-    const batch = await graphStore.search(client, workspaceId, {
-      query: params.query,
-      objectType: params.objectType,
-      limit: EXPLORER_MAX_FETCH,
-    });
+    const input = { query: params.query, objectType: params.objectType };
+    // A connection Object matches on what it shows, not what is stored (legacy 387).
+    const shown = await shownForSearch(client, workspaceId, input);
+    const batch = await graphStore.search(
+      client,
+      workspaceId,
+      { ...input, limit: EXPLORER_MAX_FETCH },
+      undefined,
+      shown,
+    );
     const domainOnly = batch.filter((object) => !PLATFORM_META_OBJECT_TYPES.has(object.objectType));
     const results = domainOnly
       .slice(0, limit)

@@ -46,9 +46,9 @@ import type { GraphObject } from './store.js';
  * entire `properties` blob — a multi-word natural-language need (English or Chinese) almost never
  * appears verbatim inside a `name`/`description`, so this almost always missed. `tokenizeNeed`
  * (below) splits `need` into keywords; `buildFindMeansQuery` matches *any* token against `name`,
- * `description` (and, for `Operation` only, `mode` and its Gatekeeper's own `name` — "operation
- * kind/gate name where available"), ranked by how many *distinct* tokens hit (not one combined
- * substring), ties broken by `updated_at desc`. This is a deliberate narrowing from the old
+ * `description` (and, for `Operation` only, `mode` and its Gatekeeper's own `name` as reads show
+ * it, legacy 387 — "operation kind/gate name where available"), ranked by how many *distinct*
+ * tokens hit (not one combined substring), ties broken by `updated_at desc`. This is a deliberate narrowing from the old
  * whole-`properties::text` search to just these named fields — a token that used to coincidentally
  * match some other property (e.g. a raw binding path) no longer does; every real field this
  * project's own manifests/console populate for discovery (name, description, mode, gate name) is
@@ -92,6 +92,16 @@ export interface FindMeansInput {
    *  row cap here alone would let filtered-out candidates take result slots — those callers page
    *  through candidates with `offset` until they have `limit` usable ones (`collectUsable`). */
   readonly offset?: number;
+}
+
+/** `find_operations`' candidates also match a need against their Gatekeeper's name — the name
+ *  every read shows (legacy 387), never the stored one: one Gatekeeper written before legacy 186
+ *  can still hold a credential there, and a token that hit it would say the credential exists.
+ *  Substrate cannot redact, so the caller hands the shown names over (`gatekeeperNamesShown`,
+ *  governance/gatekeepers); a Gatekeeper they leave out matches no token. */
+export interface FindOperationsInput extends FindMeansInput {
+  /** Shown name by Gatekeeper Object id, for the named Gatekeepers only. */
+  readonly gatekeeperNames: Readonly<Record<string, string>>;
 }
 
 export const DEFAULT_FIND_MEANS_LIMIT = 20;
@@ -192,16 +202,18 @@ type FindMeansObjectType = 'WorkerDefinition' | 'Operation' | 'Procedure';
 
 /** The `properties ->> '<key>'` fields each object type's tokens are matched against. Every type
  *  gets `name`/`description`; `Operation` additionally gets `mode` ("operation kind" — observe vs
- *  execute) — its Gatekeeper's own `name` ("gate name") is matched separately below via a
- *  correlated `exists` (it lives on a different Object, not in these properties). */
+ *  execute) — its Gatekeeper's own `name` ("gate name") is matched separately below, against the
+ *  shown names the caller binds (it lives on a different Object, and its stored text is not what
+ *  reads show — `FindOperationsInput`). */
 const NAME_DESCRIPTION_FIELDS = ["properties ->> 'name'", "properties ->> 'description'"] as const;
 const OPERATION_EXTRA_FIELDS = ["properties ->> 'mode'"] as const;
 
 /**
  * Builds the parameterised SQL for `findMetaOntologyObjects` below: every candidate `objectType`
  * Object where *any* token in `tokens` matches `name`, `description` (Operation also: `mode`, and
- * its Gatekeeper's own `name` via a correlated `exists`), ranked by the count of *distinct* tokens
- * that matched (§ this file's own module doc comment), ties broken by `updated_at desc`. `tokens`
+ * its Gatekeeper's shown name from `gatekeeperNames` — none given, no gate name matches), ranked
+ * by the count of *distinct* tokens that matched (§ this file's own module doc comment), ties
+ * broken by `updated_at desc`. `tokens`
  * empty (blank `need`) matches every candidate of this type — `where` degrades to `true` and the
  * rank expression to the constant `0` (every row ties on rank, so `updated_at desc` alone orders
  * them — "list everything, most recent first"). `Operation` alone gets the `properties ->>
@@ -214,12 +226,18 @@ export function buildFindMeansQuery(
   tokens: readonly string[],
   limit: number,
   offset = 0,
+  gatekeeperNames: Readonly<Record<string, string>> = {},
 ): SqlQuery {
   const values: unknown[] = [workspaceId, objectType];
   const fields: readonly string[] =
     objectType === 'Operation'
       ? [...NAME_DESCRIPTION_FIELDS, ...OPERATION_EXTRA_FIELDS]
       : NAME_DESCRIPTION_FIELDS;
+  let namesParam: number | undefined;
+  if (objectType === 'Operation' && tokens.length > 0) {
+    values.push(JSON.stringify(gatekeeperNames));
+    namesParam = values.length;
+  }
 
   const tokenClauses: string[] = [];
   const rankTerms: string[] = [];
@@ -227,20 +245,12 @@ export function buildFindMeansQuery(
     values.push(`%${token}%`);
     const p = values.length;
     const checks = fields.map((field) => `${field} ilike $${p}`);
-    if (objectType === 'Operation') {
-      // gk.id is uuid, identity_key ->> 'gatekeeperId' is text (`->>` always returns text) —
-      // compared as text, the same convention governance/gatekeepers/manifest.ts's own
-      // `identity_key ->> 'gatekeeperId' = $n` queries already use, rather than casting the
-      // right-hand side to uuid (which would throw on any malformed value instead of simply not
-      // matching).
+    if (namesParam !== undefined) {
+      // Legacy 387: the shown name of the Gatekeeper the Operation's `identity_key ->>
+      // 'gatekeeperId'` names (text, like governance/gatekeepers/manifest.ts's own
+      // `identity_key ->> 'gatekeeperId' = $n`) — absent, `null`, which matches nothing.
       checks.push(
-        `exists (
-           select 1 from objects gk
-           where gk.workspace_id = objects.workspace_id
-             and gk.object_type = 'Gatekeeper'
-             and gk.id::text = (objects.identity_key ->> 'gatekeeperId')
-             and gk.properties ->> 'name' ilike $${p}
-         )`,
+        `($${namesParam}::jsonb ->> (objects.identity_key ->> 'gatekeeperId')) ilike $${p}`,
       );
     }
     const clause = `(${checks.join(' or ')})`;
@@ -284,10 +294,18 @@ async function findMetaOntologyObjects(
   workspaceId: string,
   objectType: FindMeansObjectType,
   input: FindMeansInput,
+  gatekeeperNames?: Readonly<Record<string, string>>,
 ): Promise<readonly GraphObject[]> {
   const tokens = tokenizeNeed(input.need);
   const limit = input.limit ?? DEFAULT_FIND_MEANS_LIMIT;
-  const query = buildFindMeansQuery(objectType, workspaceId, tokens, limit, input.offset ?? 0);
+  const query = buildFindMeansQuery(
+    objectType,
+    workspaceId,
+    tokens,
+    limit,
+    input.offset ?? 0,
+    gatekeeperNames,
+  );
   const result = await client.query<ObjectRow>(query.text, [...query.values]);
   return result.rows.map(mapObjectRow);
 }
@@ -297,9 +315,10 @@ async function findMetaOntologyObjects(
 export function findOperationCandidates(
   client: PoolClient,
   workspaceId: string,
-  input: FindMeansInput,
+  input: FindOperationsInput,
 ): Promise<readonly GraphObject[]> {
-  return findMetaOntologyObjects(client, workspaceId, 'Operation', input);
+  const { gatekeeperNames, ...means } = input;
+  return findMetaOntologyObjects(client, workspaceId, 'Operation', means, gatekeeperNames);
 }
 
 /** Candidates for `find_workers` — every published `WorkerDefinition@version` (design doc §5.1.4)

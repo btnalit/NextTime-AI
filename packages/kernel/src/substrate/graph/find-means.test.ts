@@ -76,11 +76,17 @@ describe('buildFindMeansQuery', () => {
     expect(q.values).toEqual(['ws1', 'Procedure', '%restart%', '%container%', false, 10, 0]);
   });
 
-  it("Operation additionally matches `mode` (kind) and, via a correlated exists, its Gatekeeper's own name", () => {
+  it("Operation additionally matches `mode` (kind) and its Gatekeeper's name as the caller binds it shown (legacy 387) — never the stored name", () => {
+    const q = buildFindMeansQuery('Operation', 'ws1', ['docker'], 20, 0, { gk1: 'docker' });
+    expect(q.text).toContain("properties ->> 'mode' ilike $4");
+    expect(q.text).toContain("($3::jsonb ->> (objects.identity_key ->> 'gatekeeperId')) ilike $4");
+    expect(q.text).not.toContain('gk.');
+    expect(q.values).toEqual(['ws1', 'Operation', '{"gk1":"docker"}', '%docker%', true, 20, 0]);
+  });
+
+  it('Operation with no gate names given binds none — no gate name matches (legacy 387, fail closed)', () => {
     const q = buildFindMeansQuery('Operation', 'ws1', ['docker'], 20);
-    expect(q.text).toContain("properties ->> 'mode' ilike $3");
-    expect(q.text).toContain("gk.object_type = 'Gatekeeper'");
-    expect(q.text).toContain("gk.properties ->> 'name' ilike $3");
+    expect(q.values).toEqual(['ws1', 'Operation', '{}', '%docker%', true, 20, 0]);
   });
 
   it('Operation is published-only; WorkerDefinition/Procedure are not filtered by status', () => {

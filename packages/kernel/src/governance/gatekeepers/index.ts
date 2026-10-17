@@ -15,6 +15,7 @@ export {
   registerGatekeeper,
   getGatekeeper,
   listGatekeepers,
+  gatekeeperNamesShown,
   countGatekeepers,
   findGatekeepersByEndpoint,
   gateAddressOrigin,
