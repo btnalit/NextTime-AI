@@ -220,8 +220,55 @@ function ConfirmErrorBanner({
       error={error}
       overrides={overrides}
       testId="confirm-error"
-      className="rounded-s border border-danger bg-danger-soft px-3 py-2 text-13 text-danger"
+      // Pinned with the buttons (legacy 347), so a long refusal scrolls inside itself rather
+      // than pushing them back off the confirm.
+      className="max-h-40 overflow-y-auto rounded-s border border-danger bg-danger-soft px-3 py-2 text-13 text-danger"
     />
+  );
+}
+
+/** Legacy 347 (UX acceptance of #612 and #651): a confirm is a scrolling body over a pinned action
+ *  row, never one scrolling box — capped to the viewport, a tall body (a long impact list, a
+ *  loosening warning) used to push 确认 / 取消 below the fold, so the last look before an action
+ *  could be clicked through half-read or not found at all. `padding` follows the surface: `m` for
+ *  the popover, `l` for the centred dialog. */
+function ConfirmBody({
+  padding = 'm',
+  children,
+}: {
+  readonly padding?: 'm' | 'l';
+  readonly children: ReactNode;
+}) {
+  return (
+    <div
+      className={cn(
+        'flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain',
+        padding === 'l' ? 'p-5' : 'p-4',
+      )}
+      data-testid="confirm-body"
+    >
+      {children}
+    </div>
+  );
+}
+
+function ConfirmActions({
+  padding = 'm',
+  children,
+}: {
+  readonly padding?: 'm' | 'l';
+  readonly children: ReactNode;
+}) {
+  return (
+    <div
+      className={cn(
+        'flex shrink-0 flex-col gap-3 border-t border-border',
+        padding === 'l' ? 'px-5 py-4' : 'px-4 py-3',
+      )}
+      data-testid="confirm-actions"
+    >
+      {children}
+    </div>
   );
 }
 
@@ -325,45 +372,52 @@ function MediumTier({
             }}
             // UX acceptance of #612 (MUST-1): a tall confirm (a long impact list, a loosening
             // warning) never runs off the viewport where nothing can scroll it back — it is capped
-            // to the space Radix measured on its side and scrolls itself, title first.
+            // to the space Radix measured on its side. Legacy 347 (UX acceptance of #612, #651):
+            // only the body scrolls; the buttons (and a refusal) stay pinned under it, so the last
+            // look before loosening an approval never needs a scroll to reach 发布 / 取消. 24rem
+            // (was 20rem) also makes the usual confirm shorter.
             className={cn(
-              'z-50 flex w-80 flex-col gap-3 rounded-m border border-border bg-surface-1 p-4 shadow-1',
-              'max-h-[var(--radix-popover-content-available-height)] overflow-y-auto overscroll-contain',
+              'z-50 flex w-[min(24rem,calc(100vw-24px))] flex-col rounded-m border border-border',
+              'bg-surface-1 shadow-1 max-h-[var(--radix-popover-content-available-height)]',
             )}
           >
-            <div id={titleId} className="text-14 font-semibold text-text">
-              {title}
-            </div>
-            {description !== undefined ? (
-              <div className="text-13 text-text-2">{description}</div>
-            ) : null}
-            <TargetLine target={target} />
-            <ImpactList impact={impact} />
-            {children}
-            <ConfirmErrorBanner error={error} overrides={errorOverrides} />
-            <div className="flex flex-row-reverse flex-wrap items-center gap-2">
-              {/* ux-lint-allow-disabled: `confirmDisabled` is the caller's; its body says why (credential review, typed name). */}
-              <Button
-                ref={confirmRef}
-                variant={danger ? 'danger' : 'primary'}
-                size="s"
-                aria-busy={busy}
-                disabled={busy || confirmDisabled}
-                onClick={() => void run()}
-                data-testid="confirm-button"
-              >
-                {resolvedConfirmLabel}
-              </Button>
-              <Button
-                variant="ghost"
-                size="s"
-                onClick={() => onOpenChange(false)}
-                disabled={busy}
-                data-testid="confirm-cancel"
-              >
-                {resolvedCancelLabel}
-              </Button>
-            </div>
+            <ConfirmBody>
+              <div id={titleId} className="text-14 font-semibold text-text">
+                {title}
+              </div>
+              {description !== undefined ? (
+                <div className="text-13 text-text-2">{description}</div>
+              ) : null}
+              <TargetLine target={target} />
+              <ImpactList impact={impact} />
+              {children}
+            </ConfirmBody>
+            <ConfirmActions>
+              <ConfirmErrorBanner error={error} overrides={errorOverrides} />
+              <div className="flex flex-row-reverse flex-wrap items-center gap-2">
+                {/* ux-lint-allow-disabled: `confirmDisabled` is the caller's; its body says why (credential review, typed name). */}
+                <Button
+                  ref={confirmRef}
+                  variant={danger ? 'danger' : 'primary'}
+                  size="s"
+                  aria-busy={busy}
+                  disabled={busy || confirmDisabled}
+                  onClick={() => void run()}
+                  data-testid="confirm-button"
+                >
+                  {resolvedConfirmLabel}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="s"
+                  onClick={() => onOpenChange(false)}
+                  disabled={busy}
+                  data-testid="confirm-cancel"
+                >
+                  {resolvedCancelLabel}
+                </Button>
+              </div>
+            </ConfirmActions>
           </PopoverPrimitive.Content>
         </PopoverPrimitive.Portal>
       ) : null}
@@ -438,77 +492,83 @@ function IrreversibleTier({
             }}
             className={cn(
               'fixed left-1/2 top-1/2 z-50 flex w-full max-w-md -translate-x-1/2 -translate-y-1/2',
-              'flex-col gap-3 rounded-l border border-border bg-surface-1 p-5 shadow-1',
+              'flex-col rounded-l border border-border bg-surface-1 shadow-1',
               // UX acceptance of #612 (MUST-1): centred, a tall one would overflow both edges.
-              'max-h-[calc(100dvh-2rem)] overflow-y-auto overscroll-contain',
+              // Legacy 347: only the body scrolls — the typed name, the acknowledgement and the
+              // button they unlock stay pinned under it.
+              'max-h-[calc(100dvh-2rem)]',
             )}
           >
-            <AlertDialogPrimitive.Title id={titleId} className="text-16 font-semibold text-text">
-              {title}
-            </AlertDialogPrimitive.Title>
-            <AlertDialogPrimitive.Description id={descriptionId} className="text-13 text-text-2">
-              {t(
-                '不可逆：请键入目标名称并确认知情',
-                'Irreversible: type the target name and confirm you understand',
-              )}
-            </AlertDialogPrimitive.Description>
-            {description !== undefined ? (
-              <div className="text-13 text-text-2">{description}</div>
-            ) : null}
-            <TargetLine target={target} />
-            <ImpactList impact={impact} />
-            {children}
-            {target !== undefined ? (
-              <div className="flex flex-col gap-1.5">
-                <label htmlFor={typedId} className="text-13 font-medium text-text">
-                  键入 "{target}
-                  {t('" 以确认', 'Type the target name to confirm')}
-                </label>
-                <input
-                  id={typedId}
-                  value={typed}
-                  onChange={(event) => setTyped(event.target.value)}
-                  autoComplete="off"
-                  spellCheck={false}
-                  className="h-9 rounded-m border border-border-strong bg-surface-1 px-2 text-13 text-text"
-                  data-testid="confirm-typed-name"
-                />
-              </div>
-            ) : null}
-            <label className="flex items-start gap-2 text-13 text-text">
-              <input
-                type="checkbox"
-                checked={acknowledged}
-                onChange={(event) => setAcknowledged(event.target.checked)}
-                data-testid="confirm-acknowledge"
-                className="mt-0.5"
-              />
-              <span>
+            <ConfirmBody padding="l">
+              <AlertDialogPrimitive.Title id={titleId} className="text-16 font-semibold text-text">
+                {title}
+              </AlertDialogPrimitive.Title>
+              <AlertDialogPrimitive.Description id={descriptionId} className="text-13 text-text-2">
                 {t(
-                  '我知道此操作不可逆，且会写入平台审计。',
-                  'I understand this cannot be undone and is recorded in the platform audit.',
+                  '不可逆：请键入目标名称并确认知情',
+                  'Irreversible: type the target name and confirm you understand',
                 )}
-              </span>
-            </label>
-            <ConfirmErrorBanner error={error} overrides={errorOverrides} />
-            <div className="flex flex-row-reverse flex-wrap items-center gap-2">
-              {/* ux-lint-allow-disabled: the confirm asks to type the name right above; until it matches, that line says so. */}
-              <Button
-                variant="danger"
-                size="s"
-                aria-busy={busy}
-                disabled={busy || !ready}
-                onClick={() => void run()}
-                data-testid="confirm-button"
-              >
-                {resolvedConfirmLabel}
-              </Button>
-              <AlertDialogPrimitive.Cancel asChild>
-                <Button variant="ghost" size="s" disabled={busy} data-testid="confirm-cancel">
-                  {resolvedCancelLabel}
+              </AlertDialogPrimitive.Description>
+              {description !== undefined ? (
+                <div className="text-13 text-text-2">{description}</div>
+              ) : null}
+              <TargetLine target={target} />
+              <ImpactList impact={impact} />
+              {children}
+            </ConfirmBody>
+            <ConfirmActions padding="l">
+              {target !== undefined ? (
+                <div className="flex flex-col gap-1.5">
+                  <label htmlFor={typedId} className="text-13 font-medium text-text">
+                    键入 "{target}
+                    {t('" 以确认', 'Type the target name to confirm')}
+                  </label>
+                  <input
+                    id={typedId}
+                    value={typed}
+                    onChange={(event) => setTyped(event.target.value)}
+                    autoComplete="off"
+                    spellCheck={false}
+                    className="h-9 rounded-m border border-border-strong bg-surface-1 px-2 text-13 text-text"
+                    data-testid="confirm-typed-name"
+                  />
+                </div>
+              ) : null}
+              <label className="flex items-start gap-2 text-13 text-text">
+                <input
+                  type="checkbox"
+                  checked={acknowledged}
+                  onChange={(event) => setAcknowledged(event.target.checked)}
+                  data-testid="confirm-acknowledge"
+                  className="mt-0.5"
+                />
+                <span>
+                  {t(
+                    '我知道此操作不可逆，且会写入平台审计。',
+                    'I understand this cannot be undone and is recorded in the platform audit.',
+                  )}
+                </span>
+              </label>
+              <ConfirmErrorBanner error={error} overrides={errorOverrides} />
+              <div className="flex flex-row-reverse flex-wrap items-center gap-2">
+                {/* ux-lint-allow-disabled: the confirm asks to type the name right above; until it matches, that line says so. */}
+                <Button
+                  variant="danger"
+                  size="s"
+                  aria-busy={busy}
+                  disabled={busy || !ready}
+                  onClick={() => void run()}
+                  data-testid="confirm-button"
+                >
+                  {resolvedConfirmLabel}
                 </Button>
-              </AlertDialogPrimitive.Cancel>
-            </div>
+                <AlertDialogPrimitive.Cancel asChild>
+                  <Button variant="ghost" size="s" disabled={busy} data-testid="confirm-cancel">
+                    {resolvedCancelLabel}
+                  </Button>
+                </AlertDialogPrimitive.Cancel>
+              </div>
+            </ConfirmActions>
           </AlertDialogPrimitive.Content>
         </AlertDialogPrimitive.Portal>
       ) : null}

@@ -221,6 +221,27 @@ describe('kit/Confirm — medium', () => {
     expect(onConfirm).not.toHaveBeenCalled();
   });
 
+  it('legacy 347: only the body scrolls — the buttons and a refusal sit in the pinned row under it', async () => {
+    renderTier('medium', {
+      impact: Array.from({ length: 40 }, (_, i) => `影响 ${i}`),
+      onConfirm: async () => {
+        throw new Error('kernel said no');
+      },
+    });
+    fireEvent.click(screen.getByTestId('trigger'));
+    const popover = await screen.findByTestId('confirm');
+    const body = screen.getByTestId('confirm-body');
+    const actions = screen.getByTestId('confirm-actions');
+    expect([...popover.children]).toEqual([body, actions]);
+    expect(body.className).toContain('overflow-y-auto');
+    expect(popover.className).not.toContain('overflow-y-auto');
+    expect(body.contains(screen.getByTestId('confirm-impact'))).toBe(true);
+    expect(actions.contains(screen.getByTestId('confirm-button'))).toBe(true);
+    expect(actions.contains(screen.getByTestId('confirm-cancel'))).toBe(true);
+    fireEvent.click(screen.getByTestId('confirm-button'));
+    expect(actions.contains(await screen.findByTestId('confirm-error'))).toBe(true);
+  });
+
   it('a thrown error renders inline and the popover stays open', async () => {
     renderTier('medium', {
       onConfirm: async () => {
@@ -281,6 +302,20 @@ describe('kit/Confirm — irreversible', () => {
     fireEvent.click(button);
     await waitFor(() => expect(screen.queryByTestId('confirm')).toBeNull());
     expect(onConfirm).toHaveBeenCalledTimes(1);
+  });
+
+  it('legacy 347: the typed name, the acknowledgement and the button they unlock stay pinned under the scrolling body', async () => {
+    renderTier('irreversible', { impact: Array.from({ length: 40 }, (_, i) => `影响 ${i}`) });
+    fireEvent.click(screen.getByTestId('trigger'));
+    const dialog = await screen.findByRole('alertdialog');
+    const body = screen.getByTestId('confirm-body');
+    const actions = screen.getByTestId('confirm-actions');
+    expect([...dialog.children]).toEqual([body, actions]);
+    expect(body.className).toContain('overflow-y-auto');
+    expect(body.contains(screen.getByTestId('confirm-impact'))).toBe(true);
+    for (const id of ['confirm-typed-name', 'confirm-acknowledge', 'confirm-button']) {
+      expect(actions.contains(screen.getByTestId(id))).toBe(true);
+    }
   });
 
   it('with no target, only the acknowledgement gates the danger button (a batch with no single name)', async () => {

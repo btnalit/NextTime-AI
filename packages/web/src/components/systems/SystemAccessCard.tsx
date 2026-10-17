@@ -563,7 +563,7 @@ export function SystemAccessCard({
           </SheetHeader>
           <div className="stack">
             {rotatedSecret !== null ? <ConnectionSecretReveal secret={rotatedSecret} /> : null}
-            <div className="row" style={{ justifyContent: 'flex-end' }}>
+            <div className="row overlay-actions" style={{ justifyContent: 'flex-end' }}>
               <Button variant="primary" size="s" onClick={() => setRotatedSecret(null)}>
                 {t('我已复制', "I've copied it — Done")}
               </Button>

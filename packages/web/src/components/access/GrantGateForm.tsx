@@ -527,7 +527,7 @@ function GrantGateFormBody({
         />
       ) : null}
 
-      <div className="row" style={{ justifyContent: 'flex-end' }}>
+      <div className="row overlay-actions" style={{ justifyContent: 'flex-end' }}>
         <StillNeeded items={missing} hidden={submitting} testId="ggf-missing" />
         {onCancel ? (
           <Button variant="ghost" onClick={onCancel} disabled={submitting}>

@@ -804,6 +804,35 @@
   accent-color: var(--accent);
 }
 
+/* ---- Pinned action rows (legacy 347) ----------------------------------------------------- */
+/* UX acceptance of #612 and #651: a drawer, dialog or detail pane that scrolls as one box pushed
+ * its own 提交 / 确认 / 完成 row below the fold, so the last step needed a scroll to find. A row
+ * marked `.overlay-actions` sticks to the bottom of whatever scrolls it and stays in view; when the
+ * content is short it simply sits after it. The scroller's bottom padding would leave a strip under
+ * the stuck row where content shows through — each scroller names that padding as
+ * `--overlay-actions-inset` and the row's flat shadow fills it. Only rows that end a surface carry
+ * the class (a form's submit row, a reveal's 完成, the approval decision): a panel with one action
+ * per section keeps them in place. */
+.overlay-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+  background: var(--surface-1);
+  box-shadow: 0 var(--overlay-actions-inset, 0px) 0 0 var(--surface-1);
+}
+
+/* Inside the connect launcher, a step's own side form (create an instance, grant a member) stays
+ * in place: the launcher's 上一步 / 下一步 row is what stays pinned there. */
+.launcher .overlay-actions {
+  position: static;
+  padding-top: 0;
+  border-top: 0;
+  background: none;
+  box-shadow: none;
+}
+
 /* ---- Drawer -------------------------------------------------------------------------- */
 .drawer-overlay {
   position: fixed;
@@ -863,6 +892,7 @@
   flex: 1;
   overflow-y: auto;
   padding: var(--space-4) var(--space-5);
+  --overlay-actions-inset: var(--space-4);
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
@@ -1587,4 +1617,12 @@ a.ref-chip-name {
   gap: var(--space-2);
   padding: var(--space-3) var(--space-4);
   border-top: 1px solid var(--border);
+  /* Legacy 347: the launcher only opens in a drawer; its 上一步 / 下一步 row stays in view there
+   * like any other `.overlay-actions` row. */
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  border-radius: 0 0 var(--radius-l) var(--radius-l);
+  background: var(--surface-1);
+  box-shadow: 0 var(--overlay-actions-inset, 0px) 0 0 var(--surface-1);
 }

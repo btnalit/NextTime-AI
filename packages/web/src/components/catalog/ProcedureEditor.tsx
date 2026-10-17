@@ -687,7 +687,7 @@ export function ProcedureEditor({
         />
       ) : null}
 
-      <div className="row">
+      <div className="row overlay-actions">
         <Button type="submit" variant="primary" loading={busy} data-testid="procedure-submit">
           {t('保存草稿', 'Save draft')}
         </Button>

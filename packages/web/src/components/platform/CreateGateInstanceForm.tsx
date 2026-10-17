@@ -644,10 +644,17 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
                         '门 ID 以这个已有接入包的名字开头，已选中它，可直接修改。',
                         'The gate ID starts with this existing connector’s name, so it is picked — edit it if you like.',
                       )
-                    : t(
-                        '已根据门 ID 自动生成，可直接修改。',
-                        'Generated from the gate ID — edit it if you like.',
-                      )}
+                    : joinedConnector
+                      ? // Legacy 402: a gate id equal to an existing connector's name joins it —
+                        // 「自动生成」 would read as a new one.
+                        t(
+                          '门 ID 和这个已有接入包同名，已选中它，可直接修改。',
+                          'The gate ID matches this existing connector’s name, so it is picked — edit it if you like.',
+                        )
+                      : t(
+                          '已根据门 ID 自动生成，可直接修改。',
+                          'Generated from the gate ID — edit it if you like.',
+                        )}
                 </span>
               ) : null}
               {joinedConnector ? (
@@ -724,7 +731,7 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
         testId="create-gate-instance-error"
       />
 
-      <div className="row" style={{ justifyContent: 'flex-end' }}>
+      <div className="row overlay-actions" style={{ justifyContent: 'flex-end' }}>
         <Button variant="ghost" onClick={onCancel} disabled={submitting}>
           {t('取消', 'Cancel')}
         </Button>

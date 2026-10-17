@@ -242,6 +242,8 @@ test.describe('P-B1 acceptance: the platform gate-instance catalog', () => {
           return below || above;
         })
         .toBe(true);
+      // Legacy 347: the confirm's buttons are in view without scrolling it.
+      await expect(confirm.getByTestId('confirm-button')).toBeInViewport({ ratio: 1 });
       await confirm.getByTestId('confirm-button').click();
     }
     await expect(availableRow.getByRole('link', { name: /已启用/ })).toBeVisible({
