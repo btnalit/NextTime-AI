@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { canonicalJson } from '@nexttime/gatekeeper-base';
 import {
   ACTION_REQUEST_TRANSITIONS,
   type ActionRequestEvent,
@@ -14,6 +16,7 @@ import { findActionRequestByIdempotencyKey } from './reads.js';
 import { recordTransition } from './transition-log.js';
 import {
   ACTION_REQUEST_ROW_COLUMNS,
+  ActionInDoubtError,
   type ActionRequestDbRow,
   type ActionRequestRow,
   mapActionRequestRow,
@@ -57,6 +60,25 @@ import {
  * the transaction poisoned would break every write the *caller* still has queued after this call)
  * and return the winner's row, honoring the same "a repeat call returns the existing row, no new
  * audit/outbox writes" contract as the fast-path check above.
+ *
+ * Business-action identity in a goal step (S11 GO3c, plan §3.1, §3.3 I-G4: "同一步骤内，同一业务动作身份
+ * 至多执行一次，除非有显式、留痕的'重新执行'决定"): a request with `stepRunId` is identified by (step,
+ * Gatekeeper, Operation, stable params digest) — {@link stepIdempotencyKey}, which replaces whatever
+ * key the caller derived or supplied, so the same intent from a later attempt of the step (a new
+ * Worker session) or from a nested child Task of it is the same identity. The newest row with that
+ * identity is replayed when it is still in flight, executed (or verified), or `failed` with an
+ * unknown outcome — unless its requester decided to run it again (`reexecute_decision_id`,
+ * `reconcile.ts`); otherwise (it never reached the gate, was refused, rejected, expired, denied,
+ * withdrawn, compensated, or re-executed) a new row is created and evaluated by the policy like any
+ * other request — a person's re-execute decision never stands in for the approval. Then, before
+ * anything is created, a request of the same Operation in the step whose outcome is unknown and not
+ * yet reconciled refuses the call (`ActionInDoubtError`, 409): it may have run, and another call of
+ * that Operation could repeat its effect. That check sees only requests already known to be
+ * outcome-unknown: one still executing when another request of the same Operation (with other
+ * params) is made does not hold that request back — the same as outside a goal, where requests of
+ * one Operation with different params are independent. The `auto:` prefix keeps the in-flight
+ * unique index as the guard against two concurrent requests of one identity; a re-executed identity
+ * therefore can have more than one row, the newest deciding.
  */
 
 export interface RequestActionInput {
@@ -76,7 +98,9 @@ export interface RequestActionInput {
   readonly idempotencyKey?: string;
   readonly parentWorkerRunId?: string;
   /** S11 GO1: the StepRun the requesting Worker's Task executes (its own attempt or a nested child
-   *  Task of it) — resolved by the caller from that Task; omitted outside a goal. */
+   *  Task of it) — resolved by the caller from that Task; omitted outside a goal. S11 GO3c: given,
+   *  the request's identity is the step's ({@link stepIdempotencyKey}) and `idempotencyKey` is not
+   *  used (this module's doc comment). */
   readonly stepRunId?: string;
   /** Legacy K: the digest of the Operation definition this request is made against
    *  (`ActionRequestRow.operationDigest`); omitted when there is none to name. */
@@ -105,6 +129,25 @@ const RESOLUTION_EVENT_BY_DECISION: Record<PolicyDecision, ActionRequestEvent> =
  *  on a key the caller did not supply. Must match the `like 'auto:%'` predicates in
  *  migrations/governance/0014_action_request_idempotency_window.sql. */
 export const DERIVED_IDEMPOTENCY_KEY_PREFIX = 'auto:';
+
+/** S11 GO3c: the prefix of a goal step's business-action identity ({@link stepIdempotencyKey}).
+ *  Starts with {@link DERIVED_IDEMPOTENCY_KEY_PREFIX}, so the in-flight unique index of governance
+ *  0014 applies to it. */
+export const STEP_IDEMPOTENCY_KEY_PREFIX = `${DERIVED_IDEMPOTENCY_KEY_PREFIX}step:`;
+
+/** S11 GO3c (plan §3.1 "业务动作身份"): the identity of a request in a goal step — (step, Gatekeeper,
+ *  Operation, sha256 of the params' canonical JSON) — stored as its `idempotency_key`. */
+export function stepIdempotencyKey(input: {
+  readonly stepRunId: string;
+  readonly gatekeeperId: string;
+  readonly actionKind: string;
+  readonly params?: Record<string, unknown>;
+}): string {
+  const digest = createHash('sha256')
+    .update(canonicalJson(input.params ?? {}), 'utf8')
+    .digest('hex');
+  return `${STEP_IDEMPOTENCY_KEY_PREFIX}${input.stepRunId}:${input.gatekeeperId}:${input.actionKind}:${digest}`;
+}
 
 /** D-12: the statuses a derived key still dedupes against — the non-terminal states of
  *  `ACTION_REQUEST_TRANSITIONS` (`executed` counts as terminal: the operation has run, even though
@@ -170,6 +213,53 @@ async function findReplayableActionRequest(
   return row ? mapActionRequestRow(row) : null;
 }
 
+/** S11 GO3c: the row a request of a goal step replays — the newest with its identity, when that one
+ *  is in flight, executed, or `failed` with an unknown outcome nobody decided to run again. */
+async function findStepReplay(
+  client: PoolClient,
+  workspaceId: string,
+  stepRunId: string,
+  key: string,
+): Promise<ActionRequestRow | null> {
+  const result = await client.query<ActionRequestDbRow>(
+    `select ${ACTION_REQUEST_ROW_COLUMNS} from action_requests
+     where workspace_id = $1 and step_run_id = $2 and idempotency_key = $3
+     order by requested_at desc, id desc
+     limit 1`,
+    [workspaceId, stepRunId, key],
+  );
+  const newest = result.rows[0] ? mapActionRequestRow(result.rows[0]) : null;
+  if (!newest) return null;
+  const replayed =
+    IN_FLIGHT_ACTION_REQUEST_STATUSES.includes(newest.status) ||
+    newest.status === 'executed' ||
+    newest.status === 'verified' ||
+    (newest.status === 'failed' &&
+      newest.failureKind === 'outcome_unknown' &&
+      newest.reexecuteDecisionId === null);
+  return replayed ? newest : null;
+}
+
+/** S11 GO3c (I-G4): refuses a request of an Operation the step already has an unreconciled
+ *  outcome-unknown request of. */
+async function assertNoActionInDoubt(
+  client: PoolClient,
+  workspaceId: string,
+  stepRunId: string,
+  input: RequestActionInput,
+): Promise<void> {
+  const result = await client.query<{ id: string }>(
+    `select id from action_requests
+     where workspace_id = $1 and step_run_id = $2 and gatekeeper_id = $3 and action_kind = $4
+       and status = 'failed' and failure_kind = 'outcome_unknown' and reconciliation is null
+     order by requested_at, id
+     limit 1`,
+    [workspaceId, stepRunId, input.gatekeeperId, input.actionKind],
+  );
+  const inDoubt = result.rows[0];
+  if (inDoubt) throw new ActionInDoubtError(stepRunId, inDoubt.id);
+}
+
 async function insertActionRequestRow(
   client: PoolClient,
   workspaceId: string,
@@ -220,9 +310,19 @@ async function insertActionRequestRow(
 export async function requestAction(
   client: PoolClient,
   workspaceId: string,
-  input: RequestActionInput,
+  requested: RequestActionInput,
 ): Promise<ActionRequestRow> {
-  if (input.idempotencyKey) {
+  const input: RequestActionInput = requested.stepRunId
+    ? {
+        ...requested,
+        idempotencyKey: stepIdempotencyKey({ ...requested, stepRunId: requested.stepRunId }),
+      }
+    : requested;
+  if (input.stepRunId && input.idempotencyKey) {
+    const replay = await findStepReplay(client, workspaceId, input.stepRunId, input.idempotencyKey);
+    if (replay) return replay;
+    await assertNoActionInDoubt(client, workspaceId, input.stepRunId, input);
+  } else if (input.idempotencyKey) {
     const existing = await findReplayableActionRequest(client, workspaceId, input.idempotencyKey, {
       afterConflict: false,
     });

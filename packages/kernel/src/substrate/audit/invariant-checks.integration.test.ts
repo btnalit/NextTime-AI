@@ -91,7 +91,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       action: string;
       resourceType: string;
       resourceId: string;
-      resultingStatus: string;
+      /** Omitted for an annotation of the request (no status change, no `resultingStatus`). */
+      resultingStatus?: string;
       createdAt: Date;
     }): Promise<void> {
       await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
@@ -105,7 +106,11 @@ describe.runIf(DATABASE_URL !== undefined)(
             params.action,
             params.resourceType,
             params.resourceId,
-            JSON.stringify({ resultingStatus: params.resultingStatus }),
+            JSON.stringify(
+              params.resultingStatus === undefined
+                ? {}
+                : { resultingStatus: params.resultingStatus },
+            ),
             params.createdAt,
           ],
         ),
@@ -192,6 +197,66 @@ describe.runIf(DATABASE_URL !== undefined)(
         const before = baseline.find((b) => b.invariant === result.invariant);
         expect(result.violations).toBe(before?.violations ?? 0);
       }
+    });
+
+    it('I6: an annotation of a request (no resultingStatus, or one restating its status) is not a transition — it is neither a violation nor hides one', async () => {
+      const annotatedId = randomUUID();
+      const maskedId = randomUUID();
+      const at = (secondsAgo: number) => new Date(Date.now() - secondsAgo * 1000);
+      const baseline = await runInvariantChecks(pool);
+      const baselineI6 = baseline.find((result) => result.invariant === 'I6');
+
+      // A legal trail with every kind of annotation the kernel writes between its transitions:
+      // legacy 287's `outcome_in_doubt` (restates `executing`), S11 GO3c's `reconcile` /
+      // `reexecute` and GO3b's `release` (no `resultingStatus`).
+      const trail: { action: string; resultingStatus?: string }[] = [
+        { action: 'action_request.request', resultingStatus: 'auto_approved' },
+        { action: 'action_request.start_execution', resultingStatus: 'executing' },
+        { action: 'action_request.outcome_in_doubt', resultingStatus: 'executing' },
+        { action: 'action_request.fail', resultingStatus: 'failed' },
+        { action: 'action_request.reconcile' },
+        { action: 'action_request.reexecute' },
+        { action: 'action_request.release' },
+        { action: 'action_request.compensate', resultingStatus: 'compensated' },
+      ];
+      for (const [index, entry] of trail.entries()) {
+        await insertAuditRecord({
+          ...entry,
+          resourceType: 'action_request',
+          resourceId: annotatedId,
+          createdAt: at(25 - index),
+        });
+      }
+      const afterLegal = await runInvariantChecks(pool);
+      const i6 = afterLegal.find((result) => result.invariant === 'I6');
+      expect(i6?.violations).toBe(baselineI6?.violations ?? 0);
+      expect(i6?.sample.some((entry) => entry.includes(annotatedId))).toBe(false);
+
+      // ...and one standing between two statuses that are not an edge does not hide the skip.
+      await insertAuditRecord({
+        action: 'action_request.request',
+        resourceType: 'action_request',
+        resourceId: maskedId,
+        resultingStatus: 'pending_approval',
+        createdAt: at(12),
+      });
+      await insertAuditRecord({
+        action: 'action_request.reconcile',
+        resourceType: 'action_request',
+        resourceId: maskedId,
+        createdAt: at(11),
+      });
+      await insertAuditRecord({
+        action: 'action_request.complete',
+        resourceType: 'action_request',
+        resourceId: maskedId,
+        resultingStatus: 'executed',
+        createdAt: at(10),
+      });
+      const withSkip = await runInvariantChecks(pool);
+      const skipped = withSkip.find((result) => result.invariant === 'I6');
+      expect(skipped?.sample).toContain(`${workspaceId}:${maskedId} pending_approval->executed`);
+      expect(skipped?.violations).toBe((baselineI6?.violations ?? 0) + 1);
     });
 
     it("I13: the capability_handles_inheritance trigger rejects a child Handle whose expires_at exceeds its parent's at INSERT time (governance/0008_capability_handle_inheritance.sql) — this check itself always reads 0 in a clean database", async () => {

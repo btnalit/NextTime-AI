@@ -12,8 +12,9 @@
  * log (`transition-log.ts`). GO3a adds a person stopping a run (`control.ts`: pause, resume,
  * cancel), the advance of a cancelling run (`cancelling.ts`) and the transition helpers both writers
  * share (`moves.ts`). GO3b adds an owner's hold (`control.ts`), revising a paused run's plan
- * (`revise.ts`) and pausing a run whose advances keep failing (`advancer.ts`, legacy 356); the
- * reconcile path (GO3c) builds on these.
+ * (`revise.ts`) and pausing a run whose advances keep failing (`advancer.ts`, legacy 356). GO3c adds
+ * a person settling an action whose outcome is unknown (`reconcile.ts`: a finding, a re-execute)
+ * and the step-scoped identity of a step's requests (I-G4, in `governance/approval`).
  *
  * Boundaries: it lives in `application` because the advancer creates Tasks (`application/task`) and
  * withdraws ActionRequests (`governance/approval`) in the transaction that moves a StepRun.
@@ -99,6 +100,14 @@ export {
   type RevisedGoalRun,
   reviseGoalRun,
 } from './revise.js';
+
+export {
+  type ReconcileGoalActionInput,
+  type ReconciledGoalAction,
+  type UnresolvedGoalAction,
+  listGoalRunUnresolvedActions,
+  reconcileGoalAction,
+} from './reconcile.js';
 
 export {
   ADVANCED_GOAL_RUN_STATUSES,

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   ActionRequestFailureKindSchema,
+  ActionRequestReconciliationSchema,
   ActionRequestStatusSchema,
   BlastRadiusSchema,
   GrantStatusSchema,
@@ -45,6 +46,19 @@ export const ActionRequestQueuedBehindWireSchema = z
   .strict();
 export type ActionRequestQueuedBehindWire = z.infer<typeof ActionRequestQueuedBehindWireSchema>;
 
+/** S11 GO3c: what was found about a `failed` + `outcome_unknown` ActionRequest
+ *  (`ACTION_REQUEST_RECONCILIATION_VALUES`), and whether its requester then decided to run the same
+ *  request again (`reexecute`: the step's next request with the same identity is a new
+ *  ActionRequest, evaluated and approved like any other). Who decided, when and why is in the
+ *  Decisions behind it and the request's audit records. */
+export const ActionRequestReconciliationWireSchema = z
+  .object({
+    verdict: ActionRequestReconciliationSchema,
+    reexecute: z.boolean(),
+  })
+  .strict();
+export type ActionRequestReconciliationWire = z.infer<typeof ActionRequestReconciliationWireSchema>;
+
 export const ActionRequestWireSchema = z
   .object({
     id: z.string(),
@@ -68,6 +82,9 @@ export const ActionRequestWireSchema = z
     // `outcome_unknown` (`ACTION_REQUEST_FAILURE_KIND_VALUES`), the row's own column; `null` on
     // every other status.
     failureKind: ActionRequestFailureKindSchema.nullable(),
+    // S11 GO3c: on a `failed` + `outcome_unknown` row that has been reconciled, what was found
+    // (migrations/governance/0023). Absent until then, and on every other row.
+    reconciliation: ActionRequestReconciliationWireSchema.optional(),
     // Nullable: rows written before migrations/governance/0007 have no value on file
     // (governance/approval/types.ts's own `ActionRequestRow.requesterCanApprove` doc comment).
     requesterCanApprove: z.boolean().nullable(),

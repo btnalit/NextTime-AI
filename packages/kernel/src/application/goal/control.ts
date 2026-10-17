@@ -1,11 +1,12 @@
 import type { GoalRunPauseAuthority, GoalRunStatus, Role, StepRunStatus } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
-import { withdrawStepActions } from '../../governance/approval/index.js';
+import { listStepActionOutcomes, withdrawStepActions } from '../../governance/approval/index.js';
 import { listStepLiveTasks } from '../task/index.js';
 import { GOAL_CANCELLED_WITHDRAW_REASON } from './cancelling.js';
+import { actionDisposition, stepActionEffect } from './disposition.js';
 import { type GoalMoveActor, moveGoalRun, moveStepRun } from './moves.js';
 import { samePlanEntry } from './plan.js';
-import { getPlanRevision, lockStepRuns, readStepActionEffect } from './reads.js';
+import { getPlanRevision, lockStepRuns } from './reads.js';
 import { GoalRunNotFoundError, GoalRunStateError, lockGoalRun } from './service.js';
 import { recordGoalRunTransition } from './transition-log.js';
 import type { GoalRunRow, StepRunRow } from './types.js';
@@ -221,7 +222,9 @@ export async function resumeGoalRun(
 /** A person's retry runs no new attempt beside a request that may still run (I-G4) or a Task of the
  *  step still running — a nested child Task outlives its caller's attempt (GO3b) — and only for a
  *  step still in the current plan, unchanged (I-G2). A step waiting on an outcome-unknown request
- *  is reconciled first (GO3c), never simply retried. */
+ *  is reconciled first, never simply retried; and one with a request found `effect_absent` needs
+ *  the requester's re-execute decision first (GO3c) — a new attempt would only be replayed that
+ *  request (I-G4), and might report the step done although the action never ran. */
 async function assertRetryable(
   client: PoolClient,
   goal: GoalRunRow,
@@ -230,12 +233,18 @@ async function assertRetryable(
   if ((await listStepLiveTasks(client, goal.workspaceId, goal.id, step.id)).length > 0) {
     throw new GoalRunStateError(`step ${step.stepKey}: a Task of it still runs`);
   }
-  const effect = await readStepActionEffect(client, goal.workspaceId, step.id);
+  const outcomes = await listStepActionOutcomes(client, goal.workspaceId, step.id);
+  const effect = stepActionEffect(outcomes);
   if (effect.kind === 'wait') {
     throw new GoalRunStateError(
       effect.waitingReason === 'reconcile'
         ? `step ${step.stepKey}: an action of it may have run (outcome unknown); reconcile it first`
         : `step ${step.stepKey}: an action of it still awaits a decision or runs`,
+    );
+  }
+  if (outcomes.some((outcome) => actionDisposition(outcome) === 'unconfirmed')) {
+    throw new GoalRunStateError(
+      `step ${step.stepKey}: an action of it was found to have no effect; decide to run it again (or revise the plan) first`,
     );
   }
   const current = goal.currentRevision;
