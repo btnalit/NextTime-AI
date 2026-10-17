@@ -1,9 +1,14 @@
-import type { ActionRequestReconciliation, StepRunStatus } from '@nexttime/shared';
+import type {
+  ActionRequestReconcileCheckStatus,
+  ActionRequestReconciliation,
+  StepRunStatus,
+} from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import {
   type ActionRequestRow,
   getActionRequest,
   listUnresolvedStepActions,
+  readReconcileChecks,
   reconcileActionRequest,
 } from '../../governance/approval/index.js';
 import { markGoalRunDue } from './advancer.js';
@@ -119,6 +124,19 @@ export interface UnresolvedGoalAction {
   readonly actionKindTag: string;
   readonly failedAt: Date | null;
   readonly needs: 'finding' | 'decision';
+  /** GO3d: the platform's check of the action, when its step declared one (`plan.ts`
+   *  `reconcile`) — where it stands, how many attempts it made, the short code of why it is
+   *  `unavailable` or was last retried, its latest Observation (the evidence of `not_seen`, or
+   *  what a pending one saw so far), and when a pending one tries next (it waits for the run to
+   *  run: a paused run's checks wait for the resume). A `pending` one may still settle the
+   *  finding itself. */
+  readonly platformCheck: {
+    readonly status: ActionRequestReconcileCheckStatus;
+    readonly attempts: number;
+    readonly lastError: string | null;
+    readonly observationId: string | null;
+    readonly nextAttemptAt: Date | null;
+  } | null;
 }
 
 /** The actions of every step of `goalRunId` — revised away or cancelled ones included — whose
@@ -135,12 +153,18 @@ export async function listGoalRunUnresolvedActions(
   const byId = new Map(steps.map((step) => [step.id, step]));
   const canRun = goal.status === 'running' || goal.status === 'paused';
   const rows = await listUnresolvedStepActions(client, workspaceId, [...byId.keys()]);
+  const checks = await readReconcileChecks(
+    client,
+    workspaceId,
+    rows.map((row) => row.id),
+  );
   const unresolved: UnresolvedGoalAction[] = [];
   for (const row of rows) {
     const step = byId.get(row.stepRunId);
     if (!step) continue;
     const needs = row.reconciliation === null ? 'finding' : 'decision';
     if (needs === 'decision' && (!canRun || ENDED_STEP_STATUSES.has(step.status))) continue;
+    const check = checks.get(row.id);
     unresolved.push({
       actionRequestId: row.id,
       stepRunId: row.stepRunId,
@@ -149,6 +173,15 @@ export async function listGoalRunUnresolvedActions(
       actionKindTag: row.actionKindTag,
       failedAt: row.failedAt,
       needs,
+      platformCheck: check
+        ? {
+            status: check.status,
+            attempts: check.attempts,
+            lastError: check.lastError,
+            observationId: check.observationId,
+            nextAttemptAt: check.status === 'pending' ? check.nextAttemptAt : null,
+          }
+        : null,
     });
   }
   return unresolved;

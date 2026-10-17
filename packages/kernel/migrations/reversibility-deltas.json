@@ -19,6 +19,34 @@
         }
       ],
       "rationale": "docs/runbooks/release.md §6, core 0041 row: 0041 drops 0035's compatibility allowance on purpose, so the workspace plane's UPDATE of its own row is now hidden by RLS (0 rows) instead of raised by the trigger, and setting its own ontology_enforcement no longer succeeds. No v0.42.0 product path used the allowance."
+    },
+    {
+      "migration": "governance/0024_action_request_reconcile_checks.sql",
+      "baseTests": [
+        {
+          "file": "src/application/platform/compact-observations.integration.test.ts",
+          "fullName": "compactObservations (integration, real Postgres) — leftover 103 a dry run deletes nothing, writes no audit row, and classifies every old row"
+        },
+        {
+          "file": "src/application/platform/compact-observations.integration.test.ts",
+          "fullName": "compactObservations (integration, real Postgres) — leftover 103 the executing run deletes exactly what the dry run predicted, and only redundant ingest rows"
+        },
+        {
+          "file": "src/application/platform/compact-observations.integration.test.ts",
+          "fullName": "compactObservations (integration, real Postgres) — leftover 103 writes one unattributed cli.observations_compacted audit row with the parameters and per-workspace counts"
+        },
+        {
+          "file": "src/application/platform/compact-observations.integration.test.ts",
+          "fullName": "compactObservations (integration, real Postgres) — leftover 103 a second run deletes nothing (idempotent) and, given an operator, writes an attributed audit row"
+        }
+      ],
+      "replacedBy": [
+        {
+          "file": "src/application/platform/compact-observations.integration.test.ts",
+          "fullName": "compactObservations and a platform reconcile check (integration, real Postgres) — S11 GO3d runs on a schema where a reconcile check references an Observation, and never deletes the one the check settled on"
+        }
+      ],
+      "rationale": "docs/runbooks/release.md §6, governance 0024: 0024 adds a foreign key from action_request_reconcile_checks.observation_id into observations. The previous release's observation compaction refuses to run when the catalog shows a foreign key into observations it does not check (its fail-closed guard), so after a code-only rollback scripts/apply-release.sh reports the observations-compaction step degraded until the release carrying 0024 is applied again. Nothing is deleted, and the rest of the previous release's suite passes on the new schema. HEAD's compaction knows the key, and condition (a) keeps the Observation a check settled on."
     }
   ]
 }

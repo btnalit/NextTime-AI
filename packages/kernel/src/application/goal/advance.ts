@@ -10,7 +10,12 @@ import type {
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { type PoolLike, withWorkspace } from '../../adapters/db/pool.js';
-import { listStepActionOutcomes } from '../../governance/approval/index.js';
+import {
+  type StepActionOutcome,
+  ensureReconcileCheck,
+  listStepActionOutcomes,
+  stepIdempotencyKey,
+} from '../../governance/approval/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import {
   type LiveGoalTask,
@@ -29,7 +34,7 @@ import {
   terminateTaskWith,
 } from '../task/index.js';
 import { type CancellingOptions, advanceCancellingGoalRun } from './cancelling.js';
-import { type StepActionEffect, stepActionEffect } from './disposition.js';
+import { type StepActionEffect, actionDisposition, stepActionEffect } from './disposition.js';
 import { type GoalMoveActor, moveGoalRun, moveStepRun } from './moves.js';
 import { DEFAULT_MAX_ATTEMPTS, type PlanStep, planStep, samePlanEntry } from './plan.js';
 import { getPlanRevision, lockStepRuns } from './reads.js';
@@ -58,13 +63,17 @@ import type { GoalRunRow, PlanRevisionRow, StepRunRow } from './types.js';
  *      Task and by what the ActionRequests raised by that attempt's own runs — nested children
  *      included — became (`stepActionEffect`, §4.7; an earlier attempt's requests never decide
  *      this one). A request still in flight or awaiting a reconcile holds the step in `waiting`
- *      (§4.8: the wait is on the step, not on the Worker); a reconcile also pauses the GoalRun
- *      `awaiting_reconcile` until a person records what they found (GO3c, `reconcile.ts`;
- *      `effect_seen` counts as executed, `effect_absent` fails the step `outcome_unknown` for a
- *      person, a re-execute decision fails it `transient` for a new attempt — `disposition.ts`;
- *      the platform's reconcile observation is GO3d) and the requester resumes it: the advancer
- *      never lifts that pause itself (review #493 on #642 — a person's pause laid over it, or one
- *      left by a lifted hold, could not be told from it). Otherwise {@link judgeFinishedAttempt}:
+ *      (§4.8: the wait is on the step, not on the Worker). A reconcile is first the platform's
+ *      when the step declared a check for that action (GO3d, `plan.ts` `reconcile`): the check is
+ *      created here, `reconcile-check.ts` makes the observation outside this transaction, and the
+ *      run keeps running while it is pending — a satisfied check records `effect_seen` and sets
+ *      the run due. Otherwise — no declaration, or a check that did not see the effect or could
+ *      not be made — the GoalRun pauses `awaiting_reconcile` until a person records what they
+ *      found (GO3c, `reconcile.ts`; `effect_seen` counts as executed, `effect_absent` fails the
+ *      step `outcome_unknown` for a person, a re-execute decision fails it `transient` for a new
+ *      attempt — `disposition.ts`) and the requester resumes it: the advancer never lifts that
+ *      pause itself (review #493 on #642 — a person's pause laid over it, or one left by a lifted
+ *      hold, could not be told from it). Otherwise {@link judgeFinishedAttempt}:
  *      success, or a failure category — only `transient` is retried without a person; every
  *      other category pauses the GoalRun. A step
  *      no longer part of the current plan is not judged at all (I-G2: a late result is kept on
@@ -497,16 +506,15 @@ class Advance {
     // found to have) can be: while one is in flight or its outcome is open, no new attempt starts
     // (phase B, `control.ts`). So it changes no verdict here.
     const runs = await listTaskWorkerRunTree(this.client, this.ws, task.id);
-    const effect = stepActionEffect(
-      await listStepActionOutcomes(this.client, this.ws, step.id, { raisedBy: runs }),
-    );
+    const outcomes = await listStepActionOutcomes(this.client, this.ws, step.id, {
+      raisedBy: runs,
+    });
+    const effect = stepActionEffect(outcomes);
     if (effect.kind === 'wait') {
       await this.holdStep(step, effect.waitingReason, task.id);
       if (effect.waitingReason === 'reconcile') {
-        await this.pause(
-          'awaiting_reconcile',
-          `step ${step.stepKey}: an action of attempt ${step.attemptCount} may have run (outcome unknown)`,
-        );
+        const forPerson = await this.reconcileByPlatform(step, outcomes);
+        if (forPerson !== null) await this.pause('awaiting_reconcile', forPerson);
       }
       return;
     }
@@ -528,6 +536,51 @@ class Advance {
         `step ${step.stepKey}: attempt ${step.attemptCount} failed (${verdict.category})`,
       );
     }
+  }
+
+  /**
+   * GO3d: the outcome-unknown requests among `outcomes` that the step declared a reconcile check
+   * for (`plan.ts`, matched by business identity, I-G4) get the platform's check
+   * (`ensureReconcileCheck`; `reconcile-check.ts` runs it while the step waits in a running run,
+   * and its result sets the run due). Returns `null` when every such request has a check still
+   * pending — the step waits and the run does not pause; otherwise why a person is needed: a
+   * request with no declaration, or a check that settled without seeing the effect (`not_seen`)
+   * or could not be made (`unavailable`). The checks of the others are created all the same: they
+   * run once the requester resumes the run.
+   */
+  private async reconcileByPlatform(
+    step: StepRunRow,
+    outcomes: readonly StepActionOutcome[],
+  ): Promise<string | null> {
+    const declarations = (await this.entry(step))?.reconcile ?? [];
+    const declarationOf = (request: StepActionOutcome) =>
+      declarations.find(
+        (declaration) =>
+          request.idempotencyKey ===
+          stepIdempotencyKey({
+            stepRunId: step.id,
+            gatekeeperId: declaration.action.gatekeeperId,
+            actionKind: declaration.action.operation,
+            params: declaration.action.params,
+          }),
+      );
+    let forPerson: string | null = null;
+    for (const request of outcomes) {
+      if (actionDisposition(request) !== 'reconcile') continue;
+      const declaration = declarationOf(request);
+      if (!declaration) {
+        forPerson ??= `step ${step.stepKey}: an action of attempt ${step.attemptCount} may have run (outcome unknown)`;
+        continue;
+      }
+      const check = await ensureReconcileCheck(this.client, this.ws, {
+        actionRequestId: request.id,
+        observationCheck: declaration.check,
+      });
+      if (check.status !== 'pending') {
+        forPerson ??= `step ${step.stepKey}: the platform's reconcile check of an action of attempt ${step.attemptCount} ${check.status === 'not_seen' ? 'did not see its effect' : 'could not be made'}`;
+      }
+    }
+    return forPerson;
   }
 
   /** `running → waiting(reason)`; a step already waiting for another reason resumes and waits

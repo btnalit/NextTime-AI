@@ -189,6 +189,32 @@ export const ACTION_REQUEST_RECONCILIATION_VALUES = ['effect_seen', 'effect_abse
 export type ActionRequestReconciliation = (typeof ACTION_REQUEST_RECONCILIATION_VALUES)[number];
 export const ActionRequestReconciliationSchema = asEnum(ACTION_REQUEST_RECONCILIATION_VALUES);
 
+/**
+ * S11 GO3d (plan §4.7 "结果未知"): where the platform's reconcile check of an outcome-unknown
+ * ActionRequest stands — an observation the request's goal step declared, and a predicate over its
+ * result (`action_request_reconcile_checks`, governance/0024):
+ *   - `pending` (平台核对中): not observed yet, or observed without an answer and tried again;
+ *   - `seen` (平台已见效果): the observation satisfied the predicate — the platform recorded
+ *     `effect_seen` on the request;
+ *   - `not_seen` (平台未见效果): it did not — a person records what they find; never re-run on its own;
+ *   - `unavailable` (平台无法核对): the observation could not be made (refused, or no answer after the
+ *     last try) — a person records what they find;
+ *   - `preempted` (已由人核对): a person recorded a finding first; nothing was recorded from the check.
+ * Only `pending` moves, once, to one of the others.
+ */
+export const ACTION_REQUEST_RECONCILE_CHECK_STATUS_VALUES = [
+  'pending',
+  'seen',
+  'not_seen',
+  'unavailable',
+  'preempted',
+] as const;
+export type ActionRequestReconcileCheckStatus =
+  (typeof ACTION_REQUEST_RECONCILE_CHECK_STATUS_VALUES)[number];
+export const ActionRequestReconcileCheckStatusSchema = asEnum(
+  ACTION_REQUEST_RECONCILE_CHECK_STATUS_VALUES,
+);
+
 // ---------------------------------------------------------------------------------------------
 // §5.5 Task, WorkerRun, EntryAgent session
 // ---------------------------------------------------------------------------------------------

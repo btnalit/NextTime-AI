@@ -120,14 +120,29 @@ export {
   type RequestActionInput,
   STEP_IDEMPOTENCY_KEY_PREFIX,
   requestAction,
+  stepIdempotencyKey,
 } from './request-action.js';
 
 export {
   RECONCILIATION_NOTE_MAX,
   type ReconcileActionRequestInput,
   type ReconcileActionRequestResult,
+  type RecordObservedReconciliationInput,
   reconcileActionRequest,
+  recordObservedReconciliation,
 } from './reconcile.js';
+
+export {
+  RECONCILE_CHECK_ERROR_MAX,
+  type ReconcileCheckAuditContext,
+  type ReconcileCheckRow,
+  claimReconcileCheck,
+  deferReconcileCheck,
+  ensureReconcileCheck,
+  lockReconcileCheck,
+  readReconcileChecks,
+  settleReconcileCheck,
+} from './reconcile-checks.js';
 
 export {
   type DecideActionRequestInput,

@@ -6,7 +6,12 @@ import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
-import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
+import {
+  endActivity,
+  recordSourceObservation,
+  registerSource,
+  startActivity,
+} from '../../substrate/epistemic/index.js';
 import { approveActionRequest } from './decide.js';
 import {
   markActionRequestExecuted,
@@ -14,7 +19,20 @@ import {
   startActionRequestExecution,
 } from './execution.js';
 import { getActionRequest } from './reads.js';
-import { RECONCILIATION_NOTE_MAX, reconcileActionRequest } from './reconcile.js';
+import {
+  type ReconcileCheckRow,
+  claimReconcileCheck,
+  deferReconcileCheck,
+  ensureReconcileCheck,
+  lockReconcileCheck,
+  readReconcileChecks,
+  settleReconcileCheck,
+} from './reconcile-checks.js';
+import {
+  RECONCILIATION_NOTE_MAX,
+  reconcileActionRequest,
+  recordObservedReconciliation,
+} from './reconcile.js';
 import { STEP_IDEMPOTENCY_KEY_PREFIX, requestAction } from './request-action.js';
 import { listStepActionOutcomes } from './step-actions.js';
 import {
@@ -207,6 +225,66 @@ describe.runIf(DATABASE_URL !== undefined)(
     afterAll(async () => {
       await pool.end();
     });
+
+    /** A Decision as any application code could write one (insert-only since core/0035). */
+    async function decision(
+      decidedBy: string | null,
+      rationale: Record<string, unknown>,
+      sourceId: string | null = null,
+    ): Promise<string> {
+      return as(decidedBy ?? ownerId, async (client) => {
+        const activity = await startActivity(client, workspaceId, {
+          kind: 'governance.reconcile_decision',
+          principalId: decidedBy ?? ownerId,
+        });
+        await endActivity(client, workspaceId, activity.id, 'completed');
+        const result = await client.query<{ id: string }>(
+          `insert into decisions (workspace_id, status, activity_id, summary, rationale, decided_by,
+             decided_at, source_id)
+           values ($1, $2, $3, 'test', $4::jsonb, $5, now(), $6) returning id`,
+          [
+            workspaceId,
+            transition(DECISION_TRANSITIONS, 'proposed', 'approve'),
+            activity.id,
+            JSON.stringify(rationale),
+            decidedBy,
+            sourceId,
+          ],
+        );
+        return result.rows[0]?.id as string;
+      });
+    }
+
+    /** A Source of the gate kind, and an Observation of it with `content` (GO3d). */
+    async function gateSource(): Promise<string> {
+      return asOwner(
+        async (client) =>
+          (
+            await registerSource(client, workspaceId, {
+              kind: 'gatekeeper',
+              name: `gate-${randomUUID().slice(0, 8)}`,
+              ownerPrincipalId: ownerId,
+              visibility: 'workspace',
+              metadata: { gatekeeperId },
+            })
+          ).id,
+      );
+    }
+    async function observation(sourceId: string, content: Record<string, unknown>) {
+      return asOwner(async (client) => {
+        const activity = await startActivity(client, workspaceId, {
+          kind: 'goal_reconcile_check',
+          principalId: requesterId,
+        });
+        const recorded = await recordSourceObservation(client, workspaceId, {
+          sourceId,
+          activityId: activity.id,
+          content,
+        });
+        await endActivity(client, workspaceId, activity.id, 'completed');
+        return recorded.id;
+      });
+    }
 
     describe('one request per identity in a goal step (I-G4)', () => {
       it('replays the same intent whatever key the caller names, while it is in flight and after it ran; other params, another step and outside a goal are other requests', async () => {
@@ -495,33 +573,6 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     describe('the database guard (governance/0023)', () => {
-      /** A Decision as any application code could write one (insert-only since core/0035). */
-      async function decision(
-        decidedBy: string | null,
-        rationale: Record<string, unknown>,
-      ): Promise<string> {
-        return as(decidedBy ?? ownerId, async (client) => {
-          const activity = await startActivity(client, workspaceId, {
-            kind: 'governance.reconcile_decision',
-            principalId: decidedBy ?? ownerId,
-          });
-          await endActivity(client, workspaceId, activity.id, 'completed');
-          const result = await client.query<{ id: string }>(
-            `insert into decisions (workspace_id, status, activity_id, summary, rationale, decided_by,
-               decided_at)
-             values ($1, $2, $3, 'test', $4::jsonb, $5, now()) returning id`,
-            [
-              workspaceId,
-              transition(DECISION_TRANSITIONS, 'proposed', 'approve'),
-              activity.id,
-              JSON.stringify(rationale),
-              decidedBy,
-            ],
-          );
-          return result.rows[0]?.id as string;
-        });
-      }
-
       /** A direct UPDATE as the application role — what code that skipped `reconcile.ts` could do. */
       const write = (id: string, set: string, params: readonly unknown[] = []) =>
         asOwner((client) =>
@@ -571,14 +622,52 @@ describe.runIf(DATABASE_URL !== undefined)(
             write(id, set, ['effect_absent', await decision(decider, finding(id))]),
           ).rejects.toThrow(/only the requester or a workspace owner/);
         }
+        // Nobody decided (governance/0024): only the platform's effect_seen, resting on an
+        // observation of this request that satisfied its predicate — never effect_absent.
+        const source = await gateSource();
+        const satisfied = await observation(source, { actionRequestId: id, outcome: 'satisfied' });
+        const platform = (extra: Record<string, unknown> = {}) =>
+          finding(id, 'effect_seen', { basis: 'observation', observationId: satisfied, ...extra });
+        for (const [verdict, rationale, sourceId] of [
+          ['effect_absent', finding(id), source],
+          ['effect_absent', finding(id, 'effect_absent', { basis: 'observation' }), source],
+          ['effect_seen', platform({ basis: 'person' }), source],
+          ['effect_seen', platform(), null],
+          ['effect_seen', platform(), await gateSource()],
+          [
+            'effect_seen',
+            platform({
+              observationId: await observation(source, {
+                actionRequestId: id,
+                outcome: 'unsatisfied',
+              }),
+            }),
+            source,
+          ],
+          [
+            'effect_seen',
+            platform({
+              observationId: await observation(source, {
+                actionRequestId: randomUUID(),
+                outcome: 'satisfied',
+              }),
+            }),
+            source,
+          ],
+          ['effect_seen', platform({ observationId: randomUUID() }), source],
+        ] as const) {
+          await expect(
+            write(id, set, [verdict, await decision(null, rationale, sourceId)]),
+          ).rejects.toThrow(/nobody decided is the platform's effect_seen/);
+        }
+        // A person's Decision says so.
         await expect(
-          write(id, set, ['effect_absent', await decision(null, finding(id))]),
-        ).rejects.toThrow(/must come from an observation/);
-        // The platform's reconcile observation (GO3d): nobody decided, the basis says so.
-        await write(id, set, [
-          'effect_absent',
-          await decision(null, finding(id, 'effect_absent', { basis: 'observation' })),
-        ]);
+          write(id, set, [
+            'effect_absent',
+            await decision(requesterId, finding(id, 'effect_absent', { basis: 'observation' })),
+          ]),
+        ).rejects.toThrow(/basis person/);
+        await write(id, set, ['effect_absent', await decision(requesterId, finding(id))]);
 
         await expect(
           write(id, 'reexecute_decision_id = $3', [
@@ -689,6 +778,294 @@ describe.runIf(DATABASE_URL !== undefined)(
         await expect(write(seen, "reconciliation = 'effect_lost'")).rejects.toThrow(
           /recorded once|action_requests_reconciliation_check/,
         );
+      });
+    });
+
+    describe('the platform’s finding and its check (S11 GO3d, governance/0024)', () => {
+      async function lostRequest(): Promise<string> {
+        const created = await request(await step(), { n: randomUUID() });
+        await inDoubt(created.id);
+        return created.id;
+      }
+
+      const observationCheck = (operation = 'inventory.read') => ({
+        gatekeeperId,
+        operation,
+        expect: { path: 'qty', op: 'gte' as const, value: 1 },
+      });
+      const ensure = (id: string, operation?: string) =>
+        asOwner((client) =>
+          ensureReconcileCheck(client, workspaceId, {
+            actionRequestId: id,
+            observationCheck: observationCheck(operation),
+          }),
+        );
+      const checkOf = async (id: string) => {
+        const found = (
+          await asOwner((client) => readReconcileChecks(client, workspaceId, [id]))
+        ).get(id);
+        if (!found) throw new Error(`no check for ${id}`);
+        return found;
+      };
+      /** Read when called: the principals are created in `beforeAll`. */
+      const auditContext = () => ({ actorPrincipalId: requesterId, stepRunId: null });
+      const settle = (id: string, input: Parameters<typeof settleReconcileCheck>[3]) =>
+        asOwner(async (client) =>
+          settleReconcileCheck(
+            client,
+            workspaceId,
+            (await lockReconcileCheck(client, workspaceId, id)) as ReconcileCheckRow,
+            input,
+            auditContext(),
+          ),
+        );
+      const observed = (id: string, observationId: string, sourceId: string) =>
+        as(requesterId, (client) =>
+          recordObservedReconciliation(client, workspaceId, {
+            actionRequestId: id,
+            observationId,
+            sourceId,
+            actorPrincipalId: requesterId,
+          }),
+        );
+      const audits = (id: string, action: string, outcome?: string) =>
+        count(
+          `select count(*) as n from audit_records
+            where workspace_id = $1 and resource_id = $2 and action = $3
+              and ($4::text is null or payload ->> 'outcome' = $4 or payload ->> 'basis' = $4)`,
+          [workspaceId, id, action, outcome ?? null],
+        );
+
+      it('records effect_seen nobody decided, resting on the observation, once; never for a request not in doubt', async () => {
+        const id = await lostRequest();
+        const source = await gateSource();
+        const seen = await observation(source, { actionRequestId: id, outcome: 'satisfied' });
+        const first = await observed(id, seen, source);
+        expect(first.changed).toBe(true);
+        expect(first.actionRequest.reconciliation).toBe('effect_seen');
+        const [found] = await raw<{
+          decided_by: string | null;
+          source_id: string;
+          rationale: Record<string, unknown>;
+        }>(
+          'select decided_by, source_id, rationale from decisions where workspace_id = $1 and id = $2',
+          [workspaceId, first.actionRequest.reconciliationDecisionId],
+        );
+        expect(found).toMatchObject({
+          decided_by: null,
+          source_id: source,
+          rationale: expect.objectContaining({
+            actionRequestId: id,
+            verdict: 'effect_seen',
+            basis: 'observation',
+            observationId: seen,
+          }),
+        });
+        expect(await audits(id, 'action_request.reconcile', 'observation')).toBe(1);
+        // Once: a repeat changes nothing, a person's other finding is refused.
+        expect((await observed(id, seen, source)).changed).toBe(false);
+        await expect(
+          reconcile(requesterId, { actionRequestId: id, verdict: 'effect_absent' }),
+        ).rejects.toBeInstanceOf(ActionReconciliationStateError);
+
+        const pending = await request(await step(), { n: randomUUID() });
+        const early = await observation(source, {
+          actionRequestId: pending.id,
+          outcome: 'satisfied',
+        });
+        await expect(observed(pending.id, early, source)).rejects.toBeInstanceOf(
+          ActionReconciliationStateError,
+        );
+      });
+
+      it('creates a check pending once, for a goal step’s request in doubt, and claims it one attempt at a time under a lease', async () => {
+        const id = await lostRequest();
+        expect(await ensure(id)).toMatchObject({
+          status: 'pending',
+          attempts: 0,
+          leaseUntil: null,
+        });
+        // One check per request, whatever is declared later.
+        expect((await ensure(id, 'other.read')).observationCheck.operation).toBe('inventory.read');
+
+        const pending = await request(await step(), { n: randomUUID() });
+        await expect(ensure(pending.id)).rejects.toThrow(
+          /only a goal step's request whose outcome/,
+        );
+        const outside = await request(undefined, { n: randomUUID() });
+        await inDoubt(outside.id);
+        await expect(ensure(outside.id)).rejects.toThrow(
+          /only a goal step's request whose outcome/,
+        );
+        const untried = await lostRequest();
+        await expect(
+          asOwner((client) =>
+            client.query(
+              `insert into action_request_reconcile_checks
+                 (workspace_id, action_request_id, observation_check, attempts)
+               values ($1, $2, '{}'::jsonb, 1)`,
+              [workspaceId, untried],
+            ),
+          ),
+        ).rejects.toThrow(/created pending and untried/);
+
+        const claim = () =>
+          asOwner((client) => claimReconcileCheck(client, workspaceId, id, 60_000));
+        const claimed = await claim();
+        expect(claimed?.attempts).toBe(1);
+        expect(claimed?.leaseUntil).not.toBeNull();
+        expect(claimed?.firstAttemptAt).toBeInstanceOf(Date);
+        expect(await claim()).toBeNull();
+        // A lease that ran out (its kernel died): the next claim is a new attempt.
+        await raw(
+          `update action_request_reconcile_checks set lease_until = now() - interval '1 second'
+            where workspace_id = $1 and action_request_id = $2`,
+          [workspaceId, id],
+        );
+        const second = await claim();
+        expect(second?.attempts).toBe(2);
+        // The first claim set when the first attempt was made; later claims keep it.
+        expect(second?.firstAttemptAt).toEqual(claimed?.firstAttemptAt);
+        const looked = await observation(await gateSource(), {
+          actionRequestId: id,
+          outcome: 'unsatisfied',
+        });
+        await asOwner((client) =>
+          deferReconcileCheck(
+            client,
+            workspaceId,
+            second as ReconcileCheckRow,
+            { delayMs: 60_000, lastError: 'predicate_unsatisfied', observationId: looked },
+            auditContext(),
+          ),
+        );
+        expect(await claim()).toBeNull();
+        // Not due, but closed (its run or step ended): claimed to be settled without a call.
+        const closed = await asOwner((client) =>
+          claimReconcileCheck(client, workspaceId, id, 60_000, true),
+        );
+        expect(closed?.attempts).toBe(3);
+        await raw(
+          `update action_request_reconcile_checks set lease_until = null
+            where workspace_id = $1 and action_request_id = $2`,
+          [workspaceId, id],
+        );
+        expect(await checkOf(id)).toMatchObject({
+          status: 'pending',
+          attempts: 3,
+          leaseUntil: null,
+          observationId: looked,
+          lastError: 'predicate_unsatisfied',
+        });
+        expect(await audits(id, 'action_request.reconcile_check', 'retry')).toBe(1);
+
+        const update = (set: string) =>
+          asOwner((client) =>
+            client.query(
+              `update action_request_reconcile_checks set ${set}
+                where workspace_id = $1 and action_request_id = $2`,
+              [workspaceId, id],
+            ),
+          );
+        await expect(update('attempts = 0')).rejects.toThrow(/attempts only grow/);
+        await expect(update(`observation_check = '{}'::jsonb`)).rejects.toThrow(/never changes/);
+        await expect(update(`first_attempt_at = now() - interval '1 hour'`)).rejects.toThrow(
+          /when the first attempt was made never changes/,
+        );
+        await expect(update('first_attempt_at = null')).rejects.toThrow(
+          /when the first attempt was made never changes/,
+        );
+        // Untried checks have no first attempt, tried ones always do.
+        const fresh = await lostRequest();
+        await ensure(fresh);
+        await expect(
+          asOwner((client) =>
+            client.query(
+              `update action_request_reconcile_checks set attempts = 1
+                where workspace_id = $1 and action_request_id = $2`,
+              [workspaceId, fresh],
+            ),
+          ),
+        ).rejects.toThrow(/action_request_reconcile_checks_first_attempt/);
+      });
+
+      it('settles once: seen only on the platform’s effect_seen from its own observation, preempted only by a finding, seen and not_seen with evidence', async () => {
+        const id = await lostRequest();
+        await ensure(id);
+        const source = await gateSource();
+        const seen = await observation(source, { actionRequestId: id, outcome: 'satisfied' });
+        await expect(settle(id, { status: 'seen', observationId: seen })).rejects.toThrow(
+          /seen only when the request carries the platform's effect_seen/,
+        );
+        await expect(settle(id, { status: 'preempted' })).rejects.toThrow(
+          /preempted only by a finding/,
+        );
+        await expect(settle(id, { status: 'not_seen' })).rejects.toThrow(
+          /action_request_reconcile_checks_evidence/,
+        );
+        await observed(id, seen, source);
+        const another = await observation(source, { actionRequestId: id, outcome: 'satisfied' });
+        await expect(settle(id, { status: 'seen', observationId: another })).rejects.toThrow(
+          /seen only when/,
+        );
+        await settle(id, { status: 'seen', observationId: seen });
+        const settled = await checkOf(id);
+        expect(settled).toMatchObject({ status: 'seen', observationId: seen, leaseUntil: null });
+        expect(settled.settledAt).not.toBeNull();
+        expect(await audits(id, 'action_request.reconcile_check', 'seen')).toBe(1);
+        await expect(settle(id, { status: 'unavailable', lastError: 'late' })).rejects.toThrow(
+          /a settled check is not changed/,
+        );
+
+        const unseen = await lostRequest();
+        await ensure(unseen);
+        const looked = await observation(source, {
+          actionRequestId: unseen,
+          outcome: 'unsatisfied',
+        });
+        await settle(unseen, { status: 'not_seen', observationId: looked });
+        expect((await checkOf(unseen)).status).toBe('not_seen');
+        expect((await row(unseen)).reconciliation).toBeNull();
+
+        // A settle with no observation of its own keeps the check's latest as its evidence.
+        const later = await lostRequest();
+        const check = await ensure(later);
+        const earlier = await observation(source, {
+          actionRequestId: later,
+          outcome: 'unsatisfied',
+        });
+        await asOwner((client) =>
+          deferReconcileCheck(
+            client,
+            workspaceId,
+            check,
+            { delayMs: 0, lastError: 'predicate_unsatisfied', observationId: earlier },
+            auditContext(),
+          ),
+        );
+        await settle(later, { status: 'not_seen', lastError: 'gate_unreachable' });
+        expect(await checkOf(later)).toMatchObject({
+          status: 'not_seen',
+          observationId: earlier,
+          lastError: 'gate_unreachable',
+        });
+      });
+
+      it('a person’s finding preempts a pending check in the same transaction; a settled one stays as it was', async () => {
+        const id = await lostRequest();
+        await ensure(id);
+        await reconcile(requesterId, { actionRequestId: id, verdict: 'effect_absent' });
+        expect(await checkOf(id)).toMatchObject({ status: 'preempted' });
+        expect(await audits(id, 'action_request.reconcile_check', 'preempted')).toBe(1);
+
+        const settledFirst = await lostRequest();
+        await ensure(settledFirst);
+        await settle(settledFirst, { status: 'unavailable', lastError: 'gate_not_enabled' });
+        await reconcile(requesterId, { actionRequestId: settledFirst, verdict: 'effect_seen' });
+        expect(await checkOf(settledFirst)).toMatchObject({
+          status: 'unavailable',
+          lastError: 'gate_not_enabled',
+        });
       });
     });
   },

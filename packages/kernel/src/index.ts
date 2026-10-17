@@ -40,11 +40,14 @@ import type { GatekeeperActionExecutorDeps } from './application/gateway/index.j
 import {
   DEFAULT_GOAL_ADVANCER_INTERVAL_MS,
   DEFAULT_GOAL_RECONCILE_INTERVAL_MS,
+  DEFAULT_RECONCILE_CHECK_INTERVAL_MS,
   type GoalAdvancerOptions,
   type GoalCleanupCursor,
+  type ReconcileCheckOptions,
   markReconcileDue,
   registerGoalWakeConsumer,
   runGoalAdvancerTick,
+  runReconcileCheckTick,
   sweepGoalCancelCleanup,
 } from './application/goal/index.js';
 import type {
@@ -493,8 +496,18 @@ export interface CreateBackgroundServicesOptions {
   /** S11 GO2: the advancer's retry backoff and quota retry delay — and, S11 GO3a, its cancel
    *  deadline and re-check — for tests. */
   readonly goalAdvancerOptions?: GoalAdvancerOptions;
-  /** Called with every goal advancer, wake-consumer or reconcile-scan failure — same shape as
-   *  `onTaskReaperError`. Defaults to a no-op; `main()` passes `app.log.error`. */
+  /** S11 GO3d: how often the platform's reconcile checks run (`application/goal/reconcile-check.ts`'s
+   *  `runReconcileCheckTick`). Default `DEFAULT_RECONCILE_CHECK_INTERVAL_MS` (5 s). Wired with the
+   *  goal advancer. */
+  readonly goalReconcileCheckIntervalMs?: number;
+  /** S11 GO3d: the reconcile checks' caps — `main()` reads `maxAttempts` from
+   *  `GOAL_RECONCILE_CHECK_MAX_ATTEMPTS` and `maxDurationMs` from
+   *  `GOAL_RECONCILE_CHECK_MAX_DURATION_MS` (defaults `DEFAULT_RECONCILE_CHECK_MAX_ATTEMPTS`, 5, and
+   *  `DEFAULT_RECONCILE_CHECK_MAX_DURATION_MS`, 15 minutes) — and their lease and backoff, for
+   *  tests. */
+  readonly goalReconcileCheckOptions?: ReconcileCheckOptions;
+  /** Called with every goal advancer, wake-consumer, reconcile-scan or reconcile-check failure —
+   *  same shape as `onTaskReaperError`. Defaults to a no-op; `main()` passes `app.log.error`. */
   readonly onGoalAdvancerError?: (error: unknown) => void;
   /**
    * `OutboxDispatcher.pruneDispatched`'s `olderThanDays` — deletes dispatched outbox rows older
@@ -782,9 +795,11 @@ export function createBackgroundServices(
   // `request_action`'s own phase-2 continuation — see that function's own doc comment. The
   // consumer starts the drain without awaiting it (R-52): a slow `apply` must not hold the
   // dispatcher's single serial delivery loop, and with it every other event.
-  const { actionExecutor, withTransaction: adminWithTransaction } = buildGatekeeperExecutionDeps(
-    options.pool,
-  );
+  const {
+    gatekeeperClient,
+    actionExecutor,
+    withTransaction: adminWithTransaction,
+  } = buildGatekeeperExecutionDeps(options.pool);
   const drainer = new ApprovalDrainer({
     executor: actionExecutor,
     withTransaction: adminWithTransaction,
@@ -844,6 +859,10 @@ export function createBackgroundServices(
   let goalAdvancerTimer: NodeJS.Timeout | undefined;
   let goalReconcileTimer: NodeJS.Timeout | undefined;
   let goalAdvancerRunning = false;
+  // S11 GO3d: the platform's reconcile checks, beside the advancer; a tick waits on gate calls, so
+  // ticks do not overlap either.
+  let goalReconcileCheckTimer: NodeJS.Timeout | undefined;
+  let goalReconcileCheckRunning = false;
   let unsubscribeGoalWake: (() => void) | undefined;
   let taskDeps:
     | {
@@ -1007,6 +1026,22 @@ export function createBackgroundServices(
           );
         }, options.goalReconcileIntervalMs ?? DEFAULT_GOAL_RECONCILE_INTERVAL_MS);
         goalReconcileTimer.unref?.();
+
+        const reconcileCheckDeps = {
+          pool: options.pool,
+          gatekeeperClient,
+          options: options.goalReconcileCheckOptions,
+        };
+        goalReconcileCheckTimer = setInterval(() => {
+          if (goalReconcileCheckRunning) return;
+          goalReconcileCheckRunning = true;
+          runReconcileCheckTick(reconcileCheckDeps, { onError: (err) => onGoalAdvancerError(err) })
+            .catch(onGoalAdvancerError)
+            .finally(() => {
+              goalReconcileCheckRunning = false;
+            });
+        }, options.goalReconcileCheckIntervalMs ?? DEFAULT_RECONCILE_CHECK_INTERVAL_MS);
+        goalReconcileCheckTimer.unref?.();
       }
 
       // S8 W3 K2 (leftover 82): the draft-expiry sweep — `draftExpiryDays === 0` is a deliberate
@@ -1119,6 +1154,10 @@ export function createBackgroundServices(
       if (goalReconcileTimer) {
         clearInterval(goalReconcileTimer);
         goalReconcileTimer = undefined;
+      }
+      if (goalReconcileCheckTimer) {
+        clearInterval(goalReconcileCheckTimer);
+        goalReconcileCheckTimer = undefined;
       }
       if (draftExpiryTimer) {
         clearInterval(draftExpiryTimer);
@@ -1422,6 +1461,16 @@ export function main(): void {
       'TASK_REAPER_INTERVAL_MS',
       process.env.TASK_REAPER_INTERVAL_MS,
     );
+    // S11 GO3d: how long the platform keeps checking whether an action whose outcome is unknown
+    // took effect before it leaves the finding to a person.
+    const reconcileCheckMaxAttempts = parsePositiveIntEnvVar(
+      'GOAL_RECONCILE_CHECK_MAX_ATTEMPTS',
+      process.env.GOAL_RECONCILE_CHECK_MAX_ATTEMPTS,
+    );
+    const reconcileCheckMaxDurationMs = parsePositiveIntEnvVar(
+      'GOAL_RECONCILE_CHECK_MAX_DURATION_MS',
+      process.env.GOAL_RECONCILE_CHECK_MAX_DURATION_MS,
+    );
     const outboxPruneDays = parseNonNegativeIntEnvVar(
       'OUTBOX_PRUNE_DAYS',
       process.env.OUTBOX_PRUNE_DAYS,
@@ -1497,6 +1546,14 @@ export function main(): void {
       onGatekeeperDrainError: (err: unknown) => app.log.error(err),
       actionRequestReaperIntervalMs,
       staleExecutingTimeoutMs,
+      goalReconcileCheckOptions: {
+        ...(reconcileCheckMaxAttempts !== undefined
+          ? { maxAttempts: reconcileCheckMaxAttempts }
+          : {}),
+        ...(reconcileCheckMaxDurationMs !== undefined
+          ? { maxDurationMs: reconcileCheckMaxDurationMs }
+          : {}),
+      },
       onActionRequestReaperError: (actionRequestId: string, err: unknown) =>
         app.log.error({ actionRequestId, err }),
       outboxPruneDays,

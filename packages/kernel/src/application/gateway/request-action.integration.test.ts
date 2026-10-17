@@ -36,6 +36,7 @@ import {
   listStepActionOutcomes,
   reconcileActionRequest,
   rejectActionRequest,
+  stepIdempotencyKey,
 } from '../../governance/approval/index.js';
 import {
   entryScope,
@@ -1752,6 +1753,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       expect(row?.stepRunId).toBe(seeded.stepRunId);
       // What the advancer reads of the step: status, failure_kind and what a person found (GO3c),
+      // and the request's identity (GO3d: matched against the step's reconcile declarations) —
       // never the reason text.
       const outcomes = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
         listStepActionOutcomes(client, workspaceId, seeded.stepRunId),
@@ -1763,6 +1765,12 @@ describe.runIf(DATABASE_URL !== undefined)(
           failureKind: null,
           reconciliation: null,
           reexecuted: false,
+          idempotencyKey: stepIdempotencyKey({
+            stepRunId: seeded.stepRunId,
+            gatekeeperId,
+            actionKind: PENDING_OP.name,
+            params: { qty: 778 },
+          }),
         },
       ]);
     });

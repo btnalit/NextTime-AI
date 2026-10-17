@@ -11,6 +11,7 @@ import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { enqueue } from '../../substrate/outbox/index.js';
 import { redactedForAudit } from '../redaction/index.js';
 import { getActionRequestForUpdateOrThrow } from './reads.js';
+import { lockReconcileCheck, settleReconcileCheck } from './reconcile-checks.js';
 import {
   ACTION_REQUEST_ROW_COLUMNS,
   ActionReconciliationForbiddenError,
@@ -41,6 +42,12 @@ import {
  * a different finding is refused (409): a finding that turns out wrong is answered by a later
  * decision about the step — re-execute after `effect_absent`, a retry, or a revision of the plan —
  * never by rewriting the row (the guard trigger refuses that too).
+ *
+ * S11 GO3d: the platform records `effect_seen` itself when the reconcile observation a goal step
+ * declared satisfies its predicate ({@link recordObservedReconciliation}); nobody decided that
+ * Decision, and it cites the Observation. The platform never records `effect_absent`. A person's
+ * finding settles a check the platform still has pending as `preempted` (`reconcile-checks.ts`),
+ * in the same transaction.
  *
  * Who decides is read here from `principals`, never taken from the caller, and the database guard
  * checks it again from the Decision row. The order: lock the request (`for update`), check its
@@ -94,19 +101,24 @@ async function readDecider(
   return result.rows[0] ?? null;
 }
 
+/** A finding or re-execute Decision. A person's names them (`decidedBy`); the platform's (GO3d)
+ *  names nobody, rests on its observation's Source (`sourceId`), and its Activity is started by the
+ *  principal it observed for (`actorPrincipalId`). */
 async function writeReconcileDecision(
   client: PoolClient,
   workspaceId: string,
   params: {
     readonly actionRequest: ActionRequestRow;
-    readonly decidedBy: string;
+    readonly decidedBy: string | null;
+    readonly actorPrincipalId: string;
+    readonly sourceId?: string;
     readonly rationale: Record<string, unknown>;
     readonly summary: string;
   },
 ): Promise<string> {
   const activity = await startActivity(client, workspaceId, {
     kind: 'governance.reconcile_decision',
-    principalId: params.decidedBy,
+    principalId: params.actorPrincipalId,
     metadata: {
       actionRequestId: params.actionRequest.id,
       decision: params.rationale.decision,
@@ -114,13 +126,15 @@ async function writeReconcileDecision(
   });
   await endActivity(client, workspaceId, activity.id, 'completed');
   const result = await client.query<{ id: string }>(
-    `insert into decisions (workspace_id, status, activity_id, summary, rationale, decided_by, decided_at)
-     values ($1, $2, $3, $4, $5::jsonb, $6, now())
+    `insert into decisions (workspace_id, status, activity_id, source_id, summary, rationale,
+       decided_by, decided_at)
+     values ($1, $2, $3, $4, $5, $6::jsonb, $7, now())
      returning id`,
     [
       workspaceId,
       transition(DECISION_TRANSITIONS, 'proposed', 'approve'),
       activity.id,
+      params.sourceId ?? null,
       params.summary,
       JSON.stringify(params.rationale),
       params.decidedBy,
@@ -229,6 +243,7 @@ export async function reconcileActionRequest(
     findingDecisionId = await writeReconcileDecision(client, workspaceId, {
       actionRequest: existing,
       decidedBy: input.deciderPrincipalId,
+      actorPrincipalId: input.deciderPrincipalId,
       summary: `reconcile action_request ${id}: ${finding}`,
       rationale: {
         actionRequestId: id,
@@ -245,6 +260,7 @@ export async function reconcileActionRequest(
     reexecuteDecisionId = await writeReconcileDecision(client, workspaceId, {
       actionRequest: existing,
       decidedBy: input.deciderPrincipalId,
+      actorPrincipalId: input.deciderPrincipalId,
       summary: `re-execute action_request ${id}`,
       rationale: { actionRequestId: id, decision: 'reexecute', note: note ?? null, ...context },
     });
@@ -276,6 +292,24 @@ export async function reconcileActionRequest(
       },
     });
   }
+  if (recordFinding) {
+    // GO3d: the platform's check of this request, if one is still pending, has nothing left to
+    // find — a person's finding comes first (lock order: the request, then its check).
+    const check = await lockReconcileCheck(client, workspaceId, id);
+    if (check?.status === 'pending') {
+      await settleReconcileCheck(
+        client,
+        workspaceId,
+        check,
+        { status: 'preempted' },
+        {
+          actorPrincipalId: input.deciderPrincipalId,
+          stepRunId: existing.stepRunId,
+          ...(input.context?.goalRunId ? { goalRunId: input.context.goalRunId } : {}),
+        },
+      );
+    }
+  }
   if (recordReexecute) {
     await writeAudit(client, {
       workspaceId,
@@ -290,6 +324,104 @@ export async function reconcileActionRequest(
       },
     });
   }
+  await enqueue(client, {
+    type: 'ActionRequestUpdated',
+    workspaceId,
+    actionRequestId: id,
+    status: existing.status,
+  });
+  return { actionRequest: mapActionRequestRow(row), changed: true };
+}
+
+export interface RecordObservedReconciliationInput {
+  readonly actionRequestId: string;
+  /** The Observation the finding rests on — its content names this request and says its predicate
+   *  was satisfied (governance/0024 checks both). */
+  readonly observationId: string;
+  /** The Observation's Source (the Gatekeeper's): the Decision's `source_id`. */
+  readonly sourceId: string;
+  /** Whom the platform observed for — the request's requester; the audit row's actor. */
+  readonly actorPrincipalId: string;
+  readonly context?: { readonly goalRunId?: string };
+}
+
+/**
+ * S11 GO3d: the platform's own finding — `effect_seen`, from a reconcile observation whose
+ * predicate was satisfied (`application/goal/reconcile-check.ts`). Never `effect_absent`: an
+ * observation that does not show an effect leaves the finding to a person (it may be too early,
+ * or watch the wrong thing), so only the direction that lets the step go on is the platform's.
+ *
+ * The Decision names nobody (`decided_by` null), rests on the observation's Source, and cites the
+ * Observation (`rationale.basis = 'observation'`, `rationale.observationId`); the database guard
+ * (governance/0024) holds it to exactly that. Same order as a person's finding: lock the request,
+ * check its state, write the Decision, update the row, audit `action_request.reconcile`
+ * (`basis: 'observation'`) and publish `ActionRequestUpdated`. A request someone already
+ * reconciled is left as it is (`changed: false`) — the caller settles its check `preempted`.
+ */
+export async function recordObservedReconciliation(
+  client: PoolClient,
+  workspaceId: string,
+  input: RecordObservedReconciliationInput,
+): Promise<ReconcileActionRequestResult> {
+  const existing = await getActionRequestForUpdateOrThrow(
+    client,
+    workspaceId,
+    input.actionRequestId,
+  );
+  const id = existing.id;
+  if (existing.status !== 'failed' || existing.failureKind !== 'outcome_unknown') {
+    throw new ActionReconciliationStateError(
+      id,
+      existing.status,
+      'reconcile',
+      `is ${existing.status}${existing.failureKind ? ` (${existing.failureKind})` : ''}; only a request whose outcome is unknown is reconciled`,
+    );
+  }
+  if (existing.reconciliation !== null) return { actionRequest: existing, changed: false };
+
+  const context = {
+    stepRunId: existing.stepRunId,
+    actionKindTag: existing.actionKind,
+    ...(input.context?.goalRunId ? { goalRunId: input.context.goalRunId } : {}),
+  };
+  const decisionId = await writeReconcileDecision(client, workspaceId, {
+    actionRequest: existing,
+    decidedBy: null,
+    actorPrincipalId: input.actorPrincipalId,
+    sourceId: input.sourceId,
+    summary: `reconcile action_request ${id}: effect_seen (observed)`,
+    rationale: {
+      actionRequestId: id,
+      decision: 'reconcile',
+      verdict: 'effect_seen',
+      basis: 'observation',
+      observationId: input.observationId,
+      ...context,
+    },
+  });
+  const updated = await client.query<ActionRequestDbRow>(
+    `update action_requests
+        set reconciliation = 'effect_seen', reconciliation_decision_id = $3
+      where workspace_id = $1 and id = $2
+      returning ${ACTION_REQUEST_ROW_COLUMNS}`,
+    [workspaceId, id, decisionId],
+  );
+  const row = updated.rows[0];
+  if (!row) throw new Error('recordObservedReconciliation: UPDATE ... RETURNING produced no row');
+  await writeAudit(client, {
+    workspaceId,
+    actorPrincipalId: input.actorPrincipalId,
+    action: 'action_request.reconcile',
+    resourceType: 'action_request',
+    resourceId: id,
+    payload: {
+      verdict: 'effect_seen',
+      basis: 'observation',
+      decisionId,
+      observationId: input.observationId,
+      ...context,
+    },
+  });
   await enqueue(client, {
     type: 'ActionRequestUpdated',
     workspaceId,
