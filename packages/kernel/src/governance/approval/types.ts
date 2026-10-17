@@ -1,6 +1,7 @@
 import { IllegalTransition } from '@nexttime/shared';
 import type {
   ActionRequestFailureKind,
+  ActionRequestReconciliation,
   ActionRequestStatus,
   BlastRadius,
   PolicyDecision,
@@ -67,6 +68,15 @@ export interface ActionRequestRow {
    *  raised in — copied from the requesting Worker's Task at creation, never changed. `null` for a
    *  request outside a goal and for every human request. */
   readonly stepRunId: string | null;
+  /** S11 GO3c (migrations/governance/0023): on a `failed` + `outcome_unknown` row, what was found
+   *  when it was reconciled (`effect_seen` / `effect_absent`), with the Decision behind it — both
+   *  `null` until then, and recorded once (`reconcile.ts`). */
+  readonly reconciliation: ActionRequestReconciliation | null;
+  readonly reconciliationDecisionId: string | null;
+  /** S11 GO3c: the requester's Decision to run the same request again (only after
+   *  `effect_absent`) — the step's next request with the same identity is then a new row (I-G4,
+   *  `request-action.ts`). `null` otherwise; recorded once. */
+  readonly reexecuteDecisionId: string | null;
 }
 
 /** Legacy K: `ActionRequestRow.operationDigest` of a request made against no definition at all —
@@ -99,6 +109,9 @@ export interface ActionRequestDbRow {
   requester_can_approve: boolean | null;
   operation_digest: string | null;
   step_run_id: string | null;
+  reconciliation: ActionRequestReconciliation | null;
+  reconciliation_decision_id: string | null;
+  reexecute_decision_id: string | null;
 }
 
 export function mapActionRequestRow(row: ActionRequestDbRow): ActionRequestRow {
@@ -126,6 +139,9 @@ export function mapActionRequestRow(row: ActionRequestDbRow): ActionRequestRow {
     requesterCanApprove: row.requester_can_approve,
     operationDigest: row.operation_digest,
     stepRunId: row.step_run_id,
+    reconciliation: row.reconciliation,
+    reconciliationDecisionId: row.reconciliation_decision_id,
+    reexecuteDecisionId: row.reexecute_decision_id,
   };
 }
 
@@ -133,7 +149,8 @@ export const ACTION_REQUEST_ROW_COLUMNS =
   'workspace_id, id, status, gatekeeper_id, action_kind, resource_scope, blast_radius, ' +
   'policy_decision, approval_decision_id, await_decision, on_behalf_of, parent_worker_run_id, ' +
   'actor_runtime, idempotency_key, requested_at, executing_at, executed_at, failed_at, ' +
-  'failure_kind, params, requester_can_approve, operation_digest, step_run_id';
+  'failure_kind, params, requester_can_approve, operation_digest, step_run_id, reconciliation, ' +
+  'reconciliation_decision_id, reexecute_decision_id';
 
 export class ActionRequestNotFoundError extends Error {
   constructor(workspaceId: string, actionRequestId: string) {
@@ -246,5 +263,64 @@ export class ActionRequestConcurrentTransitionError extends IllegalTransition {
     this.name = 'ActionRequestConcurrentTransitionError';
     this.actionRequestId = actionRequestId;
     this.message = `ActionRequest ${actionRequestId}: concurrent transition — expected status "${expectedStatus}" but the conditional UPDATE to "${attemptedStatus}" affected 0 rows (another transaction changed it first)`;
+  }
+}
+
+/**
+ * S11 GO3c (plan §3.3 I-G4: "同一 Operation 在本步骤有结果不明的动作时，先核对完再放行同类请求"): a
+ * Worker acting for a goal step asked for an Operation while an earlier request of the same
+ * Operation in that step has an unknown outcome nobody has reconciled yet — it may have run, and
+ * another call of the same Operation could do its effect twice. Nothing was created. The step waits
+ * for that reconciliation (`waiting(reconcile)`); a person records what they found.
+ *
+ * An `IllegalTransition` (409 `illegal_transition` on both the HTTP and WS routes), like
+ * `GoalStepClosedError`: a well-formed request the step's current state forbids.
+ */
+export class ActionInDoubtError extends IllegalTransition {
+  readonly stepRunId: string;
+  readonly inDoubtActionRequestId: string;
+
+  constructor(stepRunId: string, inDoubtActionRequestId: string) {
+    super('ActionRequest', 'outcome_unknown', 'request_same_operation');
+    this.name = 'ActionInDoubtError';
+    this.stepRunId = stepRunId;
+    this.inDoubtActionRequestId = inDoubtActionRequestId;
+    this.message = `request_action: an earlier request of this Operation in goal step ${stepRunId} (ActionRequest ${inDoubtActionRequestId}) has an unknown outcome; it must be reconciled before the step makes another request of the same Operation (I-G4)`;
+  }
+}
+
+/**
+ * S11 GO3c: a reconciliation or re-execute decision the request's state does not allow
+ * (`reconcile.ts`) — the request is not `failed` + `outcome_unknown`, a finding (or a re-execute
+ * decision) is already recorded, or re-executing without an `effect_absent` finding. An
+ * `IllegalTransition` (409). The database guard (governance/0023) refuses the same writes.
+ */
+export class ActionReconciliationStateError extends IllegalTransition {
+  readonly actionRequestId: string;
+  constructor(
+    actionRequestId: string,
+    from: string,
+    event: 'reconcile' | 'reexecute',
+    why: string,
+  ) {
+    super('ActionRequest', from, event);
+    this.name = 'ActionReconciliationStateError';
+    this.actionRequestId = actionRequestId;
+    this.message = `${event}: ActionRequest ${actionRequestId} ${why}`;
+  }
+}
+
+/**
+ * S11 GO3c: a decider who may not make this decision — a finding is the requester's or a workspace
+ * owner's, a re-execute the requester's alone, and both a person's (a human Principal still
+ * enabled), read from `principals`, never from the caller. Extends `ApprovalScopeError`, so the
+ * existing 403 mappings cover it. The database guard (governance/0023) checks the same.
+ */
+export class ActionReconciliationForbiddenError extends ApprovalScopeError {
+  readonly actionRequestId: string;
+  constructor(actionRequestId: string, message: string) {
+    super(`ActionRequest ${actionRequestId}: ${message}`);
+    this.name = 'ActionReconciliationForbiddenError';
+    this.actionRequestId = actionRequestId;
   }
 }

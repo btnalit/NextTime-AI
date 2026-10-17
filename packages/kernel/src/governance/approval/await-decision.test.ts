@@ -34,6 +34,9 @@ function actionRequest(overrides: Partial<ActionRequestRow> = {}): ActionRequest
     requesterCanApprove: true,
     operationDigest: null,
     stepRunId: null,
+    reconciliation: null,
+    reconciliationDecisionId: null,
+    reexecuteDecisionId: null,
     ...overrides,
   };
 }

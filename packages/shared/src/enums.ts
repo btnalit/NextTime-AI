@@ -173,6 +173,22 @@ export const ACTION_REQUEST_FAILURE_KIND_VALUES = [
 export type ActionRequestFailureKind = (typeof ACTION_REQUEST_FAILURE_KIND_VALUES)[number];
 export const ActionRequestFailureKindSchema = asEnum(ACTION_REQUEST_FAILURE_KIND_VALUES);
 
+/**
+ * What a person (S11 GO3c) or a reconcile observation (GO3d) found about a `failed` +
+ * `outcome_unknown` ActionRequest (`action_requests.reconciliation`, migrations/governance/0023):
+ *
+ *   - `effect_seen` (已生效): its effect is there — the request counts as executed;
+ *   - `effect_absent` (未见效果): no effect was found — the step needs a person, who may decide to
+ *     run the same request again (a re-execute Decision) or change the plan.
+ *
+ * Recorded once, with the Decision behind it (`reconciliation_decision_id`); a finding that turns
+ * out wrong is answered by a later decision about the step (re-execute, retry, revise), never by
+ * rewriting this one.
+ */
+export const ACTION_REQUEST_RECONCILIATION_VALUES = ['effect_seen', 'effect_absent'] as const;
+export type ActionRequestReconciliation = (typeof ACTION_REQUEST_RECONCILIATION_VALUES)[number];
+export const ActionRequestReconciliationSchema = asEnum(ACTION_REQUEST_RECONCILIATION_VALUES);
+
 // ---------------------------------------------------------------------------------------------
 // §5.5 Task, WorkerRun, EntryAgent session
 // ---------------------------------------------------------------------------------------------

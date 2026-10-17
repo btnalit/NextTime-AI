@@ -59,9 +59,14 @@ import type { GoalRunRow, PlanRevisionRow, StepRunRow } from './types.js';
  *      included — became (`stepActionEffect`, §4.7; an earlier attempt's requests never decide
  *      this one). A request still in flight or awaiting a reconcile holds the step in `waiting`
  *      (§4.8: the wait is on the step, not on the Worker); a reconcile also pauses the GoalRun
- *      `awaiting_reconcile` (the reconcile observation is GO3c). Otherwise
- *      {@link judgeFinishedAttempt}: success, or a failure category — only
- *      `transient` is retried without a person; every other category pauses the GoalRun. A step
+ *      `awaiting_reconcile` until a person records what they found (GO3c, `reconcile.ts`;
+ *      `effect_seen` counts as executed, `effect_absent` fails the step `outcome_unknown` for a
+ *      person, a re-execute decision fails it `transient` for a new attempt — `disposition.ts`;
+ *      the platform's reconcile observation is GO3d) and the requester resumes it: the advancer
+ *      never lifts that pause itself (review #493 on #642 — a person's pause laid over it, or one
+ *      left by a lifted hold, could not be told from it). Otherwise {@link judgeFinishedAttempt}:
+ *      success, or a failure category — only `transient` is retried without a person; every
+ *      other category pauses the GoalRun. A step
  *      no longer part of the current plan is not judged at all (I-G2: a late result is kept on
  *      its Task, it moves nothing) and the GoalRun pauses `needs_decision`.
  *   B. **Retry transient failures** (running only). Under the step's attempt limit (plan
@@ -206,7 +211,7 @@ function failVerdict(category: StepRunFailureCategory): AttemptVerdict {
  * |---|---|---|
  * | completed | clear | succeed (GO4 adds the step's acceptance, GO5 its output schema) |
  * | completed | `fail(c)` | failed `c` — a refused request needs a person; a request that never reached its gate is transient |
- * | failed | `fail(action_refused)` | failed `action_refused` |
+ * | failed | `fail(action_refused)` or `fail(outcome_unknown)` | failed with that category — a person decides, whatever became of the Task (GO3c: an action found to have had no effect is never retried on its own) |
  * | failed `no_result` | otherwise | failed `contract_violation` — needs a person (§4.7 allows one rework; W1 asks instead, see the PR) |
  * | failed `budget_exhausted` | otherwise | failed `transient`, GoalRun paused `budget_exhausted` — the attempt's budget is what was left of the goal's |
  * | failed, any other reason | otherwise | failed `transient` — spawn failed or lost, run lost, Worker crashed, timed out or terminated |
@@ -222,8 +227,8 @@ export function judgeFinishedAttempt(
   if (task.status === 'cancelled') {
     return { kind: 'fail', category: 'transient', pause: 'needs_decision' };
   }
-  if (effect.kind === 'fail' && effect.failureCategory === 'action_refused') {
-    return failVerdict('action_refused');
+  if (effect.kind === 'fail' && effect.failureCategory !== 'transient') {
+    return failVerdict(effect.failureCategory);
   }
   if (task.failureReason === 'no_result') return failVerdict('contract_violation');
   if (task.failureReason === 'budget_exhausted') {
@@ -487,6 +492,10 @@ class Advance {
       await this.pause('needs_decision', `step ${step.stepKey}: no longer in the current plan`);
       return;
     }
+    // GO3c: a request of the step's identity (I-G4) that an earlier attempt raised and this one
+    // repeated was replayed to it, and is not among `runs`' requests — only one that ran (or was
+    // found to have) can be: while one is in flight or its outcome is open, no new attempt starts
+    // (phase B, `control.ts`). So it changes no verdict here.
     const runs = await listTaskWorkerRunTree(this.client, this.ws, task.id);
     const effect = stepActionEffect(
       await listStepActionOutcomes(this.client, this.ws, step.id, { raisedBy: runs }),
@@ -559,6 +568,16 @@ class Advance {
     }
     // Every request of the step, of every attempt (I-G4): none may still run beside a new attempt.
     const all = stepActionEffect(await listStepActionOutcomes(this.client, this.ws, step.id));
+    // Nor one found to have had no effect that nobody decided to run again (GO3c): a new attempt
+    // would only be replayed it, and could report the step done although it never ran. A person's
+    // retry refuses the same (`control.ts`).
+    if (all.kind === 'fail' && all.failureCategory === 'outcome_unknown') {
+      await this.pause(
+        'needs_decision',
+        `step ${step.stepKey}: an earlier action was found to have no effect; decide to run it again or revise the plan`,
+      );
+      return;
+    }
     if (all.kind === 'wait') {
       if (all.waitingReason === 'reconcile') {
         await this.pause(
