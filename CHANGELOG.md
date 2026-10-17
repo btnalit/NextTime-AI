@@ -1,5 +1,55 @@
 # Changelog
 
+## [0.50.0](https://github.com/btnalit/NextTime-AI/compare/v0.49.0...v0.50.0) (2026-10-17)
+
+
+### Features
+
+* bind publish and "always allow" to the reviewed version (legacy 300 / 301 / 218) ([#592](https://github.com/btnalit/NextTime-AI/issues/592)) ([085c93a](https://github.com/btnalit/NextTime-AI/commit/085c93a7568131950241f3563b2ca96c09781aa9))
+* **console:** label task failures, filter history by failure kind, fold long reasons, hide always-refused controls ([#614](https://github.com/btnalit/NextTime-AI/issues/614)) ([47f6e27](https://github.com/btnalit/NextTime-AI/commit/47f6e27b2fe12f43b3d4db635ffc74d04cd3fb6e))
+* **console:** show drafts held back for gate-owned params, offer their rewrite, and flag instances no workspace can see ([#567](https://github.com/btnalit/NextTime-AI/issues/567)) ([3da2701](https://github.com/btnalit/NextTime-AI/commit/3da27011104736d0dcdc6807a3224ceea099c132))
+* explain withdrawn requests and show why a request failed (legacy 328, 329) ([#609](https://github.com/btnalit/NextTime-AI/issues/609)) ([11e27b4](https://github.com/btnalit/NextTime-AI/commit/11e27b47c6a4394d3e94c7e3be395abf81bd5db1))
+* gate-host instances join a connector named after their system (P1) ([#644](https://github.com/btnalit/NextTime-AI/issues/644)) ([bbcaa08](https://github.com/btnalit/NextTime-AI/commit/bbcaa08c9c0b9cb822b8031a7566fe9f4a6d8123))
+* **gates:** one landing path for gates, with a platform cut-off for self connections (P0b) ([#620](https://github.com/btnalit/NextTime-AI/issues/620)) ([a2c5a4e](https://github.com/btnalit/NextTime-AI/commit/a2c5a4ef3340b4c903b281507a4de5a00a241289))
+* **gateway:** re-sync a self-connected gate from its own description (legacy 214) ([#612](https://github.com/btnalit/NextTime-AI/issues/612)) ([9a109eb](https://github.com/btnalit/NextTime-AI/commit/9a109eb4fde1670e614c27ac09941de4c8261ba1))
+* **kernel:** advance goal runs deterministically, step by step (S11 GO2) ([#619](https://github.com/btnalit/NextTime-AI/issues/619)) ([bf933cf](https://github.com/btnalit/NextTime-AI/commit/bf933cfe0c036d08afe888fd6760e9deab934019))
+* **kernel:** record goal runs, plan revisions and step runs, with their invariant checks (S11 GO1) ([#607](https://github.com/btnalit/NextTime-AI/issues/607)) ([726f769](https://github.com/btnalit/NextTime-AI/commit/726f769a94c71254ddce714678117e21c7e067d5))
+* **kernel:** revise a paused goal run, owner holds and advance-failure pause (S11 GO3b) ([#633](https://github.com/btnalit/NextTime-AI/issues/633)) ([088611e](https://github.com/btnalit/NextTime-AI/commit/088611e0e00ad06ea50b993eaf28a08816ed44ba))
+* **kernel:** split gate-call network failures into not sent and in doubt (legacy 287) ([#586](https://github.com/btnalit/NextTime-AI/issues/586)) ([b19d0c2](https://github.com/btnalit/NextTime-AI/commit/b19d0c262932b2b79f21c037b767035efd58d95a))
+* **kernel:** step-scope action identity and a person's reconcile of outcome-unknown actions (S11 GO3c) ([#642](https://github.com/btnalit/NextTime-AI/issues/642)) ([7e14195](https://github.com/btnalit/NextTime-AI/commit/7e141953ee4ec61b884529ece6dce114e1b9af6b))
+* **kernel:** stop a goal run — pause, resume, cancel with withdrawals and the I-G9 entry check (S11 GO3a) ([#626](https://github.com/btnalit/NextTime-AI/issues/626)) ([37ae610](https://github.com/btnalit/NextTime-AI/commit/37ae610f18ff62a4b19ff505156eab19f73ed054))
+* **kernel:** the platform's reconcile check of an outcome-unknown goal step action (S11 GO3d) ([#649](https://github.com/btnalit/NextTime-AI/issues/649)) ([bb52bc9](https://github.com/btnalit/NextTime-AI/commit/bb52bc96b0421dda27a8d308f690c22a4d6bef72))
+* **kernel:** withdraw ActionRequests and record a structured failure kind (S11 GO1) ([#601](https://github.com/btnalit/NextTime-AI/issues/601)) ([47a88b8](https://github.com/btnalit/NextTime-AI/commit/47a88b83b7eaa6a13125393cd260645d853fbf72))
+* **operations:** discard Operation drafts as draft → discarded; console fixes 294–297 ([#583](https://github.com/btnalit/NextTime-AI/issues/583)) ([6dfb6b3](https://github.com/btnalit/NextTime-AI/commit/6dfb6b36a01e6e883ed1158e54c2ba46b065f851))
+
+
+### Bug Fixes
+
+* **console:** Chinese titles for uncovered error codes, one term per audit resource, purge and sync-confirm copy ([#622](https://github.com/btnalit/NextTime-AI/issues/622)) ([bdc6a8d](https://github.com/btnalit/NextTime-AI/commit/bdc6a8d644d036225d4635a3cfb008eed3c8405c))
+* **console:** close legacy 271–275 (gate health drawer, held-draft reasons, same-name gates, held revisions, per-workspace badge) ([#573](https://github.com/btnalit/NextTime-AI/issues/573)) ([a123475](https://github.com/btnalit/NextTime-AI/commit/a123475d670d6f60e5ddda2463d854904b60a27a))
+* **console:** close legacy 276, 277, 279, 280, 281 (no false "calls resume" for gate-held revisions, proposal vs gone, rewrite that stays held, one preview read, versions on repeated rows) ([#577](https://github.com/btnalit/NextTime-AI/issues/577)) ([8d7ee76](https://github.com/btnalit/NextTime-AI/commit/8d7ee764d5c48d14d419e5966a2fc1fbe89855aa))
+* **console:** close legacy 283, 284, 285, 286 (review [#501](https://github.com/btnalit/NextTime-AI/issues/501) and UX P3s on [#577](https://github.com/btnalit/NextTime-AI/issues/577)) ([#579](https://github.com/btnalit/NextTime-AI/issues/579)) ([202738d](https://github.com/btnalit/NextTime-AI/commit/202738daf0bdc9ea7244f57f40f4db503ef67b9a))
+* **console:** one-click removal of an unstorable character, one term per concept, reserved-name hint, chat header at phone width ([#628](https://github.com/btnalit/NextTime-AI/issues/628)) ([25bfdfe](https://github.com/btnalit/NextTime-AI/commit/25bfdfec1b407fbbf33603ce27ba001592a813d3))
+* **console:** platform instances become cards at phone width; find-in-list moves focus to the card ([#636](https://github.com/btnalit/NextTime-AI/issues/636)) ([f1ccca7](https://github.com/btnalit/NextTime-AI/commit/f1ccca77e49dddaaa04a3f9bf6805da363e1afb4))
+* **console:** stop dead-end clicks on held Operations and scope "workspaces can't see it" to workspaces that haven't enabled it ([#571](https://github.com/btnalit/NextTime-AI/issues/571)) ([ee5f5aa](https://github.com/btnalit/NextTime-AI/commit/ee5f5aa4c116d2831e10fbdcb487a3e37144b8d2))
+* **console:** system cards keep their width at phone width; null-character note drops the count ([#632](https://github.com/btnalit/NextTime-AI/issues/632)) ([e923b51](https://github.com/btnalit/NextTime-AI/commit/e923b51be7112c5a6003f53bc1daabbe2a1a9932))
+* **governance:** a tie on created_at picks one record every read; a deprecated Operation's sync never shows a revision ([#640](https://github.com/btnalit/NextTime-AI/issues/640)) ([2179c19](https://github.com/btnalit/NextTime-AI/commit/2179c199889b45a0f82d404b741edec7285cea9c))
+* **kernel:** apply find_* result limits after filtering, not before (legacy 291) ([#599](https://github.com/btnalit/NextTime-AI/issues/599)) ([62a0208](https://github.com/btnalit/NextTime-AI/commit/62a02087770b9ee9408c0b76183a93d08d1a818d))
+* **kernel:** index the audit trail by resource and show audited reasons one way (legacy 338) ([#615](https://github.com/btnalit/NextTime-AI/issues/615)) ([8a735f7](https://github.com/btnalit/NextTime-AI/commit/8a735f7a0c312e753f4a67ab780df06f35590372))
+* **kernel:** refuse request_action names the caller cannot see and bound every echoed name (legacy 232) ([#593](https://github.com/btnalit/NextTime-AI/issues/593)) ([a372f7b](https://github.com/btnalit/NextTime-AI/commit/a372f7b3ea4e1fe01880ed406c58097a8a1f17b3))
+* **kernel:** scrub pre-186 gate names and match search on what reads show (legacy 384, 387) ([#637](https://github.com/btnalit/NextTime-AI/issues/637)) ([1a476bf](https://github.com/btnalit/NextTime-AI/commit/1a476bf088da5e3e7d2f5c55c313a483056ec277))
+* **kernel:** settle U+0000 before every write so no Task is left running (legacy 320) ([#602](https://github.com/btnalit/NextTime-AI/issues/602)) ([4398d6a](https://github.com/btnalit/NextTime-AI/commit/4398d6ae519977b26d27f48de4eb4e9b89e1ec2d))
+* refuse U+0000 over WS as unstorable_text and name the field in the console note (legacy 320 follow-up) ([#605](https://github.com/btnalit/NextTime-AI/issues/605)) ([cbb17a5](https://github.com/btnalit/NextTime-AI/commit/cbb17a54fa71dea555d91836c338ac739e667139))
+* **web:** console legacy batch: risky first publishes confirmed, sole owners explained, integrations tab in URL ([#645](https://github.com/btnalit/NextTime-AI/issues/645)) ([7970866](https://github.com/btnalit/NextTime-AI/commit/7970866a6993d1ebfe3169b5fa327191d20e6d94))
+* **web:** console legacy batch: tables as cards on narrow screens, gate-host connector form, single-change confirms ([#651](https://github.com/btnalit/NextTime-AI/issues/651)) ([dc91fc5](https://github.com/btnalit/NextTime-AI/commit/dc91fc53aba9de3ffa5cd5e9f1802d559280a532))
+* **web:** keep confirm and drawer action rows in view; worker runs as cards ([#653](https://github.com/btnalit/NextTime-AI/issues/653)) ([b3e400f](https://github.com/btnalit/NextTime-AI/commit/b3e400fbb26c0605f582ffa94ba19a2f087ab1db))
+
+
+### Performance Improvements
+
+* **platform-extension:** place the entry live context once so the prompt cache serves it ([#575](https://github.com/btnalit/NextTime-AI/issues/575)) ([61d5735](https://github.com/btnalit/NextTime-AI/commit/61d5735b3257005ef902157ebd621c50b185449d))
+* **platform-extension:** send only what changed in a mid-turn live-context update ([#582](https://github.com/btnalit/NextTime-AI/issues/582)) ([6ca7e93](https://github.com/btnalit/NextTime-AI/commit/6ca7e93224943d989cb81a21147c11674e0a2e5d))
+
 ## [0.49.0](https://github.com/btnalit/NextTime-AI/compare/v0.48.0...v0.49.0) (2026-10-15)
 
 
