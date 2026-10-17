@@ -836,7 +836,7 @@ describe('SystemsPage', () => {
     expect(within(card).getByText(/这份草稿在你查看之后被修改过/)).toBeTruthy();
   });
 
-  it('UX acceptance of #620 (P2-3): a refused duplicate connection finds the card of the system already at that address', async () => {
+  it('UX acceptance of #620 (P2-3) and legacy 385: a refused duplicate connection finds the card of the system already at that address, and focus moves to it', async () => {
     const http = scriptedHttp({
       execution_readiness: () =>
         readiness({
@@ -873,6 +873,8 @@ describe('SystemsPage', () => {
     const card = (id: string) => cards.find((element) => element.dataset.gatekeeperId === id);
     expect(card('gk-2')?.getAttribute('aria-current')).toBe('true');
     expect(card('gk-1')?.getAttribute('aria-current')).toBeNull();
+    // Not handed back to the 更多接入方式 menu that opened the drawer.
+    await waitFor(() => expect(document.activeElement).toBe(card('gk-2')));
   });
 
   it('UX acceptance of #620 (P2-3): a Gatekeeper with no card in the list opens its 健康与操作 drawer instead', async () => {
