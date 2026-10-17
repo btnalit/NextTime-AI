@@ -448,8 +448,8 @@ export function UserDetailPanel({
       ) : soleOwned.length > 0 ? (
         <p className="text-3 text-small" data-testid="user-sole-owner-no-disable">
           {t(
-            `这位用户是${soleOwned.map((ws) => `「${ws.name}」`).join('、')}唯一的所有者，不能停用；先让另一位用户成为这些工作区的所有者。`,
-            `This user is the only owner of ${soleOwned.map((ws) => `“${ws.name}”`).join(', ')}, so they cannot be disabled — make another user an owner of those workspaces first.`,
+            `这位用户是${soleOwned.map((ws) => `「${ws.name}」`).join('、')}唯一的所有者，不能停用；先让另一位用户成为${soleOwned.length === 1 ? '这个工作区' : '这些工作区'}的所有者。`,
+            `This user is the only owner of ${soleOwned.map((ws) => `“${ws.name}”`).join(', ')}, so they cannot be disabled — make another user an owner of ${soleOwned.length === 1 ? 'that workspace' : 'those workspaces'} first.`,
           )}
         </p>
       ) : isSelf ? (

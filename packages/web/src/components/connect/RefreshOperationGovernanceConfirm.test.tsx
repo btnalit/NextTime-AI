@@ -1299,7 +1299,7 @@ describe('RefreshOperationGovernanceConfirm', () => {
       fireEvent.click(screen.getByTestId('resync-gk-1'));
       const notice = await screen.findByTestId('resync-gk-1-deprecated-unwritten');
       expect(notice.textContent).toContain('stock.reserve、stock.recount');
-      expect(notice.textContent).toContain('仍保持弃用');
+      expect(notice.textContent).toContain('仍是弃用状态，不会被调用。不需要你处理');
       expect(screen.queryByTestId('resync-gk-1-aligned')).toBeNull();
       expect(screen.queryByTestId('resync-gk-1-confirm')).toBeNull();
       expect(http.calls.some((call) => call.name === 'refresh_operation_governance')).toBe(false);

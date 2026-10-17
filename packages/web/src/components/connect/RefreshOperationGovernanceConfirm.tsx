@@ -907,8 +907,8 @@ function DeprecatedUnwrittenNotice({
   return (
     <Notice testId={testId}>
       {t(
-        `门对这些已弃用的 Operation 放宽了治理字段或改了运行的定义：${shown.join('、')}。已弃用的 Operation 不会打开修订，这些变化不会写入，它们仍保持弃用。`,
-        `The gate loosened the governance of, or changed the definition it runs for, these deprecated operations: ${shown.join(', ')}. No revision opens on a deprecated operation, so none of this is written and they stay deprecated.`,
+        `门对这些已弃用的 Operation 放宽了治理字段或改了运行的定义：${shown.join('、')}。已弃用的 Operation 不能再改，这些变化不会写入；它们仍是弃用状态，不会被调用。不需要你处理。`,
+        `The gate loosened the governance of, or changed the definition it runs for, these deprecated operations: ${shown.join(', ')}. A deprecated operation can no longer change, so none of this is written; they stay deprecated and are not called. Nothing for you to do.`,
       )}
     </Notice>
   );

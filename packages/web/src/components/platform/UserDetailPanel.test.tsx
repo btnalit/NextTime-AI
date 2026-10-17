@@ -210,6 +210,7 @@ describe('UserDetailPanel', () => {
     const note = await screen.findByTestId('user-sole-owner-no-disable');
     expect(note.textContent).toContain('「Acme」唯一的所有者');
     expect(note.textContent).not.toContain('Beta');
+    expect(note.textContent).toContain('成为这个工作区的所有者');
     expect(screen.queryByRole('button', { name: '停用' })).toBeNull();
   });
 
