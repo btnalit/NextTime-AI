@@ -1067,6 +1067,27 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '立即吊销一个外部运行时的会话及其凭证。',
     enHint: "Revokes an external runtime's session and its Handles at once.",
   },
+  list_self_connections: {
+    zh: '查看自己接入的门',
+    en: 'List self-connected gates',
+    zhHint: '列出各工作区自己接入的门，以及哪些被平台暂停了。',
+    enHint:
+      'Lists the gates workspaces connected themselves, and which ones the platform suspended.',
+  },
+  suspend_self_connection: {
+    zh: '暂停自己接入的门',
+    en: 'Suspend self-connected gate',
+    zhHint: '平台切断一个工作区自己接入的门：它的全部 Operation 从下一次调用起被拒绝。',
+    enHint:
+      'Cuts off a gate a workspace connected itself: every Operation of it is refused from the next call.',
+  },
+  resume_self_connection: {
+    zh: '恢复自己接入的门',
+    en: 'Resume self-connected gate',
+    zhHint: '撤销平台对一个自己接入的门的暂停，它已发布的 Operation 恢复可调用。',
+    enHint:
+      "Lifts the platform's suspension of a self-connected gate; its published Operations run again.",
+  },
   issue_llm_admin_token: {
     zh: '签发模型管理令牌',
     en: 'Issue LLM admin token',
@@ -1361,6 +1382,13 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '操作的模式与影响面已按门的公告更新。',
     enHint: "An operation's mode and blast radius were aligned to the gate.",
   },
+  'gatekeeper.self_connection_linked': {
+    zh: '门已改由平台实例接入',
+    en: 'Gate moved to a platform instance',
+    zhHint: '一个工作区自己接入的门在启用同地址的平台实例时，改为由平台实例接入。',
+    enHint:
+      'A gate the workspace connected itself now comes from the platform instance at its address.',
+  },
   // Legacy sweep (console batch, 2026-10-16): `gate-instance-handlers.ts` writes one per revision
   // draft a gate's changed manifest opened (`reason: 'definition_changed'`).
   'operation.revision_drafted': {
@@ -1432,6 +1460,13 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     en: 'Entry Handles revoked',
     zhHint: '接入包变更后，相关工作区的入口凭证被吊销。',
     enHint: "A connector change revoked the affected workspaces' entry Handles.",
+  },
+  'self_connection.entry_handles_revoked': {
+    zh: '暂停或恢复后凭证已吊销',
+    en: 'Entry Handles revoked on suspension',
+    zhHint: '平台暂停或恢复一个自己接入的门后，该工作区的入口凭证被吊销，下一轮重新签发。',
+    enHint:
+      "Suspending or resuming a self-connected gate revoked that workspace's entry Handles; new ones come next turn.",
   },
   'gate_instance.manifest_confirmed': {
     zh: '门清单已确认',

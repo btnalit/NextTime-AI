@@ -40,6 +40,7 @@ import {
   FactNotActiveError,
   FactNotFoundError,
   ForbiddenError,
+  GatekeeperLandingRefusedError,
   GatekeeperNotFoundError,
   InvalidCapabilityParamsError,
   MetaOntologyWriteForbiddenError,
@@ -495,6 +496,21 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // refusal, the same 409 family as `enable_gate_instance`'s `connector_not_preset`.
   if (err instanceof ConnectorNotSelfServeError) {
     return { status: 409, code: err.code, message: err.message };
+  }
+  // P0b (application/gates/landing.ts): the address already has a Gatekeeper in this workspace
+  // (`endpoint_already_connected` — one Gatekeeper per address), or the Gatekeeper an enable would
+  // link is a self connection the platform suspended (`self_connection_suspended`). State, not
+  // input: 409, with the Gatekeeper (and, for the first, its name) so the console can point at it.
+  if (err instanceof GatekeeperLandingRefusedError) {
+    return {
+      status: 409,
+      code: err.code,
+      message: err.message,
+      details: {
+        gatekeeperId: err.gatekeeperId,
+        ...(err.gatekeeperName !== null ? { gatekeeperName: err.gatekeeperName } : {}),
+      },
+    };
   }
   // R-27: an owner-supplied `endpoint` / `manifestSource` that points at the platform's own
   // services or networks — refused before any fetch (adapters/outbound-target).

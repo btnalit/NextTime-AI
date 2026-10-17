@@ -7,7 +7,7 @@ import {
   observeGateExclusion,
   observeRefusal,
 } from './observe-access.js';
-import type { GateLinkPolicyView } from './store.js';
+import type { GatekeeperPlatformPolicy } from './store.js';
 
 /**
  * application/gates/observe-access.test: pure unit tests for the one observe predicate (design doc
@@ -25,13 +25,14 @@ function target(overrides: Partial<ObserveTarget> = {}): ObserveTarget {
     gateEnabled: true,
     operationName: 'items.list',
     publishedMode: 'observe',
-    gateLink: null,
+    platformPolicy: null,
     ...overrides,
   };
 }
 
-function link(disabledOperations: readonly string[]): GateLinkPolicyView {
+function link(disabledOperations: readonly string[]): GatekeeperPlatformPolicy {
   return {
+    origin: 'catalog',
     gateId: 'platform-gate',
     connector: 'fixture',
     trust: 'vetted',
@@ -66,15 +67,23 @@ describe('observeRefusal', () => {
     expect(
       observeRefusal(
         excluded,
-        target({ gateEnabled: false, gateLink: link(['items.list']), publishedMode: undefined }),
+        target({
+          gateEnabled: false,
+          platformPolicy: link(['items.list']),
+          publishedMode: undefined,
+        }),
       ),
     ).toEqual({ reason: 'gate_not_enabled' });
     expect(
       observeRefusal(
         excluded,
-        target({ gateLink: link(['items.list']), publishedMode: undefined }),
+        target({ platformPolicy: link(['items.list']), publishedMode: undefined }),
       ),
-    ).toEqual({ reason: 'disabled_by_platform', connector: 'fixture' });
+    ).toEqual({
+      reason: 'disabled_by_platform',
+      connector: 'fixture',
+      cutoff: 'connector_deny_list',
+    });
     expect(observeRefusal(excluded, target({ publishedMode: undefined }))).toEqual({
       reason: 'no_published_operation',
     });
@@ -87,8 +96,24 @@ describe('observeRefusal', () => {
 
   it('a deny list naming another Operation does not refuse this one', () => {
     expect(
-      observeRefusal(NO_OBSERVE_EXCLUSIONS, target({ gateLink: link(['items.delete']) })),
+      observeRefusal(NO_OBSERVE_EXCLUSIONS, target({ platformPolicy: link(['items.delete']) })),
     ).toBeUndefined();
+  });
+
+  it('a self-connected gate: no cut-off while its connection runs, every Operation refused once the platform suspends it', () => {
+    const self = (suspended: boolean): GatekeeperPlatformPolicy => ({
+      origin: 'self',
+      connector: 'http',
+      suspended,
+    });
+    expect(
+      observeRefusal(NO_OBSERVE_EXCLUSIONS, target({ platformPolicy: self(false) })),
+    ).toBeUndefined();
+    expect(observeRefusal(NO_OBSERVE_EXCLUSIONS, target({ platformPolicy: self(true) }))).toEqual({
+      reason: 'disabled_by_platform',
+      connector: 'http',
+      cutoff: 'self_connection_suspended',
+    });
   });
 });
 

@@ -1,5 +1,5 @@
 import type { AvailableGateInstanceWire, OperationSummaryWire, Role } from '@nexttime/shared';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invalidateCapability, useCapabilityList } from '../../hooks/useCapability.js';
 import { usePermissions } from '../../hooks/usePermissions.js';
 import { useResource } from '../../hooks/useResource.js';
@@ -331,6 +331,35 @@ export function SystemsPage({
     if (result.gatekeeperId) onSelectGatekeeper?.(result.gatekeeperId);
   }
 
+  // UX acceptance of #620 (P2-3): 「在列表里找到它」 on a refused duplicate connection
+  // (`endpoint_already_connected`) — the cards show names, not addresses. The drawer closes, and
+  // once it has, the card of the Gatekeeper already at that address scrolls into view, marked as
+  // the current row for a few seconds; its ⋯ menu holds 重新读取门的清单 / 重新签发连接密钥. A
+  // card not in the list falls back to that Gatekeeper's 健康与操作 drawer.
+  const [pointedGatekeeperId, setPointedGatekeeperId] = useState<string | null>(null);
+  // The latest callback, read when the effect runs: a caller's inline function would otherwise
+  // re-run it on every render, scrolling again and restarting the timer.
+  const selectGatekeeper = useRef(onSelectGatekeeper);
+  selectGatekeeper.current = onSelectGatekeeper;
+  function showGatekeeperCard(gatekeeperId: string): void {
+    setDrawer({ kind: 'closed' });
+    setPointedGatekeeperId(gatekeeperId);
+  }
+  useEffect(() => {
+    if (pointedGatekeeperId === null || drawer.kind !== 'closed') return;
+    const card = [
+      ...document.querySelectorAll<HTMLElement>('[data-testid="gatekeeper-card"]'),
+    ].find((element) => element.dataset.gatekeeperId === pointedGatekeeperId);
+    if (!card) {
+      setPointedGatekeeperId(null);
+      selectGatekeeper.current?.(pointedGatekeeperId);
+      return;
+    }
+    card.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+    const timer = window.setTimeout(() => setPointedGatekeeperId(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [pointedGatekeeperId, drawer.kind]);
+
   async function cancelRequest(row: ConnectionRequestRow): Promise<void> {
     try {
       const cancelled = await http.call<CancelConnectionRequestResult>(
@@ -513,6 +542,7 @@ export function SystemsPage({
                 onGranted={reloadGrants}
                 selfPrincipalId={selfPrincipalId}
                 platformAdmin={platformAdmin}
+                current={gate.gateId === pointedGatekeeperId}
               />
             );
           })}
@@ -714,6 +744,7 @@ export function SystemsPage({
               request={drawer.request}
               onDone={handleCompleted}
               onCancel={() => setDrawer({ kind: 'closed' })}
+              onShowGatekeeper={showGatekeeperCard}
             />
           ) : null}
         </SheetContent>
@@ -769,6 +800,7 @@ export function SystemsPage({
             <OnboardingWizard
               http={http}
               onCancel={() => setDrawer({ kind: 'closed' })}
+              onShowGatekeeper={showGatekeeperCard}
               onFinished={(gatekeeperId) => {
                 setDrawer({ kind: 'closed' });
                 reloadRegistry();

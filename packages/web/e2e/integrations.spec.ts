@@ -10,7 +10,8 @@ import { loginWithPassword, reachLoginForm } from './auth-helpers.js';
  * "unreachable", the truth about that endpoint; the fake-MCP end-to-end path is P-B2, not this
  * file), operations `list_things` (observe) and `restart_thing` (execute).
  *
- * Four tests, `serial`, in an order that is also a real dependency, not just convention: the
+ * Four tests (plus the launcher and 自己接入的门 checks that ride the same administrator session),
+ * `serial`, in an order that is also a real dependency, not just convention: the
  * platform admin must flip the gate instance from `discovered` to `enabled` (test 1) before any
  * workspace can `enable_gate_instance` on it (`gate-instance-handlers.ts`'s own `requireAvailable`
  * refuses a not-yet-enabled instance with `gate_not_enabled`) — test 2. Test 3's connector deny
@@ -476,6 +477,28 @@ test.describe('P-B1 acceptance: the platform gate-instance catalog', () => {
     await runtimeRow.getByTestId(`external-runtime-revoke-${sessionId}`).click();
     await runtimeRow.getByRole('button', { name: /确认吊销/ }).click();
     await expect(runtimeRow).toBeHidden({ timeout: 15_000 });
+
+    await signOut(page);
+  });
+
+  // P0b (STATUS leftover 118 remainder ①): the gates workspaces connected themselves, as the
+  // platform sees them, with its per-connection cut-off. The CI stack connects none itself
+  // (`create_connection` needs a running gate that holds the minted secret — scripts/accept_s2.sh
+  // connects, suspends and resumes real ones), so this proves the real list reaches the
+  // administrator: the generic connectors count it, and the tab loads without an error.
+  test('admin: 自己接入的门 lists the gates workspaces connected themselves', async ({ page }) => {
+    test.slow();
+    await signInAsAdmin(page);
+    await page.getByTestId('nav-platformIntegrations').click();
+    await expect(page.getByTestId('platform-integrations-page')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('connector-row-http')).toBeVisible({ timeout: 15_000 });
+
+    await page.getByTestId('integrations-tab-self').click();
+    await expect(page.getByTestId('integrations-self-connections')).toBeVisible();
+    await expect(
+      page.getByTestId('self-connections-table').or(page.getByTestId('self-connections-empty')),
+    ).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('self-connections-error')).toHaveCount(0);
 
     await signOut(page);
   });

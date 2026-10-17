@@ -89,6 +89,8 @@ export type PlatformErrorCode =
   | 'gate_not_found'
   | 'trust_not_applicable'
   | 'runtime_not_found'
+  // P0b (`suspend_self_connection` / `resume_self_connection`)
+  | 'self_connection_not_found'
   // P-B2a (gate-host instances)
   | 'gate_id_taken'
   | 'gate_in_use'

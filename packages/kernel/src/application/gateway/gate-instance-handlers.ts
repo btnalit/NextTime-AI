@@ -1,30 +1,30 @@
 import type { GateInstanceWire, Operation } from '@nexttime/shared';
 import { mintGateHostToken } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
-import { assertConnectionParamsCarryNoCredentials } from '../../governance/connections/index.js';
+import {
+  assertConnectionParamsCarryNoCredentials,
+  redactConnectionAddress,
+} from '../../governance/connections/index.js';
 import {
   type GatekeeperByEndpointEntry,
   GatekeeperNotFoundError,
   findGatekeepersByEndpoint,
   getGatekeeper,
-  importManifest,
   listPublishedOperationsForGatekeepers,
   operationRecordDigestOrNull,
-  publishImportedDrafts,
   refreshOperationGovernance,
-  registerGatekeeper,
 } from '../../governance/gatekeepers/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
-import { enqueue } from '../../substrate/outbox/index.js';
 import {
+  assertSelfConnectionNotSuspended,
   definitionRefusal,
   droppedUntilAdopted,
   findGateLinkByGate,
   findGateLinkByGatekeeper,
   getConnector,
   getGateInstance,
-  insertGateLink,
+  landGatekeeper,
   listAvailableGateInstances,
   manifestDigest,
   operationsOf,
@@ -42,31 +42,31 @@ import { gateHostCredentialUrl } from './platform-gates-handlers.js';
  * design.md §6.3 "平台预置（管理员建实例、工作区一键启用）"; development-tasks.md P-B 决定 ①) —
  * `list_available_gate_instances` / `enable_gate_instance`, `scope:'workspace'`, owner.
  *
- * Enabling mirrors `cli/bootstrap.ts`'s `register-gatekeeper --publish` step for step — one
- * Activity, `registerGatekeeper`, `importManifest` (origin `import`), `publishImportedDrafts` for
- * every imported draft (one declaring a gate-owned param stays a draft, legacy J), `ConnectionCreated` — and then writes the `workspace_gate_links` row that lets
- * the approval decision read the instance's `trust` and the connector's deny list live. It runs on
- * the workspace plane on purpose: `registerGatekeeper` and the Activity need a real Principal,
- * which the platform plane does not have; an administrator who is not a member delegates first.
- * Idempotent per (workspace, gate): a second call returns the existing Gatekeeper.
+ * Enabling is the catalog source of the one landing path (`application/gates/landing.ts`, P0b):
+ * one Activity, `registerGatekeeper` (or the existing Gatekeeper at the endpoint, below),
+ * `importManifest` (origin `import`), `publishImportedDrafts` for every imported draft (one
+ * declaring a gate-owned param stays a draft, legacy J), the `workspace_gate_links` row that lets
+ * the approval decision read the instance's `trust` and the connector's deny list live, and
+ * `ConnectionCreated`. This handler checks what only the catalog decides — the instance is
+ * available, the manifest is the one previewed (R-18), which existing Gatekeeper to link — then
+ * hands the landing exactly that. It runs on the workspace plane on purpose: `registerGatekeeper`
+ * and the Activity need a real Principal, which the platform plane does not have; an administrator
+ * who is not a member delegates first. Idempotent per (workspace, gate): a second call returns the
+ * existing Gatekeeper.
  *
  * **Endpoint-association (S8 W2-K2, leftover 73, ui-audit J3/J4/B7)**: `registerGatekeeper` has no
- * identity key of its own, so before this handler existed a workspace that had already registered
- * a Gatekeeper for the same running gate process through some other path (concretely: the legacy
- * `register-gatekeeper` CLI, `cli/bootstrap.ts`) would get a *second* Gatekeeper + a second
- * `ConnectedSystem` + a duplicate set of published Operations every time "在本工作区启用" was
- * clicked, with no way to undo it (no delete capability for a live Gatekeeper). `resolveGateLinkTarget`
- * below is the fix: before registering anything, it looks up every `Gatekeeper` Object in this
- * workspace whose own `endpoint` property (the URL the kernel actually calls) matches the
- * instance's — `endpoint`, not `name`/`target`, because those are exactly the fields a legacy
- * registration and a platform gate instance are expected to disagree on (§ its own doc comment on
- * `governance/gatekeepers/registry.ts`'s `findGatekeepersByEndpoint`). Three outcomes: exactly one
- * match → link it (`registerGatekeeper` is skipped entirely — no new Gatekeeper, no new
- * `ConnectedSystem`); zero matches → today's create path, unchanged; more than one match →
- * `GateInstanceNotAvailableError('ambiguous_existing_gatekeeper')`, nothing written (never guess
- * which one is "the" instance). Linking never rewrites the existing Object's `name`/`target`/
- * `transportKind`, nor any of its Operations' governance fields — `drift` (in the result) surfaces
- * a mismatch for a human to act on, it does not correct it.
+ * identity key of its own, so a workspace that already had a Gatekeeper for the same running gate
+ * (a self connection whose address became a platform instance's, or a registration from the
+ * removed `register-gatekeeper` CLI) would get a *second* Gatekeeper + a second `ConnectedSystem`
+ * + a duplicate set of published Operations every time "在本工作区启用" was clicked.
+ * `resolveGateLinkTarget` below decides first, from every `Gatekeeper` Object in this workspace
+ * whose own `endpoint` (the URL the kernel actually calls — not `name`/`target`, which a prior
+ * registration and the instance are expected to disagree on) matches the instance's: exactly one
+ * match → link it (no `registerGatekeeper`; the landing converts a self connection's origin row
+ * into the link, and refuses one the platform suspended); zero → register a new one; more than one
+ * → `ambiguous_existing_gatekeeper`, nothing written (never guess). Linking never rewrites the
+ * existing Object's `name`/`target`/`transportKind`, nor any of its Operations' governance fields —
+ * `drift` (in the result) surfaces a mismatch for a human to act on.
  *
  * `previewGateInstanceEnableHandler` below is the read-only twin the console's ConfirmTier calls
  * first (audit J3 "一键写入 ... 没有预览或确认"): it calls `resolveGateLinkTarget` and the same
@@ -160,6 +160,8 @@ async function resolveGateLinkTarget(
         `Gatekeeper ${existing.gatekeeperId} (the one existing Gatekeeper at gate instance "${instance.gateId}"'s endpoint) is already linked to gate instance "${linked.gateId}" — one Gatekeeper takes one gate instance link; retire the old instance's link before enabling this one`,
       );
     }
+    // P0b: a self connection the platform suspended is never linked (the landing re-checks).
+    await assertSelfConnectionNotSuspended(client, workspaceId, existing.gatekeeperId);
     return { kind: 'link', existing };
   }
   return { kind: 'ambiguous', candidateIds: matches.map((m) => m.gatekeeperId) };
@@ -191,7 +193,11 @@ function computeGateLinkDrift(
     drift.name = { existing: existing.name, instance: instance.displayName };
   }
   if (existing.target !== instance.target) {
-    drift.target = { existing: existing.target, instance: instance.target };
+    // Compared as stored, shown as every gate address is (`redactConnectionAddress`, #620 review M2).
+    drift.target = {
+      existing: redactConnectionAddress('target', existing.target),
+      instance: redactConnectionAddress('target', instance.target),
+    };
   }
   if (existing.transportKind !== instance.transportKind) {
     drift.transportKind = { existing: existing.transportKind, instance: instance.transportKind };
@@ -341,7 +347,6 @@ export const enableGateInstanceHandler: CapabilityHandler = async (
   assertConnectionParamsCarryNoCredentials('enable_gate_instance', { target: instance.target });
   // Checked before anything is written; the same read supplies what is imported below.
   const { operations } = await readManifestInEffect(client, gateId, expectedDigest);
-  const actor = { id: ctx.principal.id, kind: ctx.principal.kind };
 
   const resolution = await resolveGateLinkTarget(client, workspaceId, instance);
   if (resolution.kind === 'ambiguous') {
@@ -351,72 +356,33 @@ export const enableGateInstanceHandler: CapabilityHandler = async (
     );
   }
 
-  const activity = await startActivity(client, workspaceId, {
-    kind: 'governance.enable_gate_instance',
-    principalId: actor.id,
-    metadata:
-      resolution.kind === 'link'
-        ? { gateId, linkedExisting: true, gatekeeperId: resolution.existing.gatekeeperId }
-        : { gateId },
-  });
-
-  let gatekeeperId: string;
-  let drift: GateLinkDrift | undefined;
-  if (resolution.kind === 'link') {
-    // No `registerGatekeeper` call — no new Gatekeeper, no new `ConnectedSystem` (module doc
-    // comment). The existing Object's name/target/transportKind are left exactly as they were.
-    gatekeeperId = resolution.existing.gatekeeperId;
-    drift = computeGateLinkDrift(resolution.existing, instance);
-  } else {
-    const registered = await registerGatekeeper(client, workspaceId, {
-      name: instance.displayName,
-      transportKind: instance.transportKind,
-      target: instance.target || instance.displayName,
-      endpoint: instance.endpoint,
-      activityId: activity.id,
-      registeredBy: actor,
-    });
-    gatekeeperId = registered.gatekeeperId;
-  }
-
-  const imported = await importManifest(client, workspaceId, {
-    gatekeeperId,
-    operations,
-    proposedBy: actor,
-    activityId: activity.id,
-  });
-  const { publishedOperationNames, gateOwnedParamDrafts } = await publishImportedDrafts(
+  // P0b: the one landing path — registers (or links) the Gatekeeper, imports and publishes the
+  // manifest, writes the link (the origin record) and emits `ConnectionCreated`.
+  const landed = await landGatekeeper(
     client,
     workspaceId,
-    gatekeeperId,
-    imported.imported,
+    { id: ctx.principal.id, kind: ctx.principal.kind },
+    {
+      kind: 'catalog',
+      instance,
+      operations,
+      existing: resolution.kind === 'link' ? resolution.existing : null,
+    },
   );
-  await endActivity(client, workspaceId, activity.id, 'completed');
-  await insertGateLink(client, {
-    workspaceId,
-    gateId,
-    gatekeeperObjectId: gatekeeperId,
-    enabledBy: actor.id,
-  });
-  await enqueue(client, {
-    type: 'ConnectionCreated',
-    workspaceId,
-    gatekeeperId,
-    kind: instance.transportKind,
-    target: instance.target || instance.displayName,
-  });
+  const drift =
+    resolution.kind === 'link' ? computeGateLinkDrift(resolution.existing, instance) : undefined;
   return {
     result: {
       gateId,
-      gatekeeperId,
-      publishedOperationNames,
-      skippedOperationNames: imported.skipped.map((entry) => entry.name),
-      gateOwnedParamDrafts,
-      linkedExisting: resolution.kind === 'link',
+      gatekeeperId: landed.gatekeeperId,
+      publishedOperationNames: landed.publishedOperationNames,
+      skippedOperationNames: landed.skippedOperationNames,
+      gateOwnedParamDrafts: landed.gateOwnedParamDrafts,
+      linkedExisting: landed.linkedExisting,
       ...(drift !== undefined ? { drift } : {}),
     },
     resourceType: 'gatekeeper',
-    resourceId: gatekeeperId,
+    resourceId: landed.gatekeeperId,
   };
 };
 
@@ -521,9 +487,11 @@ export const previewGateInstanceEnableHandler: CapabilityHandler = async (
  * No linked gate instance: a gate the workspace connected itself (`create_connection`) re-syncs to
  * what it describes now (legacy 214, `gatekeeper-resync.ts` — the preview is
  * `preview_gatekeeper_resync`, and a name it describes that the workspace never had is imported as
- * a draft); one whose endpoint is a catalog instance's but was never enabled through the catalog
- * (a legacy `register-gatekeeper` registration) → `GateInstanceNotAvailableError`
- * (`no_announced_manifest`), before any write. The domain write itself
+ * a draft — a linked gate's align imports a name its adopted manifest gained the same way, P0b); one whose endpoint is a catalog instance's but was never enabled through the catalog
+ * (connected before `create_connection` checked that, or by the removed `register-gatekeeper`
+ * CLI) → `GateInstanceNotAvailableError` (`no_announced_manifest`), before any write — enabling
+ * that instance links it (the landing converts its origin). A suspended self connection →
+ * `GatekeeperLandingRefusedError` (`self_connection_suspended`). The domain write itself
  * (`governance/gatekeepers/manifest.ts`'s `refreshOperationGovernance`) is in-place, not a new
  * Operation version — see that module's own doc comment for why. R-18 (D-18): `manifestDigest`
  * is the preview's digest; a different manifest in effect refuses `manifest_changed` before any
@@ -600,10 +568,9 @@ export const refreshOperationGovernanceHandler: CapabilityHandler = async (
     proposedBy: { id: ctx.principal.id, kind: ctx.principal.kind },
     activityId: activity.id,
     droppedByGate,
-    // Legacy 214: connecting a self-connected gate again would register a second Gatekeeper, so
-    // the resync also imports what the gate now describes and the workspace never had; and since
-    // nobody reviewed the gate's own description, what it loosens waits for a publish (review
-    // #493 on #612).
+    // Either source imports what the manifest now carries and the workspace never had, as drafts
+    // (legacy 214; P0b for a linked platform gate). Since nobody reviewed a self-connected gate's
+    // own description, what it loosens also waits for a publish (review #493 on #612).
     source: link ? 'platform' : 'gate',
   });
   await endActivity(client, workspaceId, activity.id, 'completed');
@@ -642,8 +609,12 @@ export const refreshOperationGovernanceHandler: CapabilityHandler = async (
         version: draft.version,
         draftOf: draft.draftOf ?? null,
         replaced: draft.replaced,
-        reason: draft.newOnGate
-          ? 'new_on_gate'
+        // `new_on_gate`: the gate's own description (legacy 214); `new_in_adopted_manifest`: the
+        // platform instance's manifest in effect (P0b, #612 P2).
+        reason: draft.newName
+          ? link
+            ? 'new_in_adopted_manifest'
+            : 'new_on_gate'
           : draft.governanceLoosened && !draft.governanceLoosened.definitionChanged
             ? 'governance_loosened'
             : 'definition_changed',
@@ -685,10 +656,13 @@ export const refreshOperationGovernanceHandler: CapabilityHandler = async (
  *
  * Refused before contacting anything: a Gatekeeper linked to a platform gate instance
  * (`gatekeeper_linked` — its manifest is the one the platform adopted, R-18; asking the gate
- * directly would skip that review), and one whose endpoint is a catalog instance's but was never
+ * directly would skip that review), a self connection the platform suspended
+ * (`self_connection_suspended`, P0b), and one whose endpoint is a catalog instance's but was never
  * enabled through the catalog (`no_announced_manifest` — that gate is called with the platform
- * credential, and only the catalog's adopted manifest speaks for it). `manifestDigest` binds a
- * write to the description the owner previewed, as `readManifestInEffect` does for a platform gate.
+ * credential, and only the catalog's adopted manifest speaks for it; such a Gatekeeper predates
+ * the endpoint check `create_connection` makes, or the removed `register-gatekeeper` CLI made
+ * it). `manifestDigest` binds a write to the description the owner previewed, as
+ * `readManifestInEffect` does for a platform gate.
  * Entries that do not parse as an Operation are left out, as `operationsOf` does for a stored
  * manifest.
  */
@@ -707,6 +681,9 @@ export async function readSelfConnectedManifest(
       `gatekeeper "${gatekeeperId}" is enabled from platform gate instance "${link.gateId}" — align it with that instance's announcement (preview_gate_instance_enable) instead`,
     );
   }
+  // P0b: the platform suspended this connection — nothing re-syncs it, and the kernel does not
+  // contact the gate on its behalf, until the platform resumes it.
+  await assertSelfConnectionNotSuspended(client, workspaceId, gatekeeperId);
   const platformGateId = await platformGateIdForEndpoint(client, record.endpoint);
   if (platformGateId !== null) {
     throw new GateInstanceNotAvailableError(

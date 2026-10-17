@@ -148,8 +148,9 @@ export function RefreshOperationGovernanceConfirm({
   const [knownPreviewSpent, setKnownPreviewSpent] = useState(false);
   // Which previewed rows are published — a revision draft of one is its own catalog row.
   const [publishedNames, setPublishedNames] = useState<ReadonlySet<string>>(new Set());
-  // Legacy 214 (a gate the workspace connected itself): what the gate describes that the workspace
-  // never had — the resync imports it as a draft — and published Operations it no longer describes.
+  // What the manifest names that the workspace never had — the resync (legacy 214) or the align
+  // (P0b, #612 P2) imports it as a draft — and published Operations a self-connected gate no
+  // longer describes.
   const [newNames, setNewNames] = useState<readonly string[]>([]);
   // UX acceptance of #612 (P2-2): what each new Operation would be allowed to do once published.
   const [newFields, setNewFields] = useState<ReadonlyMap<string, OperationGovernanceFieldsWire>>(
@@ -298,13 +299,13 @@ export function RefreshOperationGovernanceConfirm({
       );
       const held = pending.filter((op) => op.pendingDraft?.rewritable).map((op) => op.name);
       setHeldDrafts(held);
-      // Legacy 214: only a self-connected gate's resync imports a name the workspace never had (a
-      // platform gate's new Operations come through the catalog enable).
-      const fresh = self
-        ? preview.operationsToImport.filter(
-            (op) => op.pendingDraft === undefined && inScope(op.name),
-          )
-        : [];
+      // What the manifest names that this Gatekeeper never had is imported as a draft, never
+      // published here: legacy 214, what a self-connected gate describes now; P0b (#612 P2), what
+      // the platform adopted for a catalog gate after this workspace enabled it. A name the gate no
+      // longer runs (`dropped`) is not imported — the kernel skips it too.
+      const fresh = preview.operationsToImport.filter(
+        (op) => op.pendingDraft === undefined && !dropped.has(op.name) && inScope(op.name),
+      );
       setNewNames(fresh.map((op) => op.name));
       setNewFields(
         new Map(
@@ -498,9 +499,15 @@ export function RefreshOperationGovernanceConfirm({
             {imported.length > 0 ? (
               <div className="stack-s" data-testid={testId ? `${testId}-imported` : undefined}>
                 <span>
-                  {t(
-                    `已把门新增的 ${imported.length} 个 Operation 导入为草稿。到能力目录核对后发布：`,
-                    `Imported ${imported.length} operation(s) the gate now provides as drafts. Check them in the catalog, then publish:`,
+                  {source(
+                    [
+                      `已把平台采用的清单新增的 ${imported.length} 个 Operation 导入为草稿。到能力目录核对后发布：`,
+                      `Imported ${imported.length} operation(s) new in the manifest the platform adopted as drafts. Check them in the catalog, then publish:`,
+                    ],
+                    [
+                      `已把门新增的 ${imported.length} 个 Operation 导入为草稿。到能力目录核对后发布：`,
+                      `Imported ${imported.length} operation(s) the gate now provides as drafts. Check them in the catalog, then publish:`,
+                    ],
                   )}
                 </span>
                 <ul className="stack-s" style={{ margin: 0, paddingLeft: '1.2em' }}>
@@ -706,17 +713,29 @@ export function RefreshOperationGovernanceConfirm({
               `${actionKindTagText(name)}: the gate’s manifest changed — rewrites the pending draft to it; the new manifest still declares params only the gate sets, ${heldText(name)}, so it still cannot be published`,
             ),
           ),
-          // Legacy 214: what a self-connected gate now provides and the workspace never had.
+          // Legacy 214 / P0b (#612 P2): what the manifest now names and the workspace never had.
           ...freeNames(newNames).map((name) =>
-            t(
-              `${actionKindTagText(name)}：门新增的 Operation（${newFieldsText(name)}），导入为草稿`,
-              `${actionKindTagText(name)}: new on the gate (${newFieldsText(name)}) — imported as a draft`,
+            source(
+              [
+                `${actionKindTagText(name)}：平台采用的清单新增的 Operation（${newFieldsText(name)}），导入为草稿，发布后才能调用`,
+                `${actionKindTagText(name)}: new in the manifest the platform adopted (${newFieldsText(name)}) — imported as a draft, callable once published`,
+              ],
+              [
+                `${actionKindTagText(name)}：门新增的 Operation（${newFieldsText(name)}），导入为草稿`,
+                `${actionKindTagText(name)}: new on the gate (${newFieldsText(name)}) — imported as a draft`,
+              ],
             ),
           ),
           ...heldNames(newNames).map((name) =>
-            t(
-              `${actionKindTagText(name)}：门新增的 Operation（${newFieldsText(name)}），导入为草稿；它声明了只能由门自己设置的参数 ${heldText(name)}，导入后发布不了`,
-              `${actionKindTagText(name)}: new on the gate — imported as a draft; it declares params only the gate sets, ${heldText(name)}, so it cannot be published`,
+            source(
+              [
+                `${actionKindTagText(name)}：平台采用的清单新增的 Operation（${newFieldsText(name)}），导入为草稿；它声明了只能由门自己设置的参数 ${heldText(name)}，导入后发布不了`,
+                `${actionKindTagText(name)}: new in the manifest the platform adopted — imported as a draft; it declares params only the gate sets, ${heldText(name)}, so it cannot be published`,
+              ],
+              [
+                `${actionKindTagText(name)}：门新增的 Operation（${newFieldsText(name)}），导入为草稿；它声明了只能由门自己设置的参数 ${heldText(name)}，导入后发布不了`,
+                `${actionKindTagText(name)}: new on the gate — imported as a draft; it declares params only the gate sets, ${heldText(name)}, so it cannot be published`,
+              ],
             ),
           ),
         ]}

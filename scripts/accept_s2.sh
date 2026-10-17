@@ -412,8 +412,9 @@ fixtures_up_step() {
 # (c) the already-deployed gatekeeper-docker service, needed by step 2 below — since STATUS
 # leftover 36 (S5.5) through the P-B1 catalog path (`enable_gate_instance`, see the docker block
 # below), no longer by `create_connection` to its address. (a) and (b) via the S2.13 capability
-# flow (request_connection -> create_connection -> publish_manifest -> connect_gatekeeper), not
-# bootstrap.js's operator-only register-gatekeeper subcommand.
+# flow (request_connection -> create_connection -> publish_manifest -> connect_gatekeeper); since
+# P0b both capabilities land their Gatekeeper through the one landing path (the operator-only
+# register-gatekeeper subcommand is gone) — landing_step below checks what that path recorded.
 connections_step() {
   # --- ssh ---
   out=$(cap "$ALICE_KEY" request_connection "{\"kind\":\"ssh\",\"target\":\"accept_s2_ssh\"}" "d.result.id")
@@ -566,6 +567,92 @@ connections_step() {
   status=$(parse_kv "$out" HTTP_STATUS)
   [ "$status" = "200" ] || fail "connect-docker-grant" "connect_gatekeeper(docker) HTTP $status: $(parse_kv "$out" BODY)"
   pass "connect-docker-grant" "docker gatekeeper granted to alice"
+}
+
+# P0b (one landing path; STATUS leftover 118 remainder ①). (1) Every Gatekeeper connections_step
+# connected has exactly one origin record, written by `landGatekeeper`: the ssh and http self
+# connections a `workspace_self_connections` row each, the catalog docker gate a
+# `workspace_gate_links` row, and no Gatekeeper in this workspace without one. (2) A second
+# `create_connection` to an address this workspace already connected (a trailing slash does not
+# make it another) is refused 409 `endpoint_already_connected` before the gate is contacted — no
+# secret is even sent — and writes no Gatekeeper. (3) The platform's cut-off for a self connection
+# reaches a real call: alice's observe of the http gate's `stock.get` goes through, is refused as
+# disabled by the platform while the connection is suspended, and goes through again once it is
+# resumed. This script has no administrator login, so the administrator's suspend / resume is the
+# SQL below (the same way connections_step enables the docker instance); the capabilities
+# themselves (`suspend_self_connection` / `resume_self_connection` — their platform audit row, the
+# workspace's entry Handles re-issued) are covered by the kernel's integration tests.
+landing_step() {
+  origins=$(psql_ws "select
+      (select count(*) from workspace_self_connections
+        where workspace_id='$WORKSPACE_ID' and suspended_at is null
+          and gatekeeper_object_id in ('$GATEKEEPER_ID_SSH','$GATEKEEPER_ID_HTTP'))
+      || '/' ||
+      (select count(*) from workspace_gate_links
+        where workspace_id='$WORKSPACE_ID' and gatekeeper_object_id='$GATEKEEPER_ID_DOCKER')
+      || '/' ||
+      (select count(*) from objects o
+        where o.workspace_id='$WORKSPACE_ID' and o.object_type='Gatekeeper'
+          and not exists (select 1 from workspace_self_connections s
+                           where s.workspace_id=o.workspace_id and s.gatekeeper_object_id=o.id)
+          and not exists (select 1 from workspace_gate_links l
+                           where l.workspace_id=o.workspace_id and l.gatekeeper_object_id=o.id))")
+  [ "$origins" = "2/1/0" ] || fail "landing-origins" "expected 2 self connections (ssh, http) / 1 catalog link (docker) / 0 Gatekeepers without an origin, got '$origins'"
+  pass "landing-origins" "ssh + http: self connections; docker: catalog link; no Gatekeeper without an origin"
+
+  gatekeepers_before=$(psql_ws "select count(*) from objects where workspace_id='$WORKSPACE_ID' and object_type='Gatekeeper'")
+  out=$(cap "$ALICE_KEY" create_connection \
+    "{\"kind\":\"http\",\"target\":\"accept_s2_api_again\",\"endpoint\":\"http://accept-s2-http-gate:8090/\",\"credentialKind\":\"shared\"}" \
+    "")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "409" ] || fail "landing-duplicate-refused" "create_connection to the http gate's address again must be refused (409), got HTTP $status: $(parse_kv "$out" BODY)"
+  case "$(parse_kv "$out" BODY)" in
+    *endpoint_already_connected*) : ;;
+    *) fail "landing-duplicate-refused" "409 but not endpoint_already_connected: $(parse_kv "$out" BODY)" ;;
+  esac
+  gatekeepers_after=$(psql_ws "select count(*) from objects where workspace_id='$WORKSPACE_ID' and object_type='Gatekeeper'")
+  [ "$gatekeepers_before" = "$gatekeepers_after" ] || fail "landing-duplicate-refused" "Gatekeeper count changed ($gatekeepers_before -> $gatekeepers_after) on a refused connection"
+  pass "landing-duplicate-refused" "a second connection to http://accept-s2-http-gate:8090/ refused with endpoint_already_connected; no Gatekeeper written"
+
+  out=$(cap "$ALICE_KEY" observe_operation "{\"gatekeeperId\":\"$GATEKEEPER_ID_HTTP\",\"operation\":\"stock.get\"}" "")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || fail "landing-suspend-baseline" "observe_operation(stock.get) on the http gate HTTP $status before any suspension: $(parse_kv "$out" BODY)"
+  pass "landing-suspend-baseline" "alice observes stock.get through the http self connection"
+
+  suspended=$(psql_ws "with u as (
+      update workspace_self_connections
+         set suspended_at = now(),
+             suspended_by_user_id = coalesce(
+               (select id from users where platform_role = 'admin' order by created_at limit 1),
+               gen_random_uuid()),
+             suspension_reason = 'accept_s2: platform cut-off check'
+       where workspace_id='$WORKSPACE_ID' and gatekeeper_object_id='$GATEKEEPER_ID_HTTP'
+         and suspended_at is null
+      returning 1)
+    select count(*) from u")
+  [ "$suspended" = "1" ] || fail "landing-suspend-refuses" "could not suspend the http self connection (rows updated: '$suspended')"
+  out=$(cap "$ALICE_KEY" observe_operation "{\"gatekeeperId\":\"$GATEKEEPER_ID_HTTP\",\"operation\":\"stock.get\"}" "")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  body=$(parse_kv "$out" BODY)
+  resumed=$(psql_ws "with u as (
+      update workspace_self_connections
+         set suspended_at = null, suspended_by_user_id = null, suspension_reason = null
+       where workspace_id='$WORKSPACE_ID' and gatekeeper_object_id='$GATEKEEPER_ID_HTTP'
+         and suspended_at is not null
+      returning 1)
+    select count(*) from u")
+  [ "$resumed" = "1" ] || fail "landing-suspend-refuses" "could not resume the http self connection (rows updated: '$resumed') — this only affects this run's acceptance workspace; resume it on the integrations page before the next run"
+  [ "$status" = "403" ] || fail "landing-suspend-refuses" "observe_operation while the self connection was suspended must be refused (403), got HTTP $status: $body"
+  case "$body" in
+    *operation_disabled*suspended*) : ;;
+    *) fail "landing-suspend-refuses" "403 but not the suspension refusal: $body" ;;
+  esac
+  pass "landing-suspend-refuses" "suspended: observe refused as disabled by the platform (the connection is suspended)"
+
+  out=$(cap "$ALICE_KEY" observe_operation "{\"gatekeeperId\":\"$GATEKEEPER_ID_HTTP\",\"operation\":\"stock.get\"}" "")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || fail "landing-resume-restores" "observe_operation(stock.get) after resume HTTP $status: $(parse_kv "$out" BODY)"
+  pass "landing-resume-restores" "resumed: the same observe goes through again"
 }
 
 # S5.1 (docs/development-tasks.md §5b S5.1): the kernel now refuses a Link whose LinkType the
@@ -1723,6 +1810,7 @@ bootstrap_step
 fixtures_secrets_step
 fixtures_up_step
 connections_step
+landing_step
 ontology_step
 ops_runner_step
 if [ "$REAL" -eq 1 ]; then

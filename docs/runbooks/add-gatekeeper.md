@@ -38,16 +38,16 @@ operations`"这条路径时，两份才**保证**是同一份（因为图里导�
 比对的字段是 `name`、`binding`、`params_schema`、`result_mapping`、`mode`、`reversibility`（`ssh` 另含
 `blast_radius`）；`description` 与 `auto_approvable` 等只影响内核侧治理的字段不计入。处理见 §12。
 
-**三条互补的注册路径，不是二选一淘汰关系。** ①主机操作员的 CLI 路径（`bootstrap.js
-register-gatekeeper`，不经过任何用户/权限模型，见 `docs/runbooks/host-gatekeepers.md` §5）；
-②面向终端用户的 capability 路径（`request_connection` 卡片 → owner `create_connection` →
-`publish_manifest` → `connect_gatekeeper` 授权，见 `docs/runbooks/host-gatekeepers.md` §10）；
-③**控制台路径（S6-C 起）**：平台"集成"页与工作区"系统接入"页右上角同一个"接入一个系统 Connect a
-system"启动器——http / mcp 走平台门宿主实例（管理员建实例、凭证直达门宿主、工作区一键启用，
-P-B2a，不需要 compose 服务），ssh / cli 走打包门（页面**不假装能建**，只显示部署清单并等门
-announce），见 §4b。新增一个门实例本身（起服务、验证协议端点）用哪条都行；本文档 §4–§7 默认走②
-（它同时覆盖了"给谁用"这一步，①需要额外手动查 `capability_grants` 表或另跑一遍连接流程），
-§4b 讲③。
+**一条落地路径，两个入口（P0b）。** 不论从哪个入口进来，Gatekeeper 都由同一个落地函数写入并记下来源：
+①**平台目录**：打包门（ssh / cli，页面**不假装能建**，只显示部署清单并等门 announce）与门宿主实例
+（http / mcp，管理员在平台"集成"页建实例、凭证直达门宿主，P-B2a，不需要 compose 服务）进平台目录，管理员
+启用实例后工作区一键启用（`enable_gate_instance`，同时发布 Operation），见 §4b 与
+`docs/runbooks/host-gatekeepers.md` §5；②**工作区自接**：不在目录里的门由工作区自己接入（`request_connection`
+卡片 → owner `create_connection` → `publish_manifest` → `connect_gatekeeper` 授权，见
+`docs/runbooks/host-gatekeepers.md` §10），平台管理员可以在"集成 → 自己接入的门"里逐个暂停 / 恢复。两个入口
+共用平台"集成"页与工作区"系统与授权"页右上角同一个"接入一个系统 Connect a system"启动器（S6-C）。原来的
+主机操作员 CLI `bootstrap.js register-gatekeeper` 已移除（它绕过目录规则，`--publish` 整份发布不留审计）。
+本文档 §4–§7 默认走②（它同时覆盖了"给谁用"这一步），§4b 讲①。
 
 ## 3. 前置条件
 

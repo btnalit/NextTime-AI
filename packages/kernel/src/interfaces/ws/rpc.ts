@@ -32,6 +32,7 @@ import {
   FactNotActiveError,
   FactNotFoundError,
   ForbiddenError,
+  GatekeeperLandingRefusedError,
   GatekeeperNotFoundError,
   InvalidCapabilityParamsError,
   ModelsCatalogUnavailableError,
@@ -448,7 +449,11 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   if (err instanceof OutboundTargetRefusedError || err instanceof ConnectionSecretInvalidError) {
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
-  if (err instanceof ConnectionSecretConflictError || err instanceof ConnectorNotSelfServeError) {
+  if (
+    err instanceof ConnectionSecretConflictError ||
+    err instanceof ConnectorNotSelfServeError ||
+    err instanceof GatekeeperLandingRefusedError
+  ) {
     return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
   }
   if (err instanceof GateConnectionSecretsUnavailableError) {

@@ -19,7 +19,8 @@ export {
   requestConnection,
   getConnectionRequest,
   listConnectionRequests,
-  completeConnection,
+  claimConnectionRequest,
+  markConnectionRequestCompleted,
   cancelConnectionRequest,
   connectGatekeeper,
   GatekeeperNotFoundError,
@@ -27,8 +28,6 @@ export {
 export type {
   RequestConnectionInput,
   ListConnectionRequestsInput,
-  CompleteConnectionInput,
-  CompleteConnectionResult,
   CancelConnectionRequestInput,
   ConnectGatekeeperInput,
 } from './service.js';
@@ -38,6 +37,7 @@ export {
   ConnectionParamsCarryCredentialsError,
   assertConnectionParamsCarryNoCredentials,
   findConnectionParamsCredential,
+  redactConnectionAddress,
 } from './credentials.js';
 export type { ConnectionCredentialField } from './credentials.js';
 export type { ConnectionRequestKind, ConnectionRequestRow } from './types.js';

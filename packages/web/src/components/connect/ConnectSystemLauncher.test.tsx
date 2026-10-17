@@ -130,6 +130,8 @@ function connector(overrides: Partial<ConnectorWire> = {}): ConnectorWire {
     disabledOperations: [],
     operationCount: 2,
     instanceCount: 1,
+    selfConnectionCount: 0,
+    suspendedSelfConnectionCount: 0,
     updatedAt: null,
     ...overrides,
   };

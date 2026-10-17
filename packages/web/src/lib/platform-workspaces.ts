@@ -146,6 +146,7 @@ const PURGE_COUNT_LABELS = {
   workerDefinitions: { zh: 'Worker 定义', en: 'Worker definitions' },
   workerRunSkills: { zh: 'Skill 使用记录', en: 'Skill usage records' },
   workspaceGateLinks: { zh: '已启用的门实例', en: 'Enabled gate instances' },
+  workspaceSelfConnections: { zh: '自己接入的门', en: 'Self-connected gates' },
 } as const satisfies Readonly<Record<string, { readonly zh: string; readonly en: string }>>;
 
 export type PurgeCountKey = keyof typeof PURGE_COUNT_LABELS;

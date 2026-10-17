@@ -12,8 +12,8 @@ import type { GateOwnedParam } from '@nexttime/gatekeeper-base';
  * (`importOpenApi`); this is the check for a hand-written definition and an older announcement.
  *
  * `publishOperation` refuses (400 `gate_owned_params`); the bulk paths (`publishManifest`,
- * `enable_gate_instance`, the CLI's `register-gatekeeper --publish`) leave such a draft unpublished
- * and report it, so one bad entry does not block the rest of a manifest.
+ * `enable_gate_instance`) leave such a draft unpublished and report it, so one bad entry does not
+ * block the rest of a manifest.
  */
 
 export type { GateOwnedParam };

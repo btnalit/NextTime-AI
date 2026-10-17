@@ -115,7 +115,8 @@ export type StatusMachine =
   | 'piDrift'
   | 'backupFreshness'
   | 'updateFeed'
-  | 'objectiveOutcome';
+  | 'objectiveOutcome'
+  | 'selfConnection';
 
 export const ACTION_REQUEST_TONES: Readonly<Record<ActionRequestStatus, ChipStyle>> = {
   proposed: { tone: 'neutral', label: { zh: '已提议', en: 'Proposed' } },
@@ -282,6 +283,25 @@ export function deriveGateInstanceStatus(instance: {
   return instance.hosted && instance.lastSeenAt === null ? 'awaiting_host' : instance.status;
 }
 
+/** P0b: a gate a workspace connected itself (`list_self_connections`), derived from `suspendedAt`.
+ *  `suspended` is the platform's cut-off (`suspend_self_connection`): every Operation of it is
+ *  refused until an administrator resumes it — grey like every other "disabled" state. */
+export type SelfConnectionDisplayStatus = 'active' | 'suspended';
+export const SELF_CONNECTION_STATUS_VALUES: readonly SelfConnectionDisplayStatus[] = [
+  'active',
+  'suspended',
+];
+export const SELF_CONNECTION_TONES: Readonly<Record<SelfConnectionDisplayStatus, ChipStyle>> = {
+  active: { tone: 'ok', label: { zh: '使用中', en: 'In use' } },
+  suspended: { tone: 'neutral', label: { zh: '已暂停', en: 'Suspended' } },
+};
+
+export function deriveSelfConnectionStatus(connection: {
+  readonly suspendedAt: string | null;
+}): SelfConnectionDisplayStatus {
+  return connection.suspendedAt === null ? 'active' : 'suspended';
+}
+
 type GateHealthWire = (typeof GateHealthWireSchema.options)[number];
 export const GATE_HEALTH_TONES: Readonly<Record<GateHealthWire, ChipStyle>> = {
   ok: { tone: 'ok', label: { zh: '健康', en: 'Healthy' } },
@@ -387,6 +407,7 @@ const MACHINES: Readonly<
     tones: UPDATE_FEED_TONES,
   },
   objectiveOutcome: { values: OBJECTIVE_OUTCOME_VALUES, tones: OBJECTIVE_OUTCOME_TONES },
+  selfConnection: { values: SELF_CONNECTION_STATUS_VALUES, tones: SELF_CONNECTION_TONES },
 };
 
 export interface ResolvedChipStyle extends ChipStyle {

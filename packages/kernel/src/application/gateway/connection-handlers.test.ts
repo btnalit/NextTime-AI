@@ -18,6 +18,7 @@ import {
 } from '../../adapters/outbound-target/index.js';
 import { getGatekeeper } from '../../governance/gatekeepers/index.js';
 import { queryAudit } from '../../substrate/audit/index.js';
+import { GatekeeperLandingRefusedError, findSelfConnection } from '../gates/index.js';
 import {
   ConnectionCredentialRequiredError,
   ConnectionManifestFetchError,
@@ -431,6 +432,9 @@ describe.runIf(DATABASE_URL !== undefined)(
     let fake: ReturnType<typeof createFakeGatekeeperClient>;
     const secrets = createGateConnectionSecrets(GATE_TOKEN);
     const newSecret = () => secrets.mint(workspaceId).secret;
+    // P0b: one Gatekeeper per address in a workspace — every case below connects its own (the fake
+    // client never dials it).
+    const unusedEndpoint = () => `http://127.0.0.1:1/unused-${randomUUID()}`;
 
     beforeEach(() => {
       fake = createFakeGatekeeperClient();
@@ -461,7 +465,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           dispatchCapability({ pool }, owner, 'create_connection', {
             kind: 'ssh',
             target: 'example-ssh-system',
-            endpoint: 'http://127.0.0.1:1/unused',
+            endpoint: unusedEndpoint(),
             connectionSecret: newSecret(),
             credentialKind: 'shared',
           }),
@@ -477,7 +481,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const result = (await dispatchCapability({ pool }, owner, 'create_connection', {
         kind: 'cli',
         target: 'example-cli-system',
-        endpoint: 'http://127.0.0.1:1/unused',
+        endpoint: unusedEndpoint(),
         connectionSecret: newSecret(),
         credentialKind: 'shared',
       })) as { gatekeeperId: string; importedOperationNames: readonly string[] };
@@ -486,12 +490,65 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(fake.storeConnectedAccountCalls).toEqual([]);
     });
 
+    it('P0b: lands through the one landing path — a self origin row, attributed to the caller', async () => {
+      const owner = humanCaller(workspaceId, ownerId, 'owner');
+      const endpoint = unusedEndpoint();
+      const result = (await dispatchCapability({ pool }, owner, 'create_connection', {
+        kind: 'cli',
+        target: 'origin-system',
+        endpoint,
+        connectionSecret: newSecret(),
+        credentialKind: 'shared',
+      })) as { gatekeeperId: string };
+
+      const origin = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (c) =>
+        findSelfConnection(c, workspaceId, result.gatekeeperId),
+      );
+      expect(origin).toMatchObject({
+        connector: 'cli',
+        target: 'origin-system',
+        endpoint,
+        connectedBy: ownerId,
+        suspendedAt: null,
+      });
+    });
+
+    it('P0b: a second create_connection to an address this workspace already connected is refused 409 endpoint_already_connected, before the gate is called', async () => {
+      const owner = humanCaller(workspaceId, ownerId, 'owner');
+      const endpoint = unusedEndpoint();
+      const first = (await dispatchCapability({ pool }, owner, 'create_connection', {
+        kind: 'cli',
+        target: 'twice-system',
+        endpoint,
+        connectionSecret: newSecret(),
+        credentialKind: 'shared',
+      })) as { gatekeeperId: string };
+      fake.targets.length = 0;
+
+      const thrown = await dispatchCapability({ pool }, owner, 'create_connection', {
+        kind: 'cli',
+        target: 'twice-system-again',
+        // Same address, trailing slash or not.
+        endpoint: `${endpoint}/`,
+        connectionSecret: newSecret(),
+        credentialKind: 'shared',
+      }).catch((err: unknown) => err);
+      expect(thrown).toBeInstanceOf(GatekeeperLandingRefusedError);
+      expect(thrown).toMatchObject({
+        code: 'endpoint_already_connected',
+        gatekeeperId: first.gatekeeperId,
+        // The card's name for it, so the console can say which system the address already is.
+        gatekeeperName: 'twice-system',
+      });
+      expect(fake.targets).toEqual([]);
+    });
+
     it("credentialKind: 'shared' never calls storeConnectedAccount, even when credentials happen to be omitted", async () => {
       const owner = humanCaller(workspaceId, ownerId, 'owner');
       await dispatchCapability({ pool }, owner, 'create_connection', {
         kind: 'http',
         target: 'example-system',
-        endpoint: 'http://127.0.0.1:1/unused',
+        endpoint: unusedEndpoint(),
         connectionSecret: newSecret(),
         credentialKind: 'shared',
       });
@@ -505,7 +562,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       await dispatchCapability({ pool }, owner, 'create_connection', {
         kind: 'http',
         target: 'example-system',
-        endpoint: 'http://127.0.0.1:1/unused',
+        endpoint: unusedEndpoint(),
         connectionSecret: newSecret(),
         credentials: { token: 'the-credential-value' },
         onBehalfOf: memberId,
@@ -524,7 +581,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         dispatchCapability({ pool }, owner, 'create_connection', {
           kind: 'http',
           target: 'example-system',
-          endpoint: 'http://127.0.0.1:1/unused',
+          endpoint: unusedEndpoint(),
           connectionSecret: newSecret(),
           credentialKind: 'connected_account',
         }),
@@ -537,7 +594,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const result = (await dispatchCapability({ pool }, owner, 'create_connection', {
         kind: 'http',
         target: 'example-system',
-        endpoint: 'http://127.0.0.1:1/unused',
+        endpoint: unusedEndpoint(),
         connectionSecret: newSecret(),
         credentials: { token: 'must-never-appear-in-audit' },
       })) as { gatekeeperId: string };
@@ -566,7 +623,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const result = (await dispatchCapability({ pool }, owner, 'create_connection', {
         kind: 'http',
         target: 'byo-system',
-        endpoint: 'http://127.0.0.1:1/unused',
+        endpoint: unusedEndpoint(),
         connectionSecret: minted.connectionSecret,
         credentials: { token: 'byo-credential' },
       })) as { gatekeeperId: string };
@@ -605,13 +662,16 @@ describe.runIf(DATABASE_URL !== undefined)(
       const params = {
         kind: 'cli',
         target: 'reuse-system',
-        endpoint: 'http://127.0.0.1:1/unused',
+        endpoint: unusedEndpoint(),
         credentialKind: 'shared',
         connectionSecret: secret,
       };
       await dispatchCapability({ pool }, owner, 'create_connection', params);
       await expect(
-        dispatchCapability({ pool }, owner, 'create_connection', params),
+        dispatchCapability({ pool }, owner, 'create_connection', {
+          ...params,
+          endpoint: unusedEndpoint(),
+        }),
       ).rejects.toBeInstanceOf(ConnectionSecretConflictError);
     });
 
@@ -621,7 +681,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const created = (await dispatchCapability({ pool }, owner, 'create_connection', {
         kind: 'cli',
         target: 'rotate-system',
-        endpoint: 'http://127.0.0.1:1/unused',
+        endpoint: unusedEndpoint(),
         credentialKind: 'shared',
         connectionSecret: first,
       })) as { gatekeeperId: string };

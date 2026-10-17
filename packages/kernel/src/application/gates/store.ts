@@ -21,6 +21,7 @@ import { revokeEntrySessionHandles, revokeSession } from '../../governance/capab
 import {
   type ConnectionCredentialField,
   findConnectionParamsCredential,
+  redactConnectionAddress,
 } from '../../governance/connections/index.js';
 import {
   isOperationDisabled,
@@ -105,6 +106,8 @@ interface ConnectorDbRow {
   updated_at: Date | null;
   operation_count: number;
   instance_count: number;
+  self_connection_count: number;
+  suspended_self_connection_count: number;
 }
 
 interface GateInstanceDbRow {
@@ -162,6 +165,8 @@ export function toWireConnector(row: ConnectorDbRow): ConnectorWire {
     disabledOperations: stringList(row.disabled_operations),
     operationCount: row.operation_count,
     instanceCount: row.instance_count,
+    selfConnectionCount: row.self_connection_count,
+    suspendedSelfConnectionCount: row.suspended_self_connection_count,
     updatedAt: row.updated_at ? row.updated_at.toISOString() : null,
   };
 }
@@ -224,6 +229,33 @@ export function toWireGateInstance(
   };
 }
 
+/** A gate instance as a capability shows it (#620 review M2): its addresses — `target`,
+ *  `endpoint`, and a gate-host definition's `target` / `manifestSource` — through
+ *  `redactConnectionAddress`, the rule every display of a gate address uses. One created or
+ *  announced before #549 can still carry a credential (`scrub-raw-secrets` counts it,
+ *  `gateInstanceAddresses`, for an administrator to recreate). `toWireGateInstance` stays the
+ *  stored value: the kernel's own reads (the test probe, the enable landing and its credential
+ *  refusal) need where the gate really is. No capability takes an address back from this view
+ *  (`update_gate_instance` patches name, status and trust only). */
+export function displayedGateInstance(instance: GateInstanceWire): GateInstanceWire {
+  return {
+    ...instance,
+    target: redactConnectionAddress('target', instance.target),
+    endpoint: redactConnectionAddress('endpoint', instance.endpoint),
+    definition:
+      instance.definition === null
+        ? null
+        : {
+            ...instance.definition,
+            target: redactConnectionAddress('target', instance.definition.target),
+            manifestSource:
+              instance.definition.manifestSource === null
+                ? null
+                : redactConnectionAddress('manifestSource', instance.definition.manifestSource),
+          },
+  };
+}
+
 // -------------------------------------------------------------------------------------------
 // connectors
 // -------------------------------------------------------------------------------------------
@@ -233,7 +265,14 @@ const CONNECTOR_SELECT = `
          (select count(distinct op->>'name')::int
             from gate_instances g, jsonb_array_elements(g.operations) op
            where g.connector = c.name) as operation_count,
-         (select count(*)::int from gate_instances g where g.connector = c.name) as instance_count
+         (select count(*)::int from gate_instances g where g.connector = c.name) as instance_count,
+         -- P0b: the platform plane counts every workspace's; under a workspace transaction RLS
+         -- (core 0045) leaves that workspace's own — no workspace-side caller reads these two.
+         (select count(*)::int from workspace_self_connections s where s.connector = c.name)
+           as self_connection_count,
+         (select count(*)::int from workspace_self_connections s
+           where s.connector = c.name and s.suspended_at is not null)
+           as suspended_self_connection_count
     from connectors c`;
 
 export async function listConnectors(client: PoolClient): Promise<ConnectorWire[]> {
@@ -867,7 +906,7 @@ export async function findGateLinkByGate(
 
 /** The reverse of `findGateLinkByGate` — from a workspace Gatekeeper Object id back to the
  *  platform gate instance it was enabled from, `null` for a Gatekeeper registered outside the
- *  platform catalog (the legacy `register-gatekeeper` CLI path, `create_connection`) or one this
+ *  platform catalog (`create_connection`, or the removed `register-gatekeeper` CLI) or one this
  *  workspace never linked. S8 W3-K1 (leftover 79): `refresh_operation_governance`'s own
  *  `no_announced_manifest` refusal is exactly this `null` case — there is no `gate_instances.
  *  operations` manifest to refresh from. At most one row exists per `(workspaceId,
@@ -887,10 +926,24 @@ export async function findGateLinkByGatekeeper(
   return result.rows[0] ? mapLink(result.rows[0]) : null;
 }
 
-/** The link plus the two facts the per-call rules need — the connector's deny list and the
- *  instance's trust — for a workspace Gatekeeper object; `null` for a gate the workspace connected
- *  itself (no link: no deny list applies, trust is `byo`). */
-export interface GateLinkPolicyView {
+/**
+ * What the platform decides about one workspace Gatekeeper, by its origin (P0b: every Gatekeeper
+ * has exactly one, written by the landing — `application/gates/landing.ts`):
+ *
+ *   - `catalog`: enabled from a platform gate instance (`workspace_gate_links`) — the connector's
+ *     Operation deny list, the instance's trust and status;
+ *   - `self`: connected by the workspace itself (`workspace_self_connections`, core 0045) — trust is
+ *     always `byo`; `suspended` is the platform administrator's cut-off (STATUS leftover 118
+ *     remainder ①, `suspend_self_connection`): every Operation of the gate is refused while set.
+ *
+ * `null` from the readers below: a Gatekeeper with no origin row at all — none is left after core
+ * 0045's backfill, and the landing is the only writer of Gatekeepers, so this is "no platform rule
+ * recorded", treated as before (no deny list, `byo`).
+ */
+export type GatekeeperPlatformPolicy = CatalogGatePolicy | SelfConnectionPolicy;
+
+export interface CatalogGatePolicy {
+  readonly origin: 'catalog';
   readonly gateId: string;
   readonly connector: string;
   readonly trust: GateTrust;
@@ -898,101 +951,143 @@ export interface GateLinkPolicyView {
   readonly disabledOperations: string[];
 }
 
-export async function readGateLinkPolicy(
-  client: PoolClient,
-  workspaceId: string,
-  gatekeeperObjectId: string,
-): Promise<GateLinkPolicyView | null> {
-  const result = await client.query<{
-    gate_id: string;
-    connector: string;
-    trust: GateTrust;
-    status: GateInstanceStatus;
-    disabled_operations: unknown;
-  }>(
-    `select l.gate_id, g.connector, g.trust, g.status, c.disabled_operations
-       from workspace_gate_links l
-       join gate_instances g on g.gate_id = l.gate_id
-       join connectors c on c.name = g.connector
-      where l.workspace_id = $1 and l.gatekeeper_object_id = $2`,
-    [workspaceId, gatekeeperObjectId],
-  );
-  const row = result.rows[0];
-  if (!row) return null;
+export interface SelfConnectionPolicy {
+  readonly origin: 'self';
+  readonly connector: string;
+  readonly suspended: boolean;
+}
+
+interface PlatformPolicyDbRow {
+  gatekeeper_object_id: string;
+  origin: 'catalog' | 'self';
+  gate_id: string | null;
+  connector: string;
+  trust: GateTrust | null;
+  status: GateInstanceStatus | null;
+  disabled_operations: unknown;
+  suspended: boolean | null;
+}
+
+/** Both origins in one statement — a Gatekeeper has at most one row across the two (the landing
+ *  deletes the self row when it links an existing Gatekeeper, and rolls back when it cannot);
+ *  were both ever present, `pickPlatformPolicy` decides, not the row order. */
+const PLATFORM_POLICY_SELECT = `
+  select l.gatekeeper_object_id, 'catalog' as origin, l.gate_id, g.connector, g.trust, g.status,
+         c.disabled_operations, null::boolean as suspended
+    from workspace_gate_links l
+    join gate_instances g on g.gate_id = l.gate_id
+    join connectors c on c.name = g.connector
+   where l.workspace_id = $1 and ($2::uuid is null or l.gatekeeper_object_id = $2::uuid)
+  union all
+  select s.gatekeeper_object_id, 'self' as origin, null, s.connector, null, null, null,
+         s.suspended_at is not null
+    from workspace_self_connections s
+   where s.workspace_id = $1 and ($2::uuid is null or s.gatekeeper_object_id = $2::uuid)`;
+
+/** One Gatekeeper's rows → its policy, fail-closed: a suspended self connection wins over
+ *  everything (the platform cut it off — a catalog link written next to it must not lift that,
+ *  #620 review M1); otherwise the catalog row, since the platform credential and the deny list go
+ *  with it; otherwise the self row. */
+function pickPlatformPolicy(rows: readonly PlatformPolicyDbRow[]): GatekeeperPlatformPolicy | null {
+  const row =
+    rows.find((candidate) => candidate.origin === 'self' && candidate.suspended === true) ??
+    rows.find((candidate) => candidate.origin === 'catalog') ??
+    rows[0];
+  return row ? mapPlatformPolicy(row) : null;
+}
+
+function mapPlatformPolicy(row: PlatformPolicyDbRow): GatekeeperPlatformPolicy {
+  if (row.origin === 'self') {
+    return { origin: 'self', connector: row.connector, suspended: row.suspended === true };
+  }
   return {
-    gateId: row.gate_id,
+    origin: 'catalog',
+    gateId: row.gate_id ?? '',
     connector: row.connector,
-    trust: row.trust,
-    instanceStatus: row.status,
+    trust: row.trust ?? 'byo',
+    instanceStatus: row.status ?? 'discovered',
     disabledOperations: stringList(row.disabled_operations),
   };
 }
 
-/** `readGateLinkPolicy`, batched across every workspace Gatekeeper this workspace has ever linked
- *  in one query — for a caller that must check the whole workspace at once
- *  (`computeCapabilityReachability`, `list_allowed_operations`) rather than one Gatekeeper at a
- *  time. Keyed by `gatekeeper_object_id`; a Gatekeeper this workspace connected itself has no row
- *  in the returned map — the same "no link, no deny list" meaning `readGateLinkPolicy`'s own `null`
- *  return carries, just via `Map.get` returning `undefined` instead. */
-export async function readGateLinkPoliciesForWorkspace(
+export async function readGatekeeperPlatformPolicy(
   client: PoolClient,
   workspaceId: string,
-): Promise<ReadonlyMap<string, GateLinkPolicyView>> {
-  const result = await client.query<{
-    gatekeeper_object_id: string;
-    gate_id: string;
-    connector: string;
-    trust: GateTrust;
-    status: GateInstanceStatus;
-    disabled_operations: unknown;
-  }>(
-    `select l.gatekeeper_object_id, l.gate_id, g.connector, g.trust, g.status, c.disabled_operations
-       from workspace_gate_links l
-       join gate_instances g on g.gate_id = l.gate_id
-       join connectors c on c.name = g.connector
-      where l.workspace_id = $1`,
-    [workspaceId],
-  );
-  const byGatekeeperId = new Map<string, GateLinkPolicyView>();
+  gatekeeperObjectId: string,
+): Promise<GatekeeperPlatformPolicy | null> {
+  const result = await client.query<PlatformPolicyDbRow>(PLATFORM_POLICY_SELECT, [
+    workspaceId,
+    gatekeeperObjectId,
+  ]);
+  return pickPlatformPolicy(result.rows);
+}
+
+/** `readGatekeeperPlatformPolicy`, batched across every Gatekeeper of the workspace in one query —
+ *  for a caller that checks the whole workspace at once (`computeCapabilityReachability`,
+ *  `list_allowed_operations`, the observe read models). Keyed by `gatekeeper_object_id`; a
+ *  Gatekeeper with no origin row is absent (`Map.get` → `undefined`, the readers' `null`). */
+export async function readGatekeeperPlatformPolicies(
+  client: PoolClient,
+  workspaceId: string,
+): Promise<ReadonlyMap<string, GatekeeperPlatformPolicy>> {
+  const result = await client.query<PlatformPolicyDbRow>(PLATFORM_POLICY_SELECT, [
+    workspaceId,
+    null,
+  ]);
+  const rowsByGatekeeperId = new Map<string, PlatformPolicyDbRow[]>();
   for (const row of result.rows) {
-    byGatekeeperId.set(row.gatekeeper_object_id, {
-      gateId: row.gate_id,
-      connector: row.connector,
-      trust: row.trust,
-      instanceStatus: row.status,
-      disabledOperations: stringList(row.disabled_operations),
-    });
+    const rows = rowsByGatekeeperId.get(row.gatekeeper_object_id);
+    if (rows) rows.push(row);
+    else rowsByGatekeeperId.set(row.gatekeeper_object_id, [row]);
+  }
+  const byGatekeeperId = new Map<string, GatekeeperPlatformPolicy>();
+  for (const [gatekeeperId, rows] of rowsByGatekeeperId) {
+    const policy = pickPlatformPolicy(rows);
+    if (policy) byGatekeeperId.set(gatekeeperId, policy);
   }
   return byGatekeeperId;
 }
 
+/** The trust the approval decision reads (MCP `vetted` auto-approval): only a catalog instance's —
+ *  a gate the workspace connected itself is always `byo`. */
+export function platformTrustOf(policy: GatekeeperPlatformPolicy | null | undefined): GateTrust {
+  return policy?.origin === 'catalog' ? policy.trust : 'byo';
+}
+
 /** The one place that decides "is Operation `operationName` disabled by the platform for this
- *  workspace Gatekeeper, and if so which connector disabled it" — production incident 2026-09-26:
- *  before this function existed, `assertOperationEnabled` (enforcement, request-action-handler.ts),
+ *  workspace Gatekeeper, and if so why" — production incident 2026-09-26: before this function
+ *  existed, `assertOperationEnabled` (enforcement, request-action-handler.ts),
  *  `disabledOperationsFor` (the read projections, gatekeeper-read-handlers.ts) and
  *  `computeCapabilityReachability` (the console's own reachability read model,
  *  application/gateway/capability-reachability.ts) each re-derived this decision — the third one
  *  never consulted the deny list at all, so the console told a member a gate was usable while every
- *  call to it was refused. All three (plus `list_allowed_operations`'s own tool-list projection and
- *  `action-executor.ts`'s execution-time re-check) now call this function; `null`/`undefined` for
- *  `gateLink` (a gate the workspace connected itself, or a workspace Gatekeeper absent from a
- *  `readGateLinkPoliciesForWorkspace` batch) always means "no platform deny list applies" —
- *  `isOperationDisabled`'s own exact-name-match semantics (governance/gatekeepers/trust.ts) are
- *  unchanged, just no longer inlined at each call site. */
+ *  call to it was refused. All of them (plus `list_allowed_operations`'s own tool-list projection,
+ *  `action-executor.ts`'s execution-time re-check and `observeRefusal`) call this function.
+ *
+ *  Two platform cut-offs, by origin: a catalog gate's connector deny list (`isOperationDisabled`'s
+ *  exact-name match, governance/gatekeepers/trust.ts), and a self-connected gate's suspension (P0b,
+ *  leftover 118 remainder ①) — every Operation of a suspended connection. No policy at all
+ *  (`null` / `undefined`) disables nothing. */
 export interface OperationPlatformStatus {
   readonly disabled: boolean;
-  /** Present only when `disabled` is `true` — the connector whose deny list named this Operation. */
+  /** Present only when `disabled` is `true` — the connector whose rule disabled it. */
   readonly connector?: string;
+  /** Present only when `disabled` is `true` — which cut-off applies. */
+  readonly reason?: 'connector_deny_list' | 'self_connection_suspended';
 }
 
 export function operationPlatformStatus(
-  gateLink: GateLinkPolicyView | null | undefined,
+  policy: GatekeeperPlatformPolicy | null | undefined,
   operationName: string,
 ): OperationPlatformStatus {
-  if (!gateLink || !isOperationDisabled(gateLink.disabledOperations, operationName)) {
-    return { disabled: false };
+  if (!policy) return { disabled: false };
+  if (policy.origin === 'self') {
+    return policy.suspended
+      ? { disabled: true, connector: policy.connector, reason: 'self_connection_suspended' }
+      : { disabled: false };
   }
-  return { disabled: true, connector: gateLink.connector };
+  if (!isOperationDisabled(policy.disabledOperations, operationName)) return { disabled: false };
+  return { disabled: true, connector: policy.connector, reason: 'connector_deny_list' };
 }
 
 /** Workspace side: enabled platform instances of `platform_preset` connectors, plus this
@@ -1020,7 +1115,8 @@ export async function listAvailableGateInstances(
     connector: row.connector,
     displayName: row.display_name,
     transportKind: row.transport_kind,
-    target: row.target,
+    // Shown to every member of the workspace — as every gate address is (`displayedGateInstance`).
+    target: redactConnectionAddress('target', row.target),
     status: row.status,
     trust: row.trust,
     health: row.health,
@@ -1149,22 +1245,34 @@ export async function revokeEntryHandlesForConnector(
   );
   let revokedWorkspaceCount = 0;
   for (const row of linked.rows) {
-    const entryPrincipals = await client.query<{ principal_id: string }>(
-      `select distinct principal_id from sessions
-        where workspace_id = $1 and principal_id = on_behalf_of and kind = 'entry'`,
-      [row.workspace_id],
-    );
-    if (entryPrincipals.rows.length === 0) continue;
-    await setWorkspaceContext(client, row.workspace_id, PLATFORM_PLACEHOLDER_PRINCIPAL);
-    try {
-      for (const principal of entryPrincipals.rows) {
-        await revokeEntrySessionHandles(client, row.workspace_id, principal.principal_id);
-      }
-    } finally {
-      await client.query("select set_config('app.workspace_id', '', true)");
-      await client.query("select set_config('app.principal_id', '', true)");
-    }
-    revokedWorkspaceCount += 1;
+    if (await revokeEntryHandlesInWorkspace(client, row.workspace_id)) revokedWorkspaceCount += 1;
   }
   return { linkedWorkspaceCount: linked.rows.length, revokedWorkspaceCount };
+}
+
+/** One workspace's half of `revokeEntryHandlesForConnector` (same reasoning, same platform
+ *  transaction): every principal's own `kind='entry'` session Handles in `workspaceId` are revoked,
+ *  so the next Turn mints a Handle — and a tool projection — under the platform's current rules.
+ *  `true` when the workspace had a live entry session to revoke. Also used when a self connection
+ *  is suspended or resumed (`suspend_self_connection` / `resume_self_connection`). */
+export async function revokeEntryHandlesInWorkspace(
+  client: PoolClient,
+  workspaceId: string,
+): Promise<boolean> {
+  const entryPrincipals = await client.query<{ principal_id: string }>(
+    `select distinct principal_id from sessions
+      where workspace_id = $1 and principal_id = on_behalf_of and kind = 'entry'`,
+    [workspaceId],
+  );
+  if (entryPrincipals.rows.length === 0) return false;
+  await setWorkspaceContext(client, workspaceId, PLATFORM_PLACEHOLDER_PRINCIPAL);
+  try {
+    for (const principal of entryPrincipals.rows) {
+      await revokeEntrySessionHandles(client, workspaceId, principal.principal_id);
+    }
+  } finally {
+    await client.query("select set_config('app.workspace_id', '', true)");
+    await client.query("select set_config('app.principal_id', '', true)");
+  }
+  return true;
 }

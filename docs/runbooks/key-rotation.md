@@ -357,9 +357,9 @@ handler 再收紧为"owner，或本人"，且只接受服务 Principal。旧 key
 
 ### 5.4 步骤——API/CLI 路径
 
-没有独立 CLI 子命令（`packages/kernel/src/cli/bootstrap.ts` 只有 `create-workspace` /
-`add-principal` / `register-gatekeeper` / `delete-workspace` / `list-workspaces` 五个，没有
-`rotate-api-key`）——`rotate_api_key` 只能经 HTTP capability 调用：
+没有独立 CLI 子命令（`packages/kernel/src/cli/bootstrap.ts` 的子命令——建 / 删 / 列工作区、加
+principal、签发服务 Handle、建平台管理员等——里没有 `rotate-api-key`）——`rotate_api_key` 只能经
+HTTP capability 调用：
 
 ```bash
 # 用 owner 的 key，或该服务凭证自己的 key（handler 允许 owner 改任何服务凭证、服务凭证改自己）：

@@ -23,8 +23,8 @@ import {
   operationGovernanceChange,
   operationVisibleTo,
 } from '../../governance/gatekeepers/index.js';
-import type { GateLinkPolicyView } from '../gates/index.js';
-import { operationPlatformStatus, readGateLinkPolicy } from '../gates/index.js';
+import type { GatekeeperPlatformPolicy } from '../gates/index.js';
+import { operationPlatformStatus, readGatekeeperPlatformPolicy } from '../gates/index.js';
 import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
 import { resolveGateTarget } from './gate-target.js';
 
@@ -98,12 +98,12 @@ export async function describeGateOperations(gate: GateTarget) {
  *  — `null` for a gate the workspace connected itself (no platform link). Read projections hide a
  *  disabled Operation via `operationPlatformStatus` (application/gates/index.ts) below, the same
  *  shared predicate `request_action` / `observe_operation` refuse it with per call. */
-async function gateLinkPolicyFor(
+async function platformPolicyFor(
   client: PoolClient,
   workspaceId: string,
   gatekeeperId: string,
-): Promise<GateLinkPolicyView | null> {
-  return readGateLinkPolicy(client, workspaceId, gatekeeperId);
+): Promise<GatekeeperPlatformPolicy | null> {
+  return readGatekeeperPlatformPolicy(client, workspaceId, gatekeeperId);
 }
 
 export async function probeGatekeeperHealth(gate: GateTarget): Promise<GatekeeperHealth> {
@@ -288,10 +288,11 @@ export const getGatekeeperHandler: CapabilityHandler = async (client, workspaceI
   const healthProbe = probeGatekeeperHealth(await resolveGateTarget(client, workspaceId, record));
   const allOperations = await listOperations(client, workspaceId, { gatekeeperId });
   const revisionChanges = revisionChangesForDrafts(allOperations);
-  const gateLink = await gateLinkPolicyFor(client, workspaceId, gatekeeperId);
+  const platformPolicy = await platformPolicyFor(client, workspaceId, gatekeeperId);
   const health = await healthProbe;
   const operations = allOperations.filter(
-    (op) => operationVisibleTo(viewer, op) && !operationPlatformStatus(gateLink, op.name).disabled,
+    (op) =>
+      operationVisibleTo(viewer, op) && !operationPlatformStatus(platformPolicy, op.name).disabled,
   );
 
   const summary = toWireGatekeeperSummary(
@@ -327,7 +328,7 @@ export const listOperationsHandler: CapabilityHandler = async (
   const records = await listOperations(client, workspaceId, { gatekeeperId });
   const revisionChanges = revisionChangesForDrafts(records);
   // P-B1: hide connector-disabled Operations, per gatekeeper (one deny-list read each).
-  const linksByGatekeeper = new Map<string, GateLinkPolicyView | null>();
+  const linksByGatekeeper = new Map<string, GatekeeperPlatformPolicy | null>();
   const visible = [];
   for (const record of records) {
     if (!matchesQuery(record.name, q)) continue;
@@ -335,7 +336,7 @@ export const listOperationsHandler: CapabilityHandler = async (
     if (!operationVisibleTo(viewer, record)) continue;
     let link = linksByGatekeeper.get(record.gatekeeperId);
     if (link === undefined) {
-      link = await gateLinkPolicyFor(client, workspaceId, record.gatekeeperId);
+      link = await platformPolicyFor(client, workspaceId, record.gatekeeperId);
       linksByGatekeeper.set(record.gatekeeperId, link);
     }
     if (!operationPlatformStatus(link, record.name).disabled) visible.push(record);

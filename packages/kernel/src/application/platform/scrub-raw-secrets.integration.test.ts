@@ -11,10 +11,11 @@ import { RAW_SECRET_SCRUB_AUDIT_ACTION, scrubRawSecrets } from './scrub-raw-secr
  * application/platform/scrub-raw-secrets.integration.test: DB-gated (real Postgres; auto-skip
  * without DATABASE_URL). Seeds, in a workspace of its own, the rows STATUS legacy 183–187 left
  * behind — an agent Turn's report, an agent's Decision, a stored tool-call record, a Task input, a
- * connection target, a Gatekeeper endpoint, two audit rows — plus their clean or out-of-scope
- * neighbours, then: a dry run writes nothing; an executing run rewrites exactly the three copies
- * people read, leaves the counted rows (and every neighbour) as they were, and writes one
- * unattributed audit row that names no value; a second run rewrites nothing of this workspace.
+ * connection target, a Gatekeeper endpoint and the platform's copy of it (core 0045's
+ * `workspace_self_connections`), two audit rows — plus their clean or out-of-scope neighbours,
+ * then: a dry run writes nothing; an executing run rewrites exactly the four copies people read,
+ * leaves the counted rows (and every neighbour) as they were, and writes one unattributed audit row
+ * that names no value; a second run rewrites nothing of this workspace.
  *
  * The scrub reads the whole database, and other test files run alongside: assertions are about the
  * seeded rows, and the counts only bound from below.
@@ -48,6 +49,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       task: randomUUID(),
       connectionRequest: randomUUID(),
       gatekeeper: randomUUID(),
+      cleanGatekeeper: randomUUID(),
       observed: randomUUID(),
       fact: randomUUID(),
       completeAudit: randomUUID(),
@@ -156,6 +158,13 @@ describe.runIf(DATABASE_URL !== undefined)(
               ids.fact,
             ])
           )?.properties,
+          selfConnections: (
+            await client.query(
+              `select gatekeeper_object_id, target, endpoint from workspace_self_connections
+                where workspace_id = $1 order by gatekeeper_object_id`,
+              [workspaceId],
+            )
+          ).rows,
           gates: (
             await client.query(
               'select gate_id, target, definition from gate_instances where gate_id = any($1::text[]) order by gate_id',
@@ -249,6 +258,34 @@ describe.runIf(DATABASE_URL !== undefined)(
               target: 'grafana',
               endpoint: `https://gate.example.invalid/?token=${FAKE}`,
             }),
+          ],
+        );
+        // Core 0045's copy of that Gatekeeper's address (#620 review M2) — as a backfill on a database
+        // that never ran this scrub would have left it without its own redaction — and a clean one.
+        await client.query(
+          `insert into objects (workspace_id, id, object_type, properties) values ($1, $2, 'Gatekeeper', $3::jsonb)`,
+          [
+            workspaceId,
+            ids.cleanGatekeeper,
+            JSON.stringify({
+              transportKind: 'ssh',
+              target: 'ssh://deploy@db-1.example.invalid',
+              endpoint: 'https://gate-db-1.example.invalid',
+            }),
+          ],
+        );
+        await client.query(
+          `insert into workspace_self_connections
+             (workspace_id, gatekeeper_object_id, connector, target, endpoint) values
+             ($1, $2, 'http', $3, $4), ($1, $5, 'ssh', $6, $7)`,
+          [
+            workspaceId,
+            ids.gatekeeper,
+            `https://ops:${FAKE}@grafana.example.invalid/d?token=${FAKE}`,
+            `https://gate.example.invalid/?token=${FAKE}`,
+            ids.cleanGatekeeper,
+            'ssh://deploy@db-1.example.invalid',
+            'https://gate-db-1.example.invalid',
           ],
         );
         // Review of #549 (B2): what the graph store now scrubs, written raw before it did — a gate's
@@ -356,7 +393,12 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(result.executed).toBe(false);
       expect(result.auditRecordId).toBeNull();
       expect(await snapshot()).toEqual(before);
-      for (const name of ['turnReports', 'decisions', 'toolCallRecords'] as const) {
+      for (const name of [
+        'turnReports',
+        'decisions',
+        'toolCallRecords',
+        'selfConnectionAddresses',
+      ] as const) {
         expect(result.categories[name].affected).toBeGreaterThanOrEqual(1);
         expect(result.categories[name].examples).toEqual([]);
       }
@@ -393,7 +435,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(result.categories.auditResults.affected).toBeGreaterThanOrEqual(2);
     });
 
-    it('--yes rewrites the three copies people read, counts the rest, and audits counts only', async () => {
+    it('--yes rewrites the four copies people read, counts the rest, and audits counts only', async () => {
       const result = await scrubRawSecrets(pool, { confirm: true, batchSize: 3 });
       expect(result.executed).toBe(true);
       const after = await snapshot();
@@ -415,6 +457,21 @@ describe.runIf(DATABASE_URL !== undefined)(
         redactedValues: 3,
       });
       expect(after.cleanTool).toEqual(cleanToolContent);
+      // The platform's copy loses what could carry a credential; the Gatekeeper keeps its own.
+      expect(after.selfConnections).toEqual(
+        [
+          {
+            gatekeeper_object_id: ids.gatekeeper,
+            target: 'https://grafana.example.invalid/d',
+            endpoint: 'https://gate.example.invalid/',
+          },
+          {
+            gatekeeper_object_id: ids.cleanGatekeeper,
+            target: 'ssh://deploy@db-1.example.invalid',
+            endpoint: 'https://gate-db-1.example.invalid',
+          },
+        ].sort((a, b) => (a.gatekeeper_object_id < b.gatekeeper_object_id ? -1 : 1)),
+      );
 
       // Counted, never rewritten.
       expect(after.task).toEqual(taskInput);

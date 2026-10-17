@@ -288,18 +288,14 @@ export interface ImportManifestInput {
    * writing anything (atomic — no partial import).
    *
    * Deliberately **opt-in, not the default**, even though the audit's own wording reads as an
-   * unconditional rule: `importManifest` is the single choke point every registration path shares
-   * — the CLI operator path (`cli/bootstrap.ts`'s `registerGatekeeperFromCli`, which sets this),
-   * the end-user capability path (`governance/connections/service.ts`'s `completeConnection`, fed
-   * by a live OpenAPI/MCP/SSH system a real user is connecting), and the platform-preset path
-   * (`application/gateway/gate-instance-handlers.ts`'s `enable_gate_instance`, fed by whatever a
-   * running gate — including this repo's own CI fixture gate — announced). A hand-curated manifest
-   * (this repo's own `gatekeepers/<system>/manifest.json` packages, registered through the CLI
-   * path) is exactly the case an operator can be expected to have written real descriptions for; a
-   * dynamically-imported OpenAPI/MCP/announced manifest is not always under this platform's
-   * control, and rejecting a real user's legitimate system over a missing description string would
-   * turn a P2 documentation debt into a P0 "cannot connect anything" regression. See this
-   * repository's own PR body for the CI fixtures this scoping was verified against.
+   * unconditional rule: a dynamically-imported OpenAPI/MCP/announced manifest is not always under
+   * this platform's control, and rejecting a real user's legitimate system over a missing
+   * description string would turn a P2 documentation debt into a P0 "cannot connect anything"
+   * regression. The one caller that set it — the operator CLI `register-gatekeeper`, for this
+   * repo's hand-curated `gatekeepers/<system>/manifest.json` packages — was removed by P0b (S10 W2):
+   * every manifest now comes in through the landing (`application/gates/landing.ts`), from a gate's
+   * announcement or a live connection, and none sets it. Kept as the check a catalog-side
+   * requirement would reuse (P1's change plan), not as a live rule.
    */
   readonly requireDescription?: boolean;
 }
@@ -1228,7 +1224,7 @@ export async function publishManifest(
 
 /**
  * Publishes the `'import'`-origin drafts a gate's manifest was just imported as (`importManifest`'s
- * `imported`) — `enable_gate_instance` and the CLI's `register-gatekeeper --publish`. A draft
+ * `imported`) — the landing's catalog origin (`enable_gate_instance`, application/gates/landing.ts). A draft
  * declaring a param the gate sets itself stays a draft and is reported (legacy J), like
  * `publishManifest`.
  */
@@ -1646,12 +1642,14 @@ export interface RefreshOperationGovernanceInput {
    *  published row are still aligned in place. */
   readonly droppedByGate?: ReadonlySet<string>;
   /** Where `announcedOperations` comes from (`AnnouncedManifestSource`); `'platform'` when
-   *  omitted. Legacy 214, `'gate'` (the self-connected resync): a selected announced Operation this
-   *  Gatekeeper has no row for at all is imported as an `'import'`-origin draft (`importManifest`,
-   *  the same write `create_connection` makes) instead of being reported `unchanged` — connecting
-   *  again would register a second Gatekeeper; and a governance change that loosens anything is
-   *  carried by a revision draft, never written in place (`governanceChangeNeedsRevision`). A
-   *  platform gate's align leaves new names to the catalog enable, as before. */
+   *  omitted. Either way, a selected announced Operation this Gatekeeper has no row for at all is
+   *  imported as an `'import'`-origin draft (`importManifest`) instead of being reported
+   *  `unchanged` — enabling or connecting again would register a second Gatekeeper (P0b: one per
+   *  address), so this is the only way a name the gate gained reaches the workspace. A draft, never
+   *  published here: a new name is new authority, which takes an owner's publish (legacy 214 for a
+   *  self-connected gate; P0b closes the same gap for a linked platform gate, #612 P2). Legacy 214,
+   *  `'gate'`: a governance change that loosens anything is carried by a revision draft, never
+   *  written in place (`governanceChangeNeedsRevision`). */
   readonly source?: AnnouncedManifestSource;
 }
 
@@ -1707,9 +1705,10 @@ export interface OperationRevisionDraft {
   /** `true` when an existing `'import'`-origin draft was rewritten in place (same version),
    *  `false` when a new revision was opened at `version + 1`. */
   readonly replaced: boolean;
-  /** Legacy 214 (`source: 'gate'`): a name the gate describes that this Gatekeeper had no row for
-   *  — imported as a first draft, not a revision of anything. */
-  readonly newOnGate?: true;
+  /** A name the announced manifest carries that this Gatekeeper had no row for — imported as a
+   *  first draft, not a revision of anything (legacy 214 for `source: 'gate'`; P0b for
+   *  `'platform'`). */
+  readonly newName?: true;
   /** Review #493 on #612 (M1): the revision carries a governance change that loosens something
    *  (`governanceChangeNeedsRevision`), held back from the published row until it is published.
    *  `definitionChanged`: the gate also runs another definition (it refuses calls until then). */
@@ -1828,8 +1827,8 @@ async function rewriteImportDraft(
   };
 }
 
-/** Legacy 214 (`source: 'gate'`): the one new name as `importManifest` writes it — the next version
- *  above every row (legacy 278), the name rule for a new name (legacy 232), origin `import`. */
+/** A name new to this Gatekeeper, as `importManifest` writes it — the next version above every
+ *  row (legacy 278), the name rule for a new name (legacy 232), origin `import`. */
 async function importNewOperation(
   client: PoolClient,
   workspaceId: string,
@@ -1849,7 +1848,7 @@ async function importNewOperation(
     name: written.name,
     version: written.version,
     replaced: false,
-    newOnGate: true,
+    newName: true,
   };
 }
 
@@ -1878,10 +1877,11 @@ export async function refreshOperationGovernance(
     );
     const dropped = input.droppedByGate?.has(operation.name) ?? false;
     if (existingRecord === null) {
-      const imported =
-        source === 'gate' && !dropped
-          ? await importNewOperation(client, workspaceId, input, operation)
-          : null;
+      // A name the gate no longer runs (held until the platform adopts its new manifest) is not
+      // imported: adopting removes it, so publishing the draft would bring no call.
+      const imported = dropped
+        ? null
+        : await importNewOperation(client, workspaceId, input, operation);
       if (imported) revisionDrafts.push(imported);
       else unchanged.push(operation.name);
       continue;

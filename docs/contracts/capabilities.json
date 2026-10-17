@@ -10837,6 +10837,14 @@
               "packaged": {
                 "type": "boolean"
               },
+              "selfConnectionCount": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "suspendedSelfConnectionCount": {
+                "minimum": 0,
+                "type": "integer"
+              },
               "updatedAt": {
                 "type": [
                   "string",
@@ -10852,6 +10860,8 @@
               "disabledOperations",
               "operationCount",
               "instanceCount",
+              "selfConnectionCount",
+              "suspendedSelfConnectionCount",
               "updatedAt"
             ],
             "type": "object"
@@ -13721,6 +13731,120 @@
               "labels",
               "allowed",
               "activatableRef"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": "string"
+        },
+        "truncated": {
+          "const": true,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
+    "channel": "human",
+    "group": "platform",
+    "mode": "observe",
+    "name": "list_self_connections",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "connector": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        "workspaceId": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "catalogGateId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "connectedAt": {
+                "type": "string"
+              },
+              "connectedByName": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "connector": {
+                "type": "string"
+              },
+              "endpoint": {
+                "type": "string"
+              },
+              "gatekeeperId": {
+                "type": "string"
+              },
+              "suspendedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "suspendedByLogin": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "suspensionReason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "target": {
+                "type": "string"
+              },
+              "workspaceId": {
+                "type": "string"
+              },
+              "workspaceName": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "workspaceId",
+              "workspaceName",
+              "gatekeeperId",
+              "connector",
+              "target",
+              "endpoint",
+              "connectedByName",
+              "connectedAt",
+              "suspendedAt",
+              "suspendedByLogin",
+              "suspensionReason",
+              "catalogGateId"
             ],
             "type": "object"
           },
@@ -21212,6 +21336,104 @@
   },
   {
     "channel": "human",
+    "group": "platform",
+    "mode": "write",
+    "name": "resume_self_connection",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "gatekeeperId": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "workspaceId": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "gatekeeperId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "catalogGateId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "connectedAt": {
+          "type": "string"
+        },
+        "connectedByName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "connector": {
+          "type": "string"
+        },
+        "endpoint": {
+          "type": "string"
+        },
+        "gatekeeperId": {
+          "type": "string"
+        },
+        "suspendedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "suspendedByLogin": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "suspensionReason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target": {
+          "type": "string"
+        },
+        "workspaceId": {
+          "type": "string"
+        },
+        "workspaceName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "workspaceName",
+        "gatekeeperId",
+        "connector",
+        "target",
+        "endpoint",
+        "connectedByName",
+        "connectedAt",
+        "suspendedAt",
+        "suspendedByLogin",
+        "suspensionReason",
+        "catalogGateId"
+      ],
+      "type": "object"
+    },
+    "sideEffects": true
+  },
+  {
+    "channel": "human",
     "group": "governance",
     "minRole": "owner",
     "mode": "execute",
@@ -22796,6 +23018,14 @@
         "packaged": {
           "type": "boolean"
         },
+        "selfConnectionCount": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "suspendedSelfConnectionCount": {
+          "minimum": 0,
+          "type": "integer"
+        },
         "updatedAt": {
           "type": [
             "string",
@@ -22811,6 +23041,8 @@
         "disabledOperations",
         "operationCount",
         "instanceCount",
+        "selfConnectionCount",
+        "suspendedSelfConnectionCount",
         "updatedAt"
       ],
       "type": "object"
@@ -24550,6 +24782,109 @@
         "observationId",
         "lastObservationId",
         "lastObservedAt"
+      ],
+      "type": "object"
+    },
+    "sideEffects": true
+  },
+  {
+    "channel": "human",
+    "group": "platform",
+    "mode": "write",
+    "name": "suspend_self_connection",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "gatekeeperId": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "reason": {
+          "maxLength": 500,
+          "minLength": 1,
+          "type": "string"
+        },
+        "workspaceId": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "gatekeeperId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "catalogGateId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "connectedAt": {
+          "type": "string"
+        },
+        "connectedByName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "connector": {
+          "type": "string"
+        },
+        "endpoint": {
+          "type": "string"
+        },
+        "gatekeeperId": {
+          "type": "string"
+        },
+        "suspendedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "suspendedByLogin": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "suspensionReason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target": {
+          "type": "string"
+        },
+        "workspaceId": {
+          "type": "string"
+        },
+        "workspaceName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspaceId",
+        "workspaceName",
+        "gatekeeperId",
+        "connector",
+        "target",
+        "endpoint",
+        "connectedByName",
+        "connectedAt",
+        "suspendedAt",
+        "suspendedByLogin",
+        "suspensionReason",
+        "catalogGateId"
       ],
       "type": "object"
     },
