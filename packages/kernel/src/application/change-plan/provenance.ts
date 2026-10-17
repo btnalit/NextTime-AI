@@ -1,7 +1,7 @@
 import type { ChangeSegmentStatus } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { deriveOntologyPackId, loadPublishedOntologyHead } from '../../substrate/ontology/index.js';
-import type { ChangeSource } from './engine.js';
+import type { ChangeChannel, ChangeSource } from './engine.js';
 
 /**
  * application/change-plan/provenance: "which ChangeItem put this here" (S11 plan §3.2 `Object
@@ -25,6 +25,8 @@ export type OntologyProvenance =
       readonly segmentStatus: ChangeSegmentStatus;
       readonly itemId: string;
       readonly source: ChangeSource;
+      /** `platform`: applied on the workspace's behalf, not by `appliedBy` themselves. */
+      readonly channel: ChangeChannel;
       readonly appliedBy: string;
       readonly appliedAt: Date;
     };
@@ -41,6 +43,7 @@ export async function loadOntologyProvenance(
     item_id: string;
     segment_id: string;
     status: ChangeSegmentStatus;
+    channel: ChangeChannel;
     source_kind: 'pack';
     source_name: string;
     source_version: string;
@@ -48,7 +51,7 @@ export async function loadOntologyProvenance(
     applied_by: string;
     applied_at: Date;
   }>(
-    `select i.id as item_id, s.id as segment_id, s.status, s.source_kind, s.source_name,
+    `select i.id as item_id, s.id as segment_id, s.status, s.channel, s.source_kind, s.source_name,
             s.source_version, s.source_digest, s.applied_by, s.applied_at
        from change_items i
        join change_segments s on s.workspace_id = i.workspace_id and s.id = i.segment_id
@@ -71,6 +74,7 @@ export async function loadOntologyProvenance(
       version: row.source_version,
       digest: row.source_digest,
     },
+    channel: row.channel,
     appliedBy: row.applied_by,
     appliedAt: row.applied_at,
   };

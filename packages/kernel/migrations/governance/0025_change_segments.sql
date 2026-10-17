@@ -1,6 +1,6 @@
--- module: governance, version: 0024
+-- module: governance, version: 0025
 --
--- 0024_change_segments (S11 P1-A: docs/goal-orchestration-and-admin-agent-plan-2026-10-16.md §3.1,
+-- 0025_change_segments (S11 P1-A: docs/goal-orchestration-and-admin-agent-plan-2026-10-16.md §3.1,
 -- §3.2, §3.4, §5.4 and I-A4 / I-A7 / I-A8). The persisted record of a ChangePlan's workspace
 -- segment: what was applied, from which source, by whom, and each item's before / after. Owned by
 -- `application/change-plan`.
@@ -17,7 +17,11 @@
 --
 -- Relations (§3.2), real foreign keys with `workspace_id` in them:
 --   * ChangeSegment `proposed_by` / `applied_by` / `rolled_back_by` Principal. The proposer's kind
---     (person or agent, I-A7) is the Principal's own `kind`, not copied here.
+--     (person or agent, I-A7) is the Principal's own `kind`, not copied here. `channel` says how the
+--     segment was applied: `human` — the applier's own capability call; `platform` — the platform
+--     applied it on the workspace's behalf (workspace creation's default modules), and
+--     `proposed_by` / `applied_by` then name the workspace's first owner, who did nothing
+--     themselves (the one acting is whoever made the `create_workspace` call).
 --   * ChangeItem `belongs_to` ChangeSegment (ordered by `ordinal`); `confirmed_by` Principal for an
 --     `authority_widening` item (I-A4).
 --   * `Object changed_by ChangeItem` is the item's `target` (what it changed, e.g. an ontology
@@ -26,8 +30,13 @@
 --     tables of the objects themselves.
 --
 -- Guards (`change_segments_guard`, `change_items_guard`):
---   * a segment is created `applied`; its source, reviewed digest, proposer and applier never
---     change; it moves along an edge only; `rolled_back` freezes it (`updated_at` aside);
+--   * a segment is created `applied`; its channel, source, reviewed digest, proposer and applier
+--     never change; it moves along an edge only; `rolled_back` freezes it (`updated_at` aside);
+--   * its times are the database's, never the writer's: `created_at` / `applied_at` are the
+--     applying transaction's, `verified_at` the transaction that recorded the verification,
+--     `rolled_back_at` the one that rolled it back, `updated_at` the last write's — a writer's value
+--     is replaced, and `verified_at` never moves without a new result. An item's `created_at`
+--     likewise;
 --   * items are written by the transaction that applies their segment — never added to, changed
 --     or removed from an applied segment afterwards (the application role has no UPDATE or DELETE
 --     on them either). A widening item is confirmed by the person applying the segment: in P1 the
@@ -49,6 +58,9 @@ create table if not exists change_segments (
   workspace_id uuid not null,
   id uuid not null default gen_random_uuid(),
   plan_id uuid not null,
+  -- How the segment was applied (see the header): never changes, so a reader can always tell a
+  -- person's change from one the platform made on the workspace's behalf (I-A7).
+  channel text not null check (channel in ('human', 'platform')),
   -- Where the intent came from (§5.4 "一个核心，两种来源"): P1 has packs only — a module is a pack
   -- with one ontology component (S10 §6.4). `source_digest` names the content the plan was built
   -- from; `reviewed_digest` the dry run the applier saw, recomputed and compared in the applying
@@ -195,15 +207,22 @@ begin
        or new.rolled_back_by is not null or new.rolled_back_at is not null then
       raise exception 'change_segments: a new segment has not been verified or rolled back yet';
     end if;
+    -- The applying transaction's time, whatever the writer passed (the item guard below relies on
+    -- `created_at = now()` to tell the applying transaction from a later one).
+    new.created_at := now();
+    new.applied_at := now();
+    new.updated_at := now();
     return new;
   end if;
 
   changed := change_changed_columns(to_jsonb(new), to_jsonb(old), array[
     'status', 'verified_at', 'verification', 'rolled_back_by', 'rolled_back_at', 'updated_at']);
   if changed is not null then
-    raise exception 'change_segments: what a segment applied, from which source, reviewed and applied by whom, never changes (%)',
+    raise exception 'change_segments: what a segment applied, from which source, how, reviewed and applied by whom, never changes (%)',
       changed;
   end if;
+
+  new.updated_at := now();
 
   if old.status = 'rolled_back' then
     changed := change_changed_columns(to_jsonb(new), to_jsonb(old), array['updated_at']);
@@ -218,10 +237,17 @@ begin
     raise exception 'change_segments: illegal transition % -> %', old.status, new.status;
   end if;
 
-  -- A verification result is recorded with a verification run, which also stamps its time.
-  if new.verification is distinct from old.verification
-     and new.verified_at is not distinct from old.verified_at then
-    raise exception 'change_segments: a verification result comes with the time of its run';
+  -- A verification result is recorded by a verification run, stamped with that transaction's time;
+  -- the time never moves on its own.
+  if new.verification is distinct from old.verification then
+    new.verified_at := now();
+  elsif new.verified_at is distinct from old.verified_at then
+    raise exception 'change_segments: verified_at is the time of a verification run, stamped with its result';
+  end if;
+
+  -- Rolled back by this transaction, at its time.
+  if new.status = 'rolled_back' then
+    new.rolled_back_at := now();
   end if;
 
   return new;
@@ -259,6 +285,7 @@ begin
   if new.confirmed_by is not null and new.confirmed_by <> seg_applied_by then
     raise exception 'change_items: a widening item is confirmed by the person applying its segment (I-A4)';
   end if;
+  new.created_at := now();
   return new;
 end;
 $$;

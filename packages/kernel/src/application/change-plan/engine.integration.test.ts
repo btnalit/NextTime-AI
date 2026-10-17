@@ -216,6 +216,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
         expect(segmentRow).toMatchObject({
           status: 'applied',
+          channel: 'human',
           source_kind: 'pack',
           source_name: 'fam-a',
           source_version: '1',
@@ -424,6 +425,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           segmentStatus: 'applied',
           itemId: applied.items[0]?.id,
           source: input.source,
+          channel: 'human',
           appliedBy: ws.ownerId,
         });
 
@@ -553,9 +555,10 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(state.status).toBe('up_to_date');
         const [segmentRow] = await rows(
           ws,
-          'select id, source_kind, source_name, source_version from change_segments where workspace_id = $1',
+          'select id, channel, source_kind, source_name, source_version from change_segments where workspace_id = $1',
         );
         expect(segmentRow).toMatchObject({
+          channel: 'human',
           source_kind: 'pack',
           source_name: 'plain-mod',
           source_version: '1',
@@ -626,6 +629,16 @@ describe.runIf(DATABASE_URL !== undefined)(
             }),
           }),
         ]);
+        // The segment says the platform applied it on the workspace's behalf: the owner named as
+        // its applier did nothing themselves (I-A7).
+        expect(
+          await rows(ws, 'select channel, applied_by from change_segments where workspace_id = $1'),
+        ).toEqual([{ channel: 'platform', applied_by: outcome.ownerPrincipalId }]);
+        expect(
+          await inWorkspace(ws, (client) =>
+            loadOntologyProvenance(client, ws.workspaceId, 'plain-mod'),
+          ),
+        ).toMatchObject({ status: 'recorded', channel: 'platform' });
       });
     });
   },

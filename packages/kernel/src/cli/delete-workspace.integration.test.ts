@@ -79,7 +79,7 @@ describe.runIf(DATABASE_URL !== undefined)('deleteWorkspace (integration, real P
     before('step_runs', 'plan_revisions');
     before('tasks', 'step_runs');
     before('action_requests', 'step_runs');
-    // S11 P1 (migrations/governance/0024).
+    // S11 P1 (migrations/governance/0025).
     before('change_items', 'change_segments');
     before('change_segments', 'principals');
   });

@@ -15,7 +15,7 @@ import {
 
 /**
  * application/change-plan/engine: the ChangePlan core's workspace segment (S11 plan §3.1–§3.4,
- * §5.4; migrations/governance/0024_change_segments.sql). One core for every source of change — a
+ * §5.4; migrations/governance/0025_change_segments.sql). One core for every source of change — a
  * pack (a module is a pack with one ontology component) today, the platform admin agent's
  * proposal later (AA3).
  *
@@ -36,6 +36,9 @@ import {
  */
 
 export type ChangeItemIntent = OntologyVersionIntent;
+
+/** How a segment was applied (see `ApplyWorkspaceSegmentInput.channel`). */
+export type ChangeChannel = 'human' | 'platform';
 
 /** Where the intent came from (§5.4 "一个核心，两种来源"). */
 export interface ChangeSource {
@@ -211,7 +214,11 @@ export interface ApplyWorkspaceSegmentInput extends WorkspaceSegmentInput {
   readonly proposedBy: string;
   /** The person applying, in this workspace; also the confirmer of every widening item. */
   readonly appliedBy: string;
-  readonly channel: 'human' | 'platform';
+  /** Recorded on the segment (`change_segments.channel`): `human` — the applier's own capability
+   *  call; `platform` — the platform applying on the workspace's behalf (workspace creation's
+   *  default modules), when `proposedBy` / `appliedBy` name the workspace's first owner, who did
+   *  nothing themselves. */
+  readonly channel: ChangeChannel;
   /** The ordinals of the authority-widening items the applier confirmed, one by one (I-A4). */
   readonly confirmedOrdinals: readonly number[];
 }
@@ -245,13 +252,14 @@ export async function applyWorkspaceSegment(
   const planId = randomUUID();
   const segment = await client.query<{ id: string }>(
     `insert into change_segments
-       (workspace_id, plan_id, source_kind, source_name, source_version, source_digest,
+       (workspace_id, plan_id, channel, source_kind, source_name, source_version, source_digest,
         reviewed_digest, proposed_by, applied_by)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      returning id`,
     [
       workspaceId,
       planId,
+      input.channel,
       plan.source.kind,
       plan.source.name,
       plan.source.version,

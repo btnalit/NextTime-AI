@@ -1,6 +1,6 @@
 /**
  * application/change-plan: the ChangePlan core (docs/goal-orchestration-and-admin-agent-plan-
- * 2026-10-16.md §3.1–§3.4, §5.4; S11 P1). Owns `migrations/governance/0024_change_segments.sql`
+ * 2026-10-16.md §3.1–§3.4, §5.4; S11 P1). Owns `migrations/governance/0025_change_segments.sql`
  * (`change_segments`, `change_items`) and exposes only this interface.
  *
  * P1-A (this cut): workspace segments with `ontology_version` items — plan (dry run, whitelist
@@ -31,6 +31,7 @@ export {
   type ApplyWorkspaceSegmentInput,
   type AppliedChangeItem,
   type AppliedWorkspaceSegment,
+  type ChangeChannel,
   type ChangeItemIntent,
   type ChangeSource,
   type PlannedChangeItem,

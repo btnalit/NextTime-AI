@@ -10,8 +10,9 @@ import type {
  * application/change-plan/classify: the authority-widening classifier (S11 plan §5.4, I-A4). A
  * **whitelist**: every field of an item is compared, before against after, and a change passes as
  * `not_widening` only where a rule below proves it cannot widen authority — let an action run with
- * less review, send a credential somewhere new, or put new text in front of a model. Anything else
- * is `authority_widening`, including a field no rule knows (`unrecognized`), so a field added to a
+ * less review, send a credential somewhere new, or put new text into a model's prompt (a tool
+ * result an agent asked for, such as `get_type`, is not that). Anything else is
+ * `authority_widening`, including a field no rule knows (`unrecognized`), so a field added to a
  * schema later is widening until someone writes its rule. Nothing here trusts how a proposer
  * labelled its own change.
  *
