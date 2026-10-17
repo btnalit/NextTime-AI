@@ -193,6 +193,27 @@ describe('UserDetailPanel', () => {
     expect(screen.getByTestId('user-self-no-disable').textContent).toContain('另一位管理员');
   });
 
+  it('legacy 353: the only owner of a workspace is not offered 停用 — the kernel refuses last_owner', async () => {
+    const http = scriptedHttp({
+      list_workspaces: () => ({
+        items: [
+          {
+            id: 'ws-1',
+            name: 'Acme',
+            owners: [{ userId: 'u-1', login: 'alice', displayName: 'Alice', principalId: 'p-1' }],
+          },
+          { id: 'ws-2', name: 'Beta', owners: [] },
+        ],
+      }),
+    });
+    renderPanel(http, user());
+    const note = await screen.findByTestId('user-sole-owner-no-disable');
+    expect(note.textContent).toContain('「Acme」唯一的所有者');
+    expect(note.textContent).not.toContain('Beta');
+    expect(note.textContent).toContain('成为这个工作区的所有者');
+    expect(screen.queryByRole('button', { name: '停用' })).toBeNull();
+  });
+
   it('disable: a confirm step, then set_user_status; enable acts directly', async () => {
     const row = user();
     const http = scriptedHttp({
@@ -204,7 +225,7 @@ describe('UserDetailPanel', () => {
     const { onChanged, unmount } = renderPanel(http, row);
     fireEvent.click(screen.getByRole('button', { name: '停用' }));
     expect(screen.getByTestId('user-disable-confirm')).toBeTruthy();
-    expect(http.calls).toHaveLength(0);
+    expect(http.calls.filter((c) => c.name === 'set_user_status')).toHaveLength(0);
     fireEvent.click(screen.getByRole('button', { name: '取消' }));
     expect(screen.queryByTestId('user-disable-confirm')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: '停用' }));

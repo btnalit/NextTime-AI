@@ -78,6 +78,33 @@ function renderPanel(http: CapabilityCaller, row: UserWire = user()) {
 }
 
 describe('UserMembershipsPanel', () => {
+  it('legacy 353: the only owner of a workspace is shown as such, with no role change or removal the kernel would refuse', async () => {
+    const owner = { userId: 'u-1', login: 'alice', displayName: 'Alice', principalId: 'p-1' };
+    const http = scriptedHttp({
+      list_workspaces: () => ({ items: [workspace({ owners: [owner] })] }),
+    });
+    renderPanel(
+      http,
+      user({
+        memberships: [
+          {
+            workspaceId: 'ws-1',
+            workspaceName: 'Acme',
+            workspaceStatus: 'active',
+            principalId: 'p-1',
+            role: 'owner',
+            disabled: false,
+          },
+        ],
+      }),
+    );
+    const row = screen.getByTestId('user-membership-row');
+    const note = await within(row).findByTestId('user-membership-sole-owner');
+    expect(note.textContent).toContain('「Acme」唯一的所有者');
+    expect(within(row).queryByRole('button', { name: '移出' })).toBeNull();
+    expect(within(row).queryByRole('combobox')).toBeNull();
+  });
+
   it('offers every active workspace the user is not in yet, and adds the picked one', async () => {
     const http = scriptedHttp({
       list_workspaces: () => ({

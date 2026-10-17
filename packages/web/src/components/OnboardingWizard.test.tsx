@@ -368,7 +368,8 @@ describe('OnboardingWizard', () => {
     // Proposed, not yet published: the confirm shows the change first.
     const confirm = await screen.findByTestId('wizard-review-reclassify-confirm');
     expect(http.calls.some((c) => c.name === 'publish_operation')).toBe(false);
-    expect(confirm.textContent).toContain('accept_s2_mcp_echo: 模式');
+    expect(within(confirm).getByTestId('confirm-target').textContent).toBe('accept_s2_mcp_echo');
+    expect(confirm.textContent).toContain('模式 观察 → 执行');
     expect(within(confirm).getByTestId('governance-diff-list-item').dataset.direction).toBe(
       'tightened',
     );

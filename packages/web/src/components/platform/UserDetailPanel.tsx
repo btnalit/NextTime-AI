@@ -9,6 +9,7 @@ import { envAdminTitle } from '../../lib/platform-errors.js';
 import { SavedNote } from '../../lib/saved-note.js';
 import { deriveUserStatus } from '../../lib/status-tone.js';
 import { sameDisplayName, useUserDirectoryTap } from '../../lib/users-directory.js';
+import { soleOwnedWorkspaces, useActiveWorkspaces } from '../../lib/users-workspace-picker.js';
 import { Confirm } from '../kit/confirm.js';
 import { StillNeeded } from '../kit/still-needed.js';
 import { Button } from '../ui/Button.js';
@@ -109,6 +110,9 @@ export function UserDetailPanel({
   const [resetError, setResetError] = useState<unknown | null>(null);
 
   const [confirmingDisable, setConfirmingDisable] = useState(false);
+  // Legacy 353 (#614), same class: disabling a workspace's only owner is refused (`last_owner`,
+  // `assertNotLastHumanOwnerAnywhere`) — said instead of offering it.
+  const soleOwned = soleOwnedWorkspaces(useActiveWorkspaces(http), user.id);
   const [changingStatus, setChangingStatus] = useState(false);
   const [statusError, setStatusError] = useState<unknown | null>(null);
 
@@ -441,6 +445,13 @@ export function UserDetailPanel({
             </Button>
           </div>
         </div>
+      ) : soleOwned.length > 0 ? (
+        <p className="text-3 text-small" data-testid="user-sole-owner-no-disable">
+          {t(
+            `这位用户是${soleOwned.map((ws) => `「${ws.name}」`).join('、')}唯一的所有者，不能停用；先让另一位用户成为${soleOwned.length === 1 ? '这个工作区' : '这些工作区'}的所有者。`,
+            `This user is the only owner of ${soleOwned.map((ws) => `“${ws.name}”`).join(', ')}, so they cannot be disabled — make another user an owner of ${soleOwned.length === 1 ? 'that workspace' : 'those workspaces'} first.`,
+          )}
+        </p>
       ) : isSelf ? (
         <p className="text-3 text-small" data-testid="user-self-no-disable">
           {t(

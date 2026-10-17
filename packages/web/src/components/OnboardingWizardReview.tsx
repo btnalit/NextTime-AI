@@ -390,7 +390,7 @@ function OperationReviewRow({
 
   const held = gateOwnedParams !== undefined && gateOwnedParams.length > 0;
   const changeItem = pendingChange ? { name: row.name, ...pendingChange } : null;
-  const consequences = changeItem ? governanceConsequences(changeItem, t) : [];
+  const consequences = changeItem ? governanceConsequences(changeItem, t, false) : [];
 
   return (
     <>
@@ -539,7 +539,7 @@ function OperationReviewRow({
                     'The classification decides whether this operation needs a person’s approval and a grant. Confirming publishes the new version in place of the one in effect.',
                   )}
                   target={actionKindTagText(row.name)}
-                  impact={changeItem ? [governanceChangeSummary(changeItem, t)] : []}
+                  impact={changeItem ? [governanceChangeSummary(changeItem, t, false)] : []}
                   confirmLabel={t('发布', 'Publish')}
                   danger={changeItem !== null && isLoosening(changeItem.direction)}
                   onConfirm={publish}

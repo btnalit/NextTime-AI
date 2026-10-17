@@ -19,6 +19,7 @@ import { GrantGateDrawer } from '../access/GrantGateDrawer.js';
 import { ConnectionSecretReveal } from '../connect/ConnectionSecretReveal.js';
 import { DefinitionMismatchNotice } from '../connect/DefinitionDrift.js';
 import { ManifestPublishResultNotice } from '../connect/GateOwnedParams.js';
+import { type FirstPublish, firstPublishConsequence } from '../connect/GovernanceChange.js';
 import { RefreshOperationGovernanceConfirm } from '../connect/RefreshOperationGovernanceConfirm.js';
 import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
@@ -97,6 +98,9 @@ export interface SystemAccessCardProps {
    *  ones held back for a gate-owned param (`lib/connections` `manifestPublishPlan`); defaults to
    *  every draft. */
   readonly publishableCount?: number;
+  /** Legacy 349: the first versions among them that write or are high impact — 「发布清单」
+   *  confirms these before it publishes, as the catalog's own Publish does. */
+  readonly firstPublishes?: readonly FirstPublish[];
   readonly canPublish: boolean;
   readonly onPublished: () => void;
   /** `workerDefinitionId -> name`, from the same baseline `execution_readiness` read this card's
@@ -300,6 +304,7 @@ export function SystemAccessCard({
   healthInfo,
   drafts,
   publishableCount,
+  firstPublishes = [],
   canPublish,
   onPublished,
   workerNames,
@@ -327,7 +332,10 @@ export function SystemAccessCard({
   // kernel with its own connection secret; the owner can issue a new one here — also how a gate
   // connected before per-connection secrets gets its first. Shown once, in the sheet below.
   const canRotateSecret = canManage && !healthInfo.linked;
-  const [rotateOpen, setRotateOpen] = useState(false);
+  // One confirm hangs off the ⋯ menu; which one is open — the secret rotation, or (legacy 349)
+  // 「发布清单」 when it would publish a first version that writes or is high impact.
+  const [menuConfirm, setMenuConfirm] = useState<'rotate' | 'publish' | null>(null);
+  const confirmsPublish = firstPublishes.length > 0;
   const [rotatedSecret, setRotatedSecret] = useState<string | null>(null);
 
   async function publish(): Promise<void> {
@@ -357,10 +365,10 @@ export function SystemAccessCard({
 
   function moreMenu() {
     return (
-      // `modal={false}` when the menu hands off to the rotation confirm (same reason as
+      // `modal={false}` when the menu hands off to a confirm (same reason as
       // graph/FactRow.tsx's menu: a modal menu keeps its outside-pointer lock while the next
       // surface opens).
-      <DropdownMenu modal={canRotateSecret ? false : undefined}>
+      <DropdownMenu modal={canRotateSecret || confirmsPublish ? false : undefined}>
         <DropdownMenuTrigger asChild>
           <Button
             variant="ghost"
@@ -378,7 +386,7 @@ export function SystemAccessCard({
           {canPublish ? (
             <DropdownMenuItem
               disabled={publishing || draftCount === 0}
-              onSelect={() => void publish()}
+              onSelect={() => (confirmsPublish ? setMenuConfirm('publish') : void publish())}
               data-testid="gatekeeper-publish-manifest"
             >
               {t('发布清单', 'Publish manifest')}
@@ -396,7 +404,7 @@ export function SystemAccessCard({
           ) : null}
           {canRotateSecret ? (
             <DropdownMenuItem
-              onSelect={() => setRotateOpen(true)}
+              onSelect={() => setMenuConfirm('rotate')}
               data-testid="gatekeeper-rotate-secret"
             >
               {t('重新签发连接密钥', 'Issue a new connection secret')}
@@ -478,12 +486,31 @@ export function SystemAccessCard({
             {t('授权', 'Grant')}
           </Button>
         ) : null}
-        {canRotateSecret ? (
+        {menuConfirm === 'publish' ? (
+          <Confirm
+            tier="medium"
+            open
+            onOpenChange={(open) => {
+              if (!open) setMenuConfirm(null);
+            }}
+            anchor={moreMenu()}
+            title={t('发布清单', 'Publish manifest')}
+            description={t(
+              `将发布 ${draftCount} 个 Operation。其中下面这些是第一次发布，会写入系统或影响高；发布后马上可以被调用，请先核对它们的分类。`,
+              `Publishes ${draftCount} operation(s). These are published for the first time and write to the system or are high impact; they can be called as soon as they are published — check how they are classified first.`,
+            )}
+            target={gate.name}
+            impact={firstPublishes.map((op) => firstPublishConsequence(op.name, op.fields, t))}
+            confirmLabel={t('发布', 'Publish')}
+            onConfirm={publish}
+            testId="gatekeeper-publish-manifest-confirm"
+          />
+        ) : canRotateSecret ? (
           <Confirm
             tier="medium"
             danger
-            open={rotateOpen}
-            onOpenChange={setRotateOpen}
+            open={menuConfirm === 'rotate'}
+            onOpenChange={(open) => setMenuConfirm(open ? 'rotate' : null)}
             anchor={moreMenu()}
             title={t('重新签发连接密钥', 'Issue a new connection secret')}
             target={gate.name}

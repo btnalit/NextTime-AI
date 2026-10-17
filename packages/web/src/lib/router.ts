@@ -49,6 +49,12 @@ export const CATALOG_TAB_VALUES = [
 ] as const;
 export type CatalogTab = (typeof CATALOG_TAB_VALUES)[number];
 
+/** 集成 Integrations' tabs. Legacy 380: the one shown is in the URL (`?tab=`), so a reload or a
+ *  shared link lands on it; the first one is the page's default and carries no query. A query, not
+ *  a path segment: `#/platform/integrations/<gateId>` already takes any segment as a gate id. */
+export const INTEGRATIONS_TAB_VALUES = ['connectors', 'instances', 'self', 'runtimes'] as const;
+export type IntegrationsTab = (typeof INTEGRATIONS_TAB_VALUES)[number];
+
 export type Route =
   | { readonly kind: 'login' }
   | { readonly kind: 'graph' }
@@ -220,6 +226,8 @@ export const hrefs = {
   platformUsers: () => '#/platform/users',
   platformWorkspaces: () => '#/platform/workspaces',
   platformIntegrations: () => '#/platform/integrations',
+  platformIntegrationsTab: (tab: IntegrationsTab) =>
+    tab === 'connectors' ? '#/platform/integrations' : `#/platform/integrations?tab=${tab}`,
   platformGateInstance: (gateId: string) => `#/platform/integrations/${encodeURIComponent(gateId)}`,
   platformModules: () => '#/platform/modules',
   platformModels: () => '#/platform/models',
@@ -244,6 +252,16 @@ export function readNewProviderPreset(hash: string): boolean {
   const query = hash.indexOf('?');
   if (query === -1) return false;
   return new URLSearchParams(hash.slice(query + 1)).get('new') === 'provider';
+}
+
+/** The 集成 tab `hrefs.platformIntegrationsTab` names, else `null` (the page's default). */
+export function readIntegrationsTab(hash: string): IntegrationsTab | null {
+  const query = hash.indexOf('?');
+  if (query === -1) return null;
+  const tab = new URLSearchParams(hash.slice(query + 1)).get('tab');
+  return (INTEGRATIONS_TAB_VALUES as readonly string[]).includes(tab ?? '')
+    ? (tab as IntegrationsTab)
+    : null;
 }
 
 /** The provider id `hrefs.platformModelsProvider` asks 模型与供应商 to open, else `null`. */

@@ -1250,15 +1250,59 @@ describe('RefreshOperationGovernanceConfirm', () => {
       renderResync(http);
       fireEvent.click(screen.getByTestId('resync-gk-1'));
       const confirm = await screen.findByTestId('resync-gk-1-confirm');
-      expect(confirm.textContent).toContain('就地收紧 stock.adjust 的治理字段');
-      expect(confirm.textContent).not.toContain('门放宽的');
-      expect(confirm.textContent).not.toContain('stock.reserve');
-      expect(confirm.textContent).not.toContain('stock.recount');
-      expect(confirm.textContent).not.toContain('修订');
+      // Legacy 391 (UX acceptance of #640): the two left out are named once, as not written.
+      const unwritten = within(confirm).getByTestId('resync-gk-1-confirm-deprecated-unwritten');
+      expect(unwritten.textContent).toContain('stock.reserve、stock.recount');
+      expect(unwritten.textContent).toContain('不会写入');
+      const listed = confirm.cloneNode(true) as HTMLElement;
+      listed.querySelector('[data-testid="resync-gk-1-confirm-deprecated-unwritten"]')?.remove();
+      expect(listed.textContent).toContain('就地收紧 stock.adjust 的治理字段');
+      expect(listed.textContent).not.toContain('门放宽的');
+      expect(listed.textContent).not.toContain('stock.reserve');
+      expect(listed.textContent).not.toContain('stock.recount');
+      expect(listed.textContent).not.toContain('修订');
       fireEvent.click(within(confirm).getByTestId('confirm-button'));
       await waitFor(() =>
         expect(http.calls.some((call) => call.name === 'refresh_operation_governance')).toBe(true),
       );
+    });
+
+    it('Legacy 391 (UX acceptance of #640): when only deprecated Operations differ, the sync says what it leaves unwritten instead of 「已一致」', async () => {
+      const http = scriptedHttp({
+        preview_gatekeeper_resync: () =>
+          resyncPreview({
+            operationsAlreadyPresent: [
+              {
+                name: 'stock.reserve',
+                existing: {
+                  mode: 'execute',
+                  blastRadius: 'high',
+                  autoApprovable: false,
+                  status: 'deprecated',
+                },
+                announced: { mode: 'execute', blastRadius: 'low', autoApprovable: false },
+                differs: true,
+                definitionDiffers: false,
+                direction: 'loosened',
+                governanceByRevision: true,
+              },
+              {
+                ...ALIGNED_ROW,
+                name: 'stock.recount',
+                existing: { ...ALIGNED_ROW.existing, status: 'deprecated' },
+                definitionDiffers: true,
+              },
+            ],
+          }),
+      });
+      renderResync(http);
+      fireEvent.click(screen.getByTestId('resync-gk-1'));
+      const notice = await screen.findByTestId('resync-gk-1-deprecated-unwritten');
+      expect(notice.textContent).toContain('stock.reserve、stock.recount');
+      expect(notice.textContent).toContain('仍是弃用状态，不会被调用。不需要你处理');
+      expect(screen.queryByTestId('resync-gk-1-aligned')).toBeNull();
+      expect(screen.queryByTestId('resync-gk-1-confirm')).toBeNull();
+      expect(http.calls.some((call) => call.name === 'refresh_operation_governance')).toBe(false);
     });
 
     it('review #493 on #612: a loosening the gate describes is not applied in place — the confirm says it opens a revision that takes effect once published, without danger styling, and the result links the draft', async () => {

@@ -258,7 +258,9 @@ describe('Sidebar', () => {
     );
     expect(screen.getByText('Acme Workspace')).toBeTruthy();
     const badge = screen.getByTestId('role-badge');
-    expect(badge.textContent).toBe('Owner');
+    // Legacy 354: in the viewer's language, like the known role's chip.
+    expect(badge.textContent).toBe('所有者');
+    expect(badge.getAttribute('title')).toBe('推断的角色：所有者（工作区信息还没读到）');
   });
 
   it('shows the exact role from get_workspace.caller once it is known, via the shared role StatusChip', () => {
@@ -540,7 +542,8 @@ describe('MobileTopBar', () => {
         onOpenMenu={vi.fn()}
       />,
     );
-    expect(screen.getByText(/NextTime AI · Acme · Operator\+/)).toBeTruthy();
+    // Legacy 354: in the viewer's language.
+    expect(screen.getByText('NextTime AI · Acme · 操作员及以上')).toBeTruthy();
   });
 
   // S8 W1-A3 follow-up (audit S2, journey ③ narrow-screen fix): ws-status is invisible at ≤960px

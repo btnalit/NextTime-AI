@@ -353,7 +353,10 @@ export function ConnectSystemLauncher({
     toast.push({
       tone: 'ok',
       title: result.linkedExisting
-        ? t('已关联已有的注册（旧路径）', 'Linked the existing (legacy) registration')
+        ? t(
+            '已启用，本工作区自己接入的同址门改由这个实例接入',
+            'Enabled — the gate this workspace connected at that address now comes from this instance',
+          )
         : t('已在本工作区启用', 'Enabled in this workspace'),
       description: t(
         `已发布 ${result.publishedOperationNames.length} 个 Operation${skipped > 0 ? `，跳过 ${skipped} 个已存在的` : ''}${held > 0 ? `，${held} 个没有发布（见下方）` : ''}。`,

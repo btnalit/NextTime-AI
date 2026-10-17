@@ -182,6 +182,67 @@ describe('CatalogPage', () => {
     );
   });
 
+  it('legacy 349: the first version of a write or high-impact Operation is confirmed before it is published; a low-impact observe draft stays one click', async () => {
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [
+          {
+            gatekeeperId: 'gk-1',
+            name: 'docker.restart',
+            status: 'draft',
+            mode: 'execute',
+            blastRadius: 'high',
+            autoApprovable: false,
+          },
+          {
+            gatekeeperId: 'gk-1',
+            name: 'docker.ps',
+            status: 'draft',
+            mode: 'observe',
+            blastRadius: 'low',
+            autoApprovable: true,
+          },
+        ],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+      publish_operation: () => ({}),
+    });
+    renderPage(http);
+    const rows = await screen.findAllByTestId('catalog-row');
+    const restart = rows.find((row) => row.textContent?.includes('docker.restart'));
+    if (!restart) throw new Error('docker.restart row missing');
+    let detail = await selectRow(restart);
+    fireEvent.click(
+      within(detail).getByTestId('operation-publish-first-confirm-gk-1::docker.restart-trigger'),
+    );
+    expect(http.calls.some((c) => c.name === 'publish_operation')).toBe(false);
+    const confirm = await screen.findByTestId(
+      'operation-publish-first-confirm-gk-1::docker.restart',
+    );
+    expect(confirm.textContent).toContain('第一次发布');
+    expect(confirm.textContent).toContain('每次都要人工审批');
+    // The name shows once, in the target (UX acceptance of #645: long names pushed the buttons
+    // out of the popover when the title and the impact line repeated it).
+    expect(within(confirm).getByTestId('confirm-target').textContent).toBe('docker.restart');
+    expect(confirm.textContent?.split('docker.restart')).toHaveLength(2);
+    expect(confirm.textContent).toContain('它会写入系统');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    await waitFor(() =>
+      expect(http.calls.filter((c) => c.name === 'publish_operation')).toHaveLength(1),
+    );
+
+    const ps = (await screen.findAllByTestId('catalog-row')).find((row) =>
+      row.textContent?.includes('docker.ps'),
+    );
+    if (!ps) throw new Error('docker.ps row missing');
+    detail = await selectRow(ps);
+    expect(within(detail).queryByTestId(/operation-publish-first-confirm/)).toBeNull();
+    fireEvent.click(within(detail).getByRole('button', { name: /发布/ }));
+    await waitFor(() =>
+      expect(http.calls.filter((c) => c.name === 'publish_operation')).toHaveLength(2),
+    );
+  });
+
   it('C14: a failed Publish toasts what happened and what to do, not only the generic title', async () => {
     const http = scriptedHttp({
       list_operations: () => ({
@@ -250,7 +311,10 @@ describe('CatalogPage', () => {
       'operation-publish-confirm-gk-1::docker.restart@draft',
     );
     expect(http.calls.some((c) => c.name === 'publish_operation')).toBe(false);
-    expect(confirm.textContent).toContain('docker.restart: 影响级');
+    // The target names the operation once; the impact line and consequences don't repeat it.
+    expect(within(confirm).getByTestId('confirm-target').textContent).toBe('docker.restart');
+    expect(confirm.textContent).toContain('影响级 高影响 → 低影响');
+    expect(confirm.textContent).toContain('它不再是高影响');
     expect(within(confirm).getByTestId('confirm-button').className).toContain('text-danger');
     expect(
       within(confirm).getByTestId('operation-publish-confirm-gk-1::docker.restart@draft-loosens')

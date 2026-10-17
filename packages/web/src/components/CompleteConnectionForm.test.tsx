@@ -386,6 +386,8 @@ describe('CompleteConnectionForm', () => {
     const fieldError = document.getElementById('cc-endpoint-error');
     expect(fieldError?.textContent).toContain('已经接入了这个地址上的门');
     expect(fieldError?.textContent).toContain('重新读取门的清单');
+    // Legacy 382: the secret shown above was not saved — the gate there keeps its own.
+    expect(fieldError?.textContent).toContain('这里生成的连接密钥也没有保存');
     expect(fieldError?.textContent).not.toContain('already has');
     // No list to show it in (no `onShowGatekeeper`): nothing to click.
     expect(screen.queryByTestId('cc-show-existing-gatekeeper')).toBeNull();
@@ -420,6 +422,7 @@ describe('CompleteConnectionForm', () => {
     const find = await screen.findByTestId('cc-show-existing-gatekeeper');
     const fieldError = document.getElementById('cc-endpoint-error');
     expect(fieldError?.textContent).toContain('这个地址已经接入为「Grafana 生产」');
+    expect(fieldError?.textContent).toContain('「Grafana 生产」用的仍是它原来的密钥');
     expect(fieldError?.textContent).toContain('重新读取门的清单');
     expect(find.textContent).toBe('在列表里找到「Grafana 生产」');
     fireEvent.click(find);
