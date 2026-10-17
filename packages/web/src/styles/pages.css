@@ -1365,10 +1365,12 @@
   min-height: 0;
   overflow-y: auto;
   padding: var(--space-3);
+  --overlay-actions-inset: var(--space-3);
 }
 
 .md-detail-pane .md-pane-body {
   padding: var(--space-4);
+  --overlay-actions-inset: var(--space-4);
 }
 
 .md-pane-footer {

@@ -846,7 +846,7 @@ function ProposalDetailBody({
         )}
       </div>
       {row.status === 'draft' ? (
-        <div className="row-wrap">
+        <div className="row-wrap overlay-actions">
           <PublishProposalButton http={http} row={row} onPublished={onPublished} t={t} />
           <DiscardProposalButton http={http} row={row} onDiscarded={onDiscarded} t={t} />
         </div>

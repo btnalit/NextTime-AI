@@ -28,7 +28,8 @@ export const SheetOverlay = forwardRef<
 });
 
 const sheetVariants = cva(
-  'fixed z-50 flex flex-col gap-4 overflow-y-auto border-border bg-surface-1 p-5 shadow-1',
+  // `--overlay-actions-inset` = the bottom padding a pinned action row covers (legacy 347).
+  'fixed z-50 flex flex-col gap-4 overflow-y-auto border-border bg-surface-1 p-5 shadow-1 [--overlay-actions-inset:1.25rem]',
   {
     variants: {
       side: {
@@ -85,7 +86,11 @@ export function SheetHeader({ className, ...rest }: ComponentPropsWithoutRef<'di
 export function SheetFooter({ className, ...rest }: ComponentPropsWithoutRef<'div'>) {
   return (
     <div
-      className={cn('mt-auto flex flex-row-reverse flex-wrap items-center gap-2', className)}
+      // Legacy 347: pinned to the bottom of the sheet while its body scrolls (styles/ui.css).
+      className={cn(
+        'overlay-actions mt-auto flex flex-row-reverse flex-wrap items-center gap-2',
+        className,
+      )}
       {...rest}
     />
   );

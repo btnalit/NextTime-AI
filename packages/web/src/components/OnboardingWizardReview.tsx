@@ -285,7 +285,7 @@ function OnboardingWizardReviewBody({
       )}
 
       {showDone ? (
-        <div className="row" style={{ justifyContent: 'flex-end' }}>
+        <div className="row overlay-actions" style={{ justifyContent: 'flex-end' }}>
           <Button variant="primary" onClick={onDone}>
             {t('下一步', 'Next')}
           </Button>

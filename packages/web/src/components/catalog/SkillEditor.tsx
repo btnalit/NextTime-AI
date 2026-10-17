@@ -504,7 +504,7 @@ export function SkillEditor({ http, copyOf, onProposed, onDone, onPublished }: S
         />
       ) : null}
 
-      <div className="row">
+      <div className="row overlay-actions">
         <Button type="submit" variant="primary" loading={busy} data-testid="skill-submit">
           {t('保存草稿', 'Save draft')}
         </Button>

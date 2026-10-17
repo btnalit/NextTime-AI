@@ -373,6 +373,8 @@ test.describe('P-B2a acceptance: a generic mcp gate-host instance, end to end', 
       await enableButton.click();
       const confirm = page.getByTestId(`enable-gate-${GATE_ID}-confirm`);
       await expect(confirm).toBeVisible({ timeout: 15_000 });
+      // Legacy 347: the confirm's buttons are in view without scrolling it.
+      await expect(confirm.getByTestId('confirm-button')).toBeInViewport({ ratio: 1 });
       await confirm.getByTestId('confirm-button').click();
       await expect(availableRow).toContainText('已发布 2 个 Operation', {
         timeout: 15_000,

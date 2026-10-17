@@ -731,7 +731,7 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
         testId="create-gate-instance-error"
       />
 
-      <div className="row" style={{ justifyContent: 'flex-end' }}>
+      <div className="row overlay-actions" style={{ justifyContent: 'flex-end' }}>
         <Button variant="ghost" onClick={onCancel} disabled={submitting}>
           {t('取消', 'Cancel')}
         </Button>

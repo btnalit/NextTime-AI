@@ -241,7 +241,7 @@ export function IssueServiceHandleSection({
           </span>
           <CopyButton value={issued.handle} label="Handle" />
         </div>
-        <div className="row" style={{ justifyContent: 'flex-end' }}>
+        <div className="row overlay-actions" style={{ justifyContent: 'flex-end' }}>
           <Button variant="primary" onClick={onDone}>
             {t('我已保存', 'I have saved it')}
           </Button>
@@ -476,7 +476,7 @@ export function IssueServiceHandleSection({
 
         <PlatformError error={error} title={t('无法签发', 'Could not issue the Handle')} />
 
-        <div className="row" style={{ justifyContent: 'flex-end' }}>
+        <div className="row overlay-actions" style={{ justifyContent: 'flex-end' }}>
           <StillNeeded items={missing} hidden={submitting} testId="ish-missing" />
           <Button type="submit" variant="primary" aria-busy={submitting} disabled={!canSubmit}>
             {t('签发', 'Issue')}
