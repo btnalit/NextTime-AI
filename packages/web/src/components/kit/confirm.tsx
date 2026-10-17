@@ -80,9 +80,9 @@ export interface ConfirmProps {
  * - `low`: fires `onConfirm` the moment `open` flips true, then `notify`s success (with `undo`)
  *   or failure, then closes. No visible surface of its own — `anchor` is rendered plain.
  * - `medium`: a Radix `Popover` anchored to `anchor` (`side="bottom" align="end"`, an 8px offset;
- *   Popper repositions on collision). `modal` — focus moves onto the confirm button on open
- *   (`onOpenAutoFocus`, overridden: Radix's own default targets the first focusable descendant,
- *   not necessarily the confirm button) and back to the trigger on close via
+ *   Popper repositions on collision). `modal` — focus moves onto the confirm button on open, or
+ *   onto 取消 when `danger` (`onOpenAutoFocus`, overridden: Radix's own default targets the first
+ *   focusable descendant, not necessarily either button) and back to the trigger on close via
  *   `useRestoreFocusOnClose` below (a manual replacement for Radix's built-in restore, which only
  *   fires through a rendered `Trigger`'s own ref — this file uses `Anchor` instead, precisely
  *   because several callers cannot reach their real trigger element, e.g. a shared card's own
@@ -239,8 +239,12 @@ function ConfirmBody({
   readonly padding?: 'm' | 'l';
   readonly children: ReactNode;
 }) {
+  const t = useT();
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const moreBelow = useMoreBelow(bodyRef);
   return (
     <div
+      ref={bodyRef}
       className={cn(
         'flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain',
         padding === 'l' ? 'p-5' : 'p-4',
@@ -248,8 +252,55 @@ function ConfirmBody({
       data-testid="confirm-body"
     >
       {children}
+      {/* Legacy 404 (UX acceptance of #653 P3-1): a cut-off body said so only through a half-shown
+       *  line — on a loosening confirm, the 分类变化 being confirmed could sit under the fold
+       *  unnoticed. While more is below, a fade and a 「下面还有内容」 chip sit over the bottom
+       *  edge; the chip scrolls the body on. Sticky against the body's own bottom edge (the
+       *  negative offset undoes its padding), so it adds no gap once the end is reached. */}
+      {moreBelow ? (
+        <div
+          className={cn(
+            'pointer-events-none sticky flex shrink-0 justify-center pt-6 pb-2',
+            'bg-[linear-gradient(to_top,var(--surface-1)_45%,transparent)]',
+            padding === 'l' ? '-bottom-5 -mb-5' : '-bottom-4 -mb-4',
+          )}
+          data-testid="confirm-more-below"
+        >
+          <button
+            type="button"
+            className="pointer-events-auto rounded-full border border-border bg-surface-1 px-3 py-1 text-12 text-text-2 shadow-1 hover:text-text"
+            onClick={() => {
+              const body = bodyRef.current;
+              body?.scrollBy?.({ top: body.clientHeight * 0.8, behavior: 'smooth' });
+            }}
+          >
+            {t('↓ 下面还有内容', '↓ More below')}
+          </button>
+        </div>
+      ) : null}
     </div>
   );
+}
+
+/** Whether the body scrolls on past its bottom edge — re-measured on scroll and whenever the body
+ *  or its content changes size (Radix sets the popover's available height after the first paint). */
+function useMoreBelow(ref: { readonly current: HTMLDivElement | null }): boolean {
+  const [moreBelow, setMoreBelow] = useState(false);
+  useEffect(() => {
+    const body = ref.current;
+    if (body === null) return;
+    const update = () => setMoreBelow(body.scrollHeight - body.scrollTop - body.clientHeight > 4);
+    update();
+    body.addEventListener('scroll', update, { passive: true });
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(update);
+    observer?.observe(body);
+    for (const child of Array.from(body.children)) observer?.observe(child);
+    return () => {
+      body.removeEventListener('scroll', update);
+      observer?.disconnect();
+    };
+  }, [ref]);
+  return moreBelow;
 }
 
 function ConfirmActions({
@@ -315,6 +366,7 @@ function MediumTier({
   useRestoreFocusOnClose(open);
   const titleId = useId();
   const confirmRef = useRef<HTMLButtonElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
   // `display: contents` keeps every caller's layout untouched, but it also leaves the wrapper
   // with no box — Popper measuring it gets a zero rect and pins the popover to the viewport's
   // top-left. Popper measures the wrapped trigger instead (Radix's `virtualRef`).
@@ -354,7 +406,10 @@ function MediumTier({
             data-tier="medium"
             onOpenAutoFocus={(event) => {
               event.preventDefault();
-              confirmRef.current?.focus();
+              // Legacy 405 (UX acceptance of #653 P3-2): a `danger` confirm (loosening an
+              // approval, disabling, discarding) opens on 取消, so an Enter typed out of habit
+              // never runs it; the irreversible tier's AlertDialog already does (Radix).
+              (danger ? cancelRef : confirmRef).current?.focus();
             }}
             onEscapeKeyDown={(event) => {
               // Radix's dismissable layer listens in the capture phase; a caller may render
@@ -408,6 +463,7 @@ function MediumTier({
                   {resolvedConfirmLabel}
                 </Button>
                 <Button
+                  ref={cancelRef}
                   variant="ghost"
                   size="s"
                   onClick={() => onOpenChange(false)}
