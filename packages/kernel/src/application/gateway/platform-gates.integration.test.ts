@@ -873,7 +873,8 @@ describe.runIf(DATABASE_URL !== undefined)(
 
         const announced = await announce({
           gateId: GATE_ID_LINK,
-          connector: 'fixture-mcp',
+          // A connector holds one transport kind (`fixture-mcp` is mcp) — its own http one here.
+          connector: 'fixture-http',
           transportKind: 'http', // differs from the legacy Object's own 'cli'
           target: 'http://fixture-mcp-real-upstream:9000', // differs from the legacy 'docker' target
           endpoint: ENDPOINT, // same endpoint — the only field the association key reads
@@ -1053,7 +1054,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
         const announced = await announce({
           gateId: GATE_ID_AMBIGUOUS,
-          connector: 'fixture-mcp',
+          connector: 'fixture-http',
           transportKind: 'http',
           target: 'http://fixture-mcp-ambiguous:9000',
           endpoint: ENDPOINT,
@@ -1091,7 +1092,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         for (const gateId of [GATE_ID_FIRST, GATE_ID_SECOND]) {
           const announced = await announce({
             gateId,
-            connector: 'fixture-mcp',
+            connector: 'fixture-http',
             transportKind: 'http',
             target: `http://${gateId}:9000`,
             endpoint: ENDPOINT,
@@ -1164,7 +1165,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
         const announced = await announce({
           gateId: GATE_ID_REVISION,
-          connector: 'fixture-mcp',
+          connector: 'fixture-http',
           transportKind: 'http',
           target: 'http://fixture-mcp-r08:9000',
           endpoint: ENDPOINT,

@@ -3500,6 +3500,14 @@ const platformCapabilities = [
         credentialMode: z.enum(['shared', 'connected_account']),
         /** http: the OpenAPI document URL the host imports Operations from (required — without it the instance would have no Operations). mcp: omitted, tools are listed on the target. */
         manifestSource: z.string().url().max(2000).nullable().optional(),
+        /** P1: the connector (接入包) the instance belongs to, named after the system it serves.
+         *  Omitted: the generic connector of its transport kind (`http` / `mcp`), whose mode also
+         *  decides whether workspaces may connect that kind themselves (R-40). A name no connector
+         *  carries yet creates one for this kind, `platform_preset`, so the instance reaches the
+         *  catalog once enabled without touching the generic one; an existing one must be of the
+         *  same kind (409 `connector_kind_mismatch`) and not a packaged gate's (409
+         *  `connector_packaged`). */
+        connector: z.string().regex(wire.CONNECTOR_NAME_PATTERN).optional(),
       })
       .strict()
       .superRefine((value, ctx) => {
@@ -3514,7 +3522,7 @@ const platformCapabilities = [
       }),
     resultSchema: wire.GateInstanceWireSchema,
     description:
-      'P-B2a: create a generic http / mcp gate instance for the platform gate host to serve. Lands `discovered` with no heartbeat; the host pulls the definition, imports the Operations and announces it, then the administrator enables it exactly like a packaged gate. Never takes a credential — enter that via `issue_gate_host_token`.',
+      'P-B2a: create a generic http / mcp gate instance for the platform gate host to serve. Lands `discovered` with no heartbeat; the host pulls the definition, imports the Operations and announces it, then the administrator enables it exactly like a packaged gate. P1: `connector` names the system it serves; omitted, it joins the generic connector of its kind. Never takes a credential — enter that via `issue_gate_host_token`.',
   },
   {
     name: 'delete_gate_instance',

@@ -443,14 +443,39 @@ export type ConnectorModeWire = z.infer<typeof ConnectorModeWireSchema>;
 export const GateTransportKindWireSchema = z.enum(['http', 'mcp', 'cli', 'ssh']);
 export type GateTransportKindWire = z.infer<typeof GateTransportKindWireSchema>;
 
+/** A connector name (`connectors.name`, core 0023's check): what a packaged gate announces as
+ *  `GATE_CONNECTOR` and what `create_gate_instance` takes as `connector`. */
+export const CONNECTOR_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+/** The four generic connectors core 0023 seeds, each named after its transport kind. Only these
+ *  govern a workspace connecting a system itself (R-40: `create_connection` /
+ *  `request_connection` read the connector named by the connection's kind), so only their mode
+ *  reaches past the platform catalog. Every other connector — a packaged gate's, or one an
+ *  administrator named for gate-host instances (`create_gate_instance` with `connector`) — governs
+ *  the catalog alone. */
+export const GENERIC_CONNECTOR_NAMES: readonly GateTransportKindWire[] = [
+  'http',
+  'mcp',
+  'cli',
+  'ssh',
+];
+
+/** Whether `name` is one of the four generic connectors (`GENERIC_CONNECTOR_NAMES`). */
+export function isGenericConnector(name: string): boolean {
+  return (GENERIC_CONNECTOR_NAMES as readonly string[]).includes(name);
+}
+
 export const ConnectorWireSchema = z
   .object({
-    /** Stable connector name: a packaged gate's `GATE_CONNECTOR` (`docker`, `ragflow`) or one of
-     *  the generic kinds (`http`, `mcp`, `cli`, `ssh`). */
+    /** Stable connector name: a packaged gate's `GATE_CONNECTOR` (`docker`, `ragflow`), one of the
+     *  generic kinds (`http`, `mcp`, `cli`, `ssh`, `GENERIC_CONNECTOR_NAMES`), or a name an
+     *  administrator gave gate-host instances of one system (`create_gate_instance`'s
+     *  `connector`). */
     name: z.string(),
     kind: GateTransportKindWireSchema,
-    /** `true` for a gate this deployment ships as its own image (announced with a connector name
-     *  other than the four generic kinds). */
+    /** `true` for a gate this deployment ships as its own image (created by its first
+     *  announcement, with a connector name other than the four generic kinds). `false` for the
+     *  generic kinds and for a connector created for gate-host instances. */
     packaged: z.boolean(),
     mode: ConnectorModeWireSchema,
     /** Operation names refused on the next call for every instance of this connector. */

@@ -1200,7 +1200,7 @@ v0.47.0、v0.48.0 不单独上主机（#554 不在 v0.47.0 里，遗留 259 的�
 | # | 时机 | 步骤 | 谁 |
 |---|---|---|---|
 | 1 | 窗口前 | `--prefetch v0.49.0`，日志最后一行 `RESULT ok`（§3）；tag 拿不到时先按上面用 bundle 导入并核对 commit | 主机 |
-| 2 | 窗口前 | §3.25 的预检 SQL 与表行数，结果记 `docs/private/` | 主机 |
+| 2 | 窗口前 | §3.25 的预检 SQL 与表行数；目标含 #644 时再跑 §3.38 的打包门只读检查（不为空先改 `.env` 的 `GATE_CONNECTOR`）；结果记 `docs/private/` | 主机 |
 | 3 | 窗口内 | `--pull v0.49.0`，**按最后一行 RESULT 判断，不按退出码**（§3）。日志里应看到：`STEP caddy-log-redaction` 各项 PASS（caddy 由 `up -d` 或 `mount-refresh` 重建，看不到 `mount-refresh caddy recreated` 不算异常；backup、update-feed 可能 recreated，也属正常，§3.26）；`STEP acceptance-fixtures none left running`；`STEP backup-now exit=0` 在前、`STEP raw-secret-scrub exit=0` 在后。`acceptance-failures` 按 §5 判断回滚；`degraded=…` 按 §3.26 的表逐项补做，补做结果记 `docs/private/` | 主机 |
 | 4 | 应用后 | 读 `-raw-secret-scrub.log`：改写 6 类、只计数 7 类、只列 1 类（`connectedSystemDuplicates`）的数字、`cli.raw_secrets_scrubbed` 的审计 id、全部 `counted …` 行，记 `docs/private/` | 主机 |
 | 5 | 应用后 | §3.25「应用后」的处置：只计数的地址类别 > 0 时按 `counted …` 行逐条决定 | victor 决定 |
@@ -1209,7 +1209,7 @@ v0.47.0、v0.48.0 不单独上主机（#554 不在 v0.47.0 里，遗留 259 的�
 
 **回滚**（§5）：回滚目标是 v0.46.0，按 §3.25 与 §3.26 的回滚说明；不需要排空 Worker。
 
-窗口目标改到 v0.49.0 之后的发版时（维护者 2026-10-16 决定窗口暂缓，开窗口时目标改为当时最新的发版），本清单按新目标刷新，并加上之后各版的小节，至少 §3.28（#589 升钉：`postgres` 与 `backup` 重建、不执行 `ALTER EXTENSION`、应用后只读核对 `vector` 扩展版本）与 §3.29（#592：governance 0020，旧「始终允许」规则可能显示「已暂停 · 待确认版本」需 owner 重新确认，契约不向后兼容、旧控制台页要刷新）与 §3.30（#601：governance 0021，窗口前估算 `audit_records` 全表扫描的锁表时间并核对回收超时，窗口后历史失败行多显示「结果不明」）与 §3.31（#607：goal 0001 / task 0007 / governance 0022，窗口前估算建索引时间）与 §3.32（#615：core 0044，窗口前估算建索引期间审计写入的等待，必要时并发预建并确认索引有效）与 §3.33（#619：goal 0002，新增每秒认领与每分钟对账的后台负载）与 §3.34（#620：core 0045，窗口前三数预检、迁移期间不接新门、清洗改写类变成 4 个、回滚后自接门暂停失效；#637 再加两个改写类与一个只列类，见 §3.25）、§3.35（#626：goal 0003，只重建一个守卫函数，无主机步骤）与 §3.36（#633：goal 0004，加列与重建一个守卫函数，无主机步骤）。
+窗口目标改到 v0.49.0 之后的发版时（维护者 2026-10-16 决定窗口暂缓，开窗口时目标改为当时最新的发版），本清单按新目标刷新，并加上之后各版的小节，至少 §3.28（#589 升钉：`postgres` 与 `backup` 重建、不执行 `ALTER EXTENSION`、应用后只读核对 `vector` 扩展版本）与 §3.29（#592：governance 0020，旧「始终允许」规则可能显示「已暂停 · 待确认版本」需 owner 重新确认，契约不向后兼容、旧控制台页要刷新）与 §3.30（#601：governance 0021，窗口前估算 `audit_records` 全表扫描的锁表时间并核对回收超时，窗口后历史失败行多显示「结果不明」）与 §3.31（#607：goal 0001 / task 0007 / governance 0022，窗口前估算建索引时间）与 §3.32（#615：core 0044，窗口前估算建索引期间审计写入的等待，必要时并发预建并确认索引有效）与 §3.33（#619：goal 0002，新增每秒认领与每分钟对账的后台负载）与 §3.34（#620：core 0045，窗口前三数预检、迁移期间不接新门、清洗改写类变成 4 个、回滚后自接门暂停失效；#637 再加两个改写类与一个只列类，见 §3.25）、§3.35（#626：goal 0003，只重建一个守卫函数，无主机步骤）、§3.36（#633：goal 0004，加列与重建一个守卫函数，无主机步骤）、§3.37（#642：governance 0023，`action_requests` 加列、约束与守卫触发器，窗口前看一眼该表行数，无主机步骤）与 §3.38（#644：无迁移，窗口前打包门只读检查，内核与门宿主同版，回退代码前先处理挂在系统接入包上的实例）。
 
 ### 3.28 第三方镜像升钉：pgvector、node、postgres（#589，v0.49.0 之后的下一版起）
 
@@ -1349,6 +1349,57 @@ SQL
 - **goal 之外的行为变化**：无（`withdrawStepActions` 多一个可选参数，取消路径不传，行为不变）。
 - **回滚**：只回退代码即可（§6）。上一版不写新列，两列为空时守卫和 CHECK 都接受。
 
+### 3.37 动作的去重与人工核对（#642，governance 0023，S11 GO3c，v0.49.0 之后的下一版起）
+
+带一个 governance 迁移（`0023_action_request_reconciliation`），随 `apply-release.sh` 的迁移步骤自动应用；没有新环境变量、不改 compose、无单独主机步骤。
+
+- **迁移做什么**：`action_requests` 加三列（`reconciliation`、`reconciliation_decision_id`、`reexecute_decision_id`，可空、不回填），四个 CHECK、两个指向 `decisions` 的外键，一个守卫触发器 `action_requests_reconciliation_guard`（`before insert or update of …`）。加 CHECK 与外键时会扫一遍 `action_requests`（新列全为空，扫描期间该表写入等待），窗口前只读看一眼它的行数即可。
+- **goal 之外的行为变化**：目标步骤之外的 `request_action` 不变（GO5 开放能力之前库里没有 GoalRun）；I6 不变量检查不再把不带 `resultingStatus` 的审计行当转移，少报一类违规。线上契约只新增可选字段 `reconciliation`。
+- **回滚**：只回退代码即可（§6）。上一版用显式列清单读写 `action_requests`，看不到新列；CHECK 对三列为空的旧行恒真；触发器放行三列为空的插入，更新只在写这三列时触发。
+
+### 3.38 门宿主实例的系统接入包（#644，S11 P1 第一个小 PR，无迁移，v0.49.0 之后的下一版起）
+
+没有迁移、没有新环境变量、不改 compose。主机上已有的门宿主实例都在通用接入包上，不受影响。
+
+- **新能力参数与错误码**：`create_gate_instance` 多可选的 `connector`；新增 409 `connector_kind_mismatch`、`connector_packaged`（创建时）与 `connector_not_packaged`、`connector_kind_mismatch`（announce 时，操作者在门日志的 warn 里看到）；新平台审计动作 `connector.created`。
+- **打包门的 announce 现在也会被拒**：没冻结的打包门（不是 `enabled` / `disabled`，也不是由这两种状态转成的 `lost`）的 `GATE_CONNECTOR` 用了通用名（`http` / `mcp` / `cli` / `ssh`）或门宿主接入包时返回 `connector_not_packaged`，接入包是别的种类时返回 `connector_kind_mismatch`；被拒之后它停止心跳、变成 `lost`。已启用或禁用的打包门是冻结的，不受影响。
+
+**维护窗口前**（在当前版本上跑，只读，主机执行；结果记 `docs/private/`）：找出会被拒的打包门。
+
+```bash
+docker compose exec -T postgres psql -U nexttime -d nexttime -c "
+begin transaction read only;
+select g.gate_id, g.status, g.status_before_lost, g.connector, g.transport_kind,
+       c.kind as connector_kind, c.packaged
+  from gate_instances g join connectors c on c.name = g.connector
+ where not g.hosted
+   and not (g.status in ('enabled','disabled')
+            or (g.status = 'lost' and g.status_before_lost in ('enabled','disabled')))
+   and (not c.packaged or c.kind <> g.transport_kind)
+ order by g.gate_id;
+rollback;" </dev/null
+```
+
+空表表示不受影响。不为空时，先在主机 `.env` 里把对应打包门的 `GATE_CONNECTOR` 改成系统自己的名字，再升级。这些实例本来就进不了目录（通用名不能设为平台预置），改名不影响任何工作区。
+
+**窗口内：内核与门宿主同版**。两者由同一个 `docker compose up -d` 拉起，`gate-host` 还 `depends_on` 内核 healthy，正常走完 apply 就是同版：
+
+- apply 最后一行不是 `RESULT failed-at=up` 时，再用 `docker compose ps kernel gate-host` 确认两个服务都是本窗口新建的、healthy。
+- 最后一行是 `RESULT failed-at=up` 时，修好重跑之前，不要在控制台新建挂系统接入包的实例。
+- 万一混版，两个方向都安全：先升内核、门宿主还是旧版时，已有实例照常服务；这段时间新建的挂系统接入包的实例会被旧门宿主以通用名 announce、被拒 409 `identity_mismatch`，停在「等待宿主接管」，门宿主每轮一行 warn，门宿主升级后下一轮拉取（默认 60 s 内）自动接管。先升门宿主、内核还是旧版时，列表里没有接入包字段，门宿主回落到通用名，与旧版行为一致。
+
+**回滚**：这里只说只回退代码（§5 / operations.md 的做法）；用窗口前的备份整库恢复时，这些实例随备份一起消失，没有这个风险。
+
+- 一旦有实例挂在系统接入包上，就不要回退到本 PR 之前的版本。必须回退时，先只读列出受影响的实例：
+
+  ```sql
+  select gate_id, status, connector from gate_instances
+   where hosted and connector not in ('http','mcp');
+  ```
+
+- 再删除这些实例（有工作区启用的，删除会被拒 409 `gate_in_use`，要先解除链接），回退后在通用接入包下重建。
+- 不这样做的话，旧版里这些实例会失去对应：还没被接管的，旧门宿主 announce 通用名被拒；已接管还没启用的（`discovered`），旧内核按 announce 把它改挂到通用接入包，通用接入包不是平台预置时它在目录里看不到，回退后在通用接入包下删了重建；已启用或禁用的，announce 身份不符，旧内核保留原记录、健康度置为 unknown。接入包这一行留在库里，旧控制台把它显示为「通用」类型，无害。挂在通用接入包上的实例不受影响。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -1466,6 +1517,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.49.0 之后的下一版 | goal `0003_goal_cancelling`（#626，S11 GO3a）：照 goal 0001 重建 `step_runs_status_guard`，把 `cancelling` 加进「步骤只能走向结束」的目标状态 | 可逆 | 守卫只多拒绝一种情况，上一版没有取消路径、不会碰到它，不需要 reversibility 声明（§3.35） | 只需回退代码；若要撤：按 goal 0001 重建 `step_runs_status_guard`，并 `delete from schema_migrations where module = 'goal' and version = 3` |
 | v0.49.0 之后的下一版 | core `0045_workspace_self_connections`（#620，S11 P0b）：新表 `workspace_self_connections`（强制 RLS、`endpoint_key` 部分唯一索引），按没有目录关联的 Gatekeeper 回填并剪掉地址里的凭据 | 可逆 | 上一版不读写这张表；回退后自接门的暂停**不再生效**（§3.34），其余行为与上一版相同；重新升级时 `create table if not exists` 与 `on conflict do nothing` 幂等 | 只需回退代码，表保留；若要撤：`drop table workspace_self_connections` 并 `delete from schema_migrations where module = 'core' and version = 45`（会丢掉平台的暂停记录，先导出） |
 | v0.49.0 之后的下一版 | goal `0004_goal_revision_hold`（#633，S11 GO3b）：`goal_runs` 加 `paused_by`、`paused_by_authority`、`advance_failures`，`plan_revisions` 加 `removals`，四个约束，照 goal 0002 重建 `goal_runs_status_guard`（多 hold 一段） | 可逆 | 加列都有上一版从不写的默认值或可空；守卫只多拒绝这几列的变化，上一版的暂停、继续不写 `paused_by`，回滚到上一版不需要额外步骤 |
+| v0.49.0 之后的下一版 | governance `0023_action_request_reconciliation`（#642，S11 GO3c）：`action_requests` 加 `reconciliation`、`reconciliation_decision_id`、`reexecute_decision_id`，四个 CHECK、两个外键，守卫触发器 `action_requests_reconciliation_guard` | 可逆 | 新列可空、上一版从不写；CHECK 对三列为空的行恒真；触发器只拦写这三列的插入和更新，回滚到上一版不需要额外步骤 |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：

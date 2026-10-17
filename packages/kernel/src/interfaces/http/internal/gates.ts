@@ -5,6 +5,7 @@ import { withWorkspace } from '../../../adapters/db/pool.js';
 import {
   type AnnounceBody,
   AnnounceBodySchema,
+  type ConnectorFitRefusal,
   listHostedGateDefinitions,
   storableAnnouncement,
   upsertAnnouncement,
@@ -24,11 +25,29 @@ import { OperationNameInvalidError } from '../../../governance/gatekeepers/index
  * Never a credential: the body schema is `.strict()` and has no field for one; what a gate needs
  * to reach its system stays in the gate (design §7). A `target` or `endpoint` carrying one is
  * refused 400 `credentials_in_connection_params` with nothing written, unless the instance already
- * holds exactly that value (review of #549 — `upsertAnnouncement`). The route runs on the admin client because a
- * gate is neither a user nor a Principal — the same shape `/internal/egress` uses; there is no
- * audit row (0019's actor-shape constraint needs a user for a platform row), the instance row's
- * `last_seen_at` / `updated_at` and the kernel log are the record.
+ * holds exactly that value (review of #549 — `upsertAnnouncement`). A connector that cannot hold the
+ * instance — another transport kind, or the wrong class for the caller (P1, review of #644) — is
+ * refused 409 with its code (`connector_kind_mismatch` / `connector_not_packaged`), nothing written.
+ * The route runs on the admin client because a gate is neither a user nor a Principal — the same
+ * shape `/internal/egress` uses; there is no audit row (0019's actor-shape constraint needs a user
+ * for a platform row), the instance row's `last_seen_at` / `updated_at` and the kernel log are the
+ * record.
  */
+
+function connectorRefusedMessage(
+  code: ConnectorFitRefusal,
+  connector: string,
+  transportKind: string,
+): string {
+  switch (code) {
+    case 'connector_kind_mismatch':
+      return `the connector "${connector}" is not a ${transportKind} connector — announce one of this gate's own kind`;
+    case 'connector_not_packaged':
+      return `the connector "${connector}" is not a packaged gate's (a generic connector, or one created for gate-host instances) — set GATE_CONNECTOR to a name of this system's own`;
+    case 'connector_packaged':
+      return `the connector "${connector}" belongs to a packaged gate`;
+  }
+}
 
 export interface GatesRoutesDeps {
   readonly pool: PoolLike;
@@ -116,13 +135,36 @@ export async function registerGatesRoutes(
     if (outcome.rejected) {
       request.log?.warn?.(
         { gateId: outcome.gateId, announcedConnector: parsed.data.connector },
-        'gates/announce: first announcement for a gate-host instance does not match its definition — refused',
+        'gates/announce: announcement for an undecided gate-host instance does not match its definition (connector / transport kind) — refused',
       );
       return reply.status(409).send({
         ok: false,
         error: {
           code: 'identity_mismatch',
           message: 'announced connector / transport kind differ from the instance definition',
+        },
+      });
+    }
+    if (outcome.connectorRefused) {
+      // P1 (review of #644): the announced connector cannot hold this instance (`fitConnector`).
+      request.log?.warn?.(
+        {
+          gateId: outcome.gateId,
+          caller: announcer,
+          announcedConnector: parsed.data.connector,
+          code: outcome.connectorRefused,
+        },
+        'gates/announce: the announced connector cannot hold this instance — refused, nothing written',
+      );
+      return reply.status(409).send({
+        ok: false,
+        error: {
+          code: outcome.connectorRefused,
+          message: connectorRefusedMessage(
+            outcome.connectorRefused,
+            parsed.data.connector,
+            parsed.data.transportKind,
+          ),
         },
       });
     }
@@ -155,7 +197,8 @@ export async function registerGatesRoutes(
 
   // P-B2a (决定 ⑥): the generic gate host pulls the instances it must serve — the same trust
   // direction as announce (internal token, gate → kernel), so no kernel → host credential exists.
-  // Definitions only (transport kind, target, credential mode, manifest source); never a credential.
+  // Definitions only (transport kind, target, credential mode, manifest source) and the connector
+  // each instance announces (P1); never a credential.
   app.get('/internal/gate-host/instances', async (_request, reply) => {
     const items = await withWorkspace(
       deps.pool,

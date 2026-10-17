@@ -6,6 +6,7 @@ import type {
   GateHostTokenWire,
   GateInstanceWire,
 } from '@nexttime/shared';
+import { isGenericConnector } from '@nexttime/shared';
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { useCapability, useCapabilityList } from '../../hooks/useCapability.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
@@ -1136,12 +1137,12 @@ function PlatformEnableSection({
                 workspace can only enable platform-preset instances from the catalog.
               </>,
             )}
-            {connector.packaged
-              ? null
-              : t(
+            {isGenericConnector(connector.name)
+              ? t(
                   ' 通用接入包设为平台预置后，所有工作区都不能再自己连这一类系统（已建立的连接不受影响）。',
                   ' Once a generic connector is a platform preset, no workspace can connect this kind of system itself any more (existing connections are unaffected).',
-                )}
+                )
+              : null}
           </Notice>
           <div className="row" style={{ justifyContent: 'flex-end' }}>
             <Button

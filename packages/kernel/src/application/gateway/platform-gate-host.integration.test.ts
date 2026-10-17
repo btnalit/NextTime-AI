@@ -1,7 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { GateHostTokenWire, GateInstanceWire, Operation, Role } from '@nexttime/shared';
+import type {
+  ConnectorWire,
+  GateHostTokenWire,
+  GateInstanceWire,
+  Operation,
+  Role,
+} from '@nexttime/shared';
 import { internalAuthorizationHeader, verifyGateHostToken } from '@nexttime/shared';
 import { generateKeyPair } from 'jose';
 import type { CryptoKey } from 'jose';
@@ -296,6 +302,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
       expect(created).toMatchObject({
         gateId: 'hosted-mcp',
+        // P1: no `connector` given — the generic connector of its kind, as before.
+        connector: 'mcp',
         hosted: true,
         status: 'discovered',
         health: 'unknown',
@@ -791,6 +799,329 @@ describe.runIf(DATABASE_URL !== undefined)(
         [workspaceId, endpoint],
       );
       expect(gatekeepers.rows[0].n).toBe(0);
+    });
+
+    it('n. P1: an instance named after its system gets its own connector — in the catalog once enabled, the generic one untouched', async () => {
+      // Test c put the generic `mcp` connector in the catalog; back to the default, so this test
+      // can show that it stays there.
+      await callAsAdmin('set_connector_mode', { name: 'mcp', mode: 'self_serve' });
+      const definition = {
+        transportKind: 'mcp',
+        target: 'http://widgets.internal.test/',
+        credentialMode: 'shared',
+      };
+
+      const created = await callAsAdmin<GateInstanceWire>('create_gate_instance', {
+        gateId: 'p1-widgets-a',
+        connector: 'widgets',
+        ...definition,
+      });
+      expect(created).toMatchObject({ gateId: 'p1-widgets-a', connector: 'widgets' });
+      const connectors = await callAsAdmin<{ items: ConnectorWire[] }>('list_connectors');
+      expect(connectors.items.find((row) => row.name === 'widgets')).toMatchObject({
+        kind: 'mcp',
+        packaged: false,
+        mode: 'platform_preset',
+        instanceCount: 1,
+        selfConnectionCount: 0,
+      });
+
+      // The host announces what it pulls: the connector comes along, and a first announce under
+      // another connector (a gate host older than P1 sends the generic kind) is refused.
+      const server = app();
+      const pulled = await server.inject({
+        method: 'GET',
+        url: '/internal/gate-host/instances',
+        headers: {
+          authorization: internalAuthorizationHeader(
+            deriveInternalCredential(INTERNAL_TOKEN, 'gate-host'),
+          ),
+        },
+      });
+      expect(
+        (pulled.json().result.items as Array<{ gateId: string; connector: string }>).find(
+          (item) => item.gateId === 'p1-widgets-a',
+        ),
+      ).toMatchObject({ connector: 'widgets' });
+      const endpoint = 'http://gate-host:8083/i/p1-widgets-a';
+      const generic = await announce(hostedAnnounceBody('p1-widgets-a', endpoint));
+      expect(generic.statusCode).toBe(409);
+      expect(generic.json().error.code).toBe('identity_mismatch');
+      const announced = await announce({
+        ...hostedAnnounceBody('p1-widgets-a', endpoint),
+        connector: 'widgets',
+      });
+      expect(announced.statusCode).toBe(200);
+
+      await callAsAdmin('update_gate_instance', { gateId: 'p1-widgets-a', status: 'enabled' });
+      const enabled = await callAsOwner<{ publishedOperationNames: string[] }>(
+        'enable_gate_instance',
+        { gateId: 'p1-widgets-a' },
+      );
+      expect(enabled.publishedOperationNames.sort()).toEqual(['list_widgets', 'restart_widget']);
+      const mcp = await callAsAdmin<{ items: ConnectorWire[] }>('list_connectors');
+      expect(mcp.items.find((row) => row.name === 'mcp')?.mode).toBe('self_serve');
+
+      // A second instance of the same system joins the connector.
+      const second = await callAsAdmin<GateInstanceWire>('create_gate_instance', {
+        gateId: 'p1-widgets-b',
+        connector: 'widgets',
+        ...definition,
+      });
+      expect(second.connector).toBe('widgets');
+      const after = await callAsAdmin<{ items: ConnectorWire[] }>('list_connectors');
+      expect(after.items.find((row) => row.name === 'widgets')?.instanceCount).toBe(2);
+
+      // The connector's creation has an audit row of its own (it starts preset with no
+      // `set_connector_mode` row), written once — by the first create, not the joining one.
+      const audits = await pool.query<{
+        actor_user_id: string | null;
+        resource_type: string;
+        payload: Record<string, unknown>;
+      }>(
+        `select actor_user_id, resource_type, payload from audit_records
+          where action = 'connector.created' and payload ->> 'resourceRef' = 'widgets'`,
+      );
+      expect(audits.rows).toEqual([
+        {
+          actor_user_id: admin.id,
+          resource_type: 'connector',
+          payload: {
+            resourceRef: 'widgets',
+            kind: 'mcp',
+            mode: 'platform_preset',
+            gateId: 'p1-widgets-a',
+          },
+        },
+      ]);
+    });
+
+    it('o. P1: create_gate_instance refuses a connector of another kind or a packaged gate’s, and a refused create leaves no connector behind', async () => {
+      const mcpInstance = {
+        transportKind: 'mcp',
+        target: 'http://widgets.internal.test/',
+        credentialMode: 'shared',
+      };
+      // A generic name other than the instance's own kind.
+      await expectPlatformError(
+        () =>
+          callAsAdmin('create_gate_instance', {
+            gateId: 'p1-refused-generic',
+            connector: 'http',
+            ...mcpInstance,
+          }),
+        'connector_kind_mismatch',
+      );
+      // A system connector of the other kind (`widgets` is mcp, from test n).
+      await expectPlatformError(
+        () =>
+          callAsAdmin('create_gate_instance', {
+            gateId: 'p1-refused-kind',
+            connector: 'widgets',
+            transportKind: 'http',
+            target: 'http://widgets.internal.test/',
+            credentialMode: 'shared',
+            manifestSource: 'http://widgets.internal.test/openapi.json',
+          }),
+        'connector_kind_mismatch',
+      );
+      // A packaged gate's connector (test b's announce created it).
+      await expectPlatformError(
+        () =>
+          callAsAdmin('create_gate_instance', {
+            gateId: 'p1-refused-packaged',
+            connector: packagedAnnounceBody.connector,
+            ...mcpInstance,
+          }),
+        'connector_packaged',
+      );
+      // An id clash under a new connector name rolls the new connector back with it.
+      await expectPlatformError(
+        () =>
+          callAsAdmin('create_gate_instance', {
+            gateId: 'p1-widgets-a',
+            connector: 'p1-never-created',
+            ...mcpInstance,
+          }),
+        'gate_id_taken',
+      );
+      const leftovers = await pool.query(
+        `select name from connectors where name = 'p1-never-created'
+         union all
+         select gate_id from gate_instances where gate_id like 'p1-refused-%'
+         union all
+         select payload ->> 'resourceRef' from audit_records
+          where action = 'connector.created' and payload ->> 'resourceRef' = 'p1-never-created'`,
+      );
+      expect(leftovers.rows).toEqual([]);
+    });
+
+    it('p. P1 (review of #644): one connector rule on every announce path — first or later, gate host or packaged gate — and a refused one writes nothing', async () => {
+      // Fixtures, all made here: a gate-host connector (`p1-hosted-sys`, mcp) with one never-seen
+      // and one seen, still undecided instance on it; a packaged mcp instance still undecided on
+      // its own connector (`p1-pkg-own`); a packaged http connector (`p1-pkg-http-conn`).
+      const mcpDefinition = {
+        transportKind: 'mcp',
+        target: 'http://hosted-sys.internal.test/',
+        credentialMode: 'shared',
+      };
+      for (const gateId of ['p1-hosted-first', 'p1-hosted-again']) {
+        await callAsAdmin('create_gate_instance', {
+          gateId,
+          connector: 'p1-hosted-sys',
+          ...mcpDefinition,
+        });
+      }
+      const hostedBody = (gateId: string) => ({
+        ...hostedAnnounceBody(gateId, `http://gate-host:8083/i/${gateId}`),
+        connector: 'p1-hosted-sys',
+      });
+      expect((await announce(hostedBody('p1-hosted-again'))).statusCode).toBe(200);
+      const packagedBody = (gateId: string) => ({
+        ...packagedAnnounceBody,
+        gateId,
+        connector: 'p1-pkg-own',
+        endpoint: `http://127.0.0.1:1/${gateId}`,
+      });
+      expect((await announce(packagedBody('p1-pkg-again'), 'gate')).statusCode).toBe(200);
+      expect(
+        (
+          await announce(
+            {
+              ...packagedBody('p1-pkg-http'),
+              connector: 'p1-pkg-http-conn',
+              transportKind: 'http',
+            },
+            'gate',
+          )
+        ).statusCode,
+      ).toBe(200);
+
+      type Probe = { connector: string; transportKind?: 'http' | 'mcp' };
+      const cases: Array<{
+        path: string;
+        body: (probe: Probe) => Record<string, unknown>;
+        caller: 'gate' | 'gate-host';
+        probes: Array<[Probe, string]>;
+      }> = [
+        {
+          // #493's probes: a gate-host instance, first announce and a later one while undecided.
+          path: 'gate host, first announce',
+          body: (probe) => ({ ...hostedBody('p1-hosted-first'), ...probe }),
+          caller: 'gate-host',
+          probes: [
+            [{ connector: 'mcp' }, 'identity_mismatch'],
+            [{ connector: 'p1-pkg-own' }, 'identity_mismatch'],
+            [{ connector: 'p1-brand-new-x' }, 'identity_mismatch'],
+            [{ connector: 'p1-hosted-sys', transportKind: 'http' }, 'identity_mismatch'],
+          ],
+        },
+        {
+          path: 'gate host, later announce, undecided',
+          body: (probe) => ({ ...hostedBody('p1-hosted-again'), ...probe }),
+          caller: 'gate-host',
+          probes: [
+            [{ connector: 'mcp' }, 'identity_mismatch'],
+            [{ connector: 'p1-pkg-own' }, 'identity_mismatch'],
+            [{ connector: 'p1-brand-new-x' }, 'identity_mismatch'],
+            [{ connector: 'p1-hosted-sys', transportKind: 'http' }, 'identity_mismatch'],
+          ],
+        },
+        {
+          path: 'packaged gate, first announce',
+          body: (probe) => ({ ...packagedBody('p1-pkg-first'), ...probe }),
+          caller: 'gate',
+          probes: [
+            [{ connector: 'mcp' }, 'connector_not_packaged'],
+            [{ connector: 'http', transportKind: 'http' }, 'connector_not_packaged'],
+            [{ connector: 'p1-hosted-sys' }, 'connector_not_packaged'],
+            [{ connector: 'p1-pkg-http-conn' }, 'connector_kind_mismatch'],
+            [{ connector: 'p1-pkg-own', transportKind: 'http' }, 'connector_kind_mismatch'],
+          ],
+        },
+        {
+          path: 'packaged gate, later announce, undecided',
+          body: (probe) => ({ ...packagedBody('p1-pkg-again'), ...probe }),
+          caller: 'gate',
+          probes: [
+            [{ connector: 'mcp' }, 'connector_not_packaged'],
+            [{ connector: 'http', transportKind: 'http' }, 'connector_not_packaged'],
+            [{ connector: 'p1-hosted-sys' }, 'connector_not_packaged'],
+            [{ connector: 'p1-pkg-http-conn' }, 'connector_kind_mismatch'],
+            [{ connector: 'p1-pkg-own', transportKind: 'http' }, 'connector_kind_mismatch'],
+          ],
+        },
+      ];
+      for (const { path, body, caller, probes } of cases) {
+        for (const [probe, code] of probes) {
+          const refused = await announce(body(probe), caller);
+          expect({
+            path,
+            probe,
+            status: refused.statusCode,
+            code: refused.json().error?.code,
+          }).toEqual({ path, probe, status: 409, code });
+        }
+      }
+
+      // Nothing was written: every instance keeps its connector, kind and status, the refused
+      // first announce created no instance, and no probe created a connector.
+      const instances = await pool.query<{
+        gate_id: string;
+        connector: string;
+        transport_kind: string;
+        status: string;
+        seen: boolean;
+      }>(
+        `select gate_id, connector, transport_kind, status, last_seen_at is not null as seen
+           from gate_instances where gate_id like 'p1-hosted-%' or gate_id like 'p1-pkg-%'
+          order by gate_id`,
+      );
+      expect(instances.rows).toEqual([
+        {
+          gate_id: 'p1-hosted-again',
+          connector: 'p1-hosted-sys',
+          transport_kind: 'mcp',
+          status: 'discovered',
+          seen: true,
+        },
+        {
+          gate_id: 'p1-hosted-first',
+          connector: 'p1-hosted-sys',
+          transport_kind: 'mcp',
+          status: 'discovered',
+          seen: false,
+        },
+        {
+          gate_id: 'p1-pkg-again',
+          connector: 'p1-pkg-own',
+          transport_kind: 'mcp',
+          status: 'discovered',
+          seen: true,
+        },
+        {
+          gate_id: 'p1-pkg-http',
+          connector: 'p1-pkg-http-conn',
+          transport_kind: 'http',
+          status: 'discovered',
+          seen: true,
+        },
+      ]);
+      const stray = await pool.query(`select name from connectors where name = 'p1-brand-new-x'`);
+      expect(stray.rows).toEqual([]);
+
+      // The rule still lets each class file under its own: the never-seen gate-host instance
+      // under its definition's connector, the packaged gate under a new packaged connector.
+      expect((await announce(hostedBody('p1-hosted-first'))).statusCode).toBe(200);
+      expect(
+        (await announce({ ...packagedBody('p1-pkg-again'), connector: 'p1-pkg-renamed' }, 'gate'))
+          .statusCode,
+      ).toBe(200);
+      const connectors = await callAsAdmin<{ items: ConnectorWire[] }>('list_connectors');
+      expect(connectors.items.find((row) => row.name === 'p1-pkg-renamed')).toMatchObject({
+        kind: 'mcp',
+        packaged: true,
+      });
     });
   },
 );

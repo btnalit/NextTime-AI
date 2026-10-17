@@ -4126,7 +4126,17 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **审查拍板（#493 认可）**：前驱闸门而不是拒绝修订；已结束步骤去掉保留、改了拒绝；任一 owner 可解除 hold；被 hold 时允许修订与取消；修订预算按新预算判断；连续失败上限 5；放行的请求挡 verify 直到终态。
   - **验证**：`advancer.integration.test.ts`「stopping, holding and revising a run」7 个（hold、嵌套子 Task、S8 默认终止、S8 让它跑完与 `removals` 非法形状、修订校验、前驱闸门与改名、356）加遗留 364 一个；`goal-schema`「goal/0004」4 个；`goal-invariant-checks` 1 个；变异验证 A 段、B 段、`settled()` 与游标。
 - GO3c「去重与人工核对」输入（来自 #626 与审查 #493）：I-G4 步骤范围去重；人对结果不明动作下「已生效 / 重新执行」结论（`resumeGoalRun` 现在拒绝重试结果不明的步骤；GO3b 的前驱闸门与 superseded 步骤结果不明时目标暂停 `awaiting_reconcile`，核对后要能放开它）；同一身份已执行或结果不明时重放原行，某个 Operation 在本步骤有结果不明的请求时拒绝该 Operation 的新请求（#633）；被取消目标下结果不明的动作仍要能核对、能列出，reconcile 入口不要只看 `running` / `paused` 的目标；`await_decision` 两条路径；场景 S4、S5、S11。
-- GO3d「平台核对观察」输入（2026-10-17 从 GO3c 拆出）：判定式引擎放内核 substrate / epistemic 层，不反向依赖 gatekeeper-base，GO4 的验收检查复用；计划步骤声明核对观察，`waiting(reconcile)` 用平台观察加判定式自动核对；场景 S4。
+- GO3c 实现说明（#642，2026-10-17 合入，7e14195；governance 0023；新登遗留 392–394）：
+  - **步骤范围身份（I-G4）**（`governance/approval/request-action.ts`）：步骤里的 `request_action` 身份为 `auto:step:<stepRunId>:<gatekeeperId>:<operation>:<sha256(canonicalJson(params))>`，忽略调用方的 `idempotencyKey`（`wire-contract-conventions.md` 词条同步）。同身份最新一行在途、`executed`、`verified`，或 `failed + outcome_unknown` 且没有重新执行决定时重放该行，不再调门；其余新建一行，走完整的策略评估与审批。同门同 Operation 有结果不明且未核对的请求时，其他参数的调用 409 `action_in_doubt`（`ActionInDoubtError`），拒绝审计 `refusal.inDoubtActionRequestId` 指向那个请求，形状同 `goal_step_closed`。并发沿用 `auto:` 键的在途唯一索引。
+  - **核对与重新执行**（`governance/approval/reconcile.ts` 的 `reconcileActionRequest`，governance 0023）：`action_requests` 加 `reconciliation`（`effect_seen | effect_absent`）、`reconciliation_decision_id`、`reexecute_decision_id`，两种决定都写 `decisions` 行（core/0035 起应用角色只可插入）。结论由请求人或工作区 owner 记录（`human`、未停用；目标任何状态，包括已取消、已结束、被 hold，结论不执行任何东西）；重新执行只有请求人（owner 也不行），只在目标 `running | paused`（被 hold 也算）、步骤未结束未被修订掉时（`application/goal/reconcile.ts` 检查）。重新执行不改原行，只让同身份的下一次请求新建一行。CHECK：有结论必有 Decision、只有 `outcome_unknown` 的行能有结论、重新执行必须在 `effect_absent` 之后。守卫触发器 `action_requests_reconciliation_guard`（`before insert or update of …`）：两列只写一次、只给 `failed + outcome_unknown`、插入时三列必须为空（审查 P3①，本 PR 修）、Decision 必须写明本请求 id 与自己的种类（结论还要写 verdict）、决定人从 Decision 与 `principals` 读；`decided_by` 为空只许 `basis = 'observation'`，留给 GO3d（遗留 394）。同一结论重复提交 `changed: false`，不同结论 409；note 在 Decision 里原样保留，审计副本经 `redactedForAudit` 脱敏。
+  - **推进器的处置**（`disposition.ts`）：未核对 → reconcile（等待）；`effect_seen` → executed；`effect_absent` → unconfirmed（失败类别 `outcome_unknown`）；`effect_absent` + 重新执行 → 瞬时重试；优先级 reconcile → approval → outcome_unknown → action_refused → transient。被同身份新行取代的旧行不进 `listStepActionOutcomes`。`judgeFinishedAttempt`：Task 失败且动作效果是 `action_refused` / `outcome_unknown` 时按该类别判并暂停 `needs_decision`，审批被拒或过期不再自动重发（S11）。`assertRetryable`（`control.ts`）：有 `effect_absent` 且未重新执行的请求时，人的重试被拒。
+  - **核对后由请求人继续**（审查 #493 P2，修法 A，协调线程定）：首版的 phase R（推进器在没有待核对请求后自动解除自己加的 `awaiting_reconcile`）会覆盖请求人叠加的暂停与 hold 解除后的状态，已去掉。记录结论只让目标到期，推进器在暂停的目标上照常判定步骤，运行保持暂停、`pause_reason` 不变（只记 `goal_run.pause_noted`），由请求人 `resumeGoalRun` 继续；无迁移。GO3b 的前驱闸门与 superseded 步骤的 `awaiting_reconcile` 也由请求人继续放开（`supersededInDoubt` 只认未核对的请求）。
+  - **取消后仍可核对**：`listGoalRunUnresolvedActions` 列出整条目标所有步骤（含被修订掉、已取消的步骤）里 `needs: 'finding'`（缺结论）与 `needs: 'decision'`（`effect_absent` 且目标还能跑、步骤还在计划里）的请求；目标取消后可记结论、不能重新执行。
+  - **I6 检查一类误报**：只有带 `resultingStatus` 的 `action_request.*` 审计行参与转移比较，同状态的一对不算转移；三个实例（GO3c 的 `reconcile` / `reexecute`、GO3b 的 `release`、遗留 287 的 `outcome_in_doubt` 自环）一并修。同事务审计行排序不定是遗留 392。
+  - **契约**：ActionRequest 结果多一个可选 `reconciliation {verdict, reexecute}`（strict，7 处同样新增），旧客户端不受影响。
+  - **已知局限**：in-doubt 检查只认识已知结果不明的行；可自动审批的 Operation 被重新执行时，唯一的人工关卡是请求人的重新执行决定（策略层的选择）；遗留 393（继续时不重试非瞬时失败的步骤，运行空转）。
+  - **验证**：`reconcile.integration.test.ts`（重新执行后同身份请求得到新的 `pending_approval` 行与自己的 `action_request.request` 审计、只写一次、插入绕过）、`request-action.integration.test.ts`（端到端重新执行后新行被重放）、`advancer.integration.test.ts`（S4 / S5 / S11、`await_decision` 两条路径、按暂停来源 × 结论断言暂停四列不变；把 phase R 放回去会失败）、I6 注解行两例。
+- GO3d「平台核对观察」输入（2026-10-17 从 GO3c 拆出）：判定式引擎放内核 substrate / epistemic 层，不反向依赖 gatekeeper-base，GO4 的验收检查复用；计划步骤声明核对观察，`waiting(reconcile)` 用平台观察加判定式自动核对；场景 S4；#642 留下：核对守卫的 observation 分支（`decided_by` 为空、`basis = 'observation'`）在落地观察写入时收紧，比如要求已决状态或特定 activity kind（遗留 394）。
 - 来自 GO2（#619 与审查 #493）的输入：一步在嵌套子 Task 还在跑时就会判 `succeeded`（§3.4 要求名下动作都到终态）；A 段记录尝试结果时补 `inCurrentPlan` fencing；解锁也要认 `skipped` 的依赖；token 超出的取消路径与同一次推进的尝试均分剩余量（遗留 357）；推进连续抛错后自动暂停（遗留 356）。
 - 来自 GO1（审查 #493 delta）的输入：GoalRun 在 `cancelling` 时步骤能否从 `waiting` 回到 `running`，由 GO3 定（只允许走向终止，或写明为什么允许）；锁序同 GO2，先锁 GoalRun 再锁 StepRun。
 
@@ -4138,12 +4148,14 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 
 - 实现说明：（未开工）
 - 来自 GO3a（#626）的输入：`pause_goal` / `resume_goal` / `cancel_goal` 直接调用 `control.ts`，权限按 GO3a 划分（owner 能停不能续）；角色必须由能力层从已认证主体取，不能从参数取（`lockControlledRun` 信任传入的 `role`）；`resume_goal` 的 `retrySteps` 必须逐个列出步骤，不提供不列步骤的「全部重试」；`proposed` 的目标走 `reject`。
+- 来自 GO3c（#642）的输入：`reconcile_goal_action` 调用 `reconcileActionRequest`，能力带 minRole 与 `channel: 'human'`，决定人取已认证主体；读接口 `list_goal_run_unresolved_actions`；Worker 提示词写明步骤内调用方的 `idempotencyKey` 被忽略、409 `action_in_doubt` 表示等人核对。
 - 来自 GO3b（#633 与审查 #493）的输入：`revise_goal` 调用 `reviseGoalRun`，`release_goal_hold` 调用 `releaseGoalRunHold`，角色必须由能力层从已认证主体取、不能从参数取（守卫不知道角色，任何能 UPDATE 的写者都能解除 hold，遗留 389）；agent 提议的修订（`propose_revision`）走 `proposed` 状态、由请求者接受，计数规则与 `reviseGoalRun` 同一套；提议修订若提高预算或 `maxRevisions`，接受卡片上必须单独、显著地显示。
 - 来自 GO2（#619 与审查 #493）的输入：确认卡片要预检请求者是否持有步骤声明的门，否则第一次尝试会以 `authority_lost` 暂停；`contract_violation` 返工一次需要步骤输出与输入绑定（遗留 358）；幂等键（S3 的另一半）。
 
 **GO6 — 控制台：我的目标、确认卡片、目标详情**（见 `global-roadmap-2026-10-16.md` §4）
 
 - 实现说明：（未开工）
+- 来自 GO3c（#642）的显示内容：目标详情的「待处理动作」列表（`needs` 为 finding 或 decision，含被修订掉与已取消步骤的请求）；核对卡片「已生效 / 未生效」与请求人的「重新执行」卡片，被 hold 时提示需 owner 解除；核对之后运行仍是 `paused(awaiting_reconcile)`，现状要从「待处理动作」列表推导而不是看 `pause_reason`：没有 `finding` 项时显示「核对已记录，可以继续」并给请求人「继续」入口，有 `decision` 项（`effect_absent`）时提示先决定是否重新执行或修订计划；恢复卡片对非瞬时失败的步骤引导「重试或修订」（遗留 393）；wire 字段 `reconciliation` 的展示；activity kind `governance.reconcile_decision`、审计 `action_request.reconcile` / `.reexecute`、拒绝码 `action_in_doubt` 的中文文案。
 - 来自 GO3b（#633）的显示内容：暂停的目标显示谁暂停、以什么身份；被 owner 锁定的目标只有 owner 或更高权限能解除，请求者本身也是 owner 时可以自己解除；请求者看到「继续」不可用及原因与找谁，owner 看到「解除暂停」，owner 在已暂停目标上也能「暂停（hold）」；修订：在暂停点编辑计划（步骤从当前计划派生、不手打），对每个被移除或改过且还在跑的步骤选「终止」（默认）或「让它跑完」并逐条勾选可放行的请求，其余明确提示会撤回，填原因，预算可选；修订时间线（原因、谁、基于哪个修订、移除与新增步骤、处理方式、放行的请求）；推进连续失败暂停显示「推进连续失败 N 次」与最后一次错误；解除记录显示原来是谁 hold 的（`heldBy`）；审计标签 `goal_run.hold`、`goal_run.release_hold`、`goal_run.revise`、`goal_run.advance_failing`、`plan_revision.accept`、`step_run.supersede`、`action_request.release`（「修订时放行」）与撤回原因「its step was revised away」的中文文案。
 - 来自 GO3a（#626）的显示内容：目标的暂停原因与「继续」（可勾选重试失败步骤，结果不明的步骤不可勾）；「暂停」与「取消」（owner 也可见）；`cancelling` 时等待中的 Task 与执行中的动作；`cleanup_pending` 时逐条残留项（审计 `goal_run.finish_cancel` 的负载）；审计标签 `goal_run.cancel` / `finish_cancel` / `cleanup_finished`、`step_run.cancel`、`action_request.withdraw`、`task.budget_handed_down`（「预算分给子任务」）与资源为 `step_run` 的拒绝行（遗留 366）；暂停原因 `budget_exhausted` 的说明。
 
@@ -4231,7 +4243,15 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 
 **P1 — （改造）ChangePlan 核心，验收含手写 knowledge 包**（见 `global-roadmap-2026-10-16.md` §4）
 
-- 实现说明：（未开工）
+- 实现说明（第一个小 PR：评测用夹具门重设计，#644，2026-10-17 合入，bbcaa08；无迁移；新登遗留 395–399）：
+  - **`connector` 参数**：`create_gate_instance` 多一个可选的 `connector`（接入包名，按服务的系统命名）。新名字在同一事务里建出接入包：种类同实例、`packaged = false`、`platform_preset`，另记平台审计 `connector.created`（`resourceRef`、`kind`、`mode`、`gateId`）；已有名字必须同种类且不是打包门的接入包，否则 409 `connector_kind_mismatch` / `connector_packaged`，什么都不写。不填时照旧挂通用接入包（兼容直接调能力的 staging、S2 验收）；控制台默认用系统自己的接入包。
+  - **一条接入包规则**（`fitConnector`，`application/gates/store.ts`）：一个接入包下的实例同种类、同类别，打包门的实例只进打包接入包，门宿主实例只进通用接入包或管理员为门宿主起的接入包。`create_gate_instance` 与每次会写接入包的 announce（首次或之后、门宿主或打包门）都过它；冻结的 announce 不写接入包，照旧由冻结挡住。通用名不读行、按名字判断；新名字按实例的种类与类别建出接入包；拒绝在写实例之前返回。并发：先 `insert … on conflict do nothing` 再读回，同名并发时第二个等第一个提交后按它写下的种类判断；拒绝或 gate id 冲突时整个事务回滚，不留接入包与审计行。
+  - **announce（`upsertAnnouncement`）**：门宿主实例的拒绝条件从「还没 announce 过」改为「未冻结」（审查 #493 P2：之后的 announce 原来能把 `discovered` 实例改挂到别的接入包，甚至新建打包接入包），未冻结时接入包或种类与定义不符一律 409 `identity_mismatch`。打包门 announce 过同一条规则（#493 P3，早于本 PR，一并修）：通用名或门宿主接入包 409 `connector_not_packaged`，同名别的种类 409 `connector_kind_mismatch`。抢先占名不会被劫持：管理员先用某打包门将来的 `GATE_CONNECTOR` 名建了门宿主实例，那个打包门 announce 被拒（`connector_not_packaged`），不另加预留名单。
+  - **门宿主**（`gatekeeper-base/src/host.ts`）：列表项多可选 `connector`，不给时回落到传输种类，接入包与显示名一样就地更新、不重建实例。共享定义 `GENERIC_CONNECTOR_NAMES`、`isGenericConnector`、`CONNECTOR_NAME_PATTERN` 挪到 `shared/wire/platform.ts`。
+  - **控制台**：新建实例表单多「接入包」一组（名字按门 ID 派生可改、列出同种类已有接入包可点选加入并写出实例数与模式、名字错误就地报错并进「还差」）；选通用接入包时说明代价；集成页「来源」列多「门宿主」，非通用接入包的自连列显示「—」；模式确认、目录隐藏说明、启动器预置提示只对通用接入包说「工作区不能再自己接入」；「通用」改按名字判断，不再借用 `packaged`；`connector.created` 文案与平台审计筛选项。CI 夹具门 `e2e-hosted-mcp` 改挂自己的接入包，e2e 断言它一建好就是平台预置、`mcp` 始终 `self_serve`。
+  - **取舍**：新接入包直接 `platform_preset`（实例仍要管理员启用才进目录）；不能挂进打包门的接入包；最后一个实例删除后接入包留着（同名再建会加入它，沿用当时的模式）；抢先占名与空接入包是设计选择，不记遗留。
+  - **验证**：`platform-gate-host.integration.test.ts` a、n、o 与表驱动的 p（四条 announce 路径各一组探针，去掉打包门检查或把门宿主条件改回只查首次都会失败）；`host.test.ts` 就地更新；web `CreateGateInstanceForm`、`PlatformIntegrationsPage`、`ConnectSystemLauncher` 测试；几个打包门测试夹具从通用 `http` 改到自己的 `fixture-http`。
+  - **留给 P1 后续 PR**：`importManifest` 的 `requireDescription`（遗留 372）与 344。
 - 来自 P0b（#620）的输入：第一个小 PR 是评测用夹具门重设计（托管实例挂在按系统命名的接入包上，`create_gate_instance` 的 `connector` 可选）；`importManifest` 的 `requireDescription` 留给目录侧要求复用，不用就删（遗留 372）；344 由 P1 收口。
 
 **AA1 — 管理员 Agent 身份与上限**（见 `global-roadmap-2026-10-16.md` §4）

@@ -27,6 +27,7 @@ const OTHER_AUDIT_ACTIONS = [
   'user.identity_claimed',
   'principal.user_rebound',
   'connector.entry_handles_revoked',
+  'connector.created',
   'self_connection.entry_handles_revoked',
   'gatekeeper.self_connection_linked',
   'gate_instance.manifest_confirmed',

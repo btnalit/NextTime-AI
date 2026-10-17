@@ -629,7 +629,10 @@ docker compose exec gate-host node -e "fetch('http://127.0.0.1:8083/healthz').th
 1. 管理 → 集成 → 门实例 → **新建门宿主实例**：填稳定 id（就是 `GATE_ID`，也是宿主上的路径 `/i/<id>`）、
    种类（`http` / `mcp`）、目标地址（compose 内部主机名或内网 URL；例如 fixture MCP 是
    `http://fixture-mcp:8080/`）、凭证模式（`shared` 一份共用 / `connected_account` 每人一份）、`http` 可填
-   OpenAPI 文档 URL 让宿主导入 Operation（`http` 必填）。实例落库为 `discovered`，显示"等待宿主接管"。
+   OpenAPI 文档 URL 让宿主导入 Operation（`http` 必填）、接入包。接入包默认是这个系统自己的（按 id 生成，
+   可改；同一系统的几个实例填同一个名字），名字新的由内核建成 `platform_preset`；选通用接入包 `mcp` / `http`
+   则和工作区自连的同类系统共用（P1）。实例落库为 `discovered`，显示"等待宿主接管"。宿主拉定义时连同接入包
+   一起拿到，announce 的就是这个接入包。
 2. 宿主每 `GATE_ANNOUNCE_INTERVAL_SEC`（默认 60 s，首次立刻）拉一次定义：`mcp` 实例对目标发 `tools/list`
    导入工具、`http` 实例拉 OpenAPI，成功即 announce（`endpoint = http://gate-host:8083/i/<id>`），页面上
    出现心跳时间与 Operation 数；目标不可达则**不 announce**，宿主日志一行 warn，下一轮重试。
@@ -643,8 +646,11 @@ docker compose exec gate-host node -e "fetch('http://127.0.0.1:8083/healthz').th
    `connected_account` 实例由每个成员在工作区"系统接入"页 **录入我的凭证**（`issue_gate_credential_token`，
    槽位 = 自己的 Principal）；成员凭证不参与握手，所以 `tools/list` 要认证的目标目前只能用 `shared` 模式接入。
 4. 宿主接管后（有心跳、有 Operation 数、端点是 `http://gate-host:8083/i/<id>`）在详情抽屉 **启用** 实例——
-   与打包门同一步，管理员复核过端点再放行；接入包 `mcp` / `http` 设为 **平台预置**（P-B2a 起允许；`cli` / `ssh`
-   仍不能）→ 工作区"系统接入"从平台目录一键启用 → 能力目录出现工具。宿主尚未接管时启用会得到 409 `gate_not_ready`。
+   与打包门同一步，管理员复核过端点再放行；系统自己的接入包新建即**平台预置**，挂在通用接入包上的实例要把
+   `mcp` / `http` 设为平台预置（P-B2a 起允许；`cli` / `ssh` 仍不能；设了以后工作区不能再自己接入这一种类的系统）
+   → 工作区"系统接入"从平台目录一键启用 → 能力目录出现工具。宿主尚未接管时启用会得到 409 `gate_not_ready`。
+   内核与宿主要同版升级：旧宿主不认接入包字段，对挂在系统接入包上的实例 announce 通用名，被拒 409
+   `identity_mismatch`，实例停在"等待宿主接管"。
 5. 删除：只有宿主实例可删，且要先没有工作区链接（否则 409 `gate_in_use`，先在实例上"禁用"）。宿主下一轮
    拉定义时把它从内存表摘掉，`/i/<id>/*` 立即 404，并删除 `${NEXTTIME_DATA}/gate-host/<id>/` 里的加密凭证目录
    （同名新建不会继承旧凭证）。
