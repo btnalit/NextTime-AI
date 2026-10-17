@@ -10,10 +10,7 @@ import type {
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { type PoolLike, withWorkspace } from '../../adapters/db/pool.js';
-import {
-  listStepActionOutcomes,
-  listUnresolvedStepActions,
-} from '../../governance/approval/index.js';
+import { listStepActionOutcomes } from '../../governance/approval/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import {
   type LiveGoalTask,
@@ -55,14 +52,6 @@ import type { GoalRunRow, PlanRevisionRow, StepRunRow } from './types.js';
  *      step a revision superseded — its attempt and nested child Tasks — are terminated after the
  *      commit, like a cancelling run's, unless the revision let that step finish
  *      (`plan_revisions.removals`, goal/0004). A superseded step itself never moves again.
- *   R. **Lift a reconcile pause** (S11 GO3c). The advancer's own `awaiting_reconcile` pause —
- *      someone has to check a target system first — ends once no request of any step of the run
- *      (superseded ones included) still awaits a finding (`reconcile.ts`; GO3d adds the platform's
- *      reconcile observation): the run goes back to `running` and the phases below judge its
- *      steps again, so `effect_seen` lets the run go on, `effect_absent` pauses it
- *      `needs_decision` (the reason the shared vocabulary gives a reconcile that saw no effect)
- *      and a re-execute starts a new attempt. A person's pause (`requested`, an owner's hold) is
- *      never lifted here.
  *   A. **Record finished attempts** (running or paused). A `running` / `waiting` step whose current
  *      attempt Task has finished — once no other Task of the step still runs: a nested child Task
  *      can outlive its caller and still raise requests the step owns (GO3b) — is judged by that
@@ -73,7 +62,9 @@ import type { GoalRunRow, PlanRevisionRow, StepRunRow } from './types.js';
  *      `awaiting_reconcile` until a person records what they found (GO3c, `reconcile.ts`;
  *      `effect_seen` counts as executed, `effect_absent` fails the step `outcome_unknown` for a
  *      person, a re-execute decision fails it `transient` for a new attempt — `disposition.ts`;
- *      the platform's reconcile observation is GO3d). Otherwise {@link judgeFinishedAttempt}:
+ *      the platform's reconcile observation is GO3d) and the requester resumes it: the advancer
+ *      never lifts that pause itself (review #493 on #642 — a person's pause laid over it, or one
+ *      left by a lifted hold, could not be told from it). Otherwise {@link judgeFinishedAttempt}:
  *      success, or a failure category — only `transient` is retried without a person; every
  *      other category pauses the GoalRun. A step
  *      no longer part of the current plan is not judged at all (I-G2: a late result is kept on
@@ -393,7 +384,6 @@ class Advance {
     const steps = await this.lockSteps();
     this.liveTasks = await listGoalRunLiveTaskSteps(this.client, this.ws, this.goal.id);
     await this.stopSupersededWork(steps);
-    await this.liftReconcilePause(steps);
     for (const step of steps) {
       if (step.status === 'running' || step.status === 'waiting') await this.recordAttempt(step);
     }
@@ -478,30 +468,6 @@ class Advance {
       if (removal?.mode === 'let_finish') continue;
       this.terminated.push(...tasks);
     }
-  }
-
-  // ----- R ------------------------------------------------------------------------------------
-
-  /** Before phase A: a run paused this way judges its steps as a running one does, so a step that
-   *  now fails pauses the run with its own reason. */
-  private async liftReconcilePause(steps: readonly StepRunRow[]): Promise<void> {
-    if (
-      this.status !== 'paused' ||
-      this.goal.pauseReason !== 'awaiting_reconcile' ||
-      this.goal.pausedBy !== null
-    ) {
-      return;
-    }
-    const unresolved = await listUnresolvedStepActions(
-      this.client,
-      this.ws,
-      steps.map((step) => step.id),
-    );
-    if (unresolved.some((action) => action.reconciliation === null)) return;
-    await this.moveGoal('resume', null, {
-      pauseReason: 'awaiting_reconcile',
-      reason: 'reconciled',
-    });
   }
 
   // ----- A ------------------------------------------------------------------------------------
@@ -912,7 +878,7 @@ class Advance {
   }
 
   private async moveGoal(
-    event: Extract<GoalRunEvent, 'pause' | 'resume' | 'verify'>,
+    event: Extract<GoalRunEvent, 'pause' | 'verify'>,
     pauseReason: GoalRunPauseReason | null,
     audit: Record<string, unknown>,
   ): Promise<void> {

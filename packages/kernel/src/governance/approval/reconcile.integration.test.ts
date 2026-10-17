@@ -598,6 +598,45 @@ describe.runIf(DATABASE_URL !== undefined)(
         ]);
       });
 
+      it('refuses a request inserted with a finding or a re-execute already on it — even one every CHECK accepts', async () => {
+        const lost = await lostRequest();
+        /** A copy of the lost request under a new id and key, with `extra` over its columns. */
+        const copy = (id: string, extra: Record<string, unknown>) =>
+          asOwner((client) =>
+            client.query(
+              `insert into action_requests
+               select (jsonb_populate_record(null::action_requests, to_jsonb(a) || $3::jsonb)).*
+                 from action_requests a where a.workspace_id = $1 and a.id = $2`,
+              [
+                workspaceId,
+                lost,
+                JSON.stringify({ id, idempotency_key: `explicit:copy:${id}`, ...extra }),
+              ],
+            ),
+          );
+
+        const seenId = randomUUID();
+        await expect(
+          copy(seenId, {
+            reconciliation: 'effect_absent',
+            reconciliation_decision_id: await decision(requesterId, finding(seenId)),
+          }),
+        ).rejects.toThrow(/created unreconciled/);
+        const reexecuteId = randomUUID();
+        await expect(
+          copy(reexecuteId, {
+            reexecute_decision_id: await decision(requesterId, {
+              actionRequestId: reexecuteId,
+              decision: 'reexecute',
+            }),
+          }),
+        ).rejects.toThrow(/created unreconciled/);
+        // The same copy without them goes in: the guard lets an ordinary insert through.
+        const plainId = randomUUID();
+        await copy(plainId, {});
+        expect((await row(plainId)).reconciliation).toBeNull();
+      });
+
       it('makes both write-once, and allows them only on a failed request whose outcome is unknown and a re-execute only after effect_absent', async () => {
         const id = await lostRequest();
         await reconcile(requesterId, {

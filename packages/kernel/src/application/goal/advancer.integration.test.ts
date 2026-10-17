@@ -81,7 +81,7 @@ import type { GoalRunBudget, GoalRunRow, StepRunRow } from './types.js';
  * released one by one), a step judged only once its nested child Tasks ended, verification only
  * once nothing of the run is left running, and a run whose advances keep failing (legacy 356);
  * and GO3c's: a person's finding on an action whose outcome is unknown and the requester's
- * re-execute decision, the advancer lifting its own reconcile pause, scenarios S5 and S11.
+ * re-execute decision, a finding that resumes no run (the requester does), scenarios S5 and S11.
  *
  * Every test advances its own GoalRuns by id (`advanceGoalRun`): the claim and the reconcile scan
  * are cross-workspace, and the shared database holds other files' rows, so tests that exercise
@@ -3062,7 +3062,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           );
         }
 
-        it('effect_seen counts as executed: the step succeeds, and the run the advancer paused for the check goes on by itself', async () => {
+        it('effect_seen counts as executed: the step succeeds, and the run the advancer paused for the check goes on once the requester resumes it', async () => {
           const requester = await newPrincipal();
           const member = await newPrincipal();
           const goalRunId = await startGoal(requester, [
@@ -3111,13 +3111,91 @@ describe.runIf(DATABASE_URL !== undefined)(
           expect(await isDue(goalRunId)).toBe(true);
           expect(await unresolved(goalRunId)).toEqual([]);
           await advance(goalRunId, requester);
-          const steps = await stepsOf(goalRunId);
-          expect(steps.a?.status).toBe('succeeded');
-          expect(steps.b?.status).toBe('running');
+          const judged = await stepsOf(goalRunId);
+          expect(judged.a?.status).toBe('succeeded');
+          expect(judged.b?.status).toBe('ready');
+          // A finding resumes nothing: the requester does (review #493 on #642).
+          expect((await goalOf(goalRunId)).status).toBe('paused');
+          await resumeAs(goalRunId, requester);
+          await advance(goalRunId, requester);
+          expect((await stepsOf(goalRunId)).b?.status).toBe('running');
           expect((await goalOf(goalRunId)).status).toBe('running');
           expect(
-            (await goalAudit(goalRunId)).find((row) => row.action === 'goal_run.resume')?.payload,
-          ).toMatchObject({ by: 'advancer', reason: 'reconciled' });
+            (await goalAudit(goalRunId))
+              .filter((row) => row.action === 'goal_run.resume')
+              .map((row) => row.payload),
+          ).toEqual([expect.objectContaining({ by: 'person', pauseReason: 'awaiting_reconcile' })]);
+        });
+
+        it('a finding never resumes a run — not over the requester’s own pause, nor once an owner’s hold on it was lifted (review #493 on #642)', async () => {
+          const requester = await newPrincipal();
+          const pausedForCheck = async () => {
+            const goalRunId = await startGoal(requester, [
+              { key: 'a' },
+              { key: 'b', dependsOn: ['a'] },
+            ]);
+            await advance(goalRunId, requester);
+            const stepA = (await stepsOf(goalRunId)).a as StepRunRow;
+            const action = await requestOn(
+              await newGatekeeper(),
+              stepA.id,
+              requester,
+              'executing',
+              'test.go3c.intent',
+            );
+            await lose(action);
+            await completeStep(stepA.id, requester);
+            await advance(goalRunId, requester);
+            expect(await goalOf(goalRunId)).toMatchObject({
+              status: 'paused',
+              pauseReason: 'awaiting_reconcile',
+              pausedBy: null,
+            });
+            return { goalRunId, action };
+          };
+          const settledButPaused = async (goalRunId: string) => {
+            await advance(goalRunId, requester);
+            const steps = await stepsOf(goalRunId);
+            expect(steps.a?.status).toBe('succeeded');
+            expect(steps.b?.status).toBe('ready');
+            expect((await goalOf(goalRunId)).status).toBe('paused');
+          };
+
+          // 1. The requester pauses over the advancer's pause — nothing changes on the row — then
+          //    records the finding: the run still waits for them.
+          const own = await pausedForCheck();
+          expect(
+            await asRequester(requester, (client) =>
+              pauseGoalRun(client, workspaceId, {
+                goalRunId: own.goalRunId,
+                actor: by(requester),
+              }),
+            ),
+          ).toMatchObject({ status: 'paused', changed: false });
+          await reconcileAs(own.goalRunId, own.action, requester, { verdict: 'effect_seen' });
+          await settledButPaused(own.goalRunId);
+
+          // 2. An owner holds it and lifts the hold (`paused_by` is null again), then records the
+          //    finding: the run stays paused for the requester to resume.
+          const held = await pausedForCheck();
+          await asOwner((client) =>
+            pauseGoalRun(client, workspaceId, { goalRunId: held.goalRunId, actor: byOwner() }),
+          );
+          await asOwner((client) =>
+            releaseGoalRunHold(client, workspaceId, {
+              goalRunId: held.goalRunId,
+              actor: byOwner(),
+            }),
+          );
+          expect(await goalOf(held.goalRunId)).toMatchObject({
+            status: 'paused',
+            pausedBy: null,
+          });
+          await reconcileAs(held.goalRunId, held.action, ownerId, { verdict: 'effect_seen' });
+          await settledButPaused(held.goalRunId);
+          await resumeAs(held.goalRunId, requester);
+          await advance(held.goalRunId, requester);
+          expect((await stepsOf(held.goalRunId)).b?.status).toBe('running');
         });
 
         it('effect_absent: the step fails for a person and is never run again on its own; once the requester decided to, a retry makes the request anew, for a new approval', async () => {
@@ -3142,7 +3220,8 @@ describe.runIf(DATABASE_URL !== undefined)(
             pauseReason: 'awaiting_reconcile',
           });
 
-          // An owner checks the target: nothing there. The run's pause now says what it waits for.
+          // An owner checks the target: nothing there. The step fails for a person; the run stays
+          // paused (the advancer notes the decision it waits for) until the requester resumes it.
           await reconcileAs(goalRunId, first, ownerId, { verdict: 'effect_absent' });
           await advance(goalRunId, requester);
           expect((await stepsOf(goalRunId)).only).toMatchObject({
@@ -3150,10 +3229,11 @@ describe.runIf(DATABASE_URL !== undefined)(
             failureCategory: 'outcome_unknown',
             attemptCount: 1,
           });
-          expect(await goalOf(goalRunId)).toMatchObject({
-            status: 'paused',
-            pauseReason: 'needs_decision',
-          });
+          expect((await goalOf(goalRunId)).status).toBe('paused');
+          expect(
+            (await goalAudit(goalRunId)).find((row) => row.action === 'goal_run.pause_noted')
+              ?.payload,
+          ).toMatchObject({ by: 'advancer', reason: 'needs_decision' });
           expect(await unresolved(goalRunId)).toEqual([
             expect.objectContaining({ actionRequestId: first, needs: 'decision' }),
           ]);
@@ -3194,7 +3274,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           ).resolves.toMatchObject({ id: again.id });
         });
 
-        it('no effect, run it again, in one decision: the run the advancer paused goes on with a new attempt; under an owner’s hold it waits for the hold to be lifted and the requester to resume', async () => {
+        it('no effect, run it again, in one decision: once the requester resumes the run the advancer paused, a new attempt starts; under an owner’s hold it waits for the hold to be lifted and the requester to resume', async () => {
           const requester = await newPrincipal();
           const lost = async () => {
             const goalRunId = await startGoal(requester, [{ key: 'only' }]);
@@ -3222,6 +3302,14 @@ describe.runIf(DATABASE_URL !== undefined)(
             verdict: 'effect_absent',
             reexecute: true,
           });
+          await advance(free.goalRunId, requester);
+          expect((await stepsOf(free.goalRunId)).only).toMatchObject({
+            status: 'failed',
+            failureCategory: 'transient',
+            attemptCount: 1,
+          });
+          expect((await goalOf(free.goalRunId)).status).toBe('paused');
+          await resumeAs(free.goalRunId, requester);
           await advance(free.goalRunId, requester);
           expect((await goalOf(free.goalRunId)).status).toBe('running');
           expect((await stepsOf(free.goalRunId)).only).toMatchObject({

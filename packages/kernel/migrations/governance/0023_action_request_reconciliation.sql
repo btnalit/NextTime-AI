@@ -24,12 +24,14 @@
 -- a person is the requester's (`on_behalf_of`) or a workspace owner's, a human principal still
 -- enabled; a re-execute is the requester's alone, as a person. Each Decision must name this request
 -- and its own kind (`rationale.actionRequestId`, `rationale.decision`), so one cannot be attached
--- to another request or stand for the other kind.
+-- to another request or stand for the other kind. It also fires on INSERT: a request is created
+-- with none of the three columns set (review #493 on #642), so no insert carries a finding or a
+-- re-execute past the checks above.
 --
 -- No backfill: every existing row carries NULL. Reversibility (release.md §6): the previous release
 -- reads and writes `action_requests` with an explicit column list and never sees these columns; the
--- CHECKs hold trivially on its rows, and the trigger fires only when one of the three columns is
--- written.
+-- CHECKs hold trivially on its rows, and the trigger lets its inserts through (the three columns
+-- are NULL) and fires on an update only when one of them is written.
 --
 -- Cross-process bootstrap lock: same governance-module advisory lock key as every other file in
 -- this module (core/0001_identity.sql's header comment has the full rationale).
@@ -85,6 +87,14 @@ language plpgsql as $$
 declare
   finding record;
 begin
+  if tg_op = 'INSERT' then
+    if new.reconciliation is not null or new.reconciliation_decision_id is not null
+       or new.reexecute_decision_id is not null then
+      raise exception 'action_requests: a request is created unreconciled; a finding and a re-execute decision are recorded on it afterwards';
+    end if;
+    return new;
+  end if;
+
   if old.reconciliation_decision_id is not null
      and (new.reconciliation is distinct from old.reconciliation
           or new.reconciliation_decision_id is distinct from old.reconciliation_decision_id) then
@@ -142,6 +152,6 @@ end;
 $$;
 
 create or replace trigger action_requests_reconciliation_guard
-  before update of reconciliation, reconciliation_decision_id, reexecute_decision_id
+  before insert or update of reconciliation, reconciliation_decision_id, reexecute_decision_id
   on action_requests
   for each row execute function action_requests_reconciliation_guard();

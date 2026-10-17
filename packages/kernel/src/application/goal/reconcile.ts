@@ -34,11 +34,12 @@ import { GoalRunNotFoundError, GoalRunStateError, lockGoalRun } from './service.
  *
  * Then the run is set due in the same transaction, so the advance re-reads the step: a step
  * `waiting(reconcile)` is judged again (`disposition.ts`: `effect_seen` → executed,
- * `effect_absent` → a person decides, re-execute → a new attempt). A run the advancer paused
- * `awaiting_reconcile` goes on by itself once nothing of it awaits a finding (`advance.ts`, phase
- * R) — `effect_absent` then pauses it `needs_decision`, for the requester to resume with a retry
- * once they decided to run the request again. A person's pause or an owner's hold stays: resuming
- * that is still the requester's own step (`resumeGoalRun`).
+ * `effect_absent` → a person decides, re-execute → a new attempt). The run itself stays paused
+ * until the requester resumes it (`resumeGoalRun`) — also the `awaiting_reconcile` pause the
+ * advancer set: a finding never resumes a run (review #493 on #642: a requester's pause laid over
+ * the advancer's, or the pause a lifted hold leaves, is not told apart from it by `paused_by`, so
+ * lifting it automatically would override a person). After `effect_absent` the requester's resume
+ * pauses it `needs_decision` again until they decide to run the request again (or revise the plan).
  *
  * A finding that turns out wrong is never rewritten: `effect_absent` is answered by a re-execute or
  * a revision of the plan; `effect_seen` that did not happen shows in the step's acceptance (GO4)
