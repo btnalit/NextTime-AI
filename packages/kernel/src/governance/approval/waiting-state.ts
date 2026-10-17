@@ -44,7 +44,9 @@ export interface ActionRequestQueueBlocker {
 
 /** Keyed by ActionRequest id: the in-doubt record of each of `ids` that has one. Empty input
  *  short-circuits without a round trip. Callers pass only rows that are `executing` — the audit
- *  row stays after the row is resolved. */
+ *  row stays after the row is resolved. Two records written in one transaction share
+ *  `created_at` (`now()`), so `id` breaks the tie: the same row is picked on every read (legacy
+ *  340). */
 export async function readActionRequestsInDoubt(
   client: PoolClient,
   workspaceId: string,
@@ -57,7 +59,7 @@ export async function readActionRequestsInDoubt(
      from audit_records
      where workspace_id = $1 and resource_type = 'action_request' and action = $2
        and resource_id = any($3::uuid[])
-     order by resource_id, created_at asc`,
+     order by resource_id, created_at asc, id asc`,
     [workspaceId, ACTION_REQUEST_IN_DOUBT_AUDIT_ACTION, unique],
   );
   return new Map(
@@ -154,6 +156,8 @@ export async function readActionRequestWaitingStates(
  * clipped, every character a reader cannot see shown as `\u{XXXX}`, line breaks kept. Derived on
  * read, like the waiting state: the audit row is the record (I11). Keyed by row id; a row with no
  * audited reason is absent. `truncated` (legacy 339) comes out of the same call as the text.
+ * Records sharing `created_at` (one transaction's `now()`) are ordered by `id`, so every read
+ * shows the same one (legacy 340, review #493 on #609).
  */
 export type ActionRequestFailureReason = ShownAuditReason;
 
@@ -175,7 +179,7 @@ export async function readActionRequestFailureReasons(
      from audit_records
      where workspace_id = $1 and resource_type = 'action_request' and action = 'action_request.fail'
        and resource_id = any($2::uuid[])
-     order by resource_id, created_at desc`,
+     order by resource_id, created_at desc, id desc`,
     [workspaceId, ids],
   );
   const reasons = new Map<string, ActionRequestFailureReason>();

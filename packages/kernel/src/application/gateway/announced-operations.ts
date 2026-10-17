@@ -140,8 +140,9 @@ export async function compareAnnouncedOperations(
       // Legacy K: the gate refuses calls made under the deployed definition until a revision
       // carrying the announced one is published (`refresh_operation_governance` opens it).
       definitionDiffers: operationDefinitionDiffers(existingRecord, operation),
-      // Review #493 on #612 (M1): the write's own judgment — this change opens a revision (on a
-      // published row) instead of being applied in place.
+      // Review #493 on #612 (M1): the write's own judgment — this change is not applied in place
+      // but opens a revision on a published row; on a deprecated row nothing is written at all
+      // (legacy 345 — the console reads `existing.status` for that).
       ...(governanceChangeNeedsRevision(source, direction)
         ? { governanceByRevision: true as const }
         : {}),
