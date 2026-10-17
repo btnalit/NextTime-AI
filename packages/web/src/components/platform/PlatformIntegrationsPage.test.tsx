@@ -407,6 +407,50 @@ describe('PlatformIntegrationsPage', () => {
     expect(mark.textContent).toContain('Authorization（请求头）');
   });
 
+  // P1: a connector an administrator named for a system's gate-host instances is neither packaged
+  // nor generic — its mode reaches the catalog alone, so nothing may claim it stops workspaces
+  // connecting a kind of system themselves (only a generic connector's mode does, R-40).
+  it('P1: a gate-host system connector is typed 门宿主, counts no self-connections, and no wording says presetting it stops self-connections', async () => {
+    const http = scriptedHttp({
+      list_connectors: () => ({
+        items: [
+          connector({ name: 'widgets', kind: 'mcp', packaged: false, mode: 'self_serve' }),
+          connector({ name: 'mcp', kind: 'mcp', packaged: false, mode: 'self_serve' }),
+        ],
+      }),
+      list_gate_instances: () => ({
+        items: [gateInstance({ connector: 'widgets', status: 'enabled' })],
+      }),
+    });
+    renderPage(http);
+    const table = await screen.findByTestId('connectors-table');
+    const system = within(table).getByTestId('connector-row-widgets');
+    const generic = within(table).getByTestId('connector-row-mcp');
+    expect(within(system).getByText('门宿主')).toBeTruthy();
+    expect(within(generic).getByText('通用')).toBeTruthy();
+    expect(within(system).getByText('—')).toBeTruthy();
+    expect(within(generic).queryByText('—')).toBeNull();
+
+    fireEvent.change(within(system).getByTestId('connector-mode-widgets'), {
+      target: { value: 'platform_preset' },
+    });
+    const confirm = await screen.findByTestId('connector-mode-confirm-widgets');
+    expect(confirm.textContent).not.toContain('不能再自己连这一类系统');
+    fireEvent.change(within(generic).getByTestId('connector-mode-mcp'), {
+      target: { value: 'platform_preset' },
+    });
+    expect((await screen.findByTestId('connector-mode-confirm-mcp')).textContent).toContain(
+      '不能再自己连这一类系统',
+    );
+
+    fireEvent.click(screen.getByTestId('integrations-tab-instances'));
+    const instances = await screen.findByTestId('gate-instances-table');
+    fireEvent.click(await within(instances).findByTestId('gate-instance-open-gate-1'));
+    const notice = await screen.findByTestId('gate-instance-hidden-from-workspaces');
+    expect(notice.textContent).toContain('到「接入包」把「widgets」改成「平台预置」');
+    expect(notice.textContent).not.toContain('不能再自己接入这一类系统');
+  });
+
   it('self-service visibility: a cli instance is never offered the preset switch — the drawer says workspaces connect it themselves', async () => {
     const http = scriptedHttp({
       list_connectors: () => ({
@@ -845,15 +889,11 @@ describe('PlatformIntegrationsPage', () => {
   // "omits manifestSource when blank" case is the mcp transport (mirrors CreateGateInstanceForm.test).
   it('creating a hosted instance posts create_gate_instance (mcp omits manifestSource) and opens its detail', async () => {
     const created = hostedGateInstance({ gateId: 'gate-new', displayName: 'gate-new' });
+    let sent: unknown;
     const http = scriptedHttp({
       list_gate_instances: () => ({ items: [] }),
       create_gate_instance: (params) => {
-        expect(params).toEqual({
-          gateId: 'gate-new',
-          transportKind: 'mcp',
-          target: 'https://target.internal',
-          credentialMode: 'shared',
-        });
+        sent = params;
         return created;
       },
     });
@@ -875,6 +915,14 @@ describe('PlatformIntegrationsPage', () => {
     await waitFor(() =>
       expect(http.calls.some((call) => call.name === 'create_gate_instance')).toBe(true),
     );
+    // P1: filed under a connector of its own, named after the gate id.
+    expect(sent).toEqual({
+      gateId: 'gate-new',
+      transportKind: 'mcp',
+      target: 'https://target.internal',
+      credentialMode: 'shared',
+      connector: 'gate-new',
+    });
     const detail = await screen.findByTestId('gate-instance-detail');
     expect(within(detail).getByTestId('gate-instance-hosted-tag')).toBeTruthy();
   });

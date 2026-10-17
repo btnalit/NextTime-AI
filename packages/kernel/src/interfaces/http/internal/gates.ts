@@ -155,7 +155,8 @@ export async function registerGatesRoutes(
 
   // P-B2a (决定 ⑥): the generic gate host pulls the instances it must serve — the same trust
   // direction as announce (internal token, gate → kernel), so no kernel → host credential exists.
-  // Definitions only (transport kind, target, credential mode, manifest source); never a credential.
+  // Definitions only (transport kind, target, credential mode, manifest source) and the connector
+  // each instance announces (P1); never a credential.
   app.get('/internal/gate-host/instances', async (_request, reply) => {
     const items = await withWorkspace(
       deps.pool,

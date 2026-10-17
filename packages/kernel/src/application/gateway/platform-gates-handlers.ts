@@ -454,6 +454,7 @@ export const createGateInstanceHandler: CapabilityHandler = async (
   client,
   _workspaceId,
   params,
+  ctx,
 ) => {
   const input = params as {
     gateId: string;
@@ -462,6 +463,7 @@ export const createGateInstanceHandler: CapabilityHandler = async (
     target: string;
     credentialMode: 'shared' | 'connected_account';
     manifestSource?: string | null;
+    connector?: string;
   };
   // Review of #549 (the gate-instance half of legacy 186): the definition is stored as given, sent
   // to the gate host, and shown to every platform administrator and enabling workspace — a
@@ -477,16 +479,49 @@ export const createGateInstanceHandler: CapabilityHandler = async (
     credentialMode: input.credentialMode,
     manifestSource: input.transportKind === 'http' ? (input.manifestSource ?? null) : null,
   };
-  const created = await createHostedGateInstance(client, {
+  const connector = input.connector ?? input.transportKind;
+  const outcome = await createHostedGateInstance(client, {
     gateId: input.gateId,
     displayName: input.displayName ?? input.gateId,
+    connector,
     definition,
   });
-  if (!created) {
+  const refused = outcome.refused;
+  if (refused === 'gate_id_taken') {
     throw new PlatformAdminError(
       'gate_id_taken',
       `a gate instance "${input.gateId}" already exists`,
     );
+  }
+  if (refused === 'connector_kind_mismatch') {
+    throw new PlatformAdminError(
+      'connector_kind_mismatch',
+      `the connector "${connector}" is not an ${input.transportKind} connector — name a new one for this system, or one of the same kind`,
+    );
+  }
+  if (refused === 'connector_packaged') {
+    throw new PlatformAdminError(
+      'connector_packaged',
+      `the connector "${connector}" belongs to a packaged gate — name a new one for this system`,
+    );
+  }
+  if (outcome.refused === null && outcome.connectorCreated) {
+    // P1: a new connector starts `platform_preset` with no `set_connector_mode` row of its own, so
+    // its creation is recorded against it — the same connector-keyed shape as
+    // `connector.entry_handles_revoked` (dispatch's own row for this call names the instance).
+    await writeAudit(client, {
+      workspaceId: null,
+      actorPrincipalId: null,
+      actorUserId: ctx?.platformUser?.id,
+      action: 'connector.created',
+      resourceType: 'connector',
+      payload: {
+        resourceRef: connector,
+        kind: input.transportKind,
+        mode: 'platform_preset',
+        gateId: input.gateId,
+      },
+    });
   }
   const instance = await requireGateInstance(client, input.gateId);
   return {

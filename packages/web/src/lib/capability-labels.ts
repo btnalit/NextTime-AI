@@ -1461,6 +1461,13 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '接入包变更后，相关工作区的入口凭证被吊销。',
     enHint: "A connector change revoked the affected workspaces' entry Handles.",
   },
+  'connector.created': {
+    zh: '接入包已新建',
+    en: 'Connector created',
+    zhHint: '新建门宿主实例时用了一个新的接入包名称，接入包随之建成平台预置。',
+    enHint:
+      'Creating a gate-host instance under a new connector name created that connector as a platform preset.',
+  },
   'self_connection.entry_handles_revoked': {
     zh: '暂停或恢复后凭证已吊销',
     en: 'Entry Handles revoked on suspension',

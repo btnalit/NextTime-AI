@@ -12,10 +12,15 @@ import { loginWithPassword, reachLoginForm } from './auth-helpers.js';
  * `accept_s2_mcp_note` execute) show up in 能力目录; finally the instance is marked `vetted` and
  * one of its Operations is disabled from the catalog via the connector's deny list.
  *
+ * P1: the instance is filed under a connector of its own, named after the system — the create
+ * form derives it from the gate ID — which the kernel creates already `platform_preset`. The
+ * generic `mcp` connector is never touched and stays `self_serve`, so workspaces can still connect
+ * mcp systems themselves; before P1 this flow had to preset `mcp` and so ended that for everyone.
+ *
  * Four tests, `serial`, in an order that is also a real dependency: test 2's credential/test-
  * connection needs the instance the gate host has already taken over from test 1 (`gate-instance-
  * test`'s health probe hits the gate host, not the kernel); test 3's `enable_gate_instance` needs
- * the connector already in `platform_preset` mode from that same test; test 4's catalog assertions
+ * the connector test 1 created (in `platform_preset` mode from the start); test 4's catalog assertions
  * need test 3's `enable_gate_instance` to have published the two Operations in the first place.
  * Every test reuses the same signed-in-as-admin pattern `integrations.spec.ts`/`workspaces.spec.ts`
  * use rather than sharing a page across tests — no dependency on Playwright test isolation beyond
@@ -43,10 +48,14 @@ const BAD_CREDENTIALS_MESSAGE = '登录名或密码不正确';
 const GATE_ID = 'e2e-hosted-mcp';
 const DISPLAY_NAME = 'E2E hosted MCP';
 const TARGET = 'http://fixture-mcp:8080/';
-/** `createHostedGateInstance` (application/gates/store.ts) sets `connector = transportKind` for a
- *  hosted instance — this is the generic `mcp` connector every migration seeds from the start
- *  (`self_serve` by default), not a packaged one. */
-const CONNECTOR = 'mcp';
+/** P1: `CreateGateInstanceForm` names the instance's connector after the gate ID unless the
+ *  administrator changes it, and `createHostedGateInstance` (application/gates/store.ts) creates
+ *  that connector in `platform_preset` mode — a connector of this system's own, not the generic
+ *  `mcp` one. */
+const CONNECTOR = GATE_ID;
+/** The generic connector of the same kind — seeded `self_serve` (0023_gate_instances.sql); this
+ *  flow must leave it so. */
+const GENERIC_CONNECTOR = 'mcp';
 const OBSERVE_OP = 'accept_s2_mcp_echo';
 const EXECUTE_OP = 'accept_s2_mcp_note';
 const SHARED_TOKEN = 'e2e-secret';
@@ -191,6 +200,9 @@ async function ensureHostedInstanceExists(page: Page): Promise<{ readonly justCr
   await form.locator('#cgi-display-name').fill(DISPLAY_NAME);
   await form.locator('input[name="transportKind"][value="mcp"]').check();
   await form.locator('#cgi-target').fill(TARGET);
+  // P1: the connector defaults to one of this system's own, named after the gate ID.
+  await expect(form.getByTestId('cgi-connector-system')).toBeChecked();
+  await expect(form.locator('#cgi-connector')).toHaveValue(CONNECTOR);
   // Credential mode is left at its default, `shared` — exactly the "one credential, entered by an
   // administrator" mode the next test's `GateCredentialEntry` step needs.
   await form.getByTestId('create-gate-instance-submit').click();
@@ -323,32 +335,28 @@ test.describe('P-B2a acceptance: a generic mcp gate-host instance, end to end', 
     await signOut(page);
   });
 
-  test('admin: platform-preset the mcp connector, then enable it as workspace owner', async ({
+  test('admin: the instance connector is a platform preset from the start, then enable it as workspace owner', async ({
     page,
   }) => {
     test.slow();
     await signInAsAdmin(page);
     await ensureOwnedWorkspaceSelected(page);
 
-    // --- 接入包 Connectors: the generic `mcp` connector (`self_serve` from the start, per
-    //     0023_gate_instances.sql) has to be `platform_preset` before an owner can see this
-    //     instance in the workspace catalog at all (`listAvailableGateInstances`'s own `where`). ---
+    // --- 接入包 Connectors: an owner sees an instance in the workspace catalog only when its
+    //     connector is `platform_preset` (`listAvailableGateInstances`'s own `where`). P1: the
+    //     connector test 1 created for this system already is, so nothing is switched here — and
+    //     the generic `mcp` connector stays `self_serve` (workspaces keep connecting mcp systems
+    //     themselves). ---
     await page.getByTestId('nav-platformIntegrations').click();
     await expect(page.getByTestId('platform-integrations-page')).toBeVisible({ timeout: 15_000 });
     await page.getByTestId('integrations-tab-connectors').click();
-    await expect(page.getByTestId(`connector-row-${CONNECTOR}`)).toBeVisible({ timeout: 15_000 });
-    // S8 W1-A7 (audit S13/PI1): the select no longer applies on change — it opens a medium
-    // confirm anchored to itself (self_serve → platform_preset is not the "disabled, in use" case,
-    // so `medium`, not `irreversible`) and `set_connector_mode` only fires once that confirm is
-    // confirmed.
-    const modeSelect = page.getByTestId(`connector-mode-${CONNECTOR}`);
-    if ((await modeSelect.inputValue()) !== 'platform_preset') {
-      await modeSelect.selectOption('platform_preset');
-      const modeConfirm = page.getByTestId(`connector-mode-confirm-${CONNECTOR}`);
-      await expect(modeConfirm).toBeVisible({ timeout: 15_000 });
-      await modeConfirm.getByTestId('confirm-button').click();
-    }
-    await expect(modeSelect).toHaveValue('platform_preset', { timeout: 15_000 });
+    const connectorRow = page.getByTestId(`connector-row-${CONNECTOR}`);
+    await expect(connectorRow).toBeVisible({ timeout: 15_000 });
+    await expect(connectorRow).toContainText('门宿主');
+    await expect(page.getByTestId(`connector-mode-${CONNECTOR}`)).toHaveValue('platform_preset', {
+      timeout: 15_000,
+    });
+    await expect(page.getByTestId(`connector-mode-${GENERIC_CONNECTOR}`)).toHaveValue('self_serve');
 
     // --- 系统与授权 Systems & access: enable it from the platform catalog (idempotent — a retry
     //     that already enabled it just finds the "本工作区已启用 Enabled here" link with no button left). ---
@@ -393,7 +401,7 @@ test.describe('P-B2a acceptance: a generic mcp gate-host instance, end to end', 
     await signOut(page);
   });
 
-  test('admin: mark the instance vetted, then disable one Operation on connector mcp', async ({
+  test('admin: mark the instance vetted, then disable one Operation on its connector', async ({
     page,
   }) => {
     test.slow();
@@ -421,7 +429,7 @@ test.describe('P-B2a acceptance: a generic mcp gate-host instance, end to end', 
     await page.keyboard.press('Escape');
     await expect(drawer).toBeHidden();
 
-    async function expandMcpDenyList(): Promise<void> {
+    async function expandDenyList(): Promise<void> {
       await page.getByTestId('nav-platformIntegrations').click();
       await expect(page.getByTestId('platform-integrations-page')).toBeVisible({
         timeout: 15_000,
@@ -445,7 +453,7 @@ test.describe('P-B2a acceptance: a generic mcp gate-host instance, end to end', 
 
     // --- disable accept_s2_mcp_note, and it drops out of the catalog while the observe tool
     //     stays — same assertion shape `integrations.spec.ts` uses for its own fixture. ---
-    await expandMcpDenyList();
+    await expandDenyList();
     await setOperationDisabled(page, CONNECTOR, EXECUTE_OP, true);
 
     // Polled: the catalog can render from the previous load before the deny-list change is
@@ -454,8 +462,8 @@ test.describe('P-B2a acceptance: a generic mcp gate-host instance, end to end', 
     await expect.poll(() => catalogHasOperation(OBSERVE_OP), { timeout: 20_000 }).toBe(true);
 
     // --- restore: re-enable it so a later retry (or a human) finds a clean deny list on the
-    //     shared `mcp` connector. ---
-    await expandMcpDenyList();
+    //     instance's connector. ---
+    await expandDenyList();
     await setOperationDisabled(page, CONNECTOR, EXECUTE_OP, false);
     await expect.poll(() => catalogHasOperation(EXECUTE_OP), { timeout: 20_000 }).toBe(true);
 

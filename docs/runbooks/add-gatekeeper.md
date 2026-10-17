@@ -138,8 +138,8 @@ ConnectSystemLauncher.tsx`）。按第一步选的种类分两条路：
 
 | 步 | 谁 | 页面做什么 | 内核能力 |
 |---|---|---|---|
-| 连接与凭证 | 管理员 | 在启动器里直接填 `CreateGateInstanceForm`（gate id、目标地址、凭证模式、http 的 OpenAPI 清单 URL）；`shared` 模式随后"获取 5 分钟令牌"把共享凭证**直接 POST 到门宿主**（经 caddy `/gate-host/*`，内核不经手）；然后等门宿主接管（默认 60 秒内，页面每 5 秒重查） | `create_gate_instance`、`issue_gate_host_token` |
-| 能力与策略（平台侧） | 管理员 | **启用**该实例——按钮只在 `discovered` 出现（B7；`disabled` 显示"重新启用"，`enabled` 无按钮）；若接入包（`http` / `mcp`）不是**平台预置**，页面提示并可一键设为 `platform_preset`（否则工作区在目录里看不到它，`connector_not_preset`）；注意设为平台预置后，工作区就不能再自己连这一种类的系统（`create_connection` / `request_connection` 只认"可自连"，409 `connector_not_self_serve`，R-40） | `update_gate_instance{status}`、`set_connector_mode` |
+| 连接与凭证 | 管理员 | 在启动器里直接填 `CreateGateInstanceForm`（gate id、目标地址、凭证模式、http 的 OpenAPI 清单 URL、接入包）；接入包默认是**这个系统自己的**（按 gate id 生成，可改；同一系统的几个实例填同一个名字，表单列出已有的同类接入包），名字新的由内核在同一事务里建成 `platform_preset`；也可以选通用接入包（`http` / `mcp`），那样和工作区自连的同类系统共用（P1）。通用名配错种类、或填了打包门的接入包，409 `connector_kind_mismatch` / `connector_packaged`，什么都不写；`shared` 模式随后"获取 5 分钟令牌"把共享凭证**直接 POST 到门宿主**（经 caddy `/gate-host/*`，内核不经手）；然后等门宿主接管（默认 60 秒内，页面每 5 秒重查） | `create_gate_instance`、`issue_gate_host_token` |
+| 能力与策略（平台侧） | 管理员 | **启用**该实例——按钮只在 `discovered` 出现（B7；`disabled` 显示"重新启用"，`enabled` 无按钮）；系统自己的接入包新建即平台预置，这里只剩启用；若接入包不是**平台预置**（选了通用接入包，或管理员改过模式），页面提示并可一键设为 `platform_preset`（否则工作区在目录里看不到它，`connector_not_preset`）；注意**通用**接入包（`http` / `mcp`）设为平台预置后，工作区就不能再自己连这一种类的系统（`create_connection` / `request_connection` 只认通用接入包"可自连"，409 `connector_not_self_serve`，R-40），系统自己的接入包没有这个副作用 | `update_gate_instance{status}`、`set_connector_mode` |
 | 能力与策略（工作区侧） | owner | **在本工作区启用**（注册 Gatekeeper、导入并**发布** announce 的 Operation、写工作区链接）→ 审核分类（同接入向导第④步，`propose_operation` / `publish_operation`）→ 授予成员（成员下拉来自 `list_principals`） | `enable_gate_instance`、`connect_gatekeeper` |
 | 握手验证 | 管理员 / owner | "测试连接"（平台侧）+ 状态 / 健康 / 本工作区的门链接 | `test_gate_instance` |
 
@@ -188,9 +188,9 @@ Operation，确认时按摘要采用恰好那一版（`confirm_gate_manifest`；
 ```
 
 两条内核规则，光看 compose 文件猜不到：
-- `GATE_CONNECTOR` **必须是系统专属名**（`ops-host`、`backup-cli`……），不能是 `ssh` / `cli`：通用
-  种类的接入包是 `packaged: false`，`set_connector_mode` 对它拒绝 `platform_preset`
-  （`connector_mode_not_allowed`），那样的实例永远进不了工作区目录。
+- `GATE_CONNECTOR` **必须是系统专属名**（`ops-host`、`backup-cli`……），不能是 `ssh` / `cli`：
+  `set_connector_mode` 对这两个通用接入包拒绝 `platform_preset`（`connector_mode_not_allowed`），
+  那样的实例永远进不了工作区目录。
 - 启动后它 announce 到内核，出现在"集成 → 门实例"为**未启用 discovered**；管理员**启用**它并把该
   接入包设为**平台预置**后，工作区 owner 才能在"系统接入"里启用（`list_available_gate_instances`
   的 `where` 就是这两个条件）。

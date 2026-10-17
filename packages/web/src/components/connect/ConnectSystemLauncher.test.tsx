@@ -203,11 +203,12 @@ function next() {
 }
 
 describe('ConnectSystemLauncher — hosted path from the platform page', () => {
-  it('creates the instance, waits for the gate host, enables it (B7: only while discovered), presets the connector, tests the connection and finishes with the gate id', async () => {
+  it('creates the instance on the generic connector, waits for the gate host, enables it (B7: only while discovered), presets the connector, tests the connection and finishes with the gate id', async () => {
     let created = false;
     let takenOver = false;
     let enabledOnPlatform = false;
     let preset = false;
+    let sent: unknown;
     const current = () =>
       !created
         ? []
@@ -222,7 +223,7 @@ describe('ConnectSystemLauncher — hosted path from the platform page', () => {
         items: [connector({ mode: preset ? 'platform_preset' : 'self_serve' })],
       }),
       create_gate_instance: (params) => {
-        expect(params).toMatchObject({ gateId: 'billing', transportKind: 'http' });
+        sent = params;
         created = true;
         return gateInstance();
       },
@@ -265,10 +266,13 @@ describe('ConnectSystemLauncher — hosted path from the platform page', () => {
     fireEvent.change(within(form).getByLabelText(/清单来源/), {
       target: { value: 'https://billing.internal/openapi.json' },
     });
+    // P1: the generic connector is the explicit choice here; the default is a system connector.
+    fireEvent.click(within(form).getByTestId('cgi-connector-generic'));
     expect(screen.getByTestId('launcher-next').hasAttribute('disabled')).toBe(true);
     fireEvent.click(within(form).getByTestId('create-gate-instance-submit'));
 
     const summary = await screen.findByTestId('launcher-selected-gate');
+    expect(sent).toMatchObject({ gateId: 'billing', transportKind: 'http', connector: 'http' });
     expect(onInstanceChanged).toHaveBeenCalledTimes(1);
     expect(within(summary).getByTestId('launcher-gate-status').textContent).toContain(
       '等待宿主接管',
@@ -308,6 +312,8 @@ describe('ConnectSystemLauncher — hosted path from the platform page', () => {
 
     // Connector must be platform-preset before a workspace can enable from the catalog.
     const presetBlock = await screen.findByTestId('launcher-connector-preset');
+    // A generic connector: presetting it ends workspace self-connection for the kind.
+    expect(presetBlock.textContent).toContain('所有工作区都不能再自己连这一类系统');
     fireEvent.click(within(presetBlock).getByTestId('launcher-connector-preset-button'));
     await waitFor(() => expect(screen.queryByTestId('launcher-connector-preset')).toBeNull());
     expect(screen.getByTestId('launcher-connector-ok').textContent).toContain('平台预置');
@@ -330,6 +336,71 @@ describe('ConnectSystemLauncher — hosted path from the platform page', () => {
     expect(screen.getByTestId('launcher-next').textContent).toBe('完成');
     next();
     expect(onFinished).toHaveBeenCalledWith({ gateId: 'billing', gatekeeperId: null });
+  });
+
+  it('P1: by default the instance gets a connector named after its system, which the kernel created already preset — no preset step', async () => {
+    let created = false;
+    let sent: unknown;
+    const onSystem = (overrides: Partial<GateInstanceWire> = {}) =>
+      gateInstance({ connector: 'billing', ...overrides });
+    const http = scriptedHttp({
+      list_gate_instances: () => ({ items: created ? [onSystem()] : [] }),
+      list_connectors: () => ({
+        items: created
+          ? [connector(), connector({ name: 'billing', mode: 'platform_preset' })]
+          : [connector()],
+      }),
+      create_gate_instance: (params) => {
+        sent = params;
+        created = true;
+        return onSystem();
+      },
+    });
+    renderLauncher({ http, origin: 'platform' });
+    fireEvent.click(screen.getByTestId('launcher-kind-http'));
+    next();
+    await screen.findByTestId('launcher-existing-gates');
+    fireEvent.click(screen.getByRole('button', { name: /新建实例/ }));
+    const form = await screen.findByTestId('create-gate-instance-form');
+    fireEvent.change(within(form).getByLabelText(/门 ID/), { target: { value: 'billing' } });
+    fireEvent.change(within(form).getByLabelText(/^目标/), {
+      target: { value: 'https://billing.internal' },
+    });
+    fireEvent.change(within(form).getByLabelText(/清单来源/), {
+      target: { value: 'https://billing.internal/openapi.json' },
+    });
+    fireEvent.click(within(form).getByTestId('create-gate-instance-submit'));
+    const summary = await screen.findByTestId('launcher-selected-gate');
+    expect(sent).toMatchObject({ gateId: 'billing', transportKind: 'http', connector: 'billing' });
+    expect(within(summary).getByText('接入包').nextElementSibling?.textContent).toBe('billing');
+
+    next();
+    await screen.findByTestId('launcher-platform-enable');
+    const ok = await screen.findByTestId('launcher-connector-ok');
+    expect(ok.textContent).toContain('billing');
+    expect(ok.textContent).toContain('平台预置');
+    expect(screen.queryByTestId('launcher-connector-preset')).toBeNull();
+    expect(http.calls.some((call) => call.name === 'set_connector_mode')).toBe(false);
+  });
+
+  it('P1: a system connector that is not preset offers the preset step without the generic warning', async () => {
+    const http = scriptedHttp({
+      list_gate_instances: () => ({
+        items: [announced({ connector: 'billing', status: 'enabled' })],
+      }),
+      list_connectors: () => ({
+        items: [connector(), connector({ name: 'billing', mode: 'self_serve' })],
+      }),
+    });
+    renderLauncher({ http, origin: 'platform' });
+    fireEvent.click(screen.getByTestId('launcher-kind-http'));
+    next();
+    const picker = await screen.findByTestId('launcher-existing-gates');
+    fireEvent.click(await within(picker).findByTestId('launcher-gate-billing'));
+    next();
+    const presetBlock = await screen.findByTestId('launcher-connector-preset');
+    expect(presetBlock.textContent).toContain('billing');
+    expect(presetBlock.textContent).not.toContain('所有工作区都不能再自己连这一类系统');
   });
 
   it('B7: an already enabled · ok instance picked from the list shows no 启用 button; a disabled one offers 重新启用', async () => {

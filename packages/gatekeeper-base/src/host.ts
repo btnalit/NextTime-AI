@@ -14,6 +14,7 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import { z } from 'zod';
 import {
   type AnnounceBody,
+  CONNECTOR_NAME_PATTERN,
   GATE_ID_PATTERN,
   loadInternalToken,
   postAnnouncement,
@@ -99,6 +100,9 @@ const HostedInstanceListSchema = z.object({
       z.object({
         gateId: z.string().regex(GATE_ID_PATTERN),
         displayName: z.string().min(1),
+        /** P1: the connector the administrator placed it in. A kernel older than P1 sends none —
+         *  the instance then announces the generic connector of its kind, as before. */
+        connector: z.string().regex(CONNECTOR_NAME_PATTERN).optional(),
         status: z.string(),
         definition: GateHostedDefinitionWireSchema,
       }),
@@ -111,6 +115,9 @@ interface HostedInstance {
   readonly gateId: string;
   /** Updated in place on a rename — a build may be running on this object. */
   displayName: string;
+  /** What it announces as its connector (P1). Updated in place like `displayName`: it is where the
+   *  kernel files the instance, not part of what it is built from (`definitionKey`). */
+  connector: string;
   readonly definition: GateHostedDefinitionWire;
   readonly definitionKey: string;
   readonly store: ConnectedAccountStore;
@@ -155,6 +162,11 @@ export interface GateHost {
  *  gate and its credentials; any change to kind / target / mode / manifest rebuilds AND wipes them. */
 function definitionKey(item: HostedInstanceListItem): string {
   return JSON.stringify(item.definition);
+}
+
+/** The connector to announce: the one the kernel lists (P1), else the generic one of its kind. */
+function connectorOf(item: HostedInstanceListItem): string {
+  return item.connector ?? item.definition.transportKind;
 }
 
 async function fetchJsonWithTimeout(
@@ -462,12 +474,14 @@ export async function createGateHost(options: GateHostOptions = {}): Promise<Gat
       const existing = table.get(item.gateId);
       if (existing && existing.definitionKey === key) {
         existing.displayName = item.displayName;
+        existing.connector = connectorOf(item);
         continue;
       }
       if (existing) await wipeInstanceData(item.gateId);
       table.set(item.gateId, {
         gateId: item.gateId,
         displayName: item.displayName,
+        connector: connectorOf(item),
         definition: item.definition,
         definitionKey: key,
         store: new ConnectedAccountStore({
@@ -533,7 +547,7 @@ export async function createGateHost(options: GateHostOptions = {}): Promise<Gat
     const endpoint = `${publicEndpoint}/i/${instance.gateId}`;
     return {
       gateId: instance.gateId,
-      connector: instance.definition.transportKind,
+      connector: instance.connector,
       transportKind: instance.definition.transportKind,
       target: instance.definition.target,
       endpoint,

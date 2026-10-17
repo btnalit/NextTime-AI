@@ -428,6 +428,7 @@ export const PLATFORM_LIFECYCLE_ACTIONS = [
   'principal.user_rebound',
   'gate_instance.manifest_confirmed',
   'connector.entry_handles_revoked',
+  'connector.created',
 ] as const;
 
 /** Every `scope: 'platform'` capability name (a platform dispatch is audited under its own name)

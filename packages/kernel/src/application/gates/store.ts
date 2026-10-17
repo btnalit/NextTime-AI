@@ -8,10 +8,12 @@ import type {
   PendingGateManifestWire,
 } from '@nexttime/shared';
 import {
+  CONNECTOR_NAME_PATTERN,
   GateHostedDefinitionWireSchema,
   OperationSchema,
   UnstorableTextError,
   findUnstorableText,
+  isGenericConnector,
   storableValue,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
@@ -49,8 +51,7 @@ import {
  */
 
 export const GATE_ID_PATTERN = /^[a-z0-9][a-z0-9-]{1,63}$/;
-export const CONNECTOR_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
-export const GENERIC_CONNECTOR_NAMES: readonly string[] = ['http', 'mcp', 'cli', 'ssh'];
+export { CONNECTOR_NAME_PATTERN };
 
 export type GateTransportKind = 'http' | 'mcp' | 'cli' | 'ssh';
 export type ConnectorMode = 'disabled' | 'self_serve' | 'platform_preset';
@@ -519,7 +520,7 @@ export async function upsertAnnouncement(
       `insert into connectors (name, kind, packaged, mode)
        values ($1, $2, $3, 'platform_preset')
        on conflict (name) do nothing`,
-      [body.connector, body.transportKind, !GENERIC_CONNECTOR_NAMES.includes(body.connector)],
+      [body.connector, body.transportKind, !isGenericConnector(body.connector)],
     );
   }
   if (!before) {
@@ -771,35 +772,94 @@ export async function recordGateInstanceCheck(
 export interface HostedGateDefinition {
   readonly gateId: string;
   readonly displayName: string;
+  /** P1: what the host announces as the instance's connector — fixed by `create_gate_instance`;
+   *  the first announce must carry exactly this (`upsertAnnouncement`'s `rejected`). */
+  readonly connector: string;
   readonly status: GateInstanceStatus;
   readonly definition: GateHostedDefinitionWire;
 }
 
-/** Inserts a never-seen instance: `discovered`, `endpoint ''`, `health 'unknown'`, no heartbeat. It
- *  lands `discovered` — not `enabled` — on purpose (review finding): the administrator enables it
- *  after the host has taken it over and the endpoint / Operations are visible, exactly the packaged-
- *  gate path, so an internal-token holder racing the host's first announce cannot hand workspaces a
- *  live endpoint nobody reviewed. The connector is the generic kind (`http` / `mcp`, seeded by
- *  0023). Returns `false` on an id clash. */
+/** Why `createHostedGateInstance` wrote nothing. */
+export type HostedGateInstanceRefusal =
+  /** Another instance already has this `gate_id`. */
+  | 'gate_id_taken'
+  /** The named connector is of another transport kind (a generic name other than the instance's
+   *  own kind included). */
+  | 'connector_kind_mismatch'
+  /** The named connector is a packaged gate's (`packaged`, created by its own announce). */
+  | 'connector_packaged';
+
+/** What `createHostedGateInstance` did: written (and whether that created the connector), or why
+ *  nothing was. */
+export type HostedGateInstanceOutcome =
+  | { readonly refused: null; readonly connectorCreated: boolean }
+  | { readonly refused: HostedGateInstanceRefusal };
+
+/**
+ * Inserts a never-seen instance: `discovered`, `endpoint ''`, `health 'unknown'`, no heartbeat. It
+ * lands `discovered` — not `enabled` — on purpose (review finding): the administrator enables it
+ * after the host has taken it over and the endpoint / Operations are visible, exactly the packaged-
+ * gate path, so an internal-token holder racing the host's first announce cannot hand workspaces a
+ * live endpoint nobody reviewed.
+ *
+ * P1 — the connector (接入包) it joins. Every instance of a connector shares its kind, and gate-host
+ * instances never share a packaged gate's: so the connector must be the instance's transport kind
+ * or a name that is neither a generic kind nor a packaged gate's.
+ *   - The generic connector of its kind (`http` / `mcp`, seeded by core 0023): today's placement.
+ *     Its mode also decides whether workspaces may connect that kind themselves (R-40), so putting
+ *     it in the catalog (`platform_preset`) stops every workspace's self-connections of the kind.
+ *   - A connector named after the system it serves, created here on first use (`packaged = false`,
+ *     `platform_preset`, as a packaged connector's first announce creates it): its mode reaches the
+ *     catalog only, so the instance is offered to workspaces once enabled and the generic one
+ *     keeps its mode. A later instance of the same system joins it.
+ * The connector row is written in the same transaction as the instance, so a refusal (`gate_id`
+ * clash included) leaves no connector behind; a concurrent create naming the same new connector
+ * waits on the insert and then reads the winner's kind.
+ */
 export async function createHostedGateInstance(
   client: PoolClient,
-  input: { gateId: string; displayName: string; definition: GateHostedDefinitionWire },
-): Promise<boolean> {
+  input: {
+    gateId: string;
+    displayName: string;
+    connector: string;
+    definition: GateHostedDefinitionWire;
+  },
+): Promise<HostedGateInstanceOutcome> {
+  const kind = input.definition.transportKind;
+  if (isGenericConnector(input.connector) && input.connector !== kind) {
+    return { refused: 'connector_kind_mismatch' };
+  }
+  const inserted = await client.query(
+    `insert into connectors (name, kind, packaged, mode)
+     values ($1, $2, false, 'platform_preset')
+     on conflict (name) do nothing`,
+    [input.connector, kind],
+  );
+  const connector = await client.query<{ kind: GateTransportKind; packaged: boolean }>(
+    'select kind, packaged from connectors where name = $1',
+    [input.connector],
+  );
+  const row = connector.rows[0];
+  if (!row || row.kind !== kind) return { refused: 'connector_kind_mismatch' };
+  if (row.packaged) return { refused: 'connector_packaged' };
   const result = await client.query(
     `insert into gate_instances
        (gate_id, connector, display_name, transport_kind, target, endpoint, health_endpoint,
         operations, status, health, hosted, definition, updated_at)
-     values ($1, $2, $3, $2, $4, '', null, '[]'::jsonb, 'discovered', 'unknown', true, $5::jsonb, now())
+     values ($1, $2, $3, $4, $5, '', null, '[]'::jsonb, 'discovered', 'unknown', true, $6::jsonb, now())
      on conflict (gate_id) do nothing`,
     [
       input.gateId,
-      input.definition.transportKind,
+      input.connector,
       input.displayName,
+      kind,
       input.definition.target,
       JSON.stringify(input.definition),
     ],
   );
-  return (result.rowCount ?? 0) === 1;
+  return (result.rowCount ?? 0) === 1
+    ? { refused: null, connectorCreated: (inserted.rowCount ?? 0) === 1 }
+    : { refused: 'gate_id_taken' };
 }
 
 /** Removes a hosted instance nobody linked. `'in_use'` when a workspace still has a link (an
@@ -830,10 +890,11 @@ export async function listHostedGateDefinitions(
   const result = await client.query<{
     gate_id: string;
     display_name: string;
+    connector: string;
     status: GateInstanceStatus;
     definition: unknown;
   }>(
-    `select gate_id, display_name, status, definition
+    `select gate_id, display_name, connector, status, definition
        from gate_instances where hosted order by created_at, gate_id`,
   );
   const items: HostedGateDefinition[] = [];
@@ -843,6 +904,7 @@ export async function listHostedGateDefinitions(
     items.push({
       gateId: row.gate_id,
       displayName: row.display_name,
+      connector: row.connector,
       status: row.status,
       definition,
     });

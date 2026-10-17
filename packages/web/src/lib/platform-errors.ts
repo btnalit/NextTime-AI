@@ -120,6 +120,15 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
     zh: '该实例不需要每人的凭证',
     en: 'This instance does not take a per-member credential',
   },
+  // P1：门宿主实例归到按系统命名的接入包。
+  connector_kind_mismatch: {
+    zh: '这个接入包是另一种类型的，不能放这个实例：换一个名字新建，或选同类型的接入包',
+    en: 'That connector is of another kind and cannot hold this instance — name a new one, or pick one of the same kind',
+  },
+  connector_packaged: {
+    zh: '这个接入包属于一个打包的门，不能放门宿主实例：换一个名字新建',
+    en: 'That connector belongs to a packaged gate and cannot hold a gate-host instance — name a new one',
+  },
   gate_not_ready: {
     zh: '门宿主尚未接管该实例，请稍候',
     en: 'The gate host has not taken over this instance yet — wait a moment',

@@ -11,6 +11,8 @@ export type {
   GateTransportKind,
   GateTrust,
   HostedGateDefinition,
+  HostedGateInstanceOutcome,
+  HostedGateInstanceRefusal,
   OperationPlatformStatus,
   SelfConnectionPolicy,
 } from './store.js';
@@ -19,7 +21,6 @@ export {
   storableAnnouncement,
   CONNECTOR_NAME_PATTERN,
   GATE_ID_PATTERN,
-  GENERIC_CONNECTOR_NAMES,
   confirmPendingManifest,
   createHostedGateInstance,
   deleteHostedGateInstance,

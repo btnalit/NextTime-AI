@@ -64,7 +64,7 @@ const DEMO_MCP_ITEM = {
 };
 
 interface FakeState {
-  items: Array<typeof DEMO_MCP_ITEM>;
+  items: Array<typeof DEMO_MCP_ITEM & { connector?: string }>;
   mcpListShouldFail: boolean;
   /** R-69 fixture: when set, the fake MCP server answers every method — `tools/list` included —
    *  with 401 unless the request carries `Authorization: Bearer <this>`. */
@@ -228,6 +228,31 @@ describe('createGateHost (P-B2a)', () => {
       destructive_hint: false,
       idempotent_hint: true,
     });
+  });
+
+  it('P1: announces the connector the kernel lists, kept up to date without a rebuild', async () => {
+    state.items = [{ ...DEMO_MCP_ITEM, connector: 'demo-system' }];
+    host = await createGateHost({ env, fetchImpl: recordingFetch(state, calls), listen: false });
+
+    expect(await host.tick()).toBe(true);
+    expect(state.announcements.at(-1)?.body).toMatchObject({
+      gateId: 'demo-mcp',
+      connector: 'demo-system',
+      transportKind: 'mcp',
+    });
+
+    // Re-created under the same id and definition with another connector: the host may never see
+    // the gap, so the next announce must carry the new connector, with the built gate kept.
+    const toolLists = () =>
+      calls.filter(
+        (call) => call.url === 'http://mcp.test/' && String(call.init.body).includes('tools/list'),
+      ).length;
+    const listedBefore = toolLists();
+    state.items = [{ ...DEMO_MCP_ITEM, connector: 'other-system' }];
+    expect(await host.tick()).toBe(true);
+    expect(state.announcements.at(-1)?.body).toMatchObject({ connector: 'other-system' });
+    expect(toolLists()).toBe(listedBefore);
+    expect(host.instances()).toEqual([{ gateId: 'demo-mcp', ready: true, operationCount: 2 }]);
   });
 
   it('routes /i/:gateId/gate/* by gate token, 404s an unknown gate, and /healthz needs no auth', async () => {
