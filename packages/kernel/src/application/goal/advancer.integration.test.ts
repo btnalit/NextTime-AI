@@ -3127,75 +3127,103 @@ describe.runIf(DATABASE_URL !== undefined)(
           ).toEqual([expect.objectContaining({ by: 'person', pauseReason: 'awaiting_reconcile' })]);
         });
 
-        it('a finding never resumes a run — not over the requester’s own pause, nor once an owner’s hold on it was lifted (review #493 on #642)', async () => {
-          const requester = await newPrincipal();
-          const pausedForCheck = async () => {
-            const goalRunId = await startGoal(requester, [
-              { key: 'a' },
-              { key: 'b', dependsOn: ['a'] },
-            ]);
-            await advance(goalRunId, requester);
-            const stepA = (await stepsOf(goalRunId)).a as StepRunRow;
-            const action = await requestOn(
-              await newGatekeeper(),
-              stepA.id,
-              requester,
-              'executing',
-              'test.go3c.intent',
-            );
-            await lose(action);
-            await completeStep(stepA.id, requester);
-            await advance(goalRunId, requester);
-            expect(await goalOf(goalRunId)).toMatchObject({
-              status: 'paused',
-              pauseReason: 'awaiting_reconcile',
-              pausedBy: null,
-            });
-            return { goalRunId, action };
-          };
-          const settledButPaused = async (goalRunId: string) => {
-            await advance(goalRunId, requester);
-            const steps = await stepsOf(goalRunId);
-            expect(steps.a?.status).toBe('succeeded');
-            expect(steps.b?.status).toBe('ready');
-            expect((await goalOf(goalRunId)).status).toBe('paused');
-          };
-
-          // 1. The requester pauses over the advancer's pause — nothing changes on the row — then
-          //    records the finding: the run still waits for them.
-          const own = await pausedForCheck();
-          expect(
-            await asRequester(requester, (client) =>
-              pauseGoalRun(client, workspaceId, {
-                goalRunId: own.goalRunId,
-                actor: by(requester),
-              }),
-            ),
-          ).toMatchObject({ status: 'paused', changed: false });
-          await reconcileAs(own.goalRunId, own.action, requester, { verdict: 'effect_seen' });
-          await settledButPaused(own.goalRunId);
-
-          // 2. An owner holds it and lifts the hold (`paused_by` is null again), then records the
-          //    finding: the run stays paused for the requester to resume.
-          const held = await pausedForCheck();
-          await asOwner((client) =>
-            pauseGoalRun(client, workspaceId, { goalRunId: held.goalRunId, actor: byOwner() }),
-          );
-          await asOwner((client) =>
-            releaseGoalRunHold(client, workspaceId, {
-              goalRunId: held.goalRunId,
-              actor: byOwner(),
-            }),
-          );
-          expect(await goalOf(held.goalRunId)).toMatchObject({
-            status: 'paused',
-            pausedBy: null,
+        it('a finding — effect_seen, or effect_absent with a re-execute — never changes how a run is paused, whoever paused it; the requester resumes it (review #493 on #642)', async () => {
+          type PauseSource =
+            | 'advancer'
+            | 'requester'
+            | 'requester over the advancer'
+            | 'owner hold'
+            | 'lifted hold';
+          const pauseOf = (goal: GoalRunRow) => ({
+            status: goal.status,
+            pauseReason: goal.pauseReason,
+            pausedBy: goal.pausedBy,
+            pausedByAuthority: goal.pausedByAuthority,
           });
-          await reconcileAs(held.goalRunId, held.action, ownerId, { verdict: 'effect_seen' });
-          await settledButPaused(held.goalRunId);
-          await resumeAs(held.goalRunId, requester);
-          await advance(held.goalRunId, requester);
-          expect((await stepsOf(held.goalRunId)).b?.status).toBe('running');
+          const findings = [
+            { verdict: 'effect_seen' },
+            { verdict: 'effect_absent', reexecute: true },
+          ] as const;
+          const sources: readonly PauseSource[] = [
+            'advancer',
+            'requester',
+            'requester over the advancer',
+            'owner hold',
+            'lifted hold',
+          ];
+          for (const source of sources) {
+            for (const finding of findings) {
+              const requester = await newPrincipal();
+              const goalRunId = await startGoal(requester, [
+                { key: 'a' },
+                { key: 'b', dependsOn: ['a'] },
+              ]);
+              await advance(goalRunId, requester);
+              const pauseAsRequester = () =>
+                asRequester(requester, (client) =>
+                  pauseGoalRun(client, workspaceId, { goalRunId, actor: by(requester) }),
+                );
+              // The requester's own pause comes first: the advancer only notes the check on it.
+              if (source === 'requester') {
+                expect(await pauseAsRequester()).toMatchObject({ changed: true });
+              }
+              const stepA = (await stepsOf(goalRunId)).a as StepRunRow;
+              const action = await requestOn(
+                await newGatekeeper(),
+                stepA.id,
+                requester,
+                'executing',
+                'test.go3c.intent',
+              );
+              await lose(action);
+              await completeStep(stepA.id, requester);
+              await advance(goalRunId, requester);
+              expect((await stepsOf(goalRunId)).a?.waitingReason).toBe('reconcile');
+              if (source === 'requester over the advancer') {
+                // Nothing on the row says the requester wants it held: the call changes nothing.
+                expect(await pauseAsRequester()).toMatchObject({ changed: false });
+              }
+              if (source === 'owner hold' || source === 'lifted hold') {
+                await asOwner((client) =>
+                  pauseGoalRun(client, workspaceId, { goalRunId, actor: byOwner() }),
+                );
+              }
+              if (source === 'lifted hold') {
+                await asOwner((client) =>
+                  releaseGoalRunHold(client, workspaceId, { goalRunId, actor: byOwner() }),
+                );
+              }
+              const before = pauseOf(await goalOf(goalRunId));
+              expect(before.status).toBe('paused');
+
+              await reconcileAs(goalRunId, action, requester, finding);
+              await advance(goalRunId, requester);
+              await advance(goalRunId, requester);
+              expect(
+                { source, finding, pause: pauseOf(await goalOf(goalRunId)) },
+                'a finding leaves the pause as it was',
+              ).toEqual({ source, finding, pause: before });
+              expect((await stepsOf(goalRunId)).b?.status).not.toBe('running');
+              expect(await attemptTasks(stepA.id)).toHaveLength(1);
+              expect(
+                (await goalAudit(goalRunId)).some((row) => row.action === 'goal_run.resume'),
+              ).toBe(false);
+
+              // The requester resumes — once no owner holds it — and the run goes on.
+              if (source === 'owner hold') {
+                await expect(resumeAs(goalRunId, requester)).rejects.toThrow(/holds it/);
+                continue;
+              }
+              await resumeAs(goalRunId, requester);
+              await advance(goalRunId, requester);
+              const steps = await stepsOf(goalRunId);
+              if (finding.verdict === 'effect_seen') {
+                expect(steps.b?.status).toBe('running');
+              } else {
+                expect(steps.a).toMatchObject({ status: 'running', attemptCount: 2 });
+              }
+            }
+          }
         });
 
         it('effect_absent: the step fails for a person and is never run again on its own; once the requester decided to, a retry makes the request anew, for a new approval', async () => {
