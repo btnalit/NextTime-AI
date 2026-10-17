@@ -483,7 +483,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             c,
             {
               gateId,
-              connector: 'http',
+              connector: 'fixture-http',
               transportKind: 'http',
               endpoint: `https://gate-${randomUUID()}.example.invalid`,
               operations: [stockOperation(name, '/stocks')],

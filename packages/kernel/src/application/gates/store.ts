@@ -378,6 +378,62 @@ export interface AnnounceOutcome {
    *  a credential (`findConnectionParamsCredential`) that this instance was not already stored
    *  with — nothing was written. Names the field, never the value. */
   readonly credentialRefused?: { readonly field: ConnectionCredentialField };
+  /** P1 (review of #644): the announced connector cannot hold this instance (`fitConnector`) —
+   *  another transport kind, or not a packaged gate's for a packaged gate (a generic connector, or
+   *  one created for gate-host instances). Nothing was written. */
+  readonly connectorRefused?: ConnectorFitRefusal;
+}
+
+/** Why a connector cannot hold an instance (P1, review of #644). */
+export type ConnectorFitRefusal =
+  /** The connector is of another transport kind than the instance. */
+  | 'connector_kind_mismatch'
+  /** A gate-host instance named a packaged gate's connector. */
+  | 'connector_packaged'
+  /** A packaged gate announced a connector that is not a packaged gate's — a generic one, or one
+   *  created for gate-host instances. */
+  | 'connector_not_packaged';
+
+/**
+ * The connector rule (P1, review of #644), one for every write of an instance's connector —
+ * `create_gate_instance` and every announcement that writes it (first or later, packaged gate or
+ * gate host). All instances of a connector share its transport kind, and its class: a packaged
+ * gate files under a packaged connector (its own `GATE_CONNECTOR`), a gate-host instance under the
+ * generic connector of its kind or one an administrator named for gate-host instances. A generic
+ * name is held to that without reading its row (seeded by core 0023). A name no row carries yet is
+ * created here, of the instance's kind and class, `platform_preset` — a packaged gate's first
+ * announcement, or `create_gate_instance` naming a new system. Runs in the caller's transaction
+ * before the instance is written, so a refusal writes nothing (a row is only ever inserted when it
+ * then fits); a concurrent writer of the same new name is waited on and its row then judged.
+ */
+async function fitConnector(
+  client: PoolClient,
+  input: { readonly name: string; readonly kind: GateTransportKind; readonly packaged: boolean },
+): Promise<
+  { readonly refused: ConnectorFitRefusal } | { readonly refused: null; readonly created: boolean }
+> {
+  if (isGenericConnector(input.name)) {
+    if (input.packaged) return { refused: 'connector_not_packaged' };
+    if (input.name !== input.kind) return { refused: 'connector_kind_mismatch' };
+    return { refused: null, created: false };
+  }
+  const inserted = await client.query(
+    `insert into connectors (name, kind, packaged, mode)
+     values ($1, $2, $3, 'platform_preset')
+     on conflict (name) do nothing`,
+    [input.name, input.kind, input.packaged],
+  );
+  const row = (
+    await client.query<{ kind: GateTransportKind; packaged: boolean }>(
+      'select kind, packaged from connectors where name = $1',
+      [input.name],
+    )
+  ).rows[0];
+  if (!row || row.kind !== input.kind) return { refused: 'connector_kind_mismatch' };
+  if (row.packaged !== input.packaged) {
+    return { refused: input.packaged ? 'connector_not_packaged' : 'connector_packaged' };
+  }
+  return { refused: null, created: (inserted.rowCount ?? 0) === 1 };
 }
 
 /**
@@ -520,13 +576,22 @@ export async function upsertAnnouncement(
     canonicalJson(before?.pending_operations ?? null) !== canonicalJson(body.operations);
   if (!frozen) {
     // Only where the announced connector is about to be written (`gate_instances.connector`
-    // references it) — never for a refused or a frozen announcement.
-    await client.query(
-      `insert into connectors (name, kind, packaged, mode)
-       values ($1, $2, $3, 'platform_preset')
-       on conflict (name) do nothing`,
-      [body.connector, body.transportKind, !isGenericConnector(body.connector)],
-    );
+    // references it) — never for a refused or a frozen announcement. P1 (review of #644): the same
+    // connector rule as `create_gate_instance`, on every such announcement.
+    const fit = await fitConnector(client, {
+      name: body.connector,
+      kind: body.transportKind,
+      packaged: announcer === 'gate',
+    });
+    if (fit.refused !== null) {
+      return {
+        gateId: body.gateId,
+        created: false,
+        identityMismatch: false,
+        status: before?.status ?? 'discovered',
+        connectorRefused: fit.refused,
+      };
+    }
   }
   if (!before) {
     await client.query(
@@ -785,15 +850,11 @@ export interface HostedGateDefinition {
   readonly definition: GateHostedDefinitionWire;
 }
 
-/** Why `createHostedGateInstance` wrote nothing. */
+/** Why `createHostedGateInstance` wrote nothing: the `gate_id` is taken, or the connector does not
+ *  fit (`fitConnector` — another kind, or a packaged gate's). */
 export type HostedGateInstanceRefusal =
-  /** Another instance already has this `gate_id`. */
   | 'gate_id_taken'
-  /** The named connector is of another transport kind (a generic name other than the instance's
-   *  own kind included). */
-  | 'connector_kind_mismatch'
-  /** The named connector is a packaged gate's (`packaged`, created by its own announce). */
-  | 'connector_packaged';
+  | Exclude<ConnectorFitRefusal, 'connector_not_packaged'>;
 
 /** What `createHostedGateInstance` did: written (and whether that created the connector), or why
  *  nothing was. */
@@ -808,9 +869,8 @@ export type HostedGateInstanceOutcome =
  * gate path, so an internal-token holder racing the host's first announce cannot hand workspaces a
  * live endpoint nobody reviewed.
  *
- * P1 — the connector (接入包) it joins. Every instance of a connector shares its kind, and gate-host
- * instances never share a packaged gate's: so the connector must be the instance's transport kind
- * or a name that is neither a generic kind nor a packaged gate's.
+ * P1 — the connector (接入包) it joins, held to `fitConnector`'s rule: the instance's transport kind,
+ * or a name of that kind that is neither a generic kind nor a packaged gate's.
  *   - The generic connector of its kind (`http` / `mcp`, seeded by core 0023): today's placement.
  *     Its mode also decides whether workspaces may connect that kind themselves (R-40), so putting
  *     it in the catalog (`platform_preset`) stops every workspace's self-connections of the kind.
@@ -819,8 +879,7 @@ export type HostedGateInstanceOutcome =
  *     catalog only, so the instance is offered to workspaces once enabled and the generic one
  *     keeps its mode. A later instance of the same system joins it.
  * The connector row is written in the same transaction as the instance, so a refusal (`gate_id`
- * clash included) leaves no connector behind; a concurrent create naming the same new connector
- * waits on the insert and then reads the winner's kind.
+ * clash included) leaves no connector behind.
  */
 export async function createHostedGateInstance(
   client: PoolClient,
@@ -832,22 +891,12 @@ export async function createHostedGateInstance(
   },
 ): Promise<HostedGateInstanceOutcome> {
   const kind = input.definition.transportKind;
-  if (isGenericConnector(input.connector) && input.connector !== kind) {
-    return { refused: 'connector_kind_mismatch' };
+  const fit = await fitConnector(client, { name: input.connector, kind, packaged: false });
+  if (fit.refused === 'connector_not_packaged') {
+    // Unreachable: only a packaged gate is refused for this.
+    throw new Error('createHostedGateInstance: connector_not_packaged for a gate-host instance');
   }
-  const inserted = await client.query(
-    `insert into connectors (name, kind, packaged, mode)
-     values ($1, $2, false, 'platform_preset')
-     on conflict (name) do nothing`,
-    [input.connector, kind],
-  );
-  const connector = await client.query<{ kind: GateTransportKind; packaged: boolean }>(
-    'select kind, packaged from connectors where name = $1',
-    [input.connector],
-  );
-  const row = connector.rows[0];
-  if (!row || row.kind !== kind) return { refused: 'connector_kind_mismatch' };
-  if (row.packaged) return { refused: 'connector_packaged' };
+  if (fit.refused !== null) return { refused: fit.refused };
   const result = await client.query(
     `insert into gate_instances
        (gate_id, connector, display_name, transport_kind, target, endpoint, health_endpoint,
@@ -864,7 +913,7 @@ export async function createHostedGateInstance(
     ],
   );
   return (result.rowCount ?? 0) === 1
-    ? { refused: null, connectorCreated: (inserted.rowCount ?? 0) === 1 }
+    ? { refused: null, connectorCreated: fit.created }
     : { refused: 'gate_id_taken' };
 }
 

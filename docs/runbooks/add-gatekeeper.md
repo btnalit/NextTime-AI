@@ -188,9 +188,10 @@ Operation，确认时按摘要采用恰好那一版（`confirm_gate_manifest`；
 ```
 
 两条内核规则，光看 compose 文件猜不到：
-- `GATE_CONNECTOR` **必须是系统专属名**（`ops-host`、`backup-cli`……），不能是 `ssh` / `cli`：
-  `set_connector_mode` 对这两个通用接入包拒绝 `platform_preset`（`connector_mode_not_allowed`），
-  那样的实例永远进不了工作区目录。
+- `GATE_CONNECTOR` **必须是系统专属名**（`ops-host`、`backup-cli`……），且只给同一种类的打包门用。
+  内核在每次会写入接入包的 announce 上检查（P1）：通用名（`http` / `mcp` / `cli` / `ssh`）或管理员为门宿主
+  实例起的接入包名，拒 409 `connector_not_packaged`；同名接入包已是别的种类，拒 409
+  `connector_kind_mismatch`。被拒时什么都不写，门日志每轮一行 warn（带这个 code），实例不出现或停止心跳。
 - 启动后它 announce 到内核，出现在"集成 → 门实例"为**未启用 discovered**；管理员**启用**它并把该
   接入包设为**平台预置**后，工作区 owner 才能在"系统接入"里启用（`list_available_gate_instances`
   的 `where` 就是这两个条件）。

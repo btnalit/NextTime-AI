@@ -2,6 +2,7 @@ export type {
   AnnounceBody,
   AnnounceOutcome,
   ConfirmPendingManifestOutcome,
+  ConnectorFitRefusal,
   ConnectorMode,
   GateHealth,
   CatalogGatePolicy,
