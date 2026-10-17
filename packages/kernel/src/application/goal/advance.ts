@@ -13,12 +13,13 @@ import { type PoolLike, withWorkspace } from '../../adapters/db/pool.js';
 import { listStepActionOutcomes } from '../../governance/approval/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import {
+  type LiveGoalTask,
   type PreparedStepAttempt,
   type RunConfigSnapshot,
   type StepAttemptRefusal,
   type TaskRuntimeDeps,
   createStepAttemptTask,
-  listGoalRunLiveTasks,
+  listGoalRunLiveTaskSteps,
   listTaskWorkerRunTree,
   lockTaskQuotas,
   readGoalRunTokenHeadroom,
@@ -33,7 +34,7 @@ import { type GoalMoveActor, moveGoalRun, moveStepRun } from './moves.js';
 import { DEFAULT_MAX_ATTEMPTS, type PlanStep, planStep, samePlanEntry } from './plan.js';
 import { getPlanRevision, lockStepRuns } from './reads.js';
 import { lockGoalRun } from './service.js';
-import type { GoalRunRow, StepRunRow } from './types.js';
+import type { GoalRunRow, PlanRevisionRow, StepRunRow } from './types.js';
 
 /**
  * application/goal/advance (S11 GO2; plan §4.2, §4.7, §4.9): one advance of one GoalRun — the
@@ -47,36 +48,51 @@ import type { GoalRunRow, StepRunRow } from './types.js';
  * Otherwise only a `running` or `paused` GoalRun is advanced; any other status just loses its
  * `next_tick_at` (verification is GO4). Then, in order:
  *
+ *   0. **Stop revised-away work** (running or paused; S11 GO3b, `revise.ts`). The live Tasks of a
+ *      step a revision superseded — its attempt and nested child Tasks — are terminated after the
+ *      commit, like a cancelling run's, unless the revision let that step finish
+ *      (`plan_revisions.removals`, goal/0004). A superseded step itself never moves again.
  *   A. **Record finished attempts** (running or paused). A `running` / `waiting` step whose current
- *      attempt Task has finished is judged by that Task and by what the ActionRequests raised by
- *      that attempt's own runs — nested children included — became (`stepActionEffect`, §4.7; an
- *      earlier attempt's requests never decide this one). A request still in flight or awaiting
- *      a reconcile holds the step in `waiting` (§4.8: the wait is on the step, not on the Worker);
- *      a reconcile also pauses the GoalRun `awaiting_reconcile` (the reconcile observation is
- *      GO3b). Otherwise {@link judgeFinishedAttempt}: success, or a failure category — only
+ *      attempt Task has finished — once no other Task of the step still runs: a nested child Task
+ *      can outlive its caller and still raise requests the step owns (GO3b) — is judged by that
+ *      Task and by what the ActionRequests raised by that attempt's own runs — nested children
+ *      included — became (`stepActionEffect`, §4.7; an earlier attempt's requests never decide
+ *      this one). A request still in flight or awaiting a reconcile holds the step in `waiting`
+ *      (§4.8: the wait is on the step, not on the Worker); a reconcile also pauses the GoalRun
+ *      `awaiting_reconcile` (the reconcile observation is GO3c). Otherwise
+ *      {@link judgeFinishedAttempt}: success, or a failure category — only
  *      `transient` is retried without a person; every other category pauses the GoalRun. A step
  *      no longer part of the current plan is not judged at all (I-G2: a late result is kept on
  *      its Task, it moves nothing) and the GoalRun pauses `needs_decision`.
  *   B. **Retry transient failures** (running only). Under the step's attempt limit (plan
  *      `maxAttempts`, default 3), once no request of the step — of any attempt — is still in flight
- *      (I-G4: no new attempt beside an action that may still run), after an exponential backoff
- *      from the failure, and only if the step is still part of the current plan: `failed → ready`.
+ *      and no Task of it still runs (I-G4: no new attempt beside an action that may still run),
+ *      after an exponential backoff from the failure, and only if the step is still part of the
+ *      current plan: `failed → ready`.
  *      Past the limit, the GoalRun pauses `needs_decision`.
  *   C. **Unblock** (running or paused). A `pending` step whose dependencies all succeeded becomes
  *      `ready` — after re-checking that its definition is still the current plan's entry (the
  *      database does not check this on `ready`). A skipped dependency counts as done.
  *   D. **Start** (running only). Every live step succeeded → `verifying` (GO4 runs the acceptance
- *      checks). Otherwise the budget is checked (I-G6: wall clock from confirmation, tokens used by
+ *      checks) — once nothing of the run is left running: no Task of it (a step let finish after a
+ *      revision) and no request of a superseded step still in flight (one released, or executing
+ *      when the revision came); one whose outcome is unknown pauses `awaiting_reconcile` first
+ *      (GO3b). Otherwise the budget is checked (I-G6: wall clock from confirmation, tokens used by
  *      the GoalRun's Tasks; past either → `paused(budget_exhausted)`, never failed), then each
  *      `ready` step starts one attempt while the step budget allows, the attempts of one advance
  *      splitting the goal's token headroom (`readGoalRunTokenHeadroom`: the budget less what every
  *      Task of the run holds — a live Task its own budget), so the live Tasks' budgets together
  *      never exceed what is left of the goal's: `createStepAttemptTask` inserts
  *      the attempt's Task in this transaction and the step moves `ready → running` with
- *      `attempt_count + 1` (I-G1). A refusal leaves the step `ready`: the requester's concurrency
- *      quota retries after {@link DEFAULT_QUOTA_RETRY_MS}; the daily cost quota pauses
- *      `budget_exhausted`; lost authority pauses `authority_lost` (S9, I-G7); a pinned component no
- *      longer published pauses `needs_decision`.
+ *      `attempt_count + 1` (I-G1). No attempt starts while a request of any superseded step —
+ *      whatever key the revision gave its work — has an unknown outcome: the run pauses
+ *      `awaiting_reconcile` (review #493 on #633). A step whose key a revision redefined does not
+ *      start while the StepRun it replaced still has a Task running or a request in flight (I-G4
+ *      across the revision: the new definition does not run beside the old one's actions). A
+ *      refusal leaves the step `ready`: the requester's concurrency quota retries after
+ *      {@link DEFAULT_QUOTA_RETRY_MS}; the daily cost quota pauses `budget_exhausted`; lost
+ *      authority pauses `authority_lost` (S9, I-G7); a pinned component no longer published
+ *      pauses `needs_decision`.
  *
  * A paused GoalRun keeps its first reason (the guard refuses changing it while paused); a further
  * cause is in the audit log (`goal_run.pause_noted`, once per pause for each reason and detail),
@@ -112,6 +128,9 @@ export interface GoalAdvancerOptions extends CancellingOptions {
   readonly retryBackoffMs?: (attempts: number) => number;
   readonly quotaRetryMs?: number;
   readonly blockedRetryRecheckMs?: number;
+  /** Failed advances in a row after which a running run pauses for a person (legacy 356;
+   *  `advancer.ts` `DEFAULT_MAX_CONSECUTIVE_ADVANCE_FAILURES`). */
+  readonly maxConsecutiveAdvanceFailures?: number;
 }
 
 export interface GoalAdvanceDeps {
@@ -246,6 +265,9 @@ export async function advanceGoalRun(
         };
       }
       const now = await databaseNow(client);
+      if (goal.status === 'running' || goal.status === 'paused' || goal.status === 'cancelling') {
+        await clearAdvanceFailures(client, goal);
+      }
       if (goal.status === 'cancelling') {
         const cancelling = await advanceCancellingGoalRun(client, goal, now, deps.options ?? {});
         await writeNextTick(client, goal, cancelling.nextTickAt);
@@ -294,6 +316,17 @@ async function databaseNow(client: PoolClient): Promise<Date> {
   return now;
 }
 
+/** Legacy 356: an advance that commits ends the run's streak of failed ones (`advance_failures`,
+ *  goal/0004). Written in the advance's transaction, so an advance that throws keeps the streak —
+ *  the advancer counts it (`advancer.ts`). Scheduling-like: no `updated_at`, no event. */
+async function clearAdvanceFailures(client: PoolClient, goal: GoalRunRow): Promise<void> {
+  if (goal.advanceFailures === 0) return;
+  await client.query(
+    'update goal_runs set advance_failures = 0 where workspace_id = $1 and id = $2',
+    [goal.workspaceId, goal.id],
+  );
+}
+
 async function writeNextTick(client: PoolClient, goal: GoalRunRow, at: Date | null): Promise<void> {
   // Scheduling only: `updated_at` stays the time of the run's last transition.
   await client.query('update goal_runs set next_tick_at = $3 where workspace_id = $1 and id = $2', [
@@ -313,7 +346,10 @@ class Advance {
   private status: GoalRunStatus;
   private readonly timers: number[] = [];
   private readonly started: PreparedStepAttempt[] = [];
-  private readonly plans = new Map<number, unknown>();
+  private readonly terminated: string[] = [];
+  private readonly revisions = new Map<number, PlanRevisionRow | null>();
+  /** The run's live Tasks as the advance began. Only phase D creates Tasks, after its last read. */
+  private liveTasks: readonly LiveGoalTask[] = [];
 
   constructor(client: PoolClient, goal: GoalRunRow, now: Date, options: GoalAdvancerOptions) {
     this.client = client;
@@ -340,7 +376,10 @@ class Advance {
   }
 
   async run(): Promise<AdvanceResult> {
-    for (const step of await this.lockSteps()) {
+    const steps = await this.lockSteps();
+    this.liveTasks = await listGoalRunLiveTaskSteps(this.client, this.ws, this.goal.id);
+    await this.stopSupersededWork(steps);
+    for (const step of steps) {
       if (step.status === 'running' || step.status === 'waiting') await this.recordAttempt(step);
     }
     if (this.status === 'running') {
@@ -361,7 +400,7 @@ class Advance {
       outcome: {
         status: this.status,
         startedTaskIds: this.started.map((attempt) => attempt.task.id),
-        terminatedTaskIds: [],
+        terminatedTaskIds: this.terminated,
         nextTickAt,
       },
       attempts: this.started,
@@ -375,12 +414,23 @@ class Advance {
     return lockStepRuns(this.client, this.ws, this.goal.id);
   }
 
-  private async plan(revision: number): Promise<unknown> {
-    if (!this.plans.has(revision)) {
-      const row = await getPlanRevision(this.client, this.ws, this.goal.id, revision);
-      this.plans.set(revision, row?.plan ?? null);
+  private async revision(revision: number): Promise<PlanRevisionRow | null> {
+    if (!this.revisions.has(revision)) {
+      this.revisions.set(
+        revision,
+        await getPlanRevision(this.client, this.ws, this.goal.id, revision),
+      );
     }
-    return this.plans.get(revision);
+    return this.revisions.get(revision) ?? null;
+  }
+
+  private async plan(revision: number): Promise<unknown> {
+    return (await this.revision(revision))?.plan ?? null;
+  }
+
+  /** The step's Tasks that have not ended — its attempt and nested child Tasks. */
+  private liveTasksOf(step: StepRunRow): readonly string[] {
+    return this.liveTasks.filter((task) => task.stepRunId === step.id).map((task) => task.taskId);
   }
 
   /** The step's definition: its entry in the revision that introduced it. */
@@ -399,6 +449,22 @@ class Advance {
     );
   }
 
+  // ----- 0 ------------------------------------------------------------------------------------
+
+  /** The live Tasks of superseded steps, unless the superseding revision let the step finish, go
+   *  to the advancer to terminate after the commit (terminating an ended Task is a no-op, so a
+   *  Task that ends meanwhile is harmless). */
+  private async stopSupersededWork(steps: readonly StepRunRow[]): Promise<void> {
+    for (const step of steps) {
+      if (step.status !== 'superseded' || step.supersededInRevision === null) continue;
+      const tasks = this.liveTasksOf(step);
+      if (tasks.length === 0) continue;
+      const removal = (await this.revision(step.supersededInRevision))?.removals[step.stepKey];
+      if (removal?.mode === 'let_finish') continue;
+      this.terminated.push(...tasks);
+    }
+  }
+
   // ----- A ------------------------------------------------------------------------------------
 
   private async recordAttempt(step: StepRunRow): Promise<void> {
@@ -411,6 +477,9 @@ class Advance {
       return;
     }
     if (!FINISHED_TASK_STATUSES.has(task.status)) return;
+    // A nested child Task of the attempt still runs, and may still raise requests the step owns:
+    // judged once it ends (its `TaskUpdated` wakes the run).
+    if (this.liveTasksOf(step).length > 0) return;
     // I-G2: a step out of the current plan is not judged — its attempt's result stays on its Task
     // and moves nothing (review #493 on #619). A revision supersedes such a step first (GO3b), so
     // this is the backstop.
@@ -482,6 +551,12 @@ class Advance {
       );
       return;
     }
+    // A Task of the step still running (a nested child of the failed attempt): its end wakes the
+    // run; the re-check bounds a lost wake.
+    if (this.liveTasksOf(step).length > 0) {
+      this.timers.push(this.now.getTime() + this.blockedRetryRecheckMs);
+      return;
+    }
     // Every request of the step, of every attempt (I-G4): none may still run beside a new attempt.
     const all = stepActionEffect(await listStepActionOutcomes(this.client, this.ws, step.id));
     if (all.kind === 'wait') {
@@ -537,7 +612,7 @@ class Advance {
   private async startSteps(steps: readonly StepRunRow[]): Promise<void> {
     const live = steps.filter((step) => step.status !== 'superseded');
     if (live.length > 0 && live.every((step) => DONE_STEP_STATUSES.has(step.status))) {
-      await this.moveGoal('verify', null, { steps: live.length });
+      if (await this.settled(steps)) await this.moveGoal('verify', null, { steps: live.length });
       return;
     }
     if (this.now.getTime() >= this.deadline) {
@@ -557,6 +632,19 @@ class Advance {
     }
     const ready = live.filter((step) => step.status === 'ready');
     if (ready.length === 0) return;
+    // Review #493 on #633: a request of any superseded step whose outcome is unknown holds every
+    // new attempt, whatever key the revision gave the work — renaming a step must not re-run an
+    // action that may have run. (A request still in flight holds only the step that took over its
+    // key, `predecessorBusy`: a renamed step running beside it is the person's choice, nothing in
+    // doubt.)
+    const inDoubt = await this.supersededInDoubt(steps);
+    if (inDoubt) {
+      await this.pause(
+        'awaiting_reconcile',
+        `step ${inDoubt.stepKey} (revised away): an action of it may have run (outcome unknown)`,
+      );
+      return;
+    }
     let attemptsSoFar = usage.steps;
     if (attemptsSoFar >= this.goal.budget.maxSteps) {
       await this.pause(
@@ -575,7 +663,7 @@ class Advance {
     if (share < 1) {
       // Held by live Tasks: their unspent budget comes back when they end, and their end wakes
       // the run. Otherwise the goal's tokens are all but spent.
-      if ((await listGoalRunLiveTasks(this.client, this.ws, this.goal.id)).length === 0) {
+      if (this.liveTasks.length === 0) {
         await this.pause(
           'budget_exhausted',
           `tokens: ${headroom} left of ${this.goal.budget.maxTokens}, not enough for ${starting} attempt(s)`,
@@ -591,9 +679,77 @@ class Advance {
         );
         return;
       }
+      const predecessor = await this.predecessorBusy(steps, step);
+      if (predecessor === 'reconcile') {
+        await this.pause(
+          'awaiting_reconcile',
+          `step ${step.stepKey}: an action of the step it replaces may have run (outcome unknown)`,
+        );
+        return;
+      }
+      if (predecessor === 'busy') {
+        this.timers.push(this.now.getTime() + this.blockedRetryRecheckMs);
+        continue;
+      }
       if (!(await this.startAttempt(step, share))) return;
       attemptsSoFar += 1;
     }
+  }
+
+  /** Whether the run may verify: no Task of it still runs (a step let finish after a revision) and
+   *  no request of a superseded step is still in flight — released, or executing when the revision
+   *  came. An outcome-unknown one pauses the run `awaiting_reconcile`. Otherwise the run looks
+   *  again when the Task or the request ends (its event wakes the run; the re-check bounds a lost
+   *  wake). */
+  private async settled(steps: readonly StepRunRow[]): Promise<boolean> {
+    let busy = this.liveTasks.length > 0;
+    for (const step of steps) {
+      if (step.status !== 'superseded') continue;
+      const effect = stepActionEffect(await listStepActionOutcomes(this.client, this.ws, step.id));
+      if (effect.kind !== 'wait') continue;
+      if (effect.waitingReason === 'reconcile') {
+        await this.pause(
+          'awaiting_reconcile',
+          `step ${step.stepKey} (revised away): an action of it may have run (outcome unknown)`,
+        );
+        return false;
+      }
+      busy = true;
+    }
+    if (busy) this.timers.push(this.now.getTime() + this.blockedRetryRecheckMs);
+    return !busy;
+  }
+
+  /** The first StepRun a revision superseded — under any key — with a request whose outcome is
+   *  unknown, or `null`. */
+  private async supersededInDoubt(steps: readonly StepRunRow[]): Promise<StepRunRow | null> {
+    for (const step of steps) {
+      if (step.status !== 'superseded') continue;
+      const effect = stepActionEffect(await listStepActionOutcomes(this.client, this.ws, step.id));
+      if (effect.kind === 'wait' && effect.waitingReason === 'reconcile') return step;
+    }
+    return null;
+  }
+
+  /** What the StepRuns a revision superseded under `step`'s key still have running: `busy` (a Task,
+   *  or a request in flight), `reconcile` (a request whose outcome is unknown — found by
+   *  {@link supersededInDoubt} before any attempt starts; one that turned so since) or `null`. */
+  private async predecessorBusy(
+    steps: readonly StepRunRow[],
+    step: StepRunRow,
+  ): Promise<'busy' | 'reconcile' | null> {
+    let busy = false;
+    for (const before of steps) {
+      if (before.status !== 'superseded' || before.stepKey !== step.stepKey) continue;
+      if (this.liveTasksOf(before).length > 0) busy = true;
+      const effect = stepActionEffect(
+        await listStepActionOutcomes(this.client, this.ws, before.id),
+      );
+      if (effect.kind !== 'wait') continue;
+      if (effect.waitingReason === 'reconcile') return 'reconcile';
+      busy = true;
+    }
+    return busy ? 'busy' : null;
   }
 
   /** Starts one attempt of a `ready` step with at most `tokenCap` tokens; `false` when nothing more

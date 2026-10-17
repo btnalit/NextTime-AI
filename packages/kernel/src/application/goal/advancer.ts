@@ -5,13 +5,15 @@ import {
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { type PoolLike, withWorkspace } from '../../adapters/db/pool.js';
-import { getActionRequest } from '../../governance/approval/index.js';
+import { getActionRequest, shownAuditReason } from '../../governance/approval/index.js';
 import { SYSTEM_ACTOR_PLACEHOLDER } from '../../governance/gatekeepers/index.js';
+import { writeAudit } from '../../substrate/audit/index.js';
 import type { DomainEvent } from '../../substrate/outbox/index.js';
 import { readTaskGoalStep, terminateTaskWith } from '../task/index.js';
 import { type GoalAdvanceDeps, type GoalAdvanceTarget, advanceGoalRun } from './advance.js';
 import { readCancelLeftovers } from './cancelling.js';
 import { actionDisposition } from './disposition.js';
+import { moveGoalRun } from './moves.js';
 import { lockGoalRun } from './service.js';
 import { recordGoalRunTransition } from './transition-log.js';
 
@@ -24,7 +26,10 @@ import { recordGoalRunTransition } from './transition-log.js';
  *      GoalRuns ({@link claimDueGoalRuns}: `next_tick_at <= now()`, `for no key update skip
  *      locked`, `next_tick_at` pushed one lease ahead in the claiming statement) and advances each
  *      (`advance.ts`). An advance that throws rolls back; its run is due again when the lease
- *      runs out.
+ *      runs out. Legacy 356: the throw is counted on the run ({@link recordAdvanceFailure},
+ *      `advance_failures`, goal/0004) and an advance that commits, a resume or a revision clears
+ *      the count; at {@link DEFAULT_MAX_CONSECUTIVE_ADVANCE_FAILURES} in a row a running run
+ *      pauses for a person instead of being retried every lease, without end.
  *   2. {@link registerGoalWakeConsumer} — the outbox consumer. A Task of a GoalRun finished, or an
  *      ActionRequest of one of its steps stopped being in flight: in its own short transaction it
  *      sets that GoalRun due, and returns. It never advances (§4.2: the dispatcher's delivery loop
@@ -57,6 +62,9 @@ export const DEFAULT_GOAL_RECONCILE_INTERVAL_MS = 60 * 1000;
 export const DEFAULT_GOAL_ADVANCE_LEASE_MS = 60 * 1000;
 /** GoalRuns claimed per tick. */
 export const DEFAULT_GOAL_ADVANCE_BATCH = 20;
+/** Failed advances in a row after which a running GoalRun pauses `needs_decision` (legacy 356):
+ *  five leases — about five minutes — rides out a database restart, not a bug. */
+export const DEFAULT_MAX_CONSECUTIVE_ADVANCE_FAILURES = 5;
 
 /** ActionRequest statuses that can still run or still await a decision — the `in_flight`
  *  disposition (`disposition.ts`). A request leaving them wakes its GoalRun. */
@@ -124,26 +132,105 @@ export async function runGoalAdvancerTick(
       await advanceGoalRun(deps, target);
     } catch (err) {
       options.onError?.(err, target);
+      try {
+        await recordAdvanceFailure(deps, target, err);
+      } catch (recordErr) {
+        options.onError?.(recordErr, target);
+      }
     }
   }
   return claimed.length;
 }
 
 /**
+ * Legacy 356: counts one failed advance of `target` (the advance rolled back, so this is its own
+ * transaction, in the requester's workspace context under the GoalRun lock). At
+ * `maxConsecutiveAdvanceFailures` ({@link DEFAULT_MAX_CONSECUTIVE_ADVANCE_FAILURES}) in a row:
+ *
+ *   - a `running` run pauses `needs_decision`, the count and the last error (redacted and clipped
+ *     as an audited reason is shown) in the pause's audit payload, and loses its `next_tick_at` —
+ *     a paused run needs none; an event, the reconcile scan's cleanup clause or a person's resume
+ *     (which starts a fresh count) brings it back;
+ *   - a `paused` run loses its `next_tick_at` the same way, and the streak is noted once
+ *     (`goal_run.advance_failing`);
+ *   - a `cancelling` run keeps its lease — its cleanup must keep being tried — and the streak is
+ *     noted once.
+ * The reconcile scan does not set due a run at or past the limit ({@link markReconcileDue}), so a
+ * broken run is not retried every scan period either. Runs in other statuses are not counted.
+ */
+export async function recordAdvanceFailure(
+  deps: GoalAdvanceDeps,
+  target: GoalAdvanceTarget,
+  error: unknown,
+): Promise<void> {
+  const max =
+    deps.options?.maxConsecutiveAdvanceFailures ?? DEFAULT_MAX_CONSECUTIVE_ADVANCE_FAILURES;
+  await withWorkspace(
+    deps.pool,
+    { workspaceId: target.workspaceId, principalId: target.requesterId },
+    async (client) => {
+      const goal = await lockGoalRun(client, target.workspaceId, target.goalRunId);
+      if (!goal || !(ADVANCED_GOAL_RUN_STATUSES as readonly string[]).includes(goal.status)) return;
+      const failures = goal.advanceFailures + 1;
+      await client.query(
+        'update goal_runs set advance_failures = $3 where workspace_id = $1 and id = $2',
+        [goal.workspaceId, goal.id, failures],
+      );
+      if (failures < max) return;
+      const detail = `the advance failed ${failures} times in a row`;
+      const lastError = shownAuditReason(error instanceof Error ? error.message : String(error));
+      if (goal.status === 'running') {
+        await moveGoalRun(
+          client,
+          { principalId: goal.onBehalfOf, by: 'advancer' },
+          goal,
+          'running',
+          'pause',
+          { pauseReason: 'needs_decision', audit: { reason: 'needs_decision', detail, lastError } },
+        );
+      } else if (failures === max) {
+        await writeAudit(client, {
+          workspaceId: goal.workspaceId,
+          actorPrincipalId: goal.onBehalfOf,
+          action: 'goal_run.advance_failing',
+          resourceType: 'goal_run',
+          resourceId: goal.id,
+          payload: { by: 'advancer', status: goal.status, detail, lastError },
+        });
+      }
+      if (goal.status !== 'cancelling') {
+        await client.query(
+          'update goal_runs set next_tick_at = null where workspace_id = $1 and id = $2',
+          [goal.workspaceId, goal.id],
+        );
+      }
+    },
+  );
+}
+
+/**
  * The reconcile scan (§4.2 item 3, S12): sets due — `next_tick_at = now()` — every advanced
  * GoalRun ({@link ADVANCED_GOAL_RUN_STATUSES}) not already due, and not held by an advance
- * (`skip locked`: an advance in progress re-reads everything anyway), that has
- *   (a) a `running` step whose current attempt's Task has finished;
- *   (b) a step `waiting(approval)` with no request of the step still in flight;
+ * (`skip locked`: an advance in progress re-reads everything anyway), whose advances are not
+ * failing at or past the limit (legacy 356, {@link recordAdvanceFailure}), that has
+ *   (a) a `running` step whose current attempt's Task has finished, with no other Task of the step
+ *       still running (a nested child's end wakes the run, GO3b);
+ *   (b) a step `waiting(approval)` with no request of the step still in flight and no Task of it
+ *       still running;
  *   (c) while running or cancelling: no `next_tick_at` at all (an advance of such a run always
  *       leaves one — the wall-clock or cancel deadline at the latest);
  *   (d) while running: Tokens used by its Tasks at or past its token budget (usage has no event of
  *       its own; each Task's budget is capped by the goal's headroom, but the model call that
- *       crosses a Task's budget lands before the usage hook fails the Task).
+ *       crosses a Task's budget lands before the usage hook fails the Task);
+ *   (e) a step a revision superseded without letting it finish (`plan_revisions.removals`) that
+ *       still has a Task running — terminating it after an advance failed (GO3b).
  * Returns how many runs it set due. A `waiting(reconcile)` step is not counted: its GoalRun is
- * paused for a person (GO3b runs the reconcile observation).
+ * paused for a person (GO3c runs the reconcile observation).
  */
-export async function markReconcileDue(pool: PoolLike): Promise<number> {
+export async function markReconcileDue(
+  pool: PoolLike,
+  options: { readonly maxConsecutiveAdvanceFailures?: number } = {},
+): Promise<number> {
   const client = await pool.connect();
   try {
     const result = await client.query(
@@ -153,6 +240,7 @@ export async function markReconcileDue(pool: PoolLike): Promise<number> {
                 select c.workspace_id, c.id from goal_runs c
                  where c.status = any($1::text[])
                    and (c.next_tick_at is null or c.next_tick_at > now())
+                   and c.advance_failures < $3
                    and (
                      exists (
                        select 1 from step_runs s
@@ -161,7 +249,12 @@ export async function markReconcileDue(pool: PoolLike): Promise<number> {
                           and t.step_attempt = s.attempt_count
                         where s.workspace_id = c.workspace_id and s.goal_run_id = c.id
                           and s.status = 'running'
-                          and t.status in ('completed', 'failed', 'cancelled'))
+                          and t.status in ('completed', 'failed', 'cancelled')
+                          and not exists (
+                            select 1 from tasks lt
+                             where lt.workspace_id = c.workspace_id and lt.goal_run_id = c.id
+                               and lt.step_run_id = s.id
+                               and lt.status not in ('completed', 'failed', 'cancelled')))
                      or exists (
                        select 1 from step_runs s
                         where s.workspace_id = c.workspace_id and s.goal_run_id = c.id
@@ -169,7 +262,24 @@ export async function markReconcileDue(pool: PoolLike): Promise<number> {
                           and not exists (
                             select 1 from action_requests ar
                              where ar.workspace_id = s.workspace_id and ar.step_run_id = s.id
-                               and ar.status = any($2::text[])))
+                               and ar.status = any($2::text[]))
+                          and not exists (
+                            select 1 from tasks lt
+                             where lt.workspace_id = c.workspace_id and lt.goal_run_id = c.id
+                               and lt.step_run_id = s.id
+                               and lt.status not in ('completed', 'failed', 'cancelled')))
+                     or exists (
+                       select 1 from step_runs s
+                         join plan_revisions pr
+                           on pr.workspace_id = s.workspace_id and pr.goal_run_id = s.goal_run_id
+                          and pr.revision = s.superseded_in_revision
+                         join tasks lt
+                           on lt.workspace_id = c.workspace_id and lt.goal_run_id = c.id
+                          and lt.step_run_id = s.id
+                        where s.workspace_id = c.workspace_id and s.goal_run_id = c.id
+                          and s.status = 'superseded'
+                          and coalesce(pr.removals -> s.step_key ->> 'mode', 'terminate') <> 'let_finish'
+                          and lt.status not in ('completed', 'failed', 'cancelled'))
                      or (c.status in ('running', 'cancelling') and c.next_tick_at is null)
                      or (c.status = 'running'
                          and (select coalesce(sum(t.tokens_used), 0) from tasks t
@@ -177,7 +287,11 @@ export async function markReconcileDue(pool: PoolLike): Promise<number> {
                              >= c.budget_max_tokens)
                    )
                    for no key update skip locked)`,
-      [[...ADVANCED_GOAL_RUN_STATUSES], [...IN_FLIGHT_ACTION_STATUSES]],
+      [
+        [...ADVANCED_GOAL_RUN_STATUSES],
+        [...IN_FLIGHT_ACTION_STATUSES],
+        options.maxConsecutiveAdvanceFailures ?? DEFAULT_MAX_CONSECUTIVE_ADVANCE_FAILURES,
+      ],
     );
     return result.rowCount ?? 0;
   } finally {
@@ -188,6 +302,13 @@ export async function markReconcileDue(pool: PoolLike): Promise<number> {
 /** Cancelled runs with `cleanup_pending` looked at per sweep. */
 export const DEFAULT_GOAL_CLEANUP_BATCH = 20;
 
+/** Where the next cleanup sweep goes on from: the id of the last run the previous one looked at,
+ *  `null` to start from the first (legacy 364). The sweeping process keeps one (`index.ts`); a
+ *  restart starts over, which only costs one pass. */
+export interface GoalCleanupCursor {
+  after: string | null;
+}
+
 /**
  * The cleanup sweep (§3.4 `cleanup_pending`, S11 GO3a): a run whose cancel deadline passed with
  * Tasks or executing requests left was `cancelled` with `cleanup_pending` (`cancelling.ts`). For
@@ -196,21 +317,32 @@ export const DEFAULT_GOAL_CLEANUP_BATCH = 20;
  * the leftovers refreshes); otherwise its live Tasks are terminated again after the commit.
  * Executing requests need nothing from here: the R-48 reaper ends them. Returns how many runs had
  * their flag cleared.
+ *
+ * A sweep looks at `limit` runs in id order, going on from `cursor` and starting over once it
+ * reached the end (legacy 364): a run whose leftovers never end — a Task whose termination keeps
+ * failing — no longer keeps the runs after it from being looked at. (Their `updated_at` does not
+ * change while they wait, so ordering by it would add nothing to the rotation.) Without a cursor
+ * every sweep starts from the first run.
  */
 export async function sweepGoalCancelCleanup(
   deps: GoalAdvanceDeps,
-  options: { readonly limit?: number } = {},
+  options: { readonly limit?: number; readonly cursor?: GoalCleanupCursor } = {},
 ): Promise<number> {
+  const limit = options.limit ?? DEFAULT_GOAL_CLEANUP_BATCH;
   const client = await deps.pool.connect();
   let targets: readonly GoalAdvanceTarget[];
   try {
     const result = await client.query<{ workspace_id: string; id: string; on_behalf_of: string }>(
       `select workspace_id, id, on_behalf_of from goal_runs
         where status = 'cancelled' and cleanup_pending
-        order by updated_at, id
+          and ($2::uuid is null or id > $2::uuid)
+        order by id
         limit $1`,
-      [options.limit ?? DEFAULT_GOAL_CLEANUP_BATCH],
+      [limit, options.cursor?.after ?? null],
     );
+    if (options.cursor) {
+      options.cursor.after = result.rows.length < limit ? null : (result.rows.at(-1)?.id ?? null);
+    }
     targets = result.rows.map((row) => ({
       workspaceId: row.workspace_id,
       goalRunId: row.id,
