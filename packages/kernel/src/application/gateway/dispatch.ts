@@ -10,6 +10,7 @@ import { withPlatform } from '../../adapters/db/platform-context.js';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { withWorkspace } from '../../adapters/db/pool.js';
 import { GatekeeperClientError, gateRefusalOf } from '../../adapters/gatekeeper-client/index.js';
+import { ActionInDoubtError } from '../../governance/approval/index.js';
 import { quotedName, redactSuspectedSecrets } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { GoalStepClosedError } from '../task/index.js';
@@ -323,6 +324,10 @@ async function auditGateRefusal(
  * `auditGateRefusal`'s, since the call's own rolled back with the refusal: the call's action, its
  * redacted params, `outcome: 'refused'`, and `refusal` with the step and the status it was in.
  * Failing to write it is logged and never replaces the refusal itself.
+ *
+ * S11 GO3c (I-G4): a `request_action` refused because the step has an earlier request of the same
+ * Operation whose outcome is unknown and not yet reconciled (`ActionInDoubtError`) leaves the same
+ * row, its `refusal` naming that request (`code: 'action_in_doubt'`).
  */
 async function auditGoalStepClosed(
   deps: DispatchDeps,
@@ -337,7 +342,15 @@ async function auditGoalStepClosed(
   },
 ): Promise<void> {
   const err = call.err;
-  if (!(err instanceof GoalStepClosedError)) return;
+  if (!(err instanceof GoalStepClosedError) && !(err instanceof ActionInDoubtError)) return;
+  const refusal =
+    err instanceof GoalStepClosedError
+      ? { code: 'goal_step_closed', status: 409, stepStatus: err.stepStatus }
+      : {
+          code: 'action_in_doubt',
+          status: 409,
+          inDoubtActionRequestId: err.inDoubtActionRequestId,
+        };
   try {
     await withWorkspace(
       deps.pool,
@@ -354,7 +367,7 @@ async function auditGoalStepClosed(
             onBehalfOf: call.principalId,
             ...auditParams(call.capability, call.params),
             outcome: 'refused',
-            refusal: { code: 'goal_step_closed', status: 409, stepStatus: err.stepStatus },
+            refusal,
           },
         }),
     );

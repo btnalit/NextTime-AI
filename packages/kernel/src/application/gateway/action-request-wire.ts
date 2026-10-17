@@ -44,6 +44,8 @@ export function toWireActionRequest(row: ActionRequestRow) {
     executedAt: row.executedAt ? row.executedAt.toISOString() : null,
     failedAt: row.failedAt ? row.failedAt.toISOString() : null,
     failureKind: row.failureKind,
+    // S11 GO3c: present once a `failed` + `outcome_unknown` row has been reconciled.
+    ...reconciliationOf(row),
     requesterCanApprove: row.requesterCanApprove,
     ...(suspected.count > 0
       ? { suspectedSecretValues: suspected.count, suspectedSecretPaths: suspected.paths }
@@ -52,3 +54,16 @@ export function toWireActionRequest(row: ActionRequestRow) {
 }
 
 export type WireActionRequest = ReturnType<typeof toWireActionRequest>;
+
+/** S11 GO3c: `{ reconciliation: { verdict, reexecute } }` for a reconciled row, else nothing — the
+ *  same field on the ActionRequest projection and on `request_action`'s replayed outcome. */
+export function reconciliationOf(row: ActionRequestRow) {
+  return row.reconciliation === null
+    ? {}
+    : {
+        reconciliation: {
+          verdict: row.reconciliation,
+          reexecute: row.reexecuteDecisionId !== null,
+        },
+      };
+}

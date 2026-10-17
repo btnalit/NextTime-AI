@@ -138,3 +138,58 @@ describe('stepActionEffect — a step with several requests', () => {
     });
   });
 });
+
+describe('a reconciled outcome-unknown request (S11 GO3c)', () => {
+  const found = (
+    reconciliation: 'effect_seen' | 'effect_absent',
+    reexecuted = false,
+  ): ActionOutcomeColumns => ({
+    status: 'failed',
+    failureKind: 'outcome_unknown',
+    reconciliation,
+    reexecuted,
+  });
+
+  it('effect_seen counts as executed', () => {
+    expect(actionDisposition(found('effect_seen'))).toBe('executed');
+    expect(stepActionEffect([found('effect_seen'), at('executed')])).toEqual({ kind: 'clear' });
+  });
+
+  it('effect_absent, nobody decided to run it again: a person decides — never a retry', () => {
+    expect(actionDisposition(found('effect_absent'))).toBe('unconfirmed');
+    expect(stepActionEffect([found('effect_absent'), failed('not_delivered')])).toEqual({
+      kind: 'fail',
+      failureCategory: 'outcome_unknown',
+    });
+  });
+
+  it('effect_absent and re-executed: a new attempt, which makes the request anew', () => {
+    expect(actionDisposition(found('effect_absent', true))).toBe('retry');
+    expect(stepActionEffect([found('effect_absent', true)])).toEqual({
+      kind: 'fail',
+      failureCategory: 'transient',
+    });
+  });
+
+  it('a finding is read only on a failed outcome-unknown row; one not yet reconciled still waits first', () => {
+    expect(
+      actionDisposition({
+        status: 'failed',
+        failureKind: 'refused',
+        reconciliation: 'effect_seen',
+      }),
+    ).toBe('needs_decision');
+    expect(stepActionEffect([found('effect_absent'), failed('outcome_unknown')])).toEqual({
+      kind: 'wait',
+      waitingReason: 'reconcile',
+    });
+    expect(stepActionEffect([found('effect_absent'), at('pending_approval')])).toEqual({
+      kind: 'wait',
+      waitingReason: 'approval',
+    });
+    expect(stepActionEffect([found('effect_absent'), at('rejected')])).toEqual({
+      kind: 'fail',
+      failureCategory: 'outcome_unknown',
+    });
+  });
+});
