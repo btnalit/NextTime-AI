@@ -9,12 +9,22 @@ import { describe, expect, it } from 'vitest';
  * `data-label`. Without the class, the table keeps its desktop columns at 390px and the right-hand
  * ones end up behind a sideways scroll (or squeezed to a few characters a line). A new plain table
  * either takes the class or is listed here with the reason it reads fine narrow.
+ *
+ * Legacy 401 (UX acceptance of #651): the opening tag may span lines (`<table` on one,
+ * `className` on the next), and kit's own `Table` is checked too — its Tailwind utilities sit in a
+ * layer above the hand-written sheets, so `.data-table-cards` cannot restyle it; outside
+ * `components/kit/` a table is either kit's `DataTable` (cards of its own) or a native card table.
  */
 const PLAIN_TABLE_ALLOWED: Readonly<Record<string, string>> = {
   'components/platform/PurgeUsersDialog.tsx':
     'outcome list in a dialog: a name and short status columns',
   'components/platform/PurgeWorkspaceDrawer.tsx': 'a three-column count table in a drawer',
 };
+
+/** A native `.data-table` without `data-table-cards`, the opening tag on one line or several. */
+const PLAIN_TABLE = /^\s*<table\b[^>]*\bclassName="data-table"/m;
+/** kit's `Table` (`components/kit/table.tsx`) used directly. */
+const KIT_TABLE = /^\s*<Table[\s>]/m;
 
 const SRC = fileURLToPath(new URL('.', import.meta.url));
 
@@ -34,10 +44,28 @@ describe('narrow-screen tables (legacy 399)', () => {
 
   it('every plain data-table turns into cards on a narrow window, or says why it need not', () => {
     const plain = files
-      .filter(({ text }) => /^\s*<table className="data-table"/m.test(text))
+      .filter(({ text }) => PLAIN_TABLE.test(text))
       .map(({ path }) => path)
       .filter((path) => !(path in PLAIN_TABLE_ALLOWED));
     expect(plain).toEqual([]);
+  });
+
+  it("outside components/kit, kit's Table is not used directly", () => {
+    const direct = files
+      .filter(({ path }) => !path.startsWith('components/kit/'))
+      .filter(({ text }) => KIT_TABLE.test(text))
+      .map(({ path }) => path);
+    expect(direct).toEqual([]);
+  });
+
+  it('the pattern catches an opening tag split across lines', () => {
+    expect(PLAIN_TABLE.test('  <table\n    className="data-table"\n    data-testid="x"\n  >')).toBe(
+      true,
+    );
+    expect(PLAIN_TABLE.test('  <table\n    className="data-table data-table-cards"\n  >')).toBe(
+      false,
+    );
+    expect(PLAIN_TABLE.test('// a `<table className="data-table">` in a comment')).toBe(false);
   });
 
   it('a table marked for cards labels its cells', () => {
@@ -50,10 +78,7 @@ describe('narrow-screen tables (legacy 399)', () => {
 
   it('the allow-list names only files that still have a plain table', () => {
     const stale = Object.keys(PLAIN_TABLE_ALLOWED).filter(
-      (path) =>
-        !files.some(
-          (file) => file.path === path && /^\s*<table className="data-table"/m.test(file.text),
-        ),
+      (path) => !files.some((file) => file.path === path && PLAIN_TABLE.test(file.text)),
     );
     expect(stale).toEqual([]);
   });

@@ -186,6 +186,8 @@ test.describe('Journey ①: 让入口 agent 能执行', () => {
     await enableButton.click();
     const enableConfirm = page.getByTestId(`enable-gate-${GATE_ID}-confirm`);
     await expect(enableConfirm).toBeVisible({ timeout: 15_000 });
+    // Legacy 347: the confirm's buttons are in view without scrolling it.
+    await expect(enableConfirm.getByTestId('confirm-button')).toBeInViewport({ ratio: 1 });
     await enableConfirm.getByTestId('confirm-button').click();
     await expect(availableRow.getByRole('link', { name: /已启用/ })).toBeVisible({
       timeout: 15_000,

@@ -411,6 +411,8 @@ test.describe('P-A2 acceptance: a second workspace, delegated to its own owner',
     await confirm.getByTestId('confirm-typed-name').fill(targetName);
     await confirm.getByTestId('confirm-acknowledge').check();
     await expect(confirm.getByTestId('confirm-button')).toBeEnabled();
+    // Legacy 347: the confirm's buttons are in view without scrolling it.
+    await expect(confirm.getByTestId('confirm-button')).toBeInViewport({ ratio: 1 });
     await confirm.getByTestId('confirm-button').click();
 
     await expect(confirm).toBeHidden({ timeout: 15_000 });

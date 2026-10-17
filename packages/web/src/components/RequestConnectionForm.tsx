@@ -106,7 +106,7 @@ export function RequestConnectionForm({ http, onDone, onCancel }: RequestConnect
       {error !== null ? (
         <ErrorBanner error={error} title={t('无法创建申请', 'Could not create the request')} />
       ) : null}
-      <div className="row" style={{ justifyContent: 'flex-end' }}>
+      <div className="row overlay-actions" style={{ justifyContent: 'flex-end' }}>
         <Button variant="ghost" onClick={onCancel} disabled={submitting}>
           {t('取消', 'Cancel')}
         </Button>

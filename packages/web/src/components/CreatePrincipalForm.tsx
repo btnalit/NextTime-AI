@@ -98,7 +98,7 @@ export function CreatePrincipalForm({ http, onDone, onCancel }: CreatePrincipalF
           </span>
           <CopyButton value={created.apiKey} label={t('API key', 'API key')} />
         </div>
-        <div className="row" style={{ justifyContent: 'flex-end' }}>
+        <div className="row overlay-actions" style={{ justifyContent: 'flex-end' }}>
           {/* ux-lint-allow-disabled: already acknowledged — the key is no longer shown. */}
           <Button
             variant="primary"
@@ -182,7 +182,7 @@ export function CreatePrincipalForm({ http, onDone, onCancel }: CreatePrincipalF
         />
       ) : null}
 
-      <div className="row" style={{ justifyContent: 'flex-end' }}>
+      <div className="row overlay-actions" style={{ justifyContent: 'flex-end' }}>
         <StillNeeded
           items={
             !displayName.trim()

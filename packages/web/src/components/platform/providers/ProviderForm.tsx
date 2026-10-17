@@ -1066,7 +1066,7 @@ export function ProviderForm({
         )
       ) : null}
 
-      <div className="row-wrap">
+      <div className="row-wrap overlay-actions">
         <Button
           type="submit"
           variant="primary"

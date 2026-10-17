@@ -553,7 +553,7 @@ export function ApprovalDetail({
                 disabled={busy !== null}
               />
 
-              <div className="row-wrap">
+              <div className="row-wrap overlay-actions">
                 <Button
                   variant="primary"
                   aria-busy={busy === 'approve'}
