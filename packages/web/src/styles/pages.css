@@ -1192,6 +1192,22 @@
   flex-wrap: wrap;
 }
 
+/* Legacy 350 (UX of #612, again in the re-check of #628): at phone width the trailing block
+ * (who can use, reachability, actions) stayed on the first line and squeezed the system's name
+ * and gate summary into a one-character column. Below 640px it takes its own line under them,
+ * the same wrap the graph's Fact rows use. */
+@media (max-width: 640px) {
+  .systems-list .data-row-main {
+    flex-basis: 100%;
+  }
+
+  .systems-list .data-row-trailing {
+    flex-basis: 100%;
+    flex-shrink: 1;
+    min-width: 0;
+  }
+}
+
 /* ---- Master-detail (console redesign P3-4): 待我审批 (V6, part A) + 任务 (part B) -----------------
  * Which of the two structures below renders — the two-pane grid or the list-only page — is decided
  * in JS (`kit/master-detail`'s own `useMediaQuery`, `(max-width: 1179px)`), not by a CSS media
