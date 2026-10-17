@@ -9,7 +9,7 @@ import { useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { actionKindTagText, formatDateTime, formatRelative } from '../../lib/format.js';
-import { useT } from '../../lib/i18n.js';
+import { sentenceGap, useT } from '../../lib/i18n.js';
 import { transportKindLabel } from '../../lib/labels.js';
 import { hrefs } from '../../lib/router.js';
 import { deriveGateInstanceStatus } from '../../lib/status-tone.js';
@@ -261,7 +261,10 @@ export function GateInstanceDetailPanel({
               </p>
             ) : (
               <div className="table-scroll">
-                <table className="data-table" data-testid="gate-instance-operations-table">
+                <table
+                  className="data-table data-table-cards"
+                  data-testid="gate-instance-operations-table"
+                >
                   <thead>
                     <tr>
                       <th>{t('名称', 'Name')}</th>
@@ -280,10 +283,10 @@ export function GateInstanceDetailPanel({
                             testId={`gate-instance-operation-held-${operation.name}`}
                           />
                         </td>
-                        <td>
+                        <td data-label={t('模式', 'Mode')}>
                           <StatusChip machine="operationMode" status={operation.mode} size="s" />
                         </td>
-                        <td>
+                        <td data-label={t('影响级', 'Blast radius')}>
                           <div className="row-wrap">
                             <StatusChip
                               machine="blastRadius"
@@ -295,7 +298,7 @@ export function GateInstanceDetailPanel({
                             ) : null}
                           </div>
                         </td>
-                        <td>
+                        <td data-label={t('提示', 'Hints')}>
                           {[
                             operation.readOnlyHint ? t('只读', 'read-only') : null,
                             operation.destructiveHint ? t('破坏性', 'destructive') : null,
@@ -485,7 +488,7 @@ export function GateInstanceDetailPanel({
                           'The gate refused the credential — re-enter the shared credential or check the permissions on the target system.',
                         )
                       : t('探测没有得出结论。', 'The probe was inconclusive.')}
-                  {t('', ' ')}
+                  {sentenceGap(t)}
                   {t(
                     '服务端目前不返回具体错误，详情请查看门宿主（或门服务）的日志。',
                     'The server does not return the underlying error yet — see the gate host (or gate service) logs for details.',

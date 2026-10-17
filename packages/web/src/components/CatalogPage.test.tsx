@@ -311,9 +311,12 @@ describe('CatalogPage', () => {
       'operation-publish-confirm-gk-1::docker.restart@draft',
     );
     expect(http.calls.some((c) => c.name === 'publish_operation')).toBe(false);
-    // The target names the operation once; the impact line and consequences don't repeat it.
+    // The target names the operation once; the consequences and the change list don't repeat it,
+    // and the change is shown once, as the old → new list (legacy 400).
     expect(within(confirm).getByTestId('confirm-target').textContent).toBe('docker.restart');
-    expect(confirm.textContent).toContain('影响级 高影响 → 低影响');
+    expect(confirm.textContent?.split('docker.restart')).toHaveLength(2);
+    expect(within(confirm).queryByTestId('confirm-impact')).toBeNull();
+    expect(within(confirm).getByTestId('governance-diff-list').textContent).toContain('分类变化');
     expect(confirm.textContent).toContain('它不再是高影响');
     expect(within(confirm).getByTestId('confirm-button').className).toContain('text-danger');
     expect(

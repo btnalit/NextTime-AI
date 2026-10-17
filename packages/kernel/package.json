@@ -29,6 +29,7 @@
     "@nexttime/gatekeeper-base": "workspace:*",
     "@nexttime/shared": "workspace:*",
     "fastify": "^5.12.5",
+    "jmespath": "^0.16.0",
     "jose": "^6.2.10",
     "pg": "^8.13.1",
     "ws": "^8.18.0",
@@ -37,6 +38,7 @@
     "zod-to-json-schema": "^3.24.1"
   },
   "devDependencies": {
+    "@types/jmespath": "^0.15.2",
     "@types/pg": "^8.11.10",
     "@types/ws": "^8.5.13"
   }

@@ -16,7 +16,7 @@ import {
   withDefaultScheme,
 } from '../../lib/gate-input.js';
 import { HttpError } from '../../lib/http-client.js';
-import { type Translate, useT } from '../../lib/i18n.js';
+import { type Translate, sentenceGap, useT } from '../../lib/i18n.js';
 import { connectorModeLabel } from '../../lib/labels.js';
 import { GATE_ID_PATTERN } from '../../lib/platform-errors.js';
 import { ErrorDetails } from '../kit/error-details.js';
@@ -38,6 +38,26 @@ type CredentialMode = 'shared' | 'connected_account';
 /** Where the instance is filed (P1): a connector named after its system, or the generic one of its
  *  kind (`http` / `mcp`) — whose mode also decides whether workspaces connect that kind themselves. */
 type ConnectorChoice = 'system' | 'generic';
+
+/** Legacy 396 (UX acceptance of #644): the existing system connector a new instance most likely
+ *  belongs to — one of this kind (not packaged, not generic) whose name the gate id starts with,
+ *  followed by a hyphen (`billing` for `billing-2` or `billing-eu`). The longest such name wins, so
+ *  `billing-eu` beats `billing` for `billing-eu-2`. `null` when none does (or the list is not read
+ *  yet): the connector is then named after the gate id, as before. */
+function existingConnectorFor(
+  gateId: string,
+  kind: TransportKind,
+  connectors: ReadonlyMap<string, ConnectorWire> | null,
+): string | null {
+  if (connectors === null) return null;
+  let best: string | null = null;
+  for (const row of connectors.values()) {
+    if (row.packaged || isGenericConnector(row.name) || row.kind !== kind) continue;
+    if (!gateId.startsWith(`${row.name}-`)) continue;
+    if (best === null || row.name.length > best.length) best = row.name;
+  }
+  return best;
+}
 
 /** Why the system connector name cannot be used, said on the field — `null` when it can. Mirrors
  *  `create_gate_instance`'s refusals (`connector_kind_mismatch`, `connector_packaged`) against the
@@ -153,8 +173,16 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
   const suggestedManifest = targetValid ? suggestedManifestSource(targetValue) : '';
 
   // P1: by default the instance gets a connector of its own, named after the gate id, so putting
-  // it in the catalog never changes whether workspaces may connect http / mcp themselves.
-  const systemConnector = connectorEdited ? connectorInput : gateIdValid ? gateId : '';
+  // it in the catalog never changes whether workspaces may connect http / mcp themselves — unless
+  // the gate id extends an existing connector's name (legacy 396), which it then joins.
+  const existingForGateId = gateIdValid
+    ? existingConnectorFor(gateId, transportKind, connectors)
+    : null;
+  const systemConnector = connectorEdited
+    ? connectorInput
+    : gateIdValid
+      ? (existingForGateId ?? gateId)
+      : '';
   const connector = connectorChoice === 'generic' ? transportKind : systemConnector;
   const connectorProblem =
     connectorChoice === 'system' && systemConnector.length > 0
@@ -328,7 +356,7 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
             )}
             {gateIdSource !== null ? (
               <span data-testid="cgi-gate-id-derived">
-                {t('', ' ')}
+                {sentenceGap(t)}
                 {gateIdSource === 'name'
                   ? t(
                       '已根据名称自动生成，可直接修改。',
@@ -341,7 +369,7 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
               </span>
             ) : gateIdEdited && gateIdAdjusted ? (
               <span data-testid="cgi-gate-id-adjusted">
-                {t('', ' ')}
+                {sentenceGap(t)}
                 {t(`已调整为 ${gateId}。`, `Adjusted to ${gateId}.`)}
               </span>
             ) : null}
@@ -413,7 +441,7 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
             )}
             {targetSchemeAdded ? (
               <>
-                {t('', ' ')}
+                {sentenceGap(t)}
                 <span data-testid="cgi-target-scheme-note">{schemeNote}</span>
               </>
             ) : null}
@@ -497,7 +525,7 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
               )}
               {manifestSchemeAdded ? (
                 <>
-                  {t('', ' ')}
+                  {sentenceGap(t)}
                   <span data-testid="cgi-manifest-scheme-note">{schemeNote}</span>
                 </>
               ) : null}
@@ -594,21 +622,44 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
           hint={
             <>
               {t(
-                '同一个系统的几个实例放进同一个接入包。新的接入包是「平台预置」：实例启用后工作区就能在目录里看到它，工作区自己接入 http / mcp 系统不受影响。',
-                'Instances of one system share one connector. A new connector is a platform preset: once the instance is enabled, workspaces see it in the catalog, and their own http / mcp connections are unaffected.',
+                '同一个系统的几个实例放进同一个接入包。',
+                'Instances of one system share one connector.',
+              )}
+              {/* Legacy 395: the 「新的接入包…」 sentence only when a new one is made — next to
+               *  the 「会加入它」 note below it contradicted itself. */}
+              {joinedConnector ? null : (
+                <span data-testid="cgi-connector-new">
+                  {sentenceGap(t)}
+                  {t(
+                    '新的接入包是「平台预置」：实例启用后工作区就能在目录里看到它，工作区自己接入 http / mcp 系统不受影响。',
+                    'A new connector is a platform preset: once the instance is enabled, workspaces see it in the catalog, and their own http / mcp connections are unaffected.',
+                  )}
+                </span>
               )}
               {!connectorEdited && systemConnector.length > 0 ? (
                 <span data-testid="cgi-connector-derived">
-                  {t('', ' ')}
-                  {t(
-                    '已根据门 ID 自动生成，可直接修改。',
-                    'Generated from the gate ID — edit it if you like.',
-                  )}
+                  {sentenceGap(t)}
+                  {existingForGateId !== null
+                    ? t(
+                        '门 ID 以这个已有接入包的名字开头，已选中它，可直接修改。',
+                        'The gate ID starts with this existing connector’s name, so it is picked — edit it if you like.',
+                      )
+                    : joinedConnector
+                      ? // Legacy 402: a gate id equal to an existing connector's name joins it —
+                        // 「自动生成」 would read as a new one.
+                        t(
+                          '门 ID 和这个已有接入包同名，已选中它，可直接修改。',
+                          'The gate ID matches this existing connector’s name, so it is picked — edit it if you like.',
+                        )
+                      : t(
+                          '已根据门 ID 自动生成，可直接修改。',
+                          'Generated from the gate ID — edit it if you like.',
+                        )}
                 </span>
               ) : null}
               {joinedConnector ? (
                 <span data-testid="cgi-connector-joins">
-                  {t('', ' ')}
+                  {sentenceGap(t)}
                   {t(
                     `接入包「${joinedConnector.name}」已有 ${joinedConnector.instanceCount} 个实例（${connectorModeLabel(joinedConnector.mode, t)}），这个实例会加入它。`,
                     `Connector "${joinedConnector.name}" already holds ${joinedConnector.instanceCount} instance(s) (${connectorModeLabel(joinedConnector.mode, t)}); this instance joins it.`,
@@ -680,7 +731,7 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
         testId="create-gate-instance-error"
       />
 
-      <div className="row" style={{ justifyContent: 'flex-end' }}>
+      <div className="row overlay-actions" style={{ justifyContent: 'flex-end' }}>
         <Button variant="ghost" onClick={onCancel} disabled={submitting}>
           {t('取消', 'Cancel')}
         </Button>

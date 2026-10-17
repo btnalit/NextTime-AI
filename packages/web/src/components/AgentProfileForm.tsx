@@ -10,7 +10,7 @@ import type { CapabilityCaller } from '../lib/clients.js';
 import { describeError } from '../lib/errors.js';
 import { shortId } from '../lib/format.js';
 import type { GatekeeperListRow, ModelRow, SkillRow } from '../lib/governance.js';
-import { type Translate, useT } from '../lib/i18n.js';
+import { type Translate, sentenceGap, useT } from '../lib/i18n.js';
 import { hrefs } from '../lib/router.js';
 import { sameNameIds } from '../lib/same-name.js';
 import type { WorkerDefinitionSummary } from '../lib/tasks.js';
@@ -328,7 +328,7 @@ export function AgentProfileForm({
                 '只读操作不需要授权；工作区所有者授权后，你的智能体才能经 Worker 执行写操作。',
                 'Read operations need no grant; a workspace owner has to grant a system before your agent can act on it through a Worker.',
               )}
-              {t('', ' ')}
+              {sentenceGap(t)}
               <a href={hrefs.access()} className="link-inline">
                 {t('查看授权', 'View grants')}
               </a>

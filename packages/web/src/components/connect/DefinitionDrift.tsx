@@ -1,6 +1,6 @@
 import type { DefinitionMismatchWire } from '@nexttime/shared';
 import { actionKindTagText, formatDateTime, formatRelative } from '../../lib/format.js';
-import { useT } from '../../lib/i18n.js';
+import { sentenceGap, useT } from '../../lib/i18n.js';
 import { hrefs } from '../../lib/router.js';
 import { Notice } from '../kit/notice.js';
 import { RouteLink } from '../kit/route-link.js';
@@ -84,7 +84,7 @@ export function AwaitingAdoptionNotice({
                 )}
           {gone.length > 0 ? (
             <>
-              {t('', ' ')}
+              {sentenceGap(t)}
               <span data-testid={testId ? `${testId}-dropped` : undefined}>
                 {t(
                   `门已经不再提供 ${joined(gone, true)}，对${one ? '它' : '它们'}的调用会被拒绝，采用和对齐都恢复不了：采用后${one ? '它' : '它们'}会从清单里移除。`,
@@ -187,7 +187,7 @@ export function DefinitionMismatchNotice({
             `门已经按新定义运行，对 ${joined(revision, true)} 的调用会被拒绝，直到这个工作区对齐并发布修订。`,
             `The gate already runs a new definition, so calls to ${joined(revision, false)} are refused until this workspace aligns and publishes the revision.`,
           )}
-          {t('', ' ')}
+          {sentenceGap(t)}
           {canManage
             ? t(
                 '点下面的「与门公告对齐」打开修订，再到能力目录发布。',

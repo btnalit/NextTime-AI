@@ -172,7 +172,7 @@ export function OnboardingWizard({
             </div>
           </fieldset>
           <Notice testId="wizard-kind-copy">{kindCopy(kind, t)}</Notice>
-          <div className="row" style={{ justifyContent: 'flex-end' }}>
+          <div className="row overlay-actions" style={{ justifyContent: 'flex-end' }}>
             <Button variant="ghost" onClick={onCancel}>
               {t('取消', 'Cancel')}
             </Button>
@@ -268,7 +268,7 @@ export function OnboardingWizard({
               title={t('无法发布清单', 'Could not publish the manifest')}
             />
           ) : null}
-          <div className="row" style={{ justifyContent: 'flex-end' }}>
+          <div className="row overlay-actions" style={{ justifyContent: 'flex-end' }}>
             <Button variant="ghost" onClick={() => setStep('review')}>
               {t('暂不发布，稍后再说', 'Skip for now')}
             </Button>
@@ -312,7 +312,7 @@ export function OnboardingWizard({
             {t('系统接入完成，门 ID：', 'System connected — gate ID:')}{' '}
             <code className="mono">{connection.gatekeeperId}</code>
           </Notice>
-          <div className="row" style={{ justifyContent: 'flex-end' }}>
+          <div className="row overlay-actions" style={{ justifyContent: 'flex-end' }}>
             <Button variant="ghost" onClick={onCancel}>
               {t('关闭', 'Close')}
             </Button>

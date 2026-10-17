@@ -155,6 +155,8 @@ test.describe('Journey ②: 接入一个新系统', () => {
     await expect(toImport).toContainText(EXECUTE_OP);
 
     // --- 4. 挑选要发布的 Operation：确认发布预览里列出的全部 Operation -------------------------
+    // Legacy 347: the confirm's buttons are in view without scrolling it.
+    await expect(enableConfirm.getByTestId('confirm-button')).toBeInViewport({ ratio: 1 });
     await enableConfirm.getByTestId('confirm-button').click();
 
     const linked = workspaceSide.getByTestId('launcher-workspace-linked');
@@ -280,6 +282,10 @@ test.describe('Journey ②: 接入一个新系统', () => {
     await expect(redefined).toContainText('门会拒绝对它们的调用');
     await expect(redefined).not.toContainText(OBSERVE_OP);
     await page.screenshot({ path: 'test-results/review/k-definition-drift-confirm.png' });
+
+    // Legacy 347: the confirm's buttons are in view without scrolling it.
+
+    await expect(alignConfirm.getByTestId('confirm-button')).toBeInViewport({ ratio: 1 });
 
     await alignConfirm.getByTestId('confirm-button').click();
     const alignResult = accessDrawer.getByTestId('system-governance-refresh-result');

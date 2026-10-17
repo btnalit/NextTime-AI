@@ -40,6 +40,8 @@ export const DialogContent = forwardRef<
           'rounded-l border border-border bg-surface-1 p-5 shadow-1',
           // UX acceptance of #612 (MUST-1): centred, a tall one would overflow both edges.
           'max-h-[calc(100dvh-2rem)] overflow-y-auto overscroll-contain',
+          // The bottom padding a pinned `DialogFooter` covers (legacy 347).
+          '[--overlay-actions-inset:1.25rem]',
           className,
         )}
         {...rest}
@@ -57,7 +59,11 @@ export function DialogHeader({ className, ...rest }: ComponentPropsWithoutRef<'d
 export function DialogFooter({ className, ...rest }: ComponentPropsWithoutRef<'div'>) {
   return (
     <div
-      className={cn('mt-5 flex flex-row-reverse flex-wrap items-center gap-2', className)}
+      // Legacy 347: pinned to the bottom of the dialog while its body scrolls (styles/ui.css).
+      className={cn(
+        'overlay-actions mt-5 flex flex-row-reverse flex-wrap items-center gap-2',
+        className,
+      )}
       {...rest}
     />
   );

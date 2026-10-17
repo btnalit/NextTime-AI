@@ -6,7 +6,7 @@ import type {
 import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { actionKindTagText, formatDateTime, formatRelative } from '../../lib/format.js';
-import { type Translate, useT } from '../../lib/i18n.js';
+import { type Translate, sentenceGap, useT } from '../../lib/i18n.js';
 import { operationFieldLabel } from '../../lib/labels.js';
 import { labelText, statusChipStyle } from '../../lib/status-tone.js';
 import { gateOwnedParamsText } from '../connect/GateOwnedParams.js';
@@ -157,7 +157,7 @@ export function PendingManifestReview({
         {/* UX acceptance of #577 P3: Chinese sentences run on with no half-width space between. */}
         {unrecoverable.map((line) => (
           <span key={line}>
-            {t('', ' ')}
+            {sentenceGap(t)}
             {line}
           </span>
         ))}{' '}

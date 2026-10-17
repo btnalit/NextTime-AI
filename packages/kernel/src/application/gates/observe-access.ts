@@ -37,8 +37,11 @@ import {
  * pi mode and the MCP server project, application/gateway/worker-result-handler.ts),
  * `computeCapabilityReachability` (execution_readiness + find_operations' annotation,
  * application/gateway/capability-reachability.ts), `find_procedures`' observe steps
- * (application/task/service.ts) and the My Agent checklist's "readable but not granted" systems
- * (`observableGatekeeperIds` below, application/gateway/agent-profile-handlers.ts).
+ * (application/task/service.ts), the My Agent checklist's "readable but not granted" systems
+ * (`observableGatekeeperIds` below, application/gateway/agent-profile-handlers.ts), and S11 GO3d's
+ * reconcile checks — a goal plan's declared check, validated with `NO_OBSERVE_EXCLUSIONS`
+ * (application/goal/plan.ts), and the platform's observation itself, made for the requester with
+ * their agent exclusions (application/goal/reconcile-check.ts).
  */
 
 /** The two inputs condition 4 needs, read once per caller. */

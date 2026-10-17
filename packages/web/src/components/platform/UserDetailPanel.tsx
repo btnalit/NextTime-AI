@@ -2,7 +2,7 @@ import type { PlatformRoleWire, ResetUserPasswordResultWire, UserWire } from '@n
 import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
-import { type Translate, useT } from '../../lib/i18n.js';
+import { type Translate, sentenceGap, useT } from '../../lib/i18n.js';
 import { roleLabel } from '../../lib/labels.js';
 import { passwordLengthProblem } from '../../lib/password-rule.js';
 import { envAdminTitle } from '../../lib/platform-errors.js';
@@ -491,7 +491,7 @@ export function UserDetailPanel({
                 )}
                 {sameNameCandidates.length > 0 ? (
                   <span data-testid="user-merge-same-name">
-                    {t('', ' ')}
+                    {sentenceGap(t)}
                     {t(
                       `同显示名的账户排在最前：${sameNameCandidates.map((c) => c.login).join('、')}。`,
                       `Accounts with the same display name are listed first: ${sameNameCandidates.map((c) => c.login).join(', ')}.`,

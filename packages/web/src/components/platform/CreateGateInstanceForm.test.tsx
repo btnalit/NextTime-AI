@@ -372,7 +372,7 @@ describe('CreateGateInstanceForm', () => {
     });
     render(<CreateGateInstanceForm http={http} onCreated={vi.fn()} onCancel={vi.fn()} />);
     const form = screen.getByTestId('create-gate-instance-form');
-    fireEvent.change(within(form).getByLabelText(/门 ID/), { target: { value: 'billing-api' } });
+    fireEvent.change(within(form).getByLabelText(/门 ID/), { target: { value: 'invoices' } });
     fireEvent.change(within(form).getByLabelText(/^目标/), {
       target: { value: 'https://billing.internal' },
     });
@@ -381,8 +381,11 @@ describe('CreateGateInstanceForm', () => {
     });
 
     const name = within(form).getByLabelText(/接入包名称/) as HTMLInputElement;
-    expect(name.value).toBe('billing-api');
+    expect(name.value).toBe('invoices');
     expect(within(form).getByTestId('cgi-connector-derived')).toBeTruthy();
+    expect(within(form).getByTestId('cgi-connector-new').textContent).toContain(
+      '新的接入包是「平台预置」',
+    );
     // Only http system connectors: not the mcp one, the packaged one or the generic kinds.
     const suggestions = await within(form).findByTestId('cgi-connector-suggestions');
     expect(
@@ -394,6 +397,8 @@ describe('CreateGateInstanceForm', () => {
     fireEvent.click(within(form).getByTestId('cgi-connector-suggestion-billing'));
     expect(name.value).toBe('billing');
     expect(within(form).getByTestId('cgi-connector-joins').textContent).toContain('已有 2 个实例');
+    // Legacy 395: joining says so, without the 「新的接入包…」 sentence that contradicted it.
+    expect(within(form).queryByTestId('cgi-connector-new')).toBeNull();
 
     const submit = within(form).getByTestId('create-gate-instance-submit') as HTMLButtonElement;
     for (const [value, said] of [
@@ -411,9 +416,66 @@ describe('CreateGateInstanceForm', () => {
 
     fireEvent.change(name, { target: { value: 'billing' } });
     fireEvent.click(submit);
-    await waitFor(() =>
-      expect(sent).toMatchObject({ gateId: 'billing-api', connector: 'billing' }),
+    await waitFor(() => expect(sent).toMatchObject({ gateId: 'invoices', connector: 'billing' }));
+  });
+
+  it('legacy 396: a gate id that extends an existing connector name joins that connector by default', async () => {
+    let sent: unknown;
+    const http = scriptedHttp({
+      list_connectors: () => ({
+        items: [
+          ...CONNECTORS,
+          connectorRow({ name: 'billing-eu', instanceCount: 1 }),
+          // Same prefix but the other kind: never picked for an http instance.
+          connectorRow({ name: 'billing-eu-2', kind: 'mcp' }),
+        ],
+      }),
+      create_gate_instance: (params) => {
+        sent = params;
+        return created();
+      },
+    });
+    render(<CreateGateInstanceForm http={http} onCreated={vi.fn()} onCancel={vi.fn()} />);
+    const form = screen.getByTestId('create-gate-instance-form');
+    const name = within(form).getByLabelText(/接入包名称/) as HTMLInputElement;
+
+    fireEvent.change(within(form).getByLabelText(/门 ID/), { target: { value: 'billing-2' } });
+    await waitFor(() => expect(name.value).toBe('billing'));
+    expect(within(form).getByTestId('cgi-connector-derived').textContent).toContain(
+      '门 ID 以这个已有接入包的名字开头',
     );
+    expect(within(form).getByTestId('cgi-connector-joins').textContent).toContain('已有 2 个实例');
+    expect(within(form).queryByTestId('cgi-connector-new')).toBeNull();
+
+    // The longest matching name wins; one of the other kind does not count.
+    fireEvent.change(within(form).getByLabelText(/门 ID/), { target: { value: 'billing-eu-2' } });
+    expect(name.value).toBe('billing-eu');
+
+    // Legacy 402: a gate id equal to an existing connector's name joins it and says so.
+    fireEvent.change(within(form).getByLabelText(/门 ID/), { target: { value: 'billing' } });
+    expect(name.value).toBe('billing');
+    expect(within(form).getByTestId('cgi-connector-derived').textContent).toContain(
+      '门 ID 和这个已有接入包同名',
+    );
+    expect(within(form).queryByTestId('cgi-connector-new')).toBeNull();
+
+    // No connector name to extend: named after the gate id, as before.
+    fireEvent.change(within(form).getByLabelText(/门 ID/), { target: { value: 'payroll' } });
+    expect(name.value).toBe('payroll');
+    expect(within(form).getByTestId('cgi-connector-derived').textContent).toContain(
+      '已根据门 ID 自动生成',
+    );
+    expect(within(form).getByTestId('cgi-connector-new')).toBeTruthy();
+
+    fireEvent.change(within(form).getByLabelText(/门 ID/), { target: { value: 'billing-2' } });
+    fireEvent.change(within(form).getByLabelText(/^目标/), {
+      target: { value: 'https://billing.internal' },
+    });
+    fireEvent.change(within(form).getByLabelText(/清单来源/), {
+      target: { value: 'https://billing.internal/openapi.json' },
+    });
+    fireEvent.click(within(form).getByTestId('create-gate-instance-submit'));
+    await waitFor(() => expect(sent).toMatchObject({ gateId: 'billing-2', connector: 'billing' }));
   });
 
   it('P1: the generic connector sends the transport kind and says what presetting it does to self-connections', async () => {

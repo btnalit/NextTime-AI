@@ -15,7 +15,10 @@ import { writeAudit } from '../../substrate/audit/index.js';
  * is gone. A row is deleted only if ALL of these hold:
  *   (a) no `links.observation_id` and no `links.last_observation_id` points at it, whatever the
  *       Fact's lifecycle state — `explain(factId)`'s narrowing and `lastObservation`, and the
- *       observation window's "this Fact belongs to the Source" test, read exactly these rows;
+ *       observation window's "this Fact belongs to the Source" test, read exactly these rows —
+ *       and no `action_request_reconcile_checks.observation_id` (governance 0024, S11 GO3d): the
+ *       evidence a platform reconcile check settled on (such an Observation carries a payload, so
+ *       (d) keeps it too; (a) is what the foreign key itself requires);
  *   (b) it is older than the newest Observation of its Source — `listSourceFreshness` and
  *       `checkCollectorSilent` read `max(created_at)` per Source (rows tied at the newest instant
  *       all stay);
@@ -38,7 +41,8 @@ import { writeAudit } from '../../substrate/audit/index.js';
  * `observations (workspace_id, source_id, created_at)` index (core 0039). Each window is one short
  * transaction: classify the window's rows, then delete the deletable ones with every condition
  * re-checked in the DELETE itself. The group test probes `observations (workspace_id,
- * activity_id)` (0039), the reference tests the two partial indexes on `links` (0018, 0039).
+ * activity_id)` (0039), the reference tests the two partial indexes on `links` (0018, 0039) and
+ * governance 0024's on `action_request_reconcile_checks`.
  * Statement snapshots keep each DELETE consistent with itself (it sees the group's top row it is
  * keeping), and a transaction-level advisory lock serializes the windows of two concurrent runs, so
  * no two DELETEs ever judge one group from different snapshots. Nothing holds a lock beyond one
@@ -47,8 +51,8 @@ import { writeAudit } from '../../substrate/audit/index.js';
  * **Privilege.** `nexttime_app` has only SELECT and INSERT on `observations` (core 0035, R-29) and
  * keeps exactly that: the deletes run on the login role (`skipRoleSwitch`), like the workspace
  * purge. The foreign keys into `observations` stay enforced (no `session_replication_role`), and a
- * run refuses up front if the catalog shows any foreign key into `observations` other than the two
- * on `links` this module knows how to respect.
+ * run refuses up front if the catalog shows any foreign key into `observations` other than the ones
+ * condition (a) knows how to respect.
  *
  * **Audit.** An executing run writes one platform audit row, `cli.observations_compacted`, with the
  * parameters and the per-workspace counts — also when it fails part-way, so the windows that did
@@ -150,7 +154,10 @@ function referencedBy(alias: string): string {
                     where l.workspace_id = ${alias}.workspace_id and l.observation_id = ${alias}.id)
            or exists (select 1 from links l
                        where l.workspace_id = ${alias}.workspace_id
-                         and l.last_observation_id = ${alias}.id))`;
+                         and l.last_observation_id = ${alias}.id)
+           or exists (select 1 from action_request_reconcile_checks r
+                       where r.workspace_id = ${alias}.workspace_id
+                         and r.observation_id = ${alias}.id))`;
 }
 
 /** (b): `o` is not older than the newest Observation of its Source. */
@@ -252,8 +259,9 @@ function onLoginRole<T>(
   });
 }
 
-/** The two foreign keys into `observations` condition (a) covers — `links.observation_id` (core
- *  0018) and `links.last_observation_id` (core 0026). Anything else in the catalog means a
+/** The foreign keys into `observations` condition (a) covers — `links.observation_id` (core
+ *  0018), `links.last_observation_id` (core 0026) and `action_request_reconcile_checks
+ *  .observation_id` (governance 0024). Anything else in the catalog means a
  *  reference this module does not know how to respect: refuse rather than let the FK check fail
  *  a window half-way. */
 async function assertKnownObservationReferences(client: PoolClient): Promise<void> {
@@ -269,6 +277,7 @@ async function assertKnownObservationReferences(client: PoolClient): Promise<voi
   const known = new Set([
     'links:observation_id,workspace_id',
     'links:last_observation_id,workspace_id',
+    'action_request_reconcile_checks:observation_id,workspace_id',
   ]);
   const unknown = result.rows
     .map((row) => `${row.child_table}:${row.columns}`)

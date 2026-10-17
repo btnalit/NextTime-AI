@@ -44,6 +44,23 @@ export type {
   HumanAttestationRow,
 } from './evidence.js';
 
+// S11 GO3d: judging a predicate against an observation's result, and the lint that refuses one
+// that proves nothing (predicate.ts's own module doc comment).
+export {
+  PREDICATE_EMPTY_PROBES,
+  PREDICATE_LINT_PLAN_WORK,
+  PREDICATE_REFUSAL_ANSWERS,
+  evaluatePredicate,
+  lintPredicate,
+  predicateLiterals,
+} from './predicate.js';
+export type {
+  PredicateEvaluation,
+  PredicateLintBudget,
+  PredicateLiteral,
+  PredicateOutcome,
+} from './predicate.js';
+
 export {
   findSourceByName,
   registerPrivateSource,

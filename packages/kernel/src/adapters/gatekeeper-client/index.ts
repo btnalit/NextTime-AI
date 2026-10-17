@@ -151,6 +151,48 @@ export function gateRefusalOf(
   return status !== undefined && err.status === status ? { status, code: err.code } : undefined;
 }
 
+/** Whether asking a gate the same thing again can get another answer with nobody changing
+ *  anything (S11 GO3d, review #493 on #649): `transient` — no answer, or an answer about the
+ *  moment; `deterministic` — the call as made, or the gate's set-up, is refused. */
+export type GateFailureRetry = 'transient' | 'deterministic';
+
+/** What the client itself raises, and how each is classed (see {@link gateFailureRetry}). */
+const CLIENT_FAILURE_RETRY: Readonly<Record<string, GateFailureRetry>> = {
+  // Nothing answered: the network, or the connection after the request may have been sent.
+  gate_unreachable: 'transient',
+  gate_connection_lost: 'transient',
+  // The kernel's own set-up, or the endpoint's: the same call is refused until someone acts.
+  gate_token_unavailable: 'deterministic',
+  connection_secret_missing: 'deterministic',
+  target_refused: 'deterministic',
+  redirect_refused: 'deterministic',
+  // The gate answered, with something the client does not take: it would again.
+  response_too_large: 'deterministic',
+  invalid_response: 'deterministic',
+};
+
+/**
+ * Whether a failed gate call is worth making again as it is — one rule for every caller that
+ * retries an observation (`application/goal/reconcile-check.ts`). Timeouts and anything that is
+ * not a {@link GatekeeperClientError} (the call never got an answer) are `transient`. A
+ * `GatekeeperClientError` is classed by the client's own codes ({@link CLIENT_FAILURE_RETRY}),
+ * then by the gate's answer: a refusal the gate states the same way every time
+ * ({@link gateRefusalOf}) is `deterministic`, as is any other 4xx but 408 / 425 / 429 (the
+ * kernel's token refused, a path the gate does not have); 408, 425, 429, a 5xx — and an error
+ * code with no usable status — are `transient`.
+ */
+export function gateFailureRetry(err: unknown): GateFailureRetry {
+  if (!(err instanceof GatekeeperClientError)) return 'transient';
+  const client = Object.hasOwn(CLIENT_FAILURE_RETRY, err.code)
+    ? CLIENT_FAILURE_RETRY[err.code]
+    : undefined;
+  if (client !== undefined) return client;
+  if (gateRefusalOf(err)) return 'deterministic';
+  const { status } = err;
+  if (status === 408 || status === 425 || status === 429) return 'transient';
+  return status >= 400 && status < 500 ? 'deterministic' : 'transient';
+}
+
 /**
  * Legacy 287: a gate call that failed on the network, as the kernel repeats it — two codes, because
  * the two mean opposite things for an `apply`:

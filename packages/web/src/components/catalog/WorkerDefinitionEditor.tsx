@@ -835,7 +835,7 @@ export function WorkerDefinitionEditor({
         />
       ) : null}
 
-      <div className="row">
+      <div className="row overlay-actions">
         <Button type="submit" variant="primary" loading={busy} data-testid="worker-submit">
           {t('保存草稿', 'Save draft')}
         </Button>

@@ -73,7 +73,7 @@ export function TemporaryPasswordDialog({
             {copied ? t('已复制', 'Copied') : t('复制', 'Copy')}
           </Button>
         </div>
-        <div className="row" style={{ justifyContent: 'flex-end' }}>
+        <div className="row overlay-actions" style={{ justifyContent: 'flex-end' }}>
           <Button variant="primary" onClick={onClose} data-testid="temporary-password-ack">
             {t('我已保存', 'I have saved it')}
           </Button>

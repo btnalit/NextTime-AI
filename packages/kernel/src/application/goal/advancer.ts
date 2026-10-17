@@ -225,8 +225,9 @@ export async function recordAdvanceFailure(
  *   (e) a step a revision superseded without letting it finish (`plan_revisions.removals`) that
  *       still has a Task running — terminating it after an advance failed (GO3b).
  * Returns how many runs it set due. A `waiting(reconcile)` step is not counted: its GoalRun is
- * paused for a person, and a person's finding sets the run due in its own transaction
- * (`reconcile.ts`, GO3c; GO3d adds the platform's reconcile observation).
+ * paused for a person, whose finding sets the run due in its own transaction (`reconcile.ts`,
+ * GO3c) — or, while the platform's check of it is pending, keeps running, and the check's
+ * settlement sets it due in the same transaction (`reconcile-check.ts`, GO3d).
  */
 export async function markReconcileDue(
   pool: PoolLike,

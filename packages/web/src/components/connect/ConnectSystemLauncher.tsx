@@ -20,7 +20,7 @@ import {
   useGateInstancePoll,
 } from '../../lib/gate-instances.js';
 import type { GrantRow, WorkspaceInfo } from '../../lib/governance.js';
-import { useT } from '../../lib/i18n.js';
+import { sentenceGap, useT } from '../../lib/i18n.js';
 import { GATE_ID_PATTERN } from '../../lib/platform-errors.js';
 import { type CatalogTab, hrefs } from '../../lib/router.js';
 import { sameNameIds } from '../../lib/same-name.js';
@@ -598,7 +598,7 @@ function ConnectionStep({
                 )}
                 {gateIdAdjusted && intendedGateId.length > 0 ? (
                   <span data-testid="launcher-intended-gate-id-adjusted">
-                    {t('', ' ')}
+                    {sentenceGap(t)}
                     {t(`已调整为 ${intendedGateId}。`, `Adjusted to ${intendedGateId}.`)}
                   </span>
                 ) : null}
@@ -953,7 +953,7 @@ function PolicyStep({
             {`(${gate.platform.operations.length})`}
           </span>
           <div className="table-scroll">
-            <table className="data-table">
+            <table className="data-table data-table-cards">
               <thead>
                 <tr>
                   <th>{t('名称', 'Name')}</th>
@@ -973,10 +973,10 @@ function PolicyStep({
                         testId={`launcher-announced-held-${operation.name}`}
                       />
                     </td>
-                    <td>
+                    <td data-label={t('模式', 'Mode')}>
                       <StatusChip machine="operationMode" status={operation.mode} size="s" />
                     </td>
-                    <td>
+                    <td data-label={t('影响', 'Blast radius')}>
                       <StatusChip machine="blastRadius" status={operation.blastRadius} size="s" />
                     </td>
                   </tr>

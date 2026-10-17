@@ -14,7 +14,7 @@ import { describeError, presentError } from '../lib/errors.js';
 import { isAbsoluteUrl, suggestedManifestSource, withDefaultScheme } from '../lib/gate-input.js';
 import type { PrincipalRow } from '../lib/governance.js';
 import { HttpError } from '../lib/http-client.js';
-import { type Translate, useT } from '../lib/i18n.js';
+import { type Translate, sentenceGap, useT } from '../lib/i18n.js';
 import { roleLabel } from '../lib/labels.js';
 import { endpointAlreadyConnectedMessage } from '../lib/platform-errors.js';
 import { sameNameIds, withSameNameId } from '../lib/same-name.js';
@@ -471,7 +471,7 @@ export function CompleteConnectionForm({
             )}
             {endpointSchemeAdded ? (
               <span data-testid="cc-endpoint-scheme-note">
-                {t('', ' ')}
+                {sentenceGap(t)}
                 {t(
                   '已自动补上 http://；如果门走 https，请改成 https://。',
                   'Added http:// for you — change it to https:// if the gate serves https.',
@@ -640,7 +640,7 @@ export function CompleteConnectionForm({
         />
       ) : null}
 
-      <div className="row" style={{ justifyContent: 'flex-end' }}>
+      <div className="row overlay-actions" style={{ justifyContent: 'flex-end' }}>
         <Button variant="ghost" onClick={onCancel} disabled={submitting}>
           {t('取消', 'Cancel')}
         </Button>

@@ -11,7 +11,7 @@ import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { actionKindTagText } from '../../lib/format.js';
 import { operationKey, revisionDraftKey } from '../../lib/governance.js';
-import { useT } from '../../lib/i18n.js';
+import { sentenceGap, useT } from '../../lib/i18n.js';
 import { hrefs } from '../../lib/router.js';
 import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
@@ -886,7 +886,7 @@ function NotDescribedNotice({
         `门已不再提供这些已发布的 Operation：${shown.join('、')}。对它们的调用会被门拒绝，同步不会改动它们；不再需要的话，到能力目录弃用。`,
         `The gate no longer provides these published operations: ${shown.join(', ')}. The gate refuses calls to them and syncing leaves them as they are; deprecate them in the catalog if they are no longer needed.`,
       )}
-      {t('', ' ')}
+      {sentenceGap(t)}
       <a href={hrefs.catalog('operations')}>{t('去能力目录', 'Open the catalog')}</a>
     </Notice>
   );

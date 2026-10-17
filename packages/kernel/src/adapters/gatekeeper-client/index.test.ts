@@ -12,6 +12,7 @@ import {
   GatekeeperTimeoutError,
   HttpGatekeeperClient,
   deriveConnectionSecret,
+  gateFailureRetry,
   platformGateTarget,
 } from './index.js';
 
@@ -727,5 +728,87 @@ describe('HttpGatekeeperClient — a call that failed on the network (legacy 287
       const failure = await failureOf(applyTo(port));
       expect(failure.message).not.toMatch(/127\.0\.0\.1|:\d{2,5}\b/);
     }
+  });
+});
+
+describe('gateFailureRetry — whether a failed call is worth making again (S11 GO3d)', () => {
+  const failed = (code: string, status: number) =>
+    new GatekeeperClientError(code, { code, status });
+
+  it('classes every code the client raises', () => {
+    expect(gateFailureRetry(failed('gate_unreachable', 0))).toBe('transient');
+    expect(gateFailureRetry(failed('gate_connection_lost', 0))).toBe('transient');
+    for (const [code, status] of [
+      ['gate_token_unavailable', 0],
+      ['connection_secret_missing', 401],
+      ['target_refused', 0],
+      ['redirect_refused', 307],
+      ['response_too_large', 200],
+      ['invalid_response', 200],
+      ['invalid_response', 502],
+    ] as const) {
+      expect(gateFailureRetry(failed(code, status)), code).toBe('deterministic');
+    }
+  });
+
+  it('classes a gate’s answer by its refusal table, then by status', () => {
+    for (const [code, status] of [
+      ['invalid_params', 400],
+      ['operation_refused', 403],
+      ['operation_not_found', 404],
+      ['operation_definition_mismatch', 409],
+      ['credential_unavailable', 424],
+      ['unauthorized', 401],
+      ['not_found', 404],
+    ] as const) {
+      expect(gateFailureRetry(failed(code, status)), code).toBe('deterministic');
+    }
+    for (const [code, status] of [
+      ['request_timeout', 408],
+      ['too_early', 425],
+      ['rate_limited', 429],
+      ['internal_error', 500],
+      ['upstream_unavailable', 503],
+      // A refusal code whose status does not agree is not taken as the refusal (gateRefusalOf).
+      ['operation_refused', 503],
+      ['odd', 200],
+    ] as const) {
+      expect(gateFailureRetry(failed(code, status)), code).toBe('transient');
+    }
+  });
+
+  it('a timeout, and anything that is not a client error, got no answer', () => {
+    expect(gateFailureRetry(new GatekeeperTimeoutError('timed out', 'gate/observe'))).toBe(
+      'transient',
+    );
+    expect(gateFailureRetry(new Error('boom'))).toBe('transient');
+  });
+
+  it('classes the errors the client actually throws', async () => {
+    const answer = async (response: Response) => {
+      const client = new HttpGatekeeperClient({
+        token: 't'.repeat(32),
+        fetchImpl: async () => response,
+      });
+      try {
+        await client.observe(GATE, {
+          operation: 'svc.status',
+          params: {},
+          operationDigest: DIGEST,
+        });
+      } catch (err) {
+        return gateFailureRetry(err);
+      }
+      throw new Error('expected the call to fail');
+    };
+    expect(await answer(new Response('not json', { status: 200 }))).toBe('deterministic');
+    expect(
+      await answer(jsonResponse({ ok: false, error: { code: 'busy', message: 'later' } }, 503)),
+    ).toBe('transient');
+    expect(
+      await answer(
+        jsonResponse({ ok: false, error: { code: 'invalid_params', message: 'no' } }, 400),
+      ),
+    ).toBe('deterministic');
   });
 });

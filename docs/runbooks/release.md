@@ -1209,7 +1209,7 @@ v0.47.0、v0.48.0 不单独上主机（#554 不在 v0.47.0 里，遗留 259 的�
 
 **回滚**（§5）：回滚目标是 v0.46.0，按 §3.25 与 §3.26 的回滚说明；不需要排空 Worker。
 
-窗口目标改到 v0.49.0 之后的发版时（维护者 2026-10-16 决定窗口暂缓，开窗口时目标改为当时最新的发版），本清单按新目标刷新，并加上之后各版的小节，至少 §3.28（#589 升钉：`postgres` 与 `backup` 重建、不执行 `ALTER EXTENSION`、应用后只读核对 `vector` 扩展版本）与 §3.29（#592：governance 0020，旧「始终允许」规则可能显示「已暂停 · 待确认版本」需 owner 重新确认，契约不向后兼容、旧控制台页要刷新）与 §3.30（#601：governance 0021，窗口前估算 `audit_records` 全表扫描的锁表时间并核对回收超时，窗口后历史失败行多显示「结果不明」）与 §3.31（#607：goal 0001 / task 0007 / governance 0022，窗口前估算建索引时间）与 §3.32（#615：core 0044，窗口前估算建索引期间审计写入的等待，必要时并发预建并确认索引有效）与 §3.33（#619：goal 0002，新增每秒认领与每分钟对账的后台负载）与 §3.34（#620：core 0045，窗口前三数预检、迁移期间不接新门、清洗改写类变成 4 个、回滚后自接门暂停失效；#637 再加两个改写类与一个只列类，见 §3.25）、§3.35（#626：goal 0003，只重建一个守卫函数，无主机步骤）、§3.36（#633：goal 0004，加列与重建一个守卫函数，无主机步骤）、§3.37（#642：governance 0023，`action_requests` 加列、约束与守卫触发器，窗口前看一眼该表行数，无主机步骤）与 §3.38（#644：无迁移，窗口前打包门只读检查，内核与门宿主同版，回退代码前先处理挂在系统接入包上的实例）。
+窗口目标改到 v0.49.0 之后的发版时（维护者 2026-10-16 决定窗口暂缓，开窗口时目标改为当时最新的发版），本清单按新目标刷新，并加上之后各版的小节，至少 §3.28（#589 升钉：`postgres` 与 `backup` 重建、不执行 `ALTER EXTENSION`、应用后只读核对 `vector` 扩展版本）与 §3.29（#592：governance 0020，旧「始终允许」规则可能显示「已暂停 · 待确认版本」需 owner 重新确认，契约不向后兼容、旧控制台页要刷新）与 §3.30（#601：governance 0021，窗口前估算 `audit_records` 全表扫描的锁表时间并核对回收超时，窗口后历史失败行多显示「结果不明」）与 §3.31（#607：goal 0001 / task 0007 / governance 0022，窗口前估算建索引时间）与 §3.32（#615：core 0044，窗口前估算建索引期间审计写入的等待，必要时并发预建并确认索引有效）与 §3.33（#619：goal 0002，新增每秒认领与每分钟对账的后台负载）与 §3.34（#620：core 0045，窗口前三数预检、迁移期间不接新门、清洗改写类变成 4 个、回滚后自接门暂停失效；#637 再加两个改写类与一个只列类，见 §3.25）、§3.35（#626：goal 0003，只重建一个守卫函数，无主机步骤）、§3.36（#633：goal 0004，加列与重建一个守卫函数，无主机步骤）、§3.37（#642：governance 0023，`action_requests` 加列、约束与守卫触发器，窗口前看一眼该表行数，无主机步骤）、§3.38（#644：无迁移，窗口前打包门只读检查，内核与门宿主同版，回退代码前先处理挂在系统接入包上的实例）与 §3.39（#649：governance 0024，新表与重建核对守卫，两个可选环境变量不设即默认，代码回退期间观察压缩报 degraded 可忽略）。
 
 ### 3.28 第三方镜像升钉：pgvector、node、postgres（#589，v0.49.0 之后的下一版起）
 
@@ -1400,6 +1400,15 @@ rollback;" </dev/null
 - 再删除这些实例（有工作区启用的，删除会被拒 409 `gate_in_use`，要先解除链接），回退后在通用接入包下重建。
 - 不这样做的话，旧版里这些实例会失去对应：还没被接管的，旧门宿主 announce 通用名被拒；已接管还没启用的（`discovered`），旧内核按 announce 把它改挂到通用接入包，通用接入包不是平台预置时它在目录里看不到，回退后在通用接入包下删了重建；已启用或禁用的，announce 身份不符，旧内核保留原记录、健康度置为 unknown。接入包这一行留在库里，旧控制台把它显示为「通用」类型，无害。挂在通用接入包上的实例不受影响。
 
+### 3.39 平台核对观察（#649，governance 0024，S11 GO3d，v0.49.0 之后的下一版起）
+
+带一个 governance 迁移（`0024_action_request_reconcile_checks`），随 `apply-release.sh` 的迁移步骤自动应用；不改 compose、无单独主机步骤；窗口前只读检查：无。
+
+- **迁移做什么**：新表 `action_request_reconcile_checks`（两个部分索引），重建守卫 `action_requests_reconciliation_guard`（`decided_by` 为空的分支收窄为平台的 `effect_seen`，必须引用同一 Source 上判定式满足的 Observation）。GO3c（governance 0023，同属下一版）写的结论都是人的、带 `basis = 'person'`，重建后的守卫照旧接受；0023 下写不出 `decided_by` 为空的结论，收窄不会让已有行失效。
+- **新后台定时器**：每 5 秒一轮，只在 GoalRun 运行且有到期检查时调门。
+- **新增两个可选环境变量**（kernel 的 env_file，即主机 `.env`）：`GOAL_RECONCILE_CHECK_MAX_ATTEMPTS`（默认 5）、`GOAL_RECONCILE_CHECK_MAX_DURATION_MS`（默认 900000，15 分钟），正整数，不设即用默认值，主机 `.env` 不需要改。两个上限同时生效、先到先停，目标的墙钟预算也照样封顶，所以不另设最大值。
+- **回滚**：只回退代码即可（§6）。上一版不读写新表。**代码回退到上一版后，apply-release 的 observations-compaction 步骤会报 degraded**：上一版的压缩看到 0024 指向 `observations` 的新外键就拒绝运行（安全失败，不删任何东西），重新应用带 0024 的版本后恢复；回退期间这一条 degraded 可以忽略。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -1518,6 +1527,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.49.0 之后的下一版 | core `0045_workspace_self_connections`（#620，S11 P0b）：新表 `workspace_self_connections`（强制 RLS、`endpoint_key` 部分唯一索引），按没有目录关联的 Gatekeeper 回填并剪掉地址里的凭据 | 可逆 | 上一版不读写这张表；回退后自接门的暂停**不再生效**（§3.34），其余行为与上一版相同；重新升级时 `create table if not exists` 与 `on conflict do nothing` 幂等 | 只需回退代码，表保留；若要撤：`drop table workspace_self_connections` 并 `delete from schema_migrations where module = 'core' and version = 45`（会丢掉平台的暂停记录，先导出） |
 | v0.49.0 之后的下一版 | goal `0004_goal_revision_hold`（#633，S11 GO3b）：`goal_runs` 加 `paused_by`、`paused_by_authority`、`advance_failures`，`plan_revisions` 加 `removals`，四个约束，照 goal 0002 重建 `goal_runs_status_guard`（多 hold 一段） | 可逆 | 加列都有上一版从不写的默认值或可空；守卫只多拒绝这几列的变化，上一版的暂停、继续不写 `paused_by`，回滚到上一版不需要额外步骤 |
 | v0.49.0 之后的下一版 | governance `0023_action_request_reconciliation`（#642，S11 GO3c）：`action_requests` 加 `reconciliation`、`reconciliation_decision_id`、`reexecute_decision_id`，四个 CHECK、两个外键，守卫触发器 `action_requests_reconciliation_guard` | 可逆 | 新列可空、上一版从不写；CHECK 对三列为空的行恒真；触发器只拦写这三列的插入和更新，回滚到上一版不需要额外步骤 |
+| v0.49.0 之后的下一版 | governance `0024_action_request_reconcile_checks`（#649，S11 GO3d）：新表 `action_request_reconcile_checks`（两个部分索引），重建 `action_requests_reconciliation_guard`（`decided_by` 为空的分支收窄） | 可逆（代码回退期间观察压缩报 degraded） | 上一版不读写新表；守卫收窄不影响 0023 下写出的人的结论；上一版的观察压缩看到新外键会安全拒绝运行（不删东西），apply-release 的 observations-compaction 报 degraded，重新应用带 0024 的版本后恢复 |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
