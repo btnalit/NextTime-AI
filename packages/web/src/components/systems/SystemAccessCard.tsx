@@ -413,6 +413,10 @@ export function SystemAccessCard({
       data-testid="gatekeeper-card"
       data-gatekeeper-id={gate.gateId}
       aria-current={current ? 'true' : undefined}
+      // Legacy 385: 「在列表里找到它」 moves focus here (`SystemsPage`'s `focusPointedCard`). Always
+      // -1, not only while `current`: the mark clears after a few seconds, and an element that
+      // stops being focusable while focused drops focus to the page.
+      tabIndex={-1}
     >
       <div className="data-row-main">
         <div className="data-row-title">

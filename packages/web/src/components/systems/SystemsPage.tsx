@@ -81,6 +81,13 @@ const REQUEST_FILTERS: readonly RequestFilter[] = [
 const EMPTY_NAMES: ReadonlyMap<string, string> = new Map();
 const NO_DRAFTS: readonly DraftAsRead[] = [];
 
+/** A system's card in the list, by its Gatekeeper id (`SystemAccessCard`'s `data-gatekeeper-id`). */
+function findGatekeeperCard(gatekeeperId: string): HTMLElement | undefined {
+  return [...document.querySelectorAll<HTMLElement>('[data-testid="gatekeeper-card"]')].find(
+    (element) => element.dataset.gatekeeperId === gatekeeperId,
+  );
+}
+
 /** The 待启用的平台实例 section, scrolled to from the empty state when it has rows (audit P1-16). */
 const AVAILABLE_SECTION_ID = 'systems-available-instances';
 
@@ -341,15 +348,28 @@ export function SystemsPage({
   // re-run it on every render, scrolling again and restarting the timer.
   const selectGatekeeper = useRef(onSelectGatekeeper);
   selectGatekeeper.current = onSelectGatekeeper;
+  // Legacy 385 (UX acceptance of #620, P3-5): focus moves to that card too, once the drawer has
+  // closed — otherwise the drawer hands it back to the button that opened it, and a screen-reader
+  // or keyboard user never learns where the page jumped to.
+  const focusCardOnClose = useRef<string | null>(null);
   function showGatekeeperCard(gatekeeperId: string): void {
+    focusCardOnClose.current = gatekeeperId;
     setDrawer({ kind: 'closed' });
     setPointedGatekeeperId(gatekeeperId);
   }
+  /** The drawer's own `onCloseAutoFocus`: it runs once the drawer is gone (its focus trap too), so
+   *  focus can land on the card instead of the drawer's trigger. */
+  function focusPointedCard(event: Event): void {
+    const gatekeeperId = focusCardOnClose.current;
+    focusCardOnClose.current = null;
+    const card = gatekeeperId === null ? undefined : findGatekeeperCard(gatekeeperId);
+    if (!card) return;
+    event.preventDefault();
+    card.focus({ preventScroll: true });
+  }
   useEffect(() => {
     if (pointedGatekeeperId === null || drawer.kind !== 'closed') return;
-    const card = [
-      ...document.querySelectorAll<HTMLElement>('[data-testid="gatekeeper-card"]'),
-    ].find((element) => element.dataset.gatekeeperId === pointedGatekeeperId);
+    const card = findGatekeeperCard(pointedGatekeeperId);
     if (!card) {
       setPointedGatekeeperId(null);
       selectGatekeeper.current?.(pointedGatekeeperId);
@@ -723,7 +743,11 @@ export function SystemsPage({
         open={drawer.kind === 'complete'}
         onOpenChange={(open) => !open && setDrawer({ kind: 'closed' })}
       >
-        <SheetContent size="wide" data-testid="complete-connection-drawer">
+        <SheetContent
+          size="wide"
+          data-testid="complete-connection-drawer"
+          onCloseAutoFocus={focusPointedCard}
+        >
           <SheetHeader>
             <SheetTitle>
               {drawer.kind === 'complete' && drawer.request
@@ -786,7 +810,11 @@ export function SystemsPage({
         open={drawer.kind === 'wizard'}
         onOpenChange={(open) => !open && setDrawer({ kind: 'closed' })}
       >
-        <SheetContent size="wide" data-testid="onboarding-wizard-drawer">
+        <SheetContent
+          size="wide"
+          data-testid="onboarding-wizard-drawer"
+          onCloseAutoFocus={focusPointedCard}
+        >
           <SheetHeader>
             <SheetTitle>{t('接入向导', 'Onboarding wizard')}</SheetTitle>
             <SheetDescription>
