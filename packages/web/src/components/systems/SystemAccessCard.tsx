@@ -122,6 +122,9 @@ export interface SystemAccessCardProps {
   /** `session.user?.platformRole === 'admin'` — a refused call that waits on the platform adopting
    *  the gate's new manifest then links to the gate instance (UX acceptance of #538). */
   readonly platformAdmin?: boolean;
+  /** UX acceptance of #620 (P2-3): the card a refused duplicate connection pointed at
+   *  (「在列表里找到它」), marked the way a current row is (`aria-current`). */
+  readonly current?: boolean;
 }
 
 /** Console redesign P3-3 (V5): one line per grantee, up to two names — the full roster (with
@@ -310,6 +313,7 @@ export function SystemAccessCard({
   onGranted,
   selfPrincipalId,
   platformAdmin = false,
+  current = false,
 }: SystemAccessCardProps) {
   const t = useT();
   const reader = useReadinessReader(http);
@@ -404,7 +408,12 @@ export function SystemAccessCard({
   }
 
   return (
-    <li className="data-row" data-testid="gatekeeper-card" data-gatekeeper-id={gate.gateId}>
+    <li
+      className="data-row"
+      data-testid="gatekeeper-card"
+      data-gatekeeper-id={gate.gateId}
+      aria-current={current ? 'true' : undefined}
+    >
       <div className="data-row-main">
         <div className="data-row-title">
           <strong>{gate.name}</strong>

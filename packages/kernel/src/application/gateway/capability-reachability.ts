@@ -25,7 +25,7 @@ import {
   observeRefusal,
   operationPlatformStatus,
   readGateDefinitionsForWorkspace,
-  readGateLinkPoliciesForWorkspace,
+  readGatekeeperPlatformPolicies,
 } from '../gates/index.js';
 import { listWorkerDefinitions } from '../worker/index.js';
 import { resolveAvailableResources } from './agent-profile-handlers.js';
@@ -244,7 +244,7 @@ export async function computeCapabilityReachability(
 
   // Gates: every registered Gatekeeper in this workspace, with its published Operations (one
   // batched query) and the platform's connector deny list (also one batched query —
-  // `readGateLinkPoliciesForWorkspace`, joining workspace_gate_links → gate_instances → connectors
+  // `readGatekeeperPlatformPolicies`, joining workspace_gate_links → gate_instances → connectors
   // once for the whole workspace rather than once per gate).
   const gateEntries = await listGatekeepers(client, workspaceId);
   const publishedOps = await listPublishedOperationsForGatekeepers(
@@ -252,7 +252,7 @@ export async function computeCapabilityReachability(
     workspaceId,
     gateEntries.map((entry) => entry.gatekeeperId),
   );
-  const gateLinkPolicies = await readGateLinkPoliciesForWorkspace(client, workspaceId);
+  const platformPolicies = await readGatekeeperPlatformPolicies(client, workspaceId);
   const gateDefinitions = await readGateDefinitionsForWorkspace(client, workspaceId);
   const publishedByGate = new Map<
     string,
@@ -274,11 +274,11 @@ export async function computeCapabilityReachability(
 
   const gates: GateReachability[] = gateEntries.map((entry) => {
     const gateId = entry.gatekeeperId;
-    const gateLink = gateLinkPolicies.get(gateId);
+    const platformPolicy = platformPolicies.get(gateId);
     const published = publishedByGate.get(gateId) ?? [];
     const exclusion = observeGateExclusion(exclusions, gateId);
     const disabledOperations = published
-      .filter((op) => operationPlatformStatus(gateLink, op.name).disabled)
+      .filter((op) => operationPlatformStatus(platformPolicy, op.name).disabled)
       .map((op) => op.name);
     const definitions = gateDefinitions.get(gateId);
     const definitionMismatch: DefinitionMismatchWire[] = [];
@@ -317,7 +317,7 @@ export async function computeCapabilityReachability(
             gateEnabled: true,
             operationName: op.name,
             publishedMode: op.mode,
-            gateLink,
+            platformPolicy,
           }) === undefined,
       )
       .map((op) => op.name);

@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   ConnectionParamsCarryCredentialsError,
   assertConnectionParamsCarryNoCredentials,
+  findConnectionParamsCredential,
+  redactConnectionAddress,
 } from './credentials.js';
 
 /** Synthetic — `.gitleaks.toml` allows fixtures spelled out from the alphabet. */
@@ -104,4 +106,40 @@ describe('assertConnectionParamsCarryNoCredentials (legacy 186)', () => {
       expect((err as Error).message).not.toContain(FAKE);
     },
   );
+});
+
+describe('redactConnectionAddress (core 0045 copies, #620 review M2)', () => {
+  /** Synthetic, JWT-shaped (`.gitleaks.toml` allows this signature segment). */
+  const JWT = 'eyJhbGciOiJFZERTQSJ9.eyJ3cyI6IndzMSIsIm9ibyI6InAxIn0.c2lnbmF0dXJlLWJ5dGVzLWhlcmU';
+
+  it.each([
+    ['target', 'grafana'],
+    ['target', 'ssh://deploy@db-1.example.invalid'],
+    ['target', 'https://api.example.invalid/openapi.json?format=json'],
+    ['endpoint', 'https://gate.example.invalid:8443/base'],
+  ] as const)('leaves a clean %s exactly as it is: %s', (field, address) => {
+    expect(redactConnectionAddress(field, address)).toBe(address);
+  });
+
+  it.each([
+    ['endpoint', `https://ops:${FAKE}@gate.example.invalid/x`, 'https://gate.example.invalid/x'],
+    ['endpoint', `https://gate.example.invalid/?token=${FAKE}`, 'https://gate.example.invalid/'],
+    ['endpoint', 'https://gate.example.invalid/x#frag', 'https://gate.example.invalid/x'],
+    ['endpoint', 'https://gate.example.invalid/x?', 'https://gate.example.invalid/x'],
+    [
+      'target',
+      `https://ops:${FAKE}@grafana.example.invalid/d?token=${FAKE}`,
+      'https://grafana.example.invalid/d',
+    ],
+    ['target', `grafana.example.invalid/api?auth=${FAKE}`, 'grafana.example.invalid/api'],
+    ['target', `grafana with Bearer ${JWT}`, 'grafana with Bearer [redacted]'],
+  ] as const)('cuts the credential out of %s %s', (field, address, expected) => {
+    const redacted = redactConnectionAddress(field, address);
+    expect(redacted).toBe(expected);
+    expect(redacted).not.toContain(FAKE);
+    expect(redacted).not.toContain(JWT);
+    expect(findConnectionParamsCredential({ [field]: redacted })).toBeNull();
+    // A second pass changes nothing (the scrub's idempotence).
+    expect(redactConnectionAddress(field, redacted)).toBe(redacted);
+  });
 });

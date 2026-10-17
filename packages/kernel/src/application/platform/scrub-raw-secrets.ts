@@ -3,12 +3,16 @@ import type { PoolClient } from 'pg';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { withWorkspace } from '../../adapters/db/pool.js';
 import { reasonAuditFields, resultAuditFields } from '../../governance/approval/index.js';
-import { findConnectionParamsCredential } from '../../governance/connections/index.js';
+import {
+  findConnectionParamsCredential,
+  redactConnectionAddress,
+} from '../../governance/connections/index.js';
 import { redactSuspectedSecrets, scrubSecretValues } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { scrubGraphProperties } from '../../substrate/graph/index.js';
 import { KERNEL_AUTHORED_OBJECT_TYPES } from '../../substrate/ontology/index.js';
 import { rescrubStoredToolCallResult } from '../chat/tool-call-record.js';
+import { selfConnectionAddressRewrite } from '../gates/self-connections.js';
 
 /**
  * application/platform/scrub-raw-secrets: the rows written before STATUS legacy 183–187 were fixed,
@@ -22,7 +26,13 @@ import { rescrubStoredToolCallResult } from '../chat/tool-call-record.js';
  *   - `decisions`: the `summary` of a Decision whose Activity is an agent Turn (`record_decision`,
  *     legacy 183) — likewise;
  *   - `toolCallRecords`: a stored tool-call record's result preview (legacy 185) — the key rule
- *     over JSON text, then the value patterns (application/chat's `rescrubStoredToolCallResult`).
+ *     over JSON text, then the value patterns (application/chat's `rescrubStoredToolCallResult`);
+ *   - `selfConnectionAddresses`: the copy of a self-connected gate's `target` / `endpoint` the
+ *     platform plane shows (`workspace_self_connections`, core 0045) — copied from a Gatekeeper
+ *     written before legacy 186, it can carry what the address rule refuses; it is cut out
+ *     (`redactConnectionAddress`). Core 0045's backfill already cuts what the preflight patterns
+ *     find; this holds the table to the exact rule. The Gatekeeper's own address is counted
+ *     (`gatekeeperAddresses`), not rewritten — the gate is called there.
  *
  * **Counted, never rewritten:**
  *   - `taskInputs`: a `tasks.input` carrying a suspected credential (legacy 184). The Worker runs
@@ -63,7 +73,12 @@ export const RAW_SECRET_SCRUB_AUDIT_ACTION = 'cli.raw_secrets_scrubbed';
 /** Ids kept per counted category in the result and on the audit row (`onCounted` gets all). */
 export const MAX_EXAMPLES = 20;
 
-export const REWRITTEN_CATEGORIES = ['turnReports', 'decisions', 'toolCallRecords'] as const;
+export const REWRITTEN_CATEGORIES = [
+  'turnReports',
+  'decisions',
+  'toolCallRecords',
+  'selfConnectionAddresses',
+] as const;
 export const COUNTED_CATEGORIES = [
   'taskInputs',
   'connectionTargets',
@@ -265,6 +280,38 @@ const SCANS: readonly Scan[] = [
             JSON.stringify(content),
           ],
         },
+      };
+    },
+  },
+  {
+    category: 'selfConnectionAddresses',
+    // Keyed on `(workspace_id, gatekeeper_object_id)` (core 0045).
+    window: async (client, after, limit) =>
+      (
+        await client.query<ScannedRow>(
+          `select workspace_id, gatekeeper_object_id as id, target, endpoint
+             from workspace_self_connections
+            where (workspace_id, gatekeeper_object_id) > ($1::uuid, $2::uuid)
+            order by workspace_id, gatekeeper_object_id limit $3`,
+          [after.workspaceId, after.id, limit],
+        )
+      ).rows,
+    inspect: (row) => {
+      const read = row as ScannedRow & { target: string; endpoint: string };
+      const write = {
+        target: redactConnectionAddress('target', read.target),
+        endpoint: redactConnectionAddress('endpoint', read.endpoint),
+      };
+      const values =
+        (write.target === read.target ? 0 : 1) + (write.endpoint === read.endpoint ? 0 : 1);
+      if (values === 0) return null;
+      return {
+        values,
+        rewrite: selfConnectionAddressRewrite(
+          { workspaceId: read.workspace_id as string, gatekeeperObjectId: read.id },
+          { target: read.target, endpoint: read.endpoint },
+          write,
+        ),
       };
     },
   },

@@ -7,6 +7,8 @@ import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import {
   findGatekeepersByEndpoint,
+  gateAddressOrigin,
+  gateEndpointHost,
   getGatekeeper,
   normalizeGateEndpoint,
   registerGatekeeper,
@@ -241,9 +243,76 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/registry (int
 });
 
 describe('normalizeGateEndpoint (pure)', () => {
-  it('trims exactly one trailing slash', () => {
-    expect(normalizeGateEndpoint('https://x.invalid:8080')).toBe('https://x.invalid:8080');
-    expect(normalizeGateEndpoint('https://x.invalid:8080/')).toBe('https://x.invalid:8080');
-    expect(normalizeGateEndpoint('https://x.invalid:8080//')).toBe('https://x.invalid:8080/');
+  it.each([
+    'https://x.invalid:8080',
+    'https://x.invalid:8080/',
+    'https://x.invalid:8080//',
+    'HTTPS://X.Invalid:8080',
+    'https://x.invalid.:8080/',
+  ])('%s is the same address as https://x.invalid:8080', (spelling) => {
+    expect(normalizeGateEndpoint(spelling)).toBe('https://x.invalid:8080');
+  });
+
+  it.each([
+    ['http://gate.invalid:80/', 'http://gate.invalid'],
+    ['https://gate.invalid:443/base/', 'https://gate.invalid/base'],
+    ['http://GATE.invalid:8090/Base//', 'http://gate.invalid:8090/Base'],
+    ['ssh://DB-1.invalid:22/', 'ssh://db-1.invalid'],
+    ['ssh://db-1.invalid:2222/', 'ssh://db-1.invalid:2222'],
+    ['http://[::1]:8090/', 'http://[::1]:8090'],
+    // User info, query and fragment are never sent: they do not name another gate.
+    ['https://ops@gate.invalid/base', 'https://gate.invalid/base'],
+    [
+      'https://ops:abcdefghijklmnopqrstuvwxyz0123@gate.invalid/base?x=1#y',
+      'https://gate.invalid/base',
+    ],
+    // IDN: one punycode spelling, for a scheme URL knows and one it does not.
+    ['https://BÜCHER.invalid/', 'https://xn--bcher-kva.invalid'],
+    ['ssh://bücher.invalid', 'ssh://xn--bcher-kva.invalid'],
+    // Percent-encoding (RFC 3986 §6.2.2): unreserved decoded, the rest upper-cased.
+    ['https://gate.invalid/%7Eops/%61pi', 'https://gate.invalid/~ops/api'],
+    ['https://gate.invalid/a%2fb', 'https://gate.invalid/a%2Fb'],
+  ])('%s → %s', (spelling, normal) => {
+    expect(normalizeGateEndpoint(spelling)).toBe(normal);
+  });
+
+  it('gateEndpointHost is the same rule, by host: name and non-default port', () => {
+    expect(gateEndpointHost('HTTP://Gate-Host.:8083/i/x')).toBe('gate-host:8083');
+    expect(gateEndpointHost('https://ops@gate.invalid:443/')).toBe('gate.invalid');
+    expect(gateEndpointHost('ssh://bücher.invalid:22')).toBe('xn--bcher-kva.invalid');
+    expect(gateEndpointHost('ssh://bücher.invalid:2222')).toBe('xn--bcher-kva.invalid:2222');
+    expect(gateEndpointHost('not a url')).toBeNull();
+  });
+
+  it('gateAddressOrigin is what the platform plane shows: scheme, host and port, nothing after', () => {
+    const fake = 'abcdefghijklmnopqrstuvwxyz0123';
+    expect(
+      gateAddressOrigin(`https://ops:${fake}@Gate.invalid:443/t/${fake}/api?token=${fake}#${fake}`),
+    ).toBe('https://gate.invalid');
+    expect(gateAddressOrigin(`http://gate.invalid:8090/i/${fake}`)).toBe(
+      'http://gate.invalid:8090',
+    );
+    expect(gateAddressOrigin('ssh://DB-1.invalid:22/srv')).toBe('ssh://db-1.invalid');
+    // A target that is a host or a service name: what comes before a path, after any `…@`.
+    expect(gateAddressOrigin('accept_s2_api')).toBe('accept_s2_api');
+    expect(gateAddressOrigin(`db-1.invalid:5432/${fake}?k=${fake}`)).toBe('db-1.invalid:5432');
+    expect(gateAddressOrigin(`ops:${fake}@db-1.invalid/x`)).toBe('db-1.invalid');
+  });
+
+  it('keeps addresses that differ apart', () => {
+    const distinct = [
+      'https://x.invalid:8080',
+      'http://x.invalid:8080',
+      'https://x.invalid:8081',
+      'https://y.invalid:8080',
+      'https://x.invalid:8080/base',
+      'https://x.invalid:8080/Base',
+    ];
+    expect(new Set(distinct.map(normalizeGateEndpoint)).size).toBe(distinct.length);
+  });
+
+  it('text that is not a URL with a host keeps the older rule: one trailing slash trimmed', () => {
+    expect(normalizeGateEndpoint('gate-host:8090/')).toBe('gate-host:8090');
+    expect(normalizeGateEndpoint('not a url//')).toBe('not a url/');
   });
 });

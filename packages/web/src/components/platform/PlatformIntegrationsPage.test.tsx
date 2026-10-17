@@ -1,5 +1,10 @@
 // @vitest-environment jsdom
-import type { ConnectorWire, ExternalRuntimeWire, GateInstanceWire } from '@nexttime/shared';
+import type {
+  ConnectorWire,
+  ExternalRuntimeWire,
+  GateInstanceWire,
+  SelfConnectionWire,
+} from '@nexttime/shared';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../../hooks/usePermissions.js';
@@ -49,6 +54,8 @@ function connector(overrides: Partial<ConnectorWire> = {}): ConnectorWire {
     disabledOperations: [],
     operationCount: 3,
     instanceCount: 2,
+    selfConnectionCount: 0,
+    suspendedSelfConnectionCount: 0,
     updatedAt: '2026-09-01T00:00:00.000Z',
     ...overrides,
   };
@@ -121,6 +128,24 @@ function runtime(overrides: Partial<ExternalRuntimeWire> = {}): ExternalRuntimeW
     status: 'active',
     createdAt: '2026-09-01T00:00:00.000Z',
     expiresAt: '2027-09-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+function selfConnection(overrides: Partial<SelfConnectionWire> = {}): SelfConnectionWire {
+  return {
+    workspaceId: 'ws-1',
+    workspaceName: 'Acme',
+    gatekeeperId: 'gk-self-1',
+    connector: 'http',
+    target: 'grafana',
+    endpoint: 'https://grafana-gate.example',
+    connectedByName: 'Alice',
+    connectedAt: '2026-10-01T00:00:00.000Z',
+    suspendedAt: null,
+    suspendedByLogin: null,
+    suspensionReason: null,
+    catalogGateId: null,
     ...overrides,
   };
 }
@@ -930,6 +955,252 @@ describe('PlatformIntegrationsPage', () => {
     await waitFor(() =>
       expect(screen.queryByTestId(`gate-instance-row-${instance.gateId}`)).toBeNull(),
     );
+  });
+
+  // P0b (STATUS leftover 118 remainder ①): a gate a workspace connected itself had no platform
+  // cut-off — the connector mode gates only new connections, the deny list only catalog links.
+  it('P0b: a generic connector row counts its self-connected gates and opens them, filtered to it', async () => {
+    const http = scriptedHttp({
+      list_connectors: () => ({
+        items: [
+          connector(),
+          connector({
+            name: 'http',
+            kind: 'http',
+            packaged: false,
+            selfConnectionCount: 2,
+            suspendedSelfConnectionCount: 1,
+          }),
+        ],
+      }),
+      list_gate_instances: () => ({ items: [] }),
+      list_self_connections: () => ({
+        items: [
+          selfConnection(),
+          selfConnection({ gatekeeperId: 'gk-self-2', connector: 'mcp', target: 'notes' }),
+        ],
+      }),
+    });
+    renderPage(http);
+
+    const table = await screen.findByTestId('connectors-table');
+    // A packaged connector has none (`create_connection` takes only the generic kinds).
+    expect(within(within(table).getByTestId('connector-row-docker')).getByText('—')).toBeTruthy();
+    const count = within(table).getByTestId('connector-self-connections-http');
+    expect(count.textContent).toBe('2 个（1 个已暂停）');
+    fireEvent.click(count);
+
+    const list = await screen.findByTestId('self-connections-table');
+    expect(
+      (screen.getByTestId('self-connections-connector-filter') as HTMLSelectElement).value,
+    ).toBe('http');
+    expect(within(list).getByTestId('self-connection-row-gk-self-1')).toBeTruthy();
+    expect(within(list).queryByTestId('self-connection-row-gk-self-2')).toBeNull();
+    // The filter is chosen from what the list holds, never typed.
+    fireEvent.change(screen.getByTestId('self-connections-connector-filter'), {
+      target: { value: '' },
+    });
+    expect(within(list).getByTestId('self-connection-row-gk-self-2')).toBeTruthy();
+    expect(
+      http.calls.filter((call) => call.name === 'list_self_connections').map((c) => c.params),
+    ).toEqual([{}]);
+  });
+
+  it('P0b: 暂停 is a medium confirm saying what stops and what stays; the reason is optional and trimmed; the row shows who suspended it and why', async () => {
+    const http = scriptedHttp({
+      list_self_connections: () => ({ items: [selfConnection()] }),
+      suspend_self_connection: (params) => {
+        expect(params).toEqual({
+          workspaceId: 'ws-1',
+          gatekeeperId: 'gk-self-1',
+          reason: '它会外发客户数据',
+        });
+        return selfConnection({
+          suspendedAt: '2026-10-16T00:00:00.000Z',
+          suspendedByLogin: 'root-admin',
+          suspensionReason: '它会外发客户数据',
+        });
+      },
+    });
+    renderPage(http);
+    fireEvent.click(screen.getByTestId('integrations-tab-self'));
+
+    const row = await screen.findByTestId('self-connection-row-gk-self-1');
+    expect(within(row).getByText('使用中')).toBeTruthy();
+    expect(within(row).getByText('Alice')).toBeTruthy();
+    fireEvent.click(within(row).getByTestId('self-connection-suspend-gk-self-1'));
+    expect(http.calls.some((call) => call.name === 'suspend_self_connection')).toBe(false);
+
+    const confirm = await screen.findByTestId('self-connection-confirm-gk-self-1');
+    expect(confirm.getAttribute('data-tier')).toBe('medium');
+    expect(confirm.textContent).toContain('全部 Operation 都被拒绝');
+    expect(confirm.textContent).toContain('连接、它的 Operation 和历史都保留');
+    expect(confirm.textContent).toContain('https://grafana-gate.example');
+    fireEvent.change(within(confirm).getByTestId('self-connection-reason-input-gk-self-1'), {
+      target: { value: '  它会外发客户数据  ' },
+    });
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+
+    const suspension = await screen.findByTestId('self-connection-suspension-gk-self-1');
+    expect(suspension.textContent).toContain('root-admin');
+    expect(suspension.textContent).toContain('原因：它会外发客户数据');
+    expect(within(row).getByText('已暂停')).toBeTruthy();
+    expect(within(row).getByTestId('self-connection-resume-gk-self-1')).toBeTruthy();
+  });
+
+  it('P0b: 暂停 without a reason sends none; 恢复 posts resume_self_connection and the row is in use again', async () => {
+    const suspended = selfConnection({
+      suspendedAt: '2026-10-16T00:00:00.000Z',
+      suspendedByLogin: 'root-admin',
+    });
+    const http = scriptedHttp({
+      list_self_connections: () => ({
+        items: [selfConnection(), { ...suspended, gatekeeperId: 'gk-self-2' }],
+      }),
+      suspend_self_connection: (params) => {
+        expect(params).toEqual({ workspaceId: 'ws-1', gatekeeperId: 'gk-self-1' });
+        return suspended;
+      },
+      resume_self_connection: (params) => {
+        expect(params).toEqual({ workspaceId: 'ws-1', gatekeeperId: 'gk-self-2' });
+        return selfConnection({ gatekeeperId: 'gk-self-2' });
+      },
+    });
+    renderPage(http);
+    fireEvent.click(screen.getByTestId('integrations-tab-self'));
+
+    const resumable = await screen.findByTestId('self-connection-row-gk-self-2');
+    fireEvent.click(within(resumable).getByTestId('self-connection-resume-gk-self-2'));
+    const resumeConfirm = await screen.findByTestId('self-connection-confirm-gk-self-2');
+    expect(resumeConfirm.textContent).toContain('恢复可调用');
+    expect(
+      within(resumeConfirm).queryByTestId('self-connection-reason-input-gk-self-2'),
+    ).toBeNull();
+    fireEvent.click(within(resumeConfirm).getByTestId('confirm-button'));
+    await waitFor(() => expect(within(resumable).getByText('使用中')).toBeTruthy());
+
+    const row = screen.getByTestId('self-connection-row-gk-self-1');
+    fireEvent.click(within(row).getByTestId('self-connection-suspend-gk-self-1'));
+    const confirm = await screen.findByTestId('self-connection-confirm-gk-self-1');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    await waitFor(() => expect(within(row).getByText('已暂停')).toBeTruthy());
+  });
+
+  it('P0b: a refused 暂停 stays in the confirm with its own copy; the row is unchanged', async () => {
+    const http = scriptedHttp({
+      list_self_connections: () => ({ items: [selfConnection()] }),
+      suspend_self_connection: () => {
+        throw new HttpError(
+          'capability_error',
+          'no gate that workspace connected itself has that id',
+          'self_connection_not_found',
+        );
+      },
+    });
+    renderPage(http);
+    fireEvent.click(screen.getByTestId('integrations-tab-self'));
+    const row = await screen.findByTestId('self-connection-row-gk-self-1');
+    fireEvent.click(within(row).getByTestId('self-connection-suspend-gk-self-1'));
+    const confirm = await screen.findByTestId('self-connection-confirm-gk-self-1');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    const error = await within(confirm).findByTestId('confirm-error');
+    expect(error.textContent).toContain('找不到这个工作区自己接入的门');
+    expect(within(row).getByText('使用中')).toBeTruthy();
+  });
+
+  it('P0b: a self connection at a platform instance’s address says whose credential its calls use, and opens that instance', async () => {
+    const http = scriptedHttp({
+      list_self_connections: () => ({
+        items: [selfConnection({ connectedByName: null, catalogGateId: 'gate-1' })],
+      }),
+      list_gate_instances: () => ({ items: [gateInstance()] }),
+      list_connectors: () => ({ items: [connector()] }),
+    });
+    renderPage(http);
+    fireEvent.click(screen.getByTestId('integrations-tab-self'));
+
+    const note = await screen.findByTestId('self-connection-catalog-gk-self-1');
+    expect(note.textContent).toContain('平台门实例「gate-1」');
+    expect(note.textContent).toContain('调用会用平台给这个实例的凭证');
+    // Recorded by core 0045's backfill: nobody to name.
+    expect(screen.getByTestId('self-connection-row-gk-self-1').textContent).toContain(
+      '升级前接入，未记录接入人',
+    );
+    fireEvent.click(screen.getByTestId('self-connection-show-instance-gk-self-1'));
+    expect(await screen.findByTestId('gate-instances-table')).toBeTruthy();
+  });
+
+  // UX acceptance of #620 (P2-1): at phone width a self connection is one card — its system, its
+  // status and its 暂停 in the same card, nothing scrolled off to the right.
+  it('P0b: at ≤ 768px each self connection is a card with its system, status and 暂停 together', async () => {
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn((query: string) => ({
+        matches: query.includes('max-width: 768px'),
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    try {
+      const http = scriptedHttp({
+        list_self_connections: () => ({
+          items: [
+            selfConnection({
+              suspendedAt: '2026-10-16T00:00:00.000Z',
+              suspendedByLogin: 'root-admin',
+              suspensionReason: '门在维护',
+            }),
+          ],
+        }),
+      });
+      renderPage(http);
+      fireEvent.click(screen.getByTestId('integrations-tab-self'));
+
+      const card = await screen.findByTestId('self-connection-row-gk-self-1');
+      expect(card.tagName).toBe('LI');
+      expect(card.textContent).toContain('grafana');
+      expect(card.textContent).toContain('https://grafana-gate.example');
+      expect(card.textContent).toContain('Acme');
+      expect(within(card).getByText('已暂停')).toBeTruthy();
+      expect(
+        within(card).getByTestId('self-connection-suspension-gk-self-1').textContent,
+      ).toContain('原因：门在维护');
+      expect(within(card).getByTestId('self-connection-resume-gk-self-1')).toBeTruthy();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  // UX acceptance of #620 (P2-2): the 暂停 confirm keeps to what happens next; what a suspension
+  // covers is in the tab's introduction.
+  it('P0b: what a suspension covers is said in the tab, not in the 暂停 confirm', async () => {
+    const http = scriptedHttp({ list_self_connections: () => ({ items: [selfConnection()] }) });
+    renderPage(http);
+    fireEvent.click(screen.getByTestId('integrations-tab-self'));
+    const tab = await screen.findByTestId('integrations-self-connections');
+    expect(tab.textContent).toContain('暂停只管这一条连接');
+    expect(tab.textContent).toContain('在「接入包」里改它的模式');
+
+    fireEvent.click(await screen.findByTestId('self-connection-suspend-gk-self-1'));
+    const confirm = await screen.findByTestId('self-connection-confirm-gk-self-1');
+    expect(confirm.textContent).toContain('随时可以恢复');
+    expect(confirm.textContent).not.toContain('只管这一条连接');
+    expect(confirm.textContent).not.toContain('接入包');
+  });
+
+  it('P0b: an empty filtered list names the connector it is filtered to', async () => {
+    const http = scriptedHttp({
+      list_connectors: () => ({
+        items: [connector({ name: 'ssh', kind: 'ssh', packaged: false, selfConnectionCount: 1 })],
+      }),
+      list_gate_instances: () => ({ items: [] }),
+      list_self_connections: () => ({ items: [] }),
+    });
+    renderPage(http);
+    fireEvent.click(await screen.findByTestId('connector-self-connections-ssh'));
+    const empty = await screen.findByTestId('self-connections-empty');
+    expect(empty.textContent).toContain('没有经「SSH」自己接入的门');
   });
 
   it('revoking an external runtime posts revoke_external_runtime and removes the row', async () => {

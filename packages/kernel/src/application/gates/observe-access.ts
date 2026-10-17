@@ -3,9 +3,9 @@ import type { AgentPolicyRow, AgentProfileRow } from '../../governance/agent-pro
 import { readAgentPolicy, readAgentProfile } from '../../governance/agent-profile/index.js';
 import { listPublishedOperationsForGatekeepers } from '../../governance/gatekeepers/index.js';
 import {
-  type GateLinkPolicyView,
+  type GatekeeperPlatformPolicy,
   operationPlatformStatus,
-  readGateLinkPoliciesForWorkspace,
+  readGatekeeperPlatformPolicies,
 } from './store.js';
 
 /**
@@ -103,14 +103,18 @@ export interface ObserveTarget {
   readonly operationName: string;
   /** The published Operation's `mode`; `undefined` when it is not published (draft / unknown). */
   readonly publishedMode: string | undefined;
-  /** `readGateLinkPolicy` / `readGateLinkPoliciesForWorkspace` — absent for a gate the workspace
-   *  connected itself (no platform deny list applies). */
-  readonly gateLink: GateLinkPolicyView | null | undefined;
+  /** `readGatekeeperPlatformPolicy` / `readGatekeeperPlatformPolicies` — the gate's origin and the
+   *  platform's cut-off for it (catalog: connector deny list; self: suspension). */
+  readonly platformPolicy: GatekeeperPlatformPolicy | null | undefined;
 }
 
 export type ObserveRefusal =
   | { readonly reason: 'gate_not_enabled' }
-  | { readonly reason: 'disabled_by_platform'; readonly connector: string }
+  | {
+      readonly reason: 'disabled_by_platform';
+      readonly connector: string;
+      readonly cutoff: 'connector_deny_list' | 'self_connection_suspended';
+    }
   | { readonly reason: 'no_published_operation' }
   | { readonly reason: 'not_observe_class'; readonly mode: string }
   | { readonly reason: ObserveGateExclusion };
@@ -122,9 +126,13 @@ export function observeRefusal(
   target: ObserveTarget,
 ): ObserveRefusal | undefined {
   if (!target.gateEnabled) return { reason: 'gate_not_enabled' };
-  const platform = operationPlatformStatus(target.gateLink, target.operationName);
+  const platform = operationPlatformStatus(target.platformPolicy, target.operationName);
   if (platform.disabled) {
-    return { reason: 'disabled_by_platform', connector: platform.connector ?? '' };
+    return {
+      reason: 'disabled_by_platform',
+      connector: platform.connector ?? '',
+      cutoff: platform.reason ?? 'connector_deny_list',
+    };
   }
   if (target.publishedMode === undefined) return { reason: 'no_published_operation' };
   if (target.publishedMode !== 'observe') {
@@ -150,7 +158,7 @@ export async function observableGatekeeperIds(
 ): Promise<ReadonlySet<string>> {
   // One client, one query at a time (pg rejects concurrent queries on a client).
   const published = await listPublishedOperationsForGatekeepers(client, workspaceId, gatekeeperIds);
-  const gateLinks = await readGateLinkPoliciesForWorkspace(client, workspaceId);
+  const platformPolicies = await readGatekeeperPlatformPolicies(client, workspaceId);
   const observable = new Set<string>();
   for (const record of published) {
     if (observable.has(record.gatekeeperId)) continue;
@@ -159,7 +167,7 @@ export async function observableGatekeeperIds(
       gateEnabled: true,
       operationName: record.name,
       publishedMode: record.operation.mode,
-      gateLink: gateLinks.get(record.gatekeeperId),
+      platformPolicy: platformPolicies.get(record.gatekeeperId),
     });
     if (refusal === undefined) observable.add(record.gatekeeperId);
   }

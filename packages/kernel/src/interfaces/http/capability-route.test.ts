@@ -18,6 +18,7 @@ import {
 import { OutboundTargetRefusedError } from '../../adapters/outbound-target/index.js';
 import { ChatNotFoundError, TurnAlreadyRunningError } from '../../application/chat/index.js';
 import { ChatArchivedError } from '../../application/chat/index.js';
+import { GatekeeperLandingRefusedError } from '../../application/gates/index.js';
 import { NoActiveTurnError, TurnNotFoundError } from '../../application/gateway/handlers.js';
 import {
   CapabilityNotImplementedError,
@@ -102,6 +103,34 @@ describe('mapCapabilityError — S6-A / C25 approve.reason (unit)', () => {
     expect(mapCapabilityError(new ApprovalReasonRequiredError('ar-1'))).toMatchObject({
       status: 400,
       code: 'reason_required',
+    });
+  });
+});
+
+describe('mapCapabilityError — P0b landing refusals (unit)', () => {
+  it('endpoint_already_connected maps to 409 with the Gatekeeper at that address and its name (UX acceptance of #620, P2-3)', () => {
+    expect(
+      mapCapabilityError(
+        new GatekeeperLandingRefusedError('endpoint_already_connected', 'gk-1', 'taken', 'Billing'),
+      ),
+    ).toEqual({
+      status: 409,
+      code: 'endpoint_already_connected',
+      message: 'taken',
+      details: { gatekeeperId: 'gk-1', gatekeeperName: 'Billing' },
+    });
+  });
+
+  it('self_connection_suspended maps to 409 with the Gatekeeper only', () => {
+    expect(
+      mapCapabilityError(
+        new GatekeeperLandingRefusedError('self_connection_suspended', 'gk-2', 'suspended'),
+      ),
+    ).toEqual({
+      status: 409,
+      code: 'self_connection_suspended',
+      message: 'suspended',
+      details: { gatekeeperId: 'gk-2' },
     });
   });
 });

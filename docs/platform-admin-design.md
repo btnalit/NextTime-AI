@@ -37,7 +37,7 @@ agent 在图上找到 Worker、拉起它们、经统一的门对接各系统，�
 |---|---|---|---|
 | ① 有人能进门 | `users`、`platform_role`、成员资格 | 读令牌、填初始化页；没有管理页 | **用户**：装好即有 `admin`；建人、停用、重置、看成员资格 |
 | ② agent 能思考 | `llm-proxy`（唯一持 provider key）、`models.json`、白名单 | 主机改 YAML + env、重启、`make gen-models` | **模型与供应商**：增 / 测 / 热加载；平台默认模型 |
-| ③ agent 能接系统 | Gatekeeper 实例（`http` / `mcp` / `cli` / `ssh`）、接口清单、ConnectedAccount | 每个门实例一个 compose 服务 + `register-gatekeeper` CLI；工作区的 `request_connection` 也依赖已起好的门容器 | **集成**：接入包目录、门实例、连接；RAGFlow / 任意 MCP / HTTP API / CLI 工具 / 外部运行时 |
+| ③ agent 能接系统 | Gatekeeper 实例（`http` / `mcp` / `cli` / `ssh`）、接口清单、ConnectedAccount | 每个门实例一个 compose 服务 + `register-gatekeeper` CLI（已于 P0b 移除）；工作区的 `request_connection` 也依赖已起好的门容器 | **集成**：接入包目录、门实例、连接；RAGFlow / 任意 MCP / HTTP API / CLI 工具 / 外部运行时 |
 | ④ 图有本体、agent 有模板 | OntologyVersion、领域包、WorkerDefinition、Skill、Procedure | `ontology/*.yaml` 入库靠 `seed-domain-pack` CLI；模板随镜像 | **模块**：领域包安装 / 升级、默认模块、跨工作区策展 Worker 模板与 Skill |
 | ⑤ 运行层可升级 | `pi.version`、`nexttime-ai-worker-runtime` 镜像、platform-extension、入口容器 | 改 `pi.version` → CI 守卫 → `docker compose build` → 手工 `/resident/stop` 让入口容器换镜像 | **运行层**：活动镜像、入口容器版本盘点、滚动重建、回滚、pi 漂移 |
 | ⑥ 花的钱有人管 | `llm_usage`、工作区 quota、`llm-proxy` 预算（100% 拒绝未实现，遗留 19） | owner 自设 quota；管理员无处设上限 | **平台设置 / 用户**：默认预算与按用户预算；`llm-proxy` 100% 拒绝 |
@@ -171,7 +171,7 @@ service。"系统接入"页变为从平台集成目录**启用**门实例（管�
 | 层 | 是什么 | 今天 | 管理面 |
 |---|---|---|---|
 | **接入包（connector）** | 一种可部署的门：预置包 `gatekeepers/docker`、`gatekeepers/ragflow`，或通用种类 `http` / `mcp` / `cli` / `ssh` | 源码目录 + Dockerfile | 目录页列出本部署带的接入包（名、种类、Operation 数、版本、说明），每个有**三态**：禁用 / 可自连（工作区 owner 可自己连）/ 平台预置（管理员建实例、工作区一键启用）——借 cloudflare-os `ambientGatekeeperModes`。三态管的是目录可见性与**新连接**：`create_connection` / `request_connection` 只在该种类的通用接入包为"可自连"时放行（否则 409 `connector_not_self_serve`，R-40），`enable_gate_instance` 只认"平台预置"；已建立的连接不受三态影响，要切断已启用的工作区用下面的按 Operation 开关（控制台的禁用确认里可一并"禁用全部 Operation"，R-41 / D-19） |
-| **门实例（gate instance）** | 一个在跑的门进程 + 它指向的目标（RAGFlow 地址、某个 MCP server、某台 SSH 主机） | 每实例一个 compose 服务，`register-gatekeeper` CLI 注册 | 见下文两条路径；实例有健康、最近检查、启用它的工作区数 |
+| **门实例（gate instance）** | 一个在跑的门进程 + 它指向的目标（RAGFlow 地址、某个 MCP server、某台 SSH 主机） | 每实例一个 compose 服务，`register-gatekeeper` CLI 注册（该 CLI 已于 P0b 移除） | 见下文两条路径；实例有健康、最近检查、启用它的工作区数 |
 | **连接（connection）** | 某工作区 / 某用户对一个门实例的使用关系 + 凭证（凭证只在门内） | `request_connection` 卡片 → 门存 ConnectedAccount → 图里生成 `Gatekeeper` 与系统对象 | 不变；集成页只看"谁在用"，不看凭证 |
 
 **门实例的两条路径。**
@@ -179,7 +179,7 @@ service。"系统接入"页变为从平台集成目录**启用**门实例（管�
   （内部面 token，同 supervisor），带**稳定的门身份**（`GATE_ID`，随 compose 服务配置，非显示名——防止第二个
   容器用同名顶替已启用的门）、种类、`describe_operations`、健康端点 → 出现在集成页"发现的门实例"，状态
   "未启用"；管理员启用 / 命名 / 分配三态；下线的门实例标"失联"。这替代 `register-gatekeeper`
-  CLI，也让升级接管时已起好的 docker / ragflow 门自动出现。实例一旦被决定（启用 / 禁用），再 announce
+  CLI（已于 P0b 移除），也让升级接管时已起好的 docker / ragflow 门自动出现。实例一旦被决定（启用 / 禁用），再 announce
   出的清单若改变了 Operation 集合或需要审阅的字段，先挂起、由管理员按摘要确认后才生效（2026-10-02 复审
   R-18，决定 D-18：凭证证明是谁 announce，确认证明有人看过改了什么）；清单不变的重启不产生待确认项。
 - **通用门宿主（`http` / `mcp`）。**`gatekeeper-base` 增加多实例模式：一个长驻容器承载 N 个 `http` / `mcp`

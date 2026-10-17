@@ -63,14 +63,15 @@ import {
 } from '../../governance/redaction/index.js';
 import { queryAudit } from '../../substrate/audit/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
-import type { GateLinkPolicyView, ObserveRefusal } from '../gates/index.js';
+import type { GatekeeperPlatformPolicy, ObserveRefusal } from '../gates/index.js';
 import {
   NO_OBSERVE_EXCLUSIONS,
   narrowScopeToExecutableGates,
   observeRefusal,
   operationPlatformStatus,
+  platformTrustOf,
   readExecuteAccess,
-  readGateLinkPolicy,
+  readGatekeeperPlatformPolicy,
   readObserveExclusions,
 } from '../gates/index.js';
 import type { WithTransactionFn } from './action-executor.js';
@@ -1333,7 +1334,7 @@ export const observeOperationHandler: CapabilityHandler = async (
   );
 
   const gatekeeper = await getGatekeeper(client, workspaceId, gatekeeperId);
-  const gateLink = await readGateLinkPolicy(client, workspaceId, gatekeeperId);
+  const platformPolicy = await readGatekeeperPlatformPolicy(client, workspaceId, gatekeeperId);
   const published = await getPublishedOperation(client, workspaceId, gatekeeperId, operationName);
   const exclusions =
     channel === 'handle'
@@ -1344,7 +1345,7 @@ export const observeOperationHandler: CapabilityHandler = async (
     gateEnabled: gatekeeper !== null,
     operationName,
     publishedMode: published?.operation.mode,
-    gateLink,
+    platformPolicy,
   });
   if (refusal) throw observeRefusalError(refusal, gatekeeperId, operationName);
   if (!gatekeeper) throw new GatekeeperNotFoundError(gatekeeperId); // narrowing only — refused above
@@ -1457,8 +1458,8 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
 
   // P-B1 (design §6.3): a connector-disabled Operation is refused per call, whatever Handle or
   // catalog view the caller holds; the platform link also carries the MCP trust read below.
-  const gateLink = await readGateLinkPolicy(client, workspaceId, gatekeeperId);
-  assertOperationEnabled(gateLink, gatekeeperId, operationName);
+  const platformPolicy = await readGatekeeperPlatformPolicy(client, workspaceId, gatekeeperId);
+  assertOperationEnabled(platformPolicy, gatekeeperId, operationName);
 
   const published = await getPublishedOperation(client, workspaceId, gatekeeperId, operationName);
 
@@ -1476,7 +1477,7 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
         gateEnabled: true,
         operationName,
         publishedMode: published.operation.mode,
-        gateLink,
+        platformPolicy,
       });
       if (refusal) throw observeRefusalError(refusal, gatekeeperId, operationName);
     }
@@ -1583,7 +1584,7 @@ export const requestActionHandler: CapabilityHandler = async (client, workspaceI
   const mcpTrustBlocked =
     gatekeeper.transportKind === 'mcp' &&
     !mcpAutoApproveAllowed({
-      trust: gateLink?.trust,
+      trust: platformTrustOf(platformPolicy),
       destructiveHint: operation.destructive_hint,
       idempotentHint: operation.idempotent_hint,
     });
@@ -1620,7 +1621,7 @@ function observeRefusalError(
     case 'gate_not_enabled':
       return new GatekeeperNotFoundError(gatekeeperId);
     case 'disabled_by_platform':
-      return operationDisabledError(gatekeeperId, operationName, refusal.connector);
+      return operationDisabledError(gatekeeperId, operationName, refusal.connector, refusal.cutoff);
     case 'no_published_operation':
       return new OperationNotFoundError(gatekeeperId, operationName);
     case 'not_observe_class':
@@ -1638,18 +1639,27 @@ function observeRefusalError(
   }
 }
 
+/** Same `operation_disabled:` prefix for both platform cut-offs (callers and the console key on it);
+ *  the text says which one applies, since only the suspension is lifted per connection. */
 function operationDisabledError(
   gatekeeperId: string,
   operationName: string,
   connector: string | undefined,
+  cutoff: 'connector_deny_list' | 'self_connection_suspended' | undefined,
 ): ForbiddenError {
+  if (cutoff === 'self_connection_suspended') {
+    return new ForbiddenError(
+      `operation_disabled: ${quotedName(operationName)} on gatekeeper ${gatekeeperId} is disabled by the platform: this workspace's own "${connector}" connection to it is suspended`,
+    );
+  }
   return new ForbiddenError(
     `operation_disabled: ${quotedName(operationName)} on gatekeeper ${gatekeeperId} is disabled by the platform for connector "${connector}"`,
   );
 }
 
-/** P-B1: the per-call half of "按 Operation 开关" — `null` link = a gate this workspace connected
- *  itself, no platform deny list applies. Routes through `operationPlatformStatus`
+/** P-B1: the per-call half of "按 Operation 开关" — no policy = disables nothing; a catalog gate's
+ *  connector deny list and a self-connected gate's suspension (P0b) are the two platform cut-offs.
+ *  Routes through `operationPlatformStatus`
  *  (application/gates/store.ts), the one shared predicate `disabledOperationsFor`
  *  (gatekeeper-read-handlers.ts) and `computeCapabilityReachability` (capability-reachability.ts)
  *  also consult now — the production incident this fixes was exactly the console's own reachability
@@ -1657,12 +1667,12 @@ function operationDisabledError(
  *  list at all). `request_action` calls it for every mode (the execute path too); the observe
  *  path's own check is the same predicate inside `observeRefusal`. */
 function assertOperationEnabled(
-  gateLink: GateLinkPolicyView | null,
+  platformPolicy: GatekeeperPlatformPolicy | null,
   gatekeeperId: string,
   operationName: string,
 ): void {
-  const status = operationPlatformStatus(gateLink, operationName);
+  const status = operationPlatformStatus(platformPolicy, operationName);
   if (status.disabled) {
-    throw operationDisabledError(gatekeeperId, operationName, status.connector);
+    throw operationDisabledError(gatekeeperId, operationName, status.connector, status.reason);
   }
 }

@@ -1,3 +1,4 @@
+import { domainToASCII } from 'node:url';
 import type { PrincipalKind } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
@@ -6,7 +7,10 @@ import {
   setGatekeeperConnectionSecretSaltObject,
 } from '../../substrate/ontology/index.js';
 // The rule module itself, not `../connections/index.js`: `connections/service.ts` calls this module.
-import { assertConnectionParamsCarryNoCredentials } from '../connections/credentials.js';
+import {
+  assertConnectionParamsCarryNoCredentials,
+  redactConnectionAddress,
+} from '../connections/credentials.js';
 
 /**
  * governance/gatekeepers/registry: Gatekeeper instance registration + lookup (design doc §5.1.4
@@ -64,9 +68,10 @@ export async function registerGatekeeper(
   workspaceId: string,
   input: RegisterGatekeeperInput,
 ): Promise<RegisterGatekeeperResult> {
-  // Legacy 186, defense in depth: every caller (`create_connection`, `enable_gate_instance`, the
-  // operator's `register-gatekeeper` CLI) checks first; whatever the caller, no Gatekeeper or
-  // ConnectedSystem is written with a credential in its address.
+  // Legacy 186, defense in depth: the one production caller — the landing
+  // (application/gates/landing.ts, behind `create_connection` and `enable_gate_instance`) — checks
+  // first; whatever the caller, no Gatekeeper or ConnectedSystem is written with a credential in its
+  // address.
   assertConnectionParamsCarryNoCredentials('register_gatekeeper', {
     target: input.target,
     endpoint: input.endpoint,
@@ -134,8 +139,19 @@ export async function findGatekeeperIdByConnectionSecretSalt(
   return result.rows[0]?.id ?? null;
 }
 
+/** A Gatekeeper's name as every reader of this module gets it (#620, review #493 P2): a self-
+ *  connected gate is named after the target its owner typed (application/gates/landing.ts), so a
+ *  name written before legacy 186 can carry the credential its address did — shown through
+ *  `redactConnectionAddress`, the rule for every gate address someone reads. A name is a label:
+ *  no gate is called and no row is found by it, so no reader needs the stored text. The stored
+ *  value is untouched until the scrub rewrites it. */
+function displayedGatekeeperName(name: string | undefined, gatekeeperId: string): string {
+  return name === undefined ? gatekeeperId : redactConnectionAddress('target', name);
+}
+
 export interface GatekeeperRecord {
   readonly gatekeeperId: string;
+  /** `displayedGatekeeperName`'s: redacted, never the stored text. */
   readonly name: string;
   readonly transportKind: 'http' | 'mcp' | 'cli' | 'ssh';
   readonly target: string;
@@ -167,7 +183,7 @@ export async function getGatekeeper(
   if (!props.transportKind || !props.target || !props.endpoint) return null;
   return {
     gatekeeperId: object.id,
-    name: props.name ?? object.id,
+    name: displayedGatekeeperName(props.name, object.id),
     transportKind: props.transportKind as GatekeeperRecord['transportKind'],
     target: props.target,
     endpoint: props.endpoint,
@@ -202,6 +218,7 @@ export class GatekeeperNotFoundError extends Error {
 
 export interface GatekeeperListEntry {
   readonly gatekeeperId: string;
+  /** Redacted, as `GatekeeperRecord.name`. */
   readonly name: string;
   readonly transportKind: 'http' | 'mcp' | 'cli' | 'ssh';
   readonly endpoint: string | null;
@@ -237,7 +254,7 @@ export async function listGatekeepers(
     };
     return {
       gatekeeperId: row.id,
-      name: props.name ?? row.id,
+      name: displayedGatekeeperName(props.name, row.id),
       transportKind: (props.transportKind as GatekeeperListEntry['transportKind']) ?? 'http',
       endpoint: props.endpoint ?? null,
       createdAt: row.created_at,
@@ -272,6 +289,7 @@ export async function countGatekeepers(client: PoolClient, workspaceId: string):
 
 export interface GatekeeperByEndpointEntry {
   readonly gatekeeperId: string;
+  /** Redacted, as `GatekeeperRecord.name`. */
   readonly name: string;
   readonly target: string;
   readonly transportKind: 'http' | 'mcp' | 'cli' | 'ssh';
@@ -279,11 +297,85 @@ export interface GatekeeperByEndpointEntry {
   readonly createdAt: Date;
 }
 
-/** Trims exactly one trailing `/`, nothing more (`http://x:80//` stays `http://x:80/`) — the
- *  association key's normalisation. Exported so `findGatekeepersByEndpoint`'s caller and its own
- *  SQL-free, single-source-of-truth comparison agree on the same rule without restating it. */
+/** RFC 3986 §2.3's unreserved characters: a percent-encoding of one of them means the character. */
+const UNRESERVED = /^[A-Za-z0-9\-._~]$/;
+/** Default ports `URL` does not know (it drops http / https / ws / wss / ftp's itself). */
+const DEFAULT_PORTS: Readonly<Record<string, string>> = { 'ssh:': '22' };
+
+/** The parts of a gate address that say which gate process is called, each in one canonical
+ *  spelling — `null` for text that is not a URL with a host. `URL` already lower-cases the scheme,
+ *  converts an http(s) host to punycode and drops a special scheme's default port; on top of it:
+ *    - `ssh`'s default port (22) dropped too;
+ *    - the host lower-cased and converted to punycode for a scheme `URL` does not know (`ssh`), and
+ *      a trailing dot dropped (`gate.example.` is the same DNS name);
+ *    - the user info, the query and the fragment dropped — the kernel never sends them (a call
+ *      resolves a path against the base, which drops the query; an address with user info is
+ *      refused on write, legacy 186), so they do not name another gate;
+ *    - in the path, a percent-encoded unreserved character decoded and every other
+ *      percent-encoding upper-cased (RFC 3986 §6.2.2), and every trailing `/` trimmed. */
+function canonicalGateAddress(
+  endpoint: string,
+): { readonly scheme: string; readonly host: string; readonly path: string } | null {
+  let url: URL;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    return null;
+  }
+  if (url.hostname === '') return null;
+  let hostname = url.hostname.toLowerCase();
+  if (!hostname.startsWith('[')) {
+    let decoded = hostname;
+    try {
+      decoded = decodeURIComponent(hostname);
+    } catch {
+      // Keep the encoded text.
+    }
+    hostname = domainToASCII(decoded) || decoded;
+  }
+  hostname = hostname.replace(/\.$/, '');
+  const port = url.port === DEFAULT_PORTS[url.protocol] ? '' : url.port;
+  const host = port !== '' ? `${hostname}:${port}` : hostname;
+  const path = url.pathname
+    .replace(/%[0-9A-Fa-f]{2}/g, (encoded) => {
+      const char = String.fromCharCode(Number.parseInt(encoded.slice(1), 16));
+      return UNRESERVED.test(char) ? char : encoded.toUpperCase();
+    })
+    .replace(/\/+$/, '');
+  return { scheme: url.protocol, host, path };
+}
+
+/** The one address comparison for gates (P0b, #620 review P2-1): two spellings of one gate's
+ *  address compare equal — `canonicalGateAddress` has the rule. Used for "one address, one
+ *  Gatekeeper" (the landing's `endpoint_already_connected`, its lock and core 0045's
+ *  `endpoint_key`), for leftover 73's association (`findGatekeepersByEndpoint`, which the catalog
+ *  claim of a self connection goes through), and — by host, `gateEndpointHost` — for the
+ *  platform-gate rule. Text that is not a URL with a host keeps the older rule: one trailing `/`
+ *  trimmed. A different name or IP for the same host is a different address: what the platform's
+ *  per-connection suspension means for it is in `suspend_self_connection`'s description. */
 export function normalizeGateEndpoint(endpoint: string): string {
-  return endpoint.endsWith('/') ? endpoint.slice(0, -1) : endpoint;
+  const address = canonicalGateAddress(endpoint);
+  if (address === null) return endpoint.endsWith('/') ? endpoint.slice(0, -1) : endpoint;
+  return `${address.scheme}//${address.host}${address.path}`;
+}
+
+/** The host (name plus a non-default port) of a gate address in `normalizeGateEndpoint`'s
+ *  spelling, or `null` for text that is not a URL with a host — the platform-gate rule's key
+ *  (application/gateway/gate-target.ts `platformGateIdForEndpoint`). */
+export function gateEndpointHost(endpoint: string): string | null {
+  return canonicalGateAddress(endpoint)?.host ?? null;
+}
+
+/** What the platform plane shows of an address a workspace connected itself (#620 review): the
+ *  scheme, host and a non-default port in `normalizeGateEndpoint`'s spelling — never the path,
+ *  query, fragment or user info, where a token can sit that the credential rule does not look for.
+ *  Text that is not a URL with a host (a target may be a host or a service name) keeps what comes
+ *  before its first `/`, `?` or `#`, after any `…@`. The full address stays in the workspace's
+ *  own views. */
+export function gateAddressOrigin(address: string): string {
+  const canonical = canonicalGateAddress(address);
+  if (canonical !== null) return `${canonical.scheme}//${canonical.host}`;
+  return address.replace(/^[^@/?#]*@/, '').split(/[/?#]/, 1)[0] ?? '';
 }
 
 /** Every `Gatekeeper` Object in `workspaceId` whose own `endpoint` property equals `endpoint`
@@ -315,7 +407,7 @@ export async function findGatekeepersByEndpoint(
     if (!props.endpoint || normalizeGateEndpoint(props.endpoint) !== target) continue;
     matches.push({
       gatekeeperId: row.id,
-      name: props.name ?? row.id,
+      name: displayedGatekeeperName(props.name, row.id),
       target: props.target ?? '',
       transportKind: (props.transportKind as GatekeeperByEndpointEntry['transportKind']) ?? 'http',
       endpoint: props.endpoint,

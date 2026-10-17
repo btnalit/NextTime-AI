@@ -250,8 +250,11 @@ import {
   listConnectorsHandler,
   listExternalRuntimesHandler,
   listGateInstancesHandler,
+  listSelfConnectionsHandler,
+  resumeSelfConnectionHandler,
   revokeExternalRuntimeHandler,
   setConnectorModeHandler,
+  suspendSelfConnectionHandler,
   testGateInstanceHandler,
   updateGateInstanceHandler,
 } from './platform-gates-handlers.js';
@@ -293,6 +296,7 @@ import { platformDraftResidueHandler } from './platform-residue-handler.js';
 import { observeOperationHandler, requestActionHandler } from './request-action-handler.js';
 import { resolveRefsHandler } from './resolve-refs-handler.js';
 import {
+  displayedObject,
   toWireAuditRecord,
   toWireChat,
   toWireFact,
@@ -396,7 +400,7 @@ function toNodeDetails(
     return {
       id: nodeId,
       typeName: object?.objectType ?? 'Object',
-      ...(object ? { name: objectDisplayName(object) } : {}),
+      ...(object ? { name: objectDisplayName(displayedObject(object)) } : {}),
     };
   });
 }
@@ -2145,6 +2149,9 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['test_gate_instance', testGateInstanceHandler],
   ['list_external_runtimes', listExternalRuntimesHandler],
   ['revoke_external_runtime', revokeExternalRuntimeHandler],
+  ['list_self_connections', listSelfConnectionsHandler],
+  ['suspend_self_connection', suspendSelfConnectionHandler],
+  ['resume_self_connection', resumeSelfConnectionHandler],
   ['list_available_gate_instances', listAvailableGateInstancesHandler],
   ['enable_gate_instance', enableGateInstanceHandler],
   ['preview_gate_instance_enable', previewGateInstanceEnableHandler],

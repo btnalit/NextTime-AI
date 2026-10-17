@@ -76,7 +76,7 @@ compose secret `gate_token`（`${NEXTTIME_DATA}/secrets/gate.token`）读取自�
 GATE_TOKEN=$(cat "${NEXTTIME_DATA}/secrets/gate.token")
 ```
 
-`kernel` 自己的 `HttpGatekeeperClient`（`register-gatekeeper`、`request_action` 等经内核治理路径
+`kernel` 自己的 `HttpGatekeeperClient`（`enable_gate_instance`、`request_action` 等经内核治理路径
 的调用）已经自动带这个头，不需要手动传——只有本 runbook 里**绕过内核、直接打门自己的协议端点**的
 例子（§3 的 health/describe_operations 探活、§8 的幂等复核）需要手动加 `authorization` 头。
 
@@ -87,11 +87,12 @@ GATE_TOKEN=$(cat "${NEXTTIME_DATA}/secrets/gate.token")
 ## 1. 目的
 
 验证两件事：① `gatekeeper-docker`/`gatekeeper-ragflow` 两个镜像能构建、起服务、`/gate/health`
-与 `/gate/describe_operations` 可达；② `bootstrap.js register-gatekeeper` 这条主机操作员的手工
-注册路径能把一个门实例注册进图、导入并发布它的 Operation 清单，随后从 owner 的 human 通道
-`request_action` 走一遍完整的 observe / execute（含审批）/ 幂等 apply 流程。S2.13 落地后新增的
-capability 驱动流程（`request_connection` 卡片 → `create_connection` → `connect_gatekeeper`）见
-§10，两条路径并存——§5/§10 的区别、什么时候用哪条，见§10 开头一段。
+与 `/gate/describe_operations` 可达；② 两个门自注册进平台目录后，经目录路径（管理员启用实例 →
+owner `enable_gate_instance`）接进工作区、导入并发布它的 Operation 清单，随后从 owner 的 human 通道
+`request_action` 走一遍完整的 observe / execute（含审批）/ 幂等 apply 流程。不在目录里的门由工作区
+自己接入（`request_connection` 卡片 → `create_connection` → `connect_gatekeeper`），见 §10。P0b 起
+这两条是仅有的接入入口，背后是同一个落地函数；原来的 `bootstrap.js register-gatekeeper` 命令行路径
+已移除，见 §5 开头一段。
 
 不含：`gatekeeper-ragflow` 对一个真实 RAGFlow 实例的端到端验收（本机大概率没有可用的 RAGFlow 部署
 ——§7 只验证服务能起、清单能注册，不要求真实调用其 REST API 成功）。
@@ -162,38 +163,49 @@ OWNER_ID=<owner-uuid>
 OWNER_KEY=<owner-api-key>
 ```
 
-## 5. 注册 `docker` 门、导入并发布其清单
+## 5. 把 `docker` / `ragflow` 门接进工作区（平台目录路径）
 
-`bootstrap.js register-gatekeeper`（S2.5 新增子命令）拉该门的 `describe_operations`、把它注册成
-一个 Gatekeeper 实例、把返回的每个 Operation 导入为草稿；`--publish true` 额外把每个导入的
-Operation 发布（不给这个 flag 时只会留在草稿态，见 `--help` 等价的用法文字）：
+**P0b 起只有一条落地路径**：Gatekeeper 只能经平台目录（`enable_gate_instance`）或工作区自己接入
+（`create_connection`，§10）落地，两者走同一个落地函数，每个 Gatekeeper 都记着来源（目录实例或
+工作区自接，后者平台可以在「集成 → 自己接入的门」里暂停）。原来的 `bootstrap.js register-gatekeeper`
+子命令已移除：它绕过平台目录的规则，`--publish true` 还会不经逐条审阅、不留审计地整份发布（STATUS
+遗留 123 L1-14）。现在跑它只会报用法错误并指向下面的目录路径。
+
+打包门（`gatekeeper-docker` / `gatekeeper-ragflow`）在 §3 起服务后自己向内核登记进平台目录
+（P-B1，`gate_instances`，状态 `discovered`，接入包首次登记时以 `platform_preset` 模式建好）：
+
+1. **管理员**在控制台「集成 → 门实例」里核对 `gatekeeper-docker` 已公布的 Operation 并把它设为启用
+   （`discovered` → `enabled`，`update_gate_instance`，只有平台管理员登录能做；本 runbook 不经 owner 的
+   API key 做这一步）。
+2. **owner** 在工作区「系统与授权 → 接入一个系统」里选中它点「启用」（控制台会先给出
+   `preview_gate_instance_enable` 的预览再确认），或者直接调 capability。`enable_gate_instance` 注册 Gatekeeper、导入**并发布**它公布
+   的 Operation，不需要再 `publish_manifest`：
 
 ```bash
-docker compose exec -T kernel node dist/cli/bootstrap.js register-gatekeeper \
-  --workspace "${WORKSPACE_ID}" --principal "${OWNER_ID}" \
-  --name docker --endpoint http://gatekeeper-docker:8083 --kind cli --publish true
-```
-
-期望输出：
-
-```
-gatekeeper registered: <gatekeeper-uuid>
-imported operations (draft): containers.list, container.inspect, compose.ls, container.logs_tail, container.restart, compose.up, compose.down
-published operations: containers.list, container.inspect, compose.ls, container.logs_tail, container.restart, compose.up, compose.down
+curl -s http://kernel:8080/api/cap/enable_gate_instance \
+  -H "Authorization: Bearer ${OWNER_KEY}" -H 'content-type: application/json' \
+  -d '{"gateId":"gatekeeper-docker"}'
+# {"ok":true,"result":{"gatekeeperId":"<gatekeeper-uuid>",...}}
 ```
 
 ```bash
 GATEKEEPER_ID=<gatekeeper-uuid>
 ```
 
-同样注册 `ragflow` 门（`--kind http`）——即使 §3 提到的真实 RAGFlow 凭证未配置，注册/导入/发布
-本身不发起对 RAGFlow 的调用，只调该门自己的 `/gate/describe_operations`：
+期望：`list_operations`（`{"gatekeeperId":"<gatekeeper-uuid>"}`）里 `containers.list`、
+`container.inspect`、`compose.ls`、`container.logs_tail`、`container.restart`、`compose.up`、
+`compose.down` 都是 `published`。实例还没公布任何 Operation（刚起服务、还没登记完）时启用会被拒，等
+`/gate/health` 通后几秒再试。
 
-```bash
-docker compose exec -T kernel node dist/cli/bootstrap.js register-gatekeeper \
-  --workspace "${WORKSPACE_ID}" --principal "${OWNER_ID}" \
-  --name ragflow --endpoint http://gatekeeper-ragflow:8083 --kind http --publish true
-```
+`ragflow` 门同样两步（`gateId` 换成 `gatekeeper-ragflow`）——即使 §3 提到的真实 RAGFlow 凭证未配置，
+登记 / 启用 / 发布本身不发起对 RAGFlow 的调用，只用该门自己公布的清单。
+
+**主机上用旧命令行注册过的门**：升级时 core 迁移 0045 把每个没有来源记录的 Gatekeeper 记成工作区自接
+（接入人留空，控制台显示「升级前接入，未记录接入人」）。它的地址若正是某个目录实例的地址，「自己接入
+的门」那一行会标出对应实例；owner 照上面第 2 步启用该实例，内核会直接认领这个已有的 Gatekeeper（不重复
+注册，审计 `gatekeeper.self_connection_linked`），它从此按目录实例的规则（接入包禁用名单、`vetted`、
+启用 / 禁用）运行。平台若已暂停这个自接门，启用会被拒（`409 self_connection_suspended`），先在「自己
+接入的门」里恢复。
 
 ## 6. `request_action(containers.list)` → observed `Container` facts
 
@@ -348,15 +360,22 @@ docker compose stop gatekeeper-docker gatekeeper-ragflow
 
 ## 10. S2.13：capability 驱动的连接流程（`request_connection` → `create_connection` → `connect_gatekeeper`）
 
-§5 用的 `bootstrap.js register-gatekeeper` 是主机操作员的命令行路径——直接对着已经跑起来的门容器
-操作，不经过任何用户/权限模型，适合"这台主机上先起服务、验证服务本身没问题"这类场景，本 runbook
-从 §2 到 §9 全程用的就是它。S2.13 落地的是**同一批底层函数**（`governance/gatekeepers` 的
-`registerGatekeeper`/`importManifest`/`publishOperation`）在**capability 层**的封装——`request_
-connection`/`create_connection`/`connect_gatekeeper`/`list_connection_requests`（`governance/
-connections`）——面向的是"某个用户（可能不是主机操作员本人）想通过对话或 web 的连接系统页接入一个
-系统，owner 审核并把它授权给该用户"这个场景，走的是 kernel 的 HTTP/WS capability 接口而不是主机
-上的 shell。两条路径背后是同一个 Gatekeeper 注册与清单导入实现，选哪条只取决于"谁在发起、经哪个
-入口"。
+§5 的目录路径接的是平台目录里的打包门；这里是**不在目录里**的门的接入路径——`request_connection`/
+`create_connection`/`connect_gatekeeper`/`list_connection_requests`（`governance/connections`），
+面向"某个用户想通过对话或 web 的连接系统页接入一个系统，owner 审核并把它授权给该用户"这个场景，走
+kernel 的 HTTP/WS capability 接口。它和 §5 背后是同一个落地函数（`application/gates/landing.ts`），
+区别只在来源：这里接入的 Gatekeeper 记作工作区自接，平台管理员可以在「集成 → 自己接入的门」里逐个
+暂停（暂停后它的每个 Operation 都被拒，观察也一样，并吊销仍在用它的入口 Handle）、再恢复。同一个
+工作区在同一个地址上已经有 Gatekeeper 时，`create_connection` 返回 `409 endpoint_already_connected`
+（`details.gatekeeperId` 和 `details.gatekeeperName` 指向已有的那个；控制台在地址字段下写出它的名字，并可以「在列表里找到」它的卡片），
+什么也不保存——要更新清单用「重新读取门的清单」，换密钥用
+`rotate_connection_secret`（控制台「系统与授权 → ⋯ →「重新签发连接密钥」」）。"同一地址"按归一化比较：
+scheme 与主机名不分大小写，主机名末尾的点、默认端口（http 80 / https 443 / ssh 22）、地址里的用户名密码、查询串和
+片段、路径末尾的斜杠都不算不同；中文等非 ASCII 主机名按 punycode 比较，路径里的 `%xx` 转义统一大小写
+（不必转义的字符按原字符比较）。数据库按同一规范写法再加一道唯一约束。
+平台在「自己接入的门」里只看到目标和门地址的协议、主机与端口，路径、参数等完整地址只在工作区自己的视图里。
+暂停只管这一条连接：同一个门换一个主机名或 IP 再接入，算一条新连接。要让工作区不能再自己接入某一类门，
+在「集成 → 接入包」里把对应接入包的模式从「自助」改掉。
 
 本节复用 §4 建好的 workspace/owner（`WORKSPACE_ID`/`OWNER_ID`/`OWNER_KEY`），并需要一个第二个用户
 （`member` 角色）——没有的话先用 `bootstrap.js add-principal` 建一个：
@@ -428,8 +447,8 @@ curl -s http://kernel:8080/api/cap/create_connection \
 # {"ok":true,"result":{"gatekeeperId":"<gk-uuid>","importedOperationNames":[...],"connectionRequestId":"<cr-uuid>"}}
 GATEKEEPER_ID_2=<gk-uuid>
 
-# 4. publish_manifest —— 一次性发布这份新导入的整份草稿清单（§5 的 register-gatekeeper --publish
-#    true 等价物；也可以用 meta 分组的 publish_operation 逐条发）。drafts 是先用 list_operations
+# 4. publish_manifest —— 一次性发布这份新导入的整份草稿清单（也可以用 meta 分组的 publish_operation
+#    逐条发；自接门的清单不会自动发布）。drafts 是先用 list_operations
 #    读到的草稿（name + draftDigest，#592 起必填）；读完之后草稿有变时 409 draft_changed，不发布任何草稿
 DRAFTS=$(curl -s http://kernel:8080/api/cap/list_operations \
   -H "Authorization: Bearer ${OWNER_KEY}" -H 'content-type: application/json' \
@@ -461,12 +480,12 @@ curl -s http://kernel:8080/api/cap/connect_gatekeeper \
 
 ## 11. `ragflow` 门——若本机有可用的 RAGFlow 实例
 
-§5 已注册并发布了 `ragflow` 门的清单（`kb.list kb.documents retrieve document.upload
+§5 已从目录启用并发布了 `ragflow` 门的清单（`kb.list kb.documents retrieve document.upload
 document.parse`）。若 `${NEXTTIME_DATA}/secrets/gatekeeper-ragflow.env` 已填入真实
 `RAGFLOW_BASE_URL`/`GATE_CREDENTIAL_RAGFLOW_API_KEY` 并重启过 `gatekeeper-ragflow`
 （`docker compose up -d --force-recreate gatekeeper-ragflow`，env_file 改动不会自动生效），可以
 同 §6 的方式跑 `request_action(kb.list)`，核对 `objects` 表出现 `object_type = 'KnowledgeBase'`
-的行。本机没有可用 RAGFlow 部署时，跳过本节，§3/§5 的服务可达性 + 清单注册/发布已经是 S2.5 对
+的行。本机没有可用 RAGFlow 部署时，跳过本节，§3/§5 的服务可达性 + 目录启用与清单发布已经是 S2.5 对
 `ragflow` 门的完整交付范围；`document.upload` 的真实文件上传 + `ontology/ops-assets-v2.yaml` 见
 §13（S3.4）。
 
@@ -514,14 +533,10 @@ docker compose logs --since 1m gatekeeper-ragflow | grep -ci 'NODE_TLS_REJECT_UN
 - **RAGFlow 的 `{code, data}` 错误信封对协议不可见**：一次 `code != 0` 的 RAGFlow 响应会被这个
   门当成`ok:true`（HTTP 200），`observedFacts` 为空——调用方需要自己检查 `data.code`/
   `data.message`。见 `gatekeepers/ragflow/README.md`。
-- **`register-gatekeeper` 与 S2.13 的 capability 流程并存，不是被取代**：`governance/gatekeepers`
-  （S2.4）提供 `registerGatekeeper`/`importManifest`/`publishOperation` 服务函数；S2.13 的
-  `governance/connections`（`request_connection`/`create_connection`/`connect_gatekeeper`，§10）
-  确实调用的是同一批函数，而不是重新实现——见 `governance/connections/service.ts`/
-  `governance/gatekeepers/registry.ts`/`manifest.ts` 的模块注释。`bootstrap.js
-  register-gatekeeper` 子命令没有被移除：它是主机操作员在 shell 里直接操作、不经过用户/Grant 模型
-  的路径，S2.13 的 capability 流程是面向终端用户、经 owner 审核与 `connect_gatekeeper` 显式授权
-  的路径——两者服务不同的角色，§10 开头一段有更完整的对比。
+- **`register-gatekeeper` 已移除（P0b）**：它曾与 S2.13 的 capability 流程并存，作为主机操作员不经
+  用户 / Grant 模型的 shell 路径。P0b 把接入收敛成一条落地路径（`application/gates/landing.ts`，静态
+  守卫测试保证它是 Gatekeeper 与来源记录的唯一写入者），打包门走目录（§5），其余门走工作区自接（§10）；
+  这个子命令现在只报用法错误。
 - **`compose.up`/`compose.down` 的 `await_decision` 未在 S2.5 派发文字里明确给出**：本次实现
   设为 `true`（与 `container.restart` 的显式 `false` 不同）——高影响半径的操作默认走同步等待
   批准的路径，更保守；`gatekeepers/docker/manifest.json`/`README.md` 已记录这个判断。

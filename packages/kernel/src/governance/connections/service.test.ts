@@ -1,21 +1,22 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { IllegalTransition, type Operation } from '@nexttime/shared';
+import { IllegalTransition } from '@nexttime/shared';
 import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { getGrant } from '../capability/index.js';
-import { getGatekeeper, getOperation } from '../gatekeepers/index.js';
+import { registerGatekeeper } from '../gatekeepers/index.js';
 import { ConnectionParamsCarryCredentialsError } from './credentials.js';
 import {
   GatekeeperNotFoundError,
   cancelConnectionRequest,
-  completeConnection,
+  claimConnectionRequest,
   connectGatekeeper,
   getConnectionRequest,
   listConnectionRequests,
+  markConnectionRequestCompleted,
   requestConnection,
 } from './service.js';
 import { ConnectionRequestNotFoundError } from './types.js';
@@ -24,29 +25,15 @@ import { ConnectionRequestNotFoundError } from './types.js';
  * governance/connections/service integration tests (real Postgres; auto-skip without
  * DATABASE_URL — same pattern as governance/gatekeepers/registry.test.ts). Covers the
  * ConnectionRequest state machine (`requested → completed`, I6) and `connectGatekeeper`'s Grant
- * shape; the fuller end-to-end (`create_connection` handler, credential redaction/never-persisted,
- * `find_operations` visibility) is application/gateway/connection-flow.integration.test.ts.
+ * shape. Registering the Gatekeeper itself is the landing's job (application/gates/landing.ts,
+ * `landing.integration.test.ts`); here it is a fixture. The fuller end-to-end (`create_connection`
+ * handler, credential redaction/never-persisted, `find_operations` visibility) is
+ * application/gateway/connection-flow.integration.test.ts.
  */
-
-/** R-01: the (non-secret) connection-secret salt `create_connection` hands `completeConnection`. */
-const TEST_SALT = 'd'.repeat(32);
 
 const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
 const DATABASE_URL = process.env.DATABASE_URL;
-
-const SAMPLE_OBSERVE_OP: Operation = {
-  name: 'stock.get',
-  binding: { kind: 'http', method: 'GET', path: '/stocks' },
-  params_schema: {},
-  mode: 'observe',
-  blast_radius: 'low',
-  reversibility: false,
-  auto_approvable: true,
-  await_decision: false,
-  reads: [],
-  writes: [],
-};
 
 describe.runIf(DATABASE_URL !== undefined)('governance/connections/service (integration)', () => {
   let pool: Pool;
@@ -99,6 +86,22 @@ describe.runIf(DATABASE_URL !== undefined)('governance/connections/service (inte
     });
   }
 
+  /** A registered Gatekeeper to resolve a card to / grant on — the landing does this in production. */
+  async function fixtureGatekeeper(name: string): Promise<string> {
+    const act = await activityId();
+    const { gatekeeperId } = await inTx((client) =>
+      registerGatekeeper(client, workspaceId, {
+        name,
+        transportKind: 'http',
+        target: name,
+        endpoint: `https://${name}.example.invalid`,
+        activityId: act,
+        registeredBy: { id: ownerId, kind: 'human' },
+      }),
+    );
+    return gatekeeperId;
+  }
+
   beforeAll(async () => {
     pool = createPool();
     await runMigrations(pool, MIGRATIONS_DIR);
@@ -128,35 +131,7 @@ describe.runIf(DATABASE_URL !== undefined)('governance/connections/service (inte
     expect(reread).toEqual(row);
   });
 
-  it('completeConnection with no connectionRequestId registers the gate and imports drafts (owner-direct path)', async () => {
-    const act = await activityId();
-    const result = await inTx((client) =>
-      completeConnection(client, workspaceId, {
-        kind: 'http',
-        target: 'example-system',
-        endpoint: 'https://gate.example.invalid',
-        connectionSecretSalt: TEST_SALT,
-        operations: [SAMPLE_OBSERVE_OP],
-        activityId: act,
-        completedBy: { id: ownerId, kind: 'human' },
-      }),
-    );
-    expect(result.connectionRequest).toBeNull();
-    expect(result.importedOperationNames).toEqual(['stock.get']);
-
-    const gate = await inTx((client) => getGatekeeper(client, workspaceId, result.gatekeeperId));
-    expect(gate?.endpoint).toBe('https://gate.example.invalid');
-    expect(gate?.connectionSecretSalt).toBe(TEST_SALT);
-
-    const operation = await inTx((client) =>
-      getOperation(client, workspaceId, result.gatekeeperId, 'stock.get'),
-    );
-    // I17: freshly imported Operations are always drafts, regardless of what the transport
-    // suggested for SAMPLE_OBSERVE_OP's own auto_approvable/mode fields.
-    expect(operation?.status).toBe('draft');
-  });
-
-  it('completeConnection with a connectionRequestId transitions requested → completed (I6), and a second call is IllegalTransition', async () => {
+  it('claim + mark resolve a card requested → completed (I6), naming the Gatekeeper; a second claim is IllegalTransition', async () => {
     const requested = await inTx((client) =>
       requestConnection(client, workspaceId, {
         kind: 'http',
@@ -164,57 +139,30 @@ describe.runIf(DATABASE_URL !== undefined)('governance/connections/service (inte
         requestedBy: { id: memberId, kind: 'human' },
       }),
     );
+    const gatekeeperId = await fixtureGatekeeper('example-system-2');
 
-    const act = await activityId();
-    const result = await inTx((client) =>
-      completeConnection(client, workspaceId, {
+    const completed = await inTx(async (client) => {
+      const claimed = await claimConnectionRequest(client, workspaceId, requested.id);
+      expect(claimed.status).toBe('requested');
+      return markConnectionRequestCompleted(client, workspaceId, {
         connectionRequestId: requested.id,
-        kind: 'http',
-        target: 'example-system-2',
-        endpoint: 'https://gate-2.example.invalid',
-        connectionSecretSalt: TEST_SALT,
-        operations: [],
-        activityId: act,
-        completedBy: { id: ownerId, kind: 'human' },
-      }),
-    );
-    expect(result.connectionRequest?.status).toBe('completed');
-    expect(result.connectionRequest?.gatekeeperId).toBe(result.gatekeeperId);
-    expect(result.connectionRequest?.completedBy).toBe(ownerId);
-    expect(result.connectionRequest?.completedAt).not.toBeNull();
+        gatekeeperId,
+        completedBy: ownerId,
+      });
+    });
+    expect(completed.status).toBe('completed');
+    expect(completed.gatekeeperId).toBe(gatekeeperId);
+    expect(completed.completedBy).toBe(ownerId);
+    expect(completed.completedAt).not.toBeNull();
 
-    const act2 = await activityId();
     await expect(
-      inTx((client) =>
-        completeConnection(client, workspaceId, {
-          connectionRequestId: requested.id,
-          kind: 'http',
-          target: 'example-system-2',
-          endpoint: 'https://gate-2.example.invalid',
-          connectionSecretSalt: TEST_SALT,
-          operations: [],
-          activityId: act2,
-          completedBy: { id: ownerId, kind: 'human' },
-        }),
-      ),
+      inTx((client) => claimConnectionRequest(client, workspaceId, requested.id)),
     ).rejects.toBeInstanceOf(IllegalTransition);
   });
 
-  it('completeConnection with an unknown connectionRequestId throws ConnectionRequestNotFoundError', async () => {
-    const act = await activityId();
+  it('claimConnectionRequest with an unknown id throws ConnectionRequestNotFoundError', async () => {
     await expect(
-      inTx((client) =>
-        completeConnection(client, workspaceId, {
-          connectionRequestId: randomUUID(),
-          kind: 'http',
-          target: 'x',
-          endpoint: 'https://gate.example.invalid',
-          connectionSecretSalt: TEST_SALT,
-          operations: [],
-          activityId: act,
-          completedBy: { id: ownerId, kind: 'human' },
-        }),
-      ),
+      inTx((client) => claimConnectionRequest(client, workspaceId, randomUUID())),
     ).rejects.toThrow(/ConnectionRequest not found/);
   });
 
@@ -232,18 +180,7 @@ describe.runIf(DATABASE_URL !== undefined)('governance/connections/service (inte
   });
 
   it('connectGatekeeper writes a CapabilityGrant scoped to one gatekeeperId', async () => {
-    const act = await activityId();
-    const { gatekeeperId } = await inTx((client) =>
-      completeConnection(client, workspaceId, {
-        kind: 'http',
-        target: 'example-system-3',
-        endpoint: 'https://gate-3.example.invalid',
-        connectionSecretSalt: TEST_SALT,
-        operations: [],
-        activityId: act,
-        completedBy: { id: ownerId, kind: 'human' },
-      }),
-    );
+    const gatekeeperId = await fixtureGatekeeper('example-system-3');
 
     const grant = await inTx((client) =>
       connectGatekeeper(client, workspaceId, {

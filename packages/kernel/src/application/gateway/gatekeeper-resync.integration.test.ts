@@ -167,9 +167,11 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
     }
 
-    /** A new self-connected gate: its own connection secret (one per connection, R-01). */
+    /** A new self-connected gate: its own connection secret (one per connection, R-01) and its own
+     *  address (P0b: one Gatekeeper per address in a workspace). */
     async function startNewGate(manifest: readonly Operation[]): Promise<void> {
       connectionSecret = CONNECTION_SECRETS.mint(workspaceId).secret;
+      gatePort = 0;
       await startGate(manifest);
     }
 

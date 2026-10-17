@@ -55,6 +55,7 @@ describe('formatScrubReport', () => {
       turnReports: counts(2, 3),
       decisions: counts(1, 1),
       toolCallRecords: counts(4, 5, 1),
+      selfConnectionAddresses: counts(0),
       taskInputs: { ...counts(1), examples: [{ workspaceId: 'ws-1', id: 'task-1' }] },
       connectionTargets: counts(0),
       gatekeeperAddresses: counts(0),
