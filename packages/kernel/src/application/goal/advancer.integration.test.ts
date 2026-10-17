@@ -1730,6 +1730,76 @@ describe.runIf(DATABASE_URL !== undefined)(
         await expect(resume(['only'])).rejects.toThrow(/steps are retried on resume/);
       });
 
+      it('legacy 393: a run that can only go on once a person retries a failed step pauses needs_decision at once — a resume that names no failed step comes back to it, a branch still moving keeps the run going until it stops', async () => {
+        const requester = await newPrincipal();
+        const goalRunId = await startGoal(requester, [
+          { key: 'a' },
+          { key: 'b' },
+          { key: 'c', dependsOn: ['a'] },
+        ]);
+        await advance(goalRunId, requester);
+        const first = await stepsOf(goalRunId);
+        const stepA = first.a as StepRunRow;
+        const stepB = first.b as StepRunRow;
+        await failStep(stepA.id, requester, 'no_result');
+        await advance(goalRunId, requester);
+        expect(await goalOf(goalRunId)).toMatchObject({
+          status: 'paused',
+          pauseReason: 'needs_decision',
+        });
+        expect((await stepsOf(goalRunId)).a).toMatchObject({
+          status: 'failed',
+          failureCategory: 'contract_violation',
+        });
+        const resume = (retrySteps?: readonly string[]) =>
+          asRequester(requester, (client) =>
+            resumeGoalRun(client, workspaceId, {
+              goalRunId,
+              actor: by(requester),
+              ...(retrySteps ? { retrySteps } : {}),
+            }),
+          );
+        const stuck =
+          'step a: attempt 1 failed (contract_violation) and is not retried on its own; retry it, revise the plan or cancel';
+        const lastPause = async () =>
+          (await goalAudit(goalRunId)).filter((row) => row.action === 'goal_run.pause').at(-1)
+            ?.payload;
+
+        // Resumed without retrying a: b still runs, so the run goes on.
+        await resume();
+        expect((await advance(goalRunId, requester)).status).toBe('running');
+        expect((await stepsOf(goalRunId)).b?.status).toBe('running');
+
+        // b ends: nothing moves on its own any more — the run pauses now, not at its wall clock.
+        await completeStep(stepB.id, requester);
+        const stopped = await advance(goalRunId, requester);
+        expect(stopped).toMatchObject({ status: 'paused', nextTickAt: null });
+        expect(await goalOf(goalRunId)).toMatchObject({
+          status: 'paused',
+          pauseReason: 'needs_decision',
+        });
+        expect(await lastPause()).toMatchObject({ reason: 'needs_decision', detail: stuck });
+        expect((await stepsOf(goalRunId)).b?.status).toBe('succeeded');
+
+        // Resumed again naming nothing: the next advance pauses it again, nothing starts.
+        await resume();
+        expect(await advance(goalRunId, requester)).toMatchObject({
+          status: 'paused',
+          startedTaskIds: [],
+          nextTickAt: null,
+        });
+        expect(await lastPause()).toMatchObject({ detail: stuck });
+        expect(await attemptTasks(stepA.id)).toHaveLength(1);
+
+        // Naming a: it runs again, and the run is not stuck while it does.
+        expect(await resume(['a'])).toMatchObject({ retriedStepRunIds: [stepA.id] });
+        expect(await advance(goalRunId, requester)).toMatchObject({ status: 'running' });
+        expect((await stepsOf(goalRunId)).a).toMatchObject({ status: 'running', attemptCount: 2 });
+        await completeStep(stepA.id, requester);
+        await advance(goalRunId, requester);
+        expect((await stepsOf(goalRunId)).c?.status).toBe('running');
+      });
+
       it('S7: a cancel withdraws what has not run, in its own transaction; the gate drains the next goal’s action at once; the running Task is terminated', async () => {
         const requester = await newPrincipal();
         const goalRunId = await startGoal(requester, [
@@ -3306,6 +3376,26 @@ describe.runIf(DATABASE_URL !== undefined)(
               }),
             );
           await expect(retry()).rejects.toThrow(/found to have no effect/);
+          // Resumed without a retry (legacy 393): nothing of the run moves, so the next advance
+          // pauses it again at once, saying what it waits for — the decision before a retry.
+          const resumeOnly = () =>
+            asRequester(requester, (client) =>
+              resumeGoalRun(client, workspaceId, { goalRunId, actor: by(requester) }),
+            );
+          const lastPause = async () =>
+            (await goalAudit(goalRunId)).filter((row) => row.action === 'goal_run.pause').at(-1)
+              ?.payload;
+          await resumeOnly();
+          expect(await advance(goalRunId, requester)).toMatchObject({
+            status: 'paused',
+            nextTickAt: null,
+          });
+          expect(await goalOf(goalRunId)).toMatchObject({ pauseReason: 'needs_decision' });
+          expect(await lastPause()).toMatchObject({
+            reason: 'needs_decision',
+            detail:
+              'step only: an action of it was found to have no effect and is not run again on its own; decide to run it again and retry the step, revise the plan or cancel',
+          });
           await expect(
             reconcileAs(goalRunId, first, ownerId, { reexecute: true }),
           ).rejects.toBeInstanceOf(ActionReconciliationForbiddenError);
@@ -3315,6 +3405,14 @@ describe.runIf(DATABASE_URL !== undefined)(
           // Paused for a decision: nothing runs until the requester resumes.
           await advance(goalRunId, requester);
           expect((await goalOf(goalRunId)).status).toBe('paused');
+          expect(await attemptTasks(step.id)).toHaveLength(1);
+          // Decided, but resumed without naming the step: paused again, now sent to the retry.
+          await resumeOnly();
+          await advance(goalRunId, requester);
+          expect(await lastPause()).toMatchObject({
+            detail:
+              'step only: attempt 1 failed (outcome_unknown) and is not retried on its own; retry it, revise the plan or cancel',
+          });
           expect(await attemptTasks(step.id)).toHaveLength(1);
           expect(await retry()).toMatchObject({ status: 'running', retriedStepRunIds: [step.id] });
           await advance(goalRunId, requester);

@@ -41,7 +41,9 @@ import type { GoalRunRow, StepRunRow } from './types.js';
  *     to `ready` — the "person's decision" retry of the StepRun table, past the attempt limit too —
  *     each only with no request of the step still in flight (I-G4), none of its Tasks — the
  *     attempt's nested child Tasks included — still running, and still part of the current plan
- *     (I-G2).
+ *     (I-G2). A failed step it does not name stays failed: once nothing else of the run moves, the
+ *     advance pauses it `needs_decision` again (legacy 393, `advance.ts` phase E) rather than let
+ *     it wait for its wall clock.
  *   - {@link cancelGoalRun}: `running | paused | verifying → cancelling`, due at once. In the same
  *     transaction every step not yet ended is `cancelled` and every request of the run's steps that
  *     has not started is `withdrawn` (I-G9) — read under its row lock, so one the drainer started
