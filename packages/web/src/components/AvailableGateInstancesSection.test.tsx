@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { AvailableGateInstanceWire } from '@nexttime/shared';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CapabilityListResult } from '../hooks/useCapability.js';
 import type { CapabilityCaller } from '../lib/clients.js';
@@ -166,5 +166,40 @@ describe('AvailableGateInstancesSection — a platform instance this workspace h
     await waitFor(() => expect(screen.getByTestId('available-gates-table')).toBeTruthy());
     expect(call.mock.calls.map(([name]) => name)).not.toContain('list_gate_instances');
     expect(screen.queryByTestId('available-gates-hidden')).toBeNull();
+  });
+
+  it('legacy 388: at phone width each instance is a card — what this workspace can do with it sits in the card header, the rest under it', () => {
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn(() => ({
+        matches: true,
+        media: '',
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    try {
+      render(
+        <AvailableGateInstancesSection
+          http={{ call: vi.fn() } as unknown as CapabilityCaller}
+          available={ready([
+            ROW,
+            { ...ROW, gateId: 'docker-prod', displayName: 'Docker prod', gatekeeperId: 'gk-1' },
+          ])}
+          onEnabled={vi.fn()}
+          canEnable
+        />,
+      );
+      expect(screen.getByTestId('available-gates-table').tagName).toBe('UL');
+      const row = screen.getByTestId('available-gate-ci-fixture-mcp');
+      expect(row.tagName).toBe('LI');
+      expect(within(row).getByTestId('enable-gate-ci-fixture-mcp')).toBeTruthy();
+      expect(within(row).getByText('平台状态')).toBeTruthy();
+      // No 本工作区 header over it on a card, and 平台状态 also reads 已启用: the link says whose.
+      const linked = screen.getByTestId('available-gate-docker-prod');
+      expect(within(linked).getByRole('link', { name: '本工作区已启用' })).toBeTruthy();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

@@ -351,7 +351,7 @@ test.describe('P-B2a acceptance: a generic mcp gate-host instance, end to end', 
     await expect(modeSelect).toHaveValue('platform_preset', { timeout: 15_000 });
 
     // --- 系统与授权 Systems & access: enable it from the platform catalog (idempotent — a retry
-    //     that already enabled it just finds the "已启用 Enabled" link with no button left). ---
+    //     that already enabled it just finds the "本工作区已启用 Enabled here" link with no button left). ---
     await page.getByTestId('nav-systems').click();
     await expect(page.getByRole('heading', { name: '系统与授权' })).toBeVisible({
       timeout: 15_000,

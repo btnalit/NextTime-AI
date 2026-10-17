@@ -260,7 +260,7 @@ export function DataTable<T>({
                   ))}
                 </div>
                 {high.length > 0 ? (
-                  <div className="flex shrink-0 flex-wrap items-center gap-2">
+                  <div className="flex max-w-full shrink-0 flex-wrap items-center gap-2">
                     {high.map((col) => (
                       <span key={col.id} className={col.cellClassName}>
                         {col.cell(row)}
