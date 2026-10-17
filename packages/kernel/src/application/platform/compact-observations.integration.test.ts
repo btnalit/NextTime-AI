@@ -6,6 +6,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import {
+  ensureReconcileCheck,
+  readReconcileChecks,
+  settleReconcileCheck,
+} from '../../governance/approval/index.js';
+import {
   explain,
   listSourceFreshness,
   registerSource,
@@ -613,6 +618,155 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(retired.rows.map((r) => r.service_name).sort()).toEqual(['c', 'legacy']);
       expect(retired.rows.find((r) => r.service_name === 'legacy')?.id).toBe(legacyFactId);
       for (const row of retired.rows) expect(row.invalidation_reason).toBe('not_reobserved');
+    });
+  },
+);
+
+/**
+ * S11 GO3d (governance/0024): `action_request_reconcile_checks.observation_id` is a foreign key into
+ * `observations`. A compaction that did not know it would refuse to run (the previous release's
+ * does — `reversibility-deltas.json`); this one runs, and condition (a) alone keeps the Observation a
+ * check settled on. The evidence row here is an ingest marker (`content = '{}'`) on purpose: a real
+ * check's evidence carries a payload, which (d) keeps too, so only a marker shows that (a) holds.
+ */
+describe.runIf(DATABASE_URL !== undefined)(
+  'compactObservations and a platform reconcile check (integration, real Postgres) — S11 GO3d',
+  () => {
+    let pool: Pool;
+    const workspaceId = randomUUID();
+    const ownerId = randomUUID();
+    const DAY_SECONDS = 24 * 60 * 60;
+
+    const asLogin = <T>(fn: (client: PoolClient) => Promise<T>): Promise<T> =>
+      withWorkspace(pool, { workspaceId, principalId: ownerId }, fn, { skipRoleSwitch: true });
+    /** Fixture rows the goal's guards would only let the advancer write (the GO2 suites' way). */
+    const raw = <T>(sql: string, params: readonly unknown[]): Promise<T[]> =>
+      asLogin(async (client) => {
+        await client.query('set local session_replication_role = replica');
+        return (await client.query(sql, [...params])).rows as T[];
+      });
+
+    beforeAll(async () => {
+      pool = createPool();
+      await runMigrations(pool, MIGRATIONS_DIR);
+      await asLogin(async (client) => {
+        await client.query('insert into workspaces (id, name) values ($1, $2)', [
+          workspaceId,
+          `compact-reconcile-${workspaceId.slice(0, 8)}`,
+        ]);
+        await client.query(
+          `insert into principals (workspace_id, id, kind, role, display_name)
+           values ($1, $2, 'human', 'owner', 'owner')`,
+          [workspaceId, ownerId],
+        );
+      });
+    });
+
+    afterAll(async () => {
+      await pool.end();
+    });
+
+    it('runs on a schema where a reconcile check references an Observation, and never deletes the one the check settled on', async () => {
+      const { sourceId, activityId, laterActivityId } = await asLogin(async (client) => {
+        const source = await registerSource(client, workspaceId, {
+          kind: 'test.compact-reconcile',
+          ownerPrincipalId: ownerId,
+          visibility: 'workspace',
+        });
+        const activity = await startActivity(client, workspaceId, {
+          kind: 'test.compact-reconcile',
+          principalId: ownerId,
+        });
+        const later = await startActivity(client, workspaceId, {
+          kind: 'test.compact-reconcile',
+          principalId: ownerId,
+        });
+        return { sourceId: source.id, activityId: activity.id, laterActivityId: later.id };
+      });
+      const observe = async (activity: string, offsetSeconds: number) =>
+        (
+          await raw<{ id: string }>(
+            `insert into observations (workspace_id, source_id, activity_id, content, created_at)
+             values ($1, $2, $3, '{}', now() + make_interval(secs => $4)) returning id`,
+            [workspaceId, sourceId, activity, offsetSeconds],
+          )
+        )[0]?.id as string;
+      // One (activity, source) group of three old markers — the oldest is the check's evidence —
+      // and the Source's newest row on another Activity, so (b) keeps none of the three.
+      const evidence = await observe(activityId, -40 * DAY_SECONDS - 30);
+      const older = await observe(activityId, -40 * DAY_SECONDS - 20);
+      const old = await observe(activityId, -40 * DAY_SECONDS - 10);
+      const newest = await observe(laterActivityId, 0);
+
+      const [goal] = await raw<{ id: string }>(
+        `insert into goal_runs (workspace_id, status, on_behalf_of, statement, current_revision,
+           confirmed_at, budget_max_tokens, budget_max_steps, budget_max_revisions,
+           budget_max_wall_clock_seconds)
+         values ($1, 'running', $2, 'a goal', 1, now(), 100000, 10, 5, 3600) returning id`,
+        [workspaceId, ownerId],
+      );
+      await raw(
+        `insert into plan_revisions (workspace_id, goal_run_id, revision, status, plan, proposed_by,
+           decided_by, decided_at)
+         values ($1, $2, 1, 'accepted', '{"steps":[{"key":"s"}]}', $3, $3, now())`,
+        [workspaceId, goal?.id, ownerId],
+      );
+      const [step] = await raw<{ id: string }>(
+        `insert into step_runs (workspace_id, goal_run_id, step_key, introduced_in_revision, status,
+           waiting_reason, attempt_count)
+         values ($1, $2, 's', 1, 'waiting', 'reconcile', 1) returning id`,
+        [workspaceId, goal?.id],
+      );
+      const [request] = await raw<{ id: string }>(
+        `insert into action_requests (workspace_id, status, gatekeeper_id, action_kind, blast_radius,
+           policy_decision, await_decision, on_behalf_of, actor_runtime, requested_at, failed_at,
+           step_run_id, failure_kind)
+         values ($1, 'failed', $2, 'test.compact.action', 'low', 'allow', false, $3, 'pi', now(),
+           now(), $4, 'outcome_unknown')
+         returning id`,
+        [workspaceId, randomUUID(), ownerId, step?.id],
+      );
+      const actionRequestId = request?.id as string;
+      // The check itself through the module that owns it, under its guard.
+      await asLogin(async (client) => {
+        const check = await ensureReconcileCheck(client, workspaceId, {
+          actionRequestId,
+          observationCheck: {
+            gatekeeperId: randomUUID(),
+            operation: 'svc.status',
+            expect: { path: 'state', op: 'eq', value: 'running' },
+          },
+        });
+        await settleReconcileCheck(
+          client,
+          workspaceId,
+          check,
+          { status: 'not_seen', observationId: evidence },
+          { actorPrincipalId: ownerId, stepRunId: step?.id ?? null },
+        );
+      });
+
+      const dryRun = await compactObservations(pool, { confirm: false, workspaceId });
+      const dry = dryRun.workspaces.find((w) => w.workspaceId === workspaceId);
+      expect(dry).toMatchObject({ examined: 3, keptReferenced: 1, deleted: 2 });
+
+      const executed = await compactObservations(pool, { confirm: true, workspaceId });
+      expect(executed.workspaces.find((w) => w.workspaceId === workspaceId)).toMatchObject({
+        examined: 3,
+        keptReferenced: 1,
+        deleted: 2,
+      });
+      const left = await asLogin((client) =>
+        client.query<{ id: string }>(
+          'select id from observations where workspace_id = $1 and id = any($2::uuid[])',
+          [workspaceId, [evidence, older, old, newest]],
+        ),
+      );
+      expect(new Set(left.rows.map((row) => row.id))).toEqual(new Set([evidence, newest]));
+      const check = (
+        await asLogin((client) => readReconcileChecks(client, workspaceId, [actionRequestId]))
+      ).get(actionRequestId);
+      expect(check).toMatchObject({ status: 'not_seen', observationId: evidence });
     });
   },
 );
