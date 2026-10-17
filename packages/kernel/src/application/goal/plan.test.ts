@@ -113,6 +113,54 @@ describe('parsePlan', () => {
   });
 });
 
+describe('parsePlan — reconcile declarations (S11 GO3d)', () => {
+  const gate = randomUUID();
+  const declaration = (expect: unknown = { path: 'state', op: 'eq', value: 'running' }) => ({
+    action: { gatekeeperId: gate, operation: 'svc.restart', params: { name: 'web', zone: 'a' } },
+    check: { gatekeeperId: gate, operation: 'svc.status', params: { name: 'web' }, expect },
+  });
+
+  it('accepts declarations that name an action and a predicate over an observation', () => {
+    const other = {
+      ...declaration(),
+      action: { gatekeeperId: gate, operation: 'svc.reload' },
+    };
+    const plan = parsePlan({ steps: [step('a', { reconcile: [declaration(), other] })] });
+    expect(plan.steps[0]?.reconcile).toHaveLength(2);
+  });
+
+  it('refuses an empty list, unknown fields, a missing predicate and the same action twice', () => {
+    expect(problemsOf({ steps: [step('a', { reconcile: [] })] })).toHaveLength(1);
+    expect(
+      problemsOf({ steps: [step('a', { reconcile: [{ ...declaration(), mode: 'auto' }] })] }),
+    ).toHaveLength(1);
+    const { expect: _missing, ...noPredicate } = declaration().check;
+    expect(
+      problemsOf({ steps: [step('a', { reconcile: [{ ...declaration(), check: noPredicate }] })] }),
+    ).toHaveLength(1);
+    // The same identity, params in another order: one declaration per action.
+    const reordered = {
+      ...declaration(),
+      action: { gatekeeperId: gate, operation: 'svc.restart', params: { zone: 'a', name: 'web' } },
+    };
+    expect(problemsOf({ steps: [step('a', { reconcile: [declaration(), reordered] })] })).toEqual([
+      'step "a": reconcile[1]: declares the same action as reconcile[0]',
+    ]);
+  });
+
+  it('refuses a predicate the lint refuses, naming the step and the declaration', () => {
+    const [always] = problemsOf({
+      steps: [step('a', { reconcile: [declaration({ not: { path: 'error', op: 'exists' } })] })],
+    });
+    expect(always).toMatch(/^step "a": reconcile\[0\]: the predicate holds on /);
+    expect(
+      problemsOf({
+        steps: [step('a', { reconcile: [declaration({ path: '`1`', op: 'eq', value: 1 })] })],
+      }),
+    ).toEqual(['step "a": reconcile[0]: path "`1`" reads nothing from the observation\'s result']);
+  });
+});
+
 describe('planStep and samePlanEntry', () => {
   const plan = { steps: [step('a', { input: { n: 1 } }), step('b', { dependsOn: ['a'] })] };
 

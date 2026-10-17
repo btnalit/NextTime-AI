@@ -14,7 +14,10 @@
  * share (`moves.ts`). GO3b adds an owner's hold (`control.ts`), revising a paused run's plan
  * (`revise.ts`) and pausing a run whose advances keep failing (`advancer.ts`, legacy 356). GO3c adds
  * a person settling an action whose outcome is unknown (`reconcile.ts`: a finding, a re-execute)
- * and the step-scoped identity of a step's requests (I-G4, in `governance/approval`).
+ * and the step-scoped identity of a step's requests (I-G4, in `governance/approval`). GO3d adds the
+ * platform's own check of such an action, declared by its step (`plan.ts` `reconcile`; the
+ * observation and its predicate run by `reconcile-check.ts`, the predicate judged in
+ * `substrate/epistemic`).
  *
  * Boundaries: it lives in `application` because the advancer creates Tasks (`application/task`) and
  * withdraws ActionRequests (`governance/approval`) in the transaction that moves a StepRun.
@@ -108,6 +111,23 @@ export {
   listGoalRunUnresolvedActions,
   reconcileGoalAction,
 } from './reconcile.js';
+
+export {
+  DEFAULT_RECONCILE_CHECK_BATCH,
+  DEFAULT_RECONCILE_CHECK_INTERVAL_MS,
+  DEFAULT_RECONCILE_CHECK_LEASE_MS,
+  DEFAULT_RECONCILE_CHECK_MAX_ATTEMPTS,
+  type DueReconcileCheck,
+  RECONCILE_RESULT_MAX_CHARS,
+  type ReconcileCheckDeps,
+  type ReconcileCheckOptions,
+  type ReconcileCheckOutcome,
+  type ReconcileCheckTickOptions,
+  defaultReconcileCheckBackoffMs,
+  listDueReconcileChecks,
+  runReconcileCheck,
+  runReconcileCheckTick,
+} from './reconcile-check.js';
 
 export {
   ADVANCED_GOAL_RUN_STATUSES,

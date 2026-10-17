@@ -23,13 +23,15 @@ import {
 /** One request of a StepRun, as the advancer splits on it: its status and, when it failed, its
  *  `failure_kind` — never the reason text (that stays in the audit payload, for people). S11 GO3c:
  *  and, on one whose outcome was unknown, what was found (`reconciliation`) and whether its
- *  requester decided to run it again (`reexecuted`, governance/0023). */
+ *  requester decided to run it again (`reexecuted`, governance/0023). S11 GO3d: and its business
+ *  identity (`idempotencyKey`, I-G4), which a step's reconcile declaration is matched against. */
 export interface StepActionOutcome {
   readonly id: string;
   readonly status: ActionRequestStatus;
   readonly failureKind: ActionRequestFailureKind | null;
   readonly reconciliation: ActionRequestReconciliation | null;
   readonly reexecuted: boolean;
+  readonly idempotencyKey: string | null;
 }
 
 /** Every request raised in `stepRunId` (`action_requests.step_run_id`, governance/0022), oldest
@@ -54,9 +56,10 @@ export async function listStepActionOutcomes(
     failure_kind: ActionRequestFailureKind | null;
     reconciliation: ActionRequestReconciliation | null;
     reexecuted: boolean;
+    idempotency_key: string | null;
   }>(
     `select a.id, a.status, a.failure_kind, a.reconciliation,
-            a.reexecute_decision_id is not null as reexecuted
+            a.reexecute_decision_id is not null as reexecuted, a.idempotency_key
        from action_requests a
      where a.workspace_id = $1 and a.step_run_id = $2
        and ($3::uuid[] is null or a.parent_worker_run_id = any($3::uuid[]))
@@ -78,6 +81,7 @@ export async function listStepActionOutcomes(
     failureKind: row.failure_kind,
     reconciliation: row.reconciliation,
     reexecuted: row.reexecuted,
+    idempotencyKey: row.idempotency_key,
   }));
 }
 
