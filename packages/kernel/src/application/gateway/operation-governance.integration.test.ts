@@ -202,7 +202,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           client,
           {
             gateId,
-            connector: 'http',
+            connector: 'fixture-http',
             transportKind: 'http',
             endpoint: `https://gate-${randomUUID()}.example.invalid`,
             operations: [...announcedOperations],
@@ -330,7 +330,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             client,
             {
               gateId: `unlinked-instance-${randomUUID().slice(0, 8)}`,
-              connector: 'http',
+              connector: 'fixture-http',
               transportKind: 'http',
               endpoint,
               operations: [testOperation()],
@@ -379,7 +379,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             client,
             {
               gateId,
-              connector: 'http',
+              connector: 'fixture-http',
               transportKind: 'http',
               endpoint: `https://gate-${randomUUID()}.example.invalid`,
               operations: [{ ...op, blast_radius: 'low', auto_approvable: true }],

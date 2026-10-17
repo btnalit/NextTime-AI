@@ -1,4 +1,9 @@
-import type { GateInstanceWire } from '@nexttime/shared';
+import {
+  CONNECTOR_NAME_PATTERN,
+  type ConnectorWire,
+  type GateInstanceWire,
+  isGenericConnector,
+} from '@nexttime/shared';
 import { type FormEvent, useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { presentError } from '../../lib/errors.js';
@@ -11,13 +16,16 @@ import {
   withDefaultScheme,
 } from '../../lib/gate-input.js';
 import { HttpError } from '../../lib/http-client.js';
-import { useT } from '../../lib/i18n.js';
+import { type Translate, useT } from '../../lib/i18n.js';
+import { connectorModeLabel } from '../../lib/labels.js';
 import { GATE_ID_PATTERN } from '../../lib/platform-errors.js';
 import { ErrorDetails } from '../kit/error-details.js';
 import { StillNeeded } from '../kit/still-needed.js';
 import { Button } from '../ui/Button.js';
 import { Field, Input } from '../ui/Field.js';
+import { Notice } from '../ui/Notice.js';
 import { PlatformError } from './PlatformError.js';
+import { useConnectorsByName } from './integrations/connector-visibility.js';
 
 export interface CreateGateInstanceFormProps {
   readonly http: CapabilityCaller;
@@ -27,6 +35,47 @@ export interface CreateGateInstanceFormProps {
 
 type TransportKind = 'http' | 'mcp';
 type CredentialMode = 'shared' | 'connected_account';
+/** Where the instance is filed (P1): a connector named after its system, or the generic one of its
+ *  kind (`http` / `mcp`) — whose mode also decides whether workspaces connect that kind themselves. */
+type ConnectorChoice = 'system' | 'generic';
+
+/** Why the system connector name cannot be used, said on the field — `null` when it can. Mirrors
+ *  `create_gate_instance`'s refusals (`connector_kind_mismatch`, `connector_packaged`) against the
+ *  `list_connectors` the form read (`null` while that loads or when it cannot be read: the kernel
+ *  still decides). */
+function connectorNameProblem(
+  name: string,
+  kind: TransportKind,
+  connectors: ReadonlyMap<string, ConnectorWire> | null,
+  t: Translate,
+): string | null {
+  if (!CONNECTOR_NAME_PATTERN.test(name)) {
+    return t(
+      '最多 64 位小写字母、数字或连字符，以字母或数字开头，例如 billing。',
+      'Up to 64 lowercase letters, digits or hyphens, starting with a letter or digit, e.g. billing.',
+    );
+  }
+  if (isGenericConnector(name)) {
+    return t(
+      `「${name}」是通用接入包的名字。要用通用接入包，选下面「通用接入包」；否则换一个名字。`,
+      `"${name}" is the name of a generic connector. To use it, choose "Generic connector" below; otherwise pick another name.`,
+    );
+  }
+  const existing = connectors?.get(name);
+  if (existing?.packaged) {
+    return t(
+      `「${name}」属于一个打包的门，放不了门宿主实例，换一个名字。`,
+      `"${name}" belongs to a packaged gate and cannot hold a gate-host instance — pick another name.`,
+    );
+  }
+  if (existing && existing.kind !== kind) {
+    return t(
+      `「${name}」是 ${existing.kind} 接入包，放不了 ${kind} 实例，换一个名字。`,
+      `"${name}" is an ${existing.kind} connector and cannot hold an ${kind} instance — pick another name.`,
+    );
+  }
+  return null;
+}
 
 /** A `credentials_in_connection_params` refusal (review of #549): the field `details.field` names,
  *  shown on that field rather than in the banner. */
@@ -74,9 +123,15 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
   const [credentialMode, setCredentialMode] = useState<CredentialMode>('shared');
   const [manifestSource, setManifestSource] = useState('');
   const [manifestSchemeAdded, setManifestSchemeAdded] = useState(false);
+  const [connectorChoice, setConnectorChoice] = useState<ConnectorChoice>('system');
+  const [connectorInput, setConnectorInput] = useState('');
+  /** `true` once the administrator typed (or picked) a connector name; clearing it resumes
+   *  derivation from the gate id. */
+  const [connectorEdited, setConnectorEdited] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
   const [refusal, setRefusal] = useState<AddressRefusal | null>(null);
+  const connectors = useConnectorsByName(http);
 
   const idFromName = deriveGateId(displayName);
   const derivedGateId = idFromName || gateIdFromTarget(target);
@@ -96,7 +151,36 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
   const manifestSourceValid =
     transportKind !== 'http' || (manifestValue.length > 0 && isAbsoluteUrl(manifestValue));
   const suggestedManifest = targetValid ? suggestedManifestSource(targetValue) : '';
-  const ready = gateIdValid && targetValid && manifestSourceValid && !submitting;
+
+  // P1: by default the instance gets a connector of its own, named after the gate id, so putting
+  // it in the catalog never changes whether workspaces may connect http / mcp themselves.
+  const systemConnector = connectorEdited ? connectorInput : gateIdValid ? gateId : '';
+  const connector = connectorChoice === 'generic' ? transportKind : systemConnector;
+  const connectorProblem =
+    connectorChoice === 'system' && systemConnector.length > 0
+      ? connectorNameProblem(systemConnector, transportKind, connectors, t)
+      : null;
+  const connectorValid =
+    connectorChoice === 'generic' || (systemConnector.length > 0 && connectorProblem === null);
+  /** The connector the instance would join, when it exists already (same kind, not packaged). */
+  const joinedConnector =
+    connectorChoice === 'system' && connectorValid ? connectors?.get(systemConnector) : undefined;
+  /** Other system connectors of this kind, offered as a one-click fill. */
+  const sameKindConnectors =
+    connectors === null
+      ? []
+      : [...connectors.values()]
+          .filter(
+            (row) =>
+              !row.packaged &&
+              !isGenericConnector(row.name) &&
+              row.kind === transportKind &&
+              row.name !== systemConnector,
+          )
+          .map((row) => row.name)
+          .sort();
+  const genericConnector = connectors?.get(transportKind);
+  const ready = gateIdValid && targetValid && manifestSourceValid && connectorValid && !submitting;
   // DoD item 4: a disabled 创建 says what it still waits for (the field labels' own words).
   const missing = [
     gateIdValid
@@ -114,6 +198,11 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
       : manifestSource.length === 0
         ? t('填写清单来源', 'enter the manifest source')
         : t('改正清单来源', 'fix the manifest source'),
+    connectorValid
+      ? null
+      : systemConnector.length === 0
+        ? t('填写接入包名称', 'enter the connector name')
+        : t('改正接入包名称', 'fix the connector name'),
   ].filter((item): item is string => item !== null);
 
   function changeGateId(raw: string): void {
@@ -121,6 +210,11 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
     setGateIdAdjusted(normalized !== raw);
     setGateIdInput(normalized);
     setGateIdEdited(true);
+  }
+
+  function changeConnector(raw: string): void {
+    setConnectorInput(normalizeGateIdInput(raw));
+    setConnectorEdited(true);
   }
 
   function completeTarget(): void {
@@ -143,6 +237,7 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
       transportKind,
       target: targetValue,
       credentialMode,
+      connector,
     };
     if (displayName.trim().length > 0) params.displayName = displayName.trim();
     if (transportKind === 'http' && manifestValue.length > 0) {
@@ -454,6 +549,130 @@ export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGate
           ) : null}
         </Field>
       ) : null}
+
+      <fieldset className="field" style={{ border: 0, padding: 0, margin: 0 }}>
+        <legend className="field-label">{t('接入包', 'Connector')}</legend>
+        <div className="radio-group" role="radiogroup" aria-label={t('接入包', 'Connector')}>
+          <label className="radio-option">
+            <input
+              type="radio"
+              name="connectorChoice"
+              value="system"
+              checked={connectorChoice === 'system'}
+              onChange={() => setConnectorChoice('system')}
+              disabled={submitting}
+              data-testid="cgi-connector-system"
+            />
+            {t(
+              '这个系统自己的接入包（推荐）— 设为平台预置不影响工作区自己接入',
+              'A connector of its own for this system (recommended) — making it a platform preset leaves self-connections alone',
+            )}
+          </label>
+          <label className="radio-option">
+            <input
+              type="radio"
+              name="connectorChoice"
+              value="generic"
+              checked={connectorChoice === 'generic'}
+              onChange={() => setConnectorChoice('generic')}
+              disabled={submitting}
+              data-testid="cgi-connector-generic"
+            />
+            {t(
+              `通用接入包「${transportKind}」— 和工作区自己接入的 ${transportKind} 系统共用`,
+              `The generic connector "${transportKind}" — shared with the ${transportKind} systems workspaces connect themselves`,
+            )}
+          </label>
+        </div>
+      </fieldset>
+
+      {connectorChoice === 'system' ? (
+        <Field
+          id="cgi-connector"
+          label={t('接入包名称', 'Connector name')}
+          required
+          hint={
+            <>
+              {t(
+                '同一个系统的几个实例放进同一个接入包。新的接入包是「平台预置」：实例启用后工作区就能在目录里看到它，工作区自己接入 http / mcp 系统不受影响。',
+                'Instances of one system share one connector. A new connector is a platform preset: once the instance is enabled, workspaces see it in the catalog, and their own http / mcp connections are unaffected.',
+              )}
+              {!connectorEdited && systemConnector.length > 0 ? (
+                <span data-testid="cgi-connector-derived">
+                  {t('', ' ')}
+                  {t(
+                    '已根据门 ID 自动生成，可直接修改。',
+                    'Generated from the gate ID — edit it if you like.',
+                  )}
+                </span>
+              ) : null}
+              {joinedConnector ? (
+                <span data-testid="cgi-connector-joins">
+                  {t('', ' ')}
+                  {t(
+                    `接入包「${joinedConnector.name}」已有 ${joinedConnector.instanceCount} 个实例（${connectorModeLabel(joinedConnector.mode, t)}），这个实例会加入它。`,
+                    `Connector "${joinedConnector.name}" already holds ${joinedConnector.instanceCount} instance(s) (${connectorModeLabel(joinedConnector.mode, t)}); this instance joins it.`,
+                  )}
+                </span>
+              ) : null}
+            </>
+          }
+          error={connectorProblem ?? undefined}
+        >
+          <Input
+            id="cgi-connector"
+            value={systemConnector}
+            onChange={(event) => changeConnector(event.target.value)}
+            onBlur={() => {
+              if (connectorInput.length === 0) setConnectorEdited(false);
+            }}
+            disabled={submitting}
+            invalid={connectorProblem !== null}
+            mono
+            placeholder="billing"
+          />
+          {sameKindConnectors.length > 0 ? (
+            <div className="row-wrap" data-testid="cgi-connector-suggestions">
+              <span className="text-3 text-small">
+                {t(`已有的 ${transportKind} 接入包：`, `Existing ${transportKind} connectors:`)}
+              </span>
+              {sameKindConnectors.map((name) => (
+                <Button
+                  key={name}
+                  variant="ghost"
+                  size="s"
+                  onClick={() => {
+                    setConnectorInput(name);
+                    setConnectorEdited(true);
+                  }}
+                  disabled={submitting}
+                  data-testid={`cgi-connector-suggestion-${name}`}
+                >
+                  {name}
+                </Button>
+              ))}
+            </div>
+          ) : null}
+        </Field>
+      ) : genericConnector?.mode === 'platform_preset' ? (
+        <p
+          className="text-3 text-small"
+          style={{ margin: 0 }}
+          data-testid="cgi-connector-generic-note"
+        >
+          {t(
+            `通用接入包「${transportKind}」已是平台预置：实例启用后工作区就能在目录里看到它；工作区现在本来就不能自己接入 ${transportKind} 系统。`,
+            `The generic connector "${transportKind}" is already a platform preset: once enabled, workspaces see the instance in the catalog; they already cannot connect ${transportKind} systems themselves.`,
+          )}
+        </p>
+      ) : (
+        <Notice tone="warn" testId="cgi-connector-generic-note">
+          {t(
+            `工作区要在目录里看到这个实例，得把通用接入包「${transportKind}」设为平台预置；那样所有工作区都不能再自己接入 ${transportKind} 系统（已建立的连接不受影响）。不想这样，就选「这个系统自己的接入包」。`,
+            `For workspaces to see this instance in the catalog, the generic connector "${transportKind}" must become a platform preset — then no workspace can connect ${transportKind} systems itself any more (existing connections are unaffected). To avoid that, choose "A connector of its own for this system".`,
+          )}
+        </Notice>
+      )}
 
       <PlatformError
         error={error}

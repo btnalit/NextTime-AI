@@ -1,4 +1,9 @@
-import type { ConnectorModeWire, ConnectorWire, GateInstanceWire } from '@nexttime/shared';
+import {
+  type ConnectorModeWire,
+  type ConnectorWire,
+  type GateInstanceWire,
+  isGenericConnector,
+} from '@nexttime/shared';
 import { useMemo } from 'react';
 import { useCapabilityList } from '../../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../../lib/clients.js';
@@ -130,15 +135,17 @@ export function hiddenInstanceExplanation(
       ' This kind cannot be a platform preset (the platform has no gate host for it); workspaces can only connect such a system themselves.',
     )}`;
   }
+  // Only a generic connector's mode also governs self-connections (R-40) — a packaged gate's, or
+  // one named for a system's gate-host instances (P1), reaches the catalog alone.
   return `${why}${
-    connector.packaged
+    isGenericConnector(connector.name)
       ? t(
-          `要让工作区启用它，到「接入包」把「${connector.name}」改成「平台预置」。`,
-          ` To let workspaces enable it, set "${connector.name}" to platform preset under Connectors.`,
-        )
-      : t(
           `要让工作区启用它，到「接入包」把「${connector.name}」改成「平台预置」；之后工作区不能再自己接入这一类系统。`,
           ` To let workspaces enable it, set "${connector.name}" to platform preset under Connectors; workspaces then can no longer connect this kind of system themselves.`,
+        )
+      : t(
+          `要让工作区启用它，到「接入包」把「${connector.name}」改成「平台预置」。`,
+          ` To let workspaces enable it, set "${connector.name}" to platform preset under Connectors.`,
         )
   }`;
 }

@@ -96,6 +96,9 @@ export type PlatformErrorCode =
   | 'gate_in_use'
   | 'gate_not_hosted'
   | 'credential_mode_mismatch'
+  // P1 (`create_gate_instance`'s `connector`): another kind's connector, or a packaged gate's
+  | 'connector_kind_mismatch'
+  | 'connector_packaged'
   // R-18 (`confirm_gate_manifest`): nothing held, or the held manifest is not the one shown
   | 'no_pending_manifest'
   | 'manifest_changed'

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import type { GateInstanceWire } from '@nexttime/shared';
+import type { ConnectorWire, GateInstanceWire } from '@nexttime/shared';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CapabilityCaller } from '../../lib/clients.js';
@@ -53,6 +53,31 @@ function created(overrides: Partial<GateInstanceWire> = {}): GateInstanceWire {
   };
 }
 
+function connectorRow(overrides: Partial<ConnectorWire> & { name: string }): ConnectorWire {
+  return {
+    kind: 'http',
+    packaged: false,
+    mode: 'platform_preset',
+    disabledOperations: [],
+    operationCount: 0,
+    instanceCount: 1,
+    selfConnectionCount: 0,
+    suspendedSelfConnectionCount: 0,
+    updatedAt: null,
+    ...overrides,
+  };
+}
+
+/** `list_connectors` as a fresh platform has it, plus a packaged gate's and two gate-host system
+ *  connectors (one per kind). */
+const CONNECTORS: ConnectorWire[] = [
+  connectorRow({ name: 'http', mode: 'self_serve', instanceCount: 0 }),
+  connectorRow({ name: 'mcp', kind: 'mcp', mode: 'self_serve', instanceCount: 0 }),
+  connectorRow({ name: 'docker', packaged: true }),
+  connectorRow({ name: 'billing', instanceCount: 2 }),
+  connectorRow({ name: 'widgets', kind: 'mcp' }),
+];
+
 describe('CreateGateInstanceForm', () => {
   it('shows the manifest source field for http and hides it for mcp', () => {
     const http = scriptedHttp({});
@@ -69,14 +94,10 @@ describe('CreateGateInstanceForm', () => {
     // Was an http submission with a blank manifest source before C12 — exactly the 400 the kernel
     // `superRefine` guarantees; mcp is the transport that legitimately omits `manifestSource`.
     const result = created();
+    let sent: unknown;
     const http = scriptedHttp({
       create_gate_instance: (params) => {
-        expect(params).toEqual({
-          gateId: 'billing-api',
-          transportKind: 'mcp',
-          target: 'https://billing.internal',
-          credentialMode: 'connected_account',
-        });
+        sent = params;
         return result;
       },
     });
@@ -97,20 +118,22 @@ describe('CreateGateInstanceForm', () => {
     await waitFor(() =>
       expect(http.calls.some((call) => call.name === 'create_gate_instance')).toBe(true),
     );
+    expect(sent).toEqual({
+      gateId: 'billing-api',
+      transportKind: 'mcp',
+      target: 'https://billing.internal',
+      credentialMode: 'connected_account',
+      connector: 'billing-api',
+    });
     expect(onCreated).toHaveBeenCalledWith(result);
   });
 
   it('includes manifestSource for http when filled in', async () => {
     const result = created();
+    let sent: unknown;
     const http = scriptedHttp({
       create_gate_instance: (params) => {
-        expect(params).toEqual({
-          gateId: 'billing-api',
-          transportKind: 'http',
-          target: 'https://billing.internal',
-          credentialMode: 'shared',
-          manifestSource: 'https://billing.internal/openapi.json',
-        });
+        sent = params;
         return result;
       },
     });
@@ -131,6 +154,14 @@ describe('CreateGateInstanceForm', () => {
     await waitFor(() =>
       expect(http.calls.some((call) => call.name === 'create_gate_instance')).toBe(true),
     );
+    expect(sent).toEqual({
+      gateId: 'billing-api',
+      transportKind: 'http',
+      target: 'https://billing.internal',
+      credentialMode: 'shared',
+      manifestSource: 'https://billing.internal/openapi.json',
+      connector: 'billing-api',
+    });
   });
 
   it('disables submit until gateId, target and (for http, C12) manifestSource are all valid', () => {
@@ -329,4 +360,87 @@ describe('CreateGateInstanceForm', () => {
       expect(screen.queryByTestId('create-gate-instance-error')).toBeNull();
     },
   );
+
+  it('P1: files the instance under a connector named after the gate id, offers same-kind system connectors, and says on the field why a name cannot be used', async () => {
+    let sent: unknown;
+    const http = scriptedHttp({
+      list_connectors: () => ({ items: CONNECTORS }),
+      create_gate_instance: (params) => {
+        sent = params;
+        return created();
+      },
+    });
+    render(<CreateGateInstanceForm http={http} onCreated={vi.fn()} onCancel={vi.fn()} />);
+    const form = screen.getByTestId('create-gate-instance-form');
+    fireEvent.change(within(form).getByLabelText(/门 ID/), { target: { value: 'billing-api' } });
+    fireEvent.change(within(form).getByLabelText(/^目标/), {
+      target: { value: 'https://billing.internal' },
+    });
+    fireEvent.change(within(form).getByLabelText(/清单来源/), {
+      target: { value: 'https://billing.internal/openapi.json' },
+    });
+
+    const name = within(form).getByLabelText(/接入包名称/) as HTMLInputElement;
+    expect(name.value).toBe('billing-api');
+    expect(within(form).getByTestId('cgi-connector-derived')).toBeTruthy();
+    // Only http system connectors: not the mcp one, the packaged one or the generic kinds.
+    const suggestions = await within(form).findByTestId('cgi-connector-suggestions');
+    expect(
+      within(suggestions)
+        .getAllByRole('button')
+        .map((button) => button.textContent),
+    ).toEqual(['billing']);
+
+    fireEvent.click(within(form).getByTestId('cgi-connector-suggestion-billing'));
+    expect(name.value).toBe('billing');
+    expect(within(form).getByTestId('cgi-connector-joins').textContent).toContain('已有 2 个实例');
+
+    const submit = within(form).getByTestId('create-gate-instance-submit') as HTMLButtonElement;
+    for (const [value, said] of [
+      ['docker', '属于一个打包的门'],
+      ['widgets', '是 mcp 接入包，放不了 http 实例'],
+      ['http', '是通用接入包的名字'],
+    ] as const) {
+      fireEvent.change(name, { target: { value } });
+      expect(document.getElementById('cgi-connector-error')?.textContent).toContain(said);
+      expect(submit.disabled).toBe(true);
+      expect(within(form).getByTestId('create-gate-instance-missing').textContent).toContain(
+        '改正接入包名称',
+      );
+    }
+
+    fireEvent.change(name, { target: { value: 'billing' } });
+    fireEvent.click(submit);
+    await waitFor(() =>
+      expect(sent).toMatchObject({ gateId: 'billing-api', connector: 'billing' }),
+    );
+  });
+
+  it('P1: the generic connector sends the transport kind and says what presetting it does to self-connections', async () => {
+    let sent: unknown;
+    const http = scriptedHttp({
+      list_connectors: () => ({ items: CONNECTORS }),
+      create_gate_instance: (params) => {
+        sent = params;
+        return created();
+      },
+    });
+    render(<CreateGateInstanceForm http={http} onCreated={vi.fn()} onCancel={vi.fn()} />);
+    const form = screen.getByTestId('create-gate-instance-form');
+    fireEvent.change(within(form).getByLabelText(/门 ID/), { target: { value: 'widgets-2' } });
+    fireEvent.click(within(form).getByLabelText(/^mcp/));
+    fireEvent.change(within(form).getByLabelText(/^目标/), {
+      target: { value: 'https://widgets.internal' },
+    });
+    fireEvent.click(within(form).getByTestId('cgi-connector-generic'));
+    expect(within(form).queryByLabelText(/接入包名称/)).toBeNull();
+    await waitFor(() =>
+      expect(within(form).getByTestId('cgi-connector-generic-note').textContent).toContain(
+        '所有工作区都不能再自己接入 mcp 系统',
+      ),
+    );
+
+    fireEvent.click(within(form).getByTestId('create-gate-instance-submit'));
+    await waitFor(() => expect(sent).toMatchObject({ gateId: 'widgets-2', connector: 'mcp' }));
+  });
 });

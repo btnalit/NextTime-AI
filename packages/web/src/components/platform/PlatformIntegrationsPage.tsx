@@ -5,6 +5,7 @@ import type {
   GateInstanceWire,
   SelfConnectionWire,
 } from '@nexttime/shared';
+import { isGenericConnector } from '@nexttime/shared';
 import { useEffect, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
@@ -317,7 +318,7 @@ function ConnectorsTab({
  *  connected itself is outside both; P0b gave it its own cut-off (自己接入的门 → 暂停). */
 function connectorModeDescription(
   pendingMode: ConnectorModeWire | null,
-  packaged: boolean,
+  catalogOnly: boolean,
   t: Translate,
   hidesEnabled = 0,
 ): string {
@@ -330,16 +331,18 @@ function connectorModeDescription(
           `This connector has ${hidesEnabled} enabled instance(s); after the switch they disappear from every workspace's “Platform instances pending enable” and can no longer be enabled there. `,
         )
       : '';
-  return `${hides}${connectorModeDescriptionBody(pendingMode, packaged, t)}`;
+  return `${hides}${connectorModeDescriptionBody(pendingMode, catalogOnly, t)}`;
 }
 
+/** `catalogOnly`: not one of the generic connectors, so its mode never reaches a workspace's own
+ *  connections (R-40 reads only the connector named by the connection's kind). */
 function connectorModeDescriptionBody(
   pendingMode: ConnectorModeWire | null,
-  packaged: boolean,
+  catalogOnly: boolean,
   t: Translate,
 ): string {
   if (pendingMode === 'disabled') {
-    return packaged
+    return catalogOnly
       ? t(
           '禁用只拦新的：目录里不再列出它，工作区不能再启用它的实例。已经启用它的工作区照常可以调用——要立即切断，勾选下面的「同时禁用全部 Operation」。',
           'Disabling only stops new use: the catalog stops listing it and workspaces can no longer enable its instances. Workspaces that already enabled it keep calling it — to cut them off now, tick "Also disable all operations" below.',
@@ -349,7 +352,7 @@ function connectorModeDescriptionBody(
           'Disabling only stops new use: the catalog stops listing it, and workspaces can no longer enable its instances or connect this kind of system themselves. Workspaces that already enabled it keep calling it — to cut them off now, tick "Also disable all operations" below. Systems of this kind a workspace already connected itself are not affected by the connector state; to cut one of them off, suspend it under "Self-connected gates".',
         );
   }
-  if (pendingMode === 'platform_preset' && !packaged) {
+  if (pendingMode === 'platform_preset' && !catalogOnly) {
     return t(
       '切到平台预置后，工作区只能从目录启用它的实例，不能再自己连这一类系统；已经建立的连接不受影响。改错了可以随时再切回来。',
       'As a platform preset, workspaces can only enable its instances from the catalog and can no longer connect this kind of system themselves; existing connections are unaffected. Switch it back at any time if this was a mistake.',
@@ -359,6 +362,14 @@ function connectorModeDescriptionBody(
     '新模式对这个接入包往后的启用/展示生效，已经建立的连接不受影响；改错了可以随时再切回来。',
     "The new mode governs this connector's enable/visibility from here on; existing connections are unaffected. Switch it back at any time if this was a mistake.",
   );
+}
+
+/** The connector table's 类型 column: a packaged gate's, a generic kind, or one an administrator
+ *  named for a system's gate-host instances (P1, `create_gate_instance`'s `connector`). */
+function connectorOriginLabel(connector: ConnectorWire, t: Translate): string {
+  if (connector.packaged) return t('预置', 'Packaged');
+  if (isGenericConnector(connector.name)) return t('通用', 'Generic');
+  return t('门宿主', 'Gate host');
 }
 
 /** The select's minimum width — S8 W1-A7 batch design review finding: at 768px the longest mode
@@ -389,7 +400,7 @@ function ConnectorRow({
       <tr data-testid={`connector-row-${connector.name}`}>
         <td className="mono">{connector.name}</td>
         <td>{transportKindLabel(connector.kind, t)}</td>
-        <td>{connector.packaged ? t('预置', 'Packaged') : t('通用', 'Generic')}</td>
+        <td>{connectorOriginLabel(connector, t)}</td>
         <td>
           <Confirm
             tier="medium"
@@ -419,7 +430,7 @@ function ConnectorRow({
             title={`${t('切换模式为', 'Switch mode to')} ${connectorModeLabel(mode.pendingMode ?? connector.mode, t)}`}
             description={connectorModeDescription(
               mode.pendingMode,
-              connector.packaged,
+              !isGenericConnector(connector.name),
               t,
               connector.mode === 'platform_preset' && mode.pendingMode !== 'platform_preset'
                 ? enabledInstanceCount
@@ -473,8 +484,8 @@ function ConnectorRow({
         </td>
         <td className="mono">{connector.instanceCount}</td>
         <td>
-          {connector.packaged ? (
-            // `create_connection` takes only the four generic kinds — a packaged connector has none.
+          {!isGenericConnector(connector.name) ? (
+            // `create_connection` takes only the four generic kinds — no other connector has any.
             <span className="text-3">—</span>
           ) : connector.selfConnectionCount === 0 ? (
             <span className="mono">0</span>
