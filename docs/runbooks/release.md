@@ -1001,7 +1001,7 @@ Operation 一律 409，不执行任何东西（fail closed）。
   不回填，可回滚（旧代码不读这一列）。execute 的摘要在建 ActionRequest 时记下；升级前遗留的空值行在执行时用当时已发布的版本，
   门的定义已经变了就 409 失败。
 - `publish_operation` 拒绝声明了门拥有参数的 http Operation（400 `gate_owned_params`，列出参数名与位置）；`publish_manifest`、
-  `enable_gate_instance` 与 CLI `register-gatekeeper --publish` 跳过这类 Operation、其余照常发布，并在结果里报告。已发布的行不追溯，
+  `enable_gate_instance` 与 CLI `register-gatekeeper --publish`（该 CLI 已于 P0b 移除，#620）跳过这类 Operation、其余照常发布，并在结果里报告。已发布的行不追溯，
   运行时由门拒绝（§3.20 的 SQL 能列出它们）。
 - 门的拒绝在三个通道上保留门自己的状态码与错误码（以前一律 502 `gatekeeper_error`）；门拒绝导致的执行失败原因前面多了门的错误码。
   I17 请求（建请求时既未发布也没有草稿）批准后不再执行，失败原因以 `operation_definition_unavailable:` 开头。
@@ -1078,7 +1078,8 @@ SQL 列出的自连门清单就是要逐个确认的范围。
 
 **存量清洗 `STEP raw-secret-scrub`**：`--pull` 在 `BACKUP_NOW` 之后自动跑 `node dist/cli/scrub-raw-secrets.js --yes`（备份失败就跳过；
 失败不致命；可重复执行；日志 `drills/apply-<tag>-<ts>-raw-secret-scrub.log`，apply 日志里一行 `STEP raw-secret-scrub exit=…` 带摘要）。
-- 改写 3 类（人会读的智能体副本）：`turnReports`、`decisions`、`toolCallRecords`。
+- 改写 3 类（人会读的智能体副本）：`turnReports`、`decisions`、`toolCallRecords`。v0.49.0 之后的下一版起（#620，core 0045）改写 4 类，
+  多一类 `selfConnectionAddresses`（自连门在平台面的地址副本，`workspace_self_connections.target / endpoint`，见 §3.34）。
 - 只计数、不改写 7 类，日志只列行 id、从不列值：`taskInputs`、`connectionTargets`、`gatekeeperAddresses`、`gateInstanceAddresses`、
   `factProperties`、`objectProperties`、`auditResults`。其中 Task 输入、审计里的门结果和 Fact / 对象属性在读出时已经遮蔽，原文留在库里和
   备份里。
@@ -1198,7 +1199,7 @@ v0.47.0、v0.48.0 不单独上主机（#554 不在 v0.47.0 里，遗留 259 的�
 
 **回滚**（§5）：回滚目标是 v0.46.0，按 §3.25 与 §3.26 的回滚说明；不需要排空 Worker。
 
-窗口目标改到 v0.49.0 之后的发版时（维护者 2026-10-16 决定窗口暂缓，开窗口时目标改为当时最新的发版），本清单按新目标刷新，并加上之后各版的小节，至少 §3.28（#589 升钉：`postgres` 与 `backup` 重建、不执行 `ALTER EXTENSION`、应用后只读核对 `vector` 扩展版本）与 §3.29（#592：governance 0020，旧「始终允许」规则可能显示「已暂停 · 待确认版本」需 owner 重新确认，契约不向后兼容、旧控制台页要刷新）与 §3.30（#601：governance 0021，窗口前估算 `audit_records` 全表扫描的锁表时间并核对回收超时，窗口后历史失败行多显示「结果不明」）与 §3.31（#607：goal 0001 / task 0007 / governance 0022，窗口前估算建索引时间）与 §3.32（#615：core 0044，窗口前估算建索引期间审计写入的等待，必要时并发预建并确认索引有效）与 §3.33（#619：goal 0002，新增每秒认领与每分钟对账的后台负载）与 §3.35（#626：goal 0003，只重建一个守卫函数，无主机步骤）。
+窗口目标改到 v0.49.0 之后的发版时（维护者 2026-10-16 决定窗口暂缓，开窗口时目标改为当时最新的发版），本清单按新目标刷新，并加上之后各版的小节，至少 §3.28（#589 升钉：`postgres` 与 `backup` 重建、不执行 `ALTER EXTENSION`、应用后只读核对 `vector` 扩展版本）与 §3.29（#592：governance 0020，旧「始终允许」规则可能显示「已暂停 · 待确认版本」需 owner 重新确认，契约不向后兼容、旧控制台页要刷新）与 §3.30（#601：governance 0021，窗口前估算 `audit_records` 全表扫描的锁表时间并核对回收超时，窗口后历史失败行多显示「结果不明」）与 §3.31（#607：goal 0001 / task 0007 / governance 0022，窗口前估算建索引时间）与 §3.32（#615：core 0044，窗口前估算建索引期间审计写入的等待，必要时并发预建并确认索引有效）与 §3.33（#619：goal 0002，新增每秒认领与每分钟对账的后台负载）与 §3.34（#620：core 0045，窗口前三数预检、迁移期间不接新门、清洗改写类变成 4 个、回滚后自接门暂停失效）与 §3.35（#626：goal 0003，只重建一个守卫函数，无主机步骤）。
 
 ### 3.28 第三方镜像升钉：pgvector、node、postgres（#589，v0.49.0 之后的下一版起）
 
@@ -1269,6 +1270,56 @@ node 24.21.0 → 24.22.0，只影响平台镜像的构建，随发版重建，�
 - **新的后台负载**：每秒一次到期认领（走部分索引），每分钟一次对账扫描（只看 `running` / `paused` 的 GoalRun）。GO5 开放 `propose_goal` 之前库里没有 GoalRun。
 - **goal 之外的行为变化**：`run_lost` 不再收割从没有过 WorkerRun 的 `running` / `waiting_approval` Task（遗留 325），现有入口不会产生这样的 Task。
 - **回滚**：只回退代码即可（§6）。上一版没有 goal 模块，回退后这些表不再被读写；GO1 的代码也不读写 `next_tick_at`。
+
+### 3.34 自连门的来源与平台切断；接入路径统一（#620，core 0045，S11 P0b，遗留 118 残余 ①，v0.49.0 之后的下一版起）
+
+带一个 core 迁移（`0045_workspace_self_connections`），随 `apply-release.sh` 的迁移步骤自动应用；没有新环境变量、不改 compose。
+
+行为变化：
+- 工作区自己接入的门（`create_connection`，或旧版 CLI 登记的）有了来源记录，平台管理员能在「集成 → 自己接入的门」里逐个暂停 / 恢复；
+  暂停期间这个门的所有 Operation 在每条调用路径上都按「平台已停用」拒绝。平台面只看到协议、主机和端口，完整地址只在工作区自己的视图。
+- 一个工作区里一个地址只能有一个门：同址的第二次接入 409 `endpoint_already_connected`（大小写、默认端口含 ssh 22、尾斜杠、userinfo、
+  查询串等不同写法算同址）。工作区里**原本就有**两个写法不同、实际同址的门时，两者都保留、各有来源；启用同址的平台实例时以 ambiguous 拒绝。
+- 启用与自接门同址的平台实例会认领它：这个门从自己接入转为目录来源；已被平台暂停的自接门不能被认领（`self_connection_suspended`）。
+- `bootstrap.js register-gatekeeper` 已移除，改用目录启用或 `create_connection`。
+
+**迁移做什么**：建表 `workspace_self_connections`（强制 RLS，只有平台事务能改暂停状态），并为每个**没有目录关联**的 Gatekeeper 回填一行，
+署名为空、时间取 Gatekeeper 自己的 `created_at`。复制地址时按清洗预检的模式剪掉凭据：endpoint 去掉 userinfo、查询串与片段，target 去掉
+userinfo 里的密码与查询串，剩下的仍像秘密时整段记 `[redacted]`；Gatekeeper Object 本身不改（门在那里被调用，清洗把它计入
+`gatekeeperAddresses`）。回填行的 `endpoint_key` 为空，所以同址的旧门不会让迁移失败，也不会被合并。NOTICE 一行报回填数、剪掉凭据的行数、
+跳过数（传输种类没有接入包，预期为 0，遗留 373）。量级：一张表加一次 `objects ⋈ connectors` 的插入，在 core 的 advisory lock 下秒级。
+
+**维护窗口前**（在当前版本上跑，只读，主机执行；`objects` 有 RLS，必须用 superuser 跑；结果记 `docs/private/`）：
+
+```sh
+docker compose exec -T postgres psql -U nexttime -d nexttime -v ON_ERROR_STOP=1 <<'SQL'
+begin transaction read only;
+select count(*) filter (where c.name is not null) as will_backfill,
+       count(*) filter (where c.name is null)     as will_skip,
+       count(*) filter (where coalesce(o.properties->>'endpoint','') ~ '@|[?#]'
+                           or coalesce(o.properties->>'target','')   ~ '://[^/]*@') as addresses_to_check
+  from objects o
+  left join connectors c on c.name = o.properties->>'transportKind'
+ where o.object_type = 'Gatekeeper'
+   and not exists (select 1 from workspace_gate_links l
+                    where l.workspace_id = o.workspace_id and l.gatekeeper_object_id = o.id);
+rollback;
+SQL
+```
+
+预期 `will_skip = 0`；不为 0 时这些门迁移后没有来源、平台看不到，先告诉 victor。`addresses_to_check > 0` 时，迁移会剪掉副本里的凭据，
+窗口后再按 §3.25 的清洗报告核对 `selfConnectionAddresses` 与 `gatekeeperAddresses`。
+
+**窗口内**：迁移期间旧 kernel 还在跑，这段时间里新接的门不会有来源行，所以**迁移期间不接新门**。
+
+**清洗没跑成时**：`apply-release.sh` 在迁移之后才跑 `BACKUP_NOW → raw-secret-scrub`；`BACKUP_NOW` 失败时清洗被跳过，新表里只有迁移里的
+正则在把关。按 §3.25「清洗没跑成时补跑」处理，这次补跑也会按精确规则改写新表的 `selfConnectionAddresses`。
+
+**窗口后**（结果记 `docs/private/`）：告诉 victor「集成 → 自己接入的门」里会出现回填的旧门；与目录实例同址的那几行，由 owner 启用实例来认领。
+自接门的 Gatekeeper / ConnectedSystem 名字就是目标：读侧已脱敏，但遗留 186 之前写入的带凭据旧名字仍在库里与备份里，要等清洗改写（遗留 384）；开窗口前确认 384 已随本次发版修好，否则先告诉 victor。
+
+**回滚**（§5、§6）：只回退代码即可，表可以保留、重新升级幂等。**回滚到 0045 之前的 kernel 后，自接门的暂停不再生效**（旧 kernel 不读这张表），
+回滚后在平台侧确认哪些门需要切断，改用停用工作区或在门宿主侧断开。
 
 ### 3.35 目标的暂停、继续与取消（#626，goal 0003，S11 GO3a，遗留 330、357，v0.49.0 之后的下一版起）
 
@@ -1394,6 +1445,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.49.0 之后的下一版 | core `0044_audit_records_resource_idx`（#615，遗留 338）：部分索引 `audit_records_resource_idx (workspace_id, resource_id, created_at) where resource_id is not null`，同名无效残留先删再建 | 可逆 | 只加索引，上一版不引用它，规划器自己选路径；PR 在本地先应用本版全部迁移、再跑 v0.49.0 内核全套测试全过，不需要 reversibility 声明。建索引期间阻塞审计写入（§3.32） | 只需回退代码；若要撤：`drop index if exists audit_records_resource_idx` 并 `delete from schema_migrations where module = 'core' and version = 44` |
 | v0.49.0 之后的下一版 | goal `0002_goal_advancer`（#619，S11 GO2）：`goal_runs` 加可空列 `next_tick_at`、CHECK `goal_runs_next_tick`、部分索引，重建守卫 `goal_runs_status_guard`（只多放行 `next_tick_at`） | 可逆 | 上一版没有 goal 模块，回退后不读写这些表；GO1 代码不读写 `next_tick_at`，守卫只是多允许改一列，不需要 reversibility 声明（§3.33） | 只需回退代码；若要撤：按 goal 0001 重建守卫函数、删索引与 CHECK、`alter table goal_runs drop column next_tick_at`，并 `delete from schema_migrations where module = 'goal' and version = 2` |
 | v0.49.0 之后的下一版 | goal `0003_goal_cancelling`（#626，S11 GO3a）：照 goal 0001 重建 `step_runs_status_guard`，把 `cancelling` 加进「步骤只能走向结束」的目标状态 | 可逆 | 守卫只多拒绝一种情况，上一版没有取消路径、不会碰到它，不需要 reversibility 声明（§3.35） | 只需回退代码；若要撤：按 goal 0001 重建 `step_runs_status_guard`，并 `delete from schema_migrations where module = 'goal' and version = 3` |
+| v0.49.0 之后的下一版 | core `0045_workspace_self_connections`（#620，S11 P0b）：新表 `workspace_self_connections`（强制 RLS、`endpoint_key` 部分唯一索引），按没有目录关联的 Gatekeeper 回填并剪掉地址里的凭据 | 可逆 | 上一版不读写这张表；回退后自接门的暂停**不再生效**（§3.34），其余行为与上一版相同；重新升级时 `create table if not exists` 与 `on conflict do nothing` 幂等 | 只需回退代码，表保留；若要撤：`drop table workspace_self_connections` 并 `delete from schema_migrations where module = 'core' and version = 45`（会丢掉平台的暂停记录，先导出） |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
