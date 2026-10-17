@@ -32,7 +32,21 @@ import { selfConnectionAddressRewrite } from '../gates/self-connections.js';
  *     written before legacy 186, it can carry what the address rule refuses; it is cut out
  *     (`redactConnectionAddress`). Core 0045's backfill already cuts what the preflight patterns
  *     find; this holds the table to the exact rule. The Gatekeeper's own address is counted
- *     (`gatekeeperAddresses`), not rewritten — the gate is called there.
+ *     (`gatekeeperAddresses`), not rewritten — the gate is called there;
+ *   - `gatekeeperNames`: a Gatekeeper's `name` (legacy 384) — a self-connected gate is named after
+ *     the target its owner typed (application/gates/landing.ts), so one written before legacy 186
+ *     can carry a credential in it. A label nothing calls: rewritten to what every read shows
+ *     (`redactConnectionAddress`, the `target` rule — registry.ts `displayedGatekeeperName`);
+ *   - `connectedSystems`: the ConnectedSystem Object a gate's landing writes beside it (legacy
+ *     384) — its identity key's `name` (the gate's name) and its `target`, likewise; nothing calls
+ *     it either. Its identity key is an upsert key (`objects_identity_key_uidx`), so two systems
+ *     whose names differed only in a credential would collide once both are cut: the first in
+ *     key order takes the shown name, and every later one gives its identity key up (`null`) and
+ *     keeps the name as `properties.name` beside `properties.duplicateOf` (the holder's id).
+ *     Nothing is merged into the holder: the `connects_to` Fact that names the duplicate is
+ *     append-only (I4), so the duplicate stays the Object its Gatekeeper is linked to. Rewritten
+ *     with the identity key and properties as read; a system that took the shown name in between
+ *     fails the run (`objects_identity_key_uidx`), and a rerun makes this one its duplicate.
  *
  * **Counted, never rewritten:**
  *   - `taskInputs`: a `tasks.input` carrying a suspected credential (legacy 184). The Worker runs
@@ -51,7 +65,11 @@ import { selfConnectionAddressRewrite } from '../gates/self-connections.js';
  *     (`KERNEL_AUTHORED_OBJECT_TYPES`) are not counted;
  *   - `auditResults`: an `action_request.complete` / `.fail` audit row whose `resultMetadata` /
  *     `reason` the audit rule would now hide something in (legacy 187). Audit rows are append-only
- *     (I11) — the dump `BACKUP_NOW` takes is no worse a copy than the table itself.
+ *     (I11) — the dump `BACKUP_NOW` takes is no worse a copy than the table itself;
+ *   - `connectedSystemDuplicates`: not a credential — every ConnectedSystem a run (this one or an
+ *     earlier one) made a duplicate (`connectedSystems` above), for the record. Read after the
+ *     rewrites, so a dry run lists only earlier runs' duplicates: whether a cut name collides is
+ *     known only once the names before it in key order have been rewritten.
  * A counted row is named by id, never by value: every one goes to `onCounted` (the CLI prints them
  * all, for the operator to go through row by row), and the first `MAX_EXAMPLES` per category are
  * kept as `examples` — the sample the audit row carries, which must stay bounded.
@@ -78,6 +96,8 @@ export const REWRITTEN_CATEGORIES = [
   'decisions',
   'toolCallRecords',
   'selfConnectionAddresses',
+  'gatekeeperNames',
+  'connectedSystems',
 ] as const;
 export const COUNTED_CATEGORIES = [
   'taskInputs',
@@ -87,6 +107,7 @@ export const COUNTED_CATEGORIES = [
   'factProperties',
   'objectProperties',
   'auditResults',
+  'connectedSystemDuplicates',
 ] as const;
 export type CountedRawSecretCategory = (typeof COUNTED_CATEGORIES)[number];
 export type RawSecretCategory = (typeof REWRITTEN_CATEGORIES)[number] | CountedRawSecretCategory;
@@ -176,6 +197,47 @@ function workspaceKeyset(table: string, columns: string, filter: string) {
         [after.workspaceId, after.id, limit],
       )
     ).rows;
+}
+
+/**
+ * `connectedSystems`' rewrite: `write` when no other ConnectedSystem in the workspace holds
+ * `write.identityKey`; else the duplicate's shape (identity key released, the shown name and
+ * `duplicateOf` in its properties). Conditional on the identity key and properties as read.
+ */
+function connectedSystemRewrite(
+  key: { readonly workspaceId: string; readonly id: string },
+  read: {
+    readonly identityKey: Record<string, unknown> | null;
+    readonly properties: Record<string, unknown>;
+  },
+  write: {
+    readonly identityKey: Record<string, unknown> | null;
+    readonly properties: Record<string, unknown>;
+  },
+): { readonly sql: string; readonly params: readonly unknown[] } {
+  return {
+    sql: `with holder as (
+            select id from objects
+             where workspace_id = $1 and object_type = 'ConnectedSystem'
+               and identity_key = $3::jsonb and id <> $2
+          )
+          update objects
+             set identity_key = case when exists (select 1 from holder) then null else $3::jsonb end,
+                 properties = case when exists (select 1 from holder)
+                   then $4::jsonb || jsonb_build_object(
+                     'name', $3::jsonb ->> 'name', 'duplicateOf', (select id::text from holder))
+                   else $4::jsonb end
+           where workspace_id = $1 and id = $2 and object_type = 'ConnectedSystem'
+             and identity_key is not distinct from $5::jsonb and properties = $6::jsonb`,
+    params: [
+      key.workspaceId,
+      key.id,
+      write.identityKey === null ? null : JSON.stringify(write.identityKey),
+      JSON.stringify(write.properties),
+      read.identityKey === null ? null : JSON.stringify(read.identityKey),
+      JSON.stringify(read.properties),
+    ],
+  };
 }
 
 function scrubbedStrings(values: readonly unknown[]): { values: unknown[]; hidden: number } {
@@ -316,6 +378,65 @@ const SCANS: readonly Scan[] = [
     },
   },
   {
+    category: 'gatekeeperNames',
+    window: workspaceKeyset(
+      'objects',
+      `workspace_id, id, properties ->> 'name' as name`,
+      `object_type = 'Gatekeeper' and properties ->> 'name' is not null`,
+    ),
+    inspect: (row) => {
+      const { name } = row as ScannedRow & { name: string };
+      const shown = redactConnectionAddress('target', name);
+      if (shown === name) return null;
+      return {
+        values: 1,
+        rewrite: {
+          sql: `update objects set properties = jsonb_set(properties, '{name}', to_jsonb($3::text))
+                 where workspace_id = $1 and id = $2 and object_type = 'Gatekeeper'
+                   and properties ->> 'name' = $4`,
+          params: [row.workspace_id, row.id, shown, name],
+        },
+      };
+    },
+  },
+  {
+    category: 'connectedSystems',
+    window: workspaceKeyset(
+      'objects',
+      'workspace_id, id, identity_key, properties',
+      `object_type = 'ConnectedSystem'`,
+    ),
+    inspect: (row) => {
+      const read = row as ScannedRow & {
+        identity_key: Record<string, unknown> | null;
+        properties: Record<string, unknown>;
+      };
+      let values = 0;
+      // The fields every read shows cut (resource-wire.ts `displayedObject`), by the `target` rule.
+      const shownFields = (record: Record<string, unknown>, fields: readonly string[]) => {
+        const shown = { ...record };
+        for (const field of fields) {
+          const value = record[field];
+          if (typeof value !== 'string') continue;
+          shown[field] = redactConnectionAddress('target', value);
+          if (shown[field] !== value) values += 1;
+        }
+        return shown;
+      };
+      const identityKey = read.identity_key && shownFields(read.identity_key, ['name']);
+      const properties = shownFields(read.properties, ['target', 'name']);
+      if (values === 0) return null;
+      return {
+        values,
+        rewrite: connectedSystemRewrite(
+          { workspaceId: read.workspace_id as string, id: read.id },
+          { identityKey: read.identity_key, properties: read.properties },
+          { identityKey, properties },
+        ),
+      };
+    },
+  },
+  {
     category: 'taskInputs',
     window: workspaceKeyset('tasks', 'workspace_id, id, input', 'input is not null'),
     inspect: (row) => {
@@ -438,6 +559,15 @@ const SCANS: readonly Scan[] = [
         ? null
         : { values: 1 };
     },
+  },
+  {
+    category: 'connectedSystemDuplicates',
+    window: workspaceKeyset(
+      'objects',
+      'workspace_id, id',
+      `object_type = 'ConnectedSystem' and properties ? 'duplicateOf'`,
+    ),
+    inspect: () => ({ values: 0 }),
   },
 ];
 

@@ -1212,6 +1212,55 @@ describe('RefreshOperationGovernanceConfirm', () => {
       expect(confirm.textContent).not.toContain('就地修正');
     });
 
+    it('legacy 345: on a deprecated Operation the sync opens no revision — a loosening or a changed definition there is never listed as one; a tightening still applies in place', async () => {
+      const deprecated = (name: string, blastRadius: string) => ({
+        name,
+        existing: { mode: 'execute', blastRadius, autoApprovable: false, status: 'deprecated' },
+        announced: { mode: 'execute', blastRadius: 'medium', autoApprovable: false },
+        differs: true,
+        definitionDiffers: false,
+      });
+      const http = scriptedHttp({
+        preview_gatekeeper_resync: () =>
+          resyncPreview({
+            operationsAlreadyPresent: [
+              {
+                ...deprecated('stock.reserve', 'high'),
+                direction: 'loosened',
+                governanceByRevision: true,
+              },
+              {
+                ...ALIGNED_ROW,
+                name: 'stock.recount',
+                existing: { ...ALIGNED_ROW.existing, status: 'deprecated' },
+                definitionDiffers: true,
+              },
+              { ...deprecated('stock.adjust', 'low'), direction: 'tightened' },
+            ],
+          }),
+        refresh_operation_governance: (params) => {
+          expect(params).toEqual({
+            gatekeeperId: 'gk-1',
+            operationNames: ['stock.adjust'],
+            manifestDigest: 'described-1',
+          });
+          return { gatekeeperId: 'gk-1', refreshed: [], revisionDrafts: [], unchanged: [] };
+        },
+      });
+      renderResync(http);
+      fireEvent.click(screen.getByTestId('resync-gk-1'));
+      const confirm = await screen.findByTestId('resync-gk-1-confirm');
+      expect(confirm.textContent).toContain('就地收紧 stock.adjust 的治理字段');
+      expect(confirm.textContent).not.toContain('门放宽的');
+      expect(confirm.textContent).not.toContain('stock.reserve');
+      expect(confirm.textContent).not.toContain('stock.recount');
+      expect(confirm.textContent).not.toContain('修订');
+      fireEvent.click(within(confirm).getByTestId('confirm-button'));
+      await waitFor(() =>
+        expect(http.calls.some((call) => call.name === 'refresh_operation_governance')).toBe(true),
+      );
+    });
+
     it('review #493 on #612: a loosening the gate describes is not applied in place — the confirm says it opens a revision that takes effect once published, without danger styling, and the result links the draft', async () => {
       const loosened = {
         name: 'stock.reserve',

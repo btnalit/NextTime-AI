@@ -41,8 +41,11 @@ import type { Fact, GraphObject } from '../../substrate/graph/index.js';
  *  shows through `redactConnectionAddress` (by the rule of the field named): the addresses — where
  *  a gate is reached (#620 review M2) — and the names, since a self-connected gate and its system
  *  are named after the target its owner typed (application/gates/landing.ts, review #493 P2). One
- *  written before legacy 186 can still carry a credential (`scrub-raw-secrets` counts it for its
- *  owner, `gatekeeperAddresses`). The stored value is untouched: the gate is called at it. */
+ *  written before legacy 186 can still carry a credential: `scrub-raw-secrets` rewrites the names
+ *  and the system's address to what this shows (`gatekeeperNames`, `connectedSystems`, legacy 384)
+ *  and only counts a Gatekeeper's own address for its owner (`gatekeeperAddresses`) — the gate is
+ *  called at it. A text search matches these fields as shown, never as stored (shown-search.ts,
+ *  legacy 387). */
 const CONNECTION_OBJECT_FIELDS: Readonly<
   Record<
     string,
@@ -61,6 +64,10 @@ const CONNECTION_OBJECT_FIELDS: Readonly<
     identityKey: { name: 'target' },
   },
 };
+
+/** The Object types `displayedObject` shows other than as stored — what a text search must match
+ *  on as shown (legacy 387, shown-search.ts). */
+export const CONNECTION_OBJECT_TYPES: readonly string[] = Object.keys(CONNECTION_OBJECT_FIELDS);
 
 function redactedFields<T extends Record<string, unknown>>(
   values: T,

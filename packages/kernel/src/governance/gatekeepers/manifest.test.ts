@@ -533,7 +533,7 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
       // "exactly one, never the pending draft alongside it" (the property this test actually
       // guards, I16/I17).
       const candidates = await inTx((client) =>
-        findOperationCandidates(client, workspaceId, { need: op.name }),
+        findOperationCandidates(client, workspaceId, { need: op.name, gatekeeperNames: {} }),
       );
       const ownCandidates = candidates.filter((c) => c.properties.name === op.name);
       expect(ownCandidates).toHaveLength(1);
@@ -672,7 +672,7 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
       // sibling test above for why the candidate list is filtered by op.name first — find_operations
       // is now a tokenised keyword search, not a whole-string substring match).
       const candidates = await inTx((client) =>
-        findOperationCandidates(client, workspaceId, { need: op.name }),
+        findOperationCandidates(client, workspaceId, { need: op.name, gatekeeperNames: {} }),
       );
       const ownCandidates = candidates.filter((c) => c.properties.name === op.name);
       expect(ownCandidates).toHaveLength(1);
@@ -906,7 +906,7 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
       // this file for why the candidate list is filtered by name first — find_operations is now a
       // tokenised keyword search, not a whole-string substring match).
       const candidates = await inTx((client) =>
-        findOperationCandidates(client, workspaceId, { need: name }),
+        findOperationCandidates(client, workspaceId, { need: name, gatekeeperNames: {} }),
       );
       const ownCandidates = candidates.filter((c) => c.properties.name === name);
       expect(ownCandidates).toHaveLength(1);

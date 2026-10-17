@@ -1078,11 +1078,15 @@ SQL 列出的自连门清单就是要逐个确认的范围。
 
 **存量清洗 `STEP raw-secret-scrub`**：`--pull` 在 `BACKUP_NOW` 之后自动跑 `node dist/cli/scrub-raw-secrets.js --yes`（备份失败就跳过；
 失败不致命；可重复执行；日志 `drills/apply-<tag>-<ts>-raw-secret-scrub.log`，apply 日志里一行 `STEP raw-secret-scrub exit=…` 带摘要）。
-- 改写 3 类（人会读的智能体副本）：`turnReports`、`decisions`、`toolCallRecords`。v0.49.0 之后的下一版起（#620，core 0045）改写 4 类，
-  多一类 `selfConnectionAddresses`（自连门在平台面的地址副本，`workspace_self_connections.target / endpoint`，见 §3.34）。
+- 改写 3 类（人会读的智能体副本）：`turnReports`、`decisions`、`toolCallRecords`。v0.49.0 之后的下一版起改写 6 类：#620（core 0045）加
+  `selfConnectionAddresses`（自连门在平台面的地址副本，`workspace_self_connections.target / endpoint`，见 §3.34），#637 加 `gatekeeperNames`
+  （Gatekeeper 的 `name`）与 `connectedSystems`（门旁 ConnectedSystem 的 identity key `name`、`target`、`name`）。名字按读侧的显示规则改写；
+  剪掉凭据后同名的，按键序第一个拿到名字，其余释放 identity key，名字留在 `properties.name`，并以 `properties.duplicateOf` 指向持有者。
 - 只计数、不改写 7 类，日志只列行 id、从不列值：`taskInputs`、`connectionTargets`、`gatekeeperAddresses`、`gateInstanceAddresses`、
   `factProperties`、`objectProperties`、`auditResults`。其中 Task 输入、审计里的门结果和 Fact / 对象属性在读出时已经遮蔽，原文留在库里和
   备份里。
+- 只列、不改 1 类（v0.49.0 之后的下一版起，#637）：`connectedSystemDuplicates`，不是凭据，列出被写成重复件的 ConnectedSystem（本次与以往
+  运行）；报告里这一类的标签是 `listed, nothing to fix`，与只计数的类别分开看。dry run 只列以往运行留下的：剪后是否撞名，要等前面的名字改写之后才知道。
 - 写一条平台审计 `cli.raw_secrets_scrubbed`（只有计数和行 id）；core 0043 只为允许这条未署名的主机操作放宽 `audit_records_actor_shape`。
 - 要逐行读 `audit_records` 等表，表大时会拉长窗口。
 - 只计数的类别在报告行与审计里每类最多列 20 个行 id（超出时以 `,…` 结尾），dry run 也一样。v0.48.0 起（#556）清洗日志在扫描时把每一条
@@ -1100,10 +1104,11 @@ docker compose run --rm --no-deps -T kernel node dist/cli/scrub-raw-secrets.js -
 ```
 
 **维护窗口前**（在当前版本上跑，只读，主机执行）：用目标 tag 里的预检 SQL 估上限，再记下相关表的行数用来估耗时，结果记 `docs/private/`。
-预检文件随 tag 发布，`--prefetch` 之后本地就有这个 tag：
+预检文件随 tag 发布，`--prefetch` 之后本地就有这个 tag；`<目标 tag>` 与 §3.27 的窗口目标是同一个（开窗口时刷新为当时最新的发版）。
+v0.49.0 之后的下一版起预检多两列上界 `gatekeeper_names`、`connected_systems`（#637）：
 
 ```sh
-ssh -n <主机别名> 'cd <检出目录> && (echo "begin transaction read only;"; git show v0.49.0:packages/kernel/src/cli/scrub-raw-secrets.preflight.sql; echo "rollback;") | docker compose exec -T postgres psql -U nexttime -d nexttime -v ON_ERROR_STOP=1'
+ssh -n <主机别名> 'cd <检出目录> && (echo "begin transaction read only;"; git show <目标 tag>:packages/kernel/src/cli/scrub-raw-secrets.preflight.sql; echo "rollback;") | docker compose exec -T postgres psql -U nexttime -d nexttime -v ON_ERROR_STOP=1'
 ```
 
 ```sh
@@ -1119,16 +1124,21 @@ SQL
 ```
 
 预检是文本匹配的上界；精确计数要新 kernel 镜像（`scrub-raw-secrets.js` 不带 `--yes` 就是 dry run），v0.46.0 的镜像里没有，所以窗口前
-不跑 dry run，以 `--pull` 里那次 `--yes` 的报告为准。
+不跑 dry run，以 `--pull` 里那次 `--yes` 的报告为准。升级后有人手动跑 dry run 对数时注意：地址带凭据的 ConnectedSystem 在 dry run 里同时计入
+`connectedSystems` 与 `objectProperties`，`--yes` 时先改写、`objectProperties` 再扫就不算它们，所以 `objectProperties` 以 `--yes` 后的计数为准（遗留 390）。
 
 **应用后**（主机读日志，结果记 `docs/private/`；处置项由 victor 决定）：
 - `connectionTargets` > 0：这些旧申请在取消之前仍显示原 target（遗留 247 ①）。由申请人或工作区所有者取消，需要的话用不带凭据的地址重新申请。
 - `gateInstanceAddresses` 或 `gatekeeperAddresses` > 0：这些门实例与 Gatekeeper 的地址带凭据，它们的门公告照旧放行，但这些实例不能再
   启用到新的工作区。由平台管理员用不带凭据的地址重建实例（凭据经门宿主的凭据录入），旧实例的停用或删除是写操作，victor 决定。
+- `connectedSystemDuplicates` > 0 不需要处置，记数到 `docs/private/` 即可。
+- apply 日志最后一行是 `RESULT degraded=…raw-secret-scrub…`，且 `-raw-secret-scrub.log` 末行含 `objects_identity_key_uidx`：清洗期间有门以同样的
+  显示名落地，按上面「补跑」先备份、再跑 `--yes`，那一行会被写成重复件。
 - 其余只计数的类别不需要处置；要真正删掉库里与备份里的原文，属破坏性操作，另行决定。
 
 **回滚**（§5）：代码切回 v0.46.0 即可，core 0043 只放宽约束（§6）。回滚后：
 - 已遮蔽的行**保持遮蔽**：清洗是单向的，旧代码读到的是 `[redacted]` 文本，无害。
+- 名字的改写同样是单向的（#637）：旧代码读到剪过的名字，无害；重复件的 identity key 为空，旧代码按名字 upsert 时会落到持有者上，也无害。
 - 恢复 `BACKUP_NOW` 或 `pre-upgrade/` 的 dump 会把原文带回来：**只用于灾备**，不作为回滚手段。在 v0.47.0 及以后的版本上恢复备份之后，按上面「补跑」
   的命令再跑一次清洗。
 - 升级前后的这两份 dump 里都有原文，保留期内按凭据材料对待，不拷离主机。
@@ -1192,14 +1202,14 @@ v0.47.0、v0.48.0 不单独上主机（#554 不在 v0.47.0 里，遗留 259 的�
 | 1 | 窗口前 | `--prefetch v0.49.0`，日志最后一行 `RESULT ok`（§3）；tag 拿不到时先按上面用 bundle 导入并核对 commit | 主机 |
 | 2 | 窗口前 | §3.25 的预检 SQL 与表行数，结果记 `docs/private/` | 主机 |
 | 3 | 窗口内 | `--pull v0.49.0`，**按最后一行 RESULT 判断，不按退出码**（§3）。日志里应看到：`STEP caddy-log-redaction` 各项 PASS（caddy 由 `up -d` 或 `mount-refresh` 重建，看不到 `mount-refresh caddy recreated` 不算异常；backup、update-feed 可能 recreated，也属正常，§3.26）；`STEP acceptance-fixtures none left running`；`STEP backup-now exit=0` 在前、`STEP raw-secret-scrub exit=0` 在后。`acceptance-failures` 按 §5 判断回滚；`degraded=…` 按 §3.26 的表逐项补做，补做结果记 `docs/private/` | 主机 |
-| 4 | 应用后 | 读 `-raw-secret-scrub.log`：改写 3 类与只计数 7 类的数字、`cli.raw_secrets_scrubbed` 的审计 id、全部 `counted …` 行，记 `docs/private/` | 主机 |
+| 4 | 应用后 | 读 `-raw-secret-scrub.log`：改写 6 类、只计数 7 类、只列 1 类（`connectedSystemDuplicates`）的数字、`cli.raw_secrets_scrubbed` 的审计 id、全部 `counted …` 行，记 `docs/private/` | 主机 |
 | 5 | 应用后 | §3.25「应用后」的处置：只计数的地址类别 > 0 时按 `counted …` 行逐条决定 | victor 决定 |
 | 6 | 应用后 | §3.26「应用后」：owner API key 是否轮换、旧 caddy 日志副本是否清理 | victor 决定 |
 | 7 | 应用后 | 控制台核对，结果告诉远程会话记 `docs/private/`：(a) 用一个非所有者账号打开 治理 → 系统与授权 →「接入一个系统」，选一个还没在本工作区启用的实例，到「在本工作区启用」这一步应说明由谁启用、给出一句可复制发给所有者的申请、能退回，没有死路（#541 验收盲区，#554）；(b) 第 4 步 `gateInstanceAddresses` > 0 时，在 平台 → 集成 试着启用其中一个实例，应被拒并在字段上给出说明，不建链接（遗留 251）；(c) 治理 → 审计 的行标题是中文名；(d) 打开任一新建 / 添加表单先不填，提交按钮灰掉时旁边写着「还差：…」（#554）；(e) 在授权表单里选成员时，两个同名成员各带短 id、能分开（遗留 259，#561） | **victor 手动** |
 
 **回滚**（§5）：回滚目标是 v0.46.0，按 §3.25 与 §3.26 的回滚说明；不需要排空 Worker。
 
-窗口目标改到 v0.49.0 之后的发版时（维护者 2026-10-16 决定窗口暂缓，开窗口时目标改为当时最新的发版），本清单按新目标刷新，并加上之后各版的小节，至少 §3.28（#589 升钉：`postgres` 与 `backup` 重建、不执行 `ALTER EXTENSION`、应用后只读核对 `vector` 扩展版本）与 §3.29（#592：governance 0020，旧「始终允许」规则可能显示「已暂停 · 待确认版本」需 owner 重新确认，契约不向后兼容、旧控制台页要刷新）与 §3.30（#601：governance 0021，窗口前估算 `audit_records` 全表扫描的锁表时间并核对回收超时，窗口后历史失败行多显示「结果不明」）与 §3.31（#607：goal 0001 / task 0007 / governance 0022，窗口前估算建索引时间）与 §3.32（#615：core 0044，窗口前估算建索引期间审计写入的等待，必要时并发预建并确认索引有效）与 §3.33（#619：goal 0002，新增每秒认领与每分钟对账的后台负载）与 §3.34（#620：core 0045，窗口前三数预检、迁移期间不接新门、清洗改写类变成 4 个、回滚后自接门暂停失效）、§3.35（#626：goal 0003，只重建一个守卫函数，无主机步骤）与 §3.36（#633：goal 0004，加列与重建一个守卫函数，无主机步骤）。
+窗口目标改到 v0.49.0 之后的发版时（维护者 2026-10-16 决定窗口暂缓，开窗口时目标改为当时最新的发版），本清单按新目标刷新，并加上之后各版的小节，至少 §3.28（#589 升钉：`postgres` 与 `backup` 重建、不执行 `ALTER EXTENSION`、应用后只读核对 `vector` 扩展版本）与 §3.29（#592：governance 0020，旧「始终允许」规则可能显示「已暂停 · 待确认版本」需 owner 重新确认，契约不向后兼容、旧控制台页要刷新）与 §3.30（#601：governance 0021，窗口前估算 `audit_records` 全表扫描的锁表时间并核对回收超时，窗口后历史失败行多显示「结果不明」）与 §3.31（#607：goal 0001 / task 0007 / governance 0022，窗口前估算建索引时间）与 §3.32（#615：core 0044，窗口前估算建索引期间审计写入的等待，必要时并发预建并确认索引有效）与 §3.33（#619：goal 0002，新增每秒认领与每分钟对账的后台负载）与 §3.34（#620：core 0045，窗口前三数预检、迁移期间不接新门、清洗改写类变成 4 个、回滚后自接门暂停失效；#637 再加两个改写类与一个只列类，见 §3.25）、§3.35（#626：goal 0003，只重建一个守卫函数，无主机步骤）与 §3.36（#633：goal 0004，加列与重建一个守卫函数，无主机步骤）。
 
 ### 3.28 第三方镜像升钉：pgvector、node、postgres（#589，v0.49.0 之后的下一版起）
 
@@ -1316,7 +1326,7 @@ SQL
 正则在把关。按 §3.25「清洗没跑成时补跑」处理，这次补跑也会按精确规则改写新表的 `selfConnectionAddresses`。
 
 **窗口后**（结果记 `docs/private/`）：告诉 victor「集成 → 自己接入的门」里会出现回填的旧门；与目录实例同址的那几行，由 owner 启用实例来认领。
-自接门的 Gatekeeper / ConnectedSystem 名字就是目标：读侧已脱敏，但遗留 186 之前写入的带凭据旧名字仍在库里与备份里，要等清洗改写（遗留 384）；开窗口前确认 384 已随本次发版修好，否则先告诉 victor。
+自接门的 Gatekeeper / ConnectedSystem 名字就是目标：读侧已脱敏，但遗留 186 之前写入的带凭据旧名字仍在库里与备份里，由清洗改写（遗留 384，#637 加的 `gatekeeperNames` 与 `connectedSystems`，§3.25）；开窗口前确认目标发版包含 #637，否则先告诉 victor。
 
 **回滚**（§5、§6）：只回退代码即可，表可以保留、重新升级幂等。**回滚到 0045 之前的 kernel 后，自接门的暂停不再生效**（旧 kernel 不读这张表），
 回滚后在平台侧确认哪些门需要切断，改用停用工作区或在门宿主侧断开。

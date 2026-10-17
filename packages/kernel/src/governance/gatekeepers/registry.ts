@@ -143,8 +143,8 @@ export async function findGatekeeperIdByConnectionSecretSalt(
  *  connected gate is named after the target its owner typed (application/gates/landing.ts), so a
  *  name written before legacy 186 can carry the credential its address did — shown through
  *  `redactConnectionAddress`, the rule for every gate address someone reads. A name is a label:
- *  no gate is called and no row is found by it, so no reader needs the stored text. The stored
- *  value is untouched until the scrub rewrites it. */
+ *  no gate is called and no row is found by it, so no reader needs the stored text. The scrub
+ *  rewrites the stored name to this (`scrub-raw-secrets`, `gatekeeperNames`, legacy 384). */
 function displayedGatekeeperName(name: string | undefined, gatekeeperId: string): string {
   return name === undefined ? gatekeeperId : redactConnectionAddress('target', name);
 }
@@ -260,6 +260,25 @@ export async function listGatekeepers(
       createdAt: row.created_at,
     };
   });
+}
+
+/** Every named Gatekeeper's name as reads show it (`displayedGatekeeperName`), by Gatekeeper id —
+ *  what `find_operations` matches a need's tokens against (legacy 387: a token that matched the
+ *  stored name could say a credential written there before legacy 186 exists). A Gatekeeper with
+ *  no name is left out: no gate name to match, as before. */
+export async function gatekeeperNamesShown(
+  client: PoolClient,
+  workspaceId: string,
+): Promise<Readonly<Record<string, string>>> {
+  const result = await client.query<{ id: string; name: string }>(
+    `select id, properties ->> 'name' as name
+     from objects
+     where workspace_id = $1 and object_type = 'Gatekeeper' and properties ->> 'name' is not null`,
+    [workspaceId],
+  );
+  return Object.fromEntries(
+    result.rows.map((row) => [row.id, displayedGatekeeperName(row.name, row.id)]),
+  );
 }
 
 /** `get_workspace`'s own summary count (S3.11, `application/gateway/members-handlers.ts`) — a
@@ -382,7 +401,9 @@ export function gateAddressOrigin(address: string): string {
  *  (both sides run through `normalizeGateEndpoint` — an exact match otherwise, never a prefix/
  *  substring match). Reads the same `objects` rows `listGatekeepers` above does; kept as its own
  *  query (rather than filtering `listGatekeepers`' result) because that function's own
- *  `GatekeeperListEntry` does not carry `target`, which the caller needs for `drift`. */
+ *  `GatekeeperListEntry` does not carry `target`, which the caller needs for `drift`. Oldest first,
+ *  `id` breaking a `created_at` tie, so a caller that takes the first match (`landing.ts`'s
+ *  `endpoint_already_connected`) names the same Gatekeeper every time (legacy 340 class). */
 export async function findGatekeepersByEndpoint(
   client: PoolClient,
   workspaceId: string,
@@ -393,7 +414,7 @@ export async function findGatekeepersByEndpoint(
     `select id, properties, created_at
      from objects
      where workspace_id = $1 and object_type = 'Gatekeeper' and properties ->> 'endpoint' is not null
-     order by created_at asc`,
+     order by created_at asc, id asc`,
     [workspaceId],
   );
   const matches: GatekeeperByEndpointEntry[] = [];

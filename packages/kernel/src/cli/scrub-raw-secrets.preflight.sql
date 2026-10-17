@@ -44,6 +44,20 @@ select count(distinct g.gate_id) as gate_instance_addresses from gate_instances 
     or a.address ~* '[?#&;]([^=&#;?]*(password|passwd|passphrase|secret|credential|authori[sz]ation|api[_-]?key|private[_-]?key|access[_-]?key|token|cookie|bearer|handle)[^=&#;?]*|sig|signature|x-amz-signature|x-goog-signature|key|pwd|pass|auth)=[^&#;]'
     or a.address ~* '(eyJ[A-Za-z0-9_-]{8,}\.|bearer |basic |-----begin)';
 
+-- 384 (rewritten): Gatekeeper names, and the name and target of the ConnectedSystem beside each,
+-- carrying a credential (a self-connected gate is named after the target its owner typed)
+select count(*) as gatekeeper_names from objects
+ where object_type = 'Gatekeeper'
+   and (properties ->> 'name' ~* '^[a-z][a-z0-9+.-]*://[^/?#@]*:[^/?#@]+@'
+        or properties ->> 'name' ~* '[?#&;]([^=&#;?]*(password|passwd|passphrase|secret|credential|authori[sz]ation|api[_-]?key|private[_-]?key|access[_-]?key|token|cookie|bearer|handle)[^=&#;?]*|sig|signature|x-amz-signature|x-goog-signature|key|pwd|pass|auth)=[^&#;]'
+        or properties ->> 'name' ~* '(eyJ[A-Za-z0-9_-]{8,}\.|bearer |basic |-----begin)');
+select count(distinct o.id) as connected_systems from objects o
+ cross join lateral (values (o.identity_key ->> 'name'), (o.properties ->> 'target'), (o.properties ->> 'name')) as a(address)
+ where o.object_type = 'ConnectedSystem'
+   and (a.address ~* '^[a-z][a-z0-9+.-]*://[^/?#@]*:[^/?#@]+@'
+        or a.address ~* '[?#&;]([^=&#;?]*(password|passwd|passphrase|secret|credential|authori[sz]ation|api[_-]?key|private[_-]?key|access[_-]?key|token|cookie|bearer|handle)[^=&#;?]*|sig|signature|x-amz-signature|x-goog-signature|key|pwd|pass|auth)=[^&#;]'
+        or a.address ~* '(eyJ[A-Za-z0-9_-]{8,}\.|bearer |basic |-----begin)');
+
 -- Review of #549 B2 (counted only): Fact properties and observed / ingested Object properties
 -- the graph store now scrubs (the Object types the kernel writes itself are left out)
 select count(*) as fact_properties from links

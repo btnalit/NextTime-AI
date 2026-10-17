@@ -55,6 +55,8 @@ export type {
   NeighborsInput,
   SearchInput,
   SearchPage,
+  ShownObjectText,
+  ShownObjects,
   StateAtInput,
   StateAtResult,
   SupersedeFactInput,
@@ -89,7 +91,7 @@ export {
   findProcedureCandidates,
   findWorkerDefinitionCandidates,
 } from './find-means.js';
-export type { FindMeansInput } from './find-means.js';
+export type { FindMeansInput, FindOperationsInput } from './find-means.js';
 
 // S8 W1-C: `traverse`'s `nodeDetails` and `resolve_refs`'s object/gatekeeper name resolution.
 export { objectDisplayName } from './display-name.js';

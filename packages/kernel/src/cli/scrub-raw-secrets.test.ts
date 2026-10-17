@@ -56,6 +56,8 @@ describe('formatScrubReport', () => {
       decisions: counts(1, 1),
       toolCallRecords: counts(4, 5, 1),
       selfConnectionAddresses: counts(0),
+      gatekeeperNames: counts(1, 1),
+      connectedSystems: counts(2, 3),
       taskInputs: { ...counts(1), examples: [{ workspaceId: 'ws-1', id: 'task-1' }] },
       connectionTargets: counts(0),
       gatekeeperAddresses: counts(0),
@@ -63,6 +65,10 @@ describe('formatScrubReport', () => {
       factProperties: { ...counts(1), examples: [{ workspaceId: 'ws-1', id: 'fact-1' }] },
       objectProperties: counts(0),
       auditResults: { ...counts(2), examples: [{ workspaceId: null, id: 'audit-1' }] },
+      connectedSystemDuplicates: {
+        ...counts(1),
+        examples: [{ workspaceId: 'ws-1', id: 'system-2' }],
+      },
     },
     auditRecordId: executed ? 'audit-row' : null,
   });
@@ -70,7 +76,11 @@ describe('formatScrubReport', () => {
   it('ends a dry run with the one-line summary apply-release echoes, naming rows by id only', () => {
     const lines = formatScrubReport(result(false), undefined);
     expect(lines.at(-1)).toBe(
-      'scrub-raw-secrets: dry-run would-rewrite=6 counted: taskInputs=1 connectionTargets=0 gatekeeperAddresses=0 gateInstanceAddresses=1 factProperties=1 objectProperties=0 auditResults=2 batches=7',
+      'scrub-raw-secrets: dry-run would-rewrite=9 counted: taskInputs=1 connectionTargets=0 gatekeeperAddresses=0 gateInstanceAddresses=1 factProperties=1 objectProperties=0 auditResults=2 connectedSystemDuplicates=1 batches=7',
+    );
+    expect(lines).toContain('connectedSystems: examined=10 would-rewrite=2 values=3');
+    expect(lines).toContain(
+      'connectedSystemDuplicates (listed, nothing to fix): examined=10 duplicates=1 ids=ws-1/system-2',
     );
     expect(lines).toContain(
       'toolCallRecords: examined=10 would-rewrite=3 values=5 skipped-changed-meanwhile=1',
@@ -102,6 +112,6 @@ describe('formatScrubReport', () => {
   it('an executing run names its audit row and who it is attributed to', () => {
     const lines = formatScrubReport(result(true), { login: 'ops' });
     expect(lines).toContain('audit: cli.raw_secrets_scrubbed audit-row (actor ops)');
-    expect(lines.at(-1)).toMatch(/^scrub-raw-secrets: ok rewritten=6 /);
+    expect(lines.at(-1)).toMatch(/^scrub-raw-secrets: ok rewritten=9 /);
   });
 });

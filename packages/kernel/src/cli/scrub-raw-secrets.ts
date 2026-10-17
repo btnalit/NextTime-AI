@@ -122,6 +122,17 @@ export function formatCountedRow(
   return `counted ${category} ${row.workspaceId ? `${row.workspaceId}/${row.id}` : row.id}`;
 }
 
+/** A counted category's rows carry a credential, except the duplicates `connectedSystems` leaves
+ *  behind — listed for the record, with nothing to fix. */
+function countedLabel(name: CountedRawSecretCategory): {
+  readonly group: string;
+  readonly rows: string;
+} {
+  return name === 'connectedSystemDuplicates'
+    ? { group: 'listed, nothing to fix', rows: 'duplicates' }
+    : { group: 'counted, not rewritten', rows: 'carrying' };
+}
+
 /** The report; its last line is the one-line summary `apply-release.sh` echoes. */
 export function formatScrubReport(
   result: ScrubRawSecretsResult,
@@ -144,8 +155,9 @@ export function formatScrubReport(
     const more =
       c.affected > ids.length ? `,… (all ${c.affected}: the "counted ${name}" lines)` : '';
     const listed = ids.length > 0 ? ` ids=${ids.join(',')}${more}` : '';
+    const label = countedLabel(name);
     lines.push(
-      `${name} (counted, not rewritten): examined=${c.examined} carrying=${c.affected}${listed}`,
+      `${name} (${label.group}): examined=${c.examined} ${label.rows}=${c.affected}${listed}`,
     );
   }
   if (result.executed) {

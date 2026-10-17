@@ -4222,6 +4222,12 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **对齐**：「与门公告对齐」把门新增的名字导入为草稿（遗留 343）。
   - **验证**：S2 新增 5 条 `landing-*`（ssh / http 走 `request_connection → create_connection`，docker 走 `enable_gate_instance`；`landing-origins` 断言没有无来源的门；重复接入 409；暂停后 403、恢复后可调用），staging rehearsal 从 v0.49.0 基线升级（S2 72 → 77，回填在真实旧数据上跑过）；集成测试覆盖两个事务交错的认领 / 暂停。
   - **遗留**：371–387。
+- 遗留 384、387 实现说明（#637，2026-10-17 合入，1a476bf；无迁移）：
+  - **清洗**（`application/platform/scrub-raw-secrets.ts`）：两个新扫描，改写条件是读到的值没变（ConnectedSystem 还要求 identity key 与 properties 都没变），中途被改的行留给下次；ConnectedSystem 一条语句里先查同工作区是否已有别的 ConnectedSystem 持有剪后的 identity key，没有就写入，有就写成重复件。唯一竞态是查完到写入之间恰有门以同样显示名落地，这一轮失败（`objects_identity_key_uidx`），补跑会写成重复件。改写不碰 `updated_at`。
+  - **图搜索**：`substrate/graph` 不做脱敏（分层），`search` / `searchPage` 多可选参数 `shown`（哪些类型按显示文本匹配，以及每个 Object 显示出来的 properties 与 identity key），SQL 对这些类型只匹配 `shown` 条目、渲染同 `jsonb::text`，不在条目里的匹配不上（失败关闭），不传时查询逐字节不变。`application/gateway/shown-search.ts` 读出本工作区连接 Object 套用 `displayedObject`，`search` 处理器、Explorer 节点列表与图搜索都传它；空查询与按其他类型过滤时不多读。
+  - **find_operations**：门名从关联子查询读存储值改为调用方绑定的「Gatekeeper id → 显示名」映射（`gatekeepers` 的 `gatekeeperNamesShown`），`findOperationCandidates` 必填，不给的门不匹配。
+  - **同类出口排查**：`ilike`、`includes` 与带 `q` / `query` / `need` / `search` 参数的能力与路由全过一遍；`list_gatekeepers` 自 #620 用显示名，其余不碰连接 Object；没有按存储名排序的路径。遗留 375（`activities.metadata.target` 旧地址副本）不在本次范围，仍开放。
+  - **验证**：`scrub-raw-secrets` 集成测试（改写、撞名写成重复件、dry run 计数、`--yes` 后只列类、二次运行不改）；`platform-gates` 集成测试用真实落地的自接门写回遗留 186 之前的名字与地址，三个凭据子串在三个搜索出口都搜不到、`find_operations` 不返回（让 `shownForSearch` 失效时测试失败）；预检 SQL 在只读事务里整份执行。
 
 **P1 — （改造）ChangePlan 核心，验收含手写 knowledge 包**（见 `global-roadmap-2026-10-16.md` §4）
 

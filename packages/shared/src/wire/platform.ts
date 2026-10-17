@@ -840,6 +840,7 @@ export const GateInstanceEnablePreviewOperationPresentWireSchema = z
      *  something and comes from a self-connected gate's own description, which nobody reviewed —
      *  `refresh_operation_governance` does not apply it in place but opens a revision draft that
      *  carries it (published rows), so it takes effect only once an owner publishes that draft.
+     *  On a deprecated row no revision opens and the change is not written at all (legacy 345).
      *  Absent when the change is applied in place (a tightening, or any platform manifest). */
     governanceByRevision: z.literal(true).optional(),
     /** Review #501 on #571 ③ (the workspace side): the params the announced definition declares
