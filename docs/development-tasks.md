@@ -4103,7 +4103,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 
 **GO3 — 恢复、等待、取消与修订**（见 `global-roadmap-2026-10-16.md` §4）
 
-- **拆分**（2026-10-16，协调线程定）：GO3a「停下来」（#626）、GO3b「修订与 hold」、GO3c「核对与去重」三个 PR，同一条 lane 顺序做，GO3c 合入后 GO3 才算完成，GO4 排在 GO3c 之后。
+- **拆分**（2026-10-16，协调线程定）：GO3a「停下来」（#626）、GO3b「修订与 hold」、GO3c「核对与去重」三个 PR，同一条 lane 顺序做。2026-10-17 再细分（协调线程定）：GO3c 改为「去重与人工核对」，平台核对观察拆出为 GO3d；GO3 在 GO3d 合入后才算完成，GO4 排在 GO3d 之后。owner 暂停即 hold（「管理员锁定」）由 victor 2026-10-17 在决策卡上确认。
 - GO3a 实现说明（#626，2026-10-16 合入，37ae610；goal 0003；遗留 330、357 关闭）：
   - **人的三个操作**（`application/goal/control.ts`，锁序 GoalRun → StepRun）：暂停、取消允许请求者或工作区 owner（同 `cancel_task` 的 D-21）；继续与继续时的重试只有请求者（propose → authorize → execute，§4.3）。`pauseGoalRun`：`running | verifying → paused(requested)`，只拦新尝试与重试，在跑的尝试与它已发起的请求照常（撤回不可逆，留给取消）。`resumeGoalRun`：`paused → running` 并立即到期，下一次推进复查预算与计划；`retrySteps` 走 StepRun 转移表「人的决定」那条边，可超尝试上限，但仍查 I-G4、I-G2，结果不明的步骤要先核对。`cancelGoalRun`：`running | paused | verifying → cancelling`，同一事务取消每个未结束的步骤、把各步骤下还没开始执行的请求改 `withdrawn`。已在目标状态的调用返回 `changed: false`；`proposed` 的目标走 `reject`（入口随 GO5）。
   - **撤回**（`governance/approval/step-actions.ts`）：`withdrawStepActions` 先在行锁下读状态再撤回（`for update`，`order by requested_at, id`，与排水器同序），排水器刚开始执行的行不会被选中，按 R-48 收尾；每次撤回写脱敏审计并发 `ActionRequestUpdated`，排水消费者见 `withdrawn` 立刻重新排水那个门。执行侧不读 StepRun，`startActionRequestExecution` 锁行后按转移表拒绝 `withdrawn`。
@@ -4116,7 +4116,8 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **测试稳定性**：goal / task 集成测试手动投递事件、不起 dispatcher，留下约 900 条未投递 outbox；`ws/server.test.ts` 与 `turn-terminal.integration.test.ts` 起的 dispatcher 要先排空它们，CI 上超时。两个文件在启动前把已有未投递行标为已投递（有数据库时测试文件串行跑）；遗留 123 里两条偶发超时的尾巴随之关闭。
   - **验证**：`advancer.integration.test.ts`「stopping a run」8 个（权限、继续时重试、S7 取消、`cleanup_pending` 与清理、执行中动作结束唤醒、I-G9 与在途事务串行、余量均分、fencing）；`goal-schema` 2 个；`request-action` 1 个；`invoke` 2 个（含 P2-1 端到端：目标 150000，子 Task 75000，总花费 ≤ 150000）；`drainer` 1 个（330）；内核全量 213 个文件通过。
 - GO3b「修订与 hold」输入（来自 #626 与审查 #493）：修订移除步骤（`reviseGoalRun`：默认终止、「让它跑完」、逐条放行），复用 `withdrawStepActions` 与 `lockGoalStepForNewWork`，「让它跑完」的步骤只拒绝新工作；步骤成功要求名下动作含嵌套子 Task 都到终态；遗留 356、364；I-G9 定时检查补上已 supersede 步骤的请求；场景 S8；**owner 暂停是 hold**（协调线程拍板，赶在 GO5 暴露能力之前做）：owner 暂停别人的目标时请求者不能直接继续，必须等 owner（或权限更高的人）解除，请求者自己的暂停可以自己继续；记录 `paused_by` 与暂停方的权限级别并写审计。
-- GO3c「核对与去重」输入（来自 #626 与审查 #493）：I-G4 步骤范围去重；`waiting(reconcile)` 用平台观察加判定式（GO4 的验收检查复用这套引擎），以及人的「重新执行」标记（`resumeGoalRun` 现在拒绝重试结果不明的步骤）；被取消目标下结果不明的动作仍要能核对、能列出，reconcile 入口不要只看 `running` / `paused` 的目标；`await_decision` 两条路径；场景 S4、S5、S11。
+- GO3c「去重与人工核对」输入（来自 #626 与审查 #493）：I-G4 步骤范围去重；人对结果不明动作下「已生效 / 重新执行」结论（`resumeGoalRun` 现在拒绝重试结果不明的步骤）；被取消目标下结果不明的动作仍要能核对、能列出，reconcile 入口不要只看 `running` / `paused` 的目标；`await_decision` 两条路径；场景 S4、S5、S11。
+- GO3d「平台核对观察」输入（2026-10-17 从 GO3c 拆出）：判定式引擎放内核 substrate / epistemic 层，不反向依赖 gatekeeper-base，GO4 的验收检查复用；计划步骤声明核对观察，`waiting(reconcile)` 用平台观察加判定式自动核对；场景 S4。
 - 来自 GO2（#619 与审查 #493）的输入：一步在嵌套子 Task 还在跑时就会判 `succeeded`（§3.4 要求名下动作都到终态）；A 段记录尝试结果时补 `inCurrentPlan` fencing；解锁也要认 `skipped` 的依赖；token 超出的取消路径与同一次推进的尝试均分剩余量（遗留 357）；推进连续抛错后自动暂停（遗留 356）。
 - 来自 GO1（审查 #493 delta）的输入：GoalRun 在 `cancelling` 时步骤能否从 `waiting` 回到 `running`，由 GO3 定（只允许走向终止，或写明为什么允许）；锁序同 GO2，先锁 GoalRun 再锁 StepRun。
 
@@ -4199,11 +4200,22 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 
 **P0b — 连接器接入路径统一 + 评测用夹具门重设计 + 遗留 118 残余 ①**（见 `global-roadmap-2026-10-16.md` §4）
 
-- 实现说明：（未开工）
+- 实现说明（#620，2026-10-17 合入，a2c5a4e；core 0045；遗留 118 残余 ①、343 关闭）：
+  - **范围调整**：评测用夹具门重设计移出 P0b，作为 P1 的第一个小 PR（托管实例挂在按系统命名的接入包上，`create_gate_instance` 的 `connector` 可选，和连接器预设的包组件同一形状）。P0b 只做接入路径统一与 118 残余 ①。
+  - **唯一落地路径**：`landGatekeeper`（`application/gates/landing.ts`），`create_connection` 与 `enable_gate_instance` 都经过它，有静态守卫防第二条路径；CLI `register-gatekeeper` 移除（`bootstrap.ts` 只剩报错分支），遗留 123 的 L1-14 余项随之关闭。
+  - **来源表**：`workspace_self_connections`（core 0045，强制 RLS）：工作区事务只能插入自己的行（必须带 `endpoint_key`、不能带暂停字段），只能在同一门已有 `workspace_gate_links` 行时删除未暂停的行；只有平台事务能暂停 / 恢复。每个门恰好一个来源：目录关联或自己接入。回填所有没有目录关联的存量 Gatekeeper（`connected_by` 为空，时间取 Object 的 `created_at`），没有对应接入包的跳过并在 NOTICE 计数（遗留 373）。
+  - **切断**：`suspended_at` 是平台的切断，两种切断（目录实例状态与自接暂停）共用 `operationPlatformStatus`，所有调用路径生效；平台读取对已暂停行 fail-closed，不靠 `order by` 让目录行胜出。平台能力 `list_self_connections`、`suspend_self_connection`、`resume_self_connection`；暂停只管一条连接。
+  - **一个地址一个门**：409 `endpoint_already_connected`，在发送密钥、发起网络请求之前判定；同址判断、暂停匹配、认领匹配共用 `canonicalGateAddress` / `normalizeGateEndpoint`（大小写、末尾点、默认端口含 ssh 22、userinfo、查询串和片段、尾斜杠、IDN → punycode、`%xx`），咨询锁按规范拼写；`endpoint_key` 列加部分唯一索引，回填行为空（遗留 73 之前同址的两个门都保留来源，新接入仍被落地路径的检查拒绝）。
+  - **认领与暂停的竞态**（审查 #488 阻塞 2）：目录启用认领同址自接门时先写关联再删自接行，删不掉（已暂停）就回滚并报 `self_connection_suspended`；「先查后改」的工作区路径持共享咨询锁到提交，暂停 / 恢复持排他锁（`lockSelfConnectionState`）；审计 `gatekeeper.self_connection_linked`。
+  - **地址展示**（审查 #488 阻塞 1 与后续 delta）：平台面看自接门只看协议、主机和端口（`gateAddressOrigin`），完整地址只在工作区自己的视图；地址展示统一走 `redactConnectionAddress`（自接门、门实例与宿主定义、工作区目录、启用预览差异、连接请求、Gatekeeper / ConnectedSystem Object、认领审计），存储值不变；以目标命名的名字同样脱敏，出口是门的读取函数（`registry.ts` 的 `getGatekeeper` / `listGatekeepers` / `findGatekeepersByEndpoint`）和 Object 投影 `displayedObject`（含 Explorer），存储的名字留给清洗（384、387）。0045 回填按清洗预检的模式剪掉地址里的凭据，清洗新增改写类 `selfConnectionAddresses` 按精确规则收口。
+  - **对齐**：「与门公告对齐」把门新增的名字导入为草稿（遗留 343）。
+  - **验证**：S2 新增 5 条 `landing-*`（ssh / http 走 `request_connection → create_connection`，docker 走 `enable_gate_instance`；`landing-origins` 断言没有无来源的门；重复接入 409；暂停后 403、恢复后可调用），staging rehearsal 从 v0.49.0 基线升级（S2 72 → 77，回填在真实旧数据上跑过）；集成测试覆盖两个事务交错的认领 / 暂停。
+  - **遗留**：371–387。
 
 **P1 — （改造）ChangePlan 核心，验收含手写 knowledge 包**（见 `global-roadmap-2026-10-16.md` §4）
 
 - 实现说明：（未开工）
+- 来自 P0b（#620）的输入：第一个小 PR 是评测用夹具门重设计（托管实例挂在按系统命名的接入包上，`create_gate_instance` 的 `connector` 可选）；`importManifest` 的 `requireDescription` 留给目录侧要求复用，不用就删（遗留 372）；344 由 P1 收口。
 
 **AA1 — 管理员 Agent 身份与上限**（见 `global-roadmap-2026-10-16.md` §4）
 
