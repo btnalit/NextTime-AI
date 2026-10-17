@@ -128,6 +128,7 @@ export const AUDIT_RESOURCE_TYPE_LABELS: Readonly<Record<AuditResourceType, Bili
   agent_policy: { zh: '工作区策略', en: 'Agent policy' },
   agent_profile: { zh: '智能体配置', en: 'Agent profile' },
   capability_grant: { zh: '授权', en: 'Capability grant' },
+  change_item: { zh: '变更条目', en: 'Change item' },
   chat: { zh: '对话', en: 'Chat' },
   conflict: { zh: '冲突', en: 'Conflict' },
   connection_request: { zh: '连接申请', en: 'Connection request' },

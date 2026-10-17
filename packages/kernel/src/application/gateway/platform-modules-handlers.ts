@@ -135,7 +135,7 @@ async function runInstallOrUpgrade(
   client: PoolClient,
   workspaceId: string,
   params: unknown,
-  context: { readonly principalId: string } | undefined,
+  context: CapabilityHandlerContext | undefined,
 ): Promise<{
   readonly result: WorkspaceModuleWire;
   readonly resourceType: string;
@@ -145,14 +145,15 @@ async function runInstallOrUpgrade(
   if (!context?.principalId) {
     throw new Error('install_module/upgrade_module: no calling principal in context');
   }
+  // Both are `channel: 'human'` capabilities: the owner applies the module's ChangePlan segment.
+  if (context.channel !== 'human') {
+    throw new Error('install_module/upgrade_module: invoked outside the human channel');
+  }
   const registry = await loadModuleRegistry();
-  const state = await installOrUpgradeModule(
-    client,
-    workspaceId,
-    context.principalId,
-    registry,
-    input,
-  );
+  const state = await installOrUpgradeModule(client, workspaceId, context.principalId, registry, {
+    ...input,
+    channel: 'human',
+  });
   return {
     result: toWorkspaceModuleWire(state),
     resourceType: 'module',
