@@ -195,12 +195,15 @@ export async function reviseGoalRun(
     resourceId: planRevisionId,
     payload: { goalRunId: goal.id, revision, basedOnRevision: current },
   });
-  // A revision is a change of the run (`updated_at`), not a transition: it stays paused.
+  // A revision is a change of the run (`updated_at`), not a transition: it stays paused. Like a
+  // resume, a person's revision starts the count of failed advances again (legacy 356): past the
+  // limit the reconcile scan skips the run, and with it the terminating of the Tasks this revision
+  // stops (review #493 on #633).
   await client.query(
     `update goal_runs
         set current_revision = $3, budget_max_tokens = $4, budget_max_steps = $5,
             budget_max_revisions = $6, budget_max_wall_clock_seconds = $7, updated_at = now(),
-            next_tick_at = now()
+            next_tick_at = now(), advance_failures = 0
       where workspace_id = $1 and id = $2 and status = 'paused'`,
     [
       workspaceId,

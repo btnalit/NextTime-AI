@@ -2761,7 +2761,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       it('a step whose key a revision redefined does not start beside what the step it replaces still runs; an outcome-unknown action pauses the run for a reconcile', async () => {
         const requester = await newPrincipal();
-        const redefine = async () => {
+        const redefine = async (key = 'a', unknownFirst = false) => {
           const goalRunId = await startGoal(requester, [{ key: 'a' }]);
           await advance(goalRunId, requester);
           const before = (await stepsOf(goalRunId)).a as StepRunRow;
@@ -2772,13 +2772,20 @@ describe.runIf(DATABASE_URL !== undefined)(
             'executing',
             'test.go3b.redefined',
           );
+          if (unknownFirst) {
+            await admin((client) =>
+              markActionRequestFailed(client, workspaceId, action, {
+                failureKind: 'outcome_unknown',
+              }),
+            );
+          }
           await pauseAs(goalRunId, requester);
           await asRequester(requester, (client) =>
             reviseGoalRun(client, workspaceId, {
               goalRunId,
               actor: by(requester),
               basedOnRevision: 1,
-              plan: planOf([{ key: 'a', input: { step: 'a', changed: true } }]),
+              plan: planOf([{ key, input: { step: 'a', changed: true } }]),
             }),
           );
           await advance(goalRunId, requester);
@@ -2815,6 +2822,28 @@ describe.runIf(DATABASE_URL !== undefined)(
           pauseReason: 'awaiting_reconcile',
         });
         expect((await stepsOf(unknown.goalRunId)).a?.status).toBe('ready');
+
+        // Review #493 on #633: renaming the step does not get past the outcome-unknown action — no
+        // attempt of the run starts while it waits for a reconcile, whatever the key …
+        const renamed = await redefine('a2', true);
+        await advance(renamed.goalRunId, requester);
+        expect(await goalOf(renamed.goalRunId)).toMatchObject({
+          status: 'paused',
+          pauseReason: 'awaiting_reconcile',
+        });
+        expect((await stepsOf(renamed.goalRunId)).a2).toMatchObject({
+          status: 'ready',
+          attemptCount: 0,
+        });
+
+        // … while one still in flight holds only the step that took over its key: a renamed step
+        // runs beside it, the person's choice, nothing in doubt.
+        const beside = await redefine('a2');
+        expect((await stepsOf(beside.goalRunId)).a2).toMatchObject({
+          status: 'running',
+          attemptCount: 1,
+        });
+        expect((await goalOf(beside.goalRunId)).status).toBe('running');
       });
 
       it('legacy 356: a run whose advances keep failing pauses for a person; an advance that commits, or a resume, starts the count again', async () => {
@@ -2892,7 +2921,30 @@ describe.runIf(DATABASE_URL !== undefined)(
           (await goalAudit(goalRunId)).filter((row) => row.action === 'goal_run.advance_failing'),
         ).toHaveLength(0);
 
-        // A person's resume starts the count again; an advance that commits clears it.
+        // A person's revision starts the count again (review #493 on #633: past the limit the
+        // scan skips the run, and with it terminating the Tasks a revision stops); so does a
+        // resume, and an advance that commits clears it.
+        await admin((client) =>
+          client.query(
+            'update goal_runs set advance_failures = 5 where workspace_id = $1 and id = $2',
+            [workspaceId, goalRunId],
+          ),
+        );
+        await asRequester(requester, (client) =>
+          reviseGoalRun(client, workspaceId, {
+            goalRunId,
+            actor: by(requester),
+            basedOnRevision: 1,
+            plan: planOf([{ key: 'a' }]),
+          }),
+        );
+        expect(await goalOf(goalRunId)).toMatchObject({ status: 'paused', advanceFailures: 0 });
+        await admin((client) =>
+          client.query(
+            'update goal_runs set advance_failures = 5 where workspace_id = $1 and id = $2',
+            [workspaceId, goalRunId],
+          ),
+        );
         await resumeAs(goalRunId, requester);
         expect(await goalOf(goalRunId)).toMatchObject({ status: 'running', advanceFailures: 0 });
         await tick();

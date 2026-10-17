@@ -84,13 +84,15 @@ import type { GoalRunRow, PlanRevisionRow, StepRunRow } from './types.js';
  *      Task of the run holds — a live Task its own budget), so the live Tasks' budgets together
  *      never exceed what is left of the goal's: `createStepAttemptTask` inserts
  *      the attempt's Task in this transaction and the step moves `ready → running` with
- *      `attempt_count + 1` (I-G1). A step whose key a revision redefined does not start while the
- *      StepRun it replaced still has a Task running or a request in flight (I-G4 across the
- *      revision: the new definition does not run beside the old one's actions; an outcome-unknown
- *      one pauses `awaiting_reconcile`). A refusal leaves the step `ready`: the requester's
- *      concurrency quota retries after {@link DEFAULT_QUOTA_RETRY_MS}; the daily cost quota pauses
- *      `budget_exhausted`; lost authority pauses `authority_lost` (S9, I-G7); a pinned component no
- *      longer published pauses `needs_decision`.
+ *      `attempt_count + 1` (I-G1). No attempt starts while a request of any superseded step —
+ *      whatever key the revision gave its work — has an unknown outcome: the run pauses
+ *      `awaiting_reconcile` (review #493 on #633). A step whose key a revision redefined does not
+ *      start while the StepRun it replaced still has a Task running or a request in flight (I-G4
+ *      across the revision: the new definition does not run beside the old one's actions). A
+ *      refusal leaves the step `ready`: the requester's concurrency quota retries after
+ *      {@link DEFAULT_QUOTA_RETRY_MS}; the daily cost quota pauses `budget_exhausted`; lost
+ *      authority pauses `authority_lost` (S9, I-G7); a pinned component no longer published
+ *      pauses `needs_decision`.
  *
  * A paused GoalRun keeps its first reason (the guard refuses changing it while paused); a further
  * cause is in the audit log (`goal_run.pause_noted`, once per pause for each reason and detail),
@@ -630,6 +632,19 @@ class Advance {
     }
     const ready = live.filter((step) => step.status === 'ready');
     if (ready.length === 0) return;
+    // Review #493 on #633: a request of any superseded step whose outcome is unknown holds every
+    // new attempt, whatever key the revision gave the work — renaming a step must not re-run an
+    // action that may have run. (A request still in flight holds only the step that took over its
+    // key, `predecessorBusy`: a renamed step running beside it is the person's choice, nothing in
+    // doubt.)
+    const inDoubt = await this.supersededInDoubt(steps);
+    if (inDoubt) {
+      await this.pause(
+        'awaiting_reconcile',
+        `step ${inDoubt.stepKey} (revised away): an action of it may have run (outcome unknown)`,
+      );
+      return;
+    }
     let attemptsSoFar = usage.steps;
     if (attemptsSoFar >= this.goal.budget.maxSteps) {
       await this.pause(
@@ -705,8 +720,20 @@ class Advance {
     return !busy;
   }
 
+  /** The first StepRun a revision superseded — under any key — with a request whose outcome is
+   *  unknown, or `null`. */
+  private async supersededInDoubt(steps: readonly StepRunRow[]): Promise<StepRunRow | null> {
+    for (const step of steps) {
+      if (step.status !== 'superseded') continue;
+      const effect = stepActionEffect(await listStepActionOutcomes(this.client, this.ws, step.id));
+      if (effect.kind === 'wait' && effect.waitingReason === 'reconcile') return step;
+    }
+    return null;
+  }
+
   /** What the StepRuns a revision superseded under `step`'s key still have running: `busy` (a Task,
-   *  or a request in flight), `reconcile` (a request whose outcome is unknown) or `null`. */
+   *  or a request in flight), `reconcile` (a request whose outcome is unknown — found by
+   *  {@link supersededInDoubt} before any attempt starts; one that turned so since) or `null`. */
   private async predecessorBusy(
     steps: readonly StepRunRow[],
     step: StepRunRow,

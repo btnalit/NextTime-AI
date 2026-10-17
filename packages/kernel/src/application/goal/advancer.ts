@@ -27,9 +27,9 @@ import { recordGoalRunTransition } from './transition-log.js';
  *      locked`, `next_tick_at` pushed one lease ahead in the claiming statement) and advances each
  *      (`advance.ts`). An advance that throws rolls back; its run is due again when the lease
  *      runs out. Legacy 356: the throw is counted on the run ({@link recordAdvanceFailure},
- *      `advance_failures`, goal/0004) and an advance that commits clears the count; at
- *      {@link DEFAULT_MAX_CONSECUTIVE_ADVANCE_FAILURES} in a row a running run pauses for a person
- *      instead of being retried every lease, without end.
+ *      `advance_failures`, goal/0004) and an advance that commits, a resume or a revision clears
+ *      the count; at {@link DEFAULT_MAX_CONSECUTIVE_ADVANCE_FAILURES} in a row a running run
+ *      pauses for a person instead of being retried every lease, without end.
  *   2. {@link registerGoalWakeConsumer} — the outbox consumer. A Task of a GoalRun finished, or an
  *      ActionRequest of one of its steps stopped being in flight: in its own short transaction it
  *      sets that GoalRun due, and returns. It never advances (§4.2: the dispatcher's delivery loop
