@@ -113,6 +113,135 @@ describe('parsePlan', () => {
   });
 });
 
+describe('parsePlan — reconcile declarations (S11 GO3d)', () => {
+  const gate = randomUUID();
+  const declaration = (expect: unknown = { path: 'state', op: 'eq', value: 'running' }) => ({
+    action: { gatekeeperId: gate, operation: 'svc.restart', params: { name: 'web', zone: 'a' } },
+    check: { gatekeeperId: gate, operation: 'svc.status', params: { name: 'web' }, expect },
+  });
+
+  it('accepts declarations that name an action and a predicate over an observation', () => {
+    const other = {
+      ...declaration(),
+      action: { gatekeeperId: gate, operation: 'svc.reload' },
+    };
+    const plan = parsePlan({ steps: [step('a', { reconcile: [declaration(), other] })] });
+    expect(plan.steps[0]?.reconcile).toHaveLength(2);
+  });
+
+  it('refuses an empty list, unknown fields, a missing predicate and the same action twice', () => {
+    expect(problemsOf({ steps: [step('a', { reconcile: [] })] })).toHaveLength(1);
+    expect(
+      problemsOf({ steps: [step('a', { reconcile: [{ ...declaration(), mode: 'auto' }] })] }),
+    ).toHaveLength(1);
+    const { expect: _missing, ...noPredicate } = declaration().check;
+    expect(
+      problemsOf({ steps: [step('a', { reconcile: [{ ...declaration(), check: noPredicate }] })] }),
+    ).toHaveLength(1);
+    // The same identity, params in another order: one declaration per action.
+    const reordered = {
+      ...declaration(),
+      action: { gatekeeperId: gate, operation: 'svc.restart', params: { zone: 'a', name: 'web' } },
+    };
+    expect(problemsOf({ steps: [step('a', { reconcile: [declaration(), reordered] })] })).toEqual([
+      'step "a": reconcile[1]: declares the same action as reconcile[0]',
+    ]);
+  });
+
+  it('refuses a predicate the lint refuses, naming the step and the declaration', () => {
+    const [always] = problemsOf({
+      steps: [step('a', { reconcile: [declaration({ not: { path: 'error', op: 'exists' } })] })],
+    });
+    expect(always).toMatch(/^step "a": reconcile\[0\]: the predicate holds on /);
+    expect(
+      problemsOf({
+        steps: [step('a', { reconcile: [declaration({ path: '`1`', op: 'eq', value: 1 })] })],
+      }),
+    ).toEqual(['step "a": reconcile[0]: path "`1`" reads nothing from the observation\'s result']);
+    // Review #493: the shape of the answer is not the effect.
+    expect(
+      problemsOf({
+        steps: [
+          step('a', { reconcile: [declaration({ path: 'length(keys(@))', op: 'gt', value: 1 })] }),
+        ],
+      }),
+    ).toEqual([
+      'step "a": reconcile[0]: path "length(keys(@))" reads the result as a whole (@, *, keys, values or a position) instead of a named field — it would hold on almost any answer',
+    ]);
+  });
+
+  it('refuses a predicate whose literals carry a suspected credential — in a value, an object value or the path', () => {
+    // Synthetic, Handle-shaped and vendor-shaped: what the credential review counts.
+    const jwt = 'eyJhbGciOiJFZERTQSJ9.eyJ3cyI6IndzMSIsIm9ibyI6InAxIn0.c2lnbmF0dXJlLWJ5dGVzLWhlcmU';
+    const vendor = `ghp_${'abcdefghij'.repeat(4)}`;
+    const refused: [unknown, string][] = [
+      [{ path: 'token', op: 'eq', value: jwt }, 'token'],
+      [{ path: 'auth', op: 'eq', value: { password: 'hunter2-not-real' } }, 'auth'],
+      [
+        { path: `keys[?id=='${vendor}'] | [0].state`, op: 'eq', value: 'active' },
+        `keys[?id=='${vendor}'] | [0].state`,
+      ],
+      [
+        {
+          all: [
+            { path: 'state', op: 'eq', value: 'up' },
+            { path: 'owner', op: 'contains', value: vendor },
+          ],
+        },
+        'owner',
+      ],
+    ];
+    for (const [expect_, path] of refused) {
+      expect(
+        problemsOf({ steps: [step('a', { reconcile: [declaration(expect_)] })] }),
+        JSON.stringify(expect_),
+      ).toEqual([
+        `step "a": reconcile[0]: a value compared at path "${path}" looks like a credential (1 suspected) — the check judges the result with such values redacted, so it could never match; a plan does not carry credentials`,
+      ]);
+    }
+    // Text that only mentions one is an ordinary value: a header's name, a count, a word.
+    for (const expect_ of [
+      { path: 'header', op: 'eq', value: 'Authorization' },
+      { path: 'tokenCount', op: 'gte', value: 3 },
+      { path: 'message', op: 'contains', value: 'rotated' },
+    ]) {
+      expect(() =>
+        parsePlan({ steps: [step('a', { reconcile: [declaration(expect_)] })] }),
+      ).not.toThrow();
+    }
+  });
+});
+
+describe('parsePlan — reconcile declarations share one lint budget (S11 GO3d)', () => {
+  it("refuses predicates past the plan's lint budget, though each alone would pass", () => {
+    const gate = randomUUID();
+    // Sixteen fields under one wrapper: well within one predicate's bound, a large share of a plan's.
+    const wide = {
+      all: Array.from({ length: 16 }, (_, i) => ({ path: `result.field${i}`, op: 'eq', value: i })),
+    };
+    const declarations = (from: number) =>
+      Array.from({ length: 8 }, (_, i) => ({
+        action: { gatekeeperId: gate, operation: 'svc.restart', params: { n: from + i } },
+        check: { gatekeeperId: gate, operation: 'svc.status', expect: wide },
+      }));
+    expect(() => parsePlan({ steps: [step('a', { reconcile: declarations(0) })] })).not.toThrow();
+    const problems = problemsOf({
+      steps: [
+        step('a', { reconcile: declarations(0) }),
+        step('b', { reconcile: declarations(8) }),
+        step('c', { reconcile: declarations(16) }),
+        step('d', { reconcile: declarations(24) }),
+      ],
+    });
+    expect(problems.length).toBeGreaterThan(0);
+    for (const problem of problems) {
+      expect(problem).toMatch(
+        /^step "[cd]": reconcile\[\d\]: the plan's predicates together read too many places for the lint to check — test fewer fields$/,
+      );
+    }
+  });
+});
+
 describe('planStep and samePlanEntry', () => {
   const plan = { steps: [step('a', { input: { n: 1 } }), step('b', { dependsOn: ['a'] })] };
 

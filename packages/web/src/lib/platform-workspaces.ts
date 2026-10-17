@@ -127,6 +127,7 @@ const PURGE_COUNT_LABELS = {
   principals: { zh: '成员', en: 'Principals' },
   // Legacy 337: the tables §4 does not order, under the names the console uses for them elsewhere
   // (capability labels, the navigation, the quota and profile pages).
+  actionRequestReconcileChecks: { zh: '平台核对记录', en: 'Platform reconcile checks' },
   actionRequests: { zh: '动作请求', en: 'Action requests' },
   agentPolicies: { zh: '工作区策略', en: 'Agent policies' },
   agentProfiles: { zh: '智能体配置', en: 'Agent profiles' },

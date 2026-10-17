@@ -85,6 +85,7 @@ describe('platform-workspaces', () => {
     expect(purgeCountLabel('planRevisions', zhT)).toBe('计划版本');
     expect(purgeCountLabel('stepRuns', zhT)).toBe('步骤运行');
     expect(purgeCountLabel('stepRuns', enT)).toBe('Step runs');
+    expect(purgeCountLabel('actionRequestReconcileChecks', zhT)).toBe('平台核对记录');
     expect(purgeCountLabel('brandNewTable', zhT)).toBe('Brand new table');
     expect(purgeCountLabel('', zhT)).toBe('');
   });
