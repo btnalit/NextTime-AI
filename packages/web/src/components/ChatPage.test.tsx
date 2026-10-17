@@ -605,7 +605,7 @@ describe('ChatPage send refused for U+0000 (legacy 334)', () => {
     const banner = await screen.findByRole('alert');
     const body = banner.querySelector('.error-banner-message')?.textContent ?? '';
     expect(banner.textContent).toContain('文字里有存不了的字符');
-    expect(body).toMatch(/^消息内容里有一个看不见的 U\+0000/);
+    expect(body).toMatch(/^消息内容里有看不见的 U\+0000/);
     expect(body).toContain('这条消息没有发出');
     expect(body).not.toContain('「text」');
     expect(body).not.toContain('agent');

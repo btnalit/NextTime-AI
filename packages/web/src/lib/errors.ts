@@ -253,8 +253,8 @@ export const CODE_TITLES_ZH: Readonly<Record<string, string>> = {
  *  place it names. U+0000 cannot be seen, so "remove the character" alone cannot be followed: the
  *  note says where it usually comes from and two ways to get rid of it. */
 const UNSTORABLE_TEXT_WHAT = {
-  zh: '有一个看不见的 U+0000（空字符），系统存不了它',
-  en: 'holds an invisible U+0000 (a null character), which the system cannot store',
+  zh: '有看不见的 U+0000（空字符），系统存不了它',
+  en: 'holds invisible U+0000 (null) characters, which the system cannot store',
 } as const;
 const UNSTORABLE_TEXT_FIX = {
   zh: '它通常来自粘贴的日志、终端输出或二进制内容：删掉粘贴进来的那一段重新输入，或先粘贴到纯文本编辑器里再复制过来',
