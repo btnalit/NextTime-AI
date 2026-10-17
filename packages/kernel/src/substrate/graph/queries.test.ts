@@ -261,6 +261,43 @@ describe('buildSearchQuery', () => {
     expect(q.values).toEqual(['ws1', 'test.thing', '%widget%', 10, null, null]);
   });
 
+  it('without `shown` matches the stored properties and identity key', () => {
+    const q = buildSearchQuery('ws1', { query: 'widget' });
+    expect(q.text).toContain(
+      "(properties::text ilike $3 or coalesce(identity_key::text, '') ilike $3)",
+    );
+    expect(q.text).not.toContain('case when');
+  });
+
+  it('legacy 387: with `shown`, Objects of the shown types match only their entry (by id), every other Object the stored text; binds after the viewer', () => {
+    const shown = {
+      objectTypes: ['Gatekeeper'],
+      objects: { g1: { properties: { name: 'https://h/' }, identityKey: null } },
+    };
+    const plain = buildSearchQuery('ws1', { query: 'widget' }, undefined, shown);
+    expect(plain.values.slice(6)).toEqual([['Gatekeeper'], JSON.stringify(shown.objects)]);
+    expect(plain.text).toContain('case when object_type = any($7::text[])');
+    expect(plain.text).toContain('then $8::jsonb ? id::text');
+    expect(plain.text).toContain("(($8::jsonb -> id::text) -> 'properties')::text ilike $3");
+    expect(plain.text).toContain(
+      "else (properties::text ilike $3 or coalesce(identity_key::text, '') ilike $3) end",
+    );
+    const narrowed = buildSearchQuery(
+      'ws1',
+      { query: 'widget' },
+      { principalId: 'p1', seesEveryDraft: false },
+      shown,
+    );
+    expect(narrowed.values.slice(6)).toEqual([
+      false,
+      'p1',
+      ['Gatekeeper'],
+      JSON.stringify(shown.objects),
+    ]);
+    expect(narrowed.text).toContain('case when object_type = any($9::text[])');
+    expect(narrowed.text.indexOf('case when')).toBeLessThan(narrowed.text.indexOf('order by'));
+  });
+
   it('with a valid cursor binds the decoded timestamp and id as values 5 and 6, and orders/filters by (updated_at, id)', () => {
     const updatedAt = new Date('2026-01-01T00:00:00.000Z');
     const cursor = encodeSearchCursor(updatedAt, '11111111-2222-4333-8444-555555555555');

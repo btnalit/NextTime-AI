@@ -255,6 +255,23 @@ export interface SearchInput {
   readonly cursor?: string;
 }
 
+/** Legacy 387: Objects a text search matches on what a read shows for them, not on what is
+ *  stored. The graph store does not know what a read hides — the caller does (application/gateway,
+ *  for the connection Objects whose names and addresses every read redacts) — so the caller hands
+ *  over the shown text: every Object of `objectTypes` matches `search`'s query only on its entry in
+ *  `objects` (by Object id), and one the entries leave out matches nothing. A substring of what
+ *  only the stored value holds (a credential written before legacy 186) finds nothing. */
+export interface ShownObjects {
+  readonly objectTypes: readonly string[];
+  readonly objects: Readonly<Record<string, ShownObjectText>>;
+}
+
+/** An Object's properties and identity key as its reads show them. */
+export interface ShownObjectText {
+  readonly properties: Record<string, unknown>;
+  readonly identityKey: Record<string, unknown> | null;
+}
+
 /** `searchPage` (W5 `search` pagination): one page plus the cursor for the next, `nextCursor`
  *  absent on the last page. */
 export interface SearchPage {
@@ -597,11 +614,15 @@ export interface GraphStore {
     viewer?: GraphReadViewer,
   ): Promise<StateAtResult>;
 
+  /** `shown` (legacy 387): which Objects match on their shown text rather than the stored one —
+   *  see `ShownObjects`. Omitted, every Object matches on what is stored: for internal callers and
+   *  the empty query only; a handler serving a person or an agent passes it. */
   search(
     client: PoolClient,
     workspaceId: string,
     input: SearchInput,
     viewer?: GraphReadViewer,
+    shown?: ShownObjects,
   ): Promise<readonly GraphObject[]>;
 
   /** W5: the paginated form of `search` — same predicate and ordering, keyset cursor in/out.
@@ -612,7 +633,16 @@ export interface GraphStore {
     workspaceId: string,
     input: SearchInput,
     viewer?: GraphReadViewer,
+    shown?: ShownObjects,
   ): Promise<SearchPage>;
+
+  /** Every Object of `objectTypes` in the workspace, by id — unbounded, so only for the small,
+   *  operator-managed types (the connection Objects a `ShownObjects` is built from). */
+  listObjectsOfTypes(
+    client: PoolClient,
+    workspaceId: string,
+    objectTypes: readonly string[],
+  ): Promise<readonly GraphObject[]>;
 
   /** Up to `limit` (default `DEFAULT_RECENT_FACTS_LIMIT`) currently-active (non-superseded,
    *  non-invalidated) Facts for the workspace, newest `recorded_at` first, `id` breaking ties —

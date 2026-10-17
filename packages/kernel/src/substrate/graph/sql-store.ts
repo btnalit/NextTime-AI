@@ -20,6 +20,7 @@ import {
   buildInvalidateUnobservedFactsQuery,
   buildLatestFactInvalidatedForIdentityQuery,
   buildListFactsQuery,
+  buildListObjectsOfTypesQuery,
   buildMarkFactInvalidatedQuery,
   buildMarkFactSupersededQuery,
   buildNeighborsQuery,
@@ -54,6 +55,7 @@ import {
   type NeighborsInput,
   type SearchInput,
   type SearchPage,
+  type ShownObjects,
   type StateAtInput,
   type StateAtResult,
   type SupersedeFactInput,
@@ -277,6 +279,17 @@ export class SqlGraphStore implements GraphStore {
     const map = new Map<string, GraphObject>();
     for (const row of result.rows) map.set(row.id, mapObjectRow(row));
     return map;
+  }
+
+  async listObjectsOfTypes(
+    client: PoolClient,
+    workspaceId: string,
+    objectTypes: readonly string[],
+  ): Promise<readonly GraphObject[]> {
+    if (objectTypes.length === 0) return [];
+    const query = buildListObjectsOfTypesQuery(workspaceId, objectTypes);
+    const result = await client.query<ObjectRow>(query.text, query.values as unknown[]);
+    return result.rows.map(mapObjectRow);
   }
 
   async getObjectByIdentity(
@@ -800,8 +813,9 @@ export class SqlGraphStore implements GraphStore {
     workspaceId: string,
     input: SearchInput,
     viewer?: GraphReadViewer,
+    shown?: ShownObjects,
   ): Promise<readonly GraphObject[]> {
-    const query = buildSearchQuery(workspaceId, input, viewer);
+    const query = buildSearchQuery(workspaceId, input, viewer, shown);
     const result = await client.query<ObjectRow>(query.text, query.values as unknown[]);
     return result.rows.map(mapObjectRow);
   }
@@ -811,11 +825,12 @@ export class SqlGraphStore implements GraphStore {
     workspaceId: string,
     input: SearchInput,
     viewer?: GraphReadViewer,
+    shown?: ShownObjects,
   ): Promise<SearchPage> {
     const limit = Math.min(Math.max(input.limit ?? DEFAULT_SEARCH_LIMIT, 1), MAX_SEARCH_LIMIT);
     // Over-fetch by one: a (limit + 1)th row proves there is a next page without a second query,
     // and is never returned itself — it will be the first row of that next page.
-    const query = buildSearchQuery(workspaceId, { ...input, limit: limit + 1 }, viewer);
+    const query = buildSearchQuery(workspaceId, { ...input, limit: limit + 1 }, viewer, shown);
     const result = await client.query<ObjectRow>(query.text, query.values as unknown[]);
     const rows = result.rows.slice(0, limit);
     const items = rows.map(mapObjectRow);

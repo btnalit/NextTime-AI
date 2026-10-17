@@ -306,6 +306,7 @@ import {
   toWireQuota,
 } from './resource-wire.js';
 import { issueServiceHandleHandler } from './service-handle-handler.js';
+import { shownForSearch } from './shown-search.js';
 import {
   deprecateProcedureHandler,
   deprecateSkillHandler,
@@ -448,7 +449,8 @@ const listFactsHandler: CapabilityHandler = async (client, workspaceId, params, 
 const searchHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
   const input = params as SearchInput;
   const viewer = await graphReadViewerOf(client, workspaceId, ctx);
-  const page = await graphStore.searchPage(client, workspaceId, input, viewer);
+  const shown = await shownForSearch(client, workspaceId, input);
+  const page = await graphStore.searchPage(client, workspaceId, input, viewer, shown);
   const truncated = input.limit !== undefined && input.limit > MAX_SEARCH_LIMIT;
   return {
     result: {

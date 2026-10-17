@@ -104,5 +104,16 @@ describe.runIf(DATABASE_URL !== undefined)(
     it('keeps the plain ones', async () => {
       for (const address of PLAIN) expect(await flagged(address), address).toBe(false);
     });
+
+    it('runs as a whole inside a read-only transaction, as the runbook feeds it to psql', async () => {
+      const client = await pool.connect();
+      try {
+        await client.query('begin transaction read only');
+        await expect(client.query(PREFLIGHT)).resolves.toBeDefined();
+      } finally {
+        await client.query('rollback');
+        client.release();
+      }
+    });
   },
 );

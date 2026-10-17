@@ -12,8 +12,10 @@ import { RAW_SECRET_SCRUB_AUDIT_ACTION, scrubRawSecrets } from './scrub-raw-secr
  * without DATABASE_URL). Seeds, in a workspace of its own, the rows STATUS legacy 183–187 left
  * behind — an agent Turn's report, an agent's Decision, a stored tool-call record, a Task input, a
  * connection target, a Gatekeeper endpoint and the platform's copy of it (core 0045's
- * `workspace_self_connections`), two audit rows — plus their clean or out-of-scope neighbours,
- * then: a dry run writes nothing; an executing run rewrites exactly the four copies people read,
+ * `workspace_self_connections`), a Gatekeeper's name and the ConnectedSystems beside gates (legacy
+ * 384: two whose names differ only in a credential, one whose cut name another already holds), two
+ * audit rows — plus their clean or out-of-scope neighbours,
+ * then: a dry run writes nothing; an executing run rewrites exactly the copies people read,
  * leaves the counted rows (and every neighbour) as they were, and writes one unattributed audit row
  * that names no value; a second run rewrites nothing of this workspace.
  *
@@ -50,6 +52,12 @@ describe.runIf(DATABASE_URL !== undefined)(
       connectionRequest: randomUUID(),
       gatekeeper: randomUUID(),
       cleanGatekeeper: randomUUID(),
+      // Legacy 384: two systems named after the same address with different credentials, one
+      // whose cut name the clean one below already holds.
+      systemA: randomUUID(),
+      systemB: randomUUID(),
+      systemHeld: randomUUID(),
+      systemClean: randomUUID(),
       observed: randomUUID(),
       fact: randomUUID(),
       completeAudit: randomUUID(),
@@ -158,6 +166,13 @@ describe.runIf(DATABASE_URL !== undefined)(
               ids.fact,
             ])
           )?.properties,
+          systems: (
+            await client.query(
+              `select id, identity_key, properties from objects
+                where workspace_id = $1 and object_type = 'ConnectedSystem' order by id`,
+              [workspaceId],
+            )
+          ).rows,
           selfConnections: (
             await client.query(
               `select gatekeeper_object_id, target, endpoint from workspace_self_connections
@@ -256,6 +271,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             JSON.stringify({
               transportKind: 'http',
               target: 'grafana',
+              name: `https://ops:${FAKE}@grafana.example.invalid`,
               endpoint: `https://gate.example.invalid/?token=${FAKE}`,
             }),
           ],
@@ -270,10 +286,23 @@ describe.runIf(DATABASE_URL !== undefined)(
             JSON.stringify({
               transportKind: 'ssh',
               target: 'ssh://deploy@db-1.example.invalid',
+              name: 'ssh://deploy@db-1.example.invalid',
               endpoint: 'https://gate-db-1.example.invalid',
             }),
           ],
         );
+        for (const [id, name] of [
+          [ids.systemA, `https://ops:${FAKE}@grafana.example.invalid`],
+          [ids.systemB, `https://admin:${FAKE}@grafana.example.invalid`],
+          [ids.systemHeld, `https://db-1.example.invalid/?token=${FAKE}`],
+          [ids.systemClean, 'https://db-1.example.invalid/'],
+        ] as const) {
+          await client.query(
+            `insert into objects (workspace_id, id, object_type, identity_key, properties)
+             values ($1, $2, 'ConnectedSystem', $3::jsonb, $4::jsonb)`,
+            [workspaceId, id, JSON.stringify({ name }), JSON.stringify({ target: name })],
+          );
+        }
         await client.query(
           `insert into workspace_self_connections
              (workspace_id, gatekeeper_object_id, connector, target, endpoint) values
@@ -398,6 +427,8 @@ describe.runIf(DATABASE_URL !== undefined)(
         'decisions',
         'toolCallRecords',
         'selfConnectionAddresses',
+        'gatekeeperNames',
+        'connectedSystems',
       ] as const) {
         expect(result.categories[name].affected).toBeGreaterThanOrEqual(1);
         expect(result.categories[name].examples).toEqual([]);
@@ -427,16 +458,26 @@ describe.runIf(DATABASE_URL !== undefined)(
         'factProperties',
         'objectProperties',
         'auditResults',
+        'connectedSystemDuplicates',
       ] as const) {
         expect(counted.filter((row) => row.category === name)).toHaveLength(
           result.categories[name].affected,
         );
       }
       expect(result.categories.auditResults.affected).toBeGreaterThanOrEqual(2);
+      // Whether a cut name collides is known only once the ones before it are rewritten.
+      for (const id of [ids.systemA, ids.systemB, ids.systemHeld]) {
+        expect(counted).not.toContainEqual({ category: 'connectedSystemDuplicates', id });
+      }
     });
 
-    it('--yes rewrites the four copies people read, counts the rest, and audits counts only', async () => {
-      const result = await scrubRawSecrets(pool, { confirm: true, batchSize: 3 });
+    it('--yes rewrites the copies people read, counts the rest, and audits counts only', async () => {
+      const counted: { category: string; id: string }[] = [];
+      const result = await scrubRawSecrets(pool, {
+        confirm: true,
+        batchSize: 3,
+        onCounted: (category, row) => counted.push({ category, id: row.id }),
+      });
       expect(result.executed).toBe(true);
       const after = await snapshot();
 
@@ -472,6 +513,34 @@ describe.runIf(DATABASE_URL !== undefined)(
           },
         ].sort((a, b) => (a.gatekeeper_object_id < b.gatekeeper_object_id ? -1 : 1)),
       );
+
+      // Legacy 384: a label nothing calls — the Gatekeeper's name and its systems' are cut. Of two
+      // systems whose names differed only in a credential, the first in key order takes the cut
+      // name; the other, and one whose cut name was already held, give their identity keys up.
+      expect(after.gatekeeper).toMatchObject({ name: 'https://grafana.example.invalid/' });
+      const grafana = 'https://grafana.example.invalid/';
+      const db1 = 'https://db-1.example.invalid/';
+      const [holder, duplicate] = [ids.systemA, ids.systemB].sort();
+      expect(after.systems).toEqual(
+        [
+          { id: holder, identity_key: { name: grafana }, properties: { target: grafana } },
+          {
+            id: duplicate,
+            identity_key: null,
+            properties: { target: grafana, name: grafana, duplicateOf: holder },
+          },
+          {
+            id: ids.systemHeld,
+            identity_key: null,
+            properties: { target: db1, name: db1, duplicateOf: ids.systemClean },
+          },
+          { id: ids.systemClean, identity_key: { name: db1 }, properties: { target: db1 } },
+        ].sort((a, b) => ((a.id as string) < (b.id as string) ? -1 : 1)),
+      );
+      for (const id of [duplicate, ids.systemHeld]) {
+        expect(counted).toContainEqual({ category: 'connectedSystemDuplicates', id });
+      }
+      expect(counted).not.toContainEqual({ category: 'connectedSystemDuplicates', id: holder });
 
       // Counted, never rewritten.
       expect(after.task).toEqual(taskInput);
