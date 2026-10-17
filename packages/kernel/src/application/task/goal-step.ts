@@ -336,3 +336,46 @@ export async function listGoalRunLiveTasks(
   );
   return result.rows.map((row) => row.id);
 }
+
+/** The Tasks of one step that have not ended — its attempt and the nested child Tasks started under
+ *  it (they carry the step's `step_run_id`, `invoke.ts`), oldest first. S11 GO3b: a step is judged,
+ *  retried or let go only once nothing of it still runs (plan §4.5, §4.8). Reads by the GoalRun's
+ *  index (`tasks_goal_run_idx`): a nested child Task has no `step_attempt`. */
+export async function listStepLiveTasks(
+  client: PoolClient,
+  workspaceId: string,
+  goalRunId: string,
+  stepRunId: string,
+): Promise<readonly string[]> {
+  const result = await client.query<{ id: string }>(
+    `select id from tasks
+     where workspace_id = $1 and goal_run_id = $2 and step_run_id = $3
+       and status not in ('completed', 'failed', 'cancelled')
+     order by created_at, id`,
+    [workspaceId, goalRunId, stepRunId],
+  );
+  return result.rows.map((row) => row.id);
+}
+
+/** A live Task of a GoalRun and the step it runs for. */
+export interface LiveGoalTask {
+  readonly taskId: string;
+  readonly stepRunId: string;
+}
+
+/** {@link listGoalRunLiveTasks} with each Task's step — one read for an advance that asks, step by
+ *  step, whether anything of a step still runs (S11 GO3b). */
+export async function listGoalRunLiveTaskSteps(
+  client: PoolClient,
+  workspaceId: string,
+  goalRunId: string,
+): Promise<readonly LiveGoalTask[]> {
+  const result = await client.query<{ id: string; step_run_id: string }>(
+    `select id, step_run_id from tasks
+     where workspace_id = $1 and goal_run_id = $2
+       and status not in ('completed', 'failed', 'cancelled')
+     order by created_at, id`,
+    [workspaceId, goalRunId],
+  );
+  return result.rows.map((row) => ({ taskId: row.id, stepRunId: row.step_run_id }));
+}

@@ -1,5 +1,6 @@
 import type {
   GoalOutcomeBasis,
+  GoalRunPauseAuthority,
   GoalRunPauseReason,
   GoalRunStatus,
   ObjectiveOutcome,
@@ -28,6 +29,11 @@ export interface GoalRunRow {
   readonly id: string;
   readonly status: GoalRunStatus;
   readonly pauseReason: GoalRunPauseReason | null;
+  /** The person whose pause this is, and the authority it carries (goal/0004) — set only while
+   *  paused by a person; `null` when the advancer paused the run. `owner`: a workspace owner holds
+   *  someone else's run, and the requester cannot resume it until an owner lifts the hold. */
+  readonly pausedBy: string | null;
+  readonly pausedByAuthority: GoalRunPauseAuthority | null;
   readonly cleanupPending: boolean;
   readonly outcome: ObjectiveOutcome | null;
   readonly outcomeBasis: GoalOutcomeBasis | null;
@@ -44,6 +50,15 @@ export interface GoalRunRow {
   /** When the advancer next looks at this run (goal/0002): due once it has passed; `null` while
    *  only an event can move it, and always on a final run. */
   readonly nextTickAt: Date | null;
+  /** Advances of this run that failed in a row (goal/0004, legacy 356); reset by one that commits. */
+  readonly advanceFailures: number;
+}
+
+/** What a revision decided about one step it removes (goal/0004 `plan_revisions.removals`): its
+ *  Task terminated (the default) or let to finish, and the submitted requests a person released. */
+export interface StepRemoval {
+  readonly mode: 'terminate' | 'let_finish';
+  readonly release?: readonly string[];
 }
 
 export interface PlanRevisionRow {
@@ -62,6 +77,9 @@ export interface PlanRevisionRow {
   readonly decidedBy: string | null;
   readonly decidedAt: Date | null;
   readonly createdAt: Date;
+  /** What the person decided about steps this revision removed, keyed by step key (goal/0004);
+   *  `{}` on revision 1. A removed step not listed was terminated. */
+  readonly removals: Readonly<Record<string, StepRemoval>>;
 }
 
 export interface StepRunRow {
@@ -81,16 +99,18 @@ export interface StepRunRow {
 }
 
 export const GOAL_RUN_ROW_COLUMNS =
-  'workspace_id, id, status, pause_reason, cleanup_pending, outcome, outcome_basis, ' +
-  'on_behalf_of, originated_in_turn_id, statement, current_revision, budget_max_tokens, ' +
-  'budget_max_steps, budget_max_revisions, budget_max_wall_clock_seconds, created_at, ' +
-  'updated_at, confirmed_at, ended_at, next_tick_at';
+  'workspace_id, id, status, pause_reason, paused_by, paused_by_authority, cleanup_pending, ' +
+  'outcome, outcome_basis, on_behalf_of, originated_in_turn_id, statement, current_revision, ' +
+  'budget_max_tokens, budget_max_steps, budget_max_revisions, budget_max_wall_clock_seconds, ' +
+  'created_at, updated_at, confirmed_at, ended_at, next_tick_at, advance_failures';
 
 export interface GoalRunDbRow {
   workspace_id: string;
   id: string;
   status: GoalRunStatus;
   pause_reason: GoalRunPauseReason | null;
+  paused_by: string | null;
+  paused_by_authority: GoalRunPauseAuthority | null;
   cleanup_pending: boolean;
   outcome: ObjectiveOutcome | null;
   outcome_basis: GoalOutcomeBasis | null;
@@ -107,6 +127,7 @@ export interface GoalRunDbRow {
   confirmed_at: Date | null;
   ended_at: Date | null;
   next_tick_at: Date | null;
+  advance_failures: number;
 }
 
 export function mapGoalRunRow(row: GoalRunDbRow): GoalRunRow {
@@ -115,6 +136,8 @@ export function mapGoalRunRow(row: GoalRunDbRow): GoalRunRow {
     id: row.id,
     status: row.status,
     pauseReason: row.pause_reason,
+    pausedBy: row.paused_by,
+    pausedByAuthority: row.paused_by_authority,
     cleanupPending: row.cleanup_pending,
     outcome: row.outcome,
     outcomeBasis: row.outcome_basis,
@@ -134,12 +157,13 @@ export function mapGoalRunRow(row: GoalRunDbRow): GoalRunRow {
     confirmedAt: row.confirmed_at,
     endedAt: row.ended_at,
     nextTickAt: row.next_tick_at,
+    advanceFailures: row.advance_failures,
   };
 }
 
 export const PLAN_REVISION_ROW_COLUMNS =
   'workspace_id, id, goal_run_id, revision, status, based_on_revision, plan, proposed_by, ' +
-  'reason, validation, decided_by, decided_at, created_at';
+  'reason, validation, decided_by, decided_at, created_at, removals';
 
 export interface PlanRevisionDbRow {
   workspace_id: string;
@@ -155,6 +179,7 @@ export interface PlanRevisionDbRow {
   decided_by: string | null;
   decided_at: Date | null;
   created_at: Date;
+  removals: Record<string, StepRemoval>;
 }
 
 export function mapPlanRevisionRow(row: PlanRevisionDbRow): PlanRevisionRow {
@@ -172,6 +197,7 @@ export function mapPlanRevisionRow(row: PlanRevisionDbRow): PlanRevisionRow {
     decidedBy: row.decided_by,
     decidedAt: row.decided_at,
     createdAt: row.created_at,
+    removals: row.removals,
   };
 }
 

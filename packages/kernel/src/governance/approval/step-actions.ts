@@ -12,7 +12,8 @@ import {
  * columns and nothing else. The goal advancer (`application/goal`) splits a step on these; the
  * reason text stays in the audit payload, for people. S11 GO3a adds the two writes and reads a
  * stopped step needs: withdrawing its requests that have not run, and listing those still
- * executing.
+ * executing. S11 GO3b: a revision that removes a step lets a person release some of its requests
+ * (`keep`), read first under their row locks ({@link lockWithdrawableStepActions}).
  */
 
 /** One request of a StepRun, as the advancer splits on it: its status and, when it failed, its
@@ -52,12 +53,48 @@ export async function listStepActionOutcomes(
   }));
 }
 
+/** A request of a step that has not started — what closing the step withdraws, or a person
+ *  releases (S11 GO3b). */
+export interface WithdrawableStepAction {
+  readonly id: string;
+  readonly stepRunId: string;
+  readonly status: ActionRequestStatus;
+}
+
+/** The requests of `stepRunIds` that have not started — status in
+ *  {@link WITHDRAWABLE_ACTION_REQUEST_STATUSES} — locked `for update` in `requested_at` order (the
+ *  drainer's), oldest first. A row the drainer started before the lock is not among them. */
+export async function lockWithdrawableStepActions(
+  client: PoolClient,
+  workspaceId: string,
+  stepRunIds: readonly string[],
+): Promise<readonly WithdrawableStepAction[]> {
+  if (stepRunIds.length === 0) return [];
+  const result = await client.query<{
+    id: string;
+    step_run_id: string;
+    status: ActionRequestStatus;
+  }>(
+    `select id, step_run_id, status from action_requests
+     where workspace_id = $1 and step_run_id = any($2::uuid[]) and status = any($3::text[])
+     order by requested_at, id
+     for update`,
+    [workspaceId, [...stepRunIds], [...WITHDRAWABLE_ACTION_REQUEST_STATUSES]],
+  );
+  return result.rows.map((row) => ({
+    id: row.id,
+    stepRunId: row.step_run_id,
+    status: row.status,
+  }));
+}
+
 /**
  * S11 GO3a (plan I-G9, §4.8): withdraws every request of `stepRunIds` that has not started — status
  * in {@link WITHDRAWABLE_ACTION_REQUEST_STATUSES} — and returns their ids, oldest first. Called in
- * the transaction that closes the steps (a cancelled GoalRun), so nothing of a closed step runs
- * later: the execution side reads only the row (`startActionRequestExecution` locks it and finds it
- * `withdrawn`).
+ * the transaction that closes the steps (a cancelled GoalRun, S11 GO3b a revision that removes
+ * them), so nothing of a closed step runs later: the execution side reads only the row
+ * (`startActionRequestExecution` locks it and finds it `withdrawn`). `keep` names requests a person
+ * released when a revision let their step finish: they keep their status.
  *
  * The rows are selected `for update` with the status filter — read under their lock first, as
  * `withdrawActionRequest` requires (review of #601) — so a row the drainer started in the meantime
@@ -69,19 +106,14 @@ export async function withdrawStepActions(
   client: PoolClient,
   workspaceId: string,
   stepRunIds: readonly string[],
-  options: WithdrawOptions = {},
+  options: WithdrawOptions & { readonly keep?: readonly string[] } = {},
 ): Promise<readonly string[]> {
-  if (stepRunIds.length === 0) return [];
-  const result = await client.query<{ id: string }>(
-    `select id from action_requests
-     where workspace_id = $1 and step_run_id = any($2::uuid[]) and status = any($3::text[])
-     order by requested_at, id
-     for update`,
-    [workspaceId, [...stepRunIds], [...WITHDRAWABLE_ACTION_REQUEST_STATUSES]],
-  );
+  const { keep = [], ...withdrawOptions } = options;
+  const kept = new Set(keep);
   const withdrawn: string[] = [];
-  for (const row of result.rows) {
-    await withdrawActionRequest(client, workspaceId, row.id, options);
+  for (const row of await lockWithdrawableStepActions(client, workspaceId, stepRunIds)) {
+    if (kept.has(row.id)) continue;
+    await withdrawActionRequest(client, workspaceId, row.id, withdrawOptions);
     withdrawn.push(row.id);
   }
   return withdrawn;

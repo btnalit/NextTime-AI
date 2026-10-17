@@ -1199,7 +1199,7 @@ v0.47.0、v0.48.0 不单独上主机（#554 不在 v0.47.0 里，遗留 259 的�
 
 **回滚**（§5）：回滚目标是 v0.46.0，按 §3.25 与 §3.26 的回滚说明；不需要排空 Worker。
 
-窗口目标改到 v0.49.0 之后的发版时（维护者 2026-10-16 决定窗口暂缓，开窗口时目标改为当时最新的发版），本清单按新目标刷新，并加上之后各版的小节，至少 §3.28（#589 升钉：`postgres` 与 `backup` 重建、不执行 `ALTER EXTENSION`、应用后只读核对 `vector` 扩展版本）与 §3.29（#592：governance 0020，旧「始终允许」规则可能显示「已暂停 · 待确认版本」需 owner 重新确认，契约不向后兼容、旧控制台页要刷新）与 §3.30（#601：governance 0021，窗口前估算 `audit_records` 全表扫描的锁表时间并核对回收超时，窗口后历史失败行多显示「结果不明」）与 §3.31（#607：goal 0001 / task 0007 / governance 0022，窗口前估算建索引时间）与 §3.32（#615：core 0044，窗口前估算建索引期间审计写入的等待，必要时并发预建并确认索引有效）与 §3.33（#619：goal 0002，新增每秒认领与每分钟对账的后台负载）与 §3.34（#620：core 0045，窗口前三数预检、迁移期间不接新门、清洗改写类变成 4 个、回滚后自接门暂停失效）与 §3.35（#626：goal 0003，只重建一个守卫函数，无主机步骤）。
+窗口目标改到 v0.49.0 之后的发版时（维护者 2026-10-16 决定窗口暂缓，开窗口时目标改为当时最新的发版），本清单按新目标刷新，并加上之后各版的小节，至少 §3.28（#589 升钉：`postgres` 与 `backup` 重建、不执行 `ALTER EXTENSION`、应用后只读核对 `vector` 扩展版本）与 §3.29（#592：governance 0020，旧「始终允许」规则可能显示「已暂停 · 待确认版本」需 owner 重新确认，契约不向后兼容、旧控制台页要刷新）与 §3.30（#601：governance 0021，窗口前估算 `audit_records` 全表扫描的锁表时间并核对回收超时，窗口后历史失败行多显示「结果不明」）与 §3.31（#607：goal 0001 / task 0007 / governance 0022，窗口前估算建索引时间）与 §3.32（#615：core 0044，窗口前估算建索引期间审计写入的等待，必要时并发预建并确认索引有效）与 §3.33（#619：goal 0002，新增每秒认领与每分钟对账的后台负载）与 §3.34（#620：core 0045，窗口前三数预检、迁移期间不接新门、清洗改写类变成 4 个、回滚后自接门暂停失效）、§3.35（#626：goal 0003，只重建一个守卫函数，无主机步骤）与 §3.36（#633：goal 0004，加列与重建一个守卫函数，无主机步骤）。
 
 ### 3.28 第三方镜像升钉：pgvector、node、postgres（#589，v0.49.0 之后的下一版起）
 
@@ -1330,6 +1330,15 @@ SQL
 - **goal 之外的行为变化**：排水器遇到队首在读与开始之间被撤回或被别处开始时重读队列继续，不再结束本轮（遗留 330）；目标步骤下的 Worker 在步骤关闭后发起 `request_action` 或嵌套 `invoke_worker` 得到 409 并留一条拒绝审计；目标步骤下的嵌套子 Task 先用目标空闲余量，不够时从调用方 Task 的预算里分（审计 `task.budget_handed_down`）。目标之外的调用都不受影响。
 - **回滚**：只回退代码即可（§6）。上一版没有取消路径，永远不会碰到这个拒绝。
 
+### 3.36 目标的修订与 hold（#633，goal 0004，S11 GO3b，遗留 356、364，v0.49.0 之后的下一版起）
+
+带一个 goal 迁移（`0004_goal_revision_hold`），随 `apply-release.sh` 的迁移步骤自动应用；没有新环境变量、不改 compose、无单独主机步骤。
+
+- **迁移做什么**：`goal_runs` 加三列（`paused_by`、`paused_by_authority`、`advance_failures`，可空或有默认值），`plan_revisions` 加一列（`removals`，默认 `{}`），四个约束，照 goal 0002 重建 `goal_runs_status_guard`（只多 hold 一段）。goal 表在主机上是空的，耗时可以忽略。
+- **新的后台负载**：残留清理扫描改按 `id` keyset 取（走主键）；对账扫描多一个 `exists` 条件（superseded 步骤的活 Task），条件 (a)、(b) 多一个子查询，都走 GoalRun 的索引。GO5 开放能力之前库里没有 GoalRun。
+- **goal 之外的行为变化**：无（`withdrawStepActions` 多一个可选参数，取消路径不传，行为不变）。
+- **回滚**：只回退代码即可（§6）。上一版不写新列，两列为空时守卫和 CHECK 都接受。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -1446,6 +1455,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.49.0 之后的下一版 | goal `0002_goal_advancer`（#619，S11 GO2）：`goal_runs` 加可空列 `next_tick_at`、CHECK `goal_runs_next_tick`、部分索引，重建守卫 `goal_runs_status_guard`（只多放行 `next_tick_at`） | 可逆 | 上一版没有 goal 模块，回退后不读写这些表；GO1 代码不读写 `next_tick_at`，守卫只是多允许改一列，不需要 reversibility 声明（§3.33） | 只需回退代码；若要撤：按 goal 0001 重建守卫函数、删索引与 CHECK、`alter table goal_runs drop column next_tick_at`，并 `delete from schema_migrations where module = 'goal' and version = 2` |
 | v0.49.0 之后的下一版 | goal `0003_goal_cancelling`（#626，S11 GO3a）：照 goal 0001 重建 `step_runs_status_guard`，把 `cancelling` 加进「步骤只能走向结束」的目标状态 | 可逆 | 守卫只多拒绝一种情况，上一版没有取消路径、不会碰到它，不需要 reversibility 声明（§3.35） | 只需回退代码；若要撤：按 goal 0001 重建 `step_runs_status_guard`，并 `delete from schema_migrations where module = 'goal' and version = 3` |
 | v0.49.0 之后的下一版 | core `0045_workspace_self_connections`（#620，S11 P0b）：新表 `workspace_self_connections`（强制 RLS、`endpoint_key` 部分唯一索引），按没有目录关联的 Gatekeeper 回填并剪掉地址里的凭据 | 可逆 | 上一版不读写这张表；回退后自接门的暂停**不再生效**（§3.34），其余行为与上一版相同；重新升级时 `create table if not exists` 与 `on conflict do nothing` 幂等 | 只需回退代码，表保留；若要撤：`drop table workspace_self_connections` 并 `delete from schema_migrations where module = 'core' and version = 45`（会丢掉平台的暂停记录，先导出） |
+| v0.49.0 之后的下一版 | goal `0004_goal_revision_hold`（#633，S11 GO3b）：`goal_runs` 加 `paused_by`、`paused_by_authority`、`advance_failures`，`plan_revisions` 加 `removals`，四个约束，照 goal 0002 重建 `goal_runs_status_guard`（多 hold 一段） | 可逆 | 加列都有上一版从不写的默认值或可空；守卫只多拒绝这几列的变化，上一版的暂停、继续不写 `paused_by`，回滚到上一版不需要额外步骤 |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：

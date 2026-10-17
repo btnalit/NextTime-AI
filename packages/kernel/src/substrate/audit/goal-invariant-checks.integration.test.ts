@@ -572,6 +572,53 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(flagged(result, 'raised-after-end', raisedAfter)).toBe(true);
       });
 
+      it('counts a request of a superseded step left pending, or run after the step ended, unless the revision released it (S11 GO3b)', async () => {
+        const goalRunId = await goal({ currentRevision: 2 });
+        await revision(goalRunId, 1, ['a', 'b']);
+        await revision(goalRunId, 2, ['b']);
+        const superseded = await step(goalRunId, 'a', {
+          status: 'superseded',
+          supersededIn: 2,
+          endedAgo: 600,
+        });
+        const releasedPending = await request({
+          status: 'pending_approval',
+          stepRunId: superseded,
+        });
+        const releasedRan = await request({
+          status: 'executed',
+          stepRunId: superseded,
+          executingAgo: 300,
+        });
+        const leftQueued = await request({ status: 'auto_approved', stepRunId: superseded });
+        const ranAfter = await request({
+          status: 'executed',
+          stepRunId: superseded,
+          executingAgo: 300,
+        });
+        const ranBefore = await request({
+          status: 'executed',
+          stepRunId: superseded,
+          executingAgo: 900,
+        });
+        await raw(
+          `update plan_revisions set removals = $3::jsonb
+            where workspace_id = $1 and goal_run_id = $2 and revision = 2`,
+          [
+            workspaceId,
+            goalRunId,
+            JSON.stringify({ a: { mode: 'let_finish', release: [releasedPending, releasedRan] } }),
+          ],
+        );
+
+        const result = await check((client) => checkIG9(client, ALL));
+        expect(flagged(result, 'not-withdrawn', leftQueued)).toBe(true);
+        expect(flagged(result, 'ran-after-cancel', ranAfter)).toBe(true);
+        expect(mentioned(result, releasedPending)).toBe(false);
+        expect(mentioned(result, releasedRan)).toBe(false);
+        expect(mentioned(result, ranBefore)).toBe(false);
+      });
+
       it('counts a request whose step is not the one its Worker’s Task runs for', async () => {
         const goalRunId = await goal();
         await revision(goalRunId, 1, ['s']);

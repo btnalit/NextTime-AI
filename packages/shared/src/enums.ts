@@ -318,6 +318,16 @@ export type GoalRunPauseReason = (typeof GOAL_RUN_PAUSE_REASON_VALUES)[number];
 export const GoalRunPauseReasonSchema = asEnum(GOAL_RUN_PAUSE_REASON_VALUES);
 
 /**
+ * The authority a person's pause of a GoalRun carries (S11 GO3b, goal/0004 `paused_by_authority`):
+ * the requester paused their own run (`requester` — they may resume it), or a workspace owner
+ * paused someone else's (`owner` — a hold: the requester cannot resume until an owner lifts it).
+ * Absent when the advancer paused the run (budget, lost authority, a decision needed).
+ */
+export const GOAL_RUN_PAUSE_AUTHORITY_VALUES = ['requester', 'owner'] as const;
+export type GoalRunPauseAuthority = (typeof GOAL_RUN_PAUSE_AUTHORITY_VALUES)[number];
+export const GoalRunPauseAuthoritySchema = asEnum(GOAL_RUN_PAUSE_AUTHORITY_VALUES);
+
+/**
  * What a `completed` GoalRun's objective outcome (`achieved` / `not_achieved`,
  * {@link OBJECTIVE_OUTCOME_VALUES}) rests on (I-G5): a platform-run acceptance check the requester
  * confirmed (`verified_by_check`), the requester's own word (`requester`), or an independent review
