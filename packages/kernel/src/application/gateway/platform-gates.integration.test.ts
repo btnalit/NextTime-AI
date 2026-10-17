@@ -78,6 +78,7 @@ import {
   InvokeWorkerAttenuationError,
   computeChildHandleScope,
   defaultWorkerCapabilities,
+  findOperations,
 } from '../task/index.js';
 import { configureTaskRuntime, resetTaskRuntimeForTests } from '../task/runtime.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/index.js';
@@ -97,7 +98,7 @@ import {
   setConnectionHandlerDeps,
 } from './connection-handlers.js';
 import { dispatchCapability } from './dispatch.js';
-import { listGraphNodesForExplorer } from './explorer-read-service.js';
+import { listGraphNodesForExplorer, searchGraphForExplorer } from './explorer-read-service.js';
 import { GateInstanceNotAvailableError } from './gate-instance-handlers.js';
 import { PrincipalOperationRefusedError } from './members-handlers.js';
 import { PlatformAdminError } from './platform-handlers.js';
@@ -3102,6 +3103,111 @@ describe.runIf(DATABASE_URL !== undefined)(
             [gatekeeperId],
           );
           expect(stored.rows[0]?.name).toBe(carrying);
+        });
+
+        it('a substring of a credential stored before legacy 186 finds no connection Object in search, the Explorer or find_operations, while what they show still does; the scrub then stores what they show (legacy 387, 384)', async () => {
+          const other = await createWorkspaceWithOwner(pool, {
+            name: 'p0b-probe',
+            owner: { userId: admin.id, displayName: 'Probe Owner' },
+            ontologyDir: ONTOLOGY_DIR,
+          });
+          const ownerCaller = humanCallerFor(other.workspaceId, other.ownerPrincipalId, 'owner');
+          const fake = 'abcdefghijklmnopqrstuvwxyz0123';
+          const host = `probed-${randomUUID().slice(0, 8)}.example.invalid`;
+          const carrying = `https://ops:${fake}@${host}/inventory?token=${fake}`;
+          const shown = `https://${host}/inventory`;
+          const gatekeeperId = await landSelf(
+            other.workspaceId,
+            other.ownerPrincipalId,
+            `https://${host}/gate`,
+            selfSecrets.mint(other.workspaceId).salt,
+          );
+          // As #620's own test above: the names and addresses written before legacy 186.
+          await pool.query(
+            `update objects set properties = properties || jsonb_build_object('name', $3::text, 'target', $3::text)
+              where workspace_id = $1 and id = $2`,
+            [other.workspaceId, gatekeeperId, carrying],
+          );
+          const system = await pool.query<{ id: string }>(
+            `update objects
+                set identity_key = jsonb_build_object('name', $2::text),
+                    properties = properties || jsonb_build_object('target', $2::text)
+              where workspace_id = $1 and object_type = 'ConnectedSystem'
+              returning id`,
+            [other.workspaceId, carrying],
+          );
+          const systemId = system.rows[0]?.id as string;
+          // Published, so find_operations lists it at all.
+          const operation = await pool.query<{ id: string }>(
+            `update objects set properties = properties || '{"status":"published"}'::jsonb
+              where workspace_id = $1 and object_type = 'Operation'
+                and identity_key ->> 'gatekeeperId' = $2::text
+              returning id`,
+            [other.workspaceId, gatekeeperId],
+          );
+          expect(operation.rows).toHaveLength(1);
+          const operationId = operation.rows[0]?.id as string;
+
+          const searched = async (query: string) =>
+            (
+              (await dispatchCapability({ pool }, ownerCaller, 'search', {
+                query,
+              })) as ListEnvelope<{ id: string }>
+            ).items.map((item) => item.id);
+          const explored = async (query: string) => [
+            ...(
+              await listGraphNodesForExplorer(pool, other.workspaceId, other.ownerPrincipalId, {
+                search: query,
+              })
+            ).items.map((node) => node.id),
+            ...(
+              await searchGraphForExplorer(pool, other.workspaceId, other.ownerPrincipalId, {
+                query,
+              })
+            ).results.map((result) => result.node.id),
+          ];
+          const found = (need: string) =>
+            withWorkspace(
+              pool,
+              { workspaceId: other.workspaceId, principalId: other.ownerPrincipalId },
+              (client) =>
+                findOperations(
+                  client,
+                  other.workspaceId,
+                  { parentAuthority: 'unconstrained' },
+                  need,
+                ),
+            ).then((rows) => rows.map((row) => row.id));
+
+          for (const probe of [fake, `ops:${fake}`, `token=${fake}`]) {
+            expect(await searched(probe)).toEqual([]);
+            expect(await explored(probe)).toEqual([]);
+          }
+          expect(await found(fake)).not.toContain(operationId);
+          expect(await searched(shown)).toEqual(expect.arrayContaining([gatekeeperId, systemId]));
+          expect(await explored(shown)).toEqual([systemId, systemId]);
+          // `inventory` is in the name as shown, not in the Operation's own fields.
+          expect(await found('inventory')).toContain(operationId);
+
+          await scrubRawSecrets(pool, { confirm: true });
+          const stored = await pool.query<{
+            id: string;
+            identity_key: Record<string, unknown> | null;
+            properties: Record<string, unknown>;
+          }>(
+            'select id, identity_key, properties from objects where workspace_id = $1 and id = any($2::uuid[])',
+            [other.workspaceId, [gatekeeperId, systemId]],
+          );
+          const byId = new Map(stored.rows.map((row) => [row.id, row]));
+          expect(byId.get(gatekeeperId)?.properties).toMatchObject({
+            name: shown,
+            target: carrying,
+          });
+          expect(byId.get(systemId)?.identity_key).toEqual({ name: shown });
+          expect(byId.get(systemId)?.properties).toMatchObject({ target: shown });
+          // Nothing a search finds changed with the rewrite.
+          expect(await searched(shown)).toEqual(expect.arrayContaining([gatekeeperId, systemId]));
+          expect(await searched(fake)).toEqual([]);
         });
       });
     });

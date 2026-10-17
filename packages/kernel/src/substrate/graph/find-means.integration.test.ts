@@ -180,8 +180,43 @@ describe.runIf(DATABASE_URL !== undefined)('find-means (integration, real Postgr
           status: 'published',
         },
       });
-      const candidates = await findOperationCandidates(client, workspaceId, { need: 'docker' });
+      const candidates = await findOperationCandidates(client, workspaceId, {
+        need: 'docker',
+        gatekeeperNames: { [gk.id]: 'docker' },
+      });
       expect(candidates.map((c) => c.id)).toContain(op.id);
+    });
+  });
+
+  it('find_operations (legacy 387): the gate name matched is the one the caller binds as shown, never the stored one — a Gatekeeper the names leave out matches no token', async () => {
+    await withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+      const gk = await store.upsertObject(client, workspaceId, {
+        objectType: 'Gatekeeper',
+        properties: {
+          name: 'https://probe-user:probe-pass@gate.example',
+          transportKind: 'http',
+          target: 'https://gate.example',
+          endpoint: 'https://gate.example',
+        },
+      });
+      const op = await store.upsertObject(client, workspaceId, {
+        objectType: 'Operation',
+        identity: { gatekeeperId: gk.id, name: 'ticket.close', version: 1 },
+        properties: {
+          name: 'ticket.close',
+          description: 'closes one ticket',
+          mode: 'execute',
+          status: 'published',
+        },
+      });
+      const find = (need: string, gatekeeperNames: Record<string, string>) =>
+        findOperationCandidates(client, workspaceId, { need, gatekeeperNames }).then((rows) =>
+          rows.map((c) => c.id),
+        );
+      const shown = { [gk.id]: 'https://gate.example/' };
+      expect(await find('probe', shown)).not.toContain(op.id);
+      expect(await find('example', shown)).toContain(op.id);
+      expect(await find('example', {})).not.toContain(op.id);
     });
   });
 
@@ -196,7 +231,10 @@ describe.runIf(DATABASE_URL !== undefined)('find-means (integration, real Postgr
         identity: { gatekeeperId: gk.id, name: 'draft.op', version: 1 },
         properties: { name: 'draft.op', description: 'a draft operation', status: 'draft' },
       });
-      const candidates = await findOperationCandidates(client, workspaceId, { need: 'draft' });
+      const candidates = await findOperationCandidates(client, workspaceId, {
+        need: 'draft',
+        gatekeeperNames: { [gk.id]: 'draft-gate' },
+      });
       expect(candidates.map((c) => c.id)).not.toContain(op.id);
     });
   });

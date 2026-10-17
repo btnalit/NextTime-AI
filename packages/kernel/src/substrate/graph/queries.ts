@@ -11,6 +11,7 @@ import {
   type ListFactsInput,
   type NeighborsInput,
   type SearchInput,
+  type ShownObjects,
   type StateAtInput,
   type TraverseDirection,
   type TraverseInput,
@@ -162,6 +163,17 @@ export function buildGetObjectsByIdsQuery(
     values: [workspaceId, objectIds, ...filter.values],
   };
 }
+
+/** `listObjectsOfTypes` (store.ts). */
+export function buildListObjectsOfTypesQuery(
+  workspaceId: string,
+  objectTypes: readonly string[],
+): SqlQuery {
+  return {
+    text: `select ${OBJECT_COLUMNS} from objects where workspace_id = $1 and object_type = any($2::text[]) order by id`,
+    values: [workspaceId, objectTypes],
+  };
+}
 /** `getObjectByIdentity` (store.ts): looks up an Object by its `(object_type, identity_key)`
  *  upsert key — the same partial unique index `buildUpsertObjectQuery` conflicts against
  *  (migrations/core/0006_object_identity.sql). jsonb equality (`=`), not containment (`@>`): an
@@ -216,7 +228,31 @@ export function decodeSearchCursor(
   }
 }
 
-/** S1 minimal search (docs/development-tasks.md S1.2): ILIKE over properties and identity_key.
+/** What a search matches `$3` against: the stored properties and identity key. */
+const STORED_TEXT_MATCH = `(properties::text ilike $3 or coalesce(identity_key::text, '') ilike $3)`;
+
+/**
+ * Legacy 387: the match clause for `shown` (store.ts `ShownObjects`), its two binds numbered from
+ * `firstParam`. An Object of one of the shown types matches on its entry's text — rendered by
+ * Postgres the way the stored columns are (`jsonb::text`), so a query matches it exactly as it
+ * would the stored value had nothing been hidden — and one with no entry matches nothing. No
+ * `shown`: the stored text, byte for byte the query before legacy 387.
+ */
+function searchMatch(shown: ShownObjects | undefined, firstParam: number): ViewerFilter {
+  if (!shown) return { sql: STORED_TEXT_MATCH, values: [] };
+  const entry = `$${firstParam + 1}::jsonb -> id::text`;
+  return {
+    sql: `(case when object_type = any($${firstParam}::text[])
+             then $${firstParam + 1}::jsonb ? id::text
+                  and (((${entry}) -> 'properties')::text ilike $3
+                       or coalesce(nullif((${entry}) -> 'identityKey', 'null'::jsonb)::text, '') ilike $3)
+             else ${STORED_TEXT_MATCH} end)`,
+    values: [shown.objectTypes, JSON.stringify(shown.objects)],
+  };
+}
+
+/** S1 minimal search (docs/development-tasks.md S1.2): ILIKE over properties and identity_key —
+ *  for the Objects `shown` names, over what their reads show instead (legacy 387, `searchMatch`).
  *  W5: keyset-paginated on `(updated_at desc, id desc)` via `input.cursor` (see
  *  `encodeSearchCursor`); `limit` is bound as given — callers clamp (`MAX_SEARCH_LIMIT`, store.ts)
  *  and may over-fetch by one to detect a next page (`SqlGraphStore.searchPage`).
@@ -231,19 +267,21 @@ export function buildSearchQuery(
   workspaceId: string,
   input: SearchInput,
   viewer?: GraphReadViewer,
+  shown?: ShownObjects,
 ): SqlQuery {
   const pattern = `%${input.query}%`;
   const limit = input.limit ?? DEFAULT_SEARCH_LIMIT;
   const cursor = decodeSearchCursor(input.cursor);
   // Leftover 123: in the WHERE, so `limit` and the keyset cursor count only rows the viewer sees.
   const filter = objectViewerFilter(viewer, 7);
+  const match = searchMatch(shown, 7 + filter.values.length);
   return {
     text: `
       select ${OBJECT_COLUMNS}
       from objects
       where workspace_id = $1
         and ($2::text is null or object_type = $2)
-        and (properties::text ilike $3 or coalesce(identity_key::text, '') ilike $3)
+        and ${match.sql}
         and (
           $5::timestamptz is null
           or (date_trunc('milliseconds', updated_at), id) < ($5::timestamptz, $6::uuid)
@@ -260,6 +298,7 @@ export function buildSearchQuery(
       cursor?.updatedAt ?? null,
       cursor?.id ?? null,
       ...filter.values,
+      ...match.values,
     ],
   };
 }

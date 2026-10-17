@@ -9,7 +9,11 @@ import {
 import type { PoolClient } from 'pg';
 import { withWorkspace } from '../../adapters/db/pool.js';
 import { WORKER_CEILING_CAPABILITIES } from '../../governance/capability/index.js';
-import { getGatekeeper, getPublishedOperation } from '../../governance/gatekeepers/index.js';
+import {
+  gatekeeperNamesShown,
+  getGatekeeper,
+  getPublishedOperation,
+} from '../../governance/gatekeepers/index.js';
 import {
   DEFAULT_FIND_MEANS_LIMIT,
   findOperationCandidates,
@@ -685,8 +689,10 @@ export async function findOperations(
     parentAuthority === 'unconstrained'
       ? undefined
       : new Set(parentAuthority.resources.gatekeeper ?? []);
+  // Legacy 387: a need's tokens hit gate names as reads show them, never as stored.
+  const gatekeeperNames = await gatekeeperNamesShown(client, workspaceId);
   return collectUsable(
-    (page) => findOperationCandidates(client, workspaceId, { need, ...page }),
+    (page) => findOperationCandidates(client, workspaceId, { need, ...page, gatekeeperNames }),
     (candidate) => {
       if (allowedGatekeepers === undefined || candidate.properties.mode !== 'execute') {
         return candidate;
