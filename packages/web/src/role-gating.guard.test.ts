@@ -954,6 +954,8 @@ const ROUTE_LINK_ALLOWED: Readonly<Record<string, string>> = {
   'components/platform/PlatformModelsPage.tsx': 'a platform page, as above',
   'components/platform/PlatformSettingsPage.tsx': 'a platform page, as above',
   'components/platform/PlatformStatusPage.tsx': 'a platform page, as above',
+  'components/platform/PlatformIntegrationsPage.tsx':
+    'a platform page, as above: its own tab in the URL (legacy 380)',
   'lib/audit.ts': "builds the audit deep links; resourceHref takes the caller's canOpen to filter",
   'routes.tsx':
     'in-page navigation on a route the reader already opened (approvals, platform integrations), ' +

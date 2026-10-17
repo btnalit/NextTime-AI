@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { type Route, hrefs, routeFromHash, sectionOf } from './router.js';
+import { type Route, hrefs, readIntegrationsTab, routeFromHash, sectionOf } from './router.js';
 
 describe('routeFromHash', () => {
   it('parses every S3.14 route, including optional trailing segments', () => {
@@ -89,6 +89,20 @@ describe('routeFromHash', () => {
     // 404s, it just lands on the default view.
     expect(routeFromHash('#/chats')).toEqual({ kind: 'chats' });
     expect(routeFromHash('#/connections')).toEqual({ kind: 'chats' });
+  });
+});
+
+describe('readIntegrationsTab (legacy 380)', () => {
+  it('reads the tab hrefs.platformIntegrationsTab writes; the default and anything unknown read as null', () => {
+    for (const tab of ['instances', 'self', 'runtimes'] as const) {
+      expect(readIntegrationsTab(hrefs.platformIntegrationsTab(tab))).toBe(tab);
+      expect(routeFromHash(hrefs.platformIntegrationsTab(tab))).toEqual({
+        kind: 'platformIntegrations',
+      });
+    }
+    expect(hrefs.platformIntegrationsTab('connectors')).toBe(hrefs.platformIntegrations());
+    expect(readIntegrationsTab(hrefs.platformIntegrations())).toBeNull();
+    expect(readIntegrationsTab('#/platform/integrations?tab=bogus')).toBeNull();
   });
 });
 

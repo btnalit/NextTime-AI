@@ -12,7 +12,11 @@ import type { CapabilityCaller } from '../../lib/clients.js';
 import { HttpError } from '../../lib/http-client.js';
 import { PlatformIntegrationsPage } from './PlatformIntegrationsPage.js';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  // Legacy 380: a tab change writes the URL; each test starts from the page's default.
+  window.location.hash = '';
+});
 
 /** A `CapabilityCaller` whose named answers are scripted; unscripted names throw loudly instead
  *  of silently resolving `undefined` (the convention every page test in this package uses). */
@@ -1104,7 +1108,8 @@ describe('PlatformIntegrationsPage', () => {
     const confirm = await screen.findByTestId('self-connection-confirm-gk-self-1');
     fireEvent.click(within(confirm).getByTestId('confirm-button'));
     const error = await within(confirm).findByTestId('confirm-error');
-    expect(error.textContent).toContain('找不到这个工作区自己接入的门');
+    // Legacy 377: the likely reason leads — the workspace's catalog enable claimed it.
+    expect(error.textContent).toContain('多半是工作区从目录启用了同地址的平台实例');
     expect(within(row).getByText('使用中')).toBeTruthy();
   });
 
@@ -1201,6 +1206,20 @@ describe('PlatformIntegrationsPage', () => {
     fireEvent.click(await screen.findByTestId('connector-self-connections-ssh'));
     const empty = await screen.findByTestId('self-connections-empty');
     expect(empty.textContent).toContain('没有经「SSH」自己接入的门');
+  });
+
+  it('legacy 380: the tab is in the URL — a reload lands on it, and switching writes it', async () => {
+    window.location.hash = '#/platform/integrations?tab=runtimes';
+    const http = scriptedHttp({ list_external_runtimes: () => ({ items: [runtime()] }) });
+    renderPage(http);
+    expect(await screen.findByTestId('external-runtimes-table')).toBeTruthy();
+    expect(screen.getByTestId('integrations-tab-runtimes').getAttribute('aria-selected')).toBe(
+      'true',
+    );
+    fireEvent.click(screen.getByTestId('integrations-tab-self'));
+    expect(window.location.hash).toBe('#/platform/integrations?tab=self');
+    fireEvent.click(screen.getByTestId('integrations-tab-connectors'));
+    expect(window.location.hash).toBe('#/platform/integrations');
   });
 
   it('revoking an external runtime posts revoke_external_runtime and removes the row', async () => {

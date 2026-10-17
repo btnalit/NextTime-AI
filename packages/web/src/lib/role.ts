@@ -1,6 +1,7 @@
 import type { Role } from '@nexttime/shared';
 import { getCapability } from '@nexttime/shared';
 import type { Permissions } from '../hooks/usePermissions.js';
+import type { Translate } from './i18n.js';
 
 /**
  * lib/role: a best-effort label for the signed-in principal's own role, for the Sidebar's role
@@ -46,12 +47,21 @@ export function inferRole(permissions: Pick<Permissions, 'allowed' | 'denied'>):
   return 'unknown';
 }
 
-export const ROLE_BADGE_LABEL: Readonly<Record<InferredRole, string>> = {
-  owner: 'Owner',
-  'operator+': 'Operator+',
-  member: 'Member',
-  unknown: '—',
+const ROLE_BADGE_LABEL: Readonly<
+  Record<InferredRole, { readonly zh: string; readonly en: string }>
+> = {
+  owner: { zh: '所有者', en: 'Owner' },
+  'operator+': { zh: '操作员及以上', en: 'Operator+' },
+  member: { zh: '成员', en: 'Member' },
+  unknown: { zh: '—', en: '—' },
 };
+
+/** The badge an inferred role bucket shows (legacy 354: in the viewer's language, like the known
+ *  role's chip). The buckets are ranges, not `Role` values, so they keep their own words. */
+export function inferredRoleLabel(role: InferredRole, t: Translate): string {
+  const label = ROLE_BADGE_LABEL[role];
+  return t(label.zh, label.en);
+}
 
 /**
  * `hooks/useWorkspaceIdentity.ts`'s resolved shape: `'known'` once `get_workspace` has returned

@@ -146,9 +146,12 @@ describe('EnableGateConfirm', () => {
 
     fireEvent.click(screen.getByTestId('enable-gate-1'));
     const confirm = await screen.findByTestId('enable-gate-1-confirm');
-    expect(within(confirm).getByTestId('enable-preview-would-link').textContent).toContain(
-      '不会新建',
-    );
+    const wouldLink = within(confirm).getByTestId('enable-preview-would-link').textContent;
+    expect(wouldLink).toContain('不新建门');
+    // Legacy 371: claiming a gate the workspace connected itself says what changes for it.
+    expect(wouldLink).toContain('本工作区自己接入的门');
+    expect(wouldLink).toContain('不再是「自己接入」');
+    expect(wouldLink).not.toContain('旧路径');
     expect(within(confirm).getByTestId('enable-preview-drift').textContent).toContain('old-name');
     expect(within(confirm).getByTestId('enable-preview-drift').textContent).toContain('new-name');
     expect(within(confirm).getByTestId('enable-preview-differs')).toBeTruthy();

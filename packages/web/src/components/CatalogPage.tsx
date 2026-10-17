@@ -1,4 +1,8 @@
-import type { GateOwnedParamWire, SkillDetailWire } from '@nexttime/shared';
+import type {
+  GateOwnedParamWire,
+  OperationGovernanceFieldsWire,
+  SkillDetailWire,
+} from '@nexttime/shared';
 import { visibleText } from '@nexttime/shared';
 import { type ReactNode, useId, useState } from 'react';
 import { invalidateCapability, useCapability, useCapabilityList } from '../hooks/useCapability.js';
@@ -65,9 +69,12 @@ import { WorkerEditorHost } from './catalog/WorkerEditorHost.js';
 import { gateOwnedParamsText } from './connect/GateOwnedParams.js';
 import {
   GovernanceChangeList,
+  firstPublishConsequence,
+  firstPublishNeedsConfirm,
   governanceChangeSummary,
   governanceConsequences,
   governanceFieldChanges,
+  governanceFieldsText,
   isLoosening,
 } from './connect/GovernanceChange.js';
 import { Button } from './kit/button.js';
@@ -402,6 +409,72 @@ function PublishGovernanceConfirm({
       <GovernanceChangeList items={[item]} />
     </Confirm>
   );
+}
+
+/** Legacy 349 (UX acceptance of #612): an Operation's first version that writes or is high
+ *  impact is confirmed before it is published — there is no version in effect to compare with, so
+ *  the confirm says what publishing lets happen instead. */
+function PublishFirstVersionConfirm({
+  row,
+  fields,
+  busy,
+  blocked,
+  onConfirm,
+  testId,
+}: {
+  readonly row: OperationCatalogRow;
+  readonly fields: OperationGovernanceFieldsWire;
+  readonly busy: boolean;
+  /** An open credential question (`CredentialReview`) is unanswered. */
+  readonly blocked: boolean;
+  readonly onConfirm: () => Promise<void>;
+  readonly testId: string;
+}) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  return (
+    <Confirm
+      tier="medium"
+      open={open}
+      onOpenChange={setOpen}
+      anchor={
+        // ux-lint-allow-disabled: the 「已核对凭据」 checkbox (CredentialReview) right above says why.
+        <Button
+          variant="primary"
+          size="s"
+          disabled={busy || blocked}
+          aria-busy={busy || undefined}
+          onClick={() => setOpen(true)}
+          data-testid={`${testId}-trigger`}
+        >
+          {t('发布', 'Publish')}
+        </Button>
+      }
+      title={t(`发布 ${actionKindTagText(row.name)}`, `Publish ${actionKindTagText(row.name)}`)}
+      description={t(
+        `这是它第一次发布，分类为「${governanceFieldsText(fields, t)}」。发布后它马上可以被调用；分类决定要不要授权、要不要人工审批，发布前请核对。`,
+        `This is its first published version, classified “${governanceFieldsText(fields, t)}”. It can be called as soon as it is published; the classification decides whether it needs a grant and a person's approval — check it before publishing.`,
+      )}
+      target={actionKindTagText(row.name)}
+      impact={[firstPublishConsequence(row.name, fields, t)]}
+      confirmLabel={t('发布', 'Publish')}
+      onConfirm={onConfirm}
+      testId={testId}
+    />
+  );
+}
+
+/** The fields a first-publish confirm reads — `null` when the row does not carry all three (an
+ *  older kernel), so it falls back to the plain button rather than guessing. */
+function governanceFieldsOf(row: OperationCatalogRow): OperationGovernanceFieldsWire | null {
+  if (row.mode === undefined || row.blastRadius === undefined || row.autoApprovable === undefined) {
+    return null;
+  }
+  return {
+    mode: row.mode as OperationGovernanceFieldsWire['mode'],
+    blastRadius: row.blastRadius as OperationGovernanceFieldsWire['blastRadius'],
+    autoApprovable: row.autoApprovable,
+  };
 }
 
 /** The credential question in front of a draft's Publish (decision 2026-10-09 "二次确认") — open
@@ -741,6 +814,7 @@ function OperationDetailView({
 }) {
   const t = useT();
   const key = catalogOperationKey(row);
+  const firstPublishFields = governanceFieldsOf(row);
   // Console G4 (legacy 219): publishing a definition with a gate-owned param is refused by the
   // kernel (400 gate_owned_params), so the button is not offered as if it would work.
   const gateOwned = row.gateOwnedParams ?? [];
@@ -868,6 +942,19 @@ function OperationDetailView({
             blocked={credentialReview.blocked}
             onConfirm={onPublish}
             testId={`operation-publish-confirm-${key}`}
+          />
+        ) : canPublish &&
+          row.status === 'draft' &&
+          row.governanceChange === undefined &&
+          firstPublishFields !== null &&
+          firstPublishNeedsConfirm(firstPublishFields) ? (
+          <PublishFirstVersionConfirm
+            row={row}
+            fields={firstPublishFields}
+            busy={busy}
+            blocked={credentialReview.blocked}
+            onConfirm={onPublish}
+            testId={`operation-publish-first-confirm-${key}`}
           />
         ) : canPublish && row.status === 'draft' ? (
           <Button

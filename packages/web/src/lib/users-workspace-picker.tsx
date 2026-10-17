@@ -28,6 +28,19 @@ export function useActiveWorkspaces(
   return useCapabilityList<PlatformWorkspaceWire>(http, 'list_workspaces', ACTIVE_WORKSPACES);
 }
 
+/** Legacy 353 (#614): the active workspaces `userId` is the only active human owner of — the set
+ *  the kernel refuses `last_owner` on (`isLastActiveHumanOwner`; `owners` lists exactly those
+ *  principals). Empty while the read is pending or failed: nothing is assumed then. */
+export function soleOwnedWorkspaces(
+  workspaces: CapabilityListResult<PlatformWorkspaceWire>,
+  userId: string,
+): readonly PlatformWorkspaceWire[] {
+  if (workspaces.state.status !== 'ready') return [];
+  return workspaces.state.data.items.filter(
+    (ws) => ws.owners.length === 1 && ws.owners[0]?.userId === userId,
+  );
+}
+
 export interface WorkspacePickerProps {
   readonly id: string;
   readonly label: string;

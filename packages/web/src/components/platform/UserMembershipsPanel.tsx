@@ -3,7 +3,11 @@ import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { useT } from '../../lib/i18n.js';
 import { roleDescription, roleLabel } from '../../lib/labels.js';
-import { WorkspacePicker, useActiveWorkspaces } from '../../lib/users-workspace-picker.js';
+import {
+  WorkspacePicker,
+  soleOwnedWorkspaces,
+  useActiveWorkspaces,
+} from '../../lib/users-workspace-picker.js';
 import { StillNeeded } from '../kit/still-needed.js';
 import { Button } from '../ui/Button.js';
 import { EmptyState } from '../ui/EmptyState.js';
@@ -42,6 +46,8 @@ export function UserMembershipsPanel({ http, user, onChanged, onBack }: UserMemb
   const [addError, setAddError] = useState<unknown | null>(null);
 
   const workspaceId = workspaceChoice;
+  // Legacy 353 (#614): a change the kernel is bound to refuse (`last_owner`) is not offered.
+  const soleOwnerOf = new Set(soleOwnedWorkspaces(workspaces, user.id).map((ws) => ws.id));
 
   async function add(): Promise<void> {
     if (workspaceId === '' || adding) return;
@@ -84,6 +90,11 @@ export function UserMembershipsPanel({ http, user, onChanged, onBack }: UserMemb
               http={http}
               userId={user.id}
               membership={membership}
+              soleOwner={
+                membership.role === 'owner' &&
+                !membership.disabled &&
+                soleOwnerOf.has(membership.workspaceId)
+              }
               onChanged={onChanged}
             />
           ))}
@@ -154,11 +165,14 @@ function MembershipRow({
   http,
   userId,
   membership,
+  soleOwner,
   onChanged,
 }: {
   readonly http: CapabilityCaller;
   readonly userId: string;
   readonly membership: UserMembershipWire;
+  /** This user is the workspace's only active human owner (legacy 353). */
+  readonly soleOwner: boolean;
   readonly onChanged: () => void;
 }) {
   const t = useT();
@@ -216,38 +230,54 @@ function MembershipRow({
         <div className="data-row-meta">
           <span className="mono">{membership.workspaceId}</span>
         </div>
-        <div className="row-wrap">
-          <label className="field-label" htmlFor={roleFieldId}>
-            {t('角色', 'Role')}
-          </label>
-          <LegacySelect
-            id={roleFieldId}
-            title={roleDescription(role, t) ?? undefined}
-            value={role}
-            onChange={(event) => void saveRole(event.target.value as Role)}
-            disabled={saving || removing}
-          >
-            {ROLE_VALUES.map((value) => (
-              <option key={value} value={value}>
-                {roleLabel(value, t)}
-              </option>
-            ))}
-          </LegacySelect>
-          {confirmingRemove ? (
-            <>
-              <Button variant="ghost" size="s" onClick={() => setConfirmingRemove(false)}>
-                {t('取消', 'Cancel')}
+        {soleOwner ? (
+          <div className="stack-s" data-testid="user-membership-sole-owner">
+            <div className="row-wrap">
+              <span className="field-label">{t('角色', 'Role')}</span>
+              <span>{roleLabel('owner', t)}</span>
+            </div>
+            <Notice>
+              {t(
+                `这位用户是「${membership.workspaceName}」唯一的所有者，不能移出，也不能改成其他角色。先让另一位用户成为这个工作区的所有者，再回来改。`,
+                `This user is the only owner of “${membership.workspaceName}”, so they cannot be removed or given another role. Make another user an owner of this workspace first, then come back.`,
+              )}
+            </Notice>
+          </div>
+        ) : null}
+        {soleOwner ? null : (
+          <div className="row-wrap">
+            <label className="field-label" htmlFor={roleFieldId}>
+              {t('角色', 'Role')}
+            </label>
+            <LegacySelect
+              id={roleFieldId}
+              title={roleDescription(role, t) ?? undefined}
+              value={role}
+              onChange={(event) => void saveRole(event.target.value as Role)}
+              disabled={saving || removing}
+            >
+              {ROLE_VALUES.map((value) => (
+                <option key={value} value={value}>
+                  {roleLabel(value, t)}
+                </option>
+              ))}
+            </LegacySelect>
+            {confirmingRemove ? (
+              <>
+                <Button variant="ghost" size="s" onClick={() => setConfirmingRemove(false)}>
+                  {t('取消', 'Cancel')}
+                </Button>
+                <Button variant="danger" size="s" onClick={() => void remove()} loading={removing}>
+                  {t('确认移出', 'Confirm remove')}
+                </Button>
+              </>
+            ) : (
+              <Button variant="ghost" size="s" onClick={() => setConfirmingRemove(true)}>
+                {t('移出', 'Remove')}
               </Button>
-              <Button variant="danger" size="s" onClick={() => void remove()} loading={removing}>
-                {t('确认移出', 'Confirm remove')}
-              </Button>
-            </>
-          ) : (
-            <Button variant="ghost" size="s" onClick={() => setConfirmingRemove(true)}>
-              {t('移出', 'Remove')}
-            </Button>
-          )}
-        </div>
+            )}
+          </div>
+        )}
         {confirmingRemove ? (
           <Notice tone="warn">
             {t(

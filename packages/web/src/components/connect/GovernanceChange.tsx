@@ -83,6 +83,54 @@ export function governanceFieldsText(fields: OperationGovernanceFieldsWire, t: T
   ].join(' · ');
 }
 
+/** A draft whose publish would be its Operation's first version, with what it is classified as. */
+export interface FirstPublish {
+  readonly name: string;
+  readonly fields: OperationGovernanceFieldsWire;
+}
+
+/** Legacy 349 (UX acceptance of #612): publishing an Operation's first version makes it callable
+ *  with no review beyond the click. One that writes (`execute`) or is high impact is confirmed
+ *  first; a low/medium observe call stays one click. */
+export function firstPublishNeedsConfirm(fields: {
+  readonly mode?: string;
+  readonly blastRadius?: string;
+}): boolean {
+  return fields.mode === 'execute' || fields.blastRadius === 'high';
+}
+
+/** What a first published version lets happen, one line — read off the same approval rules
+ *  `governanceConsequences` cites (`observe` needs no grant and never reaches approval; `high`
+ *  always needs a person; below that an auto-approvable one may run on the workspace policy). */
+export function firstPublishConsequence(
+  name: string,
+  fields: OperationGovernanceFieldsWire,
+  t: Translate,
+): string {
+  const shown = actionKindTagText(name);
+  if (fields.mode === 'observe') {
+    return t(
+      `${shown} 是只读调用：发布后不需要审批也不需要授权，每个成员的入口 agent 都能直接调用`,
+      `${shown} is an observe call: once published it needs no approval and no grant — every member's agent can call it directly`,
+    );
+  }
+  if (fields.blastRadius === 'high') {
+    return t(
+      `${shown} 会写入系统、影响高：发布后有授权的成员可以请求调用，每次都要人工审批`,
+      `${shown} writes to the system at high impact: once published, members with a grant can request it, and every call needs a person's approval`,
+    );
+  }
+  return fields.autoApprovable
+    ? t(
+        `${shown} 会写入系统，且标为可自动批准：发布后有授权的成员可以请求调用，工作区的自动批准策略可以不经人工审批放行它`,
+        `${shown} writes to the system and is marked auto-approvable: once published, members with a grant can request it, and the workspace auto-approval policy can let it run without a person`,
+      )
+    : t(
+        `${shown} 会写入系统：发布后有授权的成员可以请求调用，每次按审批规则处理`,
+        `${shown} writes to the system: once published, members with a grant can request it, and each call goes through approval`,
+      );
+}
+
 /** One impact line: `name: Mode A → B; Blast radius X → Y`. */
 export function governanceChangeSummary(item: GovernanceChangeItem, t: Translate): string {
   const changes = governanceFieldChanges(item.before, item.after, t);

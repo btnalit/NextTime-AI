@@ -142,10 +142,11 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
     en: 'The existing Gatekeeper at this endpoint is already linked to another platform gate instance — one Gatekeeper takes one instance, and nothing was written. Remove the old instance’s link first',
   },
   // P0b (one landing path): `create_connection` at an address this workspace already connected —
-  // a second Gatekeeper there was leftover 73's duplicate. Nothing was written.
+  // a second Gatekeeper there was leftover 73's duplicate. Nothing was written, the minted secret
+  // included (legacy 382): the gate there keeps its own.
   endpoint_already_connected: {
-    zh: '这个工作区已经接入了这个地址上的门，没有再接一次，什么也没保存。到「系统与授权」打开它：要更新清单点「重新读取门的清单」；如果已经把这次的新密钥配到了门上，在 ⋯ 里「重新签发连接密钥」，把签发的密钥换到门上',
-    en: 'This workspace already connected the gate at this address, so nothing was saved. Open it in Systems & access: “Re-read the gate’s manifest” updates its manifest; if you already put this new secret on the gate, use ⋯ → “Issue a new connection secret” and put that one on the gate instead',
+    zh: '这个工作区已经接入了这个地址上的门，没有再接一次，什么也没保存——这里生成的连接密钥也没有保存，那个门用的仍是它原来的密钥。到「系统与授权」打开它：要更新清单点「重新读取门的清单」；如果已经把这次的新密钥配到了门上，门会连不上，在 ⋯ 里「重新签发连接密钥」，把签发的密钥换到门上',
+    en: 'This workspace already connected the gate at this address, so nothing was saved — not the connection secret generated here either; that gate still uses its own. Open it in Systems & access: “Re-read the gate’s manifest” updates its manifest; if you already put this new secret on the gate, it will not connect — use ⋯ → “Issue a new connection secret” and put that one on the gate instead',
   },
   // P0b (leftover 118 remainder ①): the platform administrator suspended this self-connected gate;
   // enabling the platform instance at its address (or re-reading its manifest) would get around
@@ -154,9 +155,12 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
     zh: '平台管理员暂停了这个工作区自己接入的门，暂停期间不能启用同地址的平台实例，也不能重新读取它的清单；本次没有写入任何内容。请联系平台管理员',
     en: 'The platform administrator suspended this self-connected gate — while it is suspended, the platform instance at its address cannot be enabled and its manifest cannot be re-read. Nothing was written; contact the platform administrator',
   },
+  // Legacy 377 (review #493 on #620): mostly the workspace enabled the catalog instance at that
+  // address after this list was read, and the gate now comes from it; a purged workspace is the
+  // other way it goes. The kernel does not say which, so the likely one leads.
   self_connection_not_found: {
-    zh: '找不到这个工作区自己接入的门，可能已被删除或已改由平台实例接入；刷新列表',
-    en: 'No such self-connected gate — it may be gone or now come from a platform instance; refresh the list',
+    zh: '这个门已不在「自己接入的门」里：多半是工作区从目录启用了同地址的平台实例，它已改由那个实例接入（也可能是工作区已被清除）。本次没有写入任何内容；刷新列表，到「门实例」里看那个实例',
+    en: 'This gate is no longer self-connected: most likely the workspace enabled the platform instance at the same address and the gate now comes from that instance (or the workspace was purged). Nothing was written; refresh the list and look at that instance under Gate instances',
   },
   // S8 W3-K1 (leftover 79, closing wave C6, G3); legacy 214 narrowed it: the Gatekeeper sits at a
   // platform gate instance's address but was never enabled from the catalog (a CLI registration),
@@ -244,8 +248,8 @@ export function endpointAlreadyConnectedMessage(name: string | null, t: Translat
     return entry ? t(entry.zh, entry.en) : '';
   }
   return t(
-    `这个地址已经接入为「${name}」，没有再接一次，什么也没保存。在「系统与授权」里找到「${name}」：要更新清单点「重新读取门的清单」；如果已经把这次的新密钥配到了门上，在 ⋯ 里「重新签发连接密钥」，把签发的密钥换到门上`,
-    `This address is already connected as “${name}”, so nothing was saved. Find “${name}” in Systems & access: “Re-read the gate’s manifest” updates its manifest; if you already put this new secret on the gate, use ⋯ → “Issue a new connection secret” and put that one on the gate instead`,
+    `这个地址已经接入为「${name}」，没有再接一次，什么也没保存——这里生成的连接密钥也没有保存，「${name}」用的仍是它原来的密钥。在「系统与授权」里找到「${name}」：要更新清单点「重新读取门的清单」；如果已经把这次的新密钥配到了门上，门会连不上，在 ⋯ 里「重新签发连接密钥」，把签发的密钥换到门上`,
+    `This address is already connected as “${name}”, so nothing was saved — not the connection secret generated here either; “${name}” still uses its own. Find “${name}” in Systems & access: “Re-read the gate’s manifest” updates its manifest; if you already put this new secret on the gate, it will not connect — use ⋯ → “Issue a new connection secret” and put that one on the gate instead`,
   );
 }
 

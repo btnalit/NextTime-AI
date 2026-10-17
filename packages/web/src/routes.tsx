@@ -398,7 +398,10 @@ export function Routed({
           http={session.http}
           selectedGateId={route.gateId}
           onSelectGate={(id) =>
-            navigate(id ? hrefs.platformGateInstance(id) : hrefs.platformIntegrations())
+            // Legacy 380: closing an instance stays on 门实例.
+            navigate(
+              id ? hrefs.platformGateInstance(id) : hrefs.platformIntegrationsTab('instances'),
+            )
           }
         />,
         t,

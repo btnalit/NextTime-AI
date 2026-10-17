@@ -182,6 +182,62 @@ describe('CatalogPage', () => {
     );
   });
 
+  it('legacy 349: the first version of a write or high-impact Operation is confirmed before it is published; a low-impact observe draft stays one click', async () => {
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [
+          {
+            gatekeeperId: 'gk-1',
+            name: 'docker.restart',
+            status: 'draft',
+            mode: 'execute',
+            blastRadius: 'high',
+            autoApprovable: false,
+          },
+          {
+            gatekeeperId: 'gk-1',
+            name: 'docker.ps',
+            status: 'draft',
+            mode: 'observe',
+            blastRadius: 'low',
+            autoApprovable: true,
+          },
+        ],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+      publish_operation: () => ({}),
+    });
+    renderPage(http);
+    const rows = await screen.findAllByTestId('catalog-row');
+    const restart = rows.find((row) => row.textContent?.includes('docker.restart'));
+    if (!restart) throw new Error('docker.restart row missing');
+    let detail = await selectRow(restart);
+    fireEvent.click(
+      within(detail).getByTestId('operation-publish-first-confirm-gk-1::docker.restart-trigger'),
+    );
+    expect(http.calls.some((c) => c.name === 'publish_operation')).toBe(false);
+    const confirm = await screen.findByTestId(
+      'operation-publish-first-confirm-gk-1::docker.restart',
+    );
+    expect(confirm.textContent).toContain('第一次发布');
+    expect(confirm.textContent).toContain('每次都要人工审批');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    await waitFor(() =>
+      expect(http.calls.filter((c) => c.name === 'publish_operation')).toHaveLength(1),
+    );
+
+    const ps = (await screen.findAllByTestId('catalog-row')).find((row) =>
+      row.textContent?.includes('docker.ps'),
+    );
+    if (!ps) throw new Error('docker.ps row missing');
+    detail = await selectRow(ps);
+    expect(within(detail).queryByTestId(/operation-publish-first-confirm/)).toBeNull();
+    fireEvent.click(within(detail).getByRole('button', { name: /发布/ }));
+    await waitFor(() =>
+      expect(http.calls.filter((c) => c.name === 'publish_operation')).toHaveLength(2),
+    );
+  });
+
   it('C14: a failed Publish toasts what happened and what to do, not only the generic title', async () => {
     const http = scriptedHttp({
       list_operations: () => ({

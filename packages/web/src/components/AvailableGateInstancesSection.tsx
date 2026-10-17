@@ -108,8 +108,8 @@ export function AvailableGateInstancesSection({
       tone: 'ok',
       title: result.linkedExisting
         ? t(
-            `已关联已有的注册（旧路径）：${row.displayName}`,
-            `Linked the existing (legacy) registration: ${row.displayName}`,
+            `已启用：${row.displayName}，本工作区自己接入的同址门改由它接入`,
+            `Enabled ${row.displayName}; the gate this workspace connected at that address now comes from it`,
           )
         : t(
             `已在本工作区启用：${row.displayName}`,

@@ -5,7 +5,7 @@ import { roleLabel } from '../../lib/labels.js';
 import type { ExternalNavItem, NavItem } from '../../lib/nav.js';
 import { EXPLORER_NAV, GOVERN_NAV, PLATFORM_NAV, WORK_NAV } from '../../lib/nav.js';
 import type { InferredRole, WorkspaceRole } from '../../lib/role.js';
-import { ROLE_BADGE_LABEL, isProvenMember } from '../../lib/role.js';
+import { inferredRoleLabel, isProvenMember } from '../../lib/role.js';
 import { roleMayOpen } from '../../lib/route-access.js';
 import type { NavSection } from '../../lib/router.js';
 import type { WsConnectionStatus } from '../../lib/ws-client.js';
@@ -101,7 +101,7 @@ export interface SidebarProps {
  * the S3.11 coordination addendum) renders as the same `StatusChip machine="role"` the Members
  * page already uses for every principal's own role chip — one color vocabulary, not two. A
  * `{kind:'inferred'}` role (the pre-existing 403/200 fallback, `lib/role.ts`) keeps its own
- * bucket-label badge (`Owner`/`Operator+`/`Member`/`—`) — those are honest uncertainty ranges, not
+ * bucket-label badge (所有者 / 操作员及以上 / 成员 / —, legacy 354) — those are honest uncertainty ranges, not
  * real `Role` enum values, so they never borrow the enum-backed chip's vocabulary.
  */
 export function Sidebar(props: SidebarProps) {
@@ -212,9 +212,12 @@ export function SidebarContent({
             <span
               className={`role-badge ${ROLE_BADGE_CLASS[role.role]}`}
               data-testid="role-badge"
-              title={`Inferred role: ${ROLE_BADGE_LABEL[role.role]}`}
+              title={t(
+                `推断的角色：${inferredRoleLabel(role.role, t)}（工作区信息还没读到）`,
+                `Inferred role: ${inferredRoleLabel(role.role, t)} (workspace details not read yet)`,
+              )}
             >
-              {ROLE_BADGE_LABEL[role.role]}
+              {inferredRoleLabel(role.role, t)}
             </span>
           )}
         </span>
@@ -361,7 +364,7 @@ export interface MobileTopBarProps {
 }
 
 function roleText(role: WorkspaceRole, t: Translate): string {
-  return role.kind === 'known' ? roleLabel(role.role, t) : ROLE_BADGE_LABEL[role.role];
+  return role.kind === 'known' ? roleLabel(role.role, t) : inferredRoleLabel(role.role, t);
 }
 
 /**

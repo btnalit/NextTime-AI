@@ -123,6 +123,16 @@ function alignableOnDeprecated(
   };
 }
 
+/** Legacy 391 (UX acceptance of #640): what `alignableOnDeprecated` leaves out of a deprecated row — a
+ *  loosening or a changed definition the align does not write. Named, so 「已一致」 is never said
+ *  while the gate still differs from those rows. */
+function unwrittenOnDeprecated(op: GateInstanceEnablePreviewOperationPresentWire): boolean {
+  return (
+    op.existing.status === 'deprecated' &&
+    ((op.differs && op.governanceByRevision === true) || op.definitionDiffers)
+  );
+}
+
 export function RefreshOperationGovernanceConfirm({
   http,
   gatekeeperId,
@@ -176,6 +186,7 @@ export function RefreshOperationGovernanceConfirm({
   );
   const [importedNames, setImportedNames] = useState<ReadonlySet<string>>(new Set());
   const [notDescribed, setNotDescribed] = useState<readonly string[]>([]);
+  const [deprecatedUnwritten, setDeprecatedUnwritten] = useState<readonly string[]>([]);
   // Review #493 on #612 (M1): the revisions this resync opened only to carry a loosening the gate
   // describes (its definition did not change) — kept past the confirm so the result says what
   // publishing them changes instead of "the gate refuses calls until then", which is not so.
@@ -288,6 +299,7 @@ export function RefreshOperationGovernanceConfirm({
     setStuckDrafts([]);
     setStillHeld(new Map());
     setNotDescribed([]);
+    setDeprecatedUnwritten([]);
     try {
       const preview =
         (knownPreviewSpent ? undefined : knownPreview) ??
@@ -308,11 +320,16 @@ export function RefreshOperationGovernanceConfirm({
       const dropped = new Set(adoption?.dropped ?? []);
       // Legacy K (G1): a definition-only change drifts as well — "already aligned" would leave the
       // gate refusing those Operations with no way to open the revision that fixes it.
-      const drifting = preview.operationsAlreadyPresent
-        .map((op) => (dropped.has(op.name) ? { ...op, definitionDiffers: false } : op))
+      const present = preview.operationsAlreadyPresent.map((op) =>
+        dropped.has(op.name) ? { ...op, definitionDiffers: false } : op,
+      );
+      const drifting = present
         .map(alignableOnDeprecated)
         .filter((op) => (op.differs || op.definitionDiffers) && inScope(op.name));
       setDiffs(drifting);
+      setDeprecatedUnwritten(
+        present.filter((op) => unwrittenOnDeprecated(op) && inScope(op.name)).map((op) => op.name),
+      );
       const pending = preview.operationsToImport.filter(
         (op) => op.pendingDraft !== undefined && inScope(op.name),
       );
@@ -451,7 +468,13 @@ export function RefreshOperationGovernanceConfirm({
           testId={testId ? `${testId}-awaiting-adoption` : undefined}
         />
       ) : null}
-      {alignedNotice ? (
+      {deprecatedUnwritten.length > 0 && !confirmOpen ? (
+        <DeprecatedUnwrittenNotice
+          names={deprecatedUnwritten}
+          testId={testId ? `${testId}-deprecated-unwritten` : undefined}
+        />
+      ) : null}
+      {alignedNotice && deprecatedUnwritten.length === 0 ? (
         <Notice testId={testId ? `${testId}-aligned` : undefined}>
           {source(
             [
@@ -834,6 +857,12 @@ export function RefreshOperationGovernanceConfirm({
             testId={testId ? `${testId}-confirm-not-described` : undefined}
           />
         ) : null}
+        {deprecatedUnwritten.length > 0 ? (
+          <DeprecatedUnwrittenNotice
+            names={deprecatedUnwritten}
+            testId={testId ? `${testId}-confirm-deprecated-unwritten` : undefined}
+          />
+        ) : null}
         {items.length > 0 ? <GovernanceChangeList items={items} /> : null}
       </Confirm>
     </div>
@@ -859,6 +888,28 @@ function NotDescribedNotice({
       )}
       {t('', ' ')}
       <a href={hrefs.catalog('operations')}>{t('去能力目录', 'Open the catalog')}</a>
+    </Notice>
+  );
+}
+
+/** Legacy 391 (UX acceptance of #640): a loosening or a changed definition on a deprecated Operation. No
+ *  revision opens above a deprecated version, so the align writes none of it and the row stays
+ *  deprecated — said, rather than 「已一致」. */
+function DeprecatedUnwrittenNotice({
+  names,
+  testId,
+}: {
+  readonly names: readonly string[];
+  readonly testId?: string;
+}) {
+  const t = useT();
+  const shown = names.map((name) => actionKindTagText(name));
+  return (
+    <Notice testId={testId}>
+      {t(
+        `门对这些已弃用的 Operation 放宽了治理字段或改了运行的定义：${shown.join('、')}。已弃用的 Operation 不会打开修订，这些变化不会写入，它们仍保持弃用。`,
+        `The gate loosened the governance of, or changed the definition it runs for, these deprecated operations: ${shown.join(', ')}. No revision opens on a deprecated operation, so none of this is written and they stay deprecated.`,
+      )}
     </Notice>
   );
 }

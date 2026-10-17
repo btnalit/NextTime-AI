@@ -12,6 +12,7 @@ import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { connectorModeLabel, transportKindLabel } from '../../lib/labels.js';
 import { breadcrumbFor } from '../../lib/nav.js';
+import { type IntegrationsTab, hrefs, navigate, readIntegrationsTab } from '../../lib/router.js';
 import { deriveGateInstanceStatus, deriveSelfConnectionStatus } from '../../lib/status-tone.js';
 import { ConnectSystemLauncher } from '../connect/ConnectSystemLauncher.js';
 import { Confirm } from '../kit/confirm.js';
@@ -49,7 +50,14 @@ const CONNECTOR_MODE_VALUES: readonly ConnectorModeWire[] = [
   'platform_preset',
 ];
 
-type Tab = 'connectors' | 'instances' | 'self' | 'runtimes';
+type Tab = IntegrationsTab;
+
+/** The tab a bare `#/platform/integrations[?tab=…]` names; `null` on an instance's own URL. */
+function tabInHash(): Tab | null {
+  const hash = window.location.hash;
+  if (hash.split('?')[0] !== hrefs.platformIntegrations()) return null;
+  return readIntegrationsTab(hash) ?? 'connectors';
+}
 
 export interface PlatformIntegrationsPageProps {
   readonly http: CapabilityCaller;
@@ -90,7 +98,22 @@ export function PlatformIntegrationsPage({
   onSelectGate,
 }: PlatformIntegrationsPageProps) {
   const t = useT();
-  const [tab, setTab] = useState<Tab>(selectedGateId !== undefined ? 'instances' : 'connectors');
+  const [tab, setTab] = useState<Tab>(
+    selectedGateId !== undefined ? 'instances' : (tabInHash() ?? 'connectors'),
+  );
+  // Legacy 380: the tab is in the URL — a change writes it, and back / forward reads it again.
+  function changeTab(next: Tab): void {
+    setTab(next);
+    navigate(hrefs.platformIntegrationsTab(next));
+  }
+  useEffect(() => {
+    const follow = () => {
+      const fromHash = tabInHash();
+      if (fromHash !== null) setTab(fromHash);
+    };
+    window.addEventListener('hashchange', follow);
+    return () => window.removeEventListener('hashchange', follow);
+  }, []);
   const [launcherOpen, setLauncherOpen] = useState(false);
   // The 自己接入的门 tab's connector filter — set from a connector row's count, or the tab's own select.
   const [selfConnector, setSelfConnector] = useState<string | null>(null);
@@ -145,6 +168,7 @@ export function PlatformIntegrationsPage({
             onFinished={(result) => {
               setLauncherOpen(false);
               if (result.gateId) {
+                // `selectGate` writes the instance's own URL.
                 setTab('instances');
                 selectGate(result.gateId);
               }
@@ -156,7 +180,7 @@ export function PlatformIntegrationsPage({
       <Tabs<Tab>
         ariaLabel="Integrations tabs"
         value={tab}
-        onChange={setTab}
+        onChange={changeTab}
         options={[
           {
             value: 'connectors',
@@ -186,7 +210,7 @@ export function PlatformIntegrationsPage({
           http={http}
           onShowSelfConnections={(connector) => {
             setSelfConnector(connector);
-            setTab('self');
+            changeTab('self');
           }}
         />
       ) : null}
@@ -197,7 +221,7 @@ export function PlatformIntegrationsPage({
           onSelectGate={selectGate}
           onShowConnectors={() => {
             selectGate(null);
-            setTab('connectors');
+            changeTab('connectors');
           }}
         />
       ) : null}

@@ -836,6 +836,45 @@ describe('SystemsPage', () => {
     expect(within(card).getByText(/这份草稿在你查看之后被修改过/)).toBeTruthy();
   });
 
+  it('legacy 349: 「发布清单」 that would publish a first version which writes or is high impact confirms it first', async () => {
+    const draftRow = (name: string, mode: string, blastRadius: string) => ({
+      gatekeeperId: 'gk-1',
+      name,
+      mode,
+      blastRadius,
+      autoApprovable: false,
+      status: 'draft',
+      origin: 'import',
+      draftDigest: `d-${name}`,
+    });
+    const http = scriptedHttp({
+      execution_readiness: () => readiness({ principalId: 'p-self', gates: [gate()] }),
+      list_operations: () => ({
+        items: [
+          draftRow('stock.get', 'observe', 'low'),
+          draftRow('stock.adjust', 'execute', 'high'),
+        ],
+      }),
+      publish_manifest: () => ({
+        gatekeeperId: 'gk-1',
+        publishedOperationNames: ['stock.get', 'stock.adjust'],
+        skippedDraftOperationNames: [],
+        gateOwnedParamDrafts: [],
+      }),
+    });
+    renderPage(http);
+    const card = (await screen.findAllByTestId('gatekeeper-card'))[0] as HTMLElement;
+    fireEvent.pointerDown(within(card).getByTestId('gatekeeper-more'), { button: 0 });
+    fireEvent.click(await screen.findByTestId('gatekeeper-publish-manifest'));
+    const confirm = await screen.findByTestId('gatekeeper-publish-manifest-confirm');
+    expect(confirm.textContent).toContain('将发布 2 个');
+    expect(confirm.textContent).toContain('stock.adjust 会写入系统、影响高');
+    expect(confirm.textContent).not.toContain('stock.get');
+    expect(http.calls.some((c) => c.name === 'publish_manifest')).toBe(false);
+    fireEvent.click(within(confirm).getByRole('button', { name: '发布' }));
+    await waitFor(() => expect(http.calls.some((c) => c.name === 'publish_manifest')).toBe(true));
+  });
+
   it('UX acceptance of #620 (P2-3) and legacy 385: a refused duplicate connection finds the card of the system already at that address, and focus moves to it', async () => {
     const http = scriptedHttp({
       execution_readiness: () =>

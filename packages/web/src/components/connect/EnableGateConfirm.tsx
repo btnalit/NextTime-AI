@@ -50,7 +50,7 @@ export interface EnableGateConfirmProps {
  * the confirm entirely (a real merge/cleanup problem the kernel cannot resolve by guessing, see the
  * notice's own copy) → otherwise a `Confirm` (`kit/confirm`, `tier="medium"`) opens anchored to the
  * button, listing what would be imported/already-present and, when `wouldLink` is set, which
- * existing (legacy) registration this call would link instead of duplicating. The confirm's own
+ * Gatekeeper the workspace connected itself this call would claim instead of duplicating. The confirm's own
  * `onConfirm` is the actual `enable_gate_instance` call; success calls `onEnabled` with the full
  * result (`linkedExisting` incl.) so the caller's own toast can report it (J4's own ask).
  */
@@ -222,10 +222,20 @@ function EnablePreviewBody({
       ) : null}
       {preview.wouldLink ? (
         <div className="stack-s" data-testid="enable-preview-would-link">
+          {/* Legacy 371 (#620): the Gatekeeper at this address is one the workspace connected
+              itself (a card tagged 「自己接入」 — #612 P2-3: never 「旧注册」). Enabling claims it:
+              from then on it comes from this instance and aligns with the platform's announcement,
+              not the gate's own manifest (`gatekeeper_linked`). */}
           <span className="text-13">
-            {t('将关联已有的注册（旧路径）：', 'Will link the existing (legacy) registration: ')}
+            {t(
+              '这个地址上已有本工作区自己接入的门：',
+              'This workspace already connected the gate at this address itself: ',
+            )}
             <RefChip kind="gatekeeper" id={preview.wouldLink.gatekeeperId} http={http} size="s" />
-            {t('，不会新建 Gatekeeper。', ' — no new Gatekeeper is created.')}
+            {t(
+              '。启用后不新建门，它改由这个平台实例接入：不再是「自己接入」，以后按平台的公告对齐，不再重新读取门的清单。',
+              '. Enabling creates no new Gatekeeper — that one comes from this platform instance instead: it is no longer self-connected, and from then on it aligns with the platform’s announcement rather than re-reading the gate’s own manifest.',
+            )}
           </span>
           <DriftList drift={preview.wouldLink.drift} />
         </div>

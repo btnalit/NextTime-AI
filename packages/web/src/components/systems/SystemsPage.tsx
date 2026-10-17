@@ -28,6 +28,7 @@ import { GatekeeperDetailDrawer } from '../GatekeeperDetailDrawer.js';
 import { OnboardingWizard } from '../OnboardingWizard.js';
 import { RequestConnectionForm } from '../RequestConnectionForm.js';
 import { ConnectSystemLauncher } from '../connect/ConnectSystemLauncher.js';
+import { type FirstPublish, firstPublishNeedsConfirm } from '../connect/GovernanceChange.js';
 import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
 import {
@@ -80,6 +81,7 @@ const REQUEST_FILTERS: readonly RequestFilter[] = [
 
 const EMPTY_NAMES: ReadonlyMap<string, string> = new Map();
 const NO_DRAFTS: readonly DraftAsRead[] = [];
+const NO_FIRST_PUBLISHES: readonly FirstPublish[] = [];
 
 /** A system's card in the list, by its Gatekeeper id (`SystemAccessCard`'s `data-gatekeeper-id`). */
 function findGatekeeperCard(gatekeeperId: string): HTMLElement | undefined {
@@ -196,6 +198,40 @@ export function SystemsPage({
       const rows = operationsList.state.data.items;
       for (const gatekeeperId of new Set(rows.map((op) => op.gatekeeperId))) {
         map.set(gatekeeperId, manifestPublishPlan(rows, gatekeeperId).publishable.length);
+      }
+    }
+    return map;
+  }, [operationsList.state]);
+
+  // Legacy 349: the first versions 「发布清单」 would publish that write or are high impact — the
+  // card confirms them first, as the catalog's own Publish does.
+  const firstPublishesByGate = useMemo(() => {
+    const map = new Map<string, FirstPublish[]>();
+    if (operationsList.state.status === 'ready') {
+      const rows = operationsList.state.data.items;
+      for (const gatekeeperId of new Set(rows.map((op) => op.gatekeeperId))) {
+        const publishable = new Set(manifestPublishPlan(rows, gatekeeperId).publishable);
+        const first = rows.filter(
+          (op) =>
+            op.gatekeeperId === gatekeeperId &&
+            op.status === 'draft' &&
+            publishable.has(op.name) &&
+            op.governanceChange === undefined &&
+            firstPublishNeedsConfirm(op),
+        );
+        if (first.length > 0) {
+          map.set(
+            gatekeeperId,
+            first.map((op) => ({
+              name: op.name,
+              fields: {
+                mode: op.mode,
+                blastRadius: op.blastRadius,
+                autoApprovable: op.autoApprovable,
+              },
+            })),
+          );
+        }
       }
     }
     return map;
@@ -544,6 +580,7 @@ export function SystemsPage({
                 healthInfo={healthByGate.get(gate.gateId) ?? { linked: false }}
                 drafts={draftsByGate.get(gate.gateId) ?? NO_DRAFTS}
                 publishableCount={publishableByGate.get(gate.gateId) ?? 0}
+                firstPublishes={firstPublishesByGate.get(gate.gateId) ?? NO_FIRST_PUBLISHES}
                 canPublish={can('publish_manifest') !== false}
                 onPublished={reloadRegistry}
                 workerNames={workerNames}
