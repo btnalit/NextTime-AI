@@ -69,7 +69,7 @@ async function findGatekeeperSource(
   const found = await client.query<SourceIdRow>(
     `select id from sources
       where workspace_id = $1 and kind = $2 and metadata ->> 'gatekeeperId' = $3
-      order by created_at limit 1`,
+      order by created_at, id limit 1`,
     [workspaceId, GATEKEEPER_SOURCE_KIND, gatekeeperObjectId],
   );
   return found.rows[0]?.id;

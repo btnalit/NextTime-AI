@@ -105,6 +105,24 @@ export interface RefreshOperationGovernanceConfirmProps {
  * catalog. While the gate still announces the param, the draft is not rewritable and this says so
  * instead of 「已一致」.
  */
+/**
+ * Legacy 345 (review #493 on #612): the align opens a revision only above a *published* version
+ * (`refreshOperationGovernance`), so on a deprecated Operation nothing that would ride one is
+ * written — not a loosening the kernel holds for a revision (`governanceByRevision`), not a changed
+ * definition. Only a tightening applies to it, in place. Such a row is listed only for what the
+ * align actually does to it, never as 「将打开修订」.
+ */
+function alignableOnDeprecated(
+  op: GateInstanceEnablePreviewOperationPresentWire,
+): GateInstanceEnablePreviewOperationPresentWire {
+  if (op.existing.status !== 'deprecated') return op;
+  return {
+    ...op,
+    differs: op.differs && op.governanceByRevision !== true,
+    definitionDiffers: false,
+  };
+}
+
 export function RefreshOperationGovernanceConfirm({
   http,
   gatekeeperId,
@@ -292,6 +310,7 @@ export function RefreshOperationGovernanceConfirm({
       // gate refusing those Operations with no way to open the revision that fixes it.
       const drifting = preview.operationsAlreadyPresent
         .map((op) => (dropped.has(op.name) ? { ...op, definitionDiffers: false } : op))
+        .map(alignableOnDeprecated)
         .filter((op) => (op.differs || op.definitionDiffers) && inScope(op.name));
       setDiffs(drifting);
       const pending = preview.operationsToImport.filter(

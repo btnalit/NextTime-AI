@@ -382,7 +382,9 @@ export function gateAddressOrigin(address: string): string {
  *  (both sides run through `normalizeGateEndpoint` — an exact match otherwise, never a prefix/
  *  substring match). Reads the same `objects` rows `listGatekeepers` above does; kept as its own
  *  query (rather than filtering `listGatekeepers`' result) because that function's own
- *  `GatekeeperListEntry` does not carry `target`, which the caller needs for `drift`. */
+ *  `GatekeeperListEntry` does not carry `target`, which the caller needs for `drift`. Oldest first,
+ *  `id` breaking a `created_at` tie, so a caller that takes the first match (`landing.ts`'s
+ *  `endpoint_already_connected`) names the same Gatekeeper every time (legacy 340 class). */
 export async function findGatekeepersByEndpoint(
   client: PoolClient,
   workspaceId: string,
@@ -393,7 +395,7 @@ export async function findGatekeepersByEndpoint(
     `select id, properties, created_at
      from objects
      where workspace_id = $1 and object_type = 'Gatekeeper' and properties ->> 'endpoint' is not null
-     order by created_at asc`,
+     order by created_at asc, id asc`,
     [workspaceId],
   );
   const matches: GatekeeperByEndpointEntry[] = [];
