@@ -4243,7 +4243,15 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 
 **P1 — （改造）ChangePlan 核心，验收含手写 knowledge 包**（见 `global-roadmap-2026-10-16.md` §4）
 
-- 实现说明：（未开工）
+- 实现说明（第一个小 PR：评测用夹具门重设计，#644，2026-10-17 合入，bbcaa08；无迁移；新登遗留 395–399）：
+  - **`connector` 参数**：`create_gate_instance` 多一个可选的 `connector`（接入包名，按服务的系统命名）。新名字在同一事务里建出接入包：种类同实例、`packaged = false`、`platform_preset`，另记平台审计 `connector.created`（`resourceRef`、`kind`、`mode`、`gateId`）；已有名字必须同种类且不是打包门的接入包，否则 409 `connector_kind_mismatch` / `connector_packaged`，什么都不写。不填时照旧挂通用接入包（兼容直接调能力的 staging、S2 验收）；控制台默认用系统自己的接入包。
+  - **一条接入包规则**（`fitConnector`，`application/gates/store.ts`）：一个接入包下的实例同种类、同类别，打包门的实例只进打包接入包，门宿主实例只进通用接入包或管理员为门宿主起的接入包。`create_gate_instance` 与每次会写接入包的 announce（首次或之后、门宿主或打包门）都过它；冻结的 announce 不写接入包，照旧由冻结挡住。通用名不读行、按名字判断；新名字按实例的种类与类别建出接入包；拒绝在写实例之前返回。并发：先 `insert … on conflict do nothing` 再读回，同名并发时第二个等第一个提交后按它写下的种类判断；拒绝或 gate id 冲突时整个事务回滚，不留接入包与审计行。
+  - **announce（`upsertAnnouncement`）**：门宿主实例的拒绝条件从「还没 announce 过」改为「未冻结」（审查 #493 P2：之后的 announce 原来能把 `discovered` 实例改挂到别的接入包，甚至新建打包接入包），未冻结时接入包或种类与定义不符一律 409 `identity_mismatch`。打包门 announce 过同一条规则（#493 P3，早于本 PR，一并修）：通用名或门宿主接入包 409 `connector_not_packaged`，同名别的种类 409 `connector_kind_mismatch`。抢先占名不会被劫持：管理员先用某打包门将来的 `GATE_CONNECTOR` 名建了门宿主实例，那个打包门 announce 被拒（`connector_not_packaged`），不另加预留名单。
+  - **门宿主**（`gatekeeper-base/src/host.ts`）：列表项多可选 `connector`，不给时回落到传输种类，接入包与显示名一样就地更新、不重建实例。共享定义 `GENERIC_CONNECTOR_NAMES`、`isGenericConnector`、`CONNECTOR_NAME_PATTERN` 挪到 `shared/wire/platform.ts`。
+  - **控制台**：新建实例表单多「接入包」一组（名字按门 ID 派生可改、列出同种类已有接入包可点选加入并写出实例数与模式、名字错误就地报错并进「还差」）；选通用接入包时说明代价；集成页「来源」列多「门宿主」，非通用接入包的自连列显示「—」；模式确认、目录隐藏说明、启动器预置提示只对通用接入包说「工作区不能再自己接入」；「通用」改按名字判断，不再借用 `packaged`；`connector.created` 文案与平台审计筛选项。CI 夹具门 `e2e-hosted-mcp` 改挂自己的接入包，e2e 断言它一建好就是平台预置、`mcp` 始终 `self_serve`。
+  - **取舍**：新接入包直接 `platform_preset`（实例仍要管理员启用才进目录）；不能挂进打包门的接入包；最后一个实例删除后接入包留着（同名再建会加入它，沿用当时的模式）；抢先占名与空接入包是设计选择，不记遗留。
+  - **验证**：`platform-gate-host.integration.test.ts` a、n、o 与表驱动的 p（四条 announce 路径各一组探针，去掉打包门检查或把门宿主条件改回只查首次都会失败）；`host.test.ts` 就地更新；web `CreateGateInstanceForm`、`PlatformIntegrationsPage`、`ConnectSystemLauncher` 测试；几个打包门测试夹具从通用 `http` 改到自己的 `fixture-http`。
+  - **留给 P1 后续 PR**：`importManifest` 的 `requireDescription`（遗留 372）与 344。
 - 来自 P0b（#620）的输入：第一个小 PR 是评测用夹具门重设计（托管实例挂在按系统命名的接入包上，`create_gate_instance` 的 `connector` 可选）；`importManifest` 的 `requireDescription` 留给目录侧要求复用，不用就删（遗留 372）；344 由 P1 收口。
 
 **AA1 — 管理员 Agent 身份与上限**（见 `global-roadmap-2026-10-16.md` §4）
