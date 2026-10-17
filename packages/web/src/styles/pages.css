@@ -1345,6 +1345,25 @@
   grid-template-columns: minmax(340px, 420px) minmax(0, 1fr);
 }
 
+/* Legacy 347 (UX acceptance of #653 P2-1): the page itself scrolls — the wide layout is not capped
+ * to the window, so `.md-pane-body` grows with its content and never scrolls. Its
+ * `overflow-y: auto` (and the pane's `overflow: hidden`) still made it the box a pinned
+ * `.overlay-actions` row (批准 / 拒绝, 保存草稿) sticks to, so the row sat at the end of the page.
+ * In the wide detail pane neither is a scroll box (`clip` keeps the rounded corners): the row
+ * sticks to the bottom of the window instead, with its own padding under the buttons. */
+.md-layout--wide .md-detail-pane {
+  overflow: clip;
+}
+
+.md-layout--wide .md-detail-pane > .md-pane-body {
+  overflow: visible;
+  --overlay-actions-inset: 0px;
+}
+
+.md-layout--wide .md-detail-pane .overlay-actions {
+  padding-bottom: var(--space-4);
+}
+
 .md-layout--narrow {
   grid-template-columns: minmax(0, 1fr);
 }
