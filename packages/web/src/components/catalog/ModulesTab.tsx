@@ -154,7 +154,7 @@ export function ModulesTab({ http }: ModulesTabProps) {
         // list-container convention, not a bare table only here.
         <DashboardCard padded={false}>
           <div className="table-scroll">
-            <table className="data-table" data-testid="catalog-modules-table">
+            <table className="data-table data-table-cards" data-testid="catalog-modules-table">
               <thead>
                 <tr>
                   <th>{t('名称', 'Name')}</th>
@@ -178,11 +178,15 @@ export function ModulesTab({ http }: ModulesTabProps) {
                   return (
                     <tr key={module.name} data-testid={`catalog-module-row-${module.name}`}>
                       <td className="mono">{module.name}</td>
-                      <td>{t(STATUS_LABEL[module.status].zh, STATUS_LABEL[module.status].en)}</td>
-                      <td className="mono">
+                      <td data-label={t('状态', 'Status')}>
+                        {t(STATUS_LABEL[module.status].zh, STATUS_LABEL[module.status].en)}
+                      </td>
+                      <td className="mono" data-label={t('已装版本', 'Installed')}>
                         {module.installedVersion === null ? '—' : `v${module.installedVersion}`}
                       </td>
-                      <td className="mono">v{module.latestVersion}</td>
+                      <td className="mono" data-label={t('最新版本', 'Latest')}>
+                        v{module.latestVersion}
+                      </td>
                       <td>
                         {canWrite && label ? (
                           <Confirm

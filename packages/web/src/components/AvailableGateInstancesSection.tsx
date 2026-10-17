@@ -10,7 +10,7 @@ import { usePermissions } from '../hooks/usePermissions.js';
 import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
-import { type Translate, useT } from '../lib/i18n.js';
+import { type Translate, sentenceGap, useT } from '../lib/i18n.js';
 import { hrefs } from '../lib/router.js';
 import { AskOwnerToEnable } from './connect/AskOwnerToEnable.js';
 import { EnableGateConfirm } from './connect/EnableGateConfirm.js';
@@ -235,7 +235,7 @@ function HiddenInstancesForAdmin({ http }: { readonly http: CapabilityCaller }) 
         `平台上另有 ${hidden.length} 个已启用、但本工作区还没启用的门实例这里看不到：${hidden.map((row) => row.displayName).join('、')}。它们的接入包不是「平台预置」。`,
         `${hidden.length} more enabled gate instance(s) this workspace has not enabled do not show up here: ${hidden.map((row) => row.displayName).join(', ')}. Their connectors are not platform preset.`,
       )}
-      {t('', ' ')}
+      {sentenceGap(t)}
       <RouteLink
         href={hrefs.platformIntegrations()}
         testId="available-gates-hidden-link"

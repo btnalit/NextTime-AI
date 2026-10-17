@@ -1106,6 +1106,104 @@
   min-width: 720px;
 }
 
+/* Legacy 399 (UX acceptance of #644): a plain `.data-table` marked `.data-table-cards` turns each
+ * row into a card at the same width `kit/data-table` does (`NARROW_TABLE_QUERY`, ≤ 768px), so a
+ * narrow window shows every column instead of cutting the right-hand ones off behind a sideways
+ * scroll. The first cell is the card title; every other cell shows its column name from its own
+ * `data-label`. A cell without one (an actions cell, an expanded row's single wide cell) takes the
+ * card's full width. Kept as plain tables rather than `DataTable` because these rows expand in
+ * place (a second `<tr>` under the row), which `DataTable` does not model. */
+@media (max-width: 768px) {
+  .table-scroll > .data-table.data-table-cards {
+    min-width: 0;
+  }
+
+  .data-table-cards,
+  .data-table-cards tbody,
+  .data-table-cards tr,
+  .data-table-cards td {
+    display: block;
+    width: 100%;
+  }
+
+  .data-table-cards thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .data-table-cards tbody {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .data-table-cards tbody tr {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    background: var(--surface-1);
+    box-shadow: var(--shadow-card);
+    padding: var(--space-3);
+  }
+
+  /* An expanded row's detail joins the card above it instead of standing as a card of its own. */
+  .data-table-cards tbody tr[data-expanded-detail] {
+    margin-top: calc(-1 * var(--space-2) - 1px);
+    border-top: 0;
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+    box-shadow: none;
+  }
+
+  .data-table-cards td,
+  .data-table-cards tr:last-child td {
+    border-bottom: 0;
+    padding: 2px 0;
+  }
+
+  .data-table-cards td:first-child {
+    font-weight: 500;
+    padding-bottom: var(--space-1);
+  }
+
+  .data-table-cards tr[data-expanded-detail] td:first-child {
+    font-weight: inherit;
+  }
+
+  .data-table-cards td:empty {
+    display: none;
+  }
+
+  /* Label in the first column, the cell's content stacked in the second (a cell can hold more
+   * than one element, e.g. the mode select plus its note). */
+  .data-table-cards td[data-label] {
+    display: grid;
+    grid-template-columns: 7rem minmax(0, 1fr);
+    column-gap: var(--space-3);
+    row-gap: var(--space-1);
+    align-items: baseline;
+  }
+
+  .data-table-cards td[data-label]::before {
+    content: attr(data-label);
+    grid-column: 1;
+    grid-row: 1;
+    color: var(--text-3);
+    font-family: var(--font-sans);
+    font-size: var(--fs-12);
+  }
+
+  .data-table-cards td[data-label] > * {
+    grid-column: 2;
+    justify-self: start;
+    max-width: 100%;
+    min-width: 0;
+  }
+}
+
 /* ---- Platform workspaces (P-A2) ---------------------------------------------------------- */
 /* The whole row opens the configuration drawer; the 配置 Configure button in the last cell is the
  * keyboard path, so this is cursor + hover affordance only. */

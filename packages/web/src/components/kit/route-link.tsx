@@ -1,6 +1,6 @@
 import type { AnchorHTMLAttributes, ReactNode } from 'react';
 import { useCanOpen } from '../../hooks/useCanOpen.js';
-import { type Translate, useT } from '../../lib/i18n.js';
+import { type Translate, sentenceGap, useT } from '../../lib/i18n.js';
 import { capabilityHolders } from '../../lib/role-holders.js';
 import { type RouteRequirement, routeRequirement } from '../../lib/route-access.js';
 
@@ -50,7 +50,7 @@ export function RouteLink({
         {children}
         {whenRefused === 'text' ? (
           <span className="text-3">
-            {t('', ' ')}
+            {sentenceGap(t)}
             {whoCanOpen(routeRequirement(href), t)}
           </span>
         ) : null}
