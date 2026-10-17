@@ -182,7 +182,7 @@ function TargetLine({ target }: { readonly target: string | undefined }) {
   return (
     <dl className="flex flex-col gap-0.5 text-13">
       <dt className="text-text-2">{t('目标', 'Target')}</dt>
-      <dd className="font-medium text-text" data-testid="confirm-target">
+      <dd className="font-medium text-text wrap-anywhere" data-testid="confirm-target">
         {target}
       </dd>
     </dl>

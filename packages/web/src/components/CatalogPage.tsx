@@ -366,7 +366,7 @@ function PublishGovernanceConfirm({
   const t = useT();
   const [open, setOpen] = useState(false);
   const item = { name: row.name, ...change };
-  const consequences = governanceConsequences(item, t);
+  const consequences = governanceConsequences(item, t, false);
   return (
     <Confirm
       tier="medium"
@@ -385,13 +385,13 @@ function PublishGovernanceConfirm({
           {t('发布', 'Publish')}
         </Button>
       }
-      title={t(`发布 ${actionKindTagText(row.name)}`, `Publish ${actionKindTagText(row.name)}`)}
+      title={t('发布这个 Operation', 'Publish this operation')}
       description={t(
         '这个草稿改变了当前生效版本的分类——分类决定它要不要人工审批、要不要授权。发布后替换当前版本。',
         'This draft changes the classification of the version in effect — the classification decides whether it needs a person’s approval and a grant. Publishing replaces the current version.',
       )}
       target={actionKindTagText(row.name)}
-      impact={[governanceChangeSummary(item, t)]}
+      impact={[governanceChangeSummary(item, t, false)]}
       confirmLabel={t('发布', 'Publish')}
       danger={isLoosening(change.direction)}
       onConfirm={onConfirm}
@@ -450,13 +450,13 @@ function PublishFirstVersionConfirm({
           {t('发布', 'Publish')}
         </Button>
       }
-      title={t(`发布 ${actionKindTagText(row.name)}`, `Publish ${actionKindTagText(row.name)}`)}
+      title={t('发布这个 Operation', 'Publish this operation')}
       description={t(
         `这是它第一次发布，分类为「${governanceFieldsText(fields, t)}」。发布后它马上可以被调用；分类决定要不要授权、要不要人工审批，发布前请核对。`,
         `This is its first published version, classified “${governanceFieldsText(fields, t)}”. It can be called as soon as it is published; the classification decides whether it needs a grant and a person's approval — check it before publishing.`,
       )}
       target={actionKindTagText(row.name)}
-      impact={[firstPublishConsequence(row.name, fields, t)]}
+      impact={[firstPublishConsequence(null, fields, t)]}
       confirmLabel={t('发布', 'Publish')}
       onConfirm={onConfirm}
       testId={testId}
