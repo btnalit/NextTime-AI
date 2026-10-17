@@ -914,6 +914,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         const claimed = await claim();
         expect(claimed?.attempts).toBe(1);
         expect(claimed?.leaseUntil).not.toBeNull();
+        expect(claimed?.firstAttemptAt).toBeInstanceOf(Date);
         expect(await claim()).toBeNull();
         // A lease that ran out (its kernel died): the next claim is a new attempt.
         await raw(
@@ -923,21 +924,38 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
         const second = await claim();
         expect(second?.attempts).toBe(2);
+        // The first claim set when the first attempt was made; later claims keep it.
+        expect(second?.firstAttemptAt).toEqual(claimed?.firstAttemptAt);
+        const looked = await observation(await gateSource(), {
+          actionRequestId: id,
+          outcome: 'unsatisfied',
+        });
         await asOwner((client) =>
           deferReconcileCheck(
             client,
             workspaceId,
             second as ReconcileCheckRow,
-            { delayMs: 60_000, lastError: 'gate_unreachable' },
+            { delayMs: 60_000, lastError: 'predicate_unsatisfied', observationId: looked },
             auditContext(),
           ),
         );
         expect(await claim()).toBeNull();
+        // Not due, but closed (its run or step ended): claimed to be settled without a call.
+        const closed = await asOwner((client) =>
+          claimReconcileCheck(client, workspaceId, id, 60_000, true),
+        );
+        expect(closed?.attempts).toBe(3);
+        await raw(
+          `update action_request_reconcile_checks set lease_until = null
+            where workspace_id = $1 and action_request_id = $2`,
+          [workspaceId, id],
+        );
         expect(await checkOf(id)).toMatchObject({
           status: 'pending',
-          attempts: 2,
+          attempts: 3,
           leaseUntil: null,
-          lastError: 'gate_unreachable',
+          observationId: looked,
+          lastError: 'predicate_unsatisfied',
         });
         expect(await audits(id, 'action_request.reconcile_check', 'retry')).toBe(1);
 
@@ -951,6 +969,24 @@ describe.runIf(DATABASE_URL !== undefined)(
           );
         await expect(update('attempts = 0')).rejects.toThrow(/attempts only grow/);
         await expect(update(`observation_check = '{}'::jsonb`)).rejects.toThrow(/never changes/);
+        await expect(update(`first_attempt_at = now() - interval '1 hour'`)).rejects.toThrow(
+          /when the first attempt was made never changes/,
+        );
+        await expect(update('first_attempt_at = null')).rejects.toThrow(
+          /when the first attempt was made never changes/,
+        );
+        // Untried checks have no first attempt, tried ones always do.
+        const fresh = await lostRequest();
+        await ensure(fresh);
+        await expect(
+          asOwner((client) =>
+            client.query(
+              `update action_request_reconcile_checks set attempts = 1
+                where workspace_id = $1 and action_request_id = $2`,
+              [workspaceId, fresh],
+            ),
+          ),
+        ).rejects.toThrow(/action_request_reconcile_checks_first_attempt/);
       });
 
       it('settles once: seen only on the platform’s effect_seen from its own observation, preempted only by a finding, seen and not_seen with evidence', async () => {
@@ -990,6 +1026,29 @@ describe.runIf(DATABASE_URL !== undefined)(
         await settle(unseen, { status: 'not_seen', observationId: looked });
         expect((await checkOf(unseen)).status).toBe('not_seen');
         expect((await row(unseen)).reconciliation).toBeNull();
+
+        // A settle with no observation of its own keeps the check's latest as its evidence.
+        const later = await lostRequest();
+        const check = await ensure(later);
+        const earlier = await observation(source, {
+          actionRequestId: later,
+          outcome: 'unsatisfied',
+        });
+        await asOwner((client) =>
+          deferReconcileCheck(
+            client,
+            workspaceId,
+            check,
+            { delayMs: 0, lastError: 'predicate_unsatisfied', observationId: earlier },
+            auditContext(),
+          ),
+        );
+        await settle(later, { status: 'not_seen', lastError: 'gate_unreachable' });
+        expect(await checkOf(later)).toMatchObject({
+          status: 'not_seen',
+          observationId: earlier,
+          lastError: 'gate_unreachable',
+        });
       });
 
       it('a person’s finding preempts a pending check in the same transaction; a settled one stays as it was', async () => {

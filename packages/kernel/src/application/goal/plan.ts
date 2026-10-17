@@ -1,10 +1,10 @@
 import { isDeepStrictEqual } from 'node:util';
-import { ObservationCheckSchema } from '@nexttime/shared';
+import { ObservationCheckSchema, type Predicate } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { z } from 'zod';
 import { getGatekeeper, getPublishedOperation } from '../../governance/gatekeepers/index.js';
-import { reviewObserveParams } from '../../governance/redaction/index.js';
-import { lintPredicate } from '../../substrate/epistemic/index.js';
+import { findSuspectedSecrets, reviewObserveParams } from '../../governance/redaction/index.js';
+import { lintPredicate, predicateLiterals } from '../../substrate/epistemic/index.js';
 import {
   NO_OBSERVE_EXCLUSIONS,
   observeRefusal,
@@ -46,7 +46,8 @@ import { getWorkerDefinition } from '../worker/index.js';
  * published execute-class Operation and its check a published observe-class one the platform does
  * not cut off, with params that carry no credential and a predicate the lint accepts
  * (`substrate/epistemic`'s `lintPredicate`: one that would pass without the observation showing the
- * target is refused here, before any person is asked to confirm it). A version deprecated later is
+ * target is refused here, before any person is asked to confirm it) and whose literals carry no
+ * suspected credential ({@link predicateCredentialProblems}); the last two are `parsePlan`'s. A version deprecated later is
  * caught when an attempt would start (the advancer's snapshot check), not here; a reconcile check
  * the requester can no longer make is caught when it runs.
  */
@@ -164,7 +165,35 @@ function reconcileShapeProblems(step: PlanStep): readonly string[] {
     for (const problem of lintPredicate(declaration.check.expect)) {
       problems.push(`${where}: ${problem}`);
     }
+    for (const problem of predicateCredentialProblems(declaration.check.expect)) {
+      problems.push(`${where}: ${problem}`);
+    }
   });
+  return problems;
+}
+
+/**
+ * The credential review of a reconcile check's predicate (review #493 on #649): no literal it
+ * compares with — a comparison's `value` or a literal in its path — may carry a value the
+ * credential review counts (`governance/redaction`'s `findSuspectedSecrets`, call-argument rule:
+ * what an approval asks a person to confirm and every audit copy redacts). Refused outright, not
+ * confirmed with 「已核对凭据」 as an approval is: the check judges the result with exactly those
+ * values redacted (`reconcile-check.ts`, `redactSuspectedSecrets`, the same rule), so such a
+ * literal could never be matched — `eq` would never hold, `ne` always would — and it would sit
+ * in the plan a person confirms and in every revision after it; there is nothing for a tick to
+ * make work. Run with the plan and again before every check (`reconcile-check.ts`), so a value
+ * the review learns to suspect later stops the check rather than quietly failing to match.
+ */
+export function predicateCredentialProblems(predicate: Predicate): readonly string[] {
+  const problems: string[] = [];
+  for (const literal of predicateLiterals(predicate)) {
+    const found = findSuspectedSecrets(literal.value, { secretFields: true });
+    if (found.count > 0) {
+      problems.push(
+        `a value compared at path "${literal.path}" looks like a credential (${found.count} suspected) — the check judges the result with such values redacted, so it could never match; a plan does not carry credentials`,
+      );
+    }
+  }
   return problems;
 }
 

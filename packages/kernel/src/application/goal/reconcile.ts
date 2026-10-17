@@ -125,12 +125,17 @@ export interface UnresolvedGoalAction {
   readonly failedAt: Date | null;
   readonly needs: 'finding' | 'decision';
   /** GO3d: the platform's check of the action, when its step declared one (`plan.ts`
-   *  `reconcile`) — where it stands, how many attempts it made, and the short code of why it is
-   *  `unavailable` or was retried. A `pending` one may still settle the finding itself. */
+   *  `reconcile`) — where it stands, how many attempts it made, the short code of why it is
+   *  `unavailable` or was last retried, its latest Observation (the evidence of `not_seen`, or
+   *  what a pending one saw so far), and when a pending one tries next (it waits for the run to
+   *  run: a paused run's checks wait for the resume). A `pending` one may still settle the
+   *  finding itself. */
   readonly platformCheck: {
     readonly status: ActionRequestReconcileCheckStatus;
     readonly attempts: number;
     readonly lastError: string | null;
+    readonly observationId: string | null;
+    readonly nextAttemptAt: Date | null;
   } | null;
 }
 
@@ -169,7 +174,13 @@ export async function listGoalRunUnresolvedActions(
       failedAt: row.failedAt,
       needs,
       platformCheck: check
-        ? { status: check.status, attempts: check.attempts, lastError: check.lastError }
+        ? {
+            status: check.status,
+            attempts: check.attempts,
+            lastError: check.lastError,
+            observationId: check.observationId,
+            nextAttemptAt: check.status === 'pending' ? check.nextAttemptAt : null,
+          }
         : null,
     });
   }

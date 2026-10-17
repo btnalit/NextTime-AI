@@ -117,7 +117,9 @@ export {
   DEFAULT_RECONCILE_CHECK_INTERVAL_MS,
   DEFAULT_RECONCILE_CHECK_LEASE_MS,
   DEFAULT_RECONCILE_CHECK_MAX_ATTEMPTS,
+  DEFAULT_RECONCILE_CHECK_MAX_DURATION_MS,
   type DueReconcileCheck,
+  RECONCILE_CHECK_MAX_BACKOFF_MS,
   RECONCILE_RESULT_MAX_CHARS,
   type ReconcileCheckDeps,
   type ReconcileCheckOptions,
@@ -125,6 +127,7 @@ export {
   type ReconcileCheckTickOptions,
   defaultReconcileCheckBackoffMs,
   listDueReconcileChecks,
+  reconcileRetryDelayMs,
   runReconcileCheck,
   runReconcileCheckTick,
 } from './reconcile-check.js';

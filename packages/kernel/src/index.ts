@@ -500,7 +500,11 @@ export interface CreateBackgroundServicesOptions {
    *  `runReconcileCheckTick`). Default `DEFAULT_RECONCILE_CHECK_INTERVAL_MS` (5 s). Wired with the
    *  goal advancer. */
   readonly goalReconcileCheckIntervalMs?: number;
-  /** S11 GO3d: the reconcile checks' lease, attempts and backoff — for tests. */
+  /** S11 GO3d: the reconcile checks' caps — `main()` reads `maxAttempts` from
+   *  `GOAL_RECONCILE_CHECK_MAX_ATTEMPTS` and `maxDurationMs` from
+   *  `GOAL_RECONCILE_CHECK_MAX_DURATION_MS` (defaults `DEFAULT_RECONCILE_CHECK_MAX_ATTEMPTS`, 5, and
+   *  `DEFAULT_RECONCILE_CHECK_MAX_DURATION_MS`, 15 minutes) — and their lease and backoff, for
+   *  tests. */
   readonly goalReconcileCheckOptions?: ReconcileCheckOptions;
   /** Called with every goal advancer, wake-consumer, reconcile-scan or reconcile-check failure —
    *  same shape as `onTaskReaperError`. Defaults to a no-op; `main()` passes `app.log.error`. */
@@ -1457,6 +1461,16 @@ export function main(): void {
       'TASK_REAPER_INTERVAL_MS',
       process.env.TASK_REAPER_INTERVAL_MS,
     );
+    // S11 GO3d: how long the platform keeps checking whether an action whose outcome is unknown
+    // took effect before it leaves the finding to a person.
+    const reconcileCheckMaxAttempts = parsePositiveIntEnvVar(
+      'GOAL_RECONCILE_CHECK_MAX_ATTEMPTS',
+      process.env.GOAL_RECONCILE_CHECK_MAX_ATTEMPTS,
+    );
+    const reconcileCheckMaxDurationMs = parsePositiveIntEnvVar(
+      'GOAL_RECONCILE_CHECK_MAX_DURATION_MS',
+      process.env.GOAL_RECONCILE_CHECK_MAX_DURATION_MS,
+    );
     const outboxPruneDays = parseNonNegativeIntEnvVar(
       'OUTBOX_PRUNE_DAYS',
       process.env.OUTBOX_PRUNE_DAYS,
@@ -1532,6 +1546,14 @@ export function main(): void {
       onGatekeeperDrainError: (err: unknown) => app.log.error(err),
       actionRequestReaperIntervalMs,
       staleExecutingTimeoutMs,
+      goalReconcileCheckOptions: {
+        ...(reconcileCheckMaxAttempts !== undefined
+          ? { maxAttempts: reconcileCheckMaxAttempts }
+          : {}),
+        ...(reconcileCheckMaxDurationMs !== undefined
+          ? { maxDurationMs: reconcileCheckMaxDurationMs }
+          : {}),
+      },
       onActionRequestReaperError: (actionRequestId: string, err: unknown) =>
         app.log.error({ actionRequestId, err }),
       outboxPruneDays,

@@ -1,6 +1,11 @@
 import type { Predicate } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
-import { PREDICATE_EMPTY_PROBES, evaluatePredicate, lintPredicate } from './predicate.js';
+import {
+  PREDICATE_EMPTY_PROBES,
+  evaluatePredicate,
+  lintPredicate,
+  predicateRefusalProbes,
+} from './predicate.js';
 
 const outcome = (predicate: Predicate, data: unknown) => evaluatePredicate(predicate, data).outcome;
 
@@ -118,21 +123,82 @@ describe('substrate/epistemic predicate (S11 GO3d)', () => {
       ]);
     });
 
+    it('refuses a path that reads the result as a whole instead of a named field (review #493)', () => {
+      // The review's table: each holds on a refusal like {error, code} as well as on the effect.
+      const shapeReads: Predicate[] = [
+        { path: 'length(keys(@))', op: 'gt', value: 1 },
+        {
+          all: [
+            { path: 'type(@)', op: 'eq', value: 'object' },
+            { path: 'length(keys(@))', op: 'gte', value: 2 },
+          ],
+        },
+        { path: 'foo || length(keys(@)) > `1`', op: 'eq', value: true },
+        { path: 'length(values(@))', op: 'gte', value: 2 },
+        { path: 'length(*)', op: 'gt', value: 1 },
+        { path: 'length(to_string(@))', op: 'gt', value: 40 },
+        { path: 'keys(@)', op: 'contains', value: 'status' },
+        // And the rest of the class: the root itself, a position, a projection of it.
+        { path: '@', op: 'exists' },
+        { path: 'type(@)', op: 'ne', value: 'number' },
+        { path: 'not_null(@)', op: 'exists' },
+        { path: '[0]', op: 'exists' },
+        { path: '[*]', op: 'contains', value: 'x' },
+        { path: '*', op: 'contains', value: 'applied' },
+        { path: 'sort(keys(@))[0]', op: 'eq', value: 'code' },
+        { path: '[@, state]', op: 'exists' },
+        { path: '{a: @}.a', op: 'exists' },
+      ];
+      for (const predicate of shapeReads) {
+        const problems = lintPredicate(predicate);
+        expect(problems.length, JSON.stringify(predicate)).toBeGreaterThan(0);
+        for (const problem of problems) {
+          expect(problem, JSON.stringify(predicate)).toMatch(
+            /reads the result as a whole \(@, \*, keys, values or a position\) instead of a named field|every branch of \|\| and && must read a named field/,
+          );
+        }
+      }
+      expect(lintPredicate({ path: 'state || `"applied"`', op: 'eq', value: 'applied' })).toEqual([
+        'path "state || `"applied"`": every branch of || and && must read a named field',
+      ]);
+      expect(
+        lintPredicate({ path: 'foo || length(keys(@)) > `1`', op: 'eq', value: true }),
+      ).toEqual([
+        'path "foo || length(keys(@)) > `1`" reads the result as a whole (@, *, keys, values or a position) instead of a named field — it would hold on almost any answer',
+      ]);
+    });
+
+    it('accepts @, *, keys and positions below a named field — right of a field, a projection, a filter or a pipe', () => {
+      const anchored: Predicate[] = [
+        { path: "items[?name=='svc'] | length(@)", op: 'gt', value: 0 },
+        { path: '@.state', op: 'eq', value: 'applied' },
+        { path: '[0].status', op: 'eq', value: 'done' },
+        { path: '[*].status', op: 'contains', value: 'done' },
+        { path: '*.state', op: 'contains', value: 'applied' },
+        { path: 'length(keys(services))', op: 'gte', value: 3 },
+        { path: 'services.* | [0].state', op: 'eq', value: 'running' },
+        { path: 'items[0]', op: 'eq', value: 'web' },
+        { path: 'state || status', op: 'eq', value: 'applied' },
+        { path: "items[?state=='up'] | length(@) > `2`", op: 'eq', value: true },
+      ];
+      for (const predicate of anchored) {
+        expect(lintPredicate(predicate), JSON.stringify(predicate)).toEqual([]);
+      }
+    });
+
     it('refuses a predicate a result that says nothing about the target satisfies', () => {
       const tautologies: Predicate[] = [
-        { path: '@', op: 'exists' },
         { not: { path: 'error', op: 'exists' } },
+        { path: 'to_string(items)', op: 'exists' },
+        { path: 'type(state)', op: 'exists' },
         { path: 'status', op: 'ne', value: 'failed' },
         { path: 'missing', op: 'eq', value: null },
-        { path: 'length(keys(@))', op: 'gte', value: 0 },
-        { path: 'type(@)', op: 'ne', value: 'number' },
         {
           any: [
             { path: 'state', op: 'eq', value: 'applied' },
             { not: { path: 'state', op: 'exists' } },
           ],
         },
-        { path: 'not_null(@)', op: 'exists' },
       ];
       for (const predicate of tautologies) {
         const problems = lintPredicate(predicate);
@@ -142,8 +208,69 @@ describe('substrate/epistemic predicate (S11 GO3d)', () => {
         );
       }
       // Every probe says nothing: none of them satisfies a predicate the lint accepts.
-      for (const probe of PREDICATE_EMPTY_PROBES) {
+      for (const probe of [
+        ...PREDICATE_EMPTY_PROBES,
+        ...predicateRefusalProbes(new Set(['state'])),
+      ]) {
         expect(outcome({ path: 'state', op: 'eq', value: 'applied' }, probe)).not.toBe('satisfied');
+      }
+    });
+
+    it('builds its refusal probes from fields the predicate does not read: several keys, long strings, a list', () => {
+      const read = new Set(['error', 'code', 'state']);
+      const probes = predicateRefusalProbes(read);
+      const objects = probes.filter(
+        (probe): probe is Record<string, unknown> =>
+          typeof probe === 'object' && probe !== null && !Array.isArray(probe),
+      );
+      expect(objects.length).toBeGreaterThanOrEqual(2);
+      for (const probe of objects) {
+        expect(Object.keys(probe).length).toBeGreaterThanOrEqual(2);
+        expect(Object.keys(probe).some((key) => read.has(key))).toBe(false);
+      }
+      expect(JSON.stringify(probes)).toMatch(/"[^"]{80,}"/);
+      expect(probes.some((probe) => Array.isArray(probe) && probe.length >= 2)).toBe(true);
+      // A predicate that names nearly every refusal key gets none — its field probes still run.
+      expect(
+        predicateRefusalProbes(
+          new Set([
+            'error',
+            'code',
+            'reason',
+            'message',
+            'detail',
+            'found',
+            'ok',
+            'result',
+            'data',
+          ]),
+        ),
+      ).toEqual([]);
+    });
+
+    it('refuses a predicate that holds whatever the field it reads is, and accepts one that tests a value', () => {
+      const anyValue: Predicate[] = [
+        { path: 'length(items)', op: 'gte', value: 0 },
+        { path: 'length(items)', op: 'ne', value: -1 },
+        { path: "ends_with(name, '')", op: 'eq', value: true },
+      ];
+      for (const predicate of anyValue) {
+        const problems = lintPredicate(predicate);
+        expect(problems, JSON.stringify(predicate)).toHaveLength(1);
+        expect(problems[0]).toMatch(
+          /^the predicate holds whatever ".+" is \(empty, false, zero or unrelated\) — it does not test its value$/,
+        );
+      }
+      // Each holds on only some of the probe values: whether that proves the effect is for the
+      // plan author to weigh, and the confirmation card shows it.
+      const tests: Predicate[] = [
+        { path: 'status', op: 'exists' },
+        { path: 'enabled', op: 'eq', value: false },
+        { path: 'length(items)', op: 'eq', value: 0 },
+        { path: 'revision', op: 'gte', value: 7 },
+      ];
+      for (const predicate of tests) {
+        expect(lintPredicate(predicate), JSON.stringify(predicate)).toEqual([]);
       }
     });
   });

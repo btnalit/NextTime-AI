@@ -158,6 +158,57 @@ describe('parsePlan — reconcile declarations (S11 GO3d)', () => {
         steps: [step('a', { reconcile: [declaration({ path: '`1`', op: 'eq', value: 1 })] })],
       }),
     ).toEqual(['step "a": reconcile[0]: path "`1`" reads nothing from the observation\'s result']);
+    // Review #493: the shape of the answer is not the effect.
+    expect(
+      problemsOf({
+        steps: [
+          step('a', { reconcile: [declaration({ path: 'length(keys(@))', op: 'gt', value: 1 })] }),
+        ],
+      }),
+    ).toEqual([
+      'step "a": reconcile[0]: path "length(keys(@))" reads the result as a whole (@, *, keys, values or a position) instead of a named field — it would hold on almost any answer',
+    ]);
+  });
+
+  it('refuses a predicate whose literals carry a suspected credential — in a value, an object value or the path', () => {
+    // Synthetic, Handle-shaped and vendor-shaped: what the credential review counts.
+    const jwt = 'eyJhbGciOiJFZERTQSJ9.eyJ3cyI6IndzMSIsIm9ibyI6InAxIn0.c2lnbmF0dXJlLWJ5dGVzLWhlcmU';
+    const vendor = `ghp_${'abcdefghij'.repeat(4)}`;
+    const refused: [unknown, string][] = [
+      [{ path: 'token', op: 'eq', value: jwt }, 'token'],
+      [{ path: 'auth', op: 'eq', value: { password: 'hunter2-not-real' } }, 'auth'],
+      [
+        { path: `keys[?id=='${vendor}'] | [0].state`, op: 'eq', value: 'active' },
+        `keys[?id=='${vendor}'] | [0].state`,
+      ],
+      [
+        {
+          all: [
+            { path: 'state', op: 'eq', value: 'up' },
+            { path: 'owner', op: 'contains', value: vendor },
+          ],
+        },
+        'owner',
+      ],
+    ];
+    for (const [expect_, path] of refused) {
+      expect(
+        problemsOf({ steps: [step('a', { reconcile: [declaration(expect_)] })] }),
+        JSON.stringify(expect_),
+      ).toEqual([
+        `step "a": reconcile[0]: a value compared at path "${path}" looks like a credential (1 suspected) — the check judges the result with such values redacted, so it could never match; a plan does not carry credentials`,
+      ]);
+    }
+    // Text that only mentions one is an ordinary value: a header's name, a count, a word.
+    for (const expect_ of [
+      { path: 'header', op: 'eq', value: 'Authorization' },
+      { path: 'tokenCount', op: 'gte', value: 3 },
+      { path: 'message', op: 'contains', value: 'rotated' },
+    ]) {
+      expect(() =>
+        parsePlan({ steps: [step('a', { reconcile: [declaration(expect_)] })] }),
+      ).not.toThrow();
+    }
   });
 });
 

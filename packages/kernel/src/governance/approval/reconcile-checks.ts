@@ -25,6 +25,9 @@ export interface ReconcileCheckRow {
   readonly status: ActionRequestReconcileCheckStatus;
   readonly observationCheck: ObservationCheck;
   readonly attempts: number;
+  /** When the first attempt was claimed — `null` before it. The retries' duration cap counts
+   *  from here (`application/goal/reconcile-check.ts`). */
+  readonly firstAttemptAt: Date | null;
   readonly nextAttemptAt: Date;
   readonly leaseUntil: Date | null;
   readonly observationId: string | null;
@@ -39,6 +42,7 @@ interface ReconcileCheckDbRow {
   status: ActionRequestReconcileCheckStatus;
   observation_check: ObservationCheck;
   attempts: number;
+  first_attempt_at: Date | null;
   next_attempt_at: Date;
   lease_until: Date | null;
   observation_id: string | null;
@@ -48,8 +52,8 @@ interface ReconcileCheckDbRow {
 }
 
 const RECONCILE_CHECK_COLUMNS =
-  'workspace_id, action_request_id, status, observation_check, attempts, next_attempt_at, ' +
-  'lease_until, observation_id, last_error, created_at, settled_at';
+  'workspace_id, action_request_id, status, observation_check, attempts, first_attempt_at, ' +
+  'next_attempt_at, lease_until, observation_id, last_error, created_at, settled_at';
 
 function mapRow(row: ReconcileCheckDbRow): ReconcileCheckRow {
   return {
@@ -58,6 +62,7 @@ function mapRow(row: ReconcileCheckDbRow): ReconcileCheckRow {
     status: row.status,
     observationCheck: row.observation_check,
     attempts: row.attempts,
+    firstAttemptAt: row.first_attempt_at,
     nextAttemptAt: row.next_attempt_at,
     leaseUntil: row.lease_until,
     observationId: row.observation_id,
@@ -107,23 +112,27 @@ export async function readReconcileChecks(
 }
 
 /** Claims the check for one attempt: `pending`, due, and not leased — or `null` (another kernel
- *  has it, it settled, or it is not due). The attempt number grows by one and the lease runs
- *  `leaseMs`. A concurrent claim waits on the row and then finds it leased. */
+ *  has it, it settled, or it is not due). The attempt number grows by one, the first claim sets
+ *  `first_attempt_at`, and the lease runs `leaseMs`. A concurrent claim waits on the row and then
+ *  finds it leased. `closed`: the check's run or step ended, so it is claimed to be settled
+ *  without a call, due or not (a cancel stops the retries). */
 export async function claimReconcileCheck(
   client: PoolClient,
   workspaceId: string,
   actionRequestId: string,
   leaseMs: number,
+  closed = false,
 ): Promise<ReconcileCheckRow | null> {
   const result = await client.query<ReconcileCheckDbRow>(
     `update action_request_reconcile_checks
         set attempts = attempts + 1,
+            first_attempt_at = coalesce(first_attempt_at, now()),
             lease_until = now() + make_interval(secs => $3::double precision)
       where workspace_id = $1 and action_request_id = $2
-        and status = 'pending' and next_attempt_at <= now()
+        and status = 'pending' and ($4 or next_attempt_at <= now())
         and (lease_until is null or lease_until <= now())
       returning ${RECONCILE_CHECK_COLUMNS}`,
-    [workspaceId, actionRequestId, leaseMs / 1000],
+    [workspaceId, actionRequestId, leaseMs / 1000, closed],
   );
   const row = result.rows[0];
   return row ? mapRow(row) : null;
@@ -187,29 +196,39 @@ async function auditAttempt(
 }
 
 /** Puts a claimed check back: due again in `delayMs`, the lease released, `lastError` the code of
- *  what went wrong this time. Audited as a `retry`. */
+ *  what went wrong this time, and `observationId` — when this attempt observed without seeing the
+ *  effect — the check's latest observation. Audited as a `retry`. */
 export async function deferReconcileCheck(
   client: PoolClient,
   workspaceId: string,
   check: ReconcileCheckRow,
-  input: { readonly delayMs: number; readonly lastError: string },
+  input: { readonly delayMs: number; readonly lastError: string; readonly observationId?: string },
   context: ReconcileCheckAuditContext,
 ): Promise<void> {
   await client.query(
     `update action_request_reconcile_checks
         set next_attempt_at = now() + make_interval(secs => $3::double precision),
-            lease_until = null, last_error = $4
+            lease_until = null, last_error = $4, observation_id = coalesce($5, observation_id)
       where workspace_id = $1 and action_request_id = $2`,
-    [workspaceId, check.actionRequestId, input.delayMs / 1000, clippedCode(input.lastError)],
+    [
+      workspaceId,
+      check.actionRequestId,
+      input.delayMs / 1000,
+      clippedCode(input.lastError),
+      input.observationId ?? null,
+    ],
   );
   await auditAttempt(client, workspaceId, check, 'retry', context, {
     code: clippedCode(input.lastError),
     retryInMs: input.delayMs,
+    ...(input.observationId ? { observationId: input.observationId } : {}),
   });
 }
 
-/** Settles a pending check once — see the module comment. `observationId` is required for `seen`
- *  and `not_seen` (the evidence), `lastError` says why it is `unavailable`. */
+/** Settles a pending check once — see the module comment. `observationId` is this attempt's
+ *  observation; without one the check keeps its latest (an earlier attempt's) — required, one way
+ *  or the other, for `seen` and `not_seen` (the evidence). `lastError` says why it is
+ *  `unavailable`, or why the last attempt of a `not_seen` one did not observe. */
 export async function settleReconcileCheck(
   client: PoolClient,
   workspaceId: string,
@@ -223,7 +242,8 @@ export async function settleReconcileCheck(
 ): Promise<void> {
   await client.query(
     `update action_request_reconcile_checks
-        set status = $3, observation_id = $4, last_error = $5, lease_until = null,
+        set status = $3, observation_id = coalesce($4, observation_id), last_error = $5,
+            lease_until = null,
             settled_at = now()
       where workspace_id = $1 and action_request_id = $2`,
     [
@@ -234,8 +254,9 @@ export async function settleReconcileCheck(
       clippedCode(input.lastError),
     ],
   );
+  const observationId = input.observationId ?? check.observationId;
   await auditAttempt(client, workspaceId, check, input.status, context, {
-    ...(input.observationId ? { observationId: input.observationId } : {}),
+    ...(observationId ? { observationId } : {}),
     ...(input.lastError ? { code: clippedCode(input.lastError) } : {}),
   });
 }

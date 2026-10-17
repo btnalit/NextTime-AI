@@ -6,7 +6,7 @@ import {
   type GatekeeperClient,
   GatekeeperClientError,
   GatekeeperTimeoutError,
-  gateRefusalOf,
+  gateFailureRetry,
 } from '../../adapters/gatekeeper-client/index.js';
 import {
   type ReconcileCheckAuditContext,
@@ -32,8 +32,10 @@ import {
   reviewObserveParams,
 } from '../../governance/redaction/index.js';
 import {
+  type PredicateOutcome,
   endActivity,
   evaluatePredicate,
+  lintPredicate,
   recordSourceObservation,
   startActivity,
 } from '../../substrate/epistemic/index.js';
@@ -45,6 +47,7 @@ import {
 import { resolveGateTarget } from '../gateway/gate-target.js';
 import { getOrCreateGatekeeperSource } from '../gateway/observed-facts.js';
 import { markGoalRunDue } from './advancer.js';
+import { predicateCredentialProblems } from './plan.js';
 import { lockStepRuns } from './reads.js';
 import { lockGoalRun } from './service.js';
 
@@ -58,14 +61,30 @@ import { lockGoalRun } from './service.js';
  *   - **satisfied** — the platform records `effect_seen` on the request
  *     (`recordObservedReconciliation`: a Decision nobody decided, resting on the Observation) and
  *     the check settles `seen`; the advance then counts the action as executed.
- *   - **unsatisfied or undetermined** — the check settles `not_seen` with the Observation as its
- *     evidence, and the next advance pauses the run `awaiting_reconcile` for a person. The platform
- *     never records `effect_absent`: an observation that does not show the effect may be early, or
- *     watch the wrong thing — only the direction that lets the step go on is the platform's.
- *   - **refused** (the requester may no longer observe through that gate, the gate or Operation is
- *     gone, the params carry a credential, the gate refused the call) — `unavailable`, and a person
- *     reconciles. A gate that did not answer (network, timeout, 5xx) is tried again with backoff,
- *     up to {@link DEFAULT_RECONCILE_CHECK_MAX_ATTEMPTS} attempts, then `unavailable`.
+ *   - **unsatisfied or undetermined** — an effect can show late (a restart that takes a minute, a
+ *     replica that catches up), so the check tries again with backoff (review #493 on #649): the
+ *     Observation is recorded and audited, kept as the check's latest, and the check is due again
+ *     later. Once no further attempt fits — {@link ReconcileCheckOptions.maxAttempts} attempts made,
+ *     or the next would start past {@link ReconcileCheckOptions.maxDurationMs} from the first
+ *     ({@link reconcileRetryDelayMs}) — it settles `not_seen` on its latest Observation, and the
+ *     next advance pauses the run `awaiting_reconcile` for a person. The platform never records
+ *     `effect_absent`: an observation that does not show the effect may be early, or watch the
+ *     wrong thing — only the direction that lets the step go on is the platform's.
+ *   - **no answer** (the network, a timeout, a 5xx, a 429 — `adapters/gatekeeper-client`'s
+ *     `gateFailureRetry`: `transient`) — tried again under the same caps; at the last, `not_seen`
+ *     on the latest Observation if an earlier attempt made one, else `unavailable`.
+ *   - **refused** — nothing a retry could change, so `unavailable` at once and a person
+ *     reconciles: the predicate no longer passes the lint or the credential review (`plan.ts`,
+ *     checked again here in case either learned more since the plan was confirmed), the requester
+ *     may no longer observe through that gate (disabled, role, exclusions), the gate or Operation
+ *     is gone, the params carry a credential, or the gate refused the call or answered what the
+ *     kernel does not take (`gateFailureRetry`: `deterministic`).
+ *
+ * Retries hold nothing up and wake nothing: the run stays `running` with the step
+ * `waiting(reconcile)` — no attempt starts beside an action that may have run (I-G4), the step's
+ * attempt budget is untouched, and the advance's `next_tick_at` stays the wall-clock deadline, so
+ * the goal's budget pauses it `budget_exhausted` on time whatever the check is doing (the check
+ * then waits, pending, for the resume). Only a settled check sets the run due.
  *
  * **As the requester.** The observation is made for the request's requester, under the rule every
  * other observation is (`observe-access.ts`'s `observeRefusal`), with the requester's agent
@@ -75,10 +94,15 @@ import { lockGoalRun } from './service.js';
  * and the requester as `onBehalfOf`, like `observe_operation`'s.
  *
  * **When.** Only while the step waits on its reconcile in a `running` run: a paused run's checks
- * wait for the requester's resume. A check that can no longer matter settles `unavailable` without
- * a call — under a run that ended (completed, failed, cancelled: `goal_ended`), or of a step that
- * ended (revised away, skipped, cancelled: `step_ended`; the run pauses for a person over a
- * revised-away step's unknown action, `advance.ts`) — so no check reads "pending" forever.
+ * wait for the requester's resume (paused by a person, held by an owner, or out of budget). An
+ * attempt already under way when the run was paused still settles: a finding runs nothing, so
+ * `effect_seen` is recorded and the paused advance counts the action (`advance.ts` phase A) — but
+ * nothing starts until the run is resumed. A check that can no longer matter settles
+ * `unavailable` without a call — under a run that ended (completed, failed, cancelled:
+ * `goal_ended`), or of a step that ended (revised away, skipped, cancelled — a cancel cancels the
+ * waiting step: `step_ended`; the run pauses for a person over a revised-away step's unknown
+ * action, `advance.ts`) — keeping its latest Observation, so no check reads "pending" forever and
+ * the action is left to a person as GO3c leaves any unknown outcome under an ended goal.
  *
  * **How.** {@link runReconcileCheckTick} lists due checks across workspaces (a read with no
  * workspace context, like the advancer's claim), then per check: claims it in its own transaction
@@ -100,8 +124,14 @@ import { lockGoalRun } from './service.js';
 export const DEFAULT_RECONCILE_CHECK_INTERVAL_MS = 5000;
 /** How long a claim holds a check: past the gate client's observe timeout with room to settle. */
 export const DEFAULT_RECONCILE_CHECK_LEASE_MS = 120 * 1000;
-/** Attempts after which a check whose gate never answered settles `unavailable`. */
-export const DEFAULT_RECONCILE_CHECK_MAX_ATTEMPTS = 3;
+/** Attempts a check makes at most — observations that did not show the effect and calls that got
+ *  no answer alike. */
+export const DEFAULT_RECONCILE_CHECK_MAX_ATTEMPTS = 5;
+/** How long after its first attempt a check may still be tried again (pauses of the run
+ *  included): an attempt whose retry would start later is its last. */
+export const DEFAULT_RECONCILE_CHECK_MAX_DURATION_MS = 15 * 60 * 1000;
+/** The longest wait between two attempts. */
+export const RECONCILE_CHECK_MAX_BACKOFF_MS = 5 * 60 * 1000;
 /** Checks looked at per tick. */
 export const DEFAULT_RECONCILE_CHECK_BATCH = 10;
 /** The most characters of an observation's result kept in its evidence. */
@@ -111,16 +141,37 @@ const RECONCILE_ACTIVITY_KIND = 'goal_reconcile_check';
 const ENDED_GOAL_RUN_STATUSES = ['completed', 'failed', 'cancelled'] as const;
 const ENDED_STEP_STATUSES = ['succeeded', 'superseded', 'cancelled', 'skipped'] as const;
 
-/** Delay before attempt `attempt + 1` after attempt `attempt` got no answer: 30 s, doubling. */
+/** Delay before attempt `attempt + 1`: 30 s, doubling, at most
+ *  {@link RECONCILE_CHECK_MAX_BACKOFF_MS} — with the defaults, five attempts within 7½ minutes. */
 export function defaultReconcileCheckBackoffMs(attempt: number): number {
-  return 30_000 * 2 ** Math.max(0, attempt - 1);
+  return Math.min(30_000 * 2 ** Math.max(0, attempt - 1), RECONCILE_CHECK_MAX_BACKOFF_MS);
 }
 
 export interface ReconcileCheckOptions {
   readonly leaseMs?: number;
+  /** Attempts at most (default {@link DEFAULT_RECONCILE_CHECK_MAX_ATTEMPTS}). */
   readonly maxAttempts?: number;
+  /** No attempt is scheduled to start later than this after the first (default
+   *  {@link DEFAULT_RECONCILE_CHECK_MAX_DURATION_MS}). */
+  readonly maxDurationMs?: number;
   readonly limit?: number;
   readonly backoffMs?: (attempt: number) => number;
+}
+
+/** When the next attempt of a check that did not settle on attempt `attempts` starts, as a delay
+ *  from `now` — or `null` when this attempt is its last: `attempts` reached `maxAttempts`, or the
+ *  next would start past `maxDurationMs` from `firstAttemptAt`. */
+export function reconcileRetryDelayMs(
+  check: { readonly attempts: number; readonly firstAttemptAt: Date | null },
+  now: Date,
+  options: ReconcileCheckOptions = {},
+): number | null {
+  const maxAttempts = options.maxAttempts ?? DEFAULT_RECONCILE_CHECK_MAX_ATTEMPTS;
+  const maxDurationMs = options.maxDurationMs ?? DEFAULT_RECONCILE_CHECK_MAX_DURATION_MS;
+  if (check.attempts >= maxAttempts) return null;
+  const delayMs = (options.backoffMs ?? defaultReconcileCheckBackoffMs)(check.attempts);
+  const first = (check.firstAttemptAt ?? now).getTime();
+  return now.getTime() + delayMs > first + maxDurationMs ? null : delayMs;
 }
 
 export interface ReconcileCheckDeps {
@@ -151,8 +202,9 @@ export type ReconcileCheckOutcome =
   /** Not claimed (another kernel has it, or it is no longer due), or the claim was lost. */
   | 'skipped';
 
-/** Pending checks that are due and not leased, whose step waits on its reconcile in a running
- *  run — or whose run or step ended — oldest first. */
+/** Pending checks that are not leased and either due, with their step waiting on its reconcile
+ *  in a running run, or closed — their run or step ended: those are looked at at once, whatever
+ *  their backoff said (a cancel stops the retries) — oldest first. */
 export async function listDueReconcileChecks(
   pool: PoolLike,
   limit = DEFAULT_RECONCILE_CHECK_BATCH,
@@ -174,9 +226,10 @@ export async function listDueReconcileChecks(
          join action_requests a on a.workspace_id = c.workspace_id and a.id = c.action_request_id
          join step_runs s on s.workspace_id = a.workspace_id and s.id = a.step_run_id
          join goal_runs g on g.workspace_id = s.workspace_id and g.id = s.goal_run_id
-        where c.status = 'pending' and c.next_attempt_at <= now()
+        where c.status = 'pending'
           and (c.lease_until is null or c.lease_until <= now())
-          and ((g.status = 'running' and s.status = 'waiting' and s.waiting_reason = 'reconcile')
+          and ((c.next_attempt_at <= now() and g.status = 'running' and s.status = 'waiting'
+                and s.waiting_reason = 'reconcile')
                or g.status = any($2::text[]) or s.status = any($3::text[]))
         order by c.next_attempt_at, c.action_request_id
         limit $1`,
@@ -234,7 +287,8 @@ type GateAnswer =
   | { readonly kind: 'refused'; readonly code: string; readonly error: string | null }
   | { readonly kind: 'no_answer'; readonly code: string; readonly error: string | null };
 
-/** The settle's verdict, decided after the locks (see the module comment). */
+/** What the attempt came to, before the locks; the settle decides the rest (see the module
+ *  comment). */
 type Settlement =
   | {
       readonly kind: 'observed';
@@ -242,8 +296,10 @@ type Settlement =
       readonly operationDigest: string;
       readonly credentialReview: Record<string, unknown>;
     }
+  /** Nothing a retry could change. */
   | { readonly kind: 'unavailable'; readonly code: string; readonly error?: string | null }
-  | { readonly kind: 'retry'; readonly code: string; readonly error: string | null };
+  /** No answer: tried again while the caps allow. */
+  | { readonly kind: 'no_answer'; readonly code: string; readonly error: string | null };
 
 /** One check — see the module comment. */
 export async function runReconcileCheck(
@@ -255,7 +311,13 @@ export async function runReconcileCheck(
   const leaseMs = deps.options?.leaseMs ?? DEFAULT_RECONCILE_CHECK_LEASE_MS;
 
   const claimed = await withWorkspace(deps.pool, context, (client) =>
-    claimReconcileCheck(client, due.workspaceId, due.actionRequestId, leaseMs),
+    claimReconcileCheck(
+      client,
+      due.workspaceId,
+      due.actionRequestId,
+      leaseMs,
+      due.closedBy !== null,
+    ),
   );
   if (!claimed) return 'skipped';
 
@@ -263,7 +325,13 @@ export async function runReconcileCheck(
     return settle(deps, due, claimed, { kind: 'unavailable', code: due.closedBy });
   }
   if (claimed.attempts > maxAttempts) {
-    return settle(deps, due, claimed, { kind: 'unavailable', code: 'attempts_exhausted' });
+    // Earlier attempts lost their lease without settling (a kernel died mid-call): no attempt is
+    // left, so this one settles on what the check has — its latest Observation, or none.
+    return settle(deps, due, claimed, {
+      kind: 'no_answer',
+      code: 'attempts_exhausted',
+      error: null,
+    });
   }
 
   const check = claimed.observationCheck;
@@ -283,14 +351,11 @@ export async function runReconcileCheck(
       credentialReview: prepared.credentialReview,
     });
   }
-  if (answer.kind === 'refused' || claimed.attempts >= maxAttempts) {
-    return settle(deps, due, claimed, {
-      kind: 'unavailable',
-      code: answer.code,
-      error: answer.error,
-    });
-  }
-  return settle(deps, due, claimed, { kind: 'retry', code: answer.code, error: answer.error });
+  return settle(deps, due, claimed, {
+    kind: answer.kind === 'refused' ? 'unavailable' : 'no_answer',
+    code: answer.code,
+    error: answer.error,
+  });
 }
 
 async function prepareCall(
@@ -299,6 +364,11 @@ async function prepareCall(
   check: ObservationCheck,
 ): Promise<PreparedCall> {
   const ws = due.workspaceId;
+  // The plan's own reviews, again: either may have learned more since the plan was confirmed.
+  if (lintPredicate(check.expect).length > 0) return { kind: 'refused', code: 'predicate_refused' };
+  if (predicateCredentialProblems(check.expect).length > 0) {
+    return { kind: 'refused', code: 'credentials_in_predicate' };
+  }
   const principal = await client.query<{ role: Role; disabled: boolean }>(
     `select role, disabled_at is not null as disabled from principals
       where workspace_id = $1 and id = $2`,
@@ -361,16 +431,17 @@ async function callGate(
     });
     return { kind: 'data', data: result.data };
   } catch (err) {
-    if (err instanceof GatekeeperClientError) {
-      const refusal = gateRefusalOf(err);
-      return refusal
-        ? { kind: 'refused', code: refusal.code, error: errorText(err) }
-        : { kind: 'no_answer', code: err.code, error: errorText(err) };
-    }
-    if (err instanceof GatekeeperTimeoutError) {
-      return { kind: 'no_answer', code: 'gate_timeout', error: errorText(err) };
-    }
-    return { kind: 'no_answer', code: 'gate_error', error: errorText(err) };
+    const code =
+      err instanceof GatekeeperClientError
+        ? err.code
+        : err instanceof GatekeeperTimeoutError
+          ? 'gate_timeout'
+          : 'gate_error';
+    return {
+      kind: gateFailureRetry(err) === 'deterministic' ? 'refused' : 'no_answer',
+      code,
+      error: errorText(err),
+    };
   }
 }
 
@@ -415,20 +486,13 @@ async function settle(
         ...(error ? { error } : {}),
       });
 
+      const now = (await client.query<{ now: Date }>('select now() as now')).rows[0]?.now;
+      const retryDelayMs = reconcileRetryDelayMs(check, now ?? new Date(), deps.options);
+
       let outcome: ReconcileCheckOutcome;
       if (request.reconciliation !== null) {
         await settleReconcileCheck(client, ws, check, { status: 'preempted' }, audit());
         outcome = 'preempted';
-      } else if (settlement.kind === 'retry') {
-        const delayMs = (deps.options?.backoffMs ?? defaultReconcileCheckBackoffMs)(check.attempts);
-        await deferReconcileCheck(
-          client,
-          ws,
-          check,
-          { delayMs, lastError: settlement.code },
-          audit(settlement.error),
-        );
-        return 'retry';
       } else if (settlement.kind === 'unavailable') {
         await settleReconcileCheck(
           client,
@@ -438,8 +502,30 @@ async function settle(
           audit(settlement.error),
         );
         outcome = 'unavailable';
+      } else if (settlement.kind === 'no_answer') {
+        if (retryDelayMs !== null) {
+          await deferReconcileCheck(
+            client,
+            ws,
+            check,
+            { delayMs: retryDelayMs, lastError: settlement.code },
+            audit(settlement.error),
+          );
+          return 'retry';
+        }
+        // The last attempt: what an earlier one observed, if any, is what the check saw.
+        const status = check.observationId !== null ? 'not_seen' : 'unavailable';
+        await settleReconcileCheck(
+          client,
+          ws,
+          check,
+          { status, lastError: settlement.code },
+          audit(settlement.error),
+        );
+        outcome = status;
       } else {
-        outcome = await recordObservation(client, due, check, settlement, audit());
+        outcome = await recordObservation(client, due, check, settlement, audit(), retryDelayMs);
+        if (outcome === 'retry') return outcome;
       }
       await markGoalRunDue(client, ws, due.goalRunId);
       return outcome;
@@ -453,7 +539,8 @@ async function recordObservation(
   check: ReconcileCheckRow,
   settlement: Extract<Settlement, { kind: 'observed' }>,
   audit: ReconcileCheckAuditContext,
-): Promise<'seen' | 'not_seen'> {
+  retryDelayMs: number | null,
+): Promise<'seen' | 'not_seen' | 'retry'> {
   const ws = due.workspaceId;
   const call = check.observationCheck;
   // Judged on the redacted result, the one the evidence keeps: a stored result that is not cut
@@ -518,6 +605,20 @@ async function recordObservation(
     );
     return 'seen';
   }
+  if (retryDelayMs !== null) {
+    await deferReconcileCheck(
+      client,
+      ws,
+      check,
+      {
+        delayMs: retryDelayMs,
+        lastError: notSeenCode(evaluation.outcome),
+        observationId: observation.id,
+      },
+      audit,
+    );
+    return 'retry';
+  }
   await settleReconcileCheck(
     client,
     ws,
@@ -526,4 +627,9 @@ async function recordObservation(
     audit,
   );
   return 'not_seen';
+}
+
+/** The `last_error` of an attempt that observed without seeing the effect. */
+function notSeenCode(outcome: PredicateOutcome): string {
+  return outcome === 'undetermined' ? 'predicate_undetermined' : 'predicate_unsatisfied';
 }

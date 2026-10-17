@@ -22,6 +22,7 @@ import {
   ApprovalDrainer,
   approveActionRequest,
   claimReconcileCheck,
+  ensureReconcileCheck,
   expireActionRequest,
   getActionRequest,
   markActionRequestExecuted,
@@ -3680,15 +3681,24 @@ describe.runIf(DATABASE_URL !== undefined)(
 
           /** A goal whose step `a` declares the check of `svc.restart {name: web}`; its Worker
            *  asks for `svc.restart` with `params`, the request is approved, starts and is lost
-           *  (`outcome_unknown`), and the Worker reports its result. Then one advance. */
+           *  (`outcome_unknown`), and the Worker reports its result. Then one advance — after
+           *  `beforeAdvance`, when given. */
           async function lostAction(
             requester: string,
             params: Record<string, unknown> = { name: 'web' },
+            extra: {
+              readonly budget?: GoalRunBudget;
+              readonly beforeAdvance?: (action: string) => Promise<unknown>;
+            } = {},
           ) {
-            const goalRunId = await startGoal(requester, [
-              { key: 'a', reconcile: [declaration()] },
-              { key: 'b', dependsOn: ['a'] },
-            ]);
+            const goalRunId = await startGoal(
+              requester,
+              [
+                { key: 'a', reconcile: [declaration()] },
+                { key: 'b', dependsOn: ['a'] },
+              ],
+              extra.budget,
+            );
             await advance(goalRunId, requester);
             const stepA = (await stepsOf(goalRunId)).a as StepRunRow;
             const asked = await ask(gate, stepA.id, requester, 'svc.restart', params);
@@ -3702,9 +3712,29 @@ describe.runIf(DATABASE_URL !== undefined)(
             await admin((client) => startActionRequestExecution(client, workspaceId, asked.id));
             await lose(asked.id);
             await completeStep(stepA.id, requester);
+            await extra.beforeAdvance?.(asked.id);
             await advance(goalRunId, requester);
             return { goalRunId, stepA, action: asked.id };
           }
+          /** Makes a pending check due now (its backoff skipped). */
+          const dueNow = (action: string) =>
+            raw(
+              `update action_request_reconcile_checks set next_attempt_at = now()
+                where workspace_id = $1 and action_request_id = $2`,
+              [workspaceId, action],
+            );
+          const checkAudit = async (action: string) =>
+            (
+              await admin((client) =>
+                client.query<{ payload: Record<string, unknown> }>(
+                  `select payload from audit_records
+                    where workspace_id = $1 and action = 'action_request.reconcile_check'
+                      and resource_id = $2
+                    order by created_at, id`,
+                  [workspaceId, action],
+                ),
+              )
+            ).rows.map((row) => row.payload);
 
           const dueOf = async (action: string): Promise<DueReconcileCheck | undefined> =>
             (await listDueReconcileChecks(pool, 1000)).find(
@@ -3763,7 +3793,13 @@ describe.runIf(DATABASE_URL !== undefined)(
               expect.objectContaining({
                 actionRequestId: action,
                 needs: 'finding',
-                platformCheck: { status: 'pending', attempts: 0, lastError: null },
+                platformCheck: {
+                  status: 'pending',
+                  attempts: 0,
+                  lastError: null,
+                  observationId: null,
+                  nextAttemptAt: expect.any(Date),
+                },
               }),
             ]);
 
@@ -3819,20 +3855,73 @@ describe.runIf(DATABASE_URL !== undefined)(
             expect(await unresolved(goalRunId)).toEqual([]);
           });
 
-          it('S4 reversed: an observation that does not show the effect leaves the finding to a person — the run pauses awaiting_reconcile, nothing runs again, and the person’s finding moves it', async () => {
+          it('S4 reversed: observations that never show the effect are tried again with backoff, each one recorded, then leave the finding to a person — the run pauses awaiting_reconcile, nothing runs again, and the person’s finding moves it', async () => {
             const requester = await newPrincipal();
             const { goalRunId, stepA, action } = await lostAction(requester);
             gateClient.answer = async () => ({ data: { name: 'web', state: 'stopped' } });
-            expect(await runReconcileCheck(checkDeps(), await mustBeDue(action))).toBe('not_seen');
+            const options = { maxAttempts: 2, backoffMs: () => 60_000 };
+            expect(await runReconcileCheck(checkDeps(options), await mustBeDue(action))).toBe(
+              'retry',
+            );
+            const [first] = await evidenceOf(action);
+            expect(await checkOf(action)).toMatchObject({
+              status: 'pending',
+              attempts: 1,
+              leaseUntil: null,
+              observationId: first?.id,
+              lastError: 'predicate_unsatisfied',
+            });
+            // Retries hold nothing up and wake nothing: the run keeps running, the step waits.
+            expect(await dueOf(action)).toBeUndefined();
+            expect(await isDue(goalRunId)).toBe(false);
+            expect((await goalOf(goalRunId)).status).toBe('running');
+            expect(await unresolved(goalRunId)).toEqual([
+              expect.objectContaining({
+                platformCheck: {
+                  status: 'pending',
+                  attempts: 1,
+                  lastError: 'predicate_unsatisfied',
+                  observationId: first?.id,
+                  nextAttemptAt: expect.any(Date),
+                },
+              }),
+            ]);
+
+            await dueNow(action);
+            expect(await runReconcileCheck(checkDeps(options), await mustBeDue(action))).toBe(
+              'not_seen',
+            );
             expect(
               (await admin((client) => getActionRequest(client, workspaceId, action)))
                 ?.reconciliation,
             ).toBeNull();
-            expect(await checkOf(action)).toMatchObject({ status: 'not_seen', lastError: null });
-            expect((await evidenceOf(action))[0]?.content).toMatchObject({
+            const evidence = await evidenceOf(action);
+            expect(evidence).toHaveLength(2);
+            expect(await checkOf(action)).toMatchObject({
+              status: 'not_seen',
+              attempts: 2,
+              observationId: evidence[1]?.id,
+              lastError: null,
+            });
+            expect(evidence[1]?.content).toMatchObject({
               outcome: 'unsatisfied',
               result: { name: 'web', state: 'stopped' },
             });
+            // Every attempt is audited, with the Observation it made.
+            expect(await checkAudit(action)).toEqual([
+              expect.objectContaining({
+                outcome: 'retry',
+                attempt: 1,
+                code: 'predicate_unsatisfied',
+                retryInMs: 60_000,
+                observationId: evidence[0]?.id,
+              }),
+              expect.objectContaining({
+                outcome: 'not_seen',
+                attempt: 2,
+                observationId: evidence[1]?.id,
+              }),
+            ]);
             expect(await isDue(goalRunId)).toBe(true);
 
             await advance(goalRunId, requester);
@@ -3851,7 +3940,13 @@ describe.runIf(DATABASE_URL !== undefined)(
               expect.objectContaining({
                 actionRequestId: action,
                 needs: 'finding',
-                platformCheck: { status: 'not_seen', attempts: 1, lastError: null },
+                platformCheck: {
+                  status: 'not_seen',
+                  attempts: 2,
+                  lastError: null,
+                  observationId: evidence[1]?.id,
+                  nextAttemptAt: null,
+                },
               }),
             ]);
             expect(await requestsOf(stepA.id)).toBe(1);
@@ -3937,6 +4032,274 @@ describe.runIf(DATABASE_URL !== undefined)(
               attempts: 2,
               lastError: 'gate_unreachable',
             });
+          });
+
+          it('an effect that shows late: not seen, then seen — the platform records effect_seen on the later Observation and the next step starts', async () => {
+            const requester = await newPrincipal();
+            const { goalRunId, action } = await lostAction(requester);
+            const states = ['starting', 'running'];
+            gateClient.answer = async () => ({ data: { name: 'web', state: states.shift() } });
+            const options = { backoffMs: () => 60_000 };
+            expect(await runReconcileCheck(checkDeps(options), await mustBeDue(action))).toBe(
+              'retry',
+            );
+            await dueNow(action);
+            expect(await runReconcileCheck(checkDeps(options), await mustBeDue(action))).toBe(
+              'seen',
+            );
+            const evidence = await evidenceOf(action);
+            expect(evidence.map((row) => row.content.outcome)).toEqual([
+              'unsatisfied',
+              'satisfied',
+            ]);
+            expect(await checkOf(action)).toMatchObject({
+              status: 'seen',
+              attempts: 2,
+              observationId: evidence[1]?.id,
+            });
+            expect(
+              (await admin((client) => getActionRequest(client, workspaceId, action)))
+                ?.reconciliation,
+            ).toBe('effect_seen');
+            expect((await checkAudit(action)).map((row) => row.outcome)).toEqual(['retry', 'seen']);
+            await advance(goalRunId, requester);
+            expect((await goalOf(goalRunId)).status).toBe('running');
+            expect((await stepsOf(goalRunId)).b?.status).toBe('running');
+          });
+
+          it('the caps: no attempt is scheduled past maxDurationMs from the first; at the last, a call with no answer settles on the latest Observation, or unavailable when there is none', async () => {
+            const requester = await newPrincipal();
+            // A retry that would start past the duration cap: the first attempt is the last.
+            const short = await lostAction(requester);
+            gateClient.answer = async () => ({ data: { state: 'stopped' } });
+            expect(
+              await runReconcileCheck(
+                checkDeps({ maxDurationMs: 30_000, backoffMs: () => 60_000 }),
+                await mustBeDue(short.action),
+              ),
+            ).toBe('not_seen');
+            expect(await checkOf(short.action)).toMatchObject({ status: 'not_seen', attempts: 1 });
+            expect((await checkOf(short.action))?.firstAttemptAt).toBeInstanceOf(Date);
+
+            // Observed without the effect, then no answer at the last attempt: not_seen on the
+            // earlier Observation, the last attempt's code kept.
+            const mixed = await lostAction(requester);
+            const options = { maxAttempts: 2, backoffMs: () => 60_000 };
+            gateClient.answer = async () => ({ data: { state: 'stopped' } });
+            expect(await runReconcileCheck(checkDeps(options), await mustBeDue(mixed.action))).toBe(
+              'retry',
+            );
+            const [observed] = await evidenceOf(mixed.action);
+            gateClient.answer = async () => {
+              throw new GatekeeperClientError('gate overloaded', {
+                code: 'internal_error',
+                status: 503,
+              });
+            };
+            await dueNow(mixed.action);
+            expect(await runReconcileCheck(checkDeps(options), await mustBeDue(mixed.action))).toBe(
+              'not_seen',
+            );
+            expect(await checkOf(mixed.action)).toMatchObject({
+              status: 'not_seen',
+              attempts: 2,
+              observationId: observed?.id,
+              lastError: 'internal_error',
+            });
+            expect(await evidenceOf(mixed.action)).toHaveLength(1);
+          });
+
+          it('nothing a retry could change is retried: deterministic gate failures, and a predicate the lint or the credential review now refuses, settle unavailable at the first attempt', async () => {
+            const requester = await newPrincipal();
+            const deterministic: Array<[string, number]> = [
+              ['response_too_large', 200],
+              ['invalid_response', 200],
+              ['redirect_refused', 302],
+              ['target_refused', 0],
+              ['connection_secret_missing', 401],
+              ['unauthorized', 401],
+              ['invalid_params', 400],
+              ['credential_unavailable', 424],
+            ];
+            for (const [code, status] of deterministic) {
+              const { action } = await lostAction(requester);
+              gateClient.answer = async () => {
+                throw new GatekeeperClientError(`the gate said ${code}`, { code, status });
+              };
+              expect(await runReconcileCheck(checkDeps(), await mustBeDue(action)), code).toBe(
+                'unavailable',
+              );
+              expect(await checkOf(action), code).toMatchObject({
+                status: 'unavailable',
+                attempts: 1,
+                lastError: code,
+              });
+            }
+
+            // A stored check whose predicate the reviews refuse (they may learn more after a plan
+            // was confirmed): refused before the gate is called.
+            const jwt =
+              'eyJhbGciOiJFZERTQSJ9.eyJ3cyI6IndzMSIsIm9ibyI6InAxIn0.c2lnbmF0dXJlLWJ5dGVzLWhlcmU';
+            const stored: Array<[unknown, string]> = [
+              [{ path: 'length(keys(@))', op: 'gt', value: 1 }, 'predicate_refused'],
+              [{ path: 'token', op: 'eq', value: jwt }, 'credentials_in_predicate'],
+            ];
+            for (const [expect_, code] of stored) {
+              const { action } = await lostAction(
+                requester,
+                { name: 'web' },
+                {
+                  beforeAdvance: (id) =>
+                    admin((client) =>
+                      ensureReconcileCheck(client, workspaceId, {
+                        actionRequestId: id,
+                        observationCheck: { ...declaration().check, expect: expect_ } as never,
+                      }),
+                    ),
+                },
+              );
+              const before = gateClient.calls.length;
+              expect(await runReconcileCheck(checkDeps(), await mustBeDue(action))).toBe(
+                'unavailable',
+              );
+              expect(gateClient.calls).toHaveLength(before);
+              expect((await checkOf(action))?.lastError).toBe(code);
+            }
+          });
+
+          it('a pause or an owner’s hold that lands while an attempt is under way: the attempt still records effect_seen and the step settles, but the run keeps the person’s pause or hold and nothing starts until it is resumed', async () => {
+            const requester = await newPrincipal();
+            for (const pauser of ['requester', 'owner'] as const) {
+              const { goalRunId, stepA, action } = await lostAction(requester);
+              gateClient.answer = async () => {
+                if (pauser === 'requester') await pauseAs(goalRunId, requester);
+                else {
+                  await asOwner((client) =>
+                    pauseGoalRun(client, workspaceId, { goalRunId, actor: byOwner() }),
+                  );
+                }
+                return { data: { state: 'running' } };
+              };
+              expect(await runReconcileCheck(checkDeps(), await mustBeDue(action)), pauser).toBe(
+                'seen',
+              );
+              expect(
+                (await admin((client) => getActionRequest(client, workspaceId, action)))
+                  ?.reconciliation,
+              ).toBe('effect_seen');
+              await advance(goalRunId, requester);
+              expect(await goalOf(goalRunId), pauser).toMatchObject({
+                status: 'paused',
+                pauseReason: 'requested',
+                pausedBy: pauser === 'owner' ? ownerId : requester,
+              });
+              const steps = await stepsOf(goalRunId);
+              expect(steps.a?.status, pauser).toBe('succeeded');
+              expect(steps.b?.status, pauser).toBe('ready');
+              expect(await requestsOf(stepA.id)).toBe(1);
+
+              if (pauser === 'owner') {
+                await expect(resumeAs(goalRunId, requester)).rejects.toThrow(
+                  /a workspace owner holds it/,
+                );
+                await asRequester(ownerId, (client) =>
+                  releaseGoalRunHold(client, workspaceId, { goalRunId, actor: byOwner() }),
+                );
+              }
+              await resumeAs(goalRunId, requester);
+              await advance(goalRunId, requester);
+              expect((await stepsOf(goalRunId)).b?.status, pauser).toBe('running');
+            }
+
+            // Paused before the attempt: the check waits for the resume, and is due again after.
+            const waiting = await lostAction(requester);
+            await pauseAs(waiting.goalRunId, requester);
+            expect(await dueOf(waiting.action)).toBeUndefined();
+            await resumeAs(waiting.goalRunId, requester);
+            expect(await dueOf(waiting.action)).toBeDefined();
+          });
+
+          it('the goal’s wall-clock budget comes first: past the deadline the run pauses budget_exhausted while its check is pending, and the check waits — neither settled nor tried — until the run is resumed', async () => {
+            const requester = await newPrincipal();
+            const { goalRunId, action } = await lostAction(
+              requester,
+              { name: 'web' },
+              { budget: { ...BUDGET, maxWallClockSeconds: 600 } },
+            );
+            // While the check is pending the run is looked at again at its deadline at the latest.
+            const goal = await goalOf(goalRunId);
+            expect(goal.nextTickAt?.getTime()).toBe(
+              (goal.confirmedAt as Date).getTime() + 600 * 1000,
+            );
+            gateClient.answer = async () => ({ data: { state: 'stopped' } });
+            expect(
+              await runReconcileCheck(
+                checkDeps({ backoffMs: () => 60_000 }),
+                await mustBeDue(action),
+              ),
+            ).toBe('retry');
+
+            await raw(
+              `update goal_runs set confirmed_at = now() - interval '1 hour'
+                where workspace_id = $1 and id = $2`,
+              [workspaceId, goalRunId],
+            );
+            await advance(goalRunId, requester);
+            expect(await goalOf(goalRunId)).toMatchObject({
+              status: 'paused',
+              pauseReason: 'budget_exhausted',
+            });
+            await dueNow(action);
+            expect(await dueOf(action)).toBeUndefined();
+            expect(await checkOf(action)).toMatchObject({ status: 'pending', attempts: 1 });
+            expect((await stepsOf(goalRunId)).a).toMatchObject({
+              status: 'waiting',
+              waitingReason: 'reconcile',
+            });
+            expect(
+              (await admin((client) => getActionRequest(client, workspaceId, action)))
+                ?.reconciliation,
+            ).toBeNull();
+          });
+
+          it('a cancel stops the retries: the cancelled step’s check settles unavailable without a call, keeping its latest Observation, and the action is left to a person as any unknown outcome under an ended goal', async () => {
+            const requester = await newPrincipal();
+            const { goalRunId, action } = await lostAction(requester);
+            gateClient.answer = async () => ({ data: { state: 'stopped' } });
+            expect(
+              await runReconcileCheck(
+                checkDeps({ backoffMs: () => 60_000 }),
+                await mustBeDue(action),
+              ),
+            ).toBe('retry');
+            const [observed] = await evidenceOf(action);
+
+            await asRequester(requester, (client) =>
+              cancelGoalRun(client, workspaceId, { goalRunId, actor: by(requester) }),
+            );
+            // Due at once, whatever its backoff said: the step was cancelled with the run.
+            const closed = await dueOf(action);
+            expect(closed?.closedBy).not.toBeNull();
+            const before = gateClient.calls.length;
+            expect(await runReconcileCheck(checkDeps(), closed as DueReconcileCheck)).toBe(
+              'unavailable',
+            );
+            expect(gateClient.calls).toHaveLength(before);
+            expect(await checkOf(action)).toMatchObject({
+              status: 'unavailable',
+              attempts: 2,
+              observationId: observed?.id,
+            });
+            await advance(goalRunId, requester);
+            expect((await goalOf(goalRunId)).status).toBe('cancelled');
+            expect(await unresolved(goalRunId)).toEqual([
+              expect.objectContaining({ actionRequestId: action, needs: 'finding' }),
+            ]);
+            await reconcileAs(goalRunId, action, requester, { verdict: 'effect_seen' });
+            expect(
+              (await admin((client) => getActionRequest(client, workspaceId, action)))
+                ?.reconciliation,
+            ).toBe('effect_seen');
           });
 
           it('a person’s finding preempts the check; an attempt whose claim was lost writes nothing', async () => {

@@ -13,15 +13,19 @@
 --      is immutable, so this is a copy for the reader, not a second source), and where the check
 --      stands (packages/shared enums.ts `ACTION_REQUEST_RECONCILE_CHECK_STATUS_VALUES`):
 --      `pending` until it settles once into `seen` (the observation satisfied the predicate: the
---      platform recorded `effect_seen` on the request), `not_seen`, `unavailable` (refused, or no
---      answer after the last try) or `preempted` (a person recorded a finding first). `attempts`,
---      `next_attempt_at` and `lease_until` are the claim that keeps one kernel observing at a time
---      (`application/goal/reconcile-check.ts`); `observation_id` is the evidence `seen` and
---      `not_seen` rest on; `last_error` a short code for why it is `unavailable` or retried.
+--      platform recorded `effect_seen` on the request), `not_seen` (no observation showed the
+--      effect by the last try), `unavailable` (refused, or no answer by the last try) or
+--      `preempted` (a person recorded a finding first). `attempts`, `next_attempt_at` and
+--      `lease_until` are the claim that keeps one kernel observing at a time
+--      (`application/goal/reconcile-check.ts`); `first_attempt_at` when the first attempt was
+--      claimed — the retries' duration cap counts from it; `observation_id` the latest
+--      observation, the evidence `seen` and `not_seen` rest on (a pending check that observed
+--      without seeing the effect keeps its latest too); `last_error` a short code for why it is
+--      `unavailable` or was retried.
 --      The guard: created `pending`, for a request whose outcome is unknown and that nobody has
---      reconciled; once settled, frozen; `seen` only when the request carries the platform's
---      `effect_seen` resting on this check's observation, `preempted` only when it carries a
---      finding.
+--      reconciled; `first_attempt_at` set by the first claim and never changed; once settled,
+--      frozen; `seen` only when the request carries the platform's `effect_seen` resting on this
+--      check's observation, `preempted` only when it carries a finding.
 --   2. The reconciliation guard of governance/0023, rebuilt with its "nobody decided" branch
 --      narrowed (review #493 on #642): a Decision with no `decided_by` is the platform's
 --      `effect_seen` only — never `effect_absent`, the platform does not record that an effect is
@@ -46,6 +50,7 @@ create table if not exists action_request_reconcile_checks (
   status text not null default 'pending',
   observation_check jsonb not null,
   attempts int not null default 0,
+  first_attempt_at timestamptz,
   next_attempt_at timestamptz not null default now(),
   lease_until timestamptz,
   observation_id uuid,
@@ -58,6 +63,8 @@ create table if not exists action_request_reconcile_checks (
   constraint action_request_reconcile_checks_status
     check (status in ('pending', 'seen', 'not_seen', 'unavailable', 'preempted')),
   constraint action_request_reconcile_checks_attempts check (attempts >= 0),
+  constraint action_request_reconcile_checks_first_attempt
+    check ((attempts = 0) = (first_attempt_at is null)),
   constraint action_request_reconcile_checks_settled
     check ((status = 'pending') = (settled_at is null)),
   constraint action_request_reconcile_checks_lease check (status = 'pending' or lease_until is null),
@@ -125,6 +132,10 @@ begin
   end if;
   if new.attempts < old.attempts then
     raise exception 'action_request_reconcile_checks: attempts only grow';
+  end if;
+  if old.first_attempt_at is not null
+     and new.first_attempt_at is distinct from old.first_attempt_at then
+    raise exception 'action_request_reconcile_checks: when the first attempt was made never changes';
   end if;
   if new.status = 'seen' and not exists (
     select 1 from action_requests a

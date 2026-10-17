@@ -22,12 +22,25 @@ import jmespath from 'jmespath';
  * reads the other two the same way — the effect was not shown.
  *
  * **The lint** ({@link lintPredicate}) refuses a predicate that would prove something without the
- * observation showing it: a path that does not compile, a path that reads nothing from the result
- * (literals only), a path through `__proto__` / `constructor` / `prototype`, and — the rule that
- * catches the rest — a predicate satisfied by a result that says nothing about the target
- * ({@link PREDICATE_EMPTY_PROBES}: nothing, an empty object or list, an unrelated field). An agent
- * drafts these predicates (plan §4.3, F2); the lint is what keeps "always true" from reaching a
- * person's confirmation, not the prompt.
+ * observation showing it. An agent drafts these predicates (plan §4.3, F2); the lint is what keeps
+ * "always true" from reaching a person's confirmation, not the prompt. In order:
+ *
+ *   1. **Paths.** One that does not compile, one through `__proto__` / `constructor` /
+ *      `prototype`, one that reads nothing from the result (literals only).
+ *   2. **Anchoring** (review #493 on #649). Every read of the result at its root must go through a
+ *      named field: not the result itself (`@`), its keys or values (`keys(@)`, `values(@)`, `*`)
+ *      or a position (`[0]`, `[*]`) unless a named field follows. Such a path measures the
+ *      answer's shape — `length(keys(@)) > 1` holds on a refusal like `{error, code}` as well as on
+ *      the effect. Each branch of `||` / `&&` is anchored on its own, so a literal or shape branch
+ *      cannot carry the rest. Below the root — right of a field, a projection, a filter or a pipe —
+ *      anything goes (`items[?name=='web'] | length(@)` reads `items`).
+ *   3. **Probes.** The predicate must not hold on a result that says nothing about the target:
+ *      {@link PREDICATE_EMPTY_PROBES} (nothing, empty, an unrelated field) and refusals built from
+ *      fields the predicate does not read (several keys, long strings, a list of them). And for
+ *      each field it reads, it must not hold on every value of {@link PREDICATE_FIELD_PROBE_VALUES}
+ *      it can judge (at least two) — `length(items) >= 0` does, whatever `items` is; `exists
+ *      status`, `enabled == false` and `length(items) == 0` do not, and stay the plan author's to
+ *      weigh (the confirmation card shows them).
  */
 
 export type PredicateOutcome = 'satisfied' | 'unsatisfied' | 'undetermined';
@@ -56,6 +69,34 @@ export const PREDICATE_EMPTY_PROBES: readonly unknown[] = Object.freeze([
   [],
   { __nexttime_probe__: 'unrelated' },
   ['__nexttime_probe__'],
+]);
+
+/** Keys a refusal probe may carry — those the predicate does not read become its fields. */
+const REFUSAL_PROBE_KEYS: readonly string[] = [
+  'error',
+  'code',
+  'reason',
+  'message',
+  'detail',
+  'found',
+  'ok',
+  'result',
+  'data',
+  'info',
+  'meta',
+  'value',
+];
+const PROBE_LONG_STRING = 'nothing happened here; '.repeat(4);
+
+/** Values a field the predicate reads takes in its field probes: empty, falsy, unrelated. */
+export const PREDICATE_FIELD_PROBE_VALUES: readonly unknown[] = Object.freeze([
+  null,
+  false,
+  0,
+  '',
+  [],
+  {},
+  '__nexttime_probe__',
 ]);
 
 const RESERVED_FIELDS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype']);
@@ -169,42 +210,80 @@ function childNodes(node: PathNode): readonly PathNode[] {
   return (node.children ?? []).filter(isPathNode);
 }
 
-/** Whether `node`, evaluated against the result, reads anything from it. The left side of a
- *  chain is what is applied to the result (`a.b`, `a[0]`, `a[*].b`, `a | b`); a literal reads
- *  nothing, and neither does a `&expr` argument on its own (it is applied to what another argument
- *  produced). An unknown node type reads nothing — the lint then refuses the path. */
-function readsResult(node: PathNode): boolean {
+/**
+ * How `node`, evaluated at the root of the result, reads it (the lint's rules 1–2, module
+ * comment):
+ *
+ *   - `none` — literals only;
+ *   - `field` — only through named fields;
+ *   - `root` — the result itself or a position or projection of it (`@`, `[0]`, `[*]`, `*`),
+ *     which a named field to its right anchors (`@.state`, `[0].status`, `*.state`);
+ *   - `whole` — something measured or built from the result (`keys(@)`, `length(@)`,
+ *     `[@, state]`, `{a: @}`, `@ == x`), which nothing to its right anchors — `{a: @}.a` and
+ *     `merge(@, …).x` name a key the path made, not one of the result's;
+ *   - `branch` — a `||` / `&&` with a branch that is not `field`.
+ *
+ * A chain (`a.b`, `a[0]`, `a[*].b`, `a | b`, `a[?c]`) reads what its left side reads; below a
+ * named field anything goes. Arguments, operands and list elements are all at the root. An
+ * unknown node type reads `whole` — the lint then refuses the path.
+ */
+type RootRead = 'none' | 'field' | 'root' | 'whole' | 'branch';
+
+/** What reading `reads` side by side at the root amounts to: the root among them is measured. */
+function combined(reads: readonly RootRead[]): RootRead {
+  if (reads.includes('whole') || reads.includes('root')) return 'whole';
+  if (reads.includes('branch')) return 'branch';
+  return reads.includes('field') ? 'field' : 'none';
+}
+
+function rootRead(node: PathNode): RootRead {
+  const children = childNodes(node);
   switch (node.type) {
     case 'Field':
+      return 'field';
+    case 'Literal':
+    case 'ExpressionReference':
+      return 'none';
     case 'Current':
     case 'Identity':
     case 'Index':
     case 'Slice':
-      return true;
-    case 'Literal':
-    case 'ExpressionReference':
-      return false;
+      return 'root';
     case 'Subexpression':
     case 'IndexExpression':
     case 'Projection':
     case 'ValueProjection':
     case 'FilterProjection':
-    case 'Pipe':
-    case 'Flatten':
-    case 'NotExpression': {
-      const left = childNodes(node)[0];
-      return left !== undefined && readsResult(left);
+    case 'Pipe': {
+      const [left, ...rest] = children;
+      if (!left) return 'whole';
+      const base = rootRead(left);
+      if (base !== 'root') return base;
+      const right = rest.map(rootRead);
+      if (right.includes('field')) return 'field';
+      return right.every((read) => read === 'root' || read === 'none') ? 'root' : 'whole';
     }
-    case 'MultiSelectList':
+    case 'Flatten':
+      return children[0] ? rootRead(children[0]) : 'whole';
+    case 'NotExpression':
     case 'OrExpression':
     case 'AndExpression':
     case 'Comparator':
     case 'Function':
-      return childNodes(node).some(readsResult);
+    case 'MultiSelectList': {
+      const reads = children.map(rootRead);
+      const read = combined(reads);
+      const logical = node.type === 'OrExpression' || node.type === 'AndExpression';
+      return logical && read === 'field' && reads.some((branch) => branch !== 'field')
+        ? 'branch'
+        : read;
+    }
     case 'MultiSelectHash':
-      return childNodes(node).some((pair) => isPathNode(pair.value) && readsResult(pair.value));
+      return combined(
+        children.map((pair) => (isPathNode(pair.value) ? rootRead(pair.value) : 'none')),
+      );
     default:
-      return false;
+      return 'whole';
   }
 }
 
@@ -215,14 +294,72 @@ function fieldNames(node: PathNode, names: Set<string>): Set<string> {
   return names;
 }
 
+function literalValues(node: PathNode, values: unknown[]): unknown[] {
+  if (node.type === 'Literal') values.push(node.value);
+  for (const child of childNodes(node)) literalValues(child, values);
+  if (node.type === 'KeyValuePair' && isPathNode(node.value)) literalValues(node.value, values);
+  return values;
+}
+
+/** A literal `predicate` compares with, and the path of the comparison it belongs to. */
+export interface PredicateLiteral {
+  readonly path: string;
+  readonly value: unknown;
+}
+
+/** Every literal `predicate` compares with: each comparison's `value`, and the literals in its
+ *  path (`` `"x"` ``, `'x'`, a filter's operand). For the credential review of a reconcile check
+ *  (`application/goal/plan.ts`'s `predicateCredentialProblems`); a path that does not compile
+ *  contributes none — the lint refuses it. */
+export function predicateLiterals(predicate: Predicate): readonly PredicateLiteral[] {
+  const literals: PredicateLiteral[] = [];
+  for (const leaf of predicateLeaves(predicate)) {
+    if ('value' in leaf && leaf.value !== undefined) {
+      literals.push({ path: leaf.path, value: leaf.value });
+    }
+    let ast: unknown;
+    try {
+      ast = compilePath(leaf.path);
+    } catch {
+      continue;
+    }
+    if (!isPathNode(ast)) continue;
+    for (const value of literalValues(ast, [])) literals.push({ path: leaf.path, value });
+  }
+  return literals;
+}
+
 function describeProbe(probe: unknown): string {
   return probe === null ? 'no result' : JSON.stringify(probe);
+}
+
+/** Refusals made of fields `read` does not name: several keys, long strings, a list of them —
+ *  `[]` when it names nearly all of {@link REFUSAL_PROBE_KEYS}. */
+export function predicateRefusalProbes(read: ReadonlySet<string>): readonly unknown[] {
+  const [a, b, c, d] = REFUSAL_PROBE_KEYS.filter((key) => !read.has(key));
+  if (!a || !b || !c || !d) return [];
+  const refusal = { [a]: PROBE_LONG_STRING, [b]: 1, [c]: false };
+  const other = { [a]: 'refused', [b]: 2, [c]: { [d]: PROBE_LONG_STRING } };
+  return [refusal, other, { [a]: PROBE_LONG_STRING, [b]: PROBE_LONG_STRING }, [refusal, other]];
+}
+
+/** Whether `predicate` holds on every value of `field` it can judge — at least two of them. */
+function holdsWhateverValue(predicate: Predicate, field: string): boolean {
+  let judged = 0;
+  for (const value of PREDICATE_FIELD_PROBE_VALUES) {
+    const { outcome } = evaluatePredicate(predicate, { [field]: value });
+    if (outcome === 'undetermined') continue;
+    if (outcome === 'unsatisfied') return false;
+    judged += 1;
+  }
+  return judged >= 2;
 }
 
 /** The problems that make `predicate` unfit to prove anything — `[]` when there are none. See
  *  the module comment. */
 export function lintPredicate(predicate: Predicate): readonly string[] {
   const problems: string[] = [];
+  const read = new Set<string>();
   for (const leaf of predicateLeaves(predicate)) {
     let ast: unknown;
     try {
@@ -233,22 +370,47 @@ export function lintPredicate(predicate: Predicate): readonly string[] {
       );
       continue;
     }
-    if (!isPathNode(ast) || !readsResult(ast)) {
+    if (!isPathNode(ast)) {
       problems.push(`path "${leaf.path}" reads nothing from the observation's result`);
       continue;
     }
-    const reserved = [...fieldNames(ast, new Set())].filter((name) => RESERVED_FIELDS.has(name));
+    const names = fieldNames(ast, new Set());
+    const reserved = [...names].filter((name) => RESERVED_FIELDS.has(name));
     if (reserved.length > 0) {
       problems.push(`path "${leaf.path}" goes through ${reserved.join(', ')}`);
+      continue;
+    }
+    for (const name of names) read.add(name);
+    switch (rootRead(ast)) {
+      case 'none':
+        problems.push(`path "${leaf.path}" reads nothing from the observation's result`);
+        break;
+      case 'root':
+      case 'whole':
+        problems.push(
+          `path "${leaf.path}" reads the result as a whole (@, *, keys, values or a position) instead of a named field — it would hold on almost any answer`,
+        );
+        break;
+      case 'branch':
+        problems.push(`path "${leaf.path}": every branch of || and && must read a named field`);
+        break;
+      case 'field':
+        break;
     }
   }
   if (problems.length > 0) return problems;
-  for (const probe of PREDICATE_EMPTY_PROBES) {
+  for (const probe of [...PREDICATE_EMPTY_PROBES, ...predicateRefusalProbes(read)]) {
     if (evaluatePredicate(predicate, probe).outcome === 'satisfied') {
-      problems.push(
+      return [
         `the predicate holds on ${describeProbe(probe)} — it would pass without the observation showing the target`,
-      );
-      break;
+      ];
+    }
+  }
+  for (const field of read) {
+    if (holdsWhateverValue(predicate, field)) {
+      return [
+        `the predicate holds whatever "${field}" is (empty, false, zero or unrelated) — it does not test its value`,
+      ];
     }
   }
   return problems;
