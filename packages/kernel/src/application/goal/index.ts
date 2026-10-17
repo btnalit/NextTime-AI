@@ -11,7 +11,9 @@
  * `advancer.ts`: due claims, the outbox wake consumer and the reconcile scan) and its transition
  * log (`transition-log.ts`). GO3a adds a person stopping a run (`control.ts`: pause, resume,
  * cancel), the advance of a cancelling run (`cancelling.ts`) and the transition helpers both writers
- * share (`moves.ts`); revision and the reconcile path (GO3b) build on these.
+ * share (`moves.ts`). GO3b adds an owner's hold (`control.ts`), revising a paused run's plan
+ * (`revise.ts`) and pausing a run whose advances keep failing (`advancer.ts`, legacy 356); the
+ * reconcile path (GO3c) builds on these.
  *
  * Boundaries: it lives in `application` because the advancer creates Tasks (`application/task`) and
  * withdraws ActionRequests (`governance/approval`) in the transaction that moves a StepRun.
@@ -86,8 +88,17 @@ export {
   type GoalControlResult,
   cancelGoalRun,
   pauseGoalRun,
+  releaseGoalRunHold,
   resumeGoalRun,
 } from './control.js';
+
+export {
+  GOAL_REVISED_WITHDRAW_REASON,
+  MAX_REVISION_REASON_LENGTH,
+  type ReviseGoalRunInput,
+  type RevisedGoalRun,
+  reviseGoalRun,
+} from './revise.js';
 
 export {
   ADVANCED_GOAL_RUN_STATUSES,
@@ -96,13 +107,22 @@ export {
   DEFAULT_GOAL_ADVANCE_LEASE_MS,
   DEFAULT_GOAL_ADVANCER_INTERVAL_MS,
   DEFAULT_GOAL_RECONCILE_INTERVAL_MS,
+  DEFAULT_MAX_CONSECUTIVE_ADVANCE_FAILURES,
   type GoalAdvancerTickOptions,
+  type GoalCleanupCursor,
   type GoalWakeEventSource,
   claimDueGoalRuns,
   markReconcileDue,
+  recordAdvanceFailure,
   registerGoalWakeConsumer,
   runGoalAdvancerTick,
   sweepGoalCancelCleanup,
 } from './advancer.js';
 
-export type { GoalRunBudget, GoalRunRow, PlanRevisionRow, StepRunRow } from './types.js';
+export type {
+  GoalRunBudget,
+  GoalRunRow,
+  PlanRevisionRow,
+  StepRemoval,
+  StepRunRow,
+} from './types.js';

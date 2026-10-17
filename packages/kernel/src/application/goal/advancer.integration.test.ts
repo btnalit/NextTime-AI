@@ -17,6 +17,7 @@ import {
   approveActionRequest,
   getActionRequest,
   markActionRequestExecuted,
+  markActionRequestFailed,
   requestAction,
   startActionRequestExecution,
   withdrawActionRequest,
@@ -48,16 +49,20 @@ import {
   advanceGoalRun,
 } from './advance.js';
 import {
+  type GoalCleanupCursor,
   type GoalWakeEventSource,
   claimDueGoalRuns,
   markReconcileDue,
+  recordAdvanceFailure,
   registerGoalWakeConsumer,
+  runGoalAdvancerTick,
   sweepGoalCancelCleanup,
 } from './advancer.js';
 import { GOAL_CANCELLED_WITHDRAW_REASON } from './cancelling.js';
-import { cancelGoalRun, pauseGoalRun, resumeGoalRun } from './control.js';
+import { cancelGoalRun, pauseGoalRun, releaseGoalRunHold, resumeGoalRun } from './control.js';
 import { GoalPlanValidationError } from './plan.js';
-import { getGoalRun, listStepRuns } from './reads.js';
+import { getGoalRun, getPlanRevision, listStepRuns } from './reads.js';
+import { GOAL_REVISED_WITHDRAW_REASON, reviseGoalRun } from './revise.js';
 import { GoalRunStateError, confirmGoalRun, createGoalRun } from './service.js';
 import type { GoalRunBudget, GoalRunRow, StepRunRow } from './types.js';
 
@@ -66,8 +71,11 @@ import type { GoalRunBudget, GoalRunRow, StepRunRow } from './types.js';
  * Postgres and the real Task path (`createStepAttemptTask` → `spawnWorkerRun` → the Handle mint),
  * with an in-memory worker-supervisor. The scenarios are the plan's §7.2 rows GO2 owns — S1, S2,
  * S3, S9, S10, S12 — plus the rules around them: confirmation (I-G3), retries and backoff, the wait
- * on the step (§4.8), plan fencing (I-G2) and pinned configuration (§4.4); and GO3a's: a person
- * pausing, resuming and cancelling a run, S7, the I-G9 entry check and the goal's token headroom.
+ * on the step (§4.8), plan fencing (I-G2) and pinned configuration (§4.4); GO3a's: a person
+ * pausing, resuming and cancelling a run, S7, the I-G9 entry check and the goal's token headroom;
+ * and GO3b's: an owner's hold, revising a paused run (S8: terminated or let finish, requests
+ * released one by one), a step judged only once its nested child Tasks ended, verification only
+ * once nothing of the run is left running, and a run whose advances keep failing (legacy 356).
  *
  * Every test advances its own GoalRuns by id (`advanceGoalRun`): the claim and the reconcile scan
  * are cross-workspace, and the shared database holds other files' rows, so tests that exercise
@@ -500,8 +508,8 @@ describe.runIf(DATABASE_URL !== undefined)(
     afterAll(async () => {
       // Leave nothing for another file's kernel to advance: this file's runs end here.
       await raw(
-        `update goal_runs set status = 'cancelled', pause_reason = null, ended_at = now(),
-                next_tick_at = null
+        `update goal_runs set status = 'cancelled', pause_reason = null, paused_by = null,
+                paused_by_authority = null, ended_at = now(), next_tick_at = null
           where workspace_id = $1 and status not in ('completed', 'cancelled', 'failed')`,
         [workspaceId],
       );
@@ -1480,7 +1488,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     // -------------------------------------------------------------------------------------------
     // S11 GO3a: a person stops a run — pause, resume, cancel — and what a cancel waits for.
 
-    describe('stopping a run (S11 GO3a)', () => {
+    describe('stopping, holding and revising a run (S11 GO3a, GO3b)', () => {
       const asOwner = <T>(fn: (client: PoolClient) => Promise<T>) => asRequester(ownerId, fn);
       // A function: `ownerId` is set in `beforeAll`, after this block is collected.
       const byOwner = () => ({ principalId: ownerId, role: 'owner' as const });
@@ -1585,13 +1593,15 @@ describe.runIf(DATABASE_URL !== undefined)(
           ),
         ).rejects.toBeInstanceOf(GoalRunStateError);
         expect(
-          await asOwner((client) =>
-            pauseGoalRun(client, workspaceId, { goalRunId, actor: byOwner() }),
+          await asRequester(requester, (client) =>
+            pauseGoalRun(client, workspaceId, { goalRunId, actor: by(requester) }),
           ),
         ).toEqual({ status: 'paused', changed: true });
         expect(await goalOf(goalRunId)).toMatchObject({
           status: 'paused',
           pauseReason: 'requested',
+          pausedBy: requester,
+          pausedByAuthority: 'requester',
         });
         expect(
           await asRequester(requester, (client) =>
@@ -1617,6 +1627,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             resumeGoalRun(client, workspaceId, { goalRunId, actor: by(requester) }),
           ),
         ).toEqual({ status: 'running', changed: true, retriedStepRunIds: [] });
+        expect(await goalOf(goalRunId)).toMatchObject({ pausedBy: null, pausedByAuthority: null });
         expect(await isDue(goalRunId)).toBe(true);
         await advance(goalRunId, requester);
         steps = await stepsOf(goalRunId);
@@ -1626,6 +1637,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(audit.find((row) => row.action === 'goal_run.pause')?.payload).toMatchObject({
           by: 'person',
           resultingStatus: 'paused',
+          pausedByAuthority: 'requester',
         });
         expect(audit.find((row) => row.action === 'goal_run.resume')?.payload).toMatchObject({
           by: 'person',
@@ -1924,6 +1936,65 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(startErrors.slice(errorsBefore)).toEqual([]);
       });
 
+      it('legacy 364: the cleanup sweep goes on where the previous one stopped, so runs whose leftovers do not end keep no other run waiting', async () => {
+        const requester = await newPrincipal();
+        const cancelPastDeadline = async () => {
+          const goalRunId = await startGoal(requester, [{ key: 'only' }]);
+          await advance(goalRunId, requester);
+          const step = (await stepsOf(goalRunId)).only as StepRunRow;
+          const inDoubt = await requestOn(
+            await newGatekeeper(),
+            step.id,
+            requester,
+            'executing',
+            'test.364.in-doubt',
+          );
+          await asRequester(requester, (client) =>
+            cancelGoalRun(client, workspaceId, { goalRunId, actor: by(requester) }),
+          );
+          await advance(goalRunId, requester, { ...NO_BACKOFF, cancelDeadlineMs: 0 });
+          expect(await goalOf(goalRunId)).toMatchObject({
+            status: 'cancelled',
+            cleanupPending: true,
+          });
+          return { goalRunId, inDoubt };
+        };
+        const stuck = [await cancelPastDeadline(), await cancelPastDeadline()];
+        const done = await cancelPastDeadline();
+        await admin((client) => markActionRequestExecuted(client, workspaceId, done.inDoubt));
+        const pending = await admin(async (client) =>
+          (
+            await client.query<{ id: string }>(
+              `select id from goal_runs where status = 'cancelled' and cleanup_pending order by id`,
+            )
+          ).rows.map((row) => row.id),
+        );
+        expect(pending).toEqual(
+          expect.arrayContaining([...stuck.map((run) => run.goalRunId), done.goalRunId]),
+        );
+
+        // One run per sweep: each sweep looks at the next run in id order, then starts over.
+        const sweepDeps = {
+          pool,
+          taskRuntime: taskRuntime(),
+          onStartError: (err: unknown) => startErrors.push(err),
+        };
+        const cursor: GoalCleanupCursor = { after: null };
+        const visited: (string | null)[] = [];
+        for (let sweep = 0; sweep <= pending.length; sweep += 1) {
+          await sweepGoalCancelCleanup(sweepDeps, { limit: 1, cursor });
+          visited.push(cursor.after);
+        }
+        expect(visited).toEqual([...pending, null]);
+        expect((await goalOf(done.goalRunId)).cleanupPending).toBe(false);
+        for (const run of stuck) {
+          expect((await goalOf(run.goalRunId)).cleanupPending).toBe(true);
+          await admin((client) => markActionRequestExecuted(client, workspaceId, run.inDoubt));
+        }
+        await sweepGoalCancelCleanup(sweepDeps, { limit: 10_000 });
+        for (const run of stuck) expect((await goalOf(run.goalRunId)).cleanupPending).toBe(false);
+      });
+
       it('an executing action that ends before the deadline wakes the cancelling run, which is then cancelled cleanly', async () => {
         const requester = await newPrincipal();
         const goalRunId = await startGoal(requester, [{ key: 'only' }]);
@@ -2121,6 +2192,801 @@ describe.runIf(DATABASE_URL !== undefined)(
         const steps = await stepsOf(skipping);
         expect(steps.a?.status).toBe('skipped');
         expect(steps.b?.status).toBe('running');
+      });
+
+      // ----- S11 GO3b ---------------------------------------------------------------------------
+
+      /** A nested child Task of `stepRunId`, running, carried by a WorkerRun under `parentRunId` —
+       *  as `invoke_worker` records one (the child inherits its caller's goal step). */
+      async function nestedChild(
+        goalRunId: string,
+        stepRunId: string,
+        parentRunId: string,
+        requester: string,
+      ): Promise<{ taskId: string; runId: string }> {
+        const planRevision = (await goalOf(goalRunId)).currentRevision;
+        return admin(async (client) => {
+          const task = await client.query<{ id: string }>(
+            `insert into tasks (workspace_id, status, on_behalf_of, worker_definition_id,
+               worker_definition_version, goal_run_id, step_run_id, plan_revision)
+             values ($1, 'running', $2, $3, $4, $5, $6, $7) returning id`,
+            [
+              workspaceId,
+              requester,
+              worker.definitionId,
+              worker.version,
+              goalRunId,
+              stepRunId,
+              planRevision,
+            ],
+          );
+          const taskId = task.rows[0]?.id as string;
+          const run = await client.query<{ id: string }>(
+            `insert into worker_runs (workspace_id, status, task_id, parent_worker_run_id)
+             values ($1, 'running', $2, $3) returning id`,
+            [workspaceId, taskId, parentRunId],
+          );
+          return { taskId, runId: run.rows[0]?.id as string };
+        });
+      }
+
+      const endTask = (taskId: string) =>
+        admin((client) =>
+          client.query(
+            `update tasks set status = 'completed', completed_at = now()
+              where workspace_id = $1 and id = $2`,
+            [workspaceId, taskId],
+          ),
+        );
+
+      const pauseAs = (goalRunId: string, requester: string) =>
+        asRequester(requester, (client) =>
+          pauseGoalRun(client, workspaceId, { goalRunId, actor: by(requester) }),
+        );
+      const resumeAs = (goalRunId: string, requester: string) =>
+        asRequester(requester, (client) =>
+          resumeGoalRun(client, workspaceId, { goalRunId, actor: by(requester) }),
+        );
+
+      const ig9Mentions = async (ids: readonly string[]) => {
+        const ig9 = await pool.connect().then(async (client) => {
+          try {
+            return await checkIG9(client, 100_000);
+          } finally {
+            client.release();
+          }
+        });
+        return ig9.sample.filter((line) => ids.some((id) => line.includes(id)));
+      };
+
+      it('hold: an owner’s pause of someone else’s run holds it; the requester resumes once an owner lifts the hold', async () => {
+        const requester = await newPrincipal();
+        const member = await newPrincipal();
+        const goalRunId = await startGoal(requester, [{ key: 'only', maxAttempts: 1 }]);
+        await advance(goalRunId, requester);
+        const step = (await stepsOf(goalRunId)).only as StepRunRow;
+        const release = (actor: { principalId: string; role: 'owner' | 'member' }) =>
+          asRequester(actor.principalId, (client) =>
+            releaseGoalRunHold(client, workspaceId, { goalRunId, actor }),
+          );
+
+        expect(
+          await asOwner((client) =>
+            pauseGoalRun(client, workspaceId, { goalRunId, actor: byOwner() }),
+          ),
+        ).toEqual({ status: 'paused', changed: true });
+        expect(await goalOf(goalRunId)).toMatchObject({
+          status: 'paused',
+          pauseReason: 'requested',
+          pausedBy: ownerId,
+          pausedByAuthority: 'owner',
+        });
+        await expect(resumeAs(goalRunId, requester)).rejects.toThrow(
+          /a workspace owner holds it; it resumes once an owner lifts the hold/,
+        );
+        expect(await pauseAs(goalRunId, requester)).toEqual({ status: 'paused', changed: false });
+        expect(
+          await asOwner((client) =>
+            pauseGoalRun(client, workspaceId, { goalRunId, actor: byOwner() }),
+          ),
+        ).toEqual({ status: 'paused', changed: false });
+
+        // Lifting is an owner's act, not a resume: the run stays paused for its requester.
+        await expect(release(by(requester))).rejects.toThrow(/only a workspace owner lifts a hold/);
+        await expect(release(by(member))).rejects.toThrow(/only a workspace owner lifts a hold/);
+        expect(await release(byOwner())).toEqual({ status: 'paused', changed: true });
+        expect(await goalOf(goalRunId)).toMatchObject({
+          status: 'paused',
+          pauseReason: 'requested',
+          pausedBy: null,
+          pausedByAuthority: null,
+        });
+        expect(await release(byOwner())).toEqual({ status: 'paused', changed: false });
+        expect(await resumeAs(goalRunId, requester)).toMatchObject({
+          status: 'running',
+          changed: true,
+        });
+
+        // The advancer pauses it; an owner places a hold on top of that pause.
+        await failStep(step.id, requester, 'worker_failed');
+        await advance(goalRunId, requester);
+        expect(await goalOf(goalRunId)).toMatchObject({
+          status: 'paused',
+          pauseReason: 'needs_decision',
+          pausedBy: null,
+        });
+        expect(
+          await asOwner((client) =>
+            pauseGoalRun(client, workspaceId, { goalRunId, actor: byOwner() }),
+          ),
+        ).toEqual({ status: 'paused', changed: true });
+        expect(await goalOf(goalRunId)).toMatchObject({
+          pauseReason: 'needs_decision',
+          pausedBy: ownerId,
+          pausedByAuthority: 'owner',
+        });
+        await expect(resumeAs(goalRunId, requester)).rejects.toThrow(/a workspace owner holds it/);
+
+        const audit = await goalAudit(goalRunId);
+        expect(audit.find((row) => row.action === 'goal_run.pause')?.payload).toMatchObject({
+          by: 'person',
+          pausedByAuthority: 'owner',
+        });
+        expect(audit.find((row) => row.action === 'goal_run.release_hold')?.payload).toMatchObject({
+          by: 'person',
+          heldBy: ownerId,
+          pauseReason: 'requested',
+        });
+        expect(audit.find((row) => row.action === 'goal_run.hold')?.payload).toMatchObject({
+          by: 'person',
+          pauseReason: 'needs_decision',
+          previouslyPausedBy: null,
+          previousAuthority: null,
+        });
+
+        // A hold stops resuming, not cancelling: the requester may still stop the run for good, and
+        // leaving `paused` clears who paused.
+        expect(
+          await asRequester(requester, (client) =>
+            cancelGoalRun(client, workspaceId, { goalRunId, actor: by(requester) }),
+          ),
+        ).toMatchObject({ status: 'cancelling', changed: true });
+        expect(await goalOf(goalRunId)).toMatchObject({
+          status: 'cancelling',
+          pausedBy: null,
+          pausedByAuthority: null,
+        });
+
+        // A requester who is also an owner pauses their own run as its requester: no hold.
+        const ownerRequester = await newPrincipal('owner');
+        const own = await startGoal(ownerRequester, [{ key: 'x' }]);
+        await advance(own, ownerRequester);
+        const asOwnerRequester = { principalId: ownerRequester, role: 'owner' as const };
+        await asRequester(ownerRequester, (client) =>
+          pauseGoalRun(client, workspaceId, { goalRunId: own, actor: asOwnerRequester }),
+        );
+        expect(await goalOf(own)).toMatchObject({
+          pausedBy: ownerRequester,
+          pausedByAuthority: 'requester',
+        });
+        expect(
+          await asRequester(ownerRequester, (client) =>
+            resumeGoalRun(client, workspaceId, { goalRunId: own, actor: asOwnerRequester }),
+          ),
+        ).toMatchObject({ status: 'running', changed: true });
+      });
+
+      it('a step is judged only once its nested child Tasks ended; a request the child raised after its caller finished holds the step', async () => {
+        const requester = await newPrincipal();
+        const goalRunId = await startGoal(requester, [{ key: 'n', nested: true }]);
+        await advance(goalRunId, requester);
+        const step = (await stepsOf(goalRunId)).n as StepRunRow;
+        const child = await nestedChild(goalRunId, step.id, await latestRun(step.id), requester);
+        await completeStep(step.id, requester);
+        await advance(goalRunId, requester);
+        expect((await stepsOf(goalRunId)).n?.status).toBe('running');
+        // Nor does the reconcile scan chase it: the child's end wakes the run.
+        await markReconcileDue(pool);
+        expect(await isDue(goalRunId)).toBe(false);
+
+        const late = await seedAction(step.id, child.runId, 'pending_approval');
+        await endTask(child.taskId);
+        await advance(goalRunId, requester);
+        expect((await stepsOf(goalRunId)).n).toMatchObject({
+          status: 'waiting',
+          waitingReason: 'approval',
+        });
+        await setActionStatus(late, 'executed');
+        await advance(goalRunId, requester);
+        expect((await stepsOf(goalRunId)).n?.status).toBe('succeeded');
+        expect((await goalOf(goalRunId)).status).toBe('verifying');
+
+        // A person's retry waits for the step's Tasks too.
+        const retried = await startGoal(requester, [{ key: 'r', nested: true, maxAttempts: 1 }]);
+        await advance(retried, requester);
+        const stepR = (await stepsOf(retried)).r as StepRunRow;
+        const childR = await nestedChild(retried, stepR.id, await latestRun(stepR.id), requester);
+        await failStep(stepR.id, requester, 'worker_failed');
+        await endTask(childR.taskId);
+        await advance(retried, requester);
+        expect((await stepsOf(retried)).r?.status).toBe('failed');
+        await nestedChild(retried, stepR.id, await latestRun(stepR.id), requester);
+        await expect(
+          asRequester(requester, (client) =>
+            resumeGoalRun(client, workspaceId, {
+              goalRunId: retried,
+              actor: by(requester),
+              retrySteps: ['r'],
+            }),
+          ),
+        ).rejects.toThrow(/step r: a Task of it still runs/);
+      });
+
+      it('S8 (default): a revision removes a running step — its Tasks, nested child included, are terminated and its requests withdrawn; a kept step runs on, an added one starts on resume', async () => {
+        const requester = await newPrincipal();
+        const goalRunId = await startGoal(requester, [{ key: 'a', nested: true }, { key: 'b' }]);
+        await advance(goalRunId, requester);
+        let steps = await stepsOf(goalRunId);
+        const stepA = steps.a as StepRunRow;
+        const stepB = steps.b as StepRunRow;
+        const taskA = (await latestAttempt(stepA.id)).id;
+        const child = await nestedChild(goalRunId, stepA.id, await latestRun(stepA.id), requester);
+        const gatekeeperId = await newGatekeeper();
+        const pending = await requestOn(
+          gatekeeperId,
+          stepA.id,
+          requester,
+          'pending_approval',
+          'test.go3b.pending',
+        );
+        const approved = await requestOn(
+          gatekeeperId,
+          stepA.id,
+          requester,
+          'approved',
+          'test.go3b.approved',
+        );
+        const executing = await requestOn(
+          await newGatekeeper(),
+          stepA.id,
+          requester,
+          'executing',
+          'test.go3b.executing',
+        );
+        const plan2 = planOf([{ key: 'b' }, { key: 'c' }]);
+        const revise = (input: { plan: unknown; reason?: string }) =>
+          asRequester(requester, (client) =>
+            reviseGoalRun(client, workspaceId, {
+              goalRunId,
+              actor: by(requester),
+              basedOnRevision: 1,
+              ...input,
+            }),
+          );
+
+        await expect(revise({ plan: plan2 })).rejects.toThrow(
+          /a plan is revised while the run is paused/,
+        );
+        await pauseAs(goalRunId, requester);
+        const revised = await revise({ plan: plan2, reason: 'a is no longer needed' });
+        expect(revised).toMatchObject({
+          revision: 2,
+          supersededStepRunIds: [stepA.id],
+          withdrawnActionRequestIds: [pending, approved],
+          releasedActionRequestIds: [],
+        });
+        expect(revised.createdStepRunIds).toHaveLength(1);
+        const all = await admin((client) => listStepRuns(client, workspaceId, goalRunId));
+        expect(all.find((row) => row.id === stepA.id)).toMatchObject({
+          status: 'superseded',
+          supersededInRevision: 2,
+        });
+        steps = await stepsOf(goalRunId);
+        expect(steps.a).toBeUndefined();
+        expect(steps.b).toMatchObject({ id: stepB.id, status: 'running', introducedInRevision: 1 });
+        expect(steps.c).toMatchObject({
+          id: revised.createdStepRunIds[0],
+          status: 'pending',
+          introducedInRevision: 2,
+        });
+        expect(await actionStatus(pending)).toBe('withdrawn');
+        expect(await actionStatus(approved)).toBe('withdrawn');
+        expect(
+          (await auditOf(pending)).find((row) => row.action === 'action_request.withdraw'),
+        ).toMatchObject({
+          actor_principal_id: requester,
+          payload: expect.objectContaining({ reason: GOAL_REVISED_WITHDRAW_REASON }),
+        });
+        expect(await goalOf(goalRunId)).toMatchObject({
+          status: 'paused',
+          pauseReason: 'requested',
+          currentRevision: 2,
+        });
+        expect(await isDue(goalRunId)).toBe(true);
+        expect(
+          await admin((client) => getPlanRevision(client, workspaceId, goalRunId, 2)),
+        ).toMatchObject({
+          status: 'accepted',
+          basedOnRevision: 1,
+          proposedBy: requester,
+          decidedBy: requester,
+          reason: 'a is no longer needed',
+          removals: {},
+        });
+        expect(
+          (await goalAudit(goalRunId)).find((row) => row.action === 'goal_run.revise')?.payload,
+        ).toMatchObject({
+          by: 'person',
+          revision: 2,
+          basedOnRevision: 1,
+          superseded: ['a'],
+          created: ['c'],
+          withdrawn: 2,
+          released: 0,
+        });
+
+        // The superseded step takes no new work; the next advance terminates its Tasks.
+        await expect(
+          admin((tx) => lockGoalStepForNewWork(tx, workspaceId, stepA.id, 'request_action')),
+        ).rejects.toBeInstanceOf(GoalStepClosedError);
+        const outcome = await advance(goalRunId, requester);
+        expect([...outcome.terminatedTaskIds].sort()).toEqual([taskA, child.taskId].sort());
+        expect(await taskStatus(taskA)).toBe('cancelled');
+        expect(await taskStatus(child.taskId)).toBe('cancelled');
+        expect((await goalOf(goalRunId)).status).toBe('paused');
+
+        await resumeAs(goalRunId, requester);
+        await advance(goalRunId, requester);
+        steps = await stepsOf(goalRunId);
+        expect(steps.b?.status).toBe('running');
+        expect(steps.c?.status).toBe('running');
+
+        // b and c finish; the action a started before the revision still runs, so the run does
+        // not verify until it has ended (the R-48 way).
+        expect(await actionStatus(executing)).toBe('executing');
+        await completeStep(stepB.id, requester);
+        await completeStep(steps.c?.id as string, requester);
+        await advance(goalRunId, requester);
+        steps = await stepsOf(goalRunId);
+        expect([steps.b?.status, steps.c?.status]).toEqual(['succeeded', 'succeeded']);
+        expect((await goalOf(goalRunId)).status).toBe('running');
+        await admin((client) => markActionRequestExecuted(client, workspaceId, executing));
+        await advance(goalRunId, requester);
+        expect((await goalOf(goalRunId)).status).toBe('verifying');
+        expect(await ig9Mentions([pending, approved, executing])).toEqual([]);
+      });
+
+      it('S8 (let it finish): its Tasks run on but raise nothing new; the released request is decided and runs as usual, the others are withdrawn; the run verifies once nothing of it runs', async () => {
+        const requester = await newPrincipal();
+        const goalRunId = await startGoal(requester, [{ key: 'a', nested: true }, { key: 'b' }]);
+        await advance(goalRunId, requester);
+        const steps = await stepsOf(goalRunId);
+        const stepA = steps.a as StepRunRow;
+        const stepB = steps.b as StepRunRow;
+        const taskA = (await latestAttempt(stepA.id)).id;
+        const child = await nestedChild(goalRunId, stepA.id, await latestRun(stepA.id), requester);
+        const gatekeeperId = await newGatekeeper();
+        const released = await requestOn(
+          gatekeeperId,
+          stepA.id,
+          requester,
+          'pending_approval',
+          'test.go3b.released',
+        );
+        const dropped = await requestOn(
+          gatekeeperId,
+          stepA.id,
+          requester,
+          'approved',
+          'test.go3b.dropped',
+        );
+        const running = await requestOn(
+          await newGatekeeper(),
+          stepA.id,
+          requester,
+          'executing',
+          'test.go3b.running',
+        );
+        await pauseAs(goalRunId, requester);
+        const plan2 = planOf([{ key: 'b' }]);
+        const revise = (removals: unknown) =>
+          asRequester(requester, (client) =>
+            reviseGoalRun(client, workspaceId, {
+              goalRunId,
+              actor: by(requester),
+              basedOnRevision: 1,
+              plan: plan2,
+              removals,
+            }),
+          );
+
+        await expect(revise({ b: { mode: 'let_finish' } })).rejects.toThrow(
+          /step b is not a step this revision removes or changes while it runs/,
+        );
+        await expect(revise({ a: { mode: 'terminate', release: [released] } })).rejects.toThrow(
+          /requests are released only from a step let to finish/,
+        );
+        await expect(revise({ a: { mode: 'let_finish', release: [running] } })).rejects.toThrow(
+          /is not one of its requests awaiting a decision or approved and queued/,
+        );
+        await expect(
+          revise({ a: { mode: 'let_finish', release: [randomUUID()] } }),
+        ).rejects.toThrow(/is not one of its requests/);
+        await expect(
+          revise({ a: { mode: 'let_finish', release: [released, released] } }),
+        ).rejects.toThrow(/a request is released once/);
+        await expect(revise({ a: { mode: 'sideways' } })).rejects.toThrow(/removals: a\.mode/);
+        expect((await goalOf(goalRunId)).currentRevision).toBe(1);
+
+        const revised = await revise({ a: { mode: 'let_finish', release: [released] } });
+        expect(revised).toMatchObject({
+          revision: 2,
+          supersededStepRunIds: [stepA.id],
+          createdStepRunIds: [],
+          withdrawnActionRequestIds: [dropped],
+          releasedActionRequestIds: [released],
+        });
+        expect(await actionStatus(released)).toBe('pending_approval');
+        expect(await actionStatus(dropped)).toBe('withdrawn');
+        expect(await actionStatus(running)).toBe('executing');
+        expect(
+          (await auditOf(released)).find((row) => row.action === 'action_request.release'),
+        ).toMatchObject({
+          actor_principal_id: requester,
+          payload: expect.objectContaining({ goalRunId, stepRunId: stepA.id, revision: 2 }),
+        });
+        expect(
+          (await admin((client) => getPlanRevision(client, workspaceId, goalRunId, 2)))?.removals,
+        ).toEqual({ a: { mode: 'let_finish', release: [released] } });
+
+        // Its Tasks run on — the advance terminates nothing — but neither the step's Worker nor its
+        // nested child raises anything new.
+        const outcome = await advance(goalRunId, requester);
+        expect(outcome.terminatedTaskIds).toEqual([]);
+        expect(await taskStatus(taskA)).toBe('running');
+        expect(await taskStatus(child.taskId)).toBe('running');
+        await expect(
+          admin((tx) => lockGoalStepForNewWork(tx, workspaceId, stepA.id, 'request_action')),
+        ).rejects.toBeInstanceOf(GoalStepClosedError);
+        await markReconcileDue(pool);
+        expect(await isDue(goalRunId)).toBe(false);
+
+        // The released request is decided and runs as usual.
+        await admin((client) =>
+          approveActionRequest(client, workspaceId, {
+            actionRequestId: released,
+            approverPrincipalId: ownerId,
+            approverRole: 'owner',
+          }),
+        );
+        await admin((client) => startActionRequestExecution(client, workspaceId, released));
+        await admin((client) => markActionRequestExecuted(client, workspaceId, released));
+        expect(await actionStatus(released)).toBe('executed');
+
+        // Nothing of a is in flight any more; b finishes. The run does not verify while a's Tasks
+        // run: a's Worker, then its child.
+        await admin((client) => markActionRequestExecuted(client, workspaceId, running));
+        await resumeAs(goalRunId, requester);
+        await completeStep(stepB.id, requester);
+        await advance(goalRunId, requester);
+        expect((await stepsOf(goalRunId)).b?.status).toBe('succeeded');
+        expect((await goalOf(goalRunId)).status).toBe('running');
+        // Their results stay on their Tasks; the step moves no more.
+        await completeStep(stepA.id, requester);
+        await advance(goalRunId, requester);
+        expect((await goalOf(goalRunId)).status).toBe('running');
+        await endTask(child.taskId);
+        await advance(goalRunId, requester);
+        expect((await goalOf(goalRunId)).status).toBe('verifying');
+        const all = await admin((client) => listStepRuns(client, workspaceId, goalRunId));
+        expect(all.find((row) => row.id === stepA.id)?.status).toBe('superseded');
+        // I-G9: the released request ran after its step was superseded — not a breach.
+        expect(await ig9Mentions([released, dropped, running])).toEqual([]);
+      });
+
+      it('revising: the requester alone, on the current revision, within the revision budget; a step that ended is kept, not redefined', async () => {
+        const requester = await newPrincipal();
+        const goalRunId = await startGoal(requester, [{ key: 'a' }, { key: 'b' }], {
+          ...BUDGET,
+          maxRevisions: 1,
+        });
+        await advance(goalRunId, requester);
+        await completeStep(((await stepsOf(goalRunId)).a as StepRunRow).id, requester);
+        await advance(goalRunId, requester);
+        expect((await stepsOf(goalRunId)).a?.status).toBe('succeeded');
+        await pauseAs(goalRunId, requester);
+        const revise = (
+          basedOnRevision: number,
+          steps: readonly StepSpec[],
+          extra: { budget?: GoalRunBudget; reason?: string } = {},
+          actor: { principalId: string; role: 'owner' | 'member' } = by(requester),
+        ) =>
+          asRequester(actor.principalId, (client) =>
+            reviseGoalRun(client, workspaceId, {
+              goalRunId,
+              actor,
+              basedOnRevision,
+              plan: planOf(steps),
+              ...extra,
+            }),
+          );
+
+        await expect(revise(1, [{ key: 'b' }], {}, byOwner())).rejects.toThrow(
+          /only the requester revises a goal run/,
+        );
+        await expect(revise(2, [{ key: 'b' }])).rejects.toThrow(
+          /based on 2, but the current revision is 1 \(I-G3\)/,
+        );
+        await expect(
+          revise(1, [{ key: 'a', input: { step: 'a', changed: true } }, { key: 'b' }]),
+        ).rejects.toThrow(/step a is succeeded; its definition cannot change/);
+        await expect(revise(1, [{ key: 'b', dependsOn: ['b'] }])).rejects.toBeInstanceOf(
+          GoalPlanValidationError,
+        );
+        await expect(revise(1, [{ key: 'b' }], { reason: 'x'.repeat(2001) })).rejects.toThrow(
+          /at most 2000 characters/,
+        );
+
+        // Dropped after it succeeded: a stays, as history; b is kept as it was.
+        const stepB = (await stepsOf(goalRunId)).b as StepRunRow;
+        expect(await revise(1, [{ key: 'b' }])).toMatchObject({
+          revision: 2,
+          supersededStepRunIds: [],
+          createdStepRunIds: [],
+        });
+        const steps = await stepsOf(goalRunId);
+        expect(steps.a).toMatchObject({ status: 'succeeded', supersededInRevision: null });
+        expect(steps.b?.id).toBe(stepB.id);
+
+        await expect(revise(2, [{ key: 'b' }, { key: 'c' }])).rejects.toThrow(
+          /1 of 1 revisions already made/,
+        );
+        // A revision may bring a larger budget, revisions included: it takes effect with it.
+        const third = await revise(2, [{ key: 'b' }, { key: 'c' }], {
+          budget: { ...BUDGET, maxRevisions: 2 },
+        });
+        expect(third).toMatchObject({ revision: 3 });
+        expect(third.createdStepRunIds).toHaveLength(1);
+        expect(await goalOf(goalRunId)).toMatchObject({
+          currentRevision: 3,
+          budget: { maxRevisions: 2 },
+        });
+
+        // Only at a pause point: a running run is not revised.
+        await resumeAs(goalRunId, requester);
+        await expect(revise(3, [{ key: 'b' }, { key: 'c' }])).rejects.toThrow(
+          /is running; a plan is revised while the run is paused/,
+        );
+      });
+
+      it('a step whose key a revision redefined does not start beside what the step it replaces still runs; an outcome-unknown action pauses the run for a reconcile', async () => {
+        const requester = await newPrincipal();
+        const redefine = async (key = 'a', unknownFirst = false) => {
+          const goalRunId = await startGoal(requester, [{ key: 'a' }]);
+          await advance(goalRunId, requester);
+          const before = (await stepsOf(goalRunId)).a as StepRunRow;
+          const action = await requestOn(
+            await newGatekeeper(),
+            before.id,
+            requester,
+            'executing',
+            'test.go3b.redefined',
+          );
+          if (unknownFirst) {
+            await admin((client) =>
+              markActionRequestFailed(client, workspaceId, action, {
+                failureKind: 'outcome_unknown',
+              }),
+            );
+          }
+          await pauseAs(goalRunId, requester);
+          await asRequester(requester, (client) =>
+            reviseGoalRun(client, workspaceId, {
+              goalRunId,
+              actor: by(requester),
+              basedOnRevision: 1,
+              plan: planOf([{ key, input: { step: 'a', changed: true } }]),
+            }),
+          );
+          await advance(goalRunId, requester);
+          await resumeAs(goalRunId, requester);
+          await advance(goalRunId, requester);
+          return { goalRunId, action };
+        };
+
+        const executed = await redefine();
+        expect((await stepsOf(executed.goalRunId)).a).toMatchObject({
+          status: 'ready',
+          introducedInRevision: 2,
+          attemptCount: 0,
+        });
+        expect((await advance(executed.goalRunId, requester)).nextTickAt?.getTime()).toBeLessThan(
+          Date.now() + DEFAULT_BLOCKED_RETRY_RECHECK_MS + 5000,
+        );
+        await admin((client) => markActionRequestExecuted(client, workspaceId, executed.action));
+        await advance(executed.goalRunId, requester);
+        expect((await stepsOf(executed.goalRunId)).a).toMatchObject({
+          status: 'running',
+          attemptCount: 1,
+        });
+
+        const unknown = await redefine();
+        await admin((client) =>
+          markActionRequestFailed(client, workspaceId, unknown.action, {
+            failureKind: 'outcome_unknown',
+          }),
+        );
+        await advance(unknown.goalRunId, requester);
+        expect(await goalOf(unknown.goalRunId)).toMatchObject({
+          status: 'paused',
+          pauseReason: 'awaiting_reconcile',
+        });
+        expect((await stepsOf(unknown.goalRunId)).a?.status).toBe('ready');
+
+        // Review #493 on #633: renaming the step does not get past the outcome-unknown action — no
+        // attempt of the run starts while it waits for a reconcile, whatever the key …
+        const renamed = await redefine('a2', true);
+        await advance(renamed.goalRunId, requester);
+        expect(await goalOf(renamed.goalRunId)).toMatchObject({
+          status: 'paused',
+          pauseReason: 'awaiting_reconcile',
+        });
+        expect((await stepsOf(renamed.goalRunId)).a2).toMatchObject({
+          status: 'ready',
+          attemptCount: 0,
+        });
+
+        // … while one still in flight holds only the step that took over its key: a renamed step
+        // runs beside it, the person's choice, nothing in doubt.
+        const beside = await redefine('a2');
+        expect((await stepsOf(beside.goalRunId)).a2).toMatchObject({
+          status: 'running',
+          attemptCount: 1,
+        });
+        expect((await goalOf(beside.goalRunId)).status).toBe('running');
+      });
+
+      it('legacy 356: a run whose advances keep failing pauses for a person; an advance that commits, or a resume, starts the count again', async () => {
+        const requester = await newPrincipal();
+        const goalRunId = await startGoal(requester, [{ key: 'a' }]);
+        await advance(goalRunId, requester);
+        const errors: unknown[] = [];
+        let crashing = true;
+        // Fails the advance of this run only: after its GoalRun lock, at the advance's clock read.
+        const flaky: PoolLike = {
+          async connect() {
+            const client = await pool.connect();
+            const query = client.query.bind(client) as (...args: unknown[]) => Promise<unknown>;
+            let mine = false;
+            (client as { query: unknown }).query = async (...args: unknown[]) => {
+              const [text, params] = args as [unknown, unknown[] | undefined];
+              if (typeof text === 'string' && text.includes('for no key update')) {
+                mine = params?.[1] === goalRunId;
+              }
+              if (crashing && mine && text === 'select now() as now') {
+                throw new Error('simulated advance failure, token=sk-ant-abcdefghijklmnopqrstuv');
+              }
+              return query(...args);
+            };
+            const release = client.release.bind(client);
+            client.release = (err?: Error | boolean) => {
+              (client as { query: unknown }).query = query;
+              client.release = release;
+              return release(err);
+            };
+            return client;
+          },
+        };
+        const tick = async () => {
+          await admin((client) =>
+            client.query(
+              "update goal_runs set next_tick_at = '2000-01-01' where workspace_id = $1 and id = $2",
+              [workspaceId, goalRunId],
+            ),
+          );
+          await runGoalAdvancerTick(
+            { pool: flaky, taskRuntime: taskRuntime(), options: NO_BACKOFF },
+            { limit: 1, onError: (err) => errors.push(err) },
+          );
+        };
+
+        for (let n = 1; n <= 4; n += 1) {
+          await tick();
+          expect(await goalOf(goalRunId)).toMatchObject({ status: 'running', advanceFailures: n });
+        }
+        await tick();
+        expect(await goalOf(goalRunId)).toMatchObject({
+          status: 'paused',
+          pauseReason: 'needs_decision',
+          advanceFailures: 5,
+          nextTickAt: null,
+        });
+        expect(errors).toHaveLength(5);
+        const pause = (await goalAudit(goalRunId)).find((row) => row.action === 'goal_run.pause');
+        expect(pause?.payload).toMatchObject({
+          by: 'advancer',
+          reason: 'needs_decision',
+          detail: 'the advance failed 5 times in a row',
+        });
+        expect(String(pause?.payload.lastError)).toContain('simulated advance failure');
+        expect(String(pause?.payload.lastError)).not.toContain('abcdefghijklmnopqrstuv');
+
+        // Paused and still failing: no lease retries, and the reconcile scan leaves it alone.
+        await completeStep(((await stepsOf(goalRunId)).a as StepRunRow).id, requester);
+        await markReconcileDue(pool);
+        expect(await isDue(goalRunId)).toBe(false);
+        await tick();
+        expect(await goalOf(goalRunId)).toMatchObject({ advanceFailures: 6, nextTickAt: null });
+        expect(
+          (await goalAudit(goalRunId)).filter((row) => row.action === 'goal_run.advance_failing'),
+        ).toHaveLength(0);
+
+        // A person's revision starts the count again (review #493 on #633: past the limit the
+        // scan skips the run, and with it terminating the Tasks a revision stops); so does a
+        // resume, and an advance that commits clears it.
+        await admin((client) =>
+          client.query(
+            'update goal_runs set advance_failures = 5 where workspace_id = $1 and id = $2',
+            [workspaceId, goalRunId],
+          ),
+        );
+        await asRequester(requester, (client) =>
+          reviseGoalRun(client, workspaceId, {
+            goalRunId,
+            actor: by(requester),
+            basedOnRevision: 1,
+            plan: planOf([{ key: 'a' }]),
+          }),
+        );
+        expect(await goalOf(goalRunId)).toMatchObject({ status: 'paused', advanceFailures: 0 });
+        await admin((client) =>
+          client.query(
+            'update goal_runs set advance_failures = 5 where workspace_id = $1 and id = $2',
+            [workspaceId, goalRunId],
+          ),
+        );
+        await resumeAs(goalRunId, requester);
+        expect(await goalOf(goalRunId)).toMatchObject({ status: 'running', advanceFailures: 0 });
+        await tick();
+        expect((await goalOf(goalRunId)).advanceFailures).toBe(1);
+        crashing = false;
+        await tick();
+        expect(await goalOf(goalRunId)).toMatchObject({ status: 'verifying', advanceFailures: 0 });
+
+        // A cancelling run keeps its lease — its cleanup must keep being tried — and the streak
+        // is noted once.
+        const cancelling = await startGoal(requester, [{ key: 'c' }]);
+        await advance(cancelling, requester);
+        await asRequester(requester, (client) =>
+          cancelGoalRun(client, workspaceId, { goalRunId: cancelling, actor: by(requester) }),
+        );
+        await admin((client) =>
+          client.query(
+            'update goal_runs set advance_failures = 4 where workspace_id = $1 and id = $2',
+            [workspaceId, cancelling],
+          ),
+        );
+        const failure = new Error('cleanup failed');
+        const deps = { pool, taskRuntime: taskRuntime(), options: NO_BACKOFF };
+        const target = { workspaceId, goalRunId: cancelling, requesterId: requester };
+        await recordAdvanceFailure(deps, target, failure);
+        await recordAdvanceFailure(deps, target, failure);
+        expect(await goalOf(cancelling)).toMatchObject({
+          status: 'cancelling',
+          advanceFailures: 6,
+        });
+        expect((await goalOf(cancelling)).nextTickAt).not.toBeNull();
+        expect(
+          (await goalAudit(cancelling)).filter((row) => row.action === 'goal_run.advance_failing'),
+        ).toEqual([
+          expect.objectContaining({
+            payload: expect.objectContaining({
+              status: 'cancelling',
+              detail: 'the advance failed 5 times in a row',
+              lastError: 'cleanup failed',
+            }),
+          }),
+        ]);
       });
     });
   },

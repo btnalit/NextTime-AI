@@ -21,10 +21,12 @@ import {
   EpistemicStatusSchema,
   ExtensionModeSchema,
   GOAL_OUTCOME_BASIS_VALUES,
+  GOAL_RUN_PAUSE_AUTHORITY_VALUES,
   GOAL_RUN_PAUSE_REASON_VALUES,
   GOAL_RUN_STATUS_VALUES,
   GRANT_STATUS_VALUES,
   GoalOutcomeBasisSchema,
+  GoalRunPauseAuthoritySchema,
   GoalRunPauseReasonSchema,
   GoalRunStatusSchema,
   GrantStatusSchema,
@@ -245,6 +247,12 @@ const enumsUnderTest = [
     ],
   ],
   [
+    'GoalRunPauseAuthority',
+    GOAL_RUN_PAUSE_AUTHORITY_VALUES,
+    GoalRunPauseAuthoritySchema,
+    ['requester', 'owner'],
+  ],
+  [
     'GoalOutcomeBasis',
     GOAL_OUTCOME_BASIS_VALUES,
     GoalOutcomeBasisSchema,
@@ -294,8 +302,8 @@ const enumsUnderTest = [
 ] as const;
 
 describe('enums', () => {
-  it('covers all 32 domain enums required by R4 + S2.2 + S2.6 + R-55 (TurnStatus) + legacy 278 (OperationStatus) + S11 GO1 (ActionRequestFailureKind and the GoalRun / PlanRevision / StepRun vocabulary) + legacy 324 (TaskFailureReason) + the member-management refusal reasons (PrincipalRefusalReason)', () => {
-    expect(enumsUnderTest).toHaveLength(32);
+  it('covers all 33 domain enums required by R4 + S2.2 + S2.6 + R-55 (TurnStatus) + legacy 278 (OperationStatus) + S11 GO1 (ActionRequestFailureKind and the GoalRun / PlanRevision / StepRun vocabulary) + legacy 324 (TaskFailureReason) + the member-management refusal reasons (PrincipalRefusalReason) + S11 GO3b (GoalRunPauseAuthority)', () => {
+    expect(enumsUnderTest).toHaveLength(33);
   });
 
   for (const [name, values, schema, expected] of enumsUnderTest) {
