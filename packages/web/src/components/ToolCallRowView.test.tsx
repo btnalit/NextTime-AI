@@ -83,7 +83,7 @@ describe('ToolCallRowView', () => {
       />,
     );
     const note = screen.getByTestId('tool-call-gate-reason');
-    expect(note.textContent).toMatch(/字段「params\.name」里有一个看不见的 U\+0000/);
+    expect(note.textContent).toMatch(/字段「params\.name」里有看不见的 U\+0000/);
     expect(screen.queryByTestId('tool-call-gate-reason-link')).toBeNull();
   });
 
