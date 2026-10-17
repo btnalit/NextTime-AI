@@ -79,7 +79,8 @@ export function isEmptyEntry(entry: AuditEntry): boolean {
  * as a `<select>` on the audit page; the kernel does not publish this as an enum, so an unknown
  * value still works through the filter's free-text path. Legacy sweep (console batch,
  * 2026-10-16): `gate_instance` (`gate-instance-handlers.ts`) and `module`
- * (`platform-modules-handlers.ts`) are written on workspace rows too.
+ * (`platform-modules-handlers.ts`) are written on workspace rows too; S11 P1: `change_item`
+ * (`application/change-plan`).
  */
 export const AUDIT_RESOURCE_TYPES = [
   'action_request',
@@ -87,6 +88,7 @@ export const AUDIT_RESOURCE_TYPES = [
   'agent_policy',
   'agent_profile',
   'capability_grant',
+  'change_item',
   'chat',
   'conflict',
   'connection_request',
@@ -136,8 +138,9 @@ export type PlatformAuditResourceType = (typeof PLATFORM_AUDIT_RESOURCE_TYPES)[n
  * Lifecycle audit actions the kernel writes *outside* a capability dispatch (which audits under
  * the capability's own name — `application/gateway/dispatch.ts` `action: name`): the state-
  * machine transitions of ActionRequest / Task / WorkerRun (`governance/approval/transition-log`,
- * `application/task/transition-log.ts`) and the S6-A chat / connection actions. Suggestions
- * only — the action filter is free text.
+ * `application/task/transition-log.ts`), the S6-A chat / connection actions and S11 P1's
+ * `change_item.apply` (one row per ChangePlan item, `application/change-plan`). Suggestions only —
+ * the action filter is free text.
  */
 export const AUDIT_LIFECYCLE_ACTIONS = [
   'action_request.request',
@@ -169,6 +172,7 @@ export const AUDIT_LIFECYCLE_ACTIONS = [
   'connection.request_cancelled',
   'facts_not_reobserved',
   'ontology_violation',
+  'change_item.apply',
 ] as const;
 
 /**

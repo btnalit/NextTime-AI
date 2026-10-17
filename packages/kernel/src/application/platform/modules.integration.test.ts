@@ -131,7 +131,14 @@ describe.runIf(DATABASE_URL !== undefined)('modules (integration, real Postgres)
     input: { readonly name: string; readonly confirm?: boolean; readonly version?: number },
   ) {
     return inWorkspace(workspaceId, principalId, (client) =>
-      installOrUpgradeModule(client, workspaceId, principalId, registry, input, fixtureDir),
+      installOrUpgradeModule(
+        client,
+        workspaceId,
+        principalId,
+        registry,
+        { ...input, channel: 'human' },
+        fixtureDir,
+      ),
     );
   }
 

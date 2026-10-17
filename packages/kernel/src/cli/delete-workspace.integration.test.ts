@@ -79,6 +79,9 @@ describe.runIf(DATABASE_URL !== undefined)('deleteWorkspace (integration, real P
     before('step_runs', 'plan_revisions');
     before('tasks', 'step_runs');
     before('action_requests', 'step_runs');
+    // S11 P1 (migrations/governance/0024).
+    before('change_items', 'change_segments');
+    before('change_segments', 'principals');
   });
 
   it('deletes a Workspace and every row of its own across all workspace-scoped tables, leaving another Workspace untouched', async () => {

@@ -424,6 +424,42 @@ export type StepRunFailureCategory = (typeof STEP_RUN_FAILURE_CATEGORY_VALUES)[n
 export const StepRunFailureCategorySchema = asEnum(STEP_RUN_FAILURE_CATEGORY_VALUES);
 
 // ---------------------------------------------------------------------------------------------
+// S11 P1 ChangePlan (docs/goal-orchestration-and-admin-agent-plan-2026-10-16.md §3.1, §3.4, §5.4)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * A workspace ChangeSegment's status (§3.4, P1's first cut — §5.4 "第一版收窄"). The owner previews a
+ * segment (dry run, classification, digest — nothing stored) and applies it in one transaction, so a
+ * segment row exists from `applied` on; verification can be re-run (`verified ⇄
+ * verification_failed`); `rolled_back` is final. The states before application (`submitted`,
+ * `validated`, `approved`, …) belong to segments whose proposer is not their approver, which AA3
+ * brings.
+ */
+export const CHANGE_SEGMENT_STATUS_VALUES = [
+  'applied',
+  'verified',
+  'verification_failed',
+  'rolled_back',
+] as const;
+export type ChangeSegmentStatus = (typeof CHANGE_SEGMENT_STATUS_VALUES)[number];
+export const ChangeSegmentStatusSchema = asEnum(CHANGE_SEGMENT_STATUS_VALUES);
+
+/** What a ChangeItem is an intent to do (§5.4: a call of an existing publish / configuration
+ *  capability). P1-A has one: publish a version of an ontology family. */
+export const CHANGE_ITEM_KIND_VALUES = ['ontology_version'] as const;
+export type ChangeItemKind = (typeof CHANGE_ITEM_KIND_VALUES)[number];
+export const ChangeItemKindSchema = asEnum(CHANGE_ITEM_KIND_VALUES);
+
+/**
+ * I-A4: a ChangeItem is `not_widening` only when every field it changes is on its kind's list of
+ * changes proven not to widen authority; anything else is `authority_widening` and needs a person to
+ * confirm that item by itself.
+ */
+export const CHANGE_ITEM_CLASSIFICATION_VALUES = ['not_widening', 'authority_widening'] as const;
+export type ChangeItemClassification = (typeof CHANGE_ITEM_CLASSIFICATION_VALUES)[number];
+export const ChangeItemClassificationSchema = asEnum(CHANGE_ITEM_CLASSIFICATION_VALUES);
+
+// ---------------------------------------------------------------------------------------------
 // §5.5 Publishable lifecycle (OntologyVersion / WorkerDefinition / Skill / Procedure / Manifest)
 // ---------------------------------------------------------------------------------------------
 

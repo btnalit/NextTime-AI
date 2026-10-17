@@ -7,6 +7,11 @@ import {
   gateRefusalOf,
 } from '../../adapters/gatekeeper-client/index.js';
 import { OutboundTargetRefusedError } from '../../adapters/outbound-target/index.js';
+// S11 P1: the ChangePlan core's two refusals (application/change-plan), same direct import.
+import {
+  ChangeConfirmationRequiredError,
+  ChangePlanChangedError,
+} from '../../application/change-plan/index.js';
 import {
   ChatArchivedError,
   ChatNotFoundError,
@@ -433,6 +438,14 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   }
   if (err instanceof ModuleConfirmRequiredError) {
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
+  }
+  // S11 P1: mirrors HTTP 400 `change_confirmation_required` and 409 `change_plan_changed`
+  // (capability-route.ts).
+  if (err instanceof ChangeConfirmationRequiredError) {
+    return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
+  }
+  if (err instanceof ChangePlanChangedError) {
+    return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
   }
   // Postgres 22P02 (malformed id/value from the caller) — same mapping as capability-route.ts.
   if (isPgInvalidTextRepresentation(err)) {
