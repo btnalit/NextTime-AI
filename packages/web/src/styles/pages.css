@@ -1202,6 +1202,13 @@
     max-width: 100%;
     min-width: 0;
   }
+
+  /* Legacy 403 (UX acceptance of #651): a small ghost button as the value (「1 个」 that opens a
+   * list) starts its text after its own padding, a few pixels right of the plain values above and
+   * below; pull it back by that padding so the text lines up and the hover fill sits in the gap. */
+  .data-table-cards td[data-label] > .btn-ghost.btn-s {
+    margin-inline-start: calc(-1 * var(--space-2));
+  }
 }
 
 /* ---- Platform workspaces (P-A2) ---------------------------------------------------------- */

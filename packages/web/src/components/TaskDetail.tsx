@@ -28,7 +28,6 @@ import { KeyValue, type KeyValueItem } from './kit/key-value.js';
 import { RefChip } from './kit/ref-chip.js';
 import { RouteLink } from './kit/route-link.js';
 import { StatusChip } from './kit/status-chip.js';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './kit/table.js';
 
 export interface TaskDetailProps {
   readonly task: TaskSummary;
@@ -344,56 +343,64 @@ export function TaskDetail({
             {t('尚未分配 WorkerRun。', 'No WorkerRun has been provisioned yet.')}
           </span>
         ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>{t('运行', 'Run')}</TableHead>
-                <TableHead>{t('状态', 'Status')}</TableHead>
-                <TableHead>{t('深度', 'Depth')}</TableHead>
-                <TableHead>{t('尝试', 'Attempt')}</TableHead>
-                <TableHead>Skill</TableHead>
-                <TableHead>{t('开始', 'Started')}</TableHead>
-                <TableHead>{t('用时', 'Duration')}</TableHead>
-                <TableHead>{t('溯源', 'Provenance')}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {task.workerRuns.map((run) => (
-                <TableRow key={run.id} data-testid="worker-run-row">
-                  <TableCell>
-                    <span className="mono" title={run.id}>
-                      {shortId(run.id)}
-                    </span>
-                  </TableCell>
-                  <TableCell>
-                    <StatusChip machine="workerRun" status={run.status} size="s" />
-                  </TableCell>
-                  <TableCell className="tabular">{run.depth}</TableCell>
-                  <TableCell className="tabular">{run.attempt}</TableCell>
-                  <TableCell data-testid="worker-run-skills">
-                    <SkillLoads skills={run.skills} t={t} />
-                  </TableCell>
-                  <TableCell>
-                    <time title={formatDateTime(run.startedAt)}>
-                      {formatRelative(run.startedAt)}
-                    </time>
-                  </TableCell>
-                  <TableCell className="tabular">
-                    {formatDuration(run.startedAt, run.terminatedAt)}
-                  </TableCell>
-                  <TableCell>
-                    <RouteLink
-                      href={auditHref({ resourceType: 'worker_run', resourceId: run.id })}
-                      whenRefused="hide"
-                      testId="worker-run-provenance-link"
-                    >
-                      {t('查看', 'View')}
-                    </RouteLink>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+          // Legacy 401: eight columns — a native card table (styles/pages.css), so on a narrow
+          // window each run is a card instead of a row scrolled sideways.
+          <div className="table-scroll">
+            <table className="data-table data-table-cards" data-testid="worker-runs-table">
+              <thead>
+                <tr>
+                  <th>{t('运行', 'Run')}</th>
+                  <th>{t('状态', 'Status')}</th>
+                  <th>{t('深度', 'Depth')}</th>
+                  <th>{t('尝试', 'Attempt')}</th>
+                  <th>Skill</th>
+                  <th>{t('开始', 'Started')}</th>
+                  <th>{t('用时', 'Duration')}</th>
+                  <th>{t('溯源', 'Provenance')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {task.workerRuns.map((run) => (
+                  <tr key={run.id} data-testid="worker-run-row">
+                    <td>
+                      <span className="mono" title={run.id}>
+                        {shortId(run.id)}
+                      </span>
+                    </td>
+                    <td data-label={t('状态', 'Status')}>
+                      <StatusChip machine="workerRun" status={run.status} size="s" />
+                    </td>
+                    <td className="tabular" data-label={t('深度', 'Depth')}>
+                      {run.depth}
+                    </td>
+                    <td className="tabular" data-label={t('尝试', 'Attempt')}>
+                      {run.attempt}
+                    </td>
+                    <td data-testid="worker-run-skills" data-label="Skill">
+                      <SkillLoads skills={run.skills} t={t} />
+                    </td>
+                    <td data-label={t('开始', 'Started')}>
+                      <time title={formatDateTime(run.startedAt)}>
+                        {formatRelative(run.startedAt)}
+                      </time>
+                    </td>
+                    <td className="tabular" data-label={t('用时', 'Duration')}>
+                      {formatDuration(run.startedAt, run.terminatedAt)}
+                    </td>
+                    <td data-label={t('溯源', 'Provenance')}>
+                      <RouteLink
+                        href={auditHref({ resourceType: 'worker_run', resourceId: run.id })}
+                        whenRefused="hide"
+                        testId="worker-run-provenance-link"
+                      >
+                        {t('查看', 'View')}
+                      </RouteLink>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
 

@@ -451,6 +451,14 @@ describe('CreateGateInstanceForm', () => {
     fireEvent.change(within(form).getByLabelText(/门 ID/), { target: { value: 'billing-eu-2' } });
     expect(name.value).toBe('billing-eu');
 
+    // Legacy 402: a gate id equal to an existing connector's name joins it and says so.
+    fireEvent.change(within(form).getByLabelText(/门 ID/), { target: { value: 'billing' } });
+    expect(name.value).toBe('billing');
+    expect(within(form).getByTestId('cgi-connector-derived').textContent).toContain(
+      '门 ID 和这个已有接入包同名',
+    );
+    expect(within(form).queryByTestId('cgi-connector-new')).toBeNull();
+
     // No connector name to extend: named after the gate id, as before.
     fireEvent.change(within(form).getByLabelText(/门 ID/), { target: { value: 'payroll' } });
     expect(name.value).toBe('payroll');
