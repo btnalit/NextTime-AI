@@ -48,11 +48,18 @@ export type {
 // that proves nothing (predicate.ts's own module doc comment).
 export {
   PREDICATE_EMPTY_PROBES,
+  PREDICATE_LINT_PLAN_WORK,
+  PREDICATE_REFUSAL_ANSWERS,
   evaluatePredicate,
   lintPredicate,
   predicateLiterals,
 } from './predicate.js';
-export type { PredicateEvaluation, PredicateLiteral, PredicateOutcome } from './predicate.js';
+export type {
+  PredicateEvaluation,
+  PredicateLintBudget,
+  PredicateLiteral,
+  PredicateOutcome,
+} from './predicate.js';
 
 export {
   findSourceByName,

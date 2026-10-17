@@ -2,6 +2,8 @@ import type { Predicate } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
 import {
   PREDICATE_EMPTY_PROBES,
+  PREDICATE_REFUSAL_ANSWERS,
+  type PredicateLintBudget,
   evaluatePredicate,
   lintPredicate,
   predicateRefusalProbes,
@@ -101,7 +103,10 @@ describe('substrate/epistemic predicate (S11 GO3d)', () => {
           ],
         }),
       ).toEqual([]);
-      expect(lintPredicate({ path: 'length(items)', op: 'gt', value: 0 })).toEqual([]);
+      // A count of what the filter kept — not of whatever `items` holds (review #493).
+      expect(
+        lintPredicate({ path: "items[?status=='done'] | length(@)", op: 'gt', value: 0 }),
+      ).toEqual([]);
     });
 
     it('refuses a path that does not compile, reads only literals, or goes through the prototype', () => {
@@ -175,7 +180,6 @@ describe('substrate/epistemic predicate (S11 GO3d)', () => {
         { path: '[0].status', op: 'eq', value: 'done' },
         { path: '[*].status', op: 'contains', value: 'done' },
         { path: '*.state', op: 'contains', value: 'applied' },
-        { path: 'length(keys(services))', op: 'gte', value: 3 },
         { path: 'services.* | [0].state', op: 'eq', value: 'running' },
         { path: 'items[0]', op: 'eq', value: 'web' },
         { path: 'state || status', op: 'eq', value: 'applied' },
@@ -230,22 +234,28 @@ describe('substrate/epistemic predicate (S11 GO3d)', () => {
       }
       expect(JSON.stringify(probes)).toMatch(/"[^"]{80,}"/);
       expect(probes.some((probe) => Array.isArray(probe) && probe.length >= 2)).toBe(true);
-      // A predicate that names nearly every refusal key gets none — its field probes still run.
-      expect(
-        predicateRefusalProbes(
-          new Set([
-            'error',
-            'code',
-            'reason',
-            'message',
-            'detail',
-            'found',
-            'ok',
-            'result',
-            'data',
-          ]),
-        ),
-      ).toEqual([]);
+      // A predicate that names every refusal key still gets them, on made-up keys (review #493).
+      const all = new Set([
+        'error',
+        'code',
+        'reason',
+        'message',
+        'detail',
+        'found',
+        'ok',
+        'result',
+        'data',
+        'info',
+        'meta',
+        'value',
+        '__nexttime_refusal_0__',
+      ]);
+      const made = predicateRefusalProbes(all);
+      expect(made).toHaveLength(4);
+      for (const probe of made.filter((p) => !Array.isArray(p))) {
+        expect(Object.keys(probe as object).length).toBeGreaterThanOrEqual(2);
+        expect(Object.keys(probe as object).some((key) => all.has(key))).toBe(false);
+      }
     });
 
     it('refuses a predicate that holds whatever the field it reads is, and accepts one that tests a value', () => {
@@ -266,12 +276,180 @@ describe('substrate/epistemic predicate (S11 GO3d)', () => {
       const tests: Predicate[] = [
         { path: 'status', op: 'exists' },
         { path: 'enabled', op: 'eq', value: false },
-        { path: 'length(items)', op: 'eq', value: 0 },
         { path: 'revision', op: 'gte', value: 7 },
+        { path: 'count', op: 'eq', value: 0 },
       ];
       for (const predicate of tests) {
         expect(lintPredicate(predicate), JSON.stringify(predicate)).toEqual([]);
       }
+    });
+
+    it('refuses a shape test at a place below the root — the review table, a wrapper or deeper (review #493)', () => {
+      // The delta review's table: each held on {result: {found: false}, data: {found: false}}.
+      const negative = {
+        result: { found: false, reason: 'not there' },
+        data: { found: false, reason: 'x' },
+      };
+      const table: Predicate[] = [
+        { path: 'length(result)', op: 'gt', value: 0 },
+        { path: 'length(data)', op: 'gte', value: 1 },
+        { path: 'length(keys(data))', op: 'gt', value: 1 },
+        { path: 'merge(data, `{}`)', op: 'ne', value: {} },
+      ];
+      // And the rest of the class, at any depth and through any construct that reaches a place.
+      const shapes: Predicate[] = [
+        ...table,
+        { path: 'type(result)', op: 'eq', value: 'object' },
+        { path: 'length(to_string(result))', op: 'gt', value: 5 },
+        { path: 'length(values(data))', op: 'gt', value: 0 },
+        { path: 'length(data.*)', op: 'gt', value: 0 },
+        { path: 'length(data[])', op: 'gt', value: 0 },
+        { path: 'result | length(@)', op: 'gt', value: 0 },
+        { path: 'result | keys(@) | length(@)', op: 'gt', value: 0 },
+        { path: 'result.state || length(result)', op: 'gt', value: 0 },
+        { path: 'length(data.result.items)', op: 'gt', value: 0 },
+        { path: 'length(sort_by(data.items, &name))', op: 'gt', value: 0 },
+        { path: 'length(a[*].b)', op: 'gt', value: 0 },
+        { path: 'length(items[*] | [0])', op: 'gt', value: 0 },
+        { path: 'length(items)', op: 'gte', value: 1 },
+        { path: 'length(items)', op: 'eq', value: 1 },
+        {
+          any: [
+            { path: 'state', op: 'eq', value: 'running' },
+            { path: 'length(result)', op: 'gt', value: 0 },
+          ],
+        },
+      ];
+      for (const predicate of shapes) {
+        const problems = lintPredicate(predicate);
+        expect(problems, JSON.stringify(predicate)).toHaveLength(1);
+        expect(problems[0], JSON.stringify(predicate)).toMatch(
+          /^the predicate holds (on .* — it would pass without the observation showing the target|whatever ".+" is \(empty, false, zero or unrelated\) — it does not test its value)$/,
+        );
+      }
+      for (const predicate of table) {
+        expect(outcome(predicate, negative), JSON.stringify(predicate)).toBe('satisfied');
+      }
+      expect(lintPredicate({ path: 'length(result)', op: 'gt', value: 0 })).toEqual([
+        'the predicate holds on {"result":{"error":false}} — it would pass without the observation showing the target',
+      ]);
+      // A tautology below the root, too.
+      expect(lintPredicate({ path: 'length(data.items)', op: 'gte', value: 0 })).toHaveLength(1);
+    });
+
+    it('refuses a predicate a refusal answer satisfies — exists error, and nine refusal keys at once (review #493)', () => {
+      const nine = [
+        'error',
+        'code',
+        'reason',
+        'message',
+        'detail',
+        'found',
+        'ok',
+        'result',
+        'data',
+      ];
+      const refused: Predicate[] = [
+        { any: nine.map((path) => ({ path, op: 'exists' as const })) },
+        { path: 'error', op: 'exists' },
+        {
+          any: [
+            { path: 'error', op: 'exists' },
+            { path: 'status', op: 'exists' },
+          ],
+        },
+        { path: 'not_null(status, error)', op: 'exists' },
+        { path: 'type(error)', op: 'eq', value: 'string' },
+        // Below a wrapper too, once something else makes it more than `exists` leaves.
+        {
+          any: [
+            { path: 'result.state', op: 'eq', value: 'running' },
+            { path: 'result.error', op: 'exists' },
+          ],
+        },
+      ];
+      for (const predicate of refused) {
+        const problems = lintPredicate(predicate);
+        expect(problems, JSON.stringify(predicate)).toHaveLength(1);
+        expect(problems[0], JSON.stringify(predicate)).toMatch(
+          /^the predicate holds on .*(error|found|ok).* — it would pass without the observation showing the target$/,
+        );
+      }
+      for (const answer of PREDICATE_REFUSAL_ANSWERS) {
+        expect(outcome({ path: 'state', op: 'eq', value: 'applied' }, answer)).toBe('unsatisfied');
+      }
+    });
+
+    it('refuses an absence and a text order on its own, and lets a test of a value carry them', () => {
+      const refused: Predicate[] = [
+        { path: 'length(items)', op: 'eq', value: 0 },
+        { path: "items[?id=='x'] | length(@)", op: 'eq', value: 0 },
+        { path: 'result.found', op: 'eq', value: false },
+        { not: { path: "items[?id=='x']", op: 'contains', value: { id: 'x' } } },
+        { path: 'version', op: 'gte', value: '1.2.0' },
+        { path: 'name', op: 'lte', value: 'zzz' },
+        { path: 'message', op: 'contains', value: ' ' },
+      ];
+      for (const predicate of refused) {
+        expect(lintPredicate(predicate), JSON.stringify(predicate)).toHaveLength(1);
+      }
+      const accepted: Predicate[] = [
+        { path: 'status', op: 'eq', value: 'running' },
+        { path: 'result.state', op: 'eq', value: 'running' },
+        { path: "items[?name=='svc'] | length(@)", op: 'eq', value: 1 },
+        { path: "items[?name=='svc'] | length(@)", op: 'gt', value: 0 },
+        { path: "length(replicas[?state=='ready'])", op: 'gte', value: 3 },
+        { path: 'sort_by(items, &name)[0].name', op: 'eq', value: 'svc' },
+        { path: 'tags', op: 'contains', value: 'prod' },
+        { path: 'message', op: 'contains', value: 'restarted' },
+        { path: 'data.id', op: 'exists' },
+        {
+          all: [
+            { path: 'id', op: 'exists' },
+            { path: 'name', op: 'exists' },
+          ],
+        },
+        {
+          all: [
+            { path: 'state', op: 'eq', value: 'running' },
+            { path: 'version', op: 'gte', value: '1.2.0' },
+          ],
+        },
+        {
+          all: [
+            { path: 'state', op: 'eq', value: 'up' },
+            { path: 'length(items)', op: 'gt', value: 0 },
+          ],
+        },
+      ];
+      for (const predicate of accepted) {
+        expect(lintPredicate(predicate), JSON.stringify(predicate)).toEqual([]);
+      }
+    });
+
+    it('bounds its own work — per predicate and, through a shared budget, per plan', () => {
+      const tooDeep = { path: `a${'.b'.repeat(70)}`, op: 'eq', value: 1 } satisfies Predicate;
+      expect(lintPredicate(tooDeep)).toEqual([
+        'the predicate reads too many places in the result for the lint to check — test fewer fields',
+      ]);
+      const wide: Predicate = {
+        all: Array.from({ length: 8 }, (_, i) => ({
+          path: `result.field${i}`,
+          op: 'eq' as const,
+          value: i,
+        })),
+      };
+      expect(lintPredicate(wide)).toEqual([]);
+      const budget: PredicateLintBudget = { remaining: 40_000 };
+      expect(lintPredicate(wide, budget)).toEqual([]);
+      const left = budget.remaining;
+      expect(left).toBeLessThan(40_000);
+      expect(left).toBeGreaterThan(0);
+      // The next one no longer fits: refused, and nothing more is spent.
+      expect(lintPredicate(wide, budget)).toEqual([
+        "the plan's predicates together read too many places for the lint to check — test fewer fields",
+      ]);
+      expect(budget.remaining).toBe(left);
     });
   });
 });

@@ -212,6 +212,36 @@ describe('parsePlan — reconcile declarations (S11 GO3d)', () => {
   });
 });
 
+describe('parsePlan — reconcile declarations share one lint budget (S11 GO3d)', () => {
+  it("refuses predicates past the plan's lint budget, though each alone would pass", () => {
+    const gate = randomUUID();
+    // Sixteen fields under one wrapper: well within one predicate's bound, a large share of a plan's.
+    const wide = {
+      all: Array.from({ length: 16 }, (_, i) => ({ path: `result.field${i}`, op: 'eq', value: i })),
+    };
+    const declarations = (from: number) =>
+      Array.from({ length: 8 }, (_, i) => ({
+        action: { gatekeeperId: gate, operation: 'svc.restart', params: { n: from + i } },
+        check: { gatekeeperId: gate, operation: 'svc.status', expect: wide },
+      }));
+    expect(() => parsePlan({ steps: [step('a', { reconcile: declarations(0) })] })).not.toThrow();
+    const problems = problemsOf({
+      steps: [
+        step('a', { reconcile: declarations(0) }),
+        step('b', { reconcile: declarations(8) }),
+        step('c', { reconcile: declarations(16) }),
+        step('d', { reconcile: declarations(24) }),
+      ],
+    });
+    expect(problems.length).toBeGreaterThan(0);
+    for (const problem of problems) {
+      expect(problem).toMatch(
+        /^step "[cd]": reconcile\[\d\]: the plan's predicates together read too many places for the lint to check — test fewer fields$/,
+      );
+    }
+  });
+});
+
 describe('planStep and samePlanEntry', () => {
   const plan = { steps: [step('a', { input: { n: 1 } }), step('b', { dependsOn: ['a'] })] };
 

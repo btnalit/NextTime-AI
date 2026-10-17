@@ -34,13 +34,37 @@ import jmespath from 'jmespath';
  *      the effect. Each branch of `||` / `&&` is anchored on its own, so a literal or shape branch
  *      cannot carry the rest. Below the root — right of a field, a projection, a filter or a pipe —
  *      anything goes (`items[?name=='web'] | length(@)` reads `items`).
- *   3. **Probes.** The predicate must not hold on a result that says nothing about the target:
- *      {@link PREDICATE_EMPTY_PROBES} (nothing, empty, an unrelated field) and refusals built from
- *      fields the predicate does not read (several keys, long strings, a list of them). And for
- *      each field it reads, it must not hold on every value of {@link PREDICATE_FIELD_PROBE_VALUES}
- *      it can judge (at least two) — `length(items) >= 0` does, whatever `items` is; `exists
- *      status`, `enabled == false` and `length(items) == 0` do not, and stay the plan author's to
- *      weigh (the confirmation card shows them).
+ *   3. **Probes** (review #493 on #649, twice). The predicate must not hold on an answer that
+ *      says no:
+ *      - at the root: {@link PREDICATE_EMPTY_PROBES} (nothing, empty, an unrelated field),
+ *        refusals built from fields the predicate does not read (several keys, long strings, a
+ *        list of them) and {@link PREDICATE_REFUSAL_ANSWERS} (`{error, code, message}`,
+ *        `{found: false, reason}`, `{ok: false, error}`) — so `exists error` is refused;
+ *      - at every place it reads, however deep (`result` in `length(result) > 0`; `data`,
+ *        `data.items`, `data.items[]` and `data.items[].id` in `data.items[?id=='x']`): that place
+ *        holding nothing (missing, `{}`, `[]`) or a "no" — objects of unrelated fields, lists of
+ *        them, unrelated texts, the refusal answers. A gate's answer usually comes in a wrapper,
+ *        so a shape test one level down (`length(result) > 0`, `length(keys(data)) > 1`,
+ *        `merge(data, {}) != {}`, `type(result) == 'object'`) holds on `{result: {found: false}}`
+ *        as well as on the effect. A predicate made of `exists` leaves only is not probed here:
+ *        `exists status` holds on `{status: {…}}`, and that is all it says;
+ *      - and at each place, not on every value of {@link PREDICATE_FIELD_PROBE_VALUES} it can judge
+ *        (at least two) — `length(items) >= 0` does.
+ *      Refused on purpose, then: an absence (`length(items) == 0`, `found == false`,
+ *      `items[?id=='x'] | length(@) == 0`) — "nothing there" is also what an answer that found
+ *      nothing says, so an outcome-unknown removal goes to a person; a count of unfiltered items or
+ *      keys a short answer reaches (`length(items) >= 1`); an order comparison on text with nothing
+ *      else (`version >= '1.2'` — `'unknown'` sorts above it). A test of a value lets the rest
+ *      through: `all` with `state == 'running'`, or a filter's literal
+ *      (`items[?name=='web'] | length(@) == 1` — no probe holds an item named `web`). What stays
+ *      the plan author's to weigh (the confirmation card shows it): `exists status`,
+ *      `enabled == false`, `revision >= 7`, and a predicate that tests the wrong field.
+ *
+ * The lint runs in the kernel's event loop, so its probing is bounded: at most
+ * {@link MAX_PROBED_PLACES} places, at most {@link MAX_PROBE_WORK} of work per predicate and
+ * {@link PREDICATE_LINT_PLAN_WORK} per plan, past which a predicate is refused rather than
+ * half-checked; and a probe at a place re-judges only the leaves that read under its root field
+ * ({@link placeProber}).
  */
 
 export type PredicateOutcome = 'satisfied' | 'unsatisfied' | 'undetermined';
@@ -71,7 +95,8 @@ export const PREDICATE_EMPTY_PROBES: readonly unknown[] = Object.freeze([
   ['__nexttime_probe__'],
 ]);
 
-/** Keys a refusal probe may carry — those the predicate does not read become its fields. */
+/** Keys a refusal probe may carry — those the predicate does not read become its fields, and
+ *  made-up ones ({@link unreadKeys}) when it reads nearly all of them. */
 const REFUSAL_PROBE_KEYS: readonly string[] = [
   'error',
   'code',
@@ -87,6 +112,18 @@ const REFUSAL_PROBE_KEYS: readonly string[] = [
   'value',
 ];
 const PROBE_LONG_STRING = 'nothing happened here; '.repeat(4);
+/** Unrelated texts at a place the predicate reads: one sorting before digits, one after letters,
+ *  and a long one. */
+const PROBE_TEXTS: readonly string[] = ['(none)', '~ unrelated ~', PROBE_LONG_STRING];
+
+/** Answers that say no, with the fields such answers carry. A predicate one of them satisfies —
+ *  as the whole result or at a place it reads — is refused: `exists error` and `found == false`
+ *  hold on them, and neither shows an effect. */
+export const PREDICATE_REFUSAL_ANSWERS: readonly unknown[] = Object.freeze([
+  { error: 'not_found', code: 404, message: 'nothing happened here' },
+  { found: false, reason: 'no such thing' },
+  { ok: false, error: { code: 'refused', message: 'nothing happened here' } },
+]);
 
 /** Values a field the predicate reads takes in its field probes: empty, falsy, unrelated. */
 export const PREDICATE_FIELD_PROBE_VALUES: readonly unknown[] = Object.freeze([
@@ -98,6 +135,22 @@ export const PREDICATE_FIELD_PROBE_VALUES: readonly unknown[] = Object.freeze([
   {},
   '__nexttime_probe__',
 ]);
+
+/** Bounds on the lint's own work, which runs in the kernel's event loop: at most this many places
+ *  a predicate reads, and this much probing — each leaf judged again counts its path's length
+ *  (about 40 ms). A predicate past either is refused rather than half-checked; a plan's predicates
+ *  share {@link PredicateLintBudget}. */
+const MAX_PROBED_PLACES = 64;
+const MAX_PROBE_WORK = 262_144;
+
+/** Probing a whole plan's predicates may take (`application/goal/plan.ts` passes one per plan):
+ *  a plan carries up to 400 of them, so each one's bound alone would not bound the plan. */
+export const PREDICATE_LINT_PLAN_WORK = 2_097_152;
+
+/** Probing left for the predicates still to lint — {@link lintPredicate} spends from it. */
+export interface PredicateLintBudget {
+  remaining: number;
+}
 
 const RESERVED_FIELDS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype']);
 
@@ -171,29 +224,29 @@ function judgeLeaf(leaf: PredicateLeaf, data: unknown, undetermined: string[]): 
   }
 }
 
-function judge(predicate: Predicate, data: unknown, undetermined: string[]): Truth {
+function judge(predicate: Predicate, leafTruth: (leaf: PredicateLeaf) => Truth): Truth {
   if ('all' in predicate) {
-    const values = predicate.all.map((child) => judge(child, data, undetermined));
+    const values = predicate.all.map((child) => judge(child, leafTruth));
     if (values.includes(false)) return false;
     return values.includes(null) ? null : true;
   }
   if ('any' in predicate) {
-    const values = predicate.any.map((child) => judge(child, data, undetermined));
+    const values = predicate.any.map((child) => judge(child, leafTruth));
     if (values.includes(true)) return true;
     return values.includes(null) ? null : false;
   }
   if ('not' in predicate) {
-    const value = judge(predicate.not, data, undetermined);
+    const value = judge(predicate.not, leafTruth);
     return value === null ? null : !value;
   }
-  return judgeLeaf(predicate, data, undetermined);
+  return leafTruth(predicate);
 }
 
 /** Judges `predicate` against `data` (an observation's result) — see the module comment. Never
  *  throws on any result: what cannot be judged is `undetermined`. */
 export function evaluatePredicate(predicate: Predicate, data: unknown): PredicateEvaluation {
   const undetermined: string[] = [];
-  const value = judge(predicate, data, undetermined);
+  const value = judge(predicate, (leaf) => judgeLeaf(leaf, data, undetermined));
   return {
     outcome: value === true ? 'satisfied' : value === false ? 'unsatisfied' : 'undetermined',
     undetermined,
@@ -294,6 +347,187 @@ function fieldNames(node: PathNode, names: Set<string>): Set<string> {
   return names;
 }
 
+/** A step into a part of a value: a named field, an element of a list, a value of an object. */
+type Step = { readonly field: string } | 'element' | 'value';
+/** A place in the result: the steps to it from the root. */
+type Place = readonly Step[];
+
+/**
+ * Where a path reads, relative to where it is evaluated (the lint's rule 3, module comment):
+ * `reads`, the places it looks at on its way, and `out`, the places its value comes from — where a
+ * path to its right goes on. `items[?name=='web'].state` reads `items`, `items[]`,
+ * `items[].name` and comes from `items[].state`; an operand or argument is read where its value
+ * comes from. Over-approximate on purpose (a function's value comes from its arguments): a place
+ * too many only adds a probe.
+ */
+interface Reach {
+  readonly reads: readonly Place[];
+  readonly out: readonly Place[];
+}
+
+const NOWHERE: Reach = { reads: [], out: [] };
+
+/** Thrown when a path reads more places than the lint will probe ({@link MAX_PROBED_PLACES}). */
+class TooManyPlaces extends Error {}
+
+function within(places: readonly Place[]): readonly Place[] {
+  if (places.length > MAX_PROBED_PLACES * 4) throw new TooManyPlaces();
+  return places;
+}
+
+/** Each of `heads` followed by each of `tails`. */
+function then(heads: readonly Place[], tails: readonly Place[]): readonly Place[] {
+  if (heads.length * tails.length > MAX_PROBED_PLACES * 4) throw new TooManyPlaces();
+  return heads.flatMap((head) => tails.map((tail) => [...head, ...tail]));
+}
+
+/** What reading `parts` as operands or arguments looks at: where they read, and their values. */
+function consumed(parts: readonly Reach[]): readonly Place[] {
+  return within(parts.flatMap((part) => [...part.reads, ...part.out]));
+}
+
+function reach(node: PathNode): Reach {
+  const children = childNodes(node);
+  switch (node.type) {
+    case 'Field':
+      return typeof node.name === 'string'
+        ? { reads: [[{ field: node.name }]], out: [[{ field: node.name }]] }
+        : NOWHERE;
+    case 'Current':
+    case 'Identity':
+    case 'Slice':
+      return { reads: [], out: [[]] };
+    case 'Index':
+      return { reads: [['element']], out: [['element']] };
+    case 'Subexpression':
+    case 'IndexExpression':
+    case 'Pipe': {
+      const [left, right] = children.map(reach);
+      if (!left || !right) return NOWHERE;
+      // A pipe hands its right side the whole value: after a projection (`a[*].b | [0].c`) that is
+      // the list of parts, whose elements sit where the parts do — `a[].b.c`, not `a[].b[].c`.
+      const tails = (places: readonly Place[]) =>
+        node.type === 'Pipe'
+          ? [
+              ...places,
+              ...places.flatMap((place) => (place[0] === 'element' ? [place.slice(1)] : [])),
+            ]
+          : places;
+      return {
+        reads: within([...left.reads, ...then(left.out, tails(right.reads))]),
+        out: then(left.out, tails(right.out)),
+      };
+    }
+    case 'Projection':
+    case 'ValueProjection':
+    case 'FilterProjection': {
+      // children: the projected value, what each part goes on to, and a filter's condition.
+      const [left, ...rest] = children.map(reach);
+      if (!left) return NOWHERE;
+      const parts = then(left.out, [[node.type === 'ValueProjection' ? 'value' : 'element']]);
+      const right = rest[0];
+      return {
+        reads: within([
+          ...left.reads,
+          ...parts,
+          ...rest.flatMap((part) => then(parts, part.reads)),
+        ]),
+        out: right ? then(parts, right.out) : parts,
+      };
+    }
+    case 'Flatten': {
+      const [inner] = children.map(reach);
+      if (!inner) return NOWHERE;
+      return { reads: inner.reads, out: within([...inner.out, ...then(inner.out, [['element']])]) };
+    }
+    case 'Function': {
+      const args = children.filter((child) => child.type !== 'ExpressionReference').map(reach);
+      const bodies = children
+        .filter((child) => child.type === 'ExpressionReference')
+        .flatMap((ref) => childNodes(ref).map(reach));
+      const values = within(args.flatMap((arg) => arg.out));
+      // `sort_by(items, &name)`: an expression argument is evaluated on each element of the others.
+      const elements = bodies.length > 0 ? then(values, [['element']]) : [];
+      return {
+        reads: within([
+          ...consumed(args),
+          ...elements,
+          ...bodies.flatMap((body) => then(elements, [...body.reads, ...body.out])),
+        ]),
+        out: within([...values, ...elements]),
+      };
+    }
+    case 'Comparator':
+    case 'NotExpression':
+      return { reads: consumed(children.map(reach)), out: [] };
+    case 'OrExpression':
+    case 'AndExpression':
+    case 'MultiSelectList': {
+      const parts = children.map(reach);
+      return { reads: consumed(parts), out: within(parts.flatMap((part) => part.out)) };
+    }
+    case 'MultiSelectHash': {
+      const parts = children.flatMap((pair) => (isPathNode(pair.value) ? [reach(pair.value)] : []));
+      return { reads: consumed(parts), out: within(parts.flatMap((part) => part.out)) };
+    }
+    default:
+      return NOWHERE;
+  }
+}
+
+/** Adds to `places` every place `ast` (a leaf's path) reads, and every place on the way to one —
+ *  `data` and `data.items` for `data.items`; the root itself is not one (the root probes cover
+ *  it). Returns the root fields the leaf reads under — `null` when it reads under every one
+ *  (`[0].status`, `*.state`): only a probe under one of them can change what the leaf finds. */
+function addPlacesRead(ast: PathNode, places: Map<string, Place>): ReadonlySet<string> | null {
+  const { reads, out } = reach(ast);
+  const roots = new Set<string>();
+  let everywhere = false;
+  for (const place of [...reads, ...out]) {
+    const [first] = place;
+    if (first === undefined) continue;
+    if (typeof first === 'string') everywhere = true;
+    else roots.add(first.field);
+    for (let depth = 1; depth <= place.length; depth += 1) {
+      const prefix = place.slice(0, depth);
+      places.set(JSON.stringify(prefix), prefix);
+      if (places.size > MAX_PROBED_PLACES) throw new TooManyPlaces();
+    }
+  }
+  return everywhere ? null : roots;
+}
+
+/** `value` at `place` in an otherwise empty result; `filler` keys an object's value step. */
+function placed(place: Place, value: unknown, filler: string): unknown {
+  let result = value;
+  for (let i = place.length - 1; i >= 0; i -= 1) {
+    const step = place[i] as Step;
+    result =
+      step === 'element'
+        ? [result]
+        : step === 'value'
+          ? { [filler]: result }
+          : { [step.field]: result };
+  }
+  return result;
+}
+
+function describePlace(place: Place): string {
+  return place
+    .map((step, i) =>
+      step === 'element'
+        ? '[]'
+        : step === 'value'
+          ? i === 0
+            ? '*'
+            : '.*'
+          : i === 0
+            ? step.field
+            : `.${step.field}`,
+    )
+    .join('');
+}
+
 function literalValues(node: PathNode, values: unknown[]): unknown[] {
   if (node.type === 'Literal') values.push(node.value);
   for (const child of childNodes(node)) literalValues(child, values);
@@ -330,36 +564,94 @@ export function predicateLiterals(predicate: Predicate): readonly PredicateLiter
 }
 
 function describeProbe(probe: unknown): string {
-  return probe === null ? 'no result' : JSON.stringify(probe);
+  if (probe === null) return 'no result';
+  const shown = JSON.stringify(probe);
+  return shown.length > 160 ? `${shown.slice(0, 159)}…` : shown;
 }
 
-/** Refusals made of fields `read` does not name: several keys, long strings, a list of them —
- *  `[]` when it names nearly all of {@link REFUSAL_PROBE_KEYS}. */
+/** `count` keys `read` does not name: {@link REFUSAL_PROBE_KEYS} first, then made-up ones — a
+ *  predicate that names every refusal key still gets its refusal probes (review #493). */
+function unreadKeys(read: ReadonlySet<string>, count: number): string[] {
+  const keys = REFUSAL_PROBE_KEYS.filter((key) => !read.has(key));
+  for (let i = 0; keys.length < count; i += 1) {
+    const key = `__nexttime_refusal_${i}__`;
+    if (!read.has(key)) keys.push(key);
+  }
+  return keys.slice(0, count);
+}
+
+/** Refusals made of fields `read` does not name: several keys, long strings, a list of them. */
 export function predicateRefusalProbes(read: ReadonlySet<string>): readonly unknown[] {
-  const [a, b, c, d] = REFUSAL_PROBE_KEYS.filter((key) => !read.has(key));
-  if (!a || !b || !c || !d) return [];
+  const [a, b, c, d] = unreadKeys(read, 4) as [string, string, string, string];
   const refusal = { [a]: PROBE_LONG_STRING, [b]: 1, [c]: false };
   const other = { [a]: 'refused', [b]: 2, [c]: { [d]: PROBE_LONG_STRING } };
   return [refusal, other, { [a]: PROBE_LONG_STRING, [b]: PROBE_LONG_STRING }, [refusal, other]];
 }
 
-/** Whether `predicate` holds on every value of `field` it can judge — at least two of them. */
-function holdsWhateverValue(predicate: Predicate, field: string): boolean {
-  let judged = 0;
-  for (const value of PREDICATE_FIELD_PROBE_VALUES) {
-    const { outcome } = evaluatePredicate(predicate, { [field]: value });
-    if (outcome === 'undetermined') continue;
-    if (outcome === 'unsatisfied') return false;
-    judged += 1;
-  }
-  return judged >= 2;
+/** What a place the predicate reads may hold in an answer that says no: nothing (missing, empty),
+ *  objects of fields `read` does not name (one, three, eight), lists of them, unrelated texts and
+ *  the refusal answers. */
+function placeProbeValues(read: ReadonlySet<string>): readonly unknown[] {
+  const keys = unreadKeys(read, 8);
+  const [a, b, c, d] = keys as [string, string, string, string];
+  const one = { [a]: false };
+  const refusal = { [a]: PROBE_LONG_STRING, [b]: 1, [c]: false };
+  const other = { [a]: 'refused', [b]: 2, [c]: { [d]: PROBE_LONG_STRING } };
+  const many = Object.fromEntries(keys.map((key, i) => [key, i % 2 === 0 ? 'refused' : i]));
+  return [
+    null,
+    {},
+    [],
+    one,
+    refusal,
+    other,
+    many,
+    [refusal],
+    [refusal, other, one],
+    ...PROBE_TEXTS,
+    ...PREDICATE_REFUSAL_ANSWERS,
+  ];
+}
+
+/**
+ * Judges `predicate` on results that differ from `{}` only at one place. A leaf that reads under
+ * none of the root fields above that place finds there what it finds in `{}` — field access on a
+ * list or a missing field is `null` either way — so only the leaves that may read there are judged
+ * again; the rest keep their judgement on `{}`. `roots` is {@link addPlacesRead}'s per leaf.
+ */
+function placeProber(
+  predicate: Predicate,
+  roots: ReadonlyMap<PredicateLeaf, ReadonlySet<string> | null>,
+): { judge(place: Place, probe: unknown): Truth; work(place: Place): number } {
+  const ignored: string[] = [];
+  const leaves = predicateLeaves(predicate);
+  const onEmpty = new Map(leaves.map((leaf) => [leaf, judgeLeaf(leaf, {}, ignored)]));
+  const reads = (leaf: PredicateLeaf, place: Place): boolean => {
+    const read = roots.get(leaf);
+    const [first] = place;
+    return read == null || typeof first !== 'object' || read.has(first.field);
+  };
+  return {
+    judge: (place, probe) =>
+      judge(predicate, (leaf) =>
+        reads(leaf, place) ? judgeLeaf(leaf, probe, ignored) : (onEmpty.get(leaf) ?? null),
+      ),
+    work: (place) =>
+      leaves.reduce((sum, leaf) => sum + (reads(leaf, place) ? leaf.path.length : 0), 0),
+  };
 }
 
 /** The problems that make `predicate` unfit to prove anything — `[]` when there are none. See
- *  the module comment. */
-export function lintPredicate(predicate: Predicate): readonly string[] {
+ *  the module comment. `budget`, when given, is shared with other predicates and spent from. */
+export function lintPredicate(
+  predicate: Predicate,
+  budget?: PredicateLintBudget,
+): readonly string[] {
   const problems: string[] = [];
   const read = new Set<string>();
+  const places = new Map<string, Place>();
+  const roots = new Map<PredicateLeaf, ReadonlySet<string> | null>();
+  let tooMany = false;
   for (const leaf of predicateLeaves(predicate)) {
     let ast: unknown;
     try {
@@ -395,22 +687,65 @@ export function lintPredicate(predicate: Predicate): readonly string[] {
         problems.push(`path "${leaf.path}": every branch of || and && must read a named field`);
         break;
       case 'field':
+        if (tooMany) break;
+        try {
+          roots.set(leaf, addPlacesRead(ast, places));
+        } catch (err) {
+          if (!(err instanceof TooManyPlaces)) throw err;
+          tooMany = true;
+        }
         break;
     }
   }
   if (problems.length > 0) return problems;
-  for (const probe of [...PREDICATE_EMPTY_PROBES, ...predicateRefusalProbes(read)]) {
-    if (evaluatePredicate(predicate, probe).outcome === 'satisfied') {
+  const refusedOn = (probe: unknown) =>
+    `the predicate holds on ${describeProbe(probe)} — it would pass without the observation showing the target`;
+  for (const probe of [
+    ...PREDICATE_EMPTY_PROBES,
+    ...predicateRefusalProbes(read),
+    ...PREDICATE_REFUSAL_ANSWERS,
+  ]) {
+    if (evaluatePredicate(predicate, probe).outcome === 'satisfied') return [refusedOn(probe)];
+  }
+  const onlyExists = predicateLeaves(predicate).every((leaf) => leaf.op === 'exists');
+  const values = onlyExists ? [] : placeProbeValues(read);
+  const prober = placeProber(predicate, roots);
+  const perPlace = values.length + PREDICATE_FIELD_PROBE_VALUES.length;
+  const work = [...places.values()].reduce((sum, place) => sum + prober.work(place) * perPlace, 0);
+  if (tooMany || work > MAX_PROBE_WORK) {
+    return [
+      'the predicate reads too many places in the result for the lint to check — test fewer fields',
+    ];
+  }
+  if (budget) {
+    if (work > budget.remaining) {
       return [
-        `the predicate holds on ${describeProbe(probe)} — it would pass without the observation showing the target`,
+        "the plan's predicates together read too many places for the lint to check — test fewer fields",
+      ];
+    }
+    budget.remaining -= work;
+  }
+  const [filler] = unreadKeys(read, 1) as [string];
+  for (const place of places.values()) {
+    let judged = 0;
+    for (const value of PREDICATE_FIELD_PROBE_VALUES) {
+      const truth = prober.judge(place, placed(place, value, filler));
+      if (truth === false) {
+        judged = 0;
+        break;
+      }
+      if (truth === true) judged += 1;
+    }
+    if (judged >= 2) {
+      return [
+        `the predicate holds whatever "${describePlace(place)}" is (empty, false, zero or unrelated) — it does not test its value`,
       ];
     }
   }
-  for (const field of read) {
-    if (holdsWhateverValue(predicate, field)) {
-      return [
-        `the predicate holds whatever "${field}" is (empty, false, zero or unrelated) — it does not test its value`,
-      ];
+  for (const place of places.values()) {
+    for (const value of values) {
+      const probe = placed(place, value, filler);
+      if (prober.judge(place, probe) === true) return [refusedOn(probe)];
     }
   }
   return problems;

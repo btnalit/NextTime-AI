@@ -4,7 +4,12 @@ import type { PoolClient } from 'pg';
 import { z } from 'zod';
 import { getGatekeeper, getPublishedOperation } from '../../governance/gatekeepers/index.js';
 import { findSuspectedSecrets, reviewObserveParams } from '../../governance/redaction/index.js';
-import { lintPredicate, predicateLiterals } from '../../substrate/epistemic/index.js';
+import {
+  PREDICATE_LINT_PLAN_WORK,
+  type PredicateLintBudget,
+  lintPredicate,
+  predicateLiterals,
+} from '../../substrate/epistemic/index.js';
 import {
   NO_OBSERVE_EXCLUSIONS,
   observeRefusal,
@@ -144,13 +149,20 @@ export function parsePlan(plan: unknown): GoalPlan {
     const cycle = findCycle(parsed.data.steps);
     if (cycle) problems.push(`the dependencies form a cycle: ${cycle.join(' -> ')}`);
   }
-  for (const step of parsed.data.steps) problems.push(...reconcileShapeProblems(step));
+  const lintBudget: PredicateLintBudget = { remaining: PREDICATE_LINT_PLAN_WORK };
+  for (const step of parsed.data.steps) {
+    problems.push(...reconcileShapeProblems(step, lintBudget));
+  }
   if (problems.length > 0) throw new GoalPlanValidationError(problems);
   return parsed.data;
 }
 
-/** A step's reconcile declarations: one per action identity, each predicate accepted by the lint. */
-function reconcileShapeProblems(step: PlanStep): readonly string[] {
+/** A step's reconcile declarations: one per action identity, each predicate accepted by the lint
+ *  (spending from the plan's `lintBudget`). */
+function reconcileShapeProblems(
+  step: PlanStep,
+  lintBudget: PredicateLintBudget,
+): readonly string[] {
   const problems: string[] = [];
   const declarations = step.reconcile ?? [];
   declarations.forEach((declaration, index) => {
@@ -162,7 +174,7 @@ function reconcileShapeProblems(step: PlanStep): readonly string[] {
         isDeepStrictEqual(other.action.params ?? {}, declaration.action.params ?? {}),
     );
     if (same !== index) problems.push(`${where}: declares the same action as reconcile[${same}]`);
-    for (const problem of lintPredicate(declaration.check.expect)) {
+    for (const problem of lintPredicate(declaration.check.expect, lintBudget)) {
       problems.push(`${where}: ${problem}`);
     }
     for (const problem of predicateCredentialProblems(declaration.check.expect)) {
