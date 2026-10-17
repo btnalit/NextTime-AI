@@ -543,6 +543,8 @@ function OperationReviewRow({
                   onConfirm={publish}
                   testId="wizard-review-reclassify-confirm"
                 >
+                  {/* Legacy 404: the change first, then what loosening it means. */}
+                  {changeItem ? <GovernanceChangeList items={[changeItem]} single /> : null}
                   {consequences.length > 0 ? (
                     <Notice tone="warn" testId="wizard-review-reclassify-loosens">
                       <ul className="stack-s" style={{ margin: 0, paddingLeft: '1.2em' }}>
@@ -552,7 +554,6 @@ function OperationReviewRow({
                       </ul>
                     </Notice>
                   ) : null}
-                  {changeItem ? <GovernanceChangeList items={[changeItem]} single /> : null}
                 </Confirm>
               </div>
             </div>
