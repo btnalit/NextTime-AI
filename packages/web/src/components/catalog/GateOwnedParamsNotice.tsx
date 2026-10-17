@@ -8,7 +8,7 @@ import { useId } from 'react';
 import { useCapability, useCapabilityList } from '../../hooks/useCapability.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
-import { useT } from '../../lib/i18n.js';
+import { sentenceGap, useT } from '../../lib/i18n.js';
 import {
   type GateOwnedParamsFix,
   gateOwnedParamsNextStep,
@@ -124,7 +124,7 @@ export function GateOwnedParamsNotice({
   const named = gateOwnedParamsText(params, t);
   // Legacy 278 (UX acceptance of #577): a draft that will never be published can leave the catalog.
   const discardLine =
-    t('', ' ') +
+    sentenceGap(t) +
     (canDiscard
       ? t(
           '不再需要的话，可以用下面的「丢弃」把它移出目录。',

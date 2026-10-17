@@ -144,7 +144,7 @@ export function PlatformModulesPage({ http }: PlatformModulesPageProps) {
         />
       ) : (
         <div className="table-scroll">
-          <table className="data-table" data-testid="modules-table">
+          <table className="data-table data-table-cards" data-testid="modules-table">
             <thead>
               <tr>
                 <th>{t('名称', 'Name')}</th>
@@ -198,18 +198,25 @@ function ModuleRow({
     <>
       <tr data-testid={`module-row-${module.name}`}>
         <td className="mono">{module.name}</td>
-        <td>
-          v{latest?.version ?? '—'}
-          {latest?.breaking ? (
-            <span className="text-3" data-testid={`module-breaking-${module.name}`}>
-              {' '}
-              · breaking
-            </span>
-          ) : null}
+        <td data-label={t('最新版本', 'Latest')}>
+          {/* One element, so the version and its breaking mark stay on one line in card mode. */}
+          <span>
+            v{latest?.version ?? '—'}
+            {latest?.breaking ? (
+              <span className="text-3" data-testid={`module-breaking-${module.name}`}>
+                {' '}
+                · breaking
+              </span>
+            ) : null}
+          </span>
         </td>
-        <td className="mono">{module.installedWorkspaceCount}</td>
-        <td className="mono">{module.newerAvailableCount}</td>
-        <td>
+        <td className="mono" data-label={t('已装到', 'Installed in')}>
+          {module.installedWorkspaceCount}
+        </td>
+        <td className="mono" data-label={t('有新版', 'Newer available')}>
+          {module.newerAvailableCount}
+        </td>
+        <td data-label={t('默认安装', 'Default')}>
           <input
             type="checkbox"
             checked={isDefault}
@@ -232,7 +239,7 @@ function ModuleRow({
         </td>
       </tr>
       {expanded ? (
-        <tr>
+        <tr data-expanded-detail="">
           <td colSpan={6}>
             <div className="stack-s" data-testid={`module-versions-${module.name}`}>
               {module.versions.map((version) => (

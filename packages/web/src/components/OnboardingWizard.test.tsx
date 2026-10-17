@@ -369,7 +369,9 @@ describe('OnboardingWizard', () => {
     const confirm = await screen.findByTestId('wizard-review-reclassify-confirm');
     expect(http.calls.some((c) => c.name === 'publish_operation')).toBe(false);
     expect(within(confirm).getByTestId('confirm-target').textContent).toBe('accept_s2_mcp_echo');
-    expect(confirm.textContent).toContain('模式 观察 → 执行');
+    // Legacy 400: the change is shown once, as the old → new list, without the name again.
+    expect(within(confirm).queryByTestId('confirm-impact')).toBeNull();
+    expect(confirm.textContent?.split('accept_s2_mcp_echo')).toHaveLength(2);
     expect(within(confirm).getByTestId('governance-diff-list-item').dataset.direction).toBe(
       'tightened',
     );

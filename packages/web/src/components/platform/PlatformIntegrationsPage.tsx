@@ -302,7 +302,7 @@ function ConnectorsTab({
         />
       ) : (
         <div className="table-scroll">
-          <table className="data-table" data-testid="connectors-table">
+          <table className="data-table data-table-cards" data-testid="connectors-table">
             <thead>
               <tr>
                 <th>{t('名称', 'Name')}</th>
@@ -388,10 +388,12 @@ function connectorModeDescriptionBody(
   );
 }
 
-/** The connector table's 类型 column: a packaged gate's, a generic kind, or one an administrator
- *  named for a system's gate-host instances (P1, `create_gate_instance`'s `connector`). */
+/** The connector table's 来源 column: a packaged gate's, a generic kind, or one an administrator
+ *  named for a system's gate-host instances (P1, `create_gate_instance`'s `connector`). Legacy 398:
+ *  「打包的门」, the console's word for a packaged gate elsewhere — 「预置」 read as the 模式
+ *  column's 「平台预置」 next to it, which means something else. */
 function connectorOriginLabel(connector: ConnectorWire, t: Translate): string {
-  if (connector.packaged) return t('预置', 'Packaged');
+  if (connector.packaged) return t('打包的门', 'Packaged gate');
   if (isGenericConnector(connector.name)) return t('通用', 'Generic');
   return t('门宿主', 'Gate host');
 }
@@ -423,9 +425,9 @@ function ConnectorRow({
     <>
       <tr data-testid={`connector-row-${connector.name}`}>
         <td className="mono">{connector.name}</td>
-        <td>{transportKindLabel(connector.kind, t)}</td>
-        <td>{connectorOriginLabel(connector, t)}</td>
-        <td>
+        <td data-label={t('种类', 'Kind')}>{transportKindLabel(connector.kind, t)}</td>
+        <td data-label={t('来源', 'Origin')}>{connectorOriginLabel(connector, t)}</td>
+        <td data-label={t('模式', 'Mode')}>
           <Confirm
             tier="medium"
             open={mode.modeConfirmOpen}
@@ -506,8 +508,10 @@ function ConnectorRow({
             </p>
           ) : null}
         </td>
-        <td className="mono">{connector.instanceCount}</td>
-        <td>
+        <td className="mono" data-label={t('实例数', 'Instances')}>
+          {connector.instanceCount}
+        </td>
+        <td data-label={t('工作区自接', 'Self-connected')}>
           {!isGenericConnector(connector.name) ? (
             // `create_connection` takes only the four generic kinds — no other connector has any.
             <span className="text-3">—</span>
@@ -529,7 +533,9 @@ function ConnectorRow({
             </Button>
           )}
         </td>
-        <td className="mono">{connector.operationCount}</td>
+        <td className="mono" data-label="Operation 数">
+          {connector.operationCount}
+        </td>
         <td>
           <Button
             variant="ghost"
@@ -542,7 +548,7 @@ function ConnectorRow({
         </td>
       </tr>
       {expanded ? (
-        <tr>
+        <tr data-expanded-detail="">
           <td colSpan={8}>
             <ConnectorDenyList http={http} connector={connector} onChanged={onChanged} />
           </td>
@@ -767,7 +773,7 @@ function GateInstancesTab({
         />
       ) : (
         <div className="table-scroll">
-          <table className="data-table" data-testid="gate-instances-table">
+          <table className="data-table data-table-cards" data-testid="gate-instances-table">
             <thead>
               <tr>
                 <th>{t('名称', 'Name')}</th>
@@ -840,9 +846,11 @@ function GateInstancesTab({
                       <span className="mono text-3">{row.gateId}</span>
                     </div>
                   </td>
-                  <td className="mono">{row.connector}</td>
-                  <td>{transportKindLabel(row.transportKind, t)}</td>
-                  <td>
+                  <td className="mono" data-label={t('接入包', 'Connector')}>
+                    {row.connector}
+                  </td>
+                  <td data-label={t('种类', 'Kind')}>{transportKindLabel(row.transportKind, t)}</td>
+                  <td data-label={t('状态', 'Status')}>
                     <StatusChip
                       machine="gateInstance"
                       status={deriveGateInstanceStatus(row)}
@@ -850,7 +858,7 @@ function GateInstancesTab({
                       testId="gate-instance-status"
                     />
                   </td>
-                  <td>
+                  <td data-label={t('健康', 'Health')}>
                     <StatusChip
                       machine="gateHealth"
                       status={row.health}
@@ -858,7 +866,7 @@ function GateInstancesTab({
                       testId="gate-instance-health"
                     />
                   </td>
-                  <td>
+                  <td data-label={t('最近心跳', 'Last seen')}>
                     {row.lastSeenAt === null ? (
                       t('从未', 'Never')
                     ) : (
@@ -867,8 +875,12 @@ function GateInstancesTab({
                       </time>
                     )}
                   </td>
-                  <td className="mono">{row.operationCount}</td>
-                  <td className="mono">{row.enabledWorkspaceCount}</td>
+                  <td className="mono" data-label="Operation 数">
+                    {row.operationCount}
+                  </td>
+                  <td className="mono" data-label={t('启用它的工作区数', 'Enabling workspaces')}>
+                    {row.enabledWorkspaceCount}
+                  </td>
                   <td>
                     {row.trust === 'vetted' ? (
                       <span className="tag" data-testid="gate-instance-vetted-badge">
@@ -1316,7 +1328,7 @@ function ExternalRuntimesTab({ http }: { readonly http: CapabilityCaller }) {
         />
       ) : (
         <div className="table-scroll">
-          <table className="data-table" data-testid="external-runtimes-table">
+          <table className="data-table data-table-cards" data-testid="external-runtimes-table">
             <thead>
               <tr>
                 <th>{t('工作区', 'Workspace')}</th>
@@ -1359,12 +1371,14 @@ function ExternalRuntimeRow({
   return (
     <tr data-testid={`external-runtime-row-${runtime.sessionId}`}>
       <td>{runtime.workspaceName}</td>
-      <td>{runtime.displayName ?? <span className="mono text-3">{runtime.principalId}</span>}</td>
-      <td>{runtime.sessionKind}</td>
-      <td>
+      <td data-label={t('所属成员', 'Member')}>
+        {runtime.displayName ?? <span className="mono text-3">{runtime.principalId}</span>}
+      </td>
+      <td data-label={t('会话种类', 'Session kind')}>{runtime.sessionKind}</td>
+      <td data-label={t('创建时间', 'Created')}>
         <time title={formatDateTime(runtime.createdAt)}>{formatRelative(runtime.createdAt)}</time>
       </td>
-      <td>
+      <td data-label={t('过期', 'Expires')}>
         {runtime.expiresAt === null ? (
           '—'
         ) : (

@@ -89,6 +89,13 @@ export function useLang(): LangContextValue {
  *  cannot call the hook itself (it takes `t` as a parameter from its component caller instead). */
 export type Translate = <T>(zh: T, en: T) => T;
 
+/** The gap between two sentences that are rendered as separate pieces (a sentence that only shows
+ *  sometimes, or one wrapped in its own element): Chinese runs sentences together, English puts a
+ *  space between them. Legacy 397: replaces the bare `t('', ' ')` spelled out at each join. */
+export function sentenceGap(t: Translate): string {
+  return t('', ' ');
+}
+
 /** `t(zh, en)` — picks the half matching the current language. Generic over `T` rather than fixed
  *  to `string` so the same function also picks between two `ReactNode`s (e.g. an icon + JSX
  *  fragment) without a separate `t.node(...)` variant. */

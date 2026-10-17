@@ -25,7 +25,6 @@ import { BLAST_RADIUS_TONES, OPERATION_MODE_TONES, labelText } from '../lib/stat
 import { GateOwnedParamsMark } from './connect/GateOwnedParams.js';
 import {
   GovernanceChangeList,
-  governanceChangeSummary,
   governanceConsequences,
   isLoosening,
 } from './connect/GovernanceChange.js';
@@ -256,7 +255,7 @@ function OnboardingWizardReviewBody({
           title={t('这个门没有导入任何 Operation', 'No operations imported for this gate')}
         />
       ) : (
-        <table className="data-table" data-testid="wizard-review-table">
+        <table className="data-table data-table-cards" data-testid="wizard-review-table">
           <thead>
             <tr>
               <th>{t('名称', 'Name')}</th>
@@ -399,16 +398,16 @@ function OperationReviewRow({
           <span className="mono">{actionKindTagText(row.name)}</span>
           <GateOwnedParamsMark params={gateOwnedParams} testId="wizard-review-held" />
         </td>
-        <td>
+        <td data-label={t('模式', 'Mode')}>
           <StatusChip machine="operationMode" status={row.mode} size="s" />
         </td>
-        <td>
+        <td data-label={t('影响范围', 'Blast radius')}>
           <StatusChip machine="blastRadius" status={row.blastRadius} size="s" />
         </td>
-        <td>
+        <td data-label={t('可自动批准', 'Auto-approvable')}>
           <StatusChip machine="autoApprovable" status={String(row.autoApprovable)} size="s" />
         </td>
-        <td>
+        <td data-label={t('参数 schema', 'Params schema')}>
           <details className="disclosure">
             <summary>{t('查看 schema', 'View schema')}</summary>
             <pre className="code-block">{prettyJsonVisible(row.paramsSchema)}</pre>
@@ -430,7 +429,7 @@ function OperationReviewRow({
         </td>
       </tr>
       {editing && !held ? (
-        <tr>
+        <tr data-expanded-detail="">
           <td colSpan={6}>
             <div className="stack-s" data-testid="wizard-review-reclassify-form">
               <Notice>
@@ -539,7 +538,6 @@ function OperationReviewRow({
                     'The classification decides whether this operation needs a person’s approval and a grant. Confirming publishes the new version in place of the one in effect.',
                   )}
                   target={actionKindTagText(row.name)}
-                  impact={changeItem ? [governanceChangeSummary(changeItem, t, false)] : []}
                   confirmLabel={t('发布', 'Publish')}
                   danger={changeItem !== null && isLoosening(changeItem.direction)}
                   onConfirm={publish}
@@ -554,7 +552,7 @@ function OperationReviewRow({
                       </ul>
                     </Notice>
                   ) : null}
-                  {changeItem ? <GovernanceChangeList items={[changeItem]} /> : null}
+                  {changeItem ? <GovernanceChangeList items={[changeItem]} single /> : null}
                 </Confirm>
               </div>
             </div>

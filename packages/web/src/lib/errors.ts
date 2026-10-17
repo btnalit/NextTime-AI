@@ -1,6 +1,6 @@
 import { PRINCIPAL_REFUSAL_REASON_VALUES, type PrincipalRefusalReason } from '@nexttime/shared';
 import { HttpError } from './http-client.js';
-import type { Translate } from './i18n.js';
+import { type Translate, sentenceGap } from './i18n.js';
 import { LlmAdminError, llmAdminErrorMessage } from './llm-admin.js';
 import { LocalizedError } from './localized-error.js';
 import { ownEntry } from './own.js';
@@ -722,7 +722,7 @@ export function withPlaintextTlsHint(
   t: Translate,
 ): string {
   if (!text || !PLAINTEXT_TLS.test(text)) return message;
-  return `${message}${t('', ' ')}${t(
+  return `${message}${sentenceGap(t)}${t(
     '常见原因：https 地址指到了只讲明文 HTTP 的端口。',
     'A common cause: an https address pointing at a port that only speaks plain HTTP.',
   )}`;

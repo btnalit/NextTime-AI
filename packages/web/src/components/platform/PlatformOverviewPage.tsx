@@ -10,7 +10,7 @@ import type { MeResult } from '../../lib/auth-api.js';
 import { actionLabel } from '../../lib/capability-labels.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatAuditActor, formatDateTime } from '../../lib/format.js';
-import { type Translate, useT } from '../../lib/i18n.js';
+import { type Translate, sentenceGap, useT } from '../../lib/i18n.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { isResidueWorkspace, residueWorkspacesHref } from '../../lib/platform-workspaces.js';
 import { type ProviderStatusKind, describeProviderHealth } from '../../lib/provider-status.js';
@@ -271,7 +271,7 @@ export function PlatformOverviewPage({ http, onKeyBound }: PlatformOverviewPageP
             `验收残留 ${residue.length} 个工作区待清除（已停用或已到期的临时工作区）。`,
             `${residue.length} workspace(s) of acceptance residue await purging (disabled, or ephemeral past expiry).`,
           )}
-          {t('', ' ')}
+          {sentenceGap(t)}
           <a href={residueWorkspacesHref()} data-testid="platform-residue-link">
             {t('去清理', 'Review and purge')}
           </a>

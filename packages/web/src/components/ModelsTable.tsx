@@ -26,7 +26,7 @@ export function ModelsTable({ models }: ModelsTableProps) {
     );
   }
   return (
-    <table className="data-table" data-testid="models-table">
+    <table className="data-table data-table-cards" data-testid="models-table">
       <thead>
         <tr>
           <th>{t('模型', 'Model')}</th>
@@ -39,11 +39,13 @@ export function ModelsTable({ models }: ModelsTableProps) {
         {models.map((row) => (
           <tr key={row.id}>
             <td className="mono">{row.model}</td>
-            <td>
+            <td data-label={t('供应商', 'Provider')}>
               <span className="tag">{row.provider}</span>
             </td>
-            <td className="mono text-3">{row.id}</td>
-            <td>
+            <td className="mono text-3" data-label={t('模型 ID', 'Model ID')}>
+              {row.id}
+            </td>
+            <td data-label={t('状态', 'Status')}>
               {/* No health from the kernel reads 状态未知 (review M1), never a blank. */}
               <ModelHealthTag model={row} showOk testId={`model-health-${row.id}`} />
             </td>

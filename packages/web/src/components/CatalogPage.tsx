@@ -71,7 +71,6 @@ import {
   GovernanceChangeList,
   firstPublishConsequence,
   firstPublishNeedsConfirm,
-  governanceChangeSummary,
   governanceConsequences,
   governanceFieldChanges,
   governanceFieldsText,
@@ -391,7 +390,6 @@ function PublishGovernanceConfirm({
         'This draft changes the classification of the version in effect — the classification decides whether it needs a person’s approval and a grant. Publishing replaces the current version.',
       )}
       target={actionKindTagText(row.name)}
-      impact={[governanceChangeSummary(item, t, false)]}
       confirmLabel={t('发布', 'Publish')}
       danger={isLoosening(change.direction)}
       onConfirm={onConfirm}
@@ -406,7 +404,7 @@ function PublishGovernanceConfirm({
           </ul>
         </Notice>
       ) : null}
-      <GovernanceChangeList items={[item]} />
+      <GovernanceChangeList items={[item]} single />
     </Confirm>
   );
 }
