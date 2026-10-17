@@ -46,8 +46,10 @@ import jmespath from 'jmespath';
  *        them, unrelated texts, the refusal answers. A gate's answer usually comes in a wrapper,
  *        so a shape test one level down (`length(result) > 0`, `length(keys(data)) > 1`,
  *        `merge(data, {}) != {}`, `type(result) == 'object'`) holds on `{result: {found: false}}`
- *        as well as on the effect. A predicate made of `exists` leaves only is not probed here:
- *        `exists status` holds on `{status: {…}}`, and that is all it says;
+ *        as well as on the effect. A predicate made only of `exists` on plain field paths is
+ *        not probed here: `exists status` and `exists data.id` hold on `{status: {…}}`, and that
+ *        is all they say. Any other path keeps the probes — `exists keys(data)[0]` measures
+ *        `data`, `exists items[0]` is `length(items) >= 1` (review #493);
  *      - and at each place, not on every value of {@link PREDICATE_FIELD_PROBE_VALUES} it can judge
  *        (at least two) — `length(items) >= 0` does.
  *      Refused on purpose, then: an absence (`length(items) == 0`, `found == false`,
@@ -475,6 +477,14 @@ function reach(node: PathNode): Reach {
   }
 }
 
+/** Whether `node` is a plain chain of named fields (`status`, `data.id`). */
+function isFieldChain(node: PathNode): boolean {
+  if (node.type === 'Field') return true;
+  if (node.type !== 'Subexpression') return false;
+  const children = childNodes(node);
+  return children.length === 2 && children.every(isFieldChain);
+}
+
 /** Adds to `places` every place `ast` (a leaf's path) reads, and every place on the way to one —
  *  `data` and `data.items` for `data.items`; the root itself is not one (the root probes cover
  *  it). Returns the root fields the leaf reads under — `null` when it reads under every one
@@ -652,6 +662,8 @@ export function lintPredicate(
   const places = new Map<string, Place>();
   const roots = new Map<PredicateLeaf, ReadonlySet<string> | null>();
   let tooMany = false;
+  // Whether every leaf is `exists` on a plain field chain — the one kind not probed at its places.
+  let onlyFieldExists = true;
   for (const leaf of predicateLeaves(predicate)) {
     let ast: unknown;
     try {
@@ -673,6 +685,7 @@ export function lintPredicate(
       continue;
     }
     for (const name of names) read.add(name);
+    if (leaf.op !== 'exists' || !isFieldChain(ast)) onlyFieldExists = false;
     switch (rootRead(ast)) {
       case 'none':
         problems.push(`path "${leaf.path}" reads nothing from the observation's result`);
@@ -707,8 +720,7 @@ export function lintPredicate(
   ]) {
     if (evaluatePredicate(predicate, probe).outcome === 'satisfied') return [refusedOn(probe)];
   }
-  const onlyExists = predicateLeaves(predicate).every((leaf) => leaf.op === 'exists');
-  const values = onlyExists ? [] : placeProbeValues(read);
+  const values = onlyFieldExists ? [] : placeProbeValues(read);
   const prober = placeProber(predicate, roots);
   const perPlace = values.length + PREDICATE_FIELD_PROBE_VALUES.length;
   const work = [...places.values()].reduce((sum, place) => sum + prober.work(place) * perPlace, 0);

@@ -380,6 +380,41 @@ describe('substrate/epistemic predicate (S11 GO3d)', () => {
       }
     });
 
+    it('exempts only exists on a plain field path from the place probes (review #493)', () => {
+      // Each measures a place or is a count: probed like any other leaf, and refused.
+      const measured: Predicate[] = [
+        { path: 'keys(data)[0]', op: 'exists' },
+        { path: 'values(result)[0]', op: 'exists' },
+        { path: 'to_array(result)[0]', op: 'exists' },
+        { path: 'not_null(result.id, result.error)', op: 'exists' },
+        { path: 'data.items[0]', op: 'exists' },
+        { path: 'data.items[-1]', op: 'exists' },
+        { path: 'items[*]', op: 'exists' },
+        {
+          any: [
+            { path: 'status', op: 'exists' },
+            { path: 'items[0]', op: 'exists' },
+          ],
+        },
+      ];
+      for (const predicate of measured) {
+        expect(lintPredicate(predicate), JSON.stringify(predicate)).toHaveLength(1);
+      }
+      const plain: Predicate[] = [
+        { path: 'status', op: 'exists' },
+        { path: 'data.id', op: 'exists' },
+        {
+          all: [
+            { path: 'id', op: 'exists' },
+            { path: 'spec.name', op: 'exists' },
+          ],
+        },
+      ];
+      for (const predicate of plain) {
+        expect(lintPredicate(predicate), JSON.stringify(predicate)).toEqual([]);
+      }
+    });
+
     it('refuses an absence and a text order on its own, and lets a test of a value carry them', () => {
       const refused: Predicate[] = [
         { path: 'length(items)', op: 'eq', value: 0 },
