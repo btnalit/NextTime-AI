@@ -41,6 +41,7 @@ import {
   DEFAULT_GOAL_ADVANCER_INTERVAL_MS,
   DEFAULT_GOAL_RECONCILE_INTERVAL_MS,
   type GoalAdvancerOptions,
+  type GoalCleanupCursor,
   markReconcileDue,
   registerGoalWakeConsumer,
   runGoalAdvancerTick,
@@ -992,10 +993,18 @@ export function createBackgroundServices(
           options.goalAdvancerIntervalMs ?? DEFAULT_GOAL_ADVANCER_INTERVAL_MS,
         );
         goalAdvancerTimer.unref?.();
+        // Legacy 364: the cleanup sweep goes on where the previous one stopped.
+        const goalCleanupCursor: GoalCleanupCursor = { after: null };
         goalReconcileTimer = setInterval(() => {
-          markReconcileDue(options.pool).catch(onGoalAdvancerError);
+          // The scan skips the runs the advancer stopped retrying (legacy 356): same limit.
+          markReconcileDue(options.pool, {
+            maxConsecutiveAdvanceFailures:
+              options.goalAdvancerOptions?.maxConsecutiveAdvanceFailures,
+          }).catch(onGoalAdvancerError);
           // S11 GO3a: a cancelled run's leftovers, on the same period.
-          sweepGoalCancelCleanup(goalDeps).catch(onGoalAdvancerError);
+          sweepGoalCancelCleanup(goalDeps, { cursor: goalCleanupCursor }).catch(
+            onGoalAdvancerError,
+          );
         }, options.goalReconcileIntervalMs ?? DEFAULT_GOAL_RECONCILE_INTERVAL_MS);
         goalReconcileTimer.unref?.();
       }

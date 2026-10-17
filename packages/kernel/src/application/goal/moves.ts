@@ -1,6 +1,7 @@
 import {
   GOAL_RUN_TRANSITIONS,
   type GoalRunEvent,
+  type GoalRunPauseAuthority,
   type GoalRunPauseReason,
   type GoalRunStatus,
   STEP_RUN_TRANSITIONS,
@@ -50,6 +51,9 @@ const FINAL_STEP_STATUSES: ReadonlySet<StepRunStatus> = new Set([
 export interface StepMove {
   readonly waitingReason?: StepRunWaitingReason;
   readonly failureCategory?: StepRunFailureCategory;
+  /** Required by `supersede`: the revision that removes the step — the GoalRun's current one
+   *  once the revision took effect (the step_runs guard checks it). */
+  readonly supersededInRevision?: number;
   readonly audit?: Record<string, unknown>;
 }
 
@@ -62,11 +66,15 @@ export async function moveStepRun(
   move: StepMove = {},
 ): Promise<StepRunRow> {
   const to = transition(STEP_RUN_TRANSITIONS, step.status, event);
+  if (to === 'superseded' && move.supersededInRevision === undefined) {
+    throw new Error(`superseding step run ${step.id} needs the revision that removes it`);
+  }
   const result = await client.query<StepRunDbRow>(
     `update step_runs
         set status = $3, waiting_reason = $4, failure_category = $5,
             attempt_count = attempt_count + $6, updated_at = now(),
-            ended_at = case when $7 then now() else null end
+            ended_at = case when $7 then now() else null end,
+            superseded_in_revision = coalesce($9, superseded_in_revision)
       where workspace_id = $1 and id = $2 and status = $8
       returning ${STEP_RUN_ROW_COLUMNS}`,
     [
@@ -78,6 +86,7 @@ export async function moveStepRun(
       event === 'start' ? 1 : 0,
       FINAL_STEP_STATUSES.has(to),
       step.status,
+      to === 'superseded' ? move.supersededInRevision : null,
     ],
   );
   const row = result.rows[0];
@@ -93,6 +102,7 @@ export async function moveStepRun(
       stepKey: step.stepKey,
       ...(to === 'waiting' ? { waitingReason: move.waitingReason } : {}),
       ...(to === 'failed' ? { failureCategory: move.failureCategory } : {}),
+      ...(to === 'superseded' ? { supersededInRevision: move.supersededInRevision } : {}),
       ...move.audit,
     },
   });
@@ -102,6 +112,9 @@ export async function moveStepRun(
 export interface GoalMove {
   /** Set exactly while paused (`goal_runs_pause_reason`): required by `pause`, cleared otherwise. */
   readonly pauseReason?: GoalRunPauseReason;
+  /** A person's `pause`: who paused and the authority it carries (goal/0004). Absent when the
+   *  advancer pauses; cleared by every move out of `paused`. */
+  readonly pausedBy?: { readonly principalId: string; readonly authority: GoalRunPauseAuthority };
   /** Only on `finish_cancel` (`goal_runs_cleanup_pending`). */
   readonly cleanupPending?: boolean;
   /** `now`: the run is due at once (a person resumed or cancelled it). Otherwise `next_tick_at`
@@ -125,7 +138,9 @@ export async function moveGoalRun(
     `update goal_runs
         set status = $3, pause_reason = $4, cleanup_pending = $5, updated_at = now(),
             ended_at = case when $6 then now() else ended_at end,
-            next_tick_at = case when $6 then null when $7 then now() else next_tick_at end
+            next_tick_at = case when $6 then null when $7 then now() else next_tick_at end,
+            paused_by = $9, paused_by_authority = $10,
+            advance_failures = case when $11 then 0 else advance_failures end
       where workspace_id = $1 and id = $2 and status = $8`,
     [
       goal.workspaceId,
@@ -136,6 +151,10 @@ export async function moveGoalRun(
       final,
       move.due === 'now',
       from,
+      to === 'paused' ? (move.pausedBy?.principalId ?? null) : null,
+      to === 'paused' ? (move.pausedBy?.authority ?? null) : null,
+      // A person's resume gives the run a fresh count of failed advances (legacy 356).
+      event === 'resume',
     ],
   );
   if ((result.rowCount ?? 0) === 0) throw new Error(`goal run ${goal.id} is no longer ${from}`);
@@ -144,7 +163,11 @@ export async function moveGoalRun(
     action: `goal_run.${event}`,
     goalRunId: goal.id,
     resultingStatus: to,
-    extraAuditPayload: { by: actor.by, ...move.audit },
+    extraAuditPayload: {
+      by: actor.by,
+      ...(to === 'paused' && move.pausedBy ? { pausedByAuthority: move.pausedBy.authority } : {}),
+      ...move.audit,
+    },
   });
   return to;
 }

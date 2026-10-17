@@ -84,8 +84,10 @@ export {
 export {
   type ExecutingStepAction,
   type StepActionOutcome,
+  type WithdrawableStepAction,
   listExecutingStepActions,
   listStepActionOutcomes,
+  lockWithdrawableStepActions,
   withdrawStepActions,
 } from './step-actions.js';
 

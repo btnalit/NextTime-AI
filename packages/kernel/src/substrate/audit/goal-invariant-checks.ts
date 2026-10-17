@@ -22,12 +22,20 @@ import type { PoolClient } from 'pg';
  * | I-G1 one Task per attempt | `tasks_step_attempt_uidx` missing or not a valid unique index; a StepRun whose attempt Tasks do not number exactly 1..`attempt_count`; a StepRun with more than one unfinished attempt Task at once (attempts are sequential, one layer of retry); an attempt Task with more than one WorkerRun (S11 GO2: the advancer's Tasks have no Task-internal retry, so a second run means a retry layer under the StepRun's) |
  * | I-G2 only current-plan steps advance | a guard trigger of `goal_runs` / `plan_revisions` / `step_runs` (goal/0001) or `tasks_goal_step_immutable` (task/0007) missing or not enabled; an unfinished StepRun (`pending` … `failed`, not superseded) whose definition is not in its GoalRun's current plan unchanged — dropped or redefined without being superseded; a finished one whose key the current plan redefines; a key of the current plan with no live StepRun while the GoalRun runs; an attempt Task started under a revision outside its StepRun's live window or under a revision never accepted; an accepted revision off the chain that `based_on_revision` walks back from the current one (newer than it, or skipped by it — I-G3); a revision on that chain that is not accepted |
  * | I-G6 budget | a `running` GoalRun past its wall-clock budget by more than the grace period; or over its token, step or revision budget with no Task of it still running and nothing finished for the grace period — the advancer checks budgets between steps, so a Task that overshoots mid-run is not counted until it ends |
- * | I-G9 only live steps act | `action_requests_status_guard` (governance/0021, the `withdrawn` guard) or `action_requests_step_run_immutable` (governance/0022) missing or not enabled; a request of a cancelled StepRun, or of a cancelling / cancelled GoalRun, still awaiting a decision or approved and queued (it is withdrawn in the transaction that cancels); a request of a cancelled StepRun that started executing after the step ended; a request created after its StepRun was superseded or cancelled; a request whose StepRun is not the one its Worker's Task runs for, or that records a StepRun with no Worker's Task behind it |
+ * | I-G9 only live steps act | `action_requests_status_guard` (governance/0021, the `withdrawn` guard) or `action_requests_step_run_immutable` (governance/0022) missing or not enabled; a request of a cancelled StepRun, or of a cancelling / cancelled GoalRun, or of a superseded StepRun that the superseding revision did not release (`plan_revisions.removals`, goal/0004), still awaiting a decision or approved and queued (it is withdrawn in the transaction that cancels or revises); a request of a cancelled StepRun, or of a superseded one not released, that started executing after the step ended; a request created after its StepRun was superseded or cancelled; a request whose StepRun is not the one its Worker's Task runs for, or that records a StepRun with no Worker's Task behind it |
  *
- * Not covered yet, on purpose: I-G9 for requests of a *superseded* step that are still pending or
- * started after supersession — "让它跑完" lets a person release some of them one by one (§4.8), and
- * that release (GO3) is what tells a legitimate one from a breach; the check grows with it.
+ * A request a person released when a revision let its step finish ("让它跑完", §4.8) is listed on
+ * that revision (`removals -> <stepKey> -> release`): it legitimately stays pending and may run
+ * after its step was superseded (S11 GO3b), so I-G9 counts the superseded step's other requests
+ * only.
  */
+
+/** A request `ar` of a superseded step `s` is one the superseding revision released (goal/0004). */
+const RELEASED_BY_REVISION = `exists (
+                   select 1 from plan_revisions pr
+                    where pr.workspace_id = s.workspace_id and pr.goal_run_id = s.goal_run_id
+                      and pr.revision = s.superseded_in_revision
+                      and coalesce(pr.removals -> s.step_key -> 'release', '[]'::jsonb) ? ar.id::text)`;
 
 interface ConditionRow {
   workspace_id: string;
@@ -398,16 +406,18 @@ export async function checkIG9(
                 join step_runs s on s.workspace_id = ar.workspace_id and s.id = ar.step_run_id
                 join goal_runs g on g.workspace_id = s.workspace_id and g.id = s.goal_run_id
                where ar.status in ('pending_approval', 'approved', 'auto_approved')
-                 and (s.status = 'cancelled' or g.status in ('cancelling', 'cancelled'))
+                 and (s.status = 'cancelled' or g.status in ('cancelling', 'cancelled')
+                      or (s.status = 'superseded' and not ${RELEASED_BY_REVISION}))
                order by ar.requested_at desc, ar.id desc`,
       },
       {
         label: 'ran-after-cancel',
         sql: `select ar.workspace_id, ar.id,
-                     'executing at ' || ar.executing_at || ', step cancelled at ' || s.ended_at as detail
+                     'executing at ' || ar.executing_at || ', step ' || s.status || ' at ' || s.ended_at as detail
                 from action_requests ar
                 join step_runs s on s.workspace_id = ar.workspace_id and s.id = ar.step_run_id
-               where s.status = 'cancelled'
+               where (s.status = 'cancelled'
+                      or (s.status = 'superseded' and not ${RELEASED_BY_REVISION}))
                  and ar.executing_at > s.ended_at
                order by ar.executing_at desc, ar.id desc`,
       },

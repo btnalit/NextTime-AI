@@ -1,11 +1,13 @@
-import type { GoalRunStatus, Role, StepRunStatus } from '@nexttime/shared';
+import type { GoalRunPauseAuthority, GoalRunStatus, Role, StepRunStatus } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { withdrawStepActions } from '../../governance/approval/index.js';
+import { listStepLiveTasks } from '../task/index.js';
 import { GOAL_CANCELLED_WITHDRAW_REASON } from './cancelling.js';
 import { type GoalMoveActor, moveGoalRun, moveStepRun } from './moves.js';
 import { samePlanEntry } from './plan.js';
 import { getPlanRevision, lockStepRuns, readStepActionEffect } from './reads.js';
 import { GoalRunNotFoundError, GoalRunStateError, lockGoalRun } from './service.js';
+import { recordGoalRunTransition } from './transition-log.js';
 import type { GoalRunRow, StepRunRow } from './types.js';
 
 /**
@@ -19,14 +21,26 @@ import type { GoalRunRow, StepRunRow } from './types.js';
  * alone: it lets the run spend and act again with the requester's authority (propose → authorize
  * → execute, §4.3), which nobody decides for them.
  *
+ * S11 GO3b (goal/0004): a pause records who paused and the authority it carries — `requester`
+ * (the requester, also when they are an owner too) or `owner` (a workspace owner pausing someone
+ * else's run). An owner's pause is a **hold**: the requester cannot resume the run until a
+ * workspace owner lifts the hold ({@link releaseGoalRunHold}); otherwise an owner's stop would be
+ * undone by the person it was meant to stop. The database refuses resuming a held run too.
+ *
  *   - {@link pauseGoalRun}: `running | verifying → paused(requested)`. No new attempt starts and
  *     no retry runs; attempts already running finish and are recorded, their requests still
- *     decided and run (cancel is what stops those).
- *   - {@link resumeGoalRun}: `paused → running`, due at once; the advance then checks the budget
- *     and the plan again (§4.8 "恢复时复查"). `retrySteps` names failed steps a person sends back
+ *     decided and run (cancel is what stops those). An owner pausing someone else's run that is
+ *     already paused — by the advancer or by its requester — places the hold on it (the run and
+ *     its pause reason stay as they are).
+ *   - {@link releaseGoalRunHold}: a workspace owner lifts the hold; the run stays paused, for the
+ *     requester to resume (or to revise, `revise.ts`, or cancel).
+ *   - {@link resumeGoalRun}: `paused → running`, due at once, unless a workspace owner holds the
+ *     run; the advance then checks the budget and the plan again (§4.8 "恢复时复查"), with a fresh
+ *     count of failed advances (legacy 356). `retrySteps` names failed steps a person sends back
  *     to `ready` — the "person's decision" retry of the StepRun table, past the attempt limit too —
- *     each only with no request of the step still in flight (I-G4) and still part of the current
- *     plan (I-G2).
+ *     each only with no request of the step still in flight (I-G4), none of its Tasks — the
+ *     attempt's nested child Tasks included — still running, and still part of the current plan
+ *     (I-G2).
  *   - {@link cancelGoalRun}: `running | paused | verifying → cancelling`, due at once. In the same
  *     transaction every step not yet ended is `cancelled` and every request of the run's steps that
  *     has not started is `withdrawn` (I-G9) — read under its row lock, so one the drainer started
@@ -83,20 +97,82 @@ function personOf(input: GoalControlInput): GoalMoveActor {
   return { principalId: input.actor.principalId, by: 'person' };
 }
 
+/** The authority a stop by `input.actor` carries on `goal`: the requester's own, or a workspace
+ *  owner's over someone else's run (`lockControlledRun` admitted nobody else). */
+function stopAuthority(goal: GoalRunRow, input: GoalControlInput): GoalRunPauseAuthority {
+  return goal.onBehalfOf === input.actor.principalId ? 'requester' : 'owner';
+}
+
 export async function pauseGoalRun(
   client: PoolClient,
   workspaceId: string,
   input: GoalControlInput,
 ): Promise<GoalControlResult> {
   const goal = await lockControlledRun(client, workspaceId, input, 'stop');
-  if (goal.status === 'paused') return { status: goal.status, changed: false };
+  const authority = stopAuthority(goal, input);
+  if (goal.status === 'paused') {
+    if (authority !== 'owner' || goal.pausedByAuthority === 'owner') {
+      return { status: goal.status, changed: false };
+    }
+    // Not a transition: the run stays paused with its reason; who paused changes to the owner
+    // (the guard allows exactly this while paused). `updated_at` stays the pause's time.
+    await client.query(
+      `update goal_runs set paused_by = $3, paused_by_authority = 'owner'
+        where workspace_id = $1 and id = $2 and status = 'paused'`,
+      [goal.workspaceId, goal.id, input.actor.principalId],
+    );
+    await recordGoalRunTransition(client, goal.workspaceId, {
+      actorPrincipalId: input.actor.principalId,
+      action: 'goal_run.hold',
+      goalRunId: goal.id,
+      resultingStatus: 'paused',
+      extraAuditPayload: {
+        by: 'person',
+        pauseReason: goal.pauseReason,
+        previouslyPausedBy: goal.pausedBy,
+        previousAuthority: goal.pausedByAuthority,
+      },
+    });
+    return { status: goal.status, changed: true };
+  }
   if (goal.status !== 'running' && goal.status !== 'verifying') {
     throw new GoalRunStateError(`goal run ${goal.id} is ${goal.status}; only a running run pauses`);
   }
   const status = await moveGoalRun(client, personOf(input), goal, goal.status, 'pause', {
     pauseReason: 'requested',
+    pausedBy: { principalId: input.actor.principalId, authority },
   });
   return { status, changed: true };
+}
+
+/** A workspace owner lifts the hold on a paused run (see the module doc comment). A run nobody
+ *  holds is left as it is (`changed: false`). */
+export async function releaseGoalRunHold(
+  client: PoolClient,
+  workspaceId: string,
+  input: GoalControlInput,
+): Promise<GoalControlResult> {
+  const goal = await lockGoalRun(client, workspaceId, input.goalRunId);
+  if (!goal) throw new GoalRunNotFoundError(input.goalRunId);
+  if (input.actor.role !== 'owner') {
+    throw new GoalRunStateError('only a workspace owner lifts a hold on a goal run');
+  }
+  if (goal.status !== 'paused' || goal.pausedByAuthority !== 'owner') {
+    return { status: goal.status, changed: false };
+  }
+  await client.query(
+    `update goal_runs set paused_by = null, paused_by_authority = null
+      where workspace_id = $1 and id = $2 and status = 'paused'`,
+    [goal.workspaceId, goal.id],
+  );
+  await recordGoalRunTransition(client, goal.workspaceId, {
+    actorPrincipalId: input.actor.principalId,
+    action: 'goal_run.release_hold',
+    goalRunId: goal.id,
+    resultingStatus: 'paused',
+    extraAuditPayload: { by: 'person', pauseReason: goal.pauseReason, heldBy: goal.pausedBy },
+  });
+  return { status: goal.status, changed: true };
 }
 
 export async function resumeGoalRun(
@@ -113,6 +189,11 @@ export async function resumeGoalRun(
   }
   if (goal.status !== 'paused') {
     throw new GoalRunStateError(`goal run ${goal.id} is ${goal.status}, not paused`);
+  }
+  if (goal.pausedByAuthority === 'owner') {
+    throw new GoalRunStateError(
+      `goal run ${goal.id}: a workspace owner holds it; it resumes once an owner lifts the hold`,
+    );
   }
   const actor = personOf(input);
   const steps = await lockStepRuns(client, workspaceId, goal.id);
@@ -137,14 +218,18 @@ export async function resumeGoalRun(
   return { status, changed: true, retriedStepRunIds: retried };
 }
 
-/** A person's retry runs no new attempt beside a request that may still run (I-G4) and only for a
+/** A person's retry runs no new attempt beside a request that may still run (I-G4) or a Task of the
+ *  step still running — a nested child Task outlives its caller's attempt (GO3b) — and only for a
  *  step still in the current plan, unchanged (I-G2). A step waiting on an outcome-unknown request
- *  is reconciled first (GO3b), never simply retried. */
+ *  is reconciled first (GO3c), never simply retried. */
 async function assertRetryable(
   client: PoolClient,
   goal: GoalRunRow,
   step: StepRunRow,
 ): Promise<void> {
+  if ((await listStepLiveTasks(client, goal.workspaceId, goal.id, step.id)).length > 0) {
+    throw new GoalRunStateError(`step ${step.stepKey}: a Task of it still runs`);
+  }
   const effect = await readStepActionEffect(client, goal.workspaceId, step.id);
   if (effect.kind === 'wait') {
     throw new GoalRunStateError(

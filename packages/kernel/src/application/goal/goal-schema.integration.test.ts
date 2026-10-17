@@ -336,6 +336,148 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
     });
 
+    describe('goal/0004 records who paused, failed advances and what a revision removed (S11 GO3b)', () => {
+      const guardOf = (file: string) => {
+        const text = readFileSync(path.join(MIGRATIONS_DIR, 'goal', file), 'utf8');
+        const start = text.indexOf('create or replace function goal_runs_status_guard()');
+        expect(start, file).toBeGreaterThanOrEqual(0);
+        const end = text.indexOf('\n$$;', start);
+        expect(end, file).toBeGreaterThan(start);
+        return text.slice(start, end).replace(/\s+/g, ' ');
+      };
+
+      it('is goal/0002’s goal_runs_status_guard with three more changeable columns and the hold rules, and nothing else changed', () => {
+        const before = guardOf('0002_goal_advancer.sql');
+        const after = guardOf('0004_goal_revision_hold.sql');
+        const holdStart = after.indexOf('-- goal/0004:');
+        const holdEnd = after.indexOf('if new.current_revision is distinct');
+        expect(holdStart).toBeGreaterThan(
+          after.indexOf('the pause reason is set by the transition'),
+        );
+        expect(holdEnd).toBeGreaterThan(holdStart);
+        const hold = after.slice(holdStart, holdEnd);
+        expect(hold).toContain('only to place an owner');
+        expect(hold).toContain('it resumes only after an owner lifts the hold');
+        expect(before).toContain("'ended_at', 'next_tick_at'])");
+        expect(after.replace(hold, '')).toBe(
+          before.replace(
+            "'ended_at', 'next_tick_at'])",
+            "'ended_at', 'next_tick_at', 'paused_by', 'paused_by_authority', 'advance_failures'])",
+          ),
+        );
+      });
+
+      it('names who paused only while paused, with an authority, and keeps the failure count non-negative', async () => {
+        const goalRunId = await runningGoal();
+        await expect(
+          setGoal(goalRunId, "paused_by = $3, paused_by_authority = 'requester'", [ownerId]),
+        ).rejects.toThrow(/goal_runs_paused_by/);
+        await expect(
+          setGoal(goalRunId, "status = 'paused', pause_reason = 'requested', paused_by = $3", [
+            ownerId,
+          ]),
+        ).rejects.toThrow(/goal_runs_paused_by/);
+        await expect(
+          setGoal(
+            goalRunId,
+            "status = 'paused', pause_reason = 'requested', paused_by = $3, paused_by_authority = 'admin'",
+            [ownerId],
+          ),
+        ).rejects.toThrow(/goal_runs_paused_by/);
+        await expect(
+          setGoal(
+            goalRunId,
+            "status = 'paused', pause_reason = 'requested', paused_by = $3, paused_by_authority = 'owner'",
+            [randomUUID()],
+          ),
+        ).rejects.toThrow(/goal_runs_paused_by_fk/);
+        await expect(setGoal(goalRunId, 'advance_failures = -1')).rejects.toThrow(
+          /goal_runs_advance_failures/,
+        );
+        await setGoal(goalRunId, 'advance_failures = 3');
+        await setGoal(goalRunId, 'advance_failures = 0');
+      });
+
+      it('a person’s pause stays theirs; an owner places a hold, only lifting it clears it, and a held run does not resume', async () => {
+        const goalRunId = await runningGoal();
+        await setGoal(
+          goalRunId,
+          "status = 'paused', pause_reason = 'requested', paused_by = $3, paused_by_authority = 'requester'",
+          [ownerId],
+        );
+        // The requester's own pause: cleared only by leaving `paused`.
+        await expect(
+          setGoal(goalRunId, 'paused_by = null, paused_by_authority = null'),
+        ).rejects.toThrow(
+          /while paused, who paused changes only to place an owner's hold or to lift it \(requester -> advancer\)/,
+        );
+        await setGoal(goalRunId, "paused_by_authority = 'owner'");
+        await expect(setGoal(goalRunId, "paused_by_authority = 'requester'")).rejects.toThrow(
+          /\(owner -> requester\)/,
+        );
+        await expect(
+          setGoal(
+            goalRunId,
+            "status = 'running', pause_reason = null, paused_by = null, paused_by_authority = null",
+          ),
+        ).rejects.toThrow(/a workspace owner holds this goal run/);
+        await setGoal(goalRunId, 'paused_by = null, paused_by_authority = null');
+        await expect(
+          setGoal(goalRunId, "paused_by = $3, paused_by_authority = 'requester'", [ownerId]),
+        ).rejects.toThrow(/\(advancer -> requester\)/);
+        await setGoal(goalRunId, "status = 'running', pause_reason = null");
+        // The advancer's pause names nobody; an owner may still place a hold on it.
+        await setGoal(goalRunId, "status = 'paused', pause_reason = 'needs_decision'");
+        await setGoal(goalRunId, "paused_by = $3, paused_by_authority = 'owner'", [ownerId]);
+        // Cancelling a held run is still a stop: leaving `paused` clears who paused.
+        await setGoal(
+          goalRunId,
+          "status = 'cancelling', pause_reason = null, paused_by = null, paused_by_authority = null",
+        );
+      });
+
+      it('a revision’s removals are an object, empty on revision 1, and never change', async () => {
+        const goalRunId = await proposeGoal();
+        await expect(
+          sql(
+            `insert into plan_revisions
+               (workspace_id, goal_run_id, revision, based_on_revision, plan, proposed_by, removals)
+             values ($1, $2, 2, 1, '{"steps":[{"key":"A"}]}'::jsonb, $3, '[]'::jsonb)`,
+            [workspaceId, goalRunId, ownerId],
+          ),
+        ).rejects.toThrow(/plan_revisions_removals/);
+        await expect(
+          sql(
+            `update plan_revisions set removals = '{"A":{"mode":"terminate"}}'::jsonb
+             where workspace_id = $1 and goal_run_id = $2 and revision = 1`,
+            [workspaceId, goalRunId],
+          ),
+        ).rejects.toThrow(/a revision's content never changes \(removals\)/);
+        await expect(
+          raw(
+            `update plan_revisions set removals = '{"A":{"mode":"terminate"}}'::jsonb
+             where workspace_id = $1 and goal_run_id = $2 and revision = 1`,
+            [workspaceId, goalRunId],
+          ),
+        ).rejects.toThrow(/plan_revisions_removals/);
+        await confirmGoal(goalRunId);
+        await sql(
+          `insert into plan_revisions
+             (workspace_id, goal_run_id, revision, based_on_revision, plan, proposed_by, removals)
+           values ($1, $2, 2, 1, '{"steps":[{"key":"B"}]}'::jsonb, $3,
+                   '{"A":{"mode":"let_finish"}}'::jsonb)`,
+          [workspaceId, goalRunId, ownerId],
+        );
+        await expect(
+          sql(
+            `update plan_revisions set removals = '{}'::jsonb
+             where workspace_id = $1 and goal_run_id = $2 and revision = 2`,
+            [workspaceId, goalRunId],
+          ),
+        ).rejects.toThrow(/a revision's content never changes \(removals\)/);
+      });
+    });
+
     describe('GoalRun', () => {
       it('walks proposed → running → paused → running → verifying → completed(achieved)', async () => {
         const goalRunId = await runningGoal();
