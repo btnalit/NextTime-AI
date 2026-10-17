@@ -853,6 +853,35 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
       expect(announced.statusCode).toBe(200);
 
+      // Review of #644: not only the first announce — while the instance is still undecided, one
+      // under any other connector (the generic one, a packaged gate's, a name nobody has) or of
+      // another kind is refused as well, and writes nothing: no re-filing, no new connector.
+      for (const other of [
+        { connector: 'mcp' },
+        { connector: packagedAnnounceBody.connector },
+        { connector: 'p1-brand-new-x' },
+        { connector: 'widgets', transportKind: 'http' },
+      ]) {
+        const refused = await announce({
+          ...hostedAnnounceBody('p1-widgets-a', endpoint),
+          ...other,
+        });
+        expect(refused.statusCode).toBe(409);
+        expect(refused.json().error.code).toBe('identity_mismatch');
+      }
+      const kept = await callAsAdmin<GateInstanceWire>('get_gate_instance', {
+        gateId: 'p1-widgets-a',
+      });
+      expect(kept).toMatchObject({
+        connector: 'widgets',
+        transportKind: 'mcp',
+        status: 'discovered',
+      });
+      const strayConnectors = await pool.query(
+        `select name from connectors where name = 'p1-brand-new-x'`,
+      );
+      expect(strayConnectors.rows).toEqual([]);
+
       await callAsAdmin('update_gate_instance', { gateId: 'p1-widgets-a', status: 'enabled' });
       const enabled = await callAsOwner<{ publishedOperationNames: string[] }>(
         'enable_gate_instance',

@@ -360,9 +360,11 @@ export interface AnnounceOutcome {
    *  `enabled` / `disabled` instance was recorded with — the stored values were kept. */
   readonly identityMismatch: boolean;
   readonly status: GateInstanceStatus;
-  /** P-B2a: a never-seen gate-host instance was announced with a connector / transport kind other
-   *  than its own definition — nothing was written (the host derives both from the definition, so
-   *  this can only be a stray or hostile announcement). */
+  /** P-B2a: a gate-host instance not yet decided (never seen, or seen and still `discovered`) was
+   *  announced with a connector / transport kind other than its own definition — nothing was
+   *  written (the host derives both from the definition, so this can only be a stray or hostile
+   *  announcement, or a gate host older than the kernel; review of #644). A decided one is frozen
+   *  instead (`identityMismatch`). */
   readonly rejected?: boolean;
   /** R-03 review: the announcing class does not own this instance — a packaged gate announced a
    *  gate-host (`hosted`) instance, or the gate host announced one that is not hosted (or does not
@@ -470,13 +472,17 @@ export async function upsertAnnouncement(
   // been seen (relevant when the administrator enabled / disabled it before the host spoke). Every
   // other decided instance is frozen from the decision on (P-B1).
   const neverSeenHosted = before?.hosted === true && before.last_seen_at === null;
+  const frozen = (decided || decidedAfterLost) && !neverSeenHosted;
   if (
-    neverSeenHosted &&
-    before !== undefined &&
+    before?.hosted === true &&
+    !frozen &&
     (before.connector !== body.connector || before.transport_kind !== body.transportKind)
   ) {
-    // Only the endpoint is unknown until the host speaks; kind and connector come from the
-    // administrator's definition and must match — refuse rather than let the first announce redefine them.
+    // Kind and connector come from the administrator's definition (`create_gate_instance`) and
+    // must match on every announcement the freeze does not already cover — the first one and any
+    // while the instance is still undecided (review of #644: only the first was checked, so a later
+    // one re-filed a `discovered` instance, and could even create a packaged connector for it).
+    // Refuse rather than let an announcement redefine them.
     return {
       gateId: body.gateId,
       created: false,
@@ -485,7 +491,6 @@ export async function upsertAnnouncement(
       rejected: true,
     };
   }
-  const frozen = (decided || decidedAfterLost) && !neverSeenHosted;
   const identityMismatch =
     frozen &&
     before !== undefined &&
@@ -773,7 +778,8 @@ export interface HostedGateDefinition {
   readonly gateId: string;
   readonly displayName: string;
   /** P1: what the host announces as the instance's connector — fixed by `create_gate_instance`;
-   *  the first announce must carry exactly this (`upsertAnnouncement`'s `rejected`). */
+   *  an announce carrying another is refused (`upsertAnnouncement`'s `rejected`) or, once the
+   *  instance is decided, kept out by the freeze (`identityMismatch`). */
   readonly connector: string;
   readonly status: GateInstanceStatus;
   readonly definition: GateHostedDefinitionWire;

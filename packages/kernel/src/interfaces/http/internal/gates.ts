@@ -116,7 +116,7 @@ export async function registerGatesRoutes(
     if (outcome.rejected) {
       request.log?.warn?.(
         { gateId: outcome.gateId, announcedConnector: parsed.data.connector },
-        'gates/announce: first announcement for a gate-host instance does not match its definition — refused',
+        'gates/announce: announcement for an undecided gate-host instance does not match its definition (connector / transport kind) — refused',
       );
       return reply.status(409).send({
         ok: false,
