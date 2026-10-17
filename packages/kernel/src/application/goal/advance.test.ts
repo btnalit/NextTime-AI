@@ -7,6 +7,7 @@ import { defaultRetryBackoffMs, judgeFinishedAttempt, refusalPause } from './adv
 const clear = { kind: 'clear' } as const;
 const refused = { kind: 'fail', failureCategory: 'action_refused' } as const;
 const notDelivered = { kind: 'fail', failureCategory: 'transient' } as const;
+const unconfirmed = { kind: 'fail', failureCategory: 'outcome_unknown' } as const;
 
 describe('judgeFinishedAttempt', () => {
   it('a completed attempt succeeds unless one of its requests failed it', () => {
@@ -23,11 +24,16 @@ describe('judgeFinishedAttempt', () => {
     ).toEqual({ kind: 'fail', category: 'transient', pause: null });
   });
 
-  it('a refused request decides a failed attempt before its failure reason does', () => {
-    for (const failureReason of ['worker_failed', 'no_result', 'budget_exhausted']) {
+  it('a refused request, or one found to have had no effect, decides a failed attempt before its failure reason does', () => {
+    for (const failureReason of ['worker_failed', 'no_result', 'budget_exhausted', 'timeout']) {
       expect(judgeFinishedAttempt({ status: 'failed', failureReason }, refused)).toEqual({
         kind: 'fail',
         category: 'action_refused',
+        pause: 'needs_decision',
+      });
+      expect(judgeFinishedAttempt({ status: 'failed', failureReason }, unconfirmed)).toEqual({
+        kind: 'fail',
+        category: 'outcome_unknown',
         pause: 'needs_decision',
       });
     }

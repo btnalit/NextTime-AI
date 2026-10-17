@@ -1768,7 +1768,11 @@ const governanceCapabilities = [
         // second one, whatever its status. Omitted, a default is derived from (sid|principal,
         // gatekeeperId, operation, stable params hash) so an unmarked retry still collapses onto
         // the same row — but only while that row is in flight (2026-10-02 review R-53, D-12):
-        // once it is terminal, an identical call is a new intent.
+        // once it is terminal, an identical call is a new intent. S11 GO3c (I-G4): from a Worker
+        // whose Task runs for a goal step, neither applies — the step's own identity (step,
+        // gatekeeperId, operation, stable params hash) replaces the key, across the step's
+        // attempts: an executed request, one still in flight, or one whose outcome is unknown is
+        // replayed, unless its requester decided to run it again.
         idempotencyKey: z.string().min(1).optional(),
       })
       .strict(),
@@ -1807,6 +1811,10 @@ const governanceCapabilities = [
           reason: z.string().optional(),
           // S11 GO1: on a `failed` outcome, its kind (`ActionRequestWireSchema.failureKind`).
           failureKind: ActionRequestFailureKindSchema.optional(),
+          // S11 GO3c: on a replayed `failed` + `outcome_unknown` row someone has reconciled, what
+          // was found (`ActionRequestWireSchema.reconciliation`) — `effect_seen`: it counts as
+          // executed.
+          reconciliation: wire.ActionRequestReconciliationWireSchema.optional(),
           outcomeInDoubt: wire.ActionRequestOutcomeInDoubtWireSchema.optional(),
           queuedBehind: wire.ActionRequestQueuedBehindWireSchema.optional(),
         })

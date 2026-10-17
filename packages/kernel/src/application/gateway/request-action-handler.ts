@@ -80,7 +80,7 @@ import {
   deriveDefaultIdempotencyKey,
   scopeExplicitIdempotencyKey,
 } from './action-executor.js';
-import { toWireActionRequest } from './action-request-wire.js';
+import { reconciliationOf, toWireActionRequest } from './action-request-wire.js';
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler, CapabilityHandlerResult } from './capability-handler.js';
 import { resolveGateTarget } from './gate-target.js';
@@ -182,7 +182,12 @@ import { writeObservedFacts } from './observed-facts.js';
  * in how long they dedupe (2026-10-02 review R-53, decision D-12): an explicit key replays its row
  * whatever its status — the caller asked for exactly-once; the derived default replays only a row
  * still in flight, so once that row is terminal (`executed`, `failed`, `rejected`, `expired`, …)
- * an identical call is a new intent with a new row. Because of this, the
+ * an identical call is a new intent with a new row. S11 GO3c (I-G4): a request from a Worker whose
+ * Task runs for a goal step carries the step's own identity instead of either key — (step,
+ * Gatekeeper, Operation, params digest), applied by `requestAction` from the `stepRunId` it is given
+ * — so a later attempt of the step replays what an earlier one already ran, and a request of an
+ * Operation the step holds an unreconciled outcome-unknown request of is refused (409, audited by
+ * dispatch.ts). Because of this, the
  * decision table above is necessary but not sufficient — `runGovernedRequest`'s switch handles
  * every `ActionRequestStatus`, not just the three a *fresh* resolution can produce, since a replay
  * can return a row already carried to any status (including terminal) by an earlier call.
@@ -1046,6 +1051,10 @@ async function runGovernedRequest(
             id: actionRequest.id,
             status,
             ...failureKind,
+            // S11 GO3c: what a person found about a row whose outcome was unknown — a step's later
+            // attempt is replayed this row (I-G4), and `effect_seen` tells its Worker the action
+            // counts as done.
+            ...reconciliationOf(actionRequest),
             ...outcome,
           };
         },

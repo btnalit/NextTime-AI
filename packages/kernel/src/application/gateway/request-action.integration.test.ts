@@ -14,7 +14,7 @@ import {
 import type { Transport, TransportInvokeResult } from '@nexttime/gatekeeper-base';
 import type { Operation, Role } from '@nexttime/shared';
 import type { FastifyInstance } from 'fastify';
-import { Client, type Pool } from 'pg';
+import { Client, type Pool, type PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
@@ -28,11 +28,13 @@ import {
 import { createOutboundTargetGuard } from '../../adapters/outbound-target/index.js';
 import { setAgentPolicy, setAgentProfile } from '../../governance/agent-profile/index.js';
 import {
+  ActionInDoubtError,
   ApprovalDrainer,
   NO_OPERATION_DEFINITION,
   approveActionRequest,
   getActionRequest,
   listStepActionOutcomes,
+  reconcileActionRequest,
   rejectActionRequest,
 } from '../../governance/approval/index.js';
 import {
@@ -1749,11 +1751,20 @@ describe.runIf(DATABASE_URL !== undefined)(
         getActionRequest(client, workspaceId, result.id),
       );
       expect(row?.stepRunId).toBe(seeded.stepRunId);
-      // What the advancer reads of the step: status and failure_kind, never the reason text.
+      // What the advancer reads of the step: status, failure_kind and what a person found (GO3c),
+      // never the reason text.
       const outcomes = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
         listStepActionOutcomes(client, workspaceId, seeded.stepRunId),
       );
-      expect(outcomes).toEqual([{ id: result.id, status: 'pending_approval', failureKind: null }]);
+      expect(outcomes).toEqual([
+        {
+          id: result.id,
+          status: 'pending_approval',
+          failureKind: null,
+          reconciliation: null,
+          reexecuted: false,
+        },
+      ]);
     });
 
     it('S11 GO3a (I-G9): a Worker of a cancelled goal step raises nothing — refused 409, no request written', async () => {
@@ -1803,6 +1814,127 @@ describe.runIf(DATABASE_URL !== undefined)(
           }),
         }),
       ]);
+    });
+
+    it('S11 GO3c (I-G4): a goal step makes each request once — a repeat, whatever key it names, replays it, also past an unknown outcome; another call of that Operation waits for the reconcile', async () => {
+      const seeded = await seedGoalStepWorker('running', 'running');
+      const workerCaller = (): ResolvedCaller => {
+        const now = Math.floor(Date.now() / 1000);
+        return {
+          channel: 'handle',
+          claims: {
+            ws: workspaceId,
+            sid: seeded.sessionId,
+            obo: ownerId,
+            scope: { capabilities: ['request_action'], resources: { gatekeeper: [gatekeeperId] } },
+            jti: randomUUID(),
+            iat: now,
+            exp: now + 600,
+          },
+        };
+      };
+      type Result = {
+        status: string;
+        id: string;
+        failureKind?: string;
+        reconciliation?: unknown;
+      };
+      const call = (params: Record<string, unknown>, idempotencyKey?: string) =>
+        dispatchCapability({ pool }, workerCaller(), 'request_action', {
+          gatekeeperId,
+          operation: AUTO_OP.name,
+          params,
+          ...(idempotencyKey ? { idempotencyKey } : {}),
+        }) as Promise<Result>;
+      const asOwner = <T>(fn: (client: PoolClient) => Promise<T>) =>
+        withWorkspace(pool, { workspaceId, principalId: ownerId }, fn);
+      // Earlier tests leave requests awaiting approval on this shared gate, and its queue stops at
+      // the first ("遇 pending 停"); this test's auto-approved calls must run now. Resolve them, as
+      // a person eventually would.
+      const waiting = await asOwner((client) =>
+        client.query<{ id: string }>(
+          `select id from action_requests
+            where workspace_id = $1 and gatekeeper_id = $2 and status = 'pending_approval'`,
+          [workspaceId, gatekeeperId],
+        ),
+      );
+      for (const row of waiting.rows) {
+        await asOwner((client) =>
+          rejectActionRequest(client, workspaceId, {
+            actionRequestId: row.id,
+            approverPrincipalId: ownerId,
+            approverRole: 'owner',
+          }),
+        );
+      }
+      const calls = () => transport.calls[AUTO_OP.name] ?? 0;
+      const before = calls();
+      // The gate's exec timeout kills the call: the outcome is unknown (R-51).
+      const inDoubt = { gateTimeout: true, marker: randomUUID() };
+
+      const first = await call(inDoubt, `made-up-${randomUUID()}`);
+      expect(first).toMatchObject({ status: 'failed', failureKind: 'outcome_unknown' });
+      expect(calls()).toBe(before + 1);
+
+      // The same intent again — under another key the model made up, or none (a later attempt of
+      // the step is a new Worker session): the same request, not run again.
+      await expect(call(inDoubt, `made-up-${randomUUID()}`)).resolves.toMatchObject({
+        id: first.id,
+        status: 'failed',
+        failureKind: 'outcome_unknown',
+      });
+      await expect(call(inDoubt)).resolves.toMatchObject({ id: first.id });
+      expect(calls()).toBe(before + 1);
+
+      // Another call of that Operation could repeat the effect: refused until a person checks, and
+      // the refusal is audited against the step.
+      await expect(call({ qty: 9 })).rejects.toBeInstanceOf(ActionInDoubtError);
+      expect(calls()).toBe(before + 1);
+      const refusals = await asOwner((client) =>
+        queryAudit(client, workspaceId, {
+          resourceType: 'step_run',
+          resourceId: seeded.stepRunId,
+          action: 'request_action',
+        }),
+      );
+      expect(refusals.map((row) => row.payload)).toContainEqual(
+        expect.objectContaining({
+          outcome: 'refused',
+          refusal: { code: 'action_in_doubt', status: 409, inDoubtActionRequestId: first.id },
+        }),
+      );
+
+      // The requester finds no effect: the Operation is free again. The same request still
+      // replays, now with the finding — nothing runs it again without the requester's decision.
+      await asOwner((client) =>
+        reconcileActionRequest(client, workspaceId, {
+          actionRequestId: first.id,
+          deciderPrincipalId: ownerId,
+          verdict: 'effect_absent',
+        }),
+      );
+      await expect(call({ qty: 9 })).resolves.toMatchObject({ status: 'executed' });
+      await expect(call(inDoubt)).resolves.toMatchObject({
+        id: first.id,
+        status: 'failed',
+        reconciliation: { verdict: 'effect_absent', reexecute: false },
+      });
+      expect(calls()).toBe(before + 2);
+
+      // The requester decides to run it again: the next call is a new request, run anew.
+      await asOwner((client) =>
+        reconcileActionRequest(client, workspaceId, {
+          actionRequestId: first.id,
+          deciderPrincipalId: ownerId,
+          reexecute: true,
+        }),
+      );
+      const rerun = await call(inDoubt);
+      expect(rerun.id).not.toBe(first.id);
+      expect(rerun).toMatchObject({ status: 'failed', failureKind: 'outcome_unknown' });
+      expect(calls()).toBe(before + 3);
+      await expect(call(inDoubt)).resolves.toMatchObject({ id: rerun.id });
+      expect(calls()).toBe(before + 3);
     });
 
     // Legacy 232: a name that names nothing on the gate used to become a `pending_approval` row

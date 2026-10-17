@@ -434,6 +434,26 @@
             }
           ]
         },
+        "reconciliation": {
+          "additionalProperties": false,
+          "properties": {
+            "reexecute": {
+              "type": "boolean"
+            },
+            "verdict": {
+              "enum": [
+                "effect_seen",
+                "effect_absent"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "verdict",
+            "reexecute"
+          ],
+          "type": "object"
+        },
         "requestedAt": {
           "type": "string"
         },
@@ -6196,6 +6216,26 @@
             }
           ]
         },
+        "reconciliation": {
+          "additionalProperties": false,
+          "properties": {
+            "reexecute": {
+              "type": "boolean"
+            },
+            "verdict": {
+              "enum": [
+                "effect_seen",
+                "effect_absent"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "verdict",
+            "reexecute"
+          ],
+          "type": "object"
+        },
         "requestedAt": {
           "type": "string"
         },
@@ -9966,6 +10006,26 @@
                   }
                 ]
               },
+              "reconciliation": {
+                "additionalProperties": false,
+                "properties": {
+                  "reexecute": {
+                    "type": "boolean"
+                  },
+                  "verdict": {
+                    "enum": [
+                      "effect_seen",
+                      "effect_absent"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "verdict",
+                  "reexecute"
+                ],
+                "type": "object"
+              },
               "requestedAt": {
                 "type": "string"
               },
@@ -13007,6 +13067,26 @@
                     "type": "null"
                   }
                 ]
+              },
+              "reconciliation": {
+                "additionalProperties": false,
+                "properties": {
+                  "reexecute": {
+                    "type": "boolean"
+                  },
+                  "verdict": {
+                    "enum": [
+                      "effect_seen",
+                      "effect_absent"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "verdict",
+                  "reexecute"
+                ],
+                "type": "object"
               },
               "requestedAt": {
                 "type": "string"
@@ -19836,6 +19916,26 @@
             }
           ]
         },
+        "reconciliation": {
+          "additionalProperties": false,
+          "properties": {
+            "reexecute": {
+              "type": "boolean"
+            },
+            "verdict": {
+              "enum": [
+                "effect_seen",
+                "effect_absent"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "verdict",
+            "reexecute"
+          ],
+          "type": "object"
+        },
         "requestedAt": {
           "type": "string"
         },
@@ -20879,6 +20979,26 @@
                 }
               ]
             },
+            "reconciliation": {
+              "additionalProperties": false,
+              "properties": {
+                "reexecute": {
+                  "type": "boolean"
+                },
+                "verdict": {
+                  "enum": [
+                    "effect_seen",
+                    "effect_absent"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "verdict",
+                "reexecute"
+              ],
+              "type": "object"
+            },
             "requestedAt": {
               "type": "string"
             },
@@ -21005,6 +21125,26 @@
             },
             "reason": {
               "type": "string"
+            },
+            "reconciliation": {
+              "additionalProperties": false,
+              "properties": {
+                "reexecute": {
+                  "type": "boolean"
+                },
+                "verdict": {
+                  "enum": [
+                    "effect_seen",
+                    "effect_absent"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "verdict",
+                "reexecute"
+              ],
+              "type": "object"
             },
             "status": {
               "enum": [

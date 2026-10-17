@@ -48,6 +48,9 @@
  */
 
 export {
+  ActionInDoubtError,
+  ActionReconciliationForbiddenError,
+  ActionReconciliationStateError,
   ActionRequestConcurrentTransitionError,
   ActionRequestNotFoundError,
   ApprovalReasonRequiredError,
@@ -84,9 +87,11 @@ export {
 export {
   type ExecutingStepAction,
   type StepActionOutcome,
+  type UnresolvedStepAction,
   type WithdrawableStepAction,
   listExecutingStepActions,
   listStepActionOutcomes,
+  listUnresolvedStepActions,
   lockWithdrawableStepActions,
   withdrawStepActions,
 } from './step-actions.js';
@@ -111,7 +116,18 @@ export {
 
 export { SHOWN_REASON_MAX, shownAuditReason } from './shown-reason.js';
 
-export { type RequestActionInput, requestAction } from './request-action.js';
+export {
+  type RequestActionInput,
+  STEP_IDEMPOTENCY_KEY_PREFIX,
+  requestAction,
+} from './request-action.js';
+
+export {
+  RECONCILIATION_NOTE_MAX,
+  type ReconcileActionRequestInput,
+  type ReconcileActionRequestResult,
+  reconcileActionRequest,
+} from './reconcile.js';
 
 export {
   type DecideActionRequestInput,
