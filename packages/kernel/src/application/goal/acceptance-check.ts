@@ -3,6 +3,7 @@ import { type PoolLike, withWorkspace } from '../../adapters/db/pool.js';
 import type { PredicateOutcome } from '../../substrate/epistemic/index.js';
 import {
   type AcceptanceCheckRow,
+  FACT_NOT_OBSERVED,
   claimAcceptanceCheck,
   deferAcceptanceCheck,
   lockAcceptanceCheck,
@@ -11,6 +12,7 @@ import {
   supersedePendingStepAcceptanceChecks,
 } from './acceptance-checks.js';
 import { markGoalRunDue } from './advancer.js';
+import { judgeFact, prepareFactCheck, readFactEvidence } from './fact-check.js';
 import {
   type PlatformObservationAnswer,
   callPlatformObservation,
@@ -75,6 +77,19 @@ import { lockGoalRun } from './service.js';
  * transaction (`moves.ts`); rows left pending otherwise are superseded here without a call. Unlike
  * the goal's, the run's wall clock keeps running while a step is verified: the other steps may
  * still be working.
+ *
+ * **A fact check** (S11 GO4c, `fact_predicate`, the goal's or a step's) is claimed, fenced and
+ * settled the same way, but calls no gate: under the settle's locks it reads, as the requester,
+ * the Fact the check may rest on (`fact-check.ts`: of the Link it names, observed since the round
+ * opened and not by this goal's own doing — the database's `goal_fact_admissible`, which also holds
+ * a passed row to it) and judges its properties. Satisfied → `passed` on that Fact. Seen but not
+ * satisfied → tried again (the Fact may change), and at the last attempt `failed` on the latest
+ * Fact seen. Nothing that may serve as evidence → tried again (an observation may still come), and
+ * at the last attempt `unavailable` (`fact_not_observed`) — or `failed` when an earlier attempt saw
+ * a Fact that did not satisfy it. Refused (the predicate or the Objects it names no longer pass the
+ * review, the requester may no longer read Facts) → `unavailable` at once. "Could not see" and
+ * "saw, and it was not so" never read alike: the row's status, its `last_error`, the step's
+ * `waiting(acceptance_unavailable)` against `failed(verification_failed)`, and the audit say which.
  */
 
 /** How often the composition root runs {@link runAcceptanceCheckTick}. */
@@ -148,9 +163,9 @@ export type AcceptanceCheckOutcome =
   /** Not claimed (another kernel has it, or it is no longer due), or the claim was lost. */
   | 'skipped';
 
-/** Pending observations of a verifying run's latest round, and of the latest round of a step
- *  waiting on its acceptance in a running run, that are due and not leased; and pending rows whose
- *  round ended (any kind) — oldest first. */
+/** Pending checks the platform makes (observations, fact checks) of a verifying run's latest round,
+ *  and of the latest round of a step waiting on its acceptance in a running run, that are due and
+ *  not leased; and pending rows whose round ended (any kind) — oldest first. */
 export async function listDueAcceptanceChecks(
   pool: PoolLike,
   limit = DEFAULT_ACCEPTANCE_CHECK_BATCH,
@@ -173,7 +188,7 @@ export async function listDueAcceptanceChecks(
            join goal_runs g on g.workspace_id = c.workspace_id and g.id = c.goal_run_id
           where c.status = 'pending'
             and (g.status <> 'verifying'
-                 or (c.kind = 'observe_predicate'
+                 or (c.kind in ('observe_predicate', 'fact_predicate')
                      and c.next_attempt_at <= now()
                      and (c.lease_until is null or c.lease_until <= now())
                      and c.round = (select max(m.round) from goal_acceptance_checks m
@@ -254,7 +269,9 @@ type Settlement =
   /** Nothing a retry could change. */
   | { readonly kind: 'unavailable'; readonly code: string; readonly error?: string | null }
   /** No answer: tried again while the caps allow. */
-  | { readonly kind: 'no_answer'; readonly code: string; readonly error: string | null };
+  | { readonly kind: 'no_answer'; readonly code: string; readonly error: string | null }
+  /** A fact check: the Fact is read and judged under the settle's locks. */
+  | { readonly kind: 'fact' };
 
 /** One row — see the module comment. */
 export async function runAcceptanceCheck(
@@ -269,7 +286,7 @@ export async function runAcceptanceCheck(
   const claimed = await withWorkspace(deps.pool, context, (client) =>
     claimAcceptanceCheck(client, due.workspaceId, due, leaseMs),
   );
-  if (!claimed?.observationCheck) return 'skipped';
+  if (!claimed || (!claimed.observationCheck && !claimed.factCheck)) return 'skipped';
   if (claimed.attempts > maxAttempts) {
     // Earlier attempts lost their lease without settling (a kernel died mid-call): no attempt is
     // left, so this one settles on what the row has — its latest Observation, or none.
@@ -280,6 +297,7 @@ export async function runAcceptanceCheck(
     });
   }
 
+  if (!claimed.observationCheck) return settle(deps, due, claimed, { kind: 'fact' });
   const check = claimed.observationCheck;
   const prepared = await withWorkspace(deps.pool, context, (client) =>
     preparePlatformObservation(client, due.workspaceId, due.requesterId, check),
@@ -416,8 +434,9 @@ async function settle(
           );
           return 'retry';
         }
-        // The last attempt: what an earlier one observed, if any, is what the check saw.
-        const status = check.observationId !== null ? 'failed' : 'unavailable';
+        // The last attempt: what an earlier one saw, if any, is what the check saw.
+        const status =
+          check.observationId !== null || check.factId !== null ? 'failed' : 'unavailable';
         await settleAcceptanceCheck(
           client,
           ws,
@@ -427,6 +446,9 @@ async function settle(
           settlement.error,
         );
         outcome = status;
+      } else if (settlement.kind === 'fact') {
+        outcome = await judgeFactCheck(client, due, check, retryDelayMs);
+        if (outcome === 'retry') return outcome;
       } else {
         outcome = await recordObservation(client, due, check, settlement, retryDelayMs);
         if (outcome === 'retry') return outcome;
@@ -517,6 +539,97 @@ async function recordObservation(
     ws,
     check,
     { status: 'failed', observationId, lastError: unmetCode(evaluation.outcome) },
+    due.requesterId,
+  );
+  return 'failed';
+}
+
+/** A fact check's attempt, under the settle's locks — see the module comment. */
+async function judgeFactCheck(
+  client: PoolClient,
+  due: DueAcceptanceCheck,
+  check: AcceptanceCheckRow,
+  retryDelayMs: number | null,
+): Promise<'passed' | 'failed' | 'unavailable' | 'retry'> {
+  const ws = due.workspaceId;
+  const fact = check.factCheck;
+  if (!fact) throw new Error('judgeFactCheck: an observation is not judged on a Fact');
+  const refusal = await prepareFactCheck(client, ws, due.requesterId, fact);
+  if (refusal) {
+    await settleAcceptanceCheck(
+      client,
+      ws,
+      check,
+      { status: 'unavailable', lastError: refusal },
+      due.requesterId,
+    );
+    return 'unavailable';
+  }
+  const evidence = await readFactEvidence(client, ws, {
+    goalRunId: due.goalRunId,
+    fact,
+    since: check.createdAt,
+  });
+  if (!evidence) {
+    if (retryDelayMs !== null) {
+      await deferAcceptanceCheck(
+        client,
+        ws,
+        check,
+        { delayMs: retryDelayMs, lastError: FACT_NOT_OBSERVED },
+        due.requesterId,
+      );
+      return 'retry';
+    }
+    // The last attempt: a Fact an earlier one saw, if any, is what the check saw.
+    const status = check.factId !== null ? 'failed' : 'unavailable';
+    await settleAcceptanceCheck(
+      client,
+      ws,
+      check,
+      { status, lastError: FACT_NOT_OBSERVED },
+      due.requesterId,
+    );
+    return status;
+  }
+
+  const evaluation = judgeFact(fact, evidence);
+  const detail = {
+    evaluation: {
+      outcome: evaluation.outcome,
+      ...(evaluation.undetermined.length > 0 ? { undetermined: evaluation.undetermined } : {}),
+    },
+  };
+  if (evaluation.outcome === 'satisfied') {
+    await settleAcceptanceCheck(
+      client,
+      ws,
+      check,
+      { status: 'passed', factId: evidence.factId, detail },
+      due.requesterId,
+    );
+    return 'passed';
+  }
+  if (retryDelayMs !== null) {
+    await deferAcceptanceCheck(
+      client,
+      ws,
+      check,
+      {
+        delayMs: retryDelayMs,
+        lastError: unmetCode(evaluation.outcome),
+        factId: evidence.factId,
+        detail,
+      },
+      due.requesterId,
+    );
+    return 'retry';
+  }
+  await settleAcceptanceCheck(
+    client,
+    ws,
+    check,
+    { status: 'failed', factId: evidence.factId, lastError: unmetCode(evaluation.outcome), detail },
     due.requesterId,
   );
   return 'failed';

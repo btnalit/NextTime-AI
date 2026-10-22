@@ -22,7 +22,7 @@ import {
   startActionRequestExecution,
 } from '../../governance/approval/index.js';
 import { registerSource, startActivity } from '../../substrate/epistemic/index.js';
-import { getGoalRun, listStepRuns, readStepActionEffect } from './index.js';
+import { IMPLICIT_CONFIRM_KEY, getGoalRun, listStepRuns, readStepActionEffect } from './index.js';
 
 /**
  * application/goal — goal-schema.integration (S11 GO1, migrations/goal/0001, task/0007,
@@ -61,15 +61,41 @@ describe.runIf(DATABASE_URL !== undefined)(
     const BUDGET_COLUMNS =
       'budget_max_tokens, budget_max_steps, budget_max_revisions, budget_max_wall_clock_seconds';
 
-    /** A `proposed` GoalRun with plan revision 1 (`steps`) proposed. */
-    async function proposeGoal(steps: readonly string[] = ['A', 'B']): Promise<string> {
+    const STATEMENT = 'ship the report';
+    const OBSERVE = {
+      gatekeeperId: randomUUID(),
+      operation: 'svc.status',
+      params: { name: 'web' },
+      expect: { path: 'state', op: 'eq', value: 'running' },
+    };
+    const CONFIRM_PROMPT = 'Is the report out?';
+    type DeclaredCheck = Readonly<Record<string, unknown>>;
+    const observeCheck = (key: string): DeclaredCheck => ({
+      kind: 'observe_predicate',
+      key,
+      check: OBSERVE,
+    });
+    const confirmCheck = (key: string): DeclaredCheck => ({
+      kind: 'requester_confirm',
+      key,
+      prompt: CONFIRM_PROMPT,
+    });
+    /** The goal's acceptance checks a test plan declares unless it says otherwise: `up`, the one
+     *  `passRound` passes (goal/0007 binds a goal's checks to its plan). */
+    const DECLARED: readonly DeclaredCheck[] = [observeCheck('up')];
+
+    /** A `proposed` GoalRun with plan revision 1 (`steps`, declaring `acceptance`) proposed. */
+    async function proposeGoal(
+      steps: readonly string[] = ['A', 'B'],
+      acceptance: readonly DeclaredCheck[] = DECLARED,
+    ): Promise<string> {
       const goal = await sql(
         `insert into goal_runs (workspace_id, on_behalf_of, statement, ${BUDGET_COLUMNS})
-         values ($1, $2, 'ship the report', 100000, 10, 3, 3600) returning id`,
-        [workspaceId, ownerId],
+         values ($1, $2, $3, 100000, 10, 3, 3600) returning id`,
+        [workspaceId, ownerId, STATEMENT],
       );
       const goalRunId = goal.rows[0]?.id as string;
-      await proposeRevision(goalRunId, 1, null, steps);
+      await proposeRevision(goalRunId, 1, null, steps, acceptance);
       return goalRunId;
     }
 
@@ -78,9 +104,11 @@ describe.runIf(DATABASE_URL !== undefined)(
       revision: number,
       basedOn: number | null,
       steps: readonly (string | Record<string, unknown>)[],
+      acceptance: readonly DeclaredCheck[] = DECLARED,
     ): Promise<void> {
       const plan = {
         steps: steps.map((step) => (typeof step === 'string' ? { key: step } : step)),
+        ...(acceptance.length > 0 ? { acceptance } : {}),
       };
       await sql(
         `insert into plan_revisions
@@ -135,8 +163,11 @@ describe.runIf(DATABASE_URL !== undefined)(
       return result.rows[0]?.id as string;
     }
 
-    async function runningGoal(steps: readonly string[] = ['A', 'B']): Promise<string> {
-      const goalRunId = await proposeGoal(steps);
+    async function runningGoal(
+      steps: readonly string[] = ['A', 'B'],
+      acceptance: readonly DeclaredCheck[] = DECLARED,
+    ): Promise<string> {
+      const goalRunId = await proposeGoal(steps, acceptance);
       await confirmGoal(goalRunId, steps);
       return goalRunId;
     }
@@ -181,13 +212,9 @@ describe.runIf(DATABASE_URL !== undefined)(
       return evidenceRefs;
     }
 
-    const OBSERVE = {
-      gatekeeperId: randomUUID(),
-      operation: 'svc.status',
-      params: { name: 'web' },
-      expect: { path: 'state', op: 'eq', value: 'running' },
-    };
-    /** A pending acceptance check of `round` (GO4a) — what `openAcceptanceRound` inserts. */
+    /** A pending acceptance check of `round` (GO4a) — what `openAcceptanceRound` inserts for a
+     *  check the plan declares (`observeCheck`, `confirmCheck`; under the implicit key, the
+     *  requester's confirmation of the goal's statement). */
     const insertCheck = (
       goalRunId: string,
       round: number,
@@ -208,7 +235,11 @@ describe.runIf(DATABASE_URL !== undefined)(
           revision,
           kind,
           kind === 'observe_predicate' ? JSON.stringify(OBSERVE) : null,
-          kind === 'requester_confirm' ? 'Is the report out?' : null,
+          kind !== 'requester_confirm'
+            ? null
+            : key === IMPLICIT_CONFIRM_KEY
+              ? STATEMENT
+              : CONFIRM_PROMPT,
         ],
       );
     const setCheck = (
@@ -262,11 +293,18 @@ describe.runIf(DATABASE_URL !== undefined)(
         [observationId],
       );
     }
-    /** Round `round` of a verifying run: one observation, passed — what verification leaves
-     *  before it achieves the run by check (GO4a). */
-    async function passRound(goalRunId: string, round = 1, revision = 1) {
-      await insertCheck(goalRunId, round, 'up', 'observe_predicate', revision);
-      await passObservation(goalRunId, round, 'up');
+    /** Round `round` of a verifying run: its observations (`up` by default), passed — what
+     *  verification leaves before it achieves the run by check (GO4a). */
+    async function passRound(
+      goalRunId: string,
+      round = 1,
+      revision = 1,
+      keys: readonly string[] = ['up'],
+    ) {
+      for (const key of keys) {
+        await insertCheck(goalRunId, round, key, 'observe_predicate', revision);
+        await passObservation(goalRunId, round, key);
+      }
     }
     /** A Decision decided by `decidedBy` (the requester by default), `approved` unless `status`
      *  says otherwise — what `acceptance.ts` writes for the requester's word. */
@@ -953,7 +991,10 @@ describe.runIf(DATABASE_URL !== undefined)(
         /an outcome on the requester's word rests on their own decision saying so \(I-G5\)/;
 
       it('achieves a run by check only out of verifying, with no person’s decision, once every check of its latest round passed — one of them an observation', async () => {
-        const goalRunId = await runningGoal();
+        const goalRunId = await runningGoal(
+          ['A', 'B'],
+          [observeCheck('up'), observeCheck('healthy')],
+        );
         await setGoal(goalRunId, "status = 'verifying'");
         await expect(byCheck(goalRunId)).rejects.toThrow(NOT_BY_CHECK);
         await insertCheck(goalRunId, 1, 'up');
@@ -970,7 +1011,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         await expect(byCheck(goalRunId)).rejects.toThrow(NOT_BY_CHECK);
 
         // A newer round all passed: the failed round is history.
-        await passRound(goalRunId, 2);
+        await passRound(goalRunId, 2, 1, ['up', 'healthy']);
         const word = await decision({
           decision: 'goal_outcome',
           goalRunId,
@@ -1002,9 +1043,10 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
 
       it('a round with only the requester’s confirmation passed does not achieve a run by check; their decision does, on their word', async () => {
-        const goalRunId = await runningGoal();
+        // A plan that declares no check: the round is the requester's confirmation of the goal.
+        const goalRunId = await runningGoal(['A', 'B'], []);
         await setGoal(goalRunId, "status = 'verifying'");
-        await insertCheck(goalRunId, 1, 'requester_confirm', 'requester_confirm');
+        await insertCheck(goalRunId, 1, IMPLICIT_CONFIRM_KEY, 'requester_confirm');
         const word = await decision({
           decision: 'goal_outcome',
           goalRunId,
@@ -1118,9 +1160,10 @@ describe.runIf(DATABASE_URL !== undefined)(
         await expect(insertCheck(goalRunId, 1, 'up')).rejects.toThrow(
           /no check is added to a round older than round 2/,
         );
-        // A confirmation carries a prompt and no predicate; an observation the reverse.
+        // A confirmation carries a prompt and no predicate; an observation the reverse (the CHECK
+        // holds with the guards off too).
         await expect(
-          sql(
+          raw(
             `insert into goal_acceptance_checks
                (workspace_id, goal_run_id, round, check_key, plan_revision, kind, observation_check)
              values ($1, $2, 2, 'ok', 1, 'requester_confirm', $3::jsonb)`,
@@ -1138,7 +1181,10 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
 
       it('an observation passes only on an Observation of that very check that satisfied its predicate; a settled check never changes', async () => {
-        const goalRunId = await runningGoal();
+        const goalRunId = await runningGoal(
+          ['A', 'B'],
+          [observeCheck('up'), observeCheck('healthy')],
+        );
         await setGoal(goalRunId, "status = 'verifying'");
         await insertCheck(goalRunId, 1, 'up');
         await insertCheck(goalRunId, 1, 'healthy');
@@ -1205,7 +1251,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             ),
           { skipRoleSwitch: true },
         );
-        const goalRunId = await runningGoal();
+        const goalRunId = await runningGoal(['A', 'B'], [confirmCheck('ok')]);
         await setGoal(goalRunId, "status = 'verifying'");
         await insertCheck(goalRunId, 1, 'ok', 'requester_confirm');
         const confirmed = (extra: Record<string, unknown> = {}) => ({
@@ -1239,7 +1285,10 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
 
       it('a check settles only in the current round of a verifying run, and is superseded only once the run left verifying or a newer round began', async () => {
-        const goalRunId = await runningGoal();
+        const goalRunId = await runningGoal(
+          ['A', 'B'],
+          [observeCheck('up'), observeCheck('healthy')],
+        );
         await setGoal(goalRunId, "status = 'verifying'");
         await insertCheck(goalRunId, 1, 'up');
         await insertCheck(goalRunId, 1, 'healthy');
@@ -1590,6 +1639,682 @@ describe.runIf(DATABASE_URL !== undefined)(
         ).rejects.toThrow(
           /a step with acceptance checks succeeds only with every one of them passed in its latest round, for its current attempt/,
         );
+      });
+    });
+
+    describe('goal/0007: acceptance checks judged on a Fact of the graph (S11 GO4c)', () => {
+      /** The guard's body, its comments dropped and its whitespace collapsed. */
+      const guardOf = (file: string) => {
+        const text = readFileSync(path.join(MIGRATIONS_DIR, 'goal', file), 'utf8');
+        const start = text.indexOf('create or replace function goal_runs_status_guard()');
+        expect(start, file).toBeGreaterThanOrEqual(0);
+        const end = text.indexOf('\n$$;', start);
+        expect(end, file).toBeGreaterThan(start);
+        return text
+          .slice(start, end)
+          .replace(/--[^\n]*/g, '')
+          .replace(/\s+/g, ' ');
+      };
+
+      it('is goal/0005’s goal_runs_status_guard, comments aside, with a Fact the platform judged counting as a check it made and every check the plan declares needed — and nothing else changed', () => {
+        const OBSERVED_ONLY = "c.kind = 'observe_predicate') then";
+        const VARIABLES = 'latest_round int; begin';
+        const BY_CHECK_RULE = "observed by the platform (I-G5)'; end if;";
+        const DECLARED_RULE =
+          "declared := goal_declared_acceptance(new.workspace_id, new.id, new.current_revision); if declared is null or exists ( select 1 from jsonb_array_elements(declared) d where not exists ( select 1 from goal_acceptance_checks c where c.workspace_id = new.workspace_id and c.goal_run_id = new.id and c.round = latest_round and c.check_key = d ->> 'key')) then raise exception 'goal_runs: achieved by check needs a check of the latest round for every acceptance check the current plan declares (I-G5)'; end if;";
+        const before = guardOf('0005_goal_acceptance.sql');
+        for (const anchor of [OBSERVED_ONLY, VARIABLES, BY_CHECK_RULE]) {
+          expect(before.split(anchor), anchor).toHaveLength(2);
+        }
+        expect(guardOf('0007_fact_acceptance.sql')).toBe(
+          before
+            .replace(OBSERVED_ONLY, "c.kind in ('observe_predicate', 'fact_predicate')) then")
+            .replace(VARIABLES, 'latest_round int; declared jsonb; begin')
+            .replace(BY_CHECK_RULE, `${BY_CHECK_RULE} ${DECLARED_RULE}`),
+        );
+      });
+
+      const LINK = 'test.go4c.runs_on';
+      const HOST = 'test.go4c.Host';
+      let serviceId: string;
+      let gatekeeperId: string;
+      let webId: string;
+      let hostId: string;
+      let otherHostId: string;
+      /** The service's Sources — a gate's, a collector's, a private one — and the requester's own. */
+      let gateSource: string;
+      let collectorSource: string;
+      let privateSource: string;
+      let ownSource: string;
+      /** The check: web runs on host web-1 — one end named by id, the other by ObjectType and
+       *  identity. */
+      let FACT: { readonly linkType: string; readonly source: unknown; readonly target: unknown };
+
+      /** As the service that owns the collector and gate Sources. */
+      const asService = <T>(fn: (client: PoolClient) => Promise<T>) =>
+        withWorkspace(pool, { workspaceId, principalId: serviceId }, fn);
+
+      beforeAll(async () => {
+        serviceId = randomUUID();
+        await withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerId },
+          (client) =>
+            client.query(
+              "insert into principals (workspace_id, id, kind, role, display_name) values ($1, $2, 'service', 'member', 'collector')",
+              [workspaceId, serviceId],
+            ),
+          { skipRoleSwitch: true },
+        );
+        const object = async (type: string, identity: Record<string, unknown>) =>
+          (
+            await sql(
+              'insert into objects (workspace_id, object_type, identity_key) values ($1, $2, $3::jsonb) returning id',
+              [workspaceId, type, JSON.stringify(identity)],
+            )
+          ).rows[0]?.id as string;
+        gatekeeperId = await object('platform.Gatekeeper', { name: 'go4c-gate' });
+        webId = await object('test.go4c.Service', { name: 'web' });
+        hostId = await object(HOST, { name: 'web-1' });
+        otherHostId = await object(HOST, { name: 'web-2' });
+        FACT = {
+          linkType: LINK,
+          source: { objectId: webId },
+          target: { objectType: HOST, identity: { name: 'web-1' } },
+        };
+        const source = (kind: string, owner: string, visibility: 'workspace' | 'private') =>
+          withWorkspace(pool, { workspaceId, principalId: owner }, async (client) => {
+            const row = await registerSource(client, workspaceId, {
+              kind,
+              ownerPrincipalId: owner,
+              visibility,
+            });
+            return row.id;
+          });
+        gateSource = await source('gatekeeper', serviceId, 'workspace');
+        collectorSource = await source('test.go4c.collector', serviceId, 'workspace');
+        privateSource = await source('test.go4c.collector', serviceId, 'private');
+        ownSource = await source('test.go4c.collector', ownerId, 'workspace');
+      });
+
+      interface Seen {
+        /** The Activity's kind, and what it records. */
+        readonly activity: string;
+        readonly metadata?: Record<string, unknown>;
+        /** The Source the Observation is of — the collector's by default. */
+        readonly source?: string;
+        /** The Fact's epistemic status — `observed` by default. */
+        readonly status?: string;
+        readonly linkType?: string;
+        readonly target?: string;
+        readonly properties?: Record<string, unknown>;
+        /** SQL for the Fact's validity — `now()` and open by default. */
+        readonly validFrom?: string;
+        readonly validUntil?: string;
+      }
+      const SUBMITTED: Seen = { activity: 'ingest.submit_observations' };
+
+      /** An Observation as `seen` says: an Activity of its kind and record, and the Observation of
+       *  its Source on it. */
+      const observation = (client: PoolClient, seen: Seen) =>
+        startActivity(client, workspaceId, {
+          kind: seen.activity,
+          principalId: serviceId,
+          metadata: seen.metadata ?? {},
+        }).then(async (activity) => {
+          const row = await client.query<{ id: string }>(
+            `insert into observations (workspace_id, source_id, activity_id, content)
+             values ($1, $2, $3, '{}'::jsonb) returning id`,
+            [workspaceId, seen.source ?? collectorSource, activity.id],
+          );
+          return { activityId: activity.id, observationId: row.rows[0]?.id as string };
+        });
+      /** A Fact web → host (as `seen` says) resting on an Observation recorded as `seen` says. */
+      const fact = (seen: Seen = SUBMITTED) =>
+        asService(async (client) => {
+          const { activityId, observationId } = await observation(client, seen);
+          const row = await client.query<{ id: string }>(
+            `insert into links (workspace_id, link_type, source_object_id, target_object_id,
+               properties, valid_from, valid_until, epistemic_status, activity_id, asserted_by,
+               observation_id)
+             values ($1, $2, $3, $4, $5::jsonb, ${seen.validFrom ?? 'now()'},
+               ${seen.validUntil ?? 'null'}, $6, $7, $8, $9)
+             returning id`,
+            [
+              workspaceId,
+              seen.linkType ?? LINK,
+              webId,
+              seen.target ?? hostId,
+              JSON.stringify(seen.properties ?? {}),
+              seen.status ?? 'observed',
+              activityId,
+              serviceId,
+              observationId,
+            ],
+          );
+          return row.rows[0]?.id as string;
+        });
+      /** The Fact confirmed again, by an Observation recorded as `seen` says. */
+      const confirm = (factId: string, seen: Seen = SUBMITTED) =>
+        asService(async (client) => {
+          const { observationId } = await observation(client, seen);
+          await client.query(
+            `update links set last_observation_id = $3, last_observed_at = now()
+              where workspace_id = $1 and id = $2`,
+            [workspaceId, factId, observationId],
+          );
+        });
+      const now = async () => (await sql('select now() as at')).rows[0]?.at as Date;
+      const admissible = async (goalRunId: string, factId: string, since: Date, check = FACT) =>
+        (
+          await sql('select goal_fact_admissible($1, $2, $3, $4::jsonb, $5) as ok', [
+            workspaceId,
+            goalRunId,
+            factId,
+            JSON.stringify(check),
+            since,
+          ])
+        ).rows[0]?.ok as boolean;
+      const observedBy = (taskId: unknown): Seen => ({
+        activity: 'gatekeeper_observe',
+        source: gateSource,
+        metadata: { triggeredByTaskId: taskId },
+      });
+      const appliedFor = (actionRequestId: unknown): Seen => ({
+        activity: 'gatekeeper_apply',
+        source: gateSource,
+        metadata: { actionRequestId },
+      });
+      let requests = 0;
+      /** An ActionRequest on the gate, raised in `stepRunId` or by `parentWorkerRunId` if given. */
+      const request = async (
+        raised: { readonly stepRunId?: string; readonly parentWorkerRunId?: string } = {},
+      ) => {
+        requests += 1;
+        const row = await asApp((client) =>
+          requestAction(client, workspaceId, {
+            gatekeeperId,
+            actionKind: `test.go4c.apply.${requests}`,
+            blastRadius: 'medium',
+            operationAutoApprovable: false,
+            awaitDecision: false,
+            onBehalfOf: ownerId,
+            actorRuntime: 'pi',
+            requesterScope: {
+              capabilities: ['request_action'],
+              resources: { gatekeeper: [gatekeeperId] },
+            },
+            ...raised,
+          }),
+        );
+        return row.id;
+      };
+      const workerRun = async (taskId: string) =>
+        (
+          await sql(
+            `insert into worker_runs (workspace_id, status, task_id) values ($1, 'running', $2)
+             returning id`,
+            [workspaceId, taskId],
+          )
+        ).rows[0]?.id as string;
+
+      it('takes a Fact as evidence only if it is the Link named, active, observed, last confirmed since the round opened through a Source the requester does not own — by a collector, or a gate this goal did not drive', async () => {
+        const goalRunId = await runningGoal();
+        const otherGoal = await runningGoal();
+        const a = await stepId(goalRunId, 'A');
+        const otherA = await stepId(otherGoal, 'A');
+        const task = async (fields: Parameters<typeof insertTask>[0]) =>
+          (await insertTask(fields)).rows[0]?.id as string;
+        const ownTask = await task({ goalRunId, stepRunId: a, planRevision: 1 });
+        const otherTask = await task({ goalRunId: otherGoal, stepRunId: otherA, planRevision: 1 });
+        const looseTask = await task({});
+        const ownRequest = await request({ stepRunId: a });
+        const ownWorkerRequest = await request({ parentWorkerRunId: await workerRun(ownTask) });
+        const otherRequest = await request({ stepRunId: otherA });
+        const otherWorkerRequest = await request({
+          parentWorkerRunId: await workerRun(otherTask),
+        });
+        const looseRequest = await request();
+        const since = await now();
+
+        for (const seen of [
+          SUBMITTED,
+          // A gate's observe no Worker called, or a Worker of another goal's Task or of none.
+          observedBy(null),
+          observedBy(otherTask),
+          observedBy(looseTask),
+          // A gate's apply of a request raised outside this goal.
+          appliedFor(looseRequest),
+          appliedFor(otherRequest),
+          appliedFor(otherWorkerRequest),
+        ]) {
+          expect(await admissible(goalRunId, await fact(seen), since), JSON.stringify(seen)).toBe(
+            true,
+          );
+        }
+        for (const seen of [
+          // What a Worker acting for the requester could submit: the requester's own Source.
+          { ...SUBMITTED, source: ownSource },
+          // A submission is not a gate's, and a gate's Activity is on the gate's Source.
+          { ...SUBMITTED, source: gateSource },
+          { ...observedBy(null), source: collectorSource },
+          { ...appliedFor(looseRequest), source: collectorSource },
+          // A Source the requester cannot see.
+          { ...SUBMITTED, source: privateSource },
+          // This goal's own doing: its Task's Worker called the observe, or the apply is its own.
+          observedBy(ownTask),
+          appliedFor(ownRequest),
+          appliedFor(ownWorkerRequest),
+          // Nothing recorded (before this release), or nothing that names a known Task or request:
+          // never read as "not this goal's".
+          { activity: 'gatekeeper_observe', source: gateSource },
+          { activity: 'gatekeeper_apply', source: gateSource },
+          observedBy('not-a-task'),
+          observedBy(randomUUID()),
+          observedBy(7),
+          appliedFor('not-a-request'),
+          appliedFor(randomUUID()),
+          // Any other Activity.
+          { activity: 'agent_turn' },
+          // Asserted by a person or inferred by an agent, not observed.
+          { ...SUBMITTED, status: 'asserted' },
+          { ...SUBMITTED, status: 'inferred' },
+          // Not valid now.
+          { ...SUBMITTED, validFrom: "now() + interval '1 day'" },
+          {
+            ...SUBMITTED,
+            validFrom: "now() - interval '2 days'",
+            validUntil: "now() - interval '1 day'",
+          },
+          // Another Link: of another type, or to another Object.
+          { ...SUBMITTED, linkType: 'test.go4c.depends_on' },
+          { ...SUBMITTED, target: otherHostId },
+        ] satisfies Seen[]) {
+          expect(await admissible(goalRunId, await fact(seen), since), JSON.stringify(seen)).toBe(
+            false,
+          );
+        }
+
+        // Superseded or invalidated: no longer evidence.
+        const superseded = await fact();
+        const invalidated = await fact();
+        expect(await admissible(goalRunId, superseded, since)).toBe(true);
+        await sql('update links set superseded_at = now() where workspace_id = $1 and id = $2', [
+          workspaceId,
+          superseded,
+        ]);
+        await sql('update links set invalidated_at = now() where workspace_id = $1 and id = $2', [
+          workspaceId,
+          invalidated,
+        ]);
+        expect(await admissible(goalRunId, superseded, since)).toBe(false);
+        expect(await admissible(goalRunId, invalidated, since)).toBe(false);
+
+        // The confirmation that counts is the latest: before the round opened, none; confirmed
+        // since, it is; confirmed since by the requester's own Source, it is not.
+        const early = await fact();
+        const later = await now();
+        expect(await admissible(goalRunId, early, later)).toBe(false);
+        await confirm(early);
+        expect(await admissible(goalRunId, early, later)).toBe(true);
+        await confirm(early, { ...SUBMITTED, source: ownSource });
+        expect(await admissible(goalRunId, early, later)).toBe(false);
+
+        // The check names the Link: an id in capitals names the same Object; another goal run's
+        // check, or an unknown run, is judged on its own terms.
+        const evidence = await fact();
+        expect(
+          await admissible(goalRunId, evidence, since, {
+            ...FACT,
+            source: { objectId: webId.toUpperCase() },
+          }),
+        ).toBe(true);
+        expect(
+          await admissible(goalRunId, evidence, since, {
+            ...FACT,
+            target: { objectType: HOST, identity: { name: 'web-2' } },
+          }),
+        ).toBe(false);
+        expect(await admissible(randomUUID(), evidence, since)).toBe(false);
+        const otherOwn = await fact(observedBy(otherTask));
+        expect(await admissible(otherGoal, otherOwn, since)).toBe(false);
+        expect(await admissible(goalRunId, otherOwn, since)).toBe(true);
+      });
+
+      /** A fact check of the goal's plan: web runs on host web-1 (`FACT`), under `key`. */
+      const factCheck = (key: string): DeclaredCheck => ({
+        kind: 'fact_predicate',
+        key,
+        fact: FACT,
+      });
+      const insertFactCheck = (goalRunId: string, round: number, key: string, check = FACT) =>
+        sql(
+          `insert into goal_acceptance_checks
+             (workspace_id, goal_run_id, round, check_key, plan_revision, kind, fact_check)
+           values ($1, $2, $3, $4, 1, 'fact_predicate', $5::jsonb)`,
+          [workspaceId, goalRunId, round, key, JSON.stringify(check)],
+        );
+      const SETTLED_ON =
+        'fact_id = $5, attempts = 1, first_attempt_at = now(), settled_at = now(), status =';
+      const NOT_PASSED =
+        /a fact check passes only on a Fact that may serve as its evidence — the one it names, observed since its round opened, not by this goal's own doing/;
+      const NOT_FAILED = /a fact check fails only on a Fact it saw of the Link it names/;
+
+      it('a fact check carries its Fact selector and nothing else, is created with no Fact, and what it names never changes', async () => {
+        const goalRunId = await runningGoal(['A', 'B'], [factCheck('runs')]);
+        await setGoal(goalRunId, "status = 'verifying'");
+        // The CHECKs, with the guards off: the guard refuses a row its plan does not declare first.
+        const insert = (columns: string, values: string, params: readonly unknown[]) =>
+          raw(
+            `insert into goal_acceptance_checks
+               (workspace_id, goal_run_id, round, check_key, plan_revision, kind, ${columns})
+             values ($1, $2, 1, 'x', 1, ${values})`,
+            [workspaceId, goalRunId, ...params],
+          );
+        const SHAPE = /goal_acceptance_checks_shape/;
+        await expect(
+          insert('fact_check, observation_check', "'fact_predicate', $3::jsonb, $4::jsonb", [
+            JSON.stringify(FACT),
+            JSON.stringify(OBSERVE),
+          ]),
+        ).rejects.toThrow(SHAPE);
+        await expect(insert('prompt', "'fact_predicate', 'Is it up?'", [])).rejects.toThrow(SHAPE);
+        await expect(
+          insert('fact_check, prompt', "'requester_confirm', $3::jsonb, 'Is it up?'", [
+            JSON.stringify(FACT),
+          ]),
+        ).rejects.toThrow(SHAPE);
+        await expect(
+          insert('observation_check, fact_check', "'observe_predicate', $3::jsonb, $4::jsonb", [
+            JSON.stringify(OBSERVE),
+            JSON.stringify(FACT),
+          ]),
+        ).rejects.toThrow(SHAPE);
+        await expect(
+          sql(
+            `insert into goal_acceptance_checks
+               (workspace_id, goal_run_id, round, check_key, plan_revision, kind, fact_check,
+                fact_id)
+             values ($1, $2, 1, 'runs', 1, 'fact_predicate', $3::jsonb, $4)`,
+            [workspaceId, goalRunId, JSON.stringify(FACT), await fact()],
+          ),
+        ).rejects.toThrow(/a check is created pending and untried/);
+
+        await insertFactCheck(goalRunId, 1, 'runs');
+        await expect(
+          setCheck(goalRunId, 1, 'runs', 'fact_check = $5::jsonb', [
+            JSON.stringify({ ...FACT, linkType: 'test.go4c.depends_on' }),
+          ]),
+        ).rejects.toThrow(/what a check verifies, and for which round, never changes/);
+        // Saw nothing it may rest on: unavailable, with no Fact — never failed without one.
+        await expect(
+          setCheck(goalRunId, 1, 'runs', "status = 'failed', settled_at = now()"),
+        ).rejects.toThrow(NOT_FAILED);
+        await setCheck(
+          goalRunId,
+          1,
+          'runs',
+          "status = 'unavailable', last_error = 'fact_not_observed', attempts = 5, first_attempt_at = now(), settled_at = now()",
+        );
+      });
+
+      it('a fact check passes only on a Fact that may serve as its evidence for its round, and fails only on a Fact of the Link it names', async () => {
+        const goalRunId = await runningGoal(['A', 'B'], [factCheck('runs'), factCheck('held')]);
+        await setGoal(goalRunId, "status = 'verifying'");
+        const early = await fact();
+        await insertFactCheck(goalRunId, 1, 'runs');
+        await insertFactCheck(goalRunId, 1, 'held');
+        const settle = (key: string, status: string, factId: string | null) =>
+          setCheck(goalRunId, 1, key, `${SETTLED_ON} '${status}'`, [factId]);
+
+        await expect(settle('runs', 'passed', null)).rejects.toThrow(NOT_PASSED);
+        for (const refused of [
+          early,
+          await fact({ ...SUBMITTED, source: ownSource }),
+          await fact({ ...SUBMITTED, linkType: 'test.go4c.depends_on' }),
+          await fact({ ...SUBMITTED, status: 'inferred' }),
+        ]) {
+          await expect(settle('runs', 'passed', refused)).rejects.toThrow(NOT_PASSED);
+        }
+        await expect(
+          settle('held', 'failed', await fact({ ...SUBMITTED, target: otherHostId })),
+        ).rejects.toThrow(NOT_FAILED);
+        // Failing on what was seen of the Link named, whoever saw it, stops the run achieving by
+        // check; it is never evidence that it is.
+        await settle('held', 'failed', await fact({ ...SUBMITTED, source: ownSource }));
+        // Confirmed since the round opened, by a collector: evidence.
+        await confirm(early);
+        await settle('runs', 'passed', early);
+        await expect(
+          setCheck(goalRunId, 1, 'runs', "status = 'failed', settled_at = now()"),
+        ).rejects.toThrow(/a settled check is not changed/);
+      });
+
+      const byCheck = (goalRunId: string) =>
+        setGoal(
+          goalRunId,
+          "status = 'completed', outcome = 'achieved', outcome_basis = 'verified_by_check', ended_at = now()",
+        );
+
+      it('achieves a run by check on a round whose only check the platform made is a Fact (I-G5)', async () => {
+        const goalRunId = await runningGoal(['A', 'B'], [factCheck('runs'), confirmCheck('ok')]);
+        await setGoal(goalRunId, "status = 'verifying'");
+        await insertFactCheck(goalRunId, 1, 'runs');
+        await insertCheck(goalRunId, 1, 'ok', 'requester_confirm');
+        await setCheck(goalRunId, 1, 'runs', `${SETTLED_ON} 'passed'`, [await fact()]);
+        await setCheck(
+          goalRunId,
+          1,
+          'ok',
+          "status = 'passed', decision_id = $5, settled_at = now()",
+          [
+            await decision({
+              decision: 'goal_outcome',
+              goalRunId,
+              outcome: 'achieved',
+              round: 1,
+              checkKey: 'ok',
+            }),
+          ],
+        );
+        await byCheck(goalRunId);
+        expect(await asApp((client) => getGoalRun(client, workspaceId, goalRunId))).toMatchObject({
+          status: 'completed',
+          outcome: 'achieved',
+          outcomeBasis: 'verified_by_check',
+        });
+      });
+
+      it('a goal’s check is one its plan declares, as declared — with none declared, only the requester’s confirmation of the goal (review #493 on GO4c)', async () => {
+        const NOT_DECLARED =
+          /a check is one of the acceptance checks its plan declares, as declared — with none declared, the requester's confirmation of the goal/;
+        const insert = (
+          goalRunId: string,
+          key: string,
+          kind: string,
+          fields: { check?: unknown; fact?: unknown; prompt?: string } = {},
+        ) =>
+          sql(
+            `insert into goal_acceptance_checks
+               (workspace_id, goal_run_id, round, check_key, plan_revision, kind, observation_check,
+                fact_check, prompt)
+             values ($1, $2, 1, $3, 1, $4, $5::jsonb, $6::jsonb, $7)`,
+            [
+              workspaceId,
+              goalRunId,
+              key,
+              kind,
+              fields.check === undefined ? null : JSON.stringify(fields.check),
+              fields.fact === undefined ? null : JSON.stringify(fields.fact),
+              fields.prompt ?? null,
+            ],
+          );
+
+        const declared = await runningGoal(
+          ['A', 'B'],
+          [observeCheck('up'), factCheck('runs'), confirmCheck('ok')],
+        );
+        await setGoal(declared, "status = 'verifying'");
+        for (const [key, kind, fields] of [
+          ['down', 'observe_predicate', { check: OBSERVE }],
+          ['up', 'observe_predicate', { check: { ...OBSERVE, operation: 'svc.other' } }],
+          ['up', 'fact_predicate', { fact: FACT }],
+          ['runs', 'fact_predicate', { fact: { ...FACT, linkType: 'test.go4c.depends_on' } }],
+          ['ok', 'requester_confirm', { prompt: 'Is it up?' }],
+          [IMPLICIT_CONFIRM_KEY, 'requester_confirm', { prompt: STATEMENT }],
+        ] as const) {
+          await expect(insert(declared, key, kind, fields), `${key} ${kind}`).rejects.toThrow(
+            NOT_DECLARED,
+          );
+        }
+        await insert(declared, 'up', 'observe_predicate', { check: OBSERVE });
+        await insert(declared, 'runs', 'fact_predicate', { fact: FACT });
+        await insert(declared, 'ok', 'requester_confirm', { prompt: CONFIRM_PROMPT });
+
+        const none = await runningGoal(['A', 'B'], []);
+        await setGoal(none, "status = 'verifying'");
+        for (const [key, kind, fields] of [
+          ['up', 'observe_predicate', { check: OBSERVE }],
+          [IMPLICIT_CONFIRM_KEY, 'requester_confirm', { prompt: CONFIRM_PROMPT }],
+          ['ok', 'requester_confirm', { prompt: STATEMENT }],
+        ] as const) {
+          await expect(insert(none, key, kind, fields), `${key} ${kind}`).rejects.toThrow(
+            NOT_DECLARED,
+          );
+        }
+        await insert(none, IMPLICIT_CONFIRM_KEY, 'requester_confirm', { prompt: STATEMENT });
+      });
+
+      it('achieves a run by check only with a check of its latest round for every one the plan in force declares (review #493 on GO4c)', async () => {
+        const NOT_EVERY_DECLARED =
+          /achieved by check needs a check of the latest round for every acceptance check the current plan declares/;
+        const goalRunId = await runningGoal(['A', 'B'], [observeCheck('up'), factCheck('runs')]);
+        await setGoal(goalRunId, "status = 'verifying'");
+        await passRound(goalRunId);
+        await expect(byCheck(goalRunId)).rejects.toThrow(NOT_EVERY_DECLARED);
+        // A later round with the other check alone does not make up for it either.
+        await insertFactCheck(goalRunId, 2, 'runs');
+        await setCheck(goalRunId, 2, 'runs', `${SETTLED_ON} 'passed'`, [await fact()]);
+        await expect(byCheck(goalRunId)).rejects.toThrow(NOT_EVERY_DECLARED);
+        await passRound(goalRunId, 2);
+        await byCheck(goalRunId);
+      });
+
+      it('a step’s fact check is one it declares, as declared, and passes or fails as the goal’s does', async () => {
+        const goal = await sql(
+          `insert into goal_runs (workspace_id, on_behalf_of, statement, ${BUDGET_COLUMNS})
+           values ($1, $2, 'ship the report', 100000, 10, 3, 3600) returning id`,
+          [workspaceId, ownerId],
+        );
+        const goalRunId = goal.rows[0]?.id as string;
+        const STEP_FACT = { kind: 'fact_predicate', key: 'runs', fact: FACT };
+        await proposeRevision(goalRunId, 1, null, [{ key: 'A', acceptance: [STEP_FACT] }, 'B']);
+        await confirmGoal(goalRunId, ['A', 'B']);
+        const a = await stepId(goalRunId, 'A');
+        await setStep(a, "status = 'ready'");
+        await setStep(a, "status = 'running', attempt_count = 1");
+        await setStep(a, "status = 'waiting', waiting_reason = 'acceptance'");
+        const insert = (declared: { readonly kind: string; readonly fact: unknown }) =>
+          sql(
+            `insert into step_acceptance_checks
+               (workspace_id, goal_run_id, step_run_id, step_attempt, round, check_key,
+                plan_revision, kind, fact_check)
+             values ($1, $2, $3, 1, 1, 'runs', 1, $4, $5::jsonb)`,
+            [workspaceId, goalRunId, a, declared.kind, JSON.stringify(declared.fact)],
+          );
+        const AS_DECLARED = /a check is one of its step's declared acceptance checks, as declared/;
+        await expect(
+          insert({ ...STEP_FACT, fact: { ...FACT, linkType: 'test.go4c.depends_on' } }),
+        ).rejects.toThrow(AS_DECLARED);
+        await expect(insert({ ...STEP_FACT, kind: 'observe_predicate' })).rejects.toThrow(
+          /step_acceptance_checks_shape|declared acceptance checks/,
+        );
+        await expect(
+          sql(
+            `insert into step_acceptance_checks
+               (workspace_id, goal_run_id, step_run_id, step_attempt, round, check_key,
+                plan_revision, kind, fact_check, observation_check)
+             values ($1, $2, $3, 1, 1, 'runs', 1, 'fact_predicate', $4::jsonb, $5::jsonb)`,
+            [workspaceId, goalRunId, a, JSON.stringify(FACT), JSON.stringify(OBSERVE)],
+          ),
+        ).rejects.toThrow(/step_acceptance_checks_shape/);
+        await insert(STEP_FACT);
+
+        const settleStep = (status: string, factId: string | null) =>
+          sql(
+            `update step_acceptance_checks
+                set fact_id = $4, attempts = 1, first_attempt_at = now(), settled_at = now(),
+                    status = $5
+              where workspace_id = $1 and step_run_id = $2 and round = 1 and check_key = $3`,
+            [workspaceId, a, 'runs', factId, status],
+          );
+        await expect(
+          settleStep('passed', await fact({ ...SUBMITTED, source: ownSource })),
+        ).rejects.toThrow(
+          /a fact check passes only on a Fact that may serve as its evidence — the one it names, observed since its round opened, not by this goal's own doing/,
+        );
+        await expect(
+          settleStep('failed', await fact({ ...SUBMITTED, linkType: 'test.go4c.depends_on' })),
+        ).rejects.toThrow(/a fact check fails only on a Fact it saw of the Link it names/);
+        await settleStep('passed', await fact());
+        await setStep(a, "status = 'succeeded', waiting_reason = null, ended_at = now()");
+      });
+
+      it('core/0046: an Activity’s kind, and the Task or request it records as its trigger, never change', async () => {
+        const activity = async (metadata: Record<string, unknown>) =>
+          (
+            await asService((client) =>
+              startActivity(client, workspaceId, {
+                kind: 'gatekeeper_observe',
+                principalId: serviceId,
+                metadata,
+              }),
+            )
+          ).id;
+        const update = (id: string, set: string, params: readonly unknown[] = []) =>
+          sql(`update activities set ${set} where workspace_id = $1 and id = $2`, [
+            workspaceId,
+            id,
+            ...params,
+          ]);
+        const RECORDED =
+          /the Task or ActionRequest an Activity records as its trigger is written when it starts and never changes/;
+        const byNoWorker = await activity({ triggeredByTaskId: null });
+        const unrecorded = await activity({});
+        const applied = await activity({ actionRequestId: randomUUID() });
+
+        await expect(update(byNoWorker, "kind = 'ingest.submit_observations'")).rejects.toThrow(
+          /an Activity's kind never changes/,
+        );
+        await expect(
+          update(byNoWorker, "metadata = metadata - 'triggeredByTaskId'"),
+        ).rejects.toThrow(RECORDED);
+        await expect(
+          update(byNoWorker, 'metadata = metadata || $3::jsonb', [
+            JSON.stringify({ triggeredByTaskId: randomUUID() }),
+          ]),
+        ).rejects.toThrow(RECORDED);
+        for (const key of ['triggeredByTaskId', 'actionRequestId']) {
+          await expect(
+            update(unrecorded, 'metadata = metadata || $3::jsonb', [
+              JSON.stringify({ [key]: null }),
+            ]),
+          ).rejects.toThrow(RECORDED);
+        }
+        await expect(
+          update(applied, 'metadata = metadata || $3::jsonb', [
+            JSON.stringify({ actionRequestId: randomUUID() }),
+          ]),
+        ).rejects.toThrow(RECORDED);
+        await expect(update(applied, "metadata = '{}'::jsonb")).rejects.toThrow(RECORDED);
+        // Everything else is written as before: a report, a note, the end.
+        await update(byNoWorker, 'metadata = metadata || $3::jsonb', [
+          JSON.stringify({ note: 'x', triggeredByTaskId: null }),
+        ]);
+        await update(unrecorded, 'metadata = metadata || $3::jsonb', [
+          JSON.stringify({ note: 'x' }),
+        ]);
+        await update(applied, "status = 'completed', ended_at = now()");
       });
     });
 

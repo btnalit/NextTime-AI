@@ -1,5 +1,6 @@
 import {
   DECISION_TRANSITIONS,
+  type FactCheck,
   type GoalAcceptanceCheckKind,
   type GoalAcceptanceCheckStatus,
   type GoalOutcomeBasis,
@@ -24,7 +25,7 @@ import { markGoalRunDue } from './advancer.js';
 import type { GoalControlActor } from './control.js';
 import { actionDisposition } from './disposition.js';
 import { moveGoalRun, moveStepRun } from './moves.js';
-import { roundAcceptance } from './plan.js';
+import { isPlatformAcceptanceCheck, roundAcceptance } from './plan.js';
 import { getGoalRun, getPlanRevision, listStepRuns, lockStepRuns } from './reads.js';
 import { GoalRunNotFoundError, GoalRunStateError, lockGoalRun } from './service.js';
 import type { GoalRunRow } from './types.js';
@@ -38,7 +39,8 @@ import type { GoalRunRow } from './types.js';
  * hold or cancel someone else's run (`control.ts`), not judge it.
  *
  *   - {@link confirmGoalAcceptance}: the requester confirms the round's `requester_confirm` check —
- *     only while the run is `verifying` and only once every observation of the round passed. A
+ *     only while the run is `verifying` and only once every check of the round the platform makes
+ *     (an observation, a Fact it judges) passed. A
  *     Decision of theirs (`goal_outcome`, `achieved`, naming the run, the round and the check) is
  *     what the row passes on; the run is due, and the advance completes it (`advance.ts` phase V).
  *   - {@link endGoalRun}: the requester ends the run with an outcome, on their word (`requester`
@@ -70,6 +72,8 @@ export interface OverriddenAcceptanceCheck {
   readonly status: Exclude<GoalAcceptanceCheckStatus, 'passed' | 'pending'> | 'not_run';
   /** The Observation it rests on — the evidence a person reads. */
   readonly observationId: string | null;
+  /** A fact check's (S11 GO4c): the Fact it saw — the evidence a person reads. */
+  readonly factId: string | null;
   readonly lastError: string | null;
 }
 
@@ -176,7 +180,7 @@ export async function confirmGoalAcceptance(
     );
   }
   const unpassed = round.filter(
-    (check) => check.kind === 'observe_predicate' && check.status !== 'passed',
+    (check) => isPlatformAcceptanceCheck(check.kind) && check.status !== 'passed',
   );
   if (unpassed.length > 0) {
     throw new GoalRunStateError(
@@ -321,6 +325,7 @@ async function overriddenAcceptance(
         // Pending only in a round its run left without superseding it (a release before GO4a).
         status: row.status === 'pending' ? 'superseded' : row.status,
         observationId: row.observationId,
+        factId: row.factId,
         lastError: row.lastError,
       });
     }
@@ -338,6 +343,7 @@ async function overriddenAcceptance(
       round: null,
       status: 'not_run' as const,
       observationId: null,
+      factId: null,
       lastError: null,
     }));
 }
@@ -347,15 +353,19 @@ export interface GoalAcceptanceCheckView {
   readonly checkKey: string;
   readonly kind: GoalAcceptanceCheckKind;
   readonly status: GoalAcceptanceCheckStatus;
+  /** An observation's: what is observed. */
   readonly check: ObservationCheck | null;
+  /** A fact check's (S11 GO4c): the Fact judged. */
+  readonly fact: FactCheck | null;
   readonly prompt: string | null;
   readonly attempts: number;
   readonly lastError: string | null;
-  /** The evidence: the latest Observation (an observation), or the requester's Decision (a
-   *  confirmation). */
+  /** The evidence: the latest Observation (an observation), the latest Fact seen (a fact check),
+   *  or the requester's Decision (a confirmation). */
   readonly observationId: string | null;
+  readonly factId: string | null;
   readonly decisionId: string | null;
-  /** When the next attempt is due — only while an observation is pending. */
+  /** When the next attempt is due — only while a check the platform makes is pending. */
   readonly nextAttemptAt: Date | null;
   readonly settledAt: Date | null;
   /** 「已覆盖」: the requester declared the goal achieved over this check, which had not passed. */
@@ -504,13 +514,15 @@ function roundViews(
       kind: check.kind,
       status: check.status,
       check: check.observationCheck,
+      fact: check.factCheck,
       prompt: check.prompt,
       attempts: check.attempts,
       lastError: check.lastError,
       observationId: check.observationId,
+      factId: check.factId,
       decisionId: check.decisionId,
       nextAttemptAt:
-        check.status === 'pending' && check.kind === 'observe_predicate'
+        check.status === 'pending' && isPlatformAcceptanceCheck(check.kind)
           ? check.nextAttemptAt
           : null,
       settledAt: check.settledAt,
