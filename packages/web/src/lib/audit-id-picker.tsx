@@ -141,10 +141,17 @@ export function useDebounced(value: string, ms: number): string {
   return debounced;
 }
 
+/** The short id after the label, unless the label already shows it (a row with no name is
+ *  labelled by its id — `4df1c17f` — and need not repeat it, UX P3 on #672). */
+function idSuffix(option: PickerOption): string | undefined {
+  return option.label.includes(shortId(option.id)) ? undefined : shortId(option.id);
+}
+
 export function optionText(option: PickerOption): string {
   const parts = [option.label];
   if (option.detail) parts.push(option.detail);
-  if (option.label !== option.id) parts.push(shortId(option.id));
+  const suffix = idSuffix(option);
+  if (suffix) parts.push(suffix);
   return parts.join(' · ');
 }
 
@@ -210,7 +217,7 @@ export function AuditIdPicker({
     return all.map((option) => ({
       value: option.id,
       label: option.label,
-      secondary: [option.detail, option.label !== option.id ? shortId(option.id) : undefined]
+      secondary: [option.detail, idSuffix(option)]
         .filter((part) => part !== undefined && part !== '')
         .join(' · '),
     }));

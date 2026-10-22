@@ -91,6 +91,59 @@ describe('kit/Combobox', () => {
     expect(screen.getByRole('listbox')).toBeTruthy();
   });
 
+  it('UX P2 on #672: strict mode picks a paste that matches exactly one option', () => {
+    const onChange = vi.fn();
+    render(<Harness onChange={onChange} />);
+    fireEvent.paste(input());
+    fireEvent.change(input(), { target: { value: 'prune' } });
+    expect(onChange).toHaveBeenLastCalledWith('docker.prune');
+    expect(input().value).toBe('docker.prune');
+    expect(screen.queryByTestId('cb-paste-note')).toBeNull();
+  });
+
+  it('UX P2 on #672: a strict paste with several or no matches says so under the field', () => {
+    const onChange = vi.fn();
+    render(<Harness onChange={onChange} />);
+    fireEvent.paste(input());
+    fireEvent.change(input(), { target: { value: 'docker' } });
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.getByTestId('cb-paste-note').textContent).toContain('有 2 个匹配');
+    // Opening the list replaces the note.
+    fireEvent.keyDown(input(), { key: 'ArrowDown' });
+    expect(screen.queryByTestId('cb-paste-note')).toBeNull();
+    fireEvent.keyDown(input(), { key: 'Escape' });
+    fireEvent.paste(input());
+    fireEvent.change(input(), { target: { value: 'nginx' } });
+    expect(screen.getByTestId('cb-paste-note').textContent).toContain('没有匹配的选项');
+    // Typing is a search again: the note goes.
+    fireEvent.change(input(), { target: { value: 'ngin' } });
+    expect(screen.queryByTestId('cb-paste-note')).toBeNull();
+  });
+
+  it('UX P2 on #672: a strict paste over the chosen label replaces it instead of appending', () => {
+    const onChange = vi.fn();
+    render(<Harness initial="docker.restart" onChange={onChange} />);
+    expect(input().value).toBe('docker.restart');
+    fireEvent.paste(input(), { clipboardData: { getData: () => 'reboot' } });
+    expect(onChange).toHaveBeenLastCalledWith('host.reboot');
+    expect(input().value).toBe('host.reboot');
+  });
+
+  it('UX P2 on #672: a strict paste waits for a loading list, then picks its only match', () => {
+    const onChange = vi.fn();
+    const { rerender } = render(<Harness onChange={onChange} loading options={[]} />);
+    fireEvent.paste(input());
+    fireEvent.change(input(), { target: { value: 'li.si' } });
+    expect(screen.getByTestId('cb-paste-note').textContent).toContain('正在查找');
+    rerender(
+      <Harness
+        onChange={onChange}
+        options={[{ value: 'u-2', label: 'li.si — Li Si' }, ...OPTIONS]}
+      />,
+    );
+    expect(onChange).toHaveBeenLastCalledWith('u-2');
+  });
+
   it('is a labelled WAI-ARIA combobox whose listbox opens on click', () => {
     render(<Harness />);
     const box = input();

@@ -79,7 +79,8 @@ export function UserPicker({
   }, [query]);
 
   const users = useCapabilityList<UserWire>(http, 'list_users', params);
-  const loading = users.state.status === 'loading';
+  // A search still waiting out its debounce counts as loading: its rows are the previous search's.
+  const loading = users.state.status === 'loading' || typed.trim() !== query;
   const excluded = new Set(exclude ?? []);
   const rows =
     users.state.status === 'ready'

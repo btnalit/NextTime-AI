@@ -120,6 +120,11 @@ export function Combobox({
   const [ownQuery, setOwnQuery] = useState<string | null>(null);
   /** Set by `onPaste`, read by the `onChange` that follows it. */
   const pastingRef = useRef(false);
+  /** Strict mode: the text of a paste that picked nothing yet. It is picked as soon as it matches
+   *  exactly one option — a list searched on the server may still be loading — and otherwise a
+   *  note under the field says how many match, so a paste is never dropped silently (UX P2 on
+   *  #672). Stale once the text changes. */
+  const [pastedText, setPastedText] = useState<string | null>(null);
   const controlled = !allowFreeEntry && inputValue !== undefined;
   const query = controlled ? (inputValue === '' ? null : inputValue) : ownQuery;
 
@@ -133,6 +138,13 @@ export function Combobox({
   const filtered = useMemo(() => filterComboboxOptions(options, query ?? ''), [options, query]);
   const visible = filtered.slice(0, maxVisible);
   const hidden = filtered.length - visible.length;
+  const pendingPaste = !allowFreeEntry && pastedText !== null && query === pastedText;
+  const pasteMatches = pendingPaste ? filtered.filter((option) => !option.disabled) : [];
+  const pasteMatch = !loading && pasteMatches.length === 1 ? pasteMatches[0] : undefined;
+
+  useEffect(() => {
+    if (pasteMatch) pick(pasteMatch);
+  });
 
   // Escape closes the list only: a capture listener on `window` runs before the one Radix's
   // Sheet / Dialog puts on `document`, so the surrounding sheet stays open.
@@ -170,6 +182,7 @@ export function Combobox({
   function pick(option: ComboboxOption): void {
     if (option.disabled) return;
     onChange(option.value);
+    setPastedText(null);
     setQuery(null);
     setOpen(false);
     setActive(-1);
@@ -220,7 +233,8 @@ export function Combobox({
     if (pasted) {
       // Legacy 153 ⑨: a paste is a whole value, not the start of a search — an exact match is
       // picked, anything else is kept as typed with the list closed, so it never covers the
-      // form's buttons. ArrowDown opens it again.
+      // form's buttons. ArrowDown opens it again. Strict mode then picks the only match, or says
+      // how many there are (`pastedText`).
       const trimmed = text.trim();
       const exact = allowFreeEntry
         ? undefined
@@ -233,10 +247,12 @@ export function Combobox({
       }
       setQuery(text);
       if (allowFreeEntry) onChange(text);
+      else setPastedText(text);
       setOpen(false);
       setActive(-1);
       return;
     }
+    setPastedText(null);
     setQuery(text);
     if (allowFreeEntry) onChange(text);
     setOpen(true);
@@ -260,6 +276,7 @@ export function Combobox({
 
   function clear(): void {
     onChange('');
+    setPastedText(null);
     setQuery(null);
     setActive(-1);
     inputRef.current?.focus();
@@ -289,8 +306,14 @@ export function Combobox({
         value={displayText}
         placeholder={placeholder}
         disabled={disabled}
-        onPaste={() => {
+        onPaste={(event) => {
           pastingRef.current = true;
+          // Strict mode with nothing typed shows the chosen option's label: a paste replaces it
+          // rather than landing in the middle of it.
+          const text = event.clipboardData?.getData('text');
+          if (allowFreeEntry || query !== null || displayText === '' || text === undefined) return;
+          event.preventDefault();
+          onType(text);
         }}
         onChange={(event) => onType(event.target.value)}
         onKeyDown={onKeyDown}
@@ -383,6 +406,22 @@ export function Combobox({
             </p>
           ) : null}
         </div>
+      ) : null}
+      {pendingPaste && !open && !pasteMatch ? (
+        <p
+          className="combobox-note combobox-paste-note"
+          role="status"
+          data-testid={testId ? `${testId}-paste-note` : undefined}
+        >
+          {loading
+            ? t('正在查找匹配的选项…', 'Looking for a matching option…')
+            : pasteMatches.length === 0
+              ? t('还没选中：没有匹配的选项。', 'Nothing chosen yet: no option matches.')
+              : t(
+                  `还没选中：有 ${pasteMatches.length} 个匹配，按 ↓ 选择。`,
+                  `Nothing chosen yet: ${pasteMatches.length} options match — press ↓ to pick one.`,
+                )}
+        </p>
       ) : null}
     </div>
   );
