@@ -69,6 +69,62 @@ export function withDefaultScheme(value: string, scheme: 'http' | 'https'): stri
   return `${scheme}://${trimmed.replace(/^\/+/, '')}`;
 }
 
+/** IPv4 dotted quad → its four octets, else `undefined`. */
+function ipv4Octets(host: string): readonly number[] | undefined {
+  const parts = host.split('.');
+  if (parts.length !== 4 || !parts.every((part) => /^\d{1,3}$/.test(part))) return undefined;
+  const octets = parts.map(Number);
+  return octets.every((octet) => octet <= 255) ? octets : undefined;
+}
+
+/** An IPv4 address only reachable inside a network: private (RFC 1918), loopback, link-local,
+ *  carrier-grade NAT, or "this network". Compared numerically, so no range is spelled out. */
+function isInNetworkIpv4([a = 0, b = 0]: readonly number[]): boolean {
+  return (
+    a === 10 ||
+    a === 127 ||
+    a === 0 ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 169 && b === 254) ||
+    (a === 100 && b >= 64 && b <= 127)
+  );
+}
+
+/** An IPv6 address (no brackets) only reachable inside a network: loopback `::1`, unique local
+ *  `fc00::/7`, link-local `fe80::/10`. */
+function isInNetworkIpv6(host: string): boolean {
+  if (host === '::1') return true;
+  const first = host.startsWith('::') ? 0 : Number.parseInt(host.split(':')[0] ?? '', 16);
+  if (Number.isNaN(first)) return false;
+  return (first & 0xfe00) === 0xfc00 || (first & 0xffc0) === 0xfe80;
+}
+
+/** Name suffixes that only resolve inside a network (mDNS, the reserved `.internal`, a home
+ *  network, a Kubernetes service). */
+const IN_NETWORK_SUFFIXES = ['.localhost', '.local', '.internal', '.lan', '.home.arpa'];
+
+/** The scheme a scheme-less gate endpoint gets (legacy 152; review #501 on #661). An address only
+ *  reachable inside the network — a bare service name (`gate-host:8080`), `localhost`, a private,
+ *  loopback, link-local or CGNAT IP, an in-network name suffix — is plain http inside the
+ *  deployment network. Anything else (a public domain or IP) gets https, so the connection secret
+ *  is never sent in the clear by default; the user can still type `http://`. */
+export function gateEndpointDefaultScheme(value: string): 'http' | 'https' {
+  const authority = value.trim().replace(/^\/+/, '').split(/[/?#]/, 1)[0] ?? '';
+  const hostPort = authority.slice(authority.lastIndexOf('@') + 1).toLowerCase();
+  if (hostPort.startsWith('[')) {
+    const close = hostPort.indexOf(']');
+    const host = close > 0 ? hostPort.slice(1, close) : hostPort.slice(1);
+    return isInNetworkIpv6(host) ? 'http' : 'https';
+  }
+  const host = hostPort.replace(/:\d*$/, '');
+  if (host.length === 0) return 'http';
+  const octets = ipv4Octets(host);
+  if (octets !== undefined) return isInNetworkIpv4(octets) ? 'http' : 'https';
+  if (!host.includes('.') || host === 'localhost') return 'http';
+  return IN_NETWORK_SUFFIXES.some((suffix) => host.endsWith(suffix)) ? 'http' : 'https';
+}
+
 /** Whether `value` parses as an absolute URL. */
 export function isAbsoluteUrl(value: string): boolean {
   try {

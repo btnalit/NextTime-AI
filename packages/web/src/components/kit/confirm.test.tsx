@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Confirm, type ConfirmLevel, type ConfirmProps } from './confirm.js';
@@ -146,6 +146,105 @@ describe('kit/Confirm — medium', () => {
       body.scrollTop = 600;
       fireEvent.scroll(body);
       await waitFor(() => expect(screen.queryByTestId('confirm-more-below')).toBeNull());
+    } finally {
+      for (const spy of restore) spy.mockRestore();
+    }
+  });
+
+  it('legacy 411: the more-below chip never takes focus from 取消', async () => {
+    const proto = HTMLElement.prototype;
+    const restore = [
+      vi.spyOn(proto, 'scrollHeight', 'get').mockImplementation(() => 900),
+      vi.spyOn(proto, 'clientHeight', 'get').mockImplementation(() => 300),
+    ];
+    try {
+      renderTier('medium', { danger: true });
+      fireEvent.click(screen.getByTestId('trigger'));
+      const confirm = await screen.findByTestId('confirm');
+      const cancel = within(confirm).getByTestId('confirm-cancel');
+      await waitFor(() => expect(document.activeElement).toBe(cancel));
+      const chip = within(await screen.findByTestId('confirm-more-below')).getByRole('button');
+      expect(chip.tabIndex).toBe(-1);
+      // A mouse press on the chip is cancelled, so the browser never moves focus onto it.
+      expect(fireEvent.mouseDown(chip)).toBe(false);
+      fireEvent.click(chip);
+      expect(document.activeElement).toBe(cancel);
+    } finally {
+      for (const spy of restore) spy.mockRestore();
+    }
+  });
+
+  it('legacy 410: a body too tall for above or below moves beside the trigger when there is room', async () => {
+    const proto = HTMLElement.prototype;
+    const sizes = { scrollHeight: 900, clientHeight: 300 };
+    const restore = [
+      vi.spyOn(proto, 'scrollHeight', 'get').mockImplementation(() => sizes.scrollHeight),
+      vi.spyOn(proto, 'clientHeight', 'get').mockImplementation(() => sizes.clientHeight),
+    ];
+    try {
+      renderTier('medium');
+      const trigger = screen.getByTestId('trigger');
+      const rect = {
+        x: 700,
+        y: 400,
+        top: 400,
+        left: 700,
+        right: 760,
+        bottom: 430,
+        width: 60,
+        height: 30,
+      };
+      vi.spyOn(trigger, 'getBoundingClientRect').mockReturnValue({
+        ...rect,
+        toJSON: () => rect,
+      } as DOMRect);
+      fireEvent.click(trigger);
+      const confirm = await screen.findByTestId('confirm');
+      // jsdom's window is 1024 wide: 700px free on the left, 264px on the right.
+      await waitFor(() => expect(confirm.dataset.beside).toBe('left'));
+      // Once beside, it stays there for this opening even though the body now fits.
+      sizes.scrollHeight = 300;
+      fireEvent.scroll(screen.getByTestId('confirm-body'));
+      await waitFor(() => expect(screen.queryByTestId('confirm-more-below')).toBeNull());
+      expect(confirm.dataset.beside).toBe('left');
+      fireEvent.click(within(confirm).getByTestId('confirm-cancel'));
+      await waitFor(() => expect(screen.queryByTestId('confirm')).toBeNull());
+      sizes.scrollHeight = 300;
+      fireEvent.click(trigger);
+      expect((await screen.findByTestId('confirm')).dataset.beside).toBeUndefined();
+    } finally {
+      for (const spy of restore) spy.mockRestore();
+    }
+  });
+
+  it('legacy 410: with no room beside the trigger (a phone), it stays above or below', async () => {
+    const proto = HTMLElement.prototype;
+    const restore = [
+      vi.spyOn(proto, 'scrollHeight', 'get').mockImplementation(() => 900),
+      vi.spyOn(proto, 'clientHeight', 'get').mockImplementation(() => 300),
+      vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(390),
+    ];
+    try {
+      renderTier('medium');
+      const trigger = screen.getByTestId('trigger');
+      const rect = {
+        x: 300,
+        y: 400,
+        top: 400,
+        left: 300,
+        right: 360,
+        bottom: 430,
+        width: 60,
+        height: 30,
+      };
+      vi.spyOn(trigger, 'getBoundingClientRect').mockReturnValue({
+        ...rect,
+        toJSON: () => rect,
+      } as DOMRect);
+      fireEvent.click(trigger);
+      const confirm = await screen.findByTestId('confirm');
+      await screen.findByTestId('confirm-more-below');
+      expect(confirm.dataset.beside).toBeUndefined();
     } finally {
       for (const spy of restore) spy.mockRestore();
     }

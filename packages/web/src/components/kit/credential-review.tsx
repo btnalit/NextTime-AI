@@ -80,7 +80,16 @@ export function CredentialReview({
               <code className="mono">{visibleText(namedReviewPath(path, fieldNames))}</code>
             </li>
           ))}
-          {more ? <li className="text-3">{t('等', 'and more')}</li> : null}
+          {/* Legacy 178: a bare 「等」 hid how much the list leaves out. The count is of values, not
+           *  fields, so this says what is known: the total and that only the first fields show. */}
+          {more ? (
+            <li className="text-3" data-testid="credential-review-more">
+              {t(
+                `等（共 ${count} 处疑似值，这里只列出前 ${paths.length} 个字段）`,
+                `and more (${count} suspected values in all; only the first ${paths.length} fields are listed)`,
+              )}
+            </li>
+          ) : null}
         </ul>
       ) : null}
       {where !== undefined ? (

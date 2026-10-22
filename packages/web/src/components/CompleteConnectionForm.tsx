@@ -8,10 +8,16 @@ import {
   type ConnectionRequestRow,
   type CreateConnectionParams,
   type CreateConnectionResult,
+  connectionRequestTargetMasked,
   supportsManifestSource,
 } from '../lib/connections.js';
 import { describeError, presentError } from '../lib/errors.js';
-import { isAbsoluteUrl, suggestedManifestSource, withDefaultScheme } from '../lib/gate-input.js';
+import {
+  gateEndpointDefaultScheme,
+  isAbsoluteUrl,
+  suggestedManifestSource,
+  withDefaultScheme,
+} from '../lib/gate-input.js';
 import type { PrincipalRow } from '../lib/governance.js';
 import { HttpError } from '../lib/http-client.js';
 import { type Translate, sentenceGap, useT } from '../lib/i18n.js';
@@ -29,6 +35,9 @@ export interface CompleteConnectionFormProps {
   readonly http: CapabilityCaller;
   /** The `request_connection` card being completed; omitted when the owner connects directly. */
   readonly request?: ConnectionRequestRow | null;
+  /** The requester's display name, when the caller has the member directory (legacy 247 ②, #661
+   *  UX acceptance) — the short principal id otherwise. */
+  readonly requesterName?: string;
   readonly onDone: (result: CreateConnectionResult) => void;
   readonly onCancel: () => void;
   /** S3.12's onboarding wizard (`OnboardingWizard.tsx`) already collected the kind in its own
@@ -69,8 +78,9 @@ interface FieldErrors {
 
 /** "Looks like a URL": a scheme followed by `://` — the loose check the manifest-source field
  *  always had. The endpoint no longer uses it (C15 follow-up): a missing scheme there is filled
- *  with `http://` instead of refused, and what remains is checked with `new URL()` (a bare compose
- *  service name with a port parses fine once it has a scheme). */
+ *  with `http://` (`https://` for a public address, legacy 152) instead of refused, and what
+ *  remains is checked with `new URL()` (a bare compose service name with a port parses fine once
+ *  it has a scheme). */
 const URL_LIKE_PATTERN = /^[a-z][a-z0-9+.-]*:\/\//i;
 
 /** Parses the credential box: JSON when it is JSON, the raw string otherwise (the gate's
@@ -208,6 +218,7 @@ export function fieldForInvalidParams(message: string): keyof FieldErrors | unde
 export function CompleteConnectionForm({
   http,
   request,
+  requesterName,
   onDone,
   onCancel,
   initialKind,
@@ -216,13 +227,27 @@ export function CompleteConnectionForm({
 }: CompleteConnectionFormProps) {
   const t = useT();
   const [kind, setKind] = useState<ConnectionKind>(request?.kind ?? initialKind ?? 'http');
-  const [target, setTarget] = useState(request?.target ?? '');
+  // Legacy 247 ①: a request from before legacy 186 can carry a credential in its address; the
+  // kernel reads it out masked — `[redacted]` whole, or in place inside a path (review #501 on
+  // #661: `https://host/hook/[redacted]/x`). A masked address is never prefilled as if it were
+  // one (it would register a connection with the literal mark in it) — the field starts empty
+  // and says why.
+  const requester =
+    requesterName !== undefined ? (
+      <span data-testid="cc-requester">{requesterName}</span>
+    ) : request ? (
+      <span className="mono" data-testid="cc-requester">
+        {request.requestedBy.slice(0, 8)}
+      </span>
+    ) : null;
+  const requestTargetMasked = !!request && connectionRequestTargetMasked(request.target);
+  const [target, setTarget] = useState(requestTargetMasked ? '' : (request?.target ?? ''));
   const [endpoint, setEndpoint] = useState('');
   const [credentialKind, setCredentialKind] = useState<CredentialKind>('shared');
   const [credentials, setCredentials] = useState('');
   const [onBehalfOf, setOnBehalfOf] = useState('');
   /** The endpoint had no scheme and `http://` was prepended on blur — said under the field. */
-  const [endpointSchemeAdded, setEndpointSchemeAdded] = useState(false);
+  const [endpointSchemeAdded, setEndpointSchemeAdded] = useState<'http' | 'https' | null>(null);
   const [manifestSource, setManifestSource] = useState('');
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [serverFieldError, setServerFieldError] = useState<ServerFieldError | null>(null);
@@ -248,12 +273,14 @@ export function CompleteConnectionForm({
   }, [http]);
 
   /** What gets sent: a bare `host:port` gets `http://` (a gate endpoint is plain http inside the
-   *  deployment network — the field's own placeholder). */
-  const endpointValue = withDefaultScheme(endpoint, 'http');
+   *  deployment network — the field's own placeholder); a public domain or IP gets `https://`, so the
+   *  connection secret is never sent in the clear by default (legacy 152). */
+  const endpointValue = withDefaultScheme(endpoint, gateEndpointDefaultScheme(endpoint));
 
   function completeEndpoint(): void {
-    const next = withDefaultScheme(endpoint, 'http');
-    if (next !== endpoint.trim()) setEndpointSchemeAdded(true);
+    const scheme = gateEndpointDefaultScheme(endpoint);
+    const next = withDefaultScheme(endpoint, scheme);
+    setEndpointSchemeAdded(next !== endpoint.trim() ? scheme : null);
     setEndpoint(next);
   }
 
@@ -387,12 +414,12 @@ export function CompleteConnectionForm({
         <Notice>
           {t(
             <>
-              完成申请 <span className="mono">{request.id.slice(0, 8)}</span>，来自成员{' '}
-              <span className="mono">{request.requestedBy.slice(0, 8)}</span>。
+              完成申请 <span className="mono">{request.id.slice(0, 8)}</span>，来自成员 {requester}
+              。
             </>,
             <>
               Completing request <span className="mono">{request.id.slice(0, 8)}</span> from member{' '}
-              <span className="mono">{request.requestedBy.slice(0, 8)}</span>.
+              {requester}.
             </>,
           )}
         </Notice>
@@ -421,10 +448,23 @@ export function CompleteConnectionForm({
         required
         error={fieldErrors.target}
         errorDetails={serverDetails('target')}
-        hint={t(
-          '门前面对接的是什么——一个 base URL、host 或服务名。',
-          'What the Gatekeeper fronts — a base URL, host, or service name.',
-        )}
+        hint={
+          <>
+            {t(
+              '门前面对接的是什么——一个 base URL、host 或服务名。',
+              'What the Gatekeeper fronts — a base URL, host, or service name.',
+            )}
+            {requestTargetMasked ? (
+              <span data-testid="cc-target-masked-note">
+                {sentenceGap(t)}
+                {t(
+                  '这个申请填的地址里带有凭据，已隐藏不显示；请填写不带凭据的地址，凭据放在下面的「凭据」里。',
+                  'The address in this request carried a credential and is hidden — enter the address without it, and put the credential in Credentials below.',
+                )}
+              </span>
+            ) : null}
+          </>
+        }
       >
         <Input
           id="cc-target"
@@ -466,15 +506,23 @@ export function CompleteConnectionForm({
         hint={
           <>
             {t(
-              '正在运行的门实例自己的 HTTP 地址（每种类型，包括 cli/ssh，都由一个门前置）；没写 http:// 会自动补上。',
-              "The running Gatekeeper instance's own HTTP address (every kind, including cli/ssh, is fronted by one); http:// is added if you leave it out.",
+              '正在运行的门实例自己的 HTTP 地址（每种类型，包括 cli/ssh，都由一个门前置）；没写协议时，内网地址补 http://，公网域名或 IP 补 https://。',
+              "The running Gatekeeper instance's own HTTP address (every kind, including cli/ssh, is fronted by one); without a scheme, an in-network address gets http:// and a public domain or IP gets https://.",
             )}
-            {endpointSchemeAdded ? (
+            {endpointSchemeAdded === 'http' ? (
               <span data-testid="cc-endpoint-scheme-note">
                 {sentenceGap(t)}
                 {t(
                   '已自动补上 http://；如果门走 https，请改成 https://。',
                   'Added http:// for you — change it to https:// if the gate serves https.',
+                )}
+              </span>
+            ) : endpointSchemeAdded === 'https' ? (
+              <span data-testid="cc-endpoint-scheme-note">
+                {sentenceGap(t)}
+                {t(
+                  '这是一个公网地址，已自动补上 https://，连接密钥不会明文发送；如果门只在内网用 http，请改成 http://。',
+                  'This is a public address, so https:// was added and the connection secret is not sent in the clear — change it to http:// if the gate only serves http inside the network.',
                 )}
               </span>
             ) : null}
@@ -486,7 +534,7 @@ export function CompleteConnectionForm({
           value={endpoint}
           onChange={(event) => {
             setEndpoint(event.target.value);
-            setEndpointSchemeAdded(false);
+            setEndpointSchemeAdded(null);
           }}
           onBlur={completeEndpoint}
           placeholder="http://gate-host:port"

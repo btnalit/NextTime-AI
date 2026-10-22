@@ -2118,6 +2118,48 @@ describe('CatalogPage — credential confirmation on Publish', () => {
     ]);
   });
 
+  it('legacy 174: a gate re-import that rewrites the draft drops the tick given for the old one', async () => {
+    const seen: unknown[] = [];
+    let digest = 'sha256:d1';
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [
+          { gatekeeperId: 'gk-1', name: 'docker.restart', status: 'draft', draftDigest: digest },
+        ],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+      publish_operation: (params) => {
+        seen.push(params);
+        if (seen.length === 1) return Promise.reject(refusal('operation', 1));
+        if (seen.length === 2) {
+          // The draft was rewritten in place between the question and the retry.
+          digest = 'sha256:d2';
+          return Promise.reject(
+            new HttpError('capability_error', 'changed after it was read', 'draft_changed'),
+          );
+        }
+        return {};
+      },
+    });
+    renderPage(http);
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    const publish = () => fireEvent.click(within(detail).getByRole('button', { name: /^发布$/ }));
+    publish();
+    await within(detail).findByTestId('credential-review');
+    fireEvent.click(within(detail).getByTestId('credential-review-confirm'));
+    publish();
+    // The list reloads with the new draft: the question about the old one, and its tick, are gone.
+    await waitFor(() => expect(within(detail).queryByTestId('credential-review')).toBeNull());
+    publish();
+    await waitFor(() => expect(seen).toHaveLength(3));
+    expect(seen[1]).toMatchObject({ credentialsReviewed: true, draftDigest: 'sha256:d1' });
+    expect(seen[2]).toEqual({
+      gatekeeperId: 'gk-1',
+      name: 'docker.restart',
+      draftDigest: 'sha256:d2',
+    });
+  });
+
   it('Skills: the same flow on publish_skill', async () => {
     const seen: unknown[] = [];
     const http = scriptedHttp({
