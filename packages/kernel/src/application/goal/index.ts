@@ -23,7 +23,9 @@
  * reconcile check) and the requester's word on the outcome (`acceptance.ts`). GO4b adds a step's
  * own acceptance (`plan.ts` step `acceptance`): rounds per attempt (`step_acceptance_checks`,
  * goal/0006) the advance opens and judges when an attempt's work succeeded (`advance.ts` phase A),
- * observed by the same executor.
+ * observed by the same executor. GO4c adds checks judged on a Fact of the graph, the goal's and a
+ * step's (`plan.ts` `fact_predicate`; the Fact read and judged by `fact-check.ts`, under the same
+ * executor; what may serve as evidence held by the database, goal/0007).
  *
  * Boundaries: it lives in `application` because the advancer creates Tasks (`application/task`) and
  * withdraws ActionRequests (`governance/approval`) in the transaction that moves a StepRun.
@@ -65,11 +67,21 @@ export {
   type PlanStep,
   parsePlan,
   planHints,
+  factSelectorProblems,
+  isPlatformAcceptanceCheck,
   roundAcceptance,
   type StepAcceptanceCheck,
   StepAcceptanceCheckSchema,
   validatePlan,
 } from './plan.js';
+
+export {
+  type FactCheckRefusal,
+  type FactEvidence,
+  judgeFact,
+  prepareFactCheck,
+  readFactEvidence,
+} from './fact-check.js';
 
 export {
   type CreateGoalRunInput,
@@ -151,6 +163,7 @@ export {
 
 export {
   type AcceptanceCheckRow,
+  FACT_NOT_OBSERVED,
   listAcceptanceChecks,
   listStepAcceptanceChecks,
   readCurrentAcceptanceRound,

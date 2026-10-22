@@ -5114,6 +5114,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             round: 1,
             status: 'failed',
             observationId: diskEvidence?.id,
+            factId: null,
             lastError: 'predicate_unsatisfied',
           },
           {
@@ -5122,6 +5123,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             round: 1,
             status: 'unavailable',
             observationId: null,
+            factId: null,
             lastError: 'gate_unreachable',
           },
         ];
@@ -5970,6 +5972,471 @@ describe.runIf(DATABASE_URL !== undefined)(
           expect.stringMatching(
             /^step "a": acceptance\[1\] "a2": check: "svc\.status" cannot be observed/,
           ),
+        ]);
+      });
+    });
+
+    describe('acceptance checks judged on a Fact of the graph (S11 GO4c, I-G5)', () => {
+      const observeClient = new FakeObserveClient();
+      const LINK = 'test.go4c.runs_on';
+      const SERVED = 'test.go4c.served_by';
+      const HOST = 'test.go4c.Host';
+      let collector: string;
+      let gateService: string;
+      let collectorSource: string;
+      let gateSource: string;
+      let webId: string;
+      let hostId: string;
+
+      beforeAll(async () => {
+        collector = randomUUID();
+        gateService = randomUUID();
+        await admin(async (client) => {
+          for (const [id, name] of [
+            [collector, 'collector'],
+            [gateService, 'gatekeeper'],
+          ] as const) {
+            await client.query(
+              `insert into principals (workspace_id, id, kind, role, display_name)
+               values ($1, $2, 'service', 'member', $3)`,
+              [workspaceId, id, name],
+            );
+          }
+          const source = async (kind: string, owner: string) =>
+            (
+              await client.query<{ id: string }>(
+                `insert into sources (workspace_id, kind, owner_principal_id, visibility)
+                 values ($1, $2, $3, 'workspace') returning id`,
+                [workspaceId, kind, owner],
+              )
+            ).rows[0]?.id as string;
+          collectorSource = await source('test.go4c.collector', collector);
+          gateSource = await source('gatekeeper', gateService);
+          const object = async (type: string, name: string) =>
+            (
+              await client.query<{ id: string }>(
+                `insert into objects (workspace_id, object_type, identity_key)
+                 values ($1, $2, $3::jsonb) returning id`,
+                [workspaceId, type, JSON.stringify({ name })],
+              )
+            ).rows[0]?.id as string;
+          webId = await object('test.go4c.Service', 'web');
+          hostId = await object(HOST, 'web-1');
+        });
+      });
+
+      // A function: `webId` is set in `beforeAll`, after this block is collected.
+      const factCheck = (key: string, linkType = LINK, expect?: unknown) => ({
+        kind: 'fact_predicate' as const,
+        key,
+        fact: {
+          linkType,
+          source: { objectId: webId },
+          target: { objectType: HOST, identity: { name: 'web-1' } },
+          ...(expect ? { expect } : {}),
+        },
+      });
+      const PORT_443 = { path: 'port', op: 'eq', value: 443 };
+
+      /** An Observation of `sourceId` on an Activity of `kind` started by `principalId` with
+       *  `metadata` — what `submit_observations` (a collector) or the gate's observe writes. */
+      const observation = (
+        client: PoolClient,
+        seen: {
+          readonly kind: string;
+          readonly sourceId: string;
+          readonly principalId: string;
+          readonly metadata?: Record<string, unknown>;
+        },
+      ) =>
+        startActivity(client, workspaceId, {
+          kind: seen.kind,
+          principalId: seen.principalId,
+          metadata: seen.metadata ?? {},
+        }).then(
+          async (activity) =>
+            [
+              activity.id,
+              (
+                await client.query<{ id: string }>(
+                  `insert into observations (workspace_id, source_id, activity_id, content)
+                   values ($1, $2, $3, '{}'::jsonb) returning id`,
+                  [workspaceId, seen.sourceId, activity.id],
+                )
+              ).rows[0]?.id as string,
+            ] as const,
+        );
+      /** A collector's submission. */
+      const collectorSeen = () => ({
+        kind: 'ingest.submit_observations',
+        sourceId: collectorSource,
+        principalId: collector,
+      });
+      /** The gate's observe, called by the Worker of `taskId` (`null`: no Worker). */
+      const gateSeen = (taskId: string | null) => ({
+        kind: 'gatekeeper_observe',
+        sourceId: gateSource,
+        principalId: gateService,
+        metadata: { triggeredByTaskId: taskId },
+      });
+      /** A Fact web → host of `linkType` with `properties`, as `seen` recorded it. */
+      const recordFact = (
+        linkType: string,
+        properties: Record<string, unknown>,
+        seen: Parameters<typeof observation>[1],
+      ) =>
+        admin(async (client) => {
+          const [activityId, observationId] = await observation(client, seen);
+          return (
+            await client.query<{ id: string }>(
+              `insert into links (workspace_id, link_type, source_object_id, target_object_id,
+                 properties, epistemic_status, activity_id, asserted_by, observation_id)
+               values ($1, $2, $3, $4, $5::jsonb, 'observed', $6, $7, $8) returning id`,
+              [
+                workspaceId,
+                linkType,
+                webId,
+                hostId,
+                JSON.stringify(properties),
+                activityId,
+                seen.principalId,
+                observationId,
+              ],
+            )
+          ).rows[0]?.id as string;
+        });
+      /** The Fact confirmed again, as `seen` recorded it — what a later run of a collector, or the
+       *  gate's next observe, writes for a Fact it finds unchanged. */
+      const reconfirm = (factId: string, seen: Parameters<typeof observation>[1]) =>
+        admin(async (client) => {
+          const [, observationId] = await observation(client, seen);
+          await client.query(
+            `update links set last_observation_id = $3, last_observed_at = now()
+              where workspace_id = $1 and id = $2`,
+            [workspaceId, factId, observationId],
+          );
+        });
+
+      const by = (principalId: string) => ({ principalId, role: 'member' as const });
+      const acceptanceOf = (goalRunId: string) =>
+        admin((client) => readGoalAcceptance(client, workspaceId, goalRunId));
+      const dueOf = async (goalRunId: string): Promise<readonly DueAcceptanceCheck[]> =>
+        (await listDueAcceptanceChecks(pool, 1000)).filter((due) => due.goalRunId === goalRunId);
+      /** Runs the attempt of the check `key` (the goal's, or a step's) now, its backoff skipped. */
+      async function judgeNow(
+        goalRunId: string,
+        key: string,
+        options: Parameters<typeof runAcceptanceCheck>[0]['options'] = {},
+      ) {
+        for (const table of ['goal_acceptance_checks', 'step_acceptance_checks']) {
+          await raw(
+            `update ${table} set next_attempt_at = now()
+              where workspace_id = $1 and goal_run_id = $2 and check_key = $3 and status = 'pending'`,
+            [workspaceId, goalRunId, key],
+          );
+        }
+        const due = (await dueOf(goalRunId)).find((candidate) => candidate.checkKey === key);
+        if (!due) throw new Error(`no check ${key} of ${goalRunId} is due`);
+        return runAcceptanceCheck({ pool, gatekeeperClient: observeClient, options }, due);
+      }
+      const checkAudit = async (goalRunId: string, key: string) =>
+        (await goalAudit(goalRunId))
+          .filter(
+            (row) =>
+              (row.action === 'goal_run.acceptance_check' ||
+                row.action === 'goal_run.step_acceptance_check') &&
+              row.payload.checkKey === key,
+          )
+          .map((row) => row.payload);
+      const pauseDetail = async (goalRunId: string) =>
+        (await goalAudit(goalRunId)).filter((row) => row.action === 'goal_run.pause').at(-1)
+          ?.payload.detail;
+      const NO_FACT_SEEN = (key: string) =>
+        `acceptance check ${key}: saw no Fact it may rest on (fact_not_observed) — none confirmed since the round opened by a collector, or by a gate this goal did not drive`;
+
+      /** A confirmed run of one step `a` with the goal's `acceptance`, run until its step is done:
+       *  verifying, its round opened. */
+      async function verifyingGoal(requester: string, acceptance: readonly unknown[]) {
+        const created = await asRequester(requester, (client) =>
+          createGoalRun(client, workspaceId, {
+            requesterId: requester,
+            proposedBy: requester,
+            statement: 'web runs on web-1',
+            plan: { ...planOf([{ key: 'a' }]), acceptance },
+            budget: BUDGET,
+          }),
+        );
+        await asRequester(requester, (client) =>
+          confirmGoalRun(client, workspaceId, {
+            goalRunId: created.goalRunId,
+            confirmedBy: requester,
+          }),
+        );
+        await advance(created.goalRunId, requester);
+        await completeStep((await stepsOf(created.goalRunId)).a?.id as string, requester);
+        expect(await advance(created.goalRunId, requester)).toMatchObject({
+          status: 'verifying',
+        });
+        return { goalRunId: created.goalRunId, hints: created.hints };
+      }
+
+      it('achieved by check on a Fact: no gate is called — the Fact a collector confirmed since the round opened is the evidence, and the run completes', async () => {
+        const requester = await newPrincipal();
+        // What the collector saw before the goal was verified proves nothing about its outcome.
+        const fact = await recordFact(LINK, { port: 443 }, collectorSeen());
+        const { goalRunId, hints } = await verifyingGoal(requester, [
+          factCheck('runs', LINK, PORT_443),
+        ]);
+        expect(hints).toEqual([]);
+        expect(
+          (await goalAudit(goalRunId)).find((row) => row.action === 'goal_run.acceptance_round')
+            ?.payload,
+        ).toMatchObject({ round: 1, checks: [{ key: 'runs', kind: 'fact_predicate' }] });
+
+        const calls = observeClient.calls.length;
+        expect(await judgeNow(goalRunId, 'runs')).toBe('retry');
+        expect((await acceptanceOf(goalRunId))?.rounds[0]?.checks).toMatchObject([
+          {
+            checkKey: 'runs',
+            kind: 'fact_predicate',
+            status: 'pending',
+            fact: factCheck('runs', LINK, PORT_443).fact,
+            check: null,
+            attempts: 1,
+            lastError: 'fact_not_observed',
+            factId: null,
+            nextAttemptAt: expect.any(Date),
+          },
+        ]);
+
+        await reconfirm(fact, collectorSeen());
+        expect(await judgeNow(goalRunId, 'runs')).toBe('passed');
+        expect(observeClient.calls).toHaveLength(calls);
+        expect((await acceptanceOf(goalRunId))?.rounds[0]?.checks).toMatchObject([
+          { checkKey: 'runs', status: 'passed', factId: fact, observationId: null },
+        ]);
+        expect(await checkAudit(goalRunId, 'runs')).toMatchObject([
+          {
+            outcome: 'retry',
+            kind: 'fact_predicate',
+            linkType: LINK,
+            attempt: 1,
+            code: 'fact_not_observed',
+          },
+          {
+            outcome: 'passed',
+            kind: 'fact_predicate',
+            linkType: LINK,
+            attempt: 2,
+            factId: fact,
+            evaluation: { outcome: 'satisfied' },
+          },
+        ]);
+
+        expect(await advance(goalRunId, requester)).toMatchObject({ status: 'completed' });
+        expect(await goalOf(goalRunId)).toMatchObject({
+          outcome: 'achieved',
+          outcomeBasis: 'verified_by_check',
+          outcomeDecisionId: null,
+        });
+      });
+
+      it('seen and false is not unseen: a Fact that does not satisfy the predicate fails its check on it; one recorded through the requester’s own Source is never seen — unavailable, and the pause tells the two apart', async () => {
+        const requester = await newPrincipal();
+        const ownSource = (
+          await raw<{ id: string }>(
+            `insert into sources (workspace_id, kind, owner_principal_id, visibility)
+             values ($1, 'test.go4c.collector', $2, 'workspace') returning id`,
+            [workspaceId, requester],
+          )
+        )[0]?.id as string;
+        const { goalRunId } = await verifyingGoal(requester, [
+          factCheck('port', LINK, PORT_443),
+          factCheck('served', SERVED),
+        ]);
+        const seenFalse = await recordFact(LINK, { port: 80 }, collectorSeen());
+        // What a Worker acting for the requester could submit: through a Source the requester owns.
+        await recordFact(
+          SERVED,
+          {},
+          { ...collectorSeen(), sourceId: ownSource, principalId: requester },
+        );
+
+        const options = { maxAttempts: 2, backoffMs: () => 60_000 };
+        expect(await judgeNow(goalRunId, 'port', options)).toBe('retry');
+        expect(await judgeNow(goalRunId, 'served', options)).toBe('retry');
+        expect(await judgeNow(goalRunId, 'port', options)).toBe('failed');
+        expect(await judgeNow(goalRunId, 'served', options)).toBe('unavailable');
+        const checks = (await acceptanceOf(goalRunId))?.rounds[0]?.checks;
+        expect(checks?.find((check) => check.checkKey === 'port')).toMatchObject({
+          status: 'failed',
+          factId: seenFalse,
+          lastError: 'predicate_unsatisfied',
+        });
+        expect(checks?.find((check) => check.checkKey === 'served')).toMatchObject({
+          status: 'unavailable',
+          factId: null,
+          lastError: 'fact_not_observed',
+        });
+        expect((await checkAudit(goalRunId, 'port')).at(-1)).toMatchObject({
+          outcome: 'failed',
+          factId: seenFalse,
+          code: 'predicate_unsatisfied',
+          evaluation: { outcome: 'unsatisfied' },
+        });
+        expect((await checkAudit(goalRunId, 'served')).at(-1)).toMatchObject({
+          outcome: 'unavailable',
+          code: 'fact_not_observed',
+        });
+        expect((await checkAudit(goalRunId, 'served')).at(-1)).not.toHaveProperty('factId');
+
+        await advance(goalRunId, requester);
+        expect(await goalOf(goalRunId)).toMatchObject({
+          status: 'paused',
+          pauseReason: 'needs_decision',
+          outcome: null,
+        });
+        const detail = await pauseDetail(goalRunId);
+        expect(detail).toContain(
+          'acceptance check port: the Fact it saw did not satisfy the predicate',
+        );
+        expect(detail).toContain(NO_FACT_SEEN('served'));
+
+        // Declared achieved on the requester's word over both: each named with what it saw.
+        const ended = await asRequester(requester, (client) =>
+          endGoalRun(client, workspaceId, { goalRunId, actor: by(requester), outcome: 'achieved' }),
+        );
+        expect(ended.overriddenChecks).toEqual([
+          {
+            checkKey: 'port',
+            kind: 'fact_predicate',
+            round: 1,
+            status: 'failed',
+            observationId: null,
+            factId: seenFalse,
+            lastError: 'predicate_unsatisfied',
+          },
+          {
+            checkKey: 'served',
+            kind: 'fact_predicate',
+            round: 1,
+            status: 'unavailable',
+            observationId: null,
+            factId: null,
+            lastError: 'fact_not_observed',
+          },
+        ]);
+      });
+
+      /** A running goal: step `a` declares `acceptance`, `b` follows it; `a`'s attempt 1 has done
+       *  its work and waits on its checks. */
+      async function stepAwaitingChecks(requester: string, acceptance: readonly unknown[]) {
+        const goalRunId = await startGoal(requester, [
+          { key: 'a', acceptance },
+          { key: 'b', dependsOn: ['a'] },
+        ]);
+        await advance(goalRunId, requester);
+        const a = (await stepsOf(goalRunId)).a as StepRunRow;
+        await completeStep(a.id, requester);
+        await advance(goalRunId, requester);
+        expect((await stepsOf(goalRunId)).a).toMatchObject({
+          status: 'waiting',
+          waitingReason: 'acceptance',
+        });
+        return { goalRunId, a };
+      }
+
+      it('a step’s fact check: the gate observe its own Worker called proves nothing — the step waits acceptance_unavailable; an observe no Worker of the goal called does, and a resume verifies it without redoing the work', async () => {
+        const requester = await newPrincipal();
+        const { goalRunId, a } = await stepAwaitingChecks(requester, [factCheck('runs')]);
+        const [attempt] = await attemptTasks(a.id);
+        const fact = await recordFact(LINK, {}, gateSeen(attempt?.id as string));
+
+        expect(await judgeNow(goalRunId, 'runs', { maxAttempts: 1 })).toBe('unavailable');
+        await advance(goalRunId, requester);
+        expect((await stepsOf(goalRunId)).a).toMatchObject({
+          status: 'waiting',
+          waitingReason: 'acceptance_unavailable',
+          failureCategory: null,
+        });
+        expect(await goalOf(goalRunId)).toMatchObject({
+          status: 'paused',
+          pauseReason: 'needs_decision',
+        });
+        expect(await pauseDetail(goalRunId)).toBe(
+          `step a: attempt 1: ${NO_FACT_SEEN('runs')}; resume the run to verify the step again, revise the plan or cancel`,
+        );
+        expect(
+          (await stepAudit(goalRunId))
+            .filter((row) => row.resource_id === a.id && row.action === 'step_run.wait')
+            .at(-1)?.payload,
+        ).toMatchObject({ waitingReason: 'acceptance_unavailable', unavailableChecks: ['runs'] });
+
+        // A person's observe of the gate confirms the same Fact: evidence.
+        await reconfirm(fact, gateSeen(null));
+        await asRequester(requester, (client) =>
+          resumeGoalRun(client, workspaceId, { goalRunId, actor: by(requester) }),
+        );
+        await advance(goalRunId, requester);
+        // The round opened after the observe: the observe proves nothing for it.
+        expect(await judgeNow(goalRunId, 'runs', { maxAttempts: 2, backoffMs: () => 60_000 })).toBe(
+          'retry',
+        );
+        await reconfirm(fact, gateSeen(null));
+        expect(await judgeNow(goalRunId, 'runs')).toBe('passed');
+        await advance(goalRunId, requester);
+        expect((await stepsOf(goalRunId)).a).toMatchObject({
+          status: 'succeeded',
+          attemptCount: 1,
+        });
+        expect(await attemptTasks(a.id)).toHaveLength(1);
+        expect((await stepsOf(goalRunId)).b?.status).toBe('running');
+      });
+
+      it('a step’s fact check that sees its Fact false fails the step verification_failed, on that Fact', async () => {
+        const requester = await newPrincipal();
+        const { goalRunId, a } = await stepAwaitingChecks(requester, [
+          factCheck('port', LINK, PORT_443),
+        ]);
+        const fact = await recordFact(LINK, { port: 80 }, collectorSeen());
+        expect(await judgeNow(goalRunId, 'port', { maxAttempts: 1 })).toBe('failed');
+        expect(
+          await admin((client) => listStepAcceptanceChecks(client, workspaceId, goalRunId)),
+        ).toMatchObject([{ status: 'failed', factId: fact, lastError: 'predicate_unsatisfied' }]);
+        await advance(goalRunId, requester);
+        expect((await stepsOf(goalRunId)).a).toMatchObject({
+          status: 'failed',
+          failureCategory: 'verification_failed',
+          waitingReason: null,
+        });
+        expect(await pauseDetail(goalRunId)).toBe(
+          'step a: attempt 1: acceptance check port: the Fact it saw did not satisfy the predicate; retry the step (its work is done again), revise the plan or cancel',
+        );
+        expect((await stepsOf(goalRunId)).a?.id).toBe(a.id);
+      });
+
+      it('a plan’s fact check names Objects that exist, by id', async () => {
+        const requester = await newPrincipal();
+        const missing = randomUUID();
+        let problems: readonly string[] = [];
+        try {
+          await proposeGoal(requester, [
+            {
+              key: 'a',
+              acceptance: [
+                {
+                  ...factCheck('runs'),
+                  fact: { ...factCheck('runs').fact, source: { objectId: missing } },
+                },
+              ],
+            },
+          ]);
+        } catch (err) {
+          expect(err).toBeInstanceOf(GoalPlanValidationError);
+          problems = (err as GoalPlanValidationError).problems;
+        }
+        expect(problems).toEqual([
+          `step "a": acceptance[0] "runs": fact: the source Object ${missing} does not exist in this workspace`,
         ]);
       });
     });

@@ -35,6 +35,7 @@ import {
 } from '../task/index.js';
 import {
   type AcceptanceCheckRow,
+  FACT_NOT_OBSERVED,
   openAcceptanceRound,
   openStepAcceptanceRound,
   readCurrentAcceptanceRound,
@@ -46,6 +47,7 @@ import { type GoalMoveActor, moveGoalRun, moveStepRun } from './moves.js';
 import {
   DEFAULT_MAX_ATTEMPTS,
   type PlanStep,
+  isPlatformAcceptanceCheck,
   planStep,
   roundAcceptance,
   samePlanEntry,
@@ -150,14 +152,15 @@ import type { GoalRunRow, PlanRevisionRow, StepRunRow } from './types.js';
  *      run enters it — or by the first advance that finds none, for a run that entered it under a
  *      release without verification — with one row per acceptance check of the plan in force
  *      (`plan.ts` `roundAcceptance`: its `acceptance`, or one `requester_confirm` asking about the
- *      goal statement). The platform makes the observations (`acceptance-check.ts`, outside this
- *      transaction; a settled one sets the run due) and the requester gives the confirmation
- *      (`acceptance.ts`, asked only once every observation passed). Then: an observation still
- *      pending → wait; an observation `failed` or `unavailable` → `paused(needs_decision)`, the
- *      checks named in the pause (the evidence is on their rows); the confirmation pending → wait;
- *      every check passed → `completed(achieved)`, on `verified_by_check` when the platform
- *      observed anything, else on the requester's word (`requester`, their confirmation's
- *      Decision). The database refuses any other way to `achieved` (goal/0005). Leaving
+ *      goal statement). The platform makes the observations and judges the Facts (S11 GO4c)
+ *      (`acceptance-check.ts`, outside this transaction; a settled one sets the run due) and the
+ *      requester gives the confirmation (`acceptance.ts`, asked only once every check the platform
+ *      makes passed). Then: such a check still pending → wait; one `failed` or `unavailable` →
+ *      `paused(needs_decision)`, the checks named in the pause (the evidence is on their rows);
+ *      the confirmation pending → wait; every check passed → `completed(achieved)`, on
+ *      `verified_by_check` when the platform checked anything, else on the requester's word
+ *      (`requester`, their confirmation's Decision). The database refuses any other way to
+ *      `achieved` (goal/0005, goal/0007). Leaving
  *      `verifying` supersedes the round's pending checks (`moves.ts`), so a paused, held or
  *      cancelled run observes nothing, and a resume verifies in a new round. No budget is checked
  *      while verifying: an observation is bounded by its own attempts and duration, and waiting
@@ -178,6 +181,21 @@ import type { GoalRunRow, PlanRevisionRow, StepRunRow } from './types.js';
  * payload. Times are the database's `now()` — the transaction's start — so a backoff measured from
  * `step_runs.updated_at` never mixes two clocks.
  */
+
+/** What a `failed` acceptance check saw that did not satisfy its predicate — for a pause's detail
+ *  (the evidence is on the row). */
+function unmetEvidence(check: AcceptanceCheckRow): string {
+  return check.kind === 'fact_predicate' ? 'the Fact it saw' : 'its observation';
+}
+
+/** A pause's detail for an `unavailable` fact check that saw no Fact it may rest on — told apart
+ *  from a check that could not be made, since what is missing is an observation from outside the
+ *  goal (GO6's console offers its own next step for it). `null` for any other check. */
+function noFactSeen(check: AcceptanceCheckRow): string | null {
+  return check.kind === 'fact_predicate' && check.lastError === FACT_NOT_OBSERVED
+    ? `acceptance check ${check.checkKey}: saw no Fact it may rest on (${FACT_NOT_OBSERVED}) — none confirmed since the round opened by a collector, or by a gate this goal did not drive`
+    : null;
+}
 
 /** Delay before attempt `attempts + 1` of a step whose attempt `attempts` failed transiently:
  *  30 s, doubling, at most 10 minutes. */
@@ -734,8 +752,9 @@ class Advance {
     };
     const named = [...failed, ...unavailable].map((check) =>
       check.status === 'failed'
-        ? `acceptance check ${check.checkKey}: its observation did not satisfy the predicate`
-        : `acceptance check ${check.checkKey}: could not be made (${check.lastError ?? 'no reason recorded'})`,
+        ? `acceptance check ${check.checkKey}: ${unmetEvidence(check)} did not satisfy the predicate`
+        : (noFactSeen(check) ??
+          `acceptance check ${check.checkKey}: could not be made (${check.lastError ?? 'no reason recorded'})`),
     );
     if (failed.length > 0) {
       await this.moveStep(step, 'fail', { failureCategory: 'verification_failed', audit });
@@ -1099,14 +1118,15 @@ class Advance {
       if (!opened) return;
       round = opened;
     }
-    const observations = round.filter((check) => check.kind === 'observe_predicate');
-    if (observations.some((check) => check.status === 'pending')) return;
+    const platformChecks = round.filter((check) => isPlatformAcceptanceCheck(check.kind));
+    if (platformChecks.some((check) => check.status === 'pending')) return;
     const unmet = round.filter((check) => check.status !== 'passed' && check.status !== 'pending');
     if (unmet.length > 0) {
       const named = unmet.map((check) =>
         check.status === 'failed'
-          ? `acceptance check ${check.checkKey}: its observation did not satisfy the predicate`
-          : `acceptance check ${check.checkKey}: ${check.status} (${check.lastError ?? 'no reason recorded'})`,
+          ? `acceptance check ${check.checkKey}: ${unmetEvidence(check)} did not satisfy the predicate`
+          : (noFactSeen(check) ??
+            `acceptance check ${check.checkKey}: ${check.status} (${check.lastError ?? 'no reason recorded'})`),
       );
       await this.pause(
         'needs_decision',
@@ -1114,10 +1134,11 @@ class Advance {
       );
       return;
     }
-    // Every observation passed: what is left is the requester's confirmation, if the round asks.
+    // Every check the platform makes passed: what is left is the requester's confirmation, if the
+    // round asks.
     if (round.some((check) => check.status === 'pending')) return;
     const confirmation = round.find((check) => check.kind === 'requester_confirm');
-    const byCheck = observations.length > 0;
+    const byCheck = platformChecks.length > 0;
     this.status = await moveGoalRun(this.client, this.actor, this.goal, 'verifying', 'complete', {
       outcome: {
         outcome: 'achieved',

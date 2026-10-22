@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  FactCheckSchema,
   ObservationCheckSchema,
   PREDICATE_MAX_CHILDREN,
   PREDICATE_MAX_LEAVES,
@@ -85,5 +86,32 @@ describe('predicate (S11 GO3d)', () => {
       false,
     );
     expect(ObservationCheckSchema.safeParse({ ...check, mode: 'execute' }).success).toBe(false);
+  });
+
+  it('a fact check names a Link by its type and its two ends — by id, or by ObjectType and identity — and an optional predicate, strictly (S11 GO4c)', () => {
+    const fact = {
+      linkType: 'runs_on',
+      source: { objectId: '00000000-0000-4000-8000-000000000001' },
+      target: { objectType: 'Host', identity: { name: 'web-1', zone: 2 } },
+    };
+    expect(FactCheckSchema.parse(fact)).toEqual(fact);
+    const expect_ = { path: 'port', op: 'eq', value: 443 };
+    expect(FactCheckSchema.parse({ ...fact, expect: expect_ })).toEqual({
+      ...fact,
+      expect: expect_,
+    });
+    for (const refused of [
+      { ...fact, linkType: '' },
+      { ...fact, source: { objectId: 'web' } },
+      { ...fact, source: { ...fact.source, objectType: 'Service', identity: { name: 'web' } } },
+      { ...fact, target: { objectType: 'Host' } },
+      { ...fact, target: { objectType: 'Host', identity: {} } },
+      { ...fact, target: { objectType: '', identity: { name: 'web-1' } } },
+      { ...fact, expect: { path: 'port', op: 'between', value: 1 } },
+      { ...fact, mode: 'latest' },
+      { linkType: fact.linkType, source: fact.source },
+    ]) {
+      expect(FactCheckSchema.safeParse(refused).success, JSON.stringify(refused)).toBe(false);
+    }
   });
 });

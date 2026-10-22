@@ -861,28 +861,32 @@ describe.runIf(DATABASE_URL !== undefined)(
         [workspaceId, ownerId],
       );
       const goalRunId = goal?.id as string;
+      const up = {
+        kind: 'observe_predicate',
+        key: 'up',
+        check: {
+          gatekeeperId: randomUUID(),
+          operation: 'svc.status',
+          expect: { path: 'state', op: 'eq', value: 'running' },
+        },
+      } as const;
       await raw(
         `insert into plan_revisions (workspace_id, goal_run_id, revision, status, plan, proposed_by,
            decided_by, decided_at)
-         values ($1, $2, 1, 'accepted', '{"steps":[{"key":"s"}]}', $3, $3, now())`,
-        [workspaceId, goalRunId, ownerId],
+         values ($1, $2, 1, 'accepted', $3::jsonb, $4, $4, now())`,
+        [
+          workspaceId,
+          goalRunId,
+          JSON.stringify({ steps: [{ key: 's' }], acceptance: [up] }),
+          ownerId,
+        ],
       );
       // The round and the check's settlement through the module that owns them, under its guard.
       await asLogin(async (client) => {
         const [check] = await openAcceptanceRound(client, workspaceId, {
           goalRunId,
           planRevision: 1,
-          checks: [
-            {
-              kind: 'observe_predicate',
-              key: 'up',
-              check: {
-                gatekeeperId: randomUUID(),
-                operation: 'svc.status',
-                expect: { path: 'state', op: 'eq', value: 'running' },
-              },
-            },
-          ],
+          checks: [up],
           actorPrincipalId: ownerId,
         });
         if (!check) throw new Error('no acceptance check was opened');
