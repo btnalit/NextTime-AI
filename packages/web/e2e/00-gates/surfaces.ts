@@ -163,14 +163,15 @@ export const SURFACES: readonly Surface[] = [
     ready: (page) => heading(page, '能力目录'),
   },
   {
-    id: 'catalog-modules',
-    labelZh: '能力目录 · Module',
-    hash: '#/govern/catalog/modules',
+    // S11 P1-C: the capability packs (it replaced the 模块 tab, `catalog-modules`).
+    id: 'catalog-packs',
+    labelZh: '能力目录 · 能力包',
+    hash: '#/govern/catalog/packs',
     role: 'owner',
     ready: (page) => heading(page, '能力目录'),
   },
   {
-    // S11 P1-B: the install records (the workspace's default modules, installed by the platform).
+    // S11 P1-B: the install records (the workspace's default packs, installed by the platform).
     id: 'catalog-changes',
     labelZh: '能力目录 · 安装历史',
     hash: '#/govern/catalog/changes',

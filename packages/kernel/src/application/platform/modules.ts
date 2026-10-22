@@ -1,9 +1,4 @@
-import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import path from 'node:path';
 import type { PoolClient } from 'pg';
-import { parse as parseYaml } from 'yaml';
-import { z } from 'zod';
 import { setWorkspaceContext } from '../../adapters/db/platform-context.js';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { assertReviewedVersion } from '../../governance/capability/index.js';
@@ -11,24 +6,29 @@ import {
   type OntologyDefinition,
   type OntologyVersionRow,
   deriveOntologyPackId,
-  loadOntologyDefinitionFile,
   loadPublishedOntologyHead,
-  lockOntologyFamily,
-  resolveOntologyDir,
 } from '../../substrate/ontology/index.js';
 import {
   applyWorkspaceSegment,
   assertWideningConfirmed,
   contentDigest,
-  planWorkspaceSegment,
 } from '../change-plan/index.js';
 import { withAdminClient } from '../gateway/auth.js';
+import {
+  PACK_INSTALL_STATUS_VALUES,
+  type PackEntry,
+  type PackInstallStatus,
+  type PackRegistry,
+  type PackRegistryOptions,
+  loadPackRegistry,
+  matchInstalledVersion,
+  planPackInstall,
+} from '../packs/index.js';
 import { readPlatformSettings } from './settings.js';
 
 /**
- * application/platform/modules: the P-B2b "模块" domain — module registry (§6.4;
- * docs/development-tasks.md §5d S7-D 决定 D1–D3) built from `ontology/modules.yaml` + the domain-
- * pack files it indexes, and the install/upgrade orchestration, which applies a module as a
+ * application/platform/modules: the P-B2b "模块" domain — the module registry (§6.4;
+ * docs/development-tasks.md §5d S7-D 决定 D1–D3) and install/upgrade, which applies a module as a
  * ChangePlan workspace segment (`application/change-plan`, S11 P1). `application/gateway/
  * platform-modules-handlers.ts` is the thin `CapabilityHandler` layer over this file; this file has
  * no dependency on dispatch, capability registration, or wire schemas (`@nexttime/shared`'s own
@@ -36,184 +36,101 @@ import { readPlatformSettings } from './settings.js';
  * kept separate the same way every other `application/gateway/*-handlers.ts` / domain-module pair
  * already is in this codebase).
  *
- * **A module is a versioned domain pack** (D1): `ontology/modules.yaml` names a family (`name`,
- * matching `deriveOntologyPackId`'s own `packName`) and its dense, 1-based version list
- * (`{file, version, notes, breaking}` — see that YAML file's own header comment for why no gaps are
- * allowed). `platform-meta` / `entry-agent` / `ops-runner` are not modules and are not indexed here
- * (D1) — `platform-meta` is seeded once per workspace by `seedPlatformMetaOntology`, and the other
- * two are WorkerDefinition templates, a different publish path entirely.
+ * **A module is a pack with one ontology component named after it** (S11 P1-C; S10 plan §6.4 "模块
+ * 是只含本体组件的包"): every version of the pack publishes exactly one ontology family, the pack's
+ * own name (`deriveOntologyPackId`'s `packName`). The registry is read from the deployment's packs
+ * (`application/packs`, `packs/<name>/<version>/pack.yaml`) — the former `ontology/modules.yaml`
+ * index moved there, version numbers, notes and `breaking` unchanged. A pack with several
+ * components is not a module: it is installed with `install_pack`. `platform-meta` and the
+ * WorkerDefinition templates beside it in `ontology/` are neither (D1).
  *
- * **"Installed version" = hash match** (D2): at call time, this module hashes each index version's
- * *parsed* `OntologyDefinition` (`parseOntologyDefinition`'s own output — the same normalization
- * every publish already goes through, `substrate/ontology/loader.ts`'s `loadOntologyDefinitionFile`)
- * with a key-sorted canonical JSON + sha256, the same recipe `application/gateway/action-
- * executor.ts`'s `hashStableParams` and `substrate/graph/store.ts`'s own `stableStringify` already
- * use elsewhere in this codebase (copied here rather than factored into a shared helper — each of
- * those two sites made the same "small, self-contained, stateless, not worth a new module" call,
- * doc-commented at their own `stableStringify`; this is the third, same reasoning). The hash is
- * never persisted anywhere (`ontology/modules.yaml` itself, and `ontology_versions`, both stay
- * exactly as they already are) — it is recomputed from the image's own `ontology/` directory
- * (`resolveOntologyDir()`) on every call that needs it, so it can never drift against what an
- * install would actually publish.
+ * **"Installed version" = digest match** (D2): the family's published head is compared, by
+ * `contentDigest` of its definition, with each version's (`application/packs/state.ts`'s rule —
+ * the latest when it matches, otherwise the earliest that does). Nothing is persisted; the digests
+ * are recomputed from the image's own `packs/` and `ontology/` on every call, so they can never
+ * drift against what an install would actually publish.
  *
- * **The index's own version number is not `ontology_versions.version`.** The latter is a per-
- * workspace, per-family publish counter (`nextOntologyVersion`'s own `max(version) + 1`, advanced
- * by every publish regardless of content) — it can run ahead of, or never
- * equal, the module family's own `1, 2, 3, …` index numbering (republishing identical content still
- * consumes a DB version number; a workspace whose DB row is version 5 may still match the index's
- * own version 1 by hash). Every function here that reports "the installed version"
- * (`WorkspaceModuleState.installedVersion`, `ModuleConfirmRequiredDetails.currentVersion`) means
- * the **index** version found by hash match (D2), `null` when there is none (`customized`) —
- * `install_module`/`upgrade_module` always target the index's own **latest** version directly, in
- * one publish, never by incrementing the DB version number.
+ * **A module version number is not `ontology_versions.version`.** The latter is a per-workspace,
+ * per-family publish counter (`nextOntologyVersion`'s own `max(version) + 1`, advanced by every
+ * publish regardless of content) — it can run ahead of, or never equal, the pack's own `1, 2, 3, …`
+ * numbering (republishing identical content still consumes a DB version number; a workspace whose
+ * DB row is version 5 may still match the pack's version 1). Every function here that reports "the
+ * installed version" (`WorkspaceModuleState.installedVersion`, `ModuleConfirmRequiredDetails.
+ * currentVersion`) means the **pack** version found by digest match (D2), `null` when there is none
+ * (`customized`) — `install_module`/`upgrade_module` always target the pack's **latest** version
+ * directly, in one publish, never by incrementing the DB version number.
  */
 
 // -------------------------------------------------------------------------------------------
-// ontology/modules.yaml — index file parsing
+// module registry — the packs that are modules
 // -------------------------------------------------------------------------------------------
 
-const ModuleIndexVersionSchema = z
-  .object({
-    file: z.string().min(1),
-    version: z.number().int().positive(),
-    notes: z.string(),
-    breaking: z.boolean(),
-  })
-  .strict();
-
-const ModuleIndexEntrySchema = z
-  .object({
-    name: z.string().min(1),
-    versions: z.array(ModuleIndexVersionSchema).min(1),
-  })
-  .strict();
-
-const ModulesIndexFileSchema = z
-  .object({
-    modules: z.array(ModuleIndexEntrySchema),
-  })
-  .strict();
-
-export type ModuleIndexVersion = z.infer<typeof ModuleIndexVersionSchema>;
-export type ModuleIndexEntry = z.infer<typeof ModuleIndexEntrySchema>;
-
-export class ModuleIndexParseError extends Error {
-  constructor(source: string, cause: unknown) {
-    super(`failed to parse module index "${source}": ${String(cause)}`, { cause });
-    this.name = 'ModuleIndexParseError';
-  }
-}
-
-/** Reads and validates `<dir>/modules.yaml`, then checks the one invariant its own schema cannot
- *  express: each family's `versions` is dense and 1-based (1, 2, 3, … — no gaps, no duplicates).
- *  Not required by `installOrUpgradeModule`'s own algorithm any more (it always targets the latest
- *  entry directly and range-checks by iterating `versions`, neither of which needs density) — kept
- *  as a data-hygiene guard against an index author leaving a confusing gap (e.g. `1, 3` reading as
- *  though version 2 was withdrawn). A misconfigured index is a deployment bug, not a caller error —
- *  this throws rather than silently skipping the offending family. */
-export async function readModulesIndexFile(
-  dir: string = resolveOntologyDir(),
-): Promise<readonly ModuleIndexEntry[]> {
-  const filePath = path.join(dir, 'modules.yaml');
-  let text: string;
-  try {
-    text = await readFile(filePath, 'utf8');
-  } catch (err) {
-    throw new ModuleIndexParseError(filePath, err);
-  }
-  let raw: unknown;
-  try {
-    raw = parseYaml(text);
-  } catch (err) {
-    throw new ModuleIndexParseError(filePath, err);
-  }
-  const result = ModulesIndexFileSchema.safeParse(raw);
-  if (!result.success) throw new ModuleIndexParseError(filePath, result.error);
-  for (const entry of result.data.modules) {
-    const sorted = [...entry.versions].map((v) => v.version).sort((a, b) => a - b);
-    const dense = sorted.every((version, index) => version === index + 1);
-    if (!dense) {
-      throw new ModuleIndexParseError(
-        filePath,
-        `module "${entry.name}": versions must be dense from 1 (got: ${sorted.join(', ')})`,
-      );
-    }
-  }
-  return result.data.modules;
-}
-
-// -------------------------------------------------------------------------------------------
-// hashing (D2)
-// -------------------------------------------------------------------------------------------
-
-/** Deterministic JSON serialization — sorts object keys recursively, same recipe as
- *  `application/gateway/action-executor.ts`'s own `stableStringify` (see that function's doc
- *  comment: not a general-purpose canonical-JSON implementation, but `OntologyDefinition` is always
- *  the output of `parseOntologyDefinition`'s own Zod validation, which can never contain a BigInt,
- *  Date, or cycle). */
-function stableStringify(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
-  if (value !== null && typeof value === 'object') {
-    const record = value as Record<string, unknown>;
-    const keys = Object.keys(record).sort();
-    return `{${keys.map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`).join(',')}}`;
-  }
-  return JSON.stringify(value) ?? 'null';
-}
-
-/** sha256 of `definition`'s stable serialization, hex-encoded (D2). Exported for tests. */
-export function hashOntologyDefinition(definition: OntologyDefinition): string {
-  return createHash('sha256').update(stableStringify(definition), 'utf8').digest('hex');
-}
-
-// -------------------------------------------------------------------------------------------
-// module registry — the index, with every version's hash computed against `dir`'s actual files
-// -------------------------------------------------------------------------------------------
-
-export interface ModuleRegistryVersion extends ModuleIndexVersion {
-  readonly hash: string;
+export interface ModuleRegistryVersion {
+  readonly version: number;
+  /** The domain pack file in the ontology library this version publishes. */
+  readonly file: string;
+  readonly notes: string;
+  readonly breaking: boolean;
+  /** `contentDigest` of the definition (D2). */
+  readonly definitionDigest: string;
 }
 
 export interface ModuleRegistryEntry {
   readonly name: string;
-  /** Ascending by `version`, 1-based, dense (`readModulesIndexFile`'s own invariant). */
+  /** Ascending by `version`, dense from 1 (the pack registry's own rule). */
   readonly versions: readonly ModuleRegistryVersion[];
+  /** The pack the module is. */
+  readonly pack: PackEntry;
 }
 
-/** Not persisted anywhere — recomputed from `dir` on every call (this file's own doc comment).
- *  Cheap: `ontology/modules.yaml` and the handful of domain-pack files it indexes are small, and
- *  this mirrors `application/gateway/models-catalog-handler.ts`'s own "no cache, read fresh"
- *  choice for the same reason (the source is baked into the image and only ever changes on a
- *  redeploy — a cache would only add invalidation the process restart already provides for free). */
-export async function loadModuleRegistry(
-  dir: string = resolveOntologyDir(),
-): Promise<ReadonlyMap<string, ModuleRegistryEntry>> {
-  const index = await readModulesIndexFile(dir);
+export type ModuleRegistry = ReadonlyMap<string, ModuleRegistryEntry>;
+
+/** Every version publishes one ontology component, into the family named after the pack. */
+export function isModulePack(entry: PackEntry): boolean {
+  return entry.versions.every(
+    (version) => version.components.length === 1 && version.components[0]?.family === entry.name,
+  );
+}
+
+/** The modules among `packs`, in the registry's order. */
+export function moduleRegistryOf(packs: PackRegistry): ModuleRegistry {
   const registry = new Map<string, ModuleRegistryEntry>();
-  for (const entry of index) {
-    const sorted = [...entry.versions].sort((a, b) => a.version - b.version);
-    const versions: ModuleRegistryVersion[] = [];
-    for (const version of sorted) {
-      const definition = await loadOntologyDefinitionFile(path.join(dir, version.file));
-      versions.push({ ...version, hash: hashOntologyDefinition(definition) });
-    }
-    registry.set(entry.name, { name: entry.name, versions });
+  for (const pack of packs.values()) {
+    if (!isModulePack(pack)) continue;
+    const versions = pack.versions.map((version): ModuleRegistryVersion => {
+      const [component] = version.components;
+      if (!component) throw new Error(`module "${pack.name}" v${version.version} has no component`);
+      return {
+        version: version.version,
+        file: component.domainPack,
+        notes: version.notes,
+        breaking: version.breaking,
+        definitionDigest: component.definitionDigest,
+      };
+    });
+    registry.set(pack.name, { name: pack.name, versions, pack });
   }
   return registry;
+}
+
+/** Not persisted anywhere — read from the packs on every call (this file's own doc comment), the
+ *  same "no cache, read fresh" choice as `application/gateway/models-catalog-handler.ts` (the
+ *  source is baked into the image and only ever changes on a redeploy). */
+export async function loadModuleRegistry(
+  options: PackRegistryOptions = {},
+): Promise<ModuleRegistry> {
+  return moduleRegistryOf(await loadPackRegistry(options));
 }
 
 export class ModuleNotFoundError extends Error {
   readonly code = 'module_not_found' as const;
   constructor(name: string) {
-    super(`module "${name}" is not in this deployment's module index`);
+    super(`module "${name}" is not a module this deployment ships`);
     this.name = 'ModuleNotFoundError';
   }
 }
 
-export function requireModule(
-  registry: ReadonlyMap<string, ModuleRegistryEntry>,
-  name: string,
-): ModuleRegistryEntry {
+export function requireModule(registry: ModuleRegistry, name: string): ModuleRegistryEntry {
   const entry = registry.get(name);
   if (!entry) throw new ModuleNotFoundError(name);
   return entry;
@@ -221,7 +138,7 @@ export function requireModule(
 
 function latestVersion(entry: ModuleRegistryEntry): ModuleRegistryVersion {
   const last = entry.versions[entry.versions.length - 1];
-  if (!last) throw new Error(`module "${entry.name}" has an empty version list — index bug`);
+  if (!last) throw new Error(`module "${entry.name}" has an empty version list — registry bug`);
   return last;
 }
 
@@ -229,13 +146,8 @@ function latestVersion(entry: ModuleRegistryEntry): ModuleRegistryVersion {
 // installed-state detection (D2) — one workspace
 // -------------------------------------------------------------------------------------------
 
-export const MODULE_INSTALL_STATUS_VALUES = [
-  'not_installed',
-  'up_to_date',
-  'outdated',
-  'customized',
-] as const;
-export type ModuleInstallStatus = (typeof MODULE_INSTALL_STATUS_VALUES)[number];
+export const MODULE_INSTALL_STATUS_VALUES = PACK_INSTALL_STATUS_VALUES;
+export type ModuleInstallStatus = PackInstallStatus;
 
 /** The latest **published** `ontology_versions` row for `packId` in `workspaceId`, or `null` when
  *  the family was never published there (`substrate/ontology`'s `loadPublishedOntologyHead`).
@@ -255,51 +167,45 @@ export async function loadInstalledPackVersion(
 
 export interface WorkspaceModuleState {
   readonly entry: ModuleRegistryEntry;
-  /** The **index** version matching the installed definition's hash (D2) — never the raw
+  /** The **pack** version matching the installed definition's digest (D2) — never the raw
    *  `ontology_versions.version` row number, which is a per-workspace publish counter that can run
-   *  ahead of (or never equal) the index's own numbering (e.g. the same index version republished
-   *  twice bumps the DB version but is still index version N). `null` for `not_installed` *and*
-   *  for `customized` (a hash matching no known index version has no meaningful index version to
-   *  report). */
+   *  ahead of (or never equal) the pack's own numbering. `null` for `not_installed` *and* for
+   *  `customized` (a digest matching no known version has no meaningful version to report). */
   readonly installedVersion: number | null;
   readonly status: ModuleInstallStatus;
 }
 
-/** Classifies one workspace's install state for `entry` given the installed definition's hash (D2;
- *  `null` = never installed). A hash matching *some* known index version but not the latest one is
- *  `outdated`; matching no known version at all is `customized` (D3: a caller reached this family's
- *  id through `propose_ontology_change` directly, republished the same content over itself, or a
- *  version was hand-edited some other way — the raw DB version number is irrelevant to this
- *  classification, only content hash is); matching the latest known version is `up_to_date`. On a
- *  hash collision between two different index versions (two versions with byte-identical
- *  `OntologyDefinition` content), the **earliest** one matches — see `installOrUpgradeModule`'s own
- *  doc comment on why that is the conservative, safe choice for the confirm-range check. */
+/** Classifies one workspace's install state for `entry` given the installed definition's digest
+ *  (D2; `null` = never installed): matching the latest version is `up_to_date`; matching an older
+ *  one is `outdated` (the earliest, when two versions have identical content — see
+ *  `installOrUpgradeModule` on why that is the conservative choice for the confirm-range check);
+ *  matching none is `customized` (D3: published through `propose_ontology_change` directly, or
+ *  hand-edited some other way — the raw DB version number is irrelevant, only content is). */
 export function classifyModuleState(
   entry: ModuleRegistryEntry,
-  installedHash: string | null,
+  installedDigest: string | null,
 ): WorkspaceModuleState {
-  if (installedHash === null) return { entry, installedVersion: null, status: 'not_installed' };
-  const matched = entry.versions.find((v) => v.hash === installedHash);
-  if (!matched) return { entry, installedVersion: null, status: 'customized' };
-  const latest = latestVersion(entry);
-  const status: ModuleInstallStatus =
-    matched.version === latest.version ? 'up_to_date' : 'outdated';
-  return { entry, installedVersion: matched.version, status };
+  const candidates = entry.versions.map((v) => ({
+    version: v.version,
+    digest: v.definitionDigest,
+  }));
+  return {
+    entry,
+    ...matchInstalledVersion(candidates, latestVersion(entry).version, installedDigest),
+  };
 }
 
-/** `list_workspace_modules`: every indexed module's state in one workspace. */
+/** `list_workspace_modules`: every module's state in one workspace. */
 export async function loadWorkspaceModuleStates(
   client: PoolClient,
   workspaceId: string,
-  registry: ReadonlyMap<string, ModuleRegistryEntry>,
+  registry: ModuleRegistry,
 ): Promise<readonly WorkspaceModuleState[]> {
   const states: WorkspaceModuleState[] = [];
   for (const entry of registry.values()) {
     const packId = deriveOntologyPackId(entry.name);
     const installed = await loadInstalledPackVersion(client, workspaceId, packId);
-    states.push(
-      classifyModuleState(entry, installed ? hashOntologyDefinition(installed.definition) : null),
-    );
+    states.push(classifyModuleState(entry, installed ? contentDigest(installed.definition) : null));
   }
   return states;
 }
@@ -310,12 +216,12 @@ export async function loadWorkspaceModuleStates(
 
 export interface ModuleConfirmRequiredDetails {
   readonly name: string;
-  /** The current **index** version (D2's hash match), `null` when `currentStatus` is `customized`. */
+  /** The current **pack** version (D2's digest match), `null` when `currentStatus` is `customized`. */
   readonly currentVersion: number | null;
   readonly currentStatus: Extract<ModuleInstallStatus, 'outdated' | 'customized'>;
   readonly targetVersion: number;
-  /** True when the target itself, or any index version *between* the current one and the target,
-   *  is `breaking` — advancing straight to the target would silently skip past it otherwise. */
+  /** True when the target itself, or any version *between* the current one and the target, is
+   *  `breaking` — advancing straight to the target would silently skip past it otherwise. */
   readonly breaking: boolean;
 }
 
@@ -341,11 +247,11 @@ export class ModuleConfirmRequiredError extends Error {
 export interface InstallOrUpgradeModuleInput {
   readonly name: string;
   readonly confirm?: boolean;
-  /** Legacy 300: the indexed version the owner was shown as the target (`WorkspaceModuleWire.
-   *  latestVersion`). The call always targets the index's latest, and refuses
-   *  `ReviewedVersionChangedError` (409 `version_changed`) when that is another one — an upgrade
-   *  shipped a newer index between the read and the click. Internal callers (workspace creation's
-   *  default modules) omit it. */
+  /** Legacy 300: the version the owner was shown as the target (`WorkspaceModuleWire.
+   *  latestVersion`). The call always targets the latest, and refuses `ReviewedVersionChangedError`
+   *  (409 `version_changed`) when that is another one — an upgrade shipped a newer pack version
+   *  between the read and the click. Internal callers (workspace creation's default modules) omit
+   *  it. */
   readonly version?: number;
   /** Who is applying, for the ChangePlan audit rows: `human` — the owner's `install_module` /
    *  `upgrade_module` call; `platform` — workspace creation's default modules (a platform
@@ -353,40 +259,24 @@ export interface InstallOrUpgradeModuleInput {
   readonly channel: 'human' | 'platform';
 }
 
-/** S11 P1 (`application/change-plan`): a module is a pack with one ontology component — its
- *  segment's source is the module at its index version, its one item publishes that version's
- *  definition into the module's family. */
-function moduleSegment(
-  entry: ModuleRegistryEntry,
-  target: ModuleRegistryVersion,
-  definition: OntologyDefinition,
-) {
-  return {
-    source: {
-      kind: 'pack' as const,
-      name: entry.name,
-      version: String(target.version),
-      digest: contentDigest(definition),
-    },
-    items: [{ kind: 'ontology_version' as const, family: entry.name, definition }],
-  };
-}
-
 /**
- * `install_module` / `upgrade_module`'s one shared implementation (D3: "底层同一调用"): the family
- * absent in this workspace → publish the **latest** index version; present → also target the
- * **latest** index version (never `installedVersion + 1` — D3's "族不存在 → v1；存在 → 下一版本"
- * describes the *`ontology_versions` DB version number* `publishOntologyVersion`/
- * `nextOntologyVersion` themselves advance by one on every publish, not this index's own version
- * numbering; a workspace's *index* version is only ever known by hash match (D2), and the two
- * counters are not the same thing — republishing identical content still bumps the DB number, so a
- * workspace's DB version can run arbitrarily far ahead of, or never equal, its matched index
- * version). One publish call reaches the target directly; this function never steps through
- * intermediate index versions one at a time.
+ * `install_module` / `upgrade_module`'s one shared implementation (D3: "底层同一调用"), and S11
+ * P1-C's "单组件包的安装 / 升级": the module installs as its pack does (`application/packs/
+ * install.ts`'s `planPackInstall` — one ChangePlan workspace segment that publishes the pack's
+ * **latest** version into the family), with this capability pair's own confirmation instead of a
+ * reviewed digest. Present or absent, the target is the latest version (never
+ * `installedVersion + 1` — D3's "族不存在 → v1；存在 → 下一版本" describes the
+ * `ontology_versions` DB version number `publishOntologyVersion` advances by one on every publish,
+ * not the pack's own numbering; a workspace's pack version is only ever known by digest match, D2).
+ * One publish reaches the target directly, never stepping through intermediate versions.
  *
- * No-op short-circuit before anything is planned or published (never waste a version number, D3's
- * own words): the target's hash already equals what is installed (covers both "already at the
- * latest content" and "nothing to do, called again"). Returns the current state unpublished.
+ * Planning locks the family first (with the workspace's ontology namespace before it, I-P1):
+ * another install_module / upgrade_module (P2 hotfix, post-v0.16.0 review: two calls both passing
+ * the "not installed" check and racing to INSERT the same version) or `publish_ontology_version` on
+ * the same family waits until this transaction ends, so what was read is what gets replaced.
+ *
+ * No-op before anything is published (never waste a version number, D3's own words): the target's
+ * content is already what is installed. Returns the current state.
  *
  * Otherwise:
  *   - S11 P1 (I-A4): an authority-widening change — an ActionType added, removed or loosened
@@ -394,114 +284,80 @@ function moduleSegment(
  *     whatever `confirm` says. `confirm` answers D3's question (overwrite a customized install,
  *     cross a breaking version), and the console sends it before the call when it already knows
  *     the answer is yes; it cannot also stand for confirming each widening item, which these
- *     capabilities do not take. No module in this deployment's index declares an ActionType.
+ *     capabilities do not take (`install_pack` does). No module this deployment ships declares an
+ *     ActionType.
  *   - `confirm: true` is required (`ModuleConfirmRequiredError` — 400 `module_confirm_required` —
- *     otherwise) when either the current install is `customized` (D2: its hash matches no known
- *     index version at all), or **any** index version strictly after the currently-matched one,
- *     up to and including the target, is `breaking` — jumping straight to the target must not
- *     silently skip past an intermediate breaking version nobody confirmed.
+ *     otherwise) when either the current install is `customized` (D2: its digest matches no known
+ *     version), or **any** version strictly after the currently-matched one, up to and including
+ *     the target, is `breaking` — jumping straight to the target must not silently skip past an
+ *     intermediate breaking version nobody confirmed.
  *
- * Then the module applies as one ChangePlan workspace segment (`applyWorkspaceSegment`): the
- * definition is published under `principalId` (D4's own `proposed_by = principalId` — the
- * no-draft-phase bootstrap shape `loader.ts` documents), and the segment, its item and the item's
- * audit row record what changed, from which version to which. The review binding stays legacy
- * 300's `version` (the owner is shown a module version, not a segment digest): the segment is
- * planned and applied in this one transaction under the family lock, so the digest it re-checks
- * is the one just computed.
+ * The segment's review binding stays legacy 300's `version` (the owner is shown a module version,
+ * not a segment digest): the segment is planned and applied in this one transaction under the
+ * family lock, so the digest it re-checks is the one just computed. The definition is published
+ * under `principalId` (D4's own `proposed_by = principalId` — the no-draft-phase bootstrap shape
+ * `loader.ts` documents), and the segment, its item and the item's audit row record what changed.
  */
 export async function installOrUpgradeModule(
   client: PoolClient,
   workspaceId: string,
   principalId: string,
-  registry: ReadonlyMap<string, ModuleRegistryEntry>,
+  registry: ModuleRegistry,
   input: InstallOrUpgradeModuleInput,
-  /** Must be the same directory `registry` was built from (`loadModuleRegistry(dir)`) — this is
-   *  what the target version's definition is read from. Defaults to `resolveOntologyDir()`,
-   *  matching `loadModuleRegistry`'s own default, so every caller that built its registry with the
-   *  default dir needs to pass nothing extra; a caller using a non-default `dir` (a test fixture,
-   *  `create.ts`'s `ontologyDir`) must pass the identical value here or the publish reads the
-   *  wrong file (or none at all). */
-  dir: string = resolveOntologyDir(),
 ): Promise<WorkspaceModuleState> {
   const entry = requireModule(registry, input.name);
-  const packId = deriveOntologyPackId(entry.name);
-  // Serializes this call with every other publisher of the family — another install_module /
-  // upgrade_module (P2 hotfix, post-v0.16.0 review: two calls both passing the "not installed"
-  // check and racing to INSERT the same version, a unique-violation 500) and
-  // `publish_ontology_version` on the same family (which would otherwise slip in between the read
-  // below and the publish, so a customized head is overwritten as if it were `outdated`). The
-  // workspace's ontology namespace lock comes first (I-P1, `lockOntologyFamily`). Transaction-
-  // scoped: released at commit / rollback.
-  await lockOntologyFamily(client, workspaceId, packId);
-  const installedRow = await loadInstalledPackVersion(client, workspaceId, packId);
-  const target = latestVersion(entry);
+  const install = await planPackInstall(client, workspaceId, entry.pack);
+  const { current, plan, target } = install;
   assertReviewedVersion(
-    installedRow ? 'upgrade_module' : 'install_module',
+    current.status === 'not_installed' ? 'install_module' : 'upgrade_module',
     `module ${entry.name}`,
     input.version,
     target.version,
   );
-
-  const installedHash = installedRow ? hashOntologyDefinition(installedRow.definition) : null;
-  const current = classifyModuleState(entry, installedHash);
-
-  // No-op: the target's content is already what is installed (already up to date by content, or
-  // this call is a no-op retry) — never spend a version number republishing it (D3).
-  if (target.hash === installedHash) return current;
-
-  const definition = await loadOntologyDefinitionFile(path.join(dir, target.file));
-  const segment = moduleSegment(entry, target, definition);
-  const plan = await planWorkspaceSegment(client, workspaceId, segment);
+  // No-op: the target's content is already what is installed — never spend a version number
+  // republishing it (D3).
+  if (plan.unchanged) {
+    return { entry, installedVersion: current.installedVersion, status: current.status };
+  }
   assertWideningConfirmed(plan, [], `module "${entry.name}" v${target.version}`);
 
-  if (current.status !== 'not_installed') {
-    // `current.status` is `outdated` or `customized` here — `up_to_date` would mean
-    // `installedHash === target.hash` (target is always the latest), already handled above.
-    const currentStatus = current.status as Extract<ModuleInstallStatus, 'outdated' | 'customized'>;
-    const rangeHasBreaking =
-      currentStatus === 'customized'
-        ? false // customized alone already forces confirm below; no "from version" to range over
-        : entry.versions.some(
-            (v) =>
-              v.version > (current.installedVersion as number) &&
-              v.version <= target.version &&
-              v.breaking,
-          );
-    const needsConfirm = currentStatus === 'customized' || rangeHasBreaking;
-
+  if (current.status === 'outdated' || current.status === 'customized') {
+    // `install.breaking`: a version after the matched one, up to the target, is breaking
+    // (`outdated`), or the target is (`customized` — no version to count from).
+    const needsConfirm = current.status === 'customized' || install.breaking;
     if (needsConfirm && input.confirm !== true) {
       throw new ModuleConfirmRequiredError({
         name: entry.name,
         currentVersion: current.installedVersion,
-        currentStatus,
+        currentStatus: current.status,
         targetVersion: target.version,
-        breaking: currentStatus === 'customized' ? target.breaking : rangeHasBreaking,
+        breaking: install.breaking,
       });
     }
   }
 
   await applyWorkspaceSegment(client, workspaceId, {
-    ...segment,
+    ...install.segment,
     reviewedDigest: plan.digest,
     proposedBy: principalId,
     appliedBy: principalId,
     channel: input.channel,
     confirmedOrdinals: [],
   });
-  return classifyModuleState(entry, target.hash);
+  return { entry, installedVersion: target.version, status: 'up_to_date' };
 }
 
 // -------------------------------------------------------------------------------------------
-// platform-wide aggregate (`list_modules`: "装到 n 个工作区 / m 个有新版") — hash-based, same
+// platform-wide aggregate (`list_modules`: "装到 n 个工作区 / m 个有新版") — digest-based, same
 // `classifyModuleState` every per-workspace read uses (D2): the raw `ontology_versions.version`
-// row number is never compared against the index's own version numbering (see `WorkspaceModuleState
+// row number is never compared against the pack's own version numbering (see `WorkspaceModuleState
 // .installedVersion`'s own doc comment on why the two are not the same counter).
 // -------------------------------------------------------------------------------------------
 
 export interface ModuleInstallCounts {
   readonly installedWorkspaceCount: number;
   /** Of `installedWorkspaceCount`, how many are not `up_to_date` — `outdated` (matches an older
-   *  index version) or `customized` (matches none) both count: either way, the workspace is not on
+   *  pack version) or `customized` (matches none) both count: either way, the workspace is not on
    *  the module's current standard content. */
   readonly newerAvailableCount: number;
 }
@@ -512,14 +368,14 @@ export interface ModuleInstallCounts {
  *  `setWorkspaceContext` — the same platform-transaction technique `application/gateway/platform-
  *  handlers.ts`'s own `countGatekeepers` already uses for a per-workspace RLS-scoped count), not
  *  one query per (workspace, module) pair — fetches each row's `definition` (not just `version`)
- *  since classification is hash-based. Caller must be inside a platform transaction
+ *  since classification is by content digest. Caller must be inside a platform transaction
  *  (`withPlatform`) — `setWorkspaceContext` is a no-op guard otherwise. Resets the workspace GUC
  *  before returning (`countGatekeepers`'s own convention), so a caller that runs more platform-
  *  scoped queries afterward never inherits a stale workspace context. */
 export async function countModuleInstallations(
   client: PoolClient,
   workspaceIds: readonly string[],
-  registry: ReadonlyMap<string, ModuleRegistryEntry>,
+  registry: ModuleRegistry,
 ): Promise<ReadonlyMap<string, ModuleInstallCounts>> {
   const packIdToName = new Map<string, string>();
   for (const entry of registry.values())
@@ -546,7 +402,7 @@ export async function countModuleInstallations(
         const bucket = counts.get(name);
         if (!bucket) continue;
         bucket.installed += 1;
-        const status = classifyModuleState(entry, hashOntologyDefinition(row.definition)).status;
+        const status = classifyModuleState(entry, contentDigest(row.definition)).status;
         if (status !== 'up_to_date') bucket.newer += 1;
       }
     }
@@ -564,10 +420,7 @@ export async function countModuleInstallations(
 /** `set_default_modules`'s own input check: every name must be a real module — a typo'd default
  *  would silently install nothing for every new workspace forever (`installOrUpgradeModule` would
  *  just never find it and no one would notice at `create_workspace` time). */
-export function assertKnownModuleNames(
-  registry: ReadonlyMap<string, ModuleRegistryEntry>,
-  names: readonly string[],
-): void {
+export function assertKnownModuleNames(registry: ModuleRegistry, names: readonly string[]): void {
   for (const name of names) requireModule(registry, name);
 }
 
@@ -575,14 +428,13 @@ export function assertKnownModuleNames(
 // startup guard (S8 W5 leftover 65) — see checkDefaultModules's own doc comment
 // -------------------------------------------------------------------------------------------
 
-export interface CheckDefaultModulesOptions {
+export interface CheckDefaultModulesOptions extends PackRegistryOptions {
   readonly log?: (line: string) => void;
-  readonly ontologyDir?: string;
 }
 
 /**
  * S8 W5 (leftover 65): startup-time guard for `platform_settings.defaultModules` drifting stale
- * against this deployment's own `ontology/modules.yaml` — a module family renamed or removed from
+ * against this deployment's own modules (its `packs/`) — a module family renamed or removed from
  * the image after an administrator set it as a default (`set_default_modules` validates names only
  * at write time, `assertKnownModuleNames` above) previously failed *silently* from then on:
  * `create_workspace`'s own defaultModules skip (`application/workspace/create.ts`'s
@@ -597,7 +449,7 @@ export interface CheckDefaultModulesOptions {
  * loudly — every missing name, once, at startup, not buried per-workspace — for any that no longer
  * resolve. Never mutates `platform_settings` itself (an administrator decides whether to clear the
  * drifted names via `set_default_modules` or the platform modules page) and never throws (a broken
- * `ontology/modules.yaml` read must not take the kernel down over what is, worst case, a slightly
+ * `packs/` read must not take the kernel down over what is, worst case, a slightly
  * stale default-modules list — same tolerance `ensureDefaultWorkspace`'s own caller in `index.ts`
  * already gives that step).
  *
@@ -614,7 +466,7 @@ export async function checkDefaultModules(
   const defaultModules = settings.settings.defaultModules;
   if (defaultModules.length === 0) return [];
 
-  const registry = await loadModuleRegistry(options.ontologyDir);
+  const registry = await loadModuleRegistry(options);
   const missing = defaultModules.filter((name) => !registry.has(name));
   if (missing.length > 0) {
     log(
@@ -622,7 +474,7 @@ export async function checkDefaultModules(
         level: 'warn',
         msg:
           'platform_settings.defaultModules names module(s) no longer in this deployment’s ' +
-          'module index — every new workspace silently skips them (application/workspace/' +
+          'modules — every new workspace silently skips them (application/workspace/' +
           'create.ts); fix with set_default_modules or the platform modules page',
         names: missing,
       }),

@@ -9626,6 +9626,313 @@
     "sideEffects": true
   },
   {
+    "channel": "human",
+    "group": "modules",
+    "minRole": "owner",
+    "mode": "write",
+    "name": "install_pack",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "confirmedOrdinals": {
+          "items": {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "name": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "reviewedDigest": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "version": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "reviewedDigest"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "pack": {
+          "additionalProperties": false,
+          "properties": {
+            "components": {
+              "items": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "domainPack": {
+                        "type": "string"
+                      },
+                      "family": {
+                        "type": "string"
+                      },
+                      "installedVersion": {
+                        "anyOf": [
+                          {
+                            "exclusiveMinimum": 0,
+                            "type": "integer"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "kind": {
+                        "const": "ontology",
+                        "type": "string"
+                      },
+                      "provenance": {
+                        "anyOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "appliedAt": {
+                                "type": "string"
+                              },
+                              "appliedBy": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "displayName": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "kind": {
+                                    "enum": [
+                                      "human",
+                                      "agent",
+                                      "service"
+                                    ],
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "kind",
+                                  "displayName"
+                                ],
+                                "type": "object"
+                              },
+                              "channel": {
+                                "enum": [
+                                  "human",
+                                  "platform"
+                                ],
+                                "type": "string"
+                              },
+                              "segmentId": {
+                                "type": "string"
+                              },
+                              "segmentStatus": {
+                                "enum": [
+                                  "applied",
+                                  "verified",
+                                  "verification_failed",
+                                  "rolled_back"
+                                ],
+                                "type": "string"
+                              },
+                              "status": {
+                                "const": "recorded",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "status",
+                              "segmentId",
+                              "segmentStatus",
+                              "channel",
+                              "appliedBy",
+                              "appliedAt"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "status": {
+                                "const": "provenance_unknown",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "status"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "status": {
+                                "const": "not_installed",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "status"
+                            ],
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "status": {
+                        "enum": [
+                          "not_installed",
+                          "up_to_date",
+                          "outdated",
+                          "customized"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "family",
+                      "domainPack",
+                      "status",
+                      "installedVersion",
+                      "provenance"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            "installedVersion": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "latestVersion": {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            "name": {
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "not_installed",
+                "up_to_date",
+                "outdated",
+                "customized"
+              ],
+              "type": "string"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "versions": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "breaking": {
+                    "type": "boolean"
+                  },
+                  "components": {
+                    "items": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "domainPack": {
+                              "type": "string"
+                            },
+                            "family": {
+                              "type": "string"
+                            },
+                            "kind": {
+                              "const": "ontology",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "family",
+                            "domainPack"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "type": "array"
+                  },
+                  "notes": {
+                    "type": "string"
+                  },
+                  "summary": {
+                    "type": "string"
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "version",
+                  "summary",
+                  "notes",
+                  "breaking",
+                  "components"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "name",
+            "summary",
+            "latestVersion",
+            "versions",
+            "status",
+            "installedVersion",
+            "components"
+          ],
+          "type": "object"
+        },
+        "segmentId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "pack",
+        "segmentId"
+      ],
+      "type": "object"
+    },
+    "sideEffects": true
+  },
+  {
     "channel": "handle",
     "group": "meta",
     "minRole": "member",
@@ -13569,6 +13876,291 @@
               "autoApprovable",
               "version",
               "status"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": "string"
+        },
+        "truncated": {
+          "const": true,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
+    "channel": "human",
+    "group": "modules",
+    "minRole": "member",
+    "mode": "observe",
+    "name": "list_packs",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "components": {
+                "items": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "domainPack": {
+                          "type": "string"
+                        },
+                        "family": {
+                          "type": "string"
+                        },
+                        "installedVersion": {
+                          "anyOf": [
+                            {
+                              "exclusiveMinimum": 0,
+                              "type": "integer"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "kind": {
+                          "const": "ontology",
+                          "type": "string"
+                        },
+                        "provenance": {
+                          "anyOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "appliedAt": {
+                                  "type": "string"
+                                },
+                                "appliedBy": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "displayName": {
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
+                                    },
+                                    "id": {
+                                      "type": "string"
+                                    },
+                                    "kind": {
+                                      "enum": [
+                                        "human",
+                                        "agent",
+                                        "service"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "id",
+                                    "kind",
+                                    "displayName"
+                                  ],
+                                  "type": "object"
+                                },
+                                "channel": {
+                                  "enum": [
+                                    "human",
+                                    "platform"
+                                  ],
+                                  "type": "string"
+                                },
+                                "segmentId": {
+                                  "type": "string"
+                                },
+                                "segmentStatus": {
+                                  "enum": [
+                                    "applied",
+                                    "verified",
+                                    "verification_failed",
+                                    "rolled_back"
+                                  ],
+                                  "type": "string"
+                                },
+                                "status": {
+                                  "const": "recorded",
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "status",
+                                "segmentId",
+                                "segmentStatus",
+                                "channel",
+                                "appliedBy",
+                                "appliedAt"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "status": {
+                                  "const": "provenance_unknown",
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "status"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "status": {
+                                  "const": "not_installed",
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "status"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "status": {
+                          "enum": [
+                            "not_installed",
+                            "up_to_date",
+                            "outdated",
+                            "customized"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "family",
+                        "domainPack",
+                        "status",
+                        "installedVersion",
+                        "provenance"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              "installedVersion": {
+                "anyOf": [
+                  {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "latestVersion": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              },
+              "name": {
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "not_installed",
+                  "up_to_date",
+                  "outdated",
+                  "customized"
+                ],
+                "type": "string"
+              },
+              "summary": {
+                "type": "string"
+              },
+              "versions": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "breaking": {
+                      "type": "boolean"
+                    },
+                    "components": {
+                      "items": {
+                        "anyOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "domainPack": {
+                                "type": "string"
+                              },
+                              "family": {
+                                "type": "string"
+                              },
+                              "kind": {
+                                "const": "ontology",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "family",
+                              "domainPack"
+                            ],
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "type": "array"
+                    },
+                    "notes": {
+                      "type": "string"
+                    },
+                    "summary": {
+                      "type": "string"
+                    },
+                    "version": {
+                      "exclusiveMinimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "summary",
+                    "notes",
+                    "breaking",
+                    "components"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "name",
+              "summary",
+              "latestVersion",
+              "versions",
+              "status",
+              "installedVersion",
+              "components"
             ],
             "type": "object"
           },
@@ -18315,6 +18907,560 @@
         "operationsToImport",
         "operationsAlreadyPresent",
         "notDescribed"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
+    "channel": "human",
+    "group": "modules",
+    "minRole": "owner",
+    "mode": "observe",
+    "name": "preview_pack_install",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "breaking": {
+          "type": "boolean"
+        },
+        "crossedVersions": {
+          "items": {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "digest": {
+          "type": "string"
+        },
+        "inUse": {
+          "additionalProperties": false,
+          "properties": {
+            "capped": {
+              "type": "boolean"
+            },
+            "links": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "objects": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "objects",
+            "links",
+            "capped"
+          ],
+          "type": "object"
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "after": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "definitionDigest": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "definitionDigest"
+                    ],
+                    "type": "object"
+                  },
+                  "before": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "definitionDigest": {
+                            "type": "string"
+                          },
+                          "version": {
+                            "exclusiveMinimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "version",
+                          "definitionDigest"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "classification": {
+                    "enum": [
+                      "not_widening",
+                      "authority_widening"
+                    ],
+                    "type": "string"
+                  },
+                  "domainPack": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "ontology_version",
+                    "type": "string"
+                  },
+                  "ordinal": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  },
+                  "target": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "family": {
+                        "type": "string"
+                      },
+                      "ontologyId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "family",
+                      "ontologyId"
+                    ],
+                    "type": "object"
+                  },
+                  "types": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "added": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "actionTypes": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "linkTypes": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "objectTypes": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          }
+                        },
+                        "required": [
+                          "objectTypes",
+                          "linkTypes",
+                          "actionTypes"
+                        ],
+                        "type": "object"
+                      },
+                      "changed": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "actionTypes": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "linkTypes": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "objectTypes": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          }
+                        },
+                        "required": [
+                          "objectTypes",
+                          "linkTypes",
+                          "actionTypes"
+                        ],
+                        "type": "object"
+                      },
+                      "removed": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "actionTypes": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "linkTypes": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "objectTypes": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          }
+                        },
+                        "required": [
+                          "objectTypes",
+                          "linkTypes",
+                          "actionTypes"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "added",
+                      "removed",
+                      "changed"
+                    ],
+                    "type": "object"
+                  },
+                  "unchanged": {
+                    "type": "boolean"
+                  },
+                  "widening": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "enum": [
+                            "added",
+                            "removed",
+                            "loosened",
+                            "changed",
+                            "unrecognized"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "reason"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "ordinal",
+                  "kind",
+                  "target",
+                  "domainPack",
+                  "before",
+                  "after",
+                  "unchanged",
+                  "classification",
+                  "widening",
+                  "types"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "pack": {
+          "additionalProperties": false,
+          "properties": {
+            "components": {
+              "items": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "domainPack": {
+                        "type": "string"
+                      },
+                      "family": {
+                        "type": "string"
+                      },
+                      "installedVersion": {
+                        "anyOf": [
+                          {
+                            "exclusiveMinimum": 0,
+                            "type": "integer"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "kind": {
+                        "const": "ontology",
+                        "type": "string"
+                      },
+                      "provenance": {
+                        "anyOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "appliedAt": {
+                                "type": "string"
+                              },
+                              "appliedBy": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "displayName": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "kind": {
+                                    "enum": [
+                                      "human",
+                                      "agent",
+                                      "service"
+                                    ],
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "kind",
+                                  "displayName"
+                                ],
+                                "type": "object"
+                              },
+                              "channel": {
+                                "enum": [
+                                  "human",
+                                  "platform"
+                                ],
+                                "type": "string"
+                              },
+                              "segmentId": {
+                                "type": "string"
+                              },
+                              "segmentStatus": {
+                                "enum": [
+                                  "applied",
+                                  "verified",
+                                  "verification_failed",
+                                  "rolled_back"
+                                ],
+                                "type": "string"
+                              },
+                              "status": {
+                                "const": "recorded",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "status",
+                              "segmentId",
+                              "segmentStatus",
+                              "channel",
+                              "appliedBy",
+                              "appliedAt"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "status": {
+                                "const": "provenance_unknown",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "status"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "status": {
+                                "const": "not_installed",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "status"
+                            ],
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "status": {
+                        "enum": [
+                          "not_installed",
+                          "up_to_date",
+                          "outdated",
+                          "customized"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "family",
+                      "domainPack",
+                      "status",
+                      "installedVersion",
+                      "provenance"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            "installedVersion": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "latestVersion": {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            "name": {
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "not_installed",
+                "up_to_date",
+                "outdated",
+                "customized"
+              ],
+              "type": "string"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "versions": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "breaking": {
+                    "type": "boolean"
+                  },
+                  "components": {
+                    "items": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "domainPack": {
+                              "type": "string"
+                            },
+                            "family": {
+                              "type": "string"
+                            },
+                            "kind": {
+                              "const": "ontology",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "family",
+                            "domainPack"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "type": "array"
+                  },
+                  "notes": {
+                    "type": "string"
+                  },
+                  "summary": {
+                    "type": "string"
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "version",
+                  "summary",
+                  "notes",
+                  "breaking",
+                  "components"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "name",
+            "summary",
+            "latestVersion",
+            "versions",
+            "status",
+            "installedVersion",
+            "components"
+          ],
+          "type": "object"
+        },
+        "targetVersion": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        "unchanged": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "pack",
+        "targetVersion",
+        "digest",
+        "unchanged",
+        "crossedVersions",
+        "breaking",
+        "items",
+        "inUse"
       ],
       "type": "object"
     },

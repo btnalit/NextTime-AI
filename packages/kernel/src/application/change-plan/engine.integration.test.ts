@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { cp, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { cp, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Pool, PoolClient } from 'pg';
@@ -14,6 +13,7 @@ import {
   deriveOntologyPackId,
   publishOntologyVersion,
 } from '../../substrate/ontology/index.js';
+import { type PackFixtureDirs, writePackFixture } from '../packs/fixture.js';
 import { installOrUpgradeModule, loadModuleRegistry } from '../platform/modules.js';
 import { createWorkspaceWithOwner } from '../workspace/create.js';
 import {
@@ -73,7 +73,7 @@ describe.runIf(DATABASE_URL !== undefined)(
   'application/change-plan — workspace segments (S11 P1-A, integration, real Postgres)',
   () => {
     let pool: Pool;
-    let fixtureDir: string;
+    let fixture: PackFixtureDirs;
 
     async function newWorkspace(): Promise<{ workspaceId: string; ownerId: string }> {
       const workspaceId = randomUUID();
@@ -152,34 +152,21 @@ describe.runIf(DATABASE_URL !== undefined)(
     beforeAll(async () => {
       pool = createPool();
       await runMigrations(pool, MIGRATIONS_DIR);
-      fixtureDir = await mkdtemp(path.join(tmpdir(), 'nexttime-change-plan-fixture-'));
-      // The real ontology/ directory (workspace creation needs platform-meta.yaml and
-      // entry-agent.yaml) with two more modules: one plain, one declaring an ActionType.
-      await cp(ONTOLOGY_DIR, fixtureDir, { recursive: true });
-      await writeFile(path.join(fixtureDir, 'plain-mod-v1.yaml'), objectTypeYaml('PlainThing'));
-      await writeFile(path.join(fixtureDir, 'act-mod-v1.yaml'), objectTypeYaml('ActThing', true));
-      await writeFile(
-        path.join(fixtureDir, 'modules.yaml'),
-        `modules:
-  - name: plain-mod
-    versions:
-      - file: plain-mod-v1.yaml
-        version: 1
-        notes: plain
-        breaking: false
-  - name: act-mod
-    versions:
-      - file: act-mod-v1.yaml
-        version: 1
-        notes: declares an ActionType
-        breaking: false
-`,
-      );
+      // Two more modules, one plain, one declaring an ActionType, beside the real ontology/
+      // library (workspace creation needs platform-meta.yaml and entry-agent.yaml).
+      const module = (name: string, yaml: string) => [
+        { notes: name, ontology: [{ family: name, domainPack: `${name}-v1.yaml`, yaml }] },
+      ];
+      fixture = await writePackFixture({
+        'plain-mod': module('plain-mod', objectTypeYaml('PlainThing')),
+        'act-mod': module('act-mod', objectTypeYaml('ActThing', true)),
+      });
+      await cp(ONTOLOGY_DIR, fixture.ontologyDir, { recursive: true });
     });
 
     afterAll(async () => {
       await pool.end();
-      await rm(fixtureDir, { recursive: true, force: true });
+      await rm(fixture.root, { recursive: true, force: true });
     });
 
     describe('plan → apply', () => {
@@ -562,13 +549,16 @@ describe.runIf(DATABASE_URL !== undefined)(
             client,
             ws.workspaceId,
             ws.ownerId,
-            await loadModuleRegistry(fixtureDir),
-            { name, channel: 'human', ...(confirm ? { confirm } : {}) },
-            fixtureDir,
+            await loadModuleRegistry(fixture),
+            {
+              name,
+              channel: 'human',
+              ...(confirm ? { confirm } : {}),
+            },
           ),
         );
 
-      it('install_module records a segment sourced from the module at its index version', async () => {
+      it('install_module records a segment sourced from the module’s pack at its version', async () => {
         const ws = await newWorkspace();
         const state = await install(ws, 'plain-mod');
         expect(state.status).toBe('up_to_date');
@@ -629,7 +619,8 @@ describe.runIf(DATABASE_URL !== undefined)(
           name: `p1-defaults-${randomUUID().slice(0, 8)}`,
           owner: { displayName: 'P1 Defaults Owner' },
           defaultModules: ['act-mod', 'plain-mod'],
-          ontologyDir: fixtureDir,
+          ontologyDir: fixture.ontologyDir,
+          packsDir: fixture.packsDir,
         });
         expect(outcome.skippedDefaultModules).toEqual(['act-mod']);
         const ws = { workspaceId: outcome.workspaceId, ownerId: outcome.ownerPrincipalId };

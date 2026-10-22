@@ -429,6 +429,7 @@ describe('kernel codes with no console copy before', () => {
     ['endpoint_is_platform_gate', '能力目录启用这个平台门'],
     ['connector_not_self_serve', '在「集成」里开放'],
     ['module_not_found', '模块索引里没有它'],
+    ['pack_not_found', '附带的能力包里没有它'],
     ['not_a_draft', '只有草稿才能丢弃'],
     ['invalid_scope', '重新选择范围'],
     ['service_principal_required', '启用中的服务账号'],

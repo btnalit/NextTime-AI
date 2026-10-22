@@ -1360,18 +1360,19 @@ export type PlatformDraftResidueWire = z.infer<typeof PlatformDraftResidueWireSc
 
 // -------------------------------------------------------------------------------------------
 // P-B2b (docs/platform-admin-design.md §6.4 模块; docs/development-tasks.md §5d S7-D 决定 D1–D4):
-// modules — versioned domain packs (`ontology/modules.yaml`, `application/platform/modules.ts`) —
+// modules — packs with one ontology component (`packs/`, `application/platform/modules.ts`) —
 // as both the platform plane (`list_modules`: every module this deployment ships, aggregated across
 // workspaces) and the workspace plane (`list_workspace_modules`/`install_module`/`upgrade_module`:
 // one workspace's own install state) see them.
 // -------------------------------------------------------------------------------------------
 
-/** One version of a module family, exactly as `ontology/modules.yaml` declares it — no hash on the
- *  wire (D2: hashes are never persisted or exposed, only compared server-side at call time). */
+/** One version of a module family, as its pack version declares it (`packs/<name>/<version>/
+ *  pack.yaml`) — no digest on the wire (D2: digests are never persisted or exposed here, only
+ *  compared server-side at call time). */
 export const ModuleVersionWireSchema = z
   .object({
     version: z.number().int().positive(),
-    /** The `ontology/<file>` this version's `OntologyDefinition` lives in. */
+    /** The domain pack file (`ontology/<file>`) this version's `OntologyDefinition` lives in. */
     file: z.string(),
     notes: z.string(),
     /** True when upgrading *to* this version needs `confirm: true` (D3). Version 1 is never
@@ -1395,8 +1396,8 @@ export const ModuleWireSchema = z
   .strict();
 export type ModuleWire = z.infer<typeof ModuleWireSchema>;
 
-/** D2: `up_to_date` — the installed definition's hash matches the latest indexed version;
- *  `outdated` — matches an older indexed version; `customized` — matches no indexed version at all
+/** D2: `up_to_date` — the installed definition's digest matches the latest version's;
+ *  `outdated` — matches an older version's; `customized` — matches no version's at all
  *  (the family's id was reached some other way than `install_module`/`upgrade_module`, e.g. a
  *  hand-crafted `propose_ontology_change`); `not_installed` — no published row for this family yet. */
 export const ModuleInstallStatusWireSchema = z.enum([
@@ -1414,9 +1415,9 @@ export const WorkspaceModuleWireSchema = z
     name: z.string(),
     versions: z.array(ModuleVersionWireSchema),
     latestVersion: z.number().int().positive(),
-    /** The **indexed** version matching the installed definition's hash (D2) — `null` for
-     *  `not_installed` *and* for `customized` (a hash matching no indexed version has no
-     *  meaningful indexed version to report). Never the raw internal publish-count `ontology_
+    /** The pack version matching the installed definition's digest (D2) — `null` for
+     *  `not_installed` *and* for `customized` (a digest matching no version has no meaningful
+     *  version to report). Never the raw internal publish-count `ontology_
      *  versions.version` row number, which is a different counter — see `application/platform/
      *  modules.ts`'s own module doc comment. */
     installedVersion: z.number().int().positive().nullable(),

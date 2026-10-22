@@ -23,6 +23,7 @@ import {
   SupersedeIdentityMismatchError,
 } from '../../application/gateway/index.js';
 import { UnknownOperationError } from '../../application/gateway/index.js';
+import { PackNotFoundError } from '../../application/packs/index.js';
 import { TaskRuntimeNotConfiguredError } from '../../application/task/index.js';
 import { ApprovalReasonRequiredError } from '../../governance/approval/index.js';
 import { HandleIssuanceError, ScopeValidationError } from '../../governance/capability/index.js';
@@ -94,6 +95,14 @@ describe('mapDispatchError — OperationIdentityConflictError (review 2026-09, P
     );
     expect(mapped.code).toBe(WS_ERROR_CODES.ILLEGAL_TRANSITION);
     expect(mapped.message).toContain('container.restart');
+  });
+});
+
+describe('mapDispatchError — S11 P1-C packs', () => {
+  it('a pack this deployment does not ship → NOT_FOUND', () => {
+    expect(mapDispatchError(new PackNotFoundError('no-such-pack')).code).toBe(
+      WS_ERROR_CODES.NOT_FOUND,
+    );
   });
 });
 

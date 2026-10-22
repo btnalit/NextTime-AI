@@ -1209,7 +1209,7 @@ v0.47.0、v0.48.0 不单独上主机（#554 不在 v0.47.0 里，遗留 259 的�
 
 **回滚**（§5）：回滚目标是 v0.46.0，按 §3.25 与 §3.26 的回滚说明；不需要排空 Worker。
 
-窗口目标改到 v0.49.0 之后的发版时（维护者 2026-10-16 决定窗口暂缓，开窗口时目标改为当时最新的发版），本清单按新目标刷新，并加上之后各版的小节，至少 §3.28（#589 升钉：`postgres` 与 `backup` 重建、不执行 `ALTER EXTENSION`、应用后只读核对 `vector` 扩展版本）与 §3.29（#592：governance 0020，旧「始终允许」规则可能显示「已暂停 · 待确认版本」需 owner 重新确认，契约不向后兼容、旧控制台页要刷新）与 §3.30（#601：governance 0021，窗口前估算 `audit_records` 全表扫描的锁表时间并核对回收超时，窗口后历史失败行多显示「结果不明」）与 §3.31（#607：goal 0001 / task 0007 / governance 0022，窗口前估算建索引时间）与 §3.32（#615：core 0044，窗口前估算建索引期间审计写入的等待，必要时并发预建并确认索引有效）与 §3.33（#619：goal 0002，新增每秒认领与每分钟对账的后台负载）与 §3.34（#620：core 0045，窗口前三数预检、迁移期间不接新门、清洗改写类变成 4 个、回滚后自接门暂停失效；#637 再加两个改写类与一个只列类，见 §3.25）、§3.35（#626：goal 0003，只重建一个守卫函数，无主机步骤）、§3.36（#633：goal 0004，加列与重建一个守卫函数，无主机步骤）、§3.37（#642：governance 0023，`action_requests` 加列、约束与守卫触发器，窗口前看一眼该表行数，无主机步骤）、§3.38（#644：无迁移，窗口前打包门只读检查，内核与门宿主同版，回退代码前先处理挂在系统接入包上的实例）、§3.39（#649：governance 0024，新表与重建核对守卫，两个可选环境变量不设即默认，代码回退期间观察压缩报 degraded 可忽略）、§3.40（#650：governance 0025，只加新表，可选的窗口前本体族只读检查，模块升级可能新返回 400 `change_confirmation_required`）与 §3.41（#664：goal 0005，新表与重建目标守卫，两个可选环境变量不设即默认，升级后 I-G5 指标应为 0，代码回退期间观察压缩报 degraded 可忽略）。
+窗口目标改到 v0.49.0 之后的发版时（维护者 2026-10-16 决定窗口暂缓，开窗口时目标改为当时最新的发版），本清单按新目标刷新，并加上之后各版的小节，至少 §3.28（#589 升钉：`postgres` 与 `backup` 重建、不执行 `ALTER EXTENSION`、应用后只读核对 `vector` 扩展版本）与 §3.29（#592：governance 0020，旧「始终允许」规则可能显示「已暂停 · 待确认版本」需 owner 重新确认，契约不向后兼容、旧控制台页要刷新）与 §3.30（#601：governance 0021，窗口前估算 `audit_records` 全表扫描的锁表时间并核对回收超时，窗口后历史失败行多显示「结果不明」）与 §3.31（#607：goal 0001 / task 0007 / governance 0022，窗口前估算建索引时间）与 §3.32（#615：core 0044，窗口前估算建索引期间审计写入的等待，必要时并发预建并确认索引有效）与 §3.33（#619：goal 0002，新增每秒认领与每分钟对账的后台负载）与 §3.34（#620：core 0045，窗口前三数预检、迁移期间不接新门、清洗改写类变成 4 个、回滚后自接门暂停失效；#637 再加两个改写类与一个只列类，见 §3.25）、§3.35（#626：goal 0003，只重建一个守卫函数，无主机步骤）、§3.36（#633：goal 0004，加列与重建一个守卫函数，无主机步骤）、§3.37（#642：governance 0023，`action_requests` 加列、约束与守卫触发器，窗口前看一眼该表行数，无主机步骤）、§3.38（#644：无迁移，窗口前打包门只读检查，内核与门宿主同版，回退代码前先处理挂在系统接入包上的实例）、§3.39（#649：governance 0024，新表与重建核对守卫，两个可选环境变量不设即默认，代码回退期间观察压缩报 degraded 可忽略）、§3.40（#650：governance 0025，只加新表，可选的窗口前本体族只读检查，模块升级可能新返回 400 `change_confirmation_required`）、§3.41（#664：goal 0005，新表与重建目标守卫，两个可选环境变量不设即默认，升级后 I-G5 指标应为 0，代码回退期间观察压缩报 degraded 可忽略）、§3.42（#670：goal 0006，步骤验收新表与新触发器，无新环境变量，代码回退期间观察压缩报 degraded 可忽略）与 §3.43（#668：无迁移，能力包清单在镜像 `/app/packs`，`kernel.env` 不要设 `PACKS_DIR`）。
 
 ### 3.28 第三方镜像升钉：pgvector、node、postgres（#589，v0.49.0 之后的下一版起）
 
@@ -1447,6 +1447,23 @@ rollback;" </dev/null
 - **新指标**：`nexttime_invariant_violations{invariant="I-G5"}`，升级后应为 0；不为 0 说明守卫缺失或被禁用，或有不经验收得到 `achieved` 的目标，先停下查。
 - **回滚**：只回退代码即可（§6）。上一版不读写新表与新列。**代码回退到上一版后，apply-release 的 observations-compaction 步骤会报 degraded**：上一版的压缩看到 0005 指向 `observations` 的新外键就拒绝运行（安全失败，不删任何东西），重新应用带 0005 的版本后恢复；与 §3.39 同类，回退期间这一条 degraded 可以忽略。
 
+### 3.42 步骤验收（#670，goal 0006，S11 GO4b，v0.49.0 之后的下一版起）
+
+带一个 goal 迁移（`0006_step_acceptance`），随 `apply-release.sh` 的迁移步骤自动应用；没有新环境变量（沿用 §3.41 的 `GOAL_ACCEPTANCE_CHECK_*`）、不改 compose、无单独主机步骤；窗口前只读检查：无。
+
+- **迁移做什么**：扩大 `step_runs.waiting_reason` 的 CHECK（加 `acceptance`、`acceptance_unavailable`），新表 `step_acceptance_checks`（守卫、RLS，应用角色无 DELETE），新触发器 `step_runs_acceptance_guard`（声明了验收的步骤只能经验收全过才成功）。
+- **I-G5 指标**：§3.41 的 `nexttime_invariant_violations{invariant="I-G5"}` 现在也覆盖步骤验收，升级后仍应为 0。
+- **回滚**：只回退代码即可（§6）。上一版不读写新表。**代码回退到上一版后，apply-release 的 observations-compaction 步骤会报 degraded**（与 §3.39、§3.41 同类，重新应用带 0006 的版本后恢复，回退期间可以忽略）。上一版遇到停在 `waiting(acceptance)` 的步骤会推进失败，连续失败后目标暂停等人，不会未经验收就成功。
+
+### 3.43 能力包（#668，S11 P1-C，v0.49.0 之后的下一版起）
+
+没有迁移、没有新环境变量、不改 compose、无单独主机步骤；窗口前只读检查：无。
+
+- **镜像变化**：内核镜像多了 `/app/packs`（`PACKS_DIR=/app/packs` 由镜像设定），能力包清单改由它提供，取代已删除的 `ontology/modules.yaml`。**`kernel.env` 不要设 `PACKS_DIR`**，否则会覆盖镜像里的目录。加模块新版本改为写 `packs/<name>/<version>/pack.yaml`（`operations.md` §14）。
+- **新能力与错误码**：`list_packs`、`preview_pack_install`、`install_pack`；404 `pack_not_found`、409 `version_changed`。模块相关能力的线上契约不变。
+- **注册表整体校验**：`packs/` 里任何一处不合规，整份能力包注册表都会被拒（不半装），症状与处理见 `operations.md` §14。镜像里的 `packs/` 随版本发布，正常升级不会遇到。
+- **回滚**：只回退代码即可。安装状态和摘要都不入库、每次现算，所以摘要格式改成 `contentDigest` 对已有工作区透明。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -1568,6 +1585,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.49.0 之后的下一版 | governance `0024_action_request_reconcile_checks`（#649，S11 GO3d）：新表 `action_request_reconcile_checks`（两个部分索引），重建 `action_requests_reconciliation_guard`（`decided_by` 为空的分支收窄） | 可逆（代码回退期间观察压缩报 degraded） | 上一版不读写新表；守卫收窄不影响 0023 下写出的人的结论；上一版的观察压缩看到新外键会安全拒绝运行（不删东西），apply-release 的 observations-compaction 报 degraded，重新应用带 0024 的版本后恢复 |
 | v0.49.0 之后的下一版 | governance `0025_change_segments`（#650，S11 P1-A）：新表 `change_segments`、`change_items`（守卫、RLS、授权） | 可逆 | 只加新表，上一版不读不写；回退期间装的模块版本之后溯源为 `provenance_unknown`，属预期 |
 | v0.49.0 之后的下一版 | goal `0005_goal_acceptance`（#664，S11 GO4a）：新表 `goal_acceptance_checks`，新列 `goal_runs.outcome_decision_id`，重建 `goal_runs_status_guard`（加 I-G5） | 可逆（代码回退期间观察压缩报 degraded） | 上一版不读写新表与新列；守卫只收紧得到 `achieved` 的路径；上一版没有任何路径把目标结束为 `completed` |
+| v0.49.0 之后的下一版 | goal `0006_step_acceptance`（#670，S11 GO4b）：扩大 `step_runs.waiting_reason` 的 CHECK，新表 `step_acceptance_checks`，新触发器 `step_runs_acceptance_guard` | 可逆（代码回退期间观察压缩报 degraded） | 上一版不读写新表；上一版遇到停在 `waiting(acceptance)` 的步骤会推进失败，连续失败后目标暂停等人，不会未经验收就成功 |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：

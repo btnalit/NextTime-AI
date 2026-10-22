@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Pool, PoolClient } from 'pg';
@@ -11,10 +10,11 @@ import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { ReviewedVersionChangedError } from '../../governance/capability/index.js';
 import { deriveOntologyPackId, publishOntologyDomainPack } from '../../substrate/ontology/index.js';
 import { withAdminClient } from '../gateway/auth.js';
+import { type PackFixtureDirs, objectTypeYaml, writePackFixture } from '../packs/fixture.js';
 import { createWorkspaceWithOwner } from '../workspace/create.js';
 import {
   ModuleConfirmRequiredError,
-  type ModuleRegistryEntry,
+  type ModuleRegistry,
   checkDefaultModules,
   countModuleInstallations,
   installOrUpgradeModule,
@@ -30,16 +30,16 @@ import { readPlatformSettings, updatePlatformSettings } from './settings.js';
  * D3 branches, `countModuleInstallations`, and `create_workspace`'s default-module install (D4).
  *
  * **The central fact every test here exercises**: a workspace's `ontology_versions.version` (a
- * per-workspace publish counter) and a module's own **index** version number (`ontology/
- * modules.yaml`, matched by content hash — D2) are two different counters. `installOrUpgradeModule`
+ * per-workspace publish counter) and a module's own **pack** version number (`packs/<name>/
+ * <version>/`, matched by content digest — D2) are two different counters. `installOrUpgradeModule`
  * always targets a module's own **latest** index version directly (one publish), never
  * `installedVersion + 1` — see `modules.ts`'s own module doc comment for the full correction and
  * why an earlier draft of this function conflated the two.
  *
- * **Fixture.** A synthetic 4-version `test-mod` family is written to a temp `ontology/` directory
- * in `beforeAll` (v1/v2/v4 distinct, non-breaking content; v3 breaking) and passed as `dir` to every
- * call below — precise control over `breaking` placement the real `ops-assets-v1/v2.yaml` files
- * (both non-breaking) cannot give. The D4 create-workspace test uses the real, checked-in
+ * **Fixture.** A synthetic 4-version `test-mod` pack is written to a temp `packs/` + `ontology/` in
+ * `beforeAll` (`application/packs/fixture.ts`; v1/v2/v4 distinct, non-breaking content; v3
+ * breaking) and every registry below is read from it — precise control over `breaking` placement
+ * the real `ops-assets` versions (both non-breaking) cannot give. The D4 create-workspace test uses the real, checked-in
  * `ontology/` directory instead (its `ops-assets` family) — that test needs `platform-meta.yaml`/
  * `entry-agent.yaml` too, which the synthetic fixture does not carry.
  */
@@ -48,49 +48,30 @@ const DATABASE_URL = process.env.DATABASE_URL;
 const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
 
-/** `OntologyDefinitionSchema` requires at least one LinkType (`packages/shared/src/ontology-
- *  definition.ts`: `linkTypes: z.array(...).min(1)`) — a self-referential wildcard link keeps each
- *  fixture version minimal while still validating. */
-function objectTypeYaml(name: string): string {
-  return `objectTypes:\n  - name: ${name}\n    description: d\nlinkTypes:\n  - name: relates_to\n    domain: ${name}\n    range: "*"\n    description: d\n`;
-}
-
-async function writeTestModFixture(): Promise<string> {
-  const dir = await mkdtemp(path.join(tmpdir(), 'nexttime-modules-fixture-'));
-  await writeFile(
-    path.join(dir, 'modules.yaml'),
-    `modules:
-  - name: test-mod
-    versions:
-      - file: test-mod-v1.yaml
-        version: 1
-        notes: v1
-        breaking: false
-      - file: test-mod-v2.yaml
-        version: 2
-        notes: v2
-        breaking: false
-      - file: test-mod-v3.yaml
-        version: 3
-        notes: v3, breaking
-        breaking: true
-      - file: test-mod-v4.yaml
-        version: 4
-        notes: v4 (latest)
-        breaking: false
-`,
-  );
-  await writeFile(path.join(dir, 'test-mod-v1.yaml'), objectTypeYaml('ThingV1'));
-  await writeFile(path.join(dir, 'test-mod-v2.yaml'), objectTypeYaml('ThingV2'));
-  await writeFile(path.join(dir, 'test-mod-v3.yaml'), objectTypeYaml('ThingV3'));
-  await writeFile(path.join(dir, 'test-mod-v4.yaml'), objectTypeYaml('ThingV4'));
-  return dir;
+/** A synthetic 4-version `test-mod` module (one ontology component per version, into the family
+ *  named after it): v1/v2/v4 distinct, non-breaking content; v3 breaking. */
+async function writeTestModFixture(): Promise<PackFixtureDirs> {
+  const version = (n: number, notes: string, breaking = false) => ({
+    notes,
+    breaking,
+    ontology: [
+      { family: 'test-mod', domainPack: `test-mod-v${n}.yaml`, yaml: objectTypeYaml(`ThingV${n}`) },
+    ],
+  });
+  return writePackFixture({
+    'test-mod': [
+      version(1, 'v1'),
+      version(2, 'v2'),
+      version(3, 'v3, breaking', true),
+      version(4, 'v4 (latest)'),
+    ],
+  });
 }
 
 describe.runIf(DATABASE_URL !== undefined)('modules (integration, real Postgres)', () => {
   let pool: Pool;
-  let fixtureDir: string;
-  let registry: ReadonlyMap<string, ModuleRegistryEntry>;
+  let fixture: PackFixtureDirs;
+  let registry: ModuleRegistry;
 
   async function newWorkspace(name: string): Promise<{ workspaceId: string; principalId: string }> {
     const workspaceId = randomUUID();
@@ -121,37 +102,32 @@ describe.runIf(DATABASE_URL !== undefined)('modules (integration, real Postgres)
     return withWorkspace(pool, { workspaceId, principalId }, fn);
   }
 
-  /** `installOrUpgradeModule` against the synthetic `test-mod` registry — always passes
-   *  `fixtureDir` as the 6th (`dir`) argument, the same directory `registry` was built from
-   *  (`loadModuleRegistry(fixtureDir)` in `beforeAll`); `publishOntologyDomainPack` reads the
-   *  target version's file from exactly that directory, never the real repo `ontology/`. */
+  /** `installOrUpgradeModule` against the synthetic `test-mod` registry (`loadModuleRegistry(
+   *  fixture)` in `beforeAll`): the definitions it publishes are the fixture's, read into the
+   *  registry, never the real repo `ontology/`. */
   async function install(
     workspaceId: string,
     principalId: string,
     input: { readonly name: string; readonly confirm?: boolean; readonly version?: number },
   ) {
     return inWorkspace(workspaceId, principalId, (client) =>
-      installOrUpgradeModule(
-        client,
-        workspaceId,
-        principalId,
-        registry,
-        { ...input, channel: 'human' },
-        fixtureDir,
-      ),
+      installOrUpgradeModule(client, workspaceId, principalId, registry, {
+        ...input,
+        channel: 'human',
+      }),
     );
   }
 
   beforeAll(async () => {
     pool = createPool();
     await runMigrations(pool, MIGRATIONS_DIR);
-    fixtureDir = await writeTestModFixture();
-    registry = await loadModuleRegistry(fixtureDir);
+    fixture = await writeTestModFixture();
+    registry = await loadModuleRegistry(fixture);
   }, 180_000);
 
   afterAll(async () => {
     await pool.end();
-    await rm(fixtureDir, { recursive: true, force: true });
+    await rm(fixture.root, { recursive: true, force: true });
   });
 
   it('D3 (b): family absent → installs the latest index version directly, no confirm needed', async () => {
@@ -189,7 +165,7 @@ describe.runIf(DATABASE_URL !== undefined)('modules (integration, real Postgres)
       publishOntologyDomainPack(client, workspaceId, {
         packName: 'test-mod',
         fileName: v1.file,
-        dir: fixtureDir,
+        dir: fixture.ontologyDir,
         principalId,
       }),
     );
@@ -197,7 +173,7 @@ describe.runIf(DATABASE_URL !== undefined)('modules (integration, real Postgres)
       publishOntologyDomainPack(client, workspaceId, {
         packName: 'test-mod',
         fileName: v1.file,
-        dir: fixtureDir,
+        dir: fixture.ontologyDir,
         principalId,
       }),
     );
@@ -312,13 +288,13 @@ describe.runIf(DATABASE_URL !== undefined)('modules (integration, real Postgres)
       await publishOntologyDomainPack(client, behind.workspaceId, {
         packName: 'test-mod',
         fileName: v1.file,
-        dir: fixtureDir,
+        dir: fixture.ontologyDir,
         principalId: behind.principalId,
       });
       await publishOntologyDomainPack(client, behind.workspaceId, {
         packName: 'test-mod',
         fileName: v1.file,
-        dir: fixtureDir,
+        dir: fixture.ontologyDir,
         principalId: behind.principalId,
       });
     });
@@ -451,7 +427,7 @@ describe.runIf(DATABASE_URL !== undefined)('modules (integration, real Postgres)
       await withSavedDefaultModules(['test-mod', 'no-such-module-checkdefault'], async () => {
         const lines: string[] = [];
         const missing = await checkDefaultModules(pool, {
-          ontologyDir: fixtureDir,
+          ...fixture,
           log: (line) => lines.push(line),
         });
         expect(missing).toEqual(['no-such-module-checkdefault']);
@@ -466,7 +442,7 @@ describe.runIf(DATABASE_URL !== undefined)('modules (integration, real Postgres)
       await withSavedDefaultModules(['test-mod'], async () => {
         const lines: string[] = [];
         const missing = await checkDefaultModules(pool, {
-          ontologyDir: fixtureDir,
+          ...fixture,
           log: (line) => lines.push(line),
         });
         expect(missing).toEqual([]);
@@ -480,7 +456,7 @@ describe.runIf(DATABASE_URL !== undefined)('modules (integration, real Postgres)
         const missing = await checkDefaultModules(pool, {
           // A directory that does not exist: if this were reached, loadModuleRegistry would
           // throw — proving the empty-defaultModules short-circuit never touches the registry.
-          ontologyDir: path.join(fixtureDir, 'does-not-exist'),
+          packsDir: path.join(fixture.root, 'does-not-exist'),
           log: (line) => lines.push(line),
         });
         expect(missing).toEqual([]);

@@ -88,6 +88,8 @@ import {
   WORKSPACE_HEADER,
   parseCookieHeader,
 } from '../../application/identity/index.js';
+// S11 P1-C: a domain module's error, imported directly like the two above.
+import { PackNotFoundError } from '../../application/packs/index.js';
 // P-B2b: same direct-import convention as GateInstanceNotAvailableError above — these two live in
 // application/platform/modules.ts (a domain module, not a *-handlers.ts file), imported directly
 // rather than routed through application/gateway/index.ts's curated surface.
@@ -225,6 +227,11 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // P-B2b (application/platform/modules.ts): `install_module`/`upgrade_module`/`set_default_modules`
   // naming a module this deployment's index does not carry.
   if (err instanceof ModuleNotFoundError) {
+    return { status: 404, code: err.code, message: err.message };
+  }
+  // S11 P1-C (application/packs): `preview_pack_install` / `install_pack` naming a pack this
+  // deployment does not ship.
+  if (err instanceof PackNotFoundError) {
     return { status: 404, code: err.code, message: err.message };
   }
   // P-B2b: D3's "customized or breaking needs confirm: true" — same 400-with-details shape as
