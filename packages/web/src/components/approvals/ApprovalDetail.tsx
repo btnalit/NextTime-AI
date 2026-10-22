@@ -1,3 +1,4 @@
+import { visibleLines } from '@nexttime/shared';
 import { useId, useRef, useState } from 'react';
 import { useCanOpen } from '../../hooks/useCanOpen.js';
 import { isDecidable } from '../../lib/action-card.js';
@@ -8,6 +9,7 @@ import {
 } from '../../lib/always-allow.js';
 import { auditHref } from '../../lib/audit.js';
 import { credentialReviewCount, credentialReviewPaths } from '../../lib/credential-review.js';
+import { DECISION_REASON_MAX_LENGTH } from '../../lib/decision-reason.js';
 import {
   actionKindLabel,
   actionKindRaw,
@@ -449,7 +451,7 @@ export function ApprovalDetail({
             )}
             {decisionReason ? (
               <span className="pre-wrap" data-testid="approval-decision-reason">
-                {decisionReason}
+                {visibleLines(decisionReason)}
               </span>
             ) : null}
           </div>
@@ -508,6 +510,7 @@ export function ApprovalDetail({
                   }}
                   invalid={reasonError !== null}
                   aria-describedby={describedBy(reasonId, !reasonError, reasonError !== null)}
+                  maxLength={DECISION_REASON_MAX_LENGTH}
                   data-testid="approval-reason"
                 />
               </Field>

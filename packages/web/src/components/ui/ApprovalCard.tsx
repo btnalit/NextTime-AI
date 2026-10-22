@@ -1,5 +1,6 @@
 import type { BlastRadius, OperationMode } from '@nexttime/shared';
 import { type ReactNode, useId, useRef, useState } from 'react';
+import { DECISION_REASON_MAX_LENGTH } from '../../lib/decision-reason.js';
 import { actionKindRaw, actionKindTagText } from '../../lib/format.js';
 import { sentenceGap, useT } from '../../lib/i18n.js';
 import { Button } from './Button.js';
@@ -222,6 +223,7 @@ export function ApprovalCard({
               invalid={reasonError !== null}
               aria-required={required || undefined}
               aria-describedby={reasonError ? `${reasonId}-error` : `${reasonId}-hint`}
+              maxLength={DECISION_REASON_MAX_LENGTH}
               data-testid="approval-reason"
             />
           </Field>
