@@ -85,6 +85,7 @@ describe('platform-workspaces', () => {
     expect(purgeCountLabel('planRevisions', zhT)).toBe('计划版本');
     expect(purgeCountLabel('stepRuns', zhT)).toBe('步骤运行');
     expect(purgeCountLabel('stepRuns', enT)).toBe('Step runs');
+    expect(purgeCountLabel('goalAcceptanceChecks', zhT)).toBe('目标验收检查');
     expect(purgeCountLabel('actionRequestReconcileChecks', zhT)).toBe('平台核对记录');
     expect(purgeCountLabel('brandNewTable', zhT)).toBe('Brand new table');
     expect(purgeCountLabel('', zhT)).toBe('');
@@ -105,8 +106,15 @@ describe('platform-workspaces', () => {
   // `discoverWorkspaceScopedSchema`), read from the migrations that create it.
   it('every workspace-scoped table in the kernel migrations has a purge count label', () => {
     const tables = workspaceScopedTables();
-    // The parser reads what the purge preview shows today, S11 GO1's tables included.
-    expect(tables).toEqual(expect.arrayContaining(['goal_runs', 'plan_revisions', 'step_runs']));
+    // The parser reads what the purge preview shows today, S11 GO1's and GO4a's tables included.
+    expect(tables).toEqual(
+      expect.arrayContaining([
+        'goal_runs',
+        'plan_revisions',
+        'step_runs',
+        'goal_acceptance_checks',
+      ]),
+    );
     const unlabelled = tables
       .map((table) => table.replace(/_([a-z0-9])/g, (_match, ch: string) => ch.toUpperCase()))
       .filter((key) => !isLabelledPurgeCountKey(key));

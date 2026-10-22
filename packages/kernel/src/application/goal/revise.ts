@@ -8,7 +8,7 @@ import {
 import { writeAudit } from '../../substrate/audit/index.js';
 import type { GoalControlActor } from './control.js';
 import { moveStepRun } from './moves.js';
-import { type GoalPlan, samePlanEntry, validatePlan } from './plan.js';
+import { type GoalPlan, type PlanHint, planHints, samePlanEntry, validatePlan } from './plan.js';
 import { getPlanRevision, lockStepRuns } from './reads.js';
 import { GoalRunNotFoundError, GoalRunStateError, lockGoalRun } from './service.js';
 import { recordGoalRunTransition, recordStepRunTransition } from './transition-log.js';
@@ -72,6 +72,8 @@ export interface RevisedGoalRun {
   readonly createdStepRunIds: readonly string[];
   readonly withdrawnActionRequestIds: readonly string[];
   readonly releasedActionRequestIds: readonly string[];
+  /** What the requester should know about the revised plan ({@link planHints}). */
+  readonly hints: readonly PlanHint[];
 }
 
 /** The longest reason a revision records — a sentence or two for the revision timeline. */
@@ -174,6 +176,7 @@ export async function reviseGoalRun(
         valid: true,
         steps: plan.steps.length,
         superseded: superseded.map((step) => step.stepKey),
+        hints: planHints(plan),
       }),
       JSON.stringify(removals),
     ],
@@ -295,6 +298,7 @@ export async function reviseGoalRun(
     createdStepRunIds: created,
     withdrawnActionRequestIds: withdrawn,
     releasedActionRequestIds: released,
+    hints: planHints(plan),
   };
 }
 

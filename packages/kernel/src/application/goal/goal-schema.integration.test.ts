@@ -21,6 +21,7 @@ import {
   requestAction,
   startActionRequestExecution,
 } from '../../governance/approval/index.js';
+import { registerSource, startActivity } from '../../substrate/epistemic/index.js';
 import { getGoalRun, listStepRuns, readStepActionEffect } from './index.js';
 
 /**
@@ -32,7 +33,9 @@ import { getGoalRun, listStepRuns, readStepActionEffect } from './index.js';
  * created under a superseded revision (I-G2), a second Task for one attempt (I-G1) and a Task or
  * request claiming another goal's step are all refused by the database itself — written as
  * `nexttime_app`, the role every kernel write path uses, whatever the writer. The advancer splits a
- * step on its requests' `status` and `failure_kind` columns only.
+ * step on its requests' `status` and `failure_kind` columns only. GO4a (goal/0005): an outcome
+ * rests on a passed verification round or on the requester's own Decision (I-G5), and an acceptance
+ * check settles once, on its own evidence, in the current round of a verifying run.
  *
  * Gated on `DATABASE_URL`.
  */
@@ -159,6 +162,128 @@ describe.runIf(DATABASE_URL !== undefined)(
         id,
         ...params,
       ]);
+
+    /** An Activity and a Source of the workspace, for the Observations and Decisions below. */
+    let evidenceRefs: { readonly activityId: string; readonly sourceId: string } | undefined;
+    async function refs() {
+      evidenceRefs ??= await asApp(async (client) => {
+        const activity = await startActivity(client, workspaceId, {
+          kind: 'test.go4a.evidence',
+          principalId: ownerId,
+        });
+        const source = await registerSource(client, workspaceId, {
+          kind: 'test.go4a.evidence',
+          ownerPrincipalId: ownerId,
+          visibility: 'workspace',
+        });
+        return { activityId: activity.id, sourceId: source.id };
+      });
+      return evidenceRefs;
+    }
+
+    const OBSERVE = {
+      gatekeeperId: randomUUID(),
+      operation: 'svc.status',
+      params: { name: 'web' },
+      expect: { path: 'state', op: 'eq', value: 'running' },
+    };
+    /** A pending acceptance check of `round` (GO4a) — what `openAcceptanceRound` inserts. */
+    const insertCheck = (
+      goalRunId: string,
+      round: number,
+      key: string,
+      kind: 'observe_predicate' | 'requester_confirm' = 'observe_predicate',
+      revision = 1,
+    ) =>
+      sql(
+        `insert into goal_acceptance_checks
+           (workspace_id, goal_run_id, round, check_key, plan_revision, kind, observation_check,
+            prompt)
+         values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)`,
+        [
+          workspaceId,
+          goalRunId,
+          round,
+          key,
+          revision,
+          kind,
+          kind === 'observe_predicate' ? JSON.stringify(OBSERVE) : null,
+          kind === 'requester_confirm' ? 'Is the report out?' : null,
+        ],
+      );
+    const setCheck = (
+      goalRunId: string,
+      round: number,
+      key: string,
+      set: string,
+      params: readonly unknown[] = [],
+    ) =>
+      sql(
+        `update goal_acceptance_checks set ${set}
+          where workspace_id = $1 and goal_run_id = $2 and round = $3 and check_key = $4`,
+        [workspaceId, goalRunId, round, key, ...params],
+      );
+    /** An Observation the platform made for acceptance check `checkKey` of `round` — the content
+     *  `acceptance-check.ts` records (`content` overrides it). */
+    async function acceptanceObservation(
+      goalRunId: string,
+      round: number,
+      checkKey: string,
+      content: Record<string, unknown> = {},
+    ): Promise<string> {
+      const { activityId, sourceId } = await refs();
+      const result = await sql(
+        `insert into observations (workspace_id, source_id, activity_id, content)
+         values ($1, $2, $3, $4::jsonb) returning id`,
+        [
+          workspaceId,
+          sourceId,
+          activityId,
+          JSON.stringify({
+            purpose: 'acceptance_check',
+            goalRunId,
+            round,
+            checkKey,
+            outcome: 'satisfied',
+            ...content,
+          }),
+        ],
+      );
+      return result.rows[0]?.id as string;
+    }
+    /** Passes an observation on an Observation of it that satisfied its predicate. */
+    async function passObservation(goalRunId: string, round: number, key: string) {
+      const observationId = await acceptanceObservation(goalRunId, round, key);
+      await setCheck(
+        goalRunId,
+        round,
+        key,
+        "status = 'passed', observation_id = $5, attempts = 1, first_attempt_at = now(), settled_at = now()",
+        [observationId],
+      );
+    }
+    /** Round `round` of a verifying run: one observation, passed — what verification leaves
+     *  before it achieves the run by check (GO4a). */
+    async function passRound(goalRunId: string, round = 1, revision = 1) {
+      await insertCheck(goalRunId, round, 'up', 'observe_predicate', revision);
+      await passObservation(goalRunId, round, 'up');
+    }
+    /** A Decision decided by `decidedBy` (the requester by default), `approved` unless `status`
+     *  says otherwise — what `acceptance.ts` writes for the requester's word. */
+    async function decision(
+      rationale: Record<string, unknown>,
+      decidedBy = ownerId,
+      status = 'approved',
+    ): Promise<string> {
+      const { activityId } = await refs();
+      const result = await sql(
+        `insert into decisions (workspace_id, status, activity_id, summary, rationale, decided_by,
+           decided_at)
+         values ($1, $2, $3, 'a goal outcome', $4::jsonb, $5, now()) returning id`,
+        [workspaceId, status, activityId, JSON.stringify(rationale), decidedBy],
+      );
+      return result.rows[0]?.id as string;
+    }
 
     /** As the login role with the guards off — a row state the write path can no longer reach. */
     const raw = (text: string, params: readonly unknown[] = []) =>
@@ -484,6 +609,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         await setGoal(goalRunId, "status = 'paused', pause_reason = 'requested'");
         await setGoal(goalRunId, "status = 'running', pause_reason = null");
         await setGoal(goalRunId, "status = 'verifying'");
+        await passRound(goalRunId);
         await setGoal(
           goalRunId,
           "status = 'completed', outcome = 'achieved', outcome_basis = 'verified_by_check', ended_at = now()",
@@ -557,6 +683,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           setGoal(goalRunId, "outcome = 'achieved', outcome_basis = 'requester'"),
         ).rejects.toThrow(/goal_runs_outcome/);
         await setGoal(goalRunId, "status = 'verifying'");
+        await passRound(goalRunId);
         await expect(
           setGoal(goalRunId, "status = 'completed', outcome = 'achieved', ended_at = now()"),
         ).rejects.toThrow(/goal_runs_outcome/);
@@ -779,12 +906,383 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
     });
 
+    describe('goal/0005: what an outcome rests on, and the acceptance checks (S11 GO4a, I-G5)', () => {
+      const guardOf = (file: string) => {
+        const text = readFileSync(path.join(MIGRATIONS_DIR, 'goal', file), 'utf8');
+        const start = text.indexOf('create or replace function goal_runs_status_guard()');
+        expect(start, file).toBeGreaterThanOrEqual(0);
+        const end = text.indexOf('\n$$;', start);
+        expect(end, file).toBeGreaterThan(start);
+        return text.slice(start, end).replace(/\s+/g, ' ');
+      };
+
+      it('is goal/0004’s goal_runs_status_guard with outcome_decision_id changeable and the outcome rules before the end, and nothing else changed', () => {
+        const before = guardOf('0004_goal_revision_hold.sql');
+        const after = guardOf('0005_goal_acceptance.sql');
+        const rulesStart = after.indexOf('-- goal/0005:');
+        const rulesEnd = after.lastIndexOf('return new;');
+        expect(rulesStart).toBeGreaterThan(after.indexOf('the budget changes before confirmation'));
+        expect(rulesEnd).toBeGreaterThan(rulesStart);
+        const rules = after.slice(rulesStart, rulesEnd);
+        expect(rules).toContain('achieved by check needs every acceptance check');
+        expect(rules).toContain('rests on their own decision saying so');
+        expect(before).toContain("'advance_failures'])");
+        expect(before).toContain('new_base int;');
+        expect(after.replace(rules, '')).toBe(
+          before
+            .replace("'advance_failures'])", "'advance_failures', 'outcome_decision_id'])")
+            .replace('new_base int;', 'new_base int; latest_round int;'),
+        );
+      });
+
+      const byCheck = (goalRunId: string, extra = '', params: readonly unknown[] = []) =>
+        setGoal(
+          goalRunId,
+          `status = 'completed', outcome = 'achieved', outcome_basis = 'verified_by_check', ended_at = now()${extra}`,
+          params,
+        );
+      const NOT_BY_CHECK =
+        /achieved by check needs every acceptance check of the latest round passed on the current plan, at least one of them observed by the platform \(I-G5\)/;
+      const onWord = (goalRunId: string, decisionId: string | null, outcome = 'achieved') =>
+        setGoal(
+          goalRunId,
+          `status = 'completed', pause_reason = null, outcome = $3, outcome_basis = 'requester', outcome_decision_id = $4, ended_at = now()`,
+          [outcome, decisionId],
+        );
+      const NOT_ON_WORD =
+        /an outcome on the requester's word rests on their own decision saying so \(I-G5\)/;
+
+      it('achieves a run by check only out of verifying, with no person’s decision, once every check of its latest round passed — one of them an observation', async () => {
+        const goalRunId = await runningGoal();
+        await setGoal(goalRunId, "status = 'verifying'");
+        await expect(byCheck(goalRunId)).rejects.toThrow(NOT_BY_CHECK);
+        await insertCheck(goalRunId, 1, 'up');
+        await insertCheck(goalRunId, 1, 'healthy');
+        await passObservation(goalRunId, 1, 'up');
+        await expect(byCheck(goalRunId)).rejects.toThrow(NOT_BY_CHECK);
+        await setCheck(
+          goalRunId,
+          1,
+          'healthy',
+          "status = 'failed', observation_id = $5, attempts = 1, first_attempt_at = now(), settled_at = now()",
+          [await acceptanceObservation(goalRunId, 1, 'healthy', { outcome: 'unsatisfied' })],
+        );
+        await expect(byCheck(goalRunId)).rejects.toThrow(NOT_BY_CHECK);
+
+        // A newer round all passed: the failed round is history.
+        await passRound(goalRunId, 2);
+        const word = await decision({
+          decision: 'goal_outcome',
+          goalRunId,
+          outcome: 'achieved',
+        });
+        await expect(byCheck(goalRunId, ', outcome_decision_id = $3', [word])).rejects.toThrow(
+          /only verification achieves a goal by check/,
+        );
+        await expect(
+          setGoal(
+            goalRunId,
+            "status = 'completed', outcome = 'not_achieved', outcome_basis = 'verified_by_check', ended_at = now()",
+          ),
+        ).rejects.toThrow(/only verification achieves a goal by check/);
+        await byCheck(goalRunId);
+        expect(await asApp((client) => getGoalRun(client, workspaceId, goalRunId))).toMatchObject({
+          status: 'completed',
+          outcome: 'achieved',
+          outcomeBasis: 'verified_by_check',
+          outcomeDecisionId: null,
+        });
+
+        // Out of paused, a passed round is no basis: the run is not verifying.
+        const paused = await runningGoal();
+        await setGoal(paused, "status = 'verifying'");
+        await passRound(paused);
+        await setGoal(paused, "status = 'paused', pause_reason = 'requested'");
+        await expect(byCheck(paused)).rejects.toThrow(/only verification achieves a goal by check/);
+      });
+
+      it('a round with only the requester’s confirmation passed does not achieve a run by check; their decision does, on their word', async () => {
+        const goalRunId = await runningGoal();
+        await setGoal(goalRunId, "status = 'verifying'");
+        await insertCheck(goalRunId, 1, 'requester_confirm', 'requester_confirm');
+        const word = await decision({
+          decision: 'goal_outcome',
+          goalRunId,
+          outcome: 'achieved',
+          round: 1,
+          checkKey: 'requester_confirm',
+        });
+        await setCheck(
+          goalRunId,
+          1,
+          'requester_confirm',
+          "status = 'passed', decision_id = $5, settled_at = now()",
+          [word],
+        );
+        await expect(byCheck(goalRunId)).rejects.toThrow(NOT_BY_CHECK);
+        await onWord(goalRunId, word);
+        expect(await asApp((client) => getGoalRun(client, workspaceId, goalRunId))).toMatchObject({
+          outcome: 'achieved',
+          outcomeBasis: 'requester',
+          outcomeDecisionId: word,
+        });
+      });
+
+      it('a round passed on an earlier plan does not achieve the run once a revision took effect', async () => {
+        const goalRunId = await runningGoal();
+        await setGoal(goalRunId, "status = 'verifying'");
+        await passRound(goalRunId);
+        await setGoal(goalRunId, "status = 'paused', pause_reason = 'needs_decision'");
+        await proposeRevision(goalRunId, 2, 1, ['A', 'B', 'C']);
+        await adopt(goalRunId, 2);
+        await setGoal(goalRunId, "status = 'running', pause_reason = null");
+        await setGoal(goalRunId, "status = 'verifying'");
+        await expect(byCheck(goalRunId)).rejects.toThrow(NOT_BY_CHECK);
+        await passRound(goalRunId, 2, 2);
+        await byCheck(goalRunId);
+      });
+
+      it('an outcome on the requester’s word rests on their own approved decision naming this run and that outcome — never an agent’s, another run’s or another outcome’s', async () => {
+        const agentId = randomUUID();
+        await withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerId },
+          (client) =>
+            client.query(
+              "insert into principals (workspace_id, id, kind, role, display_name) values ($1, $2, 'agent', 'member', 'entry agent')",
+              [workspaceId, agentId],
+            ),
+          { skipRoleSwitch: true },
+        );
+        const goalRunId = await runningGoal();
+        const other = await runningGoal();
+        await setGoal(goalRunId, "status = 'paused', pause_reason = 'needs_decision'");
+        const said = (extra: Record<string, unknown> = {}) => ({
+          decision: 'goal_outcome',
+          goalRunId,
+          outcome: 'not_achieved',
+          ...extra,
+        });
+        await expect(onWord(goalRunId, null, 'not_achieved')).rejects.toThrow(NOT_ON_WORD);
+        for (const refused of [
+          await decision(said(), agentId),
+          await decision(said({ goalRunId: other })),
+          await decision(said({ outcome: 'achieved' })),
+          await decision(said({ decision: 'reconcile_finding' })),
+          await decision(said(), ownerId, 'proposed'),
+        ]) {
+          await expect(onWord(goalRunId, refused, 'not_achieved')).rejects.toThrow(NOT_ON_WORD);
+        }
+        await expect(
+          setGoal(goalRunId, 'outcome_decision_id = $3', [await decision(said())]),
+        ).rejects.toThrow(/the outcome decision is written with the outcome, once/);
+        await expect(
+          setGoal(
+            goalRunId,
+            "status = 'completed', outcome = 'achieved', outcome_basis = 'reviewer_assessed', ended_at = now()",
+          ),
+        ).rejects.toThrow(/a reviewer_assessed outcome is not recorded yet/);
+        const word = await decision(said());
+        await onWord(goalRunId, word, 'not_achieved');
+        expect(await asApp((client) => getGoalRun(client, workspaceId, goalRunId))).toMatchObject({
+          status: 'completed',
+          outcome: 'not_achieved',
+          outcomeBasis: 'requester',
+          outcomeDecisionId: word,
+        });
+        await expect(setGoal(goalRunId, 'outcome_decision_id = null')).rejects.toThrow(
+          /a completed goal run is final; outcome_decision_id cannot change/,
+        );
+      });
+
+      it('an acceptance check is created pending and untried, while its run verifies on the plan it names, never into an older round', async () => {
+        const goalRunId = await runningGoal();
+        await expect(insertCheck(goalRunId, 1, 'up')).rejects.toThrow(
+          /a round is opened while its goal run is verifying, on the plan in force/,
+        );
+        await proposeRevision(goalRunId, 2, 1, ['A']);
+        await setGoal(goalRunId, "status = 'verifying'");
+        await expect(insertCheck(goalRunId, 1, 'up', 'observe_predicate', 2)).rejects.toThrow(
+          /a round is opened while its goal run is verifying, on the plan in force/,
+        );
+        await expect(
+          sql(
+            `insert into goal_acceptance_checks
+               (workspace_id, goal_run_id, round, check_key, plan_revision, kind,
+                observation_check, status, settled_at)
+             values ($1, $2, 1, 'up', 1, 'observe_predicate', $3::jsonb, 'passed', now())`,
+            [workspaceId, goalRunId, JSON.stringify(OBSERVE)],
+          ),
+        ).rejects.toThrow(/a check is created pending and untried/);
+        await insertCheck(goalRunId, 2, 'up');
+        await expect(insertCheck(goalRunId, 1, 'up')).rejects.toThrow(
+          /no check is added to a round older than round 2/,
+        );
+        // A confirmation carries a prompt and no predicate; an observation the reverse.
+        await expect(
+          sql(
+            `insert into goal_acceptance_checks
+               (workspace_id, goal_run_id, round, check_key, plan_revision, kind, observation_check)
+             values ($1, $2, 2, 'ok', 1, 'requester_confirm', $3::jsonb)`,
+            [workspaceId, goalRunId, JSON.stringify(OBSERVE)],
+          ),
+        ).rejects.toThrow(/goal_acceptance_checks_shape/);
+        await expect(setCheck(goalRunId, 2, 'up', "check_key = 'down'")).rejects.toThrow(
+          /what a check verifies, and for which round, never changes/,
+        );
+        await expect(
+          setCheck(goalRunId, 2, 'up', 'observation_check = $5::jsonb', [
+            JSON.stringify({ ...OBSERVE, operation: 'svc.other' }),
+          ]),
+        ).rejects.toThrow(/what a check verifies, and for which round, never changes/);
+      });
+
+      it('an observation passes only on an Observation of that very check that satisfied its predicate; a settled check never changes', async () => {
+        const goalRunId = await runningGoal();
+        await setGoal(goalRunId, "status = 'verifying'");
+        await insertCheck(goalRunId, 1, 'up');
+        await insertCheck(goalRunId, 1, 'healthy');
+        const passOn = (observationId: string) =>
+          setCheck(
+            goalRunId,
+            1,
+            'up',
+            "status = 'passed', observation_id = $5, attempts = 1, first_attempt_at = now(), settled_at = now()",
+            [observationId],
+          );
+        const NOT_PASSED = /an observation passes only on an Observation of this check/;
+        for (const content of [
+          { outcome: 'unsatisfied' },
+          { checkKey: 'healthy' },
+          { round: 2 },
+          { goalRunId: randomUUID() },
+          { purpose: 'reconcile_check' },
+        ]) {
+          await expect(
+            passOn(await acceptanceObservation(goalRunId, 1, 'up', content)),
+          ).rejects.toThrow(NOT_PASSED);
+        }
+        await expect(
+          setCheck(goalRunId, 1, 'up', "status = 'passed', settled_at = now()"),
+        ).rejects.toThrow(NOT_PASSED);
+        await expect(
+          setCheck(goalRunId, 1, 'healthy', "status = 'failed', settled_at = now()"),
+        ).rejects.toThrow(/goal_acceptance_checks_evidence/);
+        const evidence = await acceptanceObservation(goalRunId, 1, 'up');
+        await passOn(evidence);
+        await expect(
+          setCheck(goalRunId, 1, 'up', "status = 'failed', settled_at = now()"),
+        ).rejects.toThrow(/a settled check is not changed/);
+
+        await setCheck(
+          goalRunId,
+          1,
+          'healthy',
+          "attempts = 2, first_attempt_at = now(), next_attempt_at = now() + interval '1 minute'",
+        );
+        await expect(setCheck(goalRunId, 1, 'healthy', 'attempts = 1')).rejects.toThrow(
+          /attempts only grow/,
+        );
+        await expect(
+          setCheck(goalRunId, 1, 'healthy', "first_attempt_at = now() - interval '1 hour'"),
+        ).rejects.toThrow(/when the first attempt was made never changes/);
+        await expect(
+          setCheck(goalRunId, 1, 'healthy', 'decision_id = $5', [
+            await decision({ decision: 'goal_outcome', goalRunId, outcome: 'achieved' }),
+          ]),
+        ).rejects.toThrow(/the requester's decision is written as the confirmation passes/);
+      });
+
+      it('a confirmation passes only on the requester’s own decision for that round and check', async () => {
+        const agentId = randomUUID();
+        await withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerId },
+          (client) =>
+            client.query(
+              "insert into principals (workspace_id, id, kind, role, display_name) values ($1, $2, 'agent', 'member', 'entry agent')",
+              [workspaceId, agentId],
+            ),
+          { skipRoleSwitch: true },
+        );
+        const goalRunId = await runningGoal();
+        await setGoal(goalRunId, "status = 'verifying'");
+        await insertCheck(goalRunId, 1, 'ok', 'requester_confirm');
+        const confirmed = (extra: Record<string, unknown> = {}) => ({
+          decision: 'goal_outcome',
+          goalRunId,
+          outcome: 'achieved',
+          round: 1,
+          checkKey: 'ok',
+          ...extra,
+        });
+        const passOn = (decisionId: string) =>
+          setCheck(goalRunId, 1, 'ok', "status = 'passed', decision_id = $5, settled_at = now()", [
+            decisionId,
+          ]);
+        const NOT_CONFIRMED =
+          /a confirmation passes only on the requester's own decision for this check/;
+        for (const refused of [
+          await decision(confirmed(), agentId),
+          await decision(confirmed({ round: 2 })),
+          await decision(confirmed({ checkKey: 'other' })),
+          await decision(confirmed({ outcome: 'not_achieved' })),
+          await decision(confirmed({ goalRunId: randomUUID() })),
+          await decision(confirmed(), ownerId, 'proposed'),
+        ]) {
+          await expect(passOn(refused)).rejects.toThrow(NOT_CONFIRMED);
+        }
+        await expect(
+          setCheck(goalRunId, 1, 'ok', "status = 'failed', settled_at = now()"),
+        ).rejects.toThrow(/goal_acceptance_checks_evidence/);
+        await passOn(await decision(confirmed()));
+      });
+
+      it('a check settles only in the current round of a verifying run, and is superseded only once the run left verifying or a newer round began', async () => {
+        const goalRunId = await runningGoal();
+        await setGoal(goalRunId, "status = 'verifying'");
+        await insertCheck(goalRunId, 1, 'up');
+        await insertCheck(goalRunId, 1, 'healthy');
+        await expect(
+          setCheck(goalRunId, 1, 'up', "status = 'superseded', settled_at = now()"),
+        ).rejects.toThrow(
+          /a check of the current round is superseded only once its goal run left verifying/,
+        );
+        await insertCheck(goalRunId, 2, 'up');
+        const evidence = await acceptanceObservation(goalRunId, 1, 'up');
+        await expect(
+          setCheck(
+            goalRunId,
+            1,
+            'up',
+            "status = 'passed', observation_id = $5, attempts = 1, first_attempt_at = now(), settled_at = now()",
+            [evidence],
+          ),
+        ).rejects.toThrow(/a check settles only in the current round of a verifying goal run/);
+        await setCheck(goalRunId, 1, 'up', "status = 'superseded', settled_at = now()");
+
+        // The run left verifying: nothing of the current round settles; it is superseded.
+        await setGoal(goalRunId, "status = 'paused', pause_reason = 'requested'");
+        await expect(
+          setCheck(
+            goalRunId,
+            2,
+            'up',
+            "status = 'unavailable', last_error = 'x', settled_at = now()",
+          ),
+        ).rejects.toThrow(/a check settles only in the current round of a verifying goal run/);
+        await setCheck(goalRunId, 2, 'up', "status = 'superseded', settled_at = now()");
+        await setCheck(goalRunId, 1, 'healthy', "status = 'superseded', settled_at = now()");
+      });
+    });
+
     describe('GoalRun — what may change, and when', () => {
       /** A completed GoalRun with revision 2 still proposed. */
       async function completedGoal(): Promise<string> {
         const goalRunId = await runningGoal();
         await proposeRevision(goalRunId, 2, 1, ['A', 'B', 'C']);
         await setGoal(goalRunId, "status = 'verifying'");
+        await passRound(goalRunId);
         await setGoal(
           goalRunId,
           "status = 'completed', outcome = 'achieved', outcome_basis = 'verified_by_check', ended_at = now()",
