@@ -22,7 +22,7 @@ import type { PoolClient } from 'pg';
  * |---|---|
  * | I-G1 one Task per attempt | `tasks_step_attempt_uidx` missing or not a valid unique index; a StepRun whose attempt Tasks do not number exactly 1..`attempt_count`; a StepRun with more than one unfinished attempt Task at once (attempts are sequential, one layer of retry); an attempt Task with more than one WorkerRun (S11 GO2: the advancer's Tasks have no Task-internal retry, so a second run means a retry layer under the StepRun's) |
  * | I-G2 only current-plan steps advance | a guard trigger of `goal_runs` / `plan_revisions` / `step_runs` (goal/0001) or `tasks_goal_step_immutable` (task/0007) missing or not enabled; an unfinished StepRun (`pending` … `failed`, not superseded) whose definition is not in its GoalRun's current plan unchanged — dropped or redefined without being superseded; a finished one whose key the current plan redefines; a key of the current plan with no live StepRun while the GoalRun runs; an attempt Task started under a revision outside its StepRun's live window or under a revision never accepted; an accepted revision off the chain that `based_on_revision` walks back from the current one (newer than it, or skipped by it — I-G3); a revision on that chain that is not accepted |
- * | I-G5 an outcome rests on verification or the requester's word — the goal's, and a step's success on its own checks (GO4b) | `goal_runs_status_guard` (goal/0005), `goal_acceptance_checks_guard`, `step_runs_acceptance_guard` or `step_acceptance_checks_guard` (goal/0006) missing or not enabled; a GoalRun completed by check (`verified_by_check`) other than `achieved` (a CHECK keeps a person's Decision off it), or whose latest acceptance round has a check not `passed`, a check on a plan other than the current one, no check the platform made (an observation, or a Fact of the graph — GO4c) — or no round at all; a GoalRun completed on the requester's word whose outcome Decision is not the requester's own, approved, naming the run and that outcome; a `passed` acceptance check with no evidence — an observation without an Observation of that check that satisfied its predicate, a fact check whose Fact is not the Link it names (GO4c), a confirmation without the requester's own Decision for that check; a succeeded StepRun whose plan entry declares acceptance checks with no round of them, or whose latest round has a check not `passed` for its current attempt or lacks one it declares; a `passed` step acceptance check without its evidence, as for the goal's |
+ * | I-G5 an outcome rests on verification or the requester's word — the goal's, and a step's success on its own checks (GO4b) | `goal_runs_status_guard` (goal/0005), `goal_acceptance_checks_guard`, `step_runs_acceptance_guard` or `step_acceptance_checks_guard` (goal/0006) missing or not enabled; a GoalRun completed by check (`verified_by_check`) other than `achieved` (a CHECK keeps a person's Decision off it), or whose latest acceptance round has a check not `passed`, a check on a plan other than the current one, no check the platform made (an observation, or a Fact of the graph — GO4c) — or no round at all; or whose latest round has a check not as the plan in force declares it, or lacks one it declares (goal/0007, review #493 on GO4c); a GoalRun completed on the requester's word whose outcome Decision is not the requester's own, approved, naming the run and that outcome; a `passed` acceptance check with no evidence — an observation without an Observation of that check that satisfied its predicate, a fact check whose Fact is not the Link it names (GO4c), a confirmation without the requester's own Decision for that check; a succeeded StepRun whose plan entry declares acceptance checks with no round of them, or whose latest round has a check not `passed` for its current attempt, lacks one it declares, or has one not as its plan entry declares it; a `passed` step acceptance check without its evidence, as for the goal's |
  * | I-G6 budget | a `running` GoalRun past its wall-clock budget by more than the grace period; or over its token, step or revision budget with no Task of it still running and nothing finished for the grace period — the advancer checks budgets between steps, so a Task that overshoots mid-run is not counted until it ends |
  * | I-G9 only live steps act | `action_requests_status_guard` (governance/0021, the `withdrawn` guard) or `action_requests_step_run_immutable` (governance/0022) missing or not enabled; a request of a cancelled StepRun, or of a cancelling / cancelled GoalRun, or of a superseded StepRun that the superseding revision did not release (`plan_revisions.removals`, goal/0004), still awaiting a decision or approved and queued (it is withdrawn in the transaction that cancels or revises); a request of a cancelled StepRun, or of a superseded one not released, that started executing after the step ended; a request created after its StepRun was superseded or cancelled; a request whose StepRun is not the one its Worker's Task runs for, or that records a StepRun with no Worker's Task behind it |
  *
@@ -343,6 +343,36 @@ function factIsNamed(c: string): string {
        and ${endpoint('tgt', `${c}.fact_check -> 'target'`)})`;
 }
 
+/** Whether acceptance check row `c` is the declared check `d` (an element of a plan's
+ *  `acceptance`), as the goal tables' guards bind them (goal/0006, goal/0007): the same key and
+ *  kind, and the same check, Fact or — a goal's confirmation (`withPrompt`; a step has none) —
+ *  prompt. */
+function isDeclaredAs(c: string, d: string, withPrompt: boolean): string {
+  return `(${d} ->> 'key' = ${c}.check_key and ${d} ->> 'kind' = ${c}.kind
+          and case ${c}.kind
+                when 'observe_predicate' then ${d} -> 'check' = ${c}.observation_check
+                when 'fact_predicate' then ${d} -> 'fact' = ${c}.fact_check
+                else ${withPrompt ? `${d} ->> 'prompt' = ${c}.prompt` : 'false'}
+              end)`;
+}
+
+/** The checks GoalRun `g`'s verification round is made of on its current revision, as
+ *  `goal_declared_acceptance` (goal/0007) and `plan.ts` `roundAcceptance` decide them: the plan's
+ *  `acceptance`, or — without any — the requester's confirmation of the goal's statement under the
+ *  implicit key. Null when the revision is missing. */
+function goalDeclared(g: string): string {
+  return `(select case when jsonb_typeof(p.plan -> 'acceptance') = 'array'
+                            and jsonb_array_length(p.plan -> 'acceptance') > 0
+                       then p.plan -> 'acceptance'
+                       else jsonb_build_array(jsonb_build_object(
+                              'kind', 'requester_confirm', 'key', 'requester_confirm',
+                              'prompt', ${g}.statement))
+                  end
+             from plan_revisions p
+            where p.workspace_id = ${g}.workspace_id and p.goal_run_id = ${g}.id
+              and p.revision = ${g}.current_revision)`;
+}
+
 // -------------------------------------------------------------------------------------------
 // I-G5 — a GoalRun's objective outcome rests on its verification or on its requester's word; a
 // step with acceptance checks succeeds only on them (GO4b).
@@ -393,6 +423,42 @@ export async function checkIG5(
                 from latest
                where outcome is distinct from 'achieved'
                   or round is null or not_passed > 0 or off_plan > 0 or made = 0
+               order by ended_at desc, id desc`,
+      },
+      // goal/0007 (review #493 on GO4c): the round a run is achieved on is the one its plan in
+      // force declares — no check other than as declared, none it declares missing.
+      {
+        label: 'achieved-not-as-declared',
+        sql: `with by_check as (
+                select g.workspace_id, g.id, g.ended_at,
+                       (select max(c.round) from goal_acceptance_checks c
+                         where c.workspace_id = g.workspace_id and c.goal_run_id = g.id) as round,
+                       coalesce(${goalDeclared('g')}, '[]'::jsonb) as declared
+                  from goal_runs g
+                 where g.status = 'completed' and g.outcome_basis = 'verified_by_check'
+              ),
+              latest as (
+                select b.workspace_id, b.id, b.ended_at, b.round,
+                       (select count(*) from goal_acceptance_checks c
+                         where c.workspace_id = b.workspace_id and c.goal_run_id = b.id
+                           and c.round = b.round
+                           and not exists (
+                             select 1 from jsonb_array_elements(b.declared) d
+                              where ${isDeclaredAs('c', 'd', true)})) as undeclared,
+                       (select count(*) from jsonb_array_elements(b.declared) d
+                         where not exists (
+                           select 1 from goal_acceptance_checks c
+                            where c.workspace_id = b.workspace_id and c.goal_run_id = b.id
+                              and c.round = b.round and c.check_key = d ->> 'key')) as missing
+                  from by_check b
+                 where b.round is not null
+              )
+              select workspace_id, id,
+                     'round ' || round || ': ' || undeclared
+                       || ' not as the plan in force declares them, ' || missing
+                       || ' declared checks missing' as detail
+                from latest
+               where undeclared > 0 or missing > 0
                order by ended_at desc, id desc`,
       },
       {
@@ -484,6 +550,40 @@ export async function checkIG5(
                                  || ' declared checks missing' end as detail
                 from latest
                where round is null or not_passed > 0 or missing > 0
+               order by updated_at desc, id desc`,
+      },
+      {
+        label: 'step-succeeded-not-as-declared',
+        sql: `with declared as (
+                select s.workspace_id, s.id, s.step_key, s.updated_at,
+                       e -> 'acceptance' as acceptance,
+                       (select max(c.round) from step_acceptance_checks c
+                         where c.workspace_id = s.workspace_id and c.step_run_id = s.id) as round
+                  from step_runs s
+                  join plan_revisions intro
+                    on intro.workspace_id = s.workspace_id and intro.goal_run_id = s.goal_run_id
+                   and intro.revision = s.introduced_in_revision
+                 cross join lateral jsonb_array_elements(intro.plan -> 'steps') e
+                 where s.status = 'succeeded' and e ->> 'key' = s.step_key
+                   and jsonb_typeof(e -> 'acceptance') = 'array'
+                   and jsonb_array_length(e -> 'acceptance') > 0
+              ),
+              latest as (
+                select d.workspace_id, d.id, d.step_key, d.updated_at, d.round,
+                       (select count(*) from step_acceptance_checks c
+                         where c.workspace_id = d.workspace_id and c.step_run_id = d.id
+                           and c.round = d.round
+                           and not exists (
+                             select 1 from jsonb_array_elements(d.acceptance) a
+                              where ${isDeclaredAs('c', 'a', false)})) as undeclared
+                  from declared d
+                 where d.round is not null
+              )
+              select workspace_id, id,
+                     'step ' || step_key || ' round ' || round || ': ' || undeclared
+                       || ' not as its plan entry declares them' as detail
+                from latest
+               where undeclared > 0
                order by updated_at desc, id desc`,
       },
       {

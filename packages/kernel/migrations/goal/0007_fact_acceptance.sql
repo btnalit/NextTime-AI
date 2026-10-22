@@ -42,20 +42,29 @@
 --      changes, a fact check passes only on a Fact `goal_fact_admissible` takes (as of now, for its
 --      round), and fails only on a Fact of the Link it names — an answer that comes out unknown
 --      (null) refuses. A step's fact check is one of its
---      declared checks as declared (`fact` in the plan entry).
---   4. `goal_runs_status_guard` as in goal/0005 with one change, its comments aside (compare with
+--      declared checks as declared (`fact` in the plan entry). A goal's check is now bound to its
+--      plan as a step's has been since goal/0006 (review #493 on GO4c: once a check may pass on a
+--      Fact a collector confirmed anyway, a round opened from the wrong plan would otherwise pass
+--      on evidence nobody asked for): it is created only as one of the checks
+--      `goal_declared_acceptance` names for its `plan_revision` — the plan's `acceptance`, as
+--      declared (key, kind, and its check, Fact or prompt), or with none declared the requester's
+--      confirmation of the goal's statement under the implicit key (`application/goal/plan.ts`
+--      `roundAcceptance`).
+--   4. `goal_runs_status_guard` as in goal/0005 with two changes, its comments aside (compare with
 --      goal/0005; the goal-schema integration test does): a goal achieved by check needs at least
 --      one check of its latest round that the platform made — an observation or a Fact
---      (`fact_predicate`).
+--      (`fact_predicate`) — and a check of that round for every one its plan in force declares.
 --
 -- Runner ordering: `core` sorts before `goal`; `links`, `objects`, `observations`, `sources` and
 -- `activities` exist when this runs. Reversibility (release.md §6): the previous release never
 -- reads or writes the new columns and never writes a `fact_predicate` row (its plan schema refuses
 -- the kind), so the wider CHECKs accept every row it writes and the rebuilt guards apply to its
--- rows as before. After a code-only rollback a `fact_predicate` row a later release left pending
--- stays pending — the previous release never claims one (its claim is for `observe_predicate`) —
--- so its run or step waits for the next release; its advance reads a plan holding one as
--- unreadable and pauses the run. Nothing is completed or succeeds on it: the guards still hold.
+-- rows as before — it opens a goal's round from the plan in force too (`roundAcceptance`, GO4a),
+-- every check the plan declares and only those. After a code-only rollback a `fact_predicate` row
+-- a later release left pending stays pending — the previous release never claims one (its claim is
+-- for `observe_predicate`) — so its run or step waits for the next release; its advance reads a
+-- plan holding one as unreadable and pauses the run. Nothing is completed or succeeds on it: the
+-- guards still hold.
 --
 -- Cross-process bootstrap lock: the goal module's key (goal/0001).
 select pg_advisory_xact_lock(7241000701);
@@ -175,6 +184,26 @@ $$;
 
 -- ----- the goal's checks ----------------------------------------------------------------------
 
+-- The checks a verification round of goal run `p_goal_run_id` on revision `p_revision` is made of
+-- (`application/goal/plan.ts` `roundAcceptance`): the plan's `acceptance`, or — without any — the
+-- requester's confirmation of the goal's statement under the implicit key (`IMPLICIT_CONFIRM_KEY`).
+-- `null` when the revision is not one of the run's.
+create or replace function goal_declared_acceptance(
+  p_workspace_id uuid, p_goal_run_id uuid, p_revision int
+) returns jsonb
+language sql stable as $$
+  select case when jsonb_typeof(p.plan -> 'acceptance') = 'array'
+                   and jsonb_array_length(p.plan -> 'acceptance') > 0
+              then p.plan -> 'acceptance'
+              else jsonb_build_array(jsonb_build_object(
+                     'kind', 'requester_confirm', 'key', 'requester_confirm', 'prompt', g.statement))
+         end
+    from plan_revisions p
+    join goal_runs g on g.workspace_id = p.workspace_id and g.id = p.goal_run_id
+   where p.workspace_id = p_workspace_id and p.goal_run_id = p_goal_run_id
+     and p.revision = p_revision
+$$;
+
 alter table goal_acceptance_checks add column if not exists fact_check jsonb;
 alter table goal_acceptance_checks add column if not exists fact_id uuid;
 
@@ -253,6 +282,18 @@ begin
     if goal.status is distinct from 'verifying'
        or goal.current_revision is distinct from new.plan_revision then
       raise exception 'goal_acceptance_checks: a round is opened while its goal run is verifying, on the plan in force';
+    end if;
+    if not exists (
+      select 1
+        from jsonb_array_elements(goal_declared_acceptance(
+               new.workspace_id, new.goal_run_id, new.plan_revision)) d
+       where d ->> 'key' = new.check_key and d ->> 'kind' = new.kind
+         and (case new.kind
+                when 'observe_predicate' then d -> 'check' = new.observation_check
+                when 'fact_predicate' then d -> 'fact' = new.fact_check
+                else d ->> 'prompt' = new.prompt
+              end)) then
+      raise exception 'goal_acceptance_checks: a check is one of the acceptance checks its plan declares, as declared — with none declared, the requester''s confirmation of the goal';
     end if;
     if latest_round is not null and new.round < latest_round then
       raise exception 'goal_acceptance_checks: no check is added to a round older than round %', latest_round;
@@ -474,13 +515,15 @@ $$;
 
 -- ----- what an outcome rests on ---------------------------------------------------------------
 
--- goal_runs_status_guard as in goal/0005, a Fact the platform judged counting as a check it made.
+-- goal_runs_status_guard as in goal/0005, a Fact the platform judged counting as a check it made,
+-- and every check the plan in force declares needed in the latest round.
 create or replace function goal_runs_status_guard() returns trigger
 language plpgsql as $$
 declare
   changed text;
   new_base int;
   latest_round int;
+  declared jsonb;
 begin
   if tg_op = 'INSERT' then
     if new.status <> 'proposed' then
@@ -575,9 +618,9 @@ begin
   -- goal/0005: what a completed run's objective outcome rests on (I-G5). `achieved` by check only
   -- out of `verifying`, with every acceptance check of the run's latest round passed — at least
   -- one of them a check the platform made, an observation or a Fact (goal/0007) — on the current
-  -- plan; any outcome on the requester's word only with their own Decision saying so;
-  -- `reviewer_assessed` not yet (W4). A missing or unknown basis is left to the CHECKs
-  -- (`goal_runs_outcome`, the column's own).
+  -- plan, and none it declares missing from that round (goal/0007); any outcome on the
+  -- requester's word only with their own Decision saying so; `reviewer_assessed` not yet (W4). A
+  -- missing or unknown basis is left to the CHECKs (`goal_runs_outcome`, the column's own).
   if new.outcome_decision_id is distinct from old.outcome_decision_id
      and not (new.status = 'completed' and old.status <> 'completed') then
     raise exception 'goal_runs: the outcome decision is written with the outcome, once';
@@ -601,6 +644,15 @@ begin
             where c.workspace_id = new.workspace_id and c.goal_run_id = new.id
               and c.round = latest_round and c.kind in ('observe_predicate', 'fact_predicate')) then
         raise exception 'goal_runs: achieved by check needs every acceptance check of the latest round passed on the current plan, at least one of them observed by the platform (I-G5)';
+      end if;
+      declared := goal_declared_acceptance(new.workspace_id, new.id, new.current_revision);
+      if declared is null or exists (
+        select 1 from jsonb_array_elements(declared) d
+         where not exists (
+           select 1 from goal_acceptance_checks c
+            where c.workspace_id = new.workspace_id and c.goal_run_id = new.id
+              and c.round = latest_round and c.check_key = d ->> 'key')) then
+        raise exception 'goal_runs: achieved by check needs a check of the latest round for every acceptance check the current plan declares (I-G5)';
       end if;
     elsif new.outcome_basis = 'requester' then
       if new.outcome_decision_id is null or not exists (
