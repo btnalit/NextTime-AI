@@ -408,9 +408,8 @@ export function Combobox({
         </div>
       ) : null}
       {pendingPaste && !open && !pasteMatch ? (
-        <p
+        <output
           className="combobox-note combobox-paste-note"
-          role="status"
           data-testid={testId ? `${testId}-paste-note` : undefined}
         >
           {loading
@@ -421,7 +420,7 @@ export function Combobox({
                   `还没选中：有 ${pasteMatches.length} 个匹配，按 ↓ 选择。`,
                   `Nothing chosen yet: ${pasteMatches.length} options match — press ↓ to pick one.`,
                 )}
-        </p>
+        </output>
       ) : null}
     </div>
   );
