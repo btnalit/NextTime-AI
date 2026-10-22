@@ -1,4 +1,8 @@
-import type { ChangeItemClassification } from '@nexttime/shared';
+import {
+  CHANGE_WIDENING_REASON_VALUES,
+  type ChangeItemClassification,
+  type ChangeWideningReasonCode,
+} from '@nexttime/shared';
 import type {
   ActionTypeDefinition,
   LinkTypeDefinition,
@@ -21,20 +25,10 @@ import type {
  * those items one by one (`ChangeConfirmationRequiredError`), and the reasons are what they read.
  */
 
-export const WIDENING_REASON_VALUES = [
-  /** A governance declaration that did not exist before (e.g. a new ActionType). */
-  'added',
-  /** A governance declaration that no longer exists: what it held in place falls back to a
-   *  default nobody reviewed here, so its removal is not proven to narrow anything. */
-  'removed',
-  /** A field with a known order of strictness moved to a looser value. */
-  'loosened',
-  /** A field whose direction is not proven changed (any change to it needs confirmation). */
-  'changed',
-  /** A field no rule covers (whitelist: unknown is widening). */
-  'unrecognized',
-] as const;
-export type WideningReasonCode = (typeof WIDENING_REASON_VALUES)[number];
+/** The reason codes (`@nexttime/shared` `CHANGE_WIDENING_REASON_VALUES`, where each is described:
+ *  they reach the console on the wire). */
+export const WIDENING_REASON_VALUES = CHANGE_WIDENING_REASON_VALUES;
+export type WideningReasonCode = ChangeWideningReasonCode;
 
 export interface WideningReason {
   /** Where in the item, e.g. `actionTypes[restart].mode`. */
@@ -234,25 +228,26 @@ function compareSection<T extends object>(
 }
 
 /**
- * The widening changes from `before` (`null`: the family is not installed) to `after`, in a stable
- * order (by section, then key, then field). Empty means the change is proven not to widen
- * authority.
+ * The widening changes from `before` to `after`, in a stable order (by section, then key, then
+ * field); `null` on either side is the family not installed — `before` for a first install,
+ * `after` for a rollback that takes the family out (P1-B: every declaration of `before` is then
+ * removed). Empty means the change is proven not to widen authority.
  */
 export function classifyOntologyDefinitionChange(
   before: OntologyDefinition | null,
-  after: OntologyDefinition,
+  after: OntologyDefinition | null,
 ): WideningReason[] {
   const out: WideningReason[] = [];
   const b = (before ?? {}) as Record<string, unknown>;
-  const a = after as Record<string, unknown>;
+  const a = (after ?? {}) as Record<string, unknown>;
   const known = new Set<string>(ONTOLOGY_SECTION_NAMES);
   const unknownKeys = [...new Set([...Object.keys(b), ...Object.keys(a)])]
     .filter((key) => !known.has(key) && (b[key] !== undefined || a[key] !== undefined))
     .sort();
   for (const key of unknownKeys) out.push({ path: key, reason: 'unrecognized' });
 
-  compareSection(OBJECT_TYPES, before?.objectTypes ?? [], after.objectTypes, out);
-  compareSection(LINK_TYPES, before?.linkTypes ?? [], after.linkTypes, out);
-  compareSection(ACTION_TYPES, before?.actionTypes ?? [], after.actionTypes ?? [], out);
+  compareSection(OBJECT_TYPES, before?.objectTypes ?? [], after?.objectTypes ?? [], out);
+  compareSection(LINK_TYPES, before?.linkTypes ?? [], after?.linkTypes ?? [], out);
+  compareSection(ACTION_TYPES, before?.actionTypes ?? [], after?.actionTypes ?? [], out);
   return out;
 }

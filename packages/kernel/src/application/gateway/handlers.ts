@@ -164,6 +164,13 @@ import {
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
 import { computeCapabilityReachability, operationReachability } from './capability-reachability.js';
+// S11 P1-B: the workspace's ChangePlan segments (安装历史) and their rollback.
+import {
+  getChangeSegmentHandler,
+  listChangeSegmentsHandler,
+  previewRollBackChangeSegmentHandler,
+  rollBackChangeSegmentHandler,
+} from './change-segment-handlers.js';
 import {
   cancelConnectionRequestHandler,
   connectGatekeeperHandler,
@@ -2172,6 +2179,11 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['list_workspace_modules', listWorkspaceModulesHandler],
   ['install_module', installModuleHandler],
   ['upgrade_module', upgradeModuleHandler],
+  // S11 P1-B change segments (change-segment-handlers.ts)
+  ['list_change_segments', listChangeSegmentsHandler],
+  ['get_change_segment', getChangeSegmentHandler],
+  ['preview_roll_back_change_segment', previewRollBackChangeSegmentHandler],
+  ['roll_back_change_segment', rollBackChangeSegmentHandler],
   ['get_object', getObjectHandler],
   ['traverse', traverseHandler],
   ['resolve_refs', resolveRefsHandler],

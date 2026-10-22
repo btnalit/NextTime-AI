@@ -93,6 +93,10 @@ export {
 } from './find-means.js';
 export type { FindMeansInput, FindOperationsInput } from './find-means.js';
 
+// S11 P1-B: what a change that takes ontology types out leaves without a declaration.
+export { countGraphTypeUsage } from './type-usage.js';
+export type { GraphTypeUsage } from './type-usage.js';
+
 // S8 W1-C: `traverse`'s `nodeDetails` and `resolve_refs`'s object/gatekeeper name resolution.
 export { objectDisplayName } from './display-name.js';
 

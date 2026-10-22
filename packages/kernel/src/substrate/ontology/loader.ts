@@ -213,6 +213,45 @@ export async function loadPublishedOntologyHead(
   return row ? mapOntologyVersionRow(row) : null;
 }
 
+/** One version of the family `id` in `workspaceId`, whatever its status, or `null` when there is
+ *  no such version. */
+export async function loadOntologyVersion(
+  client: PoolClient,
+  workspaceId: string,
+  id: string,
+  version: number,
+): Promise<OntologyVersionRow | null> {
+  const result = await client.query<OntologyVersionDbRow>(
+    `select workspace_id, id, version, status, definition, proposed_by, published_by,
+            created_at, published_at
+       from ontology_versions
+      where workspace_id = $1 and id = $2 and version = $3`,
+    [workspaceId, id, version],
+  );
+  const row = result.rows[0];
+  return row ? mapOntologyVersionRow(row) : null;
+}
+
+/** Retires one **published** version of the family `id` (`published -> deprecated`, I12: its
+ *  definition stays as it was). The family's head (`loadPublishedOntologyHead`) becomes its latest
+ *  remaining published version, or none — what an ontology item's rollback relies on
+ *  (`application/change-plan`, S11 P1). Returns `false`, writing nothing, when that version is not
+ *  published. Caller holds `lockOntologyFamily`. */
+export async function deprecatePublishedOntologyVersion(
+  client: PoolClient,
+  workspaceId: string,
+  id: string,
+  version: number,
+): Promise<boolean> {
+  const result = await client.query(
+    `update ontology_versions
+        set status = 'deprecated'
+      where workspace_id = $1 and id = $2 and version = $3 and status = 'published'`,
+    [workspaceId, id, version],
+  );
+  return result.rowCount === 1;
+}
+
 /** Exported for `registry.ts`'s `proposeOntologyChange` to reuse (S3.1) — the same "what's the
  *  next version under this id, or 1 for a fresh one" computation `publishOntologyVersion` already
  *  needed, now shared rather than re-derived a second way. */

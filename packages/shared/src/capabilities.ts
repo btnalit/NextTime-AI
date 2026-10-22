@@ -3850,6 +3850,69 @@ const modulesCapabilities = [
     description:
       'Advance this workspace’s installed module directly to its latest indexed version (one publish, never stepping through intermediate versions). version is the latestVersion the owner was shown — 409 version_changed when the latest is another one now, nothing published. Not installed yet → identical to `install_module` (same underlying call, D3). Already at the latest content → a no-op returning the current state (never wastes a version number). An ObjectType or ActionType name another installed ontology family already declares refuses 409 ontology_namespace_conflict (I-P1). Applied as a ChangePlan segment, like `install_module`; an authority-widening change refuses 400 change_confirmation_required whatever confirm says.',
   },
+  // S11 P1-B (docs/goal-orchestration-and-admin-agent-plan-2026-10-16.md §3.4, §5.4;
+  // `application/change-plan`): the workspace's applied ChangePlan segments — every module install
+  // or upgrade since P1 is one — read, dry-run a rollback, roll back. Workspace scope only: a
+  // segment's contents are read in its own workspace (§5.4 "工作区段的内容只在该工作区可见").
+  {
+    name: 'list_change_segments',
+    group: 'modules',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: z
+      .object({
+        /** Only segments from this source (a pack / module name). */
+        sourceName: z.string().min(1).optional(),
+        limit: z.number().int().positive().optional(),
+        cursor: z.string().optional(),
+      })
+      .strict(),
+    resultSchema: listEnvelope(wire.ChangeSegmentWireSchema),
+    description:
+      'The ChangePlan segments applied to this workspace (each module install or upgrade since the ChangePlan core is one), newest first: source, who applied it and how (human / platform), status, rollback; keyset-paginated (limit, cursor → nextCursor).',
+  },
+  {
+    name: 'get_change_segment',
+    group: 'modules',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: z.object({ segmentId: z.string().uuid() }).strict(),
+    resultSchema: wire.ChangeSegmentDetailWireSchema,
+    description:
+      'One applied ChangePlan segment with its items in order: each item’s target, state before and after, authority classification and who confirmed it, and whether what it wrote is still in effect now. 404 change_segment_not_found.',
+  },
+  {
+    name: 'preview_roll_back_change_segment',
+    group: 'modules',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'owner',
+    paramsSchema: z.object({ segmentId: z.string().uuid() }).strict(),
+    resultSchema: wire.ChangeRollbackPreviewWireSchema,
+    description:
+      'Dry run of roll_back_change_segment, writing nothing: per item (in reverse order) the state it would return to, the rollback’s own authority classification, the ontology types it takes out, and why it cannot be rolled back now (changed again since — roll that change back first —, gone, or a type name another family has taken); plus how many objects and active Facts use the types taken out (kept, never removed). 404 change_segment_not_found.',
+  },
+  {
+    name: 'roll_back_change_segment',
+    group: 'modules',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'owner',
+    paramsSchema: z
+      .object({
+        segmentId: z.string().uuid(),
+        /** The ordinals of the rollback items `preview_roll_back_change_segment` classifies
+         *  `authority_widening`, each confirmed by the person rolling back (I-A4) — a person
+         *  only: from a service Principal, 403. */
+        confirmedOrdinals: z.array(z.number().int().positive()).optional(),
+      })
+      .strict(),
+    resultSchema: wire.ChangeSegmentWireSchema,
+    description:
+      'Roll back one applied ChangePlan segment in one transaction: each item, last first, is compared with what is there now and returned to its state before (an ontology item retires the version it published, so the family’s head is the one before it again, or the family is no longer installed; objects and Facts already written stay). Refuses, writing nothing: 409 change_rollback_conflict when an item cannot be rolled back now — its target changed after it (details.items names the later segment to roll back first), is no longer installed, what it restores is gone, or it would restore a type name another family has taken —, 409 change_segment_rolled_back when it already was, 400 change_confirmation_required when an authority-widening rollback item is not among confirmedOrdinals, 403 when confirmedOrdinals comes from a Principal that is not a person (a service API key), 404 change_segment_not_found. One change_item.roll_back audit row per item.',
+  },
 ] as const satisfies readonly Capability[];
 
 /** The registry's entries with their literal names kept (`as const`), for `CapabilityName`. */
@@ -3946,6 +4009,13 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set<CapabilityName>
   'set_agent_profile',
   'get_agent_policy',
   'set_agent_policy',
+  // S11 P1-B: a workspace's ChangePlan records and their rollback — the owner's configuration
+  // management (§5.4: a workspace segment's contents are read and acted on only by people in that
+  // workspace; the admin agent proposes, I-A1). Never a Handle-scope member.
+  'list_change_segments',
+  'get_change_segment',
+  'preview_roll_back_change_segment',
+  'roll_back_change_segment',
   // P-A1: the platform plane, plus a few workspace-scope members that belong next to it. The
   // `scope: 'platform'` names here are never callable by a Principal at all (the gateway admits
   // only a platform-admin console session); the workspace-scope ones — `list_available_gate_instances`,

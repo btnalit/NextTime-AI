@@ -7,10 +7,13 @@ import {
   gateRefusalOf,
 } from '../../adapters/gatekeeper-client/index.js';
 import { OutboundTargetRefusedError } from '../../adapters/outbound-target/index.js';
-// S11 P1: the ChangePlan core's two refusals (application/change-plan), same direct import.
+// S11 P1: the ChangePlan core's refusals (application/change-plan), same direct import.
 import {
   ChangeConfirmationRequiredError,
   ChangePlanChangedError,
+  ChangeRollbackConflictError,
+  ChangeSegmentNotFoundError,
+  ChangeSegmentRolledBackError,
 } from '../../application/change-plan/index.js';
 import {
   ChatArchivedError,
@@ -445,6 +448,14 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
   if (err instanceof ChangePlanChangedError) {
+    return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
+  }
+  // S11 P1-B: mirrors HTTP 404 `change_segment_not_found`, 409 `change_segment_rolled_back` and
+  // 409 `change_rollback_conflict` (the message names each blocked item).
+  if (err instanceof ChangeSegmentNotFoundError) {
+    return { code: WS_ERROR_CODES.NOT_FOUND, message: err.message };
+  }
+  if (err instanceof ChangeSegmentRolledBackError || err instanceof ChangeRollbackConflictError) {
     return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
   }
   // Postgres 22P02 (malformed id/value from the caller) — same mapping as capability-route.ts.

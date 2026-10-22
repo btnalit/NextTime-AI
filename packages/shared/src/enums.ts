@@ -485,6 +485,76 @@ export const CHANGE_ITEM_CLASSIFICATION_VALUES = ['not_widening', 'authority_wid
 export type ChangeItemClassification = (typeof CHANGE_ITEM_CLASSIFICATION_VALUES)[number];
 export const ChangeItemClassificationSchema = asEnum(CHANGE_ITEM_CLASSIFICATION_VALUES);
 
+/** Why one change of an item widens authority (I-A4; the kernel's whitelist classifier,
+ *  `application/change-plan/classify.ts`, says where and which of these). */
+export const CHANGE_WIDENING_REASON_VALUES = [
+  /** A governance declaration that did not exist before (e.g. a new ActionType). */
+  'added',
+  /** A governance declaration that no longer exists: what it held in place falls back to a
+   *  default nobody reviewed here, so its removal is not proven to narrow anything. */
+  'removed',
+  /** A field with a known order of strictness moved to a looser value. */
+  'loosened',
+  /** A field whose direction is not proven changed (any change to it needs confirmation). */
+  'changed',
+  /** A field no rule covers (whitelist: unknown is widening). */
+  'unrecognized',
+] as const;
+export type ChangeWideningReasonCode = (typeof CHANGE_WIDENING_REASON_VALUES)[number];
+export const ChangeWideningReasonCodeSchema = asEnum(CHANGE_WIDENING_REASON_VALUES);
+
+/** How a segment was applied: `human` — the applier's own capability call; `platform` — the
+ *  platform applied it on the workspace's behalf (workspace creation's default modules). */
+export const CHANGE_CHANNEL_VALUES = ['human', 'platform'] as const;
+export type ChangeChannelValue = (typeof CHANGE_CHANNEL_VALUES)[number];
+export const ChangeChannelSchema = asEnum(CHANGE_CHANNEL_VALUES);
+
+/** Where a segment's intent came from (§5.4 "一个核心，两种来源"): P1 has packs (a module is a pack
+ *  with one ontology component); the platform admin agent's proposals come with AA3. */
+export const CHANGE_SOURCE_KIND_VALUES = ['pack'] as const;
+export type ChangeSourceKind = (typeof CHANGE_SOURCE_KIND_VALUES)[number];
+export const ChangeSourceKindSchema = asEnum(CHANGE_SOURCE_KIND_VALUES);
+
+/**
+ * An applied item's target now (S11 P1-B, read at the time of the call): `in_effect` — what the item
+ * wrote is still there (for an ontology item: the version it published is the family's head);
+ * `replaced` — something written later took its place; `not_installed` — the target no longer
+ * exists (an ontology family with no published version).
+ */
+export const CHANGE_ITEM_STATE_VALUES = ['in_effect', 'replaced', 'not_installed'] as const;
+export type ChangeItemState = (typeof CHANGE_ITEM_STATE_VALUES)[number];
+export const ChangeItemStateSchema = asEnum(CHANGE_ITEM_STATE_VALUES);
+
+/**
+ * Why an item of a segment cannot be rolled back now (S11 P1-B, §3.4 "逆操作遇到中间被别人改过的版本
+ * 时停下不覆盖"): `replaced` — its target was changed after it (roll that change back first, or it was
+ * made outside the ChangePlan core); `not_installed` — its target no longer exists; `restored_
+ * version_missing` — the state it would return to is gone; `namespace_conflict` — what it would
+ * restore declares a type name another ontology family has taken since (I-P1).
+ */
+export const CHANGE_ROLLBACK_BLOCKER_VALUES = [
+  'replaced',
+  'not_installed',
+  'restored_version_missing',
+  'namespace_conflict',
+] as const;
+export type ChangeRollbackBlocker = (typeof CHANGE_ROLLBACK_BLOCKER_VALUES)[number];
+export const ChangeRollbackBlockerSchema = asEnum(CHANGE_ROLLBACK_BLOCKER_VALUES);
+
+/**
+ * Which ChangeItem put an ontology family's installed version there (S11 §3.2 `Object changed_by
+ * ChangeItem`): `recorded` — an item of an applied segment; `provenance_unknown` — installed before
+ * P1, or published outside the ChangePlan core (`publish_ontology_version`, `seed-domain-pack`), so
+ * nothing records it and it cannot be rolled back from here; `not_installed` — no published version.
+ */
+export const ONTOLOGY_PROVENANCE_STATUS_VALUES = [
+  'recorded',
+  'provenance_unknown',
+  'not_installed',
+] as const;
+export type OntologyProvenanceStatus = (typeof ONTOLOGY_PROVENANCE_STATUS_VALUES)[number];
+export const OntologyProvenanceStatusSchema = asEnum(ONTOLOGY_PROVENANCE_STATUS_VALUES);
+
 // ---------------------------------------------------------------------------------------------
 // §5.5 Publishable lifecycle (OntologyVersion / WorkerDefinition / Skill / Procedure / Manifest)
 // ---------------------------------------------------------------------------------------------

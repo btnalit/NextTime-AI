@@ -14,6 +14,7 @@ import {
   ReleaseChannelReleaseSchema,
   ReleaseChannelUrlSchema,
 } from '../release-channel.js';
+import { OntologyProvenanceWireSchema } from './change-plan.js';
 
 /**
  * wire/platform: the platform-management plane's wire shapes (docs/platform-admin-design.md §5,
@@ -1420,6 +1421,10 @@ export const WorkspaceModuleWireSchema = z
      *  modules.ts`'s own module doc comment. */
     installedVersion: z.number().int().positive().nullable(),
     status: ModuleInstallStatusWireSchema,
+    /** S11 P1-B: which change installed the family's current version — the segment to look at or
+     *  roll back (`get_change_segment`), or `provenance_unknown` for one installed before the
+     *  ChangePlan core recorded changes or published outside it. */
+    provenance: OntologyProvenanceWireSchema,
   })
   .strict();
 export type WorkspaceModuleWire = z.infer<typeof WorkspaceModuleWireSchema>;
