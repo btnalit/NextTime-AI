@@ -3760,7 +3760,7 @@ const platformCapabilities = [
   },
   // P-B2b (docs/platform-admin-design.md §6.4 模块; docs/development-tasks.md §5d S7-D 决定 D1–D4):
   // the platform plane's own view of modules — every module this deployment ships
-  // (`ontology/modules.yaml`), aggregated across workspaces, plus which install by default into a
+  // (its packs with one ontology component), aggregated across workspaces, plus which install by default into a
   // new workspace. `group: 'platform'` (not `'modules'`, `assertRegistryConsistent`'s own
   // scope↔group invariant below) — the workspace-scope half (`list_workspace_modules`/
   // `install_module`/`upgrade_module`, the owner's 能力目录 模块 tab, P-B2 决定 ①) is
@@ -3774,7 +3774,7 @@ const platformCapabilities = [
     paramsSchema: noParams,
     resultSchema: listEnvelope(wire.ModuleWireSchema),
     description:
-      'Every module this deployment ships (`ontology/modules.yaml`), with its version list and how many workspaces have it installed / are behind the latest version.',
+      'Every module this deployment ships (a pack with one ontology component, `packs/`), with its version list and how many workspaces have it installed / are behind the latest version.',
   },
   {
     name: 'set_default_modules',
@@ -3785,7 +3785,7 @@ const platformCapabilities = [
     paramsSchema: z.object({ defaultModules: z.array(z.string().min(1)).max(100) }).strict(),
     resultSchema: wire.PlatformSettingsWireSchema,
     description:
-      'Set the module family names `create_workspace` installs (each at its own latest indexed version) into every new workspace. Every name must already be in `list_modules`’ own index — an unknown name 400s rather than being silently kept.',
+      'Set the module family names `create_workspace` installs (each at its own latest version) into every new workspace. Every name must already be in `list_modules` — an unknown name 400s rather than being silently kept.',
   },
 ] as const satisfies readonly Capability[];
 
@@ -3820,7 +3820,7 @@ const modulesCapabilities = [
     paramsSchema: z
       .object({
         name: z.string().min(1),
-        /** Required when the module is currently `customized`, or any index version between the
+        /** Required when the module is currently `customized`, or any version between the
          *  current one and the latest is `breaking` (400 `module_confirm_required` otherwise, with
          *  the exact versions in `details`). */
         confirm: z.boolean().optional(),
@@ -3831,7 +3831,7 @@ const modulesCapabilities = [
       .strict(),
     resultSchema: wire.WorkspaceModuleWireSchema,
     description:
-      'Install a module into this workspace — publishes its latest `OntologyDefinition` (the same mechanism `seed-domain-pack` uses) with this owner as `proposed_by`/`published_by`. version is the latestVersion the owner was shown: when the latest indexed version is another one now (an upgrade shipped a newer index), 409 version_changed and nothing is published. Already installed → identical to `upgrade_module` (same underlying call, D3). An ObjectType or ActionType name another installed ontology family already declares refuses 409 ontology_namespace_conflict (I-P1). Applied as a ChangePlan segment: one `change_item.apply` audit row records the module version and the ontology version before and after. A module whose content widens authority (an ActionType added, removed or loosened) refuses 400 change_confirmation_required whatever confirm says — this capability takes no per-item confirmation.',
+      'Install a module into this workspace — publishes its latest `OntologyDefinition` (the same mechanism `seed-domain-pack` uses) with this owner as `proposed_by`/`published_by`. version is the latestVersion the owner was shown: when the latest version is another one now (an upgrade shipped a newer pack version), 409 version_changed and nothing is published. Already installed → identical to `upgrade_module` (same underlying call, D3). An ObjectType or ActionType name another installed ontology family already declares refuses 409 ontology_namespace_conflict (I-P1). Applied as a ChangePlan segment: one `change_item.apply` audit row records the module version and the ontology version before and after. A module whose content widens authority (an ActionType added, removed or loosened) refuses 400 change_confirmation_required whatever confirm says — this capability takes no per-item confirmation.',
   },
   {
     name: 'upgrade_module',
@@ -3848,7 +3848,7 @@ const modulesCapabilities = [
       .strict(),
     resultSchema: wire.WorkspaceModuleWireSchema,
     description:
-      'Advance this workspace’s installed module directly to its latest indexed version (one publish, never stepping through intermediate versions). version is the latestVersion the owner was shown — 409 version_changed when the latest is another one now, nothing published. Not installed yet → identical to `install_module` (same underlying call, D3). Already at the latest content → a no-op returning the current state (never wastes a version number). An ObjectType or ActionType name another installed ontology family already declares refuses 409 ontology_namespace_conflict (I-P1). Applied as a ChangePlan segment, like `install_module`; an authority-widening change refuses 400 change_confirmation_required whatever confirm says.',
+      'Advance this workspace’s installed module directly to its latest version (one publish, never stepping through intermediate versions). version is the latestVersion the owner was shown — 409 version_changed when the latest is another one now, nothing published. Not installed yet → identical to `install_module` (same underlying call, D3). Already at the latest content → a no-op returning the current state (never wastes a version number). An ObjectType or ActionType name another installed ontology family already declares refuses 409 ontology_namespace_conflict (I-P1). Applied as a ChangePlan segment, like `install_module`; an authority-widening change refuses 400 change_confirmation_required whatever confirm says.',
   },
   // S11 P1-B (docs/goal-orchestration-and-admin-agent-plan-2026-10-16.md §3.4, §5.4;
   // `application/change-plan`): the workspace's applied ChangePlan segments — every module install
@@ -3912,6 +3912,55 @@ const modulesCapabilities = [
     resultSchema: wire.ChangeSegmentWireSchema,
     description:
       'Roll back one applied ChangePlan segment in one transaction: each item, last first, is compared with what is there now and returned to its state before (an ontology item retires the version it published, so the family’s head is the one before it again, or the family is no longer installed; objects and Facts already written stay). Refuses, writing nothing: 409 change_rollback_conflict when an item cannot be rolled back now — its target changed after it (details.items names the later segment to roll back first), is no longer installed, what it restores is gone, or it would restore a type name another family has taken —, 409 change_segment_rolled_back when it already was, 400 change_confirmation_required when an authority-widening rollback item is not among confirmedOrdinals, 403 when confirmedOrdinals comes from a Principal that is not a person (a service API key), 404 change_segment_not_found. One change_item.roll_back audit row per item.',
+  },
+  // S11 P1-C (Pack Contract v1, docs/s10-evolution-plan-2026-10-04.md §6; `application/packs`):
+  // the packs this deployment ships, this workspace's state of each — derived from its components,
+  // nothing stored — and installing one as a ChangePlan segment the owner reviews first (I-A8:
+  // the dry run's digest; I-A4: each authority-widening item confirmed by itself). A module is a
+  // pack with one ontology component; the module capabilities above keep their own contract.
+  {
+    name: 'list_packs',
+    group: 'modules',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: noParams,
+    resultSchema: listEnvelope(wire.PackWireSchema),
+    description:
+      'Every pack this deployment ships (Pack Contract v1, `packs/<name>/<version>/pack.yaml`) with its versions and components, and this workspace’s state of it — not installed / up to date / outdated / customized — for the pack and for each component, with the change that installed each component’s current content.',
+  },
+  {
+    name: 'preview_pack_install',
+    group: 'modules',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'owner',
+    paramsSchema: z.object({ name: z.string().min(1) }).strict(),
+    resultSchema: wire.PackInstallPreviewWireSchema,
+    description:
+      'Dry run of install_pack, writing nothing: per component of the latest version, what the family has now and would have after, the type names added / removed / changed, and the item’s authority classification; the versions the install moves through and whether one is breaking; how many objects and active Facts use a type it takes out (kept, never removed); and the digest to pass back as reviewedDigest. 404 pack_not_found; 409 ontology_namespace_conflict when a component declares an ObjectType or ActionType name another installed family already declares (I-P1).',
+  },
+  {
+    name: 'install_pack',
+    group: 'modules',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'owner',
+    paramsSchema: z
+      .object({
+        name: z.string().min(1),
+        /** The pack version the owner reviewed (`preview_pack_install`'s `targetVersion`). */
+        version: z.number().int().positive(),
+        /** The dry run's `digest` (I-A8). */
+        reviewedDigest: z.string().min(1),
+        /** The ordinals of the items the dry run classifies `authority_widening`, each confirmed
+         *  by the person installing (I-A4) — a person only: from a service Principal, 403. */
+        confirmedOrdinals: z.array(z.number().int().positive()).optional(),
+      })
+      .strict(),
+    resultSchema: wire.PackInstallResultWireSchema,
+    description:
+      'Install a pack’s latest version into this workspace in one transaction, as one ChangePlan segment: each component whose content differs is published into its ontology family with this owner as proposer and publisher (installing, upgrading, or replacing a customized family alike — the dry run showed which). Refuses, writing nothing: 409 version_changed when the latest version is not the reviewed one, 409 change_plan_changed when the dry run would differ from the reviewed digest now (preview again), 400 change_confirmation_required when an authority-widening item is not among confirmedOrdinals, 403 when confirmedOrdinals comes from a Principal that is not a person (a service API key), 409 ontology_namespace_conflict (I-P1), 404 pack_not_found. Already up to date: records nothing. One change_item.apply audit row per item.',
   },
 ] as const satisfies readonly Capability[];
 
@@ -4016,6 +4065,10 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set<CapabilityName>
   'get_change_segment',
   'preview_roll_back_change_segment',
   'roll_back_change_segment',
+  // S11 P1-C: packs and installing one as a ChangePlan segment — the same configuration management.
+  'list_packs',
+  'preview_pack_install',
+  'install_pack',
   // P-A1: the platform plane, plus a few workspace-scope members that belong next to it. The
   // `scope: 'platform'` names here are never callable by a Principal at all (the gateway admits
   // only a platform-admin console session); the workspace-scope ones — `list_available_gate_instances`,

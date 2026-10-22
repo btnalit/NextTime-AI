@@ -25,7 +25,7 @@ import type { ResolvedCaller } from './resolve-caller.js';
  * rollback the module is not installed and the segment says who rolled it back. Every result is
  * checked against its own `resultSchema` (`KERNEL_VALIDATE_RESULTS=1`, vitest.config.ts).
  *
- * Gated on `DATABASE_URL`; uses the repo's own `ontology/` module index (`ops-assets`, no
+ * Gated on `DATABASE_URL`; uses the repo's own `packs/` (`ops-assets`, no
  * ActionType — installing and rolling it back is not authority-widening).
  */
 

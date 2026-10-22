@@ -1433,16 +1433,16 @@ export function main(): void {
       );
     }
     // S8 W5 (leftover 65): warn loudly, once at startup, when platform_settings.defaultModules
-    // names a module family this deployment's own ontology/modules.yaml no longer has — previously
+    // names a module family this deployment's own packs/ no longer have — previously
     // a silent per-workspace skip only (application/workspace/create.ts's skippedDefaultModules).
-    // Own try, same "never fatal" shape as every startup step here: a broken module index read
+    // Own try, same "never fatal" shape as every startup step here: a broken packs/ read
     // must not take the kernel down over a diagnostic warning.
     try {
       await checkDefaultModules(pool, { log: (line) => app.log.warn(line) });
     } catch (err) {
       app.log.error(
         { err },
-        'could not check platform_settings.defaultModules against the module index',
+        'could not check platform_settings.defaultModules against the deployment’s modules',
       );
     }
 

@@ -249,6 +249,11 @@ import {
   updateOperationDescriptionHandler,
 } from './operation-manifest-handlers.js';
 import {
+  installPackHandler,
+  listPacksHandler,
+  previewPackInstallHandler,
+} from './pack-handlers.js';
+import {
   confirmGateManifestHandler,
   createGateInstanceHandler,
   deleteGateInstanceHandler,
@@ -2184,6 +2189,10 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['get_change_segment', getChangeSegmentHandler],
   ['preview_roll_back_change_segment', previewRollBackChangeSegmentHandler],
   ['roll_back_change_segment', rollBackChangeSegmentHandler],
+  // S11 P1-C packs (pack-handlers.ts)
+  ['list_packs', listPacksHandler],
+  ['preview_pack_install', previewPackInstallHandler],
+  ['install_pack', installPackHandler],
   ['get_object', getObjectHandler],
   ['traverse', traverseHandler],
   ['resolve_refs', resolveRefsHandler],

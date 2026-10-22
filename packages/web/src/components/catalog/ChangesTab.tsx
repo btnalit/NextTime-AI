@@ -42,11 +42,11 @@ export interface ChangesTabProps {
   readonly onSelectItem: (itemId: string | null) => void;
 }
 
-/** 「模块 ops-assets v2」 — what an install record installed. Every source is a module today (a
- *  module is a pack with one ontology part); packs of their own come with S11 P1-C. */
+/** 「能力包 ops-assets v2」 — what an install record installed. Every source is a pack (S11 P1-C:
+ *  a module is a pack with one ontology part, so a module install before P1-C reads the same). */
 export function sourceLabel(segment: Pick<ChangeSegmentWire, 'source'>, t: Translate): string {
   const { name, version } = segment.source;
-  return t(`模块 ${name} v${version}`, `Module ${name} v${version}`);
+  return t(`能力包 ${name} v${version}`, `Pack ${name} v${version}`);
 }
 
 function principalName(ref: ChangePrincipalRefWire): string {
@@ -107,23 +107,24 @@ function versionText(version: { readonly version: number } | null, t: Translate)
     : t(`第 ${version.version} 版`, `v${version.version}`);
 }
 
-/** How many names of one kind `removedText` spells out before 「等 N 个」. */
-const REMOVED_NAMES_SHOWN = 5;
+/** How many names of one kind `typeNamesText` spells out before 「等 N 个」. */
+const TYPE_NAMES_SHOWN = 5;
 
-/** 「对象类型 A、B；关系类型 c」 — the names a rollback takes out (the first few of each kind, then
- *  how many in all), or `null` for none. */
-export function removedText(removes: OntologyTypeNamesWire, t: Translate): string | null {
+/** 「对象类型 A、B；关系类型 c」 — type names by kind (the first few of each kind, then how many in
+ *  all), or `null` for none: what a rollback takes out, what an install adds, takes out or
+ *  changes (`PacksTab`). */
+export function typeNamesText(names: OntologyTypeNamesWire, t: Translate): string | null {
   const parts: string[] = [];
   for (const key of ['objectTypes', 'linkTypes', 'actionTypes'] as const) {
-    const names = removes[key];
+    const named = names[key];
     const section = SECTION_LABEL[key];
-    if (names.length === 0 || !section) continue;
-    const shown = names.slice(0, REMOVED_NAMES_SHOWN);
-    const more = names.length - shown.length;
+    if (named.length === 0 || !section) continue;
+    const shown = named.slice(0, TYPE_NAMES_SHOWN);
+    const more = named.length - shown.length;
     parts.push(
       more > 0
         ? t(
-            `${section.zh} ${shown.join('、')} 等 ${names.length} 个`,
+            `${section.zh} ${shown.join('、')} 等 ${named.length} 个`,
             `${section.en}s ${shown.join(', ')} and ${more} more`,
           )
         : t(`${section.zh} ${shown.join('、')}`, `${section.en}s ${shown.join(', ')}`),
@@ -134,13 +135,13 @@ export function removedText(removes: OntologyTypeNamesWire, t: Translate): strin
 
 /**
  * components/catalog/ChangesTab: 能力目录 · 安装历史 (`#/govern/catalog/changes`, S11 P1-B). Every
- * module install or upgrade since the ChangePlan core is one **安装记录** (a ChangePlan segment);
+ * pack install or upgrade since the ChangePlan core is one **安装记录** (a ChangePlan segment);
  * what it changed are its **改动项** (an ontology version today). Members read the list
  * (`list_change_segments`) and a record (`get_change_segment`: each change, and whether it is
  * still in effect); the owner can roll a record back — `preview_roll_back_change_segment` first,
  * inside the confirm, then `roll_back_change_segment` with each authority-widening change ticked.
- * A module installed before records were kept, or published some other way, has no record and is
- * not here (its 模块 row says so).
+ * A pack installed before records were kept, or published some other way, has no record and is
+ * not here (its 能力包 pane says so, per component).
  */
 export function ChangesTab({ http, itemId, onSelectItem }: ChangesTabProps) {
   const t = useT();
@@ -149,7 +150,7 @@ export function ChangesTab({ http, itemId, onSelectItem }: ChangesTabProps) {
   function refresh(): void {
     invalidateCapability(http, 'list_change_segments');
     invalidateCapability(http, 'get_change_segment');
-    invalidateCapability(http, 'list_workspace_modules');
+    invalidateCapability(http, 'list_packs');
     void segments.reload();
   }
 
@@ -168,16 +169,16 @@ export function ChangesTab({ http, itemId, onSelectItem }: ChangesTabProps) {
       <div className="stack-s">
         <p className="text-3 text-small">
           {t(
-            '每次安装或升级模块会留下一条安装记录：谁做的，改了什么（每个改动项是这次写入的一处变化，目前都是一个本体版本），需要时可以整条撤销。启用安装记录之前装上的模块不在这里。',
-            'Each module install or upgrade leaves an install record: who did it and what changed (each change is one thing it wrote, an ontology version today); the whole record can be rolled back if needed. Modules installed before records were kept are not here.',
+            '每次安装或升级能力包会留下一条安装记录：谁做的，改了什么（每个改动项是这次写入的一处变化，目前都是一个本体版本），需要时可以整条撤销。启用安装记录之前装上的能力包不在这里。',
+            'Each pack install or upgrade leaves an install record: who did it and what changed (each change is one thing it wrote, an ontology version today); the whole record can be rolled back if needed. Packs installed before records were kept are not here.',
           )}
         </p>
         {rows.length === 0 ? (
           <EmptyState
             title={t('还没有安装记录', 'No install records yet')}
             body={t(
-              '在「模块」页签安装或升级一个模块后，这里会出现它的安装记录。',
-              'Install or upgrade a module on the Modules tab and its install record shows up here.',
+              '在「能力包」页签安装或升级一个能力包后，这里会出现它的安装记录。',
+              'Install or upgrade a pack on the Packs tab and its install record shows up here.',
             )}
             testId="catalog-changes-empty"
           />
@@ -288,7 +289,7 @@ function ChangeSegmentDetail({
     <div className="stack" data-testid="catalog-change-detail">
       <div className="row-wrap" style={{ justifyContent: 'space-between' }}>
         <h2 className="catalog-detail-title" data-testid="catalog-change-title">
-          {t('模块 ', 'Module ')}
+          {t('能力包 ', 'Pack ')}
           <span className="mono wrap-anywhere">{segment.source.name}</span>
           {` v${segment.source.version}`}
         </h2>
@@ -366,8 +367,8 @@ function ChangeSegmentDetail({
         <output className="block">
           <Notice testId="catalog-change-rolled-back">
             {t(
-              '已撤销。这次安装写入的本体版本已停用，模块回到了安装之前的样子；已有的对象和事实都保留着。',
-              'Rolled back. The ontology versions this install wrote are deprecated and the module is back to how it was before; existing objects and Facts are kept.',
+              '已撤销。这次安装写入的本体版本已停用，能力包回到了安装之前的样子；已有的对象和事实都保留着。',
+              'Rolled back. The ontology versions this install wrote are deprecated and the pack is back to how it was before; existing objects and Facts are kept.',
             )}
           </Notice>
         </output>
@@ -392,8 +393,8 @@ function ChangeItemView({
       </div>
       <span className="text-3 text-small">
         {t(
-          `模块 v${segment.source.version} 带来的本体版本（与模块版本分开编号）：${versionText(item.before, t)} → ${versionText(item.after, t)}`,
-          `Ontology version module v${segment.source.version} brought (numbered apart from the module's): ${versionText(item.before, t)} → ${versionText(item.after, t)}`,
+          `能力包 v${segment.source.version} 带来的本体版本（与能力包版本分开编号）：${versionText(item.before, t)} → ${versionText(item.after, t)}`,
+          `Ontology version pack v${segment.source.version} brought (numbered apart from the pack's): ${versionText(item.before, t)} → ${versionText(item.after, t)}`,
         )}
       </span>
       {item.widening.length > 0 ? (
@@ -419,8 +420,8 @@ function ChangeItemView({
             </>
           ) : (
             t(
-              '之后在模块安装之外被改过（例如直接发布了本体版本），这里没有它的记录。',
-              'Changed again since outside a module install (such as an ontology version published directly); there is no record of it here.',
+              '之后在能力包安装之外被改过（例如直接发布了本体版本），这里没有它的记录。',
+              'Changed again since outside a pack install (such as an ontology version published directly); there is no record of it here.',
             )
           )}
         </span>
@@ -532,8 +533,8 @@ function RollBackSegment({
       <span className="section-title">{t('撤销', 'Roll back')}</span>
       <p className="text-3 text-small">
         {t(
-          '把这条记录的每项改动退回到安装之前：本体回到上一版，首次安装的则不再安装。已经写入的数据保留。之后可以在「模块」页签重新安装。',
-          'Returns each change of this record to what it was before: the ontology goes back a version, or a first install is no longer installed. Data already written stays. You can install again from the Modules tab.',
+          '把这条记录的每项改动退回到安装之前：本体回到上一版，首次安装的则不再安装。已经写入的数据保留。之后可以在「能力包」页签重新安装。',
+          'Returns each change of this record to what it was before: the ontology goes back a version, or a first install is no longer installed. Data already written stays. You can install again from the Packs tab.',
         )}
       </p>
       <Confirm
@@ -601,18 +602,18 @@ function RollBackSegment({
                         </>
                       ) : (
                         t(
-                          '后来的改动不是通过模块安装做的，这里撤销不了。',
-                          ' The later change was not made through a module install, so it cannot be rolled back here.',
+                          '后来的改动不是通过能力包安装做的，这里撤销不了。',
+                          ' The later change was not made through a pack install, so it cannot be rolled back here.',
                         )
                       )
                     ) : null}
                   </Notice>
                 ) : (
                   <>
-                    {removedText(item.removes, t) ? (
+                    {typeNamesText(item.removes, t) ? (
                       <span className="text-3 text-small">
                         {t('撤销后本体里不再有：', 'Afterwards the ontology no longer has: ')}
-                        {removedText(item.removes, t)}
+                        {typeNamesText(item.removes, t)}
                       </span>
                     ) : null}
                     {item.classification === 'authority_widening' ? (

@@ -1,8 +1,7 @@
-import { CHANGE_ROLLBACK_IN_USE_CAP, type ChangeItemClassification } from '@nexttime/shared';
+import type { ChangeItemClassification } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { writeAudit } from '../../substrate/audit/index.js';
-import { type GraphTypeUsage, countGraphTypeUsage } from '../../substrate/graph/index.js';
-import { loadPublishedLinkTypeFamilies } from '../../substrate/ontology/index.js';
+import type { GraphTypeUsage } from '../../substrate/graph/index.js';
 import { type WideningReason, classificationOf } from './classify.js';
 import {
   ChangeConfirmationRequiredError,
@@ -25,6 +24,7 @@ import {
   loadChangeItems,
   loadChangeSegment,
 } from './segments.js';
+import { countRemovedTypeUsage } from './usage.js';
 
 /**
  * application/change-plan/rollback: rolling an applied workspace segment back (S11 P1-B; plan §3.4
@@ -152,25 +152,14 @@ export async function previewSegmentRollback(
   if (segment.status === 'rolled_back') {
     return { ...plan, inUse: { objects: 0, links: 0, capped: false } };
   }
-  const objectTypes = new Set<string>();
-  const linkTypes = new Set<string>();
-  for (const item of plan.items) {
-    for (const name of item.ontology.removes.objectTypes) objectTypes.add(name);
-    for (const name of item.ontology.removes.linkTypes) linkTypes.add(name);
-  }
-  // A LinkType name may be declared by several families (signatures accumulate, I-P1): a name
-  // another family keeps declaring is not taken out by this rollback.
-  if (linkTypes.size > 0) {
-    const rolledBack = new Set(plan.items.map((item) => item.ontology.target.ontologyId));
-    for (const [name, families] of await loadPublishedLinkTypeFamilies(client, workspaceId)) {
-      if (families.some((id) => !rolledBack.has(id))) linkTypes.delete(name);
-    }
-  }
-  const inUse = await countGraphTypeUsage(
+  const inUse = await countRemovedTypeUsage(
     client,
     workspaceId,
-    { objectTypes: [...objectTypes], linkTypes: [...linkTypes] },
-    CHANGE_ROLLBACK_IN_USE_CAP,
+    {
+      objectTypes: plan.items.flatMap((item) => item.ontology.removes.objectTypes),
+      linkTypes: plan.items.flatMap((item) => item.ontology.removes.linkTypes),
+    },
+    new Set(plan.items.map((item) => item.ontology.target.ontologyId)),
   );
   return { ...plan, inUse };
 }

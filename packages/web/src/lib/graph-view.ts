@@ -241,7 +241,7 @@ export interface ObjectTypeGroup {
 /** S8 W4 (audit G2 "默认『最近更新』被镜像 sha256 占满"): groups the unfiltered browse page
  *  (`ObjectSearch`'s own `search{query:''}`) by `objectType`, most-recently-updated type first
  *  (each group's own newest `updatedAt`) — server order within a group is untouched (still
- *  recency). A single high-churn type (e.g. `ontology/modules.yaml`'s ops-assets `Image`) filling
+ *  recency). A single high-churn type (e.g. the ops-assets pack's `Image`) filling
  *  every slot no longer visually reads as "this workspace only has one kind of Object"; it reads
  *  as one busy section among the others. Deliberately not an *exclude* filter — nothing here is
  *  ontology-type-name-aware, so a workspace whose noisiest type is something else entirely still

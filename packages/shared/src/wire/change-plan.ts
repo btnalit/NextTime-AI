@@ -137,8 +137,8 @@ export const ChangeSegmentDetailWireSchema = z
   .strict();
 export type ChangeSegmentDetailWire = z.infer<typeof ChangeSegmentDetailWireSchema>;
 
-/** Type names a rollback takes out of the workspace's ontology: declared by the version it rolls
- *  back from and not by the one it returns to. */
+/** Type names of an ontology definition, per section (a rollback's `removes`: declared by the
+ *  version it rolls back from and not by the one it returns to). */
 export const OntologyTypeNamesWireSchema = z
   .object({
     objectTypes: z.array(z.string()),
@@ -184,8 +184,21 @@ export const ChangeRollbackItemWireSchema = z.discriminatedUnion('kind', [
 ]);
 export type ChangeRollbackItemWire = z.infer<typeof ChangeRollbackItemWireSchema>;
 
-/** Most graph rows `preview_roll_back_change_segment` counts per kind before it stops. */
+/** Most graph rows `preview_roll_back_change_segment` / `preview_pack_install` count per kind
+ *  before they stop. */
 export const CHANGE_ROLLBACK_IN_USE_CAP = 1000;
+
+/** Objects and active Facts of a type a change takes out of the workspace's ontology. They stay
+ *  (S10 I-P4: data already written is never removed); new writes are checked against the ontology
+ *  without those types. Each count stops at `CHANGE_ROLLBACK_IN_USE_CAP`; `capped` says one did. */
+export const ChangeInUseWireSchema = z
+  .object({
+    objects: z.number().int().nonnegative(),
+    links: z.number().int().nonnegative(),
+    capped: z.boolean(),
+  })
+  .strict();
+export type ChangeInUseWire = z.infer<typeof ChangeInUseWireSchema>;
 
 /** `preview_roll_back_change_segment`: what rolling a segment back would do, without doing it. */
 export const ChangeRollbackPreviewWireSchema = z
@@ -195,17 +208,9 @@ export const ChangeRollbackPreviewWireSchema = z
     possible: z.boolean(),
     /** In the order they would be rolled back: the segment's items in reverse. */
     items: z.array(ChangeRollbackItemWireSchema),
-    /** Objects and active Facts of a type the rollback takes out of the ontology (every item's
-     *  `removes`, minus a LinkType name another family still declares). They stay (S10 I-P4: data
-     *  already written is never removed); new writes are checked against the ontology without
-     *  those types. Each count stops at `CHANGE_ROLLBACK_IN_USE_CAP`; `capped` says one did. */
-    inUse: z
-      .object({
-        objects: z.number().int().nonnegative(),
-        links: z.number().int().nonnegative(),
-        capped: z.boolean(),
-      })
-      .strict(),
+    /** Of the types the rollback takes out (every item's `removes`, minus a LinkType name another
+     *  family still declares). */
+    inUse: ChangeInUseWireSchema,
   })
   .strict();
 export type ChangeRollbackPreviewWire = z.infer<typeof ChangeRollbackPreviewWireSchema>;
