@@ -21,7 +21,7 @@ import {
 } from './acceptance-checks.js';
 import { markGoalRunDue } from './advancer.js';
 import type { GoalControlActor } from './control.js';
-import { stepActionEffect } from './disposition.js';
+import { actionDisposition } from './disposition.js';
 import { moveGoalRun, moveStepRun } from './moves.js';
 import { roundAcceptance } from './plan.js';
 import { getGoalRun, getPlanRevision, lockStepRuns } from './reads.js';
@@ -257,8 +257,10 @@ export async function endGoalRun(
     );
   }
   for (const step of steps) {
-    const effect = stepActionEffect(await listStepActionOutcomes(client, workspaceId, step.id));
-    if (effect.kind === 'wait' && effect.waitingReason === 'approval') {
+    // Each request on its own, not the step's combined effect: there an outcome-unknown request
+    // (`reconcile`) outranks one in flight (`approval`), and would hide it (review #493 on GO4a).
+    const outcomes = await listStepActionOutcomes(client, workspaceId, step.id);
+    if (outcomes.some((outcome) => actionDisposition(outcome) === 'in_flight')) {
       throw new GoalRunStateError(
         `goal run ${goal.id}: an action of step ${step.stepKey} still awaits a decision or runs; wait for it, or cancel the run (which withdraws it)`,
       );

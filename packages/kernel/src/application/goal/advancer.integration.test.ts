@@ -5264,6 +5264,18 @@ describe.runIf(DATABASE_URL !== undefined)(
         await completeStep((await stepsOf(goalRunId)).a?.id as string, requester);
         await advance(goalRunId, requester);
         expect((await stepsOf(goalRunId)).a?.status).toBe('succeeded');
+        // Each request is looked at on its own: one whose outcome is unknown — it may have run,
+        // and the run may end over it — never hides one that still awaits its decision or runs
+        // (review #493 on GO4a: the step's combined effect ranks `reconcile` above `approval`).
+        const a = (await stepsOf(goalRunId)).a?.id as string;
+        await seedAction(a, null, 'failed', 'outcome_unknown');
+        for (const status of ['pending_approval', 'auto_approved', 'executing']) {
+          const inFlight = await seedAction(a, null, status);
+          await expect(endAs(goalRunId, requester, 'not_achieved')).rejects.toThrow(
+            /an action of step a still awaits a decision or runs; wait for it, or cancel the run/,
+          );
+          await setActionStatus(inFlight, 'executed');
+        }
         await expect(
           endAs(goalRunId, requester, 'achieved', 'x'.repeat(GOAL_OUTCOME_NOTE_MAX + 1)),
         ).rejects.toThrow(/a note is at most/);
