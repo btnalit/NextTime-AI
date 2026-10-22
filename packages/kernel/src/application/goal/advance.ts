@@ -104,7 +104,8 @@ import type { GoalRunRow, PlanRevisionRow, StepRunRow } from './types.js';
  *      step succeeds and the steps after it may start (the database refuses its success
  *      otherwise, goal/0006). A run that stops running supersedes its steps' pending checks
  *      (`moves.ts`): a paused run observes nothing, and resuming it opens a new round for each
- *      step still waiting on its acceptance.
+ *      step whose round lost a check that way, or never opened (its attempt finished under the
+ *      pause); a round settled in full before the pause stands, and the step goes by it.
  *   B. **Retry transient failures** (running only). Under the step's attempt limit (plan
  *      `maxAttempts`, default 3), once no request of the step — of any attempt — is still in flight
  *      and no Task of it still runs (I-G4: no new attempt beside an action that may still run),

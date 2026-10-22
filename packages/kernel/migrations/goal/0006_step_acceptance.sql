@@ -11,7 +11,9 @@
 --      step `verification_failed` (goal/0001) instead, so the two never read alike.
 --   2. `step_acceptance_checks` — one row per check of a step's verification round. A round opens
 --      each time the step starts waiting on its acceptance: after an attempt whose work is done
---      (`application/goal/advance.ts` phase A), and again when a paused run resumes. Its rows are
+--      (`application/goal/advance.ts` phase A), and again when a paused run resumes for a step
+--      whose round lost a check to the pause, never opened, or could not make one
+--      (`acceptance_unavailable`); a round settled in full before the pause stands. Its rows are
 --      the step's `acceptance` in the plan entry that defines the StepRun (the revision that
 --      introduced it), copied for the reader; `step_attempt` the attempt whose work they verify.
 --      The columns and the statuses are `goal_acceptance_checks`' (goal/0005) for an observation:
