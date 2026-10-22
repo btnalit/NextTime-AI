@@ -387,7 +387,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       ).toEqual([{ classification: 'authority_widening', confirmed_by: ws.ownerId }]);
     });
 
-    it('Skills and Workers: installed after the ontology, one item each, upgraded and recognized by content', async () => {
+    it('Skills and Workers: Skills before the Worker that mounts them, one item each, upgraded and recognized by content', async () => {
       const ws = await newWorkspace();
       await installOlder(ws, 'crew', 1);
       const entry = requirePack(registry, 'crew');

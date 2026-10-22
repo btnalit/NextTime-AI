@@ -375,5 +375,101 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
       await expect(refused).rejects.toBeInstanceOf(SkillNameConflictError);
     });
+    it('a segment with an ontology item and a Skill item locks the ontology first, applying and rolling back alike', async () => {
+      const ws = await newWorkspace();
+      const content = skill('# Lock order\n\nOne step.', 'lock-order');
+      const input: WorkspaceSegmentInput = {
+        source: { kind: 'pack', name: 'kit', version: '1', digest: contentDigest(content) },
+        items: [
+          {
+            kind: 'ontology_version',
+            family: 'fam-lock-order',
+            definition: {
+              objectTypes: [{ name: 'LockOrderThing', description: 'd' }],
+              linkTypes: [
+                {
+                  name: 'lockorderthing_of',
+                  domain: 'LockOrderThing',
+                  range: '*',
+                  description: 'd',
+                },
+              ],
+            },
+          },
+          { kind: 'skill_version', skillId: randomUUID(), content },
+        ],
+      };
+
+      /** Runs `fn` on one transaction's client and returns the advisory locks it took, in the
+       *  order it first took each (taking one it holds again waits on nobody), by key prefix:
+       *  `ontology_namespace`, `ontology_family`, `worker_registry`. */
+      const locksTakenBy = (fn: (client: PoolClient) => Promise<unknown>) =>
+        inWorkspace(ws, async (client) => {
+          const taken: string[] = [];
+          const query = client.query;
+          client.query = ((text: unknown, params?: unknown) => {
+            if (
+              typeof text === 'string' &&
+              text.includes('pg_advisory_xact_lock') &&
+              Array.isArray(params)
+            ) {
+              const key = String(params[0]);
+              if (!taken.includes(key)) taken.push(key);
+            }
+            return (query as (text: unknown, params?: unknown) => unknown).call(
+              client,
+              text,
+              params,
+            );
+          }) as typeof client.query;
+          try {
+            await fn(client);
+          } finally {
+            client.query = query;
+          }
+          return taken.map((key) => key.split(':')[0] ?? '');
+        });
+      const ontologyFirst = (taken: readonly string[]) => {
+        const registry = taken.indexOf('worker_registry');
+        expect(registry).toBeGreaterThan(-1);
+        expect(taken.slice(registry).filter((key) => key.startsWith('ontology_'))).toEqual([]);
+        expect(taken.slice(0, registry)).toContain('ontology_namespace');
+      };
+
+      let segmentId: string | null = null;
+      ontologyFirst(
+        await locksTakenBy(async (client) => {
+          const planned = await planWorkspaceSegment(client, ws.workspaceId, input);
+          const applied = await applyWorkspaceSegment(client, ws.workspaceId, {
+            ...input,
+            reviewedDigest: planned.digest,
+            proposedBy: ws.ownerId,
+            appliedBy: ws.ownerId,
+            channel: 'human',
+            confirmedOrdinals: [1, 2],
+          });
+          segmentId = applied.segmentId;
+        }),
+      );
+      if (!segmentId) throw new Error('apply: nothing applied');
+      const applied: string = segmentId;
+      // The rollback plans the Skill (item 2) first; its locks still come in the same order.
+      ontologyFirst(
+        await locksTakenBy((client) =>
+          rollBackWorkspaceSegment(client, ws.workspaceId, {
+            segmentId: applied,
+            rolledBackBy: ws.ownerId,
+            confirmedOrdinals: [1, 2],
+          }),
+        ),
+      );
+      expect(
+        (
+          await rows(ws, 'select status from change_segments where workspace_id = $1 and id = $2', [
+            applied,
+          ])
+        ).map((row) => row.status),
+      ).toEqual(['rolled_back']);
+    });
   },
 );

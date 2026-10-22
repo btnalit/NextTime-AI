@@ -16,6 +16,7 @@ import {
   parseStoredFamilyItem,
   planFamilyRollback,
 } from './family-item.js';
+import { inLockOrder } from './lock-order.js';
 import {
   type PlannedOntologyRollback,
   applyOntologyRollback,
@@ -83,17 +84,35 @@ export interface SegmentRollbackPlan {
   readonly possible: boolean;
 }
 
+/** Locks what rolling `record` back changes (its kind's rollback lock). */
+async function lockItemRollback(
+  client: PoolClient,
+  workspaceId: string,
+  record: ChangeItemRecord,
+): Promise<void> {
+  const kind = record.kind;
+  switch (kind) {
+    case 'ontology_version':
+      return lockOntologyRollback(client, workspaceId, parseStoredOntologyItem(record));
+    case 'skill_version':
+    case 'worker_definition_version':
+      return lockFamilyRollback(client, workspaceId);
+    default:
+      throw new Error(
+        `change-plan: unknown change item kind ${JSON.stringify(kind satisfies never)}`,
+      );
+  }
+}
+
 async function planItemRollback(
   client: PoolClient,
   workspaceId: string,
   record: ChangeItemRecord,
-  lock: boolean,
 ): Promise<PlannedItemRollback> {
   const kind = record.kind;
   switch (kind) {
     case 'ontology_version': {
       const item = parseStoredOntologyItem(record);
-      if (lock) await lockOntologyRollback(client, workspaceId, item);
       const ontology = await planOntologyRollback(client, workspaceId, item);
       const blocker = ontology.blocker;
       let conflict: ChangeRollbackConflict | null = null;
@@ -131,7 +150,6 @@ async function planItemRollback(
     case 'skill_version':
     case 'worker_definition_version': {
       const item = parseStoredFamilyItem(kind, record);
-      if (lock) await lockFamilyRollback(client, workspaceId);
       const family = await planFamilyRollback(client, workspaceId, item);
       const blocker = family.blocker;
       let conflict: ChangeRollbackConflict | null = null;
@@ -178,9 +196,14 @@ async function planRollback(
   lock: boolean,
 ): Promise<SegmentRollbackPlan> {
   const records = await loadChangeItems(client, workspaceId, segment.id);
+  // Every item's lock before any item is planned, in the order applying takes them: planned last
+  // first, the items would otherwise lock the Skill / Worker registry before the ontology.
+  if (lock) {
+    for (const record of inLockOrder(records)) await lockItemRollback(client, workspaceId, record);
+  }
   const items: PlannedItemRollback[] = [];
   for (const record of [...records].reverse()) {
-    items.push(await planItemRollback(client, workspaceId, record, lock));
+    items.push(await planItemRollback(client, workspaceId, record));
   }
   return {
     segment,

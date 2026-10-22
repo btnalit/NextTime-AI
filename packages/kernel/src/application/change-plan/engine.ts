@@ -13,6 +13,7 @@ import {
   lockFamilyItem,
   planFamilyItem,
 } from './family-item.js';
+import { inLockOrder } from './lock-order.js';
 import {
   type OntologyTypeChanges,
   type OntologyVersionIntent,
@@ -127,15 +128,6 @@ async function lockItem(
       throw unknownKind(kind);
   }
 }
-
-/** The order locks are taken in, whatever the items' order: the ontology's first, then the Skill
- *  and WorkerDefinition registry's (`application/worker`'s `lockWorkerRegistry`, which nothing that
- *  holds it follows with an ontology lock) — two segments never wait on each other in a cycle. */
-const LOCK_ORDER: Readonly<Record<ChangeItemKind, number>> = {
-  ontology_version: 0,
-  skill_version: 1,
-  worker_definition_version: 1,
-};
 
 /** Fail closed on an item kind this core does not implement — an intent built outside the type
  *  system (parsed input, a later caller) is refused, never skipped or applied some other way. */
@@ -255,8 +247,7 @@ async function planWithKinds(
 ): Promise<{ readonly plan: WorkspaceSegmentPlan; readonly kinds: readonly KindPlan[] }> {
   if (input.items.length === 0) throw new Error('change-plan: a segment has at least one item');
   assertDistinctTargets(input.items);
-  const lockOrder = [...input.items].sort((a, b) => LOCK_ORDER[a.kind] - LOCK_ORDER[b.kind]);
-  for (const intent of lockOrder) await lockItem(client, workspaceId, intent);
+  for (const intent of inLockOrder(input.items)) await lockItem(client, workspaceId, intent);
   const kinds: KindPlan[] = [];
   for (const [index, intent] of input.items.entries()) {
     kinds.push(await planItem(client, workspaceId, intent, index + 1));
