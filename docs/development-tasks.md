@@ -4189,7 +4189,15 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 
 **GO5 — 能力与入口 prompt**（见 `global-roadmap-2026-10-16.md` §4）
 
-- 实现说明：（未开工）
+- GO5 按协调线程批准的拆分走 GO5a→e 一条线。
+- GO5a 实现说明（#680，2026-10-22 合入，f6a8deb；无迁移、无新环境变量；只有读，不改任何状态）：
+  - **能力**：新组 `goal`，`get_goal {goalRunId}`、`list_goals {status?, onBehalfOf?, limit?, cursor?}`（`(created_at 毫秒, id)` 倒序键集，同 `list_tasks`；`GOAL_LIST_DEFAULT_LIMIT` 50 / `GOAL_LIST_MAX_LIMIT` 200，超上限带 `truncated`）、`get_goal_revision {goalRunId, revision}`、`list_goal_unresolved_actions {goalRunId}`；都是 `mode: observe`、`channel: handle`、`minRole: member`。`goal` 组暂不进任何 Handle 上限（入口 agent 的上限在 GO5c/GO5e 与 `propose_goal` 一起加）。
+  - **可见性**（`application/goal/views.ts` `goalVisibleTo`）：工作区 owner 与请求人（`on_behalf_of`），同 `taskVisibleTo`；其他人与不存在的 id 一样 404 `not_found`。owner 看全部只在 human 通道；handle 通道一律只看 Handle `obo` 本人的目标，owner 的 Handle 也一样（协调决定，#493 提出）。`list_goals` 的 `onBehalfOf` 过滤只收窄不放宽。四个读加入 `AUDITOR_READ_CAPABILITIES`。
+  - **线上契约**：shared `goal-plan.ts`（计划结构、两种验收检查、常量、`PlanHint` code 枚举、预算与 removals schema，从内核 `plan.ts` / `revise.ts` 移来，内核再导出；校验逻辑留在内核）；`wire/goal.ts`（`GoalRunWire`、`GoalDetailWire`、`PlanRevisionWire`、`StepRunWire`、验收各层、`GoalLeftoversWire`、`UnresolvedGoalActionWire`）；`originatedInTurnId` 线上叫 `turnId`；内核 `GoalRunBudget` / `StepRemoval` / `StepAcceptanceState` 改为 shared 类型别名。
+  - **读法**：`summarizeGoalRuns` 一页目标三条查询（用量、版本数、步骤计数）；已用量沿用 I-G6 计法（新批量版 `readGoalRunsUsage`）；修订次数 = 已接受版本数 − 1；步骤动作用 `governance/approval` 新批量读 `listStepsActionOutcomes`（与原函数共用一条 SQL）；步骤尝试用 `application/task` 新增 `listGoalRunStepAttempts`（不含嵌套子 Task）；步骤与步骤验收按创建时间、再按在生效计划里的位置排。`GoalRunNotFoundError` / `GoalRevisionNotFoundError` 在 HTTP 与 WS 都映射为 404。
+  - **计划里的凭据**：计划参数按原值存储与执行，读出时同 `get_task`（遗留 184）用 `redactSuspectedSecrets` 遮蔽：步骤 `input`、reconcile 动作参数、reconcile 检查与步骤 / 目标验收的观察参数、验收轮次复制的检查行（`goal_acceptance_checks` / `step_acceptance_checks` 的 `observation_check`）；`get_goal` 与 `get_goal_revision` 经同一个 `planRevisionView`。谓词字面量、事实检查 identity 与 `requester_confirm` 的 `prompt` 在 `parsePlan` 拒收带凭据的（`prompt` 是本 PR 新加）。目标陈述与修订理由不在读出时遮，由 GO5b（`revise_goal` 的理由）与 GO5c（`propose_goal` 的陈述）在写入时拒收。
+  - **有意不做**：Task 读在 Handle 通道收紧到 obo 本人（遗留 417，GO5b 后单独小 PR）；控制台页面与审计页资源类型下拉补 `goal_run` / `step_run` 属 GO6；「门确认不存在」的观察类型在 GO7 之前单独小 PR。
+  - **顺带**：`goal-invariant-checks.integration.test.ts` I-G5 用例十个 `breach(...)` 补 `await`，并在检查前断言 `cases` 有 10 条（否则可能是空测试）；把这类扫描做成守卫是遗留 416。
 - 来自 GO4a（#664）的输入：`confirm_goal_acceptance` 和 `end_goal` 是请求人的成员能力，永远不进 Handle scope（membership-not-in-handle 守卫）；`createGoalRun` 和 `reviseGoalRun` 返回的 `hints` 原样带到能力结果里；如需 owner hold 期间也禁止请求人结束目标，在能力层加一道。
 - 来自 GO3a（#626）的输入：`pause_goal` / `resume_goal` / `cancel_goal` 直接调用 `control.ts`，权限按 GO3a 划分（owner 能停不能续）；角色必须由能力层从已认证主体取，不能从参数取（`lockControlledRun` 信任传入的 `role`）；`resume_goal` 的 `retrySteps` 必须逐个列出步骤，不提供不列步骤的「全部重试」；`proposed` 的目标走 `reject`。
 - 来自 GO3c（#642）的输入：`reconcile_goal_action` 调用 `reconcileActionRequest`，能力带 minRole 与 `channel: 'human'`，决定人取已认证主体；读接口 `list_goal_run_unresolved_actions`；Worker 提示词写明步骤内调用方的 `idempotencyKey` 被忽略、409 `action_in_doubt` 表示等人核对。
@@ -4199,6 +4207,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 **GO6 — 控制台：我的目标、确认卡片、目标详情**（见 `global-roadmap-2026-10-16.md` §4）
 
 - 实现说明：（未开工）
+- 来自 GO5a（#680）的显示内容：目标列表页用 `list_goals`（状态、陈述、步骤进度条来自 `stepCounts`、预算用量来自 `usage` 与 `budget`、墙钟从 `confirmedAt` 算）；目标详情页用 `get_goal` 一次取全：计划卡片（`planRevision.plan` 已定类型，`hints` 给确认卡片的「只靠请求人确认」提示）、步骤时间线（每步 `attempts` 链接到任务详情、`actions` 链接到审批）、验收面板（`acceptance` 各轮与 `overriddenChecks`）、取消后残留提示（`leftovers`）；「待核对」区块用 `list_goal_unresolved_actions`；版本历史用 `revisions` + `get_goal_revision` 取单版全文做对比；审计页资源类型下拉补 `goal_run` / `step_run`。
 - 来自 GO4c（#674）的显示内容：`last_error = fact_not_observed` 的 `unavailable` 检查，下一步写「等采集器或请求人自己观察一次，再继续目标」；`failed` 的事实检查用 `factId` 链接到看到的那条事实的详情。
 - 来自 GO4b（#670 与 UX 验收）的显示内容：从读模型 `steps[].state` 区分「验收中 / 无法验收（继续目标重新验收，不重做工作）/ 验收未通过（重试会重做工作）/ 已通过」，各自给出对应入口；同一页面要分清目标验收和步骤验收，并说明步骤验收没通过时目标会怎样（暂停等人决定）。
 - 来自 GO4a（#664）的显示内容：确认卡把提示 `requester_confirm_only` 显示为「此目标只能由你确认完成」；目标详情从 `readGoalAcceptance` 区分「平台检查通过」和「检查未通过，由请求人认定达成」，后者逐项列出失败的检查及其证据并标「已覆盖」；暂停 `needs_decision` 时从读模型给出「按未达成结束 / 认定达成 / 修订 / 继续 / 取消」几个入口。
