@@ -8,6 +8,7 @@ import type {
 import { useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { addressText } from '../../lib/connections.js';
 import { actionKindTagText, formatDateTime, formatRelative } from '../../lib/format.js';
 import { sentenceGap, useT } from '../../lib/i18n.js';
 import { transportKindLabel } from '../../lib/labels.js';
@@ -222,9 +223,9 @@ export function GateInstanceDetailPanel({
             <dt>{t('种类', 'Transport')}</dt>
             <dd>{transportKindLabel(instance.transportKind, t)}</dd>
             <dt>{t('目标', 'Target')}</dt>
-            <dd className="mono">{instance.target}</dd>
+            <dd className="mono">{addressText(instance.target, t)}</dd>
             <dt>{t('端点', 'Endpoint')}</dt>
-            <dd className="mono">{instance.endpoint}</dd>
+            <dd className="mono">{addressText(instance.endpoint, t)}</dd>
             <dt>{t('健康', 'Health')}</dt>
             <dd>
               <StatusChip
@@ -511,7 +512,7 @@ export function GateInstanceDetailPanel({
                     {transportKindLabel(instance.definition.transportKind, t)}
                   </dd>
                   <dt>{t('目标', 'Target')}</dt>
-                  <dd className="mono">{instance.definition.target}</dd>
+                  <dd className="mono">{addressText(instance.definition.target, t)}</dd>
                   <dt>{t('凭证模式', 'Credential mode')}</dt>
                   <dd>
                     {instance.definition.credentialMode === 'shared'
@@ -519,7 +520,11 @@ export function GateInstanceDetailPanel({
                       : t('按人', 'Connected account')}
                   </dd>
                   <dt>{t('清单来源', 'Manifest source')}</dt>
-                  <dd className="mono">{instance.definition.manifestSource ?? '—'}</dd>
+                  <dd className="mono">
+                    {instance.definition.manifestSource
+                      ? addressText(instance.definition.manifestSource, t)
+                      : '—'}
+                  </dd>
                 </dl>
 
                 {instance.definition.credentialMode === 'shared' ? (
