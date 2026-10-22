@@ -74,8 +74,9 @@ interface FieldErrors {
 
 /** "Looks like a URL": a scheme followed by `://` — the loose check the manifest-source field
  *  always had. The endpoint no longer uses it (C15 follow-up): a missing scheme there is filled
- *  with `http://` (`https://` for a dotted domain, legacy 152) instead of refused, and what remains is checked with `new URL()` (a bare compose
- *  service name with a port parses fine once it has a scheme). */
+ *  with `http://` (`https://` for a public address, legacy 152) instead of refused, and what
+ *  remains is checked with `new URL()` (a bare compose service name with a port parses fine once
+ *  it has a scheme). */
 const URL_LIKE_PATTERN = /^[a-z][a-z0-9+.-]*:\/\//i;
 
 /** Parses the credential box: JSON when it is JSON, the raw string otherwise (the gate's
@@ -222,9 +223,11 @@ export function CompleteConnectionForm({
   const t = useT();
   const [kind, setKind] = useState<ConnectionKind>(request?.kind ?? initialKind ?? 'http');
   // Legacy 247 ①: a request from before legacy 186 can carry a credential in its address; the
-  // kernel reads it out masked (`[redacted]` when nothing credential-free is left). That mask is
-  // never prefilled as if it were an address — the field starts empty and says why.
-  const requestTargetMasked = request?.target === SECRET_FIELD_MASK;
+  // kernel reads it out masked — `[redacted]` whole, or in place inside a path (review #501 on
+  // #661: `https://host/hook/[redacted]/x`). A masked address is never prefilled as if it were
+  // one (it would register a connection with the literal mark in it) — the field starts empty
+  // and says why.
+  const requestTargetMasked = request?.target.includes(SECRET_FIELD_MASK) === true;
   const [target, setTarget] = useState(requestTargetMasked ? '' : (request?.target ?? ''));
   const [endpoint, setEndpoint] = useState('');
   const [credentialKind, setCredentialKind] = useState<CredentialKind>('shared');
@@ -257,7 +260,7 @@ export function CompleteConnectionForm({
   }, [http]);
 
   /** What gets sent: a bare `host:port` gets `http://` (a gate endpoint is plain http inside the
-   *  deployment network — the field's own placeholder); a dotted host name gets `https://`, so the
+   *  deployment network — the field's own placeholder); a public domain or IP gets `https://`, so the
    *  connection secret is never sent in the clear by default (legacy 152). */
   const endpointValue = withDefaultScheme(endpoint, gateEndpointDefaultScheme(endpoint));
 
@@ -490,8 +493,8 @@ export function CompleteConnectionForm({
         hint={
           <>
             {t(
-              '正在运行的门实例自己的 HTTP 地址（每种类型，包括 cli/ssh，都由一个门前置）；没写协议时，内网名称或 IP 补 http://，带点的域名补 https://。',
-              "The running Gatekeeper instance's own HTTP address (every kind, including cli/ssh, is fronted by one); without a scheme, an internal name or IP gets http:// and a dotted domain gets https://.",
+              '正在运行的门实例自己的 HTTP 地址（每种类型，包括 cli/ssh，都由一个门前置）；没写协议时，内网地址补 http://，公网域名或 IP 补 https://。',
+              "The running Gatekeeper instance's own HTTP address (every kind, including cli/ssh, is fronted by one); without a scheme, an in-network address gets http:// and a public domain or IP gets https://.",
             )}
             {endpointSchemeAdded === 'http' ? (
               <span data-testid="cc-endpoint-scheme-note">
@@ -505,8 +508,8 @@ export function CompleteConnectionForm({
               <span data-testid="cc-endpoint-scheme-note">
                 {sentenceGap(t)}
                 {t(
-                  '这是一个域名，已自动补上 https://，连接密钥不会明文发送；如果门只在内网用 http，请改成 http://。',
-                  'This is a domain name, so https:// was added and the connection secret is not sent in the clear — change it to http:// if the gate only serves http inside the network.',
+                  '这是一个公网地址，已自动补上 https://，连接密钥不会明文发送；如果门只在内网用 http，请改成 http://。',
+                  'This is a public address, so https:// was added and the connection secret is not sent in the clear — change it to http:// if the gate only serves http inside the network.',
                 )}
               </span>
             ) : null}

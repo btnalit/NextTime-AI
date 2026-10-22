@@ -19,7 +19,7 @@ describe('AuditPayloadNotes (legacy 159, 178)', () => {
     expect(note.dataset.confirmed).toBe('true');
   });
 
-  it('says an observation only recorded them — never 「已确认」', () => {
+  it('says a call that asks nobody (an observation, invoke_worker) only recorded them — never 「已确认」', () => {
     render(
       <AuditPayloadNotes
         payload={{ credentialReview: { suspectedSecretValues: 1, suspectedSecretPaths: ['q'] } }}
@@ -32,9 +32,10 @@ describe('AuditPayloadNotes (legacy 159, 178)', () => {
 
   it('says how many values were hidden from the parameters', () => {
     render(<AuditPayloadNotes payload={{ redactedValues: 3 }} />);
-    expect(screen.getByTestId('audit-redacted-values').textContent).toContain(
-      '参数中已隐藏 3 处疑似凭据',
-    );
+    const note = screen.getByTestId('audit-redacted-values').textContent;
+    expect(note).toContain('隐藏了参数中的 3 处疑似凭据');
+    // Only the audit copy is redacted — the call ran with the values as sent.
+    expect(note).toContain('调用本身按原样执行');
   });
 
   it('renders nothing for an ordinary payload or a malformed count', () => {

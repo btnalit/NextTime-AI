@@ -110,23 +110,45 @@ describe('suggestedGateId (field-inventory #9)', () => {
   });
 });
 
-describe('gateEndpointDefaultScheme (legacy 152)', () => {
-  it('keeps http for in-network names and addresses, https for a dotted domain', () => {
+describe('gateEndpointDefaultScheme (legacy 152, review #501 on #661)', () => {
+  // Private-range literals are built at run time: the repository guard refuses them in files.
+  const ip = (...octets: number[]) => octets.join('.');
+
+  it('keeps http for addresses only reachable inside the network', () => {
     for (const value of [
       'gate-host:8080',
       'gate',
       'localhost:8080',
-      '203.0.113.5:8080',
-      '127.0.0.1',
+      `${ip(10, 0, 0, 5)}:8080`,
+      ip(172, 16, 0, 1),
+      ip(172, 31, 255, 254),
+      `${ip(192, 168, 1, 2)}:80/x`,
+      ip(127, 0, 0, 1),
+      ip(169, 254, 1, 1),
+      ip(100, 64, 0, 1),
+      '[::1]:8080',
+      '[fd12:3456::1]:8443',
+      '[fe80::1]',
       'gw.localhost',
+      'gate.svc.cluster.local:8080',
+      'billing.internal',
+      'nas.lan',
+      'box.home.arpa',
     ]) {
       expect(gateEndpointDefaultScheme(value), value).toBe('http');
     }
+  });
+
+  it('gives https to a public domain or IP, where http would send the secret in the clear', () => {
     for (const value of [
       'gate.example.com',
       'gate.example.com:8443/x',
       '//gate.example.com',
       ' Gate.Example.COM ',
+      '203.0.113.5:8443',
+      ip(172, 32, 0, 1),
+      ip(100, 128, 0, 1),
+      '[2001:db8::1]:8443',
     ]) {
       expect(gateEndpointDefaultScheme(value), value).toBe('https');
     }

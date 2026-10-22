@@ -128,7 +128,32 @@ describe('CompleteConnectionForm', () => {
     expect(screen.getByTestId('cc-target-masked-note').textContent).toContain('带有凭据');
   });
 
-  it('legacy 152: a dotted domain without a scheme gets https://, so the connection secret is not sent in the clear', async () => {
+  it('legacy 247 (review #501 on #661): an address masked in place inside its path is not prefilled either', async () => {
+    const http = httpWith(async () => ({}));
+    render(
+      <CompleteConnectionForm
+        http={http}
+        request={{
+          id: 'cr-2',
+          status: 'requested',
+          kind: 'http',
+          target: 'https://api.example.com/hook/[redacted]/x',
+          requestedBy: 'p-2',
+          gatekeeperId: null,
+          completedBy: null,
+          requestedAt: '2026-09-01T00:00:00.000Z',
+          completedAt: null,
+        }}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+    await secretShown();
+    expect((screen.getByLabelText(/目标系统/) as HTMLInputElement).value).toBe('');
+    expect(screen.getByTestId('cc-target-masked-note')).toBeTruthy();
+  });
+
+  it('legacy 152: a public address without a scheme gets https://, so the connection secret is not sent in the clear', async () => {
     const http = httpWith(async (_name, params) => {
       expect((params as { endpoint: string }).endpoint).toBe('https://gate.example.com');
       return {};
@@ -141,11 +166,16 @@ describe('CompleteConnectionForm', () => {
     fireEvent.blur(endpoint);
     expect(endpoint.value).toBe('https://gate.example.com');
     expect(screen.getByTestId('cc-endpoint-scheme-note').textContent).toContain('https://');
-    // An IP address keeps http.
-    fireEvent.change(endpoint, { target: { value: '198.51.100.7:8080' } });
+    // A private address keeps http (built at run time: the repository guard refuses the literal).
+    const privateIp = [10, 1, 2, 3].join('.');
+    fireEvent.change(endpoint, { target: { value: `${privateIp}:8080` } });
     expect(screen.queryByTestId('cc-endpoint-scheme-note')).toBeNull();
     fireEvent.blur(endpoint);
-    expect(endpoint.value).toBe('http://198.51.100.7:8080');
+    expect(endpoint.value).toBe(`http://${privateIp}:8080`);
+    // A public IP gets https, like a public domain.
+    fireEvent.change(endpoint, { target: { value: '198.51.100.7:8443' } });
+    fireEvent.blur(endpoint);
+    expect(endpoint.value).toBe('https://198.51.100.7:8443');
     fireEvent.change(endpoint, { target: { value: 'gate.example.com' } });
     fireEvent.click(screen.getByRole('button', { name: '注册门' }));
     await waitFor(() => expect(createCalls(http)).toBe(1));

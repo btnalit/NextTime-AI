@@ -14,9 +14,10 @@ function asRecord(value: unknown): Readonly<Record<string, unknown>> | undefined
 
 /**
  * What an audit row's payload says about credentials, in words above the raw payload (legacy 159,
- * 178): the kernel's `credentialReview` (a person confirmed N suspected credentials — or, for an
- * observation, which asks nobody, only recorded them) and `redactedValues` (N values replaced
- * before the call was sent). Renders nothing when the payload has neither.
+ * 178): the kernel's `credentialReview` (a person confirmed N suspected credentials — or, for a
+ * call that asks nobody, such as an observation or `invoke_worker`, only recorded them) and
+ * `redactedValues` (N values hidden in this audit copy of the params; the call itself got them as
+ * sent). Renders nothing when the payload has neither.
  */
 export function AuditPayloadNotes({ payload }: { readonly payload: unknown }) {
   const t = useT();
@@ -39,16 +40,16 @@ export function AuditPayloadNotes({ payload }: { readonly payload: unknown }) {
                 `The content held ${reviewed} suspected credential value(s); the actor confirmed they were reviewed.`,
               )
             : t(
-                `参数含 ${reviewed} 处疑似凭据，已记录（观察类调用不需要人确认）。`,
-                `The parameters held ${reviewed} suspected credential value(s), recorded (an observation asks nobody to confirm).`,
+                `参数含 ${reviewed} 处疑似凭据，已记录（这类调用不经人确认）。`,
+                `The parameters held ${reviewed} suspected credential value(s), recorded (this kind of call asks nobody to confirm).`,
               )}
         </li>
       ) : null}
       {redacted !== undefined ? (
         <li data-testid="audit-redacted-values">
           {t(
-            `参数中已隐藏 ${redacted} 处疑似凭据。`,
-            `${redacted} suspected credential value(s) were hidden in the parameters.`,
+            `审计记录里隐藏了参数中的 ${redacted} 处疑似凭据（只隐藏这份记录，调用本身按原样执行）。`,
+            `${redacted} suspected credential value(s) are hidden in this audit copy of the parameters (the call itself ran with them as sent).`,
           )}
         </li>
       ) : null}

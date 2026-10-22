@@ -684,8 +684,9 @@ export function SystemsPage({
                     {transportKindLabel(row.kind, t)}
                   </span>
                   {/* Legacy 247 ①: an old request's address can carry a credential; the kernel
-                   *  masks it, and the row says so rather than showing a bare `[redacted]`. */}
-                  {row.target === SECRET_FIELD_MASK ? (
+                   *  masks it (whole, or in place inside a path), and the row says so rather than
+                   *  showing `[redacted]` as part of an address. */}
+                  {row.target.includes(SECRET_FIELD_MASK) ? (
                     <span className="text-small text-warn" data-testid="request-target-masked">
                       {t('地址带有凭据，已隐藏', 'Address carried a credential — hidden')}
                     </span>
@@ -740,7 +741,7 @@ export function SystemsPage({
                           'The request becomes cancelled; nothing registered is touched. Only your own request — the owner may cancel any.',
                         )}
                         target={`${transportKindLabel(row.kind, t)} · ${
-                          row.target === SECRET_FIELD_MASK
+                          row.target.includes(SECRET_FIELD_MASK)
                             ? t('地址带有凭据，已隐藏', 'Address carried a credential — hidden')
                             : row.target
                         }`}

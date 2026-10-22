@@ -345,6 +345,30 @@ describe('SystemsPage', () => {
     await waitFor(() => expect(within(row).getByTestId('request-by').textContent).toContain('Bob'));
   });
 
+  it('legacy 247 (review #501 on #661): an address masked in place inside its path is still said to be hidden', async () => {
+    const http = scriptedHttp({
+      list_connection_requests: () => ({
+        items: [
+          {
+            id: 'cr-2',
+            status: 'requested',
+            kind: 'http',
+            target: 'https://api.example.com/hook/[redacted]/x',
+            requestedBy: 'p-2',
+            gatekeeperId: null,
+            completedBy: null,
+            requestedAt: '2026-09-01T00:00:00.000Z',
+            completedAt: null,
+          },
+        ],
+      }),
+    });
+    renderPage(http);
+    const row = await screen.findByTestId('request-row');
+    expect(within(row).getByTestId('request-target-masked')).toBeTruthy();
+    expect(row.textContent).not.toContain('[redacted]');
+  });
+
   it('owner view: shows every grantee with a reachability chip and reason, and wires grant + revoke', async () => {
     const http = scriptedHttp({
       execution_readiness: (params) => {
