@@ -1366,6 +1366,14 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '写入的关系不符合本体约束，被拒绝或告警。',
     enHint: 'A link write did not fit the ontology; it was refused or flagged.',
   },
+  'change_item.apply': {
+    zh: '变更条目已应用',
+    en: 'Change item applied',
+    zhHint:
+      '变更计划里的一项已写入（如安装或升级模块时发布的本体版本），记下来源、前后版本和确认人。',
+    enHint:
+      'One item of a change plan was written (such as the ontology version a module install publishes), with its source, before / after and who confirmed it.',
+  },
 
   // -----------------------------------------------------------------------------------------
   // Other workspace audit events (kernel handlers and migrations, not capability names)

@@ -190,6 +190,29 @@ export async function publishOntologyVersion(
   return mapOntologyVersionRow(row);
 }
 
+/** The latest **published** `ontology_versions` row of the family `id` in `workspaceId`, or `null`
+ *  when the family was never published there — what a Worker or collector writes against right
+ *  now. Published-only: a draft under the same id is someone's unpublished proposal, not the
+ *  installed content (`application/platform/modules.ts` "installed", `application/change-plan`'s
+ *  `before`). Read under `lockOntologyFamily` when what follows depends on it staying the head. */
+export async function loadPublishedOntologyHead(
+  client: PoolClient,
+  workspaceId: string,
+  id: string,
+): Promise<OntologyVersionRow | null> {
+  const result = await client.query<OntologyVersionDbRow>(
+    `select workspace_id, id, version, status, definition, proposed_by, published_by,
+            created_at, published_at
+       from ontology_versions
+      where workspace_id = $1 and id = $2 and status = 'published'
+      order by version desc
+      limit 1`,
+    [workspaceId, id],
+  );
+  const row = result.rows[0];
+  return row ? mapOntologyVersionRow(row) : null;
+}
+
 /** Exported for `registry.ts`'s `proposeOntologyChange` to reuse (S3.1) — the same "what's the
  *  next version under this id, or 1 for a fresh one" computation `publishOntologyVersion` already
  *  needed, now shared rather than re-derived a second way. */
