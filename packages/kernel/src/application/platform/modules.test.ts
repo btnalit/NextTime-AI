@@ -202,15 +202,15 @@ describe('classifyModuleState', () => {
 
 // -------------------------------------------------------------------------------------------
 // installOrUpgradeModule — advisory-lock ordering (P2 hotfix, post-v0.16.0 review "module install
-// race"). Fake-PoolClient, no real DB: the fake only answers the lock query and then throws on
-// whatever query comes next, deliberately short-circuiting before `loadInstalledPackVersion`'s
-// real read or `publishOntologyDomainPack`'s own multi-query write path — those stay covered by
-// `modules.integration.test.ts` (DB-gated). This test only asserts the lock is issued, and issued
-// *first*, which needs no real Postgres to observe.
+// race"; S11 P1: the family lock every publisher of the family shares). Fake-PoolClient, no real DB:
+// the fake answers the lock queries and then throws on whatever query comes next, deliberately
+// short-circuiting before `loadInstalledPackVersion`'s real read or the ChangePlan apply's own
+// multi-query write path — those stay covered by `modules.integration.test.ts` (DB-gated). This test
+// only asserts the locks are issued, and issued *first*, which needs no real Postgres to observe.
 // -------------------------------------------------------------------------------------------
 
-describe('installOrUpgradeModule — advisory lock (P2 hotfix, module install race)', () => {
-  it('issues pg_advisory_xact_lock(hashtext(...)) as the very first query, before reading installed state', async () => {
+describe('installOrUpgradeModule — advisory locks (P2 hotfix, module install race)', () => {
+  it('takes the namespace lock, then the family lock, before reading installed state', async () => {
     const workspaceId = 'ws-1';
     const principalId = 'principal-1';
     const packId = deriveOntologyPackId('ops-assets');
@@ -229,10 +229,9 @@ describe('installOrUpgradeModule — advisory lock (P2 hotfix, module install ra
     const client = {
       query: async (text: string, params: unknown[] = []) => {
         calls.push({ text, params });
-        if (calls.length === 1) return { rows: [], rowCount: 0 }; // the advisory lock itself
-        // Anything past the lock is out of this unit test's scope — stop deterministically rather
-        // than simulating `loadInstalledPackVersion`/`publishOntologyDomainPack`'s real DB reads
-        // and writes.
+        if (calls.length <= 2) return { rows: [], rowCount: 0 }; // the two advisory locks
+        // Anything past the locks is out of this unit test's scope — stop deterministically
+        // rather than simulating the real DB reads and writes.
         throw new Error('stop-after-lock: this unit test only asserts lock-first ordering');
       },
     } as unknown as PoolClient;
@@ -243,14 +242,16 @@ describe('installOrUpgradeModule — advisory lock (P2 hotfix, module install ra
         workspaceId,
         principalId,
         registry,
-        { name: 'ops-assets' },
+        { name: 'ops-assets', channel: 'human' },
         '/fake/ontology/dir',
       ),
     ).rejects.toThrow('stop-after-lock');
 
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(3);
     expect(calls[0]?.text.toLowerCase()).toContain('pg_advisory_xact_lock');
-    expect(calls[0]?.params).toEqual([`install_module:${workspaceId}:${packId}`]);
-    expect(calls[1]?.text.toLowerCase()).toContain('from ontology_versions');
+    expect(calls[0]?.params).toEqual([`ontology_namespace:${workspaceId}`]);
+    expect(calls[1]?.text.toLowerCase()).toContain('pg_advisory_xact_lock');
+    expect(calls[1]?.params).toEqual([`ontology_family:${workspaceId}:${packId}`]);
+    expect(calls[2]?.text.toLowerCase()).toContain('from ontology_versions');
   });
 });

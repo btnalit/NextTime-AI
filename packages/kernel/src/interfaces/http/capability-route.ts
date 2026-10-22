@@ -7,6 +7,11 @@ import {
   gateRefusalOf,
 } from '../../adapters/gatekeeper-client/index.js';
 import { OutboundTargetRefusedError } from '../../adapters/outbound-target/index.js';
+// S11 P1: the ChangePlan core's two refusals (application/change-plan), same direct import.
+import {
+  ChangeConfirmationRequiredError,
+  ChangePlanChangedError,
+} from '../../application/change-plan/index.js';
 import {
   ChatArchivedError,
   ChatNotFoundError,
@@ -223,6 +228,16 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // OntologyViolationError below, so the console can show exactly what to confirm.
   if (err instanceof ModuleConfirmRequiredError) {
     return { status: 400, code: err.code, message: err.message, details: { ...err.details } };
+  }
+  // S11 P1 (I-A4): authority-widening ChangePlan items not confirmed one by one — the same
+  // "here is exactly what to confirm" 400; `details.items` lists each with its widening reasons.
+  if (err instanceof ChangeConfirmationRequiredError) {
+    return { status: 400, code: err.code, message: err.message, details: { ...err.details } };
+  }
+  // S11 P1 (I-A8): the segment recomputed in the applying transaction is not the one reviewed.
+  // Nothing was applied; review it again.
+  if (err instanceof ChangePlanChangedError) {
+    return { status: 409, code: err.code, message: err.message };
   }
   // S4.1 console-session channel (resolve-caller.ts): three `ForbiddenError` subclasses with
   // their own codes so the web client can act on them (pick a workspace / add the CSRF header /
