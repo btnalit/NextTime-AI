@@ -513,6 +513,38 @@ function EmptyCatalogForAdmin({ http }: { readonly http: CapabilityCaller }) {
       />
     );
   }
+  // Legacy 153 ⑥: instances exist but every one is offline — not "no instance yet".
+  const lost = items.filter((row) => row.status === 'lost');
+  if (lost.length > 0) {
+    return (
+      <EmptyState
+        title={t(
+          `平台上的 ${lost.length} 个门实例都离线了`,
+          `All ${lost.length} gate instance(s) on the platform are offline`,
+        )}
+        body={t(
+          '门进程没有在运行，或连不上平台。请运行门的人先恢复门进程；恢复后实例会重新上线，启用过的会回到这里。',
+          'The gate processes are not running or cannot reach the platform. Ask whoever runs them to bring them back; enabled instances return here once they are online.',
+        )}
+        action={
+          <span className="row row-wrap">
+            {lost.slice(0, 3).map((row) => (
+              <RouteLink
+                key={row.gateId}
+                href={hrefs.platformGateInstance(row.gateId)}
+                className="inline-flex min-h-9 items-center"
+                testId="available-gates-lost-link"
+                whenRefused="hide"
+              >
+                {t(`查看：${row.displayName}`, `View ${row.displayName}`)}
+              </RouteLink>
+            ))}
+          </span>
+        }
+        testId="available-gates-empty"
+      />
+    );
+  }
   return (
     <EmptyState
       title={t('平台上还没有任何门实例', 'No gate instance on the platform yet')}

@@ -276,6 +276,41 @@ describe('SystemsPage', () => {
     );
   });
 
+  it('legacy 153 ⑥: when every instance on the platform is offline it says so, not "no instance yet"', async () => {
+    const http = scriptedHttp({
+      list_gate_instances: () => ({
+        items: [
+          {
+            gateId: 'gate-lost-1',
+            connector: 'fixture-mcp',
+            displayName: 'Fixture MCP',
+            transportKind: 'mcp',
+            target: 'http://mcp.example.invalid',
+            endpoint: 'http://gate.example.invalid',
+            status: 'lost',
+            trust: 'byo',
+            health: 'unreachable',
+            lastSeenAt: null,
+            lastCheckedAt: null,
+            operationCount: 2,
+            enabledWorkspaces: [],
+          },
+        ],
+      }),
+    });
+    render(
+      <PermissionsProvider>
+        <SystemsPage http={http} platformAdmin />
+      </PermissionsProvider>,
+    );
+    const empty = await screen.findByTestId('available-gates-empty');
+    await waitFor(() => expect(empty.textContent).toContain('1 个门实例都离线了'));
+    expect(empty.textContent).not.toContain('还没有任何门实例');
+    expect(screen.getByTestId('available-gates-lost-link').getAttribute('href')).toBe(
+      '#/platform/integrations/gate-lost-1',
+    );
+  });
+
   it('P0-4: a non-admin is told who has to enable an instance', async () => {
     renderPage(scriptedHttp({}));
     const empty = await screen.findByTestId('available-gates-empty');

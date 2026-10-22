@@ -23,7 +23,14 @@ import { connectionRequestTargetText } from './connections.js';
 import { actionKindTagText, formatRelative } from './format.js';
 import { objectDisplayName } from './graph-view.js';
 import type { Translate } from './i18n.js';
-import { decisionStatusLabel, roleLabel, workerDefinitionKindLabel } from './labels.js';
+import {
+  decisionStatusLabel,
+  objectTypeLabel,
+  ontologyTypeKindLabel,
+  roleLabel,
+  transportKindLabel,
+  workerDefinitionKindLabel,
+} from './labels.js';
 import { ownEntry } from './own.js';
 import { sameNameIds, withSameNameId } from './same-name.js';
 import { type StatusMachine, labelText, statusChipStyle } from './status-tone.js';
@@ -191,7 +198,7 @@ export function decisionSource(t: Translate): PickerSource {
 
 /** Graph Objects (`search{query}`, member + auditor) — an empty query browses the most recently
  *  updated ones. */
-export function objectSource(): PickerSource {
+export function objectSource(t: Translate): PickerSource {
   return {
     key: 'search:objects',
     searchable: true,
@@ -201,14 +208,23 @@ export function objectSource(): PickerSource {
         limit: PICKER_LIMIT,
       });
       return dedupe(
-        page.items.map((object) => ({
-          id: object.id,
-          label: objectDisplayName(object) ?? object.objectType,
-          detail: object.objectType,
-        })),
+        page.items.map((object) => {
+          const type = objectTypeLabel(object.objectType, t);
+          return { id: object.id, label: objectPickerLabel(object, type), detail: type };
+        }),
       );
     },
   };
+}
+
+/** Legacy 153 ②: a name made only of identity values with no letters in them (a published
+ *  WorkerDefinition with no `name` is identified by `{definitionId, version}`, and the id is left
+ *  out as a UUID, so its "name" is the bare version, `1`) says nothing by itself — it is shown
+ *  after the type, `Worker 定义 1`. */
+function objectPickerLabel(object: ObjectWire, type: string): string {
+  const name = objectDisplayName(object);
+  if (name === undefined) return type;
+  return /[\p{L}]/u.test(name) ? name : `${type} ${name}`;
 }
 
 async function gatekeeperNames(http: CapabilityCaller): Promise<ReadonlyMap<string, string>> {
@@ -298,7 +314,7 @@ const RESOURCE_SOURCES: Readonly<Record<string, SourceFactory>> = {
   gatekeeper: listSource<GatekeeperSummaryWire>(
     'list_gatekeepers',
     {},
-    (gate) => ({ id: gate.id, label: gate.name, detail: gate.kind }),
+    (gate, t) => ({ id: gate.id, label: gate.name, detail: transportKindLabel(gate.kind, t) }),
     'q',
     withSameNameIds,
   ),
@@ -373,12 +389,12 @@ const RESOURCE_SOURCES: Readonly<Record<string, SourceFactory>> = {
     label: chat.title ?? t('未命名对话', 'Untitled chat'),
     detail: formatRelative(chat.lastActivityAt),
   })),
-  object: () => objectSource(),
-  ontology_type: listSource<OntologyTypeWire>('list_types', {}, (type) => ({
+  object: (t) => objectSource(t),
+  ontology_type: listSource<OntologyTypeWire>('list_types', {}, (type, t) => ({
     // The kernel audits an ontology type by its name.
     id: type.name,
     label: type.name,
-    detail: type.kind,
+    detail: ontologyTypeKindLabel(type.kind, t),
   })),
   connection_request: listSource<ConnectionRequestWire>(
     'list_connection_requests',

@@ -18,11 +18,12 @@ import { useT } from '../../lib/i18n.js';
 import { auditResourceTypeLabel } from '../../lib/labels.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { AuditPayloadNotes } from '../audit/AuditPayloadNotes.js';
+import { Combobox } from '../kit/combobox.js';
 import { PageHeader } from '../kit/page-header.js';
 import { Button } from '../ui/Button.js';
 import { EmptyState } from '../ui/EmptyState.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
-import { Field, Input, Select } from '../ui/Field.js';
+import { Field, Input } from '../ui/Field.js';
 import { SkeletonRows } from '../ui/Skeleton.js';
 
 export interface PlatformAuditPageProps {
@@ -98,6 +99,14 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
   };
   const pickedUser = actorUserIdInput === '' ? undefined : knownUsers.current.get(actorUserIdInput);
   const actionSuggestions = useMemo(() => platformAuditActionSuggestions(), []);
+  const actorOptions = [
+    ...(pickedUser && !(userRows ?? []).some((u) => u.id === pickedUser.id) ? [pickedUser] : []),
+    ...(userRows ?? []),
+  ].map((user) => ({ value: user.id, label: `${user.displayName} (${user.login})` }));
+  // A deep-linked or pasted id the directory has not named keeps an option, so it shows.
+  if (actorUserIdInput !== '' && !pickedUser) {
+    actorOptions.push({ value: actorUserIdInput, label: actorUserIdInput });
+  }
 
   function handleFilterSubmit(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
@@ -176,71 +185,45 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
             )}
           </Field>
         ) : (
-          <>
-            <Field id="platform-audit-actor-query" label={t('搜索操作者', 'Find an actor')}>
-              <Input
-                id="platform-audit-actor-query"
-                value={actorQuery}
-                onChange={(event) => setActorQuery(event.target.value)}
-                // Enter searches as you type already; never let it apply the filter half-typed.
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') event.preventDefault();
-                }}
-                placeholder={t('登录名或名称', 'Login or name')}
-                autoComplete="off"
-                spellCheck={false}
-                data-testid="platform-audit-actor-query"
-              />
-            </Field>
-            <Field
+          <Field
+            id="platform-audit-actor"
+            label={t('操作者', 'Actor')}
+            hint={
+              searching && userRows !== undefined && userRows.length === 0 ? (
+                <span data-testid="platform-audit-actor-empty">
+                  {t('没有匹配的用户', 'No matching users')}
+                </span>
+              ) : undefined
+            }
+          >
+            {/* Legacy 153 ①: one searchable field — typing re-asks `list_users{query}`; empty
+             *  (or ×) is 任意. It used to be a search box plus a `<select>`. */}
+            <Combobox
               id="platform-audit-actor"
-              label={t('操作者', 'Actor')}
-              hint={
-                searching && userRows !== undefined && userRows.length === 0 ? (
-                  <span data-testid="platform-audit-actor-empty">
-                    {t('没有匹配的用户', 'No matching users')}
-                  </span>
-                ) : undefined
+              options={actorOptions}
+              value={actorUserIdInput}
+              onChange={setActorUserIdInput}
+              inputValue={actorQuery}
+              onInputValueChange={setActorQuery}
+              onBlur={() => setActorQuery('')}
+              loading={users.state.status === 'loading'}
+              placeholder={t('任意；输入登录名或名称搜索', 'Any — type a login or name to search')}
+              emptyText={
+                searching
+                  ? t('没有匹配的用户。', 'No matching users.')
+                  : t('还没有用户。', 'No users yet.')
               }
-            >
-              <Select
-                id="platform-audit-actor"
-                value={actorUserIdInput}
-                onChange={(event) => setActorUserIdInput(event.target.value)}
-                disabled={users.state.status === 'loading'}
-                data-testid="platform-audit-actor-select"
-              >
-                <option value="">
-                  {users.state.status === 'loading'
-                    ? searching
-                      ? t('正在搜索…', 'Searching…')
-                      : t('正在加载用户…', 'Loading users…')
-                    : t('任意', 'Any')}
-                </option>
-                {pickedUser && !(userRows ?? []).some((u) => u.id === pickedUser.id) ? (
-                  <option value={pickedUser.id}>
-                    {pickedUser.displayName} ({pickedUser.login})
-                  </option>
-                ) : null}
-                {(userRows ?? []).map((user) => (
-                  <option key={user.id} value={user.id}>
-                    {user.displayName} ({user.login})
-                  </option>
-                ))}
-                {actorUserIdInput !== '' && !pickedUser ? (
-                  <option value={actorUserIdInput}>{actorUserIdInput}</option>
-                ) : null}
-              </Select>
-              {users.state.status === 'error' && searching ? (
-                <ErrorBanner
-                  error={users.state.error}
-                  title={t('无法搜索用户', 'Could not search users')}
-                  onRetry={() => void users.reload()}
-                  testId="platform-audit-actor-search-error"
-                />
-              ) : null}
-            </Field>
-          </>
+              testId="platform-audit-actor-select"
+            />
+            {users.state.status === 'error' && searching ? (
+              <ErrorBanner
+                error={users.state.error}
+                title={t('无法搜索用户', 'Could not search users')}
+                onRetry={() => void users.reload()}
+                testId="platform-audit-actor-search-error"
+              />
+            ) : null}
+          </Field>
         )}
         <Button type="submit" variant="secondary">
           {t('应用', 'Apply')}

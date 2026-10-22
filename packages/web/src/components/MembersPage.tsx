@@ -113,7 +113,7 @@ export function MembersPage({ http, platformAdmin }: MembersPageProps) {
   const permissions = usePermissions();
   const can = useRoleCan(http);
   const toast = useToast();
-  const { principalId: ownPrincipalId } = useWorkspaceIdentity(http);
+  const { principalId: ownPrincipalId, workspaceId } = useWorkspaceIdentity(http);
   const ask = useAskForAccess(http);
   const principals = useCapabilityList<PrincipalRow>(http, 'list_principals');
   const [drawer, setDrawer] = useState<DrawerState>({ kind: 'closed' });
@@ -339,6 +339,7 @@ export function MembersPage({ http, platformAdmin }: MembersPageProps) {
             <AddMemberForm
               http={http}
               platformAdmin={platformAdmin}
+              workspaceId={workspaceId ?? undefined}
               onCancel={() => setDrawer({ kind: 'closed' })}
               onDone={(principal) => {
                 setDrawer({ kind: 'closed' });

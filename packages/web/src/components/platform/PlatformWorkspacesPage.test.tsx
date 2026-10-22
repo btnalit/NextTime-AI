@@ -6,6 +6,7 @@ import { PermissionsProvider } from '../../hooks/usePermissions.js';
 import type { WireMembership } from '../../lib/auth-api.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { HttpError } from '../../lib/http-client.js';
+import { pickComboboxOption } from '../kit/combobox.test-helpers.js';
 import { ToastProvider } from '../ui/Toast.js';
 import { PlatformWorkspacesPage } from './PlatformWorkspacesPage.js';
 
@@ -196,14 +197,7 @@ describe('PlatformWorkspacesPage', () => {
     fireEvent.change(within(form).getByLabelText(/名称/), { target: { value: 'Beta' } });
 
     // The owner picker reads `list_users` on mount — i.e. only now, not with the page.
-    await waitFor(() =>
-      expect(
-        (within(form).getByTestId('create-workspace-owner') as HTMLSelectElement).disabled,
-      ).toBe(false),
-    );
-    fireEvent.change(within(form).getByTestId('create-workspace-owner'), {
-      target: { value: 'u-2' },
-    });
+    await pickComboboxOption(within(form).getByTestId('create-workspace-owner'), 'bob — Bob');
 
     // Ticking an allowed model narrows the entry-model options to it.
     fireEvent.click(within(form).getByLabelText('openai/gpt-4o'));
@@ -406,12 +400,7 @@ describe('PlatformWorkspacesPage', () => {
     fireEvent.click(screen.getByTestId('workspace-row-ws-2'));
     const detail = await screen.findByTestId('workspace-detail');
 
-    await waitFor(() =>
-      expect((within(detail).getByTestId('delegate-owner') as HTMLSelectElement).disabled).toBe(
-        false,
-      ),
-    );
-    fireEvent.change(within(detail).getByTestId('delegate-owner'), { target: { value: 'u-2' } });
+    await pickComboboxOption(within(detail).getByTestId('delegate-owner'), 'bob — Bob');
     fireEvent.click(within(detail).getByRole('button', { name: '委托' }));
 
     await waitFor(() =>
@@ -445,12 +434,7 @@ describe('PlatformWorkspacesPage', () => {
     fireEvent.click(screen.getByTestId('workspace-row-ws-2'));
     const detail = await screen.findByTestId('workspace-detail');
 
-    await waitFor(() =>
-      expect((within(detail).getByTestId('delegate-owner') as HTMLSelectElement).disabled).toBe(
-        false,
-      ),
-    );
-    fireEvent.change(within(detail).getByTestId('delegate-owner'), { target: { value: 'u-2' } });
+    await pickComboboxOption(within(detail).getByTestId('delegate-owner'), 'bob — Bob');
     fireEvent.click(within(detail).getByRole('button', { name: '委托' }));
 
     await waitFor(() =>

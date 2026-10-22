@@ -51,6 +51,8 @@ test.describe('audit page', () => {
     await login(page, API_KEY as string);
     await page.goto('/#/govern/audit');
     await page.locator('#explain-node-id').fill('00000000-0000-0000-0000-000000000000');
+    // The id box is a combobox (legacy 153 ①): close its suggestion list before pressing 解释.
+    await page.locator('#explain-node-id').press('Escape');
     await page.getByRole('button', { name: /解释/ }).click();
     const banner = page.getByTestId('explain-error');
     await expect(banner).toBeVisible({ timeout: 15_000 });

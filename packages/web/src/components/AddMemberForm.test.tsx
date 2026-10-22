@@ -6,6 +6,11 @@ import { PermissionsProvider } from '../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { HttpError } from '../lib/http-client.js';
 import { AddMemberForm } from './AddMemberForm.js';
+import {
+  comboboxOptionTexts,
+  findComboboxOption,
+  pickComboboxOption,
+} from './kit/combobox.test-helpers.js';
 
 afterEach(cleanup);
 
@@ -105,26 +110,69 @@ describe('AddMemberForm', () => {
       add_member: () => added,
     });
     const { onDone } = renderForm(http);
-    const picker = (await screen.findByTestId('add-member-user')) as HTMLSelectElement;
-    await waitFor(() => expect(picker.options.length).toBe(3));
-    expect([...picker.options].map((option) => option.textContent)).toContain('bob — Bob');
+    const picker = await screen.findByTestId('add-member-user');
+    await findComboboxOption(picker, 'carol — Carol');
+    expect(comboboxOptionTexts(picker)).toEqual(['bob — Bob', 'carol — Carol']);
     expect(screen.queryByLabelText(/^登录名/)).toBeNull();
 
     const add = screen.getByRole('button', { name: '添加' });
     expect(add.hasAttribute('disabled')).toBe(true);
-    fireEvent.change(picker, { target: { value: 'u-3' } });
+    await pickComboboxOption(picker, 'carol — Carol');
     fireEvent.change(screen.getByLabelText(/^角色/), { target: { value: 'operator' } });
     fireEvent.click(add);
     await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
     expect(addParams(http)).toEqual({ login: 'carol', role: 'operator' });
   });
 
+  it('legacy 153 ⑤: a user who is already a member of this workspace is listed but cannot be picked', async () => {
+    const http = scriptedHttp({
+      list_users: () => ({
+        items: [
+          user({
+            id: 'u-1',
+            login: 'admin',
+            displayName: 'Admin',
+            memberships: [
+              {
+                workspaceId: 'ws-1',
+                workspaceName: 'Default',
+                workspaceStatus: 'active',
+                principalId: 'p-1',
+                role: 'owner',
+                disabled: false,
+              },
+            ],
+          }),
+          user(),
+        ],
+      }),
+      add_member: () => added,
+    });
+    render(
+      <PermissionsProvider>
+        <AddMemberForm
+          http={http}
+          onDone={vi.fn()}
+          onCancel={vi.fn()}
+          platformAdmin
+          workspaceId="ws-1"
+        />
+      </PermissionsProvider>,
+    );
+    const picker = screen.getByTestId('add-member-user');
+    const member = await findComboboxOption(picker, 'admin — Admin');
+    expect(member.getAttribute('aria-disabled')).toBe('true');
+    expect(member.textContent).toContain('已是本工作区成员');
+    fireEvent.click(member);
+    expect(screen.getByRole('button', { name: '添加' }).hasAttribute('disabled')).toBe(true);
+    await pickComboboxOption(picker, 'bob — Bob');
+    expect(screen.getByRole('button', { name: '添加' }).hasAttribute('disabled')).toBe(false);
+  });
+
   it('platformAdmin: the directory opens at once; "改为手动输入" carries the picked login over', async () => {
     const http = scriptedHttp({ list_users: () => ({ items: [user()] }), add_member: () => added });
     renderForm(http, true);
-    const picker = screen.getByTestId('add-member-user') as HTMLSelectElement;
-    await waitFor(() => expect(picker.options.length).toBe(2));
-    fireEvent.change(picker, { target: { value: 'u-2' } });
+    await pickComboboxOption(screen.getByTestId('add-member-user'), 'bob — Bob');
     fireEvent.click(screen.getByTestId('add-member-type-instead'));
     expect((screen.getByLabelText(/登录名/) as HTMLInputElement).value).toBe('bob');
     // …and back.

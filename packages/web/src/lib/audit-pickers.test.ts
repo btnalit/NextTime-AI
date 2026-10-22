@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  objectSource,
   optionMatches,
   platformAuditActionSuggestions,
   provenanceNodeSource,
@@ -100,7 +101,7 @@ describe('resourceIdSource', () => {
       list_types: () => ({ items: [{ kind: 'object', name: 'Host', description: '' }] }),
     });
     const options = await resourceIdSource('ontology_type', t)?.load(http, '');
-    expect(options).toEqual([{ id: 'Host', label: 'Host', detail: 'object' }]);
+    expect(options).toEqual([{ id: 'Host', label: 'Host', detail: '对象' }]);
   });
 
   it('legacy 247 (review #501 on #661): a masked connection-request address is labelled as hidden, never as `[redacted]`', async () => {
@@ -145,6 +146,53 @@ describe('resourceIdSource', () => {
     const options = await provenanceNodeSource('fact', t).load(http, '');
     // Legacy sweep (console batch, 2026-10-16): the action reads as its label, not the raw name.
     expect(options.map((o) => [o.id, o.label])).toEqual([['f-1', '验证事实']]);
+  });
+});
+
+describe('legacy 153 ②: candidate labels in the console’s words, not the ontology’s', () => {
+  it('a platform ObjectType is named in Chinese, and a letterless identity name follows its type', async () => {
+    const http = caller({
+      search: () => ({
+        items: [
+          {
+            id: 'o-1',
+            objectType: 'WorkerDefinition',
+            identityKey: { definitionId: '6d1f0a52-1111-4222-8333-944455556666', version: 1 },
+            properties: { kind: 'entry' },
+          },
+          {
+            id: 'o-2',
+            objectType: 'ConnectedSystem',
+            identityKey: { name: 'docker-prod' },
+            properties: {},
+          },
+          { id: 'o-3', objectType: 'Server', identityKey: { hostname: 'web-01' }, properties: {} },
+        ],
+      }),
+    });
+    const options = await objectSource(t).load(http, '');
+    expect(options.map((option) => [option.label, option.detail])).toEqual([
+      ['Worker 定义 1', 'Worker 定义'],
+      ['docker-prod', '已接入的系统'],
+      ['web-01', 'Server'],
+    ]);
+  });
+
+  it('a gate reads its transport, an ontology type its kind, in words', async () => {
+    const gates = await resourceIdSource('gatekeeper', t)?.load(
+      caller({
+        list_gatekeepers: () => ({
+          items: [{ id: 'gk-1', name: 'docker-prod', kind: 'cli', status: 'active' }],
+        }),
+      }),
+      '',
+    );
+    expect(gates?.[0]?.detail).not.toBe('cli');
+    const types = await resourceIdSource('ontology_type', t)?.load(
+      caller({ list_types: () => ({ items: [{ kind: 'object', name: 'Server' }] }) }),
+      '',
+    );
+    expect(types?.[0]?.detail).toBe('对象');
   });
 });
 

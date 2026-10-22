@@ -186,19 +186,14 @@ test.describe('P-A2 acceptance: a second workspace, delegated to its own owner',
     await expect(createDrawer.getByTestId('create-workspace-form')).toBeVisible();
     await createDrawer.locator('#cw-name').fill(workspaceName);
 
-    // UserPicker searches on a button press, never per keystroke, and disables its `<select>`
-    // while `list_users` is in flight — so wait for the select before reading its options.
-    await createDrawer.locator('#cw-owner-query').fill(ownerLogin);
-    await createDrawer.getByRole('button', { name: /搜索/ }).click();
-    const ownerSelect = createDrawer.getByTestId('create-workspace-owner');
-    await expect(ownerSelect).toBeEnabled();
-    const ownerOption = ownerSelect.locator('option', { hasText: ownerLogin });
+    // UserPicker is one searchable list (legacy 153 ①): typing the login re-asks `list_users`,
+    // and the option reads `<login> — <displayName>`.
+    const ownerBox = createDrawer.getByTestId('create-workspace-owner');
+    await ownerBox.fill(ownerLogin);
+    const ownerOption = createDrawer.getByRole('option').filter({ hasText: `${ownerLogin} — ` });
     await expect(ownerOption).toHaveCount(1);
-    // The option's label is `<login> — <displayName>`, so the owner is picked by value (the
-    // platform user id) rather than by an exact label this test would have to reconstruct.
-    const ownerUserId = await ownerOption.getAttribute('value');
-    expect(ownerUserId ?? '').not.toBe('');
-    await ownerSelect.selectOption(ownerUserId as string);
+    await ownerOption.click();
+    await expect(ownerBox).toHaveValue(new RegExp(`^${ownerLogin} — `));
 
     // Allow-list first, entry model second: CreateWorkspaceForm narrows the entry-model options to
     // the ticked models, so this order also proves that narrowing.

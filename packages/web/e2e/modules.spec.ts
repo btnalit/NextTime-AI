@@ -113,15 +113,16 @@ test.describe('P-B2b acceptance: platform modules page, install ops-assets into 
     await expect(createDrawer.getByTestId('create-workspace-form')).toBeVisible();
     await createDrawer.locator('#cw-name').fill(workspaceName);
 
-    await createDrawer.locator('#cw-owner-query').fill(ADMIN_LOGIN as string);
-    await createDrawer.getByRole('button', { name: /搜索/ }).click();
-    const ownerSelect = createDrawer.getByTestId('create-workspace-owner');
-    await expect(ownerSelect).toBeEnabled();
-    const ownerOption = ownerSelect.locator('option', { hasText: ADMIN_LOGIN as string });
+    // UserPicker is one searchable list (legacy 153 ①): typing the login re-asks `list_users`,
+    // and the option reads `<login> — <displayName>`.
+    const ownerBox = createDrawer.getByTestId('create-workspace-owner');
+    await ownerBox.fill(ADMIN_LOGIN as string);
+    const ownerOption = createDrawer
+      .getByRole('option')
+      .filter({ hasText: `${ADMIN_LOGIN as string} — ` });
     await expect(ownerOption).toHaveCount(1);
-    const ownerUserId = await ownerOption.getAttribute('value');
-    expect(ownerUserId ?? '').not.toBe('');
-    await ownerSelect.selectOption(ownerUserId as string);
+    await ownerOption.click();
+    await expect(ownerBox).toHaveValue(new RegExp(`^${ADMIN_LOGIN as string} — `));
 
     await createDrawer.getByRole('button', { name: /创建/ }).click();
     await expect(createDrawer).toBeHidden({ timeout: 20_000 });

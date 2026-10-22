@@ -1,15 +1,17 @@
 import type { UserWire } from '@nexttime/shared';
-import { type ReactNode, useMemo, useState } from 'react';
+import { type ReactNode, useMemo, useRef, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
+import { useDebounced } from '../../lib/audit-id-picker.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { shortId } from '../../lib/format.js';
 import { useT } from '../../lib/i18n.js';
-import { Button } from '../ui/Button.js';
-import { Field, Input, Select } from '../ui/Field.js';
+import { Combobox, type ComboboxOption } from '../kit/combobox.js';
+import { Field } from '../ui/Field.js';
 import { PlatformError } from './PlatformError.js';
 
 export interface UserPickerProps {
   readonly http: CapabilityCaller;
-  /** Prefix for the two control ids this renders (`<id>-query` and `<id>`). */
+  /** The combobox input's id (its `<label>` points here). */
   readonly id: string;
   readonly label: string;
   readonly hint?: ReactNode;
@@ -19,10 +21,14 @@ export interface UserPickerProps {
   readonly disabled?: boolean;
   /** User ids to leave out of the list — e.g. the workspace's existing owners. */
   readonly exclude?: readonly string[];
+  /** Legacy 153 ⑤: a workspace whose members stay listed but cannot be picked, marked
+   *  「已是本工作区成员」 — adding one again could only be refused. */
+  readonly memberOf?: string;
   readonly testId?: string;
 }
 
 const PAGE_SIZE = 50;
+const SEARCH_DEBOUNCE_MS = 250;
 
 /** S8 W4-C (ui-audit PW3 "'委托 owner' 下拉列出验收残留用户"): every call site of this picker so
  *  far is "pick a user to become an owner" — a not-yet-activated account (no password set: could
@@ -37,17 +43,17 @@ function isResidueCandidate(user: UserWire): boolean {
 }
 
 /**
- * components/platform/UserPicker: "pick a platform user by login" — a search box over
- * `list_users`'s own `query` filter plus a `<select>` of what came back (P-A2, design §5 "成员"页
- * 语义: 按登录名搜索 → 选角色). Used by `CreateWorkspaceForm` (the first owner) and
- * `WorkspaceDetailPanel` (委托 owner). Both call sites pick a future *owner* — `isResidueCandidate`
- * above keeps not-yet-activated and disabled accounts out of the list for both.
+ * components/platform/UserPicker: "pick a platform user by login" — one `kit/combobox` over
+ * `list_users` (P-A2, design §5 "成员"页语义: 按登录名搜索 → 选角色). Typing searches `list_users{query}`
+ * (login or display name, kernel-side, debounced), so any user is reachable, not just the first
+ * page; an empty box lists the directory's first page. Legacy 153 ①: this used to be a search box,
+ * a 搜索 button and a `<select>` — two controls for one field. Used by `CreateWorkspaceForm` (the
+ * first owner), `WorkspaceDetailPanel` (委托 owner), `UserDetailPanel` (merge target) and
+ * `AddMemberForm` — `isResidueCandidate` above keeps not-yet-activated and disabled accounts out of
+ * the list for all of them.
  *
  * The `list_users` read lives *here* rather than on the page so it is lazy in the only sense that
- * matters: this component is mounted only while a drawer that needs a user is open, so the
- * workspaces list costs two capability calls, not three, until an administrator actually opens
- * one. The search is applied on a button press, never per keystroke — a nested `<form>` is invalid
- * inside `CreateWorkspaceForm`'s own, so this is a plain button.
+ * matters: this component is mounted only while a drawer that needs a user is open.
  */
 export function UserPicker({
   http,
@@ -58,82 +64,78 @@ export function UserPicker({
   onChange,
   disabled = false,
   exclude,
+  memberOf,
   testId,
 }: UserPickerProps) {
   const t = useT();
-  const [queryInput, setQueryInput] = useState('');
-  const [appliedQuery, setAppliedQuery] = useState('');
+  const [typed, setTyped] = useState('');
+  const query = useDebounced(typed.trim(), SEARCH_DEBOUNCE_MS);
 
-  // `list_users`'s `query` is `min(1)` — an empty box omits the field rather than sending `''`.
+  // `list_users`'s `query` is `min(1)` (and at most 100) — an empty box omits the field.
   const params = useMemo(() => {
     const next: Record<string, unknown> = { limit: PAGE_SIZE };
-    if (appliedQuery !== '') next.query = appliedQuery;
+    if (query !== '') next.query = query.slice(0, 100);
     return next;
-  }, [appliedQuery]);
+  }, [query]);
 
   const users = useCapabilityList<UserWire>(http, 'list_users', params);
-  const loading = users.state.status === 'loading';
+  // A search still waiting out its debounce counts as loading: its rows are the previous search's.
+  const loading = users.state.status === 'loading' || typed.trim() !== query;
   const excluded = new Set(exclude ?? []);
   const rows =
     users.state.status === 'ready'
       ? users.state.data.items.filter((row) => !excluded.has(row.id) && !isResidueCandidate(row))
       : [];
+  // The picked user keeps its option (and so its label in the box) after the search moves on.
+  const known = useRef(new Map<string, UserWire>());
+  for (const row of rows) known.current.set(row.id, row);
+  const picked = value === '' ? undefined : known.current.get(value);
+  const listed = picked && !rows.some((row) => row.id === picked.id) ? [picked, ...rows] : rows;
 
-  function applyQuery(): void {
-    setAppliedQuery(queryInput.trim());
+  const isMember = (user: UserWire): boolean =>
+    memberOf !== undefined && user.memberships.some((m) => m.workspaceId === memberOf);
+  const options: ComboboxOption[] = listed.map((user) => ({
+    value: user.id,
+    label: `${user.login} — ${user.displayName}`,
+    disabled: isMember(user),
+    secondary: isMember(user) ? t('已是本工作区成员', 'Already a member here') : undefined,
+  }));
+  // A value the directory has not named yet (a default owner past the first page, or still
+  // loading) reads as a short id, never the whole raw id.
+  if (value !== '' && picked === undefined) {
+    options.unshift({
+      value,
+      label: loading
+        ? t('正在读取…', 'Loading…')
+        : t(`用户 ${shortId(value)}`, `User ${shortId(value)}`),
+    });
   }
 
   return (
     <>
-      <div className="row-wrap">
-        <Field id={`${id}-query`} label={t('按登录名搜索', 'Search by login')}>
-          <Input
-            id={`${id}-query`}
-            value={queryInput}
-            onChange={(event) => setQueryInput(event.target.value)}
-            // Enter searches. Without this it would submit the surrounding
-            // `CreateWorkspaceForm` instead — creating the workspace with whatever owner was
-            // picked before, which is never what pressing Enter in a search box means.
-            onKeyDown={(event) => {
-              if (event.key !== 'Enter') return;
-              event.preventDefault();
-              applyQuery();
-            }}
-            disabled={disabled}
-            autoComplete="off"
-            spellCheck={false}
-            mono
-          />
-        </Field>
-        <Button
-          variant="secondary"
-          icon="search"
-          onClick={applyQuery}
-          disabled={disabled}
-          loading={loading}
-          data-testid={`${id}-search`}
-        >
-          {t('搜索', 'Search')}
-        </Button>
-      </div>
-
       <Field id={id} label={label} hint={hint} required>
-        <Select
+        <Combobox
           id={id}
+          options={options}
           value={value}
-          onChange={(event) => onChange(event.target.value)}
-          disabled={disabled || loading}
-          data-testid={testId}
-        >
-          <option value="">{t('选择用户', 'Pick a user')}</option>
-          {rows.map((row) => (
-            // `isResidueCandidate` above already excludes disabled/not-yet-activated accounts —
-            // every row here is active with a password set, so no status suffix is needed.
-            <option key={row.id} value={row.id}>
-              {row.login} — {row.displayName}
-            </option>
-          ))}
-        </Select>
+          onChange={(next) => {
+            onChange(next);
+            if (next === '') setTyped('');
+          }}
+          inputValue={typed}
+          onInputValueChange={setTyped}
+          onBlur={() => setTyped('')}
+          loading={loading}
+          disabled={disabled}
+          mono
+          placeholder={t('输入登录名或名称搜索', 'Type a login or name to search')}
+          emptyText={
+            query !== ''
+              ? t('没有匹配的用户。', 'No matching users.')
+              : t('目录里还没有可选的用户。', 'No users to pick yet.')
+          }
+          testId={testId}
+        />
       </Field>
 
       <PlatformError

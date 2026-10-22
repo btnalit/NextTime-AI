@@ -5,6 +5,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { HttpError } from '../../lib/http-client.js';
 import { envAdminTitle } from '../../lib/platform-errors.js';
+import {
+  comboboxOptionTexts,
+  findComboboxOption,
+  pickComboboxOption,
+} from '../kit/combobox.test-helpers.js';
 import { UserDetailPanel } from './UserDetailPanel.js';
 
 afterEach(cleanup);
@@ -307,12 +312,11 @@ describe('UserDetailPanel', () => {
     expect(screen.getByTestId('user-detail-status').textContent).toBe('待激活');
     const merge = screen.getByRole('button', { name: '合并' });
     expect(merge.hasAttribute('disabled')).toBe(true);
-    const target = screen.getByLabelText(/合并到/) as HTMLSelectElement;
+    const target = screen.getByLabelText(/合并到/);
     // Neither the source itself nor a disabled account is offered as a target.
-    await waitFor(() =>
-      expect(Array.from(target.options).map((option) => option.value)).toEqual(['', 'u-2']),
-    );
-    fireEvent.change(target, { target: { value: 'u-2' } });
+    await findComboboxOption(target, 'bob — Bob');
+    expect(comboboxOptionTexts(target)).toEqual(['bob — Bob']);
+    await pickComboboxOption(target, 'bob — Bob');
     fireEvent.click(merge);
 
     const confirm = await screen.findByTestId('user-merge-confirm');
@@ -362,25 +366,16 @@ describe('UserDetailPanel', () => {
       },
     });
     renderPanel(http, source);
-    const target = screen.getByLabelText(/合并到/) as HTMLSelectElement;
-    await waitFor(() =>
-      expect(Array.from(target.options).map((option) => option.value)).toEqual([
-        '',
-        'u-1',
-        'u-2',
-        'u-3',
-      ]),
-    );
+    const target = screen.getByLabelText(/合并到/);
+    await findComboboxOption(target, 'carol');
+    expect(comboboxOptionTexts(target)).toEqual(['alice —  alice ', 'bob — Bob', 'carol — Carol']);
     expect(screen.getByTestId('user-merge-same-name').textContent).toContain('alice');
     expect(screen.getByTestId('user-merge-same-name').textContent).not.toContain('alice2');
 
     // A user outside the first page is one search away.
-    fireEvent.change(screen.getByLabelText(/按登录名搜索/), { target: { value: 'zed' } });
-    fireEvent.click(screen.getByRole('button', { name: '搜索' }));
-    await waitFor(() =>
-      expect(Array.from(target.options).map((option) => option.value)).toEqual(['', 'u-7']),
-    );
-    fireEvent.change(target, { target: { value: 'u-7' } });
+    fireEvent.change(target, { target: { value: 'zed' } });
+    await waitFor(() => expect(comboboxOptionTexts(target)).toEqual(['zed — Zed']));
+    await pickComboboxOption(target, 'zed — Zed');
     expect(screen.getByRole('button', { name: '合并' }).hasAttribute('disabled')).toBe(false);
     expect(http.calls.some((call) => (call.params as { query?: string })?.query === 'zed')).toBe(
       true,
