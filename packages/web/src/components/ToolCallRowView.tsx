@@ -13,7 +13,7 @@ import {
 import type { CapabilityCaller } from '../lib/clients.js';
 import { carriesGateReason, definitionMismatchStep, gateReasonNextStep } from '../lib/errors.js';
 import {
-  formatDateTime,
+  formatDateTimeSecondsRange,
   formatDuration,
   formatTimeSeconds,
   prettyJsonVisible,
@@ -364,11 +364,7 @@ export function PersistedToolCallRowView({
             className="text-3 text-small"
             data-volatile=""
             data-testid="tool-call-time"
-            title={
-              record.endedAt
-                ? `${formatDateTime(record.startedAt)} – ${formatDateTime(record.endedAt)}`
-                : formatDateTime(record.startedAt)
-            }
+            title={formatDateTimeSecondsRange(record.startedAt, record.endedAt)}
           >
             {formatTimeSeconds(record.startedAt)}
             {record.endedAt

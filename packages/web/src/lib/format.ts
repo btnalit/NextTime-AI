@@ -133,6 +133,27 @@ export function formatTimeSeconds(iso: string | null | undefined): string {
   return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
 }
 
+/** `MM-DD HH:mm:ss – HH:mm:ss (UTC+8)` — a span that usually starts and ends within a minute, to the
+ *  second (legacy 164 ③: a tool call's hover). The end repeats its date (and the zone label shows
+ *  on both sides) only when it falls on another day or in another offset; with no end it is the
+ *  start alone. */
+export function formatDateTimeSecondsRange(
+  startIso: string | null | undefined,
+  endIso?: string | null,
+  now: number = Date.now(),
+): string {
+  const start = parse(startIso);
+  if (start === undefined) return '—';
+  const startText = `${formatShortDate(start, now)} ${formatTimeSeconds(startIso)}`;
+  const end = parse(endIso);
+  if (end === undefined) return `${startText} (${timeZoneLabel(start)})`;
+  const sameDay = localDayStart(start) === localDayStart(end);
+  const sameZone = timeZoneLabel(start) === timeZoneLabel(end);
+  if (sameDay && sameZone)
+    return `${startText} – ${formatTimeSeconds(endIso)} (${timeZoneLabel(start)})`;
+  return `${startText} (${timeZoneLabel(start)}) – ${formatShortDate(end, now)} ${formatTimeSeconds(endIso)} (${timeZoneLabel(end)})`;
+}
+
 /** "12s" / "3m 04s" / "1h 02m" between two instants (`end` defaults to now — an elapsed time). */
 export function formatDuration(
   startIso: string | null | undefined,
