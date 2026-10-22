@@ -55,6 +55,9 @@ export interface ProviderFormProps {
   readonly client: Pick<LlmAdminClient, 'discoverModels' | 'probeModels'>;
   /** Ids already taken — a create form flags a clash before the round trip. */
   readonly existingIds?: readonly string[];
+  /** Legacy 153 ③: when the id (typed, or filled by a preset) is already taken, offer to edit
+   *  that provider instead of only asking for another id. */
+  readonly onEditExisting?: (id: string) => void;
   readonly onSubmit: (input: LlmProviderInputWire, extras: ProviderFormExtras) => Promise<void>;
   readonly onCancel: () => void;
 }
@@ -165,6 +168,7 @@ export function ProviderForm({
   initial,
   client,
   existingIds = [],
+  onEditExisting,
   onSubmit,
   onCancel,
 }: ProviderFormProps) {
@@ -214,11 +218,17 @@ export function ProviderForm({
   const apiPath = API_KINDS.find((kind) => kind.value === api)?.path ?? '/v1';
 
   const idTrimmed = id.trim();
+  const idTaken = !editing && existingIds.includes(idTrimmed);
   const idProblem = editing
     ? null
     : (providerIdProblem(idTrimmed, t) ??
-      (existingIds.includes(idTrimmed)
-        ? t(`已有 ID 为「${idTrimmed}」的供应商，换一个`, `A provider "${idTrimmed}" exists`)
+      (idTaken
+        ? onEditExisting
+          ? t(
+              `已有 ID 为「${idTrimmed}」的供应商：换一个 ID，或编辑现有的那个`,
+              `A provider "${idTrimmed}" exists: pick another id, or edit that one`,
+            )
+          : t(`已有 ID 为「${idTrimmed}」的供应商，换一个`, `A provider "${idTrimmed}" exists`)
         : null));
   const envProblem = envNameProblem(apiKeyEnv, t);
 
@@ -554,6 +564,19 @@ export function ProviderForm({
                 )
           }
           error={!editing && (idTouched || id.length > 0) && idProblem ? idProblem : undefined}
+          errorDetails={
+            idTaken && onEditExisting ? (
+              <Button
+                variant="secondary"
+                size="s"
+                onClick={() => onEditExisting(idTrimmed)}
+                disabled={submitting}
+                data-testid="provider-edit-existing"
+              >
+                {t(`编辑现有的「${idTrimmed}」`, `Edit the existing "${idTrimmed}"`)}
+              </Button>
+            ) : undefined
+          }
         >
           <Input
             id="provider-id"

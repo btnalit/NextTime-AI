@@ -96,6 +96,41 @@ describe('resourceIdSource', () => {
     expect(option?.detail).not.toContain('superseded');
   });
 
+  it('UX P3 on #672: a Decision about an ActionRequest reads as the verb, the request and its kind', async () => {
+    const requestId = '0f8c3706-228e-497d-97e9-1fa5690c0679';
+    const http = caller({
+      query_decisions: () => ({
+        items: [
+          {
+            id: 'dec-1',
+            status: 'approved',
+            summary: `approve action_request ${requestId}`,
+            rationale: { actionRequestId: requestId, actionKind: 'docker.restart' },
+            createdAt: '2026-09-03T00:00:00.000Z',
+          },
+          {
+            id: 'dec-2',
+            status: 'approved',
+            summary: `reconcile action_request ${requestId}: effect_seen`,
+            rationale: { actionRequestId: requestId, decision: 'reconcile' },
+            createdAt: '2026-09-03T00:00:00.000Z',
+          },
+          {
+            id: 'dec-3',
+            status: 'approved',
+            summary: 'restart web',
+            createdAt: '2026-09-03T00:00:00.000Z',
+          },
+        ],
+      }),
+    });
+    const options = await provenanceNodeSource('decision', t).load(http, '');
+    const labels = options.map((option) => option.label);
+    expect(labels[0]).toMatch(/^批准动作请求 0f8c3706 · docker restart$/);
+    expect(labels[1]).toMatch(/^核对动作请求 0f8c3706$/);
+    expect(labels[2]).toBe('restart web');
+  });
+
   it('maps an ontology type to its name (the kernel’s resourceId for it)', async () => {
     const http = caller({
       list_types: () => ({ items: [{ kind: 'object', name: 'Host', description: '' }] }),

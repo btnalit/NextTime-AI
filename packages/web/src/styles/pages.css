@@ -954,11 +954,25 @@
   color: var(--text-3);
 }
 
+/* Legacy 153 ⑧: fields line up by their labels, not their bottoms, so a hint or note under one
+ * field never pushes its neighbours' labels down. Everything that is not a field (a button, a
+ * checkbox, a row of buttons) drops by one label row to sit level with the inputs. */
 .inline-form {
+  --inline-form-label-row: calc(var(--fs-13) * var(--lh-body) + 6px);
   display: flex;
   gap: var(--space-2);
-  align-items: flex-end;
+  align-items: flex-start;
   flex-wrap: wrap;
+}
+
+.inline-form > :not(.field) {
+  margin-top: var(--inline-form-label-row);
+}
+
+/* A checkbox is shorter than an input (36px): centre it on the input row. */
+.inline-form > .checkbox {
+  min-height: 36px;
+  align-items: center;
 }
 
 /* ---- OnboardingWizard (S3.12 接入向导) ------------------------------------------------ */

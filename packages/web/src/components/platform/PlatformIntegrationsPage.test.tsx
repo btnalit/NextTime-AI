@@ -5,6 +5,7 @@ import type {
   GateInstanceWire,
   SelfConnectionWire,
 } from '@nexttime/shared';
+import { SECRET_FIELD_MASK } from '@nexttime/shared';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../../hooks/usePermissions.js';
@@ -1056,6 +1057,23 @@ describe('PlatformIntegrationsPage', () => {
     expect(
       http.calls.filter((call) => call.name === 'list_self_connections').map((c) => c.params),
     ).toEqual([{}]);
+  });
+
+  it('legacy 412: an address the kernel masked whole reads as hidden in the row and its confirm', async () => {
+    const http = scriptedHttp({
+      list_self_connections: () => ({
+        items: [selfConnection({ target: SECRET_FIELD_MASK, endpoint: SECRET_FIELD_MASK })],
+      }),
+    });
+    renderPage(http);
+    fireEvent.click(screen.getByTestId('integrations-tab-self'));
+    const row = await screen.findByTestId('self-connection-row-gk-self-1');
+    expect(row.textContent).toContain('地址带有凭据，已隐藏');
+    expect(row.textContent).not.toContain(SECRET_FIELD_MASK);
+    fireEvent.click(within(row).getByTestId('self-connection-suspend-gk-self-1'));
+    const confirm = await screen.findByTestId('self-connection-confirm-gk-self-1');
+    expect(confirm.textContent).toContain('暂停「地址带有凭据，已隐藏」');
+    expect(confirm.textContent).not.toContain(SECRET_FIELD_MASK);
   });
 
   it('P0b: 暂停 is a medium confirm saying what stops and what stays; the reason is optional and trimmed; the row shows who suspended it and why', async () => {

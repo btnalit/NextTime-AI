@@ -365,16 +365,19 @@ export function manifestPublishPlan(
   return { publishable, proposals, gateOwned };
 }
 
-/** Legacy 247 ①: a connection request's address as a person reads it. An old request's address can
- *  carry a credential; the kernel masks it, whole or in place inside a path (review #501 on #661:
- *  `https://host/hook/[redacted]/x`), and the console says so rather than showing `[redacted]` as
- *  part of an address — the request row, its cancel confirm and the audit resource picker. */
-export function connectionRequestTargetMasked(target: string): boolean {
-  return target.includes(SECRET_FIELD_MASK);
+/** Legacy 247 ① / 412: a gate address as a person reads it. The kernel masks an address that
+ *  could carry a credential (`redactConnectionAddress`), whole or in place inside a path (review
+ *  #501 on #661: `https://host/hook/[redacted]/x`), on every view that shows one — a connection
+ *  request, a self connection, a gate instance. The console says so rather than showing
+ *  `[redacted]` as part of an address: the request row, its cancel confirm, the audit resource
+ *  picker, the platform's self-connection row and its suspend / resume confirm, and the gate
+ *  instance detail. */
+export function addressMasked(address: string): boolean {
+  return address.includes(SECRET_FIELD_MASK);
 }
 
-export function connectionRequestTargetText(target: string, t: Translate): string {
-  return connectionRequestTargetMasked(target)
+export function addressText(address: string, t: Translate): string {
+  return addressMasked(address)
     ? t('地址带有凭据，已隐藏', 'Address carried a credential — hidden')
-    : target;
+    : address;
 }
