@@ -63,7 +63,7 @@ import { ChangesTab } from './catalog/ChangesTab.js';
 import { DiscardReasonField } from './catalog/DiscardReasonField.js';
 import { GateOwnedParamsNotice } from './catalog/GateOwnedParamsNotice.js';
 import { MarkdownPreview } from './catalog/MarkdownPreview.js';
-import { ModulesTab } from './catalog/ModulesTab.js';
+import { PacksTab } from './catalog/PacksTab.js';
 import { ProcedureEditorHost } from './catalog/ProcedureEditorHost.js';
 import { SkillEditor } from './catalog/SkillEditor.js';
 import { WorkerEditorHost } from './catalog/WorkerEditorHost.js';
@@ -121,24 +121,24 @@ export interface CatalogPageProps {
    *  row's own stable key (`operationKey`/`id`/`id@version`), or the sentinel `'new'` while an
    *  editor (new draft / copy-as-new-draft / template / new version) is open in the pane. No item
    *  route exists for Operations (drafts arrive from a connected system's manifest, never a
-   *  console "propose") or Modules (no per-row detail concept — see `ModulesTab`'s own doc
-   *  comment on why it stays outside this master-detail shell). 安装历史 (`changes`, S11 P1-B):
-   *  an install record's id. */
+   *  console "propose"). 能力包 (`packs`, S11 P1-C): a pack's name. 安装历史 (`changes`, S11
+   *  P1-B): an install record's id. */
   readonly itemId?: string;
   readonly onSelectItem: (itemId: string | null) => void;
 }
 
 /** S8 W1-A10 (i18n remainder): `Operation`/`Skill`/`Worker` stay English proper nouns even in zh
- *  copy (the page's own description above does the same); `Procedure` reads 流程 and `Module` 模块,
- *  the zh terms the rest of the console uses (legacy 355: capability names, audit resource types,
- *  task detail, purge counts; `lib/nav.ts`'s catalog nav group). */
+ *  copy (the page's own description above does the same); `Procedure` reads 流程, the zh term the
+ *  rest of the console uses (legacy 355: capability names, audit resource types, task detail,
+ *  purge counts; `lib/nav.ts`'s catalog nav group). S11 P1-C: a pack reads 能力包 (it replaces the
+ *  模块 tab: a module is a pack with one ontology part). */
 const TAB_LABEL: Readonly<Record<CatalogTab, { readonly zh: string; readonly en: string }>> = {
   operations: { zh: 'Operation', en: 'Operations' },
   skills: { zh: 'Skill', en: 'Skills' },
   procedures: { zh: '流程', en: 'Procedures' },
   workers: { zh: 'Worker', en: 'Workers' },
-  modules: { zh: '模块', en: 'Modules' },
-  // S11 P1-B: each module install or upgrade, and its rollback (`catalog/ChangesTab`).
+  packs: { zh: '能力包', en: 'Packs' },
+  // S11 P1-B: each pack install or upgrade, and its rollback (`catalog/ChangesTab`).
   changes: { zh: '安装历史', en: 'Install history' },
 };
 
@@ -151,8 +151,8 @@ const NEW_ITEM_ID = 'new';
  * components/CatalogPage: 能力目录 Catalog (`/govern/catalog`, S3.11 "目录" group — `minRole:
  * 'member'`, open to everyone). Six tabs over the platform's publishable content: Operations
  * (`list_operations`), Skills/Procedures (`list_skills`/`list_procedures`), Workers
- * (`list_worker_definitions`), Modules (`list_workspace_modules`, `ModulesTab` — see its own doc
- * comment) and 安装历史 (`list_change_segments`, `ChangesTab`, S11 P1-B). Publish/deprecate stay the two-step `propose → publish` capabilities already in the
+ * (`list_worker_definitions`), 能力包 (`list_packs`, `PacksTab`, S11 P1-C) and 安装历史
+ * (`list_change_segments`, `ChangesTab`, S11 P1-B). Publish/deprecate stay the two-step `propose → publish` capabilities already in the
  * registry (docs/wire-contract-conventions.md: "UI 不得提供'直接改分类'的捷径") — never a shortcut,
  * each write still `channel: 'human'`-gated on its own (no fixed `minRole`, so a 403 denies only
  * that one capability — `hooks/usePermissions.tsx`).
@@ -208,13 +208,10 @@ export function CatalogPage({ http, tab, onTabChange, itemId, onSelectItem }: Ca
         <ProceduresTab http={http} itemId={itemId} onSelectItem={onSelectItem} />
       ) : tab === 'workers' ? (
         <WorkersTab http={http} itemId={itemId} onSelectItem={onSelectItem} />
-      ) : tab === 'changes' ? (
-        <ChangesTab http={http} itemId={itemId} onSelectItem={onSelectItem} />
+      ) : tab === 'packs' ? (
+        <PacksTab http={http} itemId={itemId} onSelectItem={onSelectItem} />
       ) : (
-        // Modules has no per-row detail concept (a plain table, install/upgrade acts in place) —
-        // left outside the master-detail shell rather than force-fit into `detail={null}`, which
-        // would nest `ModulesTab`'s own `DashboardCard` inside the `.md-pane` card for no reason.
-        <ModulesTab http={http} />
+        <ChangesTab http={http} itemId={itemId} onSelectItem={onSelectItem} />
       )}
     </div>
   );

@@ -1,0 +1,661 @@
+import {
+  CHANGE_ROLLBACK_IN_USE_CAP,
+  type PackComponentStateWire,
+  type PackInstallItemWire,
+  type PackInstallPreviewWire,
+  type PackInstallResultWire,
+  type PackWire,
+} from '@nexttime/shared';
+import { useEffect, useState } from 'react';
+import { invalidateCapability, useCapabilityList } from '../../hooks/useCapability.js';
+import { usePermissions } from '../../hooks/usePermissions.js';
+import { useRoleCan } from '../../hooks/useRoleCan.js';
+import type { CapabilityCaller } from '../../lib/clients.js';
+import { describeError, isForbiddenError } from '../../lib/errors.js';
+import { formatDateTime, formatRelative, shortId } from '../../lib/format.js';
+import { type Translate, useT } from '../../lib/i18n.js';
+import { hrefs } from '../../lib/router.js';
+import { Button } from '../kit/button.js';
+import { Confirm } from '../kit/confirm.js';
+import { EmptyState } from '../kit/empty-state.js';
+import { ErrorBanner } from '../kit/error-banner.js';
+import { KeyValue } from '../kit/key-value.js';
+import { List, ListRow } from '../kit/list-row.js';
+import { MasterDetail } from '../kit/master-detail.js';
+import { Notice } from '../kit/notice.js';
+import { RouteLink } from '../kit/route-link.js';
+import { SkeletonRows } from '../kit/skeleton.js';
+import { StatusChip } from '../kit/status-chip.js';
+import { StillNeeded } from '../kit/still-needed.js';
+import { typeNamesText, wideningText } from './ChangesTab.js';
+
+export interface PacksTabProps {
+  readonly http: CapabilityCaller;
+  /** The selected pack's name (`#/govern/catalog/packs/<name>`). */
+  readonly itemId: string | undefined;
+  readonly onSelectItem: (itemId: string | null) => void;
+}
+
+/** 「已装 v1 · 最新 v2」 — a list row's second line. */
+function versionLine(pack: PackWire, t: Translate): string {
+  const latest = t(`最新 v${pack.latestVersion}`, `v${pack.latestVersion} latest`);
+  const v = pack.installedVersion;
+  if (v === null || v === pack.latestVersion) return latest;
+  return `${t(`已装 v${v}`, `v${v} installed`)} · ${latest}`;
+}
+
+/** The 已装版本 value: a version, or why there is none. */
+function installedText(pack: PackWire, t: Translate): string {
+  if (pack.installedVersion !== null) return `v${pack.installedVersion}`;
+  return pack.status === 'customized'
+    ? t('对不上任何一个版本（已定制）', 'Matches no version (customized)')
+    : t('未安装', 'Not installed');
+}
+
+/** The install control's label, or `null` when there is nothing to install. */
+function actionLabel(pack: PackWire, t: Translate): string | null {
+  const v = pack.latestVersion;
+  switch (pack.status) {
+    case 'not_installed':
+      return t(`安装 v${v}`, `Install v${v}`);
+    case 'outdated':
+      return t(`升级到 v${v}`, `Upgrade to v${v}`);
+    case 'customized':
+      return t(`换成 v${v} 的标准内容`, `Replace with v${v}`);
+    case 'up_to_date':
+      return null;
+  }
+}
+
+/**
+ * components/catalog/PacksTab: 能力目录 · 能力包 (`#/govern/catalog/packs`, S11 P1-C). A **能力包**
+ * is a versioned set of components this deployment ships (Pack Contract v1, `packs/<name>/
+ * <version>/pack.yaml`; v1 components are ontology families) — a module is one with a single
+ * ontology part, so this tab replaces the 模块 tab. Members read every pack, its versions, and
+ * what this workspace has of it, per component and with the install record that put it there
+ * (`list_packs`). The owner installs or upgrades one after reviewing it (`preview_pack_install`
+ * inside the confirm: what each part changes, the versions it moves through, each
+ * authority-widening change ticked, how much data uses a type it takes out), then `install_pack`
+ * with the reviewed digest — a change since the review installs nothing and the review reloads.
+ * Each install is one 安装记录 in 安装历史 (`ChangesTab`), where it can be rolled back.
+ */
+export function PacksTab({ http, itemId, onSelectItem }: PacksTabProps) {
+  const t = useT();
+  const packs = useCapabilityList<PackWire>(http, 'list_packs', {});
+
+  // `list_packs` is reloaded in place, never dropped from the cache first: the selected pack's
+  // pane is drawn from the list, and an emptied cache would unmount it (and what it just said).
+  function refresh(): void {
+    invalidateCapability(http, 'list_change_segments');
+    invalidateCapability(http, 'get_change_segment');
+    void packs.reload();
+  }
+
+  const rows = packs.state.status === 'ready' ? packs.state.data.items : [];
+  const list =
+    packs.state.status === 'loading' ? (
+      <SkeletonRows count={3} label={t('正在加载能力包…', 'Loading packs')} />
+    ) : packs.state.status === 'error' ? (
+      <ErrorBanner
+        error={packs.state.error}
+        title={t('无法加载能力包', 'Could not load packs')}
+        onRetry={() => void packs.reload()}
+        testId="catalog-packs-error"
+      />
+    ) : (
+      <div className="stack-s" data-testid="catalog-packs">
+        <p className="text-3 text-small">
+          {t(
+            '能力包是随平台部署附带、按版本发布的一组能力（目前是本体：对象、关系和动作类型）。安装或升级之前先看它会改动什么；每次安装留下一条安装记录，可以在「安装历史」里撤销。',
+            'A pack is a versioned set of capabilities shipped with the platform (ontology today: object, link and action types). Review what it changes before installing or upgrading; each install leaves an install record you can roll back under Install history.',
+          )}
+        </p>
+        {rows.length === 0 ? (
+          <EmptyState
+            title={t('这个部署没有附带能力包', 'This deployment ships no packs')}
+            testId="catalog-packs-empty"
+          />
+        ) : (
+          <List ariaLabel={t('能力包', 'Packs')} testId="catalog-packs-list">
+            {rows.map((pack) => (
+              <ListRow
+                key={pack.name}
+                testId={`catalog-pack-row-${pack.name}`}
+                selected={pack.name === itemId}
+                onSelect={() => onSelectItem(pack.name)}
+              >
+                <span className="row-wrap" style={{ justifyContent: 'space-between' }}>
+                  <span className="mono truncate">{pack.name}</span>
+                  <StatusChip machine="packInstall" status={pack.status} size="s" />
+                </span>
+                <span className="truncate text-3">{versionLine(pack, t)}</span>
+              </ListRow>
+            ))}
+          </List>
+        )}
+      </div>
+    );
+
+  const selected = itemId !== undefined ? rows.find((pack) => pack.name === itemId) : undefined;
+  const detail =
+    itemId === undefined ? (
+      rows.length > 0 ? (
+        <EmptyState
+          title={t(
+            '选择左侧一个能力包，查看它包含什么',
+            'Select a pack on the left to see what it holds',
+          )}
+          testId="catalog-detail-empty"
+        />
+      ) : null
+    ) : packs.state.status === 'loading' ? (
+      <SkeletonRows count={3} label={t('正在加载能力包…', 'Loading pack')} />
+    ) : selected ? (
+      <PackDetail key={selected.name} http={http} pack={selected} onChanged={refresh} />
+    ) : packs.state.status === 'ready' ? (
+      <EmptyState
+        title={t('这个部署里没有这个能力包', 'This deployment has no such pack')}
+        body={t('从左侧列表重新选择。', 'Pick one from the list on the left.')}
+        testId="catalog-pack-not-found"
+      />
+    ) : null;
+
+  return (
+    <MasterDetail
+      list={list}
+      detail={detail}
+      open={itemId !== undefined}
+      onClose={() => onSelectItem(null)}
+      sheetTitle={t('能力包', 'Pack')}
+      detailTestId="catalog-detail"
+    />
+  );
+}
+
+function PackDetail({
+  http,
+  pack,
+  onChanged,
+}: {
+  readonly http: CapabilityCaller;
+  readonly pack: PackWire;
+  readonly onChanged: () => void;
+}) {
+  const t = useT();
+  // What this pane just installed: says so where the install control was (its trigger is gone).
+  const [installed, setInstalled] = useState<PackInstallResultWire | null>(null);
+  const versions = [...pack.versions].sort((a, b) => b.version - a.version);
+
+  return (
+    <div className="stack" data-testid="catalog-pack-detail">
+      <div className="row-wrap" style={{ justifyContent: 'space-between' }}>
+        <h2 className="catalog-detail-title mono wrap-anywhere" data-testid="catalog-pack-title">
+          {pack.name}
+        </h2>
+        <StatusChip machine="packInstall" status={pack.status} testId="catalog-pack-status" />
+      </div>
+      {pack.summary ? <p>{pack.summary}</p> : null}
+      <KeyValue
+        items={[
+          { key: 'installed', label: t('已装版本', 'Installed'), value: installedText(pack, t) },
+          { key: 'latest', label: t('最新版本', 'Latest'), value: `v${pack.latestVersion}` },
+        ]}
+      />
+      {pack.status === 'customized' ? (
+        <p className="text-3 text-small" data-testid="catalog-pack-customized-why">
+          {t(
+            '工作区里现在的内容和这个能力包的任何一个版本都对不上：可能只装了其中一部分，或者有内容是在能力包之外发布或改过的。下面每个组成部分各自说明是哪种情况。',
+            'What the workspace has now matches no version of this pack: only part of it may be installed, or some content was published or changed outside the pack. Each part below says which.',
+          )}
+        </p>
+      ) : null}
+
+      {installed !== null ? (
+        <output className="block">
+          <Notice testId="catalog-pack-installed">
+            {installed.segmentId !== null ? (
+              <>
+                {t(
+                  `已装上 v${installed.pack.installedVersion ?? pack.latestVersion}。这次安装留下了一条安装记录，需要时可以在那里撤销。`,
+                  `v${installed.pack.installedVersion ?? pack.latestVersion} is installed. The install left an install record, where it can be rolled back if needed.`,
+                )}{' '}
+                <RouteLink
+                  href={hrefs.catalog('changes', installed.segmentId)}
+                  testId="catalog-pack-installed-record"
+                >
+                  {t('查看安装记录', 'Open install record')}
+                </RouteLink>
+              </>
+            ) : (
+              t(
+                '工作区里已经是这一版的内容，没有改动，也没有留下安装记录。',
+                'The workspace already had this version, so nothing changed and no install record was left.',
+              )
+            )}
+          </Notice>
+        </output>
+      ) : (
+        <InstallPack
+          http={http}
+          pack={pack}
+          onInstalled={(result) => {
+            setInstalled(result);
+            onChanged();
+          }}
+          onStale={onChanged}
+        />
+      )}
+
+      <span className="section-title">{t('组成', 'Parts')}</span>
+      <div className="stack-s" data-testid="catalog-pack-components">
+        {pack.components.map((component) => (
+          <ComponentView key={component.family} component={component} />
+        ))}
+      </div>
+
+      <span className="section-title">{t('版本', 'Versions')}</span>
+      <div className="stack-s" data-testid="catalog-pack-versions">
+        {versions.map((version) => (
+          <div
+            className="stack-s"
+            key={version.version}
+            data-testid={`catalog-pack-version-${version.version}`}
+          >
+            <span className="row-wrap">
+              <span className="mono">v{version.version}</span>
+              {version.version === pack.installedVersion ? (
+                <span className="chip chip-ok chip-s">{t('已装', 'Installed')}</span>
+              ) : null}
+              {version.breaking ? (
+                <span className="chip chip-warn chip-s">{t('不兼容升级', 'Breaking')}</span>
+              ) : null}
+            </span>
+            {version.notes ? <span className="text-3 text-small">{version.notes}</span> : null}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** One part of the pack (an ontology family today): its state, and the install record that put
+ *  its current content there. No record: installed before records were kept, or published some
+ *  other way (`publish_ontology_version`); it cannot be rolled back from here. */
+function ComponentView({ component }: { readonly component: PackComponentStateWire }) {
+  const t = useT();
+  const provenance = component.provenance;
+  return (
+    <div
+      className="card card-padded stack-s"
+      data-testid={`catalog-pack-component-${component.family}`}
+    >
+      <div className="row-wrap" style={{ justifyContent: 'space-between' }}>
+        <span>
+          {t('本体 ', 'Ontology ')}
+          <span className="mono wrap-anywhere">{component.family}</span>
+        </span>
+        <StatusChip machine="packInstall" status={component.status} size="s" />
+      </div>
+      {component.installedVersion !== null ? (
+        <span className="text-3 text-small">
+          {t(
+            `内容是能力包 v${component.installedVersion} 的`,
+            `Holds the content of pack v${component.installedVersion}`,
+          )}
+        </span>
+      ) : component.status === 'customized' ? (
+        <span className="text-3 text-small">
+          {t(
+            '内容和能力包的任何一个版本都对不上，可能是在能力包之外发布或改过的',
+            'Its content matches no version of the pack; it was likely published or changed outside the pack',
+          )}
+        </span>
+      ) : null}
+      {provenance.status === 'recorded' ? (
+        <span
+          className="row-wrap text-small"
+          data-testid={`catalog-pack-provenance-${component.family}`}
+        >
+          <span>
+            {provenance.channel === 'platform'
+              ? t('创建工作区时由平台安装', 'Installed by the platform with the workspace')
+              : (provenance.appliedBy.displayName ?? shortId(provenance.appliedBy.id))}
+            {' · '}
+            <time
+              className="text-3"
+              dateTime={provenance.appliedAt}
+              title={formatDateTime(provenance.appliedAt)}
+              data-volatile=""
+            >
+              {formatRelative(provenance.appliedAt)}
+            </time>
+          </span>
+          <RouteLink
+            href={hrefs.catalog('changes', provenance.segmentId)}
+            testId={`catalog-pack-provenance-link-${component.family}`}
+          >
+            {t('查看安装记录', 'Open install record')}
+          </RouteLink>
+        </span>
+      ) : provenance.status === 'provenance_unknown' ? (
+        <span
+          className="text-3 text-small"
+          data-testid={`catalog-pack-provenance-${component.family}`}
+        >
+          {t(
+            '没有安装记录：启用安装记录之前装的，或不是从能力包装的；不能在「安装历史」里撤销',
+            'No install record: installed before records were kept, or not from a pack; it cannot be rolled back under Install history',
+          )}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+/** 「本体 ops-assets：第 1 版 → 新的一版」 — what one item does to its family. */
+function itemHeadline(item: PackInstallItemWire, t: Translate): string {
+  const family = item.target.family;
+  if (item.unchanged) {
+    return t(
+      `本体 ${family}：已经是这一版的内容，不改动`,
+      `Ontology ${family}: already this version, left as is`,
+    );
+  }
+  const before =
+    item.before === null
+      ? t('未安装', 'not installed')
+      : t(`第 ${item.before.version} 版`, `v${item.before.version}`);
+  return t(`本体 ${family}：${before} → 新的一版`, `Ontology ${family}: ${before} → a new version`);
+}
+
+/** The review's copy for a change between the review and the install: the review reloads itself,
+ *  so the next step is to look again, not to refresh. */
+const STALE_CODES = new Set(['version_changed', 'change_plan_changed']);
+
+function InstallPack({
+  http,
+  pack,
+  onInstalled,
+  onStale,
+}: {
+  readonly http: CapabilityCaller;
+  readonly pack: PackWire;
+  readonly onInstalled: (result: PackInstallResultWire) => void;
+  /** The list is out of date (a newer version, or the workspace changed since it was read). */
+  readonly onStale: () => void;
+}) {
+  const t = useT();
+  const can = useRoleCan(http);
+  const permissions = usePermissions();
+  const [open, setOpen] = useState(false);
+  // Bumped to read the review again (a change since the person looked).
+  const [round, setRound] = useState(0);
+  const [preview, setPreview] = useState<
+    | { readonly status: 'loading' }
+    | { readonly status: 'ready'; readonly data: PackInstallPreviewWire }
+    | { readonly status: 'error'; readonly error: unknown }
+  >({ status: 'loading' });
+  const [confirmed, setConfirmed] = useState<ReadonlySet<number>>(new Set());
+  // An owner-only read: run once the role is known to allow it, never on a guess.
+  const canPreview = can('preview_pack_install') === true;
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `round` only re-runs the read.
+  useEffect(() => {
+    if (!open || !canPreview) return;
+    let cancelled = false;
+    setPreview({ status: 'loading' });
+    setConfirmed(new Set());
+    http
+      .call<PackInstallPreviewWire>('preview_pack_install', { name: pack.name })
+      .then((data) => {
+        if (!cancelled) setPreview({ status: 'ready', data });
+      })
+      .catch((error: unknown) => {
+        if (isForbiddenError(error)) permissions.markDenied('preview_pack_install');
+        if (!cancelled) setPreview({ status: 'error', error });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, canPreview, http, pack.name, permissions, round]);
+
+  const label = actionLabel(pack, t);
+  if (label === null) return null;
+  if (can('install_pack') === false) {
+    return (
+      <p className="text-3 text-small" data-testid="catalog-pack-owner-only">
+        {t(
+          '安装和升级能力包由工作区所有者操作。',
+          'A workspace owner installs and upgrades packs.',
+        )}
+      </p>
+    );
+  }
+
+  const data = preview.status === 'ready' ? preview.data : null;
+  const widening = data
+    ? data.items.filter((item) => !item.unchanged && item.classification === 'authority_widening')
+    : [];
+  const unconfirmed = widening.filter((item) => !confirmed.has(item.ordinal)).length;
+  const crossed = data
+    ? data.pack.versions.filter((version) => data.crossedVersions.includes(version.version))
+    : [];
+
+  async function install(): Promise<void> {
+    if (data === null) return;
+    let result: PackInstallResultWire;
+    try {
+      result = await http.call<PackInstallResultWire>('install_pack', {
+        name: pack.name,
+        version: data.targetVersion,
+        reviewedDigest: data.digest,
+        ...(widening.length > 0 ? { confirmedOrdinals: widening.map((item) => item.ordinal) } : {}),
+      });
+    } catch (error) {
+      if (isForbiddenError(error)) permissions.markDenied('install_pack');
+      if (STALE_CODES.has(describeError(error).code)) {
+        setRound((n) => n + 1);
+        onStale();
+      }
+      throw error;
+    }
+    permissions.markAllowed('install_pack');
+    onInstalled(result);
+  }
+
+  const inUse = data?.inUse;
+  const inUseCount = (count: number) =>
+    inUse?.capped && count >= CHANGE_ROLLBACK_IN_USE_CAP
+      ? t(`至少 ${count}`, `at least ${count}`)
+      : String(count);
+  const staleText = t(
+    '在你查看之后，这个能力包有了新版本，或工作区里的内容变了，所以什么也没有安装。上面已经换成现在的样子，请重新看一遍再确认。',
+    'A newer version of this pack appeared, or what the workspace has changed, after you looked, so nothing was installed. The review above now shows how things are; look it over again before confirming.',
+  );
+
+  return (
+    <div className="stack-s" data-testid="catalog-pack-install">
+      <Confirm
+        tier="medium"
+        open={open}
+        onOpenChange={setOpen}
+        anchor={
+          <Button
+            variant="primary"
+            onClick={() => setOpen(true)}
+            data-testid="catalog-pack-install-trigger"
+          >
+            {`${label}…`}
+          </Button>
+        }
+        title={label}
+        target={`${pack.name} v${pack.latestVersion}`}
+        confirmLabel={
+          data?.pack.status === 'outdated' ? t('升级', 'Upgrade') : t('安装', 'Install')
+        }
+        danger={data !== null && (data.breaking || data.pack.status === 'customized')}
+        confirmDisabled={data === null || data.unchanged || unconfirmed > 0}
+        onConfirm={install}
+        errorOverrides={{ version_changed: staleText, change_plan_changed: staleText }}
+        testId="catalog-pack-install-confirm"
+      >
+        {preview.status === 'loading' ? (
+          <SkeletonRows count={2} label={t('正在检查会改动什么…', 'Checking what it changes')} />
+        ) : preview.status === 'error' ? (
+          <ErrorBanner
+            error={preview.error}
+            title={t('无法检查会改动什么', 'Could not check what it changes')}
+            overrides={{
+              ontology_namespace_conflict: t(
+                '这个能力包里有对象类型或动作类型的名字已经被工作区里另一个本体用了，装上会让两个本体重名，所以现在装不上，什么也没有改。「技术细节」里写着是哪个类型；占用它的本体是从能力包装上的话，可以在「安装历史」里撤销那条记录，否则请平台管理员处理。',
+                'A type name in this pack is already used by another ontology in the workspace; installing it would give the name two owners, so it cannot be installed now and nothing changed. The technical details name the type. If the ontology holding it came from a pack, roll that record back under Install history; otherwise ask a platform administrator.',
+              ),
+            }}
+            testId="catalog-pack-preview-error"
+          />
+        ) : (
+          <div className="stack-s" data-testid="catalog-pack-preview">
+            {preview.data.pack.status === 'customized' ? (
+              <Notice tone="warn" testId="catalog-pack-preview-customized">
+                {t(
+                  `工作区里现在的内容和这个能力包的任何版本都对不上（已定制）。继续会把下面每一项换成 v${preview.data.targetVersion} 的标准内容，在能力包之外做的修改会被替换；原来的本体版本仍然保留，可以在「安装历史」里撤销这次安装。`,
+                  `What the workspace has now matches no version of this pack (customized). Continuing replaces each part below with the standard content of v${preview.data.targetVersion}, so changes made outside the pack are replaced; the earlier ontology versions are kept, and this install can be rolled back under Install history.`,
+                )}
+              </Notice>
+            ) : null}
+            {preview.data.breaking ? (
+              <Notice tone="warn" testId="catalog-pack-preview-breaking">
+                {t(
+                  '这次会经过不兼容升级的版本：工作区里已有的对象或事实可能不再符合新的类型。它们会保留，不会被删除，但会被算作不符合本体。',
+                  'This goes through a breaking version: objects or Facts the workspace already holds may no longer fit the new types. They stay, nothing is deleted, but they count as not fitting the ontology.',
+                )}
+              </Notice>
+            ) : null}
+            {crossed.length > 0 ? (
+              <div className="stack-s" data-testid="catalog-pack-preview-versions">
+                <span className="text-small">
+                  {crossed.length > 1
+                    ? t(
+                        `这次会一次升到 v${preview.data.targetVersion}，经过这些版本：`,
+                        `This goes straight to v${preview.data.targetVersion}, through these versions:`,
+                      )
+                    : t(
+                        `这次会装上 v${preview.data.targetVersion}：`,
+                        `This installs v${preview.data.targetVersion}:`,
+                      )}
+                </span>
+                {crossed.map((version) => (
+                  <span className="text-3 text-small" key={version.version}>
+                    {`v${version.version}`}
+                    {version.breaking ? t('（不兼容升级）', ' (breaking)') : ''}
+                    {version.notes ? `：${version.notes}` : ''}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+            {preview.data.items.map((item) => (
+              <PreviewItem
+                key={item.ordinal}
+                item={item}
+                checked={confirmed.has(item.ordinal)}
+                onCheckedChange={(checked) =>
+                  setConfirmed((prev) => {
+                    const next = new Set(prev);
+                    if (checked) next.add(item.ordinal);
+                    else next.delete(item.ordinal);
+                    return next;
+                  })
+                }
+              />
+            ))}
+            {preview.data.inUse.objects + preview.data.inUse.links > 0 ? (
+              <Notice testId="catalog-pack-in-use">
+                {t(
+                  `工作区里有 ${inUseCount(preview.data.inUse.objects)} 个对象、${inUseCount(preview.data.inUse.links)} 条有效关系用到装好后不再有的类型。它们会保留，不会被删除，但会被算作不符合本体；之后再写入用到这些类型的关系，会按工作区的本体检查设置被拒绝或记一条告警。`,
+                  `${inUseCount(preview.data.inUse.objects)} objects and ${inUseCount(preview.data.inUse.links)} active links in this workspace use types the install takes out. They stay — nothing is deleted — but count as not fitting the ontology, and a new link written with those types is refused or flagged, as the workspace's ontology check is set.`,
+                )}
+              </Notice>
+            ) : null}
+            <StillNeeded
+              items={
+                unconfirmed > 0
+                  ? [
+                      t(
+                        `勾选 ${unconfirmed} 项权限边界确认`,
+                        `tick ${unconfirmed} authority-boundary confirmation${unconfirmed > 1 ? 's' : ''}`,
+                      ),
+                    ]
+                  : []
+              }
+              reason={
+                preview.data.unchanged
+                  ? t(
+                      '工作区里已经是这一版的内容，不需要安装',
+                      'The workspace already has this version; there is nothing to install',
+                    )
+                  : null
+              }
+              testId="catalog-pack-missing"
+            />
+          </div>
+        )}
+      </Confirm>
+    </div>
+  );
+}
+
+function PreviewItem({
+  item,
+  checked,
+  onCheckedChange,
+}: {
+  readonly item: PackInstallItemWire;
+  readonly checked: boolean;
+  readonly onCheckedChange: (checked: boolean) => void;
+}) {
+  const t = useT();
+  const added = typeNamesText(item.types.added, t);
+  const removed = typeNamesText(item.types.removed, t);
+  const changed = typeNamesText(item.types.changed, t);
+  return (
+    <div className="stack-s" data-testid={`catalog-pack-item-${item.ordinal}`}>
+      <span>{itemHeadline(item, t)}</span>
+      {item.unchanged ? null : (
+        <>
+          {added ? (
+            <span className="text-3 text-small">
+              {t('新增：', 'Adds: ')}
+              {added}
+            </span>
+          ) : null}
+          {changed ? (
+            <span className="text-3 text-small">
+              {t('修改：', 'Changes: ')}
+              {changed}
+            </span>
+          ) : null}
+          {removed ? (
+            <span className="text-3 text-small">
+              {t('装好后不再有：', 'Afterwards no longer has: ')}
+              {removed}
+            </span>
+          ) : null}
+          {item.classification === 'authority_widening' ? (
+            <label className="checkbox">
+              <input
+                type="checkbox"
+                checked={checked}
+                onChange={(event) => onCheckedChange(event.currentTarget.checked)}
+                data-testid={`catalog-pack-confirm-item-${item.ordinal}`}
+              />
+              <span>
+                {t('我确认这会改变权限边界：', 'I confirm this moves an authority boundary: ')}
+                {item.widening.map((w) => wideningText(w, t)).join(t('；', '; '))}
+              </span>
+            </label>
+          ) : null}
+        </>
+      )}
+    </div>
+  );
+}

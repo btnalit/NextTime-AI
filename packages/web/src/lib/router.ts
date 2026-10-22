@@ -45,7 +45,10 @@ export const CATALOG_TAB_VALUES = [
   'skills',
   'procedures',
   'workers',
-  'modules',
+  // S11 P1-C: 能力包 — the capability packs this deployment ships (`list_packs`), each reviewed
+  // before it is installed; the item route is a pack's name. It replaces the 模块 tab (a module is a
+  // pack with one ontology part): `#/govern/catalog/modules` still opens it (`LEGACY_CATALOG_TABS`).
+  'packs',
   // S11 P1-B: 安装历史 — the workspace's install records (`list_change_segments`); the item route
   // is a record's id.
   'changes',
@@ -88,6 +91,9 @@ export type Route =
 function isCatalogTab(value: string | undefined): value is CatalogTab {
   return value !== undefined && (CATALOG_TAB_VALUES as readonly string[]).includes(value);
 }
+
+/** Catalog tabs that were renamed, so a bookmark or a link written before still lands. */
+const LEGACY_CATALOG_TABS: Readonly<Record<string, CatalogTab>> = { modules: 'packs' };
 
 /** Unmatched/unknown hashes (including a stale `#/login` while already signed in, and every pre-
  *  S3.14 `#/chats`-style hash a bookmark might still carry) fall back to the default work view —
@@ -140,7 +146,11 @@ export function routeFromHash(fullHash: string): Route {
   // still works.
   const catalog = /^#\/govern\/catalog(?:\/([^/]+)(?:\/(.+))?)?$/.exec(hash);
   if (catalog) {
-    const tab = catalog[1] ? decodeURIComponent(catalog[1]) : undefined;
+    const named = catalog[1] ? decodeURIComponent(catalog[1]) : undefined;
+    const tab =
+      named !== undefined && Object.hasOwn(LEGACY_CATALOG_TABS, named)
+        ? LEGACY_CATALOG_TABS[named]
+        : named;
     const itemId = catalog[2] ? decodeURIComponent(catalog[2]) : undefined;
     return {
       kind: 'catalog',

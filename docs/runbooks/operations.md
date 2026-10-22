@@ -623,81 +623,109 @@ cap platform_status | jq '{health, backup, llmUsage30d}'
 | `platform_status.backup.status` 是 `stale` | 超过 26 小时没有成功的备份 | `docker compose logs backup`；在检出目录跑 `sh scripts/check-backup-freshness.sh` 看是哪一项 FAIL（`backup-restore.md`） |
 | `platform_status.backup.status` 是 `unknown` | 看 `detail`：`no backup marker`（还没成功过一次，或内核容器是 D-28 之前建的、没有这个挂载）/ `not readable`（主机文件不是 0644）/ `is a directory`（文件不存在时内核先起来了，Docker 在那里建了目录）/ `no timestamp= line`（空标记：还没成功过一次） | 依次：等下一次 `BACKUP_TIME` 或手动跑一次备份；`docker compose up -d kernel` 重建内核；`backup-restore.md`「备份状态（控制台）」一节的修复步骤 |
 
-## 14. 模块管理（P-B2b）
+## 14. 能力包与模块管理（P-B2b → S11 P1-C）
 
-`docs/platform-admin-design.md` §6.4；`docs/development-tasks.md` §5d S7-D。**模块 = 一个版本化的
-领域包**——`ontology/<pack>-v<N>.yaml`（`add-domain-pack.md` 讲的同一种文件），外加 `ontology/modules.yaml`
-这一份索引给它的每个版本记一行 `{file, version, notes, breaking}`。平台页「模块」（`#/platform/modules`，
-仅管理员）按这份索引列出本部署带的模块、装到了几个工作区、哪些工作区有新版可用，并设「默认模块」
-（新建工作区自动装哪些）；工作区 owner 在自己的「能力目录 → 模块」标签页里装 / 升级。
+`docs/platform-admin-design.md` §6.4；`docs/development-tasks.md` §5d S7-D；S11 P1-C（Pack Contract v1，
+`docs/s10-evolution-plan-2026-10-04.md` §6）。**能力包 = 一组按版本发布的组成部分**：每个版本一份清单
+`packs/<name>/<version>/pack.yaml`（`schema: 1`、`name`、`version`、`summary`、`notes`、`breaking`、
+`components.ontology: [{family, domainPack}]`），v1 的组成部分只有本体——每项把 `ontology/<domainPack>`
+（`add-domain-pack.md` 讲的同一种文件）发布进本体族 `family`。字段与规则的唯一定义在
+`packages/kernel/src/application/packs/manifest.ts`（单份清单）与 `registry.ts`（目录布局与跨清单规则）：
+目录名就是包名和版本号，清单里的 `name` / `version` 必须与目录一致；版本号从 1 连续；一个本体族只属于一个包；
+某个版本发布的族，之后每个版本都必须继续带着它。**模块 = 每个版本都只有一个本体组成部分、且族名等于包名的
+能力包**（不再有单独的 `ontology/modules.yaml` 索引）。
+
+- 平台页「模块」（`#/platform/modules`，仅管理员）列出本部署带的模块、装到了几个工作区、哪些工作区有新版可用，
+  并设「默认模块」（新建工作区自动装哪些）。
+- 工作区 owner 在「能力目录 → 能力包」页签（`#/govern/catalog/packs`；旧链接 `#/govern/catalog/modules`
+  仍落到这里）安装 / 升级：先在确认框里审阅（`preview_pack_install`：每个本体新增、修改、去掉哪些类型，经过
+  哪些版本、有没有不兼容升级，工作区里有多少对象 / 关系用到要去掉的类型），会改变权限边界的项逐项勾选后，
+  `install_pack` 带着审阅过的摘要（`reviewedDigest`）安装；审阅之后内容或工作区变了一律不装（409
+  `version_changed` / `change_plan_changed`），确认框自动换成现在的样子。每次安装是「安装历史」里的一条
+  安装记录，可以整条撤销。
 
 **这与 `add-domain-pack.md` 的关系**：那份手册讲的 `seed-domain-pack` CLI（主机 `config/ontology/`，
-`DOMAIN_PACK_DIR`）是操作员手动往**某一个**工作区塞一个领域包的旁路，不经过 `ontology/modules.yaml` 这份索引，
-控制台的「模块」页也看不到它（除非它恰好按哈希匹配上索引里的某个版本，见下）。凡是要出现在「模块」页、
-能被 owner 在控制台里点「安装 / 升级」的领域包，都必须走本节——进 `ontology/modules.yaml` 并随镜像发布。
+`DOMAIN_PACK_DIR`）是操作员手动往**某一个**工作区塞一个领域包的旁路，不经过 `packs/`，也不留安装记录；
+控制台「能力包」页只会按哈希认出它（对上某个包版本就显示那个版本，对不上就是「已定制」，见下）。凡是要让
+owner 在控制台里审阅后「安装 / 升级」的内容，都必须走本节——进 `packs/` 并随镜像发布。
 
-**"已安装版本" 怎么判定**：内核不存哈希，每次调用都现算——对索引里每个版本的文件跑与发布时相同的
-`parseOntologyDefinition`，键排序规范化后 sha256；工作区当前发布的定义算出的哈希，能对上索引里哪个版本就是
-哪个版本，对不上算「已定制」。这意味着**改一个版本号对应的文件内容，等价于让所有已装这个版本的工作区
-立刻变成「已定制」**——不要这样做；要改内容，发布成新版本号。
+**"已安装版本" 怎么判定**：内核不存安装状态，每次调用都现算——每个组成部分：把各版本里该族的定义文件按
+发布时相同的解析路径读出，规范化 JSON 后 sha256（`contentDigest`，`sha256:` 前缀），与工作区该族当前发布的
+定义比；整个包：一个版本的所有族都对上（该版本还没有的族必须在工作区里也没有）才算装的是这个版本。对上最新版
+是「已是最新」，对上更早的是「有新版」，都对不上是「已定制」（只装了一部分，或在能力包之外发布 / 改过）。
+这意味着**改一个已发布版本对应的文件内容，等价于让所有装着这个版本的工作区立刻变成「已定制」**——不要这样做；
+要改内容，发布成新版本。
 
-**两套版本号，不要混用**：`ontology_versions.version` 是每个工作区自己的发布计数（每 `publish` 一次 +1，
-同内容重复发布也占号），和 `modules.yaml` 里模块自己的版本号是两回事——控制台「已装版本」显示的永远是
-按哈希匹配到的**索引**版本号（对不上任何索引版本就是「已定制」，不显示数字）。`install_module`/
-`upgrade_module` 都是**直接发布到最新索引版本**（一次调用一次发布，不会先装 v1 再一级一级升级）；从当前
-已装版本到最新版本之间只要有一个 `breaking: true`，不管是不是最新版本本身，都需要 `confirm: true`。
+**两套版本号，不要混用**：`ontology_versions.version` 是每个工作区里每个本体族自己的发布计数（每发布一次 +1，
+同内容重复发布也占号），和能力包自己的版本号是两回事——控制台「已装版本」显示的永远是按哈希匹配到的**包**版本号。
+安装 / 升级都是**直接发布到最新版本**（一次安装一次发布，不会先装 v1 再一级一级升级）；跨过的版本里有
+`breaking: true`，或工作区当前「已定制」，审阅框会明说，审阅过的摘要就是确认。API 上的 `install_module` /
+`upgrade_module` 保持原样：仍按最新版本安装、仍要 `confirm: true`，会改变权限边界的版本它们不装（400
+`change_confirmation_required`，改用 `install_pack`）。
 
-### 14.1 加一个模块的新版本
+### 14.1 加一个能力包的新版本
 
 ```bash
-# 1. 写新版本文件（identityKey / linkType domain-range 等，见 add-domain-pack.md §2）
+# 1. 写新版本的本体文件（identityKey / linkType domain-range 等，见 add-domain-pack.md §2）
 cp <pack>-v3.yaml ontology/<pack>-v3.yaml
 
-# 2. 在 ontology/modules.yaml 给这个 family 追加一行（版本号紧接上一个，不建议跳号——
-#    install_module/upgrade_module 总是直接发布到最新版本，不逐级走，跳号本身不影响功能，
-#    只是容易让人误以为中间版本被撤回了）
-#    - file: <pack>-v3.yaml
-#      version: 3
-#      notes: 这版加了什么、owner 升级前要注意什么
-#      breaking: true   # 已有的 ObjectType/LinkType 形状变了，旧 Fact/Link 不一定还满足，
-#                        # owner 从任何早于这版的已装版本升级到（或跨过）这版都需要 confirm；
-#                        # 新增内容不影响旧数据就填 false
+# 2. 写这一版的清单：目录名就是版本号，紧接上一个（不能跳号，加载时会报错）
+mkdir -p packs/<pack>/3
+cat > packs/<pack>/3/pack.yaml <<'YAML'
+schema: 1
+name: <pack>
+version: 3
+summary: 这个包是什么（一句话，列表里显示最新版本的）
+notes: 这版加了什么、owner 升级前要注意什么
+breaking: true   # 已有的 ObjectType/LinkType 形状变了，旧 Fact/Link 不一定还满足；纯新增填 false
+components:
+  ontology:
+    - family: <pack>
+      domainPack: <pack>-v3.yaml
+YAML
 
-# 3. 重建并滚动 kernel（镜像内 ontology/ 是这两个文件的唯一来源，DOMAIN_PACK_DIR 无关）
+# 3. 本机校验整个 packs/（加载真实目录，不需要数据库）
+pnpm --filter @nexttime/kernel exec vitest run src/application/packs/registry.test.ts src/application/platform/modules.test.ts
+
+# 4. 重建并滚动 kernel（镜像里的 /app/packs（PACKS_DIR）与 ontology/ 是唯一来源，DOMAIN_PACK_DIR 无关）
 docker compose build kernel
 docker compose up -d kernel   # 无新迁移；等 healthy（§4.1）
 ```
 
-不重建 kernel 的后果：`list_modules` / `list_workspace_modules` 仍按旧镜像里的 `ontology/` 回答，新版本对
-控制台不可见，`install_module`/`upgrade_module` 目标该版本会 404 `module_not_found`。
+不重建 kernel 的后果：`list_packs` / `list_modules` / `list_workspace_modules` 仍按旧镜像里的 `packs/` 回答，
+新版本对控制台不可见，安装仍只会装到旧镜像里的最新版本。
 
-**首次给一个全新 family 建模块**：`ontology/modules.yaml` 加一条 `name` 全新的条目，`versions` 只有一条
-`version: 1`（`breaking` 随意——D3：v1 永远不需要 confirm，没有更早的版本可破坏）；同上重建 kernel。
+**首次建一个全新能力包**：`packs/<name>/1/pack.yaml`，`name` 全新（小写字母开头，小写字母和数字，用 `-` 连接），它的本体族不能已经
+属于别的包；`breaking` 随意——v1 没有更早的版本可破坏，审阅时也不会按不兼容升级提示。同上重建 kernel。
+包名与族名相同、且每个版本只有这一个本体时，它同时是一个模块（出现在平台页「模块」，可设为默认模块）。
 
 ### 14.2 设默认模块
 
 平台页「模块」每行一个「默认安装」勾选框，勾上即调用 `set_default_modules`（立即生效，仅对**之后新建**的
-工作区）——`create_workspace` 在同一事务里以新 owner Principal 把每个默认模块装到它**当前的最新索引版本**
-（先例见 `create.ts` `seedPlatformMetaOntology` 那段）。已存在的工作区不受影响，也没有批量补装的入口——
-owner 自己在能力目录里点。
+工作区）——`create_workspace` 在同一事务里以新 owner Principal 把每个默认模块装到它**当前的最新版本**
+（先例见 `create.ts` `seedPlatformMetaOntology` 那段），记成平台代为安装的安装记录。已存在的工作区不受影响，
+也没有批量补装的入口——owner 自己在能力目录里装。
 
 ### 14.3 验证
 
 ```bash
-# 1. 索引与哈希对得上（本机跑单测，不需要数据库）
-pnpm --filter @nexttime/kernel exec vitest run src/application/platform/modules.test.ts
+# 1. packs/ 与哈希对得上（本机跑单测，不需要数据库）
+pnpm --filter @nexttime/kernel exec vitest run src/application/packs/registry.test.ts src/application/platform/modules.test.ts
 
-# 2. 控制台：平台页「模块」能看到新版本 + notes + breaking 标记；某工作区的能力目录「模块」标签页
-#    显示「有新版」，点升级：非 breaking 直接过，breaking 或该工作区「已定制」会先弹确认（ConfirmTier）
+# 2. 控制台：平台页「模块」能看到新版本 + notes + breaking 标记；某工作区「能力目录 → 能力包」里这个包
+#    显示「有新版」，点「升级到 vN…」：确认框列出经过的版本、每个本体的类型变化；有不兼容升级或「已定制」
+#    会黄字提示，有改变权限边界的项要逐项勾选后才能升级；装好后「查看安装记录」打开安装历史里的这一条
 ```
 
 ### 14.4 常见问题
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
-| 新版本在「模块」页看不到 | 没重建 kernel（镜像内 `ontology/` 才是来源），或 `modules.yaml` 版本号跳号（校验会在 `list_modules` 时抛 `ModuleIndexParseError`，模块整体从列表消失） | `docker compose build kernel && docker compose up -d kernel`；检查 `modules.yaml` 该 family 的 `version` 是否从 1 连续 |
-| `install_module`/`upgrade_module` 返回 400 `module_confirm_required` | 该工作区当前是「已定制」，或从当前已装版本到最新版本之间（含最新版本本身）存在 `breaking: true` 的版本——升级会直接跳到最新版本，中间跨过的 breaking 版本也算 | 页面会弹确认（notes / 当前状态 / 目标版本），带 `confirm: true` 重试；CLI/脚本同理自己带上 `confirm: true` |
-| 升级后版本号（`installedVersion`）没变 | 目标（最新）版本文件内容与当前已装内容完全一致（哈希相同）——D3 的去重，`ontology_versions` 不新增一行 | 预期行为，不是 bug；要真正推进，改文件内容后发布成新的索引版本 |
+| 新版本在「能力包」页 / 「模块」页看不到 | 没重建 kernel（镜像里的 `packs/` 与 `ontology/` 才是来源） | `docker compose build kernel && docker compose up -d kernel` |
+| 「能力包」页、「模块」页都报「内核出错」，设了默认模块时新建工作区也失败 | `packs/` 整体校验不过（清单字段错、版本跳号、目录名与清单不一致、一个族出现在两个包、后一版丢了前一版的族、`domainPack` 文件不存在）——整份注册表一起拒绝，不会半装 | 内核日志里有具体是哪个文件哪条规则；修正后按 §14.1 第 3 步本机校验再重建。仓库里的 `packs/` 由 CI 的同一组测试把关，正常发布的镜像不会出现 |
+| `install_module`/`upgrade_module` 返回 400 `module_confirm_required` | 该工作区当前是「已定制」，或从当前已装版本到最新版本之间（含最新版本本身）存在 `breaking: true` 的版本 | 控制台走「能力包」页的审阅即可；CLI/脚本自己带上 `confirm: true` 重试 |
+| `install_module`/`upgrade_module` 返回 400 `change_confirmation_required` | 这一版会改变权限边界（例如新增、去掉或放宽动作类型），要逐项确认，这两个能力做不到 | 改用控制台「能力包」页（或 `preview_pack_install` + `install_pack` 带 `confirmedOrdinals`）；只有人能确认，服务账号带确认会 403 |
+| 升级后版本号（`installedVersion`）没变 | 目标（最新）版本文件内容与当前已装内容完全一致（哈希相同），不新增 `ontology_versions` 行，也不留安装记录 | 预期行为，不是 bug；要真正推进，改文件内容后发布成新版本 |
 | 一个工作区显示「已定制」 | 有人绕过 `install_module`/`upgrade_module`，直接用 `propose_ontology_change`/`publish_ontology_version` 发到了这个模块 family 的 id（`deriveOntologyPackId(name)`），或同一索引版本的内容被重复发布导致 `ontology_versions.version`（DB 发布计数）与索引版本号不再一一对应——两者本来就是两套编号，见 §14 开头 | 预期能检测到的情况，不是错误；「已装版本」显示的是按哈希匹配到的**索引**版本（匹配不上就是 `null`/已定制），不是 `ontology_versions` 的行号；owner 升级时会被要求 confirm |
 
 ## 15. 平台默认入口模型（P-D 剩余 E5）

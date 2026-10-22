@@ -7,11 +7,12 @@ import { loginWithPassword, reachLoginForm } from './auth-helpers.js';
  * checked-in `ops-assets` module, an administrator creates a second workspace (owned by
  * themselves — this file needs no separate owner login, unlike `workspaces.spec.ts`'s P-A2
  * delegation flow, which this one does not re-test), and installs `ops-assets` into it from the
- * workspace's own 能力目录 模块 tab: not installed → v2 (the family's latest indexed version, one
- * click — `install_module` always targets the latest directly, never v1 first); the platform 模块
- * page's own "installed in n workspaces" count reflects it afterward. S11 P1-B: the 模块 tab's
- * 安装记录 column then opens the install record in 安装历史, whose 撤销 rolls the install back
- * (preview inside the confirm first) and the module reads 未安装 again.
+ * workspace's own 能力目录 (S11 P1-C: the 能力包 tab, which replaced the 模块 tab — a module is a
+ * pack with one ontology part): not installed → v2 (the pack's latest version, reviewed in the
+ * install confirm first — `install_pack` always targets the latest directly, never v1 first); the
+ * platform 模块 page's own "installed in n workspaces" count reflects it afterward. S11 P1-B: the
+ * part's 查看安装记录 link then opens the install record in 安装历史, whose 撤销 rolls the install
+ * back (preview inside the confirm first) and the pack reads 未安装 again.
  *
  * Both scenarios run as **one** `test()` (not split further): Playwright gives every `test()` a
  * fresh browser context (no persisted cookies, no persisted `session.memberships` client state)
@@ -148,11 +149,10 @@ test.describe('P-B2b acceptance: platform modules page, install ops-assets into 
     await detailDrawer.getByTestId('open-workspace-config').click();
     await expect(page.getByTestId('nav-catalog')).toBeVisible({ timeout: 15_000 });
 
-    // --- workspace catalog 模块 tab: not installed → v2 (the latest, one click) --------------
-    // `install_module` always targets a module's own **latest** indexed version directly (one
-    // publish, never stepping through v1 first) — see `application/platform/modules.ts`'s own
-    // module doc comment. ops-assets' two versions are both non-breaking, so a fresh install needs
-    // no confirm either way.
+    // --- workspace catalog 能力包 tab: not installed → v2 (the latest), reviewed first ---------
+    // `install_pack` always targets a pack's own **latest** version directly (one publish, never
+    // stepping through v1 first) — see `application/packs/install.ts`. ops-assets v2 declares no
+    // action type, so its review has no authority-boundary change to tick.
     //
     // Sidebar click + tab click (both client-side hash navigation, `lib/router.ts`'s `navigate`)
     // — never `page.goto` here: a full reload re-mounts the session from `GET /api/auth/me`,
@@ -160,19 +160,28 @@ test.describe('P-B2b acceptance: platform modules page, install ops-assets into 
     // has 2+ memberships, so the "auto-select the only one" rule this file's own comment on
     // `signInAsAdmin` relies on no longer applies once B exists).
     await page.getByTestId('nav-catalog').click();
-    // S8 W1-A10: the catalog tab label is bilingual now; default zh-CN renders '模块'.
-    await page.getByRole('tab', { name: '模块' }).click();
-    const catalogTable = page.getByTestId('catalog-modules-table');
-    await expect(catalogTable).toBeVisible({ timeout: 15_000 });
-
-    const catalogRow = page.getByTestId('catalog-module-row-ops-assets');
+    // S8 W1-A10: the catalog tab label is bilingual now; default zh-CN renders '能力包'.
+    await page.getByRole('tab', { name: '能力包' }).click();
+    const catalogRow = page.getByTestId('catalog-pack-row-ops-assets');
     await expect(catalogRow).toBeVisible({ timeout: 15_000 });
-    // S8 W1-A10: the status cell is bilingual now (t(zh, en)); default zh-CN renders one language.
+    // S8 W1-A10: the status chip is bilingual (t(zh, en)); default zh-CN renders one language.
     await expect(catalogRow).toContainText('未安装');
 
-    await catalogRow.getByTestId('catalog-module-action-ops-assets').click();
-    await expect(catalogRow).toContainText('已是最新', { timeout: 15_000 });
-    await expect(catalogRow.locator('td').nth(2)).toHaveText('v2');
+    await catalogRow.click();
+    const packDetail = page.getByTestId('catalog-pack-detail');
+    await expect(packDetail).toBeVisible({ timeout: 15_000 });
+    await packDetail.getByTestId('catalog-pack-install-trigger').click();
+    const installConfirm = page.getByTestId('catalog-pack-install-confirm');
+    const review = installConfirm.getByTestId('catalog-pack-preview');
+    await expect(review).toBeVisible({ timeout: 15_000 });
+    await expect(review.getByTestId('catalog-pack-item-1')).toContainText('未安装 → 新的一版');
+    await installConfirm.getByRole('button', { name: '安装', exact: true }).click();
+    await expect(packDetail.getByTestId('catalog-pack-installed')).toContainText('已装上 v2', {
+      timeout: 15_000,
+    });
+    await expect(packDetail.getByTestId('catalog-pack-status')).toHaveText('已是最新', {
+      timeout: 15_000,
+    });
 
     // --- back on the platform 模块 page: installed-in count went up by one -----------------
     await page.getByTestId('nav-platformModules').click();
@@ -191,12 +200,13 @@ test.describe('P-B2b acceptance: platform modules page, install ops-assets into 
     // --- S11 P1-B: the install left an install record; roll it back from 安装历史 ----------
     // Same client-side navigation as above: the govern sidebar stays while workspace B is in scope.
     await page.getByTestId('nav-catalog').click();
-    await page.getByRole('tab', { name: '模块' }).click();
-    const provenanceLink = page.getByTestId('catalog-module-provenance-link-ops-assets');
+    await page.getByRole('tab', { name: '能力包' }).click();
+    await page.getByTestId('catalog-pack-row-ops-assets').click();
+    const provenanceLink = page.getByTestId('catalog-pack-provenance-link-ops-assets');
     await expect(provenanceLink).toBeVisible({ timeout: 15_000 });
     await provenanceLink.click();
     const recordDetail = page.getByTestId('catalog-change-detail');
-    await expect(recordDetail).toContainText('模块 ops-assets v2', { timeout: 15_000 });
+    await expect(recordDetail).toContainText('能力包 ops-assets v2', { timeout: 15_000 });
     await expect(recordDetail.getByTestId('catalog-change-status')).toHaveText('已应用');
 
     await recordDetail.getByTestId('catalog-change-rollback-trigger').click();
@@ -210,8 +220,8 @@ test.describe('P-B2b acceptance: platform modules page, install ops-assets into 
     });
     await expect(page.getByTestId('catalog-change-rolled-back')).toBeVisible();
 
-    await page.getByRole('tab', { name: '模块' }).click();
-    await expect(page.getByTestId('catalog-module-row-ops-assets')).toContainText('未安装', {
+    await page.getByRole('tab', { name: '能力包' }).click();
+    await expect(page.getByTestId('catalog-pack-row-ops-assets')).toContainText('未安装', {
       timeout: 15_000,
     });
   });

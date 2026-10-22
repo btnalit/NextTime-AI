@@ -135,7 +135,7 @@ describe('CatalogPage', () => {
     renderPage(http);
     await waitFor(() => expect(http.calls.some((c) => c.name === 'list_operations')).toBe(true));
     // S8 W1-A10: the tab label is bilingual now (default zh-CN keeps Operation/Skill/Procedure/
-    // Worker as English proper nouns — only Modules has an established zh term, '模块').
+    // Worker as English proper nouns — 流程, 能力包 and 安装历史 are zh terms).
     expect(screen.getByRole('tab', { name: 'Operation' }).getAttribute('aria-selected')).toBe(
       'true',
     );

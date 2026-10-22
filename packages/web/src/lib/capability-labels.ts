@@ -1182,13 +1182,36 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '把已安装的模块直接升到最新版本。',
     enHint: 'Advances an installed module straight to its latest version.',
   },
+  // S11 P1-C: 能力目录 · 能力包 (a module is a pack with one ontology part).
+  list_packs: {
+    zh: '查看能力包',
+    en: 'List packs',
+    zhHint: '列出本部署附带的能力包、各版本，以及本工作区装了哪一版、每部分由哪条安装记录装上。',
+    enHint:
+      'Lists the packs this deployment ships, their versions, which version this workspace has, and the install record behind each part.',
+  },
+  preview_pack_install: {
+    zh: '预览安装能力包',
+    en: 'Preview installing a pack',
+    zhHint:
+      '安装之前先看每部分会新增、修改、去掉哪些类型，会经过哪些版本，哪些改动会改变权限边界；不写入任何内容。',
+    enHint:
+      'Before installing, shows which types each part adds, changes or takes out, the versions it moves through, and which changes move an authority boundary; writes nothing.',
+  },
+  install_pack: {
+    zh: '安装能力包',
+    en: 'Install pack',
+    zhHint: '按审阅过的内容把能力包的最新版本装进本工作区，留下一条安装记录。',
+    enHint:
+      "Installs the pack's latest version into this workspace as reviewed, leaving an install record.",
+  },
   // S11 P1-B: 能力目录 · 安装历史.
   list_change_segments: {
     zh: '查看安装历史',
     en: 'List install history',
-    zhHint: '列出本工作区每次安装或升级模块留下的安装记录，最新的在前。',
+    zhHint: '列出本工作区每次安装或升级能力包留下的安装记录，最新的在前。',
     enHint:
-      'Lists the install records each module install or upgrade left in this workspace, newest first.',
+      'Lists the install records each pack install or upgrade left in this workspace, newest first.',
   },
   get_change_segment: {
     zh: '查看安装记录',
@@ -1395,15 +1418,15 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '写入的关系不符合本体约束，被拒绝或告警。',
     enHint: 'A link write did not fit the ontology; it was refused or flagged.',
   },
-  // UX acceptance of #650 (P3-1/P3-2): named as 能力目录 · 安装历史 names them — each module install
+  // UX acceptance of #650 (P3-1/P3-2): named as 能力目录 · 安装历史 names them — each pack install
   // or upgrade is one 安装记录, each thing it changed one 改动项.
   'change_item.apply': {
     zh: '改动项已写入',
     en: 'Change written',
     zhHint:
-      '安装或升级模块时，安装记录里的一项改动已写入（如发布的本体版本），记下来源、前后版本和确认人。在「能力目录 · 安装历史」里查看。',
+      '安装或升级能力包时，安装记录里的一项改动已写入（如发布的本体版本），记下来源、前后版本和确认人。在「能力目录 · 安装历史」里查看。',
     enHint:
-      'A change of an install record was written when a module was installed or upgraded (such as the ontology version it published), with its source, before / after and who confirmed it. See Catalog · Install history.',
+      'A change of an install record was written when a pack was installed or upgraded (such as the ontology version it published), with its source, before / after and who confirmed it. See Catalog · Install history.',
   },
   'change_item.roll_back': {
     zh: '改动项已撤销',

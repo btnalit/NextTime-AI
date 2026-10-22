@@ -27,8 +27,9 @@ export interface PlatformModulesPageProps {
  *
  * Installing/upgrading a module *into* a workspace is not here — design §6.4 "平台页只展示与配置...
  * 跳到工作区能力目录": that action needs a Principal (P-B2 决定 ①, owner-only), which the platform
- * plane does not have. This page only counts and configures; `components/catalog/ModulesTab.tsx`
- * (the owner's 能力目录 模块 tab) is where a workspace actually installs one.
+ * plane does not have. This page only counts and configures; `components/catalog/PacksTab.tsx`
+ * (the owner's 能力目录 能力包 tab, S11 P1-C — a module is a pack with one ontology part) is where
+ * a workspace actually installs one.
  */
 export function PlatformModulesPage({ http }: PlatformModulesPageProps) {
   const t = useT();
@@ -111,8 +112,8 @@ export function PlatformModulesPage({ http }: PlatformModulesPageProps) {
       <PageHeader
         title={t('模块', 'Modules')}
         description={t(
-          '随镜像发布的版本化领域包——本部署带哪些模块、装到了几个工作区、哪些工作区有新版可用，以及新建工作区默认安装哪些。',
-          "Versioned domain packs shipped with this deployment: what's available, how many workspaces have each installed, and which install by default into a new workspace.",
+          '随镜像发布的版本化领域包——本部署带哪些模块、装到了几个工作区、哪些工作区有新版可用，以及新建工作区默认安装哪些。模块是只含一个本体的能力包，工作区所有者在「能力目录 · 能力包」里安装和升级。',
+          "Versioned domain packs shipped with this deployment: what's available, how many workspaces have each installed, and which install by default into a new workspace. A module is a pack with one ontology; workspace owners install and upgrade it under Catalog · Packs.",
         )}
         breadcrumb={breadcrumbFor('platformModules')}
       />

@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { useT } from '../../lib/i18n.js';
-import { ChangesTab, removedText, wideningText } from './ChangesTab.js';
+import { ChangesTab, typeNamesText, wideningText } from './ChangesTab.js';
 
 afterEach(cleanup);
 
@@ -150,19 +150,19 @@ describe('ChangesTab (能力目录 · 安装历史, S11 P1-B)', () => {
     renderTab(http);
 
     const row = await screen.findByTestId(`catalog-change-row-${FIRST}`);
-    expect(row.textContent).toMatch(/模块 ops-assets v2/);
+    expect(row.textContent).toMatch(/能力包 ops-assets v2/);
     expect(row.textContent).toContain('创建工作区时由平台安装');
     fireEvent.click(row);
 
     const pane = await screen.findByTestId('catalog-change-detail');
     expect(within(pane).getByTestId('catalog-change-title').textContent).toMatch(
-      /^模块 ops-assets v2$/,
+      /^能力包 ops-assets v2$/,
     );
     expect(pane.textContent).toContain('记在第一位所有者 Owner 名下');
     const item = within(pane).getByTestId('catalog-change-item-1');
-    // The ontology version is numbered apart from the module's, and says so.
+    // The ontology version is numbered apart from the pack's, and says so.
     expect(item.textContent).toContain(
-      '模块 v2 带来的本体版本（与模块版本分开编号）：未安装 → 第 1 版',
+      '能力包 v2 带来的本体版本（与能力包版本分开编号）：未安装 → 第 1 版',
     );
     expect(item.textContent).toContain('已被后来的改动替换');
     const replaced = within(pane).getByTestId('catalog-change-item-1-replaced');
@@ -272,7 +272,7 @@ describe('ChangesTab (能力目录 · 安装历史, S11 P1-B)', () => {
     });
     renderTab(http);
     expect((await screen.findByTestId('catalog-changes-empty')).textContent).toContain(
-      '在「模块」页签安装或升级一个模块后',
+      '在「能力包」页签安装或升级一个能力包后',
     );
   });
 });
@@ -295,12 +295,12 @@ describe('wideningText', () => {
   });
 });
 
-describe('removedText', () => {
+describe('typeNamesText', () => {
   function Sample({ objectTypes }: { objectTypes: string[] }) {
     const t = useT();
     return (
       <span data-testid="r">
-        {removedText({ objectTypes, linkTypes: ['runs_on'], actionTypes: [] }, t)}
+        {typeNamesText({ objectTypes, linkTypes: ['runs_on'], actionTypes: [] }, t)}
       </span>
     );
   }
