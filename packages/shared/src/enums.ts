@@ -607,6 +607,22 @@ export const ONTOLOGY_PROVENANCE_STATUS_VALUES = [
 export type OntologyProvenanceStatus = (typeof ONTOLOGY_PROVENANCE_STATUS_VALUES)[number];
 export const OntologyProvenanceStatusSchema = asEnum(ONTOLOGY_PROVENANCE_STATUS_VALUES);
 
+/**
+ * What a workspace has of a pack, or of one of its components (S11 P1-C, Pack Contract v1; derived
+ * from each component's current content, never stored): `not_installed` — nothing; `up_to_date` —
+ * the latest version's content; `outdated` — an older version's; `customized` — content no version
+ * of the pack has (published outside it, or only part of a version). The same four as a module's
+ * (`ModuleInstallStatusWireSchema`, a module being a pack with one component).
+ */
+export const PACK_INSTALL_STATUS_VALUES = [
+  'not_installed',
+  'up_to_date',
+  'outdated',
+  'customized',
+] as const;
+export type PackInstallStatus = (typeof PACK_INSTALL_STATUS_VALUES)[number];
+export const PackInstallStatusSchema = asEnum(PACK_INSTALL_STATUS_VALUES);
+
 // ---------------------------------------------------------------------------------------------
 // §5.5 Publishable lifecycle (OntologyVersion / WorkerDefinition / Skill / Procedure / Manifest)
 // ---------------------------------------------------------------------------------------------

@@ -58,6 +58,9 @@ export interface CreateWorkspaceInput {
    *  transaction, before this bootstrap runs) can name the workspace. */
   readonly workspaceId?: string;
   readonly ontologyDir?: string;
+  /** Where the packs `defaultModules` name are read (`application/packs`; default
+   *  `resolvePacksDir()`); their domain packs are read in `ontologyDir`. */
+  readonly packsDir?: string;
   /** S5.1 (`workspaces.ontology_enforcement`, migration core 0025): what a Link write the
    *  published ontology does not license does. Omitted → `defaultOntologyEnforcement()`. */
   readonly ontologyEnforcement?: OntologyEnforcement;
@@ -66,7 +69,7 @@ export interface CreateWorkspaceInput {
   /** S5.3: when the workspace may be retired; only meaningful with `purpose: 'ephemeral'`. */
   readonly expiresAt?: Date | null;
   /** P-B2b (design §6.4 "默认模块"; §5d S7-D 决定 D4): module family names to install — each at its
-   *  own **latest** index version (`installOrUpgradeModule`'s own doc comment: a fresh workspace
+   *  own **latest** pack version (`installOrUpgradeModule`'s own doc comment: a fresh workspace
    *  always takes the "family absent → publish the latest version" branch, never "v1" specifically)
    *  — in the same transaction, right after the platform meta-ontology. Omitted/`[]` = none. The
    *  caller (`platform-handlers.ts`'s `createWorkspaceHandler`) reads `PlatformSettings.
@@ -101,7 +104,7 @@ export interface CreateWorkspaceOutcome {
   /** Present only when `owner.issueApiKey` was set. Never logged. */
   readonly apiKey?: string;
   /** P2 hotfix (post-v0.16.0 review, "default modules drift"): the subset of `input.defaultModules`
-   *  that named a module no longer in this deployment's module index (`ontology/modules.yaml`) —
+   *  that named a module no longer in this deployment's module registry (its `packs/`) —
    *  always present, `[]` when every named module installed cleanly or `defaultModules` was
    *  omitted. A deploy-time guard that keeps a platform setting's `defaultModules` in sync with the
    *  currently-deployed index is deferred to S8 (not built here) — this only keeps one drifted name
@@ -189,7 +192,7 @@ export async function createWorkspaceWithOwner(
       //
       // P2 hotfix (post-v0.16.0 review, "default modules drift"): a platform setting's
       // `defaultModules` can name a module that has since been removed from this deployment's own
-      // `ontology/modules.yaml` (a host upgraded the kernel image without also clearing the stale
+      // packs (a host upgraded the kernel image without also clearing the stale
       // setting) — `installOrUpgradeModule`/`requireModule` would throw `ModuleNotFoundError` for
       // that one name and hard-fail this entire transaction, refusing to create the workspace at
       // all over an unrelated, already-broken setting. Skip an unknown name instead (warn-logged,
@@ -197,14 +200,17 @@ export async function createWorkspaceWithOwner(
       // the rest. A deploy-time guard that keeps the setting itself from drifting is deferred to S8
       // (not built here).
       if (input.defaultModules && input.defaultModules.length > 0) {
-        const registry = await loadModuleRegistry(ontologyDir);
+        const registry = await loadModuleRegistry({
+          ...(input.packsDir ? { packsDir: input.packsDir } : {}),
+          ontologyDir,
+        });
         for (const name of input.defaultModules) {
           if (!registry.has(name)) {
             skippedDefaultModules.push(name);
             console.warn(
               JSON.stringify({
                 level: 'warn',
-                msg: 'application/workspace/create: defaultModules names a module no longer in the module index — skipped',
+                msg: 'application/workspace/create: defaultModules names a module this deployment no longer ships — skipped',
                 workspaceId,
                 name,
               }),
@@ -212,14 +218,10 @@ export async function createWorkspaceWithOwner(
             continue;
           }
           try {
-            await installOrUpgradeModule(
-              client,
-              workspaceId,
-              ownerPrincipalId,
-              registry,
-              { name, channel: 'platform' },
-              ontologyDir,
-            );
+            await installOrUpgradeModule(client, workspaceId, ownerPrincipalId, registry, {
+              name,
+              channel: 'platform',
+            });
           } catch (err) {
             // S11 P1 (I-A4): a module whose content widens authority (declares an ActionType)
             // needs the owner to confirm it item by item — nobody here can. Refused before

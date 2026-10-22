@@ -165,6 +165,7 @@ export const CODE_TITLES: Readonly<Record<string, string>> = {
   endpoint_is_platform_gate: 'A platform gate is at this address',
   connector_not_self_serve: 'Cannot be connected by a workspace',
   module_not_found: 'No such module',
+  pack_not_found: 'No such pack',
   not_a_draft: 'No longer a draft',
   invalid_scope: 'Scope not allowed',
   service_principal_required: 'Not an active service account',
@@ -244,6 +245,7 @@ export const CODE_TITLES_ZH: Readonly<Record<string, string>> = {
   endpoint_is_platform_gate: '这个地址是平台提供的门',
   connector_not_self_serve: '这类系统不能由工作区自行接入',
   module_not_found: '找不到这个模块',
+  pack_not_found: '找不到这个能力包',
   not_a_draft: '已经不是草稿',
   invalid_scope: '权限范围无效',
   service_principal_required: '不是启用中的服务账号',
@@ -531,6 +533,11 @@ export const ERROR_NEXT_STEPS: Readonly<
   module_not_found: {
     zh: '这个平台部署的模块索引里没有它，什么也没有改。刷新页面后重新选择；仍然需要它时，请平台管理员确认部署里带了这个模块。',
     en: 'This deployment’s module index does not carry it, and nothing changed. Reload the page and choose again; if it is still needed, ask a platform administrator to check the deployment ships this module.',
+  },
+  // S11 P1-C: `preview_pack_install` / `install_pack` named a pack this deployment does not ship.
+  pack_not_found: {
+    zh: '这个平台部署附带的能力包里没有它，什么也没有改。刷新页面后重新选择；仍然需要它时，请平台管理员确认部署里带了这个能力包。',
+    en: 'This deployment ships no such pack, and nothing changed. Reload the page and choose again; if it is still needed, ask a platform administrator to check the deployment ships this pack.',
   },
   not_a_draft: {
     zh: '它已经发布或弃用了，只有草稿才能丢弃，什么也没有改。刷新后查看它现在的状态。',

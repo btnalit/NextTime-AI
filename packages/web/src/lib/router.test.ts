@@ -55,6 +55,19 @@ describe('routeFromHash', () => {
     });
   });
 
+  it('S11 P1-C: the 能力包 tab, and the 模块 tab it replaced still lands on it', () => {
+    expect(routeFromHash('#/govern/catalog/packs/ops-assets')).toEqual({
+      kind: 'catalog',
+      tab: 'packs',
+      itemId: 'ops-assets',
+    });
+    expect(routeFromHash('#/govern/catalog/modules')).toEqual({ kind: 'catalog', tab: 'packs' });
+    expect(routeFromHash('#/govern/catalog/constructor')).toEqual({
+      kind: 'catalog',
+      tab: 'operations',
+    });
+  });
+
   it('decodes URI-encoded ids', () => {
     expect(routeFromHash(`#/work/chats/${encodeURIComponent('c/1')}`)).toEqual({
       kind: 'chat',

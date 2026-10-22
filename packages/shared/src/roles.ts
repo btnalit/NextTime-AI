@@ -84,6 +84,9 @@ export const AUDITOR_READ_CAPABILITIES: ReadonlySet<string> = new Set<Capability
   // which install record put each module version in (S11 P1-B); the rollback preview is an owner's
   'list_change_segments',
   'get_change_segment',
+  // the packs this deployment ships and what the workspace has of each (S11 P1-C); the install
+  // preview, like the rollback preview, is an owner's
+  'list_packs',
   // the workspace and the auditor itself
   'get_workspace',
   'list_models',

@@ -48,6 +48,7 @@ import {
   hashApiKey,
 } from '../../application/gateway/index.js';
 import { UnknownOperationError } from '../../application/gateway/index.js';
+import { PackNotFoundError } from '../../application/packs/index.js';
 import { TaskRuntimeNotConfiguredError } from '../../application/task/index.js';
 import {
   ProcedureStepReferenceError,
@@ -108,6 +109,15 @@ describe('mapCapabilityError — S6-A / C25 approve.reason (unit)', () => {
     expect(mapCapabilityError(new ApprovalReasonRequiredError('ar-1'))).toMatchObject({
       status: 400,
       code: 'reason_required',
+    });
+  });
+});
+
+describe('mapCapabilityError — S11 P1-C packs (unit)', () => {
+  it('PackNotFoundError → 404 pack_not_found', () => {
+    expect(mapCapabilityError(new PackNotFoundError('no-such-pack'))).toMatchObject({
+      status: 404,
+      code: 'pack_not_found',
     });
   });
 });

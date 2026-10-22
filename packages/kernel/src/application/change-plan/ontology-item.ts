@@ -46,6 +46,24 @@ export interface OntologyVersionIntent {
   readonly definition: OntologyDefinition;
 }
 
+/** Type names of an ontology definition, per section, sorted. */
+export interface OntologyTypeNames {
+  readonly objectTypes: readonly string[];
+  readonly linkTypes: readonly string[];
+  readonly actionTypes: readonly string[];
+}
+
+/** What a change does to a family's type names, from one definition to another (`null`: the family
+ *  not installed): names only the new one declares, only the old one, and in both but declared
+ *  differently. A LinkType name counts as one type whatever its endpoints (it may repeat with
+ *  several, `classify.ts`): it is changed when its set of declarations is. For a person reviewing
+ *  the change; the classification (`classify.ts`) is what decides confirmation. */
+export interface OntologyTypeChanges {
+  readonly added: OntologyTypeNames;
+  readonly removed: OntologyTypeNames;
+  readonly changed: OntologyTypeNames;
+}
+
 export interface PlannedOntologyItem {
   readonly target: { readonly family: string; readonly ontologyId: string };
   readonly before: { readonly version: number; readonly definitionDigest: string } | null;
@@ -53,6 +71,9 @@ export interface PlannedOntologyItem {
   readonly widening: readonly WideningReason[];
   /** The head already is this definition: applying would publish nothing new. */
   readonly unchanged: boolean;
+  /** From the head to this definition (all empty when `unchanged`). Not part of the item record or
+   *  the segment digest: `before` / `after` digest both sides. */
+  readonly types: OntologyTypeChanges;
   /** Validated content to publish (not part of the item record or the segment digest — its digest
    *  is). */
   readonly definition: OntologyDefinition;
@@ -62,6 +83,51 @@ export interface PlannedOntologyItem {
  *  segment): the family's `ontology_versions.id`. */
 export function ontologyItemTargetKey(intent: OntologyVersionIntent): string {
   return `ontology_version:${deriveOntologyPackId(intent.family)}`;
+}
+
+const NO_TYPE_NAMES: OntologyTypeNames = { objectTypes: [], linkTypes: [], actionTypes: [] };
+const NO_TYPE_CHANGES: OntologyTypeChanges = {
+  added: NO_TYPE_NAMES,
+  removed: NO_TYPE_NAMES,
+  changed: NO_TYPE_NAMES,
+};
+
+/** Each type name a section declares, with the digest of its declarations (sorted, so their order
+ *  in the file does not count). */
+function declarations(entries: readonly { readonly name: string }[]): Map<string, string> {
+  const byName = new Map<string, string[]>();
+  for (const entry of entries) {
+    byName.set(entry.name, [...(byName.get(entry.name) ?? []), contentDigest(entry)]);
+  }
+  return new Map([...byName].map(([name, digests]) => [name, contentDigest(digests.sort())]));
+}
+
+/** See `OntologyTypeChanges`. */
+export function ontologyTypeChanges(
+  from: OntologyDefinition | null,
+  to: OntologyDefinition | null,
+): OntologyTypeChanges {
+  const section = (
+    before: readonly { readonly name: string }[],
+    after: readonly { readonly name: string }[],
+  ) => {
+    const b = declarations(before);
+    const a = declarations(after);
+    return {
+      added: [...a.keys()].filter((name) => !b.has(name)).sort(),
+      removed: [...b.keys()].filter((name) => !a.has(name)).sort(),
+      changed: [...a.keys()].filter((name) => b.has(name) && b.get(name) !== a.get(name)).sort(),
+    };
+  };
+  const objectTypes = section(from?.objectTypes ?? [], to?.objectTypes ?? []);
+  const linkTypes = section(from?.linkTypes ?? [], to?.linkTypes ?? []);
+  const actionTypes = section(from?.actionTypes ?? [], to?.actionTypes ?? []);
+  const pick = (key: 'added' | 'removed' | 'changed'): OntologyTypeNames => ({
+    objectTypes: objectTypes[key],
+    linkTypes: linkTypes[key],
+    actionTypes: actionTypes[key],
+  });
+  return { added: pick('added'), removed: pick('removed'), changed: pick('changed') };
 }
 
 /** Holds the family (and, first, the workspace's ontology namespace — I-P1) until the transaction
@@ -101,6 +167,7 @@ export async function planOntologyItem(
       ? []
       : classifyOntologyDefinitionChange(head?.definition ?? null, definition),
     unchanged,
+    types: unchanged ? NO_TYPE_CHANGES : ontologyTypeChanges(head?.definition ?? null, definition),
     definition,
   };
 }
@@ -217,25 +284,6 @@ export interface PlannedOntologyRollback {
 
 const NOTHING_REMOVED = { objectTypes: [], linkTypes: [], actionTypes: [] } as const;
 
-function namesIn(definition: OntologyDefinition | null) {
-  return {
-    objectTypes: new Set((definition?.objectTypes ?? []).map((t) => t.name)),
-    linkTypes: new Set((definition?.linkTypes ?? []).map((t) => t.name)),
-    actionTypes: new Set((definition?.actionTypes ?? []).map((t) => t.name)),
-  };
-}
-
-function removedNames(from: OntologyDefinition, to: OntologyDefinition | null) {
-  const before = namesIn(from);
-  const after = namesIn(to);
-  const minus = (a: Set<string>, b: Set<string>) => [...a].filter((name) => !b.has(name)).sort();
-  return {
-    objectTypes: minus(before.objectTypes, after.objectTypes),
-    linkTypes: minus(before.linkTypes, after.linkTypes),
-    actionTypes: minus(before.actionTypes, after.actionTypes),
-  };
-}
-
 /** The item's rollback dry run (§3.4 "逆操作…先比较再写"): blocked unless the family's head is still
  *  the version the item published and the version before it is still there to return to, and the
  *  restored definition does not give a type name a second owner (I-P1). Writes nothing; a rollback
@@ -279,7 +327,7 @@ export async function planOntologyRollback(
     from: item.after,
     to: item.before,
     widening: classifyOntologyDefinitionChange(head.definition, to),
-    removes: removedNames(head.definition, to),
+    removes: ontologyTypeChanges(head.definition, to).removed,
     blocker: null,
   };
 }

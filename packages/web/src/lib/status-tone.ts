@@ -10,6 +10,7 @@ import type {
   GrantStatus,
   ObjectiveOutcome,
   OperationMode,
+  PackInstallStatus,
   PiDriftStatusWire,
   PlatformBackupStatusWire,
   PlatformRoleWire,
@@ -35,6 +36,7 @@ import {
   GateTrustWireSchema,
   OBJECTIVE_OUTCOME_VALUES,
   OPERATION_MODE_VALUES,
+  PACK_INSTALL_STATUS_VALUES,
   PUBLISHABLE_STATUS_VALUES,
   PiDriftStatusWireSchema,
   PlatformBackupStatusWireSchema,
@@ -122,7 +124,8 @@ export type StatusMachine =
   | 'objectiveOutcome'
   | 'selfConnection'
   | 'changeSegment'
-  | 'changeItemState';
+  | 'changeItemState'
+  | 'packInstall';
 
 export const ACTION_REQUEST_TONES: Readonly<Record<ActionRequestStatus, ChipStyle>> = {
   proposed: { tone: 'neutral', label: { zh: '已提议', en: 'Proposed' } },
@@ -394,6 +397,15 @@ export const CHANGE_ITEM_STATE_TONES: Readonly<Record<ChangeItemState, ChipStyle
   not_installed: { tone: 'neutral', label: { zh: '已不在工作区', en: 'No longer installed' } },
 };
 
+/** S11 P1-C: what a workspace has of a capability pack (`PackWire.status`, the 能力目录 能力包
+ *  tab), for the pack and for each of its components. */
+export const PACK_INSTALL_TONES: Readonly<Record<PackInstallStatus, ChipStyle>> = {
+  not_installed: { tone: 'neutral', label: { zh: '未安装', en: 'Not installed' } },
+  up_to_date: { tone: 'ok', label: { zh: '已是最新', en: 'Up to date' } },
+  outdated: { tone: 'info', label: { zh: '有新版', en: 'Update available' } },
+  customized: { tone: 'warn', label: { zh: '已定制', en: 'Customized' } },
+};
+
 const MACHINES: Readonly<
   Record<StatusMachine, { values: readonly string[]; tones: Readonly<Record<string, ChipStyle>> }>
 > = {
@@ -432,6 +444,7 @@ const MACHINES: Readonly<
   selfConnection: { values: SELF_CONNECTION_STATUS_VALUES, tones: SELF_CONNECTION_TONES },
   changeSegment: { values: CHANGE_SEGMENT_STATUS_VALUES, tones: CHANGE_SEGMENT_TONES },
   changeItemState: { values: CHANGE_ITEM_STATE_VALUES, tones: CHANGE_ITEM_STATE_TONES },
+  packInstall: { values: PACK_INSTALL_STATUS_VALUES, tones: PACK_INSTALL_TONES },
 };
 
 export interface ResolvedChipStyle extends ChipStyle {
