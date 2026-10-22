@@ -277,6 +277,23 @@ describe('parsePlan — acceptance checks (S11 GO4a)', () => {
     ]);
   });
 
+  it('refuses a prompt that looks like it carries a credential (review #493 on #680)', () => {
+    // Synthetic, header- and vendor-shaped: what the credential review counts.
+    const header = 'Did the call with Authorization: Bearer synthAbCdEf0123456789xyzQW work?';
+    const vendor = `Is ghp_${'abcdefghij'.repeat(4)} rotated?`;
+    for (const prompt of [header, vendor]) {
+      expect(problemsOf({ steps: [step('a')], acceptance: [confirm('ok', prompt)] })).toEqual([
+        'acceptance[0] "ok": the prompt looks like it carries a credential (1 suspected) — a plan does not carry credentials',
+      ]);
+    }
+    // Words about credentials are not one.
+    const plan = parsePlan({
+      steps: [step('a')],
+      acceptance: [confirm('ok', 'Was the API token rotated on schedule?')],
+    });
+    expect(plan.acceptance).toHaveLength(1);
+  });
+
   it('refuses a key used twice, a second confirmation, an empty prompt, unknown fields and too many checks', () => {
     expect(problemsOf({ steps: [step('a')], acceptance: [observe('up'), confirm('up')] })).toEqual([
       'acceptance[1] "up": the key appears more than once',

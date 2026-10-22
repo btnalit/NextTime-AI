@@ -91,7 +91,8 @@ import { getWorkerDefinition } from '../worker/index.js';
  *     goal's own doing (`fact-check.ts`, goal/0007). A gate's observed Facts carry no properties,
  *     so on those only the Fact being there can be checked;
  *   - `requester_confirm` — `prompt` is what the requester is asked to confirm; asked once every
- *     check the platform makes passed. At most one.
+ *     check the platform makes passed. At most one, and no prompt that looks like it carries a
+ *     credential.
  * A plan without any is allowed: its goal is achieved only on the requester's word (an implicit
  * `requester_confirm` whose prompt is the goal statement) — {@link planHints} says so, for the
  * confirmation card to show.
@@ -183,7 +184,9 @@ export function parsePlan(plan: unknown): GoalPlan {
 }
 
 /** The acceptance checks of the plan, or of one step (`prefix` names it): keys unique, at most one
- *  `requester_confirm`, every predicate — an observation's, a fact check's — accepted by the lint
+ *  `requester_confirm`, whose prompt carries nothing the credential review counts (people read it
+ *  on the goal and in every revision after it, and it is asked as written — review #493 on #680),
+ *  every predicate — an observation's, a fact check's — accepted by the lint
  *  (spending from the plan's `lintBudget`, which the reconcile declarations share) and free of
  *  suspected credentials — the rules a reconcile check's predicate is under, for the same reasons —
  *  and no identity a fact check names an Object by carrying one ({@link factSelectorProblems}). */
@@ -203,6 +206,12 @@ function acceptanceShapeProblems(
       confirmations += 1;
       if (confirmations === 2) {
         problems.push(`${where}: a plan asks the requester to confirm at most once`);
+      }
+      const found = findSuspectedSecrets(check.prompt);
+      if (found.count > 0) {
+        problems.push(
+          `${where}: the prompt looks like it carries a credential (${found.count} suspected) — a plan does not carry credentials`,
+        );
       }
       return;
     }

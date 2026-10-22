@@ -9,7 +9,6 @@ import {
   type GoalRunWire,
   type PlanRevisionSummaryWire,
   type PlanRevisionWire,
-  type Role,
   type StepRunWire,
   type UnresolvedGoalActionWire,
 } from '@nexttime/shared';
@@ -38,25 +37,23 @@ import type { CapabilityHandler, CapabilityHandlerContext } from './capability-h
  * `get_goal_revision`, `list_goal_unresolved_actions` — and their projections onto
  * `@nexttime/shared`'s `wire/goal.ts`. Who may read a run is `application/goal`'s
  * (`views.ts`'s `goalVisibleTo`: the owner and the requester); on the handle channel the viewer is
- * the Handle's `obo` with that principal's role, as on `get_task`.
+ * the Handle's `obo`, who sees their own runs only, an owner too (`views.ts`).
  */
 
-/** The caller as a goal viewer: the human channel's resolved Principal, or — on the handle channel,
- *  where `principalId` is the Handle's `obo` — that principal and its role. */
+/** The caller as a goal viewer: the human channel's resolved Principal — every run when it is the
+ *  owner — or, on the handle channel, where `principalId` is the Handle's `obo`, that principal
+ *  for their own runs only. */
 async function goalViewer(
   client: PoolClient,
-  workspaceId: string,
   ctx: CapabilityHandlerContext | undefined,
 ): Promise<GoalViewer> {
-  if (ctx?.principal) return { principalId: ctx.principal.id, role: ctx.principal.role };
-  const principalId = ctx?.principalId || (await currentPrincipalId(client));
-  const result = await client.query<{ role: Role }>(
-    'select role from principals where workspace_id = $1 and id = $2',
-    [workspaceId, principalId],
-  );
-  const role = result.rows[0]?.role;
-  if (!role) throw new Error(`goal reads: principal ${principalId} not found in ${workspaceId}`);
-  return { principalId, role };
+  if (ctx?.principal) {
+    return { principalId: ctx.principal.id, seesEveryRun: ctx.principal.role === 'owner' };
+  }
+  return {
+    principalId: ctx?.principalId || (await currentPrincipalId(client)),
+    seesEveryRun: false,
+  };
 }
 
 const iso = (value: Date | null): string | null => (value ? value.toISOString() : null);
@@ -245,7 +242,7 @@ function toWireUnresolvedAction(action: UnresolvedGoalAction): UnresolvedGoalAct
 
 export const getGoalHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
   const { goalRunId } = params as { goalRunId: string };
-  const viewer = await goalViewer(client, workspaceId, ctx);
+  const viewer = await goalViewer(client, ctx);
   const detail = await readGoalRunDetail(client, workspaceId, viewer, goalRunId);
   return { result: toWireGoalDetail(detail), resourceType: 'goal_run', resourceId: goalRunId };
 };
@@ -257,7 +254,7 @@ export const listGoalsHandler: CapabilityHandler = async (client, workspaceId, p
     limit?: number;
     cursor?: string;
   };
-  const viewer = await goalViewer(client, workspaceId, ctx);
+  const viewer = await goalViewer(client, ctx);
   const page = await listGoalRunsVisibleTo(client, workspaceId, viewer, filter, {
     defaultLimit: GOAL_LIST_DEFAULT_LIMIT,
     maxLimit: GOAL_LIST_MAX_LIMIT,
@@ -278,7 +275,7 @@ export const getGoalRevisionHandler: CapabilityHandler = async (
   ctx,
 ) => {
   const { goalRunId, revision } = params as { goalRunId: string; revision: number };
-  const viewer = await goalViewer(client, workspaceId, ctx);
+  const viewer = await goalViewer(client, ctx);
   const view = await readPlanRevisionVisibleTo(client, workspaceId, viewer, goalRunId, revision);
   return { result: toWirePlanRevision(view), resourceType: 'goal_run', resourceId: goalRunId };
 };
@@ -290,7 +287,7 @@ export const listGoalUnresolvedActionsHandler: CapabilityHandler = async (
   ctx,
 ) => {
   const { goalRunId } = params as { goalRunId: string };
-  const viewer = await goalViewer(client, workspaceId, ctx);
+  const viewer = await goalViewer(client, ctx);
   const actions = await listGoalRunUnresolvedActionsVisibleTo(
     client,
     workspaceId,

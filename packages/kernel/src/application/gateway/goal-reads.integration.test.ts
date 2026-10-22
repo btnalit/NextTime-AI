@@ -300,6 +300,74 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(stored?.plan.steps[0]?.input).toEqual({ step: 'a', password: 'synthetic-a' });
       });
 
+      it('every parameter a plan carries is read redacted: reconcile and observation params too', async () => {
+        const goalRunId = await proposeGoal(requesterId, ['a']);
+        const gatekeeperId = randomUUID();
+        // Synthetic values under fields the credential review counts — never real ones.
+        const observation = (secret: string) => ({
+          gatekeeperId,
+          operation: 'fixture.status',
+          params: { name: 'web', token: secret },
+          expect: { path: 'state', op: 'eq', value: 'running' },
+        });
+        const [stepA] = planOf(['a']).steps;
+        const plan = {
+          steps: [
+            {
+              ...stepA,
+              reconcile: [
+                {
+                  action: {
+                    gatekeeperId,
+                    operation: 'fixture.act',
+                    params: { name: 'web', password: 'synthetic-action' },
+                  },
+                  check: observation('synthetic-reconcile'),
+                },
+              ],
+              acceptance: [
+                { kind: 'observe_predicate', key: 'step-up', check: observation('synthetic-step') },
+              ],
+            },
+          ],
+          acceptance: [
+            { kind: 'observe_predicate', key: 'up', check: observation('synthetic-goal') },
+            { kind: 'requester_confirm', key: 'ok', prompt: 'Is the web service up?' },
+          ],
+        };
+        // The references are not this test's (validation is `plan.test.ts`'s): stored as is.
+        await raw(
+          'update plan_revisions set plan = $3 where workspace_id = $1 and goal_run_id = $2',
+          [workspaceId, goalRunId, JSON.stringify(plan)],
+        );
+
+        const read = PlanRevisionWireSchema.parse(
+          await call(human(requesterId, 'member'), 'get_goal_revision', {
+            goalRunId,
+            revision: 1,
+          }),
+        );
+        const [step] = read.plan.steps;
+        expect(step?.input).toEqual({ step: 'a', password: '[redacted]' });
+        expect(step?.reconcile?.[0]?.action.params).toEqual({
+          name: 'web',
+          password: '[redacted]',
+        });
+        expect(step?.reconcile?.[0]?.check.params).toEqual({ name: 'web', token: '[redacted]' });
+        expect(step?.acceptance?.[0]).toMatchObject({
+          key: 'step-up',
+          check: { params: { name: 'web', token: '[redacted]' } },
+        });
+        expect(read.plan.acceptance).toEqual([
+          {
+            ...plan.acceptance[0],
+            check: { ...observation(''), params: { name: 'web', token: '[redacted]' } },
+          },
+          plan.acceptance[1],
+        ]);
+        expect(JSON.stringify(read.plan)).not.toMatch(/synthetic-/);
+      });
+
       it('a running run: StepRuns with their attempts and actions, counts and usage', async () => {
         const goalRunId = await startGoal(requesterId);
         await advanceOnce(goalRunId, requesterId);
@@ -384,6 +452,11 @@ describe.runIf(DATABASE_URL !== undefined)(
         await expect(
           call(handleCaller(workspaceId, otherMemberId, scope), 'get_goal', { goalRunId }),
         ).rejects.toBeInstanceOf(GoalRunNotFoundError);
+        // The owner sees every run on the human channel only: a Handle acting for the owner reads
+        // the owner's own runs, not a member's.
+        await expect(
+          call(handleCaller(workspaceId, ownerId, scope), 'get_goal', { goalRunId }),
+        ).rejects.toBeInstanceOf(GoalRunNotFoundError);
         // …and only with the capability in its scope.
         await expect(
           call(
@@ -423,7 +496,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(ids(await call(human(auditorId, 'auditor'), 'list_goals', {}))).toEqual([]);
       });
 
-      it('the owner lists every run, by requester and by status', async () => {
+      it('the owner lists every run, by requester and by status — on the human channel only', async () => {
         const all = ids(await call(human(ownerId, 'owner'), 'list_goals', {}));
         expect(all).toEqual(expect.arrayContaining([...mine, theirs]));
         const byRequester = ids(
@@ -437,6 +510,16 @@ describe.runIf(DATABASE_URL !== undefined)(
           }),
         );
         expect(running).toContain(mine[1]);
+
+        // A Handle acting for the owner lists the owner's own runs: none of these.
+        const ownersAgent = handleCaller(workspaceId, ownerId, {
+          capabilities: ['list_goals'],
+          resources: {},
+        });
+        const viaHandle = ids(await call(ownersAgent, 'list_goals', {}));
+        expect(viaHandle).not.toContain(theirs);
+        expect(viaHandle.some((id) => mine.includes(id))).toBe(false);
+        expect(ids(await call(ownersAgent, 'list_goals', { onBehalfOf: requesterId }))).toEqual([]);
         expect(running).not.toContain(mine[0]);
       });
 

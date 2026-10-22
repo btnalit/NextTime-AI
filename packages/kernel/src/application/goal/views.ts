@@ -1,10 +1,11 @@
 import {
+  type AcceptanceCheck,
   type GoalPlan,
   GoalPlanSchema,
   type GoalRunStatus,
   type PlanHint,
-  type Role,
   STEP_RUN_STATUS_VALUES,
+  type StepAcceptanceCheck,
   type StepRunStatus,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
@@ -38,26 +39,35 @@ import {
  * Who sees a run ({@link goalVisibleTo}): the workspace owner and the requester (`on_behalf_of`),
  * the rule `get_task` applies (`taskVisibleTo`, D-21) — a run's statement, plan inputs and step
  * results can carry private-chat content. Anyone else gets {@link GoalRunNotFoundError}, exactly
- * like an unknown id. `list_goals` lists the owner every run and anyone else their own.
+ * like an unknown id. `list_goals` lists the owner every run and anyone else their own. The owner's
+ * view of every run is the human channel's only (the console): an agent reading on a Handle sees
+ * the runs of the Handle's `obo` and no others, whatever that principal's role (coordinator
+ * decision on review #493 of #680) — looking across the workspace, and holding or cancelling
+ * someone else's goal, are a person's, not an agent's.
  *
- * A step's `input` is what one agent wrote for another, stored as given because it is what the
- * step's Worker runs on (its Task's input); every reader here gets it with each suspected
- * credential replaced by `[redacted]` (`redactSuspectedSecrets`, the call-argument rule `get_task`
- * applies to a Task's input, legacy 184). The plan's other parameters — reconcile and acceptance
- * observations, fact checks — passed the credential review when the plan was validated (`plan.ts`).
+ * Parameters in a plan are what one agent wrote for another, stored as given because the platform
+ * acts on them: a step's `input` (its Task's input), a reconcile declaration's action params (the
+ * step's request is matched by them) and every observation's params (reconcile and acceptance
+ * checks; the review refuses a credential there, `reviewObserveParams`, but only flags a suspected
+ * one). Every reader here gets them with each suspected credential replaced by `[redacted]`
+ * (`redactSuspectedSecrets`, the call-argument rule `get_task` applies to a Task's input, legacy
+ * 184). The rest of a plan cannot carry one: predicate literals, fact-check identities and the
+ * `requester_confirm` prompt are refused when the plan is validated (`plan.ts`).
  *
  * A run's usage is what I-G6 counts (`readGoalRunsUsage`: tokens and step attempts) plus the
  * revisions made after the first (`revise.ts`'s budget rule); its StepRuns are counted by status.
  */
 
+/** Who is reading: `seesEveryRun` only for the workspace owner on the human channel — see the
+ *  module comment. */
 export interface GoalViewer {
   readonly principalId: string;
-  readonly role: Role;
+  readonly seesEveryRun: boolean;
 }
 
 /** Whether `viewer` may read `goal` — see the module comment. */
 export function goalVisibleTo(viewer: GoalViewer, goal: Pick<GoalRunRow, 'onBehalfOf'>): boolean {
-  return viewer.role === 'owner' || goal.onBehalfOf === viewer.principalId;
+  return viewer.seesEveryRun || goal.onBehalfOf === viewer.principalId;
 }
 
 /** A revision of a GoalRun's plan that `revision` does not name. */
@@ -206,7 +216,7 @@ export async function listGoalRunsVisibleTo(
   const requestedLimit = filter.limit ?? options.defaultLimit;
   const limit = Math.min(Math.max(requestedLimit, 1), options.maxLimit);
   const truncated = requestedLimit > options.maxLimit ? (true as const) : undefined;
-  const requester = viewer.role === 'owner' ? filter.onBehalfOf : viewer.principalId;
+  const requester = viewer.seesEveryRun ? filter.onBehalfOf : viewer.principalId;
   if (
     requester !== undefined &&
     filter.onBehalfOf !== undefined &&
@@ -263,18 +273,48 @@ function planRevisionView(revision: PlanRevisionRow): PlanRevisionView {
       `goal run ${revision.goalRunId} revision ${revision.revision}: the stored plan no longer parses`,
     );
   }
+  const plan = parsed.data;
   return {
     revision,
     plan: {
-      ...parsed.data,
-      steps: parsed.data.steps.map((step) =>
-        step.input === undefined
-          ? step
-          : { ...step, input: redactSuspectedSecrets(step.input, { secretFields: true }).value },
-      ),
+      ...plan,
+      steps: plan.steps.map((step) => ({
+        ...step,
+        ...(step.input !== undefined ? { input: redactParams(step.input) } : {}),
+        ...(step.reconcile !== undefined
+          ? {
+              reconcile: step.reconcile.map((declaration) => ({
+                ...declaration,
+                action: withRedactedParams(declaration.action),
+                check: withRedactedParams(declaration.check),
+              })),
+            }
+          : {}),
+        ...(step.acceptance !== undefined
+          ? { acceptance: step.acceptance.map(withRedactedObservation) }
+          : {}),
+      })),
+      ...(plan.acceptance !== undefined
+        ? { acceptance: plan.acceptance.map(withRedactedObservation) }
+        : {}),
     },
-    hints: planHints(parsed.data),
+    hints: planHints(plan),
   };
+}
+
+/** `params` with each suspected credential replaced — see the module comment. */
+function redactParams<T>(params: T): T {
+  return redactSuspectedSecrets(params, { secretFields: true }).value as T;
+}
+
+function withRedactedParams<T extends { readonly params?: Record<string, unknown> }>(value: T): T {
+  return value.params === undefined ? value : { ...value, params: redactParams(value.params) };
+}
+
+function withRedactedObservation<T extends AcceptanceCheck | StepAcceptanceCheck>(check: T): T {
+  return check.kind === 'observe_predicate'
+    ? { ...check, check: withRedactedParams(check.check) }
+    : check;
 }
 
 /** `get_goal_revision`: one revision of a run `viewer` may read. */

@@ -3972,8 +3972,10 @@ const modulesCapabilities = [
 // -------------------------------------------------------------------------------------------
 // goal (S11 GO5a; plan §4.3, §7) — reading GoalRuns. Visible to the workspace owner and the
 // requester (the principal the run acts for, `onBehalfOf`); for anyone else a run is not found,
-// exactly like an unknown id — the rule `get_task` applies (kernel `goalVisibleTo`). On the handle
-// channel the viewer is the Handle's `obo` with that principal's role. No Handle ceiling holds
+// exactly like an unknown id — the rule `get_task` applies (kernel `goalVisibleTo`). The owner sees
+// every run on the human channel only: on the handle channel the viewer is the Handle's `obo`, who
+// reads their own runs, an owner too (looking across the workspace is a person's, in the
+// console — coordinator decision on review #493 of #680). No Handle ceiling holds
 // these yet (the entry agent gets `get_goal` with `propose_goal`, GO5c/GO5e). Each result is the
 // one `wire/goal.ts` shape the console's goal pages (GO6) render.
 // -------------------------------------------------------------------------------------------
@@ -3992,7 +3994,7 @@ const goalCapabilities = [
     paramsSchema: z.object({ goalRunId: z.string().uuid() }).strict(),
     resultSchema: wire.GoalDetailWireSchema,
     description:
-      'Read one GoalRun: its status and budget with what it has spent, the plan revision in force (revision 1 until it is confirmed) with every step input’s suspected credentials redacted, its revision history, every StepRun with its attempts (the Tasks) and actions (the ActionRequests), its acceptance rounds, and — while cancelling, or cancelled with cleanupPending — the Tasks and executing actions left. Visible to the workspace owner and the requester; for anyone else it is not found (404 not_found), exactly like an unknown id.',
+      'Read one GoalRun: its status and budget with what it has spent, the plan revision in force (revision 1 until it is confirmed) with the suspected credentials in its parameters (step inputs, reconcile and observation params) redacted, its revision history, every StepRun with its attempts (the Tasks) and actions (the ActionRequests), its acceptance rounds, and — while cancelling, or cancelled with cleanupPending — the Tasks and executing actions left. Visible to the workspace owner and the requester; for anyone else it is not found (404 not_found), exactly like an unknown id. A Handle reads as its obo, and only that principal’s own runs — an owner’s too.',
   },
   {
     name: 'list_goals',
@@ -4009,7 +4011,7 @@ const goalCapabilities = [
       })
       .strict(),
     resultSchema: listEnvelope(wire.GoalRunWireSchema),
-    description: `List GoalRuns, newest first, each with its budget, usage and StepRuns counted by status: the workspace owner sees every run, anyone else only the runs they requested — onBehalfOf filters by requester (for a non-owner, any other requester lists nothing), status by status. Keyset-paginated (limit, default ${GOAL_LIST_DEFAULT_LIMIT}, at most ${GOAL_LIST_MAX_LIMIT}; cursor → nextCursor; truncated when limit was above the ceiling).`,
+    description: `List GoalRuns, newest first, each with its budget, usage and StepRuns counted by status: the workspace owner sees every run, anyone else — and a Handle, whoever its obo — only the runs they requested; onBehalfOf filters by requester (for anyone who sees only their own, any other requester lists nothing), status by status. Keyset-paginated (limit, default ${GOAL_LIST_DEFAULT_LIMIT}, at most ${GOAL_LIST_MAX_LIMIT}; cursor → nextCursor; truncated when limit was above the ceiling).`,
   },
   {
     name: 'get_goal_revision',
@@ -4022,7 +4024,7 @@ const goalCapabilities = [
       .strict(),
     resultSchema: wire.PlanRevisionWireSchema,
     description:
-      'Read one revision of a GoalRun’s plan — the plan as that revision holds it (step inputs’ suspected credentials redacted), who made it and why, what it decided about the steps it removed, and its hints. Same visibility as get_goal; an unknown revision is 404 not_found too.',
+      'Read one revision of a GoalRun’s plan — the plan as that revision holds it (the suspected credentials in its parameters redacted), who made it and why, what it decided about the steps it removed, and its hints. Same visibility as get_goal; an unknown revision is 404 not_found too.',
   },
   {
     name: 'list_goal_unresolved_actions',

@@ -33,8 +33,9 @@ import { FactCheckSchema, ObservationCheckSchema } from '../predicate.js';
  * `get_goal_revision` and `list_goal_unresolved_actions`, and by the console's goal pages (GO6).
  *
  * A run's plan is typed (`GoalPlanSchema`, `goal-plan.ts`): every stored revision passed it when it
- * was created. A step's `input` is what one agent wrote for another, so — like a Task's input on
- * `get_task` — every reader gets it with suspected credentials replaced by `[redacted]`.
+ * was created. Its parameters — a step's `input`, a reconcile declaration's action params, every
+ * observation's params — are what one agent wrote for another, so — like a Task's input on
+ * `get_task` — every reader gets them with suspected credentials replaced by `[redacted]`.
  */
 
 /** What the run has spent of its budget (I-G6): tokens of all its Tasks (nested child Tasks
