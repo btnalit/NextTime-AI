@@ -10,6 +10,7 @@ import {
   alwaysAllowOffer,
   alwaysAllowStaleRequestText,
   alwaysAllowUnpublishedText,
+  requestDefinitionText,
 } from '../lib/always-allow.js';
 import { credentialReviewCount } from '../lib/credential-review.js';
 import {
@@ -131,6 +132,7 @@ export function ActionRequestCard({
   const alwaysAllow = alwaysAllowOffer(card.publishedDefinition);
   const offerAlwaysAllow = alwaysAllowPossible && alwaysAllow.offer;
   const alwaysAllowBlock = alwaysAllowPossible ? alwaysAllow.block : null;
+  const definitionText = requestDefinitionText(card.publishedDefinition, t);
   const hasParams = card.params !== undefined && Object.keys(card.params).length > 0;
   // Decision 2026-10-09 "二次确认": the kernel's count, from the card's own content, else from its
   // 400 on an approve (a card written before the count existed carries none). Either way the card
@@ -170,6 +172,14 @@ export function ActionRequestCard({
             'This request was made on your behalf, and the policy does not let the requester approve or reject it (the default for high-impact actions): someone else with approval rights decides.',
           )}
         </Notice>
+      ) : null}
+      {/* Legacy 216 ①: which definition the request was made under, when the always-allow hints
+       *  below (which already say it) are not shown — a high-impact card, or a reader who may not
+       *  write rules. */}
+      {alwaysAllowBlock !== 'stale' && alwaysAllowBlock !== 'unpublished' && definitionText ? (
+        <p className="text-small text-2 m-0" data-testid="action-card-definition">
+          {definitionText}
+        </p>
       ) : null}
       {alwaysAllowBlock === 'stale' && card.publishedDefinition?.version != null ? (
         <p className="field-hint" data-testid="action-card-always-allow-stale">

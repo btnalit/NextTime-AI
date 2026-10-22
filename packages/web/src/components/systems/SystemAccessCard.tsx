@@ -199,7 +199,9 @@ function MyReachability({ gate }: { readonly gate: ExecutionReadinessGateWire })
       data-status={gate.status}
       title={reason}
     >
-      {gateStatusLabel(gate.status, t)}
+      {/* Legacy 245 e: it sits right after 「谁能用」's summary (「张三等 2 人」), so it says whose it
+       *  is — never reads as 「张三 可直接调用」. */}
+      {t(`你：${gateStatusLabel(gate.status, t)}`, `You: ${gateStatusLabel(gate.status, t)}`)}
     </span>
   );
 }

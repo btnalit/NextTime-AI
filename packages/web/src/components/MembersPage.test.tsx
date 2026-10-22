@@ -120,7 +120,7 @@ describe('MembersPage', () => {
     expect(within(drawer).getByTestId('issue-service-handle-section')).toBeTruthy();
   });
 
-  it('D3/B7: issuing a service Handle — capabilities from the registry checklist / paste box, TTL default 30 days — shows the token once', async () => {
+  it('D3/B7: issuing a service Handle — capabilities from the registry checklist / paste box, TTL picked from presets — shows the token once', async () => {
     const http = scriptedHttp({
       list_principals: () => ({
         items: [
@@ -138,7 +138,7 @@ describe('MembersPage', () => {
         expect(params).toEqual({
           principalId: 'p-svc',
           scope: ['search', 'get_task'],
-          ttlSeconds: 30 * 86400,
+          ttlSeconds: 7 * 86400,
         });
         return {
           handle: 'svc_handle_abc123',
@@ -157,7 +157,10 @@ describe('MembersPage', () => {
     fireEvent.change(within(form).getByLabelText(/服务账号/), {
       target: { value: 'p-svc' },
     });
-    expect((within(form).getByLabelText(/有效期（天）/) as HTMLInputElement).value).toBe('30');
+    // Legacy 168 ②: presets, the shortest by default; this run picks 7 days.
+    const ttl = within(form).getByLabelText(/有效期/) as HTMLSelectElement;
+    expect(ttl.value).toBe('1');
+    fireEvent.change(ttl, { target: { value: '7' } });
 
     // Only handle-channel names are offered: a member-management capability is not a checkbox
     // here, and pasting it is refused with the reason before any call.
@@ -182,7 +185,7 @@ describe('MembersPage', () => {
     expect(within(dialog).getByTestId('issued-handle-token').textContent).toBe('svc_handle_abc123');
   });
 
-  it('D3/B7: the TTL cap is read from the registry (one year) and enforced client-side', async () => {
+  it('D3/B7: the TTL cap is read from the registry (one year) and only presets under it are offered', async () => {
     expect(serviceHandleMaxTtlSeconds()).toBe(365 * 86400);
     expect(handleScopeCapabilities().every((c) => c.channel === 'handle')).toBe(true);
     expect(handleScopeCapabilities().some((c) => c.name.includes('<'))).toBe(false);
@@ -204,8 +207,15 @@ describe('MembersPage', () => {
     openMembersHeaderMenu();
     fireEvent.click(await screen.findByTestId('issue-service-handle-trigger'));
     const form = await screen.findByTestId('issue-service-handle-form');
-    fireEvent.change(within(form).getByLabelText(/有效期（天）/), { target: { value: '366' } });
-    expect(within(form).getByText(/必须是 1 到 365 的整数/)).toBeTruthy();
+    // Legacy 168 ②: only presets under the cap are offered — 1 / 7 / 30 / 90 / 365 days.
+    const ttl = within(form).getByLabelText(/有效期/) as HTMLSelectElement;
+    expect(Array.from(ttl.options).map((option) => option.value)).toEqual([
+      '1',
+      '7',
+      '30',
+      '90',
+      '365',
+    ]);
   });
 
   it('D3: no service account — the notice offers 创建服务账号 itself, which opens the create sheet', async () => {

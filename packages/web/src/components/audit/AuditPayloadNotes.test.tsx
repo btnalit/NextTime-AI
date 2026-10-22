@@ -30,6 +30,18 @@ describe('AuditPayloadNotes (legacy 159, 178)', () => {
     expect(note.textContent).not.toContain('已确认');
   });
 
+  it('legacy 168 ③: says how many Handles an upgrade revoked', () => {
+    render(
+      <AuditPayloadNotes
+        payload={{
+          by: 'migration governance/0018_container_held_handles_revoked',
+          revokedHandleCount: 4,
+        }}
+      />,
+    );
+    expect(screen.getByTestId('audit-revoked-handles').textContent).toContain('吊销了 4 个凭证');
+  });
+
   it('says how many values were hidden from the parameters', () => {
     render(<AuditPayloadNotes payload={{ redactedValues: 3 }} />);
     const note = screen.getByTestId('audit-redacted-values').textContent;

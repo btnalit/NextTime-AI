@@ -55,3 +55,30 @@ export function alwaysAllowStaleRequestText(t: Translate, publishedVersion: numb
     `This request was made under an earlier definition, and the gate now publishes v${publishedVersion}, so “Always allow” is not offered here: it covers only a definition you have seen. Choose it on a request made under v${publishedVersion}; the workspace owner can also confirm it in the policy table under Models & Quotas.`,
   );
 }
+
+/** Legacy 216 ①: which definition a pending request was made under, for an approver who is not
+ *  offered "总是允许" (a high-impact action, or no right to write rules) and so never reads the
+ *  sentence beside that option. The wire says only the version published now and whether the
+ *  request matches it — an older request's own version is not on the wire (legacy 216 ②), so it
+ *  reads as "an earlier definition". `null` when the row carries no such read. */
+export function requestDefinitionText(
+  published: PublishedDefinition | undefined,
+  t: Translate,
+): string | null {
+  if (published === undefined) return null;
+  if (published.version === null) {
+    return t(
+      '门上现在没有已发布的定义（草稿、已弃用或被门删掉）。',
+      'The gate publishes no definition of it now (a draft, deprecated, or removed by the gate).',
+    );
+  }
+  return published.requestIsCurrent
+    ? t(
+        `按门上现在发布的 v${published.version} 发起。`,
+        `Made under v${published.version}, the version the gate publishes now.`,
+      )
+    : t(
+        `按旧定义发起，门上现在发布的是 v${published.version}。`,
+        `Made under an earlier definition; the gate now publishes v${published.version}.`,
+      );
+}

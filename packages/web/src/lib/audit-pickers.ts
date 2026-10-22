@@ -430,6 +430,16 @@ export const PLATFORM_LIFECYCLE_ACTIONS = [
   'gate_instance.manifest_confirmed',
   'connector.entry_handles_revoked',
   'connector.created',
+  // Legacy 245 a (same sweep): written with `workspaceId: null` too — a self connection's
+  // suspension revoking entry Handles, and the host CLI's own actions.
+  'self_connection.entry_handles_revoked',
+  'cli.workspace_created',
+  'cli.principal_added',
+  'cli.service_handle_issued',
+  'cli.platform_admin_created',
+  'cli.password_set',
+  'cli.observations_compacted',
+  'cli.raw_secrets_scrubbed',
 ] as const;
 
 /** Every `scope: 'platform'` capability name (a platform dispatch is audited under its own name)

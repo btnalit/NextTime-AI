@@ -609,6 +609,9 @@
 .tool-call-detail .code-block {
   max-height: 240px;
   overflow: auto;
+  /* Legacy 164 ①: a long argument or result line wraps instead of scrolling sideways. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 /* A Turn's persisted tool calls (ToolCallGroupView), folded above its reply. */

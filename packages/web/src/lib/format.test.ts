@@ -11,9 +11,11 @@ import {
   excerpt,
   formatAuditActor,
   formatDateTime,
+  formatDateTimeSecondsRange,
   formatDuration,
   formatRelative,
   formatTime,
+  formatTimeSeconds,
   humanizeKind,
   prettyJsonVisible,
   redactSensitive,
@@ -217,6 +219,34 @@ describe('format', () => {
     it('renders HH:mm only, no date or zone', () => {
       expect(formatTime('2026-09-03T09:05:00.000Z')).toBe('09:05');
       expect(formatTime(null)).toBe('—');
+    });
+  });
+
+  describe('formatTimeSeconds', () => {
+    it('renders HH:mm:ss (legacy 164 ③)', () => {
+      expect(formatTimeSeconds('2026-09-03T09:05:07.400Z')).toBe('09:05:07');
+      expect(formatTimeSeconds(null)).toBe('—');
+    });
+  });
+
+  describe('formatDateTimeSecondsRange', () => {
+    it('reads both ends to the second, the date and zone once when they share a day (legacy 164 ③)', () => {
+      expect(
+        formatDateTimeSecondsRange('2026-09-03T09:05:07.000Z', '2026-09-03T09:05:19.000Z', NOW),
+      ).toBe('09-03 09:05:07 – 09:05:19 (UTC+0)');
+    });
+
+    it('repeats the date when the end falls on another day', () => {
+      expect(
+        formatDateTimeSecondsRange('2026-09-02T23:59:58.000Z', '2026-09-03T00:00:03.000Z', NOW),
+      ).toBe('09-02 23:59:58 (UTC+0) – 09-03 00:00:03 (UTC+0)');
+    });
+
+    it('is the start alone with no end, and tolerates bad input', () => {
+      expect(formatDateTimeSecondsRange('2026-09-03T09:05:07.000Z', null, NOW)).toBe(
+        '09-03 09:05:07 (UTC+0)',
+      );
+      expect(formatDateTimeSecondsRange(null, null, NOW)).toBe('—');
     });
   });
 });

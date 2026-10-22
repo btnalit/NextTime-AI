@@ -2,7 +2,6 @@ import type { PolicyWire, QuotaListEntryWire } from '@nexttime/shared';
 import { useState } from 'react';
 import { useCapability, useCapabilityList } from '../hooks/useCapability.js';
 import { useRoleCan } from '../hooks/useRoleCan.js';
-import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
 import type { AgentPolicy } from '../lib/agent-profile.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
@@ -11,6 +10,7 @@ import type { ModelRow, SkillRow } from '../lib/governance.js';
 import { type Translate, useT } from '../lib/i18n.js';
 import { breadcrumbFor } from '../lib/nav.js';
 import { QUOTA_KEY_INFO, type QuotaKey } from '../lib/quotas.js';
+import { capabilityHolders } from '../lib/role-holders.js';
 import { AgentPolicyForm } from './AgentPolicyForm.js';
 import { ModelsTable } from './ModelsTable.js';
 import { nameOf, useGatekeeperDirectory } from './approvals/useDirectoryNames.js';
@@ -290,10 +290,10 @@ function isOrphaned(policy: PolicyWire): boolean {
  *  given for is no longer the one published (or was never recorded), and who can reconfirm them. */
 function SuspendedPoliciesNotice({
   items,
-  isOwner,
+  canReconfirm,
 }: {
   readonly items: readonly PolicyWire[];
-  readonly isOwner: boolean;
+  readonly canReconfirm: boolean;
 }) {
   const t = useT();
   const suspended = items.filter(isSuspended);
@@ -303,7 +303,7 @@ function SuspendedPoliciesNotice({
   return (
     <Notice tone="warn" testId="policies-suspended">
       {count > 0
-        ? isOwner
+        ? canReconfirm
           ? t(
               `有 ${count} 条「始终允许」已暂停：它们允许的版本已不是门上现在发布的版本，相关请求重新走审批。看过新版本后，点该行的「重新确认」。`,
               `${count} “Always allow” rule(s) are suspended: the version they allow is no longer the one the gate publishes, so those requests go back through approval. Once you have looked at the new version, use “Reconfirm” on the row.`,
@@ -315,7 +315,7 @@ function SuspendedPoliciesNotice({
         : null}
       {count > 0 && orphaned > 0 ? ' ' : null}
       {orphaned > 0
-        ? isOwner
+        ? canReconfirm
           ? t(
               `有 ${orphaned} 条「始终允许」对应的 Operation 已不再发布，无法重新确认：点该行的「停用」，把它改为要求审批。`,
               `${orphaned} “Always allow” rule(s) name an Operation that is no longer published, so they cannot be reconfirmed: use “Turn off” on the row to make them require approval.`,
@@ -361,9 +361,12 @@ export interface ModelsPageProps {
 export function ModelsPage({ http }: ModelsPageProps) {
   const t = useT();
   const toast = useToast();
-  const { role } = useWorkspaceIdentity(http);
   const can = useRoleCan(http);
-  const isOwner = role.role === 'owner';
+  // Legacy 246 e: each edit control asks for its own capability — never "is the owner", so a role
+  // the registry lets write one of them gets that control, and none it may not use.
+  const canSetAgentPolicy = can('set_agent_policy') === true;
+  const canSetQuota = can('set_quota') === true;
+  const canSetPolicy = can('set_policy') === true;
 
   const models = useCapabilityList<ModelRow>(http, 'list_models');
   // A picker inside AgentPolicyForm, not a browsable list — autoLoadAll (S8 W1-C #243 made
@@ -458,7 +461,7 @@ export function ModelsPage({ http }: ModelsPageProps) {
               testId="agent-policy-error"
             />
           )
-        ) : isOwner ? (
+        ) : canSetAgentPolicy ? (
           <AgentPolicyForm
             http={http}
             policy={agentPolicy.state.data}
@@ -473,7 +476,10 @@ export function ModelsPage({ http }: ModelsPageProps) {
         ) : (
           <div className="stack-s" data-testid="agent-policy-readonly">
             <Notice testId="agent-policy-owner-only">
-              {t('需要所有者权限来修改', 'Editing this policy requires the workspace owner role.')}
+              {t(
+                `修改这份策略需要${capabilityHolders('set_agent_policy', t, 'or')}的权限。`,
+                `Only ${capabilityHolders('set_agent_policy', t, 'or')} can edit this policy.`,
+              )}
             </Notice>
             <dl className="definition-list">
               <dt>{t('默认模型', 'Default model')}</dt>
@@ -528,7 +534,7 @@ export function ModelsPage({ http }: ModelsPageProps) {
             />
           ) : (
             <DataTable
-              columns={quotaColumns(t, { canManage: isOwner, onEdit: setQuotaEditor, http })}
+              columns={quotaColumns(t, { canManage: canSetQuota, onEdit: setQuotaEditor, http })}
               data={quotas.state.data.items}
               getRowId={(row) => row.key}
               ariaLabel="Quotas"
@@ -543,7 +549,7 @@ export function ModelsPage({ http }: ModelsPageProps) {
         <DashboardCard
           title={t('策略', 'Policies')}
           actions={
-            isOwner ? (
+            canSetPolicy ? (
               <Button
                 variant="primary"
                 size="s"
@@ -584,10 +590,13 @@ export function ModelsPage({ http }: ModelsPageProps) {
             />
           ) : (
             <>
-              <SuspendedPoliciesNotice items={policies.state.data.items} isOwner={isOwner} />
+              <SuspendedPoliciesNotice
+                items={policies.state.data.items}
+                canReconfirm={canSetPolicy}
+              />
               <DataTable
                 columns={policyColumns(t, {
-                  canManage: isOwner,
+                  canManage: canSetPolicy,
                   onEdit: (row) => setPolicyEditor({ kind: 'edit', row }),
                   gateNames: gatekeepers.names,
                   http,
@@ -608,7 +617,7 @@ export function ModelsPage({ http }: ModelsPageProps) {
        *  instance per edit means each one's `useState(editing/row)` initializer runs against the
        *  right data, instead of whatever was current the one time an always-mounted instance
        *  would have first initialized. */}
-      {isOwner && policyEditor !== null ? (
+      {canSetPolicy && policyEditor !== null ? (
         <PolicyEditSheet
           http={http}
           open
@@ -619,7 +628,7 @@ export function ModelsPage({ http }: ModelsPageProps) {
         />
       ) : null}
 
-      {isOwner && quotaEditor !== null ? (
+      {canSetQuota && quotaEditor !== null ? (
         <QuotaEditSheet
           http={http}
           open

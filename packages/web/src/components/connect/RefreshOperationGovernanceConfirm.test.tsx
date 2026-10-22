@@ -393,6 +393,47 @@ describe('RefreshOperationGovernanceConfirm', () => {
     );
   });
 
+  it('legacy 224 ④: a changed definition that already has a revision draft comes back unchanged — never read as aligned, the draft is linked to publish', async () => {
+    const http = scriptedHttp({
+      preview_gate_instance_enable: () =>
+        preview([
+          {
+            name: 'container.restart',
+            existing: {
+              mode: 'execute',
+              blastRadius: 'medium',
+              autoApprovable: false,
+              status: 'published',
+            },
+            announced: { mode: 'execute', blastRadius: 'medium', autoApprovable: false },
+            differs: false,
+            direction: 'neutral',
+            definitionDiffers: true,
+          },
+        ]),
+      refresh_operation_governance: () => ({
+        gatekeeperId: 'gk-1',
+        refreshed: [],
+        revisionDrafts: [],
+        unchanged: ['container.restart'],
+      }),
+    });
+    const onRefreshed = renderConfirm(http);
+    fireEvent.click(screen.getByTestId('align-gk-1'));
+    const confirm = await screen.findByTestId('align-gk-1-confirm');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    await waitFor(() => expect(onRefreshed).toHaveBeenCalledTimes(1));
+    const result = await screen.findByTestId('align-gk-1-result');
+    expect(result.textContent).not.toContain('已对齐 0');
+    expect(result.textContent).not.toContain('未变化');
+    const open = within(result).getByTestId('align-gk-1-draft-already-open');
+    expect(open.textContent).toContain('已经有修订草稿');
+    expect(open.textContent).toContain('container.restart');
+    expect(within(open).getByRole('link', { name: '去能力目录发布' }).getAttribute('href')).toBe(
+      '#/govern/catalog/operations/gk-1%3A%3Acontainer.restart%40draft',
+    );
+  });
+
   it('legacy K: a governance change and a definition change in one alignment — both are sent, only the first is a classification change', async () => {
     const http = scriptedHttp({
       preview_gate_instance_enable: () =>

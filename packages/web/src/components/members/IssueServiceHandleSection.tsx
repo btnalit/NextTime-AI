@@ -3,6 +3,12 @@ import { useMemo, useState } from 'react';
 import { capabilityModeLabel } from '../../lib/catalog-pickers.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import type { PrincipalRow } from '../../lib/governance.js';
+import {
+  SECONDS_PER_DAY,
+  SERVICE_HANDLE_TTL_PRESET_DAYS,
+  ttlDaysLabel,
+  ttlPresetDaysWithin,
+} from '../../lib/handle-ttl.js';
 import { useT } from '../../lib/i18n.js';
 import { sameNameIds, withSameNameId } from '../../lib/same-name.js';
 import { Button } from '../kit/button.js';
@@ -14,14 +20,10 @@ import { Select } from '../kit/select.js';
 import { StillNeeded } from '../kit/still-needed.js';
 import { PlatformError } from '../platform/PlatformError.js';
 
-const SECONDS_PER_DAY = 86400;
 /** The registry's own ceiling (`issue_service_handle.ttlSeconds` `.max(...)`, one year) read
  *  from the Zod schema so this page cannot drift from the kernel; the literal is only the
  *  fallback if the schema shape ever changes (`serviceHandleMaxTtlSeconds` is unit-tested). */
 const FALLBACK_MAX_TTL_SECONDS = 365 * SECONDS_PER_DAY;
-/** B7 (docs/console-completion-plan.md §5.6 "TTL 默认 30 天、上限 365"): the default sits well
- *  below the cap — a runtime credential that outlives its purpose by a year was the old default. */
-const DEFAULT_TTL_DAYS = 30;
 
 export function serviceHandleMaxTtlSeconds(): number {
   const schema = getCapability('issue_service_handle')?.paramsSchema as
@@ -118,7 +120,10 @@ export function IssueServiceHandleSection({
     (p) => p.id,
     (p) => p.displayName,
   );
-  const maxTtlDays = Math.floor(serviceHandleMaxTtlSeconds() / SECONDS_PER_DAY);
+  const ttlPresets = ttlPresetDaysWithin(
+    SERVICE_HANDLE_TTL_PRESET_DAYS,
+    serviceHandleMaxTtlSeconds(),
+  );
   const catalog = useMemo(() => handleScopeCapabilities(), []);
   const allowed = useMemo(() => new Set(catalog.map((capability) => capability.name)), [catalog]);
   const groups = useMemo(() => {
@@ -135,7 +140,8 @@ export function IssueServiceHandleSection({
   // console-ux-3: with exactly one service principal there is nothing to choose — it is selected.
   const onlyPrincipal = servicePrincipals.length === 1 ? servicePrincipals[0] : undefined;
   const principalId = chosenPrincipalId || (onlyPrincipal?.id ?? '');
-  const [ttlDays, setTtlDays] = useState(String(DEFAULT_TTL_DAYS));
+  // Legacy 168 ②: picked from presets, the shortest by default (was 30 days, typed).
+  const [ttlDays, setTtlDays] = useState(ttlPresets[0] ?? 1);
   const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
   /** The name box's text: a search over the handle-channel names, or a pasted list. */
   const [nameText, setNameText] = useState('');
@@ -146,10 +152,8 @@ export function IssueServiceHandleSection({
   const [issued, setIssued] = useState<IssueServiceHandleResult | null>(null);
 
   const scope = Array.from(picked);
-  const ttlValid =
-    /^\d+$/.test(ttlDays.trim()) && Number(ttlDays) >= 1 && Number(ttlDays) <= maxTtlDays;
   const canSubmit =
-    principalId !== '' && scope.length > 0 && unknownPasted.length === 0 && ttlValid && !submitting;
+    principalId !== '' && scope.length > 0 && unknownPasted.length === 0 && !submitting;
   // Audit P1-9: a disabled 签发 says what it still waits for (the form's own label words).
   const missing = [
     principalId !== ''
@@ -157,9 +161,6 @@ export function IssueServiceHandleSection({
       : servicePrincipals.length === 0
         ? t('先创建服务账号', 'create a service account first')
         : t('选择服务账号', 'pick a service account'),
-    ttlValid
-      ? null
-      : t(`填写 1 到 ${maxTtlDays} 的有效期（天）`, `enter a TTL of 1 to ${maxTtlDays} days`),
     scope.length > 0 ? null : t('勾选能力', 'tick at least one capability'),
     unknownPasted.length === 0
       ? null
@@ -208,7 +209,7 @@ export function IssueServiceHandleSection({
         await http.call<IssueServiceHandleResult>('issue_service_handle', {
           principalId,
           scope,
-          ttlSeconds: Number(ttlDays) * SECONDS_PER_DAY,
+          ttlSeconds: ttlDays * SECONDS_PER_DAY,
         }),
       );
     } catch (err) {
@@ -320,26 +321,26 @@ export function IssueServiceHandleSection({
 
         <Field
           id="ish-ttl"
-          label={t('有效期（天）', 'TTL (days)')}
+          label={t('有效期', 'Valid for')}
           hint={t(
-            `默认 ${DEFAULT_TTL_DAYS}，最多 ${maxTtlDays}`,
-            `Default ${DEFAULT_TTL_DAYS}, max ${maxTtlDays}`,
+            '到期后要重新签发。运行时用多久选多久，越短越安全。',
+            'Issue a new one after it expires. Pick only as long as the runtime needs; shorter is safer.',
           )}
-          error={
-            ttlValid
-              ? null
-              : t(`必须是 1 到 ${maxTtlDays} 的整数`, `Must be an integer from 1 to ${maxTtlDays}`)
-          }
         >
-          <input
+          <Select
             id="ish-ttl"
-            className="input input-mono"
-            value={ttlDays}
-            onChange={(event) => setTtlDays(event.target.value)}
+            aria-label={t('有效期', 'Valid for')}
+            className="select-fit"
+            value={String(ttlDays)}
+            onChange={(event) => setTtlDays(Number(event.target.value))}
             disabled={submitting}
-            aria-invalid={!ttlValid || undefined}
-            inputMode="numeric"
-          />
+          >
+            {ttlPresets.map((days) => (
+              <option key={days} value={days}>
+                {ttlDaysLabel(days, t)}
+              </option>
+            ))}
+          </Select>
         </Field>
 
         <fieldset className="field" style={{ border: 0, padding: 0, margin: 0 }}>

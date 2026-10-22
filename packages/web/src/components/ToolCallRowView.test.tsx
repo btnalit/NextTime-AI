@@ -98,6 +98,64 @@ describe('ToolCallRowView', () => {
 });
 
 describe('PersistedToolCallRowView', () => {
+  it('legacy 164 ②③: an unfinished call with arguments still says it never finished; times read to the second with how long it took', () => {
+    const argsText = '{"cmd":"ls"}';
+    const { unmount } = render(
+      <PersistedToolCallRowView
+        record={{
+          toolCallId: 'c164',
+          name: 'bash',
+          outcome: 'not_finished',
+          args: { text: argsText, truncated: false, totalChars: argsText.length },
+          result: undefined,
+          redactedValues: 0,
+          startedAt: '2026-09-03T09:05:07.000Z',
+          endedAt: null,
+        }}
+      />,
+    );
+    expect(screen.getByTestId('tool-call-not-finished').textContent).toContain('还没有结束');
+    expect(screen.getByTestId('tool-call-time').textContent).toBe('09:05:07');
+    expect(screen.getByTestId('tool-call-time').title).toMatch(/09:05:07 \(UTC/);
+    unmount();
+    render(
+      <PersistedToolCallRowView
+        record={{
+          toolCallId: 'c164b',
+          name: 'bash',
+          outcome: 'done',
+          args: { text: argsText, truncated: false, totalChars: argsText.length },
+          result: { text: 'ok', truncated: false, totalChars: 2 },
+          redactedValues: 0,
+          startedAt: '2026-09-03T09:05:07.000Z',
+          endedAt: '2026-09-03T09:05:19.000Z',
+        }}
+      />,
+    );
+    expect(screen.getByTestId('tool-call-time').textContent).toBe('09:05:07 · 用时 12s');
+    // UX P3 on #667: the hover reads both ends to the second.
+    expect(screen.getByTestId('tool-call-time').title).toMatch(/09:05:07 – 09:05:19 \(UTC/);
+    expect(screen.queryByTestId('tool-call-not-finished')).toBeNull();
+  });
+
+  it('legacy 224 ③: a successful result that only mentions a reason code gets no refusal note', () => {
+    const text = '{"ok":true,"lines":["2026-09-03 gate_unreachable seen by the probe, recovered"]}';
+    render(
+      <PersistedToolCallRowView
+        record={{
+          toolCallId: 'c224',
+          name: 'nexttime_observe_operation',
+          outcome: 'done',
+          result: { text, truncated: false, totalChars: text.length },
+          redactedValues: 0,
+          startedAt: null,
+          endedAt: null,
+        }}
+      />,
+    );
+    expect(screen.queryByTestId('tool-call-gate-reason')).toBeNull();
+  });
+
   it('explains a request made against no definition (operation_definition_unavailable)', () => {
     render(
       <PersistedToolCallRowView
