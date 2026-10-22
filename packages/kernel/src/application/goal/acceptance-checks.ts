@@ -1,4 +1,5 @@
 import type {
+  FactCheck,
   GoalAcceptanceCheckKind,
   GoalAcceptanceCheckStatus,
   ObservationCheck,
@@ -28,20 +29,30 @@ import type { AcceptanceCheck, StepAcceptanceCheck } from './plan.js';
  * Every end of an attempt and every settlement is audited (`goal_run.acceptance_check`, on the
  * GoalRun, with the round and the check's key) — the goal's timeline. The database guard holds the
  * rest: created pending in the run's latest round while it is verifying on the plan the row names;
- * settled once; `passed` only on an Observation of this check that satisfied its predicate, or on
- * the requester's own Decision.
+ * settled once; `passed` only on an Observation of this check that satisfied its predicate, on a
+ * Fact the database takes as its evidence (a fact check, S11 GO4c, goal/0007), or on the
+ * requester's own Decision.
  *
  * **A step's checks** (S11 GO4b, `step_acceptance_checks`, goal/0006) are rows of the same shape,
- * observations only, in rounds of their StepRun: {@link openStepAcceptanceRound} as the step starts
- * waiting on its acceptance (`advance.ts` phase A), {@link supersedePendingStepAcceptanceChecks}
- * once its round ends — the step stops waiting on it, or the run stops running (`moves.ts`). An
- * observation's claim, lock, deferral and settlement are the functions above, for a key that names
- * the StepRun ({@link AcceptanceCheckKey}`.stepRunId`). Audited as `goal_run.step_acceptance_check`
- * and `goal_run.step_acceptance_round`, on the GoalRun with the step's key. The database holds a
- * row to its step's declared checks, its round to the step waiting on its acceptance at the
- * attempt the row verifies in a running run, and the step's success to every check of its latest
- * round passed.
+ * the platform's checks only (observations, Facts), in rounds of their StepRun:
+ * {@link openStepAcceptanceRound} as the step starts waiting on its acceptance (`advance.ts` phase
+ * A), {@link supersedePendingStepAcceptanceChecks} once its round ends — the step stops waiting on
+ * it, or the run stops running (`moves.ts`). An observation's claim, lock, deferral and settlement
+ * are the functions above, for a key that names the StepRun
+ * ({@link AcceptanceCheckKey}`.stepRunId`). Audited as `goal_run.step_acceptance_check` and
+ * `goal_run.step_acceptance_round`, on the GoalRun with the step's key. The database holds a row to
+ * its step's declared checks, its round to the step waiting on its acceptance at the attempt the
+ * row verifies in a running run, and the step's success to every check of its latest round passed.
+ *
+ * **A fact check** (S11 GO4c, `fact_predicate`) is claimed, deferred and settled the same way: its
+ * `fact_id` is the Fact it saw (the latest, while it is retried; the one it rests on, settled)
+ * where an observation's `observation_id` is its Observation.
  */
+
+/** The `last_error` of a fact check's attempt that found no Fact that may serve as evidence — kept
+ *  apart from a check that could not be made (a refusal) and from one that saw a Fact that did not
+ *  satisfy its predicate (`failed`), in the rows, the audit and a pause's detail. */
+export const FACT_NOT_OBSERVED = 'fact_not_observed';
 
 export interface AcceptanceCheckRow {
   readonly workspaceId: string;
@@ -54,8 +65,10 @@ export interface AcceptanceCheckRow {
   readonly checkKey: string;
   readonly planRevision: number;
   readonly kind: GoalAcceptanceCheckKind;
-  /** `observe_predicate`: what is observed; `null` for a confirmation. */
+  /** `observe_predicate`: what is observed; `null` otherwise. */
   readonly observationCheck: ObservationCheck | null;
+  /** `fact_predicate` (S11 GO4c): the Fact judged; `null` otherwise. */
+  readonly factCheck: FactCheck | null;
   /** `requester_confirm`: what the requester is asked; `null` for an observation. */
   readonly prompt: string | null;
   readonly status: GoalAcceptanceCheckStatus;
@@ -65,6 +78,8 @@ export interface AcceptanceCheckRow {
   readonly leaseUntil: Date | null;
   /** The latest Observation — the evidence a settled observation rests on. */
   readonly observationId: string | null;
+  /** The latest Fact seen — the evidence a settled fact check rests on. */
+  readonly factId: string | null;
   /** The requester's Decision a passed confirmation rests on. */
   readonly decisionId: string | null;
   readonly lastError: string | null;
@@ -82,6 +97,7 @@ interface AcceptanceCheckDbRow {
   plan_revision: number;
   kind: GoalAcceptanceCheckKind;
   observation_check: ObservationCheck | null;
+  fact_check: FactCheck | null;
   prompt: string | null;
   status: GoalAcceptanceCheckStatus;
   attempts: number;
@@ -89,6 +105,7 @@ interface AcceptanceCheckDbRow {
   next_attempt_at: Date;
   lease_until: Date | null;
   observation_id: string | null;
+  fact_id: string | null;
   decision_id: string | null;
   last_error: string | null;
   created_at: Date;
@@ -97,14 +114,16 @@ interface AcceptanceCheckDbRow {
 
 const ACCEPTANCE_CHECK_COLUMNS =
   'workspace_id, goal_run_id, null::uuid as step_run_id, null::int as step_attempt, round, ' +
-  'check_key, plan_revision, kind, observation_check, prompt, status, attempts, first_attempt_at, ' +
-  'next_attempt_at, lease_until, observation_id, decision_id, last_error, created_at, settled_at';
+  'check_key, plan_revision, kind, observation_check, fact_check, prompt, status, attempts, ' +
+  'first_attempt_at, next_attempt_at, lease_until, observation_id, fact_id, decision_id, ' +
+  'last_error, created_at, settled_at';
 
 /** A step's row in the shape of a goal's: it has no prompt and no decision. */
 const STEP_ACCEPTANCE_CHECK_COLUMNS =
   'workspace_id, goal_run_id, step_run_id, step_attempt, round, check_key, plan_revision, kind, ' +
-  'observation_check, null::text as prompt, status, attempts, first_attempt_at, next_attempt_at, ' +
-  'lease_until, observation_id, null::uuid as decision_id, last_error, created_at, settled_at';
+  'observation_check, fact_check, null::text as prompt, status, attempts, first_attempt_at, ' +
+  'next_attempt_at, lease_until, observation_id, fact_id, null::uuid as decision_id, last_error, ' +
+  'created_at, settled_at';
 
 /** One row: the goal's own check, or — with `stepRunId` — a step's (S11 GO4b). */
 export interface AcceptanceCheckKey {
@@ -149,6 +168,7 @@ function mapRow(row: AcceptanceCheckDbRow): AcceptanceCheckRow {
     planRevision: row.plan_revision,
     kind: row.kind,
     observationCheck: row.observation_check,
+    factCheck: row.fact_check,
     prompt: row.prompt,
     status: row.status,
     attempts: row.attempts,
@@ -156,6 +176,7 @@ function mapRow(row: AcceptanceCheckDbRow): AcceptanceCheckRow {
     nextAttemptAt: row.next_attempt_at,
     leaseUntil: row.lease_until,
     observationId: row.observation_id,
+    factId: row.fact_id,
     decisionId: row.decision_id,
     lastError: row.last_error,
     createdAt: row.created_at,
@@ -227,13 +248,14 @@ async function auditCheck(
       round: check.round,
       checkKey: check.checkKey,
       kind: check.kind,
-      ...(check.kind === 'observe_predicate' ? { attempt: check.attempts } : {}),
+      ...(check.kind !== 'requester_confirm' ? { attempt: check.attempts } : {}),
       ...(check.observationCheck
         ? {
             gatekeeperId: check.observationCheck.gatekeeperId,
             operation: check.observationCheck.operation,
           }
         : {}),
+      ...(check.factCheck ? { linkType: check.factCheck.linkType } : {}),
       ...extra,
     },
   });
@@ -266,8 +288,8 @@ export async function openAcceptanceRound(
     const inserted = await client.query<AcceptanceCheckDbRow>(
       `insert into goal_acceptance_checks
          (workspace_id, goal_run_id, round, check_key, plan_revision, kind, observation_check,
-          prompt)
-       values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
+          fact_check, prompt)
+       values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9)
        returning ${ACCEPTANCE_CHECK_COLUMNS}`,
       [
         workspaceId,
@@ -277,6 +299,7 @@ export async function openAcceptanceRound(
         input.planRevision,
         check.kind,
         check.kind === 'observe_predicate' ? JSON.stringify(check.check) : null,
+        check.kind === 'fact_predicate' ? JSON.stringify(check.fact) : null,
         check.kind === 'requester_confirm' ? check.prompt : null,
       ],
     );
@@ -339,8 +362,9 @@ export async function supersedePendingAcceptanceChecks(
   return result.rows.length;
 }
 
-/** Claims an observation for one attempt: `pending`, due, not leased — or `null`. The attempt
- *  number grows by one, the first claim sets `first_attempt_at`, and the lease runs `leaseMs`. */
+/** Claims a check the platform makes (an observation, a fact check) for one attempt: `pending`,
+ *  due, not leased — or `null`. The attempt number grows by one, the first claim sets
+ *  `first_attempt_at`, and the lease runs `leaseMs`. */
 export async function claimAcceptanceCheck(
   client: PoolClient,
   workspaceId: string,
@@ -354,7 +378,8 @@ export async function claimAcceptanceCheck(
             first_attempt_at = coalesce(first_attempt_at, now()),
             lease_until = now() + make_interval(secs => $5::double precision)
       where ${row.where}
-        and kind = 'observe_predicate' and status = 'pending' and next_attempt_at <= now()
+        and kind in ('observe_predicate', 'fact_predicate') and status = 'pending'
+        and next_attempt_at <= now()
         and (lease_until is null or lease_until <= now())
       returning ${row.columns}`,
     [...keyValues(workspaceId, key), leaseMs / 1000],
@@ -378,14 +403,21 @@ export async function lockAcceptanceCheck(
   return locked ? mapRow(locked) : null;
 }
 
-/** Puts a claimed observation back: due again in `delayMs`, the lease released, `lastError` the
- *  code of what went wrong this time, and `observationId` — when this attempt observed without the
- *  predicate holding — the row's latest observation. Audited as a `retry`. */
+/** Puts a claimed check back: due again in `delayMs`, the lease released, `lastError` the code of
+ *  what went wrong this time, and `observationId` / `factId` — when this attempt saw something
+ *  without the predicate holding — the row's latest observation or Fact. Audited as a `retry`
+ *  (with `detail`: a fact check's evaluation). */
 export async function deferAcceptanceCheck(
   client: PoolClient,
   workspaceId: string,
   check: AcceptanceCheckRow,
-  input: { readonly delayMs: number; readonly lastError: string; readonly observationId?: string },
+  input: {
+    readonly delayMs: number;
+    readonly lastError: string;
+    readonly observationId?: string;
+    readonly factId?: string;
+    readonly detail?: Record<string, unknown>;
+  },
   actorPrincipalId: string,
   error?: string | null,
 ): Promise<void> {
@@ -393,26 +425,31 @@ export async function deferAcceptanceCheck(
   await client.query(
     `update ${row.table}
         set next_attempt_at = now() + make_interval(secs => $5::double precision),
-            lease_until = null, last_error = $6, observation_id = coalesce($7, observation_id)
+            lease_until = null, last_error = $6, observation_id = coalesce($7, observation_id),
+            fact_id = coalesce($8, fact_id)
       where ${row.where}`,
     [
       ...keyValues(workspaceId, check),
       input.delayMs / 1000,
       clippedCode(input.lastError),
       input.observationId ?? null,
+      input.factId ?? null,
     ],
   );
   await auditCheck(client, workspaceId, check, 'retry', actorPrincipalId, {
     code: clippedCode(input.lastError),
     retryInMs: input.delayMs,
     ...(input.observationId ? { observationId: input.observationId } : {}),
+    ...(input.factId ? { factId: input.factId } : {}),
+    ...(input.detail ?? {}),
     ...(error ? { error } : {}),
   });
 }
 
-/** Settles a pending observation once: `passed` (this attempt's `observationId` satisfied the
- *  predicate), `failed` (the latest observation did not — this attempt's, or an earlier one's) or
- *  `unavailable` (`lastError` says why). */
+/** Settles a pending check the platform makes once: `passed` (this attempt's `observationId` /
+ *  `factId` satisfied the predicate), `failed` (the latest one seen did not — this attempt's, or
+ *  an earlier one's) or `unavailable` (`lastError` says why). Audited with `detail`: a fact check's
+ *  evaluation. */
 export async function settleAcceptanceCheck(
   client: PoolClient,
   workspaceId: string,
@@ -420,7 +457,9 @@ export async function settleAcceptanceCheck(
   input: {
     readonly status: 'passed' | 'failed' | 'unavailable';
     readonly observationId?: string;
+    readonly factId?: string;
     readonly lastError?: string;
+    readonly detail?: Record<string, unknown>;
   },
   actorPrincipalId: string,
   error?: string | null,
@@ -429,19 +468,23 @@ export async function settleAcceptanceCheck(
   await client.query(
     `update ${row.table}
         set status = $5, observation_id = coalesce($6, observation_id), last_error = $7,
-            lease_until = null, settled_at = now()
+            fact_id = coalesce($8, fact_id), lease_until = null, settled_at = now()
       where ${row.where}`,
     [
       ...keyValues(workspaceId, check),
       input.status,
       input.observationId ?? null,
       clippedCode(input.lastError),
+      input.factId ?? null,
     ],
   );
   const observationId = input.observationId ?? check.observationId;
+  const factId = input.factId ?? check.factId;
   await auditCheck(client, workspaceId, check, input.status, actorPrincipalId, {
     ...(observationId ? { observationId } : {}),
+    ...(factId ? { factId } : {}),
     ...(input.lastError ? { code: clippedCode(input.lastError) } : {}),
+    ...(input.detail ?? {}),
     ...(error ? { error } : {}),
   });
 }
@@ -534,8 +577,8 @@ export async function openStepAcceptanceRound(
     const inserted = await client.query<AcceptanceCheckDbRow>(
       `insert into step_acceptance_checks
          (workspace_id, goal_run_id, step_run_id, step_attempt, round, check_key, plan_revision,
-          kind, observation_check)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
+          kind, observation_check, fact_check)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb)
        returning ${STEP_ACCEPTANCE_CHECK_COLUMNS}`,
       [
         workspaceId,
@@ -546,7 +589,8 @@ export async function openStepAcceptanceRound(
         check.key,
         input.planRevision,
         check.kind,
-        JSON.stringify(check.check),
+        check.kind === 'observe_predicate' ? JSON.stringify(check.check) : null,
+        check.kind === 'fact_predicate' ? JSON.stringify(check.fact) : null,
       ],
     );
     const row = inserted.rows[0];

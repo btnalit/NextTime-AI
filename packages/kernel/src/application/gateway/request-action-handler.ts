@@ -350,7 +350,12 @@ async function recordWorkerGateObservationSafely(
  *  Bearer token, …) is refused before the Activity starts or the gate is called; any other
  *  suspected value — under a secret-named field, or query text that only mentions one — is
  *  recorded in the audit row (`auditPayload.credentialReview`). The gate is told which definition
- *  was published (legacy K) and refuses the call if it runs another. */
+ *  was published (legacy K) and refuses the call if it runs another.
+ *
+ *  The Activity records which Task's Worker made the call — `triggeredByTaskId`, `null` for a
+ *  caller that is not a WorkerRun (S11 GO4c): a goal's fact check takes the Facts this observation
+ *  confirms as evidence only when the Task is not one of that goal's (goal/0007), and the record
+ *  never changes once written (core/0046). */
 async function runObserve(
   client: PoolClient,
   workspaceId: string,
@@ -366,7 +371,11 @@ async function runObserve(
   const activity = await startActivity(client, workspaceId, {
     kind: 'gatekeeper_observe',
     principalId: onBehalfOf,
-    metadata: { gatekeeperId: gatekeeper.gatekeeperId, operation: operationName },
+    metadata: {
+      gatekeeperId: gatekeeper.gatekeeperId,
+      operation: operationName,
+      triggeredByTaskId: workerRun?.taskId ?? null,
+    },
   });
   try {
     const gate = await resolveGateTarget(client, workspaceId, gatekeeper);

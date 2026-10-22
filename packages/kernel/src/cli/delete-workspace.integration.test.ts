@@ -88,6 +88,9 @@ describe.runIf(DATABASE_URL !== undefined)('deleteWorkspace (integration, real P
     before('step_acceptance_checks', 'step_runs');
     before('step_acceptance_checks', 'plan_revisions');
     before('step_acceptance_checks', 'observations');
+    // S11 GO4c (migrations/goal/0007).
+    before('goal_acceptance_checks', 'links');
+    before('step_acceptance_checks', 'links');
     // S11 P1 (migrations/governance/0025).
     before('change_items', 'change_segments');
     before('change_segments', 'principals');

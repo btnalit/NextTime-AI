@@ -455,6 +455,53 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
     }
 
+    async function object(objectType: string, identity: Record<string, unknown>): Promise<string> {
+      const rows = await raw<{ id: string }>(
+        `insert into objects (workspace_id, object_type, identity_key) values ($1, $2, $3::jsonb)
+         returning id`,
+        [workspaceId, objectType, JSON.stringify(identity)],
+      );
+      return rows[0]?.id as string;
+    }
+
+    async function link(linkType: string, sourceId: string, targetId: string): Promise<string> {
+      const rows = await raw<{ id: string }>(
+        `insert into links (workspace_id, link_type, source_object_id, target_object_id,
+           epistemic_status, activity_id, asserted_by)
+         values ($1, $2, $3, $4, 'observed', $5, $6) returning id`,
+        [workspaceId, linkType, sourceId, targetId, randomUUID(), ownerId],
+      );
+      return rows[0]?.id as string;
+    }
+
+    /** A fact check of round 1 that passed on Fact `factId` (S11 GO4c) — the goal's, or with
+     *  `stepRunId` a step's (at its attempt 1). */
+    async function factAcceptance(
+      goalRunId: string,
+      key: string,
+      fact: Record<string, unknown>,
+      factId: string,
+      stepRunId?: string,
+    ): Promise<void> {
+      const columns = stepRunId
+        ? 'step_acceptance_checks (workspace_id, goal_run_id, step_run_id, step_attempt, round,'
+        : 'goal_acceptance_checks (workspace_id, goal_run_id, round,';
+      const values = stepRunId
+        ? [workspaceId, goalRunId, stepRunId, 1, 1]
+        : [workspaceId, goalRunId, 1];
+      const at = values.length;
+      await raw(
+        `insert into ${columns} check_key, plan_revision, kind, fact_check, fact_id, status,
+           attempts, first_attempt_at, settled_at)
+         values (${values.map((_, i) => `$${i + 1}`).join(', ')}, $${at + 1}, 1, 'fact_predicate',
+           $${at + 2}::jsonb, $${at + 3}, 'passed', 1, now(), now())`,
+        [...values, key, JSON.stringify(fact), factId],
+      );
+    }
+
+    /** A step waiting on its acceptance in goal run `goalRunId`. */
+    const stepOf = (goalRunId: string) => step(goalRunId, 's', { status: 'waiting' });
+
     const setOutcomeDecision = (goalRunId: string, decisionId: string) =>
       raw('update goal_runs set outcome_decision_id = $3 where workspace_id = $1 and id = $2', [
         workspaceId,
@@ -653,7 +700,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     describe('I-G5: a GoalRun’s outcome rests on its verification or on its requester’s word (S11 GO4a)', () => {
-      it('counts a run achieved by check whose latest round did not pass whole on the current plan, with an observation the platform made', async () => {
+      it('counts a run achieved by check whose latest round did not pass whole on the current plan, with a check the platform made', async () => {
         const byCheck = (fields: GoalFields = {}) =>
           goal({ status: 'completed', outcomeBasis: 'verified_by_check', ...fields });
         const healthy = await byCheck();
@@ -684,16 +731,13 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(mentioned(result, retried)).toBe(false);
         for (const [id, detail] of [
           [noRound, 'no acceptance round'],
-          [notPassed, 'round 2: 1 not passed, 0 off the current plan, 2 observed by the platform'],
-          [pending, 'round 1: 1 not passed, 0 off the current plan, 2 observed by the platform'],
-          [offPlan, 'round 1: 0 not passed, 1 off the current plan, 1 observed by the platform'],
-          [
-            confirmedOnly,
-            'round 1: 0 not passed, 0 off the current plan, 0 observed by the platform',
-          ],
+          [notPassed, 'round 2: 1 not passed, 0 off the current plan, 2 made by the platform'],
+          [pending, 'round 1: 1 not passed, 0 off the current plan, 2 made by the platform'],
+          [offPlan, 'round 1: 0 not passed, 1 off the current plan, 1 made by the platform'],
+          [confirmedOnly, 'round 1: 0 not passed, 0 off the current plan, 0 made by the platform'],
           [
             notAchieved,
-            'outcome not_achieved, round 1: 0 not passed, 0 off the current plan, 1 observed by the platform',
+            'outcome not_achieved, round 1: 0 not passed, 0 off the current plan, 1 made by the platform',
           ],
         ] as const) {
           expect(result.sample, detail).toContain(
@@ -881,6 +925,71 @@ describe.runIf(DATABASE_URL !== undefined)(
             `step-passed-without-evidence ${workspaceId}:${id} (round 1 check up (observe_predicate) passed without its evidence)`,
           );
         }
+      });
+
+      it('counts a passed fact check whose Fact is not the Link it names; a run achieved on a Fact alone is achieved by a check the platform made (S11 GO4c)', async () => {
+        const type = `test.go4c.${randomUUID().slice(0, 8)}`;
+        const web = await object(`${type}.Service`, { name: 'web' });
+        const host = await object(`${type}.Host`, { name: 'web-1' });
+        const other = await object(`${type}.Host`, { name: 'web-2' });
+        const runsOn = await link(`${type}.runs_on`, web, host);
+        const byId = {
+          linkType: `${type}.runs_on`,
+          source: { objectId: web },
+          target: { objectId: host },
+        };
+        const byIdentity = {
+          linkType: `${type}.runs_on`,
+          source: { objectType: `${type}.Service`, identity: { name: 'web' } },
+          target: { objectType: `${type}.Host`, identity: { name: 'web-1' } },
+        };
+
+        const achieved = await goal({ status: 'completed', outcomeBasis: 'verified_by_check' });
+        await factAcceptance(achieved, 'runs', byId, runsOn);
+        const healthy = [achieved];
+        for (const fact of [byIdentity, { ...byId, source: { objectId: web.toUpperCase() } }]) {
+          const id = await goal({ status: 'verifying' });
+          await factAcceptance(id, 'runs', fact, runsOn);
+          healthy.push(id);
+        }
+        const breaches: string[] = [];
+        for (const [fact, factId] of [
+          [byId, await link(`${type}.other`, web, host)],
+          [byId, await link(`${type}.runs_on`, web, other)],
+          [byId, await link(`${type}.runs_on`, host, web)],
+          [
+            { ...byIdentity, target: { objectType: `${type}.Host`, identity: { name: 'web-2' } } },
+            runsOn,
+          ],
+          [
+            { ...byIdentity, source: { objectType: `${type}.Host`, identity: { name: 'web' } } },
+            runsOn,
+          ],
+          [byId, randomUUID()],
+        ] as const) {
+          const id = await goal({ status: 'verifying' });
+          await factAcceptance(id, 'runs', fact, factId);
+          breaches.push(id);
+        }
+        const stepCheck = async (fact: Record<string, unknown>, factId: string) => {
+          const goalRunId = await goal();
+          const stepRunId = await stepOf(goalRunId);
+          await factAcceptance(goalRunId, 'runs', fact, factId, stepRunId);
+          return stepRunId;
+        };
+        const healthyStep = await stepCheck(byIdentity, runsOn);
+        const breachingStep = await stepCheck(byId, await link(`${type}.runs_on`, web, other));
+
+        const result = await check((client) => checkIG5(client, ALL));
+        for (const id of [...healthy, healthyStep]) expect(mentioned(result, id), id).toBe(false);
+        for (const id of breaches) {
+          expect(result.sample, id).toContain(
+            `passed-without-evidence ${workspaceId}:${id} (round 1 check runs (fact_predicate) passed without its evidence)`,
+          );
+        }
+        expect(result.sample).toContain(
+          `step-passed-without-evidence ${workspaceId}:${breachingStep} (round 1 check runs (fact_predicate) passed without its evidence)`,
+        );
       });
 
       it.each([

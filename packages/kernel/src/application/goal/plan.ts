@@ -1,5 +1,13 @@
 import { isDeepStrictEqual } from 'node:util';
-import { type ObservationCheck, ObservationCheckSchema, type Predicate } from '@nexttime/shared';
+import {
+  type FactCheck,
+  FactCheckSchema,
+  type FactObjectRef,
+  type GoalAcceptanceCheckKind,
+  type ObservationCheck,
+  ObservationCheckSchema,
+  type Predicate,
+} from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { z } from 'zod';
 import { getGatekeeper, getPublishedOperation } from '../../governance/gatekeepers/index.js';
@@ -44,11 +52,11 @@ import { getWorkerDefinition } from '../worker/index.js';
  *     on; anything else leaves the finding to a person (`reconcile-check.ts`). One declaration per
  *     action identity;
  *   - `acceptance` (S11 GO4b, plan §4.5, §4.6) — what has to hold once the step's work is done
- *     before the step succeeds and the steps after it may start: `observe_predicate` checks (the
- *     goal's kind, below; a step's acceptance never waits on a person), keys unique within the
- *     step. The platform makes them after each attempt whose work is done (`advance.ts` phase A,
- *     `acceptance-check.ts`). Changing them changes the step's entry, so a revision that does
- *     redefines the step (I-G2), like any other change to it.
+ *     before the step succeeds and the steps after it may start: `observe_predicate` and
+ *     `fact_predicate` checks (the goal's kinds, below; a step's acceptance never waits on a
+ *     person), keys unique within the step. The platform makes them after each attempt whose work
+ *     is done (`advance.ts` phase A, `acceptance-check.ts`). Changing them changes the step's
+ *     entry, so a revision that does redefines the step (I-G2), like any other change to it.
  * Unknown fields are refused rather than ignored: a field this version does not act on (an output
  * schema) must not look like it is in force.
  *
@@ -58,8 +66,15 @@ import { getWorkerDefinition } from '../worker/index.js';
  *   - `observe_predicate` — `check` is an observe-class Operation, its params and a predicate over
  *     its result (`ObservationCheck`, the same shape and the same lint and credential review as a
  *     reconcile check's), observed by the platform for the requester;
+ *   - `fact_predicate` (S11 GO4c) — `fact` is a Fact of the graph, the Link of a type from one
+ *     Object to another (each by id, or by ObjectType and identity), and optionally a predicate
+ *     over its own properties (`FactCheck`; the same lint and credential review, and no identity
+ *     value that looks like a credential). No gate is called: the platform reads the graph as the
+ *     requester and takes as evidence only a Fact observed since the round opened and not by the
+ *     goal's own doing (`fact-check.ts`, goal/0007). A gate's observed Facts carry no properties,
+ *     so on those only the Fact being there can be checked;
  *   - `requester_confirm` — `prompt` is what the requester is asked to confirm; asked once every
- *     observation passed. At most one.
+ *     check the platform makes passed. At most one.
  * A plan without any is allowed: its goal is achieved only on the requester's word (an implicit
  * `requester_confirm` whose prompt is the goal statement) — {@link planHints} says so, for the
  * confirmation card to show.
@@ -71,7 +86,8 @@ import { getWorkerDefinition } from '../worker/index.js';
  * (`substrate/epistemic`'s `lintPredicate`: one that would pass without the observation showing the
  * target is refused here, before any person is asked to confirm it) and whose literals carry no
  * suspected credential ({@link predicateCredentialProblems}); the last two are `parsePlan`'s. Every
- * acceptance observation — the goal's and the steps' — is held to what a reconcile check is. A
+ * acceptance observation — the goal's and the steps' — is held to what a reconcile check is; a fact
+ * check's predicate to the same lint and review, and an Object it names by id must exist. A
  * version deprecated later is caught when an attempt would start (the advancer's snapshot check),
  * not here; an observation the requester can no longer make is caught when it runs.
  */
@@ -118,9 +134,20 @@ const ObservePredicateCheckSchema = z
   })
   .strict();
 
+/** An acceptance check the platform judges on a Fact of the graph: the goal's and a step's (S11
+ *  GO4c). */
+const FactPredicateCheckSchema = z
+  .object({
+    kind: z.literal('fact_predicate'),
+    key: stepKey,
+    fact: FactCheckSchema,
+  })
+  .strict();
+
 /** S11 GO4b: one acceptance check of a step — see the module comment. */
 export const StepAcceptanceCheckSchema = z.discriminatedUnion('kind', [
   ObservePredicateCheckSchema,
+  FactPredicateCheckSchema,
 ]);
 
 export type StepAcceptanceCheck = z.infer<typeof StepAcceptanceCheckSchema>;
@@ -152,6 +179,7 @@ export type PlanStep = z.infer<typeof PlanStepSchema>;
 /** S11 GO4a: one acceptance check of the plan — see the module comment. */
 export const AcceptanceCheckSchema = z.discriminatedUnion('kind', [
   ObservePredicateCheckSchema,
+  FactPredicateCheckSchema,
   z
     .object({
       kind: z.literal('requester_confirm'),
@@ -225,9 +253,10 @@ export function parsePlan(plan: unknown): GoalPlan {
 }
 
 /** The acceptance checks of the plan, or of one step (`prefix` names it): keys unique, at most one
- *  `requester_confirm`, every observation's predicate accepted by the lint (spending from the
- *  plan's `lintBudget`, which the reconcile declarations share) and free of suspected credentials —
- *  the rules a reconcile check's predicate is under, for the same reasons. */
+ *  `requester_confirm`, every predicate — an observation's, a fact check's — accepted by the lint
+ *  (spending from the plan's `lintBudget`, which the reconcile declarations share) and free of
+ *  suspected credentials — the rules a reconcile check's predicate is under, for the same reasons —
+ *  and no identity a fact check names an Object by carrying one ({@link factSelectorProblems}). */
 function acceptanceShapeProblems(
   acceptance: readonly (AcceptanceCheck | StepAcceptanceCheck)[],
   lintBudget: PredicateLintBudget,
@@ -247,13 +276,39 @@ function acceptanceShapeProblems(
       }
       return;
     }
-    for (const problem of lintPredicate(check.check.expect, lintBudget)) {
+    if (check.kind === 'fact_predicate') {
+      for (const problem of factSelectorProblems(check.fact)) problems.push(`${where}: ${problem}`);
+    }
+    const expect = check.kind === 'fact_predicate' ? check.fact.expect : check.check.expect;
+    if (!expect) return;
+    for (const problem of lintPredicate(expect, lintBudget)) {
       problems.push(`${where}: ${problem}`);
     }
-    for (const problem of predicateCredentialProblems(check.check.expect)) {
+    for (const problem of predicateCredentialProblems(expect)) {
       problems.push(`${where}: ${problem}`);
     }
   });
+  return problems;
+}
+
+/** The credential review of the Objects a fact check names (S11 GO4c): no identity value may carry
+ *  what the credential review counts — the plan is read by people and kept in every revision after
+ *  it, and an identity is matched as written, so a credential there would also have to sit in the
+ *  graph. Run with the plan and again before every check (`fact-check.ts`). */
+export function factSelectorProblems(fact: FactCheck): readonly string[] {
+  const problems: string[] = [];
+  for (const [end, ref] of [
+    ['source', fact.source],
+    ['target', fact.target],
+  ] as const) {
+    if (!('identity' in ref)) continue;
+    const found = findSuspectedSecrets(ref.identity, { secretFields: true });
+    if (found.count > 0) {
+      problems.push(
+        `the ${end}'s identity looks like it carries a credential (${found.count} suspected) — a plan does not carry credentials`,
+      );
+    }
+  }
   return problems;
 }
 
@@ -269,7 +324,7 @@ export interface PlanHint {
 /** The hints a valid plan carries — see {@link PlanHint}. */
 export function planHints(plan: GoalPlan): readonly PlanHint[] {
   const acceptance = plan.acceptance ?? [];
-  if (acceptance.some((check) => check.kind === 'observe_predicate')) return [];
+  if (acceptance.some((check) => isPlatformAcceptanceCheck(check.kind))) return [];
   return [
     {
       code: 'requester_confirm_only',
@@ -277,6 +332,13 @@ export function planHints(plan: GoalPlan): readonly PlanHint[] {
         'the plan has no check the platform makes: the goal is achieved only when the requester confirms it',
     },
   ];
+}
+
+/** Whether an acceptance check of `kind` is one the platform makes — an observation or a Fact it
+ *  judges — rather than a person's word (I-G5: a goal achieved by check rests on at least one;
+ *  goal/0007's `goal_runs_status_guard` counts the same kinds). */
+export function isPlatformAcceptanceCheck(kind: GoalAcceptanceCheckKind): boolean {
+  return kind === 'observe_predicate' || kind === 'fact_predicate';
 }
 
 /** The key and prompt of the implicit `requester_confirm` of a plan without acceptance checks. */
@@ -400,20 +462,59 @@ export async function validatePlan(
     }
     for (const [index, check] of (step.acceptance ?? []).entries()) {
       const where = `step "${step.key}": acceptance[${index}] "${check.key}"`;
-      for (const problem of await observationCheckProblems(client, workspaceId, check.check)) {
-        problems.push(`${where}: check: ${problem}`);
+      for (const problem of await acceptanceReferenceProblems(client, workspaceId, check)) {
+        problems.push(`${where}: ${problem}`);
       }
     }
   }
   for (const [index, check] of (parsed.acceptance ?? []).entries()) {
-    if (check.kind !== 'observe_predicate') continue;
     const where = `acceptance[${index}] "${check.key}"`;
-    for (const problem of await observationCheckProblems(client, workspaceId, check.check)) {
-      problems.push(`${where}: check: ${problem}`);
+    for (const problem of await acceptanceReferenceProblems(client, workspaceId, check)) {
+      problems.push(`${where}: ${problem}`);
     }
   }
   if (problems.length > 0) throw new GoalPlanValidationError(problems);
   return parsed;
+}
+
+/** What an acceptance check refers to, as of now: an observation's what
+ *  {@link observationCheckProblems} accepts; a fact check's Objects named by id exist in the
+ *  workspace (one named by identity may be created by the goal's own work; a link type is not
+ *  checked against the ontology here). */
+async function acceptanceReferenceProblems(
+  client: PoolClient,
+  workspaceId: string,
+  check: AcceptanceCheck | StepAcceptanceCheck,
+): Promise<readonly string[]> {
+  if (check.kind === 'requester_confirm') return [];
+  if (check.kind === 'observe_predicate') {
+    return (await observationCheckProblems(client, workspaceId, check.check)).map(
+      (problem) => `check: ${problem}`,
+    );
+  }
+  const problems: string[] = [];
+  for (const [end, ref] of [
+    ['source', check.fact.source],
+    ['target', check.fact.target],
+  ] as const) {
+    if (!('objectId' in ref)) continue;
+    if (!(await objectExists(client, workspaceId, ref))) {
+      problems.push(`fact: the ${end} Object ${ref.objectId} does not exist in this workspace`);
+    }
+  }
+  return problems;
+}
+
+async function objectExists(
+  client: PoolClient,
+  workspaceId: string,
+  ref: Extract<FactObjectRef, { objectId: string }>,
+): Promise<boolean> {
+  const result = await client.query('select 1 from objects where workspace_id = $1 and id = $2', [
+    workspaceId,
+    ref.objectId,
+  ]);
+  return (result.rowCount ?? 0) > 0;
 }
 
 /** What a reconcile declaration refers to, as of now: its action a published execute-class
