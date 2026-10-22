@@ -1,4 +1,4 @@
-import type { MintConnectionSecretResultWire } from '@nexttime/shared';
+import { type MintConnectionSecretResultWire, SECRET_FIELD_MASK } from '@nexttime/shared';
 import { type FormEvent, useEffect, useState } from 'react';
 import { useCapabilityList } from '../hooks/useCapability.js';
 import type { CapabilityCaller } from '../lib/clients.js';
@@ -221,7 +221,11 @@ export function CompleteConnectionForm({
 }: CompleteConnectionFormProps) {
   const t = useT();
   const [kind, setKind] = useState<ConnectionKind>(request?.kind ?? initialKind ?? 'http');
-  const [target, setTarget] = useState(request?.target ?? '');
+  // Legacy 247 ①: a request from before legacy 186 can carry a credential in its address; the
+  // kernel reads it out masked (`[redacted]` when nothing credential-free is left). That mask is
+  // never prefilled as if it were an address — the field starts empty and says why.
+  const requestTargetMasked = request?.target === SECRET_FIELD_MASK;
+  const [target, setTarget] = useState(requestTargetMasked ? '' : (request?.target ?? ''));
   const [endpoint, setEndpoint] = useState('');
   const [credentialKind, setCredentialKind] = useState<CredentialKind>('shared');
   const [credentials, setCredentials] = useState('');
@@ -428,10 +432,23 @@ export function CompleteConnectionForm({
         required
         error={fieldErrors.target}
         errorDetails={serverDetails('target')}
-        hint={t(
-          '门前面对接的是什么——一个 base URL、host 或服务名。',
-          'What the Gatekeeper fronts — a base URL, host, or service name.',
-        )}
+        hint={
+          <>
+            {t(
+              '门前面对接的是什么——一个 base URL、host 或服务名。',
+              'What the Gatekeeper fronts — a base URL, host, or service name.',
+            )}
+            {requestTargetMasked ? (
+              <span data-testid="cc-target-masked-note">
+                {sentenceGap(t)}
+                {t(
+                  '这个申请填的地址里带有凭据，已隐藏不显示；请填写不带凭据的地址，凭据放在下面的「凭据」里。',
+                  'The address in this request carried a credential and is hidden — enter the address without it, and put the credential in Credentials below.',
+                )}
+              </span>
+            ) : null}
+          </>
+        }
       >
         <Input
           id="cc-target"

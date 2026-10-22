@@ -103,6 +103,31 @@ describe('CompleteConnectionForm', () => {
     await waitFor(() => expect(createCalls(http)).toBe(1));
   });
 
+  it('legacy 247: a request whose address was masked is not prefilled with the mask, and says why', async () => {
+    const http = httpWith(async () => ({}));
+    render(
+      <CompleteConnectionForm
+        http={http}
+        request={{
+          id: 'cr-1',
+          status: 'requested',
+          kind: 'http',
+          target: '[redacted]',
+          requestedBy: 'p-2',
+          gatekeeperId: null,
+          completedBy: null,
+          requestedAt: '2026-09-01T00:00:00.000Z',
+          completedAt: null,
+        }}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+    await secretShown();
+    expect((screen.getByLabelText(/目标系统/) as HTMLInputElement).value).toBe('');
+    expect(screen.getByTestId('cc-target-masked-note').textContent).toContain('带有凭据');
+  });
+
   it('legacy 152: a dotted domain without a scheme gets https://, so the connection secret is not sent in the clear', async () => {
     const http = httpWith(async (_name, params) => {
       expect((params as { endpoint: string }).endpoint).toBe('https://gate.example.com');

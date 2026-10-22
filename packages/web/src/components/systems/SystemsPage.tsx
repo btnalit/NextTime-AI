@@ -1,4 +1,9 @@
-import type { AvailableGateInstanceWire, OperationSummaryWire, Role } from '@nexttime/shared';
+import {
+  type AvailableGateInstanceWire,
+  type OperationSummaryWire,
+  type Role,
+  SECRET_FIELD_MASK,
+} from '@nexttime/shared';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invalidateCapability, useCapabilityList } from '../../hooks/useCapability.js';
 import { usePermissions } from '../../hooks/usePermissions.js';
@@ -678,9 +683,23 @@ export function SystemsPage({
                   <span className="tag" data-testid="request-kind">
                     {transportKindLabel(row.kind, t)}
                   </span>
-                  <span className="mono truncate">{row.target}</span>
-                  <span className="text-3 text-small" title={row.requestedBy}>
-                    {t('由', 'by')} {shortId(row.requestedBy)}
+                  {/* Legacy 247 ①: an old request's address can carry a credential; the kernel
+                   *  masks it, and the row says so rather than showing a bare `[redacted]`. */}
+                  {row.target === SECRET_FIELD_MASK ? (
+                    <span className="text-small text-warn" data-testid="request-target-masked">
+                      {t('地址带有凭据，已隐藏', 'Address carried a credential — hidden')}
+                    </span>
+                  ) : (
+                    <span className="mono truncate">{row.target}</span>
+                  )}
+                  {/* Legacy 247 ②: the requester by name (the page already reads the members). */}
+                  <span
+                    className="text-3 text-small"
+                    title={row.requestedBy}
+                    data-testid="request-by"
+                  >
+                    {t('由', 'by')}{' '}
+                    {principalNames.get(row.requestedBy) ?? shortId(row.requestedBy)}
                   </span>
                   <time className="text-3 text-small" title={formatDateTime(row.requestedAt)}>
                     {formatRelative(row.requestedAt)}
@@ -720,7 +739,11 @@ export function SystemsPage({
                           '申请回到「已取消」；门与已导入的 Operation 不受影响。只能取消自己的申请，所有者可取消任何申请。',
                           'The request becomes cancelled; nothing registered is touched. Only your own request — the owner may cancel any.',
                         )}
-                        target={`${transportKindLabel(row.kind, t)} · ${row.target}`}
+                        target={`${transportKindLabel(row.kind, t)} · ${
+                          row.target === SECRET_FIELD_MASK
+                            ? t('地址带有凭据，已隐藏', 'Address carried a credential — hidden')
+                            : row.target
+                        }`}
                         confirmLabel={t('取消申请', 'Cancel request')}
                         cancelLabel={t('保留', 'Keep')}
                         danger
