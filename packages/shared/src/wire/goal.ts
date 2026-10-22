@@ -280,9 +280,10 @@ export const GoalLeftoversWireSchema = z
 export type GoalLeftoversWire = z.infer<typeof GoalLeftoversWireSchema>;
 
 /** `get_goal`'s result: the run, the revision in force (revision 1 until confirmed, and on a run
- *  cancelled before it was), its revision history oldest first, every StepRun in creation order
- *  (superseded ones included), its verification, and — while cancelling or `cleanupPending` —
- *  what is left. */
+ *  cancelled before it was), its revision history oldest first, every StepRun (superseded ones
+ *  included) in plan order — by when it was created, then by its place in the plan in force — its
+ *  verification (steps in the same order), and — while cancelling or `cleanupPending` — what is
+ *  left. */
 export const GoalDetailWireSchema = GoalRunWireSchema.extend({
   planRevision: PlanRevisionWireSchema,
   revisions: z.array(PlanRevisionSummaryWireSchema),

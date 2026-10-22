@@ -326,6 +326,8 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(result.usage).toMatchObject({ steps: 1, revisions: 0 });
         expect(result.stepCounts).toMatchObject({ running: 1, pending: 1 });
         expect(result.planRevision).toMatchObject({ revision: 1, status: 'accepted' });
+        // Plan order: both steps were created by the confirmation, `a` comes first in the plan.
+        expect(result.steps.map((step) => step.stepKey)).toEqual(['a', 'b']);
         const [stepA, stepB] = result.steps;
         expect(stepA).toMatchObject({
           id: stepRunId,

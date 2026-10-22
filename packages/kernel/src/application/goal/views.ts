@@ -308,6 +308,7 @@ export interface GoalRunDetail extends GoalRunSummary {
   /** The revision in force — revision 1 until the run is confirmed (and on one cancelled before). */
   readonly planRevision: PlanRevisionView;
   readonly revisions: readonly PlanRevisionRow[];
+  /** In plan order ({@link inPlanOrder}); the acceptance view's steps follow it too. */
   readonly steps: readonly GoalRunStepView[];
   readonly acceptance: GoalAcceptanceView;
   /** Only while `cancelling`, or cancelled with `cleanupPending`. */
@@ -329,7 +330,8 @@ export async function readGoalRunDetail(
   if (!summary || !inForce || !acceptance) {
     throw new Error(`goal run ${goalRunId}: its revision in force or its acceptance did not read`);
   }
-  const stepRuns = await listStepRuns(client, workspaceId, goalRunId);
+  const planView = planRevisionView(inForce);
+  const stepRuns = inPlanOrder(await listStepRuns(client, workspaceId, goalRunId), planView.plan);
   const attempts = await listGoalRunStepAttempts(client, workspaceId, goalRunId);
   const actions = await listStepsActionOutcomes(
     client,
@@ -340,9 +342,10 @@ export async function readGoalRunDetail(
     goal.status === 'cancelling' || goal.cleanupPending
       ? await readCancelLeftovers(client, goal)
       : null;
+  const position = new Map(stepRuns.map((step, index) => [step.id, index]));
   return {
     ...summary,
-    planRevision: planRevisionView(inForce),
+    planRevision: planView,
     revisions,
     steps: stepRuns.map((step) => ({
       step,
@@ -351,11 +354,32 @@ export async function readGoalRunDetail(
         .filter((action) => action.stepRunId === step.id)
         .map(({ stepRunId: _stepRunId, ...action }) => action),
     })),
-    acceptance,
+    acceptance: {
+      ...acceptance,
+      steps: [...acceptance.steps].sort(
+        (a, b) => (position.get(a.stepRunId) ?? 0) - (position.get(b.stepRunId) ?? 0),
+      ),
+    },
     leftovers: leftovers
       ? { liveTaskIds: leftovers.liveTaskIds, executingActions: leftovers.executingActions }
       : null,
   };
+}
+
+/** A run's StepRuns in the order a person reads a plan: by when they were created (a revision's
+ *  steps after the ones before it), and — within one confirmation or revision, which creates its
+ *  steps together — by the step's place in the plan in force; a step that plan no longer holds
+ *  comes after, by key. Creation order alone ties there, and an id breaks the tie at random. */
+function inPlanOrder(steps: readonly StepRunRow[], plan: GoalPlan): readonly StepRunRow[] {
+  const place = new Map(plan.steps.map((step, index) => [step.key, index]));
+  const rank = (step: StepRunRow) => place.get(step.stepKey) ?? Number.MAX_SAFE_INTEGER;
+  return [...steps].sort(
+    (a, b) =>
+      a.createdAt.getTime() - b.createdAt.getTime() ||
+      rank(a) - rank(b) ||
+      a.stepKey.localeCompare(b.stepKey) ||
+      a.id.localeCompare(b.id),
+  );
 }
 
 /** `list_goal_unresolved_actions`: the actions of a run `viewer` may read that still need a person
