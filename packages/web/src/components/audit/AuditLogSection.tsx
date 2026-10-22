@@ -361,7 +361,12 @@ export function AuditLogSection({
                                   ? auditResourceTypeLabel(row.resourceType, t)
                                   : undefined
                               }
-                              href={resourceHref(row.resourceType, row.resourceId, canOpen)}
+                              href={resourceHref(
+                                row.resourceType,
+                                row.resourceId,
+                                canOpen,
+                                row.payload,
+                              )}
                               size="s"
                             />
                           </>

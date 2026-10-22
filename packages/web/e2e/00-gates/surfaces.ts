@@ -132,7 +132,7 @@ export const SURFACES: readonly Surface[] = [
     role: 'owner',
     ready: (page) => heading(page, '系统与授权'), // components/systems/SystemsPage.tsx
   },
-  // CatalogPage.tsx renders the same "能力目录 Catalog" heading for all five tabs — only the tab
+  // CatalogPage.tsx renders the same "能力目录 Catalog" heading for all six tabs — only the tab
   // body under it changes (Tabs component, `#/govern/catalog/<tab>`).
   {
     id: 'catalog-operations',
@@ -166,6 +166,14 @@ export const SURFACES: readonly Surface[] = [
     id: 'catalog-modules',
     labelZh: '能力目录 · Module',
     hash: '#/govern/catalog/modules',
+    role: 'owner',
+    ready: (page) => heading(page, '能力目录'),
+  },
+  {
+    // S11 P1-B: the install records (the workspace's default modules, installed by the platform).
+    id: 'catalog-changes',
+    labelZh: '能力目录 · 安装历史',
+    hash: '#/govern/catalog/changes',
     role: 'owner',
     ready: (page) => heading(page, '能力目录'),
   },

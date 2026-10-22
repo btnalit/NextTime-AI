@@ -406,6 +406,25 @@ describe.runIf(DATABASE_URL !== undefined)(
           [],
         );
       });
+
+      it('two items on one family in one segment are refused before anything is written (review of #663)', async () => {
+        const ws = await newWorkspace();
+        const input: WorkspaceSegmentInput = {
+          source: { kind: 'pack', name: 'dup', version: '1', digest: contentDigest('dup') },
+          items: [
+            { kind: 'ontology_version', family: 'fam-dup', definition: definitionOf('First') },
+            { kind: 'ontology_version', family: 'fam-dup', definition: definitionOf('Second') },
+          ],
+        };
+        await expect(plan(ws, input)).rejects.toThrow(/items 1 and 2 change the same target/);
+        await expect(apply(ws, applyInput(ws, input, contentDigest('dup')))).rejects.toThrow(
+          /items 1 and 2 change the same target/,
+        );
+        expect(await familyVersions(ws, 'fam-dup')).toEqual([]);
+        expect(await rows(ws, 'select id from change_segments where workspace_id = $1')).toEqual(
+          [],
+        );
+      });
     });
 
     describe('provenance: which item installed the current version', () => {
@@ -426,7 +445,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           itemId: applied.items[0]?.id,
           source: input.source,
           channel: 'human',
-          appliedBy: ws.ownerId,
+          appliedBy: { id: ws.ownerId, kind: 'human' },
         });
 
         // A version published outside the core (before P1, or publish_ontology_version) has no

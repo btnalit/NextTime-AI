@@ -10,6 +10,7 @@ import {
   type PlannedOntologyItem,
   applyOntologyItem,
   lockOntologyItem,
+  ontologyItemTargetKey,
   planOntologyItem,
 } from './ontology-item.js';
 
@@ -102,6 +103,34 @@ function unknownKind(kind: never): Error {
   return new Error(`change-plan: unknown change item kind ${JSON.stringify(kind)}`);
 }
 
+function targetKeyOf(intent: ChangeItemIntent): string {
+  const kind = intent.kind;
+  switch (kind) {
+    case 'ontology_version':
+      return ontologyItemTargetKey(intent);
+    default:
+      throw unknownKind(kind);
+  }
+}
+
+/** One segment changes each target once: a second item on the same target would record a `before`
+ *  that is not the state it changed from (the first item's write is not a head yet at plan time)
+ *  and could never be rolled back. Refused before any lock or read — a caller bug (a pack lists one
+ *  part twice), never something to apply. */
+function assertDistinctTargets(intents: readonly ChangeItemIntent[]): void {
+  const seen = new Map<string, number>();
+  for (const [index, intent] of intents.entries()) {
+    const key = targetKeyOf(intent);
+    const first = seen.get(key);
+    if (first !== undefined) {
+      throw new Error(
+        `change-plan: items ${first} and ${index + 1} change the same target (${key}); a segment changes each target once`,
+      );
+    }
+    seen.set(key, index + 1);
+  }
+}
+
 async function planItem(
   client: PoolClient,
   workspaceId: string,
@@ -157,6 +186,7 @@ async function planWithKinds(
   input: WorkspaceSegmentInput,
 ): Promise<{ readonly plan: WorkspaceSegmentPlan; readonly kinds: readonly KindPlan[] }> {
   if (input.items.length === 0) throw new Error('change-plan: a segment has at least one item');
+  assertDistinctTargets(input.items);
   for (const intent of input.items) await lockItem(client, workspaceId, intent);
   const kinds: KindPlan[] = [];
   for (const [index, intent] of input.items.entries()) {

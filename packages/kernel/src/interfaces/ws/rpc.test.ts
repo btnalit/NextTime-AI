@@ -5,6 +5,11 @@ import {
   HttpGatekeeperClient,
   platformGateTarget,
 } from '../../adapters/gatekeeper-client/index.js';
+import {
+  ChangeRollbackConflictError,
+  ChangeSegmentNotFoundError,
+  ChangeSegmentRolledBackError,
+} from '../../application/change-plan/index.js';
 import { NoActiveTurnError, TurnNotFoundError } from '../../application/gateway/handlers.js';
 import {
   ConflictNotFoundError,
@@ -89,6 +94,31 @@ describe('mapDispatchError — OperationIdentityConflictError (review 2026-09, P
     );
     expect(mapped.code).toBe(WS_ERROR_CODES.ILLEGAL_TRANSITION);
     expect(mapped.message).toContain('container.restart');
+  });
+});
+
+describe('mapDispatchError — S11 P1-B change segment rollback', () => {
+  it('not found → NOT_FOUND; already rolled back and blocked items → ILLEGAL_TRANSITION', () => {
+    expect(mapDispatchError(new ChangeSegmentNotFoundError('seg-1')).code).toBe(
+      WS_ERROR_CODES.NOT_FOUND,
+    );
+    expect(mapDispatchError(new ChangeSegmentRolledBackError('seg-1')).code).toBe(
+      WS_ERROR_CODES.ILLEGAL_TRANSITION,
+    );
+    const blocked = mapDispatchError(
+      new ChangeRollbackConflictError('seg-1', [
+        {
+          ordinal: 1,
+          kind: 'ontology_version',
+          target: { family: 'ops-assets', ontologyId: 'o-1' },
+          blocker: 'replaced',
+          blockedBy: { segmentId: 'seg-2' },
+          conflicts: [],
+        },
+      ]),
+    );
+    expect(blocked.code).toBe(WS_ERROR_CODES.ILLEGAL_TRANSITION);
+    expect(blocked.message).toContain('seg-2');
   });
 });
 

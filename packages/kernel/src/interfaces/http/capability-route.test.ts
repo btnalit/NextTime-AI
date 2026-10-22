@@ -16,6 +16,11 @@ import {
   platformGateTarget,
 } from '../../adapters/gatekeeper-client/index.js';
 import { OutboundTargetRefusedError } from '../../adapters/outbound-target/index.js';
+import {
+  ChangeRollbackConflictError,
+  ChangeSegmentNotFoundError,
+  ChangeSegmentRolledBackError,
+} from '../../application/change-plan/index.js';
 import { ChatNotFoundError, TurnAlreadyRunningError } from '../../application/chat/index.js';
 import { ChatArchivedError } from '../../application/chat/index.js';
 import { GatekeeperLandingRefusedError } from '../../application/gates/index.js';
@@ -104,6 +109,40 @@ describe('mapCapabilityError — S6-A / C25 approve.reason (unit)', () => {
       status: 400,
       code: 'reason_required',
     });
+  });
+});
+
+describe('mapCapabilityError — S11 P1-B change segment rollback (unit)', () => {
+  it('ChangeSegmentNotFoundError → 404 change_segment_not_found', () => {
+    expect(mapCapabilityError(new ChangeSegmentNotFoundError('seg-1'))).toMatchObject({
+      status: 404,
+      code: 'change_segment_not_found',
+    });
+  });
+
+  it('ChangeSegmentRolledBackError → 409 change_segment_rolled_back', () => {
+    expect(mapCapabilityError(new ChangeSegmentRolledBackError('seg-1'))).toMatchObject({
+      status: 409,
+      code: 'change_segment_rolled_back',
+    });
+  });
+
+  it('ChangeRollbackConflictError → 409 change_rollback_conflict with each blocked item in details', () => {
+    const item = {
+      ordinal: 1,
+      kind: 'ontology_version' as const,
+      target: { family: 'ops-assets', ontologyId: 'o-1' },
+      blocker: 'replaced' as const,
+      blockedBy: { segmentId: 'seg-2' },
+      conflicts: [],
+    };
+    const mapped = mapCapabilityError(new ChangeRollbackConflictError('seg-1', [item]));
+    expect(mapped).toMatchObject({
+      status: 409,
+      code: 'change_rollback_conflict',
+      details: { items: [item] },
+    });
+    expect(mapped.message).toContain('seg-2');
   });
 });
 

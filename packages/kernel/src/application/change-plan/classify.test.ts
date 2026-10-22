@@ -181,6 +181,10 @@ describe('classifyOntologyDefinitionChange — ActionType governance fields, one
     expect(classifyOntologyDefinitionChange(null, definition([BASE_ACTION]))).toEqual([
       { path: 'actionTypes[restart]', reason: 'added' },
     ]);
+    // P1-B: rolling a first install back takes the family out; its ActionTypes are removed.
+    expect(classifyOntologyDefinitionChange(definition([BASE_ACTION]), null)).toEqual([
+      { path: 'actionTypes[restart]', reason: 'removed' },
+    ]);
   });
 
   it('several widening changes are all listed, in a stable order', () => {
@@ -212,6 +216,7 @@ describe('classifyOntologyDefinitionChange — what is proven not to widen', () 
     expect(classifyOntologyDefinitionChange(before, after)).toEqual([]);
     expect(classifyOntologyDefinitionChange(after, before)).toEqual([]);
     expect(classifyOntologyDefinitionChange(null, after)).toEqual([]);
+    expect(classifyOntologyDefinitionChange(after, null)).toEqual([]);
   });
 
   it('the same content is not widening', () => {

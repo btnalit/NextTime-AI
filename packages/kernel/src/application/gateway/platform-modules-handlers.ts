@@ -1,5 +1,6 @@
 import type { ModuleVersionWire, ModuleWire, WorkspaceModuleWire } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
+import { loadOntologyProvenance } from '../change-plan/index.js';
 import {
   type ModuleRegistryEntry,
   type WorkspaceModuleState,
@@ -11,6 +12,7 @@ import {
 } from '../platform/modules.js';
 import { toWirePlatformSettings, updatePlatformSettings } from '../platform/settings.js';
 import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
+import { toOntologyProvenanceWire } from './change-segment-handlers.js';
 
 /**
  * application/gateway/platform-modules-handlers: the thin `CapabilityHandler` layer over
@@ -49,15 +51,23 @@ function toModuleWire(
   };
 }
 
-function toWorkspaceModuleWire(state: WorkspaceModuleState): WorkspaceModuleWire {
+/** S11 P1-B: with `provenance` — which change installed the module family's current version, read
+ *  in the same transaction as `state`. */
+async function toWorkspaceModuleWire(
+  client: PoolClient,
+  workspaceId: string,
+  state: WorkspaceModuleState,
+): Promise<WorkspaceModuleWire> {
   const latest = state.entry.versions[state.entry.versions.length - 1];
   if (!latest) throw new Error(`module "${state.entry.name}" has an empty version list`);
+  const provenance = await loadOntologyProvenance(client, workspaceId, state.entry.name);
   return {
     name: state.entry.name,
     versions: state.entry.versions.map(toModuleVersionWire),
     latestVersion: latest.version,
     installedVersion: state.installedVersion,
     status: state.status,
+    provenance: toOntologyProvenanceWire(provenance),
   };
 }
 
@@ -128,7 +138,9 @@ export const setDefaultModulesHandler: CapabilityHandler = async (
 export const listWorkspaceModulesHandler: CapabilityHandler = async (client, workspaceId) => {
   const registry = await loadModuleRegistry();
   const states = await loadWorkspaceModuleStates(client, workspaceId, registry);
-  return { result: { items: states.map(toWorkspaceModuleWire) } };
+  const items: WorkspaceModuleWire[] = [];
+  for (const state of states) items.push(await toWorkspaceModuleWire(client, workspaceId, state));
+  return { result: { items } };
 };
 
 async function runInstallOrUpgrade(
@@ -155,7 +167,7 @@ async function runInstallOrUpgrade(
     channel: 'human',
   });
   return {
-    result: toWorkspaceModuleWire(state),
+    result: await toWorkspaceModuleWire(client, workspaceId, state),
     resourceType: 'module',
     resourceId: input.name,
   };

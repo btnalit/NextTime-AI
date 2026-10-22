@@ -8,8 +8,12 @@
  * of what changed and one audit row per item, and which item installed a family's current
  * version (`provenance.ts`; `provenance_unknown` for one installed before P1 or outside the core).
  * `install_module` / `upgrade_module` and workspace creation's default modules apply through it
- * (`application/platform/modules.ts`). Packs, more item kinds, verification and rollback follow in
- * later P1 PRs.
+ * (`application/platform/modules.ts`).
+ *
+ * P1-B: reading segments back (`segments.ts`; `inspect.ts` adds what each item's target is now)
+ * and rolling a segment back (`rollback.ts`: compare before writing, the same whitelist on the
+ * inverse, one transaction). Packs, more item kinds and recorded verification follow in later P1
+ * PRs.
  *
  * Boundaries: it lives in `application` because applying calls publish functions across
  * `substrate` (ontology today; WorkerDefinition / Skill / Procedure in `application/worker` next).
@@ -44,7 +48,34 @@ export {
 export {
   ChangeConfirmationRequiredError,
   ChangePlanChangedError,
+  type ChangeRollbackConflict,
+  ChangeRollbackConflictError,
+  ChangeSegmentRolledBackError,
   type UnconfirmedChangeItem,
 } from './errors.js';
-export type { OntologyVersionIntent } from './ontology-item.js';
+export {
+  type InspectedChangeItem,
+  type InspectedChangeSegment,
+  inspectChangeSegment,
+} from './inspect.js';
+export type { OntologyVersionIntent, StoredOntologyItem } from './ontology-item.js';
 export { type OntologyProvenance, loadOntologyProvenance } from './provenance.js';
+export {
+  type PlannedItemRollback,
+  type RollBackWorkspaceSegmentInput,
+  type SegmentRollbackPlan,
+  type SegmentRollbackPreview,
+  previewSegmentRollback,
+  rollBackWorkspaceSegment,
+} from './rollback.js';
+export {
+  type ChangeItemRecord,
+  type ChangePrincipalRef,
+  type ChangeSegmentRecord,
+  ChangeSegmentNotFoundError,
+  type ChangeSegmentsPage,
+  DEFAULT_LIST_CHANGE_SEGMENTS_LIMIT,
+  type ListChangeSegmentsInput,
+  MAX_LIST_CHANGE_SEGMENTS_LIMIT,
+  listChangeSegments,
+} from './segments.js';
