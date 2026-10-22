@@ -88,20 +88,24 @@ function ProvenanceCell({
       : (provenance.appliedBy.displayName ?? shortId(provenance.appliedBy.id));
   return (
     <span className="stack-s" data-testid={`catalog-module-provenance-${module.name}`}>
+      <span className="text-small">
+        {who}
+        {' · '}
+        <time
+          className="text-3"
+          dateTime={provenance.appliedAt}
+          title={formatDateTime(provenance.appliedAt)}
+          data-volatile=""
+        >
+          {formatRelative(provenance.appliedAt)}
+        </time>
+      </span>
       <RouteLink
         href={hrefs.catalog('changes', provenance.segmentId)}
         testId={`catalog-module-provenance-link-${module.name}`}
       >
-        {who}
+        {t('查看安装记录', 'Open install record')}
       </RouteLink>
-      <time
-        className="text-3 text-small"
-        dateTime={provenance.appliedAt}
-        title={formatDateTime(provenance.appliedAt)}
-        data-volatile=""
-      >
-        {formatRelative(provenance.appliedAt)}
-      </time>
     </span>
   );
 }

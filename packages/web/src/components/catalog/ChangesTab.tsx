@@ -107,15 +107,27 @@ function versionText(version: { readonly version: number } | null, t: Translate)
     : t(`第 ${version.version} 版`, `v${version.version}`);
 }
 
-/** 「对象类型 A、B；关系类型 c」 — the names a rollback takes out, or `null` for none. */
-function removedText(removes: OntologyTypeNamesWire, t: Translate): string | null {
+/** How many names of one kind `removedText` spells out before 「等 N 个」. */
+const REMOVED_NAMES_SHOWN = 5;
+
+/** 「对象类型 A、B；关系类型 c」 — the names a rollback takes out (the first few of each kind, then
+ *  how many in all), or `null` for none. */
+export function removedText(removes: OntologyTypeNamesWire, t: Translate): string | null {
   const parts: string[] = [];
   for (const key of ['objectTypes', 'linkTypes', 'actionTypes'] as const) {
     const names = removes[key];
     const section = SECTION_LABEL[key];
-    if (names.length > 0 && section) {
-      parts.push(t(`${section.zh} ${names.join('、')}`, `${section.en}s ${names.join(', ')}`));
-    }
+    if (names.length === 0 || !section) continue;
+    const shown = names.slice(0, REMOVED_NAMES_SHOWN);
+    const more = names.length - shown.length;
+    parts.push(
+      more > 0
+        ? t(
+            `${section.zh} ${shown.join('、')} 等 ${names.length} 个`,
+            `${section.en}s ${shown.join(', ')} and ${more} more`,
+          )
+        : t(`${section.zh} ${shown.join('、')}`, `${section.en}s ${shown.join(', ')}`),
+    );
   }
   return parts.length > 0 ? parts.join(t('；', '; ')) : null;
 }
@@ -275,7 +287,11 @@ function ChangeSegmentDetail({
   return (
     <div className="stack" data-testid="catalog-change-detail">
       <div className="row-wrap" style={{ justifyContent: 'space-between' }}>
-        <h2 className="section-title">{sourceLabel(segment, t)}</h2>
+        <h2 className="catalog-detail-title" data-testid="catalog-change-title">
+          {t('模块 ', 'Module ')}
+          <span className="mono wrap-anywhere">{segment.source.name}</span>
+          {` v${segment.source.version}`}
+        </h2>
         <StatusChip
           machine="changeSegment"
           status={segment.status}
@@ -332,7 +348,7 @@ function ChangeSegmentDetail({
       <span className="section-title">{t('改了什么', 'What changed')}</span>
       <div className="stack-s" data-testid="catalog-change-items">
         {items.map((item) => (
-          <ChangeItemView key={item.id} item={item} />
+          <ChangeItemView key={item.id} item={item} segment={segment} />
         ))}
       </div>
 
@@ -360,7 +376,13 @@ function ChangeSegmentDetail({
   );
 }
 
-function ChangeItemView({ item }: { readonly item: ChangeItemWire }) {
+function ChangeItemView({
+  item,
+  segment,
+}: {
+  readonly item: ChangeItemWire;
+  readonly segment: ChangeSegmentWire;
+}) {
   const t = useT();
   return (
     <div className="card card-padded stack-s" data-testid={`catalog-change-item-${item.ordinal}`}>
@@ -370,8 +392,8 @@ function ChangeItemView({ item }: { readonly item: ChangeItemWire }) {
       </div>
       <span className="text-3 text-small">
         {t(
-          `本体版本：${versionText(item.before, t)} → ${versionText(item.after, t)}`,
-          `Ontology version: ${versionText(item.before, t)} → ${versionText(item.after, t)}`,
+          `模块 v${segment.source.version} 带来的本体版本（与模块版本分开编号）：${versionText(item.before, t)} → ${versionText(item.after, t)}`,
+          `Ontology version module v${segment.source.version} brought (numbered apart from the module's): ${versionText(item.before, t)} → ${versionText(item.after, t)}`,
         )}
       </span>
       {item.widening.length > 0 ? (

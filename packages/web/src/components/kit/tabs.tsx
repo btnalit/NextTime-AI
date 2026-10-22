@@ -45,7 +45,9 @@ export function Tabs<V extends string>({
   return (
     <div
       className={cn(
-        'inline-flex gap-0.5 rounded-m border border-border bg-surface-3 p-0.5',
+        // `max-w-full flex-wrap`: never wider than its container — on a narrow screen the options
+        // wrap to a second row instead of stretching the page sideways (UX acceptance of #663 P2-1).
+        'inline-flex max-w-full flex-wrap gap-0.5 rounded-m border border-border bg-surface-3 p-0.5',
         className,
       )}
       role="tablist"

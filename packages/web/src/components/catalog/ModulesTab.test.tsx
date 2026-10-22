@@ -152,9 +152,16 @@ describe('ModulesTab', () => {
 
     const link = await screen.findByTestId('catalog-module-provenance-link-ops-assets');
     expect(link.getAttribute('href')).toBe(`#/govern/catalog/changes/${SEGMENT_ID}`);
-    expect(link.textContent).toBe('Ada');
+    // The link says what it opens; who installed it and when are plain text beside it.
+    expect(link.textContent).toBe('查看安装记录');
+    expect(screen.getByTestId('catalog-module-provenance-ops-assets').textContent).toMatch(
+      /^Ada · /,
+    );
     expect(screen.getByTestId('catalog-module-provenance-link-default-mod').textContent).toBe(
-      '创建工作区时由平台安装',
+      '查看安装记录',
+    );
+    expect(screen.getByTestId('catalog-module-provenance-default-mod').textContent).toMatch(
+      /^创建工作区时由平台安装 · /,
     );
     expect(screen.getByTestId('catalog-module-provenance-old-mod').textContent).toContain(
       '没有安装记录',
