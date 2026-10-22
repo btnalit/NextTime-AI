@@ -4155,12 +4155,24 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 
 **GO4 — 验收检查**（见 `global-roadmap-2026-10-16.md` §4）
 
-- 实现说明：（未开工）
+- 拆分（协调线程定）：GO4a「目标验收」（#664）、GO4b「步骤验收」、GO4c「事实判定式」（`fact_predicate`），同一条 lane 顺序做。
+- 计划变更（协调线程定，#664）：「门确认不存在」不在 GO4 里做，改为 GO7 之前的一个小 PR，由它先定义门类型的「未找到」观察；在那之前判断"不存在"的判定式继续被拒，删除类目标由请求人确认完成。
+- GO4a 实现说明（#664，2026-10-22 合入，c348b2e；goal 0005；场景 S6）：
+  - **数据**（`goal/0005_goal_acceptance.sql`）：新表 `goal_acceptance_checks`，每轮每项检查一行（尝试次数、租约、证据 `observation_id` / `decision_id`、`last_error`）。只能在目标 `verifying`、计划为当前版本、轮次不早于最新一轮时以 `pending` 创建；一行只结算一次后冻结，且只有当前轮、目标仍在 `verifying` 时能结算；观察类通过必须挂属于这项检查且满足判定式的 Observation，确认类通过必须挂请求人本人对这一轮这一项的 Decision；目标离开 `verifying` 或已开更新一轮时才能 `superseded`；RLS，不授 delete。新列 `goal_runs.outcome_decision_id`。两个新词表 `GoalAcceptanceCheckKind`、`GoalAcceptanceCheckStatus`（shared）。
+  - **I-G5 守卫**：重建 `goal_runs_status_guard`（在 goal 0004 基础上允许 `outcome_decision_id` 变化，测试逐字比较两版守卫）。`verified_by_check` 只能从 `verifying` 进入，要求最新一轮全部通过、计划为当前版本、至少一项平台观察、不带人的 Decision；`requester` 依据要求请求人本人批准、指明这个目标和这个结果的 Decision；`reviewer_assessed` 暂不能写（W4）。Worker 或入口 agent 的 `agent_reported` 给不出目标结果。
+  - **轮次**：进入 `verifying` 开一轮；观察全过后若有 `requester_confirm` 再请请求人确认；全过 → `complete`；有检查最终没通过 → 暂停 `needs_decision`，暂停说明逐项点名。验收期间不看墙钟预算。离开 `verifying`（暂停、hold、取消、完成）时 `moves.ts` 同一事务把本轮 pending 行改 `superseded`，暂停或 hold 期间不做观察，继续后开新一轮。
+  - **执行器**（`acceptance-check.ts`）：与 GO3d 共用 `platform-observation.ts`（领取、准备、结算三个事务），结算先锁 GoalRun 再锁行，要求目标仍 `verifying`、行仍 pending、尝试次数未变、仍是最新一轮，否则不写。退避沿用 GO3d，两个可选环境变量 `GOAL_ACCEPTANCE_CHECK_MAX_ATTEMPTS`（默认 5）、`GOAL_ACCEPTANCE_CHECK_MAX_DURATION_MS`（默认 15 分钟）；每 5 秒一轮 tick。请求人失去观察权限时检查立即 `unavailable`。
+  - **请求人的结论**（`acceptance.ts`）：`confirmGoalAcceptance` 只有请求人、只在 `verifying`、要等观察全过；`endGoalRun` 只有请求人，可从 `paused` 或 `verifying` 以 `not_achieved` 结束，`achieved` 只能从 `paused`；不能有在跑或在等的步骤、活着的 Task、在等审批或执行中的动作（逐条判断，结果不明的动作不掩盖同一步骤里另一条在途动作，本身也不挡结束，审查 #493 P2）；未开始的步骤 skip；认定达成时 `overriddenChecks` 逐项列出 `failed` / `unavailable` / `superseded` / `not_run` 的检查与证据，写进 Decision 和 `goal_run.complete` 审计。owner 能 hold 或取消别人的目标但不能给结论。`endGoalRun` 在 owner hold 期间也允许请求人调用（结束不是继续），需要禁止时 GO5 在能力层加。
+  - **读模型** `readGoalAcceptance`：各轮次与检查，被覆盖的检查标 `overridden`，给出结果依据；控制台据此区分「平台检查通过」与「检查未通过，由请求人认定达成」，不解析暂停说明。
+  - **I-G5 定时检查**（`substrate/audit/goal-invariant-checks.ts` 的 `checkIG5`，审查 #493 P3）：由 `runInvariantChecks` 执行，指标 `nexttime_invariant_violations{invariant="I-G5"}`。四类：两个守卫缺失或未启用（含只在 replica 下触发）；`verified_by_check` 的目标结果不是 `achieved`、最新一轮有未通过或不属于当前计划的检查、没有平台观察或没有轮次；`requester` 依据的 Decision 不是请求人本人批准、指明这个目标和结果的；`passed` 的检查缺证据。数据条件与守卫重复（与 I-G2 同做法），用来发现守卫本身失效。
+  - **同类全找**：`compact-observations.ts` 条件 (a) 与已知外键加 `goal_acceptance_checks`；`ADVANCED_GOAL_RUN_STATUSES` 加 `verifying`；推进连续失败到上限时 `verifying` 的目标也暂停；`markReconcileDue` 加条件 (f)（`verifying` 但没有 pending 检查）；删除工作区顺序加新表；清空工作区预览新表标签「目标验收检查」（遗留 337 守卫）；`reversibility-deltas.json` 为 goal 0005 单独声明（与 governance 0024 同类）；`advance.ts` 与 `control.ts` 的 `assertRetryable` 已把 `wait` 两种原因都当阻塞，只有 `endGoalRun` 需要改。
+  - **范围外**：契约与能力属 GO5（`contract:check` 无漂移）；控制台目标页面属 GO6；步骤验收与事实判定式属 GO4b / GO4c，落地时 I-G5 定时检查同步扩到它们的新行和新证据。
 - 来自 GO3d（#649）的输入：验收检查复用 `substrate/epistemic/predicate.ts` 的求值与 lint（`observe_predicate` / `fact_predicate`）。要自动验收删除类动作时，先定义"门确认不存在"这种观察类型（门给出有类型的不存在证据，例如明确的 `not_found`，而不是空结果），不放开缺席判定式（#649 拍板点 13，协调线程定）。GO4 引入验收不过的暂停时，再看是否与 `awaiting_reconcile` 统一命名（拍板点 2）。
 
 **GO5 — 能力与入口 prompt**（见 `global-roadmap-2026-10-16.md` §4）
 
 - 实现说明：（未开工）
+- 来自 GO4a（#664）的输入：`confirm_goal_acceptance` 和 `end_goal` 是请求人的成员能力，永远不进 Handle scope（membership-not-in-handle 守卫）；`createGoalRun` 和 `reviseGoalRun` 返回的 `hints` 原样带到能力结果里；如需 owner hold 期间也禁止请求人结束目标，在能力层加一道。
 - 来自 GO3a（#626）的输入：`pause_goal` / `resume_goal` / `cancel_goal` 直接调用 `control.ts`，权限按 GO3a 划分（owner 能停不能续）；角色必须由能力层从已认证主体取，不能从参数取（`lockControlledRun` 信任传入的 `role`）；`resume_goal` 的 `retrySteps` 必须逐个列出步骤，不提供不列步骤的「全部重试」；`proposed` 的目标走 `reject`。
 - 来自 GO3c（#642）的输入：`reconcile_goal_action` 调用 `reconcileActionRequest`，能力带 minRole 与 `channel: 'human'`，决定人取已认证主体；读接口 `list_goal_run_unresolved_actions`；Worker 提示词写明步骤内调用方的 `idempotencyKey` 被忽略、409 `action_in_doubt` 表示等人核对。
 - 来自 GO3b（#633 与审查 #493）的输入：`revise_goal` 调用 `reviseGoalRun`，`release_goal_hold` 调用 `releaseGoalRunHold`，角色必须由能力层从已认证主体取、不能从参数取（守卫不知道角色，任何能 UPDATE 的写者都能解除 hold，遗留 389）；agent 提议的修订（`propose_revision`）走 `proposed` 状态、由请求者接受，计数规则与 `reviseGoalRun` 同一套；提议修订若提高预算或 `maxRevisions`，接受卡片上必须单独、显著地显示。
@@ -4169,6 +4181,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 **GO6 — 控制台：我的目标、确认卡片、目标详情**（见 `global-roadmap-2026-10-16.md` §4）
 
 - 实现说明：（未开工）
+- 来自 GO4a（#664）的显示内容：确认卡把提示 `requester_confirm_only` 显示为「此目标只能由你确认完成」；目标详情从 `readGoalAcceptance` 区分「平台检查通过」和「检查未通过，由请求人认定达成」，后者逐项列出失败的检查及其证据并标「已覆盖」；暂停 `needs_decision` 时从读模型给出「按未达成结束 / 认定达成 / 修订 / 继续 / 取消」几个入口。
 - 来自 GO3d（#649 与审查 #493）的显示内容：核对状态中文标签「平台核对中 / 平台已见效果 / 平台未见效果 / 平台无法核对 / 已由人核对」；目标暂停或被 hold 时，pending 的检查显示「核对已暂停，继续后再核对」；`lastError` 短码的中文说明（`predicate_unsatisfied`、`predicate_undetermined`、`predicate_refused`、`credentials_in_predicate`、`requester_may_not_observe`、`gate_timeout`、`gate_unreachable`、`attempts_exhausted`、`goal_ended`、`step_ended` 与门错误码）；未决动作列表从 `platformCheck` 渲染（状态、第几次、最新证据、`nextAttemptAt`），不解析暂停说明文字；审计里平台核对的执行者显示为「平台（代请求人）」，`action_request.reconcile_check` 各结果（含 `retry`）与 `action_request.reconcile` 的 `basis: observation` 有标签；证据 Observation 的可见范围按 `observe_operation` 的最低角色，目标详情里可点开（结果、判定式、三值结论、是否截断）；计划确认卡片把 reconcile 声明与判定式渲染成可读句子（比对了错误字段这类 lint 挡不住的问题靠这里让请求人看到）；判定式被 lint 拒绝时把原因说成人话并给改法（缺席判定式不被接受）。
 - 来自 GO3c（#642）的显示内容：目标详情的「待处理动作」列表（`needs` 为 finding 或 decision，含被修订掉与已取消步骤的请求）；核对卡片「已生效 / 未生效」与请求人的「重新执行」卡片，被 hold 时提示需 owner 解除；核对之后运行仍是 `paused(awaiting_reconcile)`，现状要从「待处理动作」列表推导而不是看 `pause_reason`：没有 `finding` 项时显示「核对已记录，可以继续」并给请求人「继续」入口，有 `decision` 项（`effect_absent`）时提示先决定是否重新执行或修订计划；恢复卡片对非瞬时失败的步骤引导「重试或修订」（遗留 393）；wire 字段 `reconciliation` 的展示；activity kind `governance.reconcile_decision`、审计 `action_request.reconcile` / `.reexecute`、拒绝码 `action_in_doubt` 的中文文案。
 - 来自 GO3b（#633）的显示内容：暂停的目标显示谁暂停、以什么身份；被 owner 锁定的目标只有 owner 或更高权限能解除，请求者本身也是 owner 时可以自己解除；请求者看到「继续」不可用及原因与找谁，owner 看到「解除暂停」，owner 在已暂停目标上也能「暂停（hold）」；修订：在暂停点编辑计划（步骤从当前计划派生、不手打），对每个被移除或改过且还在跑的步骤选「终止」（默认）或「让它跑完」并逐条勾选可放行的请求，其余明确提示会撤回，填原因，预算可选；修订时间线（原因、谁、基于哪个修订、移除与新增步骤、处理方式、放行的请求）；推进连续失败暂停显示「推进连续失败 N 次」与最后一次错误；解除记录显示原来是谁 hold 的（`heldBy`）；审计标签 `goal_run.hold`、`goal_run.release_hold`、`goal_run.revise`、`goal_run.advance_failing`、`plan_revision.accept`、`step_run.supersede`、`action_request.release`（「修订时放行」）与撤回原因「its step was revised away」的中文文案。
