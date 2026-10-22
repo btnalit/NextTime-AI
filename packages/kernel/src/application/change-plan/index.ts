@@ -16,11 +16,14 @@
  *
  * P1-C: packs (`application/packs`, Pack Contract v1) are the source a segment is planned from;
  * a planned item carries what it would change for the reviewer (`ChangeItemDetail`), and the
- * in-use count for removed types is shared (`usage.ts`). More item kinds and recorded
- * verification follow in later P1 PRs.
+ * in-use count for removed types is shared (`usage.ts`).
+ *
+ * P1-D: `skill_version` and `worker_definition_version` items (`family-item.ts`), so a pack's
+ * Skills and Workers install and roll back like its ontology families. Operation items and
+ * recorded verification follow in later P1 PRs.
  *
  * Boundaries: it lives in `application` because applying calls publish functions across
- * `substrate` (ontology today; WorkerDefinition / Skill / Procedure in `application/worker` next).
+ * `substrate` (ontology) and `application/worker` (Skills, WorkerDefinitions).
  */
 
 export {
@@ -31,8 +34,12 @@ export {
   WIDENING_REASON_VALUES,
   type WideningReason,
   type WideningReasonCode,
+  SKILL_FIELD_RULES,
+  WORKER_DEFINITION_FIELD_RULES,
   classificationOf,
   classifyOntologyDefinitionChange,
+  classifySkillChange,
+  classifyWorkerDefinitionChange,
 } from './classify.js';
 export { contentDigest } from './digest.js';
 export {
@@ -59,6 +66,20 @@ export {
   type UnconfirmedChangeItem,
 } from './errors.js';
 export {
+  type ContentVersionRef,
+  type FamilyItemKind,
+  type FamilyItemTarget,
+  type FamilyVersionIntent,
+  type SkillItemContent,
+  type SkillVersionIntent,
+  type StoredFamilyItem,
+  type WorkerDefinitionVersionIntent,
+  parseStoredFamilyItem,
+  readFamilyHeadDigest,
+  skillTargetOf,
+  workerDefinitionTargetOf,
+} from './family-item.js';
+export {
   type InspectedChangeItem,
   type InspectedChangeSegment,
   inspectChangeSegment,
@@ -69,9 +90,15 @@ export {
   type OntologyVersionIntent,
   type StoredOntologyItem,
   ontologyTypeChanges,
+  parseStoredOntologyItem,
 } from './ontology-item.js';
-export { type OntologyProvenance, loadOntologyProvenance } from './provenance.js';
 export {
+  type ChangeProvenance,
+  loadFamilyProvenance,
+  loadOntologyProvenance,
+} from './provenance.js';
+export {
+  type ItemRollbackDetail,
   type PlannedItemRollback,
   type RollBackWorkspaceSegmentInput,
   type SegmentRollbackPlan,

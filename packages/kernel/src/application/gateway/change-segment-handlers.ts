@@ -1,24 +1,27 @@
 import type {
   ChangeItemWire,
   ChangePrincipalRefWire,
+  ChangeProvenanceWire,
   ChangeRollbackItemWire,
   ChangeRollbackPreviewWire,
   ChangeSegmentDetailWire,
   ChangeSegmentWire,
-  OntologyProvenanceWire,
 } from '@nexttime/shared';
 import {
   type ChangePrincipalRef,
+  type ChangeProvenance,
   type ChangeSegmentRecord,
   type InspectedChangeItem,
-  type OntologyProvenance,
   type PlannedItemRollback,
   inspectChangeSegment,
   listChangeSegments,
+  parseStoredFamilyItem,
+  parseStoredOntologyItem,
   previewSegmentRollback,
   rollBackWorkspaceSegment,
+  skillTargetOf,
+  workerDefinitionTargetOf,
 } from '../change-plan/index.js';
-import { parseStoredOntologyItem } from '../change-plan/ontology-item.js';
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
 
@@ -52,8 +55,9 @@ export function toChangeSegmentWire(segment: ChangeSegmentRecord): ChangeSegment
   };
 }
 
-/** `list_workspace_modules`' / `install_module`'s `provenance` (`platform-modules-handlers.ts`). */
-export function toOntologyProvenanceWire(provenance: OntologyProvenance): OntologyProvenanceWire {
+/** A family's `provenance`: `list_workspace_modules`' / `install_module`'s
+ *  (`platform-modules-handlers.ts`) and a pack component's (`pack-handlers.ts`). */
+export function toChangeProvenanceWire(provenance: ChangeProvenance): ChangeProvenanceWire {
   switch (provenance.status) {
     case 'recorded':
       return {
@@ -94,6 +98,26 @@ function toChangeItemWire(item: InspectedChangeItem): ChangeItemWire {
         after: { ...stored.after },
       };
     }
+    case 'skill_version': {
+      const stored = parseStoredFamilyItem(kind, record);
+      return {
+        ...common,
+        kind,
+        target: skillTargetOf(stored.target),
+        before: stored.before ? { ...stored.before } : null,
+        after: { ...stored.after },
+      };
+    }
+    case 'worker_definition_version': {
+      const stored = parseStoredFamilyItem(kind, record);
+      return {
+        ...common,
+        kind,
+        target: workerDefinitionTargetOf(stored.target),
+        before: stored.before ? { ...stored.before } : null,
+        after: { ...stored.after },
+      };
+    }
     default:
       throw new Error(
         `change-plan: unknown change item kind ${JSON.stringify(kind satisfies never)}`,
@@ -102,24 +126,52 @@ function toChangeItemWire(item: InspectedChangeItem): ChangeItemWire {
 }
 
 function toRollbackItemWire(item: PlannedItemRollback): ChangeRollbackItemWire {
-  const { ontology, conflict } = item;
-  return {
+  const { detail, conflict } = item;
+  const common = {
     ordinal: item.record.ordinal,
-    kind: 'ontology_version',
-    target: { ...ontology.target },
-    from: { ...ontology.from },
-    to: ontology.to ? { ...ontology.to } : null,
     classification: item.classification,
     widening: item.widening.map((w) => ({ path: w.path, reason: w.reason })),
-    removes: {
-      objectTypes: [...ontology.removes.objectTypes],
-      linkTypes: [...ontology.removes.linkTypes],
-      actionTypes: [...ontology.removes.actionTypes],
-    },
     blocker: conflict?.blocker ?? null,
     blockedBy: conflict?.blockedBy ? { segmentId: conflict.blockedBy.segmentId } : null,
-    conflicts: conflict ? conflict.conflicts.map((c) => ({ kind: c.kind, name: c.name })) : [],
   };
+  switch (detail.kind) {
+    case 'ontology_version': {
+      const ontology = detail.planned;
+      return {
+        ...common,
+        kind: detail.kind,
+        target: { ...ontology.target },
+        from: { ...ontology.from },
+        to: ontology.to ? { ...ontology.to } : null,
+        removes: {
+          objectTypes: [...ontology.removes.objectTypes],
+          linkTypes: [...ontology.removes.linkTypes],
+          actionTypes: [...ontology.removes.actionTypes],
+        },
+        conflicts: conflict ? conflict.conflicts.map((c) => ({ kind: c.kind, name: c.name })) : [],
+      };
+    }
+    case 'skill_version': {
+      const family = detail.planned;
+      return {
+        ...common,
+        kind: detail.kind,
+        target: skillTargetOf(family.target),
+        from: { ...family.from },
+        to: family.to ? { ...family.to } : null,
+      };
+    }
+    case 'worker_definition_version': {
+      const family = detail.planned;
+      return {
+        ...common,
+        kind: detail.kind,
+        target: workerDefinitionTargetOf(family.target),
+        from: { ...family.from },
+        to: family.to ? { ...family.to } : null,
+      };
+    }
+  }
 }
 
 export const listChangeSegmentsHandler: CapabilityHandler = async (client, workspaceId, params) => {

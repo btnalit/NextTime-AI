@@ -20,6 +20,7 @@ import { SqlGraphStore } from '../../substrate/graph/index.js';
 import { projectSkillObject } from '../../substrate/ontology/index.js';
 import { type DraftViewer, draftVisibilityBinds, draftVisibleTo } from './draft-visibility.js';
 import { assertFamilyPublishAuthority } from './publish-family.js';
+import { lockWorkerRegistry } from './registry-lock.js';
 
 const graphStore = new SqlGraphStore();
 
@@ -121,6 +122,50 @@ export class SkillValidationError extends Error {
     super(message);
     this.name = 'SkillValidationError';
   }
+}
+
+/**
+ * S11 P1-D: a Skill name belongs to one Skill family among published versions. A Worker mounts its
+ * Skills by name or id (`resolvePublishedSkills`), and pi loads two Skills of one name as one,
+ * dropping the other — so a second family publishing a name another one has published would make
+ * which text a Worker reads depend on row order. Raised by `publishSkill` and by a ChangePlan
+ * segment installing a pack's Skill (at review and at apply), before anything is written; mapped to
+ * 409 `skill_name_conflict`. The fix is the owner's: deprecate the other family, or rename.
+ */
+export class SkillNameConflictError extends Error {
+  readonly code = 'skill_name_conflict' as const;
+  readonly skillName: string;
+  /** The family that already has the name published. */
+  readonly ownerSkillId: string;
+  constructor(skillName: string, ownerSkillId: string, subject: string) {
+    super(
+      `${subject}: Skill name "${skillName}" is already published by another Skill (${ownerSkillId}) — a Worker mounts Skills by name, so a name has one Skill; deprecate that one or rename this one. Nothing was published`,
+    );
+    this.name = 'SkillNameConflictError';
+    this.skillName = skillName;
+    this.ownerSkillId = ownerSkillId;
+  }
+}
+
+/** Refuses with `SkillNameConflictError` when a Skill family other than `skillId` has a published
+ *  version named `name`. Called under `lockWorkerRegistry`, so the answer holds until the caller's
+ *  transaction ends. */
+export async function assertSkillNameAvailable(
+  client: PoolClient,
+  workspaceId: string,
+  skillId: string,
+  name: string,
+  subject: string,
+): Promise<void> {
+  const result = await client.query<{ id: string }>(
+    `select id from skills
+     where workspace_id = $1 and name = $2 and status = 'published' and id <> $3
+     order by id
+     limit 1`,
+    [workspaceId, name, skillId],
+  );
+  const owner = result.rows[0];
+  if (owner) throw new SkillNameConflictError(name, owner.id, subject);
 }
 
 // -------------------------------------------------------------------------------------------
@@ -271,10 +316,11 @@ export function skillReviewContent(row: SkillRow): unknown {
 
 /** Publishes the latest draft version of `skillId` (human channel only — enforced at the gateway):
  *  validates the transition (`IllegalTransition` on anything but `draft -> published`), validates
- *  content (`validateSkillContent`), sets `published_by`/`published_at`, and projects the Skill
- *  into the graph (`substrate/ontology`'s `projectSkillObject`) so `find_procedures`/`list_skills`
- *  and a future WorkerDefinition's `uses` resolution (`application/task/spawn.ts`) have something
- *  to find.
+ *  content (`validateSkillContent`) and that no other family has the name published
+ *  (`SkillNameConflictError`), sets `published_by`/`published_at`, and projects the Skill into the
+ *  graph (`substrate/ontology`'s `projectSkillObject`) so `find_procedures`/`list_skills` and a
+ *  future WorkerDefinition's `uses` resolution (`application/task/spawn.ts`) have something to
+ *  find. Under `lockWorkerRegistry`, taken first.
  *
  *  `actor` (D-24): the `publish_skill` caller — `actor.principalId` is `publisherPrincipalId` —
  *  checked against the locked row (`requireSkillAuthority`) and against the family's live
@@ -286,6 +332,7 @@ export async function publishSkill(
   skillId: string,
   actor?: PublishActor,
 ): Promise<SkillRow> {
+  await lockWorkerRegistry(client, workspaceId);
   const row = await getLatestForUpdate(client, workspaceId, skillId);
   requireSkillAuthority('publish_skill', actor, row);
   // Legacy 300: publish what the person reviewed — a newer version under this id since refuses.
@@ -299,6 +346,13 @@ export async function publishSkill(
     actor,
   });
   validateSkillContent(row);
+  await assertSkillNameAvailable(
+    client,
+    workspaceId,
+    row.id,
+    row.name,
+    `publish_skill: Skill ${row.id}@${row.version}`,
+  );
   assertDraftCredentialsReviewed(
     'skill',
     `${row.id}@${row.version}`,
@@ -406,13 +460,14 @@ async function linkPublishedWorkerDefinitionsUsingSkill(
 }
 
 /** Deprecates the latest version of `skillId` (human channel only). `IllegalTransition` unless it
- *  is currently `published`. `actor` (D-24): as for `publishSkill`. */
+ *  is currently `published`. `actor` (D-24): as for `publishSkill`. Under `lockWorkerRegistry`. */
 export async function deprecateSkill(
   client: PoolClient,
   workspaceId: string,
   skillId: string,
   actor?: PublishActor,
 ): Promise<SkillRow> {
+  await lockWorkerRegistry(client, workspaceId);
   const row = await getLatestForUpdate(client, workspaceId, skillId);
   requireSkillAuthority('deprecate_skill', actor, row);
   transition(PUBLISHABLE_TRANSITIONS, row.status, 'deprecate');
@@ -427,6 +482,62 @@ export async function deprecateSkill(
   const updated = result.rows[0];
   if (!updated) throw new Error('deprecateSkill: UPDATE ... RETURNING produced no row');
   return mapRow(updated);
+}
+
+// -------------------------------------------------------------------------------------------
+// S11 P1-D: a family's head, one version, and retiring one version — what a ChangePlan item
+// (`application/change-plan/family-item.ts`) reads and writes, under `lockWorkerRegistry`.
+// -------------------------------------------------------------------------------------------
+
+/** The family's head: its latest published version (the one `resolvePublishedSkills` mounts), or
+ *  `null` when none is published. */
+export async function loadPublishedSkillHead(
+  client: PoolClient,
+  workspaceId: string,
+  skillId: string,
+): Promise<SkillRow | null> {
+  const result = await client.query<SkillDbRow>(
+    `select ${SELECT_COLUMNS} from skills
+     where workspace_id = $1 and id = $2 and status = 'published'
+     order by version desc
+     limit 1`,
+    [workspaceId, skillId],
+  );
+  const row = result.rows[0];
+  return row ? mapRow(row) : null;
+}
+
+/** One version of the family, whatever its status; `null` when there is no such row. */
+export async function loadSkillVersion(
+  client: PoolClient,
+  workspaceId: string,
+  skillId: string,
+  version: number,
+): Promise<SkillRow | null> {
+  const result = await client.query<SkillDbRow>(
+    `select ${SELECT_COLUMNS} from skills where workspace_id = $1 and id = $2 and version = $3`,
+    [workspaceId, skillId, version],
+  );
+  const row = result.rows[0];
+  return row ? mapRow(row) : null;
+}
+
+/** Retires `version` of the family (`published -> deprecated`, the lifecycle's one edge out of
+ *  `published`), whatever versions came after it — unlike `deprecateSkill`, which acts on the
+ *  latest. Returns whether a published row was retired. Its rollback's caller (a ChangePlan item)
+ *  holds `lockWorkerRegistry` and audits the change. */
+export async function deprecatePublishedSkillVersion(
+  client: PoolClient,
+  workspaceId: string,
+  skillId: string,
+  version: number,
+): Promise<boolean> {
+  const result = await client.query(
+    `update skills set status = 'deprecated'
+     where workspace_id = $1 and id = $2 and version = $3 and status = 'published'`,
+    [workspaceId, skillId, version],
+  );
+  return (result.rowCount ?? 0) === 1;
 }
 
 // -------------------------------------------------------------------------------------------

@@ -1,6 +1,7 @@
 import {
   CHANGE_ROLLBACK_IN_USE_CAP,
   type PackComponentStateWire,
+  type PackComponentWire,
   type PackInstallItemWire,
   type PackInstallPreviewWire,
   type PackInstallResultWire,
@@ -10,6 +11,7 @@ import { useEffect, useState } from 'react';
 import { invalidateCapability, useCapabilityList } from '../../hooks/useCapability.js';
 import { usePermissions } from '../../hooks/usePermissions.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
+import { actionLabel as capabilityLabel } from '../../lib/capability-labels.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { describeError, isForbiddenError } from '../../lib/errors.js';
 import { formatDateTime, formatRelative, shortId } from '../../lib/format.js';
@@ -27,7 +29,8 @@ import { RouteLink } from '../kit/route-link.js';
 import { SkeletonRows } from '../kit/skeleton.js';
 import { StatusChip } from '../kit/status-chip.js';
 import { StillNeeded } from '../kit/still-needed.js';
-import { typeNamesText, wideningText } from './ChangesTab.js';
+import { changeSubjectText, contentFieldText, typeNamesText, wideningText } from './ChangesTab.js';
+import { MarkdownPreview } from './MarkdownPreview.js';
 
 export interface PacksTabProps {
   readonly http: CapabilityCaller;
@@ -68,9 +71,9 @@ function actionLabel(pack: PackWire, t: Translate): string | null {
 }
 
 /**
- * components/catalog/PacksTab: 能力目录 · 能力包 (`#/govern/catalog/packs`, S11 P1-C). A **能力包**
- * is a versioned set of components this deployment ships (Pack Contract v1, `packs/<name>/
- * <version>/pack.yaml`; v1 components are ontology families) — a module is one with a single
+ * components/catalog/PacksTab: 能力目录 · 能力包 (`#/govern/catalog/packs`, S11 P1-C / P1-D). A
+ * **能力包** is a versioned set of components this deployment ships (Pack Contract v1, `packs/
+ * <name>/<version>/pack.yaml`: ontology families, Skills, Workers) — a module is one with a single
  * ontology part, so this tab replaces the 模块 tab. Members read every pack, its versions, and
  * what this workspace has of it, per component and with the install record that put it there
  * (`list_packs`). The owner installs or upgrades one after reviewing it (`preview_pack_install`
@@ -106,8 +109,8 @@ export function PacksTab({ http, itemId, onSelectItem }: PacksTabProps) {
       <div className="stack-s" data-testid="catalog-packs">
         <p className="text-3 text-small">
           {t(
-            '能力包是随平台部署附带、按版本发布的一组能力（目前是本体：对象、关系和动作类型）。安装或升级之前先看它会改动什么；每次安装留下一条安装记录，可以在「安装历史」里撤销。',
-            'A pack is a versioned set of capabilities shipped with the platform (ontology today: object, link and action types). Review what it changes before installing or upgrading; each install leaves an install record you can roll back under Install history.',
+            '能力包是随平台部署附带、按版本发布的一组能力：本体（对象、关系和动作类型）、Skill（Worker 读的做事方法）和 Worker（可以被委派任务的执行者）。安装或升级之前先看它会改动什么；每次安装留下一条安装记录，可以在「安装历史」里撤销。',
+            'A pack is a versioned set of capabilities shipped with the platform: ontology (object, link and action types), Skills (ways of working a Worker reads) and Workers (agents tasks are delegated to). Review what it changes before installing or upgrading; each install leaves an install record you can roll back under Install history.',
           )}
         </p>
         {rows.length === 0 ? (
@@ -185,6 +188,8 @@ function PackDetail({
   // What this pane just installed: says so where the install control was (its trigger is gone).
   const [installed, setInstalled] = useState<PackInstallResultWire | null>(null);
   const versions = [...pack.versions].sort((a, b) => b.version - a.version);
+  const latestComponents =
+    pack.versions.find((version) => version.version === pack.latestVersion)?.components ?? [];
 
   return (
     <div className="stack" data-testid="catalog-pack-detail">
@@ -249,7 +254,13 @@ function PackDetail({
       <span className="section-title">{t('组成', 'Parts')}</span>
       <div className="stack-s" data-testid="catalog-pack-components">
         {pack.components.map((component) => (
-          <ComponentView key={component.family} component={component} />
+          <ComponentView
+            key={componentKey(component)}
+            component={component}
+            declared={latestComponents.find(
+              (declared) => componentKey(declared) === componentKey(component),
+            )}
+          />
         ))}
       </div>
 
@@ -278,24 +289,58 @@ function PackDetail({
   );
 }
 
-/** One part of the pack (an ontology family today): its state, and the install record that put
- *  its current content there. No record: installed before records were kept, or published some
- *  other way (`publish_ontology_version`); it cannot be rolled back from here. */
-function ComponentView({ component }: { readonly component: PackComponentStateWire }) {
+/** A part's key within the pack: its family, or its kind and name (`ontology` families and Skill /
+ *  Worker names are separate namespaces). Also its test id. */
+function componentKey(component: PackComponentWire | PackComponentStateWire): string {
+  return component.kind === 'ontology' ? component.family : `${component.kind}-${component.name}`;
+}
+
+/** 「本体 ops-assets」, 「Skill docker-triage」, 「Worker ops-runner」. */
+function componentTitle(
+  component: PackComponentStateWire,
+  t: Translate,
+): { readonly noun: string; readonly name: string } {
+  return component.kind === 'ontology'
+    ? { noun: t('本体', 'Ontology'), name: component.family }
+    : { noun: component.kind === 'skill' ? 'Skill' : 'Worker', name: component.name };
+}
+
+/** One part of the pack — an ontology family, a Skill or a Worker: its state, and the install
+ *  record that put its current content there. No record: installed before records were kept, or
+ *  published some other way (`publish_ontology_version`, `publish_skill`, …); it cannot be rolled
+ *  back from here. An installed Skill or Worker links to its own page in the catalog. */
+function ComponentView({
+  component,
+  declared,
+}: {
+  readonly component: PackComponentStateWire;
+  /** The latest version's declaration of it (a Skill's or Worker's description). */
+  readonly declared: PackComponentWire | undefined;
+}) {
   const t = useT();
   const provenance = component.provenance;
+  const key = componentKey(component);
+  const { noun, name } = componentTitle(component, t);
+  const description =
+    declared && declared.kind !== 'ontology' ? (declared.description ?? null) : null;
+  const page =
+    component.status === 'not_installed'
+      ? null
+      : component.kind === 'skill'
+        ? hrefs.catalog('skills', component.skillId)
+        : component.kind === 'worker'
+          ? hrefs.catalog('workers', component.definitionId)
+          : null;
   return (
-    <div
-      className="card card-padded stack-s"
-      data-testid={`catalog-pack-component-${component.family}`}
-    >
+    <div className="card card-padded stack-s" data-testid={`catalog-pack-component-${key}`}>
       <div className="row-wrap" style={{ justifyContent: 'space-between' }}>
         <span>
-          {t('本体 ', 'Ontology ')}
-          <span className="mono wrap-anywhere">{component.family}</span>
+          {`${noun} `}
+          <span className="mono wrap-anywhere">{name}</span>
         </span>
         <StatusChip machine="packInstall" status={component.status} size="s" />
       </div>
+      {description ? <span className="text-small">{description}</span> : null}
       {component.installedVersion !== null ? (
         <span className="text-3 text-small">
           {t(
@@ -312,10 +357,7 @@ function ComponentView({ component }: { readonly component: PackComponentStateWi
         </span>
       ) : null}
       {provenance.status === 'recorded' ? (
-        <span
-          className="row-wrap text-small"
-          data-testid={`catalog-pack-provenance-${component.family}`}
-        >
+        <span className="row-wrap text-small" data-testid={`catalog-pack-provenance-${key}`}>
           <span>
             {provenance.channel === 'platform'
               ? t('创建工作区时由平台安装', 'Installed by the platform with the workspace')
@@ -332,21 +374,25 @@ function ComponentView({ component }: { readonly component: PackComponentStateWi
           </span>
           <RouteLink
             href={hrefs.catalog('changes', provenance.segmentId)}
-            testId={`catalog-pack-provenance-link-${component.family}`}
+            testId={`catalog-pack-provenance-link-${key}`}
           >
             {t('查看安装记录', 'Open install record')}
           </RouteLink>
         </span>
       ) : provenance.status === 'provenance_unknown' ? (
-        <span
-          className="text-3 text-small"
-          data-testid={`catalog-pack-provenance-${component.family}`}
-        >
+        <span className="text-3 text-small" data-testid={`catalog-pack-provenance-${key}`}>
           {t(
             '没有安装记录：启用安装记录之前装的，或不是从能力包装的；不能在「安装历史」里撤销',
             'No install record: installed before records were kept, or not from a pack; it cannot be rolled back under Install history',
           )}
         </span>
+      ) : null}
+      {page ? (
+        <RouteLink href={page} testId={`catalog-pack-component-page-${key}`}>
+          {component.kind === 'skill'
+            ? t('在 Skill 页查看', 'Open on the Skills tab')
+            : t('在 Worker 页查看', 'Open on the Workers tab')}
+        </RouteLink>
       ) : null}
     </div>
   );
@@ -354,18 +400,18 @@ function ComponentView({ component }: { readonly component: PackComponentStateWi
 
 /** 「本体 ops-assets：第 1 版 → 新的一版」 — what one item does to its family. */
 function itemHeadline(item: PackInstallItemWire, t: Translate): string {
-  const family = item.target.family;
+  const subject = changeSubjectText(item, t);
   if (item.unchanged) {
     return t(
-      `本体 ${family}：已经是这一版的内容，不改动`,
-      `Ontology ${family}: already this version, left as is`,
+      `${subject}：已经是这一版的内容，不改动`,
+      `${subject}: already this version, left as is`,
     );
   }
   const before =
     item.before === null
       ? t('未安装', 'not installed')
       : t(`第 ${item.before.version} 版`, `v${item.before.version}`);
-  return t(`本体 ${family}：${before} → 新的一版`, `Ontology ${family}: ${before} → a new version`);
+  return t(`${subject}：${before} → 新的一版`, `${subject}: ${before} → a new version`);
 }
 
 /** The review's copy for a change between the review and the install: the review reloads itself,
@@ -510,6 +556,10 @@ function InstallPack({
                 '这个能力包里有对象类型或动作类型的名字已经被工作区里另一个本体用了，装上会让两个本体重名，所以现在装不上，什么也没有改。「技术细节」里写着是哪个类型；占用它的本体是从能力包装上的话，可以在「安装历史」里撤销那条记录，否则请平台管理员处理。',
                 'A type name in this pack is already used by another ontology in the workspace; installing it would give the name two owners, so it cannot be installed now and nothing changed. The technical details name the type. If the ontology holding it came from a pack, roll that record back under Install history; otherwise ask a platform administrator.',
               ),
+              skill_name_conflict: t(
+                '这个能力包里有一个 Skill 和工作区里另一个已发布的 Skill 同名；Worker 按名字挂载 Skill，同名会让它挂错，所以现在装不上，什么也没有改。「技术细节」里写着是哪个名字；可以在「Skill」页停用那个 Skill 后再来安装。',
+                'A Skill in this pack has the same name as another published Skill in the workspace; a Worker mounts Skills by name, so two of one name would mix them up. It cannot be installed now and nothing changed. The technical details name it; deprecate that Skill on the Skills tab, then install again.',
+              ),
             }}
             testId="catalog-pack-preview-error"
           />
@@ -518,8 +568,8 @@ function InstallPack({
             {preview.data.pack.status === 'customized' ? (
               <Notice tone="warn" testId="catalog-pack-preview-customized">
                 {t(
-                  `工作区里现在的内容和这个能力包的任何版本都对不上（已定制）。继续会把下面每一项换成 v${preview.data.targetVersion} 的标准内容，在能力包之外做的修改会被替换；原来的本体版本仍然保留，可以在「安装历史」里撤销这次安装。`,
-                  `What the workspace has now matches no version of this pack (customized). Continuing replaces each part below with the standard content of v${preview.data.targetVersion}, so changes made outside the pack are replaced; the earlier ontology versions are kept, and this install can be rolled back under Install history.`,
+                  `工作区里现在的内容和这个能力包的任何版本都对不上（已定制）。继续会把下面每一项换成 v${preview.data.targetVersion} 的标准内容，在能力包之外做的修改会被替换；原来的版本仍然保留，可以在「安装历史」里撤销这次安装。`,
+                  `What the workspace has now matches no version of this pack (customized). Continuing replaces each part below with the standard content of v${preview.data.targetVersion}, so changes made outside the pack are replaced; the earlier versions are kept, and this install can be rolled back under Install history.`,
                 )}
               </Notice>
             ) : null}
@@ -614,32 +664,16 @@ function PreviewItem({
   readonly onCheckedChange: (checked: boolean) => void;
 }) {
   const t = useT();
-  const added = typeNamesText(item.types.added, t);
-  const removed = typeNamesText(item.types.removed, t);
-  const changed = typeNamesText(item.types.changed, t);
   return (
     <div className="stack-s" data-testid={`catalog-pack-item-${item.ordinal}`}>
       <span>{itemHeadline(item, t)}</span>
       {item.unchanged ? null : (
         <>
-          {added ? (
-            <span className="text-3 text-small">
-              {t('新增：', 'Adds: ')}
-              {added}
-            </span>
-          ) : null}
-          {changed ? (
-            <span className="text-3 text-small">
-              {t('修改：', 'Changes: ')}
-              {changed}
-            </span>
-          ) : null}
-          {removed ? (
-            <span className="text-3 text-small">
-              {t('装好后不再有：', 'Afterwards no longer has: ')}
-              {removed}
-            </span>
-          ) : null}
+          {item.kind === 'ontology_version' ? (
+            <OntologyItemChanges item={item} />
+          ) : (
+            <ContentItemChanges item={item} />
+          )}
           {item.classification === 'authority_widening' ? (
             <label className="checkbox">
               <input
@@ -657,5 +691,110 @@ function PreviewItem({
         </>
       )}
     </div>
+  );
+}
+
+/** An ontology item: the type names it adds, changes and takes out. */
+function OntologyItemChanges({
+  item,
+}: {
+  readonly item: Extract<PackInstallItemWire, { kind: 'ontology_version' }>;
+}) {
+  const t = useT();
+  const added = typeNamesText(item.types.added, t);
+  const removed = typeNamesText(item.types.removed, t);
+  const changed = typeNamesText(item.types.changed, t);
+  return (
+    <>
+      {added ? (
+        <span className="text-3 text-small">
+          {t('新增：', 'Adds: ')}
+          {added}
+        </span>
+      ) : null}
+      {changed ? (
+        <span className="text-3 text-small">
+          {t('修改：', 'Changes: ')}
+          {changed}
+        </span>
+      ) : null}
+      {removed ? (
+        <span className="text-3 text-small">
+          {t('装好后不再有：', 'Afterwards no longer has: ')}
+          {removed}
+        </span>
+      ) : null}
+    </>
+  );
+}
+
+/** A Skill or Worker item: what it installs (the text a Worker reads, what a Worker may do), and
+ *  which fields differ from what the workspace has now. */
+function ContentItemChanges({
+  item,
+}: {
+  readonly item: Exclude<PackInstallItemWire, { kind: 'ontology_version' }>;
+}) {
+  const t = useT();
+  const changed =
+    item.before !== null && item.changedFields.length > 0
+      ? item.changedFields.map((field) => contentFieldText(field, t)).join(t('、', ', '))
+      : null;
+  const prefix = `catalog-pack-item-${item.ordinal}`;
+  return (
+    <>
+      {item.kind === 'skill_version' ? (
+        <span className="text-3 text-small">{item.skill.description}</span>
+      ) : item.worker.description ? (
+        <span className="text-3 text-small">{item.worker.description}</span>
+      ) : null}
+      {changed ? (
+        <span className="text-3 text-small" data-testid={`${prefix}-changed`}>
+          {t('和工作区里现在的相比，改动了：', 'Differs from what the workspace has in: ')}
+          {changed}
+        </span>
+      ) : null}
+      {item.kind === 'worker_definition_version' ? (
+        <>
+          <span className="text-3 text-small" data-testid={`${prefix}-skills`}>
+            {t('挂载的 Skill：', 'Mounted Skills: ')}
+            {item.worker.skills.length > 0
+              ? item.worker.skills.join(t('、', ', '))
+              : t('无', 'none')}
+          </span>
+          <span className="text-3 text-small" data-testid={`${prefix}-capabilities`}>
+            {t('能力范围：', 'Capabilities: ')}
+            {item.worker.capabilities === null
+              ? t(
+                  '平台默认：查询台账、只读查看已接入的系统、提出建议；不能执行需要审批的操作',
+                  'the platform default: read the records, read connected systems, propose; it cannot run anything that needs approval',
+                )
+              : item.worker.capabilities
+                  .map((capability) => capabilityLabel(capability, t))
+                  .join(t('、', ', '))}
+          </span>
+          {item.worker.egressDeny.length > 0 ? (
+            <span className="text-3 text-small">
+              {t('禁止访问的地址：', 'Denied hosts: ')}
+              {item.worker.egressDeny.join(t('、', ', '))}
+            </span>
+          ) : null}
+        </>
+      ) : null}
+      <details className="disclosure" data-testid={`${prefix}-content`}>
+        <summary>
+          {item.kind === 'skill_version'
+            ? t('查看 Skill 正文', 'Show the Skill body')
+            : t('查看系统提示词', 'Show the system prompt')}
+        </summary>
+        <div className="disclosure-body">
+          {item.kind === 'skill_version' ? (
+            <MarkdownPreview markdown={item.skill.markdown} />
+          ) : (
+            <pre className="code-block pre-wrap">{item.worker.systemPrompt}</pre>
+          )}
+        </div>
+      </details>
+    </>
   );
 }

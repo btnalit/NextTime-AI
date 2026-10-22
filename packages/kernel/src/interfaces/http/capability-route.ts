@@ -113,6 +113,7 @@ import {
   DraftNotDiscardableError,
   ProcedureNotFoundError,
   ProcedureStepReferenceError,
+  SkillNameConflictError,
   SkillNotFoundError,
   SkillValidationError,
   WorkerDefinitionKindMismatchError,
@@ -448,6 +449,16 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // owns — `publish_ontology_version`, `install_module`, `upgrade_module`. Nothing was published.
   if (err instanceof OntologyNamespaceConflictError) {
     return { status: 409, code: err.code, message: err.message };
+  }
+  // S11 P1-D: a Skill name another Skill family has published — `publish_skill`,
+  // `preview_pack_install`, `install_pack` (a Worker mounts Skills by name). Nothing was published.
+  if (err instanceof SkillNameConflictError) {
+    return {
+      status: 409,
+      code: err.code,
+      message: err.message,
+      details: { skillName: err.skillName },
+    };
   }
   // Review 2026-09 (docs/development-tasks.md S2.4 "实现说明补充"): `propose_operation` over an
   // identity that already exists and is not the caller's own draft — a published/deprecated

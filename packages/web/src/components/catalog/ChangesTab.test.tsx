@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import type {
+  ChangeItemWire,
+  ChangeRollbackItemWire,
   ChangeRollbackPreviewWire,
   ChangeSegmentDetailWire,
   ChangeSegmentWire,
@@ -40,7 +42,7 @@ const ONTOLOGY_TARGET = { family: 'ops-assets', ontologyId: 'o-1' };
 
 function detail(
   id: string,
-  patch: Partial<ChangeSegmentDetailWire['items'][number]> = {},
+  patch: Partial<Extract<ChangeItemWire, { kind: 'ontology_version' }>> = {},
   segmentPatch: Partial<ChangeSegmentWire> = {},
 ): ChangeSegmentDetailWire {
   return {
@@ -66,7 +68,7 @@ function detail(
 
 function preview(
   id: string,
-  patch: Partial<ChangeRollbackPreviewWire['items'][number]> = {},
+  patch: Partial<Extract<ChangeRollbackItemWire, { kind: 'ontology_version' }>> = {},
 ): ChangeRollbackPreviewWire {
   const item = {
     ordinal: 1,
@@ -312,6 +314,28 @@ describe('typeNamesText', () => {
     render(<Sample objectTypes={['A', 'B', 'C', 'D', 'E', 'F', 'G']} />);
     expect(screen.getByTestId('r').textContent).toMatch(
       /^对象类型 A、B、C、D、E 等 7 个；关系类型 runs_on$/,
+    );
+  });
+  it('wideningText: a Skill or Worker reason in words', () => {
+    function Probe() {
+      const t = useT();
+      return (
+        <p data-testid="probe">
+          {[
+            { path: 'skill', reason: 'added' as const },
+            { path: 'skill.markdown', reason: 'changed' as const },
+            { path: 'worker.skills', reason: 'loosened' as const },
+            { path: 'worker.egressDeny', reason: 'loosened' as const },
+            { path: 'worker.extra', reason: 'unrecognized' as const },
+          ]
+            .map((w) => wideningText(w, t))
+            .join(' | ')}
+        </p>
+      );
+    }
+    render(<Probe />);
+    expect(screen.getByTestId('probe').textContent).toBe(
+      '新增这个 Skill：挂载它的 Worker 会读到它的全文 | Skill 正文有改动 | Worker 挂载的 Skill 增加 | Worker 禁止访问的地址减少 | Worker 字段 extra：无法识别',
     );
   });
 });

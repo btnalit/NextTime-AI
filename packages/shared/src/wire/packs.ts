@@ -2,31 +2,49 @@ import { z } from 'zod';
 import { ChangeItemClassificationSchema, PackInstallStatusSchema } from '../enums.js';
 import {
   ChangeInUseWireSchema,
+  ChangeProvenanceWireSchema,
   ChangeWideningReasonWireSchema,
-  OntologyProvenanceWireSchema,
+  ContentVersionRefWireSchema,
   OntologyTypeNamesWireSchema,
   OntologyVersionChangeTargetWireSchema,
   OntologyVersionRefWireSchema,
+  SkillVersionChangeTargetWireSchema,
+  WorkerDefinitionVersionChangeTargetWireSchema,
 } from './change-plan.js';
 
 /**
- * wire/packs: capability packs as the console reads them (S11 P1-C; Pack Contract v1,
+ * wire/packs: capability packs as the console reads them (S11 P1-C / P1-D; Pack Contract v1,
  * docs/s10-evolution-plan-2026-10-04.md §6; the kernel's `application/packs`). A **pack** is a
  * versioned, installable set of components this deployment ships (`packs/<name>/<version>/
- * pack.yaml`); v1 components are ontology families. What a workspace has of a pack is derived
- * from its components' current content, never stored; installing one is a ChangePlan workspace
- * segment the owner reviews first (`wire/change-plan.ts`). A module (`wire/platform.ts`) is a pack
- * with one ontology component named after it.
+ * pack.yaml`): ontology families, Skills and `worker` WorkerDefinitions. What a workspace has of a
+ * pack is derived from its components' current content, never stored; installing one is a
+ * ChangePlan workspace segment the owner reviews first (`wire/change-plan.ts`). A module
+ * (`wire/platform.ts`) is a pack with one ontology component named after it.
  */
 
 /** One component of a pack version, by kind. `ontology`: the domain pack file (`ontology/<file>`)
- *  it publishes into an ontology family. */
+ *  it publishes into an ontology family. `skill`: a Skill, by the name Workers mount it under.
+ *  `worker`: a `worker` WorkerDefinition, by its name (`description` null when it has none). */
 export const PackComponentWireSchema = z.discriminatedUnion('kind', [
   z
     .object({
       kind: z.literal('ontology'),
       family: z.string(),
       domainPack: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('skill'),
+      name: z.string(),
+      description: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('worker'),
+      name: z.string(),
+      description: z.string().nullable(),
     })
     .strict(),
 ]);
@@ -48,18 +66,40 @@ export const PackVersionWireSchema = z
   .strict();
 export type PackVersionWire = z.infer<typeof PackVersionWireSchema>;
 
+const PackComponentStateShape = {
+  status: PackInstallStatusSchema,
+  installedVersion: z.number().int().positive().nullable(),
+  provenance: ChangeProvenanceWireSchema,
+};
+
 /** One component of the pack's latest version, as this workspace has it now. `installedVersion`:
  *  the pack version whose content for this component is installed (`null` for `not_installed` and
- *  `customized`); `provenance`: the change that installed what is there. */
+ *  `customized`); `provenance`: the change that installed what is there. A Skill's or Worker's
+ *  `skillId` / `definitionId` is its family's in every workspace (derived from the pack and the
+ *  name), installed or not. */
 export const PackComponentStateWireSchema = z.discriminatedUnion('kind', [
   z
     .object({
       kind: z.literal('ontology'),
       family: z.string(),
       domainPack: z.string(),
-      status: PackInstallStatusSchema,
-      installedVersion: z.number().int().positive().nullable(),
-      provenance: OntologyProvenanceWireSchema,
+      ...PackComponentStateShape,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('skill'),
+      name: z.string(),
+      skillId: z.string(),
+      ...PackComponentStateShape,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('worker'),
+      name: z.string(),
+      definitionId: z.string(),
+      ...PackComponentStateShape,
     })
     .strict(),
 ]);
@@ -94,23 +134,77 @@ export const OntologyTypeChangesWireSchema = z
   .strict();
 export type OntologyTypeChangesWire = z.infer<typeof OntologyTypeChangesWireSchema>;
 
-/** One item of an install's dry run, by kind. `ontology_version`: publish the target version's
- *  `domainPack` into `target`'s family — `before` its head now (null: not installed), `after` the
- *  content it would install; `unchanged`: already there, so not applied. An `authority_widening`
- *  item is confirmed by its ordinal in `install_pack` (I-A4). */
+/** What a Skill item installs, for the person reviewing it: the text a Worker that mounts it reads. */
+export const PackSkillContentWireSchema = z
+  .object({
+    name: z.string(),
+    description: z.string(),
+    markdown: z.string(),
+  })
+  .strict();
+export type PackSkillContentWire = z.infer<typeof PackSkillContentWireSchema>;
+
+/** What a Worker item installs, for the person reviewing it. `capabilities` null: not declared, so
+ *  a Worker of it gets the platform's default — observe and propose, never execute. A pack's Worker
+ *  declares no gates and no model: the workspace's systems and models are its own. */
+export const PackWorkerContentWireSchema = z
+  .object({
+    name: z.string(),
+    description: z.string().nullable(),
+    systemPrompt: z.string(),
+    skills: z.array(z.string()),
+    capabilities: z.array(z.string()).nullable(),
+    egressDeny: z.array(z.string()),
+  })
+  .strict();
+export type PackWorkerContentWire = z.infer<typeof PackWorkerContentWireSchema>;
+
+const PackInstallItemCommonShape = {
+  ordinal: z.number().int().positive(),
+  unchanged: z.boolean(),
+  classification: ChangeItemClassificationSchema,
+  widening: z.array(ChangeWideningReasonWireSchema),
+};
+
+/** One item of an install's dry run, by kind — `before` the family's head now (null: not
+ *  installed), `after` the content it would install; `unchanged`: already there, so not applied.
+ *  `ontology_version`: publish the target version's `domainPack` into `target`'s family.
+ *  `skill_version` / `worker_definition_version`: publish `skill` / `worker` as the family's next
+ *  version; `changedFields` names the fields that differ from the head (every field it has, for a
+ *  family not installed; none when `unchanged`). An `authority_widening` item is confirmed by its
+ *  ordinal in `install_pack` (I-A4). */
 export const PackInstallItemWireSchema = z.discriminatedUnion('kind', [
   z
     .object({
-      ordinal: z.number().int().positive(),
+      ...PackInstallItemCommonShape,
       kind: z.literal('ontology_version'),
       target: OntologyVersionChangeTargetWireSchema,
       domainPack: z.string(),
       before: OntologyVersionRefWireSchema.nullable(),
       after: z.object({ definitionDigest: z.string() }).strict(),
-      unchanged: z.boolean(),
-      classification: ChangeItemClassificationSchema,
-      widening: z.array(ChangeWideningReasonWireSchema),
       types: OntologyTypeChangesWireSchema,
+    })
+    .strict(),
+  z
+    .object({
+      ...PackInstallItemCommonShape,
+      kind: z.literal('skill_version'),
+      target: SkillVersionChangeTargetWireSchema,
+      before: ContentVersionRefWireSchema.nullable(),
+      after: z.object({ contentDigest: z.string() }).strict(),
+      skill: PackSkillContentWireSchema,
+      changedFields: z.array(z.string()),
+    })
+    .strict(),
+  z
+    .object({
+      ...PackInstallItemCommonShape,
+      kind: z.literal('worker_definition_version'),
+      target: WorkerDefinitionVersionChangeTargetWireSchema,
+      before: ContentVersionRefWireSchema.nullable(),
+      after: z.object({ contentDigest: z.string() }).strict(),
+      worker: PackWorkerContentWireSchema,
+      changedFields: z.array(z.string()),
     })
     .strict(),
 ]);

@@ -1,20 +1,41 @@
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
+import { parse as parseYaml } from 'yaml';
 import { OntologyDefinitionParseError } from '../../substrate/ontology/index.js';
 import { contentDigest } from '../change-plan/index.js';
-import { type PackFixtureDirs, objectTypeYaml, writePackFixture } from './fixture.js';
+import {
+  type PackFixtureDirs,
+  objectTypeYaml,
+  skillFile,
+  workerFile,
+  writePackFixture,
+} from './fixture.js';
 import { PackManifestError } from './manifest.js';
 import {
   PackNotFoundError,
   PackRegistryError,
+  type PackVersion,
+  derivePackComponentId,
   latestPackVersion,
   loadPackRegistry,
+  packComponentKey,
   requirePack,
 } from './registry.js';
 
-/** application/packs/registry.test: Pack Contract v1 manifests and the rules across them (S11
- *  P1-C), against the real `packs/` and against fixtures that break one rule each. */
+/** application/packs/registry.test: Pack Contract v1 manifests, their Skill and Worker files, and
+ *  the rules across them (S11 P1-C / P1-D), against the real `packs/` and against fixtures that
+ *  break one rule each. */
+
+const REPO_ROOT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '..',
+  '..',
+  '..',
+  '..',
+  '..',
+);
 
 let fixture: PackFixtureDirs | undefined;
 afterEach(async () => {
@@ -31,19 +52,46 @@ describe('the packs this repository ships', () => {
     const registry = await loadPackRegistry();
     const pack = requirePack(registry, 'ops-assets');
     expect(pack.versions.map((v) => v.version)).toEqual([1, 2]);
-    expect(pack.versions.map((v) => v.components.map((c) => [c.family, c.domainPack]))).toEqual([
+    const ontology = (v: PackVersion) =>
+      v.components.flatMap((c) => (c.kind === 'ontology' ? [c] : []));
+    expect(pack.versions.map((v) => ontology(v).map((c) => [c.family, c.domainPack]))).toEqual([
       [['ops-assets', 'ops-assets-v1.yaml']],
       [['ops-assets', 'ops-assets-v2.yaml']],
     ]);
+    expect(pack.versions.every((v) => v.components.length === 1)).toBe(true);
     const latest = latestPackVersion(pack);
     expect(latest.version).toBe(2);
     expect(latest.breaking).toBe(false);
     expect(latest.summary.length).toBeGreaterThan(0);
-    expect(latest.components[0]?.definitionDigest).toBe(
-      contentDigest(latest.components[0]?.definition),
-    );
+    const [component] = ontology(latest);
+    expect(component?.definitionDigest).toBe(contentDigest(component?.definition));
     expect(latest.digest).toMatch(/^sha256:[0-9a-f]{64}$/);
     expect(pack.versions[0]?.digest).not.toBe(latest.digest);
+  });
+
+  it('ops-base: its Skill and its Worker, the Worker mounting the Skill with the ops-runner template prompt', async () => {
+    const registry = await loadPackRegistry();
+    const latest = latestPackVersion(requirePack(registry, 'ops-base'));
+    expect(latest.components.map(packComponentKey)).toEqual([
+      'skill:docker-triage',
+      'worker:ops-runner',
+    ]);
+    const [skill, worker] = latest.components;
+    if (skill?.kind !== 'skill' || worker?.kind !== 'worker') throw new Error('unexpected kinds');
+    expect(skill.skillId).toBe(derivePackComponentId('ops-base', 'skill', 'docker-triage'));
+    expect(skill.content.markdown).toMatch(/^# Docker container triage/);
+    expect(worker.definitionId).toBe(derivePackComponentId('ops-base', 'worker', 'ops-runner'));
+    expect(worker.definition).toMatchObject({ name: 'ops-runner', skills: ['docker-triage'] });
+    expect(worker.definition).not.toHaveProperty('gates');
+    expect(worker.definition).not.toHaveProperty('model');
+    expect(worker.definition).not.toHaveProperty('capabilities');
+    // The pack's Worker is the ops-runner template's prompt word for word: change both together.
+    const template = parseYaml(
+      await readFile(path.join(REPO_ROOT, 'ontology', 'ops-runner.yaml'), 'utf8'),
+    ) as { systemPrompt: string };
+    expect(worker.definition.systemPrompt).toBe(template.systemPrompt);
+    // No two packs claim one component, and ops-base is not a module (no ontology component).
+    expect(latest.summary.length).toBeGreaterThan(0);
   });
 
   it('a pack it does not ship is pack_not_found', async () => {
@@ -165,8 +213,8 @@ describe('parsePackManifest (through the registry): the manifest’s own rules',
   });
 
   it('a component kind this platform does not implement is refused by name', async () => {
-    const err = await loadWith(`schema: 1\n${head}${ontology}  skills:\n    - skills/x/\n`);
-    expect(String(err)).toMatch(/"skills" not supported/);
+    const err = await loadWith(`schema: 1\n${head}${ontology}  procedures:\n    - x\n`);
+    expect(String(err)).toMatch(/"procedures" not supported/);
   });
 
   it('version 1 cannot be breaking', async () => {
@@ -196,5 +244,144 @@ describe('parsePackManifest (through the registry): the manifest’s own rules',
     expect(await loadWith(`schema: 1\n${head}requires: {}\n${ontology}`)).toBeInstanceOf(
       PackManifestError,
     );
+  });
+});
+
+describe('Skill and Worker files (P1-D)', () => {
+  const SKILL = skillFile('fix-it', 'Fix the thing.', '# Fix it\n\nDo the steps.');
+  const WORKER = workerFile('fixer', 'You fix things.', 'skills:\n  - fix-it\n');
+
+  async function loadWith(
+    version: Parameters<typeof writePackFixture>[0][string][number],
+  ): Promise<unknown> {
+    if (fixture) await rm(fixture.root, { recursive: true, force: true });
+    fixture = await writePackFixture({ kit: [version] });
+    return loadPackRegistry(fixture).then(
+      () => {
+        throw new Error('the registry loaded');
+      },
+      (err: unknown) => err,
+    );
+  }
+
+  it('reads them after the ontology components, with family ids derived from pack and name', async () => {
+    fixture = await writePackFixture({
+      kit: [
+        {
+          ontology: [{ family: 'kit-core', domainPack: 'k.yaml', yaml: objectTypeYaml('Alpha') }],
+          skills: [SKILL],
+          workers: [
+            workerFile(
+              'fixer',
+              'You fix things.',
+              'skills:\n  - fix-it\negressDeny:\n  - "*.Example.COM"\n',
+            ),
+          ],
+        },
+      ],
+    });
+    const latest = latestPackVersion(requirePack(await loadPackRegistry(fixture), 'kit'));
+    expect(latest.components.map(packComponentKey)).toEqual([
+      'ontology:kit-core',
+      'skill:fix-it',
+      'worker:fixer',
+    ]);
+    const [, skill, worker] = latest.components;
+    if (skill?.kind !== 'skill' || worker?.kind !== 'worker') throw new Error('unexpected kinds');
+    expect(skill.content).toEqual({
+      name: 'fix-it',
+      description: 'Fix the thing.',
+      markdown: '# Fix it\n\nDo the steps.\n',
+      applicable: {},
+    });
+    expect(skill.contentDigest).toBe(contentDigest(skill.content));
+    expect(skill.skillId).toBe(derivePackComponentId('kit', 'skill', 'fix-it'));
+    expect(skill.skillId).not.toBe(derivePackComponentId('other', 'skill', 'fix-it'));
+    expect(skill.skillId).not.toBe(derivePackComponentId('kit', 'worker', 'fix-it'));
+    // The definition as published: named, parsed (an egress entry normalized).
+    expect(worker.definition).toEqual({
+      name: 'fixer',
+      systemPrompt: 'You fix things.',
+      skills: ['fix-it'],
+      egressDeny: ['example.com'],
+    });
+    expect(worker.contentDigest).toBe(contentDigest(worker.definition));
+  });
+
+  it('a version with no component at all', async () => {
+    expect(String(await loadWith({}))).toMatch(/has no components/);
+  });
+
+  it('a Skill file without frontmatter, naming another Skill, or with an empty body', async () => {
+    expect(String(await loadWith({ skills: [{ name: 'fix-it', text: '# Fix it\n' }] }))).toMatch(
+      /frontmatter block/,
+    );
+    expect(
+      String(await loadWith({ skills: [{ ...skillFile('other', 'd', 'body'), name: 'fix-it' }] })),
+    ).toMatch(/names Skill "other"/);
+    expect(String(await loadWith({ skills: [skillFile('fix-it', 'd', '   ')] }))).toMatch(
+      /must not be empty/,
+    );
+    expect(
+      await loadWith({
+        skills: [
+          { name: 'fix-it', text: '---\nname: fix-it\ndescription: d\nextra: 1\n---\nbody\n' },
+        ],
+      }),
+    ).toBeInstanceOf(PackManifestError);
+  });
+
+  it('a Worker file declaring its name, kind, gates or model', async () => {
+    for (const [field, line] of [
+      ['name', 'name: fixer\n'],
+      ['kind', 'kind: worker\n'],
+      ['gates', 'gates:\n  - g1\n'],
+      ['model', 'model: some-model\n'],
+    ] as const) {
+      const err = await loadWith({ workers: [workerFile('fixer', 'p', line)] });
+      expect(String(err)).toMatch(new RegExp(`declares \`${field}\``));
+    }
+  });
+
+  it('a Worker mounting a Skill its version does not ship, or declaring a capability beyond the worker ceiling', async () => {
+    expect(String(await loadWith({ workers: [WORKER] }))).toMatch(/does not ship/);
+    expect(
+      String(
+        await loadWith({
+          workers: [workerFile('fixer', 'p', 'capabilities:\n  - delete_workspace_forever\n')],
+        }),
+      ),
+    ).toMatch(/can never hold: delete_workspace_forever/);
+  });
+
+  it('a suspected credential in a Skill or a Worker', async () => {
+    const fake = 'abcdefghijklmnopqrstuvwxyz0123';
+    expect(
+      String(await loadWith({ skills: [skillFile('fix-it', 'd', `export API_TOKEN="${fake}"`)] })),
+    ).toMatch(/suspected credential/);
+    expect(
+      String(await loadWith({ workers: [workerFile('fixer', `export API_TOKEN="${fake}"`)] })),
+    ).toMatch(/workers\/fixer\.yaml.*suspected credential/);
+  });
+
+  it('one Skill twice in a version', async () => {
+    expect(String(await loadWith({ skills: [SKILL, SKILL] }))).toMatch(
+      /Skill "fix-it" is named twice/,
+    );
+  });
+
+  it('one Skill in two packs, and a later version dropping a Worker', async () => {
+    fixture = await writePackFixture({
+      kit: [{ skills: [SKILL] }],
+      other: [{ skills: [SKILL] }],
+    });
+    await expect(loadPackRegistry(fixture)).rejects.toThrow(
+      /Skill "fix-it" is published by both pack "kit" and pack "other"/,
+    );
+    await rm(fixture.root, { recursive: true, force: true });
+    fixture = await writePackFixture({
+      kit: [{ skills: [SKILL], workers: [WORKER] }, { skills: [SKILL] }],
+    });
+    await expect(loadPackRegistry(fixture)).rejects.toThrow(/drops Worker "fixer"/);
   });
 });

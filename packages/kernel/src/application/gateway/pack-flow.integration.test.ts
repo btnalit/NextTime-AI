@@ -142,7 +142,10 @@ describe.runIf(DATABASE_URL !== undefined)(
           unchanged: false,
         }),
       ]);
-      expect(preview.items[0]?.types.added.objectTypes).toContain('Container');
+      const [first] = preview.items;
+      expect(first?.kind === 'ontology_version' ? first.types.added.objectTypes : []).toContain(
+        'Container',
+      );
 
       await expect(
         call(member, 'install_pack', {

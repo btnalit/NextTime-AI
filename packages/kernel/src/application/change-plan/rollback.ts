@@ -10,13 +10,20 @@ import {
   ChangeSegmentRolledBackError,
 } from './errors.js';
 import {
+  type PlannedFamilyRollback,
+  applyFamilyRollback,
+  lockFamilyRollback,
+  parseStoredFamilyItem,
+  planFamilyRollback,
+} from './family-item.js';
+import {
   type PlannedOntologyRollback,
   applyOntologyRollback,
   lockOntologyRollback,
   parseStoredOntologyItem,
   planOntologyRollback,
 } from './ontology-item.js';
-import { findOntologyVersionSegment } from './provenance.js';
+import { findOntologyVersionSegment, findVersionSegment } from './provenance.js';
 import {
   type ChangeItemRecord,
   ChangeSegmentNotFoundError,
@@ -48,13 +55,24 @@ import { countRemovedTypeUsage } from './usage.js';
  * leaves its version in place (`provenance.ts`).
  */
 
-/** One item of a rollback plan. `target` / `from` / `to` are its kind's shape. */
+/** One item's planned inverse, by kind: `target` / `from` / `to` are the kind's shape. */
+export type ItemRollbackDetail =
+  | { readonly kind: 'ontology_version'; readonly planned: PlannedOntologyRollback }
+  | {
+      readonly kind: 'skill_version' | 'worker_definition_version';
+      readonly planned: PlannedFamilyRollback;
+    };
+
+/** One item of a rollback plan. */
 export interface PlannedItemRollback {
   readonly record: ChangeItemRecord;
-  readonly ontology: PlannedOntologyRollback;
+  readonly detail: ItemRollbackDetail;
   readonly classification: ChangeItemClassification;
   readonly widening: readonly WideningReason[];
   readonly conflict: ChangeRollbackConflict | null;
+  /** Runs the inverse (an unblocked plan, under its lock); returns the family's head version after
+   *  (`null`: none published). */
+  readonly apply: () => Promise<number | null>;
 }
 
 export interface SegmentRollbackPlan {
@@ -103,10 +121,47 @@ async function planItemRollback(
       }
       return {
         record,
-        ontology,
+        detail: { kind, planned: ontology },
         classification: classificationOf(ontology.widening),
         widening: ontology.widening,
         conflict,
+        apply: () => applyOntologyRollback(client, workspaceId, ontology),
+      };
+    }
+    case 'skill_version':
+    case 'worker_definition_version': {
+      const item = parseStoredFamilyItem(kind, record);
+      if (lock) await lockFamilyRollback(client, workspaceId);
+      const family = await planFamilyRollback(client, workspaceId, item);
+      const blocker = family.blocker;
+      let conflict: ChangeRollbackConflict | null = null;
+      if (blocker) {
+        const segmentId =
+          blocker.reason === 'replaced'
+            ? await findVersionSegment(
+                client,
+                workspaceId,
+                kind,
+                item.familyId,
+                blocker.headVersion,
+              )
+            : null;
+        conflict = {
+          ordinal: record.ordinal,
+          kind,
+          target: item.target,
+          blocker: blocker.reason,
+          blockedBy: segmentId ? { segmentId } : null,
+          conflicts: [],
+        };
+      }
+      return {
+        record,
+        detail: { kind, planned: family },
+        classification: classificationOf(family.widening),
+        widening: family.widening,
+        conflict,
+        apply: () => applyFamilyRollback(client, workspaceId, family),
       };
     }
     default:
@@ -152,14 +207,18 @@ export async function previewSegmentRollback(
   if (segment.status === 'rolled_back') {
     return { ...plan, inUse: { objects: 0, links: 0, capped: false } };
   }
+  // Only an ontology item takes types out; a Skill or WorkerDefinition item writes no graph types.
+  const ontology = plan.items.flatMap((item) =>
+    item.detail.kind === 'ontology_version' ? [item.detail.planned] : [],
+  );
   const inUse = await countRemovedTypeUsage(
     client,
     workspaceId,
     {
-      objectTypes: plan.items.flatMap((item) => item.ontology.removes.objectTypes),
-      linkTypes: plan.items.flatMap((item) => item.ontology.removes.linkTypes),
+      objectTypes: ontology.flatMap((planned) => planned.removes.objectTypes),
+      linkTypes: ontology.flatMap((planned) => planned.removes.linkTypes),
     },
-    new Set(plan.items.map((item) => item.ontology.target.ontologyId)),
+    new Set(ontology.map((planned) => planned.target.ontologyId)),
   );
   return { ...plan, inUse };
 }
@@ -197,7 +256,7 @@ export async function rollBackWorkspaceSegment(
     .map((item) => ({
       ordinal: item.record.ordinal,
       kind: item.record.kind,
-      target: item.ontology.target,
+      target: item.detail.planned.target,
       widening: item.widening,
     }));
   if (unconfirmed.length > 0) {
@@ -208,12 +267,7 @@ export async function rollBackWorkspaceSegment(
   }
 
   const applied: { readonly item: PlannedItemRollback; readonly headVersion: number | null }[] = [];
-  for (const item of plan.items) {
-    applied.push({
-      item,
-      headVersion: await applyOntologyRollback(client, workspaceId, item.ontology),
-    });
-  }
+  for (const item of plan.items) applied.push({ item, headVersion: await item.apply() });
 
   await client.query(
     `update change_segments set status = 'rolled_back', rolled_back_by = $3
@@ -238,11 +292,13 @@ export async function rollBackWorkspaceSegment(
         ordinal: item.record.ordinal,
         kind: item.record.kind,
         source: segment.source,
-        target: item.ontology.target,
-        from: item.ontology.from,
-        to: item.ontology.to,
+        target: item.detail.planned.target,
+        from: item.detail.planned.from,
+        to: item.detail.planned.to,
         headVersion,
-        removes: item.ontology.removes,
+        ...(item.detail.kind === 'ontology_version'
+          ? { removes: item.detail.planned.removes }
+          : {}),
         classification: item.classification,
         widening: item.widening,
         confirmedBy,

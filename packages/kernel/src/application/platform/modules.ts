@@ -85,11 +85,16 @@ export interface ModuleRegistryEntry {
 
 export type ModuleRegistry = ReadonlyMap<string, ModuleRegistryEntry>;
 
-/** Every version publishes one ontology component, into the family named after the pack. */
+/** Every version publishes one component, an ontology one, into the family named after the pack. */
 export function isModulePack(entry: PackEntry): boolean {
-  return entry.versions.every(
-    (version) => version.components.length === 1 && version.components[0]?.family === entry.name,
-  );
+  return entry.versions.every((version) => {
+    const [component] = version.components;
+    return (
+      version.components.length === 1 &&
+      component?.kind === 'ontology' &&
+      component.family === entry.name
+    );
+  });
 }
 
 /** The modules among `packs`, in the registry's order. */
@@ -99,7 +104,9 @@ export function moduleRegistryOf(packs: PackRegistry): ModuleRegistry {
     if (!isModulePack(pack)) continue;
     const versions = pack.versions.map((version): ModuleRegistryVersion => {
       const [component] = version.components;
-      if (!component) throw new Error(`module "${pack.name}" v${version.version} has no component`);
+      if (component?.kind !== 'ontology') {
+        throw new Error(`module "${pack.name}" v${version.version} has no ontology component`);
+      }
       return {
         version: version.version,
         file: component.domainPack,
