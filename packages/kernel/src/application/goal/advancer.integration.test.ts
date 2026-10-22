@@ -1760,7 +1760,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             }),
           );
         const stuck =
-          'step a: attempt 1 failed (contract_violation) and is not retried on its own; retry it, revise the plan or cancel';
+          'step a: attempt 1 failed (contract_violation) and is not retried on its own — retry it; or revise the plan or cancel';
         const lastPause = async () =>
           (await goalAudit(goalRunId)).filter((row) => row.action === 'goal_run.pause').at(-1)
             ?.payload;
@@ -1798,6 +1798,30 @@ describe.runIf(DATABASE_URL !== undefined)(
         await completeStep(stepA.id, requester);
         await advance(goalRunId, requester);
         expect((await stepsOf(goalRunId)).c?.status).toBe('running');
+      });
+
+      it('legacy 393: the pause names every step that failed for a person, each with what it waits for (review #493 on #657)', async () => {
+        const requester = await newPrincipal();
+        const goalRunId = await startGoal(requester, [{ key: 'x' }, { key: 'y' }]);
+        await advance(goalRunId, requester);
+        const steps = await stepsOf(goalRunId);
+        await failStep((steps.x as StepRunRow).id, requester, 'no_result');
+        await failStep((steps.y as StepRunRow).id, requester, 'no_result');
+        await advance(goalRunId, requester);
+        expect((await goalOf(goalRunId)).pauseReason).toBe('needs_decision');
+
+        await asRequester(requester, (client) =>
+          resumeGoalRun(client, workspaceId, { goalRunId, actor: by(requester) }),
+        );
+        expect(await advance(goalRunId, requester)).toMatchObject({ status: 'paused' });
+        const pause = (await goalAudit(goalRunId))
+          .filter((row) => row.action === 'goal_run.pause')
+          .at(-1)?.payload;
+        expect(pause).toMatchObject({
+          reason: 'needs_decision',
+          detail:
+            'step x: attempt 1 failed (contract_violation) and is not retried on its own — retry it; step y: attempt 1 failed (contract_violation) and is not retried on its own — retry it; or revise the plan or cancel',
+        });
       });
 
       it('S7: a cancel withdraws what has not run, in its own transaction; the gate drains the next goal’s action at once; the running Task is terminated', async () => {
@@ -3394,7 +3418,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           expect(await lastPause()).toMatchObject({
             reason: 'needs_decision',
             detail:
-              'step only: an action of it was found to have no effect and is not run again on its own; decide to run it again and retry the step, revise the plan or cancel',
+              'step only: an action of it was found to have no effect and is not run again on its own — decide to run it again, then retry the step; or revise the plan or cancel',
           });
           await expect(
             reconcileAs(goalRunId, first, ownerId, { reexecute: true }),
@@ -3411,7 +3435,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           await advance(goalRunId, requester);
           expect(await lastPause()).toMatchObject({
             detail:
-              'step only: attempt 1 failed (outcome_unknown) and is not retried on its own; retry it, revise the plan or cancel',
+              'step only: attempt 1 failed (outcome_unknown) and is not retried on its own — retry it; or revise the plan or cancel',
           });
           expect(await attemptTasks(step.id)).toHaveLength(1);
           expect(await retry()).toMatchObject({ status: 'running', retriedStepRunIds: [step.id] });
