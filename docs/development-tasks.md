@@ -4175,6 +4175,16 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **读模型**：`readGoalAcceptance` 加 `steps`，每个有验收轮次或正在验收的步骤带 `state`（`verifying` / `unavailable` / `failed` / `passed`）、当前尝试和各轮检查（每轮带 `stepAttempt`）。
   - **同类全找**：`markReconcileDue` 条件 (g)（目标 `running`，步骤在两种验收等待里却没有开始等待以来的 pending 行）；`compact-observations.ts` 条件 (a) 与已知外键加 `step_acceptance_checks`；删除工作区顺序；清空工作区预览标签「步骤验收检查」；`reversibility-deltas.json` 为 goal 0006 单独声明（与 goal 0005 同类）；I-G5 定时检查扩到步骤验收（两个守卫存在且启用、声明了验收的 `succeeded` 步骤没有轮次或最新一轮未为当前尝试全过、`passed` 缺证据）。
   - **有意不做**：`endGoalRun` 照旧拒绝有步骤在等待的目标，`waiting(acceptance_unavailable)` 时的入口是继续、修订、取消；请求人认定目标达成时 `overriddenChecks` 只列目标级检查，步骤验收失败在读模型 `steps` 里看。
+- GO4c 实现说明（#674，2026-10-22 合入，d22c19a；core 0046 + goal 0007；GO4 完成）：
+  - **计划**（`plan.ts`、shared `FactCheckSchema`）：目标和步骤都接受 `fact_predicate`：链接类型，加两端对象（id 或 ObjectType + identity），可选一个针对这条事实自身属性的判定式（没有时存在即通过）。同一套 lint 与凭据审查，identity 值也过审查；用 id 指定的对象必须存在，用 identity 指定的不查（可能由目标自己创建）；有事实检查的计划不带 `requester_confirm_only` 提示。链接类型不按本体校验，不存在时检查一直看不到事实、最后 `unavailable`。
+  - **可作证据**（goal 0007 `goal_fact_admissible`，以本轮开始时间为界）：有效（未取代、未作废、在有效期内）；状态 `observed`；最近一次确认在本轮开始之后，且确认它的 Observation 来自不归请求人所有的 Source（Worker 代表请求人，能提交的一律排除），挂在三种 Activity 之一：门观察且触发 Task 为空或不属本目标（没有触发记录的历史数据一律不作证据，不回退成可信）、门执行且请求不由本目标的步骤或其 Task 的 WorkerRun 发起、非门 Source 的采集器提交；请求人看不到的行同样不作证据。以最近一次确认为准：之后被请求人自己的 Source 再确认就不再可作证据。
+  - **触发记录**（core 0046）：Activity 的 `kind` 与 `metadata.triggeredByTaskId` / `actionRequestId` 写入后不可改（否则事后补一条就能让旧观察看起来与本目标无关）；`runObserve` 记录 `triggeredByTaskId`（WorkerRun 调用时为它的 Task，否则 `null`）。记录挂在 Activity 上而不是 Observation 上。
+  - **数据**（goal 0007）：两张检查表加 `fact_check`、`fact_id`（外键指向 `links`），一行按 kind 只带一组字段；守卫：事实检查创建时不带事实、`fact_check` 不可改，`passed` 必须落在 `goal_fact_admissible` 认可的事实上，`failed` 必须落在所指链接的一条事实上（判为假是保守方向），函数返回 null 一律拒绝；步骤的事实检查与计划条目逐字一致。新函数 `goal_fact_admissible` / `goal_fact_is` / `goal_fact_endpoint_is` / `goal_declared_acceptance`。
+  - **目标级检查绑定计划**（审查 #493 P3，补 GO4a 起的缺口）：`goal_declared_acceptance` 与 `roundAcceptance` 同义（有 `acceptance` 就是它，否则是对目标陈述的请求人确认）；`goal_acceptance_checks_guard` 要求每行是这份计划声明的一项（key、kind 一致，`check` / `fact` / `prompt` 逐字一致）；`goal_runs_status_guard` 的「按检查达成」要求计划在用版本声明的每个 key 都在最新一轮，平台做的检查观察与事实都算，读不到计划时拒绝。
+  - **执行器**（`fact-check.ts`、`acceptance-check.ts`）：同一个执行器、上限与租约，在结算的锁内运行；判定式或 identity 不再通过审查、请求人被停用或不能再 `list_facts` 时立即 `unavailable`；以请求人身份读最近一条可作证据的事实（按 Observation 时间取最新），属性先按 `secretFields` 遮蔽再判定；满足 → `passed`，不满足 → 退避重试、最后 `failed`，看不到 → 退避重试、最后 `unavailable`（更早的尝试看到过不满足的事实则为 `failed`）。
+  - **看不到与判为假**：判为假 → `failed`、`fact_id` 指向看到的事实、`last_error = predicate_unsatisfied`，步骤 `failed(verification_failed)`；看不到 → `unavailable`、`fact_id` 为空、`last_error = fact_not_observed`，步骤 `waiting(acceptance_unavailable)`；暂停说明与审计（`code`、`factId`，判为假时带 `evaluation`）都分开。读模型每项检查带 `fact` 和 `factId`，被覆盖的检查也带 `factId`。
+  - **同类全找**：所有只认 `observe_predicate` 的地方改为「平台做的检查」（到期列表、领取、提示、请求人确认、读模型、`listDue`、目标与步骤推进、达成守卫）；删除工作区顺序加新外键；观察清理不受影响（新外键指向 `links`）；I-G5 定时检查扩到事实检查（只复核通过之后不会再变的部分：所依据的事实是所指的链接），并加 `achieved-not-as-declared` / `step-succeeded-not-as-declared`，纯 SQL、不调守卫函数。
+  - **范围外**：「门确认不存在」移到 GO7 之前单独做（事实检查判的是「存在」，不能用来证明删除）；控制台属 GO6。不需要 `reversibility-deltas.json` 条目。
 - 来自 GO3d（#649）的输入：验收检查复用 `substrate/epistemic/predicate.ts` 的求值与 lint（`observe_predicate` / `fact_predicate`）。要自动验收删除类动作时，先定义"门确认不存在"这种观察类型（门给出有类型的不存在证据，例如明确的 `not_found`，而不是空结果），不放开缺席判定式（#649 拍板点 13，协调线程定）。GO4 引入验收不过的暂停时，再看是否与 `awaiting_reconcile` 统一命名（拍板点 2）。
 
 **GO5 — 能力与入口 prompt**（见 `global-roadmap-2026-10-16.md` §4）
@@ -4189,6 +4199,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 **GO6 — 控制台：我的目标、确认卡片、目标详情**（见 `global-roadmap-2026-10-16.md` §4）
 
 - 实现说明：（未开工）
+- 来自 GO4c（#674）的显示内容：`last_error = fact_not_observed` 的 `unavailable` 检查，下一步写「等采集器或请求人自己观察一次，再继续目标」；`failed` 的事实检查用 `factId` 链接到看到的那条事实的详情。
 - 来自 GO4b（#670 与 UX 验收）的显示内容：从读模型 `steps[].state` 区分「验收中 / 无法验收（继续目标重新验收，不重做工作）/ 验收未通过（重试会重做工作）/ 已通过」，各自给出对应入口；同一页面要分清目标验收和步骤验收，并说明步骤验收没通过时目标会怎样（暂停等人决定）。
 - 来自 GO4a（#664）的显示内容：确认卡把提示 `requester_confirm_only` 显示为「此目标只能由你确认完成」；目标详情从 `readGoalAcceptance` 区分「平台检查通过」和「检查未通过，由请求人认定达成」，后者逐项列出失败的检查及其证据并标「已覆盖」；暂停 `needs_decision` 时从读模型给出「按未达成结束 / 认定达成 / 修订 / 继续 / 取消」几个入口。
 - 来自 GO3d（#649 与审查 #493）的显示内容：核对状态中文标签「平台核对中 / 平台已见效果 / 平台未见效果 / 平台无法核对 / 已由人核对」；目标暂停或被 hold 时，pending 的检查显示「核对已暂停，继续后再核对」；`lastError` 短码的中文说明（`predicate_unsatisfied`、`predicate_undetermined`、`predicate_refused`、`credentials_in_predicate`、`requester_may_not_observe`、`gate_timeout`、`gate_unreachable`、`attempts_exhausted`、`goal_ended`、`step_ended` 与门错误码）；未决动作列表从 `platformCheck` 渲染（状态、第几次、最新证据、`nextAttemptAt`），不解析暂停说明文字；审计里平台核对的执行者显示为「平台（代请求人）」，`action_request.reconcile_check` 各结果（含 `retry`）与 `action_request.reconcile` 的 `basis: observation` 有标签；证据 Observation 的可见范围按 `observe_operation` 的最低角色，目标详情里可点开（结果、判定式、三值结论、是否截断）；计划确认卡片把 reconcile 声明与判定式渲染成可读句子（比对了错误字段这类 lint 挡不住的问题靠这里让请求人看到）；判定式被 lint 拒绝时把原因说成人话并给改法（缺席判定式不被接受）。
