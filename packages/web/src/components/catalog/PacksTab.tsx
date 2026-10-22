@@ -12,6 +12,7 @@ import { invalidateCapability, useCapabilityList } from '../../hooks/useCapabili
 import { usePermissions } from '../../hooks/usePermissions.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
 import { actionLabel as capabilityLabel } from '../../lib/capability-labels.js';
+import { workerItemId } from '../../lib/catalog.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { describeError, isForbiddenError } from '../../lib/errors.js';
 import { formatDateTime, formatRelative, shortId } from '../../lib/format.js';
@@ -328,8 +329,11 @@ function ComponentView({
       ? null
       : component.kind === 'skill'
         ? hrefs.catalog('skills', component.skillId)
-        : component.kind === 'worker'
-          ? hrefs.catalog('workers', component.definitionId)
+        : component.kind === 'worker' && component.headVersion !== null
+          ? hrefs.catalog(
+              'workers',
+              workerItemId({ id: component.definitionId, version: component.headVersion }),
+            )
           : null;
   return (
     <div className="card card-padded stack-s" data-testid={`catalog-pack-component-${key}`}>

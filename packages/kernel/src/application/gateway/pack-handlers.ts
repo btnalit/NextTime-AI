@@ -25,6 +25,7 @@ import {
   loadPackState,
   previewPackInstall,
 } from '../packs/index.js';
+import { loadPublishedWorkerDefinitionHead } from '../worker/index.js';
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
 import { toChangeProvenanceWire } from './change-segment-handlers.js';
@@ -96,13 +97,20 @@ async function toComponentStateWire(
       };
     case 'skill':
       return { kind: 'skill', name: component.name, skillId: component.skillId, ...common };
-    case 'worker':
+    case 'worker': {
+      const head = await loadPublishedWorkerDefinitionHead(
+        client,
+        workspaceId,
+        component.definitionId,
+      );
       return {
         kind: 'worker',
         name: component.name,
         definitionId: component.definitionId,
+        headVersion: head?.version ?? null,
         ...common,
       };
+    }
   }
 }
 

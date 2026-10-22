@@ -99,6 +99,9 @@ export const PackComponentStateWireSchema = z.discriminatedUnion('kind', [
       kind: z.literal('worker'),
       name: z.string(),
       definitionId: z.string(),
+      /** The WorkerDefinition's published head version (a 「Worker」 tab row is one version:
+       *  `definitionId@headVersion`); `null` when it has none. */
+      headVersion: z.number().int().positive().nullable(),
       ...PackComponentStateShape,
     })
     .strict(),

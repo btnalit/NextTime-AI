@@ -454,6 +454,7 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
           kind: 'worker',
           name: 'ops-runner',
           definitionId: 'def-1',
+          headVersion: null,
           status: 'not_installed',
           installedVersion: null,
           provenance: { status: 'not_installed' },
@@ -572,5 +573,43 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
         },
       ]),
     );
+  });
+  it("an installed Worker links to its published head version's row (the 「Worker」 tab names one version)", async () => {
+    const crew = pack({
+      name: 'ops-base',
+      latestVersion: 1,
+      versions: [
+        {
+          version: 1,
+          summary: 'Ops crew',
+          notes: 'First version',
+          breaking: false,
+          components: [{ kind: 'worker', name: 'ops-runner', description: null }],
+        },
+      ],
+      status: 'up_to_date',
+      installedVersion: 1,
+      components: [
+        {
+          kind: 'worker',
+          name: 'ops-runner',
+          definitionId: 'def-1',
+          headVersion: 3,
+          status: 'up_to_date',
+          installedVersion: 1,
+          provenance: component().provenance,
+        },
+      ],
+    });
+    renderTab(
+      scriptedHttp({ get_workspace: () => OWNER_WORKSPACE, list_packs: () => ({ items: [crew] }) }),
+      'ops-base',
+    );
+    const pane = await screen.findByTestId('catalog-pack-detail');
+    expect(
+      within(pane)
+        .getByTestId('catalog-pack-component-page-worker-ops-runner')
+        .getAttribute('href'),
+    ).toBe('#/govern/catalog/workers/def-1%403');
   });
 });

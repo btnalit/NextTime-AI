@@ -10326,6 +10326,17 @@
                       "definitionId": {
                         "type": "string"
                       },
+                      "headVersion": {
+                        "anyOf": [
+                          {
+                            "exclusiveMinimum": 0,
+                            "type": "integer"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
                       "installedVersion": {
                         "anyOf": [
                           {
@@ -10456,6 +10467,7 @@
                       "kind",
                       "name",
                       "definitionId",
+                      "headVersion",
                       "status",
                       "installedVersion",
                       "provenance"
@@ -14902,6 +14914,17 @@
                         "definitionId": {
                           "type": "string"
                         },
+                        "headVersion": {
+                          "anyOf": [
+                            {
+                              "exclusiveMinimum": 0,
+                              "type": "integer"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "installedVersion": {
                           "anyOf": [
                             {
@@ -15032,6 +15055,7 @@
                         "kind",
                         "name",
                         "definitionId",
+                        "headVersion",
                         "status",
                         "installedVersion",
                         "provenance"
@@ -20822,6 +20846,17 @@
                       "definitionId": {
                         "type": "string"
                       },
+                      "headVersion": {
+                        "anyOf": [
+                          {
+                            "exclusiveMinimum": 0,
+                            "type": "integer"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
                       "installedVersion": {
                         "anyOf": [
                           {
@@ -20952,6 +20987,7 @@
                       "kind",
                       "name",
                       "definitionId",
+                      "headVersion",
                       "status",
                       "installedVersion",
                       "provenance"

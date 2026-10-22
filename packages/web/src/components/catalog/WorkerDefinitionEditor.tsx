@@ -23,6 +23,7 @@ import {
   validateWorkerDefinition,
   workerDefinitionContentFromForm,
   workerDefinitionFormFromWire,
+  workerItemId,
 } from '../../lib/catalog.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { isForbiddenError } from '../../lib/errors.js';
@@ -443,7 +444,7 @@ export function WorkerDefinitionEditor({
       <DraftProposed
         kindLabel={t('Worker 定义', 'Worker definition')}
         draft={proposed}
-        detailHref={hrefs.catalog('workers', `${proposed.id}@${proposed.version}`)}
+        detailHref={hrefs.catalog('workers', workerItemId(proposed))}
         onPublish={
           can('publish_worker_definition') === false
             ? undefined
