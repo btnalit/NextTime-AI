@@ -118,6 +118,8 @@ export function Combobox({
   const [active, setActive] = useState(-1);
   /** What the person typed since the last pick; `null` = not filtering (show every option). */
   const [ownQuery, setOwnQuery] = useState<string | null>(null);
+  /** Set by `onPaste`, read by the `onChange` that follows it. */
+  const pastingRef = useRef(false);
   const controlled = !allowFreeEntry && inputValue !== undefined;
   const query = controlled ? (inputValue === '' ? null : inputValue) : ownQuery;
 
@@ -181,6 +183,9 @@ export function Combobox({
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLInputElement>): void {
+    // A paste whose `onChange` never came (same text pasted over itself) must not turn the next
+    // keystroke into a "paste"; the key that pastes (Ctrl+V) comes before its paste event.
+    pastingRef.current = false;
     if (event.key === 'ArrowDown') {
       event.preventDefault();
       if (!open) openList(Math.max(selectedIndex(), nextEnabled(-1, 1)));
@@ -210,6 +215,28 @@ export function Combobox({
   }
 
   function onType(text: string): void {
+    const pasted = pastingRef.current;
+    pastingRef.current = false;
+    if (pasted) {
+      // Legacy 153 ⑨: a paste is a whole value, not the start of a search — an exact match is
+      // picked, anything else is kept as typed with the list closed, so it never covers the
+      // form's buttons. ArrowDown opens it again.
+      const trimmed = text.trim();
+      const exact = allowFreeEntry
+        ? undefined
+        : options.find(
+            (option) => !option.disabled && (option.value === trimmed || option.label === trimmed),
+          );
+      if (exact) {
+        pick(exact);
+        return;
+      }
+      setQuery(text);
+      if (allowFreeEntry) onChange(text);
+      setOpen(false);
+      setActive(-1);
+      return;
+    }
     setQuery(text);
     if (allowFreeEntry) onChange(text);
     setOpen(true);
@@ -262,6 +289,9 @@ export function Combobox({
         value={displayText}
         placeholder={placeholder}
         disabled={disabled}
+        onPaste={() => {
+          pastingRef.current = true;
+        }}
         onChange={(event) => onType(event.target.value)}
         onKeyDown={onKeyDown}
         onClick={() => (open ? setOpen(false) : openList(selectedIndex()))}
@@ -319,6 +349,7 @@ export function Combobox({
                 // biome-ignore lint/a11y/useSemanticElements: see above.
                 role="option"
                 className="combobox-option"
+                data-value={option.value}
                 aria-selected={option.value === value}
                 aria-disabled={option.disabled || undefined}
                 data-active={index === active || undefined}

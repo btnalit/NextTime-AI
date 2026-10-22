@@ -56,6 +56,41 @@ function optionLabels(): string[] {
 }
 
 describe('kit/Combobox', () => {
+  it('legacy 153 ⑨: a pasted exact value is picked and the list stays closed', () => {
+    const onChange = vi.fn();
+    render(<Harness onChange={onChange} />);
+    fireEvent.paste(input());
+    fireEvent.change(input(), { target: { value: ' host.reboot ' } });
+    expect(onChange).toHaveBeenLastCalledWith('host.reboot');
+    expect(input().getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByRole('listbox')).toBeNull();
+  });
+
+  it('legacy 153 ⑨: a pasted text with no exact match is kept, list closed; ArrowDown reopens it', () => {
+    render(<Harness />);
+    fireEvent.paste(input());
+    fireEvent.change(input(), { target: { value: 'docker' } });
+    expect(input().value).toBe('docker');
+    expect(screen.queryByRole('listbox')).toBeNull();
+    fireEvent.keyDown(input(), { key: 'ArrowDown' });
+    const labels = optionLabels();
+    expect(labels).toHaveLength(2);
+    expect(labels[0]).toContain('docker.restart');
+    expect(labels[1]).toContain('docker.prune');
+  });
+
+  it('legacy 153 ⑨: free entry commits a pasted id and keeps the list closed; typing still opens it', () => {
+    const onChange = vi.fn();
+    render(<Harness allowFreeEntry onChange={onChange} />);
+    fireEvent.paste(input());
+    fireEvent.change(input(), { target: { value: '0f9e8d7c-aaaa' } });
+    expect(onChange).toHaveBeenLastCalledWith('0f9e8d7c-aaaa');
+    expect(screen.queryByRole('listbox')).toBeNull();
+    fireEvent.keyDown(input(), { key: 'Backspace' });
+    fireEvent.change(input(), { target: { value: '0f9e8d7c-aaa' } });
+    expect(screen.getByRole('listbox')).toBeTruthy();
+  });
+
   it('is a labelled WAI-ARIA combobox whose listbox opens on click', () => {
     render(<Harness />);
     const box = input();

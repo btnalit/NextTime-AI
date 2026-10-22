@@ -5,6 +5,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { HttpError } from '../../lib/http-client.js';
+import {
+  comboboxOptionTexts,
+  findComboboxOption,
+  pickComboboxOption,
+} from '../kit/combobox.test-helpers.js';
 import { PlatformAuditPage } from './PlatformAuditPage.js';
 
 afterEach(cleanup);
@@ -127,7 +132,7 @@ describe('PlatformAuditPage', () => {
     await screen.findByTestId('platform-audit-error');
   });
 
-  it('AU1: the actor filter is a <select> over list_users, and a row whose actor has no login resolves through the same directory (never a bare id)', async () => {
+  it('AU1: the actor filter picks from list_users, and a row whose actor has no login resolves through the same directory (never a bare id)', async () => {
     const http = scriptedHttp({
       list_users: () => ({ items: [user()] }),
       platform_audit_query: () => ({
@@ -142,8 +147,10 @@ describe('PlatformAuditPage', () => {
     renderPage(http);
 
     const select = await screen.findByTestId('platform-audit-actor-select');
-    expect(within(select).getByRole('option', { name: 'Administrator (admin)' })).toBeDefined();
+    await findComboboxOption(select, 'Administrator (admin)');
     expect(screen.queryByTestId('platform-audit-actor-input')).toBeNull();
+    // Legacy 153 ①: one control — no separate search box.
+    expect(screen.queryByTestId('platform-audit-actor-query')).toBeNull();
 
     const list = await screen.findByTestId('platform-audit-list');
     // The row's own actorUserId ('u-admin') resolves through list_users, not a truncated id.
@@ -253,24 +260,22 @@ describe('PlatformAuditPage', () => {
     });
     renderPage(http);
     const select = await screen.findByTestId('platform-audit-actor-select');
-    await waitFor(() => expect(select.textContent).toContain('Administrator (admin)'));
+    await findComboboxOption(select, 'Administrator (admin)');
 
-    fireEvent.change(screen.getByTestId('platform-audit-actor-query'), {
-      target: { value: 'bob' },
-    });
-    await waitFor(() => expect(select.textContent).toContain('Bob (bob)'));
+    fireEvent.change(select, { target: { value: 'bob' } });
+    await findComboboxOption(select, 'Bob (bob)');
     expect(
       http.calls.find((c) => c.name === 'list_users' && c.params && 'query' in (c.params as object))
         ?.params,
     ).toEqual({ query: 'bob', limit: 50 });
 
-    fireEvent.change(select, { target: { value: 'u-bob' } });
-    fireEvent.change(screen.getByTestId('platform-audit-actor-query'), {
-      target: { value: '' },
-    });
-    await waitFor(() => expect(select.textContent).toContain('Administrator (admin)'));
-    expect((select as HTMLSelectElement).value).toBe('u-bob');
-    expect(select.textContent).toContain('Bob (bob)');
+    await pickComboboxOption(select, 'Bob (bob)');
+    // The search text is gone, the directory is back, and the picked actor keeps its name.
+    expect((select as HTMLInputElement).value).toBe('Bob (bob)');
+    fireEvent.blur(select);
+    await findComboboxOption(select, 'Administrator (admin)');
+    expect(comboboxOptionTexts(select)).toContain('Bob (bob)');
+    expect((select as HTMLInputElement).value).toBe('Bob (bob)');
 
     fireEvent.click(
       within(screen.getByTestId('platform-audit-filter-form')).getByRole('button', {
@@ -292,10 +297,8 @@ describe('PlatformAuditPage', () => {
       platform_audit_query: () => ({ items: [] }),
     });
     renderPage(http);
-    await screen.findByTestId('platform-audit-actor-select');
-    fireEvent.change(screen.getByTestId('platform-audit-actor-query'), {
-      target: { value: 'nobody' },
-    });
+    const select = await screen.findByTestId('platform-audit-actor-select');
+    fireEvent.change(select, { target: { value: 'nobody' } });
     await screen.findByTestId('platform-audit-actor-empty');
   });
 

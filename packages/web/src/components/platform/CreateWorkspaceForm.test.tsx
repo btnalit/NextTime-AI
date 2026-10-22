@@ -45,12 +45,12 @@ function renderForm(defaultOwnerUserId?: string) {
 describe('CreateWorkspaceForm', () => {
   it('defaults the first owner to the given current admin', async () => {
     renderForm('u-1');
+    // The picked admin's label fills the box once the directory has named them.
     await waitFor(() =>
-      expect(
-        screen.getByTestId('create-workspace-owner').querySelector('option[value="u-1"]'),
-      ).not.toBeNull(),
+      expect((screen.getByTestId('create-workspace-owner') as HTMLInputElement).value).toBe(
+        'alice — Alice',
+      ),
     );
-    expect((screen.getByTestId('create-workspace-owner') as HTMLSelectElement).value).toBe('u-1');
   });
 
   it('has no default owner when none is given, and the owner hint is single-language', () => {

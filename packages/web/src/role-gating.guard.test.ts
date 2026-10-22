@@ -1,5 +1,5 @@
 import { readFileSync, readdirSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   CAPABILITY_REGISTRY,
@@ -105,6 +105,13 @@ function literalsUnder(node: ts.Node): string[] {
   return found;
 }
 
+/** Whether `specifier`, imported from the file at `path`, is this console's `src/<module>`. */
+function importsModule(path: string, specifier: ts.Expression, module: string): boolean {
+  const text = literalText(specifier);
+  if (text === undefined || !text.startsWith('.')) return false;
+  return resolve(dirname(path), text).split(sep).join('/').endsWith(`/${module}`);
+}
+
 function calleeName(call: ts.CallExpression): string | undefined {
   const callee = call.expression;
   if (ts.isIdentifier(callee)) return callee.text;
@@ -144,6 +151,22 @@ function scanFile(path: string, text: string, gatedBuilders: GatedBuilders): Fil
     ts.forEachChild(node, index);
   };
   index(source);
+
+  /** `import { useRoleCan } from '…/hooks/useRoleCan.js'` (review of #561, G2). */
+  const roleCanImported = source.statements.some(
+    (statement) =>
+      ts.isImportDeclaration(statement) &&
+      importsModule(path, statement.moduleSpecifier, 'hooks/useRoleCan.js') &&
+      statement.importClause?.namedBindings !== undefined &&
+      ts.isNamedImports(statement.importClause.namedBindings) &&
+      statement.importClause.namedBindings.elements.some(
+        (element) => element.name.text === 'useRoleCan' && element.propertyName === undefined,
+      ),
+  );
+  /** A `const` — a `let` may be reassigned after its initializer was checked (review of #561,
+   *  G3), so only a `const` reads as its initializer. */
+  const isConst = (declaration: ts.VariableDeclaration): boolean =>
+    (ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const) !== 0;
 
   /** The declaration `identifier` refers to: the innermost one whose scope holds it. */
   const declarationInScope = (identifier: ts.Identifier): ts.Node | undefined => {
@@ -239,7 +262,7 @@ function scanFile(path: string, text: string, gatedBuilders: GatedBuilders): Fil
     if (ts.isIdentifier(expr)) {
       const declaration = declarationInScope(expr);
       if (declaration !== undefined && ts.isVariableDeclaration(declaration)) {
-        return implies(declaration.initializer, want, isCheck, depth + 1);
+        return isConst(declaration) && implies(declaration.initializer, want, isCheck, depth + 1);
       }
       // A prop of a component this file does not export: what every `<Component prop={…}>` of
       // the file passes (`canResolve={canResolve}` down to the private body that resolves).
@@ -284,11 +307,16 @@ function scanFile(path: string, text: string, gatedBuilders: GatedBuilders): Fil
     const values: ts.Expression[] = [];
     for (const use of uses.get(name) ?? []) {
       const element = use.parent;
+      if (use === component.name || (ts.isJsxClosingElement(element) && element.tagName === use)) {
+        continue;
+      }
+      // Any other use (`const Alias = Row`, `Row({ … })`, `[Row].map(…)`) passes props the scan
+      // cannot read, so nothing is implied (review of #561, G4).
       if (
         !(ts.isJsxOpeningElement(element) || ts.isJsxSelfClosingElement(element)) ||
         element.tagName !== use
       ) {
-        continue;
+        return undefined;
       }
       const attribute = element.attributes.properties.find(
         (each): each is ts.JsxAttribute => ts.isJsxAttribute(each) && each.name.getText() === prop,
@@ -455,20 +483,33 @@ function scanFile(path: string, text: string, gatedBuilders: GatedBuilders): Fil
     );
   };
 
+  /** `useRoleCan(…)` — the hook `hooks/useRoleCan` exports, imported under its own name; a
+   *  `useRoleCan` the file declares itself checks nothing (review of #561, G2). */
+  const isRoleCanCall = (call: ts.CallExpression): boolean =>
+    ts.isIdentifier(call.expression) &&
+    call.expression.text === 'useRoleCan' &&
+    roleCanImported &&
+    !declarations.has('useRoleCan');
   /** `can` as the reader's role check: `const can = useRoleCan(…)`, or a parameter typed as one. */
   const isRoleCheck = (callee: ts.Expression): boolean => {
-    if (ts.isCallExpression(callee)) return calleeName(callee) === 'useRoleCan';
+    if (ts.isCallExpression(callee)) return isRoleCanCall(callee);
     if (!ts.isIdentifier(callee)) return false;
     const declaration = declarationInScope(callee);
     if (declaration === undefined) return false;
     if (ts.isVariableDeclaration(declaration)) {
       return (
+        isConst(declaration) &&
         declaration.initializer !== undefined &&
         ts.isCallExpression(declaration.initializer) &&
-        calleeName(declaration.initializer) === 'useRoleCan'
+        isRoleCanCall(declaration.initializer)
       );
     }
-    return ts.isParameter(declaration) && /\buseRoleCan\b/.test(declaration.type?.getText() ?? '');
+    return (
+      ts.isParameter(declaration) &&
+      roleCanImported &&
+      !declarations.has('useRoleCan') &&
+      /\buseRoleCan\b/.test(declaration.type?.getText() ?? '')
+    );
   };
   /** A `can('<name>')` (or `useRoleCan(http)('<name>')`) from the reader's role. */
   const isRead = (name: string) => {
@@ -651,13 +692,27 @@ function scanFile(path: string, text: string, gatedBuilders: GatedBuilders): Fil
     ) {
       aliasedCalls.push(where(node));
     }
-    // `hrefs` used other than `hrefs.<name>(…)`: an aliased builder (review of #559, L3–L5).
+    // `import * as router from '…/lib/router.js'`: `router.hrefs.audit()` builds a link the scan
+    // does not see (review of #561, G6).
+    if (
+      ts.isImportDeclaration(node) &&
+      importsModule(path, node.moduleSpecifier, 'lib/router.js') &&
+      node.importClause?.namedBindings !== undefined &&
+      ts.isNamespaceImport(node.importClause.namedBindings)
+    ) {
+      aliasedHrefs.push(where(node));
+    }
+    // `hrefs` used other than `hrefs.<name>(…)`: an aliased builder (review of #559, L3–L5) —
+    // including `import { hrefs as h }` (review of #561, G5).
     if (
       ts.isIdentifier(node) &&
       node.text === 'hrefs' &&
       isReference(node) &&
-      !ts.isImportSpecifier(node.parent) &&
-      !ts.isExportSpecifier(node.parent) &&
+      !(
+        (ts.isImportSpecifier(node.parent) || ts.isExportSpecifier(node.parent)) &&
+        node.parent.name === node &&
+        node.parent.propertyName === undefined
+      ) &&
       !(ts.isVariableDeclaration(node.parent) && node.parent.name === node) &&
       !(
         ts.isPropertyAccessExpression(node.parent) &&
@@ -1193,7 +1248,10 @@ describe('role gating guard (#541 review M1/M3, legacy 235: read from the syntax
 
 /** The bypasses the review of #554 probed by hand, kept as cases so the guard cannot regress. */
 describe('role gating guard catches the probed bypasses (review of #554)', () => {
-  const scan = (text: string) => scanFile('probe.tsx', text, GATED_BUILDERS);
+  /** A probe file at `src/probe.tsx` that imports the real role hook. */
+  const ROLE_CAN_IMPORT = "import { useRoleCan } from './hooks/useRoleCan.js';\n";
+  const scanBare = (text: string) => scanFile(join(SRC, 'probe.tsx'), text, GATED_BUILDERS);
+  const scan = (text: string) => scanBare(ROLE_CAN_IMPORT + text);
   const linkOf = (body: string) =>
     scan(`export function Probe({ canOpen }) {\n${body}\n}`).unaskedLinks.length;
 
@@ -1339,6 +1397,67 @@ describe('role gating guard catches the probed bypasses (review of #554)', () =>
       "export function A({ http }) { return can('audit_query') ? <button onClick={() => http.call('audit_query')} /> : null; }";
     expect(unheld(text)).toEqual(['audit_query']);
     expect(scan(text).foreignChecks).toHaveLength(1);
+  });
+
+  // Review of #561 (the 501 reviewer's probes G2–G6): each of these got past the guard.
+  it('a `useRoleCan` the file declares, or one not imported from hooks/useRoleCan, holds nothing (G2)', () => {
+    const body = inComponent(
+      "  return can('set_quota') !== false ? <button onClick={() => http.call('set_quota')} /> : null;",
+    );
+    expect(unpaired(scanBare(body), limited)).toEqual(['set_quota']);
+    expect(
+      unpaired(scan(`function useRoleCan() { return () => true; }\n${body}`), limited),
+    ).toEqual(['set_quota']);
+    expect(
+      unpaired(scanBare(`import { useRoleCan } from './lib/fake.js';\n${body}`), limited),
+    ).toEqual(['set_quota']);
+    expect(unheld(body)).toEqual([]);
+  });
+
+  it('a `let` reassigned after its check holds nothing; a `const` does (G3)', () => {
+    expect(
+      unheld(
+        inComponent(
+          "  let ok = can('set_quota') !== false;\n  ok = true;\n  return ok ? <button onClick={() => http.call('set_quota')} /> : null;",
+        ),
+      ),
+    ).toEqual(['set_quota']);
+    expect(
+      unheld(
+        inComponent(
+          "  const ok = can('set_quota') !== false;\n  return ok ? <button onClick={() => http.call('set_quota')} /> : null;",
+        ),
+      ),
+    ).toEqual([]);
+  });
+
+  it('a private component also used other than as a JSX tag implies nothing from its props (G4)', () => {
+    const row =
+      "function Row({ http, allowed }) { return allowed ? <button onClick={() => http.call('set_quota')} /> : null; }";
+    const held = inComponent("  return <Row http={http} allowed={can('set_quota') !== false} />;");
+    expect(unheld(`${held}\n${row}`)).toEqual([]);
+    expect(
+      unheld(
+        `${held}\nconst Alias = Row;\nexport function B({ http }) { return <Alias http={http} allowed={true} />; }\n${row}`,
+      ),
+    ).toEqual(['set_quota']);
+    expect(
+      unheld(
+        `${held}\nexport function C({ http }) { return Row({ http, allowed: true }); }\n${row}`,
+      ),
+    ).toEqual(['set_quota']);
+  });
+
+  it('`hrefs` imported under another name, or the router imported as a namespace, is reported (G5, G6)', () => {
+    expect(
+      scan("import { hrefs as h } from './lib/router.js';\nh.audit();").aliasedHrefs,
+    ).toHaveLength(1);
+    expect(
+      scan("import * as router from './lib/router.js';\nrouter.hrefs.audit();").aliasedHrefs,
+    ).toHaveLength(1);
+    expect(
+      scan("import { hrefs } from './lib/router.js';\nhrefs.audit();").aliasedHrefs,
+    ).toHaveLength(0);
   });
 
   it("`http['call']` is reported like a bound `.call`", () => {

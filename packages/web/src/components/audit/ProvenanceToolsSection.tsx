@@ -241,7 +241,7 @@ function PrecedentsTool({ http }: { readonly http: CapabilityCaller }) {
   // A `datetime-local` value (reader's zone); `query_decisions` gets it as an ISO instant.
   const [since, setSince] = useState('');
   const [state, setState] = useState<DecisionListState>(LIST_IDLE);
-  const objects = useMemo(() => objectSource(), []);
+  const objects = useMemo(() => objectSource(t), [t]);
   const operations = useMemo(() => operationNameSource(), []);
   const sinceIso = localInputToIso(since);
   // `find_precedents` answers nothing without an Object or an action kind (kernel

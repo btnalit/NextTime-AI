@@ -3,6 +3,11 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { HttpError } from '../../lib/http-client.js';
+import {
+  comboboxOptionTexts,
+  findComboboxOption,
+  pickComboboxOption,
+} from '../kit/combobox.test-helpers.js';
 import { ProvenanceToolsSection } from './ProvenanceToolsSection.js';
 
 afterEach(() => {
@@ -112,18 +117,17 @@ describe('ProvenanceToolsSection pickers', () => {
     });
     render(<ProvenanceToolsSection http={http} />);
 
-    const pick = await screen.findByTestId('causal-chain-node-id-pick');
+    const box = screen.getByTestId('causal-chain-node-id');
     // Legacy sweep (console batch, 2026-10-16): the option names the action, not its raw name.
-    await waitFor(() => expect(pick.textContent).toContain('人工确认事实'));
-    expect(pick.textContent).not.toContain('attest_fact');
+    await findComboboxOption(box, '人工确认事实');
+    expect(comboboxOptionTexts(box).join(' ')).not.toContain('attest_fact');
     expect(http.calls.find((c) => c.name === 'audit_query')?.params).toEqual({
       filter: { resourceType: 'fact' },
       limit: 200,
     });
 
     fireEvent.change(screen.getByLabelText('节点类型'), { target: { value: 'decision' } });
-    await waitFor(() => expect(pick.textContent).toContain('approve restart'));
-    fireEvent.change(pick, { target: { value: 'dec-1' } });
+    await pickComboboxOption(box, 'approve restart');
     fireEvent.submit(screen.getByTestId('causal-chain-form'));
     await screen.findByTestId('causal-chain-result');
     expect(http.calls.find((c) => c.name === 'causal_chain')?.params).toEqual({
@@ -151,13 +155,12 @@ describe('ProvenanceToolsSection pickers', () => {
     const findButton = screen.getByRole('button', { name: '查找先例' });
     expect((findButton as HTMLButtonElement).disabled).toBe(true);
 
-    const objectPick = await screen.findByTestId('precedents-object-id-pick');
-    await waitFor(() => expect(objectPick.textContent).toContain('web-01'));
-    const kindPick = screen.getByTestId('precedents-action-kind-pick');
-    await waitFor(() => expect(kindPick.textContent).toContain('container_restart · docker-prod'));
-
-    fireEvent.change(objectPick, { target: { value: 'o-1' } });
-    fireEvent.change(kindPick, { target: { value: 'container_restart' } });
+    await pickComboboxOption(screen.getByTestId('precedents-object-id'), 'web-01');
+    const kindBox = screen.getByTestId('precedents-action-kind');
+    const kind = await findComboboxOption(kindBox, 'container_restart');
+    // The option names the gates that offer the Operation.
+    expect(kind.textContent).toContain('docker-prod');
+    fireEvent.click(kind);
     expect((screen.getByLabelText('动作种类') as HTMLInputElement).value).toBe('container_restart');
     expect((findButton as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(findButton);
@@ -174,7 +177,7 @@ describe('ProvenanceToolsSection pickers', () => {
   it('precedents: typing an operation name re-asks list_operations{q}', async () => {
     const http = scriptedHttp(baseHandlers);
     render(<ProvenanceToolsSection http={http} />);
-    await screen.findByTestId('precedents-action-kind-pick');
+    await findComboboxOption(screen.getByTestId('precedents-action-kind'), 'container_restart');
     fireEvent.change(screen.getByLabelText('动作种类'), { target: { value: 'restart' } });
     await waitFor(() =>
       expect(

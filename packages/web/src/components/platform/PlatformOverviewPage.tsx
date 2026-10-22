@@ -235,6 +235,9 @@ export function PlatformOverviewPage({ http, onKeyBound }: PlatformOverviewPageP
   const allGates = gateInstances.state.status === 'ready' ? gateInstances.state.data.items : [];
   const discoveredGates = allGates.filter((gate) => gate.status === 'discovered');
   const pendingManifestGates = allGates.filter((gate) => gate.pendingManifest);
+  // Legacy 153 ⑥: an instance whose gate process stopped announcing itself — only whoever runs
+  // the gate can bring it back.
+  const lostGates = allGates.filter((gate) => gate.status === 'lost');
   // UX acceptance of #538 (out of scope there): an enabled instance whose connector is not
   // platform preset is in no workspace's catalog — a decision only an administrator can make.
   const connectors = useConnectorsByName(http);
@@ -297,6 +300,7 @@ export function PlatformOverviewPage({ http, onKeyBound }: PlatformOverviewPageP
           defaultWorkspaceRow={defaultWorkspaceRow}
           defaultWorkspaceRowsReady={workspaces.state.status === 'ready'}
           discoveredGates={discoveredGates}
+          lostGates={lostGates}
           pendingManifestGates={pendingManifestGates}
           hiddenGates={hiddenGates}
           nonResidueWorkspaceCount={nonResidueWorkspaceCount}
@@ -319,6 +323,7 @@ function PlatformOverviewBody({
   defaultWorkspaceRow,
   defaultWorkspaceRowsReady,
   discoveredGates,
+  lostGates,
   pendingManifestGates,
   hiddenGates,
   nonResidueWorkspaceCount,
@@ -330,6 +335,8 @@ function PlatformOverviewBody({
   readonly defaultWorkspaceRowsReady: boolean;
   /** Gate instances that announced themselves but were never enabled (audit P0-4). */
   readonly discoveredGates: readonly GateInstanceWire[];
+  /** Gate instances whose gate process is offline (`lost`). */
+  readonly lostGates: readonly GateInstanceWire[];
   /** Gate instances holding a new manifest that waits to be adopted (`pendingManifest`). */
   readonly pendingManifestGates: readonly GateInstanceWire[];
   /** Enabled gate instances no workspace can see (connector not platform preset). */
@@ -344,6 +351,7 @@ function PlatformOverviewBody({
   const attentionItems = buildAttentionItems(
     data,
     discoveredGates,
+    lostGates,
     pendingManifestGates,
     hiddenGates,
     t,
@@ -622,6 +630,7 @@ interface AttentionItem {
 function buildAttentionItems(
   data: PlatformOverviewWire,
   discoveredGates: readonly GateInstanceWire[],
+  lostGates: readonly GateInstanceWire[],
   pendingManifestGates: readonly GateInstanceWire[],
   hiddenGates: readonly GateInstanceWire[],
   t: Translate,
@@ -651,6 +660,16 @@ function buildAttentionItems(
       title: t(
         `门实例「${gate.displayName}」已发现，等待启用`,
         `Gate instance "${gate.displayName}" was discovered and awaits enabling`,
+      ),
+      href: hrefs.platformGateInstance(gate.gateId),
+    });
+  }
+  for (const gate of lostGates) {
+    items.push({
+      key: `gate-lost-${gate.gateId}`,
+      title: t(
+        `门实例「${gate.displayName}」离线，先恢复它的门进程`,
+        `Gate instance "${gate.displayName}" is offline; bring its gate process back`,
       ),
       href: hrefs.platformGateInstance(gate.gateId),
     });

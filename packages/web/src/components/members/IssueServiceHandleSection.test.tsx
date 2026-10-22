@@ -116,6 +116,15 @@ describe('IssueServiceHandleSection — picked, not typed', () => {
     expect(screen.getByRole('button', { name: '签发' }).hasAttribute('disabled')).toBe(false);
   });
 
+  it('legacy 153 ⑨: after a paste the suggestion list stays closed, so it does not cover 签发', () => {
+    renderSection([service('p-svc', 'CI runner')]);
+    fireEvent.paste(nameBox());
+    fireEvent.change(nameBox(), { target: { value: 'get_task, search' } });
+    expect(nameBox().getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByRole('listbox')).toBeNull();
+    expect(screen.getByTestId('ish-scope-summary').textContent).toContain('get_task');
+  });
+
   it('isNameList: a separator after a name makes a list, a bare word is a search', () => {
     expect(isNameList('get_task')).toBe(false);
     expect(isNameList('get_task ')).toBe(true);
