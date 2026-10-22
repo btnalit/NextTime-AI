@@ -1200,7 +1200,7 @@ v0.47.0、v0.48.0 不单独上主机（#554 不在 v0.47.0 里，遗留 259 的�
 | # | 时机 | 步骤 | 谁 |
 |---|---|---|---|
 | 1 | 窗口前 | `--prefetch v0.49.0`，日志最后一行 `RESULT ok`（§3）；tag 拿不到时先按上面用 bundle 导入并核对 commit | 主机 |
-| 2 | 窗口前 | §3.25 的预检 SQL 与表行数；目标含 #644 时再跑 §3.38 的打包门只读检查（不为空先改 `.env` 的 `GATE_CONNECTOR`）；结果记 `docs/private/` | 主机 |
+| 2 | 窗口前 | §3.25 的预检 SQL 与表行数；目标含 #644 时再跑 §3.38 的打包门只读检查（不为空先改 `.env` 的 `GATE_CONNECTOR`）；目标含 #650 时可选跑 §3.40 的本体族只读检查；结果记 `docs/private/` | 主机 |
 | 3 | 窗口内 | `--pull v0.49.0`，**按最后一行 RESULT 判断，不按退出码**（§3）。日志里应看到：`STEP caddy-log-redaction` 各项 PASS（caddy 由 `up -d` 或 `mount-refresh` 重建，看不到 `mount-refresh caddy recreated` 不算异常；backup、update-feed 可能 recreated，也属正常，§3.26）；`STEP acceptance-fixtures none left running`；`STEP backup-now exit=0` 在前、`STEP raw-secret-scrub exit=0` 在后。`acceptance-failures` 按 §5 判断回滚；`degraded=…` 按 §3.26 的表逐项补做，补做结果记 `docs/private/` | 主机 |
 | 4 | 应用后 | 读 `-raw-secret-scrub.log`：改写 6 类、只计数 7 类、只列 1 类（`connectedSystemDuplicates`）的数字、`cli.raw_secrets_scrubbed` 的审计 id、全部 `counted …` 行，记 `docs/private/` | 主机 |
 | 5 | 应用后 | §3.25「应用后」的处置：只计数的地址类别 > 0 时按 `counted …` 行逐条决定 | victor 决定 |
@@ -1209,7 +1209,7 @@ v0.47.0、v0.48.0 不单独上主机（#554 不在 v0.47.0 里，遗留 259 的�
 
 **回滚**（§5）：回滚目标是 v0.46.0，按 §3.25 与 §3.26 的回滚说明；不需要排空 Worker。
 
-窗口目标改到 v0.49.0 之后的发版时（维护者 2026-10-16 决定窗口暂缓，开窗口时目标改为当时最新的发版），本清单按新目标刷新，并加上之后各版的小节，至少 §3.28（#589 升钉：`postgres` 与 `backup` 重建、不执行 `ALTER EXTENSION`、应用后只读核对 `vector` 扩展版本）与 §3.29（#592：governance 0020，旧「始终允许」规则可能显示「已暂停 · 待确认版本」需 owner 重新确认，契约不向后兼容、旧控制台页要刷新）与 §3.30（#601：governance 0021，窗口前估算 `audit_records` 全表扫描的锁表时间并核对回收超时，窗口后历史失败行多显示「结果不明」）与 §3.31（#607：goal 0001 / task 0007 / governance 0022，窗口前估算建索引时间）与 §3.32（#615：core 0044，窗口前估算建索引期间审计写入的等待，必要时并发预建并确认索引有效）与 §3.33（#619：goal 0002，新增每秒认领与每分钟对账的后台负载）与 §3.34（#620：core 0045，窗口前三数预检、迁移期间不接新门、清洗改写类变成 4 个、回滚后自接门暂停失效；#637 再加两个改写类与一个只列类，见 §3.25）、§3.35（#626：goal 0003，只重建一个守卫函数，无主机步骤）、§3.36（#633：goal 0004，加列与重建一个守卫函数，无主机步骤）、§3.37（#642：governance 0023，`action_requests` 加列、约束与守卫触发器，窗口前看一眼该表行数，无主机步骤）、§3.38（#644：无迁移，窗口前打包门只读检查，内核与门宿主同版，回退代码前先处理挂在系统接入包上的实例）与 §3.39（#649：governance 0024，新表与重建核对守卫，两个可选环境变量不设即默认，代码回退期间观察压缩报 degraded 可忽略）。
+窗口目标改到 v0.49.0 之后的发版时（维护者 2026-10-16 决定窗口暂缓，开窗口时目标改为当时最新的发版），本清单按新目标刷新，并加上之后各版的小节，至少 §3.28（#589 升钉：`postgres` 与 `backup` 重建、不执行 `ALTER EXTENSION`、应用后只读核对 `vector` 扩展版本）与 §3.29（#592：governance 0020，旧「始终允许」规则可能显示「已暂停 · 待确认版本」需 owner 重新确认，契约不向后兼容、旧控制台页要刷新）与 §3.30（#601：governance 0021，窗口前估算 `audit_records` 全表扫描的锁表时间并核对回收超时，窗口后历史失败行多显示「结果不明」）与 §3.31（#607：goal 0001 / task 0007 / governance 0022，窗口前估算建索引时间）与 §3.32（#615：core 0044，窗口前估算建索引期间审计写入的等待，必要时并发预建并确认索引有效）与 §3.33（#619：goal 0002，新增每秒认领与每分钟对账的后台负载）与 §3.34（#620：core 0045，窗口前三数预检、迁移期间不接新门、清洗改写类变成 4 个、回滚后自接门暂停失效；#637 再加两个改写类与一个只列类，见 §3.25）、§3.35（#626：goal 0003，只重建一个守卫函数，无主机步骤）、§3.36（#633：goal 0004，加列与重建一个守卫函数，无主机步骤）、§3.37（#642：governance 0023，`action_requests` 加列、约束与守卫触发器，窗口前看一眼该表行数，无主机步骤）、§3.38（#644：无迁移，窗口前打包门只读检查，内核与门宿主同版，回退代码前先处理挂在系统接入包上的实例）、§3.39（#649：governance 0024，新表与重建核对守卫，两个可选环境变量不设即默认，代码回退期间观察压缩报 degraded 可忽略）与 §3.40（#650：governance 0025，只加新表，可选的窗口前本体族只读检查，模块升级可能新返回 400 `change_confirmation_required`）。
 
 ### 3.28 第三方镜像升钉：pgvector、node、postgres（#589，v0.49.0 之后的下一版起）
 
@@ -1409,6 +1409,34 @@ rollback;" </dev/null
 - **新增两个可选环境变量**（kernel 的 env_file，即主机 `.env`）：`GOAL_RECONCILE_CHECK_MAX_ATTEMPTS`（默认 5）、`GOAL_RECONCILE_CHECK_MAX_DURATION_MS`（默认 900000，15 分钟），正整数，不设即用默认值，主机 `.env` 不需要改。两个上限同时生效、先到先停，目标的墙钟预算也照样封顶，所以不另设最大值。
 - **回滚**：只回退代码即可（§6）。上一版不读写新表。**代码回退到上一版后，apply-release 的 observations-compaction 步骤会报 degraded**：上一版的压缩看到 0024 指向 `observations` 的新外键就拒绝运行（安全失败，不删任何东西），重新应用带 0024 的版本后恢复；回退期间这一条 degraded 可以忽略。
 
+### 3.40 变更计划核心：模块安装与升级记段（#650，governance 0025，S11 P1-A，v0.49.0 之后的下一版起）
+
+带一个 governance 迁移（`0025_change_segments`），随 `apply-release.sh` 的迁移步骤自动应用；没有新环境变量、不改 compose、无单独主机步骤。
+
+- **迁移做什么**：新表 `change_segments`、`change_items`，带守卫、RLS 和授权（应用角色对两张表无 DELETE）。只加新表，不改已有表和数据。
+- **新错误码**：400 `change_confirmation_required`（`install_module` / `upgrade_module` 遇到内容扩大授权的模块，现有模块都不会触发）；409 `change_plan_changed`（P1-B 的包能力才会返回给调用方，本版能力碰不到）。
+- **新审计**：动作 `change_item.apply`、资源类型 `change_item`；每次模块安装或升级多一条，建工作区时每个默认模块也多一条（通道 `platform`）。
+- **行为变化**：一个工作区里，模块所在本体族的当前版本如果是人工定制的、声明了 ActionType，对这个模块的 `upgrade_module` 会被拒（400 `change_confirmation_required`），原来带 `confirm: true` 会直接覆盖。
+- **窗口前只读检查（可选，结果记 `docs/private/`）**：列出当前版本声明了 ActionType 的本体族；空表就是不受影响，不为空只影响对这些族的模块升级。
+
+  ```bash
+  docker compose exec -T postgres psql -U nexttime -d nexttime -v ON_ERROR_STOP=1 <<'SQL'
+  begin transaction read only;
+  select v.workspace_id, v.id, v.version, jsonb_array_length(v.definition -> 'actionTypes') as action_types
+    from ontology_versions v
+   where v.status = 'published'
+     and jsonb_typeof(v.definition -> 'actionTypes') = 'array'
+     and jsonb_array_length(v.definition -> 'actionTypes') > 0
+     and v.version = (select max(v2.version) from ontology_versions v2
+                       where v2.workspace_id = v.workspace_id and v2.id = v.id
+                         and v2.status = 'published')
+   order by v.workspace_id, v.id;
+  rollback;
+  SQL
+  ```
+
+- **回滚**：只回退代码即可（§6）。新表留在库里，旧代码不读也不写，模块安装照旧工作；之后再升级回来，回退期间装的版本溯源显示 `provenance_unknown`，这是预期。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -1528,6 +1556,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.49.0 之后的下一版 | goal `0004_goal_revision_hold`（#633，S11 GO3b）：`goal_runs` 加 `paused_by`、`paused_by_authority`、`advance_failures`，`plan_revisions` 加 `removals`，四个约束，照 goal 0002 重建 `goal_runs_status_guard`（多 hold 一段） | 可逆 | 加列都有上一版从不写的默认值或可空；守卫只多拒绝这几列的变化，上一版的暂停、继续不写 `paused_by`，回滚到上一版不需要额外步骤 |
 | v0.49.0 之后的下一版 | governance `0023_action_request_reconciliation`（#642，S11 GO3c）：`action_requests` 加 `reconciliation`、`reconciliation_decision_id`、`reexecute_decision_id`，四个 CHECK、两个外键，守卫触发器 `action_requests_reconciliation_guard` | 可逆 | 新列可空、上一版从不写；CHECK 对三列为空的行恒真；触发器只拦写这三列的插入和更新，回滚到上一版不需要额外步骤 |
 | v0.49.0 之后的下一版 | governance `0024_action_request_reconcile_checks`（#649，S11 GO3d）：新表 `action_request_reconcile_checks`（两个部分索引），重建 `action_requests_reconciliation_guard`（`decided_by` 为空的分支收窄） | 可逆（代码回退期间观察压缩报 degraded） | 上一版不读写新表；守卫收窄不影响 0023 下写出的人的结论；上一版的观察压缩看到新外键会安全拒绝运行（不删东西），apply-release 的 observations-compaction 报 degraded，重新应用带 0024 的版本后恢复 |
+| v0.49.0 之后的下一版 | governance `0025_change_segments`（#650，S11 P1-A）：新表 `change_segments`、`change_items`（守卫、RLS、授权） | 可逆 | 只加新表，上一版不读不写；回退期间装的模块版本之后溯源为 `provenance_unknown`，属预期 |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
