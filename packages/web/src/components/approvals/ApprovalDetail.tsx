@@ -6,6 +6,7 @@ import {
   alwaysAllowOffer,
   alwaysAllowStaleRequestText,
   alwaysAllowUnpublishedText,
+  requestDefinitionText,
 } from '../../lib/always-allow.js';
 import { auditHref } from '../../lib/audit.js';
 import { credentialReviewCount, credentialReviewPaths } from '../../lib/credential-review.js';
@@ -275,6 +276,19 @@ export function ApprovalDetail({
           testId="approval-on-behalf-of"
         />
       ),
+    });
+  }
+  // Legacy 216 ①: the definition the request was made under, for every approver — unless the
+  // sentence beside the always-allow choice already says it (a stale or unpublished definition).
+  const definitionText =
+    alwaysAllowBlock === 'stale' || alwaysAllowBlock === 'unpublished'
+      ? null
+      : requestDefinitionText(row.publishedDefinition, t);
+  if (definitionText !== null) {
+    actionItems.push({
+      key: 'definition',
+      label: t('依据定义', 'Definition'),
+      value: <span data-testid="approval-definition">{definitionText}</span>,
     });
   }
   if (row.policyDecision) {

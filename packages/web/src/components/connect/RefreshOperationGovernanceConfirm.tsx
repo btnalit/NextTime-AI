@@ -191,6 +191,10 @@ export function RefreshOperationGovernanceConfirm({
   // describes (its definition did not change) — kept past the confirm so the result says what
   // publishing them changes instead of "the gate refuses calls until then", which is not so.
   const [loosenedOnlyNames, setLoosenedOnlyNames] = useState<ReadonlySet<string>>(new Set());
+  /** Legacy 224 ④: the Operations whose definition changed, sent for a revision draft. One that
+   *  already has a revision draft comes back `unchanged` (the kernel never opens a second), and
+   *  must not read as "aligned" — the draft still has to be published. */
+  const [expectedDraftNames, setExpectedDraftNames] = useState<ReadonlySet<string>>(new Set());
   const self = platformGateId === undefined;
   // The same sentence for both sources, naming where the manifest comes from: a platform gate's
   // announcement (adopted by the platform) or what a self-connected gate describes it runs.
@@ -288,6 +292,10 @@ export function RefreshOperationGovernanceConfirm({
   const heldResults = (lastResult?.revisionDrafts ?? []).filter((draft) =>
     stillHeld.has(draft.name),
   );
+  const draftAlreadyOpen = (lastResult?.unchanged ?? []).filter((name) =>
+    expectedDraftNames.has(name),
+  );
+  const unchangedCount = (lastResult?.unchanged.length ?? 0) - draftAlreadyOpen.length;
 
   async function loadPreviewAndOpen(): Promise<void> {
     if (checking) return;
@@ -411,6 +419,13 @@ export function RefreshOperationGovernanceConfirm({
     );
     setRewrittenNames(new Set(heldDrafts));
     setImportedNames(new Set(newNames));
+    setExpectedDraftNames(
+      new Set(
+        diffs
+          .filter((op) => op.definitionDiffers && (op.gateOwnedParams?.length ?? 0) === 0)
+          .map((op) => op.name),
+      ),
+    );
     setLoosenedOnlyNames(
       new Set(
         diffs
@@ -518,25 +533,53 @@ export function RefreshOperationGovernanceConfirm({
       ) : null}
       {lastResult !== null ? (
         <Notice
-          tone={lastResult.revisionDrafts.length > 0 ? 'warn' : 'info'}
+          tone={
+            lastResult.revisionDrafts.length > 0 || draftAlreadyOpen.length > 0 ? 'warn' : 'info'
+          }
           testId={testId ? `${testId}-result` : undefined}
         >
           <div className="stack-s">
-            {lastResult.refreshed.length > 0 || lastResult.revisionDrafts.length === 0 ? (
+            {lastResult.refreshed.length > 0 ||
+            (lastResult.revisionDrafts.length === 0 && draftAlreadyOpen.length === 0) ? (
               <span>
                 {t(
                   `已${verbZh} ${lastResult.refreshed.length} 个 Operation${
-                    lastResult.unchanged.length > 0
-                      ? `，${lastResult.unchanged.length} 个未变化`
-                      : ''
+                    unchangedCount > 0 ? `，${unchangedCount} 个未变化` : ''
                   }。`,
                   `${self ? 'Synced' : 'Aligned'} ${lastResult.refreshed.length} operation(s)${
-                    lastResult.unchanged.length > 0
-                      ? `, ${lastResult.unchanged.length} unchanged`
-                      : ''
+                    unchangedCount > 0 ? `, ${unchangedCount} unchanged` : ''
                   }.`,
                 )}
               </span>
+            ) : null}
+            {draftAlreadyOpen.length > 0 ? (
+              <div
+                className="stack-s"
+                data-testid={testId ? `${testId}-draft-already-open` : undefined}
+              >
+                <span>
+                  {t(
+                    `${draftAlreadyOpen.length} 个 Operation 已经有修订草稿，门的新定义就在里面，这次没有再开新的。发布之前，门会拒绝对它们的调用——到能力目录发布：`,
+                    `${draftAlreadyOpen.length} operation(s) already have a revision draft carrying the gate’s new definition, so none was opened this time. The gate refuses calls to them until it is published — publish it in the catalog:`,
+                  )}
+                </span>
+                <ul className="stack-s" style={{ margin: 0, paddingLeft: '1.2em' }}>
+                  {draftAlreadyOpen.map((name) => {
+                    const row = { gatekeeperId, name };
+                    const key = publishedNames.has(name)
+                      ? revisionDraftKey(row)
+                      : operationKey(row);
+                    return (
+                      <li key={name} className="row-wrap">
+                        <span className="mono">{actionKindTagText(name)}</span>
+                        <a href={hrefs.catalog('operations', key)}>
+                          {t('去能力目录发布', 'Publish in the catalog')}
+                        </a>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
             ) : null}
             {imported.length > 0 ? (
               <div className="stack-s" data-testid={testId ? `${testId}-imported` : undefined}>

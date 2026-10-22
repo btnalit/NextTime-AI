@@ -43,8 +43,8 @@ import { recordGoalRunTransition } from './transition-log.js';
  *      `cleanup_pending` gets its remaining Tasks terminated again, and the flag cleared once
  *      neither Tasks nor executing requests are left.
  *
- * `running`, `paused` and `cancelling` runs are advanced ({@link ADVANCED_GOAL_RUN_STATUSES});
- * GO4 (`verifying`) extends the list with the advance step it adds.
+ * `running`, `paused`, `verifying` (S11 GO4a, `advance.ts` phase V) and `cancelling` runs are
+ * advanced ({@link ADVANCED_GOAL_RUN_STATUSES}).
  *
  * The claim and the scan are raw cross-workspace statements on a pooled connection with no
  * workspace context, the same posture as the task reaper's scans and the invariant monitors: they
@@ -52,7 +52,7 @@ import { recordGoalRunTransition } from './transition-log.js';
  * advance, inside the requester's workspace context.
  */
 
-export const ADVANCED_GOAL_RUN_STATUSES = ['running', 'paused', 'cancelling'] as const;
+export const ADVANCED_GOAL_RUN_STATUSES = ['running', 'paused', 'verifying', 'cancelling'] as const;
 
 /** How often the composition root runs {@link runGoalAdvancerTick}. */
 export const DEFAULT_GOAL_ADVANCER_INTERVAL_MS = 1000;
@@ -147,10 +147,10 @@ export async function runGoalAdvancerTick(
  * transaction, in the requester's workspace context under the GoalRun lock). At
  * `maxConsecutiveAdvanceFailures` ({@link DEFAULT_MAX_CONSECUTIVE_ADVANCE_FAILURES}) in a row:
  *
- *   - a `running` run pauses `needs_decision`, the count and the last error (redacted and clipped
- *     as an audited reason is shown) in the pause's audit payload, and loses its `next_tick_at` —
- *     a paused run needs none; an event, the reconcile scan's cleanup clause or a person's resume
- *     (which starts a fresh count) brings it back;
+ *   - a `running` or `verifying` run pauses `needs_decision`, the count and the last error
+ *     (redacted and clipped as an audited reason is shown) in the pause's audit payload, and loses
+ *     its `next_tick_at` — a paused run needs none; an event, the reconcile scan's cleanup clause
+ *     or a person's resume (which starts a fresh count) brings it back;
  *   - a `paused` run loses its `next_tick_at` the same way, and the streak is noted once
  *     (`goal_run.advance_failing`);
  *   - a `cancelling` run keeps its lease — its cleanup must keep being tried — and the streak is
@@ -179,12 +179,12 @@ export async function recordAdvanceFailure(
       if (failures < max) return;
       const detail = `the advance failed ${failures} times in a row`;
       const lastError = shownAuditReason(error instanceof Error ? error.message : String(error));
-      if (goal.status === 'running') {
+      if (goal.status === 'running' || goal.status === 'verifying') {
         await moveGoalRun(
           client,
           { principalId: goal.onBehalfOf, by: 'advancer' },
           goal,
-          'running',
+          goal.status,
           'pause',
           { pauseReason: 'needs_decision', audit: { reason: 'needs_decision', detail, lastError } },
         );
@@ -223,7 +223,12 @@ export async function recordAdvanceFailure(
  *       its own; each Task's budget is capped by the goal's headroom, but the model call that
  *       crosses a Task's budget lands before the usage hook fails the Task);
  *   (e) a step a revision superseded without letting it finish (`plan_revisions.removals`) that
- *       still has a Task running — terminating it after an advance failed (GO3b).
+ *       still has a Task running — terminating it after an advance failed (GO3b);
+ *   (f) while verifying: no pending acceptance check opened since the run entered `verifying`
+ *       (S11 GO4a) — a round to open (a run that entered it under a release without verification)
+ *       or a settled round whose advance failed. A round waiting on an observation or on the
+ *       requester is not counted: the observation's settlement and the requester's confirmation set
+ *       the run due in their own transactions (`acceptance-check.ts`, `acceptance.ts`).
  * Returns how many runs it set due. A `waiting(reconcile)` step is not counted: its GoalRun is
  * paused for a person, whose finding sets the run due in its own transaction (`reconcile.ts`,
  * GO3c) — or, while the platform's check of it is pending, keeps running, and the check's
@@ -283,6 +288,11 @@ export async function markReconcileDue(
                           and coalesce(pr.removals -> s.step_key ->> 'mode', 'terminate') <> 'let_finish'
                           and lt.status not in ('completed', 'failed', 'cancelled'))
                      or (c.status in ('running', 'cancelling') and c.next_tick_at is null)
+                     or (c.status = 'verifying'
+                         and not exists (
+                           select 1 from goal_acceptance_checks ac
+                            where ac.workspace_id = c.workspace_id and ac.goal_run_id = c.id
+                              and ac.status = 'pending' and ac.created_at >= c.updated_at))
                      or (c.status = 'running'
                          and (select coalesce(sum(t.tokens_used), 0) from tasks t
                                where t.workspace_id = c.workspace_id and t.goal_run_id = c.id)

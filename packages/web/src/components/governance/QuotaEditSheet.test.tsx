@@ -59,7 +59,9 @@ describe('QuotaEditSheet', () => {
     renderSheet(row('task.max_depth', 2));
     fireEvent.change(input(), { target: { value: '' } });
     expect(submit().disabled).toBe(true);
-    expect(screen.getByRole('alert').textContent).toContain('0 到 3 的整数');
+    expect(screen.getByRole('alert').textContent).toContain('请输入 0 到 3 的整数');
+    // Legacy 245 b: one line says it — the hint is not shown under the error.
+    expect(screen.queryByText(/必须是 0 到 3 的整数/)).toBeNull();
   });
 
   it('audit P1-9: a disabled 保存 says what is still needed next to it, gone once valid', () => {

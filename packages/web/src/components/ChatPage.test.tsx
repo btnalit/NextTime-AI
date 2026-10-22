@@ -208,6 +208,27 @@ describe('ChatPage inline approval card (C8)', () => {
     );
   });
 
+  it('legacy 245 d: the card shows the policy that sent the request to approval, read from its row', async () => {
+    const fake = fakeClient();
+    const http = scriptedHttp({
+      get_action: () => ({
+        id: 'ar-1',
+        onBehalfOf: 'someone-else',
+        requesterCanApprove: null,
+        publishedDefinition: { version: 1, requestIsCurrent: true },
+        policyDecision: 'require_approval',
+      }),
+    });
+    renderChat(fake.client, http);
+    await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled());
+    act(() => {
+      fake.deliver(pendingCardMessage(1, 'ar-1'));
+      fake.caughtUp();
+    });
+    const card = await screen.findByTestId('action-request-card');
+    await waitFor(() => expect(within(card).getByTestId('approval-policy')).toBeTruthy());
+  });
+
   it('a refused "always allow" says why in the toast — not only that no rule was written (UX acceptance of #592)', async () => {
     const fake = fakeClient();
     const http = scriptedHttp({

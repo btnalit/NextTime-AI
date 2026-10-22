@@ -198,6 +198,11 @@ function StatusBody({
           <EmptyState
             icon="search"
             title={t('最近没有平台改动', 'No recent platform changes')}
+            // Legacy 246 c: the kernel looks only at the newest 1000 platform audit records.
+            body={t(
+              '这里只看最近 1000 条平台审计记录里的改动；更早的在「查看全部」里。',
+              'Only the newest 1000 platform audit records are checked for changes; older ones are under “View all”.',
+            )}
             testId="status-audit-empty"
           />
         ) : (

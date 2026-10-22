@@ -33,10 +33,21 @@ import {
   startStepAttemptTask,
   terminateTaskWith,
 } from '../task/index.js';
+import {
+  type AcceptanceCheckRow,
+  openAcceptanceRound,
+  readCurrentAcceptanceRound,
+} from './acceptance-checks.js';
 import { type CancellingOptions, advanceCancellingGoalRun } from './cancelling.js';
 import { type StepActionEffect, actionDisposition, stepActionEffect } from './disposition.js';
 import { type GoalMoveActor, moveGoalRun, moveStepRun } from './moves.js';
-import { DEFAULT_MAX_ATTEMPTS, type PlanStep, planStep, samePlanEntry } from './plan.js';
+import {
+  DEFAULT_MAX_ATTEMPTS,
+  type PlanStep,
+  planStep,
+  roundAcceptance,
+  samePlanEntry,
+} from './plan.js';
 import { getPlanRevision, lockStepRuns } from './reads.js';
 import { lockGoalRun } from './service.js';
 import type { GoalRunRow, PlanRevisionRow, StepRunRow } from './types.js';
@@ -49,9 +60,9 @@ import type { GoalRunRow, PlanRevisionRow, StepRunRow } from './types.js';
  * rule below reads rows and moves rows.
  *
  * A `cancelling` GoalRun is advanced by `cancelling.ts` (S11 GO3a): it waits for its Tasks to end
- * — terminating them after the commit — and its executing actions to end, then is `cancelled`.
- * Otherwise only a `running` or `paused` GoalRun is advanced; any other status just loses its
- * `next_tick_at` (verification is GO4). Then, in order:
+ * — terminating them after the commit — and its executing actions to end, then is `cancelled`. A
+ * `verifying` one goes straight to phase V below (S11 GO4a). Otherwise only a `running` or `paused`
+ * GoalRun is advanced; any other status just loses its `next_tick_at`. Then, in order:
  *
  *   0. **Stop revised-away work** (running or paused; S11 GO3b, `revise.ts`). The live Tasks of a
  *      step a revision superseded — its attempt and nested child Tasks — are terminated after the
@@ -87,12 +98,13 @@ import type { GoalRunRow, PlanRevisionRow, StepRunRow } from './types.js';
  *   C. **Unblock** (running or paused). A `pending` step whose dependencies all succeeded becomes
  *      `ready` — after re-checking that its definition is still the current plan's entry (the
  *      database does not check this on `ready`). A skipped dependency counts as done.
- *   D. **Start** (running only). Every live step succeeded → `verifying` (GO4 runs the acceptance
- *      checks) — once nothing of the run is left running: no Task of it (a step let finish after a
- *      revision) and no request of a superseded step still in flight (one released, or executing
- *      when the revision came); one whose outcome is unknown pauses `awaiting_reconcile` first
- *      (GO3b). Otherwise the budget is checked (I-G6: wall clock from confirmation, tokens used by
- *      the GoalRun's Tasks; past either → `paused(budget_exhausted)`, never failed), then each
+ *   D. **Start** (running only). Every live step succeeded → `verifying`, a verification round
+ *      opened and phase V run at once — once nothing of the run is left running: no Task of it (a
+ *      step let finish after a revision) and no request of a superseded step still in flight (one
+ *      released, or executing when the revision came); one whose outcome is unknown pauses
+ *      `awaiting_reconcile` first (GO3b). Otherwise the budget is checked (I-G6: wall clock from
+ *      confirmation, tokens used by the GoalRun's Tasks; past either → `paused(budget_exhausted)`,
+ *      never failed), then each
  *      `ready` step starts one attempt while the step budget allows, the attempts of one advance
  *      splitting the goal's token headroom (`readGoalRunTokenHeadroom`: the budget less what every
  *      Task of the run holds — a live Task its own budget), so the live Tasks' budgets together
@@ -116,6 +128,23 @@ import type { GoalRunRow, PlanRevisionRow, StepRunRow } from './types.js';
  *      effect after their re-execute decision, GO3c), revising the plan or cancelling — the pause
  *      names every failed step and what each waits for. A branch of the plan that still moves
  *      keeps the run going until it stops too.
+ *   V. **Verify** (verifying only; S11 GO4a, plan §4.6, I-G5). A run is verified in rounds: each
+ *      stay in `verifying` has one (`acceptance-checks.ts` `openAcceptanceRound`), opened as the
+ *      run enters it — or by the first advance that finds none, for a run that entered it under a
+ *      release without verification — with one row per acceptance check of the plan in force
+ *      (`plan.ts` `roundAcceptance`: its `acceptance`, or one `requester_confirm` asking about the
+ *      goal statement). The platform makes the observations (`acceptance-check.ts`, outside this
+ *      transaction; a settled one sets the run due) and the requester gives the confirmation
+ *      (`acceptance.ts`, asked only once every observation passed). Then: an observation still
+ *      pending → wait; an observation `failed` or `unavailable` → `paused(needs_decision)`, the
+ *      checks named in the pause (the evidence is on their rows); the confirmation pending → wait;
+ *      every check passed → `completed(achieved)`, on `verified_by_check` when the platform
+ *      observed anything, else on the requester's word (`requester`, their confirmation's
+ *      Decision). The database refuses any other way to `achieved` (goal/0005). Leaving
+ *      `verifying` supersedes the round's pending checks (`moves.ts`), so a paused, held or
+ *      cancelled run observes nothing, and a resume verifies in a new round. No budget is checked
+ *      while verifying: an observation is bounded by its own attempts and duration, and waiting
+ *      for the requester spends nothing.
  *
  * A paused GoalRun keeps its first reason (the guard refuses changing it while paused); a further
  * cause is in the audit log (`goal_run.pause_noted`, once per pause for each reason and detail),
@@ -290,7 +319,12 @@ export async function advanceGoalRun(
         };
       }
       const now = await databaseNow(client);
-      if (goal.status === 'running' || goal.status === 'paused' || goal.status === 'cancelling') {
+      if (
+        goal.status === 'running' ||
+        goal.status === 'paused' ||
+        goal.status === 'verifying' ||
+        goal.status === 'cancelling'
+      ) {
         await clearAdvanceFailures(client, goal);
       }
       if (goal.status === 'cancelling') {
@@ -301,7 +335,7 @@ export async function advanceGoalRun(
           attempts: [],
         };
       }
-      if (goal.status !== 'running' && goal.status !== 'paused') {
+      if (goal.status !== 'running' && goal.status !== 'paused' && goal.status !== 'verifying') {
         if (goal.nextTickAt !== null) await writeNextTick(client, goal, null);
         return {
           outcome: {
@@ -401,23 +435,27 @@ class Advance {
   }
 
   async run(): Promise<AdvanceResult> {
-    const steps = await this.lockSteps();
-    this.liveTasks = await listGoalRunLiveTaskSteps(this.client, this.ws, this.goal.id);
-    await this.stopSupersededWork(steps);
-    for (const step of steps) {
-      if (step.status === 'running' || step.status === 'waiting') await this.recordAttempt(step);
-    }
-    if (this.status === 'running') {
-      for (const step of await this.lockSteps()) {
-        if (this.status !== 'running') break;
-        if (step.status === 'failed' && step.failureCategory === 'transient') {
-          await this.retryStep(step);
+    if (this.status === 'verifying') {
+      await this.verify(false);
+    } else {
+      const steps = await this.lockSteps();
+      this.liveTasks = await listGoalRunLiveTaskSteps(this.client, this.ws, this.goal.id);
+      await this.stopSupersededWork(steps);
+      for (const step of steps) {
+        if (step.status === 'running' || step.status === 'waiting') await this.recordAttempt(step);
+      }
+      if (this.status === 'running') {
+        for (const step of await this.lockSteps()) {
+          if (this.status !== 'running') break;
+          if (step.status === 'failed' && step.failureCategory === 'transient') {
+            await this.retryStep(step);
+          }
         }
       }
+      await this.unblockSteps(await this.lockSteps());
+      if (this.status === 'running') await this.startSteps(await this.lockSteps());
+      if (this.status === 'running') await this.pauseIfStuck(await this.lockSteps());
     }
-    await this.unblockSteps(await this.lockSteps());
-    if (this.status === 'running') await this.startSteps(await this.lockSteps());
-    if (this.status === 'running') await this.pauseIfStuck(await this.lockSteps());
 
     const nextTickAt =
       this.status === 'running' ? new Date(Math.min(this.deadline, ...this.timers)) : null;
@@ -696,7 +734,10 @@ class Advance {
   private async startSteps(steps: readonly StepRunRow[]): Promise<void> {
     const live = steps.filter((step) => step.status !== 'superseded');
     if (live.length > 0 && live.every((step) => DONE_STEP_STATUSES.has(step.status))) {
-      if (await this.settled(steps)) await this.moveGoal('verify', null, { steps: live.length });
+      if (await this.settled(steps)) {
+        await this.moveGoal('verify', null, { steps: live.length });
+        await this.verify(true);
+      }
       return;
     }
     if (this.now.getTime() >= this.deadline) {
@@ -919,6 +960,66 @@ class Advance {
     await this.pause('needs_decision', `${waits.join('; ')}; or revise the plan or cancel`);
   }
 
+  // ----- V ------------------------------------------------------------------------------------
+
+  /** Phase V — see the module comment. `entered`: this advance moved the run into `verifying`, so
+   *  its round is opened now. */
+  private async verify(entered: boolean): Promise<void> {
+    let round = entered
+      ? []
+      : await readCurrentAcceptanceRound(this.client, this.ws, this.goal.id, this.goal.updatedAt);
+    if (round.length === 0) {
+      const opened = await this.openRound();
+      if (!opened) return;
+      round = opened;
+    }
+    const observations = round.filter((check) => check.kind === 'observe_predicate');
+    if (observations.some((check) => check.status === 'pending')) return;
+    const unmet = round.filter((check) => check.status !== 'passed' && check.status !== 'pending');
+    if (unmet.length > 0) {
+      const named = unmet.map((check) =>
+        check.status === 'failed'
+          ? `acceptance check ${check.checkKey}: its observation did not satisfy the predicate`
+          : `acceptance check ${check.checkKey}: ${check.status} (${check.lastError ?? 'no reason recorded'})`,
+      );
+      await this.pause(
+        'needs_decision',
+        `round ${round[0]?.round}: ${named.join('; ')}; end the goal as not achieved (or as achieved, on your word), revise the plan, resume to verify again, or cancel`,
+      );
+      return;
+    }
+    // Every observation passed: what is left is the requester's confirmation, if the round asks.
+    if (round.some((check) => check.status === 'pending')) return;
+    const confirmation = round.find((check) => check.kind === 'requester_confirm');
+    const byCheck = observations.length > 0;
+    this.status = await moveGoalRun(this.client, this.actor, this.goal, 'verifying', 'complete', {
+      outcome: {
+        outcome: 'achieved',
+        basis: byCheck ? 'verified_by_check' : 'requester',
+        ...(!byCheck && confirmation?.decisionId ? { decisionId: confirmation.decisionId } : {}),
+      },
+      audit: { round: round[0]?.round, checks: round.map((check) => check.checkKey) },
+    });
+  }
+
+  /** Opens a round on the plan in force — or pauses the run when the plan's acceptance cannot be
+   *  read (a stored plan is validated, so this is a broken row, not a person's mistake). */
+  private async openRound(): Promise<readonly AcceptanceCheckRow[] | null> {
+    const revision = this.goal.currentRevision;
+    if (revision === null) throw new Error('advanceGoalRun: a verifying goal run has no revision');
+    const checks = roundAcceptance(await this.plan(revision), this.goal.statement);
+    if (!checks) {
+      await this.pause('needs_decision', `revision ${revision}: its acceptance is unreadable`);
+      return null;
+    }
+    return openAcceptanceRound(this.client, this.ws, {
+      goalRunId: this.goal.id,
+      planRevision: revision,
+      checks,
+      actorPrincipalId: this.requester,
+    });
+  }
+
   // ----- transitions --------------------------------------------------------------------------
 
   private get actor(): GoalMoveActor {
@@ -937,12 +1038,12 @@ class Advance {
     return moveStepRun(this.client, this.actor, step, event, params);
   }
 
-  /** Pauses a running GoalRun. A paused one keeps its reason (the guard refuses changing it); the
+  /** Pauses a running or verifying GoalRun. A paused one keeps its reason (the guard refuses changing it); the
    *  later cause is only audited — once per pause: a cause already recorded since the run paused
    *  (by the pause itself or an earlier note, same reason and detail) is not written again, so a
    *  paused run advanced by every wake does not repeat it. */
   private async pause(reason: GoalRunPauseReason, detail: string): Promise<void> {
-    if (this.status !== 'running') {
+    if (this.status !== 'running' && this.status !== 'verifying') {
       if (await this.pauseCauseRecorded(reason, detail)) return;
       // Not a transition: an audit row only, no `GoalRunUpdated`.
       await writeAudit(this.client, {

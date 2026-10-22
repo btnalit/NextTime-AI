@@ -386,6 +386,44 @@ export type GoalOutcomeBasis = (typeof GOAL_OUTCOME_BASIS_VALUES)[number];
 export const GoalOutcomeBasisSchema = asEnum(GOAL_OUTCOME_BASIS_VALUES);
 
 /**
+ * S11 GO4a (plan §4.6, I-G5; `goal_acceptance_checks`, goal/0005): the kinds of a goal's acceptance
+ * check — what the platform verifies, or the requester confirms, before a GoalRun is achieved:
+ *   - `observe_predicate` (平台观察): an observe-class Operation, its params and a predicate over its
+ *     result (`ObservationCheck`), observed by the platform for the requester;
+ *   - `requester_confirm` (请求人确认): the requester says the goal is achieved — asked once every
+ *     observation of the round passed. A plan with no acceptance check has one implicitly.
+ * GO4b adds `fact_predicate`; W4 `review`.
+ */
+export const GOAL_ACCEPTANCE_CHECK_KIND_VALUES = [
+  'observe_predicate',
+  'requester_confirm',
+] as const;
+export type GoalAcceptanceCheckKind = (typeof GOAL_ACCEPTANCE_CHECK_KIND_VALUES)[number];
+export const GoalAcceptanceCheckKindSchema = asEnum(GOAL_ACCEPTANCE_CHECK_KIND_VALUES);
+
+/**
+ * S11 GO4a (goal/0005): where one acceptance check of a verification round stands:
+ *   - `pending` (验收中): not settled — an observation not made yet or tried again, a confirmation
+ *     the requester has not given;
+ *   - `passed` (通过): the observation satisfied the predicate, or the requester confirmed;
+ *   - `failed` (未通过): no observation satisfied the predicate by the last try;
+ *   - `unavailable` (无法验收): the observation could not be made — refused, or no answer by the
+ *     last try;
+ *   - `superseded` (已作废): the round ended before the check settled — the run left verification
+ *     (paused, cancelled, ended by the requester) or a newer round began.
+ * Only `pending` moves, once, to one of the others.
+ */
+export const GOAL_ACCEPTANCE_CHECK_STATUS_VALUES = [
+  'pending',
+  'passed',
+  'failed',
+  'unavailable',
+  'superseded',
+] as const;
+export type GoalAcceptanceCheckStatus = (typeof GOAL_ACCEPTANCE_CHECK_STATUS_VALUES)[number];
+export const GoalAcceptanceCheckStatusSchema = asEnum(GOAL_ACCEPTANCE_CHECK_STATUS_VALUES);
+
+/**
  * PlanRevision status: `proposed → accepted | rejected`. A revision's content never changes; which
  * accepted revision is in force is the GoalRun's `current_revision`, so "superseded" is derived
  * (an accepted revision older than the current one), not a status. Accepting requires the revision

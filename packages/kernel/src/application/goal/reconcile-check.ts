@@ -1,13 +1,5 @@
-import { type ObservationCheck, type Role, getCapability } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { type PoolLike, withWorkspace } from '../../adapters/db/pool.js';
-import {
-  type GateTarget,
-  type GatekeeperClient,
-  GatekeeperClientError,
-  GatekeeperTimeoutError,
-  gateFailureRetry,
-} from '../../adapters/gatekeeper-client/index.js';
 import {
   type ReconcileCheckAuditContext,
   type ReconcileCheckRow,
@@ -17,37 +9,19 @@ import {
   lockReconcileCheck,
   recordObservedReconciliation,
   settleReconcileCheck,
-  shownAuditReason,
 } from '../../governance/approval/index.js';
-import { roleMayUseCapability } from '../../governance/capability/index.js';
-import {
-  getGatekeeper,
-  getOrCreateGatekeeperServicePrincipal,
-  getPublishedOperation,
-  operationRecordDigest,
-} from '../../governance/gatekeepers/index.js';
-import {
-  ObserveParamsCarryCredentialsError,
-  redactSuspectedSecrets,
-  reviewObserveParams,
-} from '../../governance/redaction/index.js';
-import {
-  type PredicateOutcome,
-  endActivity,
-  evaluatePredicate,
-  lintPredicate,
-  recordSourceObservation,
-  startActivity,
-} from '../../substrate/epistemic/index.js';
-import {
-  observeRefusal,
-  readGatekeeperPlatformPolicy,
-  readObserveExclusions,
-} from '../gates/index.js';
-import { resolveGateTarget } from '../gateway/gate-target.js';
-import { getOrCreateGatekeeperSource } from '../gateway/observed-facts.js';
+import type { PredicateOutcome } from '../../substrate/epistemic/index.js';
 import { markGoalRunDue } from './advancer.js';
-import { predicateCredentialProblems } from './plan.js';
+import {
+  PLATFORM_OBSERVATION_MAX_BACKOFF_MS,
+  PLATFORM_OBSERVATION_RESULT_MAX_CHARS,
+  type PlatformObservationAnswer,
+  callPlatformObservation,
+  defaultPlatformObservationBackoffMs,
+  platformObservationRetryDelayMs,
+  preparePlatformObservation,
+  recordPlatformObservation,
+} from './platform-observation.js';
 import { lockStepRuns } from './reads.js';
 import { lockGoalRun } from './service.js';
 
@@ -130,12 +104,13 @@ export const DEFAULT_RECONCILE_CHECK_MAX_ATTEMPTS = 5;
 /** How long after its first attempt a check may still be tried again (pauses of the run
  *  included): an attempt whose retry would start later is its last. */
 export const DEFAULT_RECONCILE_CHECK_MAX_DURATION_MS = 15 * 60 * 1000;
-/** The longest wait between two attempts. */
-export const RECONCILE_CHECK_MAX_BACKOFF_MS = 5 * 60 * 1000;
+/** The longest wait between two attempts (`platform-observation.ts`). */
+export const RECONCILE_CHECK_MAX_BACKOFF_MS = PLATFORM_OBSERVATION_MAX_BACKOFF_MS;
 /** Checks looked at per tick. */
 export const DEFAULT_RECONCILE_CHECK_BATCH = 10;
-/** The most characters of an observation's result kept in its evidence. */
-export const RECONCILE_RESULT_MAX_CHARS = 8000;
+/** The most characters of an observation's result kept in its evidence
+ *  (`platform-observation.ts`). */
+export const RECONCILE_RESULT_MAX_CHARS = PLATFORM_OBSERVATION_RESULT_MAX_CHARS;
 
 const RECONCILE_ACTIVITY_KIND = 'goal_reconcile_check';
 const ENDED_GOAL_RUN_STATUSES = ['completed', 'failed', 'cancelled'] as const;
@@ -144,7 +119,7 @@ const ENDED_STEP_STATUSES = ['succeeded', 'superseded', 'cancelled', 'skipped'] 
 /** Delay before attempt `attempt + 1`: 30 s, doubling, at most
  *  {@link RECONCILE_CHECK_MAX_BACKOFF_MS} — with the defaults, five attempts within 7½ minutes. */
 export function defaultReconcileCheckBackoffMs(attempt: number): number {
-  return Math.min(30_000 * 2 ** Math.max(0, attempt - 1), RECONCILE_CHECK_MAX_BACKOFF_MS);
+  return defaultPlatformObservationBackoffMs(attempt);
 }
 
 export interface ReconcileCheckOptions {
@@ -166,17 +141,16 @@ export function reconcileRetryDelayMs(
   now: Date,
   options: ReconcileCheckOptions = {},
 ): number | null {
-  const maxAttempts = options.maxAttempts ?? DEFAULT_RECONCILE_CHECK_MAX_ATTEMPTS;
-  const maxDurationMs = options.maxDurationMs ?? DEFAULT_RECONCILE_CHECK_MAX_DURATION_MS;
-  if (check.attempts >= maxAttempts) return null;
-  const delayMs = (options.backoffMs ?? defaultReconcileCheckBackoffMs)(check.attempts);
-  const first = (check.firstAttemptAt ?? now).getTime();
-  return now.getTime() + delayMs > first + maxDurationMs ? null : delayMs;
+  return platformObservationRetryDelayMs(check, now, {
+    maxAttempts: options.maxAttempts ?? DEFAULT_RECONCILE_CHECK_MAX_ATTEMPTS,
+    maxDurationMs: options.maxDurationMs ?? DEFAULT_RECONCILE_CHECK_MAX_DURATION_MS,
+    ...(options.backoffMs ? { backoffMs: options.backoffMs } : {}),
+  });
 }
 
 export interface ReconcileCheckDeps {
   readonly pool: PoolLike;
-  readonly gatekeeperClient: Pick<GatekeeperClient, 'observe'>;
+  readonly gatekeeperClient: Parameters<typeof callPlatformObservation>[0];
   readonly options?: ReconcileCheckOptions;
 }
 
@@ -272,21 +246,6 @@ export async function runReconcileCheckTick(
   return due.length;
 }
 
-/** What the gate call needs, read in the requester's context — or why it is not made. */
-type PreparedCall =
-  | {
-      readonly kind: 'call';
-      readonly gate: GateTarget;
-      readonly operationDigest: string;
-      readonly credentialReview: Record<string, unknown>;
-    }
-  | { readonly kind: 'refused'; readonly code: string };
-
-type GateAnswer =
-  | { readonly kind: 'data'; readonly data: unknown }
-  | { readonly kind: 'refused'; readonly code: string; readonly error: string | null }
-  | { readonly kind: 'no_answer'; readonly code: string; readonly error: string | null };
-
 /** What the attempt came to, before the locks; the settle decides the rest (see the module
  *  comment). */
 type Settlement =
@@ -336,13 +295,18 @@ export async function runReconcileCheck(
 
   const check = claimed.observationCheck;
   const prepared = await withWorkspace(deps.pool, context, (client) =>
-    prepareCall(client, due, check),
+    preparePlatformObservation(client, due.workspaceId, due.requesterId, check),
   );
   if (prepared.kind === 'refused') {
     return settle(deps, due, claimed, { kind: 'unavailable', code: prepared.code });
   }
 
-  const answer = await callGate(deps, due, check, prepared);
+  const answer: PlatformObservationAnswer = await callPlatformObservation(
+    deps.gatekeeperClient,
+    due.requesterId,
+    check,
+    prepared,
+  );
   if (answer.kind === 'data') {
     return settle(deps, due, claimed, {
       kind: 'observed',
@@ -356,108 +320,6 @@ export async function runReconcileCheck(
     code: answer.code,
     error: answer.error,
   });
-}
-
-async function prepareCall(
-  client: PoolClient,
-  due: DueReconcileCheck,
-  check: ObservationCheck,
-): Promise<PreparedCall> {
-  const ws = due.workspaceId;
-  // The plan's own reviews, again: either may have learned more since the plan was confirmed.
-  if (lintPredicate(check.expect).length > 0) return { kind: 'refused', code: 'predicate_refused' };
-  if (predicateCredentialProblems(check.expect).length > 0) {
-    return { kind: 'refused', code: 'credentials_in_predicate' };
-  }
-  const principal = await client.query<{ role: Role; disabled: boolean }>(
-    `select role, disabled_at is not null as disabled from principals
-      where workspace_id = $1 and id = $2`,
-    [ws, due.requesterId],
-  );
-  const requester = principal.rows[0];
-  if (
-    !requester ||
-    requester.disabled ||
-    !roleMayUseCapability(requester.role, getCapability('observe_operation'))
-  ) {
-    return { kind: 'refused', code: 'requester_may_not_observe' };
-  }
-  const gatekeeper = await getGatekeeper(client, ws, check.gatekeeperId);
-  const platformPolicy = await readGatekeeperPlatformPolicy(client, ws, check.gatekeeperId);
-  const published = await getPublishedOperation(client, ws, check.gatekeeperId, check.operation);
-  const refusal = observeRefusal(await readObserveExclusions(client, ws, due.requesterId), {
-    gatekeeperId: check.gatekeeperId,
-    gateEnabled: gatekeeper !== null,
-    operationName: check.operation,
-    publishedMode: published?.operation.mode,
-    platformPolicy,
-  });
-  if (refusal || !gatekeeper || !published) {
-    return { kind: 'refused', code: refusal?.reason ?? 'gate_not_enabled' };
-  }
-  let credentialReview: Record<string, unknown>;
-  try {
-    credentialReview = reviewObserveParams(gatekeeper.name, check.operation, check.params ?? {});
-  } catch (err) {
-    if (err instanceof ObserveParamsCarryCredentialsError) {
-      return { kind: 'refused', code: err.code };
-    }
-    throw err;
-  }
-  return {
-    kind: 'call',
-    gate: await resolveGateTarget(client, ws, gatekeeper),
-    operationDigest: operationRecordDigest(published),
-    credentialReview,
-  };
-}
-
-function errorText(err: unknown): string | null {
-  return shownAuditReason(err instanceof Error ? err.message : String(err));
-}
-
-async function callGate(
-  deps: ReconcileCheckDeps,
-  due: DueReconcileCheck,
-  check: ObservationCheck,
-  prepared: Extract<PreparedCall, { kind: 'call' }>,
-): Promise<GateAnswer> {
-  try {
-    const result = await deps.gatekeeperClient.observe(prepared.gate, {
-      operation: check.operation,
-      params: check.params ?? {},
-      onBehalfOf: due.requesterId,
-      operationDigest: prepared.operationDigest,
-    });
-    return { kind: 'data', data: result.data };
-  } catch (err) {
-    const code =
-      err instanceof GatekeeperClientError
-        ? err.code
-        : err instanceof GatekeeperTimeoutError
-          ? 'gate_timeout'
-          : 'gate_error';
-    return {
-      kind: gateFailureRetry(err) === 'deterministic' ? 'refused' : 'no_answer',
-      code,
-      error: errorText(err),
-    };
-  }
-}
-
-/** A redacted result as the evidence keeps it: whole, or cut at
- *  {@link RECONCILE_RESULT_MAX_CHARS} of its JSON. */
-function keptResult(redacted: unknown): {
-  readonly result: unknown;
-  readonly truncated: boolean;
-} {
-  const serialized = JSON.stringify(redacted) ?? 'null';
-  if (serialized.length <= RECONCILE_RESULT_MAX_CHARS)
-    return { result: redacted, truncated: false };
-  return {
-    result: `${serialized.slice(0, RECONCILE_RESULT_MAX_CHARS)}… [${serialized.length - RECONCILE_RESULT_MAX_CHARS} more characters omitted]`,
-    truncated: true,
-  };
 }
 
 async function settle(
@@ -542,67 +404,38 @@ async function recordObservation(
   retryDelayMs: number | null,
 ): Promise<'seen' | 'not_seen' | 'retry'> {
   const ws = due.workspaceId;
-  const call = check.observationCheck;
-  // Judged on the redacted result, the one the evidence keeps: a stored result that is not cut
-  // gives the same outcome again.
-  const redacted = redactSuspectedSecrets(settlement.data ?? null, { secretFields: true }).value;
-  const evaluation = evaluatePredicate(call.expect, redacted);
-  const { result, truncated } = keptResult(redacted);
-  const activity = await startActivity(client, ws, {
-    kind: RECONCILE_ACTIVITY_KIND,
-    principalId: due.requesterId,
-    metadata: {
+  const { observationId, sourceId, evaluation } = await recordPlatformObservation(client, ws, {
+    requesterId: due.requesterId,
+    check: check.observationCheck,
+    activityKind: RECONCILE_ACTIVITY_KIND,
+    activityMetadata: {
       actionRequestId: due.actionRequestId,
       stepRunId: due.stepRunId,
       goalRunId: due.goalRunId,
-      gatekeeperId: call.gatekeeperId,
-      operation: call.operation,
+      gatekeeperId: check.observationCheck.gatekeeperId,
+      operation: check.observationCheck.operation,
       attempt: check.attempts,
     },
-  });
-  const sourceId = await getOrCreateGatekeeperSource(
-    client,
-    ws,
-    call.gatekeeperId,
-    await getOrCreateGatekeeperServicePrincipal(client, ws),
-  );
-  const observation = await recordSourceObservation(client, ws, {
-    sourceId,
-    activityId: activity.id,
-    content: {
+    about: {
       purpose: 'reconcile_check',
       actionRequestId: due.actionRequestId,
       stepRunId: due.stepRunId,
       goalRunId: due.goalRunId,
-      gatekeeperId: call.gatekeeperId,
-      operation: call.operation,
-      operationDigest: settlement.operationDigest,
-      params: redactSuspectedSecrets(call.params ?? {}, { secretFields: true }).value,
-      ...settlement.credentialReview,
-      expect: call.expect,
-      outcome: evaluation.outcome,
-      undetermined: evaluation.undetermined,
-      result,
-      truncated,
     },
+    data: settlement.data,
+    operationDigest: settlement.operationDigest,
+    credentialReview: settlement.credentialReview,
   });
-  await endActivity(client, ws, activity.id, 'completed');
 
   if (evaluation.outcome === 'satisfied') {
     await recordObservedReconciliation(client, ws, {
       actionRequestId: due.actionRequestId,
-      observationId: observation.id,
+      observationId,
       sourceId,
       actorPrincipalId: due.requesterId,
       context: { goalRunId: due.goalRunId },
     });
-    await settleReconcileCheck(
-      client,
-      ws,
-      check,
-      { status: 'seen', observationId: observation.id },
-      audit,
-    );
+    await settleReconcileCheck(client, ws, check, { status: 'seen', observationId }, audit);
     return 'seen';
   }
   if (retryDelayMs !== null) {
@@ -613,19 +446,13 @@ async function recordObservation(
       {
         delayMs: retryDelayMs,
         lastError: notSeenCode(evaluation.outcome),
-        observationId: observation.id,
+        observationId,
       },
       audit,
     );
     return 'retry';
   }
-  await settleReconcileCheck(
-    client,
-    ws,
-    check,
-    { status: 'not_seen', observationId: observation.id },
-    audit,
-  );
+  await settleReconcileCheck(client, ws, check, { status: 'not_seen', observationId }, audit);
   return 'not_seen';
 }
 

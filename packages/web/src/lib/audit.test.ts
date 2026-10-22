@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
-import type { ExplainResultWire } from '@nexttime/shared';
+import { CAPABILITY_REGISTRY, type ExplainResultWire } from '@nexttime/shared';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { PLATFORM_LIFECYCLE_ACTIONS } from './audit-pickers.js';
 import {
+  AUDIT_LIFECYCLE_ACTIONS,
   AUDIT_RESOURCE_TYPES,
   auditActionSuggestions,
   auditEntryFromHash,
@@ -13,6 +15,7 @@ import {
   isReadAuditAction,
   resourceHref,
 } from './audit.js';
+import { ACTION_COPY } from './capability-labels.js';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -82,6 +85,16 @@ describe('audit entry links', () => {
     expect(names).not.toContain('platform_audit_query');
     expect(names).toEqual([...names].sort());
     expect(AUDIT_RESOURCE_TYPES).toContain('action_request');
+  });
+
+  it('legacy 245 a: every labelled action outside a dispatch is offered on one of the two audit pages', () => {
+    const capabilities = new Set(CAPABILITY_REGISTRY.map((capability) => capability.name));
+    const offered = new Set<string>([...AUDIT_LIFECYCLE_ACTIONS, ...PLATFORM_LIFECYCLE_ACTIONS]);
+    const missing = Object.keys(ACTION_COPY).filter(
+      (action) => !capabilities.has(action) && !offered.has(action),
+    );
+    expect(missing).toEqual([]);
+    expect(auditActionSuggestions()).toContain('principal.container_handles_revoked');
   });
 });
 

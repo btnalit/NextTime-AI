@@ -45,6 +45,7 @@ import { startActivity } from '../../substrate/epistemic/index.js';
 import type { DomainEvent } from '../../substrate/outbox/index.js';
 import { createAdminWithTransaction } from '../gateway/action-executor.js';
 import { registerActionRequestDrainConsumer } from '../gateway/action-request-drain-consumer.js';
+import { reportTaskOutcome } from '../task/attribution.js';
 import {
   GoalStepClosedError,
   RunConfigSnapshotSchema,
@@ -56,6 +57,19 @@ import {
 } from '../task/index.js';
 import { failTaskAndReapWorkerRuns } from '../task/lifecycle.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/index.js';
+import {
+  type DueAcceptanceCheck,
+  listDueAcceptanceChecks,
+  runAcceptanceCheck,
+  runAcceptanceCheckTick,
+} from './acceptance-check.js';
+import { listAcceptanceChecks } from './acceptance-checks.js';
+import {
+  GOAL_OUTCOME_NOTE_MAX,
+  confirmGoalAcceptance,
+  endGoalRun,
+  readGoalAcceptance,
+} from './acceptance.js';
 import {
   DEFAULT_BLOCKED_RETRY_RECHECK_MS,
   type GoalAdvancerOptions,
@@ -99,7 +113,10 @@ import type { GoalRunBudget, GoalRunRow, StepRunRow } from './types.js';
  * and GO3c's: a person's finding on an action whose outcome is unknown and the requester's
  * re-execute decision, a finding that resumes no run (the requester does), scenarios S5 and S11;
  * and GO3d's: the platform's reconcile check a step declares (scenario S4, both ways), its refusals,
- * retries and fencing, and the plan checks of a declaration.
+ * retries and fencing, and the plan checks of a declaration; and GO4a's: verifying a run — its
+ * acceptance observations and the requester's confirmation, scenario S6 (a check that never passes
+ * pauses the run with its evidence), the requester's outcome and what it overrides, a round ended
+ * by a pause, a hold or a cancel, the scan's part, and the plan checks of an acceptance check.
  *
  * Every test advances its own GoalRuns by id (`advanceGoalRun`): the claim and the reconcile scan
  * are cross-workspace, and the shared database holds other files' rows, so tests that exercise
@@ -4582,6 +4599,822 @@ describe.runIf(DATABASE_URL !== undefined)(
             expect(await propose([base])).toMatchObject({ goalRunId: expect.any(String) });
           });
         });
+      });
+    });
+
+    // -------------------------------------------------------------------------------------------
+
+    describe('verifying a run: its acceptance checks and the requester’s outcome (S11 GO4a, S6, I-G5)', () => {
+      const observeClient = new FakeObserveClient();
+      let gate: string;
+      const STATUS: Operation = {
+        name: 'svc.status',
+        binding: { kind: 'http', method: 'GET', path: '/status' },
+        params_schema: {},
+        mode: 'observe',
+        blast_radius: 'low',
+        reversibility: false,
+        auto_approvable: true,
+        await_decision: false,
+        reads: [],
+        writes: [],
+      };
+
+      beforeAll(async () => {
+        gate = await admin(async (client) => {
+          const activity = await startActivity(client, workspaceId, {
+            kind: 'test.connection',
+            principalId: ownerId,
+          });
+          const registered = await registerGatekeeper(client, workspaceId, {
+            name: `go4a-gate-${randomUUID().slice(0, 8)}`,
+            transportKind: 'http',
+            target: 'example-system',
+            endpoint: 'http://127.0.0.1:9',
+            connectionSecretSalt: 'f'.repeat(32),
+            activityId: activity.id,
+            registeredBy: { id: ownerId, kind: 'human' },
+          });
+          await importManifest(client, workspaceId, {
+            gatekeeperId: registered.gatekeeperId,
+            operations: [STATUS],
+            proposedBy: { id: ownerId, kind: 'human' },
+            activityId: activity.id,
+          });
+          await publishOperation(client, workspaceId, {
+            gatekeeperId: registered.gatekeeperId,
+            name: STATUS.name,
+          });
+          return registered.gatekeeperId;
+        });
+      });
+
+      const by = (principalId: string, role: 'member' | 'owner' = 'member') => ({
+        principalId,
+        role,
+      });
+      // Functions: `gate` is set in `beforeAll`, after this block is collected.
+      const observe = (key = 'up', field = 'state', value: unknown = 'running') => ({
+        kind: 'observe_predicate' as const,
+        key,
+        check: {
+          gatekeeperId: gate,
+          operation: 'svc.status',
+          params: { name: 'web' },
+          expect: { path: field, op: 'eq', value },
+        },
+      });
+      const CONFIRM = {
+        kind: 'requester_confirm' as const,
+        key: 'report',
+        prompt: 'Is the weekly report in the shared folder?',
+      };
+      const STATEMENT = 'publish the weekly report';
+
+      async function proposeWith(
+        requester: string,
+        acceptance: readonly unknown[] | undefined,
+        steps: readonly StepSpec[] = [{ key: 'a' }],
+      ) {
+        const created = await asRequester(requester, (client) =>
+          createGoalRun(client, workspaceId, {
+            requesterId: requester,
+            proposedBy: requester,
+            statement: STATEMENT,
+            plan: { ...planOf(steps), ...(acceptance ? { acceptance } : {}) },
+            budget: BUDGET,
+          }),
+        );
+        await asRequester(requester, (client) =>
+          confirmGoalRun(client, workspaceId, {
+            goalRunId: created.goalRunId,
+            confirmedBy: requester,
+          }),
+        );
+        return created;
+      }
+
+      /** A confirmed run of one step `a` with `acceptance` (none: the plan has no checks), run
+       *  until every step is done — the advance that moves it to `verifying` is `entered`. */
+      async function verifyingGoal(requester: string, acceptance?: readonly unknown[]) {
+        const created = await proposeWith(requester, acceptance);
+        await advance(created.goalRunId, requester);
+        await completeStep((await stepsOf(created.goalRunId)).a?.id as string, requester);
+        const entered = await advance(created.goalRunId, requester);
+        return { goalRunId: created.goalRunId, created, entered };
+      }
+
+      const acceptanceOf = async (goalRunId: string) =>
+        (await admin((client) => readGoalAcceptance(client, workspaceId, goalRunId))) ?? undefined;
+      const rowsOf = (goalRunId: string) =>
+        admin((client) => listAcceptanceChecks(client, workspaceId, goalRunId));
+      const dueOf = async (goalRunId: string): Promise<readonly DueAcceptanceCheck[]> =>
+        (await listDueAcceptanceChecks(pool, 1000)).filter((due) => due.goalRunId === goalRunId);
+      const checkDeps = (options: Parameters<typeof runAcceptanceCheck>[0]['options'] = {}) => ({
+        pool,
+        gatekeeperClient: observeClient,
+        options,
+      });
+      /** Runs the attempt of `key` now (its backoff skipped). */
+      async function observeNow(
+        goalRunId: string,
+        key = 'up',
+        options: Parameters<typeof runAcceptanceCheck>[0]['options'] = {},
+      ) {
+        await raw(
+          `update goal_acceptance_checks set next_attempt_at = now()
+            where workspace_id = $1 and goal_run_id = $2 and check_key = $3 and status = 'pending'`,
+          [workspaceId, goalRunId, key],
+        );
+        const due = (await dueOf(goalRunId)).find((candidate) => candidate.checkKey === key);
+        if (!due) throw new Error(`the check ${key} of ${goalRunId} is not due`);
+        return runAcceptanceCheck(checkDeps(options), due);
+      }
+      const evidenceOf = async (goalRunId: string, key = 'up') =>
+        (
+          await admin((client) =>
+            client.query<{ id: string; content: Record<string, unknown> }>(
+              `select id, content from observations
+                where workspace_id = $1 and content ->> 'purpose' = 'acceptance_check'
+                  and content ->> 'goalRunId' = $2 and content ->> 'checkKey' = $3
+                order by created_at, id`,
+              [workspaceId, goalRunId, key],
+            ),
+          )
+        ).rows;
+      const decisionOf = async (id: string | null) =>
+        (
+          await raw<{ decided_by: string; status: string; rationale: Record<string, unknown> }>(
+            'select decided_by, status, rationale from decisions where workspace_id = $1 and id = $2',
+            [workspaceId, id],
+          )
+        )[0];
+      const confirmAs = (goalRunId: string, principal: string, note?: string) =>
+        asRequester(principal, (client) =>
+          confirmGoalAcceptance(client, workspaceId, {
+            goalRunId,
+            actor: by(principal),
+            ...(note ? { note } : {}),
+          }),
+        );
+      const endAs = (
+        goalRunId: string,
+        principal: string,
+        outcome: 'achieved' | 'not_achieved',
+        note?: string,
+        role: 'member' | 'owner' = 'member',
+      ) =>
+        asRequester(principal, (client) =>
+          endGoalRun(client, workspaceId, {
+            goalRunId,
+            actor: by(principal, role),
+            outcome,
+            ...(note ? { note } : {}),
+          }),
+        );
+      const pauseDetail = async (goalRunId: string) =>
+        (await goalAudit(goalRunId)).filter((row) => row.action === 'goal_run.pause').at(-1)
+          ?.payload.detail;
+      const RUNNING = async () => ({ data: { name: 'web', state: 'running' } });
+
+      it('achieved by check: the platform observes every check, they pass, and the run completes with nobody asked', async () => {
+        const requester = await newPrincipal();
+        const { goalRunId, created, entered } = await verifyingGoal(requester, [observe()]);
+        expect(created.hints).toEqual([]);
+        expect(entered).toMatchObject({ status: 'verifying', nextTickAt: null });
+        expect(await acceptanceOf(goalRunId)).toMatchObject({
+          status: 'verifying',
+          rounds: [
+            {
+              round: 1,
+              planRevision: 1,
+              checks: [
+                {
+                  checkKey: 'up',
+                  kind: 'observe_predicate',
+                  status: 'pending',
+                  check: observe().check,
+                  attempts: 0,
+                  nextAttemptAt: expect.any(Date),
+                  overridden: false,
+                },
+              ],
+            },
+          ],
+          outcome: null,
+        });
+        expect(
+          (await goalAudit(goalRunId)).find((row) => row.action === 'goal_run.acceptance_round')
+            ?.payload,
+        ).toMatchObject({ round: 1, checks: [{ key: 'up', kind: 'observe_predicate' }] });
+        // Verifying keeps no wall clock: another advance changes nothing.
+        expect(await advance(goalRunId, requester)).toMatchObject({
+          status: 'verifying',
+          nextTickAt: null,
+        });
+
+        observeClient.answer = RUNNING;
+        const calls = observeClient.calls.length;
+        expect(await observeNow(goalRunId)).toBe('passed');
+        expect(observeClient.calls.slice(calls)).toEqual([
+          {
+            target: expect.objectContaining({
+              credential: expect.objectContaining({ kind: 'connection' }),
+            }),
+            input: {
+              operation: 'svc.status',
+              params: { name: 'web' },
+              onBehalfOf: requester,
+              operationDigest: expect.any(String),
+            },
+          },
+        ]);
+        const [evidence] = await evidenceOf(goalRunId);
+        expect(evidence?.content).toMatchObject({
+          purpose: 'acceptance_check',
+          goalRunId,
+          round: 1,
+          checkKey: 'up',
+          outcome: 'satisfied',
+          result: { name: 'web', state: 'running' },
+        });
+        expect((await rowsOf(goalRunId))[0]).toMatchObject({
+          status: 'passed',
+          attempts: 1,
+          observationId: evidence?.id,
+          leaseUntil: null,
+        });
+        expect(await isDue(goalRunId)).toBe(true);
+
+        expect(await advance(goalRunId, requester)).toMatchObject({ status: 'completed' });
+        expect(await goalOf(goalRunId)).toMatchObject({
+          status: 'completed',
+          outcome: 'achieved',
+          outcomeBasis: 'verified_by_check',
+          outcomeDecisionId: null,
+        });
+        expect((await acceptanceOf(goalRunId))?.outcome).toEqual({
+          outcome: 'achieved',
+          basis: 'verified_by_check',
+          decisionId: null,
+          overriddenChecks: [],
+        });
+        expect(
+          (await goalAudit(goalRunId)).find((row) => row.action === 'goal_run.complete')?.payload,
+        ).toMatchObject({
+          by: 'advancer',
+          outcome: 'achieved',
+          outcomeBasis: 'verified_by_check',
+          round: 1,
+          checks: ['up'],
+        });
+      });
+
+      it('a plan with no check the platform makes says so; its round asks the requester alone, and only their confirmation achieves the goal — on their word', async () => {
+        const requester = await newPrincipal();
+        const someoneElse = await newPrincipal();
+        const { goalRunId, created } = await verifyingGoal(requester);
+        expect(created.hints).toEqual([
+          { code: 'requester_confirm_only', message: expect.any(String) },
+        ]);
+        const revision = await admin((client) =>
+          getPlanRevision(client, workspaceId, goalRunId, 1),
+        );
+        expect(revision?.validation).toMatchObject({
+          hints: [{ code: 'requester_confirm_only' }],
+        });
+        expect((await acceptanceOf(goalRunId))?.rounds).toMatchObject([
+          {
+            round: 1,
+            checks: [
+              {
+                checkKey: 'requester_confirm',
+                kind: 'requester_confirm',
+                status: 'pending',
+                prompt: STATEMENT,
+                nextAttemptAt: null,
+              },
+            ],
+          },
+        ]);
+        expect(await dueOf(goalRunId)).toEqual([]);
+        expect(await advance(goalRunId, requester)).toMatchObject({ status: 'verifying' });
+
+        for (const [principal, role] of [
+          [someoneElse, 'member'],
+          [ownerId, 'owner'],
+        ] as const) {
+          await expect(
+            asRequester(principal, (client) =>
+              confirmGoalAcceptance(client, workspaceId, { goalRunId, actor: by(principal, role) }),
+            ),
+          ).rejects.toThrow(/only the requester gives a goal run its outcome/);
+        }
+        await expect(endAs(goalRunId, requester, 'achieved')).rejects.toThrow(
+          /is verifying; confirm its acceptance check/,
+        );
+        const confirmed = await confirmAs(goalRunId, requester, 'checked the folder myself');
+        expect(confirmed).toMatchObject({ status: 'verifying', changed: true });
+        expect(await confirmAs(goalRunId, requester)).toEqual({
+          status: 'verifying',
+          changed: false,
+          decisionId: confirmed.decisionId,
+        });
+        expect(await isDue(goalRunId)).toBe(true);
+        expect(await decisionOf(confirmed.decisionId)).toEqual({
+          decided_by: requester,
+          status: 'approved',
+          rationale: {
+            decision: 'goal_outcome',
+            goalRunId,
+            outcome: 'achieved',
+            round: 1,
+            checkKey: 'requester_confirm',
+            note: 'checked the folder myself',
+          },
+        });
+
+        await advance(goalRunId, requester);
+        expect(await goalOf(goalRunId)).toMatchObject({
+          status: 'completed',
+          outcome: 'achieved',
+          outcomeBasis: 'requester',
+          outcomeDecisionId: confirmed.decisionId,
+        });
+        expect((await acceptanceOf(goalRunId))?.outcome).toEqual({
+          outcome: 'achieved',
+          basis: 'requester',
+          decisionId: confirmed.decisionId,
+          overriddenChecks: [],
+        });
+      });
+
+      it('I-G5: what the step’s Worker or the entry agent reports gives the goal no outcome — the Task’s agent_reported achieved neither passes a check nor completes the run', async () => {
+        const requester = await newPrincipal();
+        for (const acceptance of [[observe()], undefined]) {
+          const { goalRunId } = await verifyingGoal(requester, acceptance);
+          const task = await latestAttempt((await stepsOf(goalRunId)).a?.id as string);
+          expect(
+            await asRequester(requester, (client) =>
+              reportTaskOutcome(client, workspaceId, requester, task.id, 'achieved'),
+            ),
+          ).toMatchObject({ outcome: 'achieved', basis: 'agent_reported' });
+          expect(await advance(goalRunId, requester)).toMatchObject({ status: 'verifying' });
+          expect(await goalOf(goalRunId)).toMatchObject({ outcome: null, outcomeBasis: null });
+          expect((await rowsOf(goalRunId)).map((row) => row.status)).toEqual(['pending']);
+        }
+      });
+
+      it('observations first, then the requester: the confirmation waits for every observation to pass, and the run is achieved by check', async () => {
+        const requester = await newPrincipal();
+        const { goalRunId } = await verifyingGoal(requester, [observe(), CONFIRM]);
+        await expect(confirmAs(goalRunId, requester)).rejects.toThrow(
+          /the platform's checks have not all passed yet \(up: pending\); the requester confirms after them/,
+        );
+        observeClient.answer = RUNNING;
+        expect(await observeNow(goalRunId)).toBe('passed');
+        expect(await advance(goalRunId, requester)).toMatchObject({ status: 'verifying' });
+        expect(
+          (await goalAudit(goalRunId))
+            .map((row) => row.action)
+            .filter((a) => a === 'goal_run.pause'),
+        ).toEqual([]);
+
+        const confirmed = await confirmAs(goalRunId, requester);
+        expect(confirmed.changed).toBe(true);
+        await advance(goalRunId, requester);
+        expect(await goalOf(goalRunId)).toMatchObject({
+          status: 'completed',
+          outcome: 'achieved',
+          outcomeBasis: 'verified_by_check',
+          outcomeDecisionId: null,
+        });
+        expect((await acceptanceOf(goalRunId))?.rounds[0]?.checks).toMatchObject([
+          { checkKey: 'report', status: 'passed', decisionId: confirmed.decisionId },
+          { checkKey: 'up', status: 'passed' },
+        ]);
+      });
+
+      it('S6: an observation that never satisfies its predicate is tried again with backoff, each one recorded; at the last the run pauses needs_decision with the evidence, never achieved — and the requester ends it as not achieved', async () => {
+        const requester = await newPrincipal();
+        const { goalRunId } = await verifyingGoal(requester, [observe(), CONFIRM]);
+        observeClient.answer = async () => ({ data: { name: 'web', state: 'exited' } });
+        const options = { maxAttempts: 2, backoffMs: () => 60_000 };
+        expect(await observeNow(goalRunId, 'up', options)).toBe('retry');
+        const [first] = await evidenceOf(goalRunId);
+        expect((await rowsOf(goalRunId)).find((row) => row.checkKey === 'up')).toMatchObject({
+          status: 'pending',
+          attempts: 1,
+          leaseUntil: null,
+          lastError: 'predicate_unsatisfied',
+          observationId: first?.id,
+        });
+        expect(await dueOf(goalRunId)).toEqual([]);
+        expect(await advance(goalRunId, requester)).toMatchObject({ status: 'verifying' });
+
+        expect(await observeNow(goalRunId, 'up', options)).toBe('failed');
+        const evidence = await evidenceOf(goalRunId);
+        expect(evidence).toHaveLength(2);
+        expect(evidence.map((row) => row.content.outcome)).toEqual(['unsatisfied', 'unsatisfied']);
+        expect((await rowsOf(goalRunId)).find((row) => row.checkKey === 'up')).toMatchObject({
+          status: 'failed',
+          attempts: 2,
+          observationId: evidence[1]?.id,
+          lastError: 'predicate_unsatisfied',
+        });
+        await expect(confirmAs(goalRunId, requester)).rejects.toThrow(
+          /have not all passed yet \(up: failed\)/,
+        );
+
+        await advance(goalRunId, requester);
+        expect(await goalOf(goalRunId)).toMatchObject({
+          status: 'paused',
+          pauseReason: 'needs_decision',
+          outcome: null,
+        });
+        expect(await pauseDetail(goalRunId)).toBe(
+          'round 1: acceptance check up: its observation did not satisfy the predicate; end the goal as not achieved (or as achieved, on your word), revise the plan, resume to verify again, or cancel',
+        );
+        // The confirmation the round still asked is superseded with it.
+        expect((await acceptanceOf(goalRunId))?.rounds[0]?.checks).toMatchObject([
+          { checkKey: 'report', status: 'superseded' },
+          { checkKey: 'up', status: 'failed', observationId: evidence[1]?.id },
+        ]);
+
+        const ended = await endAs(
+          goalRunId,
+          requester,
+          'not_achieved',
+          'the service never came back',
+        );
+        expect(ended).toMatchObject({
+          status: 'completed',
+          changed: true,
+          overriddenChecks: [],
+          skippedStepRunIds: [],
+        });
+        expect(await endAs(goalRunId, requester, 'not_achieved')).toMatchObject({
+          changed: false,
+          decisionId: ended.decisionId,
+        });
+        expect(await decisionOf(ended.decisionId)).toMatchObject({
+          decided_by: requester,
+          rationale: {
+            decision: 'goal_outcome',
+            goalRunId,
+            outcome: 'not_achieved',
+            from: 'paused',
+            pauseReason: 'needs_decision',
+            note: 'the service never came back',
+          },
+        });
+        expect((await acceptanceOf(goalRunId))?.outcome).toEqual({
+          outcome: 'not_achieved',
+          basis: 'requester',
+          decisionId: ended.decisionId,
+          overriddenChecks: [],
+        });
+      });
+
+      it('the requester may declare it achieved over checks that did not pass — never silently: the decision, the audit and the read model name each overridden check with its evidence', async () => {
+        const requester = await newPrincipal();
+        const { goalRunId } = await verifyingGoal(requester, [
+          observe('up'),
+          observe('disk', 'free', 'plenty'),
+          observe('health', 'health', 'ok'),
+        ]);
+        observeClient.answer = async () => ({
+          data: { name: 'web', state: 'running', free: 'low' },
+        });
+        const once = { maxAttempts: 1 };
+        expect(await observeNow(goalRunId, 'up', once)).toBe('passed');
+        expect(await observeNow(goalRunId, 'disk', once)).toBe('failed');
+        observeClient.answer = async () => {
+          throw new GatekeeperClientError('could not connect', {
+            code: 'gate_unreachable',
+            status: 0,
+          });
+        };
+        expect(await observeNow(goalRunId, 'health', once)).toBe('unavailable');
+        await advance(goalRunId, requester);
+        expect(await pauseDetail(goalRunId)).toBe(
+          'round 1: acceptance check disk: its observation did not satisfy the predicate; acceptance check health: unavailable (gate_unreachable); end the goal as not achieved (or as achieved, on your word), revise the plan, resume to verify again, or cancel',
+        );
+
+        await expect(endAs(goalRunId, ownerId, 'achieved', undefined, 'owner')).rejects.toThrow(
+          /only the requester gives a goal run its outcome/,
+        );
+        const [diskEvidence] = await evidenceOf(goalRunId, 'disk');
+        const overriddenChecks = [
+          {
+            checkKey: 'disk',
+            kind: 'observe_predicate',
+            round: 1,
+            status: 'failed',
+            observationId: diskEvidence?.id,
+            lastError: 'predicate_unsatisfied',
+          },
+          {
+            checkKey: 'health',
+            kind: 'observe_predicate',
+            round: 1,
+            status: 'unavailable',
+            observationId: null,
+            lastError: 'gate_unreachable',
+          },
+        ];
+        const ended = await endAs(goalRunId, requester, 'achieved', 'disk is fine, I checked');
+        expect(ended).toMatchObject({ status: 'completed', overriddenChecks });
+        expect(await goalOf(goalRunId)).toMatchObject({
+          outcome: 'achieved',
+          outcomeBasis: 'requester',
+          outcomeDecisionId: ended.decisionId,
+        });
+        expect((await decisionOf(ended.decisionId))?.rationale).toMatchObject({
+          outcome: 'achieved',
+          from: 'paused',
+          overriddenChecks,
+        });
+        expect(
+          (await goalAudit(goalRunId)).find((row) => row.action === 'goal_run.complete')?.payload,
+        ).toMatchObject({
+          by: 'person',
+          outcome: 'achieved',
+          outcomeBasis: 'requester',
+          outcomeDecisionId: ended.decisionId,
+          pauseReason: 'needs_decision',
+          overriddenChecks,
+        });
+        const view = await acceptanceOf(goalRunId);
+        expect(view?.outcome).toEqual({
+          outcome: 'achieved',
+          basis: 'requester',
+          decisionId: ended.decisionId,
+          overriddenChecks,
+        });
+        expect(
+          view?.rounds[0]?.checks.map((check) => [check.checkKey, check.status, check.overridden]),
+        ).toEqual([
+          ['disk', 'failed', true],
+          ['health', 'unavailable', true],
+          ['up', 'passed', false],
+        ]);
+      });
+
+      it('a pause, an owner’s hold or a cancel ends the round: nothing is observed while the run is not verifying, an attempt under way writes nothing, and a resume verifies in a new round', async () => {
+        const requester = await newPrincipal();
+        const { goalRunId } = await verifyingGoal(requester, [observe()]);
+
+        // The run is paused while the gate answers: the attempt writes nothing.
+        observeClient.answer = async () => {
+          await asRequester(requester, (client) =>
+            pauseGoalRun(client, workspaceId, { goalRunId, actor: by(requester) }),
+          );
+          return { data: { state: 'running' } };
+        };
+        expect(await observeNow(goalRunId)).toBe('skipped');
+        expect(await evidenceOf(goalRunId)).toEqual([]);
+        expect(await goalOf(goalRunId)).toMatchObject({
+          status: 'paused',
+          pauseReason: 'requested',
+        });
+        expect(await rowsOf(goalRunId)).toMatchObject([
+          { round: 1, status: 'superseded', attempts: 1, observationId: null },
+        ]);
+        expect(
+          (await goalAudit(goalRunId)).find((row) => row.action === 'goal_run.pause')?.payload,
+        ).toMatchObject({ supersededAcceptanceChecks: 1 });
+        expect(await dueOf(goalRunId)).toEqual([]);
+        await advance(goalRunId, requester);
+        expect(await rowsOf(goalRunId)).toHaveLength(1);
+
+        // An owner's hold: the requester resumes only after it is lifted.
+        await asRequester(ownerId, (client) =>
+          pauseGoalRun(client, workspaceId, { goalRunId, actor: by(ownerId, 'owner') }),
+        );
+        await expect(
+          asRequester(requester, (client) =>
+            resumeGoalRun(client, workspaceId, { goalRunId, actor: by(requester) }),
+          ),
+        ).rejects.toThrow(/a workspace owner holds it/);
+        await advance(goalRunId, requester);
+        expect(await rowsOf(goalRunId)).toHaveLength(1);
+        await asRequester(ownerId, (client) =>
+          releaseGoalRunHold(client, workspaceId, { goalRunId, actor: by(ownerId, 'owner') }),
+        );
+        await asRequester(requester, (client) =>
+          resumeGoalRun(client, workspaceId, { goalRunId, actor: by(requester) }),
+        );
+        expect(await advance(goalRunId, requester)).toMatchObject({ status: 'verifying' });
+        expect(
+          (await rowsOf(goalRunId)).map((row) => [row.round, row.checkKey, row.status]),
+        ).toEqual([
+          [1, 'up', 'superseded'],
+          [2, 'up', 'pending'],
+        ]);
+
+        observeClient.answer = RUNNING;
+        expect(await observeNow(goalRunId)).toBe('passed');
+        await advance(goalRunId, requester);
+        expect(await goalOf(goalRunId)).toMatchObject({
+          status: 'completed',
+          outcome: 'achieved',
+          outcomeBasis: 'verified_by_check',
+        });
+
+        // A cancel supersedes the round too; a cancelled run has no outcome.
+        const other = await newPrincipal();
+        const cancelled = await verifyingGoal(other, [observe()]);
+        await asRequester(other, (client) =>
+          cancelGoalRun(client, workspaceId, {
+            goalRunId: cancelled.goalRunId,
+            actor: by(other),
+          }),
+        );
+        await advance(cancelled.goalRunId, other);
+        expect(await goalOf(cancelled.goalRunId)).toMatchObject({
+          status: 'cancelled',
+          outcome: null,
+        });
+        expect(await rowsOf(cancelled.goalRunId)).toMatchObject([{ status: 'superseded' }]);
+        expect(await acceptanceOf(cancelled.goalRunId)).toMatchObject({ outcome: null });
+        await expect(endAs(cancelled.goalRunId, other, 'not_achieved')).rejects.toThrow(
+          /is cancelled; a paused or verifying run is ended with an outcome/,
+        );
+      });
+
+      it('ending a run with an outcome: only the requester, only once nothing of it may still run; steps not started are skipped; an achieved without any round names every check as not run', async () => {
+        const requester = await newPrincipal();
+        const created = await proposeWith(
+          requester,
+          [observe()],
+          [{ key: 'a' }, { key: 'b', dependsOn: ['a'] }],
+        );
+        const goalRunId = created.goalRunId;
+        await advance(goalRunId, requester);
+        await expect(endAs(goalRunId, requester, 'not_achieved')).rejects.toThrow(
+          /is running; a paused or verifying run is ended with an outcome/,
+        );
+        await asRequester(requester, (client) =>
+          pauseGoalRun(client, workspaceId, { goalRunId, actor: by(requester) }),
+        );
+        await expect(endAs(goalRunId, requester, 'achieved')).rejects.toThrow(
+          /step a is running; wait for it, or cancel the run/,
+        );
+        await completeStep((await stepsOf(goalRunId)).a?.id as string, requester);
+        await advance(goalRunId, requester);
+        expect((await stepsOf(goalRunId)).a?.status).toBe('succeeded');
+        // Each request is looked at on its own: one whose outcome is unknown — it may have run,
+        // and the run may end over it — never hides one that still awaits its decision or runs
+        // (review #493 on GO4a: the step's combined effect ranks `reconcile` above `approval`).
+        const a = (await stepsOf(goalRunId)).a?.id as string;
+        await seedAction(a, null, 'failed', 'outcome_unknown');
+        for (const status of ['pending_approval', 'auto_approved', 'executing']) {
+          const inFlight = await seedAction(a, null, status);
+          await expect(endAs(goalRunId, requester, 'not_achieved')).rejects.toThrow(
+            /an action of step a still awaits a decision or runs; wait for it, or cancel the run/,
+          );
+          await setActionStatus(inFlight, 'executed');
+        }
+        await expect(
+          endAs(goalRunId, requester, 'achieved', 'x'.repeat(GOAL_OUTCOME_NOTE_MAX + 1)),
+        ).rejects.toThrow(/a note is at most/);
+
+        const ended = await endAs(goalRunId, requester, 'achieved');
+        const b = (await stepsOf(goalRunId)).b;
+        expect(ended).toMatchObject({
+          status: 'completed',
+          skippedStepRunIds: [b?.id],
+          overriddenChecks: [
+            {
+              checkKey: 'up',
+              kind: 'observe_predicate',
+              round: null,
+              status: 'not_run',
+              observationId: null,
+              lastError: null,
+            },
+          ],
+        });
+        expect(b?.status).toBe('skipped');
+        expect(await acceptanceOf(goalRunId)).toMatchObject({
+          rounds: [],
+          outcome: {
+            basis: 'requester',
+            overriddenChecks: [{ checkKey: 'up', status: 'not_run' }],
+          },
+        });
+      });
+
+      it('the reconcile scan opens a round a run never got and wakes one whose wake was lost; a leftover pending row of a run that left verifying is superseded without a call', async () => {
+        const requester = await newPrincipal();
+        const { goalRunId } = await verifyingGoal(requester, [observe()]);
+        // While its observation is pending, nothing to wake.
+        await raw('update goal_runs set next_tick_at = null where workspace_id = $1 and id = $2', [
+          workspaceId,
+          goalRunId,
+        ]);
+        await markReconcileDue(pool);
+        expect(await isDue(goalRunId)).toBe(false);
+        // Settled, but the wake was lost.
+        observeClient.answer = RUNNING;
+        expect(await observeNow(goalRunId)).toBe('passed');
+        await raw('update goal_runs set next_tick_at = null where workspace_id = $1 and id = $2', [
+          workspaceId,
+          goalRunId,
+        ]);
+        await markReconcileDue(pool);
+        expect(await isDue(goalRunId)).toBe(true);
+        await advance(goalRunId, requester);
+        expect((await goalOf(goalRunId)).status).toBe('completed');
+
+        // A run that entered verifying under a release without verification has no round.
+        const other = await newPrincipal();
+        const bare = await verifyingGoal(other, [observe()]);
+        await raw(
+          'delete from goal_acceptance_checks where workspace_id = $1 and goal_run_id = $2',
+          [workspaceId, bare.goalRunId],
+        );
+        await raw('update goal_runs set next_tick_at = null where workspace_id = $1 and id = $2', [
+          workspaceId,
+          bare.goalRunId,
+        ]);
+        await markReconcileDue(pool);
+        expect(await isDue(bare.goalRunId)).toBe(true);
+        await advance(bare.goalRunId, other);
+        expect(await rowsOf(bare.goalRunId)).toMatchObject([
+          { round: 1, checkKey: 'up', status: 'pending' },
+        ]);
+
+        // A pending row a release left behind when it moved the run out of verifying.
+        await raw(
+          "update goal_runs set status = 'paused', pause_reason = 'requested' where workspace_id = $1 and id = $2",
+          [workspaceId, bare.goalRunId],
+        );
+        const [leftover] = await dueOf(bare.goalRunId);
+        expect(leftover).toMatchObject({ checkKey: 'up', closedBy: 'goal_left_verifying' });
+        const calls = observeClient.calls.length;
+        expect(await runAcceptanceCheck(checkDeps(), leftover as DueAcceptanceCheck)).toBe(
+          'superseded',
+        );
+        expect(observeClient.calls).toHaveLength(calls);
+        expect(await rowsOf(bare.goalRunId)).toMatchObject([{ status: 'superseded' }]);
+      });
+
+      it('a check the requester may no longer make is unavailable at once; the tick runs every due observation', async () => {
+        const demoted = await newPrincipal();
+        const refused = await verifyingGoal(demoted, [observe()]);
+        await raw("update principals set role = 'auditor' where workspace_id = $1 and id = $2", [
+          workspaceId,
+          demoted,
+        ]);
+        const calls = observeClient.calls.length;
+        expect(await observeNow(refused.goalRunId)).toBe('unavailable');
+        expect(observeClient.calls).toHaveLength(calls);
+        expect(await rowsOf(refused.goalRunId)).toMatchObject([
+          { status: 'unavailable', lastError: 'requester_may_not_observe', observationId: null },
+        ]);
+
+        const requester = await newPrincipal();
+        const first = await verifyingGoal(requester, [observe()]);
+        const second = await verifyingGoal(requester, [observe()]);
+        observeClient.answer = RUNNING;
+        const errors: unknown[] = [];
+        expect(
+          await runAcceptanceCheckTick(checkDeps(), {
+            limit: 1000,
+            onError: (err) => errors.push(err),
+          }),
+        ).toBeGreaterThanOrEqual(2);
+        expect(errors).toEqual([]);
+        expect((await rowsOf(first.goalRunId))[0]?.status).toBe('passed');
+        expect((await rowsOf(second.goalRunId))[0]?.status).toBe('passed');
+      });
+
+      it('a plan’s acceptance observation names a published observe-class Operation of an enabled gate, with params that carry no credential', async () => {
+        const requester = await newPrincipal();
+        const unknownGate = randomUUID();
+        const jwtLike = ['eyJhbGciOiJIUzI1NiJ9', 'eyJzdWIiOiJnbzRhIn0', 'c2lnbmF0dXJlLWdvNGE'].join(
+          '.',
+        );
+        let problems: readonly string[] = [];
+        try {
+          await proposeWith(requester, [
+            { ...observe('a1'), check: { ...observe().check, operation: 'svc.missing' } },
+            { ...observe('a2'), check: { ...observe().check, gatekeeperId: unknownGate } },
+            { ...observe('a3'), check: { ...observe().check, params: { token: jwtLike } } },
+          ]);
+        } catch (err) {
+          expect(err).toBeInstanceOf(GoalPlanValidationError);
+          problems = (err as GoalPlanValidationError).problems;
+        }
+        expect(problems).toEqual([
+          expect.stringMatching(/^acceptance\[0\] "a1": check: "svc\.missing" cannot be observed/),
+          expect.stringMatching(/^acceptance\[1\] "a2": check: "svc\.status" cannot be observed/),
+          expect.stringMatching(
+            /^acceptance\[2\] "a3": check: .*svc\.status: the params carry 1 credential value/,
+          ),
+        ]);
       });
     });
   },

@@ -463,7 +463,9 @@ describe('SystemsPage', () => {
     expect(within(card).getByTestId('gatekeeper-ops-summary').textContent).toContain('1 个写操作');
 
     // Reachability for me (the owner, self) renders inline on the row — no drawer needed.
-    expect(within(card).getByTestId('gatekeeper-reachability').textContent).toContain('可直接调用');
+    expect(within(card).getByTestId('gatekeeper-reachability').textContent).toContain(
+      '你：可直接调用',
+    );
 
     // 谁能用 / 哪些 Worker 覆盖 (console redesign P3-3 V5): behind the row's own summary button,
     // opened as a `kit/sheet` drawer instead of always expanded on the card.
@@ -599,7 +601,7 @@ describe('SystemsPage', () => {
     // The row stays terse: the chip itself carries the reason as a tooltip (`title`), not as
     // visible inline text or a link — `not_granted`'s fix-it link would point back at this exact
     // page anyway (系统与授权 already has the fix — the "授权" button right on this row).
-    expect(chip.textContent).toBe('用不了');
+    expect(chip.textContent).toBe('你：用不了');
     expect(chip.getAttribute('title')).toContain('还没有授权给你');
     expect(within(card).queryByRole('link', { name: /系统与授权/ })).toBeNull();
 
@@ -631,7 +633,7 @@ describe('SystemsPage', () => {
     renderPage(http, true);
     const card = (await screen.findAllByTestId('gatekeeper-card'))[0] as HTMLElement;
     const chip = within(card).getByTestId('gatekeeper-reachability');
-    expect(chip.textContent).toBe('用不了');
+    expect(chip.textContent).toBe('你：用不了');
     expect(chip.getAttribute('title')).toContain('对它的调用正被拒绝');
     expect(card.textContent).not.toContain('可直接调用');
     // Every Operation is refused: the reachability chip says it, no second chip repeats it.
@@ -675,7 +677,7 @@ describe('SystemsPage', () => {
     renderPage(http, true);
     const card = (await screen.findAllByTestId('gatekeeper-card'))[0] as HTMLElement;
     const chip = within(card).getByTestId('gatekeeper-reachability');
-    expect(chip.textContent).toBe('用不了');
+    expect(chip.textContent).toBe('你：用不了');
     expect(chip.getAttribute('title')).toBe(
       '门已不再提供这个系统已发布的操作，对它们的调用正被拒绝。',
     );

@@ -1,6 +1,6 @@
 import type { PoolClient } from 'pg';
 import { writeAudit } from '../../substrate/audit/index.js';
-import { type GoalPlan, validatePlan } from './plan.js';
+import { type GoalPlan, type PlanHint, planHints, validatePlan } from './plan.js';
 import { getGoalRun } from './reads.js';
 import { recordGoalRunTransition, recordStepRunTransition } from './transition-log.js';
 import type { GoalRunBudget, GoalRunRow } from './types.js';
@@ -13,7 +13,9 @@ import type { GoalRunBudget, GoalRunRow } from './types.js';
  * to skip.
  *
  *   - {@link createGoalRun}: a `proposed` GoalRun and its revision 1 (`proposed`), the plan
- *     validated (`plan.ts`) and the validation recorded on the revision.
+ *     validated (`plan.ts`) and the validation recorded on the revision, with the plan's hints
+ *     (`planHints`: a plan the platform checks nothing of is achieved only on the requester's
+ *     word) for the confirmation card.
  *   - {@link confirmGoalRun}: only the requester confirms (propose → authorize → execute: a
  *     GoalRun spends and acts while nobody watches, §4.3). In one transaction, GoalRun locked
  *     first (the guards' lock order): the plan is validated again (a WorkerDefinition may have been
@@ -53,6 +55,8 @@ export interface CreatedGoalRun {
   readonly goalRunId: string;
   readonly planRevisionId: string;
   readonly plan: GoalPlan;
+  /** What the person confirming the plan should know ({@link planHints}). */
+  readonly hints: readonly PlanHint[];
 }
 
 export async function createGoalRun(
@@ -61,6 +65,7 @@ export async function createGoalRun(
   input: CreateGoalRunInput,
 ): Promise<CreatedGoalRun> {
   const plan = await validatePlan(client, workspaceId, input.plan);
+  const hints = planHints(plan);
   const goal = await client.query<{ id: string }>(
     `insert into goal_runs (
        workspace_id, on_behalf_of, originated_in_turn_id, statement, budget_max_tokens,
@@ -89,7 +94,7 @@ export async function createGoalRun(
       goalRunId,
       JSON.stringify(plan),
       input.proposedBy,
-      JSON.stringify({ valid: true, steps: plan.steps.length }),
+      JSON.stringify({ valid: true, steps: plan.steps.length, hints }),
     ],
   );
   const planRevisionId = revision.rows[0]?.id;
@@ -103,7 +108,7 @@ export async function createGoalRun(
     resultingStatus: 'proposed',
     extraAuditPayload: { requesterId: input.requesterId, steps: plan.steps.length },
   });
-  return { goalRunId, planRevisionId, plan };
+  return { goalRunId, planRevisionId, plan, hints };
 }
 
 /** Locks the GoalRun row (`for no key update`, the lock every writer under a GoalRun takes first)

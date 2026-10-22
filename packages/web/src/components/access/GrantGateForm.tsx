@@ -13,6 +13,7 @@ import {
 import { useT } from '../../lib/i18n.js';
 import { roleLabel, transportKindLabel } from '../../lib/labels.js';
 import { sameNameIds, withSameNameId } from '../../lib/same-name.js';
+import { useGatekeeperDirectory } from '../approvals/useDirectoryNames.js';
 import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
 import { ErrorBanner } from '../kit/error-banner.js';
@@ -122,11 +123,9 @@ function GrantGateFormBody({
     { autoLoadAll: true, load: lockedGatekeeper ? async () => ({ items: [] }) : undefined },
   );
   const gateOptions = gatekeepers.state.status === 'ready' ? gatekeepers.state.data.items : [];
-  const gateSame = sameNameIds(
-    gateOptions,
-    (row) => row.id,
-    (row) => row.name,
-  );
+  // Legacy 266: same-name gates are told apart over the whole directory — the picker's own list is
+  // filtered by the search (or not read at all for a locked gate), so it can miss the other one.
+  const gateSame = useGatekeeperDirectory(http).same;
   const [selectedGateIds, setSelectedGateIds] = useState<ReadonlySet<string>>(new Set());
   const [allGates, setAllGates] = useState(false);
   const [allGatesConfirmOpen, setAllGatesConfirmOpen] = useState(false);
@@ -348,7 +347,9 @@ function GrantGateFormBody({
             <RefChip
               kind="gatekeeper"
               id={lockedGatekeeper.id}
-              name={lockedGatekeeper.name}
+              // Legacy 266: a gate that shares its name with another carries its short id, as in
+              // the picker.
+              name={withSameNameId(lockedGatekeeper.name, lockedGatekeeper.id, gateSame)}
               testId="ggf-locked-gate-chip"
             />
           </div>
