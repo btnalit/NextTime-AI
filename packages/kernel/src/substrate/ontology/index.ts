@@ -23,6 +23,8 @@ export {
   OntologyDefinitionSchema,
   deriveOntologyPackId,
   loadOntologyDefinitionFile,
+  loadPublishedOntologyHead,
+  lockOntologyFamily,
   mapOntologyVersionRow,
   nextOntologyVersion,
   parseOntologyDefinition,

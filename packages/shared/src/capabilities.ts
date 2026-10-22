@@ -3831,7 +3831,7 @@ const modulesCapabilities = [
       .strict(),
     resultSchema: wire.WorkspaceModuleWireSchema,
     description:
-      'Install a module into this workspace — publishes its latest `OntologyDefinition` (the same mechanism `seed-domain-pack` uses) with this owner as `proposed_by`/`published_by`. version is the latestVersion the owner was shown: when the latest indexed version is another one now (an upgrade shipped a newer index), 409 version_changed and nothing is published. Already installed → identical to `upgrade_module` (same underlying call, D3). An ObjectType or ActionType name another installed ontology family already declares refuses 409 ontology_namespace_conflict (I-P1).',
+      'Install a module into this workspace — publishes its latest `OntologyDefinition` (the same mechanism `seed-domain-pack` uses) with this owner as `proposed_by`/`published_by`. version is the latestVersion the owner was shown: when the latest indexed version is another one now (an upgrade shipped a newer index), 409 version_changed and nothing is published. Already installed → identical to `upgrade_module` (same underlying call, D3). An ObjectType or ActionType name another installed ontology family already declares refuses 409 ontology_namespace_conflict (I-P1). Applied as a ChangePlan segment: one `change_item.apply` audit row records the module version and the ontology version before and after. A module whose content widens authority (an ActionType added, removed or loosened) refuses 400 change_confirmation_required whatever confirm says — this capability takes no per-item confirmation.',
   },
   {
     name: 'upgrade_module',
@@ -3848,7 +3848,7 @@ const modulesCapabilities = [
       .strict(),
     resultSchema: wire.WorkspaceModuleWireSchema,
     description:
-      'Advance this workspace’s installed module directly to its latest indexed version (one publish, never stepping through intermediate versions). version is the latestVersion the owner was shown — 409 version_changed when the latest is another one now, nothing published. Not installed yet → identical to `install_module` (same underlying call, D3). Already at the latest content → a no-op returning the current state (never wastes a version number). An ObjectType or ActionType name another installed ontology family already declares refuses 409 ontology_namespace_conflict (I-P1).',
+      'Advance this workspace’s installed module directly to its latest indexed version (one publish, never stepping through intermediate versions). version is the latestVersion the owner was shown — 409 version_changed when the latest is another one now, nothing published. Not installed yet → identical to `install_module` (same underlying call, D3). Already at the latest content → a no-op returning the current state (never wastes a version number). An ObjectType or ActionType name another installed ontology family already declares refuses 409 ontology_namespace_conflict (I-P1). Applied as a ChangePlan segment, like `install_module`; an authority-widening change refuses 400 change_confirmation_required whatever confirm says.',
   },
 ] as const satisfies readonly Capability[];
 

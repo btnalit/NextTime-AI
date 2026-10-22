@@ -9,6 +9,7 @@ import { setAgentPolicy } from '../../governance/agent-profile/index.js';
 import { ONTOLOGY_ENFORCEMENT_VALUES } from '../../substrate/graph/index.js';
 import type { OntologyEnforcement } from '../../substrate/graph/index.js';
 import { resolveOntologyDir, seedPlatformMetaOntology } from '../../substrate/ontology/index.js';
+import { ChangeConfirmationRequiredError } from '../change-plan/index.js';
 import { generateApiKey, hashApiKey } from '../gateway/auth.js';
 import { ensureUserForHumanPrincipal } from '../identity/users.js';
 import { installOrUpgradeModule, loadModuleRegistry } from '../platform/modules.js';
@@ -104,7 +105,9 @@ export interface CreateWorkspaceOutcome {
    *  always present, `[]` when every named module installed cleanly or `defaultModules` was
    *  omitted. A deploy-time guard that keeps a platform setting's `defaultModules` in sync with the
    *  currently-deployed index is deferred to S8 (not built here) — this only keeps one drifted name
-   *  from hard-failing the whole workspace-creation transaction. */
+   *  from hard-failing the whole workspace-creation transaction. S11 P1: also a module whose
+   *  content widens authority (`ChangeConfirmationRequiredError` — it declares an ActionType), which
+   *  only the workspace's owner can confirm, item by item. */
   readonly skippedDefaultModules: readonly string[];
 }
 
@@ -208,14 +211,30 @@ export async function createWorkspaceWithOwner(
             );
             continue;
           }
-          await installOrUpgradeModule(
-            client,
-            workspaceId,
-            ownerPrincipalId,
-            registry,
-            { name },
-            ontologyDir,
-          );
+          try {
+            await installOrUpgradeModule(
+              client,
+              workspaceId,
+              ownerPrincipalId,
+              registry,
+              { name, channel: 'platform' },
+              ontologyDir,
+            );
+          } catch (err) {
+            // S11 P1 (I-A4): a module whose content widens authority (declares an ActionType)
+            // needs the owner to confirm it item by item — nobody here can. Refused before
+            // anything was written, so the transaction carries on; skipped like an unknown name.
+            if (!(err instanceof ChangeConfirmationRequiredError)) throw err;
+            skippedDefaultModules.push(name);
+            console.warn(
+              JSON.stringify({
+                level: 'warn',
+                msg: 'application/workspace/create: a default module widens authority and needs the owner to confirm it — skipped',
+                workspaceId,
+                name,
+              }),
+            );
+          }
         }
       }
 

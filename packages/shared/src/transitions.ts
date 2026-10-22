@@ -1,5 +1,6 @@
 import type {
   ActionRequestStatus,
+  ChangeSegmentStatus,
   ConflictStatus,
   ConnectionRequestStatus,
   DecisionStatus,
@@ -570,6 +571,36 @@ export const STEP_RUN_TRANSITIONS: TransitionTable<StepRunStatus, StepRunEvent> 
   edges: STEP_RUN_EDGES,
 };
 
+// ---------------------------------------------------------------------------------------------
+// ChangeSegment (S11 P1, §3.4; workspace segments only — §5.4 "第一版收窄"). Created `applied` by
+// the transaction that applies it. Verification can be re-run, so a verified segment can fail a
+// later run and a failed one can pass; a re-run with the same result keeps the status. Rolling
+// back runs every item's inverse (compare before writing) in one transaction; `rolled_back` is
+// final. Also enforced by the database (`change_segments_guard`, migrations/change/0001).
+// ---------------------------------------------------------------------------------------------
+
+export const CHANGE_SEGMENT_EVENT_VALUES = ['verify_pass', 'verify_fail', 'roll_back'] as const;
+export type ChangeSegmentEvent = (typeof CHANGE_SEGMENT_EVENT_VALUES)[number];
+
+export const CHANGE_SEGMENT_EDGES: readonly StateTransition<
+  ChangeSegmentStatus,
+  ChangeSegmentEvent
+>[] = [
+  { from: 'applied', event: 'verify_pass', to: 'verified' },
+  { from: 'applied', event: 'verify_fail', to: 'verification_failed' },
+  { from: 'verified', event: 'verify_fail', to: 'verification_failed' },
+  { from: 'verification_failed', event: 'verify_pass', to: 'verified' },
+  { from: 'applied', event: 'roll_back', to: 'rolled_back' },
+  { from: 'verified', event: 'roll_back', to: 'rolled_back' },
+  { from: 'verification_failed', event: 'roll_back', to: 'rolled_back' },
+];
+
+export const CHANGE_SEGMENT_TRANSITIONS: TransitionTable<ChangeSegmentStatus, ChangeSegmentEvent> =
+  {
+    machine: 'ChangeSegment',
+    edges: CHANGE_SEGMENT_EDGES,
+  };
+
 /** Every transition table, for generic iteration (e.g. exhaustive tests, doc generation). */
 export const ALL_TRANSITION_TABLES = [
   FACT_LIFECYCLE_TRANSITIONS,
@@ -587,4 +618,5 @@ export const ALL_TRANSITION_TABLES = [
   GOAL_RUN_TRANSITIONS,
   PLAN_REVISION_TRANSITIONS,
   STEP_RUN_TRANSITIONS,
+  CHANGE_SEGMENT_TRANSITIONS,
 ] as const;
