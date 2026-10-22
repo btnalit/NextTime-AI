@@ -185,15 +185,74 @@ export async function readGoalRunUsage(
   workspaceId: string,
   goalRunId: string,
 ): Promise<GoalRunUsage> {
-  const result = await client.query<{ tokens: string; steps: string }>(
-    `select coalesce(sum(tokens_used), 0)::bigint as tokens,
+  return (
+    (await readGoalRunsUsage(client, workspaceId, [goalRunId])).get(goalRunId) ?? {
+      tokens: 0,
+      steps: 0,
+    }
+  );
+}
+
+/** {@link readGoalRunUsage} of several GoalRuns in one query (S11 GO5a: a page of `list_goals`). A
+ *  run with no Task yet is absent from the map. */
+export async function readGoalRunsUsage(
+  client: PoolClient,
+  workspaceId: string,
+  goalRunIds: readonly string[],
+): Promise<ReadonlyMap<string, GoalRunUsage>> {
+  if (goalRunIds.length === 0) return new Map();
+  const result = await client.query<{ goal_run_id: string; tokens: string; steps: string }>(
+    `select goal_run_id,
+            coalesce(sum(tokens_used), 0)::bigint as tokens,
             count(*) filter (where step_attempt is not null)::bigint as steps
        from tasks
-      where workspace_id = $1 and goal_run_id = $2`,
+      where workspace_id = $1 and goal_run_id = any($2::uuid[])
+      group by goal_run_id`,
+    [workspaceId, [...goalRunIds]],
+  );
+  return new Map(
+    result.rows.map((row) => [
+      row.goal_run_id,
+      { tokens: Number(row.tokens), steps: Number(row.steps) },
+    ]),
+  );
+}
+
+/** One attempt of a step of a GoalRun: the Task the advancer started for it (S11 GO5a, `get_goal`). */
+export interface GoalStepAttempt {
+  readonly stepRunId: string;
+  readonly attempt: number;
+  readonly taskId: string;
+  readonly status: TaskStatus;
+  readonly createdAt: Date;
+}
+
+/** Every step attempt of `goalRunId` — the Tasks with a `step_attempt`, not their nested child
+ *  Tasks — by step, then attempt. */
+export async function listGoalRunStepAttempts(
+  client: PoolClient,
+  workspaceId: string,
+  goalRunId: string,
+): Promise<readonly GoalStepAttempt[]> {
+  const result = await client.query<{
+    step_run_id: string;
+    step_attempt: number;
+    id: string;
+    status: TaskStatus;
+    created_at: Date;
+  }>(
+    `select step_run_id, step_attempt, id, status, created_at from tasks
+      where workspace_id = $1 and goal_run_id = $2 and step_attempt is not null
+      order by step_run_id, step_attempt`,
     [workspaceId, goalRunId],
   );
-  const row = result.rows[0];
-  return { tokens: Number(row?.tokens ?? 0), steps: Number(row?.steps ?? 0) };
+  return result.rows.map((row) => ({
+    stepRunId: row.step_run_id,
+    attempt: row.step_attempt,
+    taskId: row.id,
+    status: row.status,
+    createdAt: row.created_at,
+  }));
 }
 
 /**

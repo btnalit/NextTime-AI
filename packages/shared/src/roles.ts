@@ -95,6 +95,12 @@ export const AUDITOR_READ_CAPABILITIES: ReadonlySet<string> = new Set<Capability
   'get_agent_policy',
   'list_tasks',
   'get_task',
+  // S11 GO5a: the goal reads, under the rule the Task reads follow — an auditor sees the runs it
+  // requested (none: it cannot propose one), never anyone else's.
+  'list_goals',
+  'get_goal',
+  'get_goal_revision',
+  'list_goal_unresolved_actions',
   'list_chats',
   'get_chat_history',
   'subscribe_chat',

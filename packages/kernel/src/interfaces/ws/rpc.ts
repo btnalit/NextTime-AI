@@ -59,6 +59,8 @@ import {
   UnknownOperationError,
   UnstorableTextError,
 } from '../../application/gateway/index.js';
+// S11 GO5a: the `goal` reads' not-found errors, imported directly like the domain errors around.
+import { GoalRevisionNotFoundError, GoalRunNotFoundError } from '../../application/goal/index.js';
 // S11 P1-C: a domain module's error, imported directly like the two above.
 import { PackNotFoundError } from '../../application/packs/index.js';
 // P-B2b: same direct-import convention as the comment above — application/platform/modules.ts is a
@@ -523,6 +525,10 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
   if (err instanceof TaskNotFoundError) {
+    return { code: WS_ERROR_CODES.NOT_FOUND, message: err.message };
+  }
+  // S11 GO5a — same mapping as interfaces/http/capability-route.ts.
+  if (err instanceof GoalRunNotFoundError || err instanceof GoalRevisionNotFoundError) {
     return { code: WS_ERROR_CODES.NOT_FOUND, message: err.message };
   }
   // S10 E1 — WS equivalents of capability-route.ts's own mappings for these two classes.

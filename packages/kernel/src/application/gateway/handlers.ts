@@ -216,6 +216,13 @@ import {
   listGatekeepersHandler,
   listOperationsHandler,
 } from './gatekeeper-read-handlers.js';
+// S11 GO5a: the `goal` reads (goal-handlers.ts).
+import {
+  getGoalHandler,
+  getGoalRevisionHandler,
+  listGoalUnresolvedActionsHandler,
+  listGoalsHandler,
+} from './goal-handlers.js';
 // S8 W4-A (ui-audit G1, STATUS leftover 70/62) — same one-capability-per-file convention as
 // execution-readiness-handler.ts/resolve-refs-handler.ts just above.
 import { graphFreshnessHandler } from './graph-freshness-handler.js';
@@ -2189,6 +2196,11 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['get_change_segment', getChangeSegmentHandler],
   ['preview_roll_back_change_segment', previewRollBackChangeSegmentHandler],
   ['roll_back_change_segment', rollBackChangeSegmentHandler],
+  // S11 GO5a goal reads (goal-handlers.ts)
+  ['get_goal', getGoalHandler],
+  ['list_goals', listGoalsHandler],
+  ['get_goal_revision', getGoalRevisionHandler],
+  ['list_goal_unresolved_actions', listGoalUnresolvedActionsHandler],
   // S11 P1-C packs (pack-handlers.ts)
   ['list_packs', listPacksHandler],
   ['preview_pack_install', previewPackInstallHandler],
