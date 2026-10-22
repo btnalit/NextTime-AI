@@ -1,15 +1,32 @@
 import { isDeepStrictEqual } from 'node:util';
 import {
+  type AcceptanceCheck,
+  AcceptanceCheckSchema,
+  DEFAULT_MAX_ATTEMPTS,
   type FactCheck,
-  FactCheckSchema,
   type FactObjectRef,
   type GoalAcceptanceCheckKind,
+  type GoalPlan,
+  GoalPlanSchema,
+  MAX_ACCEPTANCE_PROMPT_CHARS,
+  MAX_PLAN_ACCEPTANCE_CHECKS,
+  MAX_PLAN_BYTES,
+  MAX_PLAN_STEPS,
+  MAX_STEP_ACCEPTANCE_CHECKS,
+  MAX_STEP_ATTEMPTS,
+  MAX_STEP_RECONCILE_DECLARATIONS,
   type ObservationCheck,
-  ObservationCheckSchema,
+  type PlanHint,
+  type PlanStep,
+  PlanStepSchema,
   type Predicate,
+  STEP_KEY_PATTERN,
+  type StepAcceptanceCheck,
+  StepAcceptanceCheckSchema,
+  type StepReconcile,
+  StepReconcileSchema,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
-import { z } from 'zod';
 import { getGatekeeper, getPublishedOperation } from '../../governance/gatekeepers/index.js';
 import { findSuspectedSecrets, reviewObserveParams } from '../../governance/redaction/index.js';
 import {
@@ -92,113 +109,26 @@ import { getWorkerDefinition } from '../worker/index.js';
  * not here; an observation the requester can no longer make is caught when it runs.
  */
 
-export const STEP_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
-export const MAX_PLAN_STEPS = 50;
-export const MAX_STEP_ATTEMPTS = 5;
-export const DEFAULT_MAX_ATTEMPTS = 3;
-/** The serialized plan, inputs included — a plan is reviewed by a person on a confirmation card. */
-export const MAX_PLAN_BYTES = 256 * 1024;
-/** Reconcile declarations one step carries at most. */
-export const MAX_STEP_RECONCILE_DECLARATIONS = 8;
-/** Acceptance checks one plan carries at most. */
-export const MAX_PLAN_ACCEPTANCE_CHECKS = 16;
-/** Acceptance checks one step carries at most. */
-export const MAX_STEP_ACCEPTANCE_CHECKS = 8;
-/** The longest prompt a `requester_confirm` check asks with. */
-export const MAX_ACCEPTANCE_PROMPT_CHARS = 2000;
-
-const stepKey = z.string().regex(STEP_KEY_PATTERN);
-
-/** S11 GO3d: how the platform reconciles one action of the step — see the module comment. */
-export const StepReconcileSchema = z
-  .object({
-    action: z
-      .object({
-        gatekeeperId: z.string().uuid(),
-        operation: z.string().min(1).max(200),
-        params: z.record(z.unknown()).optional(),
-      })
-      .strict(),
-    check: ObservationCheckSchema,
-  })
-  .strict();
-
-export type StepReconcile = z.infer<typeof StepReconcileSchema>;
-
-/** An acceptance check the platform observes: the goal's and a step's (S11 GO4a, GO4b). */
-const ObservePredicateCheckSchema = z
-  .object({
-    kind: z.literal('observe_predicate'),
-    key: stepKey,
-    check: ObservationCheckSchema,
-  })
-  .strict();
-
-/** An acceptance check the platform judges on a Fact of the graph: the goal's and a step's (S11
- *  GO4c). */
-const FactPredicateCheckSchema = z
-  .object({
-    kind: z.literal('fact_predicate'),
-    key: stepKey,
-    fact: FactCheckSchema,
-  })
-  .strict();
-
-/** S11 GO4b: one acceptance check of a step — see the module comment. */
-export const StepAcceptanceCheckSchema = z.discriminatedUnion('kind', [
-  ObservePredicateCheckSchema,
-  FactPredicateCheckSchema,
-]);
-
-export type StepAcceptanceCheck = z.infer<typeof StepAcceptanceCheckSchema>;
-
-export const PlanStepSchema = z
-  .object({
-    key: stepKey,
-    worker: z
-      .object({
-        definitionId: z.string().uuid(),
-        version: z.number().int().positive(),
-      })
-      .strict(),
-    input: z.unknown().optional(),
-    dependsOn: z.array(stepKey).max(MAX_PLAN_STEPS).optional(),
-    nested: z.boolean().optional(),
-    maxAttempts: z.number().int().min(1).max(MAX_STEP_ATTEMPTS).optional(),
-    reconcile: z.array(StepReconcileSchema).min(1).max(MAX_STEP_RECONCILE_DECLARATIONS).optional(),
-    acceptance: z
-      .array(StepAcceptanceCheckSchema)
-      .min(1)
-      .max(MAX_STEP_ACCEPTANCE_CHECKS)
-      .optional(),
-  })
-  .strict();
-
-export type PlanStep = z.infer<typeof PlanStepSchema>;
-
-/** S11 GO4a: one acceptance check of the plan — see the module comment. */
-export const AcceptanceCheckSchema = z.discriminatedUnion('kind', [
-  ObservePredicateCheckSchema,
-  FactPredicateCheckSchema,
-  z
-    .object({
-      kind: z.literal('requester_confirm'),
-      key: stepKey,
-      prompt: z.string().max(MAX_ACCEPTANCE_PROMPT_CHARS).regex(/\S/, 'says nothing to confirm'),
-    })
-    .strict(),
-]);
-
-export type AcceptanceCheck = z.infer<typeof AcceptanceCheckSchema>;
-
-export const GoalPlanSchema = z
-  .object({
-    steps: z.array(PlanStepSchema).min(1).max(MAX_PLAN_STEPS),
-    acceptance: z.array(AcceptanceCheckSchema).max(MAX_PLAN_ACCEPTANCE_CHECKS).optional(),
-  })
-  .strict();
-
-export type GoalPlan = z.infer<typeof GoalPlanSchema>;
+// The plan's shape lives in `@nexttime/shared` (`goal-plan.ts`, S11 GO5a) — the wire and the
+// console type plans with it; this module adds the checks beyond the shape. Re-exported so the
+// kernel keeps one import path.
+export {
+  AcceptanceCheckSchema,
+  DEFAULT_MAX_ATTEMPTS,
+  GoalPlanSchema,
+  MAX_ACCEPTANCE_PROMPT_CHARS,
+  MAX_PLAN_ACCEPTANCE_CHECKS,
+  MAX_PLAN_BYTES,
+  MAX_PLAN_STEPS,
+  MAX_STEP_ACCEPTANCE_CHECKS,
+  MAX_STEP_ATTEMPTS,
+  MAX_STEP_RECONCILE_DECLARATIONS,
+  PlanStepSchema,
+  STEP_KEY_PATTERN,
+  StepAcceptanceCheckSchema,
+  StepReconcileSchema,
+};
+export type { AcceptanceCheck, GoalPlan, PlanHint, PlanStep, StepAcceptanceCheck, StepReconcile };
 
 export class GoalPlanValidationError extends Error {
   readonly problems: readonly string[];
@@ -312,16 +242,8 @@ export function factSelectorProblems(fact: FactCheck): readonly string[] {
   return problems;
 }
 
-/** Something the person confirming a plan should know that does not stop it — for the
- *  confirmation card (GO6), recorded with the revision's validation. */
-export interface PlanHint {
-  /** `requester_confirm_only`: no check the platform makes — the goal is achieved only on the
-   *  requester's word. */
-  readonly code: 'requester_confirm_only';
-  readonly message: string;
-}
-
-/** The hints a valid plan carries — see {@link PlanHint}. */
+/** The hints a valid plan carries — for the confirmation card (GO6), recorded with the revision's
+ *  validation (`PlanHint`, `@nexttime/shared`). */
 export function planHints(plan: GoalPlan): readonly PlanHint[] {
   const acceptance = plan.acceptance ?? [];
   if (acceptance.some((check) => isPlatformAcceptanceCheck(check.kind))) return [];

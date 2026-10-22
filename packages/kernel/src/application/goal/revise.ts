@@ -1,6 +1,5 @@
-import type { StepRunStatus } from '@nexttime/shared';
+import { GoalBudgetSchema, StepRemovalsSchema, type StepRunStatus } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
-import { z } from 'zod';
 import {
   lockWithdrawableStepActions,
   withdrawStepActions,
@@ -81,24 +80,6 @@ export const MAX_REVISION_REASON_LENGTH = 2000;
 
 /** Why a superseded step's requests were withdrawn — in each withdrawal's audit payload. */
 export const GOAL_REVISED_WITHDRAW_REASON = 'its step was revised away';
-
-const StepRemovalSchema = z
-  .object({
-    mode: z.enum(['terminate', 'let_finish']),
-    release: z.array(z.string().uuid()).min(1).max(100).optional(),
-  })
-  .strict();
-
-const RemovalsSchema = z.record(z.string(), StepRemovalSchema);
-
-const BudgetSchema = z
-  .object({
-    maxTokens: z.number().int().positive(),
-    maxSteps: z.number().int().positive(),
-    maxRevisions: z.number().int().nonnegative(),
-    maxWallClockSeconds: z.number().int().positive(),
-  })
-  .strict();
 
 /** A step that ended keeps its row whatever later revisions say: it cannot be superseded. */
 const ENDED_STEP_STATUSES: ReadonlySet<StepRunStatus> = new Set([
@@ -304,7 +285,7 @@ export async function reviseGoalRun(
 
 function parseBudget(budget: GoalRunBudget | undefined): GoalRunBudget | null {
   if (budget === undefined) return null;
-  const parsed = BudgetSchema.safeParse(budget);
+  const parsed = GoalBudgetSchema.safeParse(budget);
   if (!parsed.success) {
     throw new GoalRunStateError(
       `budget: ${parsed.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; ')}`,
@@ -357,7 +338,7 @@ function parseRemovals(
   superseded: readonly StepRunRow[],
 ): Record<string, StepRemoval> {
   if (removals === undefined) return {};
-  const parsed = RemovalsSchema.safeParse(removals);
+  const parsed = StepRemovalsSchema.safeParse(removals);
   if (!parsed.success) {
     throw new GoalRunStateError(
       `removals: ${parsed.error.issues.map((issue) => `${issue.path.join('.') || 'removals'}: ${issue.message}`).join('; ')}`,

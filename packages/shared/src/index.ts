@@ -27,6 +27,7 @@ export * from './chat-message-content.js';
 export * from './skill.js';
 export * from './procedure.js';
 export * from './predicate.js';
+export * from './goal-plan.js';
 export * from './ontology-definition.js';
 export * from './worker-result.js';
 export * from './image-ref.js';

@@ -7,6 +7,7 @@ import {
   type GoalRunStatus,
   type ObjectiveOutcome,
   type ObservationCheck,
+  type StepAcceptanceState,
   transition,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
@@ -385,9 +386,10 @@ export interface GoalAcceptanceRoundView {
  * waits on a person, and resuming it verifies the step again without redoing its work), `failed`
  * (a check was made and did not pass: `verification_failed`, retried only by a person, which redoes
  * the work), `passed` (the step succeeded on its checks). `null`: none of these now — a step
- * working again after a retry, or one a revision or cancel ended.
+ * working again after a retry, or one a revision or cancel ended. The values are `@nexttime/shared`'s
+ * `STEP_ACCEPTANCE_STATE_VALUES` (S11 GO5a: the wire carries them).
  */
-export type StepAcceptanceState = 'verifying' | 'unavailable' | 'failed' | 'passed';
+export type { StepAcceptanceState };
 
 export interface StepAcceptanceRoundView extends GoalAcceptanceRoundView {
   /** The attempt of the step the round verifies. */

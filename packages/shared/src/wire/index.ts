@@ -13,6 +13,7 @@ export * from './ontology.js';
 export * from './governance.js';
 export * from './connection.js';
 export * from './task.js';
+export * from './goal.js';
 export * from './worker.js';
 export * from './identity.js';
 export * from './ingest.js';

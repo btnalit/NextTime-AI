@@ -25,7 +25,8 @@
  * goal/0006) the advance opens and judges when an attempt's work succeeded (`advance.ts` phase A),
  * observed by the same executor. GO4c adds checks judged on a Fact of the graph, the goal's and a
  * step's (`plan.ts` `fact_predicate`; the Fact read and judged by `fact-check.ts`, under the same
- * executor; what may serve as evidence held by the database, goal/0007).
+ * executor; what may serve as evidence held by the database, goal/0007). GO5a adds what the `goal`
+ * reads return and who may read a run (`views.ts`).
  *
  * Boundaries: it lives in `application` because the advancer creates Tasks (`application/task`) and
  * withdraws ActionRequests (`governance/approval`) in the transaction that moves a StepRun.
@@ -223,6 +224,27 @@ export {
   runGoalAdvancerTick,
   sweepGoalCancelCleanup,
 } from './advancer.js';
+
+export {
+  type GoalRunDetail,
+  type GoalRunLeftoversView,
+  type GoalRunStepView,
+  type GoalRunSummary,
+  type GoalRunUsageView,
+  type GoalRunsPage,
+  type GoalViewer,
+  GoalRevisionNotFoundError,
+  type ListGoalRunsFilter,
+  type ListGoalRunsOptions,
+  type PlanRevisionView,
+  getGoalRunVisibleTo,
+  goalVisibleTo,
+  listGoalRunUnresolvedActionsVisibleTo,
+  listGoalRunsVisibleTo,
+  readGoalRunDetail,
+  readPlanRevisionVisibleTo,
+  summarizeGoalRuns,
+} from './views.js';
 
 export type {
   GoalRunBudget,
