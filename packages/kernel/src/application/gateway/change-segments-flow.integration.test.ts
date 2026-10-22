@@ -33,10 +33,15 @@ const DATABASE_URL = process.env.DATABASE_URL;
 const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
 
-function humanCaller(workspaceId: string, principalId: string, role: Role): ResolvedCaller {
+function humanCaller(
+  workspaceId: string,
+  principalId: string,
+  role: Role,
+  kind: 'human' | 'service' = 'human',
+): ResolvedCaller {
   return {
     channel: 'human',
-    principal: { workspaceId, id: principalId, kind: 'human', role, displayName: role },
+    principal: { workspaceId, id: principalId, kind, role, displayName: role },
     session: {
       workspaceId,
       id: randomUUID(),
@@ -69,6 +74,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const ownerId = randomUUID();
       const memberId = randomUUID();
       const auditorId = randomUUID();
+      const serviceId = randomUUID();
       await withWorkspace(
         pool,
         { workspaceId, principalId: ownerId },
@@ -80,8 +86,8 @@ describe.runIf(DATABASE_URL !== undefined)(
           await client.query(
             `insert into principals (workspace_id, id, kind, role, display_name)
              values ($1, $2, 'human', 'owner', 'owner'), ($1, $3, 'human', 'member', 'member'),
-                    ($1, $4, 'human', 'auditor', 'auditor')`,
-            [workspaceId, ownerId, memberId, auditorId],
+                    ($1, $4, 'human', 'auditor', 'auditor'), ($1, $5, 'service', 'owner', 'ci-bot')`,
+            [workspaceId, ownerId, memberId, auditorId, serviceId],
           );
         },
         { skipRoleSwitch: true },
@@ -89,6 +95,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       const owner = humanCaller(workspaceId, ownerId, 'owner');
       const member = humanCaller(workspaceId, memberId, 'member');
       const auditor = humanCaller(workspaceId, auditorId, 'auditor');
+      // An owner-role service Principal: its API key authenticates on the human channel too.
+      const service = humanCaller(workspaceId, serviceId, 'owner', 'service');
       const call = <T>(caller: ResolvedCaller, name: string, params: unknown) =>
         dispatchCapability({ pool }, caller, name, params) as Promise<T>;
       const opsAssets = async () =>
@@ -149,6 +157,14 @@ describe.runIf(DATABASE_URL !== undefined)(
       await expect(call(member, 'roll_back_change_segment', { segmentId })).rejects.toBeInstanceOf(
         ForbiddenError,
       );
+      // Review of #663: confirming an authority-widening item is a person's, never a service's.
+      await expect(
+        call(service, 'roll_back_change_segment', { segmentId, confirmedOrdinals: [1] }),
+      ).rejects.toBeInstanceOf(ForbiddenError);
+      expect(
+        (await call<ChangeSegmentDetailWire>(owner, 'get_change_segment', { segmentId })).segment
+          .status,
+      ).toBe('applied');
 
       const dryRun = await call<ChangeRollbackPreviewWire>(
         owner,

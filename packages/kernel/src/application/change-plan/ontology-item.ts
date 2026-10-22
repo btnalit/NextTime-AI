@@ -62,6 +62,12 @@ export interface PlannedOntologyItem {
  *  ends, so the head read by `planOntologyItem` is still the head when `applyOntologyItem` writes.
  *  Every ontology publisher takes the namespace lock first, so locking several families of one
  *  workspace in any order cannot deadlock against another publisher. */
+/** What the item changes, as one key (`engine.ts` refuses two items with the same key in one
+ *  segment): the family's `ontology_versions.id`. */
+export function ontologyItemTargetKey(intent: OntologyVersionIntent): string {
+  return `ontology_version:${deriveOntologyPackId(intent.family)}`;
+}
+
 export async function lockOntologyItem(
   client: PoolClient,
   workspaceId: string,

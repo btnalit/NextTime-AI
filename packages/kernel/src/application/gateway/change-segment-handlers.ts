@@ -19,6 +19,7 @@ import {
   rollBackWorkspaceSegment,
 } from '../change-plan/index.js';
 import { parseStoredOntologyItem } from '../change-plan/ontology-item.js';
+import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
 
 /**
@@ -172,10 +173,20 @@ export const rollBackChangeSegmentHandler: CapabilityHandler = async (
   if (context.channel !== 'human') {
     throw new Error('roll_back_change_segment: invoked outside the human channel');
   }
+  // A confirmation of an authority-widening item is a person's (I-A4, the same rule as
+  // `attest_fact`): a *service* Principal's API key also authenticates on the human channel, and
+  // a service is not a person. Without a confirmation a service owner may still roll back a
+  // segment that widens nothing; one that does is then refused 400 change_confirmation_required.
+  const confirmedOrdinals = input.confirmedOrdinals ?? [];
+  if (confirmedOrdinals.length > 0 && context.principal?.kind !== 'human') {
+    throw new ForbiddenError(
+      'roll_back_change_segment: only a person (a human Principal on the human channel) can confirm an authority-widening change',
+    );
+  }
   const segment = await rollBackWorkspaceSegment(client, workspaceId, {
     segmentId: input.segmentId,
     rolledBackBy: context.principalId,
-    confirmedOrdinals: input.confirmedOrdinals ?? [],
+    confirmedOrdinals,
   });
   return {
     result: toChangeSegmentWire(segment),

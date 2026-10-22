@@ -3904,13 +3904,14 @@ const modulesCapabilities = [
       .object({
         segmentId: z.string().uuid(),
         /** The ordinals of the rollback items `preview_roll_back_change_segment` classifies
-         *  `authority_widening`, each confirmed by the person rolling back (I-A4). */
+         *  `authority_widening`, each confirmed by the person rolling back (I-A4) — a person
+         *  only: from a service Principal, 403. */
         confirmedOrdinals: z.array(z.number().int().positive()).optional(),
       })
       .strict(),
     resultSchema: wire.ChangeSegmentWireSchema,
     description:
-      'Roll back one applied ChangePlan segment in one transaction: each item, last first, is compared with what is there now and returned to its state before (an ontology item retires the version it published, so the family’s head is the one before it again, or the family is no longer installed; objects and Facts already written stay). Refuses, writing nothing: 409 change_rollback_conflict when an item cannot be rolled back now — its target changed after it (details.items names the later segment to roll back first), is no longer installed, what it restores is gone, or it would restore a type name another family has taken —, 409 change_segment_rolled_back when it already was, 400 change_confirmation_required when an authority-widening rollback item is not among confirmedOrdinals, 404 change_segment_not_found. One change_item.roll_back audit row per item.',
+      'Roll back one applied ChangePlan segment in one transaction: each item, last first, is compared with what is there now and returned to its state before (an ontology item retires the version it published, so the family’s head is the one before it again, or the family is no longer installed; objects and Facts already written stay). Refuses, writing nothing: 409 change_rollback_conflict when an item cannot be rolled back now — its target changed after it (details.items names the later segment to roll back first), is no longer installed, what it restores is gone, or it would restore a type name another family has taken —, 409 change_segment_rolled_back when it already was, 400 change_confirmation_required when an authority-widening rollback item is not among confirmedOrdinals, 403 when confirmedOrdinals comes from a Principal that is not a person (a service API key), 404 change_segment_not_found. One change_item.roll_back audit row per item.',
   },
 ] as const satisfies readonly Capability[];
 
