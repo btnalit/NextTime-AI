@@ -114,6 +114,7 @@ const PURGE_COUNT_LABELS = {
   planRevisions: { zh: '计划版本', en: 'Plan revisions' },
   stepRuns: { zh: '步骤运行', en: 'Step runs' },
   goalAcceptanceChecks: { zh: '目标验收检查', en: 'Goal acceptance checks' },
+  stepAcceptanceChecks: { zh: '步骤验收检查', en: 'Step acceptance checks' },
   chats: { zh: '对话', en: 'Chats' },
   chatMessages: { zh: '消息', en: 'Messages' },
   activities: { zh: '活动', en: 'Activities' },

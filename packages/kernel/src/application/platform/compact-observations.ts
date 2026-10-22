@@ -16,8 +16,9 @@ import { writeAudit } from '../../substrate/audit/index.js';
  *   (a) no `links.observation_id` and no `links.last_observation_id` points at it, whatever the
  *       Fact's lifecycle state — `explain(factId)`'s narrowing and `lastObservation`, and the
  *       observation window's "this Fact belongs to the Source" test, read exactly these rows —
- *       and no `action_request_reconcile_checks.observation_id` (governance 0024, S11 GO3d) or
- *       `goal_acceptance_checks.observation_id` (goal 0005, S11 GO4a): the evidence a platform
+ *       and no `action_request_reconcile_checks.observation_id` (governance 0024, S11 GO3d),
+ *       `goal_acceptance_checks.observation_id` (goal 0005, S11 GO4a) or
+ *       `step_acceptance_checks.observation_id` (goal 0006, S11 GO4b): the evidence a platform
  *       reconcile or acceptance check settled on (such an Observation carries a payload, so (d)
  *       keeps it too; (a) is what the foreign keys themselves require);
  *   (b) it is older than the newest Observation of its Source — `listSourceFreshness` and
@@ -43,8 +44,8 @@ import { writeAudit } from '../../substrate/audit/index.js';
  * transaction: classify the window's rows, then delete the deletable ones with every condition
  * re-checked in the DELETE itself. The group test probes `observations (workspace_id,
  * activity_id)` (0039), the reference tests the two partial indexes on `links` (0018, 0039),
- * governance 0024's on `action_request_reconcile_checks` and goal 0005's on
- * `goal_acceptance_checks`.
+ * governance 0024's on `action_request_reconcile_checks`, goal 0005's on
+ * `goal_acceptance_checks` and goal 0006's on `step_acceptance_checks`.
  * Statement snapshots keep each DELETE consistent with itself (it sees the group's top row it is
  * keeping), and a transaction-level advisory lock serializes the windows of two concurrent runs, so
  * no two DELETEs ever judge one group from different snapshots. Nothing holds a lock beyond one
@@ -162,7 +163,10 @@ function referencedBy(alias: string): string {
                          and r.observation_id = ${alias}.id)
            or exists (select 1 from goal_acceptance_checks g
                        where g.workspace_id = ${alias}.workspace_id
-                         and g.observation_id = ${alias}.id))`;
+                         and g.observation_id = ${alias}.id)
+           or exists (select 1 from step_acceptance_checks sc
+                       where sc.workspace_id = ${alias}.workspace_id
+                         and sc.observation_id = ${alias}.id))`;
 }
 
 /** (b): `o` is not older than the newest Observation of its Source. */
@@ -266,7 +270,8 @@ function onLoginRole<T>(
 
 /** The foreign keys into `observations` condition (a) covers — `links.observation_id` (core
  *  0018), `links.last_observation_id` (core 0026), `action_request_reconcile_checks
- *  .observation_id` (governance 0024) and `goal_acceptance_checks.observation_id` (goal 0005).
+ *  .observation_id` (governance 0024), `goal_acceptance_checks.observation_id` (goal 0005) and
+ *  `step_acceptance_checks.observation_id` (goal 0006).
  *  Anything else in the catalog means a
  *  reference this module does not know how to respect: refuse rather than let the FK check fail
  *  a window half-way. */
@@ -285,6 +290,7 @@ async function assertKnownObservationReferences(client: PoolClient): Promise<voi
     'links:last_observation_id,workspace_id',
     'action_request_reconcile_checks:observation_id,workspace_id',
     'goal_acceptance_checks:observation_id,workspace_id',
+    'step_acceptance_checks:observation_id,workspace_id',
   ]);
   const unknown = result.rows
     .map((row) => `${row.child_table}:${row.columns}`)
