@@ -16,6 +16,7 @@ import { listGoalRunLiveTaskSteps } from '../task/index.js';
 import {
   type AcceptanceCheckRow,
   listAcceptanceChecks,
+  listStepAcceptanceChecks,
   passAcceptanceConfirmation,
   readCurrentAcceptanceRound,
 } from './acceptance-checks.js';
@@ -24,7 +25,7 @@ import type { GoalControlActor } from './control.js';
 import { actionDisposition } from './disposition.js';
 import { moveGoalRun, moveStepRun } from './moves.js';
 import { roundAcceptance } from './plan.js';
-import { getGoalRun, getPlanRevision, lockStepRuns } from './reads.js';
+import { getGoalRun, getPlanRevision, listStepRuns, lockStepRuns } from './reads.js';
 import { GoalRunNotFoundError, GoalRunStateError, lockGoalRun } from './service.js';
 import type { GoalRunRow } from './types.js';
 
@@ -368,10 +369,36 @@ export interface GoalAcceptanceRoundView {
   readonly checks: readonly GoalAcceptanceCheckView[];
 }
 
+/**
+ * Where a step's own acceptance stands (S11 GO4b) — the console gives each a different next step:
+ * `verifying` (its checks are being observed), `unavailable` (a check could not be made: the run
+ * waits on a person, and resuming it verifies the step again without redoing its work), `failed`
+ * (a check was made and did not pass: `verification_failed`, retried only by a person, which redoes
+ * the work), `passed` (the step succeeded on its checks). `null`: none of these now — a step
+ * working again after a retry, or one a revision or cancel ended.
+ */
+export type StepAcceptanceState = 'verifying' | 'unavailable' | 'failed' | 'passed';
+
+export interface StepAcceptanceRoundView extends GoalAcceptanceRoundView {
+  /** The attempt of the step the round verifies. */
+  readonly stepAttempt: number;
+}
+
+export interface StepAcceptanceView {
+  readonly stepRunId: string;
+  readonly stepKey: string;
+  readonly attempt: number;
+  readonly state: StepAcceptanceState | null;
+  readonly rounds: readonly StepAcceptanceRoundView[];
+}
+
 export interface GoalAcceptanceView {
   readonly goalRunId: string;
   readonly status: GoalRunStatus;
   readonly rounds: readonly GoalAcceptanceRoundView[];
+  /** Steps that verify their own work (S11 GO4b): every step with an acceptance round or waiting on
+   *  one, in creation order. */
+  readonly steps: readonly StepAcceptanceView[];
   /** What a completed run's outcome rests on — `null` until it completes. */
   readonly outcome: {
     readonly outcome: ObjectiveOutcome;
@@ -406,36 +433,28 @@ export async function readGoalAcceptance(
       .filter((check) => check.round !== null)
       .map((check) => `${check.round}:${check.checkKey}`),
   );
-  const rounds = new Map<number, AcceptanceCheckRow[]>();
-  for (const row of rows) rounds.set(row.round, [...(rounds.get(row.round) ?? []), row]);
+  const stepRows = await listStepAcceptanceChecks(client, workspaceId, goalRunId);
+  const steps: StepAcceptanceView[] = [];
+  for (const step of await listStepRuns(client, workspaceId, goalRunId)) {
+    const own = stepRows.filter((row) => row.stepRunId === step.id);
+    const state = stepAcceptanceState(step, own.length > 0);
+    if (own.length === 0 && state === null) continue;
+    steps.push({
+      stepRunId: step.id,
+      stepKey: step.stepKey,
+      attempt: step.attemptCount,
+      state,
+      rounds: roundViews(own, () => false).map((round) => ({
+        ...round,
+        stepAttempt: own.find((row) => row.round === round.round)?.stepAttempt ?? 0,
+      })),
+    });
+  }
   return {
     goalRunId: goal.id,
     status: goal.status,
-    rounds: [...rounds.entries()].map(([round, checks]) => ({
-      round,
-      planRevision: checks[0]?.planRevision ?? 0,
-      openedAt: checks.reduce(
-        (first, check) => (check.createdAt < first ? check.createdAt : first),
-        checks[0]?.createdAt ?? new Date(0),
-      ),
-      checks: checks.map((check) => ({
-        checkKey: check.checkKey,
-        kind: check.kind,
-        status: check.status,
-        check: check.observationCheck,
-        prompt: check.prompt,
-        attempts: check.attempts,
-        lastError: check.lastError,
-        observationId: check.observationId,
-        decisionId: check.decisionId,
-        nextAttemptAt:
-          check.status === 'pending' && check.kind === 'observe_predicate'
-            ? check.nextAttemptAt
-            : null,
-        settledAt: check.settledAt,
-        overridden: overridden.has(`${round}:${check.checkKey}`),
-      })),
-    })),
+    rounds: roundViews(rows, (round, checkKey) => overridden.has(`${round}:${checkKey}`)),
+    steps,
     outcome:
       goal.status === 'completed' && goal.outcome && goal.outcomeBasis
         ? {
@@ -446,4 +465,56 @@ export async function readGoalAcceptance(
           }
         : null,
   };
+}
+
+function stepAcceptanceState(
+  step: {
+    readonly status: string;
+    readonly waitingReason: string | null;
+    readonly failureCategory: string | null;
+  },
+  hasRounds: boolean,
+): StepAcceptanceState | null {
+  if (step.status === 'waiting' && step.waitingReason === 'acceptance') return 'verifying';
+  if (step.status === 'waiting' && step.waitingReason === 'acceptance_unavailable') {
+    return 'unavailable';
+  }
+  if (step.status === 'failed' && step.failureCategory === 'verification_failed') return 'failed';
+  // goal/0006 lets a step that declares checks succeed only on a passed round.
+  if (step.status === 'succeeded' && hasRounds) return 'passed';
+  return null;
+}
+
+/** Rows grouped by round, in the order the rows came. */
+function roundViews(
+  rows: readonly AcceptanceCheckRow[],
+  isOverridden: (round: number, checkKey: string) => boolean,
+): GoalAcceptanceRoundView[] {
+  const rounds = new Map<number, AcceptanceCheckRow[]>();
+  for (const row of rows) rounds.set(row.round, [...(rounds.get(row.round) ?? []), row]);
+  return [...rounds.entries()].map(([round, checks]) => ({
+    round,
+    planRevision: checks[0]?.planRevision ?? 0,
+    openedAt: checks.reduce(
+      (first, check) => (check.createdAt < first ? check.createdAt : first),
+      checks[0]?.createdAt ?? new Date(0),
+    ),
+    checks: checks.map((check) => ({
+      checkKey: check.checkKey,
+      kind: check.kind,
+      status: check.status,
+      check: check.observationCheck,
+      prompt: check.prompt,
+      attempts: check.attempts,
+      lastError: check.lastError,
+      observationId: check.observationId,
+      decisionId: check.decisionId,
+      nextAttemptAt:
+        check.status === 'pending' && check.kind === 'observe_predicate'
+          ? check.nextAttemptAt
+          : null,
+      settledAt: check.settledAt,
+      overridden: isOverridden(round, check.checkKey),
+    })),
+  }));
 }

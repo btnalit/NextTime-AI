@@ -95,7 +95,8 @@ import {
  * docs/goal-orchestration-and-admin-agent-plan-2026-10-16.md §3.3, in `goal-invariant-checks.ts`
  * (its doc comment has the conditions each one counts): one Task per StepRun attempt (I-G1); only
  * steps of the current plan revision advance (I-G2); a GoalRun's outcome rests on its
- * verification or on its requester's word (I-G5, S11 GO4a); a GoalRun stays within its budget or
+ * verification or on its requester's word, and a step with acceptance checks succeeds only on them
+ * (I-G5, S11 GO4a, GO4b); a GoalRun stays within its budget or
  * pauses (I-G6, with a grace period — default 10 minutes, `goalBudgetGraceMs`); only a live step
  * of a live GoalRun raises actions and has them run (I-G9). I-G3/I-G4/I-G7/I-G8 are enforced where
  * their mechanism lives (a DB trigger for I-G3's base revision; GO2–GO4 code for the rest).

@@ -20,7 +20,10 @@
  * `substrate/epistemic`). GO4a adds the goal's acceptance (`plan.ts` `acceptance`): verification
  * rounds (`acceptance-checks.ts`, goal/0005) the advance opens and judges (`advance.ts` phase V),
  * the platform's observations (`acceptance-check.ts`, sharing `platform-observation.ts` with the
- * reconcile check) and the requester's word on the outcome (`acceptance.ts`).
+ * reconcile check) and the requester's word on the outcome (`acceptance.ts`). GO4b adds a step's
+ * own acceptance (`plan.ts` step `acceptance`): rounds per attempt (`step_acceptance_checks`,
+ * goal/0006) the advance opens and judges when an attempt's work succeeded (`advance.ts` phase A),
+ * observed by the same executor.
  *
  * Boundaries: it lives in `application` because the advancer creates Tasks (`application/task`) and
  * withdraws ActionRequests (`governance/approval`) in the transaction that moves a StepRun.
@@ -55,6 +58,7 @@ export {
   MAX_ACCEPTANCE_PROMPT_CHARS,
   MAX_PLAN_ACCEPTANCE_CHECKS,
   MAX_PLAN_STEPS,
+  MAX_STEP_ACCEPTANCE_CHECKS,
   MAX_STEP_ATTEMPTS,
   type GoalPlan,
   type PlanHint,
@@ -62,6 +66,8 @@ export {
   parsePlan,
   planHints,
   roundAcceptance,
+  type StepAcceptanceCheck,
+  StepAcceptanceCheckSchema,
   validatePlan,
 } from './plan.js';
 
@@ -146,7 +152,9 @@ export {
 export {
   type AcceptanceCheckRow,
   listAcceptanceChecks,
+  listStepAcceptanceChecks,
   readCurrentAcceptanceRound,
+  readCurrentStepAcceptanceRound,
 } from './acceptance-checks.js';
 
 export {
@@ -176,6 +184,9 @@ export {
   type GoalAcceptanceRoundView,
   type GoalAcceptanceView,
   type OverriddenAcceptanceCheck,
+  type StepAcceptanceRoundView,
+  type StepAcceptanceState,
+  type StepAcceptanceView,
   confirmGoalAcceptance,
   endGoalRun,
   readGoalAcceptance,

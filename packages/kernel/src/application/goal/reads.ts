@@ -78,6 +78,22 @@ export async function lockStepRuns(
   return result.rows.map(mapStepRunRow);
 }
 
+/** One StepRun, locked `for no key update` — after its GoalRun's row; `null` when there is none. */
+export async function lockStepRun(
+  client: PoolClient,
+  workspaceId: string,
+  stepRunId: string,
+): Promise<StepRunRow | null> {
+  const result = await client.query<StepRunDbRow>(
+    `select ${STEP_RUN_ROW_COLUMNS} from step_runs
+     where workspace_id = $1 and id = $2
+     for no key update`,
+    [workspaceId, stepRunId],
+  );
+  const row = result.rows[0];
+  return row ? mapStepRunRow(row) : null;
+}
+
 /** What a step's ActionRequests call for (`disposition.ts`), read from their `status` and
  *  `failure_kind` columns through `governance/approval` — the advancer's one way to split a step on
  *  its actions (plan §4.7). */
