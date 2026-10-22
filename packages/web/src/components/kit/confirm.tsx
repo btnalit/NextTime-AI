@@ -80,7 +80,8 @@ export interface ConfirmProps {
  * - `low`: fires `onConfirm` the moment `open` flips true, then `notify`s success (with `undo`)
  *   or failure, then closes. No visible surface of its own — `anchor` is rendered plain.
  * - `medium`: a Radix `Popover` anchored to `anchor` (`side="bottom" align="end"`, an 8px offset;
- *   Popper repositions on collision). `modal` — focus moves onto the confirm button on open, or
+ *   Popper repositions on collision; a body too tall for above or below moves beside the trigger
+ *   when there is room). `modal` — focus moves onto the confirm button on open, or
  *   onto 取消 when `danger` (`onOpenAutoFocus`, overridden: Radix's own default targets the first
  *   focusable descendant, not necessarily either button) and back to the trigger on close via
  *   `useRestoreFocusOnClose` below (a manual replacement for Radix's built-in restore, which only
@@ -234,14 +235,22 @@ function ConfirmErrorBanner({
  *  the popover, `l` for the centred dialog. */
 function ConfirmBody({
   padding = 'm',
+  onOverflow,
   children,
 }: {
   readonly padding?: 'm' | 'l';
+  /** Called while the body does not fit — the medium tier uses it to move beside its trigger. */
+  readonly onOverflow?: () => void;
   readonly children: ReactNode;
 }) {
   const t = useT();
   const bodyRef = useRef<HTMLDivElement>(null);
   const moreBelow = useMoreBelow(bodyRef);
+  const latestOnOverflow = useRef(onOverflow);
+  latestOnOverflow.current = onOverflow;
+  useEffect(() => {
+    if (moreBelow) latestOnOverflow.current?.();
+  }, [moreBelow]);
   return (
     <div
       ref={bodyRef}
@@ -268,6 +277,11 @@ function ConfirmBody({
         >
           <button
             type="button"
+            // Legacy 411 (UX acceptance of #655 P3-2): clicking the chip leaves focus where it was —
+            // on a danger confirm that is 取消 — instead of dropping it onto the popover once the
+            // chip unmounts; keyboard readers scroll the body itself, so it stays out of Tab order.
+            tabIndex={-1}
+            onMouseDown={(event) => event.preventDefault()}
             className="pointer-events-auto rounded-full border border-border bg-surface-1 px-3 py-1 text-12 text-text-2 shadow-1 hover:text-text"
             onClick={() => {
               const body = bodyRef.current;
@@ -342,6 +356,15 @@ function useRestoreFocusOnClose(open: boolean): void {
   }, [open]);
 }
 
+const SIDE_OFFSET = 8;
+const COLLISION_PADDING = 12;
+
+/** The medium tier's width, `min(24rem, 100vw − 24px)`, in pixels. */
+function popoverWidthPx(): number {
+  const rem = Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+  return Math.min(24 * rem, window.innerWidth - 24);
+}
+
 function MediumTier({
   anchor,
   open,
@@ -377,6 +400,22 @@ function MediumTier({
       return (wrap?.firstElementChild ?? wrap)?.getBoundingClientRect() ?? new DOMRect();
     },
   });
+  // Legacy 410 (UX acceptance of #655 P3-1): on a short viewport (1280×800) neither the space
+  // above nor below the trigger fits a loosening confirm, and the 分类变化 it asks about sat under
+  // the fold. When the body overflows and there is room beside the trigger, the popover moves to
+  // that side, where it may use the viewport's full height. Kept until it closes, so it never
+  // flips back.
+  const [beside, setBeside] = useState<'left' | 'right' | null>(null);
+  if (!open && beside !== null) setBeside(null);
+  function moveBesideIfRoom(): void {
+    if (beside !== null) return;
+    const rect = virtualAnchor.current.getBoundingClientRect();
+    const needed = popoverWidthPx() + SIDE_OFFSET + COLLISION_PADDING;
+    const left = rect.left;
+    const right = window.innerWidth - rect.right;
+    if (Math.max(left, right) < needed) return;
+    setBeside(left >= right ? 'left' : 'right');
+  }
   return (
     <PopoverPrimitive.Root
       open={open}
@@ -398,12 +437,13 @@ function MediumTier({
             // Drawer.tsx` already makes for its own hand-rolled dialog pattern.
             role="dialog"
             aria-labelledby={titleId}
-            side="bottom"
-            align="end"
-            sideOffset={8}
-            collisionPadding={12}
+            side={beside ?? 'bottom'}
+            align={beside === null ? 'end' : 'center'}
+            sideOffset={SIDE_OFFSET}
+            collisionPadding={COLLISION_PADDING}
             data-testid={testId}
             data-tier="medium"
+            data-beside={beside ?? undefined}
             onOpenAutoFocus={(event) => {
               event.preventDefault();
               // Legacy 405 (UX acceptance of #653 P3-2): a `danger` confirm (loosening an
@@ -436,7 +476,7 @@ function MediumTier({
               'bg-surface-1 shadow-1 max-h-[var(--radix-popover-content-available-height)]',
             )}
           >
-            <ConfirmBody>
+            <ConfirmBody onOverflow={moveBesideIfRoom}>
               <div id={titleId} className="text-14 font-semibold text-text">
                 {title}
               </div>
