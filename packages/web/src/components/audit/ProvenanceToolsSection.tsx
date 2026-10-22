@@ -131,7 +131,7 @@ function CausalChainTool({ http }: { readonly http: CapabilityCaller }) {
         <AuditIdPicker
           http={http}
           id="causal-chain-node-id"
-          label={t('id', 'id')}
+          label={t('起点 ID', 'Start node id')}
           value={nodeId}
           onChange={setNodeId}
           source={source}

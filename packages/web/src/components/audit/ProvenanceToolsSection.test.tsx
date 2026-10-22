@@ -142,7 +142,7 @@ describe('ProvenanceToolsSection pickers', () => {
     const http = scriptedHttp({ ...baseHandlers, audit_query: forbidden });
     render(<ProvenanceToolsSection http={http} />);
     await screen.findByTestId('causal-chain-node-id-refused');
-    expect(screen.getByLabelText('id')).toBeTruthy();
+    expect(screen.getByLabelText('起点 ID')).toBeTruthy();
   });
 
   it('precedents: Object and action kind come from search / list_operations (named by gate); Find precedents waits for one of them', async () => {
