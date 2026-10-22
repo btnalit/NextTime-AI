@@ -176,6 +176,19 @@ export const AUDIT_LIFECYCLE_ACTIONS = [
   'ontology_violation',
   'change_item.apply',
   'change_item.roll_back',
+  // Legacy 245 a: workspace actions the kernel writes outside a dispatch that already had a label
+  // (`capability-labels.ts`) but were missing here — a gate's governance and definition changes,
+  // the draft reaper, and the one-off rows migrations write.
+  'operation.description_updated',
+  'operation.governance_refreshed',
+  'operation.revision_drafted',
+  'gatekeeper.self_connection_linked',
+  'draft.expired',
+  'agent_profile.lists_reset_to_follow_grants',
+  'policy.auto_approve_rescoped',
+  'agent_policy.auto_approve_low_default_applied',
+  'principal.auditor_handles_revoked',
+  'principal.container_handles_revoked',
 ] as const;
 
 /**

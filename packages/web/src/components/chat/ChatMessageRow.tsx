@@ -130,10 +130,11 @@ export function ChatMessageRow({
 }
 
 /** The governance fields a chat message's card lacks (`lib/action-card`): whether it may be
- *  self-decided and which definition it was made under. */
+ *  self-decided, which definition it was made under, and (legacy 245 d) the policy that sent it
+ *  to approval — `system.action_pending` carries none of them. */
 type CardGovernance = Pick<
   ActionRequestRowLike,
-  'onBehalfOf' | 'requesterCanApprove' | 'publishedDefinition'
+  'onBehalfOf' | 'requesterCanApprove' | 'publishedDefinition' | 'policyDecision'
 >;
 
 /**
@@ -166,6 +167,7 @@ function ChatActionCard({
           ...(row.publishedDefinition !== undefined
             ? { publishedDefinition: row.publishedDefinition }
             : {}),
+          ...(row.policyDecision ? { policyDecision: row.policyDecision } : {}),
         });
       })
       // Unreadable: the card keeps its decisions, offers no "总是允许", and links to the page.
@@ -188,6 +190,7 @@ function ChatActionCard({
               ...(governance.publishedDefinition !== undefined
                 ? { publishedDefinition: governance.publishedDefinition }
                 : {}),
+              policyDecision: card.policyDecision ?? governance.policyDecision,
             }
           : card
       }

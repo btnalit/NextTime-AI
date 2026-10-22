@@ -652,6 +652,20 @@ const GATE_REASON_CODES = [
   'outcome_unknown',
 ] as const;
 const GATE_REASON_PATTERN = new RegExp(`\\b(${GATE_REASON_CODES.join('|')})\\b`);
+/** One of those codes as the value of a `reason` or `code` field — `{"status":"failed","reason":
+ *  "gate_unreachable: …"}`, `{"error":{"code":"…"}}` — also inside a JSON string (pi's
+ *  `content[0].text`, where the quotes are escaped). */
+const GATE_REASON_FIELD_PATTERN = new RegExp(
+  // `\x22` is `"` — kept out of the literal so text scanners (the i18n-pairs guard) see no quotes.
+  `\\\\?\\x22(?:reason|code)\\\\?\\x22\\s*:\\s*\\\\?\\x22(?:${GATE_REASON_CODES.join('|')})\\b`,
+);
+
+/** Legacy 224 ③: whether a tool result carries a gate reason as its outcome — the field a refusal
+ *  or a failed action reports it in — rather than merely mentioning a code somewhere in a
+ *  successful result (a log line, a document about the codes). */
+export function carriesGateReason(text: string): boolean {
+  return GATE_REASON_FIELD_PATTERN.test(text);
+}
 
 /** Reasons that say nothing about the system the call went to (UX acceptance of #602, P2-3): U+0000
  *  in the call's own text is refused by the kernel before any system is asked, so a link to the

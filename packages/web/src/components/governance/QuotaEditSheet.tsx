@@ -72,16 +72,16 @@ export function QuotaEditSheet({ http, open, onOpenChange, row, onSaved }: Quota
     ? null
     : cleaned === '' || !Number.isFinite(numeric)
       ? t(
-          `“${value.trim()}”不是有效的数字，请输入${rangeText}（可用 , 或空格分隔千位）。`,
+          `“${value.trim()}”不是有效的数字，请输入 ${rangeText}（可用 , 或空格分隔千位）。`,
           `“${value.trim()}” is not a valid number — enter ${rangeText} (thousands separators , or spaces are fine).`,
         )
       : info.integer && !Number.isInteger(numeric)
         ? t(
-            `这个配额只能是整数，请输入${rangeText}。`,
+            `这个配额只能是整数，请输入 ${rangeText}。`,
             `This quota must be a whole number — enter ${rangeText}.`,
           )
         : t(
-            `${cleaned} 超出允许范围，请输入${rangeText}。`,
+            `${cleaned} 超出允许范围，请输入 ${rangeText}。`,
             `${cleaned} is out of range — enter ${rangeText}.`,
           );
   const canSubmit = valueValid && !submitting;
@@ -134,13 +134,16 @@ export function QuotaEditSheet({ http, open, onOpenChange, row, onSaved }: Quota
           <Field
             id="qe-value"
             label={label}
+            // Legacy 245 b: the error already says the range — the hint is not repeated under it.
             hint={
-              info.nullable
-                ? t(
-                    `留空或勾选“不限”表示没有上限；否则填${rangeText}。`,
-                    `Leave empty or tick “unlimited” for no cap; otherwise enter ${rangeText}.`,
-                  )
-                : t(`必须是${rangeText}。`, `Must be ${rangeText}.`)
+              valueError !== null
+                ? undefined
+                : info.nullable
+                  ? t(
+                      `留空或勾选“不限”表示没有上限；否则填 ${rangeText}。`,
+                      `Leave empty or tick “unlimited” for no cap; otherwise enter ${rangeText}.`,
+                    )
+                  : t(`必须是 ${rangeText}。`, `Must be ${rangeText}.`)
             }
             error={valueError}
           >

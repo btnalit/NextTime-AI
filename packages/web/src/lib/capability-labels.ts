@@ -790,7 +790,8 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     enHint: "Changes a member's or service principal's role here.",
   },
   rotate_api_key: {
-    zh: 'API key 轮换',
+    // Legacy 369: not ending in English (the i18n guard's rule) without the mixed 「API key 轮换」.
+    zh: '轮换 API 密钥',
     en: 'Rotate API key',
     zhHint: '为服务账号换新 API key，旧 key 立即失效。',
     enHint: "Rotates a service principal's key; the old one stops working at once.",
