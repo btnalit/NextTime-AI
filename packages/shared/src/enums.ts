@@ -392,7 +392,8 @@ export const GoalOutcomeBasisSchema = asEnum(GOAL_OUTCOME_BASIS_VALUES);
  *     result (`ObservationCheck`), observed by the platform for the requester;
  *   - `requester_confirm` (请求人确认): the requester says the goal is achieved — asked once every
  *     observation of the round passed. A plan with no acceptance check has one implicitly.
- * GO4b adds `fact_predicate`; W4 `review`.
+ * A step's own acceptance (S11 GO4b, `step_acceptance_checks`, goal/0006) has `observe_predicate`
+ * only: a step's acceptance never waits on a person. GO4c adds `fact_predicate`; W4 `review`.
  */
 export const GOAL_ACCEPTANCE_CHECK_KIND_VALUES = [
   'observe_predicate',
@@ -411,7 +412,9 @@ export const GoalAcceptanceCheckKindSchema = asEnum(GOAL_ACCEPTANCE_CHECK_KIND_V
  *     last try;
  *   - `superseded` (已作废): the round ended before the check settled — the run left verification
  *     (paused, cancelled, ended by the requester) or a newer round began.
- * Only `pending` moves, once, to one of the others.
+ * Only `pending` moves, once, to one of the others. A step's acceptance checks (S11 GO4b,
+ * `step_acceptance_checks`) stand the same way; a step's round ends when the step stops waiting on
+ * it (it passed, failed, was superseded or cancelled) or its run stops running.
  */
 export const GOAL_ACCEPTANCE_CHECK_STATUS_VALUES = [
   'pending',
@@ -456,9 +459,19 @@ export const StepRunStatusSchema = asEnum(STEP_RUN_STATUS_VALUES);
 /**
  * What a `waiting` StepRun waits on (§3.4, §4.8) — set exactly while it waits: an ActionRequest's
  * decision or execution (`approval`), a reconcile observation after an outcome-unknown action
- * (`reconcile`, §4.7), or something outside the platform (`external`).
+ * (`reconcile`, §4.7), something outside the platform (`external`), or — S11 GO4b, §4.5, §4.6 — its
+ * own acceptance checks once its work is done: the platform making them (`acceptance`, 验收中), or
+ * a person, because a check could not be made (`acceptance_unavailable`, 无法验收: the run is paused
+ * and resuming it verifies the step again). A check that was made and did not pass fails the step
+ * `verification_failed` instead — the two never read alike.
  */
-export const STEP_RUN_WAITING_REASON_VALUES = ['approval', 'reconcile', 'external'] as const;
+export const STEP_RUN_WAITING_REASON_VALUES = [
+  'approval',
+  'reconcile',
+  'external',
+  'acceptance',
+  'acceptance_unavailable',
+] as const;
 export type StepRunWaitingReason = (typeof STEP_RUN_WAITING_REASON_VALUES)[number];
 export const StepRunWaitingReasonSchema = asEnum(STEP_RUN_WAITING_REASON_VALUES);
 
@@ -469,7 +482,8 @@ export const StepRunWaitingReasonSchema = asEnum(STEP_RUN_WAITING_REASON_VALUES)
  *     new attempt is safe;
  *   - `authority_lost`: the requester no longer holds what the step needs (Handle mint failed, 403);
  *   - `contract_violation`: the output failed its schema, or no result was reported;
- *   - `verification_failed`: the step's acceptance check came back false;
+ *   - `verification_failed`: an acceptance check of the step was made and did not pass (S11
+ *     GO4b) — a new attempt redoes the work, so only a person retries it;
  *   - `outcome_unknown`: an action may have run and the reconcile observation could not confirm
  *     it either way — never retried automatically;
  *   - `action_refused`: an action was refused by the gate or its target, rejected, expired or

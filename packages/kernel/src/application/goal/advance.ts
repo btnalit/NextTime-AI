@@ -36,7 +36,9 @@ import {
 import {
   type AcceptanceCheckRow,
   openAcceptanceRound,
+  openStepAcceptanceRound,
   readCurrentAcceptanceRound,
+  readCurrentStepAcceptanceRound,
 } from './acceptance-checks.js';
 import { type CancellingOptions, advanceCancellingGoalRun } from './cancelling.js';
 import { type StepActionEffect, actionDisposition, stepActionEffect } from './disposition.js';
@@ -89,6 +91,20 @@ import type { GoalRunRow, PlanRevisionRow, StepRunRow } from './types.js';
  *      other category pauses the GoalRun. A step
  *      no longer part of the current plan is not judged at all (I-G2: a late result is kept on
  *      its Task, it moves nothing) and the GoalRun pauses `needs_decision`.
+ *      **A step's acceptance** (S11 GO4b, plan §4.5, §4.6): a successful attempt of a step that
+ *      declares acceptance checks does not succeed yet — the step waits on them
+ *      (`waiting(acceptance)`) and a verification round of its declared checks opens for that
+ *      attempt (`acceptance-checks.ts` `openStepAcceptanceRound`; the platform makes them,
+ *      `acceptance-check.ts`, and a settled one sets the run due). Then, on every advance: a check
+ *      still pending → wait; one made that did not pass → the step fails `verification_failed`
+ *      and the run pauses `needs_decision` (a retry redoes the work, so only a person sends it);
+ *      none of those but one that could not be made → the step waits on a person
+ *      (`waiting(acceptance_unavailable)`), the run pauses `needs_decision`, and resuming it
+ *      verifies the step again in a new round, the work not redone; every check passed → the
+ *      step succeeds and the steps after it may start (the database refuses its success
+ *      otherwise, goal/0006). A run that stops running supersedes its steps' pending checks
+ *      (`moves.ts`): a paused run observes nothing, and resuming it opens a new round for each
+ *      step still waiting on its acceptance.
  *   B. **Retry transient failures** (running only). Under the step's attempt limit (plan
  *      `maxAttempts`, default 3), once no request of the step — of any attempt — is still in flight
  *      and no Task of it still runs (I-G4: no new attempt beside an action that may still run),
@@ -532,6 +548,14 @@ class Advance {
   // ----- A ------------------------------------------------------------------------------------
 
   private async recordAttempt(step: StepRunRow): Promise<void> {
+    // GO4b: the attempt's work was judged done when the step started waiting on its acceptance.
+    if (
+      step.status === 'waiting' &&
+      (step.waitingReason === 'acceptance' || step.waitingReason === 'acceptance_unavailable')
+    ) {
+      await this.verifyStep(step);
+      return;
+    }
     const task = await readStepAttemptTask(this.client, this.ws, step.id, step.attemptCount);
     if (!task) {
       await this.pause(
@@ -561,7 +585,7 @@ class Advance {
     });
     const effect = stepActionEffect(outcomes);
     if (effect.kind === 'wait') {
-      await this.holdStep(step, effect.waitingReason, task.id);
+      await this.holdStep(step, effect.waitingReason, { taskId: task.id });
       if (effect.waitingReason === 'reconcile') {
         const forPerson = await this.reconcileByPlatform(step, outcomes);
         if (forPerson !== null) await this.pause('awaiting_reconcile', forPerson);
@@ -576,6 +600,17 @@ class Advance {
       taskFailureReason: task.failureReason,
     };
     if (verdict.kind === 'succeed') {
+      const entry = await this.entry(step);
+      if (!entry) {
+        await this.pause('needs_decision', `step ${step.stepKey}: its plan entry is unreadable`);
+        return;
+      }
+      if ((entry.acceptance ?? []).length > 0) {
+        await this.holdStep(step, 'acceptance', audit);
+        // A paused run observes nothing: its resume opens the round (`verifyStep`).
+        if (this.status === 'running') await this.openStepRound(step, entry);
+        return;
+      }
       await this.moveStep(step, 'succeed', { audit });
       return;
     }
@@ -637,14 +672,102 @@ class Advance {
    *  again (the waiting reason is set by the transition into waiting). */
   private async holdStep(
     step: StepRunRow,
-    reason: Extract<StepRunWaitingReason, 'approval' | 'reconcile'>,
-    taskId: string,
+    reason: StepRunWaitingReason,
+    audit: Record<string, unknown>,
   ): Promise<void> {
     if (step.status === 'waiting' && step.waitingReason === reason) return;
-    const audit = { taskId, attempt: step.attemptCount };
+    const withAttempt = { ...audit, attempt: step.attemptCount };
     const running =
-      step.status === 'waiting' ? await this.moveStep(step, 'resume', { audit }) : step;
-    await this.moveStep(running, 'wait', { waitingReason: reason, audit });
+      step.status === 'waiting'
+        ? await this.moveStep(step, 'resume', { audit: withAttempt })
+        : step;
+    await this.moveStep(running, 'wait', { waitingReason: reason, audit: withAttempt });
+  }
+
+  /**
+   * GO4b: a step waiting on its acceptance — see the module comment, phase A. Its current round is
+   * the latest one opened since it started waiting; a round with a superseded check ended under a
+   * pause, so the run verifies the step again in a new one once it runs.
+   */
+  private async verifyStep(step: StepRunRow): Promise<void> {
+    if (step.waitingReason === 'acceptance_unavailable') {
+      // Waits on a person, for whom the run paused: their resume verifies the step again.
+      if (this.status !== 'running') return;
+      const entry = await this.entry(step);
+      if (!entry) {
+        await this.pause('needs_decision', `step ${step.stepKey}: its plan entry is unreadable`);
+        return;
+      }
+      await this.holdStep(step, 'acceptance', { reverify: true });
+      await this.openStepRound(step, entry);
+      return;
+    }
+    const round = await readCurrentStepAcceptanceRound(
+      this.client,
+      this.ws,
+      step.id,
+      step.updatedAt,
+    );
+    if (round.length === 0 || round.some((check) => check.status === 'superseded')) {
+      if (this.status !== 'running') return;
+      const entry = await this.entry(step);
+      if (!entry) {
+        await this.pause('needs_decision', `step ${step.stepKey}: its plan entry is unreadable`);
+        return;
+      }
+      await this.openStepRound(step, entry);
+      return;
+    }
+    // The platform's settlement of each sets the run due.
+    if (round.some((check) => check.status === 'pending')) return;
+    const roundNumber = round[0]?.round;
+    const failed = round.filter((check) => check.status === 'failed');
+    const unavailable = round.filter((check) => check.status === 'unavailable');
+    const audit = {
+      round: roundNumber,
+      attempt: step.attemptCount,
+      ...(failed.length > 0 ? { failedChecks: failed.map((check) => check.checkKey) } : {}),
+      ...(unavailable.length > 0
+        ? { unavailableChecks: unavailable.map((check) => check.checkKey) }
+        : {}),
+    };
+    const named = [...failed, ...unavailable].map((check) =>
+      check.status === 'failed'
+        ? `acceptance check ${check.checkKey}: its observation did not satisfy the predicate`
+        : `acceptance check ${check.checkKey}: could not be made (${check.lastError ?? 'no reason recorded'})`,
+    );
+    if (failed.length > 0) {
+      await this.moveStep(step, 'fail', { failureCategory: 'verification_failed', audit });
+      await this.pause(
+        'needs_decision',
+        `step ${step.stepKey}: attempt ${step.attemptCount}: ${named.join('; ')}; retry the step (its work is done again), revise the plan or cancel`,
+      );
+      return;
+    }
+    if (unavailable.length > 0) {
+      await this.holdStep(step, 'acceptance_unavailable', audit);
+      await this.pause(
+        'needs_decision',
+        `step ${step.stepKey}: attempt ${step.attemptCount}: ${named.join('; ')}; resume the run to verify the step again, revise the plan or cancel`,
+      );
+      return;
+    }
+    await this.moveStep(step, 'succeed', {
+      audit: { ...audit, checks: round.map((check) => check.checkKey) },
+    });
+  }
+
+  /** Opens a verification round of `step`'s declared checks for its current attempt. */
+  private async openStepRound(step: StepRunRow, entry: PlanStep): Promise<void> {
+    await openStepAcceptanceRound(this.client, this.ws, {
+      goalRunId: this.goal.id,
+      stepRunId: step.id,
+      stepKey: step.stepKey,
+      stepAttempt: step.attemptCount,
+      planRevision: step.introducedInRevision,
+      checks: entry.acceptance ?? [],
+      actorPrincipalId: this.requester,
+    });
   }
 
   // ----- B ------------------------------------------------------------------------------------
@@ -954,7 +1077,9 @@ class Advance {
       waits.push(
         outcomes.some((outcome) => actionDisposition(outcome) === 'unconfirmed')
           ? `step ${step.stepKey}: an action of it was found to have no effect and is not run again on its own — decide to run it again, then retry the step`
-          : `step ${step.stepKey}: attempt ${step.attemptCount} failed (${step.failureCategory}) and is not retried on its own — retry it`,
+          : step.failureCategory === 'verification_failed'
+            ? `step ${step.stepKey}: attempt ${step.attemptCount} did not pass its acceptance checks and is not retried on its own — retry it (its work is done again)`
+            : `step ${step.stepKey}: attempt ${step.attemptCount} failed (${step.failureCategory}) and is not retried on its own — retry it`,
       );
     }
     await this.pause('needs_decision', `${waits.join('; ')}; or revise the plan or cancel`);

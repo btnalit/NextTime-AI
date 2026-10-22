@@ -228,7 +228,11 @@ export async function recordAdvanceFailure(
  *       (S11 GO4a) — a round to open (a run that entered it under a release without verification)
  *       or a settled round whose advance failed. A round waiting on an observation or on the
  *       requester is not counted: the observation's settlement and the requester's confirmation set
- *       the run due in their own transactions (`acceptance-check.ts`, `acceptance.ts`).
+ *       the run due in their own transactions (`acceptance-check.ts`, `acceptance.ts`);
+ *   (g) while running: a step waiting on its acceptance (`acceptance`, or `acceptance_unavailable`
+ *       after the run was resumed) with no pending check opened since it last moved (S11 GO4b) — a
+ *       round to open, or a settled round whose advance failed. A round waiting on its observations
+ *       is not counted: their settlement sets the run due (`acceptance-check.ts`).
  * Returns how many runs it set due. A `waiting(reconcile)` step is not counted: its GoalRun is
  * paused for a person, whose finding sets the run due in its own transaction (`reconcile.ts`,
  * GO3c) — or, while the platform's check of it is pending, keeps running, and the check's
@@ -293,6 +297,16 @@ export async function markReconcileDue(
                            select 1 from goal_acceptance_checks ac
                             where ac.workspace_id = c.workspace_id and ac.goal_run_id = c.id
                               and ac.status = 'pending' and ac.created_at >= c.updated_at))
+                     or (c.status = 'running'
+                         and exists (
+                           select 1 from step_runs s
+                            where s.workspace_id = c.workspace_id and s.goal_run_id = c.id
+                              and s.status = 'waiting'
+                              and s.waiting_reason in ('acceptance', 'acceptance_unavailable')
+                              and not exists (
+                                select 1 from step_acceptance_checks sc
+                                 where sc.workspace_id = s.workspace_id and sc.step_run_id = s.id
+                                   and sc.status = 'pending' and sc.created_at >= s.updated_at)))
                      or (c.status = 'running'
                          and (select coalesce(sum(t.tokens_used), 0) from tasks t
                                where t.workspace_id = c.workspace_id and t.goal_run_id = c.id)

@@ -300,7 +300,7 @@ const enumsUnderTest = [
     'StepRunWaitingReason',
     STEP_RUN_WAITING_REASON_VALUES,
     StepRunWaitingReasonSchema,
-    ['approval', 'reconcile', 'external'],
+    ['approval', 'reconcile', 'external', 'acceptance', 'acceptance_unavailable'],
   ],
   [
     'StepRunFailureCategory',

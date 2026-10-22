@@ -7,6 +7,7 @@ import {
   MAX_PLAN_ACCEPTANCE_CHECKS,
   MAX_PLAN_BYTES,
   MAX_PLAN_STEPS,
+  MAX_STEP_ACCEPTANCE_CHECKS,
   MAX_STEP_ATTEMPTS,
   parsePlan,
   planHints,
@@ -44,7 +45,7 @@ describe('parsePlan', () => {
   });
 
   it('refuses unknown fields rather than ignoring them', () => {
-    expect(problemsOf({ steps: [step('a', { acceptance: 'always' })] })).toHaveLength(1);
+    expect(problemsOf({ steps: [step('a', { verify: 'always' })] })).toHaveLength(1);
     expect(problemsOf({ steps: [step('a')], outputs: {} })).toHaveLength(1);
     expect(problemsOf({ steps: [{ key: 'a', worker: { ...worker, pinned: true } }] })).toHaveLength(
       1,
@@ -356,6 +357,93 @@ describe('parsePlan — acceptance checks (S11 GO4a)', () => {
     ).toEqual([observe('up')]);
     expect(roundAcceptance({ steps: [] }, 'x')).toBeNull();
     expect(roundAcceptance(null, 'x')).toBeNull();
+  });
+});
+
+describe('parsePlan — a step’s acceptance checks (S11 GO4b)', () => {
+  const gate = randomUUID();
+  const observe = (
+    key: string,
+    expect: unknown = { path: 'state', op: 'eq', value: 'running' },
+  ) => ({
+    kind: 'observe_predicate',
+    key,
+    check: { gatekeeperId: gate, operation: 'svc.status', params: { name: 'web' }, expect },
+  });
+
+  it('accepts observations under their own keys per step — the same key in another step or the goal’s is fine', () => {
+    const plan = parsePlan({
+      steps: [
+        step('a', { acceptance: [observe('up'), observe('healthy')] }),
+        step('b', { dependsOn: ['a'], acceptance: [observe('up')] }),
+      ],
+      acceptance: [observe('up')],
+    });
+    expect(plan.steps.map((entry) => entry.acceptance?.map((check) => check.key))).toEqual([
+      ['up', 'healthy'],
+      ['up'],
+    ]);
+  });
+
+  it('refuses a confirmation, a fact predicate, an empty list, a key used twice, unknown fields and too many checks', () => {
+    // A step is checked by the platform alone: the requester confirms the goal, never a step.
+    expect(
+      problemsOf({
+        steps: [
+          step('a', { acceptance: [{ kind: 'requester_confirm', key: 'ok', prompt: 'ok?' }] }),
+        ],
+      }),
+    ).toHaveLength(1);
+    // GO4c's kind is not accepted before GO4c.
+    expect(
+      problemsOf({
+        steps: [step('a', { acceptance: [{ ...observe('up'), kind: 'fact_predicate' }] })],
+      }),
+    ).toHaveLength(1);
+    expect(problemsOf({ steps: [step('a', { acceptance: [] })] })).toHaveLength(1);
+    expect(
+      problemsOf({ steps: [step('a', { acceptance: [observe('up'), observe('up')] })] }),
+    ).toEqual(['step "a": acceptance[1] "up": the key appears more than once']);
+    expect(
+      problemsOf({ steps: [step('a', { acceptance: [{ ...observe('up'), retries: 3 }] })] }),
+    ).toHaveLength(1);
+    expect(
+      problemsOf({
+        steps: [
+          step('a', {
+            acceptance: Array.from({ length: MAX_STEP_ACCEPTANCE_CHECKS + 1 }, (_, i) =>
+              observe(`c${i}`),
+            ),
+          }),
+        ],
+      }),
+    ).toHaveLength(1);
+  });
+
+  it('holds a step’s predicate to the lint and the credential review the goal’s is under, naming the step', () => {
+    const [always] = problemsOf({
+      steps: [step('a', { acceptance: [observe('up', { not: { path: 'error', op: 'exists' } })] })],
+    });
+    expect(always).toMatch(/^step "a": acceptance\[0\] "up": the predicate holds on /);
+    // Absence is never proof (GO3d's decision): "nothing is there" is refused here too.
+    for (const absent of [
+      { path: 'length(items)', op: 'eq', value: 0 },
+      { path: 'found', op: 'eq', value: false },
+    ]) {
+      expect(
+        problemsOf({ steps: [step('a', { acceptance: [observe('gone', absent)] })] }),
+      ).toHaveLength(1);
+    }
+    const vendor = `ghp_${'abcdefghij'.repeat(4)}`;
+    expect(
+      problemsOf({
+        steps: [
+          step('a', { acceptance: [observe('up', { path: 'owner', op: 'eq', value: vendor })] }),
+        ],
+      }),
+    ).toEqual([
+      'step "a": acceptance[0] "up": a value compared at path "owner" looks like a credential (1 suspected) — the check judges the result with such values redacted, so it could never match; a plan does not carry credentials',
+    ]);
   });
 });
 

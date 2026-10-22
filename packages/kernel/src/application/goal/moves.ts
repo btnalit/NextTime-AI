@@ -14,7 +14,10 @@ import {
   transition,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
-import { supersedePendingAcceptanceChecks } from './acceptance-checks.js';
+import {
+  supersedePendingAcceptanceChecks,
+  supersedePendingStepAcceptanceChecks,
+} from './acceptance-checks.js';
 import { recordGoalRunTransition, recordStepRunTransition } from './transition-log.js';
 import {
   STEP_RUN_ROW_COLUMNS,
@@ -60,7 +63,9 @@ export interface StepMove {
   readonly audit?: Record<string, unknown>;
 }
 
-/** Moves `step` along `event`; throws when the row is no longer in the status it was read in. */
+/** Moves `step` along `event`; throws when the row is no longer in the status it was read in. A
+ *  move of a step waiting on its acceptance supersedes its round's pending checks in the same
+ *  transaction (S11 GO4b: a round ends when the step stops waiting on it). */
 export async function moveStepRun(
   client: PoolClient,
   actor: GoalMoveActor,
@@ -94,6 +99,15 @@ export async function moveStepRun(
   );
   const row = result.rows[0];
   if (!row) throw new Error(`step run ${step.id} is no longer ${step.status}`);
+  const supersededChecks =
+    step.status === 'waiting' && step.waitingReason === 'acceptance'
+      ? await supersedePendingStepAcceptanceChecks(client, step.workspaceId, {
+          goalRunId: step.goalRunId,
+          stepRunId: step.id,
+          actorPrincipalId: actor.principalId,
+          reason: 'step_moved',
+        })
+      : 0;
   await recordStepRunTransition(client, step.workspaceId, {
     actorPrincipalId: actor.principalId,
     action: `step_run.${event}`,
@@ -106,6 +120,7 @@ export async function moveStepRun(
       ...(to === 'waiting' ? { waitingReason: move.waitingReason } : {}),
       ...(to === 'failed' ? { failureCategory: move.failureCategory } : {}),
       ...(to === 'superseded' ? { supersededInRevision: move.supersededInRevision } : {}),
+      ...(supersededChecks > 0 ? { supersededAcceptanceChecks: supersededChecks } : {}),
       ...move.audit,
     },
   });
@@ -136,7 +151,8 @@ export interface GoalMove {
 /** Moves the GoalRun `goal` (in status `from`) along `event`; returns the new status. A move out of
  *  `verifying` supersedes the round's pending acceptance checks in the same transaction (S11 GO4a:
  *  nothing is observed for a run that is not verifying, and no row of an ended round stays
- *  pending). */
+ *  pending); a move out of `running` its steps' pending ones (S11 GO4b: nothing is observed for a
+ *  step of a run that is not running — resuming it verifies the step in a new round). */
 export async function moveGoalRun(
   client: PoolClient,
   actor: GoalMoveActor,
@@ -185,7 +201,13 @@ export async function moveGoalRun(
           actorPrincipalId: actor.principalId,
           reason: 'goal_moved',
         })
-      : 0;
+      : from === 'running'
+        ? await supersedePendingStepAcceptanceChecks(client, goal.workspaceId, {
+            goalRunId: goal.id,
+            actorPrincipalId: actor.principalId,
+            reason: 'goal_moved',
+          })
+        : 0;
   await recordGoalRunTransition(client, goal.workspaceId, {
     actorPrincipalId: actor.principalId,
     action: `goal_run.${event}`,

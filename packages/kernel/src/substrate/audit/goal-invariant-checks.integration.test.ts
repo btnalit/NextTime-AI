@@ -380,6 +380,81 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
     }
 
+    /** The Observation an attempt of a step's acceptance check records (S11 GO4b). */
+    async function stepCheckObservation(
+      goalRunId: string,
+      stepRunId: string,
+      round: number,
+      checkKey: string,
+      content: Record<string, unknown> = {},
+    ): Promise<string> {
+      const rows = await raw<{ id: string }>(
+        `insert into observations (workspace_id, source_id, activity_id, content)
+         values ($1, $2, $3, $4::jsonb) returning id`,
+        [
+          workspaceId,
+          randomUUID(),
+          randomUUID(),
+          JSON.stringify({
+            purpose: 'step_acceptance_check',
+            goalRunId,
+            stepRunId,
+            round,
+            checkKey,
+            outcome: 'satisfied',
+            ...content,
+          }),
+        ],
+      );
+      return rows[0]?.id as string;
+    }
+
+    interface StepAcceptanceFields {
+      readonly round?: number;
+      readonly attempt?: number;
+      readonly status?: 'pending' | 'passed' | 'failed';
+      readonly observationId?: string;
+    }
+
+    /** A step's acceptance check of a round (S11 GO4b); settled, it rests by default on an
+     *  Observation of its own that satisfied its predicate (or, failed, did not). */
+    async function stepAcceptance(
+      goalRunId: string,
+      stepRunId: string,
+      key: string,
+      fields: StepAcceptanceFields = {},
+    ): Promise<void> {
+      const status = fields.status ?? 'passed';
+      const round = fields.round ?? 1;
+      const tried = status !== 'pending';
+      const observationId = tried
+        ? (fields.observationId ??
+          (await stepCheckObservation(goalRunId, stepRunId, round, key, {
+            outcome: status === 'passed' ? 'satisfied' : 'unsatisfied',
+          })))
+        : null;
+      await raw(
+        `insert into step_acceptance_checks (workspace_id, goal_run_id, step_run_id, step_attempt,
+           round, check_key, plan_revision, kind, observation_check, status, attempts,
+           first_attempt_at, observation_id, settled_at)
+         values ($1, $2, $3, $4, $5, $6, 1, 'observe_predicate', $7::jsonb, $8, $9, $10, $11, $12)`,
+        [
+          workspaceId,
+          goalRunId,
+          stepRunId,
+          fields.attempt ?? 1,
+          round,
+          key,
+          JSON.stringify({ operation: 'svc.status' }),
+          status,
+          tried ? 1 : 0,
+          tried ? new Date() : null,
+          observationId,
+          tried ? new Date() : null,
+        ],
+      );
+    }
+
     const setOutcomeDecision = (goalRunId: string, decisionId: string) =>
       raw('update goal_runs set outcome_decision_id = $3 where workspace_id = $1 and id = $2', [
         workspaceId,
@@ -721,9 +796,98 @@ describe.runIf(DATABASE_URL !== undefined)(
         }
       });
 
+      it('counts a succeeded step whose declared acceptance checks did not all pass for its current attempt in its latest round (S11 GO4b)', async () => {
+        const goalRunId = await goal();
+        const checked = (key: string) => ({
+          key,
+          acceptance: [
+            { kind: 'observe_predicate', key: 'up', check: { operation: 'svc.status' } },
+            { kind: 'observe_predicate', key: 'down', check: { operation: 'svc.status' } },
+          ],
+        });
+        const keys = ['healthy', 'retried', 'noRound', 'notPassed', 'oldAttempt', 'missing'];
+        await revision(goalRunId, 1, [...keys.map(checked), 'plain']);
+        const succeeded = (key: string, attemptCount = 1) =>
+          step(goalRunId, key, { status: 'succeeded', attemptCount });
+        const healthy = await succeeded('healthy');
+        await stepAcceptance(goalRunId, healthy, 'up');
+        await stepAcceptance(goalRunId, healthy, 'down');
+        // An earlier round of an earlier attempt that did not pass does not count.
+        const retried = await succeeded('retried', 2);
+        await stepAcceptance(goalRunId, retried, 'up', { status: 'failed' });
+        await stepAcceptance(goalRunId, retried, 'down');
+        await stepAcceptance(goalRunId, retried, 'up', { round: 2, attempt: 2 });
+        await stepAcceptance(goalRunId, retried, 'down', { round: 2, attempt: 2 });
+        // A step that declares none succeeds on its work alone.
+        const plain = await succeeded('plain');
+        const noRound = await succeeded('noRound');
+        const notPassed = await succeeded('notPassed');
+        await stepAcceptance(goalRunId, notPassed, 'up');
+        await stepAcceptance(goalRunId, notPassed, 'down', { status: 'failed' });
+        const oldAttempt = await succeeded('oldAttempt', 2);
+        await stepAcceptance(goalRunId, oldAttempt, 'up');
+        await stepAcceptance(goalRunId, oldAttempt, 'down');
+        const missing = await succeeded('missing');
+        await stepAcceptance(goalRunId, missing, 'up');
+
+        const result = await check((client) => checkIG5(client, ALL));
+        for (const id of [healthy, retried, plain]) expect(mentioned(result, id), id).toBe(false);
+        for (const [id, detail] of [
+          [noRound, 'step noRound succeeded at attempt 1: no acceptance round'],
+          [
+            notPassed,
+            'step notPassed succeeded at attempt 1: round 1: 1 not passed for that attempt, 0 declared checks missing',
+          ],
+          [
+            oldAttempt,
+            'step oldAttempt succeeded at attempt 2: round 1: 2 not passed for that attempt, 0 declared checks missing',
+          ],
+          [
+            missing,
+            'step missing succeeded at attempt 1: round 1: 0 not passed for that attempt, 1 declared checks missing',
+          ],
+        ] as const) {
+          expect(result.sample, detail).toContain(
+            `step-succeeded-unverified ${workspaceId}:${id} (${detail})`,
+          );
+        }
+      });
+
+      it('counts a passed step check without an Observation of that check that satisfied its predicate (S11 GO4b)', async () => {
+        const goalRunId = await goal();
+        await revision(goalRunId, 1, ['s']);
+        const healthy = await step(goalRunId, 'healthy', { status: 'waiting' });
+        await stepAcceptance(goalRunId, healthy, 'up');
+        const breaches: string[] = [];
+        for (const content of [
+          { checkKey: 'other' },
+          { stepRunId: randomUUID() },
+          { goalRunId: randomUUID() },
+          { round: 2 },
+          { outcome: 'unsatisfied' },
+          { purpose: 'acceptance_check' },
+        ]) {
+          const stepRunId = await step(goalRunId, `s${breaches.length}`, { status: 'waiting' });
+          await stepAcceptance(goalRunId, stepRunId, 'up', {
+            observationId: await stepCheckObservation(goalRunId, stepRunId, 1, 'up', content),
+          });
+          breaches.push(stepRunId);
+        }
+
+        const result = await check((client) => checkIG5(client, ALL));
+        expect(mentioned(result, healthy)).toBe(false);
+        for (const id of breaches) {
+          expect(result.sample, id).toContain(
+            `step-passed-without-evidence ${workspaceId}:${id} (round 1 check up (observe_predicate) passed without its evidence)`,
+          );
+        }
+      });
+
       it.each([
         ['goal_runs', 'goal_runs_status_guard'],
         ['goal_acceptance_checks', 'goal_acceptance_checks_guard'],
+        ['step_runs', 'step_runs_acceptance_guard'],
+        ['step_acceptance_checks', 'step_acceptance_checks_guard'],
       ])(
         'counts the guard %s.%s disabled, or switched to fire only under replica',
         async (table, trigger) => {
