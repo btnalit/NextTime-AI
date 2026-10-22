@@ -228,4 +228,59 @@ describe('OnboardingWizardReview — credential confirmation', () => {
       ]),
     );
   });
+
+  it('legacy 174: a tick given for one draft never goes out with a different draft', async () => {
+    const calls: { name: string; params: unknown }[] = [];
+    const digests = ['sha256:d1', 'sha256:d2', 'sha256:d2'];
+    let publishes = 0;
+    const http = {
+      call: vi.fn(async (name: string, p?: unknown) => {
+        if (name === 'search') return { items: [operationObject('gk-1', 'rotate_key')] };
+        calls.push({ name, params: p });
+        if (name === 'propose_operation') {
+          return { governanceChange: null, draftDigest: digests.shift() };
+        }
+        if (name === 'publish_operation') {
+          publishes += 1;
+          if (publishes <= 2) {
+            throw new HttpError(
+              'capability_error',
+              'operation carries suspected credentials',
+              'credentials_review_required',
+              { subject: 'operation', suspectedSecretValues: publishes },
+            );
+          }
+          return { status: 'published' };
+        }
+        throw new Error(`unscripted ${name}`);
+      }) as CapabilityCaller['call'],
+    } as CapabilityCaller;
+    render(<OnboardingWizardReview http={http} gatekeeperId="gk-1" onDone={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: /提议重分类/ }));
+    const form = await screen.findByTestId('wizard-review-reclassify-form');
+    const submit = () => fireEvent.click(within(form).getByRole('button', { name: /提交/ }));
+    submit();
+    await within(form).findByTestId('credential-review');
+    fireEvent.click(within(form).getByTestId('credential-review-confirm'));
+    // The gate was re-imported in between: this Submit proposes a different draft (d2), so the
+    // tick given for d1 is not sent and the kernel asks again, about d2.
+    submit();
+    await waitFor(() =>
+      expect(within(form).getByTestId('credential-review').getAttribute('data-count')).toBe('2'),
+    );
+    fireEvent.click(within(form).getByTestId('credential-review-confirm'));
+    submit();
+    await waitFor(() =>
+      expect(calls.filter((c) => c.name === 'publish_operation').map((c) => c.params)).toEqual([
+        { gatekeeperId: 'gk-1', name: 'rotate_key', draftDigest: 'sha256:d1' },
+        { gatekeeperId: 'gk-1', name: 'rotate_key', draftDigest: 'sha256:d2' },
+        {
+          gatekeeperId: 'gk-1',
+          name: 'rotate_key',
+          credentialsReviewed: true,
+          draftDigest: 'sha256:d2',
+        },
+      ]),
+    );
+  });
 });
