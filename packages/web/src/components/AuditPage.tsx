@@ -178,7 +178,7 @@ function ReconstructCard({ http }: { readonly http: CapabilityCaller }) {
         <h2 id="reconstruct-title">{t('重建', 'Reconstruct')}</h2>
       </div>
       <form
-        className="inline-form"
+        className="inline-form inline-form-top"
         onSubmit={(event) => void handleSubmit(event)}
         data-testid="reconstruct-form"
       >

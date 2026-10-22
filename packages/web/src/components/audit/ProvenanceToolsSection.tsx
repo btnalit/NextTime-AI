@@ -115,7 +115,7 @@ function CausalChainTool({ http }: { readonly http: CapabilityCaller }) {
     <div className="stack-s" data-testid="causal-chain-tool">
       <h3 className="section-title">{t('因果链与影响', 'Causal chain & impact')}</h3>
       <form
-        className="inline-form"
+        className="inline-form inline-form-top"
         onSubmit={(event) => void handleSubmit(event)}
         data-testid="causal-chain-form"
       >
@@ -288,7 +288,7 @@ function PrecedentsTool({ http }: { readonly http: CapabilityCaller }) {
     <div className="stack-s" data-testid="precedents-tool">
       <h3 className="section-title">{t('先例与查询', 'Precedents & query')}</h3>
       <form
-        className="inline-form row-wrap"
+        className="inline-form inline-form-top row-wrap"
         onSubmit={(event) => {
           event.preventDefault();
           if (canFindPrecedents) void run('precedents');
