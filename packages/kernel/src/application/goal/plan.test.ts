@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { GOAL_ACCEPTANCE_CHECK_KIND_VALUES } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
 import {
   GoalPlanValidationError,
@@ -385,7 +386,7 @@ describe('parsePlan — a step’s acceptance checks (S11 GO4b)', () => {
     ]);
   });
 
-  it('refuses a confirmation, a fact predicate, an empty list, a key used twice, unknown fields and too many checks', () => {
+  it('refuses a confirmation, a fact check carrying an observation, an empty list, a key used twice, unknown fields and too many checks', () => {
     // A step is checked by the platform alone: the requester confirms the goal, never a step.
     expect(
       problemsOf({
@@ -394,12 +395,15 @@ describe('parsePlan — a step’s acceptance checks (S11 GO4b)', () => {
         ],
       }),
     ).toHaveLength(1);
-    // GO4c's kind is not accepted before GO4c.
+    // A fact check names its Fact under `fact`, never an observation.
     expect(
       problemsOf({
         steps: [step('a', { acceptance: [{ ...observe('up'), kind: 'fact_predicate' }] })],
       }),
-    ).toHaveLength(1);
+    ).toEqual([
+      'steps.0.acceptance.0.fact: Required',
+      "steps.0.acceptance.0: Unrecognized key(s) in object: 'check'",
+    ]);
     expect(problemsOf({ steps: [step('a', { acceptance: [] })] })).toHaveLength(1);
     expect(
       problemsOf({ steps: [step('a', { acceptance: [observe('up'), observe('up')] })] }),
@@ -445,6 +449,167 @@ describe('parsePlan — a step’s acceptance checks (S11 GO4b)', () => {
       'step "a": acceptance[0] "up": a value compared at path "owner" looks like a credential (1 suspected) — the check judges the result with such values redacted, so it could never match; a plan does not carry credentials',
     ]);
   });
+});
+
+describe('parsePlan — acceptance checks on a Fact of the graph (S11 GO4c)', () => {
+  const web = randomUUID();
+  const fact = (key: string, extra: Record<string, unknown> = {}) => ({
+    kind: 'fact_predicate',
+    key,
+    fact: {
+      linkType: 'runs_on',
+      source: { objectId: web },
+      target: { objectType: 'Host', identity: { name: 'web-1' } },
+      ...extra,
+    },
+  });
+
+  it('accepts a Fact named by its Link type and its two ends, with or without a predicate, on the goal and on a step', () => {
+    const plan = parsePlan({
+      steps: [step('a', { acceptance: [fact('runs')] })],
+      acceptance: [fact('runs', { expect: { path: 'port', op: 'eq', value: 443 } })],
+    });
+    expect(plan.acceptance).toEqual([
+      fact('runs', { expect: { path: 'port', op: 'eq', value: 443 } }),
+    ]);
+    expect(plan.steps[0]?.acceptance).toEqual([fact('runs')]);
+    // A Fact the platform judges is a check it makes: the goal is not achieved on a word alone.
+    expect(planHints(parsePlan({ steps: [step('a')], acceptance: [fact('runs')] }))).toEqual([]);
+    expect(
+      roundAcceptance({ steps: [step('a')], acceptance: [fact('runs')] }, 'ship the report'),
+    ).toEqual([fact('runs')]);
+  });
+
+  it('refuses a Fact without its Link type or an end, an end named both ways or by nothing, and unknown fields', () => {
+    for (const refused of [
+      { linkType: '' },
+      { source: { objectId: 'web' } },
+      { source: { objectId: web, objectType: 'Service', identity: { name: 'web' } } },
+      { target: { objectType: 'Host', identity: {} } },
+      { target: { objectType: 'Host' } },
+      { mode: 'latest' },
+    ]) {
+      expect(
+        problemsOf({ steps: [step('a')], acceptance: [fact('runs', refused)] }),
+        JSON.stringify(refused),
+      ).toHaveLength(1);
+    }
+    const { fact: _fact, ...noFact } = fact('runs');
+    expect(problemsOf({ steps: [step('a')], acceptance: [noFact] })).toHaveLength(1);
+  });
+
+  it('holds a Fact’s predicate to the lint and the credential review, and its identities to the credential review, on the goal and on a step', () => {
+    const [always] = problemsOf({
+      steps: [step('a')],
+      acceptance: [fact('runs', { expect: { not: { path: 'error', op: 'exists' } } })],
+    });
+    expect(always).toMatch(/^acceptance\[0\] "runs": the predicate holds on /);
+    const vendor = `ghp_${'abcdefghij'.repeat(4)}`;
+    expect(
+      problemsOf({
+        steps: [step('a')],
+        acceptance: [fact('runs', { expect: { path: 'owner', op: 'eq', value: vendor } })],
+      }),
+    ).toEqual([
+      'acceptance[0] "runs": a value compared at path "owner" looks like a credential (1 suspected) — the check judges the result with such values redacted, so it could never match; a plan does not carry credentials',
+    ]);
+    // Synthetic and vendor-shaped: what the credential review counts.
+    expect(
+      problemsOf({
+        steps: [
+          step('a', {
+            acceptance: [
+              fact('runs', {
+                source: { objectType: 'Account', identity: { name: 'svc', apiKey: vendor } },
+              }),
+            ],
+          }),
+        ],
+      }),
+    ).toEqual([
+      'step "a": acceptance[0] "runs": the source\'s identity looks like it carries a credential (1 suspected) — a plan does not carry credentials',
+    ]);
+    // A name that only mentions one is an ordinary identity.
+    expect(() =>
+      parsePlan({
+        steps: [step('a')],
+        acceptance: [
+          fact('runs', { target: { objectType: 'Header', identity: { name: 'Authorization' } } }),
+        ],
+      }),
+    ).not.toThrow();
+  });
+});
+
+describe('parsePlan — absence is never proof, wherever a predicate sits (S11 GO3d, GO4c)', () => {
+  const gate = randomUUID();
+  const observation = (expect: unknown) => ({
+    gatekeeperId: gate,
+    operation: 'svc.status',
+    expect,
+  });
+  const factOf = (expect: unknown) => ({
+    linkType: 'runs_on',
+    source: { objectId: randomUUID() },
+    target: { objectId: randomUUID() },
+    expect,
+  });
+  const checkOf: Record<string, (expect: unknown) => Record<string, unknown>> = {
+    observe_predicate: (expect) => ({
+      kind: 'observe_predicate',
+      key: 'k',
+      check: observation(expect),
+    }),
+    fact_predicate: (expect) => ({ kind: 'fact_predicate', key: 'k', fact: factOf(expect) }),
+  };
+  /** A plan with one predicate, for every place a plan carries one. */
+  const PLACES: Record<string, (expect: unknown) => unknown> = {
+    reconcile: (expect) => ({
+      steps: [
+        step('a', {
+          reconcile: [
+            {
+              action: { gatekeeperId: gate, operation: 'svc.restart' },
+              check: observation(expect),
+            },
+          ],
+        }),
+      ],
+    }),
+    ...Object.fromEntries(
+      Object.entries(checkOf).flatMap(([kind, check]) => [
+        [
+          `goal ${kind}`,
+          (expect: unknown) => ({ steps: [step('a')], acceptance: [check(expect)] }),
+        ],
+        [
+          `step ${kind}`,
+          (expect: unknown) => ({ steps: [step('a', { acceptance: [check(expect)] })] }),
+        ],
+      ]),
+    ),
+  };
+
+  it('covers reconcile and every acceptance check kind but the requester’s word, on the goal and on a step', () => {
+    const judged = GOAL_ACCEPTANCE_CHECK_KIND_VALUES.filter((kind) => kind !== 'requester_confirm');
+    expect(Object.keys(PLACES).sort()).toEqual(
+      ['reconcile', ...judged.flatMap((kind) => [`goal ${kind}`, `step ${kind}`])].sort(),
+    );
+  });
+
+  it.each(Object.keys(PLACES))(
+    '%s: refuses "nothing is there" — an empty list, a found flag false',
+    (place) => {
+      const plan = PLACES[place] as (expect: unknown) => unknown;
+      for (const absent of [
+        { path: 'length(items)', op: 'eq', value: 0 },
+        { path: 'found', op: 'eq', value: false },
+      ]) {
+        expect(problemsOf(plan(absent)), JSON.stringify(absent)).toHaveLength(1);
+      }
+      expect(() => parsePlan(plan({ path: 'state', op: 'eq', value: 'running' }))).not.toThrow();
+    },
+  );
 });
 
 describe('planStep and samePlanEntry', () => {

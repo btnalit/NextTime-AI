@@ -22,6 +22,12 @@ import { z } from 'zod';
  * Operation on a Gatekeeper and its params, the same three fields `observe_operation` takes. A goal
  * step declares one per action it may need reconciled (GO3d); the acceptance checks reuse it (GO4,
  * `observe_predicate`).
+ *
+ * {@link FactCheckSchema} (S11 GO4c, `fact_predicate`) pairs an optional predicate with a Fact of
+ * the graph instead: the Link of `linkType` from the `source` Object to the `target` one, each
+ * named by id or by its ObjectType and identity, and what the Fact's own properties must satisfy
+ * (none: the Fact being there is the check). Which Facts may serve as evidence — observed, recently, not
+ * by the goal itself — is the kernel's (`application/goal/fact-check.ts`, goal/0007).
  */
 
 export const PREDICATE_COMPARE_OPS = ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'contains'] as const;
@@ -164,3 +170,32 @@ export const ObservationCheckSchema = z
   })
   .strict();
 export type ObservationCheck = z.infer<typeof ObservationCheckSchema>;
+
+/** A graph Object a {@link FactCheck} names: by id, or by its ObjectType and identity — the Object
+ *  may not exist yet when the plan is written (the goal's work may be what creates it). */
+export const FactObjectRefSchema = z.union([
+  z.object({ objectId: z.string().uuid() }).strict(),
+  z
+    .object({
+      objectType: z.string().min(1).max(200),
+      identity: z
+        .record(PredicateValueSchema)
+        .refine((identity) => Object.keys(identity).length > 0, {
+          message: 'an identity names at least one field',
+        }),
+    })
+    .strict(),
+]);
+export type FactObjectRef = z.infer<typeof FactObjectRefSchema>;
+
+/** A Fact of the graph — the Link of `linkType` from `source` to `target` — and what its own
+ *  properties must satisfy (`expect`; without it, the Fact being there is the check). */
+export const FactCheckSchema = z
+  .object({
+    linkType: z.string().min(1).max(200),
+    source: FactObjectRefSchema,
+    target: FactObjectRefSchema,
+    expect: PredicateSchema.optional(),
+  })
+  .strict();
+export type FactCheck = z.infer<typeof FactCheckSchema>;

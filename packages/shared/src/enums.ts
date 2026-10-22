@@ -390,13 +390,19 @@ export const GoalOutcomeBasisSchema = asEnum(GOAL_OUTCOME_BASIS_VALUES);
  * check — what the platform verifies, or the requester confirms, before a GoalRun is achieved:
  *   - `observe_predicate` (平台观察): an observe-class Operation, its params and a predicate over its
  *     result (`ObservationCheck`), observed by the platform for the requester;
+ *   - `fact_predicate` (事实判定, S11 GO4c, goal/0007): a Fact of the graph between two Objects
+ *     and a predicate over its properties (`FactCheck`), judged by the platform on a Fact observed
+ *     since the round opened, and not by the goal's own doing;
  *   - `requester_confirm` (请求人确认): the requester says the goal is achieved — asked once every
- *     observation of the round passed. A plan with no acceptance check has one implicitly.
- * A step's own acceptance (S11 GO4b, `step_acceptance_checks`, goal/0006) has `observe_predicate`
- * only: a step's acceptance never waits on a person. GO4c adds `fact_predicate`; W4 `review`.
+ *     check the platform makes in the round passed. A plan with no acceptance check has one
+ *     implicitly.
+ * A step's own acceptance (S11 GO4b, `step_acceptance_checks`, goal/0006) has the platform's kinds
+ * only (`observe_predicate`, `fact_predicate`): a step's acceptance never waits on a person. W4
+ * adds `review`.
  */
 export const GOAL_ACCEPTANCE_CHECK_KIND_VALUES = [
   'observe_predicate',
+  'fact_predicate',
   'requester_confirm',
 ] as const;
 export type GoalAcceptanceCheckKind = (typeof GOAL_ACCEPTANCE_CHECK_KIND_VALUES)[number];
@@ -404,12 +410,14 @@ export const GoalAcceptanceCheckKindSchema = asEnum(GOAL_ACCEPTANCE_CHECK_KIND_V
 
 /**
  * S11 GO4a (goal/0005): where one acceptance check of a verification round stands:
- *   - `pending` (验收中): not settled — an observation not made yet or tried again, a confirmation
- *     the requester has not given;
- *   - `passed` (通过): the observation satisfied the predicate, or the requester confirmed;
- *   - `failed` (未通过): no observation satisfied the predicate by the last try;
- *   - `unavailable` (无法验收): the observation could not be made — refused, or no answer by the
- *     last try;
+ *   - `pending` (验收中): not settled — an observation not made yet or tried again, a Fact not
+ *     looked at yet or looked for again, a confirmation the requester has not given;
+ *   - `passed` (通过): the observation (the Fact, GO4c) satisfied the predicate, or the requester
+ *     confirmed;
+ *   - `failed` (未通过): no observation (no Fact seen) satisfied the predicate by the last try —
+ *     something was seen, and it was not what was expected;
+ *   - `unavailable` (无法验收): nothing could be seen — the observation refused or unanswered by the
+ *     last try, or no Fact that may serve as evidence by then (GO4c);
  *   - `superseded` (已作废): the round ended before the check settled — the run left verification
  *     (paused, cancelled, ended by the requester) or a newer round began.
  * Only `pending` moves, once, to one of the others. A step's acceptance checks (S11 GO4b,

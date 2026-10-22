@@ -133,9 +133,11 @@ describe.runIf(DATABASE_URL !== undefined)(
       steps: readonly (string | Record<string, unknown>)[],
       status = 'accepted',
       basedOn: number | null = revisionNumber === 1 ? null : revisionNumber - 1,
+      acceptance: readonly Record<string, unknown>[] = [],
     ): Promise<string> {
       const plan = {
         steps: steps.map((step) => (typeof step === 'string' ? { key: step } : step)),
+        ...(acceptance.length > 0 ? { acceptance } : {}),
       };
       const rows = await raw<{ id: string }>(
         `insert into plan_revisions (workspace_id, goal_run_id, revision, based_on_revision, status,
@@ -322,7 +324,24 @@ describe.runIf(DATABASE_URL !== undefined)(
       readonly planRevision?: number;
       readonly observationId?: string;
       readonly decisionId?: string;
+      /** The observation's check (`CHECK` by default) or the confirmation's prompt (`PROMPT`). */
+      readonly check?: Record<string, unknown>;
+      readonly prompt?: string;
     }
+
+    /** What `acceptance` and `stepAcceptance` record by default — and a plan declares with
+     *  `observed` / `confirmation` (goal/0007 binds a goal's checks to its plan). */
+    const CHECK = { operation: 'svc.status' };
+    const PROMPT = 'Is it done?';
+    const observed = (key: string, check: Record<string, unknown> = CHECK) => ({
+      kind: 'observe_predicate',
+      key,
+      check,
+    });
+    const confirmation = (key: string) => ({ kind: 'requester_confirm', key, prompt: PROMPT });
+    /** Revision 1 of `goalRunId`, declaring `acceptance` as the goal's checks. */
+    const declare = (goalRunId: string, acceptance: readonly Record<string, unknown>[]) =>
+      revision(goalRunId, 1, ['s'], 'accepted', null, acceptance);
 
     /** An acceptance check of a round (S11 GO4a). Settled, it rests by default on its own
      *  evidence: an observation on an Observation of it that satisfied its predicate (or, failed,
@@ -368,8 +387,8 @@ describe.runIf(DATABASE_URL !== undefined)(
           key,
           fields.planRevision ?? 1,
           kind,
-          kind === 'observe_predicate' ? JSON.stringify({ operation: 'svc.status' }) : null,
-          kind === 'observe_predicate' ? null : 'Is it done?',
+          kind === 'observe_predicate' ? JSON.stringify(fields.check ?? CHECK) : null,
+          kind === 'observe_predicate' ? null : (fields.prompt ?? PROMPT),
           status,
           tried ? 1 : 0,
           tried ? new Date() : null,
@@ -414,6 +433,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       readonly attempt?: number;
       readonly status?: 'pending' | 'passed' | 'failed';
       readonly observationId?: string;
+      readonly check?: Record<string, unknown>;
     }
 
     /** A step's acceptance check of a round (S11 GO4b); settled, it rests by default on an
@@ -445,7 +465,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           fields.attempt ?? 1,
           round,
           key,
-          JSON.stringify({ operation: 'svc.status' }),
+          JSON.stringify(fields.check ?? CHECK),
           status,
           tried ? 1 : 0,
           tried ? new Date() : null,
@@ -454,6 +474,53 @@ describe.runIf(DATABASE_URL !== undefined)(
         ],
       );
     }
+
+    async function object(objectType: string, identity: Record<string, unknown>): Promise<string> {
+      const rows = await raw<{ id: string }>(
+        `insert into objects (workspace_id, object_type, identity_key) values ($1, $2, $3::jsonb)
+         returning id`,
+        [workspaceId, objectType, JSON.stringify(identity)],
+      );
+      return rows[0]?.id as string;
+    }
+
+    async function link(linkType: string, sourceId: string, targetId: string): Promise<string> {
+      const rows = await raw<{ id: string }>(
+        `insert into links (workspace_id, link_type, source_object_id, target_object_id,
+           epistemic_status, activity_id, asserted_by)
+         values ($1, $2, $3, $4, 'observed', $5, $6) returning id`,
+        [workspaceId, linkType, sourceId, targetId, randomUUID(), ownerId],
+      );
+      return rows[0]?.id as string;
+    }
+
+    /** A fact check of round 1 that passed on Fact `factId` (S11 GO4c) — the goal's, or with
+     *  `stepRunId` a step's (at its attempt 1). */
+    async function factAcceptance(
+      goalRunId: string,
+      key: string,
+      fact: Record<string, unknown>,
+      factId: string,
+      stepRunId?: string,
+    ): Promise<void> {
+      const columns = stepRunId
+        ? 'step_acceptance_checks (workspace_id, goal_run_id, step_run_id, step_attempt, round,'
+        : 'goal_acceptance_checks (workspace_id, goal_run_id, round,';
+      const values = stepRunId
+        ? [workspaceId, goalRunId, stepRunId, 1, 1]
+        : [workspaceId, goalRunId, 1];
+      const at = values.length;
+      await raw(
+        `insert into ${columns} check_key, plan_revision, kind, fact_check, fact_id, status,
+           attempts, first_attempt_at, settled_at)
+         values (${values.map((_, i) => `$${i + 1}`).join(', ')}, $${at + 1}, 1, 'fact_predicate',
+           $${at + 2}::jsonb, $${at + 3}, 'passed', 1, now(), now())`,
+        [...values, key, JSON.stringify(fact), factId],
+      );
+    }
+
+    /** A step waiting on its acceptance in goal run `goalRunId`. */
+    const stepOf = (goalRunId: string) => step(goalRunId, 's', { status: 'waiting' });
 
     const setOutcomeDecision = (goalRunId: string, decisionId: string) =>
       raw('update goal_runs set outcome_decision_id = $3 where workspace_id = $1 and id = $2', [
@@ -653,14 +720,16 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     describe('I-G5: a GoalRun’s outcome rests on its verification or on its requester’s word (S11 GO4a)', () => {
-      it('counts a run achieved by check whose latest round did not pass whole on the current plan, with an observation the platform made', async () => {
+      it('counts a run achieved by check whose latest round did not pass whole on the current plan, with a check the platform made', async () => {
         const byCheck = (fields: GoalFields = {}) =>
           goal({ status: 'completed', outcomeBasis: 'verified_by_check', ...fields });
         const healthy = await byCheck();
+        await declare(healthy, [observed('up'), confirmation('report')]);
         await acceptance(healthy, 'up');
         await acceptance(healthy, 'report', { kind: 'requester_confirm' });
         // An earlier round that did not pass does not count: the latest decides.
         const retried = await byCheck();
+        await declare(retried, [observed('up')]);
         await acceptance(retried, 'up', { status: 'failed' });
         await acceptance(retried, 'up', { round: 2 });
         const noRound = await byCheck();
@@ -684,16 +753,13 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(mentioned(result, retried)).toBe(false);
         for (const [id, detail] of [
           [noRound, 'no acceptance round'],
-          [notPassed, 'round 2: 1 not passed, 0 off the current plan, 2 observed by the platform'],
-          [pending, 'round 1: 1 not passed, 0 off the current plan, 2 observed by the platform'],
-          [offPlan, 'round 1: 0 not passed, 1 off the current plan, 1 observed by the platform'],
-          [
-            confirmedOnly,
-            'round 1: 0 not passed, 0 off the current plan, 0 observed by the platform',
-          ],
+          [notPassed, 'round 2: 1 not passed, 0 off the current plan, 2 made by the platform'],
+          [pending, 'round 1: 1 not passed, 0 off the current plan, 2 made by the platform'],
+          [offPlan, 'round 1: 0 not passed, 1 off the current plan, 1 made by the platform'],
+          [confirmedOnly, 'round 1: 0 not passed, 0 off the current plan, 0 made by the platform'],
           [
             notAchieved,
-            'outcome not_achieved, round 1: 0 not passed, 0 off the current plan, 1 observed by the platform',
+            'outcome not_achieved, round 1: 0 not passed, 0 off the current plan, 1 made by the platform',
           ],
         ] as const) {
           expect(result.sample, detail).toContain(
@@ -753,14 +819,14 @@ describe.runIf(DATABASE_URL !== undefined)(
           await acceptance(id, key, await fields(id));
           cases.push([id, key]);
         };
-        await breach('up', async (id) => ({
+        breach('up', async (id) => ({
           observationId: await checkObservation(id, 1, 'other'),
         }));
-        await breach('up', async (id) => ({
+        breach('up', async (id) => ({
           observationId: await checkObservation(randomUUID(), 1, 'up'),
         }));
-        await breach('up', async (id) => ({ observationId: await checkObservation(id, 2, 'up') }));
-        await breach('up', async (id) => ({
+        breach('up', async (id) => ({ observationId: await checkObservation(id, 2, 'up') }));
+        breach('up', async (id) => ({
           observationId: await checkObservation(id, 1, 'up', 'unsatisfied'),
         }));
         const confirmation =
@@ -779,12 +845,12 @@ describe.runIf(DATABASE_URL !== undefined)(
               fields,
             ),
           });
-        await breach('report', confirmation({}, { decidedBy: randomUUID() }));
-        await breach('report', confirmation({}, { status: 'rejected' }));
-        await breach('report', confirmation({ outcome: 'not_achieved' }));
-        await breach('report', confirmation({ round: 2 }));
-        await breach('report', confirmation({ checkKey: 'other' }));
-        await breach('report', confirmation({ goalRunId: randomUUID() }));
+        breach('report', confirmation({}, { decidedBy: randomUUID() }));
+        breach('report', confirmation({}, { status: 'rejected' }));
+        breach('report', confirmation({ outcome: 'not_achieved' }));
+        breach('report', confirmation({ round: 2 }));
+        breach('report', confirmation({ checkKey: 'other' }));
+        breach('report', confirmation({ goalRunId: randomUUID() }));
 
         const result = await check((client) => checkIG5(client, ALL));
         expect(mentioned(result, healthy)).toBe(false);
@@ -879,6 +945,167 @@ describe.runIf(DATABASE_URL !== undefined)(
         for (const id of breaches) {
           expect(result.sample, id).toContain(
             `step-passed-without-evidence ${workspaceId}:${id} (round 1 check up (observe_predicate) passed without its evidence)`,
+          );
+        }
+      });
+
+      it('counts a passed fact check whose Fact is not the Link it names; a run achieved on a Fact alone is achieved by a check the platform made (S11 GO4c)', async () => {
+        const type = `test.go4c.${randomUUID().slice(0, 8)}`;
+        const web = await object(`${type}.Service`, { name: 'web' });
+        const host = await object(`${type}.Host`, { name: 'web-1' });
+        const other = await object(`${type}.Host`, { name: 'web-2' });
+        const runsOn = await link(`${type}.runs_on`, web, host);
+        const byId = {
+          linkType: `${type}.runs_on`,
+          source: { objectId: web },
+          target: { objectId: host },
+        };
+        const byIdentity = {
+          linkType: `${type}.runs_on`,
+          source: { objectType: `${type}.Service`, identity: { name: 'web' } },
+          target: { objectType: `${type}.Host`, identity: { name: 'web-1' } },
+        };
+
+        const achieved = await goal({ status: 'completed', outcomeBasis: 'verified_by_check' });
+        await declare(achieved, [{ kind: 'fact_predicate', key: 'runs', fact: byId }]);
+        await factAcceptance(achieved, 'runs', byId, runsOn);
+        const healthy = [achieved];
+        for (const fact of [byIdentity, { ...byId, source: { objectId: web.toUpperCase() } }]) {
+          const id = await goal({ status: 'verifying' });
+          await factAcceptance(id, 'runs', fact, runsOn);
+          healthy.push(id);
+        }
+        const breaches: string[] = [];
+        for (const [fact, factId] of [
+          [byId, await link(`${type}.other`, web, host)],
+          [byId, await link(`${type}.runs_on`, web, other)],
+          [byId, await link(`${type}.runs_on`, host, web)],
+          [
+            { ...byIdentity, target: { objectType: `${type}.Host`, identity: { name: 'web-2' } } },
+            runsOn,
+          ],
+          [
+            { ...byIdentity, source: { objectType: `${type}.Host`, identity: { name: 'web' } } },
+            runsOn,
+          ],
+          [byId, randomUUID()],
+        ] as const) {
+          const id = await goal({ status: 'verifying' });
+          await factAcceptance(id, 'runs', fact, factId);
+          breaches.push(id);
+        }
+        const stepCheck = async (fact: Record<string, unknown>, factId: string) => {
+          const goalRunId = await goal();
+          const stepRunId = await stepOf(goalRunId);
+          await factAcceptance(goalRunId, 'runs', fact, factId, stepRunId);
+          return stepRunId;
+        };
+        const healthyStep = await stepCheck(byIdentity, runsOn);
+        const breachingStep = await stepCheck(byId, await link(`${type}.runs_on`, web, other));
+
+        const result = await check((client) => checkIG5(client, ALL));
+        for (const id of [...healthy, healthyStep]) expect(mentioned(result, id), id).toBe(false);
+        for (const id of breaches) {
+          expect(result.sample, id).toContain(
+            `passed-without-evidence ${workspaceId}:${id} (round 1 check runs (fact_predicate) passed without its evidence)`,
+          );
+        }
+        expect(result.sample).toContain(
+          `step-passed-without-evidence ${workspaceId}:${breachingStep} (round 1 check runs (fact_predicate) passed without its evidence)`,
+        );
+      });
+
+      it('counts a run achieved by check on a round that is not the one its plan in force declares, and a succeeded step’s check not as its plan entry declares it (review #493 on GO4c)', async () => {
+        const byCheck = async (declared: readonly Record<string, unknown>[] | null) => {
+          const id = await goal({ status: 'completed', outcomeBasis: 'verified_by_check' });
+          if (declared) await declare(id, declared);
+          return id;
+        };
+        const healthy = await byCheck([observed('up'), confirmation('report')]);
+        await acceptance(healthy, 'up');
+        await acceptance(healthy, 'report', { kind: 'requester_confirm' });
+        // A plan that declares none: the round is the requester's confirmation of the goal.
+        const implicit = await byCheck([]);
+        await acceptance(implicit, 'requester_confirm', {
+          kind: 'requester_confirm',
+          prompt: 'a goal',
+        });
+        // An earlier round off the plan does not count: the latest decides.
+        const retried = await byCheck([observed('up')]);
+        await acceptance(retried, 'down');
+        await acceptance(retried, 'up', { round: 2 });
+        const breaches: [string, string][] = [];
+        const breach = (id: string, detail: string) => breaches.push([id, detail]);
+        const undeclared = await byCheck([observed('up')]);
+        await acceptance(undeclared, 'up');
+        await acceptance(undeclared, 'down');
+        breach(
+          undeclared,
+          'round 1: 1 not as the plan in force declares them, 0 declared checks missing',
+        );
+        const otherCheck = await byCheck([observed('up')]);
+        await acceptance(otherCheck, 'up', { check: { operation: 'svc.other' } });
+        breach(
+          otherCheck,
+          'round 1: 1 not as the plan in force declares them, 0 declared checks missing',
+        );
+        const otherKind = await byCheck([observed('up')]);
+        await acceptance(otherKind, 'up', { kind: 'requester_confirm' });
+        breach(
+          otherKind,
+          'round 1: 1 not as the plan in force declares them, 0 declared checks missing',
+        );
+        const otherPrompt = await byCheck([]);
+        await acceptance(otherPrompt, 'requester_confirm', { kind: 'requester_confirm' });
+        breach(
+          otherPrompt,
+          'round 1: 1 not as the plan in force declares them, 0 declared checks missing',
+        );
+        const missing = await byCheck([observed('up'), observed('down')]);
+        await acceptance(missing, 'up');
+        await acceptance(missing, 'down');
+        await acceptance(missing, 'up', { round: 2 });
+        breach(
+          missing,
+          'round 2: 0 not as the plan in force declares them, 1 declared checks missing',
+        );
+        const noPlan = await byCheck(null);
+        await acceptance(noPlan, 'up');
+        breach(
+          noPlan,
+          'round 1: 1 not as the plan in force declares them, 0 declared checks missing',
+        );
+
+        const stepsOf = await goal();
+        await revision(stepsOf, 1, [
+          { key: 'good', acceptance: [observed('up')] },
+          { key: 'bad', acceptance: [observed('up')] },
+          { key: 'extra', acceptance: [observed('up')] },
+        ]);
+        const goodStep = await step(stepsOf, 'good', { status: 'succeeded' });
+        await stepAcceptance(stepsOf, goodStep, 'up');
+        const badStep = await step(stepsOf, 'bad', { status: 'succeeded' });
+        await stepAcceptance(stepsOf, badStep, 'up', { check: { operation: 'svc.other' } });
+        const extraStep = await step(stepsOf, 'extra', { status: 'succeeded' });
+        await stepAcceptance(stepsOf, extraStep, 'up');
+        await stepAcceptance(stepsOf, extraStep, 'down');
+
+        const result = await check((client) => checkIG5(client, ALL));
+        for (const id of [healthy, implicit, retried, goodStep]) {
+          expect(flagged(result, 'achieved-not-as-declared', id), id).toBe(false);
+          expect(flagged(result, 'step-succeeded-not-as-declared', id), id).toBe(false);
+        }
+        for (const [id, detail] of breaches) {
+          expect(result.sample, detail).toContain(
+            `achieved-not-as-declared ${workspaceId}:${id} (${detail})`,
+          );
+        }
+        for (const [id, key] of [
+          [badStep, 'bad'],
+          [extraStep, 'extra'],
+        ] as const) {
+          expect(result.sample, key).toContain(
+            `step-succeeded-not-as-declared ${workspaceId}:${id} (step ${key} round 1: 1 not as its plan entry declares them)`,
           );
         }
       });

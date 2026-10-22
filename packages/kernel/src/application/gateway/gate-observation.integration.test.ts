@@ -511,8 +511,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       // Gatekeeper's own Source — never a second Source on this Activity (would break
       // `resolveFactOrigin`'s single-origin assumption for the Facts `writeObservedFacts` wrote).
       const observeActivity = await inTx(ownerId, async (client) => {
-        const rows = await client.query<{ id: string }>(
-          `select id from activities
+        const rows = await client.query<{ id: string; metadata: Record<string, unknown> }>(
+          `select id, metadata from activities
            where workspace_id = $1 and kind = 'gatekeeper_observe'
              and metadata ->> 'operation' = $2
            order by created_at desc limit 1`,
@@ -524,6 +524,12 @@ describe.runIf(DATABASE_URL !== undefined)(
       const observeActivityObservations = await observationForActivity(observeActivity.id);
       expect(observeActivityObservations).toHaveLength(1);
       expect(observeActivityObservations[0]?.source_kind).toBe('gatekeeper');
+      // S11 GO4c (core/0046): the Activity records the Task whose Worker made the call — a goal's
+      // fact check never takes what its own Worker's observe confirmed as evidence.
+      const workerTask = await inTx(ownerId, (client) =>
+        readWorkerRunRow(client, workspaceId, workerRunId),
+      );
+      expect(observeActivity.metadata.triggeredByTaskId).toBe(workerTask?.taskId);
     });
 
     it('an executed execute-class request_action call from a Worker records one Observation with the apply result', async () => {
@@ -584,6 +590,18 @@ describe.runIf(DATABASE_URL !== undefined)(
         params: {},
       })) as { status: string };
       expect(result.status).toBe('ok');
+      // S11 GO4c (core/0046): no Worker made the call — recorded as such, not left out.
+      const observeActivity = await inTx(ownerId, async (client) => {
+        const rows = await client.query<{ metadata: Record<string, unknown> }>(
+          `select metadata from activities
+           where workspace_id = $1 and kind = 'gatekeeper_observe'
+             and metadata ->> 'operation' = $2
+           order by created_at desc limit 1`,
+          [workspaceId, OBSERVE_OP.name],
+        );
+        return rows.rows[0];
+      });
+      expect(observeActivity?.metadata).toHaveProperty('triggeredByTaskId', null);
 
       const after = await inTx(ownerId, async (client) => {
         const rows = await client.query<{ count: string }>(
