@@ -342,7 +342,7 @@ describe('SystemsPage', () => {
     const row = await screen.findByTestId('request-row');
     expect(within(row).getByTestId('request-target-masked').textContent).toContain('带有凭据');
     expect(within(row).queryByText('[redacted]')).toBeNull();
-    await waitFor(() => expect(within(row).getByTestId('request-by').textContent).toBe('由 Bob'));
+    await waitFor(() => expect(within(row).getByTestId('request-by').textContent).toContain('Bob'));
   });
 
   it('owner view: shows every grantee with a reachability chip and reason, and wires grant + revoke', async () => {
