@@ -11,7 +11,12 @@ import {
   supportsManifestSource,
 } from '../lib/connections.js';
 import { describeError, presentError } from '../lib/errors.js';
-import { isAbsoluteUrl, suggestedManifestSource, withDefaultScheme } from '../lib/gate-input.js';
+import {
+  gateEndpointDefaultScheme,
+  isAbsoluteUrl,
+  suggestedManifestSource,
+  withDefaultScheme,
+} from '../lib/gate-input.js';
 import type { PrincipalRow } from '../lib/governance.js';
 import { HttpError } from '../lib/http-client.js';
 import { type Translate, sentenceGap, useT } from '../lib/i18n.js';
@@ -69,7 +74,7 @@ interface FieldErrors {
 
 /** "Looks like a URL": a scheme followed by `://` — the loose check the manifest-source field
  *  always had. The endpoint no longer uses it (C15 follow-up): a missing scheme there is filled
- *  with `http://` instead of refused, and what remains is checked with `new URL()` (a bare compose
+ *  with `http://` (`https://` for a dotted domain, legacy 152) instead of refused, and what remains is checked with `new URL()` (a bare compose
  *  service name with a port parses fine once it has a scheme). */
 const URL_LIKE_PATTERN = /^[a-z][a-z0-9+.-]*:\/\//i;
 
@@ -222,7 +227,7 @@ export function CompleteConnectionForm({
   const [credentials, setCredentials] = useState('');
   const [onBehalfOf, setOnBehalfOf] = useState('');
   /** The endpoint had no scheme and `http://` was prepended on blur — said under the field. */
-  const [endpointSchemeAdded, setEndpointSchemeAdded] = useState(false);
+  const [endpointSchemeAdded, setEndpointSchemeAdded] = useState<'http' | 'https' | null>(null);
   const [manifestSource, setManifestSource] = useState('');
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [serverFieldError, setServerFieldError] = useState<ServerFieldError | null>(null);
@@ -248,12 +253,14 @@ export function CompleteConnectionForm({
   }, [http]);
 
   /** What gets sent: a bare `host:port` gets `http://` (a gate endpoint is plain http inside the
-   *  deployment network — the field's own placeholder). */
-  const endpointValue = withDefaultScheme(endpoint, 'http');
+   *  deployment network — the field's own placeholder); a dotted host name gets `https://`, so the
+   *  connection secret is never sent in the clear by default (legacy 152). */
+  const endpointValue = withDefaultScheme(endpoint, gateEndpointDefaultScheme(endpoint));
 
   function completeEndpoint(): void {
-    const next = withDefaultScheme(endpoint, 'http');
-    if (next !== endpoint.trim()) setEndpointSchemeAdded(true);
+    const scheme = gateEndpointDefaultScheme(endpoint);
+    const next = withDefaultScheme(endpoint, scheme);
+    setEndpointSchemeAdded(next !== endpoint.trim() ? scheme : null);
     setEndpoint(next);
   }
 
@@ -466,15 +473,23 @@ export function CompleteConnectionForm({
         hint={
           <>
             {t(
-              '正在运行的门实例自己的 HTTP 地址（每种类型，包括 cli/ssh，都由一个门前置）；没写 http:// 会自动补上。',
-              "The running Gatekeeper instance's own HTTP address (every kind, including cli/ssh, is fronted by one); http:// is added if you leave it out.",
+              '正在运行的门实例自己的 HTTP 地址（每种类型，包括 cli/ssh，都由一个门前置）；没写协议时，内网名称或 IP 补 http://，带点的域名补 https://。',
+              "The running Gatekeeper instance's own HTTP address (every kind, including cli/ssh, is fronted by one); without a scheme, an internal name or IP gets http:// and a dotted domain gets https://.",
             )}
-            {endpointSchemeAdded ? (
+            {endpointSchemeAdded === 'http' ? (
               <span data-testid="cc-endpoint-scheme-note">
                 {sentenceGap(t)}
                 {t(
                   '已自动补上 http://；如果门走 https，请改成 https://。',
                   'Added http:// for you — change it to https:// if the gate serves https.',
+                )}
+              </span>
+            ) : endpointSchemeAdded === 'https' ? (
+              <span data-testid="cc-endpoint-scheme-note">
+                {sentenceGap(t)}
+                {t(
+                  '这是一个域名，已自动补上 https://，连接密钥不会明文发送；如果门只在内网用 http，请改成 http://。',
+                  'This is a domain name, so https:// was added and the connection secret is not sent in the clear — change it to http:// if the gate only serves http inside the network.',
                 )}
               </span>
             ) : null}
@@ -486,7 +501,7 @@ export function CompleteConnectionForm({
           value={endpoint}
           onChange={(event) => {
             setEndpoint(event.target.value);
-            setEndpointSchemeAdded(false);
+            setEndpointSchemeAdded(null);
           }}
           onBlur={completeEndpoint}
           placeholder="http://gate-host:port"

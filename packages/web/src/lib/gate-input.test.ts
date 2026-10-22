@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   addressCarriesCredential,
   deriveGateId,
+  gateEndpointDefaultScheme,
   gateIdFromTarget,
   hasUrlScheme,
   isAbsoluteUrl,
@@ -106,5 +107,28 @@ describe('suggestedGateId (field-inventory #9)', () => {
     expect(suggestedGateId('ssh', [])).toBe('gatekeeper-ssh');
     expect(suggestedGateId('ssh', ['gatekeeper-ssh', 'gatekeeper-ssh-2'])).toBe('gatekeeper-ssh-3');
     expect(suggestedGateId('cli', ['gatekeeper-ssh'])).toBe('gatekeeper-cli');
+  });
+});
+
+describe('gateEndpointDefaultScheme (legacy 152)', () => {
+  it('keeps http for in-network names and addresses, https for a dotted domain', () => {
+    for (const value of [
+      'gate-host:8080',
+      'gate',
+      'localhost:8080',
+      '10.0.0.5:8080',
+      '127.0.0.1',
+      'gw.localhost',
+    ]) {
+      expect(gateEndpointDefaultScheme(value), value).toBe('http');
+    }
+    for (const value of [
+      'gate.example.com',
+      'gate.example.com:8443/x',
+      '//gate.example.com',
+      ' Gate.Example.COM ',
+    ]) {
+      expect(gateEndpointDefaultScheme(value), value).toBe('https');
+    }
   });
 });

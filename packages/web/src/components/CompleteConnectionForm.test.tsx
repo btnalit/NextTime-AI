@@ -103,6 +103,29 @@ describe('CompleteConnectionForm', () => {
     await waitFor(() => expect(createCalls(http)).toBe(1));
   });
 
+  it('legacy 152: a dotted domain without a scheme gets https://, so the connection secret is not sent in the clear', async () => {
+    const http = httpWith(async (_name, params) => {
+      expect((params as { endpoint: string }).endpoint).toBe('https://gate.example.com');
+      return {};
+    });
+    render(<CompleteConnectionForm http={http} onDone={vi.fn()} onCancel={vi.fn()} />);
+    await secretShown();
+    const endpoint = screen.getByLabelText(/门端点/) as HTMLInputElement;
+    fireEvent.change(screen.getByLabelText(/目标系统/), { target: { value: 'erp' } });
+    fireEvent.change(endpoint, { target: { value: 'gate.example.com' } });
+    fireEvent.blur(endpoint);
+    expect(endpoint.value).toBe('https://gate.example.com');
+    expect(screen.getByTestId('cc-endpoint-scheme-note').textContent).toContain('https://');
+    // An internal IP keeps http.
+    fireEvent.change(endpoint, { target: { value: '10.1.2.3:8080' } });
+    expect(screen.queryByTestId('cc-endpoint-scheme-note')).toBeNull();
+    fireEvent.blur(endpoint);
+    expect(endpoint.value).toBe('http://10.1.2.3:8080');
+    fireEvent.change(endpoint, { target: { value: 'gate.example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: '注册门' }));
+    await waitFor(() => expect(createCalls(http)).toBe(1));
+  });
+
   it('shows the credentials box only for connected_account, and requires it there', async () => {
     const http = httpWith(async () => ({}));
     render(<CompleteConnectionForm http={http} onDone={vi.fn()} onCancel={vi.fn()} />);

@@ -69,6 +69,24 @@ export function withDefaultScheme(value: string, scheme: 'http' | 'https'): stri
   return `${scheme}://${trimmed.replace(/^\/+/, '')}`;
 }
 
+/** The scheme a scheme-less gate endpoint gets (legacy 152). A bare in-network name or address —
+ *  `gate-host:8080`, `localhost`, `10.0.0.5:8080` — is plain http inside the deployment network;
+ *  a dotted host name (`gate.example.com`) is most likely reached over the internet, where http
+ *  would send the connection secret in the clear, so it gets https (the user can still type
+ *  `http://`). */
+export function gateEndpointDefaultScheme(value: string): 'http' | 'https' {
+  const host = value
+    .trim()
+    .replace(/^\/+/, '')
+    .split(/[/?#]/, 1)[0]
+    ?.replace(/:\d*$/, '')
+    .toLowerCase();
+  if (host === undefined || !host.includes('.')) return 'http';
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return 'http';
+  if (host === 'localhost' || host.endsWith('.localhost')) return 'http';
+  return 'https';
+}
+
 /** Whether `value` parses as an absolute URL. */
 export function isAbsoluteUrl(value: string): boolean {
   try {
