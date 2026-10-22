@@ -116,7 +116,7 @@ describe('gateEndpointDefaultScheme (legacy 152)', () => {
       'gate-host:8080',
       'gate',
       'localhost:8080',
-      '10.0.0.5:8080',
+      '203.0.113.5:8080',
       '127.0.0.1',
       'gw.localhost',
     ]) {

@@ -141,11 +141,11 @@ describe('CompleteConnectionForm', () => {
     fireEvent.blur(endpoint);
     expect(endpoint.value).toBe('https://gate.example.com');
     expect(screen.getByTestId('cc-endpoint-scheme-note').textContent).toContain('https://');
-    // An internal IP keeps http.
-    fireEvent.change(endpoint, { target: { value: '10.1.2.3:8080' } });
+    // An IP address keeps http.
+    fireEvent.change(endpoint, { target: { value: '198.51.100.7:8080' } });
     expect(screen.queryByTestId('cc-endpoint-scheme-note')).toBeNull();
     fireEvent.blur(endpoint);
-    expect(endpoint.value).toBe('http://10.1.2.3:8080');
+    expect(endpoint.value).toBe('http://198.51.100.7:8080');
     fireEvent.change(endpoint, { target: { value: 'gate.example.com' } });
     fireEvent.click(screen.getByRole('button', { name: '注册门' }));
     await waitFor(() => expect(createCalls(http)).toBe(1));

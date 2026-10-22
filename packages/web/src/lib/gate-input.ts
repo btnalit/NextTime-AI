@@ -70,7 +70,7 @@ export function withDefaultScheme(value: string, scheme: 'http' | 'https'): stri
 }
 
 /** The scheme a scheme-less gate endpoint gets (legacy 152). A bare in-network name or address —
- *  `gate-host:8080`, `localhost`, `10.0.0.5:8080` — is plain http inside the deployment network;
+ *  `gate-host:8080`, `localhost`, `203.0.113.5:8080` — is plain http inside the deployment network;
  *  a dotted host name (`gate.example.com`) is most likely reached over the internet, where http
  *  would send the connection secret in the clear, so it gets https (the user can still type
  *  `http://`). */
