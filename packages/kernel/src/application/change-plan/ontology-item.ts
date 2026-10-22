@@ -1,9 +1,15 @@
 import type { PoolClient } from 'pg';
+import { z } from 'zod';
 import {
   type OntologyDefinition,
   OntologyDefinitionSchema,
+  type OntologyNamespaceConflict,
+  OntologyNamespaceConflictError,
+  type OntologyVersionRow,
   assertOntologyNamespace,
+  deprecatePublishedOntologyVersion,
   deriveOntologyPackId,
+  loadOntologyVersion,
   loadPublishedOntologyHead,
   lockOntologyFamily,
   publishOntologyVersion,
@@ -25,6 +31,12 @@ import { contentDigest } from './digest.js';
  *   * after — `{ definitionDigest }` planned, plus the `version` the apply published.
  * Version numbers, not definitions: both versions stay in `ontology_versions` (published rows are
  * immutable, I12), and a rollback compares the head with `after.version` before writing (§5.3).
+ *
+ * Rollback (P1-B, the item's inverse): retire the version the item published (`published ->
+ * deprecated`), so the family's head is `before.version` again — the very row that was the head
+ * when the item applied, not a copy — or, with no `before`, the family is no longer installed. The
+ * objects and Facts already written stay (S10 I-P4). A retired version is never published again
+ * (I12), so a rolled back item can never be what the head is.
  */
 
 export interface OntologyVersionIntent {
@@ -102,4 +114,196 @@ export async function applyOntologyItem(
     principalId: appliedBy,
   });
   return { definitionDigest: planned.after.definitionDigest, version: published.version };
+}
+
+// -------------------------------------------------------------------------------------------
+// After applying (S11 P1-B): the stored item, its target now, and its rollback
+// -------------------------------------------------------------------------------------------
+
+const VersionRefSchema = z
+  .object({ version: z.number().int().positive(), definitionDigest: z.string() })
+  .strict();
+
+const StoredOntologyItemSchema = z
+  .object({
+    target: z.object({ family: z.string(), ontologyId: z.string() }).strict(),
+    before: VersionRefSchema.nullable(),
+    after: VersionRefSchema,
+  })
+  .strict();
+
+/** An applied `ontology_version` item as `change_items` stores it. */
+export type StoredOntologyItem = z.infer<typeof StoredOntologyItemSchema>;
+
+/** Reads a stored item's `target` / `before` / `after`; throws on a shape this kind never writes. */
+export function parseStoredOntologyItem(row: {
+  readonly target: unknown;
+  readonly before: unknown;
+  readonly after: unknown;
+}): StoredOntologyItem {
+  return StoredOntologyItemSchema.parse({
+    target: row.target,
+    before: row.before,
+    after: row.after,
+  });
+}
+
+function isVersion(
+  row: OntologyVersionRow,
+  ref: { readonly version: number; readonly definitionDigest: string },
+): boolean {
+  return row.version === ref.version && contentDigest(row.definition) === ref.definitionDigest;
+}
+
+export type OntologyItemState =
+  | { readonly state: 'in_effect' }
+  | { readonly state: 'replaced'; readonly headVersion: number }
+  | { readonly state: 'not_installed' };
+
+/** Whether the version the item published is still its family's head. */
+export async function readOntologyItemState(
+  client: PoolClient,
+  workspaceId: string,
+  item: StoredOntologyItem,
+): Promise<OntologyItemState> {
+  const head = await loadPublishedOntologyHead(client, workspaceId, item.target.ontologyId);
+  if (!head) return { state: 'not_installed' };
+  if (isVersion(head, item.after)) return { state: 'in_effect' };
+  return { state: 'replaced', headVersion: head.version };
+}
+
+/** Holds the item's family (namespace lock first, as every ontology publisher) until the
+ *  transaction ends — taken by a rollback before it plans, so what it compares is what it changes. */
+export async function lockOntologyRollback(
+  client: PoolClient,
+  workspaceId: string,
+  item: StoredOntologyItem,
+): Promise<void> {
+  await lockOntologyFamily(client, workspaceId, item.target.ontologyId);
+}
+
+export type OntologyRollbackBlocker =
+  | { readonly reason: 'not_installed' }
+  | { readonly reason: 'replaced'; readonly headVersion: number }
+  | { readonly reason: 'restored_version_missing' }
+  | {
+      readonly reason: 'namespace_conflict';
+      readonly conflicts: readonly OntologyNamespaceConflict[];
+    };
+
+export interface PlannedOntologyRollback {
+  readonly target: StoredOntologyItem['target'];
+  /** The version the item published — the family's head, when the rollback can go ahead. */
+  readonly from: StoredOntologyItem['after'];
+  /** The version the head goes back to; `null`: the family is no longer installed. */
+  readonly to: StoredOntologyItem['before'];
+  /** The rollback's own classification (I-A4, the same whitelist as applying): from what the head
+   *  declares now to what it would declare after. Empty when blocked. */
+  readonly widening: readonly WideningReason[];
+  /** Type names the head declares that the restored version does not (empty when blocked). */
+  readonly removes: {
+    readonly objectTypes: readonly string[];
+    readonly linkTypes: readonly string[];
+    readonly actionTypes: readonly string[];
+  };
+  readonly blocker: OntologyRollbackBlocker | null;
+}
+
+const NOTHING_REMOVED = { objectTypes: [], linkTypes: [], actionTypes: [] } as const;
+
+function namesIn(definition: OntologyDefinition | null) {
+  return {
+    objectTypes: new Set((definition?.objectTypes ?? []).map((t) => t.name)),
+    linkTypes: new Set((definition?.linkTypes ?? []).map((t) => t.name)),
+    actionTypes: new Set((definition?.actionTypes ?? []).map((t) => t.name)),
+  };
+}
+
+function removedNames(from: OntologyDefinition, to: OntologyDefinition | null) {
+  const before = namesIn(from);
+  const after = namesIn(to);
+  const minus = (a: Set<string>, b: Set<string>) => [...a].filter((name) => !b.has(name)).sort();
+  return {
+    objectTypes: minus(before.objectTypes, after.objectTypes),
+    linkTypes: minus(before.linkTypes, after.linkTypes),
+    actionTypes: minus(before.actionTypes, after.actionTypes),
+  };
+}
+
+/** The item's rollback dry run (§3.4 "逆操作…先比较再写"): blocked unless the family's head is still
+ *  the version the item published and the version before it is still there to return to, and the
+ *  restored definition does not give a type name a second owner (I-P1). Writes nothing; a rollback
+ *  calls it under `lockOntologyRollback`. */
+export async function planOntologyRollback(
+  client: PoolClient,
+  workspaceId: string,
+  item: StoredOntologyItem,
+): Promise<PlannedOntologyRollback> {
+  const blocked = (blocker: OntologyRollbackBlocker): PlannedOntologyRollback => ({
+    target: item.target,
+    from: item.after,
+    to: item.before,
+    widening: [],
+    removes: NOTHING_REMOVED,
+    blocker,
+  });
+  const { ontologyId } = item.target;
+  const head = await loadPublishedOntologyHead(client, workspaceId, ontologyId);
+  if (!head) return blocked({ reason: 'not_installed' });
+  if (!isVersion(head, item.after))
+    return blocked({ reason: 'replaced', headVersion: head.version });
+
+  let restored: OntologyVersionRow | null = null;
+  if (item.before) {
+    const row = await loadOntologyVersion(client, workspaceId, ontologyId, item.before.version);
+    if (!row || !isVersion(row, item.before) || row.status !== 'published') {
+      return blocked({ reason: 'restored_version_missing' });
+    }
+    restored = row;
+    try {
+      await assertOntologyNamespace(client, workspaceId, ontologyId, row.definition);
+    } catch (err) {
+      if (!(err instanceof OntologyNamespaceConflictError)) throw err;
+      return blocked({ reason: 'namespace_conflict', conflicts: err.conflicts });
+    }
+  }
+  const to = restored?.definition ?? null;
+  return {
+    target: item.target,
+    from: item.after,
+    to: item.before,
+    widening: classifyOntologyDefinitionChange(head.definition, to),
+    removes: removedNames(head.definition, to),
+    blocker: null,
+  };
+}
+
+/** Rolls the item back as planned (an unblocked `planOntologyRollback` in this transaction, under
+ *  `lockOntologyRollback`): retires the version it published and checks the family's head is the
+ *  version it planned to return to. Returns that head version (`null`: not installed). */
+export async function applyOntologyRollback(
+  client: PoolClient,
+  workspaceId: string,
+  planned: PlannedOntologyRollback,
+): Promise<number | null> {
+  const { ontologyId } = planned.target;
+  const retired = await deprecatePublishedOntologyVersion(
+    client,
+    workspaceId,
+    ontologyId,
+    planned.from.version,
+  );
+  if (!retired) {
+    throw new Error(
+      `change-plan: ontology ${ontologyId} v${planned.from.version} was not published when rolled back`,
+    );
+  }
+  const head = await loadPublishedOntologyHead(client, workspaceId, ontologyId);
+  const expected = planned.to;
+  if (expected === null ? head !== null : !head || !isVersion(head, expected)) {
+    throw new Error(
+      `change-plan: ontology ${ontologyId}'s head after rolling back v${planned.from.version} is ${head ? `v${head.version}` : 'none'}, not ${expected ? `v${expected.version}` : 'none'}`,
+    );
+  }
+  return head?.version ?? null;
 }

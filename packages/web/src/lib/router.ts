@@ -46,6 +46,9 @@ export const CATALOG_TAB_VALUES = [
   'procedures',
   'workers',
   'modules',
+  // S11 P1-B: 安装历史 — the workspace's install records (`list_change_segments`); the item route
+  // is a record's id.
+  'changes',
 ] as const;
 export type CatalogTab = (typeof CATALOG_TAB_VALUES)[number];
 

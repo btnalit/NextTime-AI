@@ -5,8 +5,11 @@ import { usePermissions } from '../../hooks/usePermissions.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { isVersionChangedError } from '../../lib/errors.js';
-import { useT } from '../../lib/i18n.js';
+import { formatDateTime, formatRelative, shortId } from '../../lib/format.js';
+import { type Translate, useT } from '../../lib/i18n.js';
+import { hrefs } from '../../lib/router.js';
 import { Confirm } from '../kit/confirm.js';
+import { RouteLink } from '../kit/route-link.js';
 import { DashboardCard } from '../kit/section.js';
 import { Button } from '../ui/Button.js';
 import { EmptyState } from '../ui/EmptyState.js';
@@ -52,6 +55,55 @@ function needsConfirm(module: WorkspaceModuleWire): boolean {
   if (module.status === 'customized') return true;
   if (module.status !== 'outdated') return false;
   return breakingRangeCrossed(module);
+}
+
+/** S11 P1-B: the 安装记录 column — which install record put the installed version there, linked
+ *  to it in 安装历史 (`ChangesTab`). No record: installed before records were kept, or published
+ *  some other way (`publish_ontology_version`); it cannot be rolled back from here. */
+function ProvenanceCell({
+  module,
+  t,
+}: {
+  readonly module: WorkspaceModuleWire;
+  readonly t: Translate;
+}) {
+  const provenance = module.provenance;
+  if (provenance.status === 'not_installed') return <span className="text-3">—</span>;
+  if (provenance.status === 'provenance_unknown') {
+    return (
+      <span className="stack-s" data-testid={`catalog-module-provenance-${module.name}`}>
+        <span className="text-3">{t('没有安装记录', 'No install record')}</span>
+        <span className="text-3 text-small">
+          {t(
+            '启用安装记录之前装的，或不是从这里装的；不能在这里撤销',
+            'Installed before records were kept, or not from here; it cannot be rolled back here',
+          )}
+        </span>
+      </span>
+    );
+  }
+  const who =
+    provenance.channel === 'platform'
+      ? t('创建工作区时由平台安装', 'Installed by the platform with the workspace')
+      : (provenance.appliedBy.displayName ?? shortId(provenance.appliedBy.id));
+  return (
+    <span className="stack-s" data-testid={`catalog-module-provenance-${module.name}`}>
+      <RouteLink
+        href={hrefs.catalog('changes', provenance.segmentId)}
+        testId={`catalog-module-provenance-link-${module.name}`}
+      >
+        {who}
+      </RouteLink>
+      <time
+        className="text-3 text-small"
+        dateTime={provenance.appliedAt}
+        title={formatDateTime(provenance.appliedAt)}
+        data-volatile=""
+      >
+        {formatRelative(provenance.appliedAt)}
+      </time>
+    </span>
+  );
 }
 
 /**
@@ -161,6 +213,7 @@ export function ModulesTab({ http }: ModulesTabProps) {
                   <th>{t('状态', 'Status')}</th>
                   <th>{t('已装版本', 'Installed')}</th>
                   <th>{t('最新版本', 'Latest')}</th>
+                  <th>{t('安装记录', 'Install record')}</th>
                   <th aria-label="Actions" />
                 </tr>
               </thead>
@@ -186,6 +239,9 @@ export function ModulesTab({ http }: ModulesTabProps) {
                       </td>
                       <td className="mono" data-label={t('最新版本', 'Latest')}>
                         v{module.latestVersion}
+                      </td>
+                      <td data-label={t('安装记录', 'Install record')}>
+                        <ProvenanceCell module={module} t={t} />
                       </td>
                       <td>
                         {canWrite && label ? (
@@ -234,6 +290,14 @@ export function ModulesTab({ http }: ModulesTabProps) {
                           <ErrorBanner
                             error={rowError[module.name]}
                             title={t('操作失败', 'Action failed')}
+                            overrides={{
+                              // Legacy 406: install / upgrade take no per-item confirmation, so
+                              // this page cannot offer one — say so and who to tell.
+                              change_confirmation_required: t(
+                                '这个模块的这一版会改变权限边界（新增、去掉或放宽动作类型），这类改动要逐项确认，模块页做不到，所以没有安装，也没有写入任何内容。请把这个情况告诉平台管理员。',
+                                'This version of the module moves an authority boundary (an action type added, taken out or loosened). Such changes need confirming item by item, which this page cannot do, so nothing was installed or written. Let a platform administrator know.',
+                              ),
+                            }}
                             testId={`catalog-module-error-${module.name}`}
                           />
                         ) : null}

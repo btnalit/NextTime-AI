@@ -426,7 +426,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           itemId: applied.items[0]?.id,
           source: input.source,
           channel: 'human',
-          appliedBy: ws.ownerId,
+          appliedBy: { id: ws.ownerId, kind: 'human' },
         });
 
         // A version published outside the core (before P1, or publish_ontology_version) has no

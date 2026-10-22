@@ -7,10 +7,13 @@ import {
   gateRefusalOf,
 } from '../../adapters/gatekeeper-client/index.js';
 import { OutboundTargetRefusedError } from '../../adapters/outbound-target/index.js';
-// S11 P1: the ChangePlan core's two refusals (application/change-plan), same direct import.
+// S11 P1: the ChangePlan core's refusals (application/change-plan), same direct import.
 import {
   ChangeConfirmationRequiredError,
   ChangePlanChangedError,
+  ChangeRollbackConflictError,
+  ChangeSegmentNotFoundError,
+  ChangeSegmentRolledBackError,
 } from '../../application/change-plan/index.js';
 import {
   ChatArchivedError,
@@ -238,6 +241,18 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // Nothing was applied; review it again.
   if (err instanceof ChangePlanChangedError) {
     return { status: 409, code: err.code, message: err.message };
+  }
+  // S11 P1-B: a segment rollback. Not in this workspace → 404; already rolled back → 409; an item
+  // that cannot be rolled back now (changed since, gone, a name taken) → 409 with `details.items`,
+  // each naming what blocks it and, for a later change, the segment to roll back first.
+  if (err instanceof ChangeSegmentNotFoundError) {
+    return { status: 404, code: err.code, message: err.message };
+  }
+  if (err instanceof ChangeSegmentRolledBackError) {
+    return { status: 409, code: err.code, message: err.message };
+  }
+  if (err instanceof ChangeRollbackConflictError) {
+    return { status: 409, code: err.code, message: err.message, details: { ...err.details } };
   }
   // S4.1 console-session channel (resolve-caller.ts): three `ForbiddenError` subclasses with
   // their own codes so the web client can act on them (pick a workspace / add the CSRF header /

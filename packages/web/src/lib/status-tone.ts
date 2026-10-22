@@ -1,6 +1,8 @@
 import type {
   ActionRequestStatus,
   BlastRadius,
+  ChangeItemState,
+  ChangeSegmentStatus,
   ConnectionRequestStatus,
   ConnectorModeWire,
   GateInstanceStatusWire,
@@ -23,6 +25,8 @@ import type {
 import {
   ACTION_REQUEST_STATUS_VALUES,
   BLAST_RADIUS_VALUES,
+  CHANGE_ITEM_STATE_VALUES,
+  CHANGE_SEGMENT_STATUS_VALUES,
   CONNECTION_REQUEST_STATUS_VALUES,
   ConnectorModeWireSchema,
   GRANT_STATUS_VALUES,
@@ -116,7 +120,9 @@ export type StatusMachine =
   | 'backupFreshness'
   | 'updateFeed'
   | 'objectiveOutcome'
-  | 'selfConnection';
+  | 'selfConnection'
+  | 'changeSegment'
+  | 'changeItemState';
 
 export const ACTION_REQUEST_TONES: Readonly<Record<ActionRequestStatus, ChipStyle>> = {
   proposed: { tone: 'neutral', label: { zh: '已提议', en: 'Proposed' } },
@@ -372,6 +378,22 @@ export const UPDATE_FEED_TONES: Readonly<Record<PlatformUpdateFeedStatusWire, Ch
   missing: { tone: 'neutral', label: { zh: '尚未取到', en: 'Not fetched yet' } },
 };
 
+/** S11 P1-B: an install record (`ChangeSegmentWire.status`, the 能力目录 安装历史 tab). Verification
+ *  is recorded from P1-C on; until then a record stays 已应用 or becomes 已撤销. */
+export const CHANGE_SEGMENT_TONES: Readonly<Record<ChangeSegmentStatus, ChipStyle>> = {
+  applied: { tone: 'ok', label: { zh: '已应用', en: 'Applied' } },
+  verified: { tone: 'ok', label: { zh: '已核验', en: 'Verified' } },
+  verification_failed: { tone: 'danger', label: { zh: '核验未通过', en: 'Verification failed' } },
+  rolled_back: { tone: 'neutral', label: { zh: '已撤销', en: 'Rolled back' } },
+};
+
+/** S11 P1-B: what one change of an install record left is now (`ChangeItemWire.state`). */
+export const CHANGE_ITEM_STATE_TONES: Readonly<Record<ChangeItemState, ChipStyle>> = {
+  in_effect: { tone: 'ok', label: { zh: '生效中', en: 'In effect' } },
+  replaced: { tone: 'warn', label: { zh: '已被后来的改动替换', en: 'Replaced since' } },
+  not_installed: { tone: 'neutral', label: { zh: '已不在工作区', en: 'No longer installed' } },
+};
+
 const MACHINES: Readonly<
   Record<StatusMachine, { values: readonly string[]; tones: Readonly<Record<string, ChipStyle>> }>
 > = {
@@ -408,6 +430,8 @@ const MACHINES: Readonly<
   },
   objectiveOutcome: { values: OBJECTIVE_OUTCOME_VALUES, tones: OBJECTIVE_OUTCOME_TONES },
   selfConnection: { values: SELF_CONNECTION_STATUS_VALUES, tones: SELF_CONNECTION_TONES },
+  changeSegment: { values: CHANGE_SEGMENT_STATUS_VALUES, tones: CHANGE_SEGMENT_TONES },
+  changeItemState: { values: CHANGE_ITEM_STATE_VALUES, tones: CHANGE_ITEM_STATE_TONES },
 };
 
 export interface ResolvedChipStyle extends ChipStyle {

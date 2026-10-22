@@ -1182,6 +1182,35 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '把已安装的模块直接升到最新版本。',
     enHint: 'Advances an installed module straight to its latest version.',
   },
+  // S11 P1-B: 能力目录 · 安装历史.
+  list_change_segments: {
+    zh: '查看安装历史',
+    en: 'List install history',
+    zhHint: '列出本工作区每次安装或升级模块留下的安装记录，最新的在前。',
+    enHint:
+      'Lists the install records each module install or upgrade left in this workspace, newest first.',
+  },
+  get_change_segment: {
+    zh: '查看安装记录',
+    en: 'View install record',
+    zhHint: '查看一条安装记录改了什么，以及每项改动现在是否仍然生效。',
+    enHint: 'Shows what one install record changed, and whether each change is still in effect.',
+  },
+  preview_roll_back_change_segment: {
+    zh: '预览撤销安装记录',
+    en: 'Preview rolling back an install record',
+    zhHint:
+      '撤销之前先看会退回到哪一版、哪些改动现在撤销不了、多少数据用到要去掉的类型；不写入任何内容。',
+    enHint:
+      'Before rolling back, shows what it returns to, which changes cannot be rolled back now, and how much data uses the types it takes out; writes nothing.',
+  },
+  roll_back_change_segment: {
+    zh: '撤销安装记录',
+    en: 'Roll back install record',
+    zhHint: '把一条安装记录的每项改动退回原状（本体退回上一版，或不再安装）；已有数据保留。',
+    enHint:
+      'Returns each change of an install record to what it was (the ontology goes back a version, or is no longer installed); data already written stays.',
+  },
 
   // -----------------------------------------------------------------------------------------
   // Lifecycle audit events (`lib/audit.ts` AUDIT_LIFECYCLE_ACTIONS) — read as events
@@ -1366,13 +1395,23 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '写入的关系不符合本体约束，被拒绝或告警。',
     enHint: 'A link write did not fit the ontology; it was refused or flagged.',
   },
+  // UX acceptance of #650 (P3-1/P3-2): named as 能力目录 · 安装历史 names them — each module install
+  // or upgrade is one 安装记录, each thing it changed one 改动项.
   'change_item.apply': {
-    zh: '变更条目已应用',
-    en: 'Change item applied',
+    zh: '改动项已写入',
+    en: 'Change written',
     zhHint:
-      '变更计划里的一项已写入（如安装或升级模块时发布的本体版本），记下来源、前后版本和确认人。',
+      '安装或升级模块时，安装记录里的一项改动已写入（如发布的本体版本），记下来源、前后版本和确认人。在「能力目录 · 安装历史」里查看。',
     enHint:
-      'One item of a change plan was written (such as the ontology version a module install publishes), with its source, before / after and who confirmed it.',
+      'A change of an install record was written when a module was installed or upgraded (such as the ontology version it published), with its source, before / after and who confirmed it. See Catalog · Install history.',
+  },
+  'change_item.roll_back': {
+    zh: '改动项已撤销',
+    en: 'Change rolled back',
+    zhHint:
+      '撤销安装记录时，其中一项改动已退回原状（本体退回上一版，或不再安装），记下前后版本和确认人。',
+    enHint:
+      'A change of an install record was returned to what it was when the record was rolled back (the ontology went back a version, or is no longer installed), with before / after and who confirmed it.',
   },
 
   // -----------------------------------------------------------------------------------------

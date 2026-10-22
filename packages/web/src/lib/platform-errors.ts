@@ -224,6 +224,28 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
     zh: '这个版本里有对象类型或动作类型与本工作区另一个已发布的本体族重名；本次没有发布任何内容。请改名，或改动拥有该类型的那个本体族',
     en: 'An object type or action type in this version is already declared by another published ontology family in this workspace — nothing was published. Rename it, or change the family that owns it',
   },
+  // S11 P1 (`application/change-plan`): the module install path's two refusals, and P1-B's install
+  // record rollback. Nothing was written in any of them.
+  change_confirmation_required: {
+    zh: '这次改动里有会改变权限边界的项（例如新增或去掉一个动作类型），要逐项确认后才能进行；本次没有写入任何内容',
+    en: 'Part of this change moves an authority boundary (such as adding or taking out an action type) and has to be confirmed item by item — nothing was written',
+  },
+  change_plan_changed: {
+    zh: '在你查看之后，要改动的内容或工作区里的现状变了，本次没有写入任何内容。刷新后重新查看，再决定是否继续',
+    en: 'What would change, or what the workspace has now, moved after you looked — nothing was written. Refresh, look again, then decide',
+  },
+  change_segment_not_found: {
+    zh: '这个工作区里没有这条安装记录，它可能属于另一个工作区。回到「安装历史」重新选择',
+    en: 'This workspace has no such install record — it may belong to another workspace. Pick it again from Install history',
+  },
+  change_segment_rolled_back: {
+    zh: '这条安装记录已经撤销过了，本次没有写入任何内容。刷新后查看它现在的状态',
+    en: 'This install record was already rolled back — nothing was written. Refresh to see where it stands now',
+  },
+  change_rollback_conflict: {
+    zh: '其中有改动现在撤销不了（之后又被改过、要退回的那一版已经不在，或类型名已被别的本体占用），本次没有写入任何内容。刷新后按撤销预览里列出的原因处理',
+    en: 'Some of its changes cannot be rolled back now (changed again since, the version to return to is gone, or a type name is taken by another ontology) — nothing was written. Refresh and deal with the reasons the rollback preview lists',
+  },
   // S7-E (`application/platform/runtime.ts`): the 运行层 page's refusals. Nothing changed in any of
   // them. The allowlist is the host's configuration, so the operator is who widens it.
   image_not_in_inventory: {

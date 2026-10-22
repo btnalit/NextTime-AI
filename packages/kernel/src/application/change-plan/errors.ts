@@ -1,4 +1,4 @@
-import type { ChangeItemKind } from '@nexttime/shared';
+import type { ChangeItemKind, ChangeRollbackBlocker } from '@nexttime/shared';
 import type { WideningReason } from './classify.js';
 
 /** I-A8: the segment's dry run, recomputed in the applying transaction, is not the one reviewed —
@@ -42,6 +42,48 @@ export class ChangeConfirmationRequiredError extends Error {
       `${context ? `${context}: ` : ''}authority-widening change item(s) need to be confirmed one by one: ${list} — nothing was applied`,
     );
     this.name = 'ChangeConfirmationRequiredError';
+    this.details = { items };
+  }
+}
+
+/** P1-B: the segment was already rolled back — mapped to 409 `change_segment_rolled_back`; nothing
+ *  was written. */
+export class ChangeSegmentRolledBackError extends Error {
+  readonly code = 'change_segment_rolled_back' as const;
+  constructor(segmentId: string) {
+    super(`change segment ${segmentId} is already rolled back — nothing was written`);
+    this.name = 'ChangeSegmentRolledBackError';
+  }
+}
+
+/** One item a rollback cannot do now, and why (`@nexttime/shared` `CHANGE_ROLLBACK_BLOCKER_VALUES`). */
+export interface ChangeRollbackConflict {
+  readonly ordinal: number;
+  readonly kind: ChangeItemKind;
+  readonly target: Readonly<Record<string, unknown>>;
+  readonly blocker: ChangeRollbackBlocker;
+  /** For `replaced`: the segment whose change came after this item — roll it back first; `null`
+   *  when that change was made outside the ChangePlan core. */
+  readonly blockedBy: { readonly segmentId: string } | null;
+  /** For `namespace_conflict`: the type names another ontology family declares now (I-P1). */
+  readonly conflicts: readonly { readonly kind: 'object' | 'action'; readonly name: string }[];
+}
+
+/** P1-B (§3.4 "逆操作遇到中间被别人改过的版本时停下不覆盖"): an item's target is not what the item left
+ *  there, or what it would restore is gone or clashes. Mapped to 409 `change_rollback_conflict`
+ *  with the items in `details`; nothing was written. */
+export class ChangeRollbackConflictError extends Error {
+  readonly code = 'change_rollback_conflict' as const;
+  readonly details: { readonly items: readonly ChangeRollbackConflict[] };
+  constructor(segmentId: string, items: readonly ChangeRollbackConflict[]) {
+    const list = items
+      .map(
+        (item) =>
+          `#${item.ordinal} ${item.kind}: ${item.blocker}${item.blockedBy ? ` (roll back segment ${item.blockedBy.segmentId} first)` : ''}`,
+      )
+      .join('; ');
+    super(`change segment ${segmentId} cannot be rolled back now: ${list} — nothing was written`);
+    this.name = 'ChangeRollbackConflictError';
     this.details = { items };
   }
 }
