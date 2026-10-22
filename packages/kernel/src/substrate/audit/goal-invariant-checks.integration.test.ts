@@ -819,14 +819,14 @@ describe.runIf(DATABASE_URL !== undefined)(
           await acceptance(id, key, await fields(id));
           cases.push([id, key]);
         };
-        breach('up', async (id) => ({
+        await breach('up', async (id) => ({
           observationId: await checkObservation(id, 1, 'other'),
         }));
-        breach('up', async (id) => ({
+        await breach('up', async (id) => ({
           observationId: await checkObservation(randomUUID(), 1, 'up'),
         }));
-        breach('up', async (id) => ({ observationId: await checkObservation(id, 2, 'up') }));
-        breach('up', async (id) => ({
+        await breach('up', async (id) => ({ observationId: await checkObservation(id, 2, 'up') }));
+        await breach('up', async (id) => ({
           observationId: await checkObservation(id, 1, 'up', 'unsatisfied'),
         }));
         const confirmation =
@@ -845,12 +845,15 @@ describe.runIf(DATABASE_URL !== undefined)(
               fields,
             ),
           });
-        breach('report', confirmation({}, { decidedBy: randomUUID() }));
-        breach('report', confirmation({}, { status: 'rejected' }));
-        breach('report', confirmation({ outcome: 'not_achieved' }));
-        breach('report', confirmation({ round: 2 }));
-        breach('report', confirmation({ checkKey: 'other' }));
-        breach('report', confirmation({ goalRunId: randomUUID() }));
+        await breach('report', confirmation({}, { decidedBy: randomUUID() }));
+        await breach('report', confirmation({}, { status: 'rejected' }));
+        await breach('report', confirmation({ outcome: 'not_achieved' }));
+        await breach('report', confirmation({ round: 2 }));
+        await breach('report', confirmation({ checkKey: 'other' }));
+        await breach('report', confirmation({ goalRunId: randomUUID() }));
+        // Every breach is written before the check reads: unawaited, they raced it, and the loop
+        // below asserted only the cases that happened to land in between (#677's failure).
+        expect(cases).toHaveLength(10);
 
         const result = await check((client) => checkIG5(client, ALL));
         expect(mentioned(result, healthy)).toBe(false);
