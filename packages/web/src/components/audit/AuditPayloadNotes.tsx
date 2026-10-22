@@ -17,7 +17,9 @@ function asRecord(value: unknown): Readonly<Record<string, unknown>> | undefined
  * 178): the kernel's `credentialReview` (a person confirmed N suspected credentials — or, for a
  * call that asks nobody, such as an observation or `invoke_worker`, only recorded them) and
  * `redactedValues` (N values hidden in this audit copy of the params; the call itself got them as
- * sent). Renders nothing when the payload has neither.
+ * sent). Legacy 168 ③: `revokedHandleCount` (how many Handles an upgrade revoked, on
+ * `principal.container_handles_revoked` / `principal.auditor_handles_revoked`) too. Renders nothing
+ * when the payload has none of them.
  */
 export function AuditPayloadNotes({ payload }: { readonly payload: unknown }) {
   const t = useT();
@@ -26,7 +28,8 @@ export function AuditPayloadNotes({ payload }: { readonly payload: unknown }) {
   const review = asRecord(record.credentialReview);
   const reviewed = review !== undefined ? countAt(review, 'suspectedSecretValues') : undefined;
   const redacted = countAt(record, 'redactedValues');
-  if (reviewed === undefined && redacted === undefined) return null;
+  const revokedHandles = countAt(record, 'revokedHandleCount');
+  if (reviewed === undefined && redacted === undefined && revokedHandles === undefined) return null;
   return (
     <ul
       className="m-0 flex list-none flex-col gap-0.5 p-0 text-13 text-text-2"
@@ -51,6 +54,11 @@ export function AuditPayloadNotes({ payload }: { readonly payload: unknown }) {
             `审计记录里隐藏了参数中的 ${redacted} 处疑似凭据（只隐藏这份记录，调用本身按原样执行）。`,
             `${redacted} suspected credential value(s) are hidden in this audit copy of the parameters (the call itself ran with them as sent).`,
           )}
+        </li>
+      ) : null}
+      {revokedHandles !== undefined ? (
+        <li data-testid="audit-revoked-handles">
+          {t(`吊销了 ${revokedHandles} 个凭证（Handle）。`, `${revokedHandles} Handle(s) revoked.`)}
         </li>
       ) : null}
     </ul>

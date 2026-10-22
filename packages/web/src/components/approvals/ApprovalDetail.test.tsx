@@ -293,6 +293,12 @@ describe('ApprovalDetail (S6-A B2 / B3 / C25)', () => {
     expect(hint.textContent).toMatch(/草稿/);
   });
 
+  it('legacy 216 ①: an approver who may not write rules still reads which definition the request was made under', () => {
+    renderDetail({}, { canAlwaysAllow: false });
+    expect(screen.queryByTestId('approval-always-allow-option')).toBeNull();
+    expect(screen.getByTestId('approval-definition').textContent).toMatch(/现在发布的 v2/);
+  });
+
   it('a row that says nothing about the definition offers no "总是允许" — nothing to bind the rule to', () => {
     renderDetail({ publishedDefinition: undefined });
     expect(screen.queryByTestId('approval-always-allow-option')).toBeNull();

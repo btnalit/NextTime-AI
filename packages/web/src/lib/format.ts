@@ -124,6 +124,15 @@ export function formatTime(iso: string | null | undefined): string {
   return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 }
 
+/** Clock time to the second (`HH:mm:ss`, local zone) — for a step that can start and end within
+ *  one minute (legacy 164 ③: a tool call's start). */
+export function formatTimeSeconds(iso: string | null | undefined): string {
+  const ms = parse(iso);
+  if (ms === undefined) return '—';
+  const d = new Date(ms);
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+}
+
 /** "12s" / "3m 04s" / "1h 02m" between two instants (`end` defaults to now — an elapsed time). */
 export function formatDuration(
   startIso: string | null | undefined,

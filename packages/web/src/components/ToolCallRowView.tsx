@@ -4,14 +4,21 @@ import { useCapability, useCapabilityList } from '../hooks/useCapability.js';
 import { useRoleCan } from '../hooks/useRoleCan.js';
 import {
   type ActionOutcome,
+  type ActionOutcomeKind,
   actionOutcomeChip,
   actionOutcomeOfToolResult,
   actionTargetLabel,
   waitingReason,
 } from '../lib/action-outcome.js';
 import type { CapabilityCaller } from '../lib/clients.js';
-import { definitionMismatchStep, gateReasonNextStep } from '../lib/errors.js';
-import { formatTime, prettyJsonVisible, shortId } from '../lib/format.js';
+import { carriesGateReason, definitionMismatchStep, gateReasonNextStep } from '../lib/errors.js';
+import {
+  formatDateTime,
+  formatDuration,
+  formatTimeSeconds,
+  prettyJsonVisible,
+  shortId,
+} from '../lib/format.js';
 import { type Translate, sentenceGap, useT } from '../lib/i18n.js';
 import { hrefs } from '../lib/router.js';
 import type { ToolCallRow } from '../lib/streaming-reducer.js';
@@ -64,6 +71,28 @@ function GateReasonNote({
     return <DefinitionMismatchNote http={http} gatekeeperId={note.gatekeeperId} {...note} />;
   }
   return <GateReasonNoteBody {...note} />;
+}
+
+/** Legacy 224 ③: a gate-refusal note belongs on a call that went wrong — the call failed, the gate
+ *  action it reports failed, or its result reports a gate reason in its `reason` / `code` field. A
+ *  successful result that merely mentions a code (a log line, a document about the codes) gets
+ *  none. */
+const FAILED_ACTION_KINDS: ReadonlySet<ActionOutcomeKind> = new Set([
+  'not_run',
+  'outcome_unknown',
+  'failed',
+]);
+
+function showsGateReason(
+  callFailed: boolean,
+  action: ActionOutcome | null,
+  resultText: string,
+): boolean {
+  return (
+    callFailed ||
+    (action !== null && FAILED_ACTION_KINDS.has(action.kind)) ||
+    carriesGateReason(resultText)
+  );
 }
 
 const ALL_INSTANCES: Readonly<Record<string, unknown>> = {};
@@ -251,13 +280,15 @@ export function ToolCallRowView({
         {resultText !== undefined ? (
           <>
             <span className="section-title">{t('结果', 'Result')}</span>
-            <GateReasonNote
-              http={http}
-              actionRequestId={action?.id}
-              text={resultText}
-              gatekeeperId={gatekeeperIdOf(row.args)}
-              target={actionTargetLabel(row.name, row.args, t)}
-            />
+            {showsGateReason(failed, action, resultText) ? (
+              <GateReasonNote
+                http={http}
+                actionRequestId={action?.id}
+                text={resultText}
+                gatekeeperId={gatekeeperIdOf(row.args)}
+                target={actionTargetLabel(row.name, row.args, t)}
+              />
+            ) : null}
             <WaitingNote outcome={action} />
             <pre className="code-block">{resultText}</pre>
           </>
@@ -327,9 +358,25 @@ export function PersistedToolCallRowView({
           {chip.label}
         </span>
         {record.startedAt ? (
-          <span className="text-3 text-small" data-volatile="">
-            {formatTime(record.startedAt)}
-            {record.endedAt ? `–${formatTime(record.endedAt)}` : ''}
+          // Legacy 164 ③: most calls start and end within one minute — the start to the second and
+          // how long it took, the full instants in the tooltip.
+          <span
+            className="text-3 text-small"
+            data-volatile=""
+            data-testid="tool-call-time"
+            title={
+              record.endedAt
+                ? `${formatDateTime(record.startedAt)} – ${formatDateTime(record.endedAt)}`
+                : formatDateTime(record.startedAt)
+            }
+          >
+            {formatTimeSeconds(record.startedAt)}
+            {record.endedAt
+              ? t(
+                  ` · 用时 ${formatDuration(record.startedAt, record.endedAt)}`,
+                  ` · took ${formatDuration(record.startedAt, record.endedAt)}`,
+                )
+              : ''}
           </span>
         ) : null}
       </summary>
@@ -351,13 +398,15 @@ export function PersistedToolCallRowView({
         {record.result ? (
           <>
             <span className="section-title">{t('结果', 'Result')}</span>
-            <GateReasonNote
-              http={http}
-              actionRequestId={action?.id}
-              text={record.result.text}
-              gatekeeperId={record.args ? gatekeeperIdOf(record.args.text) : undefined}
-              target={actionTargetLabel(record.name ?? undefined, record.args?.text, t)}
-            />
+            {showsGateReason(record.outcome === 'failed', action, record.result.text) ? (
+              <GateReasonNote
+                http={http}
+                actionRequestId={action?.id}
+                text={record.result.text}
+                gatekeeperId={record.args ? gatekeeperIdOf(record.args.text) : undefined}
+                target={actionTargetLabel(record.name ?? undefined, record.args?.text, t)}
+              />
+            ) : null}
             <WaitingNote outcome={action} />
             <pre className="code-block">{previewDisplayText(record.result)}</pre>
             {record.result.truncated ? (
@@ -370,14 +419,17 @@ export function PersistedToolCallRowView({
             ) : null}
           </>
         ) : null}
-        {!record.args && !record.result ? (
+        {/* Legacy 164 ②: an unfinished call says so whether or not its arguments were recorded. */}
+        {record.outcome === 'not_finished' ? (
+          <span className="text-3 text-small" data-testid="tool-call-not-finished">
+            {t(
+              '本轮结束时这次调用还没有结束，没有结果。',
+              'The turn ended before this call finished — there is no result.',
+            )}
+          </span>
+        ) : !record.args && !record.result ? (
           <span className="text-3 text-small">
-            {record.outcome === 'not_finished'
-              ? t(
-                  '本轮结束时这次调用还没有结束，没有结果。',
-                  'The turn ended before this call finished — there is no result.',
-                )
-              : t('未记录参数或结果。', 'No arguments or result recorded.')}
+            {t('未记录参数或结果。', 'No arguments or result recorded.')}
           </span>
         ) : null}
         {record.redactedValues > 0 ? (

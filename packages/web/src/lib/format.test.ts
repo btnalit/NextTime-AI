@@ -14,6 +14,7 @@ import {
   formatDuration,
   formatRelative,
   formatTime,
+  formatTimeSeconds,
   humanizeKind,
   prettyJsonVisible,
   redactSensitive,
@@ -217,6 +218,13 @@ describe('format', () => {
     it('renders HH:mm only, no date or zone', () => {
       expect(formatTime('2026-09-03T09:05:00.000Z')).toBe('09:05');
       expect(formatTime(null)).toBe('—');
+    });
+  });
+
+  describe('formatTimeSeconds', () => {
+    it('renders HH:mm:ss (legacy 164 ③)', () => {
+      expect(formatTimeSeconds('2026-09-03T09:05:07.400Z')).toBe('09:05:07');
+      expect(formatTimeSeconds(null)).toBe('—');
     });
   });
 });

@@ -73,6 +73,29 @@ describe('ActionRequestCard', () => {
     expect(screen.getByTestId('action-card-always-allow-stale').textContent).toMatch(/v3/);
   });
 
+  it('legacy 216 ①: a high-impact card, offered no "总是允许", still says which definition the request was made under', () => {
+    const { unmount } = renderCard({ card: baseCard({ blastRadius: 'high' }) });
+    expect(screen.queryByRole('button', { name: /总是允许/ })).toBeNull();
+    expect(screen.getByTestId('action-card-definition').textContent).toMatch(/现在发布的 v2/);
+    unmount();
+    renderCard({
+      card: baseCard({
+        blastRadius: 'high',
+        publishedDefinition: { version: 3, requestIsCurrent: false },
+      }),
+    });
+    expect(screen.queryByTestId('action-card-always-allow-stale')).toBeNull();
+    expect(screen.getByTestId('action-card-definition').textContent).toContain('按旧定义发起');
+  });
+
+  it('legacy 216 ①: when the always-allow hint already names the old version, no second line repeats it', () => {
+    renderCard({
+      card: baseCard({ publishedDefinition: { version: 3, requestIsCurrent: false } }),
+    });
+    expect(screen.getByTestId('action-card-always-allow-stale')).toBeTruthy();
+    expect(screen.queryByTestId('action-card-definition')).toBeNull();
+  });
+
   it('nothing read about the definition yet: no "总是允许", decisions stay', () => {
     renderCard({ card: baseCard({ publishedDefinition: undefined }) });
     expect(screen.queryByRole('button', { name: /总是允许/ })).toBeNull();

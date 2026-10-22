@@ -96,7 +96,7 @@ describe('IssueServiceHandleSection — picked, not typed', () => {
       expect(call).toHaveBeenCalledWith('issue_service_handle', {
         principalId: 'p-svc',
         scope: ['report_task_result'],
-        ttlSeconds: 30 * 86400,
+        ttlSeconds: 86400,
       }),
     );
   });
@@ -131,12 +131,8 @@ describe('IssueServiceHandleSection: audit P1-9 still-needed line', () => {
     expect(screen.getByTestId('ish-missing').textContent).toBe('还差：选择服务账号、勾选能力');
 
     fireEvent.change(screen.getByLabelText(/服务账号/), { target: { value: 'p-a' } });
-    fireEvent.change(screen.getByLabelText(/有效期/), { target: { value: '0' } });
-    expect(screen.getByTestId('ish-missing').textContent).toMatch(
-      /^还差：填写 1 到 \d+ 的有效期（天）、勾选能力$/,
-    );
+    expect(screen.getByTestId('ish-missing').textContent).toBe('还差：勾选能力');
 
-    fireEvent.change(screen.getByLabelText(/有效期/), { target: { value: '30' } });
     fireEvent.change(nameBox(), { target: { value: 'get_task, list_users' } });
     expect(screen.getByTestId('ish-missing').textContent).toBe('还差：去掉不可签发的能力名');
 

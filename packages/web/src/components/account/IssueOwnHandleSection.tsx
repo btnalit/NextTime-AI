@@ -2,6 +2,12 @@ import { getCapability } from '@nexttime/shared';
 import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { entryCeilingCapabilities } from '../../lib/entry-ceiling.js';
+import {
+  OWN_HANDLE_TTL_PRESET_DAYS,
+  SECONDS_PER_DAY,
+  ttlDaysLabel,
+  ttlPresetDaysWithin,
+} from '../../lib/handle-ttl.js';
 import { useT } from '../../lib/i18n.js';
 import { useGatekeeperDirectory } from '../approvals/useDirectoryNames.js';
 import { Button } from '../kit/button.js';
@@ -17,16 +23,12 @@ import { ErrorBanner } from '../kit/error-banner.js';
 import { Field } from '../kit/field.js';
 import { Notice } from '../kit/notice.js';
 import { SameNameId } from '../kit/same-name-id.js';
-import { StillNeeded } from '../kit/still-needed.js';
+import { Select } from '../kit/select.js';
 
-const SECONDS_PER_HOUR = 3600;
-/** Kernel default (`issue-handle-handler.ts`'s `DEFAULT_TTL_SECONDS`) — a short-lived dev-tool
- *  session, unlike the 30-day default a service Handle gets. */
-const DEFAULT_TTL_HOURS = 24;
 /** Fallback if the registry shape ever changes — `ISSUE_HANDLE_MAX_TTL_SECONDS` in
  *  `packages/shared/src/capabilities.ts` (30 days), read from the Zod schema below so this page
  *  cannot drift from the kernel ceiling. */
-const FALLBACK_MAX_TTL_SECONDS = 30 * 24 * SECONDS_PER_HOUR;
+const FALLBACK_MAX_TTL_SECONDS = 30 * SECONDS_PER_DAY;
 
 function issueHandleMaxTtlSeconds(): number {
   const schema = getCapability('issue_handle')?.paramsSchema as
@@ -102,7 +104,7 @@ function CopyButton({ text, label }: { readonly text: string; readonly label: st
  */
 export function IssueOwnHandleSection({ http }: IssueOwnHandleSectionProps) {
   const t = useT();
-  const maxTtlHours = Math.floor(issueHandleMaxTtlSeconds() / SECONDS_PER_HOUR);
+  const ttlPresets = ttlPresetDaysWithin(OWN_HANDLE_TTL_PRESET_DAYS, issueHandleMaxTtlSeconds());
   const entryCeiling = entryCeilingCapabilities();
   // G7 (closing wave C6): the shared directory (`useDirectoryNames.tsx`) — was its own
   // `useCapabilityList<GatekeeperListRow>(http, 'list_gatekeepers')`.
@@ -110,7 +112,8 @@ export function IssueOwnHandleSection({ http }: IssueOwnHandleSectionProps) {
   const gatekeeperOptions = gatekeeperDirectory.rows ?? [];
   const gateSame = gatekeeperDirectory.same;
 
-  const [ttlHours, setTtlHours] = useState(String(DEFAULT_TTL_HOURS));
+  // Legacy 168 ②: the shortest preset by default.
+  const [ttlDays, setTtlDays] = useState(ttlPresets[0] ?? 1);
   const [capabilitiesUnrestricted, setCapabilitiesUnrestricted] = useState(true);
   const [pickedCapabilities, setPickedCapabilities] = useState<ReadonlySet<string>>(new Set());
   const [gatekeepersUnrestricted, setGatekeepersUnrestricted] = useState(true);
@@ -118,14 +121,6 @@ export function IssueOwnHandleSection({ http }: IssueOwnHandleSectionProps) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
   const [issued, setIssued] = useState<IssueHandleResult | null>(null);
-
-  const ttlValid =
-    /^\d+$/.test(ttlHours.trim()) && Number(ttlHours) >= 1 && Number(ttlHours) <= maxTtlHours;
-  const canSubmit = ttlValid && !submitting;
-  // Audit P1-9: a disabled 签发 says what it still waits for.
-  const missing = ttlValid
-    ? []
-    : [t(`填写 1 到 ${maxTtlHours} 的有效期（小时）`, `enter a TTL of 1 to ${maxTtlHours} hours`)];
 
   function toggleCapability(name: string): void {
     setPickedCapabilities((current) => {
@@ -146,7 +141,7 @@ export function IssueOwnHandleSection({ http }: IssueOwnHandleSectionProps) {
   }
 
   async function submit(): Promise<void> {
-    if (!canSubmit) return;
+    if (submitting) return;
     setSubmitting(true);
     setError(null);
     try {
@@ -158,7 +153,7 @@ export function IssueOwnHandleSection({ http }: IssueOwnHandleSectionProps) {
       if (!gatekeepersUnrestricted) scope.resources = { gatekeeper: Array.from(pickedGatekeepers) };
       const params: Record<string, unknown> = {
         sessionKind: 'interactive',
-        ttlSeconds: Number(ttlHours) * SECONDS_PER_HOUR,
+        ttlSeconds: ttlDays * SECONDS_PER_DAY,
         ...(Object.keys(scope).length > 0 ? { scope } : {}),
       };
       setIssued(await http.call<IssueHandleResult>('issue_handle', params));
@@ -185,33 +180,35 @@ export function IssueOwnHandleSection({ http }: IssueOwnHandleSectionProps) {
   return (
     <div className="stack" data-testid="issue-own-handle-section">
       <p className="text-3 text-small">
+        {/* Legacy 168 ⑤: says outright that this Handle is for clients outside the platform. */}
         {t(
-          '为 Claude Code、pi 等外部工具签发一个可直接使用的 Handle——等价于「接入指南」里手写的那次 curl 调用。',
-          'Issue a Handle for Claude Code, pi, or another external MCP client — the same result the connection guide’s hand-written curl call produces.',
+          '只供平台外的客户端使用：为你自己电脑上的 Claude Code、pi 等工具签发一个 Handle，等价于「接入指南」里手写的那次 curl 调用。平台里运行的智能体由平台自动发放凭证，不需要在这里签发。',
+          'Only for clients outside the platform: issue a Handle for Claude Code, pi or another tool on your own machine — the same result the connection guide’s hand-written curl call produces. Agents running inside the platform get their credentials from the platform; nothing to issue here.',
         )}
       </p>
 
       <Field
         id="ioh-ttl"
-        label={t('有效期（小时）', 'TTL (hours)')}
+        label={t('有效期', 'Valid for')}
         hint={t(
-          `默认 ${DEFAULT_TTL_HOURS}，最多 ${maxTtlHours}；到期后需要重新签发（没有续期接口）。`,
-          `Default ${DEFAULT_TTL_HOURS}, max ${maxTtlHours} — no renewal, issue a new one after it expires.`,
+          '到期后需要重新签发（没有续期接口）。用多久选多久，越短越安全。',
+          'Issue a new one after it expires (there is no renewal). Pick only as long as you need; shorter is safer.',
         )}
-        error={
-          ttlValid
-            ? null
-            : t(`必须是 1 到 ${maxTtlHours} 的整数`, `Must be an integer from 1 to ${maxTtlHours}`)
-        }
       >
-        <input
+        <Select
           id="ioh-ttl"
-          className="input mono"
-          value={ttlHours}
-          onChange={(event) => setTtlHours(event.target.value)}
+          aria-label={t('有效期', 'Valid for')}
+          className="select-fit"
+          value={String(ttlDays)}
+          onChange={(event) => setTtlDays(Number(event.target.value))}
           disabled={submitting}
-          inputMode="numeric"
-        />
+        >
+          {ttlPresets.map((days) => (
+            <option key={days} value={days}>
+              {ttlDaysLabel(days, t)}
+            </option>
+          ))}
+        </Select>
       </Field>
 
       <fieldset className="field" style={{ border: 0, padding: 0, margin: 0 }}>
@@ -293,14 +290,13 @@ export function IssueOwnHandleSection({ http }: IssueOwnHandleSectionProps) {
       ) : null}
 
       <div className="row" style={{ justifyContent: 'flex-end' }}>
-        <StillNeeded items={missing} hidden={submitting} testId="ioh-missing" />
         <Button
           variant="primary"
           onClick={() => void submit()}
-          disabled={!canSubmit}
+          disabled={submitting}
           data-testid="ioh-submit"
         >
-          {t('签发', 'Issue')}
+          {submitting ? t('签发中…', 'Issuing…') : t('签发', 'Issue')}
         </Button>
       </div>
 

@@ -169,7 +169,7 @@ describe('PlatformStatusPage', () => {
   it('shows an empty state with zero platform audit rows', async () => {
     const http = scriptedHttp({ platform_status: () => status({ recentAudit: [] }) });
     renderPage(http);
-    expect(await screen.findByTestId('status-audit-empty')).toBeTruthy();
+    expect((await screen.findByTestId('status-audit-empty')).textContent).toContain('最近 1000 条');
   });
 
   it('renders the recent platform audit rows via formatAuditActor', async () => {

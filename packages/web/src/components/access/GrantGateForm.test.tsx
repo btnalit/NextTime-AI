@@ -106,6 +106,41 @@ function scriptedHttp(
 }
 
 describe('GrantGateForm', () => {
+  it('legacy 266: a locked gate that shares its name with another gate shows its short id', async () => {
+    const http = scriptedHttp({
+      list_gatekeepers: () => ({
+        items: [
+          {
+            id: 'gk-1aaaaaaa-0000',
+            name: 'docker-gate',
+            kind: 'cli',
+            status: 'active',
+            operationCount: 2,
+            createdAt: '2026-09-01T00:00:00.000Z',
+          },
+          {
+            id: 'gk-2bbbbbbb-0000',
+            name: 'docker-gate',
+            kind: 'cli',
+            status: 'active',
+            operationCount: 1,
+            createdAt: '2026-09-02T00:00:00.000Z',
+          },
+        ],
+      }),
+    });
+    render(
+      <GrantGateForm
+        http={http}
+        lockedGatekeeper={{ id: 'gk-1aaaaaaa-0000', name: 'docker-gate' }}
+        onGranted={vi.fn()}
+      />,
+    );
+    const chip = screen.getByTestId('ggf-locked-gate-chip');
+    await waitFor(() => expect(chip.textContent).toContain('gk-1aaaa'));
+    expect(chip.textContent).toContain('docker-gate');
+  });
+
   it('locked to one gate: no gate picker, no free-text id; submit grants the whole gate with no scope', async () => {
     const http = scriptedHttp({
       grant_capability: (params) => {
