@@ -10,6 +10,7 @@ import {
   type GoalInvariantCheckResult,
   checkIG1,
   checkIG2,
+  checkIG5,
   checkIG6,
   checkIG9,
 } from './goal-invariant-checks.js';
@@ -95,6 +96,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       readonly maxSteps?: number;
       readonly maxRevisions?: number;
       readonly maxWallClockSeconds?: number;
+      readonly outcome?: 'achieved' | 'not_achieved';
+      readonly outcomeBasis?: 'verified_by_check' | 'requester';
     }
 
     async function goal(fields: GoalFields = {}): Promise<string> {
@@ -117,8 +120,8 @@ describe.runIf(DATABASE_URL !== undefined)(
           fields.maxSteps ?? 100,
           fields.maxRevisions ?? 10,
           fields.maxWallClockSeconds ?? 86_400,
-          status === 'completed' ? 'achieved' : null,
-          status === 'completed' ? 'requester' : null,
+          status === 'completed' ? (fields.outcome ?? 'achieved') : null,
+          status === 'completed' ? (fields.outcomeBasis ?? 'requester') : null,
         ],
       );
       return rows[0]?.id as string;
@@ -272,6 +275,117 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       return rows[0]?.id as string;
     }
+
+    /** A Decision of `decidedBy` (default: the owner, who is every fixture goal's requester). */
+    async function decision(
+      rationale: Record<string, unknown>,
+      fields: { readonly decidedBy?: string; readonly status?: string } = {},
+    ): Promise<string> {
+      const rows = await raw<{ id: string }>(
+        `insert into decisions (workspace_id, status, activity_id, rationale, decided_by, decided_at)
+         values ($1, $2, $3, $4::jsonb, $5, now()) returning id`,
+        [
+          workspaceId,
+          fields.status ?? 'approved',
+          randomUUID(),
+          JSON.stringify(rationale),
+          fields.decidedBy ?? ownerId,
+        ],
+      );
+      return rows[0]?.id as string;
+    }
+
+    /** The Observation an attempt of an acceptance check records. */
+    async function checkObservation(
+      goalRunId: string,
+      round: number,
+      checkKey: string,
+      outcome = 'satisfied',
+    ): Promise<string> {
+      const rows = await raw<{ id: string }>(
+        `insert into observations (workspace_id, source_id, activity_id, content)
+         values ($1, $2, $3, $4::jsonb) returning id`,
+        [
+          workspaceId,
+          randomUUID(),
+          randomUUID(),
+          JSON.stringify({ purpose: 'acceptance_check', goalRunId, round, checkKey, outcome }),
+        ],
+      );
+      return rows[0]?.id as string;
+    }
+
+    interface AcceptanceFields {
+      readonly round?: number;
+      readonly kind?: 'observe_predicate' | 'requester_confirm';
+      readonly status?: 'pending' | 'passed' | 'failed';
+      readonly planRevision?: number;
+      readonly observationId?: string;
+      readonly decisionId?: string;
+    }
+
+    /** An acceptance check of a round (S11 GO4a). Settled, it rests by default on its own
+     *  evidence: an observation on an Observation of it that satisfied its predicate (or, failed,
+     *  did not), a passed confirmation on the requester's Decision for it. */
+    async function acceptance(
+      goalRunId: string,
+      key: string,
+      fields: AcceptanceFields = {},
+    ): Promise<void> {
+      const kind = fields.kind ?? 'observe_predicate';
+      const status = fields.status ?? 'passed';
+      const round = fields.round ?? 1;
+      const tried = kind === 'observe_predicate' && status !== 'pending';
+      const observationId = tried
+        ? (fields.observationId ??
+          (await checkObservation(
+            goalRunId,
+            round,
+            key,
+            status === 'passed' ? 'satisfied' : 'unsatisfied',
+          )))
+        : null;
+      const decisionId =
+        kind === 'requester_confirm' && status === 'passed'
+          ? (fields.decisionId ??
+            (await decision({
+              decision: 'goal_outcome',
+              outcome: 'achieved',
+              goalRunId,
+              round,
+              checkKey: key,
+            })))
+          : null;
+      await raw(
+        `insert into goal_acceptance_checks (workspace_id, goal_run_id, round, check_key,
+           plan_revision, kind, observation_check, prompt, status, attempts, first_attempt_at,
+           observation_id, decision_id, settled_at)
+         values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14)`,
+        [
+          workspaceId,
+          goalRunId,
+          round,
+          key,
+          fields.planRevision ?? 1,
+          kind,
+          kind === 'observe_predicate' ? JSON.stringify({ operation: 'svc.status' }) : null,
+          kind === 'observe_predicate' ? null : 'Is it done?',
+          status,
+          tried ? 1 : 0,
+          tried ? new Date() : null,
+          observationId,
+          decisionId,
+          status === 'pending' ? null : new Date(),
+        ],
+      );
+    }
+
+    const setOutcomeDecision = (goalRunId: string, decisionId: string) =>
+      raw('update goal_runs set outcome_decision_id = $3 where workspace_id = $1 and id = $2', [
+        workspaceId,
+        goalRunId,
+        decisionId,
+      ]);
 
     async function workerRun(taskId: string): Promise<string> {
       const rows = await raw<{ id: string }>(
@@ -458,6 +572,172 @@ describe.runIf(DATABASE_URL !== undefined)(
             ).toBe(true);
           }
           const intact = await check((client) => checkIG2(client, ALL));
+          expect(intact.sample.some((line) => line.startsWith('guards '))).toBe(false);
+        },
+      );
+    });
+
+    describe('I-G5: a GoalRun’s outcome rests on its verification or on its requester’s word (S11 GO4a)', () => {
+      it('counts a run achieved by check whose latest round did not pass whole on the current plan, with an observation the platform made', async () => {
+        const byCheck = (fields: GoalFields = {}) =>
+          goal({ status: 'completed', outcomeBasis: 'verified_by_check', ...fields });
+        const healthy = await byCheck();
+        await acceptance(healthy, 'up');
+        await acceptance(healthy, 'report', { kind: 'requester_confirm' });
+        // An earlier round that did not pass does not count: the latest decides.
+        const retried = await byCheck();
+        await acceptance(retried, 'up', { status: 'failed' });
+        await acceptance(retried, 'up', { round: 2 });
+        const noRound = await byCheck();
+        const notPassed = await byCheck();
+        await acceptance(notPassed, 'up');
+        await acceptance(notPassed, 'up', { round: 2, status: 'failed' });
+        await acceptance(notPassed, 'down', { round: 2 });
+        const pending = await byCheck();
+        await acceptance(pending, 'up');
+        await acceptance(pending, 'down', { status: 'pending' });
+        const offPlan = await byCheck({ currentRevision: 2 });
+        await acceptance(offPlan, 'up', { planRevision: 1 });
+        const confirmedOnly = await byCheck();
+        await acceptance(confirmedOnly, 'report', { kind: 'requester_confirm' });
+        const notAchieved = await byCheck({ outcome: 'not_achieved' });
+        await acceptance(notAchieved, 'up');
+
+        const result = await check((client) => checkIG5(client, ALL));
+        expect(result.invariant).toBe('I-G5');
+        expect(mentioned(result, healthy)).toBe(false);
+        expect(mentioned(result, retried)).toBe(false);
+        for (const [id, detail] of [
+          [noRound, 'no acceptance round'],
+          [notPassed, 'round 2: 1 not passed, 0 off the current plan, 2 observed by the platform'],
+          [pending, 'round 1: 1 not passed, 0 off the current plan, 2 observed by the platform'],
+          [offPlan, 'round 1: 0 not passed, 1 off the current plan, 1 observed by the platform'],
+          [
+            confirmedOnly,
+            'round 1: 0 not passed, 0 off the current plan, 0 observed by the platform',
+          ],
+          [
+            notAchieved,
+            'outcome not_achieved, round 1: 0 not passed, 0 off the current plan, 1 observed by the platform',
+          ],
+        ] as const) {
+          expect(result.sample, detail).toContain(
+            `achieved-by-check ${workspaceId}:${id} (${detail})`,
+          );
+        }
+      });
+
+      it('counts an outcome on the requester’s word without their own approved Decision saying so', async () => {
+        const onWord = async (
+          rationale: Record<string, unknown> | null,
+          fields: Parameters<typeof decision>[1] = {},
+        ) => {
+          const id = await goal({ status: 'completed', outcome: 'not_achieved' });
+          if (rationale) {
+            const decided = await decision(
+              { decision: 'goal_outcome', goalRunId: id, outcome: 'not_achieved', ...rationale },
+              fields,
+            );
+            await setOutcomeDecision(id, decided);
+          }
+          return id;
+        };
+        const healthy = await onWord({});
+        const none = await onWord(null);
+        const someoneElse = await onWord({}, { decidedBy: randomUUID() });
+        const notApproved = await onWord({}, { status: 'proposed' });
+        const otherOutcome = await onWord({ outcome: 'achieved' });
+        const otherRun = await onWord({ goalRunId: randomUUID() });
+        const otherDecision = await onWord({ decision: 'goal_revision' });
+
+        const result = await check((client) => checkIG5(client, ALL));
+        expect(mentioned(result, healthy)).toBe(false);
+        for (const id of [none, someoneElse, notApproved, otherOutcome, otherRun, otherDecision]) {
+          expect(flagged(result, 'requester-basis', id), id).toBe(true);
+        }
+        expect(
+          result.sample.some(
+            (line) =>
+              line ===
+              `requester-basis ${workspaceId}:${none} (not_achieved on the requester's word, decision none is not theirs saying so)`,
+          ),
+        ).toBe(true);
+      });
+
+      it('counts a passed check without its evidence: an Observation of that check that satisfied its predicate, or the requester’s own Decision for it', async () => {
+        const verifying = () => goal({ status: 'verifying' });
+        const healthy = await verifying();
+        await acceptance(healthy, 'up');
+        await acceptance(healthy, 'report', { kind: 'requester_confirm' });
+        const cases: (readonly [string, string])[] = [];
+        const breach = async (
+          key: string,
+          fields: (goalRunId: string) => Promise<AcceptanceFields>,
+        ) => {
+          const id = await verifying();
+          await acceptance(id, key, await fields(id));
+          cases.push([id, key]);
+        };
+        await breach('up', async (id) => ({
+          observationId: await checkObservation(id, 1, 'other'),
+        }));
+        await breach('up', async (id) => ({
+          observationId: await checkObservation(randomUUID(), 1, 'up'),
+        }));
+        await breach('up', async (id) => ({ observationId: await checkObservation(id, 2, 'up') }));
+        await breach('up', async (id) => ({
+          observationId: await checkObservation(id, 1, 'up', 'unsatisfied'),
+        }));
+        const confirmation =
+          (rationale: Record<string, unknown>, fields: Parameters<typeof decision>[1] = {}) =>
+          async (id: string) => ({
+            kind: 'requester_confirm' as const,
+            decisionId: await decision(
+              {
+                decision: 'goal_outcome',
+                outcome: 'achieved',
+                goalRunId: id,
+                round: 1,
+                checkKey: 'report',
+                ...rationale,
+              },
+              fields,
+            ),
+          });
+        await breach('report', confirmation({}, { decidedBy: randomUUID() }));
+        await breach('report', confirmation({}, { status: 'rejected' }));
+        await breach('report', confirmation({ outcome: 'not_achieved' }));
+        await breach('report', confirmation({ round: 2 }));
+        await breach('report', confirmation({ checkKey: 'other' }));
+        await breach('report', confirmation({ goalRunId: randomUUID() }));
+
+        const result = await check((client) => checkIG5(client, ALL));
+        expect(mentioned(result, healthy)).toBe(false);
+        for (const [id, key] of cases) {
+          const kind = key === 'up' ? 'observe_predicate' : 'requester_confirm';
+          expect(result.sample, `${id} ${key}`).toContain(
+            `passed-without-evidence ${workspaceId}:${id} (round 1 check ${key} (${kind}) passed without its evidence)`,
+          );
+        }
+      });
+
+      it.each([
+        ['goal_runs', 'goal_runs_status_guard'],
+        ['goal_acceptance_checks', 'goal_acceptance_checks_guard'],
+      ])(
+        'counts the guard %s.%s disabled, or switched to fire only under replica',
+        async (table, trigger) => {
+          for (const breach of [
+            `alter table ${table} disable trigger ${trigger}`,
+            `alter table ${table} enable replica trigger ${trigger}`,
+          ]) {
+            const result = await checkRolledBack(breach, (client) => checkIG5(client, ALL));
+            expect(
+              result.sample.some((line) => line.startsWith(`guards ${table}:${trigger} (`)),
+              breach,
+            ).toBe(true);
+          }
+          const intact = await check((client) => checkIG5(client, ALL));
           expect(intact.sample.some((line) => line.startsWith('guards '))).toBe(false);
         },
       );
@@ -681,14 +961,14 @@ describe.runIf(DATABASE_URL !== undefined)(
 
     it('runs with every other invariant and is exported as a gauge per invariant', async () => {
       const results = await runInvariantChecks(pool);
-      for (const id of ['I-G1', 'I-G2', 'I-G6', 'I-G9']) {
+      for (const id of ['I-G1', 'I-G2', 'I-G5', 'I-G6', 'I-G9']) {
         const result = results.find((candidate) => candidate.invariant === id);
         expect(result, id).toBeDefined();
         // This file left breaches of each behind.
         expect(result?.violations, id).toBeGreaterThan(0);
       }
       const metrics = renderInvariantMetricsPrometheus(results, new Date());
-      for (const id of ['I-G1', 'I-G2', 'I-G6', 'I-G9']) {
+      for (const id of ['I-G1', 'I-G2', 'I-G5', 'I-G6', 'I-G9']) {
         expect(metrics).toMatch(
           new RegExp(`^nexttime_invariant_violations\\{invariant="${id}"\\} [1-9]\\d*$`, 'm'),
         );

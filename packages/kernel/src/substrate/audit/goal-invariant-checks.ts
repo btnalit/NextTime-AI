@@ -2,17 +2,18 @@ import type { PoolClient } from 'pg';
 
 /**
  * substrate/audit/goal-invariant-checks (S11 GO1; docs/goal-orchestration-and-admin-agent-plan-
- * 2026-10-16.md §3.3): the scheduled checks for the goal-execution invariants I-G1, I-G2, I-G6 and
- * I-G9, run by `invariant-checks.ts`'s `runInvariantChecks` with the rest and exported as the same
- * `nexttime_invariant_violations{invariant="I-G…"}` gauges. Same posture as that module (read its
- * doc comment): read-only, cross-workspace, plain SQL against the tables that hold the facts
- * (`goal_runs`, `plan_revisions`, `step_runs` — application/goal; `tasks`, `worker_runs` —
- * application/task; `action_requests` — governance/approval), never an import of those modules —
- * a monitor that trusted the write path would miss exactly what it is here to catch.
+ * 2026-10-16.md §3.3): the scheduled checks for the goal-execution invariants I-G1, I-G2, I-G5,
+ * I-G6 and I-G9, run by `invariant-checks.ts`'s `runInvariantChecks` with the rest and exported as
+ * the same `nexttime_invariant_violations{invariant="I-G…"}` gauges. Same posture as that module
+ * (read its doc comment): read-only, cross-workspace, plain SQL against the tables that hold the
+ * facts (`goal_runs`, `plan_revisions`, `step_runs`, `goal_acceptance_checks` — application/goal;
+ * `tasks`, `worker_runs` — application/task; `action_requests` — governance/approval;
+ * `observations`, `decisions` — core), never an import of those modules — a monitor that trusted
+ * the write path would miss exactly what it is here to catch.
  *
  * Each invariant is one gauge made of a few row-level conditions; a sampled row names the
  * condition it broke. Where the database already makes a breach unrepresentable (I-G1's unique
- * index, the goal tables' guard triggers for I-G2, I-G9's `withdrawn` guard) the check also
+ * index, the goal tables' guard triggers for I-G2 and I-G5, I-G9's `withdrawn` guard) the check also
  * watches that the mechanism is still in place, as I4 / I12 do — a trigger counts only while it
  * fires in an ordinary session (`tgenabled` `'O'` or `'A'`; `'R'` fires only under
  * `session_replication_role = replica`).
@@ -21,6 +22,7 @@ import type { PoolClient } from 'pg';
  * |---|---|
  * | I-G1 one Task per attempt | `tasks_step_attempt_uidx` missing or not a valid unique index; a StepRun whose attempt Tasks do not number exactly 1..`attempt_count`; a StepRun with more than one unfinished attempt Task at once (attempts are sequential, one layer of retry); an attempt Task with more than one WorkerRun (S11 GO2: the advancer's Tasks have no Task-internal retry, so a second run means a retry layer under the StepRun's) |
  * | I-G2 only current-plan steps advance | a guard trigger of `goal_runs` / `plan_revisions` / `step_runs` (goal/0001) or `tasks_goal_step_immutable` (task/0007) missing or not enabled; an unfinished StepRun (`pending` … `failed`, not superseded) whose definition is not in its GoalRun's current plan unchanged — dropped or redefined without being superseded; a finished one whose key the current plan redefines; a key of the current plan with no live StepRun while the GoalRun runs; an attempt Task started under a revision outside its StepRun's live window or under a revision never accepted; an accepted revision off the chain that `based_on_revision` walks back from the current one (newer than it, or skipped by it — I-G3); a revision on that chain that is not accepted |
+ * | I-G5 an outcome rests on verification or the requester's word | `goal_runs_status_guard` (goal/0005) or `goal_acceptance_checks_guard` missing or not enabled; a GoalRun completed by check (`verified_by_check`) other than `achieved` (a CHECK keeps a person's Decision off it), or whose latest acceptance round has a check not `passed`, a check on a plan other than the current one, no observation the platform made — or no round at all; a GoalRun completed on the requester's word whose outcome Decision is not the requester's own, approved, naming the run and that outcome; a `passed` acceptance check with no evidence — an observation without an Observation of that check that satisfied its predicate, a confirmation without the requester's own Decision for that check |
  * | I-G6 budget | a `running` GoalRun past its wall-clock budget by more than the grace period; or over its token, step or revision budget with no Task of it still running and nothing finished for the grace period — the advancer checks budgets between steps, so a Task that overshoots mid-run is not counted until it ends |
  * | I-G9 only live steps act | `action_requests_status_guard` (governance/0021, the `withdrawn` guard) or `action_requests_step_run_immutable` (governance/0022) missing or not enabled; a request of a cancelled StepRun, or of a cancelling / cancelled GoalRun, or of a superseded StepRun that the superseding revision did not release (`plan_revisions.removals`, goal/0004), still awaiting a decision or approved and queued (it is withdrawn in the transaction that cancels or revises); a request of a cancelled StepRun, or of a superseded one not released, that started executing after the step ended; a request created after its StepRun was superseded or cancelled; a request whose StepRun is not the one its Worker's Task runs for, or that records a StepRun with no Worker's Task behind it |
  *
@@ -311,6 +313,107 @@ export async function checkIG2(
                  and pr.revision = c.revision
                where pr.status is distinct from 'accepted'
                order by c.workspace_id, c.goal_run_id, c.revision desc`,
+      },
+    ],
+    sampleLimit,
+  );
+}
+
+// -------------------------------------------------------------------------------------------
+// I-G5 — a GoalRun's objective outcome rests on its verification or on its requester's word.
+// -------------------------------------------------------------------------------------------
+
+export async function checkIG5(
+  client: PoolClient,
+  sampleLimit: number,
+): Promise<GoalInvariantCheckResult> {
+  return runConditions(
+    client,
+    'I-G5',
+    [
+      triggersEnabled('guards', [
+        ['goal_runs', 'goal_runs_status_guard'],
+        ['goal_acceptance_checks', 'goal_acceptance_checks_guard'],
+      ]),
+      {
+        label: 'achieved-by-check',
+        sql: `with by_check as (
+                select g.workspace_id, g.id, g.outcome, g.current_revision, g.ended_at,
+                       (select max(c.round) from goal_acceptance_checks c
+                         where c.workspace_id = g.workspace_id and c.goal_run_id = g.id) as round
+                  from goal_runs g
+                 where g.status = 'completed' and g.outcome_basis = 'verified_by_check'
+              ),
+              latest as (
+                select b.workspace_id, b.id, b.outcome, b.round, b.ended_at,
+                       count(c.check_key) filter (where c.status <> 'passed') as not_passed,
+                       count(c.check_key)
+                         filter (where c.plan_revision is distinct from b.current_revision) as off_plan,
+                       count(c.check_key) filter (where c.kind = 'observe_predicate') as observed
+                  from by_check b
+                  left join goal_acceptance_checks c
+                    on c.workspace_id = b.workspace_id and c.goal_run_id = b.id and c.round = b.round
+                 group by b.workspace_id, b.id, b.outcome, b.round, b.ended_at
+              )
+              select workspace_id, id,
+                     concat_ws(', ',
+                       case when outcome is distinct from 'achieved' then 'outcome ' || outcome end,
+                       case when round is null then 'no acceptance round'
+                            else 'round ' || round || ': ' || not_passed || ' not passed, '
+                              || off_plan || ' off the current plan, ' || observed
+                              || ' observed by the platform' end) as detail
+                from latest
+               where outcome is distinct from 'achieved'
+                  or round is null or not_passed > 0 or off_plan > 0 or observed = 0
+               order by ended_at desc, id desc`,
+      },
+      {
+        label: 'requester-basis',
+        sql: `select g.workspace_id, g.id,
+                     g.outcome || ' on the requester''s word, decision '
+                       || coalesce(g.outcome_decision_id::text, 'none') || ' is not theirs saying so' as detail
+                from goal_runs g
+               where g.status = 'completed' and g.outcome_basis = 'requester'
+                 and not exists (
+                   select 1 from decisions d
+                    where d.workspace_id = g.workspace_id and d.id = g.outcome_decision_id
+                      and d.decided_by = g.on_behalf_of and d.status = 'approved'
+                      and d.rationale ->> 'decision' = 'goal_outcome'
+                      and d.rationale ->> 'goalRunId' = g.id::text
+                      and d.rationale ->> 'outcome' = g.outcome
+                 )
+               order by g.ended_at desc, g.id desc`,
+      },
+      {
+        label: 'passed-without-evidence',
+        sql: `select c.workspace_id, c.goal_run_id as id,
+                     'round ' || c.round || ' check ' || c.check_key || ' (' || c.kind
+                       || ') passed without its evidence' as detail
+                from goal_acceptance_checks c
+                join goal_runs g on g.workspace_id = c.workspace_id and g.id = c.goal_run_id
+               where c.status = 'passed'
+                 and case c.kind
+                       when 'observe_predicate' then not exists (
+                         select 1 from observations o
+                          where o.workspace_id = c.workspace_id and o.id = c.observation_id
+                            and o.content ->> 'purpose' = 'acceptance_check'
+                            and o.content ->> 'goalRunId' = c.goal_run_id::text
+                            and o.content ->> 'round' = c.round::text
+                            and o.content ->> 'checkKey' = c.check_key
+                            and o.content ->> 'outcome' = 'satisfied')
+                       when 'requester_confirm' then not exists (
+                         select 1 from decisions d
+                          where d.workspace_id = c.workspace_id and d.id = c.decision_id
+                            and d.decided_by = g.on_behalf_of and d.status = 'approved'
+                            and d.rationale ->> 'decision' = 'goal_outcome'
+                            and d.rationale ->> 'outcome' = 'achieved'
+                            and d.rationale ->> 'goalRunId' = c.goal_run_id::text
+                            and d.rationale ->> 'round' = c.round::text
+                            and d.rationale ->> 'checkKey' = c.check_key)
+                       -- A kind this check does not know how to vouch for counts until it does.
+                       else true
+                     end
+               order by c.settled_at desc, c.workspace_id, c.goal_run_id, c.round, c.check_key`,
       },
     ],
     sampleLimit,

@@ -21,6 +21,11 @@ import { SqlGraphStore } from '../../substrate/graph/index.js';
 import { publishOntologyDomainPack } from '../../substrate/ontology/index.js';
 import { dispatchCapability } from '../gateway/dispatch.js';
 import type { ResolvedCaller } from '../gateway/resolve-caller.js';
+import {
+  listAcceptanceChecks,
+  openAcceptanceRound,
+  settleAcceptanceCheck,
+} from '../goal/acceptance-checks.js';
 import { createPlatformAdmin } from '../identity/index.js';
 import { compactObservations } from './compact-observations.js';
 import type { CompactObservationsResult } from './compact-observations.js';
@@ -767,6 +772,151 @@ describe.runIf(DATABASE_URL !== undefined)(
         await asLogin((client) => readReconcileChecks(client, workspaceId, [actionRequestId]))
       ).get(actionRequestId);
       expect(check).toMatchObject({ status: 'not_seen', observationId: evidence });
+    });
+  },
+);
+
+/**
+ * S11 GO4a (goal/0005): `goal_acceptance_checks.observation_id` is a foreign key into
+ * `observations` too — the previous release's compaction refuses to run on it
+ * (`reversibility-deltas.json`), this one runs, and condition (a) keeps the Observation an
+ * acceptance check rests on. As for GO3d, the evidence is an ingest marker (`content = '{}'`) on
+ * purpose, so only (a) can be what keeps it: a failed check rests on its latest Observation, which
+ * a real attempt writes with a payload.
+ */
+describe.runIf(DATABASE_URL !== undefined)(
+  'compactObservations and a goal acceptance check (integration, real Postgres) — S11 GO4a',
+  () => {
+    let pool: Pool;
+    const workspaceId = randomUUID();
+    const ownerId = randomUUID();
+    const DAY_SECONDS = 24 * 60 * 60;
+
+    const asLogin = <T>(fn: (client: PoolClient) => Promise<T>): Promise<T> =>
+      withWorkspace(pool, { workspaceId, principalId: ownerId }, fn, { skipRoleSwitch: true });
+    /** Fixture rows the goal's guards would only let the advancer write (the GO2 suites' way). */
+    const raw = <T>(sql: string, params: readonly unknown[]): Promise<T[]> =>
+      asLogin(async (client) => {
+        await client.query('set local session_replication_role = replica');
+        return (await client.query(sql, [...params])).rows as T[];
+      });
+
+    beforeAll(async () => {
+      pool = createPool();
+      await runMigrations(pool, MIGRATIONS_DIR);
+      await asLogin(async (client) => {
+        await client.query('insert into workspaces (id, name) values ($1, $2)', [
+          workspaceId,
+          `compact-acceptance-${workspaceId.slice(0, 8)}`,
+        ]);
+        await client.query(
+          `insert into principals (workspace_id, id, kind, role, display_name)
+           values ($1, $2, 'human', 'owner', 'owner')`,
+          [workspaceId, ownerId],
+        );
+      });
+    });
+
+    afterAll(async () => {
+      await pool.end();
+    });
+
+    it('runs on a schema where an acceptance check references an Observation, and never deletes the one the check rests on', async () => {
+      const { sourceId, activityId, laterActivityId } = await asLogin(async (client) => {
+        const source = await registerSource(client, workspaceId, {
+          kind: 'test.compact-acceptance',
+          ownerPrincipalId: ownerId,
+          visibility: 'workspace',
+        });
+        const activity = await startActivity(client, workspaceId, {
+          kind: 'test.compact-acceptance',
+          principalId: ownerId,
+        });
+        const later = await startActivity(client, workspaceId, {
+          kind: 'test.compact-acceptance',
+          principalId: ownerId,
+        });
+        return { sourceId: source.id, activityId: activity.id, laterActivityId: later.id };
+      });
+      const observe = async (activity: string, offsetSeconds: number) =>
+        (
+          await raw<{ id: string }>(
+            `insert into observations (workspace_id, source_id, activity_id, content, created_at)
+             values ($1, $2, $3, '{}', now() + make_interval(secs => $4)) returning id`,
+            [workspaceId, sourceId, activity, offsetSeconds],
+          )
+        )[0]?.id as string;
+      const evidence = await observe(activityId, -40 * DAY_SECONDS - 30);
+      const older = await observe(activityId, -40 * DAY_SECONDS - 20);
+      const old = await observe(activityId, -40 * DAY_SECONDS - 10);
+      const newest = await observe(laterActivityId, 0);
+
+      const [goal] = await raw<{ id: string }>(
+        `insert into goal_runs (workspace_id, status, on_behalf_of, statement, current_revision,
+           confirmed_at, budget_max_tokens, budget_max_steps, budget_max_revisions,
+           budget_max_wall_clock_seconds)
+         values ($1, 'verifying', $2, 'a goal', 1, now(), 100000, 10, 5, 3600) returning id`,
+        [workspaceId, ownerId],
+      );
+      const goalRunId = goal?.id as string;
+      await raw(
+        `insert into plan_revisions (workspace_id, goal_run_id, revision, status, plan, proposed_by,
+           decided_by, decided_at)
+         values ($1, $2, 1, 'accepted', '{"steps":[{"key":"s"}]}', $3, $3, now())`,
+        [workspaceId, goalRunId, ownerId],
+      );
+      // The round and the check's settlement through the module that owns them, under its guard.
+      await asLogin(async (client) => {
+        const [check] = await openAcceptanceRound(client, workspaceId, {
+          goalRunId,
+          planRevision: 1,
+          checks: [
+            {
+              kind: 'observe_predicate',
+              key: 'up',
+              check: {
+                gatekeeperId: randomUUID(),
+                operation: 'svc.status',
+                expect: { path: 'state', op: 'eq', value: 'running' },
+              },
+            },
+          ],
+          actorPrincipalId: ownerId,
+        });
+        if (!check) throw new Error('no acceptance check was opened');
+        await settleAcceptanceCheck(
+          client,
+          workspaceId,
+          check,
+          { status: 'failed', observationId: evidence, lastError: 'predicate_unsatisfied' },
+          ownerId,
+        );
+      });
+
+      const dryRun = await compactObservations(pool, { confirm: false, workspaceId });
+      expect(dryRun.workspaces.find((w) => w.workspaceId === workspaceId)).toMatchObject({
+        examined: 3,
+        keptReferenced: 1,
+        deleted: 2,
+      });
+
+      const executed = await compactObservations(pool, { confirm: true, workspaceId });
+      expect(executed.workspaces.find((w) => w.workspaceId === workspaceId)).toMatchObject({
+        examined: 3,
+        keptReferenced: 1,
+        deleted: 2,
+      });
+      const left = await asLogin((client) =>
+        client.query<{ id: string }>(
+          'select id from observations where workspace_id = $1 and id = any($2::uuid[])',
+          [workspaceId, [evidence, older, old, newest]],
+        ),
+      );
+      expect(new Set(left.rows.map((row) => row.id))).toEqual(new Set([evidence, newest]));
+      const [check] = await asLogin((client) =>
+        listAcceptanceChecks(client, workspaceId, goalRunId),
+      );
+      expect(check).toMatchObject({ status: 'failed', observationId: evidence });
     });
   },
 );

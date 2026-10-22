@@ -37,6 +37,9 @@ export interface GoalRunRow {
   readonly cleanupPending: boolean;
   readonly outcome: ObjectiveOutcome | null;
   readonly outcomeBasis: GoalOutcomeBasis | null;
+  /** S11 GO4a (goal/0005): the requester's Decision an outcome on their word rests on — set only
+   *  with `outcomeBasis = 'requester'`. */
+  readonly outcomeDecisionId: string | null;
   readonly onBehalfOf: string;
   readonly originatedInTurnId: string | null;
   readonly statement: string;
@@ -100,7 +103,8 @@ export interface StepRunRow {
 
 export const GOAL_RUN_ROW_COLUMNS =
   'workspace_id, id, status, pause_reason, paused_by, paused_by_authority, cleanup_pending, ' +
-  'outcome, outcome_basis, on_behalf_of, originated_in_turn_id, statement, current_revision, ' +
+  'outcome, outcome_basis, outcome_decision_id, on_behalf_of, originated_in_turn_id, statement, ' +
+  'current_revision, ' +
   'budget_max_tokens, budget_max_steps, budget_max_revisions, budget_max_wall_clock_seconds, ' +
   'created_at, updated_at, confirmed_at, ended_at, next_tick_at, advance_failures';
 
@@ -114,6 +118,7 @@ export interface GoalRunDbRow {
   cleanup_pending: boolean;
   outcome: ObjectiveOutcome | null;
   outcome_basis: GoalOutcomeBasis | null;
+  outcome_decision_id: string | null;
   on_behalf_of: string;
   originated_in_turn_id: string | null;
   statement: string;
@@ -141,6 +146,7 @@ export function mapGoalRunRow(row: GoalRunDbRow): GoalRunRow {
     cleanupPending: row.cleanup_pending,
     outcome: row.outcome,
     outcomeBasis: row.outcome_basis,
+    outcomeDecisionId: row.outcome_decision_id,
     onBehalfOf: row.on_behalf_of,
     originatedInTurnId: row.originated_in_turn_id,
     statement: row.statement,
