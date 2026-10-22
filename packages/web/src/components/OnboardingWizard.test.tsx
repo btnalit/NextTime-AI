@@ -422,6 +422,11 @@ describe('OnboardingWizard', () => {
     expect(within(confirm).getByTestId('governance-diff-list-item').dataset.direction).toBe(
       'loosened',
     );
+    // Legacy 404: the change first, then what loosening it means.
+    expect(
+      within(confirm).getByTestId('governance-diff-list').compareDocumentPosition(warning) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
 
     fireEvent.click(within(confirm).getByTestId('confirm-cancel'));
     await screen.findByTestId('wizard-review-draft-kept');

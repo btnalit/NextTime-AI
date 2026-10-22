@@ -395,6 +395,9 @@ function PublishGovernanceConfirm({
       onConfirm={onConfirm}
       testId={testId}
     >
+      {/* Legacy 404 (UX acceptance of #653): the change being confirmed comes first, ahead of
+       *  what loosening it means — on a short window it used to sit under the fold. */}
+      <GovernanceChangeList items={[item]} single />
       {consequences.length > 0 ? (
         <Notice tone="warn" testId={`${testId}-loosens`}>
           <ul className="stack-s" style={{ margin: 0, paddingLeft: '1.2em' }}>
@@ -404,7 +407,6 @@ function PublishGovernanceConfirm({
           </ul>
         </Notice>
       ) : null}
-      <GovernanceChangeList items={[item]} single />
     </Confirm>
   );
 }
