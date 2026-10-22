@@ -38,6 +38,8 @@ import {
 } from './application/gateway/index.js';
 import type { GatekeeperActionExecutorDeps } from './application/gateway/index.js';
 import {
+  type AcceptanceCheckOptions,
+  DEFAULT_ACCEPTANCE_CHECK_INTERVAL_MS,
   DEFAULT_GOAL_ADVANCER_INTERVAL_MS,
   DEFAULT_GOAL_RECONCILE_INTERVAL_MS,
   DEFAULT_RECONCILE_CHECK_INTERVAL_MS,
@@ -46,6 +48,7 @@ import {
   type ReconcileCheckOptions,
   markReconcileDue,
   registerGoalWakeConsumer,
+  runAcceptanceCheckTick,
   runGoalAdvancerTick,
   runReconcileCheckTick,
   sweepGoalCancelCleanup,
@@ -506,8 +509,19 @@ export interface CreateBackgroundServicesOptions {
    *  `DEFAULT_RECONCILE_CHECK_MAX_DURATION_MS`, 15 minutes) — and their lease and backoff, for
    *  tests. */
   readonly goalReconcileCheckOptions?: ReconcileCheckOptions;
-  /** Called with every goal advancer, wake-consumer, reconcile-scan or reconcile-check failure —
-   *  same shape as `onTaskReaperError`. Defaults to a no-op; `main()` passes `app.log.error`. */
+  /** S11 GO4a: how often the platform's acceptance observations run (`application/goal/
+   *  acceptance-check.ts`'s `runAcceptanceCheckTick`). Default `DEFAULT_ACCEPTANCE_CHECK_INTERVAL_MS`
+   *  (5 s). Wired with the goal advancer. */
+  readonly goalAcceptanceCheckIntervalMs?: number;
+  /** S11 GO4a: the acceptance observations' caps — `main()` reads `maxAttempts` from
+   *  `GOAL_ACCEPTANCE_CHECK_MAX_ATTEMPTS` and `maxDurationMs` from
+   *  `GOAL_ACCEPTANCE_CHECK_MAX_DURATION_MS` (defaults `DEFAULT_ACCEPTANCE_CHECK_MAX_ATTEMPTS`, 5,
+   *  and `DEFAULT_ACCEPTANCE_CHECK_MAX_DURATION_MS`, 15 minutes) — and their lease and backoff,
+   *  for tests. */
+  readonly goalAcceptanceCheckOptions?: AcceptanceCheckOptions;
+  /** Called with every goal advancer, wake-consumer, reconcile-scan, reconcile-check or
+   *  acceptance-check failure — same shape as `onTaskReaperError`. Defaults to a no-op; `main()`
+   *  passes `app.log.error`. */
   readonly onGoalAdvancerError?: (error: unknown) => void;
   /**
    * `OutboxDispatcher.pruneDispatched`'s `olderThanDays` — deletes dispatched outbox rows older
@@ -863,6 +877,8 @@ export function createBackgroundServices(
   // ticks do not overlap either.
   let goalReconcileCheckTimer: NodeJS.Timeout | undefined;
   let goalReconcileCheckRunning = false;
+  let goalAcceptanceCheckTimer: NodeJS.Timeout | undefined;
+  let goalAcceptanceCheckRunning = false;
   let unsubscribeGoalWake: (() => void) | undefined;
   let taskDeps:
     | {
@@ -1042,6 +1058,24 @@ export function createBackgroundServices(
             });
         }, options.goalReconcileCheckIntervalMs ?? DEFAULT_RECONCILE_CHECK_INTERVAL_MS);
         goalReconcileCheckTimer.unref?.();
+
+        const acceptanceCheckDeps = {
+          pool: options.pool,
+          gatekeeperClient,
+          options: options.goalAcceptanceCheckOptions,
+        };
+        goalAcceptanceCheckTimer = setInterval(() => {
+          if (goalAcceptanceCheckRunning) return;
+          goalAcceptanceCheckRunning = true;
+          runAcceptanceCheckTick(acceptanceCheckDeps, {
+            onError: (err) => onGoalAdvancerError(err),
+          })
+            .catch(onGoalAdvancerError)
+            .finally(() => {
+              goalAcceptanceCheckRunning = false;
+            });
+        }, options.goalAcceptanceCheckIntervalMs ?? DEFAULT_ACCEPTANCE_CHECK_INTERVAL_MS);
+        goalAcceptanceCheckTimer.unref?.();
       }
 
       // S8 W3 K2 (leftover 82): the draft-expiry sweep — `draftExpiryDays === 0` is a deliberate
@@ -1158,6 +1192,10 @@ export function createBackgroundServices(
       if (goalReconcileCheckTimer) {
         clearInterval(goalReconcileCheckTimer);
         goalReconcileCheckTimer = undefined;
+      }
+      if (goalAcceptanceCheckTimer) {
+        clearInterval(goalAcceptanceCheckTimer);
+        goalAcceptanceCheckTimer = undefined;
       }
       if (draftExpiryTimer) {
         clearInterval(draftExpiryTimer);
@@ -1471,6 +1509,16 @@ export function main(): void {
       'GOAL_RECONCILE_CHECK_MAX_DURATION_MS',
       process.env.GOAL_RECONCILE_CHECK_MAX_DURATION_MS,
     );
+    // S11 GO4a: how long the platform keeps observing a goal's acceptance check before the goal
+    // pauses for its requester.
+    const acceptanceCheckMaxAttempts = parsePositiveIntEnvVar(
+      'GOAL_ACCEPTANCE_CHECK_MAX_ATTEMPTS',
+      process.env.GOAL_ACCEPTANCE_CHECK_MAX_ATTEMPTS,
+    );
+    const acceptanceCheckMaxDurationMs = parsePositiveIntEnvVar(
+      'GOAL_ACCEPTANCE_CHECK_MAX_DURATION_MS',
+      process.env.GOAL_ACCEPTANCE_CHECK_MAX_DURATION_MS,
+    );
     const outboxPruneDays = parseNonNegativeIntEnvVar(
       'OUTBOX_PRUNE_DAYS',
       process.env.OUTBOX_PRUNE_DAYS,
@@ -1552,6 +1600,14 @@ export function main(): void {
           : {}),
         ...(reconcileCheckMaxDurationMs !== undefined
           ? { maxDurationMs: reconcileCheckMaxDurationMs }
+          : {}),
+      },
+      goalAcceptanceCheckOptions: {
+        ...(acceptanceCheckMaxAttempts !== undefined
+          ? { maxAttempts: acceptanceCheckMaxAttempts }
+          : {}),
+        ...(acceptanceCheckMaxDurationMs !== undefined
+          ? { maxDurationMs: acceptanceCheckMaxDurationMs }
           : {}),
       },
       onActionRequestReaperError: (actionRequestId: string, err: unknown) =>

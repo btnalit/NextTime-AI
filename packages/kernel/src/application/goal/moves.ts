@@ -1,9 +1,11 @@
 import {
   GOAL_RUN_TRANSITIONS,
+  type GoalOutcomeBasis,
   type GoalRunEvent,
   type GoalRunPauseAuthority,
   type GoalRunPauseReason,
   type GoalRunStatus,
+  type ObjectiveOutcome,
   STEP_RUN_TRANSITIONS,
   type StepRunEvent,
   type StepRunFailureCategory,
@@ -12,6 +14,7 @@ import {
   transition,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
+import { supersedePendingAcceptanceChecks } from './acceptance-checks.js';
 import { recordGoalRunTransition, recordStepRunTransition } from './transition-log.js';
 import {
   STEP_RUN_ROW_COLUMNS,
@@ -120,10 +123,20 @@ export interface GoalMove {
   /** `now`: the run is due at once (a person resumed or cancelled it). Otherwise `next_tick_at`
    *  stays as it is — the advance writes it last — and a final status clears it (goal/0002). */
   readonly due?: 'now';
+  /** Only on `complete` (`goal_runs_outcome`): the objective outcome, what it rests on (I-G5) and,
+   *  for an outcome on the requester's word, their Decision (goal/0005). */
+  readonly outcome?: {
+    readonly outcome: ObjectiveOutcome;
+    readonly basis: GoalOutcomeBasis;
+    readonly decisionId?: string;
+  };
   readonly audit?: Record<string, unknown>;
 }
 
-/** Moves the GoalRun `goal` (in status `from`) along `event`; returns the new status. */
+/** Moves the GoalRun `goal` (in status `from`) along `event`; returns the new status. A move out of
+ *  `verifying` supersedes the round's pending acceptance checks in the same transaction (S11 GO4a:
+ *  nothing is observed for a run that is not verifying, and no row of an ended round stays
+ *  pending). */
 export async function moveGoalRun(
   client: PoolClient,
   actor: GoalMoveActor,
@@ -133,6 +146,9 @@ export async function moveGoalRun(
   move: GoalMove = {},
 ): Promise<GoalRunStatus> {
   const to = transition(GOAL_RUN_TRANSITIONS, from, event);
+  if ((to === 'completed') !== (move.outcome !== undefined)) {
+    throw new Error(`goal run ${goal.id}: an outcome is given exactly when it completes`);
+  }
   const final = FINAL_GOAL_STATUSES.has(to);
   const result = await client.query(
     `update goal_runs
@@ -140,7 +156,8 @@ export async function moveGoalRun(
             ended_at = case when $6 then now() else ended_at end,
             next_tick_at = case when $6 then null when $7 then now() else next_tick_at end,
             paused_by = $9, paused_by_authority = $10,
-            advance_failures = case when $11 then 0 else advance_failures end
+            advance_failures = case when $11 then 0 else advance_failures end,
+            outcome = $12, outcome_basis = $13, outcome_decision_id = $14
       where workspace_id = $1 and id = $2 and status = $8`,
     [
       goal.workspaceId,
@@ -155,9 +172,20 @@ export async function moveGoalRun(
       to === 'paused' ? (move.pausedBy?.authority ?? null) : null,
       // A person's resume gives the run a fresh count of failed advances (legacy 356).
       event === 'resume',
+      move.outcome?.outcome ?? null,
+      move.outcome?.basis ?? null,
+      move.outcome?.decisionId ?? null,
     ],
   );
   if ((result.rowCount ?? 0) === 0) throw new Error(`goal run ${goal.id} is no longer ${from}`);
+  const supersededChecks =
+    from === 'verifying'
+      ? await supersedePendingAcceptanceChecks(client, goal.workspaceId, {
+          goalRunId: goal.id,
+          actorPrincipalId: actor.principalId,
+          reason: 'goal_moved',
+        })
+      : 0;
   await recordGoalRunTransition(client, goal.workspaceId, {
     actorPrincipalId: actor.principalId,
     action: `goal_run.${event}`,
@@ -166,6 +194,14 @@ export async function moveGoalRun(
     extraAuditPayload: {
       by: actor.by,
       ...(to === 'paused' && move.pausedBy ? { pausedByAuthority: move.pausedBy.authority } : {}),
+      ...(move.outcome
+        ? {
+            outcome: move.outcome.outcome,
+            outcomeBasis: move.outcome.basis,
+            ...(move.outcome.decisionId ? { outcomeDecisionId: move.outcome.decisionId } : {}),
+          }
+        : {}),
+      ...(supersededChecks > 0 ? { supersededAcceptanceChecks: supersededChecks } : {}),
       ...move.audit,
     },
   });

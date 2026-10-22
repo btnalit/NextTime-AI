@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
-import { ObservationCheckSchema, type Predicate } from '@nexttime/shared';
+import { type ObservationCheck, ObservationCheckSchema, type Predicate } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { z } from 'zod';
 import { getGatekeeper, getPublishedOperation } from '../../governance/gatekeepers/index.js';
@@ -43,8 +43,20 @@ import { getWorkerDefinition } from '../worker/index.js';
  *     `ObservationCheck`). A satisfied check records `effect_seen` for the action and the step goes
  *     on; anything else leaves the finding to a person (`reconcile-check.ts`). One declaration per
  *     action identity.
- * Unknown fields are refused rather than ignored: a field this version does not act on (an
- * acceptance check before GO4, an output schema) must not look like it is in force.
+ * Unknown fields are refused rather than ignored: a field this version does not act on (a step's
+ * own acceptance before GO4b, an output schema) must not look like it is in force.
+ *
+ * The plan's `acceptance` (S11 GO4a, plan §4.6, I-G5) — what has to hold before the goal is
+ * achieved, checked once every step is done (`advance.ts` phase V, `acceptance-check.ts`); each
+ * check has a `key`, unique among them:
+ *   - `observe_predicate` — `check` is an observe-class Operation, its params and a predicate over
+ *     its result (`ObservationCheck`, the same shape and the same lint and credential review as a
+ *     reconcile check's), observed by the platform for the requester;
+ *   - `requester_confirm` — `prompt` is what the requester is asked to confirm; asked once every
+ *     observation passed. At most one.
+ * A plan without any is allowed: its goal is achieved only on the requester's word (an implicit
+ * `requester_confirm` whose prompt is the goal statement) — {@link planHints} says so, for the
+ * confirmation card to show.
  *
  * `validatePlan` checks what a plan refers to as of now — keys unique, dependencies known and
  * acyclic, every worker a published worker-kind version; every reconcile declaration's action a
@@ -52,9 +64,10 @@ import { getWorkerDefinition } from '../worker/index.js';
  * not cut off, with params that carry no credential and a predicate the lint accepts
  * (`substrate/epistemic`'s `lintPredicate`: one that would pass without the observation showing the
  * target is refused here, before any person is asked to confirm it) and whose literals carry no
- * suspected credential ({@link predicateCredentialProblems}); the last two are `parsePlan`'s. A version deprecated later is
- * caught when an attempt would start (the advancer's snapshot check), not here; a reconcile check
- * the requester can no longer make is caught when it runs.
+ * suspected credential ({@link predicateCredentialProblems}); the last two are `parsePlan`'s. Every
+ * acceptance observation is held to what a reconcile check is. A version deprecated later is
+ * caught when an attempt would start (the advancer's snapshot check), not here; an observation the
+ * requester can no longer make is caught when it runs.
  */
 
 export const STEP_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
@@ -65,6 +78,10 @@ export const DEFAULT_MAX_ATTEMPTS = 3;
 export const MAX_PLAN_BYTES = 256 * 1024;
 /** Reconcile declarations one step carries at most. */
 export const MAX_STEP_RECONCILE_DECLARATIONS = 8;
+/** Acceptance checks one plan carries at most. */
+export const MAX_PLAN_ACCEPTANCE_CHECKS = 16;
+/** The longest prompt a `requester_confirm` check asks with. */
+export const MAX_ACCEPTANCE_PROMPT_CHARS = 2000;
 
 const stepKey = z.string().regex(STEP_KEY_PATTERN);
 
@@ -103,8 +120,31 @@ export const PlanStepSchema = z
 
 export type PlanStep = z.infer<typeof PlanStepSchema>;
 
+/** S11 GO4a: one acceptance check of the plan — see the module comment. */
+export const AcceptanceCheckSchema = z.discriminatedUnion('kind', [
+  z
+    .object({
+      kind: z.literal('observe_predicate'),
+      key: stepKey,
+      check: ObservationCheckSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('requester_confirm'),
+      key: stepKey,
+      prompt: z.string().max(MAX_ACCEPTANCE_PROMPT_CHARS).regex(/\S/, 'says nothing to confirm'),
+    })
+    .strict(),
+]);
+
+export type AcceptanceCheck = z.infer<typeof AcceptanceCheckSchema>;
+
 export const GoalPlanSchema = z
-  .object({ steps: z.array(PlanStepSchema).min(1).max(MAX_PLAN_STEPS) })
+  .object({
+    steps: z.array(PlanStepSchema).min(1).max(MAX_PLAN_STEPS),
+    acceptance: z.array(AcceptanceCheckSchema).max(MAX_PLAN_ACCEPTANCE_CHECKS).optional(),
+  })
   .strict();
 
 export type GoalPlan = z.infer<typeof GoalPlanSchema>;
@@ -153,8 +193,80 @@ export function parsePlan(plan: unknown): GoalPlan {
   for (const step of parsed.data.steps) {
     problems.push(...reconcileShapeProblems(step, lintBudget));
   }
+  problems.push(...acceptanceShapeProblems(parsed.data.acceptance ?? [], lintBudget));
   if (problems.length > 0) throw new GoalPlanValidationError(problems);
   return parsed.data;
+}
+
+/** The plan's acceptance checks: keys unique, at most one `requester_confirm`, every observation's
+ *  predicate accepted by the lint (spending from the plan's `lintBudget`, which the reconcile
+ *  declarations share) and free of suspected credentials — the rules a reconcile check's predicate
+ *  is under, for the same reasons. */
+function acceptanceShapeProblems(
+  acceptance: readonly AcceptanceCheck[],
+  lintBudget: PredicateLintBudget,
+): readonly string[] {
+  const problems: string[] = [];
+  const keys = new Set<string>();
+  let confirmations = 0;
+  acceptance.forEach((check, index) => {
+    const where = `acceptance[${index}] "${check.key}"`;
+    if (keys.has(check.key)) problems.push(`${where}: the key appears more than once`);
+    keys.add(check.key);
+    if (check.kind === 'requester_confirm') {
+      confirmations += 1;
+      if (confirmations === 2) {
+        problems.push(`${where}: a plan asks the requester to confirm at most once`);
+      }
+      return;
+    }
+    for (const problem of lintPredicate(check.check.expect, lintBudget)) {
+      problems.push(`${where}: ${problem}`);
+    }
+    for (const problem of predicateCredentialProblems(check.check.expect)) {
+      problems.push(`${where}: ${problem}`);
+    }
+  });
+  return problems;
+}
+
+/** Something the person confirming a plan should know that does not stop it — for the
+ *  confirmation card (GO6), recorded with the revision's validation. */
+export interface PlanHint {
+  /** `requester_confirm_only`: no check the platform makes — the goal is achieved only on the
+   *  requester's word. */
+  readonly code: 'requester_confirm_only';
+  readonly message: string;
+}
+
+/** The hints a valid plan carries — see {@link PlanHint}. */
+export function planHints(plan: GoalPlan): readonly PlanHint[] {
+  const acceptance = plan.acceptance ?? [];
+  if (acceptance.some((check) => check.kind === 'observe_predicate')) return [];
+  return [
+    {
+      code: 'requester_confirm_only',
+      message:
+        'the plan has no check the platform makes: the goal is achieved only when the requester confirms it',
+    },
+  ];
+}
+
+/** The key and prompt of the implicit `requester_confirm` of a plan without acceptance checks. */
+export const IMPLICIT_CONFIRM_KEY = 'requester_confirm';
+
+/** The acceptance checks a verification round of `plan` (a stored `plan_revisions.plan`) is made
+ *  of: its `acceptance`, or — without any — one `requester_confirm` asking about `statement`.
+ *  `null` when the stored plan is not a valid plan. */
+export function roundAcceptance(
+  plan: unknown,
+  statement: string,
+): readonly AcceptanceCheck[] | null {
+  const parsed = GoalPlanSchema.safeParse(plan);
+  if (!parsed.success) return null;
+  const acceptance = parsed.data.acceptance ?? [];
+  if (acceptance.length > 0) return acceptance;
+  return [{ kind: 'requester_confirm', key: IMPLICIT_CONFIRM_KEY, prompt: statement }];
 }
 
 /** A step's reconcile declarations: one per action identity, each predicate accepted by the lint
@@ -260,14 +372,19 @@ export async function validatePlan(
       }
     }
   }
+  for (const [index, check] of (parsed.acceptance ?? []).entries()) {
+    if (check.kind !== 'observe_predicate') continue;
+    const where = `acceptance[${index}] "${check.key}"`;
+    for (const problem of await observationCheckProblems(client, workspaceId, check.check)) {
+      problems.push(`${where}: check: ${problem}`);
+    }
+  }
   if (problems.length > 0) throw new GoalPlanValidationError(problems);
   return parsed;
 }
 
 /** What a reconcile declaration refers to, as of now: its action a published execute-class
- *  Operation of a registered Gatekeeper; its check what `observe_operation` would let anyone in the
- *  workspace call (`observeRefusal` without a member's own exclusions — the requester's are applied
- *  when the check runs), with params the credential review lets through. */
+ *  Operation of a registered Gatekeeper; its check what {@link observationCheckProblems} accepts. */
 async function reconcileReferenceProblems(
   client: PoolClient,
   workspaceId: string,
@@ -287,6 +404,22 @@ async function reconcileReferenceProblems(
     problems.push(`action: "${action.operation}" is ${actionOperation.operation.mode}-class`);
   }
 
+  for (const problem of await observationCheckProblems(client, workspaceId, check)) {
+    problems.push(`check: ${problem}`);
+  }
+  return problems;
+}
+
+/** What an observation the platform makes for the requester — a reconcile check, an acceptance
+ *  check — refers to, as of now: what `observe_operation` would let anyone in the workspace call
+ *  (`observeRefusal` without a member's own exclusions — the requester's are applied when the
+ *  observation is made, `platform-observation.ts`), with params the credential review lets
+ *  through. */
+async function observationCheckProblems(
+  client: PoolClient,
+  workspaceId: string,
+  check: ObservationCheck,
+): Promise<readonly string[]> {
   const gatekeeper = await getGatekeeper(client, workspaceId, check.gatekeeperId);
   const published = await getPublishedOperation(
     client,
@@ -301,16 +434,15 @@ async function reconcileReferenceProblems(
     publishedMode: published?.operation.mode,
     platformPolicy: await readGatekeeperPlatformPolicy(client, workspaceId, check.gatekeeperId),
   });
-  if (refusal) {
-    problems.push(`check: "${check.operation}" cannot be observed (${refusal.reason})`);
-  } else if (gatekeeper) {
+  if (refusal) return [`"${check.operation}" cannot be observed (${refusal.reason})`];
+  if (gatekeeper) {
     try {
       reviewObserveParams(gatekeeper.name, check.operation, check.params ?? {});
     } catch (err) {
-      problems.push(`check: ${err instanceof Error ? err.message : String(err)}`);
+      return [err instanceof Error ? err.message : String(err)];
     }
   }
-  return problems;
+  return [];
 }
 
 /** The plan entry with `key`, read from a stored plan (`plan_revisions.plan`) — `null` when the

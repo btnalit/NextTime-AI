@@ -17,7 +17,10 @@
  * and the step-scoped identity of a step's requests (I-G4, in `governance/approval`). GO3d adds the
  * platform's own check of such an action, declared by its step (`plan.ts` `reconcile`; the
  * observation and its predicate run by `reconcile-check.ts`, the predicate judged in
- * `substrate/epistemic`).
+ * `substrate/epistemic`). GO4a adds the goal's acceptance (`plan.ts` `acceptance`): verification
+ * rounds (`acceptance-checks.ts`, goal/0005) the advance opens and judges (`advance.ts` phase V),
+ * the platform's observations (`acceptance-check.ts`, sharing `platform-observation.ts` with the
+ * reconcile check) and the requester's word on the outcome (`acceptance.ts`).
  *
  * Boundaries: it lives in `application` because the advancer creates Tasks (`application/task`) and
  * withdraws ActionRequests (`governance/approval`) in the transaction that moves a StepRun.
@@ -43,14 +46,22 @@ export {
 } from './reads.js';
 
 export {
+  type AcceptanceCheck,
+  AcceptanceCheckSchema,
   DEFAULT_MAX_ATTEMPTS,
   GoalPlanSchema,
   GoalPlanValidationError,
+  IMPLICIT_CONFIRM_KEY,
+  MAX_ACCEPTANCE_PROMPT_CHARS,
+  MAX_PLAN_ACCEPTANCE_CHECKS,
   MAX_PLAN_STEPS,
   MAX_STEP_ATTEMPTS,
   type GoalPlan,
+  type PlanHint,
   type PlanStep,
   parsePlan,
+  planHints,
+  roundAcceptance,
   validatePlan,
 } from './plan.js';
 
@@ -131,6 +142,44 @@ export {
   runReconcileCheck,
   runReconcileCheckTick,
 } from './reconcile-check.js';
+
+export {
+  type AcceptanceCheckRow,
+  listAcceptanceChecks,
+  readCurrentAcceptanceRound,
+} from './acceptance-checks.js';
+
+export {
+  type AcceptanceCheckDeps,
+  type AcceptanceCheckOptions,
+  type AcceptanceCheckOutcome,
+  type AcceptanceCheckTickOptions,
+  DEFAULT_ACCEPTANCE_CHECK_BATCH,
+  DEFAULT_ACCEPTANCE_CHECK_INTERVAL_MS,
+  DEFAULT_ACCEPTANCE_CHECK_LEASE_MS,
+  DEFAULT_ACCEPTANCE_CHECK_MAX_ATTEMPTS,
+  DEFAULT_ACCEPTANCE_CHECK_MAX_DURATION_MS,
+  type DueAcceptanceCheck,
+  acceptanceRetryDelayMs,
+  listDueAcceptanceChecks,
+  runAcceptanceCheck,
+  runAcceptanceCheckTick,
+} from './acceptance-check.js';
+
+export {
+  type ConfirmGoalAcceptanceInput,
+  type ConfirmGoalAcceptanceResult,
+  type EndGoalRunInput,
+  type EndGoalRunResult,
+  GOAL_OUTCOME_NOTE_MAX,
+  type GoalAcceptanceCheckView,
+  type GoalAcceptanceRoundView,
+  type GoalAcceptanceView,
+  type OverriddenAcceptanceCheck,
+  confirmGoalAcceptance,
+  endGoalRun,
+  readGoalAcceptance,
+} from './acceptance.js';
 
 export {
   ADVANCED_GOAL_RUN_STATUSES,

@@ -4,6 +4,7 @@ import {
   DEFAULT_GOAL_BUDGET_GRACE_MS,
   checkIG1,
   checkIG2,
+  checkIG5,
   checkIG6,
   checkIG9,
 } from './goal-invariant-checks.js';
@@ -89,13 +90,14 @@ import {
  *   active Handle is also excluded — an old/retired/superseded Source can never observe again
  *   regardless of how long it stays silent (see `checkCollectorSilent`'s own doc comment).
  *
- * ## S11 goal execution — I-G1, I-G2, I-G6, I-G9
+ * ## S11 goal execution — I-G1, I-G2, I-G5, I-G6, I-G9
  *
  * docs/goal-orchestration-and-admin-agent-plan-2026-10-16.md §3.3, in `goal-invariant-checks.ts`
  * (its doc comment has the conditions each one counts): one Task per StepRun attempt (I-G1); only
- * steps of the current plan revision advance (I-G2); a GoalRun stays within its budget or pauses
- * (I-G6, with a grace period — default 10 minutes, `goalBudgetGraceMs`); only a live step of a
- * live GoalRun raises actions and has them run (I-G9). I-G3/I-G4/I-G5/I-G7/I-G8 are enforced where
+ * steps of the current plan revision advance (I-G2); a GoalRun's outcome rests on its
+ * verification or on its requester's word (I-G5, S11 GO4a); a GoalRun stays within its budget or
+ * pauses (I-G6, with a grace period — default 10 minutes, `goalBudgetGraceMs`); only a live step
+ * of a live GoalRun raises actions and has them run (I-G9). I-G3/I-G4/I-G7/I-G8 are enforced where
  * their mechanism lives (a DB trigger for I-G3's base revision; GO2–GO4 code for the rest).
  */
 
@@ -720,6 +722,7 @@ export const INVARIANT_CHECK_IDS: readonly string[] = [
   'I-P1',
   'I-G1',
   'I-G2',
+  'I-G5',
   'I-G6',
   'I-G9',
   'ops.one_running_turn',
@@ -759,6 +762,7 @@ export async function runInvariantChecks(
       await checkIP1(client),
       await checkIG1(client, SAMPLE_LIMIT),
       await checkIG2(client, SAMPLE_LIMIT),
+      await checkIG5(client, SAMPLE_LIMIT),
       await checkIG6(client, SAMPLE_LIMIT, goalBudgetGraceMs),
       await checkIG9(client, SAMPLE_LIMIT),
       await checkOneRunningTurn(client),

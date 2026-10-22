@@ -2,16 +2,21 @@ import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
   GoalPlanValidationError,
+  IMPLICIT_CONFIRM_KEY,
+  MAX_ACCEPTANCE_PROMPT_CHARS,
+  MAX_PLAN_ACCEPTANCE_CHECKS,
   MAX_PLAN_BYTES,
   MAX_PLAN_STEPS,
   MAX_STEP_ATTEMPTS,
   parsePlan,
+  planHints,
   planStep,
+  roundAcceptance,
   samePlanEntry,
 } from './plan.js';
 
 /** application/goal/plan (S11 GO2): the plan checks that need no database. `validatePlan`'s
- *  WorkerDefinition lookups are covered by `advancer.integration.test.ts`. */
+ *  WorkerDefinition and Operation lookups are covered by `advancer.integration.test.ts`. */
 
 const worker = { definitionId: randomUUID(), version: 1 };
 const step = (key: string, extra: Record<string, unknown> = {}) => ({ key, worker, ...extra });
@@ -239,6 +244,118 @@ describe('parsePlan — reconcile declarations share one lint budget (S11 GO3d)'
         /^step "[cd]": reconcile\[\d\]: the plan's predicates together read too many places for the lint to check — test fewer fields$/,
       );
     }
+  });
+});
+
+describe('parsePlan — acceptance checks (S11 GO4a)', () => {
+  const gate = randomUUID();
+  const observe = (
+    key: string,
+    expect: unknown = { path: 'state', op: 'eq', value: 'running' },
+  ) => ({
+    kind: 'observe_predicate',
+    key,
+    check: { gatekeeperId: gate, operation: 'svc.status', params: { name: 'web' }, expect },
+  });
+  const confirm = (key: string, prompt = 'Is the weekly report in the shared folder?') => ({
+    kind: 'requester_confirm',
+    key,
+    prompt,
+  });
+
+  it('accepts observations and at most one confirmation, each under its own key', () => {
+    const plan = parsePlan({
+      steps: [step('a')],
+      acceptance: [observe('up'), observe('healthy'), confirm('report')],
+    });
+    expect(plan.acceptance?.map((check) => [check.kind, check.key])).toEqual([
+      ['observe_predicate', 'up'],
+      ['observe_predicate', 'healthy'],
+      ['requester_confirm', 'report'],
+    ]);
+  });
+
+  it('refuses a key used twice, a second confirmation, an empty prompt, unknown fields and too many checks', () => {
+    expect(problemsOf({ steps: [step('a')], acceptance: [observe('up'), confirm('up')] })).toEqual([
+      'acceptance[1] "up": the key appears more than once',
+    ]);
+    expect(
+      problemsOf({ steps: [step('a')], acceptance: [confirm('one'), confirm('two')] }),
+    ).toEqual(['acceptance[1] "two": a plan asks the requester to confirm at most once']);
+    expect(problemsOf({ steps: [step('a')], acceptance: [confirm('ok', '  ')] })).toHaveLength(1);
+    expect(
+      problemsOf({
+        steps: [step('a')],
+        acceptance: [confirm('ok', 'x'.repeat(MAX_ACCEPTANCE_PROMPT_CHARS + 1))],
+      }),
+    ).toHaveLength(1);
+    expect(
+      problemsOf({ steps: [step('a')], acceptance: [{ ...observe('up'), retries: 3 }] }),
+    ).toHaveLength(1);
+    expect(
+      problemsOf({
+        steps: [step('a')],
+        acceptance: [{ ...confirm('ok'), check: observe('x').check }],
+      }),
+    ).toHaveLength(1);
+    expect(
+      problemsOf({ steps: [step('a')], acceptance: [{ kind: 'reviewer', key: 'r' }] }),
+    ).toHaveLength(1);
+    expect(
+      problemsOf({
+        steps: [step('a')],
+        acceptance: Array.from({ length: MAX_PLAN_ACCEPTANCE_CHECKS + 1 }, (_, i) =>
+          observe(`c${i}`),
+        ),
+      }),
+    ).toHaveLength(1);
+  });
+
+  it('holds an observation’s predicate to the lint and the credential review a reconcile check is under', () => {
+    const [always] = problemsOf({
+      steps: [step('a')],
+      acceptance: [observe('up', { not: { path: 'error', op: 'exists' } })],
+    });
+    expect(always).toMatch(/^acceptance\[0\] "up": the predicate holds on /);
+    // Absence is never proof (GO3d's decision): "nothing is there" is refused here too.
+    expect(
+      problemsOf({
+        steps: [step('a')],
+        acceptance: [observe('gone', { path: 'length(items)', op: 'eq', value: 0 })],
+      }),
+    ).toHaveLength(1);
+    const vendor = `ghp_${'abcdefghij'.repeat(4)}`;
+    expect(
+      problemsOf({
+        steps: [step('a')],
+        acceptance: [observe('up', { path: 'owner', op: 'eq', value: vendor })],
+      }),
+    ).toEqual([
+      'acceptance[0] "up": a value compared at path "owner" looks like a credential (1 suspected) — the check judges the result with such values redacted, so it could never match; a plan does not carry credentials',
+    ]);
+  });
+
+  it('a plan without an observation carries the requester_confirm_only hint; one with any carries none', () => {
+    const confirmOnly = parsePlan({ steps: [step('a')], acceptance: [confirm('report')] });
+    expect(planHints(parsePlan({ steps: [step('a')] }))).toEqual([
+      {
+        code: 'requester_confirm_only',
+        message: expect.stringContaining('only when the requester'),
+      },
+    ]);
+    expect(planHints(confirmOnly).map((hint) => hint.code)).toEqual(['requester_confirm_only']);
+    expect(planHints(parsePlan({ steps: [step('a')], acceptance: [observe('up')] }))).toEqual([]);
+  });
+
+  it('a round checks the plan’s acceptance — or, without any, asks the requester to confirm the statement; an unreadable plan gives none', () => {
+    expect(roundAcceptance({ steps: [step('a')] }, 'ship the report')).toEqual([
+      { kind: 'requester_confirm', key: IMPLICIT_CONFIRM_KEY, prompt: 'ship the report' },
+    ]);
+    expect(
+      roundAcceptance({ steps: [step('a')], acceptance: [observe('up')] }, 'ship the report'),
+    ).toEqual([observe('up')]);
+    expect(roundAcceptance({ steps: [] }, 'x')).toBeNull();
+    expect(roundAcceptance(null, 'x')).toBeNull();
   });
 });
 
