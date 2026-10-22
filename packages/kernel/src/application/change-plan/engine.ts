@@ -6,6 +6,7 @@ import { type WideningReason, classificationOf } from './classify.js';
 import { contentDigest } from './digest.js';
 import { ChangeConfirmationRequiredError, ChangePlanChangedError } from './errors.js';
 import {
+  type OntologyTypeChanges,
   type OntologyVersionIntent,
   type PlannedOntologyItem,
   applyOntologyItem,
@@ -56,6 +57,13 @@ export interface WorkspaceSegmentInput {
   readonly items: readonly ChangeItemIntent[];
 }
 
+/** What a planned item would change, by kind, for the person reviewing it (not recorded, not in
+ *  the digest). `ontology_version`: the family's type names added, removed and changed. */
+export interface ChangeItemDetail {
+  readonly kind: 'ontology_version';
+  readonly types: OntologyTypeChanges;
+}
+
 export interface PlannedChangeItem {
   readonly ordinal: number;
   readonly kind: ChangeItemKind;
@@ -66,6 +74,7 @@ export interface PlannedChangeItem {
   readonly widening: readonly WideningReason[];
   /** Applying it changes nothing; it is not applied or recorded. */
   readonly unchanged: boolean;
+  readonly detail: ChangeItemDetail;
 }
 
 export interface WorkspaceSegmentPlan {
@@ -151,6 +160,7 @@ async function planItem(
           classification: classificationOf(ontology.widening),
           widening: ontology.widening,
           unchanged: ontology.unchanged,
+          detail: { kind, types: ontology.types },
         },
         ontology,
       };

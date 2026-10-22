@@ -19,7 +19,7 @@ export interface PlatformModulesPageProps {
 /**
  * components/platform/PlatformModulesPage: 模块 Modules (`/platform/modules`, docs/platform-
  * admin-design.md §6.4 "模块设计" — P-B2b). `list_modules`: every module this deployment ships
- * (`ontology/modules.yaml`), its full version list (notes / breaking), and how many workspaces
+ * (packs with one ontology component), its full version list (notes / breaking), and how many workspaces
  * have it installed / are behind the latest version. `set_default_modules`: which of them
  * `create_workspace` installs (each at v1) into every new workspace — a per-row checkbox that
  * saves immediately (same "toggle → save now" shape `PlatformIntegrationsPage`'s connector-mode

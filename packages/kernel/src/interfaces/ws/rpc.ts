@@ -59,6 +59,8 @@ import {
   UnknownOperationError,
   UnstorableTextError,
 } from '../../application/gateway/index.js';
+// S11 P1-C: a domain module's error, imported directly like the two above.
+import { PackNotFoundError } from '../../application/packs/index.js';
 // P-B2b: same direct-import convention as the comment above — application/platform/modules.ts is a
 // domain module, not re-exported by application/gateway/index.ts's curated surface.
 import {
@@ -437,6 +439,10 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   // customized/breaking upgrade" 400-with-details, same INVALID_PARAMS bucket as
   // OntologyViolationError just above).
   if (err instanceof ModuleNotFoundError) {
+    return { code: WS_ERROR_CODES.NOT_FOUND, message: err.message };
+  }
+  // S11 P1-C: mirrors HTTP 404 `pack_not_found`.
+  if (err instanceof PackNotFoundError) {
     return { code: WS_ERROR_CODES.NOT_FOUND, message: err.message };
   }
   if (err instanceof ModuleConfirmRequiredError) {

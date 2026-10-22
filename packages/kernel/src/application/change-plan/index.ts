@@ -12,8 +12,12 @@
  *
  * P1-B: reading segments back (`segments.ts`; `inspect.ts` adds what each item's target is now)
  * and rolling a segment back (`rollback.ts`: compare before writing, the same whitelist on the
- * inverse, one transaction). Packs, more item kinds and recorded verification follow in later P1
- * PRs.
+ * inverse, one transaction).
+ *
+ * P1-C: packs (`application/packs`, Pack Contract v1) are the source a segment is planned from;
+ * a planned item carries what it would change for the reviewer (`ChangeItemDetail`), and the
+ * in-use count for removed types is shared (`usage.ts`). More item kinds and recorded
+ * verification follow in later P1 PRs.
  *
  * Boundaries: it lives in `application` because applying calls publish functions across
  * `substrate` (ontology today; WorkerDefinition / Skill / Procedure in `application/worker` next).
@@ -36,6 +40,7 @@ export {
   type AppliedChangeItem,
   type AppliedWorkspaceSegment,
   type ChangeChannel,
+  type ChangeItemDetail,
   type ChangeItemIntent,
   type ChangeSource,
   type PlannedChangeItem,
@@ -58,7 +63,13 @@ export {
   type InspectedChangeSegment,
   inspectChangeSegment,
 } from './inspect.js';
-export type { OntologyVersionIntent, StoredOntologyItem } from './ontology-item.js';
+export {
+  type OntologyTypeChanges,
+  type OntologyTypeNames,
+  type OntologyVersionIntent,
+  type StoredOntologyItem,
+  ontologyTypeChanges,
+} from './ontology-item.js';
 export { type OntologyProvenance, loadOntologyProvenance } from './provenance.js';
 export {
   type PlannedItemRollback,
@@ -68,6 +79,7 @@ export {
   previewSegmentRollback,
   rollBackWorkspaceSegment,
 } from './rollback.js';
+export { countRemovedTypeUsage } from './usage.js';
 export {
   type ChangeItemRecord,
   type ChangePrincipalRef,
