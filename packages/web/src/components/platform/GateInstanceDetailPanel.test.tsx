@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import type { GateInstanceWire } from '@nexttime/shared';
+import { type GateInstanceWire, SECRET_FIELD_MASK } from '@nexttime/shared';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../../hooks/usePermissions.js';
@@ -117,6 +117,18 @@ describe('GateInstanceDetailPanel', () => {
     const { onChanged } = renderPanel(http, gateInstance());
     fireEvent.click(screen.getByTestId('gate-instance-status-toggle'));
     await waitFor(() => expect(onChanged).toHaveBeenCalledWith(enabled));
+  });
+
+  it('legacy 412: a target or endpoint the kernel masked reads as hidden, never as the mask', () => {
+    renderPanel(
+      scriptedHttp({}),
+      gateInstance({
+        target: SECRET_FIELD_MASK,
+        endpoint: `https://gate.example/${SECRET_FIELD_MASK}`,
+      }),
+    );
+    expect(screen.getAllByText('地址带有凭据，已隐藏')).toHaveLength(2);
+    expect(document.body.textContent).not.toContain(SECRET_FIELD_MASK);
   });
 
   it('renders health and status as chips, and the trust control only for an mcp instance', () => {

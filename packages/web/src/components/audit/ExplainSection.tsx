@@ -134,7 +134,11 @@ export function ExplainSection({ http, requestedNodeId, principalNames }: Explai
           </Button>
         ) : null}
       </div>
-      <form className="inline-form" onSubmit={handleSubmit} data-testid="explain-form">
+      <form
+        className="inline-form inline-form-top"
+        onSubmit={handleSubmit}
+        data-testid="explain-form"
+      >
         <Select
           id="explain-node-kind"
           label={t('候选类型', 'Suggest from')}

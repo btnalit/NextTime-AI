@@ -9,6 +9,7 @@ import { isGenericConnector } from '@nexttime/shared';
 import { useEffect, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { addressText } from '../../lib/connections.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { connectorModeLabel, transportKindLabel } from '../../lib/labels.js';
@@ -1104,8 +1105,10 @@ function selfConnectionColumns(
       priority: 'primary',
       cell: (connection) => (
         <div className="whitespace-normal">
-          <div>{connection.target}</div>
-          <div className="mono text-3 text-small font-normal">{connection.endpoint}</div>
+          <div>{addressText(connection.target, t)}</div>
+          <div className="mono text-3 text-small font-normal">
+            {addressText(connection.endpoint, t)}
+          </div>
           {connection.catalogGateId !== null ? (
             <p
               className="text-3 text-small font-normal"
@@ -1209,6 +1212,8 @@ function SelfConnectionAction({
   const suspended = connection.suspendedAt !== null;
   const rowId = connection.gatekeeperId;
   const reasonId = `self-connection-reason-${rowId}`;
+  // Legacy 412: an old address the kernel masked whole reads as hidden, not as `[redacted]`.
+  const targetText = addressText(connection.target, t);
 
   return (
     <Confirm
@@ -1227,8 +1232,8 @@ function SelfConnectionAction({
       }
       title={
         suspended
-          ? t(`恢复「${connection.target}」`, `Resume “${connection.target}”`)
-          : t(`暂停「${connection.target}」`, `Suspend “${connection.target}”`)
+          ? t(`恢复「${targetText}」`, `Resume “${targetText}”`)
+          : t(`暂停「${targetText}」`, `Suspend “${targetText}”`)
       }
       // UX acceptance of #620 (P2-2): only what happens next — what a suspension covers is in the
       // tab's own introduction, so the confirm button stays in view at 1440×900.
@@ -1243,8 +1248,8 @@ function SelfConnectionAction({
               'From the next call on, every Operation of this gate is refused, and this workspace’s entry-agent Handles are re-issued. The connection, its Operations and their history stay; you can resume it at any time.',
             )
       }
-      target={`${connection.workspaceName} · ${connection.target}`}
-      impact={[connection.endpoint]}
+      target={`${connection.workspaceName} · ${targetText}`}
+      impact={[addressText(connection.endpoint, t)]}
       confirmLabel={suspended ? t('恢复', 'Resume') : t('暂停', 'Suspend')}
       danger={!suspended}
       onConfirm={suspension.apply}

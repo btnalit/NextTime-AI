@@ -961,6 +961,19 @@
   flex-wrap: wrap;
 }
 
+/* Legacy 153 ⑧: a form whose fields carry hints or notes under them (the audit page's) lines its
+ * fields up by their labels, not their bottoms, so one field's hint never pushes its neighbours'
+ * labels down. Everything that is not a field (a button, a row of buttons) drops by one label row
+ * to sit level with the inputs. Forms without hints keep bottom alignment, which also leaves no
+ * gap above a button that wraps to its own line. */
+.inline-form.inline-form-top {
+  align-items: flex-start;
+}
+
+.inline-form.inline-form-top > :not(.field) {
+  margin-top: calc(var(--fs-13) * var(--lh-body) + 6px);
+}
+
 /* ---- OnboardingWizard (S3.12 接入向导) ------------------------------------------------ */
 .wizard-steps {
   display: flex;

@@ -573,6 +573,10 @@ export function PlatformModelsPage({ http, fetchImpl }: PlatformModelsPageProps)
           <ProviderForm
             client={client}
             existingIds={providers.map((row) => row.id)}
+            onEditExisting={(id) => {
+              const provider = providers.find((row) => row.id === id);
+              if (provider) setDrawer({ kind: 'edit', provider });
+            }}
             onSubmit={(input, extras) => save(input, undefined, extras)}
             onCancel={() => setDrawer({ kind: 'closed' })}
           />
