@@ -17,6 +17,7 @@ import {
 import { useT } from '../../lib/i18n.js';
 import { auditResourceTypeLabel } from '../../lib/labels.js';
 import { breadcrumbFor } from '../../lib/nav.js';
+import { AuditPayloadNotes } from '../audit/AuditPayloadNotes.js';
 import { PageHeader } from '../kit/page-header.js';
 import { Button } from '../ui/Button.js';
 import { EmptyState } from '../ui/EmptyState.js';
@@ -322,6 +323,7 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
                       ? ` · ${auditResourceTypeLabel(row.resourceType, t)}${row.resourceId ? `:${shortId(row.resourceId)}` : ''}`
                       : ''}
                   </div>
+                  <AuditPayloadNotes payload={row.payload} />
                   <details className="platform-audit-payload">
                     <summary>{t('负载', 'Payload')}</summary>
                     <pre className="code-block pre-wrap">

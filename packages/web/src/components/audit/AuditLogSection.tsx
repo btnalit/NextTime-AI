@@ -36,6 +36,7 @@ import { Field, Input, Select } from '../ui/Field.js';
 import { RefChip } from '../ui/RefChip.js';
 import { SkeletonRows } from '../ui/Skeleton.js';
 import { useToast } from '../ui/Toast.js';
+import { AuditPayloadNotes } from './AuditPayloadNotes.js';
 
 export interface AuditLogSectionProps {
   readonly http: CapabilityCaller;
@@ -377,6 +378,7 @@ export function AuditLogSection({
                           </>
                         ) : null}
                       </div>
+                      <AuditPayloadNotes payload={row.payload} />
                       <details className="platform-audit-payload">
                         <summary>{t('负载', 'Payload')}</summary>
                         <pre className="code-block pre-wrap">

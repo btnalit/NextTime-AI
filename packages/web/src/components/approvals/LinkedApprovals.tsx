@@ -1,3 +1,4 @@
+import { visibleLines } from '@nexttime/shared';
 import { useMemo } from 'react';
 import { useAskForAccess } from '../../hooks/useAskForAccess.js';
 import { useCapabilityList } from '../../hooks/useCapability.js';
@@ -169,8 +170,8 @@ function LinkedApprovalsList({
                 {row.decisionReason ? (
                   <>
                     <span className="meta-sep" />
-                    <span className="truncate" title={row.decisionReason}>
-                      “{row.decisionReason}”
+                    <span className="truncate" title={visibleLines(row.decisionReason)}>
+                      “{visibleLines(row.decisionReason)}”
                     </span>
                   </>
                 ) : null}

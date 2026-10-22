@@ -88,6 +88,24 @@ describe('ApprovalCard', () => {
     await waitFor(() => expect(onReject).toHaveBeenCalledWith('nope'));
   });
 
+  it('legacy 351 (#661 UX acceptance P3): the reason box caps at 1000 and says so near the cap', () => {
+    render(
+      <ApprovalCard
+        actionRequestId="ar-4"
+        actionKind="fs.read"
+        blastRadius="low"
+        target="/tmp/x"
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+      />,
+    );
+    const box = screen.getByTestId('approval-reason');
+    expect(box.getAttribute('maxlength')).toBe('1000');
+    expect(screen.queryByTestId('approval-reason-count')).toBeNull();
+    fireEvent.change(box, { target: { value: 'x'.repeat(1000) } });
+    expect(screen.getByTestId('approval-reason-count').textContent).toContain('已达 1000 字上限');
+  });
+
   it('readOnly hides the decisions but keeps the page link', () => {
     render(
       <ApprovalCard

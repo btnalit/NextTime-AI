@@ -1091,7 +1091,11 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   const versioned = identitiesListedTwice(rows);
 
   const selected = itemId ? rows.find((row) => catalogOperationKey(row) === itemId) : undefined;
-  const credentialReview = usePublishCredentialReview(itemId ?? null);
+  // Legacy 174: the question is about one draft's content — keyed by its digest too, so a gate
+  // re-import that rewrites the draft in place drops the tick instead of confirming new content.
+  const credentialReview = usePublishCredentialReview(
+    itemId ? `${itemId}@${selected?.draftDigest ?? ''}` : null,
+  );
 
   function refresh(): void {
     invalidateCapability(http, 'list_operations');

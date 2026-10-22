@@ -1,4 +1,8 @@
-import { ACTION_REQUEST_FAILURE_KIND_VALUES, ACTION_REQUEST_STATUS_VALUES } from '@nexttime/shared';
+import {
+  ACTION_REQUEST_FAILURE_KIND_VALUES,
+  ACTION_REQUEST_STATUS_VALUES,
+  visibleLines,
+} from '@nexttime/shared';
 import type { ActionRequestFailureKind, ActionRequestStatus } from '@nexttime/shared';
 import { useEffect, useMemo, useState } from 'react';
 import { useAskForAccess } from '../hooks/useAskForAccess.js';
@@ -710,10 +714,10 @@ function ApprovalHistoryTab({
                       {row.decisionReason ? (
                         <span
                           className="truncate"
-                          title={row.decisionReason}
+                          title={visibleLines(row.decisionReason)}
                           data-testid="approval-history-reason"
                         >
-                          “{row.decisionReason}”
+                          “{visibleLines(row.decisionReason)}”
                         </span>
                       ) : null}
                     </span>

@@ -317,6 +317,90 @@ describe('SystemsPage', () => {
     expect(within(row).queryByText('ssh')).toBeNull();
   });
 
+  it('legacy 247: a masked request address says it carried a credential, and the requester shows by name', async () => {
+    const http = scriptedHttp({
+      list_principals: () => ({
+        items: [principal({ id: 'p-2', displayName: 'Bob' })],
+      }),
+      list_connection_requests: () => ({
+        items: [
+          {
+            id: 'cr-1',
+            status: 'requested',
+            kind: 'http',
+            target: '[redacted]',
+            requestedBy: 'p-2',
+            gatekeeperId: null,
+            completedBy: null,
+            requestedAt: '2026-09-01T00:00:00.000Z',
+            completedAt: null,
+          },
+        ],
+      }),
+    });
+    renderPage(http);
+    const row = await screen.findByTestId('request-row');
+    expect(within(row).getByTestId('request-target-masked').textContent).toContain('带有凭据');
+    expect(within(row).queryByText('[redacted]')).toBeNull();
+    await waitFor(() => expect(within(row).getByTestId('request-by').textContent).toContain('Bob'));
+  });
+
+  it('legacy 247 (#661 UX acceptance P3): completing a request names its requester in the form header', async () => {
+    const http = scriptedHttp({
+      list_principals: () => ({
+        items: [principal({ id: 'p-2', displayName: 'Bob' })],
+      }),
+      mint_connection_secret: () => ({
+        connectionSecret: `ntgc1_${'c'.repeat(32)}_${'d'.repeat(64)}`,
+      }),
+      list_connection_requests: () => ({
+        items: [
+          {
+            id: 'cr-1',
+            status: 'requested',
+            kind: 'http',
+            target: 'https://inventory.example.com',
+            requestedBy: 'p-2',
+            gatekeeperId: null,
+            completedBy: null,
+            requestedAt: '2026-09-01T00:00:00.000Z',
+            completedAt: null,
+          },
+        ],
+      }),
+    });
+    renderPage(http);
+    const row = await screen.findByTestId('request-row');
+    await waitFor(() => expect(within(row).getByTestId('request-by').textContent).toContain('Bob'));
+    fireEvent.click(within(row).getByRole('button', { name: '完成' }));
+    const drawer = await screen.findByTestId('complete-connection-drawer');
+    expect(within(drawer).getByTestId('cc-requester').textContent).toBe('Bob');
+  });
+
+  it('legacy 247 (review #501 on #661): an address masked in place inside its path is still said to be hidden', async () => {
+    const http = scriptedHttp({
+      list_connection_requests: () => ({
+        items: [
+          {
+            id: 'cr-2',
+            status: 'requested',
+            kind: 'http',
+            target: 'https://api.example.com/hook/[redacted]/x',
+            requestedBy: 'p-2',
+            gatekeeperId: null,
+            completedBy: null,
+            requestedAt: '2026-09-01T00:00:00.000Z',
+            completedAt: null,
+          },
+        ],
+      }),
+    });
+    renderPage(http);
+    const row = await screen.findByTestId('request-row');
+    expect(within(row).getByTestId('request-target-masked')).toBeTruthy();
+    expect(row.textContent).not.toContain('[redacted]');
+  });
+
   it('owner view: shows every grantee with a reachability chip and reason, and wires grant + revoke', async () => {
     const http = scriptedHttp({
       execution_readiness: (params) => {

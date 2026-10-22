@@ -1,5 +1,5 @@
 import type { ConnectionRequestStatus, PublishableStatus } from '@nexttime/shared';
-import { PUBLISHABLE_STATUS_VALUES } from '@nexttime/shared';
+import { PUBLISHABLE_STATUS_VALUES, SECRET_FIELD_MASK } from '@nexttime/shared';
 import type { ErrorOverrides } from './errors.js';
 import type { Translate } from './i18n.js';
 import { ownEntry } from './own.js';
@@ -363,4 +363,18 @@ export function manifestPublishPlan(
     else publishable.push(row.name);
   }
   return { publishable, proposals, gateOwned };
+}
+
+/** Legacy 247 ①: a connection request's address as a person reads it. An old request's address can
+ *  carry a credential; the kernel masks it, whole or in place inside a path (review #501 on #661:
+ *  `https://host/hook/[redacted]/x`), and the console says so rather than showing `[redacted]` as
+ *  part of an address — the request row, its cancel confirm and the audit resource picker. */
+export function connectionRequestTargetMasked(target: string): boolean {
+  return target.includes(SECRET_FIELD_MASK);
+}
+
+export function connectionRequestTargetText(target: string, t: Translate): string {
+  return connectionRequestTargetMasked(target)
+    ? t('地址带有凭据，已隐藏', 'Address carried a credential — hidden')
+    : target;
 }
