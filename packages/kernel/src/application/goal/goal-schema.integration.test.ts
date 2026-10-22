@@ -1276,6 +1276,323 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
     });
 
+    describe('goal/0006: a step’s own acceptance checks (S11 GO4b)', () => {
+      const STEP_CHECK = { kind: 'observe_predicate', key: 'up', check: OBSERVE };
+      const STEP_CHECK_2 = {
+        kind: 'observe_predicate',
+        key: 'healthy',
+        check: { ...OBSERVE, operation: 'svc.health' },
+      };
+
+      /** A running GoalRun whose step A declares two acceptance checks and B none, with A's
+       *  attempt 1 under way. */
+      async function runningWithAcceptance(): Promise<{ goalRunId: string; a: string; b: string }> {
+        const goal = await sql(
+          `insert into goal_runs (workspace_id, on_behalf_of, statement, ${BUDGET_COLUMNS})
+           values ($1, $2, 'ship the report', 100000, 10, 3, 3600) returning id`,
+          [workspaceId, ownerId],
+        );
+        const goalRunId = goal.rows[0]?.id as string;
+        await proposeRevision(goalRunId, 1, null, [
+          { key: 'A', acceptance: [STEP_CHECK, STEP_CHECK_2] },
+          'B',
+        ]);
+        await confirmGoal(goalRunId, ['A', 'B']);
+        const a = await stepId(goalRunId, 'A');
+        await setStep(a, "status = 'ready'");
+        await setStep(a, "status = 'running', attempt_count = 1");
+        return { goalRunId, a, b: await stepId(goalRunId, 'B') };
+      }
+      const awaitAcceptance = (step: string) =>
+        setStep(step, "status = 'waiting', waiting_reason = 'acceptance'");
+
+      const insertStepCheck = (
+        goalRunId: string,
+        step: string,
+        round: number,
+        declared: {
+          readonly key: string;
+          readonly kind: string;
+          readonly check: unknown;
+        } = STEP_CHECK,
+        extra: { readonly attempt?: number; readonly revision?: number } = {},
+      ) =>
+        sql(
+          `insert into step_acceptance_checks
+             (workspace_id, goal_run_id, step_run_id, step_attempt, round, check_key,
+              plan_revision, kind, observation_check)
+           values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)`,
+          [
+            workspaceId,
+            goalRunId,
+            step,
+            extra.attempt ?? 1,
+            round,
+            declared.key,
+            extra.revision ?? 1,
+            declared.kind,
+            JSON.stringify(declared.check),
+          ],
+        );
+      const setStepCheck = (
+        step: string,
+        round: number,
+        key: string,
+        set: string,
+        params: readonly unknown[] = [],
+      ) =>
+        sql(
+          `update step_acceptance_checks set ${set}
+            where workspace_id = $1 and step_run_id = $2 and round = $3 and check_key = $4`,
+          [workspaceId, step, round, key, ...params],
+        );
+      /** An Observation the platform made for check `checkKey` of the step's `round` — the content
+       *  `acceptance-check.ts` records for a step's check (`content` overrides it). */
+      async function stepObservation(
+        goalRunId: string,
+        step: string,
+        round: number,
+        checkKey: string,
+        content: Record<string, unknown> = {},
+      ): Promise<string> {
+        const { activityId, sourceId } = await refs();
+        const result = await sql(
+          `insert into observations (workspace_id, source_id, activity_id, content)
+           values ($1, $2, $3, $4::jsonb) returning id`,
+          [
+            workspaceId,
+            sourceId,
+            activityId,
+            JSON.stringify({
+              purpose: 'step_acceptance_check',
+              goalRunId,
+              stepRunId: step,
+              stepAttempt: 1,
+              round,
+              checkKey,
+              outcome: 'satisfied',
+              ...content,
+            }),
+          ],
+        );
+        return result.rows[0]?.id as string;
+      }
+      const PASS =
+        "status = 'passed', observation_id = $5, attempts = 1, first_attempt_at = now(), settled_at = now()";
+      async function passStepCheck(goalRunId: string, step: string, round: number, key: string) {
+        await setStepCheck(step, round, key, PASS, [
+          await stepObservation(goalRunId, step, round, key),
+        ]);
+      }
+
+      it('a step waits on its acceptance, or on a check that could not be made; no other new reason', async () => {
+        const { a } = await runningWithAcceptance();
+        await awaitAcceptance(a);
+        await expect(setStep(a, "waiting_reason = 'acceptance_unavailable'")).rejects.toThrow(
+          /the waiting reason is set by the transition into waiting/,
+        );
+        await setStep(a, "status = 'running', waiting_reason = null");
+        await setStep(a, "status = 'waiting', waiting_reason = 'acceptance_unavailable'");
+        await setStep(a, "status = 'running', waiting_reason = null");
+        await expect(
+          setStep(a, "status = 'waiting', waiting_reason = 'verifying'"),
+        ).rejects.toThrow(/step_runs_waiting_reason_values/);
+      });
+
+      it('a check is created pending and untried, while its step waits on its acceptance at that attempt in a running run, as declared, never into an older round', async () => {
+        const { goalRunId, a, b } = await runningWithAcceptance();
+        const NOT_OPEN =
+          /a round is opened while its step waits on its acceptance, at its current attempt, in a running goal run/;
+        // Still working, or waiting on something else.
+        await expect(insertStepCheck(goalRunId, a, 1)).rejects.toThrow(NOT_OPEN);
+        await setStep(a, "status = 'waiting', waiting_reason = 'approval'");
+        await expect(insertStepCheck(goalRunId, a, 1)).rejects.toThrow(NOT_OPEN);
+        await setStep(a, "status = 'running', waiting_reason = null");
+        await awaitAcceptance(a);
+        // Another attempt's, or under a run that is not running.
+        await expect(insertStepCheck(goalRunId, a, 1, STEP_CHECK, { attempt: 2 })).rejects.toThrow(
+          NOT_OPEN,
+        );
+        await setGoal(goalRunId, "status = 'paused', pause_reason = 'requested'");
+        await expect(insertStepCheck(goalRunId, a, 1)).rejects.toThrow(NOT_OPEN);
+        await setGoal(goalRunId, "status = 'running', pause_reason = null");
+        // Only what the step's plan entry declares, as it declares it.
+        const AS_DECLARED = /a check is one of its step's declared acceptance checks, as declared/;
+        await expect(
+          insertStepCheck(goalRunId, a, 1, { ...STEP_CHECK, key: 'other' }),
+        ).rejects.toThrow(AS_DECLARED);
+        await expect(
+          insertStepCheck(goalRunId, a, 1, {
+            ...STEP_CHECK,
+            check: { ...OBSERVE, params: { name: 'db' } },
+          }),
+        ).rejects.toThrow(AS_DECLARED);
+        await setStep(b, "status = 'ready'");
+        await setStep(b, "status = 'running', attempt_count = 1");
+        await awaitAcceptance(b);
+        await expect(insertStepCheck(goalRunId, b, 1)).rejects.toThrow(AS_DECLARED);
+        await expect(
+          sql(
+            `insert into step_acceptance_checks
+               (workspace_id, goal_run_id, step_run_id, step_attempt, round, check_key,
+                plan_revision, kind, observation_check, status, settled_at)
+             values ($1, $2, $3, 1, 1, 'up', 1, 'observe_predicate', $4::jsonb, 'passed', now())`,
+            [workspaceId, goalRunId, a, JSON.stringify(OBSERVE)],
+          ),
+        ).rejects.toThrow(/a check is created pending and untried/);
+
+        await insertStepCheck(goalRunId, a, 1);
+        await insertStepCheck(goalRunId, a, 2);
+        await expect(insertStepCheck(goalRunId, a, 1, STEP_CHECK_2)).rejects.toThrow(
+          /no check is added to a round older than round 2/,
+        );
+        const IMMUTABLE = /what a check verifies, and for which round, never changes/;
+        await expect(setStepCheck(a, 2, 'up', "check_key = 'down'")).rejects.toThrow(IMMUTABLE);
+        await expect(setStepCheck(a, 2, 'up', 'step_attempt = 2')).rejects.toThrow(IMMUTABLE);
+        await expect(
+          setStepCheck(a, 2, 'up', 'observation_check = $5::jsonb', [
+            JSON.stringify({ ...OBSERVE, operation: 'svc.other' }),
+          ]),
+        ).rejects.toThrow(IMMUTABLE);
+      });
+
+      it('passes only on an Observation of that very check of that step that satisfied its predicate; a settled check never changes', async () => {
+        const { goalRunId, a } = await runningWithAcceptance();
+        await awaitAcceptance(a);
+        await insertStepCheck(goalRunId, a, 1);
+        await insertStepCheck(goalRunId, a, 1, STEP_CHECK_2);
+        const passOn = (observationId: string) => setStepCheck(a, 1, 'up', PASS, [observationId]);
+        const NOT_PASSED =
+          /a check passes only on an Observation of this check that satisfied its predicate/;
+        for (const content of [
+          { outcome: 'unsatisfied' },
+          { checkKey: 'healthy' },
+          { round: 2 },
+          { stepRunId: randomUUID() },
+          { goalRunId: randomUUID() },
+          // The goal's own acceptance check is another check.
+          { purpose: 'acceptance_check' },
+        ]) {
+          await expect(
+            passOn(await stepObservation(goalRunId, a, 1, 'up', content)),
+          ).rejects.toThrow(NOT_PASSED);
+        }
+        await expect(
+          setStepCheck(a, 1, 'up', "status = 'passed', settled_at = now()"),
+        ).rejects.toThrow(NOT_PASSED);
+        await expect(
+          setStepCheck(a, 1, 'healthy', "status = 'failed', settled_at = now()"),
+        ).rejects.toThrow(/step_acceptance_checks_evidence/);
+        await passOn(await stepObservation(goalRunId, a, 1, 'up'));
+        await expect(
+          setStepCheck(a, 1, 'up', "status = 'failed', settled_at = now()"),
+        ).rejects.toThrow(/a settled check is not changed/);
+        await setStepCheck(
+          a,
+          1,
+          'healthy',
+          "attempts = 2, first_attempt_at = now(), next_attempt_at = now() + interval '1 minute'",
+        );
+        await expect(setStepCheck(a, 1, 'healthy', 'attempts = 1')).rejects.toThrow(
+          /attempts only grow/,
+        );
+        await expect(
+          setStepCheck(a, 1, 'healthy', "first_attempt_at = now() - interval '1 hour'"),
+        ).rejects.toThrow(/when the first attempt was made never changes/);
+      });
+
+      it('settles only in the latest round of a step still waiting on it in a running run; superseded only once its round ended', async () => {
+        const { goalRunId, a } = await runningWithAcceptance();
+        await awaitAcceptance(a);
+        await insertStepCheck(goalRunId, a, 1);
+        await insertStepCheck(goalRunId, a, 1, STEP_CHECK_2);
+        const ENDED_ONLY = /a check of the current round is superseded only once its round ended/;
+        const SETTLES_ONLY =
+          /a check settles only in the current round of a step waiting on its acceptance/;
+        await expect(
+          setStepCheck(a, 1, 'up', "status = 'superseded', settled_at = now()"),
+        ).rejects.toThrow(ENDED_ONLY);
+        // A newer round: the older one settles no more, and may be superseded.
+        await insertStepCheck(goalRunId, a, 2);
+        await expect(
+          setStepCheck(a, 1, 'up', PASS, [await stepObservation(goalRunId, a, 1, 'up')]),
+        ).rejects.toThrow(SETTLES_ONLY);
+        await setStepCheck(a, 1, 'up', "status = 'superseded', settled_at = now()");
+        await setStepCheck(a, 1, 'healthy', "status = 'superseded', settled_at = now()");
+
+        // The run paused: nothing of the round settles; it is superseded.
+        await setGoal(goalRunId, "status = 'paused', pause_reason = 'requested'");
+        await expect(
+          setStepCheck(a, 2, 'up', "status = 'unavailable', last_error = 'x', settled_at = now()"),
+        ).rejects.toThrow(SETTLES_ONLY);
+        await setGoal(goalRunId, "status = 'running', pause_reason = null");
+        // The step stopped waiting on it: likewise.
+        await setStep(a, "status = 'running', waiting_reason = null");
+        await expect(
+          setStepCheck(a, 2, 'up', "status = 'unavailable', last_error = 'x', settled_at = now()"),
+        ).rejects.toThrow(SETTLES_ONLY);
+        await setStepCheck(a, 2, 'up', "status = 'superseded', settled_at = now()");
+      });
+
+      it('a step that declares checks succeeds only out of waiting on them, every one passed in its latest round for its current attempt; one that declares none as before', async () => {
+        const { goalRunId, a, b } = await runningWithAcceptance();
+        const UNVERIFIED_MOVE =
+          /a step with acceptance checks succeeds only once they are made — out of waiting on its acceptance/;
+        const UNPASSED =
+          /a step with acceptance checks succeeds only with every one of them passed in its latest round, for its current attempt/;
+        const succeed = (step: string) =>
+          setStep(step, "status = 'succeeded', waiting_reason = null, ended_at = now()");
+        // On its Worker's word, or out of another wait: never.
+        await expect(succeed(a)).rejects.toThrow(UNVERIFIED_MOVE);
+        await setStep(a, "status = 'waiting', waiting_reason = 'approval'");
+        await expect(succeed(a)).rejects.toThrow(UNVERIFIED_MOVE);
+        await setStep(a, "status = 'running', waiting_reason = null");
+        await awaitAcceptance(a);
+        // No round; a round with one declared check missing; one not yet passed.
+        await expect(succeed(a)).rejects.toThrow(UNPASSED);
+        await insertStepCheck(goalRunId, a, 1);
+        await passStepCheck(goalRunId, a, 1, 'up');
+        await expect(succeed(a)).rejects.toThrow(UNPASSED);
+        await insertStepCheck(goalRunId, a, 1, STEP_CHECK_2);
+        await expect(succeed(a)).rejects.toThrow(UNPASSED);
+        // A newer round opened: round 1 passing is not enough.
+        await passStepCheck(goalRunId, a, 1, 'healthy');
+        await insertStepCheck(goalRunId, a, 2);
+        await insertStepCheck(goalRunId, a, 2, STEP_CHECK_2);
+        await expect(succeed(a)).rejects.toThrow(UNPASSED);
+        await passStepCheck(goalRunId, a, 2, 'up');
+        await passStepCheck(goalRunId, a, 2, 'healthy');
+        await succeed(a);
+
+        // B declares none: it succeeds out of running, as before GO4b.
+        await setStep(b, "status = 'ready'");
+        await setStep(b, "status = 'running', attempt_count = 1");
+        await succeed(b);
+      });
+
+      it('a passed round of an earlier attempt does not let a later attempt succeed', async () => {
+        const { goalRunId, a } = await runningWithAcceptance();
+        await awaitAcceptance(a);
+        await insertStepCheck(goalRunId, a, 1);
+        await insertStepCheck(goalRunId, a, 1, STEP_CHECK_2);
+        await passStepCheck(goalRunId, a, 1, 'up');
+        await passStepCheck(goalRunId, a, 1, 'healthy');
+        // A person retried the step after all (a failed attempt 1, say): attempt 2's work is done.
+        await setStep(
+          a,
+          "status = 'failed', waiting_reason = null, failure_category = 'transient'",
+        );
+        await setStep(a, "status = 'ready', failure_category = null");
+        await setStep(a, "status = 'running', attempt_count = 2");
+        await awaitAcceptance(a);
+        await expect(
+          setStep(a, "status = 'succeeded', waiting_reason = null, ended_at = now()"),
+        ).rejects.toThrow(
+          /a step with acceptance checks succeeds only with every one of them passed in its latest round, for its current attempt/,
+        );
+      });
+    });
+
     describe('GoalRun — what may change, and when', () => {
       /** A completed GoalRun with revision 2 still proposed. */
       async function completedGoal(): Promise<string> {

@@ -8,6 +8,7 @@ import {
   lockAcceptanceCheck,
   settleAcceptanceCheck,
   supersedePendingAcceptanceChecks,
+  supersedePendingStepAcceptanceChecks,
 } from './acceptance-checks.js';
 import { markGoalRunDue } from './advancer.js';
 import {
@@ -17,6 +18,7 @@ import {
   preparePlatformObservation,
   recordPlatformObservation,
 } from './platform-observation.js';
+import { lockStepRun } from './reads.js';
 import { lockGoalRun } from './service.js';
 
 /**
@@ -62,6 +64,17 @@ import { lockGoalRun } from './service.js';
  * `goal_acceptance_check` on the Gatekeeper's Source, `purpose: 'acceptance_check'` with the run,
  * the round and the check's key — the database lets a row pass only on such an Observation that
  * satisfied its predicate), settles or defers the row and, on a settlement, sets the run due.
+ *
+ * **A step's checks** (S11 GO4b, `step_acceptance_checks`) run the same way, while the step waits
+ * on its acceptance (`waiting(acceptance)`) at the attempt the row verifies and the run is
+ * `running`: the settle locks the GoalRun, the StepRun, then the row, and is fenced on all of that
+ * and the row being in the step's latest round. Its Observation is an Activity
+ * `goal_step_acceptance_check`, `purpose: 'step_acceptance_check'` with the run, the step, the
+ * round and the check's key — the only Observation goal/0006 lets the row pass on. A step that
+ * stops waiting, or a run that stops running, supersedes the round's pending rows in that
+ * transaction (`moves.ts`); rows left pending otherwise are superseded here without a call. Unlike
+ * the goal's, the run's wall clock keeps running while a step is verified: the other steps may
+ * still be working.
  */
 
 /** How often the composition root runs {@link runAcceptanceCheckTick}. */
@@ -76,6 +89,7 @@ export const DEFAULT_ACCEPTANCE_CHECK_MAX_DURATION_MS = 15 * 60 * 1000;
 export const DEFAULT_ACCEPTANCE_CHECK_BATCH = 10;
 
 const ACCEPTANCE_ACTIVITY_KIND = 'goal_acceptance_check';
+const STEP_ACCEPTANCE_ACTIVITY_KIND = 'goal_step_acceptance_check';
 
 export interface AcceptanceCheckOptions {
   readonly leaseMs?: number;
@@ -112,13 +126,17 @@ export interface AcceptanceCheckDeps {
 export interface DueAcceptanceCheck {
   readonly workspaceId: string;
   readonly goalRunId: string;
+  /** A step's check (S11 GO4b): its StepRun; `null` for the goal's own. */
+  readonly stepRunId: string | null;
   readonly round: number;
   readonly checkKey: string;
   /** The run's requester — whom the observation is for. */
   readonly requesterId: string;
-  /** `goal_left_verifying`: the row was left pending under a run that is not verifying — it is
-   *  superseded without a call. `null`: an observation to make. */
-  readonly closedBy: 'goal_left_verifying' | null;
+  /** The row was left pending after its round ended — it is superseded without a call:
+   *  `goal_left_verifying` (the goal's own, under a run that is not verifying),
+   *  `step_left_acceptance` (a step's, under a step no longer waiting on it at that attempt, or a
+   *  run that is not running). `null`: an observation to make. */
+  readonly closedBy: 'goal_left_verifying' | 'step_left_acceptance' | null;
 }
 
 export type AcceptanceCheckOutcome =
@@ -130,8 +148,9 @@ export type AcceptanceCheckOutcome =
   /** Not claimed (another kernel has it, or it is no longer due), or the claim was lost. */
   | 'skipped';
 
-/** Pending observations of a verifying run's latest round that are due and not leased, and
- *  pending rows of runs that are not verifying (any kind) — oldest first. */
+/** Pending observations of a verifying run's latest round, and of the latest round of a step
+ *  waiting on its acceptance in a running run, that are due and not leased; and pending rows whose
+ *  round ended (any kind) — oldest first. */
 export async function listDueAcceptanceChecks(
   pool: PoolLike,
   limit = DEFAULT_ACCEPTANCE_CHECK_BATCH,
@@ -141,34 +160,59 @@ export async function listDueAcceptanceChecks(
     const result = await client.query<{
       workspace_id: string;
       goal_run_id: string;
+      step_run_id: string | null;
       round: number;
       check_key: string;
       on_behalf_of: string;
       closed: boolean;
     }>(
-      `select c.workspace_id, c.goal_run_id, c.round, c.check_key, g.on_behalf_of,
-              g.status <> 'verifying' as closed
-         from goal_acceptance_checks c
-         join goal_runs g on g.workspace_id = c.workspace_id and g.id = c.goal_run_id
-        where c.status = 'pending'
-          and (g.status <> 'verifying'
-               or (c.kind = 'observe_predicate'
-                   and c.next_attempt_at <= now()
-                   and (c.lease_until is null or c.lease_until <= now())
-                   and c.round = (select max(m.round) from goal_acceptance_checks m
-                                   where m.workspace_id = c.workspace_id
-                                     and m.goal_run_id = c.goal_run_id)))
-        order by c.next_attempt_at, c.goal_run_id, c.round, c.check_key
+      `select * from (
+         select c.workspace_id, c.goal_run_id, null::uuid as step_run_id, c.round, c.check_key,
+                g.on_behalf_of, g.status <> 'verifying' as closed, c.next_attempt_at
+           from goal_acceptance_checks c
+           join goal_runs g on g.workspace_id = c.workspace_id and g.id = c.goal_run_id
+          where c.status = 'pending'
+            and (g.status <> 'verifying'
+                 or (c.kind = 'observe_predicate'
+                     and c.next_attempt_at <= now()
+                     and (c.lease_until is null or c.lease_until <= now())
+                     and c.round = (select max(m.round) from goal_acceptance_checks m
+                                     where m.workspace_id = c.workspace_id
+                                       and m.goal_run_id = c.goal_run_id)))
+         union all
+         select c.workspace_id, c.goal_run_id, c.step_run_id, c.round, c.check_key,
+                g.on_behalf_of, not open.open as closed, c.next_attempt_at
+           from step_acceptance_checks c
+           join goal_runs g on g.workspace_id = c.workspace_id and g.id = c.goal_run_id
+           join step_runs s on s.workspace_id = c.workspace_id and s.id = c.step_run_id
+           cross join lateral (
+             select g.status = 'running' and s.status = 'waiting'
+                    and s.waiting_reason = 'acceptance'
+                    and s.attempt_count = c.step_attempt as open) open
+          where c.status = 'pending'
+            and (not open.open
+                 or (c.next_attempt_at <= now()
+                     and (c.lease_until is null or c.lease_until <= now())
+                     and c.round = (select max(m.round) from step_acceptance_checks m
+                                     where m.workspace_id = c.workspace_id
+                                       and m.step_run_id = c.step_run_id)))
+       ) due
+        order by next_attempt_at, goal_run_id, round, check_key
         limit $1`,
       [limit],
     );
     return result.rows.map((row) => ({
       workspaceId: row.workspace_id,
       goalRunId: row.goal_run_id,
+      stepRunId: row.step_run_id,
       round: row.round,
       checkKey: row.check_key,
       requesterId: row.on_behalf_of,
-      closedBy: row.closed ? 'goal_left_verifying' : null,
+      closedBy: !row.closed
+        ? null
+        : row.step_run_id
+          ? 'step_left_acceptance'
+          : 'goal_left_verifying',
     }));
   } finally {
     client.release();
@@ -265,7 +309,8 @@ export async function runAcceptanceCheck(
   });
 }
 
-/** A row left pending under a run that is not verifying: superseded, under the GoalRun lock. */
+/** A row left pending after its round ended: superseded, under the GoalRun lock (and the
+ *  StepRun's, for a step's). */
 async function supersedeLeftover(
   deps: AcceptanceCheckDeps,
   due: DueAcceptanceCheck,
@@ -275,7 +320,20 @@ async function supersedeLeftover(
     { workspaceId: due.workspaceId, principalId: due.requesterId },
     async (client) => {
       const goal = await lockGoalRun(client, due.workspaceId, due.goalRunId);
-      if (!goal || goal.status === 'verifying') return 'skipped';
+      if (!goal) return 'skipped';
+      if (due.stepRunId) {
+        const step = await lockStepRun(client, due.workspaceId, due.stepRunId);
+        const check = await lockAcceptanceCheck(client, due.workspaceId, due);
+        if (!step || !check || stepVerifies(goal.status, step, check)) return 'skipped';
+        const superseded = await supersedePendingStepAcceptanceChecks(client, due.workspaceId, {
+          goalRunId: due.goalRunId,
+          stepRunId: due.stepRunId,
+          actorPrincipalId: due.requesterId,
+          reason: 'step_left_acceptance',
+        });
+        return superseded > 0 ? 'superseded' : 'skipped';
+      }
+      if (goal.status === 'verifying') return 'skipped';
       const superseded = await supersedePendingAcceptanceChecks(client, due.workspaceId, {
         goalRunId: due.goalRunId,
         actorPrincipalId: due.requesterId,
@@ -283,6 +341,25 @@ async function supersedeLeftover(
       });
       return superseded > 0 ? 'superseded' : 'skipped';
     },
+  );
+}
+
+/** Whether a step's row may still settle: the run is running and the step waits on its acceptance
+ *  at the attempt the row verifies (goal/0006's guard says the same). */
+function stepVerifies(
+  goalStatus: string,
+  step: {
+    readonly status: string;
+    readonly waitingReason: string | null;
+    readonly attemptCount: number;
+  },
+  check: AcceptanceCheckRow,
+): boolean {
+  return (
+    goalStatus === 'running' &&
+    step.status === 'waiting' &&
+    step.waitingReason === 'acceptance' &&
+    step.attemptCount === check.stepAttempt
   );
 }
 
@@ -297,13 +374,16 @@ async function settle(
     deps.pool,
     { workspaceId: ws, principalId: due.requesterId },
     async (client) => {
-      // Lock order under a goal: the GoalRun, then its rows.
+      // Lock order under a goal: the GoalRun, then its StepRuns, then the rows.
       const goal = await lockGoalRun(client, ws, due.goalRunId);
+      const step = due.stepRunId ? await lockStepRun(client, ws, due.stepRunId) : null;
       const check = await lockAcceptanceCheck(client, ws, due);
       if (
         !goal ||
-        goal.status !== 'verifying' ||
         !check ||
+        (due.stepRunId
+          ? !step || !stepVerifies(goal.status, step, check)
+          : goal.status !== 'verifying') ||
         check.status !== 'pending' ||
         check.attempts !== claimed.attempts ||
         !(await isLatestRound(client, ws, check))
@@ -363,9 +443,12 @@ async function isLatestRound(
   check: AcceptanceCheckRow,
 ): Promise<boolean> {
   const result = await client.query<{ round: number | null }>(
-    `select max(round) as round from goal_acceptance_checks
-      where workspace_id = $1 and goal_run_id = $2`,
-    [workspaceId, check.goalRunId],
+    check.stepRunId
+      ? `select max(round) as round from step_acceptance_checks
+          where workspace_id = $1 and step_run_id = $2`
+      : `select max(round) as round from goal_acceptance_checks
+          where workspace_id = $1 and goal_run_id = $2`,
+    [workspaceId, check.stepRunId ?? check.goalRunId],
   );
   return result.rows[0]?.round === check.round;
 }
@@ -380,12 +463,17 @@ async function recordObservation(
   const ws = due.workspaceId;
   const observationCheck = check.observationCheck;
   if (!observationCheck) throw new Error('recordObservation: a confirmation is not observed');
+  // A step's check names its step and the attempt it verifies (S11 GO4b).
+  const step = check.stepRunId
+    ? { stepRunId: check.stepRunId, stepAttempt: check.stepAttempt }
+    : {};
   const { observationId, evaluation } = await recordPlatformObservation(client, ws, {
     requesterId: due.requesterId,
     check: observationCheck,
-    activityKind: ACCEPTANCE_ACTIVITY_KIND,
+    activityKind: check.stepRunId ? STEP_ACCEPTANCE_ACTIVITY_KIND : ACCEPTANCE_ACTIVITY_KIND,
     activityMetadata: {
       goalRunId: due.goalRunId,
+      ...step,
       round: check.round,
       checkKey: check.checkKey,
       gatekeeperId: observationCheck.gatekeeperId,
@@ -393,8 +481,9 @@ async function recordObservation(
       attempt: check.attempts,
     },
     about: {
-      purpose: 'acceptance_check',
+      purpose: check.stepRunId ? 'step_acceptance_check' : 'acceptance_check',
       goalRunId: due.goalRunId,
+      ...step,
       round: check.round,
       checkKey: check.checkKey,
     },

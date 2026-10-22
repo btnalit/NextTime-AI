@@ -63,7 +63,7 @@ import {
   runAcceptanceCheck,
   runAcceptanceCheckTick,
 } from './acceptance-check.js';
-import { listAcceptanceChecks } from './acceptance-checks.js';
+import { listAcceptanceChecks, listStepAcceptanceChecks } from './acceptance-checks.js';
 import {
   GOAL_OUTCOME_NOTE_MAX,
   confirmGoalAcceptance,
@@ -216,6 +216,7 @@ interface StepSpec {
   readonly input?: unknown;
   readonly nested?: boolean;
   readonly reconcile?: readonly unknown[];
+  readonly acceptance?: readonly unknown[];
 }
 
 interface AttemptTaskRow {
@@ -298,6 +299,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           ...(step.maxAttempts ? { maxAttempts: step.maxAttempts } : {}),
           ...(step.nested ? { nested: true } : {}),
           ...(step.reconcile ? { reconcile: step.reconcile } : {}),
+          ...(step.acceptance ? { acceptance: step.acceptance } : {}),
         })),
       };
     }
@@ -5413,6 +5415,560 @@ describe.runIf(DATABASE_URL !== undefined)(
           expect.stringMatching(/^acceptance\[1\] "a2": check: "svc\.status" cannot be observed/),
           expect.stringMatching(
             /^acceptance\[2\] "a3": check: .*svc\.status: the params carry 1 credential value/,
+          ),
+        ]);
+      });
+    });
+
+    describe('a step’s own acceptance: verified before it succeeds and the steps after it start (S11 GO4b)', () => {
+      const observeClient = new FakeObserveClient();
+      let gate: string;
+      const STATUS: Operation = {
+        name: 'svc.status',
+        binding: { kind: 'http', method: 'GET', path: '/status' },
+        params_schema: {},
+        mode: 'observe',
+        blast_radius: 'low',
+        reversibility: false,
+        auto_approvable: true,
+        await_decision: false,
+        reads: [],
+        writes: [],
+      };
+
+      beforeAll(async () => {
+        gate = await admin(async (client) => {
+          const activity = await startActivity(client, workspaceId, {
+            kind: 'test.connection',
+            principalId: ownerId,
+          });
+          const registered = await registerGatekeeper(client, workspaceId, {
+            name: `go4b-gate-${randomUUID().slice(0, 8)}`,
+            transportKind: 'http',
+            target: 'example-system',
+            endpoint: 'http://127.0.0.1:9',
+            connectionSecretSalt: 'e'.repeat(32),
+            activityId: activity.id,
+            registeredBy: { id: ownerId, kind: 'human' },
+          });
+          await importManifest(client, workspaceId, {
+            gatekeeperId: registered.gatekeeperId,
+            operations: [STATUS],
+            proposedBy: { id: ownerId, kind: 'human' },
+            activityId: activity.id,
+          });
+          await publishOperation(client, workspaceId, {
+            gatekeeperId: registered.gatekeeperId,
+            name: STATUS.name,
+          });
+          return registered.gatekeeperId;
+        });
+      });
+
+      const by = (principalId: string, role: 'member' | 'owner' = 'member') => ({
+        principalId,
+        role,
+      });
+      // A function: `gate` is set in `beforeAll`, after this block is collected.
+      const observe = (key = 'up') => ({
+        kind: 'observe_predicate' as const,
+        key,
+        check: {
+          gatekeeperId: gate,
+          operation: 'svc.status',
+          params: { name: 'web' },
+          expect: { path: 'state', op: 'eq', value: 'running' },
+        },
+      });
+      const RUNNING = async () => ({ data: { name: 'web', state: 'running' } });
+      const EXITED = async () => ({ data: { name: 'web', state: 'exited' } });
+
+      /** A running goal: step `a` declares `acceptance`, `b` follows it; `a`'s attempt 1 runs. */
+      async function verifyingStep(requester: string, acceptance = [observe()]) {
+        const goalRunId = await startGoal(requester, [
+          { key: 'a', acceptance },
+          { key: 'b', dependsOn: ['a'] },
+        ]);
+        await advance(goalRunId, requester);
+        return { goalRunId, a: (await stepsOf(goalRunId)).a as StepRunRow };
+      }
+
+      const rowsOf = (goalRunId: string) =>
+        admin((client) => listStepAcceptanceChecks(client, workspaceId, goalRunId));
+      const acceptanceOf = async (goalRunId: string) =>
+        (await admin((client) => readGoalAcceptance(client, workspaceId, goalRunId)))?.steps;
+      const dueOf = async (goalRunId: string): Promise<readonly DueAcceptanceCheck[]> =>
+        (await listDueAcceptanceChecks(pool, 1000)).filter((due) => due.goalRunId === goalRunId);
+      const checkDeps = (options: Parameters<typeof runAcceptanceCheck>[0]['options'] = {}) => ({
+        pool,
+        gatekeeperClient: observeClient,
+        options,
+      });
+      /** Runs the attempt of the step's check `key` now (its backoff skipped). */
+      async function observeNow(
+        goalRunId: string,
+        key = 'up',
+        options: Parameters<typeof runAcceptanceCheck>[0]['options'] = {},
+      ) {
+        await raw(
+          `update step_acceptance_checks set next_attempt_at = now()
+            where workspace_id = $1 and goal_run_id = $2 and check_key = $3 and status = 'pending'`,
+          [workspaceId, goalRunId, key],
+        );
+        const due = (await dueOf(goalRunId)).find(
+          (candidate) => candidate.checkKey === key && candidate.stepRunId !== null,
+        );
+        if (!due) throw new Error(`no step check ${key} of ${goalRunId} is due`);
+        return runAcceptanceCheck(checkDeps(options), due);
+      }
+      const evidenceOf = async (goalRunId: string) =>
+        (
+          await admin((client) =>
+            client.query<{ id: string; content: Record<string, unknown> }>(
+              `select id, content from observations
+                where workspace_id = $1 and content ->> 'purpose' = 'step_acceptance_check'
+                  and content ->> 'goalRunId' = $2
+                order by created_at, id`,
+              [workspaceId, goalRunId],
+            ),
+          )
+        ).rows;
+      const pauseDetail = async (goalRunId: string) =>
+        (await goalAudit(goalRunId)).filter((row) => row.action === 'goal_run.pause').at(-1)
+          ?.payload.detail;
+      const resumeAs = (goalRunId: string, principal: string, retrySteps?: readonly string[]) =>
+        asRequester(principal, (client) =>
+          resumeGoalRun(client, workspaceId, {
+            goalRunId,
+            actor: by(principal),
+            ...(retrySteps ? { retrySteps } : {}),
+          }),
+        );
+      const pauseAs = (goalRunId: string, principal: string, role: 'member' | 'owner' = 'member') =>
+        asRequester(principal, (client) =>
+          pauseGoalRun(client, workspaceId, { goalRunId, actor: by(principal, role) }),
+        );
+
+      it('the Worker’s word is not enough: the step waits on its checks, the platform observes them, and only then does it succeed and the next step start', async () => {
+        const requester = await newPrincipal();
+        const { goalRunId, a } = await verifyingStep(requester);
+        expect(await rowsOf(goalRunId)).toEqual([]);
+
+        await completeStep(a.id, requester);
+        expect(await advance(goalRunId, requester)).toMatchObject({ status: 'running' });
+        let steps = await stepsOf(goalRunId);
+        expect(steps.a).toMatchObject({ status: 'waiting', waitingReason: 'acceptance' });
+        expect(steps.b?.status).toBe('pending');
+        expect(await acceptanceOf(goalRunId)).toMatchObject([
+          {
+            stepRunId: a.id,
+            stepKey: 'a',
+            attempt: 1,
+            state: 'verifying',
+            rounds: [
+              {
+                round: 1,
+                stepAttempt: 1,
+                planRevision: 1,
+                checks: [
+                  {
+                    checkKey: 'up',
+                    kind: 'observe_predicate',
+                    status: 'pending',
+                    check: observe().check,
+                    attempts: 0,
+                    nextAttemptAt: expect.any(Date),
+                  },
+                ],
+              },
+            ],
+          },
+        ]);
+        expect(
+          (await goalAudit(goalRunId)).find(
+            (row) => row.action === 'goal_run.step_acceptance_round',
+          )?.payload,
+        ).toMatchObject({
+          stepRunId: a.id,
+          stepKey: 'a',
+          stepAttempt: 1,
+          round: 1,
+          checks: [{ key: 'up', kind: 'observe_predicate' }],
+        });
+        // While it is observed, an advance changes nothing, and the wall clock keeps running.
+        const waiting = await advance(goalRunId, requester);
+        expect(waiting).toMatchObject({ status: 'running', startedTaskIds: [] });
+        expect(waiting.nextTickAt).toBeInstanceOf(Date);
+        expect(await rowsOf(goalRunId)).toHaveLength(1);
+
+        observeClient.answer = RUNNING;
+        const calls = observeClient.calls.length;
+        expect(await observeNow(goalRunId)).toBe('passed');
+        expect(observeClient.calls.slice(calls)).toEqual([
+          {
+            target: expect.objectContaining({
+              credential: expect.objectContaining({ kind: 'connection' }),
+            }),
+            input: {
+              operation: 'svc.status',
+              params: { name: 'web' },
+              onBehalfOf: requester,
+              operationDigest: expect.any(String),
+            },
+          },
+        ]);
+        const [evidence] = await evidenceOf(goalRunId);
+        expect(evidence?.content).toMatchObject({
+          purpose: 'step_acceptance_check',
+          goalRunId,
+          stepRunId: a.id,
+          stepAttempt: 1,
+          round: 1,
+          checkKey: 'up',
+          outcome: 'satisfied',
+          result: { name: 'web', state: 'running' },
+        });
+        expect(await isDue(goalRunId)).toBe(true);
+
+        const after = await advance(goalRunId, requester);
+        steps = await stepsOf(goalRunId);
+        expect(steps.a).toMatchObject({ status: 'succeeded' });
+        expect(steps.b?.status).toBe('running');
+        expect(after.startedTaskIds).toHaveLength(1);
+        expect((await acceptanceOf(goalRunId))?.[0]).toMatchObject({
+          state: 'passed',
+          rounds: [{ checks: [{ status: 'passed', observationId: evidence?.id }] }],
+        });
+        expect(
+          (await stepAudit(goalRunId)).find(
+            (row) => row.resource_id === a.id && row.action === 'step_run.succeed',
+          )?.payload,
+        ).toMatchObject({ round: 1, attempt: 1, checks: ['up'] });
+      });
+
+      it('a check that saw its predicate false fails the step verification_failed: the run pauses for a person, and only their retry does the step’s work again', async () => {
+        const requester = await newPrincipal();
+        const { goalRunId, a } = await verifyingStep(requester);
+        await completeStep(a.id, requester);
+        await advance(goalRunId, requester);
+        observeClient.answer = EXITED;
+        const options = { maxAttempts: 2, backoffMs: () => 60_000 };
+        expect(await observeNow(goalRunId, 'up', options)).toBe('retry');
+        expect(await advance(goalRunId, requester)).toMatchObject({ status: 'running' });
+        expect(await observeNow(goalRunId, 'up', options)).toBe('failed');
+        const evidence = await evidenceOf(goalRunId);
+        expect(evidence.map((row) => row.content.outcome)).toEqual(['unsatisfied', 'unsatisfied']);
+
+        await advance(goalRunId, requester);
+        expect((await stepsOf(goalRunId)).a).toMatchObject({
+          status: 'failed',
+          failureCategory: 'verification_failed',
+          waitingReason: null,
+        });
+        expect(await goalOf(goalRunId)).toMatchObject({
+          status: 'paused',
+          pauseReason: 'needs_decision',
+        });
+        expect(await pauseDetail(goalRunId)).toBe(
+          'step a: attempt 1: acceptance check up: its observation did not satisfy the predicate; retry the step (its work is done again), revise the plan or cancel',
+        );
+        expect(
+          (await stepAudit(goalRunId)).find(
+            (row) => row.resource_id === a.id && row.action === 'step_run.fail',
+          )?.payload,
+        ).toMatchObject({
+          failureCategory: 'verification_failed',
+          round: 1,
+          attempt: 1,
+          failedChecks: ['up'],
+        });
+        expect((await acceptanceOf(goalRunId))?.[0]).toMatchObject({
+          state: 'failed',
+          rounds: [{ checks: [{ status: 'failed', observationId: evidence[1]?.id }] }],
+        });
+        // Not retried on its own: a resume without a retry leaves it failed, and the run pauses
+        // again.
+        await resumeAs(goalRunId, requester);
+        await advance(goalRunId, requester);
+        expect((await stepsOf(goalRunId)).a?.status).toBe('failed');
+        expect(await attemptTasks(a.id)).toHaveLength(1);
+        expect(await pauseDetail(goalRunId)).toBe(
+          'step a: attempt 1 did not pass its acceptance checks and is not retried on its own — retry it (its work is done again); or revise the plan or cancel',
+        );
+
+        await resumeAs(goalRunId, requester, ['a']);
+        await advance(goalRunId, requester);
+        expect(await attemptTasks(a.id)).toHaveLength(2);
+        await completeStep(a.id, requester);
+        await advance(goalRunId, requester);
+        expect(await rowsOf(goalRunId)).toMatchObject([
+          { round: 1, stepAttempt: 1, status: 'failed' },
+          { round: 2, stepAttempt: 2, status: 'pending' },
+        ]);
+        observeClient.answer = RUNNING;
+        expect(await observeNow(goalRunId)).toBe('passed');
+        await advance(goalRunId, requester);
+        expect((await stepsOf(goalRunId)).a).toMatchObject({
+          status: 'succeeded',
+          attemptCount: 2,
+        });
+      });
+
+      it('a check that could not be made: the step waits acceptance_unavailable, the run pauses, and a resume verifies it again in a new round without redoing its work', async () => {
+        const requester = await newPrincipal();
+        const { goalRunId, a } = await verifyingStep(requester, [observe('up'), observe('ready')]);
+        await completeStep(a.id, requester);
+        await advance(goalRunId, requester);
+        observeClient.answer = RUNNING;
+        expect(await observeNow(goalRunId, 'up')).toBe('passed');
+        observeClient.answer = async () => {
+          throw new GatekeeperClientError('refused by the gate', {
+            code: 'operation_refused',
+            status: 403,
+          });
+        };
+        expect(await observeNow(goalRunId, 'ready')).toBe('unavailable');
+
+        await advance(goalRunId, requester);
+        expect((await stepsOf(goalRunId)).a).toMatchObject({
+          status: 'waiting',
+          waitingReason: 'acceptance_unavailable',
+          failureCategory: null,
+        });
+        expect(await goalOf(goalRunId)).toMatchObject({
+          status: 'paused',
+          pauseReason: 'needs_decision',
+        });
+        expect(await pauseDetail(goalRunId)).toMatch(
+          /^step a: attempt 1: acceptance check ready: could not be made \(.+\); resume the run to verify the step again, revise the plan or cancel$/,
+        );
+        expect((await acceptanceOf(goalRunId))?.[0]).toMatchObject({ state: 'unavailable' });
+        const held = (await stepAudit(goalRunId)).filter(
+          (row) => row.resource_id === a.id && row.action === 'step_run.wait',
+        );
+        expect(held.at(-1)?.payload).toMatchObject({
+          waitingReason: 'acceptance_unavailable',
+          unavailableChecks: ['ready'],
+        });
+        // While paused nothing is opened.
+        await advance(goalRunId, requester);
+        expect(await rowsOf(goalRunId)).toHaveLength(2);
+
+        await resumeAs(goalRunId, requester);
+        await advance(goalRunId, requester);
+        expect((await stepsOf(goalRunId)).a).toMatchObject({
+          status: 'waiting',
+          waitingReason: 'acceptance',
+          attemptCount: 1,
+        });
+        expect(await attemptTasks(a.id)).toHaveLength(1);
+        expect(
+          (await rowsOf(goalRunId)).map((row) => [
+            row.round,
+            row.stepAttempt,
+            row.checkKey,
+            row.status,
+          ]),
+        ).toEqual([
+          [1, 1, 'ready', 'unavailable'],
+          [1, 1, 'up', 'passed'],
+          [2, 1, 'ready', 'pending'],
+          [2, 1, 'up', 'pending'],
+        ]);
+        observeClient.answer = RUNNING;
+        expect(await observeNow(goalRunId, 'up')).toBe('passed');
+        expect(await observeNow(goalRunId, 'ready')).toBe('passed');
+        await advance(goalRunId, requester);
+        expect((await stepsOf(goalRunId)).a).toMatchObject({
+          status: 'succeeded',
+          attemptCount: 1,
+        });
+        expect((await stepsOf(goalRunId)).b?.status).toBe('running');
+      });
+
+      it('a pause, an owner’s hold or a cancel ends the step’s round: an attempt under way writes nothing, nothing is observed until the run runs, and a resume verifies in a new round', async () => {
+        const requester = await newPrincipal();
+        const { goalRunId, a } = await verifyingStep(requester);
+        await completeStep(a.id, requester);
+        await advance(goalRunId, requester);
+
+        observeClient.answer = async () => {
+          await pauseAs(goalRunId, requester);
+          return { data: { state: 'running' } };
+        };
+        expect(await observeNow(goalRunId)).toBe('skipped');
+        expect(await evidenceOf(goalRunId)).toEqual([]);
+        expect(await rowsOf(goalRunId)).toMatchObject([
+          { round: 1, status: 'superseded', attempts: 1, observationId: null },
+        ]);
+        expect(
+          (await goalAudit(goalRunId)).find((row) => row.action === 'goal_run.pause')?.payload,
+        ).toMatchObject({ supersededAcceptanceChecks: 1 });
+        expect(await dueOf(goalRunId)).toEqual([]);
+        await advance(goalRunId, requester);
+        expect(await rowsOf(goalRunId)).toHaveLength(1);
+        expect((await stepsOf(goalRunId)).a).toMatchObject({
+          status: 'waiting',
+          waitingReason: 'acceptance',
+        });
+
+        await pauseAs(goalRunId, ownerId, 'owner');
+        await expect(resumeAs(goalRunId, requester)).rejects.toThrow(/a workspace owner holds it/);
+        await asRequester(ownerId, (client) =>
+          releaseGoalRunHold(client, workspaceId, { goalRunId, actor: by(ownerId, 'owner') }),
+        );
+        await resumeAs(goalRunId, requester);
+        await advance(goalRunId, requester);
+        expect((await rowsOf(goalRunId)).map((row) => [row.round, row.status])).toEqual([
+          [1, 'superseded'],
+          [2, 'pending'],
+        ]);
+        observeClient.answer = RUNNING;
+        expect(await observeNow(goalRunId)).toBe('passed');
+        await advance(goalRunId, requester);
+        expect((await stepsOf(goalRunId)).a?.status).toBe('succeeded');
+
+        // An attempt that finishes while its run is paused waits on its checks; they open on resume.
+        const other = await newPrincipal();
+        const later = await verifyingStep(other);
+        await pauseAs(later.goalRunId, other);
+        await completeStep(later.a.id, other);
+        await advance(later.goalRunId, other);
+        expect((await stepsOf(later.goalRunId)).a).toMatchObject({
+          status: 'waiting',
+          waitingReason: 'acceptance',
+        });
+        expect(await rowsOf(later.goalRunId)).toEqual([]);
+        await resumeAs(later.goalRunId, other);
+        await advance(later.goalRunId, other);
+        expect(await rowsOf(later.goalRunId)).toMatchObject([{ round: 1, status: 'pending' }]);
+
+        // A cancel supersedes the round with the step.
+        await asRequester(other, (client) =>
+          cancelGoalRun(client, workspaceId, { goalRunId: later.goalRunId, actor: by(other) }),
+        );
+        await advance(later.goalRunId, other);
+        expect(await goalOf(later.goalRunId)).toMatchObject({ status: 'cancelled' });
+        expect((await stepsOf(later.goalRunId)).a?.status).toBe('cancelled');
+        expect(await rowsOf(later.goalRunId)).toMatchObject([{ status: 'superseded' }]);
+        expect(await dueOf(later.goalRunId)).toEqual([]);
+      });
+
+      it('a revision that drops or redefines the step ends its verification with it; the redefined step verifies afresh', async () => {
+        const requester = await newPrincipal();
+        const { goalRunId, a } = await verifyingStep(requester);
+        await completeStep(a.id, requester);
+        await advance(goalRunId, requester);
+        await pauseAs(goalRunId, requester);
+        const revised = await asRequester(requester, (client) =>
+          reviseGoalRun(client, workspaceId, {
+            goalRunId,
+            actor: by(requester),
+            basedOnRevision: 1,
+            plan: planOf([{ key: 'a', acceptance: [observe('ready')] }]),
+          }),
+        );
+        // `a` redefined, `b` dropped.
+        expect(revised.supersededStepRunIds).toHaveLength(2);
+        expect(revised.supersededStepRunIds).toContain(a.id);
+        expect(await rowsOf(goalRunId)).toMatchObject([{ stepRunId: a.id, status: 'superseded' }]);
+        await resumeAs(goalRunId, requester);
+        await advance(goalRunId, requester);
+        const redefined = (await stepsOf(goalRunId)).a as StepRunRow;
+        expect(redefined.id).not.toBe(a.id);
+        await completeStep(redefined.id, requester);
+        await advance(goalRunId, requester);
+        expect(
+          (await rowsOf(goalRunId)).map((row) => [row.stepRunId, row.checkKey, row.status]),
+        ).toEqual([
+          [a.id, 'up', 'superseded'],
+          [redefined.id, 'ready', 'pending'],
+        ]);
+      });
+
+      it('the reconcile scan opens a round a step never got and wakes one whose wake was lost; a leftover pending row of a step that left its acceptance is superseded without a call', async () => {
+        const requester = await newPrincipal();
+        const { goalRunId, a } = await verifyingStep(requester);
+        await completeStep(a.id, requester);
+        await advance(goalRunId, requester);
+        const lost = () =>
+          raw(
+            "update goal_runs set next_tick_at = now() + interval '1 hour' where workspace_id = $1 and id = $2",
+            [workspaceId, goalRunId],
+          );
+        // While its observation is pending, nothing to wake.
+        await lost();
+        await markReconcileDue(pool);
+        expect(await isDue(goalRunId)).toBe(false);
+        // Settled, but the wake was lost.
+        observeClient.answer = RUNNING;
+        expect(await observeNow(goalRunId)).toBe('passed');
+        await lost();
+        await markReconcileDue(pool);
+        expect(await isDue(goalRunId)).toBe(true);
+        await advance(goalRunId, requester);
+        expect((await stepsOf(goalRunId)).a?.status).toBe('succeeded');
+
+        // A step a release left waiting on its acceptance without a round.
+        const other = await newPrincipal();
+        const bare = await verifyingStep(other);
+        await raw(
+          "update step_runs set status = 'waiting', waiting_reason = 'acceptance' where workspace_id = $1 and id = $2",
+          [workspaceId, bare.a.id],
+        );
+        await raw(
+          "update goal_runs set next_tick_at = now() + interval '1 hour' where workspace_id = $1 and id = $2",
+          [workspaceId, bare.goalRunId],
+        );
+        await markReconcileDue(pool);
+        expect(await isDue(bare.goalRunId)).toBe(true);
+        await advance(bare.goalRunId, other);
+        expect(await rowsOf(bare.goalRunId)).toMatchObject([
+          { round: 1, checkKey: 'up', status: 'pending' },
+        ]);
+
+        // A pending row a release left behind when it moved the step on.
+        await raw(
+          "update step_runs set status = 'running', waiting_reason = null where workspace_id = $1 and id = $2",
+          [workspaceId, bare.a.id],
+        );
+        const [leftover] = await dueOf(bare.goalRunId);
+        expect(leftover).toMatchObject({
+          stepRunId: bare.a.id,
+          checkKey: 'up',
+          closedBy: 'step_left_acceptance',
+        });
+        const calls = observeClient.calls.length;
+        expect(await runAcceptanceCheck(checkDeps(), leftover as DueAcceptanceCheck)).toBe(
+          'superseded',
+        );
+        expect(observeClient.calls).toHaveLength(calls);
+        expect(await rowsOf(bare.goalRunId)).toMatchObject([{ status: 'superseded' }]);
+      });
+
+      it('a step’s acceptance observation names a published observe-class Operation of an enabled gate, with params that carry no credential', async () => {
+        const requester = await newPrincipal();
+        let problems: readonly string[] = [];
+        try {
+          await proposeGoal(requester, [
+            {
+              key: 'a',
+              acceptance: [
+                { ...observe('a1'), check: { ...observe().check, operation: 'svc.missing' } },
+                { ...observe('a2'), check: { ...observe().check, gatekeeperId: randomUUID() } },
+              ],
+            },
+          ]);
+        } catch (err) {
+          expect(err).toBeInstanceOf(GoalPlanValidationError);
+          problems = (err as GoalPlanValidationError).problems;
+        }
+        expect(problems).toEqual([
+          expect.stringMatching(
+            /^step "a": acceptance\[0\] "a1": check: "svc\.missing" cannot be observed/,
+          ),
+          expect.stringMatching(
+            /^step "a": acceptance\[1\] "a2": check: "svc\.status" cannot be observed/,
           ),
         ]);
       });

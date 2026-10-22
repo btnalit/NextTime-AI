@@ -5,7 +5,7 @@ import type {
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { writeAudit } from '../../substrate/audit/index.js';
-import type { AcceptanceCheck } from './plan.js';
+import type { AcceptanceCheck, StepAcceptanceCheck } from './plan.js';
 
 /**
  * application/goal/acceptance-checks (S11 GO4a, plan §4.6, I-G5): the rows of a GoalRun's
@@ -30,11 +30,26 @@ import type { AcceptanceCheck } from './plan.js';
  * rest: created pending in the run's latest round while it is verifying on the plan the row names;
  * settled once; `passed` only on an Observation of this check that satisfied its predicate, or on
  * the requester's own Decision.
+ *
+ * **A step's checks** (S11 GO4b, `step_acceptance_checks`, goal/0006) are rows of the same shape,
+ * observations only, in rounds of their StepRun: {@link openStepAcceptanceRound} as the step starts
+ * waiting on its acceptance (`advance.ts` phase A), {@link supersedePendingStepAcceptanceChecks}
+ * once its round ends — the step stops waiting on it, or the run stops running (`moves.ts`). An
+ * observation's claim, lock, deferral and settlement are the functions above, for a key that names
+ * the StepRun ({@link AcceptanceCheckKey}`.stepRunId`). Audited as `goal_run.step_acceptance_check`
+ * and `goal_run.step_acceptance_round`, on the GoalRun with the step's key. The database holds a
+ * row to its step's declared checks, its round to the step waiting on its acceptance at the
+ * attempt the row verifies in a running run, and the step's success to every check of its latest
+ * round passed.
  */
 
 export interface AcceptanceCheckRow {
   readonly workspaceId: string;
   readonly goalRunId: string;
+  /** A step's check (S11 GO4b): its StepRun, and the attempt whose work it verifies; `null` for the
+   *  goal's own. */
+  readonly stepRunId: string | null;
+  readonly stepAttempt: number | null;
   readonly round: number;
   readonly checkKey: string;
   readonly planRevision: number;
@@ -60,6 +75,8 @@ export interface AcceptanceCheckRow {
 interface AcceptanceCheckDbRow {
   workspace_id: string;
   goal_run_id: string;
+  step_run_id: string | null;
+  step_attempt: number | null;
   round: number;
   check_key: string;
   plan_revision: number;
@@ -79,14 +96,54 @@ interface AcceptanceCheckDbRow {
 }
 
 const ACCEPTANCE_CHECK_COLUMNS =
-  'workspace_id, goal_run_id, round, check_key, plan_revision, kind, observation_check, prompt, ' +
-  'status, attempts, first_attempt_at, next_attempt_at, lease_until, observation_id, decision_id, ' +
-  'last_error, created_at, settled_at';
+  'workspace_id, goal_run_id, null::uuid as step_run_id, null::int as step_attempt, round, ' +
+  'check_key, plan_revision, kind, observation_check, prompt, status, attempts, first_attempt_at, ' +
+  'next_attempt_at, lease_until, observation_id, decision_id, last_error, created_at, settled_at';
+
+/** A step's row in the shape of a goal's: it has no prompt and no decision. */
+const STEP_ACCEPTANCE_CHECK_COLUMNS =
+  'workspace_id, goal_run_id, step_run_id, step_attempt, round, check_key, plan_revision, kind, ' +
+  'observation_check, null::text as prompt, status, attempts, first_attempt_at, next_attempt_at, ' +
+  'lease_until, observation_id, null::uuid as decision_id, last_error, created_at, settled_at';
+
+/** One row: the goal's own check, or — with `stepRunId` — a step's (S11 GO4b). */
+export interface AcceptanceCheckKey {
+  readonly goalRunId: string;
+  readonly stepRunId?: string | null;
+  readonly round: number;
+  readonly checkKey: string;
+}
+
+/** The table, columns and key condition (`$1` the workspace, `$2`–`$4` from {@link keyValues}) of
+ *  `key`'s row. */
+function rowOf(key: AcceptanceCheckKey): {
+  readonly table: string;
+  readonly columns: string;
+  readonly where: string;
+} {
+  return key.stepRunId
+    ? {
+        table: 'step_acceptance_checks',
+        columns: STEP_ACCEPTANCE_CHECK_COLUMNS,
+        where: 'workspace_id = $1 and step_run_id = $2 and round = $3 and check_key = $4',
+      }
+    : {
+        table: 'goal_acceptance_checks',
+        columns: ACCEPTANCE_CHECK_COLUMNS,
+        where: 'workspace_id = $1 and goal_run_id = $2 and round = $3 and check_key = $4',
+      };
+}
+
+function keyValues(workspaceId: string, key: AcceptanceCheckKey): unknown[] {
+  return [workspaceId, key.stepRunId || key.goalRunId, key.round, key.checkKey];
+}
 
 function mapRow(row: AcceptanceCheckDbRow): AcceptanceCheckRow {
   return {
     workspaceId: row.workspace_id,
     goalRunId: row.goal_run_id,
+    stepRunId: row.step_run_id,
+    stepAttempt: row.step_attempt,
     round: row.round,
     checkKey: row.check_key,
     planRevision: row.plan_revision,
@@ -161,11 +218,12 @@ async function auditCheck(
   await writeAudit(client, {
     workspaceId,
     actorPrincipalId,
-    action: 'goal_run.acceptance_check',
+    action: check.stepRunId ? 'goal_run.step_acceptance_check' : 'goal_run.acceptance_check',
     resourceType: 'goal_run',
     resourceId: check.goalRunId,
     payload: {
       outcome,
+      ...(check.stepRunId ? { stepRunId: check.stepRunId, stepAttempt: check.stepAttempt } : {}),
       round: check.round,
       checkKey: check.checkKey,
       kind: check.kind,
@@ -286,38 +344,38 @@ export async function supersedePendingAcceptanceChecks(
 export async function claimAcceptanceCheck(
   client: PoolClient,
   workspaceId: string,
-  key: { readonly goalRunId: string; readonly round: number; readonly checkKey: string },
+  key: AcceptanceCheckKey,
   leaseMs: number,
 ): Promise<AcceptanceCheckRow | null> {
+  const row = rowOf(key);
   const result = await client.query<AcceptanceCheckDbRow>(
-    `update goal_acceptance_checks
+    `update ${row.table}
         set attempts = attempts + 1,
             first_attempt_at = coalesce(first_attempt_at, now()),
             lease_until = now() + make_interval(secs => $5::double precision)
-      where workspace_id = $1 and goal_run_id = $2 and round = $3 and check_key = $4
+      where ${row.where}
         and kind = 'observe_predicate' and status = 'pending' and next_attempt_at <= now()
         and (lease_until is null or lease_until <= now())
-      returning ${ACCEPTANCE_CHECK_COLUMNS}`,
-    [workspaceId, key.goalRunId, key.round, key.checkKey, leaseMs / 1000],
+      returning ${row.columns}`,
+    [...keyValues(workspaceId, key), leaseMs / 1000],
   );
-  const row = result.rows[0];
-  return row ? mapRow(row) : null;
+  const claimed = result.rows[0];
+  return claimed ? mapRow(claimed) : null;
 }
 
 /** The row, locked `for update` — `null` when there is none. */
 export async function lockAcceptanceCheck(
   client: PoolClient,
   workspaceId: string,
-  key: { readonly goalRunId: string; readonly round: number; readonly checkKey: string },
+  key: AcceptanceCheckKey,
 ): Promise<AcceptanceCheckRow | null> {
+  const row = rowOf(key);
   const result = await client.query<AcceptanceCheckDbRow>(
-    `select ${ACCEPTANCE_CHECK_COLUMNS} from goal_acceptance_checks
-      where workspace_id = $1 and goal_run_id = $2 and round = $3 and check_key = $4
-      for update`,
-    [workspaceId, key.goalRunId, key.round, key.checkKey],
+    `select ${row.columns} from ${row.table} where ${row.where} for update`,
+    keyValues(workspaceId, key),
   );
-  const row = result.rows[0];
-  return row ? mapRow(row) : null;
+  const locked = result.rows[0];
+  return locked ? mapRow(locked) : null;
 }
 
 /** Puts a claimed observation back: due again in `delayMs`, the lease released, `lastError` the
@@ -331,16 +389,14 @@ export async function deferAcceptanceCheck(
   actorPrincipalId: string,
   error?: string | null,
 ): Promise<void> {
+  const row = rowOf(check);
   await client.query(
-    `update goal_acceptance_checks
+    `update ${row.table}
         set next_attempt_at = now() + make_interval(secs => $5::double precision),
             lease_until = null, last_error = $6, observation_id = coalesce($7, observation_id)
-      where workspace_id = $1 and goal_run_id = $2 and round = $3 and check_key = $4`,
+      where ${row.where}`,
     [
-      workspaceId,
-      check.goalRunId,
-      check.round,
-      check.checkKey,
+      ...keyValues(workspaceId, check),
       input.delayMs / 1000,
       clippedCode(input.lastError),
       input.observationId ?? null,
@@ -369,16 +425,14 @@ export async function settleAcceptanceCheck(
   actorPrincipalId: string,
   error?: string | null,
 ): Promise<void> {
+  const row = rowOf(check);
   await client.query(
-    `update goal_acceptance_checks
+    `update ${row.table}
         set status = $5, observation_id = coalesce($6, observation_id), last_error = $7,
             lease_until = null, settled_at = now()
-      where workspace_id = $1 and goal_run_id = $2 and round = $3 and check_key = $4`,
+      where ${row.where}`,
     [
-      workspaceId,
-      check.goalRunId,
-      check.round,
-      check.checkKey,
+      ...keyValues(workspaceId, check),
       input.status,
       input.observationId ?? null,
       clippedCode(input.lastError),
@@ -410,4 +464,153 @@ export async function passAcceptanceConfirmation(
     by: 'person',
     decisionId,
   });
+}
+
+// ----- a step's checks (S11 GO4b) -----------------------------------------------------------
+
+/** Every row of the run's steps, by StepRun, round and then key. */
+export async function listStepAcceptanceChecks(
+  client: PoolClient,
+  workspaceId: string,
+  goalRunId: string,
+): Promise<readonly AcceptanceCheckRow[]> {
+  const result = await client.query<AcceptanceCheckDbRow>(
+    `select ${STEP_ACCEPTANCE_CHECK_COLUMNS} from step_acceptance_checks
+      where workspace_id = $1 and goal_run_id = $2
+      order by created_at, step_run_id, round, check_key`,
+    [workspaceId, goalRunId],
+  );
+  return result.rows.map(mapRow);
+}
+
+/** The rows of the step's latest round that opened at or after `since` — the round of the step's
+ *  current wait on its acceptance (`step_runs.updated_at` is the time it started waiting; a round
+ *  opens in that transaction or later) — by key; empty when there is none. */
+export async function readCurrentStepAcceptanceRound(
+  client: PoolClient,
+  workspaceId: string,
+  stepRunId: string,
+  since: Date,
+): Promise<readonly AcceptanceCheckRow[]> {
+  const result = await client.query<AcceptanceCheckDbRow>(
+    `select ${STEP_ACCEPTANCE_CHECK_COLUMNS} from step_acceptance_checks c
+      where c.workspace_id = $1 and c.step_run_id = $2 and c.created_at >= $3
+        and c.round = (select max(m.round) from step_acceptance_checks m
+                        where m.workspace_id = $1 and m.step_run_id = $2)
+      order by c.check_key`,
+    [workspaceId, stepRunId, since],
+  );
+  return result.rows.map(mapRow);
+}
+
+/**
+ * Opens round `latest + 1` of a step waiting on its acceptance: one `pending` row per check of
+ * `checks` (the step's declared `acceptance`, as its plan entry has them), for attempt
+ * `stepAttempt`. Rows of the step's earlier rounds still pending are then superseded. Audited once,
+ * as `goal_run.step_acceptance_round`. Returns the new rows.
+ */
+export async function openStepAcceptanceRound(
+  client: PoolClient,
+  workspaceId: string,
+  input: {
+    readonly goalRunId: string;
+    readonly stepRunId: string;
+    readonly stepKey: string;
+    readonly stepAttempt: number;
+    /** The revision that introduced the step: its definition. */
+    readonly planRevision: number;
+    readonly checks: readonly StepAcceptanceCheck[];
+    readonly actorPrincipalId: string;
+  },
+): Promise<readonly AcceptanceCheckRow[]> {
+  const latest = await client.query<{ round: number | null }>(
+    `select max(round) as round from step_acceptance_checks
+      where workspace_id = $1 and step_run_id = $2`,
+    [workspaceId, input.stepRunId],
+  );
+  const round = (latest.rows[0]?.round ?? 0) + 1;
+  const rows: AcceptanceCheckRow[] = [];
+  for (const check of input.checks) {
+    const inserted = await client.query<AcceptanceCheckDbRow>(
+      `insert into step_acceptance_checks
+         (workspace_id, goal_run_id, step_run_id, step_attempt, round, check_key, plan_revision,
+          kind, observation_check)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
+       returning ${STEP_ACCEPTANCE_CHECK_COLUMNS}`,
+      [
+        workspaceId,
+        input.goalRunId,
+        input.stepRunId,
+        input.stepAttempt,
+        round,
+        check.key,
+        input.planRevision,
+        check.kind,
+        JSON.stringify(check.check),
+      ],
+    );
+    const row = inserted.rows[0];
+    if (!row) throw new Error('openStepAcceptanceRound: INSERT ... RETURNING produced no row');
+    rows.push(mapRow(row));
+  }
+  const superseded = await supersedePendingStepAcceptanceChecks(client, workspaceId, {
+    goalRunId: input.goalRunId,
+    stepRunId: input.stepRunId,
+    actorPrincipalId: input.actorPrincipalId,
+    reason: 'newer_round',
+    beforeRound: round,
+  });
+  await writeAudit(client, {
+    workspaceId,
+    actorPrincipalId: input.actorPrincipalId,
+    action: 'goal_run.step_acceptance_round',
+    resourceType: 'goal_run',
+    resourceId: input.goalRunId,
+    payload: {
+      by: 'advancer',
+      stepRunId: input.stepRunId,
+      stepKey: input.stepKey,
+      stepAttempt: input.stepAttempt,
+      round,
+      planRevision: input.planRevision,
+      checks: input.checks.map((check) => ({ key: check.key, kind: check.kind })),
+      ...(superseded > 0 ? { supersededChecks: superseded } : {}),
+    },
+  });
+  return rows;
+}
+
+/**
+ * Supersedes the `pending` rows of the run's steps — of one step (`stepRunId`) or of all of them:
+ * once a step stops waiting on its acceptance (`step_moved`) or the run stops running
+ * (`goal_moved`; both `moves.ts`, in the transaction that moves it), one an earlier release left
+ * behind (`step_left_acceptance`, `acceptance-check.ts`), or those of a step's rounds before
+ * `beforeRound` as that round opens (`newer_round`). Each row is audited. Returns how many.
+ */
+export async function supersedePendingStepAcceptanceChecks(
+  client: PoolClient,
+  workspaceId: string,
+  input: {
+    readonly goalRunId: string;
+    readonly stepRunId?: string;
+    readonly actorPrincipalId: string;
+    readonly reason: 'goal_moved' | 'step_moved' | 'newer_round' | 'step_left_acceptance';
+    readonly beforeRound?: number;
+  },
+): Promise<number> {
+  const result = await client.query<AcceptanceCheckDbRow>(
+    `update step_acceptance_checks
+        set status = 'superseded', lease_until = null, settled_at = now()
+      where workspace_id = $1 and goal_run_id = $2 and status = 'pending'
+        and ($3::uuid is null or step_run_id = $3::uuid)
+        and ($4::int is null or round < $4::int)
+      returning ${STEP_ACCEPTANCE_CHECK_COLUMNS}`,
+    [workspaceId, input.goalRunId, input.stepRunId ?? null, input.beforeRound ?? null],
+  );
+  for (const row of result.rows) {
+    await auditCheck(client, workspaceId, mapRow(row), 'superseded', input.actorPrincipalId, {
+      reason: input.reason,
+    });
+  }
+  return result.rows.length;
 }
