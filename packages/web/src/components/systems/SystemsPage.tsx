@@ -823,6 +823,9 @@ export function SystemsPage({
               key={drawer.request?.id ?? 'direct'}
               http={http}
               request={drawer.request}
+              requesterName={
+                drawer.request ? principalNames.get(drawer.request.requestedBy) : undefined
+              }
               onDone={handleCompleted}
               onCancel={() => setDrawer({ kind: 'closed' })}
               onShowGatekeeper={showGatekeeperCard}

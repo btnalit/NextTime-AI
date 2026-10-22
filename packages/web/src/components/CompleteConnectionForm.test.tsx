@@ -103,6 +103,27 @@ describe('CompleteConnectionForm', () => {
     await waitFor(() => expect(createCalls(http)).toBe(1));
   });
 
+  it('legacy 247: the header names the requester when the caller knows the name, else shows the short id', async () => {
+    const http = httpWith(async () => ({}));
+    const { unmount } = render(
+      <CompleteConnectionForm
+        http={http}
+        request={request}
+        requesterName="Li Si"
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+    await secretShown();
+    expect(screen.getByTestId('cc-requester').textContent).toBe('Li Si');
+    unmount();
+    render(
+      <CompleteConnectionForm http={http} request={request} onDone={vi.fn()} onCancel={vi.fn()} />,
+    );
+    await secretShown();
+    expect(screen.getByTestId('cc-requester').textContent).toBe('principa');
+  });
+
   it('legacy 247: a request whose address was masked is not prefilled with the mask, and says why', async () => {
     const http = httpWith(async () => ({}));
     render(

@@ -35,6 +35,9 @@ export interface CompleteConnectionFormProps {
   readonly http: CapabilityCaller;
   /** The `request_connection` card being completed; omitted when the owner connects directly. */
   readonly request?: ConnectionRequestRow | null;
+  /** The requester's display name, when the caller has the member directory (legacy 247 ②, #661
+   *  UX acceptance) — the short principal id otherwise. */
+  readonly requesterName?: string;
   readonly onDone: (result: CreateConnectionResult) => void;
   readonly onCancel: () => void;
   /** S3.12's onboarding wizard (`OnboardingWizard.tsx`) already collected the kind in its own
@@ -215,6 +218,7 @@ export function fieldForInvalidParams(message: string): keyof FieldErrors | unde
 export function CompleteConnectionForm({
   http,
   request,
+  requesterName,
   onDone,
   onCancel,
   initialKind,
@@ -228,6 +232,14 @@ export function CompleteConnectionForm({
   // #661: `https://host/hook/[redacted]/x`). A masked address is never prefilled as if it were
   // one (it would register a connection with the literal mark in it) — the field starts empty
   // and says why.
+  const requester =
+    requesterName !== undefined ? (
+      <span data-testid="cc-requester">{requesterName}</span>
+    ) : request ? (
+      <span className="mono" data-testid="cc-requester">
+        {request.requestedBy.slice(0, 8)}
+      </span>
+    ) : null;
   const requestTargetMasked = !!request && connectionRequestTargetMasked(request.target);
   const [target, setTarget] = useState(requestTargetMasked ? '' : (request?.target ?? ''));
   const [endpoint, setEndpoint] = useState('');
@@ -402,12 +414,12 @@ export function CompleteConnectionForm({
         <Notice>
           {t(
             <>
-              完成申请 <span className="mono">{request.id.slice(0, 8)}</span>，来自成员{' '}
-              <span className="mono">{request.requestedBy.slice(0, 8)}</span>。
+              完成申请 <span className="mono">{request.id.slice(0, 8)}</span>，来自成员 {requester}
+              。
             </>,
             <>
               Completing request <span className="mono">{request.id.slice(0, 8)}</span> from member{' '}
-              <span className="mono">{request.requestedBy.slice(0, 8)}</span>.
+              {requester}.
             </>,
           )}
         </Notice>
