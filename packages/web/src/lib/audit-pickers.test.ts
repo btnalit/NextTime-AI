@@ -103,6 +103,29 @@ describe('resourceIdSource', () => {
     expect(options).toEqual([{ id: 'Host', label: 'Host', detail: 'object' }]);
   });
 
+  it('legacy 247 (review #501 on #661): a masked connection-request address is labelled as hidden, never as `[redacted]`', async () => {
+    const http = caller({
+      list_connection_requests: () => ({
+        items: [
+          { id: 'req-1', kind: 'http', target: '[redacted]', status: 'pending' },
+          {
+            id: 'req-2',
+            kind: 'http',
+            target: 'https://hooks.example.com/[redacted]/x',
+            status: 'pending',
+          },
+          { id: 'req-3', kind: 'http', target: 'https://api.example.com', status: 'pending' },
+        ],
+      }),
+    });
+    const options = await resourceIdSource('connection_request', t)?.load(http, '');
+    expect(options?.map((option) => option.label)).toEqual([
+      '地址带有凭据，已隐藏',
+      '地址带有凭据，已隐藏',
+      'https://api.example.com',
+    ]);
+  });
+
   it('the audit-log source keeps one option per id, newest first', async () => {
     const row = (id: string, resourceId: string, action: string) => ({
       id,

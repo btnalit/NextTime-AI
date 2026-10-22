@@ -1,9 +1,4 @@
-import {
-  type AvailableGateInstanceWire,
-  type OperationSummaryWire,
-  type Role,
-  SECRET_FIELD_MASK,
-} from '@nexttime/shared';
+import type { AvailableGateInstanceWire, OperationSummaryWire, Role } from '@nexttime/shared';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invalidateCapability, useCapabilityList } from '../../hooks/useCapability.js';
 import { usePermissions } from '../../hooks/usePermissions.js';
@@ -17,6 +12,8 @@ import {
   type CreateConnectionResult,
   type DraftAsRead,
   cancelConnectionRequestOverrides,
+  connectionRequestTargetMasked,
+  connectionRequestTargetText,
   draftsAsRead,
   manifestPublishPlan,
 } from '../../lib/connections.js';
@@ -686,9 +683,9 @@ export function SystemsPage({
                   {/* Legacy 247 ①: an old request's address can carry a credential; the kernel
                    *  masks it (whole, or in place inside a path), and the row says so rather than
                    *  showing `[redacted]` as part of an address. */}
-                  {row.target.includes(SECRET_FIELD_MASK) ? (
+                  {connectionRequestTargetMasked(row.target) ? (
                     <span className="text-small text-warn" data-testid="request-target-masked">
-                      {t('地址带有凭据，已隐藏', 'Address carried a credential — hidden')}
+                      {connectionRequestTargetText(row.target, t)}
                     </span>
                   ) : (
                     <span className="mono truncate">{row.target}</span>
@@ -740,11 +737,10 @@ export function SystemsPage({
                           '申请回到「已取消」；门与已导入的 Operation 不受影响。只能取消自己的申请，所有者可取消任何申请。',
                           'The request becomes cancelled; nothing registered is touched. Only your own request — the owner may cancel any.',
                         )}
-                        target={`${transportKindLabel(row.kind, t)} · ${
-                          row.target.includes(SECRET_FIELD_MASK)
-                            ? t('地址带有凭据，已隐藏', 'Address carried a credential — hidden')
-                            : row.target
-                        }`}
+                        target={`${transportKindLabel(row.kind, t)} · ${connectionRequestTargetText(
+                          row.target,
+                          t,
+                        )}`}
                         confirmLabel={t('取消申请', 'Cancel request')}
                         cancelLabel={t('保留', 'Keep')}
                         danger

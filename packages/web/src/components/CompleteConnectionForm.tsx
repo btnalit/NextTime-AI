@@ -1,4 +1,4 @@
-import { type MintConnectionSecretResultWire, SECRET_FIELD_MASK } from '@nexttime/shared';
+import type { MintConnectionSecretResultWire } from '@nexttime/shared';
 import { type FormEvent, useEffect, useState } from 'react';
 import { useCapabilityList } from '../hooks/useCapability.js';
 import type { CapabilityCaller } from '../lib/clients.js';
@@ -8,6 +8,7 @@ import {
   type ConnectionRequestRow,
   type CreateConnectionParams,
   type CreateConnectionResult,
+  connectionRequestTargetMasked,
   supportsManifestSource,
 } from '../lib/connections.js';
 import { describeError, presentError } from '../lib/errors.js';
@@ -227,7 +228,7 @@ export function CompleteConnectionForm({
   // #661: `https://host/hook/[redacted]/x`). A masked address is never prefilled as if it were
   // one (it would register a connection with the literal mark in it) — the field starts empty
   // and says why.
-  const requestTargetMasked = request?.target.includes(SECRET_FIELD_MASK) === true;
+  const requestTargetMasked = !!request && connectionRequestTargetMasked(request.target);
   const [target, setTarget] = useState(requestTargetMasked ? '' : (request?.target ?? ''));
   const [endpoint, setEndpoint] = useState('');
   const [credentialKind, setCredentialKind] = useState<CredentialKind>('shared');
