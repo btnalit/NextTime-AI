@@ -16,6 +16,7 @@ import {
   ontologyProposalDiff,
 } from '../../lib/graph-view.js';
 import { type Translate, useT } from '../../lib/i18n.js';
+import { ontologyTypeKindLabel } from '../../lib/labels.js';
 import { DiscardReasonField } from '../catalog/DiscardReasonField.js';
 import { Button } from '../kit/button.js';
 import { Combobox } from '../kit/combobox.js';
@@ -56,12 +57,6 @@ export interface OntologyTypesDrawerProps {
 }
 
 type KindFilter = 'all' | OntologyTypeWire['kind'];
-
-function kindLabel(kind: OntologyTypeWire['kind'], t: Translate): string {
-  if (kind === 'object') return t('对象', 'Object');
-  if (kind === 'link') return t('关系', 'Link');
-  return t('动作', 'Action');
-}
 
 /** One line summarising a row for the list — the description for object/action, the first
  *  domain→range signature (plus a "+N" count) for a link, which has no description of its own at
@@ -257,7 +252,9 @@ function TypesListView({ http, onSelect }: TypesListViewProps) {
             >
               <span className="row-wrap" style={{ justifyContent: 'space-between' }}>
                 <span className="mono">{row.name}</span>
-                <span className="chip chip-neutral chip-s">{kindLabel(row.kind, t)}</span>
+                <span className="chip chip-neutral chip-s">
+                  {ontologyTypeKindLabel(row.kind, t)}
+                </span>
               </span>
               <span className="text-3 truncate">{rowSummary(row)}</span>
             </ListRow>
@@ -322,7 +319,7 @@ function TypeDetailBody({
         <span className="mono" style={{ fontWeight: 600 }}>
           {type.name}
         </span>
-        <span className="chip chip-neutral chip-s">{kindLabel(type.kind, t)}</span>
+        <span className="chip chip-neutral chip-s">{ontologyTypeKindLabel(type.kind, t)}</span>
       </span>
 
       {type.kind === 'object' ? (
@@ -839,7 +836,9 @@ function ProposalDetailBody({
                   </span>
                   <span className="mono">{entry.name}</span>
                 </span>
-                <span className="chip chip-neutral chip-s">{kindLabel(entry.kind, t)}</span>
+                <span className="chip chip-neutral chip-s">
+                  {ontologyTypeKindLabel(entry.kind, t)}
+                </span>
               </div>
             ))}
           </div>

@@ -7,6 +7,13 @@ import type { AuditRecordRow } from '../lib/audit.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import { HttpError } from '../lib/http-client.js';
 import { AuditPage } from './AuditPage.js';
+import {
+  comboboxOptionTexts,
+  comboboxOptionValues,
+  findComboboxOption,
+  openCombobox,
+  pickComboboxOption,
+} from './kit/combobox.test-helpers.js';
 import { ToastProvider } from './ui/Toast.js';
 
 afterEach(() => {
@@ -497,14 +504,15 @@ describe('AuditPage pickers', () => {
     });
     renderPage(http);
     await screen.findByTestId('audit-resource-id-no-source');
-    expect(screen.queryByTestId('audit-resource-id-pick')).toBeNull();
+    const box = screen.getByLabelText('资源 ID');
+    openCombobox(box);
+    expect(comboboxOptionValues(box)).toEqual([]);
 
     fireEvent.change(screen.getByLabelText('资源类型'), { target: { value: 'gatekeeper' } });
-    const pick = await screen.findByTestId('audit-resource-id-pick');
-    await waitFor(() => expect(optionValues(pick)).toContain('gk-1'));
-    expect(pick.textContent).toContain('docker-prod');
+    await findComboboxOption(box, 'docker-prod');
+    expect(comboboxOptionValues(box)).toContain('gk-1');
 
-    fireEvent.change(pick, { target: { value: 'gk-1' } });
+    await pickComboboxOption(box, 'docker-prod');
     expect((screen.getByLabelText('资源 ID') as HTMLInputElement).value).toBe('gk-1');
     expect(screen.getByTestId('audit-resource-id-picked').textContent).toContain('docker-prod');
 
@@ -540,9 +548,9 @@ describe('AuditPage pickers', () => {
       target: { value: 'action_request' },
     });
     await screen.findByTestId('audit-resource-id-degraded');
-    const pick = screen.getByTestId('audit-resource-id-pick');
-    expect(optionValues(pick)).toContain('ar-9');
-    expect(pick.textContent).toContain('docker.restart');
+    const box = screen.getByLabelText('资源 ID');
+    await findComboboxOption(box, 'docker.restart');
+    expect(comboboxOptionValues(box)).toContain('ar-9');
     expect(http.calls.find((c) => c.name === 'resolve_refs')?.params).toEqual({ ids: ['ar-9'] });
   });
 
@@ -575,14 +583,15 @@ describe('AuditPage pickers', () => {
     });
     renderPage(http);
     fireEvent.change(await screen.findByLabelText('资源类型'), { target: { value: 'fact' } });
-    const pick = await screen.findByTestId('audit-resource-id-pick');
-    await waitFor(() => expect(optionValues(pick)).toEqual(['', 'f-1', 'f-2']));
+    const box = screen.getByLabelText('资源 ID');
+    openCombobox(box);
+    await waitFor(() => expect(comboboxOptionValues(box)).toEqual(['f-1', 'f-2']));
 
     // Legacy sweep (console batch, 2026-10-16): an option reads as the action's label (验证事实),
     // never its raw name, so that is what typing narrows on.
-    expect(pick.textContent).not.toContain('verify_fact');
-    fireEvent.change(screen.getByLabelText('资源 ID'), { target: { value: '验证' } });
-    await waitFor(() => expect(optionValues(pick)).toEqual(['', 'f-2']));
+    expect(comboboxOptionTexts(box).join(' ')).not.toContain('verify_fact');
+    fireEvent.change(box, { target: { value: '验证' } });
+    await waitFor(() => expect(comboboxOptionValues(box)).toEqual(['f-2']));
     fireEvent.change(screen.getByLabelText('资源 ID'), { target: { value: 'zzz' } });
     await screen.findByTestId('audit-resource-id-empty');
   });
@@ -603,10 +612,7 @@ describe('AuditPage pickers', () => {
     renderPage(http);
     const input = await screen.findByTestId('audit-actor-input');
     expect(screen.getByText(/看不到成员名单/)).toBeTruthy();
-    const pick = await screen.findByTestId('audit-actor-input-pick');
-    await waitFor(() => expect(pick.textContent).toContain('Grace'));
-
-    fireEvent.change(pick, { target: { value: 'p-7' } });
+    await pickComboboxOption(input, 'Grace');
     expect((input as HTMLInputElement).value).toBe('p-7');
     fireEvent.click(screen.getByTestId('audit-apply'));
     await waitFor(() =>
@@ -625,11 +631,11 @@ describe('AuditPage pickers', () => {
       search: () => ({ items: [] }),
     });
     renderPage(http);
-    const pick = await screen.findByTestId('explain-node-id-pick');
-    await waitFor(() => expect(pick.textContent).toContain('approve restart'));
+    const box = screen.getByLabelText('节点 ID');
+    await findComboboxOption(box, 'approve restart');
     expect(http.calls.find((c) => c.name === 'query_decisions')?.params).toEqual({ limit: 50 });
 
-    fireEvent.change(pick, { target: { value: 'dec-7' } });
+    await pickComboboxOption(box, 'approve restart');
     expect((screen.getByLabelText('节点 ID') as HTMLInputElement).value).toBe('dec-7');
     fireEvent.submit(screen.getByTestId('explain-form'));
     await screen.findByTestId('explain-result');
@@ -656,15 +662,15 @@ describe('AuditPage pickers', () => {
       reconstruct: () => ({ object: null, facts: [], auditRecords: [] }),
     });
     renderPage(http);
-    const pick = await screen.findByTestId('reconstruct-entity-id-pick');
-    await waitFor(() => expect(pick.textContent).toContain('db-01'));
+    const box = screen.getByLabelText('实体 ID');
+    await findComboboxOption(box, 'db-01');
     expect(searches[0]).toEqual({ query: '', limit: 50 });
 
-    fireEvent.change(screen.getByLabelText('实体 ID'), { target: { value: 'web' } });
-    await waitFor(() => expect(pick.textContent).toContain('web-01'));
+    fireEvent.change(box, { target: { value: 'web' } });
+    await findComboboxOption(box, 'web-01');
     expect(searches).toContainEqual({ query: 'web', limit: 50 });
 
-    fireEvent.change(pick, { target: { value: 'o-web' } });
+    await pickComboboxOption(box, 'web-01');
     expect(screen.getByTestId('reconstruct-entity-id-picked').textContent).toContain('web-01');
     fireEvent.submit(screen.getByTestId('reconstruct-form'));
     await screen.findByTestId('reconstruct-result');
@@ -689,8 +695,6 @@ describe('AuditPage pickers', () => {
     const banner = await screen.findByTestId('explain-node-id-error');
     fail = false;
     fireEvent.click(within(banner).getByRole('button', { name: '重试' }));
-    await waitFor(() =>
-      expect(screen.getByTestId('explain-node-id-pick').textContent).toContain('second try'),
-    );
+    await findComboboxOption(screen.getByLabelText('节点 ID'), 'second try');
   });
 });

@@ -30,6 +30,9 @@ export interface AddMemberFormProps {
    *  the form tries `list_users` once in the background and offers the directory only if it
    *  answers (a 403 means "not a platform administrator" and is remembered for the session). */
   readonly platformAdmin?: boolean;
+  /** This workspace — the directory marks its existing members and does not let them be
+   *  picked (legacy 153 ⑤). */
+  readonly workspaceId?: string;
 }
 
 /** The probe asks for exactly `UserPicker`'s first page. */
@@ -61,7 +64,13 @@ type DirectoryState =
  * no such platform login, or it is disabled) and `already_member` (409), the two a typo or a
  * double-click actually produces.
  */
-export function AddMemberForm({ http, onDone, onCancel, platformAdmin }: AddMemberFormProps) {
+export function AddMemberForm({
+  http,
+  onDone,
+  onCancel,
+  platformAdmin,
+  workspaceId,
+}: AddMemberFormProps) {
   const t = useT();
   const permissions = usePermissions();
   const directory = useUserDirectoryTap(http);
@@ -190,6 +199,7 @@ export function AddMemberForm({ http, onDone, onCancel, platformAdmin }: AddMemb
             value={pickedUserId}
             onChange={setPickedUserId}
             disabled={submitting}
+            memberOf={workspaceId}
             testId="add-member-user"
           />
           <div className="row">

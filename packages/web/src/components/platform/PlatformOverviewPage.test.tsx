@@ -366,6 +366,29 @@ describe('PlatformOverviewPage', () => {
     );
   });
 
+  it('legacy 153 ⑥: an offline (lost) gate instance is listed under 需要人处理 with a link to it', async () => {
+    const http = scriptedHttp({
+      platform_overview: () => overview({ health: [] }),
+      list_workspaces: () => ({ items: [defaultWorkspaceRow()] }),
+      list_gate_instances: () => ({
+        items: [
+          {
+            gateId: 'gate-lost',
+            displayName: 'Docker prod',
+            status: 'lost',
+            pendingManifest: null,
+          },
+        ],
+      }),
+    });
+    renderPage(http);
+    const list = await screen.findByTestId('platform-attention-items');
+    expect(list.textContent).toContain('门实例「Docker prod」离线，先恢复它的门进程');
+    expect(Array.from(list.querySelectorAll('a')).map((a) => a.getAttribute('href'))).toContain(
+      '#/platform/integrations/gate-lost',
+    );
+  });
+
   it('self-service visibility: an enabled instance of a connector that is not a platform preset is listed under 需要人处理', async () => {
     const http = scriptedHttp({
       platform_overview: () => overview({ health: [] }),

@@ -1,7 +1,7 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Combobox } from '../components/kit/combobox.js';
 import { ErrorBanner } from '../components/kit/error-banner.js';
 import { Field } from '../components/kit/field.js';
-import { Select } from '../components/kit/select.js';
 import { type PickerOption, type PickerSource, optionMatches } from './audit-pickers.js';
 import type { CapabilityCaller } from './clients.js';
 import { isForbiddenError } from './errors.js';
@@ -9,10 +9,10 @@ import { shortId } from './format.js';
 import { useT } from './i18n.js';
 
 /**
- * lib/audit-id-picker: an id field that offers what already exists. The text box stays the value
- * (a pasted id or a deep link's pre-filled id always works), and directly under it a `<select>`
- * lists candidates from a `PickerSource` (`lib/audit-pickers.ts`): picking one fills the box,
- * and a "已选" line names the picked id. Typing narrows the list — server-side for a searchable
+ * lib/audit-id-picker: an id field that offers what already exists — one free-entry
+ * `kit/combobox` (legacy 153 ①). The box stays the value (a pasted id or a deep link's pre-filled
+ * id always works), and its list offers candidates from a `PickerSource` (`lib/audit-pickers.ts`):
+ * picking one fills the box, and a "已选" line names the picked id. Typing narrows the list — server-side for a searchable
  * source (debounced), in the browser otherwise. A refused source (403) falls back to the
  * source's `fallback` with a note, or to the plain box with a one-line note.
  */
@@ -141,16 +141,23 @@ export function useDebounced(value: string, ms: number): string {
   return debounced;
 }
 
+/** The short id after the label, unless the label already shows it (a row with no name is
+ *  labelled by its id — `4df1c17f` — and need not repeat it, UX P3 on #672). */
+function idSuffix(option: PickerOption): string | undefined {
+  return option.label.includes(shortId(option.id)) ? undefined : shortId(option.id);
+}
+
 export function optionText(option: PickerOption): string {
   const parts = [option.label];
   if (option.detail) parts.push(option.detail);
-  if (option.label !== option.id) parts.push(shortId(option.id));
+  const suffix = idSuffix(option);
+  if (suffix) parts.push(suffix);
   return parts.join(' · ');
 }
 
 export interface AuditIdPickerProps {
   readonly http: CapabilityCaller;
-  /** The text box's id (its `<label>` points here); the candidate `<select>` is `${id}-pick`. */
+  /** The combobox input's id (its `<label>` points here). */
   readonly id: string;
   readonly label: string;
   readonly hint?: ReactNode;
@@ -166,7 +173,7 @@ export interface AuditIdPickerProps {
   readonly placeholder?: string;
   readonly disabled?: boolean;
   readonly mono?: boolean;
-  /** The text box's `data-testid`; the other parts derive from it (`-pick`, `-picked`, …). */
+  /** The input's `data-testid`; the notes derive from it (`-picked`, `-empty`, …). */
   readonly testId: string;
 }
 
@@ -202,68 +209,63 @@ export function AuditIdPicker({
   if (loaded) for (const option of loaded) knownRef.current.set(option.id, option);
   const picked = value === '' ? undefined : knownRef.current.get(value);
 
-  const clientFilter = state.status === 'ready' && !state.result.searchable;
-  const visible = useMemo(() => {
-    if (!loaded) return [];
-    const text = typed.trim();
-    const filtered =
-      clientFilter && text !== '' && !knownRef.current.has(text)
-        ? loaded.filter((option) => optionMatches(option, text))
-        : loaded;
-    return picked && !filtered.some((option) => option.id === picked.id)
-      ? [picked, ...filtered]
-      : filtered;
-  }, [loaded, typed, clientFilter, picked]);
-
-  const pickId = `${id}-pick`;
-  const count = visible.length;
-  const placeholderOption =
-    state.status === 'loading'
-      ? t('正在加载候选…', 'Loading suggestions…')
-      : state.status === 'forbidden'
-        ? t('无权读取候选', 'Suggestions unavailable')
-        : state.status === 'error'
-          ? t('候选加载失败', 'Could not load suggestions')
-          : count > 0
-            ? t(`选择（${count} 个候选）`, `Pick one (${count})`)
-            : t('没有候选', 'No suggestions');
+  // The picked (or deep-linked) id stays among the options so the list can show it selected.
+  const options = useMemo(() => {
+    const rows = loaded ?? [];
+    const all =
+      picked && !rows.some((option) => option.id === picked.id) ? [picked, ...rows] : rows;
+    return all.map((option) => ({
+      value: option.id,
+      label: option.label,
+      secondary: [option.detail, idSuffix(option)]
+        .filter((part) => part !== undefined && part !== '')
+        .join(' · '),
+    }));
+  }, [loaded, picked]);
+  // The typed text, unless it is a picked id (that is not a search).
+  const text = typed.trim();
 
   return (
     <Field id={id} label={label} hint={hint}>
-      <input
+      {/* Legacy 153 ①: one field — the box is the value (a pasted id or a deep link's id always
+       *  works), and its list offers the candidates. It used to be a text box over a `<select>`. */}
+      <Combobox
         id={id}
-        className={mono ? 'input input-mono' : 'input'}
+        allowFreeEntry
+        options={source ? options : []}
         value={value}
-        onChange={(event) => {
-          onChange(event.target.value);
-          setTyped(event.target.value);
+        onChange={(next) => {
+          onChange(next);
+          // A picked candidate is not a search: the list stays as it was when it was picked.
+          if (!knownRef.current.has(next)) setTyped(next);
         }}
-        placeholder={placeholder ?? t('粘贴 ID，或输入关键字筛选', 'Paste an id or type to filter')}
+        loading={state.status === 'loading'}
+        placeholder={
+          placeholder ??
+          (source
+            ? t('粘贴 ID，或输入关键字筛选', 'Paste an id or type to filter')
+            : t('粘贴 ID', 'Paste an id'))
+        }
         disabled={disabled}
-        autoComplete="off"
-        spellCheck={false}
-        data-testid={testId}
+        mono={mono}
+        emptyText={
+          state.status === 'forbidden'
+            ? t('无权读取候选。', 'Suggestions unavailable.')
+            : state.status === 'error'
+              ? t('候选加载失败。', 'Could not load suggestions.')
+              : text !== '' && !knownRef.current.has(text)
+                ? t(
+                    '没有匹配的候选；将按输入的值查询。',
+                    'No matching suggestions — the typed value is used as is.',
+                  )
+                : t(
+                    '还没有可选的记录；可直接粘贴 ID。',
+                    'Nothing to pick yet — paste an id instead.',
+                  )
+        }
+        testId={testId}
       />
-      {source ? (
-        <Select
-          aria-label={t(`${label}（候选）`, `${label} (suggestions)`)}
-          id={pickId}
-          value={picked ? picked.id : ''}
-          onChange={(event) => {
-            if (event.target.value !== '') onChange(event.target.value);
-          }}
-          disabled={disabled || state.status !== 'ready' || count === 0}
-          data-testid={`${testId}-pick`}
-          data-state={state.status}
-        >
-          <option value="">{placeholderOption}</option>
-          {visible.map((option) => (
-            <option key={option.id} value={option.id} title={option.id}>
-              {optionText(option)}
-            </option>
-          ))}
-        </Select>
-      ) : noSourceNote ? (
+      {!source && noSourceNote ? (
         <p className="field-hint" data-testid={`${testId}-no-source`}>
           {noSourceNote}
         </p>
@@ -280,16 +282,6 @@ export function AuditIdPicker({
               '无权读取完整列表；候选来自审计记录中最近出现的 ID。',
               'The full list is not readable for your role; suggestions come from recent audit rows.',
             )}
-        </p>
-      ) : null}
-      {state.status === 'ready' && count === 0 ? (
-        <p className="field-hint" data-testid={`${testId}-empty`}>
-          {typed.trim() !== ''
-            ? t(
-                '没有匹配的候选；将按输入的值查询。',
-                'No matching suggestions — the typed value is used as is.',
-              )
-            : t('还没有可选的记录；可直接粘贴 ID。', 'Nothing to pick yet — paste an id instead.')}
         </p>
       ) : null}
       {state.status === 'forbidden' ? (

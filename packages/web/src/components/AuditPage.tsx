@@ -155,7 +155,7 @@ function ReconstructCard({ http }: { readonly http: CapabilityCaller }) {
   const [entityId, setEntityId] = useState('');
   // Graph Objects to pick from (`search`, member + auditor): the most recently updated ones, or
   // the ones matching what the reader types.
-  const source = useMemo(() => objectSource(), []);
+  const source = useMemo(() => objectSource(t), [t]);
   const [state, setState] = useState<LookupState>(IDLE);
   const forbidden = state.error !== null && isForbiddenError(state.error);
 

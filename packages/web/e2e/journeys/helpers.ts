@@ -189,14 +189,13 @@ export async function createFreshWorkspace(page: Page): Promise<{
   const wsDrawer = page.getByTestId('create-workspace-drawer');
   await expect(wsDrawer.getByTestId('create-workspace-form')).toBeVisible();
   await wsDrawer.locator('#cw-name').fill(workspaceName);
-  await wsDrawer.locator('#cw-owner-query').fill(ownerLogin);
-  await wsDrawer.getByTestId('cw-owner-search').click();
-  const ownerSelect = wsDrawer.getByTestId('create-workspace-owner');
-  await expect(ownerSelect).toBeEnabled();
-  const ownerOption = ownerSelect.locator('option', { hasText: ownerLogin });
+  // UserPicker is one searchable list (legacy 153 ①): typing the login re-asks `list_users`.
+  const ownerBox = wsDrawer.getByTestId('create-workspace-owner');
+  await ownerBox.fill(ownerLogin);
+  const ownerOption = wsDrawer.getByRole('option').filter({ hasText: `${ownerLogin} — ` });
   await expect(ownerOption).toHaveCount(1);
-  const ownerUserId = await ownerOption.getAttribute('value');
-  await ownerSelect.selectOption(ownerUserId as string);
+  await ownerOption.click();
+  await expect(ownerBox).toHaveValue(new RegExp(`^${ownerLogin} — `));
   await wsDrawer.getByTestId('create-workspace-submit').click();
   await expect(wsDrawer).toBeHidden({ timeout: 20_000 });
   // `PlatformWorkspacesPage`'s `handleCreated` swaps the same drawer over to the new workspace's

@@ -285,6 +285,32 @@ const GATE_TRANSPORT_KIND_LABELS: Readonly<Record<GateTransportKindWire, Bilingu
   ssh: { zh: 'SSH', en: 'SSH' },
 };
 
+/** Legacy 153 ②: the ObjectTypes the platform itself writes into the graph (`ontology/platform-
+ *  meta.yaml`, plus the system Object a connection creates) — named in the console's own words
+ *  instead of the ontology's English type name. A workspace's own ObjectTypes keep their names. */
+const PLATFORM_OBJECT_TYPE_LABELS: Readonly<Record<string, BilingualLabel>> = {
+  WorkerDefinition: { zh: 'Worker 定义', en: 'Worker definition' },
+  Gatekeeper: { zh: '门', en: 'Gatekeeper' },
+  Operation: { zh: 'Operation', en: 'Operation' },
+  Capability: { zh: '平台能力', en: 'Platform capability' },
+  Skill: { zh: 'Skill', en: 'Skill' },
+  Procedure: { zh: 'Procedure', en: 'Procedure' },
+  ConnectedSystem: { zh: '已接入的系统', en: 'Connected system' },
+};
+
+export function objectTypeLabel(objectType: string, t: Translate): string {
+  const entry = ownEntry(PLATFORM_OBJECT_TYPE_LABELS, objectType);
+  return entry ? label(entry, t) : objectType;
+}
+
+/** An ontology type's `kind` (`list_types`). */
+export function ontologyTypeKindLabel(kind: string, t: Translate): string {
+  if (kind === 'object') return t('对象', 'Object');
+  if (kind === 'link') return t('关系', 'Link');
+  if (kind === 'action') return t('动作', 'Action');
+  return kind;
+}
+
 /** Takes a plain `string` (not the narrower `GateTransportKindWire`) for the same reason
  *  `workerDefinitionKindLabel` does — an unrecognized value still renders visibly, never silently
  *  hidden. */
