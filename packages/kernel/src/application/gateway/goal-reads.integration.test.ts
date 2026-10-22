@@ -300,8 +300,8 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(stored?.plan.steps[0]?.input).toEqual({ step: 'a', password: 'synthetic-a' });
       });
 
-      it('every parameter a plan carries is read redacted: reconcile and observation params too', async () => {
-        const goalRunId = await proposeGoal(requesterId, ['a']);
+      it('every parameter a plan carries is read redacted: reconcile and observation params, and the check rows a round copies', async () => {
+        const goalRunId = await startGoal(requesterId, ['a']);
         const gatekeeperId = randomUUID();
         // Synthetic values under fields the credential review counts — never real ones.
         const observation = (secret: string) => ({
@@ -366,6 +366,36 @@ describe.runIf(DATABASE_URL !== undefined)(
           plan.acceptance[1],
         ]);
         expect(JSON.stringify(read.plan)).not.toMatch(/synthetic-/);
+
+        // A verification round copies the plan's checks as written: the goal's and a step's rows.
+        const [stepRun] = await raw<{ id: string }>(
+          `select id from step_runs where workspace_id = $1 and goal_run_id = $2 and step_key = 'a'`,
+          [workspaceId, goalRunId],
+        );
+        await raw(
+          `insert into goal_acceptance_checks (workspace_id, goal_run_id, round, check_key,
+             plan_revision, kind, observation_check)
+           values ($1, $2, 1, 'up', 1, 'observe_predicate', $3::jsonb)`,
+          [workspaceId, goalRunId, JSON.stringify(observation('synthetic-goal-row'))],
+        );
+        await raw(
+          `insert into step_acceptance_checks (workspace_id, goal_run_id, step_run_id, step_attempt,
+             round, check_key, plan_revision, kind, observation_check)
+           values ($1, $2, $3, 1, 1, 'step-up', 1, 'observe_predicate', $4::jsonb)`,
+          [workspaceId, goalRunId, stepRun?.id, JSON.stringify(observation('synthetic-step-row'))],
+        );
+        const detail = GoalDetailWireSchema.parse(
+          await call(human(requesterId, 'member'), 'get_goal', { goalRunId }),
+        );
+        expect(detail.acceptance.rounds[0]?.checks[0]?.check?.params).toEqual({
+          name: 'web',
+          token: '[redacted]',
+        });
+        expect(detail.acceptance.steps[0]?.rounds[0]?.checks[0]?.check?.params).toEqual({
+          name: 'web',
+          token: '[redacted]',
+        });
+        expect(JSON.stringify(detail)).not.toMatch(/synthetic-/);
       });
 
       it('a running run: StepRuns with their attempts and actions, counts and usage', async () => {

@@ -16,7 +16,11 @@ import {
 } from '../../governance/approval/index.js';
 import { redactSuspectedSecrets } from '../../governance/redaction/index.js';
 import { type GoalStepAttempt, listGoalRunStepAttempts, readGoalRunsUsage } from '../task/index.js';
-import { type GoalAcceptanceView, readGoalAcceptance } from './acceptance.js';
+import {
+  type GoalAcceptanceCheckView,
+  type GoalAcceptanceView,
+  readGoalAcceptance,
+} from './acceptance.js';
 import { readCancelLeftovers } from './cancelling.js';
 import { planHints } from './plan.js';
 import { getGoalRun, getPlanRevision, listPlanRevisions, listStepRuns } from './reads.js';
@@ -49,7 +53,8 @@ import {
  * acts on them: a step's `input` (its Task's input), a reconcile declaration's action params (the
  * step's request is matched by them) and every observation's params (reconcile and acceptance
  * checks; the review refuses a credential there, `reviewObserveParams`, but only flags a suspected
- * one). Every reader here gets them with each suspected credential replaced by `[redacted]`
+ * one) — in the plan, and in the check rows a verification round copies from it. Every reader
+ * here gets them with each suspected credential replaced by `[redacted]`
  * (`redactSuspectedSecrets`, the call-argument rule `get_task` applies to a Task's input, legacy
  * 184). The rest of a plan cannot carry one: predicate literals, fact-check identities and the
  * `requester_confirm` prompt are refused when the plan is validated (`plan.ts`).
@@ -317,6 +322,25 @@ function withRedactedObservation<T extends AcceptanceCheck | StepAcceptanceCheck
     : check;
 }
 
+/** A run's acceptance with every observation's params redacted: a round's check rows copy the
+ *  plan's checks as written (`goal_acceptance_checks`, `step_acceptance_checks`), so they carry
+ *  what the plan does — review #493 on #680. */
+function redactedAcceptance(view: GoalAcceptanceView): GoalAcceptanceView {
+  const redactRound = <R extends { readonly checks: readonly GoalAcceptanceCheckView[] }>(
+    round: R,
+  ): R => ({
+    ...round,
+    checks: round.checks.map((row) =>
+      row.check === null ? row : { ...row, check: withRedactedParams(row.check) },
+    ),
+  });
+  return {
+    ...view,
+    rounds: view.rounds.map(redactRound),
+    steps: view.steps.map((step) => ({ ...step, rounds: step.rounds.map(redactRound) })),
+  };
+}
+
 /** `get_goal_revision`: one revision of a run `viewer` may read. */
 export async function readPlanRevisionVisibleTo(
   client: PoolClient,
@@ -394,12 +418,12 @@ export async function readGoalRunDetail(
         .filter((action) => action.stepRunId === step.id)
         .map(({ stepRunId: _stepRunId, ...action }) => action),
     })),
-    acceptance: {
+    acceptance: redactedAcceptance({
       ...acceptance,
       steps: [...acceptance.steps].sort(
         (a, b) => (position.get(a.stepRunId) ?? 0) - (position.get(b.stepRunId) ?? 0),
       ),
-    },
+    }),
     leftovers: leftovers
       ? { liveTaskIds: leftovers.liveTaskIds, executingActions: leftovers.executingActions }
       : null,
