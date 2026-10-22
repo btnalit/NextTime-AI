@@ -107,6 +107,15 @@ import type { GoalRunRow, PlanRevisionRow, StepRunRow } from './types.js';
  *      {@link DEFAULT_QUOTA_RETRY_MS}; the daily cost quota pauses `budget_exhausted`; lost
  *      authority pauses `authority_lost` (S9, I-G7); a pinned component no longer published
  *      pauses `needs_decision`.
+ *   E. **Stuck** (running only; legacy 393). No live step is ready, running or waiting, none failed
+ *      `transient` (phase B retries those or pauses), and one failed for a person — a category the
+ *      advancer never retries: the run pauses `needs_decision` now instead of waiting for its wall
+ *      clock (`next_tick_at` would be the deadline, then `budget_exhausted`). This is where a
+ *      resume that names no failed step in `retrySteps` (`control.ts`) comes back to: what the run
+ *      waits for is the requester retrying a failed step (one with an action found to have no
+ *      effect after their re-execute decision, GO3c), revising the plan or cancelling — the pause
+ *      names every failed step and what each waits for. A branch of the plan that still moves
+ *      keeps the run going until it stops too.
  *
  * A paused GoalRun keeps its first reason (the guard refuses changing it while paused); a further
  * cause is in the audit log (`goal_run.pause_noted`, once per pause for each reason and detail),
@@ -188,6 +197,8 @@ const FINISHED_TASK_STATUSES: ReadonlySet<TaskStatus> = new Set([
   'cancelled',
 ]);
 const DONE_STEP_STATUSES: ReadonlySet<StepRunStatus> = new Set(['succeeded', 'skipped']);
+/** Steps that move on without a person: started, or about to be (phase E). */
+const MOVING_STEP_STATUSES: ReadonlySet<StepRunStatus> = new Set(['ready', 'running', 'waiting']);
 
 /** What a finished attempt means for its step once none of its requests holds it (§4.7). */
 export type AttemptVerdict =
@@ -406,6 +417,7 @@ class Advance {
     }
     await this.unblockSteps(await this.lockSteps());
     if (this.status === 'running') await this.startSteps(await this.lockSteps());
+    if (this.status === 'running') await this.pauseIfStuck(await this.lockSteps());
 
     const nextTickAt =
       this.status === 'running' ? new Date(Math.min(this.deadline, ...this.timers)) : null;
@@ -874,6 +886,37 @@ class Advance {
     });
     this.started.push(result.attempt);
     return true;
+  }
+
+  // ----- E ------------------------------------------------------------------------------------
+
+  /** Legacy 393: nothing of the run moves on its own and a step failed for a person — see the
+   *  module comment, phase E. */
+  private async pauseIfStuck(steps: readonly StepRunRow[]): Promise<void> {
+    const live = steps.filter((step) => step.status !== 'superseded');
+    const moving = live.some(
+      (step) =>
+        MOVING_STEP_STATUSES.has(step.status) ||
+        (step.status === 'failed' && step.failureCategory === 'transient'),
+    );
+    // By key, so the same run always reads the same.
+    const failed = live
+      .filter((step) => step.status === 'failed')
+      .sort((a, b) => (a.stepKey < b.stepKey ? -1 : a.stepKey > b.stepKey ? 1 : 0));
+    if (moving || failed.length === 0) return;
+    // Every failed step is named with what it waits for (review #493 on #657). An action found to
+    // have no effect needs the requester's re-execute decision before a retry is accepted (GO3c,
+    // `control.ts`): say so rather than send them to a retry that is refused.
+    const waits: string[] = [];
+    for (const step of failed) {
+      const outcomes = await listStepActionOutcomes(this.client, this.ws, step.id);
+      waits.push(
+        outcomes.some((outcome) => actionDisposition(outcome) === 'unconfirmed')
+          ? `step ${step.stepKey}: an action of it was found to have no effect and is not run again on its own — decide to run it again, then retry the step`
+          : `step ${step.stepKey}: attempt ${step.attemptCount} failed (${step.failureCategory}) and is not retried on its own — retry it`,
+      );
+    }
+    await this.pause('needs_decision', `${waits.join('; ')}; or revise the plan or cancel`);
   }
 
   // ----- transitions --------------------------------------------------------------------------

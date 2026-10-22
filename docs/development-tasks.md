@@ -4149,6 +4149,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **可回退性**：可回退探针只有 `compact-observations.integration.test.ts` 4 例失败（上一版压缩看到 0024 指向 `observations` 的新外键而安全拒绝运行，不删东西），已在 `reversibility-deltas.json` 声明并以新测试替代；保留外键是核对证据不被删、不悬空的数据库级保证。
   - **拍板点**（协调线程定）：平台只记 `effect_seen`；暂停原因沿用 `awaiting_reconcile`、在暂停说明里区分平台核对结果；精确身份匹配；带请求人 agent 的排除项；只在 `running` 时核对；对脱敏后的结果求值；判定式强度由计划作者与 GO6 确认卡片把关（选错观察对象、比对错字段 lint 挡不住）；重试期间保持 `running`；时长上限含暂停时间；字面值命中凭据直接拒绝；暂停或 hold 期间不调门；缺席不能由平台判定。
   - **范围外**：真实夹具门（执行成功但丢响应）跑 S4 并断言门侧执行计数为 1 属 GO7 主机验收；控制台呈现属 GO6；不改线上契约，`contract:check` 无漂移。
+- 遗留 393 实现说明（#657，2026-10-22 合入，8fabd51；无迁移）：推进加阶段 E「卡住」（`advance.ts` 的 `pauseIfStuck`，详见该文件模块注释）：没有步骤还在动（`ready / running / waiting` 或 `failed + transient`）而有非瞬时失败的步骤时，立即暂停 `needs_decision`，说明按步骤名列出每个失败步骤在等什么，`effect_absent` 未决定重新执行的写明先决定重新执行；`resumeGoalRun` 注释写明没点名的失败步骤保持失败、等其余停下后再次暂停。
 - 来自 GO2（#619 与审查 #493）的输入：一步在嵌套子 Task 还在跑时就会判 `succeeded`（§3.4 要求名下动作都到终态）；A 段记录尝试结果时补 `inCurrentPlan` fencing；解锁也要认 `skipped` 的依赖；token 超出的取消路径与同一次推进的尝试均分剩余量（遗留 357）；推进连续抛错后自动暂停（遗留 356）。
 - 来自 GO1（审查 #493 delta）的输入：GoalRun 在 `cancelling` 时步骤能否从 `waiting` 回到 `running`，由 GO3 定（只允许走向终止，或写明为什么允许）；锁序同 GO2，先锁 GoalRun 再锁 StepRun。
 
