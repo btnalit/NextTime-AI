@@ -211,7 +211,7 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
     );
     expect(within(pane).queryByTestId('catalog-pack-provenance-kit-new')).toBeNull();
     expect(within(pane).getByTestId('catalog-pack-component-kit-platform').textContent).toMatch(
-      /内容是能力包 v1 的/,
+      /内容与能力包 v1 一致/,
     );
 
     const versions = within(pane).getByTestId('catalog-pack-versions');

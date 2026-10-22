@@ -7,15 +7,18 @@
 # in this repository, `ONTOLOGY_DIR` in the image) — and the ontology family it is published into.
 # The same domain pack file stays seedable on its own (`seed-domain-pack`, docs/runbooks/
 # add-domain-pack.md).
+#
+# `summary` and `notes` are read by workspace owners in the console (the pack's detail and the
+# install review), so they say what the owner gets and what to watch out for in plain words — no
+# type names or implementation notes; those belong in the domain pack file's own comments.
 schema: 1
 name: ops-assets
 version: 1
 summary: >-
-  基础设施台账：主机上的 Docker、systemd 服务与进程，由 host-inventory 采集器写入。
+  基础设施台账：主机上的 Docker、systemd 服务与进程，由主机盘点采集器自动记录。
 notes: >-
-  Docker / systemd / 进程基础设施台账：Host、ComposeProject、Container、Image、
-  SystemdService、Process、Volume、Network、Endpoint、Repository、Owner。只读观察型对象，
-  host-inventory 采集器写入。
+  记录主机、Compose 项目、容器、镜像、systemd 服务、进程、卷、网络、端点、代码仓库和负责人。
+  这些内容由采集器从主机上看到后自动写入，工作区里只读，不需要手工维护。
 breaking: false
 components:
   ontology:

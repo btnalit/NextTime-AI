@@ -632,8 +632,9 @@ cap platform_status | jq '{health, backup, llmUsage30d}'
 （`add-domain-pack.md` 讲的同一种文件）发布进本体族 `family`。字段与规则的唯一定义在
 `packages/kernel/src/application/packs/manifest.ts`（单份清单）与 `registry.ts`（目录布局与跨清单规则）：
 目录名就是包名和版本号，清单里的 `name` / `version` 必须与目录一致；版本号从 1 连续；一个本体族只属于一个包；
-某个版本发布的族，之后每个版本都必须继续带着它。**模块 = 每个版本都只有一个本体组成部分、且族名等于包名的
-能力包**（不再有单独的 `ontology/modules.yaml` 索引）。
+某个版本发布的族，之后每个版本都必须继续带着它。`summary` 与 `notes` 是写给工作区所有者看的（控制台能力包详情和
+安装审阅框原样显示），用平常话说装上能得到什么、升级要注意什么，类型名和实现细节写在域包文件自己的注释里。
+**模块 = 每个版本都只有一个本体组成部分、且族名等于包名的能力包**（不再有单独的 `ontology/modules.yaml` 索引）。
 
 - 平台页「模块」（`#/platform/modules`，仅管理员）列出本部署带的模块、装到了几个工作区、哪些工作区有新版可用，
   并设「默认模块」（新建工作区自动装哪些）。
@@ -675,8 +676,8 @@ cat > packs/<pack>/3/pack.yaml <<'YAML'
 schema: 1
 name: <pack>
 version: 3
-summary: 这个包是什么（一句话，列表里显示最新版本的）
-notes: 这版加了什么、owner 升级前要注意什么
+summary: 这个包是什么（一句话，写给工作区所有者；列表和详情显示最新版本的）
+notes: 这版带来什么、升级前要注意什么（写给工作区所有者，详情和安装审阅框里原样显示；不写类型名和实现细节）
 breaking: true   # 已有的 ObjectType/LinkType 形状变了，旧 Fact/Link 不一定还满足；纯新增填 false
 components:
   ontology:

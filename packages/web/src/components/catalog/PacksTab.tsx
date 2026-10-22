@@ -299,8 +299,8 @@ function ComponentView({ component }: { readonly component: PackComponentStateWi
       {component.installedVersion !== null ? (
         <span className="text-3 text-small">
           {t(
-            `内容是能力包 v${component.installedVersion} 的`,
-            `Holds the content of pack v${component.installedVersion}`,
+            `内容与能力包 v${component.installedVersion} 一致`,
+            `Matches pack v${component.installedVersion}`,
           )}
         </span>
       ) : component.status === 'customized' ? (

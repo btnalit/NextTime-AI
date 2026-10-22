@@ -56,7 +56,9 @@ const PackManifestSchema = z
     version: z.number().int().positive(),
     /** What the pack is, in a sentence a workspace owner reads before installing. */
     summary: z.string().trim().min(1),
-    /** What this version brings, read before installing or upgrading to it. */
+    /** What this version brings, read before installing or upgrading to it. The console shows it
+     *  as written in the pack's detail and the install review, so it is for workspace owners: plain
+     *  words, no type names or implementation notes. */
     notes: z.string(),
     /** Upgrading to this version from the one before may leave Facts or Links a workspace already
      *  holds outside the new shapes (the same meaning as a module's `breaking`, S7-D D3). */

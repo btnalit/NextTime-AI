@@ -3,10 +3,10 @@ schema: 1
 name: ops-assets
 version: 2
 summary: >-
-  基础设施台账：主机上的 Docker、systemd 服务与进程，以及 RAGFlow 知识库，由 host-inventory 采集器写入。
+  基础设施台账：主机上的 Docker、systemd 服务与进程，以及 RAGFlow 知识库，由主机盘点采集器自动记录。
 notes: >-
-  在 v1 基础上新增 RAGFlow 知识库领域：KnowledgeBase、Document、Dataset（保留未用）。
-  纯新增（新增 ObjectType/LinkType，v1 的每个类型原样保留），已有 v1 数据与写入点不受影响。
+  在 v1 的基础上增加 RAGFlow 知识库：知识库和其中的文档（数据集先预留，暂时不会有记录）。
+  v1 的内容原样保留，升级后已有的记录和采集都不受影响。
 breaking: false
 components:
   ontology:
