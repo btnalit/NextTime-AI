@@ -1,5 +1,6 @@
 import type { BlastRadius, OperationMode } from '@nexttime/shared';
 import { type ReactNode, useId, useRef, useState } from 'react';
+import { DECISION_REASON_MAX_LENGTH, decisionReasonCountText } from '../../lib/decision-reason.js';
 import { actionKindRaw, actionKindTagText } from '../../lib/format.js';
 import { sentenceGap, useT } from '../../lib/i18n.js';
 import { Button } from './Button.js';
@@ -82,6 +83,7 @@ export function ApprovalCard({
   const t = useT();
   const required = reasonRequired ?? blastRadius === 'high';
   const [reason, setReason] = useState('');
+  const reasonCount = decisionReasonCountText(reason.length, t);
   const [reasonError, setReasonError] = useState<string | null>(null);
   const [busy, setBusy] = useState<'approve' | 'reject' | 'always' | null>(null);
   const reasonRef = useRef<HTMLTextAreaElement>(null);
@@ -222,9 +224,19 @@ export function ApprovalCard({
               invalid={reasonError !== null}
               aria-required={required || undefined}
               aria-describedby={reasonError ? `${reasonId}-error` : `${reasonId}-hint`}
+              maxLength={DECISION_REASON_MAX_LENGTH}
               data-testid="approval-reason"
             />
           </Field>
+          {reasonCount !== null ? (
+            <p
+              className="text-3 text-small m-0"
+              aria-live="polite"
+              data-testid="approval-reason-count"
+            >
+              {reasonCount}
+            </p>
+          ) : null}
           {needsReview ? (
             <p className="notice notice-warn m-0" data-testid="approval-credential-review">
               <strong>

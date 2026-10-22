@@ -326,6 +326,10 @@ function OperationReviewRow({
   // the person's confirmation. Every Submit re-proposes the same reclassification of this one
   // Operation, so the question stays open across those drafts.
   const credentialReview = usePublishCredentialReview(`${row.gatekeeperId}:${row.name}`);
+  // Legacy 174: the draft the kernel asked about. A later Submit proposes a new draft; the tick
+  // goes out only while that draft is the one that was reviewed (same digest, same content) — a
+  // gate re-import in between makes the kernel ask again instead.
+  const reviewedDigestRef = useRef<string | null>(null);
 
   async function publish(): Promise<void> {
     // Only ever reached after this row's Submit proposed a draft (the confirm or the credential
@@ -336,12 +340,13 @@ function OperationReviewRow({
       await http.call('publish_operation', {
         gatekeeperId: row.gatekeeperId,
         name: row.name,
-        ...credentialReview.params(),
+        ...(reviewedDigestRef.current === draftDigest ? credentialReview.params() : {}),
         draftDigest,
       });
     } catch (err) {
       // The kernel's credential question: the draft stays; the row asks, then Submit again.
       if (credentialReview.capture(err)) {
+        reviewedDigestRef.current = draftDigest;
         setPendingChange(null);
         setDraftKept(true);
         return;

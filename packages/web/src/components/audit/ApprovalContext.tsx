@@ -1,3 +1,4 @@
+import { visibleLines } from '@nexttime/shared';
 import { useEffect, useRef, useState } from 'react';
 import { useCanOpen } from '../../hooks/useCanOpen.js';
 import { failureReading } from '../../lib/action-outcome.js';
@@ -146,7 +147,7 @@ export function ApprovalContext({
             {row.decisionReason ? (
               <>
                 <dt>{t('理由', 'Reason')}</dt>
-                <dd className="pre-wrap">{row.decisionReason}</dd>
+                <dd className="pre-wrap">{visibleLines(row.decisionReason)}</dd>
               </>
             ) : null}
             {row.parentWorkerRunId ? (

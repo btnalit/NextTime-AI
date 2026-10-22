@@ -9,7 +9,9 @@ import { loginWithPassword, reachLoginForm } from './auth-helpers.js';
  * delegation flow, which this one does not re-test), and installs `ops-assets` into it from the
  * workspace's own 能力目录 模块 tab: not installed → v2 (the family's latest indexed version, one
  * click — `install_module` always targets the latest directly, never v1 first); the platform 模块
- * page's own "installed in n workspaces" count reflects it afterward.
+ * page's own "installed in n workspaces" count reflects it afterward. S11 P1-B: the 模块 tab's
+ * 安装记录 column then opens the install record in 安装历史, whose 撤销 rolls the install back
+ * (preview inside the confirm first) and the module reads 未安装 again.
  *
  * Both scenarios run as **one** `test()` (not split further): Playwright gives every `test()` a
  * fresh browser context (no persisted cookies, no persisted `session.memberships` client state)
@@ -185,5 +187,32 @@ test.describe('P-B2b acceptance: platform modules page, install ops-assets into 
         { timeout: 15_000 },
       )
       .toBe(baselineInstalledCount + 1);
+
+    // --- S11 P1-B: the install left an install record; roll it back from 安装历史 ----------
+    // Same client-side navigation as above: the govern sidebar stays while workspace B is in scope.
+    await page.getByTestId('nav-catalog').click();
+    await page.getByRole('tab', { name: '模块' }).click();
+    const provenanceLink = page.getByTestId('catalog-module-provenance-link-ops-assets');
+    await expect(provenanceLink).toBeVisible({ timeout: 15_000 });
+    await provenanceLink.click();
+    const recordDetail = page.getByTestId('catalog-change-detail');
+    await expect(recordDetail).toContainText('模块 ops-assets v2', { timeout: 15_000 });
+    await expect(recordDetail.getByTestId('catalog-change-status')).toHaveText('已应用');
+
+    await recordDetail.getByTestId('catalog-change-rollback-trigger').click();
+    const rollbackConfirm = page.getByTestId('catalog-change-rollback-confirm');
+    await expect(rollbackConfirm.getByTestId('catalog-change-preview')).toBeVisible({
+      timeout: 15_000,
+    });
+    await rollbackConfirm.getByRole('button', { name: '撤销', exact: true }).click();
+    await expect(recordDetail.getByTestId('catalog-change-status')).toHaveText('已撤销', {
+      timeout: 15_000,
+    });
+    await expect(page.getByTestId('catalog-change-rolled-back')).toBeVisible();
+
+    await page.getByRole('tab', { name: '模块' }).click();
+    await expect(page.getByTestId('catalog-module-row-ops-assets')).toContainText('未安装', {
+      timeout: 15_000,
+    });
   });
 });

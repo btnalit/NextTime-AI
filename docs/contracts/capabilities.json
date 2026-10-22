@@ -6545,6 +6545,412 @@
   },
   {
     "channel": "human",
+    "group": "modules",
+    "minRole": "member",
+    "mode": "observe",
+    "name": "get_change_segment",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "segmentId": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "segmentId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "after": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "definitionDigest": {
+                        "type": "string"
+                      },
+                      "version": {
+                        "exclusiveMinimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "version",
+                      "definitionDigest"
+                    ],
+                    "type": "object"
+                  },
+                  "before": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "definitionDigest": {
+                            "type": "string"
+                          },
+                          "version": {
+                            "exclusiveMinimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "version",
+                          "definitionDigest"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "classification": {
+                    "enum": [
+                      "not_widening",
+                      "authority_widening"
+                    ],
+                    "type": "string"
+                  },
+                  "confirmedBy": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "displayName": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "id": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "enum": [
+                              "human",
+                              "agent",
+                              "service"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "kind",
+                          "displayName"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "ontology_version",
+                    "type": "string"
+                  },
+                  "ordinal": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  },
+                  "replacedBy": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "segmentId": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "segmentId"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "state": {
+                    "enum": [
+                      "in_effect",
+                      "replaced",
+                      "not_installed"
+                    ],
+                    "type": "string"
+                  },
+                  "target": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "family": {
+                        "type": "string"
+                      },
+                      "ontologyId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "family",
+                      "ontologyId"
+                    ],
+                    "type": "object"
+                  },
+                  "widening": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "enum": [
+                            "added",
+                            "removed",
+                            "loosened",
+                            "changed",
+                            "unrecognized"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "reason"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "id",
+                  "ordinal",
+                  "classification",
+                  "widening",
+                  "confirmedBy",
+                  "state",
+                  "replacedBy",
+                  "kind",
+                  "target",
+                  "before",
+                  "after"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "segment": {
+          "additionalProperties": false,
+          "properties": {
+            "appliedAt": {
+              "type": "string"
+            },
+            "appliedBy": {
+              "additionalProperties": false,
+              "properties": {
+                "displayName": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "human",
+                    "agent",
+                    "service"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "displayName"
+              ],
+              "type": "object"
+            },
+            "channel": {
+              "enum": [
+                "human",
+                "platform"
+              ],
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "itemCount": {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            "planId": {
+              "type": "string"
+            },
+            "proposedBy": {
+              "additionalProperties": false,
+              "properties": {
+                "displayName": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "human",
+                    "agent",
+                    "service"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "displayName"
+              ],
+              "type": "object"
+            },
+            "rolledBackAt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "rolledBackBy": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "displayName": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "enum": [
+                        "human",
+                        "agent",
+                        "service"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "kind",
+                    "displayName"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "source": {
+              "additionalProperties": false,
+              "properties": {
+                "digest": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "pack"
+                  ],
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "name",
+                "version",
+                "digest"
+              ],
+              "type": "object"
+            },
+            "status": {
+              "enum": [
+                "applied",
+                "verified",
+                "verification_failed",
+                "rolled_back"
+              ],
+              "type": "string"
+            },
+            "verifiedAt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "wideningItemCount": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "id",
+            "planId",
+            "channel",
+            "source",
+            "status",
+            "proposedBy",
+            "appliedBy",
+            "appliedAt",
+            "verifiedAt",
+            "rolledBackBy",
+            "rolledBackAt",
+            "itemCount",
+            "wideningItemCount"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "segment",
+        "items"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
+    "channel": "human",
     "group": "chat",
     "minRole": "member",
     "mode": "observe",
@@ -9071,6 +9477,104 @@
         "name": {
           "type": "string"
         },
+        "provenance": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "appliedAt": {
+                  "type": "string"
+                },
+                "appliedBy": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "displayName": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "enum": [
+                        "human",
+                        "agent",
+                        "service"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "kind",
+                    "displayName"
+                  ],
+                  "type": "object"
+                },
+                "channel": {
+                  "enum": [
+                    "human",
+                    "platform"
+                  ],
+                  "type": "string"
+                },
+                "segmentId": {
+                  "type": "string"
+                },
+                "segmentStatus": {
+                  "enum": [
+                    "applied",
+                    "verified",
+                    "verification_failed",
+                    "rolled_back"
+                  ],
+                  "type": "string"
+                },
+                "status": {
+                  "const": "recorded",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "status",
+                "segmentId",
+                "segmentStatus",
+                "channel",
+                "appliedBy",
+                "appliedAt"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "status": {
+                  "const": "provenance_unknown",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "status"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "status": {
+                  "const": "not_installed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "status"
+              ],
+              "type": "object"
+            }
+          ]
+        },
         "status": {
           "enum": [
             "not_installed",
@@ -9114,7 +9618,8 @@
         "versions",
         "latestVersion",
         "installedVersion",
-        "status"
+        "status",
+        "provenance"
       ],
       "type": "object"
     },
@@ -10311,6 +10816,236 @@
             "required": [
               "name",
               "mode"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": "string"
+        },
+        "truncated": {
+          "const": true,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
+    "channel": "human",
+    "group": "modules",
+    "minRole": "member",
+    "mode": "observe",
+    "name": "list_change_segments",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "type": "string"
+        },
+        "limit": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        "sourceName": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "appliedAt": {
+                "type": "string"
+              },
+              "appliedBy": {
+                "additionalProperties": false,
+                "properties": {
+                  "displayName": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "enum": [
+                      "human",
+                      "agent",
+                      "service"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "kind",
+                  "displayName"
+                ],
+                "type": "object"
+              },
+              "channel": {
+                "enum": [
+                  "human",
+                  "platform"
+                ],
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "itemCount": {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              },
+              "planId": {
+                "type": "string"
+              },
+              "proposedBy": {
+                "additionalProperties": false,
+                "properties": {
+                  "displayName": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "enum": [
+                      "human",
+                      "agent",
+                      "service"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "kind",
+                  "displayName"
+                ],
+                "type": "object"
+              },
+              "rolledBackAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "rolledBackBy": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "displayName": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "id": {
+                        "type": "string"
+                      },
+                      "kind": {
+                        "enum": [
+                          "human",
+                          "agent",
+                          "service"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "kind",
+                      "displayName"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "source": {
+                "additionalProperties": false,
+                "properties": {
+                  "digest": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "enum": [
+                      "pack"
+                    ],
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "version": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "name",
+                  "version",
+                  "digest"
+                ],
+                "type": "object"
+              },
+              "status": {
+                "enum": [
+                  "applied",
+                  "verified",
+                  "verification_failed",
+                  "rolled_back"
+                ],
+                "type": "string"
+              },
+              "verifiedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "wideningItemCount": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "planId",
+              "channel",
+              "source",
+              "status",
+              "proposedBy",
+              "appliedBy",
+              "appliedAt",
+              "verifiedAt",
+              "rolledBackBy",
+              "rolledBackAt",
+              "itemCount",
+              "wideningItemCount"
             ],
             "type": "object"
           },
@@ -15077,6 +15812,104 @@
               "name": {
                 "type": "string"
               },
+              "provenance": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "appliedAt": {
+                        "type": "string"
+                      },
+                      "appliedBy": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "displayName": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "id": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "enum": [
+                              "human",
+                              "agent",
+                              "service"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "kind",
+                          "displayName"
+                        ],
+                        "type": "object"
+                      },
+                      "channel": {
+                        "enum": [
+                          "human",
+                          "platform"
+                        ],
+                        "type": "string"
+                      },
+                      "segmentId": {
+                        "type": "string"
+                      },
+                      "segmentStatus": {
+                        "enum": [
+                          "applied",
+                          "verified",
+                          "verification_failed",
+                          "rolled_back"
+                        ],
+                        "type": "string"
+                      },
+                      "status": {
+                        "const": "recorded",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "status",
+                      "segmentId",
+                      "segmentStatus",
+                      "channel",
+                      "appliedBy",
+                      "appliedAt"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "status": {
+                        "const": "provenance_unknown",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "status"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "status": {
+                        "const": "not_installed",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "status"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
               "status": {
                 "enum": [
                   "not_installed",
@@ -15120,7 +15953,8 @@
               "versions",
               "latestVersion",
               "installedVersion",
-              "status"
+              "status",
+              "provenance"
             ],
             "type": "object"
           },
@@ -17481,6 +18315,461 @@
         "operationsToImport",
         "operationsAlreadyPresent",
         "notDescribed"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
+    "channel": "human",
+    "group": "modules",
+    "minRole": "owner",
+    "mode": "observe",
+    "name": "preview_roll_back_change_segment",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "segmentId": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "segmentId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "inUse": {
+          "additionalProperties": false,
+          "properties": {
+            "capped": {
+              "type": "boolean"
+            },
+            "links": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "objects": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "objects",
+            "links",
+            "capped"
+          ],
+          "type": "object"
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "blockedBy": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "segmentId": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "segmentId"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "blocker": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "replaced",
+                          "not_installed",
+                          "restored_version_missing",
+                          "namespace_conflict"
+                        ],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "classification": {
+                    "enum": [
+                      "not_widening",
+                      "authority_widening"
+                    ],
+                    "type": "string"
+                  },
+                  "conflicts": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "enum": [
+                            "object",
+                            "action"
+                          ],
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "name"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "from": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "definitionDigest": {
+                        "type": "string"
+                      },
+                      "version": {
+                        "exclusiveMinimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "version",
+                      "definitionDigest"
+                    ],
+                    "type": "object"
+                  },
+                  "kind": {
+                    "const": "ontology_version",
+                    "type": "string"
+                  },
+                  "ordinal": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  },
+                  "removes": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "actionTypes": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      "linkTypes": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      "objectTypes": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "objectTypes",
+                      "linkTypes",
+                      "actionTypes"
+                    ],
+                    "type": "object"
+                  },
+                  "target": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "family": {
+                        "type": "string"
+                      },
+                      "ontologyId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "family",
+                      "ontologyId"
+                    ],
+                    "type": "object"
+                  },
+                  "to": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "definitionDigest": {
+                            "type": "string"
+                          },
+                          "version": {
+                            "exclusiveMinimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "version",
+                          "definitionDigest"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "widening": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "enum": [
+                            "added",
+                            "removed",
+                            "loosened",
+                            "changed",
+                            "unrecognized"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "reason"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "ordinal",
+                  "kind",
+                  "target",
+                  "from",
+                  "to",
+                  "classification",
+                  "widening",
+                  "removes",
+                  "blocker",
+                  "blockedBy",
+                  "conflicts"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "possible": {
+          "type": "boolean"
+        },
+        "segment": {
+          "additionalProperties": false,
+          "properties": {
+            "appliedAt": {
+              "type": "string"
+            },
+            "appliedBy": {
+              "additionalProperties": false,
+              "properties": {
+                "displayName": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "human",
+                    "agent",
+                    "service"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "displayName"
+              ],
+              "type": "object"
+            },
+            "channel": {
+              "enum": [
+                "human",
+                "platform"
+              ],
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "itemCount": {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            "planId": {
+              "type": "string"
+            },
+            "proposedBy": {
+              "additionalProperties": false,
+              "properties": {
+                "displayName": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "human",
+                    "agent",
+                    "service"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "displayName"
+              ],
+              "type": "object"
+            },
+            "rolledBackAt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "rolledBackBy": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "displayName": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "enum": [
+                        "human",
+                        "agent",
+                        "service"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "kind",
+                    "displayName"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "source": {
+              "additionalProperties": false,
+              "properties": {
+                "digest": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "pack"
+                  ],
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "name",
+                "version",
+                "digest"
+              ],
+              "type": "object"
+            },
+            "status": {
+              "enum": [
+                "applied",
+                "verified",
+                "verification_failed",
+                "rolled_back"
+              ],
+              "type": "string"
+            },
+            "verifiedAt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "wideningItemCount": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "id",
+            "planId",
+            "channel",
+            "source",
+            "status",
+            "proposedBy",
+            "appliedBy",
+            "appliedAt",
+            "verifiedAt",
+            "rolledBackBy",
+            "rolledBackAt",
+            "itemCount",
+            "wideningItemCount"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "segment",
+        "possible",
+        "items",
+        "inUse"
       ],
       "type": "object"
     },
@@ -21704,6 +22993,220 @@
         "workspaceId",
         "sessionId",
         "revoked"
+      ],
+      "type": "object"
+    },
+    "sideEffects": true
+  },
+  {
+    "channel": "human",
+    "group": "modules",
+    "minRole": "owner",
+    "mode": "write",
+    "name": "roll_back_change_segment",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "confirmedOrdinals": {
+          "items": {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "segmentId": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "segmentId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "appliedAt": {
+          "type": "string"
+        },
+        "appliedBy": {
+          "additionalProperties": false,
+          "properties": {
+            "displayName": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "human",
+                "agent",
+                "service"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "kind",
+            "displayName"
+          ],
+          "type": "object"
+        },
+        "channel": {
+          "enum": [
+            "human",
+            "platform"
+          ],
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "itemCount": {
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        "planId": {
+          "type": "string"
+        },
+        "proposedBy": {
+          "additionalProperties": false,
+          "properties": {
+            "displayName": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "human",
+                "agent",
+                "service"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "kind",
+            "displayName"
+          ],
+          "type": "object"
+        },
+        "rolledBackAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rolledBackBy": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "displayName": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "human",
+                    "agent",
+                    "service"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "displayName"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "additionalProperties": false,
+          "properties": {
+            "digest": {
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "pack"
+              ],
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "name",
+            "version",
+            "digest"
+          ],
+          "type": "object"
+        },
+        "status": {
+          "enum": [
+            "applied",
+            "verified",
+            "verification_failed",
+            "rolled_back"
+          ],
+          "type": "string"
+        },
+        "verifiedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "wideningItemCount": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "planId",
+        "channel",
+        "source",
+        "status",
+        "proposedBy",
+        "appliedBy",
+        "appliedAt",
+        "verifiedAt",
+        "rolledBackBy",
+        "rolledBackAt",
+        "itemCount",
+        "wideningItemCount"
       ],
       "type": "object"
     },
@@ -26464,6 +27967,104 @@
         "name": {
           "type": "string"
         },
+        "provenance": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "appliedAt": {
+                  "type": "string"
+                },
+                "appliedBy": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "displayName": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "enum": [
+                        "human",
+                        "agent",
+                        "service"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "kind",
+                    "displayName"
+                  ],
+                  "type": "object"
+                },
+                "channel": {
+                  "enum": [
+                    "human",
+                    "platform"
+                  ],
+                  "type": "string"
+                },
+                "segmentId": {
+                  "type": "string"
+                },
+                "segmentStatus": {
+                  "enum": [
+                    "applied",
+                    "verified",
+                    "verification_failed",
+                    "rolled_back"
+                  ],
+                  "type": "string"
+                },
+                "status": {
+                  "const": "recorded",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "status",
+                "segmentId",
+                "segmentStatus",
+                "channel",
+                "appliedBy",
+                "appliedAt"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "status": {
+                  "const": "provenance_unknown",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "status"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "status": {
+                  "const": "not_installed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "status"
+              ],
+              "type": "object"
+            }
+          ]
+        },
         "status": {
           "enum": [
             "not_installed",
@@ -26507,7 +28108,8 @@
         "versions",
         "latestVersion",
         "installedVersion",
-        "status"
+        "status",
+        "provenance"
       ],
       "type": "object"
     },

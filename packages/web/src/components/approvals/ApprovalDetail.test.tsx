@@ -356,6 +356,33 @@ describe('ApprovalDetail (S6-A B2 / B3 / C25)', () => {
     expect(screen.getByText(/执行于/)).toBeTruthy();
   });
 
+  it('legacy 351: a decision reason keeps its line breaks and shows hidden characters as escapes', () => {
+    renderDetail({
+      status: 'rejected',
+      decidedBy: 'principal-a',
+      decidedAt: '2026-09-03T00:01:00.000Z',
+      decisionReason: 'line one\nline two\u200b\u0000',
+    });
+    expect(screen.getByTestId('approval-decision-reason').textContent).toBe(
+      'line one\nline two\\u{200B}\\u{0}',
+    );
+  });
+
+  it('legacy 351: the reason box takes at most 1000 characters', () => {
+    renderDetail();
+    expect(screen.getByTestId('approval-reason').getAttribute('maxlength')).toBe('1000');
+  });
+
+  it('legacy 351 (#661 UX acceptance P3): near the cap the reason box says what is left, and at it that the rest was not entered', () => {
+    renderDetail();
+    const box = screen.getByTestId('approval-reason');
+    expect(screen.queryByTestId('approval-reason-count')).toBeNull();
+    fireEvent.change(box, { target: { value: 'x'.repeat(950) } });
+    expect(screen.getByTestId('approval-reason-count').textContent).toContain('还能输入 50 字');
+    fireEvent.change(box, { target: { value: 'x'.repeat(1000) } });
+    expect(screen.getByTestId('approval-reason-count').textContent).toContain('已达 1000 字上限');
+  });
+
   it('a decided row without a human decision says so instead of rendering an empty chip', () => {
     renderDetail({ status: 'auto_approved', decidedBy: null, decisionReason: null });
     expect(screen.queryByTestId('approval-decided-by')).toBeNull();

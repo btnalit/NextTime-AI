@@ -59,6 +59,7 @@ import {
 } from '../lib/tasks.js';
 import { nameOf, useGatekeeperDirectory } from './approvals/useDirectoryNames.js';
 import { DraftExpiryNote, type EditorState } from './catalog/CatalogShared.js';
+import { ChangesTab } from './catalog/ChangesTab.js';
 import { DiscardReasonField } from './catalog/DiscardReasonField.js';
 import { GateOwnedParamsNotice } from './catalog/GateOwnedParamsNotice.js';
 import { MarkdownPreview } from './catalog/MarkdownPreview.js';
@@ -121,7 +122,8 @@ export interface CatalogPageProps {
    *  editor (new draft / copy-as-new-draft / template / new version) is open in the pane. No item
    *  route exists for Operations (drafts arrive from a connected system's manifest, never a
    *  console "propose") or Modules (no per-row detail concept — see `ModulesTab`'s own doc
-   *  comment on why it stays outside this master-detail shell). */
+   *  comment on why it stays outside this master-detail shell). 安装历史 (`changes`, S11 P1-B):
+   *  an install record's id. */
   readonly itemId?: string;
   readonly onSelectItem: (itemId: string | null) => void;
 }
@@ -136,6 +138,8 @@ const TAB_LABEL: Readonly<Record<CatalogTab, { readonly zh: string; readonly en:
   procedures: { zh: '流程', en: 'Procedures' },
   workers: { zh: 'Worker', en: 'Workers' },
   modules: { zh: '模块', en: 'Modules' },
+  // S11 P1-B: each module install or upgrade, and its rollback (`catalog/ChangesTab`).
+  changes: { zh: '安装历史', en: 'Install history' },
 };
 
 /** The sentinel item segment while any editor (new / copy / template / new version) is open in
@@ -145,10 +149,10 @@ const NEW_ITEM_ID = 'new';
 
 /**
  * components/CatalogPage: 能力目录 Catalog (`/govern/catalog`, S3.11 "目录" group — `minRole:
- * 'member'`, open to everyone). Five tabs over the platform's publishable content: Operations
+ * 'member'`, open to everyone). Six tabs over the platform's publishable content: Operations
  * (`list_operations`), Skills/Procedures (`list_skills`/`list_procedures`), Workers
  * (`list_worker_definitions`), Modules (`list_workspace_modules`, `ModulesTab` — see its own doc
- * comment). Publish/deprecate stay the two-step `propose → publish` capabilities already in the
+ * comment) and 安装历史 (`list_change_segments`, `ChangesTab`, S11 P1-B). Publish/deprecate stay the two-step `propose → publish` capabilities already in the
  * registry (docs/wire-contract-conventions.md: "UI 不得提供'直接改分类'的捷径") — never a shortcut,
  * each write still `channel: 'human'`-gated on its own (no fixed `minRole`, so a 403 denies only
  * that one capability — `hooks/usePermissions.tsx`).
@@ -204,6 +208,8 @@ export function CatalogPage({ http, tab, onTabChange, itemId, onSelectItem }: Ca
         <ProceduresTab http={http} itemId={itemId} onSelectItem={onSelectItem} />
       ) : tab === 'workers' ? (
         <WorkersTab http={http} itemId={itemId} onSelectItem={onSelectItem} />
+      ) : tab === 'changes' ? (
+        <ChangesTab http={http} itemId={itemId} onSelectItem={onSelectItem} />
       ) : (
         // Modules has no per-row detail concept (a plain table, install/upgrade acts in place) —
         // left outside the master-detail shell rather than force-fit into `detail={null}`, which
@@ -1085,7 +1091,11 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   const versioned = identitiesListedTwice(rows);
 
   const selected = itemId ? rows.find((row) => catalogOperationKey(row) === itemId) : undefined;
-  const credentialReview = usePublishCredentialReview(itemId ?? null);
+  // Legacy 174: the question is about one draft's content — keyed by its digest too, so a gate
+  // re-import that rewrites the draft in place drops the tick instead of confirming new content.
+  const credentialReview = usePublishCredentialReview(
+    itemId ? `${itemId}@${selected?.draftDigest ?? ''}` : null,
+  );
 
   function refresh(): void {
     invalidateCapability(http, 'list_operations');

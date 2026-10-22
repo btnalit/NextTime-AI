@@ -21,8 +21,10 @@
 export {
   OntologyDefinitionParseError,
   OntologyDefinitionSchema,
+  deprecatePublishedOntologyVersion,
   deriveOntologyPackId,
   loadOntologyDefinitionFile,
+  loadOntologyVersion,
   loadPublishedOntologyHead,
   lockOntologyFamily,
   mapOntologyVersionRow,
@@ -85,6 +87,7 @@ export {
   getType,
   listOntologyVersions,
   listTypes,
+  loadPublishedLinkTypeFamilies,
   loadPublishedLinkTypes,
   loadVisibleOntology,
   proposeOntologyChange,

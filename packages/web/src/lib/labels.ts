@@ -128,7 +128,10 @@ export const AUDIT_RESOURCE_TYPE_LABELS: Readonly<Record<AuditResourceType, Bili
   agent_policy: { zh: '工作区策略', en: 'Agent policy' },
   agent_profile: { zh: '智能体配置', en: 'Agent profile' },
   capability_grant: { zh: '授权', en: 'Capability grant' },
-  change_item: { zh: '变更条目', en: 'Change item' },
+  // S11 P1-B (UX acceptance of #650, P3-1/P3-2): one name per concept, the 安装历史 tab's — a
+  // module install or upgrade is one 安装记录, each thing it changed one 改动项.
+  change_item: { zh: '改动项', en: 'Change' },
+  change_segment: { zh: '安装记录', en: 'Install record' },
   chat: { zh: '对话', en: 'Chat' },
   conflict: { zh: '冲突', en: 'Conflict' },
   connection_request: { zh: '连接申请', en: 'Connection request' },

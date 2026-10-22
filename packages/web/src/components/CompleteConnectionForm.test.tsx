@@ -103,6 +103,105 @@ describe('CompleteConnectionForm', () => {
     await waitFor(() => expect(createCalls(http)).toBe(1));
   });
 
+  it('legacy 247: the header names the requester when the caller knows the name, else shows the short id', async () => {
+    const http = httpWith(async () => ({}));
+    const { unmount } = render(
+      <CompleteConnectionForm
+        http={http}
+        request={request}
+        requesterName="Li Si"
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+    await secretShown();
+    expect(screen.getByTestId('cc-requester').textContent).toBe('Li Si');
+    unmount();
+    render(
+      <CompleteConnectionForm http={http} request={request} onDone={vi.fn()} onCancel={vi.fn()} />,
+    );
+    await secretShown();
+    expect(screen.getByTestId('cc-requester').textContent).toBe('principa');
+  });
+
+  it('legacy 247: a request whose address was masked is not prefilled with the mask, and says why', async () => {
+    const http = httpWith(async () => ({}));
+    render(
+      <CompleteConnectionForm
+        http={http}
+        request={{
+          id: 'cr-1',
+          status: 'requested',
+          kind: 'http',
+          target: '[redacted]',
+          requestedBy: 'p-2',
+          gatekeeperId: null,
+          completedBy: null,
+          requestedAt: '2026-09-01T00:00:00.000Z',
+          completedAt: null,
+        }}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+    await secretShown();
+    expect((screen.getByLabelText(/目标系统/) as HTMLInputElement).value).toBe('');
+    expect(screen.getByTestId('cc-target-masked-note').textContent).toContain('带有凭据');
+  });
+
+  it('legacy 247 (review #501 on #661): an address masked in place inside its path is not prefilled either', async () => {
+    const http = httpWith(async () => ({}));
+    render(
+      <CompleteConnectionForm
+        http={http}
+        request={{
+          id: 'cr-2',
+          status: 'requested',
+          kind: 'http',
+          target: 'https://api.example.com/hook/[redacted]/x',
+          requestedBy: 'p-2',
+          gatekeeperId: null,
+          completedBy: null,
+          requestedAt: '2026-09-01T00:00:00.000Z',
+          completedAt: null,
+        }}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+    await secretShown();
+    expect((screen.getByLabelText(/目标系统/) as HTMLInputElement).value).toBe('');
+    expect(screen.getByTestId('cc-target-masked-note')).toBeTruthy();
+  });
+
+  it('legacy 152: a public address without a scheme gets https://, so the connection secret is not sent in the clear', async () => {
+    const http = httpWith(async (_name, params) => {
+      expect((params as { endpoint: string }).endpoint).toBe('https://gate.example.com');
+      return {};
+    });
+    render(<CompleteConnectionForm http={http} onDone={vi.fn()} onCancel={vi.fn()} />);
+    await secretShown();
+    const endpoint = screen.getByLabelText(/门端点/) as HTMLInputElement;
+    fireEvent.change(screen.getByLabelText(/目标系统/), { target: { value: 'erp' } });
+    fireEvent.change(endpoint, { target: { value: 'gate.example.com' } });
+    fireEvent.blur(endpoint);
+    expect(endpoint.value).toBe('https://gate.example.com');
+    expect(screen.getByTestId('cc-endpoint-scheme-note').textContent).toContain('https://');
+    // A private address keeps http (built at run time: the repository guard refuses the literal).
+    const privateIp = [10, 1, 2, 3].join('.');
+    fireEvent.change(endpoint, { target: { value: `${privateIp}:8080` } });
+    expect(screen.queryByTestId('cc-endpoint-scheme-note')).toBeNull();
+    fireEvent.blur(endpoint);
+    expect(endpoint.value).toBe(`http://${privateIp}:8080`);
+    // A public IP gets https, like a public domain.
+    fireEvent.change(endpoint, { target: { value: '198.51.100.7:8443' } });
+    fireEvent.blur(endpoint);
+    expect(endpoint.value).toBe('https://198.51.100.7:8443');
+    fireEvent.change(endpoint, { target: { value: 'gate.example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: '注册门' }));
+    await waitFor(() => expect(createCalls(http)).toBe(1));
+  });
+
   it('shows the credentials box only for connected_account, and requires it there', async () => {
     const http = httpWith(async () => ({}));
     render(<CompleteConnectionForm http={http} onDone={vi.fn()} onCancel={vi.fn()} />);

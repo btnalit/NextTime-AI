@@ -80,7 +80,7 @@ export function isEmptyEntry(entry: AuditEntry): boolean {
  * value still works through the filter's free-text path. Legacy sweep (console batch,
  * 2026-10-16): `gate_instance` (`gate-instance-handlers.ts`) and `module`
  * (`platform-modules-handlers.ts`) are written on workspace rows too; S11 P1: `change_item`
- * (`application/change-plan`).
+ * (`application/change-plan`); P1-B: `change_segment` (`roll_back_change_segment`).
  */
 export const AUDIT_RESOURCE_TYPES = [
   'action_request',
@@ -89,6 +89,7 @@ export const AUDIT_RESOURCE_TYPES = [
   'agent_profile',
   'capability_grant',
   'change_item',
+  'change_segment',
   'chat',
   'conflict',
   'connection_request',
@@ -139,7 +140,8 @@ export type PlatformAuditResourceType = (typeof PLATFORM_AUDIT_RESOURCE_TYPES)[n
  * the capability's own name — `application/gateway/dispatch.ts` `action: name`): the state-
  * machine transitions of ActionRequest / Task / WorkerRun (`governance/approval/transition-log`,
  * `application/task/transition-log.ts`), the S6-A chat / connection actions and S11 P1's
- * `change_item.apply` (one row per ChangePlan item, `application/change-plan`). Suggestions only —
+ * `change_item.apply` / P1-B's `change_item.roll_back` (one row per ChangePlan item,
+ * `application/change-plan`). Suggestions only —
  * the action filter is free text.
  */
 export const AUDIT_LIFECYCLE_ACTIONS = [
@@ -173,6 +175,7 @@ export const AUDIT_LIFECYCLE_ACTIONS = [
   'facts_not_reobserved',
   'ontology_violation',
   'change_item.apply',
+  'change_item.roll_back',
 ] as const;
 
 /**
@@ -245,6 +248,9 @@ export interface AuditRecordRow {
   readonly createdAt: string;
 }
 
+/** An audit row's `payload` — `resourceHref` reads a `change_item`'s `segmentId` from it. */
+type AuditPayload = Readonly<Record<string, unknown>>;
+
 /** The console route an audit row's `resourceType:resourceId` opens, when the console has a page
  *  for that resource and the reader may open it (`canOpen`, `hooks/useCanOpen` — the route table;
  *  an auditor may not open an ActionRequest, #541 acceptance); `undefined` otherwise (the chip
@@ -253,14 +259,27 @@ export function resourceHref(
   resourceType: string | null,
   resourceId: string | null,
   canOpen: (href: string) => boolean | null = () => true,
+  payload?: AuditPayload,
 ): string | undefined {
-  const href = resourceRoute(resourceType, resourceId);
+  const href = resourceRoute(resourceType, resourceId, payload);
   return href !== undefined && canOpen(href) !== false ? href : undefined;
 }
 
-function resourceRoute(resourceType: string | null, resourceId: string | null): string | undefined {
+function resourceRoute(
+  resourceType: string | null,
+  resourceId: string | null,
+  payload: AuditPayload | undefined,
+): string | undefined {
   if (!resourceId) return undefined;
   switch (resourceType) {
+    // S11 P1-B: an install record opens in 能力目录 · 安装历史; one of its changes opens the record
+    // it belongs to (the row's payload names it).
+    case 'change_segment':
+      return hrefs.catalog('changes', resourceId);
+    case 'change_item': {
+      const segmentId = payload ? stringField(payload, 'segmentId') : undefined;
+      return segmentId ? hrefs.catalog('changes', segmentId) : undefined;
+    }
     case 'action_request':
       return hrefs.approval(resourceId);
     case 'task':

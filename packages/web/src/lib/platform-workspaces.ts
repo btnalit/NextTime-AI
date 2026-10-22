@@ -133,9 +133,10 @@ const PURGE_COUNT_LABELS = {
   agentPolicies: { zh: '工作区策略', en: 'Agent policies' },
   agentProfiles: { zh: '智能体配置', en: 'Agent profiles' },
   capabilityGrants: { zh: '授权', en: 'Grants' },
-  // S11 P1 (migrations/governance/0025): what each module install / upgrade changed.
-  changeItems: { zh: '变更条目', en: 'Change items' },
-  changeSegments: { zh: '变更记录', en: 'Change records' },
+  // S11 P1 (migrations/governance/0025): what each module install / upgrade changed — the names
+  // 能力目录 · 安装历史 uses (one 安装记录 per install or upgrade, its 改动项 under it).
+  changeItems: { zh: '安装记录里的改动项', en: 'Install record changes' },
+  changeSegments: { zh: '安装记录', en: 'Install records' },
   connectionRequests: { zh: '连接申请', en: 'Connection requests' },
   gatekeeperPolicies: { zh: '按门的审批策略', en: 'Per-gate approval policies' },
   llmUsage: { zh: '模型用量记录', en: 'Model usage records' },

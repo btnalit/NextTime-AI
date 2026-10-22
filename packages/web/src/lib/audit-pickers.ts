@@ -19,6 +19,7 @@ import type {
 import { CAPABILITY_REGISTRY } from '@nexttime/shared';
 import { actionLabel } from './capability-labels.js';
 import type { CapabilityCaller } from './clients.js';
+import { connectionRequestTargetText } from './connections.js';
 import { actionKindTagText, formatRelative } from './format.js';
 import { objectDisplayName } from './graph-view.js';
 import type { Translate } from './i18n.js';
@@ -384,7 +385,7 @@ const RESOURCE_SOURCES: Readonly<Record<string, SourceFactory>> = {
     {},
     (request, t) => ({
       id: request.id,
-      label: request.target,
+      label: connectionRequestTargetText(request.target, t),
       detail: statusText('connectionRequest', request.status, t),
     }),
   ),

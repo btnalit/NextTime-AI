@@ -443,6 +443,39 @@ export async function loadPublishedLinkTypes(
   return mergeVisibleOntology(result.rows).linkTypes;
 }
 
+/** S11 P1-B: per LinkType name, the families whose latest published version declares it — the same
+ *  "latest published per family" rule as `loadPublishedLinkTypes`. A change that takes a LinkType
+ *  out of one family leaves the links of that name declared while another family still has it. */
+export async function loadPublishedLinkTypeFamilies(
+  client: PoolClient,
+  workspaceId: string,
+): Promise<ReadonlyMap<string, readonly string[]>> {
+  const result = await client.query<{ id: string; definition: OntologyDefinition }>(
+    `select t.id, t.definition
+     from ontology_versions t
+     where t.workspace_id = $1
+       and t.status = 'published'
+       and t.version = (
+         select max(t2.version)
+         from ontology_versions t2
+         where t2.workspace_id = t.workspace_id
+           and t2.id = t.id
+           and t2.status = 'published'
+       )
+     order by t.id`,
+    [workspaceId],
+  );
+  const families = new Map<string, string[]>();
+  for (const row of result.rows) {
+    for (const linkType of row.definition.linkTypes) {
+      const ids = families.get(linkType.name) ?? [];
+      if (!ids.includes(row.id)) ids.push(row.id);
+      families.set(linkType.name, ids);
+    }
+  }
+  return families;
+}
+
 export interface ValidateLinkInput {
   readonly linkType: string;
   readonly sourceType: string;
