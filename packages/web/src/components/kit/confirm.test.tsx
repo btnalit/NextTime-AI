@@ -119,6 +119,38 @@ describe('kit/Confirm — medium', () => {
     await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId('confirm-button')));
   });
 
+  it('legacy 405: a danger confirm opens on 取消, so a habitual Enter never runs it', async () => {
+    const onConfirm = vi.fn(async () => undefined);
+    renderTier('medium', { danger: true, onConfirm });
+    fireEvent.click(screen.getByTestId('trigger'));
+    await screen.findByTestId('confirm');
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId('confirm-cancel')));
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
+
+  it('legacy 404: says there is more below while the body scrolls on, and stops once at the end', async () => {
+    const proto = HTMLElement.prototype;
+    const sizes = { scrollHeight: 900, clientHeight: 300 };
+    const restore = [
+      vi.spyOn(proto, 'scrollHeight', 'get').mockImplementation(() => sizes.scrollHeight),
+      vi.spyOn(proto, 'clientHeight', 'get').mockImplementation(() => sizes.clientHeight),
+    ];
+    try {
+      renderTier('medium', { impact: Array.from({ length: 40 }, (_, i) => `影响 ${i}`) });
+      fireEvent.click(screen.getByTestId('trigger'));
+      await screen.findByTestId('confirm');
+      const body = screen.getByTestId('confirm-body');
+      const hint = await screen.findByTestId('confirm-more-below');
+      expect(body.contains(hint)).toBe(true);
+      expect(hint.textContent).toContain('下面还有内容');
+      body.scrollTop = 600;
+      fireEvent.scroll(body);
+      await waitFor(() => expect(screen.queryByTestId('confirm-more-below')).toBeNull());
+    } finally {
+      for (const spy of restore) spy.mockRestore();
+    }
+  });
+
   it('positions the popover against the trigger itself, not the box-less `contents` wrapper', async () => {
     renderTier('medium');
     const trigger = screen.getByTestId('trigger');
@@ -316,6 +348,13 @@ describe('kit/Confirm — irreversible', () => {
     for (const id of ['confirm-typed-name', 'confirm-acknowledge', 'confirm-button']) {
       expect(actions.contains(screen.getByTestId(id))).toBe(true);
     }
+  });
+
+  it('legacy 405: opens on 取消 (Radix AlertDialog), never on the danger button', async () => {
+    renderTier('irreversible');
+    fireEvent.click(screen.getByTestId('trigger'));
+    await screen.findByRole('alertdialog');
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId('confirm-cancel')));
   });
 
   it('with no target, only the acknowledgement gates the danger button (a batch with no single name)', async () => {

@@ -319,10 +319,19 @@ describe('CatalogPage', () => {
     expect(within(confirm).getByTestId('governance-diff-list').textContent).toContain('分类变化');
     expect(confirm.textContent).toContain('它不再是高影响');
     expect(within(confirm).getByTestId('confirm-button').className).toContain('text-danger');
+    const loosens = within(confirm).getByTestId(
+      'operation-publish-confirm-gk-1::docker.restart@draft-loosens',
+    );
+    expect(loosens.textContent).toContain('不再是高影响');
+    // Legacy 404: the change being confirmed comes before what loosening it means.
     expect(
-      within(confirm).getByTestId('operation-publish-confirm-gk-1::docker.restart@draft-loosens')
-        .textContent,
-    ).toContain('不再是高影响');
+      within(confirm).getByTestId('governance-diff-list').compareDocumentPosition(loosens) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    // Legacy 405: a loosening confirm opens on 取消.
+    await waitFor(() =>
+      expect(document.activeElement).toBe(within(confirm).getByTestId('confirm-cancel')),
+    );
     fireEvent.click(within(confirm).getByTestId('confirm-button'));
     await waitFor(() => expect(http.calls.some((c) => c.name === 'publish_operation')).toBe(true));
   });
