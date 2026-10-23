@@ -1228,7 +1228,7 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
 
       const drift = await screen.findByTestId('catalog-pack-component-worker-ops-runner-drift');
       expect(drift.textContent).toBe(
-        '能力包 v2 改了它要用到的系统（相对 v1：新增 ragflow）。安装会原样保留它已接的门，不会自动改；要重新选门，在 Worker 页修改。',
+        '能力包 v2 改了它要用到的系统（相对 v1：新增 ragflow）。它现在要用到的系统是 docker、ragflow。安装会原样保留它已接的门，不会自动改；要重新选门，在 Worker 页修改。',
       );
       fireEvent.click(screen.getByTestId('catalog-pack-install-trigger'));
       expect((await screen.findByTestId('catalog-pack-item-1-binding-drift')).textContent).toMatch(
@@ -1243,8 +1243,19 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
       const stray = crew({
         status: 'up_to_date',
         installedVersion: 1,
+        requirements: [
+          ...DOCKER_CONNECTED,
+          {
+            connector: 'ragflow',
+            state: 'needs_platform',
+            gatekeepers: [],
+            offered: [],
+            platformPreset: false,
+          },
+        ],
         components: [
           runner({
+            systems: ['docker', 'ragflow'],
             status: 'up_to_date',
             installedVersion: 1,
             headVersion: 1,
@@ -1265,7 +1276,7 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
       expect(
         (await screen.findByTestId('catalog-pack-component-worker-ops-runner-drift')).textContent,
       ).toBe(
-        '已接的 old-host 不是它现在要用到的系统里接好的门。安装会原样保留它已接的门，不会自动改；要重新选门，在 Worker 页修改。',
+        '它现在要用到的系统是 docker、ragflow（平台未提供）。已接的 old-host 不属于它。安装会原样保留它已接的门，不会自动改；要重新选门，在 Worker 页修改。',
       );
     });
 

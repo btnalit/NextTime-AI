@@ -6,6 +6,7 @@ import {
   type PackInstallItemWire,
   type PackInstallPreviewWire,
   type PackInstallResultWire,
+  type PackRequirementState,
   type PackWire,
 } from '@nexttime/shared';
 import { useEffect, useState } from 'react';
@@ -19,6 +20,7 @@ import { describeError, isForbiddenError } from '../../lib/errors.js';
 import { formatDateTime, formatRelative, shortId } from '../../lib/format.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { hrefs } from '../../lib/router.js';
+import { PACK_REQUIREMENT_TONES, labelText } from '../../lib/status-tone.js';
 import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
 import { EmptyState } from '../kit/empty-state.js';
@@ -82,6 +84,11 @@ interface WorkerSystemsDrift {
   readonly added: readonly string[];
   readonly removed: readonly string[];
   readonly stray: readonly PackGateRefWire[];
+  /** The systems it works with now, each with where it stands here (`null`: not a requirement). */
+  readonly current: readonly {
+    readonly connector: string;
+    readonly state: PackRequirementState | null;
+  }[];
 }
 
 function workerSystemsDrift(
@@ -111,12 +118,34 @@ function workerSystemsDrift(
   );
   const stray = gates.filter((gate) => !ofSystems.has(gate.id));
   if (added.length === 0 && removed.length === 0 && stray.length === 0) return null;
-  return { from: added.length > 0 || removed.length > 0 ? from : null, added, removed, stray };
+  const current = systems.map((connector) => ({
+    connector,
+    state:
+      pack.requirements.find((requirement) => requirement.connector === connector)?.state ?? null,
+  }));
+  return {
+    from: added.length > 0 || removed.length > 0 ? from : null,
+    added,
+    removed,
+    stray,
+    current,
+  };
 }
 
 /** What `drift` means for the gates the workspace keeps, in a sentence or two. */
 function workerSystemsDriftText(drift: WorkerSystemsDrift, latest: number, t: Translate): string {
   const list = (names: readonly string[]) => names.join(t('、', ', '));
+  // UX P3 on #724: the systems it works with now, with any that are not connected here marked.
+  const now = list(
+    drift.current.map(({ connector, state }) =>
+      state === null || state === 'connected'
+        ? connector
+        : t(
+            `${connector}（${labelText(PACK_REQUIREMENT_TONES[state], t)}）`,
+            `${connector} (${labelText(PACK_REQUIREMENT_TONES[state], t)})`,
+          ),
+    ),
+  );
   const parts: string[] = [];
   if (drift.from !== null) {
     const moved = [
@@ -132,14 +161,14 @@ function workerSystemsDriftText(drift: WorkerSystemsDrift, latest: number, t: Tr
       ),
     );
   }
+  parts.push(
+    drift.current.length === 0
+      ? t('它现在不用任何系统。', 'It now works with no system.')
+      : t(`它现在要用到的系统是 ${now}。`, `It now works with ${now}.`),
+  );
   if (drift.stray.length > 0) {
     const names = list(drift.stray.map((gate) => gate.name));
-    parts.push(
-      t(
-        `已接的 ${names} 不是它现在要用到的系统里接好的门。`,
-        `${names}, which it acts on, is not a connected gate of the systems it works with now.`,
-      ),
-    );
+    parts.push(t(`已接的 ${names} 不属于它。`, `${names}, which it acts on, is not one of them.`));
   }
   parts.push(
     t(

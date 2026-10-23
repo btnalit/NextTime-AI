@@ -239,6 +239,8 @@ describe('ProvenanceToolsSection — Decisions the reader may not see', () => {
     const banner = await screen.findByTestId('causal-chain-error');
     expect(banner.textContent).toMatch(/找不到这个节点，或者你无权查看它/);
     expect(banner.textContent).not.toMatch(/决定/);
+    // UX P3 on #724: the form's controls were disabled while it ran; focus lands on the error.
+    await waitFor(() => expect(document.activeElement).toBe(banner.parentElement));
     // Switching the select afterwards does not rewrite what the error was about.
     fireEvent.change(screen.getByLabelText('节点类型'), { target: { value: 'decision' } });
     expect(screen.getByTestId('causal-chain-error').textContent).not.toMatch(/决定/);

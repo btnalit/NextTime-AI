@@ -2,6 +2,7 @@ import type { ExplainResultWire, ExportProvResult } from '@nexttime/shared';
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { useAskForAccess } from '../../hooks/useAskForAccess.js';
 import { useCanOpen } from '../../hooks/useCanOpen.js';
+import { useFocusWhenLost } from '../../hooks/useFocusWhenLost.js';
 import { AuditIdPicker } from '../../lib/audit-id-picker.js';
 import { type ProvenanceNodeKind, provenanceNodeSource } from '../../lib/audit-pickers.js';
 import {
@@ -67,6 +68,9 @@ export function ExplainSection({ http, requestedNodeId, principalNames }: Explai
   const [state, setState] = useState<ExplainState>(IDLE);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<unknown | null>(null);
+  const errorRef = useFocusWhenLost<HTMLDivElement>(state.error);
+  const resultRef = useFocusWhenLost<HTMLDivElement>(state.result);
+  const exportErrorRef = useFocusWhenLost<HTMLDivElement>(exportError);
 
   const run = useCallback(
     async (target: string): Promise<void> => {
@@ -173,13 +177,15 @@ export function ExplainSection({ http, requestedNodeId, principalNames }: Explai
         </Button>
       </form>
       {state.error !== null ? (
-        <ErrorBanner
-          error={state.error}
-          title={t('无法解释该节点', 'Could not explain this node')}
-          // Legacy 421: a Decision the reader may not see answers exactly like a missing one.
-          overrides={{ not_found: decisionNotFoundText(t) }}
-          testId="explain-error"
-        />
+        <div ref={errorRef} tabIndex={-1}>
+          <ErrorBanner
+            error={state.error}
+            title={t('无法解释该节点', 'Could not explain this node')}
+            // Legacy 421: a Decision the reader may not see answers exactly like a missing one.
+            overrides={{ not_found: decisionNotFoundText(t) }}
+            testId="explain-error"
+          />
+        </div>
       ) : null}
       {exportError !== null ? (
         isForbiddenError(exportError) ? (
@@ -191,27 +197,31 @@ export function ExplainSection({ http, requestedNodeId, principalNames }: Explai
             {ask('auditor', 'export')}
           </Notice>
         ) : (
-          <ErrorBanner
-            error={exportError}
-            title={t('无法导出', 'Could not export')}
-            // Legacy 430: the node was explained just now, so its kind is known.
-            overrides={{
-              not_found: decisionNotFoundText(
-                t,
-                view === null ? 'unknown' : view.nodeType === 'decision' ? 'decision' : 'other',
-              ),
-            }}
-            testId="explain-export-error"
-          />
+          <div ref={exportErrorRef} tabIndex={-1}>
+            <ErrorBanner
+              error={exportError}
+              title={t('无法导出', 'Could not export')}
+              // Legacy 430: the node was explained just now, so its kind is known.
+              overrides={{
+                not_found: decisionNotFoundText(
+                  t,
+                  view === null ? 'unknown' : view.nodeType === 'decision' ? 'decision' : 'other',
+                ),
+              }}
+              testId="explain-export-error"
+            />
+          </div>
         )
       ) : null}
       {view ? (
-        <ExplainResultView
-          view={view}
-          raw={state.result}
-          principalNames={principalNames}
-          canOpen={canOpen}
-        />
+        <div ref={resultRef} tabIndex={-1}>
+          <ExplainResultView
+            view={view}
+            raw={state.result}
+            principalNames={principalNames}
+            canOpen={canOpen}
+          />
+        </div>
       ) : null}
     </section>
   );

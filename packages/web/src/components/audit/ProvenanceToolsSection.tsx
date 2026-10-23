@@ -5,6 +5,7 @@ import type {
 } from '@nexttime/shared';
 import { type FormEvent, useMemo, useState } from 'react';
 import { useCanOpen } from '../../hooks/useCanOpen.js';
+import { useFocusWhenLost } from '../../hooks/useFocusWhenLost.js';
 import { AuditIdPicker } from '../../lib/audit-id-picker.js';
 import {
   SINCE_PRESETS,
@@ -99,6 +100,8 @@ function CausalChainTool({ http }: { readonly http: CapabilityCaller }) {
   const [kind, setKind] = useState<'fact' | 'decision'>('fact');
   const [nodeId, setNodeId] = useState('');
   const [state, setState] = useState<CausalState>(CAUSAL_IDLE);
+  const errorRef = useFocusWhenLost<HTMLDivElement>(state.error);
+  const resultRef = useFocusWhenLost<HTMLDivElement>(state.chain);
   // Recent nodes of the chosen kind: Decisions from `query_decisions`, Facts from the audit log.
   const source = useMemo(() => provenanceNodeSource(kind, t), [kind, t]);
 
@@ -158,22 +161,24 @@ function CausalChainTool({ http }: { readonly http: CapabilityCaller }) {
         </Button>
       </form>
       {state.error !== null ? (
-        <ErrorBanner
-          error={state.error}
-          title={t('无法追溯因果链', 'Could not trace the causal chain')}
-          // Legacy 421: a Decision the reader may not see answers exactly like a missing one; the
-          // part about Decisions only when the start node is one (legacy 430).
-          overrides={{
-            not_found: decisionNotFoundText(
-              t,
-              state.sentKind === 'decision' ? 'decision' : 'other',
-            ),
-          }}
-          testId="causal-chain-error"
-        />
+        <div ref={errorRef} tabIndex={-1}>
+          <ErrorBanner
+            error={state.error}
+            title={t('无法追溯因果链', 'Could not trace the causal chain')}
+            // Legacy 421: a Decision the reader may not see answers exactly like a missing one; the
+            // part about Decisions only when the start node is one (legacy 430).
+            overrides={{
+              not_found: decisionNotFoundText(
+                t,
+                state.sentKind === 'decision' ? 'decision' : 'other',
+              ),
+            }}
+            testId="causal-chain-error"
+          />
+        </div>
       ) : null}
       {state.chain ? (
-        <div className="stack-s" data-testid="causal-chain-result">
+        <div className="stack-s" ref={resultRef} tabIndex={-1} data-testid="causal-chain-result">
           <p className="text-3 text-small">
             {t('根节点', 'Root')}: {state.chain.rootType} ·{' '}
             <RouteLink href={auditHrefForNode(state.chain.rootId)}>
@@ -259,6 +264,8 @@ function PrecedentsTool({ http }: { readonly http: CapabilityCaller }) {
   // A `datetime-local` value (reader's zone); `query_decisions` gets it as an ISO instant.
   const [since, setSince] = useState('');
   const [state, setState] = useState<DecisionListState>(LIST_IDLE);
+  const errorRef = useFocusWhenLost<HTMLDivElement>(state.error);
+  const resultRef = useFocusWhenLost<HTMLUListElement>(state.items);
   const objects = useMemo(() => objectSource(t), [t]);
   const operations = useMemo(() => operationNameSource(), []);
   const sinceIso = localInputToIso(since);
@@ -398,14 +405,16 @@ function PrecedentsTool({ http }: { readonly http: CapabilityCaller }) {
         </Button>
       </form>
       {state.error !== null ? (
-        <ErrorBanner
-          error={state.error}
-          title={t('查询失败', 'Query failed')}
-          testId="precedents-error"
-        />
+        <div ref={errorRef} tabIndex={-1}>
+          <ErrorBanner
+            error={state.error}
+            title={t('查询失败', 'Query failed')}
+            testId="precedents-error"
+          />
+        </div>
       ) : null}
       {state.items !== null ? (
-        <ul className="stack-s" data-testid="precedents-result">
+        <ul className="stack-s" ref={resultRef} tabIndex={-1} data-testid="precedents-result">
           {state.items.length === 0 ? (
             // Legacy 421: an empty list may hide Decisions the reader may not see; it says so.
             <li className="text-3 text-small" data-testid="precedents-empty">
