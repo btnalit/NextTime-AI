@@ -129,6 +129,12 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
     zh: '这个接入包属于一个打包的门，不能放门宿主实例：换一个名字新建',
     en: 'That connector belongs to a packaged gate and cannot hold a gate-host instance — name a new one',
   },
+  // S11 P1-F: `create_gate_instance` named a preset this platform version does not ship (the
+  // console only offers what `list_connector_presets` lists — a stale tab after a downgrade).
+  connector_preset_not_found: {
+    zh: '这个平台版本没有这个接入预设，什么也没创建：刷新页面后重新选择',
+    en: 'This platform version does not ship that connector preset — nothing was created; reload the page and choose again',
+  },
   gate_not_ready: {
     zh: '门宿主尚未接管该实例，请稍候',
     en: 'The gate host has not taken over this instance yet — wait a moment',

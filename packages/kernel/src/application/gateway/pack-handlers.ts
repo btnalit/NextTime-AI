@@ -16,6 +16,7 @@ import {
   loadOntologyProvenance,
   verifyChangeSegment,
 } from '../change-plan/index.js';
+import { loadConnectorPresets } from '../gates/index.js';
 import {
   type PackComponent,
   type PackComponentState,
@@ -142,11 +143,19 @@ function toPackVersionWire(version: PackVersion): PackVersionWire {
   };
 }
 
+/** S11 P1-F: the names of the connector presets this deployment ships — which required systems a
+ *  platform administrator can connect from one (`PackRequirementWire.platformPreset`). */
+async function connectorPresetNames(): Promise<ReadonlySet<string>> {
+  return new Set((await loadConnectorPresets()).map((preset) => preset.name));
+}
+
 async function toPackWire(
   client: PoolClient,
   workspaceId: string,
   state: PackState,
+  presetNames?: ReadonlySet<string>,
 ): Promise<PackWire> {
+  const presets = presetNames ?? (await connectorPresetNames());
   const latest = latestPackVersion(state.entry);
   const bindings = await readWorkerBindings(client, workspaceId, state.entry);
   const components: PackComponentStateWire[] = [];
@@ -161,17 +170,18 @@ async function toPackWire(
     status: state.status,
     installedVersion: state.installedVersion,
     components,
-    requirements: (await readPackRequirements(client, workspaceId, latest.requiredConnectors)).map(
-      (requirement) => ({
-        connector: requirement.connector,
-        state: requirement.state,
-        gatekeepers: requirement.gatekeepers.map((gate) => ({ id: gate.id, name: gate.name })),
-        offered: requirement.offered.map((offer) => ({
-          gateId: offer.gateId,
-          displayName: offer.displayName,
-        })),
-      }),
-    ),
+    requirements: (
+      await readPackRequirements(client, workspaceId, latest.requiredConnectors, presets)
+    ).map((requirement) => ({
+      connector: requirement.connector,
+      state: requirement.state,
+      gatekeepers: requirement.gatekeepers.map((gate) => ({ id: gate.id, name: gate.name })),
+      offered: requirement.offered.map((offer) => ({
+        gateId: offer.gateId,
+        displayName: offer.displayName,
+      })),
+      platformPreset: requirement.platformPreset,
+    })),
   };
 }
 
@@ -274,10 +284,16 @@ function toInstallItemWire(
 
 export const listPacksHandler: CapabilityHandler = async (client, workspaceId) => {
   const registry = await loadPackRegistry();
+  const presets = await connectorPresetNames();
   const items: PackWire[] = [];
   for (const entry of registry.values()) {
     items.push(
-      await toPackWire(client, workspaceId, await loadPackState(client, workspaceId, entry)),
+      await toPackWire(
+        client,
+        workspaceId,
+        await loadPackState(client, workspaceId, entry),
+        presets,
+      ),
     );
   }
   return { result: { items } };

@@ -5,6 +5,7 @@ import type { GateHostedDefinitionWire, Operation } from '@nexttime/shared';
 import {
   GATE_SHARED_CREDENTIAL_SLOT,
   GateHostedDefinitionWireSchema,
+  OperationSchema,
   PROMETHEUS_TEXT_CONTENT_TYPE,
   importHandlePublicKey,
   internalAuthorizationHeader,
@@ -47,7 +48,10 @@ import { assertTlsNotDisabled, buildTlsFetch, gateTlsOptionsFromEnv } from './tl
  *   instance as `${GATE_PUBLIC_ENDPOINT}/i/<gateId>` so the kernel's P-B1 liveness / links / deny
  *   lists apply unchanged (决定 ⑦). An instance whose target cannot be reached (OpenAPI document or
  *   `tools/list` failed) is *not* announced — the kernel keeps showing "not taken over yet" and the
- *   host retries next tick; the reason is one warn line here.
+ *   host retries next tick; the reason is one warn line here. S11 P1-F: an instance made from a
+ *   connector preset is built from the Operations the kernel lists with it, never from the target;
+ *   when an upgrade changes them it is rebuilt with its credential kept and re-announced, and the
+ *   kernel holds the changed manifest for the administrator (R-18).
  *
  * Routes (决定 ⑫): the `/gate/*` protocol once under `/i/:gateId`, resolved per request from the
  * table. Auth: `gate_token` (kernel) on every route; additionally, `POST`/`DELETE
@@ -105,6 +109,9 @@ const HostedInstanceListSchema = z.object({
         connector: z.string().regex(CONNECTOR_NAME_PATTERN).optional(),
         status: z.string(),
         definition: GateHostedDefinitionWireSchema,
+        /** S11 P1-F: an instance made from a connector preset (`definition.preset`) comes with the
+         *  preset's Operations — it is built from these, never from the target. */
+        operations: z.array(OperationSchema).optional(),
       }),
     ),
   }),
@@ -120,6 +127,14 @@ interface HostedInstance {
   connector: string;
   readonly definition: GateHostedDefinitionWire;
   readonly definitionKey: string;
+  /** S11 P1-F: the preset's Operations the kernel listed with a preset instance (`undefined` when
+   *  it listed none), and their identity. Replaced in place when an upgrade changes them: what the
+   *  instance is built from changed, but not where its credential goes, so it is rebuilt with its
+   *  credential kept (`rebuild`), unlike a definition change. */
+  presetOperations: readonly Operation[] | undefined;
+  presetOperationsKey: string;
+  /** Rebuild at the next tick even though built — set when `presetOperations` changed. */
+  rebuild: boolean;
   readonly store: ConnectedAccountStore;
   /** One per instance, shared by every build of it: a re-handshake (R-69) replaces the gate while
    *  `apply` calls may be in flight, and the file store is not safe for two writers. */
@@ -162,6 +177,12 @@ export interface GateHost {
  *  gate and its credentials; any change to kind / target / mode / manifest rebuilds AND wipes them. */
 function definitionKey(item: HostedInstanceListItem): string {
   return JSON.stringify(item.definition);
+}
+
+/** Identity of a preset instance's Operations (S11 P1-F) — not part of `definitionKey`: a change
+ *  rebuilds the instance and keeps its credentials. */
+function presetOperationsKey(item: HostedInstanceListItem): string {
+  return item.operations === undefined ? '' : JSON.stringify(item.operations);
 }
 
 /** The connector to announce: the one the kernel lists (P1), else the generic one of its kind. */
@@ -352,7 +373,15 @@ export async function createGateHost(options: GateHostOptions = {}): Promise<Gat
         : new McpTransport({ endpoint: definition.target, fetchImpl: targetFetch });
     const resolver = new HostedCredentialResolver(instance.store, definition.credentialMode);
     let operations: Operation[];
-    if (definition.transportKind === 'mcp') {
+    if (definition.preset !== undefined) {
+      // S11 P1-F: never imported from the target — a preset's Operations are classified by hand.
+      if (instance.presetOperations === undefined) {
+        throw new Error(
+          `the kernel listed no Operations for preset "${definition.preset}" (this platform version does not ship it)`,
+        );
+      }
+      operations = [...instance.presetOperations];
+    } else if (definition.transportKind === 'mcp') {
       const shared =
         definition.credentialMode === 'shared'
           ? await instance.store.get(GATE_SHARED_CREDENTIAL_SLOT)
@@ -400,6 +429,7 @@ export async function createGateHost(options: GateHostOptions = {}): Promise<Gat
       if (onlyIfNotReady && instance.gate && instance.operations.length > 0) return true;
       try {
         await buildInstance(instance);
+        instance.rebuild = false;
         return true;
       } catch (err) {
         instance.buildError = err instanceof Error ? err.message : String(err);
@@ -471,10 +501,23 @@ export async function createGateHost(options: GateHostOptions = {}): Promise<Gat
     for (const item of items) {
       seen.add(item.gateId);
       const key = definitionKey(item);
+      const operationsKey = presetOperationsKey(item);
       const existing = table.get(item.gateId);
       if (existing && existing.definitionKey === key) {
         existing.displayName = item.displayName;
         existing.connector = connectorOf(item);
+        if (existing.presetOperationsKey !== operationsKey) {
+          existing.presetOperations = item.operations;
+          existing.presetOperationsKey = operationsKey;
+          existing.rebuild = true;
+          log(
+            JSON.stringify({
+              level: 'info',
+              msg: 'gate host: preset Operations changed, rebuilding with the stored credential',
+              gateId: item.gateId,
+            }),
+          );
+        }
         continue;
       }
       if (existing) await wipeInstanceData(item.gateId);
@@ -490,6 +533,9 @@ export async function createGateHost(options: GateHostOptions = {}): Promise<Gat
         }),
         idempotencyStore: new JsonFileIdempotencyStore(join(dataDir, item.gateId)),
         operations: [],
+        presetOperations: item.operations,
+        presetOperationsKey: operationsKey,
+        rebuild: false,
       });
       log(
         JSON.stringify({
@@ -575,8 +621,10 @@ export async function createGateHost(options: GateHostOptions = {}): Promise<Gat
     await reconcile(items);
     for (const instance of table.values()) {
       // Rebuild while not ready (target was unreachable) or while it still has no Operations (an
-      // MCP server that listed nothing yet, an OpenAPI document that was empty) — retried every tick.
-      if (!(await buildInTurn(instance, true))) continue;
+      // MCP server that listed nothing yet, an OpenAPI document that was empty) — retried every
+      // tick — or when a preset's Operations changed (S11 P1-F; a failed rebuild keeps the gate
+      // already built and retries next tick).
+      if (!(await buildInTurn(instance, !instance.rebuild))) continue;
       await announce(instance);
     }
     return true;

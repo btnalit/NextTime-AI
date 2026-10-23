@@ -243,6 +243,70 @@ describe('GateInstanceDetailPanel', () => {
     await waitFor(() => expect(onDeleted).toHaveBeenCalledWith('gate-h'));
   });
 
+  it('UX acceptance of #715 (P3-4): a hosted instance not enabled yet says what comes next at the top; a preset one names its preset as the manifest source', () => {
+    const http = scriptedHttp({});
+    const definition = {
+      transportKind: 'http',
+      target: 'https://kb.example.com',
+      credentialMode: 'shared',
+      manifestSource: null,
+      preset: 'ragflow',
+    } as const;
+    const preset = gateInstance({
+      gateId: 'ragflow',
+      connector: 'ragflow',
+      transportKind: 'http',
+      hosted: true,
+      lastSeenAt: null,
+      definition,
+    });
+    renderPanel(http, preset);
+    const steps = screen.getByTestId('gate-instance-next-steps');
+    expect(
+      within(steps)
+        .getAllByRole('listitem')
+        .map((item) => item.textContent),
+    ).toEqual([
+      '门宿主接管：创建后，门宿主下一轮拉取定义时自动完成。',
+      '录入共享凭证：在下面「编辑」里的「录入共享凭证」。',
+      '启用：在下面「编辑」里点「启用」，之后工作区才能从平台目录启用它。',
+    ]);
+    expect(within(steps).getByTestId('gate-instance-next-steps-now').textContent).toContain(
+      '等门宿主接管',
+    );
+    // It comes before the drawer's sections.
+    expect(
+      steps.compareDocumentPosition(screen.getByTestId('gate-instance-hosted-definition')) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(screen.getByTestId('gate-instance-hosted-preset').textContent).toMatch(
+      /^接入预设 ragflow：Operation 随预设下发，不从目标导入$/,
+    );
+    cleanup();
+
+    renderPanel(http, { ...preset, lastSeenAt: '2026-10-23T00:00:00.000Z' });
+    expect(screen.getByTestId('gate-instance-next-steps-now').textContent).toContain(
+      '门宿主已接管。还没录入共享凭证的话先录入，然后启用。',
+    );
+    cleanup();
+
+    renderPanel(http, {
+      ...preset,
+      lastSeenAt: '2026-10-23T00:00:00.000Z',
+      definition: { ...definition, credentialMode: 'connected_account' },
+    });
+    expect(screen.getByTestId('gate-instance-next-steps').textContent).not.toContain(
+      '录入共享凭证',
+    );
+    expect(screen.getByTestId('gate-instance-next-steps-now').textContent).toContain(
+      '每个成员在工作区里各自录入',
+    );
+    cleanup();
+
+    renderPanel(http, { ...preset, lastSeenAt: '2026-10-23T00:00:00.000Z', status: 'enabled' });
+    expect(screen.queryByTestId('gate-instance-next-steps')).toBeNull();
+  });
+
   it('R-46: delete is disabled, with the reason, while a workspace still has the instance enabled', () => {
     const http = scriptedHttp({});
     renderPanel(

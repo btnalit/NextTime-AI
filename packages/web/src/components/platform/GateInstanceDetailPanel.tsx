@@ -206,6 +206,9 @@ export function GateInstanceDetailPanel({
        *  two actions (enter the credential, delete), and its own unit test reaches the credential
        *  entry's token button through `gate-instance-hosted-definition`, so it cannot split across
        *  sections without breaking that lookup. */}
+      {instance.hosted && instance.definition ? (
+        <HostedNextSteps instance={instance} credentialMode={instance.definition.credentialMode} />
+      ) : null}
       <DrawerSections>
         <DrawerSection title={t('元数据', 'Metadata')}>
           <dl className="definition-list">
@@ -520,11 +523,24 @@ export function GateInstanceDetailPanel({
                       : t('按人', 'Connected account')}
                   </dd>
                   <dt>{t('清单来源', 'Manifest source')}</dt>
-                  <dd className="mono">
-                    {instance.definition.manifestSource
-                      ? addressText(instance.definition.manifestSource, t)
-                      : '—'}
-                  </dd>
+                  {instance.definition.preset ? (
+                    // S11 P1-F (UX acceptance of #715, P3-4): an instance made from a preset has no
+                    // manifest URL — its Operations come with the preset.
+                    <dd data-testid="gate-instance-hosted-preset">
+                      {t('接入预设 ', 'Connector preset ')}
+                      <span className="mono">{instance.definition.preset}</span>
+                      {t(
+                        '：Operation 随预设下发，不从目标导入',
+                        ': its Operations come with the preset, never imported from the target',
+                      )}
+                    </dd>
+                  ) : (
+                    <dd className="mono">
+                      {instance.definition.manifestSource
+                        ? addressText(instance.definition.manifestSource, t)
+                        : '—'}
+                    </dd>
+                  )}
                 </dl>
 
                 {instance.definition.credentialMode === 'shared' ? (
@@ -601,6 +617,69 @@ export function GateInstanceDetailPanel({
         </DrawerSection>
       </DrawerSections>
     </div>
+  );
+}
+
+/**
+ * UX acceptance of #715 (P3-4): a hosted instance not enabled yet says at the top of its drawer
+ * what comes next and which step it is at — the gate host takes it over, the shared credential is
+ * entered (under 编辑, beside the definition), then it is enabled; the controls stay where they
+ * are. Nothing for an instance already enabled, disabled or lost.
+ */
+function HostedNextSteps({
+  instance,
+  credentialMode,
+}: {
+  readonly instance: GateInstanceWire;
+  readonly credentialMode: 'shared' | 'connected_account';
+}) {
+  const t = useT();
+  const display = deriveGateInstanceStatus(instance);
+  if (display !== 'awaiting_host' && display !== 'discovered') return null;
+  const shared = credentialMode === 'shared';
+  const steps = [
+    t(
+      '门宿主接管：创建后，门宿主下一轮拉取定义时自动完成。',
+      'The gate host takes it over: automatic, on its next definition pull after the create.',
+    ),
+    shared
+      ? t(
+          '录入共享凭证：在下面「编辑」里的「录入共享凭证」。',
+          'Enter the shared credential: under Edit below, at Enter shared credential.',
+        )
+      : null,
+    t(
+      '启用：在下面「编辑」里点「启用」，之后工作区才能从平台目录启用它。',
+      'Enable it: under Edit below. Workspaces can then enable it from the platform catalog.',
+    ),
+  ].filter((step): step is string => step !== null);
+  const now =
+    display === 'awaiting_host'
+      ? t(
+          '现在：等门宿主接管，这一步不用你做什么。',
+          'Now: waiting for the gate host to take it over; nothing to do for this step.',
+        )
+      : shared
+        ? t(
+            '现在：门宿主已接管。还没录入共享凭证的话先录入，然后启用。',
+            'Now: the gate host has taken it over. Enter the shared credential if you have not yet, then enable it.',
+          )
+        : t(
+            '现在：门宿主已接管，可以启用；凭证由每个成员在工作区里各自录入。',
+            'Now: the gate host has taken it over and it can be enabled; each member enters their own credential in their workspace.',
+          );
+  return (
+    <Notice testId="gate-instance-next-steps">
+      <span className="stack-s">
+        <span>{t('接下来：', 'Next:')}</span>
+        <ol style={{ margin: 0, paddingInlineStart: '1.25em' }}>
+          {steps.map((step) => (
+            <li key={step}>{step}</li>
+          ))}
+        </ol>
+        <span data-testid="gate-instance-next-steps-now">{now}</span>
+      </span>
+    </Notice>
   );
 }
 

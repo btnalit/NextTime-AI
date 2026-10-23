@@ -281,6 +281,7 @@ import {
   deleteGateInstanceHandler,
   getGateInstanceHandler,
   issueGateHostTokenHandler,
+  listConnectorPresetsHandler,
   listConnectorsHandler,
   listExternalRuntimesHandler,
   listGateInstancesHandler,
@@ -2198,6 +2199,7 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   // P-B1: integrations (platform-gates-handlers.ts) and the workspace-side enable
   // (gate-instance-handlers.ts).
   ['list_connectors', listConnectorsHandler],
+  ['list_connector_presets', listConnectorPresetsHandler],
   ['set_connector_mode', setConnectorModeHandler],
   ['list_gate_instances', listGateInstancesHandler],
   ['get_gate_instance', getGateInstanceHandler],
