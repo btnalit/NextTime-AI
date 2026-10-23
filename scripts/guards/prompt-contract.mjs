@@ -360,12 +360,19 @@ const GRAPH_QUESTION_REQUIRED_PHRASES = [
 
 /** Checks one required-phrase list against `systemPrompt`, returning a violation naming every
  *  missing phrase (or `[]` when all are present). `ruleName` labels the violation so a failure
- *  names *which* of the three rules regressed, not just that "something" did. */
-function checkRequiredPhrases(relativePath, ruleName, systemPrompt, requiredPhrases) {
+ *  names *which* of the three rules regressed, not just that "something" did; `subject` names
+ *  the text checked (a tool description is not a systemPrompt). */
+function checkRequiredPhrases(
+  relativePath,
+  ruleName,
+  systemPrompt,
+  requiredPhrases,
+  subject = 'systemPrompt',
+) {
   const missing = requiredPhrases.filter((phrase) => !systemPrompt.includes(phrase));
   if (missing.length === 0) return [];
   return [
-    `${relativePath}: systemPrompt is missing the "${ruleName}" rule (S8 W2-K1) — expected phrase(s) not found: ${missing.map((p) => JSON.stringify(p)).join(', ')}`,
+    `${relativePath}: ${subject} is missing the "${ruleName}" rule (S8 W2-K1) — expected phrase(s) not found: ${missing.map((p) => JSON.stringify(p)).join(', ')}`,
   ];
 }
 
@@ -415,7 +422,7 @@ export function checkGraphQuestionGuidance(relativePath, systemPrompt) {
  *  confirms it in the console (the agent cannot); a retry carries the same key. */
 const GOAL_GUIDANCE_REQUIRED_PHRASES = [
   'propose_goal',
-  'a later step needs an earlier one\'s result',
+  "a later step needs an earlier one's result",
   'One delegated task is not a goal',
   'confirms a goal in the console',
   'never because a Worker says it is done',
@@ -439,7 +446,7 @@ export function checkGoalGuidance(relativePath, systemPrompt) {
  *  with the tool whatever the workspace's entry prompt says, keeps the same line between a goal and
  *  one delegated task. */
 const PROPOSE_GOAL_DESCRIPTION_REQUIRED_PHRASES = [
-  'a later step needs an earlier one\'s result',
+  "a later step needs an earlier one's result",
   'One delegated task stays invoke_worker',
 ];
 
@@ -449,6 +456,7 @@ export function checkProposeGoalDescription(relativePath, description) {
     'propose_goal is for dependent steps, never for one delegated task',
     description,
     PROPOSE_GOAL_DESCRIPTION_REQUIRED_PHRASES,
+    'the description',
   );
 }
 
