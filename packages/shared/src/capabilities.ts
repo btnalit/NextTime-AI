@@ -4345,34 +4345,58 @@ const goalCapabilities = [
   },
 ] as const satisfies readonly Capability[];
 
-/** The registry's entries with their literal names kept (`as const`), for `CapabilityName`. */
-const REGISTERED = [
-  ...chatCapabilities,
-  ...ontologyCapabilities,
-  ...graphCapabilities,
-  ...gateCapabilities,
-  ...connectionCapabilities,
-  ...metaCapabilities,
-  ...epistemicCapabilities,
-  ...governanceCapabilities,
-  ...taskCapabilities,
-  ...workerCapabilities,
-  ...ingestCapabilities,
-  ...auditCapabilities,
-  ...membersCapabilities,
-  ...agentProfileCapabilities,
-  ...platformCapabilities,
-  ...modulesCapabilities,
-  ...goalCapabilities,
-] as const;
+/**
+ * The registry's groups, each with its literal names kept (`as const`), for `CapabilityName`. The
+ * annotation names each group's type rather than letting the compiler infer the whole tuple: the
+ * inferred type — every entry's schema and description, as literals — is longer than the compiler
+ * writes into the declaration file (TS7056). A group in the value and not in the annotation (or in
+ * a different place) does not compile.
+ */
+const GROUPS: readonly [
+  typeof chatCapabilities,
+  typeof ontologyCapabilities,
+  typeof graphCapabilities,
+  typeof gateCapabilities,
+  typeof connectionCapabilities,
+  typeof metaCapabilities,
+  typeof epistemicCapabilities,
+  typeof governanceCapabilities,
+  typeof taskCapabilities,
+  typeof workerCapabilities,
+  typeof ingestCapabilities,
+  typeof auditCapabilities,
+  typeof membersCapabilities,
+  typeof agentProfileCapabilities,
+  typeof platformCapabilities,
+  typeof modulesCapabilities,
+  typeof goalCapabilities,
+] = [
+  chatCapabilities,
+  ontologyCapabilities,
+  graphCapabilities,
+  gateCapabilities,
+  connectionCapabilities,
+  metaCapabilities,
+  epistemicCapabilities,
+  governanceCapabilities,
+  taskCapabilities,
+  workerCapabilities,
+  ingestCapabilities,
+  auditCapabilities,
+  membersCapabilities,
+  agentProfileCapabilities,
+  platformCapabilities,
+  modulesCapabilities,
+  goalCapabilities,
+];
 
 /** The complete capability registry (design doc §9.3). */
-export const CAPABILITY_REGISTRY: readonly Capability[] = REGISTERED;
+export const CAPABILITY_REGISTRY: readonly Capability[] = GROUPS.flat();
 
 /** Every registered capability name, as a type: a hand-typed name that is not in the registry
  *  (a typo, a name that was never registered) fails at compile time wherever one is expected —
  *  the console's role checks and nav entries first of all (#541 review M1). */
-export type CapabilityName = (typeof REGISTERED)[number]['name'];
+export type CapabilityName = (typeof GROUPS)[number][number]['name'];
 
 /** Narrows a runtime string to `CapabilityName`. */
 export function isCapabilityName(name: string): name is CapabilityName {
