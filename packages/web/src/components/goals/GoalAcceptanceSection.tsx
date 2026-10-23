@@ -7,6 +7,7 @@ import type {
 import { auditHref } from '../../lib/audit.js';
 import { formatDateTime, formatRelative, shortId } from '../../lib/format.js';
 import {
+  checkErrorLabel,
   checkKindLabel,
   factCheckSentence,
   observationSentence,
@@ -60,7 +61,9 @@ export function GoalAcceptanceSection({ detail, gateNames }: GoalAcceptanceSecti
                     <span className="mono">{check.checkKey}</span>
                     <span className="text-3">{checkKindLabel(check.kind, t)}</span>
                     <span>{overriddenStatusText(check.status, t)}</span>
-                    {check.lastError ? <span className="text-3">{check.lastError}</span> : null}
+                    {check.lastError ? (
+                      <span className="text-3">{checkErrorLabel(check.lastError, t)}</span>
+                    ) : null}
                   </li>
                 ))}
               </ul>
@@ -261,7 +264,9 @@ function CheckRow({
           </span>
         ) : null}
       </span>
-      {check.lastError ? <span className="text-small text-danger">{check.lastError}</span> : null}
+      {check.lastError ? (
+        <span className="text-small text-danger">{checkErrorLabel(check.lastError, t)}</span>
+      ) : null}
     </li>
   );
 }

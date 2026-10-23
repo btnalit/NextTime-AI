@@ -1,4 +1,9 @@
-import type { GoalDetailWire, PlanRevisionSummaryWire, PlanRevisionWire } from '@nexttime/shared';
+import {
+  type GoalDetailWire,
+  type PlanRevisionSummaryWire,
+  type PlanRevisionWire,
+  visibleLines,
+} from '@nexttime/shared';
 import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative } from '../../lib/format.js';
@@ -95,7 +100,7 @@ function RevisionItem({
         ) : null}
       </span>
       {revision.reason ? (
-        <p className="pre-wrap">{revision.reason}</p>
+        <p className="pre-wrap">{visibleLines(revision.reason)}</p>
       ) : revision.revision > 1 ? (
         <span className="text-small text-3">{t('没有写修订原因。', 'No reason given.')}</span>
       ) : null}

@@ -2,11 +2,13 @@ import type { GoalPlan, UnresolvedGoalActionWire } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
 import { goalRun } from '../components/goals/goal-fixtures.test-helpers.js';
 import {
+  checkErrorLabel,
   exhaustedBudget,
   factCheckSentence,
   goalBudgetRows,
   goalStateNote,
   goalStepProgress,
+  observationSentence,
   planDiff,
   predicateSentence,
   unresolvedActionText,
@@ -179,5 +181,28 @@ describe('lib/goals', () => {
     expect(unresolvedActionText(unresolved({ needs: 'decision' }), false, zh).needs).toMatch(
       /重新执行，或者改计划/,
     );
+  });
+
+  it('names an observation’s params, a secret-named field masked', () => {
+    const check = {
+      gatekeeperId: '66000000-0000-4000-8000-0000000000d1',
+      operation: 'cert.list',
+      expect: { path: 'expiring', op: 'eq' as const, value: 0 },
+    };
+    expect(observationSentence(check, 'cert-gate', zh)).toBe(
+      '在门「cert-gate」上观察 cert.list，期望 expiring 等于 0',
+    );
+    const withParams = observationSentence(
+      { ...check, params: { host: 'web-1', token: 'not-a-real-value' } },
+      'cert-gate',
+      zh,
+    );
+    expect(withParams).toMatch(/以参数 .*"host":"web-1"/);
+    expect(withParams).not.toMatch(/not-a-real-value/);
+  });
+
+  it('a check’s last error reads in words where the code is known, as its code otherwise', () => {
+    expect(checkErrorLabel('predicate_unsatisfied', zh)).toBe('结果不符合期望');
+    expect(checkErrorLabel('gate_timeout', zh)).toBe('上次没成功（代码 gate_timeout）');
   });
 });

@@ -22,7 +22,8 @@ import type {
   StepRunWire,
   UnresolvedGoalActionWire,
 } from '@nexttime/shared';
-import { shortId } from './format.js';
+import { visibleText } from '@nexttime/shared';
+import { clipMiddle, redactSensitive, shortId } from './format.js';
 import type { Translate } from './i18n.js';
 
 /**
@@ -30,7 +31,7 @@ import type { Translate } from './i18n.js';
  * `goal` capability group's one wire shape (`wire/goal.ts`) — the sentences for its sub-states, a
  * plan's predicates, its budget, and the difference between two plan revisions. No capability
  * calls and no React: the pages call and render. Read-only for now — the operations (confirm,
- * pause, resume, cancel, revise) arrive with GO5b, so nothing here names a button.
+ * pause, resume, cancel, revise) come in GO6's next part, so nothing here names a button.
  *
  * Words follow the design (plan §9 "语义一致"): 目标 is the GoalRun, 步骤 a StepRun, 任务 a Task one
  * attempt of a step ran as; 执行状态 (how far it ran) and 目标结果 (whether it was achieved) stay
@@ -218,10 +219,10 @@ export function stepRemovalText(removal: StepRemoval | undefined, t: Translate):
   const released = removal.release?.length ?? 0;
   return released > 0
     ? t(
-        `让它跑完（结果只入库不推进），放行 ${released} 条已提交的动作`,
+        `让它跑完（结果只记下，不推进目标），放行 ${released} 条已提交的动作`,
         `Let it finish (result recorded, not advanced); ${released} submitted action(s) released`,
       )
-    : t('让它跑完（结果只入库不推进）', 'Let it finish (result recorded, not advanced)');
+    : t('让它跑完（结果只记下，不推进目标）', 'Let it finish (result recorded, not advanced)');
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -354,10 +355,46 @@ export function observationSentence(
 ): string {
   const gate = gateName ?? shortId(check.gatekeeperId);
   const expect = predicateSentence(check.expect, t);
-  return t(
-    `在门「${gate}」上观察 ${check.operation}，期望 ${expect}`,
-    `Observe ${check.operation} on gate “${gate}”, expecting ${expect}`,
-  );
+  // Two checks of one operation differ only in their params, so the sentence names them —
+  // secret-named fields masked, though the kernel has masked them already.
+  const params =
+    check.params && Object.keys(check.params).length > 0
+      ? visibleText(clipMiddle(JSON.stringify(redactSensitive(check.params)), OBSERVE_PARAMS_MAX))
+      : null;
+  return params === null
+    ? t(
+        `在门「${gate}」上观察 ${check.operation}，期望 ${expect}`,
+        `Observe ${check.operation} on gate “${gate}”, expecting ${expect}`,
+      )
+    : t(
+        `在门「${gate}」上以参数 ${params} 观察 ${check.operation}，期望 ${expect}`,
+        `Observe ${check.operation} with ${params} on gate “${gate}”, expecting ${expect}`,
+      );
+}
+
+/** How long the params of an observation may read inline before they are clipped. */
+const OBSERVE_PARAMS_MAX = 160;
+
+const CHECK_ERROR: Readonly<Record<string, readonly [string, string]>> = {
+  predicate_unsatisfied: ['结果不符合期望', 'The result did not meet the expectation'],
+  predicate_undetermined: [
+    '结果里没有要检查的值，判断不了',
+    'The result lacked the value to check, so it could not be judged',
+  ],
+  attempts_exhausted: ['试满了次数仍没有结论', 'Ran out of attempts without an answer'],
+  requester_may_not_read_facts: [
+    '请求人读不到图谱里的事实',
+    'The requester cannot read facts in the graph',
+  ],
+};
+
+/** What went wrong at a check's last attempt (`lastError`, a short code the kernel keeps): the
+ *  common ones in words, any other as its code. */
+export function checkErrorLabel(code: string, t: Translate): string {
+  const known = CHECK_ERROR[code];
+  if (known) return t(known[0], known[1]);
+  const shown = visibleText(code);
+  return t(`上次没成功（代码 ${shown}）`, `The last attempt did not succeed (code ${shown})`);
 }
 
 function objectRefText(ref: FactObjectRef, t: Translate): string {

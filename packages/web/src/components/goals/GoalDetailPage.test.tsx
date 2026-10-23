@@ -64,7 +64,7 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
       ),
     );
     expect(screen.getByTestId('goal-acceptance-not-started')).toBeTruthy();
-    // Read-only: no operation buttons yet (they arrive with GO5b).
+    // Read-only: no operation buttons yet (they come in GO6's next part).
     expect(screen.queryByRole('button', { name: /暂停|继续|取消|确认/ })).toBeNull();
   });
 
@@ -126,7 +126,10 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
     );
     expect(screen.getByTestId('goal-state-note').textContent).toMatch(/有动作结果不明/);
     expect(screen.getByTestId('goal-step-waiting').textContent).toMatch(/等核对动作是否生效/);
-    expect(screen.getByTestId('goal-step-action').textContent).toMatch(/结果不明/);
+    // Whether it took effect is the open question: it reads as unknown, never as failed first.
+    const stepAction = screen.getByTestId('goal-step-action');
+    expect(stepAction.textContent).toMatch(/结果不明/);
+    expect(stepAction.textContent).not.toMatch(/失败/);
   });
 
   it('once every finding is recorded, a goal paused for a check says it can go on', async () => {

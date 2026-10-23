@@ -1,11 +1,16 @@
-import type { GoalDetailWire, GoalLeftoversWire, UnresolvedGoalActionWire } from '@nexttime/shared';
+import {
+  type GoalDetailWire,
+  type GoalLeftoversWire,
+  type UnresolvedGoalActionWire,
+  visibleLines,
+} from '@nexttime/shared';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useCanOpen } from '../../hooks/useCanOpen.js';
 import { useResource } from '../../hooks/useResource.js';
 import { auditHref } from '../../lib/audit.js';
 import type { CapabilityCaller, PushSource } from '../../lib/clients.js';
 import { describeError } from '../../lib/errors.js';
-import { actionKindLabel, excerpt, formatDateTime, formatRelative } from '../../lib/format.js';
+import { actionKindTagText, excerpt, formatDateTime, formatRelative } from '../../lib/format.js';
 import {
   goalBudgetRows,
   goalPauseReasonLabel,
@@ -42,8 +47,8 @@ export interface GoalDetailPageProps {
  * components/goals/GoalDetailPage (S11 GO6, read-only part): one goal (`get_goal`) on its own page
  * — what it is doing or waiting on, who asked for it, what it spent of its budget, its steps,
  * its acceptance, the actions still waiting for a person (`list_goal_unresolved_actions`), what a
- * cancel left behind, and its plan revisions. No operation buttons yet: confirming, pausing,
- * resuming, cancelling and revising arrive with GO5b.
+ * cancel left behind, and its plan revisions. No operation buttons yet: the operations GO5b
+ * added (confirming, pausing, resuming, cancelling, …) come in GO6's next part.
  *
  * A goal the reader may not see reads exactly like one that does not exist (the kernel's 404 for
  * both); the page says so without guessing which. No goal pushes exist yet: an update of one of
@@ -244,7 +249,7 @@ function overviewItems(goal: GoalDetailWire, http: CapabilityCaller, t: Translat
     {
       key: 'statement',
       label: t('目标', 'Goal'),
-      value: <p className="pre-wrap">{goal.statement}</p>,
+      value: <p className="pre-wrap">{visibleLines(goal.statement)}</p>,
     },
     {
       key: 'requester',
@@ -333,7 +338,10 @@ function ProvenanceLink({ goalRunId, t }: { readonly goalRunId: string; readonly
   }
   return (
     <a href={href} data-testid="goal-provenance-link">
-      {t('在审计里查看这个目标的每次变化', 'See every change of this goal in the audit log')}
+      {t(
+        '在审计里查看这个目标本身的状态变化',
+        'See the changes of this goal’s own state in the audit log',
+      )}
     </a>
   );
 }
@@ -375,7 +383,7 @@ function Leftovers({
           >
             <ActionChip
               actionRequestId={action.actionRequestId}
-              name={actionKindLabel(action.actionKindTag)}
+              name={actionKindTagText(action.actionKindTag)}
               http={http}
             />
             <RefChip kind="gatekeeper" id={action.gatekeeperId} http={http} size="s" />

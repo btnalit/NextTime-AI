@@ -1,7 +1,13 @@
 import type { GoalDetailWire, StepAcceptanceWire, StepRunWire } from '@nexttime/shared';
 import { DEFAULT_MAX_ATTEMPTS } from '@nexttime/shared';
 import type { CapabilityCaller } from '../../lib/clients.js';
-import { formatDateTime, formatRelative, prettyJsonVisible, shortId } from '../../lib/format.js';
+import {
+  formatDateTime,
+  formatRelative,
+  prettyJsonVisible,
+  redactSensitive,
+  shortId,
+} from '../../lib/format.js';
 import {
   type StepView,
   actionFailureLabel,
@@ -226,7 +232,7 @@ function StepItem({ view, acceptance, http, gateNames, t }: StepItemProps) {
         <details className="disclosure">
           <summary>{t('输入', 'Input')}</summary>
           <div className="disclosure-body">
-            <pre className="code-block">{prettyJsonVisible(planStep.input)}</pre>
+            <pre className="code-block">{prettyJsonVisible(redactSensitive(planStep.input))}</pre>
           </div>
         </details>
       ) : null}
@@ -296,10 +302,20 @@ function Actions({
           data-testid="goal-step-action"
         >
           <ActionChip actionRequestId={action.actionRequestId} http={http} />
-          <StatusChip machine="actionRequest" status={action.status} size="s" />
-          {action.failureKind ? (
-            <span className="text-danger">{actionFailureLabel(action.failureKind, t)}</span>
-          ) : null}
+          {action.failureKind === 'outcome_unknown' ? (
+            // Whether it took effect is the open question (待核对的动作), so it reads as unknown,
+            // not as failed — as everywhere else in the console (`actionOutcomeChip`).
+            <span className="chip chip-s chip-danger" data-testid="goal-step-action-unknown">
+              {actionFailureLabel(action.failureKind, t)}
+            </span>
+          ) : (
+            <>
+              <StatusChip machine="actionRequest" status={action.status} size="s" />
+              {action.failureKind ? (
+                <span className="text-danger">{actionFailureLabel(action.failureKind, t)}</span>
+              ) : null}
+            </>
+          )}
           {action.reconciliation ? (
             <span className="text-3">{reconciliationLabel(action.reconciliation, t)}</span>
           ) : null}

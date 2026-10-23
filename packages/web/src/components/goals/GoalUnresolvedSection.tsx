@@ -1,7 +1,7 @@
 import type { UnresolvedGoalActionWire } from '@nexttime/shared';
 import type { CapabilityCaller } from '../../lib/clients.js';
-import { actionKindLabel, formatDateTime, formatRelative } from '../../lib/format.js';
-import { unresolvedActionText } from '../../lib/goals.js';
+import { actionKindTagText, formatDateTime, formatRelative } from '../../lib/format.js';
+import { checkErrorLabel, unresolvedActionText } from '../../lib/goals.js';
 import { useT } from '../../lib/i18n.js';
 import { ErrorBanner } from '../kit/error-banner.js';
 import { RefChip } from '../kit/ref-chip.js';
@@ -25,7 +25,8 @@ export interface GoalUnresolvedSectionProps {
  * is unknown and that still need a person (`list_goal_unresolved_actions`): what each needs (a
  * finding, or — found not to have taken effect — a decision) and where the platform's own check
  * of it stands, or why there is none. Rendered only while there is something to show; recording a
- * finding arrives with the goal operations (GO5b), so each row only opens the action itself.
+ * finding comes with the goal operations (GO6's next part), so each row only opens the action
+ * itself.
  */
 export function GoalUnresolvedSection({
   state,
@@ -60,7 +61,7 @@ export function GoalUnresolvedSection({
                 <span className="row-wrap">
                   <ActionChip
                     actionRequestId={action.actionRequestId}
-                    name={actionKindLabel(action.actionKindTag)}
+                    name={actionKindTagText(action.actionKindTag)}
                     http={http}
                   />
                   <RefChip kind="gatekeeper" id={action.gatekeeperId} http={http} size="s" />
@@ -80,7 +81,9 @@ export function GoalUnresolvedSection({
                   {text.check}
                 </span>
                 {action.platformCheck?.lastError ? (
-                  <span className="text-small text-3">{action.platformCheck.lastError}</span>
+                  <span className="text-small text-3">
+                    {checkErrorLabel(action.platformCheck.lastError, t)}
+                  </span>
                 ) : null}
               </li>
             );

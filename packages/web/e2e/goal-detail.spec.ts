@@ -1,3 +1,4 @@
+import { getCapability } from '@nexttime/shared';
 import { type Page, expect, test } from '@playwright/test';
 import { OWNER_API_KEY, loginAsOwner } from './lib/auth.js';
 
@@ -246,30 +247,59 @@ const NAMES: Record<string, { kind: string; name: string }> = {
   [TASK_APPLY]: { kind: 'task', name: 'cert-rotator' },
 };
 
+/** A stand-in's answer, checked first against the capability's own result contract (review of
+ *  #683): when the contract changes, the stand-in fails here instead of the page going green on a
+ *  shape the kernel no longer sends. */
+function answer(name: string, result: unknown) {
+  const capability = getCapability(name);
+  if (!capability) throw new Error(`no capability ${name}`);
+  return { json: { ok: true, result: capability.resultSchema.parse(result) } };
+}
+
+const member = (id: string, displayName: string) => ({
+  id,
+  kind: 'human',
+  role: 'member',
+  displayName,
+  createdAt: T0,
+  hasApiKey: true,
+  disabledAt: null,
+  internal: false,
+});
+
 async function answerGoalReads(page: Page): Promise<void> {
-  const answer = (result: unknown) => ({ json: { ok: true, result } });
-  await page.route('**/api/cap/list_goals', (route) => route.fulfill(answer({ items: GOALS })));
-  await page.route('**/api/cap/get_goal', (route) => route.fulfill(answer(DETAIL)));
+  await page.route('**/api/cap/list_goals', (route) =>
+    route.fulfill(answer('list_goals', { items: GOALS })),
+  );
+  await page.route('**/api/cap/get_goal', (route) => route.fulfill(answer('get_goal', DETAIL)));
   await page.route('**/api/cap/get_goal_revision', async (route) => {
     const body = route.request().postDataJSON() as { revision?: number } | null;
     const n = body?.revision === 2 ? 2 : 1;
-    await route.fulfill(answer(revision(n)));
+    await route.fulfill(answer('get_goal_revision', revision(n)));
   });
   await page.route('**/api/cap/list_goal_unresolved_actions', (route) =>
-    route.fulfill(answer({ items: UNRESOLVED })),
+    route.fulfill(answer('list_goal_unresolved_actions', { items: UNRESOLVED })),
   );
   await page.route('**/api/cap/list_principals', (route) =>
     route.fulfill(
-      answer({
-        items: [
-          { id: ALICE, displayName: 'alice', kind: 'human', role: 'member' },
-          { id: BOB, displayName: 'bob', kind: 'human', role: 'member' },
-        ],
-      }),
+      answer('list_principals', { items: [member(ALICE, 'alice'), member(BOB, 'bob')] }),
     ),
   );
   await page.route('**/api/cap/list_gatekeepers', (route) =>
-    route.fulfill(answer({ items: [{ id: GATE, name: 'cert-gate' }] })),
+    route.fulfill(
+      answer('list_gatekeepers', {
+        items: [
+          {
+            id: GATE,
+            name: 'cert-gate',
+            kind: 'http',
+            status: 'active',
+            operationCount: 2,
+            createdAt: T0,
+          },
+        ],
+      }),
+    ),
   );
   await page.route('**/api/cap/resolve_refs', async (route) => {
     const body = route.request().postDataJSON() as { ids?: string[] } | null;
@@ -277,7 +307,7 @@ async function answerGoalReads(page: Page): Promise<void> {
       const ref = NAMES[id];
       return ref ? [{ id, ...ref }] : [];
     });
-    await route.fulfill(answer({ items }));
+    await route.fulfill(answer('resolve_refs', { items }));
   });
 }
 
@@ -313,7 +343,7 @@ test.describe('S11 GO6: a goal’s pages with content (stand-in reads)', () => {
       await expect(page.getByTestId('goal-unresolved-check')).toContainText('删除');
       await expect(page.getByTestId('goal-step-waiting')).toBeVisible();
       await expect(page.getByTestId('goal-revision')).toHaveCount(2);
-      // Read-only: no operation buttons yet (they arrive with GO5b).
+      // Read-only: no operation buttons yet (they come in GO6's next part).
       await expect(
         page.locator('.goal-page').getByRole('button', { name: /暂停|继续|取消|确认/ }),
       ).toHaveCount(0);

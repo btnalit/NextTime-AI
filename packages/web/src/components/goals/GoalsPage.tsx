@@ -184,8 +184,8 @@ function GoalsList({ state, rows, total, principalNames, onRetry, onOpen }: Goal
             : t('没有符合筛选的目标', 'No goals match this filter')
         }
         body={t(
-          '在对话里把一件多步、跨系统或要等待的事交给入口智能体，它会提出一个目标；你确认计划后，目标就会出现在这里。',
-          'Hand the entry agent something multi-step, cross-system or long-waiting in a chat and it proposes a goal; once you confirm the plan, it shows up here.',
+          '在对话里把一件多步、跨系统或要等待的事交给入口智能体，它会提出一个目标。提出后目标就出现在这里，等你看过计划再确认。',
+          'Hand the entry agent something multi-step, cross-system or long-waiting in a chat and it proposes a goal. The goal shows up here as soon as it is proposed, for you to read its plan and confirm it.',
         )}
         testId="goals-empty"
       />
