@@ -14800,6 +14800,123 @@
                 "minimum": 0,
                 "type": "integer"
               },
+              "environment": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "definition": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "version": {
+                            "exclusiveMinimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "version"
+                        ],
+                        "type": "object"
+                      },
+                      "environmentDigest": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "image": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "kernelVersion": {
+                        "type": "string"
+                      },
+                      "model": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "runtime": {
+                        "anyOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "builtFrom": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "imageId": {
+                                "type": "string"
+                              },
+                              "imageRef": {
+                                "type": "string"
+                              },
+                              "modelsConfigDigest": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "piVersion": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "platformExtensionVersion": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "imageRef",
+                              "imageId",
+                              "piVersion",
+                              "platformExtensionVersion",
+                              "builtFrom",
+                              "modelsConfigDigest"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "systemPromptDigest": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "definition",
+                      "model",
+                      "image",
+                      "systemPromptDigest",
+                      "kernelVersion",
+                      "runtime",
+                      "environmentDigest"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "id": {
                 "type": "string"
               },
@@ -14861,7 +14978,8 @@
               "attempt",
               "startedAt",
               "terminatedAt",
-              "skills"
+              "skills",
+              "environment"
             ],
             "type": "object"
           },
@@ -24346,6 +24464,123 @@
                       "minimum": 0,
                       "type": "integer"
                     },
+                    "environment": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "definition": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "id": {
+                                  "type": "string"
+                                },
+                                "version": {
+                                  "exclusiveMinimum": 0,
+                                  "type": "integer"
+                                }
+                              },
+                              "required": [
+                                "id",
+                                "version"
+                              ],
+                              "type": "object"
+                            },
+                            "environmentDigest": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "image": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "kernelVersion": {
+                              "type": "string"
+                            },
+                            "model": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "runtime": {
+                              "anyOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "builtFrom": {
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
+                                    },
+                                    "imageId": {
+                                      "type": "string"
+                                    },
+                                    "imageRef": {
+                                      "type": "string"
+                                    },
+                                    "modelsConfigDigest": {
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
+                                    },
+                                    "piVersion": {
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
+                                    },
+                                    "platformExtensionVersion": {
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "imageRef",
+                                    "imageId",
+                                    "piVersion",
+                                    "platformExtensionVersion",
+                                    "builtFrom",
+                                    "modelsConfigDigest"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "systemPromptDigest": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "definition",
+                            "model",
+                            "image",
+                            "systemPromptDigest",
+                            "kernelVersion",
+                            "runtime",
+                            "environmentDigest"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "id": {
                       "type": "string"
                     },
@@ -24407,7 +24642,8 @@
                     "attempt",
                     "startedAt",
                     "terminatedAt",
-                    "skills"
+                    "skills",
+                    "environment"
                   ],
                   "type": "object"
                 },

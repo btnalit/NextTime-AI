@@ -130,6 +130,11 @@ curl -s https://<host>:8443/api/cap/explain \
 `"inferred"` 而是别的值时，说明这个 Fact 不是这次 Worker 写的——找错了 Fact id，回 `get_task` 的
 `result.factIds` 重新核对。
 
+同一个 Worker 以前做得对、现在不对时，先看控制台 Task 详情的「运行环境」（S11 W1a；`get_task` 里是
+`workerRuns[].environment`）：每次运行用的 Worker 定义版本、模型（或「运行时默认」）、平台版本、运行时
+镜像 id 与 pi 版本、系统提示摘要。两次运行的「环境指纹」不同，就逐项对比找出变了的那一项；早于 W1a
+的运行显示「未记录」。
+
 ### 3.5 全链路审计——`audit_query`/`reconstruct`
 
 ```bash

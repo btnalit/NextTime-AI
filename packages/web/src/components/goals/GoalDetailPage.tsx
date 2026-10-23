@@ -22,6 +22,7 @@ import { type Translate, useT } from '../../lib/i18n.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { hrefs } from '../../lib/router.js';
 import { labelText, statusChipStyle } from '../../lib/status-tone.js';
+import { ProxyOutcomeNote } from '../ProxyOutcomeNote.js';
 import { useGatekeeperNames } from '../approvals/useDirectoryNames.js';
 import { Button } from '../kit/button.js';
 import { EmptyState } from '../kit/empty-state.js';
@@ -249,6 +250,7 @@ export function GoalDetailPage({ http, pushes, goalRunId }: GoalDetailPageProps)
         {goal.outcome && goal.outcomeBasis ? (
           <span className="text-3">{outcomeBasisLabel(goal.outcomeBasis, t)}</span>
         ) : null}
+        {goal.outcome && goal.outcomeBasis ? <ProxyOutcomeNote basis={goal.outcomeBasis} /> : null}
       </div>
       {note ? (
         <Notice tone={note.tone} testId="goal-state-note">

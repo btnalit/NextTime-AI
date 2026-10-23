@@ -4,6 +4,7 @@ import { findAttributableTurn } from '../../application/host-bridge/index.js';
 import {
   type ObjectiveOutcomeRecord,
   type ProcedureClaimRecord,
+  type RunEnvironment,
   type SkillLoadRecord,
   TaskNotFoundError,
   type TurnAttributionRecord,
@@ -49,6 +50,30 @@ export function toWireSkillLoads(records: readonly SkillLoadRecord[] | null | un
     version: record.version,
     name: record.name,
   }));
+}
+
+/** S11 W1a (`wire/task.ts` `RunEnvironmentWire`): `null` = not recorded. */
+export function toWireRunEnvironment(environment: RunEnvironment | null | undefined) {
+  if (!environment) return null;
+  const { spec, runtime } = environment;
+  return {
+    definition: { id: spec.definition.id, version: spec.definition.version },
+    model: spec.model,
+    image: spec.image,
+    systemPromptDigest: spec.systemPromptDigest,
+    kernelVersion: spec.kernelVersion,
+    runtime: runtime
+      ? {
+          imageRef: runtime.imageRef,
+          imageId: runtime.imageId,
+          piVersion: runtime.piVersion,
+          platformExtensionVersion: runtime.platformExtensionVersion,
+          builtFrom: runtime.builtFrom,
+          modelsConfigDigest: runtime.modelsConfigDigest,
+        }
+      : null,
+    environmentDigest: environment.environmentDigest,
+  };
 }
 
 export function toWireProcedureClaim(record: ProcedureClaimRecord) {
