@@ -432,6 +432,21 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
     }
   }
 
+  function removeSystemPrompt(principalId: string): void {
+    try {
+      rmSync(localSystemPromptPath(config, principalId), { force: true });
+    } catch (err) {
+      console.error(
+        JSON.stringify({
+          level: 'warn',
+          msg: 'system-prompt.md removal failed (spawn still succeeds; the container starts on the previous prompt)',
+          principalId,
+          error: String(err),
+        }),
+      );
+    }
+  }
+
   /**
    * S3.13: writes every `skillsInline[]` entry's files under `skills/<name>/` in the principal's
    * platform directory (mounted read-only, host-paths.ts) — the same layout `task-service.ts`'s
@@ -614,7 +629,7 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
       // Before anything is torn down: an image that doesn't speak this supervisor's mount layout
       // must leave the principal's current container (if any) exactly as it was.
       try {
-        await assertRuntimeContract(imagesDocker, image);
+        await assertRuntimeContract(imagesDocker, image, { mode: 'resident', principalId });
       } catch (err) {
         // Only the layout asked for the recreate, and the image it would need can't run here:
         // the old-layout container still works, so it keeps serving rather than every turn
@@ -625,7 +640,7 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
           console.error(
             JSON.stringify({
               level: 'warn',
-              msg: 'entry container is on an older mount layout but the requested image cannot replace it; reusing it',
+              msg: 'entry container is on an older mount layout but the requested image cannot replace it; reusing it — it still reads its system prompt from /workspace/.nexttime/system-prompt.md, so newly published prompts and Skills do not reach it until a current image is active',
               principalId,
               image,
               containerRuntimeContract: existing.labels[CONTAINER_RUNTIME_CONTRACT_LABEL] ?? null,
@@ -665,6 +680,10 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
       // S3.13: written only in this (re)create branch — see writeSkillsInline's own doc comment
       // for why a plain reuse above never needs it.
       writeSkillsInline(principalId, skillsInline ?? []);
+      // No published entry definition (any more): the new container starts on the image's default
+      // prompt, not on one left from before (Task mode does the same). Only here, never before a
+      // reuse — the running pi was started on that path.
+      if (systemPrompt === undefined) removeSystemPrompt(principalId);
 
       const networkName = await resolveNetworkName();
       const spec = buildSpawnSpec({
@@ -754,19 +773,22 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
       // failed directory removal here (permissions, an already-gone path) must never surface as an
       // error the caller retries — the container is what actually mattered for "reclaim access",
       // this is just freeing disk sooner than the operator would notice on their own.
+      // Each directory on its own: one that can't be removed must not keep the other.
       const { localWorkspaceDir, localPlatformDir } = workspacePaths(config, principalId);
-      try {
-        rmSync(localWorkspaceDir, { recursive: true, force: true });
-        rmSync(localPlatformDir, { recursive: true, force: true });
-      } catch (err) {
-        console.error(
-          JSON.stringify({
-            level: 'warn',
-            msg: 'reclaim: workspace directory removal failed',
-            principalId,
-            error: String(err),
-          }),
-        );
+      for (const dir of [localWorkspaceDir, localPlatformDir]) {
+        try {
+          rmSync(dir, { recursive: true, force: true });
+        } catch (err) {
+          console.error(
+            JSON.stringify({
+              level: 'warn',
+              msg: 'reclaim: workspace directory removal failed',
+              principalId,
+              dir,
+              error: String(err),
+            }),
+          );
+        }
       }
     },
 

@@ -48,7 +48,7 @@
  * nothing in this codebase ever sent it — see `config.ts`'s `TaskSkillInlineSchema` doc comment).
  */
 
-import { mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { posix as posixPath } from 'node:path';
 import { isValidCorrelationId } from '@nexttime/shared';
 import type { SupervisorConfig } from './config.js';
@@ -446,7 +446,7 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
       const paths = taskWorkspacePaths(config, taskId);
 
       // Refused before anything is written (runtime-contract.ts).
-      await assertRuntimeContract(imagesDocker, image);
+      await assertRuntimeContract(imagesDocker, image, { mode: 'task', taskId, workerRunId });
 
       // This process also runs as uid 10001, so a directory it creates here is already correctly
       // owned; both are bind sources, which Docker would otherwise create as root.
@@ -480,6 +480,11 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
           writeFileSync(filePath, content, 'utf8');
         }
       }
+      // Retention (`sweepRetention`) goes by each directory's own mtime, which rewriting a file
+      // already there doesn't move: mark both as used by this spawn.
+      const usedAt = new Date(now());
+      utimesSync(paths.localWorkspaceDir, usedAt, usedAt);
+      utimesSync(paths.localPlatformDir, usedAt, usedAt);
 
       const networkName = await resolveNetworkName();
       const spec = buildTaskSpawnSpec({

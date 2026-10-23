@@ -396,6 +396,29 @@ describe('resident-service spawn', () => {
     expect(docker.createCalls).toHaveLength(3);
   });
 
+  it('drops a withdrawn entry prompt when the container is recreated, never under a running one', async () => {
+    const { service, docker } = setup();
+    await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h',
+      systemPrompt: 'published prompt',
+    });
+    const promptFile = join(platformDir('alice'), 'system-prompt.md');
+    expect(readFileSync(promptFile, 'utf8')).toBe('published prompt');
+
+    // The entry definition is withdrawn: the reused container was started on that file.
+    await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+    expect(docker.createCalls).toHaveLength(1);
+    expect(existsSync(promptFile)).toBe(true);
+
+    // The next container starts on the image's default prompt.
+    await stampLayout(docker, undefined);
+    await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+    expect(docker.createCalls).toHaveLength(2);
+    expect(existsSync(promptFile)).toBe(false);
+  });
+
   it('keeps reusing an old-layout container when the requested image could not replace it', async () => {
     const { service, docker, config } = setup();
     const first = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });

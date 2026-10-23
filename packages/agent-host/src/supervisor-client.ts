@@ -103,8 +103,8 @@ export interface SpawnInput {
    *  activeRuntimeImage`), forwarded verbatim from the `startTurn` command's own `image` field —
    *  worker-supervisor validates it against the same allowlist `/task/spawn` already enforces
    *  (403 `image_not_allowed`, surfaced here as `SupervisorError('http_error', ..., {status:403})`
-   *  since this client has no dedicated error kind for it, unlike the kernel's own
-   *  `TaskSupervisorClient`). `undefined` leaves worker-supervisor's own `WORKER_IMAGE` env
+   *  with the code in its message, since this client has no dedicated error kind for it, unlike
+   *  the kernel's own `TaskSupervisorClient`; 409 `runtime_image_incompatible` the same way). `undefined` leaves worker-supervisor's own `WORKER_IMAGE` env
    *  default in effect, unchanged from before this field existed. */
   readonly image?: string;
 }
@@ -135,6 +135,17 @@ export interface ResidentStatus {
   readonly startedAt: string | undefined;
   readonly restarts: number;
   readonly lastTouchedAt: string | undefined;
+}
+
+function errorCodeFromBody(body: unknown): string | undefined {
+  if (body && typeof body === 'object' && 'error' in body) {
+    const error = (body as { error?: unknown }).error;
+    if (error && typeof error === 'object' && 'code' in error) {
+      const code = (error as { code?: unknown }).code;
+      return typeof code === 'string' ? code : undefined;
+    }
+  }
+  return undefined;
 }
 
 async function requestJson(
@@ -228,9 +239,14 @@ export class SupervisorClient implements SupervisorClientPort {
       },
     );
     if (status !== 200) {
-      throw new SupervisorError('http_error', `POST /resident/spawn returned ${status}`, {
-        status,
-      });
+      // The refusal's own code (409 `runtime_image_incompatible`, 403 `image_not_allowed`) is what
+      // the Turn rejection and this service's log carry, so an operator can find it.
+      const code = errorCodeFromBody(body);
+      throw new SupervisorError(
+        'http_error',
+        `POST /resident/spawn returned ${status}${code ? ` ${code}` : ''}`,
+        { status },
+      );
     }
     return body as SpawnResult;
   }

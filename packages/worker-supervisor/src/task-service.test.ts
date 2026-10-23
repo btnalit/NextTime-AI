@@ -6,6 +6,7 @@ import {
   rmSync,
   statSync,
   utimesSync,
+  writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -580,6 +581,23 @@ describe('task-service sweepRetention', () => {
 
     await service.sweepRetention();
     expect(existsSync(recent)).toBe(true);
+  });
+
+  it('a spawn marks both of the Task’s directories as used, even when it only rewrites what is there', async () => {
+    const { service, config } = setupRealClock({ TASK_WORKDIR_RETENTION_HOURS: '1' });
+    const workspace = taskDir(config, 'task-1');
+    const platform = join(config.localDataDir, 'workspaces', '.platform', 'tasks', 'task-1');
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(platform, { recursive: true });
+    writeFileSync(join(platform, 'system-prompt.md'), 'earlier run');
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    utimesSync(workspace, twoHoursAgo, twoHoursAgo);
+    utimesSync(platform, twoHoursAgo, twoHoursAgo);
+
+    await service.spawn({ ...spawnInput, systemPrompt: 'this run' });
+    const hourAgo = Date.now() - 60 * 60 * 1000;
+    expect(statSync(workspace).mtimeMs).toBeGreaterThan(hourAgo);
+    expect(statSync(platform).mtimeMs).toBeGreaterThan(hourAgo);
   });
 
   it('never deletes the workdir of a Task the registry still marks running, even if old', async () => {

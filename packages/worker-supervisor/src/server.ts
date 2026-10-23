@@ -69,7 +69,7 @@ import {
   PROMETHEUS_TEXT_CONTENT_TYPE,
   resolveCorrelationId,
 } from '@nexttime/shared';
-import Fastify, { type FastifyInstance, LogController } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyRequest, LogController } from 'fastify';
 import {
   SpawnRequestSchema,
   StopRequestSchema,
@@ -123,6 +123,19 @@ export interface CreateServerOptions {
  * registration otherwise.
  */
 export const PUBLIC_ROUTES: readonly string[] = ['/healthz'];
+
+/** STATUS leftover 422: a refusal the operator has to find (`docs/runbooks/operations.md` §13),
+ *  so it goes into this service's own log — the 409 body alone only reaches the caller. */
+function logIncompatible(
+  request: FastifyRequest,
+  err: RuntimeImageIncompatibleError,
+  route: string,
+): void {
+  request.log?.warn?.(
+    { code: err.code, image: err.image, found: err.found ?? null },
+    `${route} refused: ${err.code}`,
+  );
+}
 
 export function createServer(options: CreateServerOptions): FastifyInstance {
   const app = Fastify({
@@ -202,6 +215,7 @@ export function createServer(options: CreateServerOptions): FastifyInstance {
       return outcome;
     } catch (err) {
       if (err instanceof RuntimeImageIncompatibleError) {
+        logIncompatible(request, err, 'resident/spawn');
         reply.code(409);
         return { error: { code: err.code, message: err.message } };
       }
@@ -344,6 +358,7 @@ export function createServer(options: CreateServerOptions): FastifyInstance {
       return outcome;
     } catch (err) {
       if (err instanceof RuntimeImageIncompatibleError) {
+        logIncompatible(request, err, 'task/spawn');
         reply.code(409);
         return { error: { code: err.code, message: err.message } };
       }

@@ -40,10 +40,12 @@ export class RuntimeImageIncompatibleError extends Error {
 }
 
 /** Refuses `image` unless it carries the current contract label. An image the host doesn't have
- *  passes through: `createAndStart` then fails on it the way it always has. */
+ *  passes through: `createAndStart` then fails on it the way it always has. `requester` (the
+ *  spawn's mode and ids) only goes into the warning when the image can't be read. */
 export async function assertRuntimeContract(
   imagesDocker: DockerClient,
   image: string,
+  requester: Readonly<Record<string, string>> = {},
 ): Promise<void> {
   let info: Awaited<ReturnType<DockerClient['inspectImage']>>;
   try {
@@ -54,6 +56,7 @@ export async function assertRuntimeContract(
         level: 'warn',
         msg: 'runtime image contract check skipped: the image could not be read',
         image,
+        ...requester,
         error: String(err),
       }),
     );

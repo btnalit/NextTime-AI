@@ -61,6 +61,9 @@ export type TaskSupervisorErrorKind =
   | 'invalid_response'
   | 'image_not_allowed'
   | 'invalid_request'
+  /** 409 from worker-supervisor: the image was built before its mount layout (STATUS leftover 422,
+   *  `runtime-contract.ts` there). Recorded as the `worker_run.spawn_failed` audit reason. */
+  | 'runtime_image_incompatible'
   | 'http_error';
 
 export class TaskSupervisorError extends Error {
@@ -227,6 +230,17 @@ async function requestJson(
   }
 }
 
+function errorMessageFromBody(body: unknown): string | undefined {
+  if (body && typeof body === 'object' && 'error' in body) {
+    const error = (body as { error?: unknown }).error;
+    if (error && typeof error === 'object' && 'message' in error) {
+      const message = (error as { message?: unknown }).message;
+      return typeof message === 'string' ? message : undefined;
+    }
+  }
+  return undefined;
+}
+
 function errorCodeFromBody(body: unknown): string | undefined {
   if (body && typeof body === 'object' && 'error' in body) {
     const error = (body as { error?: unknown }).error;
@@ -344,10 +358,17 @@ export class TaskSupervisorClient implements TaskSupervisorClientPort {
         },
       );
     }
+    const code = errorCodeFromBody(body);
+    if (status === 409 && code === 'runtime_image_incompatible') {
+      // The supervisor's message names the image and the label it found.
+      throw new TaskSupervisorError(code, errorMessageFromBody(body) ?? code, { status });
+    }
     if (status !== 200) {
-      throw new TaskSupervisorError('http_error', `POST /task/spawn returned ${status}`, {
-        status,
-      });
+      throw new TaskSupervisorError(
+        'http_error',
+        `POST /task/spawn returned ${status}${code ? ` ${code}` : ''}`,
+        { status },
+      );
     }
     return body as TaskSpawnOutcome;
   }
