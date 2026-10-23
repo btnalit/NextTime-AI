@@ -616,17 +616,22 @@ test.describe('S11 GO6: revising the plan (stand-in reads, refusals and revision
       await page.goto(`/#/work/goals/${GOAL}`);
       await page.getByTestId('goal-op-revise').click({ timeout: 15_000 });
 
-      // 1. Prefilled from v2; the masked input is marked before anything is sent.
+      // 1. Prefilled from v2. The masked input left alone would keep its original; changed with
+      //    the mark still in it, it is held back before anything is sent.
       const editor = page.getByTestId('goal-plan-editor');
       await expect(editor).toContainText('基于第 2 版');
       const stepOf = (key: string) =>
         editor.locator(`[data-testid="goal-plan-step"][data-step-key="${key}"]`);
       const removeOldInput = stepOf('remove-old').getByTestId('goal-plan-step-input');
       await expect(removeOldInput).toHaveValue(/\[redacted\]/);
+      await expect(stepOf('remove-old')).toContainText('不改这一项，提交时原文原样保留');
+      await expect(await fieldError(page, removeOldInput)).toHaveCount(0);
+      await expect(stepOf('apply').getByTestId('goal-plan-step-worker')).toHaveValue(WORKER);
+      await expect(page.getByTestId('goal-plan-wait')).toContainText('还没有改动');
+      await removeOldInput.fill('{"keep": "all", "auth": "[redacted]"}');
       await expect(await fieldError(page, removeOldInput)).toContainText(
         '此处原文已遮蔽，请重新填写',
       );
-      await expect(stepOf('apply').getByTestId('goal-plan-step-worker')).toHaveValue(WORKER);
       await expect(page.getByTestId('goal-plan-submit')).toBeDisabled();
       await page.screenshot({
         path: testInfo.outputPath(`goal-plan-masked-${width}.png`),

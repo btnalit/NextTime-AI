@@ -28,6 +28,10 @@ import type { Translate } from './i18n.js';
  * that cannot change); `draftProblems` only keeps a revision the kernel would certainly refuse
  * from being sent, and says where. Every problem — the editor's and the kernel's — is keyed by
  * the field it is about (`FieldKey`), so it shows on that field.
+ *
+ * The draft is made against one revision — the one the page showed when the editor opened — and
+ * stays made against it: a re-read of the goal while editing moves the steps' states, never the
+ * base (`basedOnRevision`), so a newer revision meanwhile is refused (409) rather than overwritten.
  */
 
 /** Where a problem shows: one field of the editor, or the plan as a whole. */
@@ -202,9 +206,33 @@ export function releasableActions(run: StepRunWire | undefined): readonly string
 
 /** Whether a JSON value shows the `[redacted]` mark anywhere. */
 export function showsMask(value: unknown): boolean {
-  if (typeof value === 'string') return value.includes(SECRET_FIELD_MASK);
+  return someString(value, (text) => text.includes(SECRET_FIELD_MASK));
+}
+
+/** How a read shows a character nobody can see (`visibleLines`: a zero-width joiner, a soft hyphen,
+ *  a lone carriage return…) — as the literal text `\u{XXXX}`. */
+const SHOWN_ESCAPE = /\\u\{[0-9A-F]{1,6}\}/;
+
+/** Whether a JSON value shows an unseen character the way a read writes it, anywhere. */
+export function showsEscape(value: unknown): boolean {
+  return someString(value, (text) => SHOWN_ESCAPE.test(text));
+}
+
+/** What in a value only stands for its original as a read showed it, which sent back would
+ *  replace the original: the `[redacted]` mark, or a `\u{XXXX}` an unseen character was shown as.
+ *  `null` when neither. */
+export function shownOnly(value: unknown): 'mask' | 'escape' | null {
+  if (showsMask(value)) return 'mask';
+  if (showsEscape(value)) return 'escape';
+  return null;
+}
+
+function someString(value: unknown, test: (text: string) => boolean): boolean {
+  if (typeof value === 'string') return test(value);
   if (value === null || typeof value !== 'object') return false;
-  return (Array.isArray(value) ? value : Object.values(value)).some(showsMask);
+  return (Array.isArray(value) ? value : Object.values(value)).some((inner) =>
+    someString(inner, test),
+  );
 }
 
 function parseJson(text: string): { ok: true; value: unknown } | { ok: false; error: string } {
@@ -309,8 +337,11 @@ const positiveInt = (text: string) => /^\d+$/.test(text.trim()) && Number(text) 
 /**
  * What would certainly be refused, by field: a key that is not one or is taken, no Worker or
  * version, a dependency on a step that is not (or no longer) in the plan, a cycle, an input that
- * is not JSON, text that still holds the `[redacted]` mark a read put where a credential stood, a
- * blank or too long text, a budget that is not a positive number or allows no further revision.
+ * is not JSON, a blank or too long text, a budget that is not a positive number or allows no
+ * further revision — and a text the person changed that still holds what a read only showed in
+ * place of the original (`shownOnly`: the `[redacted]` mark, a `\u{XXXX}`). A text left as it was
+ * read is sent as it is: the kernel takes an entry equal to its stored one as shown as unchanged
+ * and keeps the original (GO5c).
  */
 export function draftProblems(
   draft: PlanDraft,
@@ -318,10 +349,16 @@ export function draftProblems(
   t: Translate,
 ): ReadonlyMap<FieldKey, string> {
   const problems = new Map<FieldKey, string>();
-  const masked = t(
-    `此处原文已遮蔽，请重新填写：${SECRET_FIELD_MASK} 是读出时遮住的疑似凭据，原文不会再显示；把它改成不带凭据的写法。`,
-    `The original here was masked; write it again: ${SECRET_FIELD_MASK} stands for what looked like a credential when it was read, and the original is never shown again. Write it without the credential.`,
-  );
+  const rewrite = (kind: 'mask' | 'escape'): string =>
+    kind === 'mask'
+      ? t(
+          `此处原文已遮蔽，请重新填写：${SECRET_FIELD_MASK} 是读出时遮住的疑似凭据，原文不会再显示；改了这一项，就要把它整段改成不带凭据的写法。`,
+          `The original here was masked; write it again: ${SECRET_FIELD_MASK} stands for what looked like a credential when it was read, and the original is never shown again. Once this is changed, write it whole, without the credential.`,
+        )
+      : t(
+          '这里有读出时显示成 \\u{…} 的看不见的字符（比如零宽字符、软连字符）：改了这一项，就要把它们删掉或换成真正的字符，原样提交会把这串字面文字存进去。',
+          'This holds characters nobody can see, shown as \\u{…} when read (a zero-width or soft-hyphen character, say): once this is changed, delete them or type the real character; sent as it is, the literal text would be stored.',
+        );
   const kept = draft.steps.filter((step) => !step.removed);
   const keys = new Map<string, number>();
   for (const step of kept) keys.set(step.key, (keys.get(step.key) ?? 0) + 1);
@@ -377,31 +414,11 @@ export function draftProblems(
           at('input'),
           t(`输入不是合法的 JSON：${parsed.error}`, `The input is not valid JSON: ${parsed.error}`),
         );
-      } else if (showsMask(parsed.value)) {
-        problems.set(at('input'), masked);
+      } else {
+        const shown = shownOnly(parsed.value);
+        if (shown !== null) problems.set(at('input'), rewrite(shown));
       }
-    } else if (showsMask(step.original?.input) && step.inputText.trim() !== '') {
-      problems.set(
-        at('input'),
-        stepEnded(runs.get(step.key))
-          ? t(
-              `这一步已结束，定义不能再改，可它的输入里有遮蔽的原文（${SECRET_FIELD_MASK}），不能原样再提交：把它从计划里移除（它的记录仍然保留）。`,
-              `This step has ended, so it cannot change, yet its input holds masked text (${SECRET_FIELD_MASK}) that cannot be sent back as it is: remove it from the plan (its record stays).`,
-            )
-          : masked,
-      );
     }
-  }
-  for (const step of kept) {
-    const part = maskedPartOf(step.original);
-    if (part === null) continue;
-    problems.set(
-      `step:${step.uid}`,
-      t(
-        `这一步的${part === 'reconcile' ? '动作核对声明' : '步骤验收检查'}里有遮蔽的原文（${SECRET_FIELD_MASK}），这里改不了，原样提交会被拒绝：把这一步移除（它的记录仍然保留），或者在对话里让入口智能体修订。`,
-        `This step’s ${part === 'reconcile' ? 'reconcile declarations' : 'acceptance checks'} hold masked text (${SECRET_FIELD_MASK}) that cannot be changed here and would be refused as it is: remove the step (its record stays), or ask the entry agent to revise it in a chat.`,
-      ),
-    );
   }
   const cycle = dependencyCycle(kept);
   if (cycle !== null) {
@@ -419,18 +436,7 @@ export function draftProblems(
   for (const check of draft.acceptance) {
     if (check.removed) continue;
     const isConfirm = check.original === null || check.original.kind === 'requester_confirm';
-    if (!isConfirm) {
-      if (showsMask(check.original)) {
-        problems.set(
-          `check:${check.uid}`,
-          t(
-            `这条检查里有遮蔽的原文（${SECRET_FIELD_MASK}），这里改不了，原样提交会被拒绝：移除它，或者在对话里让入口智能体修订。`,
-            `This check holds masked text (${SECRET_FIELD_MASK}) that cannot be changed here and would be refused as it is: remove it, or ask the entry agent to revise it in a chat.`,
-          ),
-        );
-      }
-      continue;
-    }
+    if (!isConfirm) continue;
     const at = `check:${check.uid}:prompt` as const;
     if (check.prompt.trim() === '') {
       problems.set(at, t('写上要请求人确认什么。', 'Say what the requester confirms.'));
@@ -442,8 +448,9 @@ export function draftProblems(
           `At most ${MAX_ACCEPTANCE_PROMPT_CHARS} characters.`,
         ),
       );
-    } else if (check.prompt.includes(SECRET_FIELD_MASK)) {
-      problems.set(at, masked);
+    } else if (check.prompt !== originalPrompt(check)) {
+      const shown = shownOnly(check.prompt);
+      if (shown !== null) problems.set(at, rewrite(shown));
     }
   }
   if (draft.reason.length > MAX_REVISION_REASON_CHARS) {
@@ -454,8 +461,9 @@ export function draftProblems(
         `At most ${MAX_REVISION_REASON_CHARS} characters.`,
       ),
     );
-  } else if (draft.reason.includes(SECRET_FIELD_MASK)) {
-    problems.set('reason', masked);
+  } else {
+    const shown = shownOnly(draft.reason);
+    if (shown !== null) problems.set('reason', rewrite(shown));
   }
   const { budget } = draft;
   const notPositive = t('填一个大于 0 的整数。', 'A whole number above 0.');
@@ -479,13 +487,9 @@ export function draftProblems(
   return problems;
 }
 
-/** Which part of a step the editor sends as it is still holds the `[redacted]` mark: its reconcile
- *  declarations or its own acceptance checks (a plan stored before GO5c, read back masked). */
-function maskedPartOf(step: PlanStep | null): 'reconcile' | 'acceptance' | null {
-  if (step === null) return null;
-  if (showsMask(step.reconcile)) return 'reconcile';
-  if (showsMask(step.acceptance)) return 'acceptance';
-  return null;
+/** A confirmation's prompt as the plan in force has it (`''` for one this revision adds). */
+export function originalPrompt(check: CheckDraft): string {
+  return check.original?.kind === 'requester_confirm' ? check.original.prompt : '';
 }
 
 /** A cycle among the kept steps' dependencies, as keys, the first repeated at the end; `null`

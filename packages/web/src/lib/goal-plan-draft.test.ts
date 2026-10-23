@@ -109,8 +109,14 @@ describe('lib/goal-plan-draft', () => {
     let draft = draftFromDetail(detail);
     const uid = (key: string) => draft.steps.find((step) => step.key === key)?.uid ?? '';
     let problems = draftProblems(draft, detail, zh);
-    expect(problems.get(`step:${uid('fetch')}:input`)).toMatch(/此处原文已遮蔽，请重新填写/);
+    // Left as read, the masked input is sent as it is: the kernel keeps the original (GO5c).
+    expect(problems.get(`step:${uid('fetch')}:input`)).toBeUndefined();
     expect(problems.get('budget:maxRevisions')).toMatch(/这是第 4 次修订，上限至少要 4/);
+
+    // Changed, it must not keep the mark.
+    draft = withStep(draft, 'fetch', { inputText: '{"auth": "[redacted]", "hosts": 3}' });
+    problems = draftProblems(draft, detail, zh);
+    expect(problems.get(`step:${uid('fetch')}:input`)).toMatch(/此处原文已遮蔽，请重新填写/);
 
     draft = withStep(draft, 'fetch', { inputText: '{"auth": "the deploy key"}' });
     draft = withStep(draft, 'apply', { key: 'bad key', dependsOn: ['gone'] });
@@ -124,7 +130,7 @@ describe('lib/goal-plan-draft', () => {
     expect([...draftProblems(draft, detail, zh).values()].join()).toMatch(/依赖成环/);
   });
 
-  it('an ended step with masked input can only be removed', () => {
+  it('an ended step whose input reads masked is kept as it is', () => {
     const detail = paused({
       planRevision: {
         ...goalDetail().planRevision,
@@ -142,11 +148,8 @@ describe('lib/goal-plan-draft', () => {
       steps: [stepRun({ status: 'succeeded' })],
     });
     const draft = draftFromDetail(detail);
-    const fetch = draft.steps[0];
-    expect(draftProblems(draft, detail, zh).get(`step:${fetch?.uid}:input`)).toMatch(
-      /把它从计划里移除/,
-    );
-    expect(draftProblems(withStep(draft, 'fetch', { removed: true }), detail, zh).size).toBe(0);
+    expect(draftProblems(draft, detail, zh).size).toBe(0);
+    expect(planOf(draft)?.steps[0]?.input).toEqual({ auth: '[redacted]' });
   });
 
   it('a requester confirmation is written here, its prompt required', () => {
@@ -246,7 +249,7 @@ describe('lib/goal-plan-draft', () => {
     );
   });
 
-  it('a masked part the editor cannot change marks its step or check, which may then be removed', () => {
+  it('a masked part the editor cannot change is sent as read; changed texts may not keep a mark', () => {
     const base = goalDetail().planRevision;
     const detail = paused({
       planRevision: {
@@ -285,15 +288,46 @@ describe('lib/goal-plan-draft', () => {
       },
     });
     const draft = draftFromDetail(detail);
-    const apply = draft.steps[1];
-    const check = draft.acceptance[0];
-    const problems = draftProblems(draft, detail, zh);
-    expect(problems.get(`step:${apply?.uid}`)).toMatch(/动作核对声明里有遮蔽的原文/);
-    expect(problems.get(`check:${check?.uid}`)).toMatch(/这条检查里有遮蔽的原文/);
-    const removed = {
-      ...withStep(draft, 'apply', { removed: true }),
-      acceptance: draft.acceptance.map((item) => ({ ...item, removed: true })),
+    expect(draftProblems(draft, detail, zh).size).toBe(0);
+    expect(planOf(draft)).toEqual(detail.planRevision.plan);
+
+    // A reason, and a confirmation's changed prompt, are written here: neither may keep a mark or
+    // a shown escape; a confirmation's prompt left as read may.
+    const confirm = { ...requesterConfirmDraft(draft), prompt: 'done\\u{200D}' };
+    const written = {
+      ...draft,
+      reason: 'why [redacted]',
+      acceptance: [...draft.acceptance, confirm],
     };
-    expect(draftProblems(removed, detail, zh).size).toBe(0);
+    const problems = draftProblems(written, detail, zh);
+    expect(problems.get('reason')).toMatch(/此处原文已遮蔽/);
+    expect(problems.get(`check:${confirm.uid}:prompt`)).toMatch(/看不见的字符/);
+  });
+
+  it('a changed input showing an unseen character as a read writes it is held back', () => {
+    const detail = paused({
+      planRevision: {
+        ...goalDetail().planRevision,
+        plan: {
+          steps: [
+            {
+              key: 'fetch',
+              worker: { definitionId: WORKER_ID, version: 2 },
+              input: { note: 'a\\u{200D}b' },
+            },
+          ],
+        },
+      },
+      steps: [],
+    });
+    let draft = draftFromDetail(detail);
+    const fetch = draft.steps[0];
+    expect(draftProblems(draft, detail, zh).size).toBe(0);
+    draft = withStep(draft, 'fetch', { inputText: '{"note": "a\\\\u{200D}b", "hosts": 2}' });
+    expect(draftProblems(draft, detail, zh).get(`step:${fetch?.uid}:input`)).toMatch(
+      /看不见的字符/,
+    );
+    draft = withStep(draft, 'fetch', { inputText: '{"note": "ab", "hosts": 2}' });
+    expect(draftProblems(draft, detail, zh).size).toBe(0);
   });
 });

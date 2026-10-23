@@ -24,10 +24,13 @@ import {
   fieldOfRefusal,
   hasRequesterConfirm,
   liveRuns,
+  originalPrompt,
   planOf,
+  prettyInput,
   releasableActions,
   removalsOf,
   requesterConfirmDraft,
+  shownOnly,
   stepEnded,
   supersededLiveSteps,
 } from '../../lib/goal-plan-draft.js';
@@ -85,9 +88,25 @@ export interface GoalPlanEditorProps {
  * (another revision since, or the goal moved on) leaves the editor and the page says where things
  * stand.
  */
-export function GoalPlanEditor({ goal, http, gateNames, onCancel, onDone }: GoalPlanEditorProps) {
+export function GoalPlanEditor({
+  goal: latest,
+  http,
+  gateNames,
+  onCancel,
+  onDone,
+}: GoalPlanEditorProps) {
   const t = useT();
   const can = useRoleCan(http);
+  // The revision this draft is made against, as the page showed it when the editor opened. A
+  // re-read meanwhile (a push, a retry) moves the steps' states, never the base: sending against
+  // the newest revision would overwrite one this draft was never made from (I-G3).
+  const [base] = useState(() => latest.planRevision);
+  const baseRevision = useState(() => latest.currentRevision ?? latest.planRevision.revision)[0];
+  const goal = useMemo(() => ({ ...latest, planRevision: base }), [latest, base]);
+  const newer =
+    (latest.currentRevision ?? latest.planRevision.revision) !== baseRevision
+      ? (latest.currentRevision ?? latest.planRevision.revision)
+      : null;
   const [draft, setDraft] = useState<PlanDraft>(() => draftFromDetail(goal));
   const [refused, setRefused] = useState<ReadonlyMap<FieldKey, string>>(new Map());
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -97,18 +116,27 @@ export function GoalPlanEditor({ goal, http, gateNames, onCancel, onDone }: Goal
     { kind: 'worker' },
     { autoLoadAll: true },
   );
-  const run = useOperationDone(onDone, goal);
+  const run = useOperationDone(onDone, latest);
   const runs = useMemo(() => liveRuns(goal), [goal]);
   if (can('revise_goal') === false) return null;
 
   const problems = draftProblems(draft, goal, t);
   const errorOf = (key: FieldKey): string | null => refused.get(key) ?? problems.get(key) ?? null;
-  const change = (next: (current: PlanDraft) => PlanDraft) => {
+  /** A change to the draft; it clears the kernel's refusals on what it touches (`scope`: a field
+   *  key, or a step's / check's key prefix) and the one about the plan as a whole. */
+  const change = (scope: string, next: (current: PlanDraft) => PlanDraft) => {
     setDraft(next);
-    setRefused(new Map());
+    setRefused((current) => {
+      const left = new Map(
+        [...current].filter(
+          ([key]) => key !== 'plan' && key !== scope && !key.startsWith(`${scope}:`),
+        ),
+      );
+      return left.size === current.size ? current : left;
+    });
   };
   const changeStep = (uid: string, patch: Partial<StepDraft>) =>
-    change((current) => ({
+    change(`step:${uid}`, (current) => ({
       ...current,
       steps: current.steps.map((step) => {
         if (step.uid === uid) return { ...step, ...patch };
@@ -126,7 +154,7 @@ export function GoalPlanEditor({ goal, http, gateNames, onCancel, onDone }: Goal
       }),
     }));
   const changeCheck = (uid: string, patch: Partial<CheckDraft>) =>
-    change((current) => ({
+    change(`check:${uid}`, (current) => ({
       ...current,
       acceptance: current.acceptance.map((check) =>
         check.uid === uid ? { ...check, ...patch } : check,
@@ -146,11 +174,19 @@ export function GoalPlanEditor({ goal, http, gateNames, onCancel, onDone }: Goal
     budget === null;
   const blocking = problems.size + refused.size;
   const waitReason =
-    blocking > 0
-      ? t(`还有 ${blocking} 处要改，见标红的地方。`, `${blocking} thing(s) to fix, marked in red.`)
-      : unchanged
-        ? t('计划和预算都还没有改动。', 'Nothing in the plan or the budget has changed yet.')
-        : null;
+    newer !== null
+      ? t(
+          `计划已经有了第 ${newer} 版，这份修订不能再提交。`,
+          `The plan is at v${newer} now; this revision can no longer be sent.`,
+        )
+      : blocking > 0
+        ? t(
+            `还有 ${blocking} 处要改，见标红的地方。`,
+            `${blocking} thing(s) to fix, marked in red.`,
+          )
+        : unchanged
+          ? t('计划和预算都还没有改动。', 'Nothing in the plan or the budget has changed yet.')
+          : null;
   const planProblem = errorOf('plan');
   const defs = definitions.state.status === 'ready' ? definitions.state.data.items : undefined;
   const published = defs?.filter((row) => row.status === 'published');
@@ -163,7 +199,7 @@ export function GoalPlanEditor({ goal, http, gateNames, onCancel, onDone }: Goal
       await run(
         http.call<ReviseGoalResultWire>('revise_goal', {
           goalRunId: goal.id,
-          basedOnRevision: goal.currentRevision ?? goal.planRevision.revision,
+          basedOnRevision: baseRevision,
           plan,
           ...(reason === '' ? {} : { reason }),
           ...(budget === null ? {} : { budget }),
@@ -198,6 +234,14 @@ export function GoalPlanEditor({ goal, http, gateNames, onCancel, onDone }: Goal
             'Once sent, the new version is in force at once and the goal stays paused; resume it on the goal page to go on. Steps left as they were keep their progress.',
           )}
         </Notice>
+        {newer !== null ? (
+          <Notice tone="warn" testId="goal-plan-newer">
+            {t(
+              `你在改的是第 ${base.revision} 版，这期间计划已经改成第 ${newer} 版：这份修订提交会被拒绝。放弃修改，回到详情页看看新的一版，再决定要不要重新修订。`,
+              `You are editing v${base.revision}, and the plan has become v${newer} meanwhile: this revision would be refused. Discard it and look at the new version on the goal page before revising again.`,
+            )}
+          </Notice>
+        ) : null}
         {refused.size > 0 ? (
           <Notice tone="danger" testId="goal-plan-refused">
             {t(
@@ -226,7 +270,7 @@ export function GoalPlanEditor({ goal, http, gateNames, onCancel, onDone }: Goal
               onChange={(patch) => changeStep(step.uid, patch)}
               onRemove={() =>
                 step.original === null
-                  ? change((current) => ({
+                  ? change(`step:${step.uid}`, (current) => ({
                       ...current,
                       steps: current.steps.filter((item) => item.uid !== step.uid),
                     }))
@@ -240,7 +284,10 @@ export function GoalPlanEditor({ goal, http, gateNames, onCancel, onDone }: Goal
               variant="secondary"
               size="s"
               onClick={() =>
-                change((current) => ({ ...current, steps: [...current.steps, emptyStep()] }))
+                change('plan', (current) => ({
+                  ...current,
+                  steps: [...current.steps, emptyStep()],
+                }))
               }
               data-testid="goal-plan-add-step"
             >
@@ -265,7 +312,7 @@ export function GoalPlanEditor({ goal, http, gateNames, onCancel, onDone }: Goal
               onChange={(patch) => changeCheck(check.uid, patch)}
               onRemove={() =>
                 check.original === null
-                  ? change((current) => ({
+                  ? change(`check:${check.uid}`, (current) => ({
                       ...current,
                       acceptance: current.acceptance.filter((item) => item.uid !== check.uid),
                     }))
@@ -286,7 +333,7 @@ export function GoalPlanEditor({ goal, http, gateNames, onCancel, onDone }: Goal
                 variant="secondary"
                 size="s"
                 onClick={() =>
-                  change((current) => ({
+                  change('plan', (current) => ({
                     ...current,
                     acceptance: [...current.acceptance, requesterConfirmDraft(current)],
                   }))
@@ -304,7 +351,7 @@ export function GoalPlanEditor({ goal, http, gateNames, onCancel, onDone }: Goal
           draft={draft}
           errorOf={errorOf}
           onChange={(patch) =>
-            change((current) => ({ ...current, budget: { ...current.budget, ...patch } }))
+            change('budget', (current) => ({ ...current, budget: { ...current.budget, ...patch } }))
           }
         />
 
@@ -315,7 +362,7 @@ export function GoalPlanEditor({ goal, http, gateNames, onCancel, onDone }: Goal
             runs={runs}
             http={http}
             onChange={(key, removal) =>
-              change((current) => {
+              change('plan', (current) => {
                 const removals = { ...current.removals };
                 if (removal === null) delete removals[key];
                 else removals[key] = removal;
@@ -328,7 +375,7 @@ export function GoalPlanEditor({ goal, http, gateNames, onCancel, onDone }: Goal
         <ReasonField
           value={draft.reason}
           error={errorOf('reason')}
-          onChange={(reason) => change((current) => ({ ...current, reason }))}
+          onChange={(reason) => change('reason', (current) => ({ ...current, reason }))}
         />
 
         <div className="row-wrap">
@@ -452,6 +499,21 @@ function refusalText(credential: boolean, at: FieldKey, path: string | null, t: 
     (fixed ?? '') +
     where
   );
+}
+
+/** For a text shown as read with what only stands for its original (`shownOnly`): left alone, the
+ *  original is kept (GO5c takes an entry equal to its stored one as shown as unchanged). */
+function keptAsRead(shown: 'mask' | 'escape' | null, t: Translate): string | null {
+  if (shown === null) return null;
+  return shown === 'mask'
+    ? t(
+        `这里有遮蔽的原文（${SECRET_FIELD_MASK}）：不改这一项，提交时原文原样保留；改了就要整段重写，不能留着 ${SECRET_FIELD_MASK}。`,
+        `This holds masked text (${SECRET_FIELD_MASK}): left as it is, the original is kept; once changed, write it whole, without ${SECRET_FIELD_MASK}.`,
+      )
+    : t(
+        '这里有显示成 \\u{…} 的看不见的字符：不改这一项，提交时原文原样保留；改了就要把它们删掉或换成真正的字符。',
+        'This holds characters nobody can see, shown as \\u{…}: left as it is, the original is kept; once changed, delete them or type the real character.',
+      );
 }
 
 /** What sending does, for the confirm. */
@@ -693,10 +755,20 @@ function StepEditor({
           <Field
             id={`${id}-input`}
             label={t('输入（JSON，可空）', 'Input (JSON, optional)')}
-            hint={t(
-              '交给 Worker 的参数。不要写凭据的值：Worker 用的凭据由平台配置。',
-              'What the Worker is given. Never a credential’s value: the credentials Workers use are configured on the platform.',
-            )}
+            hint={[
+              t(
+                '交给 Worker 的参数。不要写凭据的值：Worker 用的凭据由平台配置。',
+                'What the Worker is given. Never a credential’s value: the credentials Workers use are configured on the platform.',
+              ),
+              keptAsRead(
+                step.original !== null && step.inputText === prettyInput(step.original.input)
+                  ? shownOnly(step.original.input)
+                  : null,
+                t,
+              ),
+            ]
+              .filter((part) => part !== null)
+              .join(' ')}
             error={inputError}
           >
             <Textarea
@@ -861,10 +933,15 @@ function CheckEditor({
         <Field
           id={`${id}-prompt`}
           label={t('要请求人确认什么', 'What the requester confirms')}
-          hint={t(
-            '平台检查都通过后，请求人看着这句话确认目标达成。',
-            'Once the platform’s checks pass, the requester confirms the goal against this.',
-          )}
+          hint={[
+            t(
+              '平台检查都通过后，请求人看着这句话确认目标达成。',
+              'Once the platform’s checks pass, the requester confirms the goal against this.',
+            ),
+            keptAsRead(check.prompt === originalPrompt(check) ? shownOnly(check.prompt) : null, t),
+          ]
+            .filter((part) => part !== null)
+            .join(' ')}
           error={promptError}
         >
           <Textarea

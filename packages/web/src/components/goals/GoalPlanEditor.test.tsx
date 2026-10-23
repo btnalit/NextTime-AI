@@ -6,6 +6,7 @@ import { PermissionsProvider } from '../../hooks/usePermissions.js';
 import { type CapabilityCaller, SILENT_PUSH_SOURCE } from '../../lib/clients.js';
 import { HttpError } from '../../lib/http-client.js';
 import { GoalDetailPage } from './GoalDetailPage.js';
+import { GoalPlanEditor } from './GoalPlanEditor.js';
 import { GATE_ID, WORKER_ID, goalDetail, stepRun } from './goal-fixtures.test-helpers.js';
 
 afterEach(cleanup);
@@ -224,20 +225,80 @@ describe('the plan editor on the goal page (S11 GO6, revise_goal)', () => {
     expect(screen.queryByTestId('goal-plan-editor')).toBeNull();
   });
 
-  it('marks a masked input on its field and will not send it until it is written again', async () => {
-    const http = scriptedHttp(handlers(masked(), workspace('p-alice', 'member')));
+  it('keeps a masked input left alone, and holds one changed with the mark still in it', async () => {
+    const http = scriptedHttp(
+      handlers(masked(), workspace('p-alice', 'member'), {
+        revise_goal: () => ({
+          goalRunId: 'goal-1',
+          status: 'paused',
+          changed: true,
+          revision: 2,
+          planRevisionId: 'rev-2',
+          supersededStepRunIds: [],
+          createdStepRunIds: [],
+          withdrawnActionRequestIds: [],
+          releasedActionRequestIds: [],
+          hints: [],
+        }),
+      }),
+    );
     renderPage(http);
     await openEditor();
     const input = within(step('fetch')).getByTestId('goal-plan-step-input') as HTMLTextAreaElement;
     expect(input.value).toContain('[redacted]');
+    expect(alerts(step('fetch'))).toBe('');
+    expect(step('fetch').textContent).toMatch(/不改这一项，提交时原文原样保留/);
+
+    fireEvent.change(input, { target: { value: '{"hosts": 4, "auth": "[redacted]"}' } });
     expect(alerts(step('fetch'))).toMatch(/此处原文已遮蔽，请重新填写/);
     expect((screen.getByTestId('goal-plan-submit') as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByTestId('goal-plan-wait').textContent).toMatch(/还有 1 处要改/);
 
-    fireEvent.change(input, { target: { value: '{"hosts": 3, "auth": "用 deploy 账号的令牌"}' } });
+    // Back as read: nothing to fix, nothing changed. A change elsewhere sends the input as read.
+    fireEvent.change(input, {
+      target: { value: JSON.stringify({ hosts: 3, auth: '[redacted]' }, null, 2) },
+    });
     expect(alerts(step('fetch'))).toBe('');
-    expect((screen.getByTestId('goal-plan-submit') as HTMLButtonElement).disabled).toBe(false);
-    expect(http.calls.some((call) => call.name === 'revise_goal')).toBe(false);
+    fireEvent.change(within(step('apply')).getByTestId('goal-plan-step-attempts'), {
+      target: { value: '3' },
+    });
+    await send();
+    await waitFor(() =>
+      expect(
+        (
+          http.calls.find((call) => call.name === 'revise_goal')?.params as {
+            plan: { steps: { input?: unknown }[] };
+          }
+        ).plan.steps[0]?.input,
+      ).toEqual({ hosts: 3, auth: '[redacted]' }),
+    );
+  });
+
+  it('a refusal stays on its field while another field changes', async () => {
+    const http = scriptedHttp(
+      handlers(paused(), workspace('p-alice', 'member'), {
+        revise_goal: () => {
+          throw new HttpError('capability_error', 'reason: refused', 'credentials_in_text', {
+            field: 'reason',
+            suspectedSecretValues: 1,
+          });
+        },
+      }),
+    );
+    renderPage(http);
+    await openEditor();
+    fireEvent.change(within(step('apply')).getByTestId('goal-plan-step-attempts'), {
+      target: { value: '3' },
+    });
+    fireEvent.change(screen.getByTestId('goal-plan-reason'), {
+      target: { value: 'token=not-a-real-value' },
+    });
+    await send();
+    await waitFor(() => expect(errorOf('goal-plan-reason')).toMatch(/用 deploy 账号的令牌/));
+    fireEvent.change(within(step('apply')).getByTestId('goal-plan-step-attempts'), {
+      target: { value: '4' },
+    });
+    expect(errorOf('goal-plan-reason')).toMatch(/用 deploy 账号的令牌/);
   });
 
   it('shows credentials_in_text on the field it names, with a way to write it instead', async () => {
@@ -319,6 +380,75 @@ describe('the plan editor on the goal page (S11 GO6, revise_goal)', () => {
     expect(within(step('apply')).getByTestId('goal-plan-step-problem').textContent).toMatch(
       /这里改不了：把这一步移除/,
     );
+  });
+
+  it('stays made against the revision it opened on while the goal is read again', async () => {
+    const http = scriptedHttp(
+      handlers(paused(), workspace('p-alice', 'member'), {
+        revise_goal: () => ({
+          goalRunId: 'goal-1',
+          status: 'paused',
+          changed: true,
+          revision: 2,
+          planRevisionId: 'rev-2',
+          supersededStepRunIds: [],
+          createdStepRunIds: [],
+          withdrawnActionRequestIds: [],
+          releasedActionRequestIds: [],
+          hints: [],
+        }),
+      }),
+    );
+    const editor = (goal: GoalDetailWire) => (
+      <PermissionsProvider>
+        <GoalPlanEditor
+          goal={goal}
+          http={http}
+          gateNames={new Map()}
+          onCancel={vi.fn()}
+          onDone={vi.fn()}
+        />
+      </PermissionsProvider>
+    );
+    const { rerender } = render(editor(paused()));
+    const attempts = () =>
+      within(step('apply')).getByTestId('goal-plan-step-attempts') as HTMLSelectElement;
+    await waitFor(() => expect(attempts()).toBeTruthy());
+    fireEvent.change(attempts(), { target: { value: '3' } });
+
+    // Read again, same revision, a step moved on: the draft stays, the base stays.
+    rerender(
+      editor(
+        paused({
+          updatedAt: '2026-10-20T00:20:00.000Z',
+          steps: [
+            stepRun({ status: 'failed', attemptCount: 1 }),
+            stepRun({ id: 'sr-apply', stepKey: 'apply', status: 'pending', attempts: [] }),
+          ],
+        }),
+      ),
+    );
+    expect(attempts().value).toBe('3');
+    expect(screen.queryByTestId('goal-plan-newer')).toBeNull();
+
+    // Read again after someone else's revision 2: refused here, never sent over it.
+    const v2 = {
+      ...goalDetail().planRevision,
+      id: 'rev-2',
+      revision: 2,
+      basedOnRevision: 1,
+      plan: {
+        steps: [{ key: 'other', worker: { definitionId: WORKER_ID, version: 2 } }],
+      },
+    };
+    rerender(editor(paused({ currentRevision: 2, planRevision: v2 })));
+    expect(screen.getByTestId('goal-plan-newer').textContent).toMatch(
+      /你在改的是第 1 版，这期间计划已经改成第 2 版/,
+    );
+    expect(screen.getByTestId('goal-plan-editor').textContent).toMatch(/基于第 1 版/);
+    expect(attempts().value).toBe('3');
+    expect((screen.getByTestId('goal-plan-submit') as HTMLButtonElement).disabled).toBe(true);
+    expect(http.calls.some((call) => call.name === 'revise_goal')).toBe(false);
   });
 
   it('leaves without sending anything', async () => {
