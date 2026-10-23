@@ -6,7 +6,7 @@ import {
   SECRET_FIELD_MASK,
   type StepRunWire,
 } from '@nexttime/shared';
-import { useId, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
@@ -33,6 +33,7 @@ import {
   shownOnly,
   stepEnded,
   supersededLiveSteps,
+  taskLive,
 } from '../../lib/goal-plan-draft.js';
 import { goalBudgetRows, planCheckSentence, planDiff, stepRemovalText } from '../../lib/goals.js';
 import { HttpError } from '../../lib/http-client.js';
@@ -108,6 +109,10 @@ export function GoalPlanEditor({
       ? (latest.currentRevision ?? latest.planRevision.revision)
       : null;
   const [draft, setDraft] = useState<PlanDraft>(() => draftFromDetail(goal));
+  // The editor takes the page's place: focus moves to its title so the change is announced.
+  const titleRef = useRef<HTMLSpanElement>(null);
+  useEffect(() => titleRef.current?.focus(), []);
+  const [discardOpen, setDiscardOpen] = useState(false);
   const [refused, setRefused] = useState<ReadonlyMap<FieldKey, string>>(new Map());
   const [confirmOpen, setConfirmOpen] = useState(false);
   const definitions = useCapabilityList<WorkerDefinitionSummary>(
@@ -173,6 +178,7 @@ export function GoalPlanEditor({
     !diff.acceptanceChanged &&
     budget === null;
   const blocking = problems.size + refused.size;
+  const edited = !unchanged || draft.reason.trim() !== '';
   const waitReason =
     newer !== null
       ? t(
@@ -221,10 +227,14 @@ export function GoalPlanEditor({
 
   return (
     <DashboardCard
-      title={t(
-        `修订计划（基于第 ${goal.planRevision.revision} 版）`,
-        `Revise the plan (from v${goal.planRevision.revision})`,
-      )}
+      title={
+        <span ref={titleRef} tabIndex={-1}>
+          {t(
+            `修订计划（基于第 ${goal.planRevision.revision} 版）`,
+            `Revise the plan (from v${goal.planRevision.revision})`,
+          )}
+        </span>
+      }
       data-testid="goal-plan-editor"
     >
       <div className="stack">
@@ -296,6 +306,23 @@ export function GoalPlanEditor({
           </div>
         </section>
 
+        {live.length > 0 ? (
+          <RemovalEditor
+            keys={live}
+            draft={draft}
+            runs={runs}
+            http={http}
+            onChange={(key, removal) =>
+              change('plan', (current) => {
+                const removals = { ...current.removals };
+                if (removal === null) delete removals[key];
+                else removals[key] = removal;
+                return { ...current, removals };
+              })
+            }
+          />
+        ) : null}
+
         <section className="stack-s" aria-label={t('验收', 'Acceptance')}>
           <span className="section-title">{t('验收检查', 'Acceptance checks')}</span>
           {draft.acceptance.length === 0 ? (
@@ -355,23 +382,6 @@ export function GoalPlanEditor({
           }
         />
 
-        {live.length > 0 ? (
-          <RemovalEditor
-            keys={live}
-            draft={draft}
-            runs={runs}
-            http={http}
-            onChange={(key, removal) =>
-              change('plan', (current) => {
-                const removals = { ...current.removals };
-                if (removal === null) delete removals[key];
-                else removals[key] = removal;
-                return { ...current, removals };
-              })
-            }
-          />
-        ) : null}
-
         <ReasonField
           value={draft.reason}
           error={errorOf('reason')}
@@ -408,9 +418,33 @@ export function GoalPlanEditor({
             onConfirm={submit}
             testId="goal-plan-confirm"
           />
-          <Button variant="ghost" size="s" onClick={onCancel} data-testid="goal-plan-cancel">
-            {t('放弃修改', 'Discard changes')}
-          </Button>
+          <Confirm
+            tier="medium"
+            open={discardOpen}
+            onOpenChange={setDiscardOpen}
+            anchor={
+              <Button
+                variant="ghost"
+                size="s"
+                onClick={() => (edited ? setDiscardOpen(true) : onCancel())}
+                data-testid="goal-plan-cancel"
+              >
+                {t('放弃修改', 'Discard changes')}
+              </Button>
+            }
+            title={t('放弃这份修订？', 'Discard this revision?')}
+            impact={[
+              t(
+                '改动不会保存，计划仍是现在的这一版。',
+                'Nothing is saved; the plan stays as it is.',
+              ),
+            ]}
+            confirmLabel={t('放弃修改', 'Discard changes')}
+            cancelLabel={t('接着改', 'Keep editing')}
+            danger
+            onConfirm={onCancel}
+            testId="goal-plan-discard"
+          />
         </div>
         {waitReason !== null ? (
           <p className="text-3 text-small" id="goal-plan-wait" data-testid="goal-plan-wait">
@@ -691,6 +725,19 @@ function StepEditor({
               />
             </Field>
           ) : null}
+          {step.original !== null ? (
+            <span className="text-3 text-small" data-testid="goal-plan-step-restart">
+              {taskLive(run)
+                ? t(
+                    '改动这一步的任何一项（包括尝试次数），它都会按新定义从头开始；它正在跑的任务怎么处理，在下面「这些步骤还在跑」里选。',
+                    'Changing anything in this step (its attempts too) starts it again on its new definition; what happens to its running task is chosen under “These steps still run” below.',
+                  )
+                : t(
+                    '改动这一步的任何一项（包括尝试次数），它都会按新定义从头开始。',
+                    'Changing anything in this step (its attempts too) starts it again on its new definition.',
+                  )}
+            </span>
+          ) : null}
           <WorkerPicker
             id={id}
             step={step}
@@ -773,7 +820,7 @@ function StepEditor({
           >
             <Textarea
               id={`${id}-input`}
-              label={t('输入', 'Input')}
+              aria-label={t('输入', 'Input')}
               className="input-mono"
               value={step.inputText}
               onChange={(event) => onChange({ inputText: event.target.value })}
@@ -946,7 +993,7 @@ function CheckEditor({
         >
           <Textarea
             id={`${id}-prompt`}
-            label={t('确认提示', 'Prompt')}
+            aria-label={t('确认提示', 'Prompt')}
             value={check.prompt}
             onChange={(event) => onChange({ prompt: event.target.value })}
             minRows={2}
@@ -1065,19 +1112,21 @@ function RemovalEditor({
             data-step-key={key}
           >
             <legend className="mono">{key}</legend>
-            <label className="row-wrap text-small">
+            <label className="goal-plan-choice text-small">
               <input
                 type="radio"
                 name={`removal-${key}`}
                 checked={!finish}
                 onChange={() => onChange(key, null)}
               />
-              {t(
-                '终止它的任务，撤回它还没执行的动作（默认）',
-                'Terminate its task and withdraw its actions not yet run (default)',
-              )}
+              <span>
+                {t(
+                  '终止它的任务，撤回它还没执行的动作（默认）',
+                  'Terminate its task and withdraw its actions not yet run (default)',
+                )}
+              </span>
             </label>
-            <label className="row-wrap text-small">
+            <label className="goal-plan-choice text-small">
               <input
                 type="radio"
                 name={`removal-${key}`}
@@ -1085,10 +1134,12 @@ function RemovalEditor({
                 onChange={() => onChange(key, { mode: 'let_finish' })}
                 data-testid="goal-plan-removal-finish"
               />
-              {t(
-                '让它跑完：结果只记录，不再推进后面的步骤',
-                'Let it finish: its result is recorded, and nothing after it moves on',
-              )}
+              <span>
+                {t(
+                  '让它跑完：结果只记录，不再推进后面的步骤',
+                  'Let it finish: its result is recorded, and nothing after it moves on',
+                )}
+              </span>
             </label>
             {finish && releasable.length > 0 ? (
               <div className="stack-s">
@@ -1148,7 +1199,7 @@ function ReasonField({
     >
       <Textarea
         id={id}
-        label={t('修订原因', 'Reason')}
+        aria-label={t('修订原因', 'Reason')}
         value={value}
         onChange={(event) => onChange(event.target.value)}
         minRows={2}

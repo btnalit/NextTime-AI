@@ -103,6 +103,22 @@ export function GoalDetailPage({ http, pushes, goalRunId }: GoalDetailPageProps)
     },
     [reloadAll],
   );
+  // Leaving the editor replaces the page under the reader's focus: it moves to what the page says
+  // about the revision, so a keyboard or screen reader user hears the page changed.
+  const doneRef = useRef<HTMLOutputElement>(null);
+  const [focusDone, setFocusDone] = useState(false);
+  const onRevised = useCallback(
+    (outcome: GoalOperationOutcome) => {
+      onDone(outcome);
+      setFocusDone(true);
+    },
+    [onDone],
+  );
+  useEffect(() => {
+    if (!focusDone || revising || doneRef.current === null) return;
+    doneRef.current.focus();
+    setFocusDone(false);
+  });
 
   const data = detail.state.status === 'ready' ? detail.state.data : undefined;
   // The Tasks and actions this goal ran, read when a push arrives rather than captured by the
@@ -208,7 +224,7 @@ export function GoalDetailPage({ http, pushes, goalRunId }: GoalDetailPageProps)
           http={http}
           gateNames={gateNames}
           onCancel={() => setRevising(false)}
-          onDone={onDone}
+          onDone={onRevised}
         />
       </div>
     );
@@ -249,7 +265,7 @@ export function GoalDetailPage({ http, pushes, goalRunId }: GoalDetailPageProps)
         }}
         onDone={onDone}
       />
-      <output aria-live="polite">
+      <output aria-live="polite" ref={doneRef} tabIndex={-1}>
         {/* After a 409, only once the goal is read again: a failed re-read keeps the old goal
             (its error banner above), from which nothing can be said about where it stands. */}
         {done && !(done.kind === 'stale' && (refreshing || detail.state.refreshError)) ? (

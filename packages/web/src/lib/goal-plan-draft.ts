@@ -12,7 +12,7 @@ import {
   type StepRemoval,
   type StepRunWire,
 } from '@nexttime/shared';
-import { planDiff } from './goals.js';
+import { goalBudgetRows, planDiff } from './goals.js';
 import type { Translate } from './i18n.js';
 
 /**
@@ -191,6 +191,11 @@ export function liveRuns(detail: GoalDetailWire): ReadonlyMap<string, StepRunWir
   );
 }
 
+/** Whether a step's Task may still be running — where terminating or letting it finish differ. */
+export function taskLive(run: StepRunWire | undefined): boolean {
+  return run !== undefined && TASK_LIVE_STEP_STATUSES.has(run.status);
+}
+
 /** Whether a step of the plan in force has ended — its definition is then fixed (it may only be
  *  dropped, staying as history). */
 export function stepEnded(run: StepRunWire | undefined): boolean {
@@ -313,10 +318,7 @@ export function supersededLiveSteps(draft: PlanDraft, detail: GoalDetailWire): r
   if (plan === null) return [];
   const diff = planDiff(detail.planRevision.plan, plan);
   const runs = liveRuns(detail);
-  return [...diff.removed, ...diff.changed].filter((key) => {
-    const run = runs.get(key);
-    return run !== undefined && TASK_LIVE_STEP_STATUSES.has(run.status);
-  });
+  return [...diff.removed, ...diff.changed].filter((key) => taskLive(runs.get(key)));
 }
 
 /** The removals to send: only the steps let to finish (terminate is the default), and only
@@ -467,10 +469,26 @@ export function draftProblems(
   }
   const { budget } = draft;
   const notPositive = t('填一个大于 0 的整数。', 'A whole number above 0.');
+  // A limit at or under what is already used stops the goal the moment it resumes: the kernel
+  // takes it, so the editor says so on the field.
+  const used = new Map(goalBudgetRows(detail, t).map((row) => [row.key, row] as const));
+  const spent = (key: 'tokens' | 'steps' | 'wallClock') =>
+    t(
+      `已用 ${used.get(key)?.usedText ?? '—'}，上限要比它大，否则一按「继续」目标就因预算用尽停下。`,
+      `${used.get(key)?.usedText ?? '—'} used already; the limit must be above it, or the goal stops for its budget as soon as it resumes.`,
+    );
   if (!positiveInt(budget.maxTokens)) problems.set('budget:maxTokens', notPositive);
+  else if (Number(budget.maxTokens) <= (used.get('tokens')?.used ?? 0)) {
+    problems.set('budget:maxTokens', spent('tokens'));
+  }
   if (!positiveInt(budget.maxSteps)) problems.set('budget:maxSteps', notPositive);
+  else if (Number(budget.maxSteps) <= (used.get('steps')?.used ?? 0)) {
+    problems.set('budget:maxSteps', spent('steps'));
+  }
   if (!(Number(budget.maxWallClockMinutes) > 0)) {
     problems.set('budget:maxWallClockSeconds', t('填一个大于 0 的数。', 'A number above 0.'));
+  } else if (Number(budget.maxWallClockMinutes) * 60 <= (used.get('wallClock')?.used ?? 0)) {
+    problems.set('budget:maxWallClockSeconds', spent('wallClock'));
   }
   const needed = detail.usage.revisions + 1;
   if (!/^\d+$/.test(budget.maxRevisions.trim())) {

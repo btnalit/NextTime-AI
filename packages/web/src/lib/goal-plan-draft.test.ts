@@ -22,8 +22,14 @@ import { planDiff } from './goals.js';
 import type { Translate } from './i18n.js';
 
 const zh: Translate = (zhText) => zhText;
+// Confirmed a few minutes ago, so the wall-clock budget is not spent yet.
 const paused = (overrides: Parameters<typeof goalDetail>[0] = {}) =>
-  goalDetail({ status: 'paused', pauseReason: 'requested', ...overrides });
+  goalDetail({
+    status: 'paused',
+    pauseReason: 'requested',
+    confirmedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+    ...overrides,
+  });
 
 const withStep = (draft: PlanDraft, key: string, patch: Partial<PlanDraft['steps'][number]>) => ({
   ...draft,
@@ -329,5 +335,20 @@ describe('lib/goal-plan-draft', () => {
     );
     draft = withStep(draft, 'fetch', { inputText: '{"note": "ab", "hosts": 2}' });
     expect(draftProblems(draft, detail, zh).size).toBe(0);
+  });
+
+  it('a budget limit at or under what is used already is held on its field', () => {
+    const detail = paused({ usage: { tokens: 48200, steps: 3, revisions: 0 } });
+    const draft = draftFromDetail(detail);
+    const limits = (budget: Partial<PlanDraft['budget']>) =>
+      draftProblems({ ...draft, budget: { ...draft.budget, ...budget } }, detail, zh);
+    expect(limits({ maxTokens: '1000' }).get('budget:maxTokens')).toMatch(
+      /已用 48,200，上限要比它大/,
+    );
+    expect(limits({ maxSteps: '3' }).get('budget:maxSteps')).toMatch(/已用 3，上限要比它大/);
+    expect(limits({ maxWallClockMinutes: '2' }).get('budget:maxWallClockSeconds')).toMatch(
+      /上限要比它大/,
+    );
+    expect(limits({ maxTokens: '48201', maxSteps: '4', maxWallClockMinutes: '30' }).size).toBe(0);
   });
 });

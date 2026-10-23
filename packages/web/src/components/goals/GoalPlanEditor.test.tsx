@@ -86,6 +86,8 @@ const paused = (overrides: Partial<GoalDetailWire> = {}) =>
     status: 'paused',
     pauseReason: 'requested',
     pausedBy: 'p-alice',
+    // A few minutes ago, so the wall-clock budget is not spent yet.
+    confirmedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
     steps: [
       stepRun({ status: 'pending', attemptCount: 0, attempts: [] }),
       stepRun({
@@ -221,8 +223,10 @@ describe('the plan editor on the goal page (S11 GO6, revise_goal)', () => {
         },
       }),
     );
-    expect((await screen.findByTestId('goal-op-done')).textContent).toMatch(/计划已改为第 2 版/);
+    const done = await screen.findByTestId('goal-op-done');
+    expect(done.textContent).toMatch(/计划已改为第 2 版/);
     expect(screen.queryByTestId('goal-plan-editor')).toBeNull();
+    await waitFor(() => expect(document.activeElement?.contains(done)).toBe(true));
   });
 
   it('keeps a masked input left alone, and holds one changed with the mark still in it', async () => {
@@ -449,6 +453,26 @@ describe('the plan editor on the goal page (S11 GO6, revise_goal)', () => {
     expect(attempts().value).toBe('3');
     expect((screen.getByTestId('goal-plan-submit') as HTMLButtonElement).disabled).toBe(true);
     expect(http.calls.some((call) => call.name === 'revise_goal')).toBe(false);
+  });
+
+  it('takes the focus to its title, and asks before throwing away a changed draft', async () => {
+    const http = scriptedHttp(handlers(paused(), workspace('p-alice', 'member')));
+    renderPage(http);
+    const editor = await openEditor();
+    await waitFor(() =>
+      expect(document.activeElement?.textContent).toMatch(/修订计划（基于第 1 版）/),
+    );
+    expect(editor.contains(document.activeElement)).toBe(true);
+
+    fireEvent.change(within(step('apply')).getByTestId('goal-plan-step-attempts'), {
+      target: { value: '3' },
+    });
+    fireEvent.click(screen.getByTestId('goal-plan-cancel'));
+    const discard = await screen.findByTestId('goal-plan-discard');
+    expect(discard.textContent).toMatch(/改动不会保存/);
+    expect(screen.getByTestId('goal-plan-editor')).toBeTruthy();
+    fireEvent.click(within(discard).getByTestId('confirm-button'));
+    await waitFor(() => expect(screen.queryByTestId('goal-plan-editor')).toBeNull());
   });
 
   it('leaves without sending anything', async () => {
