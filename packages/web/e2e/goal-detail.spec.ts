@@ -21,11 +21,15 @@ const AGENT = '66000000-0000-4000-8000-0000000000c1';
 const GATE = '66000000-0000-4000-8000-0000000000d1';
 const WORKER = '66000000-0000-4000-8000-0000000000e1';
 const ACTION = '66000000-0000-4000-8000-0000000000f1';
+const TASK_FETCH = '66000000-0000-4000-8000-000000000101';
+const TASK_APPLY = '66000000-0000-4000-8000-000000000102';
 
-const T0 = '2026-10-20T08:00:00.000Z';
-const T1 = '2026-10-20T08:01:00.000Z';
-const T2 = '2026-10-20T08:20:00.000Z';
-const T3 = '2026-10-20T08:40:00.000Z';
+// Within the last hour, so the wall-clock budget reads as it would on a goal running today.
+const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+const T0 = minutesAgo(45);
+const T1 = minutesAgo(44);
+const T2 = minutesAgo(25);
+const T3 = minutesAgo(5);
 
 const worker = { definitionId: WORKER, version: 2 };
 
@@ -133,7 +137,7 @@ const DETAIL = {
       createdAt: T1,
       updatedAt: T2,
       endedAt: T2,
-      attempts: [{ attempt: 1, taskId: 'task-fetch-1', status: 'completed', createdAt: T1 }],
+      attempts: [{ attempt: 1, taskId: TASK_FETCH, status: 'completed', createdAt: T1 }],
       actions: [],
     },
     {
@@ -148,7 +152,7 @@ const DETAIL = {
       createdAt: T2,
       updatedAt: T3,
       endedAt: null,
-      attempts: [{ attempt: 1, taskId: 'task-apply-1', status: 'failed', createdAt: T2 }],
+      attempts: [{ attempt: 1, taskId: TASK_APPLY, status: 'failed', createdAt: T2 }],
       actions: [
         {
           actionRequestId: ACTION,
@@ -238,6 +242,8 @@ const NAMES: Record<string, { kind: string; name: string }> = {
   [GATE]: { kind: 'gatekeeper', name: 'cert-gate' },
   [WORKER]: { kind: 'workerDefinition', name: 'cert-rotator' },
   [ACTION]: { kind: 'actionRequest', name: 'cert.replace' },
+  [TASK_FETCH]: { kind: 'task', name: 'cert-rotator' },
+  [TASK_APPLY]: { kind: 'task', name: 'cert-rotator' },
 };
 
 async function answerGoalReads(page: Page): Promise<void> {

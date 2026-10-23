@@ -373,8 +373,11 @@ function Leftovers({
             className="row-wrap"
             data-testid="goal-leftover-action"
           >
-            <ActionChip actionRequestId={action.actionRequestId} http={http} />
-            <span>{actionKindLabel(action.actionKindTag)}</span>
+            <ActionChip
+              actionRequestId={action.actionRequestId}
+              name={actionKindLabel(action.actionKindTag)}
+              http={http}
+            />
             <RefChip kind="gatekeeper" id={action.gatekeeperId} http={http} size="s" />
           </span>
         ))}

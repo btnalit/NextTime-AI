@@ -58,8 +58,11 @@ export function GoalUnresolvedSection({
                 data-needs={action.needs}
               >
                 <span className="row-wrap">
-                  <ActionChip actionRequestId={action.actionRequestId} http={http} />
-                  <span>{actionKindLabel(action.actionKindTag)}</span>
+                  <ActionChip
+                    actionRequestId={action.actionRequestId}
+                    name={actionKindLabel(action.actionKindTag)}
+                    http={http}
+                  />
                   <RefChip kind="gatekeeper" id={action.gatekeeperId} http={http} size="s" />
                   <span className="text-3 text-small">
                     {t('步骤', 'Step')} <span className="mono">{action.stepKey}</span>
