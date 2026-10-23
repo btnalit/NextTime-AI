@@ -36,7 +36,14 @@ import {
   taskLive,
   workerChanged,
 } from '../../lib/goal-plan-draft.js';
-import { goalBudgetRows, planCheckSentence, planDiff, stepRemovalText } from '../../lib/goals.js';
+import {
+  goalBudgetRows,
+  isStepAuthorityHint,
+  planCheckSentence,
+  planDiff,
+  planHintText,
+  stepRemovalText,
+} from '../../lib/goals.js';
 import { HttpError } from '../../lib/http-client.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import {
@@ -217,6 +224,11 @@ export function GoalPlanEditor({
             `计划已改为第 ${result.revision} 版。目标仍然暂停：要接着执行，按「继续」。`,
             `The plan is now v${result.revision}. The goal is still paused: resume it to go on.`,
           ),
+        // S11 GO5c: a step still to start that the requester's authority would not start pauses
+        // the run when it gets there. Only this result says so: a read of a run past its proposal
+        // carries the plan's own hints, which the acceptance card already shows.
+        (result) =>
+          result.hints.filter(isStepAuthorityHint).map((hint) => planHintText(hint, t, gateNames)),
       );
     } catch (error) {
       const fields = refusalFields(error, draft, t);

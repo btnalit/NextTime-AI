@@ -177,7 +177,17 @@ describe('the plan editor on the goal page (S11 GO6, revise_goal)', () => {
           createdStepRunIds: ['sr-apply-2'],
           withdrawnActionRequestIds: [],
           releasedActionRequestIds: [],
-          hints: [],
+          // The plan's own hint stays with the acceptance card; the requester's authority over a
+          // step still to start is only in this result.
+          hints: [
+            { code: 'requester_confirm_only', message: 'no check' },
+            {
+              code: 'step_gate_not_held',
+              message: 'step "apply": …',
+              stepKey: 'apply',
+              gatekeeperIds: [GATE_ID],
+            },
+          ],
         }),
       }),
     );
@@ -225,6 +235,10 @@ describe('the plan editor on the goal page (S11 GO6, revise_goal)', () => {
     );
     const done = await screen.findByTestId('goal-op-done');
     expect(done.textContent).toMatch(/计划已改为第 2 版/);
+    const notes = screen.getAllByTestId('goal-op-note');
+    expect(notes.map((note) => note.textContent)).toEqual([
+      expect.stringContaining('步骤「apply」的 Worker 要操作门「cert-gate」'),
+    ]);
     expect(screen.queryByTestId('goal-plan-editor')).toBeNull();
     await waitFor(() => expect(document.activeElement?.contains(done)).toBe(true));
   });
