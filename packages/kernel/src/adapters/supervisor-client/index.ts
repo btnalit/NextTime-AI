@@ -146,13 +146,34 @@ export interface TaskSpawnOutcome {
 }
 
 const SHA256_ID = /^sha256:[0-9a-f]{64}$/;
-/** An image reference: no whitespace or control character, the container runtime's own length bound. */
-const IMAGE_REF = /^[^\s\u0000-\u001f\u007f]{1,255}$/;
-/** A version label (`v0.50.0 (abc1234)` for built-from): printable, one line. */
-const LABEL_TEXT = /^[^\u0000-\u001f\u007f]{1,200}$/;
+const isSha256Id = (value: string): boolean => SHA256_ID.test(value);
 
-function optionalMatch(value: unknown, pattern: RegExp): string | undefined {
-  return typeof value === 'string' && pattern.test(value) ? value : undefined;
+/** Deliberately a char-code loop, not a `/[\x00-\x1f\x7f]/` regex (biome's
+ *  `noControlCharactersInRegex`, same as shared `wire/llm-admin.ts`'s `hasControlCharacter`): C0
+ *  controls (0x00–0x1F) plus DEL (0x7F). */
+function hasControlCharacter(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
+}
+
+/** An image reference: no whitespace or control character, the container runtime's own length
+ *  bound. */
+function isImageRef(value: string): boolean {
+  return (
+    value.length >= 1 && value.length <= 255 && !/\s/.test(value) && !hasControlCharacter(value)
+  );
+}
+
+/** A version label (`v0.50.0 (abc1234)` for built-from): printable, one line. */
+function isLabelText(value: string): boolean {
+  return value.length >= 1 && value.length <= 200 && !hasControlCharacter(value);
+}
+
+function optionalMatch(value: unknown, accept: (value: string) => boolean): string | undefined {
+  return typeof value === 'string' && accept(value) ? value : undefined;
 }
 
 /**
@@ -164,16 +185,16 @@ function optionalMatch(value: unknown, pattern: RegExp): string | undefined {
 export function parseTaskRuntimeReport(value: unknown): TaskRuntimeReport | undefined {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
-  const imageRef = optionalMatch(record.imageRef, IMAGE_REF);
-  const imageId = optionalMatch(record.imageId, SHA256_ID);
+  const imageRef = optionalMatch(record.imageRef, isImageRef);
+  const imageId = optionalMatch(record.imageId, isSha256Id);
   if (imageRef === undefined || imageId === undefined) return undefined;
   return {
     imageRef,
     imageId,
-    piVersion: optionalMatch(record.piVersion, LABEL_TEXT),
-    platformExtensionVersion: optionalMatch(record.platformExtensionVersion, LABEL_TEXT),
-    builtFrom: optionalMatch(record.builtFrom, LABEL_TEXT),
-    modelsConfigDigest: optionalMatch(record.modelsConfigDigest, SHA256_ID),
+    piVersion: optionalMatch(record.piVersion, isLabelText),
+    platformExtensionVersion: optionalMatch(record.platformExtensionVersion, isLabelText),
+    builtFrom: optionalMatch(record.builtFrom, isLabelText),
+    modelsConfigDigest: optionalMatch(record.modelsConfigDigest, isSha256Id),
   };
 }
 

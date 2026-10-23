@@ -14,7 +14,7 @@ const MODELS_DIGEST = `sha256:${'b'.repeat(64)}`;
 
 const originalKernelVersion = process.env.KERNEL_VERSION;
 afterEach(() => {
-  if (originalKernelVersion === undefined) delete process.env.KERNEL_VERSION;
+  if (originalKernelVersion === undefined) Reflect.deleteProperty(process.env, 'KERNEL_VERSION');
   else process.env.KERNEL_VERSION = originalKernelVersion;
 });
 
@@ -65,7 +65,7 @@ describe('buildRunSpec (S11 W1a)', () => {
   });
 
   it('records `dev` for a build that set no KERNEL_VERSION, and no digest when no prompt was composed', () => {
-    delete process.env.KERNEL_VERSION;
+    Reflect.deleteProperty(process.env, 'KERNEL_VERSION');
     const built = buildRunSpec({
       definitionId: 'def-1',
       definitionVersion: 1,
@@ -165,6 +165,10 @@ describe('readRunEnvironment', () => {
     const stored = JSON.parse(JSON.stringify({ run_spec: spec(), runtime_report: report }));
     expect(
       readRunEnvironment({ ...stored, environment_digest: environmentDigest(spec(), report) }),
-    ).toEqual({ spec: spec(), runtime: report, environmentDigest: environmentDigest(spec(), report) });
+    ).toEqual({
+      spec: spec(),
+      runtime: report,
+      environmentDigest: environmentDigest(spec(), report),
+    });
   });
 });

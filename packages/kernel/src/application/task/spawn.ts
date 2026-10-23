@@ -16,13 +16,13 @@ import {
   computeChildHandleScope,
   mintWorkerRunHandle,
 } from './handle-mint.js';
-import type { TaskRuntimeDeps } from './runtime.js';
 import {
   type RunRuntimeReport,
   buildRunSpec,
   environmentDigest,
   toRunRuntimeReport,
 } from './run-fingerprint.js';
+import type { TaskRuntimeDeps } from './runtime.js';
 import { recordWorkerRunTransition } from './transition-log.js';
 import {
   type TaskRow,

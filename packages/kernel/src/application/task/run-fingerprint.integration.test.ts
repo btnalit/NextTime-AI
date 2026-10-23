@@ -1,7 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { type CapabilityScope, type HandleClaims, RunEnvironmentWireSchema } from '@nexttime/shared';
+import {
+  type CapabilityScope,
+  type HandleClaims,
+  RunEnvironmentWireSchema,
+} from '@nexttime/shared';
 import type { Pool, PoolClient } from 'pg';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
@@ -26,7 +30,12 @@ import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/inde
 import { readTaskAttributions } from './attribution.js';
 import { invokeWorker } from './invoke.js';
 import { readTaskRow } from './lifecycle.js';
-import { RunSpecSchema, environmentDigest, sha256Hex, toRunRuntimeReport } from './run-fingerprint.js';
+import {
+  RunSpecSchema,
+  environmentDigest,
+  sha256Hex,
+  toRunRuntimeReport,
+} from './run-fingerprint.js';
 import type { TaskRuntimeDeps } from './runtime.js';
 
 /**
@@ -59,7 +68,8 @@ class FakeTaskSupervisorClient implements TaskSupervisorClientPort {
 
   async spawn(input: TaskSpawnInput): Promise<TaskSpawnOutcome> {
     this.spawnCalls.push(input);
-    if (this.failSpawn) throw new TaskSupervisorError('http_error', 'POST /task/spawn returned 500');
+    if (this.failSpawn)
+      throw new TaskSupervisorError('http_error', 'POST /task/spawn returned 500');
     return {
       containerId: `container-${input.workerRunId}`,
       ip: '198.51.100.10',
@@ -214,7 +224,8 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     afterAll(async () => {
-      if (previousKernelVersion === undefined) delete process.env.KERNEL_VERSION;
+      if (previousKernelVersion === undefined)
+        Reflect.deleteProperty(process.env, 'KERNEL_VERSION');
       else process.env.KERNEL_VERSION = previousKernelVersion;
       await pool.end();
     });
@@ -329,7 +340,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       ).toMatchObject({ message: expect.stringMatching(/never change/) });
       expect(
         await attempt(
-          `update worker_runs set environment_digest = $3 where workspace_id = $1 and id = $2`,
+          'update worker_runs set environment_digest = $3 where workspace_id = $1 and id = $2',
           [workspaceId, runId, `v1:${'0'.repeat(64)}`],
         ),
       ).toMatchObject({ message: expect.stringMatching(/never change/) });
@@ -347,14 +358,20 @@ describe.runIf(DATABASE_URL !== undefined)(
         const result = await client.query<{ id: string }>(
           `insert into worker_runs (workspace_id, status, task_id, depth, attempt, run_spec)
            values ($1, 'provisioning', $2, 1, 1, $3::jsonb) returning id`,
-          [workspaceId, spawned.taskId, JSON.stringify(RunSpecSchema.parse((await fingerprintOf(runId)).run_spec))],
+          [
+            workspaceId,
+            spawned.taskId,
+            JSON.stringify(RunSpecSchema.parse((await fingerprintOf(runId)).run_spec)),
+          ],
         );
         return result.rows[0]?.id as string;
       });
-      const report = JSON.stringify(toRunRuntimeReport(new FakeTaskSupervisorClient().runtime as TaskRuntimeReport));
+      const report = JSON.stringify(
+        toRunRuntimeReport(new FakeTaskSupervisorClient().runtime as TaskRuntimeReport),
+      );
       expect(
         await attempt(
-          `update worker_runs set runtime_report = $3::jsonb where workspace_id = $1 and id = $2`,
+          'update worker_runs set runtime_report = $3::jsonb where workspace_id = $1 and id = $2',
           [workspaceId, provisioning, report],
         ),
       ).toMatchObject({ message: expect.stringMatching(/only as it starts/) });
@@ -397,7 +414,12 @@ describe.runIf(DATABASE_URL !== undefined)(
       const attributions = await inTx(ownerId, async (client) => {
         const task = await readTaskRow(client, workspaceId, spawned.taskId);
         if (!task) throw new Error('task missing');
-        return readTaskAttributions(client, workspaceId, [task], [spawned.workerRunId, legacyRunId]);
+        return readTaskAttributions(
+          client,
+          workspaceId,
+          [task],
+          [spawned.workerRunId, legacyRunId],
+        );
       });
       expect(attributions.environmentByRun.get(legacyRunId)).toBeNull();
       expect(toWireRunEnvironment(attributions.environmentByRun.get(legacyRunId))).toBeNull();
