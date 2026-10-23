@@ -523,6 +523,7 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
 
   it('a pack that builds on another: the review waits for it, and it is installed right on the pack’s page (P1-F)', async () => {
     let assetsInstalled = false;
+    let knowledgeInstalled = false;
     const assets = () =>
       pack({
         status: assetsInstalled ? 'up_to_date' : 'not_installed',
@@ -534,8 +535,8 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
         name: 'knowledge',
         summary: 'Knowledge bases',
         latestVersion: 1,
-        status: 'not_installed',
-        installedVersion: null,
+        status: knowledgeInstalled ? 'up_to_date' : 'not_installed',
+        installedVersion: knowledgeInstalled ? 1 : null,
         versions: [
           {
             ...(VERSIONS[0] as PackWire['versions'][number]),
@@ -572,7 +573,11 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
               items: [item({ before: null })],
               inUse: { objects: 0, links: 0, capped: false },
             }),
-      install_pack: () => {
+      install_pack: (params) => {
+        if ((params as { name: string }).name === 'knowledge') {
+          knowledgeInstalled = true;
+          return { pack: knowledge(), segmentId: NEW_SEGMENT_ID, verification: null };
+        }
         assetsInstalled = true;
         return { pack: assets(), segmentId: NEW_SEGMENT_ID, verification: null };
       },
@@ -630,8 +635,19 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
     const met = screen.getByTestId('catalog-pack-dependency-ops-assets');
     expect(met.textContent).toMatch(/已满足现在已装 v2/);
     expect(within(met).queryByTestId('catalog-pack-install-trigger')).toBeNull();
+    // Its button is gone: focus is on the row that now reads met (UX acceptance of #721, P3-1).
+    await waitFor(() => expect(document.activeElement).toBe(met));
     // Still on the pack's own page.
     expect(screen.getByTestId('catalog-pack-title').textContent).toBe('knowledge');
+
+    // The pack itself installs now; what the list said about doing so is gone (P3-2).
+    fireEvent.click(screen.getByTestId('catalog-pack-install-trigger'));
+    await screen.findByTestId('catalog-pack-preview');
+    const install = screen.getByRole('button', { name: '安装' }) as HTMLButtonElement;
+    expect(install.disabled).toBe(false);
+    fireEvent.click(install);
+    await screen.findByTestId('catalog-pack-installed');
+    expect(screen.queryByTestId('catalog-pack-dependency-installed')).toBeNull();
   });
 
   it('a pack it builds on changing after the review installs nothing and reloads the review (P1-F)', async () => {

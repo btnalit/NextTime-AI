@@ -8,7 +8,7 @@ import {
   type PackInstallResultWire,
   type PackWire,
 } from '@nexttime/shared';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { invalidateCapability, useCapabilityList } from '../../hooks/useCapability.js';
 import { usePermissions } from '../../hooks/usePermissions.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
@@ -305,7 +305,13 @@ function PackDetail({
               `v${pack.latestVersion} builds on these packs: the workspace needs them, recent enough, before it can be installed or upgraded. One it does not have yet can be installed right here, and leaves its own install record.`,
             )}
           </p>
-          <PackDependencyList http={http} pack={pack} packs={packs} onChanged={onChanged} />
+          <PackDependencyList
+            http={http}
+            pack={pack}
+            packs={packs}
+            ownInstalled={installed !== null}
+            onChanged={onChanged}
+          />
         </>
       ) : null}
 
@@ -409,11 +415,15 @@ function PackDependencyList({
   http,
   pack,
   packs,
+  ownInstalled,
   onChanged,
 }: {
   readonly http: CapabilityCaller;
   readonly pack: PackWire;
   readonly packs: readonly PackWire[];
+  /** The pack itself was just installed on this page: what this list said about installing it
+   *  next is out of date then, so it says nothing more (UX acceptance of #721, P3-2). */
+  readonly ownInstalled: boolean;
   readonly onChanged: () => void;
 }) {
   const t = useT();
@@ -421,9 +431,20 @@ function PackDependencyList({
   // What was just installed from here: its row now reads 已满足, so this says what happened.
   const [installed, setInstalled] = useState<PackInstallResultWire | null>(null);
   const allMet = pack.dependencies.every((dependency) => dependency.met);
+  // Installing one takes its button away (UX acceptance of #721, P3-1, the rule of #705's P3-1):
+  // once the pack is read again and the row reads met, focus moves to that row.
+  const [focusOnMet, setFocusOnMet] = useState<string | null>(null);
+  const rows = useRef(new Map<string, HTMLDivElement>());
+  useEffect(() => {
+    if (focusOnMet === null) return;
+    const now = pack.dependencies.find((dependency) => dependency.name === focusOnMet);
+    if (now !== undefined && !now.met) return;
+    rows.current.get(focusOnMet)?.focus();
+    setFocusOnMet(null);
+  }, [focusOnMet, pack.dependencies]);
   return (
     <div className="stack-s" data-testid="catalog-pack-dependencies">
-      {installed !== null ? (
+      {installed !== null && !ownInstalled ? (
         <output className="block">
           <Notice testId="catalog-pack-dependency-installed">
             {t(
@@ -452,7 +473,16 @@ function PackDependencyList({
         const hint = dependencyHint(dependency, t);
         const target = packs.find((candidate) => candidate.name === dependency.name);
         return (
-          <div className="stack-s" key={dependency.name} data-testid={rowId}>
+          <div
+            className="stack-s"
+            key={dependency.name}
+            data-testid={rowId}
+            tabIndex={-1}
+            ref={(row) => {
+              if (row) rows.current.set(dependency.name, row);
+              else rows.current.delete(dependency.name);
+            }}
+          >
             <span className="row-wrap">
               <RouteLink href={hrefs.catalog('packs', dependency.name)} testId={`${rowId}-link`}>
                 <span className="mono">{dependency.name}</span>
@@ -478,6 +508,7 @@ function PackDependencyList({
                 pack={target}
                 onInstalled={(result) => {
                   setInstalled(result);
+                  setFocusOnMet(dependency.name);
                   onChanged();
                 }}
                 onStale={onChanged}
