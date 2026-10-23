@@ -351,4 +351,17 @@ describe('lib/goal-plan-draft', () => {
     );
     expect(limits({ maxTokens: '48201', maxSteps: '4', maxWallClockMinutes: '30' }).size).toBe(0);
   });
+
+  it('a goal out of budget may still have what is left of it removed, to go to its checks', () => {
+    const detail = paused({
+      usage: { tokens: 100000, steps: 3, revisions: 0 },
+      steps: [
+        stepRun({ status: 'succeeded' }),
+        stepRun({ id: 'sr-apply', stepKey: 'apply', status: 'pending', attempts: [] }),
+      ],
+    });
+    const draft = draftFromDetail(detail);
+    expect(draftProblems(draft, detail, zh).get('budget:maxTokens')).toMatch(/上限要比它大/);
+    expect(draftProblems(withStep(draft, 'apply', { removed: true }), detail, zh).size).toBe(0);
+  });
 });

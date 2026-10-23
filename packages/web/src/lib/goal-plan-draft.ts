@@ -469,25 +469,33 @@ export function draftProblems(
   }
   const { budget } = draft;
   const notPositive = t('填一个大于 0 的整数。', 'A whole number above 0.');
-  // A limit at or under what is already used stops the goal the moment it resumes: the kernel
-  // takes it, so the editor says so on the field.
-  const used = new Map(goalBudgetRows(detail, t).map((row) => [row.key, row] as const));
+  // A limit at or under what is already used stops the goal the moment it resumes and a step is
+  // to start (the kernel takes it, and checks the budget only before starting steps): the editor
+  // holds it on the field then. A revision leaving only ended steps — the goal goes straight to its
+  // checks — is not held: removing what is left of a goal that ran out of budget is how it ends.
+  const toStart = kept.some((step) => step.original === null || !stepEnded(runs.get(step.key)));
+  const used = new Map(
+    (toStart ? goalBudgetRows(detail, t) : []).map((row) => [row.key, row] as const),
+  );
   const spent = (key: 'tokens' | 'steps' | 'wallClock') =>
     t(
       `已用 ${used.get(key)?.usedText ?? '—'}，上限要比它大，否则一按「继续」目标就因预算用尽停下。`,
       `${used.get(key)?.usedText ?? '—'} used already; the limit must be above it, or the goal stops for its budget as soon as it resumes.`,
     );
   if (!positiveInt(budget.maxTokens)) problems.set('budget:maxTokens', notPositive);
-  else if (Number(budget.maxTokens) <= (used.get('tokens')?.used ?? 0)) {
+  else if (toStart && Number(budget.maxTokens) <= (used.get('tokens')?.used ?? 0)) {
     problems.set('budget:maxTokens', spent('tokens'));
   }
   if (!positiveInt(budget.maxSteps)) problems.set('budget:maxSteps', notPositive);
-  else if (Number(budget.maxSteps) <= (used.get('steps')?.used ?? 0)) {
+  else if (toStart && Number(budget.maxSteps) <= (used.get('steps')?.used ?? 0)) {
     problems.set('budget:maxSteps', spent('steps'));
   }
   if (!(Number(budget.maxWallClockMinutes) > 0)) {
     problems.set('budget:maxWallClockSeconds', t('填一个大于 0 的数。', 'A number above 0.'));
-  } else if (Number(budget.maxWallClockMinutes) * 60 <= (used.get('wallClock')?.used ?? 0)) {
+  } else if (
+    toStart &&
+    Number(budget.maxWallClockMinutes) * 60 <= (used.get('wallClock')?.used ?? 0)
+  ) {
     problems.set('budget:maxWallClockSeconds', spent('wallClock'));
   }
   const needed = detail.usage.revisions + 1;
