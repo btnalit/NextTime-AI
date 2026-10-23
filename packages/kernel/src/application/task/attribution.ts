@@ -2,6 +2,7 @@ import type { ObjectiveOutcome, TurnStatus } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import type { LoadedSkillRef } from './definition-content.js';
 import { readTaskRow } from './lifecycle.js';
+import { type RunEnvironment, readRunEnvironment } from './run-fingerprint.js';
 
 /**
  * application/task/attribution: S10 E1 结果归因 (docs/s10-evolution-plan-2026-10-04.md §3.1–§3.4,
@@ -456,6 +457,9 @@ export async function reportTaskOutcome(
 export interface TaskAttributions {
   /** Per WorkerRun: the Skills it loaded, or `null` when the run predates E1 (not recorded). */
   readonly skillsByRun: ReadonlyMap<string, readonly SkillLoadRecord[] | null>;
+  /** S11 W1a: per WorkerRun, what it ran with (`run-fingerprint.ts`), or `null` when the run
+   *  predates W1a (not recorded). */
+  readonly environmentByRun: ReadonlyMap<string, RunEnvironment | null>;
   readonly outcomeByTask: ReadonlyMap<string, ObjectiveOutcomeRecord | null>;
   /** The generating Turns visible to the caller. */
   readonly turns: ReadonlyMap<string, TurnAttributionRecord>;
@@ -468,12 +472,23 @@ export async function readTaskAttributions(
   workerRunIds: readonly string[],
 ): Promise<TaskAttributions> {
   const skillsByRun = new Map<string, SkillLoadRecord[] | null>();
+  const environmentByRun = new Map<string, RunEnvironment | null>();
   if (workerRunIds.length > 0) {
-    const runs = await client.query<{ id: string; skills_recorded: boolean }>(
-      'select id, skills_recorded from worker_runs where workspace_id = $1 and id = any($2::uuid[])',
+    const runs = await client.query<{
+      id: string;
+      skills_recorded: boolean;
+      run_spec: unknown;
+      runtime_report: unknown;
+      environment_digest: string | null;
+    }>(
+      `select id, skills_recorded, run_spec, runtime_report, environment_digest
+       from worker_runs where workspace_id = $1 and id = any($2::uuid[])`,
       [workspaceId, workerRunIds],
     );
-    for (const run of runs.rows) skillsByRun.set(run.id, run.skills_recorded ? [] : null);
+    for (const run of runs.rows) {
+      skillsByRun.set(run.id, run.skills_recorded ? [] : null);
+      environmentByRun.set(run.id, readRunEnvironment(run));
+    }
     const loads = await client.query<{
       worker_run_id: string;
       skill_id: string;
@@ -516,5 +531,5 @@ export async function readTaskAttributions(
     .filter((id): id is string => id !== null);
   const turns = await readTurnAttributions(client, workspaceId, turnIds);
 
-  return { skillsByRun, outcomeByTask, turns };
+  return { skillsByRun, environmentByRun, outcomeByTask, turns };
 }

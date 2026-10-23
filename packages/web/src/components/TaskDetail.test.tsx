@@ -319,6 +319,10 @@ describe('TaskDetail', () => {
       const taskOutcome = within(section).getByTestId('outcome-value');
       expect(taskOutcome.getAttribute('data-basis')).toBe('agent_reported');
       expect(taskOutcome.textContent).toContain('agent 校验步骤上报（代表 Alice）');
+      // S11 W1a: the agent's own report is shown, and said not to count toward attainment.
+      const proxyNote = within(taskOutcome).getByTestId('outcome-proxy-note').textContent;
+      expect(proxyNote).toContain('代理指标，不计入达成率');
+      expect(proxyNote).toContain('达成率只算请求人的确认和平台验收检查');
       expect(within(section).getByText('diagnose-flow v3')).toBeTruthy();
       expect(within(section).getByText('agent 自报')).toBeTruthy();
       expect(screen.getByTestId('task-turn-link').getAttribute('href')).toBe('#/work/chats/chat-1');
@@ -352,6 +356,7 @@ describe('TaskDetail', () => {
       expect(values).toHaveLength(1);
       expect(values[0]?.getAttribute('data-basis')).toBe('requester');
       expect(values[0]?.textContent).toContain('请求人 Alice 判定');
+      expect(screen.queryByTestId('outcome-proxy-note')).toBeNull();
     });
 
     it('a run that loaded no Skill reads 无, not 未记录; a Turn in an invisible chat says so', () => {
@@ -375,6 +380,114 @@ describe('TaskDetail', () => {
       expect(screen.getByText(/所在对话对你不可见/)).toBeTruthy();
     });
   });
+  describe('运行环境 (S11 W1a)', () => {
+    const IMAGE_ID = `sha256:${'a'.repeat(64)}`;
+    const PROMPT_DIGEST = 'b'.repeat(64);
+    const ENV_DIGEST = `v1:${'c'.repeat(64)}`;
+    const environment = {
+      definition: { id: 'wd-1', version: 2 },
+      model: 'anthropic/model-a',
+      image: null,
+      systemPromptDigest: PROMPT_DIGEST,
+      kernelVersion: 'v0.50.0 (abc1234)',
+      runtime: {
+        imageRef: 'nexttime-ai-worker-runtime',
+        imageId: IMAGE_ID,
+        piVersion: '1.2.3',
+        platformExtensionVersion: '0.50.0',
+        builtFrom: 'v0.50.0 (abc1234)',
+        modelsConfigDigest: null,
+      },
+      environmentDigest: ENV_DIGEST,
+    };
+    const run = {
+      id: 'run-1',
+      status: 'terminated',
+      containerId: null,
+      depth: 1,
+      attempt: 1,
+      startedAt: '2026-09-03T00:00:00.000Z',
+      terminatedAt: '2026-09-03T00:01:00.000Z',
+    };
+
+    it('shows what a run ran with: the definition version, model, platform version, image and digests, never the prompt', () => {
+      renderDetail({ workerRuns: [{ ...run, environment }] });
+      const block = screen.getByTestId('run-environment');
+      expect(block.textContent).toContain('Restarter v2');
+      expect(block.textContent).toContain('anthropic/model-a');
+      expect(block.textContent).toContain('v0.50.0 (abc1234)');
+      expect(within(block).getByTestId('run-environment-image').textContent).toBe(
+        `sha256:${'a'.repeat(12)}pi 1.2.3`,
+      );
+      expect(within(block).getByText('b'.repeat(12)).getAttribute('title')).toBe(PROMPT_DIGEST);
+      expect(within(block).getByTestId('run-environment-digest').textContent).toBe(
+        `v1:${'c'.repeat(12)}`,
+      );
+      // One run: no per-run heading, nothing to compare.
+      expect(block.textContent).not.toContain('次尝试');
+      expect(screen.queryByTestId('run-environment-summary')).toBeNull();
+    });
+
+    it('a run that named no model reads 运行时默认; a run that never started reads 未上报 and has no fingerprint', () => {
+      renderDetail({
+        workerRuns: [
+          {
+            ...run,
+            environment: { ...environment, model: null, runtime: null, environmentDigest: null },
+          },
+        ],
+      });
+      const block = screen.getByTestId('run-environment');
+      expect(within(block).getByText('运行时默认（Worker 定义和请求人都没指定）')).toBeTruthy();
+      expect(within(block).getByTestId('run-environment-image').textContent).toMatch(/^未上报/);
+      expect(within(block).getByTestId('run-environment-digest').textContent).toMatch(/^无法确定/);
+    });
+
+    it('a run from before the platform recorded it reads 未记录; a retry gets its own block', () => {
+      renderDetail({
+        workerRuns: [
+          { ...run, environment: null },
+          { ...run, id: 'run-2', attempt: 2, environment },
+        ],
+      });
+      const blocks = screen.getAllByTestId('run-environment');
+      expect(blocks).toHaveLength(2);
+      expect(blocks[0]?.textContent).toContain('运行 run-1 · 第 1 次尝试');
+      expect(
+        within(blocks[0] as HTMLElement).getByTestId('run-environment-not-recorded'),
+      ).toBeTruthy();
+      expect(blocks[1]?.textContent).toContain('第 2 次尝试');
+      expect(blocks[1]?.textContent).toContain('anthropic/model-a');
+      expect(screen.getByTestId('run-environment-summary').textContent).toMatch(
+        /^第 1 次尝试没有指纹，无法比较。环境指纹相同，说明/,
+      );
+    });
+
+    it('several runs say which ran in the same environment', () => {
+      const other = { ...environment, environmentDigest: `v1:${'d'.repeat(64)}` };
+      renderDetail({
+        workerRuns: [
+          { ...run, environment },
+          { ...run, id: 'run-2', attempt: 2, environment },
+          { ...run, id: 'run-3', attempt: 3, environment: other },
+        ],
+      });
+      expect(screen.getByTestId('run-environment-summary').textContent).toMatch(
+        /^第 1、2 次尝试的环境指纹相同；第 3 次尝试与其他几次不同。/,
+      );
+      cleanup();
+      renderDetail({
+        workerRuns: [
+          { ...run, environment },
+          { ...run, id: 'run-2', attempt: 2, environment },
+        ],
+      });
+      expect(screen.getByTestId('run-environment-summary').textContent).toMatch(
+        /^这 2 次运行的环境指纹相同。/,
+      );
+    });
+  });
+
   it('an attempt of a goal step shows its output contract, its last refused report and the attempt it redoes (S11 GO5d-1)', async () => {
     renderDetail({
       status: 'running',

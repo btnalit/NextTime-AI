@@ -64,6 +64,11 @@ make gen-models     # 从 ${NEXTTIME_DATA}/config/llm-providers.yaml 生成 mode
 cat "${NEXTTIME_DATA}/models/models.json"   # S1.7 未接入真实 provider 时期望 {"providers": {}}
 ```
 
+S11 W1a 起 `worker-supervisor` 也只读挂载整个 `${NEXTTIME_DATA}/models/` 目录（挂目录不挂文件：
+llm-proxy 用 rename 换掉 `models.json`，单文件挂载会停在旧 inode 上）。它只在每次 spawn Task
+容器前读一次这个文件，算 sha256 记进该 WorkerRun 的运行指纹（运行没指定模型时，pi 的默认模型就取自
+这里）；文件里没有凭据。读不到时 spawn 照常，只是这次运行的指纹记不下模型这一项。
+
 ## 4. 起 `egress-proxy` 与 `worker-supervisor`
 
 ```bash
@@ -297,7 +302,9 @@ fetch('http://localhost:8081/task/spawn', {
 "
 ```
 
-期望：`200 {containerId, ip}`。**立刻**（不要先查 status）检查容器 spec：
+期望：`200 {containerId, ip, runtime}`——`runtime` 是 S11 W1a 起 supervisor 对这个容器上报的运行环境
+（镜像引用、解析到的镜像 id、镜像上的 pi / 平台扩展版本标签、`models.json` 摘要），内核把它记进
+WorkerRun 的运行指纹。**立刻**（不要先查 status）检查容器 spec：
 
 ```bash
 docker inspect "nexttime-task-${WORKER_RUN_ID}" --format '{{range .Config.Env}}{{println .}}{{end}}' | sort

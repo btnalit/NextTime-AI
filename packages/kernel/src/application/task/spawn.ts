@@ -1,7 +1,10 @@
 import { IllegalTransition, TASK_TRANSITIONS, storableText } from '@nexttime/shared';
 import { withWorkspace } from '../../adapters/db/pool.js';
 import { TaskSupervisorError } from '../../adapters/supervisor-client/index.js';
-import type { TaskSkillInlineMountInput } from '../../adapters/supervisor-client/index.js';
+import type {
+  TaskSkillInlineMountInput,
+  TaskSpawnOutcome,
+} from '../../adapters/supervisor-client/index.js';
 import { revokeSession } from '../../governance/capability/index.js';
 import { currentCorrelationId } from '../../substrate/correlation/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
@@ -13,6 +16,12 @@ import {
   computeChildHandleScope,
   mintWorkerRunHandle,
 } from './handle-mint.js';
+import {
+  type RunRuntimeReport,
+  buildRunSpec,
+  environmentDigest,
+  toRunRuntimeReport,
+} from './run-fingerprint.js';
 import type { TaskRuntimeDeps } from './runtime.js';
 import { recordWorkerRunTransition } from './transition-log.js';
 import {
@@ -111,6 +120,16 @@ export async function spawnWorkerRun(
 
   const durationLimitSec = input.task.durationLimitSec ?? 3600;
 
+  // S11 W1a (run-fingerprint.ts): the kernel's half of what this run runs with — from exactly what
+  // is forwarded to the supervisor below, recorded with the run itself.
+  const runSpec = buildRunSpec({
+    definitionId: input.task.workerDefinitionId,
+    definitionVersion: input.task.workerDefinitionVersion,
+    model: input.model,
+    image: input.image,
+    systemPrompt: input.systemPrompt,
+  });
+
   const created = await withWorkspace(
     deps.pool,
     { workspaceId, principalId: input.onBehalfOf },
@@ -153,9 +172,9 @@ export async function spawnWorkerRun(
       const workerRunResult = await client.query(
         `insert into worker_runs (
            workspace_id, status, task_id, parent_worker_run_id, depth, attempt, agent_principal_id,
-           skills_recorded
+           skills_recorded, run_spec
          )
-         values ($1, 'provisioning', $2, $3, $4, $5, $6, true)
+         values ($1, 'provisioning', $2, $3, $4, $5, $6, true, $7::jsonb)
          returning ${WORKER_RUN_ROW_COLUMNS}`,
         [
           workspaceId,
@@ -164,6 +183,7 @@ export async function spawnWorkerRun(
           input.depth,
           input.attempt,
           agentPrincipalId,
+          JSON.stringify(runSpec),
         ],
       );
       const row = workerRunResult.rows[0];
@@ -230,7 +250,7 @@ export async function spawnWorkerRun(
   // inbound call), the Task's generating Turn (`created_by_activity_id`). Never placed in the Handle.
   const correlationId = currentCorrelationId() ?? input.task.createdByActivityId ?? undefined;
 
-  let spawnOutcome: { containerId: string; ip: string | undefined };
+  let spawnOutcome: TaskSpawnOutcome;
   try {
     spawnOutcome = await deps.supervisorClient.spawn(
       {
@@ -301,6 +321,13 @@ export async function spawnWorkerRun(
     throw err;
   }
 
+  // S11 W1a: the supervisor's half — what the container it started actually runs. A supervisor
+  // that reported nothing leaves both unrecorded.
+  const runtimeReport: RunRuntimeReport | null = spawnOutcome.runtime
+    ? toRunRuntimeReport(spawnOutcome.runtime)
+    : null;
+  const runEnvironmentDigest = environmentDigest(runSpec, runtimeReport);
+
   return withWorkspace(
     deps.pool,
     { workspaceId, principalId: input.onBehalfOf },
@@ -313,10 +340,19 @@ export async function spawnWorkerRun(
       // `terminateWorkerRunRow` — itself now guarded the same way, see that function) racing this
       // very `deps.supervisorClient.spawn()` call above can already have moved the row to
       // `terminated`.
+      // The runtime is recorded in this same UPDATE: migrations/task/0009 accepts it only with the
+      // run's `provisioning → running`, and a run terminated first keeps none.
       const updateResult = await client.query(
-        `update worker_runs set status = 'running', container_id = $3
+        `update worker_runs set status = 'running', container_id = $3, runtime_report = $4::jsonb,
+           environment_digest = $5
        where workspace_id = $1 and id = $2 and status = 'provisioning'`,
-        [workspaceId, created.workerRun.id, spawnOutcome.containerId],
+        [
+          workspaceId,
+          created.workerRun.id,
+          spawnOutcome.containerId,
+          runtimeReport === null ? null : JSON.stringify(runtimeReport),
+          runEnvironmentDigest,
+        ],
       );
       if ((updateResult.rowCount ?? 0) === 0) {
         // Lost the race: the run was already terminated by the time the supervisor confirmed the

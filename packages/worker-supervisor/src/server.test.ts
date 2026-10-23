@@ -687,7 +687,7 @@ const validTaskSpawnBody = {
 };
 
 describe('POST /task/spawn', () => {
-  it('spawns and returns exactly {containerId, ip}', async () => {
+  it('spawns and returns exactly {containerId, ip, runtime}', async () => {
     const { app } = setup();
     const res = await app.inject({
       method: 'POST',
@@ -697,9 +697,15 @@ describe('POST /task/spawn', () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(Object.keys(body).sort()).toEqual(['containerId', 'ip']);
+    expect(Object.keys(body).sort()).toEqual(['containerId', 'ip', 'runtime']);
     expect(body.containerId).toBeDefined();
     expect(body.ip).toBeDefined();
+    // S11 W1a: the image the request fell back to (`WORKER_IMAGE`) and the id it resolved to; no
+    // version labels on an image the host never registered, and undefined fields are not sent.
+    expect(body.runtime).toEqual({
+      imageRef: 'nexttime-ai-worker-runtime',
+      imageId: 'sha256:fake-nexttime-ai-worker-runtime',
+    });
   });
 
   it('400s on an invalid body', async () => {

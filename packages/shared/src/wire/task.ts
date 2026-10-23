@@ -15,6 +15,49 @@ import {
  * same-shape subset per §3.
  */
 
+/** S11 W1a: what worker-supervisor reported about the container it started for a WorkerRun —
+ *  the image reference it used, the image id that resolved to, the image's own version labels
+ *  (`null` when the image carries none) and the digest of the `models.json` the container mounted
+ *  (`null` when the supervisor could not read it). */
+export const RunRuntimeReportWireSchema = z
+  .object({
+    imageRef: z.string(),
+    imageId: z.string(),
+    piVersion: z.string().nullable(),
+    platformExtensionVersion: z.string().nullable(),
+    builtFrom: z.string().nullable(),
+    modelsConfigDigest: z.string().nullable(),
+  })
+  .strict();
+export type RunRuntimeReportWire = z.infer<typeof RunRuntimeReportWireSchema>;
+
+/**
+ * S11 W1a 运行指纹: what a WorkerRun ran with, recorded once and never changed (the kernel's half
+ * when it created the run, the supervisor's half when the run started).
+ *   - `model`: `null` when neither the WorkerDefinition nor the requester named one — pi then took
+ *     its default from the `models.json` in `runtime.modelsConfigDigest`.
+ *   - `image`: the runtime image the kernel asked for; `null` = worker-supervisor's default.
+ *   - `systemPromptDigest`: sha256 of the composed system prompt (never the prompt itself); `null`
+ *     = none composed, the image's default prompt.
+ *   - `kernelVersion`: the platform build that started the run (`KERNEL_VERSION`).
+ *   - `runtime`: `null` when the supervisor reported nothing — the run never started.
+ *   - `environmentDigest`: the key runs are grouped by when their outcomes are compared (`v1:`
+ *     sha256 over the WorkerDefinition version, the effective model, the image id, the platform
+ *     build and the prompt digest). `null` when one of those is unknown.
+ */
+export const RunEnvironmentWireSchema = z
+  .object({
+    definition: z.object({ id: z.string(), version: z.number().int().positive() }).strict(),
+    model: z.string().nullable(),
+    image: z.string().nullable(),
+    systemPromptDigest: z.string().nullable(),
+    kernelVersion: z.string(),
+    runtime: RunRuntimeReportWireSchema.nullable(),
+    environmentDigest: z.string().nullable(),
+  })
+  .strict();
+export type RunEnvironmentWire = z.infer<typeof RunEnvironmentWireSchema>;
+
 export const WorkerRunWireSchema = z
   .object({
     id: z.string(),
@@ -27,6 +70,8 @@ export const WorkerRunWireSchema = z
     /** S10 E1: the Skill versions this run loaded (`worker_run_skills`). `null` = not recorded (a
      *  run from before E1); `[]` = recorded, no Skill loaded. */
     skills: z.array(SkillLoadWireSchema).nullable(),
+    /** S11 W1a: `null` = not recorded (a run from before W1a). */
+    environment: RunEnvironmentWireSchema.nullable(),
   })
   .strict();
 export type WorkerRunWire = z.infer<typeof WorkerRunWireSchema>;

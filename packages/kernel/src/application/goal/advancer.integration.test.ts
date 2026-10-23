@@ -50,6 +50,7 @@ import { reportTaskOutcome } from '../task/attribution.js';
 import {
   GoalStepClosedError,
   RunConfigSnapshotSchema,
+  RunSpecSchema,
   type TaskRuntimeDeps,
   allotChildTokenBudget,
   completeTaskWithResult,
@@ -723,6 +724,21 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(snapshot.definition).toEqual({ id: worker.definitionId, version: worker.version });
         expect(snapshot.handle.capabilities).not.toContain('invoke_worker');
         expect(snapshot.handle.capabilities).not.toContain('find_workers');
+        // S11 W1a: the attempt's WorkerRun records what it ran with (run-fingerprint.ts); where the
+        // Task's snapshot says the same thing, the two agree.
+        const runs = await admin((client) =>
+          client.query<{ run_spec: unknown }>(
+            'select run_spec from worker_runs where workspace_id = $1 and task_id = $2',
+            [workspaceId, taskA?.id],
+          ),
+        );
+        expect(runs.rows).toHaveLength(1);
+        const runSpec = RunSpecSchema.parse(runs.rows[0]?.run_spec);
+        expect(runSpec.definition).toEqual(snapshot.definition);
+        expect(runSpec.model).toBe(snapshot.model);
+        expect(runSpec.image).toBe(snapshot.image);
+        expect(runSpec.systemPromptDigest).toBe(snapshot.systemPromptDigest);
+        expect(snapshot.systemPromptDigest).not.toBeNull();
         // A running run is looked at again at its wall-clock deadline at the latest.
         expect(first.nextTickAt).not.toBeNull();
 

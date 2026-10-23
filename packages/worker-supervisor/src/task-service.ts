@@ -66,6 +66,11 @@ import {
 } from './host-paths.js';
 import { assertRuntimeContract } from './runtime-contract.js';
 import {
+  type TaskRuntimeReport,
+  readModelsConfigDigest,
+  taskRuntimeReport,
+} from './runtime-report.js';
+import {
   TASK_CORRELATION_ID_LABEL,
   TASK_EGRESS_DENY_LABEL,
   TASK_ID_LABEL,
@@ -139,6 +144,8 @@ export interface TaskFinishedEvent {
 export interface TaskSpawnOutcome {
   readonly containerId: string;
   readonly ip: string | undefined;
+  /** S11 W1a: what the container actually runs (runtime-report.ts). */
+  readonly runtime: TaskRuntimeReport;
 }
 
 export interface TaskStatus {
@@ -487,6 +494,8 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
       utimesSync(paths.localPlatformDir, usedAt, usedAt);
 
       const networkName = await resolveNetworkName();
+      // S11 W1a: read right before the create, which binds the same file into the container.
+      const modelsConfigDigest = readModelsConfigDigest(config);
       const spec = buildTaskSpawnSpec({
         config,
         taskId,
@@ -571,7 +580,11 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
       });
       registerEgress(workspaceId, workerRunId, created.ip, egressDeny, acceptedCorrelationId);
 
-      return { containerId: created.id, ip: created.ip };
+      return {
+        containerId: created.id,
+        ip: created.ip,
+        runtime: taskRuntimeReport(image, created, modelsConfigDigest),
+      };
     },
 
     async terminate(workerRunId: string): Promise<boolean> {
