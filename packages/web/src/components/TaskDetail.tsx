@@ -25,6 +25,7 @@ import { nameOf } from './approvals/useDirectoryNames.js';
 import { Button } from './kit/button.js';
 import { Confirm } from './kit/confirm.js';
 import { KeyValue, type KeyValueItem } from './kit/key-value.js';
+import { RedactedNote } from './kit/redacted-note.js';
 import { RefChip } from './kit/ref-chip.js';
 import { RouteLink } from './kit/route-link.js';
 import { StatusChip } from './kit/status-chip.js';
@@ -225,6 +226,7 @@ export function TaskDetail({
           ) : null}
         </div>
         {need ? <p className="pre-wrap">{need}</p> : null}
+        <RedactedNote value={need} testId="task-need-redacted" />
       </header>
 
       <section className="stack-s">
@@ -248,6 +250,7 @@ export function TaskDetail({
               ))}
             </ul>
           ) : null}
+          <RedactedNote value={task.result} testId="task-result-redacted" />
           <div className="row-wrap text-small text-3">
             <span>
               {contract.factsToAssert.length} {t('条事实', 'facts written')}
@@ -324,6 +327,7 @@ export function TaskDetail({
         <div className="stack-s">
           <span className="section-title">{t('结果', 'Result')}</span>
           <pre className="code-block">{prettyJsonVisible(task.result)}</pre>
+          <RedactedNote value={task.result} testId="task-result-redacted" />
         </div>
       ) : null}
 
@@ -332,6 +336,7 @@ export function TaskDetail({
           <summary>{t('输入', 'Input')}</summary>
           <div className="disclosure-body">
             <pre className="code-block">{prettyJsonVisible(task.input)}</pre>
+            <RedactedNote value={task.input} testId="task-input-redacted" />
           </div>
         </details>
       ) : null}

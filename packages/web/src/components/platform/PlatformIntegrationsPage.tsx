@@ -20,6 +20,7 @@ import { ConnectSystemLauncher } from '../connect/ConnectSystemLauncher.js';
 import { Confirm } from '../kit/confirm.js';
 import { DataTable, type DataTableColumn } from '../kit/data-table.js';
 import { PageHeader } from '../kit/page-header.js';
+import { RedactedNote } from '../kit/redacted-note.js';
 import { Button } from '../ui/Button.js';
 import { Drawer } from '../ui/Drawer.js';
 import { EmptyState } from '../ui/EmptyState.js';
@@ -1179,6 +1180,10 @@ function selfConnectionColumns(
                   {connection.suspensionReason}
                 </div>
               ) : null}
+              <RedactedNote
+                value={connection.suspensionReason}
+                testId={`self-connection-suspension-redacted-${connection.gatekeeperId}`}
+              />
             </div>
           ) : null}
         </div>

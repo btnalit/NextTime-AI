@@ -427,7 +427,8 @@ export const ERROR_NEXT_STEPS: Readonly<
     zh: '参数里带了凭据，调用没有发出。不要把凭据当参数传，门会用自己配置的凭据认证。',
     en: 'The parameters carry a credential, so nothing was sent. Do not pass credentials as parameters; the gate authenticates with its own.',
   },
-  // S11 GO5b: a goal's revision reason or a note, refused for a credential-looking value.
+  // S11 GO5b: a goal's revision reason or a note, refused for a credential-looking value; legacy
+  // 420: an Operation's description too (the catalog's edit dialog says it in its own terms).
   credentials_in_text: {
     zh: '这段文字看起来带了凭据（token、key 或密码的值，或 Bearer、Authorization、name=value 这类写法），已拒绝，什么也没保存。写清发生了什么，不要写凭据的值，比如写「token 过期了」。',
     en: 'The text looks like it carries a credential (a token, key or password value, or a Bearer, Authorization or name=value form), so it was refused and nothing was saved. Say what happened without the value, for example "the token expired".',

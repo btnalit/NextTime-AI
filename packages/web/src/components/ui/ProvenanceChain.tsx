@@ -8,6 +8,7 @@ import {
   sourceKindLabel,
   sourceVisibilityLabel,
 } from '../../lib/labels.js';
+import { RedactedNote, showsRedaction } from '../kit/redacted-note.js';
 import { Icon } from './Icon.js';
 import { RefChip } from './RefChip.js';
 
@@ -140,7 +141,10 @@ function HumanAttestations({
       </div>
       <ul className="prov-attestation-list">
         {attestations.map((attestation) => {
-          const link = safeHttpLink(attestation.link);
+          // Legacy 420: a link the kernel read out masked (a password in it) is shown, not
+          // followed — `[redacted]` is not the address the person gave.
+          const linkMasked = showsRedaction(attestation.link);
+          const link = linkMasked ? null : safeHttpLink(attestation.link);
           return (
             <li
               key={attestation.id}
@@ -173,7 +177,19 @@ function HumanAttestations({
                   <Icon name="link" size="s" />
                   <span className="truncate">{link}</span>
                 </a>
+              ) : linkMasked ? (
+                <span
+                  className="prov-attestation-link"
+                  data-testid="prov-human-attestation-link-masked"
+                >
+                  <Icon name="link" size="s" />
+                  <span className="truncate">{attestation.link}</span>
+                </span>
               ) : null}
+              <RedactedNote
+                value={[attestation.note, attestation.link ?? null]}
+                testId="prov-human-attestation-redacted"
+              />
             </li>
           );
         })}
@@ -239,11 +255,17 @@ export function ProvenanceChain({
                 {fact.invalidatedAt ? (
                   <>
                     <dt className="text-danger">{t('失效', 'Invalidated')}</dt>
-                    <dd>
-                      {when(fact.invalidatedAt)}
-                      {fact.invalidationReason ? (
-                        <span className="text-2"> — {fact.invalidationReason}</span>
-                      ) : null}
+                    <dd className="stack-s">
+                      <span>
+                        {when(fact.invalidatedAt)}
+                        {fact.invalidationReason ? (
+                          <span className="text-2"> — {fact.invalidationReason}</span>
+                        ) : null}
+                      </span>
+                      <RedactedNote
+                        value={fact.invalidationReason ?? null}
+                        testId="prov-fact-invalidation-redacted"
+                      />
                     </dd>
                   </>
                 ) : null}

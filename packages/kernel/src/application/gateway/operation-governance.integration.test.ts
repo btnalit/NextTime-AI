@@ -17,6 +17,7 @@ import {
 } from '../../governance/gatekeepers/index.js';
 import { queryAudit } from '../../substrate/audit/index.js';
 import { insertGateLink, manifestDigest, upsertAnnouncement } from '../gates/index.js';
+import { findOperations } from '../task/index.js';
 import { ForbiddenError } from './authorize.js';
 import { dispatchCapability } from './dispatch.js';
 import { GateInstanceNotAvailableError } from './gate-instance-handlers.js';
@@ -797,6 +798,106 @@ describe.runIf(DATABASE_URL !== undefined)(
           getOperation(client, workspaceId, gatekeeperId, name),
         );
         expect(persisted?.operation.description).toBe('revised by its proposer');
+      });
+
+      it('legacy 420: a credential in a new description is refused; one stored before reads masked on every read', async () => {
+        const fake = 'abcdefghijklmnopqrstuvwxyz0123'; // synthetic, Handle-shaped
+        const { gatekeeperId, op } = await seedImportedOperation();
+        const stored = await inTx((client) =>
+          getOperation(client, workspaceId, gatekeeperId, op.name),
+        );
+        // A description written before the edit refused credentials (the row is the record).
+        await inTx((client) =>
+          client.query(
+            `update objects set properties = jsonb_set(properties, '{description}', to_jsonb($3::text))
+              where workspace_id = $1 and id = $2`,
+            [workspaceId, stored?.id, `restarts it; call with PGPASSWORD=${fake}`],
+          ),
+        );
+        const shown = 'restarts it; call with PGPASSWORD=[redacted]';
+
+        const listed = await callAs<{
+          items: { gatekeeperId: string; name: string; description?: string }[];
+        }>(ownerId, 'owner', 'list_operations', { gatekeeperId });
+        expect(listed.items.find((item) => item.name === op.name)?.description).toBe(shown);
+        const object = await callAs<{ properties: Record<string, unknown> }>(
+          ownerId,
+          'owner',
+          'get_object',
+          { objectId: stored?.id },
+        );
+        expect(object.properties.description).toBe(shown);
+        // The text every agent reads in its tool list, and what `find_operations` ranks.
+        const now = Math.floor(Date.now() / 1000);
+        const allowed = (await dispatchCapability(
+          { pool },
+          {
+            channel: 'handle',
+            claims: {
+              ws: workspaceId,
+              sid: randomUUID(),
+              obo: memberId,
+              scope: { capabilities: ['list_allowed_operations'], resources: {} },
+              jti: randomUUID(),
+              iat: now,
+              exp: now + 600,
+            },
+          },
+          'list_allowed_operations',
+          {},
+        )) as { items: { name: string; operation: { description?: string } }[] };
+        expect(allowed.items.find((item) => item.name === op.name)?.operation.description).toBe(
+          shown,
+        );
+        const found = await inTx((client) =>
+          findOperations(client, workspaceId, { parentAuthority: 'unconstrained' }, 'restarts'),
+        );
+        expect(
+          found.find((match) => match.identityKey?.name === op.name)?.properties.description,
+        ).toBe(shown);
+
+        // A new description carrying one is refused before anything is written.
+        await expect(
+          callAs(ownerId, 'owner', 'update_operation_description', {
+            gatekeeperId,
+            name: op.name,
+            description: `call it with Authorization: Bearer ${fake}`,
+          }),
+        ).rejects.toMatchObject({ code: 'credentials_in_text' });
+        const untouched = await inTx((client) =>
+          getOperation(client, workspaceId, gatekeeperId, op.name),
+        );
+        expect(untouched?.operation.description).toContain(fake);
+
+        // The console's edit box opens on the masked text; saving it back is not refused.
+        const saved = await callAs<{ description: string }>(
+          ownerId,
+          'owner',
+          'update_operation_description',
+          { gatekeeperId, name: op.name, description: shown },
+        );
+        expect(saved.description).toBe(shown);
+        // Its audit row's `before` is the old text with the credential replaced: the edit does not
+        // copy it into a new row.
+        const audit = await callAs<{ items: { payload: Record<string, unknown> }[] }>(
+          ownerId,
+          'owner',
+          'audit_query',
+          { filter: { action: 'operation.description_updated' } },
+        );
+        const row = audit.items.find((item) => item.payload.name === op.name);
+        expect(row?.payload.before).toBe(shown);
+        const auditRows = await inTx(
+          async (client) =>
+            (
+              await client.query<{ payload: { name: string; before: string } }>(
+                `select payload from audit_records
+                  where workspace_id = $1 and action = 'operation.description_updated'`,
+                [workspaceId],
+              )
+            ).rows,
+        );
+        expect(auditRows.find((r) => r.payload.name === op.name)?.payload.before).toBe(shown);
       });
 
       it('a blank description is rejected through dispatch too, writing nothing', async () => {

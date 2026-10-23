@@ -5,3 +5,4 @@
  * what a person must confirm, is governance's (governance/redaction).
  */
 export * from './secret-values.js';
+export * from './shown-text.js';

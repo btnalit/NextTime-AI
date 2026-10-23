@@ -6,6 +6,7 @@ import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import { writeAudit } from '../../substrate/audit/index.js';
 import { dispatchCapability } from './dispatch.js';
 import type { ResolvedCaller } from './resolve-caller.js';
 
@@ -125,6 +126,36 @@ describe.runIf(DATABASE_URL !== undefined)(
       // No params at all is still a valid first page (default limit, no cursor).
       const bare = (await dispatchCapability({ pool }, owner, 'audit_query', {})) as AuditPage;
       expect(bare.items.length).toBeGreaterThanOrEqual(3);
+    });
+
+    it('legacy 420: a payload reads masked — params by field name, the rest by value — and keeps the kernel’s own fields', async () => {
+      const fake = 'abcdefghijklmnopqrstuvwxyz0123'; // synthetic, Handle-shaped
+      const owner = humanCaller(workspaceId, ownerId, 'owner');
+      // A row written before its writer redacted the params copy, with a handler's own text.
+      await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        writeAudit(client, {
+          workspaceId,
+          actorPrincipalId: ownerId,
+          action: 'test.legacy_payload',
+          payload: {
+            params: { name: 'x', apiKey: 'plain-looking-value' },
+            before: 'old text',
+            after: `call it with Authorization: Bearer ${fake}`,
+            redactedValues: 1,
+            credentialReview: { suspectedSecretValues: 1, confirmed: true },
+          },
+        }),
+      );
+      const page = (await dispatchCapability({ pool }, owner, 'audit_query', {
+        filter: { action: 'test.legacy_payload' },
+      })) as { items: { payload: Record<string, unknown> }[] };
+      expect(page.items[0]?.payload).toMatchObject({
+        params: { name: 'x', apiKey: '[redacted]' },
+        before: 'old text',
+        after: 'call it with Authorization: [redacted]',
+        redactedValues: 1,
+        credentialReview: { suspectedSecretValues: 1, confirmed: true },
+      });
     });
   },
 );

@@ -73,6 +73,22 @@ describe('scrubSecretValues — the common ways a secret is written down', () =>
     expect(scrubSecretValues(text)).toEqual({ value: text, redactedValues: 0 });
   });
 
+  // Legacy 420: every read shows free text scrubbed, and the console may send a scrubbed text back
+  // (an Operation description's edit dialog prefills it) to a write that refuses a credential.
+  it.each([
+    `Authorization: Bearer ${HANDLE}`,
+    `Authorization:   token ${FAKE}`,
+    `Cookie: nt_session=${FAKE}`,
+    `PGPASSWORD=${FAKE} psql`,
+    `  password: '${FAKE}'`,
+    `psql --password ${FAKE} -h db`,
+    `see https://ops:${FAKE}@db.example/x`,
+    `{"refreshToken": "${FAKE}"}`,
+  ])('finds nothing to replace in its own output: %s', (text) => {
+    const once = scrubSecretValues(text).value;
+    expect(scrubSecretValues(once)).toEqual({ value: once, redactedValues: 0 });
+  });
+
   it('cannot see an encoded secret — the reason the fix is the Handle itself, not this', () => {
     const encoded = Buffer.from(HANDLE).toString('base64');
     expect(scrubSecretValues(encoded).value).toBe(encoded);

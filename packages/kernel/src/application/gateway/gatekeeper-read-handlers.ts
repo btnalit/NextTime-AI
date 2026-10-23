@@ -23,6 +23,7 @@ import {
   operationGovernanceChange,
   operationVisibleTo,
 } from '../../governance/gatekeepers/index.js';
+import { shownFreeText } from '../../governance/redaction/index.js';
 import type { GatekeeperPlatformPolicy } from '../gates/index.js';
 import { operationPlatformStatus, readGatekeeperPlatformPolicy } from '../gates/index.js';
 import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
@@ -172,8 +173,12 @@ function toWireOperationSummary(record: OperationRecord, revision?: RevisionChan
     // S8 W3-K1 (leftover 81, audit CO1): the catalog page needs the current description both to
     // render "未填写描述" for a blank one and to prefill the edit dialog — absent (never an empty
     // string) mirrors `OperationSchema.description`'s own optionality.
+    // Legacy 420: as every read shows an Operation's description (`shownFreeText`, the rule the
+    // graph reads apply to the Operation Object) — the edit dialog prefills it masked, and
+    // `update_operation_description` refuses a credential, so a masked value is never saved back
+    // as a secret.
     ...(record.operation.description !== undefined
-      ? { description: record.operation.description }
+      ? { description: shownFreeText(record.operation.description) }
       : {}),
     // STATUS leftover 123: whose row it is under D-24 — the console offers the description edit
     // only to that proposer and the owner (the kernel enforces it either way).

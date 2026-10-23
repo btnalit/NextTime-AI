@@ -137,6 +137,34 @@ describe('TaskDetail', () => {
     expect(document.querySelector('.code-block')?.textContent).toContain('"raw": true');
   });
 
+  it('legacy 420: says what [redacted] stands for in a result the kernel read out masked', () => {
+    renderDetail({
+      status: 'completed',
+      result: {
+        summary: 'Restarted web-1 with PGPASSWORD=[redacted].',
+        findings: [],
+        factsToAssert: [],
+        evidence: [],
+        artifacts: [],
+      },
+    });
+    expect(screen.getByTestId('task-result-redacted').textContent).toContain(
+      '[redacted] 处的内容看起来像密码',
+    );
+    cleanup();
+    renderDetail({
+      status: 'completed',
+      result: {
+        summary: 'Restarted web-1.',
+        findings: [],
+        factsToAssert: [],
+        evidence: [],
+        artifacts: [],
+      },
+    });
+    expect(screen.queryByTestId('task-result-redacted')).toBeNull();
+  });
+
   it('renders artifacts: inlined content when present, an explicit "not retrievable" message otherwise (S8 W5-A, leftover 74)', () => {
     renderDetail({
       status: 'completed',

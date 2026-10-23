@@ -19,10 +19,10 @@ import { actionLabel } from '../../lib/capability-labels.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { isForbiddenError } from '../../lib/errors.js';
 import {
+  auditPayloadShown,
   formatDateTime,
   formatRelative,
   prettyJsonVisible,
-  redactSensitive,
 } from '../../lib/format.js';
 import type { PrincipalRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
@@ -386,7 +386,7 @@ export function AuditLogSection({
                       <details className="platform-audit-payload">
                         <summary>{t('负载', 'Payload')}</summary>
                         <pre className="code-block pre-wrap">
-                          {prettyJsonVisible(redactSensitive(row.payload))}
+                          {prettyJsonVisible(auditPayloadShown(row.payload))}
                         </pre>
                       </details>
                     </div>

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { ConflictStatus, ConflictType } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
+import { shownFreeTextIn } from '../redaction/index.js';
 
 /**
  * substrate/epistemic/conflicts: S3.2 冲突检测 (docs/development-tasks.md S3.2, design doc §5.4 I5
@@ -139,7 +140,9 @@ function mapConflictRow(row: ConflictDbRow): ConflictRow {
     openedAt: row.opened_at,
     resolvedAt: row.resolved_at,
     resolvedBy: row.resolved_by,
-    resolution: row.resolution,
+    // Legacy 420: `{choice, reason}` — the reason is the resolver's own words, kept as written and
+    // shown as `shownFreeText` shows text.
+    resolution: shownFreeTextIn(row.resolution) as Record<string, unknown> | null,
   };
 }
 

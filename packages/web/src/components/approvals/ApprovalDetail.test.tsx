@@ -374,6 +374,18 @@ describe('ApprovalDetail (S6-A B2 / B3 / C25)', () => {
     );
   });
 
+  it('legacy 420: a reason the kernel read out masked says what [redacted] stands for', () => {
+    renderDetail({
+      status: 'rejected',
+      decidedBy: 'principal-a',
+      decidedAt: '2026-09-03T00:01:00.000Z',
+      decisionReason: 'the script sets PGPASSWORD=[redacted] inline',
+    });
+    expect(screen.getByTestId('approval-decision-reason-redacted').textContent).toContain(
+      '[redacted] 处的内容看起来像密码',
+    );
+  });
+
   it('legacy 351: the reason box takes at most 1000 characters', () => {
     renderDetail();
     expect(screen.getByTestId('approval-reason').getAttribute('maxlength')).toBe('1000');

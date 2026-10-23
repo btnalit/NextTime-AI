@@ -11,6 +11,7 @@ import {
   operationDefinitionDiffers,
   operationGovernanceChangeDirection,
 } from '../../governance/gatekeepers/index.js';
+import { shownFreeText } from '../../governance/redaction/index.js';
 
 /**
  * application/gateway/announced-operations: how a manifest a gate announces compares with what a
@@ -99,7 +100,10 @@ export async function compareAnnouncedOperations(
         mode: operation.mode,
         blastRadius: operation.blast_radius,
         autoApprovable: operation.auto_approvable,
-        ...(operation.description !== undefined ? { description: operation.description } : {}),
+        // Legacy 420: shown as every read shows an Operation's description once stored.
+        ...(operation.description !== undefined
+          ? { description: shownFreeText(operation.description) }
+          : {}),
         ...gateOwnedParamsWire(operation),
         ...(existingRecord !== null
           ? {

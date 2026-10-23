@@ -32,7 +32,11 @@ import {
   setOperationStatusObject,
 } from '../../substrate/ontology/index.js';
 import { type PublishActor, assertPublishAuthority, seesEveryDraft } from '../capability/index.js';
-import { assertDraftCredentialsReviewed, quotedName } from '../redaction/index.js';
+import {
+  assertDraftCredentialsReviewed,
+  quotedName,
+  refuseCredentialText,
+} from '../redaction/index.js';
 import {
   operationDefinitionDiffers,
   operationDraftDigest,
@@ -1441,7 +1445,8 @@ export interface UpdateOperationDescriptionInput {
  * (unknown name) is an error (`OperationNotFoundError`).
  *
  * `description` must be non-blank after trimming and at most `OPERATION_DESCRIPTION_MAX_LENGTH`
- * characters (`OperationDescriptionInvalidError`) — checked before any write, so a rejected call
+ * characters (`OperationDescriptionInvalidError`), and carry no suspected credential
+ * (`TextCarriesCredentialsError`, legacy 420) — checked before any write, so a rejected call
  * touches nothing.
  *
  * Authority (STATUS leftover 123): documentation, but not harmless — a published Operation's
@@ -1464,6 +1469,10 @@ export async function updateOperationDescription(
   if (trimmed.length > OPERATION_DESCRIPTION_MAX_LENGTH) {
     throw new OperationDescriptionInvalidError(input.name, 'too_long');
   }
+  // Legacy 420: the one way to change what an Operation says to agents without a publish's
+  // credential review (`assertDraftCredentialsReviewed`) — so a suspected credential is refused
+  // here (`credentials_in_text`), before any write. Every read masks one stored earlier.
+  refuseCredentialText('description', trimmed);
 
   const existing = await requireOperation(client, workspaceId, input.gatekeeperId, input.name);
   if (input.actor !== undefined && !operationVisibleTo(input.actor, existing)) {

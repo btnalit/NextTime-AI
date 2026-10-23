@@ -251,6 +251,39 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(rejected.decidedBy).toBe(ownerId);
     });
 
+    it('legacy 420: a reject reason is kept as written and read back masked on every approval read', async () => {
+      const owner = humanCaller(workspaceId, ownerId, 'owner');
+      const id = await seedPendingActionRequest({ blastRadius: 'low' });
+      // Never refused: a reason must never stand in the way of stopping an action.
+      const rejected = (await dispatchCapability({ pool }, owner, 'reject', {
+        actionRequestId: id,
+        reason: `the script sets PGPASSWORD=${FAKE_TOKEN} inline`,
+      })) as ActionRequestWire;
+      const shown = 'the script sets PGPASSWORD=[redacted] inline';
+      expect(rejected.decisionReason).toBe(shown);
+
+      const read = (await dispatchCapability({ pool }, owner, 'get_action', {
+        actionRequestId: id,
+      })) as ActionRequestWire;
+      expect(read.decisionReason).toBe(shown);
+      const listed = (await dispatchCapability({ pool }, owner, 'list_action_requests', {
+        status: ['rejected'],
+      })) as { items: ActionRequestWire[] };
+      expect(listed.items.find((row) => row.id === id)?.decisionReason).toBe(shown);
+
+      // The Decision keeps what was written (I11); only reads mask it.
+      const stored = await admin((client) =>
+        client.query<{ reason: string }>(
+          `select d.rationale ->> 'reason' as reason
+             from action_requests ar join decisions d
+               on d.workspace_id = ar.workspace_id and d.id = ar.approval_decision_id
+            where ar.workspace_id = $1 and ar.id = $2`,
+          [workspaceId, id],
+        ),
+      );
+      expect(stored.rows[0]?.reason).toContain(FAKE_TOKEN);
+    });
+
     it('legacy 329: a failed request carries its audited reason — redacted, clipped, unseen characters shown — and every other row null', async () => {
       const owner = humanCaller(workspaceId, ownerId, 'owner');
       const id = await seedPendingActionRequest({

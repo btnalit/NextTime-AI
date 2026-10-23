@@ -2527,6 +2527,27 @@ describe.runIf(DATABASE_URL !== undefined)(
             expect(again.suspendedAt).toBe(suspended.suspendedAt);
             expect(again.suspensionReason).toBe('under review');
 
+            // Legacy 420: a reason is never refused (it stops a connection); it reads masked.
+            await withAdminClient(pool, (c) =>
+              c.query(
+                `update workspace_self_connections set suspension_reason = $3
+                  where workspace_id = $1 and gatekeeper_object_id = $2`,
+                [
+                  cWorkspaceId,
+                  selfGatekeeperId,
+                  'leaked PGPASSWORD=abcdefghijklmnopqrstuvwxyz0123',
+                ],
+              ),
+            );
+            const maskedList = await callAsAdmin<ListEnvelope<SelfConnectionWire>>(
+              'list_self_connections',
+              { workspaceId: cWorkspaceId },
+            );
+            expect(
+              maskedList.items.find((item) => item.gatekeeperId === selfGatekeeperId)
+                ?.suspensionReason,
+            ).toBe('leaked PGPASSWORD=[redacted]');
+
             // The platform's own audit row carries what it was told.
             const audited = await withAdminClient(pool, (c) =>
               c.query<{ payload: { params?: Record<string, unknown> } }>(

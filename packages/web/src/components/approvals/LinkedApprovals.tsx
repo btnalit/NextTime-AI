@@ -19,6 +19,7 @@ import { Button } from '../kit/button.js';
 import { ErrorBanner } from '../kit/error-banner.js';
 import { List, ListRow } from '../kit/list-row.js';
 import { Notice } from '../kit/notice.js';
+import { RedactedNote } from '../kit/redacted-note.js';
 import { SkeletonRows } from '../kit/skeleton.js';
 import { StatusChip } from '../kit/status-chip.js';
 import { ActionFailureLine } from './ActionFailure.js';
@@ -180,6 +181,11 @@ function LinkedApprovalsList({
           );
         })}
       </List>
+      {/* Legacy 420: a reason reads masked in the row; the line says what `[redacted]` is. */}
+      <RedactedNote
+        value={rows.map((row) => row.decisionReason ?? null)}
+        testId="linked-approvals-reason-redacted"
+      />
       {nextCursor !== undefined ? (
         <div className="row" style={{ justifyContent: 'center' }}>
           <Button

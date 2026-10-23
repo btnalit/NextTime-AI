@@ -16,6 +16,7 @@ import {
   boundedEcho,
   countSuspectedSecrets,
   credentialReviewAudit,
+  scrubSecretValues,
 } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
@@ -292,7 +293,9 @@ export const updateOperationDescriptionHandler: CapabilityHandler = async (
     payload: {
       gatekeeperId: record.gatekeeperId,
       name: record.name,
-      before,
+      // Legacy 420: a credential in a description stored before it was refused at write is not
+      // copied into this new row — the old text with each secret-looking value replaced.
+      before: scrubSecretValues(before).value,
       after: record.operation.description ?? '',
     },
   });

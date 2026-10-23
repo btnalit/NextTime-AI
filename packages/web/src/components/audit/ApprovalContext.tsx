@@ -10,6 +10,7 @@ import { policyDecisionLabel } from '../../lib/labels.js';
 import { hrefs } from '../../lib/router.js';
 import { FailureReasonText } from '../approvals/ActionFailure.js';
 import { nameOf, resourceScopeLabel } from '../approvals/useDirectoryNames.js';
+import { RedactedNote } from '../kit/redacted-note.js';
 import { ApprovalCard } from '../ui/ApprovalCard.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
 import { RefChip } from '../ui/RefChip.js';
@@ -147,7 +148,13 @@ export function ApprovalContext({
             {row.decisionReason ? (
               <>
                 <dt>{t('理由', 'Reason')}</dt>
-                <dd className="pre-wrap">{visibleLines(row.decisionReason)}</dd>
+                <dd className="stack-s">
+                  <span className="pre-wrap">{visibleLines(row.decisionReason)}</span>
+                  <RedactedNote
+                    value={row.decisionReason}
+                    testId="approval-context-reason-redacted"
+                  />
+                </dd>
               </>
             ) : null}
             {row.parentWorkerRunId ? (

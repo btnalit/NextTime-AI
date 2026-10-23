@@ -1,5 +1,6 @@
 import { HUMAN_ATTESTATION_EVIDENCE_KIND } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
+import { shownFreeText } from '../redaction/index.js';
 
 /**
  * substrate/epistemic/evidence: writes to the `evidence` table (migrations/core/0002_substrate.sql
@@ -160,8 +161,9 @@ function toHumanAttestationRow(row: EvidenceRow): HumanAttestationRow {
   return {
     id: row.id,
     factId: row.linkId,
-    note: typeof note === 'string' ? note : '',
-    link: typeof link === 'string' ? link : null,
+    // Legacy 420: a person's own words, kept as written and shown as `shownFreeText` shows them.
+    note: typeof note === 'string' ? shownFreeText(note) : '',
+    link: typeof link === 'string' ? shownFreeText(link) : null,
     activityId: typeof activityId === 'string' ? activityId : null,
     attestedBy: row.createdBy,
     createdAt: row.createdAt,

@@ -182,7 +182,7 @@ export const SECRET_VALUE_PATTERNS: readonly ValuePattern[] = [
   // `Authorization: token …`, `Cookie: a=1; b=2` — the whole value, to the end of the line.
   {
     pattern:
-      /(?<![A-Za-z0-9-])((?:proxy-)?authorization|(?:set-)?cookie)([ \t]{0,8}:[ \t]{0,8})(?!\[redacted\])[^\r\n]+/gi,
+      /(?<![A-Za-z0-9-])((?:proxy-)?authorization|(?:set-)?cookie)([ \t]{0,8}:[ \t]{0,8})(?![ \t]*\[redacted\])[^\r\n]+/gi,
     redact: (_match, [name, separator]) => `${name}${separator}${REDACTED}`,
   },
   COMPACT_JWT,
