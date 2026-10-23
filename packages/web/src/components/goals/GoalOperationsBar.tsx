@@ -37,6 +37,8 @@ export interface GoalOperationsBarProps {
   readonly http: CapabilityCaller;
   /** Gatekeeper names, for the checks an ending overrides. */
   readonly gateNames: ReadonlyMap<string, string>;
+  /** Opens the plan editor (`revise_goal`); the button shows only when given. */
+  readonly onRevise?: () => void;
   /** After an operation — or a refusal because the goal had already moved on — for the page to
    *  say what happened and re-read the goal (and its unresolved actions). */
   readonly onDone: (outcome: GoalOperationOutcome) => void;
@@ -90,13 +92,14 @@ export function goalOperationErrors(t: Translate): ErrorOverrides {
  * owner on someone else's goal, a hold — resuming with the failed steps to retry, cancelling,
  * lifting a hold (showing whether the plan changed while it was held), ending on the requester's
  * word and confirming the acceptance. Each re-reads the goal on the same page afterwards.
- * Revising the plan is not offered here yet.
+ * Revising the plan opens the plan editor in place of the page (`GoalPlanEditor`, via `onRevise`).
  */
 export function GoalOperationsBar({
   goal,
   viewer,
   http,
   gateNames,
+  onRevise,
   onDone,
 }: GoalOperationsBarProps) {
   const t = useT();
@@ -283,6 +286,20 @@ export function GoalOperationsBar({
         }
       />
     ));
+  }
+
+  if (ops.revise && onRevise && can('revise_goal') !== false) {
+    buttons.push(
+      <Button
+        key="revise"
+        variant="secondary"
+        size="s"
+        onClick={onRevise}
+        data-testid="goal-op-revise"
+      >
+        {t('修订计划…', 'Revise plan…')}
+      </Button>,
+    );
   }
 
   if (ops.pause && can('pause_goal') !== false) {

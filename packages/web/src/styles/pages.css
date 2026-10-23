@@ -1656,3 +1656,22 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-m);
 }
+
+/* S11 GO6 plan editor: each step being edited is a bordered block, as on the goal page; a choice's
+   radio stays beside its text at any width. */
+.goal-plan-step {
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+}
+
+.goal-plan-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.goal-plan-choice > input {
+  flex: none;
+  margin-top: 0.2em;
+}
