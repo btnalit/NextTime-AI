@@ -39,8 +39,9 @@ written against the whole response (`data[*]` / `data.docs[*]`), not just its `d
 parse, and no workspace rule can turn auto-approval on for it. RAGFlow's parse endpoint
 (`parse()` in `api/apps/sdk/doc.py`; the same in each release checked: v0.18.0, v0.19.0, v0.20.5,
 v0.21.0, v0.21.1, v0.22.0, v0.22.1 and v0.23.0) resets the document's chunk count and deletes
-**every** chunk stored under that document before it queues the parse again. Chunks added by hand (`add_chunk`, stored under the same `doc_id`) and chunks edited
-by hand (`update_chunk`, edited in place) go with them, and nothing keeps a copy. Parsing a
+**every** chunk stored under that document before it queues the parse again. Chunks added by
+hand (`add_chunk`, stored under the same `doc_id`) and chunks edited by hand (`update_chunk`,
+edited in place) go with them, and nothing keeps a copy. Parsing a
 document for the first time loses nothing, but the gate cannot tell a first parse from a re-parse,
 so the classification takes the worse case.
 

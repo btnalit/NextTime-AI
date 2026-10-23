@@ -916,9 +916,10 @@ requires:
 - 一个 Skill `kb-retrieval`：先用只读 Operation 找到相关知识库和文档，再检索，只用检索到的内容作答并注明出处。
 - 一个 Worker `knowledge-researcher`：`systems: [ragflow]`，只用平台默认能力，所以只能做只读操作（列知识库
   `kb.list`、列文档 `kb.documents`、检索 `retrieve`）。解析文档 `document.parse` 是执行类，它调不了，需要时写进结果里，
-  由调用它的助手发起操作请求。`document.parse` 在清单里声明可自动批准、影响面 `low`（与打包门相同），所以按默认规则
-  会自动批准；工作区规则（这扇门的或全工作区的）关掉它的自动批准，或发起人的智能体策略关掉 low 自动批准时，
-  才要人批。
+  由调用它的助手发起操作请求。`document.parse` 在清单里声明不可自动批准、影响级 `medium`（与打包门相同）：已经解析过的
+  文档再解析一次，会先删掉它现有的全部分块，包括手工添加或编辑过的，无法恢复，所以每次都要人批（理由见
+  `gatekeepers/ragflow/README.md`）。从旧版本升级上来的部署，各工作区已部署的这个 Operation 要对齐一次才按新分类审批，
+  见 `host-gatekeepers.md` §13「升级后收紧 document.parse」。
 - 依赖 ops-assets v2：知识库和文档的对象类型 `KnowledgeBase` / `Document` 在那里定义。列知识库、列文档的结果按这两个
   类型写进图谱；检索的结果只回给 Worker，不进图谱。
 - 要用到 ragflow：平台管理员按预设接入（`host-gatekeepers.md` §14.4，只填地址），或用打包门；工作区在能力包详情里就地启用。

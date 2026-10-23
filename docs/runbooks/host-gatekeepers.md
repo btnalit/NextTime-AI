@@ -547,6 +547,7 @@ docker compose logs --since 1m gatekeeper-ragflow | grep -ci 'NODE_TLS_REJECT_UN
   `document.parse` 的 `auto_approvable` 改成了 `true`（`await_decision` 不变，仍是 `true`）——见
   §13，这份清单是手写、经过审阅的，不是 `importOpenApi` 草稿，S2.5 保留下来的保守默认在这次审阅
   后不再适用于这一个 Operation；`document.upload` 的 `auto_approvable`/`await_decision` 不变。
+  **S11 P1-F** 又把 `document.parse` 改回 `auto_approvable: false`，影响级改为 `medium`，见 §13。
 - **镜像构建未在本机验证**（Docker 不在这台开发机上）：`docker compose build gatekeeper-docker
   gatekeeper-ragflow`（§2）、`docker compose up`（§3）及之后所有步骤都需要在目标主机上首次跑一
   遍——这正是本 runbook 存在的原因。
@@ -581,7 +582,7 @@ docker compose logs --since 1m gatekeeper-ragflow | grep -ci 'NODE_TLS_REJECT_UN
 1. 已启用或已禁用的 `ragflow` 门（打包门或预设实例）重新 announce 时，新清单不会直接生效，而是挂成
    「新清单待采用」（R-18）。在此之前 `document.parse` 照旧按旧分类执行：分类不进定义摘要，所以对它的
    调用不会因为待采用而被拒。「未启用」的实例直接采用新清单。
-2. 平台管理员在「平台 · 集成」打开这个门，核对变化（只有 `document.parse` 的影响面、可否自动批准和
+2. 平台管理员在「平台 · 集成」打开这个门，核对变化（只有 `document.parse` 的影响级、可否自动批准和
    描述），确认采用。
 3. 已经启用这个门的每个工作区，所有者到「系统与授权」→ 这个系统的详情 →「已部署 Operation 的治理
    字段」对齐一次。这是收紧，直接生效，不用发布修订。没对齐之前，这个工作区里已部署的
