@@ -130,6 +130,7 @@ import {
 import {
   CredentialReviewRequiredError,
   ObserveParamsCarryCredentialsError,
+  RedactedTextSubmittedError,
   TextCarriesCredentialsError,
 } from '../../governance/redaction/index.js';
 import { isPgInvalidTextRepresentation } from '../http/capability-route.js';
@@ -356,6 +357,10 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   }
   // S11 GO5b: credential-looking free text for a goal's record (see capability-route.ts).
   if (err instanceof TextCarriesCredentialsError) {
+    return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
+  }
+  // Legacy 420: mirrors HTTP 400 `redacted_text_submitted` (capability-route.ts).
+  if (err instanceof RedactedTextSubmittedError) {
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
   // An Operation declaring a gate-owned param, not published (see capability-route.ts's own mapping).

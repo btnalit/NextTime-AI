@@ -1304,7 +1304,7 @@ const metaCapabilities = [
       .strict(),
     resultSchema: wire.UpdateOperationDescriptionResultWireSchema,
     description:
-      'S8 W3-K1 (leftover 81): edit one Operation’s description in place (documentation only, not a governance field — no draft/publish step). Builder floor; only the Operation’s proposer or the workspace owner may edit it (403 not_proposer otherwise). description must be non-blank after trimming, at most 2000 characters. AuditRecord with before/after.',
+      'S8 W3-K1 (leftover 81): edit one Operation’s description in place (documentation only, not a governance field — no draft/publish step). Builder floor; only the Operation’s proposer or the workspace owner may edit it (403 not_proposer otherwise). description must be non-blank after trimming, at most 2000 characters; refused when it carries a suspected credential (400 credentials_in_text) or still holds the [redacted] mark a read shows in place of one — write that part again (400 redacted_text_submitted). AuditRecord with before/after.',
   },
   {
     name: 'propose_skill',

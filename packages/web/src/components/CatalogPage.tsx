@@ -1401,8 +1401,8 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
           {showsRedaction(editingRow?.description) ? (
             <Notice tone="warn" testId="operation-description-redacted">
               {t(
-                '当前描述里的 [redacted] 遮住了看起来像密码、令牌或密钥的内容，原文不会填回来。请把这一段改写成不带凭据的说明再保存；不改就保存，「[redacted]」会作为文字存进描述。',
-                'Each [redacted] in the current description hides something that looked like a password, token or key, and the original is not filled back in. Rewrite that part without the credential before saving; saving it as it is stores the word [redacted] in the description.',
+                '当前描述里的 [redacted] 遮住了看起来像密码、令牌或密钥的内容，原文不会填回来。保存前请把这一段重新写成不带凭据的说明；还留着 [redacted] 的描述保存不了。',
+                'Each [redacted] in the current description hides something that looked like a password, token or key, and the original is not filled back in. Write that part again without the credential before saving; a description that still holds [redacted] cannot be saved.',
               )}
             </Notice>
           ) : null}
@@ -1420,6 +1420,10 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
                     credentials_in_text: t(
                       '描述里看起来带了凭据（token、key 或密码的值，或 Bearer、Authorization、name=value 这类写法），已拒绝，什么也没保存。描述只写这个 Operation 做什么，每个能用它的 agent 都会读到；凭据交给门保管。',
                       'The description looks like it carries a credential (a token, key or password value, or a Bearer, Authorization or name=value form), so it was refused and nothing was saved. Say what this Operation does: every agent that can use it reads this. The credential belongs to the gate.',
+                    ),
+                    redacted_text_submitted: t(
+                      '描述里还留着 [redacted]：此处原文已遮蔽，请重新填写这一段再保存，什么也没保存。描述只写这个 Operation 做什么，凭据交给门保管。',
+                      'The description still holds [redacted]: the original there was masked, so write that part again before saving. Nothing was saved. Say what this Operation does; the credential belongs to the gate.',
                     ),
                   })
                 : undefined

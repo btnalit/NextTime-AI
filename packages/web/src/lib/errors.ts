@@ -152,6 +152,7 @@ export const CODE_TITLES: Readonly<Record<string, string>> = {
   self_connection_suspended: 'Suspended by the platform',
   credentials_in_observe_params: 'Credentials in the parameters',
   credentials_in_text: 'Credentials in the text',
+  redacted_text_submitted: 'Masked text sent back',
   credentials_in_connection_params: 'Credentials in the address',
   operation_definition_mismatch: 'The gate runs another definition',
   operation_definition_unavailable: 'No approved definition',
@@ -233,6 +234,7 @@ export const CODE_TITLES_ZH: Readonly<Record<string, string>> = {
   self_connection_suspended: '已被平台暂停',
   credentials_in_observe_params: '参数里带了凭据',
   credentials_in_text: '文字里带了凭据',
+  redacted_text_submitted: '文字里还留着遮蔽标记',
   credentials_in_connection_params: '地址里带了凭据',
   operation_definition_mismatch: '门运行的定义和批准的不一样',
   operation_definition_unavailable: '没有批准过的定义',
@@ -432,6 +434,12 @@ export const ERROR_NEXT_STEPS: Readonly<
   credentials_in_text: {
     zh: '这段文字看起来带了凭据（token、key 或密码的值，或 Bearer、Authorization、name=value 这类写法），已拒绝，什么也没保存。写清发生了什么，不要写凭据的值，比如写「token 过期了」。',
     en: 'The text looks like it carries a credential (a token, key or password value, or a Bearer, Authorization or name=value form), so it was refused and nothing was saved. Say what happened without the value, for example "the token expired".',
+  },
+  // Legacy 420: text sent back with the [redacted] mark a read showed in it (the catalog's edit
+  // dialog says it on the description field).
+  redacted_text_submitted: {
+    zh: '文字里还留着 [redacted]：那里的原文已经遮住，不会填回来，什么也没保存。请把这一段重新填写。',
+    en: 'The text still holds [redacted]: the original there was masked and is never filled back in, so nothing was saved. Write that part again.',
   },
   // The fallback when no form shows it on its own field (each form says where the credential goes
   // in its own terms): no field name here, since not every place that refuses it has one.

@@ -161,6 +161,7 @@ import {
 import {
   CredentialReviewRequiredError,
   ObserveParamsCarryCredentialsError,
+  RedactedTextSubmittedError,
   TextCarriesCredentialsError,
 } from '../../governance/redaction/index.js';
 import type { SourceBinding } from '../source-binding/index.js';
@@ -405,6 +406,11 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // S11 GO5b: free text for a goal's record (a revision's reason, a note) carrying a suspected
   // credential — refused, nothing written; `details` names the field and the count.
   if (err instanceof TextCarriesCredentialsError) {
+    return { status: 400, code: err.code, message: err.message, details: { ...err.details } };
+  }
+  // Legacy 420: text sent back with the `[redacted]` mark a read showed in it — refused, nothing
+  // written; `details` names the field.
+  if (err instanceof RedactedTextSubmittedError) {
     return { status: 400, code: err.code, message: err.message, details: { ...err.details } };
   }
   // Legacy J (governance/gatekeepers/gate-owned-params.ts): `publish_operation` on an http

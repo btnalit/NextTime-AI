@@ -869,14 +869,31 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
         expect(untouched?.operation.description).toContain(fake);
 
-        // The console's edit box opens on the masked text; saving it back is not refused.
+        // The console's edit box opens on the masked text; sent back with the mark still in it, it
+        // is refused rather than stored over what was written.
+        await expect(
+          callAs(ownerId, 'owner', 'update_operation_description', {
+            gatekeeperId,
+            name: op.name,
+            description: `${shown} (edited)`,
+          }),
+        ).rejects.toMatchObject({
+          code: 'redacted_text_submitted',
+          details: { field: 'description' },
+        });
+        const stillUntouched = await inTx((client) =>
+          getOperation(client, workspaceId, gatekeeperId, op.name),
+        );
+        expect(stillUntouched?.operation.description).toContain(fake);
+
+        // With the masked part written again, the edit goes through.
         const saved = await callAs<{ description: string }>(
           ownerId,
           'owner',
           'update_operation_description',
-          { gatekeeperId, name: op.name, description: shown },
+          { gatekeeperId, name: op.name, description: 'restarts it; the gate holds the login' },
         );
-        expect(saved.description).toBe(shown);
+        expect(saved.description).toBe('restarts it; the gate holds the login');
         // Its audit row's `before` is the old text with the credential replaced: the edit does not
         // copy it into a new row.
         const audit = await callAs<{ items: { payload: Record<string, unknown> }[] }>(
