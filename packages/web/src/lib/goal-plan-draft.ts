@@ -428,10 +428,21 @@ export function draftProblems(
       if (shown !== null) {
         problems.set(
           at('input'),
+          // The person changed the Worker, not the input: say what to do with the input only.
           `${t(
             '换了 Worker 或版本，这一步的输入就按新写的算，读出时的遮蔽不会再换回原文。',
             'With the Worker or its version changed, the input counts as written anew, and what the read masked is no longer put back.',
-          )}${rewrite(shown)}`,
+          )}${
+            shown === 'mask'
+              ? t(
+                  '请把这一段重新写成不带凭据的输入。',
+                  ' Write this input again, without the credential.',
+                )
+              : t(
+                  '请把显示成 \\u{…} 的字符删掉或换成真正的字符。',
+                  ' Delete the characters shown as \\u{…}, or type the real ones.',
+                )
+          }`,
         );
       }
     }

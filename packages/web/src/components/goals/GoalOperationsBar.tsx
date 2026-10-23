@@ -67,7 +67,12 @@ export interface GoalMark {
  *  operation found it, so the page can say whether the goal itself had moved on or something of it
  *  (a step, a Task, an action) was not yet where the operation needs it. */
 export type GoalOperationOutcome =
-  | { readonly kind: 'done'; readonly message: string }
+  | {
+      readonly kind: 'done';
+      readonly message: string;
+      /** What the result says to watch for (a revision's hints), each shown under the message. */
+      readonly notes?: readonly string[];
+    }
   | { readonly kind: 'stale'; readonly before: GoalMark };
 
 /** The copy an operation's refusal gets in place of the generic one (`kit/confirm`'s inline error;
@@ -483,6 +488,7 @@ export function useOperationDone(onDone: (outcome: GoalOperationOutcome) => void
     async <R extends { readonly changed: boolean }>(
       call: Promise<R>,
       done: (result: R) => string,
+      notes?: (result: R) => readonly string[],
     ): Promise<void> => {
       let result: R;
       try {
@@ -493,12 +499,11 @@ export function useOperationDone(onDone: (outcome: GoalOperationOutcome) => void
         }
         throw error;
       }
-      onDone({
-        kind: 'done',
-        message: result.changed
-          ? done(result)
-          : t('它已经是这样了，没有变化', 'Already so: nothing changed'),
-      });
+      onDone(
+        result.changed
+          ? { kind: 'done', message: done(result), notes: notes?.(result) ?? [] }
+          : { kind: 'done', message: t('它已经是这样了，没有变化', 'Already so: nothing changed') },
+      );
     },
     [onDone, t, status, updatedAt],
   );
