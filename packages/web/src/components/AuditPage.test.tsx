@@ -427,6 +427,25 @@ describe('AuditPage degraded states', () => {
     fireEvent.submit(screen.getByTestId('explain-form'));
     const banner = await screen.findByTestId('explain-error');
     expect(banner.getAttribute('data-error-code')).toBe('not_found');
+    // Legacy 421: a Decision the reader may not see answers like a missing one; the banner says so.
+    expect(banner.textContent).toMatch(/找不到这个节点，或者你无权查看它/);
+  });
+
+  it('legacy 421: export_prov 404 says the node may be one the reader may not see', async () => {
+    const http = scriptedHttp({
+      explain: () => factExplain(),
+      export_prov: () =>
+        Promise.reject(new HttpError('capability_error', 'no such node', 'not_found')),
+      audit_query: () => ({ items: [] }),
+      list_principals: principalsPage,
+      list_gatekeepers: () => ({ items: [] }),
+    });
+    renderPage(http, { nodeId: 'fact-1' });
+    await screen.findByTestId('explain-result');
+    fireEvent.click(screen.getByTestId('explain-export'));
+    expect((await screen.findByTestId('explain-export-error')).textContent).toMatch(
+      /或者你无权查看它/,
+    );
   });
 
   it('export_prov 403 explains the auditor requirement instead of failing silently', async () => {

@@ -12,6 +12,7 @@ import {
   explainView,
 } from '../../lib/audit.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { decisionNotFoundText } from '../../lib/decision-visibility.js';
 import { isForbiddenError } from '../../lib/errors.js';
 import { useT } from '../../lib/i18n.js';
 import { decisionStatusLabel } from '../../lib/labels.js';
@@ -175,6 +176,8 @@ export function ExplainSection({ http, requestedNodeId, principalNames }: Explai
         <ErrorBanner
           error={state.error}
           title={t('无法解释该节点', 'Could not explain this node')}
+          // Legacy 421: a Decision the reader may not see answers exactly like a missing one.
+          overrides={{ not_found: decisionNotFoundText(t) }}
           testId="explain-error"
         />
       ) : null}
@@ -191,6 +194,7 @@ export function ExplainSection({ http, requestedNodeId, principalNames }: Explai
           <ErrorBanner
             error={exportError}
             title={t('无法导出', 'Could not export')}
+            overrides={{ not_found: decisionNotFoundText(t) }}
             testId="explain-export-error"
           />
         )

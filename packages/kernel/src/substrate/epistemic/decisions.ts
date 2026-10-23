@@ -1,6 +1,8 @@
 import type { DecisionStatus, EpistemicStatus } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { shownFreeText, shownFreeTextIn } from '../redaction/index.js';
+import { shownInvalidationReason } from './conflicts.js';
+import { type DecisionViewer, decisionVisibleSql } from './decision-visibility.js';
 import { type ExplainResult, explain } from './explain.js';
 
 /**
@@ -22,7 +24,10 @@ import { type ExplainResult, explain } from './explain.js';
  * shape (no write, ever) — exactly `explain.ts`'s own "explain's job is inherently this
  * cross-cutting provenance read" reasoning, extended to these four sibling capabilities. RLS
  * (`nexttime_app`'s ordinary session role, no `security definer` involved here) already scopes
- * every one of these SELECTs to what the calling principal may see.
+ * every one of these SELECTs to what the calling principal may see, and each takes the caller's
+ * `DecisionViewer` for the half of a Decision's visibility RLS cannot apply (legacy 421,
+ * decision-visibility.ts): a Decision the caller may not read is never listed and reads as not
+ * found.
  *
  * **`relatedFactIds`/`relatedTaskId` (`record_decision`, handlers.ts) and `factAId`/`factBId`
  * (`resolve_conflict`, epistemic-handlers.ts) are the only structured cross-references a Decision's
@@ -164,8 +169,8 @@ function mapFactRefRow(row: FactDbRow): FactRef {
     recordedAt: row.recorded_at,
     supersededAt: row.superseded_at,
     invalidatedAt: row.invalidated_at,
-    // Legacy 420: free text, as `shownFreeText` shows it.
-    invalidationReason: shownFreeText(row.invalidation_reason),
+    // Legacy 420 / 421: free text as `shownFreeText` shows it, a ruling's reason left out.
+    invalidationReason: shownInvalidationReason(row.invalidation_reason),
     supersedesId: row.supersedes_id,
     epistemicStatus: row.epistemic_status,
     confidence: row.confidence,
@@ -238,10 +243,13 @@ async function getDecisionRow(
   client: PoolClient,
   workspaceId: string,
   decisionId: string,
+  viewer: DecisionViewer,
 ): Promise<DecisionRow> {
+  const visible = decisionVisibleSql('d', viewer, '$1', 3);
   const result = await client.query<DecisionDbRow>(
-    `select ${DECISION_COLUMNS} from decisions where workspace_id = $1 and id = $2`,
-    [workspaceId, decisionId],
+    `select ${DECISION_COLUMNS} from decisions d
+     where d.workspace_id = $1 and d.id = $2 and ${visible.sql}`,
+    [workspaceId, decisionId, ...visible.values],
   );
   const row = result.rows[0];
   if (row === undefined) throw new DecisionNotFoundError(workspaceId, decisionId);
@@ -302,10 +310,12 @@ export async function queryDecisions(
   client: PoolClient,
   workspaceId: string,
   input: QueryDecisionsInput,
+  viewer: DecisionViewer,
 ): Promise<DecisionsPage> {
   const limit = Math.min(input.limit ?? DEFAULT_QUERY_DECISIONS_LIMIT, MAX_QUERY_DECISIONS_LIMIT);
   const cursor = decodeKeysetCursor(input.cursor);
   const since = input.since ? new Date(input.since) : null;
+  const visible = decisionVisibleSql('d', viewer, '$1', 7);
 
   const result = await client.query<DecisionDbRow>(
     `select ${DECISION_COLUMNS} from decisions d
@@ -324,9 +334,18 @@ export async function queryDecisions(
          $4::timestamptz is null
          or (date_trunc('milliseconds', d.created_at), d.id) < ($4::timestamptz, $5::uuid)
        )
+       and ${visible.sql}
      order by date_trunc('milliseconds', d.created_at) desc, d.id desc
      limit $6`,
-    [workspaceId, since, input.objectId ?? null, cursor?.at ?? null, cursor?.id ?? null, limit],
+    [
+      workspaceId,
+      since,
+      input.objectId ?? null,
+      cursor?.at ?? null,
+      cursor?.id ?? null,
+      limit,
+      ...visible.values,
+    ],
   );
 
   const items = result.rows.map(mapDecisionRow);
@@ -359,9 +378,11 @@ export async function findPrecedents(
   client: PoolClient,
   workspaceId: string,
   input: FindPrecedentsInput,
+  viewer: DecisionViewer,
 ): Promise<{ readonly items: readonly DecisionRow[] }> {
   if (!input.objectId && !input.actionKindTag) return { items: [] };
   const limit = Math.min(input.limit ?? DEFAULT_FIND_PRECEDENTS_LIMIT, MAX_FIND_PRECEDENTS_LIMIT);
+  const visible = decisionVisibleSql('d', viewer, '$1', 5);
 
   const result = await client.query<DecisionDbRow>(
     `select ${DECISION_COLUMNS} from decisions d
@@ -378,9 +399,10 @@ export async function findPrecedents(
          )
          or ($3::text is not null and d.rationale ->> 'actionKind' = $3)
        )
+       and ${visible.sql}
      order by d.created_at desc, d.id desc
      limit $4`,
-    [workspaceId, input.objectId ?? null, input.actionKindTag ?? null, limit],
+    [workspaceId, input.objectId ?? null, input.actionKindTag ?? null, limit, ...visible.values],
   );
   return { items: result.rows.map(mapDecisionRow) };
 }
@@ -432,12 +454,13 @@ async function walkFactChain(
   workspaceId: string,
   factId: string,
   depth: number,
+  viewer: DecisionViewer,
 ): Promise<{ chain: ExplainResult[]; truncated: boolean }> {
   const chain: ExplainResult[] = [];
   let currentId: string | null = factId;
   let truncated = false;
   for (let hop = 0; hop < depth && currentId; hop += 1) {
-    const step = await explain(client, workspaceId, { factId: currentId });
+    const step = await explain(client, workspaceId, { factId: currentId }, viewer);
     chain.push(step);
     const supersedesId = await getFactSupersedesId(client, workspaceId, currentId);
     if (supersedesId && hop === depth - 1) truncated = true;
@@ -456,19 +479,26 @@ export async function causalChain(
   client: PoolClient,
   workspaceId: string,
   input: CausalChainInput,
+  viewer: DecisionViewer,
 ): Promise<CausalChainResult> {
   const depth = clampDepth(input.depth);
 
   if (input.factId) {
-    const { chain, truncated } = await walkFactChain(client, workspaceId, input.factId, depth);
+    const { chain, truncated } = await walkFactChain(
+      client,
+      workspaceId,
+      input.factId,
+      depth,
+      viewer,
+    );
     return { rootType: 'fact', rootId: input.factId, chain, truncated };
   }
 
   const decisionId = input.decisionId;
   if (!decisionId) throw new Error('causal_chain: exactly one of factId/decisionId is required');
 
-  const rootStep = await explain(client, workspaceId, { decisionId });
-  const decisionRow = await getDecisionRow(client, workspaceId, decisionId);
+  const rootStep = await explain(client, workspaceId, { decisionId }, viewer);
+  const decisionRow = await getDecisionRow(client, workspaceId, decisionId, viewer);
   const relatedFactIds = extractFactIdsFromRationale(decisionRow.rationale);
   const budget = Math.max(0, depth - 1);
   const includedFactIds = relatedFactIds.slice(0, budget);
@@ -476,7 +506,7 @@ export async function causalChain(
   // S5.5 leftover 34: one client, one query at a time (pg@9 rejects concurrent queries on a client).
   const factSteps: Awaited<ReturnType<typeof explain>>[] = [];
   for (const factId of includedFactIds) {
-    factSteps.push(await explain(client, workspaceId, { factId }));
+    factSteps.push(await explain(client, workspaceId, { factId }, viewer));
   }
 
   return {
@@ -527,8 +557,9 @@ export async function decisionImpact(
   client: PoolClient,
   workspaceId: string,
   input: { readonly decisionId: string },
+  viewer: DecisionViewer,
 ): Promise<DecisionImpactResult> {
-  const decisionRow = await getDecisionRow(client, workspaceId, input.decisionId);
+  const decisionRow = await getDecisionRow(client, workspaceId, input.decisionId, viewer);
   const rationaleFactIds = extractFactIdsFromRationale(decisionRow.rationale);
 
   // S5.5 leftover 34: one client, one query at a time (pg@9 rejects concurrent queries on a client).

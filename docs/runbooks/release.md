@@ -1209,7 +1209,7 @@ v0.47.0、v0.48.0 不单独上主机（#554 不在 v0.47.0 里，遗留 259 的�
 
 **回滚**（§5）：回滚目标是 v0.46.0，按 §3.25 与 §3.26 的回滚说明；不需要排空 Worker。
 
-窗口目标改到 v0.49.0 之后的发版时（维护者 2026-10-16 决定窗口暂缓，开窗口时目标改为当时最新的发版），本清单按新目标刷新，并加上之后各版的小节，至少 §3.28（#589 升钉：`postgres` 与 `backup` 重建、不执行 `ALTER EXTENSION`、应用后只读核对 `vector` 扩展版本）与 §3.29（#592：governance 0020，旧「始终允许」规则可能显示「已暂停 · 待确认版本」需 owner 重新确认，契约不向后兼容、旧控制台页要刷新）与 §3.30（#601：governance 0021，窗口前估算 `audit_records` 全表扫描的锁表时间并核对回收超时，窗口后历史失败行多显示「结果不明」）与 §3.31（#607：goal 0001 / task 0007 / governance 0022，窗口前估算建索引时间）与 §3.32（#615：core 0044，窗口前估算建索引期间审计写入的等待，必要时并发预建并确认索引有效）与 §3.33（#619：goal 0002，新增每秒认领与每分钟对账的后台负载）与 §3.34（#620：core 0045，窗口前三数预检、迁移期间不接新门、清洗改写类变成 4 个、回滚后自接门暂停失效；#637 再加两个改写类与一个只列类，见 §3.25）、§3.35（#626：goal 0003，只重建一个守卫函数，无主机步骤）、§3.36（#633：goal 0004，加列与重建一个守卫函数，无主机步骤）、§3.37（#642：governance 0023，`action_requests` 加列、约束与守卫触发器，窗口前看一眼该表行数，无主机步骤）、§3.38（#644：无迁移，窗口前打包门只读检查，内核与门宿主同版，回退代码前先处理挂在系统接入包上的实例）、§3.39（#649：governance 0024，新表与重建核对守卫，两个可选环境变量不设即默认，代码回退期间观察压缩报 degraded 可忽略）、§3.40（#650：governance 0025，只加新表，可选的窗口前本体族只读检查，模块升级可能新返回 400 `change_confirmation_required`）、§3.41（#664：goal 0005，新表与重建目标守卫，两个可选环境变量不设即默认，升级后 I-G5 指标应为 0，代码回退期间观察压缩报 degraded 可忽略）、§3.42（#670：goal 0006，步骤验收新表与新触发器，无新环境变量，代码回退期间观察压缩报 degraded 可忽略）、§3.43（#668：无迁移，能力包清单在镜像 `/app/packs`，`kernel.env` 不要设 `PACKS_DIR`）与 §3.44（#674：core 0046 + goal 0007，可逆，无新环境变量，升级后 I-G5 指标仍应为 0）与 §3.45（#679：governance 0026，可逆，窗口前只读查同名已发布 Skill，镜像新增 ops-base）与 §3.46（#690：governance 0027，可逆，镜像新增 ops-base v2，装或升级能力包后对门做一次健康探测）。
+窗口目标改到 v0.49.0 之后的发版时（维护者 2026-10-16 决定窗口暂缓，开窗口时目标改为当时最新的发版），本清单按新目标刷新，并加上之后各版的小节，至少 §3.28（#589 升钉：`postgres` 与 `backup` 重建、不执行 `ALTER EXTENSION`、应用后只读核对 `vector` 扩展版本）与 §3.29（#592：governance 0020，旧「始终允许」规则可能显示「已暂停 · 待确认版本」需 owner 重新确认，契约不向后兼容、旧控制台页要刷新）与 §3.30（#601：governance 0021，窗口前估算 `audit_records` 全表扫描的锁表时间并核对回收超时，窗口后历史失败行多显示「结果不明」）与 §3.31（#607：goal 0001 / task 0007 / governance 0022，窗口前估算建索引时间）与 §3.32（#615：core 0044，窗口前估算建索引期间审计写入的等待，必要时并发预建并确认索引有效）与 §3.33（#619：goal 0002，新增每秒认领与每分钟对账的后台负载）与 §3.34（#620：core 0045，窗口前三数预检、迁移期间不接新门、清洗改写类变成 4 个、回滚后自接门暂停失效；#637 再加两个改写类与一个只列类，见 §3.25）、§3.35（#626：goal 0003，只重建一个守卫函数，无主机步骤）、§3.36（#633：goal 0004，加列与重建一个守卫函数，无主机步骤）、§3.37（#642：governance 0023，`action_requests` 加列、约束与守卫触发器，窗口前看一眼该表行数，无主机步骤）、§3.38（#644：无迁移，窗口前打包门只读检查，内核与门宿主同版，回退代码前先处理挂在系统接入包上的实例）、§3.39（#649：governance 0024，新表与重建核对守卫，两个可选环境变量不设即默认，代码回退期间观察压缩报 degraded 可忽略）、§3.40（#650：governance 0025，只加新表，可选的窗口前本体族只读检查，模块升级可能新返回 400 `change_confirmation_required`）、§3.41（#664：goal 0005，新表与重建目标守卫，两个可选环境变量不设即默认，升级后 I-G5 指标应为 0，代码回退期间观察压缩报 degraded 可忽略）、§3.42（#670：goal 0006，步骤验收新表与新触发器，无新环境变量，代码回退期间观察压缩报 degraded 可忽略）、§3.43（#668：无迁移，能力包清单在镜像 `/app/packs`，`kernel.env` 不要设 `PACKS_DIR`）与 §3.44（#674：core 0046 + goal 0007，可逆，无新环境变量，升级后 I-G5 指标仍应为 0）与 §3.45（#679：governance 0026，可逆，窗口前只读查同名已发布 Skill，镜像新增 ops-base）与 §3.46（#690：governance 0027，可逆，镜像新增 ops-base v2，装或升级能力包后对门做一次健康探测）与 §3.47（#700：governance 0028，可逆，窗口前四条只读查询，迁移结束的 NOTICE 每类 `without` 应为 0，窗口后核对找不到主体的 Decision）与 §3.48（#698：无迁移，worker-runtime 与 worker-supervisor 同版、只能整版回滚，窗口前只读清点工作区里的 pi 资源文件，应用后在新建的容器上核对）。
 
 ### 3.28 第三方镜像升钉：pgvector、node、postgres（#589，v0.49.0 之后的下一版起）
 
@@ -1499,6 +1499,75 @@ rollback;" </dev/null
 - **新错误码**：409 `change_segment_superseded`（`details.supersededBy`）、429 `change_verification_cooldown`（`details.retryAfterSeconds`）；新审计事件 `change_segment.verify`。
 - **回滚**：只回退代码即可（§6）。0027 只放宽约束、可逆，上一版不读 `change_items`（0025 同一未发版系列新增）；回滚后经改动项发布的 Operation 版本留在原处、照常生效，只是没有安装记录页面去撤销或核验它们。
 
+### 3.47 Decision 只给看得到它主体的人看（#700，governance 0028，S11 W1 GO5c 前小 PR C，v0.49.0 之后的下一版起）
+
+带一个迁移（`governance/0028_decision_subjects`），随 `apply-release.sh` 的迁移步骤自动应用；没有新环境变量、不改 compose。
+
+- **governance 0028**：`decisions` 加主体五列与触发器 `decisions_subject`，回填已有行（压测 20 万行 5.8 s），RLS `decisions_visibility` 加对话与冲突两条规则。
+- **窗口前只读检查**（结果记 `docs/private/`）：
+
+  ```sql
+  -- 1. 回填要处理的总行数
+  select count(*) from decisions;
+  -- 2. 每类受管 Decision 的行数
+  select a.kind, count(*)
+    from decisions d join activities a on a.workspace_id = d.workspace_id and a.id = d.activity_id
+   where a.kind in ('governance.approval_decision', 'governance.reconcile_decision',
+                    'goal.outcome_decision', 'epistemic.conflict_resolution')
+   group by a.kind;
+  -- 3. rationale 里点名了请求 / 目标 / 冲突的行（找不到主体时只给 owner 看）
+  select count(*) from decisions
+   where jsonb_typeof(rationale) = 'object' and rationale ?| array['actionRequestId', 'goalRunId', 'conflictId'];
+  -- 4. 私聊里的 Decision（升级后只有私聊的主人看得到，owner 也看不到）
+  select count(*) from decisions d
+    join activities a on a.workspace_id = d.workspace_id and a.id = d.activity_id
+    join chats c on c.workspace_id = a.workspace_id and c.id = a.chat_id
+   where c.visibility = 'private';
+  ```
+
+- **NOTICE**：迁移结束打印 `governance 0028: <kind>: N with their subject, M without; …; K Decision(s) in all read by the workspace owner only (…); C Decision(s) of a conversation`。每类 `without` 应为 0（不为 0 说明那些请求、目标或冲突已经找不到，它们只给 owner 看）；`K` 是全部 `subject_unresolved`；`C` 应等于检查 4 加上共享对话里的 Decision 数。
+- **窗口后核对**：
+
+  ```sql
+  select d.id, a.kind, d.created_at, d.rationale
+    from decisions d join activities a on a.workspace_id = d.workspace_id and a.id = d.activity_id
+   where d.subject_unresolved
+   order by d.created_at desc;
+  ```
+
+- **新行为**：成员读不到看不到的请求、目标、私聊与冲突上的 Decision（列表里没有、单条 404）；auditor 的 `export_prov` 按普通成员规则过滤；被裁决作废的 Fact 的作废原因只写哪个冲突、怎么裁的。owner 从此也看不到别人私聊里的 Decision。
+- **回滚**：只回退代码即可（§6）。上一版不读新列，触发器在它的插入上照样填主体，回滚再升级不会留下没有主体的 Decision；上一版的读面只因两条 RLS 规则变窄（别人私聊里的 Decision、看不到的 Conflict 的裁决）。
+
+### 3.48 pi 白名单启动（#698，遗留 422，S11 W3，v0.49.0 之后的下一版起）
+
+无迁移；worker-supervisor 与 worker-runtime 镜像随本版一起应用。
+
+- **应用**：`apply-release.sh` 本身会构建或拉取 worker-runtime 并重打 tag，不要另跑 `build-images.sh`。应用后核对，输出应为 `2`：
+
+  ```bash
+  docker image inspect nexttime-ai-worker-runtime --format '{{index .Config.Labels "ai.nexttime.runtime-contract"}}'
+  ```
+
+- **应用过程中**：拉完镜像、还没重启服务的这段时间，旧 supervisor 新起的入口容器会以 `check=models_json result=fail reason=empty_mount` 退出，维护窗口内可以接受。
+- **入口容器收敛**：已在跑的入口容器下一轮对话会自动重建（旧布局容器没有 `nexttime.runtime-contract` label）。想立刻收敛，在运行层页点「现在重建」（`roll_entry_containers`）；返回 `skipped_in_flight` 的，等那一轮结束后再点一次。
+- **应用后核对**（`host-worker-runtime.md` §6）：只在应用之后新建的容器上做，旧容器两项都不会通过、不说明是本版的问题。
+  - 日志里有 `check=models_json result=ok` 和 `check=pi_resource_discovery result=off`；
+  - `Binds` 恰好三条；
+  - 写入探针三条都报 `Read-only file system`。
+- **固定旧 tag 的情况**：活动镜像如果被手动设成固定的旧 tag，运行层页会标出「不兼容」并提示换哪个镜像；在换之前新起的容器都会被 409 `runtime_image_incompatible` 拒绝。
+- **回滚**：只能整版做，代码、镜像、worker-supervisor 一起回滚。只回滚运行时镜像（`pi-0.99.2` 等 422 之前的镜像）会被拒绝；只回滚 supervisor，新容器会以 `empty_mount` 退出。到下一次 pi 升级之前都是这样。
+- **排障**：发生 409 时要看的日志见 `operations.md` §13 的排障行。
+- **窗口前只读清点**（结果记 `docs/private/`，不删）：
+
+  ```bash
+  find "${NEXTTIME_DATA}/workspaces" -maxdepth 5 \( -name AGENTS.md -o -name CLAUDE.md -o -name SYSTEM.md \
+    -o -name APPEND_SYSTEM.md -o -name mcp.json -o -name .mcp.json \
+    -o \( -type d -path '*/.pi/*' \( -name extensions -o -name skills -o -name prompts \) \) \) -print
+  ```
+
+  `.pi/agent/skills/`、`.pi/agent/settings.json`、`.pi/agent/models.json` 是旧版平台自己写的（已发布的 Skill 和设置），不是智能体写的，要单独列出。清点出的这些文件从此不再生效。
+- **新错误码与 wire**：409 `runtime_image_incompatible`（supervisor 起容器；内核设为活动、回滚、滚动重建）；`RuntimeImageWire` 新增 `runtimeCompatible`。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -1625,6 +1694,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.49.0 之后的下一版 | goal `0007_fact_acceptance`（#674，S11 GO4c）：两张检查表加 `fact_check` / `fact_id`（外键指向 `links`）与新 kind，重建三个守卫（目标级检查绑定计划声明），新增四个函数 | 可逆 | 上一版不读写新列、不写事实检查行；回滚后留下的 pending 事实检查一直等待，上一版读到带事实检查的计划会暂停目标，不会判达成 |
 | v0.49.0 之后的下一版 | governance `0026_change_item_worker_kinds`（#679，S11 P1-D）：`change_items_kind_check` 加 `skill_version`、`worker_definition_version` | 可逆 | 只放宽约束、无数据改写；上一版不读 `change_items` |
 | v0.49.0 之后的下一版 | governance `0027_change_item_operation_kind`（#690，S11 P1-E1）：`change_items_kind_check` 加 `operation_version` | 可逆 | 只放宽约束、无数据改写；上一版不读 `change_items` |
+| v0.49.0 之后的下一版 | governance `0028_decision_subjects`（#700，遗留 421）：`decisions` 加主体五列、触发器 `decisions_subject` 与回填，RLS `decisions_visibility` 加对话与冲突规则 | 可逆 | 上一版不读新列，触发器在它的插入上照样填主体；上一版读面只因两条 RLS 规则变窄；可逆性探针（v0.49.0 内核套件跑在本版库结构上）只有 `reversibility-deltas.json` 已登记的 4 例失败 |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：

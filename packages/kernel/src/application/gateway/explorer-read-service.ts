@@ -13,6 +13,7 @@ import {
 } from '../../substrate/epistemic/index.js';
 import type { Fact, GraphObject } from '../../substrate/graph/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
+import { humanReadViewersOf } from './draft-viewer.js';
 import { type ProvGraph, buildProvenanceGraph } from './provenance-graph.js';
 import { displayedObject } from './resource-wire.js';
 import { shownForSearch } from './shown-search.js';
@@ -367,6 +368,8 @@ export async function listDecisionsForExplorer(
   const skip = Math.max(params.skip ?? 0, 0);
   const limit = clamp(params.limit ?? 50, 1, 500);
   return withWorkspace(pool, { workspaceId, principalId }, async (client) => {
+    // Legacy 421: only the Decisions this caller may read.
+    const { decisions: viewer } = await humanReadViewersOf(client, workspaceId, principalId);
     // Legacy 291: `category` filters while collecting, so `skip + limit` counts matching rows —
     // filtering the collected batch afterwards let non-matching decisions fill it and the page
     // came back short or empty although later matches existed. `scanned` keeps the old bound on
@@ -375,7 +378,7 @@ export async function listDecisionsForExplorer(
     let scanned = 0;
     let cursor: string | undefined;
     while (collected.length < skip + limit && scanned < EXPLORER_MAX_FETCH) {
-      const page = await queryDecisions(client, workspaceId, { limit: 100, cursor });
+      const page = await queryDecisions(client, workspaceId, { limit: 100, cursor }, viewer);
       if (page.items.length === 0) break;
       scanned += page.items.length;
       for (const row of page.items) {
@@ -450,10 +453,15 @@ export async function getDecisionChainForExplorer(
   params: { readonly decisionId: string; readonly depth?: number },
 ): Promise<DecisionChainResult> {
   return withWorkspace(pool, { workspaceId, principalId }, async (client) => {
-    const causal = await causalChain(client, workspaceId, {
-      decisionId: params.decisionId,
-      depth: params.depth,
-    });
+    // Legacy 421: a Decision this caller may not read is not found (404), and its precedents are
+    // only the ones they may read.
+    const { decisions: viewer } = await humanReadViewersOf(client, workspaceId, principalId);
+    const causal = await causalChain(
+      client,
+      workspaceId,
+      { decisionId: params.decisionId, depth: params.depth },
+      viewer,
+    );
 
     const chain: DecisionChainStep[] = causal.chain.map((step, index) =>
       explainStepToChainStep(step, index === 0 ? 'root' : 'related'),
@@ -465,7 +473,7 @@ export async function getDecisionChainForExplorer(
     attempted += 1;
     let impact: DecisionImpactResult | undefined;
     try {
-      impact = await decisionImpact(client, workspaceId, { decisionId: params.decisionId });
+      impact = await decisionImpact(client, workspaceId, { decisionId: params.decisionId }, viewer);
     } catch {
       failedSources.push('decision_impact');
     }
@@ -491,11 +499,12 @@ export async function getDecisionChainForExplorer(
       if (objectId || actionKindTag) {
         attempted += 1;
         try {
-          const precedents = await findPrecedents(client, workspaceId, {
-            objectId,
-            actionKindTag,
-            limit: 10,
-          });
+          const precedents = await findPrecedents(
+            client,
+            workspaceId,
+            { objectId, actionKindTag, limit: 10 },
+            viewer,
+          );
           for (const decision of precedents.items) {
             if (decision.id === params.decisionId) continue;
             chain.push({
@@ -545,7 +554,12 @@ export async function getProvenanceForExplorer(
   const nodeId = params.nodeId;
   if (!nodeId) return { graph: { nodes: [], edges: [] }, source: null };
   return withWorkspace(pool, { workspaceId, principalId }, async (client) => {
-    const step = await explainByNodeId(client, workspaceId, nodeId);
+    const step = await explainByNodeId(
+      client,
+      workspaceId,
+      nodeId,
+      await humanReadViewersOf(client, workspaceId, principalId),
+    );
     return { graph: buildProvenanceGraph([step]), source: 'explain' };
   });
 }
@@ -564,7 +578,12 @@ export async function getProvenanceReportForExplorer(
   params: { readonly nodeId: string },
 ): Promise<ExplorerProvenanceReport> {
   return withWorkspace(pool, { workspaceId, principalId }, async (client) => {
-    const step = await explainByNodeId(client, workspaceId, params.nodeId);
+    const step = await explainByNodeId(
+      client,
+      workspaceId,
+      params.nodeId,
+      await humanReadViewersOf(client, workspaceId, principalId),
+    );
     const label =
       step.nodeType === 'fact'
         ? (step.fact?.linkType ?? params.nodeId)

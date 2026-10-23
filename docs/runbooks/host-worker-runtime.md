@@ -141,9 +141,11 @@ docker exec nexttime-entry-demo-alice env | sort
 ```
 
 期望：只有 `KERNEL_URL KERNEL_LLM_URL CAPABILITY_HANDLE WORKSPACE_ID NEXTTIME_MODE HTTP_PROXY
-HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy PI_CODING_AGENT_DIR HOME`（大小写代理变量
+HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy HOME`（大小写代理变量
 都设，见 §10 "httpoxy" 说明）加镜像自带的 `PIP_USER PYTHONUSERBASE PATH NODE_ENV` 等
-——**没有任何 `*_API_KEY`**，也没有 supervisor 自己进程的其他 env（未继承宿主 env）。
+——**没有任何 `*_API_KEY`**，也没有 supervisor 自己进程的其他 env（未继承宿主 env）。遗留 422（白名单启动）
+起也没有 `PI_CODING_AGENT_DIR`：pi 的配置目录由 entrypoint.sh 在容器 `/tmp/pi-agent` 里建
+（`docs/runbooks/pi-upgrade.md` §2.6）。
 `CAPABILITY_HANDLE` 的值是固定标记 `source-bound`，不是 Handle：Handle 由 worker-supervisor 按容器
 地址写进 `handle-bindings` 卷，内核与 llm-proxy 按来源取用（设计文档 I19）；env 里出现 JWT 形态
 （`eyJ….eyJ….…`）的值即为异常，容器启动自检会以 `check=handle_env result=fail` 拒绝启动。
@@ -151,6 +153,28 @@ HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy PI_CODING_AGENT_DIR HOME`�
 绑定指向自己（主机名是容器 id 的前缀）才启动 pi：`check=handle_binding result=ok`；20 秒内等不到
 则 `result=fail reason=address_not_bound` 或 `reason=address_bound_to_another_container` 并退出。
 后者说明有两个运行中的容器共用一个地址（拓扑不对），不要绕过。
+
+白名单启动（遗留 422）：pi 只加载平台点名的系统提示、Skill 与扩展，工作区里的 `AGENTS.md`、`.pi/` 扩展、
+`mcp.json` 等都不读（`docs/runbooks/pi-upgrade.md` §2.6）：
+
+```bash
+docker logs nexttime-entry-demo-alice 2>&1 | grep -E 'pi_resource_discovery|models_json'
+docker inspect nexttime-entry-demo-alice --format '{{json .HostConfig.Binds}}'
+# 只读挂载在 runsc 下写不穿：三条都应报 Read-only file system
+docker exec nexttime-entry-demo-alice sh -c 'echo x >> /opt/nexttime/platform/system-prompt.md; touch /opt/nexttime/platform/x; ln -sf /tmp /opt/nexttime/platform/l'
+```
+
+期望：`nexttime-selfcheck check=models_json result=ok` 与
+`nexttime-selfcheck check=pi_resource_discovery result=off system_prompt=<platform|default> skills=<n>`；
+`Binds` 恰好三条：`.../workspaces/<principalId>:/workspace`、
+`.../workspaces/.platform/principals/<principalId>:/opt/nexttime/platform:ro`、
+`.../models/models.json:/opt/nexttime/models.json:ro`；写入探针三条都是 `Read-only file system`。
+这几项只在本版 worker-supervisor 新建的容器上成立；升级前就在跑的入口容器下一轮对话时会被重建（容器没有
+`nexttime.runtime-contract` label），之后再核。容器一启动就退出、日志是 `check=models_json result=fail
+reason=empty_mount` 时，起它的 worker-supervisor 比镜像旧（没挂 `models.json`）：把 worker-supervisor 也升到同一版本。
+worker-supervisor 返回 409
+`runtime_image_incompatible` 时，活动镜像是遗留 422 之前构建的（没有 `ai.nexttime.runtime-contract=2`
+label）：按 §2 用本版重建镜像，在运行层页把新镜像设为活动。
 
 ```bash
 docker exec nexttime-entry-demo-alice curl -sS -o /dev/null -w '%{http_code}\n' https://example.com
@@ -286,8 +310,10 @@ docker inspect "nexttime-task-${WORKER_RUN_ID}" --format '{{.HostConfig.Readonly
 NEXTTIME_MODE HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy` 加镜像自带的
 `PIP_USER PYTHONUSERBASE PATH NODE_ENV HOME` 等——**没有任何 `*_API_KEY`**，`CAPABILITY_HANDLE`
 是标记 `source-bound`（同 §6，WorkerRun 的 Handle 按容器地址绑定），也没有
-`PI_CODING_AGENT_DIR`（见 README"Spawn spec 关键决策"，默认值已经落在同一路径，不需要这个变量）；
-`Binds` 含 `.../workspaces/tasks/${TASK_ID}:/workspace` 与只读的 `models.json`；`Labels` 含
+`PI_CODING_AGENT_DIR`（见 README"Spawn spec 关键决策"：pi 的配置目录归 entrypoint.sh）；
+`Binds` 含 `.../workspaces/tasks/${TASK_ID}:/workspace`、只读的平台目录
+`.../workspaces/.platform/tasks/${TASK_ID}:/opt/nexttime/platform:ro` 与只读的
+`.../models.json:/opt/nexttime/models.json:ro`；`Labels` 含
 `nexttime.role=worker`、`nexttime.task-id=${TASK_ID}`、`nexttime.worker-run-id=${WORKER_RUN_ID}`、
 `nexttime.workspace-id=${WORKSPACE_ID}`；`ReadonlyRootfs=true`、`CapDrop=["ALL"]`、
 `SecurityOpt=["no-new-privileges"]`。
@@ -415,6 +441,10 @@ fetch('http://localhost:8081/task/spawn', {
   denied`，容器立刻退出（exitcode 1）。修法：`resident-service.ts` 的 `spawn()` 在起容器前，用
   自己的 uid（同样是 10001）先 `mkdirSync` 好 `<workspace>/.pi/agent`，这样 Docker 看到目标已
   存在、属主已经正确，不会再自己建。`host-paths.ts` 新增 `localPiAgentDir` 承载这个路径。
+  **更新（遗留 422，白名单启动）**：`models.json` 不再挂进工作区，改挂 `/opt/nexttime/models.json`（镜像里预建的
+  空文件作挂载点），工作区里也不再建 `.pi/agent`；同一条教训落到新的平台目录：supervisor 起容器前先以自己的
+  uid `mkdirSync` 好 `${NEXTTIME_DATA}/workspaces/.platform/{principals,tasks}/<id>`（`host-paths.ts`
+  `localPlatformDir`），不让 Docker 以 root 建出挂载源。
 - **egress 登记失败不应该拖垮 spawn（主机验收才发现）**：目标主机上
   `${NEXTTIME_DATA}/config/egress-sources.json` 是 `root:root 644`（`scripts/host-env-init.sh`
   只把 `config/` 设成 world-**readable**，没有单独给这个后来才需要写的文件设属主/组）——非 root
@@ -450,10 +480,16 @@ fetch('http://localhost:8081/task/spawn', {
   `homedir()` 读 `HOME`，而 `HOME=/workspace` 已经烘焙在 `deploy/worker-runtime/Dockerfile`
   镜像层（`ENV HOME=/workspace`），不受本包 `Env` 数组影响——默认值因此恰好落在
   `host-paths.ts` `taskWorkspacePaths` 挂载 `models.json`/skills 的同一路径，不需要重复设置。
+  **更新（遗留 422）**：两种模式都不再设 `PI_CODING_AGENT_DIR`，entrypoint.sh 把它指向每次启动重建的
+  `/tmp/pi-agent`，`models.json` 与 Skill 也不再落在工作区里（见上一条与下一条）。
 - **S2.8：skills 挂载目标目录已对照 pi 源码验证，不是派发文字给的兜底猜测**：对照同一参考项目的
   `packages/coding-agent/src/core/skills.ts` `loadSkills`（`join(resolvedAgentDir, 'skills')`），
   `/workspace/.pi/agent/skills/<name>` 就是 pi 0.84.4 的默认全局 skills 目录，非猜测的兜底路径
   （`config.ts` 默认 agent dir 与 skills 目录在 0.87.1、0.99.2、1.1.0 的 `dist/` 里均未变）。
+  **更新（遗留 422）**：不再依赖 pi 的默认目录。Skill 写到工作区之外的
+  `${NEXTTIME_DATA}/workspaces/.platform/tasks/<taskId>/skills/<name>/`，只读挂到
+  `/opt/nexttime/platform`，entrypoint.sh 以 `--skill /opt/nexttime/platform/skills` 显式加载，`--no-skills`
+  关掉其余发现。
 - **S2.8：`no-new-privileges` 加在 `docker-client.ts` 共享的 `createAndStart` 里，同时影响 resident
   模式**：派发文字把它列为 Task 模式的容器 flag，但 `--read-only`/`--cap-drop ALL`/tmpfs `/tmp`
   这几项本来就是这个共享函数无条件加给所有容器的（不是每个 spec 各自的字段）——按同一模式加
@@ -728,7 +764,8 @@ fetch('http://localhost:8080/api/cap/explain', {
 
 前置：§13 已验证 `invoke_worker(wait: true)` 能跑完一个 Worker 并写回结果。本节验证的是 S2.14 补上
 的那一段——发布一个 Skill、在 WorkerDefinition 的 `skills` 里引用它、`invoke_worker` 之后容器内确实
-能读到 `/workspace/.pi/agent/skills/<name>/SKILL.md`（不是一次内核内部的单元测试，是真的进容器里看）。
+能读到 `/opt/nexttime/platform/skills/<name>/SKILL.md`（遗留 422 之前是 `/workspace/.pi/agent/skills/<name>/SKILL.md`；
+不是一次内核内部的单元测试，是真的进容器里看）。
 
 ### 14.1 提议并发布一个 Skill
 
@@ -810,7 +847,7 @@ fetch('http://localhost:8080/api/cap/invoke_worker', {
 `docker exec` 进容器——容器这时可能已经退出了）：
 
 ```bash
-cat "${NEXTTIME_DATA}/workspaces/tasks/<taskId>/.pi/agent/skills/host-smoke-skill/SKILL.md"
+cat "${NEXTTIME_DATA}/workspaces/.platform/tasks/<taskId>/skills/host-smoke-skill/SKILL.md"
 ```
 
 期望：文件存在，内容形如：
@@ -831,7 +868,7 @@ When asked, say hello.
 
 ```bash
 CONTAINER=nexttime-task-<workerRunId>   # workerRunId 来自上一步返回的 JSON
-docker exec "$CONTAINER" cat /workspace/.pi/agent/skills/host-smoke-skill/SKILL.md
+docker exec "$CONTAINER" cat /opt/nexttime/platform/skills/host-smoke-skill/SKILL.md
 ```
 
 ### 14.4 已知限制

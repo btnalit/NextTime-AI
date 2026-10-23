@@ -263,6 +263,11 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
     zh: '这个镜像不在运行层的镜像允许列表里，用它启动的容器都会被拒绝，所以没有改动；请运维把它加进主机配置的允许列表后再试',
     en: 'That image is not in the runtime’s image allowlist — every container started from it would be refused, so nothing changed. Ask the operator to add it to the host’s allowlist, then retry',
   },
+  // STATUS leftover 422: the image was built before the whitelist start's mount layout.
+  runtime_image_incompatible: {
+    zh: '这个镜像是本版之前构建的，和现在的挂载布局对不上，用它起不了任何容器，所以没有改动；把本版构建的镜像设为活动（清单里还没有的话，先在主机上构建运行层镜像）',
+    en: 'That image was built before this release’s mount layout — no container can start from it, so nothing changed. Set an image built from this release active (build the runtime image on the host first if the list has none)',
+  },
   runtime_unreachable: {
     zh: '连不上运行层（worker-supervisor），没有做任何改动；稍后重试，反复出现时到「运行状态」查看它是否在运行',
     en: 'The runtime (worker-supervisor) could not be reached, so nothing changed — retry shortly; if it keeps happening, check under Status whether it is running',

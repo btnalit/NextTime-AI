@@ -232,7 +232,12 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       for (const { activity_id } of activities.rows) {
         const explained = await asPrincipal(memberId, (client) =>
-          explain(client, workspaceId, { activityId: activity_id }),
+          explain(
+            client,
+            workspaceId,
+            { activityId: activity_id },
+            { principalId: memberId, seesEveryGoalRun: true, seesEveryActionRequest: true },
+          ),
         );
         activitySources[activity_id] = [
           ...new Set((explained.activity?.observations ?? []).map((o) => o.source?.id ?? 'hidden')),
@@ -543,7 +548,12 @@ describe.runIf(DATABASE_URL !== undefined)(
         ),
       );
       const explained = await asPrincipal(ownerId, (client) =>
-        explain(client, workspaceId, { factId: factC.rows[0]?.id as string }),
+        explain(
+          client,
+          workspaceId,
+          { factId: factC.rows[0]?.id as string },
+          { principalId: ownerId, seesEveryGoalRun: true, seesEveryActionRequest: true },
+        ),
       );
       expect(explained.activity?.observations.length).toBeGreaterThanOrEqual(1);
       expect(explained.activity?.observations[0]?.source?.id).toBe(collectorSourceId);

@@ -186,7 +186,7 @@ import {
 // S8 W3 K2 (leftover 82) — discard_draft, same one-capability-per-file convention as
 // export-prov-handler.ts/operation-manifest-handlers.ts below.
 import { discardDraftHandler } from './discard-draft-handler.js';
-import { graphReadViewerOf } from './draft-viewer.js';
+import { decisionViewerOf, graphReadViewerOf } from './draft-viewer.js';
 import {
   attestFactHandler,
   causalChainHandler,
@@ -514,8 +514,10 @@ const stateAtHandler: CapabilityHandler = async (client, workspaceId, params, ct
 
 const explainHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
   const { nodeId } = params as { nodeId: string };
-  const viewer = await graphReadViewerOf(client, workspaceId, ctx);
-  const result = await explainByNodeId(client, workspaceId, nodeId, viewer);
+  const result = await explainByNodeId(client, workspaceId, nodeId, {
+    decisions: await decisionViewerOf(client, workspaceId, ctx),
+    drafts: await graphReadViewerOf(client, workspaceId, ctx),
+  });
   return { result, resourceType: result.nodeType, resourceId: nodeId };
 };
 

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { ConflictStatus, ConflictType } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
-import { shownFreeTextIn } from '../redaction/index.js';
+import { shownFreeText, shownFreeTextIn } from '../redaction/index.js';
 
 /**
  * substrate/epistemic/conflicts: S3.2 冲突检测 (docs/development-tasks.md S3.2, design doc §5.4 I5
@@ -365,4 +365,40 @@ export async function markConflictResolved(
   const row = result.rows[0];
   if (row === undefined) throw new ConflictNotFoundError(workspaceId, input.conflictId);
   return mapConflictRow(row);
+}
+
+/** How `resolve_conflict` settled a Conflict (its `resolution` param). */
+export type ConflictRuling = 'keep_a' | 'keep_b' | 'invalidate_both';
+
+/**
+ * The invalidation reason `resolve_conflict` writes on each Fact a ruling invalidates
+ * (`application/gateway/epistemic-handlers.ts`): which Conflict, and how it was settled. Never the
+ * person's reason for the ruling (legacy 421): a Fact is read under its own visibility, and anyone
+ * who sees the losing Fact need not see the Conflict — the reason is part of the ruling, and stays
+ * in its Decision's rationale and the Conflict's `resolution`, read under the Conflict's.
+ */
+export function conflictRulingInvalidationReason(
+  conflictId: string,
+  ruling: ConflictRuling,
+): string {
+  return `resolve_conflict ${conflictId}: ${ruling}`;
+}
+
+/** A reason a ruling wrote before legacy 421: the person's reason in parentheses after it. */
+const RULING_REASON_WITH_TEXT =
+  /^(resolve_conflict [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}: (?:keep_a|keep_b|invalidate_both)) \(/i;
+
+/**
+ * A Fact's invalidation reason as every read shows it: a ruling's reason written before legacy
+ * 421 cut back to {@link conflictRulingInvalidationReason}'s form — the stored row stays as it is
+ * (I11) — then free text as `shownFreeText` shows it (legacy 420). The one mapping each Fact read
+ * applies: `substrate/graph/sql-store.ts`'s `mapFactRow` (Fact reads, `state_at`, `reconstruct`),
+ * `decisions.ts`'s Fact references (`decision_impact`) and `explain.ts` (`explain`).
+ */
+export function shownInvalidationReason(reason: string): string;
+export function shownInvalidationReason(reason: string | null): string | null;
+export function shownInvalidationReason(reason: string | null): string | null {
+  if (reason === null) return null;
+  const ruling = RULING_REASON_WITH_TEXT.exec(reason);
+  return shownFreeText(ruling?.[1] ?? reason);
 }

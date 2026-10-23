@@ -22,6 +22,11 @@ const DATABASE_URL = process.env.DATABASE_URL;
 const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
 
+/** Legacy 421: the owner on the human channel — reads every Decision. */
+function ownerViewer(principalId: string) {
+  return { principalId, seesEveryGoalRun: true, seesEveryActionRequest: true };
+}
+
 describe.runIf(DATABASE_URL !== undefined)('explain (integration, real Postgres)', () => {
   let pool: Pool;
   const store = new SqlGraphStore();
@@ -99,7 +104,9 @@ describe.runIf(DATABASE_URL !== undefined)('explain (integration, real Postgres)
       return { factId: fact.id, sourceId, activityId: activity.id };
     });
 
-    const result = await inTx((client) => explain(client, workspaceId, { factId }));
+    const result = await inTx((client) =>
+      explain(client, workspaceId, { factId }, ownerViewer(ownerId)),
+    );
 
     expect(result.nodeType).toBe('fact');
     expect(result.fact?.id).toBe(factId);
@@ -191,17 +198,19 @@ describe.runIf(DATABASE_URL !== undefined)('explain (integration, real Postgres)
     );
 
     const narrowedResult = await inTx((client) =>
-      explain(client, workspaceId, { factId: factWithObsId }),
+      explain(client, workspaceId, { factId: factWithObsId }, ownerViewer(ownerId)),
     );
     expect(narrowedResult.fact?.observationId).toBe(firstObservationId);
     expect(narrowedResult.activity?.observations).toHaveLength(1);
     expect(narrowedResult.activity?.observations[0]?.id).toBe(firstObservationId);
 
-    const activityResult = await inTx((client) => explain(client, workspaceId, { activityId }));
+    const activityResult = await inTx((client) =>
+      explain(client, workspaceId, { activityId }, ownerViewer(ownerId)),
+    );
     expect(activityResult.activity?.observations).toHaveLength(2);
 
     const unnarrowedResult = await inTx((client) =>
-      explain(client, workspaceId, { factId: factWithoutObsId }),
+      explain(client, workspaceId, { factId: factWithoutObsId }, ownerViewer(ownerId)),
     );
     expect(unnarrowedResult.fact?.observationId).toBeNull();
     expect(unnarrowedResult.activity?.observations).toHaveLength(2);
@@ -233,7 +242,9 @@ describe.runIf(DATABASE_URL !== undefined)('explain (integration, real Postgres)
       return { activityId: activity.id, sourceId };
     });
 
-    const result = await inTx((client) => explain(client, workspaceId, { activityId }));
+    const result = await inTx((client) =>
+      explain(client, workspaceId, { activityId }, ownerViewer(ownerId)),
+    );
 
     expect(result.nodeType).toBe('activity');
     expect(result.activity?.kind).toBe('agent_turn');
@@ -267,7 +278,9 @@ describe.runIf(DATABASE_URL !== undefined)('explain (integration, real Postgres)
       return { decisionId: decisionRow.id, sourceId };
     });
 
-    const result = await inTx((client) => explain(client, workspaceId, { decisionId }));
+    const result = await inTx((client) =>
+      explain(client, workspaceId, { decisionId }, ownerViewer(ownerId)),
+    );
 
     expect(result.nodeType).toBe('decision');
     expect(result.decision?.id).toBe(decisionId);
@@ -277,7 +290,9 @@ describe.runIf(DATABASE_URL !== undefined)('explain (integration, real Postgres)
 
   it('explain throws ExplainNodeNotFoundError for an id that names nothing', async () => {
     await expect(
-      inTx((client) => explain(client, workspaceId, { factId: randomUUID() })),
+      inTx((client) =>
+        explain(client, workspaceId, { factId: randomUUID() }, ownerViewer(ownerId)),
+      ),
     ).rejects.toThrow(ExplainNodeNotFoundError);
   });
 
@@ -303,14 +318,18 @@ describe.runIf(DATABASE_URL !== undefined)('explain (integration, real Postgres)
       return { factId: fact.id };
     });
 
-    const result = await inTx((client) => explainByNodeId(client, workspaceId, factId));
+    const result = await inTx((client) =>
+      explainByNodeId(client, workspaceId, factId, { decisions: ownerViewer(ownerId) }),
+    );
     expect(result.nodeType).toBe('fact');
     expect(result.fact?.id).toBe(factId);
   });
 
   it('explainByNodeId throws ExplainNodeNotFoundError when nodeId names no Fact/Activity/Decision', async () => {
     await expect(
-      inTx((client) => explainByNodeId(client, workspaceId, randomUUID())),
+      inTx((client) =>
+        explainByNodeId(client, workspaceId, randomUUID(), { decisions: ownerViewer(ownerId) }),
+      ),
     ).rejects.toThrow(ExplainNodeNotFoundError);
   });
 });

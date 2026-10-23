@@ -6,7 +6,15 @@ import { loadConfig } from './config.js';
 import { createEgressMapStore } from './egress-map.js';
 import type { EgressMapStore } from './egress-map.js';
 import { createResidentService } from './resident-service.js';
-import { createFakeDockerClient } from './test-support/fake-docker-client.js';
+import {
+  IMAGE_RUNTIME_CONTRACT_LABEL,
+  RUNTIME_CONTRACT_VERSION,
+  RuntimeImageIncompatibleError,
+} from './runtime-contract.js';
+import {
+  type FakeDockerClient,
+  createFakeDockerClient,
+} from './test-support/fake-docker-client.js';
 import { memoryHandleBindings } from './test-support/memory-handle-bindings.js';
 
 /** A JWT-*shaped* (but unsigned/fake) Handle carrying only the `jti` claim `decodeHandleJtiUnsafe`
@@ -15,6 +23,16 @@ import { memoryHandleBindings } from './test-support/memory-handle-bindings.js';
 function fakeHandle(jti: string): string {
   const encode = (obj: unknown) => Buffer.from(JSON.stringify(obj)).toString('base64url');
   return `${encode({ alg: 'EdDSA' })}.${encode({ jti })}.fake-signature`;
+}
+
+/** Restamps alice's running container the way an older supervisor left it (`undefined`: no
+ *  layout label at all). */
+async function stampLayout(docker: FakeDockerClient, layout: string | undefined): Promise<void> {
+  const state = await docker.inspectByName('nexttime-entry-alice');
+  if (!state) throw new Error('container missing');
+  const labels = state.labels as Record<string, string>;
+  if (layout === undefined) Reflect.deleteProperty(labels, 'nexttime.runtime-contract');
+  else labels['nexttime.runtime-contract'] = layout;
 }
 
 let dir: string;
@@ -26,6 +44,11 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
+
+/** This container's own view of a principal's platform directory (host-paths.ts). */
+function platformDir(principalId: string): string {
+  return join(dir, 'workspaces', '.platform', 'principals', principalId);
+}
 
 function setup(overrides: Record<string, string> = {}) {
   const config = loadConfig({
@@ -79,7 +102,7 @@ describe('resident-service spawn', () => {
     ).resolves.toBeDefined();
   });
 
-  it('writes systemPrompt to /workspace/.nexttime/system-prompt.md before spawning (S2.6)', async () => {
+  it('writes systemPrompt to the principal’s platform directory before spawning (S2.6)', async () => {
     const { service } = setup();
     await service.spawn({
       workspaceId: 'ws-1',
@@ -88,14 +111,14 @@ describe('resident-service spawn', () => {
       systemPrompt: 'you are the entry agent',
     });
 
-    const filePath = join(dir, 'workspaces', 'alice', '.nexttime', 'system-prompt.md');
+    const filePath = join(platformDir('alice'), 'system-prompt.md');
     expect(existsSync(filePath)).toBe(true);
     expect(readFileSync(filePath, 'utf8')).toBe('you are the entry agent');
   });
 
   it('overwrites system-prompt.md when the content differs, leaves it alone when unchanged', async () => {
     const { service } = setup();
-    const filePath = join(dir, 'workspaces', 'alice', '.nexttime', 'system-prompt.md');
+    const filePath = join(platformDir('alice'), 'system-prompt.md');
 
     await service.spawn({
       workspaceId: 'ws-1',
@@ -118,7 +141,7 @@ describe('resident-service spawn', () => {
     const { service } = setup();
     await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
 
-    const filePath = join(dir, 'workspaces', 'alice', '.nexttime', 'system-prompt.md');
+    const filePath = join(platformDir('alice'), 'system-prompt.md');
     expect(existsSync(filePath)).toBe(false);
   });
 
@@ -312,15 +335,167 @@ describe('resident-service spawn', () => {
     });
   });
 
-  it('pre-creates .pi/agent under the local workspace dir before asking Docker to create the container', async () => {
-    // Host verification (S1.5a) found Docker auto-creating .pi/agent as root (as the parent of
-    // the models.json bind-mount target) blocks the non-root entry container from creating the
-    // sibling .pi/sessions. This pre-creation (as this process's own uid, like localWorkspaceDir
-    // itself) is the fix — assert the directory exists with the right shape before spawn returns.
+  it('pre-creates the workspace and platform directories before asking Docker to create the container', async () => {
+    // Both are bind sources; Docker would create a missing one as root (host verification S1.5a
+    // found that blocking the non-root entry container). Created as this process's own uid.
     const { service, config } = setup();
     await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
-    const stat = statSync(join(config.localDataDir, 'workspaces', 'alice', '.pi', 'agent'));
-    expect(stat.isDirectory()).toBe(true);
+    expect(statSync(join(config.localDataDir, 'workspaces', 'alice')).isDirectory()).toBe(true);
+    expect(statSync(platformDir('alice')).isDirectory()).toBe(true);
+    // Nothing pi loads is written into the workspace any more (STATUS leftover 422).
+    expect(existsSync(join(config.localDataDir, 'workspaces', 'alice', '.pi'))).toBe(false);
+    expect(existsSync(join(config.localDataDir, 'workspaces', 'alice', '.nexttime'))).toBe(false);
+  });
+
+  it('refuses an image that does not speak this supervisor’s mount layout and leaves the running container alone', async () => {
+    const { service, docker } = setup();
+    const first = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+    docker.registerImage({
+      id: 'sha256:old',
+      tags: ['nexttime-ai-worker-runtime:before-422'],
+      created: '2026-10-01T00:00:00Z',
+      labels: { 'ai.nexttime.pi-version': '1.1.0' },
+    });
+    await expect(
+      service.spawn({
+        workspaceId: 'ws-1',
+        principalId: 'alice',
+        handle: 'h',
+        image: 'nexttime-ai-worker-runtime:before-422',
+      }),
+    ).rejects.toBeInstanceOf(RuntimeImageIncompatibleError);
+    // The image change would have forced a recreate; refused before anything was torn down.
+    expect(docker.stopCalls).toEqual([]);
+    expect(docker.removeCalls).toEqual([]);
+    expect(docker.createCalls).toHaveLength(1);
+    expect((await service.status('alice'))?.containerId).toBe(first.containerId);
+  });
+
+  it('recreates a running container an older supervisor started (old mount layout), even on the same image', async () => {
+    const { service, docker } = setup();
+    const first = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+    expect(docker.createCalls[0]?.labels['nexttime.runtime-contract']).toBe(
+      RUNTIME_CONTRACT_VERSION,
+    );
+    // What a container from before the whitelist start looks like: no layout label at all.
+    await stampLayout(docker, undefined);
+
+    const second = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+    expect(second.created).toBe(true);
+    expect(second.containerId).not.toBe(first.containerId);
+    expect(docker.stopCalls).toEqual([{ name: 'nexttime-entry-alice', timeoutSeconds: 10 }]);
+    expect(docker.removeCalls).toEqual(['nexttime-entry-alice']);
+    expect(docker.createCalls[1]?.labels['nexttime.runtime-contract']).toBe(
+      RUNTIME_CONTRACT_VERSION,
+    );
+
+    // Any other value is just as stale.
+    await stampLayout(docker, '1');
+    const third = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+    expect(third.created).toBe(true);
+    expect(docker.createCalls).toHaveLength(3);
+  });
+
+  it('drops a withdrawn entry prompt when the container is recreated, never under a running one', async () => {
+    const { service, docker } = setup();
+    await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h',
+      systemPrompt: 'published prompt',
+    });
+    const promptFile = join(platformDir('alice'), 'system-prompt.md');
+    expect(readFileSync(promptFile, 'utf8')).toBe('published prompt');
+
+    // The entry definition is withdrawn: the reused container was started on that file.
+    await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+    expect(docker.createCalls).toHaveLength(1);
+    expect(existsSync(promptFile)).toBe(true);
+
+    // The next container starts on the image's default prompt.
+    await stampLayout(docker, undefined);
+    await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+    expect(docker.createCalls).toHaveLength(2);
+    expect(existsSync(promptFile)).toBe(false);
+  });
+
+  it('keeps reusing an old-layout container when the requested image could not replace it', async () => {
+    const { service, docker, config } = setup();
+    const first = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+    await stampLayout(docker, undefined);
+    // The active image is itself from before the whitelist start.
+    docker.registerImage({
+      id: 'sha256:old',
+      tags: [config.workerImage],
+      created: '2026-10-01T00:00:00Z',
+      labels: { 'ai.nexttime.pi-version': '1.1.0' },
+    });
+
+    const second = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+    expect(second.created).toBe(false);
+    expect(second.containerId).toBe(first.containerId);
+    expect(docker.stopCalls).toEqual([]);
+    expect(docker.removeCalls).toEqual([]);
+    expect(docker.createCalls).toHaveLength(1);
+    expect((await service.status('alice'))?.containerId).toBe(first.containerId);
+
+    // Not when something else also asks for the recreate: the new Skills set must not be skipped.
+    await expect(
+      service.spawn({
+        workspaceId: 'ws-1',
+        principalId: 'alice',
+        handle: 'h',
+        skillsInline: [{ name: 'demo', files: { 'SKILL.md': '# demo' } }],
+      }),
+    ).rejects.toBeInstanceOf(RuntimeImageIncompatibleError);
+    expect(docker.stopCalls).toEqual([]);
+    expect(docker.removeCalls).toEqual([]);
+  });
+
+  it('reads the image through the images connection, and spawns anyway when that read fails', async () => {
+    const config = loadConfig({
+      NEXTTIME_DATA: '/host/data',
+      LOCAL_DATA_DIR: dir,
+      EGRESS_SOURCE_MAP_FILE: join(dir, 'egress-sources.json'),
+    });
+    const docker = createFakeDockerClient();
+    const imagesDocker = createFakeDockerClient();
+    imagesDocker.registerImage({
+      id: 'sha256:new',
+      tags: ['nexttime-ai-worker-runtime:after-422'],
+      created: '2026-10-23T00:00:00Z',
+      labels: { [IMAGE_RUNTIME_CONTRACT_LABEL]: RUNTIME_CONTRACT_VERSION },
+    });
+    // The container connection cannot read images (docker-socket-proxy IMAGES=0).
+    docker.inspectImage = async () => {
+      throw new Error('403 Forbidden');
+    };
+    const service = createResidentService({
+      config,
+      docker,
+      imagesDocker,
+      handleBindings: memoryHandleBindings(),
+      egressMap: createEgressMapStore(config.egressSourceMapFile),
+    });
+    await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h',
+      image: 'nexttime-ai-worker-runtime:after-422',
+    });
+    expect(docker.createCalls).toHaveLength(1);
+
+    imagesDocker.inspectImage = async () => {
+      throw new Error('images proxy unreachable');
+    };
+    await service.reclaim('alice');
+    await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h',
+      image: 'nexttime-ai-worker-runtime:after-422',
+    });
+    expect(docker.createCalls).toHaveLength(2);
   });
 
   it('spawn still succeeds when the egress map store throws (best-effort registration)', async () => {
@@ -489,6 +664,9 @@ describe('resident-service list / listImages (S7-E inventory)', () => {
     // the kernel can reject a `set_active_runtime_image` target that would 403 at spawn time
     // instead of only discovering it later.
     expect(result.allowedImages).toEqual(config.taskImageAllowlist);
+    // Leftover 422: the contract label value this supervisor requires, so the kernel can refuse to
+    // make an image active that every spawn would then 409.
+    expect(result.runtimeContract).toBe(RUNTIME_CONTRACT_VERSION);
   });
 
   it('listImages() reports allowedImages additively from WORKER_IMAGE_ALLOWLIST, not just config.workerImage (P1-a hotfix)', async () => {
@@ -573,7 +751,7 @@ describe('resident-service list / listImages (S7-E inventory)', () => {
 describe('resident-service spawn — S3.13 skillsInline', () => {
   const SKILL = { name: 'writing-tips', files: { 'SKILL.md': '# writing tips\n\nbody' } };
 
-  it('writes skillsInline[] under <agentDir>/skills/<name>/ on first spawn', async () => {
+  it('writes skillsInline[] under skills/<name>/ in the platform directory on first spawn', async () => {
     const { service } = setup();
     await service.spawn({
       workspaceId: 'ws-1',
@@ -582,16 +760,7 @@ describe('resident-service spawn — S3.13 skillsInline', () => {
       skillsInline: [SKILL],
     });
 
-    const filePath = join(
-      dir,
-      'workspaces',
-      'alice',
-      '.pi',
-      'agent',
-      'skills',
-      'writing-tips',
-      'SKILL.md',
-    );
+    const filePath = join(platformDir('alice'), 'skills', 'writing-tips', 'SKILL.md');
     expect(existsSync(filePath)).toBe(true);
     expect(readFileSync(filePath, 'utf8')).toBe('# writing tips\n\nbody');
   });
@@ -674,16 +843,7 @@ describe('resident-service spawn — S3.13 skillsInline', () => {
       handle: 'h',
       skillsInline: [SKILL],
     });
-    const filePath = join(
-      dir,
-      'workspaces',
-      'alice',
-      '.pi',
-      'agent',
-      'skills',
-      'writing-tips',
-      'SKILL.md',
-    );
+    const filePath = join(platformDir('alice'), 'skills', 'writing-tips', 'SKILL.md');
     expect(existsSync(filePath)).toBe(true);
 
     const second = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
@@ -732,11 +892,12 @@ describe('resident-service stop', () => {
 });
 
 describe('resident-service reclaim (S8 W5 leftover 77)', () => {
-  it('force-removes the container (not just stop) and deletes the workspace directory', async () => {
+  it('force-removes the container (not just stop) and deletes the workspace and platform directories', async () => {
     const { service, docker, egressMap } = setup();
     const outcome = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
     const workspaceDir = join(dir, 'workspaces', 'alice');
     expect(existsSync(workspaceDir)).toBe(true);
+    expect(existsSync(platformDir('alice'))).toBe(true);
 
     await service.reclaim('alice');
 
@@ -744,6 +905,7 @@ describe('resident-service reclaim (S8 W5 leftover 77)', () => {
     expect(docker.stopCalls).toEqual([]); // reclaim never calls stop() — remove() force-stops
     expect(egressMap.read()[outcome.ip as string]).toBeUndefined();
     expect(existsSync(workspaceDir)).toBe(false);
+    expect(existsSync(platformDir('alice'))).toBe(false);
     expect(await service.status('alice')).toBeUndefined();
   });
 

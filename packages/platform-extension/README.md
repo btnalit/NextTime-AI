@@ -15,6 +15,7 @@ the platform) are all implemented.
 | `TASK_ID` | worker | The Task this one-shot Worker runs (injected by worker-supervisor). |
 | `NEXTTIME_CORRELATION_ID` | no (worker) | Correlation id inherited from the delegating call; the kernel mints one when absent. |
 | `NEXTTIME_TURN_ID` | no (entry) | Seeds the turn id before the first `input` event supplies a fresher one. |
+| `PI_CODING_AGENT_DIR`, `NEXTTIME_PI_SETTINGS`, `NEXTTIME_PI_MODELS` | no (entry, worker) | Set by the runtime image's `entrypoint.sh`, never by worker-supervisor: pi's config directory and the settings / `models.json` it is rebuilt from. With all three set, `src/pi-agent-dir.ts` puts the directory back on every `session_shutdown` (whitelist start, `docs/runbooks/pi-upgrade.md` §2.6). |
 
 ## Modes
 

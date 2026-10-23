@@ -9,6 +9,7 @@ import { KernelClient } from './kernel-client.js';
 import { registerEntryMode } from './modes/entry.js';
 import { registerInteractiveMode } from './modes/interactive.js';
 import { registerWorkerMode } from './modes/worker.js';
+import { restorePiAgentDirOnSessionShutdown } from './pi-agent-dir.js';
 
 export { KernelClient, KernelError } from './kernel-client.js';
 export type { KernelClientOptions, KernelErrorKind, KernelErrorOptions } from './kernel-client.js';
@@ -87,6 +88,7 @@ export default function platformExtension(pi: ExtensionAPI): void {
   // is read here, and none is sent — whatever the variable holds.
   const kernelClient = new KernelClient({ kernelUrl });
   const workspaceId = readRequiredEnv('WORKSPACE_ID');
+  restorePiAgentDirOnSessionShutdown(pi);
 
   if (mode === 'worker') {
     // S2.8's task-mode spawn spec (packages/worker-supervisor) injects TASK_ID/WORKER_RUN_ID
