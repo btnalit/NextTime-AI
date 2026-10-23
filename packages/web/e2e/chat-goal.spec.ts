@@ -10,8 +10,9 @@ import { OWNER_API_KEY, loginAsOwner, signedInOwner } from './lib/auth.js';
  * are stand-ins appended to the real chat's history as the socket carries it
  * (`page.routeWebSocket`, forwarding everything else both ways), and `get_goal` is answered in the
  * browser (`page.route`, as goal-detail.spec.ts does). The chat itself, the signed-in owner and
- * the goal pages' shell are the real stack. Full-page captures land in `test-results/` for the UX
- * acceptance to read; they are not a screenshot gate.
+ * the goal pages' shell are the real stack. Full-page captures (the proposal, a proposal that cannot
+ * be read, the milestones) land in `test-results/` for the UX acceptance to read; they are not a
+ * screenshot gate.
  */
 
 const GOAL = '66000000-0000-4000-8000-000000000301';
@@ -213,6 +214,39 @@ test.describe('S11 GO5e-2: a goal in its chat (stand-in messages)', () => {
       });
 
       await open.click();
+      await expect(page).toHaveURL(new RegExp(`#/work/goals/${GOAL}$`));
+    });
+
+    test(`a proposal its reader cannot read at ${width}`, async ({ page }, testInfo) => {
+      await page.setViewportSize({ width, height: 900 });
+      await page.route('**/api/cap/get_goal', (route) =>
+        route.fulfill({
+          status: 404,
+          json: { ok: false, error: { code: 'not_found', message: 'goal run not found' } },
+        }),
+      );
+      await appendToChatHistory(page, (last) => [
+        goalUpdate(last + 1, T0, { change: 'propose', status: 'proposed' }),
+      ]);
+      await loginAsOwner(page);
+      await openNewChat(page);
+      await page.reload();
+
+      // Still says a goal was proposed, explains the read, and still opens the goal's page.
+      const card = page.getByTestId('goal-proposal-card');
+      await expect(card).toBeVisible({ timeout: 15_000 });
+      await expect(card.getByTestId('goal-proposal-statement')).toHaveText(
+        '这里提出过一个目标，现在读不到它',
+      );
+      await expect(card.getByTestId('goal-proposal-error')).toContainText('目标页会说明原因');
+      await expect(card.getByTestId('goal-proposal-summary')).toHaveCount(0);
+      await expect(card.getByTestId('goal-proposal-open')).toHaveText('查看目标');
+      await page.screenshot({
+        path: testInfo.outputPath(`chat-goal-unreadable-${width}.png`),
+        fullPage: true,
+      });
+
+      await card.getByTestId('goal-proposal-open').click();
       await expect(page).toHaveURL(new RegExp(`#/work/goals/${GOAL}$`));
     });
 

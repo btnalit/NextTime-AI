@@ -31,8 +31,8 @@ export interface GoalProposalCardProps {
  * here goes there — 「查看并确认」 while the reader is the requester and the goal waits for them,
  * 「查看目标」 otherwise. The goal's later milestones are status lines below it in the same chat.
  *
- * Unreadable (`get_goal` refused or the goal gone): the card still says a goal was proposed and
- * still opens its page, which explains the refusal.
+ * Unreadable (`get_goal` refused or the goal gone): the card still says a goal was proposed here,
+ * says why it cannot show it, and still opens its page, which explains the refusal.
  */
 export function GoalProposalCard({
   http,
@@ -73,19 +73,24 @@ export function GoalProposalCard({
           <span className="action-detail-title" data-testid="goal-proposal-statement">
             {goal
               ? (excerpt(goal.statement, 200) ?? t('（没有目标陈述）', '(no statement)'))
-              : goalMilestoneText(
-                  {
-                    change: 'propose',
-                    status: 'proposed',
-                    pauseReason: null,
-                    heldByOwner: false,
-                    outcome: null,
-                    outcomeBasis: null,
-                    cleanupPending: false,
-                    revision: null,
-                  },
-                  t,
-                )}
+              : detail.state.status === 'error'
+                ? t(
+                    '这里提出过一个目标，现在读不到它',
+                    'A goal was proposed here; it cannot be read now',
+                  )
+                : goalMilestoneText(
+                    {
+                      change: 'propose',
+                      status: 'proposed',
+                      pauseReason: null,
+                      heldByOwner: false,
+                      outcome: null,
+                      outcomeBasis: null,
+                      cleanupPending: false,
+                      revision: null,
+                    },
+                    t,
+                  )}
           </span>
           {goal ? <RedactedNote value={goal.statement} testId="goal-proposal-redacted" /> : null}
         </div>
@@ -95,7 +100,16 @@ export function GoalProposalCard({
       {detail.state.status === 'loading' ? <Skeleton width="60%" /> : null}
       {goal ? <GoalProposalSummary goal={goal} /> : null}
       {detail.state.status === 'error' ? (
-        <InlineError error={detail.state.error} testId="goal-proposal-error" />
+        <InlineError
+          error={detail.state.error}
+          testId="goal-proposal-error"
+          overrides={{
+            not_found: t(
+              '这个目标不在了，或你看不到它。目标页会说明原因。',
+              'This goal is gone, or you cannot see it. Its page says why.',
+            ),
+          }}
+        />
       ) : null}
       {awaitsViewer ? (
         <p className="text-3 text-small" data-testid="goal-proposal-awaits">

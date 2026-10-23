@@ -1175,7 +1175,10 @@ describe('ChatPage goal card and milestones (S11 GO5e-2)', () => {
     const card = await screen.findByTestId('goal-proposal-card');
     await waitFor(() => expect(within(card).getByTestId('goal-proposal-error')).toBeTruthy());
     expect(within(card).getByTestId('goal-proposal-statement').textContent).toBe(
-      '目标已提出，等你确认后才开始',
+      '这里提出过一个目标，现在读不到它',
+    );
+    expect(within(card).getByTestId('goal-proposal-error').textContent).toContain(
+      '这个目标不在了，或你看不到它。目标页会说明原因。',
     );
     expect(within(card).getByTestId('goal-proposal-open').textContent).toBe('查看目标');
   });
