@@ -51,10 +51,15 @@ function http(handlers: Record<string, (params: unknown) => unknown>) {
   return { caller, calls };
 }
 
-/** Opens the Operation combobox and returns the names it offers. */
+/** The listbox a combobox's input controls. */
+function listOf(input: HTMLElement): HTMLElement {
+  return document.getElementById(input.getAttribute('aria-controls') ?? '') as HTMLElement;
+}
+
+/** Opens a combobox and returns the names it offers. */
 function offered(input: HTMLInputElement): string[] {
   if (input.getAttribute('aria-expanded') !== 'true') fireEvent.click(input);
-  return within(screen.getByRole('listbox'))
+  return within(listOf(input))
     .queryAllByRole('option')
     .map((option) => option.querySelector('.combobox-option-label')?.textContent ?? '');
 }
@@ -940,6 +945,195 @@ describe('ProcedureEditor (S6-A A2)', () => {
       /整个条件是「不满足」套「不满足」/,
     );
     expect(screen.queryByTestId('procedure-step-check-expect-as-form')).toBeNull();
+  });
+
+  it('the Fact a check judges is built from the ontology and the graph, identity as stored (legacy 464)', async () => {
+    const host = '5f0c1a52-8a2e-4f3b-9c61-0d2b7e4a9f10';
+    const { caller, calls } = http({
+      list_types: (params) =>
+        (params as { kind?: string }).kind === 'link'
+          ? {
+              items: [
+                {
+                  kind: 'link',
+                  name: 'runs_on',
+                  signatures: [{ domain: 'Service', range: 'Host', description: '' }],
+                },
+              ],
+            }
+          : {
+              items: [
+                { kind: 'object', name: 'Service', description: '', identityKey: ['name', 'env'] },
+                { kind: 'object', name: 'Host', description: '', identityKey: ['hostId'] },
+                { kind: 'object', name: 'Disk', description: '' },
+              ],
+            },
+      search: () => ({
+        items: [
+          {
+            id: host,
+            objectType: 'Host',
+            identityKey: { hostId: 3 },
+            properties: { name: 'h3' },
+            createdAt: '',
+            updatedAt: '',
+            lastObservedAt: null,
+          },
+        ],
+      }),
+      list_facts: () => ({ items: [], nodeDetails: [] }),
+      propose_procedure: () => ({ id: 'pr-8', version: 1, status: 'draft', name: 'On host' }),
+    });
+    render(
+      <ProcedureEditor
+        http={caller}
+        copyOf={{
+          id: 'pr-1',
+          version: 1,
+          status: 'published',
+          name: 'On host',
+          description: 'Runs on its host',
+          steps: [
+            {
+              kind: 'verify',
+              description: 'Placed.',
+              check: { kind: 'fact_predicate', key: 'on-host' },
+            },
+          ],
+        }}
+        onProposed={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    const fact = screen.getByTestId('procedure-step-check-fact');
+    fireEvent.change(within(fact).getByTestId('procedure-step-check-fact-link'), {
+      target: { value: 'runs_on' },
+    });
+
+    // From: the type's own identity fields, named and fixed; the value typed.
+    const source = within(fact).getByTestId('procedure-step-check-fact-source');
+    fireEvent.change(within(source).getByTestId('procedure-step-check-fact-source-type'), {
+      target: { value: 'Service' },
+    });
+    const keys = (await within(source).findAllByTestId(
+      'procedure-step-check-fact-source-identity-key',
+    )) as HTMLInputElement[];
+    expect(keys.map((key) => [key.value, key.readOnly])).toEqual([
+      ['name', true],
+      ['env', true],
+    ]);
+    const [name, env] = within(source).getAllByTestId(
+      'procedure-step-check-fact-source-identity-value',
+    ) as [HTMLInputElement, HTMLInputElement];
+    fireEvent.change(name, { target: { value: 'web' } });
+    fireEvent.change(env, { target: { value: 'prod' } });
+
+    // To: only the type the Link type allows there; the identity filled from a picked Object.
+    const target = within(fact).getByTestId('procedure-step-check-fact-target');
+    const targetType = within(target).getByTestId(
+      'procedure-step-check-fact-target-type',
+    ) as HTMLInputElement;
+    await waitFor(() => expect(offered(targetType)).toEqual(['Host']));
+    fireEvent.change(targetType, { target: { value: 'Host' } });
+    const fill = within(target).getByTestId('procedure-step-check-fact-target-fill');
+    fireEvent.change(fill, { target: { value: 'h3' } });
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (call) =>
+            call.name === 'search' &&
+            (call.params as { objectType?: string }).objectType === 'Host',
+        ),
+      ).toBe(true),
+    );
+    await waitFor(() => expect(offered(fill as HTMLInputElement)).toEqual(['h3']));
+    fireEvent.click(within(listOf(fill)).getByRole('option'));
+    const [hostId] = within(target).getAllByTestId(
+      'procedure-step-check-fact-target-identity-value',
+    ) as [HTMLInputElement];
+    expect(hostId.value).toBe('3');
+    expect(
+      (
+        within(target).getByTestId(
+          'procedure-step-check-fact-target-identity-kind',
+        ) as HTMLSelectElement
+      ).value,
+    ).toBe('number');
+
+    // And its properties: one condition.
+    fireEvent.click(within(fact).getByTestId('procedure-step-check-fact-add-expect'));
+    fireEvent.change(within(fact).getByTestId('procedure-step-check-fact-expect-path'), {
+      target: { value: 'port' },
+    });
+    fireEvent.change(within(fact).getByTestId('procedure-step-check-fact-expect-value-kind'), {
+      target: { value: 'number' },
+    });
+    fireEvent.change(within(fact).getByTestId('procedure-step-check-fact-expect-value'), {
+      target: { value: '443' },
+    });
+
+    fireEvent.click(screen.getByTestId('procedure-submit'));
+    await screen.findByTestId('draft-proposed');
+    const sent = calls.find((call) => call.name === 'propose_procedure')?.params as {
+      procedure: { steps: { check: { fact: unknown } }[] };
+    };
+    expect(sent.procedure.steps[0]?.check.fact).toEqual({
+      linkType: 'runs_on',
+      source: { objectType: 'Service', identity: { name: 'web', env: 'prod' } },
+      target: { objectType: 'Host', identity: { hostId: 3 } },
+      expect: { path: 'port', op: 'eq', value: 443 },
+    });
+  });
+
+  it('an identity that lacks a field of its type, or has one it does not, is said (legacy 464)', () => {
+    const { caller } = http({
+      list_types: (params) =>
+        (params as { kind?: string }).kind === 'link'
+          ? { items: [] }
+          : {
+              items: [
+                { kind: 'object', name: 'Service', description: '', identityKey: ['name', 'env'] },
+              ],
+            },
+    });
+    render(
+      <ProcedureEditor
+        http={caller}
+        copyOf={{
+          id: 'pr-1',
+          version: 1,
+          status: 'published',
+          name: 'Odd',
+          description: 'A partial identity',
+          steps: [
+            {
+              kind: 'verify',
+              description: 'Placed.',
+              check: {
+                kind: 'fact_predicate',
+                key: 'placed',
+                fact: {
+                  linkType: 'runs_on',
+                  source: { objectType: 'Service', identity: { name: 'web', zone: 'a' } },
+                  target: { objectId: '5f0c1a52-8a2e-4f3b-9c61-0d2b7e4a9f10' },
+                },
+              },
+            },
+          ],
+        }}
+        onProposed={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    return waitFor(() => {
+      const source = screen.getByTestId('procedure-step-check-fact-source');
+      expect(
+        within(source).getByTestId('procedure-step-check-fact-source-identity-missing').textContent,
+      ).toMatch(/还差身份字段 env/);
+      expect(
+        within(source).getByTestId('procedure-step-check-fact-source-identity-extra'),
+      ).toBeTruthy();
+    });
   });
 
   it('input that is not JSON is refused at its field, and nothing is sent (legacy 453)', async () => {

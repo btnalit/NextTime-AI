@@ -141,7 +141,10 @@ export type PredicateFormBlocker =
   | { readonly kind: 'double_not'; readonly at: string }
   | { readonly kind: 'empty_group'; readonly at: string };
 
-function valueDraft(value: unknown): Pick<PredicateConditionDraft, 'valueKind' | 'valueText'> {
+/** A JSON value as the form asks for it: its kind, and the text it is typed as. */
+export function predicateValueDraft(
+  value: unknown,
+): Pick<PredicateConditionDraft, 'valueKind' | 'valueText'> {
   if (typeof value === 'string') return { valueKind: 'string', valueText: value };
   if (typeof value === 'number') return { valueKind: 'number', valueText: String(value) };
   if (typeof value === 'boolean') return { valueKind: 'boolean', valueText: String(value) };
@@ -199,7 +202,7 @@ function nodeOf(
     uid: nextUid(),
     path,
     op: op as PredicateOp,
-    ...valueDraft(value.value),
+    ...predicateValueDraft(value.value),
     negated,
   };
 }
@@ -311,25 +314,52 @@ export function predicateDraftAsForm(draft: PredicateDraft): PredicateDraft | nu
 /** A condition's value as sent; what does not parse goes as the text typed (the schema then
  *  refuses it, and {@link predicateDraftProblems} says why at its place). */
 function conditionValue(node: PredicateConditionDraft): unknown {
-  switch (node.valueKind) {
+  return predicateValueOf(node.valueKind, node.valueText);
+}
+
+/** A value as the form typed it, as sent; what does not parse goes as the text typed. */
+export function predicateValueOf(kind: PredicateValueKind, text: string): unknown {
+  switch (kind) {
     case 'string':
-      return node.valueText;
+      return text;
     case 'number': {
-      const text = node.valueText.trim();
-      const number = Number(text);
-      return text !== '' && Number.isFinite(number) ? number : node.valueText;
+      const trimmed = text.trim();
+      const number = Number(trimmed);
+      return trimmed !== '' && Number.isFinite(number) ? number : text;
     }
     case 'boolean':
-      return node.valueText === 'true';
+      return text === 'true';
     case 'null':
       return null;
     case 'json':
       try {
-        return JSON.parse(node.valueText);
+        return JSON.parse(text);
       } catch {
-        return node.valueText;
+        return text;
       }
   }
+}
+
+/** Why a typed value does not parse as its kind — `null` when it does. */
+export function predicateValueProblem(
+  kind: PredicateValueKind,
+  text: string,
+  t: Translate,
+): string | null {
+  if (kind === 'number') {
+    const trimmed = text.trim();
+    return trimmed === '' || !Number.isFinite(Number(trimmed))
+      ? t('要填一个数字', 'Needs a number')
+      : null;
+  }
+  if (kind === 'json') {
+    try {
+      JSON.parse(text);
+    } catch {
+      return t('不是合法的 JSON', 'Not valid JSON');
+    }
+  }
+  return null;
 }
 
 /** Each node's place in the predicate as sent (`all.1`, `all.0.not`), by uid. */
@@ -413,19 +443,8 @@ export function predicateDraftProblems(draft: PredicateDraft, t: Translate): Map
     const at = written.paths.get(node.uid) ?? '';
     const value = at === '' ? 'value' : `${at}.value`;
     if (node.op === 'exists') return;
-    if (node.valueKind === 'number') {
-      const text = node.valueText.trim();
-      if (text === '' || !Number.isFinite(Number(text))) {
-        problems.set(value, t('要填一个数字', 'Needs a number'));
-      }
-    }
-    if (node.valueKind === 'json') {
-      try {
-        JSON.parse(node.valueText);
-      } catch {
-        problems.set(value, t('不是合法的 JSON', 'Not valid JSON'));
-      }
-    }
+    const problem = predicateValueProblem(node.valueKind, node.valueText, t);
+    if (problem !== null) problems.set(value, problem);
   };
   draft.root.children.forEach(visit);
   return problems;

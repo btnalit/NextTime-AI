@@ -36,6 +36,7 @@ import { Combobox } from '../kit/combobox.js';
 import { Field, describedBy } from '../kit/field.js';
 import { Select } from '../kit/select.js';
 import { Textarea } from '../kit/textarea.js';
+import { FactCheckEditor } from './FactCheckEditor.js';
 import { OperationStepFields } from './OperationStepFields.js';
 import { PredicateEditor } from './PredicateEditor.js';
 import { SchemaFieldsEditor } from './SchemaFieldsEditor.js';
@@ -660,7 +661,6 @@ export function VerifyCheckFields({
   const gateNames = new Map((gatekeepers ?? []).map((row) => [row.id, row.name]));
   const keyError = messages(errors, `${prefix}.key`, t);
   const paramsError = messages(errors, `${prefix}.check.params`, t);
-  const factError = messages(errors, `${prefix}.fact`, t);
   // What no field below shows: the check's own (its JSON, or a whole-check problem).
   const shown = [
     'key',
@@ -778,30 +778,15 @@ export function VerifyCheckFields({
         </>
       ) : null}
       {step.checkKind === 'fact_predicate' ? (
-        <Field
+        <FactCheckEditor
+          http={http}
           id={`${id}-fact`}
-          label={t('要判定的事实（JSON）', 'The Fact judged (JSON)')}
-          required
-          hint={t(
-            '例如 {"linkType": "runs_on", "source": {"objectType": "Service", "identity": {"name": "web"}}, "target": {"objectType": "Host", "identity": {"name": "h1"}}}；可再加 expect 判定它的属性。',
-            'E.g. {"linkType": "runs_on", "source": {"objectType": "Service", "identity": {"name": "web"}}, "target": {"objectType": "Host", "identity": {"name": "h1"}}}; an expect judges its properties.',
-          )}
-          error={factError}
-        >
-          <Textarea
-            className="input-mono"
-            id={`${id}-fact`}
-            aria-label={t('要判定的事实', 'The Fact judged')}
-            value={step.checkFactText}
-            onChange={(event) => onChange({ checkFactText: event.target.value })}
-            minRows={4}
-            spellCheck={false}
-            disabled={busy}
-            invalid={factError !== null}
-            aria-describedby={describedBy(`${id}-fact`, true, factError !== null)}
-            data-testid="procedure-step-check-fact"
-          />
-        </Field>
+          draft={step.checkFact}
+          errors={errorsUnder(errors, `${prefix}.fact`)}
+          busy={busy}
+          onChange={(checkFact) => onChange({ checkFact })}
+          testId="procedure-step-check-fact"
+        />
       ) : null}
       {step.checkKind === 'json' ? (
         <Textarea
