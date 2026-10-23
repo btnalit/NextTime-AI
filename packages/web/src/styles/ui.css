@@ -262,6 +262,19 @@
   font-weight: 600;
 }
 
+/* Legacy 436: next to actions the title keeps its line (a narrow screen broke 「镜像清单」 in the
+ * middle of the word); the actions take the squeeze and wrap, ending on the right. */
+.card-header-actions .card-title {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.card-actions {
+  min-width: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 /* ---- EmptyState ---------------------------------------------------------------------- */
 .empty-state {
   display: flex;
