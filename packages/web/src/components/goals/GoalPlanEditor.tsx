@@ -3,6 +3,7 @@ import {
   MAX_REVISION_REASON_CHARS,
   MAX_STEP_ATTEMPTS,
   type ReviseGoalResultWire,
+  SECRET_FIELD_MASK,
   type StepRunWire,
 } from '@nexttime/shared';
 import { useId, useMemo, useState } from 'react';
@@ -374,37 +375,31 @@ export function GoalPlanEditor({ goal, http, gateNames, onCancel, onDone }: Goal
   );
 }
 
-/** A refusal the editor shows on its fields — `null` for any other error (the confirm shows it). */
+/** A refusal the editor shows on its fields — `null` for any other error (the confirm shows it).
+ *  GO5c names the first place in `details.field` and every place (at most 20) in
+ *  `details.suspectedSecretPaths` / `details.paths`; each lands on its field. */
 function refusalFields(
   error: unknown,
   draft: PlanDraft,
   t: Translate,
 ): ReadonlyMap<FieldKey, string> | null {
   if (!(error instanceof HttpError)) return null;
-  const field = typeof error.details?.field === 'string' ? error.details.field : null;
-  if (error.code === 'credentials_in_text') {
-    const at = field === null ? 'plan' : fieldOfRefusal(field, draft);
-    return new Map([
-      [
-        at,
-        t(
-          `这里有像凭据的写法（token、key、密码的值，或 Bearer、Authorization、名称=值 这样的写法），已拒绝，什么也没改。把它改成描述，比如「用 deploy 账号的令牌」「密码见运维手册」，不要写值本身。${at === 'plan' && field ? `（字段：${field}）` : ''}`,
-          `This looks like it carries a credential (a token, key or password value, or a Bearer, Authorization or name=value form), so nothing was changed. Describe it instead — "the deploy account’s token", "password per the runbook" — never the value itself.${at === 'plan' && field ? ` (field: ${field})` : ''}`,
+  if (error.code === 'credentials_in_text' || error.code === 'redacted_text_submitted') {
+    const credential = error.code === 'credentials_in_text';
+    const listed = error.details?.[credential ? 'suspectedSecretPaths' : 'paths'];
+    const paths = [
+      ...new Set(
+        [error.details?.field, ...(Array.isArray(listed) ? listed : [])].filter(
+          (path): path is string => typeof path === 'string',
         ),
-      ],
-    ]);
-  }
-  if (error.code === 'redacted_text_submitted') {
-    const at = field === null ? 'plan' : fieldOfRefusal(field, draft);
-    return new Map([
-      [
-        at,
-        t(
-          `此处原文已遮蔽，请重新填写：[redacted] 是读出时遮住的疑似凭据，原样提交会把原文换成这个标记，所以已拒绝。${at === 'plan' && field ? `（字段：${field}）` : ''}`,
-          `The original here was masked; write it again: [redacted] stands for what looked like a credential, and sending it back would replace the original with the mark, so it was refused.${at === 'plan' && field ? ` (field: ${field})` : ''}`,
-        ),
-      ],
-    ]);
+      ),
+    ];
+    const fields = new Map<FieldKey, string>();
+    for (const path of paths.length > 0 ? paths : [null]) {
+      const at = path === null ? 'plan' : fieldOfRefusal(path, draft);
+      if (!fields.has(at)) fields.set(at, refusalText(credential, at, path, t));
+    }
+    return fields;
   }
   if (error.code === 'invalid_params' && Array.isArray(error.details?.problems)) {
     const fields = new Map<FieldKey, string>();
@@ -416,6 +411,47 @@ function refusalFields(
     return fields.size > 0 ? fields : null;
   }
   return null;
+}
+
+/** What a credential or masked-text refusal says where it lands: on a text the person writes here,
+ *  how to write it instead; on a part of a step or check the editor sends as it is, that it cannot
+ *  change here and what can be done. */
+function refusalText(credential: boolean, at: FieldKey, path: string | null, t: Translate): string {
+  const fixed =
+    /^step:[^:]+$/.test(at) || /^check:[^:]+$/.test(at)
+      ? at.startsWith('step:')
+        ? t(
+            '这一处在这一步的动作核对声明或步骤验收检查里，这里改不了：把这一步移除（它的记录仍然保留），或者在对话里让入口智能体修订。',
+            'This is in the step’s reconcile declarations or acceptance checks, which cannot change here: remove the step (its record stays), or ask the entry agent to revise it in a chat.',
+          )
+        : t(
+            '这一处在这条检查里，这里改不了：移除它，或者在对话里让入口智能体修订。',
+            'This is inside the check, which cannot change here: remove it, or ask the entry agent to revise it in a chat.',
+          )
+      : null;
+  const where = at === 'plan' && path ? t(`（位置：${path}）`, ` (at ${path})`) : '';
+  if (credential) {
+    return (
+      t(
+        '这里有像凭据的写法（token、key、密码的值，或 Bearer、Authorization、名称=值 这样的写法），已拒绝，什么也没改。',
+        'This looks like it carries a credential (a token, key or password value, or a Bearer, Authorization or name=value form), so nothing was changed.',
+      ) +
+      (fixed ??
+        t(
+          '把它改成描述，比如「用 deploy 账号的令牌」「密码见运维手册」，不要写值本身。',
+          ' Describe it instead — "the deploy account’s token", "password per the runbook" — never the value itself.',
+        )) +
+      where
+    );
+  }
+  return (
+    t(
+      `此处原文已遮蔽，请重新填写：${SECRET_FIELD_MASK} 是读出时遮住的疑似凭据，原样提交会把原文换成这个标记，所以已拒绝。`,
+      `The original here was masked; write it again: ${SECRET_FIELD_MASK} stands for what looked like a credential, and sending it back would replace the original with the mark, so it was refused.`,
+    ) +
+    (fixed ?? '') +
+    where
+  );
 }
 
 /** What sending does, for the confirm. */

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { WORKER_ID, goalDetail, stepRun } from '../components/goals/goal-fixtures.test-helpers.js';
+import {
+  GATE_ID,
+  WORKER_ID,
+  goalDetail,
+  stepRun,
+} from '../components/goals/goal-fixtures.test-helpers.js';
 import {
   type PlanDraft,
   budgetOf,
@@ -227,5 +232,68 @@ describe('lib/goal-plan-draft', () => {
       `step:${apply?.uid}`,
     );
     expect(fieldOfProblem('the plan is larger than 262144 bytes', draft)).toBe('plan');
+    expect(fieldOfProblem('acceptance[0] "certs": unknown gatekeeper', draft)).toBe(
+      `check:${check?.uid}`,
+    );
+    expect(fieldOfProblem('step "apply": acceptance[0] "x": prompt is empty', draft)).toBe(
+      `step:${apply?.uid}`,
+    );
+    expect(fieldOfRefusal('plan.steps.0.reconcile.0.check.params.token', draft)).toBe(
+      `step:${apply?.uid}`,
+    );
+    expect(fieldOfRefusal('plan.acceptance.0.check.params.token', draft)).toBe(
+      `check:${check?.uid}`,
+    );
+  });
+
+  it('a masked part the editor cannot change marks its step or check, which may then be removed', () => {
+    const base = goalDetail().planRevision;
+    const detail = paused({
+      planRevision: {
+        ...base,
+        plan: {
+          steps: [
+            base.plan.steps[0] as NonNullable<(typeof base.plan.steps)[number]>,
+            {
+              ...(base.plan.steps[1] as NonNullable<(typeof base.plan.steps)[number]>),
+              reconcile: [
+                {
+                  action: { gatekeeperId: GATE_ID, operation: 'cert.replace' },
+                  check: {
+                    gatekeeperId: GATE_ID,
+                    operation: 'cert.get',
+                    params: { token: '[redacted]' },
+                    expect: { path: 'ok', op: 'eq', value: true },
+                  },
+                },
+              ],
+            },
+          ],
+          acceptance: [
+            {
+              kind: 'observe_predicate',
+              key: 'certs',
+              check: {
+                gatekeeperId: GATE_ID,
+                operation: 'cert.list',
+                params: { auth: '[redacted]' },
+                expect: { path: 'expiring', op: 'eq', value: 0 },
+              },
+            },
+          ],
+        },
+      },
+    });
+    const draft = draftFromDetail(detail);
+    const apply = draft.steps[1];
+    const check = draft.acceptance[0];
+    const problems = draftProblems(draft, detail, zh);
+    expect(problems.get(`step:${apply?.uid}`)).toMatch(/动作核对声明里有遮蔽的原文/);
+    expect(problems.get(`check:${check?.uid}`)).toMatch(/这条检查里有遮蔽的原文/);
+    const removed = {
+      ...withStep(draft, 'apply', { removed: true }),
+      acceptance: draft.acceptance.map((item) => ({ ...item, removed: true })),
+    };
+    expect(draftProblems(removed, detail, zh).size).toBe(0);
   });
 });

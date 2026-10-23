@@ -392,6 +392,17 @@ export function draftProblems(
       );
     }
   }
+  for (const step of kept) {
+    const part = maskedPartOf(step.original);
+    if (part === null) continue;
+    problems.set(
+      `step:${step.uid}`,
+      t(
+        `这一步的${part === 'reconcile' ? '动作核对声明' : '步骤验收检查'}里有遮蔽的原文（${SECRET_FIELD_MASK}），这里改不了，原样提交会被拒绝：把这一步移除（它的记录仍然保留），或者在对话里让入口智能体修订。`,
+        `This step’s ${part === 'reconcile' ? 'reconcile declarations' : 'acceptance checks'} hold masked text (${SECRET_FIELD_MASK}) that cannot be changed here and would be refused as it is: remove the step (its record stays), or ask the entry agent to revise it in a chat.`,
+      ),
+    );
+  }
   const cycle = dependencyCycle(kept);
   if (cycle !== null) {
     const first = kept.find((step) => step.key === cycle[0]);
@@ -408,7 +419,18 @@ export function draftProblems(
   for (const check of draft.acceptance) {
     if (check.removed) continue;
     const isConfirm = check.original === null || check.original.kind === 'requester_confirm';
-    if (!isConfirm) continue;
+    if (!isConfirm) {
+      if (showsMask(check.original)) {
+        problems.set(
+          `check:${check.uid}`,
+          t(
+            `这条检查里有遮蔽的原文（${SECRET_FIELD_MASK}），这里改不了，原样提交会被拒绝：移除它，或者在对话里让入口智能体修订。`,
+            `This check holds masked text (${SECRET_FIELD_MASK}) that cannot be changed here and would be refused as it is: remove it, or ask the entry agent to revise it in a chat.`,
+          ),
+        );
+      }
+      continue;
+    }
     const at = `check:${check.uid}:prompt` as const;
     if (check.prompt.trim() === '') {
       problems.set(at, t('写上要请求人确认什么。', 'Say what the requester confirms.'));
@@ -457,6 +479,15 @@ export function draftProblems(
   return problems;
 }
 
+/** Which part of a step the editor sends as it is still holds the `[redacted]` mark: its reconcile
+ *  declarations or its own acceptance checks (a plan stored before GO5c, read back masked). */
+function maskedPartOf(step: PlanStep | null): 'reconcile' | 'acceptance' | null {
+  if (step === null) return null;
+  if (showsMask(step.reconcile)) return 'reconcile';
+  if (showsMask(step.acceptance)) return 'acceptance';
+  return null;
+}
+
 /** A cycle among the kept steps' dependencies, as keys, the first repeated at the end; `null`
  *  when none. */
 export function dependencyCycle(steps: readonly StepDraft[]): string[] | null {
@@ -486,8 +517,10 @@ export function dependencyCycle(steps: readonly StepDraft[]): string[] | null {
 
 /**
  * The field a refusal's `details.field` names (GO5c's `credentials_in_text` /
- * `redacted_text_submitted` on `revise_goal`): `reason`, `plan.steps.<i>…` (the i-th step sent,
- * `…input…` its input), `plan.acceptance.<i>…` (the i-th check sent). Anything else: the plan.
+ * `redacted_text_submitted` on `revise_goal`, and each of their listed paths): `reason`,
+ * `plan.steps.<i>…` (the i-th step sent: `…input…` its input, anything else in it — reconcile
+ * declarations, its own checks — the step), `plan.acceptance.<i>…` (the i-th check sent:
+ * `…prompt` its prompt, else the check). Anything else: the plan.
  */
 export function fieldOfRefusal(field: string, draft: PlanDraft): FieldKey {
   if (field === 'reason') return 'reason';
@@ -514,6 +547,13 @@ export function fieldOfRefusal(field: string, draft: PlanDraft): FieldKey {
 export function fieldOfProblem(problem: string, draft: PlanDraft): FieldKey {
   const path = /^(?:plan\.)?((?:steps|acceptance)\.\d+(?:\.[\w.]+)?):/.exec(problem);
   if (path?.[1]) return fieldOfRefusal(path[1], draft);
+  // A plan-level check: `acceptance[<i>] "<key>": …` (a step's own checks carry the step prefix).
+  const check = /^acceptance\[(\d+)\] "([^"]+)"/.exec(problem);
+  if (check) {
+    const sent = draft.acceptance.filter((item) => !item.removed);
+    const found = sent.find((item) => item.key === check[2]) ?? sent[Number(check[1])];
+    return found ? `check:${found.uid}` : 'plan';
+  }
   const named = /step "([^"]+)"/.exec(problem);
   if (named) {
     const step = draft.steps.find((item) => !item.removed && item.key === named[1]);

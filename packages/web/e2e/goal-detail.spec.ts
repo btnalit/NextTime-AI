@@ -523,15 +523,18 @@ test.describe('S11 GO6: operations on a goal (stand-in reads and operations)', (
  * holding a credential (400 `credentials_in_text`) or the `[redacted]` mark a read put in its place
  * (400 `redacted_text_submitted`) only once GO5c lands, so both refusals — and the revision that
  * then goes through — are stand-ins here, each naming its field in `details.field` the way GO5c's
- * contract says (`reason`, `plan.steps.<i>.input…`). The Workers to choose from are a stand-in too:
+ * contract says (`reason`, `plan.steps.<i>.input…`, every place in `paths`). The Workers to choose from are a stand-in too:
  * the CI stack has none published under the plan's Worker id.
  */
 test.describe('S11 GO6: revising the plan (stand-in reads, refusals and revision)', () => {
   test.skip(!OWNER_API_KEY, 'set WEB_E2E_BASE_URL and WEB_E2E_API_KEY to run this suite');
 
-  const refusal = (code: string, field: string) => ({
+  const refusal = (code: string, field: string, details: Record<string, unknown>) => ({
     status: 400,
-    json: { ok: false, error: { code, message: `${field}: refused`, details: { field } } },
+    json: {
+      ok: false,
+      error: { code, message: `${field}: refused`, details: { field, ...details } },
+    },
   });
   const workerVersion = (version: number) => ({
     id: WORKER,
@@ -586,8 +589,10 @@ test.describe('S11 GO6: revising the plan (stand-in reads, refusals and revision
       );
       const sent: unknown[] = [];
       const answers = [
-        refusal('credentials_in_text', 'reason'),
-        refusal('redacted_text_submitted', 'plan.steps.2.input'),
+        refusal('credentials_in_text', 'reason', { suspectedSecretValues: 1 }),
+        refusal('redacted_text_submitted', 'plan.steps.2.input.auth', {
+          paths: ['plan.steps.2.input.auth'],
+        }),
         answer('revise_goal', {
           goalRunId: GOAL,
           status: 'paused',

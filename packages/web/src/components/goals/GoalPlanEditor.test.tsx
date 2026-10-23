@@ -294,6 +294,33 @@ describe('the plan editor on the goal page (S11 GO6, revise_goal)', () => {
     expect(screen.getByTestId('goal-plan-refused')).toBeTruthy();
   });
 
+  it('puts every place a refusal lists on its own field', async () => {
+    const http = scriptedHttp(
+      handlers(paused(), workspace('p-alice', 'member'), {
+        revise_goal: () => {
+          throw new HttpError('capability_error', 'plan: refused', 'credentials_in_text', {
+            field: 'plan.steps.0.input.password',
+            suspectedSecretPaths: [
+              'plan.steps.0.input.password',
+              'plan.steps.1.reconcile.0.check.params.token',
+            ],
+            suspectedSecretValues: 2,
+          });
+        },
+      }),
+    );
+    renderPage(http);
+    await openEditor();
+    fireEvent.change(within(step('apply')).getByTestId('goal-plan-step-attempts'), {
+      target: { value: '3' },
+    });
+    await send();
+    await waitFor(() => expect(alerts(step('fetch'))).toMatch(/用 deploy 账号的令牌/));
+    expect(within(step('apply')).getByTestId('goal-plan-step-problem').textContent).toMatch(
+      /这里改不了：把这一步移除/,
+    );
+  });
+
   it('leaves without sending anything', async () => {
     const http = scriptedHttp(handlers(paused(), workspace('p-alice', 'member')));
     renderPage(http);
