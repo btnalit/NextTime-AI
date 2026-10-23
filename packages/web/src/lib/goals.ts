@@ -383,7 +383,10 @@ export function goalMilestoneText(milestone: GoalMilestone, t: Translate): strin
       );
     case 'finish_cancel':
       return milestone.cleanupPending
-        ? t('目标已取消，还有遗留要清理', 'Goal cancelled; some of what it started is left to clean up')
+        ? t(
+            '目标已取消，还有遗留要清理',
+            'Goal cancelled; some of what it started is left to clean up',
+          )
         : t('目标已取消', 'Goal cancelled');
     case 'cleanup_finished':
       return t('已取消目标的遗留已清理完', 'What the cancelled goal left behind is cleaned up');

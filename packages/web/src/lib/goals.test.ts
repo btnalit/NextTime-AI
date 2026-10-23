@@ -9,11 +9,11 @@ import {
 import { describe, expect, it } from 'vitest';
 import { goalRun } from '../components/goals/goal-fixtures.test-helpers.js';
 import {
+  type GoalMilestone,
   checkErrorLabel,
   exhaustedBudget,
   factCheckSentence,
   goalBudgetRows,
-  type GoalMilestone,
   goalMilestoneText,
   goalStateNote,
   goalStepProgress,
@@ -377,9 +377,9 @@ describe('goalMilestoneText (S11 GO5e-2)', () => {
   });
 
   it('a pause says why, a completion how it ended and on what, a revision its number', () => {
-    expect(
-      goalMilestoneText({ ...base, change: 'pause', pauseReason: 'needs_decision' }, zh),
-    ).toBe('目标已暂停：需要人决定');
+    expect(goalMilestoneText({ ...base, change: 'pause', pauseReason: 'needs_decision' }, zh)).toBe(
+      '目标已暂停：需要人决定',
+    );
     expect(
       goalMilestoneText(
         { ...base, change: 'complete', outcome: 'not_achieved', outcomeBasis: 'requester' },

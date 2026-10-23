@@ -91,7 +91,11 @@ export function SystemStatusLineView({ line, onOpen }: SystemStatusLineViewProps
     );
   }
   return (
-    <div className="system-status-line" data-testid="system-status-line" data-variant={line.variant}>
+    <div
+      className="system-status-line"
+      data-testid="system-status-line"
+      data-variant={line.variant}
+    >
       {body}
     </div>
   );

@@ -60,7 +60,7 @@ describe('buildTaskUpdateContent', () => {
 });
 
 describe('buildTaskUpdateContent — a goal step (S11 GO5e-2)', () => {
-  it("names the step and carries the goal and step key; without one, neither", () => {
+  it('names the step and carries the goal and step key; without one, neither', () => {
     const content = buildTaskUpdateContent({
       taskId: 'task-9',
       status: 'failed',

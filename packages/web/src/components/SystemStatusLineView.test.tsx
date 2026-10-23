@@ -107,13 +107,13 @@ describe('SystemStatusLineView', () => {
     expect(onOpen).toHaveBeenCalledTimes(1);
   });
 
-  it('S11 GO5e-2: a goal milestone reads in the reader\'s language with the goal\'s chip and opens the goal', () => {
+  it("S11 GO5e-2: a goal milestone reads in the reader's language with the goal's chip and opens the goal", () => {
     const onOpen = vi.fn();
     render(
       <SystemStatusLineView
         line={{
           variant: 'goal_update',
-          text: 'Goal goal-1 completed: achieved, on the platform\'s checks',
+          text: "Goal goal-1 completed: achieved, on the platform's checks",
           goalRunId: 'goal-1',
           change: 'complete',
           status: 'completed',
@@ -150,7 +150,7 @@ describe('SystemStatusLineView', () => {
         }}
       />,
     );
-    expect(screen.getByTestId('system-status-goal-step').textContent).toBe('目标步骤 report');
+    expect(screen.getByTestId('system-status-goal-step').textContent).toMatch(/^目标步骤 report$/);
     expect(screen.queryByText(/Goal step "report"/)).toBeNull();
     cleanup();
     render(

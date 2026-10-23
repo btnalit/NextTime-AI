@@ -316,9 +316,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           chatId: origin.id,
         }),
       );
-      await inTx(requester, (client) =>
-        endActivity(client, workspaceId, nextTurn, 'completed'),
-      );
+      await inTx(requester, (client) => endActivity(client, workspaceId, nextTurn, 'completed'));
       expect(leased.tasks).toEqual([updates[1]?.content]);
       expect(leased.pendingApprovals).toEqual([]);
     });
@@ -381,7 +379,11 @@ describe.runIf(DATABASE_URL !== undefined)(
           pauseReason: 'requested',
           heldByOwner: true,
         }),
-        expect.objectContaining({ change: 'release_hold', status: 'paused', pauseReason: 'requested' }),
+        expect.objectContaining({
+          change: 'release_hold',
+          status: 'paused',
+          pauseReason: 'requested',
+        }),
       ]);
       expect(contents[0]).not.toHaveProperty('pauseReason');
       expect(contents[3]).not.toHaveProperty('heldByOwner');
