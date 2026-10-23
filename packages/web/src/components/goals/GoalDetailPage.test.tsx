@@ -68,6 +68,29 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
     expect(screen.queryByTestId('goal-operations')).toBeNull();
   });
 
+  it('a goal judged by an independent review says that is not counted toward attainment; one the platform checked does not (S11 W1a)', async () => {
+    const reviewed = scriptedHttp(
+      baseHandlers(
+        goalDetail({ status: 'completed', outcome: 'achieved', outcomeBasis: 'reviewer_assessed' }),
+      ),
+    );
+    renderPage(reviewed);
+    const status = await screen.findByTestId('goal-status');
+    expect(within(status).getByTestId('outcome-proxy-note').textContent).toContain(
+      '代理指标，不计入达成率',
+    );
+    cleanup();
+
+    const checked = scriptedHttp(
+      baseHandlers(
+        goalDetail({ status: 'completed', outcome: 'achieved', outcomeBasis: 'verified_by_check' }),
+      ),
+    );
+    renderPage(checked);
+    expect(await screen.findByText('依据平台验收检查')).toBeTruthy();
+    expect(screen.queryByTestId('outcome-proxy-note')).toBeNull();
+  });
+
   it('a goal it may not see reads as not found, without saying which', async () => {
     const http = scriptedHttp({
       ...baseHandlers(goalDetail()),

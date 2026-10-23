@@ -204,3 +204,10 @@ export {
 } from './attribution.js';
 
 export type { LoadedSkillRef, ResolvedRunSkills } from './definition-content.js';
+export {
+  type RunEnvironment,
+  type RunRuntimeReport,
+  type RunSpec,
+  RunSpecSchema,
+  environmentDigest,
+} from './run-fingerprint.js';

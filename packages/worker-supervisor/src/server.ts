@@ -45,8 +45,11 @@
  *   POST /task/spawn              {taskId, workerRunId, workspaceId, onBehalfOf, capabilityHandle,
  *                                   image?, model?, systemPrompt?, skillsInline?,
  *                                   timeoutSec?}                                   [kernel]
- *                                  -> 200 {containerId, ip} | 400 | 403 (image not allowlisted)
+ *                                  -> 200 {containerId, ip, runtime} | 400
+ *                                     | 403 (image not allowlisted)
  *                                     | 409 runtime_image_incompatible (runtime-contract.ts)
+ *                                  `runtime` (S11 W1a, runtime-report.ts): the image id, its
+ *                                  version labels and the models.json digest of the container
  *   POST /task/:workerRunId/terminate -> 204 | 404                               [kernel]
  *   GET  /task/:workerRunId       -> 200 TaskStatus | 404                        [kernel]
  *   GET  /healthz                 -> 200 {status:"ok"}                  (public, PUBLIC_ROUTES)

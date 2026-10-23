@@ -4,11 +4,13 @@ import type {
   EpistemicStatus,
   ExecutionReadinessMissingCode,
   GateTransportKindWire,
+  OutcomeBasis,
   PrincipalKind,
   TaskFailureReason,
   TurnStatus,
   WorkerDefinitionKind,
 } from '@nexttime/shared';
+import { outcomeBasisTier } from '@nexttime/shared';
 import type { AuditResourceType, PlatformAuditResourceType } from './audit.js';
 import type { Translate } from './i18n.js';
 import { ownEntry } from './own.js';
@@ -592,4 +594,22 @@ export const CONTAINER_STATE_LABELS: Readonly<Record<ContainerState, BilingualLa
 
 export function containerStateLabel(state: string, t: Translate): string {
   return lookup(CONTAINER_STATE_LABELS, state, t);
+}
+
+/** S11 W1a: an outcome on a proxy basis — an agent's own report, a reviewer's assessment — is
+ *  shown, but never counted toward an attainment rate (`outcomeBasisTier` in `@nexttime/shared` is
+ *  the one rule, the same one E2's statistics use). `null` for the requester's word or a confirmed
+ *  check. */
+export function proxyOutcomeNote(
+  basis: OutcomeBasis,
+  t: Translate,
+): { readonly short: string; readonly detail: string } | null {
+  if (outcomeBasisTier(basis) !== 'proxy') return null;
+  return {
+    short: t('代理指标，不计入达成率', 'Proxy signal, not counted toward attainment'),
+    detail: t(
+      '达成率只算请求人的确认和平台验收检查',
+      'Attainment counts only the requester’s word and the platform’s checks',
+    ),
+  };
 }
