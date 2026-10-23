@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { HttpError } from '../../lib/http-client.js';
 import { EnableGateConfirm } from './EnableGateConfirm.js';
+import { governanceFields } from './governance-fixtures.test-helpers.js';
 
 /**
  * EnableGateConfirm.test.tsx (S8 W2-U1, audit J3/J4): the preview-then-confirm flow in front of
@@ -113,12 +114,18 @@ describe('EnableGateConfirm', () => {
             {
               name: 'container.restart',
               existing: {
-                mode: 'execute',
-                blastRadius: 'medium',
-                autoApprovable: false,
+                ...governanceFields({
+                  mode: 'execute',
+                  blastRadius: 'medium',
+                  autoApprovable: false,
+                }),
                 status: 'published',
               },
-              announced: { mode: 'execute', blastRadius: 'high', autoApprovable: false },
+              announced: governanceFields({
+                mode: 'execute',
+                blastRadius: 'high',
+                autoApprovable: false,
+              }),
               differs: true,
             },
           ],

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { HttpError } from '../../lib/http-client.js';
+import { governanceFields } from '../connect/governance-fixtures.test-helpers.js';
 import { GateInstanceDetailPanel } from './GateInstanceDetailPanel.js';
 
 /**
@@ -381,12 +382,16 @@ describe('GateInstanceDetailPanel', () => {
       changed: [
         {
           name: 'container_restart',
-          before: {
+          before: governanceFields({
             mode: 'execute' as const,
             blastRadius: 'medium' as const,
             autoApprovable: false,
-          },
-          after: { mode: 'execute' as const, blastRadius: 'low' as const, autoApprovable: true },
+          }),
+          after: governanceFields({
+            mode: 'execute' as const,
+            blastRadius: 'low' as const,
+            autoApprovable: true,
+          }),
           direction: 'loosened' as const,
           otherChangedFields: ['binding'],
         },
@@ -410,7 +415,7 @@ describe('GateInstanceDetailPanel', () => {
       const { onChanged } = renderPanel(http, gateInstance({ status: 'enabled', pendingManifest }));
       const block = screen.getByTestId('gate-instance-pending-manifest');
       expect(block.textContent).toContain('container_remove');
-      expect(block.textContent).toContain('container_restart: 影响级');
+      expect(block.textContent).toContain('container_restart：影响级');
       // Field names read as words, never the manifest's own key.
       expect(block.textContent).toContain('调用目标');
       expect(block.textContent).not.toContain('binding');

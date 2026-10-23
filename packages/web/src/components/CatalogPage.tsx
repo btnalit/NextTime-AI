@@ -1,8 +1,4 @@
-import type {
-  GateOwnedParamWire,
-  OperationGovernanceFieldsWire,
-  SkillDetailWire,
-} from '@nexttime/shared';
+import type { GateOwnedParamWire, SkillDetailWire } from '@nexttime/shared';
 import { visibleText } from '@nexttime/shared';
 import { type ReactNode, useId, useRef, useState } from 'react';
 import { invalidateCapability, useCapability, useCapabilityList } from '../hooks/useCapability.js';
@@ -71,6 +67,7 @@ import { WorkerEditorHost } from './catalog/WorkerEditorHost.js';
 import { gateOwnedParamsText } from './connect/GateOwnedParams.js';
 import {
   GovernanceChangeList,
+  type OperationClassificationWire,
   firstPublishConsequence,
   firstPublishNeedsConfirm,
   governanceConsequences,
@@ -405,8 +402,8 @@ function PublishGovernanceConfirm({
       }
       title={t('发布这个 Operation', 'Publish this operation')}
       description={t(
-        '这个草稿改变了当前生效版本的分类——分类决定它要不要人工审批、要不要授权。发布后替换当前版本。',
-        'This draft changes the classification of the version in effect — the classification decides whether it needs a person’s approval and a grant. Publishing replaces the current version.',
+        '这个草稿改了当前生效版本的治理字段——它们决定这个 Operation 要不要人工审批、要不要授权、调用方等不等审批结果。发布后替换当前版本。',
+        'This draft changes governance fields of the version in effect — they decide whether this operation needs a person’s approval and a grant, and whether the caller waits for the decision. Publishing replaces the current version.',
       )}
       target={actionKindTagText(row.name)}
       confirmLabel={t('发布', 'Publish')}
@@ -442,7 +439,7 @@ function PublishFirstVersionConfirm({
   testId,
 }: {
   readonly row: OperationCatalogRow;
-  readonly fields: OperationGovernanceFieldsWire;
+  readonly fields: OperationClassificationWire;
   readonly busy: boolean;
   /** An open credential question (`CredentialReview`) is unanswered. */
   readonly blocked: boolean;
@@ -485,13 +482,13 @@ function PublishFirstVersionConfirm({
 
 /** The fields a first-publish confirm reads — `null` when the row does not carry all three (an
  *  older kernel), so it falls back to the plain button rather than guessing. */
-function governanceFieldsOf(row: OperationCatalogRow): OperationGovernanceFieldsWire | null {
+function governanceFieldsOf(row: OperationCatalogRow): OperationClassificationWire | null {
   if (row.mode === undefined || row.blastRadius === undefined || row.autoApprovable === undefined) {
     return null;
   }
   return {
-    mode: row.mode as OperationGovernanceFieldsWire['mode'],
-    blastRadius: row.blastRadius as OperationGovernanceFieldsWire['blastRadius'],
+    mode: row.mode as OperationClassificationWire['mode'],
+    blastRadius: row.blastRadius as OperationClassificationWire['blastRadius'],
     autoApprovable: row.autoApprovable,
   };
 }

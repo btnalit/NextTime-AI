@@ -479,7 +479,8 @@ export const previewGateInstanceEnableHandler: CapabilityHandler = async (
 /**
  * `refresh_operation_governance(gatekeeperId, operationNames?)` (S8 W3-K1, leftover 79, audit
  * CO2): the owner-authorized write half of `preview_gate_instance_enable`'s `differs` flag —
- * applies the gate's currently-announced `mode`/`blastRadius`/`autoApprovable` to every selected,
+ * applies the gate's currently-announced governance fields (`mode`, `blastRadius`, `autoApprovable`,
+ * `awaitDecision`, `reads`, `writes` and the MCP hints — STATUS leftover 344) to every selected,
  * already-deployed Operation of `gatekeeperId` whose fields disagree with it. `gatekeeperId` here
  * is the workspace's own Gatekeeper Object id (not a platform `gateId`) — `findGateLinkByGatekeeper`
  * resolves which platform gate instance's manifest (if any) it was enabled from.

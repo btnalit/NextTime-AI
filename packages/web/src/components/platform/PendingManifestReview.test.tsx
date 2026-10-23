@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { governanceFields } from '../connect/governance-fixtures.test-helpers.js';
 import { PendingManifestReview } from './PendingManifestReview.js';
 
 afterEach(cleanup);
@@ -69,8 +70,16 @@ describe('PendingManifestReview', () => {
           changed: [
             {
               name: 'orders.lookup',
-              before: { mode: 'observe', blastRadius: 'low', autoApprovable: true },
-              after: { mode: 'observe', blastRadius: 'low', autoApprovable: true },
+              before: governanceFields({
+                mode: 'observe',
+                blastRadius: 'low',
+                autoApprovable: true,
+              }),
+              after: governanceFields({
+                mode: 'observe',
+                blastRadius: 'low',
+                autoApprovable: true,
+              }),
               direction: 'neutral',
               otherChangedFields: ['params_schema'],
               gateOwnedParams: [{ param: 'Authorization', location: 'header' }],
@@ -104,16 +113,32 @@ describe('PendingManifestReview', () => {
           changed: [
             {
               name: 'orders.lookup',
-              before: { mode: 'observe', blastRadius: 'low', autoApprovable: true },
-              after: { mode: 'observe', blastRadius: 'low', autoApprovable: true },
+              before: governanceFields({
+                mode: 'observe',
+                blastRadius: 'low',
+                autoApprovable: true,
+              }),
+              after: governanceFields({
+                mode: 'observe',
+                blastRadius: 'low',
+                autoApprovable: true,
+              }),
               direction: 'neutral',
               otherChangedFields: ['params_schema'],
               gateOwnedParams: [{ param: 'Authorization', location: 'header' }],
             },
             {
               name: 'orders.list',
-              before: { mode: 'observe', blastRadius: 'low', autoApprovable: true },
-              after: { mode: 'observe', blastRadius: 'low', autoApprovable: true },
+              before: governanceFields({
+                mode: 'observe',
+                blastRadius: 'low',
+                autoApprovable: true,
+              }),
+              after: governanceFields({
+                mode: 'observe',
+                blastRadius: 'low',
+                autoApprovable: true,
+              }),
               direction: 'neutral',
               otherChangedFields: ['binding'],
             },
@@ -163,8 +188,16 @@ describe('PendingManifestReview', () => {
           changed: [
             {
               name: 'orders.list',
-              before: { mode: 'observe', blastRadius: 'low', autoApprovable: true },
-              after: { mode: 'observe', blastRadius: 'low', autoApprovable: true },
+              before: governanceFields({
+                mode: 'observe',
+                blastRadius: 'low',
+                autoApprovable: true,
+              }),
+              after: governanceFields({
+                mode: 'observe',
+                blastRadius: 'low',
+                autoApprovable: true,
+              }),
               direction: 'neutral',
               otherChangedFields: ['binding'],
             },

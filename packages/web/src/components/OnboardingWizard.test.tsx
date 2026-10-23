@@ -5,6 +5,7 @@ import type { CapabilityCaller } from '../lib/clients.js';
 import type { GraphObjectRow } from '../lib/connections.js';
 import { HttpError } from '../lib/http-client.js';
 import { OnboardingWizard } from './OnboardingWizard.js';
+import { governanceFields } from './connect/governance-fixtures.test-helpers.js';
 
 afterEach(cleanup);
 
@@ -323,8 +324,12 @@ describe('OnboardingWizard', () => {
           status: 'draft',
           draftOf: 'obj-echo',
           governanceChange: {
-            before: { mode: 'observe', blastRadius: 'low', autoApprovable: true },
-            after: { mode: 'execute', blastRadius: 'medium', autoApprovable: true },
+            before: governanceFields({ mode: 'observe', blastRadius: 'low', autoApprovable: true }),
+            after: governanceFields({
+              mode: 'execute',
+              blastRadius: 'medium',
+              autoApprovable: true,
+            }),
             direction: 'tightened',
           },
           draftDigest: 'sha256:proposed',
@@ -401,8 +406,8 @@ describe('OnboardingWizard', () => {
         status: 'draft',
         draftOf: 'obj-echo',
         governanceChange: {
-          before: { mode: 'execute', blastRadius: 'high', autoApprovable: false },
-          after: { mode: 'observe', blastRadius: 'high', autoApprovable: false },
+          before: governanceFields({ mode: 'execute', blastRadius: 'high', autoApprovable: false }),
+          after: governanceFields({ mode: 'observe', blastRadius: 'high', autoApprovable: false }),
           direction: 'loosened',
         },
       }),
@@ -444,8 +449,8 @@ describe('OnboardingWizard', () => {
         status: 'draft',
         draftOf: 'obj-echo',
         governanceChange: {
-          before: { mode: 'observe', blastRadius: 'low', autoApprovable: true },
-          after: { mode: 'observe', blastRadius: 'low', autoApprovable: true },
+          before: governanceFields({ mode: 'observe', blastRadius: 'low', autoApprovable: true }),
+          after: governanceFields({ mode: 'observe', blastRadius: 'low', autoApprovable: true }),
           direction: 'neutral',
         },
       }),

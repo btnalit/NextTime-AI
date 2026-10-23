@@ -2189,33 +2189,7 @@
                           "autoApprovable": {
                             "type": "boolean"
                           },
-                          "blastRadius": {
-                            "enum": [
-                              "low",
-                              "medium",
-                              "high"
-                            ],
-                            "type": "string"
-                          },
-                          "mode": {
-                            "enum": [
-                              "observe",
-                              "execute"
-                            ],
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "mode",
-                          "blastRadius",
-                          "autoApprovable"
-                        ],
-                        "type": "object"
-                      },
-                      "before": {
-                        "additionalProperties": false,
-                        "properties": {
-                          "autoApprovable": {
+                          "awaitDecision": {
                             "type": "boolean"
                           },
                           "blastRadius": {
@@ -2226,18 +2200,122 @@
                             ],
                             "type": "string"
                           },
+                          "destructiveHint": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ]
+                          },
+                          "idempotentHint": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ]
+                          },
                           "mode": {
                             "enum": [
                               "observe",
                               "execute"
                             ],
                             "type": "string"
+                          },
+                          "readOnlyHint": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ]
+                          },
+                          "reads": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "writes": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
                           }
                         },
                         "required": [
                           "mode",
                           "blastRadius",
-                          "autoApprovable"
+                          "autoApprovable",
+                          "awaitDecision",
+                          "reads",
+                          "writes",
+                          "readOnlyHint",
+                          "destructiveHint",
+                          "idempotentHint"
+                        ],
+                        "type": "object"
+                      },
+                      "before": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "autoApprovable": {
+                            "type": "boolean"
+                          },
+                          "awaitDecision": {
+                            "type": "boolean"
+                          },
+                          "blastRadius": {
+                            "enum": [
+                              "low",
+                              "medium",
+                              "high"
+                            ],
+                            "type": "string"
+                          },
+                          "destructiveHint": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ]
+                          },
+                          "idempotentHint": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ]
+                          },
+                          "mode": {
+                            "enum": [
+                              "observe",
+                              "execute"
+                            ],
+                            "type": "string"
+                          },
+                          "readOnlyHint": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ]
+                          },
+                          "reads": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "writes": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          }
+                        },
+                        "required": [
+                          "mode",
+                          "blastRadius",
+                          "autoApprovable",
+                          "awaitDecision",
+                          "reads",
+                          "writes",
+                          "readOnlyHint",
+                          "destructiveHint",
+                          "idempotentHint"
                         ],
                         "type": "object"
                       },
@@ -3128,33 +3206,7 @@
                           "autoApprovable": {
                             "type": "boolean"
                           },
-                          "blastRadius": {
-                            "enum": [
-                              "low",
-                              "medium",
-                              "high"
-                            ],
-                            "type": "string"
-                          },
-                          "mode": {
-                            "enum": [
-                              "observe",
-                              "execute"
-                            ],
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "mode",
-                          "blastRadius",
-                          "autoApprovable"
-                        ],
-                        "type": "object"
-                      },
-                      "before": {
-                        "additionalProperties": false,
-                        "properties": {
-                          "autoApprovable": {
+                          "awaitDecision": {
                             "type": "boolean"
                           },
                           "blastRadius": {
@@ -3165,18 +3217,122 @@
                             ],
                             "type": "string"
                           },
+                          "destructiveHint": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ]
+                          },
+                          "idempotentHint": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ]
+                          },
                           "mode": {
                             "enum": [
                               "observe",
                               "execute"
                             ],
                             "type": "string"
+                          },
+                          "readOnlyHint": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ]
+                          },
+                          "reads": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "writes": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
                           }
                         },
                         "required": [
                           "mode",
                           "blastRadius",
-                          "autoApprovable"
+                          "autoApprovable",
+                          "awaitDecision",
+                          "reads",
+                          "writes",
+                          "readOnlyHint",
+                          "destructiveHint",
+                          "idempotentHint"
+                        ],
+                        "type": "object"
+                      },
+                      "before": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "autoApprovable": {
+                            "type": "boolean"
+                          },
+                          "awaitDecision": {
+                            "type": "boolean"
+                          },
+                          "blastRadius": {
+                            "enum": [
+                              "low",
+                              "medium",
+                              "high"
+                            ],
+                            "type": "string"
+                          },
+                          "destructiveHint": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ]
+                          },
+                          "idempotentHint": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ]
+                          },
+                          "mode": {
+                            "enum": [
+                              "observe",
+                              "execute"
+                            ],
+                            "type": "string"
+                          },
+                          "readOnlyHint": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ]
+                          },
+                          "reads": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "writes": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          }
+                        },
+                        "required": [
+                          "mode",
+                          "blastRadius",
+                          "autoApprovable",
+                          "awaitDecision",
+                          "reads",
+                          "writes",
+                          "readOnlyHint",
+                          "destructiveHint",
+                          "idempotentHint"
                         ],
                         "type": "object"
                       },
@@ -8741,33 +8897,7 @@
                           "autoApprovable": {
                             "type": "boolean"
                           },
-                          "blastRadius": {
-                            "enum": [
-                              "low",
-                              "medium",
-                              "high"
-                            ],
-                            "type": "string"
-                          },
-                          "mode": {
-                            "enum": [
-                              "observe",
-                              "execute"
-                            ],
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "mode",
-                          "blastRadius",
-                          "autoApprovable"
-                        ],
-                        "type": "object"
-                      },
-                      "before": {
-                        "additionalProperties": false,
-                        "properties": {
-                          "autoApprovable": {
+                          "awaitDecision": {
                             "type": "boolean"
                           },
                           "blastRadius": {
@@ -8778,18 +8908,122 @@
                             ],
                             "type": "string"
                           },
+                          "destructiveHint": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ]
+                          },
+                          "idempotentHint": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ]
+                          },
                           "mode": {
                             "enum": [
                               "observe",
                               "execute"
                             ],
                             "type": "string"
+                          },
+                          "readOnlyHint": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ]
+                          },
+                          "reads": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "writes": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
                           }
                         },
                         "required": [
                           "mode",
                           "blastRadius",
-                          "autoApprovable"
+                          "autoApprovable",
+                          "awaitDecision",
+                          "reads",
+                          "writes",
+                          "readOnlyHint",
+                          "destructiveHint",
+                          "idempotentHint"
+                        ],
+                        "type": "object"
+                      },
+                      "before": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "autoApprovable": {
+                            "type": "boolean"
+                          },
+                          "awaitDecision": {
+                            "type": "boolean"
+                          },
+                          "blastRadius": {
+                            "enum": [
+                              "low",
+                              "medium",
+                              "high"
+                            ],
+                            "type": "string"
+                          },
+                          "destructiveHint": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ]
+                          },
+                          "idempotentHint": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ]
+                          },
+                          "mode": {
+                            "enum": [
+                              "observe",
+                              "execute"
+                            ],
+                            "type": "string"
+                          },
+                          "readOnlyHint": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ]
+                          },
+                          "reads": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "writes": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          }
+                        },
+                        "required": [
+                          "mode",
+                          "blastRadius",
+                          "autoApprovable",
+                          "awaitDecision",
+                          "reads",
+                          "writes",
+                          "readOnlyHint",
+                          "destructiveHint",
+                          "idempotentHint"
                         ],
                         "type": "object"
                       },
@@ -9201,33 +9435,7 @@
                       "autoApprovable": {
                         "type": "boolean"
                       },
-                      "blastRadius": {
-                        "enum": [
-                          "low",
-                          "medium",
-                          "high"
-                        ],
-                        "type": "string"
-                      },
-                      "mode": {
-                        "enum": [
-                          "observe",
-                          "execute"
-                        ],
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "mode",
-                      "blastRadius",
-                      "autoApprovable"
-                    ],
-                    "type": "object"
-                  },
-                  "before": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "autoApprovable": {
+                      "awaitDecision": {
                         "type": "boolean"
                       },
                       "blastRadius": {
@@ -9238,18 +9446,122 @@
                         ],
                         "type": "string"
                       },
+                      "destructiveHint": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      },
+                      "idempotentHint": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      },
                       "mode": {
                         "enum": [
                           "observe",
                           "execute"
                         ],
                         "type": "string"
+                      },
+                      "readOnlyHint": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      },
+                      "reads": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      "writes": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
                       }
                     },
                     "required": [
                       "mode",
                       "blastRadius",
-                      "autoApprovable"
+                      "autoApprovable",
+                      "awaitDecision",
+                      "reads",
+                      "writes",
+                      "readOnlyHint",
+                      "destructiveHint",
+                      "idempotentHint"
+                    ],
+                    "type": "object"
+                  },
+                  "before": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "autoApprovable": {
+                        "type": "boolean"
+                      },
+                      "awaitDecision": {
+                        "type": "boolean"
+                      },
+                      "blastRadius": {
+                        "enum": [
+                          "low",
+                          "medium",
+                          "high"
+                        ],
+                        "type": "string"
+                      },
+                      "destructiveHint": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      },
+                      "idempotentHint": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      },
+                      "mode": {
+                        "enum": [
+                          "observe",
+                          "execute"
+                        ],
+                        "type": "string"
+                      },
+                      "readOnlyHint": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      },
+                      "reads": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      "writes": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "mode",
+                      "blastRadius",
+                      "autoApprovable",
+                      "awaitDecision",
+                      "reads",
+                      "writes",
+                      "readOnlyHint",
+                      "destructiveHint",
+                      "idempotentHint"
                     ],
                     "type": "object"
                   },
@@ -18222,33 +18534,7 @@
                                 "autoApprovable": {
                                   "type": "boolean"
                                 },
-                                "blastRadius": {
-                                  "enum": [
-                                    "low",
-                                    "medium",
-                                    "high"
-                                  ],
-                                  "type": "string"
-                                },
-                                "mode": {
-                                  "enum": [
-                                    "observe",
-                                    "execute"
-                                  ],
-                                  "type": "string"
-                                }
-                              },
-                              "required": [
-                                "mode",
-                                "blastRadius",
-                                "autoApprovable"
-                              ],
-                              "type": "object"
-                            },
-                            "before": {
-                              "additionalProperties": false,
-                              "properties": {
-                                "autoApprovable": {
+                                "awaitDecision": {
                                   "type": "boolean"
                                 },
                                 "blastRadius": {
@@ -18259,18 +18545,122 @@
                                   ],
                                   "type": "string"
                                 },
+                                "destructiveHint": {
+                                  "type": [
+                                    "boolean",
+                                    "null"
+                                  ]
+                                },
+                                "idempotentHint": {
+                                  "type": [
+                                    "boolean",
+                                    "null"
+                                  ]
+                                },
                                 "mode": {
                                   "enum": [
                                     "observe",
                                     "execute"
                                   ],
                                   "type": "string"
+                                },
+                                "readOnlyHint": {
+                                  "type": [
+                                    "boolean",
+                                    "null"
+                                  ]
+                                },
+                                "reads": {
+                                  "items": {
+                                    "type": "string"
+                                  },
+                                  "type": "array"
+                                },
+                                "writes": {
+                                  "items": {
+                                    "type": "string"
+                                  },
+                                  "type": "array"
                                 }
                               },
                               "required": [
                                 "mode",
                                 "blastRadius",
-                                "autoApprovable"
+                                "autoApprovable",
+                                "awaitDecision",
+                                "reads",
+                                "writes",
+                                "readOnlyHint",
+                                "destructiveHint",
+                                "idempotentHint"
+                              ],
+                              "type": "object"
+                            },
+                            "before": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "autoApprovable": {
+                                  "type": "boolean"
+                                },
+                                "awaitDecision": {
+                                  "type": "boolean"
+                                },
+                                "blastRadius": {
+                                  "enum": [
+                                    "low",
+                                    "medium",
+                                    "high"
+                                  ],
+                                  "type": "string"
+                                },
+                                "destructiveHint": {
+                                  "type": [
+                                    "boolean",
+                                    "null"
+                                  ]
+                                },
+                                "idempotentHint": {
+                                  "type": [
+                                    "boolean",
+                                    "null"
+                                  ]
+                                },
+                                "mode": {
+                                  "enum": [
+                                    "observe",
+                                    "execute"
+                                  ],
+                                  "type": "string"
+                                },
+                                "readOnlyHint": {
+                                  "type": [
+                                    "boolean",
+                                    "null"
+                                  ]
+                                },
+                                "reads": {
+                                  "items": {
+                                    "type": "string"
+                                  },
+                                  "type": "array"
+                                },
+                                "writes": {
+                                  "items": {
+                                    "type": "string"
+                                  },
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "mode",
+                                "blastRadius",
+                                "autoApprovable",
+                                "awaitDecision",
+                                "reads",
+                                "writes",
+                                "readOnlyHint",
+                                "destructiveHint",
+                                "idempotentHint"
                               ],
                               "type": "object"
                             },
@@ -19858,33 +20248,7 @@
                       "autoApprovable": {
                         "type": "boolean"
                       },
-                      "blastRadius": {
-                        "enum": [
-                          "low",
-                          "medium",
-                          "high"
-                        ],
-                        "type": "string"
-                      },
-                      "mode": {
-                        "enum": [
-                          "observe",
-                          "execute"
-                        ],
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "mode",
-                      "blastRadius",
-                      "autoApprovable"
-                    ],
-                    "type": "object"
-                  },
-                  "before": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "autoApprovable": {
+                      "awaitDecision": {
                         "type": "boolean"
                       },
                       "blastRadius": {
@@ -19895,18 +20259,122 @@
                         ],
                         "type": "string"
                       },
+                      "destructiveHint": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      },
+                      "idempotentHint": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      },
                       "mode": {
                         "enum": [
                           "observe",
                           "execute"
                         ],
                         "type": "string"
+                      },
+                      "readOnlyHint": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      },
+                      "reads": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      "writes": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
                       }
                     },
                     "required": [
                       "mode",
                       "blastRadius",
-                      "autoApprovable"
+                      "autoApprovable",
+                      "awaitDecision",
+                      "reads",
+                      "writes",
+                      "readOnlyHint",
+                      "destructiveHint",
+                      "idempotentHint"
+                    ],
+                    "type": "object"
+                  },
+                  "before": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "autoApprovable": {
+                        "type": "boolean"
+                      },
+                      "awaitDecision": {
+                        "type": "boolean"
+                      },
+                      "blastRadius": {
+                        "enum": [
+                          "low",
+                          "medium",
+                          "high"
+                        ],
+                        "type": "string"
+                      },
+                      "destructiveHint": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      },
+                      "idempotentHint": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      },
+                      "mode": {
+                        "enum": [
+                          "observe",
+                          "execute"
+                        ],
+                        "type": "string"
+                      },
+                      "readOnlyHint": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      },
+                      "reads": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      "writes": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "mode",
+                      "blastRadius",
+                      "autoApprovable",
+                      "awaitDecision",
+                      "reads",
+                      "writes",
+                      "readOnlyHint",
+                      "destructiveHint",
+                      "idempotentHint"
                     ],
                     "type": "object"
                   },
@@ -24974,6 +25442,9 @@
                   "autoApprovable": {
                     "type": "boolean"
                   },
+                  "awaitDecision": {
+                    "type": "boolean"
+                  },
                   "blastRadius": {
                     "enum": [
                       "low",
@@ -24982,18 +25453,54 @@
                     ],
                     "type": "string"
                   },
+                  "destructiveHint": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "idempotentHint": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
                   "mode": {
                     "enum": [
                       "observe",
                       "execute"
                     ],
                     "type": "string"
+                  },
+                  "readOnlyHint": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "reads": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "writes": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
                   }
                 },
                 "required": [
                   "mode",
                   "blastRadius",
-                  "autoApprovable"
+                  "autoApprovable",
+                  "awaitDecision",
+                  "reads",
+                  "writes",
+                  "readOnlyHint",
+                  "destructiveHint",
+                  "idempotentHint"
                 ],
                 "type": "object"
               },
@@ -25018,6 +25525,9 @@
                   "autoApprovable": {
                     "type": "boolean"
                   },
+                  "awaitDecision": {
+                    "type": "boolean"
+                  },
                   "blastRadius": {
                     "enum": [
                       "low",
@@ -25026,12 +25536,36 @@
                     ],
                     "type": "string"
                   },
+                  "destructiveHint": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "idempotentHint": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
                   "mode": {
                     "enum": [
                       "observe",
                       "execute"
                     ],
                     "type": "string"
+                  },
+                  "readOnlyHint": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "reads": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
                   },
                   "status": {
                     "enum": [
@@ -25040,12 +25574,24 @@
                       "deprecated"
                     ],
                     "type": "string"
+                  },
+                  "writes": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
                   }
                 },
                 "required": [
                   "mode",
                   "blastRadius",
                   "autoApprovable",
+                  "awaitDecision",
+                  "reads",
+                  "writes",
+                  "readOnlyHint",
+                  "destructiveHint",
+                  "idempotentHint",
                   "status"
                 ],
                 "type": "object"
@@ -25308,6 +25854,9 @@
                   "autoApprovable": {
                     "type": "boolean"
                   },
+                  "awaitDecision": {
+                    "type": "boolean"
+                  },
                   "blastRadius": {
                     "enum": [
                       "low",
@@ -25316,18 +25865,54 @@
                     ],
                     "type": "string"
                   },
+                  "destructiveHint": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "idempotentHint": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
                   "mode": {
                     "enum": [
                       "observe",
                       "execute"
                     ],
                     "type": "string"
+                  },
+                  "readOnlyHint": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "reads": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "writes": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
                   }
                 },
                 "required": [
                   "mode",
                   "blastRadius",
-                  "autoApprovable"
+                  "autoApprovable",
+                  "awaitDecision",
+                  "reads",
+                  "writes",
+                  "readOnlyHint",
+                  "destructiveHint",
+                  "idempotentHint"
                 ],
                 "type": "object"
               },
@@ -25352,6 +25937,9 @@
                   "autoApprovable": {
                     "type": "boolean"
                   },
+                  "awaitDecision": {
+                    "type": "boolean"
+                  },
                   "blastRadius": {
                     "enum": [
                       "low",
@@ -25360,12 +25948,36 @@
                     ],
                     "type": "string"
                   },
+                  "destructiveHint": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "idempotentHint": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
                   "mode": {
                     "enum": [
                       "observe",
                       "execute"
                     ],
                     "type": "string"
+                  },
+                  "readOnlyHint": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "reads": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
                   },
                   "status": {
                     "enum": [
@@ -25374,12 +25986,24 @@
                       "deprecated"
                     ],
                     "type": "string"
+                  },
+                  "writes": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
                   }
                 },
                 "required": [
                   "mode",
                   "blastRadius",
                   "autoApprovable",
+                  "awaitDecision",
+                  "reads",
+                  "writes",
+                  "readOnlyHint",
+                  "destructiveHint",
+                  "idempotentHint",
                   "status"
                 ],
                 "type": "object"
@@ -29130,33 +29754,7 @@
                     "autoApprovable": {
                       "type": "boolean"
                     },
-                    "blastRadius": {
-                      "enum": [
-                        "low",
-                        "medium",
-                        "high"
-                      ],
-                      "type": "string"
-                    },
-                    "mode": {
-                      "enum": [
-                        "observe",
-                        "execute"
-                      ],
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "mode",
-                    "blastRadius",
-                    "autoApprovable"
-                  ],
-                  "type": "object"
-                },
-                "before": {
-                  "additionalProperties": false,
-                  "properties": {
-                    "autoApprovable": {
+                    "awaitDecision": {
                       "type": "boolean"
                     },
                     "blastRadius": {
@@ -29167,18 +29765,122 @@
                       ],
                       "type": "string"
                     },
+                    "destructiveHint": {
+                      "type": [
+                        "boolean",
+                        "null"
+                      ]
+                    },
+                    "idempotentHint": {
+                      "type": [
+                        "boolean",
+                        "null"
+                      ]
+                    },
                     "mode": {
                       "enum": [
                         "observe",
                         "execute"
                       ],
                       "type": "string"
+                    },
+                    "readOnlyHint": {
+                      "type": [
+                        "boolean",
+                        "null"
+                      ]
+                    },
+                    "reads": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "writes": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
                     }
                   },
                   "required": [
                     "mode",
                     "blastRadius",
-                    "autoApprovable"
+                    "autoApprovable",
+                    "awaitDecision",
+                    "reads",
+                    "writes",
+                    "readOnlyHint",
+                    "destructiveHint",
+                    "idempotentHint"
+                  ],
+                  "type": "object"
+                },
+                "before": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "autoApprovable": {
+                      "type": "boolean"
+                    },
+                    "awaitDecision": {
+                      "type": "boolean"
+                    },
+                    "blastRadius": {
+                      "enum": [
+                        "low",
+                        "medium",
+                        "high"
+                      ],
+                      "type": "string"
+                    },
+                    "destructiveHint": {
+                      "type": [
+                        "boolean",
+                        "null"
+                      ]
+                    },
+                    "idempotentHint": {
+                      "type": [
+                        "boolean",
+                        "null"
+                      ]
+                    },
+                    "mode": {
+                      "enum": [
+                        "observe",
+                        "execute"
+                      ],
+                      "type": "string"
+                    },
+                    "readOnlyHint": {
+                      "type": [
+                        "boolean",
+                        "null"
+                      ]
+                    },
+                    "reads": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "writes": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "mode",
+                    "blastRadius",
+                    "autoApprovable",
+                    "awaitDecision",
+                    "reads",
+                    "writes",
+                    "readOnlyHint",
+                    "destructiveHint",
+                    "idempotentHint"
                   ],
                   "type": "object"
                 },
@@ -31050,33 +31752,7 @@
                   "autoApprovable": {
                     "type": "boolean"
                   },
-                  "blastRadius": {
-                    "enum": [
-                      "low",
-                      "medium",
-                      "high"
-                    ],
-                    "type": "string"
-                  },
-                  "mode": {
-                    "enum": [
-                      "observe",
-                      "execute"
-                    ],
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "mode",
-                  "blastRadius",
-                  "autoApprovable"
-                ],
-                "type": "object"
-              },
-              "before": {
-                "additionalProperties": false,
-                "properties": {
-                  "autoApprovable": {
+                  "awaitDecision": {
                     "type": "boolean"
                   },
                   "blastRadius": {
@@ -31087,18 +31763,122 @@
                     ],
                     "type": "string"
                   },
+                  "destructiveHint": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "idempotentHint": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
                   "mode": {
                     "enum": [
                       "observe",
                       "execute"
                     ],
                     "type": "string"
+                  },
+                  "readOnlyHint": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "reads": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "writes": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
                   }
                 },
                 "required": [
                   "mode",
                   "blastRadius",
-                  "autoApprovable"
+                  "autoApprovable",
+                  "awaitDecision",
+                  "reads",
+                  "writes",
+                  "readOnlyHint",
+                  "destructiveHint",
+                  "idempotentHint"
+                ],
+                "type": "object"
+              },
+              "before": {
+                "additionalProperties": false,
+                "properties": {
+                  "autoApprovable": {
+                    "type": "boolean"
+                  },
+                  "awaitDecision": {
+                    "type": "boolean"
+                  },
+                  "blastRadius": {
+                    "enum": [
+                      "low",
+                      "medium",
+                      "high"
+                    ],
+                    "type": "string"
+                  },
+                  "destructiveHint": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "idempotentHint": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "mode": {
+                    "enum": [
+                      "observe",
+                      "execute"
+                    ],
+                    "type": "string"
+                  },
+                  "readOnlyHint": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "reads": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "writes": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "blastRadius",
+                  "autoApprovable",
+                  "awaitDecision",
+                  "reads",
+                  "writes",
+                  "readOnlyHint",
+                  "destructiveHint",
+                  "idempotentHint"
                 ],
                 "type": "object"
               },
@@ -38697,33 +39477,7 @@
                           "autoApprovable": {
                             "type": "boolean"
                           },
-                          "blastRadius": {
-                            "enum": [
-                              "low",
-                              "medium",
-                              "high"
-                            ],
-                            "type": "string"
-                          },
-                          "mode": {
-                            "enum": [
-                              "observe",
-                              "execute"
-                            ],
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "mode",
-                          "blastRadius",
-                          "autoApprovable"
-                        ],
-                        "type": "object"
-                      },
-                      "before": {
-                        "additionalProperties": false,
-                        "properties": {
-                          "autoApprovable": {
+                          "awaitDecision": {
                             "type": "boolean"
                           },
                           "blastRadius": {
@@ -38734,18 +39488,122 @@
                             ],
                             "type": "string"
                           },
+                          "destructiveHint": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ]
+                          },
+                          "idempotentHint": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ]
+                          },
                           "mode": {
                             "enum": [
                               "observe",
                               "execute"
                             ],
                             "type": "string"
+                          },
+                          "readOnlyHint": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ]
+                          },
+                          "reads": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "writes": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
                           }
                         },
                         "required": [
                           "mode",
                           "blastRadius",
-                          "autoApprovable"
+                          "autoApprovable",
+                          "awaitDecision",
+                          "reads",
+                          "writes",
+                          "readOnlyHint",
+                          "destructiveHint",
+                          "idempotentHint"
+                        ],
+                        "type": "object"
+                      },
+                      "before": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "autoApprovable": {
+                            "type": "boolean"
+                          },
+                          "awaitDecision": {
+                            "type": "boolean"
+                          },
+                          "blastRadius": {
+                            "enum": [
+                              "low",
+                              "medium",
+                              "high"
+                            ],
+                            "type": "string"
+                          },
+                          "destructiveHint": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ]
+                          },
+                          "idempotentHint": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ]
+                          },
+                          "mode": {
+                            "enum": [
+                              "observe",
+                              "execute"
+                            ],
+                            "type": "string"
+                          },
+                          "readOnlyHint": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ]
+                          },
+                          "reads": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "writes": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          }
+                        },
+                        "required": [
+                          "mode",
+                          "blastRadius",
+                          "autoApprovable",
+                          "awaitDecision",
+                          "reads",
+                          "writes",
+                          "readOnlyHint",
+                          "destructiveHint",
+                          "idempotentHint"
                         ],
                         "type": "object"
                       },

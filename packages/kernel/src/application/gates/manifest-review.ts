@@ -6,6 +6,7 @@ import type {
   PendingGateManifestChangeWire,
 } from '@nexttime/shared';
 import {
+  OPERATION_GOVERNANCE_KEYS,
   gateOwnedParamsOfDefinition,
   operationGovernanceChange,
 } from '../../governance/gatekeepers/index.js';
@@ -78,8 +79,6 @@ export function toWireGateOperation(operation: Operation): GateOperationSummaryW
   };
 }
 
-const GOVERNANCE_KEYS: ReadonlySet<string> = new Set(['mode', 'blast_radius', 'auto_approvable']);
-
 export interface AnnouncedManifestDiff {
   readonly added: GateOperationSummaryWire[];
   readonly removed: GateOperationSummaryWire[];
@@ -112,7 +111,8 @@ export function diffAnnouncedManifest(
     changed.push({
       name,
       ...operationGovernanceChange(previous, operation),
-      otherChangedFields: differing.filter((key) => !GOVERNANCE_KEYS.has(key)).sort(),
+      // Every governance field is in `before` / `after` (STATUS leftover 344); the rest is listed.
+      otherChangedFields: differing.filter((key) => !OPERATION_GOVERNANCE_KEYS.has(key)).sort(),
       ...(gateOwnedParams.length > 0
         ? {
             gateOwnedParams: gateOwnedParams.map(({ param, location }) => ({ param, location })),

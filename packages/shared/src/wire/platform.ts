@@ -551,25 +551,35 @@ export const GateHostedDefinitionWireSchema = z
   .strict();
 export type GateHostedDefinitionWire = z.infer<typeof GateHostedDefinitionWireSchema>;
 
-/** S8 W3-K1 (leftover 79): the three fields `refresh_operation_governance` reads/writes and
- *  `preview_gate_instance_enable`'s own `differs` already compared — shared here so the two never
- *  drift on what "governance fields" means (`governance/gatekeepers/manifest.ts`'s
- *  `OperationGovernanceFields` is this same shape on the kernel side). */
+/** S8 W3-K1 (leftover 79; every field since STATUS leftover 344): an Operation's governance —
+ *  everything about how a call of it is reviewed that the workspace or the gate may change without
+ *  changing what the gate runs — as `refresh_operation_governance` reads and writes it and every
+ *  confirm compares it (`governance/gatekeepers/governance-fields.ts`'s `OperationGovernanceFields`
+ *  is this same shape on the kernel side). `reads` / `writes`: the object types a call reads and
+ *  writes; the three hints are an MCP tool's own annotations, `null` when it declares none. */
 export const OperationGovernanceFieldsWireSchema = z
   .object({
     mode: OperationModeSchema,
     blastRadius: BlastRadiusSchema,
     autoApprovable: z.boolean(),
+    awaitDecision: z.boolean(),
+    reads: z.array(z.string()),
+    writes: z.array(z.string()),
+    readOnlyHint: z.boolean().nullable(),
+    destructiveHint: z.boolean().nullable(),
+    idempotentHint: z.boolean().nullable(),
   })
   .strict();
 export type OperationGovernanceFieldsWire = z.infer<typeof OperationGovernanceFieldsWireSchema>;
 
-/** R-19 (decision D-17): the one direction a change to those three fields takes, decided by the
- *  kernel (`governance/gatekeepers/manifest.ts`'s `operationGovernanceChangeDirection`, built on
- *  `classifyOperationGovernanceChange`) and never re-derived by a client. `loosened`: every changed
- *  field lowers the friction (a lower blast radius, auto-approvable false → true, execute →
- *  observe); `tightened`: every changed field raises it; `mixed`: some of each, so it loosens at
- *  least one field; `neutral`: none of the three changed. */
+/** R-19 (decision D-17): the one direction a change to those fields takes, decided by the kernel
+ *  (`governance/gatekeepers/governance-fields.ts`'s `operationGovernanceChangeDirection`, field by
+ *  field by the same rules the change-plan classifier applies to an Operation,
+ *  `OPERATION_FIELD_RULES`) and never re-derived by a client. `loosened`: every changed field lowers
+ *  the friction (a lower blast radius, auto-approvable false → true, execute → observe, no longer
+ *  awaiting the decision, more types read or written, an MCP hint that lets auto-approval apply,
+ *  any change of the read-only hint); `tightened`: every changed field raises it or is proven not
+ *  to lower it; `mixed`: some of each, so it loosens at least one field; `neutral`: none changed. */
 export const OperationGovernanceChangeDirectionSchema = z.enum([
   'loosened',
   'tightened',
@@ -592,7 +602,7 @@ export const OperationGovernanceChangeWireSchema = z
 export type OperationGovernanceChangeWire = z.infer<typeof OperationGovernanceChangeWireSchema>;
 
 /** R-18 (decision D-18): one Operation an already-decided gate re-announced differently from the
- *  manifest in effect. `before` / `after` / `direction` cover the three governance fields;
+ *  manifest in effect. `before` / `after` / `direction` cover the governance fields;
  *  `otherChangedFields` names any other changed field of the announced Operation (`binding`,
  *  `params_schema`, `reversibility`, …; never `description`, which is not reviewed). */
 export const PendingGateManifestChangeWireSchema = OperationGovernanceChangeWireSchema.extend({
@@ -847,8 +857,8 @@ export const GateInstanceEnablePreviewOperationPresentWireSchema = z
     }).strict(),
     /** What the gate's manifest announces for the same name right now. */
     announced: OperationGovernanceFieldsWireSchema,
-    /** `true` when `existing` and `announced` disagree on mode/blastRadius/autoApprovable — CO2's
-     *  "deployed Operation whose fields no longer match the announced manifest" case. Surfaced
+    /** `true` when `existing` and `announced` disagree on a governance field (`reads` / `writes` as
+     *  sets) — CO2's "deployed Operation whose fields no longer match the announced manifest" case. Surfaced
      *  here; `refresh_operation_governance` (leftover 79) is the owner-authorized capability that
      *  actually corrects it — never done by this preview or by `enable_gate_instance` itself. */
     differs: z.boolean(),
