@@ -2405,6 +2405,45 @@ function WorkerDetailView({
 }) {
   const t = useT();
   const name = workerLabel(row, t);
+  // Legacy 441: the gates a Worker may act on, by name and linked to the gate — not only as ids in
+  // the definition below.
+  const gatekeeperNames = useGatekeeperDirectory(http).names;
+  const gates = Array.isArray(row.definition.gates)
+    ? row.definition.gates.filter((id): id is string => typeof id === 'string')
+    : [];
+  const items: KeyValueItem[] = [];
+  if (typeof row.definition.description === 'string') {
+    items.push({
+      key: 'description',
+      label: t('描述', 'Description'),
+      value: row.definition.description,
+    });
+  }
+  if (row.kind === 'worker') {
+    items.push({
+      key: 'gates',
+      label: t('可作用的门', 'Gates it acts on'),
+      value:
+        gates.length === 0 ? (
+          <span data-testid="worker-detail-gates-none">
+            {t('无：它不能对任何系统动手', 'None: it cannot act on any system')}
+          </span>
+        ) : (
+          <span className="row-wrap" data-testid="worker-detail-gates">
+            {gates.map((id) => (
+              <RefChip
+                key={id}
+                kind="gatekeeper"
+                id={id}
+                name={nameOf(gatekeeperNames, id)}
+                href={hrefs.gatekeeper(id)}
+                size="s"
+              />
+            ))}
+          </span>
+        ),
+    });
+  }
   return (
     <div className="stack" data-testid="worker-detail" data-worker-key={workerKey(row)}>
       <header className="stack-s">
@@ -2424,17 +2463,7 @@ function WorkerDetailView({
         <PublishableStepper status={row.status} testId="worker-detail-stepper" />
       </header>
 
-      {typeof row.definition.description === 'string' ? (
-        <KeyValue
-          items={[
-            {
-              key: 'description',
-              label: t('描述', 'Description'),
-              value: row.definition.description,
-            },
-          ]}
-        />
-      ) : null}
+      {items.length > 0 ? <KeyValue items={items} /> : null}
 
       <div className="stack-s">
         <span className="section-title">{t('定义', 'Definition')}</span>
