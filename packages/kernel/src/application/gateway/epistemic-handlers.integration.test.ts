@@ -290,7 +290,186 @@ describe.runIf(DATABASE_URL !== undefined)(
         )) as { rootType: string; chain: unknown[] };
         expect(chain.rootType).toBe('decision');
         expect(chain.chain.length).toBeGreaterThan(0);
+
+        // Legacy 421: the ruling is about the Conflict, which a member who cannot see both
+        // Facts (here: both rest on the owner's private Sources) does not see — so neither is the
+        // ruling (its reason, both Fact ids), on any read.
+        const [stored] = await withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerId },
+          async (client) =>
+            (
+              await client.query<{ conflict_id: string | null }>(
+                'select conflict_id from decisions where workspace_id = $1 and id = $2',
+                [workspaceId, decision.id],
+              )
+            ).rows,
+          { skipRoleSwitch: true },
+        );
+        expect(stored?.conflict_id).toBe(conflict.id);
+        const memberCaller = handleCaller(workspaceId, memberId, READ_CAPABILITIES);
+        const memberPage = (await dispatchCapability({ pool }, memberCaller, 'query_decisions', {
+          limit: 100,
+        })) as { items: Array<{ id: string }> };
+        expect(memberPage.items.map((item) => item.id)).not.toContain(decision.id);
+        await expect(
+          dispatchCapability({ pool }, memberCaller, 'decision_impact', {
+            decisionId: decision.id,
+          }),
+        ).rejects.toThrow(/not found/i);
       }
+    });
+
+    // Legacy 421 (review #493): the losing Fact is read under its own visibility, the ruling under
+    // the Conflict's. A member whose Fact loses to the owner's private one sees that their Fact was
+    // invalidated by a ruling, never the person's reason for it.
+    it("a ruling's reason stays with the Conflict, not on the losing Fact (legacy 421)", async () => {
+      const { objectA, objectB } = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => ({
+          objectA: await store.upsertObject(client, workspaceId, {
+            objectType: 'test.host',
+            identity: { hostname: `ruling-${randomUUID()}` },
+          }),
+          objectB: await store.upsertObject(client, workspaceId, {
+            objectType: 'test.service',
+            identity: { name: `ruling-svc-${randomUUID()}` },
+          }),
+        }),
+      );
+      const fact = (port: number) => ({
+        linkType: 'test.runs_on',
+        sourceObjectId: objectB.id,
+        targetObjectId: objectA.id,
+        properties: { port },
+      });
+      // The member's own Fact (workspace-visible), then the owner's from a private Source the
+      // member cannot see — so the member cannot see the Conflict between them either.
+      const memberFact = await withWorkspace(
+        pool,
+        { workspaceId, principalId: memberId },
+        async (client) => {
+          const activity = await startActivity(client, workspaceId, { kind: 'test.ingest' });
+          return store.assertFact(
+            client,
+            workspaceId,
+            { id: memberId, kind: 'human' },
+            { ...fact(81), activityId: activity.id },
+          );
+        },
+      );
+      const ownerFact = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          const source = await registerPrivateSource(client, workspaceId, {
+            kind: 'test.collector',
+            ownerPrincipalId: ownerId,
+          });
+          const activity = await startActivity(client, workspaceId, { kind: 'test.ingest' });
+          await recordSourceObservation(client, workspaceId, {
+            sourceId: source.id,
+            activityId: activity.id,
+          });
+          return store.assertFact(
+            client,
+            workspaceId,
+            { id: ownerId, kind: 'human' },
+            { ...fact(80), activityId: activity.id },
+          );
+        },
+      );
+      const ownerReader = handleCaller(workspaceId, ownerId, READ_CAPABILITIES);
+      const conflicts = (await dispatchCapability({ pool }, ownerReader, 'list_conflicts', {
+        status: 'open',
+        factId: memberFact.id,
+      })) as { items: Array<{ id: string; factAId: string; factBId: string }> };
+      const conflict = conflicts.items[0];
+      if (!conflict) throw new Error('expected a Conflict between the two Facts');
+      const resolution = conflict.factAId === ownerFact.id ? 'keep_a' : 'keep_b';
+      const reason = 'the private collector on box-7 says port 80';
+      await dispatchCapability(
+        { pool },
+        humanCaller(workspaceId, ownerId, 'owner'),
+        'resolve_conflict',
+        { conflictId: conflict.id, resolution, reason },
+      );
+
+      const ruling = `resolve_conflict ${conflict.id}: ${resolution}`;
+      const storedReason = async () =>
+        (
+          await withWorkspace(
+            pool,
+            { workspaceId, principalId: ownerId },
+            (client) =>
+              client.query<{ invalidation_reason: string | null }>(
+                'select invalidation_reason from links where workspace_id = $1 and id = $2',
+                [workspaceId, memberFact.id],
+              ),
+            { skipRoleSwitch: true },
+          )
+        ).rows[0]?.invalidation_reason;
+      // Written without the reason …
+      expect(await storedReason()).toBe(ruling);
+
+      const memberHuman = humanCaller(workspaceId, memberId, 'member');
+      const memberReads = async () => {
+        const explained = await dispatchCapability({ pool }, memberHuman, 'explain', {
+          nodeId: memberFact.id,
+        });
+        const read = await withWorkspace(pool, { workspaceId, principalId: memberId }, (client) =>
+          store.getFactForUpdate(client, workspaceId, memberFact.id),
+        );
+        return { explained: JSON.stringify(explained), read: read.invalidationReason };
+      };
+      let seen = await memberReads();
+      expect(seen.explained).toContain(ruling);
+      expect(seen.explained).not.toContain('box-7');
+      expect(seen.read).toBe(ruling);
+
+      // … and a reason a ruling wrote before (the stored row kept as it is, I11) is left out of
+      // every Fact read: `explain`, a Fact read, `decision_impact`'s Facts.
+      await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          await client.query('set local session_replication_role = replica');
+          await client.query(
+            'update links set invalidation_reason = $3 where workspace_id = $1 and id = $2',
+            [workspaceId, memberFact.id, `${ruling} (${reason})`],
+          );
+        },
+        { skipRoleSwitch: true },
+      );
+      expect(await storedReason()).toBe(`${ruling} (${reason})`);
+      seen = await memberReads();
+      expect(seen.explained).toContain(ruling);
+      expect(seen.explained).not.toContain('box-7');
+      expect(seen.read).toBe(ruling);
+
+      // The member reads no ruling at all; the owner, who sees the Conflict, reads its reason from
+      // the ruling's Decision — and its Facts without it.
+      const memberDecisions = (await dispatchCapability(
+        { pool },
+        handleCaller(workspaceId, memberId, READ_CAPABILITIES),
+        'query_decisions',
+        { limit: 100 },
+      )) as { items: Array<{ rationale: Record<string, unknown> | null }> };
+      expect(
+        memberDecisions.items.filter((item) => item.rationale?.conflictId === conflict.id),
+      ).toEqual([]);
+      const ownerDecisions = (await dispatchCapability({ pool }, ownerReader, 'query_decisions', {
+        limit: 100,
+      })) as { items: Array<{ id: string; rationale: Record<string, unknown> | null }> };
+      const decision = ownerDecisions.items.find(
+        (item) => item.rationale?.conflictId === conflict.id,
+      );
+      expect(decision?.rationale?.reason).toBe(reason);
+      const impact = (await dispatchCapability({ pool }, ownerReader, 'decision_impact', {
+        decisionId: decision?.id,
+      })) as { facts: Array<{ id: string; invalidationReason: string | null }> };
+      expect(impact.facts.find((f) => f.id === memberFact.id)?.invalidationReason).toBe(ruling);
     });
 
     // S8 W1-C (leftover 48 "list_conflicts 无对象 / Fact 筛选"): a second, independent open
@@ -718,12 +897,14 @@ describe.runIf(DATABASE_URL !== undefined)(
         'rotate the deploy key, PGPASSWORD=[redacted]',
       );
 
-      // The losing Fact's invalidation reason quotes the ruling's reason: scrubbed when written.
+      // The losing Fact's invalidation reason names the ruling, never its reason (legacy 421).
       const loser = conflict.factAId === factAId ? factBId : factAId;
       const explainedFact = (await dispatchCapability({ pool }, reader, 'explain', {
         nodeId: loser,
       })) as { fact: { invalidationReason: string | null } };
-      expect(explainedFact.fact.invalidationReason).toContain('TOKEN=[redacted]');
+      expect(explainedFact.fact.invalidationReason).toBe(
+        `resolve_conflict ${conflict.id}: ${conflict.factAId === factAId ? 'keep_a' : 'keep_b'}`,
+      );
       const stored = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
         client.query<{ invalidation_reason: string }>(
           'select invalidation_reason from links where workspace_id = $1 and id = $2',

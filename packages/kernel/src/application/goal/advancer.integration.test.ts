@@ -4955,6 +4955,12 @@ describe.runIf(DATABASE_URL !== undefined)(
             note: 'checked the folder myself',
           },
         });
+        // Legacy 421: about the run — read by its owner (human channel) and its requester.
+        const [subject] = await raw<{ goal_run_id: string | null }>(
+          'select goal_run_id from decisions where workspace_id = $1 and id = $2',
+          [workspaceId, confirmed.decisionId],
+        );
+        expect(subject?.goal_run_id).toBe(goalRunId);
 
         await advance(goalRunId, requester);
         expect(await goalOf(goalRunId)).toMatchObject({

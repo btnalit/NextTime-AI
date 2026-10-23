@@ -213,3 +213,56 @@ describe('ProvenanceToolsSection pickers', () => {
     expect(input.value).toBe('');
   });
 });
+
+/** Legacy 421: a Decision the reader may not see answers like a missing one — the tools say so. */
+describe('ProvenanceToolsSection — Decisions the reader may not see', () => {
+  const notFound = () =>
+    Promise.reject(new HttpError('capability_error', 'no such decision', 'not_found'));
+
+  it('causal chain: a 404 says the node may be one the reader may not see', async () => {
+    const http = scriptedHttp({ ...baseHandlers, causal_chain: notFound });
+    render(<ProvenanceToolsSection http={http} />);
+    fireEvent.change(screen.getByLabelText('节点类型'), { target: { value: 'decision' } });
+    fireEvent.change(screen.getByLabelText('起点 ID'), { target: { value: 'dec-hidden' } });
+    fireEvent.submit(screen.getByTestId('causal-chain-form'));
+    const banner = await screen.findByTestId('causal-chain-error');
+    expect(banner.getAttribute('data-error-code')).toBe('not_found');
+    expect(banner.textContent).toMatch(/找不到这个节点，或者你无权查看它/);
+    expect(banner.textContent).toMatch(/审批和核对的决定只对能看到那个动作请求的人显示/);
+  });
+
+  it('precedents and query: an empty list says it shows only Decisions the reader may see', async () => {
+    const http = scriptedHttp({
+      ...baseHandlers,
+      query_decisions: () => ({ items: [] }),
+      find_precedents: () => ({ items: [] }),
+    });
+    render(<ProvenanceToolsSection http={http} />);
+    fireEvent.click(screen.getByRole('button', { name: '查询决定' }));
+    expect((await screen.findByTestId('precedents-empty')).textContent).toMatch(
+      /^没有你能查看的匹配决定。/,
+    );
+
+    await pickComboboxOption(screen.getByTestId('precedents-action-kind'), 'container_restart');
+    fireEvent.submit(screen.getByTestId('precedents-form'));
+    await waitFor(() =>
+      expect(http.calls.filter((c) => c.name === 'find_precedents')).toHaveLength(1),
+    );
+    expect((await screen.findByTestId('precedents-empty')).textContent).toMatch(
+      /别人私聊里的决定、你看不到的冲突的裁决也不显示/,
+    );
+  });
+
+  it('the recent-Decisions picker with nothing to offer says why', async () => {
+    const http = scriptedHttp({ ...baseHandlers, query_decisions: () => ({ items: [] }) });
+    render(<ProvenanceToolsSection http={http} />);
+    fireEvent.change(screen.getByLabelText('节点类型'), { target: { value: 'decision' } });
+    const box = screen.getByTestId('causal-chain-node-id');
+    await waitFor(() => expect(http.calls.some((c) => c.name === 'query_decisions')).toBe(true));
+    fireEvent.focus(box);
+    fireEvent.keyDown(box, { key: 'ArrowDown' });
+    expect((await screen.findByTestId('causal-chain-node-id-empty')).textContent).toMatch(
+      /^还没有你能查看的决定；可直接粘贴 ID。/,
+    );
+  });
+});

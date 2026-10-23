@@ -13,6 +13,7 @@ import {
   provenanceNodeSource,
 } from '../../lib/audit-pickers.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { decisionNotFoundText, noVisibleDecisionsText } from '../../lib/decision-visibility.js';
 import { actionKindTagText, formatDateTime, formatRelative } from '../../lib/format.js';
 import { auditHrefForNode } from '../../lib/graph-route.js';
 import { isoToLocalInput, localInputToIso } from '../../lib/graph-view.js';
@@ -152,6 +153,8 @@ function CausalChainTool({ http }: { readonly http: CapabilityCaller }) {
         <ErrorBanner
           error={state.error}
           title={t('无法追溯因果链', 'Could not trace the causal chain')}
+          // Legacy 421: a Decision the reader may not see answers exactly like a missing one.
+          overrides={{ not_found: decisionNotFoundText(t) }}
           testId="causal-chain-error"
         />
       ) : null}
@@ -390,7 +393,10 @@ function PrecedentsTool({ http }: { readonly http: CapabilityCaller }) {
       {state.items !== null ? (
         <ul className="stack-s" data-testid="precedents-result">
           {state.items.length === 0 ? (
-            <li className="text-3 text-small">{t('没有匹配的决定', 'No matching Decisions')}</li>
+            // Legacy 421: an empty list may hide Decisions the reader may not see; it says so.
+            <li className="text-3 text-small" data-testid="precedents-empty">
+              {noVisibleDecisionsText(t)}
+            </li>
           ) : (
             state.items.map((decision) => (
               <li key={decision.id} className="data-row" data-testid="precedent-row">

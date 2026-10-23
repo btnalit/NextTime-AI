@@ -79,15 +79,18 @@ export type {
 // `openConflict` directly) and decisions.ts's for the four read-only capabilities.
 export {
   ConflictNotFoundError,
+  conflictRulingInvalidationReason,
   getConflictForUpdate,
   listConflicts,
   markConflictResolved,
   openConflict,
   resolveFactOrigin,
   sameFactOrigin,
+  shownInvalidationReason,
 } from './conflicts.js';
 export type {
   ConflictRow,
+  ConflictRuling,
   ConflictsPage,
   FactOrigin,
   ListConflictsInput,
@@ -111,3 +114,11 @@ export type {
   FindPrecedentsInput,
   QueryDecisionsInput,
 } from './decisions.js';
+
+// Legacy 421: a Decision is read by whoever may see its subject (decision-visibility.ts).
+export {
+  GATEKEEPER_GRANT_RESOURCE_TYPE,
+  actionRequestVisibleToCallerSql,
+  decisionVisibleSql,
+} from './decision-visibility.js';
+export type { DecisionViewer } from './decision-visibility.js';

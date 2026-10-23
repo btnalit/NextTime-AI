@@ -7,7 +7,11 @@ import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { SqlGraphStore } from '../graph/index.js';
 import { startActivity } from './activities.js';
-import { listConflicts } from './conflicts.js';
+import {
+  conflictRulingInvalidationReason,
+  listConflicts,
+  shownInvalidationReason,
+} from './conflicts.js';
 import { queryDecisions } from './decisions.js';
 import { recordSourceObservation, registerPrivateSource } from './sources.js';
 
@@ -25,6 +29,39 @@ const DATABASE_URL = process.env.DATABASE_URL;
 
 const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
+
+// Legacy 421 (review #493): the reason a ruling writes on a losing Fact, and how a Fact read shows
+// one — pure, no database.
+describe('a ruling on the losing Fact', () => {
+  const conflictId = '0b6f3c1e-5d2a-4c7b-9e8f-1a2b3c4d5e6f';
+
+  it('names the Conflict and how it was settled, never the reason', () => {
+    expect(conflictRulingInvalidationReason(conflictId, 'keep_b')).toBe(
+      `resolve_conflict ${conflictId}: keep_b`,
+    );
+  });
+
+  it("reads a reason a ruling wrote before without the person's reason; anything else as free text", () => {
+    for (const ruling of ['keep_a', 'keep_b', 'invalidate_both'] as const) {
+      expect(
+        shownInvalidationReason(`resolve_conflict ${conflictId}: ${ruling} (port 80 (per box-7))`),
+      ).toBe(`resolve_conflict ${conflictId}: ${ruling}`);
+    }
+    expect(shownInvalidationReason(conflictRulingInvalidationReason(conflictId, 'keep_a'))).toBe(
+      `resolve_conflict ${conflictId}: keep_a`,
+    );
+    expect(shownInvalidationReason(null)).toBeNull();
+    expect(shownInvalidationReason('not_reobserved')).toBe('not_reobserved');
+    // Not a ruling's form (no Conflict id, an unknown choice): kept, as free text.
+    expect(shownInvalidationReason('resolve_conflict later: keep_a (because)')).toBe(
+      'resolve_conflict later: keep_a (because)',
+    );
+    expect(shownInvalidationReason(`resolve_conflict ${conflictId}: merge (because)`)).toBe(
+      `resolve_conflict ${conflictId}: merge (because)`,
+    );
+    expect(shownInvalidationReason('stale\u202e')).toBe('stale\\u{202E}');
+  });
+});
 
 describe.runIf(DATABASE_URL !== undefined)(
   'conflict detection (integration, real Postgres)',
@@ -869,10 +906,12 @@ describe.runIf(DATABASE_URL !== undefined)(
         const seenDecisions = new Set<string>();
         cursor = undefined;
         for (let page = 0; page < 50 && seenDecisions.size < 2; page++) {
-          const result = await queryDecisions(client, workspaceId, {
-            limit: 1,
-            ...(cursor ? { cursor } : {}),
-          });
+          const result = await queryDecisions(
+            client,
+            workspaceId,
+            { limit: 1, ...(cursor ? { cursor } : {}) },
+            { principalId: ownerId, seesEveryGoalRun: true, seesEveryActionRequest: true },
+          );
           for (const item of result.items) {
             if (decisionIds.includes(item.id)) seenDecisions.add(item.id);
           }
