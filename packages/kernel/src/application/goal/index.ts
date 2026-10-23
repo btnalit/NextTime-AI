@@ -26,7 +26,10 @@
  * observed by the same executor. GO4c adds checks judged on a Fact of the graph, the goal's and a
  * step's (`plan.ts` `fact_predicate`; the Fact read and judged by `fact-check.ts`, under the same
  * executor; what may serve as evidence held by the database, goal/0007). GO5a adds what the `goal`
- * reads return and who may read a run (`views.ts`).
+ * reads return and who may read a run (`views.ts`). GO5b adds rejecting a proposal and binding a
+ * confirmation to the revision read (`service.ts`), and sorts every refusal into not allowed for
+ * this caller (`GoalRunForbiddenError`), not now (`GoalRunStateError`) and malformed
+ * (`GoalRunInputError`) — the `goal` capabilities' 403, 409 and 400.
  *
  * Boundaries: it lives in `application` because the advancer creates Tasks (`application/task`) and
  * withdraws ActionRequests (`governance/approval`) in the transaction that moves a StepRun.
@@ -85,12 +88,18 @@ export {
 } from './fact-check.js';
 
 export {
+  type ConfirmGoalRunInput,
+  type ConfirmedGoalRun,
   type CreateGoalRunInput,
   type CreatedGoalRun,
+  GoalRunForbiddenError,
+  GoalRunInputError,
   GoalRunNotFoundError,
   GoalRunStateError,
+  type RejectGoalRunInput,
   confirmGoalRun,
   createGoalRun,
+  rejectGoalRun,
 } from './service.js';
 
 export {

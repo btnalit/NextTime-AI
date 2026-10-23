@@ -1,4 +1,4 @@
-import type { GoalRunPauseAuthority, GoalRunStatus, Role, StepRunStatus } from '@nexttime/shared';
+import type { GoalRunPauseAuthority, GoalRunStatus, StepRunStatus } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { listStepActionOutcomes, withdrawStepActions } from '../../governance/approval/index.js';
 import { listStepLiveTasks } from '../task/index.js';
@@ -7,15 +7,21 @@ import { actionDisposition, stepActionEffect } from './disposition.js';
 import { type GoalMoveActor, moveGoalRun, moveStepRun } from './moves.js';
 import { samePlanEntry } from './plan.js';
 import { getPlanRevision, lockStepRuns } from './reads.js';
-import { GoalRunNotFoundError, GoalRunStateError, lockGoalRun } from './service.js';
+import {
+  GoalRunForbiddenError,
+  GoalRunNotFoundError,
+  GoalRunStateError,
+  lockGoalRun,
+} from './service.js';
 import { recordGoalRunTransition } from './transition-log.js';
-import type { GoalRunRow, StepRunRow } from './types.js';
+import type { GoalControlActor, GoalRunRow, StepRunRow } from './types.js';
 
 /**
  * application/goal/control (S11 GO3a; plan §4.1, §4.8): a person stopping a GoalRun — pause,
- * resume, cancel. The capabilities that expose them (`pause_goal`, `resume_goal`, `cancel_goal`)
- * are GO5; like `confirmGoalRun`, these run in the caller's transaction and enforce what a
- * capability must not be able to skip. Each takes the GoalRun lock first, then its StepRuns'.
+ * resume, cancel. The capabilities that expose them (`pause_goal`, `resume_goal`, `cancel_goal`,
+ * `release_goal_hold`, S11 GO5b: `application/gateway/goal-handlers.ts`) take the actor from the
+ * authenticated caller; like `confirmGoalRun`, these run in the caller's transaction and enforce
+ * what a capability must not be able to skip. Each takes the GoalRun lock first, then its StepRuns'.
  *
  * Who may: stopping — pause, cancel — is the requester's or a workspace owner's (an owner may stop
  * anything in the workspace, the rule `cancel_task` applies, D-21). Resuming is the requester's
@@ -51,13 +57,11 @@ import type { GoalRunRow, StepRunRow } from './types.js';
  *     (`cancelling.ts`) terminates the Tasks and waits for the executing requests.
  *
  * A call that finds the run already where it asks for (paused, cancelling or cancelled) changes
- * nothing; any other status it does not apply to is a {@link GoalRunStateError}.
+ * nothing; any other status it does not apply to is a {@link GoalRunStateError}, and a caller who
+ * may not make the call a {@link GoalRunForbiddenError}.
  */
 
-export interface GoalControlActor {
-  readonly principalId: string;
-  readonly role: Role;
-}
+export type { GoalControlActor };
 
 export interface GoalControlInput {
   readonly goalRunId: string;
@@ -87,7 +91,7 @@ async function lockControlledRun(
   if (!goal) throw new GoalRunNotFoundError(input.goalRunId);
   const requester = goal.onBehalfOf === input.actor.principalId;
   if (!requester && !(may === 'stop' && input.actor.role === 'owner')) {
-    throw new GoalRunStateError(
+    throw new GoalRunForbiddenError(
       may === 'stop'
         ? 'only the requester or a workspace owner stops a goal run'
         : 'only the requester resumes a goal run',
@@ -139,7 +143,9 @@ export async function pauseGoalRun(
     return { status: goal.status, changed: true };
   }
   if (goal.status !== 'running' && goal.status !== 'verifying') {
-    throw new GoalRunStateError(`goal run ${goal.id} is ${goal.status}; only a running run pauses`);
+    throw new GoalRunStateError(
+      `goal run ${goal.id} is ${goal.status}; only a running or verifying run pauses`,
+    );
   }
   const status = await moveGoalRun(client, personOf(input), goal, goal.status, 'pause', {
     pauseReason: 'requested',
@@ -158,7 +164,7 @@ export async function releaseGoalRunHold(
   const goal = await lockGoalRun(client, workspaceId, input.goalRunId);
   if (!goal) throw new GoalRunNotFoundError(input.goalRunId);
   if (input.actor.role !== 'owner') {
-    throw new GoalRunStateError('only a workspace owner lifts a hold on a goal run');
+    throw new GoalRunForbiddenError('only a workspace owner lifts a hold on a goal run');
   }
   if (goal.status !== 'paused' || goal.pausedByAuthority !== 'owner') {
     return { status: goal.status, changed: false };

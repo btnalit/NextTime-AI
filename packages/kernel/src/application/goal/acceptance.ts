@@ -5,6 +5,7 @@ import {
   type GoalAcceptanceCheckStatus,
   type GoalOutcomeBasis,
   type GoalRunStatus,
+  MAX_GOAL_NOTE_CHARS,
   type ObjectiveOutcome,
   type ObservationCheck,
   type StepAcceptanceState,
@@ -12,7 +13,7 @@ import {
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { listStepActionOutcomes } from '../../governance/approval/index.js';
-import { redactedForAudit } from '../../governance/redaction/index.js';
+import { redactedForAudit, refuseCredentialText } from '../../governance/redaction/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { listGoalRunLiveTaskSteps } from '../task/index.js';
 import {
@@ -23,21 +24,27 @@ import {
   readCurrentAcceptanceRound,
 } from './acceptance-checks.js';
 import { markGoalRunDue } from './advancer.js';
-import type { GoalControlActor } from './control.js';
 import { actionDisposition } from './disposition.js';
 import { moveGoalRun, moveStepRun } from './moves.js';
 import { isPlatformAcceptanceCheck, roundAcceptance } from './plan.js';
 import { getGoalRun, getPlanRevision, listStepRuns, lockStepRuns } from './reads.js';
-import { GoalRunNotFoundError, GoalRunStateError, lockGoalRun } from './service.js';
-import type { GoalRunRow } from './types.js';
+import {
+  GoalRunForbiddenError,
+  GoalRunInputError,
+  GoalRunNotFoundError,
+  GoalRunStateError,
+  lockGoalRun,
+} from './service.js';
+import type { GoalControlActor, GoalRunRow } from './types.js';
 
 /**
  * application/goal/acceptance (S11 GO4a; plan §4.6, I-G5, scenario S6): the requester's word on a
  * GoalRun's outcome, and what a person reads about its verification. The capabilities that expose
- * these are GO5 — as the requester's own decisions, never in an agent's Handle scope; like
- * `control.ts`, these run in the caller's transaction, GoalRun locked first, and enforce what a
- * capability must not be able to skip. Only the requester gives an outcome: a workspace owner may
- * hold or cancel someone else's run (`control.ts`), not judge it.
+ * these (`confirm_goal_acceptance`, `end_goal`, S11 GO5b) are the requester's own decisions on the
+ * human channel, never in an agent's Handle scope; like `control.ts`, these run in the caller's
+ * transaction, GoalRun locked first, and enforce what a capability must not be able to skip. Only
+ * the requester gives an outcome: a workspace owner may hold or cancel someone else's run
+ * (`control.ts`), not judge it.
  *
  *   - {@link confirmGoalAcceptance}: the requester confirms the round's `requester_confirm` check —
  *     only while the run is `verifying` and only once every check of the round the platform makes
@@ -59,8 +66,9 @@ import type { GoalRunRow } from './types.js';
  *     not pass, the requester declared it achieved" by (GO6), never by parsing a pause's detail.
  */
 
-/** The longest note the requester gives with an outcome. */
-export const GOAL_OUTCOME_NOTE_MAX = 2000;
+/** The longest note the requester gives with an outcome (`@nexttime/shared`'s, which the
+ *  capabilities' params hold to). */
+export const GOAL_OUTCOME_NOTE_MAX = MAX_GOAL_NOTE_CHARS;
 
 /** One acceptance check an `achieved` on the requester's word overrides, with its evidence. */
 export interface OverriddenAcceptanceCheck {
@@ -78,12 +86,15 @@ export interface OverriddenAcceptanceCheck {
   readonly lastError: string | null;
 }
 
+/** The note as kept — in the outcome Decision's rationale, as written: trimmed, a blank one absent;
+ *  refused when too long or when it carries a suspected credential (S11 GO5b). */
 function normalizeNote(note: string | undefined): string | undefined {
   const trimmed = note?.trim();
   if (!trimmed) return undefined;
   if ([...trimmed].length > GOAL_OUTCOME_NOTE_MAX) {
-    throw new GoalRunStateError(`a note is at most ${GOAL_OUTCOME_NOTE_MAX} characters`);
+    throw new GoalRunInputError(`a note is at most ${GOAL_OUTCOME_NOTE_MAX} characters`);
   }
+  refuseCredentialText('note', trimmed);
   return trimmed;
 }
 
@@ -96,7 +107,7 @@ async function lockRequesterRun(
   const goal = await lockGoalRun(client, workspaceId, goalRunId);
   if (!goal) throw new GoalRunNotFoundError(goalRunId);
   if (goal.onBehalfOf !== actor.principalId) {
-    throw new GoalRunStateError('only the requester gives a goal run its outcome');
+    throw new GoalRunForbiddenError('only the requester gives a goal run its outcome');
   }
   return goal;
 }

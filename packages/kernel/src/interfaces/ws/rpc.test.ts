@@ -23,6 +23,12 @@ import {
   SupersedeIdentityMismatchError,
 } from '../../application/gateway/index.js';
 import { UnknownOperationError } from '../../application/gateway/index.js';
+import {
+  GoalPlanValidationError,
+  GoalRunForbiddenError,
+  GoalRunInputError,
+  GoalRunStateError,
+} from '../../application/goal/index.js';
 import { PackNotFoundError } from '../../application/packs/index.js';
 import { TaskRuntimeNotConfiguredError } from '../../application/task/index.js';
 import { ApprovalReasonRequiredError } from '../../governance/approval/index.js';
@@ -33,7 +39,10 @@ import {
   OperationDeclaresGateOwnedParamsError,
   OperationIdentityConflictError,
 } from '../../governance/gatekeepers/index.js';
-import { ObserveParamsCarryCredentialsError } from '../../governance/redaction/index.js';
+import {
+  ObserveParamsCarryCredentialsError,
+  TextCarriesCredentialsError,
+} from '../../governance/redaction/index.js';
 import { JsonRpcRequestSchema, WS_ERROR_CODES, mapDispatchError } from './rpc.js';
 
 /**
@@ -160,6 +169,21 @@ describe('mapDispatchError — legacy 232 unknown operation', () => {
       code: WS_ERROR_CODES.UNSTORABLE_TEXT,
       message: err.message,
     });
+  });
+});
+
+describe('mapDispatchError — S11 GO5b goal operations', () => {
+  it('maps each refusal like the HTTP transport', () => {
+    const cases: [Error, number][] = [
+      [new GoalRunForbiddenError('only the requester'), WS_ERROR_CODES.FORBIDDEN],
+      [new GoalRunStateError('not paused'), WS_ERROR_CODES.ILLEGAL_TRANSITION],
+      [new GoalRunInputError('a note is too long'), WS_ERROR_CODES.INVALID_PARAMS],
+      [new GoalPlanValidationError(['cycle']), WS_ERROR_CODES.INVALID_PARAMS],
+      [new TextCarriesCredentialsError('note', 1), WS_ERROR_CODES.INVALID_PARAMS],
+    ];
+    for (const [err, code] of cases) {
+      expect(mapDispatchError(err)).toEqual({ code, message: err.message });
+    }
   });
 });
 

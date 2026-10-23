@@ -1,14 +1,26 @@
 import {
+  type ActionRequestReconciliation,
+  type CancelGoalResultWire,
+  type ConfirmGoalAcceptanceResultWire,
+  type ConfirmGoalResultWire,
+  type EndGoalResultWire,
   GOAL_LIST_DEFAULT_LIMIT,
   GOAL_LIST_MAX_LIMIT,
   type GoalAcceptanceCheckWire,
   type GoalAcceptanceRoundWire,
   type GoalAcceptanceWire,
   type GoalDetailWire,
+  type GoalOperationResultWire,
+  type GoalPlan,
   type GoalRunStatus,
   type GoalRunWire,
+  type ObjectiveOutcome,
   type PlanRevisionSummaryWire,
   type PlanRevisionWire,
+  type ReconcileGoalActionResultWire,
+  type ResumeGoalResultWire,
+  type ReviseGoalResultWire,
+  type StepRemoval,
   type StepRunWire,
   type UnresolvedGoalActionWire,
 } from '@nexttime/shared';
@@ -18,6 +30,8 @@ import {
   type GoalAcceptanceCheckView,
   type GoalAcceptanceRoundView,
   type GoalAcceptanceView,
+  type GoalControlActor,
+  type GoalRunBudget,
   type GoalRunDetail,
   type GoalRunStepView,
   type GoalRunSummary,
@@ -25,10 +39,22 @@ import {
   type PlanRevisionRow,
   type PlanRevisionView,
   type UnresolvedGoalAction,
+  cancelGoalRun,
+  confirmGoalAcceptance,
+  confirmGoalRun,
+  endGoalRun,
+  getGoalRun,
+  getGoalRunVisibleTo,
   listGoalRunUnresolvedActionsVisibleTo,
   listGoalRunsVisibleTo,
+  pauseGoalRun,
   readGoalRunDetail,
   readPlanRevisionVisibleTo,
+  reconcileGoalAction,
+  rejectGoalRun,
+  releaseGoalRunHold,
+  resumeGoalRun,
+  reviseGoalRun,
 } from '../../application/goal/index.js';
 import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
 
@@ -38,6 +64,12 @@ import type { CapabilityHandler, CapabilityHandlerContext } from './capability-h
  * `@nexttime/shared`'s `wire/goal.ts`. Who may read a run is `application/goal`'s
  * (`views.ts`'s `goalVisibleTo`: the owner and the requester); on the handle channel the viewer is
  * the Handle's `obo`, who sees their own runs only, an owner too (`views.ts`).
+ *
+ * S11 GO5b: a person's operations on a run — human channel only. Each takes the actor from the
+ * authenticated caller, role included (legacy 389: the database's guards do not know the role),
+ * first refuses a run the actor cannot read as not found — the 404 `get_goal` gives, so a refusal
+ * never tells someone a run exists — and then calls `application/goal`, which decides who may
+ * (403), what the run's state allows (409) and what it does, in the dispatch transaction.
  */
 
 /** The caller as a goal viewer: the human channel's resolved Principal — every run when it is the
@@ -54,6 +86,38 @@ async function goalViewer(
     principalId: ctx?.principalId || (await currentPrincipalId(client)),
     seesEveryRun: false,
   };
+}
+
+/** S11 GO5b: the caller of a person's operation — the human channel's authenticated Principal.
+ *  Every one is `channel: 'human'`, so dispatch has resolved it; a missing one is a wiring bug. */
+function goalActor(
+  capability: string,
+  ctx: CapabilityHandlerContext | undefined,
+): GoalControlActor {
+  if (!ctx?.principal) {
+    throw new Error(
+      `${capability}: no resolved human principal in context (this capability is channel:"human"-only)`,
+    );
+  }
+  return { principalId: ctx.principal.id, role: ctx.principal.role };
+}
+
+/** The actor of an operation on `goalRunId` — the run not found unless they can read it. */
+async function actorOnVisibleRun(
+  client: PoolClient,
+  workspaceId: string,
+  capability: string,
+  ctx: CapabilityHandlerContext | undefined,
+  goalRunId: string,
+): Promise<GoalControlActor> {
+  const actor = goalActor(capability, ctx);
+  await getGoalRunVisibleTo(
+    client,
+    workspaceId,
+    { principalId: actor.principalId, seesEveryRun: actor.role === 'owner' },
+    goalRunId,
+  );
+  return actor;
 }
 
 const iso = (value: Date | null): string | null => (value ? value.toISOString() : null);
@@ -299,4 +363,230 @@ export const listGoalUnresolvedActionsHandler: CapabilityHandler = async (
     resourceType: 'goal_run',
     resourceId: goalRunId,
   };
+};
+
+// ---------------------------------------------------------------------------------------------
+// S11 GO5b — a person's operations (see the module comment).
+// ---------------------------------------------------------------------------------------------
+
+const onRun = (goalRunId: string) => ({ resourceType: 'goal_run', resourceId: goalRunId });
+
+export const confirmGoalHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
+  const { goalRunId, revision } = params as { goalRunId: string; revision: number };
+  const actor = await actorOnVisibleRun(client, workspaceId, 'confirm_goal', ctx, goalRunId);
+  const confirmed = await confirmGoalRun(client, workspaceId, {
+    goalRunId,
+    revision,
+    confirmedBy: actor.principalId,
+  });
+  const result: ConfirmGoalResultWire = {
+    goalRunId,
+    status: confirmed.status,
+    changed: confirmed.changed,
+    createdStepRunIds: [...confirmed.createdStepRunIds],
+  };
+  return { result, ...onRun(goalRunId) };
+};
+
+export const rejectGoalHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
+  const { goalRunId, revision } = params as { goalRunId: string; revision: number };
+  const actor = await actorOnVisibleRun(client, workspaceId, 'reject_goal', ctx, goalRunId);
+  const rejected = await rejectGoalRun(client, workspaceId, { goalRunId, revision, actor });
+  const result: GoalOperationResultWire = { goalRunId, ...rejected };
+  return { result, ...onRun(goalRunId) };
+};
+
+export const pauseGoalHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
+  const { goalRunId } = params as { goalRunId: string };
+  const actor = await actorOnVisibleRun(client, workspaceId, 'pause_goal', ctx, goalRunId);
+  const paused = await pauseGoalRun(client, workspaceId, { goalRunId, actor });
+  const result: GoalOperationResultWire = { goalRunId, ...paused };
+  return { result, ...onRun(goalRunId) };
+};
+
+export const resumeGoalHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
+  const { goalRunId, retrySteps } = params as { goalRunId: string; retrySteps?: string[] };
+  const actor = await actorOnVisibleRun(client, workspaceId, 'resume_goal', ctx, goalRunId);
+  const resumed = await resumeGoalRun(client, workspaceId, {
+    goalRunId,
+    actor,
+    ...(retrySteps !== undefined ? { retrySteps } : {}),
+  });
+  const result: ResumeGoalResultWire = {
+    goalRunId,
+    status: resumed.status,
+    changed: resumed.changed,
+    retriedStepRunIds: [...resumed.retriedStepRunIds],
+  };
+  return { result, ...onRun(goalRunId) };
+};
+
+export const cancelGoalHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
+  const { goalRunId } = params as { goalRunId: string };
+  const actor = await actorOnVisibleRun(client, workspaceId, 'cancel_goal', ctx, goalRunId);
+  const cancelled = await cancelGoalRun(client, workspaceId, { goalRunId, actor });
+  const result: CancelGoalResultWire = {
+    goalRunId,
+    status: cancelled.status,
+    changed: cancelled.changed,
+    cancelledStepRunIds: [...cancelled.cancelledStepRunIds],
+    withdrawnActionRequestIds: [...cancelled.withdrawnActionRequestIds],
+  };
+  return { result, ...onRun(goalRunId) };
+};
+
+export const releaseGoalHoldHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+) => {
+  const { goalRunId } = params as { goalRunId: string };
+  const actor = await actorOnVisibleRun(client, workspaceId, 'release_goal_hold', ctx, goalRunId);
+  const released = await releaseGoalRunHold(client, workspaceId, { goalRunId, actor });
+  const result: GoalOperationResultWire = { goalRunId, ...released };
+  return { result, ...onRun(goalRunId) };
+};
+
+export const reviseGoalHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
+  const input = params as {
+    goalRunId: string;
+    basedOnRevision: number;
+    plan: GoalPlan;
+    reason?: string;
+    budget?: GoalRunBudget;
+    removals?: Record<string, StepRemoval>;
+  };
+  const actor = await actorOnVisibleRun(client, workspaceId, 'revise_goal', ctx, input.goalRunId);
+  const revised = await reviseGoalRun(client, workspaceId, {
+    goalRunId: input.goalRunId,
+    actor,
+    basedOnRevision: input.basedOnRevision,
+    plan: input.plan,
+    ...(input.reason !== undefined ? { reason: input.reason } : {}),
+    ...(input.budget !== undefined ? { budget: input.budget } : {}),
+    ...(input.removals !== undefined ? { removals: input.removals } : {}),
+  });
+  const result: ReviseGoalResultWire = {
+    goalRunId: input.goalRunId,
+    // A revision leaves the run paused (`revise.ts`).
+    status: 'paused',
+    changed: true,
+    revision: revised.revision,
+    planRevisionId: revised.planRevisionId,
+    supersededStepRunIds: [...revised.supersededStepRunIds],
+    createdStepRunIds: [...revised.createdStepRunIds],
+    withdrawnActionRequestIds: [...revised.withdrawnActionRequestIds],
+    releasedActionRequestIds: [...revised.releasedActionRequestIds],
+    hints: revised.hints.map((hint) => ({ code: hint.code, message: hint.message })),
+  };
+  return { result, ...onRun(input.goalRunId) };
+};
+
+export const confirmGoalAcceptanceHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+) => {
+  const { goalRunId, checkKey, note } = params as {
+    goalRunId: string;
+    checkKey?: string;
+    note?: string;
+  };
+  const actor = await actorOnVisibleRun(
+    client,
+    workspaceId,
+    'confirm_goal_acceptance',
+    ctx,
+    goalRunId,
+  );
+  const confirmed = await confirmGoalAcceptance(client, workspaceId, {
+    goalRunId,
+    actor,
+    ...(checkKey !== undefined ? { checkKey } : {}),
+    ...(note !== undefined ? { note } : {}),
+  });
+  const result: ConfirmGoalAcceptanceResultWire = { goalRunId, ...confirmed };
+  return { result, ...onRun(goalRunId) };
+};
+
+export const endGoalHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
+  const { goalRunId, outcome, note } = params as {
+    goalRunId: string;
+    outcome: ObjectiveOutcome;
+    note?: string;
+  };
+  const actor = await actorOnVisibleRun(client, workspaceId, 'end_goal', ctx, goalRunId);
+  const ended = await endGoalRun(client, workspaceId, {
+    goalRunId,
+    actor,
+    outcome,
+    ...(note !== undefined ? { note } : {}),
+  });
+  const result: EndGoalResultWire = {
+    goalRunId,
+    status: ended.status,
+    changed: ended.changed,
+    decisionId: ended.decisionId,
+    overriddenChecks: ended.overriddenChecks.map((check) => ({
+      checkKey: check.checkKey,
+      kind: check.kind,
+      round: check.round,
+      status: check.status,
+      observationId: check.observationId,
+      factId: check.factId,
+      lastError: check.lastError,
+    })),
+    skippedStepRunIds: [...ended.skippedStepRunIds],
+  };
+  return { result, ...onRun(goalRunId) };
+};
+
+export const reconcileGoalActionHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+) => {
+  const input = params as {
+    goalRunId: string;
+    actionRequestId: string;
+    verdict?: ActionRequestReconciliation;
+    reexecute?: boolean;
+    note?: string;
+  };
+  const actor = await actorOnVisibleRun(
+    client,
+    workspaceId,
+    'reconcile_goal_action',
+    ctx,
+    input.goalRunId,
+  );
+  const reconciled = await reconcileGoalAction(client, workspaceId, {
+    goalRunId: input.goalRunId,
+    actionRequestId: input.actionRequestId,
+    // Who decides is read again from `principals` by governance (and by the database guard).
+    deciderPrincipalId: actor.principalId,
+    ...(input.verdict !== undefined ? { verdict: input.verdict } : {}),
+    ...(input.reexecute !== undefined ? { reexecute: input.reexecute } : {}),
+    ...(input.note !== undefined ? { note: input.note } : {}),
+  });
+  const goal = await getGoalRun(client, workspaceId, input.goalRunId);
+  if (!goal) throw new Error(`reconcile_goal_action: goal run ${input.goalRunId} vanished`);
+  const action = reconciled.actionRequest;
+  const result: ReconcileGoalActionResultWire = {
+    goalRunId: input.goalRunId,
+    status: goal.status,
+    changed: reconciled.changed,
+    action: {
+      actionRequestId: action.id,
+      status: action.status,
+      failureKind: action.failureKind,
+      reconciliation: action.reconciliation,
+      reconciliationDecisionId: action.reconciliationDecisionId,
+      reexecuteDecisionId: action.reexecuteDecisionId,
+    },
+  };
+  return { result, ...onRun(input.goalRunId) };
 };

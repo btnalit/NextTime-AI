@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CredentialReviewRequiredError,
   ObserveParamsCarryCredentialsError,
+  TextCarriesCredentialsError,
   assertCredentialsReviewed,
   assertDraftCredentialsReviewed,
   countSuspectedSecrets,
@@ -12,6 +13,7 @@ import {
   namesASecretField,
   redactSecrets,
   redactSuspectedSecrets,
+  refuseCredentialText,
   reviewObserveParams,
 } from './index.js';
 
@@ -471,5 +473,36 @@ describe('reviewObserveParams — refuse what is certainly a credential, record 
     expect(reviewObserveParams('inventory', 'list_items', params)).toEqual({
       credentialReview: { suspectedSecretValues: 1, suspectedSecretPaths: ['apiKey.default'] },
     });
+  });
+});
+
+describe('refuseCredentialText — free text kept and read back as written (S11 GO5b)', () => {
+  it.each([
+    ['an env assignment', `PGPASSWORD=${FAKE} psql`],
+    ['a Handle-shaped JWT', `ran with ${HANDLE}`],
+    ['a literal Bearer token', `the call sent Bearer ${FAKE}`],
+    ['a vendor key', `rotated sk-ant-${FAKE} after this`],
+  ])('refuses %s, naming the field and never the value', (_label, text) => {
+    let thrown: unknown;
+    try {
+      refuseCredentialText('reason', text);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(TextCarriesCredentialsError);
+    const err = thrown as TextCarriesCredentialsError;
+    expect(err.code).toBe('credentials_in_text');
+    expect(err.details).toEqual({ field: 'reason', suspectedSecretValues: 1 });
+    expect(err.message).toMatch(/^reason: /);
+    expect(err.message).not.toContain(FAKE);
+    expect(err.message).not.toContain(HANDLE);
+  });
+
+  it('takes text that only talks about a credential, and no text at all', () => {
+    expect(() =>
+      refuseCredentialText('note', 'the token expired; a new login fixed the step'),
+    ).not.toThrow();
+    expect(() => refuseCredentialText('note', 'the deploy key was rotated by ops')).not.toThrow();
+    expect(() => refuseCredentialText('note', undefined)).not.toThrow();
   });
 });

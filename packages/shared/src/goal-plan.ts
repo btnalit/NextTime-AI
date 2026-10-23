@@ -25,6 +25,10 @@ export const MAX_PLAN_ACCEPTANCE_CHECKS = 16;
 export const MAX_STEP_ACCEPTANCE_CHECKS = 8;
 /** The longest prompt a `requester_confirm` check asks with. */
 export const MAX_ACCEPTANCE_PROMPT_CHARS = 2000;
+/** S11 GO5b: the longest reason a revision records — a sentence or two for the revision timeline. */
+export const MAX_REVISION_REASON_CHARS = 2000;
+/** S11 GO5b: the longest note a person gives with a goal's outcome or a finding about an action. */
+export const MAX_GOAL_NOTE_CHARS = 2000;
 
 export const StepKeySchema = z.string().regex(STEP_KEY_PATTERN);
 
