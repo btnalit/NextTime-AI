@@ -296,7 +296,13 @@ test.describe('S11 GO6: a goal’s pages with content (stand-in reads)', () => {
 
       await rows.first().click();
       await expect(page).toHaveURL(new RegExp(`#/work/goals/${GOAL}$`));
-      await expect(page.getByTestId('goal-step')).toHaveCount(3, { timeout: 15_000 });
+      // Three steps in the plan in force; the one revision 2 replaced sits folded below them.
+      await expect(
+        page.locator('[data-testid="goal-step"]:not([data-step-status="superseded"])'),
+      ).toHaveCount(3, { timeout: 15_000 });
+      await expect(
+        page.locator('[data-testid="goal-step"][data-step-status="superseded"]'),
+      ).toBeHidden();
       await expect(page.getByTestId('goal-state-note')).toContainText('有动作结果不明');
       await expect(page.getByTestId('goal-unresolved-check')).toContainText('删除');
       await expect(page.getByTestId('goal-step-waiting')).toBeVisible();
