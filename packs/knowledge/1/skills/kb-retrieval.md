@@ -47,5 +47,5 @@ procedure, a policy, a past decision, the content of a document.
 - `factsToAssert`: only what a document states plainly and the task needs recorded; never your
   own conclusion from it.
 - You cannot upload, parse or change anything in a knowledge base. If a document needs parsing
-  before it can be searched, recommend it in `summary` so the agent that invoked you can ask a
-  person.
+  before it can be searched, recommend it in `summary` so the agent that invoked you can request
+  it.
