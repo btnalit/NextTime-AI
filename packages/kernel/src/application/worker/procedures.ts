@@ -1,9 +1,11 @@
 import {
   IllegalTransition,
+  type OutputSchema,
   PUBLISHABLE_TRANSITIONS,
   type ProcedureStep,
   type PublishableStatus,
   transition,
+  usesPlanTemplateFields,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import {
@@ -39,6 +41,12 @@ import { assertFamilyPublishAuthority } from './publish-family.js';
  * naming the offending step index and reference) — never a partial publish. `approval`/`verify`
  * steps carry no external reference and are never checked against the graph; they are procedural
  * markers a future Workflow runner (P5) must honor, not something this task executes.
+ *
+ * S11 GO5d-2: a published Procedure is also a template a goal's plan is made from (`propose_goal`'s
+ * `fromProcedure`, `application/goal/from-procedure.ts`), taking `parameters` (worker/0005). One
+ * that says anything of that plan (`usesPlanTemplateFields`) is published only when the plan it
+ * makes passes — the check the `publish_procedure` handler passes in ({@link PublishProcedureOptions};
+ * it lives with the plan, which reads this module, so it is handed in rather than imported).
  */
 
 const graphStore = new SqlGraphStore();
@@ -55,6 +63,7 @@ interface ProcedureDbRow {
   name: string;
   description: string;
   steps: readonly ProcedureStep[];
+  parameters: OutputSchema | null;
   proposed_by: string;
   published_by: string | null;
   created_at: Date;
@@ -69,6 +78,8 @@ export interface ProcedureRow {
   readonly name: string;
   readonly description: string;
   readonly steps: readonly ProcedureStep[];
+  /** S11 GO5d-2: the parameters schema of a goal made from it; `null` = it takes none. */
+  readonly parameters: OutputSchema | null;
   readonly proposedBy: string;
   readonly publishedBy: string | null;
   readonly createdAt: Date;
@@ -84,6 +95,7 @@ function mapRow(row: ProcedureDbRow): ProcedureRow {
     name: row.name,
     description: row.description,
     steps: row.steps ?? [],
+    parameters: row.parameters ?? null,
     proposedBy: row.proposed_by,
     publishedBy: row.published_by,
     createdAt: row.created_at,
@@ -91,8 +103,8 @@ function mapRow(row: ProcedureDbRow): ProcedureRow {
   };
 }
 
-const SELECT_COLUMNS = `workspace_id, id, version, status, name, description, steps, proposed_by,
-  published_by, created_at, published_at`;
+const SELECT_COLUMNS = `workspace_id, id, version, status, name, description, steps, parameters,
+  proposed_by, published_by, created_at, published_at`;
 
 // -------------------------------------------------------------------------------------------
 // Errors
@@ -131,6 +143,8 @@ export interface ProposeProcedureInput {
   readonly name: string;
   readonly description: string;
   readonly steps: readonly ProcedureStep[];
+  /** S11 GO5d-2: absent — it takes no parameters. */
+  readonly parameters?: OutputSchema;
 }
 
 async function nextVersion(
@@ -157,9 +171,9 @@ export async function proposeProcedure(
   const version = await nextVersion(client, workspaceId, input.procedureId);
   const result = await client.query<ProcedureDbRow>(
     `insert into procedures
-       (workspace_id, id, version, status, name, description, steps, proposed_by)
+       (workspace_id, id, version, status, name, description, steps, parameters, proposed_by)
      values
-       ($1, coalesce($2::uuid, gen_random_uuid()), $3, 'draft', $4, $5, $6::jsonb, $7)
+       ($1, coalesce($2::uuid, gen_random_uuid()), $3, 'draft', $4, $5, $6::jsonb, $7::jsonb, $8)
      returning ${SELECT_COLUMNS}`,
     [
       workspaceId,
@@ -168,6 +182,7 @@ export async function proposeProcedure(
       input.name,
       input.description,
       JSON.stringify(input.steps),
+      input.parameters === undefined ? null : JSON.stringify(input.parameters),
       proposerPrincipalId,
     ],
   );
@@ -292,7 +307,31 @@ async function resolveStepTargets(
  *  suspected-credential count reads (governance/redaction/credential-review.ts). Steps can carry
  *  call arguments, so a value under a secret-named field counts too. */
 export function procedureReviewContent(row: ProcedureRow): unknown {
-  return { name: row.name, description: row.description, steps: row.steps };
+  return {
+    name: row.name,
+    description: row.description,
+    steps: row.steps,
+    ...(row.parameters !== null ? { parameters: row.parameters } : {}),
+  };
+}
+
+/** S11 GO5d-2: thrown by `publishProcedure` when the Procedure says how a goal's plan is made from
+ *  it and that plan does not pass (400 `invalid_params` with `details.problems`, like a plan). */
+export class ProcedureTemplateError extends Error {
+  readonly problems: readonly string[];
+
+  constructor(subject: string, problems: readonly string[]) {
+    super(`${subject} cannot make a goal's plan: ${problems.join('; ')}`);
+    this.name = 'ProcedureTemplateError';
+    this.problems = problems;
+  }
+}
+
+export interface PublishProcedureOptions {
+  /** S11 GO5d-2: what stops the Procedure as a goal-plan template — asked only of one that says
+   *  anything of that plan (`usesPlanTemplateFields`); `application/goal`'s
+   *  `procedureTemplateProblems`. */
+  readonly templateProblems?: (row: ProcedureRow) => readonly string[];
 }
 
 /** Publishes the latest draft version of `procedureId` (human channel only): validates the
@@ -312,6 +351,7 @@ export async function publishProcedure(
   publisherPrincipalId: string,
   procedureId: string,
   actor?: PublishActor,
+  options: PublishProcedureOptions = {},
 ): Promise<ProcedureRow> {
   const row = await getLatestForUpdate(client, workspaceId, procedureId);
   requireProcedureAuthority('publish_procedure', actor, row);
@@ -342,6 +382,12 @@ export async function publishProcedure(
     { secretFields: true },
   );
   const targets = await resolveStepTargets(client, workspaceId, row.steps);
+  if (options.templateProblems && usesPlanTemplateFields(row)) {
+    const problems = options.templateProblems(row);
+    if (problems.length > 0) {
+      throw new ProcedureTemplateError(`Procedure ${row.id}@${row.version}`, problems);
+    }
+  }
 
   const result = await client.query<ProcedureDbRow>(
     `update procedures
@@ -425,6 +471,27 @@ export async function getProcedure(
   const result = await client.query<ProcedureDbRow>(
     `select ${SELECT_COLUMNS} from procedures where workspace_id = $1 and id = $2 and version = $3`,
     [workspaceId, ref.procedureId, ref.version],
+  );
+  const row = result.rows[0];
+  return row ? mapRow(row) : null;
+}
+
+/** S11 GO5d-2: a published version of `procedureId` — `version`, or its latest published one —
+ *  or `null` when there is none (unknown, only drafts, or deprecated): what a goal's plan is made
+ *  from (`application/goal/from-procedure.ts`). Published content never changes (worker/0002's
+ *  trigger), so no lock is needed. */
+export async function getPublishedProcedure(
+  client: PoolClient,
+  workspaceId: string,
+  ref: { readonly procedureId: string; readonly version?: number },
+): Promise<ProcedureRow | null> {
+  const result = await client.query<ProcedureDbRow>(
+    `select ${SELECT_COLUMNS} from procedures
+      where workspace_id = $1 and id = $2 and status = 'published'
+        and ($3::int is null or version = $3)
+      order by version desc
+      limit 1`,
+    [workspaceId, ref.procedureId, ref.version ?? null],
   );
   const row = result.rows[0];
   return row ? mapRow(row) : null;

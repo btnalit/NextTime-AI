@@ -13,6 +13,7 @@ import {
   listStepsActionOutcomes,
 } from '../../governance/approval/index.js';
 import { type GoalStepAttempt, listGoalRunStepAttempts, readGoalRunsUsage } from '../task/index.js';
+import { getProcedure } from '../worker/index.js';
 import {
   type GoalAcceptanceCheckView,
   type GoalAcceptanceView,
@@ -260,12 +261,37 @@ export async function listGoalRunsVisibleTo(
   };
 }
 
+/** S11 GO5d-2: the published Procedure version a plan was made from, with its name as it reads
+ *  now (the version's content never changes; its name is the Procedure's). */
+export interface PlanSourceView {
+  readonly procedureId: string;
+  readonly version: number;
+  readonly name: string;
+}
+
+/** The Procedure `revision`'s plan was made from, or `null` for a plan written out. */
+async function planSourceOf(
+  client: PoolClient,
+  workspaceId: string,
+  revision: PlanRevisionRow,
+): Promise<PlanSourceView | null> {
+  if (!revision.sourceProcedure) return null;
+  // goal/0009's key holds the version there; a name it could not read shows the id.
+  const procedure = await getProcedure(client, workspaceId, revision.sourceProcedure);
+  return {
+    ...revision.sourceProcedure,
+    name: procedure?.name ?? revision.sourceProcedure.procedureId,
+  };
+}
+
 /** A revision of a plan as a reader gets it: the plan as every read shows it (`planAsRead`), and
  *  the hints for the person confirming it. */
 export interface PlanRevisionView {
   readonly revision: PlanRevisionRow;
   readonly plan: GoalPlan;
   readonly hints: readonly PlanHint[];
+  /** S11 GO5d-2: see {@link PlanSourceView}. */
+  readonly source: PlanSourceView | null;
 }
 
 async function planRevisionView(
@@ -292,6 +318,7 @@ async function planRevisionView(
       ...planHints(plan),
       ...(proposal ? await planAuthorityHints(client, workspaceId, goal.onBehalfOf, plan) : []),
     ],
+    source: await planSourceOf(client, workspaceId, revision),
   };
 }
 
@@ -352,6 +379,9 @@ export interface GoalRunDetail extends GoalRunSummary {
   /** The revision in force — revision 1 until the run is confirmed (and on one cancelled before). */
   readonly planRevision: PlanRevisionView;
   readonly revisions: readonly PlanRevisionRow[];
+  /** S11 GO5d-2: the Procedure revision 1's plan was made from — the one revision that may have
+   *  one (goal/0009); `null` for a plan written out. */
+  readonly planSource: PlanSourceView | null;
   /** In plan order ({@link inPlanOrder}); the acceptance view's steps follow it too. */
   readonly steps: readonly GoalRunStepView[];
   readonly acceptance: GoalAcceptanceView;
@@ -387,10 +417,17 @@ export async function readGoalRunDetail(
       ? await readCancelLeftovers(client, goal)
       : null;
   const position = new Map(stepRuns.map((step, index) => [step.id, index]));
+  const first = revisions.find((row) => row.revision === 1);
   return {
     ...summary,
     planRevision: planView,
     revisions,
+    planSource:
+      first === inForce
+        ? planView.source
+        : first
+          ? await planSourceOf(client, workspaceId, first)
+          : null,
     steps: stepRuns.map((step) => ({
       step,
       attempts: attempts.filter((attempt) => attempt.stepRunId === step.id),

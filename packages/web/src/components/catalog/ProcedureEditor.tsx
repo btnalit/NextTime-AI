@@ -8,9 +8,11 @@ import {
   type ProcedureForm,
   type ProcedureStepForm,
   type ProcedureStepKind,
+  hasTemplateFields,
   newProcedureStep,
   procedureContentFromForm,
-  procedureStepFromWire,
+  procedureFormFrom,
+  templateFieldErrors,
   validateProcedure,
 } from '../../lib/catalog.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
@@ -279,14 +281,9 @@ export function ProcedureEditor({
   const t = useT();
   const permissions = usePermissions();
   const can = useRoleCan(http);
+  // S11 GO5d-2: a copy keeps what its steps say of a goal's plan, and its parameters.
   const [form, setForm] = useState<ProcedureForm>(() =>
-    copyOf
-      ? {
-          name: copyOf.name,
-          description: copyOf.description,
-          steps: (copyOf.steps ?? []).map(procedureStepFromWire),
-        }
-      : EMPTY_PROCEDURE_FORM,
+    copyOf ? procedureFormFrom(copyOf) : EMPTY_PROCEDURE_FORM,
   );
   const [view, setView] = useState<View>('form');
   const [errors, setErrors] = useState<FieldErrors>({});
@@ -316,11 +313,7 @@ export function ProcedureEditor({
   }
 
   function applyJson(value: Record<string, unknown>): void {
-    setForm({
-      name: typeof value.name === 'string' ? value.name : '',
-      description: typeof value.description === 'string' ? value.description : '',
-      steps: Array.isArray(value.steps) ? value.steps.map(procedureStepFromWire) : [],
-    });
+    setForm(procedureFormFrom(value));
     setErrors({});
     setView('form');
   }
@@ -475,6 +468,27 @@ export function ProcedureEditor({
               <p className="field-error" role="alert">
                 {errors.steps}
               </p>
+            ) : null}
+            {templateFieldErrors(errors).length > 0 ? (
+              <div
+                className="field-error stack-s"
+                role="alert"
+                data-testid="procedure-template-errors"
+              >
+                <span>
+                  {t(
+                    '用流程生成目标时的这些字段不符合要求，表单不能改，请到 JSON 视图修改：',
+                    'These fields of how a goal’s plan is made from it do not pass; the form cannot edit them, so fix them in the JSON view:',
+                  )}
+                </span>
+                <ul>
+                  {templateFieldErrors(errors).map((problem) => (
+                    <li key={problem.path}>
+                      <span className="mono">{problem.path}</span>：{problem.message}
+                    </li>
+                  ))}
+                </ul>
+              </div>
             ) : null}
             {form.steps.length === 0 ? (
               <span className="text-3 text-small">
@@ -672,10 +686,31 @@ export function ProcedureEditor({
                       disabled={busy}
                     />
                   </Field>
+                  {hasTemplateFields(step) ? (
+                    <span className="text-small text-3" data-testid="procedure-step-template-note">
+                      {step.kind === 'worker'
+                        ? t(
+                            '这一步还写了用流程生成目标时的做法（步骤名、依赖、输入、输入绑定、输出约定或尝试次数）。表单还不能改这些，保存时原样保留；要改请到 JSON 视图。把类型改掉会丢掉它们。',
+                            'This step also says how a goal’s plan made from the Procedure runs it (key, dependencies, input, bindings, output contract or attempts). The form cannot edit these yet and keeps them as they are; edit them in the JSON view. Changing the kind drops them.',
+                          )
+                        : t(
+                            '这一步还带着用流程生成目标时平台要做的检查。表单还不能改它，保存时原样保留；要改请到 JSON 视图。把类型改掉会丢掉它。',
+                            'This step also carries the check the platform makes in a goal made from the Procedure. The form cannot edit it yet and keeps it as it is; edit it in the JSON view. Changing the kind drops it.',
+                          )}
+                    </span>
+                  ) : null}
                 </div>
               );
             })}
           </div>
+          {form.parameters !== undefined ? (
+            <Notice testId="procedure-parameters-note">
+              {t(
+                '这个流程有启动参数：用它生成目标时要填写。表单还不能改参数，保存时原样保留；要改请到 JSON 视图。',
+                'This Procedure takes parameters, given when a goal is made from it. The form cannot edit them yet and keeps them as they are; edit them in the JSON view.',
+              )}
+            </Notice>
+          ) : null}
         </>
       )}
 

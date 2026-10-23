@@ -391,13 +391,16 @@ function bindingProblems(step: PlanStep, steps: ReadonlyMap<string, PlanStep>): 
 }
 
 /** Whether two bindings put their values at the same field, or one inside the other's. */
-function bindingTargetsOverlap(a: StepBinding, b: StepBinding): boolean {
+export function bindingTargetsOverlap(
+  a: Pick<StepBinding, 'to'>,
+  b: Pick<StepBinding, 'to'>,
+): boolean {
   return a.to === b.to || a.to.startsWith(`${b.to}.`) || b.to.startsWith(`${a.to}.`);
 }
 
 /** Where the written `input` already has a value that a binding to `to` would replace — `to`
  *  itself, or a field on the way to it that is not an object — or `null`. */
-function writtenValueAt(input: Record<string, unknown>, to: string): string | null {
+export function writtenValueAt(input: Record<string, unknown>, to: string): string | null {
   const fields = to.split('.');
   let at: Record<string, unknown> = input;
   for (const [i, field] of fields.entries()) {
@@ -462,7 +465,7 @@ export function predicateCredentialProblems(predicate: Predicate): readonly stri
 }
 
 /** At most this many places go into a refusal's details — the count stays exact. */
-const MAX_REFUSAL_PATHS = 20;
+export const MAX_REFUSAL_PATHS = 20;
 
 /** Call arguments a plan holds, as every read shows them: each suspected credential replaced by
  *  `[redacted]` (`redactSuspectedSecrets`, the call-argument rule `get_task` applies to a Task's
@@ -544,11 +547,16 @@ export function planAsRead(plan: GoalPlan): GoalPlan {
   return shownFreeTextIn(planParamsAsRead(plan).plan) as GoalPlan;
 }
 
-/** A place in the plan as a refusal names it: from `plan`, dot-separated, array items by their
- *  0-based index (`steps[0].input.host` → `plan.steps.0.input.host`) — the form the console's
- *  plan editor finds the field by. */
+/** A place in a document a refusal names, from the document's own name: dot-separated, array
+ *  items by their 0-based index (`steps[0].input.host` → `plan.steps.0.input.host`) — the form the
+ *  console's plan editor finds the field by. */
+export function refusalPlace(document: string, path: string): string {
+  const dotted = path.replace(/\[(\d+)\]/g, '.$1');
+  return dotted === '' ? document : `${document}.${dotted}`;
+}
+
 function planPlace(path: string): string {
-  return `plan.${path.replace(/\[(\d+)\]/g, '.$1')}`;
+  return refusalPlace('plan', path);
 }
 
 /**

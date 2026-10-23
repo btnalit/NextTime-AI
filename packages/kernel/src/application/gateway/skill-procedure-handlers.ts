@@ -15,6 +15,7 @@ import {
 } from '../../application/worker/index.js';
 import { countSuspectedSecrets, credentialReviewAudit } from '../../governance/redaction/index.js';
 import { currentPrincipalId } from '../chat/index.js';
+import { procedureTemplateProblems } from '../goal/index.js';
 import { type CapabilityHandler, publishActorOf } from './capability-handler.js';
 import { draftViewerOf } from './draft-viewer.js';
 
@@ -168,7 +169,18 @@ const publishProcedureHandler: CapabilityHandler = async (client, workspaceId, p
     credentialsReviewed,
     reviewedVersion: version,
   };
-  const record = await publishProcedure(client, workspaceId, actor.principalId, procedureId, actor);
+  // S11 GO5d-2: a Procedure that says how a goal's plan is made from it is published only when
+  // that plan passes.
+  const record = await publishProcedure(
+    client,
+    workspaceId,
+    actor.principalId,
+    procedureId,
+    actor,
+    {
+      templateProblems: procedureTemplateProblems,
+    },
+  );
   return {
     result: { id: record.id, version: record.version, status: record.status },
     resourceType: 'procedure',
@@ -208,6 +220,7 @@ const listProceduresHandler: CapabilityHandler = async (client, workspaceId, par
         name: row.name,
         description: row.description,
         steps: row.steps,
+        parameters: row.parameters as Record<string, unknown> | null,
         proposedBy: row.proposedBy,
       })),
       ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),

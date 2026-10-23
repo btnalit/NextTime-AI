@@ -98,6 +98,17 @@ export const GoalRunWireSchema = z
   .strict();
 export type GoalRunWire = z.infer<typeof GoalRunWireSchema>;
 
+/** S11 GO5d-2: the published Procedure a plan was made from (`propose_goal`'s `fromProcedure`) —
+ *  revision 1 of a goal made from one; `name` as it reads now. */
+export const PlanSourceProcedureWireSchema = z
+  .object({
+    procedureId: z.string(),
+    version: z.number().int().positive(),
+    name: z.string(),
+  })
+  .strict();
+export type PlanSourceProcedureWire = z.infer<typeof PlanSourceProcedureWireSchema>;
+
 /** One revision of a run's plan (`get_goal_revision`, and `get_goal`'s `planRevision`): revision 1
  *  is the proposal the requester confirmed (or has yet to); a later one is a revision the
  *  requester made of a paused run, accepted as made. `removals`: what it decided about each step
@@ -118,6 +129,8 @@ export const PlanRevisionWireSchema = z
     createdAt: z.string(),
     removals: StepRemovalsSchema,
     hints: z.array(PlanHintSchema),
+    /** S11 GO5d-2: the Procedure the plan was made from; `null` for a plan written as it is. */
+    fromProcedure: PlanSourceProcedureWireSchema.nullable(),
   })
   .strict();
 export type PlanRevisionWire = z.infer<typeof PlanRevisionWireSchema>;

@@ -1,7 +1,13 @@
-import { GoalPlanSchema, type GoalRunStatus, MAX_GOAL_STATEMENT_CHARS } from '@nexttime/shared';
+import {
+  type GoalFromProcedure,
+  GoalPlanSchema,
+  type GoalRunStatus,
+  MAX_GOAL_STATEMENT_CHARS,
+} from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { refuseCredentialText, refuseRedactedText } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
+import { type PlanSource, planFromProcedure, refuseProcedureParameters } from './from-procedure.js';
 import { moveGoalRun } from './moves.js';
 import {
   type GoalPlan,
@@ -32,7 +38,10 @@ import type { GoalControlActor, GoalRunBudget, GoalRunRow } from './types.js';
  *     written (`refusePlanCredentials`; the statement under the rule a revision's reason is); and
  *     with an idempotency key (the stored form `propose_goal` derives, goal/0008) the call returns
  *     the run that key proposed instead of a second one (`changed: false`): an explicit key's run
- *     whatever its status, a derived key's only while still `proposed`.
+ *     whatever its status, a derived key's only while still `proposed`. S11 GO5d-2: the plan may
+ *     instead be made from a published Procedure (`fromProcedure`, `from-procedure.ts`) — its
+ *     parameters refused for what a written plan is, the plan it makes then checked exactly as a
+ *     written one, and revision 1 recording the version it came from (goal/0009).
  *   - {@link confirmGoalRun}: only the requester confirms (propose → authorize → execute: a
  *     GoalRun spends and acts while nobody watches, §4.3), and only the revision they read — the
  *     proposal, revision 1 (S11 GO5b: what is confirmed is what was shown). In one transaction,
@@ -109,7 +118,10 @@ export interface CreateGoalRunInput {
   /** Who proposed the plan (the requester, or their entry agent's principal). */
   readonly proposedBy: string;
   readonly statement: string;
-  readonly plan: unknown;
+  /** The plan written out — or, exactly one of the two, {@link fromProcedure}. */
+  readonly plan?: unknown;
+  /** S11 GO5d-2: the published Procedure the plan is made from, with its parameters. */
+  readonly fromProcedure?: GoalFromProcedure;
   readonly budget: GoalRunBudget;
   readonly originatedInTurnId?: string;
   /** S11 GO5c: the stored key (`explicit:…` or `auto:…`, goal/0008) — derived by `propose_goal`;
@@ -269,7 +281,11 @@ export async function createGoalRun(
   // What the call carries is checked before anything else, a replay included: a call refused for
   // its content never returns a run.
   checkStatement(input.statement);
-  refusePlanCredentials(planShape(input.plan));
+  if ((input.plan === undefined) === (input.fromProcedure === undefined)) {
+    throw new GoalRunInputError('a goal is proposed with exactly one of plan and fromProcedure');
+  }
+  if (input.fromProcedure !== undefined) refuseProcedureParameters(input.fromProcedure.parameters);
+  else refusePlanCredentials(planShape(input.plan));
   // The cap's count and this call's insert are one step per requester: two proposals at once
   // cannot both take the last place. A replay proposes nothing, so it is answered at the cap too.
   if (input.maxProposed !== undefined) {
@@ -288,12 +304,22 @@ export async function createGoalRun(
     if (proposed >= input.maxProposed)
       throw new ProposedGoalLimitError(input.maxProposed, proposed);
   }
-  const plan = await validatePlan(client, workspaceId, input.plan);
+  let written = input.plan;
+  let source: PlanSource | null = null;
+  if (input.fromProcedure !== undefined) {
+    // The Procedure's content is held to what a written plan is: coming from a template skips
+    // nothing.
+    const made = await planFromProcedure(client, workspaceId, input.fromProcedure);
+    refusePlanCredentials(planShape(made.plan));
+    written = made.plan;
+    source = made.source;
+  }
+  const plan = await validatePlan(client, workspaceId, written);
   const hints = planHints(plan);
   if (input.idempotencyKey !== undefined) {
     await client.query('SAVEPOINT create_goal_run_insert');
     try {
-      const created = await insertGoalRun(client, workspaceId, input, plan, hints);
+      const created = await insertGoalRun(client, workspaceId, input, plan, hints, source);
       await client.query('RELEASE SAVEPOINT create_goal_run_insert');
       return created;
     } catch (err) {
@@ -307,7 +333,7 @@ export async function createGoalRun(
       return replayProposal(client, workspaceId, existing);
     }
   }
-  return insertGoalRun(client, workspaceId, input, plan, hints);
+  return insertGoalRun(client, workspaceId, input, plan, hints, source);
 }
 
 async function insertGoalRun(
@@ -316,6 +342,7 @@ async function insertGoalRun(
   input: CreateGoalRunInput,
   plan: GoalPlan,
   hints: readonly PlanHint[],
+  source: PlanSource | null,
 ): Promise<CreatedGoalRun> {
   const goal = await client.query<{ id: string }>(
     `insert into goal_runs (
@@ -338,8 +365,10 @@ async function insertGoalRun(
   const goalRunId = goal.rows[0]?.id;
   if (!goalRunId) throw new Error('createGoalRun: goal_runs INSERT ... RETURNING produced no row');
   const revision = await client.query<{ id: string }>(
-    `insert into plan_revisions (workspace_id, goal_run_id, revision, plan, proposed_by, validation)
-     values ($1, $2, 1, $3::jsonb, $4, $5::jsonb)
+    `insert into plan_revisions (
+       workspace_id, goal_run_id, revision, plan, proposed_by, validation, source_procedure_id,
+       source_procedure_version
+     ) values ($1, $2, 1, $3::jsonb, $4, $5::jsonb, $6, $7)
      returning id`,
     [
       workspaceId,
@@ -347,6 +376,8 @@ async function insertGoalRun(
       JSON.stringify(plan),
       input.proposedBy,
       JSON.stringify({ valid: true, steps: plan.steps.length, hints }),
+      source?.procedureId ?? null,
+      source?.version ?? null,
     ],
   );
   const planRevisionId = revision.rows[0]?.id;
@@ -358,7 +389,11 @@ async function insertGoalRun(
     action: 'goal_run.propose',
     goalRunId,
     resultingStatus: 'proposed',
-    extraAuditPayload: { requesterId: input.requesterId, steps: plan.steps.length },
+    extraAuditPayload: {
+      requesterId: input.requesterId,
+      steps: plan.steps.length,
+      ...(source !== null ? { fromProcedure: source } : {}),
+    },
   });
   return {
     goalRunId,

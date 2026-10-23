@@ -1,6 +1,6 @@
 import type { GateOwnedParamWire, SkillDetailWire } from '@nexttime/shared';
 import { visibleText } from '@nexttime/shared';
-import { type ReactNode, useId, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useId, useRef, useState } from 'react';
 import { invalidateCapability, useCapability, useCapabilityList } from '../hooks/useCapability.js';
 import { usePermissions } from '../hooks/usePermissions.js';
 import { useRoleCan } from '../hooks/useRoleCan.js';
@@ -36,9 +36,11 @@ import {
   operationStatsKey,
   revisionDraftKey,
 } from '../lib/governance.js';
+import { HttpError } from '../lib/http-client.js';
 import { type Translate, useT } from '../lib/i18n.js';
 import { operationFieldLabel, workerDefinitionKindLabel } from '../lib/labels.js';
 import { breadcrumbFor } from '../lib/nav.js';
+import { procedureTemplateProblemText } from '../lib/procedure-template.js';
 import {
   type ProposerOnlyAction,
   proposerOnlyText,
@@ -62,6 +64,7 @@ import { MarkdownPreview } from './catalog/MarkdownPreview.js';
 import { PackOrigin } from './catalog/PackOrigin.js';
 import { PacksTab } from './catalog/PacksTab.js';
 import { ProcedureEditorHost } from './catalog/ProcedureEditorHost.js';
+import { ProcedureTemplateView } from './catalog/ProcedureTemplateView.js';
 import { SkillEditor } from './catalog/SkillEditor.js';
 import { WorkerEditorHost } from './catalog/WorkerEditorHost.js';
 import { gateOwnedParamsText } from './connect/GateOwnedParams.js';
@@ -514,6 +517,55 @@ function PublishCredentialSlot({
       onChange={review.setChecked}
       disabled={busy}
     />
+  );
+}
+
+/** UX acceptance of #722 (P2-1): the problems the kernel refused publishing a Procedure for, as a
+ *  template (`publish_procedure`'s 400 `invalid_params`, `details.problems`), or `null` for any
+ *  other failure. */
+function procedureTemplateProblemsOf(err: unknown): readonly string[] | null {
+  if (!(err instanceof HttpError) || err.code !== 'invalid_params') return null;
+  const problems = err.details?.problems;
+  if (!Array.isArray(problems) || problems.length === 0) return null;
+  return problems.filter((problem): problem is string => typeof problem === 'string');
+}
+
+/** UX acceptance of #722 (P2-1): why publishing this draft was refused — the plan it makes does not
+ *  pass — next to Publish, where the person is, focused when it appears; each problem as
+ *  `lib/procedure-template` words it. The fix is a new draft (a draft's content never changes). */
+function PublishTemplateProblems({ problems }: { readonly problems: readonly string[] }) {
+  const t = useT();
+  const ref = useRef<HTMLDivElement>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: focus again on each new refusal.
+  useEffect(() => {
+    ref.current?.focus();
+  }, [problems]);
+  return (
+    <div
+      ref={ref}
+      tabIndex={-1}
+      role="alert"
+      className="field-error stack-s"
+      data-testid="procedure-publish-problems"
+    >
+      <strong>
+        {t(
+          '这个流程生成不了目标的计划，所以没有发布。',
+          'This Procedure does not make a goal plan that passes, so it was not published.',
+        )}
+      </strong>
+      <span>
+        {t(
+          '请「编辑为新草稿」，在 JSON 视图里改下面这些位置，再发布新的草稿：',
+          'Use “Edit as new draft”, fix these places in the JSON view, then publish the new draft:',
+        )}
+      </span>
+      <ul className="stack-s">
+        {problems.map((problem) => (
+          <li key={problem}>{procedureTemplateProblemText(problem, t)}</li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
@@ -1970,6 +2022,7 @@ function ProcedureDetailView({
   canDiscard,
   busy,
   credentialReview,
+  publishProblems,
   onEditAsDraft,
   onPublish,
   onDeprecate,
@@ -1985,6 +2038,9 @@ function ProcedureDetailView({
   readonly canDiscard: boolean;
   readonly busy: boolean;
   readonly credentialReview: PublishCredentialReview;
+  /** Why the kernel refused the last publish of this version, as a template (UX acceptance of
+   *  #722), or `null`. */
+  readonly publishProblems: readonly string[] | null;
   readonly onEditAsDraft: () => void;
   readonly onPublish: () => Promise<void>;
   readonly onDeprecate: () => Promise<void>;
@@ -2016,12 +2072,13 @@ function ProcedureDetailView({
         ]}
       />
 
-      <div className="stack-s">
-        <span className="section-title">{t('步骤', 'Steps')}</span>
-        <pre className="code-block" data-testid="procedure-detail-steps">
-          {prettyJsonVisible(row.steps ?? [])}
-        </pre>
-      </div>
+      {/* S11 GO5d-2: the steps as the goal plan made from them reads them; JSON one click away. */}
+      <ProcedureTemplateView
+        http={http}
+        status={row.status}
+        steps={row.steps ?? []}
+        parameters={row.parameters}
+      />
 
       {canPublish && row.status === 'draft' ? (
         <PublishCredentialSlot
@@ -2029,6 +2086,9 @@ function ProcedureDetailView({
           busy={busy}
           fieldNames={reviewFieldNames('procedure', t)}
         />
+      ) : null}
+      {publishProblems && row.status === 'draft' ? (
+        <PublishTemplateProblems problems={publishProblems} />
       ) : null}
       <div className="row-wrap">
         {canPropose ? (
@@ -2083,12 +2143,20 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   const { role, principalId } = useWorkspaceIdentity(http);
   const [busy, setBusy] = useState<string | null>(null);
   const [editor, setEditor] = useState<EditorState<ProcedureRow>>(null);
+  // UX acceptance of #722 (P2-1): the last publish refusal as a template, by `id@version`.
+  const [publishRefusal, setPublishRefusal] = useState<{
+    readonly version: string;
+    readonly problems: readonly string[];
+  } | null>(null);
 
   const rows = procedures.state.status === 'ready' ? procedures.state.data.items : [];
   const selected = itemId ? rows.find((row) => row.id === itemId) : undefined;
-  const credentialReview = usePublishCredentialReview(
-    selected ? `${selected.id}@${selected.version}` : null,
-  );
+  const selectedVersion = selected ? `${selected.id}@${selected.version}` : null;
+  const credentialReview = usePublishCredentialReview(selectedVersion);
+  const publishProblems =
+    publishRefusal !== null && publishRefusal.version === selectedVersion
+      ? publishRefusal.problems
+      : null;
   const showEditor = editor !== null && itemId === NEW_ITEM_ID;
 
   function refresh(): void {
@@ -2124,10 +2192,17 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
         tone: 'ok',
         title: `${row.name} ${action === 'publish_procedure' ? t('已发布', 'published') : t('已弃用', 'deprecated')}`,
       });
+      setPublishRefusal(null);
       refresh();
     } catch (err) {
       // The kernel's credential question — answered next to Publish, not as a failure toast.
       if (action === 'publish_procedure' && credentialReview.capture(err)) return;
+      // The plan it makes does not pass: listed next to Publish too (UX acceptance of #722).
+      const problems = action === 'publish_procedure' ? procedureTemplateProblemsOf(err) : null;
+      if (problems && problems.length > 0) {
+        setPublishRefusal({ version: `${row.id}@${row.version}`, problems });
+        return;
+      }
       if (isForbiddenError(err)) permissions.markDenied(action);
       // The toast says it was reloaded: show what is there now.
       if (isVersionChangedError(err)) refresh();
@@ -2305,6 +2380,7 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       canDiscard={canDiscard && isOwnDraftOrUnknown(selected, principalId)}
       busy={busy === selected.id}
       credentialReview={credentialReview}
+      publishProblems={publishProblems}
       onEditAsDraft={() => openEditor({ kind: 'copy', row: selected })}
       onPublish={() => act(selected, 'publish_procedure')}
       onDeprecate={() => act(selected, 'deprecate_procedure')}

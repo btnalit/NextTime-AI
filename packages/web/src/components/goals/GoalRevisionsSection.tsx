@@ -14,6 +14,7 @@ import { RefChip } from '../kit/ref-chip.js';
 import { DashboardCard } from '../kit/section.js';
 import { SkeletonRows } from '../kit/skeleton.js';
 import { StatusChip } from '../kit/status-chip.js';
+import { PlanSource } from './PlanSource.js';
 
 export interface GoalRevisionsSectionProps {
   readonly detail: GoalDetailWire;
@@ -99,6 +100,11 @@ function RevisionItem({
           </>
         ) : null}
       </span>
+      {revision.fromProcedure ? (
+        <span className="text-small">
+          <PlanSource source={revision.fromProcedure} testId="goal-revision-from-procedure" />
+        </span>
+      ) : null}
       {revision.reason ? (
         <p className="pre-wrap">{visibleLines(revision.reason)}</p>
       ) : revision.revision > 1 ? (
