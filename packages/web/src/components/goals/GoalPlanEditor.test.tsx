@@ -491,6 +491,38 @@ describe('the plan editor on the goal page (S11 GO6, revise_goal)', () => {
     await waitFor(() => expect(screen.queryByTestId('goal-plan-editor')).toBeNull());
   });
 
+  it('moves focus on when 移除 turns into 恢复, a new item is taken out, or a button goes (UX P3-5 on #738)', async () => {
+    const http = scriptedHttp(handlers(paused(), workspace('p-alice', 'member')));
+    renderPage(http);
+    await openEditor();
+    const focusedId = () => (document.activeElement as HTMLElement).dataset.testid;
+
+    fireEvent.click(within(step('apply')).getByTestId('goal-plan-step-remove'));
+    expect(focusedId()).toBe('goal-plan-step-restore');
+    fireEvent.click(document.activeElement as HTMLElement);
+    expect(focusedId()).toBe('goal-plan-step-remove');
+    expect(step('apply').contains(document.activeElement)).toBe(true);
+
+    fireEvent.click(screen.getByTestId('goal-plan-add-step'));
+    const added = screen.getAllByTestId('goal-plan-step').at(-1) as HTMLElement;
+    fireEvent.click(within(added).getByTestId('goal-plan-step-remove'));
+    expect(focusedId()).toBe('goal-plan-add-step');
+
+    const [observe] = screen.getAllByTestId('goal-plan-check') as [HTMLElement];
+    fireEvent.click(within(observe).getByTestId('goal-plan-check-remove'));
+    expect(focusedId()).toBe('goal-plan-check-restore');
+    fireEvent.click(document.activeElement as HTMLElement);
+    expect(focusedId()).toBe('goal-plan-check-remove');
+
+    // 加一条请求人确认 goes once there is one: what the requester is asked takes the focus.
+    fireEvent.click(screen.getByTestId('goal-plan-add-confirm'));
+    expect(document.activeElement?.tagName).toBe('TEXTAREA');
+    const confirm = screen.getAllByTestId('goal-plan-check').at(-1) as HTMLElement;
+    expect(confirm.contains(document.activeElement)).toBe(true);
+    fireEvent.click(within(confirm).getByTestId('goal-plan-check-remove'));
+    expect(focusedId()).toBe('goal-plan-add-confirm');
+  });
+
   it('leaves without sending anything', async () => {
     const http = scriptedHttp(handlers(paused(), workspace('p-alice', 'member')));
     renderPage(http);

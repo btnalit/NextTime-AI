@@ -1,4 +1,5 @@
-import { type FormEvent, useMemo, useState } from 'react';
+import { type FormEvent, useMemo, useRef, useState } from 'react';
+import { byData, useFocusAfterRender } from '../../hooks/useFocusAfterRender.js';
 import { usePermissions } from '../../hooks/usePermissions.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
 import {
@@ -121,7 +122,21 @@ export function ProcedureEditor({
     }));
   }
 
+  // UX P3-5 on #738: a control its own change takes away (a removed step's 移除, 添加启动参数, an
+  // 上移 now at the top) hands focus on, not to <body>.
+  const formRef = useRef<HTMLFormElement>(null);
+  const stepsRef = useRef<HTMLDivElement>(null);
+  const focusAfterRender = useFocusAfterRender();
+  const stepCard = (key: string | undefined) =>
+    key === undefined ? undefined : byData(stepsRef.current, '[data-step-uid]', 'stepUid', key);
+
   function moveStep(index: number, delta: -1 | 1): void {
+    const moved = form.steps[index]?.key;
+    const at = index + delta;
+    // The same button on the step moved, or the other one when it is now at that end.
+    const atEnd = delta === -1 ? at === 0 : at === form.steps.length - 1;
+    const want = delta === -1 ? (atEnd ? 'down' : 'up') : atEnd ? 'up' : 'down';
+    focusAfterRender(() => stepCard(moved)?.querySelector<HTMLElement>(`[data-move="${want}"]`));
     setForm((prev) => {
       const steps = [...prev.steps];
       const target = index + delta;
@@ -215,6 +230,7 @@ export function ProcedureEditor({
 
   return (
     <form
+      ref={formRef}
       className="stack"
       onSubmit={(event) => void handleSubmit(event)}
       data-testid="procedure-editor"
@@ -290,7 +306,7 @@ export function ProcedureEditor({
             />
           </Field>
 
-          <div className="stack-s">
+          <div className="stack-s" ref={stepsRef}>
             <div className="row">
               <span className="section-title grow">
                 {t('步骤', 'Steps')} ({form.steps.length})
@@ -326,6 +342,7 @@ export function ProcedureEditor({
                   className="card card-padded stack-s"
                   key={step.key}
                   data-testid="procedure-step"
+                  data-step-uid={step.key}
                 >
                   <div className="row-wrap">
                     <span className="tag">{index + 1}</span>
@@ -353,6 +370,7 @@ export function ProcedureEditor({
                       size="s"
                       disabled={busy || index === 0}
                       onClick={() => moveStep(index, -1)}
+                      data-move="up"
                       aria-label={t(`上移第 ${index + 1} 步`, `Move step ${index + 1} up`)}
                     >
                       {t('上移', 'Up')}
@@ -363,6 +381,7 @@ export function ProcedureEditor({
                       size="s"
                       disabled={busy || index === form.steps.length - 1}
                       onClick={() => moveStep(index, 1)}
+                      data-move="down"
                       aria-label={t(`下移第 ${index + 1} 步`, `Move step ${index + 1} down`)}
                     >
                       {t('下移', 'Down')}
@@ -372,15 +391,24 @@ export function ProcedureEditor({
                       size="s"
                       icon="close"
                       disabled={busy}
-                      onClick={() =>
+                      onClick={() => {
+                        // The next step's kind, or 添加步骤 when it was the last.
+                        const next = form.steps[index + 1]?.key;
+                        focusAfterRender(() =>
+                          next !== undefined
+                            ? stepCard(next)?.querySelector('select')
+                            : stepsRef.current?.querySelector<HTMLElement>(
+                                '[data-testid="procedure-add-step"]',
+                              ),
+                        );
                         setForm((prev) => ({
                           ...prev,
                           steps: withPlanKeysKept(
                             prev.steps,
                             prev.steps.filter((_, i) => i !== index),
                           ),
-                        }))
-                      }
+                        }));
+                      }}
                       aria-label={t(`移除第 ${index + 1} 步`, `Remove step ${index + 1}`)}
                     >
                       {t('移除', 'Remove')}
@@ -578,7 +606,14 @@ export function ProcedureEditor({
                 'What the person filling it in sees (optional)',
               )}
               onChange={(parameters) => setForm((prev) => ({ ...prev, parameters }))}
-              onRemove={() => setForm((prev) => ({ ...prev, parameters: null }))}
+              onRemove={() => {
+                focusAfterRender(() =>
+                  formRef.current?.querySelector<HTMLElement>(
+                    '[data-testid="procedure-add-parameters"]',
+                  ),
+                );
+                setForm((prev) => ({ ...prev, parameters: null }));
+              }}
               removeLabel={t('去掉启动参数', 'Drop the parameters')}
               testId="procedure-parameters"
             />
@@ -589,7 +624,14 @@ export function ProcedureEditor({
                 size="s"
                 icon="plus"
                 disabled={busy}
-                onClick={() => setForm((prev) => ({ ...prev, parameters: emptySchemaDraft() }))}
+                onClick={() => {
+                  focusAfterRender(() =>
+                    formRef.current?.querySelector<HTMLElement>(
+                      '[data-testid="procedure-parameters-add-field"]',
+                    ),
+                  );
+                  setForm((prev) => ({ ...prev, parameters: emptySchemaDraft() }));
+                }}
                 data-testid="procedure-add-parameters"
               >
                 {t('添加启动参数', 'Add parameters')}

@@ -8,6 +8,7 @@ import {
 } from '@nexttime/shared';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
+import { byData, useFocusAfterRender } from '../../hooks/useFocusAfterRender.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import {
@@ -120,6 +121,17 @@ export function GoalPlanEditor({
   // The editor takes the page's place: focus moves to its title so the change is announced.
   const titleRef = useRef<HTMLSpanElement>(null);
   useEffect(() => titleRef.current?.focus(), []);
+  // UX P3-5 on #738 (the class of #705's P3-1): 移除 turning into 恢复 and back, a new item taken
+  // out, 加一条请求人确认 going once there is one — focus moves on, not to <body>.
+  const stepsRef = useRef<HTMLElement>(null);
+  const checksRef = useRef<HTMLElement>(null);
+  const focusAfterRender = useFocusAfterRender();
+  const within = (root: HTMLElement | null, selector: string) =>
+    root?.querySelector<HTMLElement>(selector);
+  const item = (root: HTMLElement | null, name: 'stepUid' | 'checkUid', uid: string | undefined) =>
+    uid === undefined
+      ? undefined
+      : byData(root, name === 'stepUid' ? '[data-step-uid]' : '[data-check-uid]', name, uid);
   const [discardOpen, setDiscardOpen] = useState(false);
   const [refused, setRefused] = useState<ReadonlyMap<FieldKey, string>>(new Map());
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -281,9 +293,9 @@ export function GoalPlanEditor({
           </Notice>
         ) : null}
 
-        <section className="stack-s" aria-label={t('步骤', 'Steps')}>
+        <section className="stack-s" aria-label={t('步骤', 'Steps')} ref={stepsRef}>
           <span className="section-title">{t('步骤', 'Steps')}</span>
-          {draft.steps.map((step) => (
+          {draft.steps.map((step, index) => (
             <StepEditor
               key={step.uid}
               step={step}
@@ -293,15 +305,36 @@ export function GoalPlanEditor({
               allDefinitions={defs}
               errorOf={errorOf}
               onChange={(patch) => changeStep(step.uid, patch)}
-              onRemove={() =>
-                step.original === null
-                  ? change(`step:${step.uid}`, (current) => ({
-                      ...current,
-                      steps: current.steps.filter((item) => item.uid !== step.uid),
-                    }))
-                  : changeStep(step.uid, { removed: true })
-              }
-              onRestore={() => changeStep(step.uid, { removed: false })}
+              onRemove={() => {
+                if (step.original === null) {
+                  // Gone: the next step, or 加一个步骤 when it was the last.
+                  const next = draft.steps[index + 1]?.uid;
+                  focusAfterRender(
+                    () =>
+                      item(stepsRef.current, 'stepUid', next)?.querySelector('button') ??
+                      within(stepsRef.current, '[data-testid="goal-plan-add-step"]'),
+                  );
+                  change(`step:${step.uid}`, (current) => ({
+                    ...current,
+                    steps: current.steps.filter((item) => item.uid !== step.uid),
+                  }));
+                } else {
+                  focusAfterRender(() =>
+                    item(stepsRef.current, 'stepUid', step.uid)?.querySelector(
+                      '[data-testid="goal-plan-step-restore"]',
+                    ),
+                  );
+                  changeStep(step.uid, { removed: true });
+                }
+              }}
+              onRestore={() => {
+                focusAfterRender(() =>
+                  item(stepsRef.current, 'stepUid', step.uid)?.querySelector(
+                    '[data-testid="goal-plan-step-remove"]',
+                  ),
+                );
+                changeStep(step.uid, { removed: false });
+              }}
             />
           ))}
           <div>
@@ -338,29 +371,51 @@ export function GoalPlanEditor({
           />
         ) : null}
 
-        <section className="stack-s" aria-label={t('验收', 'Acceptance')}>
+        <section className="stack-s" aria-label={t('验收', 'Acceptance')} ref={checksRef}>
           <span className="section-title">{t('验收检查', 'Acceptance checks')}</span>
           {draft.acceptance.length === 0 ? (
             <span className="text-3 text-small">
               {t('计划里没有验收检查。', 'The plan has no acceptance checks.')}
             </span>
           ) : null}
-          {draft.acceptance.map((check) => (
+          {draft.acceptance.map((check, index) => (
             <CheckEditor
               key={check.uid}
               check={check}
               gateNames={gateNames}
               errorOf={errorOf}
               onChange={(patch) => changeCheck(check.uid, patch)}
-              onRemove={() =>
-                check.original === null
-                  ? change(`check:${check.uid}`, (current) => ({
-                      ...current,
-                      acceptance: current.acceptance.filter((item) => item.uid !== check.uid),
-                    }))
-                  : changeCheck(check.uid, { removed: true })
-              }
-              onRestore={() => changeCheck(check.uid, { removed: false })}
+              onRemove={() => {
+                if (check.original === null) {
+                  // Gone (a new one is the requester's confirmation, so 加一条请求人确认 is back):
+                  // that button, or the next check.
+                  const next = draft.acceptance[index + 1]?.uid;
+                  focusAfterRender(
+                    () =>
+                      within(checksRef.current, '[data-testid="goal-plan-add-confirm"]') ??
+                      item(checksRef.current, 'checkUid', next)?.querySelector('button'),
+                  );
+                  change(`check:${check.uid}`, (current) => ({
+                    ...current,
+                    acceptance: current.acceptance.filter((item) => item.uid !== check.uid),
+                  }));
+                } else {
+                  focusAfterRender(() =>
+                    item(checksRef.current, 'checkUid', check.uid)?.querySelector(
+                      '[data-testid="goal-plan-check-restore"]',
+                    ),
+                  );
+                  changeCheck(check.uid, { removed: true });
+                }
+              }}
+              onRestore={() => {
+                focusAfterRender(() =>
+                  item(checksRef.current, 'checkUid', check.uid)?.querySelector(
+                    '[data-testid="goal-plan-check-remove"]',
+                  ),
+                );
+                changeCheck(check.uid, { removed: false });
+              }}
             />
           ))}
           <span className="text-3 text-small">
@@ -374,12 +429,19 @@ export function GoalPlanEditor({
               <Button
                 variant="secondary"
                 size="s"
-                onClick={() =>
+                onClick={() => {
+                  // The button goes once there is one: focus what the requester is asked.
+                  focusAfterRender(() => {
+                    const checks = checksRef.current?.querySelectorAll<HTMLElement>(
+                      '[data-testid="goal-plan-check"]',
+                    );
+                    return checks?.[checks.length - 1]?.querySelector('textarea');
+                  });
                   change('plan', (current) => ({
                     ...current,
                     acceptance: [...current.acceptance, requesterConfirmDraft(current)],
-                  }))
-                }
+                  }));
+                }}
                 data-testid="goal-plan-add-confirm"
               >
                 {t('加一条请求人确认', 'Add a requester confirmation')}
@@ -643,7 +705,12 @@ function StepEditor({
   const title = step.key === '' ? t('新步骤', 'New step') : step.key;
   if (step.removed) {
     return (
-      <div className="row-wrap goal-plan-step" data-testid="goal-plan-step" data-removed="">
+      <div
+        className="row-wrap goal-plan-step"
+        data-testid="goal-plan-step"
+        data-removed=""
+        data-step-uid={step.uid}
+      >
         <span className="mono text-3">{title}</span>
         <span className="text-3 text-small">{t('已移除', 'Removed')}</span>
         <Button variant="ghost" size="s" onClick={onRestore} data-testid="goal-plan-step-restore">
@@ -679,7 +746,12 @@ function StepEditor({
   ].filter((part): part is string => part !== null);
   const inputError = errorOf(`step:${step.uid}:input`);
   return (
-    <div className="stack-s goal-plan-step" data-testid="goal-plan-step" data-step-key={step.key}>
+    <div
+      className="stack-s goal-plan-step"
+      data-testid="goal-plan-step"
+      data-step-key={step.key}
+      data-step-uid={step.uid}
+    >
       <div className="row-wrap">
         {step.original === null ? (
           <span className="text-small">{t('新步骤', 'New step')}</span>
@@ -968,7 +1040,12 @@ function CheckEditor({
   const isConfirm = check.original === null || check.original.kind === 'requester_confirm';
   if (check.removed) {
     return (
-      <div className="row-wrap" data-testid="goal-plan-check" data-removed="">
+      <div
+        className="row-wrap"
+        data-testid="goal-plan-check"
+        data-removed=""
+        data-check-uid={check.uid}
+      >
         <span className="mono text-3">{check.key}</span>
         <span className="text-3 text-small">{t('已移除', 'Removed')}</span>
         <Button variant="ghost" size="s" onClick={onRestore} data-testid="goal-plan-check-restore">
@@ -980,7 +1057,12 @@ function CheckEditor({
   const promptError = errorOf(`check:${check.uid}:prompt`);
   const checkError = errorOf(`check:${check.uid}`);
   return (
-    <div className="stack-s" data-testid="goal-plan-check" data-check-key={check.key}>
+    <div
+      className="stack-s"
+      data-testid="goal-plan-check"
+      data-check-key={check.key}
+      data-check-uid={check.uid}
+    >
       <div className="row-wrap">
         <span className="mono">{check.key}</span>
         {isConfirm ? (
