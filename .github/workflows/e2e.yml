@@ -115,14 +115,18 @@ jobs:
           echo "version=$(pnpm --filter @nexttime/web exec playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
           echo "image=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
 
-      - name: Cache Playwright browsers
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+      # restore + save rather than actions/cache: its post step saves only when the whole job
+      # succeeds, so a run that the slow mirror pushed past the cap would never fill the cache.
+      - name: Restore Playwright browsers
+        id: browsers-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ~/.cache/ms-playwright
           key: playwright-browsers-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}
 
-      - name: Cache Playwright system packages
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+      - name: Restore Playwright system packages
+        id: apt-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ~/.cache/playwright-apt
           key: playwright-apt-${{ steps.playwright.outputs.image }}-${{ steps.playwright.outputs.version }}
@@ -143,6 +147,20 @@ jobs:
           sudo apt-get autoclean -qq
           sudo chown -R "$(id -u):$(id -g)" "$apt_cache"
           echo "apt cache: $(find "$apt_cache" -maxdepth 1 -name '*.deb' | wc -l) packages"
+
+      - name: Save Playwright browsers
+        if: steps.browsers-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-browsers-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}
+
+      - name: Save Playwright system packages
+        if: steps.apt-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.cache/playwright-apt
+          key: playwright-apt-${{ steps.playwright.outputs.image }}-${{ steps.playwright.outputs.version }}
 
       # S8 W1-B: `e2e/00-gates/copy-patterns.ts` imports `@nexttime/shared` (deriving the raw-enum
       # copy-guard pattern from the wire enums directly, docs/development-tasks.md §5e F5's own
