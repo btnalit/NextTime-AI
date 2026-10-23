@@ -23,16 +23,21 @@
 --        resolve, or any Decision whose `rationale` names an `actionRequestId`, `goalRunId` or
 --        `conflictId` while no subject resolved. Such a row is read conservatively: by the
 --        workspace owner only (on the human channel).
---    The database sets all five, on every insert (`decisions_subject` trigger) and here for the
---    rows already written — one function, `decision_subject`, for both, so a backfilled row and a
---    new one can never be told apart. It reads the subject from the Decision's Activity: the kind
---    and metadata the platform's own writers record (decide.ts, reconcile.ts, acceptance.ts,
---    epistemic-handlers.ts) — never from what a `rationale` claims, which for `record_decision`
---    holds what an agent passed. A subject only ever narrows who sees a row, so the kind is trusted
---    in the safe direction. Whatever an inserter puts in these columns is overwritten. An insert
---    whose Activity the inserter cannot see is refused: a Decision is recorded on an Activity its
---    recorder sees (every writer's own, or the caller's own Turn), so this only stops a Decision
---    being hung on someone else's conversation where nobody else would read it.
+--    The database sets all five, on every insert and on every update that names one of them or
+--    what they are read from (`decisions_subject` trigger), and here for the rows already written
+--    — one function, `decision_subject`, for both, so a backfilled row and a new one can never be
+--    told apart, and no update can move a Decision off its subject (an update that sets
+--    `goal_run_id` to null gets it back). Only the platform updates a Decision (the workspace
+--    plane holds no UPDATE on `decisions`, core/0035); its one update today, scrub-raw-secrets'
+--    `summary`, names none of these columns and does not fire it. The function reads the subject
+--    from the Decision's Activity: the kind and metadata the platform's own writers record
+--    (decide.ts, reconcile.ts, acceptance.ts, epistemic-handlers.ts) — never from what a
+--    `rationale` claims, which for `record_decision` holds what an agent passed. A subject only
+--    ever narrows who sees a row, so the kind is trusted in the safe direction. Whatever an
+--    inserter or updater puts in these columns is overwritten. A write whose Activity the writer
+--    cannot see is refused: a Decision is recorded on an Activity its recorder sees (every
+--    writer's own, or the caller's own Turn), so this only stops a Decision being hung on someone
+--    else's conversation where nobody else would read it.
 --    `action_request_id` and `goal_run_id` have no foreign key: `action_requests.
 --    approval_decision_id` and `goal_runs.outcome_decision_id` already point back at `decisions`,
 --    and the workspace purge (application/platform/purge-workspace.ts) refuses a foreign-key cycle.
@@ -43,8 +48,9 @@
 --    channel — the workspace owner sees every goal run only on the human channel (application/goal
 --    `seesEveryRun`), which RLS cannot see — so the epistemic reads apply them
 --    (substrate/epistemic/decision-visibility.ts): a run's Decisions to the owner (human channel)
---    and the requester; a request's to whoever `get_action` shows it to (the owner, a holder of a
---    matching scope, the requester); both set → the run's rule.
+--    and the requester; a request's to whoever `get_action`'s visibility predicate admits (the
+--    owner, a holder of a matching scope, the requester — without its channel and role floor);
+--    both set → the run's rule.
 -- 3. A NOTICE counts, per kind, the rows that got their subject and the ones that did not.
 --
 -- Reversibility (release.md §6): the previous release never reads the new columns, and the
@@ -180,7 +186,10 @@ $$;
 
 drop trigger if exists decisions_subject on decisions;
 create trigger decisions_subject
-  before insert on decisions
+  before insert
+  or update of activity_id, rationale, chat_id, goal_run_id, action_request_id, conflict_id,
+    subject_unresolved
+  on decisions
   for each row execute function decisions_subject_guard();
 
 -- core/0002's rule (a Decision resting on a Source reads like the Source), plus header §2's two.

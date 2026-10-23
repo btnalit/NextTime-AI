@@ -13,9 +13,11 @@
  *
  *   - `goal_run_id` set (an outcome Decision, or a reconcile Decision of a goal step's request):
  *     the owner on the human channel and the run's requester — `get_goal`'s rule;
- *   - else `action_request_id` set (an approval or reconcile Decision): whoever `get_action` shows
- *     the request to — the owner, a holder of a matching scope, the requester
- *     ({@link actionRequestVisibleToCallerSql}, the one definition both use);
+ *   - else `action_request_id` set (an approval or reconcile Decision): whoever `get_action`'s
+ *     visibility predicate admits — the owner, a holder of a matching scope, the requester
+ *     ({@link actionRequestVisibleToCallerSql}, the one definition both use) — without
+ *     `get_action`'s channel and role floor (human channel, `operator`): an agent reads them for
+ *     its `obo`, and a member reads the approval of a request they made;
  *   - else `subject_unresolved` (it names a subject that does not resolve): the owner on the human
  *     channel only;
  *   - else everyone RLS lets through.

@@ -79,15 +79,18 @@ export type {
 // `openConflict` directly) and decisions.ts's for the four read-only capabilities.
 export {
   ConflictNotFoundError,
+  conflictRulingInvalidationReason,
   getConflictForUpdate,
   listConflicts,
   markConflictResolved,
   openConflict,
   resolveFactOrigin,
   sameFactOrigin,
+  shownInvalidationReason,
 } from './conflicts.js';
 export type {
   ConflictRow,
+  ConflictRuling,
   ConflictsPage,
   FactOrigin,
   ListConflictsInput,

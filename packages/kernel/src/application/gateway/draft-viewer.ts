@@ -68,9 +68,12 @@ export async function graphReadViewerOf(
  * Legacy 421: the caller as a reader of Decisions (substrate/epistemic/decision-visibility.ts).
  * Human channel: the resolved Principal — the owner reads every goal run's and every request's
  * Decisions. Handle channel: the Handle's `obo` with that principal's role — an owner's agent reads
- * every request's Decisions (`get_action` reads the role the same way) but only its own principal's
- * goal runs' (`get_goal`'s rule, goal-handlers.ts `goalViewer`). No `ctx`: the RLS session
- * principal, as an owner on no channel — every request, its own goal runs only.
+ * every request's Decisions, anyone else's agent those `get_action`'s visibility predicate admits
+ * for its `obo`, but only its own principal's goal runs' (`get_goal`'s rule, goal-handlers.ts
+ * `goalViewer`). A request's Decisions follow `get_action`'s visibility predicate, not its channel
+ * and role floor (human channel, `operator`): `find_precedents` exists to show an agent approval
+ * precedents, and a member reads the approval of a request they made themselves. No `ctx`: the RLS
+ * session principal, as an owner on no channel — every request, its own goal runs only.
  */
 export async function decisionViewerOf(
   client: PoolClient,

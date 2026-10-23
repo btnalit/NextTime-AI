@@ -1,6 +1,7 @@
 import type { DecisionStatus, EpistemicStatus } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { shownFreeText, shownFreeTextIn } from '../redaction/index.js';
+import { shownInvalidationReason } from './conflicts.js';
 import { type DecisionViewer, decisionVisibleSql } from './decision-visibility.js';
 import { type ExplainResult, explain } from './explain.js';
 
@@ -168,8 +169,8 @@ function mapFactRefRow(row: FactDbRow): FactRef {
     recordedAt: row.recorded_at,
     supersededAt: row.superseded_at,
     invalidatedAt: row.invalidated_at,
-    // Legacy 420: free text, as `shownFreeText` shows it.
-    invalidationReason: shownFreeText(row.invalidation_reason),
+    // Legacy 420 / 421: free text as `shownFreeText` shows it, a ruling's reason left out.
+    invalidationReason: shownInvalidationReason(row.invalidation_reason),
     supersedesId: row.supersedes_id,
     epistemicStatus: row.epistemic_status,
     confidence: row.confidence,

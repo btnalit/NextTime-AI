@@ -6,6 +6,7 @@ import {
   linkTouchesHiddenOperationDraftSql,
 } from '../graph/operation-draft-visibility.js';
 import { shownFreeText } from '../redaction/index.js';
+import { shownInvalidationReason } from './conflicts.js';
 import { type DecisionViewer, decisionVisibleSql } from './decision-visibility.js';
 import { listHumanAttestations } from './evidence.js';
 
@@ -398,8 +399,8 @@ async function explainFact(
       humanAttestations,
       observationId: row.observation_id,
       invalidatedAt: row.invalidated_at ? row.invalidated_at.toISOString() : null,
-      // Legacy 420: free text, as `shownFreeText` shows it.
-      invalidationReason: shownFreeText(row.invalidation_reason),
+      // Legacy 420 / 421: free text as `shownFreeText` shows it, a ruling's reason left out.
+      invalidationReason: shownInvalidationReason(row.invalidation_reason),
       lastObservation,
     },
     activity,

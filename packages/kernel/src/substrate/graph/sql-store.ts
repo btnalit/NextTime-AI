@@ -5,9 +5,14 @@ import {
   transition,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
-import { openConflict, resolveFactOrigin, sameFactOrigin } from '../epistemic/index.js';
+import {
+  openConflict,
+  resolveFactOrigin,
+  sameFactOrigin,
+  shownInvalidationReason,
+} from '../epistemic/index.js';
 import { enqueue } from '../outbox/index.js';
-import { scrubSecretValues, shownFreeText } from '../redaction/index.js';
+import { scrubSecretValues } from '../redaction/index.js';
 import { enforceOntologyOnLinkWrite } from './ontology-guard.js';
 import type { GraphReadViewer } from './operation-draft-visibility.js';
 import {
@@ -167,9 +172,10 @@ function mapFactRow(row: FactRow): Fact {
     recordedAt: row.recorded_at,
     supersededAt: row.superseded_at,
     invalidatedAt: row.invalidated_at,
-    // Legacy 420: free text an agent or a person gave `invalidate_fact` / `resolve_conflict`, kept
-    // as written (scrubbed at write since then) — shown as `shownFreeText` shows it.
-    invalidationReason: shownFreeText(row.invalidation_reason),
+    // Legacy 420: free text an agent or a person gave `invalidate_fact`, kept as written (scrubbed
+    // at write since then) — shown as `shownFreeText` shows it; legacy 421: a conflict ruling's
+    // reason, written into it before, left out (`shownInvalidationReason`).
+    invalidationReason: shownInvalidationReason(row.invalidation_reason),
     supersedesId: row.supersedes_id,
     epistemicStatus: row.epistemic_status,
     confidence: row.confidence,
@@ -683,7 +689,8 @@ export class SqlGraphStore implements GraphStore {
     // `input.reason`, if given, is persisted to `links.invalidation_reason` (migrations/core/
     // 0007) — see InvalidateFactInput's doc comment in store.ts. Legacy 420: scrubbed first, like a
     // Fact's properties and `record_decision`'s summary — an agent's `invalidate_fact` writes it
-    // and every member reads it; `resolve_conflict` folds the resolver's reason into it too.
+    // and every member reads it. `resolve_conflict`'s carries no reason of its own (legacy 421,
+    // epistemic/conflicts.ts's `conflictRulingInvalidationReason`).
     const markQuery = buildMarkFactInvalidatedQuery(
       workspaceId,
       input.factId,

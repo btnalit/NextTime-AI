@@ -7,9 +7,11 @@ import {
 import type { ConflictStatus } from '@nexttime/shared';
 import {
   type ConflictRow,
+  type ConflictRuling,
   type DecisionRow,
   attachHumanAttestation,
   causalChain,
+  conflictRulingInvalidationReason,
   decisionImpact,
   endActivity,
   findPrecedents,
@@ -126,7 +128,7 @@ export const resolveConflictHandler: CapabilityHandler = async (
 ) => {
   const { conflictId, resolution, reason } = params as {
     conflictId: string;
-    resolution: 'keep_a' | 'keep_b' | 'invalidate_both';
+    resolution: ConflictRuling;
     reason: string;
   };
   const principalId = ctx?.principalId ?? (await currentPrincipalId(client));
@@ -156,7 +158,10 @@ export const resolveConflictHandler: CapabilityHandler = async (
         client,
         workspaceId,
         { id: principalId },
-        { factId, reason: `resolve_conflict ${conflictId}: ${resolution} (${reason})` },
+        // Which Conflict and how — never `reason` (legacy 421): the losing Fact is read under its
+        // own visibility, the ruling's reason only under the Conflict's (its Decision's rationale
+        // and `resolution` below).
+        { factId, reason: conflictRulingInvalidationReason(conflictId, resolution) },
       );
     }
     await endActivity(client, workspaceId, activity.id, 'completed');

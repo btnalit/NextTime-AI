@@ -397,6 +397,60 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(row?.goal_run_id).toBeNull();
     });
 
+    // Review #493: the subject is set on update too. Only the platform updates a Decision (the
+    // workspace plane cannot, core/0035); its updates go through the same trigger.
+    it('no update moves a Decision off its subject; an update of its summary alone does not recompute it', async () => {
+      const subjectOf = async (id: string) =>
+        (
+          await raw<{
+            goal_run_id: string | null;
+            action_request_id: string | null;
+            subject_unresolved: boolean;
+            summary: string;
+          }>(
+            `select goal_run_id, action_request_id, subject_unresolved, summary
+               from decisions where workspace_id = $1 and id = $2`,
+            [workspaceId, id],
+          )
+        )[0];
+      const before = await subjectOf(d.reconcile);
+      expect(before?.goal_run_id).toBe(goalRunId);
+      const widen = `update decisions
+                        set goal_run_id = null, action_request_id = null, subject_unresolved = false
+                      where workspace_id = $1 and id = $2`;
+      await expect(
+        as(otherMemberId, (client) => client.query(widen, [workspaceId, d.reconcile])),
+      ).rejects.toThrow(/permission denied/);
+      await admin((client) => client.query(widen, [workspaceId, d.reconcile]));
+      expect(await subjectOf(d.reconcile)).toEqual(before);
+
+      // scrub-raw-secrets' update names `summary` only, so the trigger does not run on it — seen
+      // here as a subject cleared with the guards off staying cleared.
+      await raw(
+        'update decisions set goal_run_id = null, action_request_id = null where workspace_id = $1 and id = $2',
+        [workspaceId, d.reconcile],
+      );
+      await admin((client) =>
+        client.query('update decisions set summary = $3 where workspace_id = $1 and id = $2', [
+          workspaceId,
+          d.reconcile,
+          'scrubbed',
+        ]),
+      );
+      expect(await subjectOf(d.reconcile)).toMatchObject({
+        goal_run_id: null,
+        action_request_id: null,
+        summary: 'scrubbed',
+      });
+      // Put back: later tests read this row with its subject.
+      await raw(
+        `update decisions set goal_run_id = $3, action_request_id = $4, summary = $5
+          where workspace_id = $1 and id = $2`,
+        [workspaceId, d.reconcile, before?.goal_run_id, before?.action_request_id, before?.summary],
+      );
+      expect(await subjectOf(d.reconcile)).toEqual(before);
+    });
+
     it('a Decision cannot be hung on a conversation its recorder cannot see', async () => {
       const turnId = await as(requesterId, async (client) => {
         const chat = await client.query<{ id: string }>(
