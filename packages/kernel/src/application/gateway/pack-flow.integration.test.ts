@@ -142,7 +142,10 @@ describe.runIf(DATABASE_URL !== undefined)(
           unchanged: false,
         }),
       ]);
-      expect(preview.items[0]?.types.added.objectTypes).toContain('Container');
+      const [first] = preview.items;
+      expect(first?.kind === 'ontology_version' ? first.types.added.objectTypes : []).toContain(
+        'Container',
+      );
 
       await expect(
         call(member, 'install_pack', {
@@ -190,6 +193,51 @@ describe.runIf(DATABASE_URL !== undefined)(
         name: 'ops-assets',
       });
       expect(again).toMatchObject({ unchanged: true, crossedVersions: [] });
+    });
+
+    it("ops-base: a Worker component carries its published head version (the 「Worker」 tab's row is one version)", async () => {
+      const workspaceId = randomUUID();
+      const ownerId = randomUUID();
+      await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          await client.query('insert into workspaces (id, name) values ($1, $2)', [
+            workspaceId,
+            'p1d-packs-flow',
+          ]);
+          await client.query(
+            `insert into principals (workspace_id, id, kind, role, display_name)
+             values ($1, $2, 'human', 'owner', 'owner')`,
+            [workspaceId, ownerId],
+          );
+        },
+        { skipRoleSwitch: true },
+      );
+      const owner = humanCaller(workspaceId, ownerId, 'owner');
+      const call = <T>(name: string, params: unknown) =>
+        dispatchCapability({ pool }, owner, name, params) as Promise<T>;
+      const opsRunner = (pack: PackWire | undefined) =>
+        pack?.components.find((c) => c.kind === 'worker' && c.name === 'ops-runner');
+
+      const listed = (await call<{ items: PackWire[] }>('list_packs', {})).items.find(
+        (p) => p.name === 'ops-base',
+      );
+      expect(opsRunner(listed)).toMatchObject({ status: 'not_installed', headVersion: null });
+
+      const preview = await call<PackInstallPreviewWire>('preview_pack_install', {
+        name: 'ops-base',
+      });
+      const installed = await call<PackInstallResultWire>('install_pack', {
+        name: 'ops-base',
+        version: preview.targetVersion,
+        reviewedDigest: preview.digest,
+        confirmedOrdinals: preview.items
+          .filter((item) => item.classification === 'authority_widening')
+          .map((item) => item.ordinal),
+      });
+      expect(installed.pack).toMatchObject({ status: 'up_to_date', installedVersion: 1 });
+      expect(opsRunner(installed.pack)).toMatchObject({ status: 'up_to_date', headVersion: 1 });
     });
   },
 );

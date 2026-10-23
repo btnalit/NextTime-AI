@@ -35,7 +35,11 @@ import { FactCheckSchema, ObservationCheckSchema } from '../predicate.js';
  * A run's plan is typed (`GoalPlanSchema`, `goal-plan.ts`): every stored revision passed it when it
  * was created. Its parameters — a step's `input`, a reconcile declaration's action params, every
  * observation's params — are what one agent wrote for another, so — like a Task's input on
- * `get_task` — every reader gets them with suspected credentials replaced by `[redacted]`.
+ * `get_task` — every reader gets them with suspected credentials replaced by `[redacted]`. Free
+ * text a person writes — a revision's reason (S11 GO5b) — is refused when it carries one, and so
+ * is read back as written.
+ *
+ * S11 GO5b adds what each of a person's operations on a run returns (the end of this file).
  */
 
 /** What the run has spent of its budget (I-G6): tokens of all its Tasks (nested child Tasks
@@ -321,3 +325,82 @@ export const UnresolvedGoalActionWireSchema = z
   })
   .strict();
 export type UnresolvedGoalActionWire = z.infer<typeof UnresolvedGoalActionWireSchema>;
+
+// ---------------------------------------------------------------------------------------------
+// S11 GO5b — what a person's operation on a GoalRun returns (`confirm_goal`, `reject_goal`,
+// `pause_goal`, `resume_goal`, `cancel_goal`, `release_goal_hold`, `revise_goal`,
+// `confirm_goal_acceptance`, `end_goal`, `reconcile_goal_action`). The console reloads the run
+// (`get_goal`) to show where it stands; these say what the call itself did.
+// ---------------------------------------------------------------------------------------------
+
+/** The run's status after the call, and whether the call changed anything — `false` when the run
+ *  already was where the call asked for (a call sent again changes nothing). */
+export const GoalOperationResultWireSchema = z
+  .object({
+    goalRunId: z.string(),
+    status: GoalRunStatusSchema,
+    changed: z.boolean(),
+  })
+  .strict();
+export type GoalOperationResultWire = z.infer<typeof GoalOperationResultWireSchema>;
+
+/** `confirm_goal`: the StepRuns the confirmation created, every step of the plan `pending` (none
+ *  when it was sent again). */
+export const ConfirmGoalResultWireSchema = GoalOperationResultWireSchema.extend({
+  createdStepRunIds: z.array(z.string()),
+}).strict();
+export type ConfirmGoalResultWire = z.infer<typeof ConfirmGoalResultWireSchema>;
+
+/** `resume_goal`: the failed steps it sent back to `ready`. */
+export const ResumeGoalResultWireSchema = GoalOperationResultWireSchema.extend({
+  retriedStepRunIds: z.array(z.string()),
+}).strict();
+export type ResumeGoalResultWire = z.infer<typeof ResumeGoalResultWireSchema>;
+
+/** `cancel_goal`: the steps it cancelled and the requests it withdrew (those not yet started); an
+ *  executing one ends on its own, the run `cancelling` until it has. */
+export const CancelGoalResultWireSchema = GoalOperationResultWireSchema.extend({
+  cancelledStepRunIds: z.array(z.string()),
+  withdrawnActionRequestIds: z.array(z.string()),
+}).strict();
+export type CancelGoalResultWire = z.infer<typeof CancelGoalResultWireSchema>;
+
+/** `revise_goal`: the revision made (accepted and in force; the run stays paused), the steps it
+ *  superseded and created, the requests it withdrew or the person released, and what the requester
+ *  should know about the revised plan (`hints`). */
+export const ReviseGoalResultWireSchema = GoalOperationResultWireSchema.extend({
+  revision: z.number().int().positive(),
+  planRevisionId: z.string(),
+  supersededStepRunIds: z.array(z.string()),
+  createdStepRunIds: z.array(z.string()),
+  withdrawnActionRequestIds: z.array(z.string()),
+  releasedActionRequestIds: z.array(z.string()),
+  hints: z.array(PlanHintSchema),
+}).strict();
+export type ReviseGoalResultWire = z.infer<typeof ReviseGoalResultWireSchema>;
+
+/** `confirm_goal_acceptance`: the requester's Decision the confirmation rests on. */
+export const ConfirmGoalAcceptanceResultWireSchema = GoalOperationResultWireSchema.extend({
+  decisionId: z.string().nullable(),
+}).strict();
+export type ConfirmGoalAcceptanceResultWire = z.infer<typeof ConfirmGoalAcceptanceResultWireSchema>;
+
+/** `end_goal`: the requester's Decision the outcome rests on, every check an `achieved` overrode
+ *  (with its evidence; empty otherwise) and the steps not started that it skipped. */
+export const EndGoalResultWireSchema = GoalOperationResultWireSchema.extend({
+  decisionId: z.string().nullable(),
+  overriddenChecks: z.array(OverriddenAcceptanceCheckWireSchema),
+  skippedStepRunIds: z.array(z.string()),
+}).strict();
+export type EndGoalResultWire = z.infer<typeof EndGoalResultWireSchema>;
+
+/** `reconcile_goal_action`: the action as it now stands — what was found (`reconciliation`, its
+ *  Decision) and whether the requester decided to run it again (its Decision). The run's status
+ *  does not change: it was set due, and stays paused until the requester resumes it. */
+export const ReconcileGoalActionResultWireSchema = GoalOperationResultWireSchema.extend({
+  action: StepActionWireSchema.extend({
+    reconciliationDecisionId: z.string().nullable(),
+    reexecuteDecisionId: z.string().nullable(),
+  }).strict(),
+}).strict();
+export type ReconcileGoalActionResultWire = z.infer<typeof ReconcileGoalActionResultWireSchema>;

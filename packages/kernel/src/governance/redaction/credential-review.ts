@@ -225,6 +225,35 @@ export function assertDraftCredentialsReviewed(
 }
 
 /**
+ * S11 GO5b (review #493 on #680): free text written into a goal's durable record — a revision's
+ * reason, the note given with an outcome or a finding (GO5c: a goal's statement) — that carries
+ * suspected credentials (`findSuspectedSecrets`, the values every read of a plan's parameters
+ * redacts). Such text is kept and read back as written, by the requester's entry agent too
+ * (`get_goal`), so it is refused and nothing is written. Over-refusing is the accepted failure
+ * mode, as for the scrubs: text that only looks like a `name=value` or `Authorization: …` form is
+ * rephrased. Maps to HTTP 400 / WS invalid-params with `code = 'credentials_in_text'` and
+ * `details: { field, suspectedSecretValues }` — never a fragment of the text.
+ */
+export class TextCarriesCredentialsError extends Error {
+  readonly code = 'credentials_in_text' as const;
+  readonly details: { readonly field: string; readonly suspectedSecretValues: number };
+  constructor(field: string, suspectedSecretValues: number) {
+    super(
+      `${field}: the text carries ${suspectedSecretValues} suspected credential value(s) (a token, key or password value, a Bearer, Authorization or name=value form) — refused, nothing was written. Say what happened without the value ("the token expired"), never the value itself.`,
+    );
+    this.name = 'TextCarriesCredentialsError';
+    this.details = { field, suspectedSecretValues };
+  }
+}
+
+/** Throws {@link TextCarriesCredentialsError} when `text` carries a suspected credential. */
+export function refuseCredentialText(field: string, text: string | undefined): void {
+  if (text === undefined) return;
+  const found = findSuspectedSecrets(text);
+  if (found.count > 0) throw new TextCarriesCredentialsError(field, found.count);
+}
+
+/**
  * An observe-class Operation's params carrying a value that is almost certainly a credential,
  * whatever field holds it (`findCredentialValues`: a PEM private key, a JWT, a vendor key, an
  * issued-looking `Bearer` or `Authorization: token` value, a `Basic` user:password, a URL's

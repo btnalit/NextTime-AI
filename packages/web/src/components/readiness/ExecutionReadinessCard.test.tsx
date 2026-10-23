@@ -238,7 +238,10 @@ describe('ExecutionReadinessCard', () => {
     const items = await screen.findAllByTestId('execution-readiness-missing-item');
     expect(items).toHaveLength(1);
     expect(missing.textContent).toContain('委派任务时找不到可用的');
-    expect(missing.querySelector('a')?.getAttribute('href')).toBe('#/govern/catalog/workers');
+    // UX acceptance of #679 P3-4: the shortest way to a Worker is installing ops-base.
+    expect(missing.querySelector('a')?.getAttribute('href')).toBe(
+      '#/govern/catalog/packs/ops-base',
+    );
   });
 
   // Audit P1-5: a fix is a link only for a role that can make it; anyone else is told who to ask.
@@ -285,13 +288,16 @@ describe('ExecutionReadinessCard', () => {
           missing: [{ code: 'no_published_worker' }, { code: 'no_grant' }],
         }),
     });
-    render(<ExecutionReadinessCard http={http} currentHref="#/govern/catalog/workers" />);
+    render(<ExecutionReadinessCard http={http} currentHref="#/govern/access" />);
     await waitFor(() =>
       expect(
         [...screen.getByTestId('execution-readiness-missing').querySelectorAll('a')].map((a) =>
           a.getAttribute('href'),
         ),
-      ).toEqual(['#/govern/access']),
+      ).toEqual(['#/govern/catalog/packs/ops-base']),
+    );
+    expect(screen.getByTestId('execution-readiness-missing').textContent).toMatch(
+      /去安装\s+ops-base/,
     );
     expect(screen.queryByTestId('execution-readiness-ask')).toBeNull();
   });

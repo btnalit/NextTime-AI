@@ -54,6 +54,9 @@ export function refusalKindsOf(
 }
 
 const CATALOG_WORKERS_TAB: CatalogTab = 'workers';
+const CATALOG_PACKS_TAB: CatalogTab = 'packs';
+/** The pack this deployment ships with a general ops Worker (`packs/ops-base`). */
+const OPS_BASE_PACK = 'ops-base';
 
 /**
  * Console audit P1-4 / P1-5: who is reading a fix, so a fix link is offered only to someone the
@@ -89,6 +92,7 @@ type FixCapability =
   | 'request_connection'
   | 'grant_capability'
   | 'set_agent_policy'
+  | 'install_pack'
   | 'publish_worker_definition'
   | 'publish_operation'
   | 'set_agent_profile';
@@ -150,7 +154,17 @@ function askFor(fix: Fix, reader: ReadinessReader, t: Translate): string | undef
   );
 }
 
-function missingFix(code: ExecutionReadinessMissingWire['code']): Fix {
+/** UX acceptance of #679 P3-4: with no Worker published, the shortest way to one is installing
+ *  the ops-base pack, which ships a general ops Worker — but only an owner installs a pack
+ *  (`install_pack`). Anyone else who may publish a Worker is sent to the 「Worker」 tab instead. */
+function installsOpsBase(reader: ReadinessReader | undefined): boolean {
+  return readerCanFix(capabilityFix('install_pack'), reader);
+}
+
+function missingFix(
+  code: ExecutionReadinessMissingWire['code'],
+  reader: ReadinessReader | undefined,
+): Fix {
   switch (code) {
     case 'no_enabled_gate':
       return capabilityFix('request_connection');
@@ -159,6 +173,7 @@ function missingFix(code: ExecutionReadinessMissingWire['code']): Fix {
     case 'excluded_by_policy':
       return capabilityFix('set_agent_policy');
     case 'no_published_worker':
+      return capabilityFix(installsOpsBase(reader) ? 'install_pack' : 'publish_worker_definition');
     case 'no_worker_gate':
       return capabilityFix('publish_worker_definition');
     case 'excluded_by_profile':
@@ -200,7 +215,7 @@ export function missingAsk(
   reader: ReadinessReader,
   t: Translate,
 ): string | undefined {
-  return askFor(missingFix(item.code), reader, t);
+  return askFor(missingFix(item.code, reader), reader, t);
 }
 
 /** `missingAsk` for one gate's `reason`. */
@@ -243,8 +258,8 @@ export function missingCauseText(
     }
     case 'no_published_worker':
       return t(
-        '入口 agent 委派任务时找不到可用的 Worker，先发布一个 Worker 定义（可从 ops-runner 模板开始）。',
-        'Your entry agent finds no Worker to delegate to — publish a Worker definition first (the ops-runner template is a quick start).',
+        '入口 agent 委派任务时找不到可用的 Worker。安装能力包 ops-base 就有一个通用运维 Worker，也可以自己发布一个 Worker 定义。',
+        'Your entry agent finds no Worker to delegate to. Installing the ops-base pack adds a general ops Worker; a Worker definition of your own works too.',
       );
     case 'no_worker_gate':
       return t(
@@ -333,16 +348,22 @@ export function missingLinkHref(
   item: ExecutionReadinessMissingWire,
   reader?: ReadinessReader,
 ): string | undefined {
-  return linkFor(missingDestination(item), missingFix(item.code), reader);
+  return linkFor(missingDestination(item, reader), missingFix(item.code, reader), reader);
 }
 
-function missingDestination(item: ExecutionReadinessMissingWire): string | undefined {
+function missingDestination(
+  item: ExecutionReadinessMissingWire,
+  reader: ReadinessReader | undefined,
+): string | undefined {
   switch (item.code) {
     case 'no_enabled_gate':
       return hrefs.systems();
     case 'no_grant':
       return hrefs.access();
     case 'no_published_worker':
+      return installsOpsBase(reader)
+        ? hrefs.catalog(CATALOG_PACKS_TAB, OPS_BASE_PACK)
+        : hrefs.catalog(CATALOG_WORKERS_TAB);
     case 'no_worker_gate':
       return hrefs.catalog(CATALOG_WORKERS_TAB);
     case 'excluded_by_profile':
@@ -362,6 +383,7 @@ function missingDestination(item: ExecutionReadinessMissingWire): string | undef
 export function missingLinkLabel(
   item: ExecutionReadinessMissingWire,
   t: Translate,
+  reader?: ReadinessReader,
 ): string | undefined {
   switch (item.code) {
     case 'no_enabled_gate':
@@ -369,6 +391,9 @@ export function missingLinkLabel(
     case 'no_grant':
       return t('去系统与授权', 'Go to Systems & access');
     case 'no_published_worker':
+      return installsOpsBase(reader)
+        ? t('去安装 ops-base', 'Install ops-base')
+        : t('去能力目录', 'Go to Catalog');
     case 'no_worker_gate':
       return t('去能力目录', 'Go to Catalog');
     case 'excluded_by_profile':

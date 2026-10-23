@@ -16,6 +16,7 @@ import {
   ChangeRollbackConflictError,
   ChangeSegmentNotFoundError,
   ChangeSegmentRolledBackError,
+  type PlannedItemRollback,
   type WorkspaceSegmentInput,
   applyWorkspaceSegment,
   contentDigest,
@@ -40,6 +41,10 @@ import {
  */
 
 const DATABASE_URL = process.env.DATABASE_URL;
+
+/** An ontology item's rollback (`undefined` for another kind). */
+const ontologyOf = (item: PlannedItemRollback | undefined) =>
+  item?.detail.kind === 'ontology_version' ? item.detail.planned : undefined;
 
 const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
@@ -228,12 +233,15 @@ describe.runIf(DATABASE_URL !== undefined)(
           classification: 'not_widening',
           widening: [],
           conflict: null,
-          ontology: {
-            target: { family: 'fam-r', ontologyId },
-            from: { version: 1, definitionDigest: contentDigest(definition) },
-            to: null,
-            removes: { objectTypes: ['ThingR'], linkTypes: ['thingr_of'], actionTypes: [] },
-            blocker: null,
+          detail: {
+            kind: 'ontology_version',
+            planned: {
+              target: { family: 'fam-r', ontologyId },
+              from: { version: 1, definitionDigest: contentDigest(definition) },
+              to: null,
+              removes: { objectTypes: ['ThingR'], linkTypes: ['thingr_of'], actionTypes: [] },
+              blocker: null,
+            },
           },
         });
         // The dry run wrote nothing.
@@ -297,7 +305,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           segment('fam-drop', definitionOf(['ThingD'], { link: 'shared_link' })),
         );
         const dryRun = await preview(ws, segmentId);
-        expect(dryRun.items[0]?.ontology.removes.linkTypes).toEqual(['shared_link']);
+        expect(ontologyOf(dryRun.items[0])?.removes.linkTypes).toEqual(['shared_link']);
         await asOwner(ws, async (client) => {
           const a = await client.query<{ id: string }>(
             `insert into objects (workspace_id, object_type, properties)
@@ -358,7 +366,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         ]);
 
         const dryRun = await preview(ws, second);
-        expect(dryRun.items[0]?.ontology).toMatchObject({
+        expect(ontologyOf(dryRun.items[0])).toMatchObject({
           from: { version: 2 },
           to: { version: 1, definitionDigest: contentDigest(v1) },
           removes: { objectTypes: ['ThingU2'], linkTypes: [], actionTypes: [] },
@@ -451,7 +459,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(dryRun.items[0]).toMatchObject({
           classification: 'authority_widening',
           widening: [{ path: 'actionTypes[restart]', reason: 'removed' }],
-          ontology: { removes: { actionTypes: ['restart'] } },
+          detail: { kind: 'ontology_version', planned: { removes: { actionTypes: ['restart'] } } },
         });
 
         const refused = rollBack(ws, segmentId);

@@ -1,7 +1,8 @@
 import type { ChangeItemState } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
+import { parseStoredFamilyItem, readFamilyItemState } from './family-item.js';
 import { parseStoredOntologyItem, readOntologyItemState } from './ontology-item.js';
-import { findOntologyVersionSegment } from './provenance.js';
+import { findOntologyVersionSegment, findVersionSegment } from './provenance.js';
 import {
   type ChangeItemRecord,
   ChangeSegmentNotFoundError,
@@ -43,6 +44,20 @@ async function inspectItem(
         client,
         workspaceId,
         item.target.ontologyId,
+        now.headVersion,
+      );
+      return { record, state: 'replaced', replacedBy: segmentId ? { segmentId } : null };
+    }
+    case 'skill_version':
+    case 'worker_definition_version': {
+      const item = parseStoredFamilyItem(kind, record);
+      const now = await readFamilyItemState(client, workspaceId, item);
+      if (now.state !== 'replaced') return { record, state: now.state, replacedBy: null };
+      const segmentId = await findVersionSegment(
+        client,
+        workspaceId,
+        kind,
+        item.familyId,
         now.headVersion,
       );
       return { record, state: 'replaced', replacedBy: segmentId ? { segmentId } : null };

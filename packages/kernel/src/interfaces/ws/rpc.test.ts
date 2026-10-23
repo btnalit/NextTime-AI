@@ -23,8 +23,15 @@ import {
   SupersedeIdentityMismatchError,
 } from '../../application/gateway/index.js';
 import { UnknownOperationError } from '../../application/gateway/index.js';
+import {
+  GoalPlanValidationError,
+  GoalRunForbiddenError,
+  GoalRunInputError,
+  GoalRunStateError,
+} from '../../application/goal/index.js';
 import { PackNotFoundError } from '../../application/packs/index.js';
 import { TaskRuntimeNotConfiguredError } from '../../application/task/index.js';
+import { SkillNameConflictError } from '../../application/worker/index.js';
 import { ApprovalReasonRequiredError } from '../../governance/approval/index.js';
 import { HandleIssuanceError, ScopeValidationError } from '../../governance/capability/index.js';
 import { ConnectionParamsCarryCredentialsError } from '../../governance/connections/index.js';
@@ -33,7 +40,10 @@ import {
   OperationDeclaresGateOwnedParamsError,
   OperationIdentityConflictError,
 } from '../../governance/gatekeepers/index.js';
-import { ObserveParamsCarryCredentialsError } from '../../governance/redaction/index.js';
+import {
+  ObserveParamsCarryCredentialsError,
+  TextCarriesCredentialsError,
+} from '../../governance/redaction/index.js';
 import { JsonRpcRequestSchema, WS_ERROR_CODES, mapDispatchError } from './rpc.js';
 
 /**
@@ -163,6 +173,21 @@ describe('mapDispatchError — legacy 232 unknown operation', () => {
   });
 });
 
+describe('mapDispatchError — S11 GO5b goal operations', () => {
+  it('maps each refusal like the HTTP transport', () => {
+    const cases: [Error, number][] = [
+      [new GoalRunForbiddenError('only the requester'), WS_ERROR_CODES.FORBIDDEN],
+      [new GoalRunStateError('not paused'), WS_ERROR_CODES.ILLEGAL_TRANSITION],
+      [new GoalRunInputError('a note is too long'), WS_ERROR_CODES.INVALID_PARAMS],
+      [new GoalPlanValidationError(['cycle']), WS_ERROR_CODES.INVALID_PARAMS],
+      [new TextCarriesCredentialsError('note', 1), WS_ERROR_CODES.INVALID_PARAMS],
+    ];
+    for (const [err, code] of cases) {
+      expect(mapDispatchError(err)).toEqual({ code, message: err.message });
+    }
+  });
+});
+
 describe('mapDispatchError — legacy 175 observe params', () => {
   it('ObserveParamsCarryCredentialsError maps to INVALID_PARAMS with its message', () => {
     const err = new ObserveParamsCarryCredentialsError('inventory', 'list_items', {
@@ -247,6 +272,11 @@ describe('mapDispatchError — error-mapping followup: previously-unmapped S3.1/
 
   it('OntologyBaseMovedError (publish_ontology_version, R-60) maps to ILLEGAL_TRANSITION, like HTTP 409', () => {
     const mapped = mapDispatchError(new OntologyBaseMovedError('ont-1', 3, 1, 2));
+    expect(mapped.code).toBe(WS_ERROR_CODES.ILLEGAL_TRANSITION);
+  });
+
+  it('SkillNameConflictError (S11 P1-D) maps to ILLEGAL_TRANSITION, like HTTP 409', () => {
+    const mapped = mapDispatchError(new SkillNameConflictError('fix-it', 'skill-1', 'install'));
     expect(mapped.code).toBe(WS_ERROR_CODES.ILLEGAL_TRANSITION);
   });
 

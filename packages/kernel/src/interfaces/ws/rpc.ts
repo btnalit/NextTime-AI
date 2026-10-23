@@ -60,7 +60,14 @@ import {
   UnstorableTextError,
 } from '../../application/gateway/index.js';
 // S11 GO5a: the `goal` reads' not-found errors, imported directly like the domain errors around.
-import { GoalRevisionNotFoundError, GoalRunNotFoundError } from '../../application/goal/index.js';
+import {
+  GoalPlanValidationError,
+  GoalRevisionNotFoundError,
+  GoalRunForbiddenError,
+  GoalRunInputError,
+  GoalRunNotFoundError,
+  GoalRunStateError,
+} from '../../application/goal/index.js';
 // S11 P1-C: a domain module's error, imported directly like the two above.
 import { PackNotFoundError } from '../../application/packs/index.js';
 // P-B2b: same direct-import convention as the comment above — application/platform/modules.ts is a
@@ -85,6 +92,7 @@ import {
   DraftNotDiscardableError,
   ProcedureNotFoundError,
   ProcedureStepReferenceError,
+  SkillNameConflictError,
   SkillNotFoundError,
   SkillValidationError,
   WorkerDefinitionKindMismatchError,
@@ -122,6 +130,7 @@ import {
 import {
   CredentialReviewRequiredError,
   ObserveParamsCarryCredentialsError,
+  TextCarriesCredentialsError,
 } from '../../governance/redaction/index.js';
 import { isPgInvalidTextRepresentation } from '../http/capability-route.js';
 
@@ -345,6 +354,10 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   if (err instanceof ObserveParamsCarryCredentialsError) {
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
+  // S11 GO5b: credential-looking free text for a goal's record (see capability-route.ts).
+  if (err instanceof TextCarriesCredentialsError) {
+    return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
+  }
   // An Operation declaring a gate-owned param, not published (see capability-route.ts's own mapping).
   if (err instanceof OperationDeclaresGateOwnedParamsError) {
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
@@ -399,6 +412,10 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   }
   // I-P1: mirrors HTTP 409 `ontology_namespace_conflict` (capability-route.ts).
   if (err instanceof OntologyNamespaceConflictError) {
+    return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
+  }
+  // S11 P1-D: mirrors HTTP 409 `skill_name_conflict` (capability-route.ts).
+  if (err instanceof SkillNameConflictError) {
     return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
   }
   // S5.3 `register_source`: mirrors HTTP 409 `source_identity_conflict` (capability-route.ts).
@@ -530,6 +547,16 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   // S11 GO5a — same mapping as interfaces/http/capability-route.ts.
   if (err instanceof GoalRunNotFoundError || err instanceof GoalRevisionNotFoundError) {
     return { code: WS_ERROR_CODES.NOT_FOUND, message: err.message };
+  }
+  // S11 GO5b — same mapping as interfaces/http/capability-route.ts.
+  if (err instanceof GoalRunForbiddenError) {
+    return { code: WS_ERROR_CODES.FORBIDDEN, message: err.message };
+  }
+  if (err instanceof GoalRunStateError) {
+    return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
+  }
+  if (err instanceof GoalRunInputError || err instanceof GoalPlanValidationError) {
+    return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
   // S10 E1 — WS equivalents of capability-route.ts's own mappings for these two classes.
   if (err instanceof ObjectiveOutcomeForbiddenError) {

@@ -5,6 +5,7 @@ import type {
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import {
+  ActionRequestNotFoundError,
   type ActionRequestRow,
   getActionRequest,
   listUnresolvedStepActions,
@@ -19,8 +20,9 @@ import { GoalRunNotFoundError, GoalRunStateError, lockGoalRun } from './service.
  * application/goal/reconcile (S11 GO3c; plan §3.3 I-G4, §4.7 "结果未知", §4.8): a person settles an
  * action of a goal step whose outcome is unknown — records what they found (`effect_seen`: it
  * counts as executed; `effect_absent`: no effect), and the requester may decide to run it again.
- * The capability that exposes it is GO5 (human channel only); like the other goal controls this runs
- * in the caller's transaction and enforces what a capability must not be able to skip.
+ * The capability that exposes it is `reconcile_goal_action` (S11 GO5b, human channel only; the
+ * decider is the authenticated caller); like the other goal controls this runs in the caller's
+ * transaction and enforces what a capability must not be able to skip.
  *
  * Lock order as everywhere under a goal: the GoalRun, its StepRuns, then the request's row
  * (`governance/approval`'s `reconcileActionRequest` locks it and records the Decisions).
@@ -84,11 +86,8 @@ export async function reconcileGoalAction(
   const steps = await lockStepRuns(client, workspaceId, goal.id);
   const request = await getActionRequest(client, workspaceId, input.actionRequestId);
   const step = request ? steps.find((s) => s.id === request.stepRunId) : undefined;
-  if (!request || !step) {
-    throw new GoalRunStateError(
-      `ActionRequest ${input.actionRequestId} is not a request of goal run ${goal.id}`,
-    );
-  }
+  // S11 GO5b: a request of another run is not found here, like an unknown id (404).
+  if (!request || !step) throw new ActionRequestNotFoundError(workspaceId, input.actionRequestId);
   if (input.reexecute && request.reexecuteDecisionId === null) {
     if (goal.status !== 'running' && goal.status !== 'paused') {
       throw new GoalRunStateError(

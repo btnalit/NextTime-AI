@@ -11,6 +11,8 @@ import {
   ONTOLOGY_SECTION_NAMES,
   classificationOf,
   classifyOntologyDefinitionChange,
+  classifySkillChange,
+  classifyWorkerDefinitionChange,
 } from './classify.js';
 
 /**
@@ -223,5 +225,75 @@ describe('classifyOntologyDefinitionChange — what is proven not to widen', () 
     expect(
       classifyOntologyDefinitionChange(definition([BASE_ACTION]), definition([BASE_ACTION])),
     ).toEqual([]);
+  });
+});
+
+describe('classifySkillChange / classifyWorkerDefinitionChange (P1-D)', () => {
+  const SKILL = { name: 'fix-it', description: 'd', markdown: 'body', applicable: {} };
+  const WORKER = { name: 'fixer', systemPrompt: 'p' };
+
+  it('a family not installed is added as a whole; taking one out widens nothing', () => {
+    expect(classifySkillChange(null, SKILL)).toEqual([{ path: 'skill', reason: 'added' }]);
+    expect(classifyWorkerDefinitionChange(null, WORKER)).toEqual([
+      { path: 'worker', reason: 'added' },
+    ]);
+    expect(classifySkillChange(SKILL, null)).toEqual([]);
+    expect(classifyWorkerDefinitionChange(WORKER, null)).toEqual([]);
+  });
+
+  it('a Skill: any change to what a Worker reads widens; its discovery metadata does not', () => {
+    expect(classifySkillChange(SKILL, { ...SKILL, markdown: 'other' })).toEqual([
+      { path: 'skill.markdown', reason: 'changed' },
+    ]);
+    expect(classifySkillChange(SKILL, { ...SKILL, name: 'fix-that', description: 'e' })).toEqual([
+      { path: 'skill.description', reason: 'changed' },
+      { path: 'skill.name', reason: 'changed' },
+    ]);
+    expect(
+      classifySkillChange(SKILL, { ...SKILL, applicable: { objectTypes: ['Container'] } }),
+    ).toEqual([]);
+  });
+
+  it('a Worker: prompt and model whenever they change, lists by direction, labels never', () => {
+    expect(classifyWorkerDefinitionChange(WORKER, { ...WORKER, systemPrompt: 'q' })).toEqual([
+      { path: 'worker.systemPrompt', reason: 'changed' },
+    ]);
+    expect(classifyWorkerDefinitionChange(WORKER, { ...WORKER, model: 'm' })).toEqual([
+      { path: 'worker.model', reason: 'changed' },
+    ]);
+    expect(
+      classifyWorkerDefinitionChange(WORKER, { ...WORKER, name: 'other', description: 'd' }),
+    ).toEqual([]);
+    // Skills and gates: more is wider (absent is none); fewer is not.
+    expect(classifyWorkerDefinitionChange(WORKER, { ...WORKER, skills: ['a'] })).toEqual([
+      { path: 'worker.skills', reason: 'loosened' },
+    ]);
+    expect(
+      classifyWorkerDefinitionChange(
+        { ...WORKER, gates: ['g1', 'g2'] },
+        { ...WORKER, gates: ['g1'] },
+      ),
+    ).toEqual([]);
+    // Capabilities: between the default and a list is not proven either way; a longer list widens.
+    expect(classifyWorkerDefinitionChange(WORKER, { ...WORKER, capabilities: ['search'] })).toEqual(
+      [{ path: 'worker.capabilities', reason: 'changed' }],
+    );
+    expect(
+      classifyWorkerDefinitionChange(
+        { ...WORKER, capabilities: ['search'] },
+        { ...WORKER, capabilities: ['search', 'request_action'] },
+      ),
+    ).toEqual([{ path: 'worker.capabilities', reason: 'loosened' }]);
+    // The egress a Worker is denied: a shorter list widens.
+    expect(
+      classifyWorkerDefinitionChange(
+        { ...WORKER, egressDeny: ['a.example', 'b.example'] },
+        { ...WORKER, egressDeny: ['a.example'] },
+      ),
+    ).toEqual([{ path: 'worker.egressDeny', reason: 'loosened' }]);
+    // A field the schema does not have is widening until a rule says otherwise.
+    expect(classifyWorkerDefinitionChange(WORKER, { ...WORKER, extra: true })).toEqual([
+      { path: 'worker.extra', reason: 'unrecognized' },
+    ]);
   });
 });

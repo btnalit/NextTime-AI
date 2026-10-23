@@ -10,20 +10,23 @@ import {
   planWorkspaceSegment,
 } from '../change-plan/index.js';
 import {
+  type PackComponent,
   type PackEntry,
   type PackRegistry,
   type PackVersion,
   latestPackVersion,
+  packComponentDigest,
+  packComponentKey,
   requirePack,
 } from './registry.js';
 import { type PackState, classifyPackState } from './state.js';
 
 /**
  * application/packs/install: installing a pack into a workspace as one ChangePlan workspace segment
- * (S11 P1-C; S10 plan §6.4; plan §5.4 I-A4, I-A8). An install always targets the pack's latest
- * version, in one segment that publishes each ontology component whose content differs — the same
- * call installs, upgrades and replaces a customized component. Nothing is stored about the pack
- * beyond the segment (`state.ts`).
+ * (S11 P1-C / P1-D; S10 plan §6.4; plan §5.4 I-A4, I-A8). An install always targets the pack's
+ * latest version, in one segment that publishes each component whose content differs — an ontology
+ * family's next version, a Skill's, a Worker's — so the same call installs, upgrades and replaces a
+ * customized component. Nothing is stored about the pack beyond the segment (`state.ts`).
  *
  *   preview (`previewPackInstall`) — the segment's dry run, plus what the person reviewing it needs
  *         beside the items: which versions it moves through and whether one is `breaking`, and how
@@ -40,7 +43,28 @@ import { type PackState, classifyPackState } from './state.js';
  * digest.
  */
 
-/** The segment installing `target` (an ontology item per component, in the manifest's order). */
+/** The change item installing one component (an item per component, in the version's order). */
+function componentIntent(component: PackComponent): WorkspaceSegmentInput['items'][number] {
+  switch (component.kind) {
+    case 'ontology':
+      return {
+        kind: 'ontology_version',
+        family: component.family,
+        definition: component.definition,
+      };
+    case 'skill':
+      return { kind: 'skill_version', skillId: component.skillId, content: component.content };
+    case 'worker':
+      return {
+        kind: 'worker_definition_version',
+        definitionId: component.definitionId,
+        definition: component.definition,
+      };
+  }
+}
+
+/** The segment installing `target`: item `n` installs component `n` (ontology families, then
+ *  Skills, then Workers — a Worker after the Skills it mounts). */
 export function packSegment(entry: PackEntry, target: PackVersion): WorkspaceSegmentInput {
   return {
     source: {
@@ -49,11 +73,7 @@ export function packSegment(entry: PackEntry, target: PackVersion): WorkspaceSeg
       version: String(target.version),
       digest: target.digest,
     },
-    items: target.components.map((component) => ({
-      kind: 'ontology_version' as const,
-      family: component.family,
-      definition: component.definition,
-    })),
+    items: target.components.map(componentIntent),
   };
 }
 
@@ -84,12 +104,13 @@ export async function planPackInstall(
   const target = latestPackVersion(entry);
   const segment = packSegment(entry, target);
   const plan = await planWorkspaceSegment(client, workspaceId, segment);
-  // Every family the pack has ever published is in the target (`registry.ts`), so the plan's
+  // Every component the pack has ever published is in the target (`registry.ts`), so the plan's
   // `before` is the whole installed state — read under the lock, with no second read.
   const heads = new Map<string, string | null>();
   for (const [index, component] of target.components.entries()) {
-    const digest = plan.items[index]?.before?.definitionDigest;
-    heads.set(component.family, typeof digest === 'string' ? digest : null);
+    const before = plan.items[index]?.before;
+    const digest = component.kind === 'ontology' ? before?.definitionDigest : before?.contentDigest;
+    heads.set(packComponentKey(component), typeof digest === 'string' ? digest : null);
   }
   const current = classifyPackState(entry, heads);
   let crossed: readonly PackVersion[];
@@ -132,15 +153,21 @@ export async function previewPackInstall(
 ): Promise<PackInstallPreview> {
   const install = await planPackInstall(client, workspaceId, requirePack(registry, name));
   // A type one component drops and another declares after the install is not taken out.
+  const ontology = install.target.components.flatMap((component) =>
+    component.kind === 'ontology' ? [component] : [],
+  );
   const declaredAfter = (section: 'objectTypes' | 'linkTypes') =>
     new Set(
-      install.target.components.flatMap((component) =>
+      ontology.flatMap((component) =>
         (component.definition[section] ?? []).map((type) => type.name),
       ),
     );
   const objectsAfter = declaredAfter('objectTypes');
   const linksAfter = declaredAfter('linkTypes');
-  const removed = install.plan.items.map((item) => item.detail.types.removed);
+  // Only an ontology item takes types out; a Skill or a Worker has none.
+  const removed = install.plan.items.flatMap((item) =>
+    item.detail.kind === 'ontology_version' ? [item.detail.types.removed] : [],
+  );
   const inUse = await countRemovedTypeUsage(
     client,
     workspaceId,
@@ -150,7 +177,7 @@ export async function previewPackInstall(
         .filter((n) => !objectsAfter.has(n)),
       linkTypes: removed.flatMap((names) => names.linkTypes).filter((n) => !linksAfter.has(n)),
     },
-    new Set(install.target.components.map((component) => deriveOntologyPackId(component.family))),
+    new Set(ontology.map((component) => deriveOntologyPackId(component.family))),
   );
   return { ...install, inUse };
 }
@@ -194,7 +221,10 @@ export async function installPack(
     confirmedOrdinals: input.confirmedOrdinals,
   });
   const heads = new Map(
-    target.components.map((component) => [component.family, component.definitionDigest]),
+    target.components.map((component) => [
+      packComponentKey(component),
+      packComponentDigest(component),
+    ]),
   );
   return { state: classifyPackState(entry, heads), segmentId: applied.segmentId };
 }

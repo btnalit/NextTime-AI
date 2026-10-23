@@ -16,9 +16,8 @@ name: ops-assets
 version: 1
 summary: >-
   基础设施台账：主机上的 Docker、systemd 服务与进程，由主机盘点采集器自动记录。
-notes: >-
-  记录主机、Compose 项目、容器、镜像、systemd 服务、进程、卷、网络、端点、代码仓库和负责人。
-  这些内容由采集器从主机上看到后自动写入，工作区里只读，不需要手工维护。
+# One line each: folding a Chinese sentence over lines puts a space where the lines meet.
+notes: 记录主机、Compose 项目、容器、镜像、systemd 服务、进程、卷、网络、端点、代码仓库和负责人。这些内容由采集器从主机上看到后自动写入，工作区里只读，不需要手工维护。
 breaking: false
 components:
   ontology:

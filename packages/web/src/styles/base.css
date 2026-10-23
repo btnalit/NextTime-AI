@@ -276,6 +276,12 @@ button:disabled {
   line-height: var(--lh-body);
 }
 
+/* A code block asked to wrap (a system prompt, a payload) does: `.pre-wrap` alone sits above
+   `.code-block` in this file at the same specificity, so `white-space: pre` would win. */
+.code-block.pre-wrap {
+  white-space: pre-wrap;
+}
+
 .divider {
   height: 1px;
   background: var(--border);

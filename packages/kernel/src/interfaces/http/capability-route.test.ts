@@ -48,10 +48,17 @@ import {
   hashApiKey,
 } from '../../application/gateway/index.js';
 import { UnknownOperationError } from '../../application/gateway/index.js';
+import {
+  GoalPlanValidationError,
+  GoalRunForbiddenError,
+  GoalRunInputError,
+  GoalRunStateError,
+} from '../../application/goal/index.js';
 import { PackNotFoundError } from '../../application/packs/index.js';
 import { TaskRuntimeNotConfiguredError } from '../../application/task/index.js';
 import {
   ProcedureStepReferenceError,
+  SkillNameConflictError,
   SkillValidationError,
   WorkerDefinitionNotFoundError,
   WorkerDefinitionNotPublishedError,
@@ -73,7 +80,10 @@ import {
   OperationDeclaresGateOwnedParamsError,
   OperationIdentityConflictError,
 } from '../../governance/gatekeepers/index.js';
-import { ObserveParamsCarryCredentialsError } from '../../governance/redaction/index.js';
+import {
+  ObserveParamsCarryCredentialsError,
+  TextCarriesCredentialsError,
+} from '../../governance/redaction/index.js';
 import { createServer } from '../../index.js';
 import { mapCapabilityError } from './capability-route.js';
 
@@ -233,6 +243,41 @@ describe('mapCapabilityError — legacy 175 observe params (unit)', () => {
       status: 400,
       code: 'credentials_in_observe_params',
       details: { suspectedSecretValues: 2, suspectedSecretPaths: ['q', 'filter.key'] },
+    });
+  });
+});
+
+describe('mapCapabilityError — S11 GO5b goal operations (unit)', () => {
+  it('a refused operation: 403 forbidden, 409 illegal_transition, 400 invalid_params', () => {
+    expect(mapCapabilityError(new GoalRunForbiddenError('only the requester'))).toMatchObject({
+      status: 403,
+      code: 'forbidden',
+    });
+    expect(mapCapabilityError(new GoalRunStateError('not paused'))).toMatchObject({
+      status: 409,
+      code: 'illegal_transition',
+    });
+    expect(mapCapabilityError(new GoalRunInputError('a note is too long'))).toMatchObject({
+      status: 400,
+      code: 'invalid_params',
+    });
+  });
+
+  it('a plan that does not pass: 400 invalid_params with every problem in details', () => {
+    expect(
+      mapCapabilityError(new GoalPlanValidationError(['step a: unknown worker', 'cycle'])),
+    ).toMatchObject({
+      status: 400,
+      code: 'invalid_params',
+      details: { problems: ['step a: unknown worker', 'cycle'] },
+    });
+  });
+
+  it('TextCarriesCredentialsError maps to 400 credentials_in_text naming the field', () => {
+    expect(mapCapabilityError(new TextCarriesCredentialsError('reason', 2))).toMatchObject({
+      status: 400,
+      code: 'credentials_in_text',
+      details: { field: 'reason', suspectedSecretValues: 2 },
     });
   });
 });
@@ -597,6 +642,15 @@ describe('mapCapabilityError — application/chat domain errors (unit)', () => {
     expect(mapped.status).toBe(409);
     expect(mapped.code).toBe('ontology_base_moved');
     expect(mapped.message).toMatch(/published version 1.*now 2/);
+  });
+
+  it('SkillNameConflictError (publish_skill / install_pack, S11 P1-D) → 409 skill_name_conflict with the name', () => {
+    const mapped = mapCapabilityError(new SkillNameConflictError('fix-it', 'skill-1', 'install'));
+    expect(mapped).toMatchObject({
+      status: 409,
+      code: 'skill_name_conflict',
+      details: { skillName: 'fix-it' },
+    });
   });
 
   it('ConflictNotFoundError (resolve_conflict/list_conflicts) → 404 not_found, not 500', () => {

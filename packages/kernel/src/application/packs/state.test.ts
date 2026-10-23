@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PackEntry, PackVersion } from './registry.js';
-import { classifyPackState, matchInstalledVersion } from './state.js';
+import { type PackComponentState, classifyPackState, matchInstalledVersion } from './state.js';
 
 /** application/packs/state.test: which version of a pack a workspace has, from the digests its
  *  families have installed (S11 P1-C) — pure, no database. */
@@ -28,7 +28,11 @@ function packOf(
   };
 }
 
-const heads = (entries: Record<string, string | null>) => new Map(Object.entries(entries));
+/** Heads by family name (each an ontology component's `packComponentKey`). */
+const heads = (entries: Record<string, string | null>) =>
+  new Map(Object.entries(entries).map(([family, digest]) => [`ontology:${family}`, digest]));
+const familyOf = (state: PackComponentState) =>
+  state.component.kind === 'ontology' ? state.component.family : state.component.name;
 
 describe('matchInstalledVersion', () => {
   const candidates = [
@@ -74,7 +78,7 @@ describe('classifyPackState', () => {
   it('no family installed is not_installed', () => {
     const state = classifyPackState(kit, heads({ 'kit-core': null, 'kit-extra': null }));
     expect(state).toMatchObject({ status: 'not_installed', installedVersion: null });
-    expect(state.components.map((c) => [c.family, c.status])).toEqual([
+    expect(state.components.map((c) => [familyOf(c), c.status])).toEqual([
       ['kit-core', 'not_installed'],
       ['kit-extra', 'not_installed'],
     ]);
@@ -91,7 +95,7 @@ describe('classifyPackState', () => {
   it('v1 installed: a family v1 does not publish yet has no head — outdated at 1', () => {
     const state = classifyPackState(kit, heads({ 'kit-core': 'kit-core@1', 'kit-extra': null }));
     expect(state).toMatchObject({ status: 'outdated', installedVersion: 1 });
-    expect(state.components.map((c) => [c.family, c.status, c.installedVersion])).toEqual([
+    expect(state.components.map((c) => [familyOf(c), c.status, c.installedVersion])).toEqual([
       ['kit-core', 'outdated', 1],
       ['kit-extra', 'not_installed', null],
     ]);

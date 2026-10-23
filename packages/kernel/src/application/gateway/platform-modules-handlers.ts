@@ -12,7 +12,7 @@ import {
 } from '../platform/modules.js';
 import { toWirePlatformSettings, updatePlatformSettings } from '../platform/settings.js';
 import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
-import { toOntologyProvenanceWire } from './change-segment-handlers.js';
+import { toChangeProvenanceWire } from './change-segment-handlers.js';
 
 /**
  * application/gateway/platform-modules-handlers: the thin `CapabilityHandler` layer over
@@ -67,7 +67,7 @@ async function toWorkspaceModuleWire(
     latestVersion: latest.version,
     installedVersion: state.installedVersion,
     status: state.status,
-    provenance: toOntologyProvenanceWire(provenance),
+    provenance: toChangeProvenanceWire(provenance),
   };
 }
 

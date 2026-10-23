@@ -213,6 +213,40 @@ describe('helpers', () => {
       { kind: 'code', lang: '', text: 'unclosed' },
     ]);
   });
+
+  it('parseMarkdownBlocks: a line wrapped under a list item joins that item, indented or not', () => {
+    // The shape of packs/ops-base/1/skills/docker-triage.md: long items wrapped onto the next line.
+    const blocks = parseMarkdownBlocks(
+      [
+        '- `search` for the container; `get_object` and `traverse` show',
+        '  the host, image and volumes around it.',
+        '- `list_facts` gives its recorded state, and',
+        '  `graph_freshness` how old that record is. The collector writes these;',
+        '  a stale record is a reason to observe.',
+        '- `state_at` answers',
+        'what changed, and when.',
+        '',
+        '1. First step',
+        '   wrapped.',
+        '',
+        'A paragraph',
+        '  wrapped too.',
+      ].join('\n'),
+    );
+    expect(blocks).toEqual([
+      {
+        kind: 'list',
+        ordered: false,
+        items: [
+          '`search` for the container; `get_object` and `traverse` show the host, image and volumes around it.',
+          '`list_facts` gives its recorded state, and `graph_freshness` how old that record is. The collector writes these; a stale record is a reason to observe.',
+          '`state_at` answers what changed, and when.',
+        ],
+      },
+      { kind: 'list', ordered: true, items: ['First step wrapped.'] },
+      { kind: 'paragraph', text: 'A paragraph wrapped too.' },
+    ]);
+  });
 });
 
 // S8 W3 K2 (leftover 84): opsRunnerTemplateForm's own capabilities-prefill rule — no hardcoded

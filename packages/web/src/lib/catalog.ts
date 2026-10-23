@@ -357,6 +357,12 @@ export interface WorkerDefinitionForm {
   readonly egressDeny: string;
 }
 
+/** A 「Worker」 tab row's item id — the tab lists each published version of a definition as its
+ *  own row, so an id names one version: `id@version` (`hrefs.catalog('workers', …)`). */
+export function workerItemId(row: { readonly id: string; readonly version: number }): string {
+  return `${row.id}@${row.version}`;
+}
+
 export const EMPTY_WORKER_DEFINITION_FORM: WorkerDefinitionForm = {
   kind: 'worker',
   name: '',
@@ -515,7 +521,8 @@ export type MarkdownBlock =
   | { readonly kind: 'list'; readonly ordered: boolean; readonly items: readonly string[] };
 
 /** Headings (`#`…`######`), fenced code (```), `-` / `*` bullets, `1.` numbered lists and
- *  paragraphs (blank-line separated). Inline emphasis / links are left as literal text. */
+ *  paragraphs (blank-line separated); a line wrapped under a list item joins that item, as a
+ *  wrapped paragraph line joins its paragraph. Inline emphasis / links are left as literal text. */
 export function parseMarkdownBlocks(markdown: string): MarkdownBlock[] {
   const blocks: MarkdownBlock[] = [];
   const lines = markdown.replace(/\r\n?/g, '\n').split('\n');
@@ -578,7 +585,13 @@ export function parseMarkdownBlocks(markdown: string): MarkdownBlock[] {
       flushList();
       continue;
     }
-    flushList();
+    if (list) {
+      // A line that starts no block of its own continues the item above it, indented or not
+      // (CommonMark's lazy continuation): SKILL.md bodies wrap long items onto the next line.
+      const last = list.items.length - 1;
+      list.items[last] = `${list.items[last]} ${line.trim()}`;
+      continue;
+    }
     paragraph.push(line.trim());
   }
   if (code) blocks.push({ kind: 'code', lang: code.lang, text: code.lines.join('\n') });

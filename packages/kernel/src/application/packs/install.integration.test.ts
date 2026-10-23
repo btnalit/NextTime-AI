@@ -11,11 +11,14 @@ import { deriveOntologyPackId, publishOntologyVersion } from '../../substrate/on
 import {
   ChangeConfirmationRequiredError,
   ChangePlanChangedError,
+  type PlannedChangeItem,
   applyWorkspaceSegment,
   planWorkspaceSegment,
 } from '../change-plan/index.js';
-import { type PackFixtureDirs, writePackFixture } from './fixture.js';
+import { proposeSkill, publishSkill } from '../worker/index.js';
+import { type PackFixtureDirs, skillFile, workerFile, writePackFixture } from './fixture.js';
 import {
+  type PackComponentState,
   type PackRegistry,
   installPack,
   latestPackVersion,
@@ -38,6 +41,13 @@ import {
  */
 
 const DATABASE_URL = process.env.DATABASE_URL;
+
+/** An ontology item's type changes (`undefined` for another kind). */
+const typesOf = (item: PlannedChangeItem | undefined) =>
+  item?.detail.kind === 'ontology_version' ? item.detail.types : undefined;
+/** A component state's family (an ontology component) or name. */
+const keyOf = (state: PackComponentState) =>
+  state.component.kind === 'ontology' ? state.component.family : state.component.name;
 const KERNEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
 
@@ -108,7 +118,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
 
     /** Installs version `version` of `name` the way an older platform would have: its segment,
-     *  applied directly (`install_pack` only ever installs the latest). */
+     *  applied directly (`install_pack` only ever installs the latest), every widening item
+     *  confirmed. */
     async function installOlder(ws: Ws, name: string, version: number): Promise<void> {
       const entry = requirePack(registry, name);
       const target = entry.versions.find((v) => v.version === version);
@@ -122,7 +133,9 @@ describe.runIf(DATABASE_URL !== undefined)(
           proposedBy: ws.ownerId,
           appliedBy: ws.ownerId,
           channel: 'human',
-          confirmedOrdinals: [],
+          confirmedOrdinals: plan.items
+            .filter((item) => item.classification === 'authority_widening')
+            .map((item) => item.ordinal),
         });
       });
     }
@@ -160,6 +173,26 @@ describe.runIf(DATABASE_URL !== undefined)(
             ],
           },
         ],
+        // v2 changes the Skill's text and gives the Worker a second Skill.
+        crew: [
+          {
+            skills: [skillFile('crew-fix', 'Fix the thing.', 'Step one.')],
+            workers: [workerFile('crew-runner', 'You run the crew.', 'skills:\n  - crew-fix\n')],
+          },
+          {
+            skills: [
+              skillFile('crew-fix', 'Fix the thing.', 'Step one, then two.'),
+              skillFile('crew-check', 'Check the thing.', 'Look first.'),
+            ],
+            workers: [
+              workerFile(
+                'crew-runner',
+                'You run the crew.',
+                'skills:\n  - crew-fix\n  - crew-check\n',
+              ),
+            ],
+          },
+        ],
         'act-kit': [
           {
             ontology: [
@@ -191,7 +224,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         ['kit-core', null],
         ['kit-extra', null],
       ]);
-      expect(dryRun.plan.items[0]?.detail.types.added.objectTypes).toEqual(['Alpha', 'Gamma']);
+      expect(typesOf(dryRun.plan.items[0])?.added.objectTypes).toEqual(['Alpha', 'Gamma']);
       expect(dryRun.inUse).toEqual({ objects: 0, links: 0, capped: false });
       // A dry run writes nothing.
       expect(await rows(ws, 'select id from change_segments where workspace_id = $1')).toEqual([]);
@@ -259,19 +292,19 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(state).toMatchObject({ status: 'outdated', installedVersion: 1 });
 
       const dryRun = await preview(ws, 'kit');
-      expect(dryRun.current.components.map((c) => [c.family, c.status])).toEqual([
+      expect(dryRun.current.components.map((c) => [keyOf(c), c.status])).toEqual([
         ['kit-core', 'outdated'],
         ['kit-extra', 'not_installed'],
       ]);
       expect(dryRun.crossed.map((v) => v.version)).toEqual([2]);
       expect(dryRun.breaking).toBe(true);
       const [core, extra] = dryRun.plan.items;
-      expect(core?.detail.types).toEqual({
+      expect(typesOf(core)).toEqual({
         added: { objectTypes: ['Gamma'], linkTypes: [], actionTypes: [] },
         removed: { objectTypes: ['Beta'], linkTypes: [], actionTypes: [] },
         changed: { objectTypes: [], linkTypes: [], actionTypes: [] },
       });
-      expect(extra?.detail.types.added.objectTypes).toEqual(['Delta']);
+      expect(typesOf(extra)?.added.objectTypes).toEqual(['Delta']);
       expect(dryRun.inUse).toEqual({ objects: 1, links: 0, capped: false });
 
       const installed = await install(ws, {
@@ -305,12 +338,12 @@ describe.runIf(DATABASE_URL !== undefined)(
       const dryRun = await preview(ws, 'kit');
       expect(dryRun.current).toMatchObject({ status: 'customized', installedVersion: null });
       expect(dryRun.current.components[0]).toMatchObject({
-        family: 'kit-core',
+        component: { kind: 'ontology', family: 'kit-core' },
         status: 'customized',
       });
       expect(dryRun.crossed.map((v) => v.version)).toEqual([2]);
       expect(dryRun.breaking).toBe(true);
-      expect(dryRun.plan.items[0]?.detail.types.changed.objectTypes).toEqual(['Alpha']);
+      expect(typesOf(dryRun.plan.items[0])?.changed.objectTypes).toEqual(['Alpha']);
     });
 
     it('the reviewed version or digest no longer current: refused, nothing written', async () => {
@@ -352,6 +385,75 @@ describe.runIf(DATABASE_URL !== undefined)(
           'select classification, confirmed_by from change_items where workspace_id = $1',
         ),
       ).toEqual([{ classification: 'authority_widening', confirmed_by: ws.ownerId }]);
+    });
+
+    it('Skills and Workers: Skills before the Worker that mounts them, one item each, upgraded and recognized by content', async () => {
+      const ws = await newWorkspace();
+      await installOlder(ws, 'crew', 1);
+      const entry = requirePack(registry, 'crew');
+      expect(
+        await inWorkspace(ws, (client) => loadPackState(client, ws.workspaceId, entry)),
+      ).toMatchObject({ status: 'outdated', installedVersion: 1 });
+
+      const dryRun = await preview(ws, 'crew');
+      expect(dryRun.current.components.map((c) => [c.component.kind, keyOf(c), c.status])).toEqual([
+        ['skill', 'crew-fix', 'outdated'],
+        ['skill', 'crew-check', 'not_installed'],
+        ['worker', 'crew-runner', 'outdated'],
+      ]);
+      expect(
+        dryRun.plan.items.map((item) => [
+          item.ordinal,
+          item.kind,
+          item.widening.map((w) => w.path),
+        ]),
+      ).toEqual([
+        [1, 'skill_version', ['skill.markdown']],
+        [2, 'skill_version', ['skill']],
+        [3, 'worker_definition_version', ['worker.skills']],
+      ]);
+      expect(dryRun.inUse).toEqual({ objects: 0, links: 0, capped: false });
+      await expect(
+        install(ws, { name: 'crew', version: 2, reviewedDigest: dryRun.plan.digest }),
+      ).rejects.toBeInstanceOf(ChangeConfirmationRequiredError);
+
+      const installed = await install(ws, {
+        name: 'crew',
+        version: 2,
+        reviewedDigest: dryRun.plan.digest,
+        confirmedOrdinals: [1, 2, 3],
+      });
+      expect(installed.state).toMatchObject({ status: 'up_to_date', installedVersion: 2 });
+      expect(
+        await inWorkspace(ws, (client) => loadPackState(client, ws.workspaceId, entry)),
+      ).toMatchObject({ status: 'up_to_date', installedVersion: 2 });
+      expect(
+        await rows(
+          ws,
+          'select s.name, s.version, s.status from skills s where s.workspace_id = $1 order by s.name, s.version',
+        ),
+      ).toEqual([
+        { name: 'crew-check', version: 1, status: 'published' },
+        { name: 'crew-fix', version: 1, status: 'published' },
+        { name: 'crew-fix', version: 2, status: 'published' },
+      ]);
+      expect((await preview(ws, 'crew')).plan.unchanged).toBe(true);
+    });
+
+    it('a Skill name the workspace already uses: the preview is refused (409 skill_name_conflict)', async () => {
+      const ws = await newWorkspace();
+      await inWorkspace(ws, async (client) => {
+        const own = await proposeSkill(client, ws.workspaceId, ws.ownerId, {
+          name: 'crew-check',
+          description: 'Mine.',
+          markdown: 'my body',
+        });
+        await publishSkill(client, ws.workspaceId, ws.ownerId, own.id);
+      });
+      await expect(preview(ws, 'crew')).rejects.toMatchObject({
+        code: 'skill_name_conflict',
+        skillName: 'crew-check',
+      });
     });
 
     it('a pack the deployment does not ship is pack_not_found', async () => {

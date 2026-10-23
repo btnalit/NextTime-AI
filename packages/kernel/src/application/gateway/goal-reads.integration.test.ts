@@ -181,7 +181,9 @@ describe.runIf(DATABASE_URL !== undefined)(
     /** Confirmed, then left with no tick: only this file moves it. */
     async function startGoal(by: string, keys?: readonly string[]) {
       const goalRunId = await proposeGoal(by, keys);
-      await as(by, (client) => confirmGoalRun(client, workspaceId, { goalRunId, confirmedBy: by }));
+      await as(by, (client) =>
+        confirmGoalRun(client, workspaceId, { goalRunId, revision: 1, confirmedBy: by }),
+      );
       await parkGoal(goalRunId);
       return goalRunId;
     }

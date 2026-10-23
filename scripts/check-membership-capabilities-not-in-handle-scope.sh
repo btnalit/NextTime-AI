@@ -25,6 +25,10 @@
 # STATUS leftover 89 adds `attest_fact` to the same list: a human attestation is a person's own
 # word, so no Handle-scope ceiling may ever carry it (same two-layer rule as above).
 #
+# S11 GO5b adds a person's operations on a GoalRun (`goal` group): the requester's decisions —
+# confirming, resuming, revising, confirming the acceptance, ending with an outcome, running an
+# action again — and the owner's stops. An agent proposes a goal; only a person decides about it.
+#
 # Run directly, via `pnpm ci:guards` (root package.json), `make ci`, or the CI `guards` job
 # (.github/workflows/ci.yml).
 set -eu
@@ -36,7 +40,7 @@ if [ ! -f "$HANDLES_FILE" ]; then
   exit 1
 fi
 
-NAMES="list_principals create_principal add_member set_principal_role rotate_api_key disable_principal get_workspace list_models list_grants list_policies list_quotas list_gatekeepers get_gatekeeper list_operations get_agent_profile set_agent_profile get_agent_policy set_agent_policy platform_overview list_users create_user update_user set_user_status reset_user_password list_user_memberships add_membership set_membership_role remove_membership merge_user set_user_budget get_platform_settings update_platform_settings platform_audit_query list_workspaces list_platform_models create_workspace update_workspace set_workspace_status set_allowed_models list_connectors set_connector_mode list_gate_instances get_gate_instance update_gate_instance confirm_gate_manifest test_gate_instance list_external_runtimes revoke_external_runtime list_available_gate_instances enable_gate_instance issue_service_handle create_gate_instance delete_gate_instance issue_gate_host_token issue_gate_credential_token purge_workspace purge_user issue_llm_admin_token attest_fact"
+NAMES="list_principals create_principal add_member set_principal_role rotate_api_key disable_principal get_workspace list_models list_grants list_policies list_quotas list_gatekeepers get_gatekeeper list_operations get_agent_profile set_agent_profile get_agent_policy set_agent_policy platform_overview list_users create_user update_user set_user_status reset_user_password list_user_memberships add_membership set_membership_role remove_membership merge_user set_user_budget get_platform_settings update_platform_settings platform_audit_query list_workspaces list_platform_models create_workspace update_workspace set_workspace_status set_allowed_models list_connectors set_connector_mode list_gate_instances get_gate_instance update_gate_instance confirm_gate_manifest test_gate_instance list_external_runtimes revoke_external_runtime list_available_gate_instances enable_gate_instance issue_service_handle create_gate_instance delete_gate_instance issue_gate_host_token issue_gate_credential_token purge_workspace purge_user issue_llm_admin_token attest_fact confirm_goal reject_goal pause_goal resume_goal cancel_goal release_goal_hold revise_goal confirm_goal_acceptance end_goal reconcile_goal_action"
 
 FOUND=0
 for name in $NAMES; do

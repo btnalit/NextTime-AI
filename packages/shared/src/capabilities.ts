@@ -8,12 +8,22 @@ import {
 } from './enums.js';
 import {
   ActionRequestFailureKindSchema,
+  ActionRequestReconciliationSchema,
   ActionRequestStatusSchema,
   GoalRunStatusSchema,
   ObjectiveOutcomeSchema,
 } from './enums.js';
 import type { CapabilityChannel, Role } from './enums.js';
 import { listEnvelope } from './envelope.js';
+import {
+  GoalBudgetSchema,
+  GoalPlanSchema,
+  MAX_GOAL_NOTE_CHARS,
+  MAX_PLAN_STEPS,
+  MAX_REVISION_REASON_CHARS,
+  StepKeySchema,
+  StepRemovalsSchema,
+} from './goal-plan.js';
 import { CapabilityScopeSchema } from './handle-token.js';
 import { OntologyDefinitionSchema } from './ontology-definition.js';
 import * as wire from './wire/index.js';
@@ -1339,7 +1349,7 @@ const metaCapabilities = [
       .strict(),
     resultSchema: wire.SkillPublishResultWireSchema,
     description:
-      'Publish your draft Skill (I16) — the latest version under skillId, which must be the version given (the one reviewed): a newer version under skillId since is 409 version_changed and nothing is published. Builder floor; the workspace owner may publish anyone’s draft (e.g. one a member’s Worker proposed); another builder’s draft is 403 not_proposer. When the draft carries suspected credentials, credentialsReviewed: true is required — 400 credentials_review_required (details: subject, suspectedSecretValues) otherwise.',
+      'Publish your draft Skill (I16) — the latest version under skillId, which must be the version given (the one reviewed): a newer version under skillId since is 409 version_changed and nothing is published. Builder floor; the workspace owner may publish anyone’s draft (e.g. one a member’s Worker proposed); another builder’s draft is 403 not_proposer. When the draft carries suspected credentials, credentialsReviewed: true is required — 400 credentials_review_required (details: subject, suspectedSecretValues) otherwise. A name another Skill family already has published refuses 409 skill_name_conflict (a Worker mounts Skills by name, so one name has one Skill) — deprecate that one or rename the draft.',
   },
   {
     name: 'publish_procedure',
@@ -3875,7 +3885,7 @@ const modulesCapabilities = [
       .strict(),
     resultSchema: listEnvelope(wire.ChangeSegmentWireSchema),
     description:
-      'The ChangePlan segments applied to this workspace (each module install or upgrade since the ChangePlan core is one), newest first: source, who applied it and how (human / platform), status, rollback; keyset-paginated (limit, cursor → nextCursor).',
+      'The ChangePlan segments applied to this workspace (each pack or module install or upgrade since the ChangePlan core is one), newest first: source, who applied it and how (human / platform), status, rollback; keyset-paginated (limit, cursor → nextCursor).',
   },
   {
     name: 'get_change_segment',
@@ -3886,7 +3896,7 @@ const modulesCapabilities = [
     paramsSchema: z.object({ segmentId: z.string().uuid() }).strict(),
     resultSchema: wire.ChangeSegmentDetailWireSchema,
     description:
-      'One applied ChangePlan segment with its items in order: each item’s target, state before and after, authority classification and who confirmed it, and whether what it wrote is still in effect now. 404 change_segment_not_found.',
+      'One applied ChangePlan segment with its items in order — a version of an ontology family, a Skill or a Worker (WorkerDefinition) published: each item’s target, state before and after, authority classification and who confirmed it, and whether what it wrote is still in effect now. 404 change_segment_not_found.',
   },
   {
     name: 'preview_roll_back_change_segment',
@@ -3916,13 +3926,14 @@ const modulesCapabilities = [
       .strict(),
     resultSchema: wire.ChangeSegmentWireSchema,
     description:
-      'Roll back one applied ChangePlan segment in one transaction: each item, last first, is compared with what is there now and returned to its state before (an ontology item retires the version it published, so the family’s head is the one before it again, or the family is no longer installed; objects and Facts already written stay). Refuses, writing nothing: 409 change_rollback_conflict when an item cannot be rolled back now — its target changed after it (details.items names the later segment to roll back first), is no longer installed, what it restores is gone, or it would restore a type name another family has taken —, 409 change_segment_rolled_back when it already was, 400 change_confirmation_required when an authority-widening rollback item is not among confirmedOrdinals, 403 when confirmedOrdinals comes from a Principal that is not a person (a service API key), 404 change_segment_not_found. One change_item.roll_back audit row per item.',
+      'Roll back one applied ChangePlan segment in one transaction: each item, last first, is compared with what is there now and returned to its state before (an item retires the version it published — of an ontology family, a Skill or a Worker — so the family’s head is the one before it again, or the family is no longer installed; objects and Facts already written stay). Refuses, writing nothing: 409 change_rollback_conflict when an item cannot be rolled back now — its target changed after it (details.items names the later segment to roll back first), is no longer installed, what it restores is gone, or it would restore a type name another family has taken —, 409 change_segment_rolled_back when it already was, 400 change_confirmation_required when an authority-widening rollback item is not among confirmedOrdinals, 403 when confirmedOrdinals comes from a Principal that is not a person (a service API key), 404 change_segment_not_found. One change_item.roll_back audit row per item.',
   },
-  // S11 P1-C (Pack Contract v1, docs/s10-evolution-plan-2026-10-04.md §6; `application/packs`):
-  // the packs this deployment ships, this workspace's state of each — derived from its components,
-  // nothing stored — and installing one as a ChangePlan segment the owner reviews first (I-A8:
-  // the dry run's digest; I-A4: each authority-widening item confirmed by itself). A module is a
-  // pack with one ontology component; the module capabilities above keep their own contract.
+  // S11 P1-C / P1-D (Pack Contract v1, docs/s10-evolution-plan-2026-10-04.md §6;
+  // `application/packs`): the packs this deployment ships — ontology families, Skills and `worker`
+  // WorkerDefinitions —, this workspace's state of each — derived from its components, nothing
+  // stored — and installing one as a ChangePlan segment the owner reviews first (I-A8: the dry
+  // run's digest; I-A4: each authority-widening item confirmed by itself). A module is a pack with
+  // one ontology component; the module capabilities above keep their own contract.
   {
     name: 'list_packs',
     group: 'modules',
@@ -3932,7 +3943,7 @@ const modulesCapabilities = [
     paramsSchema: noParams,
     resultSchema: listEnvelope(wire.PackWireSchema),
     description:
-      'Every pack this deployment ships (Pack Contract v1, `packs/<name>/<version>/pack.yaml`) with its versions and components, and this workspace’s state of it — not installed / up to date / outdated / customized — for the pack and for each component, with the change that installed each component’s current content.',
+      'Every pack this deployment ships (Pack Contract v1, `packs/<name>/<version>/pack.yaml`) with its versions and components — ontology families, Skills and Workers (WorkerDefinitions) —, and this workspace’s state of it — not installed / up to date / outdated / customized — for the pack and for each component, with the change that installed each component’s current content.',
   },
   {
     name: 'preview_pack_install',
@@ -3943,7 +3954,7 @@ const modulesCapabilities = [
     paramsSchema: z.object({ name: z.string().min(1) }).strict(),
     resultSchema: wire.PackInstallPreviewWireSchema,
     description:
-      'Dry run of install_pack, writing nothing: per component of the latest version, what the family has now and would have after, the type names added / removed / changed, and the item’s authority classification; the versions the install moves through and whether one is breaking; how many objects and active Facts use a type it takes out (kept, never removed); and the digest to pass back as reviewedDigest. 404 pack_not_found; 409 ontology_namespace_conflict when a component declares an ObjectType or ActionType name another installed family already declares (I-P1).',
+      'Dry run of install_pack, writing nothing: per component of the latest version, what the family has now and would have after — for an ontology family the type names added / removed / changed, for a Skill or Worker the content it would publish and the fields that differ —, and the item’s authority classification; the versions the install moves through and whether one is breaking; how many objects and active Facts use a type it takes out (kept, never removed); and the digest to pass back as reviewedDigest. 404 pack_not_found; 409 ontology_namespace_conflict when a component declares an ObjectType or ActionType name another installed family already declares (I-P1); 409 skill_name_conflict when another Skill family already has a Skill component’s name published.',
   },
   {
     name: 'install_pack',
@@ -3965,7 +3976,7 @@ const modulesCapabilities = [
       .strict(),
     resultSchema: wire.PackInstallResultWireSchema,
     description:
-      'Install a pack’s latest version into this workspace in one transaction, as one ChangePlan segment: each component whose content differs is published into its ontology family with this owner as proposer and publisher (installing, upgrading, or replacing a customized family alike — the dry run showed which). Refuses, writing nothing: 409 version_changed when the latest version is not the reviewed one, 409 change_plan_changed when the dry run would differ from the reviewed digest now (preview again), 400 change_confirmation_required when an authority-widening item is not among confirmedOrdinals, 403 when confirmedOrdinals comes from a Principal that is not a person (a service API key), 409 ontology_namespace_conflict (I-P1), 404 pack_not_found. Already up to date: records nothing. One change_item.apply audit row per item.',
+      'Install a pack’s latest version into this workspace in one transaction, as one ChangePlan segment: each component whose content differs is published as its family’s next version — an ontology family, a Skill, a Worker (WorkerDefinition) — with this owner as proposer and publisher (installing, upgrading, or replacing a customized family alike — the dry run showed which). Refuses, writing nothing: 409 version_changed when the latest version is not the reviewed one, 409 change_plan_changed when the dry run would differ from the reviewed digest now (preview again), 400 change_confirmation_required when an authority-widening item is not among confirmedOrdinals, 403 when confirmedOrdinals comes from a Principal that is not a person (a service API key), 409 ontology_namespace_conflict (I-P1), 409 skill_name_conflict, 404 pack_not_found. Already up to date: records nothing. One change_item.apply audit row per item.',
   },
 ] as const satisfies readonly Capability[];
 
@@ -3978,11 +3989,30 @@ const modulesCapabilities = [
 // console — coordinator decision on review #493 of #680). No Handle ceiling holds
 // these yet (the entry agent gets `get_goal` with `propose_goal`, GO5c/GO5e). Each result is the
 // one `wire/goal.ts` shape the console's goal pages (GO6) render.
+//
+// S11 GO5b — a person's operations on a run, human channel only (HUMAN_ONLY_CAPABILITY_NAMES; no
+// Handle ceiling may ever carry them, scripts/check-membership-capabilities-not-in-handle-scope.sh):
+// the requester's decisions — confirm, resume, revise, confirm the acceptance, end with an outcome,
+// run an action again — and the stops the workspace owner may make too — reject a proposal, pause
+// (on someone else's run: a hold), cancel, record what was found about an action — plus the owner's
+// lifting of a hold. Who decides is the authenticated caller, role included, never a param (legacy
+// 389): the database's guards do not know the role. A run the caller cannot read is 404 not_found,
+// like `get_goal`; one they can read but may not act on this way is 403 forbidden; one whose state
+// does not allow the call now is 409 illegal_transition. A call that finds the run where it asks
+// for changes nothing (`changed: false`) — `confirm_goal` too: the revision it confirms is decided
+// once (scenario S3, no idempotency key needed). Stopping is `write`, like `cancel_task`; a
+// decision that lets the run spend and act, or records a person's Decision, is `execute`.
 // -------------------------------------------------------------------------------------------
 
 /** `list_goals`' page size when `limit` is absent, and its ceiling. */
 export const GOAL_LIST_DEFAULT_LIMIT = 50;
 export const GOAL_LIST_MAX_LIMIT = 200;
+
+const goalRunId = z.string().uuid();
+const goalNote = z.string().max(MAX_GOAL_NOTE_CHARS).optional();
+const GOAL_OPERATION_REFUSALS =
+  ' Who cannot read the run gets 404 not_found (like get_goal); who can but may not do this, 403 forbidden.';
+const GOAL_NOTE_RULE = `note (at most ${MAX_GOAL_NOTE_CHARS} characters) is kept with the Decision as written — refused when it carries a suspected credential (400 credentials_in_text).`;
 
 const goalCapabilities = [
   {
@@ -4036,6 +4066,144 @@ const goalCapabilities = [
     resultSchema: listEnvelope(wire.UnresolvedGoalActionWireSchema),
     description:
       'List the actions of a GoalRun whose outcome is unknown and that still need a person — a finding (did it take effect?) or, found not to have, a decision (run it again or change the plan) — with the platform’s own check of each where its step declared one. Every step counts, revised-away and cancelled ones included. Same visibility as get_goal.',
+  },
+  {
+    name: 'confirm_goal',
+    group: 'goal',
+    mode: 'execute',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: z.object({ goalRunId, revision: z.number().int().positive() }).strict(),
+    resultSchema: wire.ConfirmGoalResultWireSchema,
+    description: `Confirm a proposed GoalRun — the requester alone, on the revision they read (its proposal, revision 1): the plan is checked again (400 invalid_params with details.problems when it no longer passes, e.g. a WorkerDefinition deprecated since), accepted and put in force; the run starts with every step pending, and from then on spends and acts with the requester’s authority. Sent again once confirmed, it changes nothing (changed: false). 409 illegal_transition when the run is no longer proposed or the revision is not its proposal.${GOAL_OPERATION_REFUSALS}`,
+  },
+  {
+    name: 'reject_goal',
+    group: 'goal',
+    mode: 'execute',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: z.object({ goalRunId, revision: z.number().int().positive() }).strict(),
+    resultSchema: wire.GoalOperationResultWireSchema,
+    description: `Turn a proposed GoalRun down — the requester, or the workspace owner — on the revision they read (revision 1): the proposal is rejected and the run cancelled; it never ran. Sent again, it changes nothing. 409 illegal_transition once the run was confirmed (cancel it instead).${GOAL_OPERATION_REFUSALS}`,
+  },
+  {
+    name: 'pause_goal',
+    group: 'goal',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: z.object({ goalRunId }).strict(),
+    resultSchema: wire.GoalOperationResultWireSchema,
+    description: `Pause a running or verifying GoalRun — the requester, or the workspace owner: no new step attempt starts; attempts already running finish and are recorded, their requests still decided and run (cancel stops those). The owner pausing someone else’s run holds it: its requester cannot resume it until an owner lifts the hold (release_goal_hold); an owner pausing someone else’s run that is already paused places the hold. Already paused: changes nothing. 409 illegal_transition from any other status.${GOAL_OPERATION_REFUSALS}`,
+  },
+  {
+    name: 'resume_goal',
+    group: 'goal',
+    mode: 'execute',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: z
+      .object({
+        goalRunId,
+        /** Failed steps to send back to `ready`, each by key — there is no "retry all". */
+        retrySteps: z.array(StepKeySchema).min(1).max(MAX_PLAN_STEPS).optional(),
+      })
+      .strict(),
+    resultSchema: wire.ResumeGoalResultWireSchema,
+    description: `Resume a paused GoalRun — the requester alone, and not while the workspace owner holds it (409 illegal_transition until release_goal_hold): it is due at once, its budget and plan checked again. retrySteps lists failed steps to send back to ready, each by key (there is no "retry all"), each only with no request of it in flight or of unknown outcome, none of its Tasks running, and still in the current plan (409 illegal_transition otherwise); a failed step not listed stays failed. Already running, with no retrySteps: changes nothing.${GOAL_OPERATION_REFUSALS}`,
+  },
+  {
+    name: 'cancel_goal',
+    group: 'goal',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: z.object({ goalRunId }).strict(),
+    resultSchema: wire.CancelGoalResultWireSchema,
+    description: `Cancel a GoalRun — the requester, or the workspace owner: in one transaction every step not yet ended is cancelled and every request of its steps not yet started is withdrawn; the run is cancelling until its Tasks are terminated and its executing requests have ended. Already cancelling or cancelled: changes nothing. A proposed run is rejected (reject_goal), not cancelled, and an ended one is 409 illegal_transition.${GOAL_OPERATION_REFUSALS}`,
+  },
+  {
+    name: 'release_goal_hold',
+    group: 'goal',
+    mode: 'execute',
+    channel: 'human',
+    minRole: 'owner',
+    paramsSchema: z.object({ goalRunId }).strict(),
+    resultSchema: wire.GoalOperationResultWireSchema,
+    description:
+      'Lift the workspace owner’s hold on a paused GoalRun — a workspace owner only. The run stays paused, for its requester to resume, revise or cancel. A run nobody holds: changes nothing.',
+  },
+  {
+    name: 'revise_goal',
+    group: 'goal',
+    mode: 'execute',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: z
+      .object({
+        goalRunId,
+        /** The revision the new plan was made from — the run's current one (I-G3). */
+        basedOnRevision: z.number().int().positive(),
+        plan: GoalPlanSchema,
+        reason: z.string().max(MAX_REVISION_REASON_CHARS).optional(),
+        /** A new budget, in force with the revision; the current one when absent. */
+        budget: GoalBudgetSchema.optional(),
+        /** Per step the revision removes: `terminate` (the default) or `let_finish`, releasing the
+         *  listed requests of a step let to finish. */
+        removals: StepRemovalsSchema.optional(),
+      })
+      .strict(),
+    resultSchema: wire.ReviseGoalResultWireSchema,
+    description: `Revise the plan of a paused GoalRun — the requester alone — based on its current revision (409 illegal_transition when another was accepted since, I-G3) and within its revision budget, or the budget the revision brings: the new plan is checked (400 invalid_params with details.problems), accepted and in force at once. Every live step it drops or changes is superseded (removals, per step: terminate — the default — or let_finish, releasing listed requests), every new or changed key gets a pending StepRun, and the superseded steps’ requests not yet started are withdrawn. The run stays paused for the requester to resume. reason (at most ${MAX_REVISION_REASON_CHARS} characters) is shown on the revision as written — refused when it carries a suspected credential (400 credentials_in_text).${GOAL_OPERATION_REFUSALS}`,
+  },
+  {
+    name: 'confirm_goal_acceptance',
+    group: 'goal',
+    mode: 'execute',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: z
+      .object({ goalRunId, checkKey: StepKeySchema.optional(), note: goalNote })
+      .strict(),
+    resultSchema: wire.ConfirmGoalAcceptanceResultWireSchema,
+    description: `Confirm the requester_confirm check of a verifying GoalRun’s current round — the requester alone, once every check of the round the platform makes has passed (409 illegal_transition before): their Decision (achieved) is recorded and the run completes on its next advance. checkKey names the confirmation; ${GOAL_NOTE_RULE} Already confirmed: changes nothing.${GOAL_OPERATION_REFUSALS}`,
+  },
+  {
+    name: 'end_goal',
+    group: 'goal',
+    mode: 'execute',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: z.object({ goalRunId, outcome: ObjectiveOutcomeSchema, note: goalNote }).strict(),
+    resultSchema: wire.EndGoalResultWireSchema,
+    description: `End a paused or verifying GoalRun with an outcome on the requester’s word — the requester alone, also while the workspace owner holds the run (ending is not resuming): not_achieved from paused or verifying; achieved from paused only, every check it overrides named in the result, the Decision and the audit row. Nothing of the run may still run (409 illegal_transition while a step runs or waits, a Task is live or a request is in flight — cancel the run instead); steps not started are skipped. ${GOAL_NOTE_RULE} Already ended with this outcome on the requester’s word: changes nothing.${GOAL_OPERATION_REFUSALS}`,
+  },
+  {
+    name: 'reconcile_goal_action',
+    group: 'goal',
+    mode: 'execute',
+    channel: 'human',
+    minRole: 'member',
+    paramsSchema: z
+      .object({
+        goalRunId,
+        actionRequestId: z.string().uuid(),
+        verdict: ActionRequestReconciliationSchema.optional(),
+        reexecute: z.boolean().optional(),
+        note: goalNote,
+      })
+      .strict()
+      .superRefine((value, ctx) => {
+        if (value.verdict === undefined && value.reexecute !== true) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'names nothing to record: give a verdict, reexecute: true, or both',
+          });
+        }
+      }),
+    resultSchema: wire.ReconcileGoalActionResultWireSchema,
+    description: `Settle an action of a GoalRun whose outcome is unknown: record what was found — verdict effect_seen (it took effect: counts as executed) or effect_absent (no effect) — the requester or the workspace owner, as a person, whatever became of the run; and/or decide to run it again (reexecute: true) — the requester alone, after or with effect_absent, while the run can still run and the step is still in the plan; the new request is approved like any other. Each is recorded once: the same again changes nothing, a different finding is 409 illegal_transition. The run is set due and stays paused until the requester resumes it. ${GOAL_NOTE_RULE} An action not of this run is 404 not_found.${GOAL_OPERATION_REFUSALS}`,
   },
 ] as const satisfies readonly Capability[];
 
@@ -4134,6 +4302,19 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set<CapabilityName>
   'set_agent_profile',
   'get_agent_policy',
   'set_agent_policy',
+  // S11 GO5b: a person's operations on a GoalRun — the requester's decisions and the owner's stops
+  // (the `goal` group comment). Never a Handle-scope member: an agent proposes a goal (GO5c), a
+  // person confirms, steers and judges it.
+  'confirm_goal',
+  'reject_goal',
+  'pause_goal',
+  'resume_goal',
+  'cancel_goal',
+  'release_goal_hold',
+  'revise_goal',
+  'confirm_goal_acceptance',
+  'end_goal',
+  'reconcile_goal_action',
   // S11 P1-B: a workspace's ChangePlan records and their rollback — the owner's configuration
   // management (§5.4: a workspace segment's contents are read and acted on only by people in that
   // workspace; the admin agent proposes, I-A1). Never a Handle-scope member.

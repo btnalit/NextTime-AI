@@ -4,9 +4,8 @@ name: ops-assets
 version: 2
 summary: >-
   基础设施台账：主机上的 Docker、systemd 服务与进程，以及 RAGFlow 知识库，由主机盘点采集器自动记录。
-notes: >-
-  在 v1 的基础上增加 RAGFlow 知识库：知识库和其中的文档（数据集先预留，暂时不会有记录）。
-  v1 的内容原样保留，升级后已有的记录和采集都不受影响。
+# One line each: folding a Chinese sentence over lines puts a space where the lines meet.
+notes: 在 v1 的基础上增加 RAGFlow 知识库：知识库和其中的文档（数据集先预留，暂时不会有记录）。v1 的内容原样保留，升级后已有的记录和采集都不受影响。
 breaking: false
 components:
   ontology:
