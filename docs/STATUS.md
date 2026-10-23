@@ -5,7 +5,7 @@
 > 拆解与实现说明在 `development-tasks.md`，评估在 `retrospective-*.md` / `code-review-*.md`，
 > 本文只链接不复制。与代码冲突时以代码为准，并修正本文。
 
-最后更新：2026-10-23（**S11 W1 GO5c 前小 PR C「Decision 只给看得到它主体的人看」合入（#700，f0f3e38，governance 0028，未发版；遗留 421 关闭）与 W3 遗留 422「pi 白名单启动」合入（#698，a3557f1，无迁移，未发版；遗留 422 关闭）**：审批、核对、目标结果、私聊里的 Decision 与冲突裁决只给看得到对应请求、目标、对话或冲突的人看，七个读面一致，控制台在 404 与空列表处说明「或者你无权查看」；入口与 Worker 的 pi 只加载平台点名的提示、Skill 与扩展，工作区里的 AGENTS.md、扩展、mcp.json 等不再生效，守卫测试真实跑 entrypoint 与锁定版 pi 并记录 pi 碰过的路径；新增 409 `runtime_image_incompatible`，worker-runtime 与 worker-supervisor 只能整版回滚。新增遗留 429–437（均 P3）。W1 内核下一步 GO5c，W3 下一步 P1-E2；主机窗口仍暂缓）。 上一版 2026-10-23（**S11 W1 GO6 操作部分「目标操作栏与确认卡片」合入（#697，8472942，web-only，未发版；遗留 366 关闭）**：目标详情页只显示当前读者此刻能做的操作——确认 / 驳回提议、暂停（所有者暂停别人的目标即锁定）、继续（可勾选重试的失败步骤）、取消、锁定与解除锁定（显示锁定后计划有没有改过）、结束目标、确认达成，待核对的动作可记录核对结果或重新执行；凭据拒收与 409 都有可照做的提示；目标相关的 38 个审计动作有了中文标签。GO6 余下 `revise_goal` 的计划编辑器。W1 内核下一步 C（#700 审查中），W3 遗留 422（#698 审查中）；主机窗口仍暂缓）。 更早的页首更新记录见 `status-history.md`「页首更新记录」。
+最后更新：2026-10-23（**登记遗留 438–441**：438 为 P2 内核——能力参数的 Zod 校验不限元素数量，与 GHSA-46jr 同类，修法是在 `/mcp` 与 HTTP 能力路由上校验前加元素数上限；439–441 为 #704、#705 验收中看到的原有控制台问题（P3）。main 上 Dependabot 开放告警（MCP SDK、vite）由依赖线程另开 PR 手工修。W1 GO5c（#704）、W3 P1-E2a（#705）、GO6 计划编辑器（#702）审查 / 验收中；主机窗口仍暂缓）。 上一版 2026-10-23（**S11 W1 GO5c 前小 PR C「Decision 只给看得到它主体的人看」合入（#700，f0f3e38，governance 0028，未发版；遗留 421 关闭）与 W3 遗留 422「pi 白名单启动」合入（#698，a3557f1，无迁移，未发版；遗留 422 关闭）**：审批、核对、目标结果、私聊里的 Decision 与冲突裁决只给看得到对应请求、目标、对话或冲突的人看，七个读面一致，控制台在 404 与空列表处说明「或者你无权查看」；入口与 Worker 的 pi 只加载平台点名的提示、Skill 与扩展，工作区里的 AGENTS.md、扩展、mcp.json 等不再生效，守卫测试真实跑 entrypoint 与锁定版 pi 并记录 pi 碰过的路径；新增 409 `runtime_image_incompatible`，worker-runtime 与 worker-supervisor 只能整版回滚。新增遗留 429–437（均 P3）。W1 内核下一步 GO5c，W3 下一步 P1-E2；主机窗口仍暂缓）。 更早的页首更新记录见 `status-history.md`「页首更新记录」。
 
 ## 1. 入口指引
 
@@ -579,6 +579,10 @@
 | 435 | worker-supervisor 小项：`task-service.ts` 的两次 `utimesSync` 没包 try，失败会把 Task spawn 变成 500；`server.ts` 的 409 warn 不带 principalId / taskId；`PlatformRuntimePage.tsx` 的 `INCOMPATIBLE_IMAGE_REASON` 夹在 `shortImageId` 的 JSDoc 与函数之间 | P3 | 运行时 | 开放（#698 审查 #501 记录） |
 | 436 | 390 宽度下运行层页卡片标题被右侧原因文字挤成两行，「镜像/清单」「常驻/容器」在词中间断开；建议改 kit `Card` 标题不换行 | P3 | 控制台 | 开放（#698 UX 记录） |
 | 437 | 测试端口竞争：`gatekeeper-base/src/kinds/call-failure.test.ts` 的「拒绝连接」端口先占后关，可能被下一个测试服务器 `listen(0)` 拿到，偶发失败（#698 e89f274）；同类：内核网关客户端「connection refused」用例在 #697 50273e7 上拿到 `gate_connection_lost` 而非 `gate_unreachable`。修法见 #698 PR 评论，找全同类后开小 PR | P3 | 测试 | 开放（协调线程登记） |
+| 438 | `dispatchCapability` 用 Zod 校验能力参数时不限制元素数量（与 GHSA-46jr 同类）：实测 1 MiB 请求产生约 52 万条 issue、堆涨约 160 MB；现有缓解是 Handle 认证、限流与 1 MiB `bodyLimit`。修法：在 `/mcp` 与 HTTP 能力路由上、Zod 校验之前加元素数上限 | P2 | 内核 | 开放（协调线程登记） |
+| 439 | 账户页自助签 Handle 的能力列表显示原始能力名，悬停只有英文 description，没有用 `ACTION_COPY` 的中文名与说明（原有问题） | P3 | 控制台 | 开放（#704 UX 记录） |
+| 440 | 「不限（入口 agent 上限的观察类能力全集）」说明不准：入口 agent 上限里有 `propose_*` 与 `invoke_worker`，不全是观察类（原有问题） | P3 | 控制台 | 开放（#704 UX 记录） |
+| 441 | Worker 详情里「可作用的门」只在定义 JSON 里显示成 UUID，没有门名（原有问题） | P3 | 控制台 | 开放（#705 UX 记录） |
 
 ## 5. 更新规则
 
