@@ -1,5 +1,5 @@
 import type { GoalDetailWire, GoalLeftoversWire, UnresolvedGoalActionWire } from '@nexttime/shared';
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useCanOpen } from '../../hooks/useCanOpen.js';
 import { useResource } from '../../hooks/useResource.js';
 import { auditHref } from '../../lib/audit.js';
@@ -72,29 +72,35 @@ export function GoalDetailPage({ http, pushes, goalRunId }: GoalDetailPageProps)
   }, [detail.reload, unresolved.reload]);
 
   const data = detail.state.status === 'ready' ? detail.state.data : undefined;
+  // The Tasks and actions this goal ran, read when a push arrives rather than captured by the
+  // subscription: subscribed once, a push landing between a read and the next subscription is
+  // still matched against the goal as last read.
+  const owned = useRef<{ tasks: ReadonlySet<string>; actions: ReadonlySet<string> }>({
+    tasks: new Set(),
+    actions: new Set(),
+  });
+  owned.current = useMemo(
+    () => ({
+      tasks: new Set(data?.steps.flatMap((step) => step.attempts.map((a) => a.taskId)) ?? []),
+      actions: new Set(
+        data?.steps.flatMap((step) => step.actions.map((a) => a.actionRequestId)) ?? [],
+      ),
+    }),
+    [data],
+  );
   useEffect(
     () =>
       pushes.onTaskUpdated((event) => {
-        if (
-          data?.steps.some((step) => step.attempts.some((attempt) => attempt.taskId === event.id))
-        ) {
-          reloadAll();
-        }
+        if (owned.current.tasks.has(event.id)) reloadAll();
       }),
-    [pushes, data, reloadAll],
+    [pushes, reloadAll],
   );
   useEffect(
     () =>
       pushes.onActionUpdated((event) => {
-        if (
-          data?.steps.some((step) =>
-            step.actions.some((action) => action.actionRequestId === event.id),
-          )
-        ) {
-          reloadAll();
-        }
+        if (owned.current.actions.has(event.id)) reloadAll();
       }),
-    [pushes, data, reloadAll],
+    [pushes, reloadAll],
   );
   useEffect(() => pushes.onResynced(reloadAll), [pushes, reloadAll]);
 
