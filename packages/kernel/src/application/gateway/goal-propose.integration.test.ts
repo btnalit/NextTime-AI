@@ -843,6 +843,129 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
         expect(goal?.current_revision).toBe(1);
       });
+
+      it('a masked value comes back only with its whole call: another Worker, a reconcile declaration taken out, a check pointed at another gate — each refused (400); a step check matched by its key keeps its own (review #493 on #704)', async () => {
+        const created = await as(requesterId, (client) =>
+          createGoalRun(client, workspaceId, {
+            requesterId,
+            proposedBy: requesterId,
+            statement: 'a goal whose stored calls hold credentials',
+            plan: planOf(['r', 'w', 's']),
+            budget: BUDGET,
+          }),
+        );
+        const goalRunId = created.goalRunId;
+        const requester = human(requesterId, 'member');
+        await call(requester, 'confirm_goal', { goalRunId, revision: 1 });
+        await call(requester, 'pause_goal', { goalRunId });
+        const [gate1, gate2] = [randomUUID(), randomUUID()];
+        const action = (gatekeeperId: string, password: string) => ({
+          gatekeeperId,
+          operation: 'fixture.act',
+          params: { password },
+        });
+        const check = (gatekeeperId: string, password: string) => ({
+          ...action(gatekeeperId, password),
+          operation: 'fixture.status',
+          expect: { path: 'state', op: 'eq', value: 'running' },
+        });
+        // The references are not this test's (validation is `plan.test.ts`'s): stored as is.
+        const stored = {
+          steps: [
+            {
+              key: 'r',
+              worker,
+              reconcile: [
+                { action: action(gate1, `${FAKE}1`), check: check(gate1, `${FAKE}1`) },
+                { action: action(gate2, `${FAKE}2`), check: check(gate2, `${FAKE}2`) },
+              ],
+            },
+            { key: 'w', worker, input: { password: `${FAKE}W` } },
+            {
+              key: 's',
+              worker,
+              acceptance: [
+                { kind: 'observe_predicate', key: 'x', check: check(gate1, `${FAKE}X`) },
+                { kind: 'observe_predicate', key: 'y', check: check(gate2, `${FAKE}Y`) },
+              ],
+            },
+          ],
+        };
+        await raw(
+          `update plan_revisions set plan = $3::jsonb
+            where workspace_id = $1 and goal_run_id = $2 and revision = 1`,
+          [workspaceId, goalRunId, JSON.stringify(stored)],
+        );
+        const read = (await readProposal(requester, goalRunId)).plan;
+        const [readR, readW, readS] = read.steps as [
+          (typeof read.steps)[number],
+          (typeof read.steps)[number],
+          (typeof read.steps)[number],
+        ];
+        const [first, second] = readR.reconcile as [
+          NonNullable<typeof readR.reconcile>[number],
+          NonNullable<typeof readR.reconcile>[number],
+        ];
+        const [, checkY] = readS.acceptance as [
+          NonNullable<typeof readS.acceptance>[number],
+          NonNullable<typeof readS.acceptance>[number] & { kind: 'observe_predicate' },
+        ];
+        expect(first.action.params).toEqual({ password: '[redacted]' });
+        const other = await publish({ systemPrompt: 'Another Worker for one step of a goal.' });
+        const revisedWith = (steps: unknown[]) =>
+          call(requester, 'revise_goal', { goalRunId, basedOnRevision: 1, plan: { steps } });
+        const cases: [unknown[], string[]][] = [
+          // The first declaration taken out: the one left is not given the first one's values.
+          [
+            [{ ...readR, reconcile: [second] }, readW, readS],
+            [
+              'plan.steps.0.reconcile.0.action.params.password',
+              'plan.steps.0.reconcile.0.check.params.password',
+            ],
+          ],
+          // The first action pointed at the second gate, its params left as read.
+          [
+            [
+              {
+                ...readR,
+                reconcile: [{ ...first, action: { ...first.action, gatekeeperId: gate2 } }, second],
+              },
+              readW,
+              readS,
+            ],
+            ['plan.steps.0.reconcile.0.action.params.password'],
+          ],
+          // Another Worker for w, its input left as read.
+          [[readR, { ...readW, worker: other }, readS], ['plan.steps.1.input.password']],
+          // y's check pointed at x's gate.
+          [
+            [
+              readR,
+              readW,
+              {
+                ...readS,
+                acceptance: [{ ...checkY, check: { ...checkY.check, gatekeeperId: gate1 } }],
+              },
+            ],
+            ['plan.steps.2.acceptance.0.check.params.password'],
+          ],
+        ];
+        for (const [steps, paths] of cases) {
+          const refused = await refusal(revisedWith(steps));
+          expect(refused).toMatchObject({ status: 400, code: 'redacted_text_submitted' });
+          expect([...(refused.details as { paths: string[] }).paths].sort()).toEqual(paths);
+        }
+        // x taken out: y is matched by its key and keeps its own value, so the mark is not what
+        // refuses it — the gates this fixture never registered are.
+        expect(
+          await refusal(revisedWith([readR, readW, { ...readS, acceptance: [checkY] }])),
+        ).toMatchObject({ status: 400, code: 'invalid_params' });
+        const [goal] = await raw<{ current_revision: number }>(
+          'select current_revision from goal_runs where workspace_id = $1 and id = $2',
+          [workspaceId, goalRunId],
+        );
+        expect(goal?.current_revision).toBe(1);
+      });
     });
 
     describe("the confirmation card: what the requester's authority would stop now (hints, not refusals)", () => {

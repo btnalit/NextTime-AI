@@ -882,6 +882,97 @@ describe('reviewRevisedPlan (S11 GO5c: an entry sent back as read)', () => {
     ).toEqual([{ ...withRows.steps[0], maxAttempts: 2 }]);
   });
 
+  it('gives a masked value back only with its whole call sent as read: its Worker, gate and place too (review #493 on #704)', () => {
+    const [gateA1, gateA2] = [randomUUID(), randomUUID()];
+    const other = { definitionId: randomUUID(), version: 1 };
+    const action = (gatekeeperId: string, password: string) => ({
+      gatekeeperId,
+      operation: 'svc.restart',
+      params: { password },
+    });
+    const check = (gatekeeperId: string, password: string) => ({
+      ...action(gatekeeperId, password),
+      expect: { path: 'ok', op: 'eq', value: true },
+    });
+    const calls = planShape({
+      steps: [
+        step('a', {
+          reconcile: [
+            { action: action(gateA1, `${FAKE}1`), check: check(gateA1, `${FAKE}1`) },
+            { action: action(gateA2, `${FAKE}2`), check: check(gateA2, `${FAKE}2`) },
+          ],
+        }),
+        step('b', { input: { password: `${FAKE}B` } }),
+        step('c', {
+          acceptance: [
+            { kind: 'observe_predicate', key: 'x', check: check(gateA1, `${FAKE}X`) },
+            { kind: 'observe_predicate', key: 'y', check: check(gateA2, `${FAKE}Y`) },
+          ],
+        }),
+      ],
+    });
+    const [readA, readB, readC] = planAsRead(calls).steps as [PlanStep, PlanStep, PlanStep];
+    const [first, second] = readA.reconcile as [
+      NonNullable<PlanStep['reconcile']>[number],
+      NonNullable<PlanStep['reconcile']>[number],
+    ];
+    const fieldOf = (steps: unknown[]) => {
+      try {
+        reviewRevisedPlan(planShape({ steps }), calls);
+      } catch (err) {
+        expect((err as Error).name).toBe('RedactedTextSubmittedError');
+        return (err as { details: { field: string } }).details.field;
+      }
+      throw new Error('expected the revision to be refused');
+    };
+    // A reconcile declaration taken out: the one left is not given the first one's value.
+    expect(fieldOf([{ ...readA, reconcile: [second] }, readB, readC])).toBe(
+      'plan.steps.0.reconcile.0.action.params.password',
+    );
+    // An action pointed at another gate, its params left as read.
+    expect(
+      fieldOf([
+        {
+          ...readA,
+          reconcile: [{ ...first, action: { ...first.action, gatekeeperId: gateA2 } }, second],
+        },
+        readB,
+        readC,
+      ]),
+    ).toBe('plan.steps.0.reconcile.0.action.params.password');
+    // Another Worker, the input left as read.
+    expect(fieldOf([readA, { ...readB, worker: other }, readC])).toBe(
+      'plan.steps.1.input.password',
+    );
+    // A step's acceptance check taken out: the one left is matched by its key, not its place,
+    // so y keeps its own value and never x's.
+    const [, checkY] = readC.acceptance as [unknown, unknown];
+    expect(
+      reviewRevisedPlan(
+        planShape({ steps: [readA, readB, { ...readC, acceptance: [checkY] }] }),
+        calls,
+      ).steps[2],
+    ).toEqual({ ...calls.steps[2], acceptance: [calls.steps[2]?.acceptance?.[1]] });
+    // y's check pointed at x's gate, its params left as read: not y's call any more.
+    const [, shownY] = readC.acceptance as [unknown, { check: Record<string, unknown> }];
+    expect(
+      fieldOf([
+        readA,
+        readB,
+        { ...readC, acceptance: [{ ...shownY, check: { ...shownY.check, gatekeeperId: gateA1 } }] },
+      ]),
+    ).toBe('plan.steps.2.acceptance.0.check.params.password');
+    // Every call as read, only the attempts changed: each is the stored call.
+    expect(
+      reviewRevisedPlan(
+        planShape({
+          steps: [readA, readB, readC].map((entry) => ({ ...entry, maxAttempts: 2 })),
+        }),
+        calls,
+      ).steps,
+    ).toEqual(calls.steps.map((entry) => ({ ...entry, maxAttempts: 2 })));
+  });
+
   it('never brings one entry’s original along with another’s read', () => {
     // b's read under a new key is a new entry, checked — not b.
     expect(refusalOf({ ...read, steps: [readA, { ...readB, key: 'd' }] })).toMatchObject({

@@ -489,154 +489,160 @@ export function refusePlanCredentials(plan: GoalPlan): void {
   throw new TextCarriesCredentialsError(refused[0] ?? 'plan', count, refused);
 }
 
-/** A part of a revision as submitted, with what it stands for ({@link reviewRevisedPlan}). */
-interface Restored {
-  /** The part with every leaf left as the read showed it back to its stored value. */
-  readonly value: unknown;
-  /** The part as its writer wrote it: those leaves left out (`null`), every other one as sent. */
-  readonly written: unknown;
-}
-
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
 
-/** `submitted` against the read (`shown`) and the stored value (`original`) of the same place:
- *  where it is a leaf equal to the read, the stored value; else, inside it, the same rule at each
- *  place all three have — an array item by its index, a field by its name. */
-function restoreUnchanged(submitted: unknown, shown: unknown, original: unknown): Restored {
-  const asSent: Restored = { value: submitted, written: submitted };
-  if (Array.isArray(submitted)) {
-    if (!Array.isArray(shown) || !Array.isArray(original)) return asSent;
-    const items = submitted.map((item, i) =>
-      i < shown.length && i < original.length
-        ? restoreUnchanged(item, shown[i], original[i])
-        : { value: item, written: item },
-    );
-    return { value: items.map((item) => item.value), written: items.map((item) => item.written) };
-  }
-  if (isRecord(submitted)) {
-    if (!isRecord(shown) || !isRecord(original)) return asSent;
-    const fields = Object.entries(submitted).map(
-      ([key, inner]) =>
-        [
-          key,
-          Object.hasOwn(shown, key) && Object.hasOwn(original, key)
-            ? restoreUnchanged(inner, shown[key], original[key])
-            : { value: inner, written: inner },
-        ] as const,
-    );
-    // `fromEntries` defines own properties, so a `"__proto__"` key stays a field.
-    return {
-      value: Object.fromEntries(fields.map(([key, inner]) => [key, inner.value])),
-      written: Object.fromEntries(fields.map(([key, inner]) => [key, inner.written])),
-    };
-  }
-  if (isRecord(shown) || Array.isArray(shown) || !isDeepStrictEqual(submitted, shown)) {
-    return asSent;
-  }
-  // Left as read: the stored value. One the read masked or spelled out is left out of what this
-  // writer wrote. One it shows as stored stays in, as sent: it is the same value, it keeps the
-  // shape the checks read a plan by (an acceptance check's `kind`), and the checks find nothing
-  // in it but a `[redacted]` mark stored before they ran — refused, rewritten once.
-  return { value: original, written: isDeepStrictEqual(shown, original) ? submitted : null };
+/** A part of a revision as sent ({@link reviewRevisedPlan}): what to keep, and what its writer
+ *  wrote of it — the part the checks read. */
+interface Reviewed<T> {
+  readonly value: T;
+  readonly written: T;
 }
 
-/** The value at `at` in `root` — a path as {@link mapPlanParams} names it (`steps[0].input`) —
- *  or undefined where `root` has none. */
-function valueAt(root: unknown, at: string): unknown {
-  let node = root;
-  for (const token of at.match(/[^.[\]]+/g) ?? []) {
-    if (node === null || typeof node !== 'object' || !Object.hasOwn(node, token)) return undefined;
-    node = (node as Record<string, unknown>)[token];
+/** What a writer wrote of a call sent exactly as read: nothing the read showed differently from
+ *  what is stored (`original`, the same shape) — each such value left out (`null`), the shape
+ *  kept for the checks to read the plan by. What the read shows as stored stays: it is the same
+ *  value, and the checks find nothing in it but a `[redacted]` mark stored before they ran. */
+function writtenOfRead(shown: unknown, original: unknown): unknown {
+  if (Array.isArray(shown) && Array.isArray(original)) {
+    return shown.map((item, i) => writtenOfRead(item, original[i]));
   }
-  return node;
+  if (isRecord(shown) && isRecord(original)) {
+    // `fromEntries` defines own properties, so a `"__proto__"` key stays a field.
+    return Object.fromEntries(
+      Object.entries(shown).map(([key, inner]) => [key, writtenOfRead(inner, original[key])]),
+    );
+  }
+  return isDeepStrictEqual(shown, original) ? shown : null;
+}
+
+/** One call of the plan sent against its read (`shown`) and what is stored (`original`) at the
+ *  same place: sent exactly as read, it is the stored call; changed anywhere, or new, it is as
+ *  sent — every value in it, a `[redacted]` left in it included. */
+function reviewCall<T>(sent: T, shown: T | undefined, original: T | undefined): Reviewed<T> {
+  if (shown === undefined || original === undefined || !isDeepStrictEqual(sent, shown)) {
+    return { value: sent, written: sent };
+  }
+  return { value: original, written: writtenOfRead(shown, original) as T };
+}
+
+type Stored<T> = ReadonlyMap<string, { readonly original: T; readonly shown: T }>;
+
+/** `originals` by key, each with its read (`shown`, in the same order). */
+function byKey<T extends { readonly key: string }>(
+  originals: readonly T[] | undefined,
+  shown: readonly T[] | undefined,
+): Stored<T> {
+  return new Map(
+    (originals ?? []).flatMap((original, i) => {
+      const entry = shown?.[i];
+      return entry === undefined ? [] : [[original.key, { original, shown: entry }] as const];
+    }),
+  );
+}
+
+/** Acceptance checks sent, each a call matched by key with the stored one. */
+function reviewChecks<T extends { readonly key: string }>(
+  sent: readonly T[],
+  stored: Stored<T>,
+): Reviewed<T[]> {
+  const reviewed = sent.map((check) => {
+    const match = stored.get(check.key);
+    return reviewCall(check, match?.shown, match?.original);
+  });
+  return {
+    value: reviewed.map((check) => check.value),
+    written: reviewed.map((check) => check.written),
+  };
+}
+
+/** A step sent against the stored step of its key: each of its calls on its own. */
+function reviewStep(
+  step: PlanStep,
+  match: { readonly original: PlanStep; readonly shown: PlanStep } | undefined,
+): Reviewed<PlanStep> {
+  if (match === undefined) return { value: step, written: step };
+  const { original, shown } = match;
+  const value: Record<string, unknown> = { ...step };
+  const written: Record<string, unknown> = { ...step };
+  // Its Worker with its input: another Worker would get the stored input.
+  if (step.input !== undefined && isDeepStrictEqual(step.worker, shown.worker)) {
+    const input = reviewCall(step.input, shown.input, original.input);
+    value.input = input.value;
+    written.input = input.written;
+  }
+  // Each reconcile action and check by its place — kept only while the list is as long as read,
+  // so a declaration taken out or added lines up none after it.
+  if (
+    step.reconcile !== undefined &&
+    step.reconcile.length === shown.reconcile?.length &&
+    step.reconcile.length === original.reconcile?.length
+  ) {
+    const declarations = step.reconcile.map((declaration, j) => {
+      const action = reviewCall(
+        declaration.action,
+        shown.reconcile?.[j]?.action,
+        original.reconcile?.[j]?.action,
+      );
+      const check = reviewCall(
+        declaration.check,
+        shown.reconcile?.[j]?.check,
+        original.reconcile?.[j]?.check,
+      );
+      return {
+        value: { ...declaration, action: action.value, check: check.value },
+        written: { ...declaration, action: action.written, check: check.written },
+      };
+    });
+    value.reconcile = declarations.map((declaration) => declaration.value);
+    written.reconcile = declarations.map((declaration) => declaration.written);
+  }
+  // Its acceptance checks by key, as the plan's are.
+  if (step.acceptance !== undefined) {
+    const checks = reviewChecks(step.acceptance, byKey(original.acceptance, shown.acceptance));
+    value.acceptance = checks.value;
+    written.acceptance = checks.written;
+  }
+  return { value: value as PlanStep, written: written as PlanStep };
 }
 
 /**
- * S11 GO5c (decisions on #704; review #501 on #702 §2): a revision written in an editor opened on
- * a read of the plan holds every value it did not touch as the read showed it ({@link planAsRead},
- * the one definition `get_goal` reads a revision with: a credential masked, an invisible character
- * spelled out) — not what is stored, and not what {@link refusePlanCredentials} passes. So, leaf by
- * leaf: a step and one of the plan's own acceptance checks are matched by key with the entry of
- * that key in `stored` (the revision it is based on), and every leaf of it equal to the read of the
- * same place in that entry is unchanged — it gets the stored value back. Inside a call argument (a
- * step's `input`, a reconcile declaration's action or check `params`, an observation's `params`,
- * {@link mapPlanParams}) only when the whole argument is sent as read (review #493 on #704): the
- * read shows every masked value as the same `[redacted]`, so a value given back by its place would
- * follow a row deleted or moved, or stay beside a new host; a changed argument keeps every value as
- * sent, and a `[redacted]` left in it is refused at its place. Then
- * {@link refusePlanCredentials} checks only what is left, the values this writer wrote, at their
- * places in the submitted plan. A value is only ever restored at its own key and path, so copying
- * another entry's read never brings that entry's original along; nothing stored is revealed.
- * Returns the plan to validate, compare with the revisions before it (`samePlanEntry`) and store.
+ * S11 GO5c (decisions on #704; review #501 on #702 §2; review #493 on #704): a revision written in
+ * an editor opened on a read of the plan holds what it did not touch as the read showed it
+ * ({@link planAsRead}, the one definition `get_goal` reads a revision with: a credential masked,
+ * an invisible character spelled out) — not what is stored, and not what
+ * {@link refusePlanCredentials} passes. What is left as read keeps what is stored, call by call:
+ *
+ * - a step and one of the plan's own acceptance checks are matched by key with the entry of that
+ *   key in `stored` (the revision it is based on);
+ * - in it, each call — a step's Worker with its input, one reconcile action or check (by its place,
+ *   only while the step's reconcile list is as long as read), one acceptance check (the step's by
+ *   key too) — sent exactly as read is the stored call; changed anywhere, every value in it is as
+ *   sent. The read shows every masked value as the same `[redacted]`, so a value given back on
+ *   its own would follow a row or a declaration deleted or moved, or go to another host, gate or
+ *   Worker; a `[redacted]` left in a changed call is refused at its place.
+ *
+ * Fields outside the calls (`dependsOn`, `nested`, `maxAttempts`) are as sent and decide nothing
+ * here. Then {@link refusePlanCredentials} checks only what this writer wrote, at its place in the
+ * submitted plan. Nothing stored is revealed, and nothing moves between keys. Returns the plan to
+ * validate, compare with the revisions before it (`samePlanEntry`) and store. Only the requester
+ * revises; were revisions written by others (a planner, an admin agent), this rule needs another
+ * look — a stored value given back in a new context would carry it there.
  */
 export function reviewRevisedPlan(submitted: GoalPlan, stored: GoalPlan): GoalPlan {
   const read = planAsRead(stored);
-  const byKey = <T extends { readonly key: string }>(
-    originals: readonly T[] | undefined,
-    shown: readonly T[] | undefined,
-  ): ReadonlyMap<string, { readonly original: T; readonly shown: T }> =>
-    new Map(
-      (originals ?? []).flatMap((original, i) => {
-        const entry = shown?.[i];
-        return entry === undefined ? [] : [[original.key, { original, shown: entry }] as const];
-      }),
-    );
-  const restore = <T extends { readonly key: string }>(
-    entries: readonly T[],
-    storedEntries: ReadonlyMap<string, { readonly original: T; readonly shown: T }>,
-    asPlan: (entry: T) => GoalPlan,
-    ofPlan: (plan: GoalPlan) => T,
-  ): { readonly value: T[]; readonly written: T[] } => {
-    const restored = entries.map((entry) => {
-      const match = storedEntries.get(entry.key);
-      if (match === undefined) return { value: entry, written: entry };
-      const leafByLeaf = restoreUnchanged(entry, match.shown, match.original) as {
-        value: T;
-        written: T;
-      };
-      const sent = asPlan(entry);
-      const shown = asPlan(match.shown);
-      const changed = new Set<string>();
-      mapPlanParams(sent, (params, at) => {
-        if (!isDeepStrictEqual(params, valueAt(shown, at))) changed.add(at);
-        return params;
-      });
-      if (changed.size === 0) return leafByLeaf;
-      const asSent = (part: T): T =>
-        ofPlan(
-          mapPlanParams(asPlan(part), (params, at) =>
-            changed.has(at) ? (valueAt(sent, at) as typeof params) : params,
-          ),
-        );
-      return { value: asSent(leafByLeaf.value), written: asSent(leafByLeaf.written) };
-    });
-    return {
-      value: restored.map((entry) => entry.value),
-      written: restored.map((entry) => entry.written),
-    };
-  };
-  const steps = restore(
-    submitted.steps,
-    byKey(stored.steps, read.steps),
-    (step) => ({ steps: [step] }),
-    (plan) => plan.steps[0] as PlanStep,
-  );
+  const storedSteps = byKey(stored.steps, read.steps);
+  const steps = submitted.steps.map((step) => reviewStep(step, storedSteps.get(step.key)));
   const acceptance =
     submitted.acceptance === undefined
       ? undefined
-      : restore(
-          submitted.acceptance,
-          byKey(stored.acceptance, read.acceptance),
-          (check) => ({ steps: [], acceptance: [check] }),
-          (plan) => plan.acceptance?.[0] as AcceptanceCheck,
-        );
+      : reviewChecks(submitted.acceptance, byKey(stored.acceptance, read.acceptance));
   refusePlanCredentials({
-    steps: steps.written,
+    steps: steps.map((step) => step.written),
     ...(acceptance !== undefined ? { acceptance: acceptance.written } : {}),
   });
   return {
-    steps: steps.value,
+    steps: steps.map((step) => step.value),
     ...(acceptance !== undefined ? { acceptance: acceptance.value } : {}),
   };
 }
