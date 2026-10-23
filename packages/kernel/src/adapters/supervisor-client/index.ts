@@ -14,7 +14,8 @@
  *   POST /task/spawn                {taskId, workerRunId, workspaceId, onBehalfOf,
  *                                     capabilityHandle, image?, model?, skills?, skillsInline?,
  *                                     timeoutSec?, egressDeny?}
- *                                     -> 200 {containerId, ip} / 403 (image not allowlisted) / 400
+ *                                     -> 200 {containerId, ip, runtime} / 403 (image not
+ *                                        allowlisted) / 400
  *   POST /task/:workerRunId/terminate -> 204 | 404
  *   GET  /task/:workerRunId         -> 200 TaskStatus | 404
  *
@@ -123,9 +124,57 @@ export interface TaskSpawnInput {
   readonly systemPrompt?: string;
 }
 
+/** S11 W1a: what worker-supervisor reported about the container it started for a WorkerRun —
+ *  mirrors `packages/worker-supervisor`'s own `TaskRuntimeReport` (runtime-report.ts there). */
+export interface TaskRuntimeReport {
+  readonly imageRef: string;
+  /** The container runtime's resolved image id, `sha256:<64 hex>`. */
+  readonly imageId: string;
+  readonly piVersion: string | undefined;
+  readonly platformExtensionVersion: string | undefined;
+  readonly builtFrom: string | undefined;
+  /** `sha256:<64 hex>` of the `models.json` the container mounted, when the supervisor read it. */
+  readonly modelsConfigDigest: string | undefined;
+}
+
 export interface TaskSpawnOutcome {
   readonly containerId: string;
   readonly ip: string | undefined;
+  /** S11 W1a: absent from a worker-supervisor that predates it, or when what it sent does not
+   *  parse ({@link parseTaskRuntimeReport}). */
+  readonly runtime?: TaskRuntimeReport;
+}
+
+const SHA256_ID = /^sha256:[0-9a-f]{64}$/;
+/** An image reference: no whitespace or control character, the container runtime's own length bound. */
+const IMAGE_REF = /^[^\s\u0000-\u001f\u007f]{1,255}$/;
+/** A version label (`v0.50.0 (abc1234)` for built-from): printable, one line. */
+const LABEL_TEXT = /^[^\u0000-\u001f\u007f]{1,200}$/;
+
+function optionalMatch(value: unknown, pattern: RegExp): string | undefined {
+  return typeof value === 'string' && pattern.test(value) ? value : undefined;
+}
+
+/**
+ * S11 W1a: `/task/spawn`'s `runtime`, as the kernel will store it on the WorkerRun and the console
+ * will show it. worker-supervisor is trusted, but what it sends is still checked here, at the
+ * boundary: no image reference or id of the expected shape → no report at all (`undefined`, the
+ * run's runtime reads "未记录"); a label or digest of the wrong shape → that field alone dropped.
+ */
+export function parseTaskRuntimeReport(value: unknown): TaskRuntimeReport | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const imageRef = optionalMatch(record.imageRef, IMAGE_REF);
+  const imageId = optionalMatch(record.imageId, SHA256_ID);
+  if (imageRef === undefined || imageId === undefined) return undefined;
+  return {
+    imageRef,
+    imageId,
+    piVersion: optionalMatch(record.piVersion, LABEL_TEXT),
+    platformExtensionVersion: optionalMatch(record.platformExtensionVersion, LABEL_TEXT),
+    builtFrom: optionalMatch(record.builtFrom, LABEL_TEXT),
+    modelsConfigDigest: optionalMatch(record.modelsConfigDigest, SHA256_ID),
+  };
 }
 
 /** S7-E (P-C §6.5): one runtime image, as worker-supervisor's `GET /images` reports it — mirrors
@@ -370,7 +419,13 @@ export class TaskSupervisorClient implements TaskSupervisorClientPort {
         { status },
       );
     }
-    return body as TaskSpawnOutcome;
+    const outcome = body as { containerId: string; ip: string | undefined; runtime?: unknown };
+    const runtime = parseTaskRuntimeReport(outcome.runtime);
+    return {
+      containerId: outcome.containerId,
+      ip: outcome.ip,
+      ...(runtime ? { runtime } : {}),
+    };
   }
 
   async stopResident(principalId: string): Promise<boolean> {

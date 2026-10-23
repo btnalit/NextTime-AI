@@ -394,15 +394,18 @@ services:
     # rw — this is where per-principal directories get created (I15) and bind-mounted (as HOST
     # paths, via NEXTTIME_DATA below) into spawned containers. config: ro for general config
     # visibility (models.json moved out of config/ into its own ${NEXTTIME_DATA}/models/
-    # directory, S7-A — this service never reads that file itself anyway: `hostModelsJsonPath`
-    # is a plain HOST path string handed to the Docker Engine API as a *spawned* container's
-    # bind-mount source, resolved by the daemon against the host filesystem, not this container's
-    # own mount namespace), EXCEPT egress-sources.json — that single file is re-mounted
-    # read-write on top so this service can register/unregister spawned
-    # containers' IPs with @nexttime/egress-proxy's SOURCE_MAP_FILE (S1.5a task brief: that
+    # directory, S7-A — `hostModelsJsonPath` is a plain HOST path string handed to the Docker
+    # Engine API as a *spawned* container's bind-mount source, resolved by the daemon against the
+    # host filesystem, not this container's own mount namespace), EXCEPT egress-sources.json —
+    # that single file is re-mounted read-write on top so this service can register/unregister
+    # spawned containers' IPs with @nexttime/egress-proxy's SOURCE_MAP_FILE (S1.5a task brief: that
     # package exposes no admin registration endpoint — verified reading
     # packages/egress-proxy/src/admin.ts — so the documented file-based contract is the only
     # integration point; see packages/worker-supervisor/src/egress-map.ts).
+    # models: ro (S11 W1a) — this service only reads models.json to report its digest with each
+    # Task spawn, so a run that named no model records which file pi took its default from
+    # (packages/worker-supervisor/src/runtime-report.ts). The directory, not the file: llm-proxy
+    # replaces the file by rename, which a file bind would not follow. No credential in it.
     # group_add/DOCKER_GID removed (fix/socket-proxy-and-backup-user): this service no longer
     # touches docker.sock's file permissions at all — the EACCES crash-loop `group_add` used to
     # guard against (docs/runbooks/host-worker-runtime.md "已知偏离") cannot recur, since the
@@ -416,6 +419,7 @@ services:
         "${NEXTTIME_DATA:?}/workspaces:/data/workspaces",
         "${NEXTTIME_DATA:?}/config:/data/config:ro",
         "${NEXTTIME_DATA:?}/config/egress-sources.json:/data/config/egress-sources.json",
+        "${NEXTTIME_DATA:?}/models:/data/models:ro",
         "handle-bindings:/run/handle-bindings",
       ]
     # NEXTTIME_DATA here is the HOST path (not this container's own /data/workspaces mount) —

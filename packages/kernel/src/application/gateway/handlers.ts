@@ -163,6 +163,7 @@ import {
   recordProcedureFollowedHandler,
   reportTaskOutcomeHandler,
   toWireObjectiveOutcome,
+  toWireRunEnvironment,
   toWireSkillLoads,
   toWireTurnAttribution,
 } from './attribution-handlers.js';
@@ -1904,6 +1905,8 @@ function toWireWorkerRun(
     terminatedAt: row.terminatedAt ? row.terminatedAt.toISOString() : null,
     // S10 E1: `null` = not recorded (a run from before E1), `[]` = recorded, none loaded.
     skills: toWireSkillLoads(attributions.skillsByRun.get(row.id)),
+    // S11 W1a: `null` = not recorded (a run from before W1a).
+    environment: toWireRunEnvironment(attributions.environmentByRun.get(row.id)),
   };
 }
 

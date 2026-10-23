@@ -5,6 +5,7 @@ import {
   DEFAULT_SUPERVISOR_CLIENT_TIMEOUT_MS,
   TaskSupervisorClient,
   TaskSupervisorError,
+  parseTaskRuntimeReport,
 } from './index.js';
 
 function jsonResponse(status: number, body: unknown): Response {
@@ -48,6 +49,60 @@ describe('TaskSupervisorClient', () => {
     expect(url).toBe('http://worker-supervisor:8081/task/spawn');
     expect(init.method).toBe('POST');
     expect(JSON.parse(init.body as string).capabilityHandle).toBe('secret-handle');
+  });
+
+  it('spawn: returns the runtime the supervisor reported (S11 W1a)', async () => {
+    const runtime = {
+      imageRef: 'nexttime-ai-worker-runtime:v0.50.0',
+      imageId: `sha256:${'a'.repeat(64)}`,
+      piVersion: '1.2.3',
+      platformExtensionVersion: '0.50.0',
+      builtFrom: 'v0.50.0 (abc1234)',
+      modelsConfigDigest: `sha256:${'b'.repeat(64)}`,
+    };
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(jsonResponse(200, { containerId: 'c1', ip: '198.51.100.3', runtime }));
+    const client = new TaskSupervisorClient({
+      supervisorUrl: 'http://worker-supervisor:8081',
+      fetchImpl,
+    });
+
+    const result = await client.spawn({
+      taskId: 't1',
+      workerRunId: 'wr1',
+      workspaceId: 'ws1',
+      onBehalfOf: 'p1',
+      capabilityHandle: 'h',
+    });
+
+    expect(result).toEqual({ containerId: 'c1', ip: '198.51.100.3', runtime });
+  });
+
+  it('parseTaskRuntimeReport: no report without an image reference and an image id of the expected shape; a bad label or digest is dropped alone', () => {
+    const imageId = `sha256:${'a'.repeat(64)}`;
+    expect(parseTaskRuntimeReport(undefined)).toBeUndefined();
+    expect(parseTaskRuntimeReport(['x'])).toBeUndefined();
+    expect(parseTaskRuntimeReport({ imageRef: 'img', imageId: 'sha256:short' })).toBeUndefined();
+    expect(parseTaskRuntimeReport({ imageRef: 'two words', imageId })).toBeUndefined();
+    expect(parseTaskRuntimeReport({ imageId })).toBeUndefined();
+    expect(
+      parseTaskRuntimeReport({
+        imageRef: 'img',
+        imageId,
+        piVersion: 'line\nbreak',
+        platformExtensionVersion: 7,
+        builtFrom: 'x'.repeat(201),
+        modelsConfigDigest: 'md5:abc',
+      }),
+    ).toEqual({
+      imageRef: 'img',
+      imageId,
+      piVersion: undefined,
+      platformExtensionVersion: undefined,
+      builtFrom: undefined,
+      modelsConfigDigest: undefined,
+    });
   });
 
   it('strips a trailing slash from supervisorUrl', async () => {

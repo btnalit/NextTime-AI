@@ -3,6 +3,7 @@ import type {
   OutputSchema,
   RejectedOutputWire,
   ReworkOfWire,
+  RunEnvironmentWire,
   SkillLoadWire,
   TaskStatus,
   TurnAttributionWire,
@@ -28,6 +29,9 @@ export interface WorkerRunSummary {
   /** S10 E1: the Skill versions this run loaded — `null` (or absent, from a kernel that predates
    *  E1) means 未记录, `[]` means the run loaded none. */
   readonly skills?: readonly SkillLoadWire[] | null;
+  /** S11 W1a: what this run ran with — `null` (or absent, from a kernel that predates W1a) means
+   *  未记录. Never the system prompt itself, only its digest. */
+  readonly environment?: RunEnvironmentWire | null;
 }
 
 export interface TaskSummary {
