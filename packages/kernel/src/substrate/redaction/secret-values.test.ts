@@ -89,6 +89,15 @@ describe('scrubSecretValues — the common ways a secret is written down', () =>
     expect(scrubSecretValues(once)).toEqual({ value: once, redactedValues: 0 });
   });
 
+  // …but a header whose value only starts with the mark still hides the rest of its line.
+  it.each([
+    [`Cookie: [redacted]; sid=${FAKE}`, 'Cookie: [redacted]'],
+    [`Authorization: [redacted] token ${FAKE}`, 'Authorization: [redacted]'],
+    [`Authorization: [redacted] ${FAKE}\nnext line`, 'Authorization: [redacted]\nnext line'],
+  ])('replaces what follows the mark on a header line: %s', (text, expected) => {
+    expect(scrubSecretValues(text)).toEqual({ value: expected, redactedValues: 1 });
+  });
+
   it('cannot see an encoded secret — the reason the fix is the Handle itself, not this', () => {
     const encoded = Buffer.from(HANDLE).toString('base64');
     expect(scrubSecretValues(encoded).value).toBe(encoded);

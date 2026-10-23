@@ -325,13 +325,14 @@ describe.runIf(DATABASE_URL !== undefined)(
         code: 'credentials_review_required',
         details: { subject: 'operation', suspectedSecretValues: 1 },
       });
-      const published = await call<{ status: string }>('publish_operation', {
-        gatekeeperId,
-        name: suspect,
-        draftDigest,
-        credentialsReviewed: true,
-      });
+      const published = await call<{ status: string; operation: { description: string } }>(
+        'publish_operation',
+        { gatekeeperId, name: suspect, draftDigest, credentialsReviewed: true },
+      );
       expect(published.status).toBe('published');
+      // Legacy 420: published as reviewed, echoed back as every read shows its description.
+      expect(published.operation.description).toContain('[redacted]');
+      expect(published.operation.description).not.toContain(FAKE);
       const [audit] = await auditPayloads('publish_operation', `${gatekeeperId}:${suspect}`);
       expect(audit).toMatchObject({
         credentialReview: { suspectedSecretValues: 1, confirmed: true },
