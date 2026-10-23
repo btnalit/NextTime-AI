@@ -1651,6 +1651,15 @@
   padding: 0;
 }
 
+/* S11 GO5d-2 (UX acceptance of #722): a Procedure's steps on its catalog page are numbered cards
+   (each carries its number) and their lines sentences — no list indent in a narrow drawer. */
+.procedure-template ul,
+.procedure-template ol {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
 .goal-step {
   padding: var(--space-3);
   border: 1px solid var(--border);

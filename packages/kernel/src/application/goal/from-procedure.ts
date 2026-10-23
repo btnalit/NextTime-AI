@@ -84,6 +84,9 @@ type Parameters =
 interface Built {
   readonly plan: { readonly steps: unknown[]; readonly acceptance?: unknown[] };
   readonly problems: readonly string[];
+  /** By plan step key: the Procedure's position of each binding the plan step keeps (those from
+   *  other steps), so a plan problem about `bindings[i]` names the binding as the Procedure has it. */
+  readonly bindingPositions: ReadonlyMap<string, readonly number[]>;
 }
 
 /** One Procedure `worker` step as the plan step it makes — see the module comment. */
@@ -94,14 +97,20 @@ function workerStep(
   previous: string | null,
   parameters: Parameters,
   problems: string[],
+  bindingPositions: Map<string, readonly number[]>,
 ): Record<string, unknown> {
   let input = step.input;
   const fromSteps: StepBinding[] = [];
   const fromParameters: [number, ProcedureBinding][] = [];
+  const kept: number[] = [];
   for (const [index, binding] of (step.bindings ?? []).entries()) {
     if (binding.from === PROCEDURE_PARAMS_SOURCE) fromParameters.push([index, binding]);
-    else fromSteps.push(binding as StepBinding);
+    else {
+      fromSteps.push(binding as StepBinding);
+      kept.push(index);
+    }
   }
+  bindingPositions.set(key, kept);
   if (fromParameters.length > 0 && input !== undefined && !isRecord(input)) {
     problems.push(
       `step "${key}": the input must be an object when the step has bindings — a binding fills a field of it`,
@@ -119,8 +128,12 @@ function workerStep(
     const pathProblems = bindingPathProblems(binding.path);
     for (const problem of pathProblems) problems.push(`${where}: ${problem}`);
     if (pathProblems.length === 0 && template.parameters) {
-      for (const problem of bindingSchemaProblems(binding.path, template.parameters)) {
-        problems.push(`${where}: ${problem} of the parameters`);
+      for (const problem of bindingSchemaProblems(
+        binding.path,
+        template.parameters,
+        'parameters',
+      )) {
+        problems.push(`${where}: ${problem}`);
       }
     }
     const earlier = fromParameters
@@ -167,6 +180,7 @@ function workerStep(
 
 function buildPlan(template: ProcedureTemplate, parameters: Parameters): Built {
   const problems: string[] = [];
+  const bindingPositions = new Map<string, readonly number[]>();
   const steps: unknown[] = [];
   const acceptance: unknown[] = [];
   const confirms: string[] = [];
@@ -188,7 +202,7 @@ function buildPlan(template: ProcedureTemplate, parameters: Parameters): Built {
       continue;
     }
     const key = step.key ?? `step-${n}`;
-    steps.push(workerStep(template, step, key, previous, parameters, problems));
+    steps.push(workerStep(template, step, key, previous, parameters, problems, bindingPositions));
     previous = key;
   }
   if (steps.length === 0) {
@@ -204,7 +218,11 @@ function buildPlan(template: ProcedureTemplate, parameters: Parameters): Built {
           : confirms.map((description, i) => `${i + 1}. ${description}`).join('\n'),
     });
   }
-  return { plan: { steps, ...(acceptance.length > 0 ? { acceptance } : {}) }, problems };
+  return {
+    plan: { steps, ...(acceptance.length > 0 ? { acceptance } : {}) },
+    problems,
+    bindingPositions,
+  };
 }
 
 /**
@@ -244,27 +262,54 @@ export function expandProcedure(
  * What publishing `template` is refused for, as a template: the plan it makes, with its `$params`
  * bindings checked against its `parameters` schema instead of filled in, must pass the plan's
  * checks (`parsePlan`) and carry no suspected credential or `[redacted]` mark — a plan never does,
- * so a template that does could never make one. The plan's own problems are prefixed, since their
- * places are of the plan (`step "step-2": …`, a binding counted among those the plan step keeps).
- * Empty: nothing stops it.
+ * so a template that does could never make one. Every problem at once: the making's and, when it
+ * made steps at all, the plan's — those prefixed, since their places are of the plan (`step
+ * "step-2": …`, the key the plan step has), a binding named by its position in the Procedure step
+ * all the same. Empty: nothing stops it.
  */
 export function procedureTemplateProblems(template: ProcedureTemplate): readonly string[] {
   const built = buildPlan(template, { kind: 'lint' });
-  if (built.problems.length > 0) return built.problems;
+  if (built.plan.steps.length === 0) return built.problems;
   const prefix = 'the plan it makes: ';
+  const planProblems: string[] = [];
   try {
     refusePlanCredentials(planShape(built.plan));
+  } catch (err) {
+    if (
+      !(err instanceof TextCarriesCredentialsError || err instanceof RedactedTextSubmittedError)
+    ) {
+      throw err;
+    }
+    planProblems.push(err.message);
+  }
+  try {
     parsePlan(built.plan);
   } catch (err) {
-    if (err instanceof GoalPlanValidationError) {
-      return err.problems.map((problem) => `${prefix}${problem}`);
-    }
-    if (err instanceof TextCarriesCredentialsError || err instanceof RedactedTextSubmittedError) {
-      return [`${prefix}${err.message}`];
-    }
-    throw err;
+    if (!(err instanceof GoalPlanValidationError)) throw err;
+    planProblems.push(...err.problems.map((problem) => asProcedureBinding(problem, built)));
   }
-  return [];
+  // The making already said it (the input of a step with bindings that is not an object).
+  const said = new Set(built.problems);
+  return [
+    ...built.problems,
+    ...planProblems.filter((problem) => !said.has(problem)).map((problem) => `${prefix}${problem}`),
+  ];
+}
+
+/** A plan problem about a step's `bindings[i]` (and the `bindings[j]` it clashes with) with each
+ *  index the binding's position in the Procedure step — the plan step keeps only the bindings from
+ *  other steps. */
+function asProcedureBinding(problem: string, built: Built): string {
+  const key = /^step "([^"]+)": bindings\[\d+\]/.exec(problem)?.[1];
+  const positions = key === undefined ? undefined : built.bindingPositions.get(key);
+  if (!positions) return problem;
+  const at = (whole: string, head: string, index: string) => {
+    const position = positions[Number(index)];
+    return position === undefined ? whole : `${head}${position}]`;
+  };
+  return problem
+    .replace(/^(step "[^"]+": bindings\[)(\d+)\]/, at)
+    .replace(/(, where bindings\[)(\d+)\]/, at);
 }
 
 /**

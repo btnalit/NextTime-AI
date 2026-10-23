@@ -1,4 +1,4 @@
-import type { ProcedureStep, StepAcceptanceCheck } from '@nexttime/shared';
+import type { ProcedureBinding, ProcedureStep, StepAcceptanceCheck } from '@nexttime/shared';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { actionKindTagText, prettyJsonVisible } from '../../lib/format.js';
 import { planCheckSentence } from '../../lib/goals.js';
@@ -7,10 +7,12 @@ import {
   type ProcedurePlanPlace,
   parsedProcedureParameters,
   parsedProcedureSteps,
+  procedureBindingIssue,
   procedureBindingSentence,
   procedureDependencySentence,
   procedureNoPlanReason,
   procedurePlanPlaces,
+  procedureWorkersByKey,
 } from '../../lib/procedure-template.js';
 import { useGatekeeperNames } from '../approvals/useDirectoryNames.js';
 import { OutputContractExplanation, OutputContractFields } from '../goals/OutputContract.js';
@@ -31,23 +33,39 @@ const KIND_LABEL: Readonly<Record<ProcedureStep['kind'], readonly [string, strin
  * for, where its inputs come from, its output contract and attempts; a `verify` step's check, the
  * platform's or the requester's. Then the parameters a goal made from it asks for. The steps as
  * JSON stay one click away.
+ *
+ * UX acceptance of #722: a draft is not yet a template (publishing checks it), so it says so, and
+ * a binding the page can already tell is wrong is marked where it is read; a Procedure that makes
+ * no plan shows no place in one.
  */
 export function ProcedureTemplateView({
   http,
+  status,
   steps: rawSteps,
   parameters: rawParameters,
 }: {
   readonly http: CapabilityCaller;
+  /** The version's status: a draft is only checked as a template when it is published. */
+  readonly status: string;
   readonly steps: readonly unknown[];
   readonly parameters: unknown;
 }) {
   const t = useT();
   const steps = parsedProcedureSteps(rawSteps);
-  const places = procedurePlanPlaces(steps);
-  const parameters = parsedProcedureParameters(rawParameters);
   const noPlan = procedureNoPlanReason(steps);
+  const places: ReadonlyMap<number, ProcedurePlanPlace> =
+    noPlan === null ? procedurePlanPlaces(steps) : new Map();
+  const workers = procedureWorkersByKey(steps, places);
+  const parameters = parsedProcedureParameters(rawParameters);
+  const issueOf = (binding: ProcedureBinding, place: ProcedurePlanPlace) =>
+    procedureBindingIssue(binding, place, workers, parameters, t);
+  const hasIssue = [...places].some(([index, place]) => {
+    const step = steps[index];
+    return step?.kind === 'worker' && (step.bindings ?? []).some((b) => issueOf(b, place) !== null);
+  });
+  const draft = status === 'draft';
   return (
-    <div className="stack-s" data-testid="procedure-template">
+    <div className="stack-s procedure-template" data-testid="procedure-template">
       <span className="section-title">{t('步骤', 'Steps')}</span>
       {noPlan === 'manual_step' ? (
         <Notice testId="procedure-template-manual">
@@ -65,12 +83,30 @@ export function ProcedureTemplateView({
         </Notice>
       ) : (
         <span className="text-small text-3" data-testid="procedure-template-summary">
-          {t(
-            '可以用这个流程生成目标：Worker 步骤成为计划的步骤，验证步骤成为目标的验收，带检查的由平台检查，其余由请求人确认。',
-            'A goal can be made from this Procedure: its Worker steps become the plan’s steps, and its verify steps the goal’s acceptance — the platform makes the checks they carry, and the requester confirms the rest.',
-          )}
+          {draft
+            ? t(
+                '发布后可以用这个流程生成目标（发布时平台会检查它生成的计划）：Worker 步骤成为计划的步骤，验证步骤成为目标的验收，带检查的由平台检查，其余由请求人确认。',
+                'Once published, a goal can be made from this Procedure (publishing checks the plan it makes): its Worker steps become the plan’s steps, and its verify steps the goal’s acceptance — the platform makes the checks they carry, and the requester confirms the rest.',
+              )
+            : t(
+                '可以用这个流程生成目标：Worker 步骤成为计划的步骤，验证步骤成为目标的验收，带检查的由平台检查，其余由请求人确认。',
+                'A goal can be made from this Procedure: its Worker steps become the plan’s steps, and its verify steps the goal’s acceptance — the platform makes the checks they carry, and the requester confirms the rest.',
+              )}
         </span>
       )}
+      {hasIssue ? (
+        <Notice tone="warn" testId="procedure-template-issues">
+          {draft
+            ? t(
+                '下面标出的绑定有问题，这个草稿发布时会被拒：请「编辑为新草稿」，在 JSON 视图里改。',
+                'The bindings marked below have problems, so publishing this draft is refused: use “Edit as new draft” and fix them in the JSON view.',
+              )
+            : t(
+                '下面标出的绑定有问题，用这个流程生成目标会被拒。',
+                'The bindings marked below have problems, so making a goal from this Procedure is refused.',
+              )}
+        </Notice>
+      ) : null}
       <ol className="stack-s">
         {steps.map((step, index) => (
           <li
@@ -85,6 +121,7 @@ export function ProcedureTemplateView({
                 step={step}
                 index={index}
                 place={places.get(index) ?? null}
+                issueOf={issueOf}
                 t={t}
               />
             ) : (
@@ -125,12 +162,15 @@ function StepBody({
   step,
   index,
   place,
+  issueOf,
   t,
 }: {
   readonly http: CapabilityCaller;
   readonly step: ProcedureStep;
   readonly index: number;
+  /** `null`: not a step of a plan (not a `worker` step, or the Procedure makes none). */
   readonly place: ProcedurePlanPlace | null;
+  readonly issueOf: (binding: ProcedureBinding, place: ProcedurePlanPlace) => string | null;
   readonly t: Translate;
 }) {
   const [zh, en] = KIND_LABEL[step.kind];
@@ -160,11 +200,21 @@ function StepBody({
       {step.kind === 'worker' && place ? (
         <ul className="stack-s text-small" data-testid="procedure-template-step-lines">
           <li>{procedureDependencySentence(place, t)}</li>
-          {(step.bindings ?? []).map((binding) => (
-            <li key={`${binding.from}:${binding.to}`} data-testid="procedure-template-binding">
-              {procedureBindingSentence(binding, t)}
-            </li>
-          ))}
+          {(step.bindings ?? []).map((binding) => {
+            const issue = issueOf(binding, place);
+            return (
+              <li key={`${binding.from}:${binding.to}`} className="stack-s">
+                <span data-testid="procedure-template-binding">
+                  {procedureBindingSentence(binding, t)}
+                </span>
+                {issue ? (
+                  <span className="text-warn" data-testid="procedure-template-binding-issue">
+                    {issue}
+                  </span>
+                ) : null}
+              </li>
+            );
+          })}
           {step.maxAttempts !== undefined ? (
             <li>{t(`最多尝试 ${step.maxAttempts} 次`, `At most ${step.maxAttempts} attempts`)}</li>
           ) : null}

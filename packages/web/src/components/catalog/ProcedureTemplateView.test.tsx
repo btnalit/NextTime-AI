@@ -25,6 +25,7 @@ describe('ProcedureTemplateView (S11 GO5d-2)', () => {
     render(
       <ProcedureTemplateView
         http={http()}
+        status="published"
         steps={[
           {
             ...worker,
@@ -57,7 +58,11 @@ describe('ProcedureTemplateView (S11 GO5d-2)', () => {
         ]}
         parameters={{
           type: 'object',
-          properties: { site: { type: 'string', description: 'which site' } },
+          // jsonb's own key order: the required field is listed first all the same.
+          properties: {
+            threshold: { type: 'integer' },
+            site: { type: 'string', description: 'which site' },
+          },
           required: ['site'],
         }}
       />,
@@ -103,9 +108,13 @@ describe('ProcedureTemplateView (S11 GO5d-2)', () => {
       ),
     );
     const parameters = screen.getByTestId('procedure-template-parameters');
-    expect(within(parameters).getByTestId('output-contract-field').textContent).toMatch(
-      /site.*文本.*必填.*which site/,
-    );
+    const fields = within(parameters).getAllByTestId('output-contract-field');
+    expect(fields.map((field) => field.textContent)).toEqual([
+      expect.stringMatching(/^site.*文本.*必填.*which site$/),
+      expect.stringMatching(/^threshold/),
+    ]);
+    expect(screen.queryByTestId('procedure-template-issues')).toBeNull();
+    expect(screen.queryByTestId('procedure-template-binding-issue')).toBeNull();
     expect(screen.getByTestId('procedure-detail-steps').textContent).toContain('"$params"');
   });
 
@@ -113,16 +122,25 @@ describe('ProcedureTemplateView (S11 GO5d-2)', () => {
     const { unmount } = render(
       <ProcedureTemplateView
         http={http()}
-        steps={[worker, { kind: 'approval', description: 'The owner agrees.' }]}
+        status="published"
+        steps={[
+          { ...worker, bindings: [{ to: 'site', from: '$params', path: 'site' }] },
+          { kind: 'approval', description: 'The owner agrees.' },
+        ]}
         parameters={null}
       />,
     );
     expect(screen.getByTestId('procedure-template-manual').textContent).toMatch(/只能照着手动执行/);
     expect(screen.queryByTestId('procedure-template-parameters')).toBeNull();
+    // UX acceptance of #722 (P3-3): it makes no plan, so no step has a place in one.
+    expect(screen.queryByTestId('procedure-template-step-key')).toBeNull();
+    expect(screen.queryByTestId('procedure-template-step-lines')).toBeNull();
+    expect(screen.queryByTestId('procedure-template-binding-issue')).toBeNull();
     unmount();
     render(
       <ProcedureTemplateView
         http={http()}
+        status="published"
         steps={[{ kind: 'verify', description: 'ok' }]}
         parameters={null}
       />,
@@ -130,9 +148,48 @@ describe('ProcedureTemplateView (S11 GO5d-2)', () => {
     expect(screen.getByTestId('procedure-template-manual').textContent).toMatch(/没有 Worker 步骤/);
   });
 
+  it('a draft is a template once published, and a binding the page can tell is wrong is marked where it is read', () => {
+    render(
+      <ProcedureTemplateView
+        http={http()}
+        status="draft"
+        steps={[
+          {
+            ...worker,
+            key: 'scan',
+            outputSchema: { type: 'object' },
+            bindings: [
+              { to: 'site', from: '$params', path: 'site' },
+              { to: 'zone', from: '$params', path: 'zone' },
+            ],
+          },
+          { ...worker, bindings: [{ to: 'skus', from: 'missing', path: 'skus' }] },
+        ]}
+        parameters={{
+          type: 'object',
+          properties: { site: { type: 'string' } },
+          additionalProperties: false,
+        }}
+      />,
+    );
+    expect(screen.getByTestId('procedure-template-summary').textContent).toMatch(/^发布后可以/);
+    expect(screen.getByTestId('procedure-template-issues').textContent).toMatch(/发布时会被拒/);
+    expect(
+      screen.getAllByTestId('procedure-template-binding-issue').map((line) => line.textContent),
+    ).toEqual([
+      expect.stringMatching(/启动参数里没有声明 zone/),
+      expect.stringMatching(/没有叫 missing 的 Worker 步骤/),
+    ]);
+  });
+
   it('a step it cannot read is shown as it is', () => {
     render(
-      <ProcedureTemplateView http={http()} steps={[{ kind: 'mystery', x: 1 }]} parameters={null} />,
+      <ProcedureTemplateView
+        http={http()}
+        status="published"
+        steps={[{ kind: 'mystery', x: 1 }]}
+        parameters={null}
+      />,
     );
     expect(screen.getByTestId('procedure-template-step').textContent).toContain('"mystery"');
   });

@@ -295,8 +295,46 @@ describe('procedureTemplateProblems (S11 GO5d-2)', () => {
     const problems = procedureTemplateProblems(
       template([worker({ bindings: [{ to: 'x', from: '$params', path: 'nowhere' }] })], SITE),
     );
-    expect(problems).toHaveLength(1);
-    expect(problems[0]).toMatch(/^step "step-1": bindings\[0\]: .* of the parameters$/);
+    expect(problems).toEqual([
+      'step "step-1": bindings[0]: path "nowhere": the parameters schema does not declare "nowhere" in the parameters',
+    ]);
+  });
+
+  it('says every problem in one go — the making’s and the plan’s — a binding by its place in the Procedure step', () => {
+    expect(
+      procedureTemplateProblems(
+        template(
+          [
+            worker({
+              key: 'scan',
+              outputSchema: HOSTS,
+              bindings: [
+                { to: 'site', from: '$params', path: 'site' },
+                { to: 'zone', from: '$params', path: 'zone' },
+              ],
+            }),
+            worker({
+              key: 'apply-20',
+              bindings: [
+                { to: 'site', from: '$params', path: 'site' },
+                { to: 'hosts', from: 'scan', path: 'hosts' },
+                { to: 'more', from: '$params', path: 'hosts' },
+                { to: 'hosts', from: 'missing', path: 'hosts' },
+              ],
+            }),
+          ],
+          SITE,
+        ),
+      ),
+    ).toEqual([
+      'step "scan": bindings[1]: path "zone": the parameters schema does not declare "zone" in the parameters',
+      'the plan it makes: step "apply-20": bindings[3]: takes from step "missing", which this step does not depend on — add it to dependsOn',
+      'the plan it makes: step "apply-20": bindings[3]: puts its value at "hosts", where bindings[1] puts its own at "hosts"',
+    ]);
+    // No step at all: the making's problem alone, not the plan's restatement of it.
+    expect(procedureTemplateProblems(template([{ kind: 'verify', description: 'ok' }]))).toEqual([
+      "the Procedure has no worker step — a goal's plan runs at least one Worker",
+    ]);
   });
 
   it('names the plan’s own problems as the plan it makes', () => {
