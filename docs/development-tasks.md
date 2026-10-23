@@ -4444,6 +4444,13 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **能力包需求**：`PackRequirementWire.platformPreset` 只在 `needs_platform`、平台带同名预设、接入包没被打包门占用三条同时成立时为真；列能力包时读预设名，安装和校验不读预设。
   - **控制台**：`PresetGateInstanceForm.tsx`；`CreateGateInstanceForm.tsx` 外层读预设并按传输种类过滤（原表单改为内部 `CustomGateInstanceForm`，testid 不变，两项都不预选）；`useGateInstancesPanel.ts` 消费 `?preset=` 深链接；`ChangeVerification.tsx` 按 `platformPreset` 与角色给链接或说明；`GateInstanceDetailPanel.tsx` 未启用宿主实例的「接下来」与预设实例的清单来源；`router.ts` 的 `hrefs.platformConnectorPreset` / `readConnectorPresetLink`；`PendingManifestReview.tsx` 的 `gateOperationLine` 复用。
   - **不在本 PR**：P1-F2（knowledge 能力包 v1 与 `requires.packs`）；新遗留 447–451（multipart、打包门退役、对象类型归属、按实例 CA、孤儿凭证目录）。
+- 实现说明（P1-F2：knowledge 能力包 v1 与能力包依赖，#721，2026-10-23 合入，6760198；无迁移；P1-F 完成）：
+  - **清单与注册表**：`packs/manifest.ts` 新增 `PackRequirementManifestSchema`，`requires` 为 `{connectors?, packs?}`（至少一个），拒绝重复与依赖自己；`packs/registry.ts` 的 `PackVersion.requiredPacks` 与 `assertPackRequirements`（依赖存在、版本够，DFS 查环并写出整条环）；`requires` 本就进版本摘要，`packs` 随之进入。`platform/modules.ts`：模块（只含一个同名本体组件的包）不能声明 `requires.packs`，因为 `install_module` 与默认模块不做依赖检查。
+  - **阻止安装**：`packs/requirements.ts` 的 `readPackDependencies`（用 `loadPackState`，与包状态同一判定）、`packDependencyMet`、`PackDependencyUnmetError`（409，WS `ILLEGAL_TRANSITION`）；`installPack` 在核对审阅版本之后、放宽确认之前检查。安装与依赖被并发撤销之间不加锁，装完的自动核验会判不通过并留在记录上。
+  - **核验第四件事**：`change-plan/verify.ts` 的 `SourceRequirements.dependencies`，`passed` 要求依赖都满足，审计 payload 带 `dependencies`，存量 jsonb `.default([])`；`change-plan` 核心不能引用 `application/packs`，所以另写一份同规则的 `dependencyMet`。`gateway/change-verification.ts` 按记录对应的版本读依赖。
+  - **knowledge v1**：`packs/knowledge/1`，`requires.connectors: [ragflow]`、`requires.packs: [{name: ops-assets, minVersion: 2}]`（`KnowledgeBase` / `Document` 仍由 ops-assets v2 定义，遗留 449）；Skill `kb-retrieval` 只用检索到的内容作答并注明出处；Worker `knowledge-researcher` 只有平台默认能力。端到端验收 `knowledge-pack.integration.test.ts`（真 Postgres、假 RAGFlow）：预设建实例 → 门 announce → 依赖未装 409 → 装 ops-assets 与 knowledge、核验通过 → Worker 列知识库 / 文档 / 检索并写进图谱，RAGFlow 只见门的 key → `document.parse` 被拒。
+  - **控制台**：`PacksTab.tsx` 的 `PackDependencyList`（复用 `InstallPack` 就地安装，装完焦点落在该行并提示可以继续）、审阅框「还差」、`pack_dependency_unmet` 归入需要重新审阅；`ChangeVerification.tsx` 列依赖（`minVersionText`、`dependencyNowText`）；包页安装后焦点落在「已装上」通知上。
+  - **不在本 PR**：RAGFlow `document.parse` 收紧为 medium、不可自动批准（下一个小 PR）；依赖只在安装入口检查（遗留 452）。
 - 来自 P0b（#620）的输入：第一个小 PR 是评测用夹具门重设计（托管实例挂在按系统命名的接入包上，`create_gate_instance` 的 `connector` 可选）；`importManifest` 的 `requireDescription` 留给目录侧要求复用，不用就删（遗留 372）；344 由 P1 收口。
 
 **AA1 — 管理员 Agent 身份与上限**（见 `global-roadmap-2026-10-16.md` §4）
