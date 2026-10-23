@@ -203,6 +203,7 @@ describe('lib/goals', () => {
 
   it('a check’s last error reads in words where the code is known, as its code otherwise', () => {
     expect(checkErrorLabel('predicate_unsatisfied', zh)).toBe('结果不符合期望');
+    expect(checkErrorLabel('fact_not_observed', zh)).toMatch(/^没看到能作证据的事实/);
     expect(checkErrorLabel('gate_timeout', zh)).toBe('上次没成功（代码 gate_timeout）');
   });
 });

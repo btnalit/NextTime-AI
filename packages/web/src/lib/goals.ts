@@ -385,6 +385,10 @@ const CHECK_ERROR: Readonly<Record<string, readonly [string, string]>> = {
     'The result lacked the value to check, so it could not be judged',
   ],
   attempts_exhausted: ['试满了次数仍没有结论', 'Ran out of attempts without an answer'],
+  fact_not_observed: [
+    '没看到能作证据的事实：要在这一轮开始之后观察到，而且不是这个目标自己造成的',
+    'No fact that can serve as evidence was seen: it must be observed after this round began, and not be this goal’s own doing',
+  ],
   requester_may_not_read_facts: [
     '请求人读不到图谱里的事实',
     'The requester cannot read facts in the graph',
