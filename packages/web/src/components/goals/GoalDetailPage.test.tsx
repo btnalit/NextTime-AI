@@ -143,6 +143,37 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
     expect(screen.queryByTestId('goal-unresolved')).toBeNull();
   });
 
+  it('a proposal names, step by step, what the requester could not start now — a gate by its name', async () => {
+    const base = goalDetail();
+    const detail = goalDetail({
+      status: 'proposed',
+      planRevision: {
+        ...base.planRevision,
+        status: 'proposed',
+        hints: [
+          {
+            code: 'step_capability_not_held',
+            message: 'step "fetch": …',
+            stepKey: 'fetch',
+          },
+          {
+            code: 'step_gate_not_held',
+            message: 'step "apply": …',
+            stepKey: 'apply',
+            gatekeeperIds: [GATE_ID],
+          },
+        ],
+      },
+    });
+    renderPage(scriptedHttp(baseHandlers(detail)));
+    const hints = await screen.findAllByTestId('goal-plan-hint');
+    expect(hints.map((hint) => hint.textContent)).toEqual([
+      expect.stringContaining('步骤「fetch」的 Worker 需要请求人现在没有的执行权限'),
+      expect.stringContaining('步骤「apply」'),
+    ]);
+    await waitFor(() => expect(hints[1]?.textContent).toContain('cert-gate'));
+  });
+
   it('a cancel that left work running lists the leftovers', async () => {
     const http = scriptedHttp(
       baseHandlers(

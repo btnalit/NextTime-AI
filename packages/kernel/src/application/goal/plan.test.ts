@@ -2,6 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { GOAL_ACCEPTANCE_CHECK_KIND_VALUES } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
 import {
+  RedactedTextSubmittedError,
+  TextCarriesCredentialsError,
+} from '../../governance/redaction/index.js';
+import {
   GoalPlanValidationError,
   IMPLICIT_CONFIRM_KEY,
   MAX_ACCEPTANCE_PROMPT_CHARS,
@@ -12,7 +16,9 @@ import {
   MAX_STEP_ATTEMPTS,
   parsePlan,
   planHints,
+  planShape,
   planStep,
+  refusePlanCredentials,
   roundAcceptance,
   samePlanEntry,
 } from './plan.js';
@@ -82,9 +88,9 @@ describe('parsePlan', () => {
       ],
     });
     expect(problems).toEqual([
-      'step key "a" appears more than once',
-      'step "b" depends on itself',
-      'step "c" depends on "x", which is not in the plan',
+      'step "a": the key appears more than once',
+      'step "b": depends on itself',
+      'step "c": depends on "x", which is not in the plan',
     ]);
   });
 
@@ -98,7 +104,7 @@ describe('parsePlan', () => {
           step('d'),
         ],
       }),
-    ).toEqual(['the dependencies form a cycle: a -> c -> b -> a']);
+    ).toEqual(['step "a": the dependencies form a cycle: a -> c -> b -> a']);
     // A diamond is not a cycle.
     expect(() =>
       parsePlan({
@@ -654,5 +660,76 @@ describe('planStep and samePlanEntry', () => {
     expect(samePlanEntry(plan, widened, 'a')).toBe(false);
     expect(samePlanEntry(plan, { steps: [step('a', { input: { n: 1 } })] }, 'b')).toBe(false);
     expect(samePlanEntry(plan, plan, 'z')).toBe(false);
+  });
+});
+
+// S11 GO5c: what `propose_goal` and `revise_goal` refuse before a plan's other problems, each
+// place named the way the console's plan editor finds it (`plan.steps.<i>.…`).
+describe('refusePlanCredentials', () => {
+  /** Synthetic — `.gitleaks.toml` allows fixtures spelled out from the alphabet. */
+  const FAKE = 'abcdefghijklmnopqrstuvwxyz0123';
+
+  function refusalOf(plan: unknown): { readonly name: string; readonly details: unknown } {
+    try {
+      refusePlanCredentials(planShape(plan));
+    } catch (err) {
+      return err as { name: string; details: unknown };
+    }
+    throw new Error('expected the plan to be refused');
+  }
+
+  it('lets a plan whose every part reads back as written through', () => {
+    expect(() =>
+      refusePlanCredentials(
+        planShape({
+          steps: [step('a', { input: { host: 'db-1', note: 'rotate the key' } }), step('b')],
+          acceptance: [{ key: 'ok', kind: 'requester_confirm', prompt: 'Is the report right?' }],
+        }),
+      ),
+    ).not.toThrow();
+  });
+
+  it('refuses a credential in a call argument — under a secret field name, or by its value — naming every place', () => {
+    const refused = refusalOf({
+      steps: [
+        step('a', { input: { host: 'db-1', password: 'anything' } }),
+        step('b', { input: { targets: [{ name: 'x' }, { header: `Bearer ${FAKE}` }] } }),
+      ],
+    });
+    expect(refused).toBeInstanceOf(TextCarriesCredentialsError);
+    expect(refused.details).toEqual({
+      field: 'plan.steps.0.input.password',
+      suspectedSecretValues: 2,
+      suspectedSecretPaths: ['plan.steps.0.input.password', 'plan.steps.1.input.targets.1.header'],
+    });
+    expect(JSON.stringify(refused)).not.toContain(FAKE);
+  });
+
+  it('refuses one anywhere else in the plan — a confirmation prompt — the same way, before the plan’s other problems', () => {
+    const plan = {
+      steps: [step('a')],
+      acceptance: [{ key: 'ok', kind: 'requester_confirm', prompt: `PGPASSWORD=${FAKE} worked?` }],
+    };
+    expect(refusalOf(plan).details).toEqual({
+      field: 'plan.acceptance.0.prompt',
+      suspectedSecretValues: 1,
+      suspectedSecretPaths: ['plan.acceptance.0.prompt'],
+    });
+    // parsePlan alone still names it as a problem (a plan stored before, read back).
+    expect(problemsOf(plan)).toHaveLength(1);
+  });
+
+  it('refuses a [redacted] mark copied from a read, naming where — before looking for credentials', () => {
+    const refused = refusalOf({
+      steps: [
+        step('a', { input: { password: 'anything' } }),
+        step('b', { input: { note: 'use [redacted] here' } }),
+      ],
+    });
+    expect(refused).toBeInstanceOf(RedactedTextSubmittedError);
+    expect(refused.details).toEqual({
+      field: 'plan.steps.1.input.note',
+      paths: ['plan.steps.1.input.note'],
+    });
   });
 });

@@ -219,7 +219,8 @@ import {
   listGatekeepersHandler,
   listOperationsHandler,
 } from './gatekeeper-read-handlers.js';
-// S11 GO5a: the `goal` reads; S11 GO5b: a person's operations on a run (goal-handlers.ts).
+// S11 GO5a: the `goal` reads; S11 GO5b: a person's operations on a run; S11 GO5c: proposing one
+// (goal-handlers.ts).
 import {
   cancelGoalHandler,
   confirmGoalAcceptanceHandler,
@@ -230,6 +231,7 @@ import {
   listGoalUnresolvedActionsHandler,
   listGoalsHandler,
   pauseGoalHandler,
+  proposeGoalHandler,
   reconcileGoalActionHandler,
   rejectGoalHandler,
   releaseGoalHoldHandler,
@@ -2237,6 +2239,8 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['list_goals', listGoalsHandler],
   ['get_goal_revision', getGoalRevisionHandler],
   ['list_goal_unresolved_actions', listGoalUnresolvedActionsHandler],
+  // S11 GO5c proposing a goal run (goal-handlers.ts)
+  ['propose_goal', proposeGoalHandler],
   // S11 GO5b a person's operations on a goal run (goal-handlers.ts)
   ['confirm_goal', confirmGoalHandler],
   ['reject_goal', rejectGoalHandler],

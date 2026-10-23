@@ -9,6 +9,7 @@ import {
   checkErrorLabel,
   checkKindLabel,
   planCheckSentence,
+  planHintKey,
   planHintText,
   roundCheckSentence,
 } from '../../lib/goals.js';
@@ -41,8 +42,8 @@ export function GoalAcceptanceSection({ detail, gateNames }: GoalAcceptanceSecti
     <DashboardCard title={t('验收', 'Acceptance')} data-testid="goal-acceptance">
       <div className="stack">
         {detail.planRevision.hints.map((hint) => (
-          <Notice key={hint.code} tone="warn" testId="goal-plan-hint">
-            {planHintText(hint, t)}
+          <Notice key={planHintKey(hint)} tone="warn" testId="goal-plan-hint">
+            {planHintText(hint, t, gateNames)}
           </Notice>
         ))}
         {overridden.length > 0 ? (

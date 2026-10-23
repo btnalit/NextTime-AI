@@ -15,8 +15,10 @@ import {
   type GoalRunStatus,
   type GoalRunWire,
   type ObjectiveOutcome,
+  type PlanHint,
   type PlanRevisionSummaryWire,
   type PlanRevisionWire,
+  type ProposeGoalResultWire,
   type ReconcileGoalActionResultWire,
   type ResumeGoalResultWire,
   type ReviseGoalResultWire,
@@ -42,6 +44,7 @@ import {
   cancelGoalRun,
   confirmGoalAcceptance,
   confirmGoalRun,
+  createGoalRun,
   endGoalRun,
   getGoalRun,
   getGoalRunVisibleTo,
@@ -56,7 +59,9 @@ import {
   resumeGoalRun,
   reviseGoalRun,
 } from '../../application/goal/index.js';
+import { findAttributableTurn } from '../../application/host-bridge/index.js';
 import { shownFreeText, shownFreeTextIn } from '../../governance/redaction/index.js';
+import { hashStableParams, scopeExplicitIdempotencyKey } from './action-executor.js';
 import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
 
 /**
@@ -71,6 +76,15 @@ import type { CapabilityHandler, CapabilityHandlerContext } from './capability-h
  * first refuses a run the actor cannot read as not found — the 404 `get_goal` gives, so a refusal
  * never tells someone a run exists — and then calls `application/goal`, which decides who may
  * (403), what the run's state allows (409) and what it does, in the dispatch transaction.
+ *
+ * S11 GO5c: `propose_goal` — the entry agent's way to start a goal (handle channel, the entry
+ * ceiling), or a person's own. The requester is the caller: the human channel's Principal, or the
+ * Handle's `obo`; nothing runs until they confirm it (`confirm_goal`, human channel). Its stored
+ * idempotency key (goal/0008) is the one `request_action` and `invoke_worker` use: an explicit
+ * `idempotencyKey` scoped to (requester, sid) by `scopeExplicitIdempotencyKey`, else
+ * `auto:<sid|requester>:<hash of statement, plan and budget>`, which dedupes only while that run is
+ * still proposed. A proposal made on a Handle during a running Turn records it as the run's
+ * origin (`originated_in_turn_id`), as `invoke_worker` records the Turn that generated a Task.
  */
 
 /** The caller as a goal viewer: the human channel's resolved Principal — every run when it is the
@@ -183,7 +197,17 @@ function toWirePlanRevision(view: PlanRevisionView): PlanRevisionWire {
     // claim compares — as `shownFreeTextIn` shows a stored value (a step's Task input reads the
     // same way). The plan that runs is the stored one; nothing reads this copy back.
     plan: shownFreeTextIn(view.plan) as typeof view.plan,
-    hints: view.hints.map((hint) => ({ code: hint.code, message: hint.message })),
+    hints: view.hints.map(toWirePlanHint),
+  };
+}
+
+/** A plan hint on the wire — S11 GO5c's carry the step and the gates they are about. */
+function toWirePlanHint(hint: PlanHint): PlanHint {
+  return {
+    code: hint.code,
+    message: hint.message,
+    ...(hint.stepKey !== undefined ? { stepKey: hint.stepKey } : {}),
+    ...(hint.gatekeeperIds !== undefined ? { gatekeeperIds: [...hint.gatekeeperIds] } : {}),
   };
 }
 
@@ -380,6 +404,63 @@ export const listGoalUnresolvedActionsHandler: CapabilityHandler = async (
 
 const onRun = (goalRunId: string) => ({ resourceType: 'goal_run', resourceId: goalRunId });
 
+/** `propose_goal`'s derived idempotency key (goal/0008): the same statement, plan and budget from
+ *  the same session (`sid`, else the requester) collapse onto the run while it is still proposed. */
+export function deriveDefaultProposeGoalIdempotencyKey(args: {
+  readonly identity: string;
+  readonly statement: string;
+  readonly plan: unknown;
+  readonly budget: GoalRunBudget;
+}): string {
+  const intentHash = hashStableParams({
+    statement: args.statement,
+    plan: args.plan,
+    budget: args.budget,
+  });
+  return `auto:${args.identity}:${intentHash}`;
+}
+
+export const proposeGoalHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
+  const input = params as {
+    statement: string;
+    plan: GoalPlan;
+    budget: GoalRunBudget;
+    idempotencyKey?: string;
+  };
+  const requesterId =
+    ctx?.principal?.id ?? (ctx?.principalId || (await currentPrincipalId(client)));
+  const sid = ctx?.principal ? undefined : ctx?.claims?.sid;
+  const idempotencyKey =
+    input.idempotencyKey !== undefined
+      ? scopeExplicitIdempotencyKey({ onBehalfOf: requesterId, sid, key: input.idempotencyKey })
+      : deriveDefaultProposeGoalIdempotencyKey({
+          identity: sid ?? requesterId,
+          statement: input.statement,
+          plan: input.plan,
+          budget: input.budget,
+        });
+  const turn = ctx?.principal
+    ? undefined
+    : await findAttributableTurn(client, { workspaceId, principalId: requesterId, at: new Date() });
+  const proposed = await createGoalRun(client, workspaceId, {
+    requesterId,
+    proposedBy: requesterId,
+    statement: input.statement,
+    plan: input.plan,
+    budget: input.budget,
+    idempotencyKey,
+    ...(turn?.wasRunning ? { originatedInTurnId: turn.id } : {}),
+  });
+  const result: ProposeGoalResultWire = {
+    goalRunId: proposed.goalRunId,
+    status: proposed.status,
+    changed: proposed.changed,
+    planRevisionId: proposed.planRevisionId,
+    hints: proposed.hints.map(toWirePlanHint),
+  };
+  return { result, ...onRun(proposed.goalRunId) };
+};
+
 export const confirmGoalHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
   const { goalRunId, revision } = params as { goalRunId: string; revision: number };
   const actor = await actorOnVisibleRun(client, workspaceId, 'confirm_goal', ctx, goalRunId);
@@ -487,7 +568,7 @@ export const reviseGoalHandler: CapabilityHandler = async (client, workspaceId, 
     createdStepRunIds: [...revised.createdStepRunIds],
     withdrawnActionRequestIds: [...revised.withdrawnActionRequestIds],
     releasedActionRequestIds: [...revised.releasedActionRequestIds],
-    hints: revised.hints.map((hint) => ({ code: hint.code, message: hint.message })),
+    hints: revised.hints.map(toWirePlanHint),
   };
   return { result, ...onRun(input.goalRunId) };
 };

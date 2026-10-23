@@ -198,16 +198,61 @@ export function stepAcceptanceLabel(state: StepAcceptanceState, t: Translate): s
   return t(zh, en);
 }
 
-const PLAN_HINT: Readonly<Record<PlanHint['code'], readonly [string, string]>> = {
-  requester_confirm_only: [
+/** What a step's hint (S11 GO5c) says would happen — the run pauses at the step for a person. */
+const STEP_HINT_CONSEQUENCE = [
+  '这一步不会开始，目标会停在这里等人处理。',
+  'the step would not start, and the goal would pause there for a person.',
+] as const;
+
+/**
+ * A plan hint as a sentence. `requester_confirm_only` is about the plan; the S11 GO5c codes are the
+ * confirmation card's check of the requester's authority, worked out whenever the proposal is read
+ * — `step` is the step's key, `gates` the gates a `step_gate_not_held` step needs, by name where
+ * `gateNames` knows them.
+ */
+const PLAN_HINT: Readonly<
+  Record<
+    PlanHint['code'],
+    (args: { readonly step: string; readonly gates: string }) => readonly [string, string]
+  >
+> = {
+  requester_confirm_only: () => [
     '这个计划没有平台能做的验收检查：目标是否达成只凭请求人确认。',
     'No check the platform makes: the goal is achieved only on the requester’s word.',
   ],
+  requester_cannot_start_workers: () => [
+    '请求人现在不能启动 Worker（角色不允许，或已被停用）：这个计划的步骤都不会开始，目标会在第一步就停下等人处理。',
+    'The requester cannot start Workers now (their role, or they are disabled): no step of this plan would start, and the goal would pause at its first step for a person.',
+  ],
+  step_gate_not_held: ({ step, gates }) => [
+    `步骤「${step}」的 Worker 要操作 ${gates}，请求人现在没有这些门的权限：${STEP_HINT_CONSEQUENCE[0]}`,
+    `Step “${step}”: its Worker acts on ${gates}, which the requester cannot act on now — ${STEP_HINT_CONSEQUENCE[1]}`,
+  ],
+  step_capability_not_held: ({ step }) => [
+    `步骤「${step}」的 Worker 需要请求人现在没有的执行权限：${STEP_HINT_CONSEQUENCE[0]}`,
+    `Step “${step}”: its Worker needs an execute permission the requester does not hold now — ${STEP_HINT_CONSEQUENCE[1]}`,
+  ],
+  step_definition_excluded: ({ step }) => [
+    `请求人的智能体设置排除了步骤「${step}」的 Worker：${STEP_HINT_CONSEQUENCE[0]}`,
+    `The requester’s agent profile excludes the Worker of step “${step}” — ${STEP_HINT_CONSEQUENCE[1]}`,
+  ],
 };
 
-export function planHintText(hint: PlanHint, t: Translate): string {
+export function planHintText(
+  hint: PlanHint,
+  t: Translate,
+  gateNames: ReadonlyMap<string, string> = new Map(),
+): string {
   const entry = PLAN_HINT[hint.code];
-  return entry ? t(entry[0], entry[1]) : hint.message;
+  if (!entry) return hint.message;
+  const gates = (hint.gatekeeperIds ?? []).map((id) => gateNames.get(id) ?? shortId(id)).join(', ');
+  const [zh, en] = entry({ step: hint.stepKey ?? '', gates });
+  return t(zh, en);
+}
+
+/** A key for a plan hint in a list: a step's hints share their code. */
+export function planHintKey(hint: PlanHint): string {
+  return hint.stepKey === undefined ? hint.code : `${hint.code}:${hint.stepKey}`;
 }
 
 /** A removed step's fate in a revision (`removals`; a removed step not listed was terminated). */

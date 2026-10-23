@@ -13,7 +13,7 @@ import {
   readInstanceInstructions,
 } from '../platform/instance-instructions.js';
 import { resolveActiveRuntimeImage } from '../platform/runtime.js';
-import { getWorkerDefinition } from '../worker/index.js';
+import { type WorkerDefinitionRow, getWorkerDefinition } from '../worker/index.js';
 import {
   type ResolvedRunSkills,
   readDefinitionContent,
@@ -76,12 +76,23 @@ import {
  */
 
 export type StepAttemptRefusal =
-  /** The requester cannot start this step now: disabled, no longer allowed to start Workers, or
-   *  missing a gate or an execute-class capability the step's WorkerDefinition declares (I-G7). */
-  | { readonly kind: 'authority_lost'; readonly detail: string }
-  /** What the step is pinned to cannot run: the WorkerDefinition or a Skill version is no longer
-   *  published, or the requester's own AgentProfile excludes the definition. A person decides. */
-  | { readonly kind: 'unavailable'; readonly detail: string }
+  /** The requester cannot start this step now: disabled, no longer allowed to start Workers
+   *  (`requester`), missing a gate the step's WorkerDefinition declares (`gates`, listed in
+   *  `gatekeeperIds`) or an execute-class capability it declares (`capability`) — I-G7. */
+  | {
+      readonly kind: 'authority_lost';
+      readonly reason: 'requester' | 'gates' | 'capability';
+      readonly detail: string;
+      readonly gatekeeperIds?: readonly string[];
+    }
+  /** What the step is pinned to cannot run: the WorkerDefinition (`definition`) or a Skill version
+   *  (`skills`) is no longer published, or the requester's own AgentProfile excludes the definition
+   *  (`excluded`). A person decides. */
+  | {
+      readonly kind: 'unavailable';
+      readonly reason: 'definition' | 'skills' | 'excluded';
+      readonly detail: string;
+    }
   /** An I18 quota: `concurrency_exceeded` clears by itself, `daily_cost_exceeded` with the day. */
   | { readonly kind: 'quota'; readonly code: QuotaViolationCode; readonly detail: string };
 
@@ -144,11 +155,19 @@ async function stepParentScope(
   nested: boolean,
 ): Promise<{ readonly scope: CapabilityScope } | { readonly refusal: StepAttemptRefusal }> {
   if (await requesterDisabled(client, workspaceId, requesterId)) {
-    return { refusal: { kind: 'authority_lost', detail: 'the requester is disabled' } };
+    return {
+      refusal: { kind: 'authority_lost', reason: 'requester', detail: 'the requester is disabled' },
+    };
   }
   const access = await readExecuteAccess(client, workspaceId, requesterId);
   if (access.role === undefined) {
-    return { refusal: { kind: 'authority_lost', detail: 'the requester no longer exists' } };
+    return {
+      refusal: {
+        kind: 'authority_lost',
+        reason: 'requester',
+        detail: 'the requester no longer exists',
+      },
+    };
   }
   const gatekeeperIds = entryGatekeeperIds(access);
   const entry = entryScope(
@@ -159,6 +178,7 @@ async function stepParentScope(
     return {
       refusal: {
         kind: 'authority_lost',
+        reason: 'requester',
         detail: `the requester's role (${access.role}) no longer starts Workers`,
       },
     };
@@ -175,6 +195,97 @@ async function stepParentScope(
 
 function sha256(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex');
+}
+
+/** What an attempt of a step would run with as far as authority goes — see
+ *  {@link resolveStepAuthority}. */
+export interface StepAuthority {
+  readonly kind: 'ok';
+  readonly definition: WorkerDefinitionRow;
+  readonly content: ReturnType<typeof readDefinitionContent>;
+  readonly declaredCapabilities: readonly string[];
+  readonly declaredGates: readonly string[];
+  /** The parent of the attempt's Handle: the requester's entry scope now (I-G7). */
+  readonly parent: { readonly scope: CapabilityScope };
+  readonly childScope: CapabilityScope;
+}
+
+/**
+ * I-G7: whether the requester may start an attempt of a step pinned to `ref` now, and the Handle
+ * scope it would get — the WorkerDefinition published and worker-kind, not excluded by the
+ * requester's AgentProfile, the requester enabled and allowed to start Workers, holding every gate
+ * the definition declares and every execute-class capability it declares
+ * (`computeChildHandleScope`). The one definition both {@link createStepAttemptTask} and the
+ * confirmation card's check (`application/goal`'s `planAuthorityHints`, S11 GO5c) use. Reads only.
+ */
+export async function resolveStepAuthority(
+  client: PoolClient,
+  workspaceId: string,
+  requesterId: string,
+  ref: { readonly definitionId: string; readonly version: number },
+  nested: boolean,
+): Promise<StepAuthority | { readonly kind: 'refused'; readonly refusal: StepAttemptRefusal }> {
+  const refused = (refusal: StepAttemptRefusal) => ({ kind: 'refused' as const, refusal });
+  const definition = await getWorkerDefinition(client, workspaceId, ref);
+  const refText = `${ref.definitionId}@${ref.version}`;
+  if (!definition || definition.kind !== 'worker' || definition.status !== 'published') {
+    return refused({
+      kind: 'unavailable',
+      reason: 'definition',
+      detail: definition
+        ? `WorkerDefinition ${refText} is ${definition.status === 'published' ? `${definition.kind}-kind` : definition.status}`
+        : `WorkerDefinition ${refText} does not exist`,
+    });
+  }
+
+  const agentProfile = await readAgentProfile(client, workspaceId, requesterId);
+  if (agentProfile?.excludedWorkerDefinitions.includes(ref.definitionId)) {
+    return refused({
+      kind: 'unavailable',
+      reason: 'excluded',
+      detail: `the requester's AgentProfile excludes WorkerDefinition ${ref.definitionId}`,
+    });
+  }
+
+  const content = readDefinitionContent(definition.definition);
+  const declaredCapabilities =
+    content.capabilities ?? defaultWorkerCapabilities(WORKER_CEILING_CAPABILITIES);
+  const declaredGates = content.gates ?? [];
+
+  const parent = await stepParentScope(client, workspaceId, requesterId, nested);
+  if ('refusal' in parent) return refused(parent.refusal);
+  const heldGates = new Set(parent.scope.resources.gatekeeper ?? []);
+  const missingGates = declaredGates.filter((gate) => !heldGates.has(gate));
+  if (missingGates.length > 0) {
+    return refused({
+      kind: 'authority_lost',
+      reason: 'gates',
+      detail: `the requester can no longer act on gatekeeper(s) ${missingGates.join(', ')}`,
+      gatekeeperIds: missingGates,
+    });
+  }
+  let childScope: CapabilityScope;
+  try {
+    childScope = computeChildHandleScope({
+      parentAuthority: parent.scope,
+      declaredCapabilities,
+      declaredGates,
+    });
+  } catch (err) {
+    if (err instanceof InvokeWorkerAttenuationError || err instanceof InvokeWorkerValidationError) {
+      return refused({ kind: 'authority_lost', reason: 'capability', detail: err.message });
+    }
+    throw err;
+  }
+  return {
+    kind: 'ok',
+    definition,
+    content,
+    declaredCapabilities,
+    declaredGates,
+    parent,
+    childScope,
+  };
 }
 
 /**
@@ -196,53 +307,10 @@ export async function createStepAttemptTask(
   const ref = input.previous
     ? { definitionId: input.previous.definition.id, version: input.previous.definition.version }
     : input.worker;
-  const definition = await getWorkerDefinition(client, workspaceId, ref);
-  const refText = `${ref.definitionId}@${ref.version}`;
-  if (!definition || definition.kind !== 'worker' || definition.status !== 'published') {
-    return refused({
-      kind: 'unavailable',
-      detail: definition
-        ? `WorkerDefinition ${refText} is ${definition.status === 'published' ? `${definition.kind}-kind` : definition.status}`
-        : `WorkerDefinition ${refText} does not exist`,
-    });
-  }
-
-  const agentProfile = await readAgentProfile(client, workspaceId, requesterId);
-  if (agentProfile?.excludedWorkerDefinitions.includes(ref.definitionId)) {
-    return refused({
-      kind: 'unavailable',
-      detail: `the requester's AgentProfile excludes WorkerDefinition ${ref.definitionId}`,
-    });
-  }
-
-  const content = readDefinitionContent(definition.definition);
-  const declaredCapabilities =
-    content.capabilities ?? defaultWorkerCapabilities(WORKER_CEILING_CAPABILITIES);
-  const declaredGates = content.gates ?? [];
-
-  const parent = await stepParentScope(client, workspaceId, requesterId, input.nested);
-  if ('refusal' in parent) return refused(parent.refusal);
-  const heldGates = new Set(parent.scope.resources.gatekeeper ?? []);
-  const missingGates = declaredGates.filter((gate) => !heldGates.has(gate));
-  if (missingGates.length > 0) {
-    return refused({
-      kind: 'authority_lost',
-      detail: `the requester can no longer act on gatekeeper(s) ${missingGates.join(', ')}`,
-    });
-  }
-  let childScope: CapabilityScope;
-  try {
-    childScope = computeChildHandleScope({
-      parentAuthority: parent.scope,
-      declaredCapabilities,
-      declaredGates,
-    });
-  } catch (err) {
-    if (err instanceof InvokeWorkerAttenuationError || err instanceof InvokeWorkerValidationError) {
-      return refused({ kind: 'authority_lost', detail: err.message });
-    }
-    throw err;
-  }
+  const authority = await resolveStepAuthority(client, workspaceId, requesterId, ref, input.nested);
+  if (authority.kind === 'refused') return refused(authority.refusal);
+  const { definition, content, declaredCapabilities, declaredGates, parent, childScope } =
+    authority;
 
   let skills: ResolvedRunSkills;
   if (input.previous) {
@@ -250,6 +318,7 @@ export async function createStepAttemptTask(
     if (pinned.kind === 'unavailable') {
       return refused({
         kind: 'unavailable',
+        reason: 'skills',
         detail: `Skill version(s) no longer published: ${pinned.refs
           .map((skill) => `${skill.skillId}@${skill.version}`)
           .join(', ')}`,

@@ -28,7 +28,15 @@ import {
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { getGatekeeper, getPublishedOperation } from '../../governance/gatekeepers/index.js';
-import { findSuspectedSecrets, reviewObserveParams } from '../../governance/redaction/index.js';
+import {
+  RedactedTextSubmittedError,
+  type SuspectedSecrets,
+  TextCarriesCredentialsError,
+  findSuspectedSecrets,
+  redactSuspectedSecrets,
+  redactedPathsIn,
+  reviewObserveParams,
+} from '../../governance/redaction/index.js';
 import {
   PREDICATE_LINT_PLAN_WORK,
   type PredicateLintBudget,
@@ -141,46 +149,64 @@ export class GoalPlanValidationError extends Error {
   }
 }
 
-/** Parses `plan` and checks its shape and graph — no database. Throws
- *  {@link GoalPlanValidationError} naming every problem found. */
-export function parsePlan(plan: unknown): GoalPlan {
+/**
+ * The plan's shape alone (`GoalPlanSchema`) — no other check, no database; the plan a check that
+ * must come before the plan's other problems reads ({@link refusePlanCredentials}). Throws
+ * {@link GoalPlanValidationError} naming each schema issue at its path in the plan
+ * (`steps.0.key: …`).
+ *
+ * Every problem a plan is refused with names where it is, so an editor can put it next to the
+ * part it is about (S11 GO5c, agreed with the console's plan editor): a schema issue by its path
+ * (`steps.<i>.…`), a step's problem with `step "<key>": `, the plan's own acceptance checks with
+ * `acceptance[<i>] "<key>": `; only the plan's size is about no part of it.
+ */
+export function planShape(plan: unknown): GoalPlan {
   const parsed = GoalPlanSchema.safeParse(plan);
   if (!parsed.success) {
     throw new GoalPlanValidationError(
       parsed.error.issues.map((issue) => `${issue.path.join('.') || 'plan'}: ${issue.message}`),
     );
   }
+  return parsed.data;
+}
+
+/** {@link planShape}, then the plan's size, step graph and declarations — no database. Throws
+ *  {@link GoalPlanValidationError} naming every problem found, each where it is. */
+export function parsePlan(plan: unknown): GoalPlan {
+  const shaped = planShape(plan);
   const problems: string[] = [];
-  if (Buffer.byteLength(JSON.stringify(parsed.data), 'utf8') > MAX_PLAN_BYTES) {
+  if (Buffer.byteLength(JSON.stringify(shaped), 'utf8') > MAX_PLAN_BYTES) {
     problems.push(`the plan is larger than ${MAX_PLAN_BYTES} bytes`);
   }
   const keys = new Set<string>();
-  for (const step of parsed.data.steps) {
-    if (keys.has(step.key)) problems.push(`step key "${step.key}" appears more than once`);
+  for (const step of shaped.steps) {
+    if (keys.has(step.key)) problems.push(`step "${step.key}": the key appears more than once`);
     keys.add(step.key);
   }
-  for (const step of parsed.data.steps) {
+  for (const step of shaped.steps) {
     for (const dependency of step.dependsOn ?? []) {
-      if (dependency === step.key) problems.push(`step "${step.key}" depends on itself`);
+      if (dependency === step.key) problems.push(`step "${step.key}": depends on itself`);
       else if (!keys.has(dependency)) {
-        problems.push(`step "${step.key}" depends on "${dependency}", which is not in the plan`);
+        problems.push(`step "${step.key}": depends on "${dependency}", which is not in the plan`);
       }
     }
   }
   if (problems.length === 0) {
-    const cycle = findCycle(parsed.data.steps);
-    if (cycle) problems.push(`the dependencies form a cycle: ${cycle.join(' -> ')}`);
+    const cycle = findCycle(shaped.steps);
+    if (cycle) {
+      problems.push(`step "${cycle[0]}": the dependencies form a cycle: ${cycle.join(' -> ')}`);
+    }
   }
   const lintBudget: PredicateLintBudget = { remaining: PREDICATE_LINT_PLAN_WORK };
-  for (const step of parsed.data.steps) {
+  for (const step of shaped.steps) {
     problems.push(...reconcileShapeProblems(step, lintBudget));
     problems.push(
       ...acceptanceShapeProblems(step.acceptance ?? [], lintBudget, `step "${step.key}": `),
     );
   }
-  problems.push(...acceptanceShapeProblems(parsed.data.acceptance ?? [], lintBudget, ''));
+  problems.push(...acceptanceShapeProblems(shaped.acceptance ?? [], lintBudget, ''));
   if (problems.length > 0) throw new GoalPlanValidationError(problems);
-  return parsed.data;
+  return shaped;
 }
 
 /** The acceptance checks of the plan, or of one step (`prefix` names it): keys unique, at most one
@@ -339,6 +365,108 @@ export function predicateCredentialProblems(predicate: Predicate): readonly stri
     }
   }
   return problems;
+}
+
+/** At most this many places go into a refusal's details — the count stays exact. */
+const MAX_REFUSAL_PATHS = 20;
+
+/** Call arguments a plan holds, as every read shows them: each suspected credential replaced by
+ *  `[redacted]` (`redactSuspectedSecrets`, the call-argument rule `get_task` applies to a Task's
+ *  input, legacy 184), with where (paths within `params`). */
+export function paramsAsRead<T>(params: T): SuspectedSecrets & { readonly value: T } {
+  const redacted = redactSuspectedSecrets(params, { secretFields: true });
+  return { value: redacted.value as T, count: redacted.count, paths: redacted.paths };
+}
+
+/**
+ * The plan as every read shows its call arguments (`views.ts`, the module comment there): a step's
+ * `input`, a reconcile declaration's action and check `params`, every acceptance observation's
+ * `params` — each under {@link paramsAsRead} — with how many values were replaced and where
+ * (paths within the plan). The rest of the plan is read as a stored document
+ * (`shownFreeTextIn`, `goal-handlers.ts`).
+ */
+export function planParamsAsRead(plan: GoalPlan): {
+  readonly plan: GoalPlan;
+  readonly found: SuspectedSecrets;
+} {
+  let count = 0;
+  const paths: string[] = [];
+  const read = <T>(params: T, at: string): T => {
+    const shown = paramsAsRead(params);
+    count += shown.count;
+    for (const path of shown.paths) paths.push(path === '' ? at : `${at}.${path}`);
+    return shown.value;
+  };
+  const withParams = <V extends { readonly params?: Record<string, unknown> }>(
+    value: V,
+    at: string,
+  ): V =>
+    value.params === undefined ? value : { ...value, params: read(value.params, `${at}.params`) };
+  const observation = <C extends AcceptanceCheck | StepAcceptanceCheck>(check: C, at: string): C =>
+    check.kind === 'observe_predicate'
+      ? { ...check, check: withParams(check.check, `${at}.check`) }
+      : check;
+  const shown: GoalPlan = {
+    ...plan,
+    steps: plan.steps.map((step, i) => ({
+      ...step,
+      ...(step.input !== undefined ? { input: read(step.input, `steps[${i}].input`) } : {}),
+      ...(step.reconcile !== undefined
+        ? {
+            reconcile: step.reconcile.map((declaration, j) => ({
+              ...declaration,
+              action: withParams(declaration.action, `steps[${i}].reconcile[${j}].action`),
+              check: withParams(declaration.check, `steps[${i}].reconcile[${j}].check`),
+            })),
+          }
+        : {}),
+      ...(step.acceptance !== undefined
+        ? {
+            acceptance: step.acceptance.map((check, j) =>
+              observation(check, `steps[${i}].acceptance[${j}]`),
+            ),
+          }
+        : {}),
+    })),
+    ...(plan.acceptance !== undefined
+      ? { acceptance: plan.acceptance.map((check, j) => observation(check, `acceptance[${j}]`)) }
+      : {}),
+  };
+  return { plan: shown, found: { count, paths: paths.slice(0, MAX_REFUSAL_PATHS) } };
+}
+
+/** A place in the plan as a refusal names it: from `plan`, dot-separated, array items by their
+ *  0-based index (`steps[0].input.host` → `plan.steps.0.input.host`) — the form the console's
+ *  plan editor finds the field by. */
+function planPlace(path: string): string {
+  return `plan.${path.replace(/\[(\d+)\]/g, '.$1')}`;
+}
+
+/**
+ * S11 GO5c: a plan written by `propose_goal` or `revise_goal` carries nothing a read of it masks —
+ * no suspected credential in its call arguments ({@link planParamsAsRead}) or anywhere else in it
+ * (`findSuspectedSecrets`, the document rule every read shows the rest with: an acceptance prompt,
+ * a predicate's literal), and no `[redacted]` mark copied from a read (`redactedPathsIn`). A gate
+ * authenticates with the credentials configured on it; a plan is read by people on the
+ * confirmation card and in every revision after it, and is kept as written. So what a plan says
+ * reads back as written, and an editor opened on a read of it (GO6) loses nothing. Run on the
+ * plan's shape ({@link planShape}) before its other problems, so a credential anywhere is refused
+ * the one way. Throws `RedactedTextSubmittedError` or {@link TextCarriesCredentialsError}: `field`
+ * the first place, `paths` / `suspectedSecretPaths` every place ({@link planPlace}). A plan stored
+ * before this check keeps reading masked.
+ */
+export function refusePlanCredentials(plan: GoalPlan): void {
+  const redacted = redactedPathsIn(plan).map(planPlace);
+  if (redacted.length > 0) throw new RedactedTextSubmittedError(redacted[0] as string, redacted);
+  const { plan: shown, found } = planParamsAsRead(plan);
+  const rest = findSuspectedSecrets(shown);
+  const count = found.count + rest.count;
+  if (count === 0) return;
+  const places = [...new Set([...found.paths, ...rest.paths].map(planPlace))].slice(
+    0,
+    MAX_REFUSAL_PATHS,
+  );
+  throw new TextCarriesCredentialsError(places[0] ?? 'plan', count, places);
 }
 
 /** A dependency cycle as the keys along it (first key repeated at the end), or null. */

@@ -1,8 +1,17 @@
-import type { GoalRunStatus } from '@nexttime/shared';
+import { GoalPlanSchema, type GoalRunStatus, MAX_GOAL_STATEMENT_CHARS } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
+import { refuseCredentialText, refuseRedactedText } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { moveGoalRun } from './moves.js';
-import { type GoalPlan, type PlanHint, planHints, validatePlan } from './plan.js';
+import {
+  type GoalPlan,
+  type PlanHint,
+  planHints,
+  planShape,
+  refusePlanCredentials,
+  validatePlan,
+} from './plan.js';
+import { planAuthorityHints } from './precheck.js';
 import { getGoalRun } from './reads.js';
 import { recordGoalRunTransition, recordStepRunTransition } from './transition-log.js';
 import type { GoalControlActor, GoalRunBudget, GoalRunRow } from './types.js';
@@ -17,7 +26,13 @@ import type { GoalControlActor, GoalRunBudget, GoalRunRow } from './types.js';
  *   - {@link createGoalRun}: a `proposed` GoalRun and its revision 1 (`proposed`), the plan
  *     validated (`plan.ts`) and the validation recorded on the revision, with the plan's hints
  *     (`planHints`: a plan the platform checks nothing of is achieved only on the requester's
- *     word) for the confirmation card.
+ *     word) and what the requester's authority would stop now (`precheck.ts`) for the
+ *     confirmation card. S11 GO5c: the statement and the plan carry nothing a read masks — no
+ *     suspected credential, no `[redacted]` mark copied from a read — refused before anything is
+ *     written (`refusePlanCredentials`; the statement under the rule a revision's reason is); and
+ *     with an idempotency key (the stored form `propose_goal` derives, goal/0008) the call returns
+ *     the run that key proposed instead of a second one (`changed: false`): an explicit key's run
+ *     whatever its status, a derived key's only while still `proposed`.
  *   - {@link confirmGoalRun}: only the requester confirms (propose → authorize → execute: a
  *     GoalRun spends and acts while nobody watches, §4.3), and only the revision they read — the
  *     proposal, revision 1 (S11 GO5b: what is confirmed is what was shown). In one transaction,
@@ -82,14 +97,117 @@ export interface CreateGoalRunInput {
   readonly plan: unknown;
   readonly budget: GoalRunBudget;
   readonly originatedInTurnId?: string;
+  /** S11 GO5c: the stored key (`explicit:…` or `auto:…`, goal/0008) — derived by `propose_goal`;
+   *  none for a direct caller, which never dedupes. */
+  readonly idempotencyKey?: string;
 }
 
 export interface CreatedGoalRun {
   readonly goalRunId: string;
   readonly planRevisionId: string;
   readonly plan: GoalPlan;
-  /** What the person confirming the plan should know ({@link planHints}). */
+  /** What the person confirming the plan should know ({@link planHints}), and what the
+   *  requester's authority would stop now (`planAuthorityHints`) while the run is proposed. */
   readonly hints: readonly PlanHint[];
+  /** `proposed`, or — for a call that matched a run its idempotency key proposed before — that
+   *  run's status now. */
+  readonly status: GoalRunStatus;
+  /** `false` when the call matched a run proposed before with the same idempotency key. */
+  readonly changed: boolean;
+}
+
+/** S11 GO5c: the longest statement a goal is proposed with (`@nexttime/shared`'s, which
+ *  `propose_goal`'s params hold to; counted here in code points, as a revision's reason is). */
+export const MAX_GOAL_STATEMENT_LENGTH = MAX_GOAL_STATEMENT_CHARS;
+
+/** goal/0008's two indexes: a unique violation on either means another call proposed with this
+ *  key first. */
+const GOAL_IDEMPOTENCY_KEY_CONSTRAINTS: ReadonlySet<string> = new Set([
+  'goal_runs_idempotency_key_uidx',
+  'goal_runs_derived_idempotency_key_proposed_uidx',
+]);
+
+/** The prefix of a derived key (goal/0008): it dedupes only against a run still proposed. */
+export const DERIVED_GOAL_IDEMPOTENCY_KEY_PREFIX = 'auto:';
+
+function isGoalIdempotencyKeyConflict(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const candidate = err as { code?: unknown; constraint?: unknown };
+  return (
+    candidate.code === '23505' &&
+    typeof candidate.constraint === 'string' &&
+    GOAL_IDEMPOTENCY_KEY_CONSTRAINTS.has(candidate.constraint)
+  );
+}
+
+/** What a run proposed under a key holds now — for the call that replays it. */
+async function proposedRunOfKey(
+  client: PoolClient,
+  workspaceId: string,
+  idempotencyKey: string,
+  options: { readonly afterConflict: boolean },
+): Promise<{
+  readonly goalRunId: string;
+  readonly requesterId: string;
+  readonly status: GoalRunStatus;
+} | null> {
+  // A derived key matches only a run still proposed — except after losing the insert race: the
+  // unique violation proves the winner was proposed a moment ago, so its run is this call's even
+  // if it was confirmed since (as `requestAction` does).
+  const derived = idempotencyKey.startsWith(DERIVED_GOAL_IDEMPOTENCY_KEY_PREFIX);
+  const result = await client.query<{ id: string; on_behalf_of: string; status: GoalRunStatus }>(
+    `select id, on_behalf_of, status from goal_runs
+      where workspace_id = $1 and idempotency_key = $2
+        and ($3::boolean or status = 'proposed')
+      order by created_at desc, id desc
+      limit 1`,
+    [workspaceId, idempotencyKey, !derived || options.afterConflict],
+  );
+  const row = result.rows[0];
+  return row ? { goalRunId: row.id, requesterId: row.on_behalf_of, status: row.status } : null;
+}
+
+async function replayProposal(
+  client: PoolClient,
+  workspaceId: string,
+  run: { readonly goalRunId: string; readonly requesterId: string; readonly status: GoalRunStatus },
+): Promise<CreatedGoalRun> {
+  const revision = await client.query<{ id: string; plan: unknown }>(
+    `select id, plan from plan_revisions
+      where workspace_id = $1 and goal_run_id = $2 and revision = 1`,
+    [workspaceId, run.goalRunId],
+  );
+  const stored = revision.rows[0];
+  if (!stored) throw new Error(`createGoalRun: goal run ${run.goalRunId} has no revision 1`);
+  const parsed = GoalPlanSchema.safeParse(stored.plan);
+  if (!parsed.success) {
+    throw new Error(`createGoalRun: goal run ${run.goalRunId}'s proposal no longer parses`);
+  }
+  return {
+    goalRunId: run.goalRunId,
+    planRevisionId: stored.id,
+    plan: parsed.data,
+    hints: [
+      ...planHints(parsed.data),
+      ...(run.status === 'proposed'
+        ? await planAuthorityHints(client, workspaceId, run.requesterId, parsed.data)
+        : []),
+    ],
+    status: run.status,
+    changed: false,
+  };
+}
+
+/** The statement's checks — see the module comment. */
+function checkStatement(statement: string): void {
+  if (!/\S/.test(statement)) throw new GoalRunInputError('a goal statement says nothing');
+  if ([...statement].length > MAX_GOAL_STATEMENT_LENGTH) {
+    throw new GoalRunInputError(
+      `a goal statement is at most ${MAX_GOAL_STATEMENT_LENGTH} characters`,
+    );
+  }
+  refuseRedactedText('statement', statement);
+  refuseCredentialText('statement', statement);
 }
 
 export async function createGoalRun(
@@ -97,13 +215,50 @@ export async function createGoalRun(
   workspaceId: string,
   input: CreateGoalRunInput,
 ): Promise<CreatedGoalRun> {
+  // What the call carries is checked before anything else, a replay included: a call refused for
+  // its content never returns a run.
+  checkStatement(input.statement);
+  refusePlanCredentials(planShape(input.plan));
+  if (input.idempotencyKey !== undefined) {
+    const existing = await proposedRunOfKey(client, workspaceId, input.idempotencyKey, {
+      afterConflict: false,
+    });
+    if (existing) return replayProposal(client, workspaceId, existing);
+  }
   const plan = await validatePlan(client, workspaceId, input.plan);
   const hints = planHints(plan);
+  if (input.idempotencyKey !== undefined) {
+    await client.query('SAVEPOINT create_goal_run_insert');
+    try {
+      const created = await insertGoalRun(client, workspaceId, input, plan, hints);
+      await client.query('RELEASE SAVEPOINT create_goal_run_insert');
+      return created;
+    } catch (err) {
+      if (!isGoalIdempotencyKeyConflict(err)) throw err;
+      await client.query('ROLLBACK TO SAVEPOINT create_goal_run_insert');
+      const existing = await proposedRunOfKey(client, workspaceId, input.idempotencyKey, {
+        afterConflict: true,
+      });
+      // The violation means a committed run holds the key; not finding it would contradict that.
+      if (!existing) throw err;
+      return replayProposal(client, workspaceId, existing);
+    }
+  }
+  return insertGoalRun(client, workspaceId, input, plan, hints);
+}
+
+async function insertGoalRun(
+  client: PoolClient,
+  workspaceId: string,
+  input: CreateGoalRunInput,
+  plan: GoalPlan,
+  hints: readonly PlanHint[],
+): Promise<CreatedGoalRun> {
   const goal = await client.query<{ id: string }>(
     `insert into goal_runs (
        workspace_id, on_behalf_of, originated_in_turn_id, statement, budget_max_tokens,
-       budget_max_steps, budget_max_revisions, budget_max_wall_clock_seconds
-     ) values ($1, $2, $3, $4, $5, $6, $7, $8)
+       budget_max_steps, budget_max_revisions, budget_max_wall_clock_seconds, idempotency_key
+     ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      returning id`,
     [
       workspaceId,
@@ -114,6 +269,7 @@ export async function createGoalRun(
       input.budget.maxSteps,
       input.budget.maxRevisions,
       input.budget.maxWallClockSeconds,
+      input.idempotencyKey ?? null,
     ],
   );
   const goalRunId = goal.rows[0]?.id;
@@ -141,7 +297,14 @@ export async function createGoalRun(
     resultingStatus: 'proposed',
     extraAuditPayload: { requesterId: input.requesterId, steps: plan.steps.length },
   });
-  return { goalRunId, planRevisionId, plan, hints };
+  return {
+    goalRunId,
+    planRevisionId,
+    plan,
+    hints: [...hints, ...(await planAuthorityHints(client, workspaceId, input.requesterId, plan))],
+    status: 'proposed',
+    changed: true,
+  };
 }
 
 /** Locks the GoalRun row (`for no key update`, the lock every writer under a GoalRun takes first)

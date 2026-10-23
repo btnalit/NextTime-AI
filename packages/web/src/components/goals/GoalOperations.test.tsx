@@ -94,6 +94,35 @@ describe('goal operations on the goal page (S11 GO6)', () => {
     expect((await screen.findByTestId('goal-op-done')).textContent).toBe('目标已确认，开始执行');
   });
 
+  it('the confirmation card says which step the requester could not start now', async () => {
+    const base = goalDetail();
+    const detail = goalDetail({
+      status: 'proposed',
+      currentRevision: null,
+      confirmedAt: null,
+      planRevision: {
+        ...base.planRevision,
+        status: 'proposed',
+        hints: [
+          {
+            code: 'step_gate_not_held',
+            message: 'step "apply": …',
+            stepKey: 'apply',
+            gatekeeperIds: [GATE_ID],
+          },
+        ],
+      },
+    });
+    renderPage(scriptedHttp(handlers(detail, workspace('p-alice', 'member'))));
+    fireEvent.click(await screen.findByTestId('goal-op-confirm'));
+    const confirm = await screen.findByTestId('goal-op-confirm-confirm');
+    await waitFor(() =>
+      expect(within(confirm).getByTestId('confirm-impact').textContent).toMatch(
+        /步骤「apply」的 Worker 要操作 cert-gate，请求人现在没有这些门的权限/,
+      ),
+    );
+  });
+
   it('someone else’s running goal: an owner’s pause is a hold, and says so', async () => {
     const http = scriptedHttp(
       handlers(goalDetail(), workspace('p-owner', 'owner'), {

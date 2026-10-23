@@ -20,7 +20,7 @@ import {
   retryableStepKeys,
   revisionsSince,
 } from '../../lib/goal-actions.js';
-import { goalBudgetRows } from '../../lib/goals.js';
+import { goalBudgetRows, planHintText } from '../../lib/goals.js';
 import { HttpError } from '../../lib/http-client.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { Button } from '../kit/button.js';
@@ -159,6 +159,9 @@ export function GoalOperationsBar({
             `预算上限：${budget.map((row) => `${row.label} ${row.maxText}`).join('，')}`,
             `Budget: ${budget.map((row) => `${row.label} ${row.maxText}`).join(', ')}`,
           ),
+          // S11 GO5c: what the plan's checks leave to your word, and any step your authority
+          // would not start now (the kernel works it out on every read of a proposal).
+          ...goal.planRevision.hints.map((hint) => planHintText(hint, t, gateNames)),
         ]}
         confirmLabel={t('确认并开始', 'Confirm and start')}
         errorOverrides={{

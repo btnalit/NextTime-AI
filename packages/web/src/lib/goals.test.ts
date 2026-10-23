@@ -10,6 +10,8 @@ import {
   goalStepProgress,
   observationSentence,
   planDiff,
+  planHintKey,
+  planHintText,
   predicateSentence,
   unresolvedActionText,
 } from './goals.js';
@@ -31,7 +33,39 @@ function unresolved(overrides: Partial<UnresolvedGoalActionWire> = {}): Unresolv
   };
 }
 
+const en: Translate = (_zhText, enText) => enText;
+
 describe('lib/goals', () => {
+  it("reads the confirmation card's hints by step, a gate by its name where known", () => {
+    const gateNames = new Map([['11111111-2222-4333-8444-555555555555', 'prod-cert-gate']]);
+    const gate = {
+      code: 'step_gate_not_held' as const,
+      message: 'step "apply": …',
+      stepKey: 'apply',
+      gatekeeperIds: [
+        '11111111-2222-4333-8444-555555555555',
+        '99999999-8888-4777-8666-555555555555',
+      ],
+    };
+    const zhText = planHintText(gate, zh, gateNames);
+    expect(zhText).toContain('步骤「apply」');
+    expect(zhText).toContain('prod-cert-gate');
+    expect(zhText).not.toContain('99999999-8888-4777-8666-555555555555');
+    expect(planHintText(gate, en, gateNames)).toMatch(
+      /^Step “apply”: its Worker acts on prod-cert-gate, /,
+    );
+    expect(
+      planHintText({ code: 'step_definition_excluded', message: 'm', stepKey: 'build' }, zh),
+    ).toContain('步骤「build」');
+    expect(planHintText({ code: 'requester_cannot_start_workers', message: 'm' }, en)).toMatch(
+      /^The requester cannot start Workers now/,
+    );
+    // Two steps' hints of one code are two items of the list.
+    expect(planHintKey({ code: 'step_capability_not_held', message: 'm', stepKey: 'a' })).not.toBe(
+      planHintKey({ code: 'step_capability_not_held', message: 'm', stepKey: 'b' }),
+    );
+  });
+
   it('reads a predicate as a sentence: leaves, all / any / not', () => {
     expect(predicateSentence({ path: 'state', op: 'eq', value: 'running' }, zh)).toBe(
       'state 等于 "running"',
