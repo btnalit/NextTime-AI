@@ -66,6 +66,12 @@ const MembersPage = lazy(() =>
 const ModelsPage = lazy(() =>
   import('./components/ModelsPage.js').then((m) => ({ default: m.ModelsPage })),
 );
+const GoalsPage = lazy(() =>
+  import('./components/goals/GoalsPage.js').then((m) => ({ default: m.GoalsPage })),
+);
+const GoalDetailPage = lazy(() =>
+  import('./components/goals/GoalDetailPage.js').then((m) => ({ default: m.GoalDetailPage })),
+);
 const TasksPage = lazy(() =>
   import('./components/TasksPage.js').then((m) => ({ default: m.TasksPage })),
 );
@@ -266,6 +272,23 @@ export function Routed({
           onSelect={(id) => navigate(id ? hrefs.approval(id) : hrefs.approvals())}
         />
       );
+      break;
+    case 'goals':
+      page =
+        route.goalRunId !== undefined ? (
+          <GoalDetailPage
+            key={route.goalRunId}
+            http={session.http}
+            pushes={session.ws}
+            goalRunId={route.goalRunId}
+          />
+        ) : (
+          <GoalsPage
+            http={session.http}
+            pushes={session.ws}
+            onOpen={(id) => navigate(hrefs.goal(id))}
+          />
+        );
       break;
     case 'tasks':
       page = (

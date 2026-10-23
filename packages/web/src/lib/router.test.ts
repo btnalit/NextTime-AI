@@ -11,6 +11,8 @@ describe('routeFromHash', () => {
       kind: 'approvals',
       actionRequestId: 'ar-1',
     });
+    expect(routeFromHash('#/work/goals')).toEqual({ kind: 'goals' });
+    expect(routeFromHash('#/work/goals/g-1')).toEqual({ kind: 'goals', goalRunId: 'g-1' });
     expect(routeFromHash('#/work/tasks')).toEqual({ kind: 'tasks' });
     expect(routeFromHash('#/work/tasks/t-1')).toEqual({ kind: 'tasks', taskId: 't-1' });
     expect(routeFromHash('#/me/agent')).toEqual({ kind: 'agent' });
@@ -140,6 +142,8 @@ describe('hrefs', () => {
       { kind: 'chat', chatId: 'c-1' },
       { kind: 'approvals' },
       { kind: 'approvals', actionRequestId: 'ar-1' },
+      { kind: 'goals' },
+      { kind: 'goals', goalRunId: 'g-1' },
       { kind: 'tasks' },
       { kind: 'tasks', taskId: 't-1' },
       { kind: 'agent' },
@@ -184,6 +188,8 @@ function hrefFor(route: Route): string {
       return hrefs.chat(route.chatId);
     case 'approvals':
       return route.actionRequestId ? hrefs.approval(route.actionRequestId) : hrefs.approvals();
+    case 'goals':
+      return route.goalRunId ? hrefs.goal(route.goalRunId) : hrefs.goals();
     case 'tasks':
       return route.taskId ? hrefs.task(route.taskId) : hrefs.tasks();
     case 'agent':
