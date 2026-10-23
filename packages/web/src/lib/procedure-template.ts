@@ -122,7 +122,8 @@ export function procedureWorkersByKey(
  * is refused for it, using the Procedure would be too — or `null`. Only what is certain from the
  * Procedure itself: a binding from the parameters when it declares none, or from a field its
  * parameters close off (`additionalProperties: false`); one from a step that is not a `worker`
- * step of it, that the step does not wait for, or that declares no output contract. The rest (a
+ * step of it, from the step itself (legacy 455), from a step it does not wait for, or from one
+ * that declares no output contract. The rest (a
  * path's syntax, deeper fields) is the kernel's to say when the draft is published.
  */
 export function procedureBindingIssue(
@@ -154,6 +155,13 @@ export function procedureBindingIssue(
     return t(
       `这个流程没有叫 ${binding.from} 的 Worker 步骤。`,
       `This Procedure has no Worker step named ${binding.from}.`,
+    );
+  }
+  // Legacy 455: "add it to dependsOn" cannot fix a binding from the step itself.
+  if (binding.from === place.key) {
+    return t(
+      '这一步取自它自己：绑定只能取自它要等的步骤。',
+      'This step takes from itself; a binding takes only from a step it waits for.',
     );
   }
   if (!place.dependsOn.includes(binding.from)) {
@@ -211,6 +219,11 @@ function bindingReasonText(reason: string, t: Translate, raw: string): string | 
       `路径 ${path} 取不到值：${what}${gap}不是${shape === 'a list' ? '列表' : '对象'}`,
       raw,
     );
+  }
+  const absent = /^takes from step "([^"]+)", which is not in the plan$/.exec(reason);
+  if (absent) return t(`取自步骤 ${absent[1]}，但计划里没有这个步骤`, raw);
+  if (reason === 'takes from this step itself — a binding takes from a step this one depends on') {
+    return t('取自这一步自己，绑定只能取自它要等的步骤', raw);
   }
   const notWaited =
     /^takes from step "([^"]+)", which this step does not depend on — add it to dependsOn$/.exec(

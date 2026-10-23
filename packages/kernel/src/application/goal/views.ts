@@ -20,7 +20,8 @@ import {
   readGoalAcceptance,
 } from './acceptance.js';
 import { readCancelLeftovers } from './cancelling.js';
-import { paramsAsRead, planAsRead, planHints } from './plan.js';
+import { procedureConfirmCheck } from './from-procedure.js';
+import { paramsAsRead, planAsRead, planHints, procedureParametersAsRead } from './plan.js';
 import { planAuthorityHints } from './precheck.js';
 import { getGoalRun, getPlanRevision, listPlanRevisions, listStepRuns } from './reads.js';
 import { type UnresolvedGoalAction, listGoalRunUnresolvedActions } from './reconcile.js';
@@ -262,11 +263,19 @@ export async function listGoalRunsVisibleTo(
 }
 
 /** S11 GO5d-2: the published Procedure version a plan was made from, with its name as it reads
- *  now (the version's content never changes; its name is the Procedure's). */
+ *  now (the version's content never changes; its name is the Procedure's). Legacy 454: the start
+ *  parameters it was proposed with, as every read shows them (`null`: none given, or proposed
+ *  before goal/0010), and the check its `verify` steps without a check of their own made
+ *  (`procedureConfirmCheck`; `null` when there is none, or the version could not be read). */
 export interface PlanSourceView {
   readonly procedureId: string;
   readonly version: number;
   readonly name: string;
+  readonly parameters: Record<string, unknown> | null;
+  readonly confirmCheck: {
+    readonly key: string;
+    readonly procedureSteps: readonly number[];
+  } | null;
 }
 
 /** The Procedure `revision`'s plan was made from, or `null` for a plan written out. */
@@ -275,12 +284,16 @@ async function planSourceOf(
   workspaceId: string,
   revision: PlanRevisionRow,
 ): Promise<PlanSourceView | null> {
-  if (!revision.sourceProcedure) return null;
+  const source = revision.sourceProcedure;
+  if (!source) return null;
   // goal/0009's key holds the version there; a name it could not read shows the id.
-  const procedure = await getProcedure(client, workspaceId, revision.sourceProcedure);
+  const procedure = await getProcedure(client, workspaceId, source);
   return {
-    ...revision.sourceProcedure,
-    name: procedure?.name ?? revision.sourceProcedure.procedureId,
+    procedureId: source.procedureId,
+    version: source.version,
+    name: procedure?.name ?? source.procedureId,
+    parameters: source.parameters ? procedureParametersAsRead(source.parameters) : null,
+    confirmCheck: procedure ? procedureConfirmCheck(procedure.steps) : null,
   };
 }
 

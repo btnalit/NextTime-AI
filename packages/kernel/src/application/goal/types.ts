@@ -88,8 +88,14 @@ export interface PlanRevisionRow {
    *  `{}` on revision 1. A removed step not listed was terminated. */
   readonly removals: Readonly<Record<string, StepRemoval>>;
   /** S11 GO5d-2: the published Procedure version the plan was made from (goal/0009) — revision 1
-   *  of a goal proposed `fromProcedure`; `null` for a plan written out. */
-  readonly sourceProcedure: { readonly procedureId: string; readonly version: number } | null;
+   *  of a goal proposed `fromProcedure`; `null` for a plan written out. `parameters` (legacy 454,
+   *  goal/0010): the start parameters it was proposed with, as given — `null` when none were given
+   *  or the revision predates goal/0010. Stored as written; every read masks it (`views.ts`). */
+  readonly sourceProcedure: {
+    readonly procedureId: string;
+    readonly version: number;
+    readonly parameters: Readonly<Record<string, unknown>> | null;
+  } | null;
 }
 
 export interface StepRunRow {
@@ -177,7 +183,7 @@ export function mapGoalRunRow(row: GoalRunDbRow): GoalRunRow {
 export const PLAN_REVISION_ROW_COLUMNS =
   'workspace_id, id, goal_run_id, revision, status, based_on_revision, plan, proposed_by, ' +
   'reason, validation, decided_by, decided_at, created_at, removals, source_procedure_id, ' +
-  'source_procedure_version';
+  'source_procedure_version, source_procedure_parameters';
 
 export interface PlanRevisionDbRow {
   workspace_id: string;
@@ -196,6 +202,7 @@ export interface PlanRevisionDbRow {
   removals: Record<string, StepRemoval>;
   source_procedure_id: string | null;
   source_procedure_version: number | null;
+  source_procedure_parameters: Record<string, unknown> | null;
 }
 
 export function mapPlanRevisionRow(row: PlanRevisionDbRow): PlanRevisionRow {
@@ -216,7 +223,11 @@ export function mapPlanRevisionRow(row: PlanRevisionDbRow): PlanRevisionRow {
     removals: row.removals,
     sourceProcedure:
       row.source_procedure_id !== null && row.source_procedure_version !== null
-        ? { procedureId: row.source_procedure_id, version: row.source_procedure_version }
+        ? {
+            procedureId: row.source_procedure_id,
+            version: row.source_procedure_version,
+            parameters: row.source_procedure_parameters,
+          }
         : null,
   };
 }
