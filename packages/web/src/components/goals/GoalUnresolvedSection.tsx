@@ -3,7 +3,6 @@ import type { CapabilityCaller } from '../../lib/clients.js';
 import { actionKindLabel, formatDateTime, formatRelative } from '../../lib/format.js';
 import { unresolvedActionText } from '../../lib/goals.js';
 import { useT } from '../../lib/i18n.js';
-import { hrefs } from '../../lib/router.js';
 import { ErrorBanner } from '../kit/error-banner.js';
 import { RefChip } from '../kit/ref-chip.js';
 import { DashboardCard } from '../kit/section.js';
