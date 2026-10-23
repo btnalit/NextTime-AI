@@ -6,6 +6,7 @@ import {
   GoalDetailWireSchema,
   GoalRunWireSchema,
   PlanRevisionWireSchema,
+  type PrincipalKind,
   ProposeGoalResultWireSchema,
   type Role,
   listEnvelope,
@@ -33,8 +34,9 @@ import type { ResolvedCaller } from './resolve-caller.js';
  * `[redacted]` mark is refused with the place named (the format the console's plan editor reads),
  * the plan's problems are named by step, and the confirmation card's hints say which step the
  * requester could not start now. `revise_goal` refuses a plan the same way. A Handle reads only its
- * `obo`'s own goals, an owner's included. What a run does once confirmed is
- * `application/goal`'s tests'.
+ * `obo`'s own goals, an owner's included. The requester must be a person, and has at most
+ * `GOAL_MAX_PROPOSED_PER_REQUESTER` goals waiting to be confirmed (this file sets it high and
+ * lowers it for its own test). What a run does once confirmed is `application/goal`'s tests'.
  *
  * Every run this file proposes is left with no `next_tick_at`, so no advancer of another file
  * claims it.
@@ -48,10 +50,15 @@ const BUDGET = { maxTokens: 100_000, maxSteps: 10, maxRevisions: 2, maxWallClock
 /** Synthetic — `.gitleaks.toml` allows fixtures spelled out from the alphabet. */
 const FAKE = 'abcdefghijklmnopqrstuvwxyz0123';
 
-function humanCaller(workspaceId: string, principalId: string, role: Role): ResolvedCaller {
+function humanCaller(
+  workspaceId: string,
+  principalId: string,
+  role: Role,
+  kind: PrincipalKind = 'human',
+): ResolvedCaller {
   return {
     channel: 'human',
-    principal: { workspaceId, id: principalId, kind: 'human', role, displayName: null },
+    principal: { workspaceId, id: principalId, kind, role, displayName: null },
     session: {
       workspaceId,
       id: randomUUID(),
@@ -103,6 +110,9 @@ describe.runIf(DATABASE_URL !== undefined)(
     let requesterId: string;
     let auditorId: string;
     let worker: { definitionId: string; version: number };
+    /** `GOAL_MAX_PROPOSED_PER_REQUESTER` before this file raised it; restored afterwards. */
+    let savedProposedCap: string | undefined;
+    const FILE_PROPOSED_CAP = '1000';
 
     const admin = <T>(fn: (client: PoolClient) => Promise<T>) =>
       withWorkspace(pool, { workspaceId, principalId: ownerId }, fn, { skipRoleSwitch: true });
@@ -117,13 +127,13 @@ describe.runIf(DATABASE_URL !== undefined)(
     const as = <T>(principalId: string, fn: (client: PoolClient) => Promise<T>) =>
       withWorkspace(pool, { workspaceId, principalId }, fn);
 
-    async function newPrincipal(role: Role): Promise<string> {
+    async function newPrincipal(role: Role, kind: PrincipalKind = 'human'): Promise<string> {
       const id = randomUUID();
       await admin((client) =>
         client.query(
           `insert into principals (workspace_id, id, kind, role, display_name)
-           values ($1, $2, 'human', $3, $4)`,
-          [workspaceId, id, role, `${role}-${id.slice(0, 8)}`],
+           values ($1, $2, $3, $4, $5)`,
+          [workspaceId, id, kind, role, `${role}-${id.slice(0, 8)}`],
         ),
       );
       return id;
@@ -220,6 +230,9 @@ describe.runIf(DATABASE_URL !== undefined)(
       PlanRevisionWireSchema.parse(await call(by, 'get_goal_revision', { goalRunId, revision: 1 }));
 
     beforeAll(async () => {
+      // The file's requesters propose more goals than the default cap; one test lowers it.
+      savedProposedCap = process.env.GOAL_MAX_PROPOSED_PER_REQUESTER;
+      process.env.GOAL_MAX_PROPOSED_PER_REQUESTER = FILE_PROPOSED_CAP;
       pool = createPool();
       await runMigrations(pool, MIGRATIONS_DIR);
       workspaceId = randomUUID();
@@ -253,6 +266,9 @@ describe.runIf(DATABASE_URL !== undefined)(
         [workspaceId],
       );
       await pool.end();
+      if (savedProposedCap === undefined)
+        Reflect.deleteProperty(process.env, 'GOAL_MAX_PROPOSED_PER_REQUESTER');
+      else process.env.GOAL_MAX_PROPOSED_PER_REQUESTER = savedProposedCap;
     });
 
     describe('who proposes', () => {
@@ -615,6 +631,143 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
     });
 
+    describe('revise_goal: a value left as the read showed it is the value itself', () => {
+      it('keeps what is stored for every value left as read — beside a changed one too — checks what was written, and never lets one entry take another’s original', async () => {
+        const created = await as(requesterId, (client) =>
+          createGoalRun(client, workspaceId, {
+            requesterId,
+            proposedBy: requesterId,
+            statement: 'a goal whose stored plan predates the write checks',
+            plan: planOf(['a', 'b', 'z']),
+            budget: { ...BUDGET, maxRevisions: 5 },
+          }),
+        );
+        const goalRunId = created.goalRunId;
+        const requester = human(requesterId, 'member');
+        await call(requester, 'confirm_goal', { goalRunId, revision: 1 });
+        await call(requester, 'pause_goal', { goalRunId });
+
+        // A plan stored before the write checks: two steps alike but for their key and the
+        // credential each holds, and a note and a check prompt with a joined emoji (a prompt never
+        // held a credential: `parsePlan` refused one from the start).
+        const emoji = 'family \u{1F468}\u200D\u{1F469}\u200D\u{1F467}';
+        const stored = {
+          steps: [
+            { key: 'a', worker, input: { host: 'db1', password: `${FAKE}A` } },
+            { key: 'b', worker, input: { host: 'db1', password: `${FAKE}B` } },
+            { key: 'z', worker, input: { note: emoji } },
+          ],
+          acceptance: [
+            { key: 'ok', kind: 'requester_confirm', prompt: `the ${emoji} photo is up` },
+          ],
+        };
+        await raw(
+          `update plan_revisions set plan = $3::jsonb
+            where workspace_id = $1 and goal_run_id = $2 and revision = 1`,
+          [workspaceId, goalRunId, JSON.stringify(stored)],
+        );
+        const storedPlanOf = async (revision: number) => {
+          const [row] = await raw<{ plan: typeof stored & { steps: { key: string }[] } }>(
+            `select plan from plan_revisions
+              where workspace_id = $1 and goal_run_id = $2 and revision = $3`,
+            [workspaceId, goalRunId, revision],
+          );
+          return row?.plan;
+        };
+        const revise = (basedOnRevision: number, plan: unknown) =>
+          call(requester, 'revise_goal', { goalRunId, basedOnRevision, plan });
+
+        const read = (await readProposal(requester, goalRunId)).plan;
+        const [readA, readB, readZ] = read.steps;
+        expect(readA?.input).toEqual({ host: 'db1', password: '[redacted]' });
+        expect(JSON.stringify(readZ?.input)).toContain('\\u{200D}');
+        expect(read.acceptance?.[0]).toMatchObject({
+          prompt: expect.stringContaining('\\u{200D}'),
+        });
+
+        const supersededKeys = async (result: unknown) => {
+          const ids = (result as { supersededStepRunIds: string[] }).supersededStepRunIds;
+          const rows = await raw<{ step_key: string }>(
+            'select step_key from step_runs where workspace_id = $1 and id = any($2::uuid[])',
+            [workspaceId, ids],
+          );
+          return rows.map((row) => row.step_key).sort();
+        };
+
+        // Sent back as read, with one step added: the masked step and the step with the joined
+        // emoji keep what is stored, and no step is replaced.
+        const added = { key: 'c', worker, input: { step: 'c' } };
+        const first = await revise(1, { ...read, steps: [...read.steps, added] });
+        expect(await supersededKeys(first)).toEqual([]);
+        const second = await storedPlanOf(2);
+        expect(second?.steps.map((step) => step.key)).toEqual(['a', 'b', 'z', 'c']);
+        expect(second?.steps[0]).toEqual(stored.steps[0]);
+        expect(second?.steps[1]).toEqual(stored.steps[1]);
+        expect(second?.steps[2]).toEqual(stored.steps[2]);
+        expect(second?.acceptance).toEqual(stored.acceptance);
+
+        // a's attempts changed, its input left as read: the input keeps what is stored, leaf by
+        // leaf, and only a is replaced.
+        const third = await revise(2, {
+          ...read,
+          steps: [{ ...readA, maxAttempts: 2 }, readB, readZ, added],
+        });
+        expect(await supersededKeys(third)).toEqual(['a']);
+        expect((await storedPlanOf(3))?.steps[0]).toEqual({ ...stored.steps[0], maxAttempts: 2 });
+
+        // One character changed beside the mark: that value is what this writer wrote, refused.
+        expect(
+          await refusal(
+            revise(3, {
+              ...read,
+              steps: [
+                { ...readA, maxAttempts: 2, input: { host: 'db1', password: '[redacted]!' } },
+                readB,
+                readZ,
+                added,
+              ],
+            }),
+          ),
+        ).toMatchObject({
+          status: 400,
+          code: 'redacted_text_submitted',
+          details: { field: 'plan.steps.0.input.password', paths: ['plan.steps.0.input.password'] },
+        });
+
+        // b's read under another key is not b: as a new step it is refused; as a it is a's own
+        // read, so a gets its own original back — never b's.
+        const readBAs = (key: string) => ({ ...readB, key });
+        expect(
+          await refusal(revise(3, { ...read, steps: [readA, readB, readZ, readBAs('d')] })),
+        ).toMatchObject({
+          status: 400,
+          code: 'redacted_text_submitted',
+          details: { field: 'plan.steps.3.input.password' },
+        });
+        await revise(3, { ...read, steps: [readBAs('a'), readB, readZ, added] });
+        const fourth = await storedPlanOf(4);
+        expect(fourth?.steps[0]).toEqual(stored.steps[0]);
+        expect(fourth?.steps[1]).toEqual(stored.steps[1]);
+
+        // A check whose prompt was changed to hold the mark is refused at its place.
+        expect(
+          await refusal(
+            revise(4, {
+              ...read,
+              steps: [readA, readB, readZ, added],
+              acceptance: [
+                { ...read.acceptance?.[0], prompt: 'confirm with PGPASSWORD=[redacted]' },
+              ],
+            }),
+          ),
+        ).toMatchObject({
+          status: 400,
+          code: 'redacted_text_submitted',
+          details: { field: 'plan.acceptance.0.prompt' },
+        });
+      });
+    });
+
     describe("the confirmation card: what the requester's authority would stop now (hints, not refusals)", () => {
       it('a step whose Worker acts on a gate the requester cannot act on — gone once they are granted it', async () => {
         const member = await newPrincipal('member');
@@ -761,6 +914,79 @@ describe.runIf(DATABASE_URL !== undefined)(
             await call(human(ownerId, 'owner'), 'get_goal', { goalRunId: members.goalRunId }),
           ).id,
         ).toBe(members.goalRunId);
+      });
+    });
+
+    describe('the requester is a person', () => {
+      it('a service or agent Principal is refused (403) — on its own key and on its Handle — and nothing is written', async () => {
+        const before = await goalCount();
+        for (const kind of ['service', 'agent'] as const) {
+          const principal = await newPrincipal('member', kind);
+          for (const caller of [
+            humanCaller(workspaceId, principal, 'member', kind),
+            handleCaller(workspaceId, principal, { capabilities: ['propose_goal'], resources: {} }),
+          ]) {
+            const refused = await refusal(
+              dispatchCapability({ pool }, caller, 'propose_goal', proposalOf('nobody confirms')),
+            );
+            expect(refused).toMatchObject({ status: 403, code: 'forbidden' });
+            expect(refused.message).toContain('made only for a person');
+            expect(refused.message).toContain(`a ${kind} Principal`);
+          }
+        }
+        expect(await goalCount()).toBe(before);
+      });
+    });
+
+    describe('how many goals one requester may have waiting', () => {
+      it('one past GOAL_MAX_PROPOSED_PER_REQUESTER is refused (409) and writes nothing; a retry is still answered; a rejected one frees a place; another requester is not counted', async () => {
+        const person = await newPrincipal('member');
+        const other = await newPrincipal('member');
+        process.env.GOAL_MAX_PROPOSED_PER_REQUESTER = '2';
+        try {
+          const agent = entryAgent(person);
+          const first = await propose(agent, {
+            ...proposalOf('the first'),
+            idempotencyKey: 'cap-first',
+          });
+          await propose(human(person, 'member'), proposalOf('the second, by hand'));
+
+          const before = await goalCount();
+          for (const caller of [agent, human(person, 'member')]) {
+            const refused = await refusal(
+              dispatchCapability({ pool }, caller, 'propose_goal', proposalOf('the third')),
+            );
+            expect(refused).toMatchObject({
+              status: 409,
+              code: 'proposed_goal_limit',
+              details: { limit: 2, proposed: 2 },
+            });
+            expect(refused.message).toContain('confirm or reject one of them first');
+          }
+          expect(await goalCount()).toBe(before);
+
+          // A retry proposes nothing, so it is answered at the cap.
+          expect(
+            await propose(agent, { ...proposalOf('the first'), idempotencyKey: 'cap-first' }),
+          ).toMatchObject({ goalRunId: first.goalRunId, changed: false, status: 'proposed' });
+
+          // The cap is each requester's own.
+          expect(await propose(entryAgent(other), proposalOf('theirs'))).toMatchObject({
+            changed: true,
+          });
+
+          // Turning one down frees its place.
+          await call(human(person, 'member'), 'reject_goal', {
+            goalRunId: first.goalRunId,
+            revision: 1,
+          });
+          expect(await propose(agent, proposalOf('the third'))).toMatchObject({
+            status: 'proposed',
+            changed: true,
+          });
+        } finally {
+          process.env.GOAL_MAX_PROPOSED_PER_REQUESTER = FILE_PROPOSED_CAP;
+        }
       });
     });
   },

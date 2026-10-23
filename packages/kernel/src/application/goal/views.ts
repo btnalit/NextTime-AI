@@ -19,7 +19,7 @@ import {
   readGoalAcceptance,
 } from './acceptance.js';
 import { readCancelLeftovers } from './cancelling.js';
-import { paramsAsRead, planHints, planParamsAsRead } from './plan.js';
+import { paramsAsRead, planAsRead, planHints } from './plan.js';
 import { planAuthorityHints } from './precheck.js';
 import { getGoalRun, getPlanRevision, listPlanRevisions, listStepRuns } from './reads.js';
 import { type UnresolvedGoalAction, listGoalRunUnresolvedActions } from './reconcile.js';
@@ -260,8 +260,8 @@ export async function listGoalRunsVisibleTo(
   };
 }
 
-/** A revision of a plan as a reader gets it: the plan typed, its steps' inputs redacted, and the
- *  hints for the person confirming it. */
+/** A revision of a plan as a reader gets it: the plan as every read shows it (`planAsRead`), and
+ *  the hints for the person confirming it. */
 export interface PlanRevisionView {
   readonly revision: PlanRevisionRow;
   readonly plan: GoalPlan;
@@ -287,7 +287,7 @@ async function planRevisionView(
   const proposal = goal.status === 'proposed' && revision.revision === 1;
   return {
     revision,
-    plan: planParamsAsRead(plan).plan,
+    plan: planAsRead(plan),
     hints: [
       ...planHints(plan),
       ...(proposal ? await planAuthorityHints(client, workspaceId, goal.onBehalfOf, plan) : []),

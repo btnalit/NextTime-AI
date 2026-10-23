@@ -47,6 +47,7 @@ import {
   type GoalCleanupCursor,
   type ReconcileCheckOptions,
   markReconcileDue,
+  maxProposedGoalsPerRequester,
   registerGoalWakeConsumer,
   runAcceptanceCheckTick,
   runGoalAdvancerTick,
@@ -1519,6 +1520,9 @@ export function main(): void {
       'GOAL_ACCEPTANCE_CHECK_MAX_DURATION_MS',
       process.env.GOAL_ACCEPTANCE_CHECK_MAX_DURATION_MS,
     );
+    // S11 GO5c: how many goals one requester may have waiting to be confirmed — read per proposal
+    // by `propose_goal`; parsed here once so a bad value stops the kernel at start.
+    maxProposedGoalsPerRequester(process.env.GOAL_MAX_PROPOSED_PER_REQUESTER);
     const outboxPruneDays = parseNonNegativeIntEnvVar(
       'OUTBOX_PRUNE_DAYS',
       process.env.OUTBOX_PRUNE_DAYS,

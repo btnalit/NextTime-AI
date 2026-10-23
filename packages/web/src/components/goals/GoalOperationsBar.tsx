@@ -160,8 +160,11 @@ export function GoalOperationsBar({
             `Budget: ${budget.map((row) => `${row.label} ${row.maxText}`).join(', ')}`,
           ),
           // S11 GO5c: what the plan's checks leave to your word, and any step your authority
-          // would not start now (the kernel works it out on every read of a proposal).
-          ...goal.planRevision.hints.map((hint) => planHintText(hint, t, gateNames)),
+          // would not start now (the kernel works it out on every read of a proposal) — marked, so
+          // they do not read like the lines above.
+          ...goal.planRevision.hints.map(
+            (hint) => `${t('注意：', 'Note: ')}${planHintText(hint, t, gateNames)}`,
+          ),
         ]}
         confirmLabel={t('确认并开始', 'Confirm and start')}
         errorOverrides={{

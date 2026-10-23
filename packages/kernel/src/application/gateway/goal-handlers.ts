@@ -50,6 +50,7 @@ import {
   getGoalRunVisibleTo,
   listGoalRunUnresolvedActionsVisibleTo,
   listGoalRunsVisibleTo,
+  maxProposedGoalsPerRequester,
   pauseGoalRun,
   readGoalRunDetail,
   readPlanRevisionVisibleTo,
@@ -193,10 +194,10 @@ function toWirePlanRevisionSummary(row: PlanRevisionRow): PlanRevisionSummaryWir
 function toWirePlanRevision(view: PlanRevisionView): PlanRevisionWire {
   return {
     ...toWirePlanRevisionSummary(view.revision),
-    // Legacy 420: the plan's text — step inputs, acceptance prompts, the values a check or a Fact
-    // claim compares — as `shownFreeTextIn` shows a stored value (a step's Task input reads the
-    // same way). The plan that runs is the stored one; nothing reads this copy back.
-    plan: shownFreeTextIn(view.plan) as typeof view.plan,
+    // Legacy 420: the plan as every read shows it (`application/goal`'s `planAsRead`) — the plan
+    // that runs is the stored one; `revise_goal` takes a value left as this read shows it as
+    // unchanged (S11 GO5c, `reviewRevisedPlan`).
+    plan: view.plan,
     hints: view.hints.map(toWirePlanHint),
   };
 }
@@ -208,6 +209,7 @@ function toWirePlanHint(hint: PlanHint): PlanHint {
     message: hint.message,
     ...(hint.stepKey !== undefined ? { stepKey: hint.stepKey } : {}),
     ...(hint.gatekeeperIds !== undefined ? { gatekeeperIds: [...hint.gatekeeperIds] } : {}),
+    ...(hint.capabilityNames !== undefined ? { capabilityNames: [...hint.capabilityNames] } : {}),
   };
 }
 
@@ -449,6 +451,7 @@ export const proposeGoalHandler: CapabilityHandler = async (client, workspaceId,
     plan: input.plan,
     budget: input.budget,
     idempotencyKey,
+    maxProposed: maxProposedGoalsPerRequester(process.env.GOAL_MAX_PROPOSED_PER_REQUESTER),
     ...(turn?.wasRunning ? { originatedInTurnId: turn.id } : {}),
   });
   const result: ProposeGoalResultWire = {

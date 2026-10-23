@@ -8,11 +8,13 @@ import {
   goalBudgetRows,
   goalStateNote,
   goalStepProgress,
+  isStepAuthorityHint,
   observationSentence,
   planDiff,
   planHintKey,
   planHintText,
   predicateSentence,
+  stepHintChipLabel,
   unresolvedActionText,
 } from './goals.js';
 import type { Translate } from './i18n.js';
@@ -48,17 +50,47 @@ describe('lib/goals', () => {
       ],
     };
     const zhText = planHintText(gate, zh, gateNames);
-    expect(zhText).toContain('步骤「apply」');
-    expect(zhText).toContain('prod-cert-gate');
+    // Each gate in 「」 joined by 、, an unnamed one by its short id; then what to do next.
+    expect(zhText).toMatch(/^步骤「apply」的 Worker 要操作门「prod-cert-gate」、「99999999」，/);
     expect(zhText).not.toContain('99999999-8888-4777-8666-555555555555');
+    expect(zhText).toContain('可以请工作区所有者在「成员与授权」给请求人开通，或者驳回');
     expect(planHintText(gate, en, gateNames)).toMatch(
-      /^Step “apply”: its Worker acts on prod-cert-gate, /,
+      /^Step “apply”: its Worker acts on gates “prod-cert-gate”, “99999999”, .* A workspace owner can grant it in Members/,
     );
     expect(
       planHintText({ code: 'step_definition_excluded', message: 'm', stepKey: 'build' }, zh),
-    ).toContain('步骤「build」');
+    ).toMatch(/步骤「build」.*请求人可以在「我的智能体」里调整设置。$/);
     expect(planHintText({ code: 'requester_cannot_start_workers', message: 'm' }, en)).toMatch(
-      /^The requester cannot start Workers now/,
+      /^The requester cannot start Workers now.* in Members\.$/,
+    );
+    // The permissions a step's Worker lacks, by their console names; an unknown one as it is.
+    const capability = {
+      code: 'step_capability_not_held' as const,
+      message: 'm',
+      stepKey: 'apply',
+      capabilityNames: ['request_action', 'cert-gate.renew:execute'],
+    };
+    expect(planHintText(capability, zh)).toMatch(
+      /^步骤「apply」的 Worker 需要执行权限「发起动作请求」、「cert-gate\.renew:execute」，请求人现在没有：/,
+    );
+    expect(planHintText(capability, en)).toMatch(
+      /^Step “apply”: its Worker needs the execute permissions “Request action”, “cert-gate\.renew:execute”, /,
+    );
+    // An older kernel sends none: the hint still reads, without a list.
+    expect(planHintText({ ...capability, capabilityNames: undefined }, zh)).toMatch(
+      /^步骤「apply」的 Worker 需要请求人现在没有的执行权限：/,
+    );
+    // A step's authority hints go to the steps card, each with a chip on its row; the hint about
+    // how the goal is verified stays with acceptance.
+    expect(isStepAuthorityHint(gate)).toBe(true);
+    expect(isStepAuthorityHint({ code: 'requester_confirm_only', message: 'm' })).toBe(false);
+    expect(stepHintChipLabel(gate, zh)).toBe('请求人无权限');
+    expect(stepHintChipLabel(capability, zh)).toBe('请求人无权限');
+    expect(
+      stepHintChipLabel({ code: 'step_definition_excluded', message: 'm', stepKey: 'b' }, zh),
+    ).toBe('智能体设置已排除');
+    expect(stepHintChipLabel({ code: 'requester_cannot_start_workers', message: 'm' }, zh)).toBe(
+      null,
     );
     // Two steps' hints of one code are two items of the list.
     expect(planHintKey({ code: 'step_capability_not_held', message: 'm', stepKey: 'a' })).not.toBe(

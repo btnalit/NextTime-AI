@@ -96,9 +96,12 @@ export {
   GoalRunInputError,
   GoalRunNotFoundError,
   GoalRunStateError,
+  DEFAULT_MAX_PROPOSED_GOALS_PER_REQUESTER,
+  ProposedGoalLimitError,
   type RejectGoalRunInput,
   confirmGoalRun,
   createGoalRun,
+  maxProposedGoalsPerRequester,
   rejectGoalRun,
 } from './service.js';
 

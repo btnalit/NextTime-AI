@@ -14,11 +14,14 @@ import {
   MAX_PLAN_STEPS,
   MAX_STEP_ACCEPTANCE_CHECKS,
   MAX_STEP_ATTEMPTS,
+  type PlanStep,
   parsePlan,
+  planAsRead,
   planHints,
   planShape,
   planStep,
   refusePlanCredentials,
+  reviewRevisedPlan,
   roundAcceptance,
   samePlanEntry,
 } from './plan.js';
@@ -719,6 +722,17 @@ describe('refusePlanCredentials', () => {
     expect(problemsOf(plan)).toHaveLength(1);
   });
 
+  it('counts a schema literal under a secret-named key once (review #493 on #704)', () => {
+    expect(
+      refusalOf({ steps: [step('a', { input: { schema: { apiKey: { default: 'x1' } } } })] })
+        .details,
+    ).toEqual({
+      field: 'plan.steps.0.input.schema.apiKey.default',
+      suspectedSecretValues: 1,
+      suspectedSecretPaths: ['plan.steps.0.input.schema.apiKey.default'],
+    });
+  });
+
   it('refuses a [redacted] mark copied from a read, naming where — before looking for credentials', () => {
     const refused = refusalOf({
       steps: [
@@ -731,5 +745,103 @@ describe('refusePlanCredentials', () => {
       field: 'plan.steps.1.input.note',
       paths: ['plan.steps.1.input.note'],
     });
+  });
+});
+
+describe('reviewRevisedPlan (S11 GO5c: an entry sent back as read)', () => {
+  /** Synthetic — `.gitleaks.toml` allows fixtures spelled out from the alphabet. */
+  const FAKE = 'abcdefghijklmnopqrstuvwxyz0123';
+  const stored = planShape({
+    steps: [
+      step('a', { input: { host: 'db1', password: `${FAKE}A` } }),
+      step('b', { input: { host: 'db1', password: `${FAKE}B` } }),
+      step('z', { input: { note: 'family \u{1F468}\u200D\u{1F469}' } }),
+    ],
+    acceptance: [
+      { key: 'ok', kind: 'requester_confirm', prompt: 'the \u{1F468}\u200D\u{1F469} photo' },
+    ],
+  });
+  const read = planAsRead(stored);
+  const [readA, readB, readZ] = read.steps as [PlanStep, PlanStep, PlanStep];
+
+  function refusalOf(submitted: unknown): { readonly name: string; readonly details: unknown } {
+    try {
+      reviewRevisedPlan(planShape(submitted), stored);
+    } catch (err) {
+      return err as { name: string; details: unknown };
+    }
+    throw new Error('expected the revision to be refused');
+  }
+
+  it('the read differs from what is stored: a credential masked, a joiner spelled out', () => {
+    expect(readA.input).toEqual({ host: 'db1', password: '[redacted]' });
+    expect(JSON.stringify(readZ.input)).toContain('\\u{200D}');
+    expect(read.acceptance?.[0]).toMatchObject({ prompt: expect.stringContaining('\\u{200D}') });
+  });
+
+  it('keeps the stored original of every entry sent back as read, in the order sent', () => {
+    const added = step('c', { input: { host: 'db3' } });
+    expect(
+      reviewRevisedPlan(planShape({ ...read, steps: [readZ, readB, readA, added] }), stored),
+    ).toEqual({
+      steps: [stored.steps[2], stored.steps[1], stored.steps[0], added],
+      acceptance: stored.acceptance,
+    });
+  });
+
+  it('restores leaf by leaf: a value left as read beside a changed one keeps what is stored', () => {
+    expect(
+      reviewRevisedPlan(planShape({ ...read, steps: [{ ...readA, maxAttempts: 2 }] }), stored)
+        .steps,
+    ).toEqual([{ ...stored.steps[0], maxAttempts: 2 }]);
+  });
+
+  it('checks only what was written, refused at its place in the plan sent', () => {
+    expect(
+      refusalOf({
+        ...read,
+        steps: [readB, { ...readA, input: { host: 'db1', password: '[redacted]!' } }],
+      }),
+    ).toMatchObject({
+      name: 'RedactedTextSubmittedError',
+      details: { field: 'plan.steps.1.input.password', paths: ['plan.steps.1.input.password'] },
+    });
+    expect(
+      refusalOf({
+        ...read,
+        acceptance: [{ key: 'ok', kind: 'requester_confirm', prompt: `PGPASSWORD=${FAKE}` }],
+      }),
+    ).toMatchObject({
+      name: 'TextCarriesCredentialsError',
+      details: { field: 'plan.acceptance.0.prompt', suspectedSecretValues: 1 },
+    });
+    // A value left as read is not counted with what was written.
+    expect(
+      refusalOf({
+        ...read,
+        steps: [{ ...readA, input: { host: 'db1', password: '[redacted]', token: `${FAKE}C` } }],
+      }),
+    ).toMatchObject({
+      name: 'TextCarriesCredentialsError',
+      details: {
+        field: 'plan.steps.0.input.token',
+        suspectedSecretValues: 1,
+        suspectedSecretPaths: ['plan.steps.0.input.token'],
+      },
+    });
+  });
+
+  it('never brings one entry’s original along with another’s read', () => {
+    // b's read under a new key is a new entry, checked — not b.
+    expect(refusalOf({ ...read, steps: [readA, { ...readB, key: 'd' }] })).toMatchObject({
+      name: 'RedactedTextSubmittedError',
+      details: { field: 'plan.steps.1.input.password' },
+    });
+    // b's read under a's key equals a's own read, so it is a — with a's original, never b's.
+    const revised = reviewRevisedPlan(
+      planShape({ ...read, steps: [{ ...readB, key: 'a' }] }),
+      stored,
+    );
+    expect(revised.steps).toEqual([stored.steps[0]]);
   });
 });

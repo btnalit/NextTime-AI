@@ -10507,6 +10507,12 @@
               "items": {
                 "additionalProperties": false,
                 "properties": {
+                  "capabilityNames": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
                   "code": {
                     "enum": [
                       "requester_confirm_only",
@@ -12047,6 +12053,12 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "capabilityNames": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
               "code": {
                 "enum": [
                   "requester_confirm_only",
@@ -27411,6 +27423,7 @@
     "sideEffects": false
   },
   {
+    "actsForPerson": true,
     "channel": "handle",
     "group": "goal",
     "minRole": "member",
@@ -28406,6 +28419,12 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "capabilityNames": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
               "code": {
                 "enum": [
                   "requester_confirm_only",
@@ -33919,6 +33938,12 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "capabilityNames": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
               "code": {
                 "enum": [
                   "requester_confirm_only",

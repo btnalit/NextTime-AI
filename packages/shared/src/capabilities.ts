@@ -168,6 +168,15 @@ export interface Capability {
   /** See `CapabilityScopeKind`; absent = `'workspace'`. */
   readonly scope?: CapabilityScopeKind;
   readonly minRole?: Role;
+  /**
+   * S11 GO5c: the call acts for a person — the Principal it is made for (the caller on the human
+   * channel, the Handle's `obo` on the handle channel) must be `kind = 'human'`. The kernel's
+   * dispatch refuses any other with 403, and a service Handle never carries it
+   * (`issue_service_handle` drops it as it drops what the role may not use; the console does not
+   * offer it there). `propose_goal`: a goal's requester confirms it in the console, which a
+   * service or agent Principal cannot. Absent = any kind.
+   */
+  readonly actsForPerson?: true;
   readonly paramsSchema: z.ZodType;
   /**
    * docs/wire-contract-conventions.md §5 ("为每个 capability 增加 `resultSchema`...列表结果复用
@@ -1306,7 +1315,7 @@ const metaCapabilities = [
       .strict(),
     resultSchema: wire.UpdateOperationDescriptionResultWireSchema,
     description:
-      'S8 W3-K1 (leftover 81): edit one Operation’s description in place (documentation only, not a governance field — no draft/publish step). Builder floor; only the Operation’s proposer or the workspace owner may edit it (403 not_proposer otherwise). description must be non-blank after trimming, at most 2000 characters; refused when it carries a suspected credential (400 credentials_in_text) or still holds the [redacted] mark a read shows in place of one — write that part again (400 redacted_text_submitted). AuditRecord with before/after.',
+      'S8 W3-K1 (leftover 81): edit one Operation’s description in place (documentation only, not a governance field — no draft/publish step). Builder floor; only the Operation’s proposer or the workspace owner may edit it (403 not_proposer otherwise). description must be non-blank after trimming, at most 2000 characters; refused when it carries a suspected credential (400 credentials_in_text) or still holds the [redacted] mark a read shows in place of one — write that part again (400 redacted_text_submitted). Sent exactly as a read shows the current description, it changes nothing (the stored text is kept). AuditRecord with before/after for a change.',
   },
   {
     name: 'propose_skill',
@@ -4095,6 +4104,7 @@ const goalCapabilities = [
     mode: 'propose',
     channel: 'handle',
     minRole: 'member',
+    actsForPerson: true,
     paramsSchema: z
       .object({
         statement: z.string().max(MAX_GOAL_STATEMENT_CHARS).regex(/\S/, 'says nothing'),
@@ -4104,7 +4114,7 @@ const goalCapabilities = [
       })
       .strict(),
     resultSchema: wire.ProposeGoalResultWireSchema,
-    description: `Propose a goal for you (on a Handle, the person you act for) to confirm: statement — what is wanted, in a sentence or two (at most ${MAX_GOAL_STATEMENT_CHARS} characters) — the plan (revision 1: its steps, each a published Worker version, their dependencies, inputs and checks, and the acceptance checks of the goal) and the budget (tokens, step attempts, revisions, wall-clock seconds from confirmation). Nothing runs until the requester confirms it in the console (confirm_goal); the budget cannot be changed there — propose again to change it. The plan is checked (400 invalid_params with details.problems); the statement and the plan must not carry credentials — refused, nothing written (400 credentials_in_text with details.field and, for the plan, details.suspectedSecretPaths: a gate authenticates with the credentials configured on it), nor the [redacted] mark a read shows where one stood (400 redacted_text_submitted with details.field and, for the plan, details.paths). Plan places read plan.steps.<i>.input.<field>, plan.acceptance.<i>.prompt and so on, i from 0. The result's hints say what the person confirming should know: a plan the platform checks nothing of, and any step the requester could not start now (a gate they cannot act on, a capability they do not hold, a Worker their profile excludes). idempotencyKey: the same key returns the run it first proposed, whatever its status (changed: false); without one, the same statement, plan and budget from the same session return the run still proposed.`,
+    description: `Propose a goal for you (on a Handle, the person you act for) to confirm: statement — what is wanted, in a sentence or two (at most ${MAX_GOAL_STATEMENT_CHARS} characters) — the plan (revision 1: its steps, each a published Worker version, their dependencies, inputs and checks, and the acceptance checks of the goal) and the budget (tokens, step attempts, revisions, wall-clock seconds from confirmation). Nothing runs until the requester confirms it in the console (confirm_goal); the budget cannot be changed there — propose again to change it. The requester must be a person: a call for a service or agent Principal is refused (403). A requester has at most a deployment-set number of goals waiting to be confirmed or rejected (5 unless configured): one more is refused, nothing written (409 proposed_goal_limit with details.limit and details.proposed) — ask them to confirm or reject one first; a retry of a run already proposed is still answered. The plan is checked (400 invalid_params with details.problems); the statement and the plan must not carry credentials — refused, nothing written (400 credentials_in_text with details.field and, for the plan, details.suspectedSecretPaths: a gate authenticates with the credentials configured on it), nor the [redacted] mark a read shows where one stood (400 redacted_text_submitted with details.field and, for the plan, details.paths). Plan places read plan.steps.<i>.input.<field>, plan.acceptance.<i>.prompt and so on, i from 0. The result's hints say what the person confirming should know: a plan the platform checks nothing of, and any step the requester could not start now (a gate they cannot act on, a capability they do not hold, a Worker their profile excludes). idempotencyKey: the same key returns the run it first proposed, whatever its status (changed: false); without one, the same statement, plan and budget from the same session return the run still proposed.`,
   },
   {
     name: 'confirm_goal',
@@ -4194,7 +4204,7 @@ const goalCapabilities = [
       })
       .strict(),
     resultSchema: wire.ReviseGoalResultWireSchema,
-    description: `Revise the plan of a paused GoalRun — the requester alone — based on its current revision (409 illegal_transition when another was accepted since, I-G3) and within its revision budget, or the budget the revision brings: the new plan is checked (400 invalid_params with details.problems), accepted and in force at once. Every live step it drops or changes is superseded (removals, per step: terminate — the default — or let_finish, releasing listed requests), every new or changed key gets a pending StepRun, and the superseded steps’ requests not yet started are withdrawn. The run stays paused for the requester to resume. reason (at most ${MAX_REVISION_REASON_CHARS} characters) is shown on the revision as written. The plan and the reason must not carry credentials — refused, nothing written (400 credentials_in_text with details.field and, for the plan, details.suspectedSecretPaths) — nor the [redacted] mark a read shows where one stood (400 redacted_text_submitted with details.field and, for the plan, details.paths): write that part again.${GOAL_OPERATION_REFUSALS}`,
+    description: `Revise the plan of a paused GoalRun — the requester alone — based on its current revision (409 illegal_transition when another was accepted since, I-G3) and within its revision budget, or the budget the revision brings: the new plan is checked (400 invalid_params with details.problems), accepted and in force at once. Every live step it drops or changes is superseded (removals, per step: terminate — the default — or let_finish, releasing listed requests), every new or changed key gets a pending StepRun, and the superseded steps’ requests not yet started are withdrawn. The run stays paused for the requester to resume. reason (at most ${MAX_REVISION_REASON_CHARS} characters) is shown on the revision as written. The plan and the reason must not carry credentials — refused, nothing written (400 credentials_in_text with details.field and, for the plan, details.suspectedSecretPaths) — nor the [redacted] mark a read shows where one stood (400 redacted_text_submitted with details.field and, for the plan, details.paths): write that part again. A value left exactly as get_goal_revision shows it — in a step or plan acceptance check with the same key in the current revision, at the same place — is unchanged: it keeps what is stored (a masked value, an invisible character shown as \\u{XXXX}), and only the values written anew are checked; another key's read never brings that entry's value along.${GOAL_OPERATION_REFUSALS}`,
   },
   {
     name: 'confirm_goal_acceptance',
@@ -4500,6 +4510,13 @@ export function assertRegistryConsistent(): void {
     } else if (capability.group === 'platform') {
       throw new Error(
         `capability registry: "${capability.name}" is in group "platform" but not scope:platform`,
+      );
+    }
+
+    // S11 GO5c: a platform-scope call has no Principal to act for.
+    if (capability.actsForPerson && capability.scope === 'platform') {
+      throw new Error(
+        `capability registry: "${capability.name}" is scope:platform but declares actsForPerson`,
       );
     }
 

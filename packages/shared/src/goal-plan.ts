@@ -141,7 +141,7 @@ export type GoalPlan = z.infer<typeof GoalPlanSchema>;
  *       - `step_gate_not_held` — the step's WorkerDefinition declares gates the requester cannot act
  *         on (`gatekeeperIds`);
  *       - `step_capability_not_held` — it declares an execute-class capability the requester's own
- *         scope does not hold;
+ *         scope does not hold (`capabilityNames`);
  *       - `step_definition_excluded` — the requester's AgentProfile excludes the WorkerDefinition.
  */
 export const PLAN_HINT_CODE_VALUES = [
@@ -162,6 +162,9 @@ export const PlanHintSchema = z
     stepKey: StepKeySchema.optional(),
     /** The gates a `step_gate_not_held` step declares and the requester cannot act on. */
     gatekeeperIds: z.array(z.string().uuid()).optional(),
+    /** The execute-class capabilities a `step_capability_not_held` step declares and the
+     *  requester does not hold. */
+    capabilityNames: z.array(z.string()).optional(),
   })
   .strict();
 export type PlanHint = z.infer<typeof PlanHintSchema>;

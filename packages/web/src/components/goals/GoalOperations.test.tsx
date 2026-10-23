@@ -118,7 +118,7 @@ describe('goal operations on the goal page (S11 GO6)', () => {
     const confirm = await screen.findByTestId('goal-op-confirm-confirm');
     await waitFor(() =>
       expect(within(confirm).getByTestId('confirm-impact').textContent).toMatch(
-        /步骤「apply」的 Worker 要操作 cert-gate，请求人现在没有这些门的权限/,
+        /注意：步骤「apply」的 Worker 要操作门「cert-gate」，请求人现在没有这些门的权限.*可以请工作区所有者在「成员与授权」给请求人开通/,
       ),
     );
   });

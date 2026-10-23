@@ -35,6 +35,7 @@ function stepHint(key: string, refusal: StepAttemptRefusal): PlanHint | null {
         code: 'step_capability_not_held',
         message: `step "${key}": ${refusal.detail} — ${consequence}`,
         stepKey: key,
+        capabilityNames: [...(refusal.capabilityNames ?? [])],
       };
     }
     return null;

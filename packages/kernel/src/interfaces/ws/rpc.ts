@@ -69,6 +69,7 @@ import {
   GoalRunInputError,
   GoalRunNotFoundError,
   GoalRunStateError,
+  ProposedGoalLimitError,
 } from '../../application/goal/index.js';
 // S11 P1-C: a domain module's error, imported directly like the two above.
 import { PackNotFoundError } from '../../application/packs/index.js';
@@ -568,7 +569,8 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   if (err instanceof GoalRunForbiddenError) {
     return { code: WS_ERROR_CODES.FORBIDDEN, message: err.message };
   }
-  if (err instanceof GoalRunStateError) {
+  // S11 GO5c: mirrors HTTP 409 `proposed_goal_limit` (the message names the count and the cap).
+  if (err instanceof GoalRunStateError || err instanceof ProposedGoalLimitError) {
     return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
   }
   if (err instanceof GoalRunInputError || err instanceof GoalPlanValidationError) {

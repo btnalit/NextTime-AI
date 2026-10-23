@@ -132,6 +132,8 @@ export const CODE_TITLES: Readonly<Record<string, string>> = {
   // S11 P1-E: verifying an install record.
   change_segment_superseded: 'A later install record is in effect',
   change_verification_cooldown: 'Verified just now',
+  // S11 GO5c: the requester already has as many goals waiting to be confirmed as one may.
+  proposed_goal_limit: 'Too many goals waiting',
   quota_exceeded: 'Quota exceeded',
   internal_error: 'Kernel error',
   network: 'Network error',
@@ -216,6 +218,7 @@ export const CODE_TITLES_ZH: Readonly<Record<string, string>> = {
   change_rollback_conflict: '现在不能撤销',
   change_segment_superseded: '有更新的安装记录在生效',
   change_verification_cooldown: '刚核验过',
+  proposed_goal_limit: '等待确认的目标太多',
   quota_exceeded: '超出配额',
   internal_error: '内核出错',
   network: '网络错误',
@@ -514,6 +517,10 @@ export const ERROR_NEXT_STEPS: Readonly<
   unknown_quota_key: {
     zh: '这个配额项不存在。刷新页面后重新选择。',
     en: 'No such quota key. Reload the page and choose again.',
+  },
+  proposed_goal_limit: {
+    zh: '先确认或驳回一个等待确认的目标，再提议新的。',
+    en: 'Confirm or reject one of the goals waiting first, then propose a new one.',
   },
   quota_exceeded: {
     zh: '已经达到配额上限。请工作区所有者调整配额，或等配额周期重置。',

@@ -88,6 +88,21 @@ export class GoalRunInputError extends Error {
   }
 }
 
+/** S11 GO5c: 409 `proposed_goal_limit` — the requester already has `limit` goals waiting to be
+ *  confirmed or rejected, so no further one is proposed for them until one of those is. Nothing
+ *  was written. */
+export class ProposedGoalLimitError extends Error {
+  readonly code = 'proposed_goal_limit' as const;
+  readonly details: { readonly limit: number; readonly proposed: number };
+  constructor(limit: number, proposed: number) {
+    super(
+      `the requester already has ${proposed} goals waiting to be confirmed or rejected (at most ${limit}) — confirm or reject one of them first; nothing was proposed`,
+    );
+    this.name = 'ProposedGoalLimitError';
+    this.details = { limit, proposed };
+  }
+}
+
 export interface CreateGoalRunInput {
   /** The requester — the principal the run acts for (`on_behalf_of`) and the one who confirms. */
   readonly requesterId: string;
@@ -100,6 +115,10 @@ export interface CreateGoalRunInput {
   /** S11 GO5c: the stored key (`explicit:…` or `auto:…`, goal/0008) — derived by `propose_goal`;
    *  none for a direct caller, which never dedupes. */
   readonly idempotencyKey?: string;
+  /** S11 GO5c: the most goals the requester may have proposed and not yet confirmed or rejected
+   *  ({@link ProposedGoalLimitError}) — `propose_goal` passes
+   *  {@link maxProposedGoalsPerRequester}; none for a direct caller, which has no cap. */
+  readonly maxProposed?: number;
 }
 
 export interface CreatedGoalRun {
@@ -119,6 +138,24 @@ export interface CreatedGoalRun {
 /** S11 GO5c: the longest statement a goal is proposed with (`@nexttime/shared`'s, which
  *  `propose_goal`'s params hold to; counted here in code points, as a revision's reason is). */
 export const MAX_GOAL_STATEMENT_LENGTH = MAX_GOAL_STATEMENT_CHARS;
+
+/** S11 GO5c: how many goals one requester may have proposed and not yet confirmed or rejected,
+ *  when `GOAL_MAX_PROPOSED_PER_REQUESTER` is not set. */
+export const DEFAULT_MAX_PROPOSED_GOALS_PER_REQUESTER = 5;
+
+/** `GOAL_MAX_PROPOSED_PER_REQUESTER`'s value: a whole number of at least 1, or the default when
+ *  unset. Throws on anything else — the kernel reads it once at start (`index.ts`), so a bad value
+ *  stops it there rather than failing each proposal. */
+export function maxProposedGoalsPerRequester(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === '') return DEFAULT_MAX_PROPOSED_GOALS_PER_REQUESTER;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new Error(
+      `GOAL_MAX_PROPOSED_PER_REQUESTER="${raw}" is not a whole number of at least 1 — unset it to use the default ${DEFAULT_MAX_PROPOSED_GOALS_PER_REQUESTER}`,
+    );
+  }
+  return parsed;
+}
 
 /** goal/0008's two indexes: a unique violation on either means another call proposed with this
  *  key first. */
@@ -165,6 +202,20 @@ async function proposedRunOfKey(
   );
   const row = result.rows[0];
   return row ? { goalRunId: row.id, requesterId: row.on_behalf_of, status: row.status } : null;
+}
+
+/** How many runs for this requester are proposed — waiting to be confirmed or rejected. */
+async function proposedRunsOf(
+  client: PoolClient,
+  workspaceId: string,
+  requesterId: string,
+): Promise<number> {
+  const result = await client.query<{ proposed: number }>(
+    `select count(*)::int as proposed from goal_runs
+      where workspace_id = $1 and on_behalf_of = $2 and status = 'proposed'`,
+    [workspaceId, requesterId],
+  );
+  return result.rows[0]?.proposed ?? 0;
 }
 
 async function replayProposal(
@@ -219,11 +270,23 @@ export async function createGoalRun(
   // its content never returns a run.
   checkStatement(input.statement);
   refusePlanCredentials(planShape(input.plan));
+  // The cap's count and this call's insert are one step per requester: two proposals at once
+  // cannot both take the last place. A replay proposes nothing, so it is answered at the cap too.
+  if (input.maxProposed !== undefined) {
+    await client.query('select pg_advisory_xact_lock(hashtext($1::text))', [
+      `goal-proposals:${workspaceId}:${input.requesterId}`,
+    ]);
+  }
   if (input.idempotencyKey !== undefined) {
     const existing = await proposedRunOfKey(client, workspaceId, input.idempotencyKey, {
       afterConflict: false,
     });
     if (existing) return replayProposal(client, workspaceId, existing);
+  }
+  if (input.maxProposed !== undefined) {
+    const proposed = await proposedRunsOf(client, workspaceId, input.requesterId);
+    if (proposed >= input.maxProposed)
+      throw new ProposedGoalLimitError(input.maxProposed, proposed);
   }
   const plan = await validatePlan(client, workspaceId, input.plan);
   const hints = planHints(plan);

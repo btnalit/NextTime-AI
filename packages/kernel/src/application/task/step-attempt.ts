@@ -84,6 +84,8 @@ export type StepAttemptRefusal =
       readonly reason: 'requester' | 'gates' | 'capability';
       readonly detail: string;
       readonly gatekeeperIds?: readonly string[];
+      /** `capability`: the execute-class capabilities the requester does not hold. */
+      readonly capabilityNames?: readonly string[];
     }
   /** What the step is pinned to cannot run: the WorkerDefinition (`definition`) or a Skill version
    *  (`skills`) is no longer published, or the requester's own AgentProfile excludes the definition
@@ -273,7 +275,14 @@ export async function resolveStepAuthority(
     });
   } catch (err) {
     if (err instanceof InvokeWorkerAttenuationError || err instanceof InvokeWorkerValidationError) {
-      return refused({ kind: 'authority_lost', reason: 'capability', detail: err.message });
+      const capabilityNames =
+        err instanceof InvokeWorkerAttenuationError ? err.capabilities : ([] as const);
+      return refused({
+        kind: 'authority_lost',
+        reason: 'capability',
+        detail: err.message,
+        ...(capabilityNames.length > 0 ? { capabilityNames: [...capabilityNames] } : {}),
+      });
     }
     throw err;
   }
