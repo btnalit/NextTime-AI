@@ -767,9 +767,9 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zh: '修订目标计划',
     en: 'Revise goal plan',
     zhHint:
-      '发起人修订暂停中目标的计划：去掉或改动的步骤被替换，新步骤加入；修订后仍暂停，等发起人继续。',
+      '发起人修订暂停中目标的计划：去掉的步骤不再执行，改动的步骤换成新的一版，新步骤加入；修订后仍暂停，等发起人继续。',
     enHint:
-      'The requester revises the plan of a paused goal: dropped or changed steps are replaced, new ones added; it stays paused until resumed.',
+      'The requester revises the plan of a paused goal: dropped steps no longer run, changed steps get a new version, new ones are added; it stays paused until resumed.',
   },
   confirm_goal_acceptance: {
     zh: '确认目标达成',
@@ -782,7 +782,7 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zh: '结束目标',
     en: 'End goal',
     zhHint:
-      '发起人按自己的判断结束目标：未达成，或在暂停时认定达成（未通过的检查会标为「已覆盖」）。',
+      '发起人按自己的判断结束目标：未达成，或在暂停时认定达成（未通过的检查会记为「发起人判定通过」）。',
     enHint:
       'The requester ends a goal on their own word: not achieved, or achieved while paused (checks that did not pass are marked overridden).',
   },
