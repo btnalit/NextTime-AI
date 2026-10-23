@@ -1,8 +1,13 @@
-import type { GateOwnedParamWire, SkillDetailWire } from '@nexttime/shared';
+import type {
+  EntryTemplateStatusWire,
+  GateOwnedParamWire,
+  SkillDetailWire,
+} from '@nexttime/shared';
 import { visibleText } from '@nexttime/shared';
-import { type ReactNode, useEffect, useId, useRef, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useId, useRef, useState } from 'react';
 import { invalidateCapability, useCapability, useCapabilityList } from '../hooks/useCapability.js';
 import { usePermissions } from '../hooks/usePermissions.js';
+import { useResource } from '../hooks/useResource.js';
 import { useRoleCan } from '../hooks/useRoleCan.js';
 import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
 import { opsRunnerTemplateForm, workerItemId } from '../lib/catalog.js';
@@ -59,6 +64,7 @@ import { nameOf, useGatekeeperDirectory } from './approvals/useDirectoryNames.js
 import { DraftExpiryNote, type EditorState } from './catalog/CatalogShared.js';
 import { ChangesTab } from './catalog/ChangesTab.js';
 import { DiscardReasonField } from './catalog/DiscardReasonField.js';
+import { EntryTemplateNotice, EntryTemplateSummary } from './catalog/EntryTemplateNotice.js';
 import { GateOwnedParamsNotice } from './catalog/GateOwnedParamsNotice.js';
 import { MarkdownPreview } from './catalog/MarkdownPreview.js';
 import { PackOrigin } from './catalog/PackOrigin.js';
@@ -2458,6 +2464,7 @@ function WorkerDetailView({
   canDiscard,
   busy,
   credentialReview,
+  entryTemplate,
   onEditAsNewVersion,
   onPublish,
   onDeprecate,
@@ -2474,6 +2481,8 @@ function WorkerDetailView({
   readonly canDiscard: boolean;
   readonly busy: boolean;
   readonly credentialReview: PublishCredentialReview;
+  /** Legacy 145: on the entry version in use, how it stands against the platform's template. */
+  readonly entryTemplate: ReactNode;
   readonly onEditAsNewVersion: () => void;
   readonly onPublish: () => Promise<void>;
   readonly onDeprecate: () => Promise<void>;
@@ -2538,6 +2547,8 @@ function WorkerDetailView({
         ) : null}
         <PublishableStepper status={row.status} testId="worker-detail-stepper" />
       </header>
+
+      {entryTemplate}
 
       {items.length > 0 ? <KeyValue items={items} /> : null}
 
@@ -2612,6 +2623,17 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   const can = useRoleCan(http);
   const toast = useToast();
   const { role, principalId } = useWorkspaceIdentity(http);
+  // Legacy 145: the platform's entry template against the entry version in use — read only for
+  // those who may propose the upgrade draft (builder and up); nobody else is asked.
+  const readsEntryTemplate = can('get_entry_template_status') === true;
+  const loadEntryTemplate = useCallback(
+    () =>
+      readsEntryTemplate
+        ? http.call<EntryTemplateStatusWire>('get_entry_template_status', {})
+        : Promise.resolve(null),
+    [http, readsEntryTemplate],
+  );
+  const entryTemplate = useResource(loadEntryTemplate);
   // `itemId` is the row's `id@version` (`workerKey`), so a new version asks afresh.
   const credentialReview = usePublishCredentialReview(itemId ?? null);
   const workers = useCapabilityList<CatalogWorkerRow>(http, 'list_worker_definitions', {});
@@ -2676,6 +2698,7 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
         title: `${workerLabel(row, t)} ${t('已发布', 'published')}`,
       });
       refresh();
+      if (row.kind === 'entry') void entryTemplate.reload();
     } catch (err) {
       // The kernel's credential question — answered next to Publish, not as a failure toast.
       if (credentialReview.capture(err)) return;
@@ -2954,6 +2977,7 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
             ))}
           </List>
         )}
+        <EntryTemplateSummary status={entryTemplate} onOpen={(ref) => selectRow(workerKey(ref))} />
       </div>
 
       <div className="stack-s" data-testid="workers-worker-section">
@@ -3057,6 +3081,31 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       canDiscard={canDiscard}
       busy={busy === workerKey(selected)}
       credentialReview={credentialReview}
+      entryTemplate={
+        selected.kind === 'entry' && selected.status === 'published' ? (
+          <EntryTemplateNotice
+            http={http}
+            status={entryTemplate}
+            row={selected}
+            onProposed={(upgrade) => {
+              const version = upgrade.draft.version;
+              let title = t(
+                `已生成草稿 v${version}，由所有者发布后生效`,
+                `Draft v${version} proposed; it takes effect once the owner publishes it`,
+              );
+              if (!upgrade.created) {
+                title = t(
+                  `你已经有这份草稿（第 ${version} 版）`,
+                  `You already have this draft, v${version}`,
+                );
+              }
+              toast.push({ tone: 'ok', title });
+              refresh();
+              selectRow(workerKey(upgrade.draft));
+            }}
+          />
+        ) : null
+      }
       onEditAsNewVersion={() => openEditor({ kind: 'copy', row: selected })}
       onPublish={() => publishDraft(selected)}
       onDeprecate={() => deprecate(selected)}

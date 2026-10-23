@@ -1870,3 +1870,26 @@
 .predicate-negate {
   padding-bottom: var(--space-2);
 }
+
+/* Legacy 145 (components/catalog/EntryTemplateNotice): the entry prompt against the platform
+ * template, line by line. The `+` / `−` mark carries the meaning; the tint only helps scanning. */
+.text-diff {
+  padding: var(--space-2) 0;
+}
+
+.text-diff-line {
+  display: block;
+  padding: 0 var(--space-3);
+}
+
+.text-diff-line[data-change="added"] {
+  background: var(--ok-soft);
+}
+
+.text-diff-line[data-change="removed"] {
+  background: var(--danger-soft);
+}
+
+.text-diff-line[data-change="gap"] {
+  color: var(--text-3);
+}
