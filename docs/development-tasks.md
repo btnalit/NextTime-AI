@@ -4400,6 +4400,14 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **守卫**：`packages/platform-extension/src/runtime-whitelist.test.ts` 真实跑 `entrypoint.sh` 与锁定版 pi（`NEXTTIME_RUNTIME_ROOT` 测试前缀，入口 / Worker 模式设了就拒绝启动），种资源的用例拦已知类型，文件访问用例经 `NODE_OPTIONS=--import test-support/fs-trace.mjs` 记录 pi 在 `/workspace`、`/tmp` 下问过的路径、不在 `KNOWN_PI_PATHS` 就失败；CI quality / test 与每晚 `pi-drift.yml`（`@latest`）都跑。U2 建成后并入 U2 套件。
   - **布局版本**：镜像 label `ai.nexttime.runtime-contract=2`（`runtime-contract.test.ts` 断言 Dockerfile 与 supervisor 一致），supervisor 起的容器打 `nexttime.runtime-contract`，缺失或不对就在下一次 spawn 重建（`layoutChanged`；请求的镜像本身不兼容且只有布局一项触发时继续用旧容器并记 warn，审查 #488 B1）。不兼容镜像返回 409 `runtime_image_incompatible`：supervisor 两个 spawn 路由（记 warn）、内核 `set_active_runtime_image` / `rollback_runtime_image` / `roll_entry_containers`；kernel task client 新 kind `runtime_image_incompatible` 进 `worker_run.spawn_failed` 的 reason；`RuntimeImageWire` 加 `runtimeCompatible`，控制台运行层页标出不兼容镜像、拦住「设为活动」并在按钮旁写明原因。
   - **其余**：写入探针（三条都应报 `Read-only file system`）、`models_json` 自检与 `pi_resource_discovery` 日志行、`delete-workspace.sh` 只认 UUID；operations.md §13 新增 409 排障行；到下一次 pi 升级之前只能整版回滚（§7）。
+- 实现说明（P1-E2a：包里的 Worker 按系统类型绑定工作区的门，#705，2026-10-23 合入，7c4c562；无迁移；遗留 418、425 关闭）：
+  - **Worker `systems`**：`packs/registry.ts` 的 `PackWorkerComponent.systems` 是连接器名，必须在这一版的 `requires.connectors` 里、不能重复，解析严格 schema 前剥离、永远不是 gate；版本摘要只在 `systems` 非空时纳入（已有版本摘要不变）。`ops-base` v3 的 `ops-runner` 写 `systems: [docker]`。
+  - **安装时绑定与 `workerGates`**：`packs/install.ts` 在 Worker 没有门且写了 `systems` 时绑到这些系统已接入的门（`readWorkerGateCandidates`，复用 `readPackRequirements` 的 `gatekeepers`）；`WorkerGateChoice` 不传即全部候选，传了不在候选里的门或这一版没有这个 Worker → 400 `invalid_params`；选择计入计划摘要，审阅后门接入或停用 → 409 `change_plan_changed`。有候选但一个都没留时发一版 `gates: []`（从没有到 `[]` 不算扩大权限，之后 `bindable` 为假）；没有候选时不写 `gates`，门接好后能力包页给「把 Worker 接上系统」，再装一次接上且包仍「已是最新」。核验不检查 Worker 绑没绑门。
+  - **门和模型属于工作区**：`WORKSPACE_OWNED_WORKER_FIELDS = ['gates','model']`，`packOwnedWorkerDigest` 剔除这两项，`packs/state.ts` 据此比较、改了不变「已定制」；`change-plan/family-item.ts` 的 Worker 改动项带 `keepFromHead`，在注册锁内读头版本、原样保留。
+  - **需求三态**：`packs/requirements.ts` 只剩 `connected` / `can_enable` / `needs_platform`（删掉从未发版的 `can_connect`），`gatekeepers` 带名字，`offered` 列平台提供的实例；控制台就地启用（与「系统与授权」同一确认框）或给平台管理员「集成」页链接。
+  - **wire**：`PackRequirementWire` 加 `gatekeepers`、`offered`；Worker 组件加 `systems`，状态加 `systems` / `gates` / `gatesKept` / `bindable`；安装预览 Worker 项加 `binding`（`source`: `workspace` / `install` / `none`）；`get_change_segment` 的 Worker 项加 `gates: {before, after}`。
+  - **控制台**：`PackOrigin` 显示来源包与版本（418）；装包、撤销后 `announceReadinessChange`（425）；安装记录写「接上的系统」并附「（之前：…）」，撤销确认写「撤销后 Worker 不能再操作：…」。
+  - **不在本 PR**：P1-E2b（遗留 344、372）；后续版本改了 `systems` 不提示重新绑门（遗留 442）；Worker 详情门显示成 UUID（遗留 441）。
 - 来自 P0b（#620）的输入：第一个小 PR 是评测用夹具门重设计（托管实例挂在按系统命名的接入包上，`create_gate_instance` 的 `connector` 可选）；`importManifest` 的 `requireDescription` 留给目录侧要求复用，不用就删（遗留 372）；344 由 P1 收口。
 
 **AA1 — 管理员 Agent 身份与上限**（见 `global-roadmap-2026-10-16.md` §4）
