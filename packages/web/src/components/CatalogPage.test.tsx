@@ -1316,7 +1316,15 @@ describe('CatalogPage', () => {
     ).toBe('restarts it; call with PGPASSWORD=[redacted]');
     fireEvent.click(within(dialog).getByTestId('operation-description-save'));
     await waitFor(() =>
-      expect(within(dialog).getByText(/此处原文已遮蔽，请重新填写这一段/)).toBeTruthy(),
+      expect(
+        within(dialog).getByText(
+          /没有保存：描述里还留着 \[redacted\]。把这一段重新写成不带凭据的说明再保存。/,
+        ),
+      ).toBeTruthy(),
+    );
+    // UX P3 on #691: focus goes back to the box the error is about, not to the page.
+    expect(document.activeElement).toBe(
+      within(dialog).getByTestId('operation-description-textarea'),
     );
   });
 

@@ -33,6 +33,7 @@ import { KeyValue } from '../kit/key-value.js';
 import { List, ListRow } from '../kit/list-row.js';
 import { MasterDetail } from '../kit/master-detail.js';
 import { Notice } from '../kit/notice.js';
+import { RedactedNote } from '../kit/redacted-note.js';
 import { RouteLink } from '../kit/route-link.js';
 import { SkeletonRows } from '../kit/skeleton.js';
 import { StatusChip } from '../kit/status-chip.js';
@@ -598,6 +599,12 @@ function ChangeItemView({
               {`${operationFieldLabel(change.field, t)}${t('：', ': ')}${operationValueText(change.field, change.before, t)} → ${operationValueText(change.field, change.after, t)}`}
             </span>
           ))}
+          {/* Legacy 420: a description reads masked, as on the Operations tab; the line says what
+              `[redacted]` is. */}
+          <RedactedNote
+            value={item.fields.map((change) => [change.before, change.after])}
+            testId={`catalog-change-item-${item.ordinal}-redacted`}
+          />
         </div>
       ) : null}
       {item.widening.length > 0 ? (

@@ -4,7 +4,7 @@ import type {
   SkillDetailWire,
 } from '@nexttime/shared';
 import { visibleText } from '@nexttime/shared';
-import { type ReactNode, useId, useState } from 'react';
+import { type ReactNode, useId, useRef, useState } from 'react';
 import { invalidateCapability, useCapability, useCapabilityList } from '../hooks/useCapability.js';
 import { usePermissions } from '../hooks/usePermissions.js';
 import { useRoleCan } from '../hooks/useRoleCan.js';
@@ -1084,6 +1084,7 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   const [savingDescription, setSavingDescription] = useState(false);
   const [descriptionError, setDescriptionError] = useState<unknown | null>(null);
   const descriptionFieldId = useId();
+  const descriptionBoxRef = useRef<HTMLTextAreaElement>(null);
 
   const rows = operations.state.status === 'ready' ? operations.state.data.items : [];
   // UX acceptance of #567 P3 (#561's same-name class, on Operations): one name on two gates read
@@ -1236,6 +1237,9 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
     } catch (err) {
       if (isForbiddenError(err)) permissions.markDenied('update_operation_description');
       setDescriptionError(err);
+      // The Save button was disabled while it ran, which dropped focus to the page: put it back on
+      // the box the error is about.
+      descriptionBoxRef.current?.focus();
     } finally {
       setSavingDescription(false);
     }
@@ -1422,14 +1426,15 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
                       'The description looks like it carries a credential (a token, key or password value, or a Bearer, Authorization or name=value form), so it was refused and nothing was saved. Say what this Operation does: every agent that can use it reads this. The credential belongs to the gate.',
                     ),
                     redacted_text_submitted: t(
-                      '描述里还留着 [redacted]：此处原文已遮蔽，请重新填写这一段再保存，什么也没保存。描述只写这个 Operation 做什么，凭据交给门保管。',
-                      'The description still holds [redacted]: the original there was masked, so write that part again before saving. Nothing was saved. Say what this Operation does; the credential belongs to the gate.',
+                      '没有保存：描述里还留着 [redacted]。把这一段重新写成不带凭据的说明再保存。',
+                      'Not saved: the description still holds [redacted]. Write that part again without the credential, then save.',
                     ),
                   })
                 : undefined
             }
           >
             <Textarea
+              ref={descriptionBoxRef}
               id={descriptionFieldId}
               aria-label={t('描述', 'Description')}
               value={descriptionDraft}
