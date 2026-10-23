@@ -136,7 +136,7 @@ describe('lib/goals', () => {
       pausedByAuthority: 'owner',
     });
     expect(goalStateNote(goal, undefined, goalBudgetRows(goal, zh), zh)?.text).toMatch(
-      /已被工作区所有者锁定.*要等所有者解除锁定才能继续.*仍可以结束或取消/,
+      /已被工作区所有者锁定.*要等所有者解除锁定才能继续.*仍可以改计划、结束或取消/,
     );
   });
 

@@ -1,9 +1,11 @@
 import type {
+  AcceptanceCheck,
   ActionRequestFailureKind,
   ActionRequestReconciliation,
   FactCheck,
   FactObjectRef,
   GoalAcceptanceCheckKind,
+  GoalAcceptanceCheckWire,
   GoalDetailWire,
   GoalOutcomeBasis,
   GoalPlan,
@@ -430,6 +432,35 @@ export function factCheckSentence(fact: FactCheck, t: Translate): string {
   );
 }
 
+/** A check of the plan as a sentence; `gateNames` names the gatekeepers known so far. */
+export function planCheckSentence(
+  check: AcceptanceCheck,
+  gateNames: ReadonlyMap<string, string>,
+  t: Translate,
+): string {
+  switch (check.kind) {
+    case 'observe_predicate':
+      return observationSentence(check.check, gateNames.get(check.check.gatekeeperId) ?? null, t);
+    case 'fact_predicate':
+      return factCheckSentence(check.fact, t);
+    case 'requester_confirm':
+      return check.prompt;
+  }
+}
+
+/** A check of an acceptance round as a sentence. */
+export function roundCheckSentence(
+  check: GoalAcceptanceCheckWire,
+  gateNames: ReadonlyMap<string, string>,
+  t: Translate,
+): string {
+  if (check.check) {
+    return observationSentence(check.check, gateNames.get(check.check.gatekeeperId) ?? null, t);
+  }
+  if (check.fact) return factCheckSentence(check.fact, t);
+  return check.prompt ?? '';
+}
+
 // ---------------------------------------------------------------------------------------------
 // Steps and revisions
 // ---------------------------------------------------------------------------------------------
@@ -585,8 +616,8 @@ function pausedNote(
         ? {
             tone: 'warn',
             text: t(
-              '这个目标已被工作区所有者锁定（谁锁定的见概览里的「暂停人」）：请求人要等所有者解除锁定才能继续，在此之前仍可以结束或取消它。',
-              'A workspace owner holds this goal (who, under Paused by in the overview): its requester can resume it once an owner lifts the hold, and can still end or cancel it meanwhile.',
+              '这个目标已被工作区所有者锁定（谁锁定的见概览里的「暂停人」）：请求人要等所有者解除锁定才能继续，在此之前仍可以改计划、结束或取消它。',
+              'A workspace owner holds this goal (who, under Paused by in the overview): its requester can resume it once an owner lifts the hold, and can still revise, end or cancel it meanwhile.',
             ),
           }
         : {

@@ -213,7 +213,13 @@ export function GoalDetailPage({ http, pushes, goalRunId }: GoalDetailPageProps)
           {note.text}
         </Notice>
       ) : null}
-      <GoalOperationsBar goal={goal} viewer={viewer} http={http} onDone={onDone} />
+      <GoalOperationsBar
+        goal={goal}
+        viewer={viewer}
+        http={http}
+        gateNames={gateNames}
+        onDone={onDone}
+      />
       <output aria-live="polite">
         {done ? (
           <Notice tone={done.kind === 'stale' ? 'warn' : 'info'} testId="goal-op-done">

@@ -13,6 +13,7 @@ import type { CapabilityCaller } from '../../lib/clients.js';
 import type { ErrorOverrides } from '../../lib/errors.js';
 import {
   type GoalViewer,
+  type OverriddenCheck,
   checksOverriddenByEnding,
   goalOperations,
   holdPlacedAt,
@@ -34,6 +35,8 @@ export interface GoalOperationsBarProps {
   readonly goal: GoalDetailWire;
   readonly viewer: GoalViewer;
   readonly http: CapabilityCaller;
+  /** Gatekeeper names, for the checks an ending overrides. */
+  readonly gateNames: ReadonlyMap<string, string>;
   /** After an operation — or a refusal because the goal had already moved on — for the page to
    *  say what happened and re-read the goal (and its unresolved actions). */
   readonly onDone: (outcome: GoalOperationOutcome) => void;
@@ -81,7 +84,13 @@ export function goalOperationErrors(t: Translate): ErrorOverrides {
  * word and confirming the acceptance. Each re-reads the goal on the same page afterwards.
  * Revising the plan is not offered here yet.
  */
-export function GoalOperationsBar({ goal, viewer, http, onDone }: GoalOperationsBarProps) {
+export function GoalOperationsBar({
+  goal,
+  viewer,
+  http,
+  gateNames,
+  onDone,
+}: GoalOperationsBarProps) {
   const t = useT();
   const can = useRoleCan(http);
   const ops = goalOperations(goal, viewer, t);
@@ -319,7 +328,7 @@ export function GoalOperationsBar({ goal, viewer, http, onDone }: GoalOperations
             '目标已经暂停；锁定后请求人不能自己继续，要等工作区所有者解除',
             'The goal is already paused; once held, its requester cannot resume it until a workspace owner lifts the hold',
           ),
-          t('请求人仍可改计划或取消', 'Its requester can still revise or cancel it'),
+          t('请求人仍可改计划、结束或取消', 'Its requester can still revise, end or cancel it'),
         ]}
         confirmLabel={t('锁定', 'Hold')}
         onConfirm={() =>
@@ -340,7 +349,7 @@ export function GoalOperationsBar({ goal, viewer, http, onDone }: GoalOperations
         title={t('解除锁定', 'Lift the hold')}
         impact={[
           t(
-            '目标仍然暂停：由请求人决定继续、改计划或取消，解除本身不会让任何东西运行',
+            '目标仍然暂停：由请求人决定继续、改计划、结束或取消，解除本身不会让任何东西运行',
             'The goal stays paused: its requester decides to resume, revise or cancel it; lifting the hold runs nothing',
           ),
         ]}
@@ -363,7 +372,7 @@ export function GoalOperationsBar({ goal, viewer, http, onDone }: GoalOperations
         {...openProps('end')}
         anchor={anchor}
         achievedAllowed={endOp.achieved}
-        overridden={checksOverriddenByEnding(goal)}
+        overridden={checksOverriddenByEnding(goal, gateNames, t)}
         onEnd={(outcome, note) =>
           run(
             http.call<GoalOperationResultWire>('end_goal', { goalRunId, outcome, ...note }),
@@ -610,7 +619,7 @@ function EndConfirm({
 }: OpenControl & {
   readonly achievedAllowed: boolean;
   /** The acceptance checks that ending as achieved records as the requester's decision. */
-  readonly overridden: readonly string[];
+  readonly overridden: readonly OverriddenCheck[];
   readonly onEnd: (outcome: EndOutcome, note: { note?: string }) => Promise<void>;
 }) {
   const t = useT();
@@ -631,8 +640,8 @@ function EndConfirm({
           ? [
               overridden.length > 0
                 ? t(
-                    `这些验收检查没通过或还没做，会记为「请求人判定通过」并写进审计：${overridden.join('、')}`,
-                    `These acceptance checks did not pass or have not run, and are recorded as passed on the requester’s decision, in the audit trail: ${overridden.join(', ')}`,
+                    `这些验收检查没通过或还没做，会记为「请求人判定通过」并写进审计：${overridden.map((check) => `${check.key}（${check.sentence}）`).join('；')}`,
+                    `These acceptance checks did not pass or have not run, and are recorded as passed on the requester’s decision, in the audit trail: ${overridden.map((check) => `${check.key} (${check.sentence})`).join('; ')}`,
                   )
                 : t('验收检查都已通过', 'Every acceptance check has passed'),
             ]

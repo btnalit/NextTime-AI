@@ -42,10 +42,14 @@ describe('lib/goal-actions', () => {
       steps: [stepRun({ status: 'pending', attempts: [], attemptCount: 0 })],
     });
     const mine = goalOperations(held, ALICE, zh);
-    expect(mine.resume?.disabledReason).toMatch(/所有者锁定/);
+    expect(mine.resume?.disabledReason).toMatch(/要等所有者解除锁定/);
     expect(mine.end?.disabledReason).toBeNull();
     expect(mine.release).toBeUndefined();
     expect(ops(held, OWNER)).toEqual(['cancel', 'release']);
+    // A requester who is an owner too, held by another owner: they lift it themselves.
+    const ownerToo = goalOperations(held, { principalId: 'p-alice', isOwner: true }, zh);
+    expect(ownerToo.release?.disabledReason).toBeNull();
+    expect(ownerToo.resume?.disabledReason).toMatch(/先点「解除锁定」/);
   });
 
   it('an owner places a hold on someone else’s paused goal; its requester resumes it', () => {

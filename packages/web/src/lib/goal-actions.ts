@@ -5,6 +5,7 @@ import type {
   PlanRevisionSummaryWire,
   UnresolvedGoalActionWire,
 } from '@nexttime/shared';
+import { planCheckSentence, roundCheckSentence } from './goals.js';
 import type { Translate } from './i18n.js';
 
 /**
@@ -117,12 +118,19 @@ export function goalOperations(
       break;
     case 'paused':
       if (requester) {
+        // The hold itself is explained once, in the status note above; this only says what
+        // unlocks the button — the reader who is an owner too lifts the hold themselves.
         ops.resume = held
           ? {
-              disabledReason: t(
-                '这个目标已被工作区所有者锁定：要等所有者解除锁定才能继续；在此之前你仍可以结束或取消它。',
-                'A workspace owner holds this goal: you can resume it once an owner lifts the hold, and can still end or cancel it meanwhile.',
-              ),
+              disabledReason: owner
+                ? t(
+                    '已被锁定：先点「解除锁定」，才能继续。',
+                    'Held: lift the hold first, then resume.',
+                  )
+                : t(
+                    '已被锁定：要等所有者解除锁定才能继续。',
+                    'Held: you can resume it once an owner lifts the hold.',
+                  ),
             }
           : open;
       }
@@ -166,18 +174,33 @@ export function goalOperations(
   return ops;
 }
 
+/** An acceptance check ending as achieved records as the requester's decision instead. */
+export interface OverriddenCheck {
+  readonly key: string;
+  readonly sentence: string;
+}
+
 /** The acceptance checks ending as achieved records as the requester's decision instead
  *  (`end_goal`, `overridden`): those of the current round not passed — or, before any round, every
- *  check of the plan in force. */
-export function checksOverriddenByEnding(detail: GoalDetailWire): string[] {
+ *  check of the plan in force — each with what it checks. */
+export function checksOverriddenByEnding(
+  detail: GoalDetailWire,
+  gateNames: ReadonlyMap<string, string>,
+  t: Translate,
+): OverriddenCheck[] {
   const rounds = detail.acceptance.rounds.filter(
     (round) => round.planRevision === detail.currentRevision,
   );
   const round = rounds[rounds.length - 1];
   if (round) {
-    return round.checks.filter((check) => check.status !== 'passed').map((check) => check.checkKey);
+    return round.checks
+      .filter((check) => check.status !== 'passed')
+      .map((check) => ({ key: check.checkKey, sentence: roundCheckSentence(check, gateNames, t) }));
   }
-  return (detail.planRevision.plan.acceptance ?? []).map((check) => check.key);
+  return (detail.planRevision.plan.acceptance ?? []).map((check) => ({
+    key: check.key,
+    sentence: planCheckSentence(check, gateNames, t),
+  }));
 }
 
 /** The failed steps of the plan in force a person may send back with `resume_goal` — the kernel

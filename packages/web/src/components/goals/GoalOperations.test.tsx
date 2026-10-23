@@ -354,7 +354,7 @@ describe('goal operations on the goal page (S11 GO6)', () => {
       target: { value: 'achieved' },
     });
     expect(within(confirm).getByTestId('confirm-impact').textContent).toMatch(
-      /记为「请求人判定通过」并写进审计：certs/,
+      /记为「请求人判定通过」并写进审计：certs（在门「.*」上观察 /,
     );
   });
 });
