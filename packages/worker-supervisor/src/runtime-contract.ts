@@ -9,7 +9,9 @@
  * `IMAGE_RUNTIME_CONTRACT_LABEL` (`deploy/worker-runtime/Dockerfile`), that it speaks this
  * layout; one that doesn't is refused with `runtime_image_incompatible` before any container is
  * touched (`server.ts` maps it to 409). Bump `RUNTIME_CONTRACT_VERSION` together with the
- * Dockerfile's label whenever the layout changes again.
+ * Dockerfile's label whenever the layout changes again (`runtime-contract.test.ts` fails while they
+ * differ). The containers it starts carry the version too (`spawn-spec.ts`
+ * `CONTAINER_RUNTIME_CONTRACT_LABEL`), so one an older supervisor started is recreated.
  *
  * This is a compatibility check, not an authorization one (the image allowlist is that, in
  * `server.ts`): the image is read through the read-only images connection (`index.ts`; the

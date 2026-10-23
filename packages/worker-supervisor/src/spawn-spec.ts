@@ -56,6 +56,7 @@ import {
   hostModelsJsonPath,
   workspacePaths,
 } from './host-paths.js';
+import { RUNTIME_CONTRACT_VERSION } from './runtime-contract.js';
 
 export const ENTRY_ROLE_LABEL = 'nexttime.role';
 export const ENTRY_ROLE_VALUE = 'entry';
@@ -97,6 +98,14 @@ export const SKILLS_HASH_LABEL = 'nexttime.skills-hash';
  *  drive. Always non-empty (every spawn resolves a concrete image, `config.workerImage` at worst),
  *  unlike those two labels' own "empty = no Skills / undecodable Handle" convention. */
 export const IMAGE_LABEL = 'nexttime.image';
+/** STATUS leftover 422: the mount layout (`RUNTIME_CONTRACT_VERSION`) the supervisor that created
+ *  this container spoke. Unlike the labels above, a container *without* it does force a recreate
+ *  (`resident-service.ts`): every container an older supervisor created lacks it, and those are
+ *  exactly the ones still on the old layout — their pi discovers resources from `/workspace` and
+ *  reads a system prompt this supervisor no longer writes. The image's own
+ *  `ai.nexttime.runtime-contract` label, which Docker copies onto the container, can't stand in for
+ *  it: an older supervisor may have started the new image with the old mounts. */
+export const CONTAINER_RUNTIME_CONTRACT_LABEL = 'nexttime.runtime-contract';
 
 /**
  * A deterministic digest of `skillsInline`'s content — order-independent across both the skill
@@ -199,6 +208,7 @@ export function buildSpawnSpec(input: BuildSpawnSpecInput): ContainerSpec {
       [EGRESS_DENY_LABEL]: (input.egressDeny ?? []).join(','),
       [SKILLS_HASH_LABEL]: input.skillsHash ?? '',
       [IMAGE_LABEL]: input.image,
+      [CONTAINER_RUNTIME_CONTRACT_LABEL]: RUNTIME_CONTRACT_VERSION,
     },
     networkName: input.networkName,
     runtime: config.workerRuntime,

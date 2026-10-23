@@ -17,6 +17,7 @@
  *                                   systemPrompt?, model?, image?}             [agent-host]
  *                                  -> 200 {containerId, ip, status, created, restarts}
  *                                     | 403 (image not allowlisted)
+ *                                     | 409 runtime_image_incompatible (runtime-contract.ts)
  *   POST /resident/stop           {principalId} -> 204               [agent-host, kernel]
  *   POST /resident/reclaim        {principalId} -> 204                           [kernel]
  *                                  (S8 W5 leftover 77 — force-removes the container and deletes
@@ -29,7 +30,7 @@
  *   POST /resident/:principalId/touch -> 204 | 404                           [agent-host]
  *   GET  /residents               -> 200 {items: ResidentInventoryEntry[]}       [kernel]
  *   GET  /images                  -> 200 {defaultImage: string, images: RuntimeImageInfo[],
- *                                          allowedImages: string[]}
+ *                                          allowedImages: string[], runtimeContract: string}
  *                                     | 502 {error:{code:"docker_upstream_error", message, status}}
  *                                     (images: platform-labelled only; defaultImage is this
  *                                     process's own config.workerImage — the kernel has no other
@@ -45,6 +46,7 @@
  *                                   image?, model?, systemPrompt?, skillsInline?,
  *                                   timeoutSec?}                                   [kernel]
  *                                  -> 200 {containerId, ip} | 400 | 403 (image not allowlisted)
+ *                                     | 409 runtime_image_incompatible (runtime-contract.ts)
  *   POST /task/:workerRunId/terminate -> 204 | 404                               [kernel]
  *   GET  /task/:workerRunId       -> 200 TaskStatus | 404                        [kernel]
  *   GET  /healthz                 -> 200 {status:"ok"}                  (public, PUBLIC_ROUTES)
@@ -217,9 +219,10 @@ export function createServer(options: CreateServerOptions): FastifyInstance {
 
   app.get('/images', requireInternal('kernel'), async (request, reply) => {
     try {
-      const { defaultImage, images, allowedImages } = await residentService.listImages();
+      const { defaultImage, images, allowedImages, runtimeContract } =
+        await residentService.listImages();
       reply.code(200);
-      return { defaultImage, images, allowedImages };
+      return { defaultImage, images, allowedImages, runtimeContract };
     } catch (err) {
       // v0.16.2 (fix/supervisor-images-proxy): a Docker/proxy-level failure here (e.g.
       // `docker-socket-proxy-images` unreachable, or 403ing an unexpected call) is an upstream

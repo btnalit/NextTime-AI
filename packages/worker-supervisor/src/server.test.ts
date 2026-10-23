@@ -6,6 +6,7 @@ import { loadConfig } from './config.js';
 import { createEgressMapStore } from './egress-map.js';
 import { createSupervisorMetrics } from './metrics.js';
 import { createResidentService } from './resident-service.js';
+import { RUNTIME_CONTRACT_VERSION } from './runtime-contract.js';
 import { PUBLIC_ROUTES, createServer } from './server.js';
 import { createTaskService } from './task-service.js';
 import { createFakeDockerClient } from './test-support/fake-docker-client.js';
@@ -454,6 +455,8 @@ describe('GET /images (S7-E inventory)', () => {
     // `/task/spawn` and `/resident/spawn` enforce (`config.taskImageAllowlist`), so the kernel can
     // reject a non-allowlisted `set_active_runtime_image` target instead of only 403ing at spawn.
     expect(body.allowedImages).toEqual(config.taskImageAllowlist);
+    // Leftover 422: and the runtime contract every image it starts must carry.
+    expect(body.runtimeContract).toBe(RUNTIME_CONTRACT_VERSION);
   });
 
   it('reports allowedImages additively from WORKER_IMAGE_ALLOWLIST (P1-a hotfix)', async () => {

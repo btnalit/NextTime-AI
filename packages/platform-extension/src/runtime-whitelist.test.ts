@@ -14,6 +14,7 @@ import { type Server, createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 /**
@@ -23,8 +24,15 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
  * Worker container), and asserts from what pi actually sends to the model that it loads exactly
  * what the platform hands it — its system prompt, its Skills, its extension, the seven built-in
  * tools — and nothing planted in the workspace, in `$HOME`, in the old in-workspace agent
- * directory or in pi's own config directory, before start or mid-conversation. A pi upgrade that
- * adds a new kind of auto-discovered resource should fail here first.
+ * directory or in pi's own config directory, before start or mid-conversation. That catches the
+ * kinds of resource planted here: a flag renamed or dropped, a known kind switched back on.
+ *
+ * A new kind (a new file name, directory or variable) is not planted, so those tests would still
+ * pass. The file-access test below covers that: it records every path pi asks the file system
+ * about (`test-support/fs-trace.mjs`, preloaded through `NODE_OPTIONS`) in the two places the agent
+ * can write — `/workspace` (cwd and `$HOME`) and `/tmp` (pi's config directory, `os.tmpdir()`) —
+ * and fails on any path outside `KNOWN_PI_PATHS`. A pi that starts looking somewhere new fails it
+ * even when nothing is there yet, and `pi-drift.yml` runs it against `@latest` every night.
  *
  * The extension is a stand-in (the real one needs a kernel and entry / Worker mode, which the
  * script refuses here) that registers one tool and the real `pi-agent-dir.ts` restore hook.
@@ -48,6 +56,30 @@ const PI_CLI = join(
     .bin.pi,
 );
 const PI_AGENT_DIR_MODULE = join(import.meta.dirname, 'pi-agent-dir.ts');
+
+/** Every path, relative to the stand-in `/`, pi 1.1.0 asks the file system about under `workspace/`
+ *  and `tmp/` in the file-access test below. Anything else there fails it: before adding a line,
+ *  check that pi only looks and never loads it (the tests above, docs/runbooks/pi-upgrade.md §2.6). */
+const KNOWN_PI_PATHS: readonly RegExp[] = [
+  // cwd itself, and the session directory the platform keeps (`--session-dir`).
+  /^workspace$/,
+  /^workspace\/\.pi\/sessions(\/[^/]+)?$/,
+  // Project settings: read, never applied — `--no-approve` never trusts the workspace.
+  /^workspace\/\.pi\/settings\.json(\.lock)?$/,
+  // Existence checks for directories older pi versions used (migration notices only).
+  /^workspace\/\.pi\/(commands|hooks|tools)$/,
+  // `~/.agents/skills`: pi's package manager lists it, `--no-skills` drops everything it finds.
+  /^workspace\/\.agents\/skills(\/.*)?$/,
+  // Google application-default credentials, probed for provider availability; the platform's
+  // models come from models.json and the container has no credentials of its own.
+  /^workspace\/\.config\/gcloud\/application_default_credentials\.json$/,
+  // pi's config directory (`/tmp/pi-agent`, rebuilt at every start and conversation): its own
+  // stores and settings, and the resource directories the flags switch off.
+  /^tmp\/pi-agent$/,
+  /^tmp\/pi-agent\/(settings|auth|models-store)\.json(\.lock)?$/,
+  /^tmp\/pi-agent\/(models|oauth|keybindings)\.json$/,
+  /^tmp\/pi-agent\/(extensions|skills|prompts|themes|commands|hooks|tools)$/,
+];
 
 const EXPECTED_TOOLS = ['bash', 'edit', 'find', 'grep', 'ls', 'platform_tool', 'read', 'write'];
 const PLATFORM_PROMPT = 'PLATFORM_PROMPT_MARKER';
@@ -247,6 +279,9 @@ function startEntrypoint(extraEnv: Record<string, string> = {}): Runtime {
       PI_OFFLINE: '1',
       NO_PROXY: '*',
       NEXTTIME_RUNTIME_ROOT: root,
+      // `os.tmpdir()` under the stand-in `/` too, so the file-access test sees what pi looks at
+      // there.
+      TMPDIR: join(root, 'tmp'),
       ...extraEnv,
     },
   });
@@ -331,6 +366,25 @@ function expectRebuiltAgentDir(): void {
   );
 }
 
+/** `fs-trace.mjs` for pi: where it writes, and the env that preloads it. */
+function traceFileAccess(): { env: Record<string, string>; touched(): string[] } {
+  const log = join(root, 'fs-trace.log');
+  return {
+    env: {
+      NODE_OPTIONS: `--import=${pathToFileURL(join(import.meta.dirname, 'test-support', 'fs-trace.mjs')).href}`,
+      NEXTTIME_FS_TRACE: log,
+    },
+    touched() {
+      const paths = readFileSync(log, 'utf8')
+        .split('\n')
+        .map((line) => line.split('\t')[1] ?? '')
+        .filter((path) => path.startsWith(`${root}/`))
+        .map((path) => path.slice(root.length + 1));
+      return [...new Set(paths)].sort();
+    },
+  };
+}
+
 function exitCode(child: ChildProcessWithoutNullStreams): Promise<number | null> {
   return new Promise((resolve) => child.on('close', (code) => resolve(code)));
 }
@@ -401,6 +455,30 @@ describe('worker-runtime whitelist start (entrypoint.sh + real pi)', () => {
 
     expectOnlyPlatformResources(requests.at(-1), PLATFORM_PROMPT);
     expectOnlyPlatformCommands(await runtime.request({ type: 'get_commands' }), ['platform-demo']);
+  }, 90_000);
+
+  it('asks the file system about nothing in /workspace or /tmp beyond what pi is known to look at', async () => {
+    const port = await startProvider();
+    layOutImage(port, { prompt: `${PLATFORM_PROMPT}\n`, skills: ['platform-demo'] });
+    plantBeforeStart();
+    const trace = traceFileAccess();
+    const runtime = startEntrypoint(trace.env);
+
+    await runtime.request({ type: 'get_commands' });
+    await runtime.prompt('hi');
+    // A new conversation re-reads settings and resources; the restore hook only touches pi's own
+    // files here, since nothing new was written into its config directory.
+    const switched = await runtime.request({
+      type: 'switch_session',
+      sessionPath: join(root, 'workspace', '.pi', 'sessions', 'next-chat.jsonl'),
+    });
+    expect(switched.success).toBe(true);
+    await runtime.prompt('again');
+    await runtime.request({ type: 'get_commands' });
+
+    const touched = trace.touched().filter((path) => /^(workspace|tmp)(\/|$)/.test(path));
+    expect(touched.length).toBeGreaterThan(0);
+    expect(touched.filter((path) => !KNOWN_PI_PATHS.some((known) => known.test(path)))).toEqual([]);
   }, 90_000);
 
   it('falls back to the image’s default prompt when the platform wrote none, still loading nothing else', async () => {

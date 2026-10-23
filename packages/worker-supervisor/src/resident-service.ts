@@ -39,15 +39,20 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { posix as posixPath } from 'node:path';
 import type { SpawnRequest, SupervisorConfig, TaskSkillInline } from './config.js';
-import type { DockerClient, RuntimeImageInfo } from './docker-client.js';
+import type { ContainerState, DockerClient, RuntimeImageInfo } from './docker-client.js';
 import { IMAGE_PI_VERSION_LABEL } from './docker-client.js';
 import { entrySourceId } from './egress-map.js';
 import type { EgressMapStore, SourceMapFile } from './egress-map.js';
 import { type HandleBindingStore, bindExclusive, containerAtAddress } from './handle-bindings.js';
 import { decodeHandleJtiUnsafe } from './handle-jti.js';
 import { localSkillsDir, localSystemPromptPath, workspacePaths } from './host-paths.js';
-import { assertRuntimeContract } from './runtime-contract.js';
 import {
+  RUNTIME_CONTRACT_VERSION,
+  RuntimeImageIncompatibleError,
+  assertRuntimeContract,
+} from './runtime-contract.js';
+import {
+  CONTAINER_RUNTIME_CONTRACT_LABEL,
   EGRESS_DENY_LABEL,
   ENTRY_ROLE_LABEL,
   ENTRY_ROLE_VALUE,
@@ -247,11 +252,16 @@ export interface ResidentService {
  *  checked an image appeared in `images` (built), not that it was allowlisted — a non-allowlisted
  *  active image 403s every future spawn platform-wide, discovered only once a Worker/entry
  *  container tries to start. Exposing the same list here lets the kernel reject that target up
- *  front, one security boundary (env-configured allowlist), never re-implemented kernel-side. */
+ *  front, one security boundary (env-configured allowlist), never re-implemented kernel-side.
+ *  `runtimeContract` (STATUS leftover 422): the `ai.nexttime.runtime-contract` label value every
+ *  image this supervisor starts must carry (`runtime-contract.ts`) — reported for the same reason,
+ *  so the kernel and the console can mark an incompatible image and refuse to make it active
+ *  instead of every spawn 409ing `runtime_image_incompatible` afterwards. */
 export interface RuntimeImageInventory {
   readonly defaultImage: string;
   readonly images: RuntimeImageInfo[];
   readonly allowedImages: readonly string[];
+  readonly runtimeContract: string;
 }
 
 export function createResidentService(deps: ResidentServiceDeps): ResidentService {
@@ -560,13 +570,23 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
           splitEgressDenyLabel(existing?.labels[EGRESS_DENY_LABEL]),
         );
 
-      const rotated = handleRotated || skillsChanged || egressDenyDrifted || imageChanged;
+      // STATUS leftover 422: a container an older supervisor created (no
+      // CONTAINER_RUNTIME_CONTRACT_LABEL, or another value) is still on the old mount layout, so
+      // reusing it would keep its pi discovering resources from `/workspace` until it idles out —
+      // and an upgrade usually keeps the image *name*, so `imageChanged` alone never catches it.
+      // Deliberately the one label here where "unknown" does rotate (see the label's doc comment).
+      const layoutChanged = Boolean(
+        existing && existing.labels[CONTAINER_RUNTIME_CONTRACT_LABEL] !== RUNTIME_CONTRACT_VERSION,
+      );
 
-      if (existing?.running && !rotated) {
+      const rotated =
+        handleRotated || skillsChanged || egressDenyDrifted || imageChanged || layoutChanged;
+
+      const reuse = async (running: ContainerState): Promise<SpawnOutcome> => {
         registry.set(principalId, {
           workspaceId,
-          containerId: existing.id,
-          ip: existing.ip,
+          containerId: running.id,
+          ip: running.ip,
           lastTouchedAt: now(),
           // Records what *this* reuse actually applied — the next call's own egressDenyDrifted
           // check above compares against this, not against SOURCE_MAP_FILE (see
@@ -576,22 +596,45 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
         // Refreshed on every reuse (not just a fresh spawn) so a WorkerDefinition's egress list
         // published *after* this container started still takes effect immediately, without
         // waiting for the container itself to restart — see registerEgress's own doc comment.
-        registerEgress(workspaceId, principalId, existing.ip, egressDeny);
+        registerEgress(workspaceId, principalId, running.ip, egressDeny);
         // The incoming Handle may be newer than the one bound when this container started (an
         // older container without the jti label is reused across a reissue).
-        await bindHandle(workspaceId, principalId, existing.id, existing.ip, handle);
+        await bindHandle(workspaceId, principalId, running.id, running.ip, handle);
         return {
-          containerId: existing.id,
-          ip: existing.ip,
-          status: existing.status,
+          containerId: running.id,
+          ip: running.ip,
+          status: running.status,
           created: false,
-          restarts: restartsFromLabels(existing.labels),
+          restarts: restartsFromLabels(running.labels),
         };
-      }
+      };
+
+      if (existing?.running && !rotated) return reuse(existing);
 
       // Before anything is torn down: an image that doesn't speak this supervisor's mount layout
       // must leave the principal's current container (if any) exactly as it was.
-      await assertRuntimeContract(imagesDocker, image);
+      try {
+        await assertRuntimeContract(imagesDocker, image);
+      } catch (err) {
+        // Only the layout asked for the recreate, and the image it would need can't run here:
+        // the old-layout container still works, so it keeps serving rather than every turn
+        // becoming a 409 until someone makes a current image active.
+        const layoutOnly =
+          layoutChanged && !(handleRotated || skillsChanged || egressDenyDrifted || imageChanged);
+        if (err instanceof RuntimeImageIncompatibleError && existing?.running && layoutOnly) {
+          console.error(
+            JSON.stringify({
+              level: 'warn',
+              msg: 'entry container is on an older mount layout but the requested image cannot replace it; reusing it',
+              principalId,
+              image,
+              containerRuntimeContract: existing.labels[CONTAINER_RUNTIME_CONTRACT_LABEL] ?? null,
+            }),
+          );
+          return reuse(existing);
+        }
+        throw err;
+      }
 
       const restarts = existing ? restartsFromLabels(existing.labels) + 1 : 0;
       if (existing) {
@@ -897,7 +940,12 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
       // v0.16.2: `imagesDocker`, not `docker` — see `ResidentServiceDeps.imagesDocker`'s own doc
       // comment for why image reads go through a separate, dedicated read-only proxy connection.
       const images = await imagesDocker.listImages(IMAGE_PI_VERSION_LABEL);
-      return { defaultImage: config.workerImage, images, allowedImages: config.taskImageAllowlist };
+      return {
+        defaultImage: config.workerImage,
+        images,
+        allowedImages: config.taskImageAllowlist,
+        runtimeContract: RUNTIME_CONTRACT_VERSION,
+      };
     },
   };
 }

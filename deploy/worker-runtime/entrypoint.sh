@@ -138,6 +138,11 @@ ln -s "$MODELS_JSON" "$AGENT_DIR/models.json"
 export PI_CODING_AGENT_DIR="$AGENT_DIR"
 export NEXTTIME_PI_SETTINGS="$PI_SETTINGS_FILE"
 export NEXTTIME_PI_MODELS="$MODELS_JSON"
+# pi loads the platform extension through jiti, whose compile cache defaults to `/tmp/jiti`:
+# agent-writable, and a cached file is used as is whenever the extension is loaded again in this
+# container. Off, so what pi runs as the platform extension is always the image's own file
+# (`runtime-whitelist.test.ts`, the file-access test, fails on anything else under `/tmp`).
+export JITI_FS_CACHE=false
 
 # The published entry WorkerDefinition's prompt (S2.6) or Worker prompt (P-A2), written by
 # worker-supervisor; the image's own default when there is none yet.
@@ -149,6 +154,17 @@ if [ ! -f "$SYSTEM_PROMPT_FILE" ]; then
 fi
 
 if [ "${NEXTTIME_MODE:-}" = "worker" ] || [ "${NEXTTIME_MODE:-}" = "entry" ]; then
+	# Whitelist start (STATUS leftover 422): models.json is worker-supervisor's read-only mount; the
+	# image only holds an empty placeholder at that path. Empty means a worker-supervisor from before
+	# this image started the container (an upgrade between pulling the images and restarting the
+	# services, or a rollback of the supervisor alone), and pi would only fail later, on an unknown
+	# provider at the first prompt.
+	if [ ! -s "$MODELS_JSON" ]; then
+		echo "nexttime-selfcheck check=models_json result=fail reason=empty_mount"
+		exit 1
+	fi
+	echo "nexttime-selfcheck check=models_json result=ok"
+
 	# I9: no agent process (this one included) may ever hold an LLM provider credential — provider
 	# keys live only in llm-proxy. A *_API_KEY-shaped env var here means a misconfigured container;
 	# fail before pi ever starts. Names only, never values.

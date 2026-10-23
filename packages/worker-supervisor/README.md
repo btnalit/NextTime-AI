@@ -64,7 +64,10 @@ Handle 写进 `HANDLE_BINDINGS_FILE`（默认 `/run/handle-bindings/bindings.jso
 `ai.nexttime.runtime-contract=2` 绑定。`/resident/spawn` 要新建容器、`/task/spawn` 起容器之前，经只读的
 镜像连接（`DOCKER_IMAGES_HOST`）读镜像 label，不是当前版本（含遗留 422 之前构建的镜像）就返回
 `409 {"error":{"code":"runtime_image_incompatible"}}`，不动正在跑的容器；读不到镜像信息时记一行 warn
-照常起。再改布局时与 `deploy/worker-runtime/Dockerfile` 的 label 一起改版本号。
+照常起。再改布局时与 `deploy/worker-runtime/Dockerfile` 的 label 一起改版本号（`runtime-contract.test.ts`
+在两者不一致时失败）。起的容器也带上版本号（label `nexttime.runtime-contract`）：常驻容器没有这个 label 或版本不对，
+说明是旧版 worker-supervisor 起的、还是旧布局，下一次 `/resident/spawn` 就重建它，镜像名没变也一样；只有请求的镜像
+本身不兼容时才继续用这个旧容器（记一行 warn），不把一个还能用的容器变成 409。
 
 `POST /resident/spawn` 的请求体（`SpawnRequestSchema`）额外接受 `systemPrompt?`/`model?`
 （S2.6，来自已发布入口 WorkerDefinition，agent-host 在每个 `startTurn` 上重新解析并转发）与

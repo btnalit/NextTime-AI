@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { loadConfig } from './config.js';
+import { RUNTIME_CONTRACT_VERSION } from './runtime-contract.js';
 import { buildSpawnSpec, entryContainerName, hashSkillsInline } from './spawn-spec.js';
 
 const configEnv = {
@@ -161,6 +162,7 @@ describe('buildSpawnSpec', () => {
       'nexttime.egress-deny': '',
       'nexttime.skills-hash': '',
       'nexttime.image': 'nexttime-ai-worker-runtime',
+      'nexttime.runtime-contract': RUNTIME_CONTRACT_VERSION,
     });
   });
 

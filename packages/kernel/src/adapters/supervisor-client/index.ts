@@ -145,11 +145,17 @@ export interface RuntimeImageInfo {
  * `config.taskImageAllowlist` verbatim — the exact static allowlist its `/task/spawn` and
  * `/resident/spawn` already enforce (`isImageAllowed`). `application/platform/runtime.ts` reads
  * this to reject a `set_active_runtime_image`/`rollback_runtime_image` target that is not
- * allowlisted, instead of only discovering it once every future spawn starts 403ing. */
+ * allowlisted, instead of only discovering it once every future spawn starts 403ing.
+ *
+ * `runtimeContract` (STATUS leftover 422): the `ai.nexttime.runtime-contract` label value every
+ * image worker-supervisor starts must carry (its `runtime-contract.ts`; a mismatch 409s
+ * `runtime_image_incompatible` at spawn). `undefined` from a worker-supervisor that predates it —
+ * then nothing is known to be incompatible and nothing is refused on that ground. */
 export interface RuntimeImageInventory {
   readonly defaultImage: string;
   readonly images: RuntimeImageInfo[];
   readonly allowedImages: readonly string[];
+  readonly runtimeContract?: string;
 }
 
 /** S7-E: one resident entry container, as worker-supervisor's `GET /residents` reports it —
@@ -395,7 +401,12 @@ export class TaskSupervisorClient implements TaskSupervisorClientPort {
     const parsed = body as RuntimeImageInventory;
     // P1-a hotfix: defend against an older worker-supervisor that does not yet send
     // `allowedImages` — default to "nothing allowed" (fail closed), never guessed open.
-    return { ...parsed, allowedImages: parsed.allowedImages ?? [] };
+    return {
+      ...parsed,
+      allowedImages: parsed.allowedImages ?? [],
+      runtimeContract:
+        typeof parsed.runtimeContract === 'string' ? parsed.runtimeContract : undefined,
+    };
   }
 
   async listResidents(): Promise<ResidentInventoryEntry[]> {

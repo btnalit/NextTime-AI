@@ -111,7 +111,10 @@ export type PlatformErrorCode =
   | 'no_previous_settings_version'
   // P1-a hotfix (post-v0.16.0 review): a target not in worker-supervisor's own allowlist
   // (`WORKER_IMAGE_ALLOWLIST` / `config.taskImageAllowlist`) — see runtime.ts.
-  | 'image_not_allowed';
+  | 'image_not_allowed'
+  // STATUS leftover 422: a target worker-supervisor would refuse to start anything from (no
+  // matching `ai.nexttime.runtime-contract` label) — see runtime.ts.
+  | 'runtime_image_incompatible';
 
 /** Mapped by interfaces/http/capability-route.ts: `*_not_found` → 404, the rest → 409. */
 export class PlatformAdminError extends Error {

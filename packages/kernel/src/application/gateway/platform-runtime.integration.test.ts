@@ -134,6 +134,9 @@ class FakeRuntimeSupervisorClient implements TaskSupervisorClientPort {
   defaultImage = 'nexttime-ai-worker-runtime';
   imagesShouldThrow = false;
   allowedImages: string[] | undefined = undefined;
+  /** Leftover 422: the runtime contract worker-supervisor requires; `undefined` (the default) is a
+   *  worker-supervisor that predates it, so every existing test here sees no compatibility verdict. */
+  runtimeContract: string | undefined = undefined;
   readonly stoppedPrincipalIds: string[] = [];
 
   async spawn(): Promise<TaskSpawnOutcome> {
@@ -153,6 +156,7 @@ class FakeRuntimeSupervisorClient implements TaskSupervisorClientPort {
     defaultImage: string;
     images: RuntimeImageInfo[];
     allowedImages: readonly string[];
+    runtimeContract?: string;
   }> {
     if (this.imagesShouldThrow) {
       throw new Error('simulated: worker-supervisor unreachable');
@@ -161,7 +165,12 @@ class FakeRuntimeSupervisorClient implements TaskSupervisorClientPort {
       this.defaultImage,
       ...this.images.flatMap((image) => image.tags),
     ];
-    return { defaultImage: this.defaultImage, images: this.images, allowedImages };
+    return {
+      defaultImage: this.defaultImage,
+      images: this.images,
+      allowedImages,
+      runtimeContract: this.runtimeContract,
+    };
   }
   async listResidents(): Promise<ResidentInventoryEntry[]> {
     return this.residents;
@@ -517,6 +526,86 @@ describe.runIf(DATABASE_URL !== undefined)(
         // The refused rollback must not have mutated the setting.
         const settings = await callAsAdmin<PlatformSettingsWire>('get_platform_settings');
         expect(settings.activeRuntimeImage).toBe('nexttime-ai-worker-runtime:v2');
+      });
+    });
+
+    // Leftover 422 (whitelist start): worker-supervisor refuses to start anything from an image
+    // without its current `ai.nexttime.runtime-contract` label, so the kernel marks such an image
+    // and refuses every action that would make it the one new containers start from.
+    describe('runtime contract (leftover 422)', () => {
+      const IMAGE_V3: RuntimeImageInfo = {
+        id: 'sha256:v3000000000000000000000000000000000000000000000000000000000000',
+        tags: ['nexttime-ai-worker-runtime:v3'],
+        created: '2026-10-23T00:00:00.000Z',
+        labels: { 'ai.nexttime.pi-version': '1.1.0', 'ai.nexttime.runtime-contract': '2' },
+      };
+
+      it('marks each image runtimeCompatible against what worker-supervisor requires, null when it says nothing', async () => {
+        supervisor.images = [IMAGE_V1, IMAGE_V3];
+        const unknown = await callAsAdmin<{ items: RuntimeImageWire[] }>('list_runtime_images');
+        expect(unknown.items.map((i) => i.runtimeCompatible)).toEqual([null, null]);
+
+        supervisor.runtimeContract = '2';
+        const known = await callAsAdmin<{ items: RuntimeImageWire[] }>('list_runtime_images');
+        expect(known.items.find((i) => i.id === IMAGE_V1.id)?.runtimeCompatible).toBe(false);
+        expect(known.items.find((i) => i.id === IMAGE_V3.id)?.runtimeCompatible).toBe(true);
+      });
+
+      it('refuses to set an incompatible image active and leaves the setting alone; a compatible one is set', async () => {
+        supervisor.images = [IMAGE_V1, IMAGE_V3];
+        await callAsAdmin('set_active_runtime_image', { image: 'nexttime-ai-worker-runtime:v3' });
+        supervisor.runtimeContract = '2';
+
+        await expectPlatformError(
+          () => callAsAdmin('set_active_runtime_image', { image: 'nexttime-ai-worker-runtime:v1' }),
+          'runtime_image_incompatible',
+        );
+        const settings = await callAsAdmin<PlatformSettingsWire>('get_platform_settings');
+        expect(settings.activeRuntimeImage).toBe('nexttime-ai-worker-runtime:v3');
+
+        const result = await callAsAdmin<PlatformSettingsWire>('set_active_runtime_image', {
+          image: 'nexttime-ai-worker-runtime:v3',
+        });
+        expect(result.activeRuntimeImage).toBe('nexttime-ai-worker-runtime:v3');
+      });
+
+      it('refuses to roll back to an incompatible image', async () => {
+        supervisor.images = [IMAGE_V1, IMAGE_V3];
+        await callAsAdmin('set_active_runtime_image', { image: 'nexttime-ai-worker-runtime:v1' });
+        await callAsAdmin('set_active_runtime_image', { image: 'nexttime-ai-worker-runtime:v3' });
+        supervisor.runtimeContract = '2';
+
+        await expectPlatformError(
+          () => callAsAdmin('rollback_runtime_image'),
+          'runtime_image_incompatible',
+        );
+        const settings = await callAsAdmin<PlatformSettingsWire>('get_platform_settings');
+        expect(settings.activeRuntimeImage).toBe('nexttime-ai-worker-runtime:v3');
+      });
+
+      it('shows the active image as incompatible in runtime_inventory', async () => {
+        await resetActiveRuntimeImageSetting();
+        supervisor.defaultImage = 'nexttime-ai-worker-runtime:v1';
+        supervisor.images = [IMAGE_V1, IMAGE_V3];
+        supervisor.residents = [];
+        supervisor.runtimeContract = '2';
+
+        const result = await callAsAdmin<RuntimeInventoryWire>('runtime_inventory');
+        expect(result.activeImageInfo?.id).toBe(IMAGE_V1.id);
+        expect(result.activeImageInfo?.runtimeCompatible).toBe(false);
+      });
+
+      it('refuses roll_entry_containers while the active image is incompatible, stopping nothing', async () => {
+        supervisor.images = [IMAGE_V1, IMAGE_V2];
+        await callAsAdmin('set_active_runtime_image', { image: 'nexttime-ai-worker-runtime:v2' });
+        supervisor.residents = [residentEntry({ workspaceId, imageId: IMAGE_V1.id })];
+        supervisor.runtimeContract = '2';
+
+        await expectPlatformError(
+          () => callAsAdmin('roll_entry_containers'),
+          'runtime_image_incompatible',
+        );
+        expect(supervisor.stoppedPrincipalIds).toEqual([]);
       });
     });
 

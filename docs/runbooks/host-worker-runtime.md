@@ -158,14 +158,21 @@ HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy HOME`（大小写代理变�
 `mcp.json` 等都不读（`docs/runbooks/pi-upgrade.md` §2.6）：
 
 ```bash
-docker logs nexttime-entry-demo-alice 2>&1 | grep pi_resource_discovery
+docker logs nexttime-entry-demo-alice 2>&1 | grep -E 'pi_resource_discovery|models_json'
 docker inspect nexttime-entry-demo-alice --format '{{json .HostConfig.Binds}}'
+# 只读挂载在 runsc 下写不穿：三条都应报 Read-only file system
+docker exec nexttime-entry-demo-alice sh -c 'echo x >> /opt/nexttime/platform/system-prompt.md; touch /opt/nexttime/platform/x; ln -sf /tmp /opt/nexttime/platform/l'
 ```
 
-期望：`nexttime-selfcheck check=pi_resource_discovery result=off system_prompt=<platform|default> skills=<n>`；
+期望：`nexttime-selfcheck check=models_json result=ok` 与
+`nexttime-selfcheck check=pi_resource_discovery result=off system_prompt=<platform|default> skills=<n>`；
 `Binds` 恰好三条：`.../workspaces/<principalId>:/workspace`、
 `.../workspaces/.platform/principals/<principalId>:/opt/nexttime/platform:ro`、
-`.../models/models.json:/opt/nexttime/models.json:ro`。worker-supervisor 返回 409
+`.../models/models.json:/opt/nexttime/models.json:ro`；写入探针三条都是 `Read-only file system`。
+这几项只在本版 worker-supervisor 新建的容器上成立；升级前就在跑的入口容器下一轮对话时会被重建（容器没有
+`nexttime.runtime-contract` label），之后再核。容器一启动就退出、日志是 `check=models_json result=fail
+reason=empty_mount` 时，起它的 worker-supervisor 比镜像旧（没挂 `models.json`）：把 worker-supervisor 也升到同一版本。
+worker-supervisor 返回 409
 `runtime_image_incompatible` 时，活动镜像是遗留 422 之前构建的（没有 `ai.nexttime.runtime-contract=2`
 label）：按 §2 用本版重建镜像，在运行层页把新镜像设为活动。
 

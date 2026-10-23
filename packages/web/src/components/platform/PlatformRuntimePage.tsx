@@ -49,6 +49,13 @@ const ACTIVE_IMAGE_SOURCE_LABEL: Readonly<
  *  the kernel's own `RuntimeImageWireSchema` doc comment). Strips the algorithm prefix and keeps
  *  12 hex characters — enough to tell two builds of the same tag apart in a list; `CopyId` carries
  *  the exact value on hover/copy. */
+/** Why an image built before this release's mount layout can't be used — the row hint, the
+ *  disabled button's title and the active-image notice all say the same thing. */
+const INCOMPATIBLE_IMAGE_REASON = {
+  zh: '本版之前构建的镜像，和现在的挂载布局对不上，用它起不了容器',
+  en: 'Built before this release’s mount layout — no container can start from it',
+} as const;
+
 function shortImageId(id: string): string {
   const stripped = id.startsWith('sha256:') ? id.slice('sha256:'.length) : id;
   return stripped.length > 12 ? `${stripped.slice(0, 12)}…` : stripped;
@@ -82,6 +89,14 @@ function shortImageId(id: string): string {
  * (`RuntimeInventoryWire` carries no previous-value field), so "at least two images known" is the
  * honest, checkable proxy for "there is a different value to roll back to" this page can assert
  * without guessing.
+ *
+ * STATUS leftover 422: an image built before the whitelist start (`runtimeCompatible: false`)
+ * cannot start any container under this release's worker-supervisor, and the kernel refuses to
+ * make it active, roll back to it, or roll entry containers onto it (409
+ * `runtime_image_incompatible`). Its row says so and its 设为活动 is disabled with the reason; an
+ * active image that is itself incompatible gets a notice naming the image to switch to (or the
+ * build command when there is none), and 现在重建 is disabled until then. `null` (an older
+ * worker-supervisor that can't say) is shown as nothing — the kernel refuses nothing for it either.
  */
 export function PlatformRuntimePage({ http }: PlatformRuntimePageProps) {
   const t = useT();
@@ -275,6 +290,14 @@ function RuntimeBody({
   // Roll back needs at least two known images to have a genuinely different one to switch to —
   // see the module doc comment for why this client-side proxy, not a true "has history" field.
   const canRollBack = data.images.length >= 2;
+  const activeIncompatible = data.activeImageInfo?.runtimeCompatible === false;
+  // What to switch to when the active image can't run: the newest image that can, and that the
+  // allowlist lets through.
+  const replacement = activeIncompatible
+    ? data.images
+        .filter((image) => image.runtimeCompatible === true && image.allowed)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]
+    : undefined;
 
   // S8 W1-A4 (audit S3): both tables below stay under the 768px overflow width (809px content),
   // so layout="card" (the default) applies. Defined here, inline, rather than a top-level
@@ -286,7 +309,19 @@ function RuntimeBody({
       header: t('标签', 'Tags'),
       priority: 'primary',
       cellClassName: 'mono text-small',
-      cell: (image) => image.tags.join(', ') || '—',
+      cell: (image) => (
+        <>
+          {image.tags.join(', ') || '—'}
+          {image.runtimeCompatible === false ? (
+            <>
+              {' '}
+              <span className="chip chip-warn" data-testid="runtime-image-incompatible-chip">
+                {t('不兼容', 'Incompatible')}
+              </span>
+            </>
+          ) : null}
+        </>
+      ),
     },
     {
       id: 'id',
@@ -330,6 +365,7 @@ function RuntimeBody({
       hideInCard: true,
       cell: (image) => {
         const active = image.id === data.activeImageInfo?.id;
+        const incompatible = image.runtimeCompatible === false;
         if (active) {
           return (
             <span className="chip chip-ok" data-testid="runtime-image-active-chip">
@@ -348,11 +384,13 @@ function RuntimeBody({
                   variant="ghost"
                   size="s"
                   onClick={() => setActivatingImageId(image.id)}
-                  disabled={!image.allowed}
+                  disabled={!image.allowed || incompatible}
                   title={
-                    image.allowed
-                      ? undefined
-                      : t('未在 WORKER_IMAGE_ALLOWLIST 中 ·', 'Not in WORKER_IMAGE_ALLOWLIST')
+                    incompatible
+                      ? t(INCOMPATIBLE_IMAGE_REASON.zh, INCOMPATIBLE_IMAGE_REASON.en)
+                      : image.allowed
+                        ? undefined
+                        : t('未在 WORKER_IMAGE_ALLOWLIST 中 ·', 'Not in WORKER_IMAGE_ALLOWLIST')
                   }
                   data-testid="runtime-image-activate"
                 >
@@ -371,7 +409,11 @@ function RuntimeBody({
               onConfirm={() => onActivate(image)}
               testId="runtime-activate-confirm"
             />
-            {!image.allowed ? (
+            {incompatible ? (
+              <div className="text-3 text-small" data-testid="runtime-image-incompatible-hint">
+                {t(INCOMPATIBLE_IMAGE_REASON.zh, INCOMPATIBLE_IMAGE_REASON.en)}
+              </div>
+            ) : !image.allowed ? (
               <div className="text-3 text-small" data-testid="runtime-image-not-allowed-hint">
                 {t('未在 WORKER_IMAGE_ALLOWLIST 中 ·', 'Not in WORKER_IMAGE_ALLOWLIST')}
               </div>
@@ -526,6 +568,47 @@ function RuntimeBody({
         </Notice>
       ) : null}
 
+      {activeIncompatible ? (
+        <Notice tone="warn" testId="runtime-active-image-incompatible">
+          {t(
+            <>
+              活动镜像 <span className="mono">{data.activeImage}</span>{' '}
+              是本版之前构建的，和现在的挂载布局对不上：新的入口容器和任务都起不来。
+              {replacement ? (
+                <>
+                  在下面的镜像清单把{' '}
+                  <span className="mono">{replacement.activatableRef ?? replacement.tags[0]}</span>{' '}
+                  设为活动。
+                </>
+              ) : (
+                <>
+                  清单里还没有本版构建的镜像：先在主机的项目目录运行{' '}
+                  <span className="mono">sh scripts/build-images.sh worker-runtime</span>
+                  ，再回来把它设为活动。
+                </>
+              )}
+            </>,
+            <>
+              The active image <span className="mono">{data.activeImage}</span> was built before
+              this release’s mount layout: no new entry container or task can start.{' '}
+              {replacement ? (
+                <>
+                  Set{' '}
+                  <span className="mono">{replacement.activatableRef ?? replacement.tags[0]}</span>{' '}
+                  active in the image list below.
+                </>
+              ) : (
+                <>
+                  No image in the list is built from this release yet: run{' '}
+                  <span className="mono">sh scripts/build-images.sh worker-runtime</span> in the
+                  project directory on the host, then set it active here.
+                </>
+              )}
+            </>,
+          )}
+        </Notice>
+      ) : null}
+
       <Card
         title={t('镜像清单', 'Images')}
         padded={false}
@@ -629,11 +712,16 @@ function RuntimeBody({
                 icon="refresh"
                 onClick={() => setRollOpen(true)}
                 loading={rolling}
-                disabled={needsRebuildCount === 0}
+                disabled={needsRebuildCount === 0 || activeIncompatible}
                 title={
-                  needsRebuildCount === 0
-                    ? t('没有需要重建的入口容器', 'No entry container needs a rebuild')
-                    : undefined
+                  activeIncompatible
+                    ? t(
+                        '活动镜像起不了容器，先换一个活动镜像',
+                        'The active image cannot start containers — switch it first',
+                      )
+                    : needsRebuildCount === 0
+                      ? t('没有需要重建的入口容器', 'No entry container needs a rebuild')
+                      : undefined
                 }
                 data-testid="runtime-roll-entry-containers"
               >

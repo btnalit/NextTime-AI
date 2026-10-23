@@ -11,7 +11,10 @@ import {
   RUNTIME_CONTRACT_VERSION,
   RuntimeImageIncompatibleError,
 } from './runtime-contract.js';
-import { createFakeDockerClient } from './test-support/fake-docker-client.js';
+import {
+  type FakeDockerClient,
+  createFakeDockerClient,
+} from './test-support/fake-docker-client.js';
 import { memoryHandleBindings } from './test-support/memory-handle-bindings.js';
 
 /** A JWT-*shaped* (but unsigned/fake) Handle carrying only the `jti` claim `decodeHandleJtiUnsafe`
@@ -20,6 +23,16 @@ import { memoryHandleBindings } from './test-support/memory-handle-bindings.js';
 function fakeHandle(jti: string): string {
   const encode = (obj: unknown) => Buffer.from(JSON.stringify(obj)).toString('base64url');
   return `${encode({ alg: 'EdDSA' })}.${encode({ jti })}.fake-signature`;
+}
+
+/** Restamps alice's running container the way an older supervisor left it (`undefined`: no
+ *  layout label at all). */
+async function stampLayout(docker: FakeDockerClient, layout: string | undefined): Promise<void> {
+  const state = await docker.inspectByName('nexttime-entry-alice');
+  if (!state) throw new Error('container missing');
+  const labels = state.labels as Record<string, string>;
+  if (layout === undefined) Reflect.deleteProperty(labels, 'nexttime.runtime-contract');
+  else labels['nexttime.runtime-contract'] = layout;
 }
 
 let dir: string;
@@ -358,6 +371,64 @@ describe('resident-service spawn', () => {
     expect((await service.status('alice'))?.containerId).toBe(first.containerId);
   });
 
+  it('recreates a running container an older supervisor started (old mount layout), even on the same image', async () => {
+    const { service, docker } = setup();
+    const first = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+    expect(docker.createCalls[0]?.labels['nexttime.runtime-contract']).toBe(
+      RUNTIME_CONTRACT_VERSION,
+    );
+    // What a container from before the whitelist start looks like: no layout label at all.
+    await stampLayout(docker, undefined);
+
+    const second = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+    expect(second.created).toBe(true);
+    expect(second.containerId).not.toBe(first.containerId);
+    expect(docker.stopCalls).toEqual([{ name: 'nexttime-entry-alice', timeoutSeconds: 10 }]);
+    expect(docker.removeCalls).toEqual(['nexttime-entry-alice']);
+    expect(docker.createCalls[1]?.labels['nexttime.runtime-contract']).toBe(
+      RUNTIME_CONTRACT_VERSION,
+    );
+
+    // Any other value is just as stale.
+    await stampLayout(docker, '1');
+    const third = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+    expect(third.created).toBe(true);
+    expect(docker.createCalls).toHaveLength(3);
+  });
+
+  it('keeps reusing an old-layout container when the requested image could not replace it', async () => {
+    const { service, docker, config } = setup();
+    const first = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+    await stampLayout(docker, undefined);
+    // The active image is itself from before the whitelist start.
+    docker.registerImage({
+      id: 'sha256:old',
+      tags: [config.workerImage],
+      created: '2026-10-01T00:00:00Z',
+      labels: { 'ai.nexttime.pi-version': '1.1.0' },
+    });
+
+    const second = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+    expect(second.created).toBe(false);
+    expect(second.containerId).toBe(first.containerId);
+    expect(docker.stopCalls).toEqual([]);
+    expect(docker.removeCalls).toEqual([]);
+    expect(docker.createCalls).toHaveLength(1);
+    expect((await service.status('alice'))?.containerId).toBe(first.containerId);
+
+    // Not when something else also asks for the recreate: the new Skills set must not be skipped.
+    await expect(
+      service.spawn({
+        workspaceId: 'ws-1',
+        principalId: 'alice',
+        handle: 'h',
+        skillsInline: [{ name: 'demo', files: { 'SKILL.md': '# demo' } }],
+      }),
+    ).rejects.toBeInstanceOf(RuntimeImageIncompatibleError);
+    expect(docker.stopCalls).toEqual([]);
+    expect(docker.removeCalls).toEqual([]);
+  });
+
   it('reads the image through the images connection, and spawns anyway when that read fails', async () => {
     const config = loadConfig({
       NEXTTIME_DATA: '/host/data',
@@ -570,6 +641,9 @@ describe('resident-service list / listImages (S7-E inventory)', () => {
     // the kernel can reject a `set_active_runtime_image` target that would 403 at spawn time
     // instead of only discovering it later.
     expect(result.allowedImages).toEqual(config.taskImageAllowlist);
+    // Leftover 422: the contract label value this supervisor requires, so the kernel can refuse to
+    // make an image active that every spawn would then 409.
+    expect(result.runtimeContract).toBe(RUNTIME_CONTRACT_VERSION);
   });
 
   it('listImages() reports allowedImages additively from WORKER_IMAGE_ALLOWLIST, not just config.workerImage (P1-a hotfix)', async () => {
