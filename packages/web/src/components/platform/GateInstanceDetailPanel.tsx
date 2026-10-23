@@ -219,7 +219,7 @@ export function GateInstanceDetailPanel({
                   turned one into the meaningless "gatekeep". `full` shows it whole; slugs are
                   already short enough (migrations/core/0023_gate_instances.sql caps them at 64
                   chars). */}
-              <CopyId id={instance.gateId} label="gate" full />
+              <CopyId id={instance.gateId} label={t('门', 'gate')} full />
             </dd>
             <dt>{t('接入包', 'Connector')}</dt>
             <dd className="mono">{instance.connector}</dd>

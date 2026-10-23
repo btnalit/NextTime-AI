@@ -97,9 +97,24 @@ describe('kit/RefChip', () => {
 
   it('the copy button carries a >=36px (h-9 w-9) hit area regardless of chip size', () => {
     render(<RefChip kind="principal" id="p-1" name="Ada" size="s" testId="chip" />);
-    const button = screen.getByRole('button', { name: /copy/i });
+    const button = screen.getByRole('button', { name: /复制/ });
     expect(button.className).toContain('h-9');
     expect(button.className).toContain('w-9');
+  });
+
+  it('reads a Principal as its kind, and its copy button in the interface language (legacy 426 / 427)', () => {
+    render(
+      <>
+        <RefChip kind="principal" id="p-agent" name="entry" typeName="agent" testId="agent" />
+        <RefChip kind="principal" id="p-human" name="Ada" typeName="human" testId="human" />
+        <RefChip kind="principal" id="p-new" name="New" typeName="robot" testId="unknown" />
+      </>,
+    );
+    expect(screen.getByTestId('agent').textContent).toMatch(/^智能体entry/);
+    expect(screen.getByTestId('agent').textContent).not.toContain('(agent)');
+    expect(screen.getByTestId('human').textContent).toMatch(/^成员Ada/);
+    expect(screen.getByTestId('unknown').textContent).toMatch(/^成员New/);
+    expect(screen.getByRole('button', { name: /^复制智能体 id$/ })).toBeTruthy();
   });
 
   it('links the name to href when both a name and href are given', () => {

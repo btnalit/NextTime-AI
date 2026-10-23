@@ -38,7 +38,7 @@ describe('gatekeepers/ragflow manifest.json', () => {
     }
   });
 
-  it('classifies document.upload as medium (not auto-approvable) and document.parse as low, auto-approvable (S3.4)', () => {
+  it('classifies both execute operations as medium and never auto-approvable', () => {
     const manifest = loadManifest();
     const upload = manifest.find((op) => op.name === 'document.upload');
     const parse = manifest.find((op) => op.name === 'document.parse');
@@ -47,11 +47,18 @@ describe('gatekeepers/ragflow manifest.json', () => {
       blast_radius: 'medium',
       auto_approvable: false,
     });
-    // S3.4: document.parse is a hand-authored, reviewed classification (not an importOpenApi
-    // draft) — auto_approvable:true + blast_radius:'low' resolves to `allow` under the workspace's
-    // compiled-in low-blast-radius default (governance/policy/engine.ts's
-    // `effectiveWorkspaceAutoApprove`), unless a workspace has explicitly opted out.
-    expect(parse).toMatchObject({ mode: 'execute', blast_radius: 'low', auto_approvable: true });
+    // Re-parsing a document makes RAGFlow delete every chunk it has, chunks added or edited by
+    // hand included, before it parses again (`parse()` in RAGFlow's api/apps/sdk/doc.py, in each
+    // release checked from v0.18.0 to v0.23.0) — lost work no one can undo, so a person approves every parse: no workspace
+    // rule can turn auto-approval on for it (S3.4 had it low and auto-approvable).
+    expect(parse).toMatchObject({
+      mode: 'execute',
+      blast_radius: 'medium',
+      reversibility: false,
+      auto_approvable: false,
+      await_decision: true,
+    });
+    expect(parse?.description).toContain('cannot be recovered');
   });
 
   it('document.upload accepts real file content (S3.4: kbId/name/content, base64 or utf8)', () => {
