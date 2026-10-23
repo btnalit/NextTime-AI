@@ -3,7 +3,7 @@ import { OWNER_API_KEY, loginAsOwner } from './lib/auth.js';
 
 /**
  * e2e/goal-detail.spec.ts (S11 GO6, read-only part): the 目标 list and one goal's page with real
- * content, in a real browser at the widths UX checks (1280, 390). Nothing on the CI stack can
+ * content, in a real browser at the widths UX checks (1440, 390). Nothing on the CI stack can
  * propose a goal yet (`propose_goal` is GO5c), so the goal reads are stand-ins answered in the
  * browser (`page.route`, as approval-failure-reason.spec.ts does): `list_goals`, `get_goal`,
  * `get_goal_revision`, `list_goal_unresolved_actions`, and the names they point at
@@ -278,7 +278,7 @@ async function answerGoalReads(page: Page): Promise<void> {
 test.describe('S11 GO6: a goal’s pages with content (stand-in reads)', () => {
   test.skip(!OWNER_API_KEY, 'set WEB_E2E_BASE_URL and WEB_E2E_API_KEY to run this suite');
 
-  for (const width of [1280, 390] as const) {
+  for (const width of [1440, 390] as const) {
     test(`list and detail read at ${width}`, async ({ page }, testInfo) => {
       await page.setViewportSize({ width, height: 900 });
       await answerGoalReads(page);
