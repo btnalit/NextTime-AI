@@ -5,44 +5,50 @@
  * direct `fs` operations (`egress-map.ts`'s read-modify-write, and directory bootstrapping before
  * a container's first spawn — see `resident-service.ts`).
  *
- * `piAgentDir`/`piSessionDir` are workspace-relative on both sides (design doc §7.2: "该目录只挂给
- * 这个用户的入口容器"，"含 pi 的 --session-dir 与 PI_CODING_AGENT_DIR") — they live inside the same
- * per-user directory as everything else the entry container writes, not a separate host path.
+ * Whitelist start (STATUS leftover 422, `deploy/worker-runtime/entrypoint.sh` header): nothing the
+ * runtime loads from pi's own directories lives in the workspace any more. The workspace (mounted
+ * read-write at `/workspace`) holds only the agent's own files and pi's session JSONL
+ * (`/workspace/.pi/sessions`, the `--session-dir` entrypoint.sh passes). What the platform hands
+ * pi — the published system prompt and Skills — lives in a separate per-principal / per-Task
+ * **platform directory** under `workspaces/.platform/`, bind-mounted **read-only** at
+ * `PLATFORM_MOUNT_TARGET`, so the agent can read but never edit what its next start loads. pi's
+ * own config directory (`PI_CODING_AGENT_DIR`) is entrypoint.sh's business: rebuilt in `/tmp`
+ * at every start, never a mount.
  */
 
 import type { SupervisorConfig } from './config.js';
 
+export const WORKSPACE_MOUNT_TARGET = '/workspace';
+/** entrypoint.sh's `PLATFORM_DIR`: `system-prompt.md` and `skills/<name>/` (read-only bind). */
+export const PLATFORM_MOUNT_TARGET = '/opt/nexttime/platform';
+/** entrypoint.sh's `MODELS_JSON`, which it links into the fresh pi config directory. */
+export const MODELS_JSON_MOUNT_TARGET = '/opt/nexttime/models.json';
+
+/** Platform directories live under `workspaces/` (already the supervisor's own mount and the
+ *  backup's) but outside every per-principal and per-Task workspace directory. Principal and
+ *  Task ids are UUIDs (`config.ts` `IdClaimSchema`), so `.platform` can never collide with one. */
+const PLATFORM_ROOT_RELATIVE_PATH = 'workspaces/.platform';
+
+const SYSTEM_PROMPT_FILE_NAME = 'system-prompt.md';
+const SKILLS_DIR_NAME = 'skills';
+
 export interface WorkspacePaths {
   readonly hostWorkspaceDir: string;
   readonly localWorkspaceDir: string;
-  /** `PI_CODING_AGENT_DIR` inside the container — workspace-relative (`/workspace/.pi/agent`). */
-  readonly piAgentDirInContainer: string;
-  /** `--session-dir` inside the container (`/workspace/.pi/sessions`). */
-  readonly piSessionDirInContainer: string;
-  /** `models.json`'s bind-mount target inside the container
-   *  (`${piAgentDirInContainer}/models.json`). */
-  readonly modelsJsonTargetInContainer: string;
-  /** This container's own view of `piAgentDirInContainer` — `resident-service.ts`'s spawn()
-   *  `mkdirSync`s this *before* asking Docker to create the entry container. Host verification
-   *  (S1.5a) found that skipping this step lets Docker auto-create `.pi/agent` (as the parent of
-   *  the models.json bind-mount target) as **root**, while running as root — the entry
-   *  container's own non-root `nexttime` (uid 10001) then can't `mkdir` the sibling
-   *  `.pi/sessions` under that root-owned `.pi/`, and pi's own writes under `PI_CODING_AGENT_DIR`
-   *  would fail the same way. Pre-creating it here (this process also runs as uid 10001) means
-   *  Docker's bind-mount setup finds it already correctly owned. */
-  readonly localPiAgentDir: string;
+  /** The platform directory's bind-mount source (`workspaces/.platform/principals/<id>`). */
+  readonly hostPlatformDir: string;
+  /** This container's own view of `hostPlatformDir`. `resident-service.ts`'s spawn() creates it
+   *  before asking Docker to create the entry container, so Docker never auto-creates the bind
+   *  source as root. */
+  readonly localPlatformDir: string;
 }
-
-export const WORKSPACE_MOUNT_TARGET = '/workspace';
 
 export function workspacePaths(config: SupervisorConfig, principalId: string): WorkspacePaths {
   return {
     hostWorkspaceDir: `${config.nextTimeData}/workspaces/${principalId}`,
     localWorkspaceDir: `${config.localDataDir}/workspaces/${principalId}`,
-    piAgentDirInContainer: `${WORKSPACE_MOUNT_TARGET}/.pi/agent`,
-    piSessionDirInContainer: `${WORKSPACE_MOUNT_TARGET}/.pi/sessions`,
-    modelsJsonTargetInContainer: `${WORKSPACE_MOUNT_TARGET}/.pi/agent/models.json`,
-    localPiAgentDir: `${config.localDataDir}/workspaces/${principalId}/.pi/agent`,
+    hostPlatformDir: `${config.nextTimeData}/${PLATFORM_ROOT_RELATIVE_PATH}/principals/${principalId}`,
+    localPlatformDir: `${config.localDataDir}/${PLATFORM_ROOT_RELATIVE_PATH}/principals/${principalId}`,
   };
 }
 
@@ -57,23 +63,20 @@ export function localModelsJsonPath(config: SupervisorConfig): string {
   return `${config.localDataDir}/models/models.json`;
 }
 
-/** `deploy/worker-runtime/entrypoint.sh`'s `SYSTEM_PROMPT_FILE` path, relative to whichever
- *  workspace directory is mounted at `/workspace` — the single definition both modes' helpers
- *  below build their own local view from (resident mode's per-user workspace, Task mode's
- *  per-Task one; the file has the same in-container path either way). */
-const SYSTEM_PROMPT_WORKSPACE_RELATIVE_PATH = '.nexttime/system-prompt.md';
-
-function systemPromptPathIn(localWorkspaceDir: string): string {
-  return `${localWorkspaceDir}/${SYSTEM_PROMPT_WORKSPACE_RELATIVE_PATH}`;
+/** The published system prompt entrypoint.sh passes to `--system-prompt`
+ *  (`/opt/nexttime/platform/system-prompt.md` inside the container) — this container's own view.
+ *  `resident-service.ts`'s spawn() writes it (S2.6) before deciding whether to reuse or
+ *  (re)create the entry container, so the container's next start always loads the current
+ *  published prompt. */
+export function localSystemPromptPath(config: SupervisorConfig, principalId: string): string {
+  return `${workspacePaths(config, principalId).localPlatformDir}/${SYSTEM_PROMPT_FILE_NAME}`;
 }
 
-/** `deploy/worker-runtime/entrypoint.sh`'s `SYSTEM_PROMPT_FILE` path, workspace-relative
- *  (`/workspace/.nexttime/system-prompt.md`) — this container's own view (`resident-service.ts`
- *  `spawn()` writes here, S2.6, before deciding whether to reuse or (re)create the entry
- *  container, so a workspace's next restart always picks up the current published prompt even
- *  when this particular `spawn()` call only reuses an already-running container). */
-export function localSystemPromptPath(config: SupervisorConfig, principalId: string): string {
-  return systemPromptPathIn(workspacePaths(config, principalId).localWorkspaceDir);
+/** The published Skills entrypoint.sh passes to `--skill` (`/opt/nexttime/platform/skills`, one
+ *  `<name>/` directory per Skill) — this container's own view, for either mode's platform
+ *  directory. */
+export function localSkillsDir(localPlatformDir: string): string {
+  return `${localPlatformDir}/${SKILLS_DIR_NAME}`;
 }
 
 /**
@@ -83,53 +86,43 @@ export function localSystemPromptPath(config: SupervisorConfig, principalId: str
  * entry workspace (I15: "其他用户的容器与任何 Worker 容器都不挂载" — a Worker's `hostWorkspaceDir`
  * always lives under the `tasks/` subtree, an entry container's never does).
  *
- * `piAgentDirInContainer`/`modelsJsonTargetInContainer` intentionally reuse the exact same
- * in-container path resident mode uses (`/workspace/.pi/agent[/models.json]`) even though the
- * task-mode env allowlist (spawn-spec's task builder) does not set `PI_CODING_AGENT_DIR`: pi
- * 0.84.4's own default (`packages/coding-agent/src/config.ts` `getAgentDir()`, verified against
- * the pinned reference checkout) is `join(homedir(), '.pi', 'agent')`, and `homedir()` resolves
- * from `HOME` — which the runtime image's own Dockerfile bakes in as `HOME=/workspace` at the
- * image level (`deploy/worker-runtime/Dockerfile`), present regardless of what this package's
- * `Env` array sets. So the default already lands exactly here without needing the env var.
+ * The Task's platform directory (`workspaces/.platform/tasks/<taskId>`) follows the same split
+ * as resident mode's (see this module's doc comment).
  */
 export interface TaskPaths {
   readonly hostWorkspaceDir: string;
   readonly localWorkspaceDir: string;
-  readonly piAgentDirInContainer: string;
-  readonly modelsJsonTargetInContainer: string;
-  readonly skillsDirInContainer: string;
-  /** This container's own view of `piAgentDirInContainer` — pre-created for the same reason
-   *  `workspacePaths`' `localPiAgentDir` is (see that doc comment): Docker would otherwise create
-   *  `.pi/` as root while preparing the `models.json` bind-mount, blocking the non-root Worker
-   *  container from creating sibling directories under it. */
-  readonly localPiAgentDir: string;
+  readonly hostPlatformDir: string;
+  /** This container's own view of `hostPlatformDir` — created by `task-service.ts`'s spawn()
+   *  before the container, for the same reason as `WorkspacePaths.localPlatformDir`. */
+  readonly localPlatformDir: string;
 }
 
 export function taskWorkspacePaths(config: SupervisorConfig, taskId: string): TaskPaths {
-  const hostWorkspaceDir = `${config.nextTimeData}/workspaces/tasks/${taskId}`;
-  const localWorkspaceDir = `${config.localDataDir}/workspaces/tasks/${taskId}`;
-  const piAgentDirInContainer = `${WORKSPACE_MOUNT_TARGET}/.pi/agent`;
   return {
-    hostWorkspaceDir,
-    localWorkspaceDir,
-    piAgentDirInContainer,
-    modelsJsonTargetInContainer: `${piAgentDirInContainer}/models.json`,
-    skillsDirInContainer: `${piAgentDirInContainer}/skills`,
-    localPiAgentDir: `${localWorkspaceDir}/.pi/agent`,
+    hostWorkspaceDir: `${config.nextTimeData}/workspaces/tasks/${taskId}`,
+    localWorkspaceDir: `${config.localDataDir}/workspaces/tasks/${taskId}`,
+    hostPlatformDir: `${config.nextTimeData}/${PLATFORM_ROOT_RELATIVE_PATH}/tasks/${taskId}`,
+    localPlatformDir: `${config.localDataDir}/${PLATFORM_ROOT_RELATIVE_PATH}/tasks/${taskId}`,
   };
 }
 
-/** Task-mode analogue of `localSystemPromptPath` (P-A2; docs/platform-admin-design.md §6.6) —
- *  this container's own view of the same `/workspace/.nexttime/system-prompt.md` the runtime
- *  image's `entrypoint.sh` reads, inside this Task's own workspace directory. Takes the already-
- *  resolved `TaskPaths` rather than `(config, taskId)` because every caller (`task-service.ts`'s
- *  `spawn()`) has them in hand for the bind mounts anyway. */
+/** Task-mode analogue of `localSystemPromptPath` (P-A2; docs/platform-admin-design.md §6.6),
+ *  inside this Task's own platform directory. Takes the already-resolved `TaskPaths` rather than
+ *  `(config, taskId)` because every caller (`task-service.ts`'s `spawn()`) has them in hand for
+ *  the bind mounts anyway. */
 export function taskSystemPromptPath(paths: TaskPaths): string {
-  return systemPromptPathIn(paths.localWorkspaceDir);
+  return `${paths.localPlatformDir}/${SYSTEM_PROMPT_FILE_NAME}`;
 }
 
 /** This container's own view of the `workspaces/tasks/` root — used by the retention sweep
  *  (`task-service.ts`) to enumerate finished Task directories. */
 export function localTaskWorkspacesRootDir(config: SupervisorConfig): string {
   return `${config.localDataDir}/workspaces/tasks`;
+}
+
+/** This container's own view of the `workspaces/.platform/tasks/` root — swept by the same
+ *  retention rule as the Task workspaces themselves (`task-service.ts`). */
+export function localTaskPlatformRootDir(config: SupervisorConfig): string {
+  return `${config.localDataDir}/${PLATFORM_ROOT_RELATIVE_PATH}/tasks`;
 }

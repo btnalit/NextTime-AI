@@ -14,16 +14,12 @@
  * `spawn-spec.ts` documents (verified there against the "httpoxy" plain-`http://`-only-honors-
  * lowercase behavior; identical proxy setup, identical reasoning, not re-verified here).
  *
- * Deliberately **not** in this list, unlike resident mode's entry spec: `PI_CODING_AGENT_DIR` and
- * `HOME`. Both are already correct without being set — `HOME=/workspace` is baked into
- * `deploy/worker-runtime/Dockerfile` at the image level (present in every container regardless of
- * this package's own `Env` array), and pi 0.84.4's default agent dir
- * (`packages/coding-agent/src/config.ts` `getAgentDir()`, pinned reference checkout) is
- * `join(homedir(), '.pi', 'agent')` — `homedir()` reads `HOME`, so the default already resolves to
- * `/workspace/.pi/agent`, exactly where `host-paths.ts` `taskWorkspacePaths` mounts `models.json`
- * and `task-service.ts`'s `spawn()` writes each `skillsInline[]` entry's files. `on_behalf_of`/
- * `WORKSPACE_ID` needing to reach the extension the way resident
- * mode's own doc comment describes is unaffected — `WORKSPACE_ID` IS one of this list's env vars.
+ * Deliberately **not** in this list, unlike resident mode's entry spec: `HOME`, already
+ * `/workspace` at the image level (`deploy/worker-runtime/Dockerfile`). Neither mode sets
+ * `PI_CODING_AGENT_DIR`: entrypoint.sh owns pi's config directory (rebuilt in `/tmp` at every
+ * start, STATUS leftover 422). The mounts match resident mode's: the Task workspace read-write,
+ * the Task's platform directory (published system prompt and Skills, written by
+ * `task-service.ts`'s `spawn()`) and `models.json` read-only.
  *
  * Nothing from this process's own env is ever forwarded (`docker-client.ts` passes exactly the
  * array built here, never inherits `process.env`) — `task-spawn-spec.test.ts` asserts this
@@ -37,7 +33,13 @@ import {
 } from '@nexttime/shared';
 import type { SupervisorConfig } from './config.js';
 import type { ContainerSpec } from './docker-client.js';
-import { hostModelsJsonPath, taskWorkspacePaths } from './host-paths.js';
+import {
+  MODELS_JSON_MOUNT_TARGET,
+  PLATFORM_MOUNT_TARGET,
+  WORKSPACE_MOUNT_TARGET,
+  hostModelsJsonPath,
+  taskWorkspacePaths,
+} from './host-paths.js';
 import { EGRESS_DENY_LABEL, ENTRY_ROLE_LABEL as TASK_ROLE_LABEL } from './spawn-spec.js';
 
 /** Shares the `nexttime.role` label *key* with resident mode's `ENTRY_ROLE_LABEL`
@@ -115,8 +117,9 @@ export function buildTaskSpawnSpec(input: BuildTaskSpawnSpecInput): ContainerSpe
   if (correlationId !== undefined) env.push(`${CORRELATION_ID_ENV}=${correlationId}`);
 
   const binds: string[] = [
-    `${paths.hostWorkspaceDir}:/workspace`,
-    `${hostModelsJsonPath(config)}:${paths.modelsJsonTargetInContainer}:ro`,
+    `${paths.hostWorkspaceDir}:${WORKSPACE_MOUNT_TARGET}`,
+    `${paths.hostPlatformDir}:${PLATFORM_MOUNT_TARGET}:ro`,
+    `${hostModelsJsonPath(config)}:${MODELS_JSON_MOUNT_TARGET}:ro`,
   ];
 
   return {

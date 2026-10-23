@@ -52,6 +52,20 @@ Handle 写进 `HANDLE_BINDINGS_FILE`（默认 `/run/handle-bindings/bindings.jso
 `com.docker.compose.network=workers` 标签在启动时解析。细节见 `src/resident-service.ts`、
 `src/spawn-spec.ts` 的模块注释，以及 `docs/runbooks/host-worker-runtime.md` §1–§8（含主机验收记录）。
 
+**白名单启动（STATUS 遗留 422）**：pi 只加载 `entrypoint.sh` 点名的东西（`docs/runbooks/pi-upgrade.md`
+§2.6）。这个服务写给 pi 的系统提示与 Skill 放在工作区**之外**的平台目录
+`${NEXTTIME_DATA}/workspaces/.platform/principals/<principalId>/`（Task 模式是
+`.platform/tasks/<taskId>/`；id 都是 UUID，不会与 `.platform` 撞名），只读挂到
+`/opt/nexttime/platform`；`models.json` 只读挂到 `/opt/nexttime/models.json`（`src/host-paths.ts`）。
+智能体自己的工具改不了这两样，工作区里写什么 pi 都不读。pi 的配置目录不再挂载，由 `entrypoint.sh`
+在容器 `/tmp` 里每次启动重建。回收工作区（`reclaim`、`scripts/delete-workspace.sh`）连同平台目录一起删。
+
+**运行时契约**（`src/runtime-contract.ts`）：上面的挂载布局与镜像 label
+`ai.nexttime.runtime-contract=2` 绑定。`/resident/spawn` 要新建容器、`/task/spawn` 起容器之前，经只读的
+镜像连接（`DOCKER_IMAGES_HOST`）读镜像 label，不是当前版本（含遗留 422 之前构建的镜像）就返回
+`409 {"error":{"code":"runtime_image_incompatible"}}`，不动正在跑的容器；读不到镜像信息时记一行 warn
+照常起。再改布局时与 `deploy/worker-runtime/Dockerfile` 的 label 一起改版本号。
+
 `POST /resident/spawn` 的请求体（`SpawnRequestSchema`）额外接受 `systemPrompt?`/`model?`
 （S2.6，来自已发布入口 WorkerDefinition，agent-host 在每个 `startTurn` 上重新解析并转发）与
 `egressDeny?`（feat/egress-definition-lists，同一个已发布入口 WorkerDefinition 的
@@ -61,7 +75,7 @@ Handle 写进 `HANDLE_BINDINGS_FILE`（默认 `/run/handle-bindings/bindings.jso
 
 **`skillsInline?`（S3.13）**：调用方（AgentProfile 的 `effective.enabledSkills`，内核解析并渲染）
 自己的 Skill 挂载——复用 Task 模式上面那条 `skillsInline` 的**同一个** Zod schema（`config.ts`
-`TaskSkillInlineSchema`）与写盘机制（`<agentDir>/skills/<name>/<fileName>`），但触发方式不同：
+`TaskSkillInlineSchema`）与写盘机制（平台目录下 `skills/<name>/<fileName>`），但触发方式不同：
 Task 容器每次都是全新工作目录，天然每次都写；常驻入口容器的工作目录跨重建持久化，所以：
 
 - 只在这次 spawn 真的要（重）建容器时才写（`resident-service.ts` `writeSkillsInline`）——单纯复用
@@ -98,6 +112,8 @@ Task 容器每次都是全新工作目录，天然每次都写；常驻入口容
   "skillsInline": [           // 可选（S2.14）；见下方"skillsInline"一条
     { "name": "...", "files": { "SKILL.md": "..." } }
   ],
+  "systemPrompt": "...",     // 可选（P-A2）；写成这个 Task 平台目录的 system-prompt.md，
+                              // 省略时删掉该文件、容器用镜像自带的默认提示
   "timeoutSec": 90,          // 可选，默认 TASK_MAX_RUNTIME_SEC
   "egressDeny": ["blocked.example.com"], // 可选（feat/egress-definition-lists），见下方一条
 }
@@ -126,8 +142,9 @@ S2.14 上线 `skillsInline` 之后，这个代码库里从未有任何调用方�
 写成宿主机文件再传路径进来。`skillsInline[]` 因此按内容传：内核
 （`application/worker/skills.ts` `renderSkillMarkdownFile`）把已发布 Skill 渲染成 pi 的
 `SKILL.md` 格式文本，随 spawn 请求体本身传过来；这个服务在 `docker.createAndStart` **之前**把每个
-条目的 `files` 写进这个 Task 自己已经会挂载的 `<agentDir>/skills/<name>/` 目录（`task-service.ts`
-`spawn()`）——不需要新增挂载，整个 Task 工作目录本来就整体挂在 `/workspace`。这是现在**唯一**能把
+条目的 `files` 写进这个 Task 自己的平台目录 `.platform/tasks/<taskId>/skills/<name>/`（`task-service.ts`
+`spawn()`，每次 spawn 先清空 `skills/`，同一 Task 的上一个 WorkerRun 留下的 Skill 不会带过来），
+只读挂到 `/opt/nexttime/platform`，`entrypoint.sh` 以 `--skill` 显式加载。这是现在**唯一**能把
 Skill 放进 Worker 容器的方式。
 
 - `name`：安全单段路径规则（`config.ts`）。
@@ -157,16 +174,13 @@ resident 模式自己的 `SpawnRequestSchema`/`StopRequestSchema`（`workspaceId
 - **env 恰好是** `KERNEL_URL / KERNEL_LLM_URL / CAPABILITY_HANDLE / TASK_ID / WORKSPACE_ID /
   WORKER_RUN_ID / NEXTTIME_MODE=worker / HTTP_PROXY / HTTPS_PROXY / http_proxy / https_proxy /
   NO_PROXY / no_proxy`（`CAPABILITY_HANDLE=source-bound`，见上文"Handle 来源绑定"）——大小写代理变量都设的原因见 `spawn-spec.ts`（resident 模式）已经记录的
-  "httpoxy" 规避说明，同一理由，不重复验证。**没有** `PI_CODING_AGENT_DIR` 与 `HOME`：`HOME=/workspace`
-  烘焙在 `deploy/worker-runtime/Dockerfile` 镜像层（不受本包 `Env` 数组影响），pi 0.84.4 未设
-  `PI_CODING_AGENT_DIR` 时的默认值是 `join(homedir(), '.pi', 'agent')`（对照
-  `packages/coding-agent/src/config.ts` 验证）——`homedir()` 读 `HOME`，两者结合后默认值恰好等于
-  resident 模式显式设置的那个路径，不需要重复设置。
-- **挂载**：`${NEXTTIME_DATA}/workspaces/tasks/<taskId>` → `/workspace`（读写）；`models.json` 只读
-  挂到 `/workspace/.pi/agent/models.json`（与 resident 模式同一目标路径，理由同上）。`skillsInline[]`
-  条目按内容**写入**（不是 bind mount）到 `/workspace/.pi/agent/skills/<name>`——该路径是 pi 0.84.4
-  的默认全局 skills 目录（`packages/coding-agent/src/core/skills.ts` `loadSkills`:
-  `join(resolvedAgentDir, 'skills')`），对照参考项目验证过，不是猜测。**从不**挂载任何用户的入口
+  "httpoxy" 规避说明，同一理由，不重复验证。**没有** `HOME`：`HOME=/workspace` 烘焙在
+  `deploy/worker-runtime/Dockerfile` 镜像层（不受本包 `Env` 数组影响）。**没有** `PI_CODING_AGENT_DIR`
+  （两种模式都没有）：pi 的配置目录归 `entrypoint.sh`，每次启动在 `/tmp/pi-agent` 重建（白名单启动，见上文）。
+- **挂载**：`${NEXTTIME_DATA}/workspaces/tasks/<taskId>` → `/workspace`（读写）；平台目录
+  `${NEXTTIME_DATA}/workspaces/.platform/tasks/<taskId>` → `/opt/nexttime/platform`（只读：
+  `system-prompt.md` 与 `skills/<name>/`，`entrypoint.sh` 以 `--system-prompt` / `--skill` 显式加载）；
+  `models.json` → `/opt/nexttime/models.json`（只读，与 resident 模式相同）。**从不**挂载任何用户的入口
   工作区（I15）。**没有**任何调用方能再指定一个任意宿主机路径只读挂进 Worker 容器——早前的
   `skills[].hostPath` 字段本身已随 fix/runtime-hardening 整个删除（见上文"已删除"一条）。
 - **CMD**：给了 `model` 就是 `['--model', model]`；`entrypoint.sh` 把容器 CMD 接在它自己固定的 pi
@@ -200,8 +214,8 @@ resident 模式自己的 `SpawnRequestSchema`/`StopRequestSchema`（`workspaceId
 
 ### 工作目录退休（retention sweep）
 
-`TASK_WORKDIR_RETENTION_HOURS`（默认 72）——每小时一次，删除 `workspaces/tasks/` 下 mtime 超过窗口、
-且登记表里没有标记为 `running` 的目录。小、朴素、可配置、每次删除都打一行日志
+`TASK_WORKDIR_RETENTION_HOURS`（默认 72）——每小时一次，删除 `workspaces/tasks/` 与
+`workspaces/.platform/tasks/` 下 mtime 超过窗口、且登记表里没有标记为 `running` 的目录。小、朴素、可配置、每次删除都打一行日志
 （`task-service.ts` `sweepRetention`）。
 
 ## 事件驱动的 egress 来源反注册（`src/docker-events.ts`，feat/egress-docker-events）

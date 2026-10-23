@@ -87,6 +87,7 @@ import {
   createSupervisorMetrics,
 } from './metrics.js';
 import type { ResidentService } from './resident-service.js';
+import { RuntimeImageIncompatibleError } from './runtime-contract.js';
 import type { TaskService } from './task-service.js';
 
 export interface CreateServerOptions {
@@ -198,6 +199,10 @@ export function createServer(options: CreateServerOptions): FastifyInstance {
       reply.code(200);
       return outcome;
     } catch (err) {
+      if (err instanceof RuntimeImageIncompatibleError) {
+        reply.code(409);
+        return { error: { code: err.code, message: err.message } };
+      }
       request.log?.error?.(err, 'resident/spawn failed');
       reply.code(500);
       return { error: { code: 'internal_error', message: String(err) } };
@@ -335,6 +340,10 @@ export function createServer(options: CreateServerOptions): FastifyInstance {
       reply.code(200);
       return outcome;
     } catch (err) {
+      if (err instanceof RuntimeImageIncompatibleError) {
+        reply.code(409);
+        return { error: { code: err.code, message: err.message } };
+      }
       request.log?.error?.(err, 'task/spawn failed');
       reply.code(500);
       return { error: { code: 'internal_error', message: String(err) } };

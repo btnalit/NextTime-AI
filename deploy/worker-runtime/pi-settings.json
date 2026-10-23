@@ -1,0 +1,4 @@
+{
+  "defaultTools": ["read", "bash", "edit", "write", "grep", "find", "ls"],
+  "defaultProjectTrust": "never"
+}

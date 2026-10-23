@@ -6,6 +6,11 @@ import { loadConfig } from './config.js';
 import { createEgressMapStore } from './egress-map.js';
 import type { EgressMapStore } from './egress-map.js';
 import { createResidentService } from './resident-service.js';
+import {
+  IMAGE_RUNTIME_CONTRACT_LABEL,
+  RUNTIME_CONTRACT_VERSION,
+  RuntimeImageIncompatibleError,
+} from './runtime-contract.js';
 import { createFakeDockerClient } from './test-support/fake-docker-client.js';
 import { memoryHandleBindings } from './test-support/memory-handle-bindings.js';
 
@@ -26,6 +31,11 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
+
+/** This container's own view of a principal's platform directory (host-paths.ts). */
+function platformDir(principalId: string): string {
+  return join(dir, 'workspaces', '.platform', 'principals', principalId);
+}
 
 function setup(overrides: Record<string, string> = {}) {
   const config = loadConfig({
@@ -79,7 +89,7 @@ describe('resident-service spawn', () => {
     ).resolves.toBeDefined();
   });
 
-  it('writes systemPrompt to /workspace/.nexttime/system-prompt.md before spawning (S2.6)', async () => {
+  it('writes systemPrompt to the principal’s platform directory before spawning (S2.6)', async () => {
     const { service } = setup();
     await service.spawn({
       workspaceId: 'ws-1',
@@ -88,14 +98,14 @@ describe('resident-service spawn', () => {
       systemPrompt: 'you are the entry agent',
     });
 
-    const filePath = join(dir, 'workspaces', 'alice', '.nexttime', 'system-prompt.md');
+    const filePath = join(platformDir('alice'), 'system-prompt.md');
     expect(existsSync(filePath)).toBe(true);
     expect(readFileSync(filePath, 'utf8')).toBe('you are the entry agent');
   });
 
   it('overwrites system-prompt.md when the content differs, leaves it alone when unchanged', async () => {
     const { service } = setup();
-    const filePath = join(dir, 'workspaces', 'alice', '.nexttime', 'system-prompt.md');
+    const filePath = join(platformDir('alice'), 'system-prompt.md');
 
     await service.spawn({
       workspaceId: 'ws-1',
@@ -118,7 +128,7 @@ describe('resident-service spawn', () => {
     const { service } = setup();
     await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
 
-    const filePath = join(dir, 'workspaces', 'alice', '.nexttime', 'system-prompt.md');
+    const filePath = join(platformDir('alice'), 'system-prompt.md');
     expect(existsSync(filePath)).toBe(false);
   });
 
@@ -312,15 +322,86 @@ describe('resident-service spawn', () => {
     });
   });
 
-  it('pre-creates .pi/agent under the local workspace dir before asking Docker to create the container', async () => {
-    // Host verification (S1.5a) found Docker auto-creating .pi/agent as root (as the parent of
-    // the models.json bind-mount target) blocks the non-root entry container from creating the
-    // sibling .pi/sessions. This pre-creation (as this process's own uid, like localWorkspaceDir
-    // itself) is the fix — assert the directory exists with the right shape before spawn returns.
+  it('pre-creates the workspace and platform directories before asking Docker to create the container', async () => {
+    // Both are bind sources; Docker would create a missing one as root (host verification S1.5a
+    // found that blocking the non-root entry container). Created as this process's own uid.
     const { service, config } = setup();
     await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
-    const stat = statSync(join(config.localDataDir, 'workspaces', 'alice', '.pi', 'agent'));
-    expect(stat.isDirectory()).toBe(true);
+    expect(statSync(join(config.localDataDir, 'workspaces', 'alice')).isDirectory()).toBe(true);
+    expect(statSync(platformDir('alice')).isDirectory()).toBe(true);
+    // Nothing pi loads is written into the workspace any more (STATUS leftover 422).
+    expect(existsSync(join(config.localDataDir, 'workspaces', 'alice', '.pi'))).toBe(false);
+    expect(existsSync(join(config.localDataDir, 'workspaces', 'alice', '.nexttime'))).toBe(false);
+  });
+
+  it('refuses an image that does not speak this supervisor’s mount layout and leaves the running container alone', async () => {
+    const { service, docker } = setup();
+    const first = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
+    docker.registerImage({
+      id: 'sha256:old',
+      tags: ['nexttime-ai-worker-runtime:before-422'],
+      created: '2026-10-01T00:00:00Z',
+      labels: { 'ai.nexttime.pi-version': '1.1.0' },
+    });
+    await expect(
+      service.spawn({
+        workspaceId: 'ws-1',
+        principalId: 'alice',
+        handle: 'h',
+        image: 'nexttime-ai-worker-runtime:before-422',
+      }),
+    ).rejects.toBeInstanceOf(RuntimeImageIncompatibleError);
+    // The image change would have forced a recreate; refused before anything was torn down.
+    expect(docker.stopCalls).toEqual([]);
+    expect(docker.removeCalls).toEqual([]);
+    expect(docker.createCalls).toHaveLength(1);
+    expect((await service.status('alice'))?.containerId).toBe(first.containerId);
+  });
+
+  it('reads the image through the images connection, and spawns anyway when that read fails', async () => {
+    const config = loadConfig({
+      NEXTTIME_DATA: '/host/data',
+      LOCAL_DATA_DIR: dir,
+      EGRESS_SOURCE_MAP_FILE: join(dir, 'egress-sources.json'),
+    });
+    const docker = createFakeDockerClient();
+    const imagesDocker = createFakeDockerClient();
+    imagesDocker.registerImage({
+      id: 'sha256:new',
+      tags: ['nexttime-ai-worker-runtime:after-422'],
+      created: '2026-10-23T00:00:00Z',
+      labels: { [IMAGE_RUNTIME_CONTRACT_LABEL]: RUNTIME_CONTRACT_VERSION },
+    });
+    // The container connection cannot read images (docker-socket-proxy IMAGES=0).
+    docker.inspectImage = async () => {
+      throw new Error('403 Forbidden');
+    };
+    const service = createResidentService({
+      config,
+      docker,
+      imagesDocker,
+      handleBindings: memoryHandleBindings(),
+      egressMap: createEgressMapStore(config.egressSourceMapFile),
+    });
+    await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h',
+      image: 'nexttime-ai-worker-runtime:after-422',
+    });
+    expect(docker.createCalls).toHaveLength(1);
+
+    imagesDocker.inspectImage = async () => {
+      throw new Error('images proxy unreachable');
+    };
+    await service.reclaim('alice');
+    await service.spawn({
+      workspaceId: 'ws-1',
+      principalId: 'alice',
+      handle: 'h',
+      image: 'nexttime-ai-worker-runtime:after-422',
+    });
+    expect(docker.createCalls).toHaveLength(2);
   });
 
   it('spawn still succeeds when the egress map store throws (best-effort registration)', async () => {
@@ -573,7 +654,7 @@ describe('resident-service list / listImages (S7-E inventory)', () => {
 describe('resident-service spawn — S3.13 skillsInline', () => {
   const SKILL = { name: 'writing-tips', files: { 'SKILL.md': '# writing tips\n\nbody' } };
 
-  it('writes skillsInline[] under <agentDir>/skills/<name>/ on first spawn', async () => {
+  it('writes skillsInline[] under skills/<name>/ in the platform directory on first spawn', async () => {
     const { service } = setup();
     await service.spawn({
       workspaceId: 'ws-1',
@@ -582,16 +663,7 @@ describe('resident-service spawn — S3.13 skillsInline', () => {
       skillsInline: [SKILL],
     });
 
-    const filePath = join(
-      dir,
-      'workspaces',
-      'alice',
-      '.pi',
-      'agent',
-      'skills',
-      'writing-tips',
-      'SKILL.md',
-    );
+    const filePath = join(platformDir('alice'), 'skills', 'writing-tips', 'SKILL.md');
     expect(existsSync(filePath)).toBe(true);
     expect(readFileSync(filePath, 'utf8')).toBe('# writing tips\n\nbody');
   });
@@ -674,16 +746,7 @@ describe('resident-service spawn — S3.13 skillsInline', () => {
       handle: 'h',
       skillsInline: [SKILL],
     });
-    const filePath = join(
-      dir,
-      'workspaces',
-      'alice',
-      '.pi',
-      'agent',
-      'skills',
-      'writing-tips',
-      'SKILL.md',
-    );
+    const filePath = join(platformDir('alice'), 'skills', 'writing-tips', 'SKILL.md');
     expect(existsSync(filePath)).toBe(true);
 
     const second = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
@@ -732,11 +795,12 @@ describe('resident-service stop', () => {
 });
 
 describe('resident-service reclaim (S8 W5 leftover 77)', () => {
-  it('force-removes the container (not just stop) and deletes the workspace directory', async () => {
+  it('force-removes the container (not just stop) and deletes the workspace and platform directories', async () => {
     const { service, docker, egressMap } = setup();
     const outcome = await service.spawn({ workspaceId: 'ws-1', principalId: 'alice', handle: 'h' });
     const workspaceDir = join(dir, 'workspaces', 'alice');
     expect(existsSync(workspaceDir)).toBe(true);
+    expect(existsSync(platformDir('alice'))).toBe(true);
 
     await service.reclaim('alice');
 
@@ -744,6 +808,7 @@ describe('resident-service reclaim (S8 W5 leftover 77)', () => {
     expect(docker.stopCalls).toEqual([]); // reclaim never calls stop() — remove() force-stops
     expect(egressMap.read()[outcome.ip as string]).toBeUndefined();
     expect(existsSync(workspaceDir)).toBe(false);
+    expect(existsSync(platformDir('alice'))).toBe(false);
     expect(await service.status('alice')).toBeUndefined();
   });
 

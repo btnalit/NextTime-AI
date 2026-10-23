@@ -4,10 +4,41 @@
 # filesystem read-only, `/workspace` (the per-principal bind mount) and `/tmp` (tmpfs) writable.
 #
 # `NEXTTIME_MODE` (entry/worker/interactive) is read by @nexttime/platform-extension itself, not
-# branched on here — this script's job is only to prepare `/workspace`'s directory layout (which
-# is the same regardless of mode: pi's own session/config dirs, plus this S1 stopgap system
-# prompt) and exec pi with the flags verified against pi 0.84.4's own CLI and re-verified on
-# 0.87.1, 0.99.2 and 1.1.0 (see Dockerfile header for the exact source files/lines cited).
+# branched on here — this script's job is only to prepare pi's directories and exec pi with an
+# explicit whitelist of everything it loads, with the flags verified against pi 0.84.4's own CLI
+# and re-verified on 0.87.1, 0.99.2 and 1.1.0 (see Dockerfile header for the exact source
+# files/lines cited).
+#
+# Whitelist start (STATUS leftover 422, docs/runbooks/pi-upgrade.md §2.6; maintainer 2026-10-23:
+# the platform uses pi's core runtime only, every outer layer is the platform's own): pi loads nothing it finds on its own — not from
+# `/workspace` (persistent, written by the agent's own bash / write tools), not from `$HOME`, not
+# from its agent directory. What it loads is exactly what this script names:
+#   - the platform extension (`-e`), the platform's system prompt (`--system-prompt`) and the
+#     published Skills (`--skill`) — the last two from `/opt/nexttime/platform`, which
+#     worker-supervisor writes outside the workspace and mounts read-only (host-paths.ts);
+#   - pi's settings (`/opt/nexttime/pi-settings.json`, image content) and models.json (read-only
+#     mount), copied / linked into a fresh agent directory under `/tmp` at every start.
+# Everything else is switched off (pi 1.1.0 `dist/cli/args.js`, `dist/core/resource-loader.js`):
+#   --no-context-files            AGENTS.md / CLAUDE.md from the agent dir, cwd and every parent.
+#   --no-extensions               extension discovery, settings/package extensions, and pi's
+#                                  built-in extensions (llama.cpp, codemode, tool-search, mcp —
+#                                  the platform uses none of them); `-e` paths still load.
+#   --no-skills                   skill discovery (agent dir, `~/.agents/skills`, settings,
+#                                  packages); `--skill` paths still load.
+#   --no-prompt-templates / --no-themes   the same for prompt templates and themes.
+#   --no-mcp                      pi's own MCP client (systems are reached through the kernel).
+#   --no-approve                  project-local `.pi/` resources (settings, extensions, skills,
+#                                  SYSTEM.md / APPEND_SYSTEM.md, mcp.json) are never trusted,
+#                                  whatever a trust.json or `defaultProjectTrust` says.
+#   --append-system-prompt ""     an explicit (empty) addendum, so pi never looks for
+#                                  `<agentDir>/APPEND_SYSTEM.md` — no flag switches that one off.
+# pi's agent directory itself is not discoverable state either: it holds auth.json, trust.json,
+# models-store.json and settings.json, which pi reads with no switch to stop it, and pi must be
+# able to write there (settings locks), so it cannot be read-only. It lives under `/tmp` (the
+# container's tmpfs) and is rebuilt from scratch here at every start; the platform extension puts
+# it back to exactly this state whenever pi replaces its session — a new, resumed or forked
+# conversation, a reload (`src/pi-agent-dir.ts`) — so a change the agent makes there never
+# outlives the conversation it was made in.
 #
 # Flags, verified against pi 0.84.4 (packages/coding-agent/src/cli/args.ts) and unchanged in
 # 0.87.1, 0.99.2 and 1.1.0 (`dist/cli/args.js`, `pi --help`):
@@ -27,8 +58,9 @@
 # 主要限制是访问其他系统"): every pi built-in the image can actually run is active — read / bash /
 # edit / write / grep / find / ls. pi's own default active set is only read / bash / edit / write
 # (`core/sdk.js` `defaultActiveToolNames`; 0.99.2: `core/settings-manager.js` `DEFAULT_TOOL_NAMES`);
-# the wider set is written as `defaultTools` into pi's global settings below — a plain-name list,
-# which still replaces the default set on 1.1.0 (the `+name`/`-name` modifiers are not used).
+# the wider set is `defaultTools` in pi's global settings (`pi-settings.json`, next to this file) — a
+# plain-name list, which still replaces the default set on 1.1.0 (the `+name`/`-name` modifiers are
+# not used).
 # 0.99's built-in `codemode`/`tool_search` tools are `defaultActive: false` and not listed, so they
 # stay off (docs/runbooks/pi-upgrade.md §2.4). NOT via `--tools`: that option is an allowlist over *every* tool,
 # extension tools included (`agent-session.js` `_refreshToolRegistry` `isAllowedTool`), so it
@@ -71,56 +103,49 @@
 
 set -eu
 
-SESSION_DIR="/workspace/.pi/sessions"
-AGENT_DIR="/workspace/.pi/agent"
-SYSTEM_PROMPT_FILE="/workspace/.nexttime/system-prompt.md"
-EXTENSION_ENTRY="/opt/nexttime/platform-extension/dist/index.js"
+# Test-only path prefix: packages/platform-extension's runtime-whitelist test runs this script on a
+# CI runner, with real pi, under a scratch directory standing in for `/`. worker-supervisor never
+# sets it (its env allowlist, spawn-spec.ts / task-spawn-spec.ts), and an entry or Worker container
+# that has it refuses to start rather than load anything from another root.
+ROOT="${NEXTTIME_RUNTIME_ROOT:-}"
+if [ -n "$ROOT" ]; then
+	case "${NEXTTIME_MODE:-}" in
+	entry | worker)
+		echo "nexttime-selfcheck check=runtime_root result=fail reason=test_only_variable_set"
+		exit 1
+		;;
+	esac
+fi
 
-mkdir -p "$SESSION_DIR" "$AGENT_DIR" "/workspace/.nexttime" "/workspace/.local"
+SESSION_DIR="$ROOT/workspace/.pi/sessions"
+AGENT_DIR="$ROOT/tmp/pi-agent"
+PLATFORM_DIR="$ROOT/opt/nexttime/platform"
+PI_SETTINGS_FILE="$ROOT/opt/nexttime/pi-settings.json"
+MODELS_JSON="$ROOT/opt/nexttime/models.json"
+DEFAULT_SYSTEM_PROMPT_FILE="$ROOT/opt/nexttime/default-system-prompt.md"
+EXTENSION_ENTRY="$ROOT/opt/nexttime/platform-extension/dist/index.js"
 
-# pi's global settings live at <agentDir>/settings.json — `/workspace/.pi/agent` for both modes
-# (entry: PI_CODING_AGENT_DIR; task: HOME=/workspace, pi's default). Merged, never overwritten:
-# pi and the agent may keep their own settings there. An unreadable file is left alone (pi then
-# falls back to its default four tools) rather than failing the container.
-node -e '
-const fs = require("fs");
-const file = process.argv[1];
-let settings = {};
-try {
-  settings = JSON.parse(fs.readFileSync(file, "utf8"));
-} catch (err) {
-  if (err.code !== "ENOENT") {
-    console.log("nexttime-selfcheck check=pi_default_tools result=warn reason=settings_unreadable");
-    process.exit(0);
-  }
-}
-settings.defaultTools = ["read", "bash", "edit", "write", "grep", "find", "ls"];
-try {
-  fs.writeFileSync(file, JSON.stringify(settings, null, 2) + "\n");
-} catch {
-  console.log("nexttime-selfcheck check=pi_default_tools result=warn reason=settings_unwritable");
-  process.exit(0);
-}
-console.log("nexttime-selfcheck check=pi_default_tools result=ok tools=" + settings.defaultTools.join(","));
-' "$AGENT_DIR/settings.json"
+mkdir -p "$SESSION_DIR" "$ROOT/workspace/.local"
 
-# S1 stopgap default (design doc §7.2: "--system-prompt 来自该用户入口 WorkerDefinition 的已发布
-# 版本" — WorkerDefinition-driven prompts land in S2.6; until then every entry container gets
-# this static prompt). Written only if missing, so a future mechanism that pre-seeds a real one
-# into the workspace before first spawn is never clobbered on restart.
+# pi's agent directory, rebuilt at every start (header): the platform's settings, the platform's
+# models.json, and nothing else. `PI_CODING_AGENT_DIR` is pi's own variable (`dist/config.js`
+# `getAgentDir`); the platform extension rebuilds the same directory from `NEXTTIME_PI_SETTINGS`
+# and `NEXTTIME_PI_MODELS` whenever pi replaces its session (header).
+rm -rf "$AGENT_DIR"
+mkdir -p "$AGENT_DIR"
+cp "$PI_SETTINGS_FILE" "$AGENT_DIR/settings.json"
+ln -s "$MODELS_JSON" "$AGENT_DIR/models.json"
+export PI_CODING_AGENT_DIR="$AGENT_DIR"
+export NEXTTIME_PI_SETTINGS="$PI_SETTINGS_FILE"
+export NEXTTIME_PI_MODELS="$MODELS_JSON"
+
+# The published entry WorkerDefinition's prompt (S2.6) or Worker prompt (P-A2), written by
+# worker-supervisor; the image's own default when there is none yet.
+SYSTEM_PROMPT_FILE="$PLATFORM_DIR/system-prompt.md"
+system_prompt_source=platform
 if [ ! -f "$SYSTEM_PROMPT_FILE" ]; then
-	cat >"$SYSTEM_PROMPT_FILE" <<'EOF'
-You are the entry agent for a NextTime-AI user, running inside your own container with a
-persistent workspace at /workspace. This workspace has not published an entry WorkerDefinition
-yet (or the platform could not load it), so you are running with the default configuration: real
-file, bash, and Python tools, package installs through the platform's egress proxy, and read
-access to the platform's shared knowledge graph through the `get_object`, `traverse`, `search`,
-`explain`, and `get_task` tools.
-
-You cannot directly reach internal systems or anything requiring credentials. Answer from the
-graph, your own tools, and the public internet, and say plainly when something would need a
-capability you don't have.
-EOF
+	SYSTEM_PROMPT_FILE="$DEFAULT_SYSTEM_PROMPT_FILE"
+	system_prompt_source=default
 fi
 
 if [ "${NEXTTIME_MODE:-}" = "worker" ] || [ "${NEXTTIME_MODE:-}" = "entry" ]; then
@@ -216,9 +241,25 @@ if [ "${NEXTTIME_MODE:-}" = "worker" ] || [ "${NEXTTIME_MODE:-}" = "entry" ]; th
 	fi
 fi
 
+# Published Skills (S2.14 / S3.13), one directory per Skill, written by worker-supervisor.
+skill_count=0
+if [ -d "$PLATFORM_DIR/skills" ]; then
+	skill_count=$(find "$PLATFORM_DIR/skills" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
+	set -- --skill "$PLATFORM_DIR/skills" "$@"
+fi
+echo "nexttime-selfcheck check=pi_resource_discovery result=off system_prompt=${system_prompt_source} skills=${skill_count}"
+
 exec pi \
 	--mode rpc \
 	--session-dir "$SESSION_DIR" \
+	--no-context-files \
+	--no-extensions \
+	--no-skills \
+	--no-prompt-templates \
+	--no-themes \
+	--no-mcp \
+	--no-approve \
+	--append-system-prompt "" \
 	-e "$EXTENSION_ENTRY" \
 	--system-prompt "$SYSTEM_PROMPT_FILE" \
 	"$@"

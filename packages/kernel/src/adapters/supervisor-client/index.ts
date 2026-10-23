@@ -114,9 +114,9 @@ export interface TaskSpawnInput {
    *  WorkerDefinition's own egress deny list, never re-derived by this client. */
   readonly egressDeny?: readonly string[];
   /** P-A2: the Worker container's system prompt (the WorkerDefinition's own `systemPrompt` plus
-   *  the platform's `instanceInstructions`), written by worker-supervisor to
-   *  `/workspace/.nexttime/system-prompt.md` in the Task workspace before start. Omitted =
-   *  entrypoint.sh's static default (the pre-P-A2 behaviour). */
+   *  the platform's `instanceInstructions`), written by worker-supervisor into the Task's
+   *  platform directory outside its workspace (read-only `/opt/nexttime/platform/system-prompt.md`
+   *  in the container) before start. Omitted = the runtime image's default prompt. */
   readonly systemPrompt?: string;
 }
 

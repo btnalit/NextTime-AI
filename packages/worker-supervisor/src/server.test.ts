@@ -335,6 +335,35 @@ describe('POST /resident/spawn', () => {
     expect(docker.createCalls).toHaveLength(0);
   });
 
+  it('409s an allowlisted image that does not speak this supervisor’s mount layout', async () => {
+    const { app, docker } = setup({ WORKER_IMAGE_ALLOWLIST: 'old-runtime-image' });
+    docker.registerImage({
+      id: 'sha256:old',
+      tags: ['old-runtime-image'],
+      created: '2026-10-01T00:00:00Z',
+      labels: { 'ai.nexttime.pi-version': '1.1.0' },
+    });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/resident/spawn',
+      headers: AGENT_HOST_AUTH,
+      payload: { workspaceId: WS_R, principalId: ALICE, handle: 'h', image: 'old-runtime-image' },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.code).toBe('runtime_image_incompatible');
+    expect(docker.createCalls).toHaveLength(0);
+
+    const task = await app.inject({
+      method: 'POST',
+      url: '/task/spawn',
+      headers: AUTH,
+      payload: { ...validTaskSpawnBody, image: 'old-runtime-image' },
+    });
+    expect(task.statusCode).toBe(409);
+    expect(task.json().error.code).toBe('runtime_image_incompatible');
+    expect(docker.createCalls).toHaveLength(0);
+  });
+
   it('200s an explicitly allowlisted image and spawns the container with it', async () => {
     const { app, docker } = setup({ WORKER_IMAGE_ALLOWLIST: 'some-approved-image' });
     const res = await app.inject({
@@ -768,7 +797,7 @@ describe('POST /task/spawn', () => {
     expect(res.statusCode).toBe(200);
   });
 
-  it('round-trips systemPrompt into the Task workspace’s .nexttime/system-prompt.md (P-A2)', async () => {
+  it('round-trips systemPrompt into the Task’s platform directory (P-A2)', async () => {
     const { app } = setup(); // NEXTTIME_DATA=/host/data, LOCAL_DATA_DIR=dir
     const res = await app.inject({
       method: 'POST',
@@ -779,7 +808,7 @@ describe('POST /task/spawn', () => {
     expect(res.statusCode).toBe(200);
     expect(
       readFileSync(
-        join(dir, 'workspaces', 'tasks', TASK_ID, '.nexttime', 'system-prompt.md'),
+        join(dir, 'workspaces', '.platform', 'tasks', TASK_ID, 'system-prompt.md'),
         'utf8',
       ),
     ).toBe('Instance instructions.');

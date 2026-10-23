@@ -50,7 +50,8 @@ describe('buildSpawnSpec', () => {
         'KERNEL_URL',
         'NEXTTIME_MODE',
         'NO_PROXY',
-        'PI_CODING_AGENT_DIR',
+        // Not PI_CODING_AGENT_DIR: entrypoint.sh rebuilds pi's config directory in /tmp at every
+        // start (STATUS leftover 422) and sets it itself.
         'WORKSPACE_ID',
         // Lowercase proxy mirrors — see spawn-spec.ts's doc comment (httpoxy mitigation: most
         // HTTP clients only honor lowercase http_proxy for plain http:// requests).
@@ -73,7 +74,6 @@ describe('buildSpawnSpec', () => {
     expect(spec.env).toContain('http_proxy=http://egress-proxy:3128');
     expect(spec.env).toContain('https_proxy=http://egress-proxy:3128');
     expect(spec.env).toContain('no_proxy=kernel,llm-proxy,localhost,127.0.0.1');
-    expect(spec.env).toContain('PI_CODING_AGENT_DIR=/workspace/.pi/agent');
     expect(spec.env).toContain('HOME=/workspace');
   });
 
@@ -92,10 +92,11 @@ describe('buildSpawnSpec', () => {
     expect(overridden.env).toContain('KERNEL_LLM_URL=http://llm-override:9');
   });
 
-  it('mounts exactly the host workspace dir and a read-only models.json', () => {
+  it('mounts the host workspace dir, and the platform directory and models.json read-only', () => {
     expect(spec.binds).toEqual([
       '/host/data/workspaces/alice:/workspace',
-      '/host/data/models/models.json:/workspace/.pi/agent/models.json:ro',
+      '/host/data/workspaces/.platform/principals/alice:/opt/nexttime/platform:ro',
+      '/host/data/models/models.json:/opt/nexttime/models.json:ro',
     ]);
   });
 
@@ -110,7 +111,8 @@ describe('buildSpawnSpec', () => {
     });
     expect(withFakeModelsPath.binds).toEqual([
       '/host/data/workspaces/alice:/workspace',
-      '/host/data/accept/models.json:/workspace/.pi/agent/models.json:ro',
+      '/host/data/workspaces/.platform/principals/alice:/opt/nexttime/platform:ro',
+      '/host/data/accept/models.json:/opt/nexttime/models.json:ro',
     ]);
   });
 

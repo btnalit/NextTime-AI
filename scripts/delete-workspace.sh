@@ -31,8 +31,11 @@
 #      platform audit row `platform.workspace_purged` (counts, warnings, purged users) is kept.
 #   2. Each Principal's resident entry container that belonged to it (docker rm -f; ignored if
 #      already stopped/removed).
-#   3. Each Principal's data directory under $NEXTTIME_DATA/workspaces/<principalId>.
-#   4. Each Task's data directory under $NEXTTIME_DATA/workspaces/tasks/<taskId>.
+#   3. Each Principal's data directory under $NEXTTIME_DATA/workspaces/<principalId> and its
+#      platform directory (published system prompt and Skills, worker-supervisor host-paths.ts)
+#      under $NEXTTIME_DATA/workspaces/.platform/principals/<principalId>.
+#   4. Each Task's data directory under $NEXTTIME_DATA/workspaces/tasks/<taskId> and its platform
+#      directory under $NEXTTIME_DATA/workspaces/.platform/tasks/<taskId>.
 #
 # A `WARNING service_handle_in_use` line from the kernel means a `service` Principal (a collector,
 # an external runtime) still existed: whatever process holds its Handle starts failing with 401
@@ -41,10 +44,10 @@
 # Requires NEXTTIME_DATA in the environment (same variable host-bootstrap.sh/host-checkout.sh
 # use) - refuses without it rather than silently skipping steps 2-4.
 #
-# Safety: only ever removes a path of the exact shape
-# $NEXTTIME_DATA/workspaces/<principalId> or $NEXTTIME_DATA/workspaces/tasks/<taskId> - refuses
-# to touch anything else, even if the CLI's own output were ever malformed, and refuses to act on
-# a principal/task id that contains "/" or "..".
+# Safety: only ever removes a path of the exact shape $NEXTTIME_DATA/workspaces/<principalId>,
+# $NEXTTIME_DATA/workspaces/tasks/<taskId> or the matching .platform/principals/<principalId> /
+# .platform/tasks/<taskId> - refuses to touch anything else, even if the CLI's own output were
+# ever malformed, and refuses to act on a principal/task id that contains "/" or "..".
 #
 # Does NOT delete backups (docs/runbooks/backup-restore.md) - old dumps that included this
 # workspace are untouched.
@@ -145,18 +148,19 @@ for pid in $PRINCIPAL_IDS; do
 	echo "delete-workspace: removing resident entry container for principal $pid"
 	docker rm -f "nexttime-entry-$pid" >/dev/null 2>&1 || true
 
-	dir="$NEXTTIME_DATA/workspaces/$pid"
-	case "$dir" in
-		"$NEXTTIME_DATA/workspaces/"*)
-			if [ -d "$dir" ]; then
-				echo "delete-workspace: removing $dir"
-				rm -rf -- "$dir"
-			fi
-			;;
-		*)
-			echo "delete-workspace: refusing to remove unexpected path: $dir" >&2
-			;;
-	esac
+	for dir in "$NEXTTIME_DATA/workspaces/$pid" "$NEXTTIME_DATA/workspaces/.platform/principals/$pid"; do
+		case "$dir" in
+			"$NEXTTIME_DATA/workspaces/"*)
+				if [ -d "$dir" ]; then
+					echo "delete-workspace: removing $dir"
+					rm -rf -- "$dir"
+				fi
+				;;
+			*)
+				echo "delete-workspace: refusing to remove unexpected path: $dir" >&2
+				;;
+		esac
+	done
 done
 
 for tid in $TASK_IDS; do
@@ -167,18 +171,19 @@ for tid in $TASK_IDS; do
 			;;
 	esac
 
-	dir="$NEXTTIME_DATA/workspaces/tasks/$tid"
-	case "$dir" in
-		"$NEXTTIME_DATA/workspaces/tasks/"*)
-			if [ -d "$dir" ]; then
-				echo "delete-workspace: removing $dir"
-				rm -rf -- "$dir"
-			fi
-			;;
-		*)
-			echo "delete-workspace: refusing to remove unexpected path: $dir" >&2
-			;;
-	esac
+	for dir in "$NEXTTIME_DATA/workspaces/tasks/$tid" "$NEXTTIME_DATA/workspaces/.platform/tasks/$tid"; do
+		case "$dir" in
+			"$NEXTTIME_DATA/workspaces/tasks/"* | "$NEXTTIME_DATA/workspaces/.platform/tasks/"*)
+				if [ -d "$dir" ]; then
+					echo "delete-workspace: removing $dir"
+					rm -rf -- "$dir"
+				fi
+				;;
+			*)
+				echo "delete-workspace: refusing to remove unexpected path: $dir" >&2
+				;;
+		esac
+	done
 done
 
 echo "delete-workspace: done - workspace $WORKSPACE_ID purged, host-side cleanup complete"

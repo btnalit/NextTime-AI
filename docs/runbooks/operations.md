@@ -620,6 +620,7 @@ cap platform_status | jq '{health, backup, llmUsage30d}'
 | `runtime_inventory` 里 `activeImageInfo` 是 `null` | 活动镜像的 tag/digest 不在 `list_runtime_images` 里（自定义镜像没打三个 label，或 worker-supervisor 连不上） | 检查镜像是否带 `ai.nexttime.*` label；`residentContainers[].needsRebuild` 此时恒为 `false`（不猜） |
 | `platform_status.health` 里 `llm-proxy` / `worker-supervisor` 是 `down` | 服务没起，或内核到不了 `KERNEL_LLM_URL` / `SUPERVISOR_URL` | `docker compose ps`；确认内核与这两个服务同在 `control` 网络 |
 | `roll_entry_containers` 全是 `skipped_in_flight` | 用户确实在用 | 符合预期——加速项不抢占正在进行的 Turn；等 Turn 结束，或等其自然下一次 spawn 收敛 |
+| 入口对话或 Worker 一启动就失败，agent-host / 内核日志里 worker-supervisor 返回 409 `runtime_image_incompatible`（遗留 422） | 活动镜像是白名单启动之前构建的，没有 `ai.nexttime.runtime-contract=2` label，与本版 worker-supervisor 的挂载布局不兼容（`docs/runbooks/pi-upgrade.md` §2.6）；worker-supervisor 拒绝起容器，不动正在跑的 | `sh scripts/build-images.sh worker-runtime` 用本版重建，`set_active_runtime_image` 设为活动（运行层页「设为活动」）；不要回滚到 422 之前的镜像，除非 worker-supervisor 一起回滚 |
 | `platform_status.backup.status` 是 `stale` | 超过 26 小时没有成功的备份 | `docker compose logs backup`；在检出目录跑 `sh scripts/check-backup-freshness.sh` 看是哪一项 FAIL（`backup-restore.md`） |
 | `platform_status.backup.status` 是 `unknown` | 看 `detail`：`no backup marker`（还没成功过一次，或内核容器是 D-28 之前建的、没有这个挂载）/ `not readable`（主机文件不是 0644）/ `is a directory`（文件不存在时内核先起来了，Docker 在那里建了目录）/ `no timestamp= line`（空标记：还没成功过一次） | 依次：等下一次 `BACKUP_TIME` 或手动跑一次备份；`docker compose up -d kernel` 重建内核；`backup-restore.md`「备份状态（控制台）」一节的修复步骤 |
 

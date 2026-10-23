@@ -79,9 +79,10 @@ export interface SpawnInput {
   readonly llmUrl?: string;
   /** S2.6: the published entry WorkerDefinition's `systemPrompt` (from the `startTurn` command's
    *  own field of the same name, `@nexttime/shared`'s `agent-host-protocol.ts`) — worker-supervisor
-   *  writes this to `/workspace/.nexttime/system-prompt.md` before spawn, overwriting only when
-   *  the content differs; `undefined` leaves the existing file (or `entrypoint.sh`'s own write-if-
-   *  missing static fallback) untouched. */
+   *  writes this into the principal's platform directory outside the workspace (read-only
+   *  `/opt/nexttime/platform/system-prompt.md` in the container) before spawn, overwriting only
+   *  when the content differs; `undefined` leaves the existing file untouched (none yet = the
+   *  runtime image's default prompt). */
   readonly systemPrompt?: string;
   /** S2.6: `<provider>/<id>`, forwarded as the entry container's CMD (`['--model', model]`) —
    *  `undefined` sets no CMD (pi's own default model selection). */
