@@ -333,6 +333,29 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(bareExplained.fact.humanAttestations).toEqual([]);
     });
 
+    it('legacy 420: a note and a link are kept as written and read masked', async () => {
+      const fake = 'abcdefghijklmnopqrstuvwxyz0123'; // synthetic, Handle-shaped
+      const factId = await makeFact();
+      await dispatchCapability({ pool }, humanCaller(workspaceId, memberId), 'attest_fact', {
+        factId,
+        note: `checked with PGPASSWORD=${fake} on the host`,
+        link: `https://ops:${fake}@wiki.example/runbook`,
+      });
+      const explained = (await dispatchCapability(
+        { pool },
+        handleCaller(workspaceId, ownerId, ['explain']),
+        'explain',
+        { nodeId: factId },
+      )) as { fact: { humanAttestations: Array<{ note: string; link: string | null }> } };
+      expect(explained.fact.humanAttestations[0]).toMatchObject({
+        note: 'checked with PGPASSWORD=[redacted] on the host',
+        link: 'https://ops:[redacted]@wiki.example/runbook',
+      });
+      // The Evidence row is the record (I11).
+      const [row] = await evidenceRows(factId);
+      expect(JSON.stringify(row?.content)).toContain(fake);
+    });
+
     it('a Handle can never create a human attestation — not even one whose scope names attest_fact', async () => {
       const factId = await makeFact();
       await expect(

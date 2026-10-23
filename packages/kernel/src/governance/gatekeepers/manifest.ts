@@ -32,7 +32,12 @@ import {
   setOperationStatusObject,
 } from '../../substrate/ontology/index.js';
 import { type PublishActor, assertPublishAuthority, seesEveryDraft } from '../capability/index.js';
-import { assertDraftCredentialsReviewed, quotedName } from '../redaction/index.js';
+import {
+  assertDraftCredentialsReviewed,
+  quotedName,
+  refuseCredentialText,
+  refuseRedactedText,
+} from '../redaction/index.js';
 import {
   operationContentDigest,
   operationDefinitionDiffers,
@@ -1596,8 +1601,10 @@ export interface UpdateOperationDescriptionInput {
  * is current once the publish commits, never on the version it retired.
  *
  * `description` must be non-blank after trimming and at most `OPERATION_DESCRIPTION_MAX_LENGTH`
- * characters (`OperationDescriptionInvalidError`) — checked before any write, so a rejected call
- * touches nothing.
+ * characters (`OperationDescriptionInvalidError`), carry no suspected credential
+ * (`TextCarriesCredentialsError`, legacy 420) and not the `[redacted]` mark a read shows in place of
+ * one (`RedactedTextSubmittedError`) — checked before any write, so a rejected call touches
+ * nothing.
  *
  * Authority (STATUS leftover 123): documentation, but not harmless — a published Operation's
  * description is what every agent reads in its tool list, so whoever edits it can steer agents.
@@ -1619,6 +1626,13 @@ export async function updateOperationDescription(
   if (trimmed.length > OPERATION_DESCRIPTION_MAX_LENGTH) {
     throw new OperationDescriptionInvalidError(input.name, 'too_long');
   }
+  // Legacy 420: the one way to change what an Operation says to agents without a publish's
+  // credential review (`assertDraftCredentialsReviewed`) — so a suspected credential is refused
+  // here (`credentials_in_text`), before any write. Every read masks one stored earlier, and the
+  // edit dialog opens on that masked text: sent back with the mark still in it, it is refused too
+  // (`redacted_text_submitted`) rather than stored over what was written.
+  refuseRedactedText('description', trimmed);
+  refuseCredentialText('description', trimmed);
 
   const existing = await lockCurrentOperation(client, workspaceId, input.gatekeeperId, input.name);
   if (!existing) throw new OperationNotFoundError(input.gatekeeperId, input.name);

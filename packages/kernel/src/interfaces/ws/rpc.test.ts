@@ -42,6 +42,7 @@ import {
 } from '../../governance/gatekeepers/index.js';
 import {
   ObserveParamsCarryCredentialsError,
+  RedactedTextSubmittedError,
   TextCarriesCredentialsError,
 } from '../../governance/redaction/index.js';
 import { JsonRpcRequestSchema, WS_ERROR_CODES, mapDispatchError } from './rpc.js';
@@ -181,6 +182,7 @@ describe('mapDispatchError — S11 GO5b goal operations', () => {
       [new GoalRunInputError('a note is too long'), WS_ERROR_CODES.INVALID_PARAMS],
       [new GoalPlanValidationError(['cycle']), WS_ERROR_CODES.INVALID_PARAMS],
       [new TextCarriesCredentialsError('note', 1), WS_ERROR_CODES.INVALID_PARAMS],
+      [new RedactedTextSubmittedError('description'), WS_ERROR_CODES.INVALID_PARAMS],
     ];
     for (const [err, code] of cases) {
       expect(mapDispatchError(err)).toEqual({ code, message: err.message });

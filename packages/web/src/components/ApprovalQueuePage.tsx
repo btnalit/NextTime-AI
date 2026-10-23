@@ -41,6 +41,7 @@ import { ErrorBanner } from './kit/error-banner.js';
 import { List, ListRow } from './kit/list-row.js';
 import { MasterDetail, nothingToPick } from './kit/master-detail.js';
 import { PageHeader } from './kit/page-header.js';
+import { RedactedNote } from './kit/redacted-note.js';
 import { SameNameId } from './kit/same-name-id.js';
 import { Select } from './kit/select.js';
 import { SkeletonRows } from './kit/skeleton.js';
@@ -726,6 +727,11 @@ function ApprovalHistoryTab({
               );
             })}
           </List>
+          {/* Legacy 420: a reason reads masked in the row; the line says what `[redacted]` is. */}
+          <RedactedNote
+            value={rows.map((row) => row.decisionReason ?? null)}
+            testId="approval-history-reason-redacted"
+          />
           {nextCursor !== undefined ? (
             <div className="row" style={{ justifyContent: 'center' }}>
               <Button

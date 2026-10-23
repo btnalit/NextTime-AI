@@ -21,6 +21,7 @@ import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { addPrincipal } from '../../cli/bootstrap.js';
 import { HANDLE_SIGNING_ALG, issueHandle } from '../../governance/capability/index.js';
 import { createServer } from '../../index.js';
+import { writeAudit } from '../../substrate/audit/index.js';
 import {
   CONSOLE_SESSION_COOKIE,
   createPlatformAdmin,
@@ -1096,6 +1097,36 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(filtered.items.every((item) => item.action === 'create_user')).toBe(true);
         expect(filtered.items.every((item) => item.actorUserId === admin.id)).toBe(true);
         expect(filtered.items[0]?.actorLogin).toBe(admin.login);
+      });
+
+      it('legacy 420: a payload reads masked — params by field name, the rest by value', async () => {
+        const fake = 'abcdefghijklmnopqrstuvwxyz0123'; // synthetic, Handle-shaped
+        await withWorkspace(
+          pool,
+          { workspaceId, principalId: randomUUID() },
+          (client) =>
+            writeAudit(client, {
+              workspaceId: null,
+              actorPrincipalId: null,
+              actorUserId: admin.id,
+              action: 'test.platform_legacy_payload',
+              payload: {
+                params: { login: 'ops', password: 'plain-word-1' },
+                note: `PGPASSWORD=${fake} was in the script`,
+                credentialReview: { suspectedSecretValues: 1, confirmed: true },
+              },
+            }),
+          { skipRoleSwitch: true },
+        );
+        const page = await callAsAdmin<ListEnvelope<PlatformAuditRecordWire>>(
+          'platform_audit_query',
+          { action: 'test.platform_legacy_payload' },
+        );
+        expect(page.items[0]?.payload).toMatchObject({
+          params: { login: 'ops', password: '[redacted]' },
+          note: 'PGPASSWORD=[redacted] was in the script',
+          credentialReview: { suspectedSecretValues: 1, confirmed: true },
+        });
       });
     });
 

@@ -16,9 +16,11 @@ import {
   boundedEcho,
   countSuspectedSecrets,
   credentialReviewAudit,
+  scrubSecretValues,
 } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
+import { shownObjectProperties } from '../../substrate/graph/index.js';
 import { currentPrincipalId } from '../chat/index.js';
 import { type CapabilityHandler, publishActorOf } from './capability-handler.js';
 
@@ -175,7 +177,12 @@ export const publishOperationHandler: CapabilityHandler = async (
       status: record.status,
       origin: record.origin ?? null,
       proposedBy: record.proposedBy ?? null,
-      operation: record.operation,
+      // Legacy 420: its `description` as every read shows an Operation's (`shownObjectProperties`)
+      // — a person may publish one past the credential review, and agents read it masked.
+      operation: shownObjectProperties(
+        'Operation',
+        record.operation as unknown as Record<string, unknown>,
+      ) as unknown as typeof record.operation,
       supersedes: record.supersedes ?? null,
     },
     resourceType: 'operation',
@@ -292,7 +299,9 @@ export const updateOperationDescriptionHandler: CapabilityHandler = async (
     payload: {
       gatekeeperId: record.gatekeeperId,
       name: record.name,
-      before,
+      // Legacy 420: a credential in a description stored before it was refused at write is not
+      // copied into this new row — the old text with each secret-looking value replaced.
+      before: scrubSecretValues(before).value,
       after: record.operation.description ?? '',
     },
   });

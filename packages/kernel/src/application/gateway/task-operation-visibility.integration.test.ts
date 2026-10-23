@@ -296,6 +296,40 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect((await read(handleCaller(requesterId, sessionId, scope))).input).toEqual(input);
       });
 
+      it('legacy 420: shows a result stored before the Worker report was scrubbed masked, to every reader', async () => {
+        const { taskId, sessionId } = await seedTask(requesterId);
+        await admin((client) =>
+          client.query(
+            `update tasks set status = 'completed', result = $3::jsonb
+              where workspace_id = $1 and id = $2`,
+            [
+              workspaceId,
+              taskId,
+              JSON.stringify({
+                summary: 'restarted it with PGPASSWORD=abcdefghijklmnopqrstuvwxyz0123',
+                findings: ['slow start'],
+              }),
+            ],
+          ),
+        );
+        const shown = {
+          summary: 'restarted it with PGPASSWORD=[redacted]',
+          findings: ['slow start'],
+        };
+        const scope: CapabilityScope = { capabilities: ['get_task'], resources: {} };
+        for (const caller of [
+          humanCaller(requesterId, 'member'),
+          handleCaller(requesterId, randomUUID(), scope),
+          // Its own Worker too: nothing it does reads its result back raw.
+          handleCaller(requesterId, sessionId, scope),
+        ]) {
+          const read = (await dispatchCapability({ pool }, caller, 'get_task', { taskId })) as {
+            result: unknown;
+          };
+          expect(read.result).toEqual(shown);
+        }
+      });
+
       it('list_tasks still lists only the caller’s own Tasks, for the owner too', async () => {
         const { taskId } = await seedTask(requesterId);
         const listed = (await dispatchCapability(

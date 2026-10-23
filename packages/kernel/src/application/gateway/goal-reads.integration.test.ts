@@ -400,6 +400,69 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(JSON.stringify(detail)).not.toMatch(/synthetic-/);
       });
 
+      it('legacy 420: the statement, a revision reason and the plan’s text read masked on every goal read', async () => {
+        const goalRunId = await proposeGoal(requesterId, ['a']);
+        // Synthetic, Handle-shaped: never a real credential. Value patterns, not secret-named fields.
+        const FAKE = 'abcdefghijklmnopqrstuvwxyz0123';
+        const [stepA] = planOf(['a']).steps;
+        const plan = {
+          steps: [
+            { ...stepA, input: { step: 'a', command: `PGPASSWORD=${FAKE} psql -c 'select 1'` } },
+          ],
+          acceptance: [
+            { kind: 'requester_confirm', key: 'ok', prompt: `Does TOKEN=${FAKE} still work?` },
+          ],
+        };
+        // Written before any check at write could refuse them: stored as is.
+        await raw('update goal_runs set statement = $3 where workspace_id = $1 and id = $2', [
+          workspaceId,
+          goalRunId,
+          `rotate the key, the old one is API_KEY=${FAKE}`,
+        ]);
+        await raw(
+          `update plan_revisions set plan = $3, reason = $4
+            where workspace_id = $1 and goal_run_id = $2`,
+          [
+            workspaceId,
+            goalRunId,
+            JSON.stringify(plan),
+            `retry with Authorization: Bearer ${FAKE}`,
+          ],
+        );
+
+        const reader = human(requesterId, 'member');
+        const detail = GoalDetailWireSchema.parse(await call(reader, 'get_goal', { goalRunId }));
+        expect(detail.statement).toBe('rotate the key, the old one is API_KEY=[redacted]');
+        expect(detail.planRevision.reason).toBe('retry with Authorization: [redacted]');
+        expect(detail.revisions[0]?.reason).toBe('retry with Authorization: [redacted]');
+        expect(detail.planRevision.plan.steps[0]?.input).toEqual({
+          step: 'a',
+          command: "PGPASSWORD=[redacted] psql -c 'select 1'",
+        });
+        expect(detail.planRevision.plan.acceptance).toEqual([
+          { kind: 'requester_confirm', key: 'ok', prompt: 'Does TOKEN=[redacted] still work?' },
+        ]);
+        expect(JSON.stringify(detail)).not.toContain(FAKE);
+
+        const revision = PlanRevisionWireSchema.parse(
+          await call(reader, 'get_goal_revision', { goalRunId, revision: 1 }),
+        );
+        expect(revision.reason).toBe('retry with Authorization: [redacted]');
+        expect(JSON.stringify(revision)).not.toContain(FAKE);
+
+        const listed = listEnvelope(GoalRunWireSchema)
+          .parse(await call(reader, 'list_goals', {}))
+          .items.find((item) => item.id === goalRunId);
+        expect(listed?.statement).toBe('rotate the key, the old one is API_KEY=[redacted]');
+
+        // The run keeps what was written: the Worker gets its input, the requester the question.
+        const [stored] = await raw<{ statement: string }>(
+          'select statement from goal_runs where workspace_id = $1 and id = $2',
+          [workspaceId, goalRunId],
+        );
+        expect(stored?.statement).toContain(FAKE);
+      });
+
       it('a running run: StepRuns with their attempts and actions, counts and usage', async () => {
         const goalRunId = await startGoal(requesterId);
         await advanceOnce(goalRunId, requesterId);

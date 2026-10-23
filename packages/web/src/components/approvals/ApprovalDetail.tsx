@@ -31,6 +31,7 @@ import { ErrorBanner } from '../kit/error-banner.js';
 import { Field, describedBy } from '../kit/field.js';
 import { KeyValue, type KeyValueItem } from '../kit/key-value.js';
 import { Notice } from '../kit/notice.js';
+import { RedactedNote } from '../kit/redacted-note.js';
 import { RefChip } from '../kit/ref-chip.js';
 import { StatusChip } from '../kit/status-chip.js';
 import { Textarea } from '../kit/textarea.js';
@@ -469,6 +470,7 @@ export function ApprovalDetail({
                 {visibleLines(decisionReason)}
               </span>
             ) : null}
+            <RedactedNote value={decisionReason} testId="approval-decision-reason-redacted" />
           </div>
         </section>
       ) : null}
