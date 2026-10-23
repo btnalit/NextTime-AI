@@ -681,6 +681,7 @@ test.describe('S11 GO6: revising the plan (stand-in reads, refusals and revision
       // What the requester's authority would stop in the revised plan: only the result says it.
       await expect(page.getByTestId('goal-op-note')).toHaveCount(1);
       await expect(page.getByTestId('goal-op-note')).toContainText('门「cert-gate」');
+      await expect(page.getByTestId('goal-op-note')).toContainText('再修订计划');
       await expect(page.getByTestId('goal-plan-editor')).toHaveCount(0);
       await page.screenshot({
         path: testInfo.outputPath(`goal-plan-done-${width}.png`),

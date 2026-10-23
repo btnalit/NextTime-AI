@@ -228,7 +228,9 @@ export function GoalPlanEditor({
         // the run when it gets there. Only this result says so: a read of a run past its proposal
         // carries the plan's own hints, which the acceptance card already shows.
         (result) =>
-          result.hints.filter(isStepAuthorityHint).map((hint) => planHintText(hint, t, gateNames)),
+          result.hints
+            .filter(isStepAuthorityHint)
+            .map((hint) => planHintText(hint, t, gateNames, 'revision')),
       );
     } catch (error) {
       const fields = refusalFields(error, draft, t);

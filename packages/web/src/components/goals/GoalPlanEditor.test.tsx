@@ -237,7 +237,9 @@ describe('the plan editor on the goal page (S11 GO6, revise_goal)', () => {
     expect(done.textContent).toMatch(/计划已改为第 2 版/);
     const notes = screen.getAllByTestId('goal-op-note');
     expect(notes.map((note) => note.textContent)).toEqual([
-      expect.stringContaining('步骤「apply」的 Worker 要操作门「cert-gate」'),
+      expect.stringMatching(
+        /^步骤「apply」的 Worker 要操作门「cert-gate」.*或者再修订计划，换掉或移除这一步。$/,
+      ),
     ]);
     expect(screen.queryByTestId('goal-plan-editor')).toBeNull();
     await waitFor(() => expect(document.activeElement?.contains(done)).toBe(true));
