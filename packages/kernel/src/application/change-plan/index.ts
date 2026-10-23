@@ -77,6 +77,7 @@ export {
   type FamilyItemKind,
   type FamilyItemTarget,
   type FamilyVersionIntent,
+  type KeptWorkerField,
   type SkillItemContent,
   type SkillVersionIntent,
   type StoredFamilyItem,

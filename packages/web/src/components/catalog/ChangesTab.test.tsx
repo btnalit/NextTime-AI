@@ -346,7 +346,7 @@ describe('ChangesTab (能力目录 · 安装历史, S11 P1-B)', () => {
               met: false,
               gates: [{ id: 'gk-1', name: 'docker-a', health: 'unreachable' }],
             },
-            { connector: 'ragflow', state: 'can_connect', met: false, gates: [] },
+            { connector: 'ragflow', state: 'can_enable', met: false, gates: [] },
           ],
         }),
       }),
@@ -370,7 +370,7 @@ describe('ChangesTab (能力目录 · 安装历史, S11 P1-B)', () => {
     ).toBe('#/govern/systems/gk-1');
     expect(docker.textContent).toMatch(/docker-a不可达/);
     expect(within(result).getByTestId('catalog-change-requirement-ragflow').textContent).toMatch(
-      /待接入工作区还没接入：所有者可以在「系统与授权」里自行接入。去「系统与授权」/,
+      /待启用平台已经提供，工作区还没启用。去能力包页启用/,
     );
     // A member reads it but is not offered the run.
     await waitFor(() => expect(http.calls.some((c) => c.name === 'get_workspace')).toBe(true));

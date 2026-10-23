@@ -236,8 +236,24 @@ describe.runIf(DATABASE_URL !== undefined)(
           .filter((item) => item.classification === 'authority_widening')
           .map((item) => item.ordinal),
       });
-      expect(installed.pack).toMatchObject({ status: 'up_to_date', installedVersion: 2 });
-      expect(opsRunner(installed.pack)).toMatchObject({ status: 'up_to_date', headVersion: 1 });
+      // P1-E2: ops-runner acts on docker; with no docker gate connected here the install binds it
+      // to nothing, and nothing makes it bindable yet.
+      const runnerItem = preview.items.find((item) => item.kind === 'worker_definition_version');
+      expect(runnerItem?.kind === 'worker_definition_version' && runnerItem.binding).toEqual({
+        systems: ['docker'],
+        source: 'none',
+        gates: [],
+        candidates: [],
+        model: null,
+      });
+      expect(installed.pack).toMatchObject({ status: 'up_to_date', installedVersion: 3 });
+      expect(opsRunner(installed.pack)).toMatchObject({
+        status: 'up_to_date',
+        headVersion: 1,
+        systems: ['docker'],
+        gates: [],
+        bindable: false,
+      });
     });
   },
 );

@@ -52,6 +52,10 @@ export const PackComponentWireSchema = z.discriminatedUnion('kind', [
       kind: z.literal('worker'),
       name: z.string(),
       description: z.string().nullable(),
+      /** The systems it acts on, by connector name — each one the version's `requiredConnectors`
+       *  has (P1-E2); empty when it names none. Never a gate: which gates it may act on is the
+       *  workspace's, chosen when the pack is installed. */
+      systems: z.array(z.string()),
     })
     .strict(),
 ]);
@@ -75,13 +79,34 @@ export const PackVersionWireSchema = z
   .strict();
 export type PackVersionWire = z.infer<typeof PackVersionWireSchema>;
 
+/** A Gatekeeper of the workspace, by id and the name people know it by. */
+export const PackGateRefWireSchema = z
+  .object({
+    id: z.string(),
+    name: z.string(),
+  })
+  .strict();
+export type PackGateRefWire = z.infer<typeof PackGateRefWireSchema>;
+
 /** One system the latest version needs, and where it stands in this workspace now
  *  (`@nexttime/shared` `PACK_REQUIREMENT_STATE_VALUES`). Read without contacting any gate: a gate's
- *  health is checked when an install is verified (`verify_change_segment`). */
+ *  health is checked when an install is verified (`verify_change_segment`). `gatekeepers`: for
+ *  `connected`, the workspace's gates on it (what a Worker of the pack acting on it may be bound
+ *  to); `offered`: for `can_enable`, the platform's instances the owner may enable here
+ *  (`preview_gate_instance_enable` / `enable_gate_instance`, by `gateId`). Each empty otherwise. */
 export const PackRequirementWireSchema = z
   .object({
     connector: z.string(),
     state: PackRequirementStateSchema,
+    gatekeepers: z.array(PackGateRefWireSchema),
+    offered: z.array(
+      z
+        .object({
+          gateId: z.string(),
+          displayName: z.string(),
+        })
+        .strict(),
+    ),
   })
   .strict();
 export type PackRequirementWire = z.infer<typeof PackRequirementWireSchema>;
@@ -122,6 +147,14 @@ export const PackComponentStateWireSchema = z.discriminatedUnion('kind', [
       /** The WorkerDefinition's published head version (a 「Worker」 tab row is one version:
        *  `definitionId@headVersion`); `null` when it has none. */
       headVersion: z.number().int().positive().nullable(),
+      /** The systems it acts on (the latest version's, `PackComponentWire`). */
+      systems: z.array(z.string()),
+      /** The gates its published head may act on (its `gates`): the workspace's own, kept by every
+       *  install. Empty when it has none or is not installed. */
+      gates: z.array(PackGateRefWireSchema),
+      /** Installing the pack again would bind it: it is installed, has no gates yet, and a gate of
+       *  a system it acts on is connected now (one installed before that gate was). */
+      bindable: z.boolean(),
       ...PackComponentStateShape,
     })
     .strict(),
@@ -171,7 +204,7 @@ export type PackSkillContentWire = z.infer<typeof PackSkillContentWireSchema>;
 
 /** What a Worker item installs, for the person reviewing it. `capabilities` null: not declared, so
  *  a Worker of it gets the platform's default — observe and propose, never execute. A pack's Worker
- *  declares no gates and no model: the workspace's systems and models are its own. */
+ *  declares no gates and no model: those are the workspace's own (`PackWorkerBindingWire`). */
 export const PackWorkerContentWireSchema = z
   .object({
     name: z.string(),
@@ -183,6 +216,30 @@ export const PackWorkerContentWireSchema = z
   })
   .strict();
 export type PackWorkerContentWire = z.infer<typeof PackWorkerContentWireSchema>;
+
+/** How a Worker item sets the Worker's gates and model (P1-E2) — the workspace's own, never the
+ *  pack's. `source`: `workspace` — the head's gates, kept as they are; `install` — the Worker has
+ *  none yet and the install binds it to `gates`, every one of `candidates` unless the person kept
+ *  fewer (`workerGates`); `none` — it has none and gets none (it names no system, none of its
+ *  systems is connected, or the person kept none). `candidates`: for a Worker with no gates yet,
+ *  the connected gates of its systems (empty for `workspace`). `model`: what the item publishes —
+ *  the head's, kept — or `null`. Binding widens what the Worker may act on, so such an item is
+ *  `authority_widening` and confirmed by its ordinal. */
+export const PackWorkerBindingWireSchema = z
+  .object({
+    systems: z.array(z.string()),
+    source: z.enum(['workspace', 'install', 'none']),
+    gates: z.array(PackGateRefWireSchema),
+    candidates: z.array(
+      PackGateRefWireSchema.extend({
+        /** The system it is a gate of. */
+        connector: z.string(),
+      }).strict(),
+    ),
+    model: z.string().nullable(),
+  })
+  .strict();
+export type PackWorkerBindingWire = z.infer<typeof PackWorkerBindingWireSchema>;
 
 const PackInstallItemCommonShape = {
   ordinal: z.number().int().positive(),
@@ -229,6 +286,7 @@ export const PackInstallItemWireSchema = z.discriminatedUnion('kind', [
       before: ContentVersionRefWireSchema.nullable(),
       after: z.object({ contentDigest: z.string() }).strict(),
       worker: PackWorkerContentWireSchema,
+      binding: PackWorkerBindingWireSchema,
       changedFields: z.array(z.string()),
     })
     .strict(),

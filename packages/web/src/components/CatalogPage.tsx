@@ -63,6 +63,7 @@ import { ChangesTab } from './catalog/ChangesTab.js';
 import { DiscardReasonField } from './catalog/DiscardReasonField.js';
 import { GateOwnedParamsNotice } from './catalog/GateOwnedParamsNotice.js';
 import { MarkdownPreview } from './catalog/MarkdownPreview.js';
+import { PackOrigin } from './catalog/PackOrigin.js';
 import { PacksTab } from './catalog/PacksTab.js';
 import { ProcedureEditorHost } from './catalog/ProcedureEditorHost.js';
 import { SkillEditor } from './catalog/SkillEditor.js';
@@ -126,6 +127,8 @@ export interface CatalogPageProps {
    *  P1-B): an install record's id. */
   readonly itemId?: string;
   readonly onSelectItem: (itemId: string | null) => void;
+  /** `session.user?.platformRole === 'admin'` (the 能力包 tab's link to 平台 · 集成). */
+  readonly platformAdmin?: boolean;
 }
 
 /** S8 W1-A10 (i18n remainder): `Operation`/`Skill`/`Worker` stay English proper nouns even in zh
@@ -177,7 +180,14 @@ const NEW_ITEM_ID = 'new';
  * missing-item detail behind a disclosure, instead of a second, differently-shaped readiness
  * block. No new readiness computation: same `useExecutionReadiness` read model, same component.
  */
-export function CatalogPage({ http, tab, onTabChange, itemId, onSelectItem }: CatalogPageProps) {
+export function CatalogPage({
+  http,
+  tab,
+  onTabChange,
+  itemId,
+  onSelectItem,
+  platformAdmin = false,
+}: CatalogPageProps) {
   const t = useT();
   return (
     <div className="page">
@@ -210,7 +220,12 @@ export function CatalogPage({ http, tab, onTabChange, itemId, onSelectItem }: Ca
       ) : tab === 'workers' ? (
         <WorkersTab http={http} itemId={itemId} onSelectItem={onSelectItem} />
       ) : tab === 'packs' ? (
-        <PacksTab http={http} itemId={itemId} onSelectItem={onSelectItem} />
+        <PacksTab
+          http={http}
+          itemId={itemId}
+          onSelectItem={onSelectItem}
+          platformAdmin={platformAdmin}
+        />
       ) : (
         <ChangesTab http={http} itemId={itemId} onSelectItem={onSelectItem} />
       )}
@@ -1611,6 +1626,13 @@ function SkillDetailView({
           <strong className="catalog-detail-title wrap-anywhere">{row.name}</strong>
           <span className="text-3 text-small">v{row.version}</span>
         </div>
+        {row.status === 'published' ? (
+          <PackOrigin
+            http={http}
+            target={{ kind: 'skill', skillId: row.id }}
+            testId="skill-detail-pack-origin"
+          />
+        ) : null}
         <PublishableStepper status={row.status} testId="skill-detail-stepper" />
       </header>
 
@@ -2353,6 +2375,7 @@ type WorkerEditorState =
   | null;
 
 function WorkerDetailView({
+  http,
   row,
   isMyDraft,
   canPropose,
@@ -2367,6 +2390,7 @@ function WorkerDetailView({
   onDeprecate,
   onDiscard,
 }: {
+  readonly http: CapabilityCaller;
   readonly row: WorkerDefinitionSummary;
   readonly isMyDraft: boolean;
   readonly canPropose: boolean;
@@ -2393,6 +2417,13 @@ function WorkerDetailView({
           <span className="text-3 text-small">v{row.version}</span>
           <span className="tag">{workerDefinitionKindLabel(row.kind, t)}</span>
         </div>
+        {row.status === 'published' ? (
+          <PackOrigin
+            http={http}
+            target={{ kind: 'worker', definitionId: row.id, version: row.version }}
+            testId="worker-detail-pack-origin"
+          />
+        ) : null}
         <PublishableStepper status={row.status} testId="worker-detail-stepper" />
       </header>
 
@@ -2914,6 +2945,7 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
     editorPane
   ) : selected ? (
     <WorkerDetailView
+      http={http}
       row={selected}
       isMyDraft={selected.status === 'draft'}
       canPropose={canPropose}

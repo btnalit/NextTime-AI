@@ -38,6 +38,7 @@ import { RouteLink } from '../kit/route-link.js';
 import { SkeletonRows } from '../kit/skeleton.js';
 import { StatusChip } from '../kit/status-chip.js';
 import { StillNeeded } from '../kit/still-needed.js';
+import { announceReadinessChange } from '../readiness/useExecutionReadiness.js';
 import { ChangeVerificationSection } from './ChangeVerification.js';
 
 export interface ChangesTabProps {
@@ -738,6 +739,8 @@ function RollBackSegment({
       throw error;
     }
     permissions.markAllowed('roll_back_change_segment');
+    // Legacy 425: rolling back a pack's Worker can take away the one the readiness hint counts.
+    announceReadinessChange(http);
     onRolledBack();
   }
 

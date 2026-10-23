@@ -22,12 +22,16 @@ import {
   type PackEntry,
   type PackState,
   type PackVersion,
+  type PlannedWorkerGates,
+  type WorkerBinding,
+  type WorkerGateChoice,
   installPack,
   latestPackVersion,
   loadPackRegistry,
   loadPackState,
   previewPackInstall,
   readPackRequirements,
+  readWorkerBindings,
 } from '../packs/index.js';
 import { loadPublishedWorkerDefinitionHead } from '../worker/index.js';
 import { ForbiddenError } from './authorize.js';
@@ -56,6 +60,7 @@ function toPackComponentWire(component: PackComponent): PackComponentWire {
         kind: 'worker',
         name: component.name,
         description: component.definition.description ?? null,
+        systems: [...component.systems],
       };
   }
 }
@@ -84,6 +89,7 @@ async function toComponentStateWire(
   client: PoolClient,
   workspaceId: string,
   state: PackComponentState,
+  bindings: ReadonlyMap<string, WorkerBinding>,
 ): Promise<PackComponentStateWire> {
   const { component } = state;
   const common = {
@@ -109,11 +115,15 @@ async function toComponentStateWire(
         workspaceId,
         component.definitionId,
       );
+      const binding = bindings.get(component.definitionId);
       return {
         kind: 'worker',
         name: component.name,
         definitionId: component.definitionId,
         headVersion: head?.version ?? null,
+        systems: [...component.systems],
+        gates: (binding?.gates ?? []).map((gate) => ({ id: gate.id, name: gate.name })),
+        bindable: binding?.bindable ?? false,
         ...common,
       };
     }
@@ -137,9 +147,10 @@ async function toPackWire(
   state: PackState,
 ): Promise<PackWire> {
   const latest = latestPackVersion(state.entry);
+  const bindings = await readWorkerBindings(client, workspaceId, state.entry);
   const components: PackComponentStateWire[] = [];
   for (const component of state.components) {
-    components.push(await toComponentStateWire(client, workspaceId, component));
+    components.push(await toComponentStateWire(client, workspaceId, component, bindings));
   }
   return {
     name: state.entry.name,
@@ -150,14 +161,26 @@ async function toPackWire(
     installedVersion: state.installedVersion,
     components,
     requirements: (await readPackRequirements(client, workspaceId, latest.requiredConnectors)).map(
-      (requirement) => ({ connector: requirement.connector, state: requirement.state }),
+      (requirement) => ({
+        connector: requirement.connector,
+        state: requirement.state,
+        gatekeepers: requirement.gatekeepers.map((gate) => ({ id: gate.id, name: gate.name })),
+        offered: requirement.offered.map((offer) => ({
+          gateId: offer.gateId,
+          displayName: offer.displayName,
+        })),
+      }),
     ),
   };
 }
 
 /** Item `n` installs the target's component `n` (`packSegment`): the component names what the
- *  item installs, the item what it changes. */
-function toInstallItemWire(item: PlannedChangeItem, target: PackVersion): PackInstallItemWire {
+ *  item installs, the item what it changes; a Worker item's gates and model are `workerGates`'. */
+function toInstallItemWire(
+  item: PlannedChangeItem,
+  target: PackVersion,
+  workerGates: readonly PlannedWorkerGates[],
+): PackInstallItemWire {
   const component = target.components[item.ordinal - 1];
   const common = {
     ordinal: item.ordinal,
@@ -212,6 +235,10 @@ function toInstallItemWire(item: PlannedChangeItem, target: PackVersion): PackIn
   }
   if (detail.kind === 'worker_definition_version' && component?.kind === 'worker') {
     const { definition } = component;
+    const planned = workerGates.find((worker) => worker.ordinal === item.ordinal);
+    if (!planned) {
+      throw new Error(`install review: Worker item ${item.ordinal} has no planned gates`);
+    }
     return {
       ...common,
       kind: detail.kind,
@@ -224,6 +251,17 @@ function toInstallItemWire(item: PlannedChangeItem, target: PackVersion): PackIn
         skills: [...(definition.skills ?? [])],
         capabilities: definition.capabilities ? [...definition.capabilities] : null,
         egressDeny: [...(definition.egressDeny ?? [])],
+      },
+      binding: {
+        systems: [...planned.systems],
+        source: planned.source,
+        gates: planned.gates.map((gate) => ({ id: gate.id, name: gate.name })),
+        candidates: planned.candidates.map((gate) => ({
+          id: gate.id,
+          name: gate.name,
+          connector: gate.connector,
+        })),
+        model: planned.model,
       },
       changedFields: [...detail.changedFields],
     };
@@ -244,9 +282,23 @@ export const listPacksHandler: CapabilityHandler = async (client, workspaceId) =
   return { result: { items } };
 };
 
+/** `workerGates` as the domain takes it (by Worker name). */
+function workerGateChoice(param: Record<string, string[]> | undefined): WorkerGateChoice {
+  return new Map(Object.entries(param ?? {}));
+}
+
 export const previewPackInstallHandler: CapabilityHandler = async (client, workspaceId, params) => {
-  const { name } = params as { name: string };
-  const preview = await previewPackInstall(client, workspaceId, await loadPackRegistry(), name);
+  const { name, workerGates } = params as {
+    name: string;
+    workerGates?: Record<string, string[]>;
+  };
+  const preview = await previewPackInstall(
+    client,
+    workspaceId,
+    await loadPackRegistry(),
+    name,
+    workerGateChoice(workerGates),
+  );
   const result: PackInstallPreviewWire = {
     pack: await toPackWire(client, workspaceId, preview.current),
     targetVersion: preview.target.version,
@@ -254,7 +306,9 @@ export const previewPackInstallHandler: CapabilityHandler = async (client, works
     unchanged: preview.plan.unchanged,
     crossedVersions: preview.crossed.map((version) => version.version),
     breaking: preview.breaking,
-    items: preview.plan.items.map((item) => toInstallItemWire(item, preview.target)),
+    items: preview.plan.items.map((item) =>
+      toInstallItemWire(item, preview.target, preview.workerGates),
+    ),
     inUse: { ...preview.inUse },
   };
   return { result };
@@ -271,6 +325,7 @@ export const installPackHandler: CapabilityHandler = async (
     version: number;
     reviewedDigest: string;
     confirmedOrdinals?: number[];
+    workerGates?: Record<string, string[]>;
   };
   if (!context?.principalId) throw new Error('install_pack: no calling principal in context');
   // `channel: 'human'`: the person installing is the one confirming any widening item (I-A4).
@@ -296,6 +351,7 @@ export const installPackHandler: CapabilityHandler = async (
       version: input.version,
       reviewedDigest: input.reviewedDigest,
       confirmedOrdinals,
+      workerGates: workerGateChoice(input.workerGates),
     },
   );
   const result: PackInstallResultWire = {

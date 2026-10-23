@@ -83,7 +83,15 @@ export interface WorkerDefinitionVersionIntent {
   readonly definitionId: string;
   /** `worker`-kind content (`@nexttime/shared` worker-definition.ts), with a `name`. */
   readonly definition: Readonly<Record<string, unknown>>;
+  /** Fields the workspace owns (S11 P1-E2: a pack's Worker never sets which gates it acts on or
+   *  which model runs it): where the head has one, the item publishes the head's value instead of
+   *  `definition`'s — read under the registry lock, so what was reviewed keeps exactly what the
+   *  workspace had. Where the head has none, `definition`'s value (or none) stands. */
+  readonly keepFromHead?: readonly KeptWorkerField[];
 }
+
+/** A `worker` WorkerDefinition field an item may keep from the head (`keepFromHead`). */
+export type KeptWorkerField = 'gates' | 'model';
 
 export type FamilyVersionIntent = SkillVersionIntent | WorkerDefinitionVersionIntent;
 export type FamilyItemKind = FamilyVersionIntent['kind'];
@@ -273,9 +281,11 @@ export async function planFamilyItem(
 ): Promise<PlannedFamilyItem> {
   const spec = specOf(intent.kind);
   const familyId = familyIdOf(intent);
-  const content: Readonly<Record<string, unknown>> =
-    intent.kind === 'skill_version' ? { ...validatedSkillContent(intent) } : intent.definition;
   const head = await spec.loadHead(client, workspaceId, familyId);
+  const content: Readonly<Record<string, unknown>> =
+    intent.kind === 'skill_version'
+      ? { ...validatedSkillContent(intent) }
+      : withKeptFields(intent.definition, head?.content ?? null, intent.keepFromHead ?? []);
   const digest = contentDigest(content);
   const before = head
     ? { version: head.version, contentDigest: contentDigest(head.content) }
@@ -309,9 +319,27 @@ export async function planFamilyItem(
   return {
     ...common,
     kind: intent.kind,
-    target: { definitionId: familyId, name: validatedWorkerDefinitionName(intent) },
-    content: intent.definition,
+    target: {
+      definitionId: familyId,
+      name: validatedWorkerDefinitionName({ ...intent, definition: content }),
+    },
+    content,
   };
+}
+
+/** `definition` with each `fields` value taken from `head` where the head has one (see
+ *  `WorkerDefinitionVersionIntent.keepFromHead`). */
+function withKeptFields(
+  definition: Readonly<Record<string, unknown>>,
+  head: Readonly<Record<string, unknown>> | null,
+  fields: readonly KeptWorkerField[],
+): Readonly<Record<string, unknown>> {
+  if (head === null || fields.length === 0) return definition;
+  const content: Record<string, unknown> = { ...definition };
+  for (const field of fields) {
+    if (head[field] !== undefined) content[field] = head[field];
+  }
+  return content;
 }
 
 /** Publishes the planned content as the family's next version, `appliedBy` as its proposer and
