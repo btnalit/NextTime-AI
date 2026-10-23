@@ -20,6 +20,7 @@ import { CAPABILITY_REGISTRY } from '@nexttime/shared';
 import { actionLabel } from './capability-labels.js';
 import type { CapabilityCaller } from './clients.js';
 import { addressText } from './connections.js';
+import { noVisibleRecentDecisionsText } from './decision-visibility.js';
 import { actionKindLabel, actionKindTagText, formatRelative, shortId } from './format.js';
 import { objectDisplayName } from './graph-view.js';
 import type { Translate } from './i18n.js';
@@ -63,6 +64,8 @@ export interface PickerSource {
   readonly load: (http: CapabilityCaller, query: string) => Promise<readonly PickerOption[]>;
   /** Used when `load` is refused (403) — a source the caller can still read. */
   readonly fallback?: PickerSource;
+  /** Replaces the picker's "nothing to pick yet" line when `load` returns nothing. */
+  readonly emptyNote?: string;
 }
 
 /** One page is enough for a picker: past this the reader types to narrow (searchable sources)
@@ -181,6 +184,8 @@ export function decisionSource(t: Translate): PickerSource {
   return {
     key: 'query_decisions:recent',
     searchable: false,
+    // Legacy 421: an empty list may hide Decisions the reader may not see; it says so.
+    emptyNote: noVisibleRecentDecisionsText(t),
     load: async (http) => {
       const page = await http.call<Page<DecisionWire>>('query_decisions', {
         limit: PICKER_LIMIT,

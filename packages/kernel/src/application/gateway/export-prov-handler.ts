@@ -1,12 +1,14 @@
 import type { ExportProvDocument } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import {
+  type DecisionViewer,
   type ExplainResult,
   causalChain,
   explain,
   explainByNodeId,
 } from '../../substrate/epistemic/index.js';
 import type { CapabilityHandler } from './capability-handler.js';
+import { decisionViewerOf } from './draft-viewer.js';
 import { type ProvGraph, buildProvenanceGraph } from './provenance-graph.js';
 
 /**
@@ -122,6 +124,7 @@ async function resolveChain(
   client: PoolClient,
   workspaceId: string,
   params: ExportProvParams,
+  viewer: DecisionViewer,
 ): Promise<{
   chain: readonly ExplainResult[];
   rootType: 'fact' | 'decision' | 'activity';
@@ -136,40 +139,54 @@ async function resolveChain(
     // One extra `explain` round trip to learn the node's type (throws `ExplainNodeNotFoundError`,
     // 404, when nothing matches — the same answer a typed id that does not resolve gets below),
     // then the ordinary typed path so `depth` and the chain walk behave identically either way.
-    const resolved = await explainByNodeId(client, workspaceId, params.nodeId);
+    const resolved = await explainByNodeId(client, workspaceId, params.nodeId, {
+      decisions: viewer,
+    });
     const typed: ExportProvParams =
       resolved.nodeType === 'fact'
         ? { factId: params.nodeId, depth: params.depth }
         : resolved.nodeType === 'decision'
           ? { decisionId: params.nodeId, depth: params.depth }
           : { activityId: params.nodeId, depth: params.depth };
-    return resolveChain(client, workspaceId, typed);
+    return resolveChain(client, workspaceId, typed, viewer);
   }
 
   if (params.factId) {
-    const result = await causalChain(client, workspaceId, {
-      factId: params.factId,
-      depth: params.depth,
-    });
+    const result = await causalChain(
+      client,
+      workspaceId,
+      { factId: params.factId, depth: params.depth },
+      viewer,
+    );
     return { chain: result.chain, rootType: 'fact', rootId: params.factId };
   }
   if (params.decisionId) {
-    const result = await causalChain(client, workspaceId, {
-      decisionId: params.decisionId,
-      depth: params.depth,
-    });
+    const result = await causalChain(
+      client,
+      workspaceId,
+      { decisionId: params.decisionId, depth: params.depth },
+      viewer,
+    );
     return { chain: result.chain, rootType: 'decision', rootId: params.decisionId };
   }
   // Reached only when the earlier `given.length !== 1` check passed and neither factId nor
   // decisionId was set — activityId is therefore guaranteed defined here.
   if (!params.activityId) throw new ExportProvInputError();
-  const step = await explain(client, workspaceId, { activityId: params.activityId });
+  const step = await explain(client, workspaceId, { activityId: params.activityId }, viewer);
   return { chain: [step], rootType: 'activity', rootId: params.activityId };
 }
 
-export const exportProvHandler: CapabilityHandler = async (client, workspaceId, rawParams) => {
+/** Legacy 421: the export holds only the Decisions the caller may read (`decisionViewerOf`) — an
+ *  auditor sees a request's or a goal run's Decisions under the same rule as everyone else; a
+ *  hidden root is not found (404). */
+export const exportProvHandler: CapabilityHandler = async (client, workspaceId, rawParams, ctx) => {
   const params = rawParams as ExportProvParams;
-  const { chain, rootType, rootId } = await resolveChain(client, workspaceId, params);
+  const { chain, rootType, rootId } = await resolveChain(
+    client,
+    workspaceId,
+    params,
+    await decisionViewerOf(client, workspaceId, ctx),
+  );
 
   const graph = buildProvenanceGraph(chain);
   const document = toProvJsonDocument(graph);

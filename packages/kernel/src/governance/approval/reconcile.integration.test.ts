@@ -420,8 +420,9 @@ describe.runIf(DATABASE_URL !== undefined)(
             decided_by: string;
             rationale: Record<string, unknown>;
             kind: string;
+            action_request_id: string | null;
           }>(
-            `select d.id, d.decided_by, d.rationale, a.kind from decisions d
+            `select d.id, d.decided_by, d.rationale, a.kind, d.action_request_id from decisions d
                join activities a on a.workspace_id = d.workspace_id and a.id = d.activity_id
               where d.workspace_id = $1 and d.id = any($2::uuid[])
               order by d.decided_at, d.id`,
@@ -439,6 +440,8 @@ describe.runIf(DATABASE_URL !== undefined)(
             id: reexecuted.actionRequest.reconciliationDecisionId,
             decided_by: ownerId,
             kind: 'governance.reconcile_decision',
+            // Legacy 421: about the request (and its goal run, when it has one).
+            action_request_id: lost.id,
             rationale: expect.objectContaining({
               actionRequestId: lost.id,
               decision: 'reconcile',
@@ -452,6 +455,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             id: reexecuted.actionRequest.reexecuteDecisionId,
             decided_by: requesterId,
             kind: 'governance.reconcile_decision',
+            action_request_id: lost.id,
             rationale: expect.objectContaining({
               actionRequestId: lost.id,
               decision: 'reexecute',
@@ -847,13 +851,16 @@ describe.runIf(DATABASE_URL !== undefined)(
           decided_by: string | null;
           source_id: string;
           rationale: Record<string, unknown>;
+          action_request_id: string | null;
         }>(
-          'select decided_by, source_id, rationale from decisions where workspace_id = $1 and id = $2',
+          `select decided_by, source_id, rationale, action_request_id from decisions
+            where workspace_id = $1 and id = $2`,
           [workspaceId, first.actionRequest.reconciliationDecisionId],
         );
         expect(found).toMatchObject({
           decided_by: null,
           source_id: source,
+          action_request_id: id,
           rationale: expect.objectContaining({
             actionRequestId: id,
             verdict: 'effect_seen',

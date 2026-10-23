@@ -223,10 +223,12 @@ describe.runIf(DATABASE_URL !== undefined)(
           'select metadata from activities where workspace_id = $1 and id = $2',
           [workspaceId, turnId],
         );
-        const decisionRow = await client.query<{ summary: string }>(
-          'select summary from decisions where workspace_id = $1 and id = $2',
+        const decisionRow = await client.query<{ summary: string; chat_id: string | null }>(
+          'select summary, chat_id from decisions where workspace_id = $1 and id = $2',
           [workspaceId, decision.id],
         );
+        // Legacy 421: a Decision of this conversation, read by whoever reads the conversation.
+        expect(decisionRow.rows[0]?.chat_id).toBe(chatId);
         return { turn: turn.rows[0]?.metadata, decision: decisionRow.rows[0]?.summary };
       });
       expect(JSON.stringify(stored)).not.toContain('eyJhbGci');

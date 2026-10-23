@@ -297,7 +297,14 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       const [factId] = result.factIds;
       if (!factId) throw new Error('expected a written fact id');
-      const explained = await inTx(ownerId, (client) => explain(client, workspaceId, { factId }));
+      const explained = await inTx(ownerId, (client) =>
+        explain(
+          client,
+          workspaceId,
+          { factId },
+          { principalId: ownerId, seesEveryGoalRun: true, seesEveryActionRequest: true },
+        ),
+      );
       // ownerId is a genuine 'human' principal, yet the Fact is asserted_by a real kind='agent'
       // principal — see this file's module doc comment: §5.6 agent → inferred, and this is the
       // regression guard for accept_s2 step 7 (2026-09-08) and its follow-up (replacing PR #84's

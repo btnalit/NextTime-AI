@@ -424,18 +424,28 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(updated.status).toBe('approved');
         expect(updated.approvalDecisionId).not.toBeNull();
 
-        const decisionStatus = await withWorkspace(
+        const decision = await withWorkspace(
           pool,
           { workspaceId, principalId: ownerId },
           async (client) => {
-            const result = await client.query<{ status: string }>(
-              'select status from decisions where workspace_id = $1 and id = $2',
+            const result = await client.query<{
+              status: string;
+              action_request_id: string | null;
+              goal_run_id: string | null;
+            }>(
+              `select status, action_request_id, goal_run_id from decisions
+                where workspace_id = $1 and id = $2`,
               [workspaceId, updated.approvalDecisionId],
             );
-            return result.rows[0]?.status;
+            return result.rows[0];
           },
         );
-        expect(decisionStatus).toBe('approved');
+        // Legacy 421: the Decision is about the request — read by whoever `get_action` shows it to.
+        expect(decision).toEqual({
+          status: 'approved',
+          action_request_id: updated.id,
+          goal_run_id: null,
+        });
       });
 
       it('the workspace owner may always approve, regardless of grants', async () => {
