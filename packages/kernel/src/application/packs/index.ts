@@ -4,8 +4,9 @@
  * `packs/<name>/<version>/pack.yaml` (`manifest.ts`, `registry.ts`); its components are ontology
  * families, Skills and `worker` WorkerDefinitions (P1-D). What a workspace has of a pack is
  * derived from its components (`state.ts`); installing one is a ChangePlan workspace segment
- * (`install.ts`). A version may say which systems it needs (`requires.connectors`, P1-E), and
- * `requirements.ts` reads where each stands in a workspace. A module
+ * (`install.ts`). A version may say which systems it needs (`requires.connectors`, P1-E) and which
+ * other packs it builds on (`requires.packs`, P1-F), and `requirements.ts` reads where each stands
+ * in a workspace. A module
  * (`application/platform/modules.ts`) is a pack with one ontology component named after it.
  */
 
@@ -33,6 +34,7 @@ export {
   type PackComponentKind,
   type PackManifest,
   PackManifestError,
+  type PackRequirementManifest,
 } from './manifest.js';
 export {
   type PackComponent,
@@ -56,9 +58,13 @@ export {
   WORKSPACE_OWNED_WORKER_FIELDS,
 } from './registry.js';
 export {
+  type PackDependencyStatus,
   type PackRequirementGate,
   type PackRequirementOffer,
   type PackRequirementStatus,
+  PackDependencyUnmetError,
+  packDependencyMet,
+  readPackDependencies,
   readPackRequirements,
 } from './requirements.js';
 export {

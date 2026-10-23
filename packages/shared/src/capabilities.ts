@@ -28,6 +28,7 @@ import {
 } from './goal-plan.js';
 import { CapabilityScopeSchema } from './handle-token.js';
 import { OntologyDefinitionSchema } from './ontology-definition.js';
+import { GoalFromProcedureSchema } from './procedure.js';
 import * as wire from './wire/index.js';
 import { WorkerResultCapabilityParamsSchema } from './worker-result.js';
 
@@ -1335,7 +1336,15 @@ const metaCapabilities = [
     minRole: 'builder',
     paramsSchema: z.object({ procedure: jsonRecord }).strict(),
     resultSchema: wire.ProcedureProposeResultWireSchema,
-    description: 'Propose a private draft Procedure distilled from a successful Task.',
+    description:
+      'Propose a private draft Procedure distilled from a successful Task: procedure is {name, ' +
+      'description, steps — operation, worker, approval or verify — and optionally parameters}. ' +
+      'A published Procedure is also a template a goal’s plan is made from (propose_goal’s ' +
+      'fromProcedure): a worker step may carry what a plan step does (key, dependsOn, input, ' +
+      'outputSchema, maxAttempts, and bindings — from an earlier step it depends on, or from ' +
+      '$params, the parameters the goal is proposed with), a verify step a check (an acceptance ' +
+      'check the platform makes), and parameters is the schema of those parameters — the same ' +
+      'bounded JSON Schema subset as an outputSchema.',
   },
   {
     // D-24 — see publish_operation. The owner and builders see every draft (D-26 rule,
@@ -1378,7 +1387,7 @@ const metaCapabilities = [
       .strict(),
     resultSchema: wire.ProcedurePublishResultWireSchema,
     description:
-      'Publish your draft Procedure (I16) — the latest version under procedureId, which must be the version given (the one reviewed): a newer version under procedureId since is 409 version_changed and nothing is published. Builder floor; the workspace owner may publish anyone’s draft; another builder’s draft is 403 not_proposer. When the draft carries suspected credentials, credentialsReviewed: true is required — 400 credentials_review_required (details: subject, suspectedSecretValues) otherwise.',
+      'Publish your draft Procedure (I16) — the latest version under procedureId, which must be the version given (the one reviewed): a newer version under procedureId since is 409 version_changed and nothing is published. Builder floor; the workspace owner may publish anyone’s draft; another builder’s draft is 403 not_proposer. When the draft carries suspected credentials, credentialsReviewed: true is required — 400 credentials_review_required (details: subject, suspectedSecretValues) otherwise. A Procedure that says how a goal’s plan is made from it (parameters, a worker step’s plan fields, a verify step’s check) is published only when the plan it makes passes everything a written plan is held to — its $params bindings checked against parameters, no credential or [redacted] mark — 400 invalid_params with details.problems otherwise; one with an operation or approval step is still published, for following by hand, but makes no goal.',
   },
   {
     name: 'deprecate_skill',
@@ -1458,7 +1467,8 @@ const metaCapabilities = [
     description:
       'List published Procedures plus the draft Procedures the caller may see — their own, or ' +
       'every draft for the owner and builders (D-26 rule, I16) — latest version per id, newest ' +
-      'first, each with its proposedBy; keyset-paginated (limit, cursor → nextCursor).',
+      'first, each with its proposedBy and its parameters schema (null: it takes none); ' +
+      'keyset-paginated (limit, cursor → nextCursor).',
   },
   {
     // S3.3: real handler (`application/gateway/fact-handlers.ts`'s `assertFactHandler`), replacing
@@ -4009,7 +4019,7 @@ const modulesCapabilities = [
     paramsSchema: z.object({ segmentId: z.string().uuid() }).strict(),
     resultSchema: wire.ChangeVerificationResultWireSchema,
     description:
-      'Verify one applied ChangePlan segment now and record the result on it (S11 P1-E): whether what each item wrote is still in effect, and whether each system its source needs (a pack version’s requiredConnectors) is connected in this workspace — with each of its gates’ live health, probed through the gate’s own health endpoint, the probe get_gatekeeper makes; no Operation is run. Passes when every item is in effect, every needed system is connected with at least one healthy gate, and the source version is still in this deployment; the segment becomes verified or verification_failed. One change_segment.verify audit row. Refuses, probing and writing nothing: 409 change_segment_superseded when a later segment of the same source is in effect (details.supersededBy — verify that one), 409 change_segment_rolled_back, 429 change_verification_cooldown within 60 seconds of the segment’s last verification (details.retryAfterSeconds), 404 change_segment_not_found.',
+      'Verify one applied ChangePlan segment now and record the result on it (S11 P1-E): whether what each item wrote is still in effect, and whether each system its source needs (a pack version’s requiredConnectors) is connected in this workspace — with each of its gates’ live health, probed through the gate’s own health endpoint, the probe get_gatekeeper makes; no Operation is run — and (S11 P1-F) whether each pack it builds on (requiredPacks) is still installed here at the version it needs (dependencies). Passes when every item is in effect, every needed system is connected with at least one healthy gate, every pack it builds on is installed at that version or later, and the source version is still in this deployment; the segment becomes verified or verification_failed. One change_segment.verify audit row. Refuses, probing and writing nothing: 409 change_segment_superseded when a later segment of the same source is in effect (details.supersededBy — verify that one), 409 change_segment_rolled_back, 429 change_verification_cooldown within 60 seconds of the segment’s last verification (details.retryAfterSeconds), 404 change_segment_not_found.',
   },
   // S11 P1-C / P1-D (Pack Contract v1, docs/s10-evolution-plan-2026-10-04.md §6;
   // `application/packs`): the packs this deployment ships — ontology families, Skills and `worker`
@@ -4026,7 +4036,7 @@ const modulesCapabilities = [
     paramsSchema: noParams,
     resultSchema: listEnvelope(wire.PackWireSchema),
     description:
-      'Every pack this deployment ships (Pack Contract v1, `packs/<name>/<version>/pack.yaml`) with its versions and components — ontology families, Skills and Workers (WorkerDefinitions) —, and this workspace’s state of it — not installed / up to date / outdated / customized — for the pack and for each component, with the change that installed each component’s current content; and the systems the latest version needs (requiredConnectors), each with where it stands here — connected (with the workspace’s gates on it) / an instance the platform offers to enable (with the instances) / needs a platform administrator — read without contacting any gate. Each Worker component carries the systems it acts on, the gates its published head may act on, and whether installing again would bind it (bindable: installed, no gates yet, a gate of one of its systems connected now).',
+      'Every pack this deployment ships (Pack Contract v1, `packs/<name>/<version>/pack.yaml`) with its versions and components — ontology families, Skills and Workers (WorkerDefinitions) —, and this workspace’s state of it — not installed / up to date / outdated / customized — for the pack and for each component, with the change that installed each component’s current content; and the systems the latest version needs (requiredConnectors), each with where it stands here — connected (with the workspace’s gates on it) / an instance the platform offers to enable (with the instances) / needs a platform administrator — read without contacting any gate. Each Worker component carries the systems it acts on, the gates its published head may act on, and whether installing again would bind it (bindable: installed, no gates yet, a gate of one of its systems connected now). S11 P1-F: the packs the latest version builds on (requiredPacks), each in dependencies with how this workspace has it and whether that meets the version it needs.',
   },
   {
     name: 'preview_pack_install',
@@ -4042,7 +4052,7 @@ const modulesCapabilities = [
       .strict(),
     resultSchema: wire.PackInstallPreviewWireSchema,
     description:
-      'Dry run of install_pack, writing nothing: per component of the latest version, what the family has now and would have after — for an ontology family the type names added / removed / changed, for a Skill or Worker the content it would publish and the fields that differ —, and the item’s authority classification; the versions the install moves through and whether one is breaking; how many objects and active Facts use a type it takes out (kept, never removed); and the digest to pass back as reviewedDigest. The systems the version needs are in pack.requirements: installing does not wait for them. A Worker’s gates and model are the workspace’s own: each Worker item keeps what its head has (binding.source workspace), and a Worker that names systems and has no gates yet is bound to the workspace’s connected gates of those systems (binding.source install, an authority_widening item) — every candidate unless workerGates keeps fewer; keeping none publishes gates: [] (binding.source none), so the Worker is no longer offered for binding; a Worker whose head has gates keeps them whatever workerGates says. 400 invalid_params when workerGates names a Worker the version does not have or a gate that is not one of its candidates; 404 pack_not_found; 409 ontology_namespace_conflict when a component declares an ObjectType or ActionType name another installed family already declares (I-P1); 409 skill_name_conflict when another Skill family already has a Skill component’s name published.',
+      'Dry run of install_pack, writing nothing: per component of the latest version, what the family has now and would have after — for an ontology family the type names added / removed / changed, for a Skill or Worker the content it would publish and the fields that differ —, and the item’s authority classification; the versions the install moves through and whether one is breaking; how many objects and active Facts use a type it takes out (kept, never removed); and the digest to pass back as reviewedDigest. The systems the version needs are in pack.requirements: installing does not wait for them. The packs it builds on are in pack.dependencies: installing does wait for those (install_pack 409 pack_dependency_unmet); the dry run still answers while one is missing. A Worker’s gates and model are the workspace’s own: each Worker item keeps what its head has (binding.source workspace), and a Worker that names systems and has no gates yet is bound to the workspace’s connected gates of those systems (binding.source install, an authority_widening item) — every candidate unless workerGates keeps fewer; keeping none publishes gates: [] (binding.source none), so the Worker is no longer offered for binding; a Worker whose head has gates keeps them whatever workerGates says. 400 invalid_params when workerGates names a Worker the version does not have or a gate that is not one of its candidates; 404 pack_not_found; 409 ontology_namespace_conflict when a component declares an ObjectType or ActionType name another installed family already declares (I-P1); 409 skill_name_conflict when another Skill family already has a Skill component’s name published.',
   },
   {
     name: 'install_pack',
@@ -4067,7 +4077,7 @@ const modulesCapabilities = [
       .strict(),
     resultSchema: wire.PackInstallResultWireSchema,
     description:
-      'Install a pack’s latest version into this workspace in one transaction, as one ChangePlan segment: each component whose content differs is published as its family’s next version — an ontology family, a Skill, a Worker (WorkerDefinition) — with this owner as proposer and publisher (installing, upgrading, or replacing a customized family alike — the dry run showed which); a Worker keeps the gates and model its head has, and one the dry run binds is bound to the gates it showed (pass the dry run’s own workerGates). Refuses, writing nothing: 409 version_changed when the latest version is not the reviewed one, 409 change_plan_changed when the dry run would differ from the reviewed digest now — a gate connected or cut off since counts (preview again), 400 invalid_params for workerGates as in preview_pack_install, 400 change_confirmation_required when an authority-widening item is not among confirmedOrdinals, 403 when confirmedOrdinals comes from a Principal that is not a person (a service API key), 409 ontology_namespace_conflict (I-P1), 409 skill_name_conflict, 404 pack_not_found. Already up to date: records nothing. One change_item.apply audit row per item. Right after the install commits, the segment is verified once as the person who installed (trigger system, as verify_change_segment does; its result is verification — null when the run could not be made, the install stands either way).',
+      'Install a pack’s latest version into this workspace in one transaction, as one ChangePlan segment: each component whose content differs is published as its family’s next version — an ontology family, a Skill, a Worker (WorkerDefinition) — with this owner as proposer and publisher (installing, upgrading, or replacing a customized family alike — the dry run showed which); a Worker keeps the gates and model its head has, and one the dry run binds is bound to the gates it showed (pass the dry run’s own workerGates). Refuses, writing nothing: 409 version_changed when the latest version is not the reviewed one, 409 pack_dependency_unmet when a pack it builds on (requires.packs) is not installed here at the version it needs — details.unmet lists each, install those first —, 409 change_plan_changed when the dry run would differ from the reviewed digest now — a gate connected or cut off since counts (preview again), 400 invalid_params for workerGates as in preview_pack_install, 400 change_confirmation_required when an authority-widening item is not among confirmedOrdinals, 403 when confirmedOrdinals comes from a Principal that is not a person (a service API key), 409 ontology_namespace_conflict (I-P1), 409 skill_name_conflict, 404 pack_not_found. Already up to date: records nothing. One change_item.apply audit row per item. Right after the install commits, the segment is verified once as the person who installed (trigger system, as verify_change_segment does; its result is verification — null when the run could not be made, the install stands either way).',
   },
 ] as const satisfies readonly Capability[];
 
@@ -4175,13 +4185,25 @@ const goalCapabilities = [
     paramsSchema: z
       .object({
         statement: z.string().max(MAX_GOAL_STATEMENT_CHARS).regex(/\S/, 'says nothing'),
-        plan: GoalPlanSchema,
+        plan: GoalPlanSchema.optional(),
+        // S11 GO5d-2 (plan §4.3): the plan made from a published Procedure instead of written out
+        // (`application/goal/from-procedure.ts`) — exactly one of the two.
+        fromProcedure: GoalFromProcedureSchema.optional(),
         budget: GoalBudgetSchema,
         idempotencyKey: z.string().min(1).max(MAX_GOAL_IDEMPOTENCY_KEY_CHARS).optional(),
       })
-      .strict(),
+      .strict()
+      .superRefine((value, ctx) => {
+        if ((value.plan === undefined) === (value.fromProcedure === undefined)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [value.plan === undefined ? 'plan' : 'fromProcedure'],
+            message: 'give exactly one of plan and fromProcedure',
+          });
+        }
+      }),
     resultSchema: wire.ProposeGoalResultWireSchema,
-    description: `Propose a goal for you (on a Handle, the person you act for) to confirm: statement — what is wanted, in a sentence or two (at most ${MAX_GOAL_STATEMENT_CHARS} characters) — the plan (revision 1: its steps, each a published Worker version, their dependencies, inputs and checks — a step may declare the output its Worker reports (outputSchema) and take input fields from earlier steps' outputs (bindings: to, from a step it depends on that declares an outputSchema, a JMESPath path) — and the acceptance checks of the goal) and the budget (tokens, step attempts, revisions, wall-clock seconds from confirmation). Nothing runs until the requester confirms it in the console (confirm_goal); the budget cannot be changed there — propose again to change it. The requester must be a person: a call for a service or agent Principal is refused (403). A requester has at most a deployment-set number of goals waiting to be confirmed or rejected (5 unless configured): one more is refused, nothing written (409 proposed_goal_limit with details.limit and details.proposed) — ask them to confirm or reject one first; a retry of a run already proposed is still answered. The plan is checked (400 invalid_params with details.problems); the statement and the plan must not carry credentials — refused, nothing written (400 credentials_in_text with details.field and, for the plan, details.suspectedSecretPaths: a gate authenticates with the credentials configured on it), nor the [redacted] mark a read shows where one stood (400 redacted_text_submitted with details.field and, for the plan, details.paths). Plan places read plan.steps.<i>.input.<field>, plan.acceptance.<i>.prompt and so on, i from 0. The result's hints say what the person confirming should know: a plan the platform checks nothing of, and any step the requester could not start now (a gate they cannot act on, a capability they do not hold, a Worker their profile excludes). idempotencyKey: the same key returns the run it first proposed, whatever its status (changed: false); without one, the same statement, plan and budget from the same session return the run still proposed.`,
+    description: `Propose a goal for you (on a Handle, the person you act for) to confirm: statement — what is wanted, in a sentence or two (at most ${MAX_GOAL_STATEMENT_CHARS} characters) — the plan, revision 1 — written out (plan: its steps, each a published Worker version, their dependencies, inputs and checks — a step may declare the output its Worker reports (outputSchema) and take input fields from earlier steps' outputs (bindings: to, from a step it depends on that declares an outputSchema, a JMESPath path) — and the acceptance checks of the goal) or made from a published Procedure (fromProcedure: procedureId, version — its latest published version when absent — and the parameters its parameters schema asks for: its worker steps become the plan's steps, each after the one before unless it says otherwise, its $params bindings filled in from the parameters, and its verify steps the goal's acceptance checks — the platform makes a check a verify step carries, and the requester confirms the others; a Procedure with an operation or approval step makes no plan), exactly one of the two — and the budget (tokens, step attempts, revisions, wall-clock seconds from confirmation). Nothing runs until the requester confirms it in the console (confirm_goal); the budget cannot be changed there — propose again to change it. The requester must be a person: a call for a service or agent Principal is refused (403). A requester has at most a deployment-set number of goals waiting to be confirmed or rejected (5 unless configured): one more is refused, nothing written (409 proposed_goal_limit with details.limit and details.proposed) — ask them to confirm or reject one first; a retry of a run already proposed is still answered. The plan is checked (400 invalid_params with details.problems — for fromProcedure, also an unknown or unpublished Procedure, parameters its schema refuses at fromProcedure.parameters.<field>, and a step it cannot make); a plan made from a Procedure is checked exactly like one written out, and the revision records the Procedure (fromProcedure on get_goal and get_goal_revision). The statement, the plan and the parameters must not carry credentials — refused, nothing written (400 credentials_in_text with details.field and, for the plan, details.suspectedSecretPaths: a gate authenticates with the credentials configured on it), nor the [redacted] mark a read shows where one stood (400 redacted_text_submitted with details.field and, for the plan, details.paths). Plan places read plan.steps.<i>.input.<field>, plan.acceptance.<i>.prompt and so on, i from 0. The result's hints say what the person confirming should know: a plan the platform checks nothing of, and any step the requester could not start now (a gate they cannot act on, a capability they do not hold, a Worker their profile excludes). idempotencyKey: the same key returns the run it first proposed, whatever its status (changed: false); without one, the same statement, plan (or fromProcedure) and budget from the same session return the run still proposed.`,
   },
   {
     name: 'confirm_goal',

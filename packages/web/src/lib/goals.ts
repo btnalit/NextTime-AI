@@ -285,16 +285,21 @@ export interface OutputField {
   readonly description: string | null;
 }
 
-/** The fields an output contract asks the step's Worker to hand back, in the schema's order — the
- *  root is always an object (`StepOutputSchemaSchema`). */
+/** The fields an output contract (or a Procedure's parameters) asks for — the root is always an
+ *  object (`StepOutputSchemaSchema`) — the required ones first, each part by name: the schema's
+ *  own order does not survive storage (jsonb orders an object's keys its own way). */
 export function outputContractFields(schema: OutputSchema, t: Translate): readonly OutputField[] {
   const required = new Set(schema.required ?? []);
-  return Object.entries(schema.properties ?? {}).map(([name, node]) => ({
-    name,
-    kind: outputKindText(node, t),
-    required: required.has(name),
-    description: node.description ?? null,
-  }));
+  return Object.entries(schema.properties ?? {})
+    .map(([name, node]) => ({
+      name,
+      kind: outputKindText(node, t),
+      required: required.has(name),
+      description: node.description ?? null,
+    }))
+    .sort((a, b) =>
+      a.required === b.required ? a.name.localeCompare(b.name) : a.required ? -1 : 1,
+    );
 }
 
 const OUTCOME_BASIS: Readonly<Record<GoalOutcomeBasis, readonly [string, string]>> = {

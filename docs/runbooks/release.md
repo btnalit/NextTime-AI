@@ -1209,7 +1209,7 @@ v0.47.0、v0.48.0 不单独上主机（#554 不在 v0.47.0 里，遗留 259 的�
 
 **回滚**（§5）：回滚目标是 v0.46.0，按 §3.25 与 §3.26 的回滚说明；不需要排空 Worker。
 
-窗口目标改到 v0.49.0 之后的发版时（维护者 2026-10-16 决定窗口暂缓，开窗口时目标改为当时最新的发版），本清单按新目标刷新，并加上之后各版的小节，至少 §3.28（#589 升钉：`postgres` 与 `backup` 重建、不执行 `ALTER EXTENSION`、应用后只读核对 `vector` 扩展版本）与 §3.29（#592：governance 0020，旧「始终允许」规则可能显示「已暂停 · 待确认版本」需 owner 重新确认，契约不向后兼容、旧控制台页要刷新）与 §3.30（#601：governance 0021，窗口前估算 `audit_records` 全表扫描的锁表时间并核对回收超时，窗口后历史失败行多显示「结果不明」）与 §3.31（#607：goal 0001 / task 0007 / governance 0022，窗口前估算建索引时间）与 §3.32（#615：core 0044，窗口前估算建索引期间审计写入的等待，必要时并发预建并确认索引有效）与 §3.33（#619：goal 0002，新增每秒认领与每分钟对账的后台负载）与 §3.34（#620：core 0045，窗口前三数预检、迁移期间不接新门、清洗改写类变成 4 个、回滚后自接门暂停失效；#637 再加两个改写类与一个只列类，见 §3.25）、§3.35（#626：goal 0003，只重建一个守卫函数，无主机步骤）、§3.36（#633：goal 0004，加列与重建一个守卫函数，无主机步骤）、§3.37（#642：governance 0023，`action_requests` 加列、约束与守卫触发器，窗口前看一眼该表行数，无主机步骤）、§3.38（#644：无迁移，窗口前打包门只读检查，内核与门宿主同版，回退代码前先处理挂在系统接入包上的实例）、§3.39（#649：governance 0024，新表与重建核对守卫，两个可选环境变量不设即默认，代码回退期间观察压缩报 degraded 可忽略）、§3.40（#650：governance 0025，只加新表，可选的窗口前本体族只读检查，模块升级可能新返回 400 `change_confirmation_required`）、§3.41（#664：goal 0005，新表与重建目标守卫，两个可选环境变量不设即默认，升级后 I-G5 指标应为 0，代码回退期间观察压缩报 degraded 可忽略）、§3.42（#670：goal 0006，步骤验收新表与新触发器，无新环境变量，代码回退期间观察压缩报 degraded 可忽略）、§3.43（#668：无迁移，能力包清单在镜像 `/app/packs`，`kernel.env` 不要设 `PACKS_DIR`）与 §3.44（#674：core 0046 + goal 0007，可逆，无新环境变量，升级后 I-G5 指标仍应为 0）与 §3.45（#679：governance 0026，可逆，窗口前只读查同名已发布 Skill，镜像新增 ops-base）与 §3.46（#690：governance 0027，可逆，镜像新增 ops-base v2，装或升级能力包后对门做一次健康探测）与 §3.47（#700：governance 0028，可逆，窗口前四条只读查询，迁移结束的 NOTICE 每类 `without` 应为 0，窗口后核对找不到主体的 Decision）与 §3.48（#698：无迁移，worker-runtime 与 worker-supervisor 同版、只能整版回滚，窗口前只读清点工作区里的 pi 资源文件，应用后在新建的容器上核对）与 §3.49（#705：无迁移，镜像新增 ops-base v3，包里的 Worker 安装时可绑门）与 §3.50（#704：goal 0008，可逆，可选环境变量 `GOAL_MAX_PROPOSED_PER_REQUESTER` 写错内核起不来）与 §3.51（#710：无迁移，门对齐时治理字段从三个扩到九个）与 §3.52（#715：无迁移，内核镜像带接入预设；有预设实例时回滚要先停 `gate-host`）与 §3.53（#716：task 0008，可逆，worker-runtime 与内核同版本）。
+窗口目标改到 v0.49.0 之后的发版时（维护者 2026-10-16 决定窗口暂缓，开窗口时目标改为当时最新的发版），本清单按新目标刷新，并加上之后各版的小节，至少 §3.28（#589 升钉：`postgres` 与 `backup` 重建、不执行 `ALTER EXTENSION`、应用后只读核对 `vector` 扩展版本）与 §3.29（#592：governance 0020，旧「始终允许」规则可能显示「已暂停 · 待确认版本」需 owner 重新确认，契约不向后兼容、旧控制台页要刷新）与 §3.30（#601：governance 0021，窗口前估算 `audit_records` 全表扫描的锁表时间并核对回收超时，窗口后历史失败行多显示「结果不明」）与 §3.31（#607：goal 0001 / task 0007 / governance 0022，窗口前估算建索引时间）与 §3.32（#615：core 0044，窗口前估算建索引期间审计写入的等待，必要时并发预建并确认索引有效）与 §3.33（#619：goal 0002，新增每秒认领与每分钟对账的后台负载）与 §3.34（#620：core 0045，窗口前三数预检、迁移期间不接新门、清洗改写类变成 4 个、回滚后自接门暂停失效；#637 再加两个改写类与一个只列类，见 §3.25）、§3.35（#626：goal 0003，只重建一个守卫函数，无主机步骤）、§3.36（#633：goal 0004，加列与重建一个守卫函数，无主机步骤）、§3.37（#642：governance 0023，`action_requests` 加列、约束与守卫触发器，窗口前看一眼该表行数，无主机步骤）、§3.38（#644：无迁移，窗口前打包门只读检查，内核与门宿主同版，回退代码前先处理挂在系统接入包上的实例）、§3.39（#649：governance 0024，新表与重建核对守卫，两个可选环境变量不设即默认，代码回退期间观察压缩报 degraded 可忽略）、§3.40（#650：governance 0025，只加新表，可选的窗口前本体族只读检查，模块升级可能新返回 400 `change_confirmation_required`）、§3.41（#664：goal 0005，新表与重建目标守卫，两个可选环境变量不设即默认，升级后 I-G5 指标应为 0，代码回退期间观察压缩报 degraded 可忽略）、§3.42（#670：goal 0006，步骤验收新表与新触发器，无新环境变量，代码回退期间观察压缩报 degraded 可忽略）、§3.43（#668：无迁移，能力包清单在镜像 `/app/packs`，`kernel.env` 不要设 `PACKS_DIR`）与 §3.44（#674：core 0046 + goal 0007，可逆，无新环境变量，升级后 I-G5 指标仍应为 0）与 §3.45（#679：governance 0026，可逆，窗口前只读查同名已发布 Skill，镜像新增 ops-base）与 §3.46（#690：governance 0027，可逆，镜像新增 ops-base v2，装或升级能力包后对门做一次健康探测）与 §3.47（#700：governance 0028，可逆，窗口前四条只读查询，迁移结束的 NOTICE 每类 `without` 应为 0，窗口后核对找不到主体的 Decision）与 §3.48（#698：无迁移，worker-runtime 与 worker-supervisor 同版、只能整版回滚，窗口前只读清点工作区里的 pi 资源文件，应用后在新建的容器上核对）与 §3.49（#705：无迁移，镜像新增 ops-base v3，包里的 Worker 安装时可绑门）与 §3.50（#704：goal 0008，可逆，可选环境变量 `GOAL_MAX_PROPOSED_PER_REQUESTER` 写错内核起不来）与 §3.51（#710：无迁移，门对齐时治理字段从三个扩到九个）与 §3.52（#715：无迁移，内核镜像带接入预设；有预设实例时回滚要先停 `gate-host`）与 §3.53（#716：task 0008，可逆，worker-runtime 与内核同版本）与 §3.54（#721：无迁移，镜像新增 knowledge v1 能力包）与 §3.55（#722：goal 0009 + worker 0005，可逆）与 §3.56（#726：无迁移，RAGFlow `document.parse` 收紧，需平台采用 + 各工作区对齐）。
 
 ### 3.28 第三方镜像升钉：pgvector、node、postgres（#589，v0.49.0 之后的下一版起）
 
@@ -1628,6 +1628,35 @@ rollback;" </dev/null
 - **应用后检查**：`select conname from pg_constraint where conname like 'tasks_%output%' or conname = 'tasks_rework_of';` 应列出三条约束。
 - **回滚**：只回退代码即可（§6），worker-runtime 与内核一起回退。上一版插入和查询 `tasks` 都写明列名，看不到这三列；它对 Task 的更新（状态、结果、token）不碰触发器保护的列。
 
+### 3.54 knowledge 能力包 v1 与能力包依赖（#721，S11 P1-F2，v0.49.0 之后的下一版起）
+
+无迁移；没有新环境变量，不改 compose，无单独主机步骤。
+
+- **镜像变化**：`/app/packs` 新增 `knowledge` v1（依赖 ops-assets v2 与 RAGFlow），随内核镜像重建生效。
+- **新行为与错误码**：能力包可以声明依赖别的能力包；依赖没满足时 `install_pack` 返回 409 `pack_dependency_unmet`，什么也不写；核验新增依赖检查，已有核验记录读出来依赖为空，不受影响。knowledge 要先装 ops-assets v2，并需要工作区已接入 RAGFlow（打包门或 §3.52 的预设实例）。步骤见 operations.md §14.9。
+- **回滚**：只回退代码即可。上一版不认识 `requires.packs`，但它的 `packs/` 里也没有 knowledge，已装的 knowledge 留下的 Skill 与 Worker 版本照常存在；核验记录里多出的 `dependencies` 键上一版不读。
+
+### 3.55 Procedure 成为计划模板（#722，goal 0009 + worker 0005，S11 GO5d-2，v0.49.0 之后的下一版起）
+
+带两个迁移（`goal/0009_plan_revision_source`、`worker/0005_procedure_parameters`），随 `apply-release.sh` 的迁移步骤自动应用（goal 模块先于 worker）；没有新环境变量或服务，不改 compose。
+
+- **goal 0009**：`plan_revisions` 加 `source_procedure_id`、`source_procedure_version` 两列，不回填；CHECK 两列同有同无、只能出现在第 1 版上；`plan_revisions_guard` 写入后不可改。
+- **worker 0005**：`procedures.parameters jsonb`（必须是对象），不回填；用 `create or replace` 替换流程发布后不可改触发器的函数体，覆盖这一列；外键 `plan_revisions (workspace_id, source_procedure_id, source_procedure_version) → procedures` 与一个部分索引。
+- **窗口前只读检查**：`select count(*) from plan_revisions;`、`select count(*) from procedures;`（加约束与外键时扫描的行数，预期很小）。已有计划版本没有来源、已有流程 `parameters` 为 NULL，约束对它们成立。
+- **新行为与错误码**：`propose_goal` 可以用 `fromProcedure` 代替 `plan`；`publish_procedure` 对写了模板字段的流程，展开出的计划不通过时返回 400 `invalid_params`（`details.problems`），草稿不变；已有流程照常发布。`get_goal` / `get_goal_revision` 的计划版本加 `fromProcedure`，`list_procedures` 加 `parameters`。
+- **回滚**：只回退代码即可（§6）。上一版不读写这些列，它提的流程 `parameters` 为 NULL，触发器多出来的比较对它没有影响；外键只约束非空的来源列。
+
+### 3.56 RAGFlow `document.parse` 每次都要人批（#726，S11 P1-F，v0.49.0 之后的下一版起）
+
+没有迁移、新环境变量或服务，不改 compose；只改 `ragflow` 门的清单（打包门与 RAGFlow 预设）。`document.parse` 从 `low`、可自动批准改为 `medium`、不可自动批准，因为重新解析会删掉文档原有的全部分块（含手工添加或编辑过的）。**已有部署不会自动收紧**，按下面三步做。详细步骤见 `docs/runbooks/host-gatekeepers.md` §13「升级后收紧 `document.parse`」。
+
+- **窗口前（只读）**：用 `host-gatekeepers.md` §13 的查询列出部署了 `document.parse` 的工作区，结果记进 `docs/private/`。`gate_id` 为空的行是经旧注册路径或工作区自己接上的：前一种要先从平台目录接入再对齐。
+- **平台采用新清单**：升级后，启用或禁用过的 `ragflow` 门（打包门和按预设建的实例）announce 出的新清单会挂起待采用。平台管理员在「平台 · 集成」打开它，核对变化只有 `document.parse` 的影响级（low → medium）和可否自动批准（是 → 否），确认采用。待采用期间调用不会被拒，照旧按旧分类执行。
+- **每个启用了这扇门的工作区对齐一次**：所有者到「系统与授权」→ 这个系统 →「已部署 Operation 的治理字段」对齐。没对齐之前，这个工作区里的 `document.parse` 仍会自动批准。对齐不更新描述，已部署副本没有删除分块的提醒（遗留 457）。
+- **对齐完成前的临时办法**：平台管理员可以在「平台 · 集成」→ `ragflow` 接入包的「允许调用的操作」里停用 `document.parse`，全部对齐后再恢复。
+- **核对（只读）**：对齐后在「已部署 Operation 的治理字段」或 `list_operations` 里看到 `document.parse` 是 `medium`、不可自动批准。**不要用真实参数发 `request_action` 核对**：被批准就会删掉分块。要验证审批路径，`document_ids` 用不存在的 id，看到 `pending_approval` 后立即拒绝。
+- **回滚**：无迁移，只回退代码（§6）。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -1757,6 +1786,8 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.49.0 之后的下一版 | governance `0028_decision_subjects`（#700，遗留 421）：`decisions` 加主体五列、触发器 `decisions_subject` 与回填，RLS `decisions_visibility` 加对话与冲突规则 | 可逆 | 上一版不读新列，触发器在它的插入上照样填主体；上一版读面只因两条 RLS 规则变窄；可逆性探针（v0.49.0 内核套件跑在本版库结构上）只有 `reversibility-deltas.json` 已登记的 4 例失败 |
 | v0.49.0 之后的下一版 | goal `0008_goal_idempotency_key`（#704，S11 GO5c）：`goal_runs` 加可空列 `idempotency_key` 与两个部分唯一索引，不回填 | 可逆 | 上一版插入时该列为 NULL，两个索引都不收；守卫不允许改这一列 |
 | v0.49.0 之后的下一版 | task `0008_task_output_contract`（#716，S11 GO5d-1）：`tasks` 加三列 nullable jsonb、三条 CHECK 与写入后不可改触发器，不回填 | 可逆 | 上一版按列名读写 `tasks`，看不到这三列；已有行全为 NULL，CHECK 成立；它的更新不碰受保护的列 |
+| v0.49.0 之后的下一版 | goal `0009_plan_revision_source`（#722，S11 GO5d-2）：`plan_revisions` 加两列来源与 CHECK、写入后不可改，不回填 | 可逆 | 上一版不读写这两列，已有行为 NULL，CHECK 成立 |
+| v0.49.0 之后的下一版 | worker `0005_procedure_parameters`（#722，S11 GO5d-2）：`procedures.parameters` 与对象 CHECK、不可改触发器覆盖该列、`plan_revisions` 来源外键与部分索引，不回填 | 可逆 | 上一版提的流程 `parameters` 为 NULL，触发器多出的比较不影响它；外键只约束非空来源 |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：

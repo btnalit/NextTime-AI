@@ -270,6 +270,9 @@ export interface ProcedureRow {
   readonly name: string;
   readonly description: string;
   readonly steps?: readonly unknown[];
+  /** S11 GO5d-2: the parameters schema a goal made from it is proposed with; `null` / absent: it
+   *  takes none. */
+  readonly parameters?: Readonly<Record<string, unknown>> | null;
   /** As `SkillRow.proposedBy`. */
   readonly proposedBy?: string;
 }

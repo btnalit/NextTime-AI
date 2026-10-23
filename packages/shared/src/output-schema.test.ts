@@ -152,6 +152,12 @@ describe('validateOutput (S11 GO5d-1)', () => {
     ]);
   });
 
+  it('names the value it checks by root (S11 GO5d-2: a goal’s Procedure parameters)', () => {
+    expect(validateOutput(HOSTS, {}, 'fromProcedure.parameters').problems).toEqual([
+      { path: 'fromProcedure.parameters.hosts', message: 'required, missing' },
+    ]);
+  });
+
   it('outputPath quotes keys that are not plain and cuts long ones', () => {
     expect(outputPath('output', 'a-b')).toBe('output.a-b');
     expect(outputPath('output', 'a b')).toBe('output["a b"]');

@@ -73,7 +73,7 @@ import {
   ProposedGoalLimitError,
 } from '../../application/goal/index.js';
 // S11 P1-C: a domain module's error, imported directly like the two above.
-import { PackNotFoundError } from '../../application/packs/index.js';
+import { PackDependencyUnmetError, PackNotFoundError } from '../../application/packs/index.js';
 // P-B2b: same direct-import convention as the comment above — application/platform/modules.ts is a
 // domain module, not re-exported by application/gateway/index.ts's curated surface.
 import {
@@ -97,6 +97,7 @@ import {
   DraftNotDiscardableError,
   ProcedureNotFoundError,
   ProcedureStepReferenceError,
+  ProcedureTemplateError,
   SkillNameConflictError,
   SkillNotFoundError,
   SkillValidationError,
@@ -480,6 +481,10 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   if (err instanceof PackNotFoundError) {
     return { code: WS_ERROR_CODES.NOT_FOUND, message: err.message };
   }
+  // S11 P1-F: mirrors HTTP 409 `pack_dependency_unmet`.
+  if (err instanceof PackDependencyUnmetError) {
+    return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
+  }
   if (err instanceof ModuleConfirmRequiredError) {
     return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
@@ -617,6 +622,7 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   }
   if (
     err instanceof ProcedureStepReferenceError ||
+    err instanceof ProcedureTemplateError ||
     err instanceof WorkerDefinitionValidationError ||
     err instanceof WorkerDefinitionKindMismatchError ||
     err instanceof SkillValidationError

@@ -26,7 +26,9 @@ import {
  * pack is derived from its components' current content, never stored; installing one is a
  * ChangePlan workspace segment the owner reviews first (`wire/change-plan.ts`). A version may name
  * the systems it needs (`requiredConnectors`, P1-E); where each stands in the workspace is read,
- * not stored, and installing does not wait for them — verifying the install checks them. A module
+ * not stored, and installing does not wait for them — verifying the install checks them. It may
+ * also build on other packs (`requiredPacks`, P1-F): installing waits for those, since the owner
+ * installs them on the same page (`dependencies` says how each stands). A module
  * (`wire/platform.ts`) is a pack with one ontology component named after it.
  */
 
@@ -75,10 +77,35 @@ export const PackVersionWireSchema = z
     breaking: z.boolean(),
     /** The systems its components work with, by connector name (`docker`); empty when none. */
     requiredConnectors: z.array(z.string()),
+    /** S11 P1-F: the packs it builds on, each with the lowest version that will do; empty when
+     *  none. Installing it waits for them (`install_pack` 409 `pack_dependency_unmet`). */
+    requiredPacks: z.array(
+      z
+        .object({
+          name: z.string(),
+          minVersion: z.number().int().positive(),
+        })
+        .strict(),
+    ),
     components: z.array(PackComponentWireSchema),
   })
   .strict();
 export type PackVersionWire = z.infer<typeof PackVersionWireSchema>;
+
+/** S11 P1-F: one pack the latest version builds on (`requiredPacks`), and how this workspace has it
+ *  now (`status` / `installedVersion`, that pack's own, `PackWire`). `met`: installed at
+ *  `minVersion` or later — a `customized` one never is, since what it has cannot be told. Until
+ *  every one is met, `install_pack` refuses (409 `pack_dependency_unmet`, `details.unmet`). */
+export const PackDependencyWireSchema = z
+  .object({
+    name: z.string(),
+    minVersion: z.number().int().positive(),
+    status: PackInstallStatusSchema,
+    installedVersion: z.number().int().positive().nullable(),
+    met: z.boolean(),
+  })
+  .strict();
+export type PackDependencyWire = z.infer<typeof PackDependencyWireSchema>;
 
 /** A Gatekeeper of the workspace, by id and the name people know it by (the change plan's own). */
 export const PackGateRefWireSchema = ChangeGateRefWireSchema;
@@ -180,6 +207,8 @@ export const PackWireSchema = z
     components: z.array(PackComponentStateWireSchema),
     /** The latest version's `requiredConnectors`, each with where it stands here. */
     requirements: z.array(PackRequirementWireSchema),
+    /** S11 P1-F: the latest version's `requiredPacks`, each with how this workspace has it. */
+    dependencies: z.array(PackDependencyWireSchema),
   })
   .strict();
 export type PackWire = z.infer<typeof PackWireSchema>;

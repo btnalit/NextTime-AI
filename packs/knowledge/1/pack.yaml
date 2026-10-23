@@ -1,0 +1,32 @@
+# Pack Contract v1 (S11 P1-C / P1-D / P1-E / P1-F; docs/s10-evolution-plan-2026-10-04.md §6.2,
+# §6.5): one immutable PackVersion. The shape and the rules a manifest keeps are
+# `packages/kernel/src/application/packs/manifest.ts`; the Skill and Worker files beside it, and
+# the rules across manifests, are its `registry.ts`.
+#
+# knowledge v1 ships a read-only knowledge Worker and its retrieval method, acting on RAGFlow — a
+# platform administrator connects it from the `ragflow` connector preset (`connectors/ragflow/`).
+# It brings no ontology of its own: the KnowledgeBase and Document types the RAGFlow Operations
+# read are ops-assets v2's (where they were first published), so it builds on that version
+# (`requires.packs`) instead of publishing a second family of the same types.
+#
+# `summary` and `notes` are read by workspace owners in the console (the pack's detail and the
+# install review): plain words, no type or field names.
+schema: 1
+name: knowledge
+version: 1
+summary: >-
+  知识检索：一个知识检索执行者和它的检索方法，按问题从已接入的知识库里找出相关内容，并注明出处。
+# One line each: folding a Chinese sentence over lines puts a space where the lines meet.
+notes: 安装后工作区多一个知识检索执行者和一份检索方法。执行者先看已接入的知识库里有哪些知识库和文档，再按问题检索相关片段，回答时注明每条依据出自哪个知识库、哪份文档，找不到就直说。它只读：不上传、不解析、不改动知识库里的任何内容。它要用到 RAGFlow，还要先装好基础设施台账的第 2 版（台账里记录知识库和文档的类型在那一版里）。
+breaking: false
+requires:
+  connectors:
+    - ragflow
+  packs:
+    - name: ops-assets
+      minVersion: 2
+components:
+  skills:
+    - kb-retrieval
+  workers:
+    - knowledge-researcher

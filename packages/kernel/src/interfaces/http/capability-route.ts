@@ -102,7 +102,11 @@ import {
   parseCookieHeader,
 } from '../../application/identity/index.js';
 // S11 P1-C: a domain module's error, imported directly like the two above.
-import { PackNotFoundError, PackWorkerGatesError } from '../../application/packs/index.js';
+import {
+  PackDependencyUnmetError,
+  PackNotFoundError,
+  PackWorkerGatesError,
+} from '../../application/packs/index.js';
 // P-B2b: same direct-import convention as GateInstanceNotAvailableError above — these two live in
 // application/platform/modules.ts (a domain module, not a *-handlers.ts file), imported directly
 // rather than routed through application/gateway/index.ts's curated surface.
@@ -127,6 +131,7 @@ import {
   DraftNotDiscardableError,
   ProcedureNotFoundError,
   ProcedureStepReferenceError,
+  ProcedureTemplateError,
   SkillNameConflictError,
   SkillNotFoundError,
   SkillValidationError,
@@ -255,6 +260,11 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // of its candidates — a caller-input mistake (the console only offers candidates).
   if (err instanceof PackWorkerGatesError) {
     return { status: 400, code: 'invalid_params', message: err.message };
+  }
+  // S11 P1-F: `install_pack` for a version that builds on a pack not installed at the version it
+  // needs (`requires.packs`); `details.unmet` lists each, for the console to offer installing it.
+  if (err instanceof PackDependencyUnmetError) {
+    return { status: 409, code: err.code, message: err.message, details: { ...err.details } };
   }
   // P-B2b: D3's "customized or breaking needs confirm: true" — same 400-with-details shape as
   // OntologyViolationError below, so the console can show exactly what to confirm.
@@ -765,6 +775,15 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   }
   if (err instanceof ProcedureStepReferenceError) {
     return { status: 400, code: 'invalid_step_reference', message: err.message };
+  }
+  // S11 GO5d-2: the goal plan a Procedure makes does not pass — the same 400 a plan's problems get.
+  if (err instanceof ProcedureTemplateError) {
+    return {
+      status: 400,
+      code: 'invalid_params',
+      message: err.message,
+      details: { problems: [...err.problems] },
+    };
   }
   if (
     err instanceof WorkerDefinitionValidationError ||

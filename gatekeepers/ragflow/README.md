@@ -30,20 +30,34 @@ written from memory.
 | `kb.documents` | observe | low | true | `GET /api/v1/datasets/{dataset_id}/documents` | → `Document` facts |
 | `retrieve` | observe | low | true | `POST /api/v1/retrieval` | read-only despite the HTTP verb — no side effects |
 | `document.upload` | execute | medium | **false** | `POST /api/v1/datasets/{dataset_id}/documents?type=local` | real file content (S3.4), see below |
-| `document.parse` | execute | low | **true** (S3.4) | `POST /api/v1/datasets/{dataset_id}/chunks` | starts an async parse job |
+| `document.parse` | execute | medium | **false** | `POST /api/v1/datasets/{dataset_id}/chunks` | starts an async parse job; re-parsing deletes the document's existing chunks first |
 
 Every response follows RAGFlow's own `{code, data}` envelope; `result_mapping.jmes_path` is
 written against the whole response (`data[*]` / `data.docs[*]`), not just its `data` field.
 
-`document.parse` is `auto_approvable: true` (S3.4 — the S2.5 version left it `false`, the
-conservative default `@nexttime/gatekeeper-base`'s `importOpenApi` gives every newly-imported
-execute Operation, I17 "owner review before publish"). This manifest is hand-authored and reviewed
-directly (never run through `importOpenApi`), so that review has already happened by the time this
-file is merged — `auto_approvable: true` + `blast_radius: 'low'` resolves to `allow` under a
-workspace's compiled-in low-blast-radius default (`governance/policy/engine.ts`'s
-`effectiveWorkspaceAutoApprove`) unless a workspace has explicitly opted out. `document.upload`
-stays `auto_approvable: false` (`blast_radius: 'medium'` never auto-approves regardless of this
-flag *unless* a workspace policy explicitly enables it for `medium` — I8's own double-signal rule).
+`document.parse` is `blast_radius: 'medium'`, `auto_approvable: false` — a person approves every
+parse, and no workspace rule can turn auto-approval on for it. RAGFlow's parse endpoint
+(`parse()` in `api/apps/sdk/doc.py`; the same in each release checked: v0.18.0, v0.19.0, v0.20.5,
+v0.21.0, v0.21.1, v0.22.0, v0.22.1 and v0.23.0) resets the document's chunk count and deletes
+**every** chunk stored under that document before it queues the parse again. Chunks added by
+hand (`add_chunk`, stored under the same `doc_id`) and chunks edited by hand (`update_chunk`,
+edited in place) go with them, and nothing keeps a copy. Parsing a
+document for the first time loses nothing, but the gate cannot tell a first parse from a re-parse,
+so the classification takes the worse case.
+
+History: S2.5 left it `auto_approvable: false` (the conservative default `importOpenApi` gives
+every newly-imported execute Operation, I17); S3.4 made it `low` and `auto_approvable: true`, so
+the workspace's compiled-in low-blast-radius default approved it on its own; S11 P1-F put it back
+behind a person once the re-parse behavior above was checked in RAGFlow's source.
+`document.upload` stays `blast_radius: 'medium'`, `auto_approvable: false`: a person approves every
+upload too. With `auto_approvable: false` no workspace rule can change that; a workspace rule can
+auto-approve a `medium` Operation only when the Operation itself declares `auto_approvable: true`
+(`packages/kernel/src/governance/policy/engine.ts` checks the Operation's flag first — I8's
+double signal).
+
+The connector preset (`connectors/ragflow/operations.json`, below) carries the same
+classification; `src/manifest.test.ts` holds the two files to it. Upgrading a deployment where
+this gate was already decided: `docs/runbooks/host-gatekeepers.md` §13「升级后收紧 `document.parse`」.
 
 ### `document.upload` now sends real file content (S3.4)
 

@@ -110,6 +110,7 @@ export function goalDetail(overrides: Partial<GoalDetailWire> = {}): GoalDetailW
       decidedAt: '2026-10-20T00:01:00.000Z',
       createdAt: '2026-10-20T00:00:00.000Z',
       removals: {},
+      fromProcedure: null,
       hints: [],
     },
     revisions: [
@@ -125,6 +126,7 @@ export function goalDetail(overrides: Partial<GoalDetailWire> = {}): GoalDetailW
         decidedAt: '2026-10-20T00:01:00.000Z',
         createdAt: '2026-10-20T00:00:00.000Z',
         removals: {},
+        fromProcedure: null,
       },
     ],
     steps: [

@@ -45,6 +45,7 @@ import { GoalReconcileControls } from './GoalReconcileControls.js';
 import { GoalRevisionsSection } from './GoalRevisionsSection.js';
 import { GoalStepsSection } from './GoalStepsSection.js';
 import { GoalUnresolvedSection } from './GoalUnresolvedSection.js';
+import { PlanSource } from './PlanSource.js';
 
 export interface GoalDetailPageProps {
   readonly http: CapabilityCaller;
@@ -398,13 +399,27 @@ function overviewItems(goal: GoalDetailWire, http: CapabilityCaller, t: Translat
   );
   if (goal.endedAt)
     items.push({ key: 'endedAt', label: t('结束', 'Ended'), value: <When iso={goal.endedAt} /> });
+  // S11 GO5d-2: a plan made from a Procedure says which version — revision 1's, the only one that
+  // can be; a later revision is the requester's own edit of it.
+  const source = goal.revisions.find((revision) => revision.revision === 1)?.fromProcedure ?? null;
   items.push({
     key: 'revision',
     label: t('计划', 'Plan'),
-    value:
-      goal.currentRevision !== null
-        ? t(`第 ${goal.currentRevision} 版生效中`, `v${goal.currentRevision} in force`)
-        : t('第 1 版，等确认', 'v1, awaiting confirmation'),
+    value: (
+      <span className="row-wrap">
+        <span>
+          {goal.currentRevision !== null
+            ? t(`第 ${goal.currentRevision} 版生效中`, `v${goal.currentRevision} in force`)
+            : t('第 1 版，等确认', 'v1, awaiting confirmation')}
+        </span>
+        {source ? (
+          <span className="text-small text-3">
+            {goal.currentRevision !== null && goal.currentRevision > 1 ? t('第 1 版', 'v1:') : null}{' '}
+            <PlanSource source={source} testId="goal-plan-source" />
+          </span>
+        ) : null}
+      </span>
+    ),
   });
   items.push({
     key: 'provenance',

@@ -78,6 +78,7 @@ function verification(patch: Partial<ChangeVerificationWire> = {}): ChangeVerifi
     sourceFound: true,
     items: [{ ordinal: 1, kind: 'ontology_version', state: 'in_effect' }],
     requirements: [],
+    dependencies: [],
     ...patch,
   };
 }
@@ -411,6 +412,15 @@ describe('ChangesTab (能力目录 · 安装历史, S11 P1-B)', () => {
             },
             { connector: 'ragflow', state: 'can_enable', met: false, gates: [] },
           ],
+          dependencies: [
+            {
+              name: 'ops-assets',
+              minVersion: 2,
+              status: 'outdated',
+              installedVersion: 1,
+              met: false,
+            },
+          ],
         }),
       }),
     });
@@ -435,6 +445,14 @@ describe('ChangesTab (能力目录 · 安装历史, S11 P1-B)', () => {
     expect(within(result).getByTestId('catalog-change-requirement-ragflow').textContent).toMatch(
       /待启用平台已经提供，工作区还没启用。去能力包页启用/,
     );
+    // S11 P1-F: a pack it builds on, rolled back below the version it needs since the install.
+    const dependency = within(result).getByTestId('catalog-change-dependency-ops-assets');
+    expect(dependency.textContent).toMatch(/^ops-assetsv2 或更高不满足现在已装 v1$/);
+    expect(
+      within(dependency)
+        .getByTestId('catalog-change-dependency-ops-assets-link')
+        .getAttribute('href'),
+    ).toBe('#/govern/catalog/packs/ops-assets');
     // A member reads it but is not offered the run.
     await waitFor(() => expect(http.calls.some((c) => c.name === 'get_workspace')).toBe(true));
     await waitFor(() => expect(screen.queryByTestId('catalog-change-verify')).toBeNull());

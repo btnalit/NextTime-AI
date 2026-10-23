@@ -19,6 +19,7 @@ import { proposeSkill, publishSkill } from '../worker/index.js';
 import { type PackFixtureDirs, skillFile, workerFile, writePackFixture } from './fixture.js';
 import {
   type PackComponentState,
+  PackDependencyUnmetError,
   type PackRegistry,
   installPack,
   latestPackVersion,
@@ -26,6 +27,7 @@ import {
   loadPackState,
   packSegment,
   previewPackInstall,
+  readPackDependencies,
   requirePack,
 } from './index.js';
 
@@ -191,6 +193,13 @@ describe.runIf(DATABASE_URL !== undefined)(
                 'skills:\n  - crew-fix\n  - crew-check\n',
               ),
             ],
+          },
+        ],
+        // S11 P1-F: builds on kit v2 (its Skill uses the types v2 publishes, say).
+        'kit-user': [
+          {
+            skills: [skillFile('kit-user-fix', 'Use the kit.', 'Look at the Gamma first.')],
+            requiresPacks: [{ name: 'kit', minVersion: 2 }],
           },
         ],
         'act-kit': [
@@ -454,6 +463,72 @@ describe.runIf(DATABASE_URL !== undefined)(
         code: 'skill_name_conflict',
         skillName: 'crew-check',
       });
+    });
+
+    it('S11 P1-F: a pack it builds on not installed at the version it needs refuses the install, nothing written; installing that pack first lets it through', async () => {
+      const ws = await newWorkspace();
+      const dependencies = () =>
+        inWorkspace(ws, (client) =>
+          readPackDependencies(
+            client,
+            ws.workspaceId,
+            registry,
+            latestPackVersion(requirePack(registry, 'kit-user')).requiredPacks,
+          ),
+        );
+      const tryInstall = async () => {
+        const dryRun = await preview(ws, 'kit-user');
+        return install(ws, {
+          name: 'kit-user',
+          version: 1,
+          reviewedDigest: dryRun.plan.digest,
+          confirmedOrdinals: dryRun.plan.items
+            .filter((item) => item.classification === 'authority_widening')
+            .map((item) => item.ordinal),
+        });
+      };
+
+      // Not installed: the preview still answers (the console shows what is missing), the install
+      // refuses with what to install first.
+      expect(await dependencies()).toEqual([
+        { name: 'kit', minVersion: 2, status: 'not_installed', installedVersion: null, met: false },
+      ]);
+      const refused = await tryInstall().catch((err: unknown) => err);
+      expect(refused).toBeInstanceOf(PackDependencyUnmetError);
+      expect((refused as PackDependencyUnmetError).details).toEqual({
+        unmet: [{ name: 'kit', minVersion: 2, status: 'not_installed', installedVersion: null }],
+      });
+      expect((refused as Error).message).toMatch(/builds on kit v2 or later/);
+
+      // An older version is not enough.
+      await installOlder(ws, 'kit', 1);
+      expect(await dependencies()).toMatchObject([
+        { status: 'outdated', installedVersion: 1, met: false },
+      ]);
+      await expect(tryInstall()).rejects.toBeInstanceOf(PackDependencyUnmetError);
+      expect(
+        await rows(
+          ws,
+          "select source_name from change_segments where workspace_id = $1 and source_name = 'kit-user'",
+        ),
+      ).toEqual([]);
+
+      // The required version installed: the install goes through.
+      const kit = await preview(ws, 'kit');
+      await install(ws, {
+        name: 'kit',
+        version: 2,
+        reviewedDigest: kit.plan.digest,
+        confirmedOrdinals: kit.plan.items
+          .filter((item) => item.classification === 'authority_widening')
+          .map((item) => item.ordinal),
+      });
+      expect(await dependencies()).toMatchObject([
+        { status: 'up_to_date', installedVersion: 2, met: true },
+      ]);
+      const installed = await tryInstall();
+      expect(installed.state.status).toBe('up_to_date');
+      expect(installed.segmentId).not.toBeNull();
     });
 
     it('a pack the deployment does not ship is pack_not_found', async () => {

@@ -7,6 +7,8 @@ import {
   ChangeItemStateSchema,
   type ChangeVerificationTrigger,
   ChangeVerificationTriggerSchema,
+  type PackInstallStatus,
+  PackInstallStatusSchema,
   type PackRequirementState,
   PackRequirementStateSchema,
   type PrincipalKind,
@@ -36,9 +38,14 @@ import {
  *      each stands in the workspace, and the health of its gates — the gateway probes them through
  *      the gate's own health endpoint, the path `get_gatekeeper` already uses). A requirement is met
  *      when it is `connected` with at least one gate `ok`.
+ *   3. Are the packs its source builds on still installed at the version it needs? (S11 P1-F: for a
+ *      pack, its version's `requires.packs` and how the workspace has each — the caller reads them,
+ *      `CheckSourceRequirements`' `dependencies`.) Met when the installed version is the one named
+ *      or later; a pack rolled back below it since the install fails the run.
  *
- * It passes when every item is in effect, every requirement is met, and the source version is
- * still in this deployment (without it the systems it needs are unknown, so the run cannot pass).
+ * It passes when every item is in effect, every requirement and dependency is met, and the source
+ * version is still in this deployment (without it what it needs is unknown, so the run cannot
+ * pass).
  * The segment's status follows the latest run — `verified` or `verification_failed` — and the run is
  * stored in `change_segments.verification` (its `verified_at` stamped by the database) with one
  * `change_segment.verify` audit row naming who ran it and how (`trigger`: `manual` — a person asked;
@@ -64,10 +71,28 @@ export interface RequirementCheck {
   readonly gates: readonly RequirementGateCheck[];
 }
 
+/** One pack the source builds on (S11 P1-F), as the caller found it in the workspace. */
+export interface DependencyCheck {
+  readonly name: string;
+  readonly minVersion: number;
+  readonly status: PackInstallStatus;
+  /** That pack's installed version; `null` when it is not installed or customized. */
+  readonly installedVersion: number | null;
+}
+
 export interface SourceRequirements {
   /** The source version is in this deployment. */
   readonly sourceFound: boolean;
   readonly requirements: readonly RequirementCheck[];
+  readonly dependencies: readonly DependencyCheck[];
+}
+
+/** A dependency is met when the pack is installed at the version it names or later (the same rule
+ *  as `application/packs`' `packDependencyMet`, which this core cannot import). */
+function dependencyMet(dependency: DependencyCheck): boolean {
+  return (
+    dependency.installedVersion !== null && dependency.installedVersion >= dependency.minVersion
+  );
 }
 
 /** Says which systems `source` needs and how each stands now — probing gates as it goes. */
@@ -109,6 +134,20 @@ const StoredVerificationSchema = z
         })
         .strict(),
     ),
+    /** S11 P1-F; a run recorded before it has none. */
+    dependencies: z
+      .array(
+        z
+          .object({
+            name: z.string(),
+            minVersion: z.number().int().positive(),
+            status: PackInstallStatusSchema,
+            installedVersion: z.number().int().positive().nullable(),
+            met: z.boolean(),
+          })
+          .strict(),
+      )
+      .default([]),
   })
   .strict();
 
@@ -127,6 +166,7 @@ export interface ChangeVerification {
     readonly state: ChangeItemState;
   }[];
   readonly requirements: readonly (RequirementCheck & { readonly met: boolean })[];
+  readonly dependencies: readonly (DependencyCheck & { readonly met: boolean })[];
 }
 
 /** 409 `change_segment_superseded`: a later segment of the same source, not rolled back, is the
@@ -240,10 +280,18 @@ export async function verifyChangeSegment(
     met:
       requirement.state === 'connected' && requirement.gates.some((gate) => gate.health === 'ok'),
   }));
+  const dependencies = found.dependencies.map((dependency) => ({
+    name: dependency.name,
+    minVersion: dependency.minVersion,
+    status: dependency.status,
+    installedVersion: dependency.installedVersion,
+    met: dependencyMet(dependency),
+  }));
   const passed =
     found.sourceFound &&
     items.every((item) => item.state === 'in_effect') &&
-    requirements.every((requirement) => requirement.met);
+    requirements.every((requirement) => requirement.met) &&
+    dependencies.every((dependency) => dependency.met);
   const stored: StoredVerification = {
     runId: randomUUID(),
     trigger: input.trigger,
@@ -252,6 +300,7 @@ export async function verifyChangeSegment(
     sourceFound: found.sourceFound,
     items,
     requirements,
+    dependencies,
   };
   await client.query(
     `update change_segments set status = $3, verification = $4::jsonb
@@ -273,6 +322,7 @@ export async function verifyChangeSegment(
       sourceFound: found.sourceFound,
       items,
       requirements,
+      dependencies,
     },
   });
 
@@ -318,5 +368,6 @@ export async function loadChangeVerification(
     sourceFound: stored.sourceFound,
     items: stored.items,
     requirements: stored.requirements,
+    dependencies: stored.dependencies,
   };
 }

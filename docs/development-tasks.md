@@ -1120,7 +1120,7 @@
     其它 Operation 原样委托。`manifest.json` 的 `document.upload.params_schema` 换成
     `{dataset_id, name, content, encoding?}`（`content` 是 utf8 文本或 base64，`encoding` 缺省
     utf8）；`simulate()` 只解码 `content` 量字节数、不发请求，保持"simulate 无副作用"契约。
-  - **`document.parse` 改 `auto_approvable: true`**：`blast_radius` 仍是 `low`，`await_decision`
+  - **`document.parse` 改 `auto_approvable: true`**（已被 S11 P1-F #726 取代：现为 `medium`、不可自动批准）：`blast_radius` 仍是 `low`，`await_decision`
     仍是 `true`——S2.5 沿用的是 `importOpenApi` 对新导入 execute 类 Operation 的保守默认
     （`auto_approvable:false`），但这份清单从来都是手写、经审阅的，不是导入草稿；这次审阅后认为
     "低影响半径 + 手写审阅过"不需要再保留那个默认，改成走 workspace 内置的低影响半径自动批准
@@ -4240,6 +4240,14 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **迁移 task 0008**：`tasks` 加 `output_schema` / `rejected_output` / `rework_of` 三列 nullable jsonb，不回填；CHECK `tasks_output_schema`（只在步骤尝试上）、`tasks_rejected_output`（只在有约定的 Task 上）、`tasks_rework_of`（只在第 2 次及以后的尝试上）；触发器保证 `output_schema` 与 `rework_of` 写入后不再改。
   - **控制台**：目标页每步显示绑定句子、「输出约定」字段表（原文折叠）、「这一步交回的输出」（遮敏感字段）、每次尝试的失败原因与「自动返工」标记、被拒位置（`outputProblemText` 译成中文，英文界面照原文）；任务详情新增「输出约定」一节（重做的是哪一次、约定字段、最后一次被拒的报告）；计划编辑器原样带上 `outputSchema` 与 `bindings`。
   - **不在本 PR**：GO5d-2（Procedure 作为计划模板）；凭据扫描不看对象键名（遗留 444，已升 P2）。
+- 实现说明（GO5d-2：Procedure 成为计划模板，#722，2026-10-23 合入，9d9aafc；goal 0009 + worker 0005；GO5d 完成，下一步 GO5e）：
+  - **shared**：`ProcedureWorkerStepSchema` 加可选 `key`、`dependsOn`、`input`、`bindings`（`from` 可以是 `$params`）、`outputSchema`、`maxAttempts`；`ProcedureVerifyStepSchema` 加可选 `check`；`ProposeProcedureContentSchema` 加可选 `parameters`；新增 `GoalFromProcedureSchema`；`validateOutput` 可指定根名（位置写成 `fromProcedure.parameters.<字段>`）。
+  - **展开**（`from-procedure`）：Worker 步骤 → 计划步骤（默认名 `step-<n>`，默认等上一个 Worker 步骤，显式 `dependsOn: []` 不等）；来自前面步骤的绑定原样保留，`$params` 绑定展开时取值填进输入（嵌套、数组下标；取不到值或与写定输入 / 其他绑定冲突都报）；带 `check` 的验证步骤成为验收检查，没带的合成请求人确认（键名 `verify`，多条按顺序编号）；门操作 / 审批步骤、没有 Worker 步骤 400 并指明第几步。展开后的计划与手写计划同一套 `refusePlanCredentials` + `validatePlan`；参数凭据 / `[redacted]` 在其他检查之前拒，重放同样拒。
+  - **发布检查**：`publish_procedure` 对用了模板字段（`usesPlanTemplateFields`）的流程按「不带参数」展开一次，过 `parsePlan` 与凭据检查（`$params` 绑定改为对照 `parameters` schema 检查路径），展开与计划的问题一轮全部报出、绑定按流程步骤位置编号；确认过疑似凭据也不能进计划。
+  - **来源与幂等**：计划第 1 版记 `source_procedure_id` / `source_procedure_version`，`get_goal_revision`、`get_goal` 的 `planRevision` / `revisions` 带 `fromProcedure`（`name` 按自由文本规则遮蔽），审计 `goal_run.propose` 带来源，之后的修订版不带；不传 `idempotencyKey` 时派生键用 `fromProcedure` 计算。
+  - **迁移**：goal 0009 `plan_revisions` 加两列（两列同有同无、只在第 1 版上，`plan_revisions_guard` 写入后不可改）；worker 0005 `procedures.parameters jsonb`（必须是对象，发布后不可改的触发器覆盖这一列），外键 `plan_revisions (workspace_id, source_procedure_id, source_procedure_version) → procedures` 与部分索引放在 worker 0005（goal 模块迁移先跑）。都不回填、可回退。
+  - **控制台**：流程详情 `ProcedureTemplateView` 按步骤写句子（能否生成目标、等哪些步骤、每条绑定一句、验证步骤由平台检查还是请求人确认、「启动参数」字段表），页面能看出的绑定问题就地标出；发布被拒就地列出原因（role=alert、聚焦，固定句式译中文）；目标页「由流程 … 生成」并链接目录；编辑器原样保留模板字段并提示（表单编辑见遗留 453）。
+  - **不在本 PR**：表单编辑模板字段（遗留 453）；目标页显示启动参数与 `verify` 键名（遗留 454）；绑定取自不存在步骤的报错（遗留 455）；对象键名凭据（遗留 444，范围已扩大）。
 - 来自 GO4a（#664）的输入：`confirm_goal_acceptance` 和 `end_goal` 是请求人的成员能力，永远不进 Handle scope（membership-not-in-handle 守卫）；`createGoalRun` 和 `reviseGoalRun` 返回的 `hints` 原样带到能力结果里；如需 owner hold 期间也禁止请求人结束目标，在能力层加一道。
 - 来自 GO3a（#626）的输入：`pause_goal` / `resume_goal` / `cancel_goal` 直接调用 `control.ts`，权限按 GO3a 划分（owner 能停不能续）；角色必须由能力层从已认证主体取，不能从参数取（`lockControlledRun` 信任传入的 `role`）；`resume_goal` 的 `retrySteps` 必须逐个列出步骤，不提供不列步骤的「全部重试」；`proposed` 的目标走 `reject`。
 - 来自 GO3c（#642）的输入：`reconcile_goal_action` 调用 `reconcileActionRequest`，能力带 minRole 与 `channel: 'human'`，决定人取已认证主体；读接口 `list_goal_run_unresolved_actions`；Worker 提示词写明步骤内调用方的 `idempotencyKey` 被忽略、409 `action_in_doubt` 表示等人核对。
@@ -4444,6 +4452,19 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **能力包需求**：`PackRequirementWire.platformPreset` 只在 `needs_platform`、平台带同名预设、接入包没被打包门占用三条同时成立时为真；列能力包时读预设名，安装和校验不读预设。
   - **控制台**：`PresetGateInstanceForm.tsx`；`CreateGateInstanceForm.tsx` 外层读预设并按传输种类过滤（原表单改为内部 `CustomGateInstanceForm`，testid 不变，两项都不预选）；`useGateInstancesPanel.ts` 消费 `?preset=` 深链接；`ChangeVerification.tsx` 按 `platformPreset` 与角色给链接或说明；`GateInstanceDetailPanel.tsx` 未启用宿主实例的「接下来」与预设实例的清单来源；`router.ts` 的 `hrefs.platformConnectorPreset` / `readConnectorPresetLink`；`PendingManifestReview.tsx` 的 `gateOperationLine` 复用。
   - **不在本 PR**：P1-F2（knowledge 能力包 v1 与 `requires.packs`）；新遗留 447–451（multipart、打包门退役、对象类型归属、按实例 CA、孤儿凭证目录）。
+- 实现说明（P1-F2：knowledge 能力包 v1 与能力包依赖，#721，2026-10-23 合入，6760198；无迁移；P1-F 完成）：
+  - **清单与注册表**：`packs/manifest.ts` 新增 `PackRequirementManifestSchema`，`requires` 为 `{connectors?, packs?}`（至少一个），拒绝重复与依赖自己；`packs/registry.ts` 的 `PackVersion.requiredPacks` 与 `assertPackRequirements`（依赖存在、版本够，DFS 查环并写出整条环）；`requires` 本就进版本摘要，`packs` 随之进入。`platform/modules.ts`：模块（只含一个同名本体组件的包）不能声明 `requires.packs`，因为 `install_module` 与默认模块不做依赖检查。
+  - **阻止安装**：`packs/requirements.ts` 的 `readPackDependencies`（用 `loadPackState`，与包状态同一判定）、`packDependencyMet`、`PackDependencyUnmetError`（409，WS `ILLEGAL_TRANSITION`）；`installPack` 在核对审阅版本之后、放宽确认之前检查。安装与依赖被并发撤销之间不加锁，装完的自动核验会判不通过并留在记录上。
+  - **核验第四件事**：`change-plan/verify.ts` 的 `SourceRequirements.dependencies`，`passed` 要求依赖都满足，审计 payload 带 `dependencies`，存量 jsonb `.default([])`；`change-plan` 核心不能引用 `application/packs`，所以另写一份同规则的 `dependencyMet`。`gateway/change-verification.ts` 按记录对应的版本读依赖。
+  - **knowledge v1**：`packs/knowledge/1`，`requires.connectors: [ragflow]`、`requires.packs: [{name: ops-assets, minVersion: 2}]`（`KnowledgeBase` / `Document` 仍由 ops-assets v2 定义，遗留 449）；Skill `kb-retrieval` 只用检索到的内容作答并注明出处；Worker `knowledge-researcher` 只有平台默认能力。端到端验收 `knowledge-pack.integration.test.ts`（真 Postgres、假 RAGFlow）：预设建实例 → 门 announce → 依赖未装 409 → 装 ops-assets 与 knowledge、核验通过 → Worker 列知识库 / 文档 / 检索并写进图谱，RAGFlow 只见门的 key → `document.parse` 被拒。
+  - **控制台**：`PacksTab.tsx` 的 `PackDependencyList`（复用 `InstallPack` 就地安装，装完焦点落在该行并提示可以继续）、审阅框「还差」、`pack_dependency_unmet` 归入需要重新审阅；`ChangeVerification.tsx` 列依赖（`minVersionText`、`dependencyNowText`）；包页安装后焦点落在「已装上」通知上。
+  - **不在本 PR**：RAGFlow `document.parse` 收紧为 medium、不可自动批准（下一个小 PR）；依赖只在安装入口检查（遗留 452）。
+- 实现说明（P1-F 收尾：RAGFlow `document.parse` 每次都要人批，#726，2026-10-23 合入，66066e5；无迁移；P1-F 完成）：
+  - **两份清单一起收紧**：`gatekeepers/ragflow/manifest.json` 与 `connectors/ragflow/operations.json` 的 `document.parse` 改为 `blast_radius: medium`、`auto_approvable: false`，描述写明「已经解析过的文档再解析，会先删掉它原有的全部分块，包括手工添加或编辑过的，无法恢复」；两份清单一致由 `manifest.test.ts` 锁住。
+  - **理由**：RAGFlow `api/apps/sdk/doc.py` 的 `parse()` 重新排队前清零分块计数并删掉该文档下全部分块（`add_chunk` 手工添加、`update_chunk` 原地编辑的都没有副本）；核对 v0.18.0、v0.19.0、v0.20.5、v0.21.0、v0.21.1、v0.22.0、v0.22.1、v0.23.0 行为一致（main 上文件已换位置，未核对）。门分不出是否首次解析，按坏情况分类。
+  - **升级路径**：已启用 / 已禁用的门重新 announce 时新清单挂起待采用（R-18），分类不进定义摘要，待采用期间调用不被拒；平台采用后各工作区已部署副本仍是旧分类，所有者在「已部署 Operation 的治理字段」对齐一次（收紧直接生效）；对齐不更新描述。集成测试 `connector-presets` 用例 g 覆盖全程，并锁住工作区显式打开自动批准时策略引擎仍 `require_approval`（`operation_not_auto_approvable`）。
+  - **文档**：`gatekeepers/ragflow/README.md`（分类理由、核对版本、历史 S2.5 → S3.4 → S11 P1-F）、`host-gatekeepers.md` §13、`operations.md` §14.9；knowledge 包 Worker 提示词与 Skill 不改。
+  - **不在本 PR**：分类与最新清单不一致的主动提示（遗留 456）；已决定门的描述变化不进待采用变化、不进已部署副本（遗留 457）。
 - 来自 P0b（#620）的输入：第一个小 PR 是评测用夹具门重设计（托管实例挂在按系统命名的接入包上，`create_gate_instance` 的 `connector` 可选）；`importManifest` 的 `requireDescription` 留给目录侧要求复用，不用就删（遗留 372）；344 由 P1 收口。
 
 **AA1 — 管理员 Agent 身份与上限**（见 `global-roadmap-2026-10-16.md` §4）

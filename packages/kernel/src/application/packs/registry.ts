@@ -20,7 +20,12 @@ import {
 } from '../../substrate/ontology/index.js';
 import { type SkillItemContent, contentDigest } from '../change-plan/index.js';
 import { validateSkillContent } from '../worker/index.js';
-import { PACK_NAME_PATTERN, PackManifestError, parsePackManifest } from './manifest.js';
+import {
+  PACK_NAME_PATTERN,
+  PackManifestError,
+  type PackRequirementManifest,
+  parsePackManifest,
+} from './manifest.js';
 
 /**
  * application/packs/registry: the packs this deployment ships — every `packs/<name>/<version>/
@@ -57,7 +62,9 @@ import { PACK_NAME_PATTERN, PackManifestError, parsePackManifest } from './manif
  *   - a component a version publishes is in every later version of its pack: taking a component
  *     out is uninstalling it, which Pack Contract v1 does not do (an upgrade never leaves a family
  *     behind that no version of its pack describes any more);
- *   - every domain pack a component names exists in the ontology library and parses.
+ *   - every domain pack a component names exists in the ontology library and parses;
+ *   - a pack a version requires (`requires.packs`, S11 P1-F) is in this deployment with the version
+ *     it names, and no pack requires its way back to itself, through any of its versions.
  *
  * A Skill's or Worker's family id is derived from the pack and the name (`derivePackComponentId`),
  * the same in every workspace — as an ontology family's is from its name (`deriveOntologyPackId`).
@@ -176,6 +183,9 @@ export interface PackVersion {
   /** The connectors its components work with (`manifest.ts`' `requires.connectors`), in the
    *  manifest's order; empty when it declares none. */
   readonly requiredConnectors: readonly string[];
+  /** The packs it builds on (`manifest.ts`' `requires.packs`, S11 P1-F), each with the lowest
+   *  version that will do, in the manifest's order; empty when it declares none. */
+  readonly requiredPacks: readonly PackRequirementManifest[];
   /** Ontology components in the manifest's order, then Skills, then Workers — the order the
    *  install's items publish them in (a Worker after the Skills it mounts). */
   readonly components: readonly PackComponent[];
@@ -492,6 +502,7 @@ async function loadPackVersion(
     notes: manifest.notes,
     breaking: manifest.breaking,
     requiredConnectors: manifest.requires?.connectors ?? [],
+    requiredPacks: manifest.requires?.packs ?? [],
     components,
     digest,
   };
@@ -551,7 +562,47 @@ export async function loadPackRegistry(options: PackRegistryOptions = {}): Promi
     }
     registry.set(name, { name, versions });
   }
+  assertPackRequirements(registry);
   return registry;
+}
+
+/** The packs each version requires are here, with the version it names, and none requires its way
+ *  back to itself (see this module's comment). */
+function assertPackRequirements(registry: PackRegistry): void {
+  const edges = new Map<string, Set<string>>();
+  for (const entry of registry.values()) {
+    const needs = new Set<string>();
+    for (const version of entry.versions) {
+      for (const required of version.requiredPacks) {
+        const target = registry.get(required.name);
+        if (!target) {
+          throw new PackRegistryError(
+            `packs/${entry.name}/${version.version}: requires pack "${required.name}", which this deployment does not ship`,
+          );
+        }
+        if (target.versions.length < required.minVersion) {
+          throw new PackRegistryError(
+            `packs/${entry.name}/${version.version}: requires pack "${required.name}" v${required.minVersion} or later, but it goes up to v${target.versions.length}`,
+          );
+        }
+        needs.add(required.name);
+      }
+    }
+    edges.set(entry.name, needs);
+  }
+  // Depth-first over the packs; a pack met again while still on the path closes a cycle.
+  const done = new Set<string>();
+  const visit = (name: string, path: readonly string[]): void => {
+    if (path.includes(name)) {
+      throw new PackRegistryError(
+        `packs require each other in a cycle: ${[...path.slice(path.indexOf(name)), name].join(' → ')}`,
+      );
+    }
+    if (done.has(name)) return;
+    for (const next of edges.get(name) ?? []) visit(next, [...path, name]);
+    done.add(name);
+  };
+  for (const name of [...edges.keys()].sort()) visit(name, []);
 }
 
 export function requirePack(registry: PackRegistry, name: string): PackEntry {
