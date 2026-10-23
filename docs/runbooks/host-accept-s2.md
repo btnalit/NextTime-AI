@@ -215,8 +215,8 @@ FAIL step2-chat-entry-tools kernel/platform-extension entry tools not deployed �
 | `step7-*` | (7) Worker 结果契约里的 Fact 入图为 `inferred`，`asserted_by` 是真实 agent 类 principal（非 `viaAgent` 降级标记），alice 作为 provenance 留在 Activity `metadata.onBehalfOf` 上 | 查 `links` 表 `epistemic_status` 列，`link_type='accept_s2_restarted'`（step 2 的 docker-restart Worker 通过 `report_result` 写入）；再查 `asserted_by` 关联的 `principals.kind='agent'`/`display_name` 以 `worker:` 开头；再查 `activities.metadata->>'onBehalfOf'` 等于 alice 的 principal id |
 | `connect-mcp-target-refused` | R-27（2026-10-02 评审）：owner 提供的 `manifestSource` 指向平台服务（`http://worker-supervisor:8081/task/<id>/terminate`）→ 内核出站目标判定在任何抓取前拒绝，400 `connection_target_refused` | 同一个 `create_connection`，换一个指向 worker-supervisor 的 `manifestSource`；不带 `connectionRequestId`，不消耗随后那张连接请求卡 |
 | `connect-mcp-*` | S3.12 自己的验收句——"通过 UI 接入一个 fixture MCP server ... publish 后 find_operations 命中其工具"（本脚本覆盖 capability 层这一半，不覆盖对话内 `<gate>.<op>` 工具出现这一半——那是 S3.13 入口 `session_start` 投影的范围，见 `docs/runbooks/web-console.md`） | 同一条 `request_connection → create_connection → publish_manifest` 路径，`kind:'mcp'`；`create_connection` 的 `manifestSource` 指向 `accept-s2-mcp` 自己的 JSON-RPC 端点，导入两个工具（`accept_s2_mcp_echo` 观察类、`accept_s2_mcp_note` 执行类）；`find_operations('accept_s2_mcp')` 发布前 0 命中、发布后 2 命中，与 `s213-find-operations-*` 同一条 I16/I17 不变量 |
-| `step9-*` | S11 GO5e-1：需要在对话之外持续推进的工作，在对话里发起成目标（`docs/goal-orchestration-and-admin-agent-plan-2026-10-16.md`） | 真实 chat 驱动链路：`entryGoalChatScenario`（fake-llm）驱动入口 agent 依次调 `find_workers` → `find_operations('stock')` → `propose_goal`（一步跑在 ops-runner 上；验收是平台自己对 http 门 `stock.get` 的观察 `observe_predicate`，`symbol` 等于 `NXT`；带 `idempotencyKey`），再自己试一次 `confirm_goal`。`agent-cannot-confirm`：回复里 `CONFIRM_GOAL=unavailable`，且 `get_goal` 读到的仍是 `proposed`、未确认、来源 Turn 就是这一轮——入口模式不注册 `confirm_goal`，内核对任何 Handle 也拒绝它（仅人通道）；`idempotent`：同一对话再问一次，回同一个目标、`changed=false`，`list_goals` 里这次请求只有一个目标；`confirm`：alice 以人通道确认（一个 StepRun），再确认一次 `changed=false`；`achieved`：轮询 `get_goal` 至 `completed / achieved / verified_by_check`，唯一一步成功、首次尝试，`stock-visible` 检查 `passed` 且有 Observation——Worker 不写任何 Fact，验收不靠它的话；`one-task`：`tasks` 里这个目标恰好一行 |
-| `cleanup` | — | 停 alice/bob 入口容器、`docker compose --profile accept-s2 down`；workspace 行留作审计留痕 |
+| `step9-*` | S11 GO5e-1：前后依赖、要在对话之外跑完的一串委派步骤，在对话里发起成目标（`docs/goal-orchestration-and-admin-agent-plan-2026-10-16.md`） | 真实 chat 驱动链路：`entryGoalChatScenario`（fake-llm）驱动入口 agent 依次调 `find_workers` → `find_operations('stock')` → `propose_goal`（一步跑在 ops-runner 上；验收是平台自己对 http 门 `stock.get` 的观察 `observe_predicate`，`symbol` 等于 `NXT`；带 `idempotencyKey`），再自己试一次 `confirm_goal`。`agent-cannot-confirm`：回复里 `CONFIRM_GOAL=unavailable`，且 `get_goal` 读到的仍是 `proposed`、未确认、来源 Turn 就是这一轮——入口模式不注册 `confirm_goal`，内核对任何 Handle 也拒绝它（仅人通道）；`idempotent`：同一对话再问一次，回同一个目标、`changed=false`，`list_goals` 里这次请求只有一个目标；`confirm`：alice 以人通道确认（一个 StepRun），再确认一次 `changed=false`；`achieved`：轮询 `get_goal` 至 `completed / achieved / verified_by_check`，唯一一步成功、首次尝试，`stock-visible` 检查 `passed` 且有 Observation——Worker 不写任何 Fact，验收不靠它的话；`one-task`：`tasks` 里这个目标恰好一行 |
+| `cleanup` | — | 第 9 步的目标没走到结束时先收尾（`proposed` 用 `reject_goal`，`running` / `paused` / `verifying` 用 `cancel_goal`，只记日志）；回收 alice/bob 入口容器；`docker compose --profile accept-s2 rm -sf` 六个 accept-s2 容器（不是 `down`，见 §6）；workspace 行留作审计留痕 |
 
 ## 5. 已知偏离
 
@@ -333,7 +333,12 @@ FAIL step2-chat-entry-tools kernel/platform-extension entry tools not deployed �
 
 ## 6. 清理
 
-`--keep` 不传时，`cleanup_step` 会：`docker compose --profile accept-s2 rm -sf`（移除
+`--keep` 不传时，`cleanup_step` 会：先收尾第 9 步确认过、却没看到结束的目标（轮询超时、断言失败）——
+否则它在脚本退出后还会继续：推进器在恢复生产 provider 之后重试那一步，平台验收对已删的门重试，
+最后停在等人决定的状态。`proposed` 的用 `reject_goal`，`running` / `paused` / `verifying` 的用
+`cancel_goal`，结果只打日志（`cleanup: goal <uuid> was … — cancel_goal answered HTTP 200, now
+'cancelling'`），不判失败；成功路径上目标已经 `completed`，这一步什么都不做。然后
+`docker compose --profile accept-s2 rm -sf`（移除
 `accept-s2-sshd`/`accept-s2-openapi`/`accept-s2-mcp`/`accept-s2-ssh-gate`/`accept-s2-http-gate`/
 `accept-s2-restart-target` 六个容器，只 `rm` 这六个而不是整体 `down`，避免连基础栈一起停掉——
 遗留 26）、经 `worker-supervisor` 的 `POST /resident/reclaim`（收尾波次 C9："验收残留自动清理"；
