@@ -25,7 +25,8 @@ import type { ResolvedCaller } from './resolve-caller.js';
  *   - D-21 (L2-11): `get_task` is visible only to the workspace owner, the Task's requester
  *     (`on_behalf_of`) and the Task's own WorkerRun Handle; anyone else gets the same
  *     `TaskNotFoundError` (404) an unknown id gets. `cancel_task`'s owner-or-requester rule is
- *     unchanged (still 403 for someone else's Task).
+ *     unchanged (still 403 for someone else's Task). The owner's override is the human channel's
+ *     only (legacy 417): a Handle acting for the owner reads and cancels the owner's own Tasks.
  *   - D-26 (L2-15): an Operation draft is listed (`list_operations`, `get_gatekeeper`,
  *     `list_gatekeepers.operationCount`) only to its proposer, a builder or the owner; published
  *     and deprecated Operations stay visible to every member.
@@ -320,6 +321,70 @@ describe.runIf(DATABASE_URL !== undefined)(
             taskId,
           }),
         ).rejects.toBeInstanceOf(ForbiddenError);
+      });
+
+      describe('legacy 417: the owner sees every Task on the human channel only', () => {
+        const scope: CapabilityScope = { capabilities: ['get_task', 'cancel_task'], resources: {} };
+
+        it("a Handle acting for the owner reads the owner's own Task, not a member's", async () => {
+          const { taskId: membersTask } = await seedTask(requesterId);
+          const { taskId: ownersTask } = await seedTask(ownerId);
+
+          // The console still shows the owner every Task.
+          const inConsole = (await dispatchCapability(
+            { pool },
+            humanCaller(ownerId, 'owner'),
+            'get_task',
+            { taskId: membersTask },
+          )) as { id: string };
+          expect(inConsole.id).toBe(membersTask);
+
+          // The owner's agent: the same 404 an unknown id gets, never a hint the Task exists.
+          await expect(
+            dispatchCapability({ pool }, handleCaller(ownerId, randomUUID(), scope), 'get_task', {
+              taskId: membersTask,
+            }),
+          ).rejects.toMatchObject({ name: 'TaskNotFoundError' });
+          const own = (await dispatchCapability(
+            { pool },
+            handleCaller(ownerId, randomUUID(), scope),
+            'get_task',
+            { taskId: ownersTask },
+          )) as { id: string };
+          expect(own.id).toBe(ownersTask);
+        });
+
+        it("a member's Task still reaches the Worker running it when that Worker acts for the owner", async () => {
+          // The sid branch is independent of the role: the Task's own WorkerRun Handle reads it.
+          const { taskId, sessionId } = await seedTask(requesterId, ownerId);
+          const asOwnWorkerRun = (await dispatchCapability(
+            { pool },
+            handleCaller(ownerId, sessionId, scope),
+            'get_task',
+            { taskId },
+          )) as { id: string };
+          expect(asOwnWorkerRun.id).toBe(taskId);
+        });
+
+        it("a Handle acting for the owner may not cancel a member's Task", async () => {
+          // `cancel_task` is in no Handle ceiling; a Handle granted it anyway gets no owner override.
+          const { taskId } = await seedTask(requesterId);
+          await expect(
+            dispatchCapability(
+              { pool },
+              handleCaller(ownerId, randomUUID(), scope),
+              'cancel_task',
+              { taskId },
+            ),
+          ).rejects.toBeInstanceOf(ForbiddenError);
+          const status = await admin((client) =>
+            client.query<{ status: string }>(
+              'select status from tasks where workspace_id = $1 and id = $2',
+              [workspaceId, taskId],
+            ),
+          );
+          expect(status.rows[0]?.status).toBe('running');
+        });
       });
     });
 
