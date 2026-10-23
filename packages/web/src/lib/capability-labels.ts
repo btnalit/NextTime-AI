@@ -1552,6 +1552,242 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
       'A change of an install record was returned to what it was when the record was rolled back (the ontology went back a version, or is no longer installed), with before / after and who confirmed it.',
   },
   // S11 P1-E: one row per verification, a person's or the one right after an install.
+  // S11 GO1–GO5 (legacy 366): a goal's own lifecycle, its steps and plan revisions, and the
+  // actions a goal's reconcile writes — lifecycle rows outside a capability dispatch.
+  'goal_run.propose': {
+    zh: '目标已提出',
+    en: 'Goal proposed',
+    zhHint: '入口智能体提出了一个目标，等请求人确认计划。',
+    enHint: 'The entry agent proposed a goal, awaiting its requester’s confirmation of the plan.',
+  },
+  'goal_run.confirm': {
+    zh: '目标已确认',
+    en: 'Goal confirmed',
+    zhHint: '请求人确认了计划，目标开始执行。',
+    enHint: 'The requester confirmed the plan and the goal started.',
+  },
+  'goal_run.reject': {
+    zh: '目标已驳回',
+    en: 'Goal rejected',
+    zhHint: '提议被驳回，目标取消，没有执行过。',
+    enHint: 'The proposal was rejected and the goal cancelled before it ran.',
+  },
+  'goal_run.pause': {
+    zh: '目标已暂停',
+    en: 'Goal paused',
+    zhHint: '目标暂停，记下原因；所有者暂停别人的目标即锁定。',
+    enHint: 'The goal paused, with its reason; an owner pausing someone else’s goal holds it.',
+  },
+  'goal_run.hold': {
+    zh: '目标已锁定',
+    en: 'Goal held',
+    zhHint: '工作区所有者锁定了已暂停的目标，请求人要等解除后才能继续。',
+    enHint:
+      'A workspace owner held a paused goal; its requester can resume it once the hold is lifted.',
+  },
+  'goal_run.release_hold': {
+    zh: '目标已解除锁定',
+    en: 'Goal hold lifted',
+    zhHint: '所有者解除了锁定，目标仍暂停，等请求人决定。',
+    enHint: 'An owner lifted the hold; the goal stays paused for its requester to decide.',
+  },
+  'goal_run.resume': {
+    zh: '目标已继续',
+    en: 'Goal resumed',
+    zhHint: '请求人让暂停的目标继续推进。',
+    enHint: 'The requester resumed the paused goal.',
+  },
+  'goal_run.revise': {
+    zh: '目标计划已修订',
+    en: 'Goal plan revised',
+    zhHint: '请求人修订了暂停中目标的计划。',
+    enHint: 'The requester revised the plan of a paused goal.',
+  },
+  'goal_run.verify': {
+    zh: '目标进入验收',
+    en: 'Goal verifying',
+    zhHint: '所有步骤做完，平台开始跑目标的验收检查。',
+    enHint: 'Every step is done; the platform runs the goal’s acceptance checks.',
+  },
+  'goal_run.complete': {
+    zh: '目标已结束',
+    en: 'Goal ended',
+    zhHint: '目标结束，记下结果（达成或未达成）和依据。',
+    enHint: 'The goal ended, with its outcome (achieved or not) and the basis for it.',
+  },
+  'goal_run.fail': {
+    zh: '目标已失败',
+    en: 'Goal failed',
+    zhHint: '目标没法再推进，以失败结束。',
+    enHint: 'The goal could not go on and ended as failed.',
+  },
+  'goal_run.cancel': {
+    zh: '目标已取消',
+    en: 'Goal cancelled',
+    zhHint: '目标被取消：没结束的步骤取消，没开始的动作撤回。',
+    enHint: 'The goal was cancelled: steps not ended cancelled, actions not started withdrawn.',
+  },
+  'goal_run.finish_cancel': {
+    zh: '目标取消完成',
+    en: 'Goal cancel finished',
+    zhHint: '取消时还在执行的动作都已结束，目标取消完成。',
+    enHint: 'The actions still executing at the cancel have ended; the cancel is done.',
+  },
+  'goal_run.cleanup_finished': {
+    zh: '取消残留已清理',
+    en: 'Cancel leftovers cleared',
+    zhHint: '取消时还在跑的任务和动作都已结束，没有残留了。',
+    enHint: 'The tasks and actions still running at the cancel have ended; nothing is left.',
+  },
+  'goal_run.pause_noted': {
+    zh: '暂停原因已补记',
+    en: 'Pause cause noted',
+    zhHint: '目标已经暂停时又出现了新的暂停原因，只记一笔，不改状态。',
+    enHint: 'A further cause to pause arose while the goal was already paused; recorded only.',
+  },
+  'goal_run.advance_failing': {
+    zh: '目标推进连续出错',
+    en: 'Goal advance failing',
+    zhHint: '平台推进这个目标连续出错，已达上限，需要人看一下。',
+    enHint: 'Advancing this goal failed repeatedly, up to the limit; a person should look.',
+  },
+  'goal_run.acceptance_round': {
+    zh: '验收开始新一轮',
+    en: 'Acceptance round opened',
+    zhHint: '平台为目标开始了一轮验收检查。',
+    enHint: 'The platform opened a round of the goal’s acceptance checks.',
+  },
+  'goal_run.acceptance_check': {
+    zh: '验收检查有结果',
+    en: 'Acceptance check attempted',
+    zhHint: '平台对目标的一项验收检查试了一次，记下结果或下次再试。',
+    enHint:
+      'The platform tried one of the goal’s acceptance checks, recording its result or the next try.',
+  },
+  'goal_run.step_acceptance_round': {
+    zh: '步骤验收开始新一轮',
+    en: 'Step acceptance round opened',
+    zhHint: '平台为一个步骤开始了一轮自验收检查。',
+    enHint: 'The platform opened a round of a step’s own acceptance checks.',
+  },
+  'goal_run.step_acceptance_check': {
+    zh: '步骤验收检查有结果',
+    en: 'Step acceptance check attempted',
+    zhHint: '平台对一个步骤的验收检查试了一次，记下结果或下次再试。',
+    enHint:
+      'The platform tried one of a step’s acceptance checks, recording its result or the next try.',
+  },
+  'step_run.create': {
+    zh: '目标步骤已建立',
+    en: 'Goal step created',
+    zhHint: '按确认或修订后的计划建立了一个步骤。',
+    enHint: 'A step was created from the confirmed or revised plan.',
+  },
+  'step_run.unblock': {
+    zh: '目标步骤可以开始',
+    en: 'Goal step ready',
+    zhHint: '步骤依赖的步骤都完成了，可以开始。',
+    enHint: 'Every step it depends on is done; the step can start.',
+  },
+  'step_run.start': {
+    zh: '目标步骤已开始',
+    en: 'Goal step started',
+    zhHint: '步骤开始一次尝试，派出任务。',
+    enHint: 'The step started an attempt and dispatched a task.',
+  },
+  'step_run.wait': {
+    zh: '目标步骤在等待',
+    en: 'Goal step waiting',
+    zhHint: '步骤在等审批、核对或验收。',
+    enHint: 'The step waits on an approval, a check or its acceptance.',
+  },
+  'step_run.resume': {
+    zh: '目标步骤继续',
+    en: 'Goal step resumed',
+    zhHint: '步骤等的事有了结果，继续运行。',
+    enHint: 'What the step waited on settled; it runs on.',
+  },
+  'step_run.succeed': {
+    zh: '目标步骤已完成',
+    en: 'Goal step succeeded',
+    zhHint: '步骤的输出、动作和自验收都通过了。',
+    enHint: 'The step’s output, actions and own acceptance all passed.',
+  },
+  'step_run.fail': {
+    zh: '目标步骤已失败',
+    en: 'Goal step failed',
+    zhHint: '步骤失败，记下失败类别。',
+    enHint: 'The step failed, with its failure category.',
+  },
+  'step_run.retry': {
+    zh: '目标步骤重试',
+    en: 'Goal step retried',
+    zhHint: '失败的步骤被送回去重试。',
+    enHint: 'A failed step was sent back to try again.',
+  },
+  'step_run.supersede': {
+    zh: '目标步骤被修订替换',
+    en: 'Goal step superseded',
+    zhHint: '计划修订后，这个步骤不再执行或换成了新的一版。',
+    enHint: 'After a plan revision the step no longer runs, or was replaced by a new version.',
+  },
+  'step_run.cancel': {
+    zh: '目标步骤已取消',
+    en: 'Goal step cancelled',
+    zhHint: '目标取消时，这个步骤随之取消。',
+    enHint: 'The step was cancelled with its goal.',
+  },
+  'step_run.skip': {
+    zh: '目标步骤已跳过',
+    en: 'Goal step skipped',
+    zhHint: '目标按请求人的判定结束时，还没开始的步骤被跳过。',
+    enHint: 'A step not started was skipped when the goal ended on its requester’s word.',
+  },
+  'plan_revision.accept': {
+    zh: '计划版本已采纳',
+    en: 'Plan revision accepted',
+    zhHint: '一版计划被采纳，成为目标当前执行的计划。',
+    enHint: 'A plan revision was accepted and became the plan the goal runs.',
+  },
+  'plan_revision.reject': {
+    zh: '计划版本已驳回',
+    en: 'Plan revision rejected',
+    zhHint: '提出的计划被驳回。',
+    enHint: 'A proposed plan was rejected.',
+  },
+  'task.budget_handed_down': {
+    zh: '任务预算已分给步骤',
+    en: 'Task budget handed down',
+    zhHint: '目标步骤的任务从上级任务的 Token 预算里分走了一部分。',
+    enHint: 'A goal step’s task took part of its parent task’s token budget.',
+  },
+  'action_request.release': {
+    zh: '动作已放行',
+    en: 'Action released',
+    zhHint: '计划修订去掉了一个步骤，它已提交的动作被放行，照常执行。',
+    enHint:
+      'A plan revision removed a step; an action it had submitted was released to run as usual.',
+  },
+  'action_request.reconcile': {
+    zh: '动作核对结果已记录',
+    en: 'Action finding recorded',
+    zhHint: '有人记下结果不明的动作是否生效。',
+    enHint: 'A person recorded whether an action whose outcome was unknown took effect.',
+  },
+  'action_request.reexecute': {
+    zh: '动作已决定重新执行',
+    en: 'Action re-run decided',
+    zhHint: '结果不明且未见效果的动作被决定重新执行，新请求照常审批。',
+    enHint:
+      'An action of unknown outcome, found without effect, is to run again; the new request is approved as usual.',
+  },
+  'action_request.reconcile_check': {
+    zh: '平台核对动作有结果',
+    en: 'Action platform check attempted',
+    zhHint: '平台对结果不明的动作做了一次核对，记下结果或下次再试。',
+    enHint:
+      'The platform checked an action of unknown outcome once, recording its result or the next try.',
+  },
   'change_segment.verify': {
     zh: '安装记录已核验',
     en: 'Install record verified',
