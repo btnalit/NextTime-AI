@@ -4205,7 +4205,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **确认与拒绝**：`confirmGoalRun` 必须带 `revision` 且是提议那一版（1），重发同一 `(goalRunId, revision)` 返回 `changed: false`、不新建 StepRun、不重复审计（场景 S3 按协调线程拆分用状态 + 版本绑定实现，不加幂等键）；新 `rejectGoalRun` 把提议版改为 `rejected`（记 `decided_by`），审计 `plan_revision.reject`，目标经 `moveGoalRun` 走 `proposed --reject--> cancelled`；拒绝后确认、确认后拒绝都是 409（#493 并发探针 12 轮恰好一个成功）。
   - **自由文本里的凭据**：`governance/redaction/credential-review.ts` 新 `refuseCredentialText` / `TextCarriesCredentialsError`（400 `credentials_in_text`，`details` 给字段名与个数、不回显值），用在 `revise_goal` 的 `reason` 与 `confirm_goal_acceptance` / `end_goal` / `reconcile_goal_action` 的 `note`；检测器用 `findSuspectedSecrets`（偏严，`token=expired` 会被拒，#493 同意保持）；停止类操作不带文字，不会被挡。`MAX_REVISION_REASON_CHARS` / `MAX_GOAL_NOTE_CHARS` 都是 2000，shared 与内核共用（params 按 UTF-16 计、内核按 code point 计，控制台计数用 `.length`）。目标陈述在 GO5c（`propose_goal`）拒收。
   - **锁定期间**：只挡「继续」（10-17「管理员锁定」）；修订后目标仍暂停、锁定不变；以未达成结束是终态，锁定字段清空、审计保留谁锁定的。
-  - **之后、GO5c 之前**（2026-10-23 计划变更，按顺序）：A 遗留 417（Handle 只读本人的 Task）；B 读出时遮蔽自由文本（审批理由即遗留 420、Decision rationale、冲突裁决理由、Fact `invalidationReason`、人工证明的 note / link、审计 payload 的缺口、平台自连接的暂停理由；Operation 描述写入时做凭据审查，`invalidate_fact` 写入时清洗），合入时关 420；C 目标结果与核对的 Decision 经 `query_decisions` / Explorer 只给 owner 和请求人看（遗留 421，P2）。
+  - **之后、GO5c 之前**（2026-10-23 计划变更，按顺序）：A 遗留 417（Handle 只读本人的 Task）；B 读出时遮蔽自由文本（目标陈述与目标其他自由文本、审批理由即遗留 420、Decision rationale、冲突裁决理由、Fact `invalidationReason`、人工证明的 note / link、审计 payload 的缺口、平台自连接的暂停理由；Operation 描述写入时做凭据审查，`invalidate_fact` 写入时清洗），合入时关 420；C Decision 可见性跟着主体走：目标结果与核对的 Decision、审批 Decision、非目标请求上的核对 Decision 经 `query_decisions` / Explorer 的可见性改为与 `get_action` 同一个谓词（目标类只给 owner 和请求人）；`record_decision` 写的 Decision 只给能看到对应对话的人，冲突裁决的 Decision 只给能看到这条冲突的人；都在 RLS 里做，带一个可逆迁移（遗留 421，P2，10-23 两次扩大范围）。
 - GO5c 前小 PR A 实现说明（遗留 417 / D-21，#688，2026-10-23 合入，866a231；无迁移）：
   - **规则**：owner 看全部 Task 只在人的通道；Handle 上读者是 `obo`，只能读这个人自己的 Task，加上 Handle 自己那个 WorkerRun 的 Task（按 `sid`，与角色无关）；读不到 404。与目标读取（`goalVisibleTo`）一致。
   - **代码**：`application/task/service.ts` 的 `TaskViewer` 改为 `seesEveryTask: boolean`，`taskVisibleTo` 只认这个标志；`application/gateway/handlers.ts` 新 `taskViewerOf(client, workspaceId, ctx)`（人的通道 `role === owner`；Handle 通道 `obo` + `false` + `claims.sid`；没有 `ctx` 时取 RLS 会话主体与角色），`get_task` 与 `cancel_task` 共用；`cancel_task` 不传 `sessionId`，Worker 不能取消自己的 Task。
@@ -4219,7 +4219,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 
 **GO6 — 控制台：我的目标、确认卡片、目标详情**（见 `global-roadmap-2026-10-16.md` §4）
 
-- 实现说明：（未开工）
+- 实现说明（GO6 只读部分：目标列表与详情，#683，2026-10-23 合入，f401289；web-only，无迁移；新登遗留 426–428）：「目标」列表页（`list_goals`：状态、陈述、步骤进度、预算用量）与详情页（`get_goal` 一次取全：计划卡片、步骤图与步骤验收状态、目标验收区分「平台检查通过」与「由请求人认定达成」、版本时间线、待核对动作与核对状态、取消残留逐条）；状态色在 `lib/status-tone.ts` 新增 goalRun / stepRun / goalCheck / planRevision 四个状态机；审计页资源类型补 `goal_run` / `plan_revision` / `step_run`；核对代码读成人话（含 `fact_not_observed`）。**不在本 PR**：确认卡片与暂停 / 恢复 / 取消 / 锁定等操作（GO6 下一个 PR，用上面 GO5b 的显示内容）；审计动作中文标签（遗留 366）。
 - 来自 GO5b（#685 与审查 #493、UX 轻检）的显示内容：确认卡片「确认」调 `confirm_goal`（`revision` 取 `get_goal` 的 `planRevision.revision`），「拒绝」调 `reject_goal`，`createdStepRunIds` 点亮步骤图，`changed: false` 照常刷新不报错；操作栏按 `status`、`onBehalfOf` 与当前用户、`pausedByAuthority` 决定按钮：owner 看别人的目标时「暂停」显示为「锁定」并讲清后果，被锁定时请求人看到「已被工作区所有者锁定」（谁、何时，锁定期间仍可修订或结束）且没有「继续」，owner 看到「解除锁定」，确认框显示锁定之后有没有新的计划版本（有就列出版本号与差异入口，没有写「锁定后计划未改」，因为 `release_goal_hold` 不绑定版本）；「继续」把失败步骤列成复选框进 `retrySteps`；「修订计划」`basedOnRevision` 取 `currentRevision`、结果 `hints` 原样展示；「结束目标」验收中「已达成」不可选并写原因，暂停时按「已达成」结束的确认框列出会被判定通过的检查；验收面板「确认达成」；待核对区块「已生效 / 未生效」与请求人的「重新执行」，核对后提示「核对已记录，可以继续」；409 统一提示「目标状态已变，已刷新」；`credentials_in_text` 的标题与改写示例已在 `errors.ts`。
 - 来自 GO5a（#680）的显示内容：目标列表页用 `list_goals`（状态、陈述、步骤进度条来自 `stepCounts`、预算用量来自 `usage` 与 `budget`、墙钟从 `confirmedAt` 算）；目标详情页用 `get_goal` 一次取全：计划卡片（`planRevision.plan` 已定类型，`hints` 给确认卡片的「只靠请求人确认」提示）、步骤时间线（每步 `attempts` 链接到任务详情、`actions` 链接到审批）、验收面板（`acceptance` 各轮与 `overriddenChecks`）、取消后残留提示（`leftovers`）；「待核对」区块用 `list_goal_unresolved_actions`；版本历史用 `revisions` + `get_goal_revision` 取单版全文做对比；审计页资源类型下拉补 `goal_run` / `step_run`。
 - 来自 GO4c（#674）的显示内容：`last_error = fact_not_observed` 的 `unavailable` 检查，下一步写「等采集器或请求人自己观察一次，再继续目标」；`failed` 的事实检查用 `factId` 链接到看到的那条事实的详情。
@@ -4239,10 +4239,12 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 **48 ② — `propose_skill` / `propose_procedure` 带族 id**（见 `global-roadmap-2026-10-16.md` §4）
 
 - 实现说明：（未开工）
+- 2026-10-23 决定（协调线程，依据自进化闭环审查 §7.1）：W1a 的第一个 PR 是 WorkerRun 运行指纹：每个 WorkerRun（非目标 Task 也记）记模型、镜像 digest、平台版本、系统提示摘要、`definition@version`，与 `RunConfigSnapshot` 同字段；数据没记就补不回来，有空车道就开，文件主要在 `application/task` 与 task 迁移，与 GO5 后续 PR 的重叠由协调线程看。
 
 **E2 — Skill / Procedure 版本统计读模型 + 详情页**（见 `global-roadmap-2026-10-16.md` §4）
 
 - 实现说明：（未开工）
+- 2026-10-23 输入（victor 定分叉 3 = a，与自进化闭环审查 §7.1）：统计按运行指纹分段，「建议复核」不跨指纹比较；达成率按 `basis` 分列，`agent_reported` 不进主数字；确定性失败分组（定义版本 × 失败类别 × 拒绝原因）并进 E2，不新开 E 号；轨迹挖掘与参考 agent 运行等 E3 跑起来、额度允许再立项。
 
 ### W2 — 动态组队与改计划
 
@@ -4361,7 +4363,16 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **能力包**（`application/packs`）：清单 `components` 为 `ontology?` / `skills?` / `workers?`，至少一个、名字不重复；部件 id 由包名、类型、名字按 uuid v5 推出（升级是同一 Skill / Worker 的新版本）；一个部件只属于一个包，后一版必须带着前一版所有部件；安装顺序本体 → Skill → Worker。Skill 文件 `skills/<name>.md`（frontmatter `name` 等于文件名、`description`、可选 `applicable`，`validateSkillContent` 校验）；Worker 文件 `workers/<name>.yaml`（不能写 `name` / `kind` / `gates` / `model`，`skills` 只能挂同版本的 Skill，`capabilities` 不超出 Worker 上限）；两类都做疑似凭据检查，有就整个注册表拒绝加载。部件状态里 Worker 带 `headVersion`（只读，供控制台链到 `id@版本`）。模块仍是每版只有一个本体部件且族名等于包名的包，`ops-base` 不是模块。
   - **控制台**：能力包详情按类型列部件并链到「Skill」/「Worker」页；安装审阅逐项给 Skill 正文（Markdown 预览）、Worker 的挂载 Skill、能力范围、禁止访问的地址与系统提示词，放宽原因用平常话；安装历史按「本体 / Skill / Worker x」说明对象；`skill_name_conflict` 有中英文说明；没有已发布 Worker 的就绪提示引导所有者装 ops-base。
   - **取舍**：Procedure 部件不做（没有包要带，W2 重塑）；清单用 `workers` 而非设计稿的 `workerTemplates`；能力包 notes 写单行（YAML 折行会在中文之间插空格），`registry.test.ts` 守住仓库里所有能力包给人读的文字。
+- 实现说明（P1-E1：安装记录核验、能力包要用到的系统、Operation 改动项，#690，2026-10-23 合入，f466cf4；governance 0027；新登遗留 423–425）：
+  - **Operation 改动项**（`application/change-plan/operation-item.ts`）：只修订已发布 Operation 的治理字段（description、`blast_radius`、`auto_approvable`、`await_decision`、reads、writes），门定义摘要必须不变（ssh 的 `blast_radius` 在摘要里，不能改）；有未发布修订草稿时拒绝计划，撤销预览给 `revision_pending`；是否生效按内容判断（当前发布内容摘要 = `after.contentDigest`），后来的记录撤销后前一条可从当前版本撤销；撤销发布补偿版本（带上一版设置），不重新启用旧版本；锁顺序本体 0、Skill / Worker 1、Operation 2。
+  - **原地修改入口**：`update_operation_description`、`refresh_operation_governance` 先锁当前行再写，与发布同一锁顺序（草稿在先）；锁住后当前行已被发布换掉就改锁新的当前行。撤销 Operation 项在同一事务里锁在线行再算方案，发布补偿版本时比对版本号与内容摘要，期间被原地改过就拒绝。改动项被原地改过（版本号不变、内容变）时「替换它的记录」「挡住撤销的记录」为空，不指向自己（审查 #493 P3，PR 内修）。
+  - **分类器**（`classify.ts`）：description 改动算 changed；`auto_approvable` false → true、去掉 `await_decision`、调低 `blast_radius`、增加 reads / writes 都算扩大，只有收紧算 neutral，表驱动测试两个方向；放宽原因按路径排序。
+  - **核验**（`application/change-plan/verify.ts` `verifyChangeSegment`）：先锁记录行；已撤销 409 `change_segment_rolled_back`，被同一来源后来的记录取代 409 `change_segment_superseded`（`details.supersededBy`）；冷却按数据库时钟算、在探测之前检查，429 `change_verification_cooldown`（`details.retryAfterSeconds`，同一条记录 60 秒）；通过 = 来源版本还在 ∧ 每项仍生效 ∧ 每个要用到的系统已接入且至少一扇门健康；结果写 0025 已有的 `verification` / `verified_at`，每次写审计 `change_segment.verify`（带 trigger）。门健康探测走 `get_gatekeeper` 同一路径（`application/gateway/change-verification.ts`），不新开带凭据的调用。WS 下 superseded 归 ILLEGAL_TRANSITION，冷却归 QUOTA_EXCEEDED。
+  - **要用到的系统**（`application/packs/requirements.ts`）：清单 `requires.connectors` 可选、至少一个、不重复，`http` / `mcp` / `cli` / `ssh` 等通用连接器不能写；四种状态（已接入 / 待启用 / 待接入 / 平台未提供）只读门目录，不对外调用，不拦安装。`install_pack` 提交后在单独事务里以安装人身份核验（`trigger: system`），出错只记日志、返回 `verification: null`。`ops-base` v2 内容同 v1，写明要用到 docker。
+  - **控制台**：能力包详情「要用到的系统」一节（状态标签，待启用 / 待接入链到「系统与授权」，平台未提供说明找平台管理员）；安装审阅同样列出并说明不等它们接好，装好后的提示写明自动核验结果；安装历史记录详情「核验」一节（结果、由谁核验、不再生效的改动项、「再核验一次」与冷却倒计时）。
+  - **迁移**：`governance/0027_change_item_operation_kind.sql` 只给改动项 kind 约束加 `operation_version`，可逆。
 - 来自 P1-D（#679）的输入（P1-E）：包声明 Worker 要绑定的系统类型、连接器预设；升级时保留工作区自己给包里 Worker 绑定的系统与模型（现在包升级按包内容发新版本，不保留这两项，审阅框会列出改动，`operations.md` §14 有排错）；Skill / Worker 页显示「来自能力包 x vN」（遗留 418）；已发版的 PackVersion 不可变（遗留 419）；Operation 改动项、gate 就绪检查、`verify_change_segment`、遗留 344 / 372 照旧在 P1-E。
+- 来自 P1-E1（#690）的输入（P1-E2）：Worker 声明要绑定的系统类型并在升级时保留工作区自己的系统与模型绑定、连接器预设、遗留 344 / 372 / 418 仍在 P1-E2；P1-E2 之前先做遗留 422 的小 PR；遗留 425（装好 ops-base 后就绪提示不刷新）可随 P1-E2 的控制台改动一起做。
 - 来自 P0b（#620）的输入：第一个小 PR 是评测用夹具门重设计（托管实例挂在按系统命名的接入包上，`create_gate_instance` 的 `connector` 可选）；`importManifest` 的 `requireDescription` 留给目录侧要求复用，不用就删（遗留 372）；344 由 P1 收口。
 
 **AA1 — 管理员 Agent 身份与上限**（见 `global-roadmap-2026-10-16.md` §4）
@@ -4383,6 +4394,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 **AA5 — 验收旅程：接入一个有 OpenAPI 的夹具工单系统**（见 `global-roadmap-2026-10-16.md` §4）
 
 - 实现说明：（未开工）
+- 前置（2026-10-23，victor 定分叉 1 = a）：遗留 422（入口 agent 白名单启动：关掉 pi 的全部资源发现、`settings.json` 由平台整份写入、平台资源显式传入）先关闭；管理员 Agent 用同一运行时，同一个洞在它身上就是自我修改。
 
 **AA6（可选） — OpenMetadata 包，由管理员 Agent 产出**（见 `global-roadmap-2026-10-16.md` §4）
 
@@ -4393,6 +4405,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 **E3 — Skill 评测 MVP**（见 `global-roadmap-2026-10-16.md` §4）
 
 - 实现说明：（未开工）
+- 2026-10-23 设计输入（victor 定分叉 2 = b，与自进化闭环审查 §2.3–§2.5、§7.1）：回归断言失败或判 `worse` 时，发布人要逐条确认失败项并写理由，记审计（同 10-09「已核对凭据」）；`inconclusive` 只显示、不加确认（避免确认疲劳）；按每月测试额度，MVP 主力是确定性回归棘轮 + 大效应机制筛，样本不够判 `inconclusive`，不显示成「在噪声内」；δ 与 k 改为在夹具上做 A/A 重跑校准（主机只有验收账号，遗留 230）。
 
 **GO16 — 沉淀提议：WorkerSpec 组合提议为 WorkerDefinition**（见 `global-roadmap-2026-10-16.md` §4）
 

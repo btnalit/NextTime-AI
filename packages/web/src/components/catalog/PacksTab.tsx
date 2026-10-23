@@ -30,6 +30,7 @@ import { RouteLink } from '../kit/route-link.js';
 import { SkeletonRows } from '../kit/skeleton.js';
 import { StatusChip } from '../kit/status-chip.js';
 import { StillNeeded } from '../kit/still-needed.js';
+import { PackRequirementList } from './ChangeVerification.js';
 import { changeSubjectText, contentFieldText, typeNamesText, wideningText } from './ChangesTab.js';
 import { MarkdownPreview } from './MarkdownPreview.js';
 
@@ -81,7 +82,9 @@ function actionLabel(pack: PackWire, t: Translate): string | null {
  * inside the confirm: what each part changes, the versions it moves through, each
  * authority-widening change ticked, how much data uses a type it takes out), then `install_pack`
  * with the reviewed digest — a change since the review installs nothing and the review reloads.
- * Each install is one 安装记录 in 安装历史 (`ChangesTab`), where it can be rolled back.
+ * Each install is one 安装记录 in 安装历史 (`ChangesTab`), where it can be rolled back. A pack that
+ * names the systems it needs (S11 P1-E) shows where each stands, here and in the review; the
+ * install does not wait for them, and is verified once right after (the result says how it went).
  */
 export function PacksTab({ http, itemId, onSelectItem }: PacksTabProps) {
   const t = useT();
@@ -225,6 +228,19 @@ function PackDetail({
                   `已装上 v${installed.pack.installedVersion ?? pack.latestVersion}。这次安装留下了一条安装记录，需要时可以在那里撤销。`,
                   `v${installed.pack.installedVersion ?? pack.latestVersion} is installed. The install left an install record, where it can be rolled back if needed.`,
                 )}{' '}
+                <span data-testid="catalog-pack-installed-verification">
+                  {installed.verification === null
+                    ? t(
+                        '装完没能核验，可以在安装记录里再核验一次。',
+                        'It could not be verified right after; verify it from the install record.',
+                      )
+                    : installed.verification.passed
+                      ? t('装完已核验：通过。', 'Verified right after: passed.')
+                      : t(
+                          '装完已核验：没有通过，原因见安装记录。',
+                          'Verified right after: it did not pass; the install record says why.',
+                        )}
+                </span>{' '}
                 <RouteLink
                   href={hrefs.catalog('changes', installed.segmentId)}
                   testId="catalog-pack-installed-record"
@@ -251,6 +267,22 @@ function PackDetail({
           onStale={onChanged}
         />
       )}
+
+      {pack.requirements.length > 0 ? (
+        <>
+          <span className="section-title">{t('要用到的系统', 'Systems it needs')}</span>
+          <p className="text-3 text-small">
+            {t(
+              `v${pack.latestVersion} 带来的内容要用到这些系统。系统由平台部署，能力包只检查它们在工作区里接好了没有。`,
+              `What v${pack.latestVersion} brings works with these systems. The platform deploys them; the pack only checks whether the workspace has them connected.`,
+            )}
+          </p>
+          <PackRequirementList
+            requirements={pack.requirements}
+            testId="catalog-pack-requirements"
+          />
+        </>
+      ) : null}
 
       <span className="section-title">{t('组成', 'Parts')}</span>
       <div className="stack-s" data-testid="catalog-pack-components">
@@ -283,6 +315,12 @@ function PackDetail({
               ) : null}
             </span>
             {version.notes ? <span className="text-3 text-small">{version.notes}</span> : null}
+            {version.requiredConnectors.length > 0 ? (
+              <span className="text-3 text-small">
+                {t('要用到的系统：', 'Systems it needs: ')}
+                <span className="mono">{version.requiredConnectors.join(t('、', ', '))}</span>
+              </span>
+            ) : null}
           </div>
         ))}
       </div>
@@ -605,6 +643,20 @@ function InstallPack({
                     {version.notes ? `：${version.notes}` : ''}
                   </span>
                 ))}
+              </div>
+            ) : null}
+            {preview.data.pack.requirements.length > 0 ? (
+              <div className="stack-s" data-testid="catalog-pack-preview-requirements">
+                <span className="text-small">
+                  {t(
+                    '它要用到这些系统。安装不会等它们接好；装完会马上核验一次，结果记在安装记录里。',
+                    'It needs these systems. The install does not wait for them; it is verified right after, and the result is kept on the install record.',
+                  )}
+                </span>
+                <PackRequirementList
+                  requirements={preview.data.pack.requirements}
+                  testId="catalog-pack-preview-requirement"
+                />
               </div>
             ) : null}
             {preview.data.items.map((item) => (

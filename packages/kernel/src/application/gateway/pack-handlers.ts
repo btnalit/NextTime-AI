@@ -8,15 +8,18 @@ import type {
   PackWire,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
+import { type PoolLike, withWorkspace } from '../../adapters/db/pool.js';
 import {
   type ChangeProvenance,
   type PlannedChangeItem,
   loadFamilyProvenance,
   loadOntologyProvenance,
+  verifyChangeSegment,
 } from '../change-plan/index.js';
 import {
   type PackComponent,
   type PackComponentState,
+  type PackEntry,
   type PackState,
   type PackVersion,
   installPack,
@@ -24,19 +27,22 @@ import {
   loadPackRegistry,
   loadPackState,
   previewPackInstall,
+  readPackRequirements,
 } from '../packs/index.js';
 import { loadPublishedWorkerDefinitionHead } from '../worker/index.js';
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
-import { toChangeProvenanceWire } from './change-segment-handlers.js';
+import { toChangeProvenanceWire, toChangeVerificationWire } from './change-segment-handlers.js';
+import { sourceRequirementsChecker } from './change-verification.js';
 
 /**
  * application/gateway/pack-handlers: the thin `CapabilityHandler` layer over `application/packs`
  * (S11 P1-C) — `list_packs`, `preview_pack_install`, `install_pack` (`scope:'workspace'`, the 能力
  * 目录 能力包 tab). Each parses params, calls the domain module and projects its records to
- * `@nexttime/shared`'s `wire/packs.ts`; the only read here is each component's provenance
- * (`loadOntologyProvenance` / `loadFamilyProvenance`), in the same transaction as the state it
- * explains.
+ * `@nexttime/shared`'s `wire/packs.ts`; the reads here are each component's provenance
+ * (`loadOntologyProvenance` / `loadFamilyProvenance`) and where each system the latest version
+ * needs stands (`readPackRequirements`, no gate contacted), in the same transaction as the state
+ * they explain. `install_pack` verifies the segment it recorded once it has committed (P1-E).
  */
 
 function toPackComponentWire(component: PackComponent): PackComponentWire {
@@ -120,6 +126,7 @@ function toPackVersionWire(version: PackVersion): PackVersionWire {
     summary: version.summary,
     notes: version.notes,
     breaking: version.breaking,
+    requiredConnectors: [...version.requiredConnectors],
     components: version.components.map(toPackComponentWire),
   };
 }
@@ -142,6 +149,9 @@ async function toPackWire(
     status: state.status,
     installedVersion: state.installedVersion,
     components,
+    requirements: (await readPackRequirements(client, workspaceId, latest.requiredConnectors)).map(
+      (requirement) => ({ connector: requirement.connector, state: requirement.state }),
+    ),
   };
 }
 
@@ -291,8 +301,60 @@ export const installPackHandler: CapabilityHandler = async (
   const result: PackInstallResultWire = {
     pack: await toPackWire(client, workspaceId, installed.state),
     segmentId: installed.segmentId,
+    verification: null,
   };
-  return installed.segmentId
-    ? { result, resourceType: 'change_segment', resourceId: installed.segmentId }
-    : { result };
+  const { segmentId } = installed;
+  if (!segmentId) return { result };
+  const principalId = context.principalId;
+  const { entry } = installed.state;
+  return {
+    result,
+    resourceType: 'change_segment',
+    resourceId: segmentId,
+    // S11 P1-E: once the install has committed, verify it once — as the person who installed,
+    // recorded as `trigger: system` — in a transaction of its own, so the gate probes run after the
+    // install's locks are gone. The install stands whatever happens here.
+    afterCommit: async (pool) => ({
+      ...result,
+      ...(await verifyAfterInstall(pool, workspaceId, principalId, segmentId, entry)),
+    }),
+  };
 };
+
+/** The install's first verification (see `installPackHandler`) and the pack read again after it
+ *  (its components' records now carry the run's status); nothing when the run could not be made —
+ *  logged, never thrown: the install is committed, and the owner can verify it again from its
+ *  record. */
+async function verifyAfterInstall(
+  pool: PoolLike,
+  workspaceId: string,
+  principalId: string,
+  segmentId: string,
+  entry: PackEntry,
+): Promise<Pick<PackInstallResultWire, 'pack' | 'verification'> | Record<string, never>> {
+  try {
+    return await withWorkspace(pool, { workspaceId, principalId }, async (client) => {
+      const { verification } = await verifyChangeSegment(client, workspaceId, {
+        segmentId,
+        verifiedBy: principalId,
+        trigger: 'system',
+        checkRequirements: sourceRequirementsChecker(client, workspaceId),
+      });
+      return {
+        pack: await toPackWire(
+          client,
+          workspaceId,
+          await loadPackState(client, workspaceId, entry),
+        ),
+        verification: toChangeVerificationWire(verification),
+      };
+    });
+  } catch (err) {
+    console.error(
+      `[kernel] install_pack: verifying segment ${segmentId} after the install failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+    return {};
+  }
+}

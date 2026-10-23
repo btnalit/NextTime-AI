@@ -80,7 +80,8 @@ export function isEmptyEntry(entry: AuditEntry): boolean {
  * value still works through the filter's free-text path. Legacy sweep (console batch,
  * 2026-10-16): `gate_instance` (`gate-instance-handlers.ts`) and `module`
  * (`platform-modules-handlers.ts`) are written on workspace rows too; S11 P1: `change_item`
- * (`application/change-plan`); P1-B: `change_segment` (`roll_back_change_segment`).
+ * (`application/change-plan`); P1-B: `change_segment` (`roll_back_change_segment`); S11 GO6: `goal_run`,
+ * `plan_revision`, `step_run` (`application/goal`, written since GO1).
  */
 export const AUDIT_RESOURCE_TYPES = [
   'action_request',
@@ -97,11 +98,13 @@ export const AUDIT_RESOURCE_TYPES = [
   'fact',
   'gate_instance',
   'gatekeeper',
+  'goal_run',
   'module',
   'object',
   'ontology_type',
   'ontology_version',
   'operation',
+  'plan_revision',
   'policy',
   'principal',
   'procedure',
@@ -109,6 +112,7 @@ export const AUDIT_RESOURCE_TYPES = [
   'session',
   'skill',
   'source',
+  'step_run',
   'task',
   'worker_definition',
   'worker_run',
@@ -141,7 +145,8 @@ export type PlatformAuditResourceType = (typeof PLATFORM_AUDIT_RESOURCE_TYPES)[n
  * machine transitions of ActionRequest / Task / WorkerRun (`governance/approval/transition-log`,
  * `application/task/transition-log.ts`), the S6-A chat / connection actions and S11 P1's
  * `change_item.apply` / P1-B's `change_item.roll_back` (one row per ChangePlan item,
- * `application/change-plan`). Suggestions only —
+ * `application/change-plan`) and P1-E's `change_segment.verify` (one row per verification, also
+ * the one an install runs right after it commits). Suggestions only —
  * the action filter is free text.
  */
 export const AUDIT_LIFECYCLE_ACTIONS = [
@@ -176,6 +181,7 @@ export const AUDIT_LIFECYCLE_ACTIONS = [
   'ontology_violation',
   'change_item.apply',
   'change_item.roll_back',
+  'change_segment.verify',
   // Legacy 245 a: workspace actions the kernel writes outside a dispatch that already had a label
   // (`capability-labels.ts`) but were missing here — a gate's governance and definition changes,
   // the draft reaper, and the one-off rows migrations write.

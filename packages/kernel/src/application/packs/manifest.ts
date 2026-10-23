@@ -1,3 +1,4 @@
+import { CONNECTOR_NAME_PATTERN, isGenericConnector } from '@nexttime/shared';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 
@@ -17,6 +18,14 @@ import { z } from 'zod';
  * connector preset) join this schema in the PR that implements their change items; until then a
  * manifest naming one is refused by name, so a pack written for a later platform fails closed here
  * instead of installing in part.
+ *
+ * `requires.connectors` (S11 P1-E; S10 plan §3.3 I-P3): the systems the version's components work
+ * with, by connector name — a gate is a code component the platform deploys, so a pack
+ * never brings one; it says which it needs, and the console shows where each stands in the
+ * workspace (`requirements.ts`). Installing does not wait for them (S10: waiting for someone to
+ * connect a system is a verification state, not an install failure); verifying a segment of the
+ * version checks them. A generic connector (`http`, `mcp`, `cli`, `ssh`) names a transport, not a
+ * system, so it is refused.
  *
  * What a manifest must keep that one Zod shape cannot say (`parsePackManifest` checks it): version
  * 1 is never `breaking` (nothing precedes it), it has at least one component, and it names each
@@ -76,6 +85,21 @@ const PackManifestSchema = z
     /** Upgrading to this version from the one before may leave Facts or Links a workspace already
      *  holds outside the new shapes (the same meaning as a module's `breaking`, S7-D D3). */
     breaking: z.boolean(),
+    requires: z
+      .object({
+        connectors: z
+          .array(
+            z
+              .string()
+              .regex(CONNECTOR_NAME_PATTERN)
+              .refine((name) => !isGenericConnector(name), {
+                message: 'names a transport (http, mcp, cli, ssh), not a system',
+              }),
+          )
+          .min(1),
+      })
+      .strict()
+      .optional(),
     components: z
       .object({
         ontology: z.array(OntologyComponentSchema).min(1).optional(),
@@ -146,6 +170,14 @@ export function parsePackManifest(text: string, source: string): PackManifest {
     ['Skill', skills],
     ['Worker', workers],
   ];
+  const connectors = manifest.requires?.connectors ?? [];
+  const repeatedConnector = connectors.find((name, index) => connectors.indexOf(name) !== index);
+  if (repeatedConnector !== undefined) {
+    throw new PackManifestError(
+      source,
+      `requires connector ${JSON.stringify(repeatedConnector)} twice`,
+    );
+  }
   for (const [what, names] of named) {
     const repeated = names.find((name, index) => names.indexOf(name) !== index);
     if (repeated !== undefined) {

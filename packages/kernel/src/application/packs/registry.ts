@@ -150,6 +150,9 @@ export interface PackVersion {
   readonly summary: string;
   readonly notes: string;
   readonly breaking: boolean;
+  /** The connectors its components work with (`manifest.ts`' `requires.connectors`), in the
+   *  manifest's order; empty when it declares none. */
+  readonly requiredConnectors: readonly string[];
   /** Ontology components in the manifest's order, then Skills, then Workers — the order the
    *  install's items publish them in (a Worker after the Skills it mounts). */
   readonly components: readonly PackComponent[];
@@ -400,6 +403,8 @@ async function loadPackVersion(
     summary: manifest.summary,
     notes: manifest.notes,
     breaking: manifest.breaking,
+    // Only when declared (P1-E), so the versions shipped before keep their digest.
+    ...(manifest.requires ? { requires: manifest.requires } : {}),
     // An ontology component's entry is what it was before Skills and Workers joined (P1-C), so
     // the versions shipped then keep their digest.
     components: components.map((c) =>
@@ -419,6 +424,7 @@ async function loadPackVersion(
     summary: manifest.summary,
     notes: manifest.notes,
     breaking: manifest.breaking,
+    requiredConnectors: manifest.requires?.connectors ?? [],
     components,
     digest,
   };

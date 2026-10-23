@@ -20,6 +20,7 @@ import {
   derivePackComponentId,
   latestPackVersion,
   loadPackRegistry,
+  packComponentDigest,
   packComponentKey,
   requirePack,
 } from './registry.js';
@@ -94,6 +95,21 @@ describe('the packs this repository ships', () => {
     expect(latest.summary.length).toBeGreaterThan(0);
   });
 
+  it('ops-base v2: the same components as v1, and it needs docker (P1-E)', async () => {
+    const registry = await loadPackRegistry();
+    const pack = requirePack(registry, 'ops-base');
+    expect(pack.versions.map((v) => [v.version, v.requiredConnectors])).toEqual([
+      [1, []],
+      [2, ['docker']],
+    ]);
+    const [v1, v2] = pack.versions;
+    expect(v2?.components.map(packComponentDigest)).toEqual(
+      v1?.components.map(packComponentDigest),
+    );
+    expect(v2?.breaking).toBe(false);
+    expect(v2?.digest).not.toBe(v1?.digest);
+  });
+
   it('what an owner reads (summary, notes, descriptions) has no space between two Chinese characters', async () => {
     // YAML folds a scalar written over several lines with a space where they meet: fine between
     // English words, a stray gap in Chinese (UX acceptance of #679 P3-3).
@@ -128,6 +144,19 @@ describe('loadPackRegistry: one rule broken each', () => {
     fixture = await writePackFixture({ 'test-pack': [ONE('t-v1.yaml'), ONE('t-v2.yaml', 'T2')] });
     const registry = await loadPackRegistry(fixture);
     expect(requirePack(registry, 'test-pack').versions.map((v) => v.version)).toEqual([1, 2]);
+  });
+
+  it('requires.connectors: read in order, and part of the digest', async () => {
+    fixture = await writePackFixture({
+      'test-pack': [{ ...ONE('t-v1.yaml'), requires: ['docker', 'ragflow'] }],
+    });
+    const needs = latestPackVersion(requirePack(await loadPackRegistry(fixture), 'test-pack'));
+    expect(needs.requiredConnectors).toEqual(['docker', 'ragflow']);
+    await rm(fixture.root, { recursive: true, force: true });
+    fixture = await writePackFixture({ 'test-pack': [ONE('t-v1.yaml')] });
+    const none = latestPackVersion(requirePack(await loadPackRegistry(fixture), 'test-pack'));
+    expect(none.requiredConnectors).toEqual([]);
+    expect(none.digest).not.toBe(needs.digest);
   });
 
   it('the digest changes with the notes, not only the content', async () => {
@@ -264,9 +293,24 @@ describe('parsePackManifest (through the registry): the manifest’s own rules',
   it('an empty summary, or an unknown field', async () => {
     const blank = `schema: 1\n${head.replace('summary: s', 'summary: " "')}${ontology}`;
     expect(await loadWith(blank)).toBeInstanceOf(PackManifestError);
-    expect(await loadWith(`schema: 1\n${head}requires: {}\n${ontology}`)).toBeInstanceOf(
+    expect(await loadWith(`schema: 1\n${head}provides: {}\n${ontology}`)).toBeInstanceOf(
       PackManifestError,
     );
+  });
+
+  it('requires.connectors: systems only, each once, at least one', async () => {
+    const requires = (lines: string) => `schema: 1\n${head}requires:\n${lines}${ontology}`;
+    expect(String(await loadWith(requires('  connectors:\n    - ssh\n')))).toMatch(
+      /names a transport/,
+    );
+    expect(String(await loadWith(requires('  connectors:\n    - docker\n    - docker\n')))).toMatch(
+      /requires connector "docker" twice/,
+    );
+    expect(await loadWith(requires('  connectors: []\n'))).toBeInstanceOf(PackManifestError);
+    expect(await loadWith(requires('  connectors:\n    - Docker\n'))).toBeInstanceOf(
+      PackManifestError,
+    );
+    expect(await loadWith(requires('  gates:\n    - docker\n'))).toBeInstanceOf(PackManifestError);
   });
 });
 

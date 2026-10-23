@@ -39,6 +39,7 @@ import {
   refuseRedactedText,
 } from '../redaction/index.js';
 import {
+  operationContentDigest,
   operationDefinitionDiffers,
   operationDraftDigest,
   operationRecordDigestOrNull,
@@ -750,6 +751,36 @@ export async function getOperation(
 }
 
 /**
+ * `getOperation`'s current row, locked until the transaction ends — for a write in place at that
+ * row's version (`updateOperationDescription`, `refreshOperationGovernance`). Review #493 on #690: a
+ * publish retires the live version under that same row's lock (`publishOperation` locks the draft
+ * it publishes before deprecating the live row, `publishOperationRevision` locks the live row
+ * first), so a row read without the lock could be retired before the write lands, and the write
+ * would edit a version nobody runs while the call reported success. Once the lock is granted the
+ * current row is read again; if a publish moved it while this waited, the new current row is
+ * locked instead. `null` when the identity has no row at all.
+ */
+async function lockCurrentOperation(
+  client: PoolClient,
+  workspaceId: string,
+  gatekeeperId: string,
+  name: string,
+): Promise<OperationRecord | null> {
+  // Each pass waits only on a publish that moved the current row; three in a row is a bug.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const locked = await getOperation(client, workspaceId, gatekeeperId, name, {
+      forUpdate: true,
+    });
+    if (!locked) return null;
+    const current = await getOperation(client, workspaceId, gatekeeperId, name);
+    if (current?.id === locked.id) return current;
+  }
+  throw new Error(
+    `lockCurrentOperation: Operation ${quotedName(name)} on gatekeeper ${gatekeeperId} kept moving while it was locked`,
+  );
+}
+
+/**
  * Resolves the *live* **published** Operation only — `null` for a draft, deprecated, or unknown
  * one, and (S3.12) never distracted by a pending revision draft against the same identity: a
  * dedicated query on `status = 'published'`, not `getOperation`'s draft-first "current row"
@@ -768,6 +799,7 @@ export async function getPublishedOperation(
   workspaceId: string,
   gatekeeperId: string,
   name: string,
+  options: { readonly forUpdate?: boolean } = {},
 ): Promise<OperationRecord | null> {
   const result = await client.query<OperationObjectRow>(
     `select id, identity_key, properties
@@ -778,7 +810,7 @@ export async function getPublishedOperation(
        and identity_key ->> 'name' = $3
        and properties ->> 'status' = 'published'
      order by coalesce((properties ->> 'version')::int, 1) desc
-     limit 1`,
+     limit 1${options.forUpdate === true ? ' for update' : ''}`,
     [workspaceId, gatekeeperId, name],
   );
   const row = result.rows[0];
@@ -1140,6 +1172,127 @@ export async function publishOperation(
   return { ...existing, status: 'published', ...(supersedes !== undefined ? { supersedes } : {}) };
 }
 
+// -------------------------------------------------------------------------------------------
+// S11 P1-E: a ChangePlan's revision of a published Operation (`application/change-plan`'s
+// `operation_version` item). It changes how calls of the Operation are governed, never what the
+// gate runs: the revision has the live version's definition (`operationDefinitionDigest`, the one
+// a gate holds every call to), so it never makes the gate refuse a call.
+// -------------------------------------------------------------------------------------------
+
+/** Holds the workspace's ChangePlan revisions of Operations until the transaction ends: two
+ *  segments revising Operations run one after the other — whichever Operations, so they never wait
+ *  on each other in a cycle — and the later one plans against what the earlier one published.
+ *  Taken before any read of an Operation it revises. */
+export async function lockOperationRevision(
+  client: PoolClient,
+  workspaceId: string,
+): Promise<void> {
+  await client.query('select pg_advisory_xact_lock(hashtext($1::text))', [
+    `operation_revisions:${workspaceId}`,
+  ]);
+}
+
+/** Exactly version `version` of `(gatekeeperId, name)`, whatever its status (a discarded draft
+ *  included), or `null`. */
+export async function getOperationVersion(
+  client: PoolClient,
+  workspaceId: string,
+  gatekeeperId: string,
+  name: string,
+  version: number,
+): Promise<OperationRecord | null> {
+  const result = await client.query<OperationObjectRow>(
+    `select id, identity_key, properties
+     from objects
+     where workspace_id = $1
+       and object_type = 'Operation'
+       and identity_key ->> 'gatekeeperId' = $2
+       and identity_key ->> 'name' = $3
+       and coalesce((properties ->> 'version')::int, 1) = $4
+     limit 1`,
+    [workspaceId, gatekeeperId, name, version],
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return toOperationRecord(gatekeeperId, name, row.id, row.properties);
+}
+
+export interface PublishOperationRevisionInput {
+  readonly gatekeeperId: string;
+  readonly name: string;
+  /** The published version the revision replaces, as the caller read it: its number and
+   *  `operationContentDigest`. Refused unless it is still the live one with that content — a
+   *  published version is edited in place (its description, a governance refresh), so the number
+   *  alone does not say the caller planned against what is live (review #493 on #690). */
+  readonly replaces: { readonly version: number; readonly contentDigest: string };
+  /** The revision's whole content: the live version's definition, other governance. */
+  readonly operation: Operation;
+  /** Whose change this is (the ChangePlan's applier): the revision's proposer and publisher —
+   *  origin `human` for a person, `agent` otherwise (as `proposeOperation` records it). */
+  readonly publishedBy: { readonly id: string; readonly kind: PrincipalKind };
+  readonly activityId: string;
+}
+
+/**
+ * Publishes `operation` as the next version of `(gatekeeperId, name)`, retiring `replaces` — the
+ * existing propose-and-publish path, in one transaction, leaving no draft behind: a draft at the
+ * next version (written only if that version is new, `insertOnly`), then `publishOperation`, which
+ * deprecates the live row. Refuses, writing nothing, when `replaces` is not the live version
+ * (`OperationNotFoundError` when nothing is live), when the live version's content is no longer
+ * what `replaces` says (edited in place since the caller read it: a caller that planned under the
+ * row lock never sees this, so a plain `Error`), when a draft of the Operation is pending
+ * (`OperationIdentityConflictError`: a revision someone has under review is never overwritten or
+ * bypassed), or when `operation`'s definition is not the live one's (a caller bug). Call it under
+ * `lockOperationRevision`; it locks the live row itself.
+ */
+export async function publishOperationRevision(
+  client: PoolClient,
+  workspaceId: string,
+  input: PublishOperationRevisionInput,
+): Promise<OperationRecord> {
+  const { gatekeeperId, name } = input;
+  const live = await getPublishedOperation(client, workspaceId, gatekeeperId, name, {
+    forUpdate: true,
+  });
+  if (!live || live.version !== input.replaces.version) {
+    throw new OperationNotFoundError(gatekeeperId, name);
+  }
+  if (operationContentDigest(live.operation) !== input.replaces.contentDigest) {
+    throw new Error(
+      `publishOperationRevision: Operation ${quotedName(name)} on gatekeeper ${gatekeeperId} v${live.version} was edited in place since it was read; a revision is planned against the live content, under its row lock`,
+    );
+  }
+  const current = await getOperation(client, workspaceId, gatekeeperId, name);
+  if (current?.status === 'draft') {
+    throw new OperationIdentityConflictError(gatekeeperId, name, 'draft');
+  }
+  if (operationDefinitionDiffers(live, input.operation)) {
+    throw new Error(
+      `publishOperationRevision: Operation ${quotedName(name)} on gatekeeper ${gatekeeperId} — a revision keeps the published definition (what the gate runs); only how calls are governed changes`,
+    );
+  }
+  const version = await nextOperationVersion(client, workspaceId, gatekeeperId, name);
+  const written = await registerOperationDraftObject(client, workspaceId, {
+    gatekeeperId,
+    name,
+    version,
+    draftOf: live.id,
+    operation: input.operation,
+    proposedBy: input.publishedBy,
+    activityId: input.activityId,
+    origin: input.publishedBy.kind === 'human' ? 'human' : 'agent',
+    insertOnly: true,
+  });
+  if (!written) throw new OperationIdentityConflictError(gatekeeperId, name, 'draft');
+  const published = await publishOperation(client, workspaceId, { gatekeeperId, name });
+  if (published.version !== version) {
+    throw new Error(
+      `publishOperationRevision: Operation ${quotedName(name)} on gatekeeper ${gatekeeperId} published v${published.version}, not the revision v${version}`,
+    );
+  }
+  return published;
+}
+
 /** One draft as the caller read it: its name and the `operationDraftDigest` its listing returned
  *  (`list_operations`' `draftDigest`). */
 export interface ReviewedDraft {
@@ -1443,7 +1596,9 @@ export interface UpdateOperationDescriptionInput {
  * `updateGateInstance`'s `displayName` patch needs none. Targets the identity's *current* row
  * (`requireOperation`'s draft-first priority, same target `publishOperation` resolves against) —
  * draft, published, or deprecated all accept a description edit; only the identity itself
- * (unknown name) is an error (`OperationNotFoundError`).
+ * (unknown name) is an error (`OperationNotFoundError`). The row is locked before it is read
+ * (`lockCurrentOperation`, review #493 on #690): an edit racing a publish lands on whichever version
+ * is current once the publish commits, never on the version it retired.
  *
  * `description` must be non-blank after trimming and at most `OPERATION_DESCRIPTION_MAX_LENGTH`
  * characters (`OperationDescriptionInvalidError`), carry no suspected credential
@@ -1479,7 +1634,8 @@ export async function updateOperationDescription(
   refuseRedactedText('description', trimmed);
   refuseCredentialText('description', trimmed);
 
-  const existing = await requireOperation(client, workspaceId, input.gatekeeperId, input.name);
+  const existing = await lockCurrentOperation(client, workspaceId, input.gatekeeperId, input.name);
+  if (!existing) throw new OperationNotFoundError(input.gatekeeperId, input.name);
   if (input.actor !== undefined && !operationVisibleTo(input.actor, existing)) {
     throw new OperationNotFoundError(input.gatekeeperId, input.name);
   }
@@ -1883,7 +2039,9 @@ export async function refreshOperationGovernance(
   const source = input.source ?? 'platform';
 
   for (const operation of selected) {
-    const existingRecord = await getOperation(
+    // Locked (review #493 on #690): an in-place write below lands on the version that is current
+    // when it commits, never on one a concurrent publish retired.
+    const existingRecord = await lockCurrentOperation(
       client,
       workspaceId,
       input.gatekeeperId,

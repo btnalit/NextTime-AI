@@ -141,11 +141,13 @@ export const AUDIT_RESOURCE_TYPE_LABELS: Readonly<Record<AuditResourceType, Bili
   // platform's instance, also written on workspace rows) has its own 门实例 option.
   gate_instance: { zh: '门实例', en: 'Gate instance' },
   gatekeeper: { zh: '门', en: 'Gatekeeper' },
+  goal_run: { zh: '目标', en: 'Goal' },
   module: { zh: '模块', en: 'Module' },
   object: { zh: '对象', en: 'Object' },
   ontology_type: { zh: '本体类型', en: 'Ontology type' },
   ontology_version: { zh: '本体版本', en: 'Ontology version' },
   operation: { zh: 'Operation', en: 'Operation' },
+  plan_revision: { zh: '目标计划版本', en: 'Goal plan revision' },
   policy: { zh: '审批策略', en: 'Approval policy' },
   principal: { zh: '成员', en: 'Member' },
   procedure: { zh: '流程', en: 'Procedure' },
@@ -153,6 +155,7 @@ export const AUDIT_RESOURCE_TYPE_LABELS: Readonly<Record<AuditResourceType, Bili
   session: { zh: '会话', en: 'Session' },
   skill: { zh: 'Skill', en: 'Skill' },
   source: { zh: '来源', en: 'Source' },
+  step_run: { zh: '目标步骤', en: 'Goal step' },
   task: { zh: '任务', en: 'Task' },
   worker_definition: { zh: 'Worker 定义', en: 'Worker definition' },
   worker_run: { zh: 'Worker 运行', en: 'Worker run' },
@@ -330,6 +333,7 @@ export function transportKindLabel(kind: string, t: Translate): string {
 // -------------------------------------------------------------------------------------------
 
 export const OPERATION_FIELD_LABELS: Readonly<Record<string, BilingualLabel>> = {
+  description: { zh: '说明', en: 'Description' },
   binding: { zh: '调用目标', en: 'Call target' },
   params_schema: { zh: '参数定义', en: 'Parameters' },
   result_mapping: { zh: '结果映射', en: 'Result mapping' },

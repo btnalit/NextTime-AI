@@ -1336,9 +1336,18 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zh: '撤销安装记录',
     en: 'Roll back install record',
     zhHint:
-      '把一条安装记录的每项改动退回原状（本体、Skill、Worker 各自退回上一版，或不再安装）；已有数据保留。',
+      '把一条安装记录的每项改动退回原状（本体、Skill、Worker 各自退回上一版，或不再安装；Operation 把上一版的审批设置重新发布）；已有数据保留。',
     enHint:
-      'Returns each change of an install record to what it was (each ontology, Skill or Worker goes back a version, or is no longer installed); data already written stays.',
+      'Returns each change of an install record to what it was (each ontology, Skill or Worker goes back a version, or is no longer installed; an Operation publishes its previous approval settings again); data already written stays.',
+  },
+  // S11 P1-E: 安装历史 · 核验.
+  verify_change_segment: {
+    zh: '核验安装记录',
+    en: 'Verify install record',
+    zhHint:
+      '检查一条安装记录写入的内容是否还在生效，能力包要用到的系统是否已接入、能连通（只探测门的健康，不执行操作）；同一条记录 60 秒内只能核验一次。',
+    enHint:
+      "Checks that what an install record wrote is still in effect and that the systems its pack needs are connected and answering (it only probes each gate's health and runs nothing); once a minute per record at most.",
   },
 
   // -----------------------------------------------------------------------------------------
@@ -1541,6 +1550,15 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
       '撤销安装记录时，其中一项改动已退回原状（本体退回上一版，或不再安装），记下前后版本和确认人。',
     enHint:
       'A change of an install record was returned to what it was when the record was rolled back (the ontology went back a version, or is no longer installed), with before / after and who confirmed it.',
+  },
+  // S11 P1-E: one row per verification, a person's or the one right after an install.
+  'change_segment.verify': {
+    zh: '安装记录已核验',
+    en: 'Install record verified',
+    zhHint:
+      '核验了一条安装记录：写入的内容是否还在生效、要用到的系统是否接好并能连通，记下结果、谁核验的，以及是手动还是装完自动（自动的记在安装人名下）。',
+    enHint:
+      'An install record was verified: whether what it wrote is still in effect and whether the systems it needs are connected and answering, with the result, who ran it, and whether a person asked or it ran right after the install (recorded under the installer).',
   },
 
   // -----------------------------------------------------------------------------------------

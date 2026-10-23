@@ -7,16 +7,21 @@ import type {
   ConnectorModeWire,
   GateInstanceStatusWire,
   GateTrustWire,
+  GoalAcceptanceCheckStatus,
+  GoalRunStatus,
   GrantStatus,
   ObjectiveOutcome,
   OperationMode,
   PackInstallStatus,
+  PackRequirementState,
   PiDriftStatusWire,
+  PlanRevisionStatus,
   PlatformBackupStatusWire,
   PlatformRoleWire,
   PlatformUpdateFeedStatusWire,
   PublishableStatus,
   Role,
+  StepRunStatus,
   TaskStatus,
   UserStatusWire,
   WorkerRunStatus,
@@ -30,6 +35,8 @@ import {
   CHANGE_SEGMENT_STATUS_VALUES,
   CONNECTION_REQUEST_STATUS_VALUES,
   ConnectorModeWireSchema,
+  GOAL_ACCEPTANCE_CHECK_STATUS_VALUES,
+  GOAL_RUN_STATUS_VALUES,
   GRANT_STATUS_VALUES,
   GateHealthWireSchema,
   GateInstanceStatusWireSchema,
@@ -37,12 +44,15 @@ import {
   OBJECTIVE_OUTCOME_VALUES,
   OPERATION_MODE_VALUES,
   PACK_INSTALL_STATUS_VALUES,
+  PACK_REQUIREMENT_STATE_VALUES,
+  PLAN_REVISION_STATUS_VALUES,
   PUBLISHABLE_STATUS_VALUES,
   PiDriftStatusWireSchema,
   PlatformBackupStatusWireSchema,
   PlatformRoleWireSchema,
   PlatformUpdateFeedStatusWireSchema,
   ROLE_VALUES,
+  STEP_RUN_STATUS_VALUES,
   ServiceHealthWireSchema,
   TASK_STATUS_VALUES,
   UserStatusWireSchema,
@@ -125,7 +135,12 @@ export type StatusMachine =
   | 'selfConnection'
   | 'changeSegment'
   | 'changeItemState'
-  | 'packInstall';
+  | 'packInstall'
+  | 'goalRun'
+  | 'stepRun'
+  | 'goalCheck'
+  | 'planRevision'
+  | 'packRequirement';
 
 export const ACTION_REQUEST_TONES: Readonly<Record<ActionRequestStatus, ChipStyle>> = {
   proposed: { tone: 'neutral', label: { zh: '已提议', en: 'Proposed' } },
@@ -406,6 +421,58 @@ export const PACK_INSTALL_TONES: Readonly<Record<PackInstallStatus, ChipStyle>> 
   customized: { tone: 'warn', label: { zh: '已定制', en: 'Customized' } },
 };
 
+/** S11 GO6: a goal's execution status (`GoalRunWire.status`) — how far it ran, never whether it
+ *  was achieved (that is its `outcome`, the `objectiveOutcome` machine). */
+export const GOAL_RUN_TONES: Readonly<Record<GoalRunStatus, ChipStyle>> = {
+  proposed: { tone: 'warn', label: { zh: '待确认', en: 'Awaiting confirmation' }, live: true },
+  running: { tone: 'info', label: { zh: '进行中', en: 'Running' }, live: true },
+  paused: { tone: 'warn', label: { zh: '已暂停', en: 'Paused' } },
+  verifying: { tone: 'info', label: { zh: '验收中', en: 'Verifying' }, live: true },
+  completed: { tone: 'ok', label: { zh: '已结束', en: 'Completed' } },
+  cancelling: { tone: 'warn', label: { zh: '取消中', en: 'Cancelling' }, live: true },
+  cancelled: { tone: 'neutral', label: { zh: '已取消', en: 'Cancelled' } },
+  failed: { tone: 'danger', label: { zh: '已失败', en: 'Failed' } },
+};
+
+/** S11 GO6: one step of a goal (`StepRunWire.status`). */
+export const STEP_RUN_TONES: Readonly<Record<StepRunStatus, ChipStyle>> = {
+  pending: { tone: 'neutral', label: { zh: '等前置步骤', en: 'Waiting on earlier steps' } },
+  ready: { tone: 'neutral', label: { zh: '可以开始', en: 'Ready' } },
+  running: { tone: 'info', label: { zh: '运行中', en: 'Running' }, live: true },
+  waiting: { tone: 'warn', label: { zh: '等待中', en: 'Waiting' }, live: true },
+  succeeded: { tone: 'ok', label: { zh: '已完成', en: 'Succeeded' } },
+  failed: { tone: 'danger', label: { zh: '已失败', en: 'Failed' } },
+  superseded: { tone: 'neutral', label: { zh: '已被修订替换', en: 'Superseded' } },
+  cancelled: { tone: 'neutral', label: { zh: '已取消', en: 'Cancelled' } },
+  skipped: { tone: 'neutral', label: { zh: '已跳过', en: 'Skipped' } },
+};
+
+/** S11 GO6: one acceptance check of a goal or a step (`GoalAcceptanceCheckWire.status`). */
+export const GOAL_CHECK_TONES: Readonly<Record<GoalAcceptanceCheckStatus, ChipStyle>> = {
+  pending: { tone: 'warn', label: { zh: '验收中', en: 'Pending' }, live: true },
+  passed: { tone: 'ok', label: { zh: '通过', en: 'Passed' } },
+  failed: { tone: 'danger', label: { zh: '未通过', en: 'Failed' } },
+  unavailable: { tone: 'warn', label: { zh: '无法验收', en: 'Could not check' } },
+  superseded: { tone: 'neutral', label: { zh: '已作废', en: 'Superseded' } },
+};
+
+/** S11 GO6: a revision of a goal's plan (`PlanRevisionWire.status`). Which accepted revision is in
+ *  force is the goal's `currentRevision`, not a status — the page says that beside the chip. */
+export const PLAN_REVISION_TONES: Readonly<Record<PlanRevisionStatus, ChipStyle>> = {
+  proposed: { tone: 'warn', label: { zh: '待确认', en: 'Proposed' } },
+  accepted: { tone: 'ok', label: { zh: '已采纳', en: 'Accepted' } },
+  rejected: { tone: 'danger', label: { zh: '已拒绝', en: 'Rejected' } },
+};
+
+/** S11 P1-E: where a system a pack needs stands in the workspace (`PackRequirementWire.state`,
+ *  the 能力包 detail and install review, and an install record's verification). */
+export const PACK_REQUIREMENT_TONES: Readonly<Record<PackRequirementState, ChipStyle>> = {
+  connected: { tone: 'ok', label: { zh: '已接入', en: 'Connected' } },
+  can_enable: { tone: 'warn', label: { zh: '待启用', en: 'Can be enabled' } },
+  can_connect: { tone: 'warn', label: { zh: '待接入', en: 'Can be connected' } },
+  needs_platform: { tone: 'danger', label: { zh: '平台未提供', en: 'Not offered' } },
+};
+
 const MACHINES: Readonly<
   Record<StatusMachine, { values: readonly string[]; tones: Readonly<Record<string, ChipStyle>> }>
 > = {
@@ -445,6 +512,11 @@ const MACHINES: Readonly<
   changeSegment: { values: CHANGE_SEGMENT_STATUS_VALUES, tones: CHANGE_SEGMENT_TONES },
   changeItemState: { values: CHANGE_ITEM_STATE_VALUES, tones: CHANGE_ITEM_STATE_TONES },
   packInstall: { values: PACK_INSTALL_STATUS_VALUES, tones: PACK_INSTALL_TONES },
+  goalRun: { values: GOAL_RUN_STATUS_VALUES, tones: GOAL_RUN_TONES },
+  stepRun: { values: STEP_RUN_STATUS_VALUES, tones: STEP_RUN_TONES },
+  goalCheck: { values: GOAL_ACCEPTANCE_CHECK_STATUS_VALUES, tones: GOAL_CHECK_TONES },
+  planRevision: { values: PLAN_REVISION_STATUS_VALUES, tones: PLAN_REVISION_TONES },
+  packRequirement: { values: PACK_REQUIREMENT_STATE_VALUES, tones: PACK_REQUIREMENT_TONES },
 };
 
 export interface ResolvedChipStyle extends ChipStyle {

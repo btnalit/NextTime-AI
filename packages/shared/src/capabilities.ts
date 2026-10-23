@@ -3898,7 +3898,7 @@ const modulesCapabilities = [
     paramsSchema: z.object({ segmentId: z.string().uuid() }).strict(),
     resultSchema: wire.ChangeSegmentDetailWireSchema,
     description:
-      'One applied ChangePlan segment with its items in order — a version of an ontology family, a Skill or a Worker (WorkerDefinition) published: each item’s target, state before and after, authority classification and who confirmed it, and whether what it wrote is still in effect now. 404 change_segment_not_found.',
+      'One applied ChangePlan segment with its items in order — a version of an ontology family, a Skill or a Worker (WorkerDefinition) published, or a revision of an Operation’s governance (its description, risk level, auto-approval, wait-for-decision, reads and writes — never what the gate runs): each item’s target, state before and after (for an Operation, the fields it changed), authority classification and who confirmed it, and whether what it wrote is still in effect now; and its latest verification (verify_change_segment), null when never verified. 404 change_segment_not_found.',
   },
   {
     name: 'preview_roll_back_change_segment',
@@ -3928,7 +3928,18 @@ const modulesCapabilities = [
       .strict(),
     resultSchema: wire.ChangeSegmentWireSchema,
     description:
-      'Roll back one applied ChangePlan segment in one transaction: each item, last first, is compared with what is there now and returned to its state before (an item retires the version it published — of an ontology family, a Skill or a Worker — so the family’s head is the one before it again, or the family is no longer installed; objects and Facts already written stay). Refuses, writing nothing: 409 change_rollback_conflict when an item cannot be rolled back now — its target changed after it (details.items names the later segment to roll back first), is no longer installed, what it restores is gone, or it would restore a type name another family has taken —, 409 change_segment_rolled_back when it already was, 400 change_confirmation_required when an authority-widening rollback item is not among confirmedOrdinals, 403 when confirmedOrdinals comes from a Principal that is not a person (a service API key), 404 change_segment_not_found. One change_item.roll_back audit row per item.',
+      'Roll back one applied ChangePlan segment in one transaction: each item, last first, is compared with what is there now and returned to its state before (an item retires the version it published — of an ontology family, a Skill or a Worker — so the family’s head is the one before it again, or the family is no longer installed; an Operation revision is followed by a further version with the content it replaced, since a retired Operation version is never published again; objects and Facts already written stay). Refuses, writing nothing: 409 change_rollback_conflict when an item cannot be rolled back now — its target changed after it (details.items names the later segment to roll back first), is no longer installed, what it restores is gone, it would restore a type name another family has taken, or an Operation it revised has a revision draft under review —, 409 change_segment_rolled_back when it already was, 400 change_confirmation_required when an authority-widening rollback item is not among confirmedOrdinals, 403 when confirmedOrdinals comes from a Principal that is not a person (a service API key), 404 change_segment_not_found. One change_item.roll_back audit row per item.',
+  },
+  {
+    name: 'verify_change_segment',
+    group: 'modules',
+    mode: 'write',
+    channel: 'human',
+    minRole: 'owner',
+    paramsSchema: z.object({ segmentId: z.string().uuid() }).strict(),
+    resultSchema: wire.ChangeVerificationResultWireSchema,
+    description:
+      'Verify one applied ChangePlan segment now and record the result on it (S11 P1-E): whether what each item wrote is still in effect, and whether each system its source needs (a pack version’s requiredConnectors) is connected in this workspace — with each of its gates’ live health, probed through the gate’s own health endpoint, the probe get_gatekeeper makes; no Operation is run. Passes when every item is in effect, every needed system is connected with at least one healthy gate, and the source version is still in this deployment; the segment becomes verified or verification_failed. One change_segment.verify audit row. Refuses, probing and writing nothing: 409 change_segment_superseded when a later segment of the same source is in effect (details.supersededBy — verify that one), 409 change_segment_rolled_back, 429 change_verification_cooldown within 60 seconds of the segment’s last verification (details.retryAfterSeconds), 404 change_segment_not_found.',
   },
   // S11 P1-C / P1-D (Pack Contract v1, docs/s10-evolution-plan-2026-10-04.md §6;
   // `application/packs`): the packs this deployment ships — ontology families, Skills and `worker`
@@ -3945,7 +3956,7 @@ const modulesCapabilities = [
     paramsSchema: noParams,
     resultSchema: listEnvelope(wire.PackWireSchema),
     description:
-      'Every pack this deployment ships (Pack Contract v1, `packs/<name>/<version>/pack.yaml`) with its versions and components — ontology families, Skills and Workers (WorkerDefinitions) —, and this workspace’s state of it — not installed / up to date / outdated / customized — for the pack and for each component, with the change that installed each component’s current content.',
+      'Every pack this deployment ships (Pack Contract v1, `packs/<name>/<version>/pack.yaml`) with its versions and components — ontology families, Skills and Workers (WorkerDefinitions) —, and this workspace’s state of it — not installed / up to date / outdated / customized — for the pack and for each component, with the change that installed each component’s current content; and the systems the latest version needs (requiredConnectors), each with where it stands here — connected / an instance the platform offers to enable / one the owner can connect / needs a platform administrator — read without contacting any gate.',
   },
   {
     name: 'preview_pack_install',
@@ -3956,7 +3967,7 @@ const modulesCapabilities = [
     paramsSchema: z.object({ name: z.string().min(1) }).strict(),
     resultSchema: wire.PackInstallPreviewWireSchema,
     description:
-      'Dry run of install_pack, writing nothing: per component of the latest version, what the family has now and would have after — for an ontology family the type names added / removed / changed, for a Skill or Worker the content it would publish and the fields that differ —, and the item’s authority classification; the versions the install moves through and whether one is breaking; how many objects and active Facts use a type it takes out (kept, never removed); and the digest to pass back as reviewedDigest. 404 pack_not_found; 409 ontology_namespace_conflict when a component declares an ObjectType or ActionType name another installed family already declares (I-P1); 409 skill_name_conflict when another Skill family already has a Skill component’s name published.',
+      'Dry run of install_pack, writing nothing: per component of the latest version, what the family has now and would have after — for an ontology family the type names added / removed / changed, for a Skill or Worker the content it would publish and the fields that differ —, and the item’s authority classification; the versions the install moves through and whether one is breaking; how many objects and active Facts use a type it takes out (kept, never removed); and the digest to pass back as reviewedDigest. The systems the version needs are in pack.requirements: installing does not wait for them. 404 pack_not_found; 409 ontology_namespace_conflict when a component declares an ObjectType or ActionType name another installed family already declares (I-P1); 409 skill_name_conflict when another Skill family already has a Skill component’s name published.',
   },
   {
     name: 'install_pack',
@@ -3978,7 +3989,7 @@ const modulesCapabilities = [
       .strict(),
     resultSchema: wire.PackInstallResultWireSchema,
     description:
-      'Install a pack’s latest version into this workspace in one transaction, as one ChangePlan segment: each component whose content differs is published as its family’s next version — an ontology family, a Skill, a Worker (WorkerDefinition) — with this owner as proposer and publisher (installing, upgrading, or replacing a customized family alike — the dry run showed which). Refuses, writing nothing: 409 version_changed when the latest version is not the reviewed one, 409 change_plan_changed when the dry run would differ from the reviewed digest now (preview again), 400 change_confirmation_required when an authority-widening item is not among confirmedOrdinals, 403 when confirmedOrdinals comes from a Principal that is not a person (a service API key), 409 ontology_namespace_conflict (I-P1), 409 skill_name_conflict, 404 pack_not_found. Already up to date: records nothing. One change_item.apply audit row per item.',
+      'Install a pack’s latest version into this workspace in one transaction, as one ChangePlan segment: each component whose content differs is published as its family’s next version — an ontology family, a Skill, a Worker (WorkerDefinition) — with this owner as proposer and publisher (installing, upgrading, or replacing a customized family alike — the dry run showed which). Refuses, writing nothing: 409 version_changed when the latest version is not the reviewed one, 409 change_plan_changed when the dry run would differ from the reviewed digest now (preview again), 400 change_confirmation_required when an authority-widening item is not among confirmedOrdinals, 403 when confirmedOrdinals comes from a Principal that is not a person (a service API key), 409 ontology_namespace_conflict (I-P1), 409 skill_name_conflict, 404 pack_not_found. Already up to date: records nothing. One change_item.apply audit row per item. Right after the install commits, the segment is verified once as the person who installed (trigger system, as verify_change_segment does; its result is verification — null when the run could not be made, the install stands either way).',
   },
 ] as const satisfies readonly Capability[];
 

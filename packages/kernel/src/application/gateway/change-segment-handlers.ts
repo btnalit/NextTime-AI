@@ -6,31 +6,40 @@ import type {
   ChangeRollbackPreviewWire,
   ChangeSegmentDetailWire,
   ChangeSegmentWire,
+  ChangeVerificationResultWire,
+  ChangeVerificationWire,
+  OperationFieldValueWire,
 } from '@nexttime/shared';
 import {
   type ChangePrincipalRef,
   type ChangeProvenance,
   type ChangeSegmentRecord,
+  type ChangeVerification,
   type InspectedChangeItem,
   type PlannedItemRollback,
   inspectChangeSegment,
   listChangeSegments,
+  loadChangeVerification,
   parseStoredFamilyItem,
   parseStoredOntologyItem,
+  parseStoredOperationItem,
   previewSegmentRollback,
   rollBackWorkspaceSegment,
   skillTargetOf,
+  verifyChangeSegment,
   workerDefinitionTargetOf,
 } from '../change-plan/index.js';
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
+import { sourceRequirementsChecker } from './change-verification.js';
 
 /**
  * application/gateway/change-segment-handlers: the thin `CapabilityHandler` layer over
  * `application/change-plan`'s segment reads and rollback (S11 P1-B) — `list_change_segments`,
  * `get_change_segment`, `preview_roll_back_change_segment`, `roll_back_change_segment`
- * (`scope:'workspace'`, the 能力目录 安装历史 tab). Each parses params, calls the domain module and
- * projects its records to `@nexttime/shared`'s `wire/change-plan.ts`; nothing here queries.
+ * (`scope:'workspace'`, the 能力目录 安装历史 tab) — and `verify_change_segment` (P1-E). Each parses
+ * params, calls the domain module and projects its records to `@nexttime/shared`'s
+ * `wire/change-plan.ts`; nothing here queries.
  */
 
 function toPrincipalRefWire(ref: ChangePrincipalRef): ChangePrincipalRefWire {
@@ -75,6 +84,25 @@ export function toChangeProvenanceWire(provenance: ChangeProvenance): ChangeProv
   }
 }
 
+/** A segment's latest verification: `get_change_segment`'s, `verify_change_segment`'s and the
+ *  run `install_pack` makes after installing (`pack-handlers.ts`). */
+export function toChangeVerificationWire(verification: ChangeVerification): ChangeVerificationWire {
+  return {
+    trigger: verification.trigger,
+    verifiedBy: toPrincipalRefWire(verification.verifiedBy),
+    verifiedAt: verification.verifiedAt.toISOString(),
+    passed: verification.passed,
+    sourceFound: verification.sourceFound,
+    items: verification.items.map((item) => ({ ...item })),
+    requirements: verification.requirements.map((requirement) => ({
+      connector: requirement.connector,
+      state: requirement.state,
+      gates: requirement.gates.map((gate) => ({ ...gate })),
+      met: requirement.met,
+    })),
+  };
+}
+
 function toChangeItemWire(item: InspectedChangeItem): ChangeItemWire {
   const { record } = item;
   const common = {
@@ -116,6 +144,22 @@ function toChangeItemWire(item: InspectedChangeItem): ChangeItemWire {
         target: workerDefinitionTargetOf(stored.target),
         before: stored.before ? { ...stored.before } : null,
         after: { ...stored.after },
+      };
+    }
+    case 'operation_version': {
+      const stored = parseStoredOperationItem(record);
+      return {
+        ...common,
+        kind,
+        target: { ...stored.target },
+        before: { ...stored.before },
+        after: { ...stored.after },
+        fields: item.operationFields.map((change) => ({
+          field: change.field,
+          // The six fields' values are strings, booleans and string arrays (`Operation`).
+          before: change.before as OperationFieldValueWire,
+          after: change.after as OperationFieldValueWire,
+        })),
       };
     }
     default:
@@ -171,6 +215,16 @@ function toRollbackItemWire(item: PlannedItemRollback): ChangeRollbackItemWire {
         to: family.to ? { ...family.to } : null,
       };
     }
+    case 'operation_version': {
+      const operation = detail.planned;
+      return {
+        ...common,
+        kind: detail.kind,
+        target: { ...operation.target },
+        from: { ...operation.from },
+        to: { ...operation.to },
+      };
+    }
   }
 }
 
@@ -188,11 +242,36 @@ export const listChangeSegmentsHandler: CapabilityHandler = async (client, works
 export const getChangeSegmentHandler: CapabilityHandler = async (client, workspaceId, params) => {
   const { segmentId } = params as { segmentId: string };
   const inspected = await inspectChangeSegment(client, workspaceId, segmentId);
+  const verification = await loadChangeVerification(client, workspaceId, segmentId);
   const result: ChangeSegmentDetailWire = {
     segment: toChangeSegmentWire(inspected.segment),
     items: inspected.items.map(toChangeItemWire),
+    verification: verification ? toChangeVerificationWire(verification) : null,
   };
   return { result };
+};
+
+export const verifyChangeSegmentHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  context,
+) => {
+  const { segmentId } = params as { segmentId: string };
+  if (!context?.principalId) {
+    throw new Error('verify_change_segment: no calling principal in context');
+  }
+  const verified = await verifyChangeSegment(client, workspaceId, {
+    segmentId,
+    verifiedBy: context.principalId,
+    trigger: 'manual',
+    checkRequirements: sourceRequirementsChecker(client, workspaceId),
+  });
+  const result: ChangeVerificationResultWire = {
+    segment: toChangeSegmentWire(verified.segment),
+    verification: toChangeVerificationWire(verified.verification),
+  };
+  return { result, resourceType: 'change_segment', resourceId: verified.segment.id };
 };
 
 export const previewRollBackChangeSegmentHandler: CapabilityHandler = async (

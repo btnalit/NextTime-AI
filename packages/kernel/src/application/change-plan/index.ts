@@ -19,11 +19,16 @@
  * in-use count for removed types is shared (`usage.ts`).
  *
  * P1-D: `skill_version` and `worker_definition_version` items (`family-item.ts`), so a pack's
- * Skills and Workers install and roll back like its ontology families. Operation items and
- * recorded verification follow in later P1 PRs.
+ * Skills and Workers install and roll back like its ontology families.
+ *
+ * P1-E: `operation_version` items (`operation-item.ts`: a revision of a published Operation's
+ * governance fields, never of what the gate runs), and verifying a segment (`verify.ts`: whether
+ * what it wrote is still in effect and the systems its source needs are in place, recorded on the
+ * segment).
  *
  * Boundaries: it lives in `application` because applying calls publish functions across
- * `substrate` (ontology) and `application/worker` (Skills, WorkerDefinitions).
+ * `substrate` (ontology), `application/worker` (Skills, WorkerDefinitions) and
+ * `governance/gatekeepers` (Operations).
  */
 
 export {
@@ -34,10 +39,12 @@ export {
   WIDENING_REASON_VALUES,
   type WideningReason,
   type WideningReasonCode,
+  OPERATION_FIELD_RULES,
   SKILL_FIELD_RULES,
   WORKER_DEFINITION_FIELD_RULES,
   classificationOf,
   classifyOntologyDefinitionChange,
+  classifyOperationChange,
   classifySkillChange,
   classifyWorkerDefinitionChange,
 } from './classify.js';
@@ -93,6 +100,15 @@ export {
   parseStoredOntologyItem,
 } from './ontology-item.js';
 export {
+  OPERATION_ITEM_FIELDS,
+  type OperationFieldChange,
+  type OperationGovernanceValues,
+  type OperationItemTarget,
+  type OperationVersionIntent,
+  type StoredOperationItem,
+  parseStoredOperationItem,
+} from './operation-item.js';
+export {
   type ChangeProvenance,
   loadFamilyProvenance,
   loadOntologyProvenance,
@@ -107,6 +123,19 @@ export {
   rollBackWorkspaceSegment,
 } from './rollback.js';
 export { countRemovedTypeUsage } from './usage.js';
+export {
+  type ChangeVerification,
+  ChangeSegmentSupersededError,
+  ChangeVerificationCooldownError,
+  type CheckSourceRequirements,
+  type RequirementCheck,
+  type RequirementGateCheck,
+  type SourceRequirements,
+  type VerifiedChangeSegment,
+  type VerifyChangeSegmentInput,
+  loadChangeVerification,
+  verifyChangeSegment,
+} from './verify.js';
 export {
   type ChangeItemRecord,
   type ChangePrincipalRef,

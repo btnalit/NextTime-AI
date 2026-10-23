@@ -26,6 +26,8 @@ export interface PackFixtureVersion {
   readonly summary?: string;
   readonly notes?: string;
   readonly breaking?: boolean;
+  /** `requires.connectors`. */
+  readonly requires?: readonly string[];
   readonly ontology?: readonly PackFixtureComponent[];
   /** `skills/<name>.md`. */
   readonly skills?: readonly PackFixtureFile[];
@@ -90,9 +92,12 @@ export async function writePackFixture(
           workers.map((f) => f.name),
         ),
       ].join('');
+      const requires = version.requires
+        ? `requires:\n  connectors:\n${version.requires.map((c) => `    - ${c}\n`).join('')}`
+        : '';
       await writeFile(
         path.join(dir, 'pack.yaml'),
-        `schema: 1\nname: ${name}\nversion: ${index + 1}\nsummary: ${JSON.stringify(version.summary ?? `${name} pack`)}\nnotes: ${JSON.stringify(version.notes ?? `v${index + 1}`)}\nbreaking: ${version.breaking ?? false}\ncomponents:${components === '' ? ' {}\n' : `\n${components}`}`,
+        `schema: 1\nname: ${name}\nversion: ${index + 1}\nsummary: ${JSON.stringify(version.summary ?? `${name} pack`)}\nnotes: ${JSON.stringify(version.notes ?? `v${index + 1}`)}\nbreaking: ${version.breaking ?? false}\n${requires}components:${components === '' ? ' {}\n' : `\n${components}`}`,
       );
       for (const component of ontology) {
         await writeFile(path.join(ontologyDir, component.domainPack), component.yaml);
