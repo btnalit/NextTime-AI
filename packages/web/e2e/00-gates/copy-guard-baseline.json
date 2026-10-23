@@ -14,11 +14,7 @@
   "graph": {},
   "graph-types": {
     "raw-enum": {
-      "samples": [
-        "auto_approvable",
-        "await_decision",
-        "blast_radius"
-      ]
+      "samples": ["auto_approvable", "await_decision", "blast_radius"]
     }
   },
   "login": {},
