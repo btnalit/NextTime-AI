@@ -30,8 +30,8 @@ import type { Translate } from './i18n.js';
  * lib/goals (S11 GO6): what the console's goal pages (`components/goals/*`) read out of the
  * `goal` capability group's one wire shape (`wire/goal.ts`) — the sentences for its sub-states, a
  * plan's predicates, its budget, and the difference between two plan revisions. No capability
- * calls and no React: the pages call and render. Read-only for now — the operations (confirm,
- * pause, resume, cancel, revise) come in GO6's next part, so nothing here names a button.
+ * calls and no React: the pages call and render. What a person may do to a goal is
+ * `lib/goal-actions.ts`'s, so nothing here names a button.
  *
  * Words follow the design (plan §9 "语义一致"): 目标 is the GoalRun, 步骤 a StepRun, 任务 a Task one
  * attempt of a step ran as; 执行状态 (how far it ran) and 目标结果 (whether it was achieved) stay
@@ -585,8 +585,8 @@ function pausedNote(
         ? {
             tone: 'warn',
             text: t(
-              '工作区所有者暂停了这个目标（锁定）：请求人不能自己继续，要等所有者解除。',
-              'A workspace owner paused this goal (a hold): the requester cannot resume it until an owner lifts it.',
+              '这个目标已被工作区所有者锁定（谁锁定的见概览里的「暂停人」）：请求人要等所有者解除锁定才能继续，在此之前仍可以结束或取消它。',
+              'A workspace owner holds this goal (who, under Paused by in the overview): its requester can resume it once an owner lifts the hold, and can still end or cancel it meanwhile.',
             ),
           }
         : {

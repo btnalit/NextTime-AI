@@ -723,14 +723,14 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
   confirm_goal: {
     zh: '确认目标',
     en: 'Confirm goal',
-    zhHint: '发起人确认提议的目标和计划；确认后目标开始执行，以发起人的权限花费预算、发起动作。',
+    zhHint: '请求人确认提议的目标和计划；确认后目标开始执行，以请求人的权限花费预算、发起动作。',
     enHint:
       "The requester confirms a proposed goal and its plan; it then starts, spending its budget and acting with the requester's authority.",
   },
   reject_goal: {
     zh: '驳回目标',
     en: 'Reject goal',
-    zhHint: '发起人或工作区所有者驳回还没确认的目标；它不会执行。',
+    zhHint: '请求人或工作区所有者驳回还没确认的目标；它不会执行。',
     enHint:
       'The requester or the workspace owner turns down a goal not yet confirmed; it never runs.',
   },
@@ -738,28 +738,28 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zh: '暂停目标',
     en: 'Pause goal',
     zhHint:
-      '发起人或工作区所有者暂停目标：不再开始新的步骤，已在跑的跑完。所有者暂停别人的目标会锁定它，发起人要等所有者解除锁定才能继续。',
+      '请求人或工作区所有者暂停目标：不再开始新的步骤，已在跑的跑完。所有者暂停别人的目标会锁定它，请求人要等所有者解除锁定才能继续。',
     enHint:
       "The requester or the workspace owner pauses a goal: no new step starts, running ones finish. The owner pausing someone else's goal locks it until an owner lifts the lock.",
   },
   resume_goal: {
     zh: '继续目标',
     en: 'Resume goal',
-    zhHint: '发起人继续暂停的目标，可逐个选择要重试的失败步骤；被所有者锁定时不能继续。',
+    zhHint: '请求人继续暂停的目标，可逐个选择要重试的失败步骤；被所有者锁定时不能继续。',
     enHint:
       'The requester resumes a paused goal, choosing failed steps to retry one by one; not while the owner has locked it.',
   },
   cancel_goal: {
     zh: '取消目标',
     en: 'Cancel goal',
-    zhHint: '发起人或工作区所有者取消目标：未结束的步骤取消，还没开始的动作撤回。',
+    zhHint: '请求人或工作区所有者取消目标：未结束的步骤取消，还没开始的动作撤回。',
     enHint:
       'The requester or the workspace owner cancels a goal: steps not yet ended are cancelled, actions not yet started are withdrawn.',
   },
   release_goal_hold: {
     zh: '解除目标锁定',
     en: 'Lift goal lock',
-    zhHint: '工作区所有者解除对目标的锁定；目标仍是暂停状态，由发起人决定是否继续。',
+    zhHint: '工作区所有者解除对目标的锁定；目标仍是暂停状态，由请求人决定是否继续。',
     enHint:
       'The workspace owner lifts the lock on a goal; it stays paused for its requester to resume.',
   },
@@ -767,14 +767,14 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zh: '修订目标计划',
     en: 'Revise goal plan',
     zhHint:
-      '发起人修订暂停中目标的计划：去掉的步骤不再执行，改动的步骤换成新的一版，新步骤加入；修订后仍暂停，等发起人继续。',
+      '请求人修订暂停中目标的计划：去掉的步骤不再执行，改动的步骤换成新的一版，新步骤加入；修订后仍暂停，等请求人继续。',
     enHint:
       'The requester revises the plan of a paused goal: dropped steps no longer run, changed steps get a new version, new ones are added; it stays paused until resumed.',
   },
   confirm_goal_acceptance: {
     zh: '确认目标达成',
     en: 'Confirm goal achieved',
-    zhHint: '平台的验收检查都通过后，发起人确认目标达成。',
+    zhHint: '平台的验收检查都通过后，请求人确认目标达成。',
     enHint:
       "Once the platform's acceptance checks have passed, the requester confirms the goal is achieved.",
   },
@@ -782,14 +782,14 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zh: '结束目标',
     en: 'End goal',
     zhHint:
-      '发起人按自己的判断结束目标：未达成，或在暂停时认定达成（未通过的检查会记为「发起人判定通过」）。',
+      '请求人按自己的判断结束目标：未达成，或在暂停时认定达成（未通过的检查会记为「请求人判定通过」）。',
     enHint:
       'The requester ends a goal on their own word: not achieved, or achieved while paused (checks that did not pass are marked overridden).',
   },
   reconcile_goal_action: {
     zh: '核对目标动作',
     en: 'Check goal action',
-    zhHint: '记录结果不明的动作是否已生效（发起人或工作区所有者），或由发起人决定重新执行它。',
+    zhHint: '记录结果不明的动作是否已生效（请求人或工作区所有者），或由请求人决定重新执行它。',
     enHint:
       'Records whether an action whose outcome is unknown took effect (the requester or the workspace owner), or the requester decides to run it again.',
   },

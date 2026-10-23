@@ -4,9 +4,10 @@ import {
   type UnresolvedGoalActionWire,
   visibleLines,
 } from '@nexttime/shared';
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useCanOpen } from '../../hooks/useCanOpen.js';
 import { useResource } from '../../hooks/useResource.js';
+import { useWorkspaceIdentity } from '../../hooks/useWorkspaceIdentity.js';
 import { auditHref } from '../../lib/audit.js';
 import type { CapabilityCaller, PushSource } from '../../lib/clients.js';
 import { describeError } from '../../lib/errors.js';
@@ -20,6 +21,7 @@ import {
 import { type Translate, useT } from '../../lib/i18n.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { hrefs } from '../../lib/router.js';
+import { labelText, statusChipStyle } from '../../lib/status-tone.js';
 import { useGatekeeperNames } from '../approvals/useDirectoryNames.js';
 import { Button } from '../kit/button.js';
 import { EmptyState } from '../kit/empty-state.js';
@@ -33,6 +35,8 @@ import { SkeletonRows } from '../kit/skeleton.js';
 import { StatusChip } from '../kit/status-chip.js';
 import { ActionChip } from './ActionChip.js';
 import { GoalAcceptanceSection } from './GoalAcceptanceSection.js';
+import { type GoalOperationOutcome, GoalOperationsBar } from './GoalOperationsBar.js';
+import { GoalReconcileControls } from './GoalReconcileControls.js';
 import { GoalRevisionsSection } from './GoalRevisionsSection.js';
 import { GoalStepsSection } from './GoalStepsSection.js';
 import { GoalUnresolvedSection } from './GoalUnresolvedSection.js';
@@ -47,8 +51,10 @@ export interface GoalDetailPageProps {
  * components/goals/GoalDetailPage (S11 GO6, read-only part): one goal (`get_goal`) on its own page
  * — what it is doing or waiting on, who asked for it, what it spent of its budget, its steps,
  * its acceptance, the actions still waiting for a person (`list_goal_unresolved_actions`), what a
- * cancel left behind, and its plan revisions. No operation buttons yet: the operations GO5b
- * added (confirming, pausing, resuming, cancelling, …) come in GO6's next part.
+ * cancel left behind, and its plan revisions — and what the reader may do to it now
+ * (`GoalOperationsBar`, GO5b; for a proposal, the confirm card: the plan, checks and budget below
+ * with 确认并开始 / 驳回) and about each action to check (`GoalReconcileControls`). Revising the
+ * plan is not offered yet.
  *
  * A goal the reader may not see reads exactly like one that does not exist (the kernel's 404 for
  * both); the page says so without guessing which. No goal pushes exist yet: an update of one of
@@ -70,11 +76,25 @@ export function GoalDetailPage({ http, pushes, goalRunId }: GoalDetailPageProps)
   const detail = useResource(loadDetail);
   const unresolved = useResource(loadUnresolved);
   const gateNames = useGatekeeperNames(http);
+  const identity = useWorkspaceIdentity(http);
+  const viewer = {
+    principalId: identity.principalId,
+    isOwner: identity.role.kind === 'known' && identity.role.role === 'owner',
+  };
 
   const reloadAll = useCallback(() => {
     void detail.reload();
     void unresolved.reload();
   }, [detail.reload, unresolved.reload]);
+  // What the reader's last operation did, said on the page (the operation re-reads the goal).
+  const [done, setDone] = useState<GoalOperationOutcome | null>(null);
+  const onDone = useCallback(
+    (outcome: GoalOperationOutcome) => {
+      setDone(outcome);
+      reloadAll();
+    },
+    [reloadAll],
+  );
 
   const data = detail.state.status === 'ready' ? detail.state.data : undefined;
   // The Tasks and actions this goal ran, read when a push arrives rather than captured by the
@@ -193,6 +213,19 @@ export function GoalDetailPage({ http, pushes, goalRunId }: GoalDetailPageProps)
           {note.text}
         </Notice>
       ) : null}
+      <GoalOperationsBar goal={goal} viewer={viewer} http={http} onDone={onDone} />
+      <output aria-live="polite">
+        {done ? (
+          <Notice tone={done.kind === 'stale' ? 'warn' : 'info'} testId="goal-op-done">
+            {done.kind === 'done'
+              ? done.message
+              : t(
+                  `目标的状态刚变了，刚才的操作没有执行。页面已经刷新：它现在是「${labelText(statusChipStyle('goalRun', goal.status), t)}」。`,
+                  `The goal had just moved on, so that was not done. The page has been refreshed: it is now ${labelText(statusChipStyle('goalRun', goal.status), t)}.`,
+                )}
+          </Notice>
+        ) : null}
+      </output>
 
       <DashboardCard title={t('概览', 'Overview')} data-testid="goal-overview">
         <KeyValue items={overviewItems(goal, http, t)} />
@@ -231,6 +264,15 @@ export function GoalDetailPage({ http, pushes, goalRunId }: GoalDetailPageProps)
               : { status: 'loading' }
         }
         paused={goal.status === 'paused'}
+        controls={(action) => (
+          <GoalReconcileControls
+            goal={goal}
+            action={action}
+            viewer={viewer}
+            http={http}
+            onDone={onDone}
+          />
+        )}
         http={http}
         onRetry={() => void unresolved.reload()}
       />
