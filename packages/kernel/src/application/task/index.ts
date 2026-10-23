@@ -53,6 +53,16 @@ export {
 export { lockTaskQuotas } from './quota-check.js';
 
 export {
+  type RejectedOutput,
+  type ReworkOf,
+  TaskOutputRejectedError,
+  countStepAttemptsWithoutResult,
+  readStepAttemptOutput,
+  readTaskOutputContract,
+  recordRejectedOutput,
+} from './output-contract.js';
+
+export {
   type CreateStepAttemptInput,
   type CreateStepAttemptResult,
   type PreparedStepAttempt,

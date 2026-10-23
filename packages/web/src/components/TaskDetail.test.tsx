@@ -369,4 +369,53 @@ describe('TaskDetail', () => {
       expect(screen.getByText(/所在对话对你不可见/)).toBeTruthy();
     });
   });
+  it('an attempt of a goal step shows its output contract, its last refused report and the attempt it redoes (S11 GO5d-1)', async () => {
+    renderDetail({
+      status: 'running',
+      outputSchema: {
+        type: 'object',
+        properties: { hosts: { type: 'array', items: { type: 'string' } } },
+        required: ['hosts'],
+      },
+      rejectedOutput: {
+        output: { hosts: 'web-1', password: 'should-not-show' },
+        problems: [{ path: 'output.hosts', message: 'expected array, got string' }],
+        problemCount: 1,
+        at: '2026-09-03T00:05:00.000Z',
+      },
+      reworkOf: {
+        taskId: 'task-0',
+        attempt: 1,
+        rejectedOutput: {
+          output: null,
+          problems: [{ path: 'output', message: 'required, missing' }],
+          problemCount: 1,
+          at: '2026-09-03T00:01:00.000Z',
+        },
+      },
+    });
+    const section = await screen.findByTestId('task-output-contract');
+    expect(within(section).getByTestId('output-contract-field').textContent).toBe(
+      'hosts列表（每项：文本）必填',
+    );
+    const rework = within(section).getByTestId('task-rework-of');
+    expect(rework.textContent).toMatch(/这次尝试重做第 1 次尝试/);
+    expect(within(rework).getByTestId('task-rework-of-link')).toBeTruthy();
+    expect(within(rework).getByTestId('task-rework-of-problems').textContent).toContain(
+      'output：required, missing',
+    );
+    const rejected = within(section).getByTestId('task-rejected-output');
+    expect(within(rejected).getByTestId('task-rejected-output-problems').textContent).toContain(
+      'output.hosts：expected array, got string',
+    );
+    expect(rejected.textContent).toContain('web-1');
+    expect(rejected.textContent).not.toContain('should-not-show');
+    expect(within(rejected).getByTestId('task-rejected-output-redacted')).toBeTruthy();
+  });
+
+  it('a Task that is not a goal step’s attempt has no output contract section', async () => {
+    renderDetail({ outputSchema: null, rejectedOutput: null, reworkOf: null });
+    await screen.findByTestId('task-detail');
+    expect(screen.queryByTestId('task-output-contract')).toBeNull();
+  });
 });

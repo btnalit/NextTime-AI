@@ -11,6 +11,7 @@ import {
 import {
   type StepView,
   actionFailureLabel,
+  bindingSentence,
   checkKindLabel,
   factCheckSentence,
   goalSteps,
@@ -25,12 +26,15 @@ import {
   stepWaitingReasonLabel,
 } from '../../lib/goals.js';
 import { type Translate, useT } from '../../lib/i18n.js';
+import { taskFailureReasonText } from '../../lib/labels.js';
 import { hrefs } from '../../lib/router.js';
 import { Notice } from '../kit/notice.js';
+import { RedactedNote } from '../kit/redacted-note.js';
 import { RefChip } from '../kit/ref-chip.js';
 import { DashboardCard } from '../kit/section.js';
 import { StatusChip } from '../kit/status-chip.js';
 import { ActionChip } from './ActionChip.js';
+import { OutputContractFields, OutputProblemList } from './OutputContract.js';
 
 export interface GoalStepsSectionProps {
   readonly detail: GoalDetailWire;
@@ -42,7 +46,10 @@ export interface GoalStepsSectionProps {
  * components/goals/GoalStepsSection (S11 GO6): the plan in force, step by step — its Worker, what
  * it depends on, where its StepRun stands (and, while waiting or failed, why), its attempts (the
  * Tasks), the actions it raised (the ActionRequests, each opening its approval), its own
- * acceptance checks and reconcile declarations as sentences, and its input. Steps a revision
+ * acceptance checks and reconcile declarations as sentences, and its input. S11 GO5d-1: the inputs
+ * it takes from earlier steps' outputs as sentences (「输入 host 来自步骤 scan 输出的 hosts[0]」),
+ * its output contract, the output it handed back, and per attempt whether it was the one automatic
+ * rework and where its last refused report broke the contract. Steps a revision
  * replaced are listed under their own disclosure, oldest first. While the run is proposed, what the
  * requester's authority would stop now (S11 GO5c hints) heads the card, and each step it names
  * carries a chip.
@@ -175,6 +182,20 @@ function StepItem({ view, acceptance, hints, http, gateNames, t }: StepItemProps
           : ''}
       </span>
 
+      {planStep?.bindings ? (
+        <ul className="stack-s" data-testid="goal-step-bindings">
+          {planStep.bindings.map((binding, index) => (
+            <li
+              key={`${binding.to}-${index}`}
+              className="text-small text-3"
+              data-testid="goal-step-binding"
+            >
+              {bindingSentence(binding, t)}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
       {run?.waitingReason ? (
         <span className="text-small text-warn" data-testid="goal-step-waiting">
           {stepWaitingReasonLabel(run.waitingReason, t)}
@@ -197,6 +218,24 @@ function StepItem({ view, acceptance, hints, http, gateNames, t }: StepItemProps
 
       {run ? <Attempts run={run} maxAttempts={maxAttempts} http={http} t={t} /> : null}
       {run && run.actions.length > 0 ? <Actions run={run} http={http} t={t} /> : null}
+
+      {run?.output ? (
+        <details className="disclosure" data-testid="goal-step-output">
+          <summary>{t('这一步交回的输出', 'The output this step handed back')}</summary>
+          <div className="disclosure-body stack-s">
+            <pre className="code-block">{prettyJsonVisible(redactSensitive(run.output))}</pre>
+            <RedactedNote value={redactSensitive(run.output)} testId="goal-step-output-redacted" />
+          </div>
+        </details>
+      ) : null}
+      {planStep?.outputSchema ? (
+        <details className="disclosure" data-testid="goal-step-output-contract">
+          <summary>{t('输出约定', 'Output contract')}</summary>
+          <div className="disclosure-body">
+            <OutputContractFields schema={planStep.outputSchema} t={t} />
+          </div>
+        </details>
+      ) : null}
 
       {planStep?.acceptance ? (
         <details className="disclosure">
@@ -299,20 +338,55 @@ function Attempts({
         )}
       </span>
       {run.attempts.map((attempt) => (
-        <span key={attempt.taskId} className="row-wrap text-small">
-          <span className="text-3 tabular">#{attempt.attempt}</span>
-          <RefChip
-            kind="task"
-            id={attempt.taskId}
-            http={http}
-            href={hrefs.task(attempt.taskId)}
-            size="s"
-          />
-          <StatusChip machine="task" status={attempt.status} size="s" />
-          <time className="text-3" title={formatDateTime(attempt.createdAt)}>
-            {formatRelative(attempt.createdAt)}
-          </time>
-        </span>
+        <div key={attempt.taskId} className="stack-s" data-testid="goal-step-attempt">
+          <span className="row-wrap text-small">
+            <span className="text-3 tabular">#{attempt.attempt}</span>
+            <RefChip
+              kind="task"
+              id={attempt.taskId}
+              http={http}
+              href={hrefs.task(attempt.taskId)}
+              size="s"
+            />
+            <StatusChip machine="task" status={attempt.status} size="s" />
+            {attempt.rework ? (
+              <span
+                className="chip chip-info chip-s"
+                title={t(
+                  '上一次尝试没有交回平台接受的结果，平台自动重做了这一次，并把被拒的原因告诉了 Worker。',
+                  'The attempt before it handed back no result the platform accepted, so the platform redid the step once and told the Worker what was refused.',
+                )}
+                data-testid="goal-step-attempt-rework"
+              >
+                {t('自动返工', 'Automatic rework')}
+              </span>
+            ) : null}
+            {attempt.status === 'failed' && attempt.failureReason ? (
+              <span className="text-danger" data-testid="goal-step-attempt-failure">
+                {taskFailureReasonText(attempt.failureReason, t).short}
+              </span>
+            ) : null}
+            <time className="text-3" title={formatDateTime(attempt.createdAt)}>
+              {formatRelative(attempt.createdAt)}
+            </time>
+          </span>
+          {attempt.outputProblems && attempt.outputProblemCount > 0 ? (
+            <div className="stack-s goal-step-attempt-problems">
+              <span className="text-small text-warn">
+                {t(
+                  `最后一次被拒的报告有 ${attempt.outputProblemCount} 处不符合输出约定：`,
+                  `Its last refused report broke the output contract in ${attempt.outputProblemCount} place(s):`,
+                )}
+              </span>
+              <OutputProblemList
+                problems={attempt.outputProblems}
+                problemCount={attempt.outputProblemCount}
+                t={t}
+                testId="goal-step-attempt-problems"
+              />
+            </div>
+          ) : null}
+        </div>
       ))}
     </div>
   );

@@ -2,6 +2,7 @@ import type { TaskStatus } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { z } from 'zod';
 import { writeAudit } from '../../substrate/audit/index.js';
+import { type RejectedOutput, parseRejectedOutput } from './output-contract.js';
 import { GoalStepClosedError } from './types.js';
 
 /**
@@ -121,6 +122,8 @@ export interface StepAttemptTask {
   readonly failureReason: string | null;
   /** `null` when the stored snapshot does not parse — a later attempt then cannot start from it. */
   readonly runConfig: RunConfigSnapshot | null;
+  /** S11 GO5d-1: the last report its output contract refused (`output-contract.ts`). */
+  readonly rejectedOutput: RejectedOutput | null;
 }
 
 /** The Task of attempt `attempt` of `stepRunId`, or `null` (I-G1: at most one). */
@@ -135,8 +138,9 @@ export async function readStepAttemptTask(
     status: TaskStatus;
     failure_reason: string | null;
     run_config_snapshot: unknown;
+    rejected_output: unknown;
   }>(
-    `select id, status, failure_reason, run_config_snapshot from tasks
+    `select id, status, failure_reason, run_config_snapshot, rejected_output from tasks
      where workspace_id = $1 and step_run_id = $2 and step_attempt = $3`,
     [workspaceId, stepRunId, attempt],
   );
@@ -148,6 +152,7 @@ export async function readStepAttemptTask(
     status: row.status,
     failureReason: row.failure_reason,
     runConfig: parsed.success ? parsed.data : null,
+    rejectedOutput: parseRejectedOutput(row.rejected_output),
   };
 }
 
@@ -225,6 +230,13 @@ export interface GoalStepAttempt {
   readonly taskId: string;
   readonly status: TaskStatus;
   readonly createdAt: Date;
+  /** S11 GO5d-1: why the attempt's Task failed, whether it redoes an earlier attempt, the last
+   *  report its output contract refused, and the output its accepted result carried (`null`
+   *  without one). */
+  readonly failureReason: string | null;
+  readonly rework: boolean;
+  readonly rejectedOutput: RejectedOutput | null;
+  readonly output: Record<string, unknown> | null;
 }
 
 /** Every step attempt of `goalRunId` — the Tasks with a `step_attempt`, not their nested child
@@ -240,8 +252,15 @@ export async function listGoalRunStepAttempts(
     id: string;
     status: TaskStatus;
     created_at: Date;
+    failure_reason: string | null;
+    rework: boolean;
+    rejected_output: unknown;
+    output: unknown;
   }>(
-    `select step_run_id, step_attempt, id, status, created_at from tasks
+    `select step_run_id, step_attempt, id, status, created_at, failure_reason,
+            rework_of is not null as rework, rejected_output,
+            case when status = 'completed' then result -> 'output' end as output
+       from tasks
       where workspace_id = $1 and goal_run_id = $2 and step_attempt is not null
       order by step_run_id, step_attempt`,
     [workspaceId, goalRunId],
@@ -252,6 +271,13 @@ export async function listGoalRunStepAttempts(
     taskId: row.id,
     status: row.status,
     createdAt: row.created_at,
+    failureReason: row.failure_reason,
+    rework: row.rework,
+    rejectedOutput: parseRejectedOutput(row.rejected_output),
+    output:
+      row.output !== null && typeof row.output === 'object' && !Array.isArray(row.output)
+        ? (row.output as Record<string, unknown>)
+        : null,
   }));
 }
 

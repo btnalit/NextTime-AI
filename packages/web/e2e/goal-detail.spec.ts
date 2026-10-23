@@ -27,6 +27,7 @@ const WORKER = '66000000-0000-4000-8000-0000000000e1';
 const ACTION = '66000000-0000-4000-8000-0000000000f1';
 const TASK_FETCH = '66000000-0000-4000-8000-000000000101';
 const TASK_APPLY = '66000000-0000-4000-8000-000000000102';
+const TASK_FETCH_REWORK = '66000000-0000-4000-8000-000000000103';
 
 // Within the last hour, so the wall-clock budget reads as it would on a goal running today.
 const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
@@ -73,10 +74,32 @@ function run(overrides: Record<string, unknown> = {}) {
   };
 }
 
+// S11 GO5d-1: fetch declares what it hands back; apply takes its hosts from that output.
+const FETCH_OUTPUT_SCHEMA = {
+  type: 'object',
+  properties: {
+    hosts: {
+      type: 'array',
+      items: { type: 'string', minLength: 1 },
+      minItems: 1,
+      description: '要换证书的主机',
+    },
+    expiresInDays: { type: 'integer', minimum: 0 },
+  },
+  required: ['hosts'],
+  additionalProperties: false,
+};
+
 const PLAN_V1 = {
   steps: [
-    { key: 'fetch', worker, input: { hosts: 3 } },
-    { key: 'apply', worker, dependsOn: ['fetch'], maxAttempts: 2 },
+    { key: 'fetch', worker, input: { hosts: 3 }, outputSchema: FETCH_OUTPUT_SCHEMA },
+    {
+      key: 'apply',
+      worker,
+      dependsOn: ['fetch'],
+      maxAttempts: 2,
+      bindings: [{ to: 'target.hosts', from: 'fetch', path: 'hosts' }],
+    },
     { key: 'notify', worker, dependsOn: ['apply'] },
   ],
   acceptance: [
@@ -124,6 +147,27 @@ function summary(n: 1 | 2) {
   return rest;
 }
 
+/** One attempt of a step as `get_goal` reads it (`StepAttemptWire`). */
+function attempt(
+  n: number,
+  taskId: string,
+  status: string,
+  createdAt: string,
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    attempt: n,
+    taskId,
+    status,
+    createdAt,
+    failureReason: null,
+    rework: false,
+    outputProblems: null,
+    outputProblemCount: 0,
+    ...overrides,
+  };
+}
+
 const DETAIL = {
   ...run(),
   planRevision: revision(2),
@@ -137,12 +181,25 @@ const DETAIL = {
       status: 'succeeded',
       waitingReason: null,
       failureCategory: null,
-      attemptCount: 1,
+      attemptCount: 2,
       createdAt: T1,
       updatedAt: T2,
       endedAt: T2,
-      attempts: [{ attempt: 1, taskId: TASK_FETCH, status: 'completed', createdAt: T1 }],
+      // The first attempt never handed back an output its contract accepted; the platform redid
+      // it once (GO5d-1).
+      attempts: [
+        attempt(1, TASK_FETCH, 'failed', T1, {
+          failureReason: 'no_result',
+          outputProblems: [
+            { path: 'output.hosts', message: 'expected array, got string' },
+            { path: 'output.expiresInDays', message: 'expected integer, got number' },
+          ],
+          outputProblemCount: 2,
+        }),
+        attempt(2, TASK_FETCH_REWORK, 'completed', T1, { rework: true }),
+      ],
       actions: [],
+      output: { hosts: ['web-1', 'web-2', 'web-3'], expiresInDays: 6 },
     },
     {
       id: 'sr-apply',
@@ -156,7 +213,7 @@ const DETAIL = {
       createdAt: T2,
       updatedAt: T3,
       endedAt: null,
-      attempts: [{ attempt: 1, taskId: TASK_APPLY, status: 'failed', createdAt: T2 }],
+      attempts: [attempt(1, TASK_APPLY, 'failed', T2, { failureReason: 'worker_failed' })],
       actions: [
         {
           actionRequestId: ACTION,
@@ -165,6 +222,7 @@ const DETAIL = {
           reconciliation: null,
         },
       ],
+      output: null,
     },
     {
       id: 'sr-notify',
@@ -180,6 +238,7 @@ const DETAIL = {
       endedAt: T2,
       attempts: [],
       actions: [],
+      output: null,
     },
     {
       id: 'sr-remove-old',
@@ -195,6 +254,7 @@ const DETAIL = {
       endedAt: null,
       attempts: [],
       actions: [],
+      output: null,
     },
   ],
   acceptance: { rounds: [], steps: [], overriddenChecks: [] },
@@ -248,6 +308,7 @@ const NAMES: Record<string, { kind: string; name: string }> = {
   [ACTION]: { kind: 'actionRequest', name: 'cert.replace' },
   [TASK_FETCH]: { kind: 'task', name: 'cert-rotator' },
   [TASK_APPLY]: { kind: 'task', name: 'cert-rotator' },
+  [TASK_FETCH_REWORK]: { kind: 'task', name: 'cert-rotator' },
 };
 
 /** A stand-in's answer, checked first against the capability's own result contract (review of
@@ -345,6 +406,19 @@ test.describe('S11 GO6: a goal’s pages with content (stand-in reads)', () => {
       await expect(page.getByTestId('goal-state-note')).toContainText('有动作结果不明');
       await expect(page.getByTestId('goal-unresolved-check')).toContainText('删除');
       await expect(page.getByTestId('goal-step-waiting')).toBeVisible();
+      // GO5d-1: apply's input comes from fetch's output; fetch's first attempt was refused and
+      // redone once by the platform.
+      await expect(page.getByTestId('goal-step-binding')).toHaveText(
+        '输入 target.hosts 来自步骤 fetch 输出的 hosts',
+      );
+      await expect(page.getByTestId('goal-step-attempt-rework')).toHaveCount(1);
+      await expect(page.getByTestId('goal-step-attempt-problems')).toContainText('output.hosts');
+      const contract = page.getByTestId('goal-step-output-contract');
+      await contract.locator('summary').click();
+      await expect(contract.getByTestId('output-contract-field')).toHaveCount(2);
+      const output = page.getByTestId('goal-step-output');
+      await output.locator('summary').click();
+      await expect(output).toContainText('web-2');
       await expect(page.getByTestId('goal-revision')).toHaveCount(2);
       // The owner on alice's paused goal: hold it or cancel it, record what was found about the
       // action; resuming it is alice's alone.

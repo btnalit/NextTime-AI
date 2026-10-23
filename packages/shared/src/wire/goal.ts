@@ -24,6 +24,7 @@ import {
   PlanHintSchema,
   StepRemovalsSchema,
 } from '../goal-plan.js';
+import { OutputProblemSchema } from '../output-schema.js';
 import { FactCheckSchema, ObservationCheckSchema } from '../predicate.js';
 
 /**
@@ -128,13 +129,21 @@ export const PlanRevisionSummaryWireSchema = PlanRevisionWireSchema.omit({
 });
 export type PlanRevisionSummaryWire = z.infer<typeof PlanRevisionSummaryWireSchema>;
 
-/** One attempt of a step: the Task that ran it (`get_task` reads it). */
+/** One attempt of a step: the Task that ran it (`get_task` reads it). S11 GO5d-1: why it failed,
+ *  whether it redoes an earlier attempt that ended without an accepted result (`rework`), and —
+ *  when its output contract refused a report — where the last one did not match
+ *  (`outputProblems`, at most `MAX_OUTPUT_PROBLEMS`, `outputProblemCount` exact; the output itself
+ *  is on the Task). */
 export const StepAttemptWireSchema = z
   .object({
     attempt: z.number().int().positive(),
     taskId: z.string(),
     status: TaskStatusSchema,
     createdAt: z.string(),
+    failureReason: z.string().nullable(),
+    rework: z.boolean(),
+    outputProblems: z.array(OutputProblemSchema).nullable(),
+    outputProblemCount: z.number().int().nonnegative(),
   })
   .strict();
 export type StepAttemptWire = z.infer<typeof StepAttemptWireSchema>;
@@ -170,6 +179,10 @@ export const StepRunWireSchema = z
     endedAt: z.string().nullable(),
     attempts: z.array(StepAttemptWireSchema),
     actions: z.array(StepActionWireSchema),
+    /** S11 GO5d-1: the output the step's current attempt reported with its accepted result —
+     *  what the steps bound to it read once it has succeeded. `null` = none (no accepted result
+     *  yet, or none reported). */
+    output: z.record(z.string(), z.unknown()).nullable(),
   })
   .strict();
 export type StepRunWire = z.infer<typeof StepRunWireSchema>;

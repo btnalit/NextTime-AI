@@ -60,6 +60,7 @@ import {
   UnauthorizedError,
   UnknownOperationError,
   UnstorableTextError,
+  WorkerResultValidationError,
 } from '../../application/gateway/index.js';
 // S11 GO5a: the `goal` reads' not-found errors, imported directly like the domain errors around.
 import {
@@ -88,6 +89,7 @@ import {
   ObjectiveOutcomeForbiddenError,
   QuotaExceededError,
   TaskNotFoundError,
+  TaskOutputRejectedError,
   TaskRuntimeNotConfiguredError,
   UnknownQuotaKeyError,
 } from '../../application/task/index.js';
@@ -290,6 +292,12 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   }
   if (err instanceof CapabilityNotImplementedError) {
     return { code: WS_ERROR_CODES.NOT_IMPLEMENTED, message: err.message };
+  }
+  // `report_task_result` (a Handle-channel capability) — WS equivalents of capability-route.ts's
+  // 400s: a malformed result contract, and (S11 GO5d-1) an `output` that breaks the goal step's
+  // output contract; the message names each place.
+  if (err instanceof WorkerResultValidationError || err instanceof TaskOutputRejectedError) {
+    return { code: WS_ERROR_CODES.INVALID_PARAMS, message: err.message };
   }
   // S3.3 `submit_observations` — WS equivalent of capability-route.ts's own mapping.
   if (err instanceof ObservationIdentityError) {

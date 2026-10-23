@@ -1,4 +1,10 @@
-import type { ObjectiveOutcomeWire, SkillLoadWire } from '@nexttime/shared';
+import type {
+  ObjectiveOutcomeWire,
+  OutputSchema,
+  RejectedOutputWire,
+  ReworkOfWire,
+  SkillLoadWire,
+} from '@nexttime/shared';
 import { type ReactNode, useState } from 'react';
 import { useCanOpen } from '../hooks/useCanOpen.js';
 import { auditHref } from '../lib/audit.js';
@@ -8,6 +14,7 @@ import {
   formatDuration,
   formatRelative,
   prettyJsonVisible,
+  redactSensitive,
   shortId,
 } from '../lib/format.js';
 import { useT } from '../lib/i18n.js';
@@ -22,6 +29,7 @@ import {
 } from '../lib/tasks.js';
 import { LinkedApprovals } from './approvals/LinkedApprovals.js';
 import { nameOf } from './approvals/useDirectoryNames.js';
+import { OutputContractFields, OutputProblemList } from './goals/OutputContract.js';
 import { Button } from './kit/button.js';
 import { Confirm } from './kit/confirm.js';
 import { KeyValue, type KeyValueItem } from './kit/key-value.js';
@@ -63,6 +71,11 @@ export interface TaskDetailProps {
  * page-level sibling of the detail drawer (tier `high`); now that `medium` is a Popover anchored
  * to its own trigger there is no separate surface to route Escape/focus through, so the confirm
  * lives exactly where its button does.
+ *
+ * S11 GO5d-1: for an attempt of a goal step, 输出约定 — the fields its result's output must carry,
+ * the last report that contract refused (each place, and the output as sent, masked), and, when it
+ * redoes an earlier attempt that handed back no accepted result, a link to that attempt's Task and
+ * where its last report broke the contract.
  */
 export function TaskDetail({
   task,
@@ -331,6 +344,15 @@ export function TaskDetail({
         </div>
       ) : null}
 
+      {task.outputSchema || task.rejectedOutput || task.reworkOf ? (
+        <OutputContractSection
+          schema={task.outputSchema ?? null}
+          rejected={task.rejectedOutput ?? null}
+          reworkOf={task.reworkOf ?? null}
+          t={t}
+        />
+      ) : null}
+
       {task.input !== null && task.input !== undefined && !need ? (
         <details className="disclosure">
           <summary>{t('输入', 'Input')}</summary>
@@ -424,6 +446,102 @@ export function TaskDetail({
 }
 
 type Translate = ReturnType<typeof useT>;
+
+/** 输出约定 of a goal step's attempt — see the component comment. */
+function OutputContractSection({
+  schema,
+  rejected,
+  reworkOf,
+  t,
+}: {
+  readonly schema: OutputSchema | null;
+  readonly rejected: RejectedOutputWire | null;
+  readonly reworkOf: ReworkOfWire | null;
+  readonly t: Translate;
+}) {
+  return (
+    <section className="stack-s" data-testid="task-output-contract">
+      <span className="section-title">{t('输出约定', 'Output contract')}</span>
+      {reworkOf ? (
+        <div className="stack-s" data-testid="task-rework-of">
+          <span className="row-wrap text-small">
+            <span>
+              {t(
+                `这次尝试重做第 ${reworkOf.attempt} 次尝试，那次没有交回平台接受的结果：`,
+                `This attempt redoes attempt ${reworkOf.attempt}, which handed back no result the platform accepted:`,
+              )}
+            </span>
+            <RefChip
+              kind="task"
+              id={reworkOf.taskId}
+              href={hrefs.task(reworkOf.taskId)}
+              size="s"
+              testId="task-rework-of-link"
+            />
+          </span>
+          {reworkOf.rejectedOutput ? (
+            <>
+              <span className="text-small text-3">
+                {t(
+                  `那次最后被拒的报告有 ${reworkOf.rejectedOutput.problemCount} 处不符合约定（Worker 这次读到了这些）：`,
+                  `Its last refused report broke the contract in ${reworkOf.rejectedOutput.problemCount} place(s) (this attempt’s Worker was told):`,
+                )}
+              </span>
+              <OutputProblemList
+                problems={reworkOf.rejectedOutput.problems}
+                problemCount={reworkOf.rejectedOutput.problemCount}
+                t={t}
+                testId="task-rework-of-problems"
+              />
+            </>
+          ) : (
+            <span className="text-small text-3">
+              {t(
+                '平台没有记下那次被输出约定拒绝的报告：它可能没有报告结果。',
+                'The platform recorded no report of it that the output contract refused: it may never have reported a result.',
+              )}
+            </span>
+          )}
+        </div>
+      ) : null}
+      {schema ? <OutputContractFields schema={schema} t={t} testId="task-output-fields" /> : null}
+      {rejected ? (
+        <div className="stack-s" data-testid="task-rejected-output">
+          <span className="text-small text-warn">
+            {t(
+              `最后一次被拒的报告（${formatDateTime(rejected.at)}）有 ${rejected.problemCount} 处不符合约定：`,
+              `The last refused report (${formatDateTime(rejected.at)}) broke the contract in ${rejected.problemCount} place(s):`,
+            )}
+          </span>
+          <OutputProblemList
+            problems={rejected.problems}
+            problemCount={rejected.problemCount}
+            t={t}
+            testId="task-rejected-output-problems"
+          />
+          {rejected.output ? (
+            <details className="disclosure">
+              <summary>{t('被拒报告里的 output', 'The output that report carried')}</summary>
+              <div className="disclosure-body stack-s">
+                <pre className="code-block">
+                  {prettyJsonVisible(redactSensitive(rejected.output))}
+                </pre>
+                <RedactedNote
+                  value={redactSensitive(rejected.output)}
+                  testId="task-rejected-output-redacted"
+                />
+              </div>
+            </details>
+          ) : (
+            <span className="text-small text-3">
+              {t('那次报告没有带 output。', 'That report carried no output.')}
+            </span>
+          )}
+        </div>
+      ) : null}
+    </section>
+  );
+}
 
 /** Shown wherever a field was never written — an old row, or a Task started outside a Turn. Never
  *  folded into "none": 未记录 says we do not know, "无" says we know it was empty. */

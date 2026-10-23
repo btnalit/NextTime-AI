@@ -550,6 +550,9 @@ export async function postWorkerResult(
       proposedOperationsRejected,
       evidenceDropped: [...evidenceDropped],
       activityId: activity.id,
+      // S11 GO5d-1: the structured output, as reported (a goal step's attempt passed its output
+      // contract in the gateway handler) — what the steps bound to it read.
+      ...(contract.output !== undefined ? { output: contract.output } : {}),
     };
 
     const task = await completeTaskWithResult(

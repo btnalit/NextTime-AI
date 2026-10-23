@@ -60,9 +60,14 @@ export function stepRun(overrides: Partial<StepRunWire> = {}): StepRunWire {
         taskId: 'task-fetch-1',
         status: 'running',
         createdAt: '2026-10-20T00:01:00.000Z',
+        failureReason: null,
+        rework: false,
+        outputProblems: null,
+        outputProblemCount: 0,
       },
     ],
     actions: [],
+    output: null,
     ...overrides,
   };
 }
