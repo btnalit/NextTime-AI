@@ -1185,7 +1185,9 @@ describe('SystemsPage', () => {
     );
     const items = within(notice).getAllByRole('listitem');
     expect(items).toHaveLength(1);
-    expect(items[0]?.textContent).toMatch(/^stock\.adjust：影响级 低影响 → 中影响；自动批准 可自动批准 → .+$/);
+    expect(items[0]?.textContent).toMatch(
+      /^stock\.adjust：影响级 低影响 → 中影响；自动批准 可自动批准 → .+$/,
+    );
     expect(notice.textContent).toMatch(
       /对齐之前，这个工作区仍按旧分类执行，收紧的部分还没有生效。/,
     );
