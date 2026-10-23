@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { useT } from '../../lib/i18n.js';
 import { CopyId } from './CopyId.js';
 
 /** The five reference kinds of docs/console-completion-plan.md §5.9 "RefChip". */
@@ -32,7 +33,8 @@ export interface RefChipProps {
  * capability itself; callers resolve names with `useRefNames` over a list they already hold.
  */
 export function RefChip({ kind, id, name, href, size = 'm', testId }: RefChipProps) {
-  const label = KIND_LABEL[kind];
+  const t = useT();
+  const label = t(KIND_LABEL[kind].zh, KIND_LABEL[kind].en);
   const bare = name === undefined || name === null || name === '';
   const classes = [
     'ref-chip',
@@ -48,11 +50,9 @@ export function RefChip({ kind, id, name, href, size = 'm', testId }: RefChipPro
       data-ref-kind={kind}
       data-ref-id={id}
       data-testid={testId}
-      title={bare ? `${label.en} ${id}` : `${label.en} ${name} · ${id}`}
+      title={bare ? `${label} ${id}` : `${label} ${name} · ${id}`}
     >
-      <span className="ref-chip-kind" aria-label={label.en}>
-        {label.zh}
-      </span>
+      <span className="ref-chip-kind">{label}</span>
       {bare ? null : href !== undefined ? (
         <a className="ref-chip-name truncate" href={href}>
           {name}
@@ -60,7 +60,7 @@ export function RefChip({ kind, id, name, href, size = 'm', testId }: RefChipPro
       ) : (
         <span className="ref-chip-name truncate">{name}</span>
       )}
-      <CopyId id={id} label={label.en} />
+      <CopyId id={id} label={label} />
     </span>
   );
 }

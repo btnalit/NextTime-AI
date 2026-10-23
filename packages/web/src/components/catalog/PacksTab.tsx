@@ -2,6 +2,7 @@ import {
   CHANGE_ROLLBACK_IN_USE_CAP,
   type PackComponentStateWire,
   type PackComponentWire,
+  type PackGateRefWire,
   type PackInstallItemWire,
   type PackInstallPreviewWire,
   type PackInstallResultWire,
@@ -71,6 +72,84 @@ function bindableWorkers(pack: PackWire): readonly string[] {
 
 /** The install control's label, or `null` when there is nothing to install. Up to date with a
  *  Worker to connect, installing again only connects it. */
+/** Legacy 442: how the systems of a Worker that keeps the workspace's gates moved under them. An
+ *  install keeps those gates as they are, so the person hears when the pack changed the Worker's
+ *  systems since the version installed (`added` / `removed`, from that version's manifest), or when
+ *  a kept gate is no connected gate of any system it works with now (`stray`). `null`: neither. */
+interface WorkerSystemsDrift {
+  /** The version the Worker's content is from, when the systems changed since. */
+  readonly from: number | null;
+  readonly added: readonly string[];
+  readonly removed: readonly string[];
+  readonly stray: readonly PackGateRefWire[];
+}
+
+function workerSystemsDrift(
+  pack: PackWire,
+  definitionId: string,
+  gates: readonly PackGateRefWire[],
+): WorkerSystemsDrift | null {
+  const component = pack.components.find(
+    (candidate) => candidate.kind === 'worker' && candidate.definitionId === definitionId,
+  );
+  if (component?.kind !== 'worker') return null;
+  const systems = component.systems;
+  const from = component.installedVersion;
+  const before =
+    from !== null && from !== pack.latestVersion
+      ? pack.versions
+          .find((version) => version.version === from)
+          ?.components.find((entry) => entry.kind === 'worker' && entry.name === component.name)
+      : undefined;
+  const previous = before?.kind === 'worker' ? before.systems : systems;
+  const added = systems.filter((system) => !previous.includes(system));
+  const removed = previous.filter((system) => !systems.includes(system));
+  const ofSystems = new Set(
+    pack.requirements
+      .filter((requirement) => systems.includes(requirement.connector))
+      .flatMap((requirement) => requirement.gatekeepers.map((gate) => gate.id)),
+  );
+  const stray = gates.filter((gate) => !ofSystems.has(gate.id));
+  if (added.length === 0 && removed.length === 0 && stray.length === 0) return null;
+  return { from: added.length > 0 || removed.length > 0 ? from : null, added, removed, stray };
+}
+
+/** What `drift` means for the gates the workspace keeps, in a sentence or two. */
+function workerSystemsDriftText(drift: WorkerSystemsDrift, latest: number, t: Translate): string {
+  const list = (names: readonly string[]) => names.join(t('、', ', '));
+  const parts: string[] = [];
+  if (drift.from !== null) {
+    const moved = [
+      drift.added.length > 0 ? t(`新增 ${list(drift.added)}`, `adds ${list(drift.added)}`) : null,
+      drift.removed.length > 0
+        ? t(`不再用 ${list(drift.removed)}`, `drops ${list(drift.removed)}`)
+        : null,
+    ].filter((part): part is string => part !== null);
+    parts.push(
+      t(
+        `能力包 v${latest} 改了它要用到的系统（相对 v${drift.from}：${moved.join('；')}）。`,
+        `Pack v${latest} changes the systems it works with (since v${drift.from}: ${moved.join('; ')}).`,
+      ),
+    );
+  }
+  if (drift.stray.length > 0) {
+    const names = list(drift.stray.map((gate) => gate.name));
+    parts.push(
+      t(
+        `已接的 ${names} 不是它现在要用到的系统里接好的门。`,
+        `${names}, which it acts on, is not a connected gate of the systems it works with now.`,
+      ),
+    );
+  }
+  parts.push(
+    t(
+      '安装会原样保留它已接的门，不会自动改；要重新选门，在 Worker 页修改。',
+      'Installing keeps the gates it acts on as they are; to choose them again, change them on the Workers tab.',
+    ),
+  );
+  return parts.join(t('', ' '));
+}
+
 function actionLabel(pack: PackWire, t: Translate): string | null {
   const v = pack.latestVersion;
   switch (pack.status) {
@@ -319,6 +398,12 @@ function PackDetail({
             declared={latestComponents.find(
               (declared) => componentKey(declared) === componentKey(component),
             )}
+            drift={
+              component.kind === 'worker' && (component.gatesKept || component.gates.length > 0)
+                ? workerSystemsDrift(pack, component.definitionId, component.gates)
+                : null
+            }
+            latestVersion={pack.latestVersion}
           />
         ))}
       </div>
@@ -377,10 +462,15 @@ function componentTitle(
 function ComponentView({
   component,
   declared,
+  drift,
+  latestVersion,
 }: {
   readonly component: PackComponentStateWire;
   /** The latest version's declaration of it (a Skill's or Worker's description). */
   readonly declared: PackComponentWire | undefined;
+  /** A Worker's systems moved under the gates it keeps (legacy 442). */
+  readonly drift: WorkerSystemsDrift | null;
+  readonly latestVersion: number;
 }) {
   const t = useT();
   const provenance = component.provenance;
@@ -409,12 +499,17 @@ function ComponentView({
         <StatusChip machine="packInstall" status={component.status} size="s" />
       </div>
       {description ? <span className="text-small">{description}</span> : null}
-      {component.kind === 'worker' && component.systems.length > 0 ? (
+      {component.kind === 'worker' && (component.systems.length > 0 || drift !== null) ? (
         <WorkerSystemsLine
           component={component}
           page={page}
           testId={`catalog-pack-component-${key}-gates`}
         />
+      ) : null}
+      {drift !== null ? (
+        <Notice tone="warn" testId={`catalog-pack-component-${key}-drift`}>
+          {workerSystemsDriftText(drift, latestVersion, t)}
+        </Notice>
       ) : null}
       {component.installedVersion !== null ? (
         <span className="text-3 text-small">
@@ -813,6 +908,12 @@ function InstallPack({
               <PreviewItem
                 key={item.ordinal}
                 item={item}
+                drift={
+                  item.kind === 'worker_definition_version' && item.binding.source === 'workspace'
+                    ? workerSystemsDrift(pack, item.target.definitionId, item.binding.gates)
+                    : null
+                }
+                latestVersion={pack.latestVersion}
                 kept={
                   item.kind === 'worker_definition_version'
                     ? (choice[item.target.name] ?? item.binding.candidates.map((gate) => gate.id))
@@ -878,8 +979,13 @@ function PreviewItem({
   onKeptChange,
   checked,
   onCheckedChange,
+  drift,
+  latestVersion,
 }: {
   readonly item: PackInstallItemWire;
+  /** A Worker item's systems moved under the gates it keeps (legacy 442). */
+  readonly drift: WorkerSystemsDrift | null;
+  readonly latestVersion: number;
   /** A Worker item's gates the person keeps ticked (every one offered, by default). */
   readonly kept: readonly string[];
   readonly onKeptChange: (kept: readonly string[]) => void;
@@ -891,7 +997,13 @@ function PreviewItem({
     <div className="stack-s" data-testid={`catalog-pack-item-${item.ordinal}`}>
       <span>{itemHeadline(item, t)}</span>
       {item.kind === 'worker_definition_version' ? (
-        <WorkerBindingReview item={item} kept={kept} onKeptChange={onKeptChange} />
+        <WorkerBindingReview
+          item={item}
+          kept={kept}
+          onKeptChange={onKeptChange}
+          drift={drift}
+          latestVersion={latestVersion}
+        />
       ) : null}
       {item.unchanged ? null : (
         <>
@@ -931,10 +1043,14 @@ function WorkerBindingReview({
   item,
   kept,
   onKeptChange,
+  drift,
+  latestVersion,
 }: {
   readonly item: Extract<PackInstallItemWire, { kind: 'worker_definition_version' }>;
   readonly kept: readonly string[];
   readonly onKeptChange: (kept: readonly string[]) => void;
+  readonly drift: WorkerSystemsDrift | null;
+  readonly latestVersion: number;
 }) {
   const t = useT();
   const { binding } = item;
@@ -958,7 +1074,12 @@ function WorkerBindingReview({
                 'Systems: keeps the workspace’s setting, none',
               )}
         </span>
-      ) : binding.candidates.length > 0 ? (
+      ) : null}
+      {binding.source === 'workspace' && drift !== null ? (
+        <Notice tone="warn" testId={`${prefix}-drift`}>
+          {workerSystemsDriftText(drift, latestVersion, t)}
+        </Notice>
+      ) : binding.source === 'workspace' ? null : binding.candidates.length > 0 ? (
         <fieldset className="stack-s" data-testid={`${prefix}-choice`}>
           <legend className="text-small">
             {t(

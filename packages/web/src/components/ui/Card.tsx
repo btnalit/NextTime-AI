@@ -14,9 +14,9 @@ export function Card({ title, actions, padded = true, className, children, ...re
   return (
     <section className={`card${className ? ` ${className}` : ''}`} {...rest}>
       {hasHeader ? (
-        <header className="card-header">
+        <header className={`card-header${actions !== undefined ? ' card-header-actions' : ''}`}>
           {title !== undefined ? <h2 className="card-title">{title}</h2> : <span />}
-          {actions !== undefined ? <div className="row">{actions}</div> : null}
+          {actions !== undefined ? <div className="row card-actions">{actions}</div> : null}
         </header>
       ) : null}
       {padded ? <div className="card-body">{children}</div> : children}

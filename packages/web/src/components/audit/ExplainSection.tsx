@@ -194,7 +194,13 @@ export function ExplainSection({ http, requestedNodeId, principalNames }: Explai
           <ErrorBanner
             error={exportError}
             title={t('无法导出', 'Could not export')}
-            overrides={{ not_found: decisionNotFoundText(t) }}
+            // Legacy 430: the node was explained just now, so its kind is known.
+            overrides={{
+              not_found: decisionNotFoundText(
+                t,
+                view === null ? 'unknown' : view.nodeType === 'decision' ? 'decision' : 'other',
+              ),
+            }}
             testId="explain-export-error"
           />
         )

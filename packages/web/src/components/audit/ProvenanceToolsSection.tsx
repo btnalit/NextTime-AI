@@ -38,9 +38,17 @@ interface CausalState {
   readonly error: unknown | null;
   readonly chain: CausalChainResultWire | null;
   readonly impact: DecisionImpactResultWire | null;
+  /** The kind the start node was sent as — the select may have changed since. */
+  readonly sentKind: 'fact' | 'decision' | null;
 }
 
-const CAUSAL_IDLE: CausalState = { busy: false, error: null, chain: null, impact: null };
+const CAUSAL_IDLE: CausalState = {
+  busy: false,
+  error: null,
+  chain: null,
+  impact: null,
+  sentKind: null,
+};
 
 interface DecisionListState {
   readonly busy: boolean;
@@ -98,7 +106,7 @@ function CausalChainTool({ http }: { readonly http: CapabilityCaller }) {
     event.preventDefault();
     const trimmed = nodeId.trim();
     if (!trimmed || state.busy) return;
-    setState({ busy: true, error: null, chain: null, impact: null });
+    setState({ busy: true, error: null, chain: null, impact: null, sentKind: kind });
     try {
       const chain = await http.call<CausalChainResultWire>('causal_chain', {
         [kind === 'fact' ? 'factId' : 'decisionId']: trimmed,
@@ -107,9 +115,9 @@ function CausalChainTool({ http }: { readonly http: CapabilityCaller }) {
         kind === 'decision'
           ? await http.call<DecisionImpactResultWire>('decision_impact', { decisionId: trimmed })
           : null;
-      setState({ busy: false, error: null, chain, impact });
+      setState({ busy: false, error: null, chain, impact, sentKind: kind });
     } catch (err) {
-      setState({ busy: false, error: err, chain: null, impact: null });
+      setState({ busy: false, error: err, chain: null, impact: null, sentKind: kind });
     }
   }
 
@@ -153,8 +161,14 @@ function CausalChainTool({ http }: { readonly http: CapabilityCaller }) {
         <ErrorBanner
           error={state.error}
           title={t('无法追溯因果链', 'Could not trace the causal chain')}
-          // Legacy 421: a Decision the reader may not see answers exactly like a missing one.
-          overrides={{ not_found: decisionNotFoundText(t) }}
+          // Legacy 421: a Decision the reader may not see answers exactly like a missing one; the
+          // part about Decisions only when the start node is one (legacy 430).
+          overrides={{
+            not_found: decisionNotFoundText(
+              t,
+              state.sentKind === 'decision' ? 'decision' : 'other',
+            ),
+          }}
           testId="causal-chain-error"
         />
       ) : null}

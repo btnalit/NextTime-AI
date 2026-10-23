@@ -56,6 +56,16 @@ function optionLabels(): string[] {
 }
 
 describe('kit/Combobox', () => {
+  it('legacy 431: submitting the surrounding form closes the list', () => {
+    render(<Harness allowFreeEntry />);
+    fireEvent.change(input(), { target: { value: 'no-such-id' } });
+    expect(screen.getByTestId('cb-empty')).toBeTruthy();
+    fireEvent.submit(input().form as HTMLFormElement);
+    expect(input().getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByTestId('cb-empty')).toBeNull();
+    expect(input().value).toBe('no-such-id');
+  });
+
   it('legacy 153 ⑨: a pasted exact value is picked and the list stays closed', () => {
     const onChange = vi.fn();
     render(<Harness onChange={onChange} />);

@@ -163,6 +163,20 @@ export function Combobox({
     return () => window.removeEventListener('keydown', onKeyDown, true);
   });
 
+  // Legacy 431: a submitted form closes the list, so it never covers what the submit shows (an
+  // error banner, a result) — whichever way the form was submitted.
+  useEffect(() => {
+    if (!open) return;
+    const form = inputRef.current?.form;
+    if (!form) return;
+    function onSubmit(): void {
+      setOpen(false);
+      setActive(-1);
+    }
+    form.addEventListener('submit', onSubmit);
+    return () => form.removeEventListener('submit', onSubmit);
+  });
+
   useEffect(() => {
     if (!open || active < 0) return;
     const element = document.getElementById(optionId(active));

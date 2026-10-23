@@ -7,7 +7,7 @@ import {
   type PackRequirementState,
   type PackRequirementWire,
 } from '@nexttime/shared';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { usePermissions } from '../../hooks/usePermissions.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
@@ -361,6 +361,16 @@ export function ChangeVerificationSection({
   const [error, setError] = useState<unknown | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const left = cooldownLeft(verification, now);
+  // Legacy 424: the button turns busy and then cools down, so the focus would fall to the page —
+  // it moves to the result instead, which is what changed.
+  const resultRef = useRef<HTMLDivElement>(null);
+  const cooldownId = useId();
+  const [focusResult, setFocusResult] = useState(false);
+  useEffect(() => {
+    if (!focusResult) return;
+    resultRef.current?.focus();
+    setFocusResult(false);
+  }, [focusResult]);
 
   // Ticks only while the cooldown runs, so the button comes back on its own.
   useEffect(() => {
@@ -379,6 +389,7 @@ export function ChangeVerificationSection({
       permissions.markAllowed('verify_change_segment');
       setNow(Date.now());
       onVerified(result);
+      setFocusResult(true);
     } catch (err) {
       if (isForbiddenError(err)) permissions.markDenied('verify_change_segment');
       setError(err);
@@ -398,17 +409,26 @@ export function ChangeVerificationSection({
           'Verification checks that what this install wrote is still in effect, and that the systems the pack needs are connected and answering. It only asks whether each system is up; it runs nothing.',
         )}
       </p>
-      {verification === null ? (
-        <span className="text-small" data-testid="catalog-change-verification-none">
-          {t('还没有核验过。', 'Not verified yet.')}
-        </span>
-      ) : (
-        <VerificationResult
-          segment={segment}
-          verification={verification}
-          itemSubject={itemSubject}
-        />
-      )}
+      {/* The cooldown describes the result the focus lands on — not a live region, which would
+       *  read every second of the countdown out. */}
+      <div
+        ref={resultRef}
+        tabIndex={-1}
+        aria-describedby={left > 0 && canVerify ? cooldownId : undefined}
+        data-testid="catalog-change-verification-outcome"
+      >
+        {verification === null ? (
+          <span className="text-small" data-testid="catalog-change-verification-none">
+            {t('还没有核验过。', 'Not verified yet.')}
+          </span>
+        ) : (
+          <VerificationResult
+            segment={segment}
+            verification={verification}
+            itemSubject={itemSubject}
+          />
+        )}
+      </div>
       {canVerify ? (
         <span className="row-wrap">
           {/* ux-lint-allow-disabled: running, or the cooldown hint beside it says when it comes back. */}
@@ -422,7 +442,11 @@ export function ChangeVerificationSection({
             {verification === null ? t('核验', 'Verify') : t('再核验一次', 'Verify again')}
           </Button>
           {left > 0 ? (
-            <span className="text-3 text-small" data-testid="catalog-change-verify-cooldown">
+            <span
+              id={cooldownId}
+              className="text-3 text-small"
+              data-testid="catalog-change-verify-cooldown"
+            >
               {t(`刚核验过，${left} 秒后可以再核验。`, `Verified just now; again in ${left} s.`)}
             </span>
           ) : null}

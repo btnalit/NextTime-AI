@@ -239,7 +239,7 @@ export function WorkspaceDetailPanel({
           <dl className="definition-list">
             <dt>ID</dt>
             <dd>
-              <CopyId id={workspace.id} label="workspace" />
+              <CopyId id={workspace.id} label={t('工作区', 'workspace')} />
             </dd>
             <dt>{t('状态', 'Status')}</dt>
             <dd>
