@@ -14,10 +14,17 @@ export {
   type InstalledPack,
   type PackInstallPlan,
   type PackInstallPreview,
+  PackWorkerGatesError,
+  type PlannedWorkerGates,
+  type WorkerBinding,
+  type WorkerGateCandidate,
+  type WorkerGateChoice,
   installPack,
   packSegment,
   planPackInstall,
   previewPackInstall,
+  readWorkerBindings,
+  readWorkerGateCandidates,
 } from './install.js';
 export {
   PACK_COMPONENT_KINDS,
@@ -43,10 +50,17 @@ export {
   loadPackRegistry,
   packComponentDigest,
   packComponentKey,
+  packOwnedWorkerDigest,
   requirePack,
   resolvePacksDir,
+  WORKSPACE_OWNED_WORKER_FIELDS,
 } from './registry.js';
-export { type PackRequirementStatus, readPackRequirements } from './requirements.js';
+export {
+  type PackRequirementGate,
+  type PackRequirementOffer,
+  type PackRequirementStatus,
+  readPackRequirements,
+} from './requirements.js';
 export {
   type InstalledMatch,
   PACK_INSTALL_STATUS_VALUES,

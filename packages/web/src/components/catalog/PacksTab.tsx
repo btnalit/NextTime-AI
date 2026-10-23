@@ -30,6 +30,7 @@ import { RouteLink } from '../kit/route-link.js';
 import { SkeletonRows } from '../kit/skeleton.js';
 import { StatusChip } from '../kit/status-chip.js';
 import { StillNeeded } from '../kit/still-needed.js';
+import { announceReadinessChange } from '../readiness/useExecutionReadiness.js';
 import { PackRequirementList } from './ChangeVerification.js';
 import { changeSubjectText, contentFieldText, typeNamesText, wideningText } from './ChangesTab.js';
 import { MarkdownPreview } from './MarkdownPreview.js';
@@ -39,6 +40,9 @@ export interface PacksTabProps {
   /** The selected pack's name (`#/govern/catalog/packs/<name>`). */
   readonly itemId: string | undefined;
   readonly onSelectItem: (itemId: string | null) => void;
+  /** `session.user?.platformRole === 'admin'`: a system the platform has not set up links to
+   *  平台 · 集成. */
+  readonly platformAdmin?: boolean;
 }
 
 /** 「已装 v1 · 最新 v2」 — a list row's second line. */
@@ -57,7 +61,16 @@ function installedText(pack: PackWire, t: Translate): string {
     : t('未安装', 'Not installed');
 }
 
-/** The install control's label, or `null` when there is nothing to install. */
+/** A Worker of the pack that installing again would connect to its systems (P1-E2): installed
+ *  before any gate of them was connected here. */
+function bindableWorkers(pack: PackWire): readonly string[] {
+  return pack.components.flatMap((component) =>
+    component.kind === 'worker' && component.bindable ? [component.name] : [],
+  );
+}
+
+/** The install control's label, or `null` when there is nothing to install. Up to date with a
+ *  Worker to connect, installing again only connects it. */
 function actionLabel(pack: PackWire, t: Translate): string | null {
   const v = pack.latestVersion;
   switch (pack.status) {
@@ -68,7 +81,9 @@ function actionLabel(pack: PackWire, t: Translate): string | null {
     case 'customized':
       return t(`换成 v${v} 的标准内容`, `Replace with v${v}`);
     case 'up_to_date':
-      return null;
+      return bindableWorkers(pack).length > 0
+        ? t('把 Worker 接上系统', 'Connect the Worker to its systems')
+        : null;
   }
 }
 
@@ -86,7 +101,7 @@ function actionLabel(pack: PackWire, t: Translate): string | null {
  * names the systems it needs (S11 P1-E) shows where each stands, here and in the review; the
  * install does not wait for them, and is verified once right after (the result says how it went).
  */
-export function PacksTab({ http, itemId, onSelectItem }: PacksTabProps) {
+export function PacksTab({ http, itemId, onSelectItem, platformAdmin = false }: PacksTabProps) {
   const t = useT();
   const packs = useCapabilityList<PackWire>(http, 'list_packs', {});
 
@@ -158,7 +173,13 @@ export function PacksTab({ http, itemId, onSelectItem }: PacksTabProps) {
     ) : packs.state.status === 'loading' ? (
       <SkeletonRows count={3} label={t('正在加载能力包…', 'Loading pack')} />
     ) : selected ? (
-      <PackDetail key={selected.name} http={http} pack={selected} onChanged={refresh} />
+      <PackDetail
+        key={selected.name}
+        http={http}
+        pack={selected}
+        platformAdmin={platformAdmin}
+        onChanged={refresh}
+      />
     ) : packs.state.status === 'ready' ? (
       <EmptyState
         title={t('这个部署里没有这个能力包', 'This deployment has no such pack')}
@@ -182,10 +203,12 @@ export function PacksTab({ http, itemId, onSelectItem }: PacksTabProps) {
 function PackDetail({
   http,
   pack,
+  platformAdmin,
   onChanged,
 }: {
   readonly http: CapabilityCaller;
   readonly pack: PackWire;
+  readonly platformAdmin: boolean;
   readonly onChanged: () => void;
 }) {
   const t = useT();
@@ -273,12 +296,15 @@ function PackDetail({
           <span className="section-title">{t('要用到的系统', 'Systems it needs')}</span>
           <p className="text-3 text-small">
             {t(
-              `v${pack.latestVersion} 带来的内容要用到这些系统。系统由平台部署，能力包只检查它们在工作区里接好了没有。`,
-              `What v${pack.latestVersion} brings works with these systems. The platform deploys them; the pack only checks whether the workspace has them connected.`,
+              `v${pack.latestVersion} 带来的内容要用到这些系统。系统由平台部署，能力包只检查它们在工作区里接好了没有；平台已经提供的，可以在这里直接启用。`,
+              `What v${pack.latestVersion} brings works with these systems. The platform deploys them; the pack only checks whether the workspace has them connected, and one the platform offers can be enabled right here.`,
             )}
           </p>
           <PackRequirementList
+            http={http}
             requirements={pack.requirements}
+            platformAdmin={platformAdmin}
+            onChanged={onChanged}
             testId="catalog-pack-requirements"
           />
         </>
@@ -383,6 +409,13 @@ function ComponentView({
         <StatusChip machine="packInstall" status={component.status} size="s" />
       </div>
       {description ? <span className="text-small">{description}</span> : null}
+      {component.kind === 'worker' && component.systems.length > 0 ? (
+        <WorkerSystemsLine
+          component={component}
+          page={page}
+          testId={`catalog-pack-component-${key}-gates`}
+        />
+      ) : null}
       {component.installedVersion !== null ? (
         <span className="text-3 text-small">
           {t(
@@ -440,6 +473,79 @@ function ComponentView({
   );
 }
 
+/** A pack Worker's systems and the gates it acts on here (P1-E2): the workspace's own, kept by
+ *  every install — possibly none, when that was the choice — and changed on the Worker's own page;
+ *  or, with none yet, whether installing (again) would connect it. */
+function WorkerSystemsLine({
+  component,
+  page,
+  testId,
+}: {
+  readonly component: Extract<PackComponentStateWire, { kind: 'worker' }>;
+  /** The Worker's page in the catalog (`null` when it has no published version). */
+  readonly page: string | null;
+  readonly testId: string;
+}) {
+  const t = useT();
+  const systems = component.systems.join(t('、', ', '));
+  // UX acceptance of #705, P3-6: the gates are changed on the Worker's page, not here.
+  const change = page ? (
+    <RouteLink href={page} testId={`${testId}-change`}>
+      {t('在 Worker 页修改', 'Change on the Workers tab')}
+    </RouteLink>
+  ) : null;
+  return (
+    <span className="row-wrap text-3 text-small" data-testid={testId}>
+      {component.gates.length > 0 ? (
+        <>
+          <span>{t('接入的系统：', 'Acts on: ')}</span>
+          {component.gates.map((gate) => (
+            <RouteLink
+              key={gate.id}
+              href={hrefs.gatekeeper(gate.id)}
+              testId={`${testId}-${gate.id}`}
+            >
+              {gate.name}
+            </RouteLink>
+          ))}
+          {change}
+        </>
+      ) : component.gatesKept ? (
+        <>
+          <span data-testid={`${testId}-none-kept`}>
+            {t(
+              '不接任何系统：这是工作区为它定的，再装也会保留。',
+              'Acts on no system: the workspace set it so, and installing again keeps it.',
+            )}
+          </span>
+          {change}
+        </>
+      ) : component.status === 'not_installed' ? (
+        <span>
+          {t(
+            `要用到 ${systems}：安装时会接上工作区里已经接好的。`,
+            `Works with ${systems}: installing connects it to what the workspace has connected.`,
+          )}
+        </span>
+      ) : component.bindable ? (
+        <span>
+          {t(
+            `还没接上任何系统。工作区现在有接好的 ${systems}，再装一次就能接上。`,
+            `Not connected to any system yet. The workspace now has ${systems} connected; installing again connects it.`,
+          )}
+        </span>
+      ) : (
+        <span>
+          {t(
+            `还没接上任何系统：工作区里还没有接好的 ${systems}。接好之后，回到这里再装一次就能接上。`,
+            `Not connected to any system: the workspace has no ${systems} connected yet. Once it does, install again here to connect it.`,
+          )}
+        </span>
+      )}
+    </span>
+  );
+}
+
 /** 「本体 ops-assets：第 1 版 → 新的一版」 — what one item does to its family. */
 function itemHeadline(item: PackInstallItemWire, t: Translate): string {
   const subject = changeSubjectText(item, t);
@@ -459,6 +565,9 @@ function itemHeadline(item: PackInstallItemWire, t: Translate): string {
 /** The review's copy for a change between the review and the install: the review reloads itself,
  *  so the next step is to look again, not to refresh. */
 const STALE_CODES = new Set(['version_changed', 'change_plan_changed']);
+
+/** `workerGates`: by Worker name, the gates the person kept for a Worker the install connects. */
+type WorkerGateChoice = Readonly<Record<string, readonly string[]>>;
 
 function InstallPack({
   http,
@@ -480,32 +589,50 @@ function InstallPack({
   const [round, setRound] = useState(0);
   const [preview, setPreview] = useState<
     | { readonly status: 'loading' }
-    | { readonly status: 'ready'; readonly data: PackInstallPreviewWire }
+    | {
+        readonly status: 'ready';
+        readonly data: PackInstallPreviewWire;
+        /** The gate choice this review was read with — what the install passes back. */
+        readonly choice: WorkerGateChoice;
+      }
     | { readonly status: 'error'; readonly error: unknown }
   >({ status: 'loading' });
+  // Reading the review again for a new gate choice: the last one stays on screen meanwhile.
+  const [refreshing, setRefreshing] = useState(false);
   const [confirmed, setConfirmed] = useState<ReadonlySet<number>>(new Set());
+  // P1-E2: by Worker name, the gates the person kept for a Worker the install connects; a Worker
+  // not here keeps every gate offered (the default).
+  const [choice, setChoice] = useState<WorkerGateChoice>({});
+  const choiceKey = JSON.stringify(choice);
   // An owner-only read: run once the role is known to allow it, never on a guess.
   const canPreview = can('preview_pack_install') === true;
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `round` only re-runs the read.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `round` and `choiceKey` only re-run the read.
   useEffect(() => {
     if (!open || !canPreview) return;
     let cancelled = false;
-    setPreview({ status: 'loading' });
+    const asked = choice;
+    setRefreshing(true);
     setConfirmed(new Set());
     http
-      .call<PackInstallPreviewWire>('preview_pack_install', { name: pack.name })
+      .call<PackInstallPreviewWire>('preview_pack_install', {
+        name: pack.name,
+        ...(Object.keys(asked).length > 0 ? { workerGates: asked } : {}),
+      })
       .then((data) => {
-        if (!cancelled) setPreview({ status: 'ready', data });
+        if (!cancelled) setPreview({ status: 'ready', data, choice: asked });
       })
       .catch((error: unknown) => {
         if (isForbiddenError(error)) permissions.markDenied('preview_pack_install');
         if (!cancelled) setPreview({ status: 'error', error });
+      })
+      .finally(() => {
+        if (!cancelled) setRefreshing(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [open, canPreview, http, pack.name, permissions, round]);
+  }, [open, canPreview, http, pack.name, permissions, round, choiceKey]);
 
   const label = actionLabel(pack, t);
   if (label === null) return null;
@@ -525,6 +652,15 @@ function InstallPack({
     ? data.items.filter((item) => !item.unchanged && item.classification === 'authority_widening')
     : [];
   const unconfirmed = widening.filter((item) => !confirmed.has(item.ordinal)).length;
+  // Up to date, installing again only connects a Worker — or, every gate unticked, records that it
+  // is connected to none (UX acceptance of #705, P3-2).
+  const connects =
+    data?.items.some(
+      (item) =>
+        item.kind === 'worker_definition_version' &&
+        !item.unchanged &&
+        item.binding.source === 'install',
+    ) ?? false;
   const crossed = data
     ? data.pack.versions.filter((version) => data.crossedVersions.includes(version.version))
     : [];
@@ -533,11 +669,13 @@ function InstallPack({
     if (data === null) return;
     let result: PackInstallResultWire;
     try {
+      const reviewedChoice = preview.status === 'ready' ? preview.choice : {};
       result = await http.call<PackInstallResultWire>('install_pack', {
         name: pack.name,
         version: data.targetVersion,
         reviewedDigest: data.digest,
         ...(widening.length > 0 ? { confirmedOrdinals: widening.map((item) => item.ordinal) } : {}),
+        ...(Object.keys(reviewedChoice).length > 0 ? { workerGates: reviewedChoice } : {}),
       });
     } catch (error) {
       if (isForbiddenError(error)) permissions.markDenied('install_pack');
@@ -548,6 +686,8 @@ function InstallPack({
       throw error;
     }
     permissions.markAllowed('install_pack');
+    // Legacy 425: a pack's Worker is what the readiness hint asks for when there is none.
+    announceReadinessChange(http);
     onInstalled(result);
   }
 
@@ -570,7 +710,10 @@ function InstallPack({
         anchor={
           <Button
             variant="primary"
-            onClick={() => setOpen(true)}
+            onClick={() => {
+              setChoice({});
+              setOpen(true);
+            }}
             data-testid="catalog-pack-install-trigger"
           >
             {`${label}…`}
@@ -579,10 +722,16 @@ function InstallPack({
         title={label}
         target={`${pack.name} v${pack.latestVersion}`}
         confirmLabel={
-          data?.pack.status === 'outdated' ? t('升级', 'Upgrade') : t('安装', 'Install')
+          data?.pack.status === 'outdated'
+            ? t('升级', 'Upgrade')
+            : data?.pack.status === 'up_to_date'
+              ? connects
+                ? t('接上', 'Connect')
+                : t('记下：不接', 'Keep: none')
+              : t('安装', 'Install')
         }
         danger={data !== null && (data.breaking || data.pack.status === 'customized')}
-        confirmDisabled={data === null || data.unchanged || unconfirmed > 0}
+        confirmDisabled={data === null || data.unchanged || unconfirmed > 0 || refreshing}
         onConfirm={install}
         errorOverrides={{ version_changed: staleText, change_plan_changed: staleText }}
         testId="catalog-pack-install-confirm"
@@ -654,6 +803,7 @@ function InstallPack({
                   )}
                 </span>
                 <PackRequirementList
+                  http={http}
                   requirements={preview.data.pack.requirements}
                   testId="catalog-pack-preview-requirement"
                 />
@@ -663,6 +813,16 @@ function InstallPack({
               <PreviewItem
                 key={item.ordinal}
                 item={item}
+                kept={
+                  item.kind === 'worker_definition_version'
+                    ? (choice[item.target.name] ?? item.binding.candidates.map((gate) => gate.id))
+                    : []
+                }
+                onKeptChange={(kept) =>
+                  item.kind === 'worker_definition_version'
+                    ? setChoice((prev) => ({ ...prev, [item.target.name]: kept }))
+                    : undefined
+                }
                 checked={confirmed.has(item.ordinal)}
                 onCheckedChange={(checked) =>
                   setConfirmed((prev) => {
@@ -694,12 +854,14 @@ function InstallPack({
                   : []
               }
               reason={
-                preview.data.unchanged
-                  ? t(
-                      '工作区里已经是这一版的内容，不需要安装',
-                      'The workspace already has this version; there is nothing to install',
-                    )
-                  : null
+                refreshing
+                  ? t('正在按你的选择重新检查…', 'Checking again with your choice…')
+                  : preview.data.unchanged
+                    ? t(
+                        '工作区里已经是这一版的内容，不需要安装',
+                        'The workspace already has this version; there is nothing to install',
+                      )
+                    : null
               }
               testId="catalog-pack-missing"
             />
@@ -712,10 +874,15 @@ function InstallPack({
 
 function PreviewItem({
   item,
+  kept,
+  onKeptChange,
   checked,
   onCheckedChange,
 }: {
   readonly item: PackInstallItemWire;
+  /** A Worker item's gates the person keeps ticked (every one offered, by default). */
+  readonly kept: readonly string[];
+  readonly onKeptChange: (kept: readonly string[]) => void;
   readonly checked: boolean;
   readonly onCheckedChange: (checked: boolean) => void;
 }) {
@@ -723,6 +890,9 @@ function PreviewItem({
   return (
     <div className="stack-s" data-testid={`catalog-pack-item-${item.ordinal}`}>
       <span>{itemHeadline(item, t)}</span>
+      {item.kind === 'worker_definition_version' ? (
+        <WorkerBindingReview item={item} kept={kept} onKeptChange={onKeptChange} />
+      ) : null}
       {item.unchanged ? null : (
         <>
           {item.kind === 'ontology_version' ? (
@@ -746,6 +916,102 @@ function PreviewItem({
           ) : null}
         </>
       )}
+    </div>
+  );
+}
+
+/**
+ * A Worker item's systems (P1-E2), as the install sets them. The gates it acts on and the model it
+ * runs on are the workspace's own: an install keeps whatever the workspace set. A Worker with no
+ * gates yet is connected to the workspace's connected gates of its systems, every one listed by
+ * name and ticked by default; unticking one reads the review again (the install binds exactly what
+ * was reviewed). Connecting it widens what it may act on, so the item asks for its confirmation.
+ */
+function WorkerBindingReview({
+  item,
+  kept,
+  onKeptChange,
+}: {
+  readonly item: Extract<PackInstallItemWire, { kind: 'worker_definition_version' }>;
+  readonly kept: readonly string[];
+  readonly onKeptChange: (kept: readonly string[]) => void;
+}) {
+  const t = useT();
+  const { binding } = item;
+  const prefix = `catalog-pack-item-${item.ordinal}-binding`;
+  if (binding.systems.length === 0 && binding.source !== 'workspace' && binding.model === null) {
+    return null;
+  }
+  const systems = binding.systems.join(t('、', ', '));
+  const keptSet = new Set(kept);
+  return (
+    <div className="stack-s" data-testid={prefix}>
+      {binding.source === 'workspace' ? (
+        <span className="text-3 text-small" data-testid={`${prefix}-kept`}>
+          {binding.gates.length > 0
+            ? t(
+                `接入的系统：沿用工作区为它选的 ${binding.gates.map((gate) => gate.name).join('、')}`,
+                `Systems: keeps the ones the workspace chose, ${binding.gates.map((gate) => gate.name).join(', ')}`,
+              )
+            : t(
+                '接入的系统：沿用工作区的设置，不接入任何系统',
+                'Systems: keeps the workspace’s setting, none',
+              )}
+        </span>
+      ) : binding.candidates.length > 0 ? (
+        <fieldset className="stack-s" data-testid={`${prefix}-choice`}>
+          <legend className="text-small">
+            {t(
+              '安装时把它接上这些系统（默认全部接上，可以取消勾选）：',
+              'Installing connects it to these systems (all of them by default; untick any):',
+            )}
+          </legend>
+          {binding.candidates.map((gate) => (
+            <label className="checkbox" key={gate.id}>
+              <input
+                type="checkbox"
+                checked={keptSet.has(gate.id)}
+                onChange={(event) => {
+                  const on = event.currentTarget.checked;
+                  onKeptChange(
+                    binding.candidates
+                      .map((candidate) => candidate.id)
+                      .filter((id) => (id === gate.id ? on : keptSet.has(id))),
+                  );
+                }}
+                data-testid={`${prefix}-gate-${gate.id}`}
+              />
+              <span>
+                {gate.name}
+                <span className="text-3">{`（${gate.connector}）`}</span>
+              </span>
+            </label>
+          ))}
+          {kept.length === 0 ? (
+            <span className="text-3 text-small" data-testid={`${prefix}-none-kept`}>
+              {t(
+                '一个都不接：它不能对任何系统动手。这个选择会记下来，之后不再提示接上；要接，在「Worker」页给它选。',
+                'None: it cannot act on any system. The choice is kept, and you will not be asked to connect it again; to connect it, pick some on the Workers tab.',
+              )}
+            </span>
+          ) : null}
+        </fieldset>
+      ) : (
+        <span className="text-3 text-small" data-testid={`${prefix}-unavailable`}>
+          {t(
+            `它要用到 ${systems}，工作区里还没有接好的，这次不接入任何系统。接好之后，回到能力包页再装一次就能接上。`,
+            `It works with ${systems}, which the workspace has not connected yet, so it is connected to nothing for now. Once connected, install again from the pack’s page to connect it.`,
+          )}
+        </span>
+      )}
+      {binding.model !== null ? (
+        <span className="text-3 text-small" data-testid={`${prefix}-model`}>
+          {t(
+            `模型：沿用工作区设置的 ${binding.model}`,
+            `Model: keeps the workspace’s ${binding.model}`,
+          )}
+        </span>
+      ) : null}
     </div>
   );
 }

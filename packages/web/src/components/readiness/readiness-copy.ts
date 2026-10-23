@@ -263,8 +263,8 @@ export function missingCauseText(
       );
     case 'no_worker_gate':
       return t(
-        '委派出去的 Worker 碰不到任何系统：在 Worker 定义里勾选已授权的门，再发布新版本。',
-        'A delegated Worker reaches no system: tick a granted gate in the Worker definition, then publish a new version.',
+        '委派出去的 Worker 碰不到任何系统：在 Worker 定义里勾选已授权的门，再发布新版本。从能力包装的 Worker，可以在能力包页「把 Worker 接上系统」。',
+        'A delegated Worker reaches no system: tick a granted gate in the Worker definition, then publish a new version. A Worker installed from a pack can be connected from the pack’s page (Connect the Worker to its systems).',
       );
     case 'excluded_by_profile': {
       const name = item.gateId ? gateNames.get(item.gateId) : undefined;

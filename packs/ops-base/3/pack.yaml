@@ -1,0 +1,28 @@
+# Pack Contract v1 (S11 P1-C / P1-D / P1-E; docs/s10-evolution-plan-2026-10-04.md §6.2, §6.5): one
+# immutable PackVersion. The shape and the rules a manifest keeps are
+# `packages/kernel/src/application/packs/manifest.ts`; the Skill and Worker files beside it, and
+# the rules across manifests, are its `registry.ts`.
+#
+# ops-base v3 ships the same Skill and Worker prompt as v2; the Worker now says which system it
+# acts on (`systems`, S11 P1-E2), so installing it binds it to the workspace's connected container
+# gates — every one unless the owner unticks some in the review. Which gates and which model are
+# the workspace's own: an upgrade keeps whatever the workspace set.
+#
+# `summary` and `notes` are read by workspace owners in the console (the pack's detail and the
+# install review): plain words, no type or field names.
+schema: 1
+name: ops-base
+version: 3
+summary: >-
+  运维基础：一个通用运维执行者和它的排查方法，用来调查主机与容器上的问题。
+# One line each: folding a Chinese sentence over lines puts a space where the lines meet.
+notes: 这一版让运维执行者在安装时直接接上工作区里已接好的容器管理系统：审阅时逐个列出能接的系统，默认全接，可以取消勾选。以后再升级，工作区自己为它选的系统和模型原样保留。执行者的提示词和排查方法与上一版相同。它不能自己改动任何系统：需要重启或修改时，由调用它的助手发起审批，由人决定。
+breaking: false
+requires:
+  connectors:
+    - docker
+components:
+  skills:
+    - docker-triage
+  workers:
+    - ops-runner

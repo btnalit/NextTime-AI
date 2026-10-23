@@ -102,7 +102,7 @@ import {
   parseCookieHeader,
 } from '../../application/identity/index.js';
 // S11 P1-C: a domain module's error, imported directly like the two above.
-import { PackNotFoundError } from '../../application/packs/index.js';
+import { PackNotFoundError, PackWorkerGatesError } from '../../application/packs/index.js';
 // P-B2b: same direct-import convention as GateInstanceNotAvailableError above — these two live in
 // application/platform/modules.ts (a domain module, not a *-handlers.ts file), imported directly
 // rather than routed through application/gateway/index.ts's curated surface.
@@ -249,6 +249,11 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // deployment does not ship.
   if (err instanceof PackNotFoundError) {
     return { status: 404, code: err.code, message: err.message };
+  }
+  // S11 P1-E2: `workerGates` naming a Worker the version does not have, or a gate that is not one
+  // of its candidates — a caller-input mistake (the console only offers candidates).
+  if (err instanceof PackWorkerGatesError) {
+    return { status: 400, code: 'invalid_params', message: err.message };
   }
   // P-B2b: D3's "customized or breaking needs confirm: true" — same 400-with-details shape as
   // OntologyViolationError below, so the console can show exactly what to confirm.

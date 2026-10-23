@@ -38,6 +38,7 @@ import { RouteLink } from '../kit/route-link.js';
 import { SkeletonRows } from '../kit/skeleton.js';
 import { StatusChip } from '../kit/status-chip.js';
 import { StillNeeded } from '../kit/still-needed.js';
+import { announceReadinessChange } from '../readiness/useExecutionReadiness.js';
 import { ChangeVerificationSection } from './ChangeVerification.js';
 
 export interface ChangesTabProps {
@@ -283,6 +284,22 @@ function versionText(version: { readonly version: number } | null, t: Translate)
   return version === null
     ? t('未安装', 'not installed')
     : t(`第 ${version.version} 版`, `v${version.version}`);
+}
+
+type WorkerItemGates = Extract<ChangeItemWire, { kind: 'worker_definition_version' }>['gates'];
+type ChangeGateRef = NonNullable<WorkerItemGates['after']>[number];
+
+/** The gates in `from` that `to` has not, by id. */
+function gatesMissing(
+  from: readonly ChangeGateRef[],
+  to: readonly ChangeGateRef[],
+): readonly ChangeGateRef[] {
+  const kept = new Set(to.map((gate) => gate.id));
+  return from.filter((gate) => !kept.has(gate.id));
+}
+
+function gateNamesText(gates: readonly ChangeGateRef[], t: Translate): string {
+  return gates.map((gate) => gate.name).join(t('、', ', '));
 }
 
 /** How many names of one kind `typeNamesText` spells out before 「等 N 个」. */
@@ -552,6 +569,7 @@ function ChangeSegmentDetail({
         <RollBackSegment
           http={http}
           segment={segment}
+          items={items}
           onRolledBack={() => {
             setRolledBackHere(segment.id);
             void detail.reload();
@@ -607,6 +625,12 @@ function ChangeItemView({
           />
         </div>
       ) : null}
+      {item.kind === 'worker_definition_version' ? (
+        <WorkerItemGatesLine
+          gates={item.gates}
+          testId={`catalog-change-item-${item.ordinal}-gates`}
+        />
+      ) : null}
       {item.widening.length > 0 ? (
         <span className="text-small">
           {t('改变了权限边界：', 'Moved an authority boundary: ')}
@@ -645,6 +669,43 @@ function ChangeItemView({
   );
 }
 
+/**
+ * A Worker item's systems (UX acceptance of #705, P2-1): the gates the version it published may act
+ * on — what a person ticked in the review — and, when the version it replaced had others, those.
+ * Read from those versions now; nothing is said when the published one no longer holds what was
+ * recorded.
+ */
+function WorkerItemGatesLine({
+  gates,
+  testId,
+}: {
+  readonly gates: WorkerItemGates;
+  readonly testId: string;
+}) {
+  const t = useT();
+  if (gates.after === null) return null;
+  const before = gates.before;
+  // Against the version it replaced, when the gates differ: what the Worker acted on before.
+  const changed =
+    before !== null &&
+    (gatesMissing(gates.after, before).length > 0 || gatesMissing(before, gates.after).length > 0);
+  return (
+    <span className="text-3 text-small" data-testid={testId}>
+      {gates.after.length > 0
+        ? t(
+            `接上的系统：${gateNamesText(gates.after, t)}`,
+            `Acts on: ${gateNamesText(gates.after, t)}`,
+          )
+        : t('接上的系统：没有', 'Acts on: no system')}
+      {changed
+        ? before.length > 0
+          ? t(`（之前：${gateNamesText(before, t)}）`, ` (before: ${gateNamesText(before, t)})`)
+          : t('（之前没有）', ' (none before)')
+        : null}
+    </span>
+  );
+}
+
 const BLOCKER_TEXT: Readonly<
   Record<
     NonNullable<ChangeRollbackItemWire['blocker']>,
@@ -673,13 +734,55 @@ const BLOCKER_TEXT: Readonly<
   },
 };
 
+function workerGatesOf(items: readonly ChangeItemWire[], ordinal: number): WorkerItemGates | null {
+  const item = items.find((candidate) => candidate.ordinal === ordinal);
+  return item?.kind === 'worker_definition_version' ? item.gates : null;
+}
+
+/** What rolling a Worker item back does to the systems it acts on (UX acceptance of #705, P3-4):
+ *  it goes back to the gates of the version before, so it loses the ones the item connected and
+ *  gets back the ones it disconnected. Nothing is said when either side is no longer known. */
+function WorkerRollbackGatesLine({
+  gates,
+  testId,
+}: {
+  readonly gates: WorkerItemGates | null;
+  readonly testId: string;
+}) {
+  const t = useT();
+  if (gates === null || gates.before === null || gates.after === null) return null;
+  const lost = gatesMissing(gates.after, gates.before);
+  const regained = gatesMissing(gates.before, gates.after);
+  if (lost.length === 0 && regained.length === 0) return null;
+  return (
+    <span className="text-3 text-small" data-testid={testId}>
+      {lost.length > 0
+        ? t(
+            `撤销后 Worker 不能再操作：${gateNamesText(lost, t)}`,
+            `Afterwards the Worker can no longer act on: ${gateNamesText(lost, t)}`,
+          )
+        : null}
+      {lost.length > 0 && regained.length > 0 ? t('；', '; ') : null}
+      {regained.length > 0
+        ? t(
+            `撤销后 Worker 又能操作：${gateNamesText(regained, t)}`,
+            `Afterwards the Worker can act on again: ${gateNamesText(regained, t)}`,
+          )
+        : null}
+    </span>
+  );
+}
+
 function RollBackSegment({
   http,
   segment,
+  items,
   onRolledBack,
 }: {
   readonly http: CapabilityCaller;
   readonly segment: ChangeSegmentWire;
+  /** The record's items: what a Worker item's gates were on each side (P3-4). */
+  readonly items: readonly ChangeItemWire[];
   readonly onRolledBack: () => void;
 }) {
   const t = useT();
@@ -738,6 +841,8 @@ function RollBackSegment({
       throw error;
     }
     permissions.markAllowed('roll_back_change_segment');
+    // Legacy 425: rolling back a pack's Worker can take away the one the readiness hint counts.
+    announceReadinessChange(http);
     onRolledBack();
   }
 
@@ -848,6 +953,11 @@ function RollBackSegment({
                           `Rolling back publishes v${item.to.version}'s approval settings again as a new version; a retired version is never re-enabled.`,
                         )}
                       </span>
+                    ) : item.kind === 'worker_definition_version' && item.to !== null ? (
+                      <WorkerRollbackGatesLine
+                        gates={workerGatesOf(items, item.ordinal)}
+                        testId={`catalog-change-preview-${item.ordinal}-gates`}
+                      />
                     ) : item.kind !== 'ontology_version' && item.to === null ? (
                       <span className="text-3 text-small">
                         {item.kind === 'skill_version'
