@@ -11,7 +11,11 @@
 //      find_workers/invoke_worker) has its args validated against that capability's params JSON
 //      Schema in docs/contracts/capabilities.json — a contract drift (e.g. a new required field)
 //      fails here instead of surfacing on the host. Non-registry names (gate operations, worker
-//      report_result) are skipped, not failed.
+//      report_result) are skipped, not failed. S11 GO5e-1: the same args are also parsed with the
+//      capability's own Zod params schema from packages/shared/dist (the JSON Schema subset above
+//      does not reach nested fields, which propose_goal's plan is made of) — build
+//      @nexttime/shared first, as for the prompt-contract guard; CI's quality job builds it before
+//      this step.
 //   5. S5.4 (docs/retrospective-2026-09-11.md §3.1): a request whose `tools[].function.parameters`
 //      is not a `type: "object"` schema is rejected with 400 `invalid_function_parameters`, like a
 //      real OpenAI-compatible upstream — and a well-formed `tools` array never false-positives.
@@ -24,7 +28,7 @@
 
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -40,6 +44,20 @@ const REGISTRY = new Map(
 );
 
 let failures = 0;
+
+// The registry's own module (`getCapability(name).paramsSchema`), loaded in main().
+let shared;
+async function loadShared() {
+  const distIndex = join(HERE, '..', '..', 'packages', 'shared', 'dist', 'index.js');
+  try {
+    return await import(pathToFileURL(distIndex).href);
+  } catch (err) {
+    console.error(
+      `fake-llm scenario self-test: could not import ${distIndex} — build @nexttime/shared first (\`pnpm --filter @nexttime/shared build\`).`,
+    );
+    throw err;
+  }
+}
 
 function check(label, condition, detail) {
   if (condition) {
@@ -102,16 +120,33 @@ check(
   JSON.stringify(validateParams(REGISTRY.get('get_object'), { objectId: 'x', extra: 1 })),
 );
 
-// Gate operations and the Worker-side report_result aren't registry capabilities; skip those,
-// don't fail them.
+// Gate operations aren't registry capabilities; skip those, don't fail them. The Worker-side
+// report_result is checked against the Worker result contract instead.
 function checkToolCallAgainstRegistry(label, call) {
   if (!call) return;
+  if (call.name === 'report_result') {
+    // A Worker's result contract (packages/platform-extension's report_result tool takes exactly
+    // this schema), not a registry capability.
+    const parsed = shared.WorkerResultContractSchema.safeParse(call.args);
+    check(
+      `${label}-result-contract`,
+      parsed.success,
+      parsed.success ? '' : JSON.stringify(parsed.error.issues),
+    );
+    return;
+  }
   if (!REGISTRY.has(call.name)) {
     console.log(`skip ${label}: ${call.name} is not a registry capability`);
     return;
   }
   const problems = validateParams(REGISTRY.get(call.name), call.args);
   check(`${label}-params-vs-registry`, problems.length === 0, problems.join('; '));
+  const parsed = shared.getCapability(call.name).paramsSchema.safeParse(call.args);
+  check(
+    `${label}-params-vs-schema`,
+    parsed.success,
+    parsed.success ? '' : JSON.stringify(parsed.error.issues),
+  );
 }
 
 async function post(messages, stream = false, extra = {}) {
@@ -134,6 +169,7 @@ function toolCallOf(json) {
 }
 
 async function main() {
+  shared = await loadShared();
   const child = spawn(process.execPath, [SERVER_PATH], {
     env: { ...process.env, PORT: String(PORT) },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -574,6 +610,196 @@ async function main() {
           json.choices[0].message.content.includes('depends_on'),
         JSON.stringify(json.choices[0]),
       );
+    }
+
+    // 6j. S11 GO5e-1 entryGoalChatScenario: "发起验收目标" — find_workers, then find_operations,
+    //     then propose_goal chained off both *real* results, then the agent's own confirm_goal
+    //     attempt, then a final text accept_s2.sh reads.
+    {
+      const WORKER_ID = '11111111-1111-4111-8111-111111111111';
+      const GATE_ID = '22222222-2222-4222-8222-222222222222';
+      const GOAL_ID = '33333333-3333-4333-8333-333333333333';
+      const ask = { role: 'user', content: '发起验收目标 GOAL_NONCE=n42' };
+      const call = (id, name, args) => ({
+        role: 'assistant',
+        content: null,
+        tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+      });
+      const result = (id, content) => ({
+        role: 'tool',
+        tool_call_id: id,
+        content: typeof content === 'string' ? content : JSON.stringify(content),
+      });
+      const foundWorkers = [
+        call('call_fw', 'find_workers', { need: 'restart' }),
+        result('call_fw', { items: [{ definitionId: WORKER_ID, version: 2, kind: 'worker', name: 'ops-runner' }] }),
+      ];
+      const foundOperations = [
+        call('call_fo', 'find_operations', { need: 'stock' }),
+        result('call_fo', {
+          items: [
+            {
+              id: 'op-object-id',
+              objectType: 'Operation',
+              identityKey: { gatekeeperId: GATE_ID, name: 'stock.get', version: 1 },
+              properties: { kind: 'observe' },
+              reachability: { kind: 'direct' },
+            },
+          ],
+        }),
+      ];
+      const proposedOnce = [
+        call('call_pg', 'propose_goal', {}),
+        result('call_pg', { goalRunId: GOAL_ID, status: 'proposed', changed: true, planRevisionId: 'rev-1', hints: [] }),
+      ];
+
+      {
+        const { json } = await post([ask]);
+        const turn1 = toolCallOf(json);
+        check('entry-goal-chat-turn1', turn1?.name === 'find_workers' && turn1.args.need === 'restart', JSON.stringify(json.choices[0]));
+        checkToolCallAgainstRegistry('entry-goal-chat-turn1', turn1);
+      }
+      {
+        const { json } = await post([ask, ...foundWorkers]);
+        const turn2 = toolCallOf(json);
+        check('entry-goal-chat-turn2', turn2?.name === 'find_operations' && turn2.args.need === 'stock', JSON.stringify(json.choices[0]));
+        checkToolCallAgainstRegistry('entry-goal-chat-turn2', turn2);
+      }
+      {
+        const { json } = await post([ask, call('call_fw', 'find_workers', { need: 'restart' }), result('call_fw', 'Tool find_workers not found')]);
+        check(
+          'entry-goal-chat-turn2-unresolved',
+          json.choices[0].finish_reason === 'stop' && json.choices[0].message.content.includes('did not resolve'),
+          JSON.stringify(json.choices[0]),
+        );
+      }
+      {
+        const { json } = await post([ask, ...foundWorkers, ...foundOperations]);
+        const turn3 = toolCallOf(json);
+        const step = turn3?.args?.plan?.steps?.[0];
+        const acceptance = turn3?.args?.plan?.acceptance?.[0];
+        check(
+          'entry-goal-chat-turn3',
+          turn3?.name === 'propose_goal' &&
+            step?.worker?.definitionId === WORKER_ID &&
+            step.worker.version === 2 &&
+            step.input === 'ACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=n42' &&
+            acceptance?.kind === 'observe_predicate' &&
+            acceptance.check.gatekeeperId === GATE_ID &&
+            acceptance.check.operation === 'stock.get' &&
+            turn3.args.idempotencyKey === 'accept-s2-goal-n42',
+          JSON.stringify(json.choices[0]),
+        );
+        // A step's Worker sees its input (and the goal's statement may reach it): the chat marker
+        // there would hand the Worker the entry agent's script.
+        check(
+          'entry-goal-chat-turn3-no-chat-marker',
+          turn3 !== undefined && !JSON.stringify(turn3.args).includes('发起验收目标'),
+          JSON.stringify(turn3?.args),
+        );
+        checkToolCallAgainstRegistry('entry-goal-chat-turn3', turn3);
+      }
+      {
+        // The entry agent's session is resident: an earlier asking with another nonce is still in
+        // the history. The newest asking's nonce is the one used.
+        const earlier = { role: 'user', content: '发起验收目标 GOAL_NONCE=old1' };
+        const { json } = await post([earlier, { role: 'assistant', content: 'earlier reply' }, ask, ...foundWorkers, ...foundOperations]);
+        const turn3 = toolCallOf(json);
+        check(
+          'entry-goal-chat-turn3-newest-nonce',
+          turn3?.name === 'propose_goal' && turn3.args.idempotencyKey === 'accept-s2-goal-n42',
+          JSON.stringify(json.choices[0]),
+        );
+      }
+      {
+        const { json } = await post([ask, ...foundWorkers, ...foundOperations, ...proposedOnce]);
+        const turn4 = toolCallOf(json);
+        check(
+          'entry-goal-chat-turn4',
+          turn4?.name === 'confirm_goal' && turn4.args.goalRunId === GOAL_ID && turn4.args.revision === 1,
+          JSON.stringify(json.choices[0]),
+        );
+        checkToolCallAgainstRegistry('entry-goal-chat-turn4', turn4);
+      }
+      {
+        // pi's answer to a tool entry mode does not register: plain text, not a confirmation.
+        const { json } = await post([
+          ask,
+          ...foundWorkers,
+          ...foundOperations,
+          ...proposedOnce,
+          call('call_cg', 'confirm_goal', { goalRunId: GOAL_ID, revision: 1 }),
+          result('call_cg', 'Tool confirm_goal not found'),
+        ]);
+        const text = json.choices[0].message.content;
+        check(
+          'entry-goal-chat-turn5',
+          json.choices[0].finish_reason === 'stop' &&
+            text.includes(`GOAL_ID=${GOAL_ID}`) &&
+            text.includes('GOAL_STATUS=proposed') &&
+            text.includes('GOAL_CHANGED=true') &&
+            text.includes('CONFIRM_GOAL=unavailable'),
+          JSON.stringify(json.choices[0]),
+        );
+      }
+      {
+        // Had the confirmation gone through, the reply says so — accept_s2.sh's assertion bites.
+        const { json } = await post([
+          ask,
+          ...foundWorkers,
+          ...foundOperations,
+          ...proposedOnce,
+          call('call_cg', 'confirm_goal', { goalRunId: GOAL_ID, revision: 1 }),
+          result('call_cg', { goalRunId: GOAL_ID, status: 'running', changed: true, createdStepRunIds: ['s1'] }),
+        ]);
+        check(
+          'entry-goal-chat-turn5-confirmed-shows',
+          json.choices[0].message.content.includes('CONFIRM_GOAL=confirmed'),
+          JSON.stringify(json.choices[0]),
+        );
+      }
+      {
+        // Asked again in the same chat: the newest asking restarts the script at turn 1, and the
+        // agent's earlier propose_goal call (whose input carries the Worker marker) never flips it
+        // onto the Worker script.
+        const { json } = await post([
+          ask,
+          ...foundWorkers,
+          ...foundOperations,
+          ...proposedOnce,
+          { role: 'assistant', content: 'first reply' },
+          { role: 'user', content: '发起验收目标 GOAL_NONCE=n42' },
+        ]);
+        const again = toolCallOf(json);
+        check('entry-goal-chat-asked-again', again?.name === 'find_workers', JSON.stringify(json.choices[0]));
+      }
+      {
+        const { json } = await post([
+          ask,
+          call('call_pg', 'propose_goal', { plan: { steps: [{ input: 'ACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=n42' }] } }),
+          result('call_pg', { goalRunId: GOAL_ID, status: 'proposed', changed: true }),
+        ]);
+        const notWorker = toolCallOf(json);
+        check('entry-goal-chat-not-worker-script', notWorker?.name !== 'report_result', JSON.stringify(json.choices[0]));
+      }
+    }
+
+    // 6k. S11 GO5e-1 goalStepScenario: the goal's step Worker reports back with no Fact.
+    {
+      const { json } = await post([
+        { role: 'custom', content: '### Task input\nACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=n42' },
+        { role: 'user', content: 'Begin working on your assigned Task now' },
+      ]);
+      const call = toolCallOf(json);
+      check(
+        'goal-step-worker',
+        call?.name === 'report_result' &&
+          Array.isArray(call.args.factsToAssert) &&
+          call.args.factsToAssert.length === 0 &&
+          call.args.summary.includes('n42'),
+        JSON.stringify(json.choices[0]),
+      );
+      checkToolCallAgainstRegistry('goal-step-worker', call);
     }
 
     // 7. Streaming mode also honors scenarios (SSE contains the scripted tool name).

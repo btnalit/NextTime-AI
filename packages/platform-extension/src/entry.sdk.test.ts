@@ -360,4 +360,143 @@ describe('platform-extension loaded through the real pi SDK (entry mode)', () =>
     session.dispose();
     fauxProvider.unregister();
   });
+
+  /**
+   * S11 GO5e-1: the goal tools through pi's *real* tool registry. The model is offered
+   * `propose_goal` (its plan's self-containing predicate schemas included) and its call reaches the
+   * kernel as written; confirming is the person's, so `confirm_goal` is never offered, and a model
+   * that calls it anyway gets pi's own tool error — the kernel never hears of it.
+   */
+  it('offers propose_goal and passes its plan to the kernel; confirm_goal is no tool', async () => {
+    kernel.setHandler('list_allowed_operations', () => ({ ok: true, result: { items: [] } }));
+    kernel.setHandler('get_entry_context', () => ({ ok: true, result: {} }));
+    kernel.setHandler('report_turn', () => ({ ok: true, result: {} }));
+    kernel.setHandler('propose_goal', () => ({
+      ok: true,
+      result: {
+        goalRunId: 'goal-1',
+        status: 'proposed',
+        changed: true,
+        planRevisionId: 'revision-1',
+        hints: [],
+      },
+    }));
+
+    const proposal = {
+      statement: 'Restart the flaky container and confirm the stock API answers.',
+      plan: {
+        steps: [
+          {
+            key: 'restart',
+            worker: { definitionId: '11111111-1111-4111-8111-111111111111', version: 1 },
+            input: 'Restart the flaky container.',
+          },
+        ],
+        acceptance: [
+          {
+            kind: 'observe_predicate',
+            key: 'stock-visible',
+            check: {
+              gatekeeperId: '22222222-2222-4222-8222-222222222222',
+              operation: 'stock.get',
+              params: {},
+              expect: { all: [{ path: 'symbol', op: 'eq', value: 'NXT' }] },
+            },
+          },
+        ],
+      },
+      budget: { maxTokens: 200000, maxSteps: 3, maxRevisions: 1, maxWallClockSeconds: 1800 },
+      idempotencyKey: 'restart-and-check',
+    };
+
+    const fauxProvider = registerFauxProvider();
+    const model = fauxProvider.getModel();
+    const offered: string[][] = [];
+    fauxProvider.setResponses([
+      (context) => {
+        offered.push(getCurrentTools(context.messages).map((tool) => tool.name));
+        return fauxAssistantMessage(fauxToolCall('propose_goal', proposal), {
+          stopReason: 'toolUse',
+        });
+      },
+      () =>
+        fauxAssistantMessage(fauxToolCall('confirm_goal', { goalRunId: 'goal-1', revision: 1 }), {
+          stopReason: 'toolUse',
+        }),
+      () => fauxAssistantMessage('Proposed — please confirm it in the console under Goals.'),
+    ]);
+
+    const modelRuntime = await ModelRuntime.create({
+      credentials: new InMemoryCredentialStore(),
+      modelsPath: null,
+      refreshOnCreate: false,
+    });
+    modelRuntime.registerProvider(model.provider, {
+      baseUrl: model.baseUrl,
+      apiKey: 'faux-key',
+      api: fauxProvider.api,
+      models: fauxProvider.models.map((registeredModel) => ({
+        id: registeredModel.id,
+        name: registeredModel.name,
+        api: registeredModel.api,
+        reasoning: registeredModel.reasoning,
+        input: registeredModel.input,
+        cost: registeredModel.cost,
+        contextWindow: registeredModel.contextWindow,
+        maxTokens: registeredModel.maxTokens,
+        baseUrl: registeredModel.baseUrl,
+      })),
+    });
+
+    const resourceLoader = new DefaultResourceLoader({
+      cwd: tmpDir,
+      agentDir: tmpDir,
+      settingsManager: SettingsManager.inMemory(),
+      noExtensions: true,
+      additionalExtensionPaths: [EXTENSION_PATH],
+    });
+    await resourceLoader.reload();
+    expect(resourceLoader.getExtensions().errors).toEqual([]);
+
+    const { session } = await createAgentSession({
+      cwd: tmpDir,
+      agentDir: tmpDir,
+      model,
+      modelRuntime,
+      resourceLoader,
+      sessionManager: SessionManager.inMemory(tmpDir),
+      settingsManager: SettingsManager.inMemory(),
+      noTools: 'builtin',
+    });
+    const events: AgentSessionEvent[] = [];
+    session.subscribe((event) => events.push(event));
+
+    await session.prompt(
+      '<!--nexttime:turn_id=turn-1-->\nRestart it and keep at it until the API answers.',
+    );
+
+    expect(offered[0]).toEqual(
+      expect.arrayContaining(['propose_goal', 'get_goal', 'list_goals', 'get_goal_revision']),
+    );
+    expect(offered[0]).not.toContain('confirm_goal');
+
+    const proposeEnd = events.find(
+      (event): event is Extract<AgentSessionEvent, { type: 'tool_execution_end' }> =>
+        event.type === 'tool_execution_end' && event.toolName === 'propose_goal',
+    );
+    expect(proposeEnd?.isError).toBe(false);
+    expect(
+      kernel.requests.find((request) => request.capability === 'propose_goal')?.params,
+    ).toEqual(proposal);
+
+    const confirmEnd = events.find(
+      (event): event is Extract<AgentSessionEvent, { type: 'tool_execution_end' }> =>
+        event.type === 'tool_execution_end' && event.toolName === 'confirm_goal',
+    );
+    expect(confirmEnd?.isError).toBe(true);
+    expect(kernel.requests.some((request) => request.capability === 'confirm_goal')).toBe(false);
+
+    session.dispose();
+    fauxProvider.unregister();
+  });
 });

@@ -12,15 +12,21 @@ import { test } from 'node:test';
 import {
   ALLOWED_NON_TOOL_WORDS,
   GATE_PLACEHOLDER,
+  PROPOSE_GOAL_REFUSAL_CODES,
+  PROPOSE_GOAL_SCHEMA_WORDS,
   candidateIdentifier,
   checkConditionalOpsRunner,
   checkEmptyFindGuidance,
+  checkGoalGuidance,
   checkGraphQuestionGuidance,
   checkPromptFile,
+  checkProposeGoalDescription,
+  checkProposeGoalWords,
   checkReplyLanguageDirective,
   extractBacktickSpans,
   extractCandidateIdentifiers,
   extractStringArrayLiteral,
+  jsonSchemaWords,
 } from './prompt-contract.mjs';
 
 test('candidateIdentifier', async (t) => {
@@ -176,6 +182,11 @@ const GOOD_ENTRY_FIXTURE_PROMPT = [
   'summary in.',
   'The injected Facts are never the whole graph: call `list_facts` and follow its `nextCursor`.',
   'If data is missing, say so plainly, and never present a partial answer as complete.',
+  "When a later step needs an earlier one's result, propose it with `propose_goal`. One delegated",
+  'task is not a goal. Once the user confirms a goal in the console the platform runs it.',
+  'It is achieved on its checks, never because a Worker says it is done; write each so it could',
+  'come out false. Pass an `idempotencyKey`. Confirming and pausing are theirs — you cannot do any',
+  'of them. Read progress with `list_goals`.',
 ].join(' ');
 
 test('checkEmptyFindGuidance', async (t) => {
@@ -234,6 +245,118 @@ test('checkGraphQuestionGuidance', async (t) => {
       assert.match(violations[0], /"say so plainly"/);
     },
   );
+});
+
+test('checkGoalGuidance', async (t) => {
+  await t.test('a prompt carrying every required phrase has no violations', () => {
+    assert.deepEqual(checkGoalGuidance('fixture.yaml', GOOD_ENTRY_FIXTURE_PROMPT), []);
+  });
+
+  await t.test('catches a prompt that lets a Worker’s word complete a goal', () => {
+    const badPrompt = GOOD_ENTRY_FIXTURE_PROMPT.replace(
+      'never because a Worker says it is done',
+      'or when the Worker reports success',
+    );
+    const violations = checkGoalGuidance('fixture.yaml', badPrompt);
+    assert.equal(violations.length, 1);
+    assert.match(violations[0], /"never because a Worker says it is done"/);
+  });
+
+  await t.test('catches a prompt that sends one delegated task to a goal (#728 review)', () => {
+    const badPrompt = GOOD_ENTRY_FIXTURE_PROMPT.replace(
+      'One delegated task is not a goal.',
+      'A write that needs an approval is a goal too.',
+    );
+    const violations = checkGoalGuidance('fixture.yaml', badPrompt);
+    assert.equal(violations.length, 1);
+    assert.match(violations[0], /"One delegated task is not a goal"/);
+  });
+});
+
+test('checkProposeGoalDescription', async (t) => {
+  const good =
+    "Propose a goal: a later step needs an earlier one's result. One delegated task stays invoke_worker, even a write that needs an approval.";
+
+  await t.test('a description keeping both halves of the line has no violations', () => {
+    assert.deepEqual(checkProposeGoalDescription('capabilities.ts', good), []);
+  });
+
+  await t.test('catches a description that widens goals to any approval or system', () => {
+    const widened =
+      'Propose a goal for more than one system, or waiting on an approval. Use it instead of invoke_worker.';
+    const violations = checkProposeGoalDescription('capabilities.ts', widened);
+    assert.equal(violations.length, 1);
+    assert.match(violations[0], /"One delegated task stays invoke_worker"/);
+    assert.match(violations[0], /: the description is missing/);
+  });
+});
+
+test('checkProposeGoalWords', async (t) => {
+  const schema = {
+    type: 'object',
+    properties: {
+      statement: { type: 'string' },
+      fromProcedure: { type: 'object', properties: { procedureId: { type: 'string' } } },
+      idempotencyKey: { type: 'string' },
+      plan: {
+        type: 'object',
+        properties: {
+          steps: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                key: {},
+                input: {},
+                dependsOn: {},
+                bindings: {},
+                outputSchema: {},
+              },
+            },
+          },
+          acceptance: {
+            type: 'array',
+            items: {
+              anyOf: [
+                { properties: { kind: { const: 'observe_predicate' } } },
+                { properties: { kind: { const: 'fact_predicate' } } },
+                { properties: { kind: { type: 'string', enum: ['requester_confirm'] } } },
+              ],
+            },
+          },
+        },
+      },
+    },
+  };
+  const description = 'refused: invalid_params, credentials_in_text, proposed_goal_limit';
+
+  await t.test('jsonSchemaWords collects property names and const / enum values', () => {
+    const words = jsonSchemaWords(schema);
+    for (const word of PROPOSE_GOAL_SCHEMA_WORDS) assert.ok(words.has(word), word);
+    assert.ok(words.has('statement'));
+  });
+
+  await t.test('no violations when every word and code is there', () => {
+    assert.deepEqual(
+      checkProposeGoalWords('fixture.yaml', jsonSchemaWords(schema), description),
+      [],
+    );
+  });
+
+  await t.test('catches a renamed field and a code the description no longer names', () => {
+    const renamed = structuredClone(schema);
+    const { dependsOn, ...stepFields } = renamed.properties.plan.properties.steps.items.properties;
+    renamed.properties.plan.properties.steps.items.properties = { ...stepFields, after: dependsOn };
+    const violations = checkProposeGoalWords(
+      'fixture.yaml',
+      jsonSchemaWords(renamed),
+      'refused: invalid_params, credentials_in_text',
+    );
+    assert.equal(violations.length, 2);
+    assert.match(violations[0], /"dependsOn"/);
+    assert.match(violations[1], /"proposed_goal_limit"/);
+    assert.ok(PROPOSE_GOAL_REFUSAL_CODES.has('proposed_goal_limit'));
+  });
 });
 
 test('ALLOWED_NON_TOOL_WORDS', async (t) => {

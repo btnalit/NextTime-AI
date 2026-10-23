@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { CapabilityScope, HandleClaims } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { ENTRY_CEILING_CAPABILITIES } from '../../governance/capability/index.js';
 import { MCP_TOOL_ALIASES } from './reference-tool-aliases.js';
@@ -64,6 +64,21 @@ describe('buildToolCatalog — native projection', () => {
       // S8 W1-C: `direction` (`in`/`out`/`both`) added alongside the pre-existing params.
       ['depth', 'direction', 'fromId', 'linkType'].sort(),
     );
+  });
+
+  it('S11 GO5e: a schema that contains itself (propose_goal’s predicates) is written as {} the second time, without a warning per occurrence', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const claims = claimsWithScope({ capabilities: ['propose_goal'], resources: {} });
+      const catalog = await buildToolCatalog({ pool: neverConnectPool }, claims);
+      const propose = catalog.tools.find((t) => t.name === 'propose_goal');
+      expect(propose?.inputSchema.type).toBe('object');
+      expect(warn).not.toHaveBeenCalled();
+      const text = JSON.stringify(propose?.inputSchema);
+      expect(text).toContain('"all":{"type":"array","items":{}');
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('resolve() passes native tool args straight through, unmodified', async () => {

@@ -15,10 +15,9 @@ Handle）、`docs/runbooks/host-explorer.md`（Explorer 九个端点里本脚本
   `${NEXTTIME_DATA}/config/llm-providers.yaml` 与 `${NEXTTIME_DATA}/models/models.json`
   全程不会被改动，跑前跑后都不用重跑
   `make gen-models`；唯一要求是 llm-proxy、worker-supervisor、fake-llm 镜像已经构建好。
-- `fake-llm` 镜像是用当前代码构建的（本任务在 `deploy/fake-llm/server.mjs` 新增了
-  `entryDependencyChatScenario`——见 §4）：`docker compose --profile test build fake-llm && docker
-  compose --profile test up -d --force-recreate fake-llm`，否则"哪个服务依赖哪个"这句话不会命中新
-  场景，入口 agent 只会回 echo。
+- `fake-llm` 镜像不用手动重建：脚本切 fake provider 时（`accept_provider_up`）先用当前检出
+  `docker compose --profile test build fake-llm`，再重建容器，所以"哪个服务依赖哪个"这类
+  `deploy/fake-llm/server.mjs` 里的场景总是当前代码的版本（见 host-accept-s2.md §1）。
 - 迁移已跑到最新（脚本自己的 `preflight-migrations` 步骤会再核实一遍）。
 - `collector-host-inventory` 镜像已在主机上：`scripts/pull-images.sh` 拉取并验签的发布镜像，或
   `scripts/build-images.sh` 的源码构建（`apply-release.sh` 第 4 步二者必居其一）。脚本**不再**在主机上

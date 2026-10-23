@@ -18,7 +18,20 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { zodToJsonSchema } from 'zod-to-json-schema';
+import { ignoreOverride, zodToJsonSchema } from 'zod-to-json-schema';
+
+// S11 GO5e: a schema that contains itself (a predicate's `all` / `any` / `not`, an output schema's
+// `properties` — `z.lazy` in @nexttime/shared) is written as `{}` the second time, exactly what the
+// library writes with `$refStrategy: 'none'`, without the warning it logs for every occurrence
+// (about a hundred lines per run since the goal plan schemas). Same test the library makes: the
+// schema is already open on the path being written.
+function recursionAsAny(_def, refs, seen) {
+  return seen !== undefined &&
+    seen.path.length < refs.currentPath.length &&
+    seen.path.every((segment, index) => refs.currentPath[index] === segment)
+    ? {}
+    : ignoreOverride;
+}
 
 const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 
@@ -267,7 +280,7 @@ export function collectPropertyKeys(node, out = []) {
 }
 
 function checkSnakeCaseKeys(registry) {
-  const jsonSchemaOptions = { $refStrategy: 'none' };
+  const jsonSchemaOptions = { $refStrategy: 'none', override: recursionAsAny };
   for (const capability of registry.CAPABILITY_REGISTRY) {
     const schemas = [
       ['paramsSchema', capability.paramsSchema],
@@ -314,7 +327,7 @@ export function isListShapedName(name) {
 }
 
 function checkListEnvelopeVocabulary(registry) {
-  const jsonSchemaOptions = { $refStrategy: 'none' };
+  const jsonSchemaOptions = { $refStrategy: 'none', override: recursionAsAny };
   for (const capability of registry.CAPABILITY_REGISTRY) {
     if (!isListShapedName(capability.name)) continue;
     if (!capability.resultSchema) {
