@@ -63,8 +63,22 @@ const DEMO_MCP_ITEM = {
   },
 };
 
+/** What the fake kernel lists: `DEMO_MCP_ITEM`'s shape, any transport, optionally a preset
+ *  instance's (S11 P1-F) `preset` and Operations. */
+type FakeItem = Omit<typeof DEMO_MCP_ITEM, 'definition'> & {
+  connector?: string;
+  definition: {
+    transportKind: 'http' | 'mcp';
+    target: string;
+    credentialMode: 'shared' | 'connected_account';
+    manifestSource: string | null;
+    preset?: string;
+  };
+  operations?: unknown[];
+};
+
 interface FakeState {
-  items: Array<typeof DEMO_MCP_ITEM & { connector?: string }>;
+  items: FakeItem[];
   mcpListShouldFail: boolean;
   /** R-69 fixture: when set, the fake MCP server answers every method — `tools/list` included —
    *  with 401 unless the request carries `Authorization: Bearer <this>`. */
@@ -90,6 +104,13 @@ function makeFetch(state: FakeState): typeof fetch {
       const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
       state.announcements.push({ url, body });
       return new Response(JSON.stringify({ ok: true, result: {} }), { status: 200 });
+    }
+
+    if (url === 'http://ragflow.test/api/v1/datasets' && method === 'GET') {
+      return new Response(JSON.stringify({ code: 0, data: [{ id: 'kb-1', name: 'Handbook' }] }), {
+        status: 200,
+        headers: { 'x-recorded-authorization': headers.authorization ?? '' },
+      });
     }
 
     if (url === 'http://mcp.test/' && method === 'POST') {
@@ -778,6 +799,171 @@ describe('createGateHost (P-B2a)', () => {
       });
       expect(resp.statusCode).toBe(404);
       expect(resp.json().error.code).toBe('gate_not_found');
+    });
+  });
+  describe('S11 P1-F: an instance made from a connector preset', () => {
+    const KB_LIST = {
+      name: 'kb.list',
+      description: 'List the knowledge bases.',
+      binding: { kind: 'http', method: 'GET', path: '/api/v1/datasets' },
+      params_schema: { type: 'object', properties: {}, additionalProperties: false },
+      mode: 'observe',
+      blast_radius: 'low',
+      reversibility: false,
+      auto_approvable: true,
+      await_decision: false,
+      reads: ['KnowledgeBase'],
+      writes: [],
+    };
+    const PARSE = {
+      name: 'document.parse',
+      description: 'Parse documents into chunks.',
+      binding: { kind: 'http', method: 'POST', path: '/api/v1/datasets/{dataset_id}/chunks' },
+      params_schema: {
+        type: 'object',
+        properties: { dataset_id: { type: 'string', minLength: 1 } },
+        required: ['dataset_id'],
+        additionalProperties: false,
+      },
+      mode: 'execute',
+      blast_radius: 'low',
+      reversibility: false,
+      auto_approvable: true,
+      await_decision: true,
+      reads: ['Document'],
+      writes: ['Document'],
+    };
+    const PRESET_ITEM: FakeItem = {
+      gateId: 'kb',
+      displayName: 'Knowledge',
+      status: 'enabled',
+      connector: 'ragflow',
+      definition: {
+        transportKind: 'http',
+        target: 'http://ragflow.test',
+        credentialMode: 'shared',
+        manifestSource: null,
+        preset: 'ragflow',
+      },
+      operations: [KB_LIST],
+    };
+
+    function targetCalls(): Array<{ url: string; init: RequestInit }> {
+      return calls.filter((call) => call.url.startsWith('http://ragflow.test'));
+    }
+
+    async function storeSharedKey(secret: string): Promise<void> {
+      const { token } = await mintGateHostToken({
+        privateKey,
+        gateId: 'kb',
+        onBehalfOf: GATE_SHARED_CREDENTIAL_SLOT,
+        subject: 'admin-1',
+      });
+      const stored = await (host as GateHost).app.inject({
+        method: 'POST',
+        url: '/i/kb/gate/connected-accounts',
+        headers: { authorization: `Bearer ${token}` },
+        payload: { onBehalfOf: GATE_SHARED_CREDENTIAL_SLOT, credential: { token: secret } },
+      });
+      expect(stored.statusCode).toBe(200);
+    }
+
+    async function observeKbList(): Promise<string> {
+      const before = targetCalls().length;
+      const observed = await (host as GateHost).app.inject({
+        method: 'POST',
+        url: '/i/kb/gate/observe',
+        headers: { authorization: `Bearer ${GATE_TOKEN}` },
+        payload: {
+          operation: 'kb.list',
+          params: {},
+          operationDigest: await announcedDigest(host as GateHost, 'kb', 'kb.list'),
+        },
+      });
+      expect(observed.statusCode).toBe(200);
+      const call = targetCalls()[before];
+      return (call?.init.headers as Record<string, string>).authorization ?? '';
+    }
+
+    it('is built from the Operations the kernel lists with it, without asking the target, and announced under the preset connector', async () => {
+      state.items = [PRESET_ITEM];
+      host = await createGateHost({ env, fetchImpl: recordingFetch(state, calls), listen: false });
+
+      expect(await host.tick()).toBe(true);
+      expect(host.instances()).toEqual([{ gateId: 'kb', ready: true, operationCount: 1 }]);
+      expect(targetCalls()).toHaveLength(0);
+      const announced = state.announcements.at(-1)?.body;
+      expect(announced).toMatchObject({
+        gateId: 'kb',
+        connector: 'ragflow',
+        transportKind: 'http',
+        target: 'http://ragflow.test',
+      });
+      expect((announced?.operations as Array<{ name: string }>).map((op) => op.name)).toEqual([
+        'kb.list',
+      ]);
+
+      await storeSharedKey('rag-key-1');
+      expect(await observeKbList()).toBe('Bearer rag-key-1');
+    });
+
+    it('changed preset Operations rebuild the instance and re-announce them, keeping its credential', async () => {
+      state.items = [PRESET_ITEM];
+      host = await createGateHost({ env, fetchImpl: recordingFetch(state, calls), listen: false });
+      await host.tick();
+      await storeSharedKey('rag-key-2');
+      const announcedBefore = state.announcements.length;
+
+      state.items = [{ ...PRESET_ITEM, operations: [KB_LIST, PARSE] }];
+      expect(await host.tick()).toBe(true);
+      expect(host.instances()).toEqual([{ gateId: 'kb', ready: true, operationCount: 2 }]);
+      const announced = state.announcements.slice(announcedBefore);
+      expect(
+        (announced.at(-1)?.body.operations as Array<{ name: string }>).map((op) => op.name),
+      ).toEqual(['kb.list', 'document.parse']);
+
+      const accountStore = new ConnectedAccountStore({
+        dataDir: join(dir, 'data', 'kb'),
+        keyFilePath: join(dir, 'store.key'),
+      });
+      expect(await accountStore.get(GATE_SHARED_CREDENTIAL_SLOT)).toEqual({ token: 'rag-key-2' });
+      expect(await observeKbList()).toBe('Bearer rag-key-2');
+
+      // Unchanged on the next pull: no rebuild, the same Operations announced again.
+      const toldBefore = state.announcements.length;
+      expect(await host.tick()).toBe(true);
+      expect(host.instances()).toEqual([{ gateId: 'kb', ready: true, operationCount: 2 }]);
+      expect(state.announcements.length).toBe(toldBefore + 1);
+    });
+
+    it('listed without Operations (a version that no longer ships the preset): never built from nothing, and a built one is kept', async () => {
+      const lines: string[] = [];
+      state.items = [{ ...PRESET_ITEM, operations: undefined }];
+      host = await createGateHost({
+        env,
+        fetchImpl: recordingFetch(state, calls),
+        listen: false,
+        log: (line) => lines.push(line),
+      });
+
+      expect(await host.tick()).toBe(true);
+      const [unbuilt] = host.instances();
+      expect(unbuilt).toMatchObject({ gateId: 'kb', ready: false, operationCount: 0 });
+      expect(unbuilt?.buildError).toMatch(/no Operations for preset "ragflow"/);
+      expect(state.announcements).toHaveLength(0);
+      expect(targetCalls()).toHaveLength(0);
+
+      state.items = [PRESET_ITEM];
+      expect(await host.tick()).toBe(true);
+      expect(host.instances()).toEqual([{ gateId: 'kb', ready: true, operationCount: 1 }]);
+
+      state.items = [{ ...PRESET_ITEM, operations: undefined }];
+      const announcedBefore = state.announcements.length;
+      expect(await host.tick()).toBe(true);
+      const [kept] = host.instances();
+      expect(kept).toMatchObject({ gateId: 'kb', ready: true, operationCount: 1 });
+      expect(kept?.buildError).toMatch(/no Operations for preset "ragflow"/);
+      expect(state.announcements).toHaveLength(announcedBefore);
     });
   });
 });

@@ -663,3 +663,35 @@ docker compose exec gate-host node -e "fetch('http://127.0.0.1:8083/healthz').th
   Handle 校验，真 Handle 在宿主这边也过不了（两条都有单测）。
 - 宿主只从 JWT 拿写入槽位，请求体里的 `onBehalfOf` 被忽略；`__shared__` 不是 UUID，撞不上任何 Principal。
 - 内核既不知道宿主地址也没有到宿主的凭证：定义是宿主拉的，心跳是宿主发的，与打包门完全一致。
+
+### 14.4 按预设接入（S11 P1-F：RAGFlow）
+
+平台随内核镜像带一组**接入预设**（仓库根 `connectors/<名字>/`，镜像里是 `/app/connectors`，内核读
+`CONNECTOR_PRESETS_DIR`）：每个预设固定一个系统的传输种类、凭证模式、整理好分类的 Operation 和接入包名，
+不含地址也不含凭证。第一个是 `ragflow`：打包门 `gatekeepers/ragflow/manifest.json` 去掉 `document.upload`
+（multipart，通用 http 传输发不了）后的四个 Operation，`gatekeepers/ragflow/src/manifest.test.ts` 保证两者
+一致。预设是平台目录数据，不是能力包组件。
+
+1. **平台 · 集成 → 门实例 → 新建门宿主实例 →「接入什么」选 RAGFlow**（能力包详情里「需要平台接入」的
+   `ragflow` 行对平台管理员直接给出这条链接）。只填 RAGFlow 的访问地址（不带 `/api/v1`）；名称默认
+   「RAGFlow」，门 ID 默认 `ragflow`（已有实例时 `ragflow-2`……）。实例归到接入包 `ragflow`，新建即
+   平台预置。表单先列出四个 Operation 和要准备的凭证。
+2. 宿主下一轮拉定义时，Operation 随定义一起下发（`GET /internal/gate-host/instances` 的 `operations`），
+   **不访问目标**就建成并 announce——所以地址填错也会先「接管」，`test_gate_instance` / 第一次调用才会
+   暴露连不上。
+3. 之后同 §14.2 的 3–4 步：详情抽屉录入共享凭证（RAGFlow 的 API key，`Authorization: Bearer`）→ 启用 →
+   工作区从平台目录一键启用。
+
+与打包门的差别和边界：
+
+- 没有 `document.upload`；要上传文件仍用打包门（遗留：通用 http 传输的 multipart 绑定）。
+- 门宿主没有按实例的 `GATE_TLS_CA_FILE`：RAGFlow 用自签证书时，预设实例连不上，要么继续用打包门
+  （§11.1），要么在主机上给 `gate-host` 配信任（遗留：私有 CA 只能主机配）。
+- RAGFlow 的 `{code, data}` 应用层错误对门协议不可见，打包门同样如此（`gatekeepers/ragflow/README.md`）。
+- 打包门 `gatekeeper-ragflow` 已经 announce 过时，接入包 `ragflow` 属于它：预设显示「已由打包的门接入」，
+  按预设新建被拒 409 `connector_packaged`。打包门的退役要主机窗口，另记遗留。
+- 升级改了预设的 Operation：宿主下一轮拿到新的 Operation，**保留凭证**重建并重新 announce；内核把它挂成
+  「新清单待采用」（R-18），平台管理员在实例详情里确认之前，生效的仍是旧清单（定义变了的 Operation 按
+  遗留 K 先拒绝调用）。
+- 回滚只能整版回滚。旧版内核读不懂定义里的 `preset`，拉定义时不再列出预设实例，宿主会把它当作已删除、
+  清掉它的凭证目录：再升回来以后要重新录入 RAGFlow 的 API key。

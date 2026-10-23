@@ -68,6 +68,10 @@ COPY --from=build --chown=nexttime:nexttime /workspace/ontology ./ontology
 # same reason as ontology/ above; PACKS_DIR is its `resolvePacksDir`. The ontology components a
 # manifest names are read from ONTOLOGY_DIR.
 COPY --from=build --chown=nexttime:nexttime /workspace/packs ./packs
+# S11 P1-F: repo-root connectors/ (connector presets, `application/gates/presets.ts`) — the same
+# reason again; CONNECTOR_PRESETS_DIR is its `resolveConnectorPresetsDir`. The gate host reads a
+# preset instance's Operations from the kernel's pull, never from this directory.
+COPY --from=build --chown=nexttime:nexttime /workspace/connectors ./connectors
 # The pi version this release expects (the same repo-root file deploy/worker-runtime/Dockerfile
 # installs pi from) — the console's "pi 运行时" card compares it with the active runtime image's
 # own ai.nexttime.pi-version label (application/platform/runtime.ts `pi_drift`).
@@ -77,6 +81,7 @@ USER nexttime
 ENV NODE_ENV=production
 ENV ONTOLOGY_DIR=/app/ontology
 ENV PACKS_DIR=/app/packs
+ENV CONNECTOR_PRESETS_DIR=/app/connectors
 ENV PI_VERSION_FILE=/app/pi.version
 # Declared in this (runtime) stage, not at the top of the file: an ARG only lives in the stage
 # that declares it, and placing it after every COPY keeps a version bump from invalidating any

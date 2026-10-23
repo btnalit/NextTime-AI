@@ -82,4 +82,22 @@ describe('gatekeepers/ragflow manifest.json', () => {
     expect(kbDocs.result_mapping.object_type).toBe('Document');
     expect(kbDocs.result_mapping.identity_keys).toEqual(['id']);
   });
+  it('S11 P1-F: the platform connector preset carries the same Operations, all but document.upload', () => {
+    // `connectors/ragflow/` is the template a platform administrator creates a gate-host instance
+    // of RAGFlow from; the generic http transport cannot send `document.upload`'s multipart body.
+    const presetOperations = JSON.parse(
+      readFileSync(
+        path.resolve(
+          path.dirname(MANIFEST_PATH),
+          '..',
+          '..',
+          'connectors',
+          'ragflow',
+          'operations.json',
+        ),
+        'utf8',
+      ),
+    ) as unknown;
+    expect(presetOperations).toEqual(loadManifest().filter((op) => op.name !== 'document.upload'));
+  });
 });

@@ -1,10 +1,12 @@
 import {
   CONNECTOR_NAME_PATTERN,
+  type ConnectorPresetWire,
   type ConnectorWire,
   type GateInstanceWire,
   isGenericConnector,
 } from '@nexttime/shared';
 import { type FormEvent, useState } from 'react';
+import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { presentError } from '../../lib/errors.js';
 import {
@@ -25,12 +27,19 @@ import { Button } from '../ui/Button.js';
 import { Field, Input } from '../ui/Field.js';
 import { Notice } from '../ui/Notice.js';
 import { PlatformError } from './PlatformError.js';
+import { PresetGateInstanceForm } from './PresetGateInstanceForm.js';
 import { useConnectorsByName } from './integrations/connector-visibility.js';
 
 export interface CreateGateInstanceFormProps {
   readonly http: CapabilityCaller;
   readonly onCreated: (instance: GateInstanceWire) => void;
   readonly onCancel: () => void;
+  /** S11 P1-F: start on this connector preset (`hrefs.platformConnectorPreset`, a pack's 需要平台接入
+   *  system); otherwise the form starts on 其他系统. */
+  readonly initialPreset?: string;
+  /** The transport the reader already chose (the launcher's step 1): only presets of it are
+   *  offered. */
+  readonly transportKind?: TransportKind;
 }
 
 type TransportKind = 'http' | 'mcp';
@@ -110,8 +119,127 @@ function addressRefusalOf(err: unknown): AddressRefusal | null {
   return field === 'target' || field === 'manifestSource' ? { field, error: err } : null;
 }
 
+const ALL_PRESETS: Readonly<Record<string, unknown>> = {};
+
 /**
- * components/platform/CreateGateInstanceForm: `create_gate_instance` (P-B2a 决定 ⑥–⑬) — the
+ * components/platform/CreateGateInstanceForm: 新建门宿主实例 — where to start, then the form for
+ * it. S11 P1-F: a system this platform ships a connector preset for (`list_connector_presets`) is
+ * one choice each, above 其他系统 — its form (`PresetGateInstanceForm`) asks for the address only.
+ * With no preset (none shipped, none of this kind, or the list unreadable) the choice is not shown
+ * and the form is the one below, as before.
+ */
+export function CreateGateInstanceForm({
+  http,
+  onCreated,
+  onCancel,
+  initialPreset,
+  transportKind,
+}: CreateGateInstanceFormProps) {
+  const t = useT();
+  const list = useCapabilityList<ConnectorPresetWire>(http, 'list_connector_presets', ALL_PRESETS, {
+    autoLoadAll: true,
+  });
+  const presets =
+    list.state.status === 'ready'
+      ? list.state.data.items.filter(
+          (preset) => transportKind === undefined || preset.transportKind === transportKind,
+        )
+      : [];
+  /** The chosen preset's name; `null` is 其他系统. */
+  const [source, setSource] = useState<string | null>(initialPreset ?? null);
+  const preset = source === null ? undefined : presets.find((row) => row.name === source);
+  const waiting = source !== null && list.state.status === 'loading';
+  // A link to a preset this platform version does not ship (or one of another kind), or a preset
+  // list that cannot be read, falls back to 其他系统 and says so.
+  const fallbackNote =
+    source === null || waiting || preset !== undefined
+      ? null
+      : list.state.status === 'error'
+        ? t(
+            '读不到平台的接入预设，下面按其他系统填写。',
+            'Could not read the platform’s connector presets; fill in the form below as for any other system.',
+          )
+        : t(
+            `这个平台版本没有「${source}」的接入预设，下面按其他系统填写。`,
+            `This platform version ships no connector preset "${source}"; fill in the form below as for any other system.`,
+          );
+
+  return (
+    <div className="stack" data-testid="create-gate-instance">
+      {presets.length > 0 ? (
+        <fieldset className="field" style={{ border: 0, padding: 0, margin: 0 }}>
+          <legend className="field-label">{t('接入什么', 'What to connect')}</legend>
+          <div
+            className="radio-group"
+            role="radiogroup"
+            aria-label={t('接入什么', 'What to connect')}
+          >
+            {presets.map((row) => (
+              <label className="radio-option" key={row.name}>
+                <input
+                  type="radio"
+                  name="gateSource"
+                  value={row.name}
+                  checked={source === row.name}
+                  onChange={() => setSource(row.name)}
+                  data-testid={`cgi-source-preset-${row.name}`}
+                />
+                {row.packagedConnector
+                  ? t(
+                      `${row.displayName}（已由打包的门接入）`,
+                      `${row.displayName} (connected by a packaged gate)`,
+                    )
+                  : t(
+                      `${row.displayName} — 平台自带的预设，只填地址`,
+                      `${row.displayName} — a preset the platform ships; enter the address only`,
+                    )}
+              </label>
+            ))}
+            <label className="radio-option">
+              <input
+                type="radio"
+                name="gateSource"
+                value=""
+                checked={preset === undefined}
+                onChange={() => setSource(null)}
+                data-testid="cgi-source-custom"
+              />
+              {t(
+                '其他 http / mcp 系统 — 自己填目标和清单来源',
+                'Another http / mcp system — enter its target and manifest source',
+              )}
+            </label>
+          </div>
+        </fieldset>
+      ) : null}
+      {waiting ? (
+        <p className="text-3 text-small" style={{ margin: 0 }} data-testid="cgi-presets-loading">
+          {t('正在读取接入预设…', 'Reading the connector presets…')}
+        </p>
+      ) : preset ? (
+        <PresetGateInstanceForm
+          key={preset.name}
+          http={http}
+          preset={preset}
+          onCreated={onCreated}
+          onCancel={onCancel}
+        />
+      ) : (
+        <>
+          {fallbackNote !== null ? (
+            <Notice tone="warn" testId="cgi-preset-unknown">
+              {fallbackNote}
+            </Notice>
+          ) : null}
+          <CustomGateInstanceForm http={http} onCreated={onCreated} onCancel={onCancel} />
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The form for any other system: `create_gate_instance` (P-B2a 决定 ⑥–⑬) — the
  * administrator half of the generic门宿主 flow. Never takes a credential (design's own line: "the
  * kernel is never in that path") — a shared credential is entered afterwards from
  * `GateInstanceDetailPanel` (`issue_gate_host_token` + `GateCredentialEntry`), a per-member one
@@ -128,7 +256,11 @@ function addressRefusalOf(err: unknown): AddressRefusal | null {
  * manifest source the kernel refuses for carrying a credential is said on that field, with the
  * kernel's own text in the field's collapsed 「技术细节」.
  */
-export function CreateGateInstanceForm({ http, onCreated, onCancel }: CreateGateInstanceFormProps) {
+function CustomGateInstanceForm({
+  http,
+  onCreated,
+  onCancel,
+}: Pick<CreateGateInstanceFormProps, 'http' | 'onCreated' | 'onCancel'>) {
   const t = useT();
   const [gateIdInput, setGateIdInput] = useState('');
   /** `true` once the administrator typed into the gate-id field; leaving it empty (blur) resumes

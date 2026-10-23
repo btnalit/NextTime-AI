@@ -73,6 +73,17 @@ and (for the mapped operations) an empty `observedFacts` array — see
 `src/result-mapping.test.ts`'s "error response … produces no facts" case. A caller must inspect
 the raw `data.code`/`data.message` itself; the gate protocol does not surface it as an error.
 
+## Connector preset (S11 P1-F)
+
+`connectors/ragflow/` (repo root) is the same RAGFlow system as a **connector preset**: a platform
+administrator creates a generic gate-host instance from it on 平台 · 集成 by typing the address only,
+instead of running this container (`docs/runbooks/host-gatekeepers.md` §14.4). Its
+`operations.json` is this `manifest.json` without `document.upload` — the generic `HttpTransport`
+sends JSON bodies only, so the multipart upload stays with this gate — and `src/manifest.test.ts`
+fails when the two drift apart. Edit both together. The two cannot share the `ragflow` connector:
+while this gate has announced, the preset is shown as already connected and a preset instance is
+refused (`connector_packaged`).
+
 ## Credentials
 
 `SharedEnvCredentialResolver({name: 'RAGFLOW_API_KEY'})` reads the key from the file named by

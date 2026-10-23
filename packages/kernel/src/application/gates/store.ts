@@ -283,6 +283,30 @@ export async function listConnectors(client: PoolClient): Promise<ConnectorWire[
   return result.rows.map(toWireConnector);
 }
 
+/** S11 P1-F: for each of `names` that a connector carries, whether a packaged gate holds it and how
+ *  many gate instances it holds — what a connector preset of that name can still do here (a preset
+ *  instance never joins a packaged gate's connector, `fitConnector`). A name no connector carries is
+ *  absent: nothing holds it yet. Readable from every workspace transaction (core 0023). */
+export async function readConnectorOccupancy(
+  client: PoolClient,
+  names: readonly string[],
+): Promise<ReadonlyMap<string, { readonly packaged: boolean; readonly instanceCount: number }>> {
+  if (names.length === 0) return new Map();
+  const result = await client.query<{ name: string; packaged: boolean; instance_count: number }>(
+    `select c.name, c.packaged,
+            (select count(*)::int from gate_instances g where g.connector = c.name) as instance_count
+       from connectors c
+      where c.name = any($1::text[])`,
+    [names],
+  );
+  return new Map(
+    result.rows.map((row) => [
+      row.name,
+      { packaged: row.packaged, instanceCount: row.instance_count },
+    ]),
+  );
+}
+
 export async function getConnector(
   client: PoolClient,
   name: string,
@@ -848,6 +872,9 @@ export interface HostedGateDefinition {
   readonly connector: string;
   readonly status: GateInstanceStatus;
   readonly definition: GateHostedDefinitionWire;
+  /** S11 P1-F: for an instance made from a connector preset (`definition.preset`), the preset's
+   *  Operations the host builds it from (`presets.ts`'s `withPresetOperations`); absent otherwise. */
+  readonly operations?: readonly Operation[];
 }
 
 /** Why `createHostedGateInstance` wrote nothing: the `gate_id` is taken, or the connector does not

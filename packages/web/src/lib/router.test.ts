@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { type Route, hrefs, readIntegrationsTab, routeFromHash, sectionOf } from './router.js';
+import {
+  type Route,
+  hrefs,
+  readConnectorPresetLink,
+  readIntegrationsTab,
+  routeFromHash,
+  sectionOf,
+} from './router.js';
 
 describe('routeFromHash', () => {
   it('parses every S3.14 route, including optional trailing segments', () => {
@@ -118,6 +125,18 @@ describe('readIntegrationsTab (legacy 380)', () => {
     expect(hrefs.platformIntegrationsTab('connectors')).toBe(hrefs.platformIntegrations());
     expect(readIntegrationsTab(hrefs.platformIntegrations())).toBeNull();
     expect(readIntegrationsTab('#/platform/integrations?tab=bogus')).toBeNull();
+  });
+});
+
+describe('readConnectorPresetLink (S11 P1-F)', () => {
+  it('reads the preset hrefs.platformConnectorPreset names, on the instances tab', () => {
+    const href = hrefs.platformConnectorPreset('ragflow');
+    expect(href).toBe('#/platform/integrations?tab=instances&preset=ragflow');
+    expect(readConnectorPresetLink(href)).toBe('ragflow');
+    expect(readIntegrationsTab(href)).toBe('instances');
+    expect(routeFromHash(href)).toEqual({ kind: 'platformIntegrations' });
+    expect(readConnectorPresetLink(hrefs.platformIntegrationsTab('instances'))).toBeNull();
+    expect(readConnectorPresetLink('#/platform/integrations?tab=instances&preset=')).toBeNull();
   });
 });
 

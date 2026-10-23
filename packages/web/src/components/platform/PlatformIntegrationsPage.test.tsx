@@ -932,6 +932,41 @@ describe('PlatformIntegrationsPage', () => {
     expect(within(detail).getByTestId('gate-instance-hosted-tag')).toBeTruthy();
   });
 
+  it('S11 P1-F: a link to a connector preset opens 新建门宿主实例 on it, once — the query is dropped', async () => {
+    window.location.hash = '#/platform/integrations?tab=instances&preset=ragflow';
+    const http = scriptedHttp({
+      list_gate_instances: () => ({ items: [] }),
+      list_connectors: () => ({ items: [] }),
+      list_connector_presets: () => ({
+        items: [
+          {
+            name: 'ragflow',
+            displayName: 'RAGFlow',
+            summary: '知识库检索。',
+            transportKind: 'http',
+            credentialMode: 'shared',
+            targetHint: 'RAGFlow 的访问地址。',
+            credentialHint: 'RAGFlow 的 API key。',
+            operations: [],
+            packagedConnector: false,
+            instanceCount: 0,
+          },
+        ],
+      }),
+    });
+    renderPage(http);
+
+    const drawer = await screen.findByTestId('create-gate-instance-drawer');
+    expect(await within(drawer).findByTestId('preset-gate-instance-form')).toBeTruthy();
+    expect(
+      (within(drawer).getByTestId('cgi-source-preset-ragflow') as HTMLInputElement).checked,
+    ).toBe(true);
+    expect(screen.getByTestId('integrations-tab-instances').getAttribute('aria-selected')).toBe(
+      'true',
+    );
+    expect(window.location.hash).toBe('#/platform/integrations?tab=instances');
+  });
+
   it('hosted instance detail: shared credential mode shows the token button, connected_account does not', async () => {
     const shared = hostedGateInstance();
     const perMember = hostedGateInstance({
