@@ -35,6 +35,11 @@ const ENTRY_CEILING_EXTRA_CAPABILITY_NAMES: readonly CapabilityName[] = [
   'list_allowed_operations',
   'report_task_result',
   'observe_operation',
+  // S11 GO5c: the goals the Handle's person requested (`propose_goal` joins by its prefix).
+  'get_goal',
+  'list_goals',
+  'get_goal_revision',
+  'list_goal_unresolved_actions',
 ];
 
 export function entryCeilingCapabilities(): readonly Capability[] {

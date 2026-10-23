@@ -1,5 +1,6 @@
 import {
   GoalBudgetSchema,
+  GoalPlanSchema,
   MAX_REVISION_REASON_CHARS,
   StepRemovalsSchema,
   type StepRunStatus,
@@ -9,10 +10,19 @@ import {
   lockWithdrawableStepActions,
   withdrawStepActions,
 } from '../../governance/approval/index.js';
-import { refuseCredentialText } from '../../governance/redaction/index.js';
+import { refuseCredentialText, refuseRedactedText } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { moveStepRun } from './moves.js';
-import { type GoalPlan, type PlanHint, planHints, samePlanEntry, validatePlan } from './plan.js';
+import {
+  type GoalPlan,
+  type PlanHint,
+  planHints,
+  planShape,
+  reviewRevisedPlan,
+  samePlanEntry,
+  validatePlan,
+} from './plan.js';
+import { planAuthorityHints } from './precheck.js';
 import { getPlanRevision, lockStepRuns } from './reads.js';
 import {
   GoalRunForbiddenError,
@@ -84,7 +94,8 @@ export interface RevisedGoalRun {
   readonly createdStepRunIds: readonly string[];
   readonly withdrawnActionRequestIds: readonly string[];
   readonly releasedActionRequestIds: readonly string[];
-  /** What the requester should know about the revised plan ({@link planHints}). */
+  /** What the requester should know about the revised plan ({@link planHints}), and what their
+   *  authority would stop now (`planAuthorityHints`, S11 GO5c). */
   readonly hints: readonly PlanHint[];
 }
 
@@ -128,8 +139,20 @@ export async function reviseGoalRun(
       `a revision reason is at most ${MAX_REVISION_REASON_LENGTH} characters`,
     );
   }
-  // S11 GO5b (review #493 on #680): the reason is kept and read back as written.
+  // S11 GO5b (review #493 on #680): the reason is kept and read back as written. S11 GO5c: so is
+  // the plan — neither may carry what a read masks, nor the mark a read left in a copy of it (an
+  // editor opened on a masked read, GO6). An entry of the plan left as the read showed it is not a
+  // copy but the entry itself: it keeps what is stored, and only the entries changed are checked
+  // (`reviewRevisedPlan`).
+  refuseRedactedText('reason', input.reason);
   refuseCredentialText('reason', input.reason);
+  const currentRow = await getPlanRevision(client, workspaceId, goal.id, current);
+  if (!currentRow) throw new Error(`reviseGoalRun: current revision ${current} is unreadable`);
+  const stored = GoalPlanSchema.safeParse(currentRow.plan);
+  if (!stored.success) {
+    throw new Error(`reviseGoalRun: the plan of current revision ${current} no longer parses`);
+  }
+  const submitted = reviewRevisedPlan(planShape(input.plan), stored.data);
   const budget = parseBudget(input.budget) ?? goal.budget;
   const accepted = await client.query<{ accepted: number; next: number }>(
     `select count(*) filter (where status = 'accepted')::int as accepted,
@@ -146,12 +169,15 @@ export async function reviseGoalRun(
     );
   }
   const revision = counts.next;
-  const plan = await validatePlan(client, workspaceId, input.plan);
-  const currentRow = await getPlanRevision(client, workspaceId, goal.id, current);
-  if (!currentRow) throw new Error(`reviseGoalRun: current revision ${current} is unreadable`);
+  const plan = await validatePlan(client, workspaceId, submitted);
 
   const steps = await lockStepRuns(client, workspaceId, goal.id);
   const { superseded, kept } = await splitSteps(client, workspaceId, goal.id, steps, plan);
+  const endedKeys = new Set(
+    steps
+      .filter((step) => kept.has(step.stepKey) && ENDED_STEP_STATUSES.has(step.status))
+      .map((step) => step.stepKey),
+  );
   const removals = parseRemovals(input.removals, superseded);
   const releases = await lockReleases(client, workspaceId, superseded, removals);
 
@@ -295,7 +321,16 @@ export async function reviseGoalRun(
     createdStepRunIds: created,
     withdrawnActionRequestIds: withdrawn,
     releasedActionRequestIds: released,
-    hints: planHints(plan),
+    // S11 GO5c: and what the requester's authority would stop now — a step still to start that
+    // would not pauses the run when it gets there (`precheck.ts`); a kept step that ended never
+    // starts again.
+    hints: [
+      ...planHints(plan),
+      ...(await planAuthorityHints(client, workspaceId, goal.onBehalfOf, {
+        ...plan,
+        steps: plan.steps.filter((entry) => !endedKeys.has(entry.key)),
+      })),
+    ],
   };
 }
 

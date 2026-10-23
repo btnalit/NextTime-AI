@@ -8,7 +8,9 @@ import { formatDateTime, formatRelative, shortId } from '../../lib/format.js';
 import {
   checkErrorLabel,
   checkKindLabel,
+  isStepAuthorityHint,
   planCheckSentence,
+  planHintKey,
   planHintText,
   roundCheckSentence,
 } from '../../lib/goals.js';
@@ -40,11 +42,15 @@ export function GoalAcceptanceSection({ detail, gateNames }: GoalAcceptanceSecti
   return (
     <DashboardCard title={t('验收', 'Acceptance')} data-testid="goal-acceptance">
       <div className="stack">
-        {detail.planRevision.hints.map((hint) => (
-          <Notice key={hint.code} tone="warn" testId="goal-plan-hint">
-            {planHintText(hint, t)}
-          </Notice>
-        ))}
+        {/* What the plan's checks leave to the requester's word; hints about a step's authority
+            (S11 GO5c) are the steps card's. */}
+        {detail.planRevision.hints
+          .filter((hint) => !isStepAuthorityHint(hint))
+          .map((hint) => (
+            <Notice key={planHintKey(hint)} tone="warn" testId="goal-plan-hint">
+              {planHintText(hint, t, gateNames)}
+            </Notice>
+          ))}
         {overridden.length > 0 ? (
           <Notice tone="warn" testId="goal-overridden-checks">
             <div className="stack-s">

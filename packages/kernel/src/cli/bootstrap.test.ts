@@ -679,6 +679,30 @@ describe.runIf(DATABASE_URL !== undefined)('createWorkspace (integration, real P
         expect(principalRow.rows[0]?.display_name).toBe('host-inventory-test');
       });
 
+      it('refuses a capability made only for a person (S11 GO5c: propose_goal) and opens nothing', async () => {
+        const owner = await createWorkspace(
+          pool,
+          'bootstrap-test-workspace-issue-service-handle-person-only',
+          'Alice',
+        );
+        await expect(
+          issueServiceHandleFromCli(pool, {
+            workspaceId: owner.workspaceId,
+            name: 'goal-proposer-test',
+            scope: ['search', 'propose_goal'],
+          }),
+        ).rejects.toThrow(/propose_goal is made only for a person/);
+        const principals = await withWorkspace(
+          pool,
+          { workspaceId: owner.workspaceId, principalId: owner.ownerPrincipalId },
+          (client) =>
+            client.query("select 1 from principals where workspace_id = $1 and kind = 'service'", [
+              owner.workspaceId,
+            ]),
+        );
+        expect(principals.rowCount).toBe(0);
+      });
+
       it('re-running with the same --name reuses the same service Principal (a fresh Session/Handle each time)', async () => {
         const owner = await createWorkspace(
           pool,

@@ -1,4 +1,4 @@
-import type { Capability } from '@nexttime/shared';
+import type { Capability, PrincipalKind } from '@nexttime/shared';
 import { roleMayUseCapability, roleSatisfiesMinRole } from '../../governance/capability/index.js';
 import type { ResolvedCaller } from './caller.js';
 
@@ -51,6 +51,18 @@ export class ForbiddenError extends Error {
   }
 }
 
+/**
+ * S11 GO5c (`Capability.actsForPerson`): refuses a call made for a Principal that is not a person.
+ * The human channel checks it in {@link authorizeCapabilityCall} (the caller's row is in hand); the
+ * handle channel in `dispatch.ts`, which reads the `obo`'s kind — a Handle's claims carry none.
+ */
+export function assertActsForPerson(capability: Capability, kind: PrincipalKind | undefined): void {
+  if (!capability.actsForPerson || kind === 'human') return;
+  throw new ForbiddenError(
+    `capability "${capability.name}" is made only for a person, and this call is for ${kind === undefined ? 'no known Principal' : `a ${kind} Principal`}`,
+  );
+}
+
 /** Re-exported from governance (`governance/capability/roles.ts`, W5.5) so existing importers and
  *  `authorize.test.ts` keep working; the rule itself now lives one layer down because Handle
  *  issuance applies it too (see `authorizeCapabilityCall`'s doc comment). */
@@ -73,7 +85,8 @@ export { roleSatisfiesMinRole };
  * principals row, and part of its cache-freshness key), `issue-handle-handler.ts` (from the
  * calling Principal) and, since review 2026-10-02 R-36, `service-handle-handler.ts` (the service
  * Principal's own role filters the requested capability list; the operator CLI's
- * `issue-service-handle` is the one issuer that does not). `computeChildHandleScope` (application/task/handle-mint.ts) intersects a
+ * `issue-service-handle` is the one issuer that does not, though it refuses an `actsForPerson`
+ * capability, S11 GO5c). `computeChildHandleScope` (application/task/handle-mint.ts) intersects a
  * Worker's scope with its parent's, so a `member`'s Workers inherit the same narrowing. A
  * `set_principal_role` change revokes the principal's entry-session Handles so the narrowing (or
  * widening) takes effect on the next Turn rather than at ttl. `authorize.test.ts`'s "does not
@@ -119,4 +132,5 @@ export function authorizeCapabilityCall(caller: ResolvedCaller, capability: Capa
         : `principal role "${caller.principal.role}" does not satisfy capability "${capability.name}"'s minRole "${capability.minRole}"`,
     );
   }
+  assertActsForPerson(capability, caller.principal.kind);
 }

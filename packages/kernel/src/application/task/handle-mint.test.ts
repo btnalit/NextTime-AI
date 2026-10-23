@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { CapabilityScope } from '@nexttime/shared';
+import { CAPABILITY_REGISTRY, type CapabilityScope } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -323,6 +323,43 @@ describe('computeChildHandleScope', () => {
     for (const capability of scope.capabilities) {
       expect(WORKER_CEILING_CAPABILITIES).toContain(capability);
     }
+  });
+
+  // S11 GO5c (plan §4.4): the entry agent proposes goals and reads its person's; a Worker does
+  // neither — a step's Worker that could propose goals would start teams outside the advancer.
+  describe('goals: entry only (GO5c)', () => {
+    const goalCapabilities = CAPABILITY_REGISTRY.filter((c) => c.group === 'goal').map(
+      (c) => c.name,
+    );
+    const entryGoalNames = [
+      'propose_goal',
+      'get_goal',
+      'list_goals',
+      'get_goal_revision',
+      'list_goal_unresolved_actions',
+    ];
+
+    it("a member's entry Handle holds propose_goal and the four goal reads, and no goal operation", () => {
+      const entry = entryScope({}, { role: 'member' });
+      expect(goalCapabilities.filter((name) => entry.capabilities.includes(name)).sort()).toEqual(
+        [...entryGoalNames].sort(),
+      );
+    });
+
+    it('the Worker ceiling holds no goal capability, and a definition declaring one gets none', () => {
+      expect(goalCapabilities.filter((name) => WORKER_CEILING_CAPABILITIES.includes(name))).toEqual(
+        [],
+      );
+      const child = computeChildHandleScope({
+        parentAuthority: entryScope({}, { role: 'member' }),
+        declaredCapabilities: ['get_object', ...entryGoalNames],
+        declaredGates: [],
+      });
+      for (const name of goalCapabilities) {
+        expect(child.capabilities).not.toContain(name);
+      }
+      expect(child.capabilities).toContain('get_object');
+    });
   });
 });
 

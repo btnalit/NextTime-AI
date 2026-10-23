@@ -17,6 +17,7 @@ import {
   countSuspectedSecrets,
   credentialReviewAudit,
   scrubSecretValues,
+  shownFreeText,
 } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
@@ -285,6 +286,21 @@ export const updateOperationDescriptionHandler: CapabilityHandler = async (
     description,
     actor,
   });
+  // S11 GO5c: the description sent back as read — nothing changed, so no change is audited (the
+  // call itself is, by dispatch), and the result is the description as read, never what a read
+  // masks in it.
+  const shown = {
+    gatekeeperId: record.gatekeeperId,
+    name: record.name,
+    description: shownFreeText(record.operation.description ?? ''),
+  };
+  if (!record.changed) {
+    return {
+      result: shown,
+      resourceType: 'operation',
+      resourceId: `${record.gatekeeperId}:${record.name}`,
+    };
+  }
 
   await writeAudit(client, {
     workspaceId,
@@ -307,11 +323,7 @@ export const updateOperationDescriptionHandler: CapabilityHandler = async (
   });
 
   return {
-    result: {
-      gatekeeperId: record.gatekeeperId,
-      name: record.name,
-      description: record.operation.description ?? '',
-    },
+    result: shown,
     resourceType: 'operation',
     resourceId: `${record.gatekeeperId}:${record.name}`,
   };

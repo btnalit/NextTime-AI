@@ -57,7 +57,9 @@ export {
   type CreateStepAttemptResult,
   type PreparedStepAttempt,
   type StepAttemptRefusal,
+  type StepAuthority,
   createStepAttemptTask,
+  resolveStepAuthority,
   startStepAttemptTask,
 } from './step-attempt.js';
 

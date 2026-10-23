@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { Capability } from '@nexttime/shared';
+import type { Capability, PrincipalKind } from '@nexttime/shared';
 import {
   UnstorableTextError,
   findUnstorableText,
@@ -14,7 +14,7 @@ import { ActionInDoubtError } from '../../governance/approval/index.js';
 import { quotedName, redactSuspectedSecrets } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { GoalStepClosedError } from '../task/index.js';
-import { ForbiddenError, authorizeCapabilityCall } from './authorize.js';
+import { ForbiddenError, assertActsForPerson, authorizeCapabilityCall } from './authorize.js';
 import { CAPABILITY_HANDLERS } from './handlers.js';
 import { UnknownOperationError } from './request-action-handler.js';
 import type { ResolvedCaller } from './resolve-caller.js';
@@ -546,6 +546,16 @@ export async function dispatchCapability(
       );
       if (workspaceRow.rows[0]?.status !== 'active') {
         throw new ForbiddenError('workspace_disabled: this workspace is disabled');
+      }
+      // S11 GO5c: a capability made only for a person, on a Handle — whoever the Handle acts for
+      // must be one (a service Handle's `obo` is the service Principal itself). The human channel
+      // checked the caller's own kind in `authorizeCapabilityCall`.
+      if (capability.actsForPerson && caller.channel === 'handle') {
+        const obo = await client.query<{ kind: PrincipalKind }>(
+          'select kind from principals where workspace_id = $1 and id = $2',
+          [workspaceId, principalId],
+        );
+        assertActsForPerson(capability, obo.rows[0]?.kind);
       }
       const result = await handler(client, workspaceId, parsed.data, {
         channel: caller.channel,

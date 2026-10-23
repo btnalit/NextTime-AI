@@ -81,8 +81,12 @@ describe('judgeFinishedAttempt', () => {
 
 describe('refusalPause', () => {
   it('maps why an attempt could not start to why the goal pauses', () => {
-    expect(refusalPause({ kind: 'authority_lost', detail: 'x' })).toBe('authority_lost');
-    expect(refusalPause({ kind: 'unavailable', detail: 'x' })).toBe('needs_decision');
+    expect(refusalPause({ kind: 'authority_lost', reason: 'gates', detail: 'x' })).toBe(
+      'authority_lost',
+    );
+    expect(refusalPause({ kind: 'unavailable', reason: 'definition', detail: 'x' })).toBe(
+      'needs_decision',
+    );
     expect(refusalPause({ kind: 'quota', code: 'concurrency_exceeded', detail: 'x' })).toBeNull();
     expect(refusalPause({ kind: 'quota', code: 'daily_cost_exceeded', detail: 'x' })).toBe(
       'budget_exhausted',
