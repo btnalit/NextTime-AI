@@ -1,5 +1,8 @@
 import type {
   ObjectiveOutcomeWire,
+  OutputSchema,
+  RejectedOutputWire,
+  ReworkOfWire,
   SkillLoadWire,
   TaskStatus,
   TurnAttributionWire,
@@ -51,6 +54,12 @@ export interface TaskSummary {
   readonly turnId?: string | null;
   readonly turn?: TurnAttributionWire | null;
   readonly objectiveOutcome?: ObjectiveOutcomeWire | null;
+  /** S11 GO5d-1, for an attempt of a goal step: the output schema its result's `output` is held
+   *  to, the last report that contract refused, and the earlier attempt this one redoes (one that
+   *  ended without an accepted result). `null` = none; absent from a kernel that predates GO5d-1. */
+  readonly outputSchema?: OutputSchema | null;
+  readonly rejectedOutput?: RejectedOutputWire | null;
+  readonly reworkOf?: ReworkOfWire | null;
 }
 
 /** `list_worker_definitions` row (`toWireWorkerDefinition`, handlers.ts) — only what the Tasks

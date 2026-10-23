@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { OperationSchema } from './action-description.js';
 import { HUMAN_ATTESTATION_EVIDENCE_KIND } from './enums.js';
+import { OUTPUT_MAX_CHARS, isOutputJsonValue } from './output-schema.js';
 import { ProposeSkillContentSchema } from './skill.js';
 
 /**
@@ -136,6 +137,18 @@ export const WorkerResultProposedOperationSchema = z
   .strict();
 export type WorkerResultProposedOperation = z.infer<typeof WorkerResultProposedOperationSchema>;
 
+/** S11 GO5d-1 (plan §4.5): the structured result of a goal step — a JSON object, at most
+ *  {@link OUTPUT_MAX_CHARS} characters as JSON. A step that declares an `outputSchema` is held to
+ *  it when the result is reported (`report_task_result` refuses one that does not match, naming
+ *  each place), and the steps after it read it through their bindings; outside a goal step it is
+ *  kept with the result as sent. */
+export const WorkerResultOutputSchema = z
+  .record(z.string(), z.unknown())
+  .refine((output) => isOutputJsonValue(output), { message: 'must be plain JSON' })
+  .refine((output) => JSON.stringify(output).length <= OUTPUT_MAX_CHARS, {
+    message: `is longer than ${OUTPUT_MAX_CHARS} characters as JSON`,
+  });
+
 /**
  * The model-facing contract (`report_result` pi tool params). `proposedSkill` (S2.14) is
  * {@link ProposeSkillContentSchema} — the same shape `propose_skill` itself takes — rather than an
@@ -154,6 +167,7 @@ export const WorkerResultContractSchema = z
     artifacts: z.array(WorkerResultArtifactSchema).max(MAX_ARTIFACTS_PER_CONTRACT).optional(),
     proposedSkill: ProposeSkillContentSchema.optional(),
     proposedOperations: z.array(WorkerResultProposedOperationSchema).optional(),
+    output: WorkerResultOutputSchema.optional(),
   })
   .strict();
 export type WorkerResultContract = z.infer<typeof WorkerResultContractSchema>;

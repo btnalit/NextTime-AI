@@ -440,6 +440,19 @@ describe.runIf(DATABASE_URL !== undefined)(
       return task.id;
     }
 
+    /** S11 GO5d-1: each step's latest attempt ends without a result, the advance reworks it once,
+     *  and the rework ends without one too — the steps fail `contract_violation` for a person. */
+    async function failWithoutResultTwice(
+      goalRunId: string,
+      stepRunIds: readonly string[],
+      requesterId: string,
+    ) {
+      for (const id of stepRunIds) await failStep(id, requesterId, 'no_result');
+      await advance(goalRunId, requesterId);
+      for (const id of stepRunIds) await failStep(id, requesterId, 'no_result');
+      await advance(goalRunId, requesterId);
+    }
+
     /** An ActionRequest of the step, raised by `workerRunId`. */
     async function seedAction(
       stepRunId: string,
@@ -1359,11 +1372,52 @@ describe.runIf(DATABASE_URL !== undefined)(
         });
       });
 
-      it('a Worker that ends without a result, or a Task someone cancelled, needs a person', async () => {
+      it('legacy 358: a Worker that ends without a result is reworked once, then needs a person; a Task someone cancelled needs a person', async () => {
         const requester = await newPrincipal();
         const noResult = await startGoal(requester, [{ key: 'only' }]);
         await advance(noResult, requester);
-        await failStep(((await stepsOf(noResult)).only as StepRunRow).id, requester, 'no_result');
+        const only = (await stepsOf(noResult)).only as StepRunRow;
+        const firstTask = await failStep(only.id, requester, 'no_result');
+        // The rework starts at once — no backoff, no person — and says what it redoes.
+        const reworked = await advance(noResult, requester, {
+          retryBackoffMs: () => 60 * 60 * 1000,
+        });
+        expect(reworked).toMatchObject({ status: 'running' });
+        expect(reworked.startedTaskIds).toHaveLength(1);
+        expect((await stepsOf(noResult)).only).toMatchObject({
+          status: 'running',
+          attemptCount: 2,
+        });
+        const [, second] = await attemptTasks(only.id);
+        const contract = await admin((client) =>
+          client.query<{ rework_of: unknown; output_schema: unknown }>(
+            'select rework_of, output_schema from tasks where workspace_id = $1 and id = $2',
+            [workspaceId, second?.id],
+          ),
+        );
+        expect(contract.rows[0]).toEqual({
+          rework_of: { taskId: firstTask, attempt: 1, rejectedOutput: null },
+          output_schema: null,
+        });
+        // Both moves are written by the one advance's transaction, so they share `created_at`:
+        // read by action, not by time.
+        const moves = await admin(async (client) => {
+          const result = await client.query<{ action: string; payload: Record<string, unknown> }>(
+            `select action, payload from audit_records
+              where workspace_id = $1 and resource_id = $2
+                and action in ('step_run.fail', 'step_run.retry')
+              order by action`,
+            [workspaceId, only.id],
+          );
+          return result.rows;
+        });
+        expect(moves.map((row) => [row.action, row.payload])).toEqual([
+          ['step_run.fail', expect.objectContaining({ rework: true })],
+          ['step_run.retry', expect.objectContaining({ attempts: 1, rework: true })],
+        ]);
+
+        // The rework ends without a result too: a person, named as such.
+        await failStep(only.id, requester, 'no_result');
         await advance(noResult, requester);
         expect(await goalOf(noResult)).toMatchObject({
           status: 'paused',
@@ -1372,7 +1426,34 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect((await stepsOf(noResult)).only).toMatchObject({
           status: 'failed',
           failureCategory: 'contract_violation',
+          attemptCount: 2,
         });
+        expect(
+          (await goalAudit(noResult)).filter((row) => row.action === 'goal_run.pause').at(-1)
+            ?.payload,
+        ).toMatchObject({
+          detail:
+            'step only: attempt 2 ended without an accepted result again (contract_violation), after the step was reworked once — retry it (the Worker is told what was refused), revise the plan or cancel',
+        });
+
+        // A person's retry redoes it with what was refused; no second automatic rework after it.
+        await asRequester(requester, (client) =>
+          resumeGoalRun(client, workspaceId, {
+            goalRunId: noResult,
+            actor: { principalId: requester, role: 'member' },
+            retrySteps: ['only'],
+          }),
+        );
+        await advance(noResult, requester);
+        const third = (await attemptTasks(only.id))[2];
+        expect(third).toMatchObject({ step_attempt: 3 });
+        await failStep(only.id, requester, 'no_result');
+        await advance(noResult, requester);
+        expect(await goalOf(noResult)).toMatchObject({
+          status: 'paused',
+          pauseReason: 'needs_decision',
+        });
+        expect(await attemptTasks(only.id)).toHaveLength(3);
 
         const cancelled = await startGoal(requester, [{ key: 'only' }]);
         await advance(cancelled, requester);
@@ -1521,12 +1602,16 @@ describe.runIf(DATABASE_URL !== undefined)(
           pauseReason: 'needs_decision',
         });
 
-        // While paused, c's attempt fails: a new cause, noted once; b's is the pause's own.
-        await failStep(before.c?.id as string, requester, 'no_result');
+        // While paused, someone cancels c's Task: a new cause, noted once; b's is the pause's own.
+        const taskC = await latestAttempt(before.c?.id as string);
+        await raw(
+          "update tasks set status = 'cancelled', cancelled_at = now() where workspace_id = $1 and id = $2",
+          [workspaceId, taskC.id],
+        );
         for (let i = 0; i < 3; i += 1) await advance(goalRunId, requester);
         expect((await stepsOf(goalRunId)).c).toMatchObject({
           status: 'failed',
-          failureCategory: 'contract_violation',
+          failureCategory: 'transient',
         });
         const audit = await goalAudit(goalRunId);
         expect(audit.filter((row) => row.action === 'goal_run.pause')).toHaveLength(1);
@@ -1535,7 +1620,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         ).toEqual([
           expect.objectContaining({
             reason: 'needs_decision',
-            detail: 'step c: attempt 1 failed (contract_violation)',
+            detail: 'step c: attempt 1 failed (transient)',
           }),
         ]);
       });
@@ -1779,8 +1864,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         const first = await stepsOf(goalRunId);
         const stepA = first.a as StepRunRow;
         const stepB = first.b as StepRunRow;
-        await failStep(stepA.id, requester, 'no_result');
-        await advance(goalRunId, requester);
+        await failWithoutResultTwice(goalRunId, [stepA.id], requester);
         expect(await goalOf(goalRunId)).toMatchObject({
           status: 'paused',
           pauseReason: 'needs_decision',
@@ -1798,7 +1882,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             }),
           );
         const stuck =
-          'step a: attempt 1 failed (contract_violation) and is not retried on its own — retry it; or revise the plan or cancel';
+          'step a: attempt 2 failed (contract_violation) and is not retried on its own — retry it; or revise the plan or cancel';
         const lastPause = async () =>
           (await goalAudit(goalRunId)).filter((row) => row.action === 'goal_run.pause').at(-1)
             ?.payload;
@@ -1827,12 +1911,12 @@ describe.runIf(DATABASE_URL !== undefined)(
           nextTickAt: null,
         });
         expect(await lastPause()).toMatchObject({ detail: stuck });
-        expect(await attemptTasks(stepA.id)).toHaveLength(1);
+        expect(await attemptTasks(stepA.id)).toHaveLength(2);
 
         // Naming a: it runs again, and the run is not stuck while it does.
         expect(await resume(['a'])).toMatchObject({ retriedStepRunIds: [stepA.id] });
         expect(await advance(goalRunId, requester)).toMatchObject({ status: 'running' });
-        expect((await stepsOf(goalRunId)).a).toMatchObject({ status: 'running', attemptCount: 2 });
+        expect((await stepsOf(goalRunId)).a).toMatchObject({ status: 'running', attemptCount: 3 });
         await completeStep(stepA.id, requester);
         await advance(goalRunId, requester);
         expect((await stepsOf(goalRunId)).c?.status).toBe('running');
@@ -1843,9 +1927,11 @@ describe.runIf(DATABASE_URL !== undefined)(
         const goalRunId = await startGoal(requester, [{ key: 'x' }, { key: 'y' }]);
         await advance(goalRunId, requester);
         const steps = await stepsOf(goalRunId);
-        await failStep((steps.x as StepRunRow).id, requester, 'no_result');
-        await failStep((steps.y as StepRunRow).id, requester, 'no_result');
-        await advance(goalRunId, requester);
+        await failWithoutResultTwice(
+          goalRunId,
+          [(steps.x as StepRunRow).id, (steps.y as StepRunRow).id],
+          requester,
+        );
         expect((await goalOf(goalRunId)).pauseReason).toBe('needs_decision');
 
         await asRequester(requester, (client) =>
@@ -1858,7 +1944,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(pause).toMatchObject({
           reason: 'needs_decision',
           detail:
-            'step x: attempt 1 failed (contract_violation) and is not retried on its own — retry it; step y: attempt 1 failed (contract_violation) and is not retried on its own — retry it; or revise the plan or cancel',
+            'step x: attempt 2 failed (contract_violation) and is not retried on its own — retry it; step y: attempt 2 failed (contract_violation) and is not retried on its own — retry it; or revise the plan or cancel',
         });
       });
 

@@ -4,9 +4,12 @@ import {
   PREDICATE_EMPTY_PROBES,
   PREDICATE_REFUSAL_ANSWERS,
   type PredicateLintBudget,
+  bindingPathProblems,
+  bindingSchemaProblems,
   evaluatePredicate,
   lintPredicate,
   predicateRefusalProbes,
+  selectPath,
 } from './predicate.js';
 
 const outcome = (predicate: Predicate, data: unknown) => evaluatePredicate(predicate, data).outcome;
@@ -486,5 +489,61 @@ describe('substrate/epistemic predicate (S11 GO3d)', () => {
       ]);
       expect(budget.remaining).toBe(left);
     });
+  });
+});
+
+describe('binding paths (S11 GO5d-1)', () => {
+  it('bindingPathProblems: compiles, reads something, no reserved field — anchoring is not asked', () => {
+    for (const path of ['hosts[0]', '@', 'length(hosts)', '[0]', 'items[?ok].name', 'a || b']) {
+      expect(bindingPathProblems(path), path).toEqual([]);
+    }
+    expect(bindingPathProblems('`1`')).toEqual(['path "`1`" reads nothing from the output']);
+    expect(bindingPathProblems('a.constructor')).toEqual([
+      'path "a.constructor" goes through constructor',
+    ]);
+    expect(bindingPathProblems('a[')[0]).toMatch(/^path "a\[" is not a JMESPath expression/);
+  });
+
+  it('bindingSchemaProblems follows a plain path only as far as the schema says', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        hosts: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: { name: { type: 'string' } },
+            additionalProperties: false,
+          },
+        },
+        open: { type: 'object' },
+        any: {},
+      },
+      additionalProperties: false,
+    } as const;
+    expect(bindingSchemaProblems('hosts[0].name', schema)).toEqual([]);
+    expect(bindingSchemaProblems('open.x.y[3]', schema)).toEqual([]);
+    expect(bindingSchemaProblems('any[0].x', schema)).toEqual([]);
+    // Not a plain path: nothing claimed.
+    expect(bindingSchemaProblems('hosts[*].nope', schema)).toEqual([]);
+    expect(bindingSchemaProblems('hosts[0].nope', schema)).toEqual([
+      'path "hosts[0].nope": the output schema does not declare "nope" in hosts[0]',
+    ]);
+    expect(bindingSchemaProblems('missing', schema)).toEqual([
+      'path "missing": the output schema does not declare "missing" in the output',
+    ]);
+    expect(bindingSchemaProblems('hosts.name', schema)).toEqual([
+      'path "hosts.name": hosts is not an object in the output schema',
+    ]);
+  });
+
+  it('selectPath: a value, nothing (null is nothing), or the error a path raised on this data', () => {
+    expect(selectPath({ hosts: ['a', 'b'] }, 'hosts[1]')).toEqual({ found: true, value: 'b' });
+    expect(selectPath({ hosts: [] }, 'hosts[0]')).toEqual({ found: false, error: null });
+    expect(selectPath({ a: null }, 'a')).toEqual({ found: false, error: null });
+    expect(selectPath({ a: 0 }, 'a')).toEqual({ found: true, value: 0 });
+    const failed = selectPath({ a: 'x' }, 'length(a.b.c) > `1` && abs(a)');
+    expect(failed.found).toBe(false);
+    expect(failed.found === false && failed.error).toBeTruthy();
   });
 });

@@ -1657,6 +1657,18 @@
   border-radius: var(--radius-m);
 }
 
+/* S11 GO5d-1: where a refused report broke a step's output contract — a plain list of places,
+   set in under the attempt (or the Task section) it belongs to. */
+.output-problems {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 var(--space-3);
+}
+
+.goal-step-attempt-problems {
+  padding-left: var(--space-3);
+}
+
 /* S11 GO6 plan editor: each step being edited is a bordered block, as on the goal page; a choice's
    radio stays beside its text at any width. */
 .goal-plan-step {

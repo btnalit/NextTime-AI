@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { CapabilityScope } from '@nexttime/shared';
+import type { CapabilityScope, OutputSchema } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { withWorkspace } from '../../adapters/db/pool.js';
 import {
@@ -23,6 +23,7 @@ import {
 import type { RunConfigSnapshot } from './goal-step.js';
 import { computeChildHandleScope, defaultWorkerCapabilities } from './handle-mint.js';
 import { failTaskAndReapWorkerRuns } from './lifecycle.js';
+import type { ReworkOf } from './output-contract.js';
 import { assertTaskQuotas, lockTaskQuotas } from './quota-check.js';
 import type { TaskRuntimeDeps } from './runtime.js';
 import { type SpawnWorkerRunInput, spawnWorkerRun } from './spawn.js';
@@ -107,6 +108,11 @@ export interface CreateStepAttemptInput {
   readonly worker: { readonly definitionId: string; readonly version: number };
   readonly input: unknown;
   readonly nested: boolean;
+  /** S11 GO5d-1: the step's output schema the attempt's result is held to (`null`: none). */
+  readonly outputSchema: OutputSchema | null;
+  /** S11 GO5d-1: the previous attempt this one redoes, when that one ended without an accepted
+   *  result (`output-contract.ts`); `null` otherwise. */
+  readonly reworkOf: ReworkOf | null;
   /** The previous attempt's snapshot; `null` for the first attempt. */
   readonly previous: RunConfigSnapshot | null;
   /** What is left of the goal's token budget — `null` when nothing caps it. */
@@ -393,8 +399,10 @@ export async function createStepAttemptTask(
     `insert into tasks (
        workspace_id, status, on_behalf_of, created_by_activity_id, worker_definition_id,
        worker_definition_version, input, token_budget, duration_limit_sec,
-       goal_run_id, step_run_id, plan_revision, step_attempt, run_config_snapshot
-     ) values ($1, 'queued', $2, null, $3, $4, $5::jsonb, $6, $7, $8, $9, $10, $11, $12::jsonb)
+       goal_run_id, step_run_id, plan_revision, step_attempt, run_config_snapshot,
+       output_schema, rework_of
+     ) values ($1, 'queued', $2, null, $3, $4, $5::jsonb, $6, $7, $8, $9, $10, $11, $12::jsonb,
+       $13::jsonb, $14::jsonb)
      returning ${TASK_ROW_COLUMNS}`,
     [
       workspaceId,
@@ -409,6 +417,8 @@ export async function createStepAttemptTask(
       input.planRevision,
       input.stepAttempt,
       JSON.stringify(snapshot),
+      input.outputSchema === null ? null : JSON.stringify(input.outputSchema),
+      input.reworkOf === null ? null : JSON.stringify(input.reworkOf),
     ],
   );
   const row = inserted.rows[0];
@@ -423,6 +433,7 @@ export async function createStepAttemptTask(
       goalRunId: input.goalRunId,
       stepRunId: input.stepRunId,
       stepAttempt: input.stepAttempt,
+      ...(input.reworkOf !== null ? { reworkOfTaskId: input.reworkOf.taskId } : {}),
     },
   });
 

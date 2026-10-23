@@ -23,6 +23,7 @@ import {
   STEP_KEY_PATTERN,
   type StepAcceptanceCheck,
   StepAcceptanceCheckSchema,
+  type StepBinding,
   type StepReconcile,
   StepReconcileSchema,
 } from '@nexttime/shared';
@@ -41,6 +42,8 @@ import {
 import {
   PREDICATE_LINT_PLAN_WORK,
   type PredicateLintBudget,
+  bindingPathProblems,
+  bindingSchemaProblems,
   lintPredicate,
   predicateLiterals,
 } from '../../substrate/epistemic/index.js';
@@ -61,8 +64,8 @@ import { getWorkerDefinition } from '../worker/index.js';
  *   - `key` — the step's name in the plan, unique; a StepRun carries it (`step_runs.step_key`);
  *   - `worker` — a published `kind='worker'` WorkerDefinition version, pinned (the attempt's
  *     configuration snapshot records what that version resolved to, §4.4);
- *   - `input` — passed to the Worker as the Task's input, as is (bindings from upstream outputs
- *     come with step outputs, GO5);
+ *   - `input` — passed to the Worker as the Task's input, as is, with the values its `bindings` take
+ *     put in;
  *   - `dependsOn` — keys of steps that must have succeeded first; the graph is acyclic;
  *   - `nested` — the step may start Workers of its own (`invoke_worker` / `find_workers` in its
  *     Handle). Off by default: teams are the advancer's, so budgets and dependencies have one
@@ -82,9 +85,20 @@ import { getWorkerDefinition } from '../worker/index.js';
  *     `fact_predicate` checks (the goal's kinds, below; a step's acceptance never waits on a
  *     person), keys unique within the step. The platform makes them after each attempt whose work
  *     is done (`advance.ts` phase A, `acceptance-check.ts`). Changing them changes the step's
- *     entry, so a revision that does redefines the step (I-G2), like any other change to it.
- * Unknown fields are refused rather than ignored: a field this version does not act on (an output
- * schema) must not look like it is in force.
+ *     entry, so a revision that does redefines the step (I-G2), like any other change to it;
+ *   - `outputSchema` (S11 GO5d-1, plan §4.5) — what the step's Worker reports as its structured
+ *     `output` (`@nexttime/shared` `output-schema.ts`, a bounded JSON Schema subset whose root is an
+ *     object). `report_task_result` refuses a result that does not meet it, naming each place, and
+ *     an attempt that never reports one that does ends without a result — reworked once, then a
+ *     person (`advance.ts`);
+ *   - `bindings` (S11 GO5d-1, plan §4.5) — fields of the input taken from earlier steps' outputs:
+ *     `to` the field (dots for depth), `from` a step this one depends on that declares an
+ *     `outputSchema`, `path` a JMESPath expression over that step's output ({@link
+ *     bindingProblems}). The advancer puts the values in when an attempt starts
+ *     (`bindings.ts`): a value that is not there, or that the credential review counts, pauses the
+ *     run for a person rather than start the Worker without it.
+ * Unknown fields are refused rather than ignored: a field this version does not act on must not
+ * look like it is in force.
  *
  * The plan's `acceptance` (S11 GO4a, plan §4.6, I-G5) — what has to hold before the goal is
  * achieved, checked once every step is done (`advance.ts` phase V, `acceptance-check.ts`); each
@@ -199,7 +213,9 @@ export function parsePlan(plan: unknown): GoalPlan {
     }
   }
   const lintBudget: PredicateLintBudget = { remaining: PREDICATE_LINT_PLAN_WORK };
+  const byStepKey = new Map(shaped.steps.map((step) => [step.key, step]));
   for (const step of shaped.steps) {
+    problems.push(...bindingProblems(step, byStepKey));
     problems.push(...reconcileShapeProblems(step, lintBudget));
     problems.push(
       ...acceptanceShapeProblems(step.acceptance ?? [], lintBudget, `step "${step.key}": `),
@@ -314,6 +330,83 @@ export function roundAcceptance(
   const acceptance = parsed.data.acceptance ?? [];
   if (acceptance.length > 0) return acceptance;
   return [{ kind: 'requester_confirm', key: IMPLICIT_CONFIRM_KEY, prompt: statement }];
+}
+
+/**
+ * S11 GO5d-1 (plan §4.5): a step's input bindings. Each takes from a step it depends on (so that
+ * step has succeeded when an attempt starts) and that declares an `outputSchema` (a binding takes
+ * only from what a Worker is held to report); its `path` compiles and reads something
+ * (`bindingPathProblems`), and selects nothing the upstream schema rules out
+ * (`bindingSchemaProblems`: a field it closes off, a field of what is not an object, a position in
+ * what is not a list). Where they put values: the input is an object, no two bindings put theirs at
+ * the same field or one inside the other, and none where the written input already has a value —
+ * one of them would silently win.
+ */
+function bindingProblems(step: PlanStep, steps: ReadonlyMap<string, PlanStep>): readonly string[] {
+  const bindings = step.bindings ?? [];
+  if (bindings.length === 0) return [];
+  const problems: string[] = [];
+  const input = step.input;
+  if (input !== undefined && !isRecord(input)) {
+    problems.push(
+      `step "${step.key}": the input must be an object when the step has bindings — a binding fills a field of it`,
+    );
+  }
+  const dependsOn = new Set(step.dependsOn ?? []);
+  bindings.forEach((binding, index) => {
+    const where = `step "${step.key}": bindings[${index}]`;
+    const upstream = steps.get(binding.from);
+    if (!dependsOn.has(binding.from)) {
+      problems.push(
+        `${where}: takes from step "${binding.from}", which this step does not depend on — add it to dependsOn`,
+      );
+    } else if (upstream && !upstream.outputSchema) {
+      problems.push(
+        `${where}: step "${binding.from}" declares no outputSchema — a binding takes only from a declared output`,
+      );
+    }
+    const pathProblems = bindingPathProblems(binding.path);
+    for (const problem of pathProblems) problems.push(`${where}: ${problem}`);
+    if (pathProblems.length === 0 && upstream?.outputSchema) {
+      for (const problem of bindingSchemaProblems(binding.path, upstream.outputSchema)) {
+        problems.push(`${where}: ${problem} of step "${binding.from}"`);
+      }
+    }
+    const earlier = bindings.findIndex(
+      (other, j) => j < index && bindingTargetsOverlap(other, binding),
+    );
+    if (earlier !== -1) {
+      problems.push(
+        `${where}: puts its value at "${binding.to}", where bindings[${earlier}] puts its own at "${bindings[earlier]?.to}"`,
+      );
+    }
+    const written = isRecord(input) ? writtenValueAt(input, binding.to) : null;
+    if (written !== null) {
+      problems.push(
+        `${where}: the input already has a value at "${written}" — take it out of the input, or bind another field`,
+      );
+    }
+  });
+  return problems;
+}
+
+/** Whether two bindings put their values at the same field, or one inside the other's. */
+function bindingTargetsOverlap(a: StepBinding, b: StepBinding): boolean {
+  return a.to === b.to || a.to.startsWith(`${b.to}.`) || b.to.startsWith(`${a.to}.`);
+}
+
+/** Where the written `input` already has a value that a binding to `to` would replace — `to`
+ *  itself, or a field on the way to it that is not an object — or `null`. */
+function writtenValueAt(input: Record<string, unknown>, to: string): string | null {
+  const fields = to.split('.');
+  let at: Record<string, unknown> = input;
+  for (const [i, field] of fields.entries()) {
+    if (!Object.hasOwn(at, field)) return null;
+    const value = at[field];
+    if (i === fields.length - 1 || !isRecord(value)) return fields.slice(0, i + 1).join('.');
+    at = value;
+  }
+  return null;
 }
 
 /** A step's reconcile declarations: one per action identity, each predicate accepted by the lint
@@ -603,6 +696,19 @@ function reviewStep(
     value.acceptance = checks.value;
     written.acceptance = checks.written;
   }
+  // GO5d-1: its output schema and its bindings, each one call — free text a read spells out
+  // differently (an invisible character in a property name or a path) stays as stored unless the
+  // writer changed it.
+  if (step.outputSchema !== undefined) {
+    const schema = reviewCall(step.outputSchema, shown.outputSchema, original.outputSchema);
+    value.outputSchema = schema.value;
+    written.outputSchema = schema.written;
+  }
+  if (step.bindings !== undefined) {
+    const bindings = reviewCall(step.bindings, shown.bindings, original.bindings);
+    value.bindings = bindings.value;
+    written.bindings = bindings.written;
+  }
   return { value: value as PlanStep, written: written as PlanStep };
 }
 
@@ -620,7 +726,8 @@ function reviewStep(
  *   key too) — sent exactly as read is the stored call; changed anywhere, every value in it is as
  *   sent. The read shows every masked value as the same `[redacted]`, so a value given back on
  *   its own would follow a row or a declaration deleted or moved, or go to another host, gate or
- *   Worker; a `[redacted]` left in a changed call is refused at its place.
+ *   Worker; a `[redacted]` left in a changed call is refused at its place. A step's `outputSchema`
+ *   and its `bindings` are each one call too (GO5d-1).
  *
  * Fields outside the calls (`dependsOn`, `nested`, `maxAttempts`) are as sent and decide nothing
  * here. Then {@link refusePlanCredentials} checks only what this writer wrote, at its place in the
