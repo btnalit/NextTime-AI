@@ -373,6 +373,32 @@ describe('goal operations on the goal page (S11 GO6)', () => {
     expect(within(confirm).getByText(/此刻不能执行，什么也没改/)).toBeTruthy();
   });
 
+  it('a 409 whose re-read fails says nothing about where the goal stands', async () => {
+    let refused = false;
+    const http = scriptedHttp(
+      handlers(
+        goalDetail({ status: 'paused', pauseReason: 'requested' }),
+        workspace('p-alice', 'member'),
+        {
+          get_goal: () => {
+            if (refused) throw new HttpError('network', 'offline');
+            return goalDetail({ status: 'paused', pauseReason: 'requested' });
+          },
+          resume_goal: () => {
+            refused = true;
+            throw new HttpError('capability_error', 'step has a live task', 'illegal_transition');
+          },
+        },
+      ),
+    );
+    renderPage(http);
+    fireEvent.click(await screen.findByTestId('goal-op-resume'));
+    const confirm = await screen.findByTestId('goal-op-resume-confirm');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    await waitFor(() => expect(reads(http)).toBe(2));
+    await waitFor(() => expect(screen.queryByTestId('goal-op-done')).toBeNull());
+  });
+
   it('ending as achieved lists the checks recorded as passed on the requester’s word', async () => {
     const http = scriptedHttp(
       handlers(

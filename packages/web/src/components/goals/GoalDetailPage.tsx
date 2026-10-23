@@ -225,7 +225,9 @@ export function GoalDetailPage({ http, pushes, goalRunId }: GoalDetailPageProps)
         onDone={onDone}
       />
       <output aria-live="polite">
-        {done && !(done.kind === 'stale' && refreshing) ? (
+        {/* After a 409, only once the goal is read again: a failed re-read keeps the old goal
+            (its error banner above), from which nothing can be said about where it stands. */}
+        {done && !(done.kind === 'stale' && (refreshing || detail.state.refreshError)) ? (
           <Notice tone={done.kind === 'stale' ? 'warn' : 'info'} testId="goal-op-done">
             {done.kind === 'done' ? done.message : staleText(done.before, goal, t)}
           </Notice>
