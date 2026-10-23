@@ -91,6 +91,7 @@ export {
   type WithdrawableStepAction,
   listExecutingStepActions,
   listStepActionOutcomes,
+  listStepsActionOutcomes,
   listUnresolvedStepActions,
   lockWithdrawableStepActions,
   withdrawStepActions,

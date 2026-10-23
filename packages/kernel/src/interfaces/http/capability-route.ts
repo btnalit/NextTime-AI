@@ -82,6 +82,8 @@ import {
 } from '../../application/gateway/members-handlers.js';
 import { PlatformAdminError } from '../../application/gateway/platform-handlers.js';
 import { ServicePrincipalRequiredError } from '../../application/gateway/service-handle-handler.js';
+// S11 GO5a: the `goal` reads' not-found errors, imported directly like the domain errors around.
+import { GoalRevisionNotFoundError, GoalRunNotFoundError } from '../../application/goal/index.js';
 import {
   CSRF_HEADER,
   WORKSPACE_COOKIE,
@@ -647,6 +649,11 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
     return { status: 400, code: 'unknown_quota_key', message: err.message };
   }
   if (err instanceof TaskNotFoundError) {
+    return { status: 404, code: 'not_found', message: err.message };
+  }
+  // S11 GO5a: a GoalRun the caller may not read is not found, exactly like an unknown id
+  // (`application/goal`'s `goalVisibleTo`), and so is a revision it does not have.
+  if (err instanceof GoalRunNotFoundError || err instanceof GoalRevisionNotFoundError) {
     return { status: 404, code: 'not_found', message: err.message };
   }
   // S10 E1 (application/task/attribution.ts): an objective outcome given by someone who may see

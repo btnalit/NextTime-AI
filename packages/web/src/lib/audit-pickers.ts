@@ -19,8 +19,8 @@ import type {
 import { CAPABILITY_REGISTRY } from '@nexttime/shared';
 import { actionLabel } from './capability-labels.js';
 import type { CapabilityCaller } from './clients.js';
-import { connectionRequestTargetText } from './connections.js';
-import { actionKindTagText, formatRelative } from './format.js';
+import { addressText } from './connections.js';
+import { actionKindLabel, actionKindTagText, formatRelative, shortId } from './format.js';
 import { objectDisplayName } from './graph-view.js';
 import type { Translate } from './i18n.js';
 import {
@@ -188,12 +188,41 @@ export function decisionSource(t: Translate): PickerSource {
       return dedupe(
         page.items.map((decision) => ({
           id: decision.id,
-          label: decision.summary ?? t('（无摘要）', '(no summary)'),
+          label: decisionPickerLabel(decision, t),
           detail: `${decisionStatusLabel(decision.status, t)} · ${formatRelative(decision.createdAt)}`,
         })),
       );
     },
   };
+}
+
+/** UX P3 on #672: a Decision about an ActionRequest carries the kernel's English summary
+ *  (`approve action_request <uuid>`, `reconcile action_request <uuid>: …`). Its rationale names
+ *  the request (and, for an approval, the action kind), so the label reads 「批准动作请求 1a2b3c4d ·
+ *  <动作>」; any other Decision keeps its own summary. */
+export function decisionPickerLabel(decision: DecisionWire, t: Translate): string {
+  const rationale = decision.rationale ?? {};
+  const requestId = rationale.actionRequestId;
+  const summary = decision.summary ?? '';
+  const verb =
+    rationale.decision === 'reconcile'
+      ? t('核对', 'Reconcile')
+      : rationale.decision === 'reexecute'
+        ? t('重新执行', 'Re-execute')
+        : summary.startsWith('approve ')
+          ? t('批准', 'Approve')
+          : summary.startsWith('reject ')
+            ? t('拒绝', 'Reject')
+            : undefined;
+  if (typeof requestId !== 'string' || verb === undefined) {
+    return decision.summary ?? t('（无摘要）', '(no summary)');
+  }
+  const kind =
+    typeof rationale.actionKind === 'string' ? ` · ${actionKindLabel(rationale.actionKind)}` : '';
+  return t(
+    `${verb}动作请求 ${shortId(requestId)}${kind}`,
+    `${verb} action request ${shortId(requestId)}${kind}`,
+  );
 }
 
 /** Graph Objects (`search{query}`, member + auditor) — an empty query browses the most recently
@@ -401,7 +430,7 @@ const RESOURCE_SOURCES: Readonly<Record<string, SourceFactory>> = {
     {},
     (request, t) => ({
       id: request.id,
-      label: connectionRequestTargetText(request.target, t),
+      label: addressText(request.target, t),
       detail: statusText('connectionRequest', request.status, t),
     }),
   ),

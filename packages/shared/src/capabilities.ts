@@ -9,6 +9,7 @@ import {
 import {
   ActionRequestFailureKindSchema,
   ActionRequestStatusSchema,
+  GoalRunStatusSchema,
   ObjectiveOutcomeSchema,
 } from './enums.js';
 import type { CapabilityChannel, Role } from './enums.js';
@@ -89,6 +90,10 @@ export const CAPABILITY_GROUP_VALUES = [
   // `enable_gate_instance` is `group:'connection'`, `scope:'workspace'` — two groups, not one
   // shared across both scopes, corrected from this group's own earlier draft comment).
   'modules',
+  // S11 GO5 (docs/goal-orchestration-and-admin-agent-plan-2026-10-16.md §4.3, §7): GoalRuns — the
+  // reads (GO5a), the requester's and owner's operations (GO5b) and `propose_goal` (GO5c). Its own
+  // group: a GoalRun is neither a Task (it runs many) nor a governance record.
+  'goal',
 ] as const;
 export type CapabilityGroup = (typeof CAPABILITY_GROUP_VALUES)[number];
 export const CapabilityGroupSchema = z.enum(CAPABILITY_GROUP_VALUES);
@@ -3965,6 +3970,76 @@ const modulesCapabilities = [
   },
 ] as const satisfies readonly Capability[];
 
+// -------------------------------------------------------------------------------------------
+// goal (S11 GO5a; plan §4.3, §7) — reading GoalRuns. Visible to the workspace owner and the
+// requester (the principal the run acts for, `onBehalfOf`); for anyone else a run is not found,
+// exactly like an unknown id — the rule `get_task` applies (kernel `goalVisibleTo`). The owner sees
+// every run on the human channel only: on the handle channel the viewer is the Handle's `obo`, who
+// reads their own runs, an owner too (looking across the workspace is a person's, in the
+// console — coordinator decision on review #493 of #680). No Handle ceiling holds
+// these yet (the entry agent gets `get_goal` with `propose_goal`, GO5c/GO5e). Each result is the
+// one `wire/goal.ts` shape the console's goal pages (GO6) render.
+// -------------------------------------------------------------------------------------------
+
+/** `list_goals`' page size when `limit` is absent, and its ceiling. */
+export const GOAL_LIST_DEFAULT_LIMIT = 50;
+export const GOAL_LIST_MAX_LIMIT = 200;
+
+const goalCapabilities = [
+  {
+    name: 'get_goal',
+    group: 'goal',
+    mode: 'observe',
+    channel: 'handle',
+    minRole: 'member',
+    paramsSchema: z.object({ goalRunId: z.string().uuid() }).strict(),
+    resultSchema: wire.GoalDetailWireSchema,
+    description:
+      'Read one GoalRun: its status and budget with what it has spent, the plan revision in force (revision 1 until it is confirmed) with the suspected credentials in its parameters (step inputs, reconcile and observation params) redacted, its revision history, every StepRun with its attempts (the Tasks) and actions (the ActionRequests), its acceptance rounds, and — while cancelling, or cancelled with cleanupPending — the Tasks and executing actions left. Visible to the workspace owner and the requester; for anyone else it is not found (404 not_found), exactly like an unknown id. A Handle reads as its obo, and only that principal’s own runs — an owner’s too.',
+  },
+  {
+    name: 'list_goals',
+    group: 'goal',
+    mode: 'observe',
+    channel: 'handle',
+    minRole: 'member',
+    paramsSchema: z
+      .object({
+        status: z.array(GoalRunStatusSchema).min(1).optional(),
+        onBehalfOf: z.string().uuid().optional(),
+        limit: z.number().int().positive().optional(),
+        cursor: z.string().optional(),
+      })
+      .strict(),
+    resultSchema: listEnvelope(wire.GoalRunWireSchema),
+    description: `List GoalRuns, newest first, each with its budget, usage and StepRuns counted by status: the workspace owner sees every run, anyone else — and a Handle, whoever its obo — only the runs they requested; onBehalfOf filters by requester (for anyone who sees only their own, any other requester lists nothing), status by status. Keyset-paginated (limit, default ${GOAL_LIST_DEFAULT_LIMIT}, at most ${GOAL_LIST_MAX_LIMIT}; cursor → nextCursor; truncated when limit was above the ceiling).`,
+  },
+  {
+    name: 'get_goal_revision',
+    group: 'goal',
+    mode: 'observe',
+    channel: 'handle',
+    minRole: 'member',
+    paramsSchema: z
+      .object({ goalRunId: z.string().uuid(), revision: z.number().int().positive() })
+      .strict(),
+    resultSchema: wire.PlanRevisionWireSchema,
+    description:
+      'Read one revision of a GoalRun’s plan — the plan as that revision holds it (the suspected credentials in its parameters redacted), who made it and why, what it decided about the steps it removed, and its hints. Same visibility as get_goal; an unknown revision is 404 not_found too.',
+  },
+  {
+    name: 'list_goal_unresolved_actions',
+    group: 'goal',
+    mode: 'observe',
+    channel: 'handle',
+    minRole: 'member',
+    paramsSchema: z.object({ goalRunId: z.string().uuid() }).strict(),
+    resultSchema: listEnvelope(wire.UnresolvedGoalActionWireSchema),
+    description:
+      'List the actions of a GoalRun whose outcome is unknown and that still need a person — a finding (did it take effect?) or, found not to have, a decision (run it again or change the plan) — with the platform’s own check of each where its step declared one. Every step counts, revised-away and cancelled ones included. Same visibility as get_goal.',
+  },
+] as const satisfies readonly Capability[];
+
 /** The registry's entries with their literal names kept (`as const`), for `CapabilityName`. */
 const REGISTERED = [
   ...chatCapabilities,
@@ -3983,6 +4058,7 @@ const REGISTERED = [
   ...agentProfileCapabilities,
   ...platformCapabilities,
   ...modulesCapabilities,
+  ...goalCapabilities,
 ] as const;
 
 /** The complete capability registry (design doc §9.3). */

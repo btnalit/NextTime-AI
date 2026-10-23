@@ -104,3 +104,18 @@ export async function readStepActionEffect(
 ): Promise<StepActionEffect> {
   return stepActionEffect(await listStepActionOutcomes(client, workspaceId, stepRunId));
 }
+
+/** Every revision of a GoalRun's plan, oldest first. */
+export async function listPlanRevisions(
+  client: PoolClient,
+  workspaceId: string,
+  goalRunId: string,
+): Promise<readonly PlanRevisionRow[]> {
+  const result = await client.query<PlanRevisionDbRow>(
+    `select ${PLAN_REVISION_ROW_COLUMNS} from plan_revisions
+     where workspace_id = $1 and goal_run_id = $2
+     order by revision`,
+    [workspaceId, goalRunId],
+  );
+  return result.rows.map(mapPlanRevisionRow);
+}

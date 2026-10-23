@@ -1,10 +1,12 @@
 import type {
+  GoalBudget,
   GoalOutcomeBasis,
   GoalRunPauseAuthority,
   GoalRunPauseReason,
   GoalRunStatus,
   ObjectiveOutcome,
   PlanRevisionStatus,
+  StepRemoval as SharedStepRemoval,
   StepRunFailureCategory,
   StepRunStatus,
   StepRunWaitingReason,
@@ -17,12 +19,8 @@ import type {
  * failed.
  */
 
-export interface GoalRunBudget {
-  readonly maxTokens: number;
-  readonly maxSteps: number;
-  readonly maxRevisions: number;
-  readonly maxWallClockSeconds: number;
-}
+/** goal/0001's `budget_*` columns — the shape is `@nexttime/shared`'s `GoalBudget` (GO5a). */
+export type GoalRunBudget = Readonly<GoalBudget>;
 
 export interface GoalRunRow {
   readonly workspaceId: string;
@@ -57,12 +55,9 @@ export interface GoalRunRow {
   readonly advanceFailures: number;
 }
 
-/** What a revision decided about one step it removes (goal/0004 `plan_revisions.removals`): its
- *  Task terminated (the default) or let to finish, and the submitted requests a person released. */
-export interface StepRemoval {
-  readonly mode: 'terminate' | 'let_finish';
-  readonly release?: readonly string[];
-}
+/** What a revision decided about one step it removes (goal/0004 `plan_revisions.removals`) — the
+ *  shape is `@nexttime/shared`'s `StepRemoval` (GO5a). */
+export type StepRemoval = Readonly<SharedStepRemoval>;
 
 export interface PlanRevisionRow {
   readonly workspaceId: string;

@@ -174,7 +174,11 @@ export function AuditLogSection({
           </Button>
         ) : null}
       </div>
-      <form className="inline-form row-wrap" onSubmit={handleSubmit} data-testid="audit-query-form">
+      <form
+        className="inline-form inline-form-top row-wrap"
+        onSubmit={handleSubmit}
+        data-testid="audit-query-form"
+      >
         {actorSelect ? (
           <Field id="audit-actor" label={t('操作者', 'Actor')}>
             <Select

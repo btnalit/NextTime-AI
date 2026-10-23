@@ -8,7 +8,7 @@ import {
   type ConnectionRequestRow,
   type CreateConnectionParams,
   type CreateConnectionResult,
-  connectionRequestTargetMasked,
+  addressMasked,
   supportsManifestSource,
 } from '../lib/connections.js';
 import { describeError, presentError } from '../lib/errors.js';
@@ -240,7 +240,7 @@ export function CompleteConnectionForm({
         {request.requestedBy.slice(0, 8)}
       </span>
     ) : null;
-  const requestTargetMasked = !!request && connectionRequestTargetMasked(request.target);
+  const requestTargetMasked = !!request && addressMasked(request.target);
   const [target, setTarget] = useState(requestTargetMasked ? '' : (request?.target ?? ''));
   const [endpoint, setEndpoint] = useState('');
   const [credentialKind, setCredentialKind] = useState<CredentialKind>('shared');

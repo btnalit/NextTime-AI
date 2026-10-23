@@ -691,6 +691,37 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
   },
 
   // -----------------------------------------------------------------------------------------
+  // Capabilities — goals (S11 GO5a)
+  // -----------------------------------------------------------------------------------------
+  get_goal: {
+    zh: '查看目标',
+    en: 'Read goal',
+    zhHint: '读取一个目标：计划、每一步的进展与尝试、验收结果，以及预算用了多少。',
+    enHint:
+      "Reads one goal: its plan, each step's progress and attempts, its acceptance results, and how much of its budget it has used.",
+  },
+  list_goals: {
+    zh: '查看目标列表',
+    en: 'List goals',
+    zhHint: '列出目标，最新的在前：工作区所有者看到全部，其他人只看到自己发起的。',
+    enHint:
+      'Lists goals, newest first: the workspace owner sees every goal, anyone else only their own.',
+  },
+  get_goal_revision: {
+    zh: '查看目标计划版本',
+    en: 'Read goal plan revision',
+    zhHint: '读取目标计划的某一个版本：当时的计划、谁改的、为什么改。',
+    enHint: "Reads one revision of a goal's plan: the plan as it stood, who made it and why.",
+  },
+  list_goal_unresolved_actions: {
+    zh: '查看目标待核对的动作',
+    en: 'List goal actions to check',
+    zhHint: '列出目标里结果不明、还需要有人核对或决定的动作。',
+    enHint:
+      'Lists the actions of a goal whose outcome is unknown and that still need someone to check or decide.',
+  },
+
+  // -----------------------------------------------------------------------------------------
   // Capabilities — Worker definitions and drafts
   // -----------------------------------------------------------------------------------------
   propose_worker_definition: {

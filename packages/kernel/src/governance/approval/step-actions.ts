@@ -50,18 +50,40 @@ export async function listStepActionOutcomes(
   stepRunId: string,
   options: { readonly raisedBy?: readonly string[] } = {},
 ): Promise<readonly StepActionOutcome[]> {
+  const rows = await queryStepActionOutcomes(client, workspaceId, [stepRunId], options.raisedBy);
+  return rows.map(({ stepRunId: _stepRunId, ...outcome }) => outcome);
+}
+
+/** {@link listStepActionOutcomes} of several steps in one query, each with its step (S11 GO5a: the
+ *  goal detail page) — the same rows, by step, then oldest first. */
+export async function listStepsActionOutcomes(
+  client: PoolClient,
+  workspaceId: string,
+  stepRunIds: readonly string[],
+): Promise<readonly (StepActionOutcome & { readonly stepRunId: string })[]> {
+  if (stepRunIds.length === 0) return [];
+  return queryStepActionOutcomes(client, workspaceId, stepRunIds, undefined);
+}
+
+async function queryStepActionOutcomes(
+  client: PoolClient,
+  workspaceId: string,
+  stepRunIds: readonly string[],
+  raisedBy: readonly string[] | undefined,
+): Promise<readonly (StepActionOutcome & { readonly stepRunId: string })[]> {
   const result = await client.query<{
     id: string;
+    step_run_id: string;
     status: ActionRequestStatus;
     failure_kind: ActionRequestFailureKind | null;
     reconciliation: ActionRequestReconciliation | null;
     reexecuted: boolean;
     idempotency_key: string | null;
   }>(
-    `select a.id, a.status, a.failure_kind, a.reconciliation,
+    `select a.id, a.step_run_id, a.status, a.failure_kind, a.reconciliation,
             a.reexecute_decision_id is not null as reexecuted, a.idempotency_key
        from action_requests a
-     where a.workspace_id = $1 and a.step_run_id = $2
+     where a.workspace_id = $1 and a.step_run_id = any($2::uuid[])
        and ($3::uuid[] is null or a.parent_worker_run_id = any($3::uuid[]))
        and not (
          a.reexecute_decision_id is not null
@@ -72,11 +94,12 @@ export async function listStepActionOutcomes(
               and (n.requested_at, n.id) > (a.requested_at, a.id)
          )
        )
-     order by a.requested_at, a.id`,
-    [workspaceId, stepRunId, options.raisedBy === undefined ? null : [...options.raisedBy]],
+     order by a.step_run_id, a.requested_at, a.id`,
+    [workspaceId, [...stepRunIds], raisedBy === undefined ? null : [...raisedBy]],
   );
   return result.rows.map((row) => ({
     id: row.id,
+    stepRunId: row.step_run_id,
     status: row.status,
     failureKind: row.failure_kind,
     reconciliation: row.reconciliation,
