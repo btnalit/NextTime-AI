@@ -705,6 +705,84 @@ describe('ProcedureEditor (S6-A A2)', () => {
     expect(screen.queryByTestId('procedure-step-depends-cycle')).toBeNull();
   });
 
+  it('a control its own change takes away hands focus on, not to <body> (UX P3-5 on #738)', () => {
+    const { caller } = http({});
+    const worker = (key: string, extra: Record<string, unknown> = {}) => ({
+      kind: 'worker',
+      definitionId: 'wd-1',
+      version: 1,
+      key,
+      outputSchema: {
+        type: 'object',
+        properties: { n: { type: 'integer' }, m: { type: 'integer' } },
+      },
+      ...extra,
+    });
+    render(
+      <ProcedureEditor
+        http={caller}
+        copyOf={{
+          id: 'pr-1',
+          version: 1,
+          status: 'published',
+          name: 'Three',
+          description: 'Three steps',
+          steps: [
+            worker('scan'),
+            worker('recount'),
+            worker('report', { bindings: [{ to: 'n', from: 'scan', path: 'n' }] }),
+          ],
+          parameters: { type: 'object', properties: { site: { type: 'string' } } },
+        }}
+        onProposed={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    const step = (n: number) => screen.getAllByTestId('procedure-step')[n] as HTMLElement;
+    const focused = () => document.activeElement as HTMLElement;
+
+    // 也等 scan goes once report waits for it: focus is on the box now ticked.
+    fireEvent.click(within(step(2)).getByTestId('procedure-step-binding-wait'));
+    expect(focused().dataset.depKey).toBe('scan');
+    expect((focused() as HTMLInputElement).checked).toBe(true);
+
+    // The last binding removed: 添加绑定.
+    fireEvent.click(within(step(2)).getByRole('button', { name: '移除第 1 个绑定' }));
+    expect(focused().dataset.testid).toBe('procedure-step-add-binding');
+
+    // A field removed: the next field's name; the last one: 添加字段.
+    fireEvent.click(within(step(0)).getByRole('button', { name: '移除第 1 个字段' }));
+    expect((focused() as HTMLInputElement).value).toBe('m');
+    fireEvent.click(within(step(0)).getByRole('button', { name: '移除第 1 个字段' }));
+    expect(focused().dataset.testid).toBe('procedure-step-output-add-field');
+
+    // The contract dropped: 添加输出约定; added again: its 添加字段.
+    fireEvent.click(within(step(0)).getByTestId('procedure-step-output-remove'));
+    expect(focused().dataset.testid).toBe('procedure-step-add-output');
+    fireEvent.click(within(step(0)).getByTestId('procedure-step-add-output'));
+    expect(focused().dataset.testid).toBe('procedure-step-output-add-field');
+
+    // The parameters dropped and added again, the same way.
+    fireEvent.click(screen.getByTestId('procedure-parameters-remove'));
+    expect(focused().dataset.testid).toBe('procedure-add-parameters');
+    fireEvent.click(screen.getByTestId('procedure-add-parameters'));
+    expect(focused().dataset.testid).toBe('procedure-parameters-add-field');
+
+    // recount moved to the top, where 上移 is disabled: its 下移.
+    fireEvent.click(within(step(1)).getByRole('button', { name: '上移第 2 步' }));
+    expect(focused().getAttribute('aria-label')).toBe('下移第 1 步');
+    expect(within(step(0)).getByTestId('procedure-step-plan').textContent).toMatch(/recount/);
+    // It moves down again, not to an end: still 下移.
+    fireEvent.click(focused());
+    expect(focused().getAttribute('aria-label')).toBe('下移第 2 步');
+
+    // A step removed: the next step's kind; the last one: 添加步骤.
+    fireEvent.click(within(step(0)).getByRole('button', { name: '移除第 1 步' }));
+    expect(focused()).toBe(within(step(0)).getByTestId('procedure-step-kind'));
+    fireEvent.click(within(step(1)).getByRole('button', { name: '移除第 2 步' }));
+    expect(focused().dataset.testid).toBe('procedure-add-step');
+  });
+
   it('input that is not JSON is refused at its field, and nothing is sent (legacy 453)', async () => {
     const { caller, calls } = http({});
     render(<ProcedureEditor http={caller} onProposed={vi.fn()} onDone={vi.fn()} />);

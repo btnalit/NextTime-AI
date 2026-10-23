@@ -1,4 +1,5 @@
-import type { ReactNode } from 'react';
+import { type ReactNode, useRef } from 'react';
+import { byData, useFocusAfterRender } from '../../hooks/useFocusAfterRender.js';
 import { useT } from '../../lib/i18n.js';
 import {
   SCHEMA_FIELD_KINDS,
@@ -52,6 +53,9 @@ export function SchemaFieldsEditor({
   readonly testId: string;
 }) {
   const t = useT();
+  // UX P3-5 on #738: removing a field hands focus to the next one's name, or 添加字段.
+  const root = useRef<HTMLFieldSetElement>(null);
+  const focusAfterRender = useFocusAfterRender();
   const asFields = draft.mode === 'json' ? schemaDraftAsFields(draft) : draft;
   const blocker = schemaListBlocker(draft);
   const at = (row: SchemaFieldRow, index: number) => (path: string) => {
@@ -80,7 +84,7 @@ export function SchemaFieldsEditor({
   }
 
   return (
-    <fieldset className="stack-s schema-fields" data-testid={testId}>
+    <fieldset ref={root} className="stack-s schema-fields" data-testid={testId}>
       <legend className="text-small">{legend}</legend>
       {explanation ? <span className="text-small text-3">{explanation}</span> : null}
       {draft.mode === 'fields' ? (
@@ -111,7 +115,12 @@ export function SchemaFieldsEditor({
                 const problem = rowError(row, index);
                 const n = index + 1;
                 return (
-                  <div className="schema-field-row" key={row.uid} data-testid={`${testId}-field`}>
+                  <div
+                    className="schema-field-row"
+                    key={row.uid}
+                    data-testid={`${testId}-field`}
+                    data-field={row.uid}
+                  >
                     <input
                       className="input input-mono"
                       id={`${id}-field-${row.uid}-name`}
@@ -147,22 +156,39 @@ export function SchemaFieldsEditor({
                       disabled={busy}
                       data-testid={`${testId}-field-required`}
                     />
-                    <input
-                      aria-label={t(`第 ${n} 个字段的说明`, `Field ${n} description`)}
-                      className="input schema-field-description"
-                      placeholder={descriptionPlaceholder}
-                      value={row.description}
-                      onChange={(event) => updateRow(index, { description: event.target.value })}
-                      disabled={busy}
-                      data-testid={`${testId}-field-description`}
-                    />
+                    {/* UX P3-7 on #738: below 640 px the description has a line of its own and
+                     *  no column head above it, so it carries its own label there. */}
+                    <label className="schema-field-description">
+                      <span className="schema-field-description-label" aria-hidden>
+                        {t('说明', 'Description')}
+                      </span>
+                      <input
+                        aria-label={t(`第 ${n} 个字段的说明`, `Field ${n} description`)}
+                        className="input"
+                        placeholder={descriptionPlaceholder}
+                        value={row.description}
+                        onChange={(event) => updateRow(index, { description: event.target.value })}
+                        disabled={busy}
+                        data-testid={`${testId}-field-description`}
+                      />
+                    </label>
                     <Button
                       variant="ghost"
                       size="s"
                       disabled={busy}
-                      onClick={() =>
-                        onChange({ ...draft, rows: draft.rows.filter((_, i) => i !== index) })
-                      }
+                      onClick={() => {
+                        const next = draft.rows[index + 1]?.uid;
+                        focusAfterRender(() =>
+                          next !== undefined
+                            ? byData(root.current, '[data-field]', 'field', next)?.querySelector(
+                                'input',
+                              )
+                            : root.current?.querySelector<HTMLElement>(
+                                `[data-testid="${testId}-add-field"]`,
+                              ),
+                        );
+                        onChange({ ...draft, rows: draft.rows.filter((_, i) => i !== index) });
+                      }}
                       aria-label={t(`移除第 ${n} 个字段`, `Remove field ${n}`)}
                     >
                       {t('移除', 'Remove')}

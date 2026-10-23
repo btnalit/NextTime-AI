@@ -6,7 +6,8 @@ import {
   type ProcedureStep,
   StepAcceptanceCheckSchema,
 } from '@nexttime/shared';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import { byData, useFocusAfterRender } from '../../hooks/useFocusAfterRender.js';
 import {
   type FieldErrors,
   type ProcedureBindingForm,
@@ -135,6 +136,10 @@ export function WorkerPlanFields({
   const waiters = procedureWaiters(steps, ownKey);
   const ownDeps = step.dependsOn ?? (previous !== null ? [previous] : []);
   const cycleThrough = ownDeps.filter((key) => waiters.has(key));
+  // UX P3-5 on #738: a control its own change takes away hands focus on, not to <body>.
+  const root = useRef<HTMLDetailsElement>(null);
+  const focusAfterRender = useFocusAfterRender();
+  const find = (selector: string) => root.current?.querySelector<HTMLElement>(selector);
 
   function updateBinding(at: number, patch: Partial<ProcedureBindingForm>): void {
     onChange({
@@ -151,6 +156,7 @@ export function WorkerPlanFields({
 
   return (
     <details
+      ref={root}
       className="disclosure"
       open={open || hasErrors}
       onToggle={(event) => setOpen(event.currentTarget.open)}
@@ -295,6 +301,7 @@ export function WorkerPlanFields({
                           }}
                           disabled={busy || (loops && !checked)}
                           data-testid="procedure-step-depends-on"
+                          data-dep-key={key}
                         />
                         <span>
                           <span className="mono">{key}</span>
@@ -400,7 +407,12 @@ export function WorkerPlanFields({
                 : null;
             const fieldId = `${id}-binding-${binding.uid}`;
             return (
-              <div className="stack-s" key={binding.uid} data-testid="procedure-step-binding">
+              <div
+                className="stack-s procedure-binding"
+                key={binding.uid}
+                data-testid="procedure-step-binding"
+                data-binding={binding.uid}
+              >
                 {/* UX P2-1 on #738: each control labelled, read as a sentence — 来源 → 取值 →
                  *  填到输入字段. */}
                 <div className="row-wrap procedure-binding-row">
@@ -456,30 +468,44 @@ export function WorkerPlanFields({
                       testId="procedure-step-binding-path"
                     />
                   </Field>
-                  <span className="text-3" aria-hidden>
-                    →
-                  </span>
-                  <Field id={`${fieldId}-to`} label={t('填到输入字段', 'Into input field')}>
-                    <input
-                      id={`${fieldId}-to`}
-                      className="input input-mono"
-                      aria-label={t(
-                        `第 ${n} 个绑定填到输入的哪个字段`,
-                        `Binding ${n}: input field`,
-                      )}
-                      placeholder={t('target.host 这样的字段', 'e.g. target.host')}
-                      value={binding.to}
-                      onChange={(event) => updateBinding(at, { to: event.target.value })}
-                      disabled={busy}
-                      aria-invalid={rowError !== null || undefined}
-                      data-testid="procedure-step-binding-to"
-                    />
-                  </Field>
+                  {/* UX P3-6 on #738: the arrow wraps with the field it points to. */}
+                  <div className="procedure-binding-to">
+                    <span className="text-3" aria-hidden>
+                      →
+                    </span>
+                    <Field id={`${fieldId}-to`} label={t('填到输入字段', 'Into input field')}>
+                      <input
+                        id={`${fieldId}-to`}
+                        className="input input-mono"
+                        aria-label={t(
+                          `第 ${n} 个绑定填到输入的哪个字段`,
+                          `Binding ${n}: input field`,
+                        )}
+                        placeholder={t('target.host 这样的字段', 'e.g. target.host')}
+                        value={binding.to}
+                        onChange={(event) => updateBinding(at, { to: event.target.value })}
+                        disabled={busy}
+                        aria-invalid={rowError !== null || undefined}
+                        data-testid="procedure-step-binding-to"
+                      />
+                    </Field>
+                  </div>
                   <Button
                     variant="ghost"
                     size="s"
                     disabled={busy}
-                    onClick={() => onChange({ bindings: step.bindings.filter((_, i) => i !== at) })}
+                    onClick={() => {
+                      // The next binding's source, or 添加绑定 when it was the last.
+                      const next = step.bindings[at + 1]?.uid;
+                      focusAfterRender(() =>
+                        next !== undefined
+                          ? byData(root.current, '[data-binding]', 'binding', next)?.querySelector(
+                              'select',
+                            )
+                          : find('[data-testid="procedure-step-add-binding"]'),
+                      );
+                      onChange({ bindings: step.bindings.filter((_, i) => i !== at) });
+                    }}
                     aria-label={t(`移除第 ${n} 个绑定`, `Remove binding ${n}`)}
                   >
                     {t('移除', 'Remove')}
@@ -502,7 +528,18 @@ export function WorkerPlanFields({
                         variant="secondary"
                         size="s"
                         disabled={busy}
-                        onClick={() => onChange({ dependsOn: [...ownDeps, source] })}
+                        onClick={() => {
+                          // The button goes once the step waits for it: focus the box now ticked.
+                          focusAfterRender(() =>
+                            byData(
+                              root.current,
+                              '[data-testid="procedure-step-depends-on"]',
+                              'depKey',
+                              source,
+                            ),
+                          );
+                          onChange({ dependsOn: [...ownDeps, source] });
+                        }}
                         data-testid="procedure-step-binding-wait"
                       >
                         {t(`也等 ${source}`, `Also wait for ${source}`)}
@@ -553,7 +590,10 @@ export function WorkerPlanFields({
             busy={busy}
             descriptionPlaceholder={t('这个字段是什么（可空）', 'What this field is (optional)')}
             onChange={(outputSchema) => onChange({ outputSchema })}
-            onRemove={() => onChange({ outputSchema: null })}
+            onRemove={() => {
+              focusAfterRender(() => find('[data-testid="procedure-step-add-output"]'));
+              onChange({ outputSchema: null });
+            }}
             removeLabel={t('去掉输出约定', 'Drop the output contract')}
             testId="procedure-step-output"
           />
@@ -563,7 +603,10 @@ export function WorkerPlanFields({
               variant="secondary"
               size="s"
               disabled={busy}
-              onClick={() => onChange({ outputSchema: emptySchemaDraft() })}
+              onClick={() => {
+                focusAfterRender(() => find('[data-testid="procedure-step-output-add-field"]'));
+                onChange({ outputSchema: emptySchemaDraft() });
+              }}
               data-testid="procedure-step-add-output"
             >
               {t('添加输出约定', 'Add an output contract')}
