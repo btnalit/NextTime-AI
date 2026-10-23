@@ -9,6 +9,8 @@ import {
   schemaDraftAsFields,
   schemaDraftAsJson,
   schemaFieldKindLabel,
+  schemaListBlocker,
+  schemaListBlockerText,
 } from '../../lib/schema-fields.js';
 import { Button } from '../kit/button.js';
 import { Select } from '../kit/select.js';
@@ -51,6 +53,7 @@ export function SchemaFieldsEditor({
 }) {
   const t = useT();
   const asFields = draft.mode === 'json' ? schemaDraftAsFields(draft) : draft;
+  const blocker = schemaListBlocker(draft);
   const at = (row: SchemaFieldRow, index: number) => (path: string) => {
     const name = row.name.trim();
     return (
@@ -87,78 +90,93 @@ export function SchemaFieldsEditor({
               {t('还没有字段：任何对象都符合。', 'No fields yet: any object meets it.')}
             </span>
           ) : null}
-          {draft.rows.map((row, index) => {
-            const problem = rowError(row, index);
-            const n = index + 1;
-            return (
-              <div className="stack-s" key={row.uid} data-testid={`${testId}-field`}>
-                <div className="row-wrap">
-                  <input
-                    className="input input-mono"
-                    id={`${id}-field-${row.uid}-name`}
-                    aria-label={t(`第 ${n} 个字段的名字`, `Field ${n} name`)}
-                    placeholder={t('字段名', 'Field name')}
-                    value={row.name}
-                    onChange={(event) => updateRow(index, { name: event.target.value })}
-                    disabled={busy}
-                    aria-invalid={problem !== null || undefined}
-                    data-testid={`${testId}-field-name`}
-                  />
-                  <Select
-                    aria-label={t(`第 ${n} 个字段的类型`, `Field ${n} kind`)}
-                    className="select-fit"
-                    value={row.kind}
-                    onChange={(event) =>
-                      updateRow(index, { kind: event.target.value as SchemaFieldKind })
-                    }
-                    disabled={busy}
-                    data-testid={`${testId}-field-kind`}
-                  >
-                    {SCHEMA_FIELD_KINDS.map((kind) => (
-                      <option key={kind} value={kind}>
-                        {schemaFieldKindLabel(kind, t)}
-                      </option>
-                    ))}
-                  </Select>
-                  <label className="row-wrap text-small">
+          {draft.rows.length > 0 ? (
+            // UX P3-1 / P3-3 on #738: a grid with a header row, so a filled row still says which
+            // value is which; below 640 px the description takes a line of its own.
+            <div className="schema-fields-grid">
+              <span className="schema-fields-head" aria-hidden>
+                {t('字段名', 'Name')}
+              </span>
+              <span className="schema-fields-head" aria-hidden>
+                {t('类型', 'Kind')}
+              </span>
+              <span className="schema-fields-head" aria-hidden>
+                {t('必填', 'Required')}
+              </span>
+              <span className="schema-fields-head schema-fields-head-description" aria-hidden>
+                {t('说明', 'Description')}
+              </span>
+              <span aria-hidden />
+              {draft.rows.map((row, index) => {
+                const problem = rowError(row, index);
+                const n = index + 1;
+                return (
+                  <div className="schema-field-row" key={row.uid} data-testid={`${testId}-field`}>
+                    <input
+                      className="input input-mono"
+                      id={`${id}-field-${row.uid}-name`}
+                      aria-label={t(`第 ${n} 个字段的名字`, `Field ${n} name`)}
+                      placeholder={t('字段名', 'Field name')}
+                      value={row.name}
+                      onChange={(event) => updateRow(index, { name: event.target.value })}
+                      disabled={busy}
+                      aria-invalid={problem !== null || undefined}
+                      data-testid={`${testId}-field-name`}
+                    />
+                    <Select
+                      aria-label={t(`第 ${n} 个字段的类型`, `Field ${n} kind`)}
+                      className="select-fit"
+                      value={row.kind}
+                      onChange={(event) =>
+                        updateRow(index, { kind: event.target.value as SchemaFieldKind })
+                      }
+                      disabled={busy}
+                      data-testid={`${testId}-field-kind`}
+                    >
+                      {SCHEMA_FIELD_KINDS.map((kind) => (
+                        <option key={kind} value={kind}>
+                          {schemaFieldKindLabel(kind, t)}
+                        </option>
+                      ))}
+                    </Select>
                     <input
                       type="checkbox"
+                      aria-label={t(`第 ${n} 个字段必填`, `Field ${n} required`)}
                       checked={row.required}
                       onChange={(event) => updateRow(index, { required: event.target.checked })}
                       disabled={busy}
                       data-testid={`${testId}-field-required`}
                     />
-                    {t('必填', 'Required')}
-                  </label>
-                  <input
-                    aria-label={t(`第 ${n} 个字段的说明`, `Field ${n} description`)}
-                    className="input grow"
-                    placeholder={descriptionPlaceholder}
-                    value={row.description}
-                    onChange={(event) => updateRow(index, { description: event.target.value })}
-                    disabled={busy}
-                    data-testid={`${testId}-field-description`}
-                  />
-                  <Button
-                    variant="ghost"
-                    size="s"
-                    disabled={busy}
-                    onClick={() =>
-                      onChange({ ...draft, rows: draft.rows.filter((_, i) => i !== index) })
-                    }
-                    aria-label={t(`移除第 ${n} 个字段`, `Remove field ${n}`)}
-                  >
-                    {t('移除', 'Remove')}
-                  </Button>
-                </div>
-                {problem !== null ? (
-                  <p className="field-error" role="alert">
-                    {problem}
-                  </p>
-                ) : null}
-              </div>
-            );
-          })}
+                    <input
+                      aria-label={t(`第 ${n} 个字段的说明`, `Field ${n} description`)}
+                      className="input schema-field-description"
+                      placeholder={descriptionPlaceholder}
+                      value={row.description}
+                      onChange={(event) => updateRow(index, { description: event.target.value })}
+                      disabled={busy}
+                      data-testid={`${testId}-field-description`}
+                    />
+                    <Button
+                      variant="ghost"
+                      size="s"
+                      disabled={busy}
+                      onClick={() =>
+                        onChange({ ...draft, rows: draft.rows.filter((_, i) => i !== index) })
+                      }
+                      aria-label={t(`移除第 ${n} 个字段`, `Remove field ${n}`)}
+                    >
+                      {t('移除', 'Remove')}
+                    </Button>
+                    {problem !== null ? (
+                      <p className="field-error" role="alert">
+                        {problem}
+                      </p>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          ) : null}
           <div className="row-wrap">
             <Button
               variant="secondary"
@@ -198,12 +216,12 @@ export function SchemaFieldsEditor({
             invalid={errors.some((error) => error.path === '')}
             data-testid={`${testId}-json`}
           />
-          {asFields === null ? (
+          {blocker !== null ? (
+            // UX P3-4 on #738: which field, and what of it — so the person knows what to change
+            // to get the list back.
             <span className="text-small text-3" data-testid={`${testId}-json-only`}>
-              {t(
-                '这份 JSON 用了字段列表说不出的写法（例如嵌套字段、取值范围），或者还不是合法 JSON，只能在这里改。',
-                'This JSON says more than the field list can (nested fields, bounds, …), or is not valid JSON yet, so it is edited here.',
-              )}
+              {t('只能用 JSON 编辑：', 'Edited as JSON only: ')}
+              {schemaListBlockerText(blocker, t)}
             </span>
           ) : null}
         </>

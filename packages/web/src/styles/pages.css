@@ -1702,3 +1702,60 @@
   flex: none;
   margin-top: 0.2em;
 }
+
+/* Legacy 453 (UX P3-1 / P3-3 on #738): a schema's field list as a grid under a header row, so a
+ * filled row still says which value is which. Below 640 px the description takes a line of its
+ * own, full width, instead of being squeezed beside the other controls. */
+.schema-fields-grid {
+  display: grid;
+  grid-template-columns: minmax(7rem, 1fr) auto auto minmax(9rem, 2fr) auto;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.schema-field-row {
+  display: contents;
+}
+
+.schema-fields-head {
+  color: var(--text-3);
+  font-size: var(--fs-12);
+}
+
+.schema-field-row > .field-error {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+@media (max-width: 640px) {
+  .schema-fields-grid {
+    grid-template-columns: minmax(0, 1fr) auto auto auto;
+    grid-auto-flow: row dense;
+  }
+
+  .schema-fields-head-description {
+    display: none;
+  }
+
+  .schema-field-description {
+    grid-column: 1 / -1;
+  }
+}
+
+/* UX P2-1 on #738: a binding's three labelled controls, read left to right as a sentence; the
+ * remove button sits on the controls' line, not the labels'. */
+.procedure-binding-row {
+  align-items: flex-end;
+}
+
+/* UX P3-2 on #738: a radio or checkbox stays beside its text; the text wraps on its own. */
+.choice-line {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.choice-line > input {
+  flex: none;
+  margin-top: 0.2em;
+}

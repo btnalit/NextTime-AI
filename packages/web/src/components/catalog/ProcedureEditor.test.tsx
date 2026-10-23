@@ -608,6 +608,103 @@ describe('ProcedureEditor (S6-A A2)', () => {
     ]);
   });
 
+  it('never leads into a cycle: a step waiting for this one cannot be waited for or taken from (UX P2-2 on #738)', () => {
+    const { caller } = http({});
+    const worker = (key: string, extra: Record<string, unknown> = {}) => ({
+      kind: 'worker',
+      definitionId: 'wd-1',
+      version: 1,
+      key,
+      outputSchema: { type: 'object', properties: { n: { type: 'integer' } } },
+      ...extra,
+    });
+    render(
+      <ProcedureEditor
+        http={caller}
+        copyOf={{
+          id: 'pr-1',
+          version: 1,
+          status: 'published',
+          name: 'Three',
+          description: 'Three steps',
+          steps: [
+            worker('scan', { bindings: [{ to: 'n', from: 'recount', path: 'n' }] }),
+            worker('recount'),
+            worker('report', { bindings: [{ to: 'n', from: 'scan', path: 'n' }] }),
+          ],
+        }}
+        onProposed={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    const [scan, , report] = screen.getAllByTestId('procedure-step') as [
+      HTMLElement,
+      HTMLElement,
+      HTMLElement,
+    ];
+    // recount waits for scan: scan's sources offer it disabled, and say why.
+    const sources = within(scan).getByTestId('procedure-step-binding-from') as HTMLSelectElement;
+    const recountOption = [...sources.options].find((option) => option.value === 'recount');
+    expect(recountOption?.textContent).toMatch(/它在等这一步/);
+    // It is the source already (from the copy): said in the form's words, with no way to wait.
+    expect(within(scan).getByTestId('procedure-step-binding-issue').textContent).toMatch(
+      /^步骤 recount 在等这一步/,
+    );
+    expect(within(scan).queryByTestId('procedure-step-binding-wait')).toBeNull();
+    fireEvent.click(within(scan).getByTestId('procedure-step-depends-own'));
+    const waits = within(scan).getAllByTestId('procedure-step-depends-on') as HTMLInputElement[];
+    expect(waits.map((box) => box.disabled)).toEqual([true, true]);
+    expect(within(scan).getAllByTestId('procedure-step-depends-loops')).toHaveLength(2);
+
+    // report waits for recount only: taking from scan says so, and one click adds the wait.
+    expect(within(report).getByTestId('procedure-step-binding-issue').textContent).toMatch(
+      /^这一步不等步骤 scan 完成.*「什么时候开始」/,
+    );
+    fireEvent.click(within(report).getByTestId('procedure-step-binding-wait'));
+    expect(
+      (within(report).getByTestId('procedure-step-depends-own') as HTMLInputElement).checked,
+    ).toBe(true);
+    const reportWaits = within(report).getAllByTestId(
+      'procedure-step-depends-on',
+    ) as HTMLInputElement[];
+    expect(reportWaits.map((box) => box.checked)).toEqual([true, true]);
+    expect(within(report).queryByTestId('procedure-step-binding-issue')).toBeNull();
+  });
+
+  it('a cycle that came with the Procedure is said where it is (UX P2-2 on #738)', () => {
+    const { caller } = http({});
+    render(
+      <ProcedureEditor
+        http={caller}
+        copyOf={{
+          id: 'pr-1',
+          version: 1,
+          status: 'published',
+          name: 'Loop',
+          description: 'Two steps waiting for each other',
+          steps: [
+            { kind: 'worker', definitionId: 'wd-1', version: 1, key: 'a', dependsOn: ['b'] },
+            { kind: 'worker', definitionId: 'wd-1', version: 1, key: 'b' },
+          ],
+        }}
+        onProposed={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    const [a, b] = screen.getAllByTestId('procedure-step') as [HTMLElement, HTMLElement];
+    expect(within(a).getByTestId('procedure-step-depends-cycle').textContent).toMatch(
+      /^这一步在等 b/,
+    );
+    expect(within(b).getByTestId('procedure-step-depends-cycle').textContent).toMatch(
+      /^这一步在等 a/,
+    );
+    // Taking the wait out is still possible, and ends it.
+    const [toB] = within(a).getAllByTestId('procedure-step-depends-on') as [HTMLInputElement];
+    expect(toB.disabled).toBe(false);
+    fireEvent.click(toB);
+    expect(screen.queryByTestId('procedure-step-depends-cycle')).toBeNull();
+  });
+
   it('input that is not JSON is refused at its field, and nothing is sent (legacy 453)', async () => {
     const { caller, calls } = http({});
     render(<ProcedureEditor http={caller} onProposed={vi.fn()} onDone={vi.fn()} />);
@@ -658,7 +755,10 @@ describe('ProcedureEditor (S6-A A2)', () => {
         onDone={vi.fn()}
       />,
     );
-    expect(screen.getByTestId('procedure-step-output-json-only')).toBeTruthy();
+    // UX P3-4 on #738: the reason names the field and what of it the list cannot say.
+    expect(screen.getByTestId('procedure-step-output-json-only').textContent).toMatch(
+      /字段 host 写了 properties/,
+    );
     expect(screen.queryByTestId('procedure-step-output-as-fields')).toBeNull();
     fireEvent.click(screen.getByTestId('procedure-parameters-as-json'));
     const json = screen.getByTestId('procedure-parameters-json') as HTMLTextAreaElement;

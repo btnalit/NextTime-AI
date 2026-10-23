@@ -16,6 +16,7 @@ import {
   newProcedureBinding,
   procedurePlanKey,
   procedurePreviousWorkerKey,
+  procedureWaiters,
   procedureWorkerKeys,
 } from '../../lib/catalog.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
@@ -129,6 +130,11 @@ export function WorkerPlanFields({
   const attemptOptions = Array.from({ length: MAX_STEP_ATTEMPTS }, (_, i) => String(i + 1));
   const place = context.places.get(index);
   const workers = procedureWorkersByKey(context.parsed, context.places);
+  // UX P2-2 on #738: the steps that wait for this one (directly or not) — it must not wait for, or
+  // take from, any of them. This step among them: it already is in a cycle.
+  const waiters = procedureWaiters(steps, ownKey);
+  const ownDeps = step.dependsOn ?? (previous !== null ? [previous] : []);
+  const cycleThrough = ownDeps.filter((key) => waiters.has(key));
 
   function updateBinding(at: number, patch: Partial<ProcedureBindingForm>): void {
     onChange({
@@ -226,7 +232,7 @@ export function WorkerPlanFields({
 
         <fieldset className="stack-s" data-testid="procedure-step-depends">
           <legend className="text-small">{t('什么时候开始', 'When it starts')}</legend>
-          <label className="row-wrap text-small">
+          <label className="choice-line text-small">
             <input
               type="radio"
               name={`${id}-depends`}
@@ -235,17 +241,19 @@ export function WorkerPlanFields({
               disabled={busy}
               data-testid="procedure-step-depends-default"
             />
-            {previous === null
-              ? t(
-                  '按顺序：它是第一个 Worker 步骤，最先开始',
-                  'In order: the first Worker step, starting first',
-                )
-              : t(
-                  `按顺序：等上一个 Worker 步骤 ${previous} 完成`,
-                  `In order: once the Worker step before it, ${previous}, is done`,
-                )}
+            <span>
+              {previous === null
+                ? t(
+                    '按顺序：它是第一个 Worker 步骤，最先开始',
+                    'In order: the first Worker step, starting first',
+                  )
+                : t(
+                    `按顺序：等上一个 Worker 步骤 ${previous} 完成`,
+                    `In order: once the Worker step before it, ${previous}, is done`,
+                  )}
+            </span>
           </label>
-          <label className="row-wrap text-small">
+          <label className="choice-line text-small">
             <input
               type="radio"
               name={`${id}-depends`}
@@ -254,7 +262,7 @@ export function WorkerPlanFields({
               disabled={busy}
               data-testid="procedure-step-depends-own"
             />
-            {t('自己选要等的步骤', 'Choose the steps it waits for')}
+            <span>{t('自己选要等的步骤', 'Choose the steps it waits for')}</span>
           </label>
           {step.dependsOn !== null ? (
             <div className="stack-s">
@@ -267,30 +275,45 @@ export function WorkerPlanFields({
                 </span>
               ) : (
                 <div className="row-wrap">
-                  {[...otherKeys, ...staleDeps].map((key) => (
-                    <label key={key} className="row-wrap text-small">
-                      <input
-                        type="checkbox"
-                        checked={step.dependsOn?.includes(key) ?? false}
-                        onChange={(event) => {
-                          const current = step.dependsOn ?? [];
-                          onChange({
-                            dependsOn: event.target.checked
-                              ? [...current, key]
-                              : current.filter((dep) => dep !== key),
-                          });
-                        }}
-                        disabled={busy}
-                        data-testid="procedure-step-depends-on"
-                      />
-                      <span className="mono">{key}</span>
-                      {staleDeps.includes(key) ? (
-                        <span className="text-3">
-                          {t('（这个流程里没有这一步）', ' (no such step in this Procedure)')}
+                  {[...otherKeys, ...staleDeps].map((key) => {
+                    const checked = step.dependsOn?.includes(key) ?? false;
+                    // A step that waits for this one cannot be waited for: offered unticked,
+                    // never; ticked (a cycle already), it can still be taken out.
+                    const loops = waiters.has(key);
+                    return (
+                      <label key={key} className="choice-line text-small">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(event) => {
+                            const current = step.dependsOn ?? [];
+                            onChange({
+                              dependsOn: event.target.checked
+                                ? [...current, key]
+                                : current.filter((dep) => dep !== key),
+                            });
+                          }}
+                          disabled={busy || (loops && !checked)}
+                          data-testid="procedure-step-depends-on"
+                        />
+                        <span>
+                          <span className="mono">{key}</span>
+                          {staleDeps.includes(key) ? (
+                            <span className="text-3">
+                              {t('（这个流程里没有这一步）', ' (no such step in this Procedure)')}
+                            </span>
+                          ) : loops ? (
+                            <span className="text-3" data-testid="procedure-step-depends-loops">
+                              {t(
+                                '（它在等这一步，不能反过来等它）',
+                                ' (it waits for this step, so this step cannot wait for it)',
+                              )}
+                            </span>
+                          ) : null}
                         </span>
-                      ) : null}
-                    </label>
-                  ))}
+                      </label>
+                    );
+                  })}
                 </div>
               )}
               {step.dependsOn.length === 0 && otherKeys.length > 0 ? (
@@ -299,6 +322,14 @@ export function WorkerPlanFields({
                 </span>
               ) : null}
             </div>
+          ) : null}
+          {cycleThrough.length > 0 ? (
+            <p className="field-error" role="alert" data-testid="procedure-step-depends-cycle">
+              {t(
+                `这一步在等 ${cycleThrough.join('、')}，而它们又（直接或间接）在等这一步：互相等待会被发布拒绝。取消其中一个等待。`,
+                `This step waits for ${cycleThrough.join(', ')}, which wait (directly or not) for this step: publishing refuses such a cycle. Take one of the waits out.`,
+              )}
+            </p>
           ) : null}
           {depsError !== null ? (
             <p className="field-error" role="alert">
@@ -342,78 +373,108 @@ export function WorkerPlanFields({
           {step.bindings.map((binding, at) => {
             const n = at + 1;
             const rowError = messages(errors, `${prefix}.bindings.${at}`, t);
-            const issue =
-              place !== undefined && binding.from !== '' && binding.path.trim() !== ''
+            const source = binding.from;
+            const fromStep = source !== '' && source !== PROCEDURE_PARAMS_SOURCE;
+            const staleSource = fromStep && !otherKeys.includes(source);
+            // UX P2-2 on #738: a source this step does not wait for is said in the form's own
+            // words, with the wait one click away — unless waiting for it would be a cycle.
+            const unwaited = fromStep && !staleSource && !ownDeps.includes(source);
+            const issue = unwaited
+              ? waiters.has(source)
+                ? t(
+                    `步骤 ${source} 在等这一步，这一步拿不到它的输出：换一个来源。`,
+                    `${source} waits for this step, so this step cannot take its output: choose another source.`,
+                  )
+                : t(
+                    `这一步不等步骤 ${source} 完成，拿不到它的输出：在「什么时候开始」里也等它。`,
+                    `This step does not wait for ${source}, so it cannot take its output: have it wait for ${source} under “When it starts”.`,
+                  )
+              : place !== undefined && source !== '' && binding.path.trim() !== ''
                 ? procedureBindingIssue(
-                    { to: binding.to.trim(), from: binding.from, path: binding.path.trim() },
+                    { to: binding.to.trim(), from: source, path: binding.path.trim() },
                     place,
                     workers,
                     context.parameters,
                     t,
                   )
                 : null;
-            const staleSource =
-              binding.from !== '' &&
-              binding.from !== PROCEDURE_PARAMS_SOURCE &&
-              !otherKeys.includes(binding.from);
+            const fieldId = `${id}-binding-${binding.uid}`;
             return (
               <div className="stack-s" key={binding.uid} data-testid="procedure-step-binding">
-                <div className="row-wrap">
-                  <input
-                    className="input input-mono"
-                    aria-label={t(`第 ${n} 个绑定放到输入的哪个字段`, `Binding ${n}: input field`)}
-                    placeholder={t('target.host 这样的输入字段', 'Input field, e.g. target.host')}
-                    value={binding.to}
-                    onChange={(event) => updateBinding(at, { to: event.target.value })}
-                    disabled={busy}
-                    aria-invalid={rowError !== null || undefined}
-                    data-testid="procedure-step-binding-to"
-                  />
-                  <Select
-                    aria-label={t(`第 ${n} 个绑定的来源`, `Binding ${n}: source`)}
-                    className="select-fit"
-                    value={binding.from}
-                    onChange={(event) => updateBinding(at, { from: event.target.value })}
-                    disabled={busy}
-                    data-testid="procedure-step-binding-from"
-                  >
-                    <option value="">{t('选来源…', 'Choose a source…')}</option>
-                    <option value={PROCEDURE_PARAMS_SOURCE}>
-                      {t('启动参数', 'The parameters')}
-                    </option>
-                    {otherKeys.map((key) => (
-                      <option key={key} value={key}>
-                        {t(`步骤 ${key} 的输出`, `Output of ${key}`)}
+                {/* UX P2-1 on #738: each control labelled, read as a sentence — 来源 → 取值 →
+                 *  填到输入字段. */}
+                <div className="row-wrap procedure-binding-row">
+                  <Field id={`${fieldId}-from`} label={t('来源', 'Source')}>
+                    <Select
+                      id={`${fieldId}-from`}
+                      aria-label={t(`第 ${n} 个绑定的来源`, `Binding ${n}: source`)}
+                      className="select-fit"
+                      value={source}
+                      onChange={(event) => updateBinding(at, { from: event.target.value })}
+                      disabled={busy}
+                      data-testid="procedure-step-binding-from"
+                    >
+                      <option value="">{t('选来源…', 'Choose a source…')}</option>
+                      <option value={PROCEDURE_PARAMS_SOURCE}>
+                        {t('启动参数', 'The parameters')}
                       </option>
-                    ))}
-                    {staleSource ? (
-                      <option value={binding.from}>
-                        {t(
-                          `步骤 ${binding.from}（这个流程里没有）`,
-                          `${binding.from} (not in this Procedure)`,
-                        )}
-                      </option>
-                    ) : null}
-                  </Select>
-                  <Combobox
-                    id={`${id}-binding-${binding.uid}-path`}
-                    aria-label={t(`第 ${n} 个绑定取哪个值`, `Binding ${n}: path`)}
-                    options={pathChoices(binding.from).map((name) => ({
-                      value: name,
-                      label: name,
-                    }))}
-                    value={binding.path}
-                    onChange={(path) => updateBinding(at, { path })}
-                    allowFreeEntry
-                    mono
-                    disabled={busy}
-                    placeholder={t('取值路径，如 site', 'Path, e.g. site')}
-                    emptyText={t(
-                      '来源没有声明字段：直接写路径。',
-                      'The source declares no fields: type the path.',
-                    )}
-                    testId="procedure-step-binding-path"
-                  />
+                      {otherKeys.map((key) => (
+                        <option key={key} value={key} disabled={waiters.has(key) && key !== source}>
+                          {waiters.has(key)
+                            ? t(
+                                `步骤 ${key} 的输出（它在等这一步）`,
+                                `Output of ${key} (it waits for this step)`,
+                              )
+                            : t(`步骤 ${key} 的输出`, `Output of ${key}`)}
+                        </option>
+                      ))}
+                      {staleSource ? (
+                        <option value={source}>
+                          {t(
+                            `步骤 ${source}（这个流程里没有）`,
+                            `${source} (not in this Procedure)`,
+                          )}
+                        </option>
+                      ) : null}
+                    </Select>
+                  </Field>
+                  <Field id={`${fieldId}-path`} label={t('取值', 'Value')}>
+                    <Combobox
+                      id={`${fieldId}-path`}
+                      aria-label={t(`第 ${n} 个绑定取哪个值`, `Binding ${n}: path`)}
+                      options={pathChoices(source).map((name) => ({ value: name, label: name }))}
+                      value={binding.path}
+                      onChange={(path) => updateBinding(at, { path })}
+                      allowFreeEntry
+                      mono
+                      disabled={busy}
+                      placeholder={t('取值路径，如 site', 'Path, e.g. site')}
+                      emptyText={t(
+                        '来源没有声明字段：直接写路径。',
+                        'The source declares no fields: type the path.',
+                      )}
+                      testId="procedure-step-binding-path"
+                    />
+                  </Field>
+                  <span className="text-3" aria-hidden>
+                    →
+                  </span>
+                  <Field id={`${fieldId}-to`} label={t('填到输入字段', 'Into input field')}>
+                    <input
+                      id={`${fieldId}-to`}
+                      className="input input-mono"
+                      aria-label={t(
+                        `第 ${n} 个绑定填到输入的哪个字段`,
+                        `Binding ${n}: input field`,
+                      )}
+                      placeholder={t('target.host 这样的字段', 'e.g. target.host')}
+                      value={binding.to}
+                      onChange={(event) => updateBinding(at, { to: event.target.value })}
+                      disabled={busy}
+                      aria-invalid={rowError !== null || undefined}
+                      data-testid="procedure-step-binding-to"
+                    />
+                  </Field>
                   <Button
                     variant="ghost"
                     size="s"
@@ -429,9 +490,25 @@ export function WorkerPlanFields({
                     {rowError}
                   </p>
                 ) : issue !== null ? (
-                  <span className="text-small text-warn" data-testid="procedure-step-binding-issue">
-                    {issue}
-                  </span>
+                  <div className="row-wrap">
+                    <span
+                      className="text-small text-warn"
+                      data-testid="procedure-step-binding-issue"
+                    >
+                      {issue}
+                    </span>
+                    {unwaited && !waiters.has(source) ? (
+                      <Button
+                        variant="secondary"
+                        size="s"
+                        disabled={busy}
+                        onClick={() => onChange({ dependsOn: [...ownDeps, source] })}
+                        data-testid="procedure-step-binding-wait"
+                      >
+                        {t(`也等 ${source}`, `Also wait for ${source}`)}
+                      </Button>
+                    ) : null}
+                  </div>
                 ) : null}
               </div>
             );

@@ -384,6 +384,44 @@ export function procedurePreviousWorkerKey(
   return before.at(-1)?.key ?? null;
 }
 
+/** UX P2-2 on #738: each `worker` step's plan key → the keys it waits for (its own list, else the
+ *  `worker` step before it). */
+export function procedureWaits(
+  steps: readonly ProcedureStepForm[],
+): ReadonlyMap<string, readonly string[]> {
+  const waits = new Map<string, readonly string[]>();
+  let previous: string | null = null;
+  for (const [index, step] of steps.entries()) {
+    if (step.kind !== 'worker') continue;
+    const key = procedurePlanKey(step, index);
+    waits.set(key, step.dependsOn ?? (previous !== null ? [previous] : []));
+    previous = key;
+  }
+  return waits;
+}
+
+/** UX P2-2 on #738: the keys of the `worker` steps that wait for `key`, directly or through
+ *  others — a step `key` must not wait for (or take from) any of them: that is a cycle. `key`
+ *  itself is among them when it already is in one. */
+export function procedureWaiters(
+  steps: readonly ProcedureStepForm[],
+  key: string,
+): ReadonlySet<string> {
+  const waits = procedureWaits(steps);
+  const waiters = new Set<string>();
+  const queue = [key];
+  while (queue.length > 0) {
+    const current = queue.shift() as string;
+    for (const [other, deps] of waits) {
+      if (deps.includes(current) && !waiters.has(other)) {
+        waiters.add(other);
+        queue.push(other);
+      }
+    }
+  }
+  return waiters;
+}
+
 /** Keys that some step names — in an explicit `dependsOn` or a binding's `from`. */
 function referencedKeys(steps: readonly ProcedureStepForm[]): ReadonlySet<string> {
   const keys = new Set<string>();

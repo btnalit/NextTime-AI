@@ -84,52 +84,119 @@ const ROOT_KEYS: ReadonlySet<string> = new Set([
 ]);
 const FIELD_KEYS: ReadonlySet<string> = new Set(['type', 'description']);
 
-/** The list for `schema`, or `null` when the list cannot say it exactly. */
-function rowsOf(schema: unknown): SchemaDraft | null {
-  if (!isRecord(schema) || schema.type !== 'object') return null;
-  if (Object.keys(schema).some((key) => !ROOT_KEYS.has(key))) return null;
+/** Why the field list cannot say a schema — the first place it stops at (UX P3-4 on #738). */
+export type SchemaListBlocker =
+  | { readonly kind: 'not_json' }
+  | { readonly kind: 'root_not_object' }
+  | { readonly kind: 'root_keys'; readonly keys: readonly string[] }
+  | { readonly kind: 'required'; readonly name: string }
+  | { readonly kind: 'field_keys'; readonly field: string; readonly keys: readonly string[] }
+  | { readonly kind: 'field_type'; readonly field: string };
+
+/** The list for `schema`, or where the list cannot say it exactly. */
+function rowsOf(schema: unknown): SchemaDraft | SchemaListBlocker {
+  if (!isRecord(schema) || schema.type !== 'object') return { kind: 'root_not_object' };
+  const extra = Object.keys(schema).filter((key) => !ROOT_KEYS.has(key));
   const { properties, required, additionalProperties, description } = schema;
-  if (properties !== undefined && !isRecord(properties)) return null;
-  if (additionalProperties !== undefined && typeof additionalProperties !== 'boolean') return null;
-  if (description !== undefined && typeof description !== 'string') return null;
-  if (
-    required !== undefined &&
-    (!Array.isArray(required) ||
-      required.some((name) => typeof name !== 'string' || !Object.hasOwn(properties ?? {}, name)) ||
-      new Set(required).size !== required.length)
-  ) {
-    return null;
+  if (properties !== undefined && !isRecord(properties)) extra.push('properties');
+  if (additionalProperties !== undefined && typeof additionalProperties !== 'boolean') {
+    extra.push('additionalProperties');
   }
-  const requiredNames = new Set((required as string[] | undefined) ?? []);
+  if (description !== undefined && typeof description !== 'string') extra.push('description');
+  if (required !== undefined && !Array.isArray(required)) extra.push('required');
+  if (extra.length > 0) return { kind: 'root_keys', keys: extra };
+  const declared = (properties ?? {}) as Record<string, unknown>;
+  const requiredList = (required ?? []) as unknown[];
+  for (const [index, name] of requiredList.entries()) {
+    if (
+      typeof name !== 'string' ||
+      !Object.hasOwn(declared, name) ||
+      requiredList.indexOf(name) !== index
+    ) {
+      return { kind: 'required', name: String(name) };
+    }
+  }
+  const requiredNames = new Set(requiredList as string[]);
   const rows: SchemaFieldRow[] = [];
-  for (const [name, node] of Object.entries(properties ?? {})) {
-    if (!isRecord(node) || Object.keys(node).some((key) => !FIELD_KEYS.has(key))) return null;
+  for (const [name, node] of Object.entries(declared)) {
+    if (!isRecord(node)) return { kind: 'field_type', field: name };
+    const keys = Object.keys(node).filter((key) => !FIELD_KEYS.has(key));
+    if (node.description !== undefined && typeof node.description !== 'string') {
+      keys.push('description');
+    }
+    if (keys.length > 0) return { kind: 'field_keys', field: name, keys };
     const kind = node.type === undefined ? '' : node.type;
     if (typeof kind !== 'string' || !SCHEMA_FIELD_KINDS.includes(kind as SchemaFieldKind)) {
-      return null;
+      return { kind: 'field_type', field: name };
     }
-    if (node.description !== undefined && typeof node.description !== 'string') return null;
     rows.push({
       ...newSchemaRow(),
       name,
       kind: kind as SchemaFieldKind,
       required: requiredNames.has(name),
-      description: node.description ?? '',
+      description: (node.description as string | undefined) ?? '',
     });
   }
   return {
     mode: 'fields',
     rows,
-    ...(additionalProperties !== undefined ? { additionalProperties } : {}),
-    ...(description !== undefined ? { description } : {}),
+    ...(typeof additionalProperties === 'boolean' ? { additionalProperties } : {}),
+    ...(typeof description === 'string' ? { description } : {}),
     hadProperties: properties !== undefined,
     hadRequired: required !== undefined,
   };
 }
 
+const isDraft = (value: SchemaDraft | SchemaListBlocker): value is SchemaDraft => 'mode' in value;
+
+/** Where a JSON draft keeps the list from saying it — `null` when the list can (or the draft is
+ *  a list already). */
+export function schemaListBlocker(draft: SchemaDraft): SchemaListBlocker | null {
+  if (draft.mode === 'fields') return null;
+  const schema = schemaFromDraft(draft);
+  if (!schema.ok) return { kind: 'not_json' };
+  const read = rowsOf(schema.value);
+  return isDraft(read) ? null : read;
+}
+
+/** The blocker as a sentence: which field, and what of it the list cannot say. */
+export function schemaListBlockerText(blocker: SchemaListBlocker, t: Translate): string {
+  const keys = (list: readonly string[]) => list.join(t('、', ', '));
+  switch (blocker.kind) {
+    case 'not_json':
+      return t('还不是合法的 JSON。', 'It is not valid JSON yet.');
+    case 'root_not_object':
+      return t(
+        '它的根不是对象（type 不是 object），字段列表只编辑对象的字段。',
+        'Its root is not an object (type is not object); the field list edits an object’s fields.',
+      );
+    case 'root_keys':
+      return t(
+        `它的根上写了 ${keys(blocker.keys)}，字段列表说不出。`,
+        `Its root says ${keys(blocker.keys)}, which the field list cannot.`,
+      );
+    case 'required':
+      return t(
+        `必填里的 ${blocker.name} 没有声明成字段，或者写了两次。`,
+        `${blocker.name} is required but not declared as a field, or listed twice.`,
+      );
+    case 'field_keys':
+      return t(
+        `字段 ${blocker.field} 写了 ${keys(blocker.keys)}，字段列表说不出。`,
+        `Field ${blocker.field} says ${keys(blocker.keys)}, which the field list cannot.`,
+      );
+    case 'field_type':
+      return t(
+        `字段 ${blocker.field} 的类型不止一种，或不是字段列表里的类型。`,
+        `Field ${blocker.field} has more than one kind, or one the field list does not offer.`,
+      );
+  }
+}
+
 /** The draft for a schema as it came: its list, or its JSON when the list cannot say it. */
 export function schemaDraftFrom(schema: unknown): SchemaDraft {
-  return rowsOf(schema) ?? { mode: 'json', text: JSON.stringify(schema, null, 2) };
+  const read = rowsOf(schema);
+  return isDraft(read) ? read : { mode: 'json', text: JSON.stringify(schema, null, 2) };
 }
 
 /** A new, empty contract: an object with no fields yet. */
@@ -185,7 +252,9 @@ export function schemaDraftAsJson(draft: SchemaDraft): SchemaDraft {
 export function schemaDraftAsFields(draft: SchemaDraft): SchemaDraft | null {
   if (draft.mode === 'fields') return draft;
   const schema = schemaFromDraft(draft);
-  return schema.ok ? rowsOf(schema.value) : null;
+  if (!schema.ok) return null;
+  const read = rowsOf(schema.value);
+  return isDraft(read) ? read : null;
 }
 
 /** What is wrong with the list's rows, by row index: no name, or a name used twice. */
