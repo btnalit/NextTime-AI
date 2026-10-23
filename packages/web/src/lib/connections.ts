@@ -2,7 +2,6 @@ import type { ConnectionRequestStatus, PublishableStatus } from '@nexttime/share
 import { PUBLISHABLE_STATUS_VALUES, SECRET_FIELD_MASK } from '@nexttime/shared';
 import type { ErrorOverrides } from './errors.js';
 import type { Translate } from './i18n.js';
-import { ownEntry } from './own.js';
 
 /**
  * lib/connections: wire shapes of the S2.13 connection flow as the web reads them —
@@ -211,46 +210,6 @@ export function reclassifiedOperationPayload(
     blast_radius: overrides.blastRadius,
     auto_approvable: overrides.autoApprovable,
   };
-}
-
-// -------------------------------------------------------------------------------------------
-// S8 W3-K1 (leftover 79): the console-side mirror of the kernel's own loosened/tightened
-// classification (`governance/gatekeepers/manifest.ts`'s `classifyOperationGovernanceChange`) —
-// used only to pick the `Confirm` tier (`medium` vs `irreversible`) *before* the owner confirms,
-// since the kernel's own authoritative classification is only known from the call's result,
-// after the fact. Never writes, never overrides the kernel's own audited classification.
-// -------------------------------------------------------------------------------------------
-
-export interface OperationGovernanceFieldsView {
-  readonly mode: string;
-  readonly blastRadius: string;
-  readonly autoApprovable: boolean;
-}
-
-const GOVERNANCE_MODE_STRICTNESS: Readonly<Record<string, number>> = { observe: 0, execute: 1 };
-const GOVERNANCE_BLAST_RADIUS_STRICTNESS: Readonly<Record<string, number>> = {
-  low: 0,
-  medium: 1,
-  high: 2,
-};
-
-/** `true` when moving from `existing` to `announced` reduces governance friction on any field
- *  (lower blast radius, `autoApprovable` false→true, `execute`→`observe`) — same direction rule
- *  as the kernel's own `classifyOperationGovernanceChange`, just a boolean rather than a full
- *  loosened/tightened/mixed classification (the console only needs "does this need the
- *  irreversible tier", not the kernel's own per-field breakdown). */
-export function isLooseningGovernanceChange(
-  existing: OperationGovernanceFieldsView,
-  announced: OperationGovernanceFieldsView,
-): boolean {
-  const existingMode = ownEntry(GOVERNANCE_MODE_STRICTNESS, existing.mode) ?? 0;
-  const announcedMode = ownEntry(GOVERNANCE_MODE_STRICTNESS, announced.mode) ?? 0;
-  if (announcedMode < existingMode) return true;
-  const existingBlast = ownEntry(GOVERNANCE_BLAST_RADIUS_STRICTNESS, existing.blastRadius) ?? 0;
-  const announcedBlast = ownEntry(GOVERNANCE_BLAST_RADIUS_STRICTNESS, announced.blastRadius) ?? 0;
-  if (announcedBlast < existingBlast) return true;
-  if (announced.autoApprovable && !existing.autoApprovable) return true;
-  return false;
 }
 
 /**

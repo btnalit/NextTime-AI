@@ -635,7 +635,7 @@ export function importOpenApi(document: OpenApiDocumentLike): Operation[] {
         // S8 W2-K1 (CO1/B3): `summary` first (OpenAPI's own short human-readable field), then the
         // longer `description`, then a synthesized fallback — never blank, so a real OpenAPI
         // document without either still produces something `find_operations`'s keyword ranking
-        // (and any future `importManifest({requireDescription: true})` caller) can use.
+        // can use.
         description: op.summary ?? op.description ?? `${method.toUpperCase()} ${path}`,
         binding: { kind: 'http', method: method.toUpperCase(), path },
         params_schema: paramsSchemaFor(op),

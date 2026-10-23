@@ -7,6 +7,7 @@ import type { CapabilityCaller } from '../lib/clients.js';
 import { HttpError } from '../lib/http-client.js';
 import type { CatalogTab } from '../lib/router.js';
 import { CatalogPage } from './CatalogPage.js';
+import { governanceFields } from './connect/governance-fixtures.test-helpers.js';
 import { ToastProvider } from './ui/Toast.js';
 
 afterEach(cleanup);
@@ -286,8 +287,16 @@ describe('CatalogPage', () => {
             blastRadius: 'low',
             autoApprovable: true,
             governanceChange: {
-              before: { mode: 'execute', blastRadius: 'high', autoApprovable: true },
-              after: { mode: 'execute', blastRadius: 'low', autoApprovable: true },
+              before: governanceFields({
+                mode: 'execute',
+                blastRadius: 'high',
+                autoApprovable: true,
+              }),
+              after: governanceFields({
+                mode: 'execute',
+                blastRadius: 'low',
+                autoApprovable: true,
+              }),
               direction: 'loosened',
             },
           },
@@ -316,7 +325,9 @@ describe('CatalogPage', () => {
     expect(within(confirm).getByTestId('confirm-target').textContent).toBe('docker.restart');
     expect(confirm.textContent?.split('docker.restart')).toHaveLength(2);
     expect(within(confirm).queryByTestId('confirm-impact')).toBeNull();
-    expect(within(confirm).getByTestId('governance-diff-list').textContent).toContain('分类变化');
+    expect(within(confirm).getByTestId('governance-diff-list').textContent).toContain(
+      '治理字段的变化',
+    );
     expect(confirm.textContent).toContain('它不再是高影响');
     expect(within(confirm).getByTestId('confirm-button').className).toContain('text-danger');
     const loosens = within(confirm).getByTestId(
@@ -348,8 +359,16 @@ describe('CatalogPage', () => {
             blastRadius: 'high',
             autoApprovable: false,
             governanceChange: {
-              before: { mode: 'execute', blastRadius: 'medium', autoApprovable: false },
-              after: { mode: 'execute', blastRadius: 'high', autoApprovable: false },
+              before: governanceFields({
+                mode: 'execute',
+                blastRadius: 'medium',
+                autoApprovable: false,
+              }),
+              after: governanceFields({
+                mode: 'execute',
+                blastRadius: 'high',
+                autoApprovable: false,
+              }),
               direction: 'tightened',
             },
           },
@@ -394,8 +413,16 @@ describe('CatalogPage', () => {
             autoApprovable: true,
             version: 2,
             governanceChange: {
-              before: { mode: 'observe', blastRadius: 'low', autoApprovable: true },
-              after: { mode: 'observe', blastRadius: 'low', autoApprovable: true },
+              before: governanceFields({
+                mode: 'observe',
+                blastRadius: 'low',
+                autoApprovable: true,
+              }),
+              after: governanceFields({
+                mode: 'observe',
+                blastRadius: 'low',
+                autoApprovable: true,
+              }),
               direction: 'neutral',
             },
             definitionChange: {
@@ -960,8 +987,16 @@ describe('CatalogPage', () => {
             status: 'draft',
             version: 2,
             governanceChange: {
-              before: { mode: 'observe', blastRadius: 'low', autoApprovable: true },
-              after: { mode: 'observe', blastRadius: 'low', autoApprovable: true },
+              before: governanceFields({
+                mode: 'observe',
+                blastRadius: 'low',
+                autoApprovable: true,
+              }),
+              after: governanceFields({
+                mode: 'observe',
+                blastRadius: 'low',
+                autoApprovable: true,
+              }),
               direction: 'neutral',
             },
             definitionChange: {
@@ -1007,8 +1042,16 @@ describe('CatalogPage', () => {
                 status: 'draft',
                 version: 2,
                 governanceChange: {
-                  before: { mode: 'observe', blastRadius: 'low', autoApprovable: true },
-                  after: { mode: 'observe', blastRadius: 'low', autoApprovable: true },
+                  before: governanceFields({
+                    mode: 'observe',
+                    blastRadius: 'low',
+                    autoApprovable: true,
+                  }),
+                  after: governanceFields({
+                    mode: 'observe',
+                    blastRadius: 'low',
+                    autoApprovable: true,
+                  }),
                   direction: 'neutral',
                 },
               },
@@ -2413,8 +2456,16 @@ describe('CatalogPage — proposer-only Publish / Deprecate (D-24)', () => {
             version: 2,
             proposedBy: 'p-me',
             governanceChange: {
-              before: { mode: 'execute', blastRadius: 'low', autoApprovable: false },
-              after: { mode: 'execute', blastRadius: 'low', autoApprovable: false },
+              before: governanceFields({
+                mode: 'execute',
+                blastRadius: 'low',
+                autoApprovable: false,
+              }),
+              after: governanceFields({
+                mode: 'execute',
+                blastRadius: 'low',
+                autoApprovable: false,
+              }),
               direction: 'neutral',
             },
           },

@@ -36,6 +36,16 @@ function direction(before: Partial<Operation>, after: Partial<Operation>) {
   );
 }
 
+/** The governance fields `op()` leaves at their defaults. */
+const UNDECLARED = {
+  awaitDecision: false,
+  reads: [],
+  writes: [],
+  readOnlyHint: null,
+  destructiveHint: null,
+  idempotentHint: null,
+} as const;
+
 describe('operationGovernanceChangeDirection (R-19, D-17)', () => {
   it('counts a lower blast radius as loosening on its own (high → medium, medium → low)', () => {
     expect(direction({ blast_radius: 'high' }, { blast_radius: 'medium' })).toBe('loosened');
@@ -121,12 +131,42 @@ describe('diffAnnouncedManifest', () => {
     expect(diff.changed).toEqual([
       {
         name: 'container.restart',
-        before: { mode: 'execute', blastRadius: 'high', autoApprovable: false },
-        after: { mode: 'execute', blastRadius: 'low', autoApprovable: true },
+        before: { ...UNDECLARED, mode: 'execute', blastRadius: 'high', autoApprovable: false },
+        after: { ...UNDECLARED, mode: 'execute', blastRadius: 'low', autoApprovable: true },
         direction: 'loosened',
         otherChangedFields: ['reversibility'],
       },
     ]);
+  });
+
+  it('carries every governance field in before / after, never in otherChangedFields (STATUS leftover 344)', () => {
+    const restart = op();
+    const diff = diffAnnouncedManifest(
+      [restart],
+      [
+        {
+          ...restart,
+          await_decision: !restart.await_decision,
+          reads: ['Container'],
+          writes: ['Container'],
+          read_only_hint: true,
+          destructive_hint: false,
+          idempotent_hint: true,
+        },
+      ],
+    );
+    expect(diff.changed).toHaveLength(1);
+    const [change] = diff.changed;
+    expect(change?.after).toMatchObject({
+      awaitDecision: !restart.await_decision,
+      reads: ['Container'],
+      writes: ['Container'],
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+    });
+    expect(change?.otherChangedFields).toEqual([]);
+    expect(change?.direction).not.toBe('neutral');
   });
 
   it('does not list an Operation whose only change is its description', () => {

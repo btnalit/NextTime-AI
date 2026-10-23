@@ -2,6 +2,7 @@ import type { Operation, PublishableStatus } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import {
   type AnnouncedManifestSource,
+  type OperationGovernanceFields,
   type OperationRecord,
   diffOperationGovernanceFields,
   gateOwnedParamsOfDefinition,
@@ -10,6 +11,7 @@ import {
   importDraftDiffersFromAnnounced,
   operationDefinitionDiffers,
   operationGovernanceChangeDirection,
+  operationGovernanceFieldsOf,
 } from '../../governance/gatekeepers/index.js';
 import { shownFreeText } from '../../governance/redaction/index.js';
 
@@ -40,17 +42,8 @@ export interface AnnouncedOperationToImport {
 
 export interface AnnouncedOperationPresent {
   name: string;
-  existing: {
-    mode: Operation['mode'];
-    blastRadius: Operation['blast_radius'];
-    autoApprovable: boolean;
-    status: PublishableStatus;
-  };
-  announced: {
-    mode: Operation['mode'];
-    blastRadius: Operation['blast_radius'];
-    autoApprovable: boolean;
-  };
+  existing: OperationGovernanceFields & { status: PublishableStatus };
+  announced: OperationGovernanceFields;
   differs: boolean;
   direction: ReturnType<typeof operationGovernanceChangeDirection>;
   definitionDiffers: boolean;
@@ -120,15 +113,10 @@ export async function compareAnnouncedOperations(
       });
       continue;
     }
-    const announced = {
-      mode: operation.mode,
-      blastRadius: operation.blast_radius,
-      autoApprovable: operation.auto_approvable,
-    };
+    // Every governance field (STATUS leftover 344): what the align below would write.
+    const announced = operationGovernanceFieldsOf(operation);
     const existingFields = {
-      mode: existingRecord.operation.mode,
-      blastRadius: existingRecord.operation.blast_radius,
-      autoApprovable: existingRecord.operation.auto_approvable,
+      ...operationGovernanceFieldsOf(existingRecord.operation),
       status: existingRecord.status,
     };
     // R-19 (D-17): the kernel's own classification, so the console's confirm never re-ranks it.
