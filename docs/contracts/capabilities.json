@@ -8136,6 +8136,52 @@
             {
               "additionalProperties": false,
               "properties": {
+                "dependencies": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "installedVersion": {
+                        "anyOf": [
+                          {
+                            "exclusiveMinimum": 0,
+                            "type": "integer"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "met": {
+                        "type": "boolean"
+                      },
+                      "minVersion": {
+                        "exclusiveMinimum": 0,
+                        "type": "integer"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "status": {
+                        "enum": [
+                          "not_installed",
+                          "up_to_date",
+                          "outdated",
+                          "customized"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "minVersion",
+                      "status",
+                      "installedVersion",
+                      "met"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
                 "items": {
                   "items": {
                     "additionalProperties": false,
@@ -8280,7 +8326,8 @@
                 "passed",
                 "sourceFound",
                 "items",
-                "requirements"
+                "requirements",
+                "dependencies"
               ],
               "type": "object"
             },
@@ -16031,6 +16078,52 @@
               },
               "type": "array"
             },
+            "dependencies": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "installedVersion": {
+                    "anyOf": [
+                      {
+                        "exclusiveMinimum": 0,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "met": {
+                    "type": "boolean"
+                  },
+                  "minVersion": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "enum": [
+                      "not_installed",
+                      "up_to_date",
+                      "outdated",
+                      "customized"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name",
+                  "minVersion",
+                  "status",
+                  "installedVersion",
+                  "met"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
             "installedVersion": {
               "anyOf": [
                 {
@@ -16225,6 +16318,26 @@
                     },
                     "type": "array"
                   },
+                  "requiredPacks": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "minVersion": {
+                          "exclusiveMinimum": 0,
+                          "type": "integer"
+                        },
+                        "name": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "minVersion"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
                   "summary": {
                     "type": "string"
                   },
@@ -16239,6 +16352,7 @@
                   "notes",
                   "breaking",
                   "requiredConnectors",
+                  "requiredPacks",
                   "components"
                 ],
                 "type": "object"
@@ -16254,7 +16368,8 @@
             "status",
             "installedVersion",
             "components",
-            "requirements"
+            "requirements",
+            "dependencies"
           ],
           "type": "object"
         },
@@ -16269,6 +16384,52 @@
             {
               "additionalProperties": false,
               "properties": {
+                "dependencies": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "installedVersion": {
+                        "anyOf": [
+                          {
+                            "exclusiveMinimum": 0,
+                            "type": "integer"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "met": {
+                        "type": "boolean"
+                      },
+                      "minVersion": {
+                        "exclusiveMinimum": 0,
+                        "type": "integer"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "status": {
+                        "enum": [
+                          "not_installed",
+                          "up_to_date",
+                          "outdated",
+                          "customized"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "minVersion",
+                      "status",
+                      "installedVersion",
+                      "met"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
                 "items": {
                   "items": {
                     "additionalProperties": false,
@@ -16413,7 +16574,8 @@
                 "passed",
                 "sourceFound",
                 "items",
-                "requirements"
+                "requirements",
+                "dependencies"
               ],
               "type": "object"
             },
@@ -21686,6 +21848,52 @@
                 },
                 "type": "array"
               },
+              "dependencies": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "installedVersion": {
+                      "anyOf": [
+                        {
+                          "exclusiveMinimum": 0,
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "met": {
+                      "type": "boolean"
+                    },
+                    "minVersion": {
+                      "exclusiveMinimum": 0,
+                      "type": "integer"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "enum": [
+                        "not_installed",
+                        "up_to_date",
+                        "outdated",
+                        "customized"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "minVersion",
+                    "status",
+                    "installedVersion",
+                    "met"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
               "installedVersion": {
                 "anyOf": [
                   {
@@ -21880,6 +22088,26 @@
                       },
                       "type": "array"
                     },
+                    "requiredPacks": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "minVersion": {
+                            "exclusiveMinimum": 0,
+                            "type": "integer"
+                          },
+                          "name": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "minVersion"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
                     "summary": {
                       "type": "string"
                     },
@@ -21894,6 +22122,7 @@
                     "notes",
                     "breaking",
                     "requiredConnectors",
+                    "requiredPacks",
                     "components"
                   ],
                   "type": "object"
@@ -21909,7 +22138,8 @@
               "status",
               "installedVersion",
               "components",
-              "requirements"
+              "requirements",
+              "dependencies"
             ],
             "type": "object"
           },
@@ -28693,6 +28923,52 @@
               },
               "type": "array"
             },
+            "dependencies": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "installedVersion": {
+                    "anyOf": [
+                      {
+                        "exclusiveMinimum": 0,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "met": {
+                    "type": "boolean"
+                  },
+                  "minVersion": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "enum": [
+                      "not_installed",
+                      "up_to_date",
+                      "outdated",
+                      "customized"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name",
+                  "minVersion",
+                  "status",
+                  "installedVersion",
+                  "met"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
             "installedVersion": {
               "anyOf": [
                 {
@@ -28887,6 +29163,26 @@
                     },
                     "type": "array"
                   },
+                  "requiredPacks": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "minVersion": {
+                          "exclusiveMinimum": 0,
+                          "type": "integer"
+                        },
+                        "name": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "minVersion"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
                   "summary": {
                     "type": "string"
                   },
@@ -28901,6 +29197,7 @@
                   "notes",
                   "breaking",
                   "requiredConnectors",
+                  "requiredPacks",
                   "components"
                 ],
                 "type": "object"
@@ -28916,7 +29213,8 @@
             "status",
             "installedVersion",
             "components",
-            "requirements"
+            "requirements",
+            "dependencies"
           ],
           "type": "object"
         },
@@ -42504,6 +42802,52 @@
         "verification": {
           "additionalProperties": false,
           "properties": {
+            "dependencies": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "installedVersion": {
+                    "anyOf": [
+                      {
+                        "exclusiveMinimum": 0,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "met": {
+                    "type": "boolean"
+                  },
+                  "minVersion": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "enum": [
+                      "not_installed",
+                      "up_to_date",
+                      "outdated",
+                      "customized"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name",
+                  "minVersion",
+                  "status",
+                  "installedVersion",
+                  "met"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
             "items": {
               "items": {
                 "additionalProperties": false,
@@ -42648,7 +42992,8 @@
             "passed",
             "sourceFound",
             "items",
-            "requirements"
+            "requirements",
+            "dependencies"
           ],
           "type": "object"
         }

@@ -1,4 +1,4 @@
-import type { PackRequirementState } from '@nexttime/shared';
+import type { PackInstallStatus, PackRequirementState } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { getGatekeeper } from '../../governance/gatekeepers/index.js';
 import {
@@ -6,6 +6,9 @@ import {
   readConnectorOccupancy,
   readGatekeeperPlatformPolicies,
 } from '../gates/index.js';
+import type { PackRequirementManifest } from './manifest.js';
+import { type PackRegistry, requirePack } from './registry.js';
+import { loadPackState } from './state.js';
 
 /**
  * application/packs/requirements: where each system a pack version needs (`requires.connectors`,
@@ -32,6 +35,11 @@ import {
  * `platformPreset` (S11 P1-F): for a `needs_platform` system, the platform ships a connector preset
  * of its name (`application/gates/presets.ts`) and no packaged gate holds its connector — a platform
  * administrator can connect it from that preset by typing its address and key.
+ *
+ * The packs a version builds on (`requires.packs`, S11 P1-F) are read here too
+ * (`readPackDependencies`): each one's state in the workspace, from its components (`state.ts`).
+ * Unlike a system, a missing one stops an install (`PackDependencyUnmetError`): the owner installs
+ * it on the same page.
  */
 
 /** A Gatekeeper of the workspace, by id and the name people know it by. */
@@ -124,4 +132,76 @@ export async function readPackRequirements(
     });
   }
   return statuses;
+}
+
+/** One pack a version builds on (`requires.packs`, S11 P1-F) and how the workspace has it now
+ *  (`state.ts`): met when that pack's installed version is `minVersion` or later. A `customized`
+ *  pack — content matching none of its versions — is not: what it has cannot be told. */
+export interface PackDependencyStatus {
+  readonly name: string;
+  readonly minVersion: number;
+  readonly status: PackInstallStatus;
+  /** The required pack's installed version; `null` for `not_installed` and `customized`. */
+  readonly installedVersion: number | null;
+  readonly met: boolean;
+}
+
+/** Whether `installedVersion` meets `minVersion` (see `PackDependencyStatus`). */
+export function packDependencyMet(installedVersion: number | null, minVersion: number): boolean {
+  return installedVersion !== null && installedVersion >= minVersion;
+}
+
+/** How each of `required` stands in `workspaceId`, in their order. Not locked: a read for the
+ *  pack's detail and the check before an install — a required pack rolled back while an install
+ *  runs shows on that install's own verification, run right after it. */
+export async function readPackDependencies(
+  client: PoolClient,
+  workspaceId: string,
+  registry: PackRegistry,
+  required: readonly PackRequirementManifest[],
+): Promise<readonly PackDependencyStatus[]> {
+  const statuses: PackDependencyStatus[] = [];
+  for (const { name, minVersion } of required) {
+    const state = await loadPackState(client, workspaceId, requirePack(registry, name));
+    statuses.push({
+      name,
+      minVersion,
+      status: state.status,
+      installedVersion: state.installedVersion,
+      met: packDependencyMet(state.installedVersion, minVersion),
+    });
+  }
+  return statuses;
+}
+
+/** `409 pack_dependency_unmet`: a pack the version builds on is not installed at the version it
+ *  needs (`requires.packs`). Nothing was written; install those first. */
+export class PackDependencyUnmetError extends Error {
+  readonly code = 'pack_dependency_unmet' as const;
+  readonly details: {
+    readonly unmet: readonly {
+      readonly name: string;
+      readonly minVersion: number;
+      readonly status: PackInstallStatus;
+      readonly installedVersion: number | null;
+    }[];
+  };
+  constructor(pack: string, unmet: readonly PackDependencyStatus[]) {
+    super(
+      `pack ${pack} builds on ${unmet
+        .map((dependency) => `${dependency.name} v${dependency.minVersion} or later`)
+        .join(
+          ', ',
+        )}, not installed here at that version — install ${unmet.length === 1 ? 'it' : 'them'} first; nothing was installed`,
+    );
+    this.name = 'PackDependencyUnmetError';
+    this.details = {
+      unmet: unmet.map(({ name, minVersion, status, installedVersion }) => ({
+        name,
+        minVersion,
+        status,
+        installedVersion,
+      })),
+    };
+  }
 }

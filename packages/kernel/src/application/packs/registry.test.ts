@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { parse as parseYaml } from 'yaml';
 import { OntologyDefinitionParseError } from '../../substrate/ontology/index.js';
 import { contentDigest } from '../change-plan/index.js';
+import { loadConnectorPresets } from '../gates/index.js';
 import {
   type PackFixtureDirs,
   objectTypeYaml,
@@ -118,6 +119,41 @@ describe('the packs this repository ships', () => {
     expect(systemsOf(v3)).toEqual([['ops-runner', ['docker']]]);
     expect([v2?.breaking, v3?.breaking]).toEqual([false, false]);
     expect(new Set([v1?.digest, v2?.digest, v3?.digest]).size).toBe(3);
+  });
+
+  it('knowledge v1 (S11 P1-F): a read-only Worker and its Skill on RAGFlow, building on ops-assets v2 for the types RAGFlow’s Operations read and write', async () => {
+    const registry = await loadPackRegistry();
+    const v1 = latestPackVersion(requirePack(registry, 'knowledge'));
+    expect(v1.version).toBe(1);
+    expect(v1.requiredConnectors).toEqual(['ragflow']);
+    expect(v1.requiredPacks).toEqual([{ name: 'ops-assets', minVersion: 2 }]);
+    expect(v1.components.map((c) => [c.kind, c.kind === 'ontology' ? c.family : c.name])).toEqual([
+      ['skill', 'kb-retrieval'],
+      ['worker', 'knowledge-researcher'],
+    ]);
+    const worker = v1.components.find((c) => c.kind === 'worker');
+    expect(worker?.kind === 'worker' && worker.systems).toEqual(['ragflow']);
+    expect(worker?.kind === 'worker' && worker.definition.skills).toEqual(['kb-retrieval']);
+    // No capabilities: the platform's default, which never holds an execute-class tool.
+    expect(worker?.kind === 'worker' && worker.definition.capabilities).toBeUndefined();
+
+    // Every type the RAGFlow preset's Operations read or write is one the version it builds on
+    // declares — the reason it builds on ops-assets v2 rather than publishing them again.
+    const opsAssets = requirePack(registry, 'ops-assets').versions[1];
+    const declared = new Set(
+      opsAssets?.components.flatMap((c) =>
+        c.kind === 'ontology' ? (c.definition.objectTypes ?? []).map((type) => type.name) : [],
+      ),
+    );
+    const ragflow = (await loadConnectorPresets()).find((preset) => preset.name === 'ragflow');
+    const used = new Set(
+      ragflow?.operations.flatMap((operation) => [
+        ...(operation.reads ?? []),
+        ...(operation.writes ?? []),
+      ]),
+    );
+    expect(used.size).toBeGreaterThan(0);
+    expect([...used].filter((type) => !declared.has(type))).toEqual([]);
   });
 
   it('what an owner reads (summary, notes, descriptions) has no space between two Chinese characters', async () => {
@@ -321,6 +357,109 @@ describe('parsePackManifest (through the registry): the manifest’s own rules',
       PackManifestError,
     );
     expect(await loadWith(requires('  gates:\n    - docker\n'))).toBeInstanceOf(PackManifestError);
+  });
+
+  it('requires.packs (S11 P1-F): a pack name and a version from 1, each pack once, never its own', async () => {
+    const requires = (lines: string) => `schema: 1\n${head}requires:\n${lines}${ontology}`;
+    expect(
+      String(
+        await loadWith(
+          requires(
+            '  packs:\n    - name: base\n      minVersion: 1\n    - name: base\n      minVersion: 2\n',
+          ),
+        ),
+      ),
+    ).toMatch(/requires pack "base" twice/);
+    expect(
+      String(await loadWith(requires('  packs:\n    - name: test-pack\n      minVersion: 1\n'))),
+    ).toMatch(/never requires itself/);
+    expect(
+      await loadWith(requires('  packs:\n    - name: base\n      minVersion: 0\n')),
+    ).toBeInstanceOf(PackManifestError);
+    expect(await loadWith(requires('  packs:\n    - name: base\n'))).toBeInstanceOf(
+      PackManifestError,
+    );
+    expect(
+      await loadWith(requires('  packs:\n    - name: Base\n      minVersion: 1\n')),
+    ).toBeInstanceOf(PackManifestError);
+    expect(await loadWith(requires('  packs: []\n'))).toBeInstanceOf(PackManifestError);
+    expect(String(await loadWith(requires('  {}\n')))).toMatch(/requires names connectors, packs/);
+  });
+});
+
+describe('requires.packs across the registry (S11 P1-F)', () => {
+  const BASE = (type: string) => ({
+    ontology: [{ family: 'base', domainPack: `base-${type}.yaml`, yaml: objectTypeYaml(type) }],
+  });
+  const needs = (name: string, minVersion: number, type = 'Uses') => ({
+    ontology: [
+      {
+        family: `uses-${name}`,
+        domainPack: `uses-${name}-${type}.yaml`,
+        yaml: objectTypeYaml(type),
+      },
+    ],
+    requiresPacks: [{ name, minVersion }],
+  });
+
+  it('reads them in order, and counts them in the digest only when declared', async () => {
+    fixture = await writePackFixture({
+      base: [BASE('A'), BASE('B')],
+      user: [{ ...needs('base', 2), requires: ['docker'] }],
+    });
+    const registry = await loadPackRegistry(fixture);
+    const user = latestPackVersion(requirePack(registry, 'user'));
+    expect(user.requiredPacks).toEqual([{ name: 'base', minVersion: 2 }]);
+    expect(user.requiredConnectors).toEqual(['docker']);
+    expect(latestPackVersion(requirePack(registry, 'base')).requiredPacks).toEqual([]);
+    await rm(fixture.root, { recursive: true, force: true });
+    fixture = await writePackFixture({
+      base: [BASE('A'), BASE('B')],
+      user: [{ ...needs('base', 2), requiresPacks: undefined, requires: ['docker'] }],
+    });
+    const without = latestPackVersion(requirePack(await loadPackRegistry(fixture), 'user'));
+    expect(without.requiredPacks).toEqual([]);
+    expect(without.digest).not.toBe(user.digest);
+  });
+
+  it('a pack this deployment does not ship, or a version it does not reach', async () => {
+    fixture = await writePackFixture({ user: [needs('base', 1)] });
+    await expect(loadPackRegistry(fixture)).rejects.toThrow(
+      /requires pack "base", which this deployment does not ship/,
+    );
+    await rm(fixture.root, { recursive: true, force: true });
+    fixture = await writePackFixture({ base: [BASE('A')], user: [needs('base', 2)] });
+    await expect(loadPackRegistry(fixture)).rejects.toThrow(
+      /requires pack "base" v2 or later, but it goes up to v1/,
+    );
+  });
+
+  it('packs requiring each other in a cycle, through any of their versions', async () => {
+    // third requires first in its v1 only: its v2 keeps the component and drops the requirement.
+    fixture = await writePackFixture({
+      first: [needs('second', 1, 'One')],
+      second: [needs('third', 1, 'Two')],
+      third: [
+        needs('first', 1, 'Three'),
+        {
+          ontology: [
+            {
+              family: 'uses-first',
+              domainPack: 'uses-first-v2.yaml',
+              yaml: objectTypeYaml('Three'),
+            },
+          ],
+        },
+      ],
+    });
+    const err = await loadPackRegistry(fixture).then(
+      () => {
+        throw new Error('the registry loaded');
+      },
+      (thrown: unknown) => thrown,
+    );
+    expect(err).toBeInstanceOf(PackRegistryError);
+    expect(String(err)).toMatch(/cycle: first → second → third → first/);
   });
 });
 

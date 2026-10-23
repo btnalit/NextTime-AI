@@ -27,6 +27,15 @@ import { z } from 'zod';
  * version checks them. A generic connector (`http`, `mcp`, `cli`, `ssh`) names a transport, not a
  * system, so it is refused.
  *
+ * `requires.packs` (S11 P1-F): the other packs the version's components build on, each by name and
+ * the lowest version that has what they need (`minVersion`) — the ontology types its systems'
+ * Operations read and write, say, which another pack publishes (a type belongs to one family, and a
+ * family to one pack). Unlike a system, a pack is something the workspace's owner installs on the
+ * same page, so installing waits for them: `install_pack` refuses while one is not installed at
+ * `minVersion` or later (`requirements.ts`); verifying a segment of the version checks them again.
+ * A pack never requires itself; the registry checks the packs named exist with that version, and
+ * that no pack requires its way back to itself (`registry.ts`).
+ *
  * What a manifest must keep that one Zod shape cannot say (`parsePackManifest` checks it): version
  * 1 is never `breaking` (nothing precedes it), it has at least one component, and it names each
  * component once. Rules across manifests (directory names, versions dense from 1, a component in
@@ -71,6 +80,14 @@ const OntologyComponentSchema = z
   })
   .strict();
 
+/** One pack a version builds on (`requires.packs`, see this module's comment). */
+const PackRequirementManifestSchema = z
+  .object({
+    name: z.string().regex(PACK_NAME_PATTERN),
+    minVersion: z.number().int().positive(),
+  })
+  .strict();
+
 const PackManifestSchema = z
   .object({
     schema: z.literal(PACK_CONTRACT_SCHEMA),
@@ -96,9 +113,14 @@ const PackManifestSchema = z
                 message: 'names a transport (http, mcp, cli, ssh), not a system',
               }),
           )
-          .min(1),
+          .min(1)
+          .optional(),
+        packs: z.array(PackRequirementManifestSchema).min(1).optional(),
       })
       .strict()
+      .refine((requires) => requires.connectors !== undefined || requires.packs !== undefined, {
+        message: 'requires names connectors, packs or both; leave it out when it needs neither',
+      })
       .optional(),
     components: z
       .object({
@@ -111,6 +133,7 @@ const PackManifestSchema = z
   .strict();
 
 export type PackManifest = z.infer<typeof PackManifestSchema>;
+export type PackRequirementManifest = z.infer<typeof PackRequirementManifestSchema>;
 export type PackOntologyComponentManifest = NonNullable<
   PackManifest['components']['ontology']
 >[number];
@@ -177,6 +200,14 @@ export function parsePackManifest(text: string, source: string): PackManifest {
       source,
       `requires connector ${JSON.stringify(repeatedConnector)} twice`,
     );
+  }
+  const packs = (manifest.requires?.packs ?? []).map((required) => required.name);
+  const repeatedPack = packs.find((name, index) => packs.indexOf(name) !== index);
+  if (repeatedPack !== undefined) {
+    throw new PackManifestError(source, `requires pack ${JSON.stringify(repeatedPack)} twice`);
+  }
+  if (packs.includes(manifest.name)) {
+    throw new PackManifestError(source, 'requires its own pack; a pack never requires itself');
   }
   for (const [what, names] of named) {
     const repeated = names.find((name, index) => names.indexOf(name) !== index);

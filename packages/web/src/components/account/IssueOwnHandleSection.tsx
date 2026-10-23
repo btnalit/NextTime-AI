@@ -1,5 +1,6 @@
-import { getCapability } from '@nexttime/shared';
+import { type Capability, getCapability } from '@nexttime/shared';
 import { useState } from 'react';
+import { actionHint, actionLabel } from '../../lib/capability-labels.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { entryCeilingCapabilities } from '../../lib/entry-ceiling.js';
 import {
@@ -8,7 +9,7 @@ import {
   ttlDaysLabel,
   ttlPresetDaysWithin,
 } from '../../lib/handle-ttl.js';
-import { useT } from '../../lib/i18n.js';
+import { type Translate, useT } from '../../lib/i18n.js';
 import { useGatekeeperDirectory } from '../approvals/useDirectoryNames.js';
 import { Button } from '../kit/button.js';
 import {
@@ -53,6 +54,31 @@ interface IssueHandleResult {
     readonly capabilities: readonly string[];
     readonly resources: Readonly<Record<string, readonly string[]>>;
   };
+}
+
+/** The kinds of capability the entry ceiling holds, in the order the scope list shows them — by the
+ *  registry's `mode`: reads, proposals, the one delegation, and what the agent reports or records. */
+type CeilingKind = 'read' | 'propose' | 'delegate' | 'report';
+const CEILING_KINDS: readonly CeilingKind[] = ['read', 'propose', 'delegate', 'report'];
+
+function ceilingKind(capability: Capability): CeilingKind {
+  if (capability.mode === 'observe') return 'read';
+  if (capability.mode === 'propose') return 'propose';
+  if (capability.name === 'invoke_worker') return 'delegate';
+  return 'report';
+}
+
+function ceilingKindLabel(kind: CeilingKind, t: Translate): string {
+  switch (kind) {
+    case 'read':
+      return t('查询', 'Reading');
+    case 'propose':
+      return t('提议', 'Proposing');
+    case 'delegate':
+      return t('委派 Worker', 'Delegating to Workers');
+    case 'report':
+      return t('汇报与记录', 'Reporting and recording');
+  }
 }
 
 export interface IssueOwnHandleSectionProps {
@@ -221,25 +247,53 @@ export function IssueOwnHandleSection({ http }: IssueOwnHandleSectionProps) {
             disabled={submitting}
           />
           <span>
+            {/* Legacy 440: the entry ceiling is not only reads — it proposes, delegates to
+             *  Workers and reports too. */}
             {t(
-              '不限（入口 agent 上限的观察类能力全集）',
-              'Unrestricted (every observe-class capability the entry ceiling allows)',
+              `不限（入口智能体能用的全部 ${entryCeiling.length} 项能力：查询、提议、委派 Worker、汇报与记录）`,
+              `Unrestricted (all ${entryCeiling.length} capabilities the entry agent may use: reading, proposing, delegating to Workers, reporting and recording)`,
             )}
           </span>
         </label>
         {!capabilitiesUnrestricted ? (
           <div className="stack-s" data-testid="ioh-capability-list" style={{ paddingTop: 8 }}>
-            {entryCeiling.map((capability) => (
-              <label className="checkbox" key={capability.name} title={capability.description}>
-                <input
-                  type="checkbox"
-                  checked={pickedCapabilities.has(capability.name)}
-                  onChange={() => toggleCapability(capability.name)}
-                  disabled={submitting}
-                />
-                <span className="mono">{capability.name}</span>
-              </label>
-            ))}
+            {/* Legacy 439: what it does first, in the reader's language, with its description
+             *  under it (no tooltip-only English); the registry name as secondary text. Grouped by
+             *  the kinds the unrestricted option names (#718 UX P3). */}
+            {CEILING_KINDS.map((kind) => {
+              const members = entryCeiling.filter((capability) => ceilingKind(capability) === kind);
+              if (members.length === 0) return null;
+              return (
+                <fieldset
+                  key={kind}
+                  className="stack-s"
+                  style={{ border: 0, padding: 0, margin: 0 }}
+                  data-testid={`ioh-capability-group-${kind}`}
+                >
+                  <legend className="text-2 text-small">{ceilingKindLabel(kind, t)}</legend>
+                  {members.map((capability) => {
+                    const hint = actionHint(capability.name, t);
+                    return (
+                      <label className="checkbox" key={capability.name}>
+                        <input
+                          type="checkbox"
+                          checked={pickedCapabilities.has(capability.name)}
+                          onChange={() => toggleCapability(capability.name)}
+                          disabled={submitting}
+                        />
+                        <span className="stack-s" style={{ gap: 2 }}>
+                          <span>
+                            {actionLabel(capability.name, t)}{' '}
+                            <span className="mono text-3 text-small">{capability.name}</span>
+                          </span>
+                          {hint !== null ? <span className="text-3 text-small">{hint}</span> : null}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </fieldset>
+              );
+            })}
           </div>
         ) : null}
       </fieldset>

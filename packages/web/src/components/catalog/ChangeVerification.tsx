@@ -4,6 +4,7 @@ import {
   type ChangeSegmentWire,
   type ChangeVerificationResultWire,
   type ChangeVerificationWire,
+  type PackInstallStatus,
   type PackRequirementState,
   type PackRequirementWire,
 } from '@nexttime/shared';
@@ -28,7 +29,8 @@ import { StatusChip } from '../kit/status-chip.js';
  * stands in the workspace and what to do about it (`PackRequirementWire`: the 能力包 detail and
  * install review), and an install
  * record's 核验 — the latest run (`ChangeVerificationWire`: are the changes still in effect, are
- * the systems connected and up) and, for the owner, running it again (`verify_change_segment`, at
+ * the systems connected and up, are the packs it builds on still installed at the version it
+ * needs) and, for the owner, running it again (`verify_change_segment`, at
  * most once every `CHANGE_VERIFICATION_COOLDOWN_SECONDS`).
  */
 
@@ -49,6 +51,21 @@ export function requirementHint(state: PackRequirementState, t: Translate): stri
         'The platform does not offer it, or its gate instances are disabled; a platform administrator connects or re-enables one first.',
       );
   }
+}
+
+/** The version a pack needs of a pack it builds on (S11 P1-F): 「v2 或更高」. */
+export function minVersionText(minVersion: number, t: Translate): string {
+  return t(`v${minVersion} 或更高`, `v${minVersion} or later`);
+}
+
+/** How the workspace has a pack another builds on, in a few words: 「未安装」, 「已装 v1」. */
+export function dependencyNowText(
+  dependency: { readonly status: PackInstallStatus; readonly installedVersion: number | null },
+  t: Translate,
+): string {
+  if (dependency.status === 'not_installed') return t('未安装', 'not installed');
+  if (dependency.installedVersion === null) return t('已定制', 'customized');
+  return t(`已装 v${dependency.installedVersion}`, `v${dependency.installedVersion} installed`);
 }
 
 /**
@@ -322,6 +339,35 @@ function VerificationResult({
           ))}
         </div>
       )}
+      {verification.dependencies.length > 0 ? (
+        <div className="stack-s" data-testid="catalog-change-dependencies">
+          <span className="text-small">{t('依赖的能力包：', 'Packs it builds on:')}</span>
+          {verification.dependencies.map((dependency) => (
+            <span
+              className="row-wrap text-small"
+              key={dependency.name}
+              data-testid={`catalog-change-dependency-${dependency.name}`}
+            >
+              <RouteLink
+                href={hrefs.catalog('packs', dependency.name)}
+                testId={`catalog-change-dependency-${dependency.name}-link`}
+              >
+                <span className="mono">{dependency.name}</span>
+              </RouteLink>
+              <span>{minVersionText(dependency.minVersion, t)}</span>
+              <span className={`chip chip-s ${dependency.met ? 'chip-ok' : 'chip-warn'}`}>
+                {dependency.met ? t('已满足', 'Met') : t('不满足', 'Not met')}
+              </span>
+              <span className="text-3">
+                {t(
+                  `现在${dependencyNowText(dependency, t)}`,
+                  `now ${dependencyNowText(dependency, t)}`,
+                )}
+              </span>
+            </span>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }

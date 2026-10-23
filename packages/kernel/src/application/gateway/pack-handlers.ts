@@ -21,6 +21,7 @@ import {
   type PackComponent,
   type PackComponentState,
   type PackEntry,
+  type PackRegistry,
   type PackState,
   type PackVersion,
   type PlannedWorkerGates,
@@ -31,6 +32,7 @@ import {
   loadPackRegistry,
   loadPackState,
   previewPackInstall,
+  readPackDependencies,
   readPackRequirements,
   readWorkerBindings,
 } from '../packs/index.js';
@@ -46,8 +48,8 @@ import { sourceRequirementsChecker } from './change-verification.js';
  * 目录 能力包 tab). Each parses params, calls the domain module and projects its records to
  * `@nexttime/shared`'s `wire/packs.ts`; the reads here are each component's provenance
  * (`loadOntologyProvenance` / `loadFamilyProvenance`) and where each system the latest version
- * needs stands (`readPackRequirements`, no gate contacted), in the same transaction as the state
- * they explain. `install_pack` verifies the segment it recorded once it has committed (P1-E).
+ * needs stands (`readPackRequirements`, no gate contacted) and how the workspace has each pack it
+ * builds on (`readPackDependencies`, P1-F), in the same transaction as the state they explain. `install_pack` verifies the segment it recorded once it has committed (P1-E).
  */
 
 function toPackComponentWire(component: PackComponent): PackComponentWire {
@@ -139,6 +141,7 @@ function toPackVersionWire(version: PackVersion): PackVersionWire {
     notes: version.notes,
     breaking: version.breaking,
     requiredConnectors: [...version.requiredConnectors],
+    requiredPacks: version.requiredPacks.map(({ name, minVersion }) => ({ name, minVersion })),
     components: version.components.map(toPackComponentWire),
   };
 }
@@ -152,6 +155,7 @@ async function connectorPresetNames(): Promise<ReadonlySet<string>> {
 async function toPackWire(
   client: PoolClient,
   workspaceId: string,
+  registry: PackRegistry,
   state: PackState,
   presetNames?: ReadonlySet<string>,
 ): Promise<PackWire> {
@@ -182,6 +186,9 @@ async function toPackWire(
       })),
       platformPreset: requirement.platformPreset,
     })),
+    dependencies: (
+      await readPackDependencies(client, workspaceId, registry, latest.requiredPacks)
+    ).map((dependency) => ({ ...dependency })),
   };
 }
 
@@ -291,6 +298,7 @@ export const listPacksHandler: CapabilityHandler = async (client, workspaceId) =
       await toPackWire(
         client,
         workspaceId,
+        registry,
         await loadPackState(client, workspaceId, entry),
         presets,
       ),
@@ -309,15 +317,16 @@ export const previewPackInstallHandler: CapabilityHandler = async (client, works
     name: string;
     workerGates?: Record<string, string[]>;
   };
+  const registry = await loadPackRegistry();
   const preview = await previewPackInstall(
     client,
     workspaceId,
-    await loadPackRegistry(),
+    registry,
     name,
     workerGateChoice(workerGates),
   );
   const result: PackInstallPreviewWire = {
-    pack: await toPackWire(client, workspaceId, preview.current),
+    pack: await toPackWire(client, workspaceId, registry, preview.current),
     targetVersion: preview.target.version,
     digest: preview.plan.digest,
     unchanged: preview.plan.unchanged,
@@ -358,21 +367,16 @@ export const installPackHandler: CapabilityHandler = async (
       'install_pack: only a person (a human Principal on the human channel) can confirm an authority-widening change',
     );
   }
-  const installed = await installPack(
-    client,
-    workspaceId,
-    context.principalId,
-    await loadPackRegistry(),
-    {
-      name: input.name,
-      version: input.version,
-      reviewedDigest: input.reviewedDigest,
-      confirmedOrdinals,
-      workerGates: workerGateChoice(input.workerGates),
-    },
-  );
+  const registry = await loadPackRegistry();
+  const installed = await installPack(client, workspaceId, context.principalId, registry, {
+    name: input.name,
+    version: input.version,
+    reviewedDigest: input.reviewedDigest,
+    confirmedOrdinals,
+    workerGates: workerGateChoice(input.workerGates),
+  });
   const result: PackInstallResultWire = {
-    pack: await toPackWire(client, workspaceId, installed.state),
+    pack: await toPackWire(client, workspaceId, registry, installed.state),
     segmentId: installed.segmentId,
     verification: null,
   };
@@ -389,7 +393,7 @@ export const installPackHandler: CapabilityHandler = async (
     // install's locks are gone. The install stands whatever happens here.
     afterCommit: async (pool) => ({
       ...result,
-      ...(await verifyAfterInstall(pool, workspaceId, principalId, segmentId, entry)),
+      ...(await verifyAfterInstall(pool, workspaceId, principalId, segmentId, registry, entry)),
     }),
   };
 };
@@ -403,6 +407,7 @@ async function verifyAfterInstall(
   workspaceId: string,
   principalId: string,
   segmentId: string,
+  registry: PackRegistry,
   entry: PackEntry,
 ): Promise<Pick<PackInstallResultWire, 'pack' | 'verification'> | Record<string, never>> {
   try {
@@ -417,6 +422,7 @@ async function verifyAfterInstall(
         pack: await toPackWire(
           client,
           workspaceId,
+          registry,
           await loadPackState(client, workspaceId, entry),
         ),
         verification: toChangeVerificationWire(verification),

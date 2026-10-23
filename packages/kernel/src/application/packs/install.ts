@@ -23,7 +23,12 @@ import {
   packOwnedWorkerDigest,
   requirePack,
 } from './registry.js';
-import { type PackRequirementGate, readPackRequirements } from './requirements.js';
+import {
+  PackDependencyUnmetError,
+  type PackRequirementGate,
+  readPackDependencies,
+  readPackRequirements,
+} from './requirements.js';
 import { type PackState, classifyPackState } from './state.js';
 
 /**
@@ -37,9 +42,11 @@ import { type PackState, classifyPackState } from './state.js';
  *         beside the items: which versions it moves through and whether one is `breaking`, and how
  *         many graph rows use a type it takes out. The digest is what they review.
  *   install (`installPack`) — refuses when the latest version is not the one reviewed (409
- *         `version_changed`), then applies the segment with the reviewed digest (409
- *         `change_plan_changed` when anything moved since) and the widening items the person
- *         confirmed one by one (400 `change_confirmation_required` otherwise).
+ *         `version_changed`) or builds on a pack the workspace does not have at the version it
+ *         needs (409 `pack_dependency_unmet`, `requires.packs`, S11 P1-F), then applies the
+ *         segment with the reviewed digest (409 `change_plan_changed` when anything moved since)
+ *         and the widening items the person confirmed one by one (400
+ *         `change_confirmation_required` otherwise).
  *
  * A customized component or a `breaking` version needs no separate confirmation here: the preview
  * shows both, and the digest the installer passes back covers what each item replaces (`before`)
@@ -470,6 +477,15 @@ export async function installPack(
     input.version,
     latestPackVersion(entry).version,
   );
+  const unmet = (
+    await readPackDependencies(
+      client,
+      workspaceId,
+      registry,
+      latestPackVersion(entry).requiredPacks,
+    )
+  ).filter((dependency) => !dependency.met);
+  if (unmet.length > 0) throw new PackDependencyUnmetError(entry.name, unmet);
   const { target, segment } = await installSegment(
     client,
     workspaceId,

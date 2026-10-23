@@ -62,6 +62,7 @@ const CONNECTED_OK: SourceRequirements = {
       ],
     },
   ],
+  dependencies: [{ name: 'ops-assets', minVersion: 2, status: 'up_to_date', installedVersion: 2 }],
 };
 
 /** A checker answering `answer`, counting its calls. */
@@ -190,12 +191,33 @@ describe.runIf(DATABASE_URL !== undefined)(
         sourceFound: true,
         items: [{ ordinal: 1, kind: 'skill_version', state: 'in_effect' }],
         requirements: [{ connector: 'docker', state: 'connected', met: true }],
+        dependencies: [{ name: 'ops-assets', minVersion: 2, installedVersion: 2, met: true }],
       });
       expect(
         await inWorkspace(ws, (client) =>
           loadChangeVerification(client, ws.workspaceId, segmentId),
         ),
       ).toEqual(run.verification);
+      // S11 P1-F: a run recorded before dependencies were checked reads back with none.
+      await inWorkspace(ws, async (client) => {
+        const stored = await client.query<{ verification: unknown }>(
+          'select verification from change_segments where workspace_id = $1 and id = $2',
+          [ws.workspaceId, segmentId],
+        );
+        await client.query(
+          `update change_segments set verification = verification - 'dependencies'
+            where workspace_id = $1 and id = $2`,
+          [ws.workspaceId, segmentId],
+        );
+        expect(
+          (await loadChangeVerification(client, ws.workspaceId, segmentId))?.dependencies,
+        ).toEqual([]);
+        await client.query(
+          `update change_segments set verification = $3::jsonb
+            where workspace_id = $1 and id = $2`,
+          [ws.workspaceId, segmentId, JSON.stringify(stored.rows[0]?.verification)],
+        );
+      });
       expect(await verifyAudits(ws, segmentId)).toEqual([
         {
           actor: ws.ownerId,
@@ -230,6 +252,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         checker({
           sourceFound: true,
           requirements: [{ connector: 'docker', state: 'can_enable', gates: [] }],
+          dependencies: [],
         }),
       );
       expect(notConnected.segment.status).toBe('verification_failed');
@@ -251,6 +274,7 @@ describe.runIf(DATABASE_URL !== undefined)(
               gates: [{ id: 'g-1', name: 'docker-a', health: 'unauthorized' }],
             },
           ],
+          dependencies: [],
         }),
       );
       expect(down.verification).toMatchObject({ passed: false, requirements: [{ met: false }] });
@@ -259,9 +283,35 @@ describe.runIf(DATABASE_URL !== undefined)(
       const unknown = await verify(
         ws,
         segmentId,
-        checker({ sourceFound: false, requirements: [] }),
+        checker({ sourceFound: false, requirements: [], dependencies: [] }),
       );
       expect(unknown.verification).toMatchObject({ passed: false, sourceFound: false });
+
+      // S11 P1-F: a pack it builds on rolled back below the version it needs.
+      await ageLastRun(ws, segmentId);
+      const rolledBack = await verify(
+        ws,
+        segmentId,
+        checker({
+          ...CONNECTED_OK,
+          dependencies: [
+            { name: 'ops-assets', minVersion: 2, status: 'outdated', installedVersion: 1 },
+          ],
+        }),
+      );
+      expect(rolledBack.verification).toMatchObject({
+        passed: false,
+        requirements: [{ met: true }],
+        dependencies: [
+          {
+            name: 'ops-assets',
+            minVersion: 2,
+            status: 'outdated',
+            installedVersion: 1,
+            met: false,
+          },
+        ],
+      });
 
       // A good run sets it back to verified.
       await ageLastRun(ws, segmentId);
@@ -283,6 +333,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       ]);
       expect((await verifyAudits(ws, segmentId)).map((row) => row.payload.statusBefore)).toEqual([
         'applied',
+        'verification_failed',
         'verification_failed',
         'verification_failed',
         'verification_failed',
