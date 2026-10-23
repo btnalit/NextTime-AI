@@ -205,12 +205,23 @@ const STEP_HINT_CONSEQUENCE = [
   'the step would not start, and the goal would pause there for a person.',
 ] as const;
 
-/** What to do about a missing grant: the hints do not stop confirming, so each says what comes
- *  next — get it granted first, or turn the plan down for another. */
-const GRANT_NEXT_STEP = [
-  '可以请工作区所有者在「成员与授权」给请求人开通，或者驳回，让助手换个做法。',
-  'A workspace owner can grant it in Members, or turn the plan down so the assistant tries another way.',
-] as const;
+/** Where a plan hint is read: on the card that confirms a proposal, or under a revision the
+ *  requester made, which is in force already and has nothing to turn down. */
+export type PlanHintContext = 'proposal' | 'revision';
+
+/** What to do about a missing grant: the hints do not stop confirming or revising, so each says
+ *  what comes next — get it granted first, or turn the plan down for another (a proposal), or
+ *  revise it again without the step (a revision). */
+const GRANT_NEXT_STEP: Readonly<Record<PlanHintContext, readonly [string, string]>> = {
+  proposal: [
+    '可以请工作区所有者在「成员与授权」给请求人开通，或者驳回，让助手换个做法。',
+    'A workspace owner can grant it in Members, or turn the plan down so the assistant tries another way.',
+  ],
+  revision: [
+    '可以请工作区所有者在「成员与授权」给请求人开通，或者再修订计划，换掉或移除这一步。',
+    'A workspace owner can grant it in Members, or revise the plan again to change or remove the step.',
+  ],
+};
 
 /** A list in a sentence: each name in 「」 joined by 、 (zh), in quotes joined by commas (en). */
 function namesIn(names: readonly string[]): readonly [string, string] {
@@ -222,6 +233,8 @@ function namesIn(names: readonly string[]): readonly [string, string] {
 
 interface PlanHintArgs {
   readonly step: string;
+  /** What to do about a missing grant, where the hint is read. */
+  readonly next: readonly [string, string];
   /** The gates a `step_gate_not_held` step needs, by name where known. */
   readonly gates: readonly string[];
   /** The execute permissions a `step_capability_not_held` step needs, by their console names. */
@@ -244,25 +257,25 @@ const PLAN_HINT: Readonly<
     '请求人现在不能启动 Worker（角色不允许，或已被停用）：这个计划的步骤都不会开始，目标会在第一步就停下等人处理。可以请工作区所有者在「成员与授权」查看请求人的角色和状态。',
     'The requester cannot start Workers now (their role, or they are disabled): no step of this plan would start, and the goal would pause at its first step for a person. A workspace owner can check the requester’s role and status in Members.',
   ],
-  step_gate_not_held: ({ step, gates }) => {
+  step_gate_not_held: ({ step, gates, next }) => {
     const [zh, en] = namesIn(gates);
     return [
-      `步骤「${step}」的 Worker 要操作门${zh}，请求人现在没有这些门的权限：${STEP_HINT_CONSEQUENCE[0]}${GRANT_NEXT_STEP[0]}`,
-      `Step “${step}”: its Worker acts on ${gates.length === 1 ? 'gate' : 'gates'} ${en}, which the requester cannot act on now — ${STEP_HINT_CONSEQUENCE[1]} ${GRANT_NEXT_STEP[1]}`,
+      `步骤「${step}」的 Worker 要操作门${zh}，请求人现在没有${gates.length === 1 ? '这个门' : '这些门'}的权限：${STEP_HINT_CONSEQUENCE[0]}${next[0]}`,
+      `Step “${step}”: its Worker acts on ${gates.length === 1 ? 'gate' : 'gates'} ${en}, which the requester cannot act on now — ${STEP_HINT_CONSEQUENCE[1]} ${next[1]}`,
     ];
   },
-  step_capability_not_held: ({ step, capabilities }) => {
+  step_capability_not_held: ({ step, capabilities, next }) => {
     if (capabilities.length === 0) {
       return [
-        `步骤「${step}」的 Worker 需要请求人现在没有的执行权限：${STEP_HINT_CONSEQUENCE[0]}${GRANT_NEXT_STEP[0]}`,
-        `Step “${step}”: its Worker needs an execute permission the requester does not hold now — ${STEP_HINT_CONSEQUENCE[1]} ${GRANT_NEXT_STEP[1]}`,
+        `步骤「${step}」的 Worker 需要请求人现在没有的执行权限：${STEP_HINT_CONSEQUENCE[0]}${next[0]}`,
+        `Step “${step}”: its Worker needs an execute permission the requester does not hold now — ${STEP_HINT_CONSEQUENCE[1]} ${next[1]}`,
       ];
     }
     const [zh] = namesIn(capabilities.map(([name]) => name));
     const [, en] = namesIn(capabilities.map(([, name]) => name));
     return [
-      `步骤「${step}」的 Worker 需要执行权限${zh}，请求人现在没有：${STEP_HINT_CONSEQUENCE[0]}${GRANT_NEXT_STEP[0]}`,
-      `Step “${step}”: its Worker needs the execute ${capabilities.length === 1 ? 'permission' : 'permissions'} ${en}, which the requester does not hold now — ${STEP_HINT_CONSEQUENCE[1]} ${GRANT_NEXT_STEP[1]}`,
+      `步骤「${step}」的 Worker 需要执行权限${zh}，请求人现在没有：${STEP_HINT_CONSEQUENCE[0]}${next[0]}`,
+      `Step “${step}”: its Worker needs the execute ${capabilities.length === 1 ? 'permission' : 'permissions'} ${en}, which the requester does not hold now — ${STEP_HINT_CONSEQUENCE[1]} ${next[1]}`,
     ];
   },
   step_definition_excluded: ({ step }) => [
@@ -278,11 +291,13 @@ export function planHintText(
   hint: PlanHint,
   t: Translate,
   gateNames: ReadonlyMap<string, string> = new Map(),
+  context: PlanHintContext = 'proposal',
 ): string {
   const entry = PLAN_HINT[hint.code];
   if (!entry) return hint.message;
   const [zh, en] = entry({
     step: hint.stepKey ?? '',
+    next: GRANT_NEXT_STEP[context],
     gates: (hint.gatekeeperIds ?? []).map((id) => gateNames.get(id) ?? shortId(id)),
     capabilities: (hint.capabilityNames ?? []).map(
       (name) => [actionLabel(name, inZh), actionLabel(name, inEn)] as const,

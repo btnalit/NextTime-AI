@@ -273,6 +273,13 @@ export function GoalDetailPage({ http, pushes, goalRunId }: GoalDetailPageProps)
             {done.kind === 'done' ? done.message : staleText(done.before, goal, t)}
           </Notice>
         ) : null}
+        {done?.kind === 'done'
+          ? done.notes?.map((note) => (
+              <Notice key={note} tone="warn" testId="goal-op-note">
+                {note}
+              </Notice>
+            ))
+          : null}
       </output>
 
       <DashboardCard title={t('概览', 'Overview')} data-testid="goal-overview">
