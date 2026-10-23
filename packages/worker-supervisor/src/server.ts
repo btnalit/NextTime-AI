@@ -126,7 +126,7 @@ export const PUBLIC_ROUTES: readonly string[] = ['/healthz'];
 
 /** STATUS leftover 422: a refusal the operator has to find (`docs/runbooks/operations.md` §13),
  *  so it goes into this service's own log — the 409 body alone only reaches the caller. */
-function logIncompatible(
+function warnImageRefused(
   request: FastifyRequest,
   err: RuntimeImageIncompatibleError,
   route: string,
@@ -215,7 +215,7 @@ export function createServer(options: CreateServerOptions): FastifyInstance {
       return outcome;
     } catch (err) {
       if (err instanceof RuntimeImageIncompatibleError) {
-        logIncompatible(request, err, 'resident/spawn');
+        warnImageRefused(request, err, 'resident/spawn');
         reply.code(409);
         return { error: { code: err.code, message: err.message } };
       }
@@ -358,7 +358,7 @@ export function createServer(options: CreateServerOptions): FastifyInstance {
       return outcome;
     } catch (err) {
       if (err instanceof RuntimeImageIncompatibleError) {
-        logIncompatible(request, err, 'task/spawn');
+        warnImageRefused(request, err, 'task/spawn');
         reply.code(409);
         return { error: { code: err.code, message: err.message } };
       }
