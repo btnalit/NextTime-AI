@@ -123,6 +123,7 @@ export function GoalsPage({ http, pushes, onOpen }: GoalsPageProps) {
         />
         {requesters.length > 1 ? (
           <Select
+            className="select-fit"
             aria-label={t('按请求人筛选', 'Filter by requester')}
             value={requester}
             onChange={(event) => setRequester(event.target.value)}
