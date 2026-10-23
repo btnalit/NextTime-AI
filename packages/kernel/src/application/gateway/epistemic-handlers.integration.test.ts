@@ -290,6 +290,33 @@ describe.runIf(DATABASE_URL !== undefined)(
         )) as { rootType: string; chain: unknown[] };
         expect(chain.rootType).toBe('decision');
         expect(chain.chain.length).toBeGreaterThan(0);
+
+        // Legacy 421: the ruling is about the Conflict, which a member who cannot see both
+        // Facts (here: both rest on the owner's private Sources) does not see — so neither is the
+        // ruling (its reason, both Fact ids), on any read.
+        const [stored] = await withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerId },
+          async (client) =>
+            (
+              await client.query<{ conflict_id: string | null }>(
+                'select conflict_id from decisions where workspace_id = $1 and id = $2',
+                [workspaceId, decision.id],
+              )
+            ).rows,
+          { skipRoleSwitch: true },
+        );
+        expect(stored?.conflict_id).toBe(conflict.id);
+        const memberCaller = handleCaller(workspaceId, memberId, READ_CAPABILITIES);
+        const memberPage = (await dispatchCapability({ pool }, memberCaller, 'query_decisions', {
+          limit: 100,
+        })) as { items: Array<{ id: string }> };
+        expect(memberPage.items.map((item) => item.id)).not.toContain(decision.id);
+        await expect(
+          dispatchCapability({ pool }, memberCaller, 'decision_impact', {
+            decisionId: decision.id,
+          }),
+        ).rejects.toThrow(/not found/i);
       }
     });
 

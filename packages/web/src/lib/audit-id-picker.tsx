@@ -258,10 +258,11 @@ export function AuditIdPicker({
                     '没有匹配的候选；将按输入的值查询。',
                     'No matching suggestions — the typed value is used as is.',
                   )
-                : t(
+                : (source?.emptyNote ??
+                  t(
                     '还没有可选的记录；可直接粘贴 ID。',
                     'Nothing to pick yet — paste an id instead.',
-                  )
+                  ))
         }
         testId={testId}
       />

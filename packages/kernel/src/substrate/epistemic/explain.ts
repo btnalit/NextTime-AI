@@ -6,6 +6,7 @@ import {
   linkTouchesHiddenOperationDraftSql,
 } from '../graph/operation-draft-visibility.js';
 import { shownFreeText } from '../redaction/index.js';
+import { type DecisionViewer, decisionVisibleSql } from './decision-visibility.js';
 import { listHumanAttestations } from './evidence.js';
 
 /**
@@ -415,14 +416,19 @@ async function explainActivity(
   return { nodeType: 'activity', activity };
 }
 
+/** Legacy 421: a Decision the viewer may not read (decision-visibility.ts) is not found, exactly
+ *  like an id that does not exist. */
 async function explainDecision(
   client: PoolClient,
   workspaceId: string,
   decisionId: string,
+  viewer: DecisionViewer,
 ): Promise<ExplainResult> {
+  const visible = decisionVisibleSql('d', viewer, '$1', 3);
   const result = await client.query<DecisionDbRow>(
-    'select id, status, summary, activity_id, source_id, decided_by from decisions where workspace_id = $1 and id = $2',
-    [workspaceId, decisionId],
+    `select id, status, summary, activity_id, source_id, decided_by from decisions d
+     where d.workspace_id = $1 and d.id = $2 and ${visible.sql}`,
+    [workspaceId, decisionId, ...visible.values],
   );
   const row = result.rows[0];
   if (!row) throw new ExplainNodeNotFoundError('decision', workspaceId, decisionId);
@@ -448,16 +454,18 @@ async function explainDecision(
  * Walks the PROV-O chain for one Fact, Activity (incl. a Turn), or Decision. Throws
  * `ExplainNodeNotFoundError` if the named node does not exist in `workspaceId` (RLS-visible rows
  * only — `client` must already be inside a `withWorkspace()` transaction, same convention as
- * every other substrate method).
+ * every other substrate method) or, for a Decision, if `decisionViewer` may not read it
+ * (legacy 421, decision-visibility.ts).
  */
 export async function explain(
   client: PoolClient,
   workspaceId: string,
   input: ExplainInput,
+  decisionViewer: DecisionViewer,
 ): Promise<ExplainResult> {
   if ('factId' in input) return explainFact(client, workspaceId, input.factId);
   if ('activityId' in input) return explainActivity(client, workspaceId, input.activityId);
-  return explainDecision(client, workspaceId, input.decisionId);
+  return explainDecision(client, workspaceId, input.decisionId, decisionViewer);
 }
 
 /**
@@ -467,18 +475,20 @@ export async function explain(
  * `ExplainNodeNotFoundError` (tagged `'fact'`, matching the first table tried) if `nodeId` names
  * none of the three.
  *
- * `viewer` (the `explain` capability passes its caller's): see `explainFact` — a Fact touching an
- * Operation draft the viewer may not see reads as not found. Omitted for the auditor-scoped
- * callers (`export_prov`), which see the full provenance.
+ * `viewers.drafts` (the `explain` capability and the Explorer pass their caller's): see
+ * `explainFact` — a Fact touching an Operation draft the viewer may not see reads as not found.
+ * Omitted for the auditor-scoped caller (`export_prov`), which sees the full provenance.
+ * `viewers.decisions`, always given: a Decision the caller may not read is not found either
+ * (legacy 421, decision-visibility.ts).
  */
 export async function explainByNodeId(
   client: PoolClient,
   workspaceId: string,
   nodeId: string,
-  viewer?: GraphReadViewer,
+  viewers: { readonly decisions: DecisionViewer; readonly drafts?: GraphReadViewer },
 ): Promise<ExplainResult> {
   try {
-    return await explainFact(client, workspaceId, nodeId, viewer);
+    return await explainFact(client, workspaceId, nodeId, viewers.drafts);
   } catch (err) {
     if (!(err instanceof ExplainNodeNotFoundError)) throw err;
   }
@@ -487,5 +497,5 @@ export async function explainByNodeId(
   } catch (err) {
     if (!(err instanceof ExplainNodeNotFoundError)) throw err;
   }
-  return explainDecision(client, workspaceId, nodeId);
+  return explainDecision(client, workspaceId, nodeId, viewers.decisions);
 }

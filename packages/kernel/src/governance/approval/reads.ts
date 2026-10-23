@@ -6,6 +6,7 @@ import {
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { queryAuditActionOperationStats } from '../../substrate/audit/index.js';
+import { actionRequestVisibleToCallerSql } from '../../substrate/epistemic/index.js';
 import {
   GATEKEEPER_GRANT_CAPABILITY,
   hasActiveGrant,
@@ -40,45 +41,11 @@ export async function getActionRequest(
   return row ? mapActionRequestRow(row) : null;
 }
 
-/**
- * R-42 (maintainer decision D-22, docs/code-review-2026-10-02.md): who may *read* an
- * ActionRequest. `get_action` and `list_action_requests` share this one predicate, so a single-row
- * read never shows more than the list does: the workspace owner sees every row; anyone else sees
- * a row whose `action_kind` / `resource_scope` matches one of their own active
- * `capability_grants` (I14 — the same match `listPendingForApprover` and `approverHasScope` use,
- * including item 2's "gatekeeper grant satisfies I14" branch), or a row they requested themselves
- * (`on_behalf_of` — design doc §8.5: the requester follows their own request's status even
- * without the scope to decide it). The table alias is always `ar`; `isOwnerParam` /
- * `principalParam` are the calling query's own positional placeholders for "the caller is the
- * workspace owner" and the caller's principal id.
- */
-function actionRequestVisibleToCallerSql(isOwnerParam: string, principalParam: string): string {
-  return `(
-    ${isOwnerParam}::boolean
-    or ar.on_behalf_of = ${principalParam}::uuid
-    or exists (
-      select 1 from capability_grants cg
-      where cg.workspace_id = ar.workspace_id
-        and cg.principal_id = ${principalParam}::uuid
-        and cg.status = 'active'
-        and (cg.expires_at is null or cg.expires_at > now())
-        and (
-          (cg.resource_type = ar.action_kind
-           and (cg.resource_id is null or cg.resource_id::text = ar.resource_scope))
-          or (
-            ar.resource_scope is not null
-            and cg.resource_type = '${GATEKEEPER_GRANT_CAPABILITY}'
-            and (cg.resource_id is null or cg.resource_id::text = ar.resource_scope)
-          )
-        )
-    )
-  )`;
-}
-
 /** `get_action` (R-42, D-22): one ActionRequest, only if `caller` may see it under
- *  `actionRequestVisibleToCallerSql` — `null` both when the id does not resolve and when the row
- *  exists outside the caller's visibility, so the read is no existence oracle (the handler answers
- *  404 for both). */
+ *  `actionRequestVisibleToCallerSql` (substrate/epistemic/decision-visibility.ts, where it moved
+ *  so a request's Decisions are read under the same rule, legacy 421) — `null` both when the id
+ *  does not resolve and when the row exists outside the caller's visibility, so the read is no
+ *  existence oracle (the handler answers 404 for both). */
 export async function getActionRequestVisibleTo(
   client: PoolClient,
   workspaceId: string,

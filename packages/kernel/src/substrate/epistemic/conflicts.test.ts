@@ -869,10 +869,12 @@ describe.runIf(DATABASE_URL !== undefined)(
         const seenDecisions = new Set<string>();
         cursor = undefined;
         for (let page = 0; page < 50 && seenDecisions.size < 2; page++) {
-          const result = await queryDecisions(client, workspaceId, {
-            limit: 1,
-            ...(cursor ? { cursor } : {}),
-          });
+          const result = await queryDecisions(
+            client,
+            workspaceId,
+            { limit: 1, ...(cursor ? { cursor } : {}) },
+            { principalId: ownerId, seesEveryGoalRun: true, seesEveryActionRequest: true },
+          );
           for (const item of result.items) {
             if (decisionIds.includes(item.id)) seenDecisions.add(item.id);
           }

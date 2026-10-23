@@ -11,6 +11,14 @@ vi.mock('../../adapters/db/pool.js', () => ({
   withWorkspace: (_pool: unknown, _ctx: unknown, fn: (client: unknown) => unknown) => fn({}),
 }));
 
+// Legacy 421: who the caller is does not matter here (the fake `queryDecisions` ignores it).
+vi.mock('./draft-viewer.js', () => ({
+  humanReadViewersOf: vi.fn(async (_client: unknown, _ws: unknown, principalId: string) => ({
+    decisions: { principalId, seesEveryGoalRun: true, seesEveryActionRequest: true },
+    drafts: { principalId, seesEveryDraft: true },
+  })),
+}));
+
 /** 250 decisions newest first; only the last five carry `rationale.category = 'wanted'`. */
 const DECISIONS = Array.from(
   { length: 250 },

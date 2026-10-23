@@ -24,6 +24,7 @@ import { SqlGraphStore, factLifecycleState } from '../../substrate/graph/index.j
 import { currentPrincipalId } from '../chat/index.js';
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
+import { decisionViewerOf } from './draft-viewer.js';
 import { toWireFact } from './resource-wire.js';
 
 /**
@@ -314,14 +315,27 @@ export const attestFactHandler: CapabilityHandler = async (client, workspaceId, 
 // query_decisions / find_precedents / causal_chain / decision_impact
 // -------------------------------------------------------------------------------------------
 
-export const queryDecisionsHandler: CapabilityHandler = async (client, workspaceId, params) => {
+// Legacy 421: each reads only the Decisions the caller may see (`decisionViewerOf`); a hidden one is
+// never listed and reads as not found.
+
+export const queryDecisionsHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+) => {
   const { objectId, since, limit, cursor } = params as {
     objectId?: string;
     since?: string;
     limit?: number;
     cursor?: string;
   };
-  const page = await queryDecisions(client, workspaceId, { objectId, since, limit, cursor });
+  const page = await queryDecisions(
+    client,
+    workspaceId,
+    { objectId, since, limit, cursor },
+    await decisionViewerOf(client, workspaceId, ctx),
+  );
   return {
     result:
       page.nextCursor === undefined
@@ -330,29 +344,54 @@ export const queryDecisionsHandler: CapabilityHandler = async (client, workspace
   };
 };
 
-export const findPrecedentsHandler: CapabilityHandler = async (client, workspaceId, params) => {
+export const findPrecedentsHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+) => {
   const { objectId, actionKindTag, limit } = params as {
     objectId?: string;
     actionKindTag?: string;
     limit?: number;
   };
-  const page = await findPrecedents(client, workspaceId, { objectId, actionKindTag, limit });
+  const page = await findPrecedents(
+    client,
+    workspaceId,
+    { objectId, actionKindTag, limit },
+    await decisionViewerOf(client, workspaceId, ctx),
+  );
   return { result: { items: page.items.map(toWireDecision) } };
 };
 
-export const causalChainHandler: CapabilityHandler = async (client, workspaceId, params) => {
+export const causalChainHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
   const { factId, decisionId, depth } = params as {
     factId?: string;
     decisionId?: string;
     depth?: number;
   };
-  const result = await causalChain(client, workspaceId, { factId, decisionId, depth });
+  const result = await causalChain(
+    client,
+    workspaceId,
+    { factId, decisionId, depth },
+    await decisionViewerOf(client, workspaceId, ctx),
+  );
   return { result, resourceType: result.rootType, resourceId: result.rootId };
 };
 
-export const decisionImpactHandler: CapabilityHandler = async (client, workspaceId, params) => {
+export const decisionImpactHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+  ctx,
+) => {
   const { decisionId } = params as { decisionId: string };
-  const result = await decisionImpact(client, workspaceId, { decisionId });
+  const result = await decisionImpact(
+    client,
+    workspaceId,
+    { decisionId },
+    await decisionViewerOf(client, workspaceId, ctx),
+  );
   return {
     result: {
       decisionId: result.decisionId,
