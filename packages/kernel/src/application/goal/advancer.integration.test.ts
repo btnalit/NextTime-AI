@@ -4603,20 +4603,24 @@ describe.runIf(DATABASE_URL !== undefined)(
               await problems([
                 { ...base, action: { ...base.action, operation: 'svc.status' } },
                 { ...base, check: { ...base.check, operation: 'svc.restart' } },
-                {
-                  ...base,
-                  action: { gatekeeperId: unknownGate, operation: 'svc.restart' },
-                  check: { ...base.check, params: { token: jwtLike } },
-                },
+                { ...base, action: { gatekeeperId: unknownGate, operation: 'svc.restart' } },
               ]),
             ).toEqual([
               'step "a": reconcile[0]: action: "svc.status" is observe-class',
               'step "a": reconcile[1]: check: "svc.restart" cannot be observed (not_observe_class)',
               `step "a": reconcile[2]: action: Gatekeeper ${unknownGate} is not enabled in this workspace`,
-              expect.stringMatching(
-                /^step "a": reconcile\[2\]: check: .*svc\.status: the params carry 1 credential value/,
-              ),
             ]);
+            // S11 GO5c: a credential anywhere in a plan is refused before the plan is checked
+            // against the workspace — a plan does not carry credentials.
+            await expect(
+              propose([{ ...base, check: { ...base.check, params: { token: jwtLike } } }]),
+            ).rejects.toMatchObject({
+              code: 'credentials_in_text',
+              details: {
+                field: 'plan.steps.0.reconcile.0.check.params.token',
+                suspectedSecretPaths: ['plan.steps.0.reconcile.0.check.params.token'],
+              },
+            });
             expect(await propose([base])).toMatchObject({ goalRunId: expect.any(String) });
           });
         });
@@ -5432,7 +5436,6 @@ describe.runIf(DATABASE_URL !== undefined)(
           await proposeWith(requester, [
             { ...observe('a1'), check: { ...observe().check, operation: 'svc.missing' } },
             { ...observe('a2'), check: { ...observe().check, gatekeeperId: unknownGate } },
-            { ...observe('a3'), check: { ...observe().check, params: { token: jwtLike } } },
           ]);
         } catch (err) {
           expect(err).toBeInstanceOf(GoalPlanValidationError);
@@ -5441,10 +5444,19 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(problems).toEqual([
           expect.stringMatching(/^acceptance\[0\] "a1": check: "svc\.missing" cannot be observed/),
           expect.stringMatching(/^acceptance\[1\] "a2": check: "svc\.status" cannot be observed/),
-          expect.stringMatching(
-            /^acceptance\[2\] "a3": check: .*svc\.status: the params carry 1 credential value/,
-          ),
         ]);
+        // S11 GO5c: refused before the plan is checked against the workspace.
+        await expect(
+          proposeWith(requester, [
+            { ...observe('a3'), check: { ...observe().check, params: { token: jwtLike } } },
+          ]),
+        ).rejects.toMatchObject({
+          code: 'credentials_in_text',
+          details: {
+            field: 'plan.acceptance.0.check.params.token',
+            suspectedSecretPaths: ['plan.acceptance.0.check.params.token'],
+          },
+        });
       });
     });
 

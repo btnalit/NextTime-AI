@@ -84,8 +84,8 @@ import {
 } from '../../application/gateway/members-handlers.js';
 import { PlatformAdminError } from '../../application/gateway/platform-handlers.js';
 import { ServicePrincipalRequiredError } from '../../application/gateway/service-handle-handler.js';
-// S11 GO5a: the `goal` reads' not-found errors; S11 GO5b: a person's operations' refusals —
-// imported directly like the domain errors around.
+// S11 GO5a: the `goal` reads' not-found errors; S11 GO5b: a person's operations' refusals; S11
+// GO5c: the proposed-goal cap — imported directly like the domain errors around.
 import {
   GoalPlanValidationError,
   GoalRevisionNotFoundError,
@@ -93,6 +93,7 @@ import {
   GoalRunInputError,
   GoalRunNotFoundError,
   GoalRunStateError,
+  ProposedGoalLimitError,
 } from '../../application/goal/index.js';
 import {
   CSRF_HEADER,
@@ -701,6 +702,11 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   }
   if (err instanceof GoalRunStateError) {
     return { status: 409, code: 'illegal_transition', message: err.message };
+  }
+  // S11 GO5c: the requester already has as many goals waiting to be confirmed as one may —
+  // `details.limit` and `details.proposed`; nothing was proposed.
+  if (err instanceof ProposedGoalLimitError) {
+    return { status: 409, code: err.code, message: err.message, details: { ...err.details } };
   }
   if (err instanceof GoalRunInputError) {
     return { status: 400, code: 'invalid_params', message: err.message };

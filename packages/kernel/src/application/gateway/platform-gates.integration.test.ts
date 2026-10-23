@@ -1429,6 +1429,15 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
         expect(new Set(asBuilder.scope.capabilities)).toEqual(new Set(requested));
       });
+
+      it('leaves out a capability made only for a person (S11 GO5c: propose_goal), whatever the role', async () => {
+        const ownerKeyId = await insertServicePrincipal('owner', 'go5c owner key');
+        const issued = await callAsOwner<{ scope: { capabilities: string[] } }>(
+          'issue_service_handle',
+          { principalId: ownerKeyId, scope: ['search', 'propose_goal', 'list_goals'] },
+        );
+        expect(issued.scope.capabilities.slice().sort()).toEqual(['list_goals', 'search']);
+      });
     });
 
     describe('external runtimes', () => {

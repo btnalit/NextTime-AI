@@ -595,7 +595,7 @@ describe('AgentHostRuntime — startTurn happy path', () => {
     expect(new Set(claims.scope.resources.gatekeeper)).toEqual(new Set(['gk-1', 'gk-2']));
   });
 
-  it("W5.5 (STATUS leftover 18): a member principal's issued entry Handle excludes propose_* and keeps get_object", async () => {
+  it("W5.5 (STATUS leftover 18): a member principal's issued entry Handle excludes the builder-level propose_* and keeps get_object", async () => {
     const principalId = randomUUID();
     const rolesByPrincipal = new Map<string, Role>([[principalId, 'member']]);
     const { pool } = createFakePool(
@@ -627,7 +627,11 @@ describe('AgentHostRuntime — startTurn happy path', () => {
     const claims = JSON.parse(Buffer.from(payloadSegment, 'base64url').toString('utf8')) as {
       scope: { capabilities: readonly string[] };
     };
-    expect(claims.scope.capabilities.some((name) => name.startsWith('propose_'))).toBe(false);
+    // The only member-level propose_* is S11 GO5c's `propose_goal`: the entry agent proposes a
+    // goal for its person to confirm.
+    expect(claims.scope.capabilities.filter((name) => name.startsWith('propose_'))).toEqual([
+      'propose_goal',
+    ]);
     expect(claims.scope.capabilities).toContain('get_object');
 
     runtime.handleFrame({ type: 'turnAccepted', turnId: input.turnId });

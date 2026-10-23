@@ -149,6 +149,14 @@ const ENTRY_CEILING_EXTRA_CAPABILITY_NAMES = [
   // `observe`, so the "no execute-mode capability in the entry ceiling" invariant holds by
   // construction — an execute-class Operation is refused by its handler, never governed here.
   'observe_operation',
+  // S11 GO5c (plan §4.3, §7.2 item 2): the entry agent reads the goals it proposed for its person
+  // — on a Handle, only the obo's own runs, whatever their role (application/goal views.ts) — to
+  // answer "how is it going" and say what waits on them. `propose_goal` itself joins through the
+  // `propose_` prefix below. None of the goal operations does: they are human-channel only.
+  'get_goal',
+  'list_goals',
+  'get_goal_revision',
+  'list_goal_unresolved_actions',
 ] as const;
 
 /**
@@ -226,9 +234,19 @@ const WORKER_CEILING_EXTRA_CAPABILITY_NAMES = [
 
 const WORKER_CEILING_GATE_EXECUTE_CAPABILITY_NAME = '<gate>.<op>:execute';
 
+/**
+ * S11 GO5c (plan §4.4): `propose_*` names a Worker's ceiling leaves out. A goal is proposed by the
+ * entry agent for its person (or by the person), never by a Worker: a step's Worker that could
+ * propose goals would start teams of its own outside the advancer, which alone manages a goal's
+ * budget and dependencies — the reason a step's Handle carries no `invoke_worker` unless its plan
+ * says `nested`. (A W2 planner proposes revisions through its own capability, not this one.)
+ */
+const WORKER_CEILING_EXCLUDED_PROPOSE_NAMES: ReadonlySet<string> = new Set(['propose_goal']);
+
 function buildWorkerCeilingCapabilityNames(): readonly string[] {
   const names = new Set<string>();
   for (const capability of CAPABILITY_REGISTRY) {
+    if (WORKER_CEILING_EXCLUDED_PROPOSE_NAMES.has(capability.name)) continue;
     if (capability.group === 'graph' || capability.name.startsWith('propose_')) {
       names.add(capability.name);
     }

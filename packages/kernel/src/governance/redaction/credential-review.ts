@@ -227,23 +227,38 @@ export function assertDraftCredentialsReviewed(
 
 /**
  * S11 GO5b (review #493 on #680): free text written into a goal's durable record — a revision's
- * reason, the note given with an outcome or a finding (GO5c: a goal's statement) — that carries
- * suspected credentials (`findSuspectedSecrets`, the values every read of a plan's parameters
- * redacts). Such text is kept as written — every read masks it (legacy 420), but the record keeps
- * the value — so it is refused and nothing is written. Over-refusing is the accepted failure
- * mode, as for the scrubs: text that only looks like a `name=value` or `Authorization: …` form is
- * rephrased. Maps to HTTP 400 / WS invalid-params with `code = 'credentials_in_text'` and
- * `details: { field, suspectedSecretValues }` — never a fragment of the text.
+ * reason, the note given with an outcome or a finding, a goal's statement (S11 GO5c) — that
+ * carries suspected credentials (`findSuspectedSecrets`, the values every read of it redacts).
+ * Such text is kept as written — every read masks it (legacy 420), but the record keeps the value
+ * — so it is refused and nothing is written. Over-refusing is the accepted failure mode, as for
+ * the scrubs: text that only looks like a `name=value` or `Authorization: …` form is rephrased.
+ * S11 GO5c: also a goal's plan, a JSON document whose values every read masks — `paths` then says
+ * where (field names only, at most 20). Maps to HTTP 400 / WS invalid-params with
+ * `code = 'credentials_in_text'` and `details: { field, suspectedSecretValues,
+ * suspectedSecretPaths? }` — never a fragment of the text.
  */
 export class TextCarriesCredentialsError extends Error {
   readonly code = 'credentials_in_text' as const;
-  readonly details: { readonly field: string; readonly suspectedSecretValues: number };
-  constructor(field: string, suspectedSecretValues: number) {
+  readonly details: {
+    readonly field: string;
+    readonly suspectedSecretValues: number;
+    readonly suspectedSecretPaths?: readonly string[];
+  };
+  /** For a JSON document (`paths` given), `field` is the first place in it and `paths` every place
+   *  (at most 20), all spelled from the document's own name (`plan.steps.0.input.password`). */
+  constructor(field: string, suspectedSecretValues: number, paths?: readonly string[]) {
+    const document = field.split('.')[0];
     super(
-      `${field}: the text carries ${suspectedSecretValues} suspected credential value(s) (a token, key or password value, a Bearer, Authorization or name=value form) — refused, nothing was written. Say what happened without the value ("the token expired"), never the value itself.`,
+      paths === undefined
+        ? `${field}: the text carries ${suspectedSecretValues} suspected credential value(s) (a token, key or password value, a Bearer, Authorization or name=value form) — refused, nothing was written. Say what happened without the value ("the token expired"), never the value itself.`
+        : `the ${document} carries ${suspectedSecretValues} suspected credential value(s) at ${paths.join(', ')} — refused, nothing was written. A gate authenticates with the credentials configured on it, never with one written into a ${document}; leave the value out.`,
     );
     this.name = 'TextCarriesCredentialsError';
-    this.details = { field, suspectedSecretValues };
+    this.details = {
+      field,
+      suspectedSecretValues,
+      ...(paths !== undefined ? { suspectedSecretPaths: paths } : {}),
+    };
   }
 }
 
@@ -259,24 +274,53 @@ export function refuseCredentialText(field: string, text: string | undefined): v
  * stood (`SECRET_FIELD_MASK`) — a copy read from a masked surface, such as an Operation's
  * description its edit dialog opens on, saved without rewriting that part. Storing it would
  * replace what was written with the mark for good, so it is refused and nothing is written; the
- * person writes the masked part again. Maps to HTTP 400 / WS invalid-params with
- * `code = 'redacted_text_submitted'` and `details: { field }`.
+ * person writes the masked part again. S11 GO5c: also a JSON document read the same way (a goal's
+ * plan) — `paths` then says where. Maps to HTTP 400 / WS invalid-params with
+ * `code = 'redacted_text_submitted'` and `details: { field, paths? }`.
  */
 export class RedactedTextSubmittedError extends Error {
   readonly code = 'redacted_text_submitted' as const;
-  readonly details: { readonly field: string };
-  constructor(field: string) {
+  readonly details: { readonly field: string; readonly paths?: readonly string[] };
+  /** For a JSON document (`paths` given), `field` is the first place in it and `paths` every place
+   *  (at most 20), as {@link TextCarriesCredentialsError} spells them. */
+  constructor(field: string, paths?: readonly string[]) {
     super(
-      `${field}: the text still holds ${SECRET_FIELD_MASK}, the mark a read puts where a suspected credential stood — the original there was masked and is never filled back in. Write that part again, without the credential; nothing was written.`,
+      `${paths === undefined ? `${field}: the text still holds` : `the ${field.split('.')[0]} still holds, at ${paths.join(', ')},`} ${SECRET_FIELD_MASK}, the mark a read puts where a suspected credential stood — the original there was masked and is never filled back in. Write that part again, without the credential; nothing was written.`,
     );
     this.name = 'RedactedTextSubmittedError';
-    this.details = { field };
+    this.details = { field, ...(paths !== undefined ? { paths } : {}) };
   }
 }
 
 /** Throws {@link RedactedTextSubmittedError} when `text` holds the mask a read shows. */
 export function refuseRedactedText(field: string, text: string | undefined): void {
   if (text?.includes(SECRET_FIELD_MASK) === true) throw new RedactedTextSubmittedError(field);
+}
+
+/** S11 GO5c: where a JSON document holds the mask a read shows — every string in `value`, keys
+ *  included, at any depth (dot paths, `[i]` for array items, the first 20 places); empty when it
+ *  holds none. */
+export function redactedPathsIn(value: unknown): readonly string[] {
+  const paths: string[] = [];
+  const visit = (node: unknown, path: string): void => {
+    if (paths.length >= MAX_PATHS) return;
+    if (typeof node === 'string') {
+      if (node.includes(SECRET_FIELD_MASK)) paths.push(path || '(the value)');
+      return;
+    }
+    if (node === null || typeof node !== 'object') return;
+    if (Array.isArray(node)) {
+      node.forEach((item, index) => visit(item, `${path}[${index}]`));
+      return;
+    }
+    for (const [key, inner] of Object.entries(node as Record<string, unknown>)) {
+      const at = path === '' ? segment(key) : `${path}.${segment(key)}`;
+      if (key.includes(SECRET_FIELD_MASK) && paths.length < MAX_PATHS) paths.push(at);
+      visit(inner, at);
+    }
+  };
+  visit(value, '');
+  return paths;
 }
 
 /**

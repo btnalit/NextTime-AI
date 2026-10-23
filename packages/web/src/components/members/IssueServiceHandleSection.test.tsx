@@ -116,6 +116,16 @@ describe('IssueServiceHandleSection — picked, not typed', () => {
     expect(screen.getByRole('button', { name: '签发' }).hasAttribute('disabled')).toBe(false);
   });
 
+  it('S11 GO5c: never offers a capability made only for a person (propose_goal)', () => {
+    renderSection([service('p-svc', 'CI runner')]);
+    const checklist = screen.getByTestId('ish-scope-checklist');
+    expect(checklist.querySelector('[data-capability="propose_goal"]')).toBeNull();
+    expect(checklist.querySelector('[data-capability="list_goals"]')).not.toBeNull();
+    fireEvent.change(nameBox(), { target: { value: 'propose_goal, search' } });
+    expect(nameBox().value).toBe('propose_goal');
+    expect(screen.getByText(/不是可签发的能力名/).textContent).toContain('propose_goal');
+  });
+
   it('legacy 153 ⑨: after a paste the suggestion list stays closed, so it does not cover 签发', () => {
     renderSection([service('p-svc', 'CI runner')]);
     fireEvent.paste(nameBox());

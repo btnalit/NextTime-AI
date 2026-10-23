@@ -37,6 +37,7 @@ import {
   quotedName,
   refuseCredentialText,
   refuseRedactedText,
+  shownFreeText,
 } from '../redaction/index.js';
 import {
   operationContentDigest,
@@ -1573,7 +1574,9 @@ export interface UpdateOperationDescriptionInput {
  * characters (`OperationDescriptionInvalidError`), carry no suspected credential
  * (`TextCarriesCredentialsError`, legacy 420) and not the `[redacted]` mark a read shows in place of
  * one (`RedactedTextSubmittedError`) — checked before any write, so a rejected call touches
- * nothing.
+ * nothing. S11 GO5c (decision on #704): a description sent back exactly as every read shows the
+ * current one (`shownFreeText`) is not an edit — it changes nothing (`changed: false`), the stored
+ * text kept, whatever the read masked in it.
  *
  * Authority (STATUS leftover 123): documentation, but not harmless — a published Operation's
  * description is what every agent reads in its tool list, so whoever edits it can steer agents.
@@ -1587,7 +1590,7 @@ export async function updateOperationDescription(
   client: PoolClient,
   workspaceId: string,
   input: UpdateOperationDescriptionInput,
-): Promise<OperationRecord> {
+): Promise<OperationRecord & { readonly changed: boolean }> {
   const trimmed = input.description.trim();
   if (trimmed.length === 0) {
     throw new OperationDescriptionInvalidError(input.name, 'empty');
@@ -1595,13 +1598,6 @@ export async function updateOperationDescription(
   if (trimmed.length > OPERATION_DESCRIPTION_MAX_LENGTH) {
     throw new OperationDescriptionInvalidError(input.name, 'too_long');
   }
-  // Legacy 420: the one way to change what an Operation says to agents without a publish's
-  // credential review (`assertDraftCredentialsReviewed`) — so a suspected credential is refused
-  // here (`credentials_in_text`), before any write. Every read masks one stored earlier, and the
-  // edit dialog opens on that masked text: sent back with the mark still in it, it is refused too
-  // (`redacted_text_submitted`) rather than stored over what was written.
-  refuseRedactedText('description', trimmed);
-  refuseCredentialText('description', trimmed);
 
   const existing = await lockCurrentOperation(client, workspaceId, input.gatekeeperId, input.name);
   if (!existing) throw new OperationNotFoundError(input.gatekeeperId, input.name);
@@ -1614,13 +1610,25 @@ export async function updateOperationDescription(
     { status: existing.status, proposedBy: existing.proposedBy?.id },
     `Operation ${input.gatekeeperId}/${input.name}@${existing.version}`,
   );
+  // S11 GO5c: the edit dialog opens on the description as read; sent back unchanged, it is the
+  // stored description itself, masked or not — nothing to write and nothing to check.
+  if (trimmed === shownFreeText(existing.operation.description ?? '')) {
+    return { ...existing, changed: false };
+  }
+  // Legacy 420: the one way to change what an Operation says to agents without a publish's
+  // credential review (`assertDraftCredentialsReviewed`) — so a suspected credential is refused
+  // here (`credentials_in_text`), before any write. Every read masks one stored earlier, and the
+  // edit dialog opens on that masked text: changed but sent back with the mark still in it, it is
+  // refused too (`redacted_text_submitted`) rather than stored over what was written.
+  refuseRedactedText('description', trimmed);
+  refuseCredentialText('description', trimmed);
   await setOperationDescriptionObject(
     client,
     workspaceId,
     { gatekeeperId: input.gatekeeperId, name: input.name, version: existing.version },
     trimmed,
   );
-  return { ...existing, operation: { ...existing.operation, description: trimmed } };
+  return { ...existing, operation: { ...existing.operation, description: trimmed }, changed: true };
 }
 
 // -------------------------------------------------------------------------------------------

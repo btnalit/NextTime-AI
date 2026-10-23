@@ -29,6 +29,11 @@ export const MAX_ACCEPTANCE_PROMPT_CHARS = 2000;
 export const MAX_REVISION_REASON_CHARS = 2000;
 /** S11 GO5b: the longest note a person gives with a goal's outcome or a finding about an action. */
 export const MAX_GOAL_NOTE_CHARS = 2000;
+/** S11 GO5c: the longest statement a goal is proposed with — what the requester wants, in a few
+ *  sentences; the plan carries the detail. */
+export const MAX_GOAL_STATEMENT_CHARS = 2000;
+/** S11 GO5c: the longest idempotency key `propose_goal` takes. */
+export const MAX_GOAL_IDEMPOTENCY_KEY_CHARS = 200;
 
 export const StepKeySchema = z.string().regex(STEP_KEY_PATTERN);
 
@@ -124,15 +129,44 @@ export const GoalPlanSchema = z
 export type GoalPlan = z.infer<typeof GoalPlanSchema>;
 
 /**
- * What a person confirming a plan should know that does not stop it (the kernel's `planHints`):
- * `requester_confirm_only` — no check the platform makes, so the goal is achieved only on the
- * requester's word.
+ * What a person confirming a plan should know that does not stop it:
+ *   - `requester_confirm_only` (the kernel's `planHints`) — no check the platform makes, so the
+ *     goal is achieved only on the requester's word;
+ *   - S11 GO5c, the confirmation card's check of the requester's authority (the kernel's
+ *     `planAuthorityHints`, worked out when it is read, for a proposed run — authority changes):
+ *     what would stop a step's first attempt from starting, the goal then pausing for a person
+ *     (`authority_lost`, or the step's WorkerDefinition unavailable to them):
+ *       - `requester_cannot_start_workers` — the requester (their role, or they are disabled) cannot
+ *         start Workers at all; no `stepKey`;
+ *       - `step_gate_not_held` — the step's WorkerDefinition declares gates the requester cannot act
+ *         on (`gatekeeperIds`);
+ *       - `step_capability_not_held` — it declares an execute-class capability the requester's own
+ *         scope does not hold (`capabilityNames`);
+ *       - `step_definition_excluded` — the requester's AgentProfile excludes the WorkerDefinition.
  */
-export const PLAN_HINT_CODE_VALUES = ['requester_confirm_only'] as const;
+export const PLAN_HINT_CODE_VALUES = [
+  'requester_confirm_only',
+  'requester_cannot_start_workers',
+  'step_gate_not_held',
+  'step_capability_not_held',
+  'step_definition_excluded',
+] as const;
 export type PlanHintCode = (typeof PLAN_HINT_CODE_VALUES)[number];
 export const PlanHintCodeSchema = z.enum(PLAN_HINT_CODE_VALUES);
 
-export const PlanHintSchema = z.object({ code: PlanHintCodeSchema, message: z.string() }).strict();
+export const PlanHintSchema = z
+  .object({
+    code: PlanHintCodeSchema,
+    message: z.string(),
+    /** The step the hint is about (the `step_*` codes). */
+    stepKey: StepKeySchema.optional(),
+    /** The gates a `step_gate_not_held` step declares and the requester cannot act on. */
+    gatekeeperIds: z.array(z.string().uuid()).optional(),
+    /** The execute-class capabilities a `step_capability_not_held` step declares and the
+     *  requester does not hold. */
+    capabilityNames: z.array(z.string()).optional(),
+  })
+  .strict();
 export type PlanHint = z.infer<typeof PlanHintSchema>;
 
 /** A GoalRun's budget (I-G6; goal/0001's `budget_*` columns and their CHECKs): tokens and step

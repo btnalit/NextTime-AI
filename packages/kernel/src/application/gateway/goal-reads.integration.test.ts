@@ -165,15 +165,28 @@ describe.runIf(DATABASE_URL !== undefined)(
       };
     }
 
+    /** A run proposed, then its plan stored the way a run written before GO5c's check at write
+     *  could hold it (a password in each step's input): what every read must mask. */
     async function proposeGoal(by: string, keys: readonly string[] = ['a', 'b']) {
+      const plan = planOf(keys);
       const created = await as(by, (client) =>
         createGoalRun(client, workspaceId, {
           requesterId: by,
           proposedBy: by,
           statement: `goal of ${by.slice(0, 8)}`,
-          plan: planOf(keys),
+          plan: {
+            ...plan,
+            steps: plan.steps.map(({ input: _input, ...step }) => ({
+              ...step,
+              input: { step: step.key },
+            })),
+          },
           budget: BUDGET,
         }),
+      );
+      await raw(
+        'update plan_revisions set plan = $3 where workspace_id = $1 and goal_run_id = $2',
+        [workspaceId, created.goalRunId, JSON.stringify(plan)],
       );
       return created.goalRunId;
     }

@@ -8,6 +8,7 @@ import {
   type Role,
   RoleSchema,
   type WorkerDefinitionKind,
+  getCapability,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { parse as parseYaml } from 'yaml';
@@ -376,6 +377,14 @@ export async function issueServiceHandleFromCli(
   pool: PoolLike,
   input: IssueServiceHandleCliInput,
 ): Promise<IssueServiceHandleCliResult> {
+  // S11 GO5c: a capability made only for a person (`actsForPerson`) is refused on every call a
+  // service Handle makes — say so here rather than issue a Handle that cannot use it.
+  const personOnly = input.scope.filter((name) => getCapability(name)?.actsForPerson);
+  if (personOnly.length > 0) {
+    throw new Error(
+      `issue-service-handle: ${personOnly.join(', ')} ${personOnly.length === 1 ? 'is' : 'are'} made only for a person; a service Handle cannot carry ${personOnly.length === 1 ? 'it' : 'them'}`,
+    );
+  }
   const keyPair = await loadHandleKeyPair();
 
   return withWorkspace(

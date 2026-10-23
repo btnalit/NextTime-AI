@@ -143,6 +143,58 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
     expect(screen.queryByTestId('goal-unresolved')).toBeNull();
   });
 
+  it('a proposal names, step by step, what the requester could not start now — a gate by its name', async () => {
+    const base = goalDetail();
+    const detail = goalDetail({
+      status: 'proposed',
+      planRevision: {
+        ...base.planRevision,
+        status: 'proposed',
+        hints: [
+          { code: 'requester_confirm_only', message: 'only on the requester’s word' },
+          {
+            code: 'step_capability_not_held',
+            message: 'step "fetch": …',
+            stepKey: 'fetch',
+            capabilityNames: ['request_action'],
+          },
+          {
+            code: 'step_gate_not_held',
+            message: 'step "apply": …',
+            stepKey: 'apply',
+            gatekeeperIds: [GATE_ID],
+          },
+        ],
+      },
+    });
+    renderPage(scriptedHttp(baseHandlers(detail)));
+    // The requester's authority over steps heads the steps card, the missing permission by name…
+    const hints = await screen.findAllByTestId('goal-step-hint');
+    expect(hints.map((hint) => hint.textContent)).toEqual([
+      expect.stringContaining(
+        '步骤「fetch」的 Worker 需要执行权限「发起动作请求」，请求人现在没有',
+      ),
+      expect.stringContaining('步骤「apply」'),
+    ]);
+    await waitFor(() => expect(hints[1]?.textContent).toContain('门「cert-gate」'));
+    for (const hint of hints) expect(screen.getByTestId('goal-steps').contains(hint)).toBe(true);
+    // …and each step it names carries a chip.
+    const chipsOf = (key: string) =>
+      within(
+        screen
+          .getAllByTestId('goal-step')
+          .find((row) => row.dataset.stepKey === key) as HTMLElement,
+      )
+        .queryAllByTestId('goal-step-hint-chip')
+        .map((chip) => chip.textContent);
+    expect(chipsOf('fetch')).toEqual(['请求人无权限']);
+    expect(chipsOf('apply')).toEqual(['请求人无权限']);
+    // How the goal is verified stays with acceptance.
+    expect(screen.getAllByTestId('goal-plan-hint').map((hint) => hint.textContent)).toEqual([
+      expect.stringContaining('只凭请求人确认'),
+    ]);
+  });
+
   it('a cancel that left work running lists the leftovers', async () => {
     const http = scriptedHttp(
       baseHandlers(

@@ -75,10 +75,12 @@ export const issueServiceHandleHandler: CapabilityHandler = async (client, works
   // may not use (`roleMayUseCapability` — its `minRole`, and since R-35 the auditor's read-only
   // allowlist) is dropped — a member-role key never receives builder-only `propose_*`, an
   // auditor-role key nothing that writes. Dropped silently, as `issue_handle` drops what exceeds
-  // its ceiling; the returned `scope` is what the Handle carries.
-  const capabilities = [...new Set(input.scope)].filter((name) =>
-    roleMayUseCapability(role, getCapability(name)),
-  );
+  // its ceiling; the returned `scope` is what the Handle carries. S11 GO5c: so is a capability made
+  // only for a person (`actsForPerson`, `propose_goal`) — dispatch would refuse it on this Handle.
+  const capabilities = [...new Set(input.scope)].filter((name) => {
+    const capability = getCapability(name);
+    return roleMayUseCapability(role, capability) && !capability?.actsForPerson;
+  });
 
   const sessionResult = await client.query<{ id: string }>(
     `insert into sessions (workspace_id, principal_id, kind, on_behalf_of, status)

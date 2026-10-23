@@ -40,6 +40,7 @@ import {
   type GoalOperationOutcome,
   GoalOperationsBar,
 } from './GoalOperationsBar.js';
+import { GoalPlanEditor } from './GoalPlanEditor.js';
 import { GoalReconcileControls } from './GoalReconcileControls.js';
 import { GoalRevisionsSection } from './GoalRevisionsSection.js';
 import { GoalStepsSection } from './GoalStepsSection.js';
@@ -58,7 +59,7 @@ export interface GoalDetailPageProps {
  * cancel left behind, and its plan revisions — and what the reader may do to it now
  * (`GoalOperationsBar`, GO5b; for a proposal, the confirm card: the plan, checks and budget below
  * with 确认并开始 / 驳回) and about each action to check (`GoalReconcileControls`). Revising the
- * plan is not offered yet.
+ * plan (修订计划…) swaps the page's sections for the plan editor (`GoalPlanEditor`).
  *
  * A goal the reader may not see reads exactly like one that does not exist (the kernel's 404 for
  * both); the page says so without guessing which. No goal pushes exist yet: an update of one of
@@ -92,13 +93,32 @@ export function GoalDetailPage({ http, pushes, goalRunId }: GoalDetailPageProps)
   }, [detail.reload, unresolved.reload]);
   // What the reader's last operation did, said on the page (the operation re-reads the goal).
   const [done, setDone] = useState<GoalOperationOutcome | null>(null);
+  // The plan editor (`revise_goal`) in place of the page's sections, until it is sent or left.
+  const [revising, setRevising] = useState(false);
   const onDone = useCallback(
     (outcome: GoalOperationOutcome) => {
       setDone(outcome);
+      setRevising(false);
       reloadAll();
     },
     [reloadAll],
   );
+  // Leaving the editor replaces the page under the reader's focus: it moves to what the page says
+  // about the revision, so a keyboard or screen reader user hears the page changed.
+  const doneRef = useRef<HTMLOutputElement>(null);
+  const [focusDone, setFocusDone] = useState(false);
+  const onRevised = useCallback(
+    (outcome: GoalOperationOutcome) => {
+      onDone(outcome);
+      setFocusDone(true);
+    },
+    [onDone],
+  );
+  useEffect(() => {
+    if (!focusDone || revising || doneRef.current === null) return;
+    doneRef.current.focus();
+    setFocusDone(false);
+  });
 
   const data = detail.state.status === 'ready' ? detail.state.data : undefined;
   // The Tasks and actions this goal ran, read when a push arrives rather than captured by the
@@ -192,6 +212,23 @@ export function GoalDetailPage({ http, pushes, goalRunId }: GoalDetailPageProps)
   const unresolvedItems = unresolved.state.status === 'ready' ? unresolved.state.data : undefined;
   const budget = goalBudgetRows(goal, t);
   const note = goalStateNote(goal, unresolvedItems, budget, t);
+  if (revising) {
+    return (
+      <div className="page goal-page stack" data-testid="goal-detail" data-goal-id={goal.id}>
+        {header(excerpt(goal.statement, 80) ?? t('目标', 'Goal'))}
+        {detail.state.refreshError ? (
+          <ErrorBanner error={detail.state.refreshError} onRetry={reloadAll} />
+        ) : null}
+        <GoalPlanEditor
+          goal={goal}
+          http={http}
+          gateNames={gateNames}
+          onCancel={() => setRevising(false)}
+          onDone={onRevised}
+        />
+      </div>
+    );
+  }
   return (
     <div className="page goal-page stack" data-testid="goal-detail" data-goal-id={goal.id}>
       {header(excerpt(goal.statement, 80) ?? t('目标', 'Goal'))}
@@ -222,9 +259,13 @@ export function GoalDetailPage({ http, pushes, goalRunId }: GoalDetailPageProps)
         viewer={viewer}
         http={http}
         gateNames={gateNames}
+        onRevise={() => {
+          setDone(null);
+          setRevising(true);
+        }}
         onDone={onDone}
       />
-      <output aria-live="polite">
+      <output aria-live="polite" ref={doneRef} tabIndex={-1}>
         {/* After a 409, only once the goal is read again: a failed re-read keeps the old goal
             (its error banner above), from which nothing can be said about where it stands. */}
         {done && !(done.kind === 'stale' && (refreshing || detail.state.refreshError)) ? (

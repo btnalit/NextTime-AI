@@ -25,6 +25,7 @@ import type {
   UnresolvedGoalActionWire,
 } from '@nexttime/shared';
 import { visibleText } from '@nexttime/shared';
+import { actionLabel } from './capability-labels.js';
 import { clipMiddle, redactSensitive, shortId } from './format.js';
 import type { Translate } from './i18n.js';
 
@@ -198,16 +199,120 @@ export function stepAcceptanceLabel(state: StepAcceptanceState, t: Translate): s
   return t(zh, en);
 }
 
-const PLAN_HINT: Readonly<Record<PlanHint['code'], readonly [string, string]>> = {
-  requester_confirm_only: [
+/** What a step's hint (S11 GO5c) says would happen — the run pauses at the step for a person. */
+const STEP_HINT_CONSEQUENCE = [
+  '这一步不会开始，目标会停在这里等人处理。',
+  'the step would not start, and the goal would pause there for a person.',
+] as const;
+
+/** What to do about a missing grant: the hints do not stop confirming, so each says what comes
+ *  next — get it granted first, or turn the plan down for another. */
+const GRANT_NEXT_STEP = [
+  '可以请工作区所有者在「成员与授权」给请求人开通，或者驳回，让助手换个做法。',
+  'A workspace owner can grant it in Members, or turn the plan down so the assistant tries another way.',
+] as const;
+
+/** A list in a sentence: each name in 「」 joined by 、 (zh), in quotes joined by commas (en). */
+function namesIn(names: readonly string[]): readonly [string, string] {
+  return [
+    names.map((name) => `「${name}」`).join('、'),
+    names.map((name) => `“${name}”`).join(', '),
+  ];
+}
+
+interface PlanHintArgs {
+  readonly step: string;
+  /** The gates a `step_gate_not_held` step needs, by name where known. */
+  readonly gates: readonly string[];
+  /** The execute permissions a `step_capability_not_held` step needs, by their console names. */
+  readonly capabilities: readonly (readonly [string, string])[];
+}
+
+/**
+ * A plan hint as a sentence. `requester_confirm_only` is about the plan; the S11 GO5c codes are the
+ * confirmation card's check of the requester's authority, worked out whenever the proposal is read:
+ * what would stop a step, and what to do about it.
+ */
+const PLAN_HINT: Readonly<
+  Record<PlanHint['code'], (args: PlanHintArgs) => readonly [string, string]>
+> = {
+  requester_confirm_only: () => [
     '这个计划没有平台能做的验收检查：目标是否达成只凭请求人确认。',
     'No check the platform makes: the goal is achieved only on the requester’s word.',
   ],
+  requester_cannot_start_workers: () => [
+    '请求人现在不能启动 Worker（角色不允许，或已被停用）：这个计划的步骤都不会开始，目标会在第一步就停下等人处理。可以请工作区所有者在「成员与授权」查看请求人的角色和状态。',
+    'The requester cannot start Workers now (their role, or they are disabled): no step of this plan would start, and the goal would pause at its first step for a person. A workspace owner can check the requester’s role and status in Members.',
+  ],
+  step_gate_not_held: ({ step, gates }) => {
+    const [zh, en] = namesIn(gates);
+    return [
+      `步骤「${step}」的 Worker 要操作门${zh}，请求人现在没有这些门的权限：${STEP_HINT_CONSEQUENCE[0]}${GRANT_NEXT_STEP[0]}`,
+      `Step “${step}”: its Worker acts on ${gates.length === 1 ? 'gate' : 'gates'} ${en}, which the requester cannot act on now — ${STEP_HINT_CONSEQUENCE[1]} ${GRANT_NEXT_STEP[1]}`,
+    ];
+  },
+  step_capability_not_held: ({ step, capabilities }) => {
+    if (capabilities.length === 0) {
+      return [
+        `步骤「${step}」的 Worker 需要请求人现在没有的执行权限：${STEP_HINT_CONSEQUENCE[0]}${GRANT_NEXT_STEP[0]}`,
+        `Step “${step}”: its Worker needs an execute permission the requester does not hold now — ${STEP_HINT_CONSEQUENCE[1]} ${GRANT_NEXT_STEP[1]}`,
+      ];
+    }
+    const [zh] = namesIn(capabilities.map(([name]) => name));
+    const [, en] = namesIn(capabilities.map(([, name]) => name));
+    return [
+      `步骤「${step}」的 Worker 需要执行权限${zh}，请求人现在没有：${STEP_HINT_CONSEQUENCE[0]}${GRANT_NEXT_STEP[0]}`,
+      `Step “${step}”: its Worker needs the execute ${capabilities.length === 1 ? 'permission' : 'permissions'} ${en}, which the requester does not hold now — ${STEP_HINT_CONSEQUENCE[1]} ${GRANT_NEXT_STEP[1]}`,
+    ];
+  },
+  step_definition_excluded: ({ step }) => [
+    `请求人的智能体设置排除了步骤「${step}」的 Worker：${STEP_HINT_CONSEQUENCE[0]}请求人可以在「我的智能体」里调整设置。`,
+    `The requester’s agent profile excludes the Worker of step “${step}” — ${STEP_HINT_CONSEQUENCE[1]} The requester can change it in My Agent.`,
+  ],
 };
 
-export function planHintText(hint: PlanHint, t: Translate): string {
+const inZh: Translate = (zh) => zh;
+const inEn: Translate = (_, en) => en;
+
+export function planHintText(
+  hint: PlanHint,
+  t: Translate,
+  gateNames: ReadonlyMap<string, string> = new Map(),
+): string {
   const entry = PLAN_HINT[hint.code];
-  return entry ? t(entry[0], entry[1]) : hint.message;
+  if (!entry) return hint.message;
+  const [zh, en] = entry({
+    step: hint.stepKey ?? '',
+    gates: (hint.gatekeeperIds ?? []).map((id) => gateNames.get(id) ?? shortId(id)),
+    capabilities: (hint.capabilityNames ?? []).map(
+      (name) => [actionLabel(name, inZh), actionLabel(name, inEn)] as const,
+    ),
+  });
+  return t(zh, en);
+}
+
+/** Whether a plan hint is about the requester's authority over a step (S11 GO5c) — the steps card
+ *  shows those; `requester_confirm_only`, about how the goal is verified, stays with acceptance. */
+export function isStepAuthorityHint(hint: PlanHint): boolean {
+  return hint.code !== 'requester_confirm_only';
+}
+
+/** The chip a step row carries for its own authority hint. */
+export function stepHintChipLabel(hint: PlanHint, t: Translate): string | null {
+  switch (hint.code) {
+    case 'step_gate_not_held':
+    case 'step_capability_not_held':
+      return t('请求人无权限', 'Requester lacks access');
+    case 'step_definition_excluded':
+      return t('智能体设置已排除', 'Excluded by agent settings');
+    default:
+      return null;
+  }
+}
+
+/** A key for a plan hint in a list: a step's hints share their code. */
+export function planHintKey(hint: PlanHint): string {
+  return hint.stepKey === undefined ? hint.code : `${hint.code}:${hint.stepKey}`;
 }
 
 /** A removed step's fate in a revision (`removals`; a removed step not listed was terminated). */
