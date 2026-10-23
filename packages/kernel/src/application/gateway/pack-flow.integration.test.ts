@@ -236,7 +236,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           .filter((item) => item.classification === 'authority_widening')
           .map((item) => item.ordinal),
       });
-      expect(installed.pack).toMatchObject({ status: 'up_to_date', installedVersion: 1 });
+      expect(installed.pack).toMatchObject({ status: 'up_to_date', installedVersion: 2 });
       expect(opsRunner(installed.pack)).toMatchObject({ status: 'up_to_date', headVersion: 1 });
     });
   },

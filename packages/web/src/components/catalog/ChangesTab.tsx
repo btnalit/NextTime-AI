@@ -8,6 +8,7 @@ import {
   type ChangeSegmentWire,
   type ChangeWideningReasonWire,
   type OntologyTypeNamesWire,
+  type OperationFieldChangeWire,
 } from '@nexttime/shared';
 import { useEffect, useState } from 'react';
 import {
@@ -21,7 +22,9 @@ import type { CapabilityCaller } from '../../lib/clients.js';
 import { isForbiddenError } from '../../lib/errors.js';
 import { formatDateTime, formatRelative, shortId } from '../../lib/format.js';
 import { type Translate, useT } from '../../lib/i18n.js';
+import { operationFieldLabel } from '../../lib/labels.js';
 import { hrefs } from '../../lib/router.js';
+import { BLAST_RADIUS_TONES, labelText } from '../../lib/status-tone.js';
 import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
 import { EmptyState } from '../kit/empty-state.js';
@@ -34,6 +37,7 @@ import { RouteLink } from '../kit/route-link.js';
 import { SkeletonRows } from '../kit/skeleton.js';
 import { StatusChip } from '../kit/status-chip.js';
 import { StillNeeded } from '../kit/still-needed.js';
+import { ChangeVerificationSection } from './ChangeVerification.js';
 
 export interface ChangesTabProps {
   readonly http: CapabilityCaller;
@@ -153,6 +157,43 @@ function contentWideningText(
 
 const CONTENT_WIDENING_PATH = /^(skill|worker)(?:\.(.+))?$/;
 
+/** 「Operation 改为可自动批准」 — an Operation's widening reason (path `operation` or one of its
+ *  fields, S11 P1-E): the looser way of each governance field in words, other fields by label. */
+function operationWideningText(
+  field: string | undefined,
+  reason: ChangeWideningReasonWire['reason'],
+  t: Translate,
+): string {
+  if (field === undefined) {
+    return t(
+      '新增这个 Operation：助手可以请求调用它',
+      'adds this Operation: agents may request calls of it',
+    );
+  }
+  if (reason === 'loosened') {
+    switch (field) {
+      case 'auto_approvable':
+        return t('Operation 改为可自动批准', 'Operation becomes auto-approvable');
+      case 'await_decision':
+        return t('Operation 不再等审批结果', 'Operation no longer waits for the decision');
+      case 'blast_radius':
+        return t('Operation 影响级调低', 'Operation blast radius lowered');
+      case 'reads':
+        return t('Operation 读取的资源增加', 'Operation reads more');
+      case 'writes':
+        return t('Operation 写入的资源增加', 'Operation writes more');
+    }
+  }
+  const label = operationFieldLabel(field, t);
+  return reason === 'unrecognized'
+    ? t(`Operation 字段 ${field}：无法识别`, `Operation field ${field}: not recognized`)
+    : reason === 'loosened'
+      ? t(`Operation ${zhJoin(label, '放宽')}`, `Operation ${label} loosened`)
+      : t(`Operation ${zhJoin(label, '有改动')}`, `Operation ${label} changed`);
+}
+
+const OPERATION_WIDENING_PATH = /^operation(?:\.(.+))?$/;
+
 /** One widening reason as a sentence: 「去掉动作类型 restart」, 「动作类型 restart 的 mode 放宽」,
  *  「Skill 正文有改动」. */
 export function wideningText(widening: ChangeWideningReasonWire, t: Translate): string {
@@ -161,6 +202,8 @@ export function wideningText(widening: ChangeWideningReasonWire, t: Translate): 
   if (content?.[1] === 'skill' || content?.[1] === 'worker') {
     return contentWideningText(content[1], content[2], widening.reason, t);
   }
+  const operation = OPERATION_WIDENING_PATH.exec(widening.path);
+  if (operation) return operationWideningText(operation[1], widening.reason, t);
   const match = WIDENING_PATH.exec(widening.path);
   const section = match?.[1] ? SECTION_LABEL[match[1]] : undefined;
   if (!match || !section) {
@@ -178,12 +221,16 @@ export function wideningText(widening: ChangeWideningReasonWire, t: Translate): 
 }
 
 /** What a change item changes, by kind: 「本体 ops-assets」, 「Skill docker-triage」, 「Worker
- *  ops-runner」 (S11 P1-D). */
+ *  ops-runner」 (S11 P1-D), 「Operation container.restart（门 docker）」 (P1-E). */
 export type ChangeSubject =
   | { readonly kind: 'ontology_version'; readonly target: { readonly family: string } }
   | {
       readonly kind: 'skill_version' | 'worker_definition_version';
       readonly target: { readonly name: string };
+    }
+  | {
+      readonly kind: 'operation_version';
+      readonly target: { readonly name: string; readonly gatekeeperName: string };
     };
 
 export function changeSubjectText(item: ChangeSubject, t: Translate): string {
@@ -194,10 +241,15 @@ export function changeSubjectText(item: ChangeSubject, t: Translate): string {
       return `Skill ${item.target.name}`;
     case 'worker_definition_version':
       return `Worker ${item.target.name}`;
+    case 'operation_version':
+      return t(
+        `Operation ${item.target.name}（门 ${item.target.gatekeeperName}）`,
+        `Operation ${item.target.name} (gate ${item.target.gatekeeperName})`,
+      );
   }
 }
 
-/** The family's own version noun: 本体 / Skill / Worker 版本. */
+/** The family's own version noun: 本体 / Skill / Worker / Operation 版本. */
 function familyNoun(kind: ChangeItemWire['kind'], t: Translate): string {
   switch (kind) {
     case 'ontology_version':
@@ -206,7 +258,24 @@ function familyNoun(kind: ChangeItemWire['kind'], t: Translate): string {
       return 'Skill';
     case 'worker_definition_version':
       return 'Worker';
+    case 'operation_version':
+      return 'Operation';
   }
+}
+
+/** 「是」, 「高影响」, 「Container、Host」 — one governance field's value on an Operation version. */
+function operationValueText(
+  field: OperationFieldChangeWire['field'],
+  value: OperationFieldChangeWire['before'],
+  t: Translate,
+): string {
+  if (value === null) return t('未设置', 'not set');
+  if (typeof value === 'boolean') return value ? t('是', 'yes') : t('否', 'no');
+  if (Array.isArray(value)) return value.length > 0 ? value.join(t('、', ', ')) : t('无', 'none');
+  if (field === 'blast_radius' && Object.hasOwn(BLAST_RADIUS_TONES, value)) {
+    return labelText(BLAST_RADIUS_TONES[value as keyof typeof BLAST_RADIUS_TONES], t);
+  }
+  return value;
 }
 
 function versionText(version: { readonly version: number } | null, t: Translate): string {
@@ -245,9 +314,10 @@ export function typeNamesText(names: OntologyTypeNamesWire, t: Translate): strin
  * components/catalog/ChangesTab: 能力目录 · 安装历史 (`#/govern/catalog/changes`, S11 P1-B). Every
  * pack install or upgrade since the ChangePlan core is one **安装记录** (a ChangePlan segment);
  * what it changed are its **改动项** (a new version of an ontology family, a Skill or a Worker,
- * P1-D). Members read the list
- * (`list_change_segments`) and a record (`get_change_segment`: each change, and whether it is
- * still in effect); the owner can roll a record back — `preview_roll_back_change_segment` first,
+ * P1-D; a revision of an Operation's approval settings, P1-E). Members read the list
+ * (`list_change_segments`) and a record (`get_change_segment`: each change, whether it is still in
+ * effect, and its latest 核验 — `ChangeVerification.tsx`); the owner can verify it again
+ * (`verify_change_segment`) and roll it back — `preview_roll_back_change_segment` first,
  * inside the confirm, then `roll_back_change_segment` with each authority-widening change ticked.
  * A pack installed before records were kept, or published some other way, has no record and is
  * not here (its 能力包 pane says so, per component).
@@ -393,7 +463,11 @@ function ChangeSegmentDetail({
       />
     );
   }
-  const { segment, items } = detail.state.data;
+  const { segment, items, verification } = detail.state.data;
+  const itemSubject = (ordinal: number): string => {
+    const item = items.find((candidate) => candidate.ordinal === ordinal);
+    return item ? changeSubjectText(item, t) : `#${ordinal}`;
+  };
   return (
     <div className="stack" data-testid="catalog-change-detail">
       <div className="row-wrap" style={{ justifyContent: 'space-between' }}>
@@ -462,6 +536,17 @@ function ChangeSegmentDetail({
         ))}
       </div>
 
+      <ChangeVerificationSection
+        http={http}
+        segment={segment}
+        verification={verification}
+        itemSubject={itemSubject}
+        onVerified={() => {
+          void detail.reload();
+          onRolledBack();
+        }}
+      />
+
       {segment.status !== 'rolled_back' ? (
         <RollBackSegment
           http={http}
@@ -506,6 +591,15 @@ function ChangeItemView({
           `${familyNoun(item.kind, t)} version pack v${segment.source.version} brought (numbered apart from the pack's): ${versionText(item.before, t)} → ${versionText(item.after, t)}`,
         )}
       </span>
+      {item.kind === 'operation_version' && item.fields.length > 0 ? (
+        <div className="stack-s" data-testid={`catalog-change-item-${item.ordinal}-fields`}>
+          {item.fields.map((change) => (
+            <span className="text-3 text-small" key={change.field}>
+              {`${operationFieldLabel(change.field, t)}${t('：', ': ')}${operationValueText(change.field, change.before, t)} → ${operationValueText(change.field, change.after, t)}`}
+            </span>
+          ))}
+        </div>
+      ) : null}
       {item.widening.length > 0 ? (
         <span className="text-small">
           {t('改变了权限边界：', 'Moved an authority boundary: ')}
@@ -560,6 +654,10 @@ const BLOCKER_TEXT: Readonly<
   namespace_conflict: {
     zh: '要退回的那一版里有类型名已被别的本体占用，退回会让两个本体重名。',
     en: 'A type name in the version to return to is now taken by another ontology; going back would give it two owners.',
+  },
+  revision_pending: {
+    zh: '这个 Operation 有一份待审的修订草稿，撤销会越过它，所以不撤销。先在「Operation」页发布或丢弃那份草稿。',
+    en: 'This Operation has a revision draft under review; rolling back would go past it, so it is not rolled back. Publish or discard that draft on the Operations tab first.',
   },
 };
 
@@ -725,6 +823,13 @@ function RollBackSegment({
                       <span className="text-3 text-small">
                         {t('撤销后本体里不再有：', 'Afterwards the ontology no longer has: ')}
                         {typeNamesText(item.removes, t)}
+                      </span>
+                    ) : item.kind === 'operation_version' ? (
+                      <span className="text-3 text-small">
+                        {t(
+                          `撤销会把第 ${item.to.version} 版的审批设置作为新的一版重新发布；停用的版本不会再启用。`,
+                          `Rolling back publishes v${item.to.version}'s approval settings again as a new version; a retired version is never re-enabled.`,
+                        )}
                       </span>
                     ) : item.kind !== 'ontology_version' && item.to === null ? (
                       <span className="text-3 text-small">

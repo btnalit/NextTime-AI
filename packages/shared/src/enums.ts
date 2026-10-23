@@ -532,14 +532,31 @@ export const ChangeSegmentStatusSchema = asEnum(CHANGE_SEGMENT_STATUS_VALUES);
 
 /** What a ChangeItem is an intent to do (§5.4: a call of an existing publish / configuration
  *  capability): publish the next version of an ontology family (P1-A), of a Skill family, or of a
- *  `worker`-kind WorkerDefinition family (P1-D). */
+ *  `worker`-kind WorkerDefinition family (P1-D); publish a revision of a published Operation that
+ *  changes how calls of it are governed, never what the gate runs (P1-E). */
 export const CHANGE_ITEM_KIND_VALUES = [
   'ontology_version',
   'skill_version',
   'worker_definition_version',
+  'operation_version',
 ] as const;
 export type ChangeItemKind = (typeof CHANGE_ITEM_KIND_VALUES)[number];
 export const ChangeItemKindSchema = asEnum(CHANGE_ITEM_KIND_VALUES);
+
+/** The Operation fields an `operation_version` item may set (P1-E): what the workspace decides about
+ *  calls of the Operation. Everything the gate runs — name, binding, params schema, result mapping,
+ *  mode, reversibility, an ssh binding's blast radius — the gate holds every call to, and the MCP
+ *  hints are the system's own claim, so neither is here. */
+export const OPERATION_ITEM_FIELD_VALUES = [
+  'description',
+  'blast_radius',
+  'auto_approvable',
+  'await_decision',
+  'reads',
+  'writes',
+] as const;
+export type OperationItemField = (typeof OPERATION_ITEM_FIELD_VALUES)[number];
+export const OperationItemFieldSchema = asEnum(OPERATION_ITEM_FIELD_VALUES);
 
 /**
  * I-A4: a ChangeItem is `not_widening` only when every field it changes is on its kind's list of
@@ -583,26 +600,55 @@ export const ChangeSourceKindSchema = asEnum(CHANGE_SOURCE_KIND_VALUES);
 /**
  * An applied item's target now (S11 P1-B, read at the time of the call): `in_effect` — what the item
  * wrote is still there (the version it published is its family's head: the latest published
- * version of the ontology family, Skill or WorkerDefinition); `replaced` — something written later
- * took its place; `not_installed` — the target no longer exists (a family with no published
- * version).
+ * version of the ontology family, Skill or WorkerDefinition; for an Operation, its one published
+ * version); `replaced` — something written later took its place; `not_installed` — the target no
+ * longer exists (a family, or an Operation, with no published version).
  */
 export const CHANGE_ITEM_STATE_VALUES = ['in_effect', 'replaced', 'not_installed'] as const;
 export type ChangeItemState = (typeof CHANGE_ITEM_STATE_VALUES)[number];
 export const ChangeItemStateSchema = asEnum(CHANGE_ITEM_STATE_VALUES);
 
 /**
+ * Who started a segment's verification run (S11 P1-E, `verify_change_segment`): `manual` — a
+ * person asked for it; `system` — the platform ran it right after an install, as the person who
+ * installed.
+ */
+export const CHANGE_VERIFICATION_TRIGGER_VALUES = ['manual', 'system'] as const;
+export type ChangeVerificationTrigger = (typeof CHANGE_VERIFICATION_TRIGGER_VALUES)[number];
+export const ChangeVerificationTriggerSchema = asEnum(CHANGE_VERIFICATION_TRIGGER_VALUES);
+
+/**
+ * Where a system a pack needs (a connector it `requires`) stands in this workspace (S11 P1-E; S10
+ * plan §3.3 I-P3: a gate is a code component, so a pack only checks it is in place):
+ * `connected` — the workspace has a gate of that connector the platform has not cut off;
+ * `can_enable` — the platform offers an instance of it the owner can enable here; `can_connect` —
+ * the platform lets workspaces connect it themselves; `needs_platform` — none of these: a platform
+ * administrator has to add or turn on an instance first.
+ */
+export const PACK_REQUIREMENT_STATE_VALUES = [
+  'connected',
+  'can_enable',
+  'can_connect',
+  'needs_platform',
+] as const;
+export type PackRequirementState = (typeof PACK_REQUIREMENT_STATE_VALUES)[number];
+export const PackRequirementStateSchema = asEnum(PACK_REQUIREMENT_STATE_VALUES);
+
+/**
  * Why an item of a segment cannot be rolled back now (S11 P1-B, §3.4 "逆操作遇到中间被别人改过的版本
  * 时停下不覆盖"): `replaced` — its target was changed after it (roll that change back first, or it was
  * made outside the ChangePlan core); `not_installed` — its target no longer exists; `restored_
  * version_missing` — the state it would return to is gone; `namespace_conflict` — what it would
- * restore declares a type name another ontology family has taken since (I-P1).
+ * restore declares a type name another ontology family has taken since (I-P1); `revision_pending`
+ * — its target, an Operation, has a revision draft under review, which a rollback would neither
+ * overwrite nor publish past (P1-E: publish or discard that draft first).
  */
 export const CHANGE_ROLLBACK_BLOCKER_VALUES = [
   'replaced',
   'not_installed',
   'restored_version_missing',
   'namespace_conflict',
+  'revision_pending',
 ] as const;
 export type ChangeRollbackBlocker = (typeof CHANGE_ROLLBACK_BLOCKER_VALUES)[number];
 export const ChangeRollbackBlockerSchema = asEnum(CHANGE_ROLLBACK_BLOCKER_VALUES);

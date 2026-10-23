@@ -14,6 +14,8 @@ import {
   ChangeRollbackConflictError,
   ChangeSegmentNotFoundError,
   ChangeSegmentRolledBackError,
+  ChangeSegmentSupersededError,
+  ChangeVerificationCooldownError,
 } from '../../application/change-plan/index.js';
 import {
   ChatArchivedError,
@@ -272,6 +274,15 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   }
   if (err instanceof ChangeRollbackConflictError) {
     return { status: 409, code: err.code, message: err.message, details: { ...err.details } };
+  }
+  // S11 P1-E: verifying a segment. A later segment of the same source is the one in effect → 409
+  // with `details.supersededBy`; verified less than the cooldown ago → 429 with
+  // `details.retryAfterSeconds`. Neither probed nor wrote anything.
+  if (err instanceof ChangeSegmentSupersededError) {
+    return { status: 409, code: err.code, message: err.message, details: { ...err.details } };
+  }
+  if (err instanceof ChangeVerificationCooldownError) {
+    return { status: 429, code: err.code, message: err.message, details: { ...err.details } };
   }
   // S4.1 console-session channel (resolve-caller.ts): three `ForbiddenError` subclasses with
   // their own codes so the web client can act on them (pick a workspace / add the CSRF header /

@@ -24,6 +24,7 @@ const VERSIONS: PackWire['versions'] = [
     summary: 'Hosts and the services on them',
     notes: 'First version',
     breaking: false,
+    requiredConnectors: [],
     components: [{ kind: 'ontology', family: 'ops-assets', domainPack: 'ops-assets-v1.yaml' }],
   },
   {
@@ -31,6 +32,7 @@ const VERSIONS: PackWire['versions'] = [
     summary: 'Hosts and the services on them',
     notes: '新增 Disk 与 restart 动作',
     breaking: true,
+    requiredConnectors: [],
     components: [{ kind: 'ontology', family: 'ops-assets', domainPack: 'ops-assets-v2.yaml' }],
   },
 ];
@@ -63,6 +65,7 @@ function pack(patch: Partial<PackWire> = {}): PackWire {
     status: 'outdated',
     installedVersion: 1,
     components: [component()],
+    requirements: [],
     ...patch,
   };
 }
@@ -251,6 +254,7 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
         return {
           pack: pack({ status: 'up_to_date', installedVersion: 2 }),
           segmentId: NEW_SEGMENT_ID,
+          verification: null,
         };
       },
     });
@@ -303,6 +307,9 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
     const done = await screen.findByTestId('catalog-pack-installed');
     expect(done.closest('output')).not.toBeNull();
     expect(done.textContent).toMatch(/已装上 v2/);
+    expect(screen.getByTestId('catalog-pack-installed-verification').textContent).toBe(
+      '装完没能核验，可以在安装记录里再核验一次。',
+    );
     expect(screen.getByTestId('catalog-pack-installed-record').getAttribute('href')).toBe(
       `#/govern/catalog/changes/${NEW_SEGMENT_ID}`,
     );
@@ -411,6 +418,66 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
     expect(named(http.calls, 'preview_pack_install')).toEqual([]);
   });
 
+  it('a pack that needs systems says where each stands, before and in the review; the install says how its verification went (P1-E)', async () => {
+    const needs = pack({
+      requirements: [
+        { connector: 'docker', state: 'can_enable' },
+        { connector: 'ragflow', state: 'needs_platform' },
+      ],
+      versions: VERSIONS.map((version) =>
+        version.version === 2 ? { ...version, requiredConnectors: ['docker', 'ragflow'] } : version,
+      ),
+    });
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_packs: () => ({ items: [needs] }),
+      preview_pack_install: () => preview({ pack: needs }),
+      install_pack: () => ({
+        pack: pack({ status: 'up_to_date', installedVersion: 2 }),
+        segmentId: NEW_SEGMENT_ID,
+        verification: {
+          trigger: 'system',
+          verifiedBy: { id: 'p-owner', kind: 'human', displayName: 'Owner' },
+          verifiedAt: new Date().toISOString(),
+          passed: false,
+          sourceFound: true,
+          items: [{ ordinal: 1, kind: 'ontology_version', state: 'in_effect' }],
+          requirements: [
+            { connector: 'docker', state: 'can_enable', gates: [], met: false },
+            { connector: 'ragflow', state: 'needs_platform', gates: [], met: false },
+          ],
+        },
+      }),
+    });
+    renderTab(http, 'ops-assets');
+
+    const listed = await screen.findByTestId('catalog-pack-requirements');
+    const docker = within(listed).getByTestId('catalog-pack-requirements-docker');
+    expect(docker.textContent).toMatch(/docker待启用平台已经提供，工作区还没启用/);
+    expect(
+      within(docker).getByTestId('catalog-pack-requirements-docker-link').getAttribute('href'),
+    ).toBe('#/govern/systems');
+    const ragflow = within(listed).getByTestId('catalog-pack-requirements-ragflow');
+    expect(ragflow.textContent).toMatch(/平台未提供这个部署还没有提供它，需要平台管理员先接入/);
+    expect(within(ragflow).queryByRole('link')).toBeNull();
+    expect(screen.getByTestId('catalog-pack-version-2').textContent).toMatch(
+      /要用到的系统：docker、ragflow/,
+    );
+    expect(screen.getByTestId('catalog-pack-version-1').textContent).not.toMatch(/要用到的系统/);
+
+    fireEvent.click(screen.getByTestId('catalog-pack-install-trigger'));
+    const review = await screen.findByTestId('catalog-pack-preview-requirements');
+    expect(review.textContent).toMatch(/安装不会等它们接好；装完会马上核验一次/);
+    expect(within(review).getByTestId('catalog-pack-preview-requirement-docker')).toBeTruthy();
+    // Nothing to confirm (the item widens nothing): installing does not wait for the systems.
+    const confirm = screen.getByRole('button', { name: '升级' }) as HTMLButtonElement;
+    expect(confirm.disabled).toBe(false);
+    fireEvent.click(confirm);
+    expect((await screen.findByTestId('catalog-pack-installed-verification')).textContent).toBe(
+      '装完已核验：没有通过，原因见安装记录。',
+    );
+  });
+
   it('a pack this deployment does not ship says so', async () => {
     const http = scriptedHttp({
       get_workspace: () => OWNER_WORKSPACE,
@@ -428,6 +495,7 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
         summary: 'Ops crew',
         notes: 'First version',
         breaking: false,
+        requiredConnectors: [],
         components: [
           { kind: 'skill', name: 'docker-triage', description: '排查容器问题' },
           { kind: 'worker', name: 'ops-runner', description: '通用运维执行者' },
@@ -509,7 +577,7 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
             },
           ],
         }),
-      install_pack: () => ({ pack: crew, segmentId: NEW_SEGMENT_ID }),
+      install_pack: () => ({ pack: crew, segmentId: NEW_SEGMENT_ID, verification: null }),
     });
     renderTab(http, 'ops-base');
 
@@ -584,6 +652,7 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
           summary: 'Ops crew',
           notes: 'First version',
           breaking: false,
+          requiredConnectors: [],
           components: [{ kind: 'worker', name: 'ops-runner', description: null }],
         },
       ],

@@ -2,7 +2,17 @@ import type { ChangeItemState } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { parseStoredFamilyItem, readFamilyItemState } from './family-item.js';
 import { parseStoredOntologyItem, readOntologyItemState } from './ontology-item.js';
-import { findOntologyVersionSegment, findVersionSegment } from './provenance.js';
+import {
+  type OperationFieldChange,
+  parseStoredOperationItem,
+  readOperationItemFields,
+  readOperationItemState,
+} from './operation-item.js';
+import {
+  findOntologyVersionSegment,
+  findOperationVersionSegment,
+  findVersionSegment,
+} from './provenance.js';
 import {
   type ChangeItemRecord,
   ChangeSegmentNotFoundError,
@@ -22,6 +32,9 @@ export interface InspectedChangeItem {
   /** For `replaced`: the segment whose item wrote what is there now; `null` when that was written
    *  outside the ChangePlan core, and for every other state. */
   readonly replacedBy: { readonly segmentId: string } | null;
+  /** For an `operation_version` item: the governance fields it changed (`readOperationItemFields`);
+   *  empty for every other kind. */
+  readonly operationFields: readonly OperationFieldChange[];
 }
 
 export interface InspectedChangeSegment {
@@ -39,20 +52,29 @@ async function inspectItem(
     case 'ontology_version': {
       const item = parseStoredOntologyItem(record);
       const now = await readOntologyItemState(client, workspaceId, item);
-      if (now.state !== 'replaced') return { record, state: now.state, replacedBy: null };
+      if (now.state !== 'replaced') {
+        return { record, state: now.state, replacedBy: null, operationFields: [] };
+      }
       const segmentId = await findOntologyVersionSegment(
         client,
         workspaceId,
         item.target.ontologyId,
         now.headVersion,
       );
-      return { record, state: 'replaced', replacedBy: segmentId ? { segmentId } : null };
+      return {
+        record,
+        state: 'replaced',
+        replacedBy: segmentId ? { segmentId } : null,
+        operationFields: [],
+      };
     }
     case 'skill_version':
     case 'worker_definition_version': {
       const item = parseStoredFamilyItem(kind, record);
       const now = await readFamilyItemState(client, workspaceId, item);
-      if (now.state !== 'replaced') return { record, state: now.state, replacedBy: null };
+      if (now.state !== 'replaced') {
+        return { record, state: now.state, replacedBy: null, operationFields: [] };
+      }
       const segmentId = await findVersionSegment(
         client,
         workspaceId,
@@ -60,7 +82,32 @@ async function inspectItem(
         item.familyId,
         now.headVersion,
       );
-      return { record, state: 'replaced', replacedBy: segmentId ? { segmentId } : null };
+      return {
+        record,
+        state: 'replaced',
+        replacedBy: segmentId ? { segmentId } : null,
+        operationFields: [],
+      };
+    }
+    case 'operation_version': {
+      const item = parseStoredOperationItem(record);
+      const now = await readOperationItemState(client, workspaceId, item);
+      const operationFields = await readOperationItemFields(client, workspaceId, item);
+      if (now.state !== 'replaced') {
+        return { record, state: now.state, replacedBy: null, operationFields };
+      }
+      const segmentId = await findOperationVersionSegment(
+        client,
+        workspaceId,
+        item.target,
+        now.headVersion,
+      );
+      return {
+        record,
+        state: 'replaced',
+        replacedBy: segmentId ? { segmentId } : null,
+        operationFields,
+      };
     }
     default:
       throw new Error(

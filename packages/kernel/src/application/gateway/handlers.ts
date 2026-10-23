@@ -171,6 +171,7 @@ import {
   listChangeSegmentsHandler,
   previewRollBackChangeSegmentHandler,
   rollBackChangeSegmentHandler,
+  verifyChangeSegmentHandler,
 } from './change-segment-handlers.js';
 import {
   cancelConnectionRequestHandler,
@@ -2225,6 +2226,7 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['get_change_segment', getChangeSegmentHandler],
   ['preview_roll_back_change_segment', previewRollBackChangeSegmentHandler],
   ['roll_back_change_segment', rollBackChangeSegmentHandler],
+  ['verify_change_segment', verifyChangeSegmentHandler],
   // S11 GO5a goal reads (goal-handlers.ts)
   ['get_goal', getGoalHandler],
   ['list_goals', listGoalsHandler],

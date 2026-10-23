@@ -14,6 +14,8 @@ import {
   ChangeRollbackConflictError,
   ChangeSegmentNotFoundError,
   ChangeSegmentRolledBackError,
+  ChangeSegmentSupersededError,
+  ChangeVerificationCooldownError,
 } from '../../application/change-plan/index.js';
 import {
   ChatArchivedError,
@@ -475,13 +477,22 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   if (err instanceof ChangePlanChangedError) {
     return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
   }
-  // S11 P1-B: mirrors HTTP 404 `change_segment_not_found`, 409 `change_segment_rolled_back` and
-  // 409 `change_rollback_conflict` (the message names each blocked item).
+  // S11 P1-B/E: mirrors HTTP 404 `change_segment_not_found`, 409 `change_segment_rolled_back`,
+  // 409 `change_rollback_conflict` (the message names each blocked item) and 409
+  // `change_segment_superseded` (the message names the later segment).
   if (err instanceof ChangeSegmentNotFoundError) {
     return { code: WS_ERROR_CODES.NOT_FOUND, message: err.message };
   }
-  if (err instanceof ChangeSegmentRolledBackError || err instanceof ChangeRollbackConflictError) {
+  if (
+    err instanceof ChangeSegmentRolledBackError ||
+    err instanceof ChangeRollbackConflictError ||
+    err instanceof ChangeSegmentSupersededError
+  ) {
     return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
+  }
+  // S11 P1-E: mirrors HTTP 429 `change_verification_cooldown` — the one WS code for HTTP 429.
+  if (err instanceof ChangeVerificationCooldownError) {
+    return { code: WS_ERROR_CODES.QUOTA_EXCEEDED, message: err.message };
   }
   // Postgres 22P02 (malformed id/value from the caller) — same mapping as capability-route.ts.
   if (isPgInvalidTextRepresentation(err)) {

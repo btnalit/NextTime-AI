@@ -5,12 +5,14 @@ import type {
   ChangeRollbackPreviewWire,
   ChangeSegmentDetailWire,
   ChangeSegmentWire,
+  ChangeVerificationWire,
 } from '@nexttime/shared';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { HttpError } from '../../lib/http-client.js';
 import { useT } from '../../lib/i18n.js';
 import { ChangesTab, typeNamesText, wideningText } from './ChangesTab.js';
 
@@ -63,8 +65,28 @@ function detail(
         ...patch,
       },
     ],
+    verification: null,
   };
 }
+
+function verification(patch: Partial<ChangeVerificationWire> = {}): ChangeVerificationWire {
+  return {
+    trigger: 'system',
+    verifiedBy: { id: 'p-owner', kind: 'human', displayName: 'Owner' },
+    verifiedAt: '2026-10-20T08:00:05.000Z',
+    passed: true,
+    sourceFound: true,
+    items: [{ ordinal: 1, kind: 'ontology_version', state: 'in_effect' }],
+    requirements: [],
+    ...patch,
+  };
+}
+
+const OPERATION_TARGET = {
+  gatekeeperId: 'gk-1',
+  gatekeeperName: 'docker-a',
+  name: 'container.restart',
+};
 
 function preview(
   id: string,
@@ -294,6 +316,7 @@ describe('ChangesTab (能力目录 · 安装历史, S11 P1-B)', () => {
             after: { version: 1, contentDigest: 'sha256:s' },
           },
         ],
+        verification: null,
       }),
     });
     renderTab(http, segmentId);
@@ -301,6 +324,186 @@ describe('ChangesTab (能力目录 · 安装历史, S11 P1-B)', () => {
     const item = await screen.findByTestId('catalog-change-item-1');
     expect(item.textContent).toContain(
       '能力包 v1 带来的 Skill 版本（与能力包版本分开编号）：未安装 → 第 1 版',
+    );
+  });
+
+  it('a record shows its latest verification: who ran it and how, what is no longer in effect, and each system with its gates (P1-E)', async () => {
+    const http = scriptedHttp({
+      get_workspace: () => ({
+        ...OWNER_WORKSPACE,
+        caller: { ...OWNER_WORKSPACE.caller, role: 'member' },
+      }),
+      list_change_segments: () => ({ items: [segment(FIRST, { status: 'verification_failed' })] }),
+      get_change_segment: () => ({
+        ...detail(FIRST, { state: 'replaced' }, { status: 'verification_failed' }),
+        verification: verification({
+          passed: false,
+          items: [{ ordinal: 1, kind: 'ontology_version', state: 'replaced' }],
+          requirements: [
+            {
+              connector: 'docker',
+              state: 'connected',
+              met: false,
+              gates: [{ id: 'gk-1', name: 'docker-a', health: 'unreachable' }],
+            },
+            { connector: 'ragflow', state: 'can_connect', met: false, gates: [] },
+          ],
+        }),
+      }),
+    });
+    renderTab(http, FIRST);
+
+    const result = await screen.findByTestId('catalog-change-verification-result');
+    expect(within(result).getByTestId('catalog-change-verification-status').textContent).toBe(
+      '核验未通过',
+    );
+    expect(result.textContent).toMatch(/安装后自动核验（记在 Owner 名下）/);
+    expect(within(result).getByTestId('catalog-change-verification-item-1').textContent).toBe(
+      '本体 ops-assets已被后来的改动替换',
+    );
+    const docker = within(result).getByTestId('catalog-change-requirement-docker');
+    expect(docker.textContent).toMatch(/docker已接入但没有一个能连通/);
+    expect(
+      within(docker)
+        .getByTestId('catalog-change-requirement-docker-gate-gk-1')
+        .getAttribute('href'),
+    ).toBe('#/govern/systems/gk-1');
+    expect(docker.textContent).toMatch(/docker-a不可达/);
+    expect(within(result).getByTestId('catalog-change-requirement-ragflow').textContent).toMatch(
+      /待接入工作区还没接入：所有者可以在「系统与授权」里自行接入。去「系统与授权」/,
+    );
+    // A member reads it but is not offered the run.
+    await waitFor(() => expect(http.calls.some((c) => c.name === 'get_workspace')).toBe(true));
+    await waitFor(() => expect(screen.queryByTestId('catalog-change-verify')).toBeNull());
+  });
+
+  it('the owner verifies a record; right after, the button waits out the cooldown', async () => {
+    let verified: ChangeVerificationWire | null = null;
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_change_segments: () => ({ items: [segment(FIRST)] }),
+      get_change_segment: () => ({
+        ...detail(FIRST, {}, verified ? { status: 'verified' } : {}),
+        verification: verified,
+      }),
+      verify_change_segment: () => {
+        verified = verification({ trigger: 'manual', verifiedAt: new Date().toISOString() });
+        return { segment: segment(FIRST, { status: 'verified' }), verification: verified };
+      },
+    });
+    renderTab(http, FIRST);
+
+    expect((await screen.findByTestId('catalog-change-verification-none')).textContent).toBe(
+      '还没有核验过。',
+    );
+    const run = screen.getByTestId('catalog-change-verify') as HTMLButtonElement;
+    expect(run.textContent).toBe('核验');
+    fireEvent.click(run);
+    await waitFor(() =>
+      expect(http.calls.filter((c) => c.name === 'verify_change_segment')).toEqual([
+        { name: 'verify_change_segment', params: { segmentId: FIRST } },
+      ]),
+    );
+    const result = await screen.findByTestId('catalog-change-verification-result');
+    expect(result.textContent).toMatch(/Owner 手动核验/);
+    expect(result.textContent).toMatch(/这次写入的改动项都还在生效。/);
+    expect(result.textContent).toMatch(/这个能力包没有写明要用到的系统。/);
+    const again = screen.getByTestId('catalog-change-verify') as HTMLButtonElement;
+    expect(again.textContent).toBe('再核验一次');
+    expect(again.disabled).toBe(true);
+    expect(screen.getByTestId('catalog-change-verify-cooldown').textContent).toMatch(
+      /^刚核验过，\d+ 秒后可以再核验。$/,
+    );
+  });
+
+  it('a superseded record says which one to verify instead', async () => {
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_change_segments: () => ({ items: [segment(LATER), segment(FIRST)] }),
+      get_change_segment: () => detail(FIRST),
+      verify_change_segment: () => {
+        throw new HttpError('capability_error', 'superseded', 'change_segment_superseded', {
+          supersededBy: LATER,
+        });
+      },
+    });
+    renderTab(http, FIRST);
+
+    fireEvent.click(await screen.findByTestId('catalog-change-verify'));
+    expect((await screen.findByTestId('catalog-change-verify-error')).textContent).toMatch(
+      /现在生效的是那条安装记录；请核验那一条/,
+    );
+    expect(screen.getByTestId('catalog-change-verify-later').getAttribute('href')).toBe(
+      `#/govern/catalog/changes/${LATER}`,
+    );
+  });
+
+  it('an Operation item shows the approval settings it changed; its rollback publishes them again, or waits on a pending revision', async () => {
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_change_segments: () => ({ items: [segment(FIRST)] }),
+      get_change_segment: () => ({
+        segment: segment(FIRST),
+        items: [
+          {
+            id: 'item-op',
+            ordinal: 1,
+            kind: 'operation_version',
+            classification: 'authority_widening',
+            widening: [{ path: 'operation.auto_approvable', reason: 'loosened' }],
+            confirmedBy: { id: 'p-owner', kind: 'human', displayName: 'Owner' },
+            state: 'in_effect',
+            replacedBy: null,
+            target: OPERATION_TARGET,
+            before: { version: 1, contentDigest: 'sha256:1' },
+            after: { version: 2, contentDigest: 'sha256:2' },
+            fields: [
+              { field: 'auto_approvable', before: false, after: true },
+              { field: 'blast_radius', before: 'high', after: 'medium' },
+              { field: 'writes', before: ['Container'], after: [] },
+            ],
+          },
+        ],
+        verification: null,
+      }),
+      preview_roll_back_change_segment: () => ({
+        segment: segment(FIRST),
+        possible: true,
+        items: [
+          {
+            ordinal: 1,
+            kind: 'operation_version',
+            target: OPERATION_TARGET,
+            from: { version: 2, contentDigest: 'sha256:2' },
+            to: { version: 1, contentDigest: 'sha256:1' },
+            classification: 'not_widening',
+            widening: [],
+            blocker: null,
+            blockedBy: null,
+            conflicts: [],
+          },
+        ],
+        inUse: { objects: 0, links: 0, capped: false },
+      }),
+    });
+    renderTab(http, FIRST);
+
+    const item = await screen.findByTestId('catalog-change-item-1');
+    expect(item.textContent).toContain('Operation container.restart（门 docker-a）');
+    expect(item.textContent).toContain(
+      '能力包 v2 带来的 Operation 版本（与能力包版本分开编号）：第 1 版 → 第 2 版',
+    );
+    expect(screen.getByTestId('catalog-change-item-1-fields').textContent).toBe(
+      '是否可自动批准：否 → 是影响级：高影响 → 中影响写入的资源：Container → 无',
+    );
+    expect(item.textContent).toMatch(
+      /改变了权限边界：Operation 改为可自动批准（Owner 已逐项确认）/,
+    );
+
+    fireEvent.click(screen.getByTestId('catalog-change-rollback-trigger'));
+    const preview = await screen.findByTestId('catalog-change-preview-1');
+    expect(preview.textContent).toBe(
+      'Operation container.restart（门 docker-a）：第 2 版 → 第 1 版撤销会把第 1 版的审批设置作为新的一版重新发布；停用的版本不会再启用。',
     );
   });
 
@@ -364,6 +567,10 @@ describe('typeNamesText', () => {
             { path: 'worker.skills', reason: 'loosened' as const },
             { path: 'worker.egressDeny', reason: 'loosened' as const },
             { path: 'worker.extra', reason: 'unrecognized' as const },
+            { path: 'operation', reason: 'added' as const },
+            { path: 'operation.await_decision', reason: 'loosened' as const },
+            { path: 'operation.description', reason: 'changed' as const },
+            { path: 'operation.mode', reason: 'loosened' as const },
           ]
             .map((w) => wideningText(w, t))
             .join(' | ')}
@@ -372,7 +579,7 @@ describe('typeNamesText', () => {
     }
     render(<Probe />);
     expect(screen.getByTestId('probe').textContent).toBe(
-      '新增这个 Skill：挂载它的 Worker 会读到它的全文 | Skill 正文有改动 | Worker 挂载的 Skill 增加 | Worker 禁止访问的地址减少 | Worker 字段 extra：无法识别',
+      '新增这个 Skill：挂载它的 Worker 会读到它的全文 | Skill 正文有改动 | Worker 挂载的 Skill 增加 | Worker 禁止访问的地址减少 | Worker 字段 extra：无法识别 | 新增这个 Operation：助手可以请求调用它 | Operation 不再等审批结果 | Operation 说明有改动 | Operation 模式放宽',
     );
   });
 });

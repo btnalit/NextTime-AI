@@ -8,7 +8,8 @@ import type { ChangePrincipalRef } from './segments.js';
 /**
  * application/change-plan/provenance: "which ChangeItem put this here" (S11 plan §3.2 `Object
  * changed_by ChangeItem`) for a family's installed version — an ontology family's, a Skill's or a
- * `worker` WorkerDefinition's. Only versions applied through the core since P1 have an item; a
+ * `worker` WorkerDefinition's — and for an Operation's live version (`findOperationVersionSegment`;
+ * an Operation rolled back gets a further version no item wrote: `operation-item.ts`). Only versions applied through the core since P1 have an item; a
  * version published before P1, or outside a ChangePlan (`publish_ontology_version`,
  * `publish_skill`, `publish_worker_definition`, `seed-domain-pack`), says so as
  * `provenance_unknown` — never "no change" and never something a rollback may act on. A rollback
@@ -55,20 +56,23 @@ interface WritingItemRow {
   applied_at: Date;
 }
 
+/** A kind whose target names a family by one id field. */
+type FamilyIdKind = Exclude<ChangeItemKind, 'operation_version'>;
+
 /** Which item kind's target names its family under which field: a fixed table, never input. */
-const TARGET_ID_FIELD: Readonly<Record<ChangeItemKind, string>> = {
+const TARGET_ID_FIELD: Readonly<Record<FamilyIdKind, string>> = {
   ontology_version: 'ontologyId',
   skill_version: familyIdField('skill_version'),
   worker_definition_version: familyIdField('worker_definition_version'),
 };
 
-/** The `kind` item that published `version` of the family `familyId`, or `null` when none did
- *  (published before P1 or outside the core). */
+/** The `kind` item whose target contains `target` and that published `version`, or `null` when
+ *  none did (published before P1 or outside the core). */
 async function findWritingItem(
   client: PoolClient,
   workspaceId: string,
   kind: ChangeItemKind,
-  familyId: string,
+  target: Readonly<Record<string, string>>,
   version: number,
 ): Promise<WritingItemRow | null> {
   const result = await client.query<WritingItemRow>(
@@ -79,9 +83,9 @@ async function findWritingItem(
        join change_segments s on s.workspace_id = i.workspace_id and s.id = i.segment_id
        join principals p on p.workspace_id = s.workspace_id and p.id = s.applied_by
       where i.workspace_id = $1 and i.kind = $2
-        and i.target ->> $3 = $4
-        and (i.after ->> 'version')::int = $5`,
-    [workspaceId, kind, TARGET_ID_FIELD[kind], familyId, version],
+        and i.target @> $3::jsonb
+        and (i.after ->> 'version')::int = $4`,
+    [workspaceId, kind, JSON.stringify(target), version],
   );
   return result.rows[0] ?? null;
 }
@@ -92,11 +96,26 @@ async function findWritingItem(
 export async function findVersionSegment(
   client: PoolClient,
   workspaceId: string,
-  kind: ChangeItemKind,
+  kind: FamilyIdKind,
   familyId: string,
   version: number,
 ): Promise<string | null> {
-  return (await findWritingItem(client, workspaceId, kind, familyId, version))?.segment_id ?? null;
+  const target = { [TARGET_ID_FIELD[kind]]: familyId };
+  return (await findWritingItem(client, workspaceId, kind, target, version))?.segment_id ?? null;
+}
+
+/** As `findVersionSegment`, for an Operation (`{ gatekeeperId, name }`). */
+export async function findOperationVersionSegment(
+  client: PoolClient,
+  workspaceId: string,
+  operation: { readonly gatekeeperId: string; readonly name: string },
+  version: number,
+): Promise<string | null> {
+  const target = { gatekeeperId: operation.gatekeeperId, name: operation.name };
+  return (
+    (await findWritingItem(client, workspaceId, 'operation_version', target, version))
+      ?.segment_id ?? null
+  );
 }
 
 /** As `findVersionSegment`, for an ontology family (`ontology_versions.id`). */
@@ -112,12 +131,13 @@ export async function findOntologyVersionSegment(
 async function provenanceOf(
   client: PoolClient,
   workspaceId: string,
-  kind: ChangeItemKind,
+  kind: FamilyIdKind,
   familyId: string,
   headVersion: number | null,
 ): Promise<ChangeProvenance> {
   if (headVersion === null) return { status: 'not_installed' };
-  const row = await findWritingItem(client, workspaceId, kind, familyId, headVersion);
+  const target = { [TARGET_ID_FIELD[kind]]: familyId };
+  const row = await findWritingItem(client, workspaceId, kind, target, headVersion);
   if (!row) return { status: 'provenance_unknown', version: headVersion };
   return {
     status: 'recorded',

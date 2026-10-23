@@ -1,3 +1,4 @@
+import { type Operation, OperationSchema } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
 import {
   type ActionTypeDefinition,
@@ -9,8 +10,10 @@ import {
   LINK_TYPE_FIELD_RULES,
   OBJECT_TYPE_FIELD_RULES,
   ONTOLOGY_SECTION_NAMES,
+  OPERATION_FIELD_RULES,
   classificationOf,
   classifyOntologyDefinitionChange,
+  classifyOperationChange,
   classifySkillChange,
   classifyWorkerDefinitionChange,
 } from './classify.js';
@@ -295,5 +298,164 @@ describe('classifySkillChange / classifyWorkerDefinitionChange (P1-D)', () => {
     expect(classifyWorkerDefinitionChange(WORKER, { ...WORKER, extra: true })).toEqual([
       { path: 'worker.extra', reason: 'unrecognized' },
     ]);
+  });
+});
+
+describe('classifyOperationChange (P1-E) — the whole Operation, field by field', () => {
+  /** An execute-class MCP call that is as loose as its governance fields go: auto-approvable, low
+   *  impact, not awaiting the decision. The rows below change one field each — the three
+   *  governance fields stay as they are, so `classifyOperationGovernanceChange` reads every one of
+   *  them as `neutral`. */
+  const OPERATION: Operation = {
+    name: 'container.restart',
+    description: 'Restart one container.',
+    binding: { kind: 'mcp', tool_name: 'restart' },
+    params_schema: {
+      type: 'object',
+      properties: { id: { type: 'string' } },
+      required: ['id'],
+      additionalProperties: false,
+    },
+    mode: 'execute',
+    blast_radius: 'low',
+    reversibility: true,
+    auto_approvable: true,
+    await_decision: false,
+    reads: ['Container'],
+    writes: ['Container'],
+    result_mapping: { jmes_path: '@', object_type: 'Container', identity_keys: ['id'] },
+    read_only_hint: false,
+    destructive_hint: false,
+    idempotent_hint: true,
+  };
+
+  /** `OPERATION` with `patch` applied; a key set to `undefined` is left out. */
+  function changed(patch: Partial<Record<keyof Operation, unknown>>): Operation {
+    const next = { ...OPERATION, ...patch } as Record<string, unknown>;
+    for (const [key, value] of Object.entries(patch)) if (value === undefined) delete next[key];
+    return next as Operation;
+  }
+
+  it('every schema field has a rule', () => {
+    expect(Object.keys(OPERATION_FIELD_RULES).sort()).toEqual(
+      Object.keys(OperationSchema.shape).sort(),
+    );
+  });
+
+  it('a new Operation is added as a whole; taking one out widens nothing', () => {
+    const observe = changed({ mode: 'observe' });
+    expect(classifyOperationChange(null, OPERATION)).toEqual([
+      { path: 'operation', reason: 'added' },
+    ]);
+    expect(classifyOperationChange(null, observe)).toEqual([
+      { path: 'operation', reason: 'added' },
+    ]);
+    expect(classifyOperationChange(OPERATION, null)).toEqual([]);
+    expect(classifyOperationChange(OPERATION, OPERATION)).toEqual([]);
+  });
+
+  // The plan's §5.4 list and the roadmap's P1 acceptance: each of these, changed alone with the
+  // three governance fields untouched, needs a person to confirm it.
+  it.each([
+    ['binding: another tool', { binding: { kind: 'mcp', tool_name: 'restart_all' } }, 'binding'],
+    [
+      'binding: an ssh command template',
+      { binding: { kind: 'ssh', command_template: 'docker restart {id} && rm -rf /' } },
+      'binding',
+    ],
+    [
+      'binding: an http path and method',
+      { binding: { kind: 'http', method: 'DELETE', path: '/containers/{id}' } },
+      'binding',
+    ],
+    [
+      'params_schema: loosened',
+      { params_schema: { type: 'object', additionalProperties: true } },
+      'params_schema',
+    ],
+    [
+      'params_schema: a gate-owned param declared',
+      {
+        params_schema: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            authorization: { type: 'string', 'x-in': 'header' },
+          },
+          required: ['id'],
+          additionalProperties: false,
+        },
+      },
+      'params_schema',
+    ],
+    ['reversibility: true to false', { reversibility: false }, 'reversibility'],
+    ['description', { description: 'Restart, and say it is safe.' }, 'description'],
+    [
+      'result_mapping',
+      { result_mapping: { jmes_path: '@', object_type: 'Host', identity_keys: ['id'] } },
+      'result_mapping',
+    ],
+    ['read_only_hint', { read_only_hint: true }, 'read_only_hint'],
+  ] as const)('%s → changed', (_label, patch, field) => {
+    const widening = classifyOperationChange(OPERATION, changed(patch));
+    expect(widening).toEqual([{ path: `operation.${field}`, reason: 'changed' }]);
+    expect(classificationOf(widening)).toBe('authority_widening');
+  });
+
+  it('reversibility needs confirmation whichever way it moves', () => {
+    expect(
+      classifyOperationChange(changed({ reversibility: false }), changed({ reversibility: true })),
+    ).toEqual([{ path: 'operation.reversibility', reason: 'changed' }]);
+  });
+
+  // Fields with a direction: the looser way widens, the stricter way (and staying) does not.
+  const strict: Operation = changed({
+    mode: 'execute',
+    blast_radius: 'high',
+    auto_approvable: false,
+    await_decision: true,
+    destructive_hint: true,
+    idempotent_hint: false,
+    reads: ['Container'],
+    writes: ['Container'],
+  });
+  it.each([
+    ['mode: execute → observe', { mode: 'observe' }, 'mode'],
+    ['blast_radius: high → medium', { blast_radius: 'medium' }, 'blast_radius'],
+    ['blast_radius: high → low', { blast_radius: 'low' }, 'blast_radius'],
+    ['auto_approvable: false → true', { auto_approvable: true }, 'auto_approvable'],
+    ['await_decision: true → false', { await_decision: false }, 'await_decision'],
+    ['destructive_hint: true → false', { destructive_hint: false }, 'destructive_hint'],
+    ['idempotent_hint: false → true', { idempotent_hint: true }, 'idempotent_hint'],
+    ['writes: one more type', { writes: ['Container', 'Host'] }, 'writes'],
+    ['reads: one more type', { reads: ['Container', 'Secret'] }, 'reads'],
+  ] as const)('loosened — %s', (_label, patch, field) => {
+    const after = { ...strict, ...patch } as Operation;
+    expect(classifyOperationChange(strict, after)).toEqual([
+      { path: `operation.${field}`, reason: 'loosened' },
+    ]);
+    // The other way round tightens: proven not to widen.
+    expect(classifyOperationChange(after, strict)).toEqual([]);
+  });
+
+  it('an MCP hint left out reads as not declared: as strict as the stricter value', () => {
+    const declared = changed({ destructive_hint: true, idempotent_hint: false });
+    const undeclared = changed({ destructive_hint: undefined, idempotent_hint: undefined });
+    expect(classifyOperationChange(declared, undeclared)).toEqual([]);
+    expect(classifyOperationChange(undeclared, declared)).toEqual([]);
+    expect(classifyOperationChange(undeclared, changed({ destructive_hint: false }))).toEqual([
+      { path: 'operation.destructive_hint', reason: 'loosened' },
+      { path: 'operation.idempotent_hint', reason: 'loosened' },
+    ]);
+  });
+
+  it('every governance field tightened at once is not widening', () => {
+    expect(classifyOperationChange(OPERATION, strict)).toEqual([]);
+  });
+
+  it('a field the schema does not have is widening until a rule says otherwise', () => {
+    expect(
+      classifyOperationChange(OPERATION, { ...OPERATION, gate_owned: true } as Operation),
+    ).toEqual([{ path: 'operation.gate_owned', reason: 'unrecognized' }]);
   });
 });

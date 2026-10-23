@@ -623,12 +623,12 @@ cap platform_status | jq '{health, backup, llmUsage30d}'
 | `platform_status.backup.status` 是 `stale` | 超过 26 小时没有成功的备份 | `docker compose logs backup`；在检出目录跑 `sh scripts/check-backup-freshness.sh` 看是哪一项 FAIL（`backup-restore.md`） |
 | `platform_status.backup.status` 是 `unknown` | 看 `detail`：`no backup marker`（还没成功过一次，或内核容器是 D-28 之前建的、没有这个挂载）/ `not readable`（主机文件不是 0644）/ `is a directory`（文件不存在时内核先起来了，Docker 在那里建了目录）/ `no timestamp= line`（空标记：还没成功过一次） | 依次：等下一次 `BACKUP_TIME` 或手动跑一次备份；`docker compose up -d kernel` 重建内核；`backup-restore.md`「备份状态（控制台）」一节的修复步骤 |
 
-## 14. 能力包与模块管理（P-B2b → S11 P1-C / P1-D）
+## 14. 能力包与模块管理（P-B2b → S11 P1-C / P1-D / P1-E）
 
 `docs/platform-admin-design.md` §6.4；`docs/development-tasks.md` §5d S7-D；S11 P1-C / P1-D（Pack Contract v1，
 `docs/s10-evolution-plan-2026-10-04.md` §6）。**能力包 = 一组按版本发布的组成部分**：每个版本一份清单
 `packs/<name>/<version>/pack.yaml`（`schema: 1`、`name`、`version`、`summary`、`notes`、`breaking`、
-`components`），组成部分有三类，至少一个：
+`components`，可选 `requires`——要用到的系统，见 §14.6），组成部分有三类，至少一个：
 - `components.ontology: [{family, domainPack}]`——把 `ontology/<domainPack>`（`add-domain-pack.md` 讲的同一种文件）
   发布进本体族 `family`；
 - `components.skills: [<name>]`——发布同目录 `skills/<name>.md` 里的 Skill（P1-D，格式见 §14.5）；
@@ -736,6 +736,10 @@ pnpm --filter @nexttime/kernel exec vitest run src/application/packs/registry.te
 | 安装 / 升级返回 409 `skill_name_conflict`，控制台说「这个能力包里有一个 Skill 和工作区里另一个已发布的 Skill 同名」 | 工作区里已经有一个不是这个包装的、同名且已发布的 Skill（Worker 按名字挂载 Skill，已发布的 Skill 名在工作区内唯一；包里的 Skill 有自己固定的 id，和手建的那个不是同一个）；`details.skillName` 是哪个名字 | 先在「能力目录 → Skill」里停用那个 Skill，再回来安装；不想动它就别装这个包 |
 | 包里的 Worker 显示「已定制」，升级审阅里列出「可操作的系统」「模型」有改动 | 有人在「能力目录 → Worker」里改过这个 Worker（例如绑定了系统或指定了模型）；包里的 Worker 文件从不带这两项 | 升级会按包里的内容发布新的一版，绑定的系统和指定的模型不会保留——审阅时看清再装，装完需要的话在「Worker」页重新绑定（让升级保留工作区自己的绑定排在 P1-E） |
 | 撤销一次安装后，Skill / Worker 回到了上一版，但版本记录里还有新的那一版 | 撤销把这次安装发布的那一版标成「已弃用」，不删除；首次安装的没有上一版，撤销后就不再有已发布的版本 | 预期行为；弃用的那一版不会再被挂载或调用 |
+| 装完提示「没有通过」，安装记录里 docker「已接入但没有一个能连通」 | 装好了，但核验时这个系统的门健康检查不通（门停了、网络断了、凭据过期）；核验不阻止安装，也不会自动撤销 | 先修好那扇门（`host-gatekeepers.md`）（控制台「系统与授权」里看它的健康），再在安装记录里点「再核验一次」 |
+| 「核验」返回 429 `change_verification_cooldown` | 同一条安装记录 60 秒内只能核验一次（每次都会探测门的健康），`details.retryAfterSeconds` 是还要等几秒 | 等一会儿再点；控制台按钮在冷却期间自己变灰 |
+| 「核验」返回 409 `change_segment_superseded` | 同一个能力包之后又装过一次，现在生效的是后来那条记录（`details.supersededBy`） | 核验后来那一条；旧记录的核验结果保留着，只是不再更新 |
+| 平台代装的默认模块那条记录一直是「已应用」 | 新建工作区时代装的默认模块不自动核验（建工作区的事务里不对外探测） | 需要时 owner 在安装记录里点「核验」 |
 
 ### 14.5 包里的 Skill 与 Worker（S11 P1-D）
 
@@ -760,7 +764,7 @@ applicable:                    # 可选：适用的对象类型，写法同「�
 
 **Worker 文件**（`workers/<name>.yaml`）：WorkerDefinition 的字段，`description`、`systemPrompt`（必填）、`skills`、
 `capabilities`、`egressDeny`。不能写 `name`（文件名就是名字）、`kind`（只能是 `worker`）、`gates` 和 `model`——
-它能操作哪些系统、跑哪个模型是工作区自己的设置，包不带（包声明要绑定哪类系统排在 P1-E）。`skills` 只能挂这个包同一版本里的 Skill；`capabilities`
+它能操作哪些系统、跑哪个模型是工作区自己的设置，包不带（包可以写明要用到哪类系统，见 §14.6；让 Worker 按系统类型绑定排在 P1-E2）。`skills` 只能挂这个包同一版本里的 Skill；`capabilities`
 不写就是平台默认（查询台账、只读查看已接入的系统、提出建议，不能执行需要审批的操作），写了也不能超出 Worker 的上限。
 Skill 和 Worker 文件里都不能有像凭据的内容（token、密钥、`export API_TOKEN=…` 之类），加载时一律拒绝。
 
@@ -770,11 +774,59 @@ Skill / Worker 发布新的一版，不会冒出同名的第二个。装上的�
 要逐项勾选（Skill 的适用范围、Worker 的说明有改动不算）。撤销一次安装，就把这次发布的那一版标成「已弃用」；之后
 又有人发布了更新的一版，这一项就不撤销（「之后又被改过」，先撤销后来的那条记录）。
 
-`packs/ops-base`（v1）是第一个这样的包：一个排查 Docker 容器的 Skill `docker-triage`，和挂着它的通用运维
+`packs/ops-base`（v1；v2 内容相同，只多写明要用到 docker，见 §14.6）是第一个这样的包：一个排查 Docker 容器的 Skill `docker-triage`，和挂着它的通用运维
 Worker `ops-runner`（提示词与 `ontology/ops-runner.yaml` 模板一致）。它不装本体，所以不是模块；它的 Worker
 自己不改动任何系统，要做的变更由调用它的助手走审批。
 
 本机校验同 §14.1 第 3 步（`registry.test.ts` 加载真实的 `packs/`，含所有 Skill / Worker 文件）。
+
+### 14.6 要用到的系统与安装记录核验（S11 P1-E）
+
+清单里可以写这一版要用到的系统（连接器名，和「系统与授权」里门的连接器一致，不重复；`http` / `mcp` / `cli` / `ssh` 这类只说明调用方式的通用连接器不能写）：
+
+```yaml
+requires:
+  connectors:
+    - docker
+```
+
+包只**检查**这些系统接好了没有，不会去接它们（门是平台部署的代码组件）。能力包详情「要用到的系统」和安装审阅框
+逐个显示它在这个工作区的状态（`list_packs` / `preview_pack_install` 的 `requirements`，只读目录，不对外探测）：
+
+| 状态 | 控制台 | 含义 | 谁来做 |
+|---|---|---|---|
+| `connected` | 已接入 | 工作区有一扇这个连接器的门，平台没有停用它 | — |
+| `can_enable` | 待启用 | 平台提供了一个启用着的实例，工作区还没接 | owner 在「系统与授权」里启用 |
+| `can_connect` | 待接入 | 连接器允许工作区自行接入（`self_serve`） | owner 在「系统与授权」里接入 |
+| `needs_platform` | 平台未提供 | 没有这个连接器、它被停用，或所有实例都关着 | 平台管理员先接入（`host-gatekeepers.md` §5 / §14） |
+
+**不阻止安装**：没接好也能装，审阅框会说明；装完会马上核验一次。
+
+**核验**（`verify_change_segment`，只有 owner；控制台「安装历史」每条记录底部「核验」/「再核验一次」）检查三件事，
+都满足才算通过，记录变成「已核验」，否则「核验未通过」：
+1. 这次写入的每一项都还在生效（没被后来的改动替换、没被撤销）；
+2. 记录对应的能力包版本还在这个部署里（找不到就不知道它要哪些系统，判不通过）；
+3. 每个要用到的系统都是 `connected`，且至少一扇门健康检查通过——探测走门已有的健康检查（和「系统与授权」
+   详情里看健康是同一个请求），不执行任何 Operation，不新增带凭据的调用路径。
+
+每次核验写一条审计 `change_segment.verify`（`trigger: manual` 或 `system`）。**装完自动核验**用安装人的身份，
+在安装事务提交之后单独跑，审计里 `trigger: system`；这一步失败只记日志，安装照样成功，控制台提示「装完没能核验」，
+owner 之后手动核验即可。同一条记录 60 秒内只能核验一次（429），已撤销的、被同一个包后来的安装取代的记录不能核验（409）。
+
+**ops-base v2 与已装 v1 的工作区**：v2 的组成部分和 v1 完全相同，按哈希判定，已装 v1 内容的工作区直接显示
+「已是最新（v2）」，不会出现升级；它们 v1 那条安装记录核验时按 v1 的清单算（v1 没写要用到的系统）。要让
+docker 的检查算进去，等之后包里的内容真正改了版再装。
+
+### 14.7 Operation 改动项（S11 P1-E）
+
+安装记录里的一项也可以是某扇门上一个 **Operation 的审批设置**（`operation_version`）：只改已发布 Operation 的
+治理字段——说明、影响级（`blast_radius`）、是否可自动批准、是否等审批结果、读取 / 写入的资源；门自己的定义
+（调用方式、参数、ssh 的影响级等进门定义摘要的字段）一律不能改，有未发布的修订草稿时也不能改。往收紧方向改
+不用确认；改为可自动批准、不再等审批结果、影响级调低、读取或写入的资源变多，都算改变权限边界，要逐项勾选。
+撤销把上一版的审批设置作为新的一版重新发布（不是重新启用旧版本）；之后又有人改过这个 Operation，就先撤销后来的那条。
+
+目前还没有能力包带 Operation（清单里没有这类组成部分）；这一项先在改动计划内核和控制台「安装历史」里就位，
+控制台按「是否可自动批准：否 → 是」这样逐个字段显示改了什么。
 
 ## 15. 平台默认入口模型（P-D 剩余 E5）
 
