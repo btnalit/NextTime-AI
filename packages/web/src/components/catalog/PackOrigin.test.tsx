@@ -22,6 +22,7 @@ function pack(components: readonly PackComponentStateWire[]): PackWire {
     installedVersion: 3,
     components: [...components],
     requirements: [],
+    dependencies: [],
   };
 }
 

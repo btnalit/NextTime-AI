@@ -9,7 +9,7 @@ import {
 } from '../../substrate/ontology/index.js';
 import { contentDigest } from '../change-plan/index.js';
 import { type PackFixtureDirs, objectTypeYaml, writePackFixture } from '../packs/fixture.js';
-import { loadPackRegistry } from '../packs/index.js';
+import { PackRegistryError, loadPackRegistry } from '../packs/index.js';
 import {
   ModuleNotFoundError,
   classifyModuleState,
@@ -90,6 +90,24 @@ describe('isModulePack / moduleRegistryOf', () => {
       ['two-parts', false],
     ]);
     expect([...moduleRegistryOf(packs).keys()]).toEqual(['one-mod']);
+  });
+
+  it('refuses a module that requires other packs: install_module would not check them (P1-F)', async () => {
+    fixture = await writePackFixture({
+      base: [{ ontology: [{ family: 'base', domainPack: 'b.yaml', yaml: objectTypeYaml('B') }] }],
+      'needs-base': [
+        { ontology: [{ family: 'needs-base', domainPack: 'n.yaml', yaml: objectTypeYaml('N') }] },
+        {
+          ontology: [{ family: 'needs-base', domainPack: 'n.yaml', yaml: objectTypeYaml('N') }],
+          requiresPacks: [{ name: 'base', minVersion: 1 }],
+        },
+      ],
+    });
+    const packs = await loadPackRegistry(fixture);
+    expect(() => moduleRegistryOf(packs)).toThrow(PackRegistryError);
+    expect(() => moduleRegistryOf(packs)).toThrow(
+      'packs/needs-base/2: a module cannot require other packs',
+    );
   });
 });
 

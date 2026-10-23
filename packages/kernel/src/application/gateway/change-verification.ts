@@ -9,6 +9,7 @@ import type {
 import {
   type PackRegistryOptions,
   loadPackRegistry,
+  readPackDependencies,
   readPackRequirements,
 } from '../packs/index.js';
 import { resolveGateTarget } from './gate-target.js';
@@ -22,7 +23,8 @@ import { probeGatekeeperHealth } from './gatekeeper-read-handlers.js';
  * health of each `connected` Gatekeeper, probed exactly as `get_gatekeeper` probes it — the gate's
  * own `/gate/health`, through `resolveGateTarget` and the short-timeout client of
  * `gatekeeper-read-handlers.ts`. No new call path to a gate, no new credential: the probe asks a
- * gate whether it is up, never runs an Operation.
+ * gate whether it is up, never runs an Operation. And (S11 P1-F) its version's `requires.packs`,
+ * each with how the workspace has that pack now (`readPackDependencies`).
  *
  * The source version counts as found only when this deployment ships it with the same content
  * (name, version and digest): what it needs is then known.
@@ -69,7 +71,7 @@ export function sourceRequirementsChecker(
         (candidate) =>
           String(candidate.version) === source.version && candidate.digest === source.digest,
       );
-    if (!version) return { sourceFound: false, requirements: [] };
+    if (!version) return { sourceFound: false, requirements: [], dependencies: [] };
     const statuses = await readPackRequirements(client, workspaceId, version.requiredConnectors);
     const requirements: RequirementCheck[] = [];
     for (const status of statuses) {
@@ -83,6 +85,14 @@ export function sourceRequirementsChecker(
         ),
       });
     }
-    return { sourceFound: true, requirements };
+    const dependencies = (
+      await readPackDependencies(client, workspaceId, packs, version.requiredPacks)
+    ).map(({ name, minVersion, status, installedVersion }) => ({
+      name,
+      minVersion,
+      status,
+      installedVersion,
+    }));
+    return { sourceFound: true, requirements, dependencies };
   };
 }

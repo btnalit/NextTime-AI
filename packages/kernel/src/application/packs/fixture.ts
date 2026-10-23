@@ -28,6 +28,8 @@ export interface PackFixtureVersion {
   readonly breaking?: boolean;
   /** `requires.connectors`. */
   readonly requires?: readonly string[];
+  /** `requires.packs` (S11 P1-F). */
+  readonly requiresPacks?: readonly { readonly name: string; readonly minVersion: number }[];
   readonly ontology?: readonly PackFixtureComponent[];
   /** `skills/<name>.md`. */
   readonly skills?: readonly PackFixtureFile[];
@@ -92,9 +94,18 @@ export async function writePackFixture(
           workers.map((f) => f.name),
         ),
       ].join('');
-      const requires = version.requires
-        ? `requires:\n  connectors:\n${version.requires.map((c) => `    - ${c}\n`).join('')}`
+      const requiredConnectors = version.requires
+        ? `  connectors:\n${version.requires.map((c) => `    - ${c}\n`).join('')}`
         : '';
+      const requiredPacks = version.requiresPacks
+        ? `  packs:\n${version.requiresPacks
+            .map((p) => `    - name: ${p.name}\n      minVersion: ${p.minVersion}\n`)
+            .join('')}`
+        : '';
+      const requires =
+        requiredConnectors !== '' || requiredPacks !== ''
+          ? `requires:\n${requiredConnectors}${requiredPacks}`
+          : '';
       await writeFile(
         path.join(dir, 'pack.yaml'),
         `schema: 1\nname: ${name}\nversion: ${index + 1}\nsummary: ${JSON.stringify(version.summary ?? `${name} pack`)}\nnotes: ${JSON.stringify(version.notes ?? `v${index + 1}`)}\nbreaking: ${version.breaking ?? false}\n${requires}components:${components === '' ? ' {}\n' : `\n${components}`}`,

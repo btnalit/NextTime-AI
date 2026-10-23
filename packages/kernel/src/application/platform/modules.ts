@@ -19,6 +19,7 @@ import {
   type PackEntry,
   type PackInstallStatus,
   type PackRegistry,
+  PackRegistryError,
   type PackRegistryOptions,
   loadPackRegistry,
   matchInstalledVersion,
@@ -42,7 +43,10 @@ import { readPlatformSettings } from './settings.js';
  * (`application/packs`, `packs/<name>/<version>/pack.yaml`) — the former `ontology/modules.yaml`
  * index moved there, version numbers, notes and `breaking` unchanged. A pack with several
  * components is not a module: it is installed with `install_pack`. `platform-meta` and the
- * WorkerDefinition templates beside it in `ontology/` are neither (D1).
+ * WorkerDefinition templates beside it in `ontology/` are neither (D1). A module cannot require
+ * other packs (`requires.packs`, P1-F): `install_module` and a new workspace's default modules
+ * install it without the dependency check `install_pack` makes, so the registry refuses one that
+ * declares any — a pack that builds on others is installed with `install_pack`.
  *
  * **"Installed version" = digest match** (D2): the family's published head is compared, by
  * `contentDigest` of its definition, with each version's (`application/packs/state.ts`'s rule —
@@ -102,6 +106,12 @@ export function moduleRegistryOf(packs: PackRegistry): ModuleRegistry {
   const registry = new Map<string, ModuleRegistryEntry>();
   for (const pack of packs.values()) {
     if (!isModulePack(pack)) continue;
+    const requiring = pack.versions.find((version) => version.requiredPacks.length > 0);
+    if (requiring) {
+      throw new PackRegistryError(
+        `packs/${pack.name}/${requiring.version}: a module cannot require other packs — install_module and a workspace's default modules do not check them`,
+      );
+    }
     const versions = pack.versions.map((version): ModuleRegistryVersion => {
       const [component] = version.components;
       if (component?.kind !== 'ontology') {
