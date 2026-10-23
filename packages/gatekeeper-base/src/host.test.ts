@@ -849,7 +849,7 @@ describe('createGateHost (P-B2a)', () => {
     };
 
     function targetCalls(): Array<{ url: string; init: RequestInit }> {
-      return calls.filter((call) => call.url.startsWith('http://ragflow.test'));
+      return calls.filter((call) => new URL(call.url).host === 'ragflow.test');
     }
 
     async function storeSharedKey(secret: string): Promise<void> {
