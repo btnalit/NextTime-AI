@@ -1,3 +1,4 @@
+import { SECRET_FIELD_MASK } from '@nexttime/shared';
 import {
   HIGH_CONFIDENCE_SECRET_PATTERNS,
   type RedactSecretsOptions,
@@ -228,8 +229,8 @@ export function assertDraftCredentialsReviewed(
  * S11 GO5b (review #493 on #680): free text written into a goal's durable record — a revision's
  * reason, the note given with an outcome or a finding (GO5c: a goal's statement) — that carries
  * suspected credentials (`findSuspectedSecrets`, the values every read of a plan's parameters
- * redacts). Such text is kept and read back as written, by the requester's entry agent too
- * (`get_goal`), so it is refused and nothing is written. Over-refusing is the accepted failure
+ * redacts). Such text is kept as written — every read masks it (legacy 420), but the record keeps
+ * the value — so it is refused and nothing is written. Over-refusing is the accepted failure
  * mode, as for the scrubs: text that only looks like a `name=value` or `Authorization: …` form is
  * rephrased. Maps to HTTP 400 / WS invalid-params with `code = 'credentials_in_text'` and
  * `details: { field, suspectedSecretValues }` — never a fragment of the text.
@@ -251,6 +252,31 @@ export function refuseCredentialText(field: string, text: string | undefined): v
   if (text === undefined) return;
   const found = findSuspectedSecrets(text);
   if (found.count > 0) throw new TextCarriesCredentialsError(field, found.count);
+}
+
+/**
+ * Legacy 420: text sent back still holding the mark every read puts where a suspected credential
+ * stood (`SECRET_FIELD_MASK`) — a copy read from a masked surface, such as an Operation's
+ * description its edit dialog opens on, saved without rewriting that part. Storing it would
+ * replace what was written with the mark for good, so it is refused and nothing is written; the
+ * person writes the masked part again. Maps to HTTP 400 / WS invalid-params with
+ * `code = 'redacted_text_submitted'` and `details: { field }`.
+ */
+export class RedactedTextSubmittedError extends Error {
+  readonly code = 'redacted_text_submitted' as const;
+  readonly details: { readonly field: string };
+  constructor(field: string) {
+    super(
+      `${field}: the text still holds ${SECRET_FIELD_MASK}, the mark a read puts where a suspected credential stood — the original there was masked and is never filled back in. Write that part again, without the credential; nothing was written.`,
+    );
+    this.name = 'RedactedTextSubmittedError';
+    this.details = { field };
+  }
+}
+
+/** Throws {@link RedactedTextSubmittedError} when `text` holds the mask a read shows. */
+export function refuseRedactedText(field: string, text: string | undefined): void {
+  if (text?.includes(SECRET_FIELD_MASK) === true) throw new RedactedTextSubmittedError(field);
 }
 
 /**

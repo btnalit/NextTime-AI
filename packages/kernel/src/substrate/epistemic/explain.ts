@@ -5,6 +5,7 @@ import {
   type GraphReadViewer,
   linkTouchesHiddenOperationDraftSql,
 } from '../graph/operation-draft-visibility.js';
+import { shownFreeText } from '../redaction/index.js';
 import { listHumanAttestations } from './evidence.js';
 
 /**
@@ -396,7 +397,8 @@ async function explainFact(
       humanAttestations,
       observationId: row.observation_id,
       invalidatedAt: row.invalidated_at ? row.invalidated_at.toISOString() : null,
-      invalidationReason: row.invalidation_reason,
+      // Legacy 420: free text, as `shownFreeText` shows it.
+      invalidationReason: shownFreeText(row.invalidation_reason),
       lastObservation,
     },
     activity,
@@ -434,7 +436,7 @@ async function explainDecision(
     decision: {
       id: row.id,
       status: row.status,
-      summary: row.summary,
+      summary: shownFreeText(row.summary),
       decidedByPrincipal,
       source,
     },

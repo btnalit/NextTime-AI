@@ -1,5 +1,6 @@
 import type { PoolClient } from 'pg';
 import { normalizeGateEndpoint } from '../../governance/gatekeepers/index.js';
+import { shownFreeText } from '../../governance/redaction/index.js';
 
 /**
  * application/gates/self-connections: the origin record of a gate a workspace connected itself
@@ -66,7 +67,9 @@ function mapSelfConnection(row: SelfConnectionDbRow): SelfConnectionRow {
     connectedAt: row.connected_at,
     suspendedAt: row.suspended_at,
     suspendedByUserId: row.suspended_by_user_id,
-    suspensionReason: row.suspension_reason,
+    // Legacy 420: the administrator's own words, kept as written (never refused: nothing may stand
+    // in the way of suspending a connection) and shown as `shownFreeText` shows them.
+    suspensionReason: shownFreeText(row.suspension_reason),
   };
 }
 

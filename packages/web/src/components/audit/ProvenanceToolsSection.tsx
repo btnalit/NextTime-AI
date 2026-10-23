@@ -23,6 +23,7 @@ import { hrefs } from '../../lib/router.js';
 import { Button } from '../kit/button.js';
 import { ErrorBanner } from '../kit/error-banner.js';
 import { Field } from '../kit/field.js';
+import { RedactedNote } from '../kit/redacted-note.js';
 import { RefChip } from '../kit/ref-chip.js';
 import { RouteLink } from '../kit/route-link.js';
 import { Select } from '../kit/select.js';
@@ -414,6 +415,10 @@ function PrecedentsTool({ http }: { readonly http: CapabilityCaller }) {
           )}
         </ul>
       ) : null}
+      <RedactedNote
+        value={state.items?.map((decision) => decision.summary ?? null) ?? null}
+        testId="precedents-redacted"
+      />
     </div>
   );
 }

@@ -94,3 +94,58 @@ describe('ProvenanceChain', () => {
     expect(screen.queryByTestId('prov-raw')).toBeNull();
   });
 });
+
+describe('ProvenanceChain — text the kernel read out masked (legacy 420)', () => {
+  it('says what [redacted] stands for under an invalidation reason and an attestation', () => {
+    render(
+      <ProvenanceChain
+        fact={{
+          id: 'fact-1',
+          invalidatedAt: '2026-09-02T00:00:00Z',
+          invalidationReason: 'wrong host, PGPASSWORD=[redacted] was in the probe',
+          humanAttestations: [
+            {
+              id: 'att-1',
+              note: 'checked with token=[redacted]',
+              link: 'https://ops:[redacted]@wiki.example/page',
+              createdAt: '2026-09-02T00:00:00Z',
+            },
+          ],
+        }}
+        activity={null}
+        raw={{}}
+        testId="chain"
+      />,
+    );
+    expect(screen.getByTestId('prov-fact-invalidation-redacted').textContent).toContain(
+      '[redacted] 处的内容看起来像密码',
+    );
+    expect(screen.getByTestId('prov-human-attestation-redacted')).toBeTruthy();
+    // A masked link is shown as text, never followed: `[redacted]` is not the address given.
+    expect(screen.queryByTestId('prov-human-attestation-link')).toBeNull();
+    expect(screen.getByTestId('prov-human-attestation-link-masked').textContent).toContain(
+      'https://ops:[redacted]@wiki.example/page',
+    );
+  });
+
+  it('adds nothing to text with no mask', () => {
+    render(
+      <ProvenanceChain
+        fact={{
+          id: 'fact-1',
+          invalidatedAt: '2026-09-02T00:00:00Z',
+          invalidationReason: 'wrong host',
+          humanAttestations: [{ id: 'att-1', note: 'checked', link: 'https://wiki.example/page' }],
+        }}
+        activity={null}
+        raw={{}}
+        testId="chain"
+      />,
+    );
+    expect(screen.queryByTestId('prov-fact-invalidation-redacted')).toBeNull();
+    expect(screen.queryByTestId('prov-human-attestation-redacted')).toBeNull();
+    expect(screen.getByTestId('prov-human-attestation-link').getAttribute('href')).toBe(
+      'https://wiki.example/page',
+    );
+  });
+});

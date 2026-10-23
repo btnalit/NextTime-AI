@@ -1229,6 +1229,105 @@ describe('CatalogPage', () => {
     );
   });
 
+  // Legacy 420: the kernel reads a description out masked; the detail says what `[redacted]` is,
+  // and the edit box, which opens on that masked text, says the original is not filled back in.
+  it('Operations: a masked description is explained in the detail and in the edit dialog', async () => {
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [
+          {
+            gatekeeperId: 'gk-1',
+            name: 'docker.restart',
+            status: 'published',
+            description: 'restarts it; call with Authorization: [redacted]',
+          },
+        ],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+    });
+    renderPage(http);
+    const row = await screen.findByTestId('catalog-row');
+    const detail = await selectRow(row);
+    expect(within(detail).getByTestId('catalog-detail-description-redacted').textContent).toContain(
+      '[redacted] 处的内容看起来像密码',
+    );
+    fireEvent.click(within(detail).getByTestId('operation-edit-description-gk-1::docker.restart'));
+    const dialog = await screen.findByTestId('operation-description-dialog');
+    expect(within(dialog).getByTestId('operation-description-redacted').textContent).toContain(
+      '原文不会填回来',
+    );
+  });
+
+  it('Operations: a description refused for a credential says so on the field', async () => {
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [{ gatekeeperId: 'gk-1', name: 'docker.restart', status: 'published' }],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+      update_operation_description: () => {
+        throw new HttpError(
+          'capability_error',
+          'description carries 1 credential',
+          'credentials_in_text',
+        );
+      },
+    });
+    renderPage(http);
+    const row = await screen.findByTestId('catalog-row');
+    const detail = await selectRow(row);
+    fireEvent.click(within(detail).getByTestId('operation-edit-description-gk-1::docker.restart'));
+    const dialog = await screen.findByTestId('operation-description-dialog');
+    fireEvent.change(within(dialog).getByTestId('operation-description-textarea'), {
+      target: { value: 'call it with TOKEN=abcdefghijklmnopqrstuvwxyz0123' },
+    });
+    fireEvent.click(within(dialog).getByTestId('operation-description-save'));
+    await waitFor(() => expect(within(dialog).getByText(/描述里看起来带了凭据/)).toBeTruthy());
+  });
+
+  it('Operations: a description sent back with [redacted] in it is refused on the field (legacy 420)', async () => {
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [
+          {
+            gatekeeperId: 'gk-1',
+            name: 'docker.restart',
+            status: 'published',
+            description: 'restarts it; call with PGPASSWORD=[redacted]',
+          },
+        ],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+      update_operation_description: () => {
+        throw new HttpError(
+          'capability_error',
+          'description: the text still holds [redacted]',
+          'redacted_text_submitted',
+        );
+      },
+    });
+    renderPage(http);
+    const row = await screen.findByTestId('catalog-row');
+    const detail = await selectRow(row);
+    fireEvent.click(within(detail).getByTestId('operation-edit-description-gk-1::docker.restart'));
+    const dialog = await screen.findByTestId('operation-description-dialog');
+    // Prefilled with the description as read: the person rewrites only the masked part.
+    expect(
+      (within(dialog).getByTestId('operation-description-textarea') as HTMLTextAreaElement).value,
+    ).toBe('restarts it; call with PGPASSWORD=[redacted]');
+    fireEvent.click(within(dialog).getByTestId('operation-description-save'));
+    await waitFor(() =>
+      expect(
+        within(dialog).getByText(
+          /没有保存：描述里还留着 \[redacted\]。把这一段重新写成不带凭据的说明再保存。/,
+        ),
+      ).toBeTruthy(),
+    );
+    // UX P3 on #691: focus goes back to the box the error is about, not to the page.
+    expect(document.activeElement).toBe(
+      within(dialog).getByTestId('operation-description-textarea'),
+    );
+  });
+
   it('Operations: the Save button is disabled while the draft is blank', async () => {
     const http = scriptedHttp({
       list_operations: () => ({

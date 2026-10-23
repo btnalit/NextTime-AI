@@ -18,6 +18,7 @@ import { setWorkspaceContext, withPlatform } from '../../adapters/db/platform-co
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { modelPolicyViolation } from '../../governance/agent-profile/index.js';
 import { revokeRoleScopedSessionHandles } from '../../governance/capability/index.js';
+import { shownAuditPayload } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { DEFAULT_COLLECTOR_SILENCE_THRESHOLD_MS } from '../../substrate/audit/invariant-checks.js';
 import { listSourceFreshness } from '../../substrate/epistemic/index.js';
@@ -1571,7 +1572,8 @@ function toWireAudit(row: AuditDbRow): PlatformAuditRecordWire {
     actorLogin: row.actor_login,
     resourceType: row.resource_type,
     resourceId: row.resource_id,
-    payload: row.payload,
+    // Legacy 420: as a workspace audit read shows a payload (`shownAuditPayload`).
+    payload: shownAuditPayload(row.payload),
     createdAt: row.created_at.toISOString(),
   };
 }

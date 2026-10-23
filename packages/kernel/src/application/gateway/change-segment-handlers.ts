@@ -9,7 +9,9 @@ import type {
   ChangeVerificationResultWire,
   ChangeVerificationWire,
   OperationFieldValueWire,
+  OperationItemField,
 } from '@nexttime/shared';
+import { shownFreeText } from '../../governance/redaction/index.js';
 import {
   type ChangePrincipalRef,
   type ChangeProvenance,
@@ -103,6 +105,19 @@ export function toChangeVerificationWire(verification: ChangeVerification): Chan
   };
 }
 
+/** One field of an `operation_version` item as the wire carries it. The six fields' values are
+ *  strings, booleans and string arrays (`Operation`); the description reads as every read of an
+ *  Operation shows it (legacy 420, `shownFreeText`) — a version published before credentials were
+ *  refused may still carry one. The other five are an enum, booleans and type names. */
+function shownOperationFieldValue(
+  field: OperationItemField,
+  value: unknown,
+): OperationFieldValueWire {
+  return (
+    field === 'description' && typeof value === 'string' ? shownFreeText(value) : value
+  ) as OperationFieldValueWire;
+}
+
 function toChangeItemWire(item: InspectedChangeItem): ChangeItemWire {
   const { record } = item;
   const common = {
@@ -156,9 +171,8 @@ function toChangeItemWire(item: InspectedChangeItem): ChangeItemWire {
         after: { ...stored.after },
         fields: item.operationFields.map((change) => ({
           field: change.field,
-          // The six fields' values are strings, booleans and string arrays (`Operation`).
-          before: change.before as OperationFieldValueWire,
-          after: change.after as OperationFieldValueWire,
+          before: shownOperationFieldValue(change.field, change.before),
+          after: shownOperationFieldValue(change.field, change.after),
         })),
       };
     }

@@ -595,6 +595,144 @@ describe.runIf(DATABASE_URL !== undefined)(
       ).rejects.toThrow(InvalidCapabilityParamsError);
     });
 
+    it('legacy 420: a conflict ruling, the Decisions it and record-less writers left, and the Fact it invalidated read masked', async () => {
+      const fake = 'abcdefghijklmnopqrstuvwxyz0123'; // synthetic, Handle-shaped
+      const { objectId, factAId, factBId, seededDecisionId } = await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          const host = await store.upsertObject(client, workspaceId, {
+            objectType: 'test.host',
+            identity: { hostname: `masked-${randomUUID()}` },
+          });
+          const service = await store.upsertObject(client, workspaceId, {
+            objectType: 'test.service',
+            identity: { name: `masked-svc-${randomUUID()}` },
+          });
+          const facts: string[] = [];
+          for (const port of [80, 81]) {
+            const source = await registerPrivateSource(client, workspaceId, {
+              kind: 'test.collector',
+              ownerPrincipalId: ownerId,
+            });
+            const activity = await startActivity(client, workspaceId, { kind: 'test.ingest' });
+            await recordSourceObservation(client, workspaceId, {
+              sourceId: source.id,
+              activityId: activity.id,
+            });
+            const fact = await store.assertFact(
+              client,
+              workspaceId,
+              { id: ownerId, kind: 'human' },
+              {
+                linkType: 'test.runs_on',
+                sourceObjectId: service.id,
+                targetObjectId: host.id,
+                activityId: activity.id,
+                properties: { port },
+              },
+            );
+            facts.push(fact.id);
+          }
+          // A Decision written before its writer scrubbed: free text in its summary and
+          // rationale, next to the kernel's own count fields, which must keep their values.
+          const activity = await startActivity(client, workspaceId, { kind: 'test.decide' });
+          const inserted = await client.query<{ id: string }>(
+            `insert into decisions (workspace_id, status, activity_id, summary, rationale)
+             values ($1, 'proposed', $2, $3, $4::jsonb) returning id`,
+            [
+              workspaceId,
+              activity.id,
+              `rotate the deploy key, PGPASSWORD=${fake}`,
+              JSON.stringify({
+                relatedFactIds: [facts[0]],
+                note: `see https://ops:${fake}@db.example/x`,
+                credentialReview: { suspectedSecretValues: 2, confirmed: true },
+              }),
+            ],
+          );
+          return {
+            objectId: host.id,
+            factAId: facts[0] as string,
+            factBId: facts[1] as string,
+            seededDecisionId: inserted.rows[0]?.id as string,
+          };
+        },
+      );
+
+      const reader = handleCaller(workspaceId, ownerId, [...READ_CAPABILITIES, 'explain']);
+      const open = (await dispatchCapability({ pool }, reader, 'list_conflicts', {
+        factId: factAId,
+      })) as { items: Array<{ id: string; factAId: string }> };
+      const conflict = open.items[0];
+      if (!conflict) throw new Error('no conflict opened');
+
+      // A ruling's reason is never refused; it is kept as written.
+      await dispatchCapability(
+        { pool },
+        humanCaller(workspaceId, ownerId, 'owner'),
+        'resolve_conflict',
+        {
+          conflictId: conflict.id,
+          resolution: conflict.factAId === factAId ? 'keep_a' : 'keep_b',
+          reason: `checked on the host with TOKEN=${fake}`,
+        },
+      );
+
+      const resolved = (await dispatchCapability({ pool }, reader, 'list_conflicts', {
+        factId: factAId,
+        status: 'resolved',
+      })) as { items: Array<{ id: string; resolution: { reason?: string } | null }> };
+      expect(resolved.items.find((item) => item.id === conflict.id)?.resolution?.reason).toBe(
+        'checked on the host with TOKEN=[redacted]',
+      );
+
+      const decisions = (await dispatchCapability({ pool }, reader, 'query_decisions', {
+        objectId,
+      })) as {
+        items: Array<{
+          id: string;
+          summary: string | null;
+          rationale: Record<string, unknown> | null;
+        }>;
+      };
+      const ruling = decisions.items.find((item) => item.rationale?.conflictId === conflict.id);
+      expect(ruling?.rationale?.reason).toBe('checked on the host with TOKEN=[redacted]');
+      const seeded = decisions.items.find((item) => item.id === seededDecisionId);
+      expect(seeded?.summary).toBe('rotate the deploy key, PGPASSWORD=[redacted]');
+      expect(seeded?.rationale).toEqual({
+        relatedFactIds: [factAId],
+        note: 'see https://ops:[redacted]@db.example/x',
+        credentialReview: { suspectedSecretValues: 2, confirmed: true },
+      });
+      const precedents = (await dispatchCapability({ pool }, reader, 'find_precedents', {
+        objectId,
+      })) as { items: Array<{ id: string; summary: string | null }> };
+      expect(precedents.items.find((item) => item.id === seededDecisionId)?.summary).toBe(
+        'rotate the deploy key, PGPASSWORD=[redacted]',
+      );
+      const explainedDecision = (await dispatchCapability({ pool }, reader, 'explain', {
+        nodeId: seededDecisionId,
+      })) as { decision: { summary: string | null } };
+      expect(explainedDecision.decision.summary).toBe(
+        'rotate the deploy key, PGPASSWORD=[redacted]',
+      );
+
+      // The losing Fact's invalidation reason quotes the ruling's reason: scrubbed when written.
+      const loser = conflict.factAId === factAId ? factBId : factAId;
+      const explainedFact = (await dispatchCapability({ pool }, reader, 'explain', {
+        nodeId: loser,
+      })) as { fact: { invalidationReason: string | null } };
+      expect(explainedFact.fact.invalidationReason).toContain('TOKEN=[redacted]');
+      const stored = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
+        client.query<{ invalidation_reason: string }>(
+          'select invalidation_reason from links where workspace_id = $1 and id = $2',
+          [workspaceId, loser],
+        ),
+      );
+      expect(stored.rows[0]?.invalidation_reason).not.toContain(fake);
+    });
+
     it('find_precedents(objectId) and find_precedents() with neither param', async () => {
       const caller = handleCaller(workspaceId, memberId, READ_CAPABILITIES);
       const empty = (await dispatchCapability({ pool }, caller, 'find_precedents', {})) as {

@@ -4,7 +4,7 @@ import type {
   SkillDetailWire,
 } from '@nexttime/shared';
 import { visibleText } from '@nexttime/shared';
-import { type ReactNode, useId, useState } from 'react';
+import { type ReactNode, useId, useRef, useState } from 'react';
 import { invalidateCapability, useCapability, useCapabilityList } from '../hooks/useCapability.js';
 import { usePermissions } from '../hooks/usePermissions.js';
 import { useRoleCan } from '../hooks/useRoleCan.js';
@@ -97,6 +97,7 @@ import { List, ListRow } from './kit/list-row.js';
 import { MasterDetail, nothingToPick } from './kit/master-detail.js';
 import { Notice } from './kit/notice.js';
 import { PageHeader } from './kit/page-header.js';
+import { RedactedNote, showsRedaction } from './kit/redacted-note.js';
 import { RefChip } from './kit/ref-chip.js';
 import { SameNameId } from './kit/same-name-id.js';
 import { SkeletonRows } from './kit/skeleton.js';
@@ -848,7 +849,10 @@ function OperationDetailView({
       label: t('描述', 'Description'),
       value:
         row.description && row.description.trim().length > 0 ? (
-          row.description
+          <span className="stack-s">
+            <span>{row.description}</span>
+            <RedactedNote value={row.description} testId="catalog-detail-description-redacted" />
+          </span>
         ) : (
           <span className="text-3">{t('未填写描述', 'No description yet')}</span>
         ),
@@ -1080,6 +1084,7 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   const [savingDescription, setSavingDescription] = useState(false);
   const [descriptionError, setDescriptionError] = useState<unknown | null>(null);
   const descriptionFieldId = useId();
+  const descriptionBoxRef = useRef<HTMLTextAreaElement>(null);
 
   const rows = operations.state.status === 'ready' ? operations.state.data.items : [];
   // UX acceptance of #567 P3 (#561's same-name class, on Operations): one name on two gates read
@@ -1232,6 +1237,9 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
     } catch (err) {
       if (isForbiddenError(err)) permissions.markDenied('update_operation_description');
       setDescriptionError(err);
+      // The Save button was disabled while it ran, which dropped focus to the page: put it back on
+      // the box the error is about.
+      descriptionBoxRef.current?.focus();
     } finally {
       setSavingDescription(false);
     }
@@ -1392,6 +1400,16 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
               {editingRow ? actionKindTagText(editingRow.name) : null}
             </DialogDescription>
           </DialogHeader>
+          {/* Legacy 420: the box opens on the description as every read shows it, so a masked
+              value is never filled back in. */}
+          {showsRedaction(editingRow?.description) ? (
+            <Notice tone="warn" testId="operation-description-redacted">
+              {t(
+                '当前描述里的 [redacted] 遮住了看起来像密码、令牌或密钥的内容，原文不会填回来。保存前请把这一段重新写成不带凭据的说明；还留着 [redacted] 的描述保存不了。',
+                'Each [redacted] in the current description hides something that looked like a password, token or key, and the original is not filled back in. Write that part again without the credential before saving; a description that still holds [redacted] cannot be saved.',
+              )}
+            </Notice>
+          ) : null}
           <Field
             id={descriptionFieldId}
             label={t('描述', 'Description')}
@@ -1399,9 +1417,24 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
               '说明这个 Operation 做什么——会用于自然语言检索与在目录 / 审批卡片里展示。',
               "What this Operation does — used for natural-language search and shown wherever it's listed.",
             )}
-            error={descriptionError !== null ? errorToastText(descriptionError, t) : undefined}
+            error={
+              descriptionError !== null
+                ? errorToastText(descriptionError, t, {
+                    // Legacy 420: said in the field's own terms — every agent reads it.
+                    credentials_in_text: t(
+                      '描述里看起来带了凭据（token、key 或密码的值，或 Bearer、Authorization、name=value 这类写法），已拒绝，什么也没保存。描述只写这个 Operation 做什么，每个能用它的 agent 都会读到；凭据交给门保管。',
+                      'The description looks like it carries a credential (a token, key or password value, or a Bearer, Authorization or name=value form), so it was refused and nothing was saved. Say what this Operation does: every agent that can use it reads this. The credential belongs to the gate.',
+                    ),
+                    redacted_text_submitted: t(
+                      '没有保存：描述里还留着 [redacted]。把这一段重新写成不带凭据的说明再保存。',
+                      'Not saved: the description still holds [redacted]. Write that part again without the credential, then save.',
+                    ),
+                  })
+                : undefined
+            }
           >
             <Textarea
+              ref={descriptionBoxRef}
               id={descriptionFieldId}
               aria-label={t('描述', 'Description')}
               value={descriptionDraft}

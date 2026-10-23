@@ -7,6 +7,7 @@ import {
 import type { PoolClient } from 'pg';
 import { openConflict, resolveFactOrigin, sameFactOrigin } from '../epistemic/index.js';
 import { enqueue } from '../outbox/index.js';
+import { scrubSecretValues, shownFreeText } from '../redaction/index.js';
 import { enforceOntologyOnLinkWrite } from './ontology-guard.js';
 import type { GraphReadViewer } from './operation-draft-visibility.js';
 import {
@@ -35,6 +36,7 @@ import {
   encodeSearchCursor,
 } from './queries.js';
 import { scrubGraphProperties } from './scrub-properties.js';
+import { shownObjectProperties } from './shown-object.js';
 import {
   type AssertFactInput,
   type AssertFactResult,
@@ -145,7 +147,7 @@ function mapObjectRow(row: ObjectRow): GraphObject {
     id: row.id,
     objectType: row.object_type,
     identityKey: row.identity_key,
-    properties: row.properties,
+    properties: shownObjectProperties(row.object_type, row.properties),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     lastObservedAt: row.last_observed_at,
@@ -165,7 +167,9 @@ function mapFactRow(row: FactRow): Fact {
     recordedAt: row.recorded_at,
     supersededAt: row.superseded_at,
     invalidatedAt: row.invalidated_at,
-    invalidationReason: row.invalidation_reason,
+    // Legacy 420: free text an agent or a person gave `invalidate_fact` / `resolve_conflict`, kept
+    // as written (scrubbed at write since then) — shown as `shownFreeText` shows it.
+    invalidationReason: shownFreeText(row.invalidation_reason),
     supersedesId: row.supersedes_id,
     epistemicStatus: row.epistemic_status,
     confidence: row.confidence,
@@ -677,11 +681,13 @@ export class SqlGraphStore implements GraphStore {
     transition(FACT_LIFECYCLE_TRANSITIONS, currentState, 'invalidate');
 
     // `input.reason`, if given, is persisted to `links.invalidation_reason` (migrations/core/
-    // 0007) — see InvalidateFactInput's doc comment in store.ts.
+    // 0007) — see InvalidateFactInput's doc comment in store.ts. Legacy 420: scrubbed first, like a
+    // Fact's properties and `record_decision`'s summary — an agent's `invalidate_fact` writes it
+    // and every member reads it; `resolve_conflict` folds the resolver's reason into it too.
     const markQuery = buildMarkFactInvalidatedQuery(
       workspaceId,
       input.factId,
-      input.reason ?? null,
+      input.reason === undefined ? null : scrubSecretValues(input.reason).value,
     );
     const markResult = await client.query<FactRow>(markQuery.text, markQuery.values as unknown[]);
     return mapFactRow(

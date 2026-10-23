@@ -17,7 +17,7 @@ import {
 } from '../../governance/gatekeepers/index.js';
 import type { GatekeeperRecord } from '../../governance/gatekeepers/index.js';
 import { boundedEcho, quotedName, redactSecrets } from '../../governance/redaction/index.js';
-import { SqlGraphStore } from '../../substrate/graph/index.js';
+import { SqlGraphStore, shownObjectProperties } from '../../substrate/graph/index.js';
 import {
   narrowScopeToExecutableGates,
   observeRefusal,
@@ -346,7 +346,13 @@ function toWireOperation(
     gatekeeperId: record.gatekeeperId,
     gateName,
     name: record.name,
-    operation: record.operation,
+    // Legacy 420: its `description` as every read shows an Operation's (`shownObjectProperties`,
+    // the rule the graph reads apply to the Operation Object) — this list is what an agent's gate
+    // tools are described from.
+    operation:
+      record.operation !== null && typeof record.operation === 'object'
+        ? shownObjectProperties('Operation', record.operation as Record<string, unknown>)
+        : record.operation,
   };
 }
 

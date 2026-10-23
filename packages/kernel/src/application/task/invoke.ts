@@ -8,6 +8,7 @@ import {
 } from '../../governance/agent-profile/index.js';
 import { WORKER_CEILING_CAPABILITIES } from '../../governance/capability/index.js';
 import { getGatekeeper } from '../../governance/gatekeepers/index.js';
+import { shownFreeTextIn } from '../../governance/redaction/index.js';
 import {
   composeSystemPrompt,
   readInstanceInstructions,
@@ -183,7 +184,9 @@ export interface InvokeWorkerResult {
   readonly taskId: string;
   readonly workerRunId: string;
   readonly status: TaskRow['status'];
-  /** Present only when `wait` reached a terminal Task status within `timeout`. */
+  /** Present only when `wait` reached a terminal Task status within `timeout` — shown as every
+   *  read of a Task's result shows it (`shownFreeTextIn`, legacy 420: a result stored before the
+   *  Worker report was scrubbed at write reads masked). */
   readonly result?: unknown;
   readonly failureReason?: string | null;
 }
@@ -285,7 +288,9 @@ async function replayExistingTask(
         taskId,
         workerRunId,
         status: task.status,
-        ...(terminal ? { result: task.result, failureReason: task.failureReason } : {}),
+        ...(terminal
+          ? { result: shownFreeTextIn(task.result), failureReason: task.failureReason }
+          : {}),
       };
     }
     if (
@@ -748,7 +753,7 @@ export async function waitForOutcome(
         taskId,
         workerRunId,
         status: task.status,
-        result: task.result,
+        result: shownFreeTextIn(task.result),
         failureReason: task.failureReason,
       };
     }
@@ -771,7 +776,7 @@ export async function waitForOutcome(
         taskId,
         workerRunId,
         status: finalTask?.status ?? 'running',
-        result: finalTask?.result,
+        result: finalTask ? shownFreeTextIn(finalTask.result) : undefined,
         failureReason: finalTask?.failureReason,
       };
     }

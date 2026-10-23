@@ -7,6 +7,7 @@ import {
   redactConnectionAddress,
 } from '../../governance/connections/index.js';
 import type { AutoApproveConsent, PolicyRow } from '../../governance/policy/index.js';
+import { shownAuditPayload } from '../../governance/redaction/index.js';
 import type { AuditRecordRow } from '../../substrate/audit/index.js';
 import type { SourceRow } from '../../substrate/epistemic/index.js';
 import type { Fact, GraphObject } from '../../substrate/graph/index.js';
@@ -138,7 +139,9 @@ export function toWireAuditRecord(row: AuditRecordRow) {
     action: row.action,
     resourceType: row.resourceType,
     resourceId: row.resourceId,
-    payload: row.payload,
+    // Legacy 420: the writers redact (`auditParams`, `redactedForAudit`); a row written before
+    // they did, and text a handler kept as given, reads masked here (`shownAuditPayload`).
+    payload: shownAuditPayload(row.payload),
     createdAt: row.createdAt.toISOString(),
   };
 }

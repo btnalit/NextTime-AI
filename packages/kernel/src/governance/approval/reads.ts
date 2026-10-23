@@ -11,6 +11,7 @@ import {
   hasActiveGrant,
   roleSatisfiesMinRole,
 } from '../capability/index.js';
+import { shownFreeText } from '../redaction/index.js';
 import {
   ACTION_REQUEST_ROW_COLUMNS,
   type ActionRequestDbRow,
@@ -322,8 +323,8 @@ export async function listActionRequestsForApprover(
 
 export interface ApprovalDecisionSummary {
   readonly decisionId: string;
-  /** `rationale.reason` as `decide.ts` stored it — `null` for a reason-less low/medium approve
-   *  or a reason-less reject. */
+  /** `rationale.reason` as `decide.ts` stored it, shown as `shownFreeText` shows free text —
+   *  `null` for a reason-less low/medium approve or a reason-less reject. */
   readonly reason: string | null;
   readonly decidedBy: string;
   readonly decidedAt: Date;
@@ -356,7 +357,10 @@ export async function readApprovalDecisions(
       row.id,
       {
         decisionId: row.id,
-        reason: row.reason,
+        // Legacy 420: the approver's own words, kept as written (a reject reason is never refused:
+        // nothing may stand in the way of stopping an action) — every reader gets them as
+        // `shownFreeText` shows them.
+        reason: shownFreeText(row.reason),
         decidedBy: row.decided_by,
         decidedAt: row.decided_at,
       },
