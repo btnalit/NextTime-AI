@@ -4248,6 +4248,13 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **迁移**：goal 0009 `plan_revisions` 加两列（两列同有同无、只在第 1 版上，`plan_revisions_guard` 写入后不可改）；worker 0005 `procedures.parameters jsonb`（必须是对象，发布后不可改的触发器覆盖这一列），外键 `plan_revisions (workspace_id, source_procedure_id, source_procedure_version) → procedures` 与部分索引放在 worker 0005（goal 模块迁移先跑）。都不回填、可回退。
   - **控制台**：流程详情 `ProcedureTemplateView` 按步骤写句子（能否生成目标、等哪些步骤、每条绑定一句、验证步骤由平台检查还是请求人确认、「启动参数」字段表），页面能看出的绑定问题就地标出；发布被拒就地列出原因（role=alert、聚焦，固定句式译中文）；目标页「由流程 … 生成」并链接目录；编辑器原样保留模板字段并提示（表单编辑见遗留 453）。
   - **不在本 PR**：表单编辑模板字段（遗留 453）；目标页显示启动参数与 `verify` 键名（遗留 454）；绑定取自不存在步骤的报错（遗留 455）；对象键名凭据（遗留 444，范围已扩大）。
+- 实现说明（GO5e-1：入口 agent 在对话里发起目标，#728，2026-10-23 合入，5b4b7aa；无迁移；GO5e 拆两个 PR，GO5e-2 做对话里的目标卡片与里程碑消息）：
+  - **工具注册**：入口与 interactive 模式各加 `propose_goal`、`get_goal`、`list_goals`、`get_goal_revision`、`list_goal_unresolved_actions`；入口 Handle 范围按角色算、本来就有这些能力，内核不改；`confirm_goal` 等目标操作不注册，内核对任何 Handle 也拒绝（真实 pi SDK 测试锁住：模型看不到 `confirm_goal`，硬调时 pi 返回工具错误、内核收不到）。
+  - **描述与模板分工**：`propose_goal` 描述里的要点（判据、反例、优先平台检查）随工具下发、到达所有工作区；完整「Goals」一节只在 `ontology/entry-agent.yaml`，只写进新建工作区，已有工作区在遗留 145 之前只靠描述。
+  - **判据与反例**：后一步要用前一步的结果，或要等前一步（或它的审批）完成才能开始，才发起目标；一个委派任务仍是 `invoke_worker`，哪怕是要审批的写操作、跨几个门或要跑很久。三层说明同步：只由 Worker 与验证步骤组成的已发布流程可以 `fromProcedure` 发起，带操作或审批步骤的照旧逐步执行。`fact_predicate`：目标自己步骤产生的 Fact 不算证据（`goal_fact_admissible`）。
+  - **自包含 schema**：谓词 `all` / `any` / `not` 与输出约定 `properties` 的内层出现写成 `{}`（调用仍按 Zod 校验），与 `$refStrategy: 'none'` 输出一致但不再打警告；`tool-schema.ts`、内核 MCP 投影、契约快照、词表守卫、提示词守卫同类一并修；提示词契约守卫规则 5 检查 Goals 一节关键句、反引号字段名都是 `propose_goal` 参数或拒绝码，描述里必须有判据与反例。
+  - **验收**：fake-llm 新增 `entryGoalChatScenario`、`goalStepScenario`，自测用共享包 Zod schema 解析每次脚本化调用；`accept_s2.sh` fake 模式第 9 步六条断言；`accept_provider_up`（s1–s3 fake 模式）每次先按当前检出构建 fake-llm（fake-llm 不随发版、`build-images.sh` 不建 `test` profile、`up` 只在没有镜像时构建，此前 apply 阶段一直用最早那次构建），s2 / s3 runbook 删掉手动重建一步。
+  - **不在本 PR**：对话里的目标卡片与里程碑消息（GO5e-2）；已有工作区入口提示词升级（遗留 145）；悬空旧 fake-llm 镜像（遗留 460）。
 - 来自 GO4a（#664）的输入：`confirm_goal_acceptance` 和 `end_goal` 是请求人的成员能力，永远不进 Handle scope（membership-not-in-handle 守卫）；`createGoalRun` 和 `reviseGoalRun` 返回的 `hints` 原样带到能力结果里；如需 owner hold 期间也禁止请求人结束目标，在能力层加一道。
 - 来自 GO3a（#626）的输入：`pause_goal` / `resume_goal` / `cancel_goal` 直接调用 `control.ts`，权限按 GO3a 划分（owner 能停不能续）；角色必须由能力层从已认证主体取，不能从参数取（`lockControlledRun` 信任传入的 `role`）；`resume_goal` 的 `retrySteps` 必须逐个列出步骤，不提供不列步骤的「全部重试」；`proposed` 的目标走 `reject`。
 - 来自 GO3c（#642）的输入：`reconcile_goal_action` 调用 `reconcileActionRequest`，能力带 minRole 与 `channel: 'human'`，决定人取已认证主体；读接口 `list_goal_run_unresolved_actions`；Worker 提示词写明步骤内调用方的 `idempotencyKey` 被忽略、409 `action_in_doubt` 表示等人核对。
