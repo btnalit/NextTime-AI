@@ -61,18 +61,21 @@ export type { ListSkillsFilter, ProposeSkillInput, SkillRow, SkillsPage } from '
 export {
   deprecateProcedure,
   getProcedure,
+  getPublishedProcedure,
   listProcedures,
   procedureReviewContent,
   proposeProcedure,
   publishProcedure,
   ProcedureNotFoundError,
   ProcedureStepReferenceError,
+  ProcedureTemplateError,
 } from './procedures.js';
 export type {
   ListProceduresFilter,
   ProcedureRow,
   ProceduresPage,
   ProposeProcedureInput,
+  PublishProcedureOptions,
 } from './procedures.js';
 
 export type { DraftViewer } from './draft-visibility.js';

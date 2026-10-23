@@ -87,6 +87,9 @@ export interface PlanRevisionRow {
   /** What the person decided about steps this revision removed, keyed by step key (goal/0004);
    *  `{}` on revision 1. A removed step not listed was terminated. */
   readonly removals: Readonly<Record<string, StepRemoval>>;
+  /** S11 GO5d-2: the published Procedure version the plan was made from (goal/0009) — revision 1
+   *  of a goal proposed `fromProcedure`; `null` for a plan written out. */
+  readonly sourceProcedure: { readonly procedureId: string; readonly version: number } | null;
 }
 
 export interface StepRunRow {
@@ -173,7 +176,8 @@ export function mapGoalRunRow(row: GoalRunDbRow): GoalRunRow {
 
 export const PLAN_REVISION_ROW_COLUMNS =
   'workspace_id, id, goal_run_id, revision, status, based_on_revision, plan, proposed_by, ' +
-  'reason, validation, decided_by, decided_at, created_at, removals';
+  'reason, validation, decided_by, decided_at, created_at, removals, source_procedure_id, ' +
+  'source_procedure_version';
 
 export interface PlanRevisionDbRow {
   workspace_id: string;
@@ -190,6 +194,8 @@ export interface PlanRevisionDbRow {
   decided_at: Date | null;
   created_at: Date;
   removals: Record<string, StepRemoval>;
+  source_procedure_id: string | null;
+  source_procedure_version: number | null;
 }
 
 export function mapPlanRevisionRow(row: PlanRevisionDbRow): PlanRevisionRow {
@@ -208,6 +214,10 @@ export function mapPlanRevisionRow(row: PlanRevisionDbRow): PlanRevisionRow {
     decidedAt: row.decided_at,
     createdAt: row.created_at,
     removals: row.removals,
+    sourceProcedure:
+      row.source_procedure_id !== null && row.source_procedure_version !== null
+        ? { procedureId: row.source_procedure_id, version: row.source_procedure_version }
+        : null,
   };
 }
 

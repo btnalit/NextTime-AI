@@ -62,6 +62,7 @@ import { MarkdownPreview } from './catalog/MarkdownPreview.js';
 import { PackOrigin } from './catalog/PackOrigin.js';
 import { PacksTab } from './catalog/PacksTab.js';
 import { ProcedureEditorHost } from './catalog/ProcedureEditorHost.js';
+import { ProcedureTemplateView } from './catalog/ProcedureTemplateView.js';
 import { SkillEditor } from './catalog/SkillEditor.js';
 import { WorkerEditorHost } from './catalog/WorkerEditorHost.js';
 import { gateOwnedParamsText } from './connect/GateOwnedParams.js';
@@ -2016,12 +2017,8 @@ function ProcedureDetailView({
         ]}
       />
 
-      <div className="stack-s">
-        <span className="section-title">{t('步骤', 'Steps')}</span>
-        <pre className="code-block" data-testid="procedure-detail-steps">
-          {prettyJsonVisible(row.steps ?? [])}
-        </pre>
-      </div>
+      {/* S11 GO5d-2: the steps as the goal plan made from them reads them; JSON one click away. */}
+      <ProcedureTemplateView http={http} steps={row.steps ?? []} parameters={row.parameters} />
 
       {canPublish && row.status === 'draft' ? (
         <PublishCredentialSlot

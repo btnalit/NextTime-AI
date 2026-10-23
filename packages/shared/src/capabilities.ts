@@ -28,6 +28,7 @@ import {
 } from './goal-plan.js';
 import { CapabilityScopeSchema } from './handle-token.js';
 import { OntologyDefinitionSchema } from './ontology-definition.js';
+import { GoalFromProcedureSchema } from './procedure.js';
 import * as wire from './wire/index.js';
 import { WorkerResultCapabilityParamsSchema } from './worker-result.js';
 
@@ -1335,7 +1336,15 @@ const metaCapabilities = [
     minRole: 'builder',
     paramsSchema: z.object({ procedure: jsonRecord }).strict(),
     resultSchema: wire.ProcedureProposeResultWireSchema,
-    description: 'Propose a private draft Procedure distilled from a successful Task.',
+    description:
+      'Propose a private draft Procedure distilled from a successful Task: procedure is {name, ' +
+      'description, steps — operation, worker, approval or verify — and optionally parameters}. ' +
+      'A published Procedure is also a template a goal’s plan is made from (propose_goal’s ' +
+      'fromProcedure): a worker step may carry what a plan step does (key, dependsOn, input, ' +
+      'outputSchema, maxAttempts, and bindings — from an earlier step it depends on, or from ' +
+      '$params, the parameters the goal is proposed with), a verify step a check (an acceptance ' +
+      'check the platform makes), and parameters is the schema of those parameters — the same ' +
+      'bounded JSON Schema subset as an outputSchema.',
   },
   {
     // D-24 — see publish_operation. The owner and builders see every draft (D-26 rule,
@@ -1378,7 +1387,7 @@ const metaCapabilities = [
       .strict(),
     resultSchema: wire.ProcedurePublishResultWireSchema,
     description:
-      'Publish your draft Procedure (I16) — the latest version under procedureId, which must be the version given (the one reviewed): a newer version under procedureId since is 409 version_changed and nothing is published. Builder floor; the workspace owner may publish anyone’s draft; another builder’s draft is 403 not_proposer. When the draft carries suspected credentials, credentialsReviewed: true is required — 400 credentials_review_required (details: subject, suspectedSecretValues) otherwise.',
+      'Publish your draft Procedure (I16) — the latest version under procedureId, which must be the version given (the one reviewed): a newer version under procedureId since is 409 version_changed and nothing is published. Builder floor; the workspace owner may publish anyone’s draft; another builder’s draft is 403 not_proposer. When the draft carries suspected credentials, credentialsReviewed: true is required — 400 credentials_review_required (details: subject, suspectedSecretValues) otherwise. A Procedure that says how a goal’s plan is made from it (parameters, a worker step’s plan fields, a verify step’s check) is published only when the plan it makes passes everything a written plan is held to — its $params bindings checked against parameters, no credential or [redacted] mark — 400 invalid_params with details.problems otherwise; one with an operation or approval step is still published, for following by hand, but makes no goal.',
   },
   {
     name: 'deprecate_skill',
@@ -1458,7 +1467,8 @@ const metaCapabilities = [
     description:
       'List published Procedures plus the draft Procedures the caller may see — their own, or ' +
       'every draft for the owner and builders (D-26 rule, I16) — latest version per id, newest ' +
-      'first, each with its proposedBy; keyset-paginated (limit, cursor → nextCursor).',
+      'first, each with its proposedBy and its parameters schema (null: it takes none); ' +
+      'keyset-paginated (limit, cursor → nextCursor).',
   },
   {
     // S3.3: real handler (`application/gateway/fact-handlers.ts`'s `assertFactHandler`), replacing
@@ -4175,13 +4185,25 @@ const goalCapabilities = [
     paramsSchema: z
       .object({
         statement: z.string().max(MAX_GOAL_STATEMENT_CHARS).regex(/\S/, 'says nothing'),
-        plan: GoalPlanSchema,
+        plan: GoalPlanSchema.optional(),
+        // S11 GO5d-2 (plan §4.3): the plan made from a published Procedure instead of written out
+        // (`application/goal/from-procedure.ts`) — exactly one of the two.
+        fromProcedure: GoalFromProcedureSchema.optional(),
         budget: GoalBudgetSchema,
         idempotencyKey: z.string().min(1).max(MAX_GOAL_IDEMPOTENCY_KEY_CHARS).optional(),
       })
-      .strict(),
+      .strict()
+      .superRefine((value, ctx) => {
+        if ((value.plan === undefined) === (value.fromProcedure === undefined)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [value.plan === undefined ? 'plan' : 'fromProcedure'],
+            message: 'give exactly one of plan and fromProcedure',
+          });
+        }
+      }),
     resultSchema: wire.ProposeGoalResultWireSchema,
-    description: `Propose a goal for you (on a Handle, the person you act for) to confirm: statement — what is wanted, in a sentence or two (at most ${MAX_GOAL_STATEMENT_CHARS} characters) — the plan (revision 1: its steps, each a published Worker version, their dependencies, inputs and checks — a step may declare the output its Worker reports (outputSchema) and take input fields from earlier steps' outputs (bindings: to, from a step it depends on that declares an outputSchema, a JMESPath path) — and the acceptance checks of the goal) and the budget (tokens, step attempts, revisions, wall-clock seconds from confirmation). Nothing runs until the requester confirms it in the console (confirm_goal); the budget cannot be changed there — propose again to change it. The requester must be a person: a call for a service or agent Principal is refused (403). A requester has at most a deployment-set number of goals waiting to be confirmed or rejected (5 unless configured): one more is refused, nothing written (409 proposed_goal_limit with details.limit and details.proposed) — ask them to confirm or reject one first; a retry of a run already proposed is still answered. The plan is checked (400 invalid_params with details.problems); the statement and the plan must not carry credentials — refused, nothing written (400 credentials_in_text with details.field and, for the plan, details.suspectedSecretPaths: a gate authenticates with the credentials configured on it), nor the [redacted] mark a read shows where one stood (400 redacted_text_submitted with details.field and, for the plan, details.paths). Plan places read plan.steps.<i>.input.<field>, plan.acceptance.<i>.prompt and so on, i from 0. The result's hints say what the person confirming should know: a plan the platform checks nothing of, and any step the requester could not start now (a gate they cannot act on, a capability they do not hold, a Worker their profile excludes). idempotencyKey: the same key returns the run it first proposed, whatever its status (changed: false); without one, the same statement, plan and budget from the same session return the run still proposed.`,
+    description: `Propose a goal for you (on a Handle, the person you act for) to confirm: statement — what is wanted, in a sentence or two (at most ${MAX_GOAL_STATEMENT_CHARS} characters) — the plan, revision 1 — written out (plan: its steps, each a published Worker version, their dependencies, inputs and checks — a step may declare the output its Worker reports (outputSchema) and take input fields from earlier steps' outputs (bindings: to, from a step it depends on that declares an outputSchema, a JMESPath path) — and the acceptance checks of the goal) or made from a published Procedure (fromProcedure: procedureId, version — its latest published version when absent — and the parameters its parameters schema asks for: its worker steps become the plan's steps, each after the one before unless it says otherwise, its $params bindings filled in from the parameters, and its verify steps the goal's acceptance checks — the platform makes a check a verify step carries, and the requester confirms the others; a Procedure with an operation or approval step makes no plan), exactly one of the two — and the budget (tokens, step attempts, revisions, wall-clock seconds from confirmation). Nothing runs until the requester confirms it in the console (confirm_goal); the budget cannot be changed there — propose again to change it. The requester must be a person: a call for a service or agent Principal is refused (403). A requester has at most a deployment-set number of goals waiting to be confirmed or rejected (5 unless configured): one more is refused, nothing written (409 proposed_goal_limit with details.limit and details.proposed) — ask them to confirm or reject one first; a retry of a run already proposed is still answered. The plan is checked (400 invalid_params with details.problems — for fromProcedure, also an unknown or unpublished Procedure, parameters its schema refuses at fromProcedure.parameters.<field>, and a step it cannot make); a plan made from a Procedure is checked exactly like one written out, and the revision records the Procedure (fromProcedure on get_goal and get_goal_revision). The statement, the plan and the parameters must not carry credentials — refused, nothing written (400 credentials_in_text with details.field and, for the plan, details.suspectedSecretPaths: a gate authenticates with the credentials configured on it), nor the [redacted] mark a read shows where one stood (400 redacted_text_submitted with details.field and, for the plan, details.paths). Plan places read plan.steps.<i>.input.<field>, plan.acceptance.<i>.prompt and so on, i from 0. The result's hints say what the person confirming should know: a plan the platform checks nothing of, and any step the requester could not start now (a gate they cannot act on, a capability they do not hold, a Worker their profile excludes). idempotencyKey: the same key returns the run it first proposed, whatever its status (changed: false); without one, the same statement, plan (or fromProcedure) and budget from the same session return the run still proposed.`,
   },
   {
     name: 'confirm_goal',

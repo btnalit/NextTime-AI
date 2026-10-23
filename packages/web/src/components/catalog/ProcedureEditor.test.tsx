@@ -230,6 +230,155 @@ describe('ProcedureEditor (S6-A A2)', () => {
     expect((screen.getByLabelText(/^名称/) as HTMLInputElement).value).toBe('Deploy');
   });
 
+  it('a copy keeps what its steps say of a goal’s plan, and its parameters, through edits, the JSON view and the save (S11 GO5d-2)', async () => {
+    const { caller, calls } = http({
+      propose_procedure: () => ({ id: 'pr-9', version: 1, status: 'draft', name: 'Renew' }),
+    });
+    const parameters = {
+      type: 'object',
+      properties: { site: { type: 'string' } },
+      required: ['site'],
+    };
+    const fetch = {
+      kind: 'worker',
+      definitionId: 'wd-1',
+      version: 2,
+      key: 'fetch',
+      dependsOn: [],
+      input: { mode: 'safe' },
+      bindings: [{ to: 'target.site', from: '$params', path: 'site' }],
+      outputSchema: { type: 'object', properties: { hosts: { type: 'array' } } },
+      maxAttempts: 2,
+    };
+    const apply = {
+      kind: 'worker',
+      definitionId: 'wd-1',
+      version: 2,
+      dependsOn: ['fetch'],
+      bindings: [{ to: 'hosts', from: 'fetch', path: 'hosts' }],
+    };
+    const check = {
+      kind: 'observe_predicate',
+      key: 'valid',
+      check: {
+        gatekeeperId: '5f0c1a52-8a2e-4f3b-9c61-0d2b7e4a9f10',
+        operation: 'cert.status',
+        expect: { path: 'state', op: 'eq', value: 'valid' },
+      },
+    };
+    render(
+      <ProcedureEditor
+        http={caller}
+        copyOf={{
+          id: 'pr-1',
+          version: 3,
+          status: 'published',
+          name: 'Renew',
+          description: 'Renew the certificates',
+          steps: [
+            fetch,
+            apply,
+            { kind: 'verify', description: 'The certificate is valid.', check },
+            { kind: 'approval', description: 'The owner agrees.' },
+          ],
+          parameters,
+        }}
+        onProposed={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    // Each step that carries them says so, and so does the Procedure for its parameters.
+    expect(screen.getAllByTestId('procedure-step-template-note')).toHaveLength(3);
+    expect(screen.getByTestId('procedure-parameters-note')).toBeTruthy();
+
+    // Editing what the form edits leaves them as they were — in the JSON view too.
+    const steps = screen.getAllByTestId('procedure-step');
+    fireEvent.change(within(steps[1] as HTMLElement).getByLabelText(/说明/), {
+      target: { value: 'apply the new certificates' },
+    });
+    fireEvent.click(screen.getByTestId('procedure-view-json'));
+    fireEvent.click(screen.getByTestId('procedure-json-apply'));
+    fireEvent.click(screen.getByTestId('procedure-submit'));
+    await screen.findByTestId('draft-proposed');
+    expect(calls.find((call) => call.name === 'propose_procedure')?.params).toEqual({
+      procedure: {
+        name: 'Renew',
+        description: 'Renew the certificates',
+        steps: [
+          fetch,
+          { ...apply, description: 'apply the new certificates' },
+          { kind: 'verify', description: 'The certificate is valid.', check },
+          { kind: 'approval', description: 'The owner agrees.' },
+        ],
+        parameters,
+      },
+    });
+  });
+
+  it('what the form cannot edit, refused, is listed with its place (S11 GO5d-2)', async () => {
+    const { caller, calls } = http({});
+    render(<ProcedureEditor http={caller} onProposed={vi.fn()} onDone={vi.fn()} />);
+    fireEvent.click(screen.getByTestId('procedure-view-json'));
+    fireEvent.change(within(screen.getByTestId('procedure-json')).getByRole('textbox'), {
+      target: {
+        value: JSON.stringify({
+          name: 'Bad',
+          description: 'd',
+          steps: [
+            { kind: 'worker', definitionId: 'wd-1', version: 1, maxAttempts: 0 },
+            { kind: 'verify', description: 'ok', check: { kind: 'observe_predicate' } },
+          ],
+          parameters: { type: 'string' },
+        }),
+      },
+    });
+    fireEvent.click(screen.getByTestId('procedure-json-apply'));
+    fireEvent.click(screen.getByTestId('procedure-submit'));
+    const listed = await screen.findByTestId('procedure-template-errors');
+    const paths = [...listed.querySelectorAll('li .mono')].map((node) => node.textContent);
+    expect(paths).toEqual(
+      expect.arrayContaining(['steps.0.maxAttempts', expect.stringMatching(/^steps\.1\.check/)]),
+    );
+    expect(paths.some((path) => path?.startsWith('parameters'))).toBe(true);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('a step changed to another kind sends only what that kind carries', async () => {
+    const { caller, calls } = http({
+      propose_procedure: () => ({ id: 'pr-8', version: 1, status: 'draft', name: 'One' }),
+    });
+    render(
+      <ProcedureEditor
+        http={caller}
+        copyOf={{
+          id: 'pr-1',
+          version: 1,
+          status: 'published',
+          name: 'One',
+          description: 'One step',
+          steps: [{ kind: 'worker', definitionId: 'wd-1', version: 1, key: 'only', input: {} }],
+        }}
+        onProposed={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    const step = screen.getByTestId('procedure-step');
+    fireEvent.change(within(step).getByTestId('procedure-step-kind'), {
+      target: { value: 'verify' },
+    });
+    expect(screen.queryByTestId('procedure-step-template-note')).toBeNull();
+    fireEvent.change(within(step).getByLabelText(/说明/), { target: { value: 'done' } });
+    fireEvent.click(screen.getByTestId('procedure-submit'));
+    await screen.findByTestId('draft-proposed');
+    expect(calls.find((call) => call.name === 'propose_procedure')?.params).toEqual({
+      procedure: {
+        name: 'One',
+        description: 'One step',
+        steps: [{ kind: 'verify', description: 'done' }],
+      },
+    });
+  });
+
   it('the Operation list failing to load falls back to a manual name, with a retry', async () => {
     const { caller, calls } = http({
       list_operations: () => {

@@ -29,7 +29,9 @@
  * reads return and who may read a run (`views.ts`). GO5b adds rejecting a proposal and binding a
  * confirmation to the revision read (`service.ts`), and sorts every refusal into not allowed for
  * this caller (`GoalRunForbiddenError`), not now (`GoalRunStateError`) and malformed
- * (`GoalRunInputError`) — the `goal` capabilities' 403, 409 and 400.
+ * (`GoalRunInputError`) — the `goal` capabilities' 403, 409 and 400. GO5d-1 adds the data a step
+ * hands the next (`bindings.ts`); GO5d-2 a plan made from a published Procedure
+ * (`from-procedure.ts`).
  *
  * Boundaries: it lives in `application` because the advancer creates Tasks (`application/task`) and
  * withdraws ActionRequests (`governance/approval`) in the transaction that moves a StepRun.
@@ -104,6 +106,16 @@ export {
   maxProposedGoalsPerRequester,
   rejectGoalRun,
 } from './service.js';
+
+export {
+  PROCEDURE_CONFIRM_KEY,
+  type PlanSource,
+  type ProcedureTemplate,
+  expandProcedure,
+  planFromProcedure,
+  procedureTemplateProblems,
+  refuseProcedureParameters,
+} from './from-procedure.js';
 
 export {
   type AttemptVerdict,
@@ -249,6 +261,7 @@ export {
   type ListGoalRunsFilter,
   type ListGoalRunsOptions,
   type PlanRevisionView,
+  type PlanSourceView,
   getGoalRunVisibleTo,
   goalVisibleTo,
   listGoalRunUnresolvedActionsVisibleTo,

@@ -78,6 +78,8 @@ export const ProcedureSummaryWireSchema = z
     name: z.string(),
     description: z.string(),
     steps: z.array(ProcedureStepSchema),
+    /** S11 GO5d-2: the parameters schema a goal made from it is proposed with; `null` = none. */
+    parameters: z.record(z.string(), z.unknown()).nullable(),
     proposedBy: z.string(),
   })
   .strict();

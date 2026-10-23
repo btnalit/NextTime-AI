@@ -273,6 +273,51 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
     expect(http.calls.filter((call) => call.name === 'get_goal_revision')).toHaveLength(1);
   });
 
+  it('a plan made from a Procedure says which version, linked to it — on the plan and on revision 1 (S11 GO5d-2)', async () => {
+    const base = goalDetail();
+    const source = { procedureId: 'proc-1', version: 3, name: '证书续期' };
+    const v2: PlanRevisionWire = {
+      ...base.planRevision,
+      id: 'rev-2',
+      revision: 2,
+      basedOnRevision: 1,
+      proposedBy: 'p-alice',
+      reason: '多加一步',
+      fromProcedure: null,
+    };
+    const { plan: _plan, hints: _hints, ...v2Summary } = v2;
+    const [v1Summary] = base.revisions;
+    const detail = goalDetail({
+      currentRevision: 2,
+      planRevision: v2,
+      revisions: [
+        { ...(v1Summary as (typeof base.revisions)[number]), fromProcedure: source },
+        v2Summary,
+      ],
+    });
+    renderPage(scriptedHttp(baseHandlers(detail)));
+
+    const plan = await screen.findByTestId('goal-plan-source');
+    expect(plan.parentElement?.textContent).toMatch(/第 1 版 由流程 证书续期 v3 生成/);
+    expect(screen.getByTestId('goal-plan-source-link').getAttribute('href')).toBe(
+      '#/govern/catalog/procedures/proc-1',
+    );
+    const revisions = screen.getAllByTestId('goal-revision');
+    expect(
+      within(revisions[1] as HTMLElement).getByTestId('goal-revision-from-procedure').textContent,
+    ).toBe('由流程 证书续期 v3 生成');
+    expect(
+      within(revisions[0] as HTMLElement).queryByTestId('goal-revision-from-procedure'),
+    ).toBeNull();
+  });
+
+  it('a plan written out says nothing of a Procedure', async () => {
+    renderPage(scriptedHttp(baseHandlers(goalDetail())));
+    await screen.findAllByTestId('goal-revision');
+    expect(screen.queryByTestId('goal-plan-source')).toBeNull();
+    expect(screen.queryByTestId('goal-revision-from-procedure')).toBeNull();
+  });
+
   it('an update of one of its tasks re-reads the goal; another task’s does not', async () => {
     const tasks = new Set<(event: TaskUpdatedPush) => void>();
     const pushes: PushSource = {

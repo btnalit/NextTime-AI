@@ -97,6 +97,7 @@ import {
   DraftNotDiscardableError,
   ProcedureNotFoundError,
   ProcedureStepReferenceError,
+  ProcedureTemplateError,
   SkillNameConflictError,
   SkillNotFoundError,
   SkillValidationError,
@@ -617,6 +618,7 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   }
   if (
     err instanceof ProcedureStepReferenceError ||
+    err instanceof ProcedureTemplateError ||
     err instanceof WorkerDefinitionValidationError ||
     err instanceof WorkerDefinitionKindMismatchError ||
     err instanceof SkillValidationError

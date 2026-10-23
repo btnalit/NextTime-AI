@@ -234,6 +234,16 @@ export const PROCEDURE_STEP_KINDS: readonly ProcedureStepKind[] = [
   'verify',
 ];
 
+/** S11 GO5d-2: what a step says of the goal plan made from its Procedure
+ *  (`@nexttime/shared` `procedure.ts`) — the form does not edit these yet (legacy), so it keeps them
+ *  as they came and sends them back on the step of the kind that may carry them. */
+const TEMPLATE_FIELDS: Readonly<Record<ProcedureStepKind, readonly string[]>> = {
+  operation: [],
+  worker: ['key', 'dependsOn', 'input', 'bindings', 'outputSchema', 'maxAttempts'],
+  approval: [],
+  verify: ['check'],
+};
+
 /** One step as the form edits it — every field a string so a half-typed step is representable;
  *  `procedureStepsFromForm` turns it into the wire shape. */
 export interface ProcedureStepForm {
@@ -246,6 +256,9 @@ export interface ProcedureStepForm {
   readonly definitionId: string;
   readonly version: string;
   readonly description: string;
+  /** S11 GO5d-2: the step's plan-template fields ({@link TEMPLATE_FIELDS}), kept as they came —
+   *  sent back only while the step is of a kind that carries them. */
+  readonly template: Readonly<Record<string, unknown>>;
 }
 
 let stepCounter = 0;
@@ -263,15 +276,60 @@ export const EMPTY_STEP: ProcedureStepForm = {
   definitionId: '',
   version: '1',
   description: '',
+  template: {},
 };
 
 export interface ProcedureForm {
   readonly name: string;
   readonly description: string;
   readonly steps: readonly ProcedureStepForm[];
+  /** S11 GO5d-2: the parameters schema a goal made from it is proposed with — kept as it came
+   *  (the form does not edit it); absent: it takes none. */
+  readonly parameters?: unknown;
 }
 
 export const EMPTY_PROCEDURE_FORM: ProcedureForm = { name: '', description: '', steps: [] };
+
+/** The form for a Procedure's content (a row to copy, or the JSON view's) — its steps, and its
+ *  parameters when it has any. */
+export function procedureFormFrom(content: {
+  readonly name?: unknown;
+  readonly description?: unknown;
+  readonly steps?: unknown;
+  readonly parameters?: unknown;
+}): ProcedureForm {
+  return {
+    name: typeof content.name === 'string' ? content.name : '',
+    description: typeof content.description === 'string' ? content.description : '',
+    steps: Array.isArray(content.steps) ? content.steps.map(procedureStepFromWire) : [],
+    ...(content.parameters !== undefined && content.parameters !== null
+      ? { parameters: content.parameters }
+      : {}),
+  };
+}
+
+/** The field errors of what the form keeps but does not edit (S11 GO5d-2: a step's plan-template
+ *  fields, the parameters) — no form field shows them, so the editor lists them; `path` as the
+ *  content has it (`steps.0.bindings.1.from`). */
+export function templateFieldErrors(
+  errors: FieldErrors,
+): readonly { readonly path: string; readonly message: string }[] {
+  const fields = new Set(Object.values(TEMPLATE_FIELDS).flat());
+  return Object.entries(errors)
+    .filter(([path]) => {
+      const parts = path.split('.');
+      return (
+        parts[0] === 'parameters' ||
+        (parts[0] === 'steps' && parts[2] !== undefined && fields.has(parts[2]))
+      );
+    })
+    .map(([path, message]) => ({ path, message }));
+}
+
+/** Whether a step carries plan-template fields the form keeps but does not edit (S11 GO5d-2). */
+export function hasTemplateFields(step: ProcedureStepForm): boolean {
+  return TEMPLATE_FIELDS[step.kind].some((field) => step.template[field] !== undefined);
+}
 
 export function newProcedureStep(): ProcedureStepForm {
   return { ...EMPTY_STEP, key: nextStepKey() };
@@ -283,6 +341,10 @@ export function procedureStepFromWire(step: unknown): ProcedureStepForm {
   const kind = PROCEDURE_STEP_KINDS.includes(record.kind as ProcedureStepKind)
     ? (record.kind as ProcedureStepKind)
     : 'approval';
+  const template: Record<string, unknown> = {};
+  for (const field of TEMPLATE_FIELDS[kind]) {
+    if (record[field] !== undefined) template[field] = record[field];
+  }
   return {
     key: nextStepKey(),
     kind,
@@ -291,7 +353,17 @@ export function procedureStepFromWire(step: unknown): ProcedureStepForm {
     definitionId: str('definitionId'),
     version: typeof record.version === 'number' ? String(record.version) : '1',
     description: str('description'),
+    template,
   };
+}
+
+/** The template fields `step` sends back: those its kind may carry. */
+function templateToWire(step: ProcedureStepForm): Record<string, unknown> {
+  const fields: Record<string, unknown> = {};
+  for (const field of TEMPLATE_FIELDS[step.kind]) {
+    if (step.template[field] !== undefined) fields[field] = step.template[field];
+  }
+  return fields;
 }
 
 /** The wire step for a form step — only the fields its `kind` declares (`.strict()` schemas). */
@@ -312,10 +384,11 @@ export function procedureStepToWire(step: ProcedureStepForm): Record<string, unk
         definitionId: step.definitionId.trim(),
         version: Number.isNaN(version) ? step.version : version,
         ...(description ? { description } : {}),
+        ...templateToWire(step),
       };
     }
     default:
-      return { kind: step.kind, description };
+      return { kind: step.kind, description, ...templateToWire(step) };
   }
 }
 
@@ -324,6 +397,7 @@ export function procedureContentFromForm(form: ProcedureForm): Record<string, un
     name: form.name.trim(),
     description: form.description.trim(),
     steps: form.steps.map(procedureStepToWire),
+    ...(form.parameters !== undefined ? { parameters: form.parameters } : {}),
   };
 }
 
