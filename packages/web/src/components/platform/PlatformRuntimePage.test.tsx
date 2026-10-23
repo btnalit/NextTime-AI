@@ -474,6 +474,10 @@ describe('PlatformRuntimePage', () => {
     const roll = screen.getByTestId('runtime-roll-entry-containers') as HTMLButtonElement;
     expect(roll.disabled).toBe(true);
     expect(roll.title).toBe('活动镜像起不了容器，先换一个活动镜像');
+    // The reason is on the page too, not only in the hover title (#698 UX P3).
+    expect(screen.getByTestId('runtime-roll-missing').textContent).toBe(
+      '活动镜像起不了容器，先换一个活动镜像',
+    );
   });
 
   it('an incompatible active image with nothing to switch to: names the build command', async () => {
@@ -576,6 +580,7 @@ describe('PlatformRuntimePage', () => {
     renderPage(http);
 
     const button = await screen.findByTestId('runtime-roll-entry-containers');
+    expect(screen.queryByTestId('runtime-roll-missing')).toBeNull();
     fireEvent.click(button);
 
     // Coverage-map G6: the platform-wide rebuild asks first, naming its reach.

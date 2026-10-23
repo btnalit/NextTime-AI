@@ -701,63 +701,80 @@ function RuntimeBody({
           // Coverage-map gap G6: the one runtime write on this page without a confirm, and the
           // widest — with nothing selected it stops every idle resident entry container on the
           // platform that needs a rebuild. Same `medium` tier as its two siblings above.
-          <Confirm
-            tier="medium"
-            open={rollOpen}
-            onOpenChange={setRollOpen}
-            anchor={
-              <Button
-                variant="secondary"
-                size="s"
-                icon="refresh"
-                onClick={() => setRollOpen(true)}
-                loading={rolling}
-                disabled={needsRebuildCount === 0 || activeIncompatible}
-                title={
-                  activeIncompatible
-                    ? t(
-                        '活动镜像起不了容器，先换一个活动镜像',
-                        'The active image cannot start containers — switch it first',
-                      )
-                    : needsRebuildCount === 0
-                      ? t('没有需要重建的入口容器', 'No entry container needs a rebuild')
-                      : undefined
-                }
-                data-testid="runtime-roll-entry-containers"
-              >
-                {selected.size > 0
+          <>
+            {/* Audit P1-9, as for 回滚 above: a disabled 现在重建 says why on the page, where a
+                phone or a screen reader finds it, not only in a hover title. */}
+            <StillNeeded
+              reason={
+                activeIncompatible
                   ? t(
-                      `现在重建选中的 (${selected.size})`,
-                      `Rebuild selected now (${selected.size})`,
+                      '活动镜像起不了容器，先换一个活动镜像',
+                      'The active image cannot start containers — switch it first',
                     )
-                  : t('现在重建空闲的', 'Rebuild idle now')}
-              </Button>
-            }
-            title={
-              selected.size > 0
-                ? t(
-                    `重建选中的 ${selected.size} 个入口容器`,
-                    `Rebuild ${selected.size} selected entry containers`,
-                  )
-                : t(
-                    `重建全平台 ${needsRebuildCount} 个需要重建的入口容器`,
-                    `Rebuild ${needsRebuildCount} entry containers platform-wide`,
-                  )
-            }
-            impact={[
-              t(
-                '只停止空闲且镜像已过期的容器；正在跑一轮对话的会被跳过。',
-                'Only idle containers on an outdated image are stopped; one in the middle of a turn is skipped.',
-              ),
-              t(
-                '被停止的成员在下一轮对话时自动用活动镜像重建，首轮会慢几秒。',
-                "Each stopped member's container is recreated on the active image at their next turn, which is a few seconds slower.",
-              ),
-            ]}
-            confirmLabel={t('重建', 'Rebuild')}
-            onConfirm={onRollEntryContainers}
-            testId="runtime-roll-confirm"
-          />
+                  : needsRebuildCount === 0
+                    ? t('没有需要重建的入口容器', 'No entry container needs a rebuild')
+                    : null
+              }
+              testId="runtime-roll-missing"
+            />
+            <Confirm
+              tier="medium"
+              open={rollOpen}
+              onOpenChange={setRollOpen}
+              anchor={
+                <Button
+                  variant="secondary"
+                  size="s"
+                  icon="refresh"
+                  onClick={() => setRollOpen(true)}
+                  loading={rolling}
+                  disabled={needsRebuildCount === 0 || activeIncompatible}
+                  title={
+                    activeIncompatible
+                      ? t(
+                          '活动镜像起不了容器，先换一个活动镜像',
+                          'The active image cannot start containers — switch it first',
+                        )
+                      : needsRebuildCount === 0
+                        ? t('没有需要重建的入口容器', 'No entry container needs a rebuild')
+                        : undefined
+                  }
+                  data-testid="runtime-roll-entry-containers"
+                >
+                  {selected.size > 0
+                    ? t(
+                        `现在重建选中的 (${selected.size})`,
+                        `Rebuild selected now (${selected.size})`,
+                      )
+                    : t('现在重建空闲的', 'Rebuild idle now')}
+                </Button>
+              }
+              title={
+                selected.size > 0
+                  ? t(
+                      `重建选中的 ${selected.size} 个入口容器`,
+                      `Rebuild ${selected.size} selected entry containers`,
+                    )
+                  : t(
+                      `重建全平台 ${needsRebuildCount} 个需要重建的入口容器`,
+                      `Rebuild ${needsRebuildCount} entry containers platform-wide`,
+                    )
+              }
+              impact={[
+                t(
+                  '只停止空闲且镜像已过期的容器；正在跑一轮对话的会被跳过。',
+                  'Only idle containers on an outdated image are stopped; one in the middle of a turn is skipped.',
+                ),
+                t(
+                  '被停止的成员在下一轮对话时自动用活动镜像重建，首轮会慢几秒。',
+                  "Each stopped member's container is recreated on the active image at their next turn, which is a few seconds slower.",
+                ),
+              ]}
+              confirmLabel={t('重建', 'Rebuild')}
+              onConfirm={onRollEntryContainers}
+              testId="runtime-roll-confirm"
+            />
+          </>
         }
         padded={false}
       >
