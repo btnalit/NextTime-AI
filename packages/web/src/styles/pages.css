@@ -1313,6 +1313,12 @@
   flex-wrap: wrap;
 }
 
+/* Legacy 456 (UX P2 on #733): a notice that belongs to the row sits under it, full width, at
+ * every width. */
+.systems-list .data-row-full {
+  flex-basis: 100%;
+}
+
 /* Legacy 350 (UX of #612, again in the re-check of #628): at phone width the trailing block
  * (who can use, reachability, actions) stayed on the first line and squeezed the system's name
  * and gate summary into a one-character column. Below 640px it takes its own line under them,

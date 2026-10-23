@@ -45,6 +45,7 @@ import {
   refusalKind,
 } from '../readiness/readiness-copy.js';
 import { announceReadinessChange } from '../readiness/useExecutionReadiness.js';
+import { GovernanceDriftNotice } from './GovernanceDriftNotice.js';
 
 /** A plain "more actions" glyph — this file is not `components/kit/*`, but its own overflow
  *  trigger only needs `kit/button`'s bare label slot, not `components/ui/Icon` (which would add a
@@ -538,6 +539,16 @@ export function SystemAccessCard({
         )}
       </div>
 
+      {canManage && healthInfo.linked && healthInfo.platformGateId !== undefined ? (
+        <GovernanceDriftNotice
+          http={http}
+          gatekeeperId={gate.gateId}
+          platformGateId={healthInfo.platformGateId}
+          gateDisplayName={gate.name}
+          platformAdmin={platformAdmin}
+          onAligned={() => onPublished()}
+        />
+      ) : null}
       {publishError !== null ? (
         <ErrorBanner
           error={publishError}
