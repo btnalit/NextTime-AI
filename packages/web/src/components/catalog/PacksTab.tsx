@@ -219,6 +219,11 @@ function PackDetail({
   const t = useT();
   // What this pane just installed: says so where the install control was (its trigger is gone).
   const [installed, setInstalled] = useState<PackInstallResultWire | null>(null);
+  // …and focus moves to that notice, not to the page (UX acceptance of #721, same rule as #705 P3-1).
+  const installedRef = useRef<HTMLOutputElement>(null);
+  useEffect(() => {
+    if (installed !== null) installedRef.current?.focus();
+  }, [installed]);
   const versions = [...pack.versions].sort((a, b) => b.version - a.version);
   const latestComponents =
     pack.versions.find((version) => version.version === pack.latestVersion)?.components ?? [];
@@ -248,7 +253,7 @@ function PackDetail({
       ) : null}
 
       {installed !== null ? (
-        <output className="block">
+        <output className="block" ref={installedRef} tabIndex={-1}>
           <Notice testId="catalog-pack-installed">
             {installed.segmentId !== null ? (
               <>

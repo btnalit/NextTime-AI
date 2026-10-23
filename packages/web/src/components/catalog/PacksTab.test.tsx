@@ -340,6 +340,8 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
       expect(screen.getByTestId('catalog-pack-status').textContent).toBe('已是最新'),
     );
     expect(screen.queryByTestId('catalog-pack-install-trigger')).toBeNull();
+    // Focus is on the notice that took the trigger's place, not on the page (UX acceptance of #721).
+    expect(document.activeElement).toBe(done.closest('output'));
   });
 
   it('a customized pack says what installing replaces; an unchanged part is left as is', async () => {
@@ -646,7 +648,8 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
     const install = screen.getByRole('button', { name: '安装' }) as HTMLButtonElement;
     expect(install.disabled).toBe(false);
     fireEvent.click(install);
-    await screen.findByTestId('catalog-pack-installed');
+    const own = await screen.findByTestId('catalog-pack-installed');
+    expect(document.activeElement).toBe(own.closest('output'));
     expect(screen.queryByTestId('catalog-pack-dependency-installed')).toBeNull();
   });
 
