@@ -1,5 +1,4 @@
 import type {
-  AcceptanceCheck,
   GoalAcceptanceCheckWire,
   GoalAcceptanceRoundWire,
   GoalDetailWire,
@@ -9,9 +8,9 @@ import { formatDateTime, formatRelative, shortId } from '../../lib/format.js';
 import {
   checkErrorLabel,
   checkKindLabel,
-  factCheckSentence,
-  observationSentence,
+  planCheckSentence,
   planHintText,
+  roundCheckSentence,
 } from '../../lib/goals.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { CopyButton } from '../kit/copy-button.js';
@@ -120,21 +119,6 @@ export function GoalAcceptanceSection({ detail, gateNames }: GoalAcceptanceSecti
   );
 }
 
-function planCheckSentence(
-  check: AcceptanceCheck,
-  gateNames: ReadonlyMap<string, string>,
-  t: Translate,
-): string {
-  switch (check.kind) {
-    case 'observe_predicate':
-      return observationSentence(check.check, gateNames.get(check.check.gatekeeperId) ?? null, t);
-    case 'fact_predicate':
-      return factCheckSentence(check.fact, t);
-    case 'requester_confirm':
-      return check.prompt;
-  }
-}
-
 function overriddenStatusText(
   status: 'failed' | 'unavailable' | 'superseded' | 'not_run',
   t: Translate,
@@ -181,18 +165,6 @@ function Round({
   );
 }
 
-function checkSentence(
-  check: GoalAcceptanceCheckWire,
-  gateNames: ReadonlyMap<string, string>,
-  t: Translate,
-): string {
-  if (check.check) {
-    return observationSentence(check.check, gateNames.get(check.check.gatekeeperId) ?? null, t);
-  }
-  if (check.fact) return factCheckSentence(check.fact, t);
-  return check.prompt ?? '';
-}
-
 function CheckRow({
   check,
   gateNames,
@@ -214,7 +186,7 @@ function CheckRow({
           </span>
         ) : null}
       </span>
-      <span>{checkSentence(check, gateNames, t)}</span>
+      <span>{roundCheckSentence(check, gateNames, t)}</span>
       <span className="row-wrap text-small text-3">
         {check.kind !== 'requester_confirm' ? (
           <span className="tabular">

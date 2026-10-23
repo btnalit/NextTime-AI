@@ -470,6 +470,9 @@ describe('kit/Confirm — irreversible', () => {
     fireEvent.click(screen.getByTestId('trigger'));
     await screen.findByRole('alertdialog');
     expect(screen.queryByTestId('confirm-typed-name')).toBeNull();
+    // UX acceptance of #697: the line under the title asks only for what the dialog has.
+    expect(screen.getByText('不可逆：请勾选确认知情')).toBeTruthy();
+    expect(screen.queryByText(/请键入目标名称/)).toBeNull();
     const button = screen.getByTestId('confirm-button');
     expect(button.hasAttribute('disabled')).toBe(true);
     fireEvent.click(screen.getByTestId('confirm-acknowledge'));

@@ -64,8 +64,8 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
       ),
     );
     expect(screen.getByTestId('goal-acceptance-not-started')).toBeTruthy();
-    // Read-only: no operation buttons yet (they come in GO6's next part).
-    expect(screen.queryByRole('button', { name: /暂停|继续|取消|确认/ })).toBeNull();
+    // Who reads is not known yet (get_workspace unanswered): no operation is offered.
+    expect(screen.queryByTestId('goal-operations')).toBeNull();
   });
 
   it('a goal it may not see reads as not found, without saying which', async () => {
