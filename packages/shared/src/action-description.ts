@@ -139,10 +139,9 @@ export const OperationSchema = z.object({
    *  pick. Optional at this schema's own level — a manifest sourced from a live gate's
    *  `describe_operations` (accept-s2 fixtures, a third-party MCP/OpenAPI system) may not have
    *  one yet, and this package does no business-logic validation (R4 scope: "no IO / no business
-   *  logic here"). `governance/gatekeepers/manifest.ts`'s `importManifest` is where a *blank*
-   *  description is actually rejected, and only for the one call site that opts in
-   *  (`requireDescription`) — see that module's own doc comment for why the rule cannot be
-   *  unconditional here. */
+   *  logic here"). Nor does an import require one: refusing a real system over a missing
+   *  description would block connecting it (STATUS leftover 372); a person adds or edits one in
+   *  the catalog (`update_operation_description`). */
   description: z.string().optional(),
   binding: OperationBindingSchema,
   params_schema: JsonSchemaObjectSchema,

@@ -58,18 +58,12 @@ export {
   importDraftDiffersFromAnnounced,
   governanceChangeNeedsRevision,
   refreshOperationGovernance,
-  operationGovernanceFieldsOf,
-  diffOperationGovernanceFields,
-  classifyOperationGovernanceChange,
-  operationGovernanceChangeDirection,
-  operationGovernanceChange,
   OPERATION_DESCRIPTION_MAX_LENGTH,
   OperationNotFoundError,
   OperationIdentityConflictError,
   OperationNameInvalidError,
   operationProposalRefusal,
   OperationDraftChangedError,
-  OperationDescriptionRequiredError,
   OperationDescriptionInvalidError,
   IllegalTransition,
 } from './manifest.js';
@@ -111,13 +105,26 @@ export type {
   RefreshOperationGovernanceResult,
   OperationRevisionDraft,
   RefreshedOperationGovernance,
+} from './manifest.js';
+export {
+  OPERATION_FIELD_RULES,
+  OPERATION_GOVERNANCE_KEYS,
+  classifyOperationGovernanceChange,
+  diffOperationGovernanceFields,
+  operationGovernanceChange,
+  operationGovernanceChangeDirection,
+  operationGovernanceFieldsOf,
+  operationGovernanceProperties,
+  withOperationGovernance,
+} from './governance-fields.js';
+export type {
   OperationGovernanceChange,
   OperationGovernanceChangeDirection,
-  OperationGovernanceFields,
-  OperationGovernanceFieldName,
   OperationGovernanceDiff,
   OperationGovernanceDirection,
-} from './manifest.js';
+  OperationGovernanceFieldName,
+  OperationGovernanceFields,
+} from './governance-fields.js';
 export type { OperationOrigin } from '../../substrate/ontology/index.js';
 
 export { getOrCreateGatekeeperServicePrincipal } from './service-principal.js';

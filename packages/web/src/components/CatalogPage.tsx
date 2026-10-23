@@ -1,8 +1,4 @@
-import type {
-  GateOwnedParamWire,
-  OperationGovernanceFieldsWire,
-  SkillDetailWire,
-} from '@nexttime/shared';
+import type { GateOwnedParamWire, SkillDetailWire } from '@nexttime/shared';
 import { visibleText } from '@nexttime/shared';
 import { type ReactNode, useId, useRef, useState } from 'react';
 import { invalidateCapability, useCapability, useCapabilityList } from '../hooks/useCapability.js';
@@ -70,6 +66,7 @@ import { WorkerEditorHost } from './catalog/WorkerEditorHost.js';
 import { gateOwnedParamsText } from './connect/GateOwnedParams.js';
 import {
   GovernanceChangeList,
+  type OperationClassificationWire,
   firstPublishConsequence,
   firstPublishNeedsConfirm,
   governanceConsequences,
@@ -427,7 +424,7 @@ function PublishFirstVersionConfirm({
   testId,
 }: {
   readonly row: OperationCatalogRow;
-  readonly fields: OperationGovernanceFieldsWire;
+  readonly fields: OperationClassificationWire;
   readonly busy: boolean;
   /** An open credential question (`CredentialReview`) is unanswered. */
   readonly blocked: boolean;
@@ -470,13 +467,13 @@ function PublishFirstVersionConfirm({
 
 /** The fields a first-publish confirm reads — `null` when the row does not carry all three (an
  *  older kernel), so it falls back to the plain button rather than guessing. */
-function governanceFieldsOf(row: OperationCatalogRow): OperationGovernanceFieldsWire | null {
+function governanceFieldsOf(row: OperationCatalogRow): OperationClassificationWire | null {
   if (row.mode === undefined || row.blastRadius === undefined || row.autoApprovable === undefined) {
     return null;
   }
   return {
-    mode: row.mode as OperationGovernanceFieldsWire['mode'],
-    blastRadius: row.blastRadius as OperationGovernanceFieldsWire['blastRadius'],
+    mode: row.mode as OperationClassificationWire['mode'],
+    blastRadius: row.blastRadius as OperationClassificationWire['blastRadius'],
     autoApprovable: row.autoApprovable,
   };
 }

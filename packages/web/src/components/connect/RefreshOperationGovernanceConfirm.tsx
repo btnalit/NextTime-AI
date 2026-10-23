@@ -22,6 +22,7 @@ import { gateOwnedParamsNextStep, gateOwnedParamsText } from './GateOwnedParams.
 import {
   type GovernanceChangeItem,
   GovernanceChangeList,
+  type OperationClassificationWire,
   governanceChangeSummary,
   governanceConsequences,
   governanceFieldsText,
@@ -181,7 +182,7 @@ export function RefreshOperationGovernanceConfirm({
   // longer describes.
   const [newNames, setNewNames] = useState<readonly string[]>([]);
   // UX acceptance of #612 (P2-2): what each new Operation would be allowed to do once published.
-  const [newFields, setNewFields] = useState<ReadonlyMap<string, OperationGovernanceFieldsWire>>(
+  const [newFields, setNewFields] = useState<ReadonlyMap<string, OperationClassificationWire>>(
     new Map(),
   );
   const [importedNames, setImportedNames] = useState<ReadonlySet<string>>(new Set());
@@ -957,16 +958,21 @@ function DeprecatedUnwrittenNotice({
   );
 }
 
+/** `existing` without its status: every governance field the kernel compared (STATUS leftover
+ *  344). */
+function governanceFieldsOfExisting({
+  status: _status,
+  ...fields
+}: GateInstanceEnablePreviewOperationPresentWire['existing']): OperationGovernanceFieldsWire {
+  return fields;
+}
+
 /** A drifting row as the shared confirm list reads it — `existing` → `announced`, with the
  *  kernel's direction. */
 function changeItem(op: GateInstanceEnablePreviewOperationPresentWire): GovernanceChangeItem {
   return {
     name: op.name,
-    before: {
-      mode: op.existing.mode,
-      blastRadius: op.existing.blastRadius,
-      autoApprovable: op.existing.autoApprovable,
-    },
+    before: governanceFieldsOfExisting(op.existing),
     after: op.announced,
     direction: op.direction,
   };

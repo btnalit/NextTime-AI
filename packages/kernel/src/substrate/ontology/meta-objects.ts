@@ -476,38 +476,52 @@ export async function deprecatePublishedOperationObjects(
 
 /**
  * S8 W3-K1 (leftover 79, `governance/gatekeepers/manifest.ts`'s `refreshOperationGovernance`):
- * merges `{mode, blast_radius, auto_approvable}` into one specific, already-versioned Operation
- * Object's properties — same "no identity/transition check, caller has already confirmed the
- * write is authorized and targets the right row" contract as `setOperationStatusObject` right
- * above, just for the governance fields instead of `status`. Deliberately **in place** (never a
- * new `version`, unlike `proposeOperation`'s revision-draft path) — see `manifest.ts`'s own doc
- * comment on `refreshOperationGovernance` for why this call is trusted the same way
+ * writes an Operation's governance properties (`governance/gatekeepers/governance-fields.ts`'s
+ * `operationGovernanceProperties`) into one specific, already-versioned Operation Object — `set`
+ * merged in, `removed` dropped (an MCP hint the gate no longer declares; STATUS leftover 344). Same
+ * "no identity/transition check, caller has already confirmed the write is authorized and targets
+ * the right row" contract as `setOperationStatusObject` right above, just for the governance
+ * fields instead of `status`. Deliberately **in place** (never a new `version`, unlike
+ * `proposeOperation`'s revision-draft path) — see `manifest.ts`'s own doc comment on
+ * `refreshOperationGovernance` for why this call is trusted the same way
  * `publishOperation`/`deprecateOperation`/`updateGateInstance` already are, not routed through
- * the propose→publish workflow that exists to gate *unreviewed* Handle-channel proposals. */
+ * the propose→publish workflow that exists to gate *unreviewed* Handle-channel proposals.
+ *
+ * One `update`, not the graph store's upsert: its `properties || excluded.properties` merge can
+ * add keys but never drop one. Throws when no row has `identity` (the caller holds its lock).
+ */
 export async function setOperationGovernanceFieldsObject(
   client: PoolClient,
   workspaceId: string,
   identity: OperationIdentity,
-  fields: {
-    readonly mode: Operation['mode'];
-    readonly blastRadius: Operation['blast_radius'];
-    readonly autoApprovable: boolean;
+  properties: {
+    readonly set: Readonly<Record<string, unknown>>;
+    readonly removed: readonly string[];
   },
-): Promise<GraphObject> {
-  return graphStore.upsertObject(client, workspaceId, {
-    objectType: 'Operation',
-    kernelAuthored: true,
-    identity: {
-      gatekeeperId: identity.gatekeeperId,
-      name: identity.name,
-      version: identity.version,
-    },
-    properties: {
-      mode: fields.mode,
-      blast_radius: fields.blastRadius,
-      auto_approvable: fields.autoApprovable,
-    },
-  });
+): Promise<void> {
+  const result = await client.query<{ id: string }>(
+    `update objects
+     set properties = (properties || $3::jsonb) - $4::text[], updated_at = now()
+     where workspace_id = $1
+       and object_type = 'Operation'
+       and identity_key = $2::jsonb
+     returning id`,
+    [
+      workspaceId,
+      JSON.stringify({
+        gatekeeperId: identity.gatekeeperId,
+        name: identity.name,
+        version: identity.version,
+      }),
+      JSON.stringify(properties.set),
+      [...properties.removed],
+    ],
+  );
+  if (result.rowCount !== 1) {
+    throw new Error(
+      `setOperationGovernanceFieldsObject: expected one Operation row for ${identity.gatekeeperId}/${identity.name} v${identity.version}, updated ${result.rowCount ?? 0}`,
+    );
+  }
 }
 
 /** S8 W3-K1 (leftover 81): merges `{description}` into one specific, already-versioned Operation

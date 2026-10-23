@@ -19,17 +19,19 @@ import { findOperationCandidates } from '../../substrate/graph/index.js';
 import { setOperationStatusObject } from '../../substrate/ontology/index.js';
 import { operationDraftDigest } from './definition.js';
 import { OperationDeclaresGateOwnedParamsError } from './gate-owned-params.js';
+import {
+  classifyOperationGovernanceChange,
+  diffOperationGovernanceFields,
+  operationGovernanceFieldsOf,
+} from './governance-fields.js';
 import type { OperationRecord } from './manifest.js';
 import {
   OperationDescriptionInvalidError,
-  OperationDescriptionRequiredError,
   OperationIdentityConflictError,
   OperationNameInvalidError,
   OperationNotFoundError,
-  classifyOperationGovernanceChange,
   countOperationsByGatekeeper,
   deprecateOperation,
-  diffOperationGovernanceFields,
   discardOperationDraft,
   getOperation,
   getPublishedOperation,
@@ -38,7 +40,6 @@ import {
   listDraftOperationsForGatekeeper,
   listOperations,
   listPublishedOperationsForGatekeepers,
-  operationGovernanceFieldsOf,
   proposeOperation,
   publishImportedDrafts,
   publishManifest,
@@ -189,7 +190,7 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
     expect(published).toBeNull();
   });
 
-  it('S8 W2-K1 (CO1): requireDescription omitted (default) still accepts a blank description — every existing caller (create_connection, enable_gate_instance) is unaffected', async () => {
+  it("S8 W2-K1 (CO1): an import accepts a blank description — a gate's manifest need not declare one (STATUS leftover 372)", async () => {
     const op = testOperation({ name: `no-desc.${randomUUID()}`, description: '' });
     const act = await newActivity();
     const imported = await inTx((client) =>
@@ -201,30 +202,6 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
       }),
     );
     expect(imported.imported.map((r) => r.name)).toEqual([op.name]);
-  });
-
-  it('S8 W2-K1 (CO1): requireDescription:true rejects a blank description, naming the operation, before writing anything', async () => {
-    const good = testOperation({ name: `good-desc.${randomUUID()}` });
-    const bad = testOperation({ name: `blank-desc.${randomUUID()}`, description: '   ' });
-    const act = await newActivity();
-
-    await expect(
-      inTx((client) =>
-        importManifest(client, workspaceId, {
-          gatekeeperId,
-          operations: [good, bad],
-          proposedBy: { id: ownerId, kind: 'human' },
-          activityId: act,
-          requireDescription: true,
-        }),
-      ),
-    ).rejects.toThrow(OperationDescriptionRequiredError);
-
-    // Atomic: `good` (which came first and does have a description) was not written either.
-    const goodRecord = await inTx((client) =>
-      getOperation(client, workspaceId, gatekeeperId, good.name),
-    );
-    expect(goodRecord).toBeNull();
   });
 
   describe('legacy 232: a new Operation name is bounded and visible', () => {
@@ -1476,12 +1453,26 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
       const [entry] = outcome.refreshed;
       expect(entry?.name).toBe(drifted.name);
       expect(entry?.direction).toBe('loosened');
+      const undeclared = {
+        awaitDecision: false,
+        reads: [],
+        writes: [],
+        readOnlyHint: null,
+        destructiveHint: null,
+        idempotentHint: null,
+      };
       expect(entry?.before).toEqual({
+        ...undeclared,
         mode: 'execute',
         blastRadius: 'high',
         autoApprovable: false,
       });
-      expect(entry?.after).toEqual({ mode: 'observe', blastRadius: 'low', autoApprovable: true });
+      expect(entry?.after).toEqual({
+        ...undeclared,
+        mode: 'observe',
+        blastRadius: 'low',
+        autoApprovable: true,
+      });
 
       const persisted = await inTx((client) =>
         getPublishedOperation(client, workspaceId, gatekeeperId, drifted.name),
@@ -1504,6 +1495,146 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
       );
       expect(again.refreshed).toEqual([]);
       expect(again.unchanged).toEqual([drifted.name]);
+    });
+
+    it('STATUS leftover 344: await_decision, reads / writes and the MCP hints are applied in place too — a hint the gate no longer declares is removed', async () => {
+      const deployed = testOperation({
+        name: `gov.fields.${randomUUID()}`,
+        mode: 'execute',
+        await_decision: false,
+        reads: ['Container'],
+        writes: ['Container', 'Host'],
+        read_only_hint: false,
+        destructive_hint: false,
+      });
+      const importAct = await newActivity();
+      await inTx((client) =>
+        importManifest(client, workspaceId, {
+          gatekeeperId,
+          operations: [deployed],
+          proposedBy: { id: ownerId, kind: 'human' },
+          activityId: importAct,
+        }),
+      );
+      await inTx((client) =>
+        publishOperation(client, workspaceId, { gatekeeperId, name: deployed.name }),
+      );
+
+      const { read_only_hint: _dropped, ...rest } = deployed;
+      const announced: Operation = {
+        ...rest,
+        await_decision: true,
+        reads: ['Host', 'Container'],
+        writes: ['Container'],
+        idempotent_hint: true,
+      };
+      const refreshAct = await newActivity();
+      const outcome = await inTx((client) =>
+        refreshOperationGovernance(client, workspaceId, {
+          gatekeeperId,
+          proposedBy: { id: ownerId, kind: 'human' },
+          activityId: refreshAct,
+          announcedOperations: [announced],
+        }),
+      );
+      expect(outcome.revisionDrafts).toEqual([]);
+      expect(outcome.refreshed).toHaveLength(1);
+      const [entry] = outcome.refreshed;
+      // reads grew (loosens), a read-only hint changed (loosens), the rest tightened.
+      expect(entry?.direction).toBe('mixed');
+      expect(entry?.after).toMatchObject({
+        awaitDecision: true,
+        reads: ['Host', 'Container'],
+        writes: ['Container'],
+        readOnlyHint: null,
+        destructiveHint: false,
+        idempotentHint: true,
+      });
+
+      const persisted = await inTx((client) =>
+        getPublishedOperation(client, workspaceId, gatekeeperId, deployed.name),
+      );
+      expect(persisted?.version).toBe(1);
+      expect(persisted?.operation.await_decision).toBe(true);
+      expect(persisted?.operation.reads).toEqual(['Host', 'Container']);
+      expect(persisted?.operation.writes).toEqual(['Container']);
+      expect(persisted?.operation.idempotent_hint).toBe(true);
+      expect(persisted?.operation.destructive_hint).toBe(false);
+      expect(persisted?.operation).not.toHaveProperty('read_only_hint');
+
+      const again = await inTx((client) =>
+        refreshOperationGovernance(client, workspaceId, {
+          gatekeeperId,
+          proposedBy: { id: ownerId, kind: 'human' },
+          activityId: refreshAct,
+          announcedOperations: [announced],
+        }),
+      );
+      expect(again.refreshed).toEqual([]);
+      expect(again.unchanged).toEqual([deployed.name]);
+    });
+
+    it("STATUS leftover 344: a self-connected gate's loosening of await_decision waits for a revision; its tightening of writes is applied in place", async () => {
+      const loosens = testOperation({
+        name: `gov.gate.loosens.${randomUUID()}`,
+        mode: 'execute',
+        await_decision: true,
+      });
+      const tightens = testOperation({
+        name: `gov.gate.tightens.${randomUUID()}`,
+        mode: 'execute',
+        writes: ['Container', 'Host'],
+      });
+      const importAct = await newActivity();
+      await inTx((client) =>
+        importManifest(client, workspaceId, {
+          gatekeeperId,
+          operations: [loosens, tightens],
+          proposedBy: { id: ownerId, kind: 'human' },
+          activityId: importAct,
+        }),
+      );
+      const published = await inTx((client) =>
+        publishOperation(client, workspaceId, { gatekeeperId, name: loosens.name }),
+      );
+      await inTx((client) =>
+        publishOperation(client, workspaceId, { gatekeeperId, name: tightens.name }),
+      );
+
+      const refreshAct = await newActivity();
+      const outcome = await inTx((client) =>
+        refreshOperationGovernance(client, workspaceId, {
+          gatekeeperId,
+          proposedBy: { id: ownerId, kind: 'human' },
+          activityId: refreshAct,
+          source: 'gate',
+          announcedOperations: [
+            { ...loosens, await_decision: false },
+            { ...tightens, writes: ['Container'] },
+          ],
+        }),
+      );
+      expect(outcome.refreshed.map((entry) => [entry.name, entry.direction])).toEqual([
+        [tightens.name, 'tightened'],
+      ]);
+      expect(outcome.revisionDrafts).toEqual([
+        {
+          id: expect.any(String),
+          name: loosens.name,
+          version: 2,
+          draftOf: published.id,
+          replaced: false,
+          governanceLoosened: { direction: 'loosened', definitionChanged: false },
+        },
+      ]);
+      const live = await inTx((client) =>
+        getPublishedOperation(client, workspaceId, gatekeeperId, loosens.name),
+      );
+      expect(live?.operation.await_decision).toBe(true);
+      const narrowed = await inTx((client) =>
+        getPublishedOperation(client, workspaceId, gatekeeperId, tightens.name),
+      );
+      expect(narrowed?.operation.writes).toEqual(['Container']);
     });
 
     it('legacy K: a published Operation whose announced definition changed gets an import revision draft carrying it; the live version is untouched until it is published', async () => {

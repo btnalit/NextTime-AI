@@ -6,6 +6,15 @@ import {
   type ProposeSkillContent,
   type WorkerWorkerDefinitionContent,
 } from '@nexttime/shared';
+import {
+  ANY_CHANGE,
+  type FieldRule,
+  NOT_WIDENING,
+  listRule,
+  rankOf,
+  strictness,
+} from '../../governance/field-rules/index.js';
+import { OPERATION_FIELD_RULES } from '../../governance/gatekeepers/index.js';
 import type {
   ActionTypeDefinition,
   LinkTypeDefinition,
@@ -48,40 +57,6 @@ export function classificationOf(widening: readonly WideningReason[]): ChangeIte
 // -------------------------------------------------------------------------------------------
 // Field rules
 // -------------------------------------------------------------------------------------------
-
-/** One field's rule: the reason a before → after change of it widens authority, or `null` when it
- *  is proven not to. Called only for fields present on at least one side. */
-type FieldRule = (before: unknown, after: unknown) => WideningReasonCode | null;
-
-function sameValue(before: unknown, after: unknown): boolean {
-  return JSON.stringify(before) === JSON.stringify(after);
-}
-
-/** Proven not to widen authority whatever the change (see each use for why). */
-const NOT_WIDENING: FieldRule = () => null;
-
-/** Any change needs confirmation: the field governs review, and no direction of change is proven
- *  harmless. */
-const ANY_CHANGE: FieldRule = (before, after) => (sameValue(before, after) ? null : 'changed');
-
-/** A field with a strictness order: moving to a stricter (or equally strict) value is proven not
- *  to widen; a looser one is `loosened`; a value outside the order is `changed`. */
-function strictness(rank: (value: unknown) => number | undefined): FieldRule {
-  return (before, after) => {
-    if (sameValue(before, after)) return null;
-    const from = rank(before);
-    const to = rank(after);
-    if (from === undefined || to === undefined) return 'changed';
-    return to < from ? 'loosened' : null;
-  };
-}
-
-function rankOf(order: readonly unknown[]): (value: unknown) => number | undefined {
-  return (value) => {
-    const index = order.indexOf(value);
-    return index === -1 ? undefined : index;
-  };
-}
 
 /**
  * ActionType (`packages/shared` ontology-definition.ts): the platform's declaration of how a kind of
@@ -261,35 +236,6 @@ export function classifyOntologyDefinitionChange(
 // Skills and WorkerDefinitions (S11 P1-D)
 // -------------------------------------------------------------------------------------------
 
-/** A list of strings, or `undefined` for anything else; `undefined` itself reads as `absent`. */
-function stringList(
-  value: unknown,
-  absent: readonly string[] | undefined,
-): readonly string[] | undefined {
-  if (value === undefined) return absent;
-  return Array.isArray(value) && value.every((entry) => typeof entry === 'string')
-    ? value
-    : undefined;
-}
-
-/**
- * A list whose entries each reach further (`widensWhen: 'grows'` — an entry added widens) or hold
- * something back (`'shrinks'` — an entry dropped widens). Order does not count. `absentIsEmpty`:
- * the field left out means no entries; otherwise leaving it out means a default defined elsewhere,
- * and a change between that and a list is `changed` (not proven either way).
- */
-function listRule(widensWhen: 'grows' | 'shrinks', absentIsEmpty: boolean): FieldRule {
-  return (before, after) => {
-    if (sameValue(before, after)) return null;
-    if (!absentIsEmpty && (before === undefined) !== (after === undefined)) return 'changed';
-    const b = stringList(before, absentIsEmpty ? [] : undefined);
-    const a = stringList(after, absentIsEmpty ? [] : undefined);
-    if (b === undefined || a === undefined) return 'changed';
-    const [wider, narrower] = widensWhen === 'grows' ? [a, b] : [b, a];
-    return wider.every((entry) => narrower.includes(entry)) ? null : 'loosened';
-  };
-}
-
 /**
  * A Skill version (`application/worker/skills.ts`; `@nexttime/shared` skill.ts). What a Worker
  * that mounts it reads is prompt text — pi lists each mounted Skill's name and description and
@@ -367,52 +313,9 @@ export function classifyWorkerDefinitionChange(
 // Operations (S11 P1-E)
 // -------------------------------------------------------------------------------------------
 
-/**
- * An Operation version (`@nexttime/shared` action-description.ts `OperationSchema`): how a gate's
- * action is called and how a call of it is governed. Every field is compared — the plan's §5.4
- * list names the ones a person must confirm, and none of the three governance fields
- * (`classifyOperationGovernanceChange`'s `mode`, `blast_radius`, `auto_approvable`) being unchanged
- * proves anything about the rest: an `auto_approvable`, low-impact Operation whose command alone
- * changed would run the new command with nobody reviewing it. Typed over the schema's own keys, so
- * a new Operation field does not compile without a rule.
- *
- * A field with an order of strictness passes only when it moves the strict way (or stays):
- * `execute` is reviewed where `observe` is not; a higher blast radius is reviewed more; a call
- * that is not auto-approvable waits for a person; one that awaits the decision blocks its caller
- * until the decision. The MCP hints read as `governance/gatekeepers/trust.ts` reads them — an
- * execute-class MCP call auto-approves only on `destructive_hint: false` and `idempotent_hint:
- * true`, and a hint left out counts as not declared, as strict as the stricter value.
- */
-export const OPERATION_FIELD_RULES: Readonly<Record<keyof Operation, FieldRule>> = {
-  // The approval card names the action by it; another name is another action to the approver.
-  name: ANY_CHANGE,
-  // Injected into every agent's tool list (`list_allowed_operations`, STATUS leftover 123): prompt
-  // text, as a Skill's description is.
-  description: ANY_CHANGE,
-  // Where the call goes and what it sends: no direction of change is proven harmless.
-  binding: ANY_CHANGE,
-  // What the gate validates and where each param is sent (`x-in`) — gate-owned params included.
-  params_schema: ANY_CHANGE,
-  mode: strictness(rankOf(['observe', 'execute'])),
-  blast_radius: strictness(rankOf(['low', 'medium', 'high'])),
-  reversibility: ANY_CHANGE,
-  auto_approvable: strictness(rankOf([true, false])),
-  // Dropped (`true` → `false`), the caller goes on before anyone has decided.
-  await_decision: strictness(rankOf([false, true])),
-  // The object types a call reads and writes: more of either reaches further.
-  reads: listRule('grows', true),
-  writes: listRule('grows', true),
-  // Which observed Facts a call writes into the graph.
-  result_mapping: ANY_CHANGE,
-  // No decision reads it today; not proven harmless either.
-  read_only_hint: ANY_CHANGE,
-  destructive_hint: strictness((value) =>
-    value === false ? 0 : value === true || value === undefined ? 1 : undefined,
-  ),
-  idempotent_hint: strictness((value) =>
-    value === true ? 0 : value === false || value === undefined ? 1 : undefined,
-  ),
-};
+/** The Operation table lives in `governance/gatekeepers/governance-fields.ts` (STATUS leftover
+ *  344): a gate's re-announced governance is judged by the same rules as this kind's items. */
+export { OPERATION_FIELD_RULES };
 
 /** The widening changes from one Operation version to another (`null`: no published version). A
  *  new Operation is `added` as a whole — its classification is an approval boundary in itself

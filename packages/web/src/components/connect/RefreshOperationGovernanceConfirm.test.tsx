@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { HttpError } from '../../lib/http-client.js';
 import { RefreshOperationGovernanceConfirm } from './RefreshOperationGovernanceConfirm.js';
+import { governanceFields } from './governance-fixtures.test-helpers.js';
 
 /**
  * RefreshOperationGovernanceConfirm.test.tsx (closing wave C6, G3, leftover 79's exit): the
@@ -46,8 +47,11 @@ function preview(operationsAlreadyPresent: readonly Record<string, unknown>[] = 
 
 const ALIGNED_ROW = {
   name: 'stock.get',
-  existing: { mode: 'observe', blastRadius: 'low', autoApprovable: true, status: 'published' },
-  announced: { mode: 'observe', blastRadius: 'low', autoApprovable: true },
+  existing: {
+    ...governanceFields({ mode: 'observe', blastRadius: 'low', autoApprovable: true }),
+    status: 'published',
+  },
+  announced: governanceFields({ mode: 'observe', blastRadius: 'low', autoApprovable: true }),
   differs: false,
   definitionDiffers: false,
   direction: 'neutral',
@@ -80,12 +84,14 @@ describe('RefreshOperationGovernanceConfirm', () => {
           {
             name: 'container.list',
             existing: {
+              ...governanceFields({ mode: 'observe', blastRadius: 'low', autoApprovable: true }),
+              status: 'published',
+            },
+            announced: governanceFields({
               mode: 'observe',
               blastRadius: 'low',
               autoApprovable: true,
-              status: 'published',
-            },
-            announced: { mode: 'observe', blastRadius: 'low', autoApprovable: true },
+            }),
             differs: false,
             direction: 'neutral',
           },
@@ -172,12 +178,18 @@ describe('RefreshOperationGovernanceConfirm', () => {
           {
             name: 'orders.cancel',
             existing: {
+              ...governanceFields({
+                mode: 'execute',
+                blastRadius: 'medium',
+                autoApprovable: false,
+              }),
+              status: 'published',
+            },
+            announced: governanceFields({
               mode: 'execute',
               blastRadius: 'medium',
               autoApprovable: false,
-              status: 'published',
-            },
-            announced: { mode: 'execute', blastRadius: 'medium', autoApprovable: false },
+            }),
             differs: false,
             direction: 'neutral',
             definitionDiffers: true,
@@ -240,24 +252,32 @@ describe('RefreshOperationGovernanceConfirm', () => {
           {
             name: 'container.restart',
             existing: {
-              mode: 'observe',
-              blastRadius: 'medium',
-              autoApprovable: false,
+              ...governanceFields({
+                mode: 'observe',
+                blastRadius: 'medium',
+                autoApprovable: false,
+              }),
               status: 'published',
             },
-            announced: { mode: 'execute', blastRadius: 'high', autoApprovable: false },
+            announced: governanceFields({
+              mode: 'execute',
+              blastRadius: 'high',
+              autoApprovable: false,
+            }),
             differs: true,
             direction: 'tightened',
           },
           {
             name: 'container.list',
             existing: {
+              ...governanceFields({ mode: 'observe', blastRadius: 'low', autoApprovable: true }),
+              status: 'published',
+            },
+            announced: governanceFields({
               mode: 'observe',
               blastRadius: 'low',
               autoApprovable: true,
-              status: 'published',
-            },
-            announced: { mode: 'observe', blastRadius: 'low', autoApprovable: true },
+            }),
             differs: false,
             direction: 'neutral',
           },
@@ -273,8 +293,16 @@ describe('RefreshOperationGovernanceConfirm', () => {
           refreshed: [
             {
               name: 'container.restart',
-              before: { mode: 'observe', blastRadius: 'medium', autoApprovable: false },
-              after: { mode: 'execute', blastRadius: 'high', autoApprovable: false },
+              before: governanceFields({
+                mode: 'observe',
+                blastRadius: 'medium',
+                autoApprovable: false,
+              }),
+              after: governanceFields({
+                mode: 'execute',
+                blastRadius: 'high',
+                autoApprovable: false,
+              }),
               direction: 'tightened',
             },
           ],
@@ -326,12 +354,18 @@ describe('RefreshOperationGovernanceConfirm', () => {
           {
             name: 'container.restart',
             existing: {
+              ...governanceFields({
+                mode: 'execute',
+                blastRadius: 'medium',
+                autoApprovable: false,
+              }),
+              status: 'published',
+            },
+            announced: governanceFields({
               mode: 'execute',
               blastRadius: 'medium',
               autoApprovable: false,
-              status: 'published',
-            },
-            announced: { mode: 'execute', blastRadius: 'medium', autoApprovable: false },
+            }),
             differs: false,
             direction: 'neutral',
             definitionDiffers: true,
@@ -339,12 +373,14 @@ describe('RefreshOperationGovernanceConfirm', () => {
           {
             name: 'container.list',
             existing: {
+              ...governanceFields({ mode: 'observe', blastRadius: 'low', autoApprovable: true }),
+              status: 'published',
+            },
+            announced: governanceFields({
               mode: 'observe',
               blastRadius: 'low',
               autoApprovable: true,
-              status: 'published',
-            },
-            announced: { mode: 'observe', blastRadius: 'low', autoApprovable: true },
+            }),
             differs: false,
             direction: 'neutral',
             definitionDiffers: false,
@@ -400,12 +436,18 @@ describe('RefreshOperationGovernanceConfirm', () => {
           {
             name: 'container.restart',
             existing: {
+              ...governanceFields({
+                mode: 'execute',
+                blastRadius: 'medium',
+                autoApprovable: false,
+              }),
+              status: 'published',
+            },
+            announced: governanceFields({
               mode: 'execute',
               blastRadius: 'medium',
               autoApprovable: false,
-              status: 'published',
-            },
-            announced: { mode: 'execute', blastRadius: 'medium', autoApprovable: false },
+            }),
             differs: false,
             direction: 'neutral',
             definitionDiffers: true,
@@ -441,12 +483,18 @@ describe('RefreshOperationGovernanceConfirm', () => {
           {
             name: 'container.restart',
             existing: {
-              mode: 'observe',
-              blastRadius: 'medium',
-              autoApprovable: false,
+              ...governanceFields({
+                mode: 'observe',
+                blastRadius: 'medium',
+                autoApprovable: false,
+              }),
               status: 'published',
             },
-            announced: { mode: 'execute', blastRadius: 'high', autoApprovable: false },
+            announced: governanceFields({
+              mode: 'execute',
+              blastRadius: 'high',
+              autoApprovable: false,
+            }),
             differs: true,
             direction: 'tightened',
             definitionDiffers: true,
@@ -454,12 +502,14 @@ describe('RefreshOperationGovernanceConfirm', () => {
           {
             name: 'container.logs',
             existing: {
+              ...governanceFields({ mode: 'observe', blastRadius: 'low', autoApprovable: true }),
+              status: 'published',
+            },
+            announced: governanceFields({
               mode: 'observe',
               blastRadius: 'low',
               autoApprovable: true,
-              status: 'published',
-            },
-            announced: { mode: 'observe', blastRadius: 'low', autoApprovable: true },
+            }),
             differs: false,
             direction: 'neutral',
             definitionDiffers: true,
@@ -475,8 +525,16 @@ describe('RefreshOperationGovernanceConfirm', () => {
           refreshed: [
             {
               name: 'container.restart',
-              before: { mode: 'observe', blastRadius: 'medium', autoApprovable: false },
-              after: { mode: 'execute', blastRadius: 'high', autoApprovable: false },
+              before: governanceFields({
+                mode: 'observe',
+                blastRadius: 'medium',
+                autoApprovable: false,
+              }),
+              after: governanceFields({
+                mode: 'execute',
+                blastRadius: 'high',
+                autoApprovable: false,
+              }),
               direction: 'tightened',
             },
           ],
@@ -512,12 +570,14 @@ describe('RefreshOperationGovernanceConfirm', () => {
           {
             name: 'container.restart',
             existing: {
-              mode: 'execute',
-              blastRadius: 'high',
-              autoApprovable: false,
+              ...governanceFields({ mode: 'execute', blastRadius: 'high', autoApprovable: false }),
               status: 'published',
             },
-            announced: { mode: 'execute', blastRadius: 'high', autoApprovable: true },
+            announced: governanceFields({
+              mode: 'execute',
+              blastRadius: 'high',
+              autoApprovable: true,
+            }),
             differs: true,
             direction: 'loosened',
           },
@@ -541,12 +601,14 @@ describe('RefreshOperationGovernanceConfirm', () => {
           {
             name: 'db.restart',
             existing: {
-              mode: 'execute',
-              blastRadius: 'high',
-              autoApprovable: true,
+              ...governanceFields({ mode: 'execute', blastRadius: 'high', autoApprovable: true }),
               status: 'published',
             },
-            announced: { mode: 'execute', blastRadius: 'low', autoApprovable: true },
+            announced: governanceFields({
+              mode: 'execute',
+              blastRadius: 'low',
+              autoApprovable: true,
+            }),
             differs: true,
             direction: 'loosened',
           },
@@ -576,12 +638,18 @@ describe('RefreshOperationGovernanceConfirm', () => {
           {
             name: 'container.remove',
             existing: {
-              mode: 'execute',
-              blastRadius: 'medium',
-              autoApprovable: false,
+              ...governanceFields({
+                mode: 'execute',
+                blastRadius: 'medium',
+                autoApprovable: false,
+              }),
               status: 'published',
             },
-            announced: { mode: 'observe', blastRadius: 'medium', autoApprovable: false },
+            announced: governanceFields({
+              mode: 'observe',
+              blastRadius: 'medium',
+              autoApprovable: false,
+            }),
             differs: true,
             direction: 'loosened',
           },
@@ -604,12 +672,14 @@ describe('RefreshOperationGovernanceConfirm', () => {
           {
             name: 'container.exec',
             existing: {
-              mode: 'execute',
-              blastRadius: 'low',
-              autoApprovable: true,
+              ...governanceFields({ mode: 'execute', blastRadius: 'low', autoApprovable: true }),
               status: 'published',
             },
-            announced: { mode: 'observe', blastRadius: 'high', autoApprovable: true },
+            announced: governanceFields({
+              mode: 'observe',
+              blastRadius: 'high',
+              autoApprovable: true,
+            }),
             differs: true,
             direction: 'mixed',
           },
@@ -623,6 +693,53 @@ describe('RefreshOperationGovernanceConfirm', () => {
     expect(within(confirm).getByTestId('align-gk-1-loosens')).toBeTruthy();
   });
 
+  it('leftover 344: a change to await-decision, reads / writes or an MCP hint is shown field by field, with what it lets through', async () => {
+    const before = governanceFields({
+      mode: 'execute',
+      blastRadius: 'medium',
+      autoApprovable: true,
+      awaitDecision: true,
+      reads: ['Container'],
+      writes: ['Container'],
+    });
+    const http = scriptedHttp({
+      preview_gate_instance_enable: () =>
+        preview([
+          {
+            name: 'container.restart',
+            existing: { ...before, status: 'published' },
+            announced: {
+              ...before,
+              awaitDecision: false,
+              reads: ['Container', 'Host'],
+              readOnlyHint: true,
+              destructiveHint: false,
+              idempotentHint: true,
+            },
+            differs: true,
+            direction: 'loosened',
+          },
+        ]),
+    });
+    renderConfirm(http);
+
+    fireEvent.click(screen.getByTestId('align-gk-1'));
+    const confirm = await screen.findByTestId('align-gk-1-confirm');
+    expect(confirmButtonIsDanger(confirm)).toBe(true);
+    // Only the fields that changed get a row; writes did not.
+    const rows = within(confirm)
+      .getAllByTestId('governance-diff-list-field')
+      .map((row) => row.textContent ?? '');
+    expect(rows).toHaveLength(5);
+    expect(rows.some((row) => /Container → Container、Host$/.test(row))).toBe(true);
+    expect(rows.some((row) => /未声明 → 否$/.test(row))).toBe(true);
+    const warning = within(confirm).getByTestId('align-gk-1-loosens');
+    expect(warning.textContent).toContain('不再等审批结果');
+    expect(warning.textContent).toMatch(/还会读取 Host/);
+    expect(warning.textContent).toContain('不具破坏性且幂等');
+    expect(warning.textContent).toContain('只读提示变了');
+  });
+
   it('R-18: a manifest that changed after the preview is refused with its own copy', async () => {
     const http = scriptedHttp({
       preview_gate_instance_enable: () =>
@@ -630,12 +747,14 @@ describe('RefreshOperationGovernanceConfirm', () => {
           {
             name: 'container.restart',
             existing: {
-              mode: 'execute',
-              blastRadius: 'high',
-              autoApprovable: false,
+              ...governanceFields({ mode: 'execute', blastRadius: 'high', autoApprovable: false }),
               status: 'published',
             },
-            announced: { mode: 'execute', blastRadius: 'medium', autoApprovable: false },
+            announced: governanceFields({
+              mode: 'execute',
+              blastRadius: 'medium',
+              autoApprovable: false,
+            }),
             differs: true,
             direction: 'loosened',
           },
@@ -728,12 +847,14 @@ describe('RefreshOperationGovernanceConfirm', () => {
           {
             name: 'container.restart',
             existing: {
-              mode: 'observe',
-              blastRadius: 'low',
-              autoApprovable: true,
+              ...governanceFields({ mode: 'observe', blastRadius: 'low', autoApprovable: true }),
               status: 'published',
             },
-            announced: { mode: 'execute', blastRadius: 'high', autoApprovable: false },
+            announced: governanceFields({
+              mode: 'execute',
+              blastRadius: 'high',
+              autoApprovable: false,
+            }),
             differs: true,
             direction: 'tightened',
           },
@@ -1184,12 +1305,14 @@ describe('RefreshOperationGovernanceConfirm', () => {
       const tightened = {
         name: 'stock.adjust',
         existing: {
-          mode: 'execute',
-          blastRadius: 'low',
-          autoApprovable: true,
+          ...governanceFields({ mode: 'execute', blastRadius: 'low', autoApprovable: true }),
           status: 'published',
         },
-        announced: { mode: 'execute', blastRadius: 'high', autoApprovable: false },
+        announced: governanceFields({
+          mode: 'execute',
+          blastRadius: 'high',
+          autoApprovable: false,
+        }),
         differs: true,
         definitionDiffers: false,
         direction: 'tightened',
@@ -1197,12 +1320,10 @@ describe('RefreshOperationGovernanceConfirm', () => {
       const loosened = {
         name: 'stock.reserve',
         existing: {
-          mode: 'execute',
-          blastRadius: 'high',
-          autoApprovable: false,
+          ...governanceFields({ mode: 'execute', blastRadius: 'high', autoApprovable: false }),
           status: 'published',
         },
-        announced: { mode: 'execute', blastRadius: 'low', autoApprovable: false },
+        announced: governanceFields({ mode: 'execute', blastRadius: 'low', autoApprovable: false }),
         differs: true,
         definitionDiffers: false,
         direction: 'loosened',
@@ -1232,12 +1353,18 @@ describe('RefreshOperationGovernanceConfirm', () => {
               {
                 name: 'stock.adjust',
                 existing: {
-                  mode: 'execute',
-                  blastRadius: 'medium',
-                  autoApprovable: false,
+                  ...governanceFields({
+                    mode: 'execute',
+                    blastRadius: 'medium',
+                    autoApprovable: false,
+                  }),
                   status: 'published',
                 },
-                announced: { mode: 'execute', blastRadius: 'high', autoApprovable: false },
+                announced: governanceFields({
+                  mode: 'execute',
+                  blastRadius: 'high',
+                  autoApprovable: false,
+                }),
                 differs: true,
                 definitionDiffers: false,
                 direction: 'tightened',
@@ -1254,10 +1381,17 @@ describe('RefreshOperationGovernanceConfirm', () => {
     });
 
     it('legacy 345: on a deprecated Operation the sync opens no revision — a loosening or a changed definition there is never listed as one; a tightening still applies in place', async () => {
-      const deprecated = (name: string, blastRadius: string) => ({
+      const deprecated = (name: string, blastRadius: 'low' | 'medium' | 'high') => ({
         name,
-        existing: { mode: 'execute', blastRadius, autoApprovable: false, status: 'deprecated' },
-        announced: { mode: 'execute', blastRadius: 'medium', autoApprovable: false },
+        existing: {
+          ...governanceFields({ mode: 'execute', blastRadius, autoApprovable: false }),
+          status: 'deprecated',
+        },
+        announced: governanceFields({
+          mode: 'execute',
+          blastRadius: 'medium',
+          autoApprovable: false,
+        }),
         differs: true,
         definitionDiffers: false,
       });
@@ -1316,12 +1450,18 @@ describe('RefreshOperationGovernanceConfirm', () => {
               {
                 name: 'stock.reserve',
                 existing: {
-                  mode: 'execute',
-                  blastRadius: 'high',
-                  autoApprovable: false,
+                  ...governanceFields({
+                    mode: 'execute',
+                    blastRadius: 'high',
+                    autoApprovable: false,
+                  }),
                   status: 'deprecated',
                 },
-                announced: { mode: 'execute', blastRadius: 'low', autoApprovable: false },
+                announced: governanceFields({
+                  mode: 'execute',
+                  blastRadius: 'low',
+                  autoApprovable: false,
+                }),
                 differs: true,
                 definitionDiffers: false,
                 direction: 'loosened',
@@ -1350,12 +1490,10 @@ describe('RefreshOperationGovernanceConfirm', () => {
       const loosened = {
         name: 'stock.reserve',
         existing: {
-          mode: 'execute',
-          blastRadius: 'high',
-          autoApprovable: false,
+          ...governanceFields({ mode: 'execute', blastRadius: 'high', autoApprovable: false }),
           status: 'published',
         },
-        announced: { mode: 'execute', blastRadius: 'low', autoApprovable: false },
+        announced: governanceFields({ mode: 'execute', blastRadius: 'low', autoApprovable: false }),
         differs: true,
         definitionDiffers: false,
         direction: 'loosened',

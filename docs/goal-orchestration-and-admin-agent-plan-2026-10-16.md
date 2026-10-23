@@ -168,7 +168,7 @@ Task / WorkerRun 与转移日志（每次转移发 `TaskUpdated`，`task/transit
 | I-A1 | 管理员 Agent 永远是提议者，不是授权者：它的 Handle 不含 human 通道能力，不能调 `scope:'platform'` 写能力；它不是 service API key | 现有 `assertValidScope` 与 `authorizeCapabilityCall`；新增守卫测试；身份用 Handle（来源绑定），不签 API key |
 | I-A2 | 管理员 Agent 的能力上限只在代码里，且它没有任何写平台代码的能力；改上限只能经人合入代码、由维护者部署 | `ADMIN_AGENT_CEILING` 常量 + CI 守卫断言上限不含 human 通道 / 审批 / 授权 / 策略类能力与代码托管类能力。今天唯一只能由人做的关口是部署；W5 若开工，前提是有 agent 拿不到的审批身份（§5.5） |
 | I-A3 | 管理员 Agent 的权力随人：每次调用检查其 `on_behalf_of` 的用户当前仍是平台管理员 | 调用时检查（不是签发时）；降级或停用立即失效 |
-| I-A4 | 凡是无法确定性证明"不扩大授权"的 ChangeItem，一律标 `authority_widening`，逐项人工确认，不能随其他项一键应用 | **白名单**分类器（§5.4）：对 ChangeItem 的全部字段逐字段比较，只有落在"已证明不扩大"集合里的变化才放行，不信 agent 自己的标注。`operationGovernanceChangeDirection` 只是其中一部分，只判 `mode` / `blast_radius` / `auto_approvable` 三个字段的方向；它返回 `neutral` 不证明任何事。应用接口要求逐项确认，审计记录 |
+| I-A4 | 凡是无法确定性证明"不扩大授权"的 ChangeItem，一律标 `authority_widening`，逐项人工确认，不能随其他项一键应用 | **白名单**分类器（§5.4）：对 ChangeItem 的全部字段逐字段比较，只有落在"已证明不扩大"集合里的变化才放行，不信 agent 自己的标注。`operationGovernanceChangeDirection` 只是其中一部分，只判 Operation 的九个治理字段（`mode`、`blast_radius`、`auto_approvable`、`await_decision`、`reads` / `writes`、三个 MCP 提示）的方向，用的是本分类器同一张规则表（遗留 344，E2b）；它返回 `neutral` 不证明任何事（`binding`、`params_schema`、`description` 等不在其中）。应用接口要求逐项确认，审计记录 |
 | I-A5 | ChangePlan 不含凭证值；凭证只由人直接录入门宿主或 llm-proxy | ChangePlan schema 无凭证字段 + #526 的疑似凭据计数 |
 | I-A6 | 管理员 Agent 的探索只发生在试验工作区；生产工作区只经已应用的 ChangePlan 改变 | 它在生产工作区没有 Principal |
 | I-A7 | agent 起草的东西在溯源上可区分：起草者种类与批准人分开记录 | 扩展现有 `origin` / `proposer_kind` 到 Skill / Procedure / WorkerDefinition 草稿与 ChangePlan（遗留 293），不新增平行字段；审计记录两者 |

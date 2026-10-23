@@ -49,6 +49,16 @@ import {
   assertNoGateOwnedParams,
   gateOwnedParamsOfDefinition,
 } from './gate-owned-params.js';
+import {
+  type OperationGovernanceChangeDirection,
+  type OperationGovernanceDirection,
+  type OperationGovernanceFields,
+  classifyOperationGovernanceChange,
+  diffOperationGovernanceFields,
+  operationGovernanceFieldsOf,
+  operationGovernanceProperties,
+  withOperationGovernance,
+} from './governance-fields.js';
 
 /**
  * governance/gatekeepers/manifest: Operation manifest import (draft) + publish/deprecate (design
@@ -287,23 +297,6 @@ export interface ImportManifestInput {
   readonly operations: readonly Operation[];
   readonly proposedBy: { readonly id: string; readonly kind: PrincipalKind };
   readonly activityId: string;
-  /**
-   * S8 W2-K1 (leftover 71/72, audit CO1: "12 个 Operation 描述全空 ... find_operations 自然语言检索
-   * 落空的原因之一"). When `true`, every entry in `input.operations` must carry a non-blank
-   * `description` or the whole call throws {@link OperationDescriptionRequiredError} *before*
-   * writing anything (atomic — no partial import).
-   *
-   * Deliberately **opt-in, not the default**, even though the audit's own wording reads as an
-   * unconditional rule: a dynamically-imported OpenAPI/MCP/announced manifest is not always under
-   * this platform's control, and rejecting a real user's legitimate system over a missing
-   * description string would turn a P2 documentation debt into a P0 "cannot connect anything"
-   * regression. The one caller that set it — the operator CLI `register-gatekeeper`, for this
-   * repo's hand-curated `gatekeepers/<system>/manifest.json` packages — was removed by P0b (S10 W2):
-   * every manifest now comes in through the landing (`application/gates/landing.ts`), from a gate's
-   * announcement or a live connection, and none sets it. Kept as the check a catalog-side
-   * requirement would reuse (P1's change plan), not as a live rule.
-   */
-  readonly requireDescription?: boolean;
 }
 
 /** Legacy 232 (review #493): a *new* Operation name that breaks `operationNameProblem`'s rule
@@ -334,20 +327,6 @@ function assertNewOperationNameAllowed(name: string, existing: OperationRecord |
   if (existing !== null) return;
   const problem = operationNameProblem(name);
   if (problem !== undefined) throw new OperationNameInvalidError(name, problem);
-}
-
-/** Thrown by `importManifest` when `input.requireDescription` is set and `operationName` has no
- *  (or a blank/whitespace-only) `description` — CO1's "manifest 导入时要求描述" reject, naming the
- *  offending Operation so the caller can fix its manifest entry directly. */
-export class OperationDescriptionRequiredError extends Error {
-  readonly operationName: string;
-  constructor(operationName: string) {
-    super(
-      `import_manifest: Operation ${quotedName(operationName)} has no description — every imported Operation must declare a non-blank description (CO1)`,
-    );
-    this.name = 'OperationDescriptionRequiredError';
-    this.operationName = operationName;
-  }
 }
 
 export interface SkippedOperation {
@@ -416,18 +395,8 @@ export async function importManifest(
   input: ImportManifestInput,
 ): Promise<ImportManifestResult> {
   const operations = input.operations.map(storableManifestOperation);
-  if (input.requireDescription) {
-    // Validated up front, before any write — a manifest with one bad entry imports nothing
-    // rather than a confusing partial import (same "reject atomically" shape `manifest.ts`'s own
-    // draft-isolation conditional writes already use elsewhere in this file).
-    for (const operation of operations) {
-      if (!operation.description || operation.description.trim().length === 0) {
-        throw new OperationDescriptionRequiredError(operation.name);
-      }
-    }
-  }
-
-  // Legacy 232: a new name breaking the name rule imports nothing (same atomic shape as above).
+  // Legacy 232: a new name breaking the name rule imports nothing — validated before any write,
+  // so a manifest with one bad entry imports nothing rather than a confusing partial import.
   for (const operation of operations) {
     if (operationNameProblem(operation.name) === undefined) continue;
     assertNewOperationNameAllowed(
@@ -1558,10 +1527,10 @@ export async function discardOperationDraft(
  *  bound for a documentation string. */
 export const OPERATION_DESCRIPTION_MAX_LENGTH = 2000;
 
-/** Thrown by `updateOperationDescription` for a blank (after trim) or over-length description —
- *  named distinctly from `OperationDescriptionRequiredError` above (that one is `importManifest`'s
- *  own "the gate's manifest must declare one" rule; this is a human directly editing one Operation's
- *  documentation and gets its own message rather than borrowing `import_manifest`'s wording). */
+/** Thrown by `updateOperationDescription` for a blank (after trim) or over-length description — a
+ *  human directly editing one Operation's documentation. An import never requires one (STATUS
+ *  leftover 372 removed the unused opt-in): a gate's manifest is not always under this platform's
+ *  control, and refusing a real system over a missing description would block connecting it. */
 export class OperationDescriptionInvalidError extends Error {
   readonly operationName: string;
   readonly reason: 'empty' | 'too_long';
@@ -1655,143 +1624,11 @@ export async function updateOperationDescription(
 }
 
 // -------------------------------------------------------------------------------------------
-// S8 W3-K1 (leftover 79): refresh_operation_governance — human channel, owner only. The shared
-// "does this Operation's governance disagree with the gate's announced manifest" judgment
-// `preview_gate_instance_enable` (application/gateway/gate-instance-handlers.ts) already computes
-// inline for its own `differs` flag now lives here, as `diffOperationGovernanceFields` — both that
-// preview and `refreshOperationGovernance` below call it, so "which fields count as governance"
-// and "when do they differ" can never drift between the read and the write.
+// S8 W3-K1 (leftover 79): refresh_operation_governance — human channel, owner only. Which fields
+// count as an Operation's governance, when they differ and which way a change moves are
+// `./governance-fields.ts` — the very judgment `preview_gate_instance_enable`'s own `differs` flag
+// and every console confirm use, so the read and the write can never drift (STATUS leftover 344).
 // -------------------------------------------------------------------------------------------
-
-/** The three fields `preview_gate_instance_enable`'s own `differs` flag already compared before
- *  this task (module doc comment) — deliberately not `await_decision`/`reversibility`/the MCP
- *  trust hints, which that preview never compared either; "governance fields" for this capability
- *  means exactly these three, not the full `Operation` shape. */
-export interface OperationGovernanceFields {
-  readonly mode: Operation['mode'];
-  readonly blastRadius: Operation['blast_radius'];
-  readonly autoApprovable: boolean;
-}
-
-export function operationGovernanceFieldsOf(operation: Operation): OperationGovernanceFields {
-  return {
-    mode: operation.mode,
-    blastRadius: operation.blast_radius,
-    autoApprovable: operation.auto_approvable,
-  };
-}
-
-export type OperationGovernanceFieldName = 'mode' | 'blastRadius' | 'autoApprovable';
-
-export interface OperationGovernanceDiff {
-  readonly differs: boolean;
-  readonly changedFields: readonly OperationGovernanceFieldName[];
-}
-
-/** The exact comparison `preview_gate_instance_enable` used inline for its own `differs` flag
- *  before this task — extracted here so `refreshOperationGovernance` reuses it verbatim rather
- *  than a second, potentially-drifting comparison (dispatch contract). */
-export function diffOperationGovernanceFields(
-  existing: OperationGovernanceFields,
-  announced: OperationGovernanceFields,
-): OperationGovernanceDiff {
-  const changedFields: OperationGovernanceFieldName[] = [];
-  if (existing.mode !== announced.mode) changedFields.push('mode');
-  if (existing.blastRadius !== announced.blastRadius) changedFields.push('blastRadius');
-  if (existing.autoApprovable !== announced.autoApprovable) changedFields.push('autoApprovable');
-  return { differs: changedFields.length > 0, changedFields };
-}
-
-export type OperationGovernanceDirection = 'loosened' | 'tightened' | 'mixed';
-
-/** Strictness rank per field value — lower means *less* governance friction (loosened when the
- *  announced value ranks lower than the existing one). `observe` needs no approval at all
- *  (`request_action`'s handler routes it straight through), `execute` always creates an
- *  ActionRequest — so `execute → observe` is a loosening exactly like the task brief's own
- *  example, and blast radius / auto-approvable follow their natural order. */
-const MODE_STRICTNESS: Readonly<Record<Operation['mode'], number>> = { observe: 0, execute: 1 };
-const BLAST_RADIUS_STRICTNESS: Readonly<Record<Operation['blast_radius'], number>> = {
-  low: 0,
-  medium: 1,
-  high: 2,
-};
-
-function fieldDirection(
-  field: OperationGovernanceFieldName,
-  existing: OperationGovernanceFields,
-  announced: OperationGovernanceFields,
-): 'loosened' | 'tightened' {
-  if (field === 'mode') {
-    return MODE_STRICTNESS[announced.mode] < MODE_STRICTNESS[existing.mode]
-      ? 'loosened'
-      : 'tightened';
-  }
-  if (field === 'blastRadius') {
-    return BLAST_RADIUS_STRICTNESS[announced.blastRadius] <
-      BLAST_RADIUS_STRICTNESS[existing.blastRadius]
-      ? 'loosened'
-      : 'tightened';
-  }
-  // autoApprovable
-  return announced.autoApprovable && !existing.autoApprovable ? 'loosened' : 'tightened';
-}
-
-/** Classifies a non-empty set of changed governance fields (`diffOperationGovernanceFields`'s own
- *  `changedFields`) as `loosened` (every changed field reduces governance friction — lower blast
- *  radius, `autoApprovable` false→true, `execute→observe`), `tightened` (every changed field
- *  increases it), or `mixed` (some of each). Throws on an empty `changedFields` — callers only
- *  classify a diff that actually differs. */
-export function classifyOperationGovernanceChange(
-  existing: OperationGovernanceFields,
-  announced: OperationGovernanceFields,
-  changedFields: readonly OperationGovernanceFieldName[],
-): OperationGovernanceDirection {
-  if (changedFields.length === 0) {
-    throw new Error(
-      'classifyOperationGovernanceChange: changedFields is empty — nothing to classify',
-    );
-  }
-  const directions = new Set(
-    changedFields.map((field) => fieldDirection(field, existing, announced)),
-  );
-  return directions.size > 1 ? 'mixed' : ([...directions][0] as OperationGovernanceDirection);
-}
-
-/** R-19 (decision D-17): the one direction every console confirm shows for a governance change —
- *  the refresh preview, a catalog publish, the wizard's reclassification and a gate's pending
- *  manifest — so no client keeps a ranking of its own. `classifyOperationGovernanceChange` for a
- *  real change, `neutral` when none of the three fields differs. */
-export type OperationGovernanceChangeDirection = OperationGovernanceDirection | 'neutral';
-
-export function operationGovernanceChangeDirection(
-  before: OperationGovernanceFields,
-  after: OperationGovernanceFields,
-): OperationGovernanceChangeDirection {
-  const diff = diffOperationGovernanceFields(before, after);
-  return diff.differs
-    ? classifyOperationGovernanceChange(before, after, diff.changedFields)
-    : 'neutral';
-}
-
-export interface OperationGovernanceChange {
-  readonly before: OperationGovernanceFields;
-  readonly after: OperationGovernanceFields;
-  readonly direction: OperationGovernanceChangeDirection;
-}
-
-/** `before` → `after` as the wire's `OperationGovernanceChangeWire`. */
-export function operationGovernanceChange(
-  before: Operation,
-  after: Operation,
-): OperationGovernanceChange {
-  const beforeFields = operationGovernanceFieldsOf(before);
-  const afterFields = operationGovernanceFieldsOf(after);
-  return {
-    before: beforeFields,
-    after: afterFields,
-    direction: operationGovernanceChangeDirection(beforeFields, afterFields),
-  };
-}
 
 export interface RefreshOperationGovernanceInput {
   readonly gatekeeperId: string;
@@ -2080,7 +1917,7 @@ export async function refreshOperationGovernance(
         client,
         workspaceId,
         { gatekeeperId: input.gatekeeperId, name: operation.name, version: existingRecord.version },
-        after,
+        operationGovernanceProperties(after),
       );
       refreshed.push({
         id: existingRecord.id,
@@ -2094,15 +1931,7 @@ export async function refreshOperationGovernance(
     // Compared as it stands after the in-place write: a `mode` (or an ssh `blast_radius`) the
     // governance refresh just aligned is no longer a difference in definition.
     const deployed: OperationRecord = inPlace
-      ? {
-          ...existingRecord,
-          operation: {
-            ...existingRecord.operation,
-            mode: after.mode,
-            blast_radius: after.blastRadius,
-            auto_approvable: after.autoApprovable,
-          },
-        }
+      ? { ...existingRecord, operation: withOperationGovernance(existingRecord.operation, after) }
       : existingRecord;
     // Legacy 278: above a discarded revision too, never on top of it.
     const definitionChanged = operationDefinitionDiffers(deployed, operation);
