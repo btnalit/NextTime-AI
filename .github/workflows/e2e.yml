@@ -112,7 +112,11 @@ jobs:
       - name: Playwright cache keys
         id: playwright
         run: |
-          echo "version=$(pnpm --filter @nexttime/web exec playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+          version=$(pnpm --filter @nexttime/web exec playwright --version | awk '{print $2}')
+          # An empty version would collapse every cache key onto one entry.
+          if [ -z "$version" ]; then echo "::error::could not read the Playwright version"; exit 1; fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "os=${ImageOS:-unknown}" >> "$GITHUB_OUTPUT"
           echo "image=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
 
       # restore + save rather than actions/cache: its post step saves only when the whole job
@@ -131,7 +135,9 @@ jobs:
           path: ~/.cache/playwright-apt
           key: playwright-apt-${{ steps.playwright.outputs.image }}-${{ steps.playwright.outputs.version }}
           # A new runner image still has most of the same packages; apt fetches only the rest.
-          restore-keys: playwright-apt-${{ steps.playwright.outputs.image }}-
+          restore-keys: |
+            playwright-apt-${{ steps.playwright.outputs.image }}-
+            playwright-apt-${{ steps.playwright.outputs.os }}-
 
       - name: Install Playwright Chromium
         run: |
