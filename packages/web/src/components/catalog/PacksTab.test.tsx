@@ -445,8 +445,15 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
           state: 'can_enable',
           gatekeepers: [],
           offered: [{ gateId: 'docker-a', displayName: '容器主机甲' }],
+          platformPreset: false,
         },
-        { connector: 'ragflow', state: 'needs_platform', gatekeepers: [], offered: [] },
+        {
+          connector: 'ragflow',
+          state: 'needs_platform',
+          gatekeepers: [],
+          offered: [],
+          platformPreset: false,
+        },
       ],
       versions: VERSIONS.map((version) =>
         version.version === 2 ? { ...version, requiredConnectors: ['docker', 'ragflow'] } : version,
@@ -702,6 +709,7 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
           { id: 'gk-south', name: 'south' },
         ],
         offered: [],
+        platformPreset: false,
       },
     ];
     const CANDIDATES = [
@@ -1008,6 +1016,7 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
             state: 'can_enable',
             gatekeepers: [],
             offered: [{ gateId: 'docker-a', displayName: '容器主机甲' }],
+            platformPreset: false,
           },
         ],
       });
@@ -1038,8 +1047,15 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
             state: 'can_enable',
             gatekeepers: [],
             offered: [{ gateId: 'docker-a', displayName: '容器主机甲' }],
+            platformPreset: false,
           },
-          { connector: 'ragflow', state: 'needs_platform', gatekeepers: [], offered: [] },
+          {
+            connector: 'ragflow',
+            state: 'needs_platform',
+            gatekeepers: [],
+            offered: [],
+            platformPreset: false,
+          },
         ],
       });
       const connected = crew({
@@ -1049,8 +1065,15 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
             state: 'connected',
             gatekeepers: [{ id: 'gk-new', name: '容器主机甲' }],
             offered: [],
+            platformPreset: false,
           },
-          { connector: 'ragflow', state: 'needs_platform', gatekeepers: [], offered: [] },
+          {
+            connector: 'ragflow',
+            state: 'needs_platform',
+            gatekeepers: [],
+            offered: [],
+            platformPreset: false,
+          },
         ],
       });
       let enabled = false;
@@ -1096,6 +1119,44 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
           .getByTestId('catalog-pack-requirements-ragflow-platform')
           .getAttribute('href'),
       ).toBe('#/platform/integrations?tab=instances');
+    });
+
+    it('a system the platform ships a connector preset for sends a platform administrator to that preset, and tells anyone else (S11 P1-F)', async () => {
+      const needsPreset = crew({
+        requirements: [
+          {
+            connector: 'ragflow',
+            state: 'needs_platform',
+            gatekeepers: [],
+            offered: [],
+            platformPreset: true,
+          },
+        ],
+      });
+      const http = scriptedHttp({
+        get_workspace: () => OWNER_WORKSPACE,
+        list_packs: () => ({ items: [needsPreset] }),
+      });
+      renderTab(http, 'ops-base', { platformAdmin: true });
+      const ragflow = await screen.findByTestId('catalog-pack-requirements-ragflow');
+      const link = within(ragflow).getByTestId('catalog-pack-requirements-ragflow-preset');
+      expect(link.getAttribute('href')).toBe(
+        '#/platform/integrations?tab=instances&preset=ragflow',
+      );
+      expect(link.textContent).toMatch(/按它的接入预设接入（只填地址）/);
+      expect(
+        within(ragflow).queryByTestId('catalog-pack-requirements-ragflow-platform'),
+      ).toBeNull();
+      cleanup();
+
+      renderTab(http, 'ops-base');
+      const asked = await screen.findByTestId('catalog-pack-requirements-ragflow-ask-platform');
+      expect(asked.textContent).toMatch(
+        /平台自带它的接入预设：请平台管理员在「平台 · 集成」按预设接入/,
+      );
+      expect(
+        within(screen.getByTestId('catalog-pack-requirements-ragflow')).queryByRole('link'),
+      ).toBeNull();
     });
   });
 

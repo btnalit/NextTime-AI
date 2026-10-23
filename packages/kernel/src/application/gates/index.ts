@@ -34,6 +34,7 @@ export {
   insertGateLink,
   listAvailableGateInstances,
   listConnectors,
+  readConnectorOccupancy,
   listExternalRuntimes,
   listGateInstances,
   listHostedGateDefinitions,
@@ -79,6 +80,7 @@ export {
   diffAnnouncedManifest,
   isReviewedManifestChange,
   manifestDigest,
+  toWireGateOperation,
 } from './manifest-review.js';
 export type { ExecuteAccess } from './execute-access.js';
 export {
@@ -110,3 +112,11 @@ export {
   readGateDefinitions,
   readGateDefinitionsForWorkspace,
 } from './definition-drift.js';
+export type { ConnectorPreset, ConnectorPresetOptions } from './presets.js';
+export {
+  CONNECTOR_PRESET_SCHEMA,
+  ConnectorPresetError,
+  loadConnectorPresets,
+  resolveConnectorPresetsDir,
+  withPresetOperations,
+} from './presets.js';

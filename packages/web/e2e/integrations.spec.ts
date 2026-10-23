@@ -334,6 +334,9 @@ test.describe('P-B1 acceptance: the platform gate-instance catalog', () => {
       timeout: 15_000,
     });
     await platformLauncher.getByRole('button', { name: /新建实例/ }).click();
+    // S11 P1-F: the kernel image ships an http connector preset (RAGFlow), so 接入什么 comes first,
+    // with nothing picked.
+    await platformLauncher.getByTestId('cgi-source-custom').check({ timeout: 15_000 });
     await expect(platformLauncher.getByTestId('create-gate-instance-form')).toBeVisible({
       timeout: 15_000,
     });

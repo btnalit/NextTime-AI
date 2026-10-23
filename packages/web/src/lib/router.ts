@@ -253,6 +253,10 @@ export const hrefs = {
   platformIntegrationsTab: (tab: IntegrationsTab) =>
     tab === 'connectors' ? '#/platform/integrations' : `#/platform/integrations?tab=${tab}`,
   platformGateInstance: (gateId: string) => `#/platform/integrations/${encodeURIComponent(gateId)}`,
+  /** 门实例 with 新建门宿主实例 already open on that connector preset (S11 P1-F): a pack's 需要平台接入
+   *  system that a preset of the same name covers sends a platform administrator here. */
+  platformConnectorPreset: (preset: string) =>
+    `#/platform/integrations?tab=instances&preset=${encodeURIComponent(preset)}`,
   platformModules: () => '#/platform/modules',
   platformModels: () => '#/platform/models',
   /** 模型与供应商 with the 新增供应商 drawer already open (the overview's first-run step). */
@@ -286,6 +290,15 @@ export function readIntegrationsTab(hash: string): IntegrationsTab | null {
   return (INTEGRATIONS_TAB_VALUES as readonly string[]).includes(tab ?? '')
     ? (tab as IntegrationsTab)
     : null;
+}
+
+/** The connector preset `hrefs.platformConnectorPreset` asks 门实例 to create an instance from,
+ *  else `null`. */
+export function readConnectorPresetLink(hash: string): string | null {
+  const query = hash.indexOf('?');
+  if (query === -1) return null;
+  const preset = new URLSearchParams(hash.slice(query + 1)).get('preset');
+  return preset ? preset : null;
 }
 
 /** The provider id `hrefs.platformModelsProvider` asks 模型与供应商 to open, else `null`. */

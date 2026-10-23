@@ -688,6 +688,7 @@ function ConnectionStep({
             </span>
             <CreateGateInstanceForm
               http={http}
+              transportKind={kind === 'mcp' ? 'mcp' : 'http'}
               onCreated={(instance) => {
                 setCreating(false);
                 onCreated(instance);

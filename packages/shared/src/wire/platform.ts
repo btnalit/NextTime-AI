@@ -545,11 +545,45 @@ export const GateHostedDefinitionWireSchema = z
      *  administrator; `connected_account`: one per Principal, entered by each member. Either way the
      *  credential goes browser → gate host directly (决定 ⑩). */
     credentialMode: z.enum(['shared', 'connected_account']),
-    /** http: the OpenAPI document URL the host imports Operations from; mcp: `null` (tools/list on the target). */
+    /** http: the OpenAPI document URL the host imports Operations from; mcp: `null` (tools/list on
+     *  the target). `null` too for an instance made from a preset (`preset`). */
     manifestSource: z.string().url().nullable(),
+    /** S11 P1-F: the connector preset (`ConnectorPresetWire`) the instance was created from — its
+     *  Operations are the preset's, handed to the gate host with the definition (never imported
+     *  from the target), and its connector is the preset's name. Absent for every other instance. */
+    preset: z.string().regex(CONNECTOR_NAME_PATTERN).optional(),
   })
   .strict();
 export type GateHostedDefinitionWire = z.infer<typeof GateHostedDefinitionWireSchema>;
+
+/** S11 P1-F: a connector preset — a template this deployment ships (`connectors/<name>/` in the
+ *  kernel image) for a gate-host instance of one system: its transport, credential mode and
+ *  Operations, never an address or a credential. A platform administrator creates an instance from
+ *  it with `create_gate_instance`'s `preset`, typing the address only; the credential is entered on
+ *  the gate host afterwards, like any instance's. */
+export const ConnectorPresetWireSchema = z
+  .object({
+    /** The preset's name, which is also the connector its instances join (`ragflow`). */
+    name: z.string(),
+    displayName: z.string(),
+    /** What the system does for the platform, in a sentence an administrator reads. */
+    summary: z.string(),
+    transportKind: z.enum(['http', 'mcp']),
+    credentialMode: z.enum(['shared', 'connected_account']),
+    /** What the address field takes, and which credential to enter after creating, in plain words. */
+    targetHint: z.string(),
+    credentialHint: z.string(),
+    /** The Operations an instance made from it announces, as the gate will describe them. */
+    operations: z.array(GateOperationSummaryWireSchema),
+    /** The connector of this name belongs to a packaged gate this deployment runs: the system is
+     *  already connected that way, and `create_gate_instance` refuses a preset instance beside it
+     *  (409 `connector_packaged`). */
+    packagedConnector: z.boolean(),
+    /** Gate instances already in its connector (any status). */
+    instanceCount: z.number().int().nonnegative(),
+  })
+  .strict();
+export type ConnectorPresetWire = z.infer<typeof ConnectorPresetWireSchema>;
 
 /** S8 W3-K1 (leftover 79; every field since STATUS leftover 344): an Operation's governance —
  *  everything about how a call of it is reviewed that the workspace or the gate may change without
