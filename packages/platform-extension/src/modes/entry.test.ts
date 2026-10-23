@@ -156,7 +156,7 @@ describe('registerEntryMode', () => {
   it('S11 GO5e: propose_goal takes an object schema and sends the plan to the kernel as the model wrote it', async () => {
     const tool = fake.tools.get('propose_goal');
     expect(tool?.parameters).toMatchObject({ type: 'object' });
-    expect(tool?.description).toContain('instead of invoke_worker');
+    expect(tool?.description).toContain('One delegated task stays invoke_worker');
     kernel.setHandler('propose_goal', () => ({
       ok: true,
       result: { goalRunId: 'g-1', status: 'proposed', revision: 1, changed: true, hints: [] },

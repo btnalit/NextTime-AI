@@ -409,12 +409,15 @@ export function checkGraphQuestionGuidance(relativePath, systemPrompt) {
   );
 }
 
-/** Rule 5 (S11 GO5e, plan §7.2 item 6) — work that must keep going without the conversation is a
- *  goal; it is achieved on checks, not a Worker's word; the person confirms it in the console (the
- *  agent cannot); a retry carries the same key. */
+/** Rule 5 (S11 GO5e, plan §7.2 item 6) — a chain of dependent delegated steps is a goal, one
+ *  delegated task is not (#728 review: a write that needs an approval, several gates or a long run
+ *  is still one `invoke_worker`); it is achieved on checks, not a Worker's word; the person
+ *  confirms it in the console (the agent cannot); a retry carries the same key. */
 const GOAL_GUIDANCE_REQUIRED_PHRASES = [
   'propose_goal',
-  'confirms it in the console',
+  'a later step needs an earlier one\'s result',
+  'One delegated task is not a goal',
+  'confirms a goal in the console',
   'never because a Worker says it is done',
   'could come out false',
   'idempotencyKey',
@@ -429,6 +432,23 @@ export function checkGoalGuidance(relativePath, systemPrompt) {
     'propose a goal for work that outlives the conversation, with checks the person confirms',
     systemPrompt,
     GOAL_GUIDANCE_REQUIRED_PHRASES,
+  );
+}
+
+/** Rule 5's half that reaches every workspace (S11 GO5e): `propose_goal`'s own description, sent
+ *  with the tool whatever the workspace's entry prompt says, keeps the same line between a goal and
+ *  one delegated task. */
+const PROPOSE_GOAL_DESCRIPTION_REQUIRED_PHRASES = [
+  'a later step needs an earlier one\'s result',
+  'One delegated task stays invoke_worker',
+];
+
+export function checkProposeGoalDescription(relativePath, description) {
+  return checkRequiredPhrases(
+    relativePath,
+    'propose_goal is for dependent steps, never for one delegated task',
+    description,
+    PROPOSE_GOAL_DESCRIPTION_REQUIRED_PHRASES,
   );
 }
 
@@ -494,6 +514,10 @@ export async function main() {
     if (isEntry) {
       violations.push(
         ...checkProposeGoalWords(file.path, proposeGoal.schemaWords, proposeGoal.description),
+        ...checkProposeGoalDescription(
+          'packages/shared/src/capabilities.ts (propose_goal description)',
+          proposeGoal.description,
+        ),
       );
       for (const check of ENTRY_PROMPT_CONTENT_CHECKS) {
         violations.push(...check(file.path, systemPrompt));

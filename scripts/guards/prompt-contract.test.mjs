@@ -20,6 +20,7 @@ import {
   checkGoalGuidance,
   checkGraphQuestionGuidance,
   checkPromptFile,
+  checkProposeGoalDescription,
   checkProposeGoalWords,
   checkReplyLanguageDirective,
   extractBacktickSpans,
@@ -181,7 +182,8 @@ const GOOD_ENTRY_FIXTURE_PROMPT = [
   'summary in.',
   'The injected Facts are never the whole graph: call `list_facts` and follow its `nextCursor`.',
   'If data is missing, say so plainly, and never present a partial answer as complete.',
-  'Propose it with `propose_goal`; once the user confirms it in the console the platform runs it.',
+  'When a later step needs an earlier one\'s result, propose it with `propose_goal`. One delegated',
+  'task is not a goal. Once the user confirms a goal in the console the platform runs it.',
   'It is achieved on its checks, never because a Worker says it is done; write each so it could',
   'come out false. Pass an `idempotencyKey`. Confirming and pausing are theirs — you cannot do any',
   'of them. Read progress with `list_goals`.',
@@ -258,6 +260,33 @@ test('checkGoalGuidance', async (t) => {
     const violations = checkGoalGuidance('fixture.yaml', badPrompt);
     assert.equal(violations.length, 1);
     assert.match(violations[0], /"never because a Worker says it is done"/);
+  });
+
+  await t.test('catches a prompt that sends one delegated task to a goal (#728 review)', () => {
+    const badPrompt = GOOD_ENTRY_FIXTURE_PROMPT.replace(
+      'One delegated task is not a goal.',
+      'A write that needs an approval is a goal too.',
+    );
+    const violations = checkGoalGuidance('fixture.yaml', badPrompt);
+    assert.equal(violations.length, 1);
+    assert.match(violations[0], /"One delegated task is not a goal"/);
+  });
+});
+
+test('checkProposeGoalDescription', async (t) => {
+  const good =
+    "Propose a goal: a later step needs an earlier one's result. One delegated task stays invoke_worker, even a write that needs an approval.";
+
+  await t.test('a description keeping both halves of the line has no violations', () => {
+    assert.deepEqual(checkProposeGoalDescription('capabilities.ts', good), []);
+  });
+
+  await t.test('catches a description that widens goals to any approval or system', () => {
+    const widened =
+      'Propose a goal for more than one system, or waiting on an approval. Use it instead of invoke_worker.';
+    const violations = checkProposeGoalDescription('capabilities.ts', widened);
+    assert.equal(violations.length, 1);
+    assert.match(violations[0], /"One delegated task stays invoke_worker"/);
   });
 });
 

@@ -533,7 +533,9 @@ function entryDependencyChatScenario(messages) {
  *  Turn 2: `find_operations({need:'stock'})` — the http gate's published observe Operation
  *  `stock.get`; its Object's identity names the Gatekeeper (`identityKey.gatekeeperId`).
  *
- *  Turn 3: `propose_goal` — one step on that Worker (`goalStepScenario` below scripts it), the goal
+ *  Turn 3: `propose_goal` — one step on that Worker (`goalStepScenario` below scripts it; one step
+ *  keeps the run short — when a goal is the right call is the entry prompt's business, guarded by
+ *  scripts/guards/prompt-contract.mjs, not this script's), the goal
  *  accepted by a check the platform makes (an `observe_predicate` on `stock.get` returning the
  *  fixture's symbol, never the Worker's word), a budget, and an `idempotencyKey` named after the
  *  nonce: asking again in the same chat proposes nothing new (`changed: false`, the same run).
