@@ -4205,7 +4205,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **确认与拒绝**：`confirmGoalRun` 必须带 `revision` 且是提议那一版（1），重发同一 `(goalRunId, revision)` 返回 `changed: false`、不新建 StepRun、不重复审计（场景 S3 按协调线程拆分用状态 + 版本绑定实现，不加幂等键）；新 `rejectGoalRun` 把提议版改为 `rejected`（记 `decided_by`），审计 `plan_revision.reject`，目标经 `moveGoalRun` 走 `proposed --reject--> cancelled`；拒绝后确认、确认后拒绝都是 409（#493 并发探针 12 轮恰好一个成功）。
   - **自由文本里的凭据**：`governance/redaction/credential-review.ts` 新 `refuseCredentialText` / `TextCarriesCredentialsError`（400 `credentials_in_text`，`details` 给字段名与个数、不回显值），用在 `revise_goal` 的 `reason` 与 `confirm_goal_acceptance` / `end_goal` / `reconcile_goal_action` 的 `note`；检测器用 `findSuspectedSecrets`（偏严，`token=expired` 会被拒，#493 同意保持）；停止类操作不带文字，不会被挡。`MAX_REVISION_REASON_CHARS` / `MAX_GOAL_NOTE_CHARS` 都是 2000，shared 与内核共用（params 按 UTF-16 计、内核按 code point 计，控制台计数用 `.length`）。目标陈述在 GO5c（`propose_goal`）拒收。
   - **锁定期间**：只挡「继续」（10-17「管理员锁定」）；修订后目标仍暂停、锁定不变；以未达成结束是终态，锁定字段清空、审计保留谁锁定的。
-  - **之后、GO5c 之前**（2026-10-23 计划变更，按顺序）：A 遗留 417（Handle 只读本人的 Task）；B 读出时遮蔽自由文本（目标陈述与目标其他自由文本、审批理由即遗留 420、Decision rationale、冲突裁决理由、Fact `invalidationReason`、人工证明的 note / link、审计 payload 的缺口、平台自连接的暂停理由；Operation 描述写入时做凭据审查，`invalidate_fact` 写入时清洗），合入时关 420；C Decision 可见性跟着主体走：目标结果与核对的 Decision、审批 Decision、非目标请求上的核对 Decision 经 `query_decisions` / Explorer 的可见性改为与 `get_action` 同一个谓词（目标类只给 owner 和请求人），带一个可逆迁移（遗留 421，P2，10-23 扩大范围）。
+  - **之后、GO5c 之前**（2026-10-23 计划变更，按顺序）：A 遗留 417（Handle 只读本人的 Task）；B 读出时遮蔽自由文本（目标陈述与目标其他自由文本、审批理由即遗留 420、Decision rationale、冲突裁决理由、Fact `invalidationReason`、人工证明的 note / link、审计 payload 的缺口、平台自连接的暂停理由；Operation 描述写入时做凭据审查，`invalidate_fact` 写入时清洗），合入时关 420；C Decision 可见性跟着主体走：目标结果与核对的 Decision、审批 Decision、非目标请求上的核对 Decision 经 `query_decisions` / Explorer 的可见性改为与 `get_action` 同一个谓词（目标类只给 owner 和请求人）；`record_decision` 写的 Decision 只给能看到对应对话的人，冲突裁决的 Decision 只给能看到这条冲突的人；都在 RLS 里做，带一个可逆迁移（遗留 421，P2，10-23 两次扩大范围）。
 - GO5c 前小 PR A 实现说明（遗留 417 / D-21，#688，2026-10-23 合入，866a231；无迁移）：
   - **规则**：owner 看全部 Task 只在人的通道；Handle 上读者是 `obo`，只能读这个人自己的 Task，加上 Handle 自己那个 WorkerRun 的 Task（按 `sid`，与角色无关）；读不到 404。与目标读取（`goalVisibleTo`）一致。
   - **代码**：`application/task/service.ts` 的 `TaskViewer` 改为 `seesEveryTask: boolean`，`taskVisibleTo` 只认这个标志；`application/gateway/handlers.ts` 新 `taskViewerOf(client, workspaceId, ctx)`（人的通道 `role === owner`；Handle 通道 `obo` + `false` + `claims.sid`；没有 `ctx` 时取 RLS 会话主体与角色），`get_task` 与 `cancel_task` 共用；`cancel_task` 不传 `sessionId`，Worker 不能取消自己的 Task。
@@ -4385,7 +4385,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 **AA5 — 验收旅程：接入一个有 OpenAPI 的夹具工单系统**（见 `global-roadmap-2026-10-16.md` §4）
 
 - 实现说明：（未开工）
-- 前置（2026-10-23，victor 定分叉 1 = a）：遗留 422（入口 agent 关闭 pi 的资源自动发现、平台资源显式传入）先关闭；管理员 Agent 用同一运行时，同一个洞在它身上就是自我修改。
+- 前置（2026-10-23，victor 定分叉 1 = a）：遗留 422（入口 agent 白名单启动：关掉 pi 的全部资源发现、`settings.json` 由平台整份写入、平台资源显式传入）先关闭；管理员 Agent 用同一运行时，同一个洞在它身上就是自我修改。
 
 **AA6（可选） — OpenMetadata 包，由管理员 Agent 产出**（见 `global-roadmap-2026-10-16.md` §4）
 
