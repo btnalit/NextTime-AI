@@ -7,8 +7,10 @@ import {
   AnnounceBodySchema,
   type ConnectorFitRefusal,
   listHostedGateDefinitions,
+  loadConnectorPresets,
   storableAnnouncement,
   upsertAnnouncement,
+  withPresetOperations,
 } from '../../../application/gates/index.js';
 import { OperationNameInvalidError } from '../../../governance/gatekeepers/index.js';
 
@@ -198,7 +200,10 @@ export async function registerGatesRoutes(
   // P-B2a (决定 ⑥): the generic gate host pulls the instances it must serve — the same trust
   // direction as announce (internal token, gate → kernel), so no kernel → host credential exists.
   // Definitions only (transport kind, target, credential mode, manifest source) and the connector
-  // each instance announces (P1); never a credential.
+  // each instance announces (P1); never a credential. S11 P1-F: an instance made from a connector
+  // preset also carries the preset's Operations (`withPresetOperations`). Presets that cannot be
+  // read fail the whole pull: the host then keeps every instance as it is and retries, instead of
+  // rebuilding preset instances from nothing.
   app.get('/internal/gate-host/instances', async (_request, reply) => {
     const items = await withWorkspace(
       deps.pool,
@@ -206,6 +211,11 @@ export async function registerGatesRoutes(
       (client) => listHostedGateDefinitions(client),
       { skipRoleSwitch: true },
     );
-    return reply.status(200).send({ ok: true, result: { items } });
+    const presets = items.some((item) => item.definition.preset !== undefined)
+      ? await loadConnectorPresets()
+      : [];
+    return reply
+      .status(200)
+      .send({ ok: true, result: { items: withPresetOperations(items, presets) } });
   });
 }
