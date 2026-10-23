@@ -10,6 +10,9 @@ export interface SystemStatusLineViewProps {
   readonly line: SystemStatusLineData;
   /** When given, the line is a button that opens the referenced approval/task/goal detail. */
   readonly onOpen?: () => void;
+  /** S11 GO5e-2 (#737 UX P2-2): for a goal's milestone or a goal step's Task, which goal it is —
+   *  its statement on one line, or that it cannot be read (`chatGoalLabel`); `null` while read. */
+  readonly goalLabel?: string | null;
 }
 
 const OPEN_TITLE = {
@@ -24,14 +27,25 @@ const OPEN_TITLE = {
  *  language (`goalMilestoneText`) and, unlike the kernel's one-line tail, never cut: it wraps on a
  *  narrow screen (pages.css). A Task run for a goal's step shows a tag naming the step in place of
  *  the kernel's line. */
-export function SystemStatusLineView({ line, onOpen }: SystemStatusLineViewProps) {
+export function SystemStatusLineView({ line, onOpen, goalLabel }: SystemStatusLineViewProps) {
   const t = useT();
   const failure = line.variant === 'action_update' ? failureReading(line, t) : null;
   const chip =
     line.variant === 'action_update' ? (
       <StatusChip machine="actionRequest" status={line.status} size="s" />
     ) : line.variant === 'goal_update' ? (
-      <StatusChip machine="goalRun" status={line.status} size="s" />
+      <>
+        <StatusChip machine="goalRun" status={line.status} size="s" />
+        {/* How it ended, beside 「已结束」 (#737 UX P2-1) — as the goal's page shows it. */}
+        {line.outcome ? (
+          <StatusChip
+            machine="objectiveOutcome"
+            status={line.outcome}
+            size="s"
+            testId="system-status-goal-outcome"
+          />
+        ) : null}
+      </>
     ) : (
       <StatusChip machine="task" status={line.status} size="s" />
     );
@@ -67,6 +81,16 @@ export function SystemStatusLineView({ line, onOpen }: SystemStatusLineViewProps
         </span>
       ) : null}
       {text !== null ? <span className="system-status-text">{text}</span> : null}
+      {goalLabel ? (
+        <span
+          className="system-status-goal text-3"
+          data-testid="system-status-goal"
+          title={goalLabel}
+        >
+          <span aria-hidden="true">· </span>
+          {goalLabel}
+        </span>
+      ) : null}
       {line.variant === 'task_update' && line.failureReason ? (
         <span className="text-3" title={taskFailureReasonText(line.failureReason, t).detail}>
           ({taskFailureReasonText(line.failureReason, t).short})

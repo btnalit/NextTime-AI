@@ -178,9 +178,12 @@ async function loadModeToolSets() {
 
   const goalUpdate = shared.SystemMessageContentSchema.optionsMap.get('system.goal_update');
   if (!goalUpdate) {
-    throw new Error('prompt-contract: system.goal_update is missing from SystemMessageContentSchema');
+    throw new Error(
+      'prompt-contract: system.goal_update is missing from SystemMessageContentSchema',
+    );
   }
   const goalUpdateWords = new Set(Object.keys(goalUpdate.shape));
+  const goalChangeWords = goalChangeWordsInContext(shared.GOAL_RUN_CHANGE_VALUES);
 
   return {
     entryTools,
@@ -188,6 +191,7 @@ async function loadModeToolSets() {
     resultContractKeys,
     proposeGoal: { schemaWords: proposeGoalSchemaWords, description: proposeGoal.description },
     goalUpdateWords,
+    goalChangeWords,
   };
 }
 
@@ -241,6 +245,25 @@ export const GOAL_UPDATE_FIELD_WORDS = new Set([
   'outcome',
   'outcomeBasis',
 ]);
+
+/** Every `change` a goal's milestone can carry into the entry context — every GoalRunChange but
+ *  its proposal, which is no context item (`application/linkage/goal-consumer.ts`) — is named in
+ *  the entry prompt in backticks, so the model reads each raw value it can see (#737 review). */
+export function checkGoalChangeWords(relativePath, systemPrompt, changeWords) {
+  const violations = [];
+  for (const word of changeWords) {
+    if (systemPrompt.includes(`\`${word}\``)) continue;
+    violations.push(
+      `${relativePath}: a goal's milestone can carry change "${word}" (GOAL_RUN_CHANGE_VALUES), but the prompt never names it — add it, in backticks, to the milestone paragraph's list of changes`,
+    );
+  }
+  return violations;
+}
+
+/** The GoalRunChange values a milestone in the entry context can carry. */
+export function goalChangeWordsInContext(changeValues) {
+  return new Set(changeValues.filter((value) => value !== 'propose'));
+}
 
 /** Every `GOAL_UPDATE_FIELD_WORDS` word is a property of the `system.goal_update` content. */
 export function checkGoalUpdateWords(relativePath, schemaWords) {
@@ -464,7 +487,7 @@ const GOAL_GUIDANCE_REQUIRED_PHRASES = [
   'you cannot do any of them',
   'list_goals',
   // S11 GO5e-2: milestones arrive on their own; a step's Task is the goal's, not the agent's.
-  "milestones also reach you without asking",
+  'milestones also reach you without asking',
   "The Tasks a goal's steps run do not reach you",
 ];
 
@@ -528,8 +551,14 @@ const PROMPT_FILES = [
 ];
 
 export async function main() {
-  const { entryTools, workerTools, resultContractKeys, proposeGoal, goalUpdateWords } =
-    await loadModeToolSets();
+  const {
+    entryTools,
+    workerTools,
+    resultContractKeys,
+    proposeGoal,
+    goalUpdateWords,
+    goalChangeWords,
+  } = await loadModeToolSets();
   const toolSetsByKey = { entryTools, workerTools };
   const violations = [];
 
@@ -549,9 +578,15 @@ export async function main() {
     const allowed = new Set([
       ...(ALLOWED_NON_TOOL_WORDS[file.path] ?? []),
       // S11 GO5e: checked against propose_goal itself just below, not allowed blind; GO5e-2's
-      // milestone fields against the system.goal_update content.
+      // milestone fields against the system.goal_update content, and its changes are the
+      // registry's own GoalRunChange values.
       ...(isEntry
-        ? [...PROPOSE_GOAL_SCHEMA_WORDS, ...PROPOSE_GOAL_REFUSAL_CODES, ...GOAL_UPDATE_FIELD_WORDS]
+        ? [
+            ...PROPOSE_GOAL_SCHEMA_WORDS,
+            ...PROPOSE_GOAL_REFUSAL_CODES,
+            ...GOAL_UPDATE_FIELD_WORDS,
+            ...goalChangeWords,
+          ]
         : []),
     ]);
     violations.push(...checkPromptFile(file.path, systemPrompt, toolSet, allowed));
@@ -563,6 +598,7 @@ export async function main() {
       violations.push(
         ...checkProposeGoalWords(file.path, proposeGoal.schemaWords, proposeGoal.description),
         ...checkGoalUpdateWords(file.path, goalUpdateWords),
+        ...checkGoalChangeWords(file.path, systemPrompt, goalChangeWords),
         ...checkProposeGoalDescription(
           'packages/shared/src/capabilities.ts (propose_goal description)',
           proposeGoal.description,

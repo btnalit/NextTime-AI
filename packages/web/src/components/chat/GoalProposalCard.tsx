@@ -1,21 +1,21 @@
-import type { GoalDetailWire, GoalRunStatus } from '@nexttime/shared';
-import { useCallback } from 'react';
-import { useResource } from '../../hooks/useResource.js';
-import type { CapabilityCaller } from '../../lib/clients.js';
+import type { GoalDetailWire, GoalRunStatus, ObjectiveOutcome } from '@nexttime/shared';
 import { excerpt, formatTime } from '../../lib/format.js';
 import { goalBudgetRows, goalMilestoneText } from '../../lib/goals.js';
 import { useT } from '../../lib/i18n.js';
+import type { LatestGoalStatus } from '../../lib/system-status.js';
 import { Button } from '../kit/button.js';
 import { InlineError } from '../kit/inline-error.js';
 import { RedactedNote } from '../kit/redacted-note.js';
 import { Skeleton } from '../kit/skeleton.js';
 import { StatusChip } from '../kit/status-chip.js';
+import type { ChatGoalRead } from './useChatGoals.js';
 
 export interface GoalProposalCardProps {
-  readonly http: CapabilityCaller;
   readonly goalRunId: string;
+  /** The goal as this chat read it (`useChatGoals`: one `get_goal` however many lines name it). */
+  readonly read: ChatGoalRead | undefined;
   /** The goal's status as the latest of its milestones in this chat says (`latestGoalStatuses`). */
-  readonly latestStatus: GoalRunStatus | undefined;
+  readonly latestStatus: LatestGoalStatus | undefined;
   /** The reader's own principal, when known: only the requester confirms. */
   readonly viewerId: string | null;
   readonly createdAt: string;
@@ -35,25 +35,23 @@ export interface GoalProposalCardProps {
  * says why it cannot show it, and still opens its page, which explains the refusal.
  */
 export function GoalProposalCard({
-  http,
   goalRunId,
+  read,
   latestStatus,
   viewerId,
   createdAt,
   onOpenGoal,
 }: GoalProposalCardProps) {
   const t = useT();
-  const load = useCallback(
-    () => http.call<GoalDetailWire>('get_goal', { goalRunId }),
-    [http, goalRunId],
-  );
-  const detail = useResource(load);
-  const goal = detail.state.status === 'ready' ? detail.state.data : null;
-  // A later milestone in this chat is newer than the read made when the card mounted.
-  const status: GoalRunStatus =
-    latestStatus !== undefined && latestStatus !== 'proposed'
-      ? latestStatus
-      : (goal?.status ?? latestStatus ?? 'proposed');
+  const goal = read?.status === 'ready' ? read.goal : null;
+  // A later milestone in this chat is newer than the read made when the chat first named the goal.
+  const fromMilestone = latestStatus !== undefined && latestStatus.status !== 'proposed';
+  const status: GoalRunStatus = fromMilestone
+    ? latestStatus.status
+    : (goal?.status ?? latestStatus?.status ?? 'proposed');
+  // How it ended, beside 「已结束」: green alone would read "not achieved" as done (#737 UX P2-1).
+  const outcome: ObjectiveOutcome | null =
+    status !== 'completed' ? null : fromMilestone ? latestStatus.outcome : (goal?.outcome ?? null);
   const awaitsViewer =
     status === 'proposed' && goal !== null && viewerId !== null && goal.onBehalfOf === viewerId;
 
@@ -73,7 +71,7 @@ export function GoalProposalCard({
           <span className="action-detail-title" data-testid="goal-proposal-statement">
             {goal
               ? (excerpt(goal.statement, 200) ?? t('（没有目标陈述）', '(no statement)'))
-              : detail.state.status === 'error'
+              : read?.status === 'error'
                 ? t(
                     '这里提出过一个目标，现在读不到它',
                     'A goal was proposed here; it cannot be read now',
@@ -94,14 +92,24 @@ export function GoalProposalCard({
           </span>
           {goal ? <RedactedNote value={goal.statement} testId="goal-proposal-redacted" /> : null}
         </div>
-        <StatusChip machine="goalRun" status={status} size="s" />
+        <span className="row-wrap">
+          <StatusChip machine="goalRun" status={status} size="s" />
+          {outcome ? (
+            <StatusChip
+              machine="objectiveOutcome"
+              status={outcome}
+              size="s"
+              testId="goal-proposal-outcome"
+            />
+          ) : null}
+        </span>
       </header>
 
-      {detail.state.status === 'loading' ? <Skeleton width="60%" /> : null}
+      {read === undefined || read.status === 'loading' ? <Skeleton width="60%" /> : null}
       {goal ? <GoalProposalSummary goal={goal} /> : null}
-      {detail.state.status === 'error' ? (
+      {read?.status === 'error' ? (
         <InlineError
-          error={detail.state.error}
+          error={read.error}
           testId="goal-proposal-error"
           overrides={{
             not_found: t(

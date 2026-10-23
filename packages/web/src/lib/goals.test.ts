@@ -376,6 +376,18 @@ describe('goalMilestoneText (S11 GO5e-2)', () => {
     }
   });
 
+  it('a lifted hold says the goal is still paused, and why, when the pause it took over stays (#737 UX P3-1)', () => {
+    expect(
+      goalMilestoneText(
+        { ...base, change: 'release_hold', status: 'paused', pauseReason: 'authority_lost' },
+        zh,
+      ),
+    ).toBe('锁定已解除；目标仍暂停：请求人缺少授权');
+    expect(goalMilestoneText({ ...base, change: 'release_hold', status: 'paused' }, zh)).toBe(
+      '锁定已解除，你可以继续这个目标',
+    );
+  });
+
   it('a pause says why, a completion how it ended and on what, a revision its number', () => {
     expect(goalMilestoneText({ ...base, change: 'pause', pauseReason: 'needs_decision' }, zh)).toBe(
       '目标已暂停：需要人决定',
@@ -385,8 +397,20 @@ describe('goalMilestoneText (S11 GO5e-2)', () => {
         { ...base, change: 'complete', outcome: 'not_achieved', outcomeBasis: 'requester' },
         en,
       ),
-    ).toBe('Goal completed: not achieved · On the requester’s word');
-    expect(goalMilestoneText({ ...base, change: 'complete' }, zh)).toBe('目标已完成');
+    ).toBe('Goal ended as not achieved · On the requester’s word');
+    expect(
+      goalMilestoneText(
+        { ...base, change: 'complete', outcome: 'not_achieved', outcomeBasis: 'requester' },
+        zh,
+      ),
+    ).toBe('目标按未达成结束 · 依据请求人确认');
+    expect(
+      goalMilestoneText(
+        { ...base, change: 'complete', outcome: 'achieved', outcomeBasis: 'verified_by_check' },
+        zh,
+      ),
+    ).toBe('目标已达成 · 依据平台验收检查');
+    expect(goalMilestoneText({ ...base, change: 'complete' }, zh)).toBe('目标已结束');
     expect(goalMilestoneText({ ...base, change: 'revise', revision: 3 }, zh)).toContain('第 3 版');
     expect(goalMilestoneText({ ...base, change: 'finish_cancel', cleanupPending: true }, zh)).toBe(
       '目标已取消，还有遗留要清理',

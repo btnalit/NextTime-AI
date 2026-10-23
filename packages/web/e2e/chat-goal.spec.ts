@@ -11,14 +11,17 @@ import { OWNER_API_KEY, loginAsOwner, signedInOwner } from './lib/auth.js';
  * (`page.routeWebSocket`, forwarding everything else both ways), and `get_goal` is answered in the
  * browser (`page.route`, as goal-detail.spec.ts does). The chat itself, the signed-in owner and
  * the goal pages' shell are the real stack. Full-page captures (the proposal, a proposal that cannot
- * be read, the milestones) land in `test-results/` for the UX acceptance to read; they are not a
- * screenshot gate.
+ * be read, the milestones, two goals in one chat) land in `test-results/` for the UX acceptance to
+ * read; they are not a screenshot gate.
  */
 
 const GOAL = '66000000-0000-4000-8000-000000000301';
 const WORKER = '66000000-0000-4000-8000-0000000003e1';
 const GATE = '66000000-0000-4000-8000-0000000003d1';
 const TASK = '66000000-0000-4000-8000-000000000311';
+const SECOND = '66000000-0000-4000-8000-000000000302';
+const STATEMENT = '每周一早上汇总三台主机的证书到期时间，快到期的列出来';
+const SECOND_STATEMENT = '把二号仓本月的盘点差异整理成一份报告，按金额从大到小列出';
 
 const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
 const T0 = minutesAgo(30);
@@ -58,7 +61,7 @@ function proposedGoal(requester: string) {
     outcomeDecisionId: null,
     onBehalfOf: requester,
     turnId: null,
-    statement: '每周一早上汇总三台主机的证书到期时间，快到期的列出来',
+    statement: STATEMENT,
     currentRevision: 1,
     budget: { maxTokens: 200000, maxSteps: 8, maxRevisions: 2, maxWallClockSeconds: 3600 },
     usage: { tokens: 0, steps: 0, revisions: 0 },
@@ -100,6 +103,24 @@ function proposedGoal(requester: string) {
   };
 }
 
+/** `get_goal` for a second goal of the same chat, ended as not achieved on its requester's word. */
+function endedGoal(requester: string) {
+  const goal = proposedGoal(requester);
+  return {
+    ...goal,
+    id: SECOND,
+    status: 'completed',
+    outcome: 'not_achieved',
+    outcomeBasis: 'requester',
+    outcomeDecisionId: '66000000-0000-4000-8000-0000000003a1',
+    statement: SECOND_STATEMENT,
+    confirmedAt: T1,
+    endedAt: T2,
+    updatedAt: T2,
+    planRevision: { ...goal.planRevision, goalRunId: SECOND, status: 'accepted' },
+  };
+}
+
 /** A stand-in's answer, checked first against the capability's own result contract (as in
  *  goal-detail.spec.ts). */
 function answer(name: string, result: unknown) {
@@ -124,13 +145,30 @@ function systemMessage(sequence: number, at: string, content: Record<string, unk
   };
 }
 
-const goalUpdate = (sequence: number, at: string, fields: Record<string, unknown>) =>
+const goalUpdate = (
+  sequence: number,
+  at: string,
+  fields: Record<string, unknown>,
+  goalRunId = GOAL,
+) =>
   systemMessage(sequence, at, {
     kind: 'system.goal_update',
-    text: `Goal ${GOAL}`,
-    goalRunId: GOAL,
+    text: `Goal ${goalRunId}`,
+    goalRunId,
     ...fields,
   });
+
+/** Neither the line nor the page scrolls sideways: a long statement is cut with its whole text as
+ *  the title, the milestone itself wraps. */
+async function expectNoSidewaysScroll(page: Page): Promise<void> {
+  const lines = page.getByTestId('system-status-line');
+  for (const line of await lines.all()) {
+    expect(await line.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+}
 
 /** Appends `extra(lastSequence)` to the last page of every chat history the page reads over the
  *  socket; every other frame passes through unchanged, both ways. */
@@ -201,9 +239,7 @@ test.describe('S11 GO5e-2: a goal in its chat (stand-in messages)', () => {
 
       const card = page.getByTestId('goal-proposal-card');
       await expect(card).toBeVisible({ timeout: 15_000 });
-      await expect(card.getByTestId('goal-proposal-statement')).toHaveText(
-        '每周一早上汇总三台主机的证书到期时间，快到期的列出来',
-      );
+      await expect(card.getByTestId('goal-proposal-statement')).toHaveText(STATEMENT);
       await expect(card.getByTestId('goal-proposal-summary')).toContainText('2 个步骤');
       await expect(card.getByTestId('goal-proposal-awaits')).toBeVisible();
       const open = card.getByTestId('goal-proposal-open');
@@ -298,11 +334,18 @@ test.describe('S11 GO5e-2: a goal in its chat (stand-in messages)', () => {
       await expect(lines.nth(1)).not.toContainText('Goal step');
       await expect(lines.nth(2)).toContainText('目标已暂停：需要人决定');
       await expect(lines.nth(3)).toContainText('所有者解除之后才能继续');
+      // #737 UX P2-2: every line, the step's Task included, says which goal it belongs to.
+      for (const index of [0, 1, 2, 3]) {
+        const goal = lines.nth(index).getByTestId('system-status-goal');
+        await expect(goal).toHaveText(`· ${STATEMENT}`);
+        await expect(goal).toHaveAttribute('title', STATEMENT);
+      }
       // A milestone is never cut, at either width: it wraps instead.
       for (const index of [0, 2, 3]) {
         const text = lines.nth(index).locator('.system-status-text');
         expect(await text.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
       }
+      await expectNoSidewaysScroll(page);
       await page.screenshot({
         path: testInfo.outputPath(`chat-goal-milestones-${width}.png`),
         fullPage: true,
@@ -310,6 +353,77 @@ test.describe('S11 GO5e-2: a goal in its chat (stand-in messages)', () => {
 
       await lines.nth(2).click();
       await expect(page).toHaveURL(new RegExp(`#/work/goals/${GOAL}$`));
+    });
+
+    test(`two goals in one chat, one ended not achieved, at ${width}`, async ({
+      page,
+    }, testInfo) => {
+      await page.setViewportSize({ width, height: 900 });
+      const owner = (await signedInOwner(page)).id;
+      await page.route('**/api/cap/get_goal', async (route) => {
+        const { goalRunId } = route.request().postDataJSON() as { goalRunId: string };
+        const requester = await owner;
+        await route.fulfill(
+          answer('get_goal', goalRunId === SECOND ? endedGoal(requester) : proposedGoal(requester)),
+        );
+      });
+      await appendToChatHistory(page, (last) => [
+        goalUpdate(last + 1, T0, { change: 'propose', status: 'proposed' }),
+        goalUpdate(last + 2, T0, { change: 'propose', status: 'proposed' }, SECOND),
+        goalUpdate(last + 3, T1, { change: 'confirm', status: 'running' }),
+        goalUpdate(last + 4, T1, { change: 'confirm', status: 'running' }, SECOND),
+        goalUpdate(
+          last + 5,
+          T2,
+          {
+            change: 'complete',
+            status: 'completed',
+            outcome: 'not_achieved',
+            outcomeBasis: 'requester',
+          },
+          SECOND,
+        ),
+      ]);
+      await loginAsOwner(page);
+      await openNewChat(page);
+      await page.reload();
+
+      const cards = page.getByTestId('goal-proposal-card');
+      await expect(cards).toHaveCount(2, { timeout: 15_000 });
+      await expect(cards.nth(0)).toHaveAttribute('data-status', 'running');
+      await expect(cards.nth(0).getByTestId('goal-proposal-outcome')).toHaveCount(0);
+      await expect(cards.nth(1)).toHaveAttribute('data-status', 'completed');
+      await expect(cards.nth(1).getByTestId('goal-proposal-statement')).toHaveText(
+        SECOND_STATEMENT,
+      );
+      // #737 UX P2-1: an end not achieved is a red 「未达成」, never only a green 「已结束」.
+      await expect(cards.nth(1).getByTestId('goal-proposal-outcome')).toHaveAttribute(
+        'data-status',
+        'not_achieved',
+      );
+
+      const lines = page.getByTestId('system-status-line');
+      await expect(lines).toHaveCount(3);
+      await expect(lines.nth(0).getByTestId('system-status-goal')).toHaveText(`· ${STATEMENT}`);
+      await expect(lines.nth(1).getByTestId('system-status-goal')).toHaveText(
+        `· ${SECOND_STATEMENT}`,
+      );
+      await expect(lines.nth(2)).toContainText('目标按未达成结束 · 依据请求人确认');
+      await expect(lines.nth(2).getByTestId('system-status-goal-outcome')).toHaveAttribute(
+        'data-status',
+        'not_achieved',
+      );
+      await expect(lines.nth(2).getByTestId('system-status-goal')).toHaveText(
+        `· ${SECOND_STATEMENT}`,
+      );
+      await expectNoSidewaysScroll(page);
+      await page.screenshot({
+        path: testInfo.outputPath(`chat-goal-two-goals-${width}.png`),
+        fullPage: true,
+      });
+
+      await lines.nth(2).click();
+      await expect(page).toHaveURL(new RegExp(`#/work/goals/${SECOND}$`));
     });
   }
 });

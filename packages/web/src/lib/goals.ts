@@ -355,7 +355,14 @@ export function goalMilestoneText(milestone: GoalMilestone, t: Translate): strin
         'A workspace owner holds the goal: it can resume only once an owner lifts the hold',
       );
     case 'release_hold':
-      return t('锁定已解除，你可以继续这个目标', 'The hold was lifted; you can resume the goal');
+      // Lifting the hold leaves the pause it took over: say why it is still paused, so nobody
+      // resumes a goal that would stop again at once (#737 UX P3-1).
+      return reason
+        ? t(
+            `锁定已解除；目标仍暂停：${reason}`,
+            `The hold was lifted; the goal is still paused: ${reason}`,
+          )
+        : t('锁定已解除，你可以继续这个目标', 'The hold was lifted; you can resume the goal');
     case 'resume':
       return t('目标已继续', 'Goal resumed');
     case 'revise':
@@ -368,13 +375,20 @@ export function goalMilestoneText(milestone: GoalMilestone, t: Translate): strin
     case 'verify':
       return t('所有步骤都已完成，平台正在验收', 'Every step is done; the platform is checking it');
     case 'complete': {
-      if (!milestone.outcome) return t('目标已完成', 'Goal completed');
-      const outcome =
-        milestone.outcome === 'achieved' ? t('已达成', 'achieved') : t('未达成', 'not achieved');
+      // Worded as the goal's page words it (`goalStateNote`): an end "not achieved" is never
+      // "completed" (#737 UX P2-1); the line's outcome chip carries the colour.
       const basis = milestone.outcomeBasis ? outcomeBasisLabel(milestone.outcomeBasis, t) : null;
-      return basis
-        ? t(`目标已完成：${outcome} · ${basis}`, `Goal completed: ${outcome} · ${basis}`)
-        : t(`目标已完成：${outcome}`, `Goal completed: ${outcome}`);
+      if (milestone.outcome === 'achieved') {
+        return basis
+          ? t(`目标已达成 · ${basis}`, `Goal achieved · ${basis}`)
+          : t('目标已达成', 'Goal achieved');
+      }
+      if (milestone.outcome === 'not_achieved') {
+        return basis
+          ? t(`目标按未达成结束 · ${basis}`, `Goal ended as not achieved · ${basis}`)
+          : t('目标按未达成结束', 'Goal ended as not achieved');
+      }
+      return t('目标已结束', 'Goal ended');
     }
     case 'cancel':
       return t(

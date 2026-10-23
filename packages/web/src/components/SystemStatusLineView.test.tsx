@@ -127,13 +127,86 @@ describe('SystemStatusLineView', () => {
         onOpen={onOpen}
       />,
     );
-    const button = screen.getByRole('button', { name: /目标已完成：已达成 · 依据平台验收检查/ });
+    const button = screen.getByRole('button', { name: /目标已达成 · 依据平台验收检查/ });
     expect(button.getAttribute('title')).toBe('打开目标');
     expect(document.querySelector('.chip')?.getAttribute('data-status')).toBe('completed');
+    expect(screen.getByTestId('system-status-goal-outcome').getAttribute('data-status')).toBe(
+      'achieved',
+    );
     // The kernel's own (English) text is not what the reader sees.
     expect(screen.queryByText(/on the platform's checks/)).toBeNull();
     fireEvent.click(button);
     expect(onOpen).toHaveBeenCalledTimes(1);
+  });
+
+  it('#737 UX P2-1: an end "not achieved" says so in words and with the outcome chip, never only a green 「已结束」', () => {
+    render(
+      <SystemStatusLineView
+        line={{
+          variant: 'goal_update',
+          text: 'Goal goal-1 completed: not achieved',
+          goalRunId: 'goal-1',
+          change: 'complete',
+          status: 'completed',
+          pauseReason: null,
+          heldByOwner: false,
+          outcome: 'not_achieved',
+          outcomeBasis: 'requester',
+          cleanupPending: false,
+          revision: null,
+        }}
+      />,
+    );
+    const line = screen.getByTestId('system-status-line');
+    expect(line.textContent).toMatch(/目标按未达成结束 · 依据请求人确认/);
+    expect(line.textContent).not.toMatch(/已完成/);
+    const outcome = screen.getByTestId('system-status-goal-outcome');
+    expect(outcome.getAttribute('data-status')).toBe('not_achieved');
+    expect(outcome.className).toMatch(/chip-danger/);
+  });
+
+  it('#737 UX P2-2: a milestone and a goal step say which goal, on one line with the whole statement as its title', () => {
+    const statement = '复核二号仓的低库存 SKU，并确认库存系统读数正常。';
+    const { unmount } = render(
+      <SystemStatusLineView
+        line={{
+          variant: 'goal_update',
+          text: 'Goal goal-1 paused',
+          goalRunId: 'goal-1',
+          change: 'pause',
+          status: 'paused',
+          pauseReason: 'authority_lost',
+          heldByOwner: false,
+          outcome: null,
+          outcomeBasis: null,
+          cleanupPending: false,
+          revision: null,
+        }}
+        goalLabel={statement}
+      />,
+    );
+    const goal = screen.getByTestId('system-status-goal');
+    expect(goal.textContent).toBe(`· ${statement}`);
+    expect(goal.getAttribute('title')).toBe(statement);
+    expect(screen.queryByTestId('system-status-goal-outcome')).toBeNull();
+    unmount();
+    render(
+      <SystemStatusLineView
+        line={{
+          variant: 'task_update',
+          text: 'Goal step "scan": task task-1 completed',
+          taskId: 'task-1',
+          status: 'completed',
+          failureReason: null,
+          summary: null,
+          goalStep: { goalRunId: 'goal-1', stepKey: 'scan' },
+        }}
+        goalLabel="一个读不到的目标"
+      />,
+    );
+    expect(screen.getByTestId('system-status-line').textContent).toMatch(
+      /目标步骤 scan· 一个读不到的目标/,
+    );
   });
 
   it("S11 GO5e-2: a goal step's Task names its step in place of the kernel's line", () => {

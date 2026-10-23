@@ -18,6 +18,7 @@ import {
   candidateIdentifier,
   checkConditionalOpsRunner,
   checkEmptyFindGuidance,
+  checkGoalChangeWords,
   checkGoalGuidance,
   checkGoalUpdateWords,
   checkGraphQuestionGuidance,
@@ -28,6 +29,7 @@ import {
   extractBacktickSpans,
   extractCandidateIdentifiers,
   extractStringArrayLiteral,
+  goalChangeWordsInContext,
   jsonSchemaWords,
 } from './prompt-contract.mjs';
 
@@ -314,6 +316,26 @@ test('checkGoalUpdateWords', async (t) => {
     assert.equal(violations.length, 1);
     assert.match(violations[0], /"pauseReason"/);
     assert.ok(GOAL_UPDATE_FIELD_WORDS.has('pauseReason'));
+  });
+});
+
+test('checkGoalChangeWords', async (t) => {
+  const changes = goalChangeWordsInContext(['confirm', 'pause', 'release_hold', 'fail', 'propose']);
+
+  await t.test('the proposal is no context item, so the prompt need not name it', () => {
+    assert.deepEqual([...changes], ['confirm', 'pause', 'release_hold', 'fail']);
+  });
+
+  await t.test('no violations when every change is named in backticks', () => {
+    const prompt = 'its `change` (`confirm`, `pause`, `release_hold`, `fail` — a platform error)';
+    assert.deepEqual(checkGoalChangeWords('fixture.yaml', prompt, changes), []);
+  });
+
+  await t.test('catches a change the prompt only glosses in words', () => {
+    const prompt = 'its `change` (`confirm`, `pause`, `release_hold`, stopped on a platform error)';
+    const violations = checkGoalChangeWords('fixture.yaml', prompt, changes);
+    assert.equal(violations.length, 1);
+    assert.match(violations[0], /"fail"/);
   });
 });
 

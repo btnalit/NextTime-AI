@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { latestGoalStatuses, systemStatusLineFromMessage } from './system-status.js';
+import { goalRunIdsIn, latestGoalStatuses, systemStatusLineFromMessage } from './system-status.js';
 import type { ChatMessage } from './ws-client.js';
 
 function chatMessage(content: Record<string, unknown> | undefined, text = 'fallback'): ChatMessage {
@@ -183,8 +183,40 @@ describe('latestGoalStatuses (S11 GO5e-2)', () => {
       goal(5, 'g-1', 'verifying'),
     ]);
     expect([...map]).toEqual([
-      ['g-1', 'verifying'],
-      ['g-2', 'proposed'],
+      ['g-1', { status: 'verifying', outcome: null }],
+      ['g-2', { status: 'proposed', outcome: null }],
     ]);
+  });
+
+  it('carries how a goal ended with its last status', () => {
+    const map = latestGoalStatuses([
+      chatMessage({
+        kind: 'system.goal_update',
+        goalRunId: 'g-1',
+        status: 'completed',
+        outcome: 'not_achieved',
+      }),
+    ]);
+    expect(map.get('g-1')).toEqual({ status: 'completed', outcome: 'not_achieved' });
+  });
+});
+
+describe('goalRunIdsIn (#737 UX P2-2)', () => {
+  it('names each goal a proposal, milestone or goal step names, once, in first-named order', () => {
+    expect(
+      goalRunIdsIn([
+        chatMessage({ kind: 'system.goal_update', goalRunId: 'g-2', status: 'proposed' }),
+        chatMessage({
+          kind: 'system.task_update',
+          taskId: 't-1',
+          status: 'completed',
+          goalRunId: 'g-1',
+          stepKey: 'scan',
+        }),
+        chatMessage({ kind: 'system.task_update', taskId: 't-2', status: 'completed' }),
+        chatMessage({ kind: 'system.goal_update', goalRunId: 'g-2', status: 'running' }),
+        chatMessage({ kind: 'system.action_update', actionRequestId: 'a-1', status: 'approved' }),
+      ]),
+    ).toEqual(['g-2', 'g-1']);
   });
 });

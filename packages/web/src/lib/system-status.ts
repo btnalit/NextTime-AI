@@ -145,15 +145,35 @@ export function systemStatusLineFromMessage(
   return undefined;
 }
 
+/** A goal's status, and how it ended once it has, as its latest milestone in a chat says. */
+export interface LatestGoalStatus {
+  readonly status: GoalRunStatus;
+  readonly outcome: ObjectiveOutcome | null;
+}
+
 /** S11 GO5e-2: each goal's status as the latest of its milestones in `messages` says — what a
  *  proposal card in the same chat shows once the goal has moved on. */
 export function latestGoalStatuses(
   messages: readonly ChatMessage[],
-): ReadonlyMap<string, GoalRunStatus> {
-  const map = new Map<string, GoalRunStatus>();
+): ReadonlyMap<string, LatestGoalStatus> {
+  const map = new Map<string, LatestGoalStatus>();
   for (const message of messages) {
     const line = systemStatusLineFromMessage(message);
-    if (line?.variant === 'goal_update') map.set(line.goalRunId, line.status);
+    if (line?.variant === 'goal_update') {
+      map.set(line.goalRunId, { status: line.status, outcome: line.outcome });
+    }
   }
   return map;
+}
+
+/** S11 GO5e-2 (#737 UX P2-2): every goal this chat's messages are about — its proposals, its
+ *  milestones and the Tasks its steps ran — each once, in the order the chat first names it. */
+export function goalRunIdsIn(messages: readonly ChatMessage[]): string[] {
+  const ids = new Set<string>();
+  for (const message of messages) {
+    const line = systemStatusLineFromMessage(message);
+    if (line?.variant === 'goal_update') ids.add(line.goalRunId);
+    else if (line?.variant === 'task_update' && line.goalStep) ids.add(line.goalStep.goalRunId);
+  }
+  return [...ids];
 }

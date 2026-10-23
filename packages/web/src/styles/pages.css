@@ -692,6 +692,17 @@
   white-space: normal;
 }
 
+/* S11 GO5e-2 (#737 UX P2-2): which goal a milestone or a goal step's Task belongs to — its
+   statement on one line, cut first when the line is narrow (the whole of it is the title). */
+.system-status-goal {
+  flex: 0 4 auto;
+  min-width: 6em;
+  max-width: 28em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .chat-empty {
   margin: auto;
   padding: var(--space-6) var(--gutter);

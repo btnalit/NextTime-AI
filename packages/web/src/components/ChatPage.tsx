@@ -6,7 +6,7 @@ import type { CapabilityCaller } from '../lib/clients.js';
 import { composerUnstorableTextStep, describeError } from '../lib/errors.js';
 import { useT } from '../lib/i18n.js';
 import { liveOutputPaused } from '../lib/live-stream.js';
-import { latestGoalStatuses } from '../lib/system-status.js';
+import { goalRunIdsIn, latestGoalStatuses } from '../lib/system-status.js';
 import { persistedToolCallIds, threadItems } from '../lib/tool-call-record.js';
 import type { WsClient } from '../lib/ws-client.js';
 import { ToolCallGroupView, ToolCallRowView } from './ToolCallRowView.js';
@@ -18,6 +18,7 @@ import { ChatModelHealthNotice, type RunningModelHealth } from './chat/ModelSwit
 import { TurnOutcomeControl } from './chat/TurnOutcomeControl.js';
 import { useActionCards } from './chat/useActionCards.js';
 import { useAutoFollow } from './chat/useAutoFollow.js';
+import { useChatGoals } from './chat/useChatGoals.js';
 import { useChatMessages } from './chat/useChatMessages.js';
 import { useChatSummary } from './chat/useChatSummary.js';
 import { useComposer } from './chat/useComposer.js';
@@ -96,6 +97,8 @@ export function ChatPage({
   const follow = useAutoFollow(messages, turn);
   const actionCards = useActionCards(client, http, messages, toast, t, permissions);
   const latestGoalStatus = useMemo(() => latestGoalStatuses(messages), [messages]);
+  const goalRunIds = useMemo(() => goalRunIdsIn(messages), [messages]);
+  const goals = useChatGoals(http, goalRunIds);
   const composer = useComposer(
     client,
     chatId,
@@ -200,6 +203,7 @@ export function ChatPage({
                       onOpenApproval={onOpenApproval}
                       onOpenTask={onOpenTask}
                       latestGoalStatus={latestGoalStatus}
+                      goals={goals}
                       onOpenGoal={onOpenGoal}
                     />
                     {turnAttribution ? (

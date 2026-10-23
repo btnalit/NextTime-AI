@@ -1157,6 +1157,77 @@ describe('ChatPage goal card and milestones (S11 GO5e-2)', () => {
     expect(onOpenGoal).toHaveBeenCalledWith('goal-1');
   });
 
+  it('#737 UX P2-2: two goals in one chat — each line names its own goal, each goal is read once, and an end not achieved says so', async () => {
+    const second = goalDetail({
+      id: 'goal-2',
+      statement: '把二号仓的盘点\n差异整理成报告。',
+      status: 'completed',
+      outcome: 'not_achieved',
+      outcomeBasis: 'requester',
+      onBehalfOf: 'p-me',
+    });
+    const fake = fakeClient();
+    const http = scriptedHttp({
+      get_workspace: () => ({ name: 'ws', caller: { id: 'p-me', role: 'member' } }),
+      list_chat_turns: () => ({ items: [] }),
+      get_goal: (params) =>
+        (params as { goalRunId: string }).goalRunId === 'goal-2' ? second : proposed,
+    });
+    renderChat(fake.client, http);
+    await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled());
+    act(() => {
+      fake.deliver(goalMessage(1, { change: 'propose', status: 'proposed' }));
+      fake.deliver(goalMessage(2, { change: 'propose', status: 'proposed' }, 'goal-2'));
+      fake.deliver(goalMessage(3, { change: 'confirm', status: 'running' }));
+      fake.deliver(goalMessage(4, { change: 'confirm', status: 'running' }, 'goal-2'));
+      fake.deliver(
+        goalMessage(
+          5,
+          {
+            change: 'complete',
+            status: 'completed',
+            outcome: 'not_achieved',
+            outcomeBasis: 'requester',
+          },
+          'goal-2',
+        ),
+      );
+      fake.caughtUp();
+    });
+
+    await waitFor(() =>
+      expect(screen.getAllByTestId('system-status-goal').map((label) => label.textContent)).toEqual(
+        [
+          `· ${proposed.statement}`,
+          '· 把二号仓的盘点 差异整理成报告。',
+          '· 把二号仓的盘点 差异整理成报告。',
+        ],
+      ),
+    );
+    expect(
+      http.calls
+        .filter((call) => call.name === 'get_goal')
+        .map((call) => (call.params as { goalRunId: string }).goalRunId)
+        .sort(),
+    ).toEqual(['goal-1', 'goal-2']);
+
+    const lines = screen.getAllByTestId('system-status-line');
+    expect(lines[2]?.textContent).toMatch(/目标按未达成结束 · 依据请求人确认/);
+    expect(
+      within(lines[2] as HTMLElement)
+        .getByTestId('system-status-goal-outcome')
+        .getAttribute('data-status'),
+    ).toBe('not_achieved');
+    const cards = screen.getAllByTestId('goal-proposal-card');
+    expect(cards.map((card) => card.getAttribute('data-status'))).toEqual(['running', 'completed']);
+    expect(within(cards[0] as HTMLElement).queryByTestId('goal-proposal-outcome')).toBeNull();
+    expect(
+      within(cards[1] as HTMLElement)
+        .getByTestId('goal-proposal-outcome')
+        .getAttribute('data-status'),
+    ).toBe('not_achieved');
+  });
+
   it('an unreadable goal still says a goal was proposed and still opens its page', async () => {
     const fake = fakeClient();
     const http = scriptedHttp({

@@ -1,4 +1,3 @@
-import type { GoalRunStatus } from '@nexttime/shared';
 import { useEffect, useState } from 'react';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
 import {
@@ -11,13 +10,14 @@ import { messageRoleLabel } from '../../lib/chat-messages.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatTime } from '../../lib/format.js';
 import { useT } from '../../lib/i18n.js';
-import { systemStatusLineFromMessage } from '../../lib/system-status.js';
+import { type LatestGoalStatus, systemStatusLineFromMessage } from '../../lib/system-status.js';
 import type { ChatMessage } from '../../lib/ws-client.js';
 import { ActionRequestCard, type ActionRequestCardProps } from '../ActionRequestCard.js';
 import { SystemStatusLineView } from '../SystemStatusLineView.js';
 import { GoalProposalCard } from './GoalProposalCard.js';
 import { MessageBody } from './MessageBody.js';
 import { MessageReferences } from './MessageReferences.js';
+import { type ChatGoalRead, chatGoalLabel } from './useChatGoals.js';
 
 export interface ChatMessageRowProps {
   readonly message: ChatMessage;
@@ -39,7 +39,9 @@ export interface ChatMessageRowProps {
   readonly onOpenTask: (taskId: string) => void;
   /** S11 GO5e-2: each goal's latest status in this chat (`latestGoalStatuses`), for a proposal
    *  card once its goal has moved on. */
-  readonly latestGoalStatus: ReadonlyMap<string, GoalRunStatus>;
+  readonly latestGoalStatus: ReadonlyMap<string, LatestGoalStatus>;
+  /** The goals this chat names, each read once (`useChatGoals`). */
+  readonly goals: ReadonlyMap<string, ChatGoalRead>;
   readonly onOpenGoal: (goalRunId: string) => void;
 }
 
@@ -67,6 +69,7 @@ export function ChatMessageRow({
   onOpenApproval,
   onOpenTask,
   latestGoalStatus,
+  goals,
   onOpenGoal,
 }: ChatMessageRowProps) {
   const t = useT();
@@ -97,8 +100,8 @@ export function ChatMessageRow({
     return (
       <GoalProposalCard
         key={message.sequence}
-        http={http}
         goalRunId={statusLine.goalRunId}
+        read={goals.get(statusLine.goalRunId)}
         latestStatus={latestGoalStatus.get(statusLine.goalRunId)}
         viewerId={viewerId ?? null}
         createdAt={message.createdAt}
@@ -107,8 +110,15 @@ export function ChatMessageRow({
     );
   }
   if (statusLine) {
+    const goalRunId =
+      statusLine.variant === 'goal_update'
+        ? statusLine.goalRunId
+        : statusLine.variant === 'task_update'
+          ? statusLine.goalStep?.goalRunId
+          : undefined;
     return (
       <SystemStatusLineView
+        goalLabel={goalRunId ? chatGoalLabel(goals.get(goalRunId), t) : undefined}
         key={message.sequence}
         line={statusLine}
         onOpen={

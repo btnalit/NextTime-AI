@@ -26,6 +26,7 @@ import type { GoalRunBudget } from '../goal/types.js';
 import type { OutboxDeliveryMeta } from '../outbox/index.js';
 import { completeTaskWithResult } from '../task/index.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/index.js';
+import { registerBudgetWarningConsumer } from './budget-consumer.js';
 import { registerGoalRunUpdatedConsumer } from './goal-consumer.js';
 import { leaseContextItemsToTurn } from './store.js';
 import { registerTaskUpdatedConsumer } from './task-consumer.js';
@@ -77,7 +78,7 @@ class FakeTaskSupervisorClient implements TaskSupervisorClientPort {
 }
 
 /** Captures the consumer a `register*Consumer` subscribes, so a test delivers events by hand. */
-function fakeDispatcher<E extends GoalRunUpdatedEvent | TaskUpdatedEvent>() {
+function fakeDispatcher<E extends GoalRunUpdatedEvent | TaskUpdatedEvent | BudgetWarningEvent>() {
   let registered: ((event: E, meta: OutboxDeliveryMeta) => Promise<void> | void) | undefined;
   return {
     subscribe: (
@@ -97,6 +98,7 @@ function fakeDispatcher<E extends GoalRunUpdatedEvent | TaskUpdatedEvent>() {
 
 type GoalRunUpdatedEvent = Extract<DomainEvent, { type: 'GoalRunUpdated' }>;
 type TaskUpdatedEvent = Extract<DomainEvent, { type: 'TaskUpdated' }>;
+type BudgetWarningEvent = Extract<DomainEvent, { type: 'BudgetWarning' }>;
 
 interface MessageRow {
   readonly chat_id: string;
@@ -116,6 +118,7 @@ describe.runIf(DATABASE_URL !== undefined)(
 
     const goals = fakeDispatcher<GoalRunUpdatedEvent>();
     const tasks = fakeDispatcher<TaskUpdatedEvent>();
+    const budgets = fakeDispatcher<BudgetWarningEvent>();
 
     const inTx = <T>(principalId: string, fn: (client: PoolClient) => Promise<T>) =>
       withWorkspace(pool, { workspaceId, principalId }, fn);
@@ -248,6 +251,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       worker = { definitionId: proposed.id, version: proposed.version };
       registerGoalRunUpdatedConsumer(goals, { pool });
       registerTaskUpdatedConsumer(tasks, { pool });
+      registerBudgetWarningConsumer(budgets, { pool });
     });
 
     afterAll(async () => {
@@ -419,7 +423,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       ]);
     });
 
-    it("a goal step's Task reports into the goal's chat under its step, with no context item of its own", async () => {
+    it("a goal step's Task reports into the goal's chat under its step, with no context item of its own — not even a budget warning", async () => {
       const requester = await newPrincipal();
       const origin = await inTx(requester, (client) => newChat(client, workspaceId, requester, {}));
       const goalRunId = await propose(requester, await turnIn(requester, origin.id));
@@ -457,6 +461,15 @@ describe.runIf(DATABASE_URL !== undefined)(
         return row;
       });
       await tasks.emit(String(completed.id), completed.payload);
+      // The step's token budget is carved from the goal's (`application/task/invoke.ts`), so its
+      // Task can cross 80% like any other; that is the goal's business, not the agent's.
+      await budgets.emit(String(9_000_000_000 + Math.floor(Math.random() * 1_000_000)), {
+        type: 'BudgetWarning',
+        workspaceId,
+        scope: 'task',
+        taskId,
+        percent: 85,
+      });
 
       const lines = (await systemMessages(requester)).filter(
         (row) => row.content.kind === 'system.task_update' && row.content.taskId === taskId,
