@@ -1206,6 +1206,10 @@ describe('SystemsPage', () => {
     await waitFor(() =>
       expect(within(card).queryByTestId('gatekeeper-governance-drift-notice')).toBeNull(),
     );
+    // UX P3 on #733: what was done is said in its place, and focus lands on it.
+    const done = await within(card).findByTestId('gatekeeper-governance-aligned');
+    expect(done.textContent).toBe('已对齐 1 个 Operation 的分类，现在按平台最新清单执行。');
+    await waitFor(() => expect(document.activeElement).toBe(done.parentElement));
   });
 
   it('legacy 456: nothing is said when the deployed operations match, and a member never reads the preview', async () => {

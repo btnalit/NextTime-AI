@@ -1,5 +1,10 @@
-import type { PreviewGateInstanceEnableResultWire } from '@nexttime/shared';
+import type {
+  PreviewGateInstanceEnableResultWire,
+  RefreshOperationGovernanceResultWire,
+} from '@nexttime/shared';
+import { useState } from 'react';
 import { useCapability } from '../../hooks/useCapability.js';
+import { useFocusWhenLost } from '../../hooks/useFocusWhenLost.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { useT } from '../../lib/i18n.js';
@@ -50,9 +55,32 @@ export function GovernanceDriftNotice({
     { gateId: platformGateId },
     { enabled: reads },
   );
-  if (!reads || preview.state.status !== 'ready') return null;
-  const drift = governanceDriftOf(preview.state.data);
-  if (drift.length === 0) return null;
+  // UX P3 on #733: once aligned the notice goes away; what was done is said in its place, and
+  // focus — dropped to the page when the confirm closed — lands on it.
+  const [aligned, setAligned] = useState<RefreshOperationGovernanceResultWire | null>(null);
+  const drift =
+    reads && preview.state.status === 'ready' ? governanceDriftOf(preview.state.data) : [];
+  // Said once the notice is gone (the preview read again), not while it still shows.
+  const shownAligned = drift.length === 0 ? aligned : null;
+  const alignedRef = useFocusWhenLost<HTMLDivElement>(shownAligned);
+  const done =
+    shownAligned !== null ? (
+      <div ref={alignedRef} tabIndex={-1} className="data-row-full">
+        <Notice testId="gatekeeper-governance-aligned">
+          {t(
+            `已对齐 ${shownAligned.refreshed.length} 个 Operation 的分类，现在按平台最新清单执行。`,
+            `Aligned the classification of ${shownAligned.refreshed.length} operation(s); they now follow the platform’s latest manifest.`,
+          )}
+          {shownAligned.revisionDrafts.length > 0
+            ? t(
+                `另开了 ${shownAligned.revisionDrafts.length} 个修订草稿，到能力目录发布后生效。`,
+                ` ${shownAligned.revisionDrafts.length} revision draft(s) were opened; they take effect once published in the catalog.`,
+              )
+            : null}
+        </Notice>
+      </div>
+    ) : null;
+  if (drift.length === 0) return done;
   const items = drift.map((op) => ({
     name: op.name,
     before: op.existing,
@@ -61,7 +89,8 @@ export function GovernanceDriftNotice({
   }));
   const tightens = drift.some((op) => op.direction === 'tightened' || op.direction === 'mixed');
   return (
-    <div className="stack-s" data-testid="gatekeeper-governance-drift">
+    // UX P2 on #733: under the row at every width, never a column beside it.
+    <div className="stack-s data-row-full" data-testid="gatekeeper-governance-drift">
       <Notice tone="warn" testId="gatekeeper-governance-drift-notice">
         <span className="stack-s">
           <span>
@@ -90,20 +119,24 @@ export function GovernanceDriftNotice({
           </span>
         </span>
       </Notice>
-      <RefreshOperationGovernanceConfirm
-        http={http}
-        gatekeeperId={gatekeeperId}
-        platformGateId={platformGateId}
-        gateDisplayName={gateDisplayName}
-        platformAdmin={platformAdmin}
-        preview={preview.state.data}
-        label={t('对齐', 'Align')}
-        onRefreshed={() => {
-          void preview.reload();
-          onAligned();
-        }}
-        testId="gatekeeper-governance-drift-align"
-      />
+      {/* A row, so the 「对齐」 button keeps its own width. */}
+      <div className="row">
+        <RefreshOperationGovernanceConfirm
+          http={http}
+          gatekeeperId={gatekeeperId}
+          platformGateId={platformGateId}
+          gateDisplayName={gateDisplayName}
+          platformAdmin={platformAdmin}
+          preview={preview.state.status === 'ready' ? preview.state.data : undefined}
+          label={t('对齐', 'Align')}
+          onRefreshed={(result) => {
+            setAligned(result);
+            void preview.reload();
+            onAligned();
+          }}
+          testId="gatekeeper-governance-drift-align"
+        />
+      </div>
     </div>
   );
 }
