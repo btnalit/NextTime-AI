@@ -2,6 +2,7 @@ import { PACK_INSTALL_STATUS_VALUES, type PackInstallStatus } from '@nexttime/sh
 import type { PoolClient } from 'pg';
 import { deriveOntologyPackId, loadPublishedOntologyHead } from '../../substrate/ontology/index.js';
 import { contentDigest, readFamilyHeadDigest } from '../change-plan/index.js';
+import { loadPublishedWorkerDefinitionHead } from '../worker/index.js';
 import {
   type PackComponent,
   type PackEntry,
@@ -9,6 +10,7 @@ import {
   latestPackVersion,
   packComponentDigest,
   packComponentKey,
+  packOwnedWorkerDigest,
 } from './registry.js';
 
 /**
@@ -29,6 +31,10 @@ import {
  * of the latest version has that version's digest, or no head where that version does not publish
  * the component yet (a component is in every version after the first that publishes it,
  * `registry.ts`). No head at all is `not_installed`; heads matching no version are `customized`.
+ *
+ * A Worker's head is compared without the fields the workspace owns (`packOwnedWorkerDigest`, S11
+ * P1-E2): the gates the workspace bound it to and the model it set are not a customization of the
+ * pack's Worker.
  */
 
 export { PACK_INSTALL_STATUS_VALUES, type PackInstallStatus };
@@ -124,13 +130,14 @@ async function readComponentHead(
     }
     case 'skill':
       return readFamilyHeadDigest(client, workspaceId, 'skill_version', component.skillId);
-    case 'worker':
-      return readFamilyHeadDigest(
+    case 'worker': {
+      const head = await loadPublishedWorkerDefinitionHead(
         client,
         workspaceId,
-        'worker_definition_version',
         component.definitionId,
       );
+      return head ? packOwnedWorkerDigest(head.definition) : null;
+    }
   }
 }
 

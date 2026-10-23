@@ -84,8 +84,8 @@ import {
 } from '../../application/gateway/members-handlers.js';
 import { PlatformAdminError } from '../../application/gateway/platform-handlers.js';
 import { ServicePrincipalRequiredError } from '../../application/gateway/service-handle-handler.js';
-// S11 GO5a: the `goal` reads' not-found errors; S11 GO5b: a person's operations' refusals —
-// imported directly like the domain errors around.
+// S11 GO5a: the `goal` reads' not-found errors; S11 GO5b: a person's operations' refusals; S11
+// GO5c: the proposed-goal cap — imported directly like the domain errors around.
 import {
   GoalPlanValidationError,
   GoalRevisionNotFoundError,
@@ -93,6 +93,7 @@ import {
   GoalRunInputError,
   GoalRunNotFoundError,
   GoalRunStateError,
+  ProposedGoalLimitError,
 } from '../../application/goal/index.js';
 import {
   CSRF_HEADER,
@@ -101,7 +102,7 @@ import {
   parseCookieHeader,
 } from '../../application/identity/index.js';
 // S11 P1-C: a domain module's error, imported directly like the two above.
-import { PackNotFoundError } from '../../application/packs/index.js';
+import { PackNotFoundError, PackWorkerGatesError } from '../../application/packs/index.js';
 // P-B2b: same direct-import convention as GateInstanceNotAvailableError above — these two live in
 // application/platform/modules.ts (a domain module, not a *-handlers.ts file), imported directly
 // rather than routed through application/gateway/index.ts's curated surface.
@@ -248,6 +249,11 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // deployment does not ship.
   if (err instanceof PackNotFoundError) {
     return { status: 404, code: err.code, message: err.message };
+  }
+  // S11 P1-E2: `workerGates` naming a Worker the version does not have, or a gate that is not one
+  // of its candidates — a caller-input mistake (the console only offers candidates).
+  if (err instanceof PackWorkerGatesError) {
+    return { status: 400, code: 'invalid_params', message: err.message };
   }
   // P-B2b: D3's "customized or breaking needs confirm: true" — same 400-with-details shape as
   // OntologyViolationError below, so the console can show exactly what to confirm.
@@ -696,6 +702,11 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   }
   if (err instanceof GoalRunStateError) {
     return { status: 409, code: 'illegal_transition', message: err.message };
+  }
+  // S11 GO5c: the requester already has as many goals waiting to be confirmed as one may —
+  // `details.limit` and `details.proposed`; nothing was proposed.
+  if (err instanceof ProposedGoalLimitError) {
+    return { status: 409, code: err.code, message: err.message, details: { ...err.details } };
   }
   if (err instanceof GoalRunInputError) {
     return { status: 400, code: 'invalid_params', message: err.message };

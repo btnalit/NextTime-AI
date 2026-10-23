@@ -36,8 +36,8 @@ import type { ResolvedCaller } from './resolve-caller.js';
 
 /**
  * application/gateway — change-verification.integration (S11 P1-E): where the systems a pack needs
- * stand in a workspace (`readPackRequirements`: connected / can_enable / can_connect /
- * needs_platform, read from the gate catalog), how a verification run finds them
+ * stand in a workspace (`readPackRequirements`: connected / can_enable / needs_platform, read from
+ * the gate catalog, with the gates and the offered instances behind each), how a verification run finds them
  * (`sourceRequirementsChecker`: the connected Gatekeepers' health through the gate's own health
  * endpoint, the path `get_gatekeeper` uses), and the capabilities around it: `list_packs` shows
  * each pack's requirements, `install_pack` verifies the segment it recorded right after the commit
@@ -252,15 +252,37 @@ describe.runIf(DATABASE_URL !== undefined)(
       const statuses = await inWorkspace(ws, (client) =>
         readPackRequirements(client, ws.workspaceId, names),
       );
+      const gate = (id: string) => ({ id, name: expect.stringMatching(/^gate-/) });
+      const none = { gatekeepers: [], offered: [] };
+      // A self-serve connector the workspace has not connected (`open`) or whose connection the
+      // platform suspended (`cut`) is not something a pack's owner could connect on their own: a
+      // workspace connects the generic transports only (P1-E2 dropped `can_connect`).
       expect(statuses).toEqual([
-        { connector: connector('linked'), state: 'connected', gatekeeperIds: [linked] },
-        { connector: connector('off'), state: 'needs_platform', gatekeeperIds: [] },
-        { connector: connector('offered'), state: 'can_enable', gatekeeperIds: [] },
-        { connector: connector('open'), state: 'can_connect', gatekeeperIds: [] },
-        { connector: connector('self'), state: 'connected', gatekeeperIds: [self.gatekeeperId] },
-        { connector: connector('cut'), state: 'can_connect', gatekeeperIds: [] },
-        { connector: connector('closed'), state: 'needs_platform', gatekeeperIds: [] },
-        { connector: connector('missing'), state: 'needs_platform', gatekeeperIds: [] },
+        {
+          connector: connector('linked'),
+          state: 'connected',
+          gatekeepers: [gate(linked)],
+          offered: [],
+        },
+        { connector: connector('off'), state: 'needs_platform', ...none },
+        {
+          connector: connector('offered'),
+          state: 'can_enable',
+          gatekeepers: [],
+          offered: [
+            { gateId: `${connector('offered')}-a`, displayName: `${connector('offered')}-a` },
+          ],
+        },
+        { connector: connector('open'), state: 'needs_platform', ...none },
+        {
+          connector: connector('self'),
+          state: 'connected',
+          gatekeepers: [gate(self.gatekeeperId)],
+          offered: [],
+        },
+        { connector: connector('cut'), state: 'needs_platform', ...none },
+        { connector: connector('closed'), state: 'needs_platform', ...none },
+        { connector: connector('missing'), state: 'needs_platform', ...none },
       ]);
       // Another workspace has not linked the enabled instance: the platform offers it.
       const other = await newWorkspace();
@@ -323,7 +345,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       expect(found.requirements[1]).toEqual({
         connector: connector('absent'),
-        state: 'can_connect',
+        state: 'needs_platform',
         gates: [],
       });
 
@@ -358,6 +380,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(listed?.versions.map((v) => [v.version, v.requiredConnectors])).toEqual([
         [1, []],
         [2, ['docker']],
+        [3, ['docker']],
       ]);
 
       const preview = await call<PackInstallPreviewWire>(owner, 'preview_pack_install', {
@@ -372,7 +395,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           .filter((item) => item.classification === 'authority_widening')
           .map((item) => item.ordinal),
       });
-      expect(installed.pack).toMatchObject({ status: 'up_to_date', installedVersion: 2 });
+      expect(installed.pack).toMatchObject({ status: 'up_to_date', installedVersion: 3 });
       expect(installed.verification).toMatchObject({
         trigger: 'system',
         verifiedBy: { id: ws.ownerId, kind: 'human' },

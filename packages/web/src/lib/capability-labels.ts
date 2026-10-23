@@ -691,7 +691,7 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
   },
 
   // -----------------------------------------------------------------------------------------
-  // Capabilities — goals (S11 GO5a reads, GO5b a person's operations)
+  // Capabilities — goals (S11 GO5a reads, GO5b a person's operations, GO5c proposing one)
   // -----------------------------------------------------------------------------------------
   get_goal: {
     zh: '查看目标',
@@ -719,6 +719,14 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '列出目标里结果不明、还需要有人核对或决定的动作。',
     enHint:
       'Lists the actions of a goal whose outcome is unknown and that still need someone to check or decide.',
+  },
+  propose_goal: {
+    zh: '提议目标',
+    en: 'Propose goal',
+    zhHint:
+      '入口助手替你（或你自己）提议一个目标：说明要什么、分步计划和预算；你在控制台确认之前什么都不会执行。',
+    enHint:
+      'Your assistant (or you) proposes a goal: what is wanted, a step-by-step plan and a budget; nothing runs until you confirm it in the console.',
   },
   confirm_goal: {
     zh: '确认目标',

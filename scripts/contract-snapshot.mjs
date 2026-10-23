@@ -58,6 +58,8 @@ function buildCapabilitiesSnapshot() {
     sideEffects: capabilityHasSideEffects(capability),
     channel: capability.channel,
     ...(capability.minRole !== undefined ? { minRole: capability.minRole } : {}),
+    // S11 GO5c: made only for a person (dispatch refuses any other Principal kind).
+    ...(capability.actsForPerson ? { actsForPerson: true } : {}),
     params: zodToJsonSchema(capability.paramsSchema, JSON_SCHEMA_OPTIONS),
     // Every registry entry carries one as of S3.7 (packages/shared/src/capabilities.ts's own
     // module doc comment) — `null` is defensive only, never expected in practice.

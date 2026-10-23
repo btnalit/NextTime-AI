@@ -18,7 +18,9 @@ import { listEnvelope } from './envelope.js';
 import {
   GoalBudgetSchema,
   GoalPlanSchema,
+  MAX_GOAL_IDEMPOTENCY_KEY_CHARS,
   MAX_GOAL_NOTE_CHARS,
+  MAX_GOAL_STATEMENT_CHARS,
   MAX_PLAN_STEPS,
   MAX_REVISION_REASON_CHARS,
   StepKeySchema,
@@ -166,6 +168,15 @@ export interface Capability {
   /** See `CapabilityScopeKind`; absent = `'workspace'`. */
   readonly scope?: CapabilityScopeKind;
   readonly minRole?: Role;
+  /**
+   * S11 GO5c: the call acts for a person — the Principal it is made for (the caller on the human
+   * channel, the Handle's `obo` on the handle channel) must be `kind = 'human'`. The kernel's
+   * dispatch refuses any other with 403, and a service Handle never carries it
+   * (`issue_service_handle` drops it as it drops what the role may not use; the console does not
+   * offer it there). `propose_goal`: a goal's requester confirms it in the console, which a
+   * service or agent Principal cannot. Absent = any kind.
+   */
+  readonly actsForPerson?: true;
   readonly paramsSchema: z.ZodType;
   /**
    * docs/wire-contract-conventions.md §5 ("为每个 capability 增加 `resultSchema`...列表结果复用
@@ -1304,7 +1315,7 @@ const metaCapabilities = [
       .strict(),
     resultSchema: wire.UpdateOperationDescriptionResultWireSchema,
     description:
-      'S8 W3-K1 (leftover 81): edit one Operation’s description in place (documentation only, not a governance field — no draft/publish step). Builder floor; only the Operation’s proposer or the workspace owner may edit it (403 not_proposer otherwise). description must be non-blank after trimming, at most 2000 characters; refused when it carries a suspected credential (400 credentials_in_text) or still holds the [redacted] mark a read shows in place of one — write that part again (400 redacted_text_submitted). AuditRecord with before/after.',
+      'S8 W3-K1 (leftover 81): edit one Operation’s description in place (documentation only, not a governance field — no draft/publish step). Builder floor; only the Operation’s proposer or the workspace owner may edit it (403 not_proposer otherwise). description must be non-blank after trimming, at most 2000 characters; refused when it carries a suspected credential (400 credentials_in_text) or still holds the [redacted] mark a read shows in place of one — write that part again (400 redacted_text_submitted). Sent exactly as a read shows the current description, it changes nothing (the stored text is kept). AuditRecord with before/after for a change.',
   },
   {
     name: 'propose_skill',
@@ -3816,6 +3827,13 @@ const platformCapabilities = [
 // invariant: every `scope:'platform'` capability must be `group:'platform'`, and vice versa).
 // -------------------------------------------------------------------------------------------
 
+/** `preview_pack_install` / `install_pack` `workerGates` (S11 P1-E2): by Worker name, the gates the
+ *  owner kept for a Worker the install binds — a subset of its binding's `candidates` (400
+ *  invalid_params otherwise). A Worker not named is bound to every candidate; an empty list keeps
+ *  none and is recorded (`gates: []`). A Worker whose head already has gates keeps them whatever
+ *  is passed (`binding.source: 'workspace'`). */
+const PackWorkerGatesParamSchema = z.record(z.string().min(1), z.array(id));
+
 const modulesCapabilities = [
   {
     name: 'list_workspace_modules',
@@ -3956,7 +3974,7 @@ const modulesCapabilities = [
     paramsSchema: noParams,
     resultSchema: listEnvelope(wire.PackWireSchema),
     description:
-      'Every pack this deployment ships (Pack Contract v1, `packs/<name>/<version>/pack.yaml`) with its versions and components — ontology families, Skills and Workers (WorkerDefinitions) —, and this workspace’s state of it — not installed / up to date / outdated / customized — for the pack and for each component, with the change that installed each component’s current content; and the systems the latest version needs (requiredConnectors), each with where it stands here — connected / an instance the platform offers to enable / one the owner can connect / needs a platform administrator — read without contacting any gate.',
+      'Every pack this deployment ships (Pack Contract v1, `packs/<name>/<version>/pack.yaml`) with its versions and components — ontology families, Skills and Workers (WorkerDefinitions) —, and this workspace’s state of it — not installed / up to date / outdated / customized — for the pack and for each component, with the change that installed each component’s current content; and the systems the latest version needs (requiredConnectors), each with where it stands here — connected (with the workspace’s gates on it) / an instance the platform offers to enable (with the instances) / needs a platform administrator — read without contacting any gate. Each Worker component carries the systems it acts on, the gates its published head may act on, and whether installing again would bind it (bindable: installed, no gates yet, a gate of one of its systems connected now).',
   },
   {
     name: 'preview_pack_install',
@@ -3964,10 +3982,15 @@ const modulesCapabilities = [
     mode: 'observe',
     channel: 'human',
     minRole: 'owner',
-    paramsSchema: z.object({ name: z.string().min(1) }).strict(),
+    paramsSchema: z
+      .object({
+        name: z.string().min(1),
+        workerGates: PackWorkerGatesParamSchema.optional(),
+      })
+      .strict(),
     resultSchema: wire.PackInstallPreviewWireSchema,
     description:
-      'Dry run of install_pack, writing nothing: per component of the latest version, what the family has now and would have after — for an ontology family the type names added / removed / changed, for a Skill or Worker the content it would publish and the fields that differ —, and the item’s authority classification; the versions the install moves through and whether one is breaking; how many objects and active Facts use a type it takes out (kept, never removed); and the digest to pass back as reviewedDigest. The systems the version needs are in pack.requirements: installing does not wait for them. 404 pack_not_found; 409 ontology_namespace_conflict when a component declares an ObjectType or ActionType name another installed family already declares (I-P1); 409 skill_name_conflict when another Skill family already has a Skill component’s name published.',
+      'Dry run of install_pack, writing nothing: per component of the latest version, what the family has now and would have after — for an ontology family the type names added / removed / changed, for a Skill or Worker the content it would publish and the fields that differ —, and the item’s authority classification; the versions the install moves through and whether one is breaking; how many objects and active Facts use a type it takes out (kept, never removed); and the digest to pass back as reviewedDigest. The systems the version needs are in pack.requirements: installing does not wait for them. A Worker’s gates and model are the workspace’s own: each Worker item keeps what its head has (binding.source workspace), and a Worker that names systems and has no gates yet is bound to the workspace’s connected gates of those systems (binding.source install, an authority_widening item) — every candidate unless workerGates keeps fewer; keeping none publishes gates: [] (binding.source none), so the Worker is no longer offered for binding; a Worker whose head has gates keeps them whatever workerGates says. 400 invalid_params when workerGates names a Worker the version does not have or a gate that is not one of its candidates; 404 pack_not_found; 409 ontology_namespace_conflict when a component declares an ObjectType or ActionType name another installed family already declares (I-P1); 409 skill_name_conflict when another Skill family already has a Skill component’s name published.',
   },
   {
     name: 'install_pack',
@@ -3985,11 +4008,14 @@ const modulesCapabilities = [
         /** The ordinals of the items the dry run classifies `authority_widening`, each confirmed
          *  by the person installing (I-A4) — a person only: from a service Principal, 403. */
         confirmedOrdinals: z.array(z.number().int().positive()).optional(),
+        /** The gates the owner kept for a Worker the install binds — the dry run's own
+         *  `workerGates`, since it is part of what the digest covers. */
+        workerGates: PackWorkerGatesParamSchema.optional(),
       })
       .strict(),
     resultSchema: wire.PackInstallResultWireSchema,
     description:
-      'Install a pack’s latest version into this workspace in one transaction, as one ChangePlan segment: each component whose content differs is published as its family’s next version — an ontology family, a Skill, a Worker (WorkerDefinition) — with this owner as proposer and publisher (installing, upgrading, or replacing a customized family alike — the dry run showed which). Refuses, writing nothing: 409 version_changed when the latest version is not the reviewed one, 409 change_plan_changed when the dry run would differ from the reviewed digest now (preview again), 400 change_confirmation_required when an authority-widening item is not among confirmedOrdinals, 403 when confirmedOrdinals comes from a Principal that is not a person (a service API key), 409 ontology_namespace_conflict (I-P1), 409 skill_name_conflict, 404 pack_not_found. Already up to date: records nothing. One change_item.apply audit row per item. Right after the install commits, the segment is verified once as the person who installed (trigger system, as verify_change_segment does; its result is verification — null when the run could not be made, the install stands either way).',
+      'Install a pack’s latest version into this workspace in one transaction, as one ChangePlan segment: each component whose content differs is published as its family’s next version — an ontology family, a Skill, a Worker (WorkerDefinition) — with this owner as proposer and publisher (installing, upgrading, or replacing a customized family alike — the dry run showed which); a Worker keeps the gates and model its head has, and one the dry run binds is bound to the gates it showed (pass the dry run’s own workerGates). Refuses, writing nothing: 409 version_changed when the latest version is not the reviewed one, 409 change_plan_changed when the dry run would differ from the reviewed digest now — a gate connected or cut off since counts (preview again), 400 invalid_params for workerGates as in preview_pack_install, 400 change_confirmation_required when an authority-widening item is not among confirmedOrdinals, 403 when confirmedOrdinals comes from a Principal that is not a person (a service API key), 409 ontology_namespace_conflict (I-P1), 409 skill_name_conflict, 404 pack_not_found. Already up to date: records nothing. One change_item.apply audit row per item. Right after the install commits, the segment is verified once as the person who installed (trigger system, as verify_change_segment does; its result is verification — null when the run could not be made, the install stands either way).',
   },
 ] as const satisfies readonly Capability[];
 
@@ -3999,9 +4025,16 @@ const modulesCapabilities = [
 // exactly like an unknown id — the rule `get_task` applies (kernel `goalVisibleTo`). The owner sees
 // every run on the human channel only: on the handle channel the viewer is the Handle's `obo`, who
 // reads their own runs, an owner too (looking across the workspace is a person's, in the
-// console — coordinator decision on review #493 of #680). No Handle ceiling holds
-// these yet (the entry agent gets `get_goal` with `propose_goal`, GO5c/GO5e). Each result is the
-// one `wire/goal.ts` shape the console's goal pages (GO6) render.
+// console — coordinator decision on review #493 of #680). The entry ceiling holds the four reads
+// and `propose_goal` (S11 GO5c), no Worker's does: a step's Worker never proposes or reads goals
+// (governance/capability/handles.ts). Each result is the one `wire/goal.ts` shape the console's
+// goal pages (GO6) render.
+//
+// S11 GO5c — `propose_goal`: a goal, its plan v1 and budget, proposed for the caller (on a Handle,
+// its obo) to confirm — the entry agent's way to start one, or a person's own. Nothing runs until
+// the requester confirms it (`confirm_goal`, human channel): a GoalRun spends and acts while nobody
+// watches (propose → authorize → execute). The budget is the proposal's and the confirmation
+// cannot change it: what the card shows is what is confirmed.
 //
 // S11 GO5b — a person's operations on a run, human channel only (HUMAN_ONLY_CAPABILITY_NAMES; no
 // Handle ceiling may ever carry them, scripts/check-membership-capabilities-not-in-handle-scope.sh):
@@ -4079,6 +4112,24 @@ const goalCapabilities = [
     resultSchema: listEnvelope(wire.UnresolvedGoalActionWireSchema),
     description:
       'List the actions of a GoalRun whose outcome is unknown and that still need a person — a finding (did it take effect?) or, found not to have, a decision (run it again or change the plan) — with the platform’s own check of each where its step declared one. Every step counts, revised-away and cancelled ones included. Same visibility as get_goal.',
+  },
+  {
+    name: 'propose_goal',
+    group: 'goal',
+    mode: 'propose',
+    channel: 'handle',
+    minRole: 'member',
+    actsForPerson: true,
+    paramsSchema: z
+      .object({
+        statement: z.string().max(MAX_GOAL_STATEMENT_CHARS).regex(/\S/, 'says nothing'),
+        plan: GoalPlanSchema,
+        budget: GoalBudgetSchema,
+        idempotencyKey: z.string().min(1).max(MAX_GOAL_IDEMPOTENCY_KEY_CHARS).optional(),
+      })
+      .strict(),
+    resultSchema: wire.ProposeGoalResultWireSchema,
+    description: `Propose a goal for you (on a Handle, the person you act for) to confirm: statement — what is wanted, in a sentence or two (at most ${MAX_GOAL_STATEMENT_CHARS} characters) — the plan (revision 1: its steps, each a published Worker version, their dependencies, inputs and checks, and the acceptance checks of the goal) and the budget (tokens, step attempts, revisions, wall-clock seconds from confirmation). Nothing runs until the requester confirms it in the console (confirm_goal); the budget cannot be changed there — propose again to change it. The requester must be a person: a call for a service or agent Principal is refused (403). A requester has at most a deployment-set number of goals waiting to be confirmed or rejected (5 unless configured): one more is refused, nothing written (409 proposed_goal_limit with details.limit and details.proposed) — ask them to confirm or reject one first; a retry of a run already proposed is still answered. The plan is checked (400 invalid_params with details.problems); the statement and the plan must not carry credentials — refused, nothing written (400 credentials_in_text with details.field and, for the plan, details.suspectedSecretPaths: a gate authenticates with the credentials configured on it), nor the [redacted] mark a read shows where one stood (400 redacted_text_submitted with details.field and, for the plan, details.paths). Plan places read plan.steps.<i>.input.<field>, plan.acceptance.<i>.prompt and so on, i from 0. The result's hints say what the person confirming should know: a plan the platform checks nothing of, and any step the requester could not start now (a gate they cannot act on, a capability they do not hold, a Worker their profile excludes). idempotencyKey: the same key returns the run it first proposed, whatever its status (changed: false); without one, the same statement, plan and budget from the same session return the run still proposed.`,
   },
   {
     name: 'confirm_goal',
@@ -4168,7 +4219,7 @@ const goalCapabilities = [
       })
       .strict(),
     resultSchema: wire.ReviseGoalResultWireSchema,
-    description: `Revise the plan of a paused GoalRun — the requester alone — based on its current revision (409 illegal_transition when another was accepted since, I-G3) and within its revision budget, or the budget the revision brings: the new plan is checked (400 invalid_params with details.problems), accepted and in force at once. Every live step it drops or changes is superseded (removals, per step: terminate — the default — or let_finish, releasing listed requests), every new or changed key gets a pending StepRun, and the superseded steps’ requests not yet started are withdrawn. The run stays paused for the requester to resume. reason (at most ${MAX_REVISION_REASON_CHARS} characters) is shown on the revision as written — refused when it carries a suspected credential (400 credentials_in_text).${GOAL_OPERATION_REFUSALS}`,
+    description: `Revise the plan of a paused GoalRun — the requester alone — based on its current revision (409 illegal_transition when another was accepted since, I-G3) and within its revision budget, or the budget the revision brings: the new plan is checked (400 invalid_params with details.problems), accepted and in force at once. Every live step it drops or changes is superseded (removals, per step: terminate — the default — or let_finish, releasing listed requests), every new or changed key gets a pending StepRun, and the superseded steps’ requests not yet started are withdrawn. The run stays paused for the requester to resume. reason (at most ${MAX_REVISION_REASON_CHARS} characters) is shown on the revision as written. The plan and the reason must not carry credentials — refused, nothing written (400 credentials_in_text with details.field and, for the plan, details.suspectedSecretPaths) — nor the [redacted] mark a read shows where one stood (400 redacted_text_submitted with details.field and, for the plan, details.paths): write that part again. A call sent exactly as get_goal_revision shows it is unchanged: it keeps what is stored (a masked value, an invisible character shown as \\u{XXXX}), and only what is written anew is checked. A call is a step's Worker with its input (same step key), a reconcile action or check (same step key, as many reconcile declarations as read, same place), or an acceptance check (same key, the step's or the plan's) — each whole, its target included; another key's read never brings that entry's value along. A call changed anywhere — another Worker, gate or operation, a value — keeps every value as sent, so a [redacted] left in it is refused; fields outside a call (maxAttempts, dependsOn, nested) do not decide it.${GOAL_OPERATION_REFUSALS}`,
   },
   {
     name: 'confirm_goal_acceptance',
@@ -4474,6 +4525,13 @@ export function assertRegistryConsistent(): void {
     } else if (capability.group === 'platform') {
       throw new Error(
         `capability registry: "${capability.name}" is in group "platform" but not scope:platform`,
+      );
+    }
+
+    // S11 GO5c: a platform-scope call has no Principal to act for.
+    if (capability.actsForPerson && capability.scope === 'platform') {
+      throw new Error(
+        `capability registry: "${capability.name}" is scope:platform but declares actsForPerson`,
       );
     }
 

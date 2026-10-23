@@ -344,6 +344,16 @@ export const GoalOperationResultWireSchema = z
   .strict();
 export type GoalOperationResultWire = z.infer<typeof GoalOperationResultWireSchema>;
 
+/** S11 GO5c `propose_goal`: the run proposed — `proposed`, with its revision 1 — and what the
+ *  person confirming it should know (`hints`: the plan's, and what the requester's authority would
+ *  stop now). `changed: false` when the call matched a run proposed before with the same
+ *  idempotency key (an explicit key: whatever its status since; a derived one: still proposed). */
+export const ProposeGoalResultWireSchema = GoalOperationResultWireSchema.extend({
+  planRevisionId: z.string(),
+  hints: z.array(PlanHintSchema),
+}).strict();
+export type ProposeGoalResultWire = z.infer<typeof ProposeGoalResultWireSchema>;
+
 /** `confirm_goal`: the StepRuns the confirmation created, every step of the plan `pending` (none
  *  when it was sent again). */
 export const ConfirmGoalResultWireSchema = GoalOperationResultWireSchema.extend({

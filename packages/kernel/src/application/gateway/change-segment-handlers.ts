@@ -13,6 +13,7 @@ import type {
 } from '@nexttime/shared';
 import { shownFreeText } from '../../governance/redaction/index.js';
 import {
+  type ChangeGateRef,
   type ChangePrincipalRef,
   type ChangeProvenance,
   type ChangeSegmentRecord,
@@ -153,12 +154,19 @@ function toChangeItemWire(item: InspectedChangeItem): ChangeItemWire {
     }
     case 'worker_definition_version': {
       const stored = parseStoredFamilyItem(kind, record);
+      const gateRefs = (side: readonly ChangeGateRef[] | null | undefined) =>
+        side ? side.map((gate) => ({ id: gate.id, name: gate.name })) : null;
       return {
         ...common,
         kind,
         target: workerDefinitionTargetOf(stored.target),
         before: stored.before ? { ...stored.before } : null,
         after: { ...stored.after },
+        // P1-E2 (UX acceptance of #705): what the Worker could act on before and after.
+        gates: {
+          before: gateRefs(item.workerGates?.before),
+          after: gateRefs(item.workerGates?.after),
+        },
       };
     }
     case 'operation_version': {

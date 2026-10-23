@@ -469,7 +469,6 @@ export const PLAN_REVISION_TONES: Readonly<Record<PlanRevisionStatus, ChipStyle>
 export const PACK_REQUIREMENT_TONES: Readonly<Record<PackRequirementState, ChipStyle>> = {
   connected: { tone: 'ok', label: { zh: '已接入', en: 'Connected' } },
   can_enable: { tone: 'warn', label: { zh: '待启用', en: 'Can be enabled' } },
-  can_connect: { tone: 'warn', label: { zh: '待接入', en: 'Can be connected' } },
   needs_platform: { tone: 'danger', label: { zh: '平台未提供', en: 'Not offered' } },
 };
 

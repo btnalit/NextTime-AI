@@ -886,6 +886,27 @@ describe.runIf(DATABASE_URL !== undefined)(
         );
         expect(stillUntouched?.operation.description).toContain(fake);
 
+        // Sent back exactly as read, it is the stored description itself (S11 GO5c): nothing is
+        // written or audited as a change, and the result is the read, not what it masks.
+        const unchanged = await callAs<{ description: string }>(
+          ownerId,
+          'owner',
+          'update_operation_description',
+          { gatekeeperId, name: op.name, description: ` ${shown} ` },
+        );
+        expect(unchanged.description).toBe(shown);
+        expect(
+          (await inTx((client) => getOperation(client, workspaceId, gatekeeperId, op.name)))
+            ?.operation.description,
+        ).toContain(fake);
+        const noChange = await callAs<{ items: { payload: Record<string, unknown> }[] }>(
+          ownerId,
+          'owner',
+          'audit_query',
+          { filter: { action: 'operation.description_updated' } },
+        );
+        expect(noChange.items.filter((item) => item.payload.name === op.name)).toEqual([]);
+
         // With the masked part written again, the edit goes through.
         const saved = await callAs<{ description: string }>(
           ownerId,

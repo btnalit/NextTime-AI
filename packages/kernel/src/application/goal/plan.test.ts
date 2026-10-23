@@ -2,6 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { GOAL_ACCEPTANCE_CHECK_KIND_VALUES } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
 import {
+  RedactedTextSubmittedError,
+  TextCarriesCredentialsError,
+} from '../../governance/redaction/index.js';
+import {
   GoalPlanValidationError,
   IMPLICIT_CONFIRM_KEY,
   MAX_ACCEPTANCE_PROMPT_CHARS,
@@ -10,9 +14,14 @@ import {
   MAX_PLAN_STEPS,
   MAX_STEP_ACCEPTANCE_CHECKS,
   MAX_STEP_ATTEMPTS,
+  type PlanStep,
   parsePlan,
+  planAsRead,
   planHints,
+  planShape,
   planStep,
+  refusePlanCredentials,
+  reviewRevisedPlan,
   roundAcceptance,
   samePlanEntry,
 } from './plan.js';
@@ -82,9 +91,9 @@ describe('parsePlan', () => {
       ],
     });
     expect(problems).toEqual([
-      'step key "a" appears more than once',
-      'step "b" depends on itself',
-      'step "c" depends on "x", which is not in the plan',
+      'step "a": the key appears more than once',
+      'step "b": depends on itself',
+      'step "c": depends on "x", which is not in the plan',
     ]);
   });
 
@@ -98,7 +107,7 @@ describe('parsePlan', () => {
           step('d'),
         ],
       }),
-    ).toEqual(['the dependencies form a cycle: a -> c -> b -> a']);
+    ).toEqual(['step "a": the dependencies form a cycle: a -> c -> b -> a']);
     // A diamond is not a cycle.
     expect(() =>
       parsePlan({
@@ -654,5 +663,327 @@ describe('planStep and samePlanEntry', () => {
     expect(samePlanEntry(plan, widened, 'a')).toBe(false);
     expect(samePlanEntry(plan, { steps: [step('a', { input: { n: 1 } })] }, 'b')).toBe(false);
     expect(samePlanEntry(plan, plan, 'z')).toBe(false);
+  });
+});
+
+// S11 GO5c: what `propose_goal` and `revise_goal` refuse before a plan's other problems, each
+// place named the way the console's plan editor finds it (`plan.steps.<i>.…`).
+describe('refusePlanCredentials', () => {
+  /** Synthetic — `.gitleaks.toml` allows fixtures spelled out from the alphabet. */
+  const FAKE = 'abcdefghijklmnopqrstuvwxyz0123';
+
+  function refusalOf(plan: unknown): { readonly name: string; readonly details: unknown } {
+    try {
+      refusePlanCredentials(planShape(plan));
+    } catch (err) {
+      return err as { name: string; details: unknown };
+    }
+    throw new Error('expected the plan to be refused');
+  }
+
+  it('lets a plan whose every part reads back as written through', () => {
+    expect(() =>
+      refusePlanCredentials(
+        planShape({
+          steps: [step('a', { input: { host: 'db-1', note: 'rotate the key' } }), step('b')],
+          acceptance: [{ key: 'ok', kind: 'requester_confirm', prompt: 'Is the report right?' }],
+        }),
+      ),
+    ).not.toThrow();
+  });
+
+  it('refuses a credential in a call argument — under a secret field name, or by its value — naming every place', () => {
+    const refused = refusalOf({
+      steps: [
+        step('a', { input: { host: 'db-1', password: 'anything' } }),
+        step('b', { input: { targets: [{ name: 'x' }, { header: `Bearer ${FAKE}` }] } }),
+      ],
+    });
+    expect(refused).toBeInstanceOf(TextCarriesCredentialsError);
+    expect(refused.details).toEqual({
+      field: 'plan.steps.0.input.password',
+      suspectedSecretValues: 2,
+      suspectedSecretPaths: ['plan.steps.0.input.password', 'plan.steps.1.input.targets.1.header'],
+    });
+    expect(JSON.stringify(refused)).not.toContain(FAKE);
+  });
+
+  it('refuses one anywhere else in the plan — a confirmation prompt — the same way, before the plan’s other problems', () => {
+    const plan = {
+      steps: [step('a')],
+      acceptance: [{ key: 'ok', kind: 'requester_confirm', prompt: `PGPASSWORD=${FAKE} worked?` }],
+    };
+    expect(refusalOf(plan).details).toEqual({
+      field: 'plan.acceptance.0.prompt',
+      suspectedSecretValues: 1,
+      suspectedSecretPaths: ['plan.acceptance.0.prompt'],
+    });
+    // parsePlan alone still names it as a problem (a plan stored before, read back).
+    expect(problemsOf(plan)).toHaveLength(1);
+  });
+
+  it('counts a schema literal under a secret-named key once (review #493 on #704)', () => {
+    expect(
+      refusalOf({ steps: [step('a', { input: { schema: { apiKey: { default: 'x1' } } } })] })
+        .details,
+    ).toEqual({
+      field: 'plan.steps.0.input.schema.apiKey.default',
+      suspectedSecretValues: 1,
+      suspectedSecretPaths: ['plan.steps.0.input.schema.apiKey.default'],
+    });
+  });
+
+  it('refuses a [redacted] mark copied from a read, naming where — before looking for credentials', () => {
+    const refused = refusalOf({
+      steps: [
+        step('a', { input: { password: 'anything' } }),
+        step('b', { input: { note: 'use [redacted] here' } }),
+      ],
+    });
+    expect(refused).toBeInstanceOf(RedactedTextSubmittedError);
+    expect(refused.details).toEqual({
+      field: 'plan.steps.1.input.note',
+      paths: ['plan.steps.1.input.note'],
+    });
+  });
+});
+
+describe('reviewRevisedPlan (S11 GO5c: an entry sent back as read)', () => {
+  /** Synthetic — `.gitleaks.toml` allows fixtures spelled out from the alphabet. */
+  const FAKE = 'abcdefghijklmnopqrstuvwxyz0123';
+  const stored = planShape({
+    steps: [
+      step('a', { input: { host: 'db1', password: `${FAKE}A` } }),
+      step('b', { input: { host: 'db1', password: `${FAKE}B` } }),
+      step('z', { input: { note: 'family \u{1F468}\u200D\u{1F469}' } }),
+    ],
+    acceptance: [
+      { key: 'ok', kind: 'requester_confirm', prompt: 'the \u{1F468}\u200D\u{1F469} photo' },
+    ],
+  });
+  const read = planAsRead(stored);
+  const [readA, readB, readZ] = read.steps as [PlanStep, PlanStep, PlanStep];
+
+  function refusalOf(submitted: unknown): { readonly name: string; readonly details: unknown } {
+    try {
+      reviewRevisedPlan(planShape(submitted), stored);
+    } catch (err) {
+      return err as { name: string; details: unknown };
+    }
+    throw new Error('expected the revision to be refused');
+  }
+
+  it('the read differs from what is stored: a credential masked, a joiner spelled out', () => {
+    expect(readA.input).toEqual({ host: 'db1', password: '[redacted]' });
+    expect(JSON.stringify(readZ.input)).toContain('\\u{200D}');
+    expect(read.acceptance?.[0]).toMatchObject({ prompt: expect.stringContaining('\\u{200D}') });
+  });
+
+  it('keeps the stored original of every entry sent back as read, in the order sent', () => {
+    const added = step('c', { input: { host: 'db3' } });
+    expect(
+      reviewRevisedPlan(planShape({ ...read, steps: [readZ, readB, readA, added] }), stored),
+    ).toEqual({
+      steps: [stored.steps[2], stored.steps[1], stored.steps[0], added],
+      acceptance: stored.acceptance,
+    });
+  });
+
+  it('restores leaf by leaf: a value left as read beside a changed one keeps what is stored', () => {
+    expect(
+      reviewRevisedPlan(planShape({ ...read, steps: [{ ...readA, maxAttempts: 2 }] }), stored)
+        .steps,
+    ).toEqual([{ ...stored.steps[0], maxAttempts: 2 }]);
+  });
+
+  it('checks only what was written, refused at its place in the plan sent', () => {
+    expect(
+      refusalOf({
+        ...read,
+        steps: [readB, { ...readA, input: { host: 'db1', password: '[redacted]!' } }],
+      }),
+    ).toMatchObject({
+      name: 'RedactedTextSubmittedError',
+      details: { field: 'plan.steps.1.input.password', paths: ['plan.steps.1.input.password'] },
+    });
+    expect(
+      refusalOf({
+        ...read,
+        acceptance: [{ key: 'ok', kind: 'requester_confirm', prompt: `PGPASSWORD=${FAKE}` }],
+      }),
+    ).toMatchObject({
+      name: 'TextCarriesCredentialsError',
+      details: { field: 'plan.acceptance.0.prompt', suspectedSecretValues: 1 },
+    });
+    // A value left as read is not counted with what was written.
+    expect(
+      refusalOf({
+        steps: [{ ...readA, maxAttempts: 2 }],
+        acceptance: [{ key: 'ok', kind: 'requester_confirm', prompt: `PGPASSWORD=${FAKE}` }],
+      }),
+    ).toMatchObject({
+      name: 'TextCarriesCredentialsError',
+      details: {
+        field: 'plan.acceptance.0.prompt',
+        suspectedSecretValues: 1,
+        suspectedSecretPaths: ['plan.acceptance.0.prompt'],
+      },
+    });
+  });
+
+  it('gives a masked value back only with its whole call argument sent as read (review #493 on #704)', () => {
+    const withRows = planShape({
+      steps: [
+        step('t', {
+          input: {
+            targets: [
+              { host: 'h1', password: `${FAKE}1` },
+              { host: 'h2', password: `${FAKE}2` },
+            ],
+            tokens: [`${FAKE}A`, `${FAKE}B`],
+          },
+        }),
+      ],
+    });
+    const [readT] = planAsRead(withRows).steps as [PlanStep];
+    const input = readT.input as {
+      targets: { host: string; password: string }[];
+      tokens: string[];
+    };
+    const refusedAt = (changed: Record<string, unknown>) => {
+      try {
+        reviewRevisedPlan(
+          planShape({ steps: [{ ...readT, input: { ...input, ...changed } }] }),
+          withRows,
+        );
+      } catch (err) {
+        return { name: (err as Error).name, details: (err as { details: unknown }).details };
+      }
+      throw new Error('expected the revision to be refused');
+    };
+    // A row deleted, two rows swapped, an item deleted, a host changed: each [redacted] left in the
+    // changed input is refused where it stands — never filled with whatever was stored there.
+    expect(refusedAt({ targets: [input.targets[1]] })).toEqual({
+      name: 'RedactedTextSubmittedError',
+      details: { field: 'plan.steps.0.input.targets.0.password', paths: expect.any(Array) },
+    });
+    expect(refusedAt({ targets: [input.targets[1], input.targets[0]] })).toMatchObject({
+      details: { field: 'plan.steps.0.input.targets.0.password' },
+    });
+    expect(refusedAt({ tokens: [input.tokens[1]] })).toMatchObject({
+      details: { field: 'plan.steps.0.input.targets.0.password' },
+    });
+    expect(
+      refusedAt({ targets: [{ ...input.targets[0], host: 'h9' }, input.targets[1]] }),
+    ).toMatchObject({ details: { field: 'plan.steps.0.input.targets.0.password' } });
+    // The whole input as read, the step changed elsewhere: given back as stored.
+    expect(
+      reviewRevisedPlan(planShape({ steps: [{ ...readT, maxAttempts: 2 }] }), withRows).steps,
+    ).toEqual([{ ...withRows.steps[0], maxAttempts: 2 }]);
+  });
+
+  it('gives a masked value back only with its whole call sent as read: its Worker, gate and place too (review #493 on #704)', () => {
+    const [gateA1, gateA2] = [randomUUID(), randomUUID()];
+    const other = { definitionId: randomUUID(), version: 1 };
+    const action = (gatekeeperId: string, password: string) => ({
+      gatekeeperId,
+      operation: 'svc.restart',
+      params: { password },
+    });
+    const check = (gatekeeperId: string, password: string) => ({
+      ...action(gatekeeperId, password),
+      expect: { path: 'ok', op: 'eq', value: true },
+    });
+    const calls = planShape({
+      steps: [
+        step('a', {
+          reconcile: [
+            { action: action(gateA1, `${FAKE}1`), check: check(gateA1, `${FAKE}1`) },
+            { action: action(gateA2, `${FAKE}2`), check: check(gateA2, `${FAKE}2`) },
+          ],
+        }),
+        step('b', { input: { password: `${FAKE}B` } }),
+        step('c', {
+          acceptance: [
+            { kind: 'observe_predicate', key: 'x', check: check(gateA1, `${FAKE}X`) },
+            { kind: 'observe_predicate', key: 'y', check: check(gateA2, `${FAKE}Y`) },
+          ],
+        }),
+      ],
+    });
+    const [readA, readB, readC] = planAsRead(calls).steps as [PlanStep, PlanStep, PlanStep];
+    const [first, second] = readA.reconcile as [
+      NonNullable<PlanStep['reconcile']>[number],
+      NonNullable<PlanStep['reconcile']>[number],
+    ];
+    const fieldOf = (steps: unknown[]) => {
+      try {
+        reviewRevisedPlan(planShape({ steps }), calls);
+      } catch (err) {
+        expect((err as Error).name).toBe('RedactedTextSubmittedError');
+        return (err as { details: { field: string } }).details.field;
+      }
+      throw new Error('expected the revision to be refused');
+    };
+    // A reconcile declaration taken out: the one left is not given the first one's value.
+    expect(fieldOf([{ ...readA, reconcile: [second] }, readB, readC])).toBe(
+      'plan.steps.0.reconcile.0.action.params.password',
+    );
+    // An action pointed at another gate, its params left as read.
+    expect(
+      fieldOf([
+        {
+          ...readA,
+          reconcile: [{ ...first, action: { ...first.action, gatekeeperId: gateA2 } }, second],
+        },
+        readB,
+        readC,
+      ]),
+    ).toBe('plan.steps.0.reconcile.0.action.params.password');
+    // Another Worker, the input left as read.
+    expect(fieldOf([readA, { ...readB, worker: other }, readC])).toBe(
+      'plan.steps.1.input.password',
+    );
+    // A step's acceptance check taken out: the one left is matched by its key, not its place,
+    // so y keeps its own value and never x's.
+    const [, checkY] = readC.acceptance as [unknown, unknown];
+    expect(
+      reviewRevisedPlan(
+        planShape({ steps: [readA, readB, { ...readC, acceptance: [checkY] }] }),
+        calls,
+      ).steps[2],
+    ).toEqual({ ...calls.steps[2], acceptance: [calls.steps[2]?.acceptance?.[1]] });
+    // y's check pointed at x's gate, its params left as read: not y's call any more.
+    const [, shownY] = readC.acceptance as [unknown, { check: Record<string, unknown> }];
+    expect(
+      fieldOf([
+        readA,
+        readB,
+        { ...readC, acceptance: [{ ...shownY, check: { ...shownY.check, gatekeeperId: gateA1 } }] },
+      ]),
+    ).toBe('plan.steps.2.acceptance.0.check.params.password');
+    // Every call as read, only the attempts changed: each is the stored call.
+    expect(
+      reviewRevisedPlan(
+        planShape({
+          steps: [readA, readB, readC].map((entry) => ({ ...entry, maxAttempts: 2 })),
+        }),
+        calls,
+      ).steps,
+    ).toEqual(calls.steps.map((entry) => ({ ...entry, maxAttempts: 2 })));
+  });
+
+  it('never brings one entry’s original along with another’s read', () => {
+    // b's read under a new key is a new entry, checked — not b.
+    expect(refusalOf({ ...read, steps: [readA, { ...readB, key: 'd' }] })).toMatchObject({
+      name: 'RedactedTextSubmittedError',
+      details: { field: 'plan.steps.1.input.password' },
+    });
+    // b's read under a's key equals a's own read, so it is a — with a's original, never b's.
+    const revised = reviewRevisedPlan(
+      planShape({ ...read, steps: [{ ...readB, key: 'a' }] }),
+      stored,
+    );
+    expect(revised.steps).toEqual([stored.steps[0]]);
   });
 });

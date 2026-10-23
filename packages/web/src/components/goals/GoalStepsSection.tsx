@@ -1,4 +1,4 @@
-import type { GoalDetailWire, StepAcceptanceWire, StepRunWire } from '@nexttime/shared';
+import type { GoalDetailWire, PlanHint, StepAcceptanceWire, StepRunWire } from '@nexttime/shared';
 import { DEFAULT_MAX_ATTEMPTS } from '@nexttime/shared';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import {
@@ -14,14 +14,19 @@ import {
   checkKindLabel,
   factCheckSentence,
   goalSteps,
+  isStepAuthorityHint,
   observationSentence,
+  planHintKey,
+  planHintText,
   reconciliationLabel,
   stepAcceptanceLabel,
   stepFailureText,
+  stepHintChipLabel,
   stepWaitingReasonLabel,
 } from '../../lib/goals.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { hrefs } from '../../lib/router.js';
+import { Notice } from '../kit/notice.js';
 import { RefChip } from '../kit/ref-chip.js';
 import { DashboardCard } from '../kit/section.js';
 import { StatusChip } from '../kit/status-chip.js';
@@ -38,20 +43,38 @@ export interface GoalStepsSectionProps {
  * it depends on, where its StepRun stands (and, while waiting or failed, why), its attempts (the
  * Tasks), the actions it raised (the ActionRequests, each opening its approval), its own
  * acceptance checks and reconcile declarations as sentences, and its input. Steps a revision
- * replaced are listed under their own disclosure, oldest first.
+ * replaced are listed under their own disclosure, oldest first. While the run is proposed, what the
+ * requester's authority would stop now (S11 GO5c hints) heads the card, and each step it names
+ * carries a chip.
  */
 export function GoalStepsSection({ detail, http, gateNames }: GoalStepsSectionProps) {
   const t = useT();
   const { current, superseded } = goalSteps(detail);
   const acceptanceByRun = new Map(detail.acceptance.steps.map((step) => [step.stepRunId, step]));
+  const authorityHints = detail.planRevision.hints.filter(isStepAuthorityHint);
+  const hintsByStep = new Map<string, PlanHint[]>();
+  for (const hint of authorityHints) {
+    if (hint.stepKey === undefined) continue;
+    hintsByStep.set(hint.stepKey, [...(hintsByStep.get(hint.stepKey) ?? []), hint]);
+  }
   return (
     <DashboardCard title={t('步骤', 'Steps')} data-testid="goal-steps">
+      {authorityHints.length > 0 ? (
+        <div className="stack-s">
+          {authorityHints.map((hint) => (
+            <Notice key={planHintKey(hint)} tone="warn" testId="goal-step-hint">
+              {planHintText(hint, t, gateNames)}
+            </Notice>
+          ))}
+        </div>
+      ) : null}
       <ol className="stack-s goal-steps">
         {current.map((view) => (
           <StepItem
             key={view.key}
             view={view}
             acceptance={view.run ? acceptanceByRun.get(view.run.id) : undefined}
+            hints={hintsByStep.get(view.key) ?? []}
             http={http}
             gateNames={gateNames}
             t={t}
@@ -73,6 +96,7 @@ export function GoalStepsSection({ detail, http, gateNames }: GoalStepsSectionPr
                   key={run.id}
                   view={{ key: run.stepKey, planStep: null, run }}
                   acceptance={acceptanceByRun.get(run.id)}
+                  hints={[]}
                   http={http}
                   gateNames={gateNames}
                   t={t}
@@ -89,12 +113,14 @@ export function GoalStepsSection({ detail, http, gateNames }: GoalStepsSectionPr
 interface StepItemProps {
   readonly view: StepView;
   readonly acceptance: StepAcceptanceWire | undefined;
+  /** The step's own authority hints (S11 GO5c), shown as chips by its status. */
+  readonly hints: readonly PlanHint[];
   readonly http: CapabilityCaller;
   readonly gateNames: ReadonlyMap<string, string>;
   readonly t: Translate;
 }
 
-function StepItem({ view, acceptance, http, gateNames, t }: StepItemProps) {
+function StepItem({ view, acceptance, hints, http, gateNames, t }: StepItemProps) {
   const { planStep, run } = view;
   const dependsOn = planStep?.dependsOn ?? [];
   const maxAttempts = planStep?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
@@ -121,11 +147,20 @@ function StepItem({ view, acceptance, http, gateNames, t }: StepItemProps) {
             </>
           ) : null}
         </span>
-        {run ? (
-          <StatusChip machine="stepRun" status={run.status} size="s" />
-        ) : (
-          <span className="text-3 text-small">{t('尚未开始', 'Not started')}</span>
-        )}
+        <span className="row-wrap">
+          {[...new Set(hints.map((hint) => stepHintChipLabel(hint, t)))].map((label) =>
+            label ? (
+              <span key={label} className="chip chip-warn chip-s" data-testid="goal-step-hint-chip">
+                {label}
+              </span>
+            ) : null,
+          )}
+          {run ? (
+            <StatusChip machine="stepRun" status={run.status} size="s" />
+          ) : (
+            <span className="text-3 text-small">{t('尚未开始', 'Not started')}</span>
+          )}
+        </span>
       </div>
 
       <span className="text-small text-3">

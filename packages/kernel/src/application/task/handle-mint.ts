@@ -201,6 +201,7 @@ export function computeChildHandleScope(input: ComputeChildHandleScopeInput): Ca
   const delegatedRequestAction = !unconstrained && parentGateSet.size > 0;
 
   const childCapabilities: string[] = [];
+  const missingExecuteClass: string[] = [];
   for (const capability of effectiveDeclaredCapabilities) {
     if (!ceiling.has(capability)) continue;
     const parentHasIt =
@@ -208,16 +209,20 @@ export function computeChildHandleScope(input: ComputeChildHandleScopeInput): Ca
       parentCapabilitySet.has(capability) ||
       (capability === 'request_action' && delegatedRequestAction);
     if (isExecuteClassCapability(capability)) {
-      if (!parentHasIt) {
-        throw new InvokeWorkerAttenuationError(
-          `invoke_worker: this WorkerDefinition requires the execute-class capability "${capability}", which the calling Handle does not hold — an execute-class capability can never be granted to a child Handle that lacks it (§5.3 item 11, I13)`,
-        );
-      }
-      childCapabilities.push(capability);
+      if (!parentHasIt) missingExecuteClass.push(capability);
+      else childCapabilities.push(capability);
     } else if (parentHasIt) {
       childCapabilities.push(capability);
     }
     // else: declared, non-execute-class, and the caller doesn't hold it — silently dropped.
+  }
+  if (missingExecuteClass.length > 0) {
+    // Every one named (S11 GO5c: the confirmation card lists them), not only the first.
+    const quoted = missingExecuteClass.map((capability) => `"${capability}"`).join(', ');
+    throw new InvokeWorkerAttenuationError(
+      `invoke_worker: this WorkerDefinition requires the execute-class ${missingExecuteClass.length === 1 ? 'capability' : 'capabilities'} ${quoted}, which the calling Handle does not hold — an execute-class capability can never be granted to a child Handle that lacks it (§5.3 item 11, I13)`,
+      { capabilities: missingExecuteClass },
+    );
   }
 
   const requestedGates = input.requestedGates ?? input.declaredGates;

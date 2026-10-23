@@ -1,11 +1,9 @@
 import {
-  type AcceptanceCheck,
   type GoalPlan,
   GoalPlanSchema,
   type GoalRunStatus,
   type PlanHint,
   STEP_RUN_STATUS_VALUES,
-  type StepAcceptanceCheck,
   type StepRunStatus,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
@@ -14,7 +12,6 @@ import {
   type StepActionOutcome,
   listStepsActionOutcomes,
 } from '../../governance/approval/index.js';
-import { redactSuspectedSecrets } from '../../governance/redaction/index.js';
 import { type GoalStepAttempt, listGoalRunStepAttempts, readGoalRunsUsage } from '../task/index.js';
 import {
   type GoalAcceptanceCheckView,
@@ -22,7 +19,8 @@ import {
   readGoalAcceptance,
 } from './acceptance.js';
 import { readCancelLeftovers } from './cancelling.js';
-import { planHints } from './plan.js';
+import { paramsAsRead, planAsRead, planHints } from './plan.js';
+import { planAuthorityHints } from './precheck.js';
 import { getGoalRun, getPlanRevision, listPlanRevisions, listStepRuns } from './reads.js';
 import { type UnresolvedGoalAction, listGoalRunUnresolvedActions } from './reconcile.js';
 import { GoalRunNotFoundError } from './service.js';
@@ -262,15 +260,20 @@ export async function listGoalRunsVisibleTo(
   };
 }
 
-/** A revision of a plan as a reader gets it: the plan typed, its steps' inputs redacted, and the
- *  hints for the person confirming it. */
+/** A revision of a plan as a reader gets it: the plan as every read shows it (`planAsRead`), and
+ *  the hints for the person confirming it. */
 export interface PlanRevisionView {
   readonly revision: PlanRevisionRow;
   readonly plan: GoalPlan;
   readonly hints: readonly PlanHint[];
 }
 
-function planRevisionView(revision: PlanRevisionRow): PlanRevisionView {
+async function planRevisionView(
+  client: PoolClient,
+  workspaceId: string,
+  goal: GoalRunRow,
+  revision: PlanRevisionRow,
+): Promise<PlanRevisionView> {
   // Every stored plan passed `parsePlan` when its revision was made (`service.ts`, `revise.ts`).
   const parsed = GoalPlanSchema.safeParse(revision.plan);
   if (!parsed.success) {
@@ -279,47 +282,24 @@ function planRevisionView(revision: PlanRevisionRow): PlanRevisionView {
     );
   }
   const plan = parsed.data;
+  // S11 GO5c: the proposal of a run still proposed is what the confirmation card shows — with what
+  // the requester's authority would stop now, worked out on every read (`precheck.ts`).
+  const proposal = goal.status === 'proposed' && revision.revision === 1;
   return {
     revision,
-    plan: {
-      ...plan,
-      steps: plan.steps.map((step) => ({
-        ...step,
-        ...(step.input !== undefined ? { input: redactParams(step.input) } : {}),
-        ...(step.reconcile !== undefined
-          ? {
-              reconcile: step.reconcile.map((declaration) => ({
-                ...declaration,
-                action: withRedactedParams(declaration.action),
-                check: withRedactedParams(declaration.check),
-              })),
-            }
-          : {}),
-        ...(step.acceptance !== undefined
-          ? { acceptance: step.acceptance.map(withRedactedObservation) }
-          : {}),
-      })),
-      ...(plan.acceptance !== undefined
-        ? { acceptance: plan.acceptance.map(withRedactedObservation) }
-        : {}),
-    },
-    hints: planHints(plan),
+    plan: planAsRead(plan),
+    hints: [
+      ...planHints(plan),
+      ...(proposal ? await planAuthorityHints(client, workspaceId, goal.onBehalfOf, plan) : []),
+    ],
   };
 }
 
 /** `params` with each suspected credential replaced — see the module comment. */
-function redactParams<T>(params: T): T {
-  return redactSuspectedSecrets(params, { secretFields: true }).value as T;
-}
-
 function withRedactedParams<T extends { readonly params?: Record<string, unknown> }>(value: T): T {
-  return value.params === undefined ? value : { ...value, params: redactParams(value.params) };
-}
-
-function withRedactedObservation<T extends AcceptanceCheck | StepAcceptanceCheck>(check: T): T {
-  return check.kind === 'observe_predicate'
-    ? { ...check, check: withRedactedParams(check.check) }
-    : check;
+  return value.params === undefined
+    ? value
+    : { ...value, params: paramsAsRead(value.params).value };
 }
 
 /** A run's acceptance with every observation's params redacted: a round's check rows copy the
@@ -349,10 +329,10 @@ export async function readPlanRevisionVisibleTo(
   goalRunId: string,
   revision: number,
 ): Promise<PlanRevisionView> {
-  await getGoalRunVisibleTo(client, workspaceId, viewer, goalRunId);
+  const goal = await getGoalRunVisibleTo(client, workspaceId, viewer, goalRunId);
   const row = await getPlanRevision(client, workspaceId, goalRunId, revision);
   if (!row) throw new GoalRevisionNotFoundError(goalRunId, revision);
-  return planRevisionView(row);
+  return planRevisionView(client, workspaceId, goal, row);
 }
 
 /** One StepRun with its attempts (the Tasks) and the requests it raised, oldest first. */
@@ -394,7 +374,7 @@ export async function readGoalRunDetail(
   if (!summary || !inForce || !acceptance) {
     throw new Error(`goal run ${goalRunId}: its revision in force or its acceptance did not read`);
   }
-  const planView = planRevisionView(inForce);
+  const planView = await planRevisionView(client, workspaceId, goal, inForce);
   const stepRuns = inPlanOrder(await listStepRuns(client, workspaceId, goalRunId), planView.plan);
   const attempts = await listGoalRunStepAttempts(client, workspaceId, goalRunId);
   const actions = await listStepsActionOutcomes(

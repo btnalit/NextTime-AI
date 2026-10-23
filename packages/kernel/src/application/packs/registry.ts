@@ -4,6 +4,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  CONNECTOR_NAME_PATTERN,
   SkillApplicableSchema,
   type WorkerWorkerDefinitionContent,
   WorkerWorkerDefinitionContentSchema,
@@ -38,7 +39,10 @@ import { PACK_NAME_PATTERN, PackManifestError, parsePackManifest } from './manif
  *     Schema`) without `name` (the file's) and without `kind`, `gates` or `model`: the systems a
  *     Worker acts on and the models it runs on are the workspace's own, never a pack's. Its
  *     `skills` name Skills of the same version (a pack installs what its Workers mount), and its
- *     `capabilities`, when declared, are within the worker ceiling.
+ *     `capabilities`, when declared, are within the worker ceiling. Beside the content, `systems`
+ *     (S11 P1-E2) names the kinds of system the Worker acts on, by connector name, each one the
+ *     version `requires`: never a gate — which gates of those systems it may act on is the
+ *     workspace's, offered when the pack is installed (`install.ts`).
  * Neither may carry a suspected credential (`findSuspectedSecrets`, the rule `publish_skill` /
  * `publish_worker_definition` ask a person to confirm): a pack is published by the platform, not
  * reviewed value by value, so one found is a deployment bug like any other here.
@@ -87,10 +91,29 @@ export interface PackWorkerComponent {
   readonly name: string;
   /** The WorkerDefinition family's id (`derivePackComponentId`). */
   readonly definitionId: string;
-  /** The definition as published: the file's content with `name`, parsed (so normalized). */
+  /** The definition as the pack ships it: the file's content with `name`, parsed (so normalized),
+   *  without `systems` — never `gates` or `model`, which are the workspace's
+   *  (`WORKSPACE_OWNED_WORKER_FIELDS`). */
   readonly definition: WorkerWorkerDefinitionContent;
-  /** `contentDigest(definition)` — the digest a change item records for it. */
+  /** `contentDigest(definition)` — what the pack's part of an installed head is compared with
+   *  (`packOwnedWorkerDigest`). */
   readonly contentDigest: string;
+  /** The connectors of the systems it acts on (the file's `systems`, in its order), each one the
+   *  version requires; empty when it names none. */
+  readonly systems: readonly string[];
+}
+
+/** The fields of a pack's Worker that are the workspace's own (see this module's comment): a pack
+ *  never ships them, an install keeps whatever the workspace has set (`install.ts`), and a head that
+ *  differs from a pack version only in them still has that version's content (`state.ts`). */
+export const WORKSPACE_OWNED_WORKER_FIELDS = ['gates', 'model'] as const;
+
+/** The digest of the part of a `worker` definition a pack ships: `contentDigest` of it without the
+ *  workspace's own fields — what `PackWorkerComponent.contentDigest` is for the pack's file. */
+export function packOwnedWorkerDigest(definition: Readonly<Record<string, unknown>>): string {
+  const owned: Record<string, unknown> = { ...definition };
+  for (const field of WORKSPACE_OWNED_WORKER_FIELDS) delete owned[field];
+  return contentDigest(owned);
 }
 
 export type PackComponent = PackOntologyComponent | PackSkillComponent | PackWorkerComponent;
@@ -309,15 +332,47 @@ async function loadSkillComponent(
 const WORKER_FIELDS_NOT_IN_A_PACK: Readonly<Record<string, string>> = {
   name: 'its name is the file name',
   kind: 'a pack installs `worker` WorkerDefinitions only',
-  gates: 'the systems a Worker acts on are the workspace’s own, never a pack’s',
+  gates:
+    'the gates a Worker acts on are the workspace’s own, never a pack’s (name the kinds of system with `systems`)',
   model: 'the models a Worker runs on are the workspace’s own, never a pack’s',
 };
+
+/** A Worker file's `systems`: connector names, at least one, each once. */
+const WorkerSystemsSchema = z.array(z.string().regex(CONNECTOR_NAME_PATTERN)).min(1);
+
+/** Reads a Worker file's `systems` (see `PackWorkerComponent.systems`): each one a system the
+ *  version requires (so never a transport, which the manifest refuses), each named once. */
+function workerSystems(
+  source: string,
+  raw: unknown,
+  requiredConnectors: ReadonlySet<string>,
+): readonly string[] {
+  if (raw === undefined) return [];
+  const parsed = WorkerSystemsSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new PackManifestError(source, `systems: ${parsed.error.message}`);
+  }
+  const systems = parsed.data;
+  const repeated = systems.find((system, index) => systems.indexOf(system) !== index);
+  if (repeated !== undefined) {
+    throw new PackManifestError(source, `names system ${JSON.stringify(repeated)} twice`);
+  }
+  const unrequired = systems.filter((system) => !requiredConnectors.has(system));
+  if (unrequired.length > 0) {
+    throw new PackManifestError(
+      source,
+      `acts on system(s) ${unrequired.map((system) => JSON.stringify(system)).join(', ')} that the version does not require (add them to requires.connectors)`,
+    );
+  }
+  return systems;
+}
 
 async function loadWorkerComponent(
   versionDir: string,
   pack: string,
   name: string,
   skills: ReadonlySet<string>,
+  requiredConnectors: ReadonlySet<string>,
 ): Promise<PackWorkerComponent> {
   const source = path.join(versionDir, 'workers', `${name}.yaml`);
   let raw: unknown;
@@ -333,7 +388,9 @@ async function loadWorkerComponent(
   for (const [field, reason] of Object.entries(WORKER_FIELDS_NOT_IN_A_PACK)) {
     if (field in raw) throw new PackManifestError(source, `declares \`${field}\`: ${reason}`);
   }
-  const parsed = WorkerWorkerDefinitionContentSchema.safeParse({ ...raw, name });
+  const { systems: rawSystems, ...content } = raw as Record<string, unknown>;
+  const systems = workerSystems(source, rawSystems, requiredConnectors);
+  const parsed = WorkerWorkerDefinitionContentSchema.safeParse({ ...content, name });
   if (!parsed.success) throw new PackManifestError(source, parsed.error.message);
   const definition = parsed.data;
   const foreign = (definition.skills ?? []).filter((skill) => !skills.has(skill));
@@ -358,6 +415,7 @@ async function loadWorkerComponent(
     definitionId: derivePackComponentId(pack, 'worker', name),
     definition,
     contentDigest: contentDigest(definition),
+    systems,
   };
 }
 
@@ -393,8 +451,11 @@ async function loadPackVersion(
   for (const skill of skills) {
     components.push(await loadSkillComponent(versionDir, name, skill));
   }
+  const requiredConnectors = new Set(manifest.requires?.connectors ?? []);
   for (const worker of manifest.components.workers ?? []) {
-    components.push(await loadWorkerComponent(versionDir, name, worker, new Set(skills)));
+    components.push(
+      await loadWorkerComponent(versionDir, name, worker, new Set(skills), requiredConnectors),
+    );
   }
   const digest = contentDigest({
     schema: manifest.schema,
@@ -415,7 +476,13 @@ async function loadPackVersion(
             domainPack: c.domainPack,
             definitionDigest: c.definitionDigest,
           }
-        : { kind: c.kind, name: c.name, contentDigest: c.contentDigest },
+        : {
+            kind: c.kind,
+            name: c.name,
+            contentDigest: c.contentDigest,
+            // Only when declared (P1-E2), so the versions shipped before keep their digest.
+            ...(c.kind === 'worker' && c.systems.length > 0 ? { systems: c.systems } : {}),
+          },
     ),
   });
   return {

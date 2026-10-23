@@ -217,9 +217,13 @@ export class GoalStepClosedError extends IllegalTransition {
  *  it (mirrors `governance/approval/types.ts`'s own `ApprovalScopeError`, a module-local error for
  *  a cross-cutting concern). */
 export class InvokeWorkerAttenuationError extends Error {
-  constructor(message: string, options?: { cause?: unknown }) {
-    super(message, options);
+  /** S11 GO5c: the execute-class capabilities the WorkerDefinition declares and the calling Handle
+   *  does not hold — empty when the refusal is about gates. */
+  readonly capabilities: readonly string[];
+  constructor(message: string, options?: { cause?: unknown; capabilities?: readonly string[] }) {
+    super(message, options?.cause === undefined ? undefined : { cause: options.cause });
     this.name = 'InvokeWorkerAttenuationError';
+    this.capabilities = [...(options?.capabilities ?? [])];
   }
 }
 
