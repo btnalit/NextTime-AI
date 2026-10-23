@@ -5,7 +5,7 @@ import {
   type GateInstanceWire,
   isGenericConnector,
 } from '@nexttime/shared';
-import { type FormEvent, useState } from 'react';
+import { type FormEvent, useEffect, useRef, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { presentError } from '../../lib/errors.js';
@@ -145,14 +145,18 @@ export function CreateGateInstanceForm({
           (preset) => transportKind === undefined || preset.transportKind === transportKind,
         )
       : [];
-  /** The chosen preset's name; `null` is 其他系统. */
-  const [source, setSource] = useState<string | null>(initialPreset ?? null);
-  const preset = source === null ? undefined : presets.find((row) => row.name === source);
+  /** The chosen preset's name; `null` is 其他系统; `undefined` is nothing chosen yet. UX acceptance
+   *  of #715 (P3-2): with presets to offer, neither is picked for the reader — the question comes
+   *  alone, so a preset is not passed over under 其他系统's long form. */
+  const [source, setSource] = useState<string | null | undefined>(initialPreset);
+  const preset =
+    typeof source === 'string' ? presets.find((row) => row.name === source) : undefined;
   const waiting = source !== null && list.state.status === 'loading';
+  const choosing = source === undefined && !waiting && presets.length > 0;
   // A link to a preset this platform version does not ship (or one of another kind), or a preset
   // list that cannot be read, falls back to 其他系统 and says so.
   const fallbackNote =
-    source === null || waiting || preset !== undefined
+    typeof source !== 'string' || waiting || preset !== undefined
       ? null
       : list.state.status === 'error'
         ? t(
@@ -200,7 +204,7 @@ export function CreateGateInstanceForm({
                 type="radio"
                 name="gateSource"
                 value=""
-                checked={preset === undefined}
+                checked={source !== undefined && !waiting && preset === undefined}
                 onChange={() => setSource(null)}
                 data-testid="cgi-source-custom"
               />
@@ -216,6 +220,20 @@ export function CreateGateInstanceForm({
         <p className="text-3 text-small" style={{ margin: 0 }} data-testid="cgi-presets-loading">
           {t('正在读取接入预设…', 'Reading the connector presets…')}
         </p>
+      ) : choosing ? (
+        <div className="stack-s" data-testid="cgi-source-unchosen">
+          <p className="text-3 text-small" style={{ margin: 0 }}>
+            {t(
+              '先选接入什么：平台自带预设的系统只要填地址；其他系统要自己填目标和清单来源。',
+              'Choose what to connect first: a system the platform ships a preset for needs its address only; any other system needs its target and manifest source.',
+            )}
+          </p>
+          <div className="row" style={{ justifyContent: 'flex-end' }}>
+            <Button variant="ghost" onClick={onCancel}>
+              {t('取消', 'Cancel')}
+            </Button>
+          </div>
+        </div>
       ) : preset ? (
         <PresetGateInstanceForm
           key={preset.name}
@@ -283,6 +301,14 @@ function CustomGateInstanceForm({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
   const [refusal, setRefusal] = useState<AddressRefusal | null>(null);
+  const targetInput = useRef<HTMLInputElement>(null);
+  const manifestInput = useRef<HTMLInputElement>(null);
+  // UX acceptance of #715 (P3-1): the field a refusal is said on takes the focus back once the form
+  // is enabled again — submitting disabled it, which had dropped the focus to the page.
+  useEffect(() => {
+    if (refusal === null || submitting) return;
+    (refusal.field === 'target' ? targetInput : manifestInput).current?.focus();
+  }, [refusal, submitting]);
   const connectors = useConnectorsByName(http);
 
   const idFromName = deriveGateId(displayName);
@@ -591,6 +617,7 @@ function CustomGateInstanceForm({
         errorDetails={targetRefusal?.details}
       >
         <Input
+          ref={targetInput}
           id="cgi-target"
           value={target}
           onChange={(event) => {
@@ -675,6 +702,7 @@ function CustomGateInstanceForm({
           errorDetails={manifestRefusal?.details}
         >
           <Input
+            ref={manifestInput}
             id="cgi-manifest-source"
             value={manifestSource}
             onChange={(event) => {

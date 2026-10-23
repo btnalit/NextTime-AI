@@ -1143,7 +1143,7 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
       expect(link.getAttribute('href')).toBe(
         '#/platform/integrations?tab=instances&preset=ragflow',
       );
-      expect(link.textContent).toMatch(/按预设接入 ragflow（只填地址）/);
+      expect(link.textContent).toMatch(/按它的接入预设接入（只填地址）/);
       expect(
         within(ragflow).queryByTestId('catalog-pack-requirements-ragflow-platform'),
       ).toBeNull();

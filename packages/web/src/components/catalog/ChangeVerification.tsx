@@ -164,9 +164,11 @@ export function PackRequirementList({
                     href={hrefs.platformConnectorPreset(requirement.connector)}
                     testId={`${rowId}-preset`}
                   >
+                    {/* UX acceptance of #715 (P3-3): the row names the system above; the link
+                     *  does not repeat its connector name in place of the preset's own name. */}
                     {t(
-                      `去「平台 · 集成」按预设接入 ${requirement.connector}（只填地址）`,
-                      `Connect ${requirement.connector} from its preset under Platform · Integrations (address only)`,
+                      '去「平台 · 集成」按它的接入预设接入（只填地址）',
+                      'Connect it from its preset under Platform · Integrations (address only)',
                     )}
                   </RouteLink>
                 ) : (

@@ -194,6 +194,9 @@ async function ensureHostedInstanceExists(page: Page): Promise<{ readonly justCr
 
   await page.getByTestId('new-gate-instance').click();
   const createDrawer = page.getByTestId('create-gate-instance-drawer');
+  // S11 P1-F: the kernel image ships a connector preset (RAGFlow), so 接入什么 comes first, with
+  // nothing picked; this system is not a preset's.
+  await createDrawer.getByTestId('cgi-source-custom').check({ timeout: 15_000 });
   const form = createDrawer.getByTestId('create-gate-instance-form');
   await expect(form).toBeVisible({ timeout: 15_000 });
   await form.locator('#cgi-gate-id').fill(GATE_ID);

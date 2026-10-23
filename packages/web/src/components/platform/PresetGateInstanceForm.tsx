@@ -1,5 +1,5 @@
 import type { ConnectorPresetWire, GateInstanceWire } from '@nexttime/shared';
-import { type FormEvent, useState } from 'react';
+import { type FormEvent, useEffect, useRef, useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { presentError } from '../../lib/errors.js';
 import {
@@ -61,7 +61,13 @@ export function PresetGateInstanceForm({
   const [error, setError] = useState<unknown | null>(null);
   /** A `credentials_in_connection_params` refusal: said on the address field. */
   const [targetRefusal, setTargetRefusal] = useState<unknown | null>(null);
+  const targetInput = useRef<HTMLInputElement>(null);
   const connectors = useConnectorsByName(http);
+  // UX acceptance of #715 (P3-1): the address field takes the focus back once a refusal is said on
+  // it — submitting disabled it, which had dropped the focus to the page.
+  useEffect(() => {
+    if (targetRefusal !== null && !submitting) targetInput.current?.focus();
+  }, [targetRefusal, submitting]);
 
   const derivedGateId = deriveGateId(displayName) || presetGateId(preset);
   const gateId = gateIdEdited ? gateIdInput : derivedGateId;
@@ -193,6 +199,7 @@ export function PresetGateInstanceForm({
             error={targetError}
           >
             <input
+              ref={targetInput}
               id="pgi-target"
               className="input input-mono"
               value={target}

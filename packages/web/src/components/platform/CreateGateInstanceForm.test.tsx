@@ -79,11 +79,11 @@ const CONNECTORS: ConnectorWire[] = [
 ];
 
 describe('CreateGateInstanceForm', () => {
-  it('shows the manifest source field for http and hides it for mcp', () => {
+  it('shows the manifest source field for http and hides it for mcp', async () => {
     const http = scriptedHttp({});
     render(<CreateGateInstanceForm http={http} onCreated={vi.fn()} onCancel={vi.fn()} />);
 
-    const form = screen.getByTestId('create-gate-instance-form');
+    const form = await screen.findByTestId('create-gate-instance-form');
     expect(within(form).getByLabelText(/清单来源/)).toBeTruthy();
 
     fireEvent.click(within(form).getByLabelText(/mcp/));
@@ -104,7 +104,7 @@ describe('CreateGateInstanceForm', () => {
     const onCreated = vi.fn();
     render(<CreateGateInstanceForm http={http} onCreated={onCreated} onCancel={vi.fn()} />);
 
-    const form = screen.getByTestId('create-gate-instance-form');
+    const form = await screen.findByTestId('create-gate-instance-form');
     fireEvent.change(within(form).getByLabelText(/门 ID/), {
       target: { value: 'billing-api' },
     });
@@ -139,7 +139,7 @@ describe('CreateGateInstanceForm', () => {
     });
     render(<CreateGateInstanceForm http={http} onCreated={vi.fn()} onCancel={vi.fn()} />);
 
-    const form = screen.getByTestId('create-gate-instance-form');
+    const form = await screen.findByTestId('create-gate-instance-form');
     fireEvent.change(within(form).getByLabelText(/门 ID/), {
       target: { value: 'billing-api' },
     });
@@ -164,11 +164,11 @@ describe('CreateGateInstanceForm', () => {
     });
   });
 
-  it('disables submit until gateId, target and (for http, C12) manifestSource are all valid', () => {
+  it('disables submit until gateId, target and (for http, C12) manifestSource are all valid', async () => {
     const http = scriptedHttp({});
     render(<CreateGateInstanceForm http={http} onCreated={vi.fn()} onCancel={vi.fn()} />);
 
-    const form = screen.getByTestId('create-gate-instance-form');
+    const form = await screen.findByTestId('create-gate-instance-form');
     const submit = within(form).getByTestId('create-gate-instance-submit') as HTMLButtonElement;
     expect(submit.disabled).toBe(true);
 
@@ -207,10 +207,10 @@ describe('CreateGateInstanceForm', () => {
     expect(submit.disabled).toBe(false);
   });
 
-  it('derives the gate id from the display name, then the target host, until it is edited', () => {
+  it('derives the gate id from the display name, then the target host, until it is edited', async () => {
     const http = scriptedHttp({});
     render(<CreateGateInstanceForm http={http} onCreated={vi.fn()} onCancel={vi.fn()} />);
-    const form = screen.getByTestId('create-gate-instance-form');
+    const form = await screen.findByTestId('create-gate-instance-form');
     const gateId = within(form).getByLabelText(/门 ID/) as HTMLInputElement;
 
     // From the target host when there is no usable name.
@@ -257,7 +257,7 @@ describe('CreateGateInstanceForm', () => {
       },
     });
     render(<CreateGateInstanceForm http={http} onCreated={vi.fn()} onCancel={vi.fn()} />);
-    const form = screen.getByTestId('create-gate-instance-form');
+    const form = await screen.findByTestId('create-gate-instance-form');
     fireEvent.click(within(form).getByLabelText(/^mcp/));
     const target = within(form).getByLabelText(/^目标/) as HTMLInputElement;
     fireEvent.change(target, { target: { value: 'billing.internal:8080' } });
@@ -277,10 +277,10 @@ describe('CreateGateInstanceForm', () => {
     );
   });
 
-  it('suggests <target>/openapi.json for the manifest as a placeholder and a one-click fill, never silently', () => {
+  it('suggests <target>/openapi.json for the manifest as a placeholder and a one-click fill, never silently', async () => {
     const http = scriptedHttp({});
     render(<CreateGateInstanceForm http={http} onCreated={vi.fn()} onCancel={vi.fn()} />);
-    const form = screen.getByTestId('create-gate-instance-form');
+    const form = await screen.findByTestId('create-gate-instance-form');
     expect(within(form).queryByTestId('cgi-manifest-suggest')).toBeNull();
     fireEvent.change(within(form).getByLabelText(/^目标/), {
       target: { value: 'https://billing.example.com/' },
@@ -301,20 +301,20 @@ describe('CreateGateInstanceForm', () => {
   it.each([
     ['a password', 'https://ops:Synth-Pw-4417@billing.example.com'],
     ['a token query', 'https://billing.example.com/?token=abcdefghijklmnopqrstuvwxyz0123'],
-  ])('offers no manifest suggestion for a target carrying %s', (_name, value) => {
+  ])('offers no manifest suggestion for a target carrying %s', async (_name, value) => {
     const http = scriptedHttp({});
     render(<CreateGateInstanceForm http={http} onCreated={vi.fn()} onCancel={vi.fn()} />);
-    const form = screen.getByTestId('create-gate-instance-form');
+    const form = await screen.findByTestId('create-gate-instance-form');
     fireEvent.change(within(form).getByLabelText(/^目标/), { target: { value } });
     const manifest = within(form).getByLabelText(/清单来源/) as HTMLInputElement;
     expect(within(form).queryByTestId('cgi-manifest-suggest')).toBeNull();
     expect(manifest.placeholder).toBe('https://billing.example.com/openapi.json');
   });
 
-  it('drops the target query from the manifest suggestion', () => {
+  it('drops the target query from the manifest suggestion', async () => {
     const http = scriptedHttp({});
     render(<CreateGateInstanceForm http={http} onCreated={vi.fn()} onCancel={vi.fn()} />);
-    const form = screen.getByTestId('create-gate-instance-form');
+    const form = await screen.findByTestId('create-gate-instance-form');
     fireEvent.change(within(form).getByLabelText(/^目标/), {
       target: { value: 'https://billing.example.com/api?version=3' },
     });
@@ -338,7 +338,7 @@ describe('CreateGateInstanceForm', () => {
         },
       });
       render(<CreateGateInstanceForm http={http} onCreated={vi.fn()} onCancel={vi.fn()} />);
-      const form = screen.getByTestId('create-gate-instance-form');
+      const form = await screen.findByTestId('create-gate-instance-form');
       fireEvent.change(within(form).getByLabelText(/门 ID/), {
         target: { value: 'billing-api' },
       });
@@ -355,6 +355,12 @@ describe('CreateGateInstanceForm', () => {
       expect((raw.closest('details') as HTMLDetailsElement).open).toBe(false);
       const fieldId = field === 'target' ? 'cgi-target-error' : 'cgi-manifest-source-error';
       const line = document.getElementById(fieldId);
+      // UX acceptance of #715 (P3-1): the refused field has the focus back once the form is enabled.
+      await waitFor(() =>
+        expect(document.activeElement).toBe(
+          document.getElementById(field === 'target' ? 'cgi-target' : 'cgi-manifest-source'),
+        ),
+      );
       expect(line?.textContent).toContain(explanation);
       expect(line?.textContent).not.toContain('refused, nothing was stored');
       expect(screen.queryByTestId('create-gate-instance-error')).toBeNull();
@@ -371,7 +377,7 @@ describe('CreateGateInstanceForm', () => {
       },
     });
     render(<CreateGateInstanceForm http={http} onCreated={vi.fn()} onCancel={vi.fn()} />);
-    const form = screen.getByTestId('create-gate-instance-form');
+    const form = await screen.findByTestId('create-gate-instance-form');
     fireEvent.change(within(form).getByLabelText(/门 ID/), { target: { value: 'invoices' } });
     fireEvent.change(within(form).getByLabelText(/^目标/), {
       target: { value: 'https://billing.internal' },
@@ -436,7 +442,7 @@ describe('CreateGateInstanceForm', () => {
       },
     });
     render(<CreateGateInstanceForm http={http} onCreated={vi.fn()} onCancel={vi.fn()} />);
-    const form = screen.getByTestId('create-gate-instance-form');
+    const form = await screen.findByTestId('create-gate-instance-form');
     const name = within(form).getByLabelText(/接入包名称/) as HTMLInputElement;
 
     fireEvent.change(within(form).getByLabelText(/门 ID/), { target: { value: 'billing-2' } });
@@ -488,7 +494,7 @@ describe('CreateGateInstanceForm', () => {
       },
     });
     render(<CreateGateInstanceForm http={http} onCreated={vi.fn()} onCancel={vi.fn()} />);
-    const form = screen.getByTestId('create-gate-instance-form');
+    const form = await screen.findByTestId('create-gate-instance-form');
     fireEvent.change(within(form).getByLabelText(/门 ID/), { target: { value: 'widgets-2' } });
     fireEvent.click(within(form).getByLabelText(/^mcp/));
     fireEvent.change(within(form).getByLabelText(/^目标/), {
@@ -553,8 +559,14 @@ describe('CreateGateInstanceForm from a connector preset (S11 P1-F)', () => {
     const onCreated = vi.fn();
     render(<CreateGateInstanceForm http={http} onCreated={onCreated} onCancel={vi.fn()} />);
 
-    // 其他系统 stays the default: the custom form is shown until a preset is picked.
-    fireEvent.click(await screen.findByTestId('cgi-source-preset-ragflow'));
+    // UX acceptance of #715 (P3-2): nothing is picked — the question comes alone, no form under it.
+    const choice = await screen.findByTestId('cgi-source-preset-ragflow');
+    expect((choice as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByTestId('cgi-source-custom') as HTMLInputElement).checked).toBe(false);
+    expect(screen.getByTestId('cgi-source-unchosen').textContent).toContain('先选接入什么');
+    expect(screen.queryByTestId('create-gate-instance-form')).toBeNull();
+    expect(screen.queryByTestId('preset-gate-instance-form')).toBeNull();
+    fireEvent.click(choice);
     expect(screen.queryByTestId('create-gate-instance-form')).toBeNull();
     const form = screen.getByTestId('preset-gate-instance-form');
     expect(within(form).getByTestId('preset-operations').textContent).toContain('document.parse');
@@ -590,6 +602,23 @@ describe('CreateGateInstanceForm from a connector preset (S11 P1-F)', () => {
       preset: 'ragflow',
       target: 'https://kb.example.com',
     });
+  });
+
+  it('其他系统 opens the form for any other system; 取消 before choosing closes the form', async () => {
+    const http = scriptedHttp({
+      list_connector_presets: () => ({ items: [ragflowPreset()] }),
+      list_connectors: () => ({ items: CONNECTORS }),
+    });
+    const onCancel = vi.fn();
+    render(<CreateGateInstanceForm http={http} onCreated={vi.fn()} onCancel={onCancel} />);
+    const unchosen = await screen.findByTestId('cgi-source-unchosen');
+    fireEvent.click(within(unchosen).getByRole('button', { name: '取消' }));
+    expect(onCancel).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByTestId('cgi-source-custom'));
+    expect(screen.getByTestId('create-gate-instance-form')).toBeTruthy();
+    expect(screen.queryByTestId('cgi-source-unchosen')).toBeNull();
+    expect((screen.getByTestId('cgi-source-custom') as HTMLInputElement).checked).toBe(true);
   });
 
   it('opens on the preset a link names; a second instance gets the next gate id and joins the connector', async () => {
@@ -686,6 +715,8 @@ describe('CreateGateInstanceForm from a connector preset (S11 P1-F)', () => {
     });
     fireEvent.click(within(form).getByTestId('preset-gate-instance-submit'));
     expect((await within(form).findByRole('alert')).textContent).toContain('地址里带了凭据');
+    // UX acceptance of #715 (P3-1): the field the refusal is said on has the focus back.
+    await waitFor(() => expect(document.activeElement).toBe(within(form).getByLabelText(/^地址/)));
     expect(within(form).getByTestId('pgi-target-error-detail').textContent).toContain(
       'target carries a credential',
     );
@@ -706,7 +737,7 @@ describe('CreateGateInstanceForm from a connector preset (S11 P1-F)', () => {
       expect(listed.calls.some((call) => call.name === 'list_connector_presets')).toBe(true),
     );
     expect(screen.queryByTestId('cgi-source-preset-ragflow')).toBeNull();
-    expect(screen.getByTestId('create-gate-instance-form')).toBeTruthy();
+    expect(await screen.findByTestId('create-gate-instance-form')).toBeTruthy();
     cleanup();
 
     render(
@@ -720,7 +751,7 @@ describe('CreateGateInstanceForm from a connector preset (S11 P1-F)', () => {
     expect((await screen.findByTestId('cgi-preset-unknown')).textContent).toContain(
       '没有「confluence」的接入预设',
     );
-    expect(screen.getByTestId('create-gate-instance-form')).toBeTruthy();
+    expect(await screen.findByTestId('create-gate-instance-form')).toBeTruthy();
     expect((screen.getByTestId('cgi-source-custom') as HTMLInputElement).checked).toBe(true);
     cleanup();
 

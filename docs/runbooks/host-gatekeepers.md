@@ -685,13 +685,26 @@ docker compose exec gate-host node -e "fetch('http://127.0.0.1:8083/healthz').th
 与打包门的差别和边界：
 
 - 没有 `document.upload`；要上传文件仍用打包门（遗留：通用 http 传输的 multipart 绑定）。
-- 门宿主没有按实例的 `GATE_TLS_CA_FILE`：RAGFlow 用自签证书时，预设实例连不上，要么继续用打包门
-  （§11.1），要么在主机上给 `gate-host` 配信任（遗留：私有 CA 只能主机配）。
+- 门宿主没有按实例的信任：RAGFlow 用自签证书时，预设实例连不上，请继续用打包门（§11.1）。**不要**给
+  `gate-host` 设 `GATE_TLS_CA_FILE` / `GATE_TLS_SERVERNAME`：前者是**唯一**信任锚
+  （`gatekeeper-base/src/tls.ts`），门宿主所有实例共用一个出站 fetch，设了会替换所有实例的信任，其他用公网
+  证书的 http / mcp 实例全部握手失败；后者同样对所有实例生效（遗留：门宿主没有按实例的私有 CA）。
 - RAGFlow 的 `{code, data}` 应用层错误对门协议不可见，打包门同样如此（`gatekeepers/ragflow/README.md`）。
-- 打包门 `gatekeeper-ragflow` 已经 announce 过时，接入包 `ragflow` 属于它：预设显示「已由打包的门接入」，
-  按预设新建被拒 409 `connector_packaged`。打包门的退役要主机窗口，另记遗留。
-- 升级改了预设的 Operation：宿主下一轮拿到新的 Operation，**保留凭证**重建并重新 announce；内核把它挂成
-  「新清单待采用」（R-18），平台管理员在实例详情里确认之前，生效的仍是旧清单（定义变了的 Operation 按
-  遗留 K 先拒绝调用）。
-- 回滚只能整版回滚。旧版内核读不懂定义里的 `preset`，拉定义时不再列出预设实例，宿主会把它当作已删除、
-  清掉它的凭证目录：再升回来以后要重新录入 RAGFlow 的 API key。
+- 两者不能共用接入包 `ragflow`，看的是 `connectors` 里 `ragflow` 这一行，不是容器在不在跑：
+  - 打包门 `gatekeeper-ragflow` announce 过一次，这一行就是 `packaged = true`，之后停掉或删掉容器也还在：
+    预设显示「已由打包的门接入」，按预设新建被拒 409 `connector_packaged`。打包门的退役要主机窗口，另记遗留
+    （只停容器不够，还要处理这一行接入包和打包门的门实例）。
+  - 反过来，先按预设接入（这一行是 `packaged = false`），之后**不要再启用打包门**：给
+    `gatekeeper-ragflow` 配好 env 让它起来，它的 announce 会被拒 409 `connector_not_packaged`，门不会出现，
+    门日志每轮一行 warn。
+- 升级改了预设的 Operation：宿主下一轮拿到新的 Operation，**保留凭证**重建并重新 announce。已启用或已禁用
+  的实例，内核把它挂成「新清单待采用」（R-18），平台管理员在实例详情里确认之前，生效的仍是旧清单（定义变了
+  的 Operation 按遗留 K 先拒绝调用）；还是「未启用」（`discovered`）的实例没进任何工作区，直接采用新的 Operation。
+- 只回退代码（不恢复库）时：旧版内核读不懂定义里的 `preset`，拉定义时不再列出预设实例。回滚时如果新版
+  门宿主在旧内核起来后还在运行，就会把预设实例当作已删除并清掉它的凭证目录（旧版门宿主不会碰这个目录）。
+  - 回退前先只读列出受影响的实例：
+    `select gate_id, status from gate_instances where hosted and definition ? 'preset';`
+  - 结果非空时，先 `docker compose stop gate-host`，再回滚其余服务，最后启动旧版 `gate-host`，凭证目录就能
+    保留；如果已经被清掉，升回来后要重新录入 RAGFlow 的 API key。
+  - 回退期间这些实例不在旧版里，有工作区链接的会变成 lost。
+  - 用窗口前的备份整库恢复时没有这个问题（库里本来就没有预设实例）。
