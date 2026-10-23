@@ -364,8 +364,12 @@ test.describe('S11 GO6: a goal’s pages with content (stand-in reads)', () => {
   }
 });
 
-/** The signed-in owner's id, read off the real `get_workspace` as the page makes it. */
-async function signedInOwner(page: Page): Promise<Promise<string>> {
+/**
+ * The signed-in owner's id, read off the real `get_workspace` as the page makes it. Wrapped in an
+ * object: an async function returning the bare promise would adopt it, and awaiting the route
+ * set-up would then wait for a request the page has not made yet.
+ */
+async function signedInOwner(page: Page): Promise<{ id: Promise<string> }> {
   let resolve: (id: string) => void = () => undefined;
   const owner = new Promise<string>((done) => {
     resolve = done;
@@ -376,7 +380,7 @@ async function signedInOwner(page: Page): Promise<Promise<string>> {
     if (body.result?.caller?.id) resolve(body.result.caller.id);
     await route.fulfill({ response });
   });
-  return owner;
+  return { id: owner };
 }
 
 test.describe('S11 GO6: operations on a goal (stand-in reads and operations)', () => {
@@ -388,7 +392,7 @@ test.describe('S11 GO6: operations on a goal (stand-in reads and operations)', (
     }, testInfo) => {
       await page.setViewportSize({ width, height: 900 });
       await answerGoalReads(page);
-      const owner = await signedInOwner(page);
+      const owner = (await signedInOwner(page)).id;
       let detail: (ownerId: string) => unknown = () => DETAIL;
       let unresolved: unknown[] = [];
       await page.route('**/api/cap/get_goal', async (route) => {
