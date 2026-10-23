@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { registerGatekeeper } from '../../governance/gatekeepers/index.js';
-import { ChangePlanChangedError } from '../change-plan/index.js';
+import { ChangePlanChangedError, inspectChangeSegment } from '../change-plan/index.js';
 import {
   loadPublishedWorkerDefinitionHead,
   proposeWorkerDefinition,
@@ -127,7 +127,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     /** Previews, then installs exactly what was reviewed, every widening item confirmed. */
     async function installReviewed(ws: Ws, name: string, choice?: WorkerGateChoice) {
       const reviewed = await preview(ws, name, choice);
-      await inWorkspace(ws, (client) =>
+      const installed = await inWorkspace(ws, (client) =>
         installPack(client, ws.workspaceId, ws.ownerId, registry, {
           name,
           version: reviewed.target.version,
@@ -138,7 +138,20 @@ describe.runIf(DATABASE_URL !== undefined)(
           ...(choice ? { workerGates: choice } : {}),
         }),
       );
-      return reviewed;
+      return { ...reviewed, segmentId: installed.segmentId };
+    }
+
+    /** The gates the install record shows for its (one) Worker item, by name — the record holds
+     *  only the items that changed. */
+    async function recordedGates(ws: Ws, segmentId: string | null) {
+      if (segmentId === null) throw new Error('nothing was installed');
+      const inspected = await inWorkspace(ws, (client) =>
+        inspectChangeSegment(client, ws.workspaceId, segmentId),
+      );
+      const gates = inspected.items.find((item) => item.workerGates !== null)?.workerGates;
+      const names = (side: readonly { readonly name: string }[] | null | undefined) =>
+        side ? side.map((gate) => gate.name).sort() : side;
+      return { before: names(gates?.before), after: names(gates?.after) };
     }
 
     const head = (ws: Ws, definitionId: string) =>
@@ -224,6 +237,12 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       const item = reviewed.plan.items[(planned?.ordinal ?? 0) - 1];
       expect(item?.classification).toBe('authority_widening');
+      // The install record names the gates it bound (UX acceptance of #705): none before, a new
+      // Worker.
+      expect(await recordedGates(ws, reviewed.segmentId)).toEqual({
+        before: null,
+        after: [`north-${suffix}`, `south-${suffix}`],
+      });
 
       const gates = (await head(ws, runner.definitionId))?.definition.gates as string[] | undefined;
       expect([...(gates ?? [])].sort()).toEqual(both);
@@ -301,7 +320,10 @@ describe.runIf(DATABASE_URL !== undefined)(
       const first = await installReviewed(ws, 'boxes');
       expect(first.workerGates[0]).toMatchObject({ source: 'none', gates: [], candidates: [] });
       expect((await head(ws, runner.definitionId))?.definition.gates).toBeUndefined();
-      expect((await bindings(ws, 'boxes')).get(runner.definitionId)?.bindable).toBe(false);
+      expect((await bindings(ws, 'boxes')).get(runner.definitionId)).toMatchObject({
+        bindable: false,
+        kept: false,
+      });
 
       const north = await connectGate(ws, `north-${suffix}`);
       expect((await state(ws, 'boxes')).status).toBe('up_to_date');
@@ -312,10 +334,44 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(again.plan.unchanged).toBe(false);
       expect(again.workerGates[0]).toMatchObject({ source: 'install' });
       expect((await head(ws, runner.definitionId))?.definition.gates).toEqual([north]);
+      expect(await recordedGates(ws, again.segmentId)).toEqual({
+        before: [],
+        after: [`north-${suffix}`],
+      });
       expect((await state(ws, 'boxes')).status).toBe('up_to_date');
       expect((await bindings(ws, 'boxes')).get(runner.definitionId)?.bindable).toBe(false);
       // Nothing left to do.
       expect((await preview(ws, 'boxes')).plan.unchanged).toBe(true);
+    });
+
+    it('keeping none is recorded as gates: [] — not widening, no longer bindable, and installing again changes nothing (review #493 on #705)', async () => {
+      const ws = await newWorkspace();
+      const runner = runnerOf('boxes');
+      await installReviewed(ws, 'boxes');
+      await connectGate(ws, `north-${suffix}`);
+      expect((await bindings(ws, 'boxes')).get(runner.definitionId)?.bindable).toBe(true);
+
+      const none = await installReviewed(ws, 'boxes', new Map([['box-runner', []]]));
+      const planned = none.workerGates[0];
+      expect(planned).toMatchObject({ source: 'none', gates: [] });
+      // From no gates to none: nothing more for the Worker to act on, so nothing to confirm.
+      const item = none.plan.items[(planned?.ordinal ?? 0) - 1];
+      expect(item?.classification).not.toBe('authority_widening');
+      expect(item?.widening).toEqual([]);
+
+      expect((await head(ws, runner.definitionId))?.definition.gates).toEqual([]);
+      const binding = (await bindings(ws, 'boxes')).get(runner.definitionId);
+      expect(binding?.bindable).toBe(false);
+      expect(binding?.gates).toEqual([]);
+      expect(binding?.kept).toBe(true);
+      expect((await state(ws, 'boxes')).status).toBe('up_to_date');
+      const again = await preview(ws, 'boxes');
+      expect(again.plan.unchanged).toBe(true);
+      expect(again.workerGates[0]).toMatchObject({
+        source: 'workspace',
+        gates: [],
+        candidates: [],
+      });
     });
 
     it('the workspace’s own gates and model: never customized, kept as they are by an upgrade', async () => {

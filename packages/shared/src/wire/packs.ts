@@ -5,6 +5,7 @@ import {
   PackRequirementStateSchema,
 } from '../enums.js';
 import {
+  ChangeGateRefWireSchema,
   ChangeInUseWireSchema,
   ChangeProvenanceWireSchema,
   ChangeVerificationWireSchema,
@@ -79,13 +80,8 @@ export const PackVersionWireSchema = z
   .strict();
 export type PackVersionWire = z.infer<typeof PackVersionWireSchema>;
 
-/** A Gatekeeper of the workspace, by id and the name people know it by. */
-export const PackGateRefWireSchema = z
-  .object({
-    id: z.string(),
-    name: z.string(),
-  })
-  .strict();
+/** A Gatekeeper of the workspace, by id and the name people know it by (the change plan's own). */
+export const PackGateRefWireSchema = ChangeGateRefWireSchema;
 export type PackGateRefWire = z.infer<typeof PackGateRefWireSchema>;
 
 /** One system the latest version needs, and where it stands in this workspace now
@@ -152,6 +148,9 @@ export const PackComponentStateWireSchema = z.discriminatedUnion('kind', [
       /** The gates its published head may act on (its `gates`): the workspace's own, kept by every
        *  install. Empty when it has none or is not installed. */
       gates: z.array(PackGateRefWireSchema),
+      /** Its published head has `gates` of its own — possibly none, as when the owner kept none
+       *  when binding it (`gates` is then empty) — which every install keeps. */
+      gatesKept: z.boolean(),
       /** Installing the pack again would bind it: it is installed, has no gates yet, and a gate of
        *  a system it acts on is connected now (one installed before that gate was). */
       bindable: z.boolean(),

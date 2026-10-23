@@ -47,6 +47,7 @@ function worker(patch: Partial<PackComponentStateWire> = {}): PackComponentState
     installedVersion: 3,
     systems: ['docker'],
     gates: [],
+    gatesKept: false,
     bindable: false,
     provenance: { status: 'unrecorded' },
     ...patch,

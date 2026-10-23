@@ -410,7 +410,11 @@ function ComponentView({
       </div>
       {description ? <span className="text-small">{description}</span> : null}
       {component.kind === 'worker' && component.systems.length > 0 ? (
-        <WorkerSystemsLine component={component} testId={`catalog-pack-component-${key}-gates`} />
+        <WorkerSystemsLine
+          component={component}
+          page={page}
+          testId={`catalog-pack-component-${key}-gates`}
+        />
       ) : null}
       {component.installedVersion !== null ? (
         <span className="text-3 text-small">
@@ -470,16 +474,26 @@ function ComponentView({
 }
 
 /** A pack Worker's systems and the gates it acts on here (P1-E2): the workspace's own, kept by
- *  every install; or, with none yet, whether installing (again) would connect it. */
+ *  every install — possibly none, when that was the choice — and changed on the Worker's own page;
+ *  or, with none yet, whether installing (again) would connect it. */
 function WorkerSystemsLine({
   component,
+  page,
   testId,
 }: {
   readonly component: Extract<PackComponentStateWire, { kind: 'worker' }>;
+  /** The Worker's page in the catalog (`null` when it has no published version). */
+  readonly page: string | null;
   readonly testId: string;
 }) {
   const t = useT();
   const systems = component.systems.join(t('、', ', '));
+  // UX acceptance of #705, P3-6: the gates are changed on the Worker's page, not here.
+  const change = page ? (
+    <RouteLink href={page} testId={`${testId}-change`}>
+      {t('在 Worker 页修改', 'Change on the Workers tab')}
+    </RouteLink>
+  ) : null;
   return (
     <span className="row-wrap text-3 text-small" data-testid={testId}>
       {component.gates.length > 0 ? (
@@ -494,6 +508,17 @@ function WorkerSystemsLine({
               {gate.name}
             </RouteLink>
           ))}
+          {change}
+        </>
+      ) : component.gatesKept ? (
+        <>
+          <span data-testid={`${testId}-none-kept`}>
+            {t(
+              '不接任何系统：这是工作区为它定的，再装也会保留。',
+              'Acts on no system: the workspace set it so, and installing again keeps it.',
+            )}
+          </span>
+          {change}
         </>
       ) : component.status === 'not_installed' ? (
         <span>
@@ -627,6 +652,15 @@ function InstallPack({
     ? data.items.filter((item) => !item.unchanged && item.classification === 'authority_widening')
     : [];
   const unconfirmed = widening.filter((item) => !confirmed.has(item.ordinal)).length;
+  // Up to date, installing again only connects a Worker — or, every gate unticked, records that it
+  // is connected to none (UX acceptance of #705, P3-2).
+  const connects =
+    data?.items.some(
+      (item) =>
+        item.kind === 'worker_definition_version' &&
+        !item.unchanged &&
+        item.binding.source === 'install',
+    ) ?? false;
   const crossed = data
     ? data.pack.versions.filter((version) => data.crossedVersions.includes(version.version))
     : [];
@@ -691,7 +725,9 @@ function InstallPack({
           data?.pack.status === 'outdated'
             ? t('升级', 'Upgrade')
             : data?.pack.status === 'up_to_date'
-              ? t('接上', 'Connect')
+              ? connects
+                ? t('接上', 'Connect')
+                : t('记下：不接', 'Keep: none')
               : t('安装', 'Install')
         }
         danger={data !== null && (data.breaking || data.pack.status === 'customized')}
@@ -954,8 +990,8 @@ function WorkerBindingReview({
           {kept.length === 0 ? (
             <span className="text-3 text-small" data-testid={`${prefix}-none-kept`}>
               {t(
-                '一个都不接：装好后它不能对任何系统动手；之后可以在「Worker」页给它选。',
-                'None: once installed it cannot act on any system; pick some later on the Workers tab.',
+                '一个都不接：它不能对任何系统动手。这个选择会记下来，之后不再提示接上；要接，在「Worker」页给它选。',
+                'None: it cannot act on any system. The choice is kept, and you will not be asked to connect it again; to connect it, pick some on the Workers tab.',
               )}
             </span>
           ) : null}

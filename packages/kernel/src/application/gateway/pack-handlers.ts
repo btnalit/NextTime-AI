@@ -123,6 +123,7 @@ async function toComponentStateWire(
         headVersion: head?.version ?? null,
         systems: [...component.systems],
         gates: (binding?.gates ?? []).map((gate) => ({ id: gate.id, name: gate.name })),
+        gatesKept: binding?.kept ?? false,
         bindable: binding?.bindable ?? false,
         ...common,
       };

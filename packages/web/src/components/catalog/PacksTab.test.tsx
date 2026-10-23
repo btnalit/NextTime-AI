@@ -484,11 +484,12 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
     ).toBeTruthy();
     expect(within(docker).queryByRole('link')).toBeNull();
     const ragflow = within(listed).getByTestId('catalog-pack-requirements-ragflow');
-    expect(ragflow.textContent).toMatch(/平台未提供这个部署还没有提供它，需要平台管理员先接入/);
+    // Not offered, or every instance of it disabled (UX acceptance of #705, P3-3).
+    expect(ragflow.textContent).toMatch(/平台未提供平台没有提供它，或者提供的门实例已经停用/);
     // Not a platform administrator: told who does it, no link to a page they cannot open.
     expect(
       within(ragflow).getByTestId('catalog-pack-requirements-ragflow-ask-platform').textContent,
-    ).toMatch(/请平台管理员在「平台 · 集成」里添加它的门实例/);
+    ).toMatch(/请平台管理员在「平台 · 集成」里添加或重新启用它的门实例/);
     expect(within(ragflow).queryByRole('link')).toBeNull();
     expect(screen.getByTestId('catalog-pack-version-2').textContent).toMatch(
       /要用到的系统：docker、ragflow/,
@@ -557,6 +558,7 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
           headVersion: null,
           systems: [],
           gates: [],
+          gatesKept: false,
           bindable: false,
           status: 'not_installed',
           installedVersion: null,
@@ -716,6 +718,7 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
         headVersion: null,
         systems: ['docker'],
         gates: [],
+        gatesKept: false,
         bindable: false,
         status: 'not_installed',
         installedVersion: null,
@@ -862,7 +865,7 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
       fireEvent.click(screen.getByTestId('catalog-pack-item-1-binding-gate-gk-south'));
       expect(
         (await screen.findByTestId('catalog-pack-item-1-binding-none-kept')).textContent,
-      ).toMatch(/一个都不接：装好后它不能对任何系统动手/);
+      ).toMatch(/一个都不接：它不能对任何系统动手。这个选择会记下来，之后不再提示接上/);
       await waitFor(() =>
         expect(named(http.calls, 'preview_pack_install').at(-1)?.params).toEqual({
           name: 'ops-base',
@@ -901,6 +904,41 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
       fireEvent.click(trigger);
       await screen.findByTestId('catalog-pack-item-1-binding-choice');
       expect(screen.getByRole('button', { name: '接上' })).toBeTruthy();
+      // Unticking every gate connects nothing: the install records that choice (P3-2).
+      fireEvent.click(screen.getByTestId('catalog-pack-item-1-binding-gate-gk-north'));
+      fireEvent.click(screen.getByTestId('catalog-pack-item-1-binding-gate-gk-south'));
+      expect(await screen.findByRole('button', { name: '记下：不接' })).toBeTruthy();
+    });
+
+    it('a Worker the workspace connected to no system: says so, and is not offered to connect again', async () => {
+      const none = crew({
+        status: 'up_to_date',
+        installedVersion: 1,
+        components: [
+          runner({
+            status: 'up_to_date',
+            installedVersion: 1,
+            headVersion: 2,
+            gatesKept: true,
+            provenance: component().provenance,
+          }),
+        ],
+      });
+      const http = scriptedHttp({
+        get_workspace: () => OWNER_WORKSPACE,
+        list_packs: () => ({ items: [none] }),
+      });
+      renderTab(http, 'ops-base');
+      const line = await screen.findByTestId('catalog-pack-component-worker-ops-runner-gates');
+      expect(line.textContent).toBe(
+        '不接任何系统：这是工作区为它定的，再装也会保留。在 Worker 页修改',
+      );
+      expect(
+        within(line)
+          .getByTestId('catalog-pack-component-worker-ops-runner-gates-change')
+          .getAttribute('href'),
+      ).toBe('#/govern/catalog/workers/def-1%402');
+      expect(screen.queryByTestId('catalog-pack-install-trigger')).toBeNull();
     });
 
     it('a Worker already connected: its gates link to their pages, and the review keeps them and the model', async () => {
@@ -940,7 +978,13 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
       renderTab(http, 'ops-base');
 
       const line = await screen.findByTestId('catalog-pack-component-worker-ops-runner-gates');
-      expect(line.textContent).toMatch(/^接入的系统：south$/);
+      expect(line.textContent).toMatch(/^接入的系统：south在 Worker 页修改$/);
+      // P3-6: changed on the Worker's own page.
+      expect(
+        within(line)
+          .getByTestId('catalog-pack-component-worker-ops-runner-gates-change')
+          .getAttribute('href'),
+      ).toBe('#/govern/catalog/workers/def-1%402');
       expect(
         within(line)
           .getByTestId('catalog-pack-component-worker-ops-runner-gates-gk-south')
@@ -998,9 +1042,21 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
           { connector: 'ragflow', state: 'needs_platform', gatekeepers: [], offered: [] },
         ],
       });
+      const connected = crew({
+        requirements: [
+          {
+            connector: 'docker',
+            state: 'connected',
+            gatekeepers: [{ id: 'gk-new', name: '容器主机甲' }],
+            offered: [],
+          },
+          { connector: 'ragflow', state: 'needs_platform', gatekeepers: [], offered: [] },
+        ],
+      });
+      let enabled = false;
       const http = scriptedHttp({
         get_workspace: () => OWNER_WORKSPACE,
-        list_packs: () => ({ items: [offered] }),
+        list_packs: () => ({ items: [enabled ? connected : offered] }),
         preview_gate_instance_enable: () => ({
           gateId: 'docker-a',
           ambiguousCandidates: [],
@@ -1009,11 +1065,10 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
           operationsAlreadyPresent: [],
           manifestDigest: 'sha256:manifest',
         }),
-        enable_gate_instance: () => ({
-          gatekeeperId: 'gk-new',
-          linkedExisting: false,
-          publishedOperationNames: [],
-        }),
+        enable_gate_instance: () => {
+          enabled = true;
+          return { gatekeeperId: 'gk-new', linkedExisting: false, publishedOperationNames: [] };
+        },
       });
       renderTab(http, 'ops-base', { platformAdmin: true });
 
@@ -1029,6 +1084,11 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
       );
       // The pack is read again: the system is connected now, its Worker can be connected.
       await waitFor(() => expect(named(http.calls, 'list_packs').length).toBeGreaterThan(1));
+      // The enable button is gone: focus lands on the system's row, whose state line announces
+      // it (UX acceptance of #705, P3-1).
+      const row = await screen.findByTestId('catalog-pack-requirements-docker');
+      await waitFor(() => expect(document.activeElement).toBe(row));
+      expect(within(row).getByRole('status').textContent).toMatch(/docker已接入/);
 
       const ragflow = screen.getByTestId('catalog-pack-requirements-ragflow');
       expect(
@@ -1063,6 +1123,7 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
           headVersion: 3,
           systems: [],
           gates: [],
+          gatesKept: false,
           bindable: false,
           status: 'up_to_date',
           installedVersion: 1,

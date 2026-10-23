@@ -54,6 +54,9 @@ import { type PackState, classifyPackState } from './state.js';
  *   - a Worker that names its systems (`PackWorkerComponent.systems`) and has no gates yet is bound
  *     by the install to the workspace's connected gates of those systems (`readPackRequirements`'
  *     `gatekeepers`): every one, unless the person reviewing kept only some (`WorkerGateChoice`).
+ *     Keeping none publishes `gates: []`, so the choice is kept like any other (review #493 on
+ *     #705): the Worker is no longer `bindable`, and the next install keeps it. With no candidate
+ *     at all the install writes no `gates`, so the Worker stays bindable once one is connected.
  *     Binding widens what the Worker may act on, so the item is confirmed by itself (I-A4); a gate
  *     connected or cut off between the review and the install changes the digest (409
  *     `change_plan_changed`). Installing again once a system is connected binds a Worker installed
@@ -61,10 +64,11 @@ import { type PackState, classifyPackState } from './state.js';
  */
 
 /** The change item installing one component (an item per component, in the version's order).
- *  `gates`: what a Worker with no gates yet is bound to (see this module's comment). */
+ *  `gates`: what a Worker with no gates yet is bound to, `undefined` for one it is not (see this
+ *  module's comment). */
 function componentIntent(
   component: PackComponent,
-  gates: readonly string[],
+  gates: readonly string[] | undefined,
 ): WorkspaceSegmentInput['items'][number] {
   switch (component.kind) {
     case 'ontology':
@@ -80,7 +84,9 @@ function componentIntent(
         kind: 'worker_definition_version',
         definitionId: component.definitionId,
         definition:
-          gates.length > 0 ? { ...component.definition, gates: [...gates] } : component.definition,
+          gates === undefined
+            ? component.definition
+            : { ...component.definition, gates: [...gates] },
         keepFromHead: WORKSPACE_OWNED_WORKER_FIELDS,
       };
   }
@@ -88,7 +94,8 @@ function componentIntent(
 
 /** The segment installing `target`: item `n` installs component `n` (ontology families, then
  *  Skills, then Workers — a Worker after the Skills it mounts). `gates`: by WorkerDefinition id,
- *  what a Worker with no gates yet is bound to (none when absent). */
+ *  what a Worker with no gates yet is bound to (an empty list: none, kept as the choice); a Worker
+ *  absent from it is bound to nothing and gets no `gates`. */
 export function packSegment(
   entry: PackEntry,
   target: PackVersion,
@@ -104,7 +111,7 @@ export function packSegment(
     items: target.components.map((component) =>
       componentIntent(
         component,
-        component.kind === 'worker' ? (gates.get(component.definitionId) ?? []) : [],
+        component.kind === 'worker' ? gates.get(component.definitionId) : undefined,
       ),
     ),
   };
@@ -160,6 +167,9 @@ export interface WorkerBinding {
   /** The gates its published head may act on (its `gates`), with their names; empty when it has
    *  none (or is not installed). */
   readonly gates: readonly PackRequirementGate[];
+  /** Its published head has `gates` of its own — possibly none, as when the person kept none — so
+   *  every install keeps them (`PlannedWorkerGates.source: 'workspace'`). */
+  readonly kept: boolean;
   /** Installing the pack again would bind it: it is installed, has no gates yet, and a gate of a
    *  system it acts on is connected now (see this module's comment). */
   readonly bindable: boolean;
@@ -182,20 +192,20 @@ export async function readWorkerBindings(
       workspaceId,
       component.definitionId,
     );
+    const kept = head !== null && head.definition.gates !== undefined;
     bindings.set(component.definitionId, {
       systems: component.systems,
       gates: await gateRefs(client, workspaceId, stringList(head?.definition.gates)),
-      bindable:
-        head !== null &&
-        head.definition.gates === undefined &&
-        (candidates.get(component.definitionId) ?? []).length > 0,
+      kept,
+      bindable: head !== null && !kept && (candidates.get(component.definitionId) ?? []).length > 0,
     });
   }
   return bindings;
 }
 
 /** What a Worker with no gates yet is bound to: the person's choice, checked against the
- *  candidates, or every candidate (see `WorkerGateChoice`). */
+ *  candidates, or every candidate (see `WorkerGateChoice`). A Worker with no candidate is left out:
+ *  there was nothing to choose from, so nothing is recorded. */
 function chooseWorkerGates(
   target: PackVersion,
   candidates: ReadonlyMap<string, readonly WorkerGateCandidate[]>,
@@ -219,6 +229,7 @@ function chooseWorkerGates(
   }
   const gates = new Map<string, readonly string[]>();
   for (const [definitionId, offered] of candidates) {
+    if (offered.length === 0) continue;
     const name = [...workers.values()].find((worker) => worker.definitionId === definitionId)?.name;
     const chosen = name === undefined ? undefined : choice.get(name);
     const kept = chosen === undefined ? null : new Set(chosen);

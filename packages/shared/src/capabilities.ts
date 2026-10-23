@@ -3818,7 +3818,9 @@ const platformCapabilities = [
 
 /** `preview_pack_install` / `install_pack` `workerGates` (S11 P1-E2): by Worker name, the gates the
  *  owner kept for a Worker the install binds — a subset of its binding's `candidates` (400
- *  invalid_params otherwise). A Worker not named is bound to every candidate. */
+ *  invalid_params otherwise). A Worker not named is bound to every candidate; an empty list keeps
+ *  none and is recorded (`gates: []`). A Worker whose head already has gates keeps them whatever
+ *  is passed (`binding.source: 'workspace'`). */
 const PackWorkerGatesParamSchema = z.record(z.string().min(1), z.array(id));
 
 const modulesCapabilities = [
@@ -3977,7 +3979,7 @@ const modulesCapabilities = [
       .strict(),
     resultSchema: wire.PackInstallPreviewWireSchema,
     description:
-      'Dry run of install_pack, writing nothing: per component of the latest version, what the family has now and would have after — for an ontology family the type names added / removed / changed, for a Skill or Worker the content it would publish and the fields that differ —, and the item’s authority classification; the versions the install moves through and whether one is breaking; how many objects and active Facts use a type it takes out (kept, never removed); and the digest to pass back as reviewedDigest. The systems the version needs are in pack.requirements: installing does not wait for them. A Worker’s gates and model are the workspace’s own: each Worker item keeps what its head has (binding.source workspace), and a Worker that names systems and has no gates yet is bound to the workspace’s connected gates of those systems (binding.source install, an authority_widening item) — every candidate unless workerGates keeps fewer. 400 invalid_params when workerGates names a Worker the version does not have or a gate that is not one of its candidates; 404 pack_not_found; 409 ontology_namespace_conflict when a component declares an ObjectType or ActionType name another installed family already declares (I-P1); 409 skill_name_conflict when another Skill family already has a Skill component’s name published.',
+      'Dry run of install_pack, writing nothing: per component of the latest version, what the family has now and would have after — for an ontology family the type names added / removed / changed, for a Skill or Worker the content it would publish and the fields that differ —, and the item’s authority classification; the versions the install moves through and whether one is breaking; how many objects and active Facts use a type it takes out (kept, never removed); and the digest to pass back as reviewedDigest. The systems the version needs are in pack.requirements: installing does not wait for them. A Worker’s gates and model are the workspace’s own: each Worker item keeps what its head has (binding.source workspace), and a Worker that names systems and has no gates yet is bound to the workspace’s connected gates of those systems (binding.source install, an authority_widening item) — every candidate unless workerGates keeps fewer; keeping none publishes gates: [] (binding.source none), so the Worker is no longer offered for binding; a Worker whose head has gates keeps them whatever workerGates says. 400 invalid_params when workerGates names a Worker the version does not have or a gate that is not one of its candidates; 404 pack_not_found; 409 ontology_namespace_conflict when a component declares an ObjectType or ActionType name another installed family already declares (I-P1); 409 skill_name_conflict when another Skill family already has a Skill component’s name published.',
   },
   {
     name: 'install_pack',

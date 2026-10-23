@@ -327,6 +327,69 @@ describe('ChangesTab (能力目录 · 安装历史, S11 P1-B)', () => {
     );
   });
 
+  it('a Worker item names the systems it was connected to; its rollback says which it loses (UX acceptance of #705)', async () => {
+    const north = { id: 'gk-north', name: '容器主机甲' };
+    const south = { id: 'gk-south', name: '容器主机乙' };
+    const workerItem = (gates: {
+      before: (typeof north)[] | null;
+      after: (typeof north)[] | null;
+    }): ChangeItemWire => ({
+      id: 'item-worker',
+      ordinal: 1,
+      kind: 'worker_definition_version',
+      classification: 'authority_widening',
+      widening: [{ path: 'worker.gates', reason: 'loosened' }],
+      confirmedBy: { id: 'p-owner', kind: 'human', displayName: 'Owner' },
+      state: 'in_effect',
+      replacedBy: null,
+      target: { definitionId: 'def-1', name: 'ops-runner' },
+      before: { version: 2, contentDigest: 'sha256:w2' },
+      after: { version: 3, contentDigest: 'sha256:w3' },
+      gates,
+    });
+    let item = workerItem({ before: [], after: [north] });
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_change_segments: () => ({ items: [segment(FIRST)] }),
+      get_change_segment: () => ({ segment: segment(FIRST), items: [item], verification: null }),
+      preview_roll_back_change_segment: () => ({
+        segment: segment(FIRST),
+        possible: true,
+        items: [
+          {
+            ordinal: 1,
+            kind: 'worker_definition_version',
+            target: { definitionId: 'def-1', name: 'ops-runner' },
+            from: { version: 3, contentDigest: 'sha256:w3' },
+            to: { version: 2, contentDigest: 'sha256:w2' },
+            classification: 'not_widening',
+            widening: [],
+            blocker: null,
+            blockedBy: null,
+          },
+        ],
+        inUse: { objects: 0, links: 0, capped: false },
+      }),
+    });
+    const view = renderTab(http, FIRST);
+
+    expect((await screen.findByTestId('catalog-change-item-1-gates')).textContent).toBe(
+      '接上的系统：容器主机甲（之前没有）',
+    );
+    fireEvent.click(screen.getByTestId('catalog-change-rollback-trigger'));
+    expect((await screen.findByTestId('catalog-change-preview-1-gates')).textContent).toBe(
+      '撤销后 Worker 不能再操作：容器主机甲',
+    );
+    view.unmount();
+
+    // Only the prompt changed: the gates are as they were, with nothing to compare.
+    item = workerItem({ before: [north, south], after: [north, south] });
+    renderTab(http, FIRST);
+    expect((await screen.findByTestId('catalog-change-item-1-gates')).textContent).toBe(
+      '接上的系统：容器主机甲、容器主机乙',
+    );
+  });
+
   it('a record shows its latest verification: who ran it and how, what is no longer in effect, and each system with its gates (P1-E)', async () => {
     const http = scriptedHttp({
       get_workspace: () => ({

@@ -252,6 +252,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         headVersion: 1,
         systems: ['docker'],
         gates: [],
+        gatesKept: false,
         bindable: false,
       });
     });

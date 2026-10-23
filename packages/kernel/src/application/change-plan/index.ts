@@ -82,6 +82,8 @@ export {
   type SkillVersionIntent,
   type StoredFamilyItem,
   type WorkerDefinitionVersionIntent,
+  type ChangeGateRef,
+  type WorkerItemGates,
   parseStoredFamilyItem,
   readFamilyHeadDigest,
   skillTargetOf,

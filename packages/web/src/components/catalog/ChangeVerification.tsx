@@ -7,7 +7,7 @@ import {
   type PackRequirementState,
   type PackRequirementWire,
 } from '@nexttime/shared';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { usePermissions } from '../../hooks/usePermissions.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
@@ -43,9 +43,10 @@ export function requirementHint(state: PackRequirementState, t: Translate): stri
         'The platform offers it; the workspace has not enabled it yet.',
       );
     case 'needs_platform':
+      // Also every instance of it disabled (UX acceptance of #705, P3-3).
       return t(
-        '这个部署还没有提供它，需要平台管理员先接入。',
-        'This deployment does not offer it yet; a platform administrator connects it first.',
+        '平台没有提供它，或者提供的门实例已经停用，需要平台管理员接入或重新启用。',
+        'The platform does not offer it, or its gate instances are disabled; a platform administrator connects or re-enables one first.',
       );
   }
 }
@@ -76,14 +77,34 @@ export function PackRequirementList({
   const t = useT();
   const can = useRoleCan(http);
   const canEnable = can('enable_gate_instance') !== false;
+  // Enabling one takes its button away (UX acceptance of #705, P3-1): once the pack is read
+  // again, focus moves to its row, whose state line announces where it stands now.
+  const [enabled, setEnabled] = useState<string | null>(null);
+  const rows = useRef(new Map<string, HTMLDivElement>());
+  useEffect(() => {
+    if (enabled === null) return;
+    const now = requirements.find((requirement) => requirement.connector === enabled);
+    if (now?.state === 'can_enable') return;
+    rows.current.get(enabled)?.focus();
+    setEnabled(null);
+  }, [enabled, requirements]);
   return (
     <div className="stack-s" data-testid={testId}>
       {requirements.map((requirement) => {
         const hint = requirementHint(requirement.state, t);
         const rowId = `${testId}-${requirement.connector}`;
         return (
-          <div className="stack-s" key={requirement.connector} data-testid={rowId}>
-            <span className="row-wrap">
+          <div
+            className="stack-s"
+            key={requirement.connector}
+            data-testid={rowId}
+            tabIndex={-1}
+            ref={(row) => {
+              if (row) rows.current.set(requirement.connector, row);
+              else rows.current.delete(requirement.connector);
+            }}
+          >
+            <span className="row-wrap" role={onChanged ? 'status' : undefined}>
               <span className="mono">{requirement.connector}</span>
               <StatusChip machine="packRequirement" status={requirement.state} size="s" />
             </span>
@@ -117,7 +138,10 @@ export function PackRequirementList({
                       gateId={offer.gateId}
                       gateDisplayName={offer.displayName}
                       platformAdmin={platformAdmin}
-                      onEnabled={() => onChanged()}
+                      onEnabled={() => {
+                        setEnabled(requirement.connector);
+                        onChanged();
+                      }}
                       testId={`${rowId}-enable-${offer.gateId}`}
                     />
                   </span>
@@ -138,15 +162,15 @@ export function PackRequirementList({
                   testId={`${rowId}-platform`}
                 >
                   {t(
-                    `去「平台 · 集成」添加一个 ${requirement.connector} 门实例`,
-                    `Add a ${requirement.connector} gate instance under Platform · Integrations`,
+                    `去「平台 · 集成」看 ${requirement.connector} 门实例`,
+                    `See the ${requirement.connector} gate instances under Platform · Integrations`,
                   )}
                 </RouteLink>
               ) : (
                 <span className="text-3 text-small" data-testid={`${rowId}-ask-platform`}>
                   {t(
-                    '请平台管理员在「平台 · 集成」里添加它的门实例，之后这里就能启用。',
-                    'Ask a platform administrator to add a gate instance for it under Platform · Integrations; it can then be enabled here.',
+                    '请平台管理员在「平台 · 集成」里添加或重新启用它的门实例，之后这里就能启用。',
+                    'Ask a platform administrator to add or re-enable a gate instance for it under Platform · Integrations; it can then be enabled here.',
                   )}
                 </span>
               )

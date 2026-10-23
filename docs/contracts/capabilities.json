@@ -7367,6 +7367,68 @@
                       }
                     ]
                   },
+                  "gates": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "after": {
+                        "anyOf": [
+                          {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "id": {
+                                  "type": "string"
+                                },
+                                "name": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "id",
+                                "name"
+                              ],
+                              "type": "object"
+                            },
+                            "type": "array"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "before": {
+                        "anyOf": [
+                          {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "id": {
+                                  "type": "string"
+                                },
+                                "name": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "id",
+                                "name"
+                              ],
+                              "type": "object"
+                            },
+                            "type": "array"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "before",
+                      "after"
+                    ],
+                    "type": "object"
+                  },
                   "id": {
                     "type": "string"
                   },
@@ -7459,7 +7521,8 @@
                   "kind",
                   "target",
                   "before",
-                  "after"
+                  "after",
+                  "gates"
                 ],
                 "type": "object"
               },
@@ -14892,6 +14955,9 @@
                         },
                         "type": "array"
                       },
+                      "gatesKept": {
+                        "type": "boolean"
+                      },
                       "headVersion": {
                         "anyOf": [
                           {
@@ -15042,6 +15108,7 @@
                       "headVersion",
                       "systems",
                       "gates",
+                      "gatesKept",
                       "bindable",
                       "status",
                       "installedVersion",
@@ -20215,6 +20282,9 @@
                           },
                           "type": "array"
                         },
+                        "gatesKept": {
+                          "type": "boolean"
+                        },
                         "headVersion": {
                           "anyOf": [
                             {
@@ -20365,6 +20435,7 @@
                         "headVersion",
                         "systems",
                         "gates",
+                        "gatesKept",
                         "bindable",
                         "status",
                         "installedVersion",
@@ -26406,6 +26477,9 @@
                         },
                         "type": "array"
                       },
+                      "gatesKept": {
+                        "type": "boolean"
+                      },
                       "headVersion": {
                         "anyOf": [
                           {
@@ -26556,6 +26630,7 @@
                       "headVersion",
                       "systems",
                       "gates",
+                      "gatesKept",
                       "bindable",
                       "status",
                       "installedVersion",
