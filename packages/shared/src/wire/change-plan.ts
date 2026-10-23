@@ -165,6 +165,16 @@ export const OperationFieldChangeWireSchema = z
   .strict();
 export type OperationFieldChangeWire = z.infer<typeof OperationFieldChangeWireSchema>;
 
+/** A Gatekeeper of the workspace, by id and the name people know it by (its id for one no longer
+ *  there). */
+export const ChangeGateRefWireSchema = z
+  .object({
+    id: z.string(),
+    name: z.string(),
+  })
+  .strict();
+export type ChangeGateRefWire = z.infer<typeof ChangeGateRefWireSchema>;
+
 const ChangeItemCommonShape = {
   id: z.string(),
   /** 1-based position in its segment; items apply in this order and roll back in reverse. */
@@ -185,9 +195,11 @@ const ChangeItemCommonShape = {
 /** One item of `get_change_segment`, by kind. Each published `after` as its family's next
  *  version; `before` was the family's head then (null: not installed). `ontology_version`: an
  *  ontology family; `skill_version`: a Skill; `worker_definition_version`: a `worker`
- *  WorkerDefinition; `operation_version`: a revision of a published Operation (`before` the
- *  version it replaced, never null), `fields` the governance fields it changed (read from the two
- *  versions now; empty when either no longer holds what the item recorded). */
+ *  WorkerDefinition, `gates` the gates of each side's version (S11 P1-E2: what the Worker could act
+ *  on before and after; read from the versions now, `null` for a side not there or no longer
+ *  holding what the item recorded); `operation_version`: a revision of a published Operation
+ *  (`before` the version it replaced, never null), `fields` the governance fields it changed (read
+ *  from the two versions now; empty when either no longer holds what the item recorded). */
 export const ChangeItemWireSchema = z.discriminatedUnion('kind', [
   z
     .object({
@@ -214,6 +226,12 @@ export const ChangeItemWireSchema = z.discriminatedUnion('kind', [
       target: WorkerDefinitionVersionChangeTargetWireSchema,
       before: ContentVersionRefWireSchema.nullable(),
       after: ContentVersionRefWireSchema,
+      gates: z
+        .object({
+          before: z.array(ChangeGateRefWireSchema).nullable(),
+          after: z.array(ChangeGateRefWireSchema).nullable(),
+        })
+        .strict(),
     })
     .strict(),
   z

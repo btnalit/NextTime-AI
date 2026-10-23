@@ -621,16 +621,12 @@ export const ChangeVerificationTriggerSchema = asEnum(CHANGE_VERIFICATION_TRIGGE
  * Where a system a pack needs (a connector it `requires`) stands in this workspace (S11 P1-E; S10
  * plan §3.3 I-P3: a gate is a code component, so a pack only checks it is in place):
  * `connected` — the workspace has a gate of that connector the platform has not cut off;
- * `can_enable` — the platform offers an instance of it the owner can enable here; `can_connect` —
- * the platform lets workspaces connect it themselves; `needs_platform` — none of these: a platform
- * administrator has to add or turn on an instance first.
+ * `can_enable` — the platform offers an instance of it the owner can enable here;
+ * `needs_platform` — neither: a platform administrator has to add or turn on an instance first.
+ * (P1-E2 dropped `can_connect`: a workspace connects only the four generic transports itself, and a
+ * pack never requires one of those, so a pack's system could never be in it.)
  */
-export const PACK_REQUIREMENT_STATE_VALUES = [
-  'connected',
-  'can_enable',
-  'can_connect',
-  'needs_platform',
-] as const;
+export const PACK_REQUIREMENT_STATE_VALUES = ['connected', 'can_enable', 'needs_platform'] as const;
 export type PackRequirementState = (typeof PACK_REQUIREMENT_STATE_VALUES)[number];
 export const PackRequirementStateSchema = asEnum(PACK_REQUIREMENT_STATE_VALUES);
 
