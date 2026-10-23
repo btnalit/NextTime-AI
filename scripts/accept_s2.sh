@@ -1342,6 +1342,29 @@ step9_goal_from_chat() {
   goal_tasks=$(psql_ws "select count(*) from tasks where workspace_id='$WORKSPACE_ID' and goal_run_id='$GOAL_ID'")
   [ "$goal_tasks" = "1" ] || fail "step9-goal-one-task" "goal $GOAL_ID has $goal_tasks Task rows, expected exactly one for its one step"
   pass "step9-goal-one-task" "one Task for the goal's one step"
+
+  # S11 GO5e-2: the goal's milestones are status lines in the chat it was proposed from, in order,
+  # the last one with its outcome; its step's Task reported there under its step; every milestone
+  # but the proposal waits as a context item for that chat's next turn, the step's Task does not.
+  # The outbox delivers after the run settles, so poll for the last milestone.
+  goal_lines=""
+  attempt=0
+  while [ "$attempt" -lt 30 ]; do
+    goal_lines=$(psql_ws "select string_agg(content->>'change', ',' order by sequence) from chat_messages where workspace_id='$WORKSPACE_ID' and chat_id='$GOAL_CHAT_ID' and role='system' and content->>'kind'='system.goal_update' and content->>'goalRunId'='$GOAL_ID'")
+    case "$goal_lines" in
+      *complete) break ;;
+    esac
+    attempt=$((attempt + 1))
+    sleep 1
+  done
+  [ "$goal_lines" = "propose,confirm,verify,complete" ] || fail "step9-goal-milestones" "goal $GOAL_ID's milestones in chat $GOAL_CHAT_ID read '$goal_lines', expected propose,confirm,verify,complete"
+  goal_end_line=$(psql_ws "select concat_ws(',', content->>'status', content->>'outcome', content->>'outcomeBasis') from chat_messages where workspace_id='$WORKSPACE_ID' and chat_id='$GOAL_CHAT_ID' and content->>'kind'='system.goal_update' and content->>'goalRunId'='$GOAL_ID' and content->>'change'='complete'")
+  [ "$goal_end_line" = "completed,achieved,verified_by_check" ] || fail "step9-goal-milestones" "the completion line reads '$goal_end_line', expected completed,achieved,verified_by_check"
+  goal_step_line=$(psql_ws "select count(*) from chat_messages where workspace_id='$WORKSPACE_ID' and chat_id='$GOAL_CHAT_ID' and content->>'kind'='system.task_update' and content->>'goalRunId'='$GOAL_ID' and content->>'stepKey'='report' and content->>'status'='completed'")
+  [ "$goal_step_line" = "1" ] || fail "step9-goal-milestones" "chat $GOAL_CHAT_ID has $goal_step_line completed-Task lines for the goal's step 'report', expected 1"
+  goal_context=$(psql_ws "select coalesce(string_agg(p.kind || ':' || coalesce(p.payload->>'change', '') || case when p.chat_id = '$GOAL_CHAT_ID' then '' else '@another-chat' end, ',' order by p.created_at, p.id), '') from pending_context_items p where p.workspace_id='$WORKSPACE_ID' and p.principal_id='$ALICE_PRINCIPAL_ID' and (p.subject_id='$GOAL_ID' or p.subject_id in (select id from tasks where workspace_id='$WORKSPACE_ID' and goal_run_id='$GOAL_ID'))")
+  [ "$goal_context" = "goal_update:confirm,goal_update:verify,goal_update:complete" ] || fail "step9-goal-milestones" "the next turn's context items for goal $GOAL_ID read '$goal_context', expected goal_update:confirm,goal_update:verify,goal_update:complete and nothing for its step's Task"
+  pass "step9-goal-milestones" "chat $GOAL_CHAT_ID shows the goal's milestones (proposed, confirmed, checking, completed: achieved) and its step's Task under 'report'; the next turn gets the three after the proposal, not the Task"
 }
 
 cleanup_step() {

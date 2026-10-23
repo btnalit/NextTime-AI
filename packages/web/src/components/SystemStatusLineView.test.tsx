@@ -106,4 +106,66 @@ describe('SystemStatusLineView', () => {
     fireEvent.click(screen.getByRole('button', { name: /Task completed/ }));
     expect(onOpen).toHaveBeenCalledTimes(1);
   });
+
+  it('S11 GO5e-2: a goal milestone reads in the reader\'s language with the goal\'s chip and opens the goal', () => {
+    const onOpen = vi.fn();
+    render(
+      <SystemStatusLineView
+        line={{
+          variant: 'goal_update',
+          text: 'Goal goal-1 completed: achieved, on the platform\'s checks',
+          goalRunId: 'goal-1',
+          change: 'complete',
+          status: 'completed',
+          pauseReason: null,
+          heldByOwner: false,
+          outcome: 'achieved',
+          outcomeBasis: 'verified_by_check',
+          cleanupPending: false,
+          revision: null,
+        }}
+        onOpen={onOpen}
+      />,
+    );
+    const button = screen.getByRole('button', { name: /目标已完成：已达成 · 依据平台验收检查/ });
+    expect(button.getAttribute('title')).toBe('打开目标');
+    expect(document.querySelector('.chip')?.getAttribute('data-status')).toBe('completed');
+    // The kernel's own (English) text is not what the reader sees.
+    expect(screen.queryByText(/on the platform's checks/)).toBeNull();
+    fireEvent.click(button);
+    expect(onOpen).toHaveBeenCalledTimes(1);
+  });
+
+  it("S11 GO5e-2: a goal step's Task names its step in place of the kernel's line", () => {
+    render(
+      <SystemStatusLineView
+        line={{
+          variant: 'task_update',
+          text: 'Goal step "report": task task-1 completed',
+          taskId: 'task-1',
+          status: 'completed',
+          failureReason: null,
+          summary: null,
+          goalStep: { goalRunId: 'goal-1', stepKey: 'report' },
+        }}
+      />,
+    );
+    expect(screen.getByTestId('system-status-goal-step').textContent).toBe('目标步骤 report');
+    expect(screen.queryByText(/Goal step "report"/)).toBeNull();
+    cleanup();
+    render(
+      <SystemStatusLineView
+        line={{
+          variant: 'task_update',
+          text: 'Task task-1 completed',
+          taskId: 'task-1',
+          status: 'completed',
+          failureReason: null,
+          summary: null,
+        }}
+      />,
+    );
+    expect(screen.queryByTestId('system-status-goal-step')).toBeNull();
+    expect(screen.getByText('Task task-1 completed')).toBeTruthy();
+  });
 });

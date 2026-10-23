@@ -401,7 +401,7 @@ export async function sweepGoalCancelCleanup(
           // log and the event stream say the leftovers are gone.
           await recordGoalRunTransition(tx, goal.workspaceId, {
             actorPrincipalId: goal.onBehalfOf,
-            action: 'goal_run.cleanup_finished',
+            change: 'cleanup_finished',
             goalRunId: goal.id,
             resultingStatus: 'cancelled',
             extraAuditPayload: { by: 'advancer' },

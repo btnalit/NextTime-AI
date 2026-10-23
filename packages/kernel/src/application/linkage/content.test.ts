@@ -1,12 +1,15 @@
+import { GOAL_RUN_CHANGE_VALUES, SystemMessageContentSchema } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
 import {
+  type GoalUpdateRunState,
   buildActionPendingContent,
   buildActionUpdateContent,
+  buildGoalUpdateContent,
   buildTaskUpdateContent,
 } from './content.js';
 
 /**
- * application/linkage/content.test: unit tests (no IO) for the three `SystemMessageContent`
+ * application/linkage/content.test: unit tests (no IO) for the `SystemMessageContent`
  * builders — docs/development-tasks.md S2.11 deliverable 5 "unit tests for the context
  * formatting".
  */
@@ -53,6 +56,26 @@ describe('buildTaskUpdateContent', () => {
     });
     expect(content.text).toContain('task-4');
     expect(content.text).toContain('queued');
+  });
+});
+
+describe('buildTaskUpdateContent — a goal step (S11 GO5e-2)', () => {
+  it("names the step and carries the goal and step key; without one, neither", () => {
+    const content = buildTaskUpdateContent({
+      taskId: 'task-9',
+      status: 'failed',
+      failureReason: 'contract_violation',
+      goalStep: { goalRunId: 'goal-1', stepKey: 'collect' },
+    });
+    expect(content).toMatchObject({
+      text: 'Goal step "collect": task task-9 failed (contract_violation)',
+      goalRunId: 'goal-1',
+      stepKey: 'collect',
+    });
+    const plain = buildTaskUpdateContent({ taskId: 'task-9', status: 'completed', goalStep: null });
+    expect(plain).not.toHaveProperty('goalRunId');
+    expect(plain).not.toHaveProperty('stepKey');
+    expect(SystemMessageContentSchema.parse(content)).toEqual(content);
   });
 });
 
@@ -183,5 +206,124 @@ describe('buildActionUpdateContent', () => {
       isHolder: false,
     });
     expect(content.isHolder).toBe(false);
+  });
+});
+
+describe('buildGoalUpdateContent (S11 GO5e-2)', () => {
+  const RUN: GoalUpdateRunState = {
+    status: 'running',
+    pauseReason: null,
+    pausedByAuthority: null,
+    outcome: null,
+    outcomeBasis: null,
+    cleanupPending: false,
+    currentRevision: 1,
+  };
+
+  it('every change reads as itself, never as the default, and fits the wire schema', () => {
+    for (const change of GOAL_RUN_CHANGE_VALUES) {
+      const content = buildGoalUpdateContent({
+        goalRunId: 'goal-1',
+        change,
+        status: 'running',
+        run: RUN,
+      });
+      expect(content.text, change).toContain('goal-1');
+      expect(content.text, change).not.toContain('is now');
+      expect(content.change).toBe(change);
+      expect(SystemMessageContentSchema.parse(content)).toEqual(content);
+    }
+  });
+
+  it('a pause says why; an owner-held one says so; both only while the run is still paused', () => {
+    const paused: GoalUpdateRunState = {
+      ...RUN,
+      status: 'paused',
+      pauseReason: 'budget_exhausted',
+      pausedByAuthority: 'owner',
+    };
+    expect(
+      buildGoalUpdateContent({ goalRunId: 'g', change: 'pause', status: 'paused', run: paused }),
+    ).toEqual({
+      kind: 'system.goal_update',
+      text: 'Goal g paused: its budget ran out',
+      goalRunId: 'g',
+      change: 'pause',
+      status: 'paused',
+      pauseReason: 'budget_exhausted',
+      heldByOwner: true,
+    });
+    // Read after the run resumed: the pause's own sub-state is gone, so none is claimed.
+    const after = buildGoalUpdateContent({
+      goalRunId: 'g',
+      change: 'pause',
+      status: 'paused',
+      run: { ...RUN, status: 'running' },
+    });
+    expect(after).not.toHaveProperty('pauseReason');
+    expect(after).not.toHaveProperty('heldByOwner');
+    expect(after.text).toBe('Goal g paused');
+    // A change that is not a pause does not take the pause's sub-state even while paused.
+    const confirm = buildGoalUpdateContent({
+      goalRunId: 'g',
+      change: 'confirm',
+      status: 'paused',
+      run: paused,
+    });
+    expect(confirm).not.toHaveProperty('pauseReason');
+  });
+
+  it('completion carries its outcome and basis; a cancel its pending cleanup; a revision its number', () => {
+    const done = buildGoalUpdateContent({
+      goalRunId: 'g',
+      change: 'complete',
+      status: 'completed',
+      run: { ...RUN, status: 'completed', outcome: 'achieved', outcomeBasis: 'verified_by_check' },
+    });
+    expect(done).toMatchObject({
+      text: "Goal g completed: achieved, on the platform's checks",
+      outcome: 'achieved',
+      outcomeBasis: 'verified_by_check',
+    });
+    const cancelled = { ...RUN, status: 'cancelled' as const, cleanupPending: true };
+    expect(
+      buildGoalUpdateContent({
+        goalRunId: 'g',
+        change: 'finish_cancel',
+        status: 'cancelled',
+        run: cancelled,
+      }),
+    ).toMatchObject({ cleanupPending: true, text: expect.stringContaining('cleaned up') });
+    expect(
+      buildGoalUpdateContent({
+        goalRunId: 'g',
+        change: 'cleanup_finished',
+        status: 'cancelled',
+        run: cancelled,
+      }),
+    ).not.toHaveProperty('cleanupPending');
+    expect(
+      buildGoalUpdateContent({
+        goalRunId: 'g',
+        change: 'revise',
+        status: 'paused',
+        run: { ...RUN, status: 'paused', pauseReason: 'requested', currentRevision: 3 },
+      }),
+    ).toMatchObject({ revision: 3, text: expect.stringContaining('revision 3') });
+  });
+
+  it('an event with no change reads by its status', () => {
+    const content = buildGoalUpdateContent({
+      goalRunId: 'g',
+      change: undefined,
+      status: 'verifying',
+      run: { ...RUN, status: 'verifying' },
+    });
+    expect(content).toEqual({
+      kind: 'system.goal_update',
+      text: 'Goal g is now "verifying"',
+      goalRunId: 'g',
+      status: 'verifying',
+    });
   });
 });

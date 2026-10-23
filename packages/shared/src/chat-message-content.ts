@@ -3,19 +3,25 @@ import {
   ActionRequestFailureKindSchema,
   ActionRequestStatusSchema,
   BlastRadiusSchema,
+  GoalOutcomeBasisSchema,
+  GoalRunPauseReasonSchema,
+  GoalRunStatusSchema,
+  ObjectiveOutcomeSchema,
   TaskStatusSchema,
 } from './enums.js';
+import { StepKeySchema } from './goal-plan.js';
+import { GOAL_RUN_CHANGE_VALUES } from './transitions.js';
 
 /**
- * Chat message `kind`/`content` vocabulary for the three system-message kinds `application/
- * linkage` (kernel) writes into `chat_messages` (docs/development-tasks.md S2.11 deliverable 1:
- * "message kinds: system.task_update, system.action_pending, system.action_update; extend the
- * chat message schema/enum in the existing style").
+ * Chat message `kind`/`content` vocabulary for the system-message kinds `application/linkage`
+ * (kernel) writes into `chat_messages` (docs/development-tasks.md S2.11 deliverable 1: "message
+ * kinds: system.task_update, system.action_pending, system.action_update; extend the chat message
+ * schema/enum in the existing style"; S11 GO5e-2 adds `system.goal_update`).
  *
  * `chat_messages.role` (migrations/core/0008_chat_messages.sql) already reserves `'system'` for
  * exactly this future case (that migration's own comment says so) — this file is the "existing
  * style" extension point the S2.11 task brief asks for: a plain `role='system'` row's `content`
- * jsonb carries one of these three shapes, discriminated by a `kind` field the DB schema itself
+ * jsonb carries one of these shapes, discriminated by a `kind` field the DB schema itself
  * does not (and need not) constrain, since `chat_messages.content` is already an unconstrained
  * jsonb column. Every variant also carries `text` — a human-readable one-liner — so `chatMessageText`
  * (application/chat/service.ts) and any client that only reads `content.text` degrade gracefully
@@ -31,6 +37,7 @@ export const SYSTEM_MESSAGE_KIND_VALUES = [
   'system.task_update',
   'system.action_pending',
   'system.action_update',
+  'system.goal_update',
 ] as const;
 export type SystemMessageKind = (typeof SYSTEM_MESSAGE_KIND_VALUES)[number];
 
@@ -41,6 +48,11 @@ const SystemTaskUpdateContent = z.object({
   status: TaskStatusSchema,
   failureReason: z.string().nullable().optional(),
   summary: z.string().nullable().optional(),
+  // S11 GO5e-2: a Task run for a goal's step (its attempt, or a Task its Worker started) names the
+  // GoalRun and the step, so it reads as that goal's progress and goes to that goal's chat.
+  // Absent for any other Task, and on messages written before it.
+  goalRunId: z.string().optional(),
+  stepKey: StepKeySchema.optional(),
 });
 
 /** Written into a *holder's* Chat (§8.5 "卡片... 出现在持有范围者的对话") — `isHolder: true` — or, with
@@ -75,10 +87,35 @@ const SystemActionUpdateContent = z.object({
   failureKind: ActionRequestFailureKindSchema.optional(),
 });
 
+/**
+ * S11 GO5e-2 (plan §4.14 "对话：发起目标的对话里，里程碑以系统消息出现"): one change of a GoalRun,
+ * written into the chat the goal was proposed from (or, for a goal proposed with no conversation
+ * behind it, the requester's most recent chat). `change` is what happened (`GoalRunChange`; absent
+ * when the event that produced it predates it), `status` the run's status after it. The sub-state
+ * fields are read from the run when the message is written and only while they still describe
+ * that change — `pauseReason` (and `heldByOwner`) for a pause, `outcome` + `outcomeBasis` once
+ * completed, `cleanupPending` once cancelled, `revision` for a revision. The goal's statement is
+ * never copied in: a client reads it with `get_goal`, which shows it the way every read does.
+ */
+const SystemGoalUpdateContent = z.object({
+  kind: z.literal('system.goal_update'),
+  text: z.string(),
+  goalRunId: z.string(),
+  change: z.enum(GOAL_RUN_CHANGE_VALUES).optional(),
+  status: GoalRunStatusSchema,
+  pauseReason: GoalRunPauseReasonSchema.optional(),
+  heldByOwner: z.boolean().optional(),
+  outcome: ObjectiveOutcomeSchema.optional(),
+  outcomeBasis: GoalOutcomeBasisSchema.optional(),
+  cleanupPending: z.boolean().optional(),
+  revision: z.number().int().positive().optional(),
+});
+
 export const SystemMessageContentSchema = z.discriminatedUnion('kind', [
   SystemTaskUpdateContent,
   SystemActionPendingContent,
   SystemActionUpdateContent,
+  SystemGoalUpdateContent,
 ]);
 export type SystemMessageContent = z.infer<typeof SystemMessageContentSchema>;
 

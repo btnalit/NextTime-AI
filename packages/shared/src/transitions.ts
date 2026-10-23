@@ -460,6 +460,24 @@ export const GOAL_RUN_EVENT_VALUES = [
 ] as const;
 export type GoalRunEvent = (typeof GOAL_RUN_EVENT_VALUES)[number];
 
+/**
+ * What happened to a GoalRun (S11 GO5e-2): an event of the transition table below, or a change
+ * that is not a transition — its proposal (`propose`: the row is created `proposed`), a workspace
+ * owner taking over a person's pause or lifting that hold (`hold` / `release_hold`, GO3b), a
+ * revision accepted while it is paused (`revise`), or the leftovers of a cancel gone
+ * (`cleanup_finished`). `GoalRunUpdated` carries it and the audit action names it
+ * (`goal_run.<change>`), so a consumer knows which change it reads without comparing rows.
+ */
+export const GOAL_RUN_CHANGE_VALUES = [
+  ...GOAL_RUN_EVENT_VALUES,
+  'propose',
+  'hold',
+  'release_hold',
+  'revise',
+  'cleanup_finished',
+] as const;
+export type GoalRunChange = (typeof GOAL_RUN_CHANGE_VALUES)[number];
+
 export const GOAL_RUN_EDGES: readonly StateTransition<GoalRunStatus, GoalRunEvent>[] = [
   // The requester confirms plan + acceptance checks + budget; or it is rejected / expires unconfirmed.
   { from: 'proposed', event: 'confirm', to: 'running' },

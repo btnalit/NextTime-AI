@@ -1,4 +1,5 @@
 import {
+  GOAL_RUN_CHANGE_VALUES,
   type GoalPlan,
   type OutputSchema,
   type UnresolvedGoalActionWire,
@@ -12,6 +13,8 @@ import {
   exhaustedBudget,
   factCheckSentence,
   goalBudgetRows,
+  type GoalMilestone,
+  goalMilestoneText,
   goalStateNote,
   goalStepProgress,
   isStepAuthorityHint,
@@ -347,5 +350,46 @@ describe('outputProblemText (S11 GO5d-1)', () => {
     );
     expect(outputProblemText('required, missing', zh)).toBe('必填，但没有');
     expect(outputProblemText('something new', zh)).toBe('something new');
+  });
+});
+
+describe('goalMilestoneText (S11 GO5e-2)', () => {
+  const en: Translate = (_zh, enText) => enText;
+  const base: GoalMilestone = {
+    change: null,
+    status: 'running',
+    pauseReason: null,
+    heldByOwner: false,
+    outcome: null,
+    outcomeBasis: null,
+    cleanupPending: false,
+    revision: null,
+  };
+
+  it('every change has its own sentence in both languages', () => {
+    for (const translate of [zh, en]) {
+      const texts = GOAL_RUN_CHANGE_VALUES.map((change) =>
+        goalMilestoneText({ ...base, change }, translate),
+      );
+      expect(new Set(texts).size).toBe(GOAL_RUN_CHANGE_VALUES.length);
+      expect(texts).not.toContain(goalMilestoneText(base, translate));
+    }
+  });
+
+  it('a pause says why, a completion how it ended and on what, a revision its number', () => {
+    expect(
+      goalMilestoneText({ ...base, change: 'pause', pauseReason: 'needs_decision' }, zh),
+    ).toBe('目标已暂停：需要人决定');
+    expect(
+      goalMilestoneText(
+        { ...base, change: 'complete', outcome: 'not_achieved', outcomeBasis: 'requester' },
+        en,
+      ),
+    ).toBe('Goal completed: not achieved · On the requester’s word');
+    expect(goalMilestoneText({ ...base, change: 'complete' }, zh)).toBe('目标已完成');
+    expect(goalMilestoneText({ ...base, change: 'revise', revision: 3 }, zh)).toContain('第 3 版');
+    expect(goalMilestoneText({ ...base, change: 'finish_cancel', cleanupPending: true }, zh)).toBe(
+      '目标已取消，还有遗留要清理',
+    );
   });
 });

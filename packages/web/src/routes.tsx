@@ -260,6 +260,7 @@ export function Routed({
           onSelectChat={(id) => navigate(hrefs.chat(id))}
           onOpenApproval={openApproval}
           onOpenTask={openTask}
+          onOpenGoal={(id) => navigate(hrefs.goal(id))}
         />
       );
       break;

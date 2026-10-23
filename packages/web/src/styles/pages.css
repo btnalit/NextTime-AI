@@ -674,6 +674,24 @@
   white-space: nowrap;
 }
 
+/* S11 GO5e-2: the goal step a Task ran for, beside the chip — kept whole like the failure kind. */
+.system-status-step {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* S11 GO5e-2: a goal's milestone is the console's own sentence (why it paused, who has to lift a
+   hold), not the kernel's tail — it wraps on a narrow screen instead of being cut. The radius keeps
+   a one-line milestone as round as every other line. */
+.system-status-line[data-variant='goal_update'] {
+  border-radius: 14px;
+  text-align: left;
+}
+
+.system-status-line[data-variant='goal_update'] .system-status-text {
+  white-space: normal;
+}
+
 .chat-empty {
   margin: auto;
   padding: var(--space-6) var(--gutter);

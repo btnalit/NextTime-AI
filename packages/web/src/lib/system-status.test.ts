@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { systemStatusLineFromMessage } from './system-status.js';
+import { latestGoalStatuses, systemStatusLineFromMessage } from './system-status.js';
 import type { ChatMessage } from './ws-client.js';
 
 function chatMessage(content: Record<string, unknown> | undefined, text = 'fallback'): ChatMessage {
@@ -103,5 +103,88 @@ describe('systemStatusLineFromMessage', () => {
     expect(
       systemStatusLineFromMessage(chatMessage({ kind: 'system.task_update', taskId: 'task-1' })),
     ).toBeUndefined();
+  });
+
+  it('S11 GO5e-2: parses system.goal_update; a value it does not know reads as absent', () => {
+    const line = systemStatusLineFromMessage(
+      chatMessage({
+        kind: 'system.goal_update',
+        text: 'Goal g-1 paused: its budget ran out',
+        goalRunId: 'g-1',
+        change: 'pause',
+        status: 'paused',
+        pauseReason: 'budget_exhausted',
+        heldByOwner: true,
+      }),
+    );
+    expect(line).toEqual({
+      variant: 'goal_update',
+      text: 'Goal g-1 paused: its budget ran out',
+      goalRunId: 'g-1',
+      change: 'pause',
+      status: 'paused',
+      pauseReason: 'budget_exhausted',
+      heldByOwner: true,
+      outcome: null,
+      outcomeBasis: null,
+      cleanupPending: false,
+      revision: null,
+    });
+    const newer = systemStatusLineFromMessage(
+      chatMessage({
+        kind: 'system.goal_update',
+        goalRunId: 'g-1',
+        change: 'rebalance',
+        status: 'running',
+        pauseReason: 'cosmic_rays',
+      }),
+    );
+    expect(newer).toMatchObject({ change: null, status: 'running', pauseReason: null });
+    // A status it does not know is not a goal line at all.
+    expect(
+      systemStatusLineFromMessage(
+        chatMessage({ kind: 'system.goal_update', goalRunId: 'g-1', status: 'teleported' }),
+      ),
+    ).toBeUndefined();
+  });
+
+  it("S11 GO5e-2: a goal step's Task carries its goal and step; another Task carries neither", () => {
+    expect(
+      systemStatusLineFromMessage(
+        chatMessage({
+          kind: 'system.task_update',
+          text: 'Goal step "report": task t-1 completed',
+          taskId: 't-1',
+          status: 'completed',
+          goalRunId: 'g-1',
+          stepKey: 'report',
+        }),
+      ),
+    ).toMatchObject({ goalStep: { goalRunId: 'g-1', stepKey: 'report' } });
+    expect(
+      systemStatusLineFromMessage(
+        chatMessage({ kind: 'system.task_update', taskId: 't-2', status: 'completed' }),
+      ),
+    ).not.toHaveProperty('goalStep');
+  });
+});
+
+describe('latestGoalStatuses (S11 GO5e-2)', () => {
+  it("keeps each goal's last milestone status, in message order", () => {
+    const goal = (sequence: number, goalRunId: string, status: string): ChatMessage => ({
+      ...chatMessage({ kind: 'system.goal_update', goalRunId, status }),
+      sequence,
+    });
+    const map = latestGoalStatuses([
+      goal(1, 'g-1', 'proposed'),
+      goal(2, 'g-2', 'proposed'),
+      goal(3, 'g-1', 'running'),
+      chatMessage({ kind: 'system.task_update', taskId: 't-1', status: 'completed' }),
+      goal(5, 'g-1', 'verifying'),
+    ]);
+    expect([...map]).toEqual([
+      ['g-1', 'verifying'],
+      ['g-2', 'proposed'],
+    ]);
   });
 });

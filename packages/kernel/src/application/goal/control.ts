@@ -130,7 +130,7 @@ export async function pauseGoalRun(
     );
     await recordGoalRunTransition(client, goal.workspaceId, {
       actorPrincipalId: input.actor.principalId,
-      action: 'goal_run.hold',
+      change: 'hold',
       goalRunId: goal.id,
       resultingStatus: 'paused',
       extraAuditPayload: {
@@ -176,7 +176,7 @@ export async function releaseGoalRunHold(
   );
   await recordGoalRunTransition(client, goal.workspaceId, {
     actorPrincipalId: input.actor.principalId,
-    action: 'goal_run.release_hold',
+    change: 'release_hold',
     goalRunId: goal.id,
     resultingStatus: 'paused',
     extraAuditPayload: { by: 'person', pauseReason: goal.pauseReason, heldBy: goal.pausedBy },
