@@ -231,7 +231,7 @@ export function UserDetailPanel({
         <dd className="mono">{user.login}</dd>
         <dt>ID</dt>
         <dd>
-          <CopyId id={user.id} label="user" />
+          <CopyId id={user.id} label={t('用户', 'user')} />
         </dd>
         <dt>{t('状态', 'Status')}</dt>
         <dd>

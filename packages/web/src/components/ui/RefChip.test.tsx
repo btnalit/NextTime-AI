@@ -26,7 +26,7 @@ describe('RefChip', () => {
     expect(container.querySelector('.ref-chip-kind')?.textContent).toBe('成员');
     // CopyId: the 8-character short form and a copy button naming the kind.
     expect(container.querySelector('.copy-id-text')?.textContent).toBe('0f2c6e1a');
-    expect(screen.getByRole('button', { name: 'Copy Member id' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^复制成员 id$/ })).toBeTruthy();
   });
 
   it('falls back to the grey bare id when the name is unknown', () => {
@@ -36,7 +36,7 @@ describe('RefChip', () => {
     expect(container.querySelector('.ref-chip-name')).toBeNull();
     expect(chip.textContent).toContain('门');
     expect(chip.textContent).toContain('gk-1');
-    expect(chip.getAttribute('title')).toBe('Gatekeeper gk-1');
+    expect(chip.getAttribute('title')).toMatch(/^门 gk-1$/);
   });
 
   it('covers all five kinds with a label', () => {

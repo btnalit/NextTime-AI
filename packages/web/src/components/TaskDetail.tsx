@@ -1,9 +1,10 @@
-import type {
-  ObjectiveOutcomeWire,
-  OutputSchema,
-  RejectedOutputWire,
-  ReworkOfWire,
-  SkillLoadWire,
+import {
+  type ObjectiveOutcomeWire,
+  type OutputSchema,
+  type RejectedOutputWire,
+  type ReworkOfWire,
+  type SkillLoadWire,
+  visibleLines,
 } from '@nexttime/shared';
 import { type ReactNode, useState } from 'react';
 import { useCanOpen } from '../hooks/useCanOpen.js';
@@ -242,7 +243,9 @@ export function TaskDetail({
             </Button>
           ) : null}
         </div>
-        {need ? <p className="pre-wrap">{need}</p> : null}
+        {/* Legacy 428: free text under the same rule as a goal's statement — characters nobody
+         *  can see are shown as \u{…}, line breaks kept. */}
+        {need ? <p className="pre-wrap">{visibleLines(need)}</p> : null}
         <RedactedNote value={need} testId="task-need-redacted" />
       </header>
 
