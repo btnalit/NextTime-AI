@@ -541,6 +541,17 @@ function restoreUnchanged(submitted: unknown, shown: unknown, original: unknown)
   return { value: original, written: isDeepStrictEqual(shown, original) ? submitted : null };
 }
 
+/** The value at `at` in `root` — a path as {@link mapPlanParams} names it (`steps[0].input`) —
+ *  or undefined where `root` has none. */
+function valueAt(root: unknown, at: string): unknown {
+  let node = root;
+  for (const token of at.match(/[^.[\]]+/g) ?? []) {
+    if (node === null || typeof node !== 'object' || !Object.hasOwn(node, token)) return undefined;
+    node = (node as Record<string, unknown>)[token];
+  }
+  return node;
+}
+
 /**
  * S11 GO5c (decisions on #704; review #501 on #702 §2): a revision written in an editor opened on
  * a read of the plan holds every value it did not touch as the read showed it ({@link planAsRead},
@@ -548,7 +559,12 @@ function restoreUnchanged(submitted: unknown, shown: unknown, original: unknown)
  * spelled out) — not what is stored, and not what {@link refusePlanCredentials} passes. So, leaf by
  * leaf: a step and one of the plan's own acceptance checks are matched by key with the entry of
  * that key in `stored` (the revision it is based on), and every leaf of it equal to the read of the
- * same place in that entry is unchanged — it gets the stored value back. Then
+ * same place in that entry is unchanged — it gets the stored value back. Inside a call argument (a
+ * step's `input`, a reconcile declaration's action or check `params`, an observation's `params`,
+ * {@link mapPlanParams}) only when the whole argument is sent as read (review #493 on #704): the
+ * read shows every masked value as the same `[redacted]`, so a value given back by its place would
+ * follow a row deleted or moved, or stay beside a new host; a changed argument keeps every value as
+ * sent, and a `[redacted]` left in it is refused at its place. Then
  * {@link refusePlanCredentials} checks only what is left, the values this writer wrote, at their
  * places in the submitted plan. A value is only ever restored at its own key and path, so copying
  * another entry's read never brings that entry's original along; nothing stored is revealed.
@@ -569,23 +585,52 @@ export function reviewRevisedPlan(submitted: GoalPlan, stored: GoalPlan): GoalPl
   const restore = <T extends { readonly key: string }>(
     entries: readonly T[],
     storedEntries: ReadonlyMap<string, { readonly original: T; readonly shown: T }>,
+    asPlan: (entry: T) => GoalPlan,
+    ofPlan: (plan: GoalPlan) => T,
   ): { readonly value: T[]; readonly written: T[] } => {
     const restored = entries.map((entry) => {
       const match = storedEntries.get(entry.key);
-      return match === undefined
-        ? { value: entry, written: entry }
-        : (restoreUnchanged(entry, match.shown, match.original) as { value: T; written: T });
+      if (match === undefined) return { value: entry, written: entry };
+      const leafByLeaf = restoreUnchanged(entry, match.shown, match.original) as {
+        value: T;
+        written: T;
+      };
+      const sent = asPlan(entry);
+      const shown = asPlan(match.shown);
+      const changed = new Set<string>();
+      mapPlanParams(sent, (params, at) => {
+        if (!isDeepStrictEqual(params, valueAt(shown, at))) changed.add(at);
+        return params;
+      });
+      if (changed.size === 0) return leafByLeaf;
+      const asSent = (part: T): T =>
+        ofPlan(
+          mapPlanParams(asPlan(part), (params, at) =>
+            changed.has(at) ? (valueAt(sent, at) as typeof params) : params,
+          ),
+        );
+      return { value: asSent(leafByLeaf.value), written: asSent(leafByLeaf.written) };
     });
     return {
       value: restored.map((entry) => entry.value),
       written: restored.map((entry) => entry.written),
     };
   };
-  const steps = restore(submitted.steps, byKey(stored.steps, read.steps));
+  const steps = restore(
+    submitted.steps,
+    byKey(stored.steps, read.steps),
+    (step) => ({ steps: [step] }),
+    (plan) => plan.steps[0] as PlanStep,
+  );
   const acceptance =
     submitted.acceptance === undefined
       ? undefined
-      : restore(submitted.acceptance, byKey(stored.acceptance, read.acceptance));
+      : restore(
+          submitted.acceptance,
+          byKey(stored.acceptance, read.acceptance),
+          (check) => ({ steps: [], acceptance: [check] }),
+          (plan) => plan.acceptance?.[0] as AcceptanceCheck,
+        );
   refusePlanCredentials({
     steps: steps.written,
     ...(acceptance !== undefined ? { acceptance: acceptance.written } : {}),

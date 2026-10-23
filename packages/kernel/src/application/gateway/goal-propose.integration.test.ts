@@ -766,6 +766,83 @@ describe.runIf(DATABASE_URL !== undefined)(
           details: { field: 'plan.acceptance.0.prompt' },
         });
       });
+
+      it('a call argument changed anywhere gets no masked value back by its place: a row deleted or swapped, an item deleted, a host changed — each refused (400), nothing written (review #493 on #704)', async () => {
+        const created = await as(requesterId, (client) =>
+          createGoalRun(client, workspaceId, {
+            requesterId,
+            proposedBy: requesterId,
+            statement: 'a goal whose stored input holds rows of credentials',
+            plan: planOf(['t']),
+            budget: BUDGET,
+          }),
+        );
+        const goalRunId = created.goalRunId;
+        const requester = human(requesterId, 'member');
+        await call(requester, 'confirm_goal', { goalRunId, revision: 1 });
+        await call(requester, 'pause_goal', { goalRunId });
+        const stored = {
+          steps: [
+            {
+              key: 't',
+              worker,
+              input: {
+                targets: [
+                  { host: 'h1', password: `${FAKE}1` },
+                  { host: 'h2', password: `${FAKE}2` },
+                ],
+                tokens: [`${FAKE}A`, `${FAKE}B`],
+              },
+            },
+          ],
+        };
+        await raw(
+          `update plan_revisions set plan = $3::jsonb
+            where workspace_id = $1 and goal_run_id = $2 and revision = 1`,
+          [workspaceId, goalRunId, JSON.stringify(stored)],
+        );
+        const read = (await readProposal(requester, goalRunId)).plan;
+        const readT = read.steps[0] as { input: Record<string, unknown> };
+        const input = readT.input as {
+          targets: { host: string; password: string }[];
+          tokens: string[];
+        };
+        expect(input.targets.map((row) => row.password)).toEqual(['[redacted]', '[redacted]']);
+        const revisedWith = (changed: Record<string, unknown>) =>
+          call(requester, 'revise_goal', {
+            goalRunId,
+            basedOnRevision: 1,
+            plan: { ...read, steps: [{ ...readT, input: { ...input, ...changed } }] },
+          });
+        const [first, second] = input.targets as [
+          { host: string; password: string },
+          { host: string; password: string },
+        ];
+        // Every [redacted] left in the changed input is refused where it stands.
+        const at = (path: string) => `plan.steps.0.input.${path}`;
+        const cases: [Record<string, unknown>, string[]][] = [
+          [{ targets: [second] }, ['targets.0.password', 'tokens.0', 'tokens.1']],
+          [
+            { targets: [second, first] },
+            ['targets.0.password', 'targets.1.password', 'tokens.0', 'tokens.1'],
+          ],
+          [{ tokens: [input.tokens[1]] }, ['targets.0.password', 'targets.1.password', 'tokens.0']],
+          [
+            { targets: [{ ...first, host: 'h9' }, second] },
+            ['targets.0.password', 'targets.1.password', 'tokens.0', 'tokens.1'],
+          ],
+        ];
+        for (const [changed, paths] of cases) {
+          const refused = await refusal(revisedWith(changed));
+          expect(refused).toMatchObject({ status: 400, code: 'redacted_text_submitted' });
+          expect([...(refused.details as { paths: string[] }).paths].sort()).toEqual(paths.map(at));
+        }
+        const [goal] = await raw<{ current_revision: number }>(
+          'select current_revision from goal_runs where workspace_id = $1 and id = $2',
+          [workspaceId, goalRunId],
+        );
+        expect(goal?.current_revision).toBe(1);
+      });
     });
 
     describe("the confirmation card: what the requester's authority would stop now (hints, not refusals)", () => {

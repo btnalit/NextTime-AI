@@ -818,17 +818,68 @@ describe('reviewRevisedPlan (S11 GO5c: an entry sent back as read)', () => {
     // A value left as read is not counted with what was written.
     expect(
       refusalOf({
-        ...read,
-        steps: [{ ...readA, input: { host: 'db1', password: '[redacted]', token: `${FAKE}C` } }],
+        steps: [{ ...readA, maxAttempts: 2 }],
+        acceptance: [{ key: 'ok', kind: 'requester_confirm', prompt: `PGPASSWORD=${FAKE}` }],
       }),
     ).toMatchObject({
       name: 'TextCarriesCredentialsError',
       details: {
-        field: 'plan.steps.0.input.token',
+        field: 'plan.acceptance.0.prompt',
         suspectedSecretValues: 1,
-        suspectedSecretPaths: ['plan.steps.0.input.token'],
+        suspectedSecretPaths: ['plan.acceptance.0.prompt'],
       },
     });
+  });
+
+  it('gives a masked value back only with its whole call argument sent as read (review #493 on #704)', () => {
+    const withRows = planShape({
+      steps: [
+        step('t', {
+          input: {
+            targets: [
+              { host: 'h1', password: `${FAKE}1` },
+              { host: 'h2', password: `${FAKE}2` },
+            ],
+            tokens: [`${FAKE}A`, `${FAKE}B`],
+          },
+        }),
+      ],
+    });
+    const [readT] = planAsRead(withRows).steps as [PlanStep];
+    const input = readT.input as {
+      targets: { host: string; password: string }[];
+      tokens: string[];
+    };
+    const refusedAt = (changed: Record<string, unknown>) => {
+      try {
+        reviewRevisedPlan(
+          planShape({ steps: [{ ...readT, input: { ...input, ...changed } }] }),
+          withRows,
+        );
+      } catch (err) {
+        return { name: (err as Error).name, details: (err as { details: unknown }).details };
+      }
+      throw new Error('expected the revision to be refused');
+    };
+    // A row deleted, two rows swapped, an item deleted, a host changed: each [redacted] left in the
+    // changed input is refused where it stands — never filled with whatever was stored there.
+    expect(refusedAt({ targets: [input.targets[1]] })).toEqual({
+      name: 'RedactedTextSubmittedError',
+      details: { field: 'plan.steps.0.input.targets.0.password', paths: expect.any(Array) },
+    });
+    expect(refusedAt({ targets: [input.targets[1], input.targets[0]] })).toMatchObject({
+      details: { field: 'plan.steps.0.input.targets.0.password' },
+    });
+    expect(refusedAt({ tokens: [input.tokens[1]] })).toMatchObject({
+      details: { field: 'plan.steps.0.input.targets.0.password' },
+    });
+    expect(
+      refusedAt({ targets: [{ ...input.targets[0], host: 'h9' }, input.targets[1]] }),
+    ).toMatchObject({ details: { field: 'plan.steps.0.input.targets.0.password' } });
+    // The whole input as read, the step changed elsewhere: given back as stored.
+    expect(
+      reviewRevisedPlan(planShape({ steps: [{ ...readT, maxAttempts: 2 }] }), withRows).steps,
+    ).toEqual([{ ...withRows.steps[0], maxAttempts: 2 }]);
   });
 
   it('never brings one entry’s original along with another’s read', () => {
