@@ -2,11 +2,15 @@ import { z } from 'zod';
 import {
   ChangeChannelSchema,
   ChangeItemClassificationSchema,
+  ChangeItemKindSchema,
   ChangeItemStateSchema,
   ChangeRollbackBlockerSchema,
   ChangeSegmentStatusSchema,
   ChangeSourceKindSchema,
+  ChangeVerificationTriggerSchema,
   ChangeWideningReasonCodeSchema,
+  OperationItemFieldSchema,
+  PackRequirementStateSchema,
   PrincipalKindSchema,
 } from '../enums.js';
 
@@ -16,7 +20,9 @@ import {
  * `application/change-plan`). A **segment** is one change applied to a workspace from one source
  * (a pack — a module is a pack with one ontology component), in one transaction, by one person;
  * its **items** are what it changed — a version of an ontology family, a Skill or a `worker`
- * WorkerDefinition published — each with its state before and after. Projected by
+ * WorkerDefinition published, or a revision of an Operation's governance — each with its state
+ * before and after. A segment can be verified, again and again: whether what it wrote is still in
+ * effect and the systems its source needs are in place (S11 P1-E). Projected by
  * `application/gateway/change-segment-handlers.ts`.
  *
  * Workspace segments only (§5.4 "第一版收窄"). Their contents are read in the owning workspace and
@@ -129,6 +135,36 @@ export const ContentVersionRefWireSchema = z
   .strict();
 export type ContentVersionRefWire = z.infer<typeof ContentVersionRefWireSchema>;
 
+/** An `operation_version` item's target: one Operation of one Gatekeeper of the workspace —
+ *  `gatekeeperName` as it was named when the item was applied. */
+export const OperationVersionChangeTargetWireSchema = z
+  .object({
+    gatekeeperId: z.string(),
+    gatekeeperName: z.string(),
+    name: z.string(),
+  })
+  .strict();
+export type OperationVersionChangeTargetWire = z.infer<
+  typeof OperationVersionChangeTargetWireSchema
+>;
+
+/** A governance field's value on an Operation version (`blast_radius`, `auto_approvable`,
+ *  `await_decision`, `reads`, `writes`, `description`); `null` when the version has none. */
+export const OperationFieldValueWireSchema = z
+  .union([z.string(), z.boolean(), z.array(z.string())])
+  .nullable();
+export type OperationFieldValueWire = z.infer<typeof OperationFieldValueWireSchema>;
+
+/** One field an Operation revision changes, before and after. */
+export const OperationFieldChangeWireSchema = z
+  .object({
+    field: OperationItemFieldSchema,
+    before: OperationFieldValueWireSchema,
+    after: OperationFieldValueWireSchema,
+  })
+  .strict();
+export type OperationFieldChangeWire = z.infer<typeof OperationFieldChangeWireSchema>;
+
 const ChangeItemCommonShape = {
   id: z.string(),
   /** 1-based position in its segment; items apply in this order and roll back in reverse. */
@@ -149,7 +185,9 @@ const ChangeItemCommonShape = {
 /** One item of `get_change_segment`, by kind. Each published `after` as its family's next
  *  version; `before` was the family's head then (null: not installed). `ontology_version`: an
  *  ontology family; `skill_version`: a Skill; `worker_definition_version`: a `worker`
- *  WorkerDefinition. */
+ *  WorkerDefinition; `operation_version`: a revision of a published Operation (`before` the
+ *  version it replaced, never null), `fields` the governance fields it changed (read from the two
+ *  versions now; empty when either no longer holds what the item recorded). */
 export const ChangeItemWireSchema = z.discriminatedUnion('kind', [
   z
     .object({
@@ -178,17 +216,95 @@ export const ChangeItemWireSchema = z.discriminatedUnion('kind', [
       after: ContentVersionRefWireSchema,
     })
     .strict(),
+  z
+    .object({
+      ...ChangeItemCommonShape,
+      kind: z.literal('operation_version'),
+      target: OperationVersionChangeTargetWireSchema,
+      before: ContentVersionRefWireSchema,
+      after: ContentVersionRefWireSchema,
+      fields: z.array(OperationFieldChangeWireSchema),
+    })
+    .strict(),
 ]);
 export type ChangeItemWire = z.infer<typeof ChangeItemWireSchema>;
 
-/** `get_change_segment`: a segment with its items, in order. */
+/** A Gatekeeper of the workspace as a verification saw it: its live health, through the gate's own
+ *  health endpoint (the probe `get_gatekeeper` makes). */
+export const ChangeRequirementGateWireSchema = z
+  .object({
+    id: z.string(),
+    name: z.string(),
+    health: z.enum(['ok', 'unreachable', 'unauthorized']),
+  })
+  .strict();
+export type ChangeRequirementGateWire = z.infer<typeof ChangeRequirementGateWireSchema>;
+
+/** One system the segment's source needs (a connector its pack version `requires`), as a
+ *  verification found it: where it stands in the workspace and, when `connected`, the health of
+ *  each of its gates there. Met when `connected` with at least one gate `ok`. */
+export const ChangeRequirementCheckWireSchema = z
+  .object({
+    connector: z.string(),
+    state: PackRequirementStateSchema,
+    gates: z.array(ChangeRequirementGateWireSchema),
+    met: z.boolean(),
+  })
+  .strict();
+export type ChangeRequirementCheckWire = z.infer<typeof ChangeRequirementCheckWireSchema>;
+
+/** One item as a verification found it: whether what it wrote is still in effect. */
+export const ChangeItemCheckWireSchema = z
+  .object({
+    ordinal: z.number().int().positive(),
+    kind: ChangeItemKindSchema,
+    state: ChangeItemStateSchema,
+  })
+  .strict();
+export type ChangeItemCheckWire = z.infer<typeof ChangeItemCheckWireSchema>;
+
+/** A segment's latest verification run (S11 P1-E, `verify_change_segment`): who ran it and how
+ *  (`system`: right after the install, as the person who installed), when, each item's state and
+ *  each needed system's. `passed` — every item `in_effect`, every requirement met, and the source
+ *  version still in this deployment (`sourceFound`: without it the systems it needs are not
+ *  known, so the run cannot pass). The segment's status follows: `verified` or
+ *  `verification_failed`. */
+export const ChangeVerificationWireSchema = z
+  .object({
+    trigger: ChangeVerificationTriggerSchema,
+    verifiedBy: ChangePrincipalRefWireSchema,
+    verifiedAt: z.string(),
+    passed: z.boolean(),
+    sourceFound: z.boolean(),
+    items: z.array(ChangeItemCheckWireSchema),
+    requirements: z.array(ChangeRequirementCheckWireSchema),
+  })
+  .strict();
+export type ChangeVerificationWire = z.infer<typeof ChangeVerificationWireSchema>;
+
+/** `get_change_segment`: a segment with its items, in order, and its latest verification (null:
+ *  never verified). */
 export const ChangeSegmentDetailWireSchema = z
   .object({
     segment: ChangeSegmentWireSchema,
     items: z.array(ChangeItemWireSchema),
+    verification: ChangeVerificationWireSchema.nullable(),
   })
   .strict();
 export type ChangeSegmentDetailWire = z.infer<typeof ChangeSegmentDetailWireSchema>;
+
+/** `verify_change_segment`: the segment after the run, and the run. */
+export const ChangeVerificationResultWireSchema = z
+  .object({
+    segment: ChangeSegmentWireSchema,
+    verification: ChangeVerificationWireSchema,
+  })
+  .strict();
+export type ChangeVerificationResultWire = z.infer<typeof ChangeVerificationResultWireSchema>;
+
+/** How long a segment's verification is not run again (`verify_change_segment` refuses 429
+ *  `change_verification_cooldown` within it): each run probes the gates its source needs. */
+export const CHANGE_VERIFICATION_COOLDOWN_SECONDS = 60;
 
 /** Type names of an ontology definition, per section (a rollback's `removes`: declared by the
  *  version it rolls back from and not by the one it returns to). */
@@ -260,6 +376,21 @@ export const ChangeRollbackItemWireSchema = z.discriminatedUnion('kind', [
       target: WorkerDefinitionVersionChangeTargetWireSchema,
       from: ContentVersionRefWireSchema,
       to: ContentVersionRefWireSchema.nullable(),
+      classification: ChangeItemClassificationSchema,
+      widening: z.array(ChangeWideningReasonWireSchema),
+      ...RollbackBlockedByShape,
+    })
+    .strict(),
+  // An Operation has one published version at a time and a retired one is never published again
+  // (I12): rolling a revision back publishes a further version carrying `to`'s content — `to`
+  // names the version whose content comes back, not the row that will be live.
+  z
+    .object({
+      ordinal: z.number().int().positive(),
+      kind: z.literal('operation_version'),
+      target: OperationVersionChangeTargetWireSchema,
+      from: ContentVersionRefWireSchema,
+      to: ContentVersionRefWireSchema,
       classification: ChangeItemClassificationSchema,
       widening: z.array(ChangeWideningReasonWireSchema),
       ...RollbackBlockedByShape,

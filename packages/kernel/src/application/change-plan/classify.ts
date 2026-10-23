@@ -2,6 +2,7 @@ import {
   CHANGE_WIDENING_REASON_VALUES,
   type ChangeItemClassification,
   type ChangeWideningReasonCode,
+  type Operation,
   type ProposeSkillContent,
   type WorkerWorkerDefinitionContent,
 } from '@nexttime/shared';
@@ -14,7 +15,8 @@ import type {
 
 /**
  * application/change-plan/classify: the authority-widening classifier (S11 plan §5.4, I-A4) — for
- * ontology definitions (P1-A), Skills and `worker` WorkerDefinitions (P1-D). A
+ * ontology definitions (P1-A), Skills and `worker` WorkerDefinitions (P1-D), and Operations
+ * (P1-E). A
  * **whitelist**: every field of an item is compared, before against after, and a change passes as
  * `not_widening` only where a rule below proves it cannot widen authority — let an action run with
  * less review, send a credential somewhere new, or put new text into a model's prompt (a tool
@@ -359,4 +361,65 @@ export function classifyWorkerDefinitionChange(
   after: Readonly<Record<string, unknown>> | null,
 ): WideningReason[] {
   return classifyVersionedContent('worker', WORKER_DEFINITION_FIELD_RULES, before, after);
+}
+
+// -------------------------------------------------------------------------------------------
+// Operations (S11 P1-E)
+// -------------------------------------------------------------------------------------------
+
+/**
+ * An Operation version (`@nexttime/shared` action-description.ts `OperationSchema`): how a gate's
+ * action is called and how a call of it is governed. Every field is compared — the plan's §5.4
+ * list names the ones a person must confirm, and none of the three governance fields
+ * (`classifyOperationGovernanceChange`'s `mode`, `blast_radius`, `auto_approvable`) being unchanged
+ * proves anything about the rest: an `auto_approvable`, low-impact Operation whose command alone
+ * changed would run the new command with nobody reviewing it. Typed over the schema's own keys, so
+ * a new Operation field does not compile without a rule.
+ *
+ * A field with an order of strictness passes only when it moves the strict way (or stays):
+ * `execute` is reviewed where `observe` is not; a higher blast radius is reviewed more; a call
+ * that is not auto-approvable waits for a person; one that awaits the decision blocks its caller
+ * until the decision. The MCP hints read as `governance/gatekeepers/trust.ts` reads them — an
+ * execute-class MCP call auto-approves only on `destructive_hint: false` and `idempotent_hint:
+ * true`, and a hint left out counts as not declared, as strict as the stricter value.
+ */
+export const OPERATION_FIELD_RULES: Readonly<Record<keyof Operation, FieldRule>> = {
+  // The approval card names the action by it; another name is another action to the approver.
+  name: ANY_CHANGE,
+  // Injected into every agent's tool list (`list_allowed_operations`, STATUS leftover 123): prompt
+  // text, as a Skill's description is.
+  description: ANY_CHANGE,
+  // Where the call goes and what it sends: no direction of change is proven harmless.
+  binding: ANY_CHANGE,
+  // What the gate validates and where each param is sent (`x-in`) — gate-owned params included.
+  params_schema: ANY_CHANGE,
+  mode: strictness(rankOf(['observe', 'execute'])),
+  blast_radius: strictness(rankOf(['low', 'medium', 'high'])),
+  reversibility: ANY_CHANGE,
+  auto_approvable: strictness(rankOf([true, false])),
+  // Dropped (`true` → `false`), the caller goes on before anyone has decided.
+  await_decision: strictness(rankOf([false, true])),
+  // The object types a call reads and writes: more of either reaches further.
+  reads: listRule('grows', true),
+  writes: listRule('grows', true),
+  // Which observed Facts a call writes into the graph.
+  result_mapping: ANY_CHANGE,
+  // No decision reads it today; not proven harmless either.
+  read_only_hint: ANY_CHANGE,
+  destructive_hint: strictness((value) =>
+    value === false ? 0 : value === true || value === undefined ? 1 : undefined,
+  ),
+  idempotent_hint: strictness((value) =>
+    value === true ? 0 : value === false || value === undefined ? 1 : undefined,
+  ),
+};
+
+/** The widening changes from one Operation version to another (`null`: no published version). A
+ *  new Operation is `added` as a whole — its classification is an approval boundary in itself
+ *  (§5.4); taking one out narrows: nothing can call it. */
+export function classifyOperationChange(
+  before: Operation | null,
+  after: Operation | null,
+): WideningReason[] {
+  return classifyVersionedContent('operation', OPERATION_FIELD_RULES, before, after);
 }

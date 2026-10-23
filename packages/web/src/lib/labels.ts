@@ -333,6 +333,7 @@ export function transportKindLabel(kind: string, t: Translate): string {
 // -------------------------------------------------------------------------------------------
 
 export const OPERATION_FIELD_LABELS: Readonly<Record<string, BilingualLabel>> = {
+  description: { zh: '说明', en: 'Description' },
   binding: { zh: '调用目标', en: 'Call target' },
   params_schema: { zh: '参数定义', en: 'Parameters' },
   result_mapping: { zh: '结果映射', en: 'Result mapping' },

@@ -247,6 +247,13 @@ export interface RegisterOperationDraftInput extends OperationIdentity {
    */
   readonly onlyOwnDraftOf?: string;
   /**
+   * S11 P1-E (`governance/gatekeepers/manifest.ts`'s `publishOperationRevision`): write a new row
+   * or nothing — an existing row of this identity, draft included, is never replaced. A revision
+   * a ChangePlan publishes in the same transaction must not land on a draft someone else started at
+   * the same version between the version read and this write.
+   */
+  readonly insertOnly?: boolean;
+  /**
    * S3.12 revision path only: the Object id of the `published` Operation row this draft was
    * proposed against (`governance/gatekeepers/manifest.ts`'s `proposeOperation`, when the current
    * row for the identity is `published` rather than a conflicting draft) — stashed on the draft's
@@ -270,7 +277,7 @@ export interface OperationObjectResult {
  * `origin`, `proposedBy`, `proposedByKind`), and asserts the `Gatekeeper --exposes--> Operation`
  * Fact (design doc §5.1.2). Returns `null` — and asserts no Fact — when the identity already
  * exists and the existing row is not one this write is allowed to replace (see
- * `RegisterOperationDraftInput.onlyOwnDraftOf`).
+ * `RegisterOperationDraftInput.onlyOwnDraftOf` and `insertOnly`).
  *
  * Why a hand-written conditional upsert rather than `graphStore.upsertObject` (review 2026-09,
  * P0): the generic upsert *merges* properties over whatever row holds the identity, and cannot
@@ -311,6 +318,7 @@ export async function registerOperationDraftObject(
      on conflict (workspace_id, object_type, identity_key) where identity_key is not null
      do update set properties = excluded.properties, updated_at = now()
      where objects.properties ->> 'status' = 'draft'
+       and not $5::boolean
        and (
          $4::text is null
          or (
@@ -328,6 +336,7 @@ export async function registerOperationDraftObject(
       }),
       JSON.stringify(properties),
       input.onlyOwnDraftOf ?? null,
+      input.insertOnly === true,
     ],
   );
   const row = result.rows[0];

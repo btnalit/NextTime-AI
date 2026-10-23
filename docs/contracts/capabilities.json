@@ -7462,6 +7462,257 @@
                   "after"
                 ],
                 "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "after": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "contentDigest": {
+                        "type": "string"
+                      },
+                      "version": {
+                        "exclusiveMinimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "version",
+                      "contentDigest"
+                    ],
+                    "type": "object"
+                  },
+                  "before": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "contentDigest": {
+                        "type": "string"
+                      },
+                      "version": {
+                        "exclusiveMinimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "version",
+                      "contentDigest"
+                    ],
+                    "type": "object"
+                  },
+                  "classification": {
+                    "enum": [
+                      "not_widening",
+                      "authority_widening"
+                    ],
+                    "type": "string"
+                  },
+                  "confirmedBy": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "displayName": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "id": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "enum": [
+                              "human",
+                              "agent",
+                              "service"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "kind",
+                          "displayName"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "fields": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "after": {
+                          "anyOf": [
+                            {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "items": {
+                                    "type": "string"
+                                  },
+                                  "type": "array"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "before": {
+                          "anyOf": [
+                            {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "items": {
+                                    "type": "string"
+                                  },
+                                  "type": "array"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "field": {
+                          "enum": [
+                            "description",
+                            "blast_radius",
+                            "auto_approvable",
+                            "await_decision",
+                            "reads",
+                            "writes"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "field",
+                        "before",
+                        "after"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "operation_version",
+                    "type": "string"
+                  },
+                  "ordinal": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  },
+                  "replacedBy": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "segmentId": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "segmentId"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "state": {
+                    "enum": [
+                      "in_effect",
+                      "replaced",
+                      "not_installed"
+                    ],
+                    "type": "string"
+                  },
+                  "target": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "gatekeeperId": {
+                        "type": "string"
+                      },
+                      "gatekeeperName": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "gatekeeperId",
+                      "gatekeeperName",
+                      "name"
+                    ],
+                    "type": "object"
+                  },
+                  "widening": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "enum": [
+                            "added",
+                            "removed",
+                            "loosened",
+                            "changed",
+                            "unrecognized"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "reason"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "id",
+                  "ordinal",
+                  "classification",
+                  "widening",
+                  "confirmedBy",
+                  "state",
+                  "replacedBy",
+                  "kind",
+                  "target",
+                  "before",
+                  "after",
+                  "fields"
+                ],
+                "type": "object"
               }
             ]
           },
@@ -7650,11 +7901,171 @@
             "wideningItemCount"
           ],
           "type": "object"
+        },
+        "verification": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "items": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "enum": [
+                          "ontology_version",
+                          "skill_version",
+                          "worker_definition_version",
+                          "operation_version"
+                        ],
+                        "type": "string"
+                      },
+                      "ordinal": {
+                        "exclusiveMinimum": 0,
+                        "type": "integer"
+                      },
+                      "state": {
+                        "enum": [
+                          "in_effect",
+                          "replaced",
+                          "not_installed"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "ordinal",
+                      "kind",
+                      "state"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "passed": {
+                  "type": "boolean"
+                },
+                "requirements": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "connector": {
+                        "type": "string"
+                      },
+                      "gates": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "health": {
+                              "enum": [
+                                "ok",
+                                "unreachable",
+                                "unauthorized"
+                              ],
+                              "type": "string"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "name",
+                            "health"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "met": {
+                        "type": "boolean"
+                      },
+                      "state": {
+                        "enum": [
+                          "connected",
+                          "can_enable",
+                          "can_connect",
+                          "needs_platform"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "connector",
+                      "state",
+                      "gates",
+                      "met"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "sourceFound": {
+                  "type": "boolean"
+                },
+                "trigger": {
+                  "enum": [
+                    "manual",
+                    "system"
+                  ],
+                  "type": "string"
+                },
+                "verifiedAt": {
+                  "type": "string"
+                },
+                "verifiedBy": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "displayName": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "enum": [
+                        "human",
+                        "agent",
+                        "service"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "kind",
+                    "displayName"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "trigger",
+                "verifiedBy",
+                "verifiedAt",
+                "passed",
+                "sourceFound",
+                "items",
+                "requirements"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
         "segment",
-        "items"
+        "items",
+        "verification"
       ],
       "type": "object"
     },
@@ -14617,6 +15028,31 @@
             "name": {
               "type": "string"
             },
+            "requirements": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "connector": {
+                    "type": "string"
+                  },
+                  "state": {
+                    "enum": [
+                      "connected",
+                      "can_enable",
+                      "can_connect",
+                      "needs_platform"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "connector",
+                  "state"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
             "status": {
               "enum": [
                 "not_installed",
@@ -14712,6 +15148,12 @@
                   "notes": {
                     "type": "string"
                   },
+                  "requiredConnectors": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
                   "summary": {
                     "type": "string"
                   },
@@ -14725,6 +15167,7 @@
                   "summary",
                   "notes",
                   "breaking",
+                  "requiredConnectors",
                   "components"
                 ],
                 "type": "object"
@@ -14739,7 +15182,8 @@
             "versions",
             "status",
             "installedVersion",
-            "components"
+            "components",
+            "requirements"
           ],
           "type": "object"
         },
@@ -14748,11 +15192,171 @@
             "string",
             "null"
           ]
+        },
+        "verification": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "items": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "enum": [
+                          "ontology_version",
+                          "skill_version",
+                          "worker_definition_version",
+                          "operation_version"
+                        ],
+                        "type": "string"
+                      },
+                      "ordinal": {
+                        "exclusiveMinimum": 0,
+                        "type": "integer"
+                      },
+                      "state": {
+                        "enum": [
+                          "in_effect",
+                          "replaced",
+                          "not_installed"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "ordinal",
+                      "kind",
+                      "state"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "passed": {
+                  "type": "boolean"
+                },
+                "requirements": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "connector": {
+                        "type": "string"
+                      },
+                      "gates": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "health": {
+                              "enum": [
+                                "ok",
+                                "unreachable",
+                                "unauthorized"
+                              ],
+                              "type": "string"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "name",
+                            "health"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "met": {
+                        "type": "boolean"
+                      },
+                      "state": {
+                        "enum": [
+                          "connected",
+                          "can_enable",
+                          "can_connect",
+                          "needs_platform"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "connector",
+                      "state",
+                      "gates",
+                      "met"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "sourceFound": {
+                  "type": "boolean"
+                },
+                "trigger": {
+                  "enum": [
+                    "manual",
+                    "system"
+                  ],
+                  "type": "string"
+                },
+                "verifiedAt": {
+                  "type": "string"
+                },
+                "verifiedBy": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "displayName": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "enum": [
+                        "human",
+                        "agent",
+                        "service"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "kind",
+                    "displayName"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "trigger",
+                "verifiedBy",
+                "verifiedAt",
+                "passed",
+                "sourceFound",
+                "items",
+                "requirements"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
         "pack",
-        "segmentId"
+        "segmentId",
+        "verification"
       ],
       "type": "object"
     },
@@ -19671,6 +20275,31 @@
               "name": {
                 "type": "string"
               },
+              "requirements": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "connector": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "enum": [
+                        "connected",
+                        "can_enable",
+                        "can_connect",
+                        "needs_platform"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "connector",
+                    "state"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
               "status": {
                 "enum": [
                   "not_installed",
@@ -19766,6 +20395,12 @@
                     "notes": {
                       "type": "string"
                     },
+                    "requiredConnectors": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
                     "summary": {
                       "type": "string"
                     },
@@ -19779,6 +20414,7 @@
                     "summary",
                     "notes",
                     "breaking",
+                    "requiredConnectors",
                     "components"
                   ],
                   "type": "object"
@@ -19793,7 +20429,8 @@
               "versions",
               "status",
               "installedVersion",
-              "components"
+              "components",
+              "requirements"
             ],
             "type": "object"
           },
@@ -25656,6 +26293,31 @@
             "name": {
               "type": "string"
             },
+            "requirements": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "connector": {
+                    "type": "string"
+                  },
+                  "state": {
+                    "enum": [
+                      "connected",
+                      "can_enable",
+                      "can_connect",
+                      "needs_platform"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "connector",
+                  "state"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
             "status": {
               "enum": [
                 "not_installed",
@@ -25751,6 +26413,12 @@
                   "notes": {
                     "type": "string"
                   },
+                  "requiredConnectors": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
                   "summary": {
                     "type": "string"
                   },
@@ -25764,6 +26432,7 @@
                   "summary",
                   "notes",
                   "breaking",
+                  "requiredConnectors",
                   "components"
                 ],
                 "type": "object"
@@ -25778,7 +26447,8 @@
             "versions",
             "status",
             "installedVersion",
-            "components"
+            "components",
+            "requirements"
           ],
           "type": "object"
         },
@@ -25882,7 +26552,8 @@
                           "replaced",
                           "not_installed",
                           "restored_version_missing",
-                          "namespace_conflict"
+                          "namespace_conflict",
+                          "revision_pending"
                         ],
                         "type": "string"
                       },
@@ -26086,7 +26757,8 @@
                           "replaced",
                           "not_installed",
                           "restored_version_missing",
-                          "namespace_conflict"
+                          "namespace_conflict",
+                          "revision_pending"
                         ],
                         "type": "string"
                       },
@@ -26236,7 +26908,8 @@
                           "replaced",
                           "not_installed",
                           "restored_version_missing",
-                          "namespace_conflict"
+                          "namespace_conflict",
+                          "revision_pending"
                         ],
                         "type": "string"
                       },
@@ -26316,6 +26989,154 @@
                         "type": "null"
                       }
                     ]
+                  },
+                  "widening": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "enum": [
+                            "added",
+                            "removed",
+                            "loosened",
+                            "changed",
+                            "unrecognized"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "reason"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "ordinal",
+                  "kind",
+                  "target",
+                  "from",
+                  "to",
+                  "classification",
+                  "widening",
+                  "blocker",
+                  "blockedBy"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "blockedBy": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "segmentId": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "segmentId"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "blocker": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "replaced",
+                          "not_installed",
+                          "restored_version_missing",
+                          "namespace_conflict",
+                          "revision_pending"
+                        ],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "classification": {
+                    "enum": [
+                      "not_widening",
+                      "authority_widening"
+                    ],
+                    "type": "string"
+                  },
+                  "from": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "contentDigest": {
+                        "type": "string"
+                      },
+                      "version": {
+                        "exclusiveMinimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "version",
+                      "contentDigest"
+                    ],
+                    "type": "object"
+                  },
+                  "kind": {
+                    "const": "operation_version",
+                    "type": "string"
+                  },
+                  "ordinal": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  },
+                  "target": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "gatekeeperId": {
+                        "type": "string"
+                      },
+                      "gatekeeperName": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "gatekeeperId",
+                      "gatekeeperName",
+                      "name"
+                    ],
+                    "type": "object"
+                  },
+                  "to": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "contentDigest": {
+                        "type": "string"
+                      },
+                      "version": {
+                        "exclusiveMinimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "version",
+                      "contentDigest"
+                    ],
+                    "type": "object"
                   },
                   "widening": {
                     "items": {
@@ -37392,6 +38213,375 @@
       "type": "object"
     },
     "sideEffects": false
+  },
+  {
+    "channel": "human",
+    "group": "modules",
+    "minRole": "owner",
+    "mode": "write",
+    "name": "verify_change_segment",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "segmentId": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "segmentId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "segment": {
+          "additionalProperties": false,
+          "properties": {
+            "appliedAt": {
+              "type": "string"
+            },
+            "appliedBy": {
+              "additionalProperties": false,
+              "properties": {
+                "displayName": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "human",
+                    "agent",
+                    "service"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "displayName"
+              ],
+              "type": "object"
+            },
+            "channel": {
+              "enum": [
+                "human",
+                "platform"
+              ],
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "itemCount": {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            "planId": {
+              "type": "string"
+            },
+            "proposedBy": {
+              "additionalProperties": false,
+              "properties": {
+                "displayName": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "human",
+                    "agent",
+                    "service"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "displayName"
+              ],
+              "type": "object"
+            },
+            "rolledBackAt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "rolledBackBy": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "displayName": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "enum": [
+                        "human",
+                        "agent",
+                        "service"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "kind",
+                    "displayName"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "source": {
+              "additionalProperties": false,
+              "properties": {
+                "digest": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "pack"
+                  ],
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "name",
+                "version",
+                "digest"
+              ],
+              "type": "object"
+            },
+            "status": {
+              "enum": [
+                "applied",
+                "verified",
+                "verification_failed",
+                "rolled_back"
+              ],
+              "type": "string"
+            },
+            "verifiedAt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "wideningItemCount": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "id",
+            "planId",
+            "channel",
+            "source",
+            "status",
+            "proposedBy",
+            "appliedBy",
+            "appliedAt",
+            "verifiedAt",
+            "rolledBackBy",
+            "rolledBackAt",
+            "itemCount",
+            "wideningItemCount"
+          ],
+          "type": "object"
+        },
+        "verification": {
+          "additionalProperties": false,
+          "properties": {
+            "items": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "ontology_version",
+                      "skill_version",
+                      "worker_definition_version",
+                      "operation_version"
+                    ],
+                    "type": "string"
+                  },
+                  "ordinal": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  },
+                  "state": {
+                    "enum": [
+                      "in_effect",
+                      "replaced",
+                      "not_installed"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "ordinal",
+                  "kind",
+                  "state"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "passed": {
+              "type": "boolean"
+            },
+            "requirements": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "connector": {
+                    "type": "string"
+                  },
+                  "gates": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "health": {
+                          "enum": [
+                            "ok",
+                            "unreachable",
+                            "unauthorized"
+                          ],
+                          "type": "string"
+                        },
+                        "id": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "name",
+                        "health"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "met": {
+                    "type": "boolean"
+                  },
+                  "state": {
+                    "enum": [
+                      "connected",
+                      "can_enable",
+                      "can_connect",
+                      "needs_platform"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "connector",
+                  "state",
+                  "gates",
+                  "met"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "sourceFound": {
+              "type": "boolean"
+            },
+            "trigger": {
+              "enum": [
+                "manual",
+                "system"
+              ],
+              "type": "string"
+            },
+            "verifiedAt": {
+              "type": "string"
+            },
+            "verifiedBy": {
+              "additionalProperties": false,
+              "properties": {
+                "displayName": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "human",
+                    "agent",
+                    "service"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "displayName"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "trigger",
+            "verifiedBy",
+            "verifiedAt",
+            "passed",
+            "sourceFound",
+            "items",
+            "requirements"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "segment",
+        "verification"
+      ],
+      "type": "object"
+    },
+    "sideEffects": true
   },
   {
     "channel": "human",

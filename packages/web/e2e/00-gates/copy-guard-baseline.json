@@ -13,7 +13,11 @@
   "chats": {},
   "goals": {},
   "graph": {},
-  "graph-types": {},
+  "graph-types": {
+    "raw-enum": {
+      "samples": ["auto_approvable", "await_decision", "blast_radius"]
+    }
+  },
   "login": {},
   "members": {},
   "models": {},

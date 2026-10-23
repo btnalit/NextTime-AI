@@ -13,6 +13,7 @@ import type {
   ObjectiveOutcome,
   OperationMode,
   PackInstallStatus,
+  PackRequirementState,
   PiDriftStatusWire,
   PlanRevisionStatus,
   PlatformBackupStatusWire,
@@ -43,6 +44,7 @@ import {
   OBJECTIVE_OUTCOME_VALUES,
   OPERATION_MODE_VALUES,
   PACK_INSTALL_STATUS_VALUES,
+  PACK_REQUIREMENT_STATE_VALUES,
   PLAN_REVISION_STATUS_VALUES,
   PUBLISHABLE_STATUS_VALUES,
   PiDriftStatusWireSchema,
@@ -137,7 +139,8 @@ export type StatusMachine =
   | 'goalRun'
   | 'stepRun'
   | 'goalCheck'
-  | 'planRevision';
+  | 'planRevision'
+  | 'packRequirement';
 
 export const ACTION_REQUEST_TONES: Readonly<Record<ActionRequestStatus, ChipStyle>> = {
   proposed: { tone: 'neutral', label: { zh: '已提议', en: 'Proposed' } },
@@ -461,6 +464,15 @@ export const PLAN_REVISION_TONES: Readonly<Record<PlanRevisionStatus, ChipStyle>
   rejected: { tone: 'danger', label: { zh: '已拒绝', en: 'Rejected' } },
 };
 
+/** S11 P1-E: where a system a pack needs stands in the workspace (`PackRequirementWire.state`,
+ *  the 能力包 detail and install review, and an install record's verification). */
+export const PACK_REQUIREMENT_TONES: Readonly<Record<PackRequirementState, ChipStyle>> = {
+  connected: { tone: 'ok', label: { zh: '已接入', en: 'Connected' } },
+  can_enable: { tone: 'warn', label: { zh: '待启用', en: 'Can be enabled' } },
+  can_connect: { tone: 'warn', label: { zh: '待接入', en: 'Can be connected' } },
+  needs_platform: { tone: 'danger', label: { zh: '平台未提供', en: 'Not offered' } },
+};
+
 const MACHINES: Readonly<
   Record<StatusMachine, { values: readonly string[]; tones: Readonly<Record<string, ChipStyle>> }>
 > = {
@@ -504,6 +516,7 @@ const MACHINES: Readonly<
   stepRun: { values: STEP_RUN_STATUS_VALUES, tones: STEP_RUN_TONES },
   goalCheck: { values: GOAL_ACCEPTANCE_CHECK_STATUS_VALUES, tones: GOAL_CHECK_TONES },
   planRevision: { values: PLAN_REVISION_STATUS_VALUES, tones: PLAN_REVISION_TONES },
+  packRequirement: { values: PACK_REQUIREMENT_STATE_VALUES, tones: PACK_REQUIREMENT_TONES },
 };
 
 export interface ResolvedChipStyle extends ChipStyle {
