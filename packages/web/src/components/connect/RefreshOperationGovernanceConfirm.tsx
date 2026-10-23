@@ -135,6 +135,20 @@ function unwrittenOnDeprecated(op: GateInstanceEnablePreviewOperationPresentWire
   );
 }
 
+/** Legacy 456: the deployed Operations whose governance fields differ from the manifest the
+ *  platform adopted — what the align would change in place, read the way the confirm reads it: an
+ *  Operation the gate no longer runs is left out, and on a deprecated one only what the align
+ *  writes counts. */
+export function governanceDriftOf(
+  preview: PreviewGateInstanceEnableResultWire,
+): readonly GateInstanceEnablePreviewOperationPresentWire[] {
+  const dropped = new Set(preview.awaitingPlatformAdoption?.dropped ?? []);
+  return preview.operationsAlreadyPresent
+    .filter((op) => !dropped.has(op.name))
+    .map(alignableOnDeprecated)
+    .filter((op) => op.differs);
+}
+
 export function RefreshOperationGovernanceConfirm({
   http,
   gatekeeperId,

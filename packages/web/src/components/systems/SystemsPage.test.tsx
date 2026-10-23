@@ -6,6 +6,7 @@ import { PermissionsProvider } from '../../hooks/usePermissions.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import type { GrantRow, PrincipalRow } from '../../lib/governance.js';
 import { HttpError } from '../../lib/http-client.js';
+import { governanceFields } from '../connect/governance-fixtures.test-helpers.js';
 import { SystemsPage } from './SystemsPage.js';
 
 afterEach(cleanup);
@@ -129,6 +130,49 @@ const LINKED_STOCK_INSTANCE = {
  *  leaves it closed (same as `ConnectionsPage.test.tsx`'s own note before this lane). */
 function openConnectMoreMenu(): void {
   fireEvent.pointerDown(screen.getByTestId('connect-system-more'), { button: 0 });
+}
+
+/** Legacy 456: the platform's adopted manifest for `stock`, `stock.adjust` tightened in it. */
+function driftPreview(adjustAligned = false) {
+  const adjust = governanceFields({
+    mode: 'execute',
+    blastRadius: 'medium',
+    autoApprovable: false,
+  });
+  return {
+    gateId: 'stock',
+    wouldLink: null,
+    ambiguousCandidates: [],
+    operationsToImport: [],
+    operationsAlreadyPresent: [
+      {
+        name: 'stock.adjust',
+        existing: {
+          ...(adjustAligned
+            ? adjust
+            : governanceFields({ mode: 'execute', blastRadius: 'low', autoApprovable: true })),
+          status: 'published',
+        },
+        announced: adjust,
+        differs: !adjustAligned,
+        definitionDiffers: false,
+        direction: adjustAligned ? 'neutral' : 'tightened',
+      },
+      {
+        name: 'stock.get',
+        existing: {
+          ...governanceFields({ mode: 'observe', blastRadius: 'low', autoApprovable: true }),
+          status: 'published',
+        },
+        announced: governanceFields({ mode: 'observe', blastRadius: 'low', autoApprovable: true }),
+        differs: false,
+        definitionDiffers: false,
+        direction: 'neutral',
+      },
+    ],
+    manifestDigest: 'digest-stock',
+    awaitingPlatformAdoption: null,
+  };
 }
 
 describe('SystemsPage', () => {
@@ -1095,5 +1139,97 @@ describe('SystemsPage', () => {
     fireEvent.pointerDown(within(card).getByTestId('gatekeeper-more'), { button: 0 });
     expect(await screen.findByText('健康与操作')).toBeTruthy();
     expect(screen.queryByTestId('gatekeeper-rotate-secret')).toBeNull();
+  });
+  it('legacy 456: an owner sees on the row that a deployed operation is classified otherwise than the adopted manifest, and aligns it there', async () => {
+    let aligned = false;
+    const http = scriptedHttp({
+      execution_readiness: () =>
+        readiness({ principalId: 'p-self', gates: [gate({ name: '库存' })] }),
+      list_available_gate_instances: () => ({ items: [LINKED_STOCK_INSTANCE] }),
+      preview_gate_instance_enable: () => driftPreview(aligned),
+      refresh_operation_governance: (params) => {
+        expect(params).toEqual({
+          gatekeeperId: 'gk-1',
+          operationNames: ['stock.adjust'],
+          manifestDigest: 'digest-stock',
+        });
+        aligned = true;
+        return {
+          gatekeeperId: 'gk-1',
+          refreshed: [
+            {
+              name: 'stock.adjust',
+              before: governanceFields({
+                mode: 'execute',
+                blastRadius: 'low',
+                autoApprovable: true,
+              }),
+              after: governanceFields({
+                mode: 'execute',
+                blastRadius: 'medium',
+                autoApprovable: false,
+              }),
+              direction: 'tightened',
+            },
+          ],
+          revisionDrafts: [],
+          unchanged: [],
+        };
+      },
+    });
+    renderPage(http);
+    const card = (await screen.findAllByTestId('gatekeeper-card'))[0] as HTMLElement;
+    const notice = await within(card).findByTestId('gatekeeper-governance-drift-notice');
+    expect(notice.textContent).toMatch(
+      /^1 个已部署的 Operation 分类与平台最新清单不一致，需对齐：/,
+    );
+    const items = within(notice).getAllByRole('listitem');
+    expect(items).toHaveLength(1);
+    expect(items[0]?.textContent).toMatch(/^stock\.adjust：影响级 低影响 → 中影响；自动批准 可自动批准 → .+$/);
+    expect(notice.textContent).toMatch(
+      /对齐之前，这个工作区仍按旧分类执行，收紧的部分还没有生效。/,
+    );
+
+    const previews = () =>
+      http.calls.filter((call) => call.name === 'preview_gate_instance_enable').length;
+    const before = previews();
+    fireEvent.click(within(card).getByTestId('gatekeeper-governance-drift-align'));
+    const confirm = await screen.findByTestId('gatekeeper-governance-drift-align-confirm');
+    // The confirm shows what the row listed: the preview is not read again for it.
+    expect(previews()).toBe(before);
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    await waitFor(() =>
+      expect(http.calls.some((call) => call.name === 'refresh_operation_governance')).toBe(true),
+    );
+    await waitFor(() =>
+      expect(within(card).queryByTestId('gatekeeper-governance-drift-notice')).toBeNull(),
+    );
+  });
+
+  it('legacy 456: nothing is said when the deployed operations match, and a member never reads the preview', async () => {
+    const http = scriptedHttp({
+      execution_readiness: () =>
+        readiness({ principalId: 'p-self', gates: [gate({ name: '库存' })] }),
+      list_available_gate_instances: () => ({ items: [LINKED_STOCK_INSTANCE] }),
+      preview_gate_instance_enable: () => driftPreview(true),
+    });
+    renderPage(http);
+    await screen.findAllByTestId('gatekeeper-card');
+    await waitFor(() =>
+      expect(http.calls.some((call) => call.name === 'preview_gate_instance_enable')).toBe(true),
+    );
+    expect(screen.queryByTestId('gatekeeper-governance-drift')).toBeNull();
+    cleanup();
+
+    const member = scriptedHttp({
+      get_workspace: () => workspace('member'),
+      execution_readiness: () =>
+        readiness({ principalId: 'p-self', gates: [gate({ name: '库存' })] }),
+      list_available_gate_instances: () => ({ items: [LINKED_STOCK_INSTANCE] }),
+    });
+    renderPage(member);
+    await screen.findAllByTestId('gatekeeper-card');
+    expect(member.calls.some((call) => call.name === 'preview_gate_instance_enable')).toBe(false);
+    expect(screen.queryByTestId('gatekeeper-governance-drift')).toBeNull();
   });
 });
