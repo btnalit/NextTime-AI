@@ -287,13 +287,53 @@ describe('ProcedureEditor (S6-A A2)', () => {
         onDone={vi.fn()}
       />,
     );
-    // Each step that carries them says so, and so does the Procedure for its parameters.
-    expect(screen.getAllByTestId('procedure-step-template-note')).toHaveLength(3);
-    expect(screen.getByTestId('procedure-parameters-note')).toBeTruthy();
-
-    // Editing what the form edits leaves them as they were — in the JSON view too.
+    // Legacy 453: the form shows what each step says of the plan, field by field.
     const steps = screen.getAllByTestId('procedure-step');
-    fireEvent.change(within(steps[1] as HTMLElement).getByLabelText(/说明/), {
+    const [first, second, third] = steps as [HTMLElement, HTMLElement, HTMLElement];
+    expect((within(first).getByTestId('procedure-step-plan-key') as HTMLInputElement).value).toBe(
+      'fetch',
+    );
+    expect(
+      (within(first).getByTestId('procedure-step-depends-own') as HTMLInputElement).checked,
+    ).toBe(true);
+    expect(within(first).queryAllByTestId('procedure-step-depends-on')).toHaveLength(1);
+    expect((within(first).getByTestId('procedure-step-attempts') as HTMLSelectElement).value).toBe(
+      '2',
+    );
+    expect(
+      JSON.parse((within(first).getByTestId('procedure-step-input') as HTMLTextAreaElement).value),
+    ).toEqual({ mode: 'safe' });
+    expect(
+      (within(first).getByTestId('procedure-step-binding-from') as HTMLSelectElement).value,
+    ).toBe('$params');
+    expect(
+      within(first)
+        .getAllByTestId('procedure-step-output-field-name')
+        .map((input) => (input as HTMLInputElement).value),
+    ).toEqual(['hosts']);
+    // A binding the page can already tell is fine says nothing; the step it waits for is chosen.
+    expect(within(second).queryByTestId('procedure-step-binding-issue')).toBeNull();
+    expect(
+      (within(second).getByTestId('procedure-step-depends-on') as HTMLInputElement).checked,
+    ).toBe(true);
+    expect(
+      (within(third).getByTestId('procedure-step-check-kind') as HTMLSelectElement).value,
+    ).toBe('observe_predicate');
+    expect(within(third).getByTestId('procedure-step-check-sentence').textContent).toMatch(
+      /^平台会检查：/,
+    );
+    const parameterRows = screen.getAllByTestId('procedure-parameters-field');
+    expect(parameterRows).toHaveLength(1);
+    expect(
+      (
+        within(parameterRows[0] as HTMLElement).getByTestId(
+          'procedure-parameters-field-required',
+        ) as HTMLInputElement
+      ).checked,
+    ).toBe(true);
+
+    // Editing what the form edits leaves the rest as it was — in the JSON view too.
+    fireEvent.change(within(second).getByLabelText(/^说明/), {
       target: { value: 'apply the new certificates' },
     });
     fireEvent.click(screen.getByTestId('procedure-view-json'));
@@ -315,7 +355,7 @@ describe('ProcedureEditor (S6-A A2)', () => {
     });
   });
 
-  it('what the form cannot edit, refused, is listed with its place (S11 GO5d-2)', async () => {
+  it('what is refused shows on the field it is about (legacy 453)', async () => {
     const { caller, calls } = http({});
     render(<ProcedureEditor http={caller} onProposed={vi.fn()} onDone={vi.fn()} />);
     fireEvent.click(screen.getByTestId('procedure-view-json'));
@@ -334,13 +374,308 @@ describe('ProcedureEditor (S6-A A2)', () => {
     });
     fireEvent.click(screen.getByTestId('procedure-json-apply'));
     fireEvent.click(screen.getByTestId('procedure-submit'));
-    const listed = await screen.findByTestId('procedure-template-errors');
-    const paths = [...listed.querySelectorAll('li .mono')].map((node) => node.textContent);
-    expect(paths).toEqual(
-      expect.arrayContaining(['steps.0.maxAttempts', expect.stringMatching(/^steps\.1\.check/)]),
-    );
-    expect(paths.some((path) => path?.startsWith('parameters'))).toBe(true);
+    const [worker, verify] = screen.getAllByTestId('procedure-step') as [HTMLElement, HTMLElement];
+    // The attempts the platform does not allow are kept, named, and refused at their field.
+    const attempts = within(worker).getByTestId('procedure-step-attempts') as HTMLSelectElement;
+    expect(attempts.value).toBe('0');
+    expect(attempts.getAttribute('aria-invalid')).toBe('true');
+    // The check's missing key, gate and expectation, each at its own field.
+    await within(verify).findByTestId('procedure-step-check-key');
+    expect(
+      within(verify).getByTestId('procedure-step-check-key').getAttribute('aria-invalid'),
+    ).toBe('true');
+    expect(
+      within(verify).getByTestId('procedure-step-check-expect').getAttribute('aria-invalid'),
+    ).toBe('true');
+    // Parameters the field list cannot say stay JSON, with the schema's complaint under them.
+    expect(screen.getByTestId('procedure-parameters-json-only')).toBeTruthy();
+    expect(screen.getByTestId('procedure-parameters-errors').textContent).not.toBe('');
+    expect(screen.queryByTestId('procedure-step-errors')).toBeNull();
     expect(calls).toHaveLength(0);
+  });
+
+  it('builds a template from the form: keys, bindings from the parameters and a step’s output, contracts, a platform check (legacy 453)', async () => {
+    const { caller, calls } = http({
+      propose_procedure: () => ({ id: 'pr-5', version: 1, status: 'draft', name: 'Renew' }),
+    });
+    render(
+      <ProcedureEditor
+        http={caller}
+        workerDefinitions={[
+          {
+            id: 'wd-1',
+            version: 1,
+            kind: 'worker',
+            status: 'published',
+            definition: { name: 'Fixer' },
+          },
+        ]}
+        onProposed={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText(/^名称/), { target: { value: 'Renew' } });
+    fireEvent.change(screen.getByLabelText(/^描述/), { target: { value: 'Renew certs' } });
+    for (let i = 0; i < 3; i += 1) fireEvent.click(screen.getByTestId('procedure-add-step'));
+    const [fetch, apply, verify] = screen.getAllByTestId('procedure-step') as [
+      HTMLElement,
+      HTMLElement,
+      HTMLElement,
+    ];
+    for (const step of [fetch, apply]) {
+      fireEvent.change(within(step).getByTestId('procedure-step-kind'), {
+        target: { value: 'worker' },
+      });
+      fireEvent.change(within(step).getByLabelText(/Worker 定义/), { target: { value: 'wd-1' } });
+    }
+
+    // The parameters, as a field list.
+    fireEvent.click(screen.getByTestId('procedure-add-parameters'));
+    fireEvent.click(screen.getByTestId('procedure-parameters-add-field'));
+    fireEvent.change(screen.getByTestId('procedure-parameters-field-name'), {
+      target: { value: 'site' },
+    });
+    fireEvent.click(screen.getByTestId('procedure-parameters-field-required'));
+
+    // The first step: its key, an output contract, and its input bound to a parameter.
+    const key = within(fetch).getByTestId('procedure-step-plan-key');
+    expect((key as HTMLInputElement).placeholder).toBe('step-1');
+    fireEvent.focus(key);
+    fireEvent.change(key, { target: { value: 'fetch' } });
+    fireEvent.blur(key);
+    fireEvent.click(within(fetch).getByTestId('procedure-step-add-output'));
+    fireEvent.click(within(fetch).getByTestId('procedure-step-output-add-field'));
+    fireEvent.change(within(fetch).getByTestId('procedure-step-output-field-name'), {
+      target: { value: 'hosts' },
+    });
+    fireEvent.change(within(fetch).getByTestId('procedure-step-output-field-kind'), {
+      target: { value: 'array' },
+    });
+    fireEvent.click(within(fetch).getByTestId('procedure-step-add-binding'));
+    fireEvent.change(within(fetch).getByTestId('procedure-step-binding-to'), {
+      target: { value: 'target.site' },
+    });
+    fireEvent.change(within(fetch).getByTestId('procedure-step-binding-from'), {
+      target: { value: '$params' },
+    });
+    // The path is offered from the fields the source declares.
+    const paramPath = within(fetch).getByTestId('procedure-step-binding-path') as HTMLInputElement;
+    expect(offered(paramPath)).toEqual(['site']);
+    fireEvent.click(within(screen.getByRole('listbox')).getByRole('option', { name: 'site' }));
+
+    // The second waits for the first by default; its input takes the first's output.
+    expect(
+      within(apply).getByTestId('procedure-step-depends-default').parentElement?.textContent,
+    ).toMatch(/fetch/);
+    fireEvent.click(within(apply).getByTestId('procedure-step-add-binding'));
+    fireEvent.change(within(apply).getByTestId('procedure-step-binding-to'), {
+      target: { value: 'hosts' },
+    });
+    const sources = within(apply).getByTestId('procedure-step-binding-from') as HTMLSelectElement;
+    expect([...sources.options].map((option) => option.value)).toEqual(['', '$params', 'fetch']);
+    fireEvent.change(sources, { target: { value: 'fetch' } });
+    const stepPath = within(apply).getByTestId('procedure-step-binding-path') as HTMLInputElement;
+    expect(offered(stepPath)).toEqual(['hosts']);
+    fireEvent.click(within(screen.getByRole('listbox')).getByRole('option', { name: 'hosts' }));
+    fireEvent.change(within(apply).getByTestId('procedure-step-attempts'), {
+      target: { value: '4' },
+    });
+
+    // The last: a check the platform makes.
+    fireEvent.change(within(verify).getByTestId('procedure-step-kind'), {
+      target: { value: 'verify' },
+    });
+    fireEvent.change(within(verify).getByLabelText(/^说明/), { target: { value: 'Valid.' } });
+    fireEvent.change(within(verify).getByTestId('procedure-step-check-kind'), {
+      target: { value: 'observe_predicate' },
+    });
+    expect((within(verify).getByTestId('procedure-step-check-key') as HTMLInputElement).value).toBe(
+      'check-3',
+    );
+    fireEvent.change(within(verify).getByLabelText(/观察哪个门/), {
+      target: { value: '5f0c1a52-8a2e-4f3b-9c61-0d2b7e4a9f10' },
+    });
+    fireEvent.change(within(verify).getByTestId('procedure-step-check-operation-input'), {
+      target: { value: 'cert.status' },
+    });
+    fireEvent.change(within(verify).getByTestId('procedure-step-check-expect'), {
+      target: { value: '{"path": "state", "op": "eq", "value": "valid"}' },
+    });
+    expect(within(verify).getByTestId('procedure-step-check-sentence')).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId('procedure-submit'));
+    await screen.findByTestId('draft-proposed');
+    expect(calls.find((call) => call.name === 'propose_procedure')?.params).toEqual({
+      procedure: {
+        name: 'Renew',
+        description: 'Renew certs',
+        steps: [
+          {
+            kind: 'worker',
+            definitionId: 'wd-1',
+            version: 1,
+            key: 'fetch',
+            bindings: [{ to: 'target.site', from: '$params', path: 'site' }],
+            outputSchema: { type: 'object', properties: { hosts: { type: 'array' } } },
+          },
+          {
+            kind: 'worker',
+            definitionId: 'wd-1',
+            version: 1,
+            bindings: [{ to: 'hosts', from: 'fetch', path: 'hosts' }],
+            maxAttempts: 4,
+          },
+          {
+            kind: 'verify',
+            description: 'Valid.',
+            check: {
+              kind: 'observe_predicate',
+              key: 'check-3',
+              check: {
+                gatekeeperId: '5f0c1a52-8a2e-4f3b-9c61-0d2b7e4a9f10',
+                operation: 'cert.status',
+                expect: { path: 'state', op: 'eq', value: 'valid' },
+              },
+            },
+          },
+        ],
+        parameters: {
+          type: 'object',
+          properties: { site: { type: 'string' } },
+          required: ['site'],
+        },
+      },
+    });
+  });
+
+  it('a renamed key is followed by what named it, and a removal keeps a named step’s key (legacy 453)', async () => {
+    const { caller, calls } = http({
+      propose_procedure: () => ({ id: 'pr-6', version: 1, status: 'draft', name: 'Two' }),
+    });
+    render(
+      <ProcedureEditor
+        http={caller}
+        copyOf={{
+          id: 'pr-1',
+          version: 1,
+          status: 'published',
+          name: 'Two',
+          description: 'Two steps',
+          steps: [
+            { kind: 'approval', description: 'go' },
+            { kind: 'worker', definitionId: 'wd-1', version: 1, outputSchema: { type: 'object' } },
+            {
+              kind: 'worker',
+              definitionId: 'wd-1',
+              version: 1,
+              dependsOn: ['step-2'],
+              bindings: [{ to: 'h', from: 'step-2', path: 'h' }],
+            },
+          ],
+        }}
+        onProposed={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    const [, fetch] = screen.getAllByTestId('procedure-step') as [HTMLElement, HTMLElement];
+    fireEvent.click(within(fetch).getByText(/用流程生成目标时/));
+    const key = within(fetch).getByTestId('procedure-step-plan-key');
+    fireEvent.focus(key);
+    fireEvent.change(key, { target: { value: 'fetch' } });
+    fireEvent.blur(key);
+    // Taking the approval step out moves both Workers up: the named one keeps its key.
+    fireEvent.click(screen.getByRole('button', { name: '移除第 1 步' }));
+    fireEvent.click(screen.getByTestId('procedure-submit'));
+    await screen.findByTestId('draft-proposed');
+    const sent = calls.find((call) => call.name === 'propose_procedure')?.params as {
+      procedure: { steps: unknown[] };
+    };
+    expect(sent.procedure.steps).toEqual([
+      {
+        kind: 'worker',
+        definitionId: 'wd-1',
+        version: 1,
+        key: 'fetch',
+        outputSchema: { type: 'object' },
+      },
+      {
+        kind: 'worker',
+        definitionId: 'wd-1',
+        version: 1,
+        dependsOn: ['fetch'],
+        bindings: [{ to: 'h', from: 'fetch', path: 'h' }],
+      },
+    ]);
+  });
+
+  it('input that is not JSON is refused at its field, and nothing is sent (legacy 453)', async () => {
+    const { caller, calls } = http({});
+    render(<ProcedureEditor http={caller} onProposed={vi.fn()} onDone={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText(/^名称/), { target: { value: 'X' } });
+    fireEvent.change(screen.getByLabelText(/^描述/), { target: { value: 'Y' } });
+    fireEvent.click(screen.getByTestId('procedure-add-step'));
+    const step = screen.getByTestId('procedure-step');
+    fireEvent.change(within(step).getByTestId('procedure-step-kind'), {
+      target: { value: 'worker' },
+    });
+    fireEvent.change(within(step).getByLabelText(/Worker 定义/), { target: { value: 'wd-1' } });
+    fireEvent.click(within(step).getByText(/用流程生成目标时/));
+    fireEvent.change(within(step).getByTestId('procedure-step-input'), {
+      target: { value: '{mode: safe}' },
+    });
+    fireEvent.click(screen.getByTestId('procedure-submit'));
+    const input = within(step).getByTestId('procedure-step-input');
+    await waitFor(() => expect(input.getAttribute('aria-invalid')).toBe('true'));
+    expect(within(step).getByText(/不是合法的 JSON/)).toBeTruthy();
+    expect(calls).toHaveLength(0);
+  });
+
+  it('a contract the field list cannot say stays JSON; one it can goes back and forth (legacy 453)', () => {
+    const { caller } = http({});
+    render(
+      <ProcedureEditor
+        http={caller}
+        copyOf={{
+          id: 'pr-1',
+          version: 1,
+          status: 'published',
+          name: 'One',
+          description: 'One step',
+          steps: [
+            {
+              kind: 'worker',
+              definitionId: 'wd-1',
+              version: 1,
+              outputSchema: {
+                type: 'object',
+                properties: { host: { type: 'object', properties: { name: { type: 'string' } } } },
+              },
+            },
+          ],
+          parameters: { type: 'object', properties: { site: { type: 'string' } } },
+        }}
+        onProposed={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('procedure-step-output-json-only')).toBeTruthy();
+    expect(screen.queryByTestId('procedure-step-output-as-fields')).toBeNull();
+    fireEvent.click(screen.getByTestId('procedure-parameters-as-json'));
+    const json = screen.getByTestId('procedure-parameters-json') as HTMLTextAreaElement;
+    expect(JSON.parse(json.value)).toEqual({
+      type: 'object',
+      properties: { site: { type: 'string' } },
+    });
+    fireEvent.change(json, {
+      target: { value: '{"type": "object", "properties": {"zone": {"type": "integer"}}}' },
+    });
+    fireEvent.click(screen.getByTestId('procedure-parameters-as-fields'));
+    expect((screen.getByTestId('procedure-parameters-field-name') as HTMLInputElement).value).toBe(
+      'zone',
+    );
+    expect((screen.getByTestId('procedure-parameters-field-kind') as HTMLSelectElement).value).toBe(
+      'integer',
+    );
   });
 
   it('a step changed to another kind sends only what that kind carries', async () => {
@@ -366,7 +701,6 @@ describe('ProcedureEditor (S6-A A2)', () => {
     fireEvent.change(within(step).getByTestId('procedure-step-kind'), {
       target: { value: 'verify' },
     });
-    expect(screen.queryByTestId('procedure-step-template-note')).toBeNull();
     fireEvent.change(within(step).getByLabelText(/说明/), { target: { value: 'done' } });
     fireEvent.click(screen.getByTestId('procedure-submit'));
     await screen.findByTestId('draft-proposed');
