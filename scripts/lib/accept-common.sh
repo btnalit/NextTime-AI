@@ -284,6 +284,17 @@ accept_provider_up() {
   mv "$NEXTTIME_DATA/accept/models.json.tmp" "$NEXTTIME_DATA/accept/models.json" || return 1
   # Read inside spawned containers as uid 10001 (see require_driver for the same reasoning).
   chmod a+r "$NEXTTIME_DATA/accept/models.json"
+  # fake-llm is a test fixture no release ships and build-images.sh never builds (profile test),
+  # and `up` builds a service only when it has no image yet: a host — and a rehearsal's apply
+  # phase, after the baseline built it from the previous release — kept answering with whichever
+  # checkout's server.mjs built it first, so a scenario a newer checkout added never matched and
+  # the entry agent replied with the echo fallback (#728, step 9). Built from this checkout on
+  # every run instead: the mirrored node base plus one COPY, no package install, so nothing to
+  # fetch beyond the base image; a cached no-op when server.mjs is unchanged.
+  if ! build_out=$(compose_accept --profile test build fake-llm </dev/null 2>&1); then
+    echo "accept: building fake-llm from this checkout failed: $(printf '%s' "$build_out" | tail -10)" >&2
+    return 1
+  fi
   # Marked as switched *before* the recreate: `up` can succeed for llm-proxy and then fail on
   # worker-supervisor, and the caller's EXIT trap (installed before calling this function) must
   # still restore whatever did get recreated onto the override.

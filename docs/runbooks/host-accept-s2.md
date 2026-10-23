@@ -15,7 +15,7 @@
   `${NEXTTIME_DATA}/config/llm-providers.yaml` 与 `${NEXTTIME_DATA}/models/models.json`
   全程不会被改动，跑前跑后都不用重跑
   `make gen-models`（同 accept-s1.md §1）。
-- `fake-llm` 镜像是用当前代码构建的：`deploy/fake-llm/server.mjs` 的脚本化场景烤在镜像里，拉新代码后要 `docker compose --profile test build fake-llm && docker compose --profile test up -d --force-recreate fake-llm`，否则场景不匹配、入口 agent 只会回 echo。
+- `fake-llm` 镜像不用手动重建：`deploy/fake-llm/server.mjs` 的脚本化场景烤在镜像里，脚本切 fake provider 时（`accept_provider_up`）先用当前检出 `docker compose --profile test build fake-llm`，再重建容器。之前要手动重建，`apply-release.sh` 也不建它（`build-images.sh` 不建 `test` profile），主机和预发的 apply 阶段会一直用最早那次构建的镜像，新增的场景匹配不上，入口 agent 只会回 echo（#728 第 9 步在预发上就是这样失败的）。
 - 迁移已跑到最新。
 - `docker compose --profile build-only build worker-runtime` 已跑过一次，产出
   `nexttime-ai-worker-runtime` 镜像（step 6 直接跑这个镜像做 env/egress 探测，见 §5 "已知偏离"）。
