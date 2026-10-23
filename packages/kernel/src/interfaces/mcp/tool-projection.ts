@@ -1,7 +1,7 @@
 import type { CapabilityScope, HandleClaims } from '@nexttime/shared';
 import { listByChannel } from '@nexttime/shared';
 import type { ZodTypeAny } from 'zod';
-import { zodToJsonSchema } from 'zod-to-json-schema';
+import { type Options, ignoreOverride, zodToJsonSchema } from 'zod-to-json-schema';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { dispatchCapability } from '../../application/gateway/index.js';
 import { quotedName } from '../../governance/redaction/index.js';
@@ -115,11 +115,27 @@ function gateToolDescription(op: AllowedOperationWire, name: string): string {
 
 const EMPTY_INPUT_SCHEMA: JsonSchemaObject = { type: 'object', properties: {} };
 
+/**
+ * S11 GO5e: a schema that contains itself — a predicate's `all` / `any` / `not` and an output
+ * schema's `properties` / `items` (`z.lazy` in `@nexttime/shared`, reached through
+ * `propose_goal`'s plan) — has no finite inline JSON Schema. Its inner occurrence becomes `{}` (any
+ * value; the call is still checked against the Zod schema), which is what the library does with
+ * `$refStrategy: 'none'` too, except that it also logs a warning for every occurrence on every
+ * `tools/list`. Same test the library makes: the schema is already open on the path being written.
+ * (`platform-extension`'s `tool-schema.ts` does the same for pi tools.)
+ */
+const recursionAsAny: NonNullable<Options['override']> = (_def, refs, seen) =>
+  seen !== undefined &&
+  seen.path.length < refs.currentPath.length &&
+  seen.path.every((segment, index) => refs.currentPath[index] === segment)
+    ? {}
+    : ignoreOverride;
+
 function toInputSchema(paramsSchema: ZodTypeAny): JsonSchemaObject {
-  const jsonSchema = zodToJsonSchema(paramsSchema, { $refStrategy: 'none' }) as Record<
-    string,
-    unknown
-  >;
+  const jsonSchema = zodToJsonSchema(paramsSchema, {
+    $refStrategy: 'none',
+    override: recursionAsAny,
+  }) as Record<string, unknown>;
   jsonSchema.$schema = undefined;
   if (jsonSchema.type !== 'object') {
     // Every capability's paramsSchema in packages/shared/src/capabilities.ts is a z.object(...)

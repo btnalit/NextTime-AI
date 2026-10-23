@@ -20,7 +20,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { zodToJsonSchema } from 'zod-to-json-schema';
+import { ignoreOverride, zodToJsonSchema } from 'zod-to-json-schema';
 import {
   CAPABILITY_REGISTRY,
   PlatformEventSchema,
@@ -46,7 +46,20 @@ function sortKeysDeep(value) {
   return value;
 }
 
-const JSON_SCHEMA_OPTIONS = { $refStrategy: 'none' };
+// S11 GO5e: a schema that contains itself (a predicate's `all` / `any` / `not`, an output schema's
+// `properties` — `z.lazy` in @nexttime/shared) is written as `{}` the second time, exactly what the
+// library writes with `$refStrategy: 'none'`, without the warning it logs for every occurrence
+// (about a hundred lines per run since the goal plan schemas). Same test the library makes: the
+// schema is already open on the path being written.
+function recursionAsAny(_def, refs, seen) {
+  return seen !== undefined &&
+    seen.path.length < refs.currentPath.length &&
+    seen.path.every((segment, index) => refs.currentPath[index] === segment)
+    ? {}
+    : ignoreOverride;
+}
+
+const JSON_SCHEMA_OPTIONS = { $refStrategy: 'none', override: recursionAsAny };
 
 function buildCapabilitiesSnapshot() {
   const entries = CAPABILITY_REGISTRY.map((capability) => ({
@@ -111,7 +124,8 @@ function main() {
     const committedEvents = readExisting(EVENTS_FILE);
 
     const drifted = [];
-    if (freshCapabilities !== committedCapabilities) drifted.push('docs/contracts/capabilities.json');
+    if (freshCapabilities !== committedCapabilities)
+      drifted.push('docs/contracts/capabilities.json');
     if (freshEvents !== committedEvents) drifted.push('docs/contracts/events.json');
 
     if (drifted.length > 0) {

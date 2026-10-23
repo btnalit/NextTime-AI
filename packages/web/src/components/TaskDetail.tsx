@@ -3,6 +3,7 @@ import {
   type OutputSchema,
   type RejectedOutputWire,
   type ReworkOfWire,
+  type RunEnvironmentWire,
   type SkillLoadWire,
   visibleLines,
 } from '@nexttime/shared';
@@ -23,11 +24,13 @@ import { taskFailureReasonText } from '../lib/labels.js';
 import { hrefs } from '../lib/router.js';
 import {
   type TaskSummary,
+  type WorkerRunSummary,
   asResultContract,
   isCancellable,
   taskFinishedAt,
   taskNeed,
 } from '../lib/tasks.js';
+import { ProxyOutcomeNote } from './ProxyOutcomeNote.js';
 import { LinkedApprovals } from './approvals/LinkedApprovals.js';
 import { nameOf } from './approvals/useDirectoryNames.js';
 import {
@@ -81,6 +84,10 @@ export interface TaskDetailProps {
  * the last report that contract refused (each place, and the output as sent, masked), and, when it
  * redoes an earlier attempt that handed back no accepted result, a link to that attempt's Task and
  * where its last report broke the contract.
+ *
+ * S11 W1a: 运行环境 under the runs — for each run, what it ran with (WorkerDefinition version,
+ * model, platform build, runtime image, the system prompt's digest — never the prompt). A proxy
+ * outcome (an agent's own report) says it is not counted toward attainment.
  */
 export function TaskDetail({
   task,
@@ -436,6 +443,14 @@ export function TaskDetail({
             </table>
           </div>
         )}
+        {task.workerRuns.length > 0 ? (
+          <RunEnvironments
+            runs={task.workerRuns}
+            definitionId={task.workerDefinitionId}
+            definitionName={definitionName}
+            t={t}
+          />
+        ) : null}
       </div>
 
       <div className="stack-s">
@@ -591,6 +606,7 @@ function OutcomeValue({
         <time title={formatDateTime(outcome.givenAt)}>{formatRelative(outcome.givenAt)}</time>
         {previous ? ` · ${t('已更正，原为', 'corrected from')} ${previous}` : null}
       </span>
+      <ProxyOutcomeNote basis={outcome.basis} />
     </span>
   );
 }
@@ -685,4 +701,216 @@ function SkillLoads({
       ))}
     </span>
   );
+}
+
+/** A digest as the console shows it: the algorithm prefix kept, 12 hex characters of the rest. */
+function shortDigest(digest: string): string {
+  const colon = digest.indexOf(':');
+  return colon < 0 ? digest.slice(0, 12) : digest.slice(0, colon + 13);
+}
+
+/** 运行环境 — see the component comment. One block per run; a crash retry is a second run that may
+ *  have started on another build. */
+function RunEnvironments({
+  runs,
+  definitionId,
+  definitionName,
+  t,
+}: {
+  readonly runs: readonly WorkerRunSummary[];
+  readonly definitionId: string;
+  readonly definitionName: string | undefined;
+  readonly t: Translate;
+}) {
+  return (
+    <section className="stack-s" data-testid="run-environments">
+      <span className="section-title">{t('运行环境', 'Run environment')}</span>
+      {runs.length > 1 ? (
+        <p className="text-small text-3" data-testid="run-environment-summary">
+          {sameEnvironmentText(runs, t)}
+          {t(
+            '环境指纹相同，说明 Worker 定义版本、模型、运行时镜像、平台版本和系统提示都相同。',
+            'The same fingerprint means the same Worker definition version, model, runtime image, platform version and system prompt.',
+          )}
+        </p>
+      ) : null}
+      {runs.map((run) => (
+        <div key={run.id} className="stack-s" data-testid="run-environment" data-run={run.id}>
+          {runs.length > 1 ? (
+            <span className="text-small text-3">
+              {t(
+                `运行 ${shortId(run.id)} · 第 ${run.attempt} 次尝试`,
+                `Run ${shortId(run.id)} · attempt ${run.attempt}`,
+              )}
+            </span>
+          ) : null}
+          {run.environment ? (
+            <KeyValue
+              items={runEnvironmentRows(run.environment, definitionId, definitionName, t)}
+            />
+          ) : (
+            <span className="text-small" data-testid="run-environment-not-recorded">
+              <NotRecorded t={t} />
+              <span className="text-3">
+                {t(
+                  '：这次运行早于平台记录运行环境。',
+                  ': this run predates the platform recording what runs ran with.',
+                )}
+              </span>
+            </span>
+          )}
+        </div>
+      ))}
+    </section>
+  );
+}
+
+/** For more than one run: which of them ran in the same environment, by their fingerprints. */
+function sameEnvironmentText(runs: readonly WorkerRunSummary[], t: Translate): string {
+  const byDigest = new Map<string, number[]>();
+  const unknown: number[] = [];
+  for (const run of runs) {
+    const digest = run.environment?.environmentDigest ?? null;
+    if (digest === null) unknown.push(run.attempt);
+    else byDigest.set(digest, [...(byDigest.get(digest) ?? []), run.attempt]);
+  }
+  const groups = [...byDigest.values()];
+  if (unknown.length === 0 && groups.length === 1)
+    return t(
+      `这 ${runs.length} 次运行的环境指纹相同。`,
+      `All ${runs.length} runs have the same environment fingerprint. `,
+    );
+  const parts: string[] = [];
+  for (const group of groups)
+    if (group.length > 1)
+      parts.push(
+        t(
+          `第 ${group.join('、')} 次尝试的环境指纹相同`,
+          `attempts ${group.join(', ')} share a fingerprint`,
+        ),
+      );
+  const singles = groups.filter((group) => group.length === 1).map((group) => group[0]);
+  if (groups.length > 1 && singles.length > 0)
+    parts.push(
+      t(
+        `第 ${singles.join('、')} 次尝试与其他几次不同`,
+        `attempt(s) ${singles.join(', ')} differ from the others`,
+      ),
+    );
+  if (unknown.length > 0)
+    parts.push(
+      t(
+        `第 ${unknown.join('、')} 次尝试没有指纹，无法比较`,
+        `attempt(s) ${unknown.join(', ')} have no fingerprint to compare`,
+      ),
+    );
+  return t(`${parts.join('；')}。`, `${parts.join('; ')}. `);
+}
+
+function runEnvironmentRows(
+  environment: RunEnvironmentWire,
+  definitionId: string,
+  definitionName: string | undefined,
+  t: Translate,
+): KeyValueItem[] {
+  const { definition, runtime } = environment;
+  const name =
+    definition.id === definitionId && definitionName ? definitionName : shortId(definition.id);
+  return [
+    {
+      key: 'definition',
+      label: t('Worker 定义', 'Worker definition'),
+      value: (
+        <span title={definition.id}>
+          {name} v{definition.version}
+        </span>
+      ),
+    },
+    {
+      key: 'model',
+      label: t('模型', 'Model'),
+      value:
+        environment.model !== null ? (
+          <span className="mono">{environment.model}</span>
+        ) : (
+          <span
+            className="text-3"
+            title={t(
+              'Worker 定义和请求人都没有指定模型，用的是运行时 models.json 里的默认模型。',
+              'Neither the Worker definition nor the requester named a model: the runtime’s default from models.json.',
+            )}
+          >
+            {t(
+              '运行时默认（Worker 定义和请求人都没指定）',
+              'Runtime default (neither the Worker definition nor the requester named one)',
+            )}
+          </span>
+        ),
+    },
+    {
+      key: 'platform',
+      label: t('平台版本', 'Platform version'),
+      value: <span className="mono">{environment.kernelVersion}</span>,
+    },
+    {
+      key: 'image',
+      label: t('运行时镜像', 'Runtime image'),
+      value: runtime ? (
+        <span className="row-wrap" data-testid="run-environment-image">
+          <span
+            className="mono"
+            title={`${runtime.imageRef}\n${runtime.imageId}${runtime.builtFrom ? `\n${runtime.builtFrom}` : ''}`}
+          >
+            {shortDigest(runtime.imageId)}
+          </span>
+          {runtime.piVersion ? (
+            <span className="text-3 text-small">pi {runtime.piVersion}</span>
+          ) : null}
+        </span>
+      ) : (
+        <span className="text-3" data-testid="run-environment-image">
+          {t(
+            '未上报：这次运行没有启动成功，或启动它的 worker-supervisor 版本较早',
+            'Not reported: this run never started, or the worker-supervisor that started it predates the report',
+          )}
+        </span>
+      ),
+    },
+    {
+      key: 'prompt',
+      label: t('系统提示摘要', 'System prompt digest'),
+      value:
+        environment.systemPromptDigest !== null ? (
+          <span className="mono" title={environment.systemPromptDigest}>
+            {shortDigest(environment.systemPromptDigest)}
+          </span>
+        ) : (
+          <span className="text-3">{t('无', 'None')}</span>
+        ),
+    },
+    {
+      key: 'environment',
+      label: t('环境指纹', 'Environment fingerprint'),
+      value:
+        environment.environmentDigest !== null ? (
+          <span
+            className="mono"
+            title={t(
+              `${environment.environmentDigest}\n指纹相同的运行，定义版本、模型、镜像、平台版本和系统提示都相同。`,
+              `${environment.environmentDigest}\nRuns with the same fingerprint ran the same definition version, model, image, platform version and system prompt.`,
+            )}
+            data-testid="run-environment-digest"
+          >
+            {shortDigest(environment.environmentDigest)}
+          </span>
+        ) : (
+          <span className="text-3" data-testid="run-environment-digest">
+            {t(
+              '无法确定：运行时没有上报，或用了默认模型而 models.json 没有读到',
+              'Unknown: the runtime reported nothing, or the run used the default model and models.json could not be read',
+            )}
+          </span>
+        ),
+    },
+  ];
 }

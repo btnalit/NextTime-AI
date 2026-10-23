@@ -56,6 +56,9 @@ export function createFakeDockerClient(options: { networkName?: string } = {}): 
     async createAndStart(spec: ContainerSpec): Promise<ContainerState> {
       createCalls.push(spec);
       idSeq += 1;
+      // Like Docker: a container is created from the image the name resolves to, and carries that
+      // image's labels under its own.
+      const image = images.find((i) => i.id === spec.image || i.tags.includes(spec.image));
       const state: ContainerState & { idCounter: number } = {
         id: `container-${idSeq}`,
         idCounter: idSeq,
@@ -64,12 +67,13 @@ export function createFakeDockerClient(options: { networkName?: string } = {}): 
         status: 'running',
         startedAt: new Date().toISOString(),
         ip: pendingIp ?? nextIp(),
-        labels: { ...spec.labels },
+        labels: { ...image?.labels, ...spec.labels },
         exitCode: undefined,
-        // Deterministic per distinct `spec.image` — mirrors real Docker's own "same content ->
-        // same image id" property closely enough for the drift-comparison tests this fake exists
-        // for (resident-service.test.ts's own "image changed forces a recreate" case).
-        imageId: `sha256:fake-${spec.image}`,
+        // A registered image's own id; otherwise deterministic per distinct `spec.image` — mirrors
+        // real Docker's own "same content -> same image id" property closely enough for the
+        // drift-comparison tests this fake exists for (resident-service.test.ts's own "image
+        // changed forces a recreate" case).
+        imageId: image?.id ?? `sha256:fake-${spec.image}`,
       };
       pendingIp = undefined;
       containers.set(spec.name, state);

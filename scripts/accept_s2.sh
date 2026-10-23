@@ -126,6 +126,7 @@ require_driver
 WORKSPACE_ID=""
 ALICE_PRINCIPAL_ID=""
 BOB_PRINCIPAL_ID=""
+GOAL_ID=""
 CLEANUP_DONE=0
 
 # leftover 76: cleanup_step (defined below) used to run only on the two explicit success paths at
@@ -1234,6 +1235,115 @@ step8_mcp_connect() {
   pass "connect-mcp-find-operations-post-publish" "find_operations('accept_s2_mcp') sees both fixture tools after publish_manifest ($post_count result(s))"
 }
 
+# S11 GO5e-1: work that keeps going without the conversation, asked for in chat. "A asks the entry
+# agent -> it finds the means (find_workers, find_operations) and proposes a goal (propose_goal),
+# and cannot confirm it itself -> asking again in the same chat proposes nothing new -> A confirms
+# it (a second confirm changes nothing) -> the advancer runs the one step on the ops-runner Worker
+# -> the platform observes the test stock API and accepts the goal -> completed(achieved,
+# verified_by_check), one Task for the step." deploy/fake-llm/server.mjs's entryGoalChatScenario
+# scripts the entry agent (and its own confirm_goal attempt), goalStepScenario the step's Worker.
+#
+# Confirmation is the person's: entry mode registers no confirm_goal tool, and the kernel refuses
+# the capability on any Handle (human channel only) — the run is still `proposed` after the Turn
+# whichever of the two stopped the agent. The acceptance check is an observation the platform
+# makes with A's authority, not anything the Worker reported: the step reports no Fact.
+step9_goal_from_chat() {
+  goal_nonce=$(real_token)
+  goal_ask="发起验收目标 GOAL_NONCE=$goal_nonce"
+
+  # A new chat, as step 3 explains (fake-llm picks the scenario from the history).
+  chat_out=$(run_driver send-and-wait "$ALICE_KEY" "" "$goal_ask" 90000)
+  GOAL_CHAT_ID=$(parse_kv "$chat_out" CHAT_ID)
+  goal_turn_id=$(parse_kv "$chat_out" TURN_ID)
+  [ -n "$GOAL_CHAT_ID" ] || fail "step9-goal-chat" "no CHAT_ID from send-and-wait: $chat_out"
+  # Checked before the reply is read: a Turn that did not complete leaves no reply of its own, and
+  # the failure below would then blame the goal tools for what is a stuck or failed Turn.
+  goal_turn_status=$(parse_kv "$chat_out" TURN_STATUS)
+  [ "$goal_turn_status" = "completed" ] || fail "step9-goal-proposed" "the Turn $goal_turn_id ended '${goal_turn_status:-not settled within 90s}', not completed"
+
+  goal_reply=$(parse_kv "$(run_driver get-history "$ALICE_KEY" "$GOAL_CHAT_ID" "(d.filter(m=>m.role==='assistant').pop()||{}).text||''")" EXTRACTED)
+  case "$goal_reply" in
+    *"did not resolve"*|"")
+      fail "step9-goal-proposed" "the entry agent did not propose a goal — goal tools not registered in entry mode, or a find_* step came back empty (last assistant reply: '$goal_reply')"
+      ;;
+  esac
+  GOAL_ID=$(printf '%s' "$goal_reply" | sed -n 's/.*GOAL_ID=\([0-9a-f-]*\).*/\1/p')
+  [ -n "$GOAL_ID" ] || fail "step9-goal-proposed" "no GOAL_ID in the entry agent's reply: '$goal_reply'"
+  case "$goal_reply" in
+    *"GOAL_STATUS=proposed"*"GOAL_CHANGED=true"*) : ;;
+    *) fail "step9-goal-proposed" "propose_goal did not answer a new proposed run: '$goal_reply'" ;;
+  esac
+  pass "step9-goal-proposed" "the entry agent proposed goal $GOAL_ID in chat $GOAL_CHAT_ID"
+
+  # The agent's own confirm_goal attempt (turn 4 of the scenario) did not confirm anything.
+  case "$goal_reply" in
+    *"CONFIRM_GOAL=unavailable"*) : ;;
+    *) fail "step9-agent-cannot-confirm" "the entry agent's own confirm_goal call came back as a confirmation: '$goal_reply'" ;;
+  esac
+  out=$(cap "$ALICE_KEY" get_goal "{\"goalRunId\":\"$GOAL_ID\"}" "[d.result.status, d.result.confirmedAt === null ? 'unconfirmed' : 'confirmed', d.result.turnId].join(',')")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || fail "step9-agent-cannot-confirm" "get_goal HTTP $status: $(parse_kv "$out" BODY)"
+  goal_state=$(parse_kv "$out" EXTRACTED)
+  [ "$goal_state" = "proposed,unconfirmed,$goal_turn_id" ] || fail "step9-agent-cannot-confirm" "goal $GOAL_ID reads '$goal_state' after the Turn, expected 'proposed,unconfirmed,$goal_turn_id' (still proposed, proposed in that Turn)"
+  pass "step9-agent-cannot-confirm" "the agent's confirm_goal attempt confirmed nothing: goal $GOAL_ID still proposed, its origin the Turn $goal_turn_id"
+
+  # Asked again in the same chat: the idempotencyKey returns the same run, nothing new proposed.
+  chat_out=$(run_driver send-and-wait "$ALICE_KEY" "$GOAL_CHAT_ID" "$goal_ask" 90000)
+  # As above, and more so here: the chat's last assistant reply would otherwise be the first one.
+  again_turn_status=$(parse_kv "$chat_out" TURN_STATUS)
+  [ "$again_turn_status" = "completed" ] || fail "step9-goal-idempotent" "asking again: the Turn $(parse_kv "$chat_out" TURN_ID) ended '${again_turn_status:-not settled within 90s}', not completed"
+  again_reply=$(parse_kv "$(run_driver get-history "$ALICE_KEY" "$GOAL_CHAT_ID" "(d.filter(m=>m.role==='assistant').pop()||{}).text||''")" EXTRACTED)
+  again_id=$(printf '%s' "$again_reply" | sed -n 's/.*GOAL_ID=\([0-9a-f-]*\).*/\1/p')
+  [ "$again_id" = "$GOAL_ID" ] || fail "step9-goal-idempotent" "asking again proposed '$again_id', expected the same run $GOAL_ID (reply: '$again_reply')"
+  case "$again_reply" in
+    *"GOAL_CHANGED=false"*) : ;;
+    *) fail "step9-goal-idempotent" "asking again did not answer changed=false: '$again_reply'" ;;
+  esac
+  out=$(cap "$ALICE_KEY" list_goals "{\"limit\":100}" "d.result.items.filter((g) => g.statement.includes('$goal_nonce')).length")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || fail "step9-goal-idempotent" "list_goals HTTP $status: $(parse_kv "$out" BODY)"
+  goal_count=$(parse_kv "$out" EXTRACTED)
+  [ "$goal_count" = "1" ] || fail "step9-goal-idempotent" "list_goals shows $goal_count goals for this request, expected 1"
+  pass "step9-goal-idempotent" "asking again in the same chat answered the same run $GOAL_ID (changed=false); one goal for the request"
+
+  # A confirms it in the console's place; a second confirm changes nothing.
+  out=$(cap "$ALICE_KEY" confirm_goal "{\"goalRunId\":\"$GOAL_ID\",\"revision\":1}" "[d.result.changed, d.result.createdStepRunIds.length].join(',')")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || fail "step9-goal-confirm" "confirm_goal HTTP $status: $(parse_kv "$out" BODY)"
+  [ "$(parse_kv "$out" EXTRACTED)" = "true,1" ] || fail "step9-goal-confirm" "confirm_goal answered '$(parse_kv "$out" EXTRACTED)', expected changed=true with one StepRun: $(parse_kv "$out" BODY)"
+  out=$(cap "$ALICE_KEY" confirm_goal "{\"goalRunId\":\"$GOAL_ID\",\"revision\":1}" "[d.result.changed, d.result.createdStepRunIds.length].join(',')")
+  status=$(parse_kv "$out" HTTP_STATUS)
+  [ "$status" = "200" ] || fail "step9-goal-confirm-again" "a second confirm_goal HTTP $status: $(parse_kv "$out" BODY)"
+  [ "$(parse_kv "$out" EXTRACTED)" = "false,0" ] || fail "step9-goal-confirm-again" "a second confirm_goal answered '$(parse_kv "$out" EXTRACTED)', expected changed=false and no StepRun"
+  pass "step9-goal-confirm" "alice confirmed goal $GOAL_ID (one StepRun); confirming again changed nothing"
+
+  # The advancer runs the step, then the platform's own check; poll until the run settles.
+  goal_state=""
+  attempt=0
+  while [ "$attempt" -lt 90 ]; do
+    out=$(cap "$ALICE_KEY" get_goal "{\"goalRunId\":\"$GOAL_ID\"}" "[d.result.status, d.result.outcome || '', d.result.outcomeBasis || ''].join(',')")
+    goal_state=$(parse_kv "$out" EXTRACTED)
+    case "$goal_state" in
+      completed,*|cancelled,*|failed,*|paused,*) break ;;
+    esac
+    attempt=$((attempt + 1))
+    sleep 2
+  done
+  if [ "$goal_state" != "completed,achieved,verified_by_check" ]; then
+    out=$(cap "$ALICE_KEY" get_goal "{\"goalRunId\":\"$GOAL_ID\"}" "JSON.stringify({pauseReason: d.result.pauseReason, steps: d.result.steps.map((s) => [s.stepKey, s.status, s.attempts.map((a) => a.status + ':' + (a.failureReason || ''))]), checks: d.result.acceptance.rounds.flatMap((r) => r.checks.map((c) => [r.round, c.checkKey, c.status, c.lastError]))})")
+    fail "step9-goal-achieved" "goal $GOAL_ID ended '$goal_state', expected completed,achieved,verified_by_check — $(parse_kv "$out" EXTRACTED)"
+  fi
+
+  out=$(cap "$ALICE_KEY" get_goal "{\"goalRunId\":\"$GOAL_ID\"}" "(() => { const r = d.result.acceptance.rounds; const c = r.length ? r[r.length - 1].checks.find((x) => x.checkKey === 'stock-visible') : undefined; const s = d.result.steps[0]; return [d.result.steps.length, s ? s.status : 'none', s ? s.attempts.length : 0, c ? c.status : 'none', c && c.observationId ? 'observed' : 'unobserved'].join(','); })()")
+  achieved=$(parse_kv "$out" EXTRACTED)
+  [ "$achieved" = "1,succeeded,1,passed,observed" ] || fail "step9-goal-achieved" "goal $GOAL_ID completed but reads '$achieved', expected one step succeeded on its first attempt and the stock-visible check passed on an Observation"
+  pass "step9-goal-achieved" "goal $GOAL_ID completed(achieved, verified_by_check): the step succeeded, the platform's own observation of stock.get passed"
+
+  goal_tasks=$(psql_ws "select count(*) from tasks where workspace_id='$WORKSPACE_ID' and goal_run_id='$GOAL_ID'")
+  [ "$goal_tasks" = "1" ] || fail "step9-goal-one-task" "goal $GOAL_ID has $goal_tasks Task rows, expected exactly one for its one step"
+  pass "step9-goal-one-task" "one Task for the goal's one step"
+}
+
 cleanup_step() {
   # Set here, not only in on_exit: the explicit end-of-run call must also disarm the EXIT trap,
   # or cleanup runs (and reports PASS) a second time on the normal exit.
@@ -1241,6 +1351,25 @@ cleanup_step() {
   if [ "$KEEP" -eq 1 ]; then
     echo "cleanup: --keep set, leaving accept-s2 fixtures/gates/workspace up"
     return
+  fi
+  # A goal step 9 confirmed but did not see end (a poll that ran out, a failed assertion) would go
+  # on after this script: the advancer retrying its step on a fake model the provider restore
+  # switches away from, the platform's check retrying a gate removed below. Bounded either way,
+  # but still Worker containers, audit rows and a goal waiting on a decision after the operator
+  # saw FAIL. So it is ended here, before the gates go: a proposed run rejected, a live one
+  # cancelled. Logged, never failed — on the success path the run is completed and this does
+  # nothing.
+  if [ -n "$GOAL_ID" ]; then
+    goal_end_state=$(parse_kv "$(cap "$ALICE_KEY" get_goal "{\"goalRunId\":\"$GOAL_ID\"}" "d.result.status")" EXTRACTED)
+    case "$goal_end_state" in
+      proposed) goal_end_cap=reject_goal; goal_end_params="{\"goalRunId\":\"$GOAL_ID\",\"revision\":1}" ;;
+      running|paused|verifying) goal_end_cap=cancel_goal; goal_end_params="{\"goalRunId\":\"$GOAL_ID\"}" ;;
+      *) goal_end_cap="" ;;
+    esac
+    if [ -n "$goal_end_cap" ]; then
+      goal_end_out=$(cap "$ALICE_KEY" "$goal_end_cap" "$goal_end_params" "d.result.status")
+      echo "cleanup: goal $GOAL_ID was $goal_end_state — $goal_end_cap answered HTTP $(parse_kv "$goal_end_out" HTTP_STATUS), now '$(parse_kv "$goal_end_out" EXTRACTED)'"
+    fi
   fi
   resident_reclaim "$ALICE_PRINCIPAL_ID" >/dev/null 2>&1
   resident_reclaim "$BOB_PRINCIPAL_ID" >/dev/null 2>&1
@@ -1829,6 +1958,7 @@ else
   step6_env_and_egress
   step7_facts_inferred
   step8_mcp_connect
+  step9_goal_from_chat
   cleanup_step
 fi
 

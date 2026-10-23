@@ -120,6 +120,11 @@ describe('registerEntryMode', () => {
       'propose_skill',
       'propose_procedure',
       'propose_ontology_change',
+      'propose_goal',
+      'get_goal',
+      'list_goals',
+      'get_goal_revision',
+      'list_goal_unresolved_actions',
     ]);
     const getObject = fake.tools.get('get_object');
     expect(getObject?.description).toContain('Object');
@@ -130,6 +135,51 @@ describe('registerEntryMode', () => {
     expect(fake.tools.has('report_turn')).toBe(false);
     expect(fake.tools.has('observe_operation')).toBe(false);
     expect(fake.tools.has('request_action')).toBe(false);
+    // S11 GO5e: the agent proposes a goal; the person confirms and runs it in the console. None of
+    // the human-channel goal operations is a tool.
+    for (const operation of [
+      'confirm_goal',
+      'reject_goal',
+      'pause_goal',
+      'resume_goal',
+      'cancel_goal',
+      'revise_goal',
+      'release_goal_hold',
+      'end_goal',
+      'confirm_goal_acceptance',
+      'reconcile_goal_action',
+    ]) {
+      expect(fake.tools.has(operation)).toBe(false);
+    }
+  });
+
+  it('S11 GO5e: propose_goal takes an object schema and sends the plan to the kernel as the model wrote it', async () => {
+    const tool = fake.tools.get('propose_goal');
+    expect(tool?.parameters).toMatchObject({ type: 'object' });
+    expect(tool?.description).toContain('One delegated task stays invoke_worker');
+    kernel.setHandler('propose_goal', () => ({
+      ok: true,
+      result: { goalRunId: 'g-1', status: 'proposed', revision: 1, changed: true, hints: [] },
+    }));
+    const params = {
+      statement: 'Restart the web tier and check it comes back',
+      plan: {
+        steps: [
+          {
+            key: 'restart',
+            worker: { definitionId: '11111111-1111-4111-8111-111111111111', version: 2 },
+            input: 'Restart the web tier',
+          },
+        ],
+        acceptance: [{ kind: 'requester_confirm', key: 'looks-right', prompt: 'Is the site up?' }],
+      },
+      budget: { maxTokens: 200000, maxSteps: 3, maxRevisions: 1, maxWallClockSeconds: 3600 },
+      idempotencyKey: 'restart-web-2026-10-23',
+    };
+    if (!tool) throw new Error('propose_goal is not registered');
+    const result = await tool.execute('call-1', params, undefined, undefined, fakeCtx());
+    expect(kernel.requests.at(-1)).toMatchObject({ capability: 'propose_goal', params });
+    expect(result.details).toMatchObject({ goalRunId: 'g-1', status: 'proposed' });
   });
 
   it('session_start projects only observe-class allowed Operations as <gate>.<op> tools that call observe_operation', async () => {
@@ -728,6 +778,11 @@ describe('registerEntryMode — per-turn gate tool projection (C3)', () => {
     'propose_skill',
     'propose_procedure',
     'propose_ontology_change',
+    'propose_goal',
+    'get_goal',
+    'list_goals',
+    'get_goal_revision',
+    'list_goal_unresolved_actions',
   ];
 
   let kernel: FakeKernel;
@@ -913,8 +968,8 @@ describe('registerEntryMode — per-turn gate tool projection (C3)', () => {
     expect(listReads()).toBe(4);
     expect(kernel.requests.filter((r) => r.capability !== 'list_allowed_operations')).toEqual([]);
     expect(fake.api.setActiveTools).not.toHaveBeenCalled();
-    // 20 static tools + 1 gate tool, each registered once.
-    expect(fake.api.registerTool).toHaveBeenCalledTimes(21);
+    // 25 static tools + 1 gate tool, each registered once.
+    expect(fake.api.registerTool).toHaveBeenCalledTimes(26);
     // Only the first projection is a change worth logging.
     expect(logLines(logSpy).filter((line) => line.includes('check=tool_projection'))).toHaveLength(
       1,

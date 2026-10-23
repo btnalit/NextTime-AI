@@ -92,6 +92,16 @@ const ENTRY_TOOL_CAPABILITY_NAMES = [
   'propose_skill',
   'propose_procedure',
   'propose_ontology_change',
+  // S11 GO5e (plan §4.1, §7.2 item 6): work that has to keep going without this conversation is
+  // proposed as a goal, which the person confirms in the console and the platform's advancer then
+  // runs; the four reads answer "how is it going" (on a Handle, only the person's own goals). The
+  // person's own goal operations are not here — `confirm_goal`, `pause_goal` and the rest are
+  // human-channel only, so the person, never the agent, confirms, pauses, revises or ends a goal.
+  'propose_goal',
+  'get_goal',
+  'list_goals',
+  'get_goal_revision',
+  'list_goal_unresolved_actions',
 ] as const;
 
 export interface EntryModeOptions {

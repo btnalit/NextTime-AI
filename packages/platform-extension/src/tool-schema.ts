@@ -1,6 +1,6 @@
 import type { TSchema } from 'typebox';
 import type { ZodTypeAny } from 'zod';
-import { zodToJsonSchema } from 'zod-to-json-schema';
+import { type Options, ignoreOverride, zodToJsonSchema } from 'zod-to-json-schema';
 
 /**
  * tool-schema: converts a shared-registry capability's Zod `paramsSchema` into a pi tool
@@ -18,13 +18,29 @@ import { zodToJsonSchema } from 'zod-to-json-schema';
  * is sufficient and avoids hand-duplicating the registry's Zod schemas as typebox schemas.
  */
 export function toToolParameters(paramsSchema: ZodTypeAny): TSchema {
-  const jsonSchema = zodToJsonSchema(paramsSchema, { $refStrategy: 'none' }) as Record<
-    string,
-    unknown
-  >;
+  const jsonSchema = zodToJsonSchema(paramsSchema, {
+    $refStrategy: 'none',
+    override: recursionAsAny,
+  }) as Record<string, unknown>;
   jsonSchema.$schema = undefined;
   return jsonSchema as unknown as TSchema;
 }
+
+/**
+ * S11 GO5e: a schema that contains itself — a predicate's `all` / `any` / `not` and an output
+ * schema's `properties` / `items` (`z.lazy` in `@nexttime/shared`, reached through
+ * `propose_goal`'s plan) — has no finite inline JSON Schema. Its inner occurrence becomes `{}` (any
+ * value; the kernel still checks the whole call against the Zod schema), which is what the library
+ * does with `$refStrategy: 'none'` too, except that it also logs a warning for every occurrence,
+ * every time a tool is built. Same test the library makes: the schema is already open on the path
+ * being written.
+ */
+const recursionAsAny: NonNullable<Options['override']> = (_def, refs, seen) =>
+  seen !== undefined &&
+  seen.path.length < refs.currentPath.length &&
+  seen.path.every((segment, index) => refs.currentPath[index] === segment)
+    ? {}
+    : ignoreOverride;
 
 /**
  * W7 (found by the first real-model run of scripts/accept_s2.sh --real): a Gatekeeper Operation's

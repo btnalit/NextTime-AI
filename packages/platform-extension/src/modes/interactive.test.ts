@@ -67,7 +67,7 @@ describe('registerInteractiveMode', () => {
     await kernel.close();
   });
 
-  it('registers the same 18 capability tools as entry mode, from the shared registry', () => {
+  it('registers the same 23 capability tools as entry mode, from the shared registry', () => {
     expect([...fake.tools.keys()]).toEqual([
       'get_object',
       'traverse',
@@ -87,6 +87,11 @@ describe('registerInteractiveMode', () => {
       'propose_skill',
       'propose_procedure',
       'propose_ontology_change',
+      'propose_goal',
+      'get_goal',
+      'list_goals',
+      'get_goal_revision',
+      'list_goal_unresolved_actions',
     ]);
     const getObject = fake.tools.get('get_object');
     expect(getObject?.description).toContain('Object');
@@ -97,6 +102,9 @@ describe('registerInteractiveMode', () => {
     expect(fake.tools.has('report_turn')).toBe(false);
     expect(fake.tools.has('observe_operation')).toBe(false);
     expect(fake.tools.has('request_action')).toBe(false);
+    // S11 GO5e: confirming a goal (and every other goal operation) is the member's, in the console.
+    expect(fake.tools.has('confirm_goal')).toBe(false);
+    expect(fake.tools.has('pause_goal')).toBe(false);
   });
 
   it('subscribes only to session_start, context, before_agent_start (live-context run boundary) and before_provider_request (prompt cache) — no input/agent_start/agent_end/agent_settled (no Turn to correlate)', () => {

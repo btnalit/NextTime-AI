@@ -79,12 +79,12 @@ const spawnInput = {
 };
 
 describe('task-service spawn', () => {
-  it('creates a container and returns exactly {containerId, ip}', async () => {
+  it('creates a container and returns exactly {containerId, ip, runtime}', async () => {
     const { service, docker } = setup();
     const outcome = await service.spawn(spawnInput);
     expect(outcome.containerId).toBeDefined();
     expect(outcome.ip).toBeDefined();
-    expect(Object.keys(outcome).sort()).toEqual(['containerId', 'ip']);
+    expect(Object.keys(outcome).sort()).toEqual(['containerId', 'ip', 'runtime']);
     expect(docker.createCalls).toHaveLength(1);
     expect(docker.createCalls[0]?.name).toBe('nexttime-task-run-1');
   });
@@ -186,6 +186,55 @@ describe('task-service spawn', () => {
     });
     await service.spawn({ ...spawnInput, image: 'nexttime-ai-worker-runtime:after-422' });
     expect(docker.createCalls).toHaveLength(1);
+  });
+
+  it('reports the image id and version labels of the container it created, and the digest of the models.json it mounts (S11 W1a)', async () => {
+    const { service, docker, config } = setup();
+    docker.registerImage({
+      id: `sha256:${'a'.repeat(64)}`,
+      tags: ['nexttime-ai-worker-runtime:v0.50.0'],
+      created: '2026-10-23T00:00:00Z',
+      labels: {
+        [IMAGE_RUNTIME_CONTRACT_LABEL]: RUNTIME_CONTRACT_VERSION,
+        'ai.nexttime.pi-version': '1.2.3',
+        'ai.nexttime.platform-extension-version': '0.50.0',
+        'ai.nexttime.built-from': 'v0.50.0 (abc1234)',
+      },
+    });
+    mkdirSync(join(config.localDataDir, 'models'), { recursive: true });
+    writeFileSync(join(config.localDataDir, 'models', 'models.json'), '{"providers":{}}');
+
+    const outcome = await service.spawn({
+      ...spawnInput,
+      image: 'nexttime-ai-worker-runtime:v0.50.0',
+    });
+
+    expect(outcome.runtime).toEqual({
+      imageRef: 'nexttime-ai-worker-runtime:v0.50.0',
+      imageId: `sha256:${'a'.repeat(64)}`,
+      piVersion: '1.2.3',
+      platformExtensionVersion: '0.50.0',
+      builtFrom: 'v0.50.0 (abc1234)',
+      // sha256 of '{"providers":{}}'
+      modelsConfigDigest: 'sha256:9aecf438c3f923ce02f488be25cae648068d632535d5ec4d38b0fa6abb6b055f',
+    });
+  });
+
+  it('reports no models.json digest when the containers mount another file, or the file cannot be read (S11 W1a)', async () => {
+    const unreadable = setup();
+    const first = await unreadable.service.spawn(spawnInput);
+    expect(first.runtime.imageRef).toBe('nexttime-ai-worker-runtime');
+    expect(first.runtime.imageId).toBe('sha256:fake-nexttime-ai-worker-runtime');
+    expect(first.runtime.modelsConfigDigest).toBeUndefined();
+    expect(first.runtime.piVersion).toBeUndefined();
+
+    rmSync(dir, { recursive: true, force: true });
+    dir = mkdtempSync(join(tmpdir(), 'worker-supervisor-task-'));
+    const elsewhere = setup({ MODELS_JSON_HOST_PATH: '/host/data/accept/models.json' });
+    mkdirSync(join(elsewhere.config.localDataDir, 'models'), { recursive: true });
+    writeFileSync(join(elsewhere.config.localDataDir, 'models', 'models.json'), '{}');
+    const second = await elsewhere.service.spawn(spawnInput);
+    expect(second.runtime.modelsConfigDigest).toBeUndefined();
   });
 
   it('registers the spawned container IP in the egress source map as worker:<ws>:<workerRunId>', async () => {
