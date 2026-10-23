@@ -102,8 +102,71 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # `playwright install --with-deps` was the step that pushed #726 over the 20-minute cap. Its
+      # time is almost all apt: 25.9 MB of fonts, xvfb and library upgrades from the Ubuntu mirror,
+      # normally ~1 s, but 3-7 minutes when the mirror crawls at 60-120 kB/s. The three browser
+      # downloads from Playwright's CDN take ~10 s either way. Both are cached: the browsers by
+      # Playwright version, the .deb files by runner image and Playwright version. On a hit apt
+      # still runs `update` and installs the same packages (so the screenshots see the same fonts),
+      # but downloads only a package whose version moved since the cache was saved.
+      - name: Playwright cache keys
+        id: playwright
+        run: |
+          version=$(pnpm --filter @nexttime/web exec playwright --version | awk '{print $2}')
+          # An empty version would collapse every cache key onto one entry.
+          if [ -z "$version" ]; then echo "::error::could not read the Playwright version"; exit 1; fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "os=${ImageOS:-unknown}" >> "$GITHUB_OUTPUT"
+          echo "image=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+
+      # restore + save rather than actions/cache: its post step saves only when the whole job
+      # succeeds, so a run that the slow mirror pushed past the cap would never fill the cache.
+      - name: Restore Playwright browsers
+        id: browsers-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-browsers-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}
+
+      - name: Restore Playwright system packages
+        id: apt-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.cache/playwright-apt
+          key: playwright-apt-${{ steps.playwright.outputs.image }}-${{ steps.playwright.outputs.version }}
+          # A new runner image still has most of the same packages; apt fetches only the rest.
+          restore-keys: |
+            playwright-apt-${{ steps.playwright.outputs.image }}-
+            playwright-apt-${{ steps.playwright.outputs.os }}-
+
       - name: Install Playwright Chromium
-        run: pnpm --filter @nexttime/web exec playwright install --with-deps chromium
+        run: |
+          set -euo pipefail
+          apt_cache="$HOME/.cache/playwright-apt"
+          mkdir -p "$apt_cache/partial"
+          # For this step only: apt keeps its .deb files in the cached directory.
+          printf 'Dir::Cache::archives "%s/";\nAPT::Keep-Downloaded-Packages "true";\n' "$apt_cache" \
+            | sudo tee /etc/apt/apt.conf.d/99-playwright-cache >/dev/null
+          trap 'sudo rm -f /etc/apt/apt.conf.d/99-playwright-cache' EXIT
+          pnpm --filter @nexttime/web exec playwright install --with-deps chromium
+          # Drop .deb files the mirror no longer offers so the cache does not grow across images.
+          sudo apt-get autoclean -qq
+          sudo chown -R "$(id -u):$(id -g)" "$apt_cache"
+          echo "apt cache: $(find "$apt_cache" -maxdepth 1 -name '*.deb' | wc -l) packages"
+
+      - name: Save Playwright browsers
+        if: steps.browsers-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-browsers-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}
+
+      - name: Save Playwright system packages
+        if: steps.apt-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.cache/playwright-apt
+          key: playwright-apt-${{ steps.playwright.outputs.image }}-${{ steps.playwright.outputs.version }}
 
       # S8 W1-B: `e2e/00-gates/copy-patterns.ts` imports `@nexttime/shared` (deriving the raw-enum
       # copy-guard pattern from the wire enums directly, docs/development-tasks.md §5e F5's own
