@@ -1,5 +1,6 @@
 import { getCapability } from '@nexttime/shared';
 import { useState } from 'react';
+import { actionHint, actionLabel } from '../../lib/capability-labels.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { entryCeilingCapabilities } from '../../lib/entry-ceiling.js';
 import {
@@ -221,25 +222,38 @@ export function IssueOwnHandleSection({ http }: IssueOwnHandleSectionProps) {
             disabled={submitting}
           />
           <span>
+            {/* Legacy 440: the entry ceiling is not only reads — it proposes, delegates to
+             *  Workers and reports too. */}
             {t(
-              '不限（入口 agent 上限的观察类能力全集）',
-              'Unrestricted (every observe-class capability the entry ceiling allows)',
+              `不限（入口智能体能用的全部 ${entryCeiling.length} 项能力：查询、提议、委派 Worker 和汇报结果）`,
+              `Unrestricted (all ${entryCeiling.length} capabilities the entry agent may use: reading, proposing, delegating to Workers and reporting results)`,
             )}
           </span>
         </label>
         {!capabilitiesUnrestricted ? (
           <div className="stack-s" data-testid="ioh-capability-list" style={{ paddingTop: 8 }}>
-            {entryCeiling.map((capability) => (
-              <label className="checkbox" key={capability.name} title={capability.description}>
-                <input
-                  type="checkbox"
-                  checked={pickedCapabilities.has(capability.name)}
-                  onChange={() => toggleCapability(capability.name)}
-                  disabled={submitting}
-                />
-                <span className="mono">{capability.name}</span>
-              </label>
-            ))}
+            {/* Legacy 439: what it does first, in the reader's language, with its description
+             *  under it (no tooltip-only English); the registry name as secondary text. */}
+            {entryCeiling.map((capability) => {
+              const hint = actionHint(capability.name, t);
+              return (
+                <label className="checkbox" key={capability.name}>
+                  <input
+                    type="checkbox"
+                    checked={pickedCapabilities.has(capability.name)}
+                    onChange={() => toggleCapability(capability.name)}
+                    disabled={submitting}
+                  />
+                  <span className="stack-s" style={{ gap: 2 }}>
+                    <span>
+                      {actionLabel(capability.name, t)}{' '}
+                      <span className="mono text-3 text-small">{capability.name}</span>
+                    </span>
+                    {hint !== null ? <span className="text-3 text-small">{hint}</span> : null}
+                  </span>
+                </label>
+              );
+            })}
           </div>
         ) : null}
       </fieldset>

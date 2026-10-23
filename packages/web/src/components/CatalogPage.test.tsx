@@ -1157,6 +1157,44 @@ describe('CatalogPage', () => {
     expect(within(detail).getByRole('button', { name: /弃用/ })).toBeTruthy();
   });
 
+  it('Workers tab: names the gates a Worker acts on, linked to each gate (legacy 441)', async () => {
+    const http = scriptedHttp({
+      list_worker_definitions: () => ({
+        items: [
+          {
+            id: 'wd-1',
+            version: 1,
+            kind: 'worker',
+            status: 'published',
+            definition: { name: 'Fixer', gates: ['gk-1', 'gk-gone'] },
+          },
+          {
+            id: 'wd-2',
+            version: 1,
+            kind: 'worker',
+            status: 'published',
+            definition: { name: 'Idle' },
+          },
+        ],
+      }),
+      list_gatekeepers: () => ({ items: [{ id: 'gk-1', name: 'prod-docker' }] }),
+    });
+    renderPage(http, 'workers');
+    const [fixer, idle] = await screen.findAllByTestId('catalog-row');
+    const detail = await selectRow(fixer as HTMLElement);
+    const gates = await within(detail).findByTestId('worker-detail-gates');
+    await waitFor(() => expect(gates.textContent).toContain('prod-docker'));
+    const link = within(gates).getByRole('link', { name: /prod-docker/ });
+    expect(link.getAttribute('href')).toBe('#/govern/systems/gk-1');
+    // A gate the directory does not know still shows, unlinked, by its id.
+    expect(gates.querySelectorAll('a')).toHaveLength(1);
+    expect(gates.textContent).toContain('gk-gone');
+    const none = await selectRow(idle as HTMLElement);
+    expect(within(none).getByTestId('worker-detail-gates-none').textContent).toMatch(
+      /不能对任何系统动手/,
+    );
+  });
+
   // S8 W1-A7 (audit S13): 弃用 Deprecate used to be a plain button with no confirmation at all —
   // now a medium `kit/confirm` anchored to itself; the capability fires only once confirmed.
   it('Operations: Deprecate opens a medium confirm next to the button; deprecate_operation fires only on confirm', async () => {
