@@ -2363,11 +2363,13 @@ const taskCapabilities = [
     minRole: 'member',
     paramsSchema: z.object({ taskId: id }).strict(),
     resultSchema: wire.TaskWireSchema,
-    // D-21 (review 2026-10-02, L2-11): kernel `taskVisibleTo` (application/task/service.ts).
+    // D-21 (review 2026-10-02, L2-11): kernel `taskVisibleTo` (application/task/service.ts); the
+    // owner's view of every Task is the human channel's only (legacy 417).
     description:
-      'Read one Task and its WorkerRuns. Visible to the workspace owner, the principal the Task ' +
-      'acts for, and the Task’s own WorkerRun Handle; for anyone else it is not found, exactly ' +
-      'like an unknown id.',
+      'Read one Task and its WorkerRuns. Visible to the principal the Task acts for, the Task’s ' +
+      'own WorkerRun Handle, and the workspace owner in the console (a Handle acting for the ' +
+      'owner reads only the owner’s own Tasks); for anyone else it is not found, exactly like an ' +
+      'unknown id.',
   },
   {
     // S2.9 addition (task brief: "add a small kernel capability/endpoint if none exists — e.g.

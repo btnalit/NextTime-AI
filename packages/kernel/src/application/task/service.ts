@@ -1,6 +1,5 @@
 import {
   type ProcedureStep,
-  type Role,
   TASK_TRANSITIONS,
   type TaskEvent,
   type TaskStatus,
@@ -81,11 +80,12 @@ export async function getTaskWithWorkerRuns(
   return { task, workerRuns: workerRunsResult.rows.map(mapWorkerRunRow) };
 }
 
-/** Who is reading a Task — the acting principal (a Handle's `obo`, I13) with its workspace role,
- *  plus the calling Handle's own session (`claims.sid`) on the handle channel. */
+/** Who is reading a Task — the acting principal (a Handle's `obo`, I13), whether it sees every
+ *  Task (`seesEveryTask`: the workspace owner on the human channel only, legacy 417), plus the
+ *  calling Handle's own session (`claims.sid`) on the handle channel. */
 export interface TaskViewer {
   readonly principalId: string;
-  readonly role: Role;
+  readonly seesEveryTask: boolean;
   readonly sessionId?: string;
 }
 
@@ -98,13 +98,19 @@ export interface TaskViewer {
  * the WorkerRun branch never reaches it). Task *names* stay workspace-wide through `resolve_refs`
  * (resolve-refs-handler.ts: a name is not sensitive); `list_tasks` lists only the caller's own
  * Tasks, a subset of this predicate.
+ *
+ * Legacy 417: the owner's view of every Task is the human channel's only (the console). An agent
+ * reading on a Handle sees the Tasks of the Handle's `obo` and its own WorkerRun's Task, whatever
+ * that principal's role — the rule the goal reads follow (application/goal/views.ts,
+ * `goalVisibleTo`): looking across the workspace is a person's, not an agent's. The caller builds
+ * `seesEveryTask` from the channel (`taskViewerOf`, application/gateway/handlers.ts).
  */
 export function taskVisibleTo(
   viewer: TaskViewer,
   task: TaskRow,
   workerRuns: readonly WorkerRunRow[],
 ): boolean {
-  if (viewer.role === 'owner') return true;
+  if (viewer.seesEveryTask) return true;
   if (task.onBehalfOf === viewer.principalId) return true;
   const sessionId = viewer.sessionId;
   return sessionId !== undefined && workerRuns.some((run) => run.sessionId === sessionId);
