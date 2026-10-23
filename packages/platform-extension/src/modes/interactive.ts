@@ -83,6 +83,13 @@ const INTERACTIVE_TOOL_CAPABILITY_NAMES = [
   'propose_skill',
   'propose_procedure',
   'propose_ontology_change',
+  // S11 GO5e: the same goal tools as entry mode — propose a goal for the member this Handle acts
+  // for, and read their own goals; confirming and the other goal operations stay in the console.
+  'propose_goal',
+  'get_goal',
+  'list_goals',
+  'get_goal_revision',
+  'list_goal_unresolved_actions',
 ] as const;
 
 export interface InteractiveModeOptions {
