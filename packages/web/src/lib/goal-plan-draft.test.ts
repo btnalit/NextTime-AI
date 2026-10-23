@@ -364,4 +364,33 @@ describe('lib/goal-plan-draft', () => {
     expect(draftProblems(draft, detail, zh).get('budget:maxTokens')).toMatch(/上限要比它大/);
     expect(draftProblems(withStep(draft, 'apply', { removed: true }), detail, zh).size).toBe(0);
   });
+
+  it('a masked input left as read under another Worker version must be written again', () => {
+    const detail = paused({
+      planRevision: {
+        ...goalDetail().planRevision,
+        plan: {
+          steps: [
+            {
+              key: 'fetch',
+              worker: { definitionId: WORKER_ID, version: 2 },
+              input: { auth: '[redacted]' },
+            },
+          ],
+        },
+      },
+      steps: [],
+    });
+    const draft = draftFromDetail(detail);
+    const fetch = draft.steps[0];
+    expect(draftProblems(draft, detail, zh).size).toBe(0);
+    const moved = withStep(draft, 'fetch', { version: '3' });
+    expect(draftProblems(moved, detail, zh).get(`step:${fetch?.uid}:input`)).toMatch(
+      /换了 Worker 或版本.*此处原文已遮蔽，请重新填写/,
+    );
+    expect(
+      draftProblems(withStep(moved, 'fetch', { inputText: '{"auth": "见运维手册"}' }), detail, zh)
+        .size,
+    ).toBe(0);
+  });
 });

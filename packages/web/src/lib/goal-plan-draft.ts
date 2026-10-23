@@ -342,8 +342,9 @@ const positiveInt = (text: string) => /^\d+$/.test(text.trim()) && Number(text) 
  * is not JSON, a blank or too long text, a budget that is not a positive number or allows no
  * further revision — and a text the person changed that still holds what a read only showed in
  * place of the original (`shownOnly`: the `[redacted]` mark, a `\u{XXXX}`). A text left as it was
- * read is sent as it is: the kernel takes an entry equal to its stored one as shown as unchanged
- * and keeps the original (GO5c).
+ * read is sent as it is: the kernel takes a call (a Worker with its input) or a text equal to its
+ * stored one as shown as unchanged and keeps the original (GO5c) — so an input left as read under
+ * a changed Worker counts as written anew.
  */
 export function draftProblems(
   draft: PlanDraft,
@@ -419,6 +420,19 @@ export function draftProblems(
       } else {
         const shown = shownOnly(parsed.value);
         if (shown !== null) problems.set(at('input'), rewrite(shown));
+      }
+    } else if (step.inputText.trim() !== '' && workerChanged(step)) {
+      // The Worker and its input are one call: with the Worker changed, the input left as read is
+      // taken as written anew, so what a read only showed must be written again (GO5c).
+      const shown = shownOnly(step.original?.input);
+      if (shown !== null) {
+        problems.set(
+          at('input'),
+          `${t(
+            '换了 Worker 或版本，这一步的输入就按新写的算，读出时的遮蔽不会再换回原文。',
+            'With the Worker or its version changed, the input counts as written anew, and what the read masked is no longer put back.',
+          )}${rewrite(shown)}`,
+        );
       }
     }
   }
@@ -511,6 +525,15 @@ export function draftProblems(
     );
   }
   return problems;
+}
+
+/** Whether a step of the plan in force now names another Worker or version (a new step: no). */
+export function workerChanged(step: StepDraft): boolean {
+  return (
+    step.original !== null &&
+    (step.definitionId !== step.original.worker.definitionId ||
+      step.version !== String(step.original.worker.version))
+  );
 }
 
 /** A confirmation's prompt as the plan in force has it (`''` for one this revision adds). */

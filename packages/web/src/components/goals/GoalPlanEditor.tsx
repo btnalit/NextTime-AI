@@ -34,6 +34,7 @@ import {
   stepEnded,
   supersededLiveSteps,
   taskLive,
+  workerChanged,
 } from '../../lib/goal-plan-draft.js';
 import { goalBudgetRows, planCheckSentence, planDiff, stepRemovalText } from '../../lib/goals.js';
 import { HttpError } from '../../lib/http-client.js';
@@ -808,7 +809,9 @@ function StepEditor({
                 'What the Worker is given. Never a credential’s value: the credentials Workers use are configured on the platform.',
               ),
               keptAsRead(
-                step.original !== null && step.inputText === prettyInput(step.original.input)
+                step.original !== null &&
+                  step.inputText === prettyInput(step.original.input) &&
+                  !workerChanged(step)
                   ? shownOnly(step.original.input)
                   : null,
                 t,
