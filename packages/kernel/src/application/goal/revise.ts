@@ -1,23 +1,34 @@
-import { GoalBudgetSchema, StepRemovalsSchema, type StepRunStatus } from '@nexttime/shared';
+import {
+  GoalBudgetSchema,
+  MAX_REVISION_REASON_CHARS,
+  StepRemovalsSchema,
+  type StepRunStatus,
+} from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import {
   lockWithdrawableStepActions,
   withdrawStepActions,
 } from '../../governance/approval/index.js';
+import { refuseCredentialText } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
-import type { GoalControlActor } from './control.js';
 import { moveStepRun } from './moves.js';
 import { type GoalPlan, type PlanHint, planHints, samePlanEntry, validatePlan } from './plan.js';
 import { getPlanRevision, lockStepRuns } from './reads.js';
-import { GoalRunNotFoundError, GoalRunStateError, lockGoalRun } from './service.js';
+import {
+  GoalRunForbiddenError,
+  GoalRunInputError,
+  GoalRunNotFoundError,
+  GoalRunStateError,
+  lockGoalRun,
+} from './service.js';
 import { recordGoalRunTransition, recordStepRunTransition } from './transition-log.js';
-import type { GoalRunBudget, StepRemoval, StepRunRow } from './types.js';
+import type { GoalControlActor, GoalRunBudget, StepRemoval, StepRunRow } from './types.js';
 
 /**
  * application/goal/revise (S11 GO3b; plan §4.3, §4.8, I-G2, I-G3, I-G9; scenario S8): the requester
  * revising the plan of a paused GoalRun. Like the other writers here it runs in the caller's
- * transaction (the `revise_goal` capability is GO5) and enforces what a capability must not be
- * able to skip.
+ * transaction (the `revise_goal` capability, S11 GO5b, takes the actor from the authenticated
+ * caller) and enforces what a capability must not be able to skip.
  *
  * Who and when: the requester alone — a revision is a plan the run then carries out with their
  * authority (propose → authorize → execute, §4.3) — and only while the run is `paused`, the pause
@@ -57,6 +68,8 @@ export interface ReviseGoalRunInput {
   /** The revision the new plan was made from — the run's current one (I-G3). */
   readonly basedOnRevision: number;
   readonly plan: unknown;
+  /** Why — shown on the revision timeline as written; refused when it carries a suspected
+   *  credential (`TextCarriesCredentialsError`, S11 GO5b). */
   readonly reason?: string;
   /** A new budget that takes effect with the revision; the current one when absent. */
   readonly budget?: GoalRunBudget;
@@ -75,8 +88,9 @@ export interface RevisedGoalRun {
   readonly hints: readonly PlanHint[];
 }
 
-/** The longest reason a revision records — a sentence or two for the revision timeline. */
-export const MAX_REVISION_REASON_LENGTH = 2000;
+/** The longest reason a revision records — a sentence or two for the revision timeline
+ *  (`@nexttime/shared`'s, which `revise_goal`'s params hold to). */
+export const MAX_REVISION_REASON_LENGTH = MAX_REVISION_REASON_CHARS;
 
 /** Why a superseded step's requests were withdrawn — in each withdrawal's audit payload. */
 export const GOAL_REVISED_WITHDRAW_REASON = 'its step was revised away';
@@ -96,7 +110,7 @@ export async function reviseGoalRun(
   const goal = await lockGoalRun(client, workspaceId, input.goalRunId);
   if (!goal) throw new GoalRunNotFoundError(input.goalRunId);
   if (goal.onBehalfOf !== input.actor.principalId) {
-    throw new GoalRunStateError('only the requester revises a goal run');
+    throw new GoalRunForbiddenError('only the requester revises a goal run');
   }
   if (goal.status !== 'paused') {
     throw new GoalRunStateError(
@@ -110,10 +124,12 @@ export async function reviseGoalRun(
     );
   }
   if (input.reason !== undefined && [...input.reason].length > MAX_REVISION_REASON_LENGTH) {
-    throw new GoalRunStateError(
+    throw new GoalRunInputError(
       `a revision reason is at most ${MAX_REVISION_REASON_LENGTH} characters`,
     );
   }
+  // S11 GO5b (review #493 on #680): the reason is kept and read back as written.
+  refuseCredentialText('reason', input.reason);
   const budget = parseBudget(input.budget) ?? goal.budget;
   const accepted = await client.query<{ accepted: number; next: number }>(
     `select count(*) filter (where status = 'accepted')::int as accepted,
@@ -287,7 +303,7 @@ function parseBudget(budget: GoalRunBudget | undefined): GoalRunBudget | null {
   if (budget === undefined) return null;
   const parsed = GoalBudgetSchema.safeParse(budget);
   if (!parsed.success) {
-    throw new GoalRunStateError(
+    throw new GoalRunInputError(
       `budget: ${parsed.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; ')}`,
     );
   }
@@ -340,7 +356,7 @@ function parseRemovals(
   if (removals === undefined) return {};
   const parsed = StepRemovalsSchema.safeParse(removals);
   if (!parsed.success) {
-    throw new GoalRunStateError(
+    throw new GoalRunInputError(
       `removals: ${parsed.error.issues.map((issue) => `${issue.path.join('.') || 'removals'}: ${issue.message}`).join('; ')}`,
     );
   }
@@ -353,12 +369,12 @@ function parseRemovals(
       );
     }
     if (removal.release && removal.mode !== 'let_finish') {
-      throw new GoalRunStateError(
+      throw new GoalRunInputError(
         `removals: step ${key}: requests are released only from a step let to finish`,
       );
     }
     if (removal.release && new Set(removal.release).size !== removal.release.length) {
-      throw new GoalRunStateError(`removals: step ${key}: a request is released once`);
+      throw new GoalRunInputError(`removals: step ${key}: a request is released once`);
     }
     result[key] = removal;
   }

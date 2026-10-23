@@ -1,6 +1,7 @@
 import {
   type ActionRequestReconciliation,
   DECISION_TRANSITIONS,
+  MAX_GOAL_NOTE_CHARS,
   type PrincipalKind,
   type Role,
   transition,
@@ -9,7 +10,7 @@ import type { PoolClient } from 'pg';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { enqueue } from '../../substrate/outbox/index.js';
-import { redactedForAudit } from '../redaction/index.js';
+import { redactedForAudit, refuseCredentialText } from '../redaction/index.js';
 import { getActionRequestForUpdateOrThrow } from './reads.js';
 import { lockReconcileCheck, settleReconcileCheck } from './reconcile-checks.js';
 import {
@@ -66,7 +67,8 @@ export interface ReconcileActionRequestInput {
    *  already recorded). */
   readonly reexecute?: boolean;
   /** What the person checked, kept in the Decision's rationale and (redacted) in the audit record.
-   *  Trimmed; a blank one counts as absent. */
+   *  Trimmed; a blank one counts as absent. One carrying a suspected credential is refused
+   *  (S11 GO5b, `TextCarriesCredentialsError`): the rationale keeps it as written. */
   readonly note?: string;
   /** Ids the caller adds to the Decision's rationale and the audit record (the goal service: the
    *  request's GoalRun), so its timeline finds them. Never free text. */
@@ -79,8 +81,9 @@ export interface ReconcileActionRequestResult {
   readonly changed: boolean;
 }
 
-/** The longest note kept, in code points — the same bound as a goal revision's reason. */
-export const RECONCILIATION_NOTE_MAX = 2000;
+/** The longest note kept, in code points — `@nexttime/shared`'s bound on a note about a goal's
+ *  action, which `reconcile_goal_action`'s params hold to. */
+export const RECONCILIATION_NOTE_MAX = MAX_GOAL_NOTE_CHARS;
 
 interface Decider {
   readonly kind: PrincipalKind;
@@ -156,12 +159,14 @@ function normalizeNote(note: string | undefined, actionRequestId: string): strin
       `takes a note of at most ${RECONCILIATION_NOTE_MAX} characters`,
     );
   }
+  refuseCredentialText('note', trimmed);
   return trimmed;
 }
 
 /** Records a finding and/or a re-execute decision on a `failed` + `outcome_unknown` request — see
  *  the module comment. Throws `ActionRequestNotFoundError` (404),
- *  `ActionReconciliationStateError` (409) or `ActionReconciliationForbiddenError` (403). */
+ *  `ActionReconciliationStateError` (409), `ActionReconciliationForbiddenError` (403) or, for a
+ *  note carrying a suspected credential, `TextCarriesCredentialsError` (400). */
 export async function reconcileActionRequest(
   client: PoolClient,
   workspaceId: string,

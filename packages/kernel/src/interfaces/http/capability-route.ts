@@ -82,8 +82,16 @@ import {
 } from '../../application/gateway/members-handlers.js';
 import { PlatformAdminError } from '../../application/gateway/platform-handlers.js';
 import { ServicePrincipalRequiredError } from '../../application/gateway/service-handle-handler.js';
-// S11 GO5a: the `goal` reads' not-found errors, imported directly like the domain errors around.
-import { GoalRevisionNotFoundError, GoalRunNotFoundError } from '../../application/goal/index.js';
+// S11 GO5a: the `goal` reads' not-found errors; S11 GO5b: a person's operations' refusals —
+// imported directly like the domain errors around.
+import {
+  GoalPlanValidationError,
+  GoalRevisionNotFoundError,
+  GoalRunForbiddenError,
+  GoalRunInputError,
+  GoalRunNotFoundError,
+  GoalRunStateError,
+} from '../../application/goal/index.js';
 import {
   CSRF_HEADER,
   WORKSPACE_COOKIE,
@@ -153,6 +161,7 @@ import {
 import {
   CredentialReviewRequiredError,
   ObserveParamsCarryCredentialsError,
+  TextCarriesCredentialsError,
 } from '../../governance/redaction/index.js';
 import type { SourceBinding } from '../source-binding/index.js';
 
@@ -391,6 +400,11 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // Operation's params carrying a literal credential — refused before the gate is called;
   // the message tells the agent not to pass credentials, `details` says how many and where.
   if (err instanceof ObserveParamsCarryCredentialsError) {
+    return { status: 400, code: err.code, message: err.message, details: { ...err.details } };
+  }
+  // S11 GO5b: free text for a goal's record (a revision's reason, a note) carrying a suspected
+  // credential — refused, nothing written; `details` names the field and the count.
+  if (err instanceof TextCarriesCredentialsError) {
     return { status: 400, code: err.code, message: err.message, details: { ...err.details } };
   }
   // Legacy J (governance/gatekeepers/gate-owned-params.ts): `publish_operation` on an http
@@ -655,6 +669,27 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // (`application/goal`'s `goalVisibleTo`), and so is a revision it does not have.
   if (err instanceof GoalRunNotFoundError || err instanceof GoalRevisionNotFoundError) {
     return { status: 404, code: 'not_found', message: err.message };
+  }
+  // S11 GO5b (application/goal/service.ts): a person's operation on a run they can read but may not
+  // act on this way (403); one the run's state does not allow now (409, the IllegalTransition
+  // family: the console reloads); a malformed request (400); a plan that does not pass, every
+  // problem in `details.problems`.
+  if (err instanceof GoalRunForbiddenError) {
+    return { status: 403, code: 'forbidden', message: err.message };
+  }
+  if (err instanceof GoalRunStateError) {
+    return { status: 409, code: 'illegal_transition', message: err.message };
+  }
+  if (err instanceof GoalRunInputError) {
+    return { status: 400, code: 'invalid_params', message: err.message };
+  }
+  if (err instanceof GoalPlanValidationError) {
+    return {
+      status: 400,
+      code: 'invalid_params',
+      message: err.message,
+      details: { problems: [...err.problems] },
+    };
   }
   // S10 E1 (application/task/attribution.ts): an objective outcome given by someone who may see
   // the Turn / Task but may not judge it (403), or one its state forbids — not finished yet, or its

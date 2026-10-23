@@ -6,6 +6,7 @@ import type {
   GoalRunStatus,
   ObjectiveOutcome,
   PlanRevisionStatus,
+  Role,
   StepRemoval as SharedStepRemoval,
   StepRunFailureCategory,
   StepRunStatus,
@@ -18,6 +19,14 @@ import type {
  * `outcome` + `outcomeBasis` once completed, `waitingReason` while waiting, `failureCategory` while
  * failed.
  */
+
+/** A person deciding about a GoalRun (`control.ts`, `revise.ts`, `acceptance.ts`, `service.ts`'s
+ *  reject). The `goal` capabilities (S11 GO5b) take both from the authenticated caller, never from
+ *  params (legacy 389): the database's guards do not know the role. */
+export interface GoalControlActor {
+  readonly principalId: string;
+  readonly role: Role;
+}
 
 /** goal/0001's `budget_*` columns — the shape is `@nexttime/shared`'s `GoalBudget` (GO5a). */
 export type GoalRunBudget = Readonly<GoalBudget>;

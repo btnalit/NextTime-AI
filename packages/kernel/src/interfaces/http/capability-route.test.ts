@@ -48,6 +48,12 @@ import {
   hashApiKey,
 } from '../../application/gateway/index.js';
 import { UnknownOperationError } from '../../application/gateway/index.js';
+import {
+  GoalPlanValidationError,
+  GoalRunForbiddenError,
+  GoalRunInputError,
+  GoalRunStateError,
+} from '../../application/goal/index.js';
 import { PackNotFoundError } from '../../application/packs/index.js';
 import { TaskRuntimeNotConfiguredError } from '../../application/task/index.js';
 import {
@@ -74,7 +80,10 @@ import {
   OperationDeclaresGateOwnedParamsError,
   OperationIdentityConflictError,
 } from '../../governance/gatekeepers/index.js';
-import { ObserveParamsCarryCredentialsError } from '../../governance/redaction/index.js';
+import {
+  ObserveParamsCarryCredentialsError,
+  TextCarriesCredentialsError,
+} from '../../governance/redaction/index.js';
 import { createServer } from '../../index.js';
 import { mapCapabilityError } from './capability-route.js';
 
@@ -234,6 +243,41 @@ describe('mapCapabilityError — legacy 175 observe params (unit)', () => {
       status: 400,
       code: 'credentials_in_observe_params',
       details: { suspectedSecretValues: 2, suspectedSecretPaths: ['q', 'filter.key'] },
+    });
+  });
+});
+
+describe('mapCapabilityError — S11 GO5b goal operations (unit)', () => {
+  it('a refused operation: 403 forbidden, 409 illegal_transition, 400 invalid_params', () => {
+    expect(mapCapabilityError(new GoalRunForbiddenError('only the requester'))).toMatchObject({
+      status: 403,
+      code: 'forbidden',
+    });
+    expect(mapCapabilityError(new GoalRunStateError('not paused'))).toMatchObject({
+      status: 409,
+      code: 'illegal_transition',
+    });
+    expect(mapCapabilityError(new GoalRunInputError('a note is too long'))).toMatchObject({
+      status: 400,
+      code: 'invalid_params',
+    });
+  });
+
+  it('a plan that does not pass: 400 invalid_params with every problem in details', () => {
+    expect(
+      mapCapabilityError(new GoalPlanValidationError(['step a: unknown worker', 'cycle'])),
+    ).toMatchObject({
+      status: 400,
+      code: 'invalid_params',
+      details: { problems: ['step a: unknown worker', 'cycle'] },
+    });
+  });
+
+  it('TextCarriesCredentialsError maps to 400 credentials_in_text naming the field', () => {
+    expect(mapCapabilityError(new TextCarriesCredentialsError('reason', 2))).toMatchObject({
+      status: 400,
+      code: 'credentials_in_text',
+      details: { field: 'reason', suspectedSecretValues: 2 },
     });
   });
 });

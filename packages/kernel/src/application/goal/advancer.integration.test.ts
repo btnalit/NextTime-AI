@@ -19,6 +19,7 @@ import type {
 } from '../../adapters/supervisor-client/index.js';
 import {
   ActionReconciliationForbiddenError,
+  ActionRequestNotFoundError,
   ApprovalDrainer,
   approveActionRequest,
   claimReconcileCheck,
@@ -97,7 +98,12 @@ import {
 } from './reconcile-check.js';
 import { listGoalRunUnresolvedActions, reconcileGoalAction } from './reconcile.js';
 import { GOAL_REVISED_WITHDRAW_REASON, reviseGoalRun } from './revise.js';
-import { GoalRunStateError, confirmGoalRun, createGoalRun } from './service.js';
+import {
+  GoalRunForbiddenError,
+  GoalRunStateError,
+  confirmGoalRun,
+  createGoalRun,
+} from './service.js';
 import type { GoalRunBudget, GoalRunRow, StepRunRow } from './types.js';
 
 /**
@@ -330,7 +336,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     ): Promise<string> {
       const goalRunId = await proposeGoal(requesterId, steps, budget, ref);
       await asRequester(requesterId, (client) =>
-        confirmGoalRun(client, workspaceId, { goalRunId, confirmedBy: requesterId }),
+        confirmGoalRun(client, workspaceId, { goalRunId, revision: 1, confirmedBy: requesterId }),
       );
       return goalRunId;
     }
@@ -589,13 +595,19 @@ describe.runIf(DATABASE_URL !== undefined)(
         for (const other of [someoneElse, ownerId]) {
           await expect(
             asRequester(other, (client) =>
-              confirmGoalRun(client, workspaceId, { goalRunId, confirmedBy: other }),
+              confirmGoalRun(client, workspaceId, { goalRunId, revision: 1, confirmedBy: other }),
             ),
-          ).rejects.toBeInstanceOf(GoalRunStateError);
+          ).rejects.toBeInstanceOf(GoalRunForbiddenError);
         }
+        // Only the proposal the requester read is confirmed (S11 GO5b).
+        await expect(
+          asRequester(requester, (client) =>
+            confirmGoalRun(client, workspaceId, { goalRunId, revision: 2, confirmedBy: requester }),
+          ),
+        ).rejects.toBeInstanceOf(GoalRunStateError);
 
-        await asRequester(requester, (client) =>
-          confirmGoalRun(client, workspaceId, { goalRunId, confirmedBy: requester }),
+        const confirmed = await asRequester(requester, (client) =>
+          confirmGoalRun(client, workspaceId, { goalRunId, revision: 1, confirmedBy: requester }),
         );
         const goal = await goalOf(goalRunId);
         expect(goal).toMatchObject({ status: 'running', currentRevision: 1 });
@@ -618,12 +630,19 @@ describe.runIf(DATABASE_URL !== undefined)(
           });
         }
         expect(await goalTaskCount(goalRunId)).toBe(0);
+        expect(confirmed).toEqual({
+          status: 'running',
+          changed: true,
+          createdStepRunIds: expect.arrayContaining(Object.values(steps).map((step) => step.id)),
+        });
+        expect(confirmed.createdStepRunIds).toHaveLength(2);
 
-        await expect(
-          asRequester(requester, (client) =>
-            confirmGoalRun(client, workspaceId, { goalRunId, confirmedBy: requester }),
-          ),
-        ).rejects.toBeInstanceOf(GoalRunStateError);
+        // Sent again (scenario S3): nothing changes — no second acceptance, no second StepRun.
+        const again = await asRequester(requester, (client) =>
+          confirmGoalRun(client, workspaceId, { goalRunId, revision: 1, confirmedBy: requester }),
+        );
+        expect(again).toEqual({ status: 'running', changed: false, createdStepRunIds: [] });
+        expect(Object.keys(await stepsOf(goalRunId)).sort()).toEqual(['a', 'b']);
       });
 
       it('refuses a plan with a cycle, an unknown dependency or an unpublished worker', async () => {
@@ -1648,7 +1667,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           asRequester(someoneElse, (client) =>
             pauseGoalRun(client, workspaceId, { goalRunId, actor: by(someoneElse) }),
           ),
-        ).rejects.toBeInstanceOf(GoalRunStateError);
+        ).rejects.toBeInstanceOf(GoalRunForbiddenError);
         expect(
           await asRequester(requester, (client) =>
             pauseGoalRun(client, workspaceId, { goalRunId, actor: by(requester) }),
@@ -1678,7 +1697,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         // Resuming lets the run act with the requester's authority again: theirs alone.
         await expect(
           asOwner((client) => resumeGoalRun(client, workspaceId, { goalRunId, actor: byOwner() })),
-        ).rejects.toBeInstanceOf(GoalRunStateError);
+        ).rejects.toBeInstanceOf(GoalRunForbiddenError);
         expect(
           await asRequester(requester, (client) =>
             resumeGoalRun(client, workspaceId, { goalRunId, actor: by(requester) }),
@@ -1903,7 +1922,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           asRequester(otherRequester, (client) =>
             cancelGoalRun(client, workspaceId, { goalRunId, actor: by(otherRequester) }),
           ),
-        ).rejects.toBeInstanceOf(GoalRunStateError);
+        ).rejects.toBeInstanceOf(GoalRunForbiddenError);
         const cancelled = await asRequester(requester, (client) =>
           cancelGoalRun(client, workspaceId, { goalRunId, actor: by(requester) }),
         );
@@ -3594,7 +3613,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           const other = await startGoal(requester, [{ key: 'only' }]);
           await expect(
             reconcileAs(other, action, requester, { verdict: 'effect_absent' }),
-          ).rejects.toThrow(/is not a request of goal run/);
+          ).rejects.toBeInstanceOf(ActionRequestNotFoundError);
 
           await reconcileAs(goalRunId, action, ownerId, { verdict: 'effect_absent' });
           expect(await unresolved(goalRunId)).toEqual([]);
@@ -4690,6 +4709,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         await asRequester(requester, (client) =>
           confirmGoalRun(client, workspaceId, {
             goalRunId: created.goalRunId,
+            revision: 1,
             confirmedBy: requester,
           }),
         );
@@ -6169,6 +6189,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         await asRequester(requester, (client) =>
           confirmGoalRun(client, workspaceId, {
             goalRunId: created.goalRunId,
+            revision: 1,
             confirmedBy: requester,
           }),
         );
