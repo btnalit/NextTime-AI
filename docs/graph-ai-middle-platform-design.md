@@ -742,7 +742,7 @@ create table worker_definitions (
 | | `approve` / `reject` / `list_pending` / `set_auto_approved_action_kind` | human | I14（`set_auto_approved_action_kind` 带上勾选所在的 `actionRequestId`，按目标门检查能否批准它；规则只允许那条请求所针对的定义，遗留 218） |
 | | `get_action` / `list_action_requests` | human（observe） | 同一可见性谓词：owner 看全部；其他人只看匹配自己有效授权的（I14）或自己发起的；`get_action` 读不到的一律 404（R-42 / D-22） |
 | | `grant_capability` / `revoke_capability` / `set_policy` / `set_quota` / `issue_handle` | human（owner） | `set_policy` 的规则必须对应已发布的 Operation（按门：该门已发布，否则 404；全工作区：某个门已发布同名的，否则 400）；按门开自动批准要带 `operationVersion`，与现在发布的版本不符返回 409 `version_changed`（遗留 218） |
-| task | `invoke_worker` / `cancel_task` / `get_task` / `list_tasks` | write / observe | `invoke_worker` / `cancel_task` 为 `write`，不是 `propose`。`create_task`（只建不跑）于 W5 下架，见 `development-tasks.md` S2.7 实现说明。`get_task` 只对 owner、请求者（`on_behalf_of`）和该 Task 自己的 WorkerRun Handle 可见，其余一律 404（D-21，与 `cancel_task` 同一谓词）；`list_tasks` 只列调用者自己的 |
+| task | `invoke_worker` / `cancel_task` / `get_task` / `list_tasks` | write / observe | `invoke_worker` / `cancel_task` 为 `write`，不是 `propose`。`create_task`（只建不跑）于 W5 下架，见 `development-tasks.md` S2.7 实现说明。`get_task` 只对 owner、请求者（`on_behalf_of`）和该 Task 自己的 WorkerRun Handle 可见，其余一律 404（D-21，与 `cancel_task` 同一谓词）；owner 看全部 Task 只在人的通道（控制台），Handle 上读的是其 `obo` 本人的 Task，owner 的 Handle 也一样（遗留 417，与目标读取同一规则）；`list_tasks` 只列调用者自己的 |
 | worker | `propose_worker_definition` / `publish_worker_definition` / `deprecate_worker_definition` / `list_worker_definitions` | propose / human / observe | 发布 / 弃用同 meta 行（D-24） |
 | ingest | `register_source` / `submit_observations` | propose | service |
 | audit | `audit_query` / `reconstruct` / `export_prov` | observe（auditor） | |

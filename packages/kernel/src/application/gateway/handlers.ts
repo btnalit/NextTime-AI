@@ -40,6 +40,7 @@ import {
   type TaskAttributions,
   TaskNotFoundError,
   type TaskRow,
+  type TaskViewer,
   type WorkerRunRow,
   findOperations,
   findProcedures,
@@ -1943,21 +1944,37 @@ function toWireTask(
   };
 }
 
+/** The caller as a Task viewer (D-21, legacy 417): the human channel's resolved Principal — every
+ *  Task when it is the owner — or, on the handle channel, the Handle's `obo` (I13) for that
+ *  principal's own Tasks plus the Handle's own session for its WorkerRun's Task, an owner's Handle
+ *  too (`taskVisibleTo`'s doc comment). No `ctx` (a test driving a handler directly): the RLS
+ *  session principal with its role, the fallback `currentPrincipalRole` gives every other handler. */
+async function taskViewerOf(
+  client: PoolClient,
+  workspaceId: string,
+  ctx: Parameters<CapabilityHandler>[3],
+): Promise<TaskViewer> {
+  if (ctx?.principal) {
+    return { principalId: ctx.principal.id, seesEveryTask: ctx.principal.role === 'owner' };
+  }
+  if (ctx?.claims) {
+    return { principalId: ctx.principalId, seesEveryTask: false, sessionId: ctx.claims.sid };
+  }
+  const caller = await currentPrincipalRole(client, workspaceId);
+  return { principalId: caller.id, seesEveryTask: caller.role === 'owner' };
+}
+
 /** `get_task` — D-21 (review 2026-10-02, L2-11): only the workspace owner, the Task's requester
  *  and the Task's own WorkerRun Handle may read it (`taskVisibleTo`, application/task/service.ts);
  *  anyone else gets the same 404 an unknown id gets. On the handle channel the viewer is the
- *  Handle's `obo` (I13) with that principal's role, plus the Handle's own session. */
+ *  Handle's `obo` (I13) plus the Handle's own session — the owner's view of every Task is the
+ *  console's only (legacy 417, `taskViewerOf`). */
 const getTaskHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
   const { taskId } = params as { taskId: string };
-  const caller = await currentPrincipalRole(client, workspaceId);
   const { task, workerRuns } = await getTaskVisibleTo(
     client,
     workspaceId,
-    {
-      principalId: caller.id,
-      role: caller.role,
-      ...(ctx?.claims ? { sessionId: ctx.claims.sid } : {}),
-    },
+    await taskViewerOf(client, workspaceId, ctx),
     taskId,
   );
   const attributions = await readTaskAttributions(
@@ -2115,21 +2132,23 @@ const findProceduresHandler: CapabilityHandler = async (client, workspaceId, par
  *  a 403 for "not yours" is preferable to `terminateTask`'s own `TaskNotFoundError` (404) leaking
  *  no information either way, but 403 is the more accurate reason here.
  *
- *  D-21: the ownership rule is `taskVisibleTo` — the one predicate `get_task` reads with. No
+ *  D-21: the ownership rule is `taskVisibleTo` — the one predicate `get_task` reads with, built by
+ *  the same `taskViewerOf`: the owner override is the human channel's only (legacy 417), so an
+ *  owner's Handle, were one ever granted this capability, cancels only the owner's own Tasks. No
  *  sessionId is passed (and no WorkerRun Handle carries this capability — it is outside the Worker
  *  ceiling), so the rule here stays exactly "owner or requester". */
-const cancelTaskHandler: CapabilityHandler = async (client, workspaceId, params) => {
+const cancelTaskHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
   const { taskId } = params as { taskId: string };
-  const caller = await currentPrincipalRole(client, workspaceId);
-  if (caller.role !== 'owner') {
+  const { principalId, seesEveryTask } = await taskViewerOf(client, workspaceId, ctx);
+  if (!seesEveryTask) {
     const { task, workerRuns } = await getTaskWithWorkerRuns(client, workspaceId, taskId);
-    if (!taskVisibleTo({ principalId: caller.id, role: caller.role }, task, workerRuns)) {
+    if (!taskVisibleTo({ principalId, seesEveryTask }, task, workerRuns)) {
       throw new ForbiddenError(
-        `cancel_task: principal ${caller.id} may not cancel Task ${taskId} (owned by another principal)`,
+        `cancel_task: principal ${principalId} may not cancel Task ${taskId} (owned by another principal)`,
       );
     }
   }
-  const result = await terminateTask(workspaceId, caller.id, taskId);
+  const result = await terminateTask(workspaceId, principalId, taskId);
   return {
     result: { id: result.id, status: result.status },
     resourceType: 'task',
