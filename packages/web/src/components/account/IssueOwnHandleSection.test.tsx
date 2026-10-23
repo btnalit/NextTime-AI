@@ -52,6 +52,17 @@ describe('IssueOwnHandleSection', () => {
     expect(unrestricted.parentElement?.textContent).not.toContain('观察类');
     fireEvent.click(unrestricted);
     const list = screen.getByTestId('ioh-capability-list');
+    // Grouped by the kinds the unrestricted option names, reads first (#718 UX P3).
+    const groups = Array.from(list.querySelectorAll('fieldset legend')).map((l) => l.textContent);
+    expect(groups).toHaveLength(4);
+    expect(groups[0]).toBe('查询');
+    expect(groups[3]).toBe('汇报与记录');
+    expect(screen.getByTestId('ioh-capability-group-delegate').textContent).toContain(
+      'invoke_worker',
+    );
+    expect(screen.getByTestId('ioh-capability-group-propose').textContent).toContain(
+      'propose_goal',
+    );
     // Every capability the Handle can carry has console copy: its name and what it does, in zh.
     for (const capability of ceiling) {
       const hint = actionHint(capability.name, (zh) => zh);
