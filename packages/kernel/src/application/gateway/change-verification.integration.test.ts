@@ -375,6 +375,8 @@ describe.runIf(DATABASE_URL !== undefined)(
         state: 'needs_platform',
         gates: [],
       });
+      // S11 P1-F: a version that builds on no pack has no dependencies to check.
+      expect(found.dependencies).toEqual([]);
 
       // Another digest for the same name and version is not a version this deployment has.
       const unknown = await inWorkspace(ws, (client) =>
@@ -387,7 +389,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           digest: `sha256:${'0'.repeat(64)}`,
         }),
       );
-      expect(unknown).toEqual({ sourceFound: false, requirements: [] });
+      expect(unknown).toEqual({ sourceFound: false, requirements: [], dependencies: [] });
     });
 
     it('install_pack verifies what it installed as the installer (trigger system); verify_change_segment is the owner’s, with a cooldown', async () => {

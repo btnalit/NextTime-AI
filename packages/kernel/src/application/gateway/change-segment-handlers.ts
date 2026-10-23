@@ -103,6 +103,7 @@ export function toChangeVerificationWire(verification: ChangeVerification): Chan
       gates: requirement.gates.map((gate) => ({ ...gate })),
       met: requirement.met,
     })),
+    dependencies: verification.dependencies.map((dependency) => ({ ...dependency })),
   };
 }
 

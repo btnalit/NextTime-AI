@@ -2,6 +2,7 @@ import {
   CHANGE_ROLLBACK_IN_USE_CAP,
   type PackComponentStateWire,
   type PackComponentWire,
+  type PackDependencyWire,
   type PackInstallItemWire,
   type PackInstallPreviewWire,
   type PackInstallResultWire,
@@ -31,7 +32,7 @@ import { SkeletonRows } from '../kit/skeleton.js';
 import { StatusChip } from '../kit/status-chip.js';
 import { StillNeeded } from '../kit/still-needed.js';
 import { announceReadinessChange } from '../readiness/useExecutionReadiness.js';
-import { PackRequirementList } from './ChangeVerification.js';
+import { PackRequirementList, dependencyNowText, minVersionText } from './ChangeVerification.js';
 import { changeSubjectText, contentFieldText, typeNamesText, wideningText } from './ChangesTab.js';
 import { MarkdownPreview } from './MarkdownPreview.js';
 
@@ -177,6 +178,7 @@ export function PacksTab({ http, itemId, onSelectItem, platformAdmin = false }: 
         key={selected.name}
         http={http}
         pack={selected}
+        packs={rows}
         platformAdmin={platformAdmin}
         onChanged={refresh}
       />
@@ -203,11 +205,14 @@ export function PacksTab({ http, itemId, onSelectItem, platformAdmin = false }: 
 function PackDetail({
   http,
   pack,
+  packs,
   platformAdmin,
   onChanged,
 }: {
   readonly http: CapabilityCaller;
   readonly pack: PackWire;
+  /** Every pack this deployment ships — the ones it builds on are installed from its page. */
+  readonly packs: readonly PackWire[];
   readonly platformAdmin: boolean;
   readonly onChanged: () => void;
 }) {
@@ -291,6 +296,19 @@ function PackDetail({
         />
       )}
 
+      {pack.dependencies.length > 0 ? (
+        <>
+          <span className="section-title">{t('依赖的能力包', 'Packs it builds on')}</span>
+          <p className="text-3 text-small">
+            {t(
+              `v${pack.latestVersion} 建立在这些能力包之上：工作区要先装好它们，而且版本够新，才能安装或升级它。还没装好的可以在这里直接安装，各自留下自己的安装记录。`,
+              `v${pack.latestVersion} builds on these packs: the workspace needs them, recent enough, before it can be installed or upgraded. One it does not have yet can be installed right here, and leaves its own install record.`,
+            )}
+          </p>
+          <PackDependencyList http={http} pack={pack} packs={packs} onChanged={onChanged} />
+        </>
+      ) : null}
+
       {pack.requirements.length > 0 ? (
         <>
           <span className="section-title">{t('要用到的系统', 'Systems it needs')}</span>
@@ -347,9 +365,127 @@ function PackDetail({
                 <span className="mono">{version.requiredConnectors.join(t('、', ', '))}</span>
               </span>
             ) : null}
+            {version.requiredPacks.length > 0 ? (
+              <span className="text-3 text-small">
+                {t('依赖的能力包：', 'Builds on: ')}
+                {version.requiredPacks
+                  .map((required) => `${required.name} ${minVersionText(required.minVersion, t)}`)
+                  .join(t('、', ', '))}
+              </span>
+            ) : null}
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+/** Why a pack another builds on does not meet the version it needs, or `null` when it does. */
+function dependencyHint(dependency: PackDependencyWire, t: Translate): string | null {
+  if (dependency.met) return null;
+  switch (dependency.status) {
+    case 'not_installed':
+      return t('工作区还没安装它。', 'The workspace has not installed it.');
+    case 'customized':
+      return t(
+        '工作区里现在的内容对不上它的任何一个版本（已定制），要先换成它的标准内容。',
+        'What the workspace has matches no version of it (customized); replace it with its standard content first.',
+      );
+    default:
+      return t(
+        `工作区装的是 v${dependency.installedVersion}，版本不够新，要先升级。`,
+        `The workspace has v${dependency.installedVersion}, which is not recent enough; upgrade it first.`,
+      );
+  }
+}
+
+/**
+ * The packs a pack builds on (`requires.packs`, S11 P1-F), each with how the workspace has it and
+ * whether that is recent enough. Unlike the systems it needs, installing the pack waits for them
+ * (`install_pack` 409 `pack_dependency_unmet`), so one that falls short is installed right here —
+ * the same install control and review its own page has, as its own install record.
+ */
+function PackDependencyList({
+  http,
+  pack,
+  packs,
+  onChanged,
+}: {
+  readonly http: CapabilityCaller;
+  readonly pack: PackWire;
+  readonly packs: readonly PackWire[];
+  readonly onChanged: () => void;
+}) {
+  const t = useT();
+  const can = useRoleCan(http);
+  // What was just installed from here: its row now reads 已满足, so this says what happened.
+  const [installed, setInstalled] = useState<PackInstallResultWire | null>(null);
+  const allMet = pack.dependencies.every((dependency) => dependency.met);
+  return (
+    <div className="stack-s" data-testid="catalog-pack-dependencies">
+      {installed !== null ? (
+        <output className="block">
+          <Notice testId="catalog-pack-dependency-installed">
+            {t(
+              `已装上 ${installed.pack.name} v${installed.pack.installedVersion ?? installed.pack.latestVersion}。`,
+              `${installed.pack.name} v${installed.pack.installedVersion ?? installed.pack.latestVersion} is installed.`,
+            )}
+            {allMet
+              ? t(
+                  ` 依赖的能力包都已装好，现在可以安装 ${pack.name} 了。`,
+                  ` Every pack it builds on is in place; ${pack.name} can be installed now.`,
+                )
+              : ''}{' '}
+            {installed.segmentId !== null ? (
+              <RouteLink
+                href={hrefs.catalog('changes', installed.segmentId)}
+                testId="catalog-pack-dependency-installed-record"
+              >
+                {t('查看安装记录', 'Open install record')}
+              </RouteLink>
+            ) : null}
+          </Notice>
+        </output>
+      ) : null}
+      {pack.dependencies.map((dependency) => {
+        const rowId = `catalog-pack-dependency-${dependency.name}`;
+        const hint = dependencyHint(dependency, t);
+        const target = packs.find((candidate) => candidate.name === dependency.name);
+        return (
+          <div className="stack-s" key={dependency.name} data-testid={rowId}>
+            <span className="row-wrap">
+              <RouteLink href={hrefs.catalog('packs', dependency.name)} testId={`${rowId}-link`}>
+                <span className="mono">{dependency.name}</span>
+              </RouteLink>
+              <span className="text-small">{minVersionText(dependency.minVersion, t)}</span>
+              <span
+                className={`chip chip-s ${dependency.met ? 'chip-ok' : 'chip-warn'}`}
+                data-testid={`${rowId}-met`}
+              >
+                {dependency.met ? t('已满足', 'Met') : t('还没满足', 'Not met')}
+              </span>
+              <span className="text-3 text-small">
+                {t(
+                  `现在${dependencyNowText(dependency, t)}`,
+                  `now ${dependencyNowText(dependency, t)}`,
+                )}
+              </span>
+            </span>
+            {hint ? <span className="text-3 text-small">{hint}</span> : null}
+            {!dependency.met && target !== undefined && can('install_pack') !== false ? (
+              <InstallPack
+                http={http}
+                pack={target}
+                onInstalled={(result) => {
+                  setInstalled(result);
+                  onChanged();
+                }}
+                onStale={onChanged}
+              />
+            ) : null}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -564,7 +700,7 @@ function itemHeadline(item: PackInstallItemWire, t: Translate): string {
 
 /** The review's copy for a change between the review and the install: the review reloads itself,
  *  so the next step is to look again, not to refresh. */
-const STALE_CODES = new Set(['version_changed', 'change_plan_changed']);
+const STALE_CODES = new Set(['version_changed', 'change_plan_changed', 'pack_dependency_unmet']);
 
 /** `workerGates`: by Worker name, the gates the person kept for a Worker the install connects. */
 type WorkerGateChoice = Readonly<Record<string, readonly string[]>>;
@@ -652,6 +788,8 @@ function InstallPack({
     ? data.items.filter((item) => !item.unchanged && item.classification === 'authority_widening')
     : [];
   const unconfirmed = widening.filter((item) => !confirmed.has(item.ordinal)).length;
+  // S11 P1-F: the packs it builds on that the workspace does not meet — the install would refuse.
+  const unmet = data ? data.pack.dependencies.filter((dependency) => !dependency.met) : [];
   // Up to date, installing again only connects a Worker — or, every gate unticked, records that it
   // is connected to none (UX acceptance of #705, P3-2).
   const connects =
@@ -731,9 +869,18 @@ function InstallPack({
               : t('安装', 'Install')
         }
         danger={data !== null && (data.breaking || data.pack.status === 'customized')}
-        confirmDisabled={data === null || data.unchanged || unconfirmed > 0 || refreshing}
+        confirmDisabled={
+          data === null || data.unchanged || unconfirmed > 0 || unmet.length > 0 || refreshing
+        }
         onConfirm={install}
-        errorOverrides={{ version_changed: staleText, change_plan_changed: staleText }}
+        errorOverrides={{
+          version_changed: staleText,
+          change_plan_changed: staleText,
+          pack_dependency_unmet: t(
+            '在你查看之后，它依赖的能力包有了变化（被撤销或换了版本），现在不满足要求，所以什么也没有安装。上面已经换成现在的样子。',
+            'A pack it builds on changed after you looked (rolled back, or another version), so it no longer meets what this pack needs and nothing was installed. The review above now shows how things are.',
+          ),
+        }}
         testId="catalog-pack-install-confirm"
       >
         {preview.status === 'loading' ? (
@@ -756,6 +903,24 @@ function InstallPack({
           />
         ) : (
           <div className="stack-s" data-testid="catalog-pack-preview">
+            {unmet.length > 0 ? (
+              <Notice tone="warn" testId="catalog-pack-preview-dependencies">
+                {t(
+                  `它建立在别的能力包之上，要先装好它们才能安装：${unmet
+                    .map(
+                      (dependency) =>
+                        `${dependency.name}（${minVersionText(dependency.minVersion, t)}，现在${dependencyNowText(dependency, t)}）`,
+                    )
+                    .join('、')}。关掉这个窗口，在「依赖的能力包」里可以直接安装。`,
+                  `It builds on other packs, which need to be in place first: ${unmet
+                    .map(
+                      (dependency) =>
+                        `${dependency.name} (${minVersionText(dependency.minVersion, t)}, now ${dependencyNowText(dependency, t)})`,
+                    )
+                    .join(', ')}. Close this and install them under Packs it builds on.`,
+                )}
+              </Notice>
+            ) : null}
             {preview.data.pack.status === 'customized' ? (
               <Notice tone="warn" testId="catalog-pack-preview-customized">
                 {t(
@@ -843,16 +1008,22 @@ function InstallPack({
               </Notice>
             ) : null}
             <StillNeeded
-              items={
-                unconfirmed > 0
+              items={[
+                ...unmet.map((dependency) =>
+                  t(
+                    `先装好 ${dependency.name}（${minVersionText(dependency.minVersion, t)}）`,
+                    `install ${dependency.name} (${minVersionText(dependency.minVersion, t)}) first`,
+                  ),
+                ),
+                ...(unconfirmed > 0
                   ? [
                       t(
                         `勾选 ${unconfirmed} 项权限边界确认`,
                         `tick ${unconfirmed} authority-boundary confirmation${unconfirmed > 1 ? 's' : ''}`,
                       ),
                     ]
-                  : []
-              }
+                  : []),
+              ]}
               reason={
                 refreshing
                   ? t('正在按你的选择重新检查…', 'Checking again with your choice…')

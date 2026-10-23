@@ -10,6 +10,7 @@ import {
   ChangeVerificationTriggerSchema,
   ChangeWideningReasonCodeSchema,
   OperationItemFieldSchema,
+  PackInstallStatusSchema,
   PackRequirementStateSchema,
   PrincipalKindSchema,
 } from '../enums.js';
@@ -271,6 +272,20 @@ export const ChangeRequirementCheckWireSchema = z
   .strict();
 export type ChangeRequirementCheckWire = z.infer<typeof ChangeRequirementCheckWireSchema>;
 
+/** S11 P1-F: one pack the segment's source builds on (its pack version's `requires.packs`), as a
+ *  verification found it: how the workspace has it (that pack's own status and installed version).
+ *  Met when installed at `minVersion` or later. */
+export const ChangeDependencyCheckWireSchema = z
+  .object({
+    name: z.string(),
+    minVersion: z.number().int().positive(),
+    status: PackInstallStatusSchema,
+    installedVersion: z.number().int().positive().nullable(),
+    met: z.boolean(),
+  })
+  .strict();
+export type ChangeDependencyCheckWire = z.infer<typeof ChangeDependencyCheckWireSchema>;
+
 /** One item as a verification found it: whether what it wrote is still in effect. */
 export const ChangeItemCheckWireSchema = z
   .object({
@@ -283,7 +298,8 @@ export type ChangeItemCheckWire = z.infer<typeof ChangeItemCheckWireSchema>;
 
 /** A segment's latest verification run (S11 P1-E, `verify_change_segment`): who ran it and how
  *  (`system`: right after the install, as the person who installed), when, each item's state and
- *  each needed system's. `passed` — every item `in_effect`, every requirement met, and the source
+ *  each needed system's and pack's. `passed` — every item `in_effect`, every requirement and
+ *  dependency met, and the source
  *  version still in this deployment (`sourceFound`: without it the systems it needs are not
  *  known, so the run cannot pass). The segment's status follows: `verified` or
  *  `verification_failed`. */
@@ -296,6 +312,8 @@ export const ChangeVerificationWireSchema = z
     sourceFound: z.boolean(),
     items: z.array(ChangeItemCheckWireSchema),
     requirements: z.array(ChangeRequirementCheckWireSchema),
+    /** S11 P1-F: empty for a run recorded before, and for a source that builds on no pack. */
+    dependencies: z.array(ChangeDependencyCheckWireSchema),
   })
   .strict();
 export type ChangeVerificationWire = z.infer<typeof ChangeVerificationWireSchema>;

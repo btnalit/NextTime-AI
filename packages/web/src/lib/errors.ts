@@ -173,6 +173,7 @@ export const CODE_TITLES: Readonly<Record<string, string>> = {
   connector_not_self_serve: 'Cannot be connected by a workspace',
   module_not_found: 'No such module',
   pack_not_found: 'No such pack',
+  pack_dependency_unmet: 'Install the packs it builds on first',
   not_a_draft: 'No longer a draft',
   invalid_scope: 'Scope not allowed',
   service_principal_required: 'Not an active service account',
@@ -259,6 +260,7 @@ export const CODE_TITLES_ZH: Readonly<Record<string, string>> = {
   connector_not_self_serve: '这类系统不能由工作区自行接入',
   module_not_found: '找不到这个模块',
   pack_not_found: '找不到这个能力包',
+  pack_dependency_unmet: '要先装好它依赖的能力包',
   not_a_draft: '已经不是草稿',
   invalid_scope: '权限范围无效',
   service_principal_required: '不是启用中的服务账号',
@@ -568,6 +570,11 @@ export const ERROR_NEXT_STEPS: Readonly<
   pack_not_found: {
     zh: '这个平台部署附带的能力包里没有它，什么也没有改。刷新页面后重新选择；仍然需要它时，请平台管理员确认部署里带了这个能力包。',
     en: 'This deployment ships no such pack, and nothing changed. Reload the page and choose again; if it is still needed, ask a platform administrator to check the deployment ships this pack.',
+  },
+  // S11 P1-F: `install_pack` for a pack whose `requires.packs` this workspace does not meet.
+  pack_dependency_unmet: {
+    zh: '这个能力包建立在别的能力包之上，它们在工作区里还没装好（没有安装，或者版本不够新），所以什么也没有安装。在这个能力包的「依赖的能力包」里先把它们装好，再回来安装。',
+    en: 'This pack builds on other packs that the workspace does not have yet (not installed, or not a recent enough version), so nothing was installed. Install them first under Packs it builds on on this pack’s page, then come back.',
   },
   not_a_draft: {
     zh: '它已经发布或弃用了，只有草稿才能丢弃，什么也没有改。刷新后查看它现在的状态。',

@@ -25,6 +25,7 @@ const VERSIONS: PackWire['versions'] = [
     notes: 'First version',
     breaking: false,
     requiredConnectors: [],
+    requiredPacks: [],
     components: [{ kind: 'ontology', family: 'ops-assets', domainPack: 'ops-assets-v1.yaml' }],
   },
   {
@@ -33,6 +34,7 @@ const VERSIONS: PackWire['versions'] = [
     notes: '新增 Disk 与 restart 动作',
     breaking: true,
     requiredConnectors: [],
+    requiredPacks: [],
     components: [{ kind: 'ontology', family: 'ops-assets', domainPack: 'ops-assets-v2.yaml' }],
   },
 ];
@@ -66,6 +68,7 @@ function pack(patch: Partial<PackWire> = {}): PackWire {
     installedVersion: 1,
     components: [component()],
     requirements: [],
+    dependencies: [],
     ...patch,
   };
 }
@@ -518,6 +521,175 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
     );
   });
 
+  it('a pack that builds on another: the review waits for it, and it is installed right on the pack’s page (P1-F)', async () => {
+    let assetsInstalled = false;
+    const assets = () =>
+      pack({
+        status: assetsInstalled ? 'up_to_date' : 'not_installed',
+        installedVersion: assetsInstalled ? 2 : null,
+        components: [component({ status: assetsInstalled ? 'up_to_date' : 'not_installed' })],
+      });
+    const knowledge = () =>
+      pack({
+        name: 'knowledge',
+        summary: 'Knowledge bases',
+        latestVersion: 1,
+        status: 'not_installed',
+        installedVersion: null,
+        versions: [
+          {
+            ...(VERSIONS[0] as PackWire['versions'][number]),
+            requiredPacks: [{ name: 'ops-assets', minVersion: 2 }],
+          },
+        ],
+        components: [],
+        dependencies: [
+          {
+            name: 'ops-assets',
+            minVersion: 2,
+            status: assetsInstalled ? 'up_to_date' : 'not_installed',
+            installedVersion: assetsInstalled ? 2 : null,
+            met: assetsInstalled,
+          },
+        ],
+      });
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_packs: () => ({ items: [assets(), knowledge()] }),
+      preview_pack_install: (params) =>
+        (params as { name: string }).name === 'knowledge'
+          ? preview({
+              pack: knowledge(),
+              targetVersion: 1,
+              crossedVersions: [1],
+              breaking: false,
+              items: [item({ before: null })],
+              inUse: { objects: 0, links: 0, capped: false },
+            })
+          : preview({
+              pack: assets(),
+              breaking: false,
+              items: [item({ before: null })],
+              inUse: { objects: 0, links: 0, capped: false },
+            }),
+      install_pack: () => {
+        assetsInstalled = true;
+        return { pack: assets(), segmentId: NEW_SEGMENT_ID, verification: null };
+      },
+    });
+    renderTab(http, 'knowledge');
+
+    const row = await screen.findByTestId('catalog-pack-dependency-ops-assets');
+    expect(row.textContent).toMatch(/ops-assetsv2 或更高还没满足现在未安装工作区还没安装它。/);
+    expect(
+      within(row).getByTestId('catalog-pack-dependency-ops-assets-link').getAttribute('href'),
+    ).toBe('#/govern/catalog/packs/ops-assets');
+    expect(screen.getByTestId('catalog-pack-version-1').textContent).toMatch(
+      /依赖的能力包：ops-assets v2 或更高/,
+    );
+
+    // The pack's own review says what it waits for, and cannot be confirmed.
+    const ownTrigger = screen
+      .getAllByTestId('catalog-pack-install-trigger')
+      .find((trigger) => !trigger.closest('[data-testid="catalog-pack-dependencies"]'));
+    fireEvent.click(ownTrigger as HTMLElement);
+    const waits = await screen.findByTestId('catalog-pack-preview-dependencies');
+    expect(waits.textContent).toMatch(
+      /要先装好它们才能安装：ops-assets（v2 或更高，现在未安装）。关掉这个窗口，在「依赖的能力包」里可以直接安装。/,
+    );
+    expect((screen.getByRole('button', { name: '安装' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByTestId('catalog-pack-missing').textContent).toBe(
+      '还差：先装好 ops-assets（v2 或更高）',
+    );
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+    await waitFor(() => expect(screen.queryByTestId('catalog-pack-preview')).toBeNull());
+
+    // The dependency is installed from its row, behind its own review.
+    fireEvent.click(within(row).getByTestId('catalog-pack-install-trigger'));
+    await screen.findByTestId('catalog-pack-preview');
+    expect(named(http.calls, 'preview_pack_install').at(-1)?.params).toEqual({
+      name: 'ops-assets',
+    });
+    fireEvent.click(screen.getByRole('button', { name: '安装' }));
+    const installed = await screen.findByTestId('catalog-pack-dependency-installed');
+    expect(installed.closest('output')).not.toBeNull();
+    expect(named(http.calls, 'install_pack')).toEqual([
+      {
+        name: 'install_pack',
+        params: { name: 'ops-assets', version: 2, reviewedDigest: 'sha256:plan' },
+      },
+    ]);
+    await waitFor(() =>
+      expect(screen.getByTestId('catalog-pack-dependency-installed').textContent).toMatch(
+        /已装上 ops-assets v2。 依赖的能力包都已装好，现在可以安装 knowledge 了。/,
+      ),
+    );
+    expect(
+      screen.getByTestId('catalog-pack-dependency-installed-record').getAttribute('href'),
+    ).toBe(`#/govern/catalog/changes/${NEW_SEGMENT_ID}`);
+    const met = screen.getByTestId('catalog-pack-dependency-ops-assets');
+    expect(met.textContent).toMatch(/已满足现在已装 v2/);
+    expect(within(met).queryByTestId('catalog-pack-install-trigger')).toBeNull();
+    // Still on the pack's own page.
+    expect(screen.getByTestId('catalog-pack-title').textContent).toBe('knowledge');
+  });
+
+  it('a pack it builds on changing after the review installs nothing and reloads the review (P1-F)', async () => {
+    const knowledge = pack({
+      name: 'knowledge',
+      latestVersion: 1,
+      status: 'not_installed',
+      installedVersion: null,
+      versions: [VERSIONS[0] as PackWire['versions'][number]],
+      dependencies: [
+        {
+          name: 'ops-assets',
+          minVersion: 2,
+          status: 'up_to_date',
+          installedVersion: 2,
+          met: true,
+        },
+      ],
+    });
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_packs: () => ({ items: [knowledge] }),
+      preview_pack_install: () =>
+        preview({
+          pack: knowledge,
+          targetVersion: 1,
+          crossedVersions: [1],
+          breaking: false,
+          items: [item({ before: null })],
+          inUse: { objects: 0, links: 0, capped: false },
+        }),
+      install_pack: () =>
+        Promise.reject(
+          new HttpError(
+            'capability_error',
+            'pack knowledge builds on ops-assets v2 or later, not installed here at that version',
+            'pack_dependency_unmet',
+          ),
+        ),
+    });
+    renderTab(http, 'knowledge');
+
+    const row = await screen.findByTestId('catalog-pack-dependency-ops-assets');
+    expect(row.textContent).toMatch(/已满足现在已装 v2/);
+    expect(within(row).queryByTestId('catalog-pack-install-trigger')).toBeNull();
+    fireEvent.click(screen.getByTestId('catalog-pack-install-trigger'));
+    await screen.findByTestId('catalog-pack-preview');
+    expect(screen.queryByTestId('catalog-pack-preview-dependencies')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '安装' }));
+
+    const error = await screen.findByTestId('confirm-error');
+    expect(error.textContent).toMatch(
+      /它依赖的能力包有了变化（被撤销或换了版本），现在不满足要求，所以什么也没有安装/,
+    );
+    await waitFor(() => expect(named(http.calls, 'preview_pack_install')).toHaveLength(2));
+    await waitFor(() => expect(named(http.calls, 'list_packs')).toHaveLength(2));
+  });
+
   it('a pack this deployment does not ship says so', async () => {
     const http = scriptedHttp({
       get_workspace: () => OWNER_WORKSPACE,
@@ -536,6 +708,7 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
         notes: 'First version',
         breaking: false,
         requiredConnectors: [],
+        requiredPacks: [],
         components: [
           { kind: 'skill', name: 'docker-triage', description: '排查容器问题' },
           { kind: 'worker', name: 'ops-runner', description: '通用运维执行者', systems: [] },
@@ -695,6 +868,7 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
         notes: 'First version',
         breaking: false,
         requiredConnectors: ['docker'],
+        requiredPacks: [],
         components: [
           { kind: 'worker', name: 'ops-runner', description: null, systems: ['docker'] },
         ],
@@ -1171,6 +1345,7 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
           notes: 'First version',
           breaking: false,
           requiredConnectors: [],
+          requiredPacks: [],
           components: [{ kind: 'worker', name: 'ops-runner', description: null, systems: [] }],
         },
       ],
