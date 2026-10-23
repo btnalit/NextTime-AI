@@ -604,10 +604,15 @@ function IrreversibleTier({
                 {title}
               </AlertDialogPrimitive.Title>
               <AlertDialogPrimitive.Description id={descriptionId} className="text-13 text-text-2">
-                {t(
-                  '不可逆：请键入目标名称并确认知情',
-                  'Irreversible: type the target name and confirm you understand',
-                )}
+                {target !== undefined
+                  ? t(
+                      '不可逆：请键入目标名称并确认知情',
+                      'Irreversible: type the target name and confirm you understand',
+                    )
+                  : t(
+                      '不可逆：请勾选确认知情',
+                      'Irreversible: tick the box to confirm you understand',
+                    )}
               </AlertDialogPrimitive.Description>
               {description !== undefined ? (
                 <div className="text-13 text-text-2">{description}</div>

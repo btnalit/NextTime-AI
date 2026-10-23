@@ -1,4 +1,5 @@
 import type { UnresolvedGoalActionWire } from '@nexttime/shared';
+import type { ReactNode } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { actionKindTagText, formatDateTime, formatRelative } from '../../lib/format.js';
 import { checkErrorLabel, unresolvedActionText } from '../../lib/goals.js';
@@ -18,21 +19,23 @@ export interface GoalUnresolvedSectionProps {
   readonly paused: boolean;
   readonly http: CapabilityCaller;
   readonly onRetry: () => void;
+  /** What the reader may do about one action (`GoalReconcileControls`). */
+  readonly controls?: (action: UnresolvedGoalActionWire) => ReactNode;
 }
 
 /**
  * components/goals/GoalUnresolvedSection (S11 GO6): 待核对的动作 — the goal's actions whose outcome
  * is unknown and that still need a person (`list_goal_unresolved_actions`): what each needs (a
  * finding, or — found not to have taken effect — a decision) and where the platform's own check
- * of it stands, or why there is none. Rendered only while there is something to show; recording a
- * finding comes with the goal operations (GO6's next part), so each row only opens the action
- * itself.
+ * of it stands, or why there is none, and — through `controls` — what the reader may do about it.
+ * Rendered only while there is something to show.
  */
 export function GoalUnresolvedSection({
   state,
   paused,
   http,
   onRetry,
+  controls,
 }: GoalUnresolvedSectionProps) {
   const t = useT();
   if (state.status === 'ready' && state.items.length === 0) return null;
@@ -85,6 +88,7 @@ export function GoalUnresolvedSection({
                     {checkErrorLabel(action.platformCheck.lastError, t)}
                   </span>
                 ) : null}
+                {controls?.(action)}
               </li>
             );
           })}
