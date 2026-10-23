@@ -1799,3 +1799,26 @@
     display: inline;
   }
 }
+
+/* Legacy 464: the predicate editor — a condition's labelled controls on one line (wrapping as a
+ * whole), conditions told apart, a group set in under its own head. */
+.predicate-condition-row,
+.predicate-group-head {
+  align-items: flex-end;
+}
+
+.predicate-condition + .predicate-condition,
+.predicate-condition + .predicate-group,
+.predicate-group + .predicate-condition {
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-2);
+}
+
+.predicate-group {
+  border-left: 2px solid var(--border);
+  padding-left: var(--space-3);
+}
+
+.predicate-negate {
+  padding-bottom: var(--space-2);
+}
