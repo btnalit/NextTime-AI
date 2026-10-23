@@ -13,7 +13,9 @@ import {
   importManifest,
   proposeOperation,
   publishOperation,
+  refreshOperationGovernance,
   registerGatekeeper,
+  updateOperationDescription,
 } from '../../governance/gatekeepers/index.js';
 import {
   ChangeConfirmationRequiredError,
@@ -27,6 +29,12 @@ import {
   previewSegmentRollback,
   rollBackWorkspaceSegment,
 } from './index.js';
+import {
+  applyOperationRollback,
+  lockOperationItem,
+  parseStoredOperationItem,
+  planOperationRollback,
+} from './operation-item.js';
 
 /**
  * application/change-plan — operation-item.integration (S11 P1-E): the `operation_version` item. A
@@ -36,7 +44,10 @@ import {
  * further version with the content before (a retired version is never published again). What the
  * gate runs is never revised (refused at plan), a revision someone has under review is never
  * published over (refused at plan, and a rollback stops on it), and a version published since
- * stops a rollback, naming the segment that published it.
+ * stops a rollback, naming the segment that published it. Review #493 on #690: a published version
+ * is also edited in place (its description, a governance refresh) — such an edit waits for a
+ * rollback holding the row and lands on the version that is live afterwards, never on one a
+ * publish retired, and the item it changed is replaced by no segment.
  *
  * Gated on `DATABASE_URL`.
  */
@@ -180,6 +191,66 @@ describe.runIf(DATABASE_URL !== undefined)(
           blastRadius: properties.blast_radius,
         }));
       });
+
+    /** Every version's status and description, oldest first. */
+    const descriptions = (ws: Ws, gatekeeperId: string) =>
+      inWorkspace(ws, async (client) => {
+        const result = await client.query<{ properties: Record<string, unknown> }>(
+          `select properties from objects
+            where workspace_id = $1 and object_type = 'Operation'
+              and identity_key ->> 'gatekeeperId' = $2 and identity_key ->> 'name' = $3
+            order by (properties ->> 'version')::int`,
+          [ws.workspaceId, gatekeeperId, STRICT.name],
+        );
+        return result.rows.map(({ properties }) => ({
+          version: properties.version,
+          status: properties.status,
+          description: properties.description,
+          blastRadius: properties.blast_radius,
+        }));
+      });
+
+    const storedItem = (ws: Ws, segmentId: string) =>
+      inWorkspace(ws, async (client) => {
+        const result = await client.query<{ target: unknown; before: unknown; after: unknown }>(
+          'select target, before, after from change_items where workspace_id = $1 and segment_id = $2',
+          [ws.workspaceId, segmentId],
+        );
+        const [row] = result.rows;
+        if (!row) throw new Error('no item');
+        return parseStoredOperationItem(row);
+      });
+
+    const editDescription = (ws: Ws, gatekeeperId: string, description: string) =>
+      inWorkspace(ws, (client) =>
+        updateOperationDescription(client, ws.workspaceId, {
+          gatekeeperId,
+          name: STRICT.name,
+          description,
+        }),
+      );
+
+    /** Resolves once `waiters` other backends wait on `pid`, directly or behind another waiter
+     *  (a second waiter on a row queues behind the first), and fails after 5 s. */
+    async function blockedBy(pid: number, waiters = 1): Promise<void> {
+      for (let waited = 0; waited < 5_000; waited += 20) {
+        const result = await pool.query<{ n: number }>(
+          `with recursive waiting(pid) as (
+             select pid from pg_stat_activity where $1 = any(pg_blocking_pids(pid))
+             union
+             select a.pid from pg_stat_activity a join waiting w on w.pid = any(pg_blocking_pids(a.pid))
+           )
+           select count(*)::int as n from waiting`,
+          [pid],
+        );
+        if ((result.rows[0]?.n ?? 0) >= waiters) return;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      throw new Error(`nothing waited on backend ${pid}`);
+    }
+
+    const backendPid = async (client: PoolClient) =>
+      (await client.query<{ pid: number }>('select pg_backend_pid() as pid')).rows[0]?.pid ?? 0;
 
     const auditCount = (ws: Ws, action: string) =>
       inWorkspace(ws, async (client) => {
@@ -414,6 +485,110 @@ describe.runIf(DATABASE_URL !== undefined)(
         getPublishedOperation(client, ws.workspaceId, gatekeeperId, STRICT.name),
       );
       expect(contentDigest(live?.operation)).toBe(contentDigest(STRICT));
+    });
+
+    it('a rollback holds the live row from plan to apply: an in-place edit waits, then lands on the version it published (review #493 on #690)', async () => {
+      const ws = await newWorkspace();
+      const gatekeeperId = await seedOperation(ws);
+      const segmentId = await apply(ws, segment(gatekeeperId, { writes: [] }), []);
+      const item = await storedItem(ws, segmentId);
+
+      const { edit } = await inWorkspace(ws, async (client) => {
+        await lockOperationItem(client, ws.workspaceId);
+        const planned = await planOperationRollback(client, ws.workspaceId, item, {
+          forUpdate: true,
+        });
+        expect(planned.blocker).toBeNull();
+        const pending = editDescription(ws, gatekeeperId, 'Edited while the rollback ran.');
+        pending.catch(() => undefined);
+        await blockedBy(await backendPid(client));
+        // Planned against v2 as it was; the edit could not land in between.
+        expect(await applyOperationRollback(client, ws.workspaceId, planned, ws.ownerId)).toBe(3);
+        return { edit: pending };
+      });
+      expect((await edit).version).toBe(3);
+      expect(await descriptions(ws, gatekeeperId)).toEqual([
+        { version: 1, status: 'deprecated', description: STRICT.description, blastRadius: 'high' },
+        { version: 2, status: 'deprecated', description: STRICT.description, blastRadius: 'high' },
+        {
+          version: 3,
+          status: 'published',
+          description: 'Edited while the rollback ran.',
+          blastRadius: 'high',
+        },
+      ]);
+    });
+
+    it('an in-place edit racing a publish lands on the new live version, never the retired one (review #493 on #690)', async () => {
+      const ws = await newWorkspace();
+      const gatekeeperId = await seedOperation(ws);
+
+      const { edit, refresh } = await inWorkspace(ws, async (client) => {
+        const input = segment(gatekeeperId, { writes: [] });
+        const planned = await planWorkspaceSegment(client, ws.workspaceId, input);
+        await applyWorkspaceSegment(client, ws.workspaceId, {
+          ...input,
+          reviewedDigest: planned.digest,
+          proposedBy: ws.ownerId,
+          appliedBy: ws.ownerId,
+          channel: 'human',
+          confirmedOrdinals: [],
+        });
+        const pid = await backendPid(client);
+        const pendingEdit = editDescription(ws, gatekeeperId, 'Edited while v2 was published.');
+        pendingEdit.catch(() => undefined);
+        await blockedBy(pid);
+        // The platform's governance refresh writes in place too (a loosening from the platform).
+        const pendingRefresh = inWorkspace(ws, async (other) => {
+          const activity = await other.query<{ id: string }>(
+            `insert into activities (workspace_id, kind, status, started_by) values ($1, 'test.operation-item', 'running', $2) returning id`,
+            [ws.workspaceId, ws.ownerId],
+          );
+          return refreshOperationGovernance(other, ws.workspaceId, {
+            gatekeeperId,
+            announcedOperations: [{ ...STRICT, blast_radius: 'medium' }],
+            proposedBy: { id: ws.ownerId, kind: 'human' },
+            activityId: activity.rows[0]?.id ?? '',
+          });
+        });
+        pendingRefresh.catch(() => undefined);
+        await blockedBy(pid, 2);
+        return { edit: pendingEdit, refresh: pendingRefresh };
+      });
+      expect((await edit).version).toBe(2);
+      expect((await refresh).refreshed).toMatchObject([{ name: STRICT.name }]);
+      expect(await descriptions(ws, gatekeeperId)).toEqual([
+        { version: 1, status: 'deprecated', description: STRICT.description, blastRadius: 'high' },
+        {
+          version: 2,
+          status: 'published',
+          description: 'Edited while v2 was published.',
+          blastRadius: 'medium',
+        },
+      ]);
+    });
+
+    it('an item whose version was edited in place is replaced by no segment, and its rollback names none (review #493 on #690)', async () => {
+      const ws = await newWorkspace();
+      const gatekeeperId = await seedOperation(ws);
+      const segmentId = await apply(ws, segment(gatekeeperId, { writes: [] }), []);
+      await editDescription(ws, gatekeeperId, 'Edited on the Operations tab.');
+
+      const inspected = await inWorkspace(ws, (client) =>
+        inspectChangeSegment(client, ws.workspaceId, segmentId),
+      );
+      expect(inspected.items[0]).toMatchObject({ state: 'replaced', replacedBy: null });
+      expect((await preview(ws, segmentId)).items[0]?.conflict).toMatchObject({
+        blocker: 'replaced',
+        blockedBy: null,
+      });
+      await expect(rollBack(ws, segmentId, [1])).rejects.toBeInstanceOf(
+        ChangeRollbackConflictError,
+      );
+      expect((await descriptions(ws, gatekeeperId)).map((row) => row.description)).toEqual([
+        STRICT.description,
+        'Edited on the Operations tab.',
+      ]);
     });
   },
 );

@@ -58,6 +58,16 @@ export function operationRecordDigestOrNull(record: OperationDefinitionRecord): 
   }
 }
 
+/** `sha256:<hex>` of `operation`'s canonical JSON: one version's whole content, governance fields
+ *  and description included — the same string `application/change-plan`'s `contentDigest` makes of
+ *  an Operation, which its `operation_version` items record. `publishOperationRevision` compares
+ *  the live version against it (review #493 on #690): an Operation's published version is edited
+ *  in place (`updateOperationDescription`, `refreshOperationGovernance`), so its number alone does
+ *  not name its content. */
+export function operationContentDigest(operation: unknown): string {
+  return `sha256:${createHash('sha256').update(canonicalJson(operation), 'utf8').digest('hex')}`;
+}
+
 /** What `operationDraftDigest` covers of an `OperationRecord`: everything a draft says. */
 export interface OperationDraftContent {
   readonly operation: unknown;

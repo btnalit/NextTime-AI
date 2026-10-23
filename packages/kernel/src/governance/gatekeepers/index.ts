@@ -77,6 +77,7 @@ export type { OperationDefinitionChange, OperationParamSummary } from './definit
 export {
   OperationDefinitionUnreadableError,
   operationDefinitionChange,
+  operationContentDigest,
   operationDefinitionDiffers,
   operationDraftDigest,
   operationRecordDigest,

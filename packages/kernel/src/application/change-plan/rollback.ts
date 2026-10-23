@@ -122,6 +122,7 @@ async function planItemRollback(
   client: PoolClient,
   workspaceId: string,
   record: ChangeItemRecord,
+  lock: boolean,
 ): Promise<PlannedItemRollback> {
   const kind = record.kind;
   switch (kind) {
@@ -198,12 +199,14 @@ async function planItemRollback(
     }
     case 'operation_version': {
       const item = parseStoredOperationItem(record);
-      const operation = await planOperationRollback(client, workspaceId, item);
+      // Locked when rolling back: an Operation's live version is edited in place, outside the
+      // ChangePlan locks, so the row lock is what keeps such an edit out until the apply.
+      const operation = await planOperationRollback(client, workspaceId, item, { forUpdate: lock });
       const blocker = operation.blocker;
       let conflict: ChangeRollbackConflict | null = null;
       if (blocker) {
         const segmentId =
-          blocker.reason === 'replaced'
+          blocker.reason === 'replaced' && blocker.headVersion !== null
             ? await findOperationVersionSegment(
                 client,
                 workspaceId,
@@ -251,7 +254,7 @@ async function planRollback(
   }
   const items: PlannedItemRollback[] = [];
   for (const record of [...records].reverse()) {
-    items.push(await planItemRollback(client, workspaceId, record));
+    items.push(await planItemRollback(client, workspaceId, record, lock));
   }
   return {
     segment,

@@ -507,6 +507,61 @@ describe('ChangesTab (能力目录 · 安装历史, S11 P1-B)', () => {
     );
   });
 
+  it('an Operation edited in place since its record was written: no record replaced it, and its rollback says why it cannot run (review #493 on #690)', async () => {
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_change_segments: () => ({ items: [segment(FIRST)] }),
+      get_change_segment: () => ({
+        segment: segment(FIRST),
+        items: [
+          {
+            id: 'item-op',
+            ordinal: 1,
+            kind: 'operation_version',
+            classification: 'not_widening',
+            widening: [],
+            confirmedBy: null,
+            state: 'replaced',
+            replacedBy: null,
+            target: OPERATION_TARGET,
+            before: { version: 1, contentDigest: 'sha256:1' },
+            after: { version: 2, contentDigest: 'sha256:2' },
+            fields: [],
+          },
+        ],
+        verification: null,
+      }),
+      preview_roll_back_change_segment: () => ({
+        segment: segment(FIRST),
+        possible: false,
+        items: [
+          {
+            ordinal: 1,
+            kind: 'operation_version',
+            target: OPERATION_TARGET,
+            from: { version: 2, contentDigest: 'sha256:2' },
+            to: { version: 1, contentDigest: 'sha256:1' },
+            classification: 'not_widening',
+            widening: [],
+            blocker: 'replaced',
+            blockedBy: null,
+            conflicts: [],
+          },
+        ],
+        inUse: { objects: 0, links: 0, capped: false },
+      }),
+    });
+    renderTab(http, FIRST);
+
+    expect((await screen.findByTestId('catalog-change-item-1-replaced')).textContent).toBe(
+      '之后在安装记录之外被改过（例如在「Operation」页改了说明，或直接发布了新版本），这里没有它的记录。',
+    );
+    fireEvent.click(screen.getByTestId('catalog-change-rollback-trigger'));
+    expect((await screen.findByTestId('catalog-change-preview-1')).textContent).toContain(
+      '后来的改动不在任何安装记录里（例如在「Operation」页改了说明），这里撤销不了。',
+    );
+  });
+
   it('no records yet: says what makes one', async () => {
     const http = scriptedHttp({
       get_workspace: () => OWNER_WORKSPACE,

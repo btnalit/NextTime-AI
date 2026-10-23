@@ -621,6 +621,11 @@ function ChangeItemView({
                 {t('查看那条记录', 'Open that record')}
               </RouteLink>
             </>
+          ) : item.kind === 'operation_version' ? (
+            t(
+              '之后在安装记录之外被改过（例如在「Operation」页改了说明，或直接发布了新版本），这里没有它的记录。',
+              'Changed again since outside an install record (such as its description edited on the Operations tab, or a version published directly); there is no record of it here.',
+            )
           ) : (
             t(
               '之后在能力包安装之外被改过（例如直接发布了新版本），这里没有它的记录。',
@@ -809,6 +814,11 @@ function RollBackSegment({
                             {t('先撤销后来的那条记录', 'Roll back the later record first')}
                           </RouteLink>
                         </>
+                      ) : item.kind === 'operation_version' ? (
+                        t(
+                          '后来的改动不在任何安装记录里（例如在「Operation」页改了说明），这里撤销不了。',
+                          ' The later change is in no install record (such as its description edited on the Operations tab), so it cannot be rolled back here.',
+                        )
                       ) : (
                         t(
                           '后来的改动不是通过能力包安装做的，这里撤销不了。',

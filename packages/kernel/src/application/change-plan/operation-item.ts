@@ -62,10 +62,15 @@ import type { ContentVersionRef } from './family-item.js';
  *
  * So the item is in effect while the live version carries the content it published, whatever that
  * version's number: rolling back a later segment publishes this item's content again as a further
- * version, and this item can then be rolled back in turn.
+ * version, and this item can then be rolled back in turn. A published version is also edited in
+ * place outside any plan (`update_operation_description`, `refresh_operation_governance`), so its
+ * number never stands for its content: the version the item published, edited since, is no longer
+ * in effect either, and no later segment replaced it (`headVersion: null`, review #493 on #690).
  *
  * Locks: `lockOperationRevision` (one advisory lock for the workspace's revisions), then the live
- * row (`for update`), so what a plan read is what its apply changes.
+ * row (`for update`) — the lock an in-place edit takes too — so what a plan read is what its apply
+ * changes, for an item and for its rollback alike; `publishOperationRevision` compares the live
+ * content once more before it writes.
  */
 
 /** The fields an `operation_version` item may set (`@nexttime/shared`, where each is described). */
@@ -218,7 +223,7 @@ async function publishRevision(
   client: PoolClient,
   workspaceId: string,
   target: OperationItemTarget,
-  replaces: number,
+  replaces: ContentVersionRef,
   operation: Operation,
   publishedBy: string,
 ): Promise<OperationRecord> {
@@ -257,7 +262,7 @@ export async function applyOperationItem(
     client,
     workspaceId,
     planned.target,
-    planned.before.version,
+    planned.before,
     planned.content,
     appliedBy,
   );
@@ -314,8 +319,16 @@ function carries(live: OperationRecord, after: ContentVersionRef): boolean {
 
 export type OperationItemState =
   | { readonly state: 'in_effect' }
-  | { readonly state: 'replaced'; readonly headVersion: number }
+  /** `headVersion`: the live version, to find the segment that published it — `null` when it is
+   *  the version the item published itself, edited in place since (no segment replaced it). */
+  | { readonly state: 'replaced'; readonly headVersion: number | null }
   | { readonly state: 'not_installed' };
+
+/** The live version, when it no longer carries what the item published: `null` for the item's own
+ *  version edited in place (see `OperationItemState`). */
+function replacingVersion(live: OperationRecord, item: StoredOperationItem): number | null {
+  return live.version === item.after.version ? null : live.version;
+}
 
 /** Whether the live version still carries what the item published. */
 export async function readOperationItemState(
@@ -331,7 +344,7 @@ export async function readOperationItemState(
   );
   if (!live) return { state: 'not_installed' };
   if (carries(live, item.after)) return { state: 'in_effect' };
-  return { state: 'replaced', headVersion: live.version };
+  return { state: 'replaced', headVersion: replacingVersion(live, item) };
 }
 
 /** The governance fields the item changed, read from the version it replaced and the one it
@@ -367,7 +380,8 @@ export type OperationRollbackBlocker =
   | {
       readonly reason: 'not_installed' | 'restored_version_missing' | 'revision_pending';
     }
-  | { readonly reason: 'replaced'; readonly headVersion: number };
+  /** `headVersion` as `OperationItemState`'s. */
+  | { readonly reason: 'replaced'; readonly headVersion: number | null };
 
 export interface PlannedOperationRollback {
   readonly kind: 'operation_version';
@@ -386,12 +400,15 @@ export interface PlannedOperationRollback {
   readonly content: Operation | null;
 }
 
-/** The item's rollback dry run (§3.4 "先比较再写"; see this module's comment). Writes nothing; a
- *  rollback calls it under `lockOperationItem`. */
+/** The item's rollback dry run (§3.4 "先比较再写"; see this module's comment). Writes nothing. A
+ *  rollback calls it under `lockOperationItem` with `forUpdate`, which locks the live row so no
+ *  in-place edit lands between this read and the apply (review #493 on #690); a preview reads
+ *  without locking. */
 export async function planOperationRollback(
   client: PoolClient,
   workspaceId: string,
   item: StoredOperationItem,
+  options: { readonly forUpdate?: boolean } = {},
 ): Promise<PlannedOperationRollback> {
   const { gatekeeperId, name } = item.target;
   const blocked = (blocker: OperationRollbackBlocker): PlannedOperationRollback => ({
@@ -403,10 +420,12 @@ export async function planOperationRollback(
     blocker,
     content: null,
   });
-  const live = await getPublishedOperation(client, workspaceId, gatekeeperId, name);
+  const live = await getPublishedOperation(client, workspaceId, gatekeeperId, name, {
+    forUpdate: options.forUpdate === true,
+  });
   if (!live) return blocked({ reason: 'not_installed' });
   if (!carries(live, item.after)) {
-    return blocked({ reason: 'replaced', headVersion: live.version });
+    return blocked({ reason: 'replaced', headVersion: replacingVersion(live, item) });
   }
   const current = await getOperation(client, workspaceId, gatekeeperId, name);
   if (current?.status === 'draft') return blocked({ reason: 'revision_pending' });
@@ -446,7 +465,7 @@ export async function applyOperationRollback(
     client,
     workspaceId,
     planned.target,
-    planned.from.version,
+    planned.from,
     planned.content,
     rolledBackBy,
   );

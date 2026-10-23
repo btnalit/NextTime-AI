@@ -96,12 +96,11 @@ async function inspectItem(
       if (now.state !== 'replaced') {
         return { record, state: now.state, replacedBy: null, operationFields };
       }
-      const segmentId = await findOperationVersionSegment(
-        client,
-        workspaceId,
-        item.target,
-        now.headVersion,
-      );
+      // `null`: the item's own version, edited in place — no segment replaced it.
+      const segmentId =
+        now.headVersion === null
+          ? null
+          : await findOperationVersionSegment(client, workspaceId, item.target, now.headVersion);
       return {
         record,
         state: 'replaced',
