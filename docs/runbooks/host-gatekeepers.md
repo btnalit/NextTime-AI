@@ -569,6 +569,26 @@ docker compose logs --since 1m gatekeeper-ragflow | grep -ci 'NODE_TLS_REJECT_UN
 - `document.parse` 现在 `auto_approvable: true`（`blast_radius` 仍是 `low`）——沿用 workspace
   内置的低影响半径自动批准默认（`governance/policy/engine.ts` 的
   `effectiveWorkspaceAutoApprove`），除非该 workspace 显式关闭了它。
+  **S11 P1-F 已改回**：重新解析会删掉文档原有的全部分块（含人工添加、修改的），所以现在是
+  `blast_radius: medium`、`auto_approvable: false`，每次都要人批，见下面的「升级后收紧
+  `document.parse`」和 `gatekeepers/ragflow/README.md`。
+
+### 升级后收紧 `document.parse`（S11 P1-F）
+
+打包门和 RAGFlow 预设的清单里，`document.parse` 从 `low` / 可自动批准改成 `medium` / 不可自动批准
+（描述里也写明重新解析会删掉原有分块）。升级到带这个改动的版本之后：
+
+1. 已启用或已禁用的 `ragflow` 门（打包门或预设实例）重新 announce 时，新清单不会直接生效，而是挂成
+   「新清单待采用」（R-18）。在此之前 `document.parse` 照旧按旧分类执行：分类不进定义摘要，所以对它的
+   调用不会因为待采用而被拒。「未启用」的实例直接采用新清单。
+2. 平台管理员在「平台 · 集成」打开这个门，核对变化（只有 `document.parse` 的影响面、可否自动批准和
+   描述），确认采用。
+3. 已经启用这个门的每个工作区，所有者到「系统与授权」→ 这个系统的详情 →「已部署 Operation 的治理
+   字段」对齐一次。这是收紧，直接生效，不用发布修订。没对齐之前，这个工作区里已部署的
+   `document.parse` 仍是旧分类，仍会自动批准。
+
+核对：对齐后，在这个工作区对 `document.parse` 发起 `request_action`，返回 `pending_approval`，
+不再自动执行。
 
 ### 13.1 验证真实文件上传
 

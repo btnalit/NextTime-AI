@@ -125,7 +125,7 @@
   },
   {
     "name": "document.parse",
-    "description": "Parse one or more already-uploaded documents into retrievable chunks.",
+    "description": "Parse one or more already-uploaded documents into retrievable chunks. Parsing a document that was parsed before first deletes all of its existing chunks, including chunks added or edited by hand; they cannot be recovered.",
     "binding": { "kind": "http", "method": "POST", "path": "/api/v1/datasets/{dataset_id}/chunks" },
     "params_schema": {
       "type": "object",
@@ -137,9 +137,9 @@
       "additionalProperties": false
     },
     "mode": "execute",
-    "blast_radius": "low",
+    "blast_radius": "medium",
     "reversibility": false,
-    "auto_approvable": true,
+    "auto_approvable": false,
     "await_decision": true,
     "reads": ["Document"],
     "writes": ["Document"]

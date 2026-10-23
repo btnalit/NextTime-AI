@@ -18,6 +18,7 @@ import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool } from '../../adapters/db/pool.js';
 import { HANDLE_SIGNING_ALG } from '../../governance/capability/index.js';
 import { ConnectionParamsCarryCredentialsError } from '../../governance/connections/index.js';
+import { GATEKEEPER_RESOURCE_SCOPE_KEY, evaluate } from '../../governance/policy/index.js';
 import { createServer } from '../../index.js';
 import { deriveInternalCredential } from '../../interfaces/internal-auth/index.js';
 import { loadConnectorPresets } from '../gates/index.js';
@@ -522,6 +523,121 @@ describe.runIf(DATABASE_URL !== undefined)(
           }),
         'connector_packaged',
       );
+    });
+
+    it('g. document.parse ships medium and never auto-approvable; an instance decided under the earlier low classification holds it, and the owner tightens it in place', async () => {
+      // Re-parsing makes RAGFlow delete the document's chunks, hand-made ones included
+      // (gatekeepers/ragflow/README.md), so no workspace rule may approve it on its own.
+      const shipped = (await loadConnectorPresets({ presetsDir: PRESETS_DIR }))
+        .find((preset) => preset.name === 'ragflow')
+        ?.operations.find((operation) => operation.name === 'document.parse');
+      expect(shipped).toMatchObject({ blast_radius: 'medium', auto_approvable: false });
+
+      // A deployment decided this instance when the preset still said low / auto-approvable.
+      await callAsAdmin('create_gate_instance', {
+        gateId: 'kb-parse',
+        preset: 'ragflow',
+        target: 'https://ragflow-parse.example.invalid',
+      });
+      await overridePresets(async (dir) => {
+        const file = path.join(dir, 'ragflow', 'operations.json');
+        const operations = JSON.parse(await readFile(file, 'utf8')) as Operation[];
+        const parse = operations.find((operation) => operation.name === 'document.parse');
+        if (!parse) throw new Error('the RAGFlow preset has no document.parse');
+        parse.blast_radius = 'low';
+        parse.auto_approvable = true;
+        await writeFile(file, JSON.stringify(operations, null, 2));
+      });
+      const [earlier] = (await pull()).filter((item) => item.gateId === 'kb-parse');
+      expect(
+        (await announce(presetAnnounceBody('kb-parse', earlier?.operations ?? []))).statusCode,
+      ).toBe(200);
+      await callAsAdmin('update_gate_instance', { gateId: 'kb-parse', status: 'enabled' });
+      const { gatekeeperId } = (await dispatchCapability(
+        { pool },
+        ownerCaller(),
+        'enable_gate_instance',
+        { gateId: 'kb-parse' },
+      )) as { gatekeeperId: string };
+      async function deployedParse() {
+        const { items } = (await dispatchCapability({ pool }, ownerCaller(), 'list_operations', {
+          gatekeeperId,
+        })) as { items: Array<{ name: string; blastRadius: string; autoApprovable: boolean }> };
+        const parse = items.find((item) => item.name === 'document.parse');
+        if (!parse) throw new Error('document.parse is not deployed');
+        return parse;
+      }
+      expect(await deployedParse()).toMatchObject({ blastRadius: 'low', autoApprovable: true });
+
+      // The upgrade: the host announces today's preset. The instance is decided, so the change is
+      // held; the classification is not part of the definition the gate checks, so calls to
+      // document.parse are not refused meanwhile — it runs under the classification deployed.
+      Reflect.deleteProperty(process.env, 'CONNECTOR_PRESETS_DIR');
+      const [upgraded] = (await pull()).filter((item) => item.gateId === 'kb-parse');
+      expect(
+        (await announce(presetAnnounceBody('kb-parse', upgraded?.operations ?? []))).statusCode,
+      ).toBe(200);
+      const held = await callAsAdmin<GateInstanceWire>('get_gate_instance', {
+        gateId: 'kb-parse',
+      });
+      expect(held.pendingManifest?.changed).toEqual([
+        expect.objectContaining({
+          name: 'document.parse',
+          direction: 'tightened',
+          before: expect.objectContaining({ blastRadius: 'low', autoApprovable: true }),
+          after: expect.objectContaining({ blastRadius: 'medium', autoApprovable: false }),
+          otherChangedFields: [],
+        }),
+      ]);
+      expect(held.pendingManifest?.refusedOperations).toEqual([]);
+      expect(await deployedParse()).toMatchObject({ blastRadius: 'low', autoApprovable: true });
+
+      // The administrator adopts it; what the workspace deployed does not change by itself.
+      await callAsAdmin('confirm_gate_manifest', {
+        gateId: 'kb-parse',
+        digest: held.pendingManifest?.digest,
+      });
+      expect(await deployedParse()).toMatchObject({ blastRadius: 'low', autoApprovable: true });
+
+      // The owner aligns: a tightening, written in place without a revision.
+      const preview = (await dispatchCapability(
+        { pool },
+        ownerCaller(),
+        'preview_gate_instance_enable',
+        { gateId: 'kb-parse' },
+      )) as {
+        manifestDigest: string;
+        operationsAlreadyPresent: Array<{
+          name: string;
+          direction: string;
+          governanceByRevision?: true;
+        }>;
+      };
+      const parseChange = preview.operationsAlreadyPresent.find(
+        (operation) => operation.name === 'document.parse',
+      );
+      expect(parseChange).toMatchObject({ direction: 'tightened' });
+      expect(parseChange?.governanceByRevision).toBeUndefined();
+      await dispatchCapability({ pool }, ownerCaller(), 'refresh_operation_governance', {
+        gatekeeperId,
+        manifestDigest: preview.manifestDigest,
+      });
+      const tightened = await deployedParse();
+      expect(tightened).toMatchObject({ blastRadius: 'medium', autoApprovable: false });
+
+      // From now on a person decides every parse, even where a rule for this gate opts in.
+      expect(
+        evaluate({
+          gatekeeperId,
+          blastRadius: 'medium',
+          operationAutoApprovable: tightened.autoApprovable,
+          workspacePolicy: { scope: 'gatekeeper', autoApprove: true },
+          requesterScope: {
+            capabilities: ['request_action'],
+            resources: { [GATEKEEPER_RESOURCE_SCOPE_KEY]: [gatekeeperId] },
+          },
+        }),
+      ).toMatchObject({ decision: 'require_approval', reason: 'operation_not_auto_approvable' });
     });
   },
 );
