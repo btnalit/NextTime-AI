@@ -50,6 +50,32 @@ describe('AuditPayloadNotes (legacy 159, 178)', () => {
     expect(note).toContain('调用本身按原样执行');
   });
 
+  it('legacy 420: says what a [redacted] outside the counted params stands for', () => {
+    render(
+      <AuditPayloadNotes
+        payload={{
+          redactedValues: 1,
+          params: { apiKey: '[redacted]' },
+          after: 'call it with Authorization: [redacted]',
+        }}
+      />,
+    );
+    expect(screen.getByTestId('audit-payload-redacted').textContent).toContain(
+      '[redacted] 处的内容看起来像密码',
+    );
+  });
+
+  it('legacy 420: leaves a [redacted] the params count already explains to that line', () => {
+    render(<AuditPayloadNotes payload={{ redactedValues: 1, params: { apiKey: '[redacted]' } }} />);
+    expect(screen.getByTestId('audit-redacted-values')).toBeTruthy();
+    expect(screen.queryByTestId('audit-payload-redacted')).toBeNull();
+  });
+
+  it('legacy 420: explains a field the console masks by its name when nothing counted it', () => {
+    render(<AuditPayloadNotes payload={{ params: { password: 'plain-word' } }} />);
+    expect(screen.getByTestId('audit-payload-redacted')).toBeTruthy();
+  });
+
   it('renders nothing for an ordinary payload or a malformed count', () => {
     const { container } = render(
       <>

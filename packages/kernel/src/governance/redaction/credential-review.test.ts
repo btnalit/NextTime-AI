@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CredentialReviewRequiredError,
   ObserveParamsCarryCredentialsError,
+  RedactedTextSubmittedError,
   TextCarriesCredentialsError,
   assertCredentialsReviewed,
   assertDraftCredentialsReviewed,
@@ -14,6 +15,7 @@ import {
   redactSecrets,
   redactSuspectedSecrets,
   refuseCredentialText,
+  refuseRedactedText,
   reviewObserveParams,
 } from './index.js';
 
@@ -504,5 +506,27 @@ describe('refuseCredentialText — free text kept and read back as written (S11 
     ).not.toThrow();
     expect(() => refuseCredentialText('note', 'the deploy key was rotated by ops')).not.toThrow();
     expect(() => refuseCredentialText('note', undefined)).not.toThrow();
+  });
+});
+
+describe('refuseRedactedText — text sent back with the mask a read showed (legacy 420)', () => {
+  it('refuses text still holding [redacted], naming the field', () => {
+    let thrown: unknown;
+    try {
+      refuseRedactedText('description', 'restarts it; call with PGPASSWORD=[redacted]');
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(RedactedTextSubmittedError);
+    const err = thrown as RedactedTextSubmittedError;
+    expect(err.code).toBe('redacted_text_submitted');
+    expect(err.details).toEqual({ field: 'description' });
+    expect(err.message).toMatch(/^description: /);
+  });
+
+  it('takes text without the mask, and no text at all', () => {
+    expect(() => refuseRedactedText('description', 'restarts the service')).not.toThrow();
+    expect(() => refuseRedactedText('description', 'redacted [in brackets]')).not.toThrow();
+    expect(() => refuseRedactedText('description', undefined)).not.toThrow();
   });
 });

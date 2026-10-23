@@ -507,6 +507,62 @@ describe('ChangesTab (能力目录 · 安装历史, S11 P1-B)', () => {
     );
   });
 
+  it('legacy 420: a description the kernel reads masked says what [redacted] is; none masked, no line', async () => {
+    const opItem = (fields: readonly unknown[]) => ({
+      id: 'item-op',
+      ordinal: 1,
+      kind: 'operation_version',
+      classification: 'authority_widening',
+      widening: [{ path: 'operation.description', reason: 'changed' }],
+      confirmedBy: { id: 'p-owner', kind: 'human', displayName: 'Owner' },
+      state: 'in_effect',
+      replacedBy: null,
+      target: OPERATION_TARGET,
+      before: { version: 1, contentDigest: 'sha256:1' },
+      after: { version: 2, contentDigest: 'sha256:2' },
+      fields,
+    });
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_change_segments: () => ({ items: [segment(FIRST)] }),
+      get_change_segment: () => ({
+        segment: segment(FIRST),
+        items: [
+          opItem([
+            {
+              field: 'description',
+              before: 'Restart it; call with PGPASSWORD=[redacted]',
+              after: 'Restart one container.',
+            },
+          ]),
+        ],
+        verification: null,
+      }),
+    });
+    renderTab(http, FIRST);
+
+    expect((await screen.findByTestId('catalog-change-item-1-fields')).textContent).toMatch(
+      /^说明：Restart it; call with PGPASSWORD=\[redacted\] → Restart one container\./,
+    );
+    expect(screen.getByTestId('catalog-change-item-1-redacted').textContent).toMatch(
+      /\[redacted\] 处的内容看起来像密码、令牌或密钥/,
+    );
+    cleanup();
+
+    const plain = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_change_segments: () => ({ items: [segment(FIRST)] }),
+      get_change_segment: () => ({
+        segment: segment(FIRST),
+        items: [opItem([{ field: 'description', before: 'Restart.', after: 'Restart one.' }])],
+        verification: null,
+      }),
+    });
+    renderTab(plain, FIRST);
+    await screen.findByTestId('catalog-change-item-1-fields');
+    expect(screen.queryByTestId('catalog-change-item-1-redacted')).toBeNull();
+  });
+
   it('an Operation edited in place since its record was written: no record replaced it, and its rollback says why it cannot run (review #493 on #690)', async () => {
     const http = scriptedHttp({
       get_workspace: () => OWNER_WORKSPACE,

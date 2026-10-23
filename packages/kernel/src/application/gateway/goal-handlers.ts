@@ -56,6 +56,7 @@ import {
   resumeGoalRun,
   reviseGoalRun,
 } from '../../application/goal/index.js';
+import { shownFreeText, shownFreeTextIn } from '../../governance/redaction/index.js';
 import type { CapabilityHandler, CapabilityHandlerContext } from './capability-handler.js';
 
 /**
@@ -136,7 +137,9 @@ function toWireGoalRun(summary: GoalRunSummary): GoalRunWire {
     outcomeDecisionId: goal.outcomeDecisionId,
     onBehalfOf: goal.onBehalfOf,
     turnId: goal.originatedInTurnId,
-    statement: goal.statement,
+    // Legacy 420: free text kept as written, shown as `shownFreeText` shows it. `propose_goal`
+    // refuses a suspected credential in it at write (GO5c); this masks any run written before.
+    statement: shownFreeText(goal.statement),
     currentRevision: goal.currentRevision,
     budget: { ...goal.budget },
     usage: { ...summary.usage },
@@ -156,7 +159,8 @@ function toWirePlanRevisionSummary(row: PlanRevisionRow): PlanRevisionSummaryWir
     status: row.status,
     basedOnRevision: row.basedOnRevision,
     proposedBy: row.proposedBy,
-    reason: row.reason,
+    // Legacy 420: as `statement` above (`revise_goal` refuses a credential in it since GO5b).
+    reason: shownFreeText(row.reason),
     decidedBy: row.decidedBy,
     decidedAt: iso(row.decidedAt),
     createdAt: row.createdAt.toISOString(),
@@ -175,7 +179,10 @@ function toWirePlanRevisionSummary(row: PlanRevisionRow): PlanRevisionSummaryWir
 function toWirePlanRevision(view: PlanRevisionView): PlanRevisionWire {
   return {
     ...toWirePlanRevisionSummary(view.revision),
-    plan: view.plan,
+    // Legacy 420: the plan's text — step inputs, acceptance prompts, the values a check or a Fact
+    // claim compares — as `shownFreeTextIn` shows a stored value (a step's Task input reads the
+    // same way). The plan that runs is the stored one; nothing reads this copy back.
+    plan: shownFreeTextIn(view.plan) as typeof view.plan,
     hints: view.hints.map((hint) => ({ code: hint.code, message: hint.message })),
   };
 }
@@ -214,9 +221,11 @@ function toWireAcceptanceCheck(check: GoalAcceptanceCheckView): GoalAcceptanceCh
     checkKey: check.checkKey,
     kind: check.kind,
     status: check.status,
-    check: check.check,
-    fact: check.fact,
-    prompt: check.prompt,
+    // Legacy 420: as the plan they come from reads (`toWirePlanRevision`); the implicit
+    // requester confirmation's prompt is the goal statement.
+    check: shownFreeTextIn(check.check) as typeof check.check,
+    fact: shownFreeTextIn(check.fact) as typeof check.fact,
+    prompt: shownFreeText(check.prompt),
     attempts: check.attempts,
     lastError: check.lastError,
     observationId: check.observationId,

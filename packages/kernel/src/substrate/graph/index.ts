@@ -18,6 +18,7 @@
  */
 
 export { scrubGraphProperties } from './scrub-properties.js';
+export { shownObjectProperties } from './shown-object.js';
 export {
   DEFAULT_LIST_FACTS_LIMIT,
   DEFAULT_RECENT_FACTS_LIMIT,

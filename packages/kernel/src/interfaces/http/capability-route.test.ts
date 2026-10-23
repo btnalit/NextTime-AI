@@ -82,6 +82,7 @@ import {
 } from '../../governance/gatekeepers/index.js';
 import {
   ObserveParamsCarryCredentialsError,
+  RedactedTextSubmittedError,
   TextCarriesCredentialsError,
 } from '../../governance/redaction/index.js';
 import { createServer } from '../../index.js';
@@ -278,6 +279,14 @@ describe('mapCapabilityError — S11 GO5b goal operations (unit)', () => {
       status: 400,
       code: 'credentials_in_text',
       details: { field: 'reason', suspectedSecretValues: 2 },
+    });
+  });
+
+  it('RedactedTextSubmittedError maps to 400 redacted_text_submitted naming the field (legacy 420)', () => {
+    expect(mapCapabilityError(new RedactedTextSubmittedError('description'))).toMatchObject({
+      status: 400,
+      code: 'redacted_text_submitted',
+      details: { field: 'description' },
     });
   });
 });

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Operation } from '@nexttime/shared';
+import type { ChangeSegmentDetailWire, Operation } from '@nexttime/shared';
 import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
@@ -17,6 +17,7 @@ import {
   registerGatekeeper,
   updateOperationDescription,
 } from '../../governance/gatekeepers/index.js';
+import { getChangeSegmentHandler } from '../gateway/change-segment-handlers.js';
 import {
   ChangeConfirmationRequiredError,
   ChangeRollbackConflictError,
@@ -589,6 +590,49 @@ describe.runIf(DATABASE_URL !== undefined)(
         STRICT.description,
         'Edited on the Operations tab.',
       ]);
+    });
+
+    it('legacy 420: get_change_segment shows a description changed by the item as every read of an Operation does', async () => {
+      const fake = 'abcdefghijklmnopqrstuvwxyz0123'; // synthetic, Handle-shaped
+      const ws = await newWorkspace();
+      const gatekeeperId = await seedOperation(ws);
+      // A description written before credentials were refused (the row is the record).
+      await inWorkspace(ws, (client) =>
+        client.query(
+          `update objects set properties = jsonb_set(properties, '{description}', to_jsonb($3::text))
+            where workspace_id = $1 and object_type = 'Operation'
+              and identity_key ->> 'gatekeeperId' = $2`,
+          [ws.workspaceId, gatekeeperId, `Restart it; call with PGPASSWORD=${fake}`],
+        ),
+      );
+      const segmentId = await apply(
+        ws,
+        segment(gatekeeperId, { description: 'Restart one container.', blast_radius: 'high' }),
+      );
+
+      // The record keeps what was there; only the read masks it.
+      const inspected = await inWorkspace(ws, (client) =>
+        inspectChangeSegment(client, ws.workspaceId, segmentId),
+      );
+      expect(inspected.items[0]?.operationFields).toEqual([
+        {
+          field: 'description',
+          before: `Restart it; call with PGPASSWORD=${fake}`,
+          after: 'Restart one container.',
+        },
+      ]);
+      const detail = (await inWorkspace(ws, (client) =>
+        getChangeSegmentHandler(client, ws.workspaceId, { segmentId }),
+      )) as { result: ChangeSegmentDetailWire };
+      const [item] = detail.result.items;
+      expect(item?.kind === 'operation_version' ? item.fields : null).toEqual([
+        {
+          field: 'description',
+          before: 'Restart it; call with PGPASSWORD=[redacted]',
+          after: 'Restart one container.',
+        },
+      ]);
+      expect(JSON.stringify(detail)).not.toContain(fake);
     });
   },
 );

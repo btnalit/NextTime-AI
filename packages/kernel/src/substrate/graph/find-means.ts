@@ -1,4 +1,5 @@
 import type { PoolClient } from 'pg';
+import { shownObjectProperties } from './shown-object.js';
 import type { GraphObject } from './store.js';
 
 /**
@@ -130,7 +131,7 @@ function mapObjectRow(row: ObjectRow): GraphObject {
     id: row.id,
     objectType: row.object_type,
     identityKey: row.identity_key,
-    properties: row.properties,
+    properties: shownObjectProperties(row.object_type, row.properties),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     lastObservedAt: row.last_observed_at,

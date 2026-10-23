@@ -117,6 +117,7 @@ import {
   findSuspectedSecrets,
   redactSuspectedSecrets,
   scrubSecretValues,
+  shownFreeTextIn,
 } from '../../governance/redaction/index.js';
 import type { AuditQueryFilter } from '../../substrate/audit/index.js';
 import { MAX_AUDIT_QUERY_LIMIT, queryAuditPage, reconstruct } from '../../substrate/audit/index.js';
@@ -1929,7 +1930,9 @@ function toWireTask(
       options.inputAsStored === true
         ? task.input
         : redactSuspectedSecrets(task.input, { secretFields: true }).value,
-    result: task.result,
+    // Legacy 420: a Worker's report is scrubbed at write (`scrubReport`); one stored before that
+    // reads masked here, for its own Worker too (`shownFreeTextIn`).
+    result: shownFreeTextIn(task.result),
     tokenBudget: task.tokenBudget,
     tokensUsed: task.tokensUsed,
     durationLimitSec: task.durationLimitSec,

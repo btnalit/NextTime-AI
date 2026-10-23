@@ -1,4 +1,6 @@
+import { auditPayloadShown } from '../../lib/format.js';
 import { useT } from '../../lib/i18n.js';
+import { RedactedNote, showsRedaction } from '../kit/redacted-note.js';
 
 /** A non-negative whole number at `record[key]`, else `undefined`. */
 function countAt(record: Readonly<Record<string, unknown>>, key: string): number | undefined {
@@ -18,7 +20,11 @@ function asRecord(value: unknown): Readonly<Record<string, unknown>> | undefined
  * call that asks nobody, such as an observation or `invoke_worker`, only recorded them) and
  * `redactedValues` (N values hidden in this audit copy of the params; the call itself got them as
  * sent). Legacy 168 ③: `revokedHandleCount` (how many Handles an upgrade revoked, on
- * `principal.container_handles_revoked` / `principal.auditor_handles_revoked`) too. Renders nothing
+ * `principal.container_handles_revoked` / `principal.auditor_handles_revoked`) too. Legacy 420:
+ * and what a `[redacted]` the payload below shows stands for, when `redactedValues` does not
+ * already account for it — text the kernel reads out masked (an Operation description's before /
+ * after, a row written before the params copy was redacted) or a value under a secret-named field
+ * the console masks (`auditPayloadShown`, what the page shows below the notes). Renders nothing
  * when the payload has none of them.
  */
 export function AuditPayloadNotes({ payload }: { readonly payload: unknown }) {
@@ -29,7 +35,12 @@ export function AuditPayloadNotes({ payload }: { readonly payload: unknown }) {
   const reviewed = review !== undefined ? countAt(review, 'suspectedSecretValues') : undefined;
   const redacted = countAt(record, 'redactedValues');
   const revokedHandles = countAt(record, 'revokedHandleCount');
-  if (reviewed === undefined && redacted === undefined && revokedHandles === undefined) return null;
+  // Looked for in what the page shows below.
+  const { params, ...rest } = auditPayloadShown(record) as Record<string, unknown>;
+  const masked = showsRedaction(rest) || (redacted === undefined && showsRedaction(params));
+  if (reviewed === undefined && redacted === undefined && revokedHandles === undefined && !masked) {
+    return null;
+  }
   return (
     <ul
       className="m-0 flex list-none flex-col gap-0.5 p-0 text-13 text-text-2"
@@ -59,6 +70,11 @@ export function AuditPayloadNotes({ payload }: { readonly payload: unknown }) {
       {revokedHandles !== undefined ? (
         <li data-testid="audit-revoked-handles">
           {t(`吊销了 ${revokedHandles} 个凭证（Handle）。`, `${revokedHandles} Handle(s) revoked.`)}
+        </li>
+      ) : null}
+      {masked ? (
+        <li>
+          <RedactedNote value={auditPayloadShown(record)} testId="audit-payload-redacted" />
         </li>
       ) : null}
     </ul>

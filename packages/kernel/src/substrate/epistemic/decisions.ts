@@ -1,5 +1,6 @@
 import type { DecisionStatus, EpistemicStatus } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
+import { shownFreeText, shownFreeTextIn } from '../redaction/index.js';
 import { type ExplainResult, explain } from './explain.js';
 
 /**
@@ -73,8 +74,11 @@ function mapDecisionRow(row: DecisionDbRow): DecisionRow {
     status: row.status,
     activityId: row.activity_id,
     sourceId: row.source_id,
-    summary: row.summary,
-    rationale: row.rationale,
+    // Legacy 420: a Decision's summary and rationale hold free text kept as written (an approve /
+    // reject reason, a conflict resolution's reason, a finding's or an outcome's note) — every
+    // reader gets it as `shownFreeText` shows it; the row stays the record.
+    summary: shownFreeText(row.summary),
+    rationale: shownFreeTextIn(row.rationale) as Record<string, unknown> | null,
     decidedBy: row.decided_by,
     createdAt: row.created_at,
     decidedAt: row.decided_at,
@@ -160,7 +164,8 @@ function mapFactRefRow(row: FactDbRow): FactRef {
     recordedAt: row.recorded_at,
     supersededAt: row.superseded_at,
     invalidatedAt: row.invalidated_at,
-    invalidationReason: row.invalidation_reason,
+    // Legacy 420: free text, as `shownFreeText` shows it.
+    invalidationReason: shownFreeText(row.invalidation_reason),
     supersedesId: row.supersedes_id,
     epistemicStatus: row.epistemic_status,
     confidence: row.confidence,

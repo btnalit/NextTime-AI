@@ -296,6 +296,40 @@ describe.runIf(DATABASE_URL !== undefined)(
       ).rejects.toMatchObject({ name: 'IllegalTransition' });
     });
 
+    it('legacy 420: invalidate_fact stores a reason with each secret-looking value replaced', async () => {
+      const sourceObjectId = await makeObject('test.fact-handlers-source');
+      const targetObjectId = await makeObject('test.fact-handlers-target');
+      const caller = handleCaller(workspaceId, memberId, ['assert_fact', 'invalidate_fact']);
+      const fact = (await dispatchCapability({ pool }, caller, 'assert_fact', {
+        sourceObjectId,
+        targetObjectId,
+        linkType: 'has_note',
+        properties: { note: 'v1' },
+      })) as { id: string };
+
+      // Synthetic, Handle-shaped: never a real credential.
+      const invalidated = (await dispatchCapability({ pool }, caller, 'invalidate_fact', {
+        factId: fact.id,
+        reason: 'moved, the new login is PGPASSWORD=abcdefghijklmnopqrstuvwxyz0123',
+      })) as { invalidationReason: string | null };
+      expect(invalidated.invalidationReason).toBe('moved, the new login is PGPASSWORD=[redacted]');
+
+      const stored = await withWorkspace(
+        pool,
+        { workspaceId, principalId: memberId },
+        async (client) =>
+          (
+            await client.query<{ invalidation_reason: string | null }>(
+              'select invalidation_reason from links where workspace_id = $1 and id = $2',
+              [workspaceId, fact.id],
+            )
+          ).rows[0]?.invalidation_reason,
+      );
+      expect(stored).toBe('moved, the new login is PGPASSWORD=[redacted]');
+      const [audit] = await auditRow('invalidate_fact', fact.id);
+      expect(JSON.stringify(audit?.payload)).not.toContain('abcdefghijklmnopqrstuvwxyz0123');
+    });
+
     it('supersede_fact from the console writes a replacement asserted by the person, audited', async () => {
       const sourceObjectId = await makeObject('test.fact-handlers-source');
       const targetObjectId = await makeObject('test.fact-handlers-target');

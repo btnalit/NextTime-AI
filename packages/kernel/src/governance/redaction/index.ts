@@ -6,3 +6,6 @@ export * from './secret-stream.js';
 export * from './secret-values.js';
 export * from './credential-review.js';
 export * from './quoted-name.js';
+// How free text the kernel keeps as written is shown on read (legacy 420) — substrate, like the
+// secret-value primitives it applies.
+export * from '../../substrate/redaction/shown-text.js';
