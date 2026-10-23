@@ -577,19 +577,53 @@ docker compose logs --since 1m gatekeeper-ragflow | grep -ci 'NODE_TLS_REJECT_UN
 ### 升级后收紧 `document.parse`（S11 P1-F）
 
 打包门和 RAGFlow 预设的清单里，`document.parse` 从 `low` / 可自动批准改成 `medium` / 不可自动批准
-（描述里也写明重新解析会删掉原有分块）。升级到带这个改动的版本之后：
+（新描述里也写明重新解析会删掉原有分块）。升级到带这个改动的版本之后：
 
 1. 已启用或已禁用的 `ragflow` 门（打包门或预设实例）重新 announce 时，新清单不会直接生效，而是挂成
    「新清单待采用」（R-18）。在此之前 `document.parse` 照旧按旧分类执行：分类不进定义摘要，所以对它的
    调用不会因为待采用而被拒。「未启用」的实例直接采用新清单。
-2. 平台管理员在「平台 · 集成」打开这个门，核对变化（只有 `document.parse` 的影响级、可否自动批准和
-   描述），确认采用。
+2. 平台管理员在「平台 · 集成」打开这个门，核对变化：只有 `document.parse` 的影响级（low → medium）和
+   可否自动批准（是 → 否），确认采用。描述不是治理字段，它的变化不在这里显示。
 3. 已经启用这个门的每个工作区，所有者到「系统与授权」→ 这个系统的详情 →「已部署 Operation 的治理
    字段」对齐一次。这是收紧，直接生效，不用发布修订。没对齐之前，这个工作区里已部署的
-   `document.parse` 仍是旧分类，仍会自动批准。
+   `document.parse` 仍是旧分类，仍会自动批准。对齐只改治理字段，已部署副本的描述仍是旧文字，
+   没有删除分块的提醒；只有新部署的副本带新描述。
 
-核对：对齐后，在这个工作区对 `document.parse` 发起 `request_action`，返回 `pending_approval`，
-不再自动执行。
+**窗口前（只读）**：列出哪些工作区部署了 `document.parse`，升级后按这张表逐个通知所有者对齐，结果记进
+`docs/private/`。按已部署的 Operation 查，不只看 `workspace_gate_links`，这样没有关联行的工作区也列得出来：
+
+```bash
+docker compose exec -T postgres psql -U nexttime -d nexttime -c "
+begin transaction read only;
+select w.name as workspace, o.workspace_id,
+       o.identity_key ->> 'gatekeeperId' as gatekeeper_id,
+       o.properties ->> 'blast_radius' as blast_radius,
+       o.properties ->> 'auto_approvable' as auto_approvable,
+       l.gate_id
+  from objects o
+  left join workspaces w on w.id = o.workspace_id
+  left join workspace_gate_links l
+    on l.workspace_id = o.workspace_id
+   and l.gatekeeper_object_id::text = o.identity_key ->> 'gatekeeperId'
+ where o.object_type = 'Operation'
+   and o.identity_key ->> 'name' = 'document.parse'
+   and o.properties ->> 'status' = 'published'
+ order by w.name;
+rollback;" </dev/null
+```
+
+`gate_id` 为空的行没有经平台目录接入：它的 Gatekeeper 是旧的注册路径（`register-gatekeeper`）建的，或是
+工作区自己接的门。前一种在对齐时会报 `no_announced_manifest`，所有者要先在「系统与授权」从平台目录接入
+这个 `ragflow` 门（按地址关联到已有的 Gatekeeper，不新建），再对齐；下面的临时办法也要等关联之后才管得到
+它。工作区自己接的门不用平台的清单，这次改动不影响它。
+
+**对齐完成前的临时办法**：平台管理员可以在「平台 · 集成」→ `ragflow` 接入包的「允许调用的操作」里停用
+`document.parse`。经平台目录接入的工作区从下一次调用起都会拒绝它；全部对齐后再恢复。
+
+**核对（只读）**：对齐后，这个工作区「已部署 Operation 的治理字段」或 `list_operations` 里的
+`document.parse` 是 `medium`、不可自动批准。不要用真实参数发 `request_action` 来核对：那是一条真的解析
+请求，被批准就会删掉分块。要验证审批路径，`document_ids` 用一个不存在的 id，看到 `pending_approval` 后
+立即拒绝这条请求。
 
 ### 13.1 验证真实文件上传
 

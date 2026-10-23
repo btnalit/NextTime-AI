@@ -45,6 +45,11 @@ const MIGRATIONS_DIR = path.join(KERNEL_ROOT, 'migrations');
 const REPO_ROOT = path.resolve(KERNEL_ROOT, '..', '..');
 const ONTOLOGY_DIR = path.join(REPO_ROOT, 'ontology');
 const PRESETS_DIR = path.join(REPO_ROOT, 'connectors');
+
+/** `document.parse`'s description in the RAGFlow preset before S11 P1-F tightened it. */
+const EARLIER_PARSE_DESCRIPTION =
+  'Parse one or more already-uploaded documents into retrievable chunks.';
+
 const INTERNAL_TOKEN = 'p1f-presets-internal-token-0123456789abcdef0123456789ab';
 const PASSWORD = 'correct horse battery staple';
 /** Synthetic — `.gitleaks.toml` allows fixtures spelled out from the alphabet. */
@@ -533,7 +538,8 @@ describe.runIf(DATABASE_URL !== undefined)(
         ?.operations.find((operation) => operation.name === 'document.parse');
       expect(shipped).toMatchObject({ blast_radius: 'medium', auto_approvable: false });
 
-      // A deployment decided this instance when the preset still said low / auto-approvable.
+      // A deployment decided this instance when the preset still said low / auto-approvable, with
+      // the description it had then (no word about deleting chunks).
       await callAsAdmin('create_gate_instance', {
         gateId: 'kb-parse',
         preset: 'ragflow',
@@ -546,6 +552,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         if (!parse) throw new Error('the RAGFlow preset has no document.parse');
         parse.blast_radius = 'low';
         parse.auto_approvable = true;
+        parse.description = EARLIER_PARSE_DESCRIPTION;
         await writeFile(file, JSON.stringify(operations, null, 2));
       });
       const [earlier] = (await pull()).filter((item) => item.gateId === 'kb-parse');
@@ -562,7 +569,14 @@ describe.runIf(DATABASE_URL !== undefined)(
       async function deployedParse() {
         const { items } = (await dispatchCapability({ pool }, ownerCaller(), 'list_operations', {
           gatekeeperId,
-        })) as { items: Array<{ name: string; blastRadius: string; autoApprovable: boolean }> };
+        })) as {
+          items: Array<{
+            name: string;
+            blastRadius: string;
+            autoApprovable: boolean;
+            description: string;
+          }>;
+        };
         const parse = items.find((item) => item.name === 'document.parse');
         if (!parse) throw new Error('document.parse is not deployed');
         return parse;
@@ -580,6 +594,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       const held = await callAsAdmin<GateInstanceWire>('get_gate_instance', {
         gateId: 'kb-parse',
       });
+      // Only the classification shows as changed: a description is no governance field, so its
+      // new warning neither shows here nor reaches what is deployed (host-gatekeepers.md §13).
       expect(held.pendingManifest?.changed).toEqual([
         expect.objectContaining({
           name: 'document.parse',
@@ -623,7 +639,11 @@ describe.runIf(DATABASE_URL !== undefined)(
         manifestDigest: preview.manifestDigest,
       });
       const tightened = await deployedParse();
-      expect(tightened).toMatchObject({ blastRadius: 'medium', autoApprovable: false });
+      expect(tightened).toMatchObject({
+        blastRadius: 'medium',
+        autoApprovable: false,
+        description: EARLIER_PARSE_DESCRIPTION,
+      });
 
       // From now on a person decides every parse, even where a rule for this gate opts in.
       expect(

@@ -49,9 +49,11 @@ History: S2.5 left it `auto_approvable: false` (the conservative default `import
 every newly-imported execute Operation, I17); S3.4 made it `low` and `auto_approvable: true`, so
 the workspace's compiled-in low-blast-radius default approved it on its own; S11 P1-F put it back
 behind a person once the re-parse behavior above was checked in RAGFlow's source.
-`document.upload` stays `auto_approvable: false` (`blast_radius: 'medium'` never auto-approves
-regardless of this flag *unless* a workspace policy explicitly enables it for `medium` — I8's own
-double-signal rule).
+`document.upload` stays `blast_radius: 'medium'`, `auto_approvable: false`: a person approves every
+upload too. With `auto_approvable: false` no workspace rule can change that; a workspace rule can
+auto-approve a `medium` Operation only when the Operation itself declares `auto_approvable: true`
+(`packages/kernel/src/governance/policy/engine.ts` checks the Operation's flag first — I8's
+double signal).
 
 The connector preset (`connectors/ragflow/operations.json`, below) carries the same
 classification; `src/manifest.test.ts` holds the two files to it. Upgrading a deployment where
