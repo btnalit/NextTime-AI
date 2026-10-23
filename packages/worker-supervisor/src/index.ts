@@ -89,7 +89,8 @@ export async function main(): Promise<void> {
   const agentHostToken = loadAgentHostToken();
   const docker = createDockerClient({ connection: config.dockerConnection });
   // v0.16.2 (fix/supervisor-images-proxy): a second, read-only client for GET /images
-  // (listImages/inspectImage) — see `config.ts`'s `dockerImagesConnection` doc comment for why
+  // (listImages/inspectImage) and the runtime contract check before every spawn
+  // (runtime-contract.ts) — see `config.ts`'s `dockerImagesConnection` doc comment for why
   // this is a genuinely different Docker Engine API target, not just a second handle onto the
   // same one.
   const imagesDocker = createDockerClient({ connection: config.dockerImagesConnection });
@@ -113,6 +114,7 @@ export async function main(): Promise<void> {
   const taskService = createTaskService({
     config,
     docker,
+    imagesDocker,
     egressMap,
     handleBindings,
     onTaskFinished: (event) => metrics.recordTaskFinished(event),

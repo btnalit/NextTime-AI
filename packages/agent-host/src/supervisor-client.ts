@@ -79,9 +79,10 @@ export interface SpawnInput {
   readonly llmUrl?: string;
   /** S2.6: the published entry WorkerDefinition's `systemPrompt` (from the `startTurn` command's
    *  own field of the same name, `@nexttime/shared`'s `agent-host-protocol.ts`) — worker-supervisor
-   *  writes this to `/workspace/.nexttime/system-prompt.md` before spawn, overwriting only when
-   *  the content differs; `undefined` leaves the existing file (or `entrypoint.sh`'s own write-if-
-   *  missing static fallback) untouched. */
+   *  writes this into the principal's platform directory outside the workspace (read-only
+   *  `/opt/nexttime/platform/system-prompt.md` in the container) before spawn, overwriting only
+   *  when the content differs; `undefined` leaves the existing file untouched (none yet = the
+   *  runtime image's default prompt). */
   readonly systemPrompt?: string;
   /** S2.6: `<provider>/<id>`, forwarded as the entry container's CMD (`['--model', model]`) —
    *  `undefined` sets no CMD (pi's own default model selection). */
@@ -102,8 +103,8 @@ export interface SpawnInput {
    *  activeRuntimeImage`), forwarded verbatim from the `startTurn` command's own `image` field —
    *  worker-supervisor validates it against the same allowlist `/task/spawn` already enforces
    *  (403 `image_not_allowed`, surfaced here as `SupervisorError('http_error', ..., {status:403})`
-   *  since this client has no dedicated error kind for it, unlike the kernel's own
-   *  `TaskSupervisorClient`). `undefined` leaves worker-supervisor's own `WORKER_IMAGE` env
+   *  with the code in its message, since this client has no dedicated error kind for it, unlike
+   *  the kernel's own `TaskSupervisorClient`; 409 `runtime_image_incompatible` the same way). `undefined` leaves worker-supervisor's own `WORKER_IMAGE` env
    *  default in effect, unchanged from before this field existed. */
   readonly image?: string;
 }
@@ -134,6 +135,17 @@ export interface ResidentStatus {
   readonly startedAt: string | undefined;
   readonly restarts: number;
   readonly lastTouchedAt: string | undefined;
+}
+
+function errorCodeFromBody(body: unknown): string | undefined {
+  if (body && typeof body === 'object' && 'error' in body) {
+    const error = (body as { error?: unknown }).error;
+    if (error && typeof error === 'object' && 'code' in error) {
+      const code = (error as { code?: unknown }).code;
+      return typeof code === 'string' ? code : undefined;
+    }
+  }
+  return undefined;
 }
 
 async function requestJson(
@@ -227,9 +239,14 @@ export class SupervisorClient implements SupervisorClientPort {
       },
     );
     if (status !== 200) {
-      throw new SupervisorError('http_error', `POST /resident/spawn returned ${status}`, {
-        status,
-      });
+      // The refusal's own code (409 `runtime_image_incompatible`, 403 `image_not_allowed`) is what
+      // the Turn rejection and this service's log carry, so an operator can find it.
+      const code = errorCodeFromBody(body);
+      throw new SupervisorError(
+        'http_error',
+        `POST /resident/spawn returned ${status}${code ? ` ${code}` : ''}`,
+        { status },
+      );
     }
     return body as SpawnResult;
   }

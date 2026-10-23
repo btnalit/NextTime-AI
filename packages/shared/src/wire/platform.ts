@@ -1059,6 +1059,14 @@ export const RuntimeImageWireSchema = z
      *  `tags[0] ?? id` — an untagged image's `id` is a digest, which can never be allowlisted, and
      *  `tags[0]` alone does not account for Docker's own implicit `:latest` on the allowlist side. */
     activatableRef: z.string().nullable(),
+    /** STATUS leftover 422 (whitelist start): whether this image's `ai.nexttime.runtime-contract`
+     *  label is the one worker-supervisor requires (`GET /images` `runtimeContract`). `false`: an
+     *  image built before the runtime's current mount layout — worker-supervisor refuses to start
+     *  any container from it (409 `runtime_image_incompatible`), so `set_active_runtime_image` /
+     *  `rollback_runtime_image` refuse it too and the console marks it and disables "设为活动".
+     *  `null` when worker-supervisor did not say what it requires (an older one): unknown, never
+     *  guessed. */
+    runtimeCompatible: z.boolean().nullable(),
   })
   .strict();
 export type RuntimeImageWire = z.infer<typeof RuntimeImageWireSchema>;

@@ -6,8 +6,9 @@
  * Env is the security-critical part: **exactly** `KERNEL_URL`, `KERNEL_LLM_URL`,
  * `CAPABILITY_HANDLE` (the fixed marker `SOURCE_BOUND_CAPABILITY_HANDLE`, never the Handle — the
  * Handle is bound to the container's address, @nexttime/shared handle-binding.ts),
- * `NEXTTIME_MODE=entry`, `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`,
- * `PI_CODING_AGENT_DIR`, `HOME=/workspace` — plus two additions beyond the task brief's list:
+ * `NEXTTIME_MODE=entry`, `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `HOME=/workspace` — plus two
+ * additions beyond the task brief's list. Not `PI_CODING_AGENT_DIR`: entrypoint.sh owns pi's
+ * config directory (rebuilt in `/tmp` at every start, STATUS leftover 422) and sets it itself.
  *
  * - `WORKSPACE_ID`: `@nexttime/platform-extension`'s `index.ts` (`readRequiredEnv('WORKSPACE_ID')`)
  *   throws on activation without it — verified by reading that file; it is not something this
@@ -31,9 +32,10 @@
  * S2.6 addition: `input.model`, when set, becomes container CMD (`['--model', model]`) — same
  * `ContainerSpec.cmd` field and the same `entrypoint.sh` "appends CMD after its fixed pi flags"
  * mechanism `task-spawn-spec.ts`'s one-shot Task mode already uses (S2.8). The entry container's
- * `systemPrompt` is **not** part of this spec — `resident-service.ts` writes it straight to
- * `/workspace/.nexttime/system-prompt.md` (a file, not an env var or CMD arg) before calling
- * `buildSpawnSpec`, since `entrypoint.sh` already reads that exact path.
+ * `systemPrompt` is **not** part of this spec — `resident-service.ts` writes it straight to the
+ * principal's platform directory (a file, not an env var or CMD arg) before calling
+ * `buildSpawnSpec`; this spec mounts that directory read-only at `PLATFORM_MOUNT_TARGET`, where
+ * `entrypoint.sh` reads it.
  *
  * S7-E addition (P-C §6.5 决定 E1/E2): `input.image` is now the container's actual `image`
  * (previously always `config.workerImage`) and is stamped as `IMAGE_LABEL` — `resident-service.ts`'s
@@ -47,7 +49,14 @@ import { SOURCE_BOUND_CAPABILITY_HANDLE } from '@nexttime/shared';
 import type { SupervisorConfig } from './config.js';
 import type { TaskSkillInline } from './config.js';
 import type { ContainerSpec } from './docker-client.js';
-import { hostModelsJsonPath, workspacePaths } from './host-paths.js';
+import {
+  MODELS_JSON_MOUNT_TARGET,
+  PLATFORM_MOUNT_TARGET,
+  WORKSPACE_MOUNT_TARGET,
+  hostModelsJsonPath,
+  workspacePaths,
+} from './host-paths.js';
+import { RUNTIME_CONTRACT_VERSION } from './runtime-contract.js';
 
 export const ENTRY_ROLE_LABEL = 'nexttime.role';
 export const ENTRY_ROLE_VALUE = 'entry';
@@ -89,6 +98,14 @@ export const SKILLS_HASH_LABEL = 'nexttime.skills-hash';
  *  drive. Always non-empty (every spawn resolves a concrete image, `config.workerImage` at worst),
  *  unlike those two labels' own "empty = no Skills / undecodable Handle" convention. */
 export const IMAGE_LABEL = 'nexttime.image';
+/** STATUS leftover 422: the mount layout (`RUNTIME_CONTRACT_VERSION`) the supervisor that created
+ *  this container spoke. Unlike the labels above, a container *without* it does force a recreate
+ *  (`resident-service.ts`): every container an older supervisor created lacks it, and those are
+ *  exactly the ones still on the old layout — their pi discovers resources from `/workspace` and
+ *  reads a system prompt this supervisor no longer writes. The image's own
+ *  `ai.nexttime.runtime-contract` label, which Docker copies onto the container, can't stand in for
+ *  it: an older supervisor may have started the new image with the old mounts. */
+export const CONTAINER_RUNTIME_CONTRACT_LABEL = 'nexttime.runtime-contract';
 
 /**
  * A deterministic digest of `skillsInline`'s content — order-independent across both the skill
@@ -167,13 +184,13 @@ export function buildSpawnSpec(input: BuildSpawnSpecInput): ContainerSpec {
     `http_proxy=${config.httpProxyForWorkers}`,
     `https_proxy=${config.httpProxyForWorkers}`,
     `no_proxy=${config.noProxyForWorkers}`,
-    `PI_CODING_AGENT_DIR=${paths.piAgentDirInContainer}`,
     'HOME=/workspace',
   ];
 
   const binds: string[] = [
-    `${paths.hostWorkspaceDir}:/workspace`,
-    `${hostModelsJsonPath(config)}:${paths.modelsJsonTargetInContainer}:ro`,
+    `${paths.hostWorkspaceDir}:${WORKSPACE_MOUNT_TARGET}`,
+    `${paths.hostPlatformDir}:${PLATFORM_MOUNT_TARGET}:ro`,
+    `${hostModelsJsonPath(config)}:${MODELS_JSON_MOUNT_TARGET}:ro`,
   ];
 
   return {
@@ -191,6 +208,7 @@ export function buildSpawnSpec(input: BuildSpawnSpecInput): ContainerSpec {
       [EGRESS_DENY_LABEL]: (input.egressDeny ?? []).join(','),
       [SKILLS_HASH_LABEL]: input.skillsHash ?? '',
       [IMAGE_LABEL]: input.image,
+      [CONTAINER_RUNTIME_CONTRACT_LABEL]: RUNTIME_CONTRACT_VERSION,
     },
     networkName: input.networkName,
     runtime: config.workerRuntime,

@@ -118,6 +118,24 @@ describe('SupervisorClient.spawn', () => {
     ).rejects.toThrow(SupervisorError);
   });
 
+  it('keeps the supervisor’s error code in the message (409 runtime_image_incompatible)', async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse(409, { error: { code: 'runtime_image_incompatible', message: 'old image' } }),
+    );
+    const client = new SupervisorClient({
+      supervisorUrl: 'http://worker-supervisor:8081',
+      fetchImpl,
+    });
+
+    await expect(
+      client.spawn({ workspaceId: 'ws-1', principalId: 'p-1', handle: 't' }),
+    ).rejects.toMatchObject({
+      kind: 'http_error',
+      status: 409,
+      message: 'POST /resident/spawn returned 409 runtime_image_incompatible',
+    });
+  });
+
   it('throws SupervisorError(network) when fetch itself rejects', async () => {
     const fetchImpl = vi.fn(async () => {
       throw new Error('ECONNREFUSED');

@@ -292,8 +292,8 @@ export const IdClaimSchema = z.string().uuid();
  *  (I9-adjacent — see `docs/development-tasks.md` S2.8's own read-first note "the kernel has NO
  *  writable data mount, only `config:ro`"), so a published Skill's rendered file content travels
  *  in the spawn request body itself; this service writes it to disk (`task-service.ts`'s `spawn()`)
- *  under the Task's own workspace directory before the container starts — no bind mount needed,
- *  the whole Task workspace is already bind-mounted at `/workspace`.
+ *  under the Task's own platform directory before the container starts — the directory the
+ *  container mounts read-only (`host-paths.ts`), not a caller-chosen host path.
  *
  * This is now the *only* way a spawn request can put a Skill into a Worker container — the
  * earlier host-path variant (`skills[].hostPath`, a caller-supplied absolute path this process
@@ -308,8 +308,9 @@ export const IdClaimSchema = z.string().uuid();
  * itself is no longer reachable without the shared secret either.
  *
  * `name` must be a safe single path segment — `isSafeSkillInlineFileName` below applies the
- * matching rule to `fileName`. Each entry in `files` becomes `<agentDir>/skills/<name>/<fileName>`
- * (`host-paths.ts`'s `TaskPaths.skillsDirInContainer`); `fileName` must be a safe relative path —
+ * matching rule to `fileName`. Each entry in `files` becomes `skills/<name>/<fileName>` in the
+ * container's read-only platform directory (`host-paths.ts`'s `localSkillsDir`, which
+ * entrypoint.sh passes to pi's `--skill`); `fileName` must be a safe relative path —
  * no leading `/`, no `.`/`..` path segments, so it can never escape the skill's own directory.
  * Every entry must include a `"SKILL.md"` file (pi's own required entry point, `docs/skills.md`
  * "Skill Structure") — `application/worker/skills.ts`'s `renderSkillMarkdownFile` (kernel) is the
@@ -454,7 +455,7 @@ export const TaskSpawnRequestSchema = z
     model: z.string().min(1).optional(),
     /** P-A2 (docs/platform-admin-design.md §6.6 "instanceInstructions ... 追加到每个入口与 Worker
      *  的 system prompt"): the Task-mode counterpart of `SpawnRequestSchema.systemPrompt` above —
-     *  written to `/workspace/.nexttime/system-prompt.md` in this Task's *own* workspace
+     *  written to `system-prompt.md` in this Task's *own* platform directory
      *  (`host-paths.ts` `taskSystemPromptPath`) before the container starts, so
      *  `deploy/worker-runtime/entrypoint.sh` picks it up instead of its own static default.
      *  Omitted leaves that default in place, exactly as before this field existed. */

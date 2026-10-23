@@ -21437,6 +21437,12 @@
                   "null"
                 ]
               },
+              "runtimeCompatible": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
               "tags": {
                 "items": {
                   "type": "string"
@@ -21453,7 +21459,8 @@
               "builtFrom",
               "labels",
               "allowed",
-              "activatableRef"
+              "activatableRef",
+              "runtimeCompatible"
             ],
             "type": "object"
           },
@@ -34707,6 +34714,12 @@
                     "null"
                   ]
                 },
+                "runtimeCompatible": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                },
                 "tags": {
                   "items": {
                     "type": "string"
@@ -34723,7 +34736,8 @@
                 "builtFrom",
                 "labels",
                 "allowed",
-                "activatableRef"
+                "activatableRef",
+                "runtimeCompatible"
               ],
               "type": "object"
             },
@@ -34786,6 +34800,12 @@
                   "null"
                 ]
               },
+              "runtimeCompatible": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
               "tags": {
                 "items": {
                   "type": "string"
@@ -34802,7 +34822,8 @@
               "builtFrom",
               "labels",
               "allowed",
-              "activatableRef"
+              "activatableRef",
+              "runtimeCompatible"
             ],
             "type": "object"
           },

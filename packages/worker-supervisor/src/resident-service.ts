@@ -39,14 +39,20 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { posix as posixPath } from 'node:path';
 import type { SpawnRequest, SupervisorConfig, TaskSkillInline } from './config.js';
-import type { DockerClient, RuntimeImageInfo } from './docker-client.js';
+import type { ContainerState, DockerClient, RuntimeImageInfo } from './docker-client.js';
 import { IMAGE_PI_VERSION_LABEL } from './docker-client.js';
 import { entrySourceId } from './egress-map.js';
 import type { EgressMapStore, SourceMapFile } from './egress-map.js';
 import { type HandleBindingStore, bindExclusive, containerAtAddress } from './handle-bindings.js';
 import { decodeHandleJtiUnsafe } from './handle-jti.js';
-import { localSystemPromptPath, workspacePaths } from './host-paths.js';
+import { localSkillsDir, localSystemPromptPath, workspacePaths } from './host-paths.js';
 import {
+  RUNTIME_CONTRACT_VERSION,
+  RuntimeImageIncompatibleError,
+  assertRuntimeContract,
+} from './runtime-contract.js';
+import {
+  CONTAINER_RUNTIME_CONTRACT_LABEL,
   EGRESS_DENY_LABEL,
   ENTRY_ROLE_LABEL,
   ENTRY_ROLE_VALUE,
@@ -246,11 +252,16 @@ export interface ResidentService {
  *  checked an image appeared in `images` (built), not that it was allowlisted — a non-allowlisted
  *  active image 403s every future spawn platform-wide, discovered only once a Worker/entry
  *  container tries to start. Exposing the same list here lets the kernel reject that target up
- *  front, one security boundary (env-configured allowlist), never re-implemented kernel-side. */
+ *  front, one security boundary (env-configured allowlist), never re-implemented kernel-side.
+ *  `runtimeContract` (STATUS leftover 422): the `ai.nexttime.runtime-contract` label value every
+ *  image this supervisor starts must carry (`runtime-contract.ts`) — reported for the same reason,
+ *  so the kernel and the console can mark an incompatible image and refuse to make it active
+ *  instead of every spawn 409ing `runtime_image_incompatible` afterwards. */
 export interface RuntimeImageInventory {
   readonly defaultImage: string;
   readonly images: RuntimeImageInfo[];
   readonly allowedImages: readonly string[];
+  readonly runtimeContract: string;
 }
 
 export function createResidentService(deps: ResidentServiceDeps): ResidentService {
@@ -383,15 +394,16 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
     }
   }
 
-  // S2.6: writes/overwrites `/workspace/.nexttime/system-prompt.md` (host-paths.ts
+  // S2.6: writes/overwrites `system-prompt.md` in the principal's platform directory (host-paths.ts
   // `localSystemPromptPath`) before every spawn — both the create and the reuse-a-running-
   // container paths, so a workspace's *next* restart always picks up the current published entry
   // WorkerDefinition's prompt even when this particular call only reuses an already-running
-  // container (writing to the file has no effect on a container pi already started). Best-effort,
+  // container (a running pi reads the file again only when it reloads its resources, at a new
+  // conversation). Best-effort,
   // same convention as `registerEgress`/`unregisterEgress` above and this package's own S1.5a
   // precedent (egress registration must never fail a spawn): a broken/unwritable workspace
   // directory must not block the entry container from coming up — `entrypoint.sh`'s own
-  // write-if-missing static fallback still applies if this never succeeds. Only writes when
+  // static default prompt (image content) still applies if this never succeeds. Only writes when
   // `systemPrompt` is given and differs from what's already on disk, so a spawn call carrying no
   // `systemPrompt` (or with the caller's own file byte-for-byte in place) is a cheap read + no-op,
   // not a needless write.
@@ -420,16 +432,32 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
     }
   }
 
+  function removeSystemPrompt(principalId: string): void {
+    try {
+      rmSync(localSystemPromptPath(config, principalId), { force: true });
+    } catch (err) {
+      console.error(
+        JSON.stringify({
+          level: 'warn',
+          msg: 'system-prompt.md removal failed (spawn still succeeds; the container starts on the previous prompt)',
+          principalId,
+          error: String(err),
+        }),
+      );
+    }
+  }
+
   /**
-   * S3.13: writes every `skillsInline[]` entry's files under `<agentDir>/skills/<name>/` — the
-   * same layout `task-service.ts`'s own `spawn()` already writes for Task mode. Only ever called
+   * S3.13: writes every `skillsInline[]` entry's files under `skills/<name>/` in the principal's
+   * platform directory (mounted read-only, host-paths.ts) — the same layout `task-service.ts`'s
+   * own `spawn()` already writes for Task mode. Only ever called
    * from the (re)create branch below, never on a plain reuse: a Skill-set change is exactly what
    * forces the recreate in the first place (`SKILLS_HASH_LABEL`'s own comparison, see `spawn()`),
    * so a reused container's already-mounted `skills/` directory is, by construction, still the
    * correct set — writing again there would be a needless no-op at best.
    *
-   * Clears the whole `skills/` subdirectory first — unlike Task mode's always-fresh workspace, a
-   * resident entry container's workspace directory persists across recreations, so a Skill
+   * Clears the whole `skills/` subdirectory first — unlike Task mode's always-fresh directories,
+   * a resident principal's platform directory persists across recreations, so a Skill
    * removed from the caller's AgentProfile must not linger on disk merely because its own
    * directory was never deleted (S3.13's own "never widen" invariant applies here too: a
    * container must never end up mounting a Skill the caller's current AgentProfile no longer
@@ -437,8 +465,7 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
    * unwritable workspace directory must never block the entry container from coming up.
    */
   function writeSkillsInline(principalId: string, skillsInline: readonly TaskSkillInline[]): void {
-    const paths = workspacePaths(config, principalId);
-    const skillsDir = posixPath.join(paths.localPiAgentDir, 'skills');
+    const skillsDir = localSkillsDir(workspacePaths(config, principalId).localPlatformDir);
     try {
       rmSync(skillsDir, { recursive: true, force: true });
       for (const skill of skillsInline) {
@@ -484,12 +511,10 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
       // The supervisor's own container runs as uid:gid 10001 (Dockerfile `USER nexttime`,
       // matching every other @nexttime/* image) — a directory this process creates is therefore
       // already owned by that uid, satisfying I15 ("only that user's dir") without a separate
-      // chown step. localPiAgentDir must be pre-created here too (not left for Docker or
-      // entrypoint.sh) — see its doc comment in host-paths.ts for why: Docker auto-creating it
-      // as root (as the parent of the models.json bind-mount target) would block the non-root
-      // entry container from creating its sibling `.pi/sessions`.
+      // chown step. The platform directory is a bind source too, so it is created here for the
+      // same reason: Docker would otherwise create a missing one as root.
       mkdirSync(paths.localWorkspaceDir, { recursive: true });
-      mkdirSync(paths.localPiAgentDir, { recursive: true });
+      mkdirSync(paths.localPlatformDir, { recursive: true });
 
       // S2.6: before deciding reuse-vs-(re)create, so the file is current for whichever the
       // container actually loads at its *next* start (see this function's own doc comment above).
@@ -560,13 +585,23 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
           splitEgressDenyLabel(existing?.labels[EGRESS_DENY_LABEL]),
         );
 
-      const rotated = handleRotated || skillsChanged || egressDenyDrifted || imageChanged;
+      // STATUS leftover 422: a container an older supervisor created (no
+      // CONTAINER_RUNTIME_CONTRACT_LABEL, or another value) is still on the old mount layout, so
+      // reusing it would keep its pi discovering resources from `/workspace` until it idles out —
+      // and an upgrade usually keeps the image *name*, so `imageChanged` alone never catches it.
+      // Deliberately the one label here where "unknown" does rotate (see the label's doc comment).
+      const layoutChanged = Boolean(
+        existing && existing.labels[CONTAINER_RUNTIME_CONTRACT_LABEL] !== RUNTIME_CONTRACT_VERSION,
+      );
 
-      if (existing?.running && !rotated) {
+      const rotated =
+        handleRotated || skillsChanged || egressDenyDrifted || imageChanged || layoutChanged;
+
+      const reuse = async (running: ContainerState): Promise<SpawnOutcome> => {
         registry.set(principalId, {
           workspaceId,
-          containerId: existing.id,
-          ip: existing.ip,
+          containerId: running.id,
+          ip: running.ip,
           lastTouchedAt: now(),
           // Records what *this* reuse actually applied — the next call's own egressDenyDrifted
           // check above compares against this, not against SOURCE_MAP_FILE (see
@@ -576,17 +611,44 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
         // Refreshed on every reuse (not just a fresh spawn) so a WorkerDefinition's egress list
         // published *after* this container started still takes effect immediately, without
         // waiting for the container itself to restart — see registerEgress's own doc comment.
-        registerEgress(workspaceId, principalId, existing.ip, egressDeny);
+        registerEgress(workspaceId, principalId, running.ip, egressDeny);
         // The incoming Handle may be newer than the one bound when this container started (an
         // older container without the jti label is reused across a reissue).
-        await bindHandle(workspaceId, principalId, existing.id, existing.ip, handle);
+        await bindHandle(workspaceId, principalId, running.id, running.ip, handle);
         return {
-          containerId: existing.id,
-          ip: existing.ip,
-          status: existing.status,
+          containerId: running.id,
+          ip: running.ip,
+          status: running.status,
           created: false,
-          restarts: restartsFromLabels(existing.labels),
+          restarts: restartsFromLabels(running.labels),
         };
+      };
+
+      if (existing?.running && !rotated) return reuse(existing);
+
+      // Before anything is torn down: an image that doesn't speak this supervisor's mount layout
+      // must leave the principal's current container (if any) exactly as it was.
+      try {
+        await assertRuntimeContract(imagesDocker, image, { mode: 'resident', principalId });
+      } catch (err) {
+        // Only the layout asked for the recreate, and the image it would need can't run here:
+        // the old-layout container still works, so it keeps serving rather than every turn
+        // becoming a 409 until someone makes a current image active.
+        const layoutOnly =
+          layoutChanged && !(handleRotated || skillsChanged || egressDenyDrifted || imageChanged);
+        if (err instanceof RuntimeImageIncompatibleError && existing?.running && layoutOnly) {
+          console.error(
+            JSON.stringify({
+              level: 'warn',
+              msg: 'entry container is on an older mount layout but the requested image cannot replace it; reusing it — it still reads its system prompt from /workspace/.nexttime/system-prompt.md, so newly published prompts and Skills do not reach it until a current image is active',
+              principalId,
+              image,
+              containerRuntimeContract: existing.labels[CONTAINER_RUNTIME_CONTRACT_LABEL] ?? null,
+            }),
+          );
+          return reuse(existing);
+        }
+        throw err;
       }
 
       const restarts = existing ? restartsFromLabels(existing.labels) + 1 : 0;
@@ -618,6 +680,10 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
       // S3.13: written only in this (re)create branch — see writeSkillsInline's own doc comment
       // for why a plain reuse above never needs it.
       writeSkillsInline(principalId, skillsInline ?? []);
+      // No published entry definition (any more): the new container starts on the image's default
+      // prompt, not on one left from before (Task mode does the same). Only here, never before a
+      // reuse — the running pi was started on that path.
+      if (systemPrompt === undefined) removeSystemPrompt(principalId);
 
       const networkName = await resolveNetworkName();
       const spec = buildSpawnSpec({
@@ -707,18 +773,22 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
       // failed directory removal here (permissions, an already-gone path) must never surface as an
       // error the caller retries — the container is what actually mattered for "reclaim access",
       // this is just freeing disk sooner than the operator would notice on their own.
-      const dir = workspacePaths(config, principalId).localWorkspaceDir;
-      try {
-        rmSync(dir, { recursive: true, force: true });
-      } catch (err) {
-        console.error(
-          JSON.stringify({
-            level: 'warn',
-            msg: 'reclaim: workspace directory removal failed',
-            principalId,
-            error: String(err),
-          }),
-        );
+      // Each directory on its own: one that can't be removed must not keep the other.
+      const { localWorkspaceDir, localPlatformDir } = workspacePaths(config, principalId);
+      for (const dir of [localWorkspaceDir, localPlatformDir]) {
+        try {
+          rmSync(dir, { recursive: true, force: true });
+        } catch (err) {
+          console.error(
+            JSON.stringify({
+              level: 'warn',
+              msg: 'reclaim: workspace directory removal failed',
+              principalId,
+              dir,
+              error: String(err),
+            }),
+          );
+        }
       }
     },
 
@@ -892,7 +962,12 @@ export function createResidentService(deps: ResidentServiceDeps): ResidentServic
       // v0.16.2: `imagesDocker`, not `docker` — see `ResidentServiceDeps.imagesDocker`'s own doc
       // comment for why image reads go through a separate, dedicated read-only proxy connection.
       const images = await imagesDocker.listImages(IMAGE_PI_VERSION_LABEL);
-      return { defaultImage: config.workerImage, images, allowedImages: config.taskImageAllowlist };
+      return {
+        defaultImage: config.workerImage,
+        images,
+        allowedImages: config.taskImageAllowlist,
+        runtimeContract: RUNTIME_CONTRACT_VERSION,
+      };
     },
   };
 }

@@ -102,10 +102,11 @@ describe('buildTaskSpawnSpec', () => {
     }
   });
 
-  it('mounts exactly the host Task workspace dir and a read-only models.json', () => {
+  it('mounts the host Task workspace dir, and its platform directory and models.json read-only', () => {
     expect(spec.binds).toEqual([
       '/host/data/workspaces/tasks/task-1:/workspace',
-      '/host/data/models/models.json:/workspace/.pi/agent/models.json:ro',
+      '/host/data/workspaces/.platform/tasks/task-1:/opt/nexttime/platform:ro',
+      '/host/data/models/models.json:/opt/nexttime/models.json:ro',
     ]);
   });
 
@@ -120,7 +121,8 @@ describe('buildTaskSpawnSpec', () => {
     });
     expect(withFakeModelsPath.binds).toEqual([
       '/host/data/workspaces/tasks/task-1:/workspace',
-      '/host/data/accept/models.json:/workspace/.pi/agent/models.json:ro',
+      '/host/data/workspaces/.platform/tasks/task-1:/opt/nexttime/platform:ro',
+      '/host/data/accept/models.json:/opt/nexttime/models.json:ro',
     ]);
   });
 

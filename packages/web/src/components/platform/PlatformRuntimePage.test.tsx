@@ -58,6 +58,7 @@ function image(overrides: Partial<RuntimeInventoryWire['images'][number]> = {}) 
     labels: {},
     allowed: true,
     activatableRef: tags[0] ?? null,
+    runtimeCompatible: true,
     ...overrides,
   };
 }
@@ -388,6 +389,110 @@ describe('PlatformRuntimePage', () => {
     expect(http.calls.some((c) => c.name === 'set_active_runtime_image')).toBe(false);
   });
 
+  it('an image built before this release’s mount layout is marked, and 设为活动 says why it is disabled (leftover 422)', async () => {
+    const old = image({
+      id: 'sha256:v0000000000000000000000000000000000000000000000000000000000000',
+      tags: ['nexttime-ai-worker-runtime:pi-0.99.2'],
+      runtimeCompatible: false,
+    });
+    const http = scriptedHttp({
+      runtime_inventory: () => inventory({ images: [image(), old] }),
+      pi_drift: () => piDrift(),
+      list_workspaces: () => ({ items: [] }),
+    });
+    renderPage(http);
+
+    const row = await screen.findByTestId(`runtime-image-row-${old.id}`);
+    expect(within(row).getByTestId('runtime-image-incompatible-chip').textContent).toBe('不兼容');
+    const button = within(row).getByTestId('runtime-image-activate') as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(within(row).getByTestId('runtime-image-incompatible-hint').textContent).toBe(
+      '本版之前构建的镜像，和现在的挂载布局对不上，用它起不了容器',
+    );
+    fireEvent.click(button);
+    expect(http.calls.some((c) => c.name === 'set_active_runtime_image')).toBe(false);
+
+    // The current image's row is unmarked, and nothing warns about the active image.
+    const current = screen.getByTestId(`runtime-image-row-${image().id}`);
+    expect(within(current).queryByTestId('runtime-image-incompatible-chip')).toBeNull();
+    expect(screen.queryByTestId('runtime-active-image-incompatible')).toBeNull();
+  });
+
+  it('an older worker-supervisor that cannot say (runtimeCompatible null) marks nothing', async () => {
+    const unknown = image({
+      id: 'sha256:v2000000000000000000000000000000000000000000000000000000000000',
+      tags: ['nexttime-ai-worker-runtime:v2'],
+      runtimeCompatible: null,
+    });
+    const http = scriptedHttp({
+      runtime_inventory: () => inventory({ images: [image({ runtimeCompatible: null }), unknown] }),
+      pi_drift: () => piDrift(),
+      list_workspaces: () => ({ items: [] }),
+    });
+    renderPage(http);
+
+    const row = await screen.findByTestId(`runtime-image-row-${unknown.id}`);
+    expect(within(row).queryByTestId('runtime-image-incompatible-chip')).toBeNull();
+    expect((within(row).getByTestId('runtime-image-activate') as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+    expect(screen.queryByTestId('runtime-active-image-incompatible')).toBeNull();
+  });
+
+  it('an incompatible active image: names the newest image to switch to, and 现在重建 waits for it', async () => {
+    const old = image({
+      id: 'sha256:v0000000000000000000000000000000000000000000000000000000000000',
+      tags: ['nexttime-ai-worker-runtime:pi-0.99.2'],
+      runtimeCompatible: false,
+    });
+    const older = image({
+      id: 'sha256:v2000000000000000000000000000000000000000000000000000000000000',
+      tags: ['nexttime-ai-worker-runtime:v2'],
+      createdAt: '2026-10-22T00:00:00.000Z',
+    });
+    const newest = image({
+      id: 'sha256:v3000000000000000000000000000000000000000000000000000000000000',
+      tags: ['nexttime-ai-worker-runtime:v3'],
+      createdAt: '2026-10-23T00:00:00.000Z',
+    });
+    const http = scriptedHttp({
+      runtime_inventory: () =>
+        inventory({
+          activeImage: 'nexttime-ai-worker-runtime:pi-0.99.2',
+          activeImageInfo: old,
+          images: [older, old, newest],
+          residentContainers: [resident({ imageId: old.id, needsRebuild: true })],
+        }),
+      pi_drift: () => piDrift(),
+      list_workspaces: () => ({ items: [] }),
+    });
+    renderPage(http);
+
+    const notice = await screen.findByTestId('runtime-active-image-incompatible');
+    expect(notice.textContent).toContain('nexttime-ai-worker-runtime:pi-0.99.2');
+    expect(notice.textContent).toContain('把 nexttime-ai-worker-runtime:v3 设为活动');
+    const roll = screen.getByTestId('runtime-roll-entry-containers') as HTMLButtonElement;
+    expect(roll.disabled).toBe(true);
+    expect(roll.title).toBe('活动镜像起不了容器，先换一个活动镜像');
+    // The reason is on the page too, not only in the hover title (#698 UX P3).
+    expect(screen.getByTestId('runtime-roll-missing').textContent).toBe(
+      '活动镜像起不了容器，先换一个活动镜像',
+    );
+  });
+
+  it('an incompatible active image with nothing to switch to: names the build command', async () => {
+    const old = image({ runtimeCompatible: false });
+    const http = scriptedHttp({
+      runtime_inventory: () => inventory({ activeImageInfo: old, images: [old] }),
+      pi_drift: () => piDrift(),
+      list_workspaces: () => ({ items: [] }),
+    });
+    renderPage(http);
+
+    const notice = await screen.findByTestId('runtime-active-image-incompatible');
+    expect(notice.textContent).toContain('sh scripts/build-images.sh worker-runtime');
+  });
+
   it('回滚到上一个镜像', async () => {
     const otherImage = image({
       id: 'sha256:v2000000000000000000000000000000000000000000000000000000000000',
@@ -475,6 +580,7 @@ describe('PlatformRuntimePage', () => {
     renderPage(http);
 
     const button = await screen.findByTestId('runtime-roll-entry-containers');
+    expect(screen.queryByTestId('runtime-roll-missing')).toBeNull();
     fireEvent.click(button);
 
     // Coverage-map G6: the platform-wide rebuild asks first, naming its reach.

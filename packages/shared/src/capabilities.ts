@@ -3723,7 +3723,7 @@ const platformCapabilities = [
     paramsSchema: z.object({ image: z.string().min(1) }).strict(),
     resultSchema: wire.PlatformSettingsWireSchema,
     description:
-      'Sets the platform’s active runtime image (must already appear in `list_runtime_images`) — resident entry containers pick it up at their own next spawn (spec-drift rebuild, E2); no forced restart. Audited.',
+      'Sets the platform’s active runtime image (must already appear in `list_runtime_images`, be allowlisted, and not be `runtimeCompatible: false` — 409 `runtime_image_incompatible`, since worker-supervisor would refuse to start anything from it) — resident entry containers pick it up at their own next spawn (spec-drift rebuild, E2); no forced restart. Audited.',
   },
   {
     name: 'rollback_runtime_image',
@@ -3734,7 +3734,7 @@ const platformCapabilities = [
     paramsSchema: noParams,
     resultSchema: wire.PlatformSettingsWireSchema,
     description:
-      'Switches the active runtime image back to the most recent `platform_settings_history` value that differs from the current one — an intervening unrelated settings write (e.g. siteName) is skipped over, not treated as "the previous value". Calling this repeatedly toggles between the last two distinct images. Audited.',
+      'Switches the active runtime image back to the most recent `platform_settings_history` value that differs from the current one — an intervening unrelated settings write (e.g. siteName) is skipped over, not treated as "the previous value". Calling this repeatedly toggles between the last two distinct images. Refused (409 `runtime_image_incompatible`) when that image is known to be one worker-supervisor would refuse to start anything from. Audited.',
   },
   {
     name: 'roll_entry_containers',
@@ -3751,7 +3751,7 @@ const platformCapabilities = [
       .strict(),
     resultSchema: wire.RollEntryContainersResultWireSchema,
     description:
-      'Acceleration only (E2): stops resident entry containers that both need rebuild and have no in-flight Turn (kernel’s own `activities` bookkeeping) — never a forced stop of a busy container, never a draining/reject-new-Turn state. Every stopped container is recreated with the active image at its own next spawn regardless of whether this was ever called.',
+      'Acceleration only (E2): stops resident entry containers that both need rebuild and have no in-flight Turn (kernel’s own `activities` bookkeeping) — never a forced stop of a busy container, never a draining/reject-new-Turn state. Every stopped container is recreated with the active image at its own next spawn regardless of whether this was ever called. Refused (409 `runtime_image_incompatible`) while the active image is one worker-supervisor would refuse to start anything from.',
   },
   {
     name: 'pi_drift',
