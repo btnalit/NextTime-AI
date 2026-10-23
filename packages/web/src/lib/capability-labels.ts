@@ -1120,6 +1120,13 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '设置接入包的模式，以及禁止运行的操作。',
     enHint: "Sets a connector's mode and the operations it may never run.",
   },
+  list_connector_presets: {
+    zh: '查看接入预设',
+    en: 'List connector presets',
+    zhHint: '列出平台自带的系统接入模板，按模板新建门实例时只需填地址。',
+    enHint:
+      'Lists the system templates this platform ships; creating an instance from one takes only its address.',
+  },
   list_gate_instances: {
     zh: '查看门实例',
     en: 'List gate instances',

@@ -82,7 +82,9 @@ export function PendingManifestReview({
   }
 
   const impact = [
-    ...pending.added.map((op) => t(`新增 ${opLine(op, t)}`, `Adds ${opLine(op, t)}`)),
+    ...pending.added.map((op) =>
+      t(`新增 ${gateOperationLine(op, t)}`, `Adds ${gateOperationLine(op, t)}`),
+    ),
     ...pending.removed.map((op) =>
       t(`移除 ${actionKindTagText(op.name)}`, `Removes ${actionKindTagText(op.name)}`),
     ),
@@ -243,7 +245,9 @@ export function PendingManifestReview({
   );
 }
 
-function opLine(op: GateOperationSummaryWire, t: Translate): string {
+/** One announced Operation in a line: its name and how it is classified (the 新清单 review here,
+ *  and a connector preset's Operations on 新建门宿主实例, S11 P1-F). */
+export function gateOperationLine(op: GateOperationSummaryWire, t: Translate): string {
   const parts = [
     labelText(statusChipStyle('operationMode', op.mode), t),
     labelText(statusChipStyle('blastRadius', op.blastRadius), t),

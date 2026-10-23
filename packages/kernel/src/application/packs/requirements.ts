@@ -1,7 +1,11 @@
 import type { PackRequirementState } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { getGatekeeper } from '../../governance/gatekeepers/index.js';
-import { listAvailableGateInstances, readGatekeeperPlatformPolicies } from '../gates/index.js';
+import {
+  listAvailableGateInstances,
+  readConnectorOccupancy,
+  readGatekeeperPlatformPolicies,
+} from '../gates/index.js';
 
 /**
  * application/packs/requirements: where each system a pack version needs (`requires.connectors`,
@@ -24,6 +28,10 @@ import { listAvailableGateInstances, readGatekeeperPlatformPolicies } from '../g
  *
  * Health is not read here: a list of packs makes no outbound call. Verifying a segment probes the
  * `connected` Gatekeepers' health (`application/gateway/change-verification.ts`).
+ *
+ * `platformPreset` (S11 P1-F): for a `needs_platform` system, the platform ships a connector preset
+ * of its name (`application/gates/presets.ts`) and no packaged gate holds its connector — a platform
+ * administrator can connect it from that preset by typing its address and key.
  */
 
 /** A Gatekeeper of the workspace, by id and the name people know it by. */
@@ -46,17 +54,28 @@ export interface PackRequirementStatus {
   /** The instances the platform offers, for `can_enable` (in the catalog's order); empty
    *  otherwise. */
   readonly offered: readonly PackRequirementOffer[];
+  /** For `needs_platform`: a platform administrator can connect it from a preset (see above);
+   *  `false` otherwise. */
+  readonly platformPreset: boolean;
 }
 
-/** The state of each of `connectors` in `workspaceId`, in their order. */
+/** The state of each of `connectors` in `workspaceId`, in their order. `presets` names the
+ *  connector presets this deployment ships (`loadConnectorPresets`); left out, none is assumed and
+ *  `platformPreset` is `false` throughout — the readers that only need the state (installing,
+ *  verifying) skip reading them. */
 export async function readPackRequirements(
   client: PoolClient,
   workspaceId: string,
   connectors: readonly string[],
+  presets: ReadonlySet<string> = new Set(),
 ): Promise<readonly PackRequirementStatus[]> {
   if (connectors.length === 0) return [];
   const policies = await readGatekeeperPlatformPolicies(client, workspaceId);
   const available = await listAvailableGateInstances(client, workspaceId);
+  const occupancy = await readConnectorOccupancy(
+    client,
+    connectors.filter((connector) => presets.has(connector)),
+  );
   const statuses: PackRequirementStatus[] = [];
   for (const connector of connectors) {
     const gatekeeperIds = [...policies]
@@ -75,7 +94,13 @@ export async function readPackRequirements(
         const gatekeeper = await getGatekeeper(client, workspaceId, id);
         gatekeepers.push({ id, name: gatekeeper?.name ?? id });
       }
-      statuses.push({ connector, state: 'connected', gatekeepers, offered: [] });
+      statuses.push({
+        connector,
+        state: 'connected',
+        gatekeepers,
+        offered: [],
+        platformPreset: false,
+      });
       continue;
     }
     const offered = available
@@ -86,11 +111,16 @@ export async function readPackRequirements(
           instance.gatekeeperId === null,
       )
       .map((instance) => ({ gateId: instance.gateId, displayName: instance.displayName }));
+    const state = offered.length > 0 ? 'can_enable' : 'needs_platform';
     statuses.push({
       connector,
-      state: offered.length > 0 ? 'can_enable' : 'needs_platform',
+      state,
       gatekeepers: [],
       offered,
+      platformPreset:
+        state === 'needs_platform' &&
+        presets.has(connector) &&
+        occupancy.get(connector)?.packaged !== true,
     });
   }
   return statuses;

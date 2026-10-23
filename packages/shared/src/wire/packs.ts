@@ -103,6 +103,10 @@ export const PackRequirementWireSchema = z
         })
         .strict(),
     ),
+    /** S11 P1-F: for `needs_platform`, the platform ships a connector preset of this name
+     *  (`list_connector_presets`) and no packaged gate holds its connector — a platform
+     *  administrator connects it from the preset by typing its address and key. `false` otherwise. */
+    platformPreset: z.boolean(),
   })
   .strict();
 export type PackRequirementWire = z.infer<typeof PackRequirementWireSchema>;

@@ -1,4 +1,5 @@
 import type {
+  ConnectorPresetWire,
   GateHostedDefinitionWire,
   GateInstanceWire,
   SelfConnectionWire,
@@ -24,12 +25,15 @@ import {
   listExternalRuntimes,
   listGateInstances,
   listSelfConnections,
+  loadConnectorPresets,
   operationsOf,
+  readConnectorOccupancy,
   recordGateInstanceCheck,
   revokeEntryHandlesForConnector,
   revokeEntryHandlesInWorkspace,
   revokeExternalRuntime,
   setSelfConnectionSuspension,
+  toWireGateOperation,
   updateConnector,
   updateGateInstance,
 } from '../gates/index.js';
@@ -450,36 +454,104 @@ export function gateHostCredentialUrl(gateId: string): string {
   return `/gate-host/i/${encodeURIComponent(gateId)}/gate/connected-accounts`;
 }
 
+/** S11 P1-F: the connector presets this deployment ships (`application/gates/presets.ts`), each
+ *  with what its connector already holds here. */
+export const listConnectorPresetsHandler: CapabilityHandler = async (client) => {
+  const presets = await loadConnectorPresets();
+  const occupancy = await readConnectorOccupancy(
+    client,
+    presets.map((preset) => preset.name),
+  );
+  const items: ConnectorPresetWire[] = presets.map((preset) => {
+    const held = occupancy.get(preset.name);
+    return {
+      name: preset.name,
+      displayName: preset.displayName,
+      summary: preset.summary,
+      transportKind: preset.transportKind,
+      credentialMode: preset.credentialMode,
+      targetHint: preset.targetHint,
+      credentialHint: preset.credentialHint,
+      operations: preset.operations.map(toWireGateOperation),
+      packagedConnector: held?.packaged ?? false,
+      instanceCount: held?.instanceCount ?? 0,
+    };
+  });
+  return { result: { items } };
+};
+
+interface CreateGateInstanceInput {
+  readonly gateId: string;
+  readonly displayName?: string;
+  readonly preset?: string;
+  readonly transportKind?: 'http' | 'mcp';
+  readonly target: string;
+  readonly credentialMode?: 'shared' | 'connected_account';
+  readonly manifestSource?: string | null;
+  readonly connector?: string;
+}
+
+/** The definition `create_gate_instance` stores, and the connector the instance joins: the
+ *  preset's (S11 P1-F) when one is named — its transport, credential mode and name, with only the
+ *  administrator's address — else exactly what was typed. The params schema already refused a
+ *  preset call that also names any of those, and a plain one missing the kind or mode. */
+async function requestedDefinition(
+  input: CreateGateInstanceInput,
+): Promise<{ readonly definition: GateHostedDefinitionWire; readonly connector: string }> {
+  if (input.preset !== undefined) {
+    const presets = await loadConnectorPresets();
+    const preset = presets.find((candidate) => candidate.name === input.preset);
+    if (!preset) {
+      throw new PlatformAdminError(
+        'connector_preset_not_found',
+        `connector preset "${input.preset}" is not in this deployment`,
+      );
+    }
+    return {
+      definition: {
+        transportKind: preset.transportKind,
+        target: input.target,
+        credentialMode: preset.credentialMode,
+        manifestSource: null,
+        preset: preset.name,
+      },
+      connector: preset.name,
+    };
+  }
+  const transportKind = input.transportKind;
+  const credentialMode = input.credentialMode;
+  if (transportKind === undefined || credentialMode === undefined) {
+    throw new Error(
+      'create_gate_instance: transportKind and credentialMode passed the params schema unset',
+    );
+  }
+  return {
+    definition: {
+      transportKind,
+      target: input.target,
+      credentialMode,
+      manifestSource: transportKind === 'http' ? (input.manifestSource ?? null) : null,
+    },
+    connector: input.connector ?? transportKind,
+  };
+}
+
 export const createGateInstanceHandler: CapabilityHandler = async (
   client,
   _workspaceId,
   params,
   ctx,
 ) => {
-  const input = params as {
-    gateId: string;
-    displayName?: string;
-    transportKind: 'http' | 'mcp';
-    target: string;
-    credentialMode: 'shared' | 'connected_account';
-    manifestSource?: string | null;
-    connector?: string;
-  };
+  const input = params as CreateGateInstanceInput;
+  const { definition, connector } = await requestedDefinition(input);
   // Review of #549 (the gate-instance half of legacy 186): the definition is stored as given, sent
   // to the gate host, and shown to every platform administrator and enabling workspace — a
   // credential in its target or manifest source is refused before anything is written. The gate
   // host takes the credential through its own entry (`issue_gate_host_token`), never the kernel.
   assertConnectionParamsCarryNoCredentials('create_gate_instance', {
-    target: input.target,
-    manifestSource: input.transportKind === 'http' ? input.manifestSource : null,
+    target: definition.target,
+    manifestSource: definition.manifestSource,
   });
-  const definition: GateHostedDefinitionWire = {
-    transportKind: input.transportKind,
-    target: input.target,
-    credentialMode: input.credentialMode,
-    manifestSource: input.transportKind === 'http' ? (input.manifestSource ?? null) : null,
-  };
-  const connector = input.connector ?? input.transportKind;
   const outcome = await createHostedGateInstance(client, {
     gateId: input.gateId,
     displayName: input.displayName ?? input.gateId,
@@ -496,13 +568,15 @@ export const createGateInstanceHandler: CapabilityHandler = async (
   if (refused === 'connector_kind_mismatch') {
     throw new PlatformAdminError(
       'connector_kind_mismatch',
-      `the connector "${connector}" is not an ${input.transportKind} connector — name a new one for this system, or one of the same kind`,
+      `the connector "${connector}" is not an ${definition.transportKind} connector — name a new one for this system, or one of the same kind`,
     );
   }
   if (refused === 'connector_packaged') {
     throw new PlatformAdminError(
       'connector_packaged',
-      `the connector "${connector}" belongs to a packaged gate — name a new one for this system`,
+      definition.preset !== undefined
+        ? `the connector "${connector}" belongs to a packaged gate this deployment runs — the system is already connected through it, so no preset instance can join it`
+        : `the connector "${connector}" belongs to a packaged gate — name a new one for this system`,
     );
   }
   if (outcome.refused === null && outcome.connectorCreated) {
@@ -517,9 +591,10 @@ export const createGateInstanceHandler: CapabilityHandler = async (
       resourceType: 'connector',
       payload: {
         resourceRef: connector,
-        kind: input.transportKind,
+        kind: definition.transportKind,
         mode: 'platform_preset',
         gateId: input.gateId,
+        ...(definition.preset !== undefined ? { preset: definition.preset } : {}),
       },
     });
   }
