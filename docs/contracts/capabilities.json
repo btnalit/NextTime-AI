@@ -7367,6 +7367,68 @@
                       }
                     ]
                   },
+                  "gates": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "after": {
+                        "anyOf": [
+                          {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "id": {
+                                  "type": "string"
+                                },
+                                "name": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "id",
+                                "name"
+                              ],
+                              "type": "object"
+                            },
+                            "type": "array"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "before": {
+                        "anyOf": [
+                          {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "id": {
+                                  "type": "string"
+                                },
+                                "name": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "id",
+                                "name"
+                              ],
+                              "type": "object"
+                            },
+                            "type": "array"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "before",
+                      "after"
+                    ],
+                    "type": "object"
+                  },
                   "id": {
                     "type": "string"
                   },
@@ -7459,7 +7521,8 @@
                   "kind",
                   "target",
                   "before",
-                  "after"
+                  "after",
+                  "gates"
                 ],
                 "type": "object"
               },
@@ -7987,7 +8050,6 @@
                         "enum": [
                           "connected",
                           "can_enable",
-                          "can_connect",
                           "needs_platform"
                         ],
                         "type": "string"
@@ -14549,6 +14611,19 @@
         "version": {
           "exclusiveMinimum": 0,
           "type": "integer"
+        },
+        "workerGates": {
+          "additionalProperties": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "propertyNames": {
+            "minLength": 1
+          },
+          "type": "object"
         }
       },
       "required": [
@@ -14855,8 +14930,33 @@
                   {
                     "additionalProperties": false,
                     "properties": {
+                      "bindable": {
+                        "type": "boolean"
+                      },
                       "definitionId": {
                         "type": "string"
+                      },
+                      "gates": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "name"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "gatesKept": {
+                        "type": "boolean"
                       },
                       "headVersion": {
                         "anyOf": [
@@ -14993,6 +15093,12 @@
                           "customized"
                         ],
                         "type": "string"
+                      },
+                      "systems": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
                       }
                     },
                     "required": [
@@ -15000,6 +15106,10 @@
                       "name",
                       "definitionId",
                       "headVersion",
+                      "systems",
+                      "gates",
+                      "gatesKept",
+                      "bindable",
                       "status",
                       "installedVersion",
                       "provenance"
@@ -15035,11 +15145,48 @@
                   "connector": {
                     "type": "string"
                   },
+                  "gatekeepers": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "name"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "offered": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "displayName": {
+                          "type": "string"
+                        },
+                        "gateId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "gateId",
+                        "displayName"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
                   "state": {
                     "enum": [
                       "connected",
                       "can_enable",
-                      "can_connect",
                       "needs_platform"
                     ],
                     "type": "string"
@@ -15047,7 +15194,9 @@
                 },
                 "required": [
                   "connector",
-                  "state"
+                  "state",
+                  "gatekeepers",
+                  "offered"
                 ],
                 "type": "object"
               },
@@ -15132,12 +15281,19 @@
                             },
                             "name": {
                               "type": "string"
+                            },
+                            "systems": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
                             }
                           },
                           "required": [
                             "kind",
                             "name",
-                            "description"
+                            "description",
+                            "systems"
                           ],
                           "type": "object"
                         }
@@ -15278,7 +15434,6 @@
                         "enum": [
                           "connected",
                           "can_enable",
-                          "can_connect",
                           "needs_platform"
                         ],
                         "type": "string"
@@ -20102,8 +20257,33 @@
                     {
                       "additionalProperties": false,
                       "properties": {
+                        "bindable": {
+                          "type": "boolean"
+                        },
                         "definitionId": {
                           "type": "string"
+                        },
+                        "gates": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "name"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        "gatesKept": {
+                          "type": "boolean"
                         },
                         "headVersion": {
                           "anyOf": [
@@ -20240,6 +20420,12 @@
                             "customized"
                           ],
                           "type": "string"
+                        },
+                        "systems": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
                         }
                       },
                       "required": [
@@ -20247,6 +20433,10 @@
                         "name",
                         "definitionId",
                         "headVersion",
+                        "systems",
+                        "gates",
+                        "gatesKept",
+                        "bindable",
                         "status",
                         "installedVersion",
                         "provenance"
@@ -20282,11 +20472,48 @@
                     "connector": {
                       "type": "string"
                     },
+                    "gatekeepers": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "name"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "offered": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "displayName": {
+                            "type": "string"
+                          },
+                          "gateId": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "gateId",
+                          "displayName"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
                     "state": {
                       "enum": [
                         "connected",
                         "can_enable",
-                        "can_connect",
                         "needs_platform"
                       ],
                       "type": "string"
@@ -20294,7 +20521,9 @@
                   },
                   "required": [
                     "connector",
-                    "state"
+                    "state",
+                    "gatekeepers",
+                    "offered"
                   ],
                   "type": "object"
                 },
@@ -20379,12 +20608,19 @@
                               },
                               "name": {
                                 "type": "string"
+                              },
+                              "systems": {
+                                "items": {
+                                  "type": "string"
+                                },
+                                "type": "array"
                               }
                             },
                             "required": [
                               "kind",
                               "name",
-                              "description"
+                              "description",
+                              "systems"
                             ],
                             "type": "object"
                           }
@@ -25255,6 +25491,19 @@
         "name": {
           "minLength": 1,
           "type": "string"
+        },
+        "workerGates": {
+          "additionalProperties": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "propertyNames": {
+            "minLength": 1
+          },
+          "type": "object"
         }
       },
       "required": [
@@ -25698,6 +25947,81 @@
                       }
                     ]
                   },
+                  "binding": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "candidates": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "connector": {
+                              "type": "string"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "name",
+                            "connector"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "gates": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "name"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "model": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "source": {
+                        "enum": [
+                          "workspace",
+                          "install",
+                          "none"
+                        ],
+                        "type": "string"
+                      },
+                      "systems": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "systems",
+                      "source",
+                      "gates",
+                      "candidates",
+                      "model"
+                    ],
+                    "type": "object"
+                  },
                   "changedFields": {
                     "items": {
                       "type": "string"
@@ -25826,6 +26150,7 @@
                   "before",
                   "after",
                   "worker",
+                  "binding",
                   "changedFields"
                 ],
                 "type": "object"
@@ -26127,8 +26452,33 @@
                   {
                     "additionalProperties": false,
                     "properties": {
+                      "bindable": {
+                        "type": "boolean"
+                      },
                       "definitionId": {
                         "type": "string"
+                      },
+                      "gates": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "name"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "gatesKept": {
+                        "type": "boolean"
                       },
                       "headVersion": {
                         "anyOf": [
@@ -26265,6 +26615,12 @@
                           "customized"
                         ],
                         "type": "string"
+                      },
+                      "systems": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
                       }
                     },
                     "required": [
@@ -26272,6 +26628,10 @@
                       "name",
                       "definitionId",
                       "headVersion",
+                      "systems",
+                      "gates",
+                      "gatesKept",
+                      "bindable",
                       "status",
                       "installedVersion",
                       "provenance"
@@ -26307,11 +26667,48 @@
                   "connector": {
                     "type": "string"
                   },
+                  "gatekeepers": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "name"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "offered": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "displayName": {
+                          "type": "string"
+                        },
+                        "gateId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "gateId",
+                        "displayName"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
                   "state": {
                     "enum": [
                       "connected",
                       "can_enable",
-                      "can_connect",
                       "needs_platform"
                     ],
                     "type": "string"
@@ -26319,7 +26716,9 @@
                 },
                 "required": [
                   "connector",
-                  "state"
+                  "state",
+                  "gatekeepers",
+                  "offered"
                 ],
                 "type": "object"
               },
@@ -26404,12 +26803,19 @@
                             },
                             "name": {
                               "type": "string"
+                            },
+                            "systems": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
                             }
                           },
                           "required": [
                             "kind",
                             "name",
-                            "description"
+                            "description",
+                            "systems"
                           ],
                           "type": "object"
                         }
@@ -38526,7 +38932,6 @@
                     "enum": [
                       "connected",
                       "can_enable",
-                      "can_connect",
                       "needs_platform"
                     ],
                     "type": "string"

@@ -2,6 +2,7 @@ import type { ChangeRollbackBlocker, ProposeSkillContent, SkillApplicable } from
 import { SkillApplicableSchema } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { z } from 'zod';
+import { getGatekeeper } from '../../governance/gatekeepers/index.js';
 import {
   type SkillRow,
   type WorkerDefinitionRow,
@@ -83,7 +84,15 @@ export interface WorkerDefinitionVersionIntent {
   readonly definitionId: string;
   /** `worker`-kind content (`@nexttime/shared` worker-definition.ts), with a `name`. */
   readonly definition: Readonly<Record<string, unknown>>;
+  /** Fields the workspace owns (S11 P1-E2: a pack's Worker never sets which gates it acts on or
+   *  which model runs it): where the head has one, the item publishes the head's value instead of
+   *  `definition`'s — read under the registry lock, so what was reviewed keeps exactly what the
+   *  workspace had. Where the head has none, `definition`'s value (or none) stands. */
+  readonly keepFromHead?: readonly KeptWorkerField[];
 }
+
+/** A `worker` WorkerDefinition field an item may keep from the head (`keepFromHead`). */
+export type KeptWorkerField = 'gates' | 'model';
 
 export type FamilyVersionIntent = SkillVersionIntent | WorkerDefinitionVersionIntent;
 export type FamilyItemKind = FamilyVersionIntent['kind'];
@@ -273,9 +282,11 @@ export async function planFamilyItem(
 ): Promise<PlannedFamilyItem> {
   const spec = specOf(intent.kind);
   const familyId = familyIdOf(intent);
-  const content: Readonly<Record<string, unknown>> =
-    intent.kind === 'skill_version' ? { ...validatedSkillContent(intent) } : intent.definition;
   const head = await spec.loadHead(client, workspaceId, familyId);
+  const content: Readonly<Record<string, unknown>> =
+    intent.kind === 'skill_version'
+      ? { ...validatedSkillContent(intent) }
+      : withKeptFields(intent.definition, head?.content ?? null, intent.keepFromHead ?? []);
   const digest = contentDigest(content);
   const before = head
     ? { version: head.version, contentDigest: contentDigest(head.content) }
@@ -309,9 +320,27 @@ export async function planFamilyItem(
   return {
     ...common,
     kind: intent.kind,
-    target: { definitionId: familyId, name: validatedWorkerDefinitionName(intent) },
-    content: intent.definition,
+    target: {
+      definitionId: familyId,
+      name: validatedWorkerDefinitionName({ ...intent, definition: content }),
+    },
+    content,
   };
+}
+
+/** `definition` with each `fields` value taken from `head` where the head has one (see
+ *  `WorkerDefinitionVersionIntent.keepFromHead`). */
+function withKeptFields(
+  definition: Readonly<Record<string, unknown>>,
+  head: Readonly<Record<string, unknown>> | null,
+  fields: readonly KeptWorkerField[],
+): Readonly<Record<string, unknown>> {
+  if (head === null || fields.length === 0) return definition;
+  const content: Record<string, unknown> = { ...definition };
+  for (const field of fields) {
+    if (head[field] !== undefined) content[field] = head[field];
+  }
+  return content;
 }
 
 /** Publishes the planned content as the family's next version, `appliedBy` as its proposer and
@@ -409,6 +438,42 @@ export function parseStoredFamilyItem(
 
 function isVersion(row: FamilyRow, ref: ContentVersionRef): boolean {
   return row.version === ref.version && contentDigest(row.content) === ref.contentDigest;
+}
+
+/** A Gatekeeper by id and the name people know it by (the id itself for one no longer there). */
+export interface ChangeGateRef {
+  readonly id: string;
+  readonly name: string;
+}
+
+/** A `worker_definition_version` item's gates on each side (P1-E2, UX acceptance of #705): the
+ *  gates of the version it replaced and of the one it published, read from those versions now (as
+ *  an Operation item's fields are). A side is `null` when it is not there: no `before`, or the
+ *  version no longer holds what the item recorded. A version with no `gates` has none (`[]`). */
+export interface WorkerItemGates {
+  readonly before: readonly ChangeGateRef[] | null;
+  readonly after: readonly ChangeGateRef[] | null;
+}
+
+export async function readWorkerItemGates(
+  client: PoolClient,
+  workspaceId: string,
+  item: StoredFamilyItem,
+): Promise<WorkerItemGates> {
+  async function gatesOf(ref: ContentVersionRef | null): Promise<readonly ChangeGateRef[] | null> {
+    if (ref === null) return null;
+    const row = await WORKER_SPEC.loadVersion(client, workspaceId, item.familyId, ref.version);
+    if (!row || !isVersion(row, ref)) return null;
+    const ids = Array.isArray(row.content.gates)
+      ? row.content.gates.filter((id): id is string => typeof id === 'string')
+      : [];
+    const gates: ChangeGateRef[] = [];
+    for (const id of ids) {
+      gates.push({ id, name: (await getGatekeeper(client, workspaceId, id))?.name ?? id });
+    }
+    return gates;
+  }
+  return { before: await gatesOf(item.before), after: await gatesOf(item.after) };
 }
 
 export type FamilyItemState =

@@ -7,7 +7,7 @@ import {
   type PackRequirementState,
   type PackRequirementWire,
 } from '@nexttime/shared';
-import { type ReactNode, useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { usePermissions } from '../../hooks/usePermissions.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
@@ -16,6 +16,7 @@ import { formatDateTime, shortId } from '../../lib/format.js';
 import { HttpError } from '../../lib/http-client.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { hrefs } from '../../lib/router.js';
+import { EnableGateConfirm } from '../connect/EnableGateConfirm.js';
 import { Button } from '../kit/button.js';
 import { ErrorBanner } from '../kit/error-banner.js';
 import { Notice } from '../kit/notice.js';
@@ -23,73 +24,156 @@ import { RouteLink } from '../kit/route-link.js';
 import { StatusChip } from '../kit/status-chip.js';
 
 /**
- * components/catalog/ChangeVerification (S11 P1-E): the systems a pack needs and where each stands
- * in the workspace (`PackRequirementWire`: the 能力包 detail and install review), and an install
+ * components/catalog/ChangeVerification (S11 P1-E / P1-E2): the systems a pack needs, where each
+ * stands in the workspace and what to do about it (`PackRequirementWire`: the 能力包 detail and
+ * install review), and an install
  * record's 核验 — the latest run (`ChangeVerificationWire`: are the changes still in effect, are
  * the systems connected and up) and, for the owner, running it again (`verify_change_segment`, at
  * most once every `CHANGE_VERIFICATION_COOLDOWN_SECONDS`).
  */
 
-/** What the owner does about a system in `state`, or `null` when nothing is needed. */
+/** Where a system in `state` stands, in a sentence, or `null` when it is connected. */
 export function requirementHint(state: PackRequirementState, t: Translate): string | null {
   switch (state) {
     case 'connected':
       return null;
     case 'can_enable':
       return t(
-        '平台已经提供，工作区还没启用：所有者可以在「系统与授权」里启用。',
-        'The platform offers it and the workspace has not enabled it: an owner can enable it under Systems.',
-      );
-    case 'can_connect':
-      return t(
-        '工作区还没接入：所有者可以在「系统与授权」里自行接入。',
-        'The workspace has not connected it: an owner can connect it under Systems.',
+        '平台已经提供，工作区还没启用。',
+        'The platform offers it; the workspace has not enabled it yet.',
       );
     case 'needs_platform':
+      // Also every instance of it disabled (UX acceptance of #705, P3-3).
       return t(
-        '这个部署还没有提供它，需要平台管理员先接入。',
-        'This deployment does not offer it yet; a platform administrator connects it first.',
+        '平台没有提供它，或者提供的门实例已经停用，需要平台管理员接入或重新启用。',
+        'The platform does not offer it, or its gate instances are disabled; a platform administrator connects or re-enables one first.',
       );
   }
 }
 
-/** The 「系统与授权」 link a hint points to, for the states an owner can act on themselves. */
-function hintLink(state: PackRequirementState, t: Translate, testId: string): ReactNode {
-  return state === 'can_enable' || state === 'can_connect' ? (
-    <RouteLink href={hrefs.systems()} testId={testId}>
-      {t('去「系统与授权」', 'Open Systems')}
-    </RouteLink>
-  ) : null;
-}
-
-/** The systems a pack needs, each with where it stands (the 能力包 detail and install review). */
+/**
+ * The systems a pack needs, each with where it stands (the 能力包 detail and install review). With
+ * `onChanged` (the pack's detail) each one says what to do about it, right there (P1-E2): a
+ * connected one names its gates; one the platform offers is enabled in place — the owner's
+ * `enable_gate_instance`, behind the same preview-then-confirm the 系统 page uses; one the platform
+ * has not set up sends a platform administrator to 平台 · 集成 and tells anyone else who does it.
+ * Without it (inside the install review, itself a confirm) the list only says where each stands.
+ */
 export function PackRequirementList({
+  http,
   requirements,
+  platformAdmin = false,
+  onChanged,
   testId,
 }: {
+  readonly http: CapabilityCaller;
   readonly requirements: readonly PackRequirementWire[];
+  /** `session.user?.platformRole === 'admin'`. */
+  readonly platformAdmin?: boolean;
+  /** Something was enabled: read the pack again. */
+  readonly onChanged?: () => void;
   readonly testId: string;
 }) {
   const t = useT();
+  const can = useRoleCan(http);
+  const canEnable = can('enable_gate_instance') !== false;
+  // Enabling one takes its button away (UX acceptance of #705, P3-1): once the pack is read
+  // again, focus moves to its row, whose state line announces where it stands now.
+  const [enabled, setEnabled] = useState<string | null>(null);
+  const rows = useRef(new Map<string, HTMLDivElement>());
+  useEffect(() => {
+    if (enabled === null) return;
+    const now = requirements.find((requirement) => requirement.connector === enabled);
+    if (now?.state === 'can_enable') return;
+    rows.current.get(enabled)?.focus();
+    setEnabled(null);
+  }, [enabled, requirements]);
   return (
     <div className="stack-s" data-testid={testId}>
       {requirements.map((requirement) => {
         const hint = requirementHint(requirement.state, t);
+        const rowId = `${testId}-${requirement.connector}`;
         return (
           <div
             className="stack-s"
             key={requirement.connector}
-            data-testid={`${testId}-${requirement.connector}`}
+            data-testid={rowId}
+            tabIndex={-1}
+            ref={(row) => {
+              if (row) rows.current.set(requirement.connector, row);
+              else rows.current.delete(requirement.connector);
+            }}
           >
-            <span className="row-wrap">
+            <span className="row-wrap" role={onChanged ? 'status' : undefined}>
               <span className="mono">{requirement.connector}</span>
               <StatusChip machine="packRequirement" status={requirement.state} size="s" />
             </span>
-            {hint ? (
-              <span className="row-wrap text-3 text-small">
-                <span>{hint}</span>
-                {hintLink(requirement.state, t, `${testId}-${requirement.connector}-link`)}
+            {requirement.state === 'connected' && requirement.gatekeepers.length > 0 ? (
+              <span className="row-wrap text-3 text-small" data-testid={`${rowId}-gates`}>
+                <span>{t('已接好的门：', 'Connected gates: ')}</span>
+                {requirement.gatekeepers.map((gate) =>
+                  onChanged ? (
+                    <RouteLink
+                      key={gate.id}
+                      href={hrefs.gatekeeper(gate.id)}
+                      testId={`${rowId}-gate-${gate.id}`}
+                    >
+                      {gate.name}
+                    </RouteLink>
+                  ) : (
+                    <span key={gate.id}>{gate.name}</span>
+                  ),
+                )}
               </span>
+            ) : null}
+            {hint ? <span className="text-3 text-small">{hint}</span> : null}
+            {onChanged && requirement.state === 'can_enable' ? (
+              canEnable ? (
+                requirement.offered.map((offer) => (
+                  <span className="row-wrap text-small" key={offer.gateId}>
+                    <span>{offer.displayName}</span>
+                    <EnableGateConfirm
+                      key={offer.gateId}
+                      http={http}
+                      gateId={offer.gateId}
+                      gateDisplayName={offer.displayName}
+                      platformAdmin={platformAdmin}
+                      onEnabled={() => {
+                        setEnabled(requirement.connector);
+                        onChanged();
+                      }}
+                      testId={`${rowId}-enable-${offer.gateId}`}
+                    />
+                  </span>
+                ))
+              ) : (
+                <span className="text-3 text-small" data-testid={`${rowId}-owner-only`}>
+                  {t(
+                    '工作区所有者可以在这里直接启用。',
+                    'A workspace owner can enable it right here.',
+                  )}
+                </span>
+              )
+            ) : null}
+            {onChanged && requirement.state === 'needs_platform' ? (
+              platformAdmin ? (
+                <RouteLink
+                  href={hrefs.platformIntegrationsTab('instances')}
+                  testId={`${rowId}-platform`}
+                >
+                  {t(
+                    `去「平台 · 集成」看 ${requirement.connector} 门实例`,
+                    `See the ${requirement.connector} gate instances under Platform · Integrations`,
+                  )}
+                </RouteLink>
+              ) : (
+                <span className="text-3 text-small" data-testid={`${rowId}-ask-platform`}>
+                  {t(
+                    '请平台管理员在「平台 · 集成」里添加或重新启用它的门实例，之后这里就能启用。',
+                    'Ask a platform administrator to add or re-enable a gate instance for it under Platform · Integrations; it can then be enabled here.',
+                  )}
+                </span>
+              )
             ) : null}
           </div>
         );
@@ -102,8 +186,15 @@ function principalName(ref: ChangeVerificationWire['verifiedBy']): string {
   return ref.displayName ?? shortId(ref.id);
 }
 
-/** One system as the run found it: its state and, when connected, each gate's health. */
-function RequirementCheck({ requirement }: { readonly requirement: ChangeRequirementCheckWire }) {
+/** One system as the run found it: its state and, when connected, each gate's health. One the
+ *  platform offers is enabled from the pack's page (`packHref`). */
+function RequirementCheck({
+  requirement,
+  packHref,
+}: {
+  readonly requirement: ChangeRequirementCheckWire;
+  readonly packHref: string;
+}) {
   const t = useT();
   const testId = `catalog-change-requirement-${requirement.connector}`;
   const hint = requirementHint(requirement.state, t);
@@ -127,7 +218,11 @@ function RequirementCheck({ requirement }: { readonly requirement: ChangeRequire
       {hint ? (
         <span className="row-wrap text-3 text-small">
           <span>{hint}</span>
-          {hintLink(requirement.state, t, `${testId}-link`)}
+          {requirement.state === 'can_enable' ? (
+            <RouteLink href={packHref} testId={`${testId}-link`}>
+              {t('去能力包页启用', 'Enable it on the pack’s page')}
+            </RouteLink>
+          ) : null}
         </span>
       ) : null}
     </div>
@@ -198,7 +293,11 @@ function VerificationResult({
         <div className="stack-s" data-testid="catalog-change-requirements">
           <span className="text-small">{t('要用到的系统：', 'Systems it needs:')}</span>
           {verification.requirements.map((requirement) => (
-            <RequirementCheck key={requirement.connector} requirement={requirement} />
+            <RequirementCheck
+              key={requirement.connector}
+              requirement={requirement}
+              packHref={hrefs.catalog('packs', segment.source.name)}
+            />
           ))}
         </div>
       )}

@@ -128,20 +128,39 @@ function scriptedHttp(
   };
 }
 
-function Harness({ http, initialItemId }: { http: CapabilityCaller; initialItemId?: string }) {
+function Harness({
+  http,
+  initialItemId,
+  platformAdmin,
+}: {
+  http: CapabilityCaller;
+  initialItemId?: string;
+  platformAdmin?: boolean;
+}) {
   const [itemId, setItemId] = useState<string | undefined>(initialItemId);
-  return <PacksTab http={http} itemId={itemId} onSelectItem={(id) => setItemId(id ?? undefined)} />;
+  return (
+    <PacksTab
+      http={http}
+      itemId={itemId}
+      onSelectItem={(id) => setItemId(id ?? undefined)}
+      platformAdmin={platformAdmin}
+    />
+  );
 }
 
-function renderTab(http: CapabilityCaller, initialItemId?: string) {
+function renderTab(
+  http: CapabilityCaller,
+  initialItemId?: string,
+  options: { readonly platformAdmin?: boolean } = {},
+) {
   return render(
     <PermissionsProvider>
-      <Harness http={http} initialItemId={initialItemId} />
+      <Harness http={http} initialItemId={initialItemId} platformAdmin={options.platformAdmin} />
     </PermissionsProvider>,
   );
 }
 
-const named = (calls: readonly { readonly name: string }[], name: string) =>
+const named = <T extends { readonly name: string }>(calls: readonly T[], name: string) =>
   calls.filter((call) => call.name === name);
 
 describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
@@ -421,8 +440,13 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
   it('a pack that needs systems says where each stands, before and in the review; the install says how its verification went (P1-E)', async () => {
     const needs = pack({
       requirements: [
-        { connector: 'docker', state: 'can_enable' },
-        { connector: 'ragflow', state: 'needs_platform' },
+        {
+          connector: 'docker',
+          state: 'can_enable',
+          gatekeepers: [],
+          offered: [{ gateId: 'docker-a', displayName: '容器主机甲' }],
+        },
+        { connector: 'ragflow', state: 'needs_platform', gatekeepers: [], offered: [] },
       ],
       versions: VERSIONS.map((version) =>
         version.version === 2 ? { ...version, requiredConnectors: ['docker', 'ragflow'] } : version,
@@ -453,12 +477,19 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
 
     const listed = await screen.findByTestId('catalog-pack-requirements');
     const docker = within(listed).getByTestId('catalog-pack-requirements-docker');
-    expect(docker.textContent).toMatch(/docker待启用平台已经提供，工作区还没启用/);
+    expect(docker.textContent).toMatch(/docker待启用平台已经提供，工作区还没启用。容器主机甲/);
+    // P1-E2: enabled right here, not by a trip to another page.
     expect(
-      within(docker).getByTestId('catalog-pack-requirements-docker-link').getAttribute('href'),
-    ).toBe('#/govern/systems');
+      within(docker).getByTestId('catalog-pack-requirements-docker-enable-docker-a'),
+    ).toBeTruthy();
+    expect(within(docker).queryByRole('link')).toBeNull();
     const ragflow = within(listed).getByTestId('catalog-pack-requirements-ragflow');
-    expect(ragflow.textContent).toMatch(/平台未提供这个部署还没有提供它，需要平台管理员先接入/);
+    // Not offered, or every instance of it disabled (UX acceptance of #705, P3-3).
+    expect(ragflow.textContent).toMatch(/平台未提供平台没有提供它，或者提供的门实例已经停用/);
+    // Not a platform administrator: told who does it, no link to a page they cannot open.
+    expect(
+      within(ragflow).getByTestId('catalog-pack-requirements-ragflow-ask-platform').textContent,
+    ).toMatch(/请平台管理员在「平台 · 集成」里添加或重新启用它的门实例/);
     expect(within(ragflow).queryByRole('link')).toBeNull();
     expect(screen.getByTestId('catalog-pack-version-2').textContent).toMatch(
       /要用到的系统：docker、ragflow/,
@@ -468,7 +499,9 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
     fireEvent.click(screen.getByTestId('catalog-pack-install-trigger'));
     const review = await screen.findByTestId('catalog-pack-preview-requirements');
     expect(review.textContent).toMatch(/安装不会等它们接好；装完会马上核验一次/);
-    expect(within(review).getByTestId('catalog-pack-preview-requirement-docker')).toBeTruthy();
+    const inReview = within(review).getByTestId('catalog-pack-preview-requirement-docker');
+    // Inside the review (itself a confirm) the list only says where each system stands.
+    expect(within(inReview).queryByRole('button')).toBeNull();
     // Nothing to confirm (the item widens nothing): installing does not wait for the systems.
     const confirm = screen.getByRole('button', { name: '升级' }) as HTMLButtonElement;
     expect(confirm.disabled).toBe(false);
@@ -498,7 +531,7 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
         requiredConnectors: [],
         components: [
           { kind: 'skill', name: 'docker-triage', description: '排查容器问题' },
-          { kind: 'worker', name: 'ops-runner', description: '通用运维执行者' },
+          { kind: 'worker', name: 'ops-runner', description: '通用运维执行者', systems: [] },
         ],
       },
     ];
@@ -523,6 +556,10 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
           name: 'ops-runner',
           definitionId: 'def-1',
           headVersion: null,
+          systems: [],
+          gates: [],
+          gatesKept: false,
+          bindable: false,
           status: 'not_installed',
           installedVersion: null,
           provenance: { status: 'not_installed' },
@@ -573,6 +610,7 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
                 capabilities: null,
                 egressDeny: [],
               },
+              binding: { systems: [], source: 'none', gates: [], candidates: [], model: null },
               changedFields: ['description', 'name', 'skills', 'systemPrompt'],
             },
           ],
@@ -642,6 +680,425 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
       ]),
     );
   });
+  describe('a pack Worker’s systems (P1-E2)', () => {
+    const SYSTEMS_VERSIONS: PackWire['versions'] = [
+      {
+        version: 1,
+        summary: 'Ops crew',
+        notes: 'First version',
+        breaking: false,
+        requiredConnectors: ['docker'],
+        components: [
+          { kind: 'worker', name: 'ops-runner', description: null, systems: ['docker'] },
+        ],
+      },
+    ];
+    const DOCKER_CONNECTED: PackWire['requirements'] = [
+      {
+        connector: 'docker',
+        state: 'connected',
+        gatekeepers: [
+          { id: 'gk-north', name: 'north' },
+          { id: 'gk-south', name: 'south' },
+        ],
+        offered: [],
+      },
+    ];
+    const CANDIDATES = [
+      { id: 'gk-north', name: 'north', connector: 'docker' },
+      { id: 'gk-south', name: 'south', connector: 'docker' },
+    ];
+    function runner(
+      patch: Partial<Extract<PackComponentStateWire, { kind: 'worker' }>> = {},
+    ): PackComponentStateWire {
+      return {
+        kind: 'worker',
+        name: 'ops-runner',
+        definitionId: 'def-1',
+        headVersion: null,
+        systems: ['docker'],
+        gates: [],
+        gatesKept: false,
+        bindable: false,
+        status: 'not_installed',
+        installedVersion: null,
+        provenance: { status: 'not_installed' },
+        ...patch,
+      } as PackComponentStateWire;
+    }
+    function crew(patch: Partial<PackWire> = {}): PackWire {
+      return pack({
+        name: 'ops-base',
+        latestVersion: 1,
+        versions: SYSTEMS_VERSIONS,
+        status: 'not_installed',
+        installedVersion: null,
+        components: [runner()],
+        requirements: DOCKER_CONNECTED,
+        ...patch,
+      });
+    }
+    function runnerItem(
+      binding: Partial<
+        Extract<PackInstallItemWire, { kind: 'worker_definition_version' }>['binding']
+      >,
+    ): PackInstallItemWire {
+      return {
+        ordinal: 1,
+        kind: 'worker_definition_version',
+        target: { definitionId: 'def-1', name: 'ops-runner' },
+        before: null,
+        after: { contentDigest: 'sha256:d' },
+        unchanged: false,
+        classification: 'authority_widening',
+        widening: [{ path: 'worker', reason: 'added' }],
+        worker: {
+          name: 'ops-runner',
+          description: null,
+          systemPrompt: 'You are ops-runner.',
+          skills: [],
+          capabilities: null,
+          egressDeny: [],
+        },
+        binding: {
+          systems: ['docker'],
+          source: 'install',
+          gates: [],
+          candidates: CANDIDATES,
+          model: null,
+          ...binding,
+        },
+        changedFields: ['name', 'systemPrompt'],
+      };
+    }
+    /** The preview the kernel would give for `workerGates` (every candidate when absent). */
+    function previewFor(params: unknown, packWire: PackWire): PackInstallPreviewWire {
+      const kept = (params as { workerGates?: Record<string, string[]> }).workerGates?.[
+        'ops-runner'
+      ];
+      const gates = CANDIDATES.filter((gate) => kept === undefined || kept.includes(gate.id));
+      return preview({
+        pack: packWire,
+        targetVersion: 1,
+        digest: `sha256:plan-${gates.map((gate) => gate.id).join('+') || 'none'}`,
+        crossedVersions: packWire.status === 'up_to_date' ? [] : [1],
+        breaking: false,
+        inUse: { objects: 0, links: 0, capped: false },
+        items: [
+          runnerItem({
+            source: gates.length > 0 ? 'install' : 'none',
+            gates: gates.map(({ id, name }) => ({ id, name })),
+          }),
+        ],
+      });
+    }
+
+    it('the review lists every gate by name, all ticked; unticking one reads the review again, and the install passes what was reviewed', async () => {
+      const readiness = vi.fn();
+      window.addEventListener('nexttime:execution-readiness-changed', readiness);
+      const http = scriptedHttp({
+        get_workspace: () => OWNER_WORKSPACE,
+        list_packs: () => ({ items: [crew()] }),
+        preview_pack_install: (params) => previewFor(params, crew()),
+        install_pack: () => ({ pack: crew(), segmentId: NEW_SEGMENT_ID, verification: null }),
+      });
+      renderTab(http, 'ops-base');
+
+      const pane = await screen.findByTestId('catalog-pack-detail');
+      expect(
+        within(pane).getByTestId('catalog-pack-component-worker-ops-runner-gates').textContent,
+      ).toBe('要用到 docker：安装时会接上工作区里已经接好的。');
+      fireEvent.click(within(pane).getByTestId('catalog-pack-install-trigger'));
+      const choice = await screen.findByTestId('catalog-pack-item-1-binding-choice');
+      expect(choice.textContent).toMatch(/默认全部接上，可以取消勾选/);
+      const north = within(choice).getByTestId(
+        'catalog-pack-item-1-binding-gate-gk-north',
+      ) as HTMLInputElement;
+      const south = within(choice).getByTestId(
+        'catalog-pack-item-1-binding-gate-gk-south',
+      ) as HTMLInputElement;
+      expect([north.checked, south.checked]).toEqual([true, true]);
+      expect(north.closest('label')?.textContent).toBe('north（docker）');
+      expect(named(http.calls, 'preview_pack_install')[0]?.params).toEqual({ name: 'ops-base' });
+
+      fireEvent.click(south);
+      await waitFor(() =>
+        expect(named(http.calls, 'preview_pack_install').at(-1)?.params).toEqual({
+          name: 'ops-base',
+          workerGates: { 'ops-runner': ['gk-north'] },
+        }),
+      );
+      expect(
+        (screen.getByTestId('catalog-pack-item-1-binding-gate-gk-south') as HTMLInputElement)
+          .checked,
+      ).toBe(false);
+      // The binding widens what the Worker may act on: confirmed by itself.
+      fireEvent.click(await screen.findByTestId('catalog-pack-confirm-item-1'));
+      const confirm = screen.getByRole('button', { name: '安装' }) as HTMLButtonElement;
+      await waitFor(() => expect(confirm.disabled).toBe(false));
+      fireEvent.click(confirm);
+      await waitFor(() =>
+        expect(named(http.calls, 'install_pack').map((call) => call.params)).toEqual([
+          {
+            name: 'ops-base',
+            version: 1,
+            reviewedDigest: 'sha256:plan-gk-north',
+            confirmedOrdinals: [1],
+            workerGates: { 'ops-runner': ['gk-north'] },
+          },
+        ]),
+      );
+      // Legacy 425: the readiness hint at the top reads itself again.
+      await waitFor(() => expect(readiness).toHaveBeenCalled());
+      window.removeEventListener('nexttime:execution-readiness-changed', readiness);
+    });
+
+    it('unticking every gate says the Worker will act on nothing', async () => {
+      const http = scriptedHttp({
+        get_workspace: () => OWNER_WORKSPACE,
+        list_packs: () => ({ items: [crew()] }),
+        preview_pack_install: (params) => previewFor(params, crew()),
+      });
+      renderTab(http, 'ops-base');
+      fireEvent.click(await screen.findByTestId('catalog-pack-install-trigger'));
+      fireEvent.click(await screen.findByTestId('catalog-pack-item-1-binding-gate-gk-north'));
+      fireEvent.click(screen.getByTestId('catalog-pack-item-1-binding-gate-gk-south'));
+      expect(
+        (await screen.findByTestId('catalog-pack-item-1-binding-none-kept')).textContent,
+      ).toMatch(/一个都不接：它不能对任何系统动手。这个选择会记下来，之后不再提示接上/);
+      await waitFor(() =>
+        expect(named(http.calls, 'preview_pack_install').at(-1)?.params).toEqual({
+          name: 'ops-base',
+          workerGates: { 'ops-runner': [] },
+        }),
+      );
+    });
+
+    it('up to date with a Worker installed before docker was connected: the pack offers to connect it', async () => {
+      const installed = crew({
+        status: 'up_to_date',
+        installedVersion: 1,
+        components: [
+          runner({
+            status: 'up_to_date',
+            installedVersion: 1,
+            headVersion: 1,
+            bindable: true,
+            provenance: component().provenance,
+          }),
+        ],
+      });
+      const http = scriptedHttp({
+        get_workspace: () => OWNER_WORKSPACE,
+        list_packs: () => ({ items: [installed] }),
+        preview_pack_install: (params) => previewFor(params, installed),
+      });
+      renderTab(http, 'ops-base');
+
+      const pane = await screen.findByTestId('catalog-pack-detail');
+      expect(
+        within(pane).getByTestId('catalog-pack-component-worker-ops-runner-gates').textContent,
+      ).toBe('还没接上任何系统。工作区现在有接好的 docker，再装一次就能接上。');
+      const trigger = within(pane).getByTestId('catalog-pack-install-trigger');
+      expect(trigger.textContent).toBe('把 Worker 接上系统…');
+      fireEvent.click(trigger);
+      await screen.findByTestId('catalog-pack-item-1-binding-choice');
+      expect(screen.getByRole('button', { name: '接上' })).toBeTruthy();
+      // Unticking every gate connects nothing: the install records that choice (P3-2).
+      fireEvent.click(screen.getByTestId('catalog-pack-item-1-binding-gate-gk-north'));
+      fireEvent.click(screen.getByTestId('catalog-pack-item-1-binding-gate-gk-south'));
+      expect(await screen.findByRole('button', { name: '记下：不接' })).toBeTruthy();
+    });
+
+    it('a Worker the workspace connected to no system: says so, and is not offered to connect again', async () => {
+      const none = crew({
+        status: 'up_to_date',
+        installedVersion: 1,
+        components: [
+          runner({
+            status: 'up_to_date',
+            installedVersion: 1,
+            headVersion: 2,
+            gatesKept: true,
+            provenance: component().provenance,
+          }),
+        ],
+      });
+      const http = scriptedHttp({
+        get_workspace: () => OWNER_WORKSPACE,
+        list_packs: () => ({ items: [none] }),
+      });
+      renderTab(http, 'ops-base');
+      const line = await screen.findByTestId('catalog-pack-component-worker-ops-runner-gates');
+      expect(line.textContent).toBe(
+        '不接任何系统：这是工作区为它定的，再装也会保留。在 Worker 页修改',
+      );
+      expect(
+        within(line)
+          .getByTestId('catalog-pack-component-worker-ops-runner-gates-change')
+          .getAttribute('href'),
+      ).toBe('#/govern/catalog/workers/def-1%402');
+      expect(screen.queryByTestId('catalog-pack-install-trigger')).toBeNull();
+    });
+
+    it('a Worker already connected: its gates link to their pages, and the review keeps them and the model', async () => {
+      const outdated = crew({
+        status: 'outdated',
+        installedVersion: 1,
+        latestVersion: 1,
+        components: [
+          runner({
+            status: 'outdated',
+            installedVersion: 1,
+            headVersion: 2,
+            gates: [{ id: 'gk-south', name: 'south' }],
+            provenance: component().provenance,
+          }),
+        ],
+      });
+      const http = scriptedHttp({
+        get_workspace: () => OWNER_WORKSPACE,
+        list_packs: () => ({ items: [outdated] }),
+        preview_pack_install: () =>
+          preview({
+            pack: outdated,
+            targetVersion: 1,
+            breaking: false,
+            inUse: { objects: 0, links: 0, capped: false },
+            items: [
+              runnerItem({
+                source: 'workspace',
+                gates: [{ id: 'gk-south', name: 'south' }],
+                candidates: [],
+                model: 'fake/fake-echo',
+              }),
+            ],
+          }),
+      });
+      renderTab(http, 'ops-base');
+
+      const line = await screen.findByTestId('catalog-pack-component-worker-ops-runner-gates');
+      expect(line.textContent).toMatch(/^接入的系统：south在 Worker 页修改$/);
+      // P3-6: changed on the Worker's own page.
+      expect(
+        within(line)
+          .getByTestId('catalog-pack-component-worker-ops-runner-gates-change')
+          .getAttribute('href'),
+      ).toBe('#/govern/catalog/workers/def-1%402');
+      expect(
+        within(line)
+          .getByTestId('catalog-pack-component-worker-ops-runner-gates-gk-south')
+          .getAttribute('href'),
+      ).toBe('#/govern/systems/gk-south');
+      fireEvent.click(screen.getByTestId('catalog-pack-install-trigger'));
+      expect((await screen.findByTestId('catalog-pack-item-1-binding-kept')).textContent).toMatch(
+        /^接入的系统：沿用工作区为它选的 south$/,
+      );
+      expect(screen.getByTestId('catalog-pack-item-1-binding-model').textContent).toMatch(
+        /^模型：沿用工作区设置的 fake\/fake-echo$/,
+      );
+      expect(screen.queryByTestId('catalog-pack-item-1-binding-choice')).toBeNull();
+    });
+
+    it('docker not connected yet: the review says the Worker is connected to nothing for now', async () => {
+      const waiting = crew({
+        requirements: [
+          {
+            connector: 'docker',
+            state: 'can_enable',
+            gatekeepers: [],
+            offered: [{ gateId: 'docker-a', displayName: '容器主机甲' }],
+          },
+        ],
+      });
+      const http = scriptedHttp({
+        get_workspace: () => OWNER_WORKSPACE,
+        list_packs: () => ({ items: [waiting] }),
+        preview_pack_install: () =>
+          preview({
+            pack: waiting,
+            targetVersion: 1,
+            breaking: false,
+            inUse: { objects: 0, links: 0, capped: false },
+            items: [runnerItem({ source: 'none', candidates: [] })],
+          }),
+      });
+      renderTab(http, 'ops-base');
+      fireEvent.click(await screen.findByTestId('catalog-pack-install-trigger'));
+      expect(
+        (await screen.findByTestId('catalog-pack-item-1-binding-unavailable')).textContent,
+      ).toMatch(/它要用到 docker，工作区里还没有接好的，这次不接入任何系统/);
+    });
+
+    it('a system the platform offers is enabled in place; a platform administrator is linked to 集成 for one it does not', async () => {
+      const offered = crew({
+        requirements: [
+          {
+            connector: 'docker',
+            state: 'can_enable',
+            gatekeepers: [],
+            offered: [{ gateId: 'docker-a', displayName: '容器主机甲' }],
+          },
+          { connector: 'ragflow', state: 'needs_platform', gatekeepers: [], offered: [] },
+        ],
+      });
+      const connected = crew({
+        requirements: [
+          {
+            connector: 'docker',
+            state: 'connected',
+            gatekeepers: [{ id: 'gk-new', name: '容器主机甲' }],
+            offered: [],
+          },
+          { connector: 'ragflow', state: 'needs_platform', gatekeepers: [], offered: [] },
+        ],
+      });
+      let enabled = false;
+      const http = scriptedHttp({
+        get_workspace: () => OWNER_WORKSPACE,
+        list_packs: () => ({ items: [enabled ? connected : offered] }),
+        preview_gate_instance_enable: () => ({
+          gateId: 'docker-a',
+          ambiguousCandidates: [],
+          wouldLink: null,
+          operationsToImport: [],
+          operationsAlreadyPresent: [],
+          manifestDigest: 'sha256:manifest',
+        }),
+        enable_gate_instance: () => {
+          enabled = true;
+          return { gatekeeperId: 'gk-new', linkedExisting: false, publishedOperationNames: [] };
+        },
+      });
+      renderTab(http, 'ops-base', { platformAdmin: true });
+
+      const docker = await screen.findByTestId('catalog-pack-requirements-docker');
+      fireEvent.click(
+        within(docker).getByTestId('catalog-pack-requirements-docker-enable-docker-a'),
+      );
+      fireEvent.click(await screen.findByRole('button', { name: '注册并启用' }));
+      await waitFor(() =>
+        expect(named(http.calls, 'enable_gate_instance').map((call) => call.params)).toEqual([
+          { gateId: 'docker-a', manifestDigest: 'sha256:manifest' },
+        ]),
+      );
+      // The pack is read again: the system is connected now, its Worker can be connected.
+      await waitFor(() => expect(named(http.calls, 'list_packs').length).toBeGreaterThan(1));
+      // The enable button is gone: focus lands on the system's row, whose state line announces
+      // it (UX acceptance of #705, P3-1).
+      const row = await screen.findByTestId('catalog-pack-requirements-docker');
+      await waitFor(() => expect(document.activeElement).toBe(row));
+      expect(within(row).getByRole('status').textContent).toMatch(/docker已接入/);
+
+      const ragflow = screen.getByTestId('catalog-pack-requirements-ragflow');
+      expect(
+        within(ragflow)
+          .getByTestId('catalog-pack-requirements-ragflow-platform')
+          .getAttribute('href'),
+      ).toBe('#/platform/integrations?tab=instances');
+    });
+  });
+
   it("an installed Worker links to its published head version's row (the 「Worker」 tab names one version)", async () => {
     const crew = pack({
       name: 'ops-base',
@@ -653,7 +1110,7 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
           notes: 'First version',
           breaking: false,
           requiredConnectors: [],
-          components: [{ kind: 'worker', name: 'ops-runner', description: null }],
+          components: [{ kind: 'worker', name: 'ops-runner', description: null, systems: [] }],
         },
       ],
       status: 'up_to_date',
@@ -664,6 +1121,10 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
           name: 'ops-runner',
           definitionId: 'def-1',
           headVersion: 3,
+          systems: [],
+          gates: [],
+          gatesKept: false,
+          bindable: false,
           status: 'up_to_date',
           installedVersion: 1,
           provenance: component().provenance,

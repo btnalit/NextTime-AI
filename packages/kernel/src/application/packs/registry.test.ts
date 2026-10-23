@@ -17,11 +17,13 @@ import {
   PackNotFoundError,
   PackRegistryError,
   type PackVersion,
+  WORKSPACE_OWNED_WORKER_FIELDS,
   derivePackComponentId,
   latestPackVersion,
   loadPackRegistry,
   packComponentDigest,
   packComponentKey,
+  packOwnedWorkerDigest,
   requirePack,
 } from './registry.js';
 
@@ -95,19 +97,27 @@ describe('the packs this repository ships', () => {
     expect(latest.summary.length).toBeGreaterThan(0);
   });
 
-  it('ops-base v2: the same components as v1, and it needs docker (P1-E)', async () => {
+  it('ops-base v2 needs docker (P1-E); v3 has its Worker act on it (P1-E2), the content unchanged', async () => {
     const registry = await loadPackRegistry();
     const pack = requirePack(registry, 'ops-base');
     expect(pack.versions.map((v) => [v.version, v.requiredConnectors])).toEqual([
       [1, []],
       [2, ['docker']],
+      [3, ['docker']],
     ]);
-    const [v1, v2] = pack.versions;
+    const [v1, v2, v3] = pack.versions;
     expect(v2?.components.map(packComponentDigest)).toEqual(
       v1?.components.map(packComponentDigest),
     );
-    expect(v2?.breaking).toBe(false);
-    expect(v2?.digest).not.toBe(v1?.digest);
+    expect(v3?.components.map(packComponentDigest)).toEqual(
+      v2?.components.map(packComponentDigest),
+    );
+    const systemsOf = (version: PackVersion | undefined) =>
+      version?.components.flatMap((c) => (c.kind === 'worker' ? [[c.name, c.systems]] : []));
+    expect(systemsOf(v2)).toEqual([['ops-runner', []]]);
+    expect(systemsOf(v3)).toEqual([['ops-runner', ['docker']]]);
+    expect([v2?.breaking, v3?.breaking]).toEqual([false, false]);
+    expect(new Set([v1?.digest, v2?.digest, v3?.digest]).size).toBe(3);
   });
 
   it('what an owner reads (summary, notes, descriptions) has no space between two Chinese characters', async () => {
@@ -408,6 +418,78 @@ describe('Skill and Worker files (P1-D)', () => {
       const err = await loadWith({ workers: [workerFile('fixer', 'p', line)] });
       expect(String(err)).toMatch(new RegExp(`declares \`${field}\``));
     }
+  });
+
+  it('a Worker’s systems (P1-E2): read beside its content, each one the version requires, named once', async () => {
+    fixture = await writePackFixture({
+      kit: [
+        {
+          requires: ['docker', 'ragflow'],
+          workers: [workerFile('fixer', 'p', 'systems:\n  - ragflow\n  - docker\n')],
+        },
+      ],
+    });
+    const [worker] = latestPackVersion(
+      requirePack(await loadPackRegistry(fixture), 'kit'),
+    ).components;
+    if (worker?.kind !== 'worker') throw new Error('unexpected kind');
+    expect(worker.systems).toEqual(['ragflow', 'docker']);
+    // Not content: the definition a workspace gets has no `systems`, so its digest is the one a
+    // Worker without them has.
+    expect(worker.definition).toEqual({ name: 'fixer', systemPrompt: 'p' });
+    expect(worker.contentDigest).toBe(contentDigest({ name: 'fixer', systemPrompt: 'p' }));
+
+    expect(
+      String(
+        await loadWith({
+          requires: ['docker'],
+          workers: [workerFile('fixer', 'p', 'systems:\n  - ragflow\n')],
+        }),
+      ),
+    ).toMatch(/system\(s\) "ragflow" that the version does not require/);
+    expect(
+      String(await loadWith({ workers: [workerFile('fixer', 'p', 'systems:\n  - docker\n')] })),
+    ).toMatch(/does not require/);
+    expect(
+      String(
+        await loadWith({
+          requires: ['docker'],
+          workers: [workerFile('fixer', 'p', 'systems:\n  - docker\n  - docker\n')],
+        }),
+      ),
+    ).toMatch(/names system "docker" twice/);
+    for (const line of ['systems: []\n', 'systems: docker\n', 'systems:\n  - Not A Name\n']) {
+      expect(
+        await loadWith({ requires: ['docker'], workers: [workerFile('fixer', 'p', line)] }),
+      ).toBeInstanceOf(PackManifestError);
+    }
+  });
+
+  it('a version’s digest counts a Worker’s systems only when it names some', async () => {
+    const digestWith = async (extra: string) => {
+      if (fixture) await rm(fixture.root, { recursive: true, force: true });
+      fixture = await writePackFixture({
+        kit: [{ requires: ['docker'], workers: [workerFile('fixer', 'p', extra)] }],
+      });
+      return latestPackVersion(requirePack(await loadPackRegistry(fixture), 'kit')).digest;
+    };
+    const without = await digestWith('');
+    const named = await digestWith('systems:\n  - docker\n');
+    expect(named).not.toBe(without);
+    // A version shipped before `systems` existed keeps its digest: nothing about it changed.
+    expect(await digestWith('')).toBe(without);
+  });
+
+  it('packOwnedWorkerDigest: the workspace’s gates and model are not the pack’s content', () => {
+    const shipped = { name: 'fixer', systemPrompt: 'p', skills: ['fix-it'] };
+    expect(packOwnedWorkerDigest(shipped)).toBe(contentDigest(shipped));
+    expect(packOwnedWorkerDigest({ ...shipped, gates: ['g1', 'g2'], model: 'a/b' })).toBe(
+      contentDigest(shipped),
+    );
+    expect(packOwnedWorkerDigest({ ...shipped, systemPrompt: 'q', gates: ['g1'] })).not.toBe(
+      contentDigest(shipped),
+    );
+    expect(WORKSPACE_OWNED_WORKER_FIELDS).toEqual(['gates', 'model']);
   });
 
   it('a Worker mounting a Skill its version does not ship, or declaring a capability beyond the worker ceiling', async () => {

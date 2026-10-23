@@ -76,7 +76,11 @@ export function sourceRequirementsChecker(
       requirements.push({
         connector: status.connector,
         state: status.state,
-        gates: await probeGates(client, workspaceId, status.gatekeeperIds),
+        gates: await probeGates(
+          client,
+          workspaceId,
+          status.gatekeepers.map((gate) => gate.id),
+        ),
       });
     }
     return { sourceFound: true, requirements };
