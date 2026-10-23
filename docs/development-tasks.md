@@ -4290,6 +4290,15 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
 
 - 实现说明：（未开工）
 - 2026-10-23 决定（协调线程，依据自进化闭环审查 §7.1）：W1a 的第一个 PR 是 WorkerRun 运行指纹：每个 WorkerRun（非目标 Task 也记）记模型、镜像 digest、平台版本、系统提示摘要、`definition@version`，与 `RunConfigSnapshot` 同字段；数据没记就补不回来，有空车道就开，文件主要在 `application/task` 与 task 迁移，与 GO5 后续 PR 的重叠由协调线程看。
+- 实现说明（W1a 第一个 PR：运行指纹 + 达成率按依据分列，#730，2026-10-23 合入，aa55f45；task 0009）：
+  - **分叉**（协调线程）：1a 指纹记在每个 WorkerRun 上；2a 镜像 id 由 worker-supervisor 回报建容器实际用的那个；3b 没指定模型时用 supervisor 读到的 `models.json` 摘要代表模型；4a 规则定在 shared，统计读模型留给 E2；5 控制台 Task 详情加「运行环境」。
+  - **worker-supervisor**：`runtime-report.ts` 的 `readModelsConfigDigest` 每次 spawn 前读 `${localDataDir}/models/models.json` 算 sha256（只在 `MODELS_JSON_HOST_PATH` 正是数据目录下那份时读，读不到 spawn 照常、不报这一项，遗留 459）；`taskRuntimeReport` 取 Docker 建出容器的 `Image` 与容器标签；`POST /task/spawn` 应答变为 `{containerId, ip, runtime}`；compose 挂 `models/` 目录只读（llm-proxy 与 `make gen-models` 用 rename 换文件，单文件挂载会停在旧 inode）。
+  - **内核**：`run-fingerprint.ts`（`RunSpecSchema` / `RunRuntimeReportSchema` strict、`v: 1`，`buildRunSpec`、`environmentDigest`、`readRunEnvironment`；存的值解析不了按「未记录 / 未上报」读）；`spawn.ts` INSERT 带 `run_spec`，supervisor 应答后在原 `provisioning → running` UPDATE 里写 `runtime_report` 与 `environment_digest`，spawn 失败的运行只有 `run_spec`；`supervisor-client` 的 `parseTaskRuntimeReport` 镜像引用 / id 不合格式整份不收，标签与摘要逐个校验；目标步骤的 `run_config_snapshot` 不动，集成测试断言与指纹重叠的四项一致。
+  - **迁移 task 0009**：三列、三个 CHECK（没 `run_spec` 不能有 `runtime_report`，没 `runtime_report` 不能有指纹，指纹格式固定）、部分索引 `(workspace_id, environment_digest)`；触发器 `worker_runs_fingerprint_write_once` 覆盖 INSERT 与写这三列或 `status` 的 UPDATE（#493 F1、F2），用 task 模块同一个 advisory lock；不回填、可回退。
+  - **shared**：`outcome-basis.ts`：请求人确认、平台验收检查是主数字，agent 自报、独立评审是代理指标，`Record` 保证新依据必须先归档；`tallyOutcomesByBasis` 分开计数与达成率、无样本为 null。wire 加 `RunRuntimeReportWireSchema`、`RunEnvironmentWireSchema`、`WorkerRunWire.environment`（nullable）。
+  - **控制台**：`TaskDetail` 的 `RunEnvironments`（每次运行一块，多次运行开头说明哪几次指纹相同 / 不同 / 无法比较，不显示系统提示原文）；`ProxyOutcomeNote` 标代理指标；`lib/tasks.ts` 缺省按「未记录」读。
+  - **可比范围**（#488 审查）：`imageId` 是本机 Docker 解析出的 id，同一份镜像本机构建与从 GHCR 拉取时可能不同，启用 containerd 镜像存储时也可能是 manifest digest；`environment_digest` 只在同一台主机内可比，不能拿 staging 与主机比较，E2 的分段要按工作区（即按主机）理解。
+  - **不在本 PR**：统计读模型与详情页（E2）；`MODELS_JSON_HOST_PATH` 指到别处时没有指纹（遗留 459）。
 
 **E2 — Skill / Procedure 版本统计读模型 + 详情页**（见 `global-roadmap-2026-10-16.md` §4）
 
