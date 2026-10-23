@@ -131,6 +131,7 @@ import {
   DraftNotDiscardableError,
   ProcedureNotFoundError,
   ProcedureStepReferenceError,
+  ProcedureTemplateError,
   SkillNameConflictError,
   SkillNotFoundError,
   SkillValidationError,
@@ -774,6 +775,15 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   }
   if (err instanceof ProcedureStepReferenceError) {
     return { status: 400, code: 'invalid_step_reference', message: err.message };
+  }
+  // S11 GO5d-2: the goal plan a Procedure makes does not pass — the same 400 a plan's problems get.
+  if (err instanceof ProcedureTemplateError) {
+    return {
+      status: 400,
+      code: 'invalid_params',
+      message: err.message,
+      details: { problems: [...err.problems] },
+    };
   }
   if (
     err instanceof WorkerDefinitionValidationError ||

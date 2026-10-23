@@ -378,9 +378,14 @@ class TooLargeToCheck extends Error {}
 /**
  * Where `output` does not match `schema` — see the module comment. Pure and bounded: it walks
  * `output` along `schema` only and visits at most {@link OUTPUT_VALIDATION_MAX_NODES} values; an
- * output with more along its schema is one problem, at `output`.
+ * output with more along its schema is one problem, at `output`. `root` names the value in the
+ * problems' paths (S11 GO5d-2: a goal's Procedure `parameters` are checked by the same rules).
  */
-export function validateOutput(schema: OutputSchema, output: unknown): OutputValidation {
+export function validateOutput(
+  schema: OutputSchema,
+  output: unknown,
+  root = 'output',
+): OutputValidation {
   const problems: OutputProblem[] = [];
   let problemCount = 0;
   let visited = 0;
@@ -456,13 +461,13 @@ export function validateOutput(schema: OutputSchema, output: unknown): OutputVal
   };
 
   try {
-    visit(schema, output, 'output');
+    visit(schema, output, root);
   } catch (err) {
     if (!(err instanceof TooLargeToCheck)) throw err;
     return {
       problems: [
         {
-          path: 'output',
+          path: root,
           message: `too large to check: more than ${OUTPUT_VALIDATION_MAX_NODES} values`,
         },
       ],

@@ -28,6 +28,7 @@ const ACTION = '66000000-0000-4000-8000-0000000000f1';
 const TASK_FETCH = '66000000-0000-4000-8000-000000000101';
 const TASK_APPLY = '66000000-0000-4000-8000-000000000102';
 const TASK_FETCH_REWORK = '66000000-0000-4000-8000-000000000103';
+const PROCEDURE = '66000000-0000-4000-8000-000000000201';
 
 // Within the last hour, so the wall-clock budget reads as it would on a goal running today.
 const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
@@ -139,6 +140,8 @@ function revision(n: 1 | 2) {
     createdAt: n === 1 ? T0 : T2,
     removals: n === 1 ? {} : { notify: { mode: 'terminate' } },
     hints: [],
+    // GO5d-2: revision 1 was made from a published Procedure; revision 2 is alice's own edit.
+    fromProcedure: n === 1 ? { procedureId: PROCEDURE, version: 3, name: '证书续期' } : null,
   };
 }
 
@@ -421,6 +424,13 @@ test.describe('S11 GO6: a goal’s pages with content (stand-in reads)', () => {
       await output.locator('summary').click();
       await expect(output).toContainText('web-2');
       await expect(page.getByTestId('goal-revision')).toHaveCount(2);
+      // GO5d-2: where the plan came from, on the plan and on revision 1, linked to the Procedure.
+      await expect(page.getByTestId('goal-plan-source')).toHaveText('由流程 证书续期 v3 生成');
+      await expect(page.getByTestId('goal-plan-source-link')).toHaveAttribute(
+        'href',
+        `#/govern/catalog/procedures/${PROCEDURE}`,
+      );
+      await expect(page.getByTestId('goal-revision-from-procedure')).toHaveCount(1);
       // The owner on alice's paused goal: hold it or cancel it, record what was found about the
       // action; resuming it is alice's alone.
       await expect(page.getByTestId('goal-op-hold')).toBeVisible();

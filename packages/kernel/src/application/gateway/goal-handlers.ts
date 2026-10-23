@@ -10,6 +10,7 @@ import {
   type GoalAcceptanceRoundWire,
   type GoalAcceptanceWire,
   type GoalDetailWire,
+  type GoalFromProcedure,
   type GoalOperationResultWire,
   type GoalPlan,
   type GoalRunStatus,
@@ -41,6 +42,7 @@ import {
   type GoalViewer,
   type PlanRevisionRow,
   type PlanRevisionView,
+  type PlanSourceView,
   type UnresolvedGoalAction,
   cancelGoalRun,
   confirmGoalAcceptance,
@@ -167,7 +169,11 @@ function toWireGoalRun(summary: GoalRunSummary): GoalRunWire {
   };
 }
 
-function toWirePlanRevisionSummary(row: PlanRevisionRow): PlanRevisionSummaryWire {
+/** `source`: the Procedure `row`'s plan was made from (S11 GO5d-2), as the reader got it. */
+function toWirePlanRevisionSummary(
+  row: PlanRevisionRow,
+  source: PlanSourceView | null,
+): PlanRevisionSummaryWire {
   return {
     id: row.id,
     goalRunId: row.goalRunId,
@@ -189,12 +195,21 @@ function toWirePlanRevisionSummary(row: PlanRevisionRow): PlanRevisionSummaryWir
         },
       ]),
     ),
+    // Legacy 420: a Procedure's name is free text, read as every read shows it.
+    fromProcedure:
+      row.sourceProcedure !== null && source !== null
+        ? {
+            procedureId: source.procedureId,
+            version: source.version,
+            name: shownFreeText(source.name),
+          }
+        : null,
   };
 }
 
 function toWirePlanRevision(view: PlanRevisionView): PlanRevisionWire {
   return {
-    ...toWirePlanRevisionSummary(view.revision),
+    ...toWirePlanRevisionSummary(view.revision, view.source),
     // Legacy 420: the plan as every read shows it (`application/goal`'s `planAsRead`) — the plan
     // that runs is the stored one; `revise_goal` takes a value left as this read shows it as
     // unchanged (S11 GO5c, `reviewRevisedPlan`).
@@ -318,7 +333,9 @@ function toWireGoalDetail(detail: GoalRunDetail): GoalDetailWire {
   return {
     ...toWireGoalRun(detail),
     planRevision: toWirePlanRevision(detail.planRevision),
-    revisions: detail.revisions.map(toWirePlanRevisionSummary),
+    revisions: detail.revisions.map((row) =>
+      toWirePlanRevisionSummary(row, row.sourceProcedure !== null ? detail.planSource : null),
+    ),
     steps: detail.steps.map(toWireStepRun),
     acceptance: toWireAcceptance(detail.acceptance),
     leftovers: detail.leftovers
@@ -424,16 +441,21 @@ export const listGoalUnresolvedActionsHandler: CapabilityHandler = async (
 const onRun = (goalRunId: string) => ({ resourceType: 'goal_run', resourceId: goalRunId });
 
 /** `propose_goal`'s derived idempotency key (goal/0008): the same statement, plan and budget from
- *  the same session (`sid`, else the requester) collapse onto the run while it is still proposed. */
+ *  the same session (`sid`, else the requester) collapse onto the run while it is still proposed.
+ *  S11 GO5d-2: a plan made from a Procedure counts as its `fromProcedure` — the Procedure, version
+ *  and parameters asked for (a written plan's key is as before). */
 export function deriveDefaultProposeGoalIdempotencyKey(args: {
   readonly identity: string;
   readonly statement: string;
-  readonly plan: unknown;
+  readonly plan?: unknown;
+  readonly fromProcedure?: GoalFromProcedure;
   readonly budget: GoalRunBudget;
 }): string {
   const intentHash = hashStableParams({
     statement: args.statement,
-    plan: args.plan,
+    ...(args.fromProcedure !== undefined
+      ? { fromProcedure: args.fromProcedure }
+      : { plan: args.plan }),
     budget: args.budget,
   });
   return `auto:${args.identity}:${intentHash}`;
@@ -442,7 +464,8 @@ export function deriveDefaultProposeGoalIdempotencyKey(args: {
 export const proposeGoalHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
   const input = params as {
     statement: string;
-    plan: GoalPlan;
+    plan?: GoalPlan;
+    fromProcedure?: GoalFromProcedure;
     budget: GoalRunBudget;
     idempotencyKey?: string;
   };
@@ -455,7 +478,9 @@ export const proposeGoalHandler: CapabilityHandler = async (client, workspaceId,
       : deriveDefaultProposeGoalIdempotencyKey({
           identity: sid ?? requesterId,
           statement: input.statement,
-          plan: input.plan,
+          ...(input.fromProcedure !== undefined
+            ? { fromProcedure: input.fromProcedure }
+            : { plan: input.plan }),
           budget: input.budget,
         });
   const turn = ctx?.principal
@@ -465,7 +490,9 @@ export const proposeGoalHandler: CapabilityHandler = async (client, workspaceId,
     requesterId,
     proposedBy: requesterId,
     statement: input.statement,
-    plan: input.plan,
+    ...(input.fromProcedure !== undefined
+      ? { fromProcedure: input.fromProcedure }
+      : { plan: input.plan }),
     budget: input.budget,
     idempotencyKey,
     maxProposed: maxProposedGoalsPerRequester(process.env.GOAL_MAX_PROPOSED_PER_REQUESTER),

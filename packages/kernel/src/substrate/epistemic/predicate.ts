@@ -841,8 +841,14 @@ function chainText(steps: readonly ChainStep[]): string {
  * position in what is not a list. Only a plain path (fields and positions) is followed, and only
  * as far as the schema says: past a part it leaves open, nothing is claimed — the advancer finds a
  * missing value when it binds (`application/goal/bindings.ts`). `[]` when nothing is certain.
+ * `subject` names what the schema describes — a step's output (the default), or a Procedure's
+ * parameters (S11 GO5d-2: a `$params` binding).
  */
-export function bindingSchemaProblems(path: string, schema: OutputSchema): readonly string[] {
+export function bindingSchemaProblems(
+  path: string,
+  schema: OutputSchema,
+  subject: 'output' | 'parameters' = 'output',
+): readonly string[] {
   let ast: unknown;
   try {
     ast = compilePath(path);
@@ -856,10 +862,10 @@ export function bindingSchemaProblems(path: string, schema: OutputSchema): reado
   for (const [i, step] of steps.entries()) {
     if (!at) return [];
     const types = at.type === undefined ? null : Array.isArray(at.type) ? at.type : [at.type];
-    const where = i === 0 ? 'the output' : chainText(steps.slice(0, i));
+    const where = i === 0 ? `the ${subject}` : chainText(steps.slice(0, i));
     if ('field' in step) {
       if (types && !types.includes('object')) {
-        return [`path "${path}": ${where} is not an object in the output schema`];
+        return [`path "${path}": ${where} is not an object in the ${subject} schema`];
       }
       const declared: OutputSchema | undefined = at.properties
         ? Object.hasOwn(at.properties, step.field)
@@ -868,13 +874,13 @@ export function bindingSchemaProblems(path: string, schema: OutputSchema): reado
         : undefined;
       if (!declared && at.additionalProperties === false) {
         return [
-          `path "${path}": the output schema does not declare ${JSON.stringify(step.field)} in ${where}`,
+          `path "${path}": the ${subject} schema does not declare ${JSON.stringify(step.field)} in ${where}`,
         ];
       }
       at = declared;
     } else {
       if (types && !types.includes('array')) {
-        return [`path "${path}": ${where} is not a list in the output schema`];
+        return [`path "${path}": ${where} is not a list in the ${subject} schema`];
       }
       at = at.items;
     }

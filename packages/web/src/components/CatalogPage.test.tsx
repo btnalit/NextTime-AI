@@ -1976,6 +1976,56 @@ describe('CatalogPage', () => {
     );
   });
 
+  it('UX acceptance of #722 (P2-1): a publish refused because the plan it makes does not pass lists why next to Publish, focused', async () => {
+    let attempts = 0;
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_procedures: () => ({
+        items: [
+          {
+            id: 'pr-9',
+            version: 2,
+            status: 'draft',
+            name: 'stock-check',
+            description: 'd',
+            steps: [],
+          },
+        ],
+      }),
+      publish_procedure: () => {
+        attempts += 1;
+        throw new HttpError('capability_error', 'invalid params', 'invalid_params', {
+          problems: [
+            'step "scan": bindings[2]: path "zone": the parameters schema does not declare "zone" in the parameters',
+            'the plan it makes: step "apply": bindings[0]: takes from step "missing", which this step does not depend on — add it to dependsOn',
+            'something the console does not know',
+          ],
+        });
+      },
+    });
+    renderPage(http, 'procedures');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    fireEvent.click(within(detail).getByRole('button', { name: /^发布$/ }));
+    const problems = await within(detail).findByTestId('procedure-publish-problems');
+    expect(problems.getAttribute('role')).toBe('alert');
+    await waitFor(() => expect(document.activeElement).toBe(problems));
+    expect(problems.textContent).toMatch(/生成不了目标的计划，所以没有发布/);
+    expect(
+      within(problems)
+        .getAllByRole('listitem')
+        .map((item) => item.textContent),
+    ).toEqual([
+      expect.stringMatching(
+        /^步骤 scan 的第 3 个绑定：路径 zone 取不到值：启动参数里没有声明 zone$/,
+      ),
+      expect.stringMatching(/^步骤 apply 的第 1 个绑定：取自步骤 missing/),
+      'something the console does not know',
+    ]);
+    // Said here, not as a failure toast.
+    expect(screen.queryByTestId('toast')).toBeNull();
+    expect(attempts).toBe(1);
+  });
+
   it('Skills tab: the proposer’s own draft still offers Discard', async () => {
     const http = scriptedHttp({
       get_workspace: () => OWNER_WORKSPACE,

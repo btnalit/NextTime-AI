@@ -39,8 +39,8 @@ function described(step: PlanStep, binding: StepBinding, index: number): string 
 
 /** `target` with `value` at the dotted `to`, the objects on the way made (or copied) as needed.
  *  Own properties only, so no field name reaches a prototype (the plan refuses the reserved ones
- *  as well). */
-function placeAt(
+ *  as well). Also how a plan made from a Procedure puts its parameters in (`from-procedure.ts`). */
+export function placeAt(
   target: Record<string, unknown>,
   to: readonly string[],
   value: unknown,
