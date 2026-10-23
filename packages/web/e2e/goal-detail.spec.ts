@@ -1,0 +1,318 @@
+import { type Page, expect, test } from '@playwright/test';
+import { OWNER_API_KEY, loginAsOwner } from './lib/auth.js';
+
+/**
+ * e2e/goal-detail.spec.ts (S11 GO6, read-only part): the 目标 list and one goal's page with real
+ * content, in a real browser at the widths UX checks (1280, 390). Nothing on the CI stack can
+ * propose a goal yet (`propose_goal` is GO5c), so the goal reads are stand-ins answered in the
+ * browser (`page.route`, as approval-failure-reason.spec.ts does): `list_goals`, `get_goal`,
+ * `get_goal_revision`, `list_goal_unresolved_actions`, and the names they point at
+ * (`list_principals`, `list_gatekeepers`, `resolve_refs`). Everything else on the page is the real
+ * stack. Full-page captures land in `test-results/` (uploaded as the `playwright-report` artifact)
+ * for the UX acceptance to read; they are not a screenshot gate.
+ */
+
+const GOAL = '66000000-0000-4000-8000-000000000001';
+const GOAL_DONE = '66000000-0000-4000-8000-000000000002';
+const GOAL_OTHER = '66000000-0000-4000-8000-000000000003';
+const ALICE = '66000000-0000-4000-8000-0000000000a1';
+const BOB = '66000000-0000-4000-8000-0000000000b1';
+const AGENT = '66000000-0000-4000-8000-0000000000c1';
+const GATE = '66000000-0000-4000-8000-0000000000d1';
+const WORKER = '66000000-0000-4000-8000-0000000000e1';
+const ACTION = '66000000-0000-4000-8000-0000000000f1';
+
+const T0 = '2026-10-20T08:00:00.000Z';
+const T1 = '2026-10-20T08:01:00.000Z';
+const T2 = '2026-10-20T08:20:00.000Z';
+const T3 = '2026-10-20T08:40:00.000Z';
+
+const worker = { definitionId: WORKER, version: 2 };
+
+function run(overrides: Record<string, unknown> = {}) {
+  return {
+    id: GOAL,
+    status: 'paused',
+    pauseReason: 'awaiting_reconcile',
+    pausedBy: null,
+    pausedByAuthority: null,
+    cleanupPending: false,
+    outcome: null,
+    outcomeBasis: null,
+    outcomeDecisionId: null,
+    onBehalfOf: ALICE,
+    turnId: null,
+    statement: '把三台主机的证书都换成新签发的，旧证书确认不再使用后删除',
+    currentRevision: 2,
+    budget: { maxTokens: 200000, maxSteps: 12, maxRevisions: 3, maxWallClockSeconds: 14400 },
+    usage: { tokens: 48200, steps: 3, revisions: 1 },
+    stepCounts: {
+      pending: 1,
+      ready: 0,
+      running: 0,
+      waiting: 1,
+      succeeded: 1,
+      failed: 0,
+      superseded: 1,
+      cancelled: 0,
+      skipped: 0,
+    },
+    createdAt: T0,
+    updatedAt: T3,
+    confirmedAt: T1,
+    endedAt: null,
+    ...overrides,
+  };
+}
+
+const PLAN_V1 = {
+  steps: [
+    { key: 'fetch', worker, input: { hosts: 3 } },
+    { key: 'apply', worker, dependsOn: ['fetch'], maxAttempts: 2 },
+    { key: 'notify', worker, dependsOn: ['apply'] },
+  ],
+  acceptance: [
+    {
+      kind: 'observe_predicate',
+      key: 'certs',
+      check: {
+        gatekeeperId: GATE,
+        operation: 'cert.list',
+        expect: { path: 'expiring', op: 'eq', value: 0 },
+      },
+    },
+  ],
+};
+
+const PLAN_V2 = {
+  ...PLAN_V1,
+  steps: [
+    PLAN_V1.steps[0],
+    PLAN_V1.steps[1],
+    { key: 'remove-old', worker, dependsOn: ['apply'], input: { keep: 'none' } },
+  ],
+};
+
+function revision(n: 1 | 2) {
+  return {
+    id: `rev-${n}`,
+    goalRunId: GOAL,
+    revision: n,
+    status: 'accepted',
+    basedOnRevision: n === 1 ? null : 1,
+    plan: n === 1 ? PLAN_V1 : PLAN_V2,
+    proposedBy: n === 1 ? AGENT : ALICE,
+    reason: n === 1 ? null : '通知改成人工发；旧证书要在换完后删掉',
+    decidedBy: ALICE,
+    decidedAt: n === 1 ? T1 : T2,
+    createdAt: n === 1 ? T0 : T2,
+    removals: n === 1 ? {} : { notify: { mode: 'terminate' } },
+    hints: [],
+  };
+}
+
+function summary(n: 1 | 2) {
+  const { plan: _plan, hints: _hints, ...rest } = revision(n);
+  return rest;
+}
+
+const DETAIL = {
+  ...run(),
+  planRevision: revision(2),
+  revisions: [summary(1), summary(2)],
+  steps: [
+    {
+      id: 'sr-fetch',
+      stepKey: 'fetch',
+      introducedInRevision: 1,
+      supersededInRevision: null,
+      status: 'succeeded',
+      waitingReason: null,
+      failureCategory: null,
+      attemptCount: 1,
+      createdAt: T1,
+      updatedAt: T2,
+      endedAt: T2,
+      attempts: [{ attempt: 1, taskId: 'task-fetch-1', status: 'completed', createdAt: T1 }],
+      actions: [],
+    },
+    {
+      id: 'sr-apply',
+      stepKey: 'apply',
+      introducedInRevision: 1,
+      supersededInRevision: null,
+      status: 'waiting',
+      waitingReason: 'reconcile',
+      failureCategory: null,
+      attemptCount: 1,
+      createdAt: T2,
+      updatedAt: T3,
+      endedAt: null,
+      attempts: [{ attempt: 1, taskId: 'task-apply-1', status: 'failed', createdAt: T2 }],
+      actions: [
+        {
+          actionRequestId: ACTION,
+          status: 'failed',
+          failureKind: 'outcome_unknown',
+          reconciliation: null,
+        },
+      ],
+    },
+    {
+      id: 'sr-notify',
+      stepKey: 'notify',
+      introducedInRevision: 1,
+      supersededInRevision: 2,
+      status: 'superseded',
+      waitingReason: null,
+      failureCategory: null,
+      attemptCount: 0,
+      createdAt: T1,
+      updatedAt: T2,
+      endedAt: T2,
+      attempts: [],
+      actions: [],
+    },
+    {
+      id: 'sr-remove-old',
+      stepKey: 'remove-old',
+      introducedInRevision: 2,
+      supersededInRevision: null,
+      status: 'pending',
+      waitingReason: null,
+      failureCategory: null,
+      attemptCount: 0,
+      createdAt: T2,
+      updatedAt: T2,
+      endedAt: null,
+      attempts: [],
+      actions: [],
+    },
+  ],
+  acceptance: { rounds: [], steps: [], overriddenChecks: [] },
+  leftovers: null,
+};
+
+const UNRESOLVED = [
+  {
+    actionRequestId: ACTION,
+    stepRunId: 'sr-apply',
+    stepKey: 'apply',
+    gatekeeperId: GATE,
+    actionKindTag: 'cert.replace',
+    failedAt: T3,
+    needs: 'finding',
+    platformCheck: null,
+  },
+];
+
+const GOALS = [
+  run(),
+  run({
+    id: GOAL_DONE,
+    status: 'completed',
+    pauseReason: null,
+    outcome: 'achieved',
+    outcomeBasis: 'verified_by_check',
+    statement: '给备份库加一块盘并确认挂载',
+    currentRevision: 1,
+    usage: { tokens: 9100, steps: 2, revisions: 0 },
+    stepCounts: { ...run().stepCounts, pending: 0, waiting: 0, succeeded: 2, superseded: 0 },
+    endedAt: T3,
+  }),
+  run({
+    id: GOAL_OTHER,
+    status: 'running',
+    pauseReason: null,
+    onBehalfOf: BOB,
+    statement: '升级数据库到下一个小版本',
+    currentRevision: 1,
+    usage: { tokens: 1200, steps: 1, revisions: 0 },
+  }),
+];
+
+const NAMES: Record<string, { kind: string; name: string }> = {
+  [ALICE]: { kind: 'principal', name: 'alice' },
+  [BOB]: { kind: 'principal', name: 'bob' },
+  [AGENT]: { kind: 'principal', name: '入口智能体' },
+  [GATE]: { kind: 'gatekeeper', name: 'cert-gate' },
+  [WORKER]: { kind: 'workerDefinition', name: 'cert-rotator' },
+  [ACTION]: { kind: 'actionRequest', name: 'cert.replace' },
+};
+
+async function answerGoalReads(page: Page): Promise<void> {
+  const answer = (result: unknown) => ({ json: { ok: true, result } });
+  await page.route('**/api/cap/list_goals', (route) => route.fulfill(answer({ items: GOALS })));
+  await page.route('**/api/cap/get_goal', (route) => route.fulfill(answer(DETAIL)));
+  await page.route('**/api/cap/get_goal_revision', async (route) => {
+    const body = route.request().postDataJSON() as { revision?: number } | null;
+    const n = body?.revision === 2 ? 2 : 1;
+    await route.fulfill(answer(revision(n)));
+  });
+  await page.route('**/api/cap/list_goal_unresolved_actions', (route) =>
+    route.fulfill(answer({ items: UNRESOLVED })),
+  );
+  await page.route('**/api/cap/list_principals', (route) =>
+    route.fulfill(
+      answer({
+        items: [
+          { id: ALICE, displayName: 'alice', kind: 'human', role: 'member' },
+          { id: BOB, displayName: 'bob', kind: 'human', role: 'member' },
+        ],
+      }),
+    ),
+  );
+  await page.route('**/api/cap/list_gatekeepers', (route) =>
+    route.fulfill(answer({ items: [{ id: GATE, name: 'cert-gate' }] })),
+  );
+  await page.route('**/api/cap/resolve_refs', async (route) => {
+    const body = route.request().postDataJSON() as { ids?: string[] } | null;
+    const items = (body?.ids ?? []).flatMap((id) => {
+      const ref = NAMES[id];
+      return ref ? [{ id, ...ref }] : [];
+    });
+    await route.fulfill(answer({ items }));
+  });
+}
+
+test.describe('S11 GO6: a goal’s pages with content (stand-in reads)', () => {
+  test.skip(!OWNER_API_KEY, 'set WEB_E2E_BASE_URL and WEB_E2E_API_KEY to run this suite');
+
+  for (const width of [1280, 390] as const) {
+    test(`list and detail read at ${width}`, async ({ page }, testInfo) => {
+      await page.setViewportSize({ width, height: 900 });
+      await answerGoalReads(page);
+      await loginAsOwner(page);
+
+      await page.goto('/#/work/goals');
+      const rows = page.getByTestId('goal-row');
+      await expect(rows).toHaveCount(3, { timeout: 15_000 });
+      await expect(page.getByTestId('goals-requester-filter')).toBeVisible();
+      await expect(rows.first()).toContainText('alice');
+      await page.screenshot({
+        path: testInfo.outputPath(`goals-list-${width}.png`),
+        fullPage: true,
+      });
+
+      await rows.first().click();
+      await expect(page).toHaveURL(new RegExp(`#/work/goals/${GOAL}$`));
+      await expect(page.getByTestId('goal-step')).toHaveCount(3, { timeout: 15_000 });
+      await expect(page.getByTestId('goal-state-note')).toContainText('有动作结果不明');
+      await expect(page.getByTestId('goal-unresolved-check')).toContainText('删除');
+      await expect(page.getByTestId('goal-step-waiting')).toBeVisible();
+      await expect(page.getByTestId('goal-revision')).toHaveCount(2);
+      // Read-only: no operation buttons yet (they arrive with GO5b).
+      await expect(
+        page.locator('.goal-page').getByRole('button', { name: /暂停|继续|取消|确认/ }),
+      ).toHaveCount(0);
+
+      const diff = page.getByTestId('goal-revision-diff').first();
+      await diff.locator('summary').click();
+      await expect(diff.getByTestId('goal-revision-diff-body')).toContainText('remove-old');
+      await page.screenshot({
+        path: testInfo.outputPath(`goal-detail-${width}.png`),
+        fullPage: true,
+      });
+    });
+  }
+});

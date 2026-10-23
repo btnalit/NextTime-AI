@@ -1642,3 +1642,17 @@
 .provider-test-verdict[data-verdict="chat-only"] .provider-test-verdict-mark {
   background: var(--warn);
 }
+
+/* S11 GO6: the goal page — its lists are rows of chips and sentences, not bulleted prose; each
+   step of the plan is a bordered block so its attempts, actions and checks read as one step. */
+.goal-page ul,
+.goal-page ol {
+  list-style: none;
+  padding: 0;
+}
+
+.goal-step {
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+}

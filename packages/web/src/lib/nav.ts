@@ -67,6 +67,8 @@ export const WORK_NAV: readonly NavItem[] = [
     // Only an operator or the owner reads the queue: for every other role the page could only
     // say "not you" (#541 acceptance P2 — a dead end for the read-only auditor first of all).
   },
+  // S11 GO6: a goal runs many Tasks, so it sits just above them.
+  { section: 'goals', label: '目标', sub: 'Goals', icon: 'flag', href: hrefs.goals() },
   { section: 'tasks', label: '任务', sub: 'Tasks', icon: 'tasks', href: hrefs.tasks() },
   // S6-D: the native 图谱 page (object browser on search / state_at / explain) replaces the
   // third-party Explorer bundle as the console's graph entry.

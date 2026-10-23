@@ -80,7 +80,8 @@ export function isEmptyEntry(entry: AuditEntry): boolean {
  * value still works through the filter's free-text path. Legacy sweep (console batch,
  * 2026-10-16): `gate_instance` (`gate-instance-handlers.ts`) and `module`
  * (`platform-modules-handlers.ts`) are written on workspace rows too; S11 P1: `change_item`
- * (`application/change-plan`); P1-B: `change_segment` (`roll_back_change_segment`).
+ * (`application/change-plan`); P1-B: `change_segment` (`roll_back_change_segment`); S11 GO6: `goal_run`,
+ * `plan_revision`, `step_run` (`application/goal`, written since GO1).
  */
 export const AUDIT_RESOURCE_TYPES = [
   'action_request',
@@ -97,11 +98,13 @@ export const AUDIT_RESOURCE_TYPES = [
   'fact',
   'gate_instance',
   'gatekeeper',
+  'goal_run',
   'module',
   'object',
   'ontology_type',
   'ontology_version',
   'operation',
+  'plan_revision',
   'policy',
   'principal',
   'procedure',
@@ -109,6 +112,7 @@ export const AUDIT_RESOURCE_TYPES = [
   'session',
   'skill',
   'source',
+  'step_run',
   'task',
   'worker_definition',
   'worker_run',

@@ -76,6 +76,14 @@ export const SURFACES: readonly Surface[] = [
     role: 'owner',
     ready: (page) => heading(page, '待我审批'), // ApprovalQueuePage.tsx
   },
+  // S11 GO6: 目标 — empty in CI until a goal can be proposed (GO5c).
+  {
+    id: 'goals',
+    labelZh: '目标',
+    hash: '#/work/goals',
+    role: 'owner',
+    ready: (page) => page.getByTestId('goals-empty').or(page.getByTestId('goals-list')), // goals/GoalsPage.tsx
+  },
   {
     id: 'tasks',
     labelZh: '任务',

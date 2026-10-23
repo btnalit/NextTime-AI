@@ -18,6 +18,7 @@
 export type NavSection =
   | 'chats'
   | 'approvals'
+  | 'goals'
   | 'tasks'
   | 'agent'
   | 'account'
@@ -67,6 +68,7 @@ export type Route =
   | { readonly kind: 'chats' }
   | { readonly kind: 'chat'; readonly chatId: string }
   | { readonly kind: 'approvals'; readonly actionRequestId?: string }
+  | { readonly kind: 'goals'; readonly goalRunId?: string }
   | { readonly kind: 'tasks'; readonly taskId?: string }
   | { readonly kind: 'agent' }
   | { readonly kind: 'account' }
@@ -120,6 +122,13 @@ export function routeFromHash(fullHash: string): Route {
     return approval[1]
       ? { kind: 'approvals', actionRequestId: decodeURIComponent(approval[1]) }
       : { kind: 'approvals' };
+  }
+
+  // S11 GO6: 目标 — the list, and one goal's own page (not a drawer: a goal's plan, steps,
+  // acceptance and revisions need the room).
+  const goal = /^#\/work\/goals(?:\/(.+))?$/.exec(hash);
+  if (goal) {
+    return goal[1] ? { kind: 'goals', goalRunId: decodeURIComponent(goal[1]) } : { kind: 'goals' };
   }
 
   const task = /^#\/work\/tasks(?:\/(.+))?$/.exec(hash);
@@ -213,6 +222,8 @@ export const hrefs = {
   chat: (chatId: string) => `#/work/chats/${encodeURIComponent(chatId)}`,
   approvals: () => '#/work/approvals',
   approval: (actionRequestId: string) => `#/work/approvals/${encodeURIComponent(actionRequestId)}`,
+  goals: () => '#/work/goals',
+  goal: (goalRunId: string) => `#/work/goals/${encodeURIComponent(goalRunId)}`,
   tasks: () => '#/work/tasks',
   task: (taskId: string) => `#/work/tasks/${encodeURIComponent(taskId)}`,
   agent: () => '#/me/agent',

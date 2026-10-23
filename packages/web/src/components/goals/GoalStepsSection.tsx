@@ -1,0 +1,310 @@
+import type { GoalDetailWire, StepAcceptanceWire, StepRunWire } from '@nexttime/shared';
+import { DEFAULT_MAX_ATTEMPTS } from '@nexttime/shared';
+import type { CapabilityCaller } from '../../lib/clients.js';
+import { formatDateTime, formatRelative, prettyJsonVisible, shortId } from '../../lib/format.js';
+import {
+  type StepView,
+  actionFailureLabel,
+  checkKindLabel,
+  factCheckSentence,
+  goalSteps,
+  observationSentence,
+  reconciliationLabel,
+  stepAcceptanceLabel,
+  stepFailureText,
+  stepWaitingReasonLabel,
+} from '../../lib/goals.js';
+import { type Translate, useT } from '../../lib/i18n.js';
+import { hrefs } from '../../lib/router.js';
+import { RefChip } from '../kit/ref-chip.js';
+import { DashboardCard } from '../kit/section.js';
+import { StatusChip } from '../kit/status-chip.js';
+import { ActionChip } from './ActionChip.js';
+
+export interface GoalStepsSectionProps {
+  readonly detail: GoalDetailWire;
+  readonly http: CapabilityCaller;
+  readonly gateNames: ReadonlyMap<string, string>;
+}
+
+/**
+ * components/goals/GoalStepsSection (S11 GO6): the plan in force, step by step — its Worker, what
+ * it depends on, where its StepRun stands (and, while waiting or failed, why), its attempts (the
+ * Tasks), the actions it raised (the ActionRequests, each opening its approval), its own
+ * acceptance checks and reconcile declarations as sentences, and its input. Steps a revision
+ * replaced are listed under their own disclosure, oldest first.
+ */
+export function GoalStepsSection({ detail, http, gateNames }: GoalStepsSectionProps) {
+  const t = useT();
+  const { current, superseded } = goalSteps(detail);
+  const acceptanceByRun = new Map(detail.acceptance.steps.map((step) => [step.stepRunId, step]));
+  return (
+    <DashboardCard title={t('步骤', 'Steps')} data-testid="goal-steps">
+      <ol className="stack-s goal-steps">
+        {current.map((view) => (
+          <StepItem
+            key={view.key}
+            view={view}
+            acceptance={view.run ? acceptanceByRun.get(view.run.id) : undefined}
+            http={http}
+            gateNames={gateNames}
+            t={t}
+          />
+        ))}
+      </ol>
+      {superseded.length > 0 ? (
+        <details className="disclosure" data-testid="goal-steps-superseded">
+          <summary>
+            {t(
+              `已被修订替换的步骤（${superseded.length}）`,
+              `Steps a revision replaced (${superseded.length})`,
+            )}
+          </summary>
+          <div className="disclosure-body">
+            <ol className="stack-s goal-steps">
+              {superseded.map((run) => (
+                <StepItem
+                  key={run.id}
+                  view={{ key: run.stepKey, planStep: null, run }}
+                  acceptance={acceptanceByRun.get(run.id)}
+                  http={http}
+                  gateNames={gateNames}
+                  t={t}
+                />
+              ))}
+            </ol>
+          </div>
+        </details>
+      ) : null}
+    </DashboardCard>
+  );
+}
+
+interface StepItemProps {
+  readonly view: StepView;
+  readonly acceptance: StepAcceptanceWire | undefined;
+  readonly http: CapabilityCaller;
+  readonly gateNames: ReadonlyMap<string, string>;
+  readonly t: Translate;
+}
+
+function StepItem({ view, acceptance, http, gateNames, t }: StepItemProps) {
+  const { planStep, run } = view;
+  const dependsOn = planStep?.dependsOn ?? [];
+  const maxAttempts = planStep?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
+  const failure = run?.failureCategory ? stepFailureText(run.failureCategory, t) : null;
+  return (
+    <li
+      className="goal-step stack-s"
+      data-testid="goal-step"
+      data-step-key={view.key}
+      data-step-status={run?.status ?? 'not_started'}
+    >
+      <div className="row-wrap" style={{ justifyContent: 'space-between' }}>
+        <span className="row-wrap">
+          <strong className="mono">{view.key}</strong>
+          {planStep ? (
+            <>
+              <RefChip
+                kind="workerDefinition"
+                id={planStep.worker.definitionId}
+                http={http}
+                size="s"
+              />
+              <span className="text-3 text-small">v{planStep.worker.version}</span>
+            </>
+          ) : null}
+        </span>
+        {run ? (
+          <StatusChip machine="stepRun" status={run.status} size="s" />
+        ) : (
+          <span className="text-3 text-small">{t('尚未开始', 'Not started')}</span>
+        )}
+      </div>
+
+      <span className="text-small text-3">
+        {dependsOn.length > 0
+          ? t(`在这些步骤之后：${dependsOn.join('、')}`, `After: ${dependsOn.join(', ')}`)
+          : t('没有前置步骤', 'No earlier step')}
+        {run?.supersededInRevision
+          ? t(
+              ` · 第 ${run.introducedInRevision} 版引入，第 ${run.supersededInRevision} 版替换`,
+              ` · introduced in v${run.introducedInRevision}, replaced in v${run.supersededInRevision}`,
+            )
+          : ''}
+      </span>
+
+      {run?.waitingReason ? (
+        <span className="text-small text-warn" data-testid="goal-step-waiting">
+          {stepWaitingReasonLabel(run.waitingReason, t)}
+        </span>
+      ) : null}
+      {failure ? (
+        <span className="stack-s" data-testid="goal-step-failure">
+          <span className="text-small text-danger">{failure.short}</span>
+          <span className="text-small text-3">{failure.detail}</span>
+        </span>
+      ) : null}
+      {acceptance?.state ? (
+        <span
+          className={`text-small ${acceptance.state === 'passed' ? 'text-3' : 'text-warn'}`}
+          data-testid="goal-step-acceptance"
+        >
+          {stepAcceptanceLabel(acceptance.state, t)}
+        </span>
+      ) : null}
+
+      {run ? <Attempts run={run} maxAttempts={maxAttempts} http={http} t={t} /> : null}
+      {run && run.actions.length > 0 ? <Actions run={run} http={http} t={t} /> : null}
+
+      {planStep?.acceptance ? (
+        <details className="disclosure">
+          <summary>
+            {t(
+              `这一步的验收检查（${planStep.acceptance.length}）`,
+              `This step’s checks (${planStep.acceptance.length})`,
+            )}
+          </summary>
+          <div className="disclosure-body">
+            <ul className="stack-s">
+              {planStep.acceptance.map((check) => {
+                const latest = acceptance?.rounds
+                  .at(-1)
+                  ?.checks.find((candidate) => candidate.checkKey === check.key);
+                return (
+                  <li key={check.key} className="row-wrap" data-testid="goal-step-check">
+                    {latest ? (
+                      <StatusChip machine="goalCheck" status={latest.status} size="s" />
+                    ) : null}
+                    <span className="text-3 text-small">{checkKindLabel(check.kind, t)}</span>
+                    <span>
+                      {check.kind === 'observe_predicate'
+                        ? observationSentence(
+                            check.check,
+                            gateNames.get(check.check.gatekeeperId) ?? null,
+                            t,
+                          )
+                        : factCheckSentence(check.fact, t)}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        </details>
+      ) : null}
+      {planStep?.reconcile ? (
+        <details className="disclosure">
+          <summary>
+            {t(
+              `结果不明时平台怎么核对（${planStep.reconcile.length}）`,
+              `How the platform checks an unknown outcome (${planStep.reconcile.length})`,
+            )}
+          </summary>
+          <div className="disclosure-body">
+            <ul className="stack-s">
+              {planStep.reconcile.map((declaration, index) => (
+                <li
+                  key={`${declaration.action.gatekeeperId}-${declaration.action.operation}-${index}`}
+                >
+                  {t(
+                    `对门「${gateLabel(gateNames, declaration.action.gatekeeperId)}」上的 ${declaration.action.operation}：`,
+                    `For ${declaration.action.operation} on gate “${gateLabel(gateNames, declaration.action.gatekeeperId)}”: `,
+                  )}
+                  {observationSentence(
+                    declaration.check,
+                    gateNames.get(declaration.check.gatekeeperId) ?? null,
+                    t,
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </details>
+      ) : null}
+      {planStep?.input !== undefined ? (
+        <details className="disclosure">
+          <summary>{t('输入', 'Input')}</summary>
+          <div className="disclosure-body">
+            <pre className="code-block">{prettyJsonVisible(planStep.input)}</pre>
+          </div>
+        </details>
+      ) : null}
+    </li>
+  );
+}
+
+function gateLabel(names: ReadonlyMap<string, string>, gatekeeperId: string): string {
+  return names.get(gatekeeperId) ?? shortId(gatekeeperId);
+}
+
+function Attempts({
+  run,
+  maxAttempts,
+  http,
+  t,
+}: {
+  readonly run: StepRunWire;
+  readonly maxAttempts: number;
+  readonly http: CapabilityCaller;
+  readonly t: Translate;
+}) {
+  return (
+    <div className="stack-s" data-testid="goal-step-attempts">
+      <span className="text-small text-3 tabular">
+        {t(
+          `尝试 ${run.attemptCount}/${maxAttempts}`,
+          `Attempts ${run.attemptCount}/${maxAttempts}`,
+        )}
+      </span>
+      {run.attempts.map((attempt) => (
+        <span key={attempt.taskId} className="row-wrap text-small">
+          <span className="text-3 tabular">#{attempt.attempt}</span>
+          <RefChip
+            kind="task"
+            id={attempt.taskId}
+            http={http}
+            href={hrefs.task(attempt.taskId)}
+            size="s"
+          />
+          <StatusChip machine="task" status={attempt.status} size="s" />
+          <time className="text-3" title={formatDateTime(attempt.createdAt)}>
+            {formatRelative(attempt.createdAt)}
+          </time>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function Actions({
+  run,
+  http,
+  t,
+}: {
+  readonly run: StepRunWire;
+  readonly http: CapabilityCaller;
+  readonly t: Translate;
+}) {
+  return (
+    <div className="stack-s" data-testid="goal-step-actions">
+      <span className="text-small text-3">{t('提交的动作', 'Actions raised')}</span>
+      {run.actions.map((action) => (
+        <span
+          key={action.actionRequestId}
+          className="row-wrap text-small"
+          data-testid="goal-step-action"
+        >
+          <ActionChip actionRequestId={action.actionRequestId} http={http} />
+          <StatusChip machine="actionRequest" status={action.status} size="s" />
+          {action.failureKind ? (
+            <span className="text-danger">{actionFailureLabel(action.failureKind, t)}</span>
+          ) : null}
+          {action.reconciliation ? (
+            <span className="text-3">{reconciliationLabel(action.reconciliation, t)}</span>
+          ) : null}
+        </span>
+      ))}
+    </div>
+  );
+}
