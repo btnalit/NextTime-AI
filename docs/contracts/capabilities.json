@@ -1932,6 +1932,10 @@
                     }
                   ]
                 },
+                "preset": {
+                  "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+                  "type": "string"
+                },
                 "target": {
                   "format": "uri",
                   "type": "string"
@@ -2895,6 +2899,10 @@
             }
           ]
         },
+        "preset": {
+          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+          "type": "string"
+        },
         "target": {
           "format": "uri",
           "maxLength": 2000,
@@ -2910,9 +2918,7 @@
       },
       "required": [
         "gateId",
-        "transportKind",
-        "target",
-        "credentialMode"
+        "target"
       ],
       "type": "object"
     },
@@ -2948,6 +2954,10 @@
                       "type": "null"
                     }
                   ]
+                },
+                "preset": {
+                  "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+                  "type": "string"
                 },
                 "target": {
                   "format": "uri",
@@ -8639,6 +8649,10 @@
                       "type": "null"
                     }
                   ]
+                },
+                "preset": {
+                  "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+                  "type": "string"
                 },
                 "target": {
                   "format": "uri",
@@ -15993,6 +16007,9 @@
                     },
                     "type": "array"
                   },
+                  "platformPreset": {
+                    "type": "boolean"
+                  },
                   "state": {
                     "enum": [
                       "connected",
@@ -16006,7 +16023,8 @@
                   "connector",
                   "state",
                   "gatekeepers",
-                  "offered"
+                  "offered",
+                  "platformPreset"
                 ],
                 "type": "object"
               },
@@ -18286,6 +18304,170 @@
     "channel": "human",
     "group": "platform",
     "mode": "observe",
+    "name": "list_connector_presets",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "credentialHint": {
+                "type": "string"
+              },
+              "credentialMode": {
+                "enum": [
+                  "shared",
+                  "connected_account"
+                ],
+                "type": "string"
+              },
+              "displayName": {
+                "type": "string"
+              },
+              "instanceCount": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "name": {
+                "type": "string"
+              },
+              "operations": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "autoApprovable": {
+                      "type": "boolean"
+                    },
+                    "blastRadius": {
+                      "type": "string"
+                    },
+                    "destructiveHint": {
+                      "type": [
+                        "boolean",
+                        "null"
+                      ]
+                    },
+                    "gateOwnedParams": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "location": {
+                            "enum": [
+                              "header",
+                              "query",
+                              "cookie",
+                              "binding"
+                            ],
+                            "type": "string"
+                          },
+                          "param": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "param",
+                          "location"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "idempotentHint": {
+                      "type": [
+                        "boolean",
+                        "null"
+                      ]
+                    },
+                    "mode": {
+                      "enum": [
+                        "observe",
+                        "execute"
+                      ],
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "readOnlyHint": {
+                      "type": [
+                        "boolean",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "mode",
+                    "blastRadius",
+                    "autoApprovable",
+                    "readOnlyHint",
+                    "destructiveHint",
+                    "idempotentHint"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "packagedConnector": {
+                "type": "boolean"
+              },
+              "summary": {
+                "type": "string"
+              },
+              "targetHint": {
+                "type": "string"
+              },
+              "transportKind": {
+                "enum": [
+                  "http",
+                  "mcp"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "displayName",
+              "summary",
+              "transportKind",
+              "credentialMode",
+              "targetHint",
+              "credentialHint",
+              "operations",
+              "packagedConnector",
+              "instanceCount"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": "string"
+        },
+        "truncated": {
+          "const": true,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
+    "channel": "human",
+    "group": "platform",
+    "mode": "observe",
     "name": "list_connectors",
     "params": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -18732,6 +18914,10 @@
                             "type": "null"
                           }
                         ]
+                      },
+                      "preset": {
+                        "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+                        "type": "string"
                       },
                       "target": {
                         "format": "uri",
@@ -21476,6 +21662,9 @@
                       },
                       "type": "array"
                     },
+                    "platformPreset": {
+                      "type": "boolean"
+                    },
                     "state": {
                       "enum": [
                         "connected",
@@ -21489,7 +21678,8 @@
                     "connector",
                     "state",
                     "gatekeepers",
-                    "offered"
+                    "offered",
+                    "platformPreset"
                   ],
                   "type": "object"
                 },
@@ -27978,6 +28168,9 @@
                     },
                     "type": "array"
                   },
+                  "platformPreset": {
+                    "type": "boolean"
+                  },
                   "state": {
                     "enum": [
                       "connected",
@@ -27991,7 +28184,8 @@
                   "connector",
                   "state",
                   "gatekeepers",
-                  "offered"
+                  "offered",
+                  "platformPreset"
                 ],
                 "type": "object"
               },
@@ -40080,6 +40274,10 @@
                       "type": "null"
                     }
                   ]
+                },
+                "preset": {
+                  "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+                  "type": "string"
                 },
                 "target": {
                   "format": "uri",

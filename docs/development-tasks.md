@@ -4430,6 +4430,13 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **wire 与控制台**：`OperationGovernanceFieldsWire` 加 `awaitDecision`、`reads`、`writes`、`readOnlyHint`、`destructiveHint`、`idempotentHint`（只出现在结果里）。`GovernanceChange.tsx` 只列变了的字段（`governance-diff-list-field`），三个分类字段有变化时才显示分类标签，新增四条后果（不再等审批结果、多读写哪些类型、MCP 提示放宽、只读提示变了「当作放宽，需要你确认」）；`OperationClassificationWire` 用在只需分类的首次发布。
   - **372**：删掉 `importManifest` 的 `requireDescription` 与 `OperationDescriptionRequiredError`，导入接受空描述。
   - **不在本 PR**：ActionType 的 `awaitDecision` 规则是 `ANY_CHANGE`，与 Operation 表方向不同（遗留 446）。
+- 实现说明（P1-F1：接入预设，首个 RAGFlow，#715，2026-10-23 合入，2d3eb03；无迁移；内核镜像新增 `/app/connectors`）：
+  - **预设是平台目录数据，不是能力包组件**：`connectors/<名字>/preset.yaml` + `operations.json`，随内核镜像发布（`CONNECTOR_PRESETS_DIR`）。`application/gates/presets.ts` 每次调用从目录读（同 `packs/registry.ts`）：`preset.yaml` 严格 schema、名字与目录名一致且不能用传输种类名；`operations.json` 逐条过 `OperationSchema`、绑定必须是 http、不能重名；整个预设过 `findSuspectedSecrets`；任何一条不合规整组拒绝加载（部署 bug，由测试先抓住）。
+  - **建实例**：`create_gate_instance` 的 `preset` 在 `requestedDefinition` 里展开成定义与接入包（接入包名即预设名），凭证检查走原来那一处；`transportKind` / `credentialMode` 由 `superRefine` 按是否带 `preset` 决定必填。`connector.created` 审计记 `preset`。`list_connector_presets` 带 `readConnectorOccupancy` 的 `packagedConnector` / `instanceCount`。
+  - **下发与升级（R-18）**：`GET /internal/gate-host/instances` 只在存在预设实例时读预设，`withPresetOperations` 只给 `definition.preset` 有对应预设的实例附 `operations`；预设读不出来整次拉取失败、宿主保持现状下轮重试。门宿主（`gatekeeper-base/src/host.ts`）用下发的 Operation 建实例、不从目标导入；`presetOperationsKey` 变化置 `rebuild`（不清数据目录、保留凭证，失败保留已建 gate）；镜像里没了某个预设时保留已建实例并记日志。升级改了 Operation 由内核挂成 `pendingManifest`，平台管理员确认前生效的仍是旧清单（已启用 / 已禁用挂起，「未启用」直接采用）。
+  - **能力包需求**：`PackRequirementWire.platformPreset` 只在 `needs_platform`、平台带同名预设、接入包没被打包门占用三条同时成立时为真；列能力包时读预设名，安装和校验不读预设。
+  - **控制台**：`PresetGateInstanceForm.tsx`；`CreateGateInstanceForm.tsx` 外层读预设并按传输种类过滤（原表单改为内部 `CustomGateInstanceForm`，testid 不变，两项都不预选）；`useGateInstancesPanel.ts` 消费 `?preset=` 深链接；`ChangeVerification.tsx` 按 `platformPreset` 与角色给链接或说明；`GateInstanceDetailPanel.tsx` 未启用宿主实例的「接下来」与预设实例的清单来源；`router.ts` 的 `hrefs.platformConnectorPreset` / `readConnectorPresetLink`；`PendingManifestReview.tsx` 的 `gateOperationLine` 复用。
+  - **不在本 PR**：P1-F2（knowledge 能力包 v1 与 `requires.packs`）；新遗留 447–451（multipart、打包门退役、对象类型归属、按实例 CA、孤儿凭证目录）。
 - 来自 P0b（#620）的输入：第一个小 PR 是评测用夹具门重设计（托管实例挂在按系统命名的接入包上，`create_gate_instance` 的 `connector` 可选）；`importManifest` 的 `requireDescription` 留给目录侧要求复用，不用就删（遗留 372）；344 由 P1 收口。
 
 **AA1 — 管理员 Agent 身份与上限**（见 `global-roadmap-2026-10-16.md` §4）

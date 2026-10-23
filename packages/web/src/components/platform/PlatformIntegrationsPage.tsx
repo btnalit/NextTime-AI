@@ -919,6 +919,7 @@ function GateInstancesTab({
         {panel.panel.kind === 'create' ? (
           <CreateGateInstanceForm
             http={http}
+            initialPreset={panel.panel.preset}
             onCreated={panel.handleCreated}
             onCancel={() => setPanel({ kind: 'closed' })}
           />

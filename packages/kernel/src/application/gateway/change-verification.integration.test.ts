@@ -233,6 +233,13 @@ describe.runIf(DATABASE_URL !== undefined)(
       await addConnector(connector('self'), 'self_serve');
       await addConnector(connector('cut'), 'self_serve');
       await addConnector(connector('closed'), 'disabled');
+      // S11 P1-F: a packaged gate's connector — a preset of its name cannot add an instance to it.
+      await asAdmin((client) =>
+        client.query(
+          "insert into connectors (name, kind, packaged, mode) values ($1, 'http', true, 'platform_preset')",
+          [connector('boxed')],
+        ),
+      );
 
       const linked = await linkCatalogGate(ws, connector('linked'), 'enabled');
       // Linked, but the platform turned the instance off: not connected, nothing else offered.
@@ -246,14 +253,25 @@ describe.runIf(DATABASE_URL !== undefined)(
       const self = await connectSelf(ws, connector('self'));
       await connectSelf(ws, connector('cut'), true);
 
-      const names = ['linked', 'off', 'offered', 'open', 'self', 'cut', 'closed', 'missing'].map(
-        connector,
-      );
+      const names = [
+        'linked',
+        'off',
+        'offered',
+        'open',
+        'self',
+        'cut',
+        'closed',
+        'missing',
+        'boxed',
+      ].map(connector);
+      // S11 P1-F: the platform ships presets of these; only an unconnected, unoffered one whose
+      // connector no packaged gate holds is one an administrator can connect from its preset.
+      const presets = new Set(['linked', 'offered', 'missing', 'boxed'].map(connector));
       const statuses = await inWorkspace(ws, (client) =>
-        readPackRequirements(client, ws.workspaceId, names),
+        readPackRequirements(client, ws.workspaceId, names, presets),
       );
       const gate = (id: string) => ({ id, name: expect.stringMatching(/^gate-/) });
-      const none = { gatekeepers: [], offered: [] };
+      const none = { gatekeepers: [], offered: [], platformPreset: false };
       // A self-serve connector the workspace has not connected (`open`) or whose connection the
       // platform suspended (`cut`) is not something a pack's owner could connect on their own: a
       // workspace connects the generic transports only (P1-E2 dropped `can_connect`).
@@ -263,6 +281,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           state: 'connected',
           gatekeepers: [gate(linked)],
           offered: [],
+          platformPreset: false,
         },
         { connector: connector('off'), state: 'needs_platform', ...none },
         {
@@ -272,6 +291,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           offered: [
             { gateId: `${connector('offered')}-a`, displayName: `${connector('offered')}-a` },
           ],
+          platformPreset: false,
         },
         { connector: connector('open'), state: 'needs_platform', ...none },
         {
@@ -279,10 +299,17 @@ describe.runIf(DATABASE_URL !== undefined)(
           state: 'connected',
           gatekeepers: [gate(self.gatekeeperId)],
           offered: [],
+          platformPreset: false,
         },
         { connector: connector('cut'), state: 'needs_platform', ...none },
         { connector: connector('closed'), state: 'needs_platform', ...none },
-        { connector: connector('missing'), state: 'needs_platform', ...none },
+        {
+          connector: connector('missing'),
+          state: 'needs_platform',
+          ...none,
+          platformPreset: true,
+        },
+        { connector: connector('boxed'), state: 'needs_platform', ...none },
       ]);
       // Another workspace has not linked the enabled instance: the platform offers it.
       const other = await newWorkspace();

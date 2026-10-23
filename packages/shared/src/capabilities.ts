@@ -3520,6 +3520,18 @@ const platformCapabilities = [
       'R-18: adopt a gate instance’s pending announced manifest (pendingManifest) as the manifest in effect — what later workspace enables import and refresh_operation_governance aligns to. digest must be the pending manifest’s own digest: a newer announce replaces it, so a stale digest refuses 409 manifest_changed; nothing pending refuses 409 no_pending_manifest. Platform AuditRecord with the added / removed / changed Operations.',
   },
   {
+    // S11 P1-F: the templates `create_gate_instance`'s `preset` takes.
+    name: 'list_connector_presets',
+    group: 'platform',
+    mode: 'observe',
+    channel: 'human',
+    scope: 'platform',
+    paramsSchema: noParams,
+    resultSchema: listEnvelope(wire.ConnectorPresetWireSchema),
+    description:
+      'S11 P1-F: the connector presets this deployment ships — for each system a template of a gate-host instance (transport, credential mode, the Operations it announces), with no address and no credential. `packagedConnector` says the system is already connected through a packaged gate here, so no preset instance can join it; `instanceCount` counts the instances its connector already holds.',
+  },
+  {
     name: 'create_gate_instance',
     group: 'platform',
     mode: 'write',
@@ -3530,10 +3542,17 @@ const platformCapabilities = [
         /** Stable id, becomes the instance’s `GATE_ID` and its path on the gate host (`/i/<gateId>`). */
         gateId: z.string().regex(/^[a-z0-9][a-z0-9-]{1,63}$/),
         displayName: z.string().min(1).max(120).optional(),
-        transportKind: z.enum(['http', 'mcp']),
+        /** S11 P1-F: create it from this connector preset (`list_connector_presets`). The preset
+         *  fixes the transport kind, the credential mode, the Operations and the connector (its
+         *  name), so `transportKind`, `credentialMode`, `manifestSource` and `connector` are left
+         *  out; only `target` is typed. An unknown name refuses 404 `connector_preset_not_found`. */
+        preset: z.string().regex(wire.CONNECTOR_NAME_PATTERN).optional(),
+        /** Required without `preset`. */
+        transportKind: z.enum(['http', 'mcp']).optional(),
         target: z.string().url().max(2000),
-        credentialMode: z.enum(['shared', 'connected_account']),
-        /** http: the OpenAPI document URL the host imports Operations from (required — without it the instance would have no Operations). mcp: omitted, tools are listed on the target. */
+        /** Required without `preset`. */
+        credentialMode: z.enum(['shared', 'connected_account']).optional(),
+        /** http: the OpenAPI document URL the host imports Operations from (required without `preset` — without it the instance would have no Operations). mcp: omitted, tools are listed on the target. */
         manifestSource: z.string().url().max(2000).nullable().optional(),
         /** P1: the connector (接入包) the instance belongs to, named after the system it serves.
          *  Omitted: the generic connector of its transport kind (`http` / `mcp`), whose mode also
@@ -3546,6 +3565,32 @@ const platformCapabilities = [
       })
       .strict()
       .superRefine((value, ctx) => {
+        if (value.preset !== undefined) {
+          for (const key of [
+            'transportKind',
+            'credentialMode',
+            'manifestSource',
+            'connector',
+          ] as const) {
+            if (value[key] !== undefined) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: [key],
+                message: `the preset fixes ${key}; leave it out`,
+              });
+            }
+          }
+          return;
+        }
+        for (const key of ['transportKind', 'credentialMode'] as const) {
+          if (value[key] === undefined) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [key],
+              message: `${key} is required without a preset`,
+            });
+          }
+        }
         if (value.transportKind === 'http' && !value.manifestSource) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
@@ -3557,7 +3602,7 @@ const platformCapabilities = [
       }),
     resultSchema: wire.GateInstanceWireSchema,
     description:
-      'P-B2a: create a generic http / mcp gate instance for the platform gate host to serve. Lands `discovered` with no heartbeat; the host pulls the definition, imports the Operations and announces it, then the administrator enables it exactly like a packaged gate. P1: `connector` names the system it serves; omitted, it joins the generic connector of its kind. Never takes a credential — enter that via `issue_gate_host_token`.',
+      'P-B2a: create a generic http / mcp gate instance for the platform gate host to serve. Lands `discovered` with no heartbeat; the host pulls the definition, imports the Operations and announces it, then the administrator enables it exactly like a packaged gate. P1: `connector` names the system it serves; omitted, it joins the generic connector of its kind. S11 P1-F: `preset` creates it from a connector preset instead — only `target` is typed, the host builds it from the preset’s Operations, and it joins the preset’s connector (409 `connector_packaged` when a packaged gate holds that name). Never takes a credential — enter that via `issue_gate_host_token`.',
   },
   {
     name: 'delete_gate_instance',
@@ -4428,6 +4473,7 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set<CapabilityName>
     'set_allowed_models',
     'list_connectors',
     'set_connector_mode',
+    'list_connector_presets',
     'list_gate_instances',
     'get_gate_instance',
     'update_gate_instance',

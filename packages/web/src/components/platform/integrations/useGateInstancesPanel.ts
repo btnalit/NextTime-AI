@@ -3,10 +3,11 @@ import { useEffect, useState } from 'react';
 import { useCapabilityList } from '../../../hooks/useCapability.js';
 import type { CapabilityListResult } from '../../../hooks/useCapability.js';
 import type { CapabilityCaller } from '../../../lib/clients.js';
+import { hrefs, readConnectorPresetLink } from '../../../lib/router.js';
 
 export type InstancesPanel =
   | { readonly kind: 'closed' }
-  | { readonly kind: 'create' }
+  | { readonly kind: 'create'; readonly preset?: string }
   | { readonly kind: 'gate'; readonly gateId: string };
 
 export interface GateInstancesPanelState {
@@ -32,12 +33,28 @@ export function useGateInstancesPanel(
   selectedGateId: string | undefined,
   onSelectGate: ((gateId: string | null) => void) | undefined,
 ): GateInstancesPanelState {
-  const [panel, setPanelState] = useState<InstancesPanel>(() =>
-    selectedGateId !== undefined ? { kind: 'gate', gateId: selectedGateId } : { kind: 'closed' },
-  );
+  const [panel, setPanelState] = useState<InstancesPanel>(() => {
+    if (selectedGateId !== undefined) return { kind: 'gate', gateId: selectedGateId };
+    const preset = readConnectorPresetLink(window.location.hash);
+    return preset !== null ? { kind: 'create', preset } : { kind: 'closed' };
+  });
   useEffect(() => {
     if (selectedGateId !== undefined) setPanelState({ kind: 'gate', gateId: selectedGateId });
   }, [selectedGateId]);
+  // S11 P1-F: `hrefs.platformConnectorPreset` (a pack's 需要平台接入 system) opens 新建门宿主实例 on
+  // that preset. The query is dropped once read, so closing the drawer and reloading does not open
+  // it again; a link followed while this tab is already mounted opens it too.
+  useEffect(() => {
+    function consume(): void {
+      const preset = readConnectorPresetLink(window.location.hash);
+      if (preset === null) return;
+      setPanelState({ kind: 'create', preset });
+      window.history.replaceState(null, '', hrefs.platformIntegrationsTab('instances'));
+    }
+    consume();
+    window.addEventListener('hashchange', consume);
+    return () => window.removeEventListener('hashchange', consume);
+  }, []);
   function setPanel(next: InstancesPanel): void {
     setPanelState(next);
     if (next.kind === 'gate') onSelectGate?.(next.gateId);

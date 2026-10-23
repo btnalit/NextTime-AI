@@ -1,0 +1,19 @@
+# Connector preset (S11 P1-F): a template, with no credential and no address, that a platform
+# administrator creates a gate-host instance from on 平台 · 集成. They type the address only; the key
+# goes from the browser straight to the gate host afterwards, never through the kernel. The shape
+# and its rules are `packages/kernel/src/application/gates/presets.ts`.
+#
+# The Operations are `operations.json` beside this file: the packaged gate's own manifest
+# (`gatekeepers/ragflow/manifest.json`) without `document.upload`, whose multipart body the generic
+# http transport cannot send. `gatekeepers/ragflow/src/manifest.test.ts` keeps the two equal.
+#
+# `displayName`, `summary` and the two hints are read by platform administrators in the console:
+# plain words, one line each (folding a Chinese sentence over lines puts a space where they meet).
+schema: 1
+name: ragflow
+displayName: RAGFlow
+summary: 知识库检索：列出知识库和其中的文档，按问题检索相关片段，把已上传的文档解析成可检索的片段。
+transportKind: http
+credentialMode: shared
+targetHint: RAGFlow 的访问地址，例如 https://ragflow.example.com，不带 /api/v1。
+credentialHint: RAGFlow 的 API key，在 RAGFlow 的「API」页面生成；整个实例共用这一个。

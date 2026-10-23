@@ -157,21 +157,42 @@ export function PackRequirementList({
             ) : null}
             {onChanged && requirement.state === 'needs_platform' ? (
               platformAdmin ? (
-                <RouteLink
-                  href={hrefs.platformIntegrationsTab('instances')}
-                  testId={`${rowId}-platform`}
-                >
-                  {t(
-                    `去「平台 · 集成」看 ${requirement.connector} 门实例`,
-                    `See the ${requirement.connector} gate instances under Platform · Integrations`,
-                  )}
-                </RouteLink>
+                // S11 P1-F: a system the platform ships a connector preset for opens 新建门宿主实例
+                // on that preset — the administrator types its address only.
+                requirement.platformPreset ? (
+                  <RouteLink
+                    href={hrefs.platformConnectorPreset(requirement.connector)}
+                    testId={`${rowId}-preset`}
+                  >
+                    {/* UX acceptance of #715 (P3-3): the row names the system above; the link
+                     *  does not repeat its connector name in place of the preset's own name. */}
+                    {t(
+                      '去「平台 · 集成」按它的接入预设接入（只填地址）',
+                      'Connect it from its preset under Platform · Integrations (address only)',
+                    )}
+                  </RouteLink>
+                ) : (
+                  <RouteLink
+                    href={hrefs.platformIntegrationsTab('instances')}
+                    testId={`${rowId}-platform`}
+                  >
+                    {t(
+                      `去「平台 · 集成」看 ${requirement.connector} 门实例`,
+                      `See the ${requirement.connector} gate instances under Platform · Integrations`,
+                    )}
+                  </RouteLink>
+                )
               ) : (
                 <span className="text-3 text-small" data-testid={`${rowId}-ask-platform`}>
-                  {t(
-                    '请平台管理员在「平台 · 集成」里添加或重新启用它的门实例，之后这里就能启用。',
-                    'Ask a platform administrator to add or re-enable a gate instance for it under Platform · Integrations; it can then be enabled here.',
-                  )}
+                  {requirement.platformPreset
+                    ? t(
+                        '平台自带它的接入预设：请平台管理员在「平台 · 集成」按预设接入（只要它的地址和凭证），之后这里就能启用。',
+                        'The platform ships a connector preset for it: ask a platform administrator to connect it from that preset under Platform · Integrations (only its address and credential are needed); it can then be enabled here.',
+                      )
+                    : t(
+                        '请平台管理员在「平台 · 集成」里添加或重新启用它的门实例，之后这里就能启用。',
+                        'Ask a platform administrator to add or re-enable a gate instance for it under Platform · Integrations; it can then be enabled here.',
+                      )}
                 </span>
               )
             ) : null}
