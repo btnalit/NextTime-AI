@@ -15,7 +15,8 @@ import {
  * docs/goal-orchestration-and-admin-agent-plan-2026-10-16.md §3.1–§3.4, §5.4; the kernel's
  * `application/change-plan`). A **segment** is one change applied to a workspace from one source
  * (a pack — a module is a pack with one ontology component), in one transaction, by one person;
- * its **items** are what it changed, each with its state before and after. Projected by
+ * its **items** are what it changed — a version of an ontology family, a Skill or a `worker`
+ * WorkerDefinition published — each with its state before and after. Projected by
  * `application/gateway/change-segment-handlers.ts`.
  *
  * Workspace segments only (§5.4 "第一版收窄"). Their contents are read in the owning workspace and
@@ -96,6 +97,38 @@ export const OntologyVersionRefWireSchema = z
   .strict();
 export type OntologyVersionRefWire = z.infer<typeof OntologyVersionRefWireSchema>;
 
+/** A `skill_version` item's target: the Skill family (`skills.id`) and the name it is mounted
+ *  under (a Skill name belongs to one family, `skill_name_conflict`). */
+export const SkillVersionChangeTargetWireSchema = z
+  .object({
+    skillId: z.string(),
+    name: z.string(),
+  })
+  .strict();
+export type SkillVersionChangeTargetWire = z.infer<typeof SkillVersionChangeTargetWireSchema>;
+
+/** A `worker_definition_version` item's target: the WorkerDefinition family
+ *  (`worker_definitions.id`, kind `worker`) and its `name`. */
+export const WorkerDefinitionVersionChangeTargetWireSchema = z
+  .object({
+    definitionId: z.string(),
+    name: z.string(),
+  })
+  .strict();
+export type WorkerDefinitionVersionChangeTargetWire = z.infer<
+  typeof WorkerDefinitionVersionChangeTargetWireSchema
+>;
+
+/** One version of a Skill or WorkerDefinition family, by number and the digest of its content
+ *  (a Skill's name, description, body and `applicable`; a WorkerDefinition's `definition`). */
+export const ContentVersionRefWireSchema = z
+  .object({
+    version: z.number().int().positive(),
+    contentDigest: z.string(),
+  })
+  .strict();
+export type ContentVersionRefWire = z.infer<typeof ContentVersionRefWireSchema>;
+
 const ChangeItemCommonShape = {
   id: z.string(),
   /** 1-based position in its segment; items apply in this order and roll back in reverse. */
@@ -113,8 +146,10 @@ const ChangeItemCommonShape = {
   replacedBy: z.object({ segmentId: z.string() }).strict().nullable(),
 };
 
-/** One item of `get_change_segment`, by kind. `ontology_version`: it published `after` as the
- *  family's next version; `before` was the family's head then (null: not installed). */
+/** One item of `get_change_segment`, by kind. Each published `after` as its family's next
+ *  version; `before` was the family's head then (null: not installed). `ontology_version`: an
+ *  ontology family; `skill_version`: a Skill; `worker_definition_version`: a `worker`
+ *  WorkerDefinition. */
 export const ChangeItemWireSchema = z.discriminatedUnion('kind', [
   z
     .object({
@@ -123,6 +158,24 @@ export const ChangeItemWireSchema = z.discriminatedUnion('kind', [
       target: OntologyVersionChangeTargetWireSchema,
       before: OntologyVersionRefWireSchema.nullable(),
       after: OntologyVersionRefWireSchema,
+    })
+    .strict(),
+  z
+    .object({
+      ...ChangeItemCommonShape,
+      kind: z.literal('skill_version'),
+      target: SkillVersionChangeTargetWireSchema,
+      before: ContentVersionRefWireSchema.nullable(),
+      after: ContentVersionRefWireSchema,
+    })
+    .strict(),
+  z
+    .object({
+      ...ChangeItemCommonShape,
+      kind: z.literal('worker_definition_version'),
+      target: WorkerDefinitionVersionChangeTargetWireSchema,
+      before: ContentVersionRefWireSchema.nullable(),
+      after: ContentVersionRefWireSchema,
     })
     .strict(),
 ]);
@@ -148,10 +201,22 @@ export const OntologyTypeNamesWireSchema = z
   .strict();
 export type OntologyTypeNamesWire = z.infer<typeof OntologyTypeNamesWireSchema>;
 
-/** One item of a rollback dry run, by kind. `ontology_version`: the family goes back from `from`
- *  (the version the item published) to `to` (the version before it; null — the family is no longer
- *  installed). Its classification is the rollback's own, by the same whitelist as applying
- *  (I-A4): an `authority_widening` item is confirmed by its ordinal in `roll_back_change_segment`. */
+const RollbackBlockedByShape = {
+  /** Why this item cannot be rolled back now; null when it can. */
+  blocker: ChangeRollbackBlockerSchema.nullable(),
+  /** For `blocker: 'replaced'`: the segment whose change came after this one — roll that one back
+   *  first; null when the later change was made outside the ChangePlan core, and for every other
+   *  blocker. */
+  blockedBy: z.object({ segmentId: z.string() }).strict().nullable(),
+};
+
+/** One item of a rollback dry run, by kind. The family goes back from `from` (the version the item
+ *  published) to `to` (the version before it; null — the family is no longer installed: a Skill
+ *  no Worker mounts any more, a WorkerDefinition nobody can invoke). Its classification is the
+ *  rollback's own, by the same whitelist as applying (I-A4): an `authority_widening` item is
+ *  confirmed by its ordinal in `roll_back_change_segment`. Only an `ontology_version` item can be
+ *  blocked by `namespace_conflict`; a Skill or WorkerDefinition rollback only retires a version, so
+ *  it never gives a name a second owner. */
 export const ChangeRollbackItemWireSchema = z.discriminatedUnion('kind', [
   z
     .object({
@@ -163,12 +228,7 @@ export const ChangeRollbackItemWireSchema = z.discriminatedUnion('kind', [
       classification: ChangeItemClassificationSchema,
       widening: z.array(ChangeWideningReasonWireSchema),
       removes: OntologyTypeNamesWireSchema,
-      /** Why this item cannot be rolled back now; null when it can. */
-      blocker: ChangeRollbackBlockerSchema.nullable(),
-      /** For `blocker: 'replaced'`: the segment whose change came after this one — roll that one
-       *  back first; null when the later change was made outside the ChangePlan core, and for every
-       *  other blocker. */
-      blockedBy: z.object({ segmentId: z.string() }).strict().nullable(),
+      ...RollbackBlockedByShape,
       /** For `blocker: 'namespace_conflict'`: the type names (`object` / `action`) another family
        *  declares now (I-P1). Empty otherwise. */
       conflicts: z.array(
@@ -179,6 +239,30 @@ export const ChangeRollbackItemWireSchema = z.discriminatedUnion('kind', [
           })
           .strict(),
       ),
+    })
+    .strict(),
+  z
+    .object({
+      ordinal: z.number().int().positive(),
+      kind: z.literal('skill_version'),
+      target: SkillVersionChangeTargetWireSchema,
+      from: ContentVersionRefWireSchema,
+      to: ContentVersionRefWireSchema.nullable(),
+      classification: ChangeItemClassificationSchema,
+      widening: z.array(ChangeWideningReasonWireSchema),
+      ...RollbackBlockedByShape,
+    })
+    .strict(),
+  z
+    .object({
+      ordinal: z.number().int().positive(),
+      kind: z.literal('worker_definition_version'),
+      target: WorkerDefinitionVersionChangeTargetWireSchema,
+      from: ContentVersionRefWireSchema,
+      to: ContentVersionRefWireSchema.nullable(),
+      classification: ChangeItemClassificationSchema,
+      widening: z.array(ChangeWideningReasonWireSchema),
+      ...RollbackBlockedByShape,
     })
     .strict(),
 ]);
@@ -215,12 +299,13 @@ export const ChangeRollbackPreviewWireSchema = z
   .strict();
 export type ChangeRollbackPreviewWire = z.infer<typeof ChangeRollbackPreviewWireSchema>;
 
-/** Which ChangeItem put an ontology family's installed version there (`list_workspace_modules`'s
- *  `provenance`). `recorded`: `segmentId`'s item — applied by `appliedBy` at `appliedAt`, or, for
- *  `channel: 'platform'`, by the platform on the workspace's behalf. `provenance_unknown`: installed
- *  before the ChangePlan core recorded changes, or published outside it — nothing to roll back
- *  from here. `not_installed`: no published version. */
-export const OntologyProvenanceWireSchema = z.discriminatedUnion('status', [
+/** Which ChangeItem put a family's installed version there — an ontology family's
+ *  (`list_workspace_modules`' `provenance`), or a pack component's (`list_packs`). `recorded`:
+ *  `segmentId`'s item — applied by `appliedBy` at `appliedAt`, or, for `channel: 'platform'`, by the
+ *  platform on the workspace's behalf. `provenance_unknown`: installed before the ChangePlan core
+ *  recorded changes, or published outside it — nothing to roll back from here. `not_installed`: no
+ *  published version. */
+export const ChangeProvenanceWireSchema = z.discriminatedUnion('status', [
   z
     .object({
       status: z.literal('recorded'),
@@ -234,4 +319,4 @@ export const OntologyProvenanceWireSchema = z.discriminatedUnion('status', [
   z.object({ status: z.literal('provenance_unknown') }).strict(),
   z.object({ status: z.literal('not_installed') }).strict(),
 ]);
-export type OntologyProvenanceWire = z.infer<typeof OntologyProvenanceWireSchema>;
+export type ChangeProvenanceWire = z.infer<typeof ChangeProvenanceWireSchema>;

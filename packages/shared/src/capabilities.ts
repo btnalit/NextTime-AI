@@ -1349,7 +1349,7 @@ const metaCapabilities = [
       .strict(),
     resultSchema: wire.SkillPublishResultWireSchema,
     description:
-      'Publish your draft Skill (I16) — the latest version under skillId, which must be the version given (the one reviewed): a newer version under skillId since is 409 version_changed and nothing is published. Builder floor; the workspace owner may publish anyone’s draft (e.g. one a member’s Worker proposed); another builder’s draft is 403 not_proposer. When the draft carries suspected credentials, credentialsReviewed: true is required — 400 credentials_review_required (details: subject, suspectedSecretValues) otherwise.',
+      'Publish your draft Skill (I16) — the latest version under skillId, which must be the version given (the one reviewed): a newer version under skillId since is 409 version_changed and nothing is published. Builder floor; the workspace owner may publish anyone’s draft (e.g. one a member’s Worker proposed); another builder’s draft is 403 not_proposer. When the draft carries suspected credentials, credentialsReviewed: true is required — 400 credentials_review_required (details: subject, suspectedSecretValues) otherwise. A name another Skill family already has published refuses 409 skill_name_conflict (a Worker mounts Skills by name, so one name has one Skill) — deprecate that one or rename the draft.',
   },
   {
     name: 'publish_procedure',
@@ -3885,7 +3885,7 @@ const modulesCapabilities = [
       .strict(),
     resultSchema: listEnvelope(wire.ChangeSegmentWireSchema),
     description:
-      'The ChangePlan segments applied to this workspace (each module install or upgrade since the ChangePlan core is one), newest first: source, who applied it and how (human / platform), status, rollback; keyset-paginated (limit, cursor → nextCursor).',
+      'The ChangePlan segments applied to this workspace (each pack or module install or upgrade since the ChangePlan core is one), newest first: source, who applied it and how (human / platform), status, rollback; keyset-paginated (limit, cursor → nextCursor).',
   },
   {
     name: 'get_change_segment',
@@ -3896,7 +3896,7 @@ const modulesCapabilities = [
     paramsSchema: z.object({ segmentId: z.string().uuid() }).strict(),
     resultSchema: wire.ChangeSegmentDetailWireSchema,
     description:
-      'One applied ChangePlan segment with its items in order: each item’s target, state before and after, authority classification and who confirmed it, and whether what it wrote is still in effect now. 404 change_segment_not_found.',
+      'One applied ChangePlan segment with its items in order — a version of an ontology family, a Skill or a Worker (WorkerDefinition) published: each item’s target, state before and after, authority classification and who confirmed it, and whether what it wrote is still in effect now. 404 change_segment_not_found.',
   },
   {
     name: 'preview_roll_back_change_segment',
@@ -3926,13 +3926,14 @@ const modulesCapabilities = [
       .strict(),
     resultSchema: wire.ChangeSegmentWireSchema,
     description:
-      'Roll back one applied ChangePlan segment in one transaction: each item, last first, is compared with what is there now and returned to its state before (an ontology item retires the version it published, so the family’s head is the one before it again, or the family is no longer installed; objects and Facts already written stay). Refuses, writing nothing: 409 change_rollback_conflict when an item cannot be rolled back now — its target changed after it (details.items names the later segment to roll back first), is no longer installed, what it restores is gone, or it would restore a type name another family has taken —, 409 change_segment_rolled_back when it already was, 400 change_confirmation_required when an authority-widening rollback item is not among confirmedOrdinals, 403 when confirmedOrdinals comes from a Principal that is not a person (a service API key), 404 change_segment_not_found. One change_item.roll_back audit row per item.',
+      'Roll back one applied ChangePlan segment in one transaction: each item, last first, is compared with what is there now and returned to its state before (an item retires the version it published — of an ontology family, a Skill or a Worker — so the family’s head is the one before it again, or the family is no longer installed; objects and Facts already written stay). Refuses, writing nothing: 409 change_rollback_conflict when an item cannot be rolled back now — its target changed after it (details.items names the later segment to roll back first), is no longer installed, what it restores is gone, or it would restore a type name another family has taken —, 409 change_segment_rolled_back when it already was, 400 change_confirmation_required when an authority-widening rollback item is not among confirmedOrdinals, 403 when confirmedOrdinals comes from a Principal that is not a person (a service API key), 404 change_segment_not_found. One change_item.roll_back audit row per item.',
   },
-  // S11 P1-C (Pack Contract v1, docs/s10-evolution-plan-2026-10-04.md §6; `application/packs`):
-  // the packs this deployment ships, this workspace's state of each — derived from its components,
-  // nothing stored — and installing one as a ChangePlan segment the owner reviews first (I-A8:
-  // the dry run's digest; I-A4: each authority-widening item confirmed by itself). A module is a
-  // pack with one ontology component; the module capabilities above keep their own contract.
+  // S11 P1-C / P1-D (Pack Contract v1, docs/s10-evolution-plan-2026-10-04.md §6;
+  // `application/packs`): the packs this deployment ships — ontology families, Skills and `worker`
+  // WorkerDefinitions —, this workspace's state of each — derived from its components, nothing
+  // stored — and installing one as a ChangePlan segment the owner reviews first (I-A8: the dry
+  // run's digest; I-A4: each authority-widening item confirmed by itself). A module is a pack with
+  // one ontology component; the module capabilities above keep their own contract.
   {
     name: 'list_packs',
     group: 'modules',
@@ -3942,7 +3943,7 @@ const modulesCapabilities = [
     paramsSchema: noParams,
     resultSchema: listEnvelope(wire.PackWireSchema),
     description:
-      'Every pack this deployment ships (Pack Contract v1, `packs/<name>/<version>/pack.yaml`) with its versions and components, and this workspace’s state of it — not installed / up to date / outdated / customized — for the pack and for each component, with the change that installed each component’s current content.',
+      'Every pack this deployment ships (Pack Contract v1, `packs/<name>/<version>/pack.yaml`) with its versions and components — ontology families, Skills and Workers (WorkerDefinitions) —, and this workspace’s state of it — not installed / up to date / outdated / customized — for the pack and for each component, with the change that installed each component’s current content.',
   },
   {
     name: 'preview_pack_install',
@@ -3953,7 +3954,7 @@ const modulesCapabilities = [
     paramsSchema: z.object({ name: z.string().min(1) }).strict(),
     resultSchema: wire.PackInstallPreviewWireSchema,
     description:
-      'Dry run of install_pack, writing nothing: per component of the latest version, what the family has now and would have after, the type names added / removed / changed, and the item’s authority classification; the versions the install moves through and whether one is breaking; how many objects and active Facts use a type it takes out (kept, never removed); and the digest to pass back as reviewedDigest. 404 pack_not_found; 409 ontology_namespace_conflict when a component declares an ObjectType or ActionType name another installed family already declares (I-P1).',
+      'Dry run of install_pack, writing nothing: per component of the latest version, what the family has now and would have after — for an ontology family the type names added / removed / changed, for a Skill or Worker the content it would publish and the fields that differ —, and the item’s authority classification; the versions the install moves through and whether one is breaking; how many objects and active Facts use a type it takes out (kept, never removed); and the digest to pass back as reviewedDigest. 404 pack_not_found; 409 ontology_namespace_conflict when a component declares an ObjectType or ActionType name another installed family already declares (I-P1); 409 skill_name_conflict when another Skill family already has a Skill component’s name published.',
   },
   {
     name: 'install_pack',
@@ -3975,7 +3976,7 @@ const modulesCapabilities = [
       .strict(),
     resultSchema: wire.PackInstallResultWireSchema,
     description:
-      'Install a pack’s latest version into this workspace in one transaction, as one ChangePlan segment: each component whose content differs is published into its ontology family with this owner as proposer and publisher (installing, upgrading, or replacing a customized family alike — the dry run showed which). Refuses, writing nothing: 409 version_changed when the latest version is not the reviewed one, 409 change_plan_changed when the dry run would differ from the reviewed digest now (preview again), 400 change_confirmation_required when an authority-widening item is not among confirmedOrdinals, 403 when confirmedOrdinals comes from a Principal that is not a person (a service API key), 409 ontology_namespace_conflict (I-P1), 404 pack_not_found. Already up to date: records nothing. One change_item.apply audit row per item.',
+      'Install a pack’s latest version into this workspace in one transaction, as one ChangePlan segment: each component whose content differs is published as its family’s next version — an ontology family, a Skill, a Worker (WorkerDefinition) — with this owner as proposer and publisher (installing, upgrading, or replacing a customized family alike — the dry run showed which). Refuses, writing nothing: 409 version_changed when the latest version is not the reviewed one, 409 change_plan_changed when the dry run would differ from the reviewed digest now (preview again), 400 change_confirmation_required when an authority-widening item is not among confirmedOrdinals, 403 when confirmedOrdinals comes from a Principal that is not a person (a service API key), 409 ontology_namespace_conflict (I-P1), 409 skill_name_conflict, 404 pack_not_found. Already up to date: records nothing. One change_item.apply audit row per item.',
   },
 ] as const satisfies readonly Capability[];
 

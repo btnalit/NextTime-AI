@@ -81,14 +81,14 @@ export interface ConfirmProps {
  *   or failure, then closes. No visible surface of its own — `anchor` is rendered plain.
  * - `medium`: a Radix `Popover` anchored to `anchor` (`side="bottom" align="end"`, an 8px offset;
  *   Popper repositions on collision; a body too tall for above or below moves beside the trigger
- *   when there is room). `modal` — focus moves onto the confirm button on open, or
- *   onto 取消 when `danger` (`onOpenAutoFocus`, overridden: Radix's own default targets the first
- *   focusable descendant, not necessarily either button) and back to the trigger on close via
- *   `useRestoreFocusOnClose` below (a manual replacement for Radix's built-in restore, which only
- *   fires through a rendered `Trigger`'s own ref — this file uses `Anchor` instead, precisely
- *   because several callers cannot reach their real trigger element, e.g. a shared card's own
- *   Approve/Reject button with no forwarded ref). Escape/outside-click close it unless a confirm
- *   is in flight.
+ *   when there is room). `modal` — focus moves onto the confirm button on open, or onto 取消
+ *   when `danger` or `confirmDisabled` (`onOpenAutoFocus`, overridden: Radix's own default
+ *   targets the first focusable descendant, not necessarily either button) and back to the
+ *   trigger on close via `useRestoreFocusOnClose` below (a manual replacement for Radix's
+ *   built-in restore, which only fires through a rendered `Trigger`'s own ref — this file uses
+ *   `Anchor` instead, precisely because several callers cannot reach their real trigger
+ *   element, e.g. a shared card's own Approve/Reject button with no forwarded ref).
+ *   Escape/outside-click close it unless a confirm is in flight.
  * - `irreversible`: a centred Radix `AlertDialog` (never anchored — a destructive, unrecoverable
  *   action gets the viewport's full attention regardless of where the trigger sits). The danger
  *   button stays disabled until the target name is retyped (skipped when `target` is omitted —
@@ -449,7 +449,11 @@ function MediumTier({
               // Legacy 405 (UX acceptance of #653 P3-2): a `danger` confirm (loosening an
               // approval, disabling, discarding) opens on 取消, so an Enter typed out of habit
               // never runs it; the irreversible tier's AlertDialog already does (Radix).
-              (danger ? cancelRef : confirmRef).current?.focus();
+              // UX acceptance of #679 P3-1: so does one whose confirm button starts disabled (a
+              // box to tick, a reason to type) — a disabled button takes no focus, which left it
+              // on the trigger behind the popover, unheard by a screen reader. Never onto the
+              // first box to tick: a stray Space would tick it before it was read.
+              (danger || confirmDisabled ? cancelRef : confirmRef).current?.focus();
             }}
             onEscapeKeyDown={(event) => {
               // Radix's dismissable layer listens in the capture phase; a caller may render

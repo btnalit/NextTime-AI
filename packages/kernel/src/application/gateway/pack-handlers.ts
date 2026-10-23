@@ -1,5 +1,6 @@
 import type {
   PackComponentStateWire,
+  PackComponentWire,
   PackInstallItemWire,
   PackInstallPreviewWire,
   PackInstallResultWire,
@@ -7,8 +8,15 @@ import type {
   PackWire,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
-import { type PlannedChangeItem, loadOntologyProvenance } from '../change-plan/index.js';
 import {
+  type ChangeProvenance,
+  type PlannedChangeItem,
+  loadFamilyProvenance,
+  loadOntologyProvenance,
+} from '../change-plan/index.js';
+import {
+  type PackComponent,
+  type PackComponentState,
   type PackState,
   type PackVersion,
   installPack,
@@ -17,17 +25,94 @@ import {
   loadPackState,
   previewPackInstall,
 } from '../packs/index.js';
+import { loadPublishedWorkerDefinitionHead } from '../worker/index.js';
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
-import { toOntologyProvenanceWire } from './change-segment-handlers.js';
+import { toChangeProvenanceWire } from './change-segment-handlers.js';
 
 /**
  * application/gateway/pack-handlers: the thin `CapabilityHandler` layer over `application/packs`
  * (S11 P1-C) — `list_packs`, `preview_pack_install`, `install_pack` (`scope:'workspace'`, the 能力
  * 目录 能力包 tab). Each parses params, calls the domain module and projects its records to
  * `@nexttime/shared`'s `wire/packs.ts`; the only read here is each component's provenance
- * (`loadOntologyProvenance`), in the same transaction as the state it explains.
+ * (`loadOntologyProvenance` / `loadFamilyProvenance`), in the same transaction as the state it
+ * explains.
  */
+
+function toPackComponentWire(component: PackComponent): PackComponentWire {
+  switch (component.kind) {
+    case 'ontology':
+      return { kind: 'ontology', family: component.family, domainPack: component.domainPack };
+    case 'skill':
+      return { kind: 'skill', name: component.name, description: component.content.description };
+    case 'worker':
+      return {
+        kind: 'worker',
+        name: component.name,
+        description: component.definition.description ?? null,
+      };
+  }
+}
+
+async function loadComponentProvenance(
+  client: PoolClient,
+  workspaceId: string,
+  component: PackComponent,
+): Promise<ChangeProvenance> {
+  switch (component.kind) {
+    case 'ontology':
+      return loadOntologyProvenance(client, workspaceId, component.family);
+    case 'skill':
+      return loadFamilyProvenance(client, workspaceId, 'skill_version', component.skillId);
+    case 'worker':
+      return loadFamilyProvenance(
+        client,
+        workspaceId,
+        'worker_definition_version',
+        component.definitionId,
+      );
+  }
+}
+
+async function toComponentStateWire(
+  client: PoolClient,
+  workspaceId: string,
+  state: PackComponentState,
+): Promise<PackComponentStateWire> {
+  const { component } = state;
+  const common = {
+    status: state.status,
+    installedVersion: state.installedVersion,
+    provenance: toChangeProvenanceWire(
+      await loadComponentProvenance(client, workspaceId, component),
+    ),
+  };
+  switch (component.kind) {
+    case 'ontology':
+      return {
+        kind: 'ontology',
+        family: component.family,
+        domainPack: component.domainPack,
+        ...common,
+      };
+    case 'skill':
+      return { kind: 'skill', name: component.name, skillId: component.skillId, ...common };
+    case 'worker': {
+      const head = await loadPublishedWorkerDefinitionHead(
+        client,
+        workspaceId,
+        component.definitionId,
+      );
+      return {
+        kind: 'worker',
+        name: component.name,
+        definitionId: component.definitionId,
+        headVersion: head?.version ?? null,
+        ...common,
+      };
+    }
+  }
+}
 
 function toPackVersionWire(version: PackVersion): PackVersionWire {
   return {
@@ -35,11 +120,7 @@ function toPackVersionWire(version: PackVersion): PackVersionWire {
     summary: version.summary,
     notes: version.notes,
     breaking: version.breaking,
-    components: version.components.map((component) => ({
-      kind: component.kind,
-      family: component.family,
-      domainPack: component.domainPack,
-    })),
+    components: version.components.map(toPackComponentWire),
   };
 }
 
@@ -50,16 +131,8 @@ async function toPackWire(
 ): Promise<PackWire> {
   const latest = latestPackVersion(state.entry);
   const components: PackComponentStateWire[] = [];
-  for (const [index, component] of state.components.entries()) {
-    const provenance = await loadOntologyProvenance(client, workspaceId, component.family);
-    components.push({
-      kind: component.kind,
-      family: component.family,
-      domainPack: latest.components[index]?.domainPack ?? '',
-      status: component.status,
-      installedVersion: component.installedVersion,
-      provenance: toOntologyProvenanceWire(provenance),
-    });
+  for (const component of state.components) {
+    components.push(await toComponentStateWire(client, workspaceId, component));
   }
   return {
     name: state.entry.name,
@@ -72,32 +145,82 @@ async function toPackWire(
   };
 }
 
+/** Item `n` installs the target's component `n` (`packSegment`): the component names what the
+ *  item installs, the item what it changes. */
 function toInstallItemWire(item: PlannedChangeItem, target: PackVersion): PackInstallItemWire {
-  const { types } = item.detail;
-  const names = (section: typeof types.added) => ({
-    objectTypes: [...section.objectTypes],
-    linkTypes: [...section.linkTypes],
-    actionTypes: [...section.actionTypes],
-  });
-  const before = item.before as { version: number; definitionDigest: string } | null;
-  const after = item.after as { definitionDigest: string };
-  return {
+  const component = target.components[item.ordinal - 1];
+  const common = {
     ordinal: item.ordinal,
-    kind: item.kind,
-    target: item.target as { family: string; ontologyId: string },
-    // Item `n` installs the target's component `n` (`packSegment`).
-    domainPack: target.components[item.ordinal - 1]?.domainPack ?? '',
-    before: before ? { version: before.version, definitionDigest: before.definitionDigest } : null,
-    after: { definitionDigest: after.definitionDigest },
     unchanged: item.unchanged,
     classification: item.classification,
     widening: item.widening.map((w) => ({ path: w.path, reason: w.reason })),
-    types: {
-      added: names(types.added),
-      removed: names(types.removed),
-      changed: names(types.changed),
-    },
   };
+  const { detail } = item;
+  if (detail.kind === 'ontology_version' && component?.kind === 'ontology') {
+    const names = (section: typeof detail.types.added) => ({
+      objectTypes: [...section.objectTypes],
+      linkTypes: [...section.linkTypes],
+      actionTypes: [...section.actionTypes],
+    });
+    const before = item.before as { version: number; definitionDigest: string } | null;
+    const after = item.after as { definitionDigest: string };
+    return {
+      ...common,
+      kind: detail.kind,
+      target: item.target as { family: string; ontologyId: string },
+      domainPack: component.domainPack,
+      before: before
+        ? { version: before.version, definitionDigest: before.definitionDigest }
+        : null,
+      after: { definitionDigest: after.definitionDigest },
+      types: {
+        added: names(detail.types.added),
+        removed: names(detail.types.removed),
+        changed: names(detail.types.changed),
+      },
+    };
+  }
+  const before = item.before as { version: number; contentDigest: string } | null;
+  const after = item.after as { contentDigest: string };
+  const versions = {
+    before: before ? { version: before.version, contentDigest: before.contentDigest } : null,
+    after: { contentDigest: after.contentDigest },
+  };
+  if (detail.kind === 'skill_version' && component?.kind === 'skill') {
+    return {
+      ...common,
+      kind: detail.kind,
+      target: { skillId: component.skillId, name: component.name },
+      ...versions,
+      skill: {
+        name: detail.content.name,
+        description: detail.content.description,
+        markdown: detail.content.markdown,
+      },
+      changedFields: [...detail.changedFields],
+    };
+  }
+  if (detail.kind === 'worker_definition_version' && component?.kind === 'worker') {
+    const { definition } = component;
+    return {
+      ...common,
+      kind: detail.kind,
+      target: { definitionId: component.definitionId, name: component.name },
+      ...versions,
+      worker: {
+        name: component.name,
+        description: definition.description ?? null,
+        systemPrompt: definition.systemPrompt,
+        skills: [...(definition.skills ?? [])],
+        capabilities: definition.capabilities ? [...definition.capabilities] : null,
+        egressDeny: [...(definition.egressDeny ?? [])],
+      },
+      changedFields: [...detail.changedFields],
+    };
+  }
+  throw new Error(
+    `install review: item ${item.ordinal} (${detail.kind}) does not install component ${item.ordinal} (${component?.kind ?? 'none'})`,
+  );
 }
 
 export const listPacksHandler: CapabilityHandler = async (client, workspaceId) => {

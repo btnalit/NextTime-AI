@@ -92,6 +92,7 @@ import {
   DraftNotDiscardableError,
   ProcedureNotFoundError,
   ProcedureStepReferenceError,
+  SkillNameConflictError,
   SkillNotFoundError,
   SkillValidationError,
   WorkerDefinitionKindMismatchError,
@@ -411,6 +412,10 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   }
   // I-P1: mirrors HTTP 409 `ontology_namespace_conflict` (capability-route.ts).
   if (err instanceof OntologyNamespaceConflictError) {
+    return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
+  }
+  // S11 P1-D: mirrors HTTP 409 `skill_name_conflict` (capability-route.ts).
+  if (err instanceof SkillNameConflictError) {
     return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
   }
   // S5.3 `register_source`: mirrors HTTP 409 `source_identity_conflict` (capability-route.ts).

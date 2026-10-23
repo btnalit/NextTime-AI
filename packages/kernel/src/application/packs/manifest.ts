@@ -7,16 +7,21 @@ import { z } from 'zod';
  * immutable once shipped, its content digest fixed (`registry.ts`). A **pack** is the family of its
  * versions, named by `name`.
  *
- * Components (v1): `ontology` only — a domain pack file in the platform's ontology library
- * (`domainPack`, resolved in `ONTOLOGY_DIR`; never a path) and the ontology family it publishes into
- * (`family`, the stable name `deriveOntologyPackId` derives the family's id from). Further component
- * kinds (WorkerDefinition, Skill, Procedure, Operation, connector preset) join this schema in the PR
- * that implements their change items; until then a manifest naming one is refused by name, so a
- * pack written for a later platform fails closed here instead of installing in part.
+ * Components, each kind a list under `components` (at least one component in all):
+ *   - `ontology` — a domain pack file in the platform's ontology library (`domainPack`, resolved in
+ *     `ONTOLOGY_DIR`; never a path) and the ontology family it publishes into (`family`, the stable
+ *     name `deriveOntologyPackId` derives the family's id from);
+ *   - `skills` — Skill names; each one's file is `skills/<name>.md` beside the manifest (P1-D);
+ *   - `workers` — `worker` WorkerDefinition names; each one's file is `workers/<name>.yaml` (P1-D).
+ * The two files' formats are `registry.ts`'s. Further component kinds (Procedure, Operation,
+ * connector preset) join this schema in the PR that implements their change items; until then a
+ * manifest naming one is refused by name, so a pack written for a later platform fails closed here
+ * instead of installing in part.
  *
  * What a manifest must keep that one Zod shape cannot say (`parsePackManifest` checks it): version
- * 1 is never `breaking` (nothing precedes it), and one version names each family once. Rules across
- * manifests (directory names, versions dense from 1, a family in one pack) are `registry.ts`'s.
+ * 1 is never `breaking` (nothing precedes it), it has at least one component, and it names each
+ * component once. Rules across manifests (directory names, versions dense from 1, a component in
+ * one pack) are `registry.ts`'s.
  */
 
 /** The only `schema` this platform reads. */
@@ -33,9 +38,17 @@ const DOMAIN_PACK_FILE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*\.ya?ml$/;
  *  WorkerDefinition templates beside it do not parse as an `OntologyDefinition`.) */
 const NOT_DOMAIN_PACKS: ReadonlySet<string> = new Set(['platform-meta.yaml']);
 
-/** The component kinds this platform implements. */
-export const PACK_COMPONENT_KINDS = ['ontology'] as const;
+/** The component kinds this platform implements, and the `components` key that lists each. */
+export const PACK_COMPONENT_KINDS = ['ontology', 'skill', 'worker'] as const;
 export type PackComponentKind = (typeof PACK_COMPONENT_KINDS)[number];
+const COMPONENT_KEY: Readonly<Record<PackComponentKind, string>> = {
+  ontology: 'ontology',
+  skill: 'skills',
+  worker: 'workers',
+};
+
+/** A Skill's or Worker's name in a pack: a pack name's shape, which is also a valid pi Skill name. */
+const ComponentNameSchema = z.string().regex(PACK_NAME_PATTERN);
 
 const OntologyComponentSchema = z
   .object({
@@ -65,14 +78,18 @@ const PackManifestSchema = z
     breaking: z.boolean(),
     components: z
       .object({
-        ontology: z.array(OntologyComponentSchema).min(1),
+        ontology: z.array(OntologyComponentSchema).min(1).optional(),
+        skills: z.array(ComponentNameSchema).min(1).optional(),
+        workers: z.array(ComponentNameSchema).min(1).optional(),
       })
       .strict(),
   })
   .strict();
 
 export type PackManifest = z.infer<typeof PackManifestSchema>;
-export type PackOntologyComponentManifest = PackManifest['components']['ontology'][number];
+export type PackOntologyComponentManifest = NonNullable<
+  PackManifest['components']['ontology']
+>[number];
 
 /** A manifest that is not Pack Contract v1, or breaks one of its rules — a deployment bug (the
  *  manifests ship with the image), never a caller error. */
@@ -104,12 +121,13 @@ export function parsePackManifest(text: string, source: string): PackManifest {
   // reports it as an unrecognized key.
   const components = (raw as { components?: unknown } | null)?.components;
   if (components !== null && typeof components === 'object') {
-    const supported: ReadonlySet<string> = new Set(PACK_COMPONENT_KINDS);
-    const unsupported = Object.keys(components).filter((kind) => !supported.has(kind));
+    const keys = Object.values(COMPONENT_KEY);
+    const supported: ReadonlySet<string> = new Set(keys);
+    const unsupported = Object.keys(components).filter((key) => !supported.has(key));
     if (unsupported.length > 0) {
       throw new PackManifestError(
         source,
-        `component kind(s) ${unsupported.map((kind) => JSON.stringify(kind)).join(', ')} not supported by this platform (it implements ${PACK_COMPONENT_KINDS.join(', ')})`,
+        `component kind(s) ${unsupported.map((key) => JSON.stringify(key)).join(', ')} not supported by this platform (it implements ${keys.join(', ')})`,
       );
     }
   }
@@ -119,13 +137,23 @@ export function parsePackManifest(text: string, source: string): PackManifest {
   if (manifest.version === 1 && manifest.breaking) {
     throw new PackManifestError(source, 'version 1 cannot be breaking: nothing precedes it');
   }
-  const families = manifest.components.ontology.map((component) => component.family);
-  const repeated = families.filter((family, index) => families.indexOf(family) !== index);
-  if (repeated.length > 0) {
-    throw new PackManifestError(
-      source,
-      `ontology family ${JSON.stringify(repeated[0])} is named twice; a version publishes each family once`,
-    );
+  const { ontology = [], skills = [], workers = [] } = manifest.components;
+  if (ontology.length + skills.length + workers.length === 0) {
+    throw new PackManifestError(source, 'has no components; a version installs at least one');
+  }
+  const named: readonly [string, readonly string[]][] = [
+    ['ontology family', ontology.map((component) => component.family)],
+    ['Skill', skills],
+    ['Worker', workers],
+  ];
+  for (const [what, names] of named) {
+    const repeated = names.find((name, index) => names.indexOf(name) !== index);
+    if (repeated !== undefined) {
+      throw new PackManifestError(
+        source,
+        `${what} ${JSON.stringify(repeated)} is named twice; a version publishes each once`,
+      );
+    }
   }
   return manifest;
 }

@@ -531,8 +531,13 @@ export type ChangeSegmentStatus = (typeof CHANGE_SEGMENT_STATUS_VALUES)[number];
 export const ChangeSegmentStatusSchema = asEnum(CHANGE_SEGMENT_STATUS_VALUES);
 
 /** What a ChangeItem is an intent to do (§5.4: a call of an existing publish / configuration
- *  capability). P1-A has one: publish a version of an ontology family. */
-export const CHANGE_ITEM_KIND_VALUES = ['ontology_version'] as const;
+ *  capability): publish the next version of an ontology family (P1-A), of a Skill family, or of a
+ *  `worker`-kind WorkerDefinition family (P1-D). */
+export const CHANGE_ITEM_KIND_VALUES = [
+  'ontology_version',
+  'skill_version',
+  'worker_definition_version',
+] as const;
 export type ChangeItemKind = (typeof CHANGE_ITEM_KIND_VALUES)[number];
 export const ChangeItemKindSchema = asEnum(CHANGE_ITEM_KIND_VALUES);
 
@@ -577,9 +582,10 @@ export const ChangeSourceKindSchema = asEnum(CHANGE_SOURCE_KIND_VALUES);
 
 /**
  * An applied item's target now (S11 P1-B, read at the time of the call): `in_effect` — what the item
- * wrote is still there (for an ontology item: the version it published is the family's head);
- * `replaced` — something written later took its place; `not_installed` — the target no longer
- * exists (an ontology family with no published version).
+ * wrote is still there (the version it published is its family's head: the latest published
+ * version of the ontology family, Skill or WorkerDefinition); `replaced` — something written later
+ * took its place; `not_installed` — the target no longer exists (a family with no published
+ * version).
  */
 export const CHANGE_ITEM_STATE_VALUES = ['in_effect', 'replaced', 'not_installed'] as const;
 export type ChangeItemState = (typeof CHANGE_ITEM_STATE_VALUES)[number];
@@ -602,18 +608,19 @@ export type ChangeRollbackBlocker = (typeof CHANGE_ROLLBACK_BLOCKER_VALUES)[numb
 export const ChangeRollbackBlockerSchema = asEnum(CHANGE_ROLLBACK_BLOCKER_VALUES);
 
 /**
- * Which ChangeItem put an ontology family's installed version there (S11 §3.2 `Object changed_by
- * ChangeItem`): `recorded` — an item of an applied segment; `provenance_unknown` — installed before
- * P1, or published outside the ChangePlan core (`publish_ontology_version`, `seed-domain-pack`), so
+ * Which ChangeItem put a family's installed version there (S11 §3.2 `Object changed_by ChangeItem`;
+ * an ontology family, a Skill or a WorkerDefinition): `recorded` — an item of an applied segment;
+ * `provenance_unknown` — installed before P1, or published outside the ChangePlan core
+ * (`publish_ontology_version`, `publish_skill`, `publish_worker_definition`, `seed-domain-pack`), so
  * nothing records it and it cannot be rolled back from here; `not_installed` — no published version.
  */
-export const ONTOLOGY_PROVENANCE_STATUS_VALUES = [
+export const CHANGE_PROVENANCE_STATUS_VALUES = [
   'recorded',
   'provenance_unknown',
   'not_installed',
 ] as const;
-export type OntologyProvenanceStatus = (typeof ONTOLOGY_PROVENANCE_STATUS_VALUES)[number];
-export const OntologyProvenanceStatusSchema = asEnum(ONTOLOGY_PROVENANCE_STATUS_VALUES);
+export type ChangeProvenanceStatus = (typeof CHANGE_PROVENANCE_STATUS_VALUES)[number];
+export const ChangeProvenanceStatusSchema = asEnum(CHANGE_PROVENANCE_STATUS_VALUES);
 
 /**
  * What a workspace has of a pack, or of one of its components (S11 P1-C, Pack Contract v1; derived

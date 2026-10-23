@@ -31,6 +31,7 @@ import {
 } from '../../application/goal/index.js';
 import { PackNotFoundError } from '../../application/packs/index.js';
 import { TaskRuntimeNotConfiguredError } from '../../application/task/index.js';
+import { SkillNameConflictError } from '../../application/worker/index.js';
 import { ApprovalReasonRequiredError } from '../../governance/approval/index.js';
 import { HandleIssuanceError, ScopeValidationError } from '../../governance/capability/index.js';
 import { ConnectionParamsCarryCredentialsError } from '../../governance/connections/index.js';
@@ -271,6 +272,11 @@ describe('mapDispatchError — error-mapping followup: previously-unmapped S3.1/
 
   it('OntologyBaseMovedError (publish_ontology_version, R-60) maps to ILLEGAL_TRANSITION, like HTTP 409', () => {
     const mapped = mapDispatchError(new OntologyBaseMovedError('ont-1', 3, 1, 2));
+    expect(mapped.code).toBe(WS_ERROR_CODES.ILLEGAL_TRANSITION);
+  });
+
+  it('SkillNameConflictError (S11 P1-D) maps to ILLEGAL_TRANSITION, like HTTP 409', () => {
+    const mapped = mapDispatchError(new SkillNameConflictError('fix-it', 'skill-1', 'install'));
     expect(mapped.code).toBe(WS_ERROR_CODES.ILLEGAL_TRANSITION);
   });
 

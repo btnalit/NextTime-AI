@@ -421,4 +421,195 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
       /这个部署里没有这个能力包/,
     );
   });
+  it('Skills and Workers: each part says what it is and links to its page; the review shows what each installs and what it may do', async () => {
+    const CREW_VERSIONS: PackWire['versions'] = [
+      {
+        version: 1,
+        summary: 'Ops crew',
+        notes: 'First version',
+        breaking: false,
+        components: [
+          { kind: 'skill', name: 'docker-triage', description: '排查容器问题' },
+          { kind: 'worker', name: 'ops-runner', description: '通用运维执行者' },
+        ],
+      },
+    ];
+    const recorded = component().provenance;
+    const crew = pack({
+      name: 'ops-base',
+      latestVersion: 1,
+      versions: CREW_VERSIONS,
+      status: 'customized',
+      installedVersion: null,
+      components: [
+        {
+          kind: 'skill',
+          name: 'docker-triage',
+          skillId: 'skill-1',
+          status: 'up_to_date',
+          installedVersion: 1,
+          provenance: recorded,
+        },
+        {
+          kind: 'worker',
+          name: 'ops-runner',
+          definitionId: 'def-1',
+          headVersion: null,
+          status: 'not_installed',
+          installedVersion: null,
+          provenance: { status: 'not_installed' },
+        },
+      ],
+    });
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_packs: () => ({ items: [crew] }),
+      preview_pack_install: () =>
+        preview({
+          pack: crew,
+          targetVersion: 1,
+          crossedVersions: [1],
+          breaking: false,
+          inUse: { objects: 0, links: 0, capped: false },
+          items: [
+            {
+              ordinal: 1,
+              kind: 'skill_version',
+              target: { skillId: 'skill-1', name: 'docker-triage' },
+              before: { version: 2, contentDigest: 'sha256:b' },
+              after: { contentDigest: 'sha256:c' },
+              unchanged: false,
+              classification: 'authority_widening',
+              widening: [{ path: 'skill.markdown', reason: 'changed' }],
+              skill: {
+                name: 'docker-triage',
+                description: '排查容器问题',
+                markdown: '# Triage\n\nLook first.',
+              },
+              changedFields: ['markdown'],
+            },
+            {
+              ordinal: 2,
+              kind: 'worker_definition_version',
+              target: { definitionId: 'def-1', name: 'ops-runner' },
+              before: null,
+              after: { contentDigest: 'sha256:d' },
+              unchanged: false,
+              classification: 'authority_widening',
+              widening: [{ path: 'worker', reason: 'added' }],
+              worker: {
+                name: 'ops-runner',
+                description: '通用运维执行者',
+                systemPrompt: 'You are ops-runner.',
+                skills: ['docker-triage'],
+                capabilities: null,
+                egressDeny: [],
+              },
+              changedFields: ['description', 'name', 'skills', 'systemPrompt'],
+            },
+          ],
+        }),
+      install_pack: () => ({ pack: crew, segmentId: NEW_SEGMENT_ID }),
+    });
+    renderTab(http, 'ops-base');
+
+    const pane = await screen.findByTestId('catalog-pack-detail');
+    const skill = within(pane).getByTestId('catalog-pack-component-skill-docker-triage');
+    expect(skill.textContent).toMatch(/^Skill docker-triage/);
+    expect(skill.textContent).toContain('排查容器问题');
+    expect(
+      within(skill)
+        .getByTestId('catalog-pack-component-page-skill-docker-triage')
+        .getAttribute('href'),
+    ).toBe('#/govern/catalog/skills/skill-1');
+    const worker = within(pane).getByTestId('catalog-pack-component-worker-ops-runner');
+    expect(worker.textContent).toMatch(/^Worker ops-runner/);
+    // Not installed: nothing to open yet.
+    expect(
+      within(worker).queryByTestId('catalog-pack-component-page-worker-ops-runner'),
+    ).toBeNull();
+
+    fireEvent.click(within(pane).getByTestId('catalog-pack-install-trigger'));
+    const review = await screen.findByTestId('catalog-pack-preview');
+    const skillItem = within(review).getByTestId('catalog-pack-item-1');
+    expect(skillItem.textContent).toMatch(/Skill docker-triage：第 2 版 → 新的一版/);
+    expect(within(skillItem).getByTestId('catalog-pack-item-1-changed').textContent).toBe(
+      '和工作区里现在的相比，改动了：正文',
+    );
+    expect(within(skillItem).getByTestId('catalog-pack-item-1-content').textContent).toMatch(
+      /查看 Skill 正文.*Look first\./,
+    );
+    expect(screen.getByTestId('catalog-pack-confirm-item-1').closest('label')?.textContent).toMatch(
+      /Skill 正文有改动/,
+    );
+
+    const workerItem = within(review).getByTestId('catalog-pack-item-2');
+    expect(workerItem.textContent).toMatch(/Worker ops-runner：未安装 → 新的一版/);
+    // A first install lists no "changed" fields: everything is new.
+    expect(within(workerItem).queryByTestId('catalog-pack-item-2-changed')).toBeNull();
+    expect(within(workerItem).getByTestId('catalog-pack-item-2-skills').textContent).toMatch(
+      /^挂载的 Skill：docker-triage$/,
+    );
+    expect(within(workerItem).getByTestId('catalog-pack-item-2-capabilities').textContent).toMatch(
+      /平台默认.*不能执行需要审批的操作/,
+    );
+    expect(screen.getByTestId('catalog-pack-confirm-item-2').closest('label')?.textContent).toMatch(
+      /新增这个 Worker：能委派任务的助手都可以调用它/,
+    );
+
+    fireEvent.click(screen.getByTestId('catalog-pack-confirm-item-1'));
+    fireEvent.click(screen.getByTestId('catalog-pack-confirm-item-2'));
+    fireEvent.click(screen.getByRole('button', { name: '安装' }));
+    await waitFor(() =>
+      expect(named(http.calls, 'install_pack')).toEqual([
+        {
+          name: 'install_pack',
+          params: {
+            name: 'ops-base',
+            version: 1,
+            reviewedDigest: 'sha256:plan',
+            confirmedOrdinals: [1, 2],
+          },
+        },
+      ]),
+    );
+  });
+  it("an installed Worker links to its published head version's row (the 「Worker」 tab names one version)", async () => {
+    const crew = pack({
+      name: 'ops-base',
+      latestVersion: 1,
+      versions: [
+        {
+          version: 1,
+          summary: 'Ops crew',
+          notes: 'First version',
+          breaking: false,
+          components: [{ kind: 'worker', name: 'ops-runner', description: null }],
+        },
+      ],
+      status: 'up_to_date',
+      installedVersion: 1,
+      components: [
+        {
+          kind: 'worker',
+          name: 'ops-runner',
+          definitionId: 'def-1',
+          headVersion: 3,
+          status: 'up_to_date',
+          installedVersion: 1,
+          provenance: component().provenance,
+        },
+      ],
+    });
+    renderTab(
+      scriptedHttp({ get_workspace: () => OWNER_WORKSPACE, list_packs: () => ({ items: [crew] }) }),
+      'ops-base',
+    );
+    const pane = await screen.findByTestId('catalog-pack-detail');
+    expect(
+      within(pane)
+        .getByTestId('catalog-pack-component-page-worker-ops-runner')
+        .getAttribute('href'),
+    ).toBe('#/govern/catalog/workers/def-1%403');
+  });
 });

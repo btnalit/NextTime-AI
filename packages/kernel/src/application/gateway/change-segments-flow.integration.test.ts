@@ -176,7 +176,8 @@ describe.runIf(DATABASE_URL !== undefined)(
         inUse: { objects: 0, links: 0, capped: false },
         items: [{ ordinal: 1, to: null, classification: 'not_widening', blocker: null }],
       });
-      expect(dryRun.items[0]?.removes.objectTypes).toContain('Host');
+      const [first] = dryRun.items;
+      expect(first?.kind === 'ontology_version' ? first.removes.objectTypes : []).toContain('Host');
 
       const rolledBack = await call<ChangeSegmentWire>(owner, 'roll_back_change_segment', {
         segmentId,

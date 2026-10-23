@@ -2,6 +2,8 @@ import {
   CHANGE_WIDENING_REASON_VALUES,
   type ChangeItemClassification,
   type ChangeWideningReasonCode,
+  type ProposeSkillContent,
+  type WorkerWorkerDefinitionContent,
 } from '@nexttime/shared';
 import type {
   ActionTypeDefinition,
@@ -11,7 +13,8 @@ import type {
 } from '../../substrate/ontology/index.js';
 
 /**
- * application/change-plan/classify: the authority-widening classifier (S11 plan §5.4, I-A4). A
+ * application/change-plan/classify: the authority-widening classifier (S11 plan §5.4, I-A4) — for
+ * ontology definitions (P1-A), Skills and `worker` WorkerDefinitions (P1-D). A
  * **whitelist**: every field of an item is compared, before against after, and a change passes as
  * `not_widening` only where a rule below proves it cannot widen authority — let an action run with
  * less review, send a credential somewhere new, or put new text into a model's prompt (a tool
@@ -250,4 +253,110 @@ export function classifyOntologyDefinitionChange(
   compareSection(LINK_TYPES, before?.linkTypes ?? [], after?.linkTypes ?? [], out);
   compareSection(ACTION_TYPES, before?.actionTypes ?? [], after?.actionTypes ?? [], out);
   return out;
+}
+
+// -------------------------------------------------------------------------------------------
+// Skills and WorkerDefinitions (S11 P1-D)
+// -------------------------------------------------------------------------------------------
+
+/** A list of strings, or `undefined` for anything else; `undefined` itself reads as `absent`. */
+function stringList(
+  value: unknown,
+  absent: readonly string[] | undefined,
+): readonly string[] | undefined {
+  if (value === undefined) return absent;
+  return Array.isArray(value) && value.every((entry) => typeof entry === 'string')
+    ? value
+    : undefined;
+}
+
+/**
+ * A list whose entries each reach further (`widensWhen: 'grows'` — an entry added widens) or hold
+ * something back (`'shrinks'` — an entry dropped widens). Order does not count. `absentIsEmpty`:
+ * the field left out means no entries; otherwise leaving it out means a default defined elsewhere,
+ * and a change between that and a list is `changed` (not proven either way).
+ */
+function listRule(widensWhen: 'grows' | 'shrinks', absentIsEmpty: boolean): FieldRule {
+  return (before, after) => {
+    if (sameValue(before, after)) return null;
+    if (!absentIsEmpty && (before === undefined) !== (after === undefined)) return 'changed';
+    const b = stringList(before, absentIsEmpty ? [] : undefined);
+    const a = stringList(after, absentIsEmpty ? [] : undefined);
+    if (b === undefined || a === undefined) return 'changed';
+    const [wider, narrower] = widensWhen === 'grows' ? [a, b] : [b, a];
+    return wider.every((entry) => narrower.includes(entry)) ? null : 'loosened';
+  };
+}
+
+/**
+ * A Skill version (`application/worker/skills.ts`; `@nexttime/shared` skill.ts). What a Worker
+ * that mounts it reads is prompt text — pi lists each mounted Skill's name and description and
+ * loads its body — so a change to any of the three needs confirmation. Typed over the schema's own
+ * keys, so a new Skill field does not compile without a rule.
+ */
+export const SKILL_FIELD_RULES: Readonly<Record<keyof ProposeSkillContent, FieldRule>> = {
+  // Workers mount Skills by name: another name is another Skill to them.
+  name: ANY_CHANGE,
+  description: ANY_CHANGE,
+  markdown: ANY_CHANGE,
+  // Metadata `list_skills` / `find_procedures` filter on; mounting never reads it.
+  applicable: NOT_WIDENING,
+};
+
+/**
+ * A `worker` WorkerDefinition version (`@nexttime/shared` worker-definition.ts): what a Worker of
+ * it is told (`systemPrompt`, its Skills), which model runs it, and what it may do —
+ * `capabilities`, `gates`, and the egress it is denied. Typed over the schema's own keys.
+ */
+export const WORKER_DEFINITION_FIELD_RULES: Readonly<
+  Record<keyof WorkerWorkerDefinitionContent, FieldRule>
+> = {
+  systemPrompt: ANY_CHANGE,
+  // Which model runs it: no direction proven harmless.
+  model: ANY_CHANGE,
+  // `find_workers` ranking text an agent reads through a tool result; grants nothing.
+  name: NOT_WIDENING,
+  description: NOT_WIDENING,
+  // Each Skill mounted is more text in its prompt.
+  skills: listRule('grows', true),
+  // Left out means the platform's default (the worker ceiling without execute-class names), which
+  // changes with the platform: between that and a list is not proven either way.
+  capabilities: listRule('grows', false),
+  gates: listRule('grows', true),
+  // A host taken off the deny list is egress allowed again.
+  egressDeny: listRule('shrinks', true),
+};
+
+/** One version's content against another, as `compareEntry` does for a type, under `path`. An item
+ *  that did not exist (`before` null) is `added` as a whole — a new prompt, or a new agent anyone
+ *  allowed to delegate may invoke; taking one out (`after` null) narrows: no Worker mounts the
+ *  Skill, nobody can invoke the WorkerDefinition. */
+function classifyVersionedContent(
+  path: string,
+  fields: Readonly<Record<string, FieldRule>>,
+  before: object | null,
+  after: object | null,
+): WideningReason[] {
+  if (after === null) return [];
+  if (before === null) return [{ path, reason: 'added' }];
+  const out: WideningReason[] = [];
+  compareEntry(path, before, after, fields, out);
+  return out;
+}
+
+/** The widening changes from one Skill version's content to another (`null`: not installed). */
+export function classifySkillChange(
+  before: ProposeSkillContent | null,
+  after: ProposeSkillContent | null,
+): WideningReason[] {
+  return classifyVersionedContent('skill', SKILL_FIELD_RULES, before, after);
+}
+
+/** The widening changes from one `worker` WorkerDefinition version's content to another (`null`:
+ *  not installed). */
+export function classifyWorkerDefinitionChange(
+  before: Readonly<Record<string, unknown>> | null,
+  after: Readonly<Record<string, unknown>> | null,
+): WideningReason[] {
+  return classifyVersionedContent('worker', WORKER_DEFINITION_FIELD_RULES, before, after);
 }

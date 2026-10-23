@@ -158,7 +158,7 @@ function ExecutionReadinessStrip({
               <span>{missingCauseText(first, gateNames, t, refusalKinds)}</span>
               <FixHint
                 href={missingLinkHref(first, reader)}
-                label={missingLinkLabel(first, t)}
+                label={missingLinkLabel(first, t, reader)}
                 ask={missingAsk(first, reader, t)}
               />
             </li>
@@ -273,7 +273,7 @@ function ExecutionReadinessStrip({
                 <span>{missingCauseText(item, gateNames, t, refusalKinds)}</span>
                 <FixHint
                   href={missingLinkHref(item, reader)}
-                  label={missingLinkLabel(item, t)}
+                  label={missingLinkLabel(item, t, reader)}
                   ask={missingAsk(item, reader, t)}
                 />
               </li>

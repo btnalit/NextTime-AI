@@ -6,9 +6,17 @@ import { type WideningReason, classificationOf } from './classify.js';
 import { contentDigest } from './digest.js';
 import { ChangeConfirmationRequiredError, ChangePlanChangedError } from './errors.js';
 import {
+  type FamilyVersionIntent,
+  type SkillItemContent,
+  applyFamilyItem,
+  familyItemTargetKey,
+  lockFamilyItem,
+  planFamilyItem,
+} from './family-item.js';
+import { inLockOrder } from './lock-order.js';
+import {
   type OntologyTypeChanges,
   type OntologyVersionIntent,
-  type PlannedOntologyItem,
   applyOntologyItem,
   lockOntologyItem,
   ontologyItemTargetKey,
@@ -19,7 +27,8 @@ import {
  * application/change-plan/engine: the ChangePlan core's workspace segment (S11 plan §3.1–§3.4,
  * §5.4; migrations/governance/0025_change_segments.sql). One core for every source of change — a
  * pack (a module is a pack with one ontology component) today, the platform admin agent's
- * proposal later (AA3).
+ * proposal later (AA3). Item kinds: a version of an ontology family (`ontology-item.ts`), of a
+ * Skill or of a `worker` WorkerDefinition (`family-item.ts`).
  *
  *   plan  (`planWorkspaceSegment`)  — the dry run: lock what the items change, read its current
  *         state, classify each item (whitelist, I-A4), and digest the result. Writes nothing; the
@@ -37,7 +46,7 @@ import {
  * Handle (I-A1).
  */
 
-export type ChangeItemIntent = OntologyVersionIntent;
+export type ChangeItemIntent = OntologyVersionIntent | FamilyVersionIntent;
 
 /** How a segment was applied (see `ApplyWorkspaceSegmentInput.channel`). */
 export type ChangeChannel = 'human' | 'platform';
@@ -58,11 +67,21 @@ export interface WorkspaceSegmentInput {
 }
 
 /** What a planned item would change, by kind, for the person reviewing it (not recorded, not in
- *  the digest). `ontology_version`: the family's type names added, removed and changed. */
-export interface ChangeItemDetail {
-  readonly kind: 'ontology_version';
-  readonly types: OntologyTypeChanges;
-}
+ *  the digest). `ontology_version`: the family's type names added, removed and changed.
+ *  `skill_version` / `worker_definition_version`: the content it would publish and the fields that
+ *  differ from the head. */
+export type ChangeItemDetail =
+  | { readonly kind: 'ontology_version'; readonly types: OntologyTypeChanges }
+  | {
+      readonly kind: 'skill_version';
+      readonly content: SkillItemContent;
+      readonly changedFields: readonly string[];
+    }
+  | {
+      readonly kind: 'worker_definition_version';
+      readonly definition: Readonly<Record<string, unknown>>;
+      readonly changedFields: readonly string[];
+    };
 
 export interface PlannedChangeItem {
   readonly ordinal: number;
@@ -89,7 +108,8 @@ export interface WorkspaceSegmentPlan {
 
 interface KindPlan {
   readonly planned: PlannedChangeItem;
-  readonly ontology: PlannedOntologyItem;
+  /** Writes the item through its kind's publish function; returns its `after`. */
+  readonly apply: (appliedBy: string) => Promise<Readonly<Record<string, unknown>>>;
 }
 
 async function lockItem(
@@ -101,6 +121,9 @@ async function lockItem(
   switch (kind) {
     case 'ontology_version':
       return lockOntologyItem(client, workspaceId, intent);
+    case 'skill_version':
+    case 'worker_definition_version':
+      return lockFamilyItem(client, workspaceId);
     default:
       throw unknownKind(kind);
   }
@@ -117,6 +140,9 @@ function targetKeyOf(intent: ChangeItemIntent): string {
   switch (kind) {
     case 'ontology_version':
       return ontologyItemTargetKey(intent);
+    case 'skill_version':
+    case 'worker_definition_version':
+      return familyItemTargetKey(intent);
     default:
       throw unknownKind(kind);
   }
@@ -162,7 +188,29 @@ async function planItem(
           unchanged: ontology.unchanged,
           detail: { kind, types: ontology.types },
         },
-        ontology,
+        apply: (appliedBy) => applyOntologyItem(client, workspaceId, ontology, appliedBy),
+      };
+    }
+    case 'skill_version':
+    case 'worker_definition_version': {
+      const family = await planFamilyItem(client, workspaceId, intent);
+      const detail: ChangeItemDetail =
+        family.kind === 'skill_version'
+          ? { kind: family.kind, content: family.content, changedFields: family.changedFields }
+          : { kind: family.kind, definition: family.content, changedFields: family.changedFields };
+      return {
+        planned: {
+          ordinal,
+          kind,
+          target: family.target,
+          before: family.before,
+          after: family.after,
+          classification: classificationOf(family.widening),
+          widening: family.widening,
+          unchanged: family.unchanged,
+          detail,
+        },
+        apply: (appliedBy) => applyFamilyItem(client, workspaceId, family, appliedBy),
       };
     }
     default:
@@ -173,6 +221,8 @@ async function planItem(
 /** The existing capability whose intent an item kind carries (the audit row's `capability`). */
 const ITEM_KIND_CAPABILITY: Readonly<Record<ChangeItemKind, string>> = {
   ontology_version: 'publish_ontology_version',
+  skill_version: 'publish_skill',
+  worker_definition_version: 'publish_worker_definition',
 };
 
 function segmentDigest(source: ChangeSource, items: readonly PlannedChangeItem[]): string {
@@ -197,7 +247,7 @@ async function planWithKinds(
 ): Promise<{ readonly plan: WorkspaceSegmentPlan; readonly kinds: readonly KindPlan[] }> {
   if (input.items.length === 0) throw new Error('change-plan: a segment has at least one item');
   assertDistinctTargets(input.items);
-  for (const intent of input.items) await lockItem(client, workspaceId, intent);
+  for (const intent of inLockOrder(input.items)) await lockItem(client, workspaceId, intent);
   const kinds: KindPlan[] = [];
   for (const [index, intent] of input.items.entries()) {
     kinds.push(await planItem(client, workspaceId, intent, index + 1));
@@ -313,9 +363,9 @@ export async function applyWorkspaceSegment(
   if (!segmentId) throw new Error('change-plan: INSERT ... RETURNING produced no segment');
 
   const applied: AppliedChangeItem[] = [];
-  for (const { planned, ontology } of kinds) {
+  for (const { planned, apply } of kinds) {
     if (planned.unchanged) continue;
-    const after = await applyOntologyItem(client, workspaceId, ontology, input.appliedBy);
+    const after = await apply(input.appliedBy);
     const confirmedBy = planned.classification === 'authority_widening' ? input.appliedBy : null;
     const item = await client.query<{ id: string }>(
       `insert into change_items

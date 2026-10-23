@@ -224,6 +224,13 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
     zh: '这个版本里有对象类型或动作类型与本工作区另一个已发布的本体族重名；本次没有发布任何内容。请改名，或改动拥有该类型的那个本体族',
     en: 'An object type or action type in this version is already declared by another published ontology family in this workspace — nothing was published. Rename it, or change the family that owns it',
   },
+  // S11 P1-D: a Skill name another Skill already has published in this workspace (a Worker mounts
+  // Skills by name, so a name has one Skill) — `publish_skill`, a pack's install review and
+  // install. Nothing was published.
+  skill_name_conflict: {
+    zh: '工作区里已经有另一个同名的 Skill 在用；Worker 按名字挂载 Skill，同名会让它挂错，所以本次没有发布任何内容。请改名，或先停用另一个',
+    en: 'Another Skill of this name is already in use in this workspace; a Worker mounts Skills by name, so two of one name would mix them up — nothing was published. Rename it, or deprecate the other one first',
+  },
   // S11 P1 (`application/change-plan`): the module install path's two refusals, and P1-B's install
   // record rollback. Nothing was written in any of them.
   change_confirmation_required: {

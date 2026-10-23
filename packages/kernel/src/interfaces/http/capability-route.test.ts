@@ -58,6 +58,7 @@ import { PackNotFoundError } from '../../application/packs/index.js';
 import { TaskRuntimeNotConfiguredError } from '../../application/task/index.js';
 import {
   ProcedureStepReferenceError,
+  SkillNameConflictError,
   SkillValidationError,
   WorkerDefinitionNotFoundError,
   WorkerDefinitionNotPublishedError,
@@ -641,6 +642,15 @@ describe('mapCapabilityError — application/chat domain errors (unit)', () => {
     expect(mapped.status).toBe(409);
     expect(mapped.code).toBe('ontology_base_moved');
     expect(mapped.message).toMatch(/published version 1.*now 2/);
+  });
+
+  it('SkillNameConflictError (publish_skill / install_pack, S11 P1-D) → 409 skill_name_conflict with the name', () => {
+    const mapped = mapCapabilityError(new SkillNameConflictError('fix-it', 'skill-1', 'install'));
+    expect(mapped).toMatchObject({
+      status: 409,
+      code: 'skill_name_conflict',
+      details: { skillName: 'fix-it' },
+    });
   });
 
   it('ConflictNotFoundError (resolve_conflict/list_conflicts) → 404 not_found, not 500', () => {
