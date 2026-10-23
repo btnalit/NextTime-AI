@@ -144,6 +144,16 @@ describe('readRunEnvironment', () => {
     ).toBeNull();
   });
 
+  it('reads a stored runtime that does not parse as unreported, and drops the digest taken over it', () => {
+    expect(
+      readRunEnvironment({
+        run_spec: spec(),
+        runtime_report: { v: 2 },
+        environment_digest: environmentDigest(spec(), runtime()),
+      }),
+    ).toEqual({ spec: spec(), runtime: null, environmentDigest: null });
+  });
+
   it('reads the kernel’s half alone when the runtime was never reported', () => {
     expect(
       readRunEnvironment({ run_spec: spec(), runtime_report: null, environment_digest: null }),

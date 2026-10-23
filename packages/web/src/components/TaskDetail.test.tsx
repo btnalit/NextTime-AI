@@ -314,9 +314,9 @@ describe('TaskDetail', () => {
       expect(taskOutcome.getAttribute('data-basis')).toBe('agent_reported');
       expect(taskOutcome.textContent).toContain('agent 校验步骤上报（代表 Alice）');
       // S11 W1a: the agent's own report is shown, and said not to count toward attainment.
-      expect(within(taskOutcome).getByTestId('outcome-proxy-note').textContent).toBe(
-        '代理指标，不计入达成率',
-      );
+      const proxyNote = within(taskOutcome).getByTestId('outcome-proxy-note').textContent;
+      expect(proxyNote).toContain('代理指标，不计入达成率');
+      expect(proxyNote).toContain('达成率只算请求人的确认和平台验收检查');
       expect(within(section).getByText('diagnose-flow v3')).toBeTruthy();
       expect(within(section).getByText('agent 自报')).toBeTruthy();
       expect(screen.getByTestId('task-turn-link').getAttribute('href')).toBe('#/work/chats/chat-1');
@@ -417,8 +417,9 @@ describe('TaskDetail', () => {
       expect(within(block).getByTestId('run-environment-digest').textContent).toBe(
         `v1:${'c'.repeat(12)}`,
       );
-      // One run: no per-run heading.
+      // One run: no per-run heading, nothing to compare.
       expect(block.textContent).not.toContain('次尝试');
+      expect(screen.queryByTestId('run-environment-summary')).toBeNull();
     });
 
     it('a run that named no model reads 运行时默认; a run that never started reads 未上报 and has no fingerprint', () => {
@@ -431,7 +432,7 @@ describe('TaskDetail', () => {
         ],
       });
       const block = screen.getByTestId('run-environment');
-      expect(within(block).getByText('运行时默认')).toBeTruthy();
+      expect(within(block).getByText('运行时默认（Worker 定义和请求人都没指定）')).toBeTruthy();
       expect(within(block).getByTestId('run-environment-image').textContent).toMatch(/^未上报/);
       expect(within(block).getByTestId('run-environment-digest').textContent).toMatch(/^无法确定/);
     });
@@ -451,6 +452,33 @@ describe('TaskDetail', () => {
       ).toBeTruthy();
       expect(blocks[1]?.textContent).toContain('第 2 次尝试');
       expect(blocks[1]?.textContent).toContain('anthropic/model-a');
+      expect(screen.getByTestId('run-environment-summary').textContent).toMatch(
+        /^第 1 次尝试没有指纹，无法比较。环境指纹相同，说明/,
+      );
+    });
+
+    it('several runs say which ran in the same environment', () => {
+      const other = { ...environment, environmentDigest: `v1:${'d'.repeat(64)}` };
+      renderDetail({
+        workerRuns: [
+          { ...run, environment },
+          { ...run, id: 'run-2', attempt: 2, environment },
+          { ...run, id: 'run-3', attempt: 3, environment: other },
+        ],
+      });
+      expect(screen.getByTestId('run-environment-summary').textContent).toMatch(
+        /^第 1、2 次尝试的环境指纹相同；第 3 次尝试与其他几次不同。/,
+      );
+      cleanup();
+      renderDetail({
+        workerRuns: [
+          { ...run, environment },
+          { ...run, id: 'run-2', attempt: 2, environment },
+        ],
+      });
+      expect(screen.getByTestId('run-environment-summary').textContent).toMatch(
+        /^这 2 次运行的环境指纹相同。/,
+      );
     });
   });
 

@@ -383,20 +383,84 @@ describe.runIf(DATABASE_URL !== undefined)(
         ),
       ).toBeNull();
 
-      // A run with no spec of its own cannot carry a runtime or an environment.
-      expect(
-        await attempt(
-          `insert into worker_runs (workspace_id, status, task_id, depth, attempt, runtime_report)
-           values ($1, 'running', $2, 1, 1, $3::jsonb)`,
-          [workspaceId, spawned.taskId, report],
-        ),
-      ).toMatchObject({ message: expect.stringMatching(/worker_runs_runtime_report_object/) });
+      // A run is created before it starts: no INSERT carries the supervisor's half, whatever
+      // status it names.
+      for (const status of ['provisioning', 'running', 'terminated']) {
+        expect(
+          await attempt(
+            `insert into worker_runs (workspace_id, status, task_id, depth, attempt, run_spec,
+               runtime_report)
+             values ($1, $3, $2, 1, 1, '{}'::jsonb, $4::jsonb)`,
+            [workspaceId, spawned.taskId, status, report],
+          ),
+        ).toMatchObject({ message: expect.stringMatching(/only as it starts/) });
+      }
       expect(
         await attempt(
           `insert into worker_runs (workspace_id, status, task_id, depth, attempt, run_spec,
              environment_digest)
            values ($1, 'running', $2, 1, 1, '{}'::jsonb, $3)`,
           [workspaceId, spawned.taskId, `v1:${'0'.repeat(64)}`],
+        ),
+      ).toMatchObject({ message: expect.stringMatching(/only as it starts/) });
+    });
+
+    it('a run that started without a runtime cannot go back to provisioning and start again with one', async () => {
+      const silent = new FakeTaskSupervisorClient();
+      silent.runtime = undefined;
+      const runId = (await invoke(silent)).workerRunId;
+      expect((await fingerprintOf(runId)).status).toBe('running');
+      for (const from of ['running', 'terminated']) {
+        if (from === 'terminated')
+          await inTx(ownerId, (client) =>
+            client.query(
+              `update worker_runs set status = 'terminated', terminated_at = now()
+               where workspace_id = $1 and id = $2`,
+              [workspaceId, runId],
+            ),
+          );
+        expect(
+          await attempt(
+            `update worker_runs set status = 'provisioning' where workspace_id = $1 and id = $2`,
+            [workspaceId, runId],
+          ),
+        ).toMatchObject({ message: expect.stringMatching(/never goes back to provisioning/) });
+      }
+      const after = await fingerprintOf(runId);
+      expect(after.status).toBe('terminated');
+      expect(after.runtime_report).toBeNull();
+    });
+
+    it('even at its start, a run with no spec of its own cannot carry a runtime, nor a run without a runtime an environment', async () => {
+      const spawned = await invoke(new FakeTaskSupervisorClient());
+      const report = JSON.stringify(
+        toRunRuntimeReport(new FakeTaskSupervisorClient().runtime as TaskRuntimeReport),
+      );
+      const provisioningRun = (runSpec: string | null) =>
+        inTx(ownerId, async (client) => {
+          const result = await client.query<{ id: string }>(
+            `insert into worker_runs (workspace_id, status, task_id, depth, attempt, run_spec)
+             values ($1, 'provisioning', $2, 1, 1, $3::jsonb) returning id`,
+            [workspaceId, spawned.taskId, runSpec],
+          );
+          return result.rows[0]?.id as string;
+        });
+
+      const noSpec = await provisioningRun(null);
+      expect(
+        await attempt(
+          `update worker_runs set status = 'running', runtime_report = $3::jsonb
+           where workspace_id = $1 and id = $2`,
+          [workspaceId, noSpec, report],
+        ),
+      ).toMatchObject({ message: expect.stringMatching(/worker_runs_runtime_report_object/) });
+
+      const noRuntime = await provisioningRun('{}');
+      expect(
+        await attempt(
+          `update worker_runs set status = 'running', environment_digest = $3
+           where workspace_id = $1 and id = $2`,
+          [workspaceId, noRuntime, `v1:${'0'.repeat(64)}`],
         ),
       ).toMatchObject({ message: expect.stringMatching(/worker_runs_environment_digest/) });
     });

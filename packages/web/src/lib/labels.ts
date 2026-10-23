@@ -608,8 +608,8 @@ export function proxyOutcomeNote(
   return {
     short: t('代理指标，不计入达成率', 'Proxy signal, not counted toward attainment'),
     detail: t(
-      '达成率只算请求人的确认和平台验收检查；agent 自己的上报和评审意见单独列出，不算进去。',
-      'Attainment counts only the requester’s word and the platform’s checks; an agent’s own report and a review are listed separately and never counted.',
+      '达成率只算请求人的确认和平台验收检查',
+      'Attainment counts only the requester’s word and the platform’s checks',
     ),
   };
 }

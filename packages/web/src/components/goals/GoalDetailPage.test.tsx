@@ -76,7 +76,7 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
     );
     renderPage(reviewed);
     const status = await screen.findByTestId('goal-status');
-    expect(within(status).getByTestId('outcome-proxy-note').textContent).toBe(
+    expect(within(status).getByTestId('outcome-proxy-note').textContent).toContain(
       '代理指标，不计入达成率',
     );
     cleanup();

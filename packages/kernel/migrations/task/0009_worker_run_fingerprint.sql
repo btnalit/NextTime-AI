@@ -20,12 +20,14 @@
 --     Written with `runtime_report`, NULL when one of those is unknown. The key E2 groups runs by.
 --
 -- Each is written once: `run_spec` only at INSERT, the other two only from NULL and only in the
--- `provisioning → running` UPDATE. A trigger refuses every other change.
+-- `provisioning → running` UPDATE. A trigger refuses every other change: an INSERT that already
+-- carries a runtime, any change to what was recorded, a runtime recorded outside the run's start,
+-- and a run moved back to `provisioning` (which would let a run that started without a runtime
+-- report "start" again and be given one).
 --
 -- Nullable, no backfill: a run from before this migration reads "未记录". Reversibility: the
 -- previous release names its columns on every insert and select of `worker_runs` and never sets
--- these; the trigger fires only on an UPDATE that names one of them, and the CHECKs hold for its
--- rows (all NULL).
+-- these, and never moves a run back to `provisioning`; the CHECKs hold for its rows (all NULL).
 --
 -- Cross-process bootstrap lock: same `task`-module key as 0001–0008.
 select pg_advisory_xact_lock(7241000401);
@@ -64,6 +66,16 @@ create index if not exists worker_runs_environment_digest_idx
 create or replace function worker_runs_fingerprint_write_once() returns trigger
 language plpgsql as $$
 begin
+  -- A run is created before it starts: the supervisor's half cannot arrive with it.
+  if tg_op = 'INSERT' then
+    if new.runtime_report is not null or new.environment_digest is not null then
+      raise exception 'worker_runs: a run''s runtime is recorded only as it starts';
+    end if;
+    return new;
+  end if;
+  if new.status = 'provisioning' and old.status <> 'provisioning' then
+    raise exception 'worker_runs: a run never goes back to provisioning';
+  end if;
   if new.run_spec is distinct from old.run_spec
      or (old.runtime_report is not null
          and new.runtime_report is distinct from old.runtime_report)
@@ -82,5 +94,5 @@ end;
 $$;
 
 create or replace trigger worker_runs_fingerprint_write_once
-  before update of run_spec, runtime_report, environment_digest on worker_runs
+  before insert or update of run_spec, runtime_report, environment_digest, status on worker_runs
   for each row execute function worker_runs_fingerprint_write_once();

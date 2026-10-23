@@ -722,6 +722,15 @@ function RunEnvironments({
   return (
     <section className="stack-s" data-testid="run-environments">
       <span className="section-title">{t('运行环境', 'Run environment')}</span>
+      {runs.length > 1 ? (
+        <p className="text-small text-3" data-testid="run-environment-summary">
+          {sameEnvironmentText(runs, t)}
+          {t(
+            '环境指纹相同，说明 Worker 定义版本、模型、运行时镜像、平台版本和系统提示都相同。',
+            'The same fingerprint means the same Worker definition version, model, runtime image, platform version and system prompt.',
+          )}
+        </p>
+      ) : null}
       {runs.map((run) => (
         <div key={run.id} className="stack-s" data-testid="run-environment" data-run={run.id}>
           {runs.length > 1 ? (
@@ -751,6 +760,48 @@ function RunEnvironments({
       ))}
     </section>
   );
+}
+
+/** For more than one run: which of them ran in the same environment, by their fingerprints. */
+function sameEnvironmentText(runs: readonly WorkerRunSummary[], t: Translate): string {
+  const byDigest = new Map<string, number[]>();
+  const unknown: number[] = [];
+  for (const run of runs) {
+    const digest = run.environment?.environmentDigest ?? null;
+    if (digest === null) unknown.push(run.attempt);
+    else byDigest.set(digest, [...(byDigest.get(digest) ?? []), run.attempt]);
+  }
+  const groups = [...byDigest.values()];
+  if (unknown.length === 0 && groups.length === 1)
+    return t(
+      `这 ${runs.length} 次运行的环境指纹相同。`,
+      `All ${runs.length} runs have the same environment fingerprint. `,
+    );
+  const parts: string[] = [];
+  for (const group of groups)
+    if (group.length > 1)
+      parts.push(
+        t(
+          `第 ${group.join('、')} 次尝试的环境指纹相同`,
+          `attempts ${group.join(', ')} share a fingerprint`,
+        ),
+      );
+  const singles = groups.filter((group) => group.length === 1).map((group) => group[0]);
+  if (groups.length > 1 && singles.length > 0)
+    parts.push(
+      t(
+        `第 ${singles.join('、')} 次尝试与其他几次不同`,
+        `attempt(s) ${singles.join(', ')} differ from the others`,
+      ),
+    );
+  if (unknown.length > 0)
+    parts.push(
+      t(
+        `第 ${unknown.join('、')} 次尝试没有指纹，无法比较`,
+        `attempt(s) ${unknown.join(', ')} have no fingerprint to compare`,
+      ),
+    );
+  return t(`${parts.join('；')}。`, `${parts.join('; ')}. `);
 }
 
 function runEnvironmentRows(
@@ -786,7 +837,10 @@ function runEnvironmentRows(
               'Neither the Worker definition nor the requester named a model: the runtime’s default from models.json.',
             )}
           >
-            {t('运行时默认', 'Runtime default')}
+            {t(
+              '运行时默认（Worker 定义和请求人都没指定）',
+              'Runtime default (neither the Worker definition nor the requester named one)',
+            )}
           </span>
         ),
     },
@@ -813,8 +867,8 @@ function runEnvironmentRows(
       ) : (
         <span className="text-3" data-testid="run-environment-image">
           {t(
-            '未上报：这次运行没有启动成功，或启动它的组件版本较早',
-            'Not reported: this run never started, or what started it predates the report',
+            '未上报：这次运行没有启动成功，或启动它的 worker-supervisor 版本较早',
+            'Not reported: this run never started, or the worker-supervisor that started it predates the report',
           )}
         </span>
       ),

@@ -131,7 +131,8 @@ export interface RunEnvironment {
 }
 
 /** A run's stored fingerprint, or `null` when it has none (a run from before W1a) or what is
- *  stored does not parse. */
+ *  stored does not parse. A stored runtime that does not parse reads as unreported, and its
+ *  environment digest with it: a digest is never shown without the runtime it was taken over. */
 export function readRunEnvironment(row: {
   readonly run_spec: unknown;
   readonly runtime_report: unknown;
@@ -141,9 +142,10 @@ export function readRunEnvironment(row: {
   if (!spec.success) return null;
   const runtime =
     row.runtime_report === null ? null : RunRuntimeReportSchema.safeParse(row.runtime_report);
+  const parsedRuntime = runtime?.success ? runtime.data : null;
   return {
     spec: spec.data,
-    runtime: runtime?.success ? runtime.data : null,
-    environmentDigest: row.environment_digest,
+    runtime: parsedRuntime,
+    environmentDigest: parsedRuntime === null ? null : row.environment_digest,
   };
 }
