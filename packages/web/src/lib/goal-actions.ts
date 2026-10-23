@@ -15,8 +15,8 @@ import type { Translate } from './i18n.js';
  * not allow it — this only keeps a button off the page that would certainly be refused, and says
  * why a visible one waits. Who may (capability descriptions in `@nexttime/shared`):
  *
- *   - the requester alone: confirm, resume, end with an outcome, confirm the acceptance, run an
- *     action again;
+ *   - the requester alone: confirm, resume, revise the plan of a paused run, end with an outcome,
+ *     confirm the acceptance, run an action again;
  *   - the requester or a workspace owner: reject a proposal, pause, cancel, record what was found
  *     about an action — an owner pausing someone else's run holds it;
  *   - a workspace owner: lift a hold.
@@ -41,6 +41,8 @@ export interface GoalOperations {
   /** An owner placing a hold on someone else's run that is already paused. */
   readonly hold?: GoalOperation;
   readonly resume?: GoalOperation;
+  /** The requester revising the plan of a paused run — held or not (revising is not resuming). */
+  readonly revise?: GoalOperation;
   readonly cancel?: GoalOperation;
   readonly release?: GoalOperation;
   /** `achieved`: whether ending as achieved is open (from paused only). */
@@ -134,6 +136,7 @@ export function goalOperations(
             }
           : open;
       }
+      if (requester) ops.revise = open;
       if (owner && !requester && !held) ops.hold = open;
       if (owner && held) ops.release = open;
       if (stopper) ops.cancel = open;

@@ -517,3 +517,164 @@ test.describe('S11 GO6: operations on a goal (stand-in reads and operations)', (
     });
   }
 });
+
+/**
+ * The plan editor (`revise_goal`) on the owner's own paused goal. `revise_goal` refuses a text
+ * holding a credential (400 `credentials_in_text`) or the `[redacted]` mark a read put in its place
+ * (400 `redacted_text_submitted`) only once GO5c lands, so both refusals — and the revision that
+ * then goes through — are stand-ins here, each naming its field in `details.field` the way GO5c's
+ * contract says (`reason`, `plan.steps.<i>.input…`). The Workers to choose from are a stand-in too:
+ * the CI stack has none published under the plan's Worker id.
+ */
+test.describe('S11 GO6: revising the plan (stand-in reads, refusals and revision)', () => {
+  test.skip(!OWNER_API_KEY, 'set WEB_E2E_BASE_URL and WEB_E2E_API_KEY to run this suite');
+
+  const refusal = (code: string, field: string) => ({
+    status: 400,
+    json: { ok: false, error: { code, message: `${field}: refused`, details: { field } } },
+  });
+  const workerVersion = (version: number) => ({
+    id: WORKER,
+    version,
+    kind: 'worker',
+    status: 'published',
+    definition: { name: 'cert-rotator' },
+    proposedBy: ALICE,
+    publishedBy: ALICE,
+    createdAt: T0,
+    publishedAt: T0,
+  });
+  /** The error `kit/field` shows under a control, by the control's id. */
+  const fieldError = async (page: Page, control: ReturnType<Page['getByTestId']>) =>
+    page.locator(`[id="${await control.getAttribute('id')}-error"]`);
+
+  for (const width of [1440, 390] as const) {
+    test(`masked input, both refusals on their fields and the revision at ${width}`, async ({
+      page,
+    }, testInfo) => {
+      await page.setViewportSize({ width, height: 900 });
+      await answerGoalReads(page);
+      const owner = (await signedInOwner(page)).id;
+      await page.route('**/api/cap/get_goal', async (route) => {
+        const ownerId = await owner;
+        NAMES[ownerId] = { kind: 'principal', name: 'owner' };
+        await route.fulfill(
+          answer('get_goal', {
+            ...DETAIL,
+            onBehalfOf: ownerId,
+            pauseReason: 'requested',
+            pausedBy: ownerId,
+            pausedByAuthority: 'requester',
+            planRevision: {
+              ...revision(2),
+              plan: {
+                ...PLAN_V2,
+                steps: [
+                  PLAN_V2.steps[0],
+                  PLAN_V2.steps[1],
+                  { ...PLAN_V2.steps[2], input: { keep: 'none', auth: '[redacted]' } },
+                ],
+              },
+            },
+          }),
+        );
+      });
+      await page.route('**/api/cap/list_worker_definitions', (route) =>
+        route.fulfill(
+          answer('list_worker_definitions', { items: [workerVersion(3), workerVersion(2)] }),
+        ),
+      );
+      const sent: unknown[] = [];
+      const answers = [
+        refusal('credentials_in_text', 'reason'),
+        refusal('redacted_text_submitted', 'plan.steps.2.input'),
+        answer('revise_goal', {
+          goalRunId: GOAL,
+          status: 'paused',
+          changed: true,
+          revision: 3,
+          planRevisionId: 'rev-3',
+          supersededStepRunIds: ['sr-apply'],
+          createdStepRunIds: ['sr-apply-3'],
+          withdrawnActionRequestIds: [],
+          releasedActionRequestIds: [],
+          hints: [],
+        }),
+      ];
+      await page.route('**/api/cap/revise_goal', async (route) => {
+        sent.push(route.request().postDataJSON());
+        const next = answers.shift();
+        if (!next) throw new Error('revise_goal sent more often than scripted');
+        await route.fulfill(next);
+      });
+      await loginAsOwner(page);
+      await page.goto(`/#/work/goals/${GOAL}`);
+      await page.getByTestId('goal-op-revise').click({ timeout: 15_000 });
+
+      // 1. Prefilled from v2; the masked input is marked before anything is sent.
+      const editor = page.getByTestId('goal-plan-editor');
+      await expect(editor).toContainText('基于第 2 版');
+      const stepOf = (key: string) =>
+        editor.locator(`[data-testid="goal-plan-step"][data-step-key="${key}"]`);
+      const removeOldInput = stepOf('remove-old').getByTestId('goal-plan-step-input');
+      await expect(removeOldInput).toHaveValue(/\[redacted\]/);
+      await expect(await fieldError(page, removeOldInput)).toContainText(
+        '此处原文已遮蔽，请重新填写',
+      );
+      await expect(stepOf('apply').getByTestId('goal-plan-step-worker')).toHaveValue(WORKER);
+      await expect(page.getByTestId('goal-plan-submit')).toBeDisabled();
+      await page.screenshot({
+        path: testInfo.outputPath(`goal-plan-masked-${width}.png`),
+        fullPage: true,
+      });
+
+      // 2. Written again, apply moved to v3, a reason that reads like a credential: refused on it.
+      await removeOldInput.fill('{"keep": "none", "auth": "用 deploy 账号的令牌"}');
+      await stepOf('apply').getByTestId('goal-plan-step-version').selectOption('3');
+      const reason = page.getByTestId('goal-plan-reason');
+      await reason.fill('token=not-a-real-value');
+      const send = async () => {
+        await page.getByTestId('goal-plan-submit').click();
+        await page.getByTestId('goal-plan-confirm').getByTestId('confirm-button').click();
+      };
+      await send();
+      await expect(await fieldError(page, reason)).toContainText('用 deploy 账号的令牌');
+      await expect(page.getByTestId('goal-plan-refused')).toBeVisible();
+      await page.screenshot({
+        path: testInfo.outputPath(`goal-plan-credentials-${width}.png`),
+        fullPage: true,
+      });
+
+      // 3. The reason rewritten; the kernel still finds the mark in remove-old's input.
+      await reason.fill('apply 换用 v3 的 Worker');
+      await send();
+      await expect(await fieldError(page, removeOldInput)).toContainText(
+        '此处原文已遮蔽，请重新填写',
+      );
+      await expect(await fieldError(page, reason)).toHaveCount(0);
+      await page.screenshot({
+        path: testInfo.outputPath(`goal-plan-redacted-${width}.png`),
+        fullPage: true,
+      });
+
+      // 4. Written again: the revision goes through on v2, and the page says the goal waits.
+      await removeOldInput.fill('{"keep": "none"}');
+      await send();
+      await expect(page.getByTestId('goal-op-done')).toContainText('计划已改为第 3 版');
+      await expect(page.getByTestId('goal-plan-editor')).toHaveCount(0);
+      expect(sent).toHaveLength(3);
+      expect(sent[2]).toMatchObject({
+        goalRunId: GOAL,
+        basedOnRevision: 2,
+        reason: 'apply 换用 v3 的 Worker',
+        plan: {
+          steps: [
+            PLAN_V2.steps[0],
+            { ...PLAN_V2.steps[1], worker: { definitionId: WORKER, version: 3 } },
+            { ...PLAN_V2.steps[2], input: { keep: 'none' } },
+          ],
+        },
+      });
+    });
+  }
+});
