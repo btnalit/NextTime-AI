@@ -3,14 +3,17 @@ import { type Page, expect, test } from '@playwright/test';
 import { OWNER_API_KEY, loginAsOwner } from './lib/auth.js';
 
 /**
- * e2e/goal-detail.spec.ts (S11 GO6, read-only part): the 目标 list and one goal's page with real
- * content, in a real browser at the widths UX checks (1440, 390). Nothing on the CI stack can
- * propose a goal yet (`propose_goal` is GO5c), so the goal reads are stand-ins answered in the
- * browser (`page.route`, as approval-failure-reason.spec.ts does): `list_goals`, `get_goal`,
- * `get_goal_revision`, `list_goal_unresolved_actions`, and the names they point at
- * (`list_principals`, `list_gatekeepers`, `resolve_refs`). Everything else on the page is the real
- * stack. Full-page captures land in `test-results/` (uploaded as the `playwright-report` artifact)
- * for the UX acceptance to read; they are not a screenshot gate.
+ * e2e/goal-detail.spec.ts (S11 GO6): the 目标 list and one goal's page with real content, and the
+ * operations on it (confirm card, lifting a hold, ending with a refused note), in a real browser
+ * at the widths UX checks (1440, 390). Nothing on the CI stack can propose a goal yet
+ * (`propose_goal` is GO5c), so the goal reads are stand-ins answered in the browser (`page.route`,
+ * as approval-failure-reason.spec.ts does): `list_goals`, `get_goal`, `get_goal_revision`,
+ * `list_goal_unresolved_actions`, and the names they point at (`list_principals`,
+ * `list_gatekeepers`, `resolve_refs`); the operations the second suite fires, and the audit read
+ * behind 解除锁定, are answered the same way. Everything else on the page is the real stack — the
+ * signed-in owner among it (`get_workspace`). Full-page captures land in `test-results/` (uploaded
+ * as the `playwright-report` artifact) for the UX acceptance to read; they are not a screenshot
+ * gate.
  */
 
 const GOAL = '66000000-0000-4000-8000-000000000001';
@@ -343,16 +346,172 @@ test.describe('S11 GO6: a goal’s pages with content (stand-in reads)', () => {
       await expect(page.getByTestId('goal-unresolved-check')).toContainText('删除');
       await expect(page.getByTestId('goal-step-waiting')).toBeVisible();
       await expect(page.getByTestId('goal-revision')).toHaveCount(2);
-      // Read-only: no operation buttons yet (they come in GO6's next part).
-      await expect(
-        page.locator('.goal-page').getByRole('button', { name: /暂停|继续|取消|确认/ }),
-      ).toHaveCount(0);
+      // The owner on alice's paused goal: hold it or cancel it, record what was found about the
+      // action; resuming it is alice's alone.
+      await expect(page.getByTestId('goal-op-hold')).toBeVisible();
+      await expect(page.getByTestId('goal-op-cancel')).toBeVisible();
+      await expect(page.getByTestId('goal-op-resume')).toHaveCount(0);
+      await expect(page.getByTestId('goal-reconcile-record')).toBeVisible();
 
       const diff = page.getByTestId('goal-revision-diff').first();
       await diff.locator('summary').click();
       await expect(diff.getByTestId('goal-revision-diff-body')).toContainText('remove-old');
       await page.screenshot({
         path: testInfo.outputPath(`goal-detail-${width}.png`),
+        fullPage: true,
+      });
+    });
+  }
+});
+
+/**
+ * The signed-in owner's id, read off the real `get_workspace` as the page makes it. Wrapped in an
+ * object: an async function returning the bare promise would adopt it, and awaiting the route
+ * set-up would then wait for a request the page has not made yet.
+ */
+async function signedInOwner(page: Page): Promise<{ id: Promise<string> }> {
+  let resolve: (id: string) => void = () => undefined;
+  const owner = new Promise<string>((done) => {
+    resolve = done;
+  });
+  await page.route('**/api/cap/get_workspace', async (route) => {
+    const response = await route.fetch();
+    const body = (await response.json()) as { result?: { caller?: { id?: string } } };
+    if (body.result?.caller?.id) resolve(body.result.caller.id);
+    await route.fulfill({ response });
+  });
+  return { id: owner };
+}
+
+test.describe('S11 GO6: operations on a goal (stand-in reads and operations)', () => {
+  test.skip(!OWNER_API_KEY, 'set WEB_E2E_BASE_URL and WEB_E2E_API_KEY to run this suite');
+
+  for (const width of [1440, 390] as const) {
+    test(`confirm card, lifting a hold and a refused note at ${width}`, async ({
+      page,
+    }, testInfo) => {
+      await page.setViewportSize({ width, height: 900 });
+      await answerGoalReads(page);
+      const owner = (await signedInOwner(page)).id;
+      let detail: (ownerId: string) => unknown = () => DETAIL;
+      let unresolved: unknown[] = [];
+      await page.route('**/api/cap/get_goal', async (route) => {
+        const ownerId = await owner;
+        NAMES[ownerId] = { kind: 'principal', name: 'owner' };
+        await route.fulfill(answer('get_goal', detail(ownerId)));
+      });
+      await page.route('**/api/cap/list_goal_unresolved_actions', (route) =>
+        route.fulfill(answer('list_goal_unresolved_actions', { items: unresolved })),
+      );
+      const fired: { name: string; params: unknown }[] = [];
+      const operations: Record<string, unknown> = {
+        confirm_goal: { goalRunId: GOAL, status: 'running', changed: true, createdStepRunIds: [] },
+        release_goal_hold: { goalRunId: GOAL, status: 'paused', changed: true },
+      };
+      for (const [name, result] of Object.entries(operations)) {
+        await page.route(`**/api/cap/${name}`, async (route) => {
+          fired.push({ name, params: route.request().postDataJSON() });
+          await route.fulfill(answer(name, result));
+        });
+      }
+      await page.route('**/api/cap/end_goal', async (route) => {
+        fired.push({ name: 'end_goal', params: route.request().postDataJSON() });
+        await route.fulfill({
+          status: 400,
+          json: {
+            ok: false,
+            error: {
+              code: 'credentials_in_text',
+              message: 'note: looks like it carries a credential',
+              details: { field: 'note', suspectedSecretValues: 1 },
+            },
+          },
+        });
+      });
+      await page.route('**/api/cap/audit_query', (route) =>
+        route.fulfill(
+          answer('audit_query', {
+            items: [
+              {
+                id: 'audit-hold',
+                actorPrincipalId: BOB,
+                action: 'goal_run.pause',
+                resourceType: 'goal_run',
+                resourceId: GOAL,
+                payload: { pausedByAuthority: 'owner' },
+                createdAt: T1,
+              },
+            ],
+          }),
+        ),
+      );
+      await loginAsOwner(page);
+
+      // 1. The owner's own proposal: the confirm card says what confirming starts.
+      const proposal = { ...revision(1), status: 'proposed', decidedBy: null, decidedAt: null };
+      detail = (ownerId) => ({
+        ...DETAIL,
+        ...run({ status: 'proposed', pauseReason: null, currentRevision: null, confirmedAt: null }),
+        onBehalfOf: ownerId,
+        planRevision: proposal,
+        revisions: [{ ...summary(1), status: 'proposed', decidedBy: null, decidedAt: null }],
+        steps: [],
+        usage: { tokens: 0, steps: 0, revisions: 0 },
+      });
+      await page.goto(`/#/work/goals/${GOAL}`);
+      await page.getByTestId('goal-op-confirm').click({ timeout: 15_000 });
+      const confirm = page.getByTestId('goal-op-confirm-confirm');
+      await expect(confirm.getByTestId('confirm-impact')).toContainText('3 个步骤');
+      await expect(page.getByTestId('goal-op-reject')).toBeVisible();
+      await page.screenshot({
+        path: testInfo.outputPath(`goal-confirm-${width}.png`),
+        fullPage: true,
+      });
+      await confirm.getByTestId('confirm-button').click();
+      await expect(page.getByTestId('goal-op-done')).toContainText('目标已确认');
+      expect(fired.find((call) => call.name === 'confirm_goal')?.params).toEqual({
+        goalRunId: GOAL,
+        revision: 1,
+      });
+
+      // 2. Alice's goal the owner held: lifting the hold says alice revised the plan since.
+      detail = () => ({
+        ...DETAIL,
+        pauseReason: 'requested',
+        pausedBy: BOB,
+        pausedByAuthority: 'owner',
+      });
+      await page.reload();
+      await page.getByTestId('goal-op-release').click({ timeout: 15_000 });
+      const release = page.getByTestId('goal-op-release-confirm');
+      await expect(release.getByTestId('goal-hold-plan')).toContainText('第 2 版');
+      await page.screenshot({
+        path: testInfo.outputPath(`goal-release-${width}.png`),
+        fullPage: true,
+      });
+      await release.getByTestId('confirm-button').click();
+      await expect(page.getByTestId('goal-op-done')).toContainText('锁定已解除');
+
+      // 3. The owner's own paused goal: a note refused for a credential says how to rewrite it.
+      detail = (ownerId) => ({
+        ...DETAIL,
+        onBehalfOf: ownerId,
+        pauseReason: 'awaiting_reconcile',
+        steps: DETAIL.steps.map((step) =>
+          step.stepKey === 'apply' ? { ...step, status: 'failed', waitingReason: null } : step,
+        ),
+      });
+      unresolved = UNRESOLVED;
+      await page.reload();
+      await expect(page.getByTestId('goal-reconcile-record')).toBeVisible({ timeout: 15_000 });
+      await page.getByTestId('goal-op-end').click();
+      const end = page.getByTestId('goal-op-end-confirm');
+      await end.getByTestId('goal-op-note').fill('token=not-a-real-value');
+      await end.getByTestId('confirm-button').click();
+      await expect(end).toContainText('比如「token 过期了」');
+      await expect(end.getByTestId('goal-op-note')).toHaveValue('token=not-a-real-value');
+      await page.screenshot({
+        path: testInfo.outputPath(`goal-end-refused-${width}.png`),
         fullPage: true,
       });
     });

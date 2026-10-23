@@ -4,9 +4,10 @@ import {
   type UnresolvedGoalActionWire,
   visibleLines,
 } from '@nexttime/shared';
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useCanOpen } from '../../hooks/useCanOpen.js';
 import { useResource } from '../../hooks/useResource.js';
+import { useWorkspaceIdentity } from '../../hooks/useWorkspaceIdentity.js';
 import { auditHref } from '../../lib/audit.js';
 import type { CapabilityCaller, PushSource } from '../../lib/clients.js';
 import { describeError } from '../../lib/errors.js';
@@ -20,6 +21,7 @@ import {
 import { type Translate, useT } from '../../lib/i18n.js';
 import { breadcrumbFor } from '../../lib/nav.js';
 import { hrefs } from '../../lib/router.js';
+import { labelText, statusChipStyle } from '../../lib/status-tone.js';
 import { useGatekeeperNames } from '../approvals/useDirectoryNames.js';
 import { Button } from '../kit/button.js';
 import { EmptyState } from '../kit/empty-state.js';
@@ -33,6 +35,12 @@ import { SkeletonRows } from '../kit/skeleton.js';
 import { StatusChip } from '../kit/status-chip.js';
 import { ActionChip } from './ActionChip.js';
 import { GoalAcceptanceSection } from './GoalAcceptanceSection.js';
+import {
+  type GoalMark,
+  type GoalOperationOutcome,
+  GoalOperationsBar,
+} from './GoalOperationsBar.js';
+import { GoalReconcileControls } from './GoalReconcileControls.js';
 import { GoalRevisionsSection } from './GoalRevisionsSection.js';
 import { GoalStepsSection } from './GoalStepsSection.js';
 import { GoalUnresolvedSection } from './GoalUnresolvedSection.js';
@@ -47,8 +55,10 @@ export interface GoalDetailPageProps {
  * components/goals/GoalDetailPage (S11 GO6, read-only part): one goal (`get_goal`) on its own page
  * — what it is doing or waiting on, who asked for it, what it spent of its budget, its steps,
  * its acceptance, the actions still waiting for a person (`list_goal_unresolved_actions`), what a
- * cancel left behind, and its plan revisions. No operation buttons yet: the operations GO5b
- * added (confirming, pausing, resuming, cancelling, …) come in GO6's next part.
+ * cancel left behind, and its plan revisions — and what the reader may do to it now
+ * (`GoalOperationsBar`, GO5b; for a proposal, the confirm card: the plan, checks and budget below
+ * with 确认并开始 / 驳回) and about each action to check (`GoalReconcileControls`). Revising the
+ * plan is not offered yet.
  *
  * A goal the reader may not see reads exactly like one that does not exist (the kernel's 404 for
  * both); the page says so without guessing which. No goal pushes exist yet: an update of one of
@@ -70,11 +80,25 @@ export function GoalDetailPage({ http, pushes, goalRunId }: GoalDetailPageProps)
   const detail = useResource(loadDetail);
   const unresolved = useResource(loadUnresolved);
   const gateNames = useGatekeeperNames(http);
+  const identity = useWorkspaceIdentity(http);
+  const viewer = {
+    principalId: identity.principalId,
+    isOwner: identity.role.kind === 'known' && identity.role.role === 'owner',
+  };
 
   const reloadAll = useCallback(() => {
     void detail.reload();
     void unresolved.reload();
   }, [detail.reload, unresolved.reload]);
+  // What the reader's last operation did, said on the page (the operation re-reads the goal).
+  const [done, setDone] = useState<GoalOperationOutcome | null>(null);
+  const onDone = useCallback(
+    (outcome: GoalOperationOutcome) => {
+      setDone(outcome);
+      reloadAll();
+    },
+    [reloadAll],
+  );
 
   const data = detail.state.status === 'ready' ? detail.state.data : undefined;
   // The Tasks and actions this goal ran, read when a push arrives rather than captured by the
@@ -193,6 +217,22 @@ export function GoalDetailPage({ http, pushes, goalRunId }: GoalDetailPageProps)
           {note.text}
         </Notice>
       ) : null}
+      <GoalOperationsBar
+        goal={goal}
+        viewer={viewer}
+        http={http}
+        gateNames={gateNames}
+        onDone={onDone}
+      />
+      <output aria-live="polite">
+        {/* After a 409, only once the goal is read again: a failed re-read keeps the old goal
+            (its error banner above), from which nothing can be said about where it stands. */}
+        {done && !(done.kind === 'stale' && (refreshing || detail.state.refreshError)) ? (
+          <Notice tone={done.kind === 'stale' ? 'warn' : 'info'} testId="goal-op-done">
+            {done.kind === 'done' ? done.message : staleText(done.before, goal, t)}
+          </Notice>
+        ) : null}
+      </output>
 
       <DashboardCard title={t('概览', 'Overview')} data-testid="goal-overview">
         <KeyValue items={overviewItems(goal, http, t)} />
@@ -231,6 +271,15 @@ export function GoalDetailPage({ http, pushes, goalRunId }: GoalDetailPageProps)
               : { status: 'loading' }
         }
         paused={goal.status === 'paused'}
+        controls={(action) => (
+          <GoalReconcileControls
+            goal={goal}
+            action={action}
+            viewer={viewer}
+            http={http}
+            onDone={onDone}
+          />
+        )}
         http={http}
         onRetry={() => void unresolved.reload()}
       />
@@ -391,5 +440,23 @@ function Leftovers({
         ))}
       </div>
     </DashboardCard>
+  );
+}
+
+/** After a 409: whether the goal itself had moved on (read again, its status or version differs
+ *  from what the operation found), or the refusal was about something of it — a step still
+ *  running or waiting, a Task still live, an action in flight or of unknown outcome (review #501
+ *  on #697). */
+function staleText(before: GoalMark, goal: GoalDetailWire, t: Translate): string {
+  const now = labelText(statusChipStyle('goalRun', goal.status), t);
+  if (before.status !== goal.status || before.updatedAt !== goal.updatedAt) {
+    return t(
+      `目标的状态刚变了，刚才的操作没有执行。页面已经刷新：它现在是「${now}」。`,
+      `The goal had just moved on, so that was not done. The page has been refreshed: it is now ${now}.`,
+    );
+  }
+  return t(
+    `刚才的操作此刻不能执行，什么也没改；目标仍是「${now}」。通常是还有步骤在运行或等待、任务还没结束，或者有动作在进行或结果不明：先看下面的「步骤」和「待核对的动作」。`,
+    `That cannot be done right now, and nothing changed; the goal is still ${now}. Usually a step still runs or waits, a Task is still live, or an action is in flight or of unknown outcome: see Steps and Actions to check below.`,
   );
 }
