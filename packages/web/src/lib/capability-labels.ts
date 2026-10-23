@@ -1231,9 +1231,10 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
   roll_back_change_segment: {
     zh: '撤销安装记录',
     en: 'Roll back install record',
-    zhHint: '把一条安装记录的每项改动退回原状（本体退回上一版，或不再安装）；已有数据保留。',
+    zhHint:
+      '把一条安装记录的每项改动退回原状（本体、Skill、Worker 各自退回上一版，或不再安装）；已有数据保留。',
     enHint:
-      'Returns each change of an install record to what it was (the ontology goes back a version, or is no longer installed); data already written stays.',
+      'Returns each change of an install record to what it was (each ontology, Skill or Worker goes back a version, or is no longer installed); data already written stays.',
   },
 
   // -----------------------------------------------------------------------------------------

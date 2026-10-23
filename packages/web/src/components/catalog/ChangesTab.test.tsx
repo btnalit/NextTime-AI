@@ -267,6 +267,43 @@ describe('ChangesTab (能力目录 · 安装历史, S11 P1-B)', () => {
     await waitFor(() => expect(screen.queryByTestId('catalog-change-rollback')).toBeNull());
   });
 
+  it('a Skill or Worker item names its kind with a space on each side of the Latin word', async () => {
+    const segmentId = FIRST;
+    const http = scriptedHttp({
+      get_workspace: () => ({
+        ...OWNER_WORKSPACE,
+        caller: { ...OWNER_WORKSPACE.caller, role: 'member' },
+      }),
+      list_change_segments: () => ({ items: [segment(segmentId)] }),
+      get_change_segment: () => ({
+        segment: segment(segmentId, {
+          source: { kind: 'pack', name: 'ops-base', version: '1', digest: 'sha256:x' },
+        }),
+        items: [
+          {
+            id: 'item-skill',
+            ordinal: 1,
+            kind: 'skill_version',
+            classification: 'not_widening',
+            widening: [],
+            confirmedBy: null,
+            state: 'in_effect',
+            replacedBy: null,
+            target: { skillId: 'skill-1', name: 'docker-triage' },
+            before: null,
+            after: { version: 1, contentDigest: 'sha256:s' },
+          },
+        ],
+      }),
+    });
+    renderTab(http, segmentId);
+
+    const item = await screen.findByTestId('catalog-change-item-1');
+    expect(item.textContent).toContain(
+      '能力包 v1 带来的 Skill 版本（与能力包版本分开编号）：未安装 → 第 1 版',
+    );
+  });
+
   it('no records yet: says what makes one', async () => {
     const http = scriptedHttp({
       get_workspace: () => OWNER_WORKSPACE,

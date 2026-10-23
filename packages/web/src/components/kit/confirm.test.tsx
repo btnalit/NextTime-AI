@@ -128,6 +128,15 @@ describe('kit/Confirm — medium', () => {
     expect(onConfirm).not.toHaveBeenCalled();
   });
 
+  it('UX acceptance of #679 P3-1: a confirm whose button starts disabled opens on 取消, not on the trigger behind it', async () => {
+    renderTier('medium', { confirmDisabled: true });
+    const trigger = screen.getByTestId('trigger');
+    trigger.focus();
+    fireEvent.click(trigger);
+    await screen.findByTestId('confirm');
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId('confirm-cancel')));
+  });
+
   it('legacy 404: says there is more below while the body scrolls on, and stops once at the end', async () => {
     const proto = HTMLElement.prototype;
     const sizes = { scrollHeight: 900, clientHeight: 300 };

@@ -110,9 +110,12 @@ export function contentFieldText(field: string, t: Translate): string {
   }
 }
 
-/** 「挂载的 Skill 增加」, 「正文有改动」: a space only between a Latin word and the Chinese after it. */
+/** 「挂载的 Skill 增加」, 「带来的 Skill 版本」, 「正文有改动」: a space only where a Latin word
+ *  meets Chinese. */
 function zhJoin(head: string, tail: string): string {
-  return /[A-Za-z0-9]$/.test(head) ? `${head} ${tail}` : `${head}${tail}`;
+  return /[A-Za-z0-9]$/.test(head) || /^[A-Za-z0-9]/.test(tail)
+    ? `${head} ${tail}`
+    : `${head}${tail}`;
 }
 
 /** 「Worker 挂载的 Skill 增加」 — a Skill's or Worker's widening reason (path `skill` / `worker`,
@@ -499,7 +502,7 @@ function ChangeItemView({
       </div>
       <span className="text-3 text-small">
         {t(
-          `能力包 v${segment.source.version} 带来的${familyNoun(item.kind, t)}版本（与能力包版本分开编号）：${versionText(item.before, t)} → ${versionText(item.after, t)}`,
+          `${zhJoin(zhJoin(`能力包 v${segment.source.version} 带来的`, familyNoun(item.kind, t)), '版本')}（与能力包版本分开编号）：${versionText(item.before, t)} → ${versionText(item.after, t)}`,
           `${familyNoun(item.kind, t)} version pack v${segment.source.version} brought (numbered apart from the pack's): ${versionText(item.before, t)} → ${versionText(item.after, t)}`,
         )}
       </span>
@@ -639,8 +642,8 @@ function RollBackSegment({
       <span className="section-title">{t('撤销', 'Roll back')}</span>
       <p className="text-3 text-small">
         {t(
-          '把这条记录的每项改动退回到安装之前：本体回到上一版，首次安装的则不再安装。已经写入的数据保留。之后可以在「能力包」页签重新安装。',
-          'Returns each change of this record to what it was before: the ontology goes back a version, or a first install is no longer installed. Data already written stays. You can install again from the Packs tab.',
+          '把这条记录退回到安装之前：每一项回到上一版，首次安装的则不再安装。已经写入的数据保留。之后可以在「能力包」页签重新安装。',
+          'Returns this record to what was there before: each item goes back a version, or a first install is no longer installed. Data already written stays. You can install again from the Packs tab.',
         )}
       </p>
       <Confirm

@@ -15,6 +15,7 @@ import {
   missingAsk,
   missingCauseText,
   missingLinkHref,
+  missingLinkLabel,
   refusalKind,
   refusalKindsOf,
 } from './readiness-copy.js';
@@ -127,6 +128,19 @@ describe('readiness fix links follow the kernel authorization (#541 review R1)',
     expect(missingLinkHref({ code: 'excluded_by_profile' }, { role: 'member' })).toBe(
       hrefs.agent(),
     );
+  });
+
+  it('no Worker published: an owner is sent to install ops-base, a builder to the 「Worker」 tab (UX acceptance of #679 P3-4)', () => {
+    const item = { code: 'no_published_worker' } as const;
+    expect(missingLinkHref(item, { role: 'owner' })).toBe(hrefs.catalog('packs', 'ops-base'));
+    expect(missingLinkLabel(item, t, { role: 'owner' })).toMatch(/^去安装\s+ops-base$/);
+    expect(missingAsk(item, { role: 'owner' }, t)).toBeUndefined();
+    expect(missingLinkHref(item, { role: 'builder' })).toBe(hrefs.catalog('workers'));
+    expect(missingLinkLabel(item, t, { role: 'builder' })).toBe('去能力目录');
+    expect(missingAsk(item, { role: 'builder' }, t)).toBeUndefined();
+    expect(missingLinkHref(item, { role: 'member' })).toBeUndefined();
+    expect(missingAsk(item, { role: 'member' }, t)).toBeDefined();
+    expect(missingCauseText(item, new Map(), t)).toMatch(/安装能力包\s+ops-base/);
   });
 
   it('never links to the page the reader is already on', () => {

@@ -94,6 +94,29 @@ describe('the packs this repository ships', () => {
     expect(latest.summary.length).toBeGreaterThan(0);
   });
 
+  it('what an owner reads (summary, notes, descriptions) has no space between two Chinese characters', async () => {
+    // YAML folds a scalar written over several lines with a space where they meet: fine between
+    // English words, a stray gap in Chinese (UX acceptance of #679 P3-3).
+    const gap =
+      /[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef] +[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]/u;
+    const registry = await loadPackRegistry();
+    const texts = [...registry.values()].flatMap((pack) =>
+      pack.versions.flatMap((v) => [
+        v.summary,
+        v.notes,
+        ...v.components.flatMap((c) =>
+          c.kind === 'skill'
+            ? [c.content.description]
+            : c.kind === 'worker'
+              ? [c.definition.description ?? '']
+              : [],
+        ),
+      ]),
+    );
+    expect(texts.length).toBeGreaterThan(0);
+    expect(texts.filter((text) => gap.test(text))).toEqual([]);
+  });
+
   it('a pack it does not ship is pack_not_found', async () => {
     const registry = await loadPackRegistry();
     expect(() => requirePack(registry, 'no-such-pack')).toThrow(PackNotFoundError);
