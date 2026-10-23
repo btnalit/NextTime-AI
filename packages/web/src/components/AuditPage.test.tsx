@@ -429,6 +429,8 @@ describe('AuditPage degraded states', () => {
     expect(banner.getAttribute('data-error-code')).toBe('not_found');
     // Legacy 421: a Decision the reader may not see answers like a missing one; the banner says so.
     expect(banner.textContent).toMatch(/找不到这个节点，或者你无权查看它/);
+    // Legacy 430: the kind of a pasted id is unknown, so the part about Decisions says "if".
+    expect(banner.textContent).toMatch(/如果这是一个决定：审批和核对的决定/);
   });
 
   it('legacy 421: export_prov 404 says the node may be one the reader may not see', async () => {
@@ -443,9 +445,10 @@ describe('AuditPage degraded states', () => {
     renderPage(http, { nodeId: 'fact-1' });
     await screen.findByTestId('explain-result');
     fireEvent.click(screen.getByTestId('explain-export'));
-    expect((await screen.findByTestId('explain-export-error')).textContent).toMatch(
-      /或者你无权查看它/,
-    );
+    const error = await screen.findByTestId('explain-export-error');
+    expect(error.textContent).toMatch(/或者你无权查看它/);
+    // Legacy 430: the node is a Fact, so nothing about who may see Decisions.
+    expect(error.textContent).not.toMatch(/决定/);
   });
 
   it('export_prov 403 explains the auditor requirement instead of failing silently', async () => {

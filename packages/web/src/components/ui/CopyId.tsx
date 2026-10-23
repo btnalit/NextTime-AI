@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
 import { shortId } from '../../lib/format.js';
+import { useT } from '../../lib/i18n.js';
 import { Button } from './Button.js';
 
 export interface CopyIdProps {
   readonly id: string;
-  /** Read out before the id ("Task", "Principal"). */
+  /** What the id belongs to, in the current language ("任务" / "Task") — read out as "复制任务 id"
+   *  / "Copy Task id" (legacy 427: the copy button follows the interface language). */
   readonly label?: string;
   /** Show the full id instead of the 8-character short form. */
   readonly full?: boolean;
@@ -16,6 +18,7 @@ export interface CopyIdProps {
  * http origins); the fallback selects nothing and simply reports failure via the icon staying put.
  */
 export function CopyId({ id, label, full = false }: CopyIdProps) {
+  const t = useT();
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -41,7 +44,11 @@ export function CopyId({ id, label, full = false }: CopyIdProps) {
         size="s"
         icon={copied ? 'check' : 'copy'}
         iconOnly
-        aria-label={copied ? 'Copied' : `Copy ${label ? `${label} ` : ''}id`}
+        aria-label={
+          copied
+            ? t('已复制', 'Copied')
+            : t(`复制${label ?? ''} id`, `Copy ${label ? `${label} ` : ''}id`)
+        }
         onClick={() => void copy()}
       />
     </span>

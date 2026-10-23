@@ -231,6 +231,21 @@ describe('ProvenanceToolsSection — Decisions the reader may not see', () => {
     expect(banner.textContent).toMatch(/审批和核对的决定只对能看到那个动作请求的人显示/);
   });
 
+  it('causal chain: a Fact that is not found says nothing about who may see Decisions (legacy 430)', async () => {
+    const http = scriptedHttp({ ...baseHandlers, causal_chain: notFound });
+    render(<ProvenanceToolsSection http={http} />);
+    fireEvent.change(screen.getByLabelText('起点 ID'), { target: { value: 'fact-gone' } });
+    fireEvent.submit(screen.getByTestId('causal-chain-form'));
+    const banner = await screen.findByTestId('causal-chain-error');
+    expect(banner.textContent).toMatch(/找不到这个节点，或者你无权查看它/);
+    expect(banner.textContent).not.toMatch(/决定/);
+    // UX P3 on #724: the form's controls were disabled while it ran; focus lands on the error.
+    await waitFor(() => expect(document.activeElement).toBe(banner.parentElement));
+    // Switching the select afterwards does not rewrite what the error was about.
+    fireEvent.change(screen.getByLabelText('节点类型'), { target: { value: 'decision' } });
+    expect(screen.getByTestId('causal-chain-error').textContent).not.toMatch(/决定/);
+  });
+
   it('precedents and query: an empty list says it shows only Decisions the reader may see', async () => {
     const http = scriptedHttp({
       ...baseHandlers,

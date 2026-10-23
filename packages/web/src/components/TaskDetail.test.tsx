@@ -78,6 +78,12 @@ function renderDetail(
 
 /** TaskDetail.test.tsx (C22, console-completion-plan §2b; S6-A B3 / B4 / C28 / §5.5). */
 describe('TaskDetail', () => {
+  it('shows the need with characters nobody can see written out, its line breaks kept (legacy 428)', async () => {
+    renderDetail({ input: { need: 'restart\u200bweb\nthen check' } });
+    const need = await screen.findByText(/restart/);
+    expect(need.textContent).toBe('restart\\u{200B}web\nthen check');
+  });
+
   it('renders the definition and on-behalf-of as named chips, the budget bar, and the provenance links', () => {
     renderDetail();
     const definition = screen.getByTestId('task-definition');

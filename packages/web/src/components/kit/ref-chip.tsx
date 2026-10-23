@@ -39,6 +39,30 @@ const KIND_LABEL: Readonly<Record<ResolvedRefKind, { readonly zh: string; readon
     workspace: { zh: '工作区', en: 'Workspace' },
   };
 
+/** Legacy 426: a Principal reads as what it is — `resolve_refs` answers its kind (`human` / `agent`
+ *  / `service`) as the ref's `typeName`, and a caller with its own directory row can pass it the
+ *  same way. An unknown or missing kind keeps the generic label. */
+const PRINCIPAL_KIND_LABEL: Readonly<Record<string, { readonly zh: string; readonly en: string }>> =
+  {
+    human: { zh: '成员', en: 'Member' },
+    agent: { zh: '智能体', en: 'Agent' },
+    service: { zh: '服务', en: 'Service' },
+  };
+
+function kindLabel(
+  kind: ResolvedRefKind,
+  typeName: string | undefined,
+): { readonly zh: string; readonly en: string } {
+  if (
+    kind === 'principal' &&
+    typeName !== undefined &&
+    Object.hasOwn(PRINCIPAL_KIND_LABEL, typeName)
+  ) {
+    return PRINCIPAL_KIND_LABEL[typeName] ?? KIND_LABEL.principal;
+  }
+  return KIND_LABEL[kind];
+}
+
 export interface RefChipProps {
   readonly kind: ResolvedRefKind;
   readonly id: string;
@@ -72,7 +96,10 @@ export function RefChip({
   const effectiveName = name ?? resolved?.name;
   const effectiveTypeName = typeName ?? resolved?.typeName;
   const bare = effectiveName === undefined || effectiveName === null || effectiveName === '';
-  const label = KIND_LABEL[kind];
+  const copy = kindLabel(kind, effectiveTypeName);
+  const label = t(copy.zh, copy.en);
+  // A Principal's kind is its label, not a type name after it.
+  const shownTypeName = kind === 'principal' ? undefined : effectiveTypeName;
 
   return (
     <span
@@ -86,11 +113,9 @@ export function RefChip({
       data-ref-kind={kind}
       data-ref-id={id}
       data-testid={testId}
-      title={bare ? `${label.en} ${id}` : `${label.en} ${effectiveName} · ${id}`}
+      title={bare ? `${label} ${id}` : `${label} ${effectiveName} · ${id}`}
     >
-      <span className="shrink-0 text-text-3" aria-label={label.en}>
-        {label.zh}
-      </span>
+      <span className="shrink-0 text-text-3">{label}</span>
       {bare ? (
         <span
           className="truncate font-mono"
@@ -106,10 +131,10 @@ export function RefChip({
       ) : (
         <span className="truncate">{effectiveName}</span>
       )}
-      {effectiveTypeName !== undefined && !bare ? (
-        <span className="shrink-0 text-text-3">({effectiveTypeName})</span>
+      {shownTypeName !== undefined && !bare ? (
+        <span className="shrink-0 text-text-3">({shownTypeName})</span>
       ) : null}
-      <CopyIdButton id={id} label={label.en} />
+      <CopyIdButton id={id} label={label} />
     </span>
   );
 }
@@ -120,6 +145,7 @@ export function RefChip({
  *  36px hit area") is about the *tap target*, not the chip's visual height — a small chip with a
  *  small-looking icon still needs a full 36px square to actually hit it on a touch screen. */
 function CopyIdButton({ id, label }: { readonly id: string; readonly label: string }) {
+  const t = useT();
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -145,7 +171,8 @@ function CopyIdButton({ id, label }: { readonly id: string; readonly label: stri
         event.stopPropagation();
         void copy();
       }}
-      aria-label={copied ? 'Copied' : `Copy ${label} id`}
+      // Legacy 427: read out in the interface language.
+      aria-label={copied ? t('已复制', 'Copied') : t(`复制${label} id`, `Copy ${label} id`)}
       title={id}
     >
       {copied ? (

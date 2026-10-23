@@ -1351,6 +1351,152 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
         within(screen.getByTestId('catalog-pack-requirements-ragflow')).queryByRole('link'),
       ).toBeNull();
     });
+
+    it('legacy 442: a later version changes the Worker’s systems — the row and the review say the kept gates stay as they are', async () => {
+      const RAGFLOW_CONNECTED: PackWire['requirements'] = [
+        ...DOCKER_CONNECTED,
+        {
+          connector: 'ragflow',
+          state: 'connected',
+          gatekeepers: [{ id: 'gk-rag', name: 'rag' }],
+          offered: [],
+          platformPreset: false,
+        },
+      ];
+      const moved = crew({
+        status: 'outdated',
+        installedVersion: 1,
+        latestVersion: 2,
+        versions: [
+          ...SYSTEMS_VERSIONS,
+          {
+            version: 2,
+            summary: 'Ops crew',
+            notes: 'Adds ragflow',
+            breaking: false,
+            requiredConnectors: ['docker', 'ragflow'],
+            requiredPacks: [],
+            components: [
+              {
+                kind: 'worker',
+                name: 'ops-runner',
+                description: null,
+                systems: ['docker', 'ragflow'],
+              },
+            ],
+          },
+        ],
+        requirements: RAGFLOW_CONNECTED,
+        components: [
+          runner({
+            status: 'outdated',
+            installedVersion: 1,
+            headVersion: 1,
+            systems: ['docker', 'ragflow'],
+            gates: [{ id: 'gk-north', name: 'north' }],
+            gatesKept: true,
+            provenance: component().provenance,
+          }),
+        ],
+      });
+      const http = scriptedHttp({
+        get_workspace: () => OWNER_WORKSPACE,
+        list_packs: () => ({ items: [moved] }),
+        preview_pack_install: () =>
+          preview({
+            pack: moved,
+            targetVersion: 2,
+            breaking: false,
+            inUse: { objects: 0, links: 0, capped: false },
+            items: [
+              runnerItem({
+                systems: ['docker', 'ragflow'],
+                source: 'workspace',
+                gates: [{ id: 'gk-north', name: 'north' }],
+                candidates: [],
+              }),
+            ],
+          }),
+      });
+      renderTab(http, 'ops-base');
+
+      const drift = await screen.findByTestId('catalog-pack-component-worker-ops-runner-drift');
+      expect(drift.textContent).toBe(
+        '能力包 v2 改了它要用到的系统（相对 v1：新增 ragflow）。它现在要用到的系统是 docker、ragflow。安装会原样保留它已接的门，不会自动改；要重新选门，在 Worker 页修改。',
+      );
+      fireEvent.click(screen.getByTestId('catalog-pack-install-trigger'));
+      expect((await screen.findByTestId('catalog-pack-item-1-binding-drift')).textContent).toMatch(
+        /^能力包 v2 改了它要用到的系统（相对 v1：新增 ragflow）。/,
+      );
+      expect(screen.getByTestId('catalog-pack-item-1-binding-kept').textContent).toMatch(
+        /^接入的系统：沿用工作区为它选的 north$/,
+      );
+    });
+
+    it('legacy 442: a kept gate that is no gate of the Worker’s systems now is named', async () => {
+      const stray = crew({
+        status: 'up_to_date',
+        installedVersion: 1,
+        requirements: [
+          ...DOCKER_CONNECTED,
+          {
+            connector: 'ragflow',
+            state: 'needs_platform',
+            gatekeepers: [],
+            offered: [],
+            platformPreset: false,
+          },
+        ],
+        components: [
+          runner({
+            systems: ['docker', 'ragflow'],
+            status: 'up_to_date',
+            installedVersion: 1,
+            headVersion: 1,
+            gates: [
+              { id: 'gk-north', name: 'north' },
+              { id: 'gk-old', name: 'old-host' },
+            ],
+            gatesKept: true,
+            provenance: component().provenance,
+          }),
+        ],
+      });
+      const http = scriptedHttp({
+        get_workspace: () => OWNER_WORKSPACE,
+        list_packs: () => ({ items: [stray] }),
+      });
+      renderTab(http, 'ops-base');
+      expect(
+        (await screen.findByTestId('catalog-pack-component-worker-ops-runner-drift')).textContent,
+      ).toBe(
+        '它现在要用到的系统是 docker、ragflow（平台未提供）。已接的 old-host 不属于它。安装会原样保留它已接的门，不会自动改；要重新选门，在 Worker 页修改。',
+      );
+    });
+
+    it('legacy 442: kept gates that match the Worker’s systems say nothing more', async () => {
+      const fine = crew({
+        status: 'up_to_date',
+        installedVersion: 1,
+        components: [
+          runner({
+            status: 'up_to_date',
+            installedVersion: 1,
+            headVersion: 1,
+            gates: [{ id: 'gk-north', name: 'north' }],
+            gatesKept: true,
+            provenance: component().provenance,
+          }),
+        ],
+      });
+      const http = scriptedHttp({
+        get_workspace: () => OWNER_WORKSPACE,
+        list_packs: () => ({ items: [fine] }),
+      });
+      renderTab(http, 'ops-base');
+      await screen.findByTestId('catalog-pack-component-worker-ops-runner-gates');
+      expect(screen.queryByTestId('catalog-pack-component-worker-ops-runner-drift')).toBeNull();
+    });
   });
 
   it("an installed Worker links to its published head version's row (the 「Worker」 tab names one version)", async () => {

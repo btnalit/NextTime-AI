@@ -495,6 +495,11 @@ describe('ChangesTab (能力目录 · 安装历史, S11 P1-B)', () => {
     expect(screen.getByTestId('catalog-change-verify-cooldown').textContent).toMatch(
       /^刚核验过，\d+ 秒后可以再核验。$/,
     );
+    // Legacy 424: the focus moves to the result, which the cooldown describes.
+    const outcome = screen.getByTestId('catalog-change-verification-outcome');
+    await waitFor(() => expect(document.activeElement).toBe(outcome));
+    const cooldown = screen.getByTestId('catalog-change-verify-cooldown');
+    expect(outcome.getAttribute('aria-describedby')).toBe(cooldown.id);
   });
 
   it('a superseded record says which one to verify instead', async () => {
