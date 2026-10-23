@@ -385,9 +385,10 @@ describe('lib/goal-plan-draft', () => {
     const fetch = draft.steps[0];
     expect(draftProblems(draft, detail, zh).size).toBe(0);
     const moved = withStep(draft, 'fetch', { version: '3' });
-    expect(draftProblems(moved, detail, zh).get(`step:${fetch?.uid}:input`)).toMatch(
-      /换了 Worker 或版本.*此处原文已遮蔽，请重新填写/,
-    );
+    // About the input only: the person changed the Worker, so nothing says "once this is changed".
+    const held = draftProblems(moved, detail, zh).get(`step:${fetch?.uid}:input`);
+    expect(held).toMatch(/换了 Worker 或版本.*请把这一段重新写成不带凭据的输入/);
+    expect(held).not.toMatch(/改了这一项/);
     expect(
       draftProblems(withStep(moved, 'fetch', { inputText: '{"auth": "见运维手册"}' }), detail, zh)
         .size,

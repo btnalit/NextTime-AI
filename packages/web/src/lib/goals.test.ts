@@ -60,7 +60,23 @@ describe('lib/goals', () => {
     // Each gate in 「」 joined by 、, an unnamed one by its short id; then what to do next.
     expect(zhText).toMatch(/^步骤「apply」的 Worker 要操作门「prod-cert-gate」、「99999999」，/);
     expect(zhText).not.toContain('99999999-8888-4777-8666-555555555555');
+    expect(zhText).toContain('请求人现在没有这些门的权限');
     expect(zhText).toContain('可以请工作区所有者在「成员与授权」给请求人开通，或者驳回');
+    // Under a revision the requester made there is nothing to turn down: revise again instead.
+    const revised = planHintText(gate, zh, gateNames, 'revision');
+    expect(revised).toContain('或者再修订计划，换掉或移除这一步。');
+    expect(revised).not.toContain('驳回');
+    expect(planHintText(gate, en, gateNames, 'revision')).toMatch(
+      /or revise the plan again to change or remove the step\.$/,
+    );
+    // One gate reads as one in Chinese too.
+    expect(
+      planHintText(
+        { ...gate, gatekeeperIds: ['11111111-2222-4333-8444-555555555555'] },
+        zh,
+        gateNames,
+      ),
+    ).toContain('请求人现在没有这个门的权限');
     expect(planHintText(gate, en, gateNames)).toMatch(
       /^Step “apply”: its Worker acts on gates “prod-cert-gate”, “99999999”, .* A workspace owner can grant it in Members/,
     );

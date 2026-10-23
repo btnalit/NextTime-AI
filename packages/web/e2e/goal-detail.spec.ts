@@ -678,7 +678,14 @@ test.describe('S11 GO6: revising the plan (stand-in reads, refusals and revision
           createdStepRunIds: ['sr-apply-3'],
           withdrawnActionRequestIds: [],
           releasedActionRequestIds: [],
-          hints: [],
+          hints: [
+            {
+              code: 'step_gate_not_held',
+              message: 'step: gate not held',
+              stepKey: PLAN_V2.steps[1].key,
+              gatekeeperIds: [GATE],
+            },
+          ],
         }),
       ];
       await page.route('**/api/cap/revise_goal', async (route) => {
@@ -746,7 +753,15 @@ test.describe('S11 GO6: revising the plan (stand-in reads, refusals and revision
       await removeOldInput.fill('{"keep": "none"}');
       await send();
       await expect(page.getByTestId('goal-op-done')).toContainText('计划已改为第 3 版');
+      // What the requester's authority would stop in the revised plan: only the result says it.
+      await expect(page.getByTestId('goal-op-note')).toHaveCount(1);
+      await expect(page.getByTestId('goal-op-note')).toContainText('门「cert-gate」');
+      await expect(page.getByTestId('goal-op-note')).toContainText('再修订计划');
       await expect(page.getByTestId('goal-plan-editor')).toHaveCount(0);
+      await page.screenshot({
+        path: testInfo.outputPath(`goal-plan-done-${width}.png`),
+        fullPage: true,
+      });
       expect(sent).toHaveLength(3);
       expect(sent[2]).toMatchObject({
         goalRunId: GOAL,
