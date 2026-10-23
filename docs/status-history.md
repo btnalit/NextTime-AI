@@ -164,6 +164,8 @@
 
 ### 页首更新记录（2026-10-04 精简时移出，原文照搬）
 
+上一版 2026-10-23（**S11 W1 GO5e-1「入口 agent 在对话里发起目标」合入（#728，5b4b7aa，无迁移，未发版）**：入口和 interactive 模式注册 `propose_goal`、`get_goal`、`list_goals`、`get_goal_revision`、`list_goal_unresolved_actions`，确认 / 暂停 / 修订 / 取消仍只走人通道；`propose_goal` 描述写明判据（后一步依赖前一步才是目标）与反例（单个委派任务哪怕要审批也留在 `invoke_worker`），入口模板新增「Goals」一节（已有工作区等遗留 145）；accept_s2 新增第 9 步，验收脚本 fake 模式每次按当前检出构建 fake-llm。关闭遗留 282，新遗留 460。W1 下一步 GO5e-2（对话里的目标卡片与里程碑消息））。
+
 上一版 2026-10-23（**S11 W1a 第一个 PR「运行指纹 + 达成率按依据分列」合入（#730，aa55f45，task 0009，未发版）**：每个 WorkerRun 记下自己跑的是什么（内核写 `run_spec`：定义版本、要的模型与镜像、系统提示摘要、平台版本；worker-supervisor 回报 `runtime_report`：实际镜像 id 与标签、`models.json` 摘要），算出 `environment_digest` 作为 E2 按环境分段的键，各写一次、数据库触发器守住；shared `outcome-basis.ts` 规定请求人确认与平台检查是主数字、agent 自报与独立评审是代理指标。控制台 Task 详情新增「运行环境」，代理指标的结果标「不计入达成率」。kernel 与 worker-supervisor 须同版本，compose 给 supervisor 加 `models/` 只读挂载（主机步骤 release.md §3.57）。新遗留 459。W1a 下一步 E2）。
 
 上一版 2026-10-23（**控制台遗留一批合入（#724，1546565，只改 `packages/web`）**：关闭遗留 424、426–428、430、431、436、442。引用标签与复制按钮跟随界面语言、主体按 成员 / 智能体 / 服务 显示；核验结果出来后焦点落到结果；need 文本走 `visibleLines`；404 文案按节点类型；Combobox 提交后收起；Card 标题不在词中间断开；能力包新版本改了 Worker 用到的系统时提示重新选门。新遗留 458）。

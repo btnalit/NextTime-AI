@@ -8,31 +8,33 @@ import {
   type ProcedureForm,
   type ProcedureStepForm,
   type ProcedureStepKind,
-  hasTemplateFields,
+  errorsUnder,
   newProcedureStep,
   procedureContentFromForm,
   procedureFormFrom,
-  templateFieldErrors,
+  procedureStepToWire,
   validateProcedure,
+  withPlanKeyRenamed,
+  withPlanKeysKept,
 } from '../../lib/catalog.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { reviewFieldNames } from '../../lib/credential-review.js';
 import { isForbiddenError } from '../../lib/errors.js';
-import { actionKindTagText } from '../../lib/format.js';
-import { type OperationChoice, useGateOperations } from '../../lib/gate-operations.js';
 import type { GatekeeperListRow, ProcedureRow } from '../../lib/governance.js';
-import { type Translate, useT } from '../../lib/i18n.js';
-import { transportKindLabel } from '../../lib/labels.js';
+import { useT } from '../../lib/i18n.js';
+import {
+  parsedProcedureParameters,
+  parsedProcedureSteps,
+  procedurePlanPlaces,
+} from '../../lib/procedure-template.js';
 import { hrefs } from '../../lib/router.js';
-import { sameNameIds, withSameNameId } from '../../lib/same-name.js';
-import { BLAST_RADIUS_TONES } from '../../lib/status-tone.js';
+import { emptySchemaDraft } from '../../lib/schema-fields.js';
 import type { WorkerDefinitionSummary } from '../../lib/tasks.js';
 import {
   definitionVersions,
   latestPerDefinition,
   workerDefinitionChoices,
 } from '../../lib/tasks.js';
-import { Combobox } from '../kit/combobox.js';
 import { Button } from '../ui/Button.js';
 import { ErrorBanner } from '../ui/ErrorBanner.js';
 import { Field, Input, Select, Textarea, describedBy } from '../ui/Field.js';
@@ -40,6 +42,13 @@ import { Notice } from '../ui/Notice.js';
 import { Tabs } from '../ui/Tabs.js';
 import { DraftProposed, type ProposedDraft } from './DraftProposed.js';
 import { JsonEditor } from './JsonEditor.js';
+import { OperationStepFields } from './OperationStepFields.js';
+import {
+  type ProcedurePlanContext,
+  VerifyCheckFields,
+  WorkerPlanFields,
+} from './ProcedurePlanFields.js';
+import { SchemaFieldsEditor } from './SchemaFieldsEditor.js';
 
 export interface ProcedureEditorProps {
   readonly http: CapabilityCaller;
@@ -65,202 +74,6 @@ const STEP_KIND_LABEL: Readonly<
   approval: { zh: '审批', en: 'Approval' },
   verify: { zh: '验证', en: 'Verify' },
 };
-
-/** The note beside an Operation in the picker: its declared blast radius. */
-function operationSecondary(choice: OperationChoice, t: Translate): string | undefined {
-  if (choice.blastRadius === null) return undefined;
-  const label = BLAST_RADIUS_TONES[choice.blastRadius].label;
-  return typeof label === 'string' ? label : t(label.zh, label.en);
-}
-
-/**
- * An `operation` step's gate + Operation (console-ux-2): the Operation is chosen from the picked
- * gate's published Operations (`lib/gate-operations.ts`) instead of typed, so a typo can no longer
- * save a step that fails at publish. "手动输入" stays as a fallback — and is what renders while the
- * gate directory is unavailable (typed gate id), the list fails to load or is empty, or a
- * prefilled name is not on the list (a copied step whose Operation has since changed).
- */
-function OperationStepFields({
-  http,
-  prefix,
-  step,
-  gatekeepers,
-  busy,
-  gateError,
-  operationError,
-  onChange,
-}: {
-  readonly http: CapabilityCaller;
-  readonly prefix: string;
-  readonly step: ProcedureStepForm;
-  readonly gatekeepers?: readonly GatekeeperListRow[];
-  readonly busy: boolean;
-  readonly gateError: string | null;
-  readonly operationError: string | null;
-  readonly onChange: (patch: Partial<ProcedureStepForm>) => void;
-}) {
-  const t = useT();
-  const [manualChosen, setManualChosen] = useState(false);
-  const hasDirectory = gatekeepers !== undefined && gatekeepers.length > 0;
-  const gateSame = sameNameIds(
-    gatekeepers,
-    (row) => row.id,
-    (row) => row.name,
-  );
-  const gate = gatekeepers?.find((row) => row.id === step.gatekeeperId);
-  // Only a gate from the directory is queried — a half-typed id would be a 400 per keystroke.
-  const operations = useGateOperations(http, gate ? { gatekeeperId: gate.id } : null);
-  const choices: readonly OperationChoice[] =
-    operations.state.status === 'ready' ? operations.state.choices : [];
-  const name = step.operationName.trim();
-  const listUnavailable =
-    operations.state.status === 'error' ||
-    (operations.state.status === 'ready' && choices.length === 0);
-  const notOnList =
-    operations.state.status === 'ready' &&
-    name !== '' &&
-    !choices.some((choice) => choice.name === name);
-  const manual = !hasDirectory || manualChosen || listUnavailable || notOnList;
-
-  return (
-    <div className="stack-s">
-      <div className="row-wrap">
-        <Field id={`${prefix}-gatekeeper`} label={t('门', 'Gate')} required error={gateError}>
-          {hasDirectory ? (
-            <Select
-              id={`${prefix}-gatekeeper`}
-              value={step.gatekeeperId}
-              onChange={(event) =>
-                // A name picked from the previous gate's list may not exist on the new one; a
-                // typed name is the person's own and stays.
-                onChange({
-                  gatekeeperId: event.target.value,
-                  ...(manual ? {} : { operationName: '' }),
-                })
-              }
-              disabled={busy}
-            >
-              <option value="">{t('选择一个门…', 'Choose a gate…')}</option>
-              {gatekeepers.map((row) => (
-                <option key={row.id} value={row.id}>
-                  {withSameNameId(row.name, row.id, gateSame)} · {transportKindLabel(row.kind, t)}
-                </option>
-              ))}
-            </Select>
-          ) : (
-            <Input
-              id={`${prefix}-gatekeeper`}
-              value={step.gatekeeperId}
-              onChange={(event) => onChange({ gatekeeperId: event.target.value })}
-              onBlur={() => onChange({ gatekeeperId: step.gatekeeperId.trim() })}
-              disabled={busy}
-              mono
-            />
-          )}
-        </Field>
-        <Field
-          id={`${prefix}-operation`}
-          label={t('Operation 名', 'Operation')}
-          required
-          error={operationError}
-          hint={
-            manual
-              ? t(
-                  '手动输入：与门发布的 Operation 名完全一致（区分大小写）。',
-                  'Manual entry: the Operation name exactly as the gate publishes it (case-sensitive).',
-                )
-              : undefined
-          }
-        >
-          {manual ? (
-            <Input
-              id={`${prefix}-operation`}
-              value={step.operationName}
-              onChange={(event) => onChange({ operationName: event.target.value })}
-              onBlur={() => onChange({ operationName: step.operationName.trim() })}
-              disabled={busy}
-              invalid={!!operationError || notOnList}
-              mono
-              data-testid="procedure-step-operation-input"
-            />
-          ) : (
-            // console-ux-3: a gate imported from OpenAPI can publish hundreds of Operations —
-            // searchable instead of a native select.
-            <Combobox
-              id={`${prefix}-operation`}
-              options={choices.map((choice) => ({
-                value: choice.name,
-                label: actionKindTagText(choice.name),
-                secondary: operationSecondary(choice, t),
-              }))}
-              value={step.operationName}
-              onChange={(operationName) => onChange({ operationName })}
-              loading={operations.state.status === 'loading'}
-              disabled={busy || operations.state.status === 'idle'}
-              invalid={!!operationError}
-              mono
-              placeholder={
-                operations.state.status === 'idle'
-                  ? t('先选择门', 'Choose a gate first')
-                  : operations.state.status === 'loading'
-                    ? t('正在加载 Operation…', 'Loading Operations…')
-                    : t('输入以搜索 Operation…', 'Type to search Operations…')
-              }
-              testId="procedure-step-operation"
-            />
-          )}
-        </Field>
-      </div>
-      {operations.state.status === 'error' ? (
-        <Notice tone="warn" testId="procedure-step-operations-error">
-          {t(
-            '无法加载这个门的 Operation 列表，已切换为手动输入。',
-            'Could not load this gate’s Operations — switched to manual entry.',
-          )}{' '}
-          <Button variant="ghost" size="s" onClick={operations.reload}>
-            {t('重试', 'Retry')}
-          </Button>
-        </Notice>
-      ) : null}
-      {gate && operations.state.status === 'ready' && choices.length === 0 ? (
-        <span className="text-3 text-small" data-testid="procedure-step-operations-empty">
-          {t(
-            `门「${gate.name}」还没有已发布的 Operation，请手动输入名称。`,
-            `Gate “${gate.name}” has no published Operation yet — type the name manually.`,
-          )}
-        </span>
-      ) : null}
-      {gate && notOnList && choices.length > 0 ? (
-        <Notice tone="warn" testId="procedure-step-unknown-operation">
-          {t(
-            `门「${gate.name}」上没有已发布的「${actionKindTagText(name)}」；发布这个流程时会失败。请从列表选择，或检查拼写。`,
-            `Gate “${gate.name}” publishes no “${actionKindTagText(name)}”; publishing this Procedure would fail. Choose from the list or check the spelling.`,
-          )}
-        </Notice>
-      ) : null}
-      {gate && choices.length > 0 ? (
-        <div>
-          <Button
-            variant="ghost"
-            size="s"
-            disabled={busy}
-            onClick={() => {
-              if (manual) {
-                setManualChosen(false);
-                if (notOnList) onChange({ operationName: '' });
-              } else {
-                setManualChosen(true);
-              }
-            }}
-            data-testid="procedure-step-operation-mode"
-          >
-            {manual ? t('从列表选择', 'Choose from the list') : t('手动输入', 'Type it manually')}
-          </Button>
-        </div>
-      ) : null}
-    </div>
-  );
-}
 
 /**
  * components/catalog/ProcedureEditor (S6-A A2 — docs/console-completion-plan.md §5.3): name,
@@ -291,6 +104,15 @@ export function ProcedureEditor({
   const [error, setError] = useState<unknown | null>(null);
   const [proposed, setProposed] = useState<ProposedDraft | null>(null);
   const content = useMemo(() => procedureContentFromForm(form), [form]);
+  // Legacy 453: the Procedure as the plan it would make — what a binding can already be told.
+  const context = useMemo<ProcedurePlanContext>(() => {
+    const parsed = parsedProcedureSteps(content.steps as readonly unknown[]);
+    return {
+      parsed,
+      places: procedurePlanPlaces(parsed),
+      parameters: parsedProcedureParameters(content.parameters),
+    };
+  }, [content]);
 
   function updateStep(index: number, patch: Partial<ProcedureStepForm>): void {
     setForm((prev) => ({
@@ -308,8 +130,30 @@ export function ProcedureEditor({
       if (current === undefined || other === undefined) return prev;
       steps[index] = other;
       steps[target] = current;
-      return { ...prev, steps };
+      return { ...prev, steps: withPlanKeysKept(prev.steps, steps) };
     });
+  }
+
+  /** A step's errors no field of it shows (legacy 453) — listed on the step, so none is lost. */
+  function leftover(index: number, kind: ProcedureStepKind) {
+    const shown = [
+      'kind',
+      'gatekeeperId',
+      'operationName',
+      'definitionId',
+      'version',
+      'description',
+      ...(kind === 'worker'
+        ? ['key', 'dependsOn', 'maxAttempts', 'input', 'bindings', 'outputSchema']
+        : kind === 'verify'
+          ? ['check']
+          : []),
+    ];
+    return errorsUnder(errors, `steps.${index}`).filter(
+      (problem) =>
+        problem.path !== '' &&
+        !shown.some((field) => problem.path === field || problem.path.startsWith(`${field}.`)),
+    );
   }
 
   function applyJson(value: Record<string, unknown>): void {
@@ -469,27 +313,6 @@ export function ProcedureEditor({
                 {errors.steps}
               </p>
             ) : null}
-            {templateFieldErrors(errors).length > 0 ? (
-              <div
-                className="field-error stack-s"
-                role="alert"
-                data-testid="procedure-template-errors"
-              >
-                <span>
-                  {t(
-                    '用流程生成目标时的这些字段不符合要求，表单不能改，请到 JSON 视图修改：',
-                    'These fields of how a goal’s plan is made from it do not pass; the form cannot edit them, so fix them in the JSON view:',
-                  )}
-                </span>
-                <ul>
-                  {templateFieldErrors(errors).map((problem) => (
-                    <li key={problem.path}>
-                      <span className="mono">{problem.path}</span>：{problem.message}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
             {form.steps.length === 0 ? (
               <span className="text-3 text-small">
                 {t('还没有步骤；一个流程至少描述一个有序动作。', 'No steps yet.')}
@@ -552,7 +375,10 @@ export function ProcedureEditor({
                       onClick={() =>
                         setForm((prev) => ({
                           ...prev,
-                          steps: prev.steps.filter((_, i) => i !== index),
+                          steps: withPlanKeysKept(
+                            prev.steps,
+                            prev.steps.filter((_, i) => i !== index),
+                          ),
                         }))
                       }
                       aria-label={t(`移除第 ${index + 1} 步`, `Remove step ${index + 1}`)}
@@ -564,7 +390,8 @@ export function ProcedureEditor({
                     <OperationStepFields
                       http={http}
                       prefix={prefix}
-                      step={step}
+                      gatekeeperId={step.gatekeeperId}
+                      operationName={step.operationName}
                       gatekeepers={gatekeepers}
                       busy={busy}
                       gateError={fieldError('gatekeeperId')}
@@ -673,6 +500,24 @@ export function ProcedureEditor({
                       </Field>
                     </div>
                   ) : null}
+                  {step.kind === 'worker' ? (
+                    <WorkerPlanFields
+                      index={index}
+                      step={step}
+                      steps={form.steps}
+                      parameters={form.parameters ?? null}
+                      context={context}
+                      errors={errors}
+                      busy={busy}
+                      onChange={(patch) => updateStep(index, patch)}
+                      onKeyRenamed={(from, to) =>
+                        setForm((prev) => ({
+                          ...prev,
+                          steps: withPlanKeyRenamed(prev.steps, from, to),
+                        }))
+                      }
+                    />
+                  ) : null}
                   <Field
                     id={`${prefix}-description`}
                     label={t('说明', 'description')}
@@ -686,31 +531,71 @@ export function ProcedureEditor({
                       disabled={busy}
                     />
                   </Field>
-                  {hasTemplateFields(step) ? (
-                    <span className="text-small text-3" data-testid="procedure-step-template-note">
-                      {step.kind === 'worker'
-                        ? t(
-                            '这一步还写了用流程生成目标时的做法（步骤名、依赖、输入、输入绑定、输出约定或尝试次数）。表单还不能改这些，保存时原样保留；要改请到 JSON 视图。把类型改掉会丢掉它们。',
-                            'This step also says how a goal’s plan made from the Procedure runs it (key, dependencies, input, bindings, output contract or attempts). The form cannot edit these yet and keeps them as they are; edit them in the JSON view. Changing the kind drops them.',
-                          )
-                        : t(
-                            '这一步还带着用流程生成目标时平台要做的检查。表单还不能改它，保存时原样保留；要改请到 JSON 视图。把类型改掉会丢掉它。',
-                            'This step also carries the check the platform makes in a goal made from the Procedure. The form cannot edit it yet and keeps it as it is; edit it in the JSON view. Changing the kind drops it.',
-                          )}
-                    </span>
+                  {step.kind === 'verify' ? (
+                    <VerifyCheckFields
+                      http={http}
+                      index={index}
+                      step={step}
+                      wire={procedureStepToWire(step)}
+                      gatekeepers={gatekeepers}
+                      errors={errors}
+                      busy={busy}
+                      onChange={(patch) => updateStep(index, patch)}
+                    />
+                  ) : null}
+                  {leftover(index, step.kind).length > 0 ? (
+                    <div
+                      className="field-error stack-s"
+                      role="alert"
+                      data-testid="procedure-step-errors"
+                    >
+                      <ul className="stack-s">
+                        {leftover(index, step.kind).map((problem) => (
+                          <li key={problem.path}>
+                            <span className="mono">{problem.path}</span>：{problem.message}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
                   ) : null}
                 </div>
               );
             })}
           </div>
-          {form.parameters !== undefined ? (
-            <Notice testId="procedure-parameters-note">
-              {t(
-                '这个流程有启动参数：用它生成目标时要填写。表单还不能改参数，保存时原样保留；要改请到 JSON 视图。',
-                'This Procedure takes parameters, given when a goal is made from it. The form cannot edit them yet and keeps them as they are; edit them in the JSON view.',
+          {form.parameters ? (
+            <SchemaFieldsEditor
+              id="procedure-parameters"
+              legend={t('启动参数', 'Parameters')}
+              explanation={t(
+                '用这个流程生成目标时要填写这些参数；Worker 步骤的输入绑定可以从中取值。',
+                'A goal made from this Procedure is proposed with these parameters; Worker steps’ input bindings can take values from them.',
               )}
-            </Notice>
-          ) : null}
+              draft={form.parameters}
+              errors={errorsUnder(errors, 'parameters')}
+              busy={busy}
+              descriptionPlaceholder={t(
+                '填写的人看到的说明（可空）',
+                'What the person filling it in sees (optional)',
+              )}
+              onChange={(parameters) => setForm((prev) => ({ ...prev, parameters }))}
+              onRemove={() => setForm((prev) => ({ ...prev, parameters: null }))}
+              removeLabel={t('去掉启动参数', 'Drop the parameters')}
+              testId="procedure-parameters"
+            />
+          ) : (
+            <div>
+              <Button
+                variant="secondary"
+                size="s"
+                icon="plus"
+                disabled={busy}
+                onClick={() => setForm((prev) => ({ ...prev, parameters: emptySchemaDraft() }))}
+                data-testid="procedure-add-parameters"
+              >
+                {t('添加启动参数', 'Add parameters')}
+              </Button>
+            </div>
+          )}
         </>
       )}
 

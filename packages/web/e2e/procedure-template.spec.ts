@@ -5,8 +5,8 @@ import { OWNER_API_KEY, loginAsOwner } from './lib/auth.js';
 /**
  * e2e/procedure-template.spec.ts (S11 GO5d-2): a Procedure's catalog page read as the template a
  * goal's plan is made from — each step's place in the plan, what it waits for, where its inputs
- * come from, who checks each verify step, and the parameters — and its editor keeping those fields
- * it cannot edit yet, at the widths UX checks (1440, 390). Nothing on the CI stack publishes such a
+ * come from, who checks each verify step, and the parameters — and its editor editing those fields
+ * in place (legacy 453), at the widths UX checks (1440, 390). Nothing on the CI stack publishes such a
  * Procedure, so `list_procedures` and the names it points at are stand-ins answered in the browser
  * (`page.route`, as goal-detail.spec.ts does); everything else is the real stack. Full-page
  * captures land in `test-results/` for the UX acceptance to read; they are not a screenshot gate.
@@ -104,6 +104,23 @@ async function answerProcedureReads(page: Page): Promise<void> {
       }),
     ),
   );
+  await page.route('**/api/cap/list_operations', (route) =>
+    route.fulfill(
+      answer('list_operations', {
+        items: [
+          {
+            gatekeeperId: GATE,
+            name: 'cert.status',
+            mode: 'observe',
+            blastRadius: 'low',
+            autoApprovable: true,
+            version: 1,
+            status: 'published',
+          },
+        ],
+      }),
+    ),
+  );
   await page.route('**/api/cap/resolve_refs', async (route) => {
     const body = route.request().postDataJSON() as { ids?: string[] } | null;
     const items = (body?.ids ?? []).flatMap((id) => {
@@ -148,12 +165,23 @@ test.describe('S11 GO5d-2: a Procedure as a goal plan template (stand-in reads)'
         fullPage: true,
       });
 
-      // The editor keeps what it cannot edit yet, and says so.
+      // Legacy 453: the editor edits them in place — what a list cannot say stays JSON.
       await page.getByTestId('catalog-edit-as-draft').click();
       const editor = page.getByTestId('procedure-editor');
       await expect(editor).toBeVisible({ timeout: 15_000 });
-      await expect(editor.getByTestId('procedure-step-template-note')).toHaveCount(3);
-      await expect(editor.getByTestId('procedure-parameters-note')).toBeVisible();
+      const editing = editor.getByTestId('procedure-step');
+      await expect(editing.nth(0).getByTestId('procedure-step-plan-key')).toHaveValue('fetch');
+      await expect(editing.nth(0).getByTestId('procedure-step-binding-from')).toHaveValue(
+        '$params',
+      );
+      await expect(editing.nth(2).getByTestId('procedure-step-binding-from')).toHaveValue('fetch');
+      await expect(editing.nth(3).getByTestId('procedure-step-check-kind')).toHaveValue(
+        'observe_predicate',
+      );
+      await expect(editing.nth(3).getByTestId('procedure-step-check-sentence')).toContainText(
+        'cert-gate',
+      );
+      await expect(editor.getByTestId('procedure-parameters-json-only')).toBeVisible();
       await page.screenshot({
         path: testInfo.outputPath(`procedure-template-editor-${width}.png`),
         fullPage: true,
