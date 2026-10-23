@@ -10,6 +10,12 @@ import {
 } from '@nexttime/shared';
 import type { CapabilityNameRow } from './governance.js';
 import type { Translate } from './i18n.js';
+import {
+  type SchemaDraft,
+  schemaDraftFrom,
+  schemaFromDraft,
+  schemaRowProblems,
+} from './schema-fields.js';
 import { OPS_RUNNER_WORKER_TEMPLATE } from './templates/ops-runner.js';
 
 /**
@@ -234,18 +240,25 @@ export const PROCEDURE_STEP_KINDS: readonly ProcedureStepKind[] = [
   'verify',
 ];
 
-/** S11 GO5d-2: what a step says of the goal plan made from its Procedure
- *  (`@nexttime/shared` `procedure.ts`) — the form does not edit these yet (legacy), so it keeps them
- *  as they came and sends them back on the step of the kind that may carry them. */
-const TEMPLATE_FIELDS: Readonly<Record<ProcedureStepKind, readonly string[]>> = {
-  operation: [],
-  worker: ['key', 'dependsOn', 'input', 'bindings', 'outputSchema', 'maxAttempts'],
-  approval: [],
-  verify: ['check'],
-};
+/** A binding of a `worker` step as the form edits it (S11 GO5d-2 `ProcedureBindingSchema`; legacy
+ *  453): where in the input (`to`), from what (an earlier step's key, or
+ *  {@link PROCEDURE_PARAMS_SOURCE}), read with `path`. */
+export interface ProcedureBindingForm {
+  /** React key; never sent. */
+  readonly uid: string;
+  readonly to: string;
+  readonly from: string;
+  readonly path: string;
+}
+
+/** What checks a `verify` step in a goal made from the Procedure (legacy 453): the requester, on
+ *  its description (`none`); the platform observing a gate's Operation; the platform judging a
+ *  Fact of the graph; or a check the form cannot read, kept as JSON. */
+export type ProcedureCheckKind = 'none' | 'observe_predicate' | 'fact_predicate' | 'json';
 
 /** One step as the form edits it — every field a string so a half-typed step is representable;
- *  `procedureStepsFromForm` turns it into the wire shape. */
+ *  `procedureStepToWire` turns it into the wire shape. A step keeps the fields of every kind while
+ *  it is edited (changing its kind and back loses nothing); only its kind's are sent. */
 export interface ProcedureStepForm {
   /** A client-side identity for React keys (steps are re-ordered and re-typed in place);
    *  never sent on the wire. */
@@ -256,9 +269,29 @@ export interface ProcedureStepForm {
   readonly definitionId: string;
   readonly version: string;
   readonly description: string;
-  /** S11 GO5d-2: the step's plan-template fields ({@link TEMPLATE_FIELDS}), kept as they came —
-   *  sent back only while the step is of a kind that carries them. */
-  readonly template: Readonly<Record<string, unknown>>;
+  // S11 GO5d-2 / legacy 453: what a `worker` step says of the plan step it becomes.
+  /** Its key in the plan; `''`: `step-<n>` ({@link procedurePlanKey}). */
+  readonly stepKey: string;
+  /** The steps it waits for; `null`: the `worker` step before it. */
+  readonly dependsOn: readonly string[] | null;
+  /** `''`: the platform's default. */
+  readonly maxAttempts: string;
+  /** The input as JSON text; `''`: none. */
+  readonly inputText: string;
+  readonly bindings: readonly ProcedureBindingForm[];
+  /** `null`: no output contract. */
+  readonly outputSchema: SchemaDraft | null;
+  // S11 GO5d-2 / legacy 453: a `verify` step's check.
+  readonly checkKind: ProcedureCheckKind;
+  readonly checkKey: string;
+  readonly checkGatekeeperId: string;
+  readonly checkOperation: string;
+  /** JSON texts; `''`: absent. */
+  readonly checkParamsText: string;
+  readonly checkExpectText: string;
+  readonly checkFactText: string;
+  /** `checkKind: 'json'` only: the check as it came. */
+  readonly checkJsonText: string;
 }
 
 let stepCounter = 0;
@@ -266,6 +299,12 @@ let stepCounter = 0;
 export function nextStepKey(): string {
   stepCounter += 1;
   return `step-${stepCounter}`;
+}
+
+let bindingCounter = 0;
+export function newProcedureBinding(): ProcedureBindingForm {
+  bindingCounter += 1;
+  return { uid: `binding-${bindingCounter}`, to: '', from: '', path: '' };
 }
 
 export const EMPTY_STEP: ProcedureStepForm = {
@@ -276,16 +315,29 @@ export const EMPTY_STEP: ProcedureStepForm = {
   definitionId: '',
   version: '1',
   description: '',
-  template: {},
+  stepKey: '',
+  dependsOn: null,
+  maxAttempts: '',
+  inputText: '',
+  bindings: [],
+  outputSchema: null,
+  checkKind: 'none',
+  checkKey: '',
+  checkGatekeeperId: '',
+  checkOperation: '',
+  checkParamsText: '',
+  checkExpectText: '',
+  checkFactText: '',
+  checkJsonText: '',
 };
 
 export interface ProcedureForm {
   readonly name: string;
   readonly description: string;
   readonly steps: readonly ProcedureStepForm[];
-  /** S11 GO5d-2: the parameters schema a goal made from it is proposed with — kept as it came
-   *  (the form does not edit it); absent: it takes none. */
-  readonly parameters?: unknown;
+  /** S11 GO5d-2 / legacy 453: the parameters a goal made from it is proposed with; absent or
+   *  `null`: it takes none. */
+  readonly parameters?: SchemaDraft | null;
 }
 
 export const EMPTY_PROCEDURE_FORM: ProcedureForm = { name: '', description: '', steps: [] };
@@ -303,49 +355,181 @@ export function procedureFormFrom(content: {
     description: typeof content.description === 'string' ? content.description : '',
     steps: Array.isArray(content.steps) ? content.steps.map(procedureStepFromWire) : [],
     ...(content.parameters !== undefined && content.parameters !== null
-      ? { parameters: content.parameters }
+      ? { parameters: schemaDraftFrom(content.parameters) }
       : {}),
   };
 }
 
-/** The field errors of what the form keeps but does not edit (S11 GO5d-2: a step's plan-template
- *  fields, the parameters) — no form field shows them, so the editor lists them; `path` as the
- *  content has it (`steps.0.bindings.1.from`). */
-export function templateFieldErrors(
-  errors: FieldErrors,
-): readonly { readonly path: string; readonly message: string }[] {
-  const fields = new Set(Object.values(TEMPLATE_FIELDS).flat());
-  return Object.entries(errors)
-    .filter(([path]) => {
-      const parts = path.split('.');
-      return (
-        parts[0] === 'parameters' ||
-        (parts[0] === 'steps' && parts[2] !== undefined && fields.has(parts[2]))
-      );
-    })
-    .map(([path, message]) => ({ path, message }));
+/** A `worker` step's key in the goal's plan — its own, else `step-<n>` with n its 1-based place
+ *  among all the Procedure's steps (the kernel's `from-procedure.ts`). */
+export function procedurePlanKey(step: ProcedureStepForm, index: number): string {
+  return step.stepKey.trim() || `step-${index + 1}`;
 }
 
-/** Whether a step carries plan-template fields the form keeps but does not edit (S11 GO5d-2). */
-export function hasTemplateFields(step: ProcedureStepForm): boolean {
-  return TEMPLATE_FIELDS[step.kind].some((field) => step.template[field] !== undefined);
+/** The plan keys of the `worker` steps, in order, with each step's index. */
+export function procedureWorkerKeys(
+  steps: readonly ProcedureStepForm[],
+): readonly { readonly index: number; readonly key: string }[] {
+  return steps.flatMap((step, index) =>
+    step.kind === 'worker' ? [{ index, key: procedurePlanKey(step, index) }] : [],
+  );
+}
+
+/** The key a `worker` step waits for when it names none: the `worker` step before it. */
+export function procedurePreviousWorkerKey(
+  steps: readonly ProcedureStepForm[],
+  index: number,
+): string | null {
+  const before = procedureWorkerKeys(steps).filter((worker) => worker.index < index);
+  return before.at(-1)?.key ?? null;
+}
+
+/** UX P2-2 on #738: each `worker` step's plan key → the keys it waits for (its own list, else the
+ *  `worker` step before it). */
+export function procedureWaits(
+  steps: readonly ProcedureStepForm[],
+): ReadonlyMap<string, readonly string[]> {
+  const waits = new Map<string, readonly string[]>();
+  let previous: string | null = null;
+  for (const [index, step] of steps.entries()) {
+    if (step.kind !== 'worker') continue;
+    const key = procedurePlanKey(step, index);
+    waits.set(key, step.dependsOn ?? (previous !== null ? [previous] : []));
+    previous = key;
+  }
+  return waits;
+}
+
+/** UX P2-2 on #738: the keys of the `worker` steps that wait for `key`, directly or through
+ *  others — a step `key` must not wait for (or take from) any of them: that is a cycle. `key`
+ *  itself is among them when it already is in one. */
+export function procedureWaiters(
+  steps: readonly ProcedureStepForm[],
+  key: string,
+): ReadonlySet<string> {
+  const waits = procedureWaits(steps);
+  const waiters = new Set<string>();
+  const queue = [key];
+  while (queue.length > 0) {
+    const current = queue.shift() as string;
+    for (const [other, deps] of waits) {
+      if (deps.includes(current) && !waiters.has(other)) {
+        waiters.add(other);
+        queue.push(other);
+      }
+    }
+  }
+  return waiters;
+}
+
+/** Keys that some step names — in an explicit `dependsOn` or a binding's `from`. */
+function referencedKeys(steps: readonly ProcedureStepForm[]): ReadonlySet<string> {
+  const keys = new Set<string>();
+  for (const step of steps) {
+    if (step.kind !== 'worker') continue;
+    for (const key of step.dependsOn ?? []) keys.add(key);
+    for (const binding of step.bindings) keys.add(binding.from);
+  }
+  return keys;
+}
+
+/**
+ * Legacy 453: the steps after a move or a removal, with every `worker` step that is named by its
+ * default key (`step-<n>`, n its place) keeping the key it had — so a dependency or a binding that
+ * named it still names it, and never silently names whichever step now sits at its old place. A
+ * step keeps its key only when that key, or the one it would get, is named somewhere: a Procedure
+ * whose steps simply follow one another gets no keys written into it.
+ */
+export function withPlanKeysKept(
+  before: readonly ProcedureStepForm[],
+  after: readonly ProcedureStepForm[],
+): readonly ProcedureStepForm[] {
+  const previous = new Map(before.map((step, index) => [step.key, procedurePlanKey(step, index)]));
+  const named = referencedKeys(after);
+  return after.map((step, index) => {
+    if (step.kind !== 'worker' || step.stepKey.trim() !== '') return step;
+    const was = previous.get(step.key);
+    const now = procedurePlanKey(step, index);
+    if (was === undefined || was === now || (!named.has(was) && !named.has(now))) return step;
+    return { ...step, stepKey: was };
+  });
+}
+
+/** Legacy 453: the steps with every dependency and binding that named `from` naming `to` instead —
+ *  a `worker` step's key renamed in the form. */
+export function withPlanKeyRenamed(
+  steps: readonly ProcedureStepForm[],
+  from: string,
+  to: string,
+): readonly ProcedureStepForm[] {
+  if (from === to) return steps;
+  return steps.map((step) =>
+    step.kind !== 'worker'
+      ? step
+      : {
+          ...step,
+          dependsOn: step.dependsOn?.map((key) => (key === from ? to : key)) ?? null,
+          bindings: step.bindings.map((binding) =>
+            binding.from === from ? { ...binding, from: to } : binding,
+          ),
+        },
+  );
 }
 
 export function newProcedureStep(): ProcedureStepForm {
   return { ...EMPTY_STEP, key: nextStepKey() };
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value);
+
+function jsonText(value: unknown): string {
+  return value === undefined ? '' : JSON.stringify(value, null, 2);
+}
+
+/** A `verify` step's check as the form edits it — the fields of the kind it is, or its JSON when
+ *  the form cannot read it. */
+function checkFormFrom(check: unknown): Partial<ProcedureStepForm> {
+  if (check === undefined) return {};
+  const shaped = (keys: readonly string[], value: Record<string, unknown>) =>
+    Object.keys(value).every((key) => keys.includes(key));
+  if (isRecord(check) && (check.key === undefined || typeof check.key === 'string')) {
+    const key = typeof check.key === 'string' ? check.key : '';
+    const observed = check.check;
+    if (
+      check.kind === 'observe_predicate' &&
+      shaped(['kind', 'key', 'check'], check) &&
+      (observed === undefined ||
+        (isRecord(observed) &&
+          shaped(['gatekeeperId', 'operation', 'params', 'expect'], observed) &&
+          (observed.gatekeeperId === undefined || typeof observed.gatekeeperId === 'string') &&
+          (observed.operation === undefined || typeof observed.operation === 'string')))
+    ) {
+      const fields = isRecord(observed) ? observed : {};
+      return {
+        checkKind: 'observe_predicate',
+        checkKey: key,
+        checkGatekeeperId: typeof fields.gatekeeperId === 'string' ? fields.gatekeeperId : '',
+        checkOperation: typeof fields.operation === 'string' ? fields.operation : '',
+        checkParamsText: jsonText(fields.params),
+        checkExpectText: jsonText(fields.expect),
+      };
+    }
+    if (check.kind === 'fact_predicate' && shaped(['kind', 'key', 'fact'], check)) {
+      return { checkKind: 'fact_predicate', checkKey: key, checkFactText: jsonText(check.fact) };
+    }
+  }
+  return { checkKind: 'json', checkJsonText: jsonText(check) };
+}
+
 export function procedureStepFromWire(step: unknown): ProcedureStepForm {
-  const record = (step && typeof step === 'object' ? step : {}) as Record<string, unknown>;
+  const record = isRecord(step) ? step : {};
   const str = (key: string): string => (typeof record[key] === 'string' ? record[key] : '');
   const kind = PROCEDURE_STEP_KINDS.includes(record.kind as ProcedureStepKind)
     ? (record.kind as ProcedureStepKind)
     : 'approval';
-  const template: Record<string, unknown> = {};
-  for (const field of TEMPLATE_FIELDS[kind]) {
-    if (record[field] !== undefined) template[field] = record[field];
-  }
-  return {
+  const base: ProcedureStepForm = {
+    ...EMPTY_STEP,
     key: nextStepKey(),
     kind,
     gatekeeperId: str('gatekeeperId'),
@@ -353,17 +537,83 @@ export function procedureStepFromWire(step: unknown): ProcedureStepForm {
     definitionId: str('definitionId'),
     version: typeof record.version === 'number' ? String(record.version) : '1',
     description: str('description'),
-    template,
   };
+  if (kind === 'worker') {
+    const text = (value: unknown) => (typeof value === 'string' ? value : '');
+    return {
+      ...base,
+      stepKey: str('key'),
+      dependsOn: Array.isArray(record.dependsOn)
+        ? record.dependsOn.filter((key): key is string => typeof key === 'string')
+        : null,
+      maxAttempts: typeof record.maxAttempts === 'number' ? String(record.maxAttempts) : '',
+      inputText: jsonText(record.input),
+      bindings: Array.isArray(record.bindings)
+        ? record.bindings.map((binding) => {
+            const fields = isRecord(binding) ? binding : {};
+            return {
+              ...newProcedureBinding(),
+              to: text(fields.to),
+              from: text(fields.from),
+              path: text(fields.path),
+            };
+          })
+        : [],
+      outputSchema: record.outputSchema === undefined ? null : schemaDraftFrom(record.outputSchema),
+    };
+  }
+  if (kind === 'verify') return { ...base, ...checkFormFrom(record.check) };
+  return base;
 }
 
-/** The template fields `step` sends back: those its kind may carry. */
-function templateToWire(step: ProcedureStepForm): Record<string, unknown> {
-  const fields: Record<string, unknown> = {};
-  for (const field of TEMPLATE_FIELDS[step.kind]) {
-    if (step.template[field] !== undefined) fields[field] = step.template[field];
+/** A JSON text as the value it says — or, when it does not parse, the text itself (the JSON view
+ *  shows it as typed, and validation says where). */
+function parsedOr(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
   }
-  return fields;
+}
+
+function schemaValue(draft: SchemaDraft): unknown {
+  const schema = schemaFromDraft(draft);
+  return schema.ok ? schema.value : schema.text;
+}
+
+function checkToWire(step: ProcedureStepForm): Record<string, unknown> {
+  const key = step.checkKey.trim();
+  switch (step.checkKind) {
+    case 'none':
+      return {};
+    case 'json':
+      return step.checkJsonText.trim() === '' ? {} : { check: parsedOr(step.checkJsonText) };
+    case 'observe_predicate':
+      return {
+        check: {
+          kind: 'observe_predicate',
+          key,
+          check: {
+            gatekeeperId: step.checkGatekeeperId.trim(),
+            operation: step.checkOperation.trim(),
+            ...(step.checkParamsText.trim() !== ''
+              ? { params: parsedOr(step.checkParamsText) }
+              : {}),
+            ...(step.checkExpectText.trim() !== ''
+              ? { expect: parsedOr(step.checkExpectText) }
+              : {}),
+          },
+        },
+      };
+    case 'fact_predicate':
+      return {
+        check: {
+          kind: 'fact_predicate',
+          key,
+          ...(step.checkFactText.trim() !== '' ? { fact: parsedOr(step.checkFactText) } : {}),
+        },
+      };
+  }
 }
 
 /** The wire step for a form step — only the fields its `kind` declares (`.strict()` schemas). */
@@ -379,16 +629,34 @@ export function procedureStepToWire(step: ProcedureStepForm): Record<string, unk
       };
     case 'worker': {
       const version = Number.parseInt(step.version, 10);
+      const attempts = Number(step.maxAttempts);
       return {
         kind: 'worker',
         definitionId: step.definitionId.trim(),
         version: Number.isNaN(version) ? step.version : version,
         ...(description ? { description } : {}),
-        ...templateToWire(step),
+        ...(step.stepKey.trim() !== '' ? { key: step.stepKey.trim() } : {}),
+        ...(step.dependsOn !== null ? { dependsOn: step.dependsOn } : {}),
+        ...(step.inputText.trim() !== '' ? { input: parsedOr(step.inputText) } : {}),
+        ...(step.bindings.length > 0
+          ? {
+              bindings: step.bindings.map((binding) => ({
+                to: binding.to.trim(),
+                from: binding.from,
+                path: binding.path.trim(),
+              })),
+            }
+          : {}),
+        ...(step.outputSchema !== null ? { outputSchema: schemaValue(step.outputSchema) } : {}),
+        ...(step.maxAttempts !== ''
+          ? { maxAttempts: Number.isNaN(attempts) ? step.maxAttempts : attempts }
+          : {}),
       };
     }
+    case 'verify':
+      return { kind: 'verify', description, ...checkToWire(step) };
     default:
-      return { kind: step.kind, description, ...templateToWire(step) };
+      return { kind: step.kind, description };
   }
 }
 
@@ -397,18 +665,81 @@ export function procedureContentFromForm(form: ProcedureForm): Record<string, un
     name: form.name.trim(),
     description: form.description.trim(),
     steps: form.steps.map(procedureStepToWire),
-    ...(form.parameters !== undefined ? { parameters: form.parameters } : {}),
+    ...(form.parameters ? { parameters: schemaValue(form.parameters) } : {}),
   };
+}
+
+/** What the form can tell before the schema does: JSON that does not parse, and a field list's
+ *  rows without a name or with one used twice — by the content path the problem is at
+ *  (`steps.0.input`; a list row as `….fields.<row>`). */
+function formProblems(form: ProcedureForm, t: Translate): Record<string, string> {
+  const problems: Record<string, string> = {};
+  const notJson = t('不是合法的 JSON', 'Not valid JSON');
+  const json = (path: string, text: string) => {
+    if (text.trim() === '') return;
+    try {
+      JSON.parse(text);
+    } catch {
+      problems[path] = notJson;
+    }
+  };
+  const schema = (path: string, draft: SchemaDraft | null | undefined) => {
+    if (!draft) return;
+    if (draft.mode === 'json') json(path, draft.text);
+    for (const [row, problem] of schemaRowProblems(draft, t)) {
+      problems[`${path}.fields.${row}`] = problem;
+    }
+  };
+  for (const [index, step] of form.steps.entries()) {
+    const at = `steps.${index}`;
+    if (step.kind === 'worker') {
+      json(`${at}.input`, step.inputText);
+      schema(`${at}.outputSchema`, step.outputSchema);
+    } else if (step.kind === 'verify') {
+      if (step.checkKind === 'json') json(`${at}.check`, step.checkJsonText);
+      if (step.checkKind === 'observe_predicate') {
+        json(`${at}.check.check.params`, step.checkParamsText);
+        json(`${at}.check.check.expect`, step.checkExpectText);
+      }
+      if (step.checkKind === 'fact_predicate') json(`${at}.check.fact`, step.checkFactText);
+    }
+  }
+  schema('parameters', form.parameters);
+  return problems;
 }
 
 export function validateProcedure(
   form: ProcedureForm,
   t: Translate,
 ): ValidationResult<ProposeProcedureContent> {
+  const problems = formProblems(form, t);
   const parsed = ProposeProcedureContentSchema.safeParse(procedureContentFromForm(form));
-  return parsed.success
-    ? { ok: true, value: parsed.data }
-    : { ok: false, errors: fieldErrorsFromIssues(parsed.error.issues, t) };
+  if (parsed.success && Object.keys(problems).length === 0) return { ok: true, value: parsed.data };
+  // The form's own problem at a place wins: 「不是合法的 JSON」 says more than the schema's
+  // complaint about the text standing in for it.
+  const schemaErrors = parsed.success ? {} : fieldErrorsFromIssues(parsed.error.issues, t);
+  const errors: Record<string, string> = { ...problems };
+  for (const [path, message] of Object.entries(schemaErrors)) {
+    if (!Object.keys(problems).some((own) => path === own || path.startsWith(`${own}.`))) {
+      errors[path] = message;
+    }
+  }
+  return { ok: false, errors };
+}
+
+/** Legacy 453: the errors at `prefix` and under it, each with the rest of its path (`''` for one
+ *  at `prefix` itself) — what one part of the form shows. */
+export function errorsUnder(
+  errors: FieldErrors,
+  prefix: string,
+): readonly { readonly path: string; readonly message: string }[] {
+  return Object.entries(errors).flatMap(([path, message]) =>
+    path === prefix
+      ? [{ path: '', message }]
+      : path.startsWith(`${prefix}.`)
+        ? [{ path: path.slice(prefix.length + 1), message }]
+        : [],
+  );
 }
 
 // -------------------------------------------------------------------------------------------

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   EMPTY_STEP,
+  type ProcedureStepForm,
   issueMessage,
   opsRunnerTemplateForm,
   parseJsonObject,
@@ -13,6 +14,8 @@ import {
   validateProcedure,
   validateSkill,
   validateWorkerDefinition,
+  withPlanKeyRenamed,
+  withPlanKeysKept,
   workerDefinitionContentFromForm,
   workerDefinitionFormFromWire,
 } from './catalog.js';
@@ -134,6 +137,46 @@ describe('procedure form → propose_procedure{procedure}', () => {
       },
     );
     expect(procedureStepFromWire({ kind: 'bogus' }).kind).toBe('approval');
+  });
+
+  it('a move or a removal keeps the default key of a step something names (legacy 453)', () => {
+    const worker = (key: string, patch: Partial<ProcedureStepForm> = {}): ProcedureStepForm => ({
+      ...EMPTY_STEP,
+      key,
+      kind: 'worker',
+      definitionId: 'wd',
+      ...patch,
+    });
+    const a = worker('a');
+    const b = worker('b');
+    const c = worker('c', { dependsOn: ['step-2'] });
+    // Removing the first: b (named as step-2) keeps that key, and c — which would now be step-2,
+    // the key c's own dependency means b by — keeps step-3.
+    const removed = withPlanKeysKept([a, b, c], [b, c]);
+    expect(removed.map((step) => step.stepKey)).toEqual(['step-2', 'step-3']);
+    // A Procedure whose steps simply follow one another gets no keys written into it.
+    const plain = withPlanKeysKept(
+      [a, worker('b2'), worker('c2')],
+      [worker('c2'), a, worker('b2')],
+    );
+    expect(plain.map((step) => step.stepKey)).toEqual(['', '', '']);
+    // A step that would take a key something names (meaning another step) keeps its own.
+    const x = worker('x', { bindings: [{ uid: 'u', to: 'h', from: 'step-1', path: 'p' }] });
+    const taken = withPlanKeysKept([a, b, x], [b, x]);
+    expect(taken.map((step) => step.stepKey)).toEqual(['step-2', '']);
+  });
+
+  it('renaming a step’s key renames what named it (legacy 453)', () => {
+    const named = {
+      ...EMPTY_STEP,
+      key: 'n',
+      kind: 'worker' as const,
+      dependsOn: ['step-1', 'other'],
+      bindings: [{ uid: 'u', to: 'h', from: 'step-1', path: 'p' }],
+    };
+    const [renamed] = withPlanKeyRenamed([named], 'step-1', 'fetch');
+    expect(renamed?.dependsOn).toEqual(['fetch', 'other']);
+    expect(renamed?.bindings[0]?.from).toBe('fetch');
   });
 });
 
