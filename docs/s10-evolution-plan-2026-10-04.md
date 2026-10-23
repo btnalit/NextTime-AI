@@ -283,8 +283,8 @@ OAuth 2.0 或 JWT Bearer 认证；工具含 `search_metadata`（`query` / `entit
 | Worker 的工作目录 | 不跨 Task，保留期到期删除 | Worker | Task 模式每次新目录；supervisor 按 `TASK_WORKDIR_RETENTION_HOURS` 清理 | 已有 |
 | 目标内步骤产物（GO14） | 跨步骤，限本 GoalRun 保留期 | 上游 Worker | 推进器绑定、只读挂载，挂在下游 cwd 的上级链与 agentDir 之外 | 设计，未实现 |
 | Skill / Procedure / WorkerDefinition / 本体 / Operation | 永久 | 只能经人发布 | I16、发布绑定版本（#592） | 已有 |
-| 先例召回（GO17） | 跨目标 | 平台 | 只引用完整记录与证据，正例只取 `verified_by_check` 且未被覆盖的 | 设计，未实现 |
-| 入口 agent 的持久工作目录 | 永久（按用户） | 入口 agent（bash / write） | **白名单启动**：pi 的全部资源发现关闭（上下文文件、扩展、skills、提示模板、MCP），`settings.json` 由平台整份写入，平台扩展、已发布 Skill、入口提示显式传入；守卫测试在 U2 套件 | **未完成**（遗留 422，AA5 之前关闭）；今天 pi 每次启动仍会加载其中的 `AGENTS.md`、扩展与 `mcp.json` |
+| 先例召回（GO17） | 跨目标 | 平台 | 只引用完整记录与证据，正例只取 `verified_by_check` 且未被覆盖的；只从当前请求人能看到的目标里取，用 GO5a / 遗留 421 的同一个可见性谓词 | 设计，未实现 |
+| 入口 agent 的持久工作目录 | 永久（按用户） | 入口 agent（bash / write） | **白名单启动**：pi 的全部资源发现关闭（上下文文件、扩展、skills、提示模板、MCP），`settings.json` 由平台整份写入，平台扩展、已发布 Skill、入口提示显式传入；U2 建成前守卫先放 e2e / CI 测试，U2 建成后并入 | **未完成**（遗留 422，AA5 之前关闭）；今天 pi 每次启动仍会加载其中的 `AGENTS.md`、扩展与 `mcp.json` |
 | 入口 agent 的个人记忆（E4） | 跨会话（按用户） | 受审扩展 | 平台显式加载的固定版本扩展，不进图谱 | 推迟 |
 
 原则（victor 2026-10-23）：平台只用 pi 的核心 runtime，外层一律由平台自己包装；平台扩展充分利用 pi 的扩展机制，但一律显式传入。
@@ -318,9 +318,11 @@ WorkerDefinition 的 `capabilities` 本身就是授权，所以由人发布、�
   （按达成率排序会让老流程越用越多、新流程没有机会——冷启动与马太效应）。
 - 提示而不是自动：连续 N 次未达成的版本在页面上标"建议复核"，由 builder 决定是否弃用；真实模型回归结果入库（今天只打到 stdout，入库是 E2 的计划），看跨版本趋势。
 - **按运行指纹分段**（2026-10-23 补）：每个 WorkerRun 记运行指纹——模型、镜像 digest、平台版本、系统提示摘要、`definition@version`，
-  与目标步骤的 `RunConfigSnapshot` 同字段，非目标 Task 也记（W1a 第一个 PR）；统计按指纹分段，"建议复核"不跨指纹比较，
+  在目标步骤的 `RunConfigSnapshot` 基础上补平台版本与镜像 digest（快照里没有平台版本，`image` 是运行时镜像设置值、未设置时为 `null`，
+  不是 digest），非目标 Task 也记（W1a 第一个 PR）；统计按指纹分段，"建议复核"不跨指纹比较，
   否则换模型或升级平台会被记成"Skill 变差"。
-- **达成率按 `basis` 分列**：主数字只用 `requester` 与（GO 之后的）`verified_by_check`；`agent_reported` 单列、不进主数字——
+- **达成率按 `basis` 分列**：主数字只用 `requester` 与（GO 之后的）`verified_by_check`；`agent_reported` 与 `reviewer_assessed`（GO18 的评审判定，
+  按评分标准，属代理指标）单列、不进主数字——
   否则提议了 Skill 的那条 agent 链就在给自己的 Skill 打分。
 - **确定性失败分组**（victor 2026-10-23 定分叉 3 = a）：失败按 定义版本 × 失败类别 × 拒绝原因（含 `excluded_by_policy`、
   `contract_violation`、技术性拒绝）分组并进"按原因"统计；轨迹挖掘与参考 agent 对照等 E3 跑起来、额度允许再立项。
@@ -368,7 +370,7 @@ WorkerDefinition 的 `capabilities` 本身就是授权，所以由人发布、�
   评分标准），不适用于规格：GO4 的验收检查是对真实世界状态的观察，执行者知道它没有问题。
 - **回归棘轮**：用例集的 `regression` 分区只增不减，行带 `origin`（来自哪次评测或哪个 Task 的失败）；应用角色无 DELETE，退役只能由人带理由标记、
   写审计。
-- **账本恒等式**：`eval_trials (eval_run_id, arm, case_id, rep)` 唯一；写判定前由数据库守卫核对每臂行数 = k × 用例数（做法同 GO4 的守卫）。
+- **账本恒等式**：`eval_trials (eval_run_id, arm, case_id, rep)` 唯一；写判定前由数据库守卫核对每臂行数 = k × 用例数（做法同 goal 0005 的 `goal_runs_status_guard`：判定行写入时在库里复核所依据的明细齐全）。
 - **结果去哪**：用例、夹具输出、判定规则、逐用例得分、转录写专用 `eval_*` 表，只由 human 通道能力读（I-E4）；图谱只落
   一条摘要 Observation（判定、草稿摘要、evalRunId）作为草稿的 Evidence；转录不走 Worker 结果契约（否则会回流成私有
   Source、被通用读读到）。发布审阅页显示判定、各用例得分与成本差，发布请求绑定 `(kind, id, version)` + 摘要（I-E3）。
