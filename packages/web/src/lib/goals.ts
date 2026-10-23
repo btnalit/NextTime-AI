@@ -219,10 +219,13 @@ export function stepRemovalText(removal: StepRemoval | undefined, t: Translate):
   const released = removal.release?.length ?? 0;
   return released > 0
     ? t(
-        `让它跑完（结果只记下，不推进目标），放行 ${released} 条已提交的动作`,
-        `Let it finish (result recorded, not advanced); ${released} submitted action(s) released`,
+        `让它跑完，结果只记录，不再推进后面的步骤；放行 ${released} 条已提交的动作`,
+        `Let it finish: its result is recorded, and nothing after it moves on; ${released} submitted action(s) released`,
       )
-    : t('让它跑完（结果只记下，不推进目标）', 'Let it finish (result recorded, not advanced)');
+    : t(
+        '让它跑完，结果只记录，不再推进后面的步骤',
+        'Let it finish: its result is recorded, and nothing after it moves on',
+      );
 }
 
 // ---------------------------------------------------------------------------------------------

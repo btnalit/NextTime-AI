@@ -251,9 +251,9 @@ const NAMES: Record<string, { kind: string; name: string }> = {
  *  #683): when the contract changes, the stand-in fails here instead of the page going green on a
  *  shape the kernel no longer sends. */
 function answer(name: string, result: unknown) {
-  const capability = getCapability(name);
-  if (!capability) throw new Error(`no capability ${name}`);
-  return { json: { ok: true, result: capability.resultSchema.parse(result) } };
+  const contract = getCapability(name)?.resultSchema;
+  if (!contract) throw new Error(`no result contract for ${name}`);
+  return { json: { ok: true, result: contract.parse(result) } };
 }
 
 const member = (id: string, displayName: string) => ({
