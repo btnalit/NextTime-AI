@@ -35,7 +35,11 @@ import { SkeletonRows } from '../kit/skeleton.js';
 import { StatusChip } from '../kit/status-chip.js';
 import { ActionChip } from './ActionChip.js';
 import { GoalAcceptanceSection } from './GoalAcceptanceSection.js';
-import { type GoalOperationOutcome, GoalOperationsBar } from './GoalOperationsBar.js';
+import {
+  type GoalMark,
+  type GoalOperationOutcome,
+  GoalOperationsBar,
+} from './GoalOperationsBar.js';
 import { GoalReconcileControls } from './GoalReconcileControls.js';
 import { GoalRevisionsSection } from './GoalRevisionsSection.js';
 import { GoalStepsSection } from './GoalStepsSection.js';
@@ -221,14 +225,9 @@ export function GoalDetailPage({ http, pushes, goalRunId }: GoalDetailPageProps)
         onDone={onDone}
       />
       <output aria-live="polite">
-        {done ? (
+        {done && !(done.kind === 'stale' && refreshing) ? (
           <Notice tone={done.kind === 'stale' ? 'warn' : 'info'} testId="goal-op-done">
-            {done.kind === 'done'
-              ? done.message
-              : t(
-                  `目标的状态刚变了，刚才的操作没有执行。页面已经刷新：它现在是「${labelText(statusChipStyle('goalRun', goal.status), t)}」。`,
-                  `The goal had just moved on, so that was not done. The page has been refreshed: it is now ${labelText(statusChipStyle('goalRun', goal.status), t)}.`,
-                )}
+            {done.kind === 'done' ? done.message : staleText(done.before, goal, t)}
           </Notice>
         ) : null}
       </output>
@@ -439,5 +438,23 @@ function Leftovers({
         ))}
       </div>
     </DashboardCard>
+  );
+}
+
+/** After a 409: whether the goal itself had moved on (read again, its status or version differs
+ *  from what the operation found), or the refusal was about something of it — a step still
+ *  running or waiting, a Task still live, an action in flight or of unknown outcome (review #501
+ *  on #697). */
+function staleText(before: GoalMark, goal: GoalDetailWire, t: Translate): string {
+  const now = labelText(statusChipStyle('goalRun', goal.status), t);
+  if (before.status !== goal.status || before.updatedAt !== goal.updatedAt) {
+    return t(
+      `目标的状态刚变了，刚才的操作没有执行。页面已经刷新：它现在是「${now}」。`,
+      `The goal had just moved on, so that was not done. The page has been refreshed: it is now ${now}.`,
+    );
+  }
+  return t(
+    `刚才的操作此刻不能执行，什么也没改；目标仍是「${now}」。通常是还有步骤在运行或等待、任务还没结束，或者有动作在进行或结果不明：先看下面的「步骤」和「待核对的动作」。`,
+    `That cannot be done right now, and nothing changed; the goal is still ${now}. Usually a step still runs or waits, a Task is still live, or an action is in flight or of unknown outcome: see Steps and Actions to check below.`,
   );
 }

@@ -91,7 +91,7 @@ function reconcile(
 
 function RecordFinding(props: DialogProps & { readonly canReexecute: boolean }) {
   const t = useT();
-  const run = useOperationDone(props.onDone);
+  const run = useOperationDone(props.onDone, props.goal);
   const name = useId();
   const [verdict, setVerdict] = useState<Verdict | null>(null);
   const [reexecute, setReexecute] = useState(false);
@@ -180,7 +180,7 @@ function RecordFinding(props: DialogProps & { readonly canReexecute: boolean }) 
 
 function Reexecute(props: DialogProps) {
   const t = useT();
-  const run = useOperationDone(props.onDone);
+  const run = useOperationDone(props.onDone, props.goal);
   const note = useNote();
   return (
     <Confirm

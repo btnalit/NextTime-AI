@@ -211,8 +211,16 @@ export function retryableStepKeys(detail: GoalDetailWire): string[] {
     .map((step) => step.stepKey);
 }
 
+/** The step statuses after which an action of the step is not run again. */
+const ENDED_STEP_STATUSES: ReadonlySet<string> = new Set([
+  'succeeded',
+  'superseded',
+  'cancelled',
+  'skipped',
+]);
+
 /** What a person may do about one unresolved action: record a finding (requester or owner), run it
- *  again (the requester, while the run can still run). */
+ *  again (the requester, while the run can still run and the step has not ended). */
 export interface ReconcileOptions {
   readonly record: boolean;
   readonly reexecute: boolean;
@@ -224,23 +232,29 @@ export function reconcileOptions(
   viewer: GoalViewer,
 ): ReconcileOptions {
   const requester = isRequester(detail, viewer);
-  const canStillRun =
-    detail.status === 'running' || detail.status === 'paused' || detail.status === 'verifying';
+  // As the kernel has it (`reconcile_goal_action`): a run that can still run, a step still in it.
+  const canStillRun = detail.status === 'running' || detail.status === 'paused';
+  const step = detail.steps.find((item) => item.id === action.stepRunId);
+  const stepLive = step !== undefined && !ENDED_STEP_STATUSES.has(step.status);
   return {
     record: action.needs === 'finding' && (requester || viewer.isOwner),
-    reexecute: requester && canStillRun,
+    reexecute: requester && canStillRun && stepLive,
   };
 }
 
-/** When the hold now on the run was placed, read from its audit trail (newest first): the latest
- *  `goal_run.hold`, or `goal_run.pause` by an owner. `null` when the page found none. */
+/** When the hold now on the run was placed, read from its audit trail: the latest `goal_run.hold`,
+ *  or `goal_run.pause` by an owner, in whatever order the records come. `null` when none. */
 export function holdPlacedAt(records: readonly AuditRecordWire[]): string | null {
-  const found = records.find(
-    (record) =>
+  let latest: string | null = null;
+  for (const record of records) {
+    const hold =
       record.action === 'goal_run.hold' ||
-      (record.action === 'goal_run.pause' && record.payload.pausedByAuthority === 'owner'),
-  );
-  return found ? found.createdAt : null;
+      (record.action === 'goal_run.pause' && record.payload.pausedByAuthority === 'owner');
+    if (hold && (latest === null || Date.parse(record.createdAt) > Date.parse(latest))) {
+      latest = record.createdAt;
+    }
+  }
+  return latest;
 }
 
 /** The revisions accepted after `since` — the plan the requester changed while the run was held

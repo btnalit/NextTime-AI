@@ -54,19 +54,27 @@ type OpenOp =
   | 'confirmAcceptance'
   | null;
 
-/** What the page says after an operation: what it did, or that the goal had moved on (a 409
- *  `illegal_transition`) and was read again — the page names the state it is in now. */
+/** The goal as an operation found it — to tell, once re-read, whether a 409 meant it had moved on. */
+export interface GoalMark {
+  readonly status: string;
+  readonly updatedAt: string;
+}
+
+/** What the page says after an operation: what it did, or that it was refused for the state of
+ *  things (a 409 `illegal_transition`) and the goal was read again — with the goal as the
+ *  operation found it, so the page can say whether the goal itself had moved on or something of it
+ *  (a step, a Task, an action) was not yet where the operation needs it. */
 export type GoalOperationOutcome =
   | { readonly kind: 'done'; readonly message: string }
-  | { readonly kind: 'stale' };
+  | { readonly kind: 'stale'; readonly before: GoalMark };
 
 /** The copy an operation's refusal gets in place of the generic one (`kit/confirm`'s inline error;
  *  the kernel's own text stays under 技术细节). */
 export function goalOperationErrors(t: Translate): ErrorOverrides {
   return {
     illegal_transition: t(
-      '目标的状态刚变了，这个操作没有执行；页面已经刷新，上方写着它现在的状态。',
-      'The goal has just moved on, so this was not done; the page has been refreshed and says where it stands now.',
+      '这个操作此刻不能执行，什么也没改。页面已经刷新，下方写着原因。',
+      'This cannot be done right now, and nothing changed. The page has been refreshed; the reason is shown below the buttons.',
     ),
     credentials_in_text: t(
       '备注里有像凭据的写法（token、key、密码的值，或 Bearer、Authorization、名称=值 这样的写法），已拒绝，什么也没保存。把它改成描述发生了什么，比如「token 过期了」「密码不对」，或者清空备注再提交。',
@@ -97,7 +105,7 @@ export function GoalOperationsBar({
   const [open, setOpen] = useState<OpenOp>(null);
   const errors = goalOperationErrors(t);
   const goalRunId = goal.id;
-  const run = useOperationDone(onDone);
+  const run = useOperationDone(onDone, goal);
 
   const buttons: ReactNode[] = [];
   const waits: { op: string; reason: string }[] = [];
@@ -350,7 +358,7 @@ export function GoalOperationsBar({
         impact={[
           t(
             '目标仍然暂停：由请求人决定继续、改计划、结束或取消，解除本身不会让任何东西运行',
-            'The goal stays paused: its requester decides to resume, revise or cancel it; lifting the hold runs nothing',
+            'The goal stays paused: its requester decides to resume, revise, end or cancel it; lifting the hold runs nothing',
           ),
         ]}
         confirmLabel={t('解除锁定', 'Lift hold')}
@@ -445,8 +453,9 @@ export function GoalOperationsBar({
  *  which shows it inline and stays open; one because the goal had moved on (409
  *  `illegal_transition`) also has the page read it again and say where it stands, since the button
  *  that was pressed may not be there any more. */
-export function useOperationDone(onDone: (outcome: GoalOperationOutcome) => void) {
+export function useOperationDone(onDone: (outcome: GoalOperationOutcome) => void, goal: GoalMark) {
   const t = useT();
+  const { status, updatedAt } = goal;
   return useCallback(
     async <R extends { readonly changed: boolean }>(
       call: Promise<R>,
@@ -457,7 +466,7 @@ export function useOperationDone(onDone: (outcome: GoalOperationOutcome) => void
         result = await call;
       } catch (error) {
         if (error instanceof HttpError && error.code === 'illegal_transition') {
-          onDone({ kind: 'stale' });
+          onDone({ kind: 'stale', before: { status, updatedAt } });
         }
         throw error;
       }
@@ -468,7 +477,7 @@ export function useOperationDone(onDone: (outcome: GoalOperationOutcome) => void
           : t('它已经是这样了，没有变化', 'Already so: nothing changed'),
       });
     },
-    [onDone, t],
+    [onDone, t, status, updatedAt],
   );
 }
 
@@ -681,11 +690,18 @@ function HoldPlanChanges({
   const mayReadAudit = can('audit_query') === true;
   const load = useCallback(async () => {
     if (!mayReadAudit) return null;
-    const page = await http.call<{ items: readonly AuditRecordWire[] }>('audit_query', {
-      filter: { resourceType: 'goal_run', resourceId: goal.id },
-      limit: 200,
-    });
-    return holdPlacedAt(page.items);
+    // By action, not the goal's whole trail: every read of the goal writes an audit row too, so a
+    // page of the trail can hold none of the hold (review #501 on #697).
+    const query = (action: string, limit: number) =>
+      http.call<{ items: readonly AuditRecordWire[] }>('audit_query', {
+        filter: { resourceType: 'goal_run', resourceId: goal.id, action },
+        limit,
+      });
+    const [holds, pauses] = await Promise.all([
+      query('goal_run.hold', 1),
+      query('goal_run.pause', 50),
+    ]);
+    return holdPlacedAt([...holds.items, ...pauses.items]);
   }, [http, goal.id, mayReadAudit]);
   const heldAt = useResource(load);
   if (can('audit_query') === null || heldAt.state.status === 'loading') {

@@ -150,6 +150,17 @@ describe('lib/goal-actions', () => {
     expect(reconcileOptions(paused, action, OWNER)).toEqual({ record: true, reexecute: false });
     const cancelled = goalDetail({ status: 'cancelled' });
     expect(reconcileOptions(cancelled, action, ALICE)).toEqual({ record: true, reexecute: false });
+    // As the kernel: not while verifying, and not for a step that has ended (review #501 on #697).
+    const verifying = goalDetail({ status: 'verifying' });
+    expect(reconcileOptions(verifying, action, ALICE).reexecute).toBe(false);
+    const ended = goalDetail({
+      status: 'paused',
+      pauseReason: 'awaiting_reconcile',
+      steps: paused.steps.map((step) =>
+        step.id === action.stepRunId ? { ...step, status: 'succeeded' as const } : step,
+      ),
+    });
+    expect(reconcileOptions(ended, action, ALICE).reexecute).toBe(false);
     expect(reconcileOptions(paused, { ...action, needs: 'decision' }, ALICE).record).toBe(false);
   });
 
@@ -175,6 +186,13 @@ describe('lib/goal-actions', () => {
       '2026-10-20T09:00:00.000Z',
     );
     expect(holdPlacedAt([record('goal_run.pause', '2026-10-20T06:00:00.000Z')])).toBeNull();
+    // Two pages (holds, pauses) merged: the latest wins whatever the order.
+    expect(
+      holdPlacedAt([
+        record('goal_run.hold', '2026-10-20T09:00:00.000Z'),
+        record('goal_run.pause', '2026-10-20T12:00:00.000Z', { pausedByAuthority: 'owner' }),
+      ]),
+    ).toBe('2026-10-20T12:00:00.000Z');
 
     const base = goalDetail().revisions[0];
     if (!base) throw new Error('fixture has a revision');

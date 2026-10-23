@@ -160,6 +160,13 @@ describe('goal operations on the goal page (S11 GO6)', () => {
     expect((await within(confirm).findByTestId('goal-hold-plan')).textContent).toMatch(
       /锁定后请求人改过计划：第 2 版/,
     );
+    // Read by action — the goal's own reads fill its trail (review #501 on #697).
+    expect(
+      http.calls
+        .filter((call) => call.name === 'audit_query')
+        .map((call) => (call.params as { filter: { action: string } }).filter.action)
+        .sort(),
+    ).toEqual(['goal_run.hold', 'goal_run.pause']);
     fireEvent.click(within(confirm).getByTestId('confirm-button'));
     await waitFor(() =>
       expect(http.calls.some((call) => call.name === 'release_goal_hold')).toBe(true),
@@ -315,12 +322,18 @@ describe('goal operations on the goal page (S11 GO6)', () => {
   });
 
   it('a 409 because the goal moved on reads it again and says what it is now', async () => {
+    let refused = false;
     const http = scriptedHttp(
       handlers(
         goalDetail({ status: 'paused', pauseReason: 'requested' }),
         workspace('p-alice', 'member'),
         {
+          get_goal: () =>
+            refused
+              ? goalDetail({ status: 'cancelled', updatedAt: '2026-10-20T13:00:00.000Z' })
+              : goalDetail({ status: 'paused', pauseReason: 'requested' }),
           resume_goal: () => {
+            refused = true;
             throw new HttpError('capability_error', 'goal is cancelled', 'illegal_transition');
           },
         },
@@ -330,10 +343,34 @@ describe('goal operations on the goal page (S11 GO6)', () => {
     fireEvent.click(await screen.findByTestId('goal-op-resume'));
     const confirm = await screen.findByTestId('goal-op-resume-confirm');
     fireEvent.click(within(confirm).getByTestId('confirm-button'));
-    expect((await screen.findByTestId('goal-op-done')).textContent).toMatch(
-      /刚才的操作没有执行。页面已经刷新：它现在是「/,
+    await waitFor(() =>
+      expect(screen.getByTestId('goal-op-done').textContent).toMatch(
+        /刚才的操作没有执行。页面已经刷新：它现在是「已取消」/,
+      ),
     );
+  });
+
+  it('a 409 for something of the goal, the goal itself unchanged, says nothing moved on', async () => {
+    const http = scriptedHttp(
+      handlers(
+        goalDetail({ status: 'paused', pauseReason: 'requested' }),
+        workspace('p-alice', 'member'),
+        {
+          resume_goal: () => {
+            throw new HttpError('capability_error', 'step has a live task', 'illegal_transition');
+          },
+        },
+      ),
+    );
+    renderPage(http);
+    fireEvent.click(await screen.findByTestId('goal-op-resume'));
+    const confirm = await screen.findByTestId('goal-op-resume-confirm');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
     await waitFor(() => expect(reads(http)).toBe(2));
+    const said = (await screen.findByTestId('goal-op-done')).textContent ?? '';
+    expect(said).toMatch(/此刻不能执行，什么也没改；目标仍是「已暂停」/);
+    expect(said).not.toMatch(/刚变了/);
+    expect(within(confirm).getByText(/此刻不能执行，什么也没改/)).toBeTruthy();
   });
 
   it('ending as achieved lists the checks recorded as passed on the requester’s word', async () => {
