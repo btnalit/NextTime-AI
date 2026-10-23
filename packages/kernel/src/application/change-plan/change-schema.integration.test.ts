@@ -1,7 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CHANGE_SEGMENT_EDGES, CHANGE_SEGMENT_STATUS_VALUES } from '@nexttime/shared';
+import {
+  CHANGE_ITEM_KIND_VALUES,
+  CHANGE_SEGMENT_EDGES,
+  CHANGE_SEGMENT_STATUS_VALUES,
+} from '@nexttime/shared';
 import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
@@ -391,6 +395,15 @@ describe.runIf(DATABASE_URL !== undefined)(
             widening,
             confirmedBy: ownerId,
           });
+        });
+      });
+
+      it('takes every kind of CHANGE_ITEM_KIND_VALUES', async () => {
+        await asApp(async (client) => {
+          const id = await insertSegmentIn(client);
+          for (const [index, kind] of CHANGE_ITEM_KIND_VALUES.entries()) {
+            await insertItemIn(client, id, { ordinal: index + 1, kind });
+          }
         });
       });
 

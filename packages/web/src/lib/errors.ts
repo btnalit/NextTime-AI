@@ -129,6 +129,9 @@ export const CODE_TITLES: Readonly<Record<string, string>> = {
   change_segment_not_found: 'Install record not found',
   change_segment_rolled_back: 'Already rolled back',
   change_rollback_conflict: 'Cannot be rolled back now',
+  // S11 P1-E: verifying an install record.
+  change_segment_superseded: 'A later install record is in effect',
+  change_verification_cooldown: 'Verified just now',
   quota_exceeded: 'Quota exceeded',
   internal_error: 'Kernel error',
   network: 'Network error',
@@ -210,6 +213,8 @@ export const CODE_TITLES_ZH: Readonly<Record<string, string>> = {
   change_segment_not_found: '找不到这条安装记录',
   change_segment_rolled_back: '已经撤销过了',
   change_rollback_conflict: '现在不能撤销',
+  change_segment_superseded: '有更新的安装记录在生效',
+  change_verification_cooldown: '刚核验过',
   quota_exceeded: '超出配额',
   internal_error: '内核出错',
   network: '网络错误',

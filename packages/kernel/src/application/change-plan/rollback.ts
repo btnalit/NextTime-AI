@@ -24,7 +24,18 @@ import {
   parseStoredOntologyItem,
   planOntologyRollback,
 } from './ontology-item.js';
-import { findOntologyVersionSegment, findVersionSegment } from './provenance.js';
+import {
+  type PlannedOperationRollback,
+  applyOperationRollback,
+  lockOperationItem,
+  parseStoredOperationItem,
+  planOperationRollback,
+} from './operation-item.js';
+import {
+  findOntologyVersionSegment,
+  findOperationVersionSegment,
+  findVersionSegment,
+} from './provenance.js';
 import {
   type ChangeItemRecord,
   ChangeSegmentNotFoundError,
@@ -62,7 +73,8 @@ export type ItemRollbackDetail =
   | {
       readonly kind: 'skill_version' | 'worker_definition_version';
       readonly planned: PlannedFamilyRollback;
-    };
+    }
+  | { readonly kind: 'operation_version'; readonly planned: PlannedOperationRollback };
 
 /** One item of a rollback plan. */
 export interface PlannedItemRollback {
@@ -71,9 +83,9 @@ export interface PlannedItemRollback {
   readonly classification: ChangeItemClassification;
   readonly widening: readonly WideningReason[];
   readonly conflict: ChangeRollbackConflict | null;
-  /** Runs the inverse (an unblocked plan, under its lock); returns the family's head version after
-   *  (`null`: none published). */
-  readonly apply: () => Promise<number | null>;
+  /** Runs the inverse (an unblocked plan, under its lock) as `rolledBackBy`; returns the family's
+   *  head version after (`null`: none published). */
+  readonly apply: (rolledBackBy: string) => Promise<number | null>;
 }
 
 export interface SegmentRollbackPlan {
@@ -97,6 +109,8 @@ async function lockItemRollback(
     case 'skill_version':
     case 'worker_definition_version':
       return lockFamilyRollback(client, workspaceId);
+    case 'operation_version':
+      return lockOperationItem(client, workspaceId);
     default:
       throw new Error(
         `change-plan: unknown change item kind ${JSON.stringify(kind satisfies never)}`,
@@ -108,6 +122,7 @@ async function planItemRollback(
   client: PoolClient,
   workspaceId: string,
   record: ChangeItemRecord,
+  lock: boolean,
 ): Promise<PlannedItemRollback> {
   const kind = record.kind;
   switch (kind) {
@@ -182,6 +197,42 @@ async function planItemRollback(
         apply: () => applyFamilyRollback(client, workspaceId, family),
       };
     }
+    case 'operation_version': {
+      const item = parseStoredOperationItem(record);
+      // Locked when rolling back: an Operation's live version is edited in place, outside the
+      // ChangePlan locks, so the row lock is what keeps such an edit out until the apply.
+      const operation = await planOperationRollback(client, workspaceId, item, { forUpdate: lock });
+      const blocker = operation.blocker;
+      let conflict: ChangeRollbackConflict | null = null;
+      if (blocker) {
+        const segmentId =
+          blocker.reason === 'replaced' && blocker.headVersion !== null
+            ? await findOperationVersionSegment(
+                client,
+                workspaceId,
+                item.target,
+                blocker.headVersion,
+              )
+            : null;
+        conflict = {
+          ordinal: record.ordinal,
+          kind,
+          target: item.target,
+          blocker: blocker.reason,
+          blockedBy: segmentId ? { segmentId } : null,
+          conflicts: [],
+        };
+      }
+      return {
+        record,
+        detail: { kind, planned: operation },
+        classification: classificationOf(operation.widening),
+        widening: operation.widening,
+        conflict,
+        apply: (rolledBackBy) =>
+          applyOperationRollback(client, workspaceId, operation, rolledBackBy),
+      };
+    }
     default:
       throw new Error(
         `change-plan: unknown change item kind ${JSON.stringify(kind satisfies never)}`,
@@ -203,7 +254,7 @@ async function planRollback(
   }
   const items: PlannedItemRollback[] = [];
   for (const record of [...records].reverse()) {
-    items.push(await planItemRollback(client, workspaceId, record));
+    items.push(await planItemRollback(client, workspaceId, record, lock));
   }
   return {
     segment,
@@ -290,7 +341,9 @@ export async function rollBackWorkspaceSegment(
   }
 
   const applied: { readonly item: PlannedItemRollback; readonly headVersion: number | null }[] = [];
-  for (const item of plan.items) applied.push({ item, headVersion: await item.apply() });
+  for (const item of plan.items) {
+    applied.push({ item, headVersion: await item.apply(input.rolledBackBy) });
+  }
 
   await client.query(
     `update change_segments set status = 'rolled_back', rolled_back_by = $3

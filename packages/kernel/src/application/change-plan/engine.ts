@@ -22,13 +22,22 @@ import {
   ontologyItemTargetKey,
   planOntologyItem,
 } from './ontology-item.js';
+import {
+  type OperationFieldChange,
+  type OperationVersionIntent,
+  applyOperationItem,
+  lockOperationItem,
+  operationItemTargetKey,
+  planOperationItem,
+} from './operation-item.js';
 
 /**
  * application/change-plan/engine: the ChangePlan core's workspace segment (S11 plan §3.1–§3.4,
  * §5.4; migrations/governance/0025_change_segments.sql). One core for every source of change — a
  * pack (a module is a pack with one ontology component) today, the platform admin agent's
  * proposal later (AA3). Item kinds: a version of an ontology family (`ontology-item.ts`), of a
- * Skill or of a `worker` WorkerDefinition (`family-item.ts`).
+ * Skill or of a `worker` WorkerDefinition (`family-item.ts`), and a revision of a published
+ * Operation's governance (`operation-item.ts`).
  *
  *   plan  (`planWorkspaceSegment`)  — the dry run: lock what the items change, read its current
  *         state, classify each item (whitelist, I-A4), and digest the result. Writes nothing; the
@@ -46,7 +55,7 @@ import {
  * Handle (I-A1).
  */
 
-export type ChangeItemIntent = OntologyVersionIntent | FamilyVersionIntent;
+export type ChangeItemIntent = OntologyVersionIntent | FamilyVersionIntent | OperationVersionIntent;
 
 /** How a segment was applied (see `ApplyWorkspaceSegmentInput.channel`). */
 export type ChangeChannel = 'human' | 'platform';
@@ -69,7 +78,7 @@ export interface WorkspaceSegmentInput {
 /** What a planned item would change, by kind, for the person reviewing it (not recorded, not in
  *  the digest). `ontology_version`: the family's type names added, removed and changed.
  *  `skill_version` / `worker_definition_version`: the content it would publish and the fields that
- *  differ from the head. */
+ *  differ from the head. `operation_version`: the governance fields it changes, before and after. */
 export type ChangeItemDetail =
   | { readonly kind: 'ontology_version'; readonly types: OntologyTypeChanges }
   | {
@@ -81,7 +90,8 @@ export type ChangeItemDetail =
       readonly kind: 'worker_definition_version';
       readonly definition: Readonly<Record<string, unknown>>;
       readonly changedFields: readonly string[];
-    };
+    }
+  | { readonly kind: 'operation_version'; readonly fields: readonly OperationFieldChange[] };
 
 export interface PlannedChangeItem {
   readonly ordinal: number;
@@ -124,6 +134,8 @@ async function lockItem(
     case 'skill_version':
     case 'worker_definition_version':
       return lockFamilyItem(client, workspaceId);
+    case 'operation_version':
+      return lockOperationItem(client, workspaceId);
     default:
       throw unknownKind(kind);
   }
@@ -143,6 +155,8 @@ function targetKeyOf(intent: ChangeItemIntent): string {
     case 'skill_version':
     case 'worker_definition_version':
       return familyItemTargetKey(intent);
+    case 'operation_version':
+      return operationItemTargetKey(intent);
     default:
       throw unknownKind(kind);
   }
@@ -213,6 +227,23 @@ async function planItem(
         apply: (appliedBy) => applyFamilyItem(client, workspaceId, family, appliedBy),
       };
     }
+    case 'operation_version': {
+      const operation = await planOperationItem(client, workspaceId, intent);
+      return {
+        planned: {
+          ordinal,
+          kind,
+          target: operation.target,
+          before: operation.before,
+          after: operation.after,
+          classification: classificationOf(operation.widening),
+          widening: operation.widening,
+          unchanged: operation.unchanged,
+          detail: { kind, fields: operation.fields },
+        },
+        apply: (appliedBy) => applyOperationItem(client, workspaceId, operation, appliedBy),
+      };
+    }
     default:
       throw unknownKind(kind);
   }
@@ -223,6 +254,7 @@ const ITEM_KIND_CAPABILITY: Readonly<Record<ChangeItemKind, string>> = {
   ontology_version: 'publish_ontology_version',
   skill_version: 'publish_skill',
   worker_definition_version: 'publish_worker_definition',
+  operation_version: 'publish_operation',
 };
 
 function segmentDigest(source: ChangeSource, items: readonly PlannedChangeItem[]): string {

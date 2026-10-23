@@ -1,8 +1,13 @@
 import { z } from 'zod';
-import { ChangeItemClassificationSchema, PackInstallStatusSchema } from '../enums.js';
+import {
+  ChangeItemClassificationSchema,
+  PackInstallStatusSchema,
+  PackRequirementStateSchema,
+} from '../enums.js';
 import {
   ChangeInUseWireSchema,
   ChangeProvenanceWireSchema,
+  ChangeVerificationWireSchema,
   ChangeWideningReasonWireSchema,
   ContentVersionRefWireSchema,
   OntologyTypeNamesWireSchema,
@@ -18,7 +23,9 @@ import {
  * versioned, installable set of components this deployment ships (`packs/<name>/<version>/
  * pack.yaml`): ontology families, Skills and `worker` WorkerDefinitions. What a workspace has of a
  * pack is derived from its components' current content, never stored; installing one is a
- * ChangePlan workspace segment the owner reviews first (`wire/change-plan.ts`). A module
+ * ChangePlan workspace segment the owner reviews first (`wire/change-plan.ts`). A version may name
+ * the systems it needs (`requiredConnectors`, P1-E); where each stands in the workspace is read,
+ * not stored, and installing does not wait for them — verifying the install checks them. A module
  * (`wire/platform.ts`) is a pack with one ontology component named after it.
  */
 
@@ -61,10 +68,23 @@ export const PackVersionWireSchema = z
     /** Upgrading to it from the version before may leave Objects or Facts the workspace holds
      *  outside the new shapes. Version 1 never is. */
     breaking: z.boolean(),
+    /** The systems its components work with, by connector name (`docker`); empty when none. */
+    requiredConnectors: z.array(z.string()),
     components: z.array(PackComponentWireSchema),
   })
   .strict();
 export type PackVersionWire = z.infer<typeof PackVersionWireSchema>;
+
+/** One system the latest version needs, and where it stands in this workspace now
+ *  (`@nexttime/shared` `PACK_REQUIREMENT_STATE_VALUES`). Read without contacting any gate: a gate's
+ *  health is checked when an install is verified (`verify_change_segment`). */
+export const PackRequirementWireSchema = z
+  .object({
+    connector: z.string(),
+    state: PackRequirementStateSchema,
+  })
+  .strict();
+export type PackRequirementWire = z.infer<typeof PackRequirementWireSchema>;
 
 const PackComponentStateShape = {
   status: PackInstallStatusSchema,
@@ -122,6 +142,8 @@ export const PackWireSchema = z
     status: PackInstallStatusSchema,
     installedVersion: z.number().int().positive().nullable(),
     components: z.array(PackComponentStateWireSchema),
+    /** The latest version's `requiredConnectors`, each with where it stands here. */
+    requirements: z.array(PackRequirementWireSchema),
   })
   .strict();
 export type PackWire = z.infer<typeof PackWireSchema>;
@@ -238,12 +260,15 @@ export const PackInstallPreviewWireSchema = z
   .strict();
 export type PackInstallPreviewWire = z.infer<typeof PackInstallPreviewWireSchema>;
 
-/** `install_pack`: the pack's state after the install, and the segment that recorded it (`null`
- *  when nothing needed to change). */
+/** `install_pack`: the pack's state after the install, the segment that recorded it (`null` when
+ *  nothing needed to change), and that segment's first verification — run right after the install,
+ *  as the person who installed (`trigger: system`); `null` when nothing was recorded or the run
+ *  could not be made (verify the segment from its record then). */
 export const PackInstallResultWireSchema = z
   .object({
     pack: PackWireSchema,
     segmentId: z.string().nullable(),
+    verification: ChangeVerificationWireSchema.nullable(),
   })
   .strict();
 export type PackInstallResultWire = z.infer<typeof PackInstallResultWireSchema>;

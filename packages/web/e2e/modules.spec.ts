@@ -12,7 +12,8 @@ import { loginWithPassword, reachLoginForm } from './auth-helpers.js';
  * install confirm first — `install_pack` always targets the latest directly, never v1 first); the
  * platform 模块 page's own "installed in n workspaces" count reflects it afterward. S11 P1-B: the
  * part's 查看安装记录 link then opens the install record in 安装历史, whose 撤销 rolls the install
- * back (preview inside the confirm first) and the pack reads 未安装 again.
+ * back (preview inside the confirm first) and the pack reads 未安装 again. S11 P1-E: the install
+ * verifies itself as it finishes, so the record reads 已核验 by then.
  *
  * Both scenarios run as **one** `test()` (not split further): Playwright gives every `test()` a
  * fresh browser context (no persisted cookies, no persisted `session.memberships` client state)
@@ -180,6 +181,10 @@ test.describe('P-B2b acceptance: platform modules page, install ops-assets into 
     await expect(packDetail.getByTestId('catalog-pack-installed')).toContainText('已装上 v2', {
       timeout: 15_000,
     });
+    // S11 P1-E: the install verifies itself right away; ops-assets names no system it needs.
+    await expect(packDetail.getByTestId('catalog-pack-installed-verification')).toHaveText(
+      '装完已核验：通过。',
+    );
     await expect(packDetail.getByTestId('catalog-pack-status')).toHaveText('已是最新', {
       timeout: 15_000,
     });
@@ -208,7 +213,10 @@ test.describe('P-B2b acceptance: platform modules page, install ops-assets into 
     await provenanceLink.click();
     const recordDetail = page.getByTestId('catalog-change-detail');
     await expect(recordDetail).toContainText('能力包 ops-assets v2', { timeout: 15_000 });
-    await expect(recordDetail.getByTestId('catalog-change-status')).toHaveText('已应用');
+    await expect(recordDetail.getByTestId('catalog-change-status')).toHaveText('已核验');
+    await expect(recordDetail.getByTestId('catalog-change-verification-result')).toContainText(
+      '安装后自动核验',
+    );
 
     await recordDetail.getByTestId('catalog-change-rollback-trigger').click();
     const rollbackConfirm = page.getByTestId('catalog-change-rollback-confirm');

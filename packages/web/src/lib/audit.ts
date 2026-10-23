@@ -141,7 +141,8 @@ export type PlatformAuditResourceType = (typeof PLATFORM_AUDIT_RESOURCE_TYPES)[n
  * machine transitions of ActionRequest / Task / WorkerRun (`governance/approval/transition-log`,
  * `application/task/transition-log.ts`), the S6-A chat / connection actions and S11 P1's
  * `change_item.apply` / P1-B's `change_item.roll_back` (one row per ChangePlan item,
- * `application/change-plan`). Suggestions only —
+ * `application/change-plan`) and P1-E's `change_segment.verify` (one row per verification, also
+ * the one an install runs right after it commits). Suggestions only —
  * the action filter is free text.
  */
 export const AUDIT_LIFECYCLE_ACTIONS = [
@@ -176,6 +177,7 @@ export const AUDIT_LIFECYCLE_ACTIONS = [
   'ontology_violation',
   'change_item.apply',
   'change_item.roll_back',
+  'change_segment.verify',
   // Legacy 245 a: workspace actions the kernel writes outside a dispatch that already had a label
   // (`capability-labels.ts`) but were missing here — a gate's governance and definition changes,
   // the draft reaper, and the one-off rows migrations write.
