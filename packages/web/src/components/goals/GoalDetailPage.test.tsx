@@ -296,4 +296,121 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
     });
     await waitFor(() => expect(reads()).toBe(2));
   });
+  it('a step’s output contract, the inputs it takes from earlier steps, its output, and its automatic rework read as sentences', async () => {
+    const base = goalDetail();
+    const plan = base.planRevision.plan;
+    const detail = goalDetail({
+      planRevision: {
+        ...base.planRevision,
+        plan: {
+          ...plan,
+          steps: [
+            {
+              ...(plan.steps[0] as (typeof plan.steps)[number]),
+              outputSchema: {
+                type: 'object',
+                properties: {
+                  hosts: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description: '要换证书的主机',
+                  },
+                  mode: { enum: ['fast', 'safe'] },
+                },
+                required: ['hosts'],
+              },
+            },
+            {
+              ...(plan.steps[1] as (typeof plan.steps)[number]),
+              input: { mode: 'safe' },
+              bindings: [{ to: 'target.host', from: 'fetch', path: 'hosts[0]' }],
+            },
+          ],
+        },
+      },
+      steps: [
+        stepRun({
+          status: 'succeeded',
+          attemptCount: 2,
+          output: { hosts: ['web-1'], api_token: 'should-not-show' },
+          attempts: [
+            {
+              attempt: 1,
+              taskId: 'task-fetch-1',
+              status: 'failed',
+              createdAt: '2026-10-20T00:01:00.000Z',
+              failureReason: 'no_result',
+              rework: false,
+              outputProblems: [
+                { path: 'output.hosts', message: 'required, missing' },
+                { path: 'output.mode', message: 'must be one of ["fast","safe"]' },
+              ],
+              outputProblemCount: 3,
+            },
+            {
+              attempt: 2,
+              taskId: 'task-fetch-2',
+              status: 'completed',
+              createdAt: '2026-10-20T00:03:00.000Z',
+              failureReason: null,
+              rework: true,
+              outputProblems: null,
+              outputProblemCount: 0,
+            },
+          ],
+        }),
+        stepRun({
+          id: 'sr-apply',
+          stepKey: 'apply',
+          status: 'pending',
+          attemptCount: 0,
+          attempts: [],
+        }),
+      ],
+    });
+    const http = scriptedHttp(baseHandlers(detail));
+    renderPage(http);
+
+    const steps = await screen.findAllByTestId('goal-step');
+    const fetch = steps[0] as HTMLElement;
+    const apply = steps[1] as HTMLElement;
+    expect(within(apply).getByTestId('goal-step-binding').textContent).toBe(
+      '输入 target.host 来自步骤 fetch 输出的 hosts[0]',
+    );
+    expect(within(fetch).queryByTestId('goal-step-bindings')).toBeNull();
+
+    const fields = within(within(fetch).getByTestId('goal-step-output-contract')).getAllByTestId(
+      'output-contract-field',
+    );
+    expect(fields.map((field) => field.textContent)).toEqual([
+      'hosts列表（每项：文本）必填— 要换证书的主机',
+      'mode取值之一："fast"、"safe"',
+    ]);
+    expect(within(apply).queryByTestId('goal-step-output-contract')).toBeNull();
+
+    const output = within(fetch).getByTestId('goal-step-output');
+    expect(output.textContent).toContain('web-1');
+    expect(output.textContent).not.toContain('should-not-show');
+    expect(within(output).getByTestId('goal-step-output-redacted')).toBeTruthy();
+
+    const attempts = within(fetch).getAllByTestId('goal-step-attempt');
+    expect(
+      within(attempts[0] as HTMLElement).getByTestId('goal-step-attempt-failure').textContent,
+    ).toBe('没有交回结果');
+    expect(within(attempts[0] as HTMLElement).queryByTestId('goal-step-attempt-rework')).toBeNull();
+    expect(attempts[0]?.textContent).toMatch(/最后一次被拒的报告有 3 处不符合输出约定/);
+    const problems = within(attempts[0] as HTMLElement).getByTestId('goal-step-attempt-problems');
+    expect(problems.textContent).toContain('output.hosts：必填，但没有');
+    expect(problems.textContent).toContain('还有 1 处');
+    expect(
+      within(attempts[1] as HTMLElement).getByTestId('goal-step-attempt-rework').textContent,
+    ).toBe('自动返工');
+    // Why, in words anyone reads — not only a tooltip.
+    expect(
+      within(attempts[1] as HTMLElement).getByTestId('goal-step-attempt-rework-note').textContent,
+    ).toMatch(/平台自动重做了这一次/);
+    expect(
+      within(attempts[1] as HTMLElement).queryByTestId('goal-step-attempt-problems'),
+    ).toBeNull();
+  });
 });

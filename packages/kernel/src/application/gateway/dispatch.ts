@@ -11,9 +11,17 @@ import type { PoolLike } from '../../adapters/db/pool.js';
 import { withWorkspace } from '../../adapters/db/pool.js';
 import { GatekeeperClientError, gateRefusalOf } from '../../adapters/gatekeeper-client/index.js';
 import { ActionInDoubtError } from '../../governance/approval/index.js';
-import { quotedName, redactSuspectedSecrets } from '../../governance/redaction/index.js';
+import {
+  quotedName,
+  redactSuspectedSecrets,
+  redactedForAudit,
+} from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
-import { GoalStepClosedError } from '../task/index.js';
+import {
+  GoalStepClosedError,
+  TaskOutputRejectedError,
+  recordRejectedOutput,
+} from '../task/index.js';
 import { ForbiddenError, assertActsForPerson, authorizeCapabilityCall } from './authorize.js';
 import { CAPABILITY_HANDLERS } from './handlers.js';
 import { UnknownOperationError } from './request-action-handler.js';
@@ -450,6 +458,69 @@ async function auditUnknownOperation(
 }
 
 /**
+ * S11 GO5d-1 (plan §4.5, §4.7): a `report_task_result` refused because its `output` breaks the goal
+ * step's output contract (`TaskOutputRejectedError`) is recorded on the Task — the output as it
+ * would have been stored and where it did not match (`recordRejectedOutput`; only while the Task
+ * has not ended) — with an audit row, in a transaction of their own like `auditGateRefusal`'s,
+ * since the call's own rolled back with the refusal. The step's next attempt, if one is needed, is
+ * told what to fix from it. The row's `refusal` holds the count and the places, never a value.
+ * Failing to write either is logged and never replaces the refusal itself.
+ */
+async function recordRefusedOutput(
+  deps: DispatchDeps,
+  call: {
+    readonly workspaceId: string;
+    readonly principalId: string;
+    readonly channel: string;
+    readonly capability: Capability;
+    readonly name: string;
+    readonly params: Record<string, unknown>;
+    readonly err: unknown;
+  },
+): Promise<void> {
+  const err = call.err;
+  if (!(err instanceof TaskOutputRejectedError)) return;
+  try {
+    await withWorkspace(
+      deps.pool,
+      { workspaceId: call.workspaceId, principalId: call.principalId },
+      async (client) => {
+        const recorded = await recordRejectedOutput(client, call.workspaceId, err);
+        await writeAudit(client, {
+          workspaceId: call.workspaceId,
+          actorPrincipalId: call.principalId,
+          action: call.name,
+          resourceType: 'task',
+          resourceId: err.taskId,
+          payload: {
+            channel: call.channel,
+            onBehalfOf: call.principalId,
+            ...auditParams(call.capability, call.params),
+            outcome: 'refused',
+            refusal: {
+              code: 'output_contract',
+              status: 400,
+              problemCount: err.problemCount,
+              // The places are the output's keys — the Worker's text, under the audit rule.
+              ...redactedForAudit({ places: err.problems.map((problem) => problem.path) }),
+              recorded,
+            },
+          },
+        });
+      },
+    );
+  } catch (recordErr) {
+    const detail = recordErr instanceof Error ? recordErr.message : String(recordErr);
+    console.error(
+      `[kernel] record of a refused output failed (capability=${call.name}): ${detail}`.replace(
+        /\n|\r/g,
+        '',
+      ),
+    );
+  }
+}
+
+/**
  * Dispatches one capability call. Throws `CapabilityNotFoundError` (404), `ForbiddenError` (403,
  * authorize.ts), `InvalidCapabilityParamsError` (400), `UnstorableTextError` (400, legacy 320),
  * `CapabilityNotImplementedError` (501), or —
@@ -620,6 +691,7 @@ export async function dispatchCapability(
     await auditGateRefusal(deps, refused);
     await auditUnknownOperation(deps, refused);
     await auditGoalStepClosed(deps, refused);
+    await recordRefusedOutput(deps, refused);
     throw err;
   });
 

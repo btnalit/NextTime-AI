@@ -39,12 +39,19 @@ describe('judgeFinishedAttempt', () => {
     }
   });
 
-  it('no result is a contract violation; an exhausted attempt budget pauses the goal', () => {
+  it('no result is a contract violation, reworked once (legacy 358); an exhausted attempt budget pauses the goal', () => {
+    // The step's first attempt without an accepted result: failed, no pause — phase B reworks it.
     expect(judgeFinishedAttempt({ status: 'failed', failureReason: 'no_result' }, clear)).toEqual({
       kind: 'fail',
       category: 'contract_violation',
-      pause: 'needs_decision',
+      pause: null,
     });
+    // Any after that: a person.
+    for (const earlier of [1, 2]) {
+      expect(
+        judgeFinishedAttempt({ status: 'failed', failureReason: 'no_result' }, clear, earlier),
+      ).toEqual({ kind: 'fail', category: 'contract_violation', pause: 'needs_decision' });
+    }
     expect(
       judgeFinishedAttempt({ status: 'failed', failureReason: 'budget_exhausted' }, notDelivered),
     ).toEqual({ kind: 'fail', category: 'transient', pause: 'budget_exhausted' });

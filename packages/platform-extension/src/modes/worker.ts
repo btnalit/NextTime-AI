@@ -124,6 +124,70 @@ function buildGateTool(
 interface WorkerTaskContext {
   readonly taskInput?: unknown;
   readonly facts: readonly unknown[];
+  /** S11 GO5d-1: the goal step's output schema (`get_task`'s `outputSchema`), when it has one. */
+  readonly outputSchema?: unknown;
+  /** S11 GO5d-1: the attempt this one redoes (`get_task`'s `reworkOf`), when it is a rework. */
+  readonly reworkOf?: unknown;
+}
+
+/** At most this much of a refused output goes back into a rework's context. */
+const MAX_REFUSED_OUTPUT_CHARS = 2000;
+
+function recordOf(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+/** S11 GO5d-1: the step's output contract — what `report_result`'s `output` must meet. */
+function renderOutputContract(outputSchema: unknown): string | undefined {
+  if (!recordOf(outputSchema)) return undefined;
+  return [
+    '### Output contract',
+    'This Task is a step of a goal, and later steps take values from its result. Put your ' +
+      'structured result in report_result’s `output` field (a JSON object); it must meet this JSON ' +
+      'Schema. The platform refuses a result whose `output` is missing or does not meet it, and ' +
+      'names each place to fix — correct `output` and call report_result again.',
+    `\`\`\`json\n${JSON.stringify(outputSchema, null, 2)}\n\`\`\``,
+  ].join('\n');
+}
+
+/** S11 GO5d-1: what the attempt this one redoes was refused for (`reworkOf`). */
+function renderPreviousAttempt(reworkOf: unknown): string | undefined {
+  const rework = recordOf(reworkOf);
+  if (!rework) return undefined;
+  const attempt = typeof rework.attempt === 'number' ? rework.attempt : undefined;
+  const label = attempt === undefined ? 'The previous attempt' : `Attempt ${attempt}`;
+  const rejected = recordOf(rework.rejectedOutput);
+  if (!rejected) {
+    return [
+      '### Previous attempt',
+      `${label} of this step ended without a result the platform accepted (it never reported one that reached the platform).`,
+      'Do the work again, and call report_result once you are done.',
+    ].join('\n');
+  }
+  const problems = recordArray(rejected.problems).map(
+    (problem) => `- ${String(problem.path)}: ${String(problem.message)}`,
+  );
+  const count = typeof rejected.problemCount === 'number' ? rejected.problemCount : problems.length;
+  if (count > problems.length) problems.push(`- … and ${count - problems.length} more`);
+  const output =
+    rejected.output !== undefined && rejected.output !== null
+      ? JSON.stringify(rejected.output, null, 2)
+      : undefined;
+  return [
+    '### Previous attempt',
+    `${label} of this step ended without a result the platform accepted.`,
+    'Its last report was refused because its `output` did not meet the output contract:',
+    ...problems,
+    ...(output
+      ? [
+          'What it reported as `output`:',
+          `\`\`\`json\n${output.length > MAX_REFUSED_OUTPUT_CHARS ? `${output.slice(0, MAX_REFUSED_OUTPUT_CHARS)}\n… (cut)` : output}\n\`\`\``,
+        ]
+      : []),
+    'Do the work again, and make sure the `output` you report meets the contract.',
+  ].join('\n');
 }
 
 function renderTaskInput(input: unknown): string {
@@ -163,6 +227,8 @@ export function toSearchQuery(input: unknown): string {
 function renderWorkerContext(ctx: WorkerTaskContext): string {
   const sections = [
     `### Task input\n${renderTaskInput(ctx.taskInput)}`,
+    renderOutputContract(ctx.outputSchema),
+    renderPreviousAttempt(ctx.reworkOf),
     ctx.facts.length > 0
       ? `### Relevant facts\n${ctx.facts.map((fact) => `- ${JSON.stringify(fact)}`).join('\n')}`
       : undefined,
@@ -415,10 +481,11 @@ export function registerWorkerMode(pi: ExtensionAPI, options: WorkerModeOptions)
     label: REPORT_RESULT_TOOL_NAME,
     description:
       'Report this Task’s final result contract back to the platform ' +
-      '({summary, findings?, factsToAssert?, evidence?, artifacts?, proposedSkill?, ' +
-      'proposedOperations?}). Call this once, when you are done — the platform answers ' +
-      'immediately (accepted, or why it was rejected) and the agent loop ends after an ' +
-      'accepted call.',
+      '({summary, output?, findings?, factsToAssert?, evidence?, artifacts?, proposedSkill?, ' +
+      'proposedOperations?}). When the worker context has an "Output contract", put the ' +
+      'structured result in `output` — it must meet that schema. Call this once, when you are ' +
+      'done — the platform answers immediately (accepted, or why it was rejected) and the agent ' +
+      'loop ends after an accepted call.',
     parameters: toToolParameters(WorkerResultContractSchema),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const parsed = WorkerResultContractSchema.safeParse(params);
@@ -541,7 +608,11 @@ export function registerWorkerMode(pi: ExtensionAPI, options: WorkerModeOptions)
   pi.on('context', async (event) => {
     if (!taskContext) {
       try {
-        const task = await options.kernelClient.call<{ input?: unknown }>('get_task', {
+        const task = await options.kernelClient.call<{
+          input?: unknown;
+          outputSchema?: unknown;
+          reworkOf?: unknown;
+        }>('get_task', {
           taskId: options.taskId,
         });
         let facts: readonly unknown[] = [];
@@ -555,7 +626,12 @@ export function registerWorkerMode(pi: ExtensionAPI, options: WorkerModeOptions)
         } catch (error) {
           logKernelError(error, 'search');
         }
-        taskContext = { taskInput: task.input, facts };
+        taskContext = {
+          taskInput: task.input,
+          facts,
+          outputSchema: task.outputSchema,
+          reworkOf: task.reworkOf,
+        };
       } catch (error) {
         // A failed get_task must degrade to "no injected context", never break the turn — and
         // must not be cached, so the next context call (if any) retries.

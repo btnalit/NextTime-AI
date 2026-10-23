@@ -50,9 +50,12 @@ export {
   PREDICATE_EMPTY_PROBES,
   PREDICATE_LINT_PLAN_WORK,
   PREDICATE_REFUSAL_ANSWERS,
+  bindingPathProblems,
+  bindingSchemaProblems,
   evaluatePredicate,
   lintPredicate,
   predicateLiterals,
+  selectPath,
 } from './predicate.js';
 export type {
   PredicateEvaluation,

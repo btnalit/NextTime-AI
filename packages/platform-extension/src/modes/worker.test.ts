@@ -695,6 +695,89 @@ describe('registerWorkerMode', () => {
     expect(getTaskCall?.params).toEqual({ taskId: 'task-1' });
   });
 
+  it('S11 GO5d-1: a goal step with an output schema gets an "Output contract" section; a rework gets "Previous attempt" with what was refused', async () => {
+    const outputSchema = {
+      type: 'object',
+      properties: { hosts: { type: 'array', items: { type: 'string' } } },
+      required: ['hosts'],
+    };
+    kernel.setHandler('get_task', () => ({
+      ok: true,
+      result: {
+        input: { zone: 'lab' },
+        outputSchema,
+        reworkOf: {
+          taskId: 'task-0',
+          attempt: 1,
+          rejectedOutput: {
+            output: { hostz: ['a'] },
+            problems: [
+              { path: 'output.hosts', message: 'required, missing' },
+              {
+                path: 'output.hostz',
+                message: 'not declared by the schema (additionalProperties is false)',
+              },
+            ],
+            problemCount: 3,
+            at: '2026-10-23T00:00:00.000Z',
+          },
+        },
+      },
+    }));
+    kernel.setHandler('search', () => ({ ok: true, result: { items: [] } }));
+    const contextHandler = fake.handlers.get('context');
+    if (!contextHandler) throw new Error('context handler not registered');
+
+    const result = await contextHandler({ messages: [] }, fakeCtx());
+    const content = String(result.messages[0]?.content);
+    expect(content).toContain('### Output contract');
+    expect(content).toContain('"required": [');
+    expect(content).toContain('### Previous attempt');
+    expect(content).toContain('Attempt 1 of this step');
+    expect(content).toContain('- output.hosts: required, missing');
+    expect(content).toContain('- … and 1 more');
+    expect(content).toContain('"hostz"');
+    // The sections come after the Task input and before the facts.
+    expect(content.indexOf('### Task input')).toBeLessThan(content.indexOf('### Output contract'));
+    expect(content.indexOf('### Output contract')).toBeLessThan(
+      content.indexOf('### Previous attempt'),
+    );
+  });
+
+  it('S11 GO5d-1: a rework whose previous attempt never reached the platform says so; a plain Task gets neither section', async () => {
+    kernel.setHandler('get_task', () => ({
+      ok: true,
+      result: {
+        input: 'x',
+        outputSchema: null,
+        reworkOf: { taskId: 't', attempt: 2, rejectedOutput: null },
+      },
+    }));
+    kernel.setHandler('search', () => ({ ok: true, result: { items: [] } }));
+    const contextHandler = fake.handlers.get('context');
+    if (!contextHandler) throw new Error('context handler not registered');
+    const result = await contextHandler({ messages: [] }, fakeCtx());
+    const content = String(result.messages[0]?.content);
+    expect(content).not.toContain('### Output contract');
+    expect(content).toContain(
+      'Attempt 2 of this step ended without a result the platform accepted',
+    );
+    expect(content).toContain('never reported one that reached the platform');
+
+    const plain = createFakePi();
+    registerWorkerMode(plain.api, { kernelClient, workspaceId: 'ws-1', taskId: 'task-1' });
+    kernel.setHandler('get_task', () => ({
+      ok: true,
+      result: { input: 'x', outputSchema: null, reworkOf: null },
+    }));
+    const plainHandler = plain.handlers.get('context');
+    if (!plainHandler) throw new Error('context handler not registered');
+    const plainResult = await plainHandler({ messages: [] }, fakeCtx());
+    const plainContent = String(plainResult.messages[0]?.content);
+    expect(plainContent).not.toContain('### Output contract');
+    expect(plainContent).not.toContain('### Previous attempt');
+  });
+
   it('the search query drops secret-named fields of the Task input before it is cut to 200 characters (review of #549, B3)', async () => {
     // Synthetic: a plain word only the field name gives away.
     const plain = 'hunter2-plain-word';

@@ -489,14 +489,17 @@ export const StepRunWaitingReasonSchema = asEnum(STEP_RUN_WAITING_REASON_VALUES)
  *     an action of the step was not delivered (ActionRequest `failure_kind = not_delivered`) — a
  *     new attempt is safe;
  *   - `authority_lost`: the requester no longer holds what the step needs (Handle mint failed, 403);
- *   - `contract_violation`: the output failed its schema, or no result was reported;
+ *   - `contract_violation`: the attempt ended without an accepted result — its output never met
+ *     the step's output contract, or no result was reported (S11 GO5d-1: the step's first such
+ *     attempt is redone once without a decision, the Worker told what was refused);
  *   - `verification_failed`: an acceptance check of the step was made and did not pass (S11
  *     GO4b) — a new attempt redoes the work, so only a person retries it;
  *   - `outcome_unknown`: an action may have run and the reconcile observation could not confirm
  *     it either way — never retried automatically;
  *   - `action_refused`: an action was refused by the gate or its target, rejected, expired or
  *     denied — asking again unchanged gets the same answer.
- * Only `transient` is retried without a decision; the others pause the GoalRun for one.
+ * Only `transient` (within the attempt limit) and a step's first `contract_violation` are retried
+ * without a decision; the others pause the GoalRun for one.
  */
 export const STEP_RUN_FAILURE_CATEGORY_VALUES = [
   'transient',

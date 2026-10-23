@@ -2,6 +2,8 @@ import type {
   ActionRequestFailureKind,
   ActionRequestStatus,
   HandleClaims,
+  OutputProblem,
+  RejectedOutputWire,
   Role,
   WorkerDefinitionKind,
 } from '@nexttime/shared';
@@ -37,6 +39,7 @@ import {
   DERIVED_TASK_IDEMPOTENCY_KEY_PREFIX,
   type InvokeWorkerInput,
   type InvokeWorkerResult,
+  type RejectedOutput,
   type TaskAttributions,
   TaskNotFoundError,
   type TaskRow,
@@ -1950,6 +1953,31 @@ function toWireTask(
     turnId: task.createdByActivityId,
     turn: turn ? toWireTurnAttribution(turn) : null,
     objectiveOutcome: toWireObjectiveOutcome(attributions.outcomeByTask.get(task.id) ?? null),
+    // S11 GO5d-1: a goal step attempt's output contract — the schema as the plan it comes from
+    // reads, a refused report as the result reads (legacy 420: the output and its keys are the
+    // Worker's text).
+    outputSchema: task.outputSchema
+      ? (shownFreeTextIn(task.outputSchema) as Record<string, unknown>)
+      : null,
+    rejectedOutput: task.rejectedOutput ? toWireRejectedOutput(task.rejectedOutput) : null,
+    reworkOf: task.reworkOf
+      ? {
+          taskId: task.reworkOf.taskId,
+          attempt: task.reworkOf.attempt,
+          rejectedOutput: task.reworkOf.rejectedOutput
+            ? toWireRejectedOutput(task.reworkOf.rejectedOutput)
+            : null,
+        }
+      : null,
+  };
+}
+
+function toWireRejectedOutput(rejected: RejectedOutput): RejectedOutputWire {
+  return {
+    output: rejected.output ? (shownFreeTextIn(rejected.output) as Record<string, unknown>) : null,
+    problems: shownFreeTextIn(rejected.problems) as OutputProblem[],
+    problemCount: rejected.problemCount,
+    at: rejected.at,
   };
 }
 
