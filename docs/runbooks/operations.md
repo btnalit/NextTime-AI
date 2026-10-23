@@ -623,16 +623,21 @@ cap platform_status | jq '{health, backup, llmUsage30d}'
 | `platform_status.backup.status` 是 `stale` | 超过 26 小时没有成功的备份 | `docker compose logs backup`；在检出目录跑 `sh scripts/check-backup-freshness.sh` 看是哪一项 FAIL（`backup-restore.md`） |
 | `platform_status.backup.status` 是 `unknown` | 看 `detail`：`no backup marker`（还没成功过一次，或内核容器是 D-28 之前建的、没有这个挂载）/ `not readable`（主机文件不是 0644）/ `is a directory`（文件不存在时内核先起来了，Docker 在那里建了目录）/ `no timestamp= line`（空标记：还没成功过一次） | 依次：等下一次 `BACKUP_TIME` 或手动跑一次备份；`docker compose up -d kernel` 重建内核；`backup-restore.md`「备份状态（控制台）」一节的修复步骤 |
 
-## 14. 能力包与模块管理（P-B2b → S11 P1-C）
+## 14. 能力包与模块管理（P-B2b → S11 P1-C / P1-D）
 
-`docs/platform-admin-design.md` §6.4；`docs/development-tasks.md` §5d S7-D；S11 P1-C（Pack Contract v1，
+`docs/platform-admin-design.md` §6.4；`docs/development-tasks.md` §5d S7-D；S11 P1-C / P1-D（Pack Contract v1，
 `docs/s10-evolution-plan-2026-10-04.md` §6）。**能力包 = 一组按版本发布的组成部分**：每个版本一份清单
 `packs/<name>/<version>/pack.yaml`（`schema: 1`、`name`、`version`、`summary`、`notes`、`breaking`、
-`components.ontology: [{family, domainPack}]`），v1 的组成部分只有本体——每项把 `ontology/<domainPack>`
-（`add-domain-pack.md` 讲的同一种文件）发布进本体族 `family`。字段与规则的唯一定义在
-`packages/kernel/src/application/packs/manifest.ts`（单份清单）与 `registry.ts`（目录布局与跨清单规则）：
-目录名就是包名和版本号，清单里的 `name` / `version` 必须与目录一致；版本号从 1 连续；一个本体族只属于一个包；
-某个版本发布的族，之后每个版本都必须继续带着它。`summary` 与 `notes` 是写给工作区所有者看的（控制台能力包详情和
+`components`），组成部分有三类，至少一个：
+- `components.ontology: [{family, domainPack}]`——把 `ontology/<domainPack>`（`add-domain-pack.md` 讲的同一种文件）
+  发布进本体族 `family`；
+- `components.skills: [<name>]`——发布同目录 `skills/<name>.md` 里的 Skill（P1-D，格式见 §14.5）；
+- `components.workers: [<name>]`——发布同目录 `workers/<name>.yaml` 里的 Worker 定义（P1-D，格式见 §14.5）。
+
+字段与规则的唯一定义在 `packages/kernel/src/application/packs/manifest.ts`（单份清单）与 `registry.ts`（目录布局、
+Skill / Worker 文件与跨清单规则）：目录名就是包名和版本号，清单里的 `name` / `version` 必须与目录一致；版本号从 1
+连续；一个组成部分（本体族、Skill 名、Worker 名）只属于一个包；某个版本带的组成部分，之后每个版本都必须继续带着它。
+安装时按本体、Skill、Worker 的顺序逐项发布（Worker 挂载的 Skill 先装好）。`summary` 与 `notes` 是写给工作区所有者看的（控制台能力包详情和
 安装审阅框原样显示），用平常话说装上能得到什么、升级要注意什么，类型名和实现细节写在域包文件自己的注释里。
 **模块 = 每个版本都只有一个本体组成部分、且族名等于包名的能力包**（不再有单独的 `ontology/modules.yaml` 索引）。
 
@@ -650,9 +655,9 @@ cap platform_status | jq '{health, backup, llmUsage30d}'
 控制台「能力包」页只会按哈希认出它（对上某个包版本就显示那个版本，对不上就是「已定制」，见下）。凡是要让
 owner 在控制台里审阅后「安装 / 升级」的内容，都必须走本节——进 `packs/` 并随镜像发布。
 
-**"已安装版本" 怎么判定**：内核不存安装状态，每次调用都现算——每个组成部分：把各版本里该族的定义文件按
-发布时相同的解析路径读出，规范化 JSON 后 sha256（`contentDigest`，`sha256:` 前缀），与工作区该族当前发布的
-定义比；整个包：一个版本的所有族都对上（该版本还没有的族必须在工作区里也没有）才算装的是这个版本。对上最新版
+**"已安装版本" 怎么判定**：内核不存安装状态，每次调用都现算——每个组成部分：把各版本里该族的定义文件（或
+Skill / Worker 文件）按发布时相同的解析路径读出，规范化 JSON 后 sha256（`contentDigest`，`sha256:` 前缀），与工作区
+当前发布的内容比（本体族比当前发布的定义，Skill / Worker 比最新发布的那一版）；整个包：一个版本的所有族都对上（该版本还没有的族必须在工作区里也没有）才算装的是这个版本。对上最新版
 是「已是最新」，对上更早的是「有新版」，都对不上是「已定制」（只装了一部分，或在能力包之外发布 / 改过）。
 这意味着**改一个已发布版本对应的文件内容，等价于让所有装着这个版本的工作区立刻变成「已定制」**——不要这样做；
 要改内容，发布成新版本。
@@ -728,6 +733,48 @@ pnpm --filter @nexttime/kernel exec vitest run src/application/packs/registry.te
 | `install_module`/`upgrade_module` 返回 400 `change_confirmation_required` | 这一版会改变权限边界（例如新增、去掉或放宽动作类型），要逐项确认，这两个能力做不到 | 改用控制台「能力包」页（或 `preview_pack_install` + `install_pack` 带 `confirmedOrdinals`）；只有人能确认，服务账号带确认会 403 |
 | 升级后版本号（`installedVersion`）没变 | 目标（最新）版本文件内容与当前已装内容完全一致（哈希相同），不新增 `ontology_versions` 行，也不留安装记录 | 预期行为，不是 bug；要真正推进，改文件内容后发布成新版本 |
 | 一个工作区显示「已定制」 | 有人绕过 `install_module`/`upgrade_module`，直接用 `propose_ontology_change`/`publish_ontology_version` 发到了这个模块 family 的 id（`deriveOntologyPackId(name)`），或同一索引版本的内容被重复发布导致 `ontology_versions.version`（DB 发布计数）与索引版本号不再一一对应——两者本来就是两套编号，见 §14 开头 | 预期能检测到的情况，不是错误；「已装版本」显示的是按哈希匹配到的**索引**版本（匹配不上就是 `null`/已定制），不是 `ontology_versions` 的行号；owner 升级时会被要求 confirm |
+| 安装 / 升级返回 409 `skill_name_conflict`，控制台说「这个能力包里有一个 Skill 和工作区里另一个已发布的 Skill 同名」 | 工作区里已经有一个不是这个包装的、同名且已发布的 Skill（Worker 按名字挂载 Skill，已发布的 Skill 名在工作区内唯一；包里的 Skill 有自己固定的 id，和手建的那个不是同一个）；`details.skillName` 是哪个名字 | 先在「能力目录 → Skill」里停用那个 Skill，再回来安装；不想动它就别装这个包 |
+| 包里的 Worker 显示「已定制」，升级审阅里列出「可操作的系统」「模型」有改动 | 有人在「能力目录 → Worker」里改过这个 Worker（例如绑定了系统或指定了模型）；包里的 Worker 文件从不带这两项 | 升级会按包里的内容发布新的一版，绑定的系统和指定的模型不会保留——审阅时看清再装，装完需要的话在「Worker」页重新绑定（让升级保留工作区自己的绑定排在 P1-E） |
+| 撤销一次安装后，Skill / Worker 回到了上一版，但版本记录里还有新的那一版 | 撤销把这次安装发布的那一版标成「已弃用」，不删除；首次安装的没有上一版，撤销后就不再有已发布的版本 | 预期行为；弃用的那一版不会再被挂载或调用 |
+
+### 14.5 包里的 Skill 与 Worker（S11 P1-D）
+
+```text
+packs/<pack>/<version>/
+  pack.yaml                # components.skills: [docker-triage]，components.workers: [ops-runner]
+  skills/docker-triage.md  # 文件名 = Skill 名
+  workers/ops-runner.yaml  # 文件名 = Worker 名
+```
+
+**Skill 文件**（`skills/<name>.md`）：开头一段 `---` 包起来的 YAML，之后是正文（Markdown，开头的空行不算正文）。
+
+```markdown
+---
+name: docker-triage            # 必须等于文件名
+description: 一句话说明它教什么（控制台显示，写给工作区所有者）
+applicable:                    # 可选：适用的对象类型，写法同「能力目录 → Skill」
+  objectTypes: [Container, ComposeProject]
+---
+# 正文：挂载它的 Worker 会读到全文
+```
+
+**Worker 文件**（`workers/<name>.yaml`）：WorkerDefinition 的字段，`description`、`systemPrompt`（必填）、`skills`、
+`capabilities`、`egressDeny`。不能写 `name`（文件名就是名字）、`kind`（只能是 `worker`）、`gates` 和 `model`——
+它能操作哪些系统、跑哪个模型是工作区自己的设置，包不带（包声明要绑定哪类系统排在 P1-E）。`skills` 只能挂这个包同一版本里的 Skill；`capabilities`
+不写就是平台默认（查询台账、只读查看已接入的系统、提出建议，不能执行需要审批的操作），写了也不能超出 Worker 的上限。
+Skill 和 Worker 文件里都不能有像凭据的内容（token、密钥、`export API_TOKEN=…` 之类），加载时一律拒绝。
+
+**它们怎么装、怎么撤**：每个 Skill / Worker 在每个工作区里有一个由包名和名字推出来的固定 id，所以升级是给同一个
+Skill / Worker 发布新的一版，不会冒出同名的第二个。装上的每一项都要审阅：新增一个 Skill / Worker，Skill 的名称、
+说明或正文有改动，Worker 的提示词或模型有改动、挂载的 Skill 或能力范围变多、禁止访问的地址变少，都算改变权限边界，
+要逐项勾选（Skill 的适用范围、Worker 的说明有改动不算）。撤销一次安装，就把这次发布的那一版标成「已弃用」；之后
+又有人发布了更新的一版，这一项就不撤销（「之后又被改过」，先撤销后来的那条记录）。
+
+`packs/ops-base`（v1）是第一个这样的包：一个排查 Docker 容器的 Skill `docker-triage`，和挂着它的通用运维
+Worker `ops-runner`（提示词与 `ontology/ops-runner.yaml` 模板一致）。它不装本体，所以不是模块；它的 Worker
+自己不改动任何系统，要做的变更由调用它的助手走审批。
+
+本机校验同 §14.1 第 3 步（`registry.test.ts` 加载真实的 `packs/`，含所有 Skill / Worker 文件）。
 
 ## 15. 平台默认入口模型（P-D 剩余 E5）
 

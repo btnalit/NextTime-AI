@@ -9,7 +9,7 @@ import { invalidateCapability, useCapability, useCapabilityList } from '../hooks
 import { usePermissions } from '../hooks/usePermissions.js';
 import { useRoleCan } from '../hooks/useRoleCan.js';
 import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
-import { opsRunnerTemplateForm } from '../lib/catalog.js';
+import { opsRunnerTemplateForm, workerItemId } from '../lib/catalog.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import {
   type PublishCredentialReview,
@@ -2293,7 +2293,7 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
  *  shape already used as this tab's React `key` before this lane, now doubling as the item's URL
  *  segment. */
 function workerKey(row: Pick<WorkerDefinitionSummary, 'id' | 'version'>): string {
-  return `${row.id}@${row.version}`;
+  return workerItemId(row);
 }
 
 /** A Worker definition's display name: its own name, else 「未命名 · <short id>」. Rows are one

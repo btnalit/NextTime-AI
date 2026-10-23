@@ -128,7 +128,7 @@ const FAKE_DELEGATE_MARKER = '__nexttime_fake_delegate__';
 const READINESS_NO_ENABLED_GATE_TEXT =
   '入口 agent 还没有任何可以作用的系统，先在系统接入启用一个门。';
 const READINESS_NO_PUBLISHED_WORKER_TEXT =
-  '入口 agent 委派任务时找不到可用的 Worker，先发布一个 Worker 定义（可从 ops-runner 模板开始）。';
+  '入口 agent 委派任务时找不到可用的 Worker。安装能力包 ops-base 就有一个通用运维 Worker，也可以自己发布一个 Worker 定义。';
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

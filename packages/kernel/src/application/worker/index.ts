@@ -12,11 +12,13 @@
  * domain events (see packages/shared).
  */
 export {
+  deprecatePublishedWorkerDefinitionVersion,
   deprecateWorkerDefinition,
   getPublishedEntryDefinition,
   getWorkerDefinition,
   listWorkerDefinitions,
   listWorkerDefinitionsPage,
+  loadPublishedWorkerDefinitionHead,
   proposeWorkerDefinition,
   publishWorkerDefinition,
   requirePublishedWorkerDefinition,
@@ -35,10 +37,14 @@ export type {
 } from './definitions.js';
 
 export {
+  assertSkillNameAvailable,
+  deprecatePublishedSkillVersion,
   deprecateSkill,
   getSkill,
   listPublishedSkillIds,
   listSkills,
+  loadPublishedSkillHead,
+  loadSkillVersion,
   proposeSkill,
   publishSkill,
   readSkillVersions,
@@ -46,6 +52,7 @@ export {
   skillReviewContent,
   resolvePublishedSkills,
   validateSkillContent,
+  SkillNameConflictError,
   SkillNotFoundError,
   SkillValidationError,
 } from './skills.js';
@@ -69,6 +76,8 @@ export type {
 } from './procedures.js';
 
 export type { DraftViewer } from './draft-visibility.js';
+
+export { lockWorkerRegistry } from './registry-lock.js';
 
 export {
   DEFAULT_DRAFT_EXPIRY_DAYS,

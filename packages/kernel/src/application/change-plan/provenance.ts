@@ -1,22 +1,26 @@
-import type { ChangeSegmentStatus, PrincipalKind } from '@nexttime/shared';
+import type { ChangeItemKind, ChangeSegmentStatus, PrincipalKind } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { deriveOntologyPackId, loadPublishedOntologyHead } from '../../substrate/ontology/index.js';
 import type { ChangeChannel, ChangeSource } from './engine.js';
+import { type FamilyItemKind, familyIdField, loadFamilyHeadVersion } from './family-item.js';
 import type { ChangePrincipalRef } from './segments.js';
 
 /**
  * application/change-plan/provenance: "which ChangeItem put this here" (S11 plan §3.2 `Object
- * changed_by ChangeItem`) for an ontology family's installed version. Only versions applied through
- * the core since P1 have an item; a version published before P1, or outside a ChangePlan
- * (`publish_ontology_version`, `seed-domain-pack`), says so as `provenance_unknown` — never "no
- * change" and never something a rollback may act on. A rollback (`rollback.ts`) starts from a
- * segment's items and compares the head with each item's `after` before writing (§5.3 "先比较再写").
+ * changed_by ChangeItem`) for a family's installed version — an ontology family's, a Skill's or a
+ * `worker` WorkerDefinition's. Only versions applied through the core since P1 have an item; a
+ * version published before P1, or outside a ChangePlan (`publish_ontology_version`,
+ * `publish_skill`, `publish_worker_definition`, `seed-domain-pack`), says so as
+ * `provenance_unknown` — never "no change" and never something a rollback may act on. A rollback
+ * (`rollback.ts`) starts from a segment's items and compares the head with each item's `after`
+ * before writing (§5.3 "先比较再写").
  *
  * A rolled back segment never wrote the head: its rollback retired, in the same transaction, the
- * version each of its items published (`ontology-item.ts`), and a retired version is never
- * published again (I12). So `recorded` always names a segment that is not `rolled_back`.
+ * version each of its items published (`ontology-item.ts`, `family-item.ts`), and a retired
+ * version is never published again (I12). So `recorded` always names a segment that is not
+ * `rolled_back`.
  */
-export type OntologyProvenance =
+export type ChangeProvenance =
   | { readonly status: 'not_installed' }
   | {
       readonly status: 'provenance_unknown';
@@ -51,12 +55,20 @@ interface WritingItemRow {
   applied_at: Date;
 }
 
-/** The `ontology_version` item that published `version` of the family `ontologyId`, or `null` when
- *  none did (published before P1 or outside the core). */
+/** Which item kind's target names its family under which field: a fixed table, never input. */
+const TARGET_ID_FIELD: Readonly<Record<ChangeItemKind, string>> = {
+  ontology_version: 'ontologyId',
+  skill_version: familyIdField('skill_version'),
+  worker_definition_version: familyIdField('worker_definition_version'),
+};
+
+/** The `kind` item that published `version` of the family `familyId`, or `null` when none did
+ *  (published before P1 or outside the core). */
 async function findWritingItem(
   client: PoolClient,
   workspaceId: string,
-  ontologyId: string,
+  kind: ChangeItemKind,
+  familyId: string,
   version: number,
 ): Promise<WritingItemRow | null> {
   const result = await client.query<WritingItemRow>(
@@ -66,39 +78,50 @@ async function findWritingItem(
        from change_items i
        join change_segments s on s.workspace_id = i.workspace_id and s.id = i.segment_id
        join principals p on p.workspace_id = s.workspace_id and p.id = s.applied_by
-      where i.workspace_id = $1 and i.kind = 'ontology_version'
-        and i.target ->> 'ontologyId' = $2
-        and (i.after ->> 'version')::int = $3`,
-    [workspaceId, ontologyId, version],
+      where i.workspace_id = $1 and i.kind = $2
+        and i.target ->> $3 = $4
+        and (i.after ->> 'version')::int = $5`,
+    [workspaceId, kind, TARGET_ID_FIELD[kind], familyId, version],
   );
   return result.rows[0] ?? null;
 }
 
-/** The segment whose item published `version` of the family `ontologyId`, or `null` (see
+/** The segment whose `kind` item published `version` of the family `familyId`, or `null` (see
  *  `findWritingItem`). What a rollback that finds the family changed since names as the change to
  *  roll back first, and what `get_change_segment` names as an item's replacement. */
+export async function findVersionSegment(
+  client: PoolClient,
+  workspaceId: string,
+  kind: ChangeItemKind,
+  familyId: string,
+  version: number,
+): Promise<string | null> {
+  return (await findWritingItem(client, workspaceId, kind, familyId, version))?.segment_id ?? null;
+}
+
+/** As `findVersionSegment`, for an ontology family (`ontology_versions.id`). */
 export async function findOntologyVersionSegment(
   client: PoolClient,
   workspaceId: string,
   ontologyId: string,
   version: number,
 ): Promise<string | null> {
-  return (await findWritingItem(client, workspaceId, ontologyId, version))?.segment_id ?? null;
+  return findVersionSegment(client, workspaceId, 'ontology_version', ontologyId, version);
 }
 
-export async function loadOntologyProvenance(
+async function provenanceOf(
   client: PoolClient,
   workspaceId: string,
-  family: string,
-): Promise<OntologyProvenance> {
-  const ontologyId = deriveOntologyPackId(family);
-  const head = await loadPublishedOntologyHead(client, workspaceId, ontologyId);
-  if (!head) return { status: 'not_installed' };
-  const row = await findWritingItem(client, workspaceId, ontologyId, head.version);
-  if (!row) return { status: 'provenance_unknown', version: head.version };
+  kind: ChangeItemKind,
+  familyId: string,
+  headVersion: number | null,
+): Promise<ChangeProvenance> {
+  if (headVersion === null) return { status: 'not_installed' };
+  const row = await findWritingItem(client, workspaceId, kind, familyId, headVersion);
+  if (!row) return { status: 'provenance_unknown', version: headVersion };
   return {
     status: 'recorded',
-    version: head.version,
+    version: headVersion,
     segmentId: row.segment_id,
     segmentStatus: row.status,
     itemId: row.item_id,
@@ -112,4 +135,26 @@ export async function loadOntologyProvenance(
     appliedBy: { id: row.applied_by, kind: row.applied_kind, displayName: row.applied_name },
     appliedAt: row.applied_at,
   };
+}
+
+/** The provenance of the ontology family `family`'s installed (published head) version. */
+export async function loadOntologyProvenance(
+  client: PoolClient,
+  workspaceId: string,
+  family: string,
+): Promise<ChangeProvenance> {
+  const ontologyId = deriveOntologyPackId(family);
+  const head = await loadPublishedOntologyHead(client, workspaceId, ontologyId);
+  return provenanceOf(client, workspaceId, 'ontology_version', ontologyId, head?.version ?? null);
+}
+
+/** The provenance of a Skill's or `worker` WorkerDefinition's installed (published head) version. */
+export async function loadFamilyProvenance(
+  client: PoolClient,
+  workspaceId: string,
+  kind: FamilyItemKind,
+  familyId: string,
+): Promise<ChangeProvenance> {
+  const headVersion = await loadFamilyHeadVersion(client, workspaceId, kind, familyId);
+  return provenanceOf(client, workspaceId, kind, familyId, headVersion);
 }

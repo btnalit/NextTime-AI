@@ -15,6 +15,7 @@ import {
 import { assertDraftCredentialsReviewed } from '../../governance/redaction/index.js';
 import { projectWorkerDefinitionObject } from '../../substrate/ontology/index.js';
 import { assertFamilyPublishAuthority } from './publish-family.js';
+import { lockWorkerRegistry } from './registry-lock.js';
 
 /**
  * application/worker/definitions: the WorkerDefinition registry (design doc §5.1.4
@@ -300,7 +301,8 @@ function requireWorkerDefinitionAuthority(
  *  `actor` (D-24): the `publish_worker_definition` caller — `actor.principalId` is
  *  `publisherPrincipalId` — checked against the locked row and the family's live version it would
  *  supersede (`assertFamilyPublishAuthority`); omitted by internal callers (workspace creation's
- *  default entry definition). */
+ *  default entry definition, a ChangePlan item installing a pack's Worker). Under
+ *  `lockWorkerRegistry`, taken first. */
 export async function publishWorkerDefinition(
   client: PoolClient,
   workspaceId: string,
@@ -308,6 +310,7 @@ export async function publishWorkerDefinition(
   ref: WorkerDefinitionVersionRef,
   actor?: PublishActor,
 ): Promise<WorkerDefinitionRow> {
+  await lockWorkerRegistry(client, workspaceId);
   const row = await getForUpdate(client, workspaceId, ref);
   requireWorkerDefinitionAuthority('publish_worker_definition', actor, row);
   transition(PUBLISHABLE_TRANSITIONS, row.status, 'publish'); // throws IllegalTransition if illegal
@@ -359,13 +362,14 @@ export async function publishWorkerDefinition(
 /** Deprecates a published version (human channel only — enforced at the gateway). Validates the
  *  transition via `PUBLISHABLE_TRANSITIONS` (`published -> deprecated` is its only edge out of
  *  `published`; `IllegalTransition` otherwise, e.g. deprecating a draft or an already-deprecated
- *  version). `actor` (D-24): as for `publishWorkerDefinition`. */
+ *  version). `actor` (D-24): as for `publishWorkerDefinition`. Under `lockWorkerRegistry`. */
 export async function deprecateWorkerDefinition(
   client: PoolClient,
   workspaceId: string,
   ref: WorkerDefinitionVersionRef,
   actor?: PublishActor,
 ): Promise<WorkerDefinitionRow> {
+  await lockWorkerRegistry(client, workspaceId);
   const row = await getForUpdate(client, workspaceId, ref);
   requireWorkerDefinitionAuthority('deprecate_worker_definition', actor, row);
   transition(PUBLISHABLE_TRANSITIONS, row.status, 'deprecate');
@@ -380,6 +384,46 @@ export async function deprecateWorkerDefinition(
   const updated = result.rows[0];
   if (!updated) throw new Error('deprecateWorkerDefinition: UPDATE ... RETURNING produced no row');
   return mapRow(updated);
+}
+
+// -------------------------------------------------------------------------------------------
+// S11 P1-D: a family's head and retiring one version — what a ChangePlan item
+// (`application/change-plan/family-item.ts`) reads and writes, under `lockWorkerRegistry`.
+// -------------------------------------------------------------------------------------------
+
+/** The family's head: its latest published version, or `null` when none is published. Earlier
+ *  published versions stay invocable (`listWorkerDefinitions` lists every published row); the head
+ *  is what a pack's state compares (`application/packs/state.ts`). */
+export async function loadPublishedWorkerDefinitionHead(
+  client: PoolClient,
+  workspaceId: string,
+  definitionId: string,
+): Promise<WorkerDefinitionRow | null> {
+  const result = await client.query<WorkerDefinitionDbRow>(
+    `select ${SELECT_COLUMNS} from worker_definitions
+     where workspace_id = $1 and id = $2 and status = 'published'
+     order by version desc
+     limit 1`,
+    [workspaceId, definitionId],
+  );
+  const row = result.rows[0];
+  return row ? mapRow(row) : null;
+}
+
+/** Retires `ref` (`published -> deprecated`); returns whether a published row was retired. Unlike
+ *  `deprecateWorkerDefinition`, no authority check and no error for another status: its caller (a
+ *  ChangePlan item's rollback) holds `lockWorkerRegistry`, compared the head first, and audits. */
+export async function deprecatePublishedWorkerDefinitionVersion(
+  client: PoolClient,
+  workspaceId: string,
+  ref: WorkerDefinitionVersionRef,
+): Promise<boolean> {
+  const result = await client.query(
+    `update worker_definitions set status = 'deprecated'
+     where workspace_id = $1 and id = $2 and version = $3 and status = 'published'`,
+    [workspaceId, ref.definitionId, ref.version],
+  );
+  return (result.rowCount ?? 0) === 1;
 }
 
 // -------------------------------------------------------------------------------------------
