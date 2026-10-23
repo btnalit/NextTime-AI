@@ -4339,6 +4339,15 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **摘要换成 `contentDigest`**：统一用 ChangePlan 的 `sha256:` + 规范化 JSON，取代模块索引旧的十六进制哈希；D2 规定这类哈希从不入库、每次现算，切换对已有工作区透明。
   - **控制台**：`components/catalog/PacksTab.tsx` 取代 `ModulesTab.tsx`（`#/govern/catalog/packs/<name>`，旧链接落到这里），状态机 `packInstall`；审阅框 medium 级确认，已定制或不兼容时 `danger`，预览读在角色确认是 owner 之后才发，`version_changed` / `change_plan_changed` 时自动重读预览；安装历史来源统一叫「能力包 X vN」；平台「模块」页说明模块是只含一个本体的能力包。`operations.md` §14 改写为「能力包与模块管理」。
   - **不在本 PR**：记录核验（`verify_change_segment`、`verified` / `verification_failed` 的写入）移到 P1-E（与 Operation 改动项、gate readiness 一起）；WorkerDefinition / Skill / Procedure 改动项与 ops-base 属 P1-D；知识包验收属 P1-F；主机私有能力包目录（`config/packs/`）以后再做；默认模块仍只能选「模块」形状的能力包；`publish_ontology_version` 仍绕过权限扩大分类器（沿用 P1-A 前瞻说明）。
+- 实现说明（P1-D：能力包可带 Skill 与 Worker，首个 ops-base 包，#679，2026-10-23 合入，2167026；governance 0026；新登遗留 418、419）：
+  - **变更项**（`application/change-plan/family-item.ts`）：新 kind `skill_version` / `worker_definition_version`；头部 = 最新已发布版本；应用 = 无 actor 的 propose + publish；撤销 = 把这一项发布的那一版标弃用，前后比对后才写；被后来的版本替换的不撤。迁移 governance 0026 只放宽 `change_items_kind_check`。
+  - **锁**：同一工作区一把 `lockWorkerRegistry` 咨询锁；应用与撤销按 `change-plan/lock-order.ts` 同一顺序（本体在前、Skill / Worker 注册表在后，审查 #493 提出，集成测试抓反序）。
+  - **分类器**（`classify.ts`）：Skill 的名称、说明、正文任何改动算放宽，`applicable` 不算；Worker 的提示词、模型任何改动算，`skills` / `gates` 变多、`capabilities` 出现 / 消失 / 变多、`egressDeny` 变少算放宽，不认识的字段算 unrecognized。
+  - **Skill 名不变式**：工作区里已发布的 Skill 名唯一（Worker 按名字挂载）；`publishSkill` 与计划阶段都查，`SkillNameConflictError` → HTTP 409 `skill_name_conflict`（`details.skillName`）、WS ILLEGAL_TRANSITION。Worker 名重名不拦（按 id 调用）。
+  - **能力包**（`application/packs`）：清单 `components` 为 `ontology?` / `skills?` / `workers?`，至少一个、名字不重复；部件 id 由包名、类型、名字按 uuid v5 推出（升级是同一 Skill / Worker 的新版本）；一个部件只属于一个包，后一版必须带着前一版所有部件；安装顺序本体 → Skill → Worker。Skill 文件 `skills/<name>.md`（frontmatter `name` 等于文件名、`description`、可选 `applicable`，`validateSkillContent` 校验）；Worker 文件 `workers/<name>.yaml`（不能写 `name` / `kind` / `gates` / `model`，`skills` 只能挂同版本的 Skill，`capabilities` 不超出 Worker 上限）；两类都做疑似凭据检查，有就整个注册表拒绝加载。部件状态里 Worker 带 `headVersion`（只读，供控制台链到 `id@版本`）。模块仍是每版只有一个本体部件且族名等于包名的包，`ops-base` 不是模块。
+  - **控制台**：能力包详情按类型列部件并链到「Skill」/「Worker」页；安装审阅逐项给 Skill 正文（Markdown 预览）、Worker 的挂载 Skill、能力范围、禁止访问的地址与系统提示词，放宽原因用平常话；安装历史按「本体 / Skill / Worker x」说明对象；`skill_name_conflict` 有中英文说明；没有已发布 Worker 的就绪提示引导所有者装 ops-base。
+  - **取舍**：Procedure 部件不做（没有包要带，W2 重塑）；清单用 `workers` 而非设计稿的 `workerTemplates`；能力包 notes 写单行（YAML 折行会在中文之间插空格），`registry.test.ts` 守住仓库里所有能力包给人读的文字。
+- 来自 P1-D（#679）的输入（P1-E）：包声明 Worker 要绑定的系统类型、连接器预设；升级时保留工作区自己给包里 Worker 绑定的系统与模型（现在包升级按包内容发新版本，不保留这两项，审阅框会列出改动，`operations.md` §14 有排错）；Skill / Worker 页显示「来自能力包 x vN」（遗留 418）；已发版的 PackVersion 不可变（遗留 419）；Operation 改动项、gate 就绪检查、`verify_change_segment`、遗留 344 / 372 照旧在 P1-E。
 - 来自 P0b（#620）的输入：第一个小 PR 是评测用夹具门重设计（托管实例挂在按系统命名的接入包上，`create_gate_instance` 的 `connector` 可选）；`importManifest` 的 `requireDescription` 留给目录侧要求复用，不用就删（遗留 372）；344 由 P1 收口。
 
 **AA1 — 管理员 Agent 身份与上限**（见 `global-roadmap-2026-10-16.md` §4）

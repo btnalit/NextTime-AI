@@ -1209,7 +1209,7 @@ v0.47.0、v0.48.0 不单独上主机（#554 不在 v0.47.0 里，遗留 259 的�
 
 **回滚**（§5）：回滚目标是 v0.46.0，按 §3.25 与 §3.26 的回滚说明；不需要排空 Worker。
 
-窗口目标改到 v0.49.0 之后的发版时（维护者 2026-10-16 决定窗口暂缓，开窗口时目标改为当时最新的发版），本清单按新目标刷新，并加上之后各版的小节，至少 §3.28（#589 升钉：`postgres` 与 `backup` 重建、不执行 `ALTER EXTENSION`、应用后只读核对 `vector` 扩展版本）与 §3.29（#592：governance 0020，旧「始终允许」规则可能显示「已暂停 · 待确认版本」需 owner 重新确认，契约不向后兼容、旧控制台页要刷新）与 §3.30（#601：governance 0021，窗口前估算 `audit_records` 全表扫描的锁表时间并核对回收超时，窗口后历史失败行多显示「结果不明」）与 §3.31（#607：goal 0001 / task 0007 / governance 0022，窗口前估算建索引时间）与 §3.32（#615：core 0044，窗口前估算建索引期间审计写入的等待，必要时并发预建并确认索引有效）与 §3.33（#619：goal 0002，新增每秒认领与每分钟对账的后台负载）与 §3.34（#620：core 0045，窗口前三数预检、迁移期间不接新门、清洗改写类变成 4 个、回滚后自接门暂停失效；#637 再加两个改写类与一个只列类，见 §3.25）、§3.35（#626：goal 0003，只重建一个守卫函数，无主机步骤）、§3.36（#633：goal 0004，加列与重建一个守卫函数，无主机步骤）、§3.37（#642：governance 0023，`action_requests` 加列、约束与守卫触发器，窗口前看一眼该表行数，无主机步骤）、§3.38（#644：无迁移，窗口前打包门只读检查，内核与门宿主同版，回退代码前先处理挂在系统接入包上的实例）、§3.39（#649：governance 0024，新表与重建核对守卫，两个可选环境变量不设即默认，代码回退期间观察压缩报 degraded 可忽略）、§3.40（#650：governance 0025，只加新表，可选的窗口前本体族只读检查，模块升级可能新返回 400 `change_confirmation_required`）、§3.41（#664：goal 0005，新表与重建目标守卫，两个可选环境变量不设即默认，升级后 I-G5 指标应为 0，代码回退期间观察压缩报 degraded 可忽略）、§3.42（#670：goal 0006，步骤验收新表与新触发器，无新环境变量，代码回退期间观察压缩报 degraded 可忽略）、§3.43（#668：无迁移，能力包清单在镜像 `/app/packs`，`kernel.env` 不要设 `PACKS_DIR`）与 §3.44（#674：core 0046 + goal 0007，可逆，无新环境变量，升级后 I-G5 指标仍应为 0）。
+窗口目标改到 v0.49.0 之后的发版时（维护者 2026-10-16 决定窗口暂缓，开窗口时目标改为当时最新的发版），本清单按新目标刷新，并加上之后各版的小节，至少 §3.28（#589 升钉：`postgres` 与 `backup` 重建、不执行 `ALTER EXTENSION`、应用后只读核对 `vector` 扩展版本）与 §3.29（#592：governance 0020，旧「始终允许」规则可能显示「已暂停 · 待确认版本」需 owner 重新确认，契约不向后兼容、旧控制台页要刷新）与 §3.30（#601：governance 0021，窗口前估算 `audit_records` 全表扫描的锁表时间并核对回收超时，窗口后历史失败行多显示「结果不明」）与 §3.31（#607：goal 0001 / task 0007 / governance 0022，窗口前估算建索引时间）与 §3.32（#615：core 0044，窗口前估算建索引期间审计写入的等待，必要时并发预建并确认索引有效）与 §3.33（#619：goal 0002，新增每秒认领与每分钟对账的后台负载）与 §3.34（#620：core 0045，窗口前三数预检、迁移期间不接新门、清洗改写类变成 4 个、回滚后自接门暂停失效；#637 再加两个改写类与一个只列类，见 §3.25）、§3.35（#626：goal 0003，只重建一个守卫函数，无主机步骤）、§3.36（#633：goal 0004，加列与重建一个守卫函数，无主机步骤）、§3.37（#642：governance 0023，`action_requests` 加列、约束与守卫触发器，窗口前看一眼该表行数，无主机步骤）、§3.38（#644：无迁移，窗口前打包门只读检查，内核与门宿主同版，回退代码前先处理挂在系统接入包上的实例）、§3.39（#649：governance 0024，新表与重建核对守卫，两个可选环境变量不设即默认，代码回退期间观察压缩报 degraded 可忽略）、§3.40（#650：governance 0025，只加新表，可选的窗口前本体族只读检查，模块升级可能新返回 400 `change_confirmation_required`）、§3.41（#664：goal 0005，新表与重建目标守卫，两个可选环境变量不设即默认，升级后 I-G5 指标应为 0，代码回退期间观察压缩报 degraded 可忽略）、§3.42（#670：goal 0006，步骤验收新表与新触发器，无新环境变量，代码回退期间观察压缩报 degraded 可忽略）、§3.43（#668：无迁移，能力包清单在镜像 `/app/packs`，`kernel.env` 不要设 `PACKS_DIR`）与 §3.44（#674：core 0046 + goal 0007，可逆，无新环境变量，升级后 I-G5 指标仍应为 0）与 §3.45（#679：governance 0026，可逆，窗口前只读查同名已发布 Skill，镜像新增 ops-base）。
 
 ### 3.28 第三方镜像升钉：pgvector、node、postgres（#589，v0.49.0 之后的下一版起）
 
@@ -1473,6 +1473,22 @@ rollback;" </dev/null
 - **I-G5 指标**：§3.41 的 `nexttime_invariant_violations{invariant="I-G5"}` 现在也覆盖事实检查与「按计划声明」两个条件，升级后仍应为 0。
 - **回滚**：只回退代码即可（§6），两个迁移都可逆，不需要 `reversibility-deltas.json` 条目。上一版不读写新列，也不写事实检查行；它写目标级检查行时本来就按计划声明建行，新的绑定规则不挡它。回滚后留下的 pending 事实检查不会被上一版领取，所在目标或步骤一直等待；上一版读到带事实检查的计划会视为不可读并暂停目标；什么都不会被判达成。
 
+### 3.45 能力包可带 Skill 与 Worker（#679，governance 0026，S11 P1-D，v0.49.0 之后的下一版起）
+
+带一个迁移（`governance/0026_change_item_worker_kinds`），随 `apply-release.sh` 的迁移步骤自动应用；没有新环境变量、不改 compose、无单独主机步骤。
+
+- **窗口前只读检查**：查工作区里有没有同名的已发布 Skill：
+
+  ```sql
+  select workspace_id, name, count(distinct id) from skills where status = 'published' group by 1, 2 having count(distinct id) > 1;
+  ```
+
+  有结果不阻塞升级，但升级后这些名字再发布新版本会得到 409 `skill_name_conflict`；按 `operations.md` §14 在「Skill」页停用多余的那个。
+- **governance 0026**：只改 `change_items` 的 kind 约束（加 `skill_version`、`worker_definition_version`），无数据改写。
+- **镜像变化**：`/app/packs` 新增 `ops-base` v1（Skill `docker-triage`、Worker `ops-runner`），随内核镜像重建生效；`ops-assets` v1 / v2 的 notes 改为单行，这两个版本的清单摘要随之改变。摘要只记在安装记录上作出处，不参与状态判断，不需要任何操作；在旧构建上预览、新构建上安装会得到一次 `change_plan_changed`，重新预览即可。
+- **新错误码**：409 `skill_name_conflict`（`details.skillName`）；`publish_skill` 现在拒绝与已发布 Skill 同名的发布。
+- **回滚**：只回退代码即可（§6）。0026 只放宽约束、可逆，上一版不读 `change_items`（0025 同一版新增）；回滚后已安装的 Skill / Worker 版本留在原处、照常可用，只是没有能力包页面去撤销它们。
+
 ## 4. Hotfix 流程
 
 线上 tag 之后发现一个必须马上修的问题，不等下一次常规 release：
@@ -1597,6 +1613,7 @@ v(n-1) 已经发布过的迁移的声明自动失效（下一个 tag 带上新�
 | v0.49.0 之后的下一版 | goal `0006_step_acceptance`（#670，S11 GO4b）：扩大 `step_runs.waiting_reason` 的 CHECK，新表 `step_acceptance_checks`，新触发器 `step_runs_acceptance_guard` | 可逆（代码回退期间观察压缩报 degraded） | 上一版不读写新表；上一版遇到停在 `waiting(acceptance)` 的步骤会推进失败，连续失败后目标暂停等人，不会未经验收就成功 |
 | v0.49.0 之后的下一版 | core `0046_activity_trigger_record`（#674，S11 GO4c）：Activity 的 `kind` 与触发记录键写入后不可改的守卫 | 可逆 | 上一版从不改这些键 |
 | v0.49.0 之后的下一版 | goal `0007_fact_acceptance`（#674，S11 GO4c）：两张检查表加 `fact_check` / `fact_id`（外键指向 `links`）与新 kind，重建三个守卫（目标级检查绑定计划声明），新增四个函数 | 可逆 | 上一版不读写新列、不写事实检查行；回滚后留下的 pending 事实检查一直等待，上一版读到带事实检查的计划会暂停目标，不会判达成 |
+| v0.49.0 之后的下一版 | governance `0026_change_item_worker_kinds`（#679，S11 P1-D）：`change_items_kind_check` 加 `skill_version`、`worker_definition_version` | 可逆 | 只放宽约束、无数据改写；上一版不读 `change_items` |
 
 **CI 可逆性探针实测（2026-10-02，S9 D4，`reversibility-probe.yml` 以 `workflow_dispatch` 补跑）**——v0.16.0 起
 "依据"列只有读代码推理的几行，现在都有了跑出来的证据（v(n-1) 的 kernel 测试套件在 v(n) 迁移后的库上）：
