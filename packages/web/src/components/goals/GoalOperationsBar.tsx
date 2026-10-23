@@ -73,8 +73,8 @@ export type GoalOperationOutcome =
 export function goalOperationErrors(t: Translate): ErrorOverrides {
   return {
     illegal_transition: t(
-      '这个操作此刻不能执行，什么也没改。页面已经刷新，下方写着原因。',
-      'This cannot be done right now, and nothing changed. The page has been refreshed; the reason is shown below the buttons.',
+      '这个操作此刻不能执行，什么也没改。页面已经刷新，原因写在页面的操作按钮下方，关掉这个框就能看到。',
+      'This cannot be done right now, and nothing changed. The page has been refreshed; the reason is under the page’s buttons — close this to see it.',
     ),
     credentials_in_text: t(
       '备注里有像凭据的写法（token、key、密码的值，或 Bearer、Authorization、名称=值 这样的写法），已拒绝，什么也没保存。把它改成描述发生了什么，比如「token 过期了」「密码不对」，或者清空备注再提交。',
