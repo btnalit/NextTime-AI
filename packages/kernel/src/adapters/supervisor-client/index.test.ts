@@ -89,6 +89,47 @@ describe('TaskSupervisorClient', () => {
     ).rejects.toMatchObject({ kind: 'image_not_allowed' });
   });
 
+  it('spawn: 409 runtime_image_incompatible keeps its code as the kind and the supervisor’s message', async () => {
+    const message =
+      'image nexttime-ai-worker-runtime:old does not speak runtime contract 2 (label ai.nexttime.runtime-contract=<missing>)';
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse(409, { error: { code: 'runtime_image_incompatible', message } }),
+      );
+    const client = new TaskSupervisorClient({ supervisorUrl: 'http://x', fetchImpl });
+
+    await expect(
+      client.spawn({
+        taskId: 't1',
+        workerRunId: 'wr1',
+        workspaceId: 'ws1',
+        onBehalfOf: 'p1',
+        capabilityHandle: 'h',
+      }),
+    ).rejects.toMatchObject({ kind: 'runtime_image_incompatible', status: 409, message });
+  });
+
+  it('spawn: any other non-200 keeps the supervisor’s error code in the message', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(jsonResponse(500, { error: { code: 'internal_error', message: 'x' } }));
+    const client = new TaskSupervisorClient({ supervisorUrl: 'http://x', fetchImpl });
+
+    await expect(
+      client.spawn({
+        taskId: 't1',
+        workerRunId: 'wr1',
+        workspaceId: 'ws1',
+        onBehalfOf: 'p1',
+        capabilityHandle: 'h',
+      }),
+    ).rejects.toMatchObject({
+      kind: 'http_error',
+      message: 'POST /task/spawn returned 500 internal_error',
+    });
+  });
+
   it('spawn: 400 maps to invalid_request', async () => {
     const fetchImpl = vi
       .fn()

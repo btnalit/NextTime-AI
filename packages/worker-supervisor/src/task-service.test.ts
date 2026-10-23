@@ -6,6 +6,7 @@ import {
   rmSync,
   statSync,
   utimesSync,
+  writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,6 +14,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadConfig } from './config.js';
 import { createEgressMapStore } from './egress-map.js';
 import type { EgressMapStore } from './egress-map.js';
+import {
+  IMAGE_RUNTIME_CONTRACT_LABEL,
+  RUNTIME_CONTRACT_VERSION,
+  RuntimeImageIncompatibleError,
+} from './runtime-contract.js';
 import { createTaskService } from './task-service.js';
 import { createFakeDockerClient } from './test-support/fake-docker-client.js';
 import { memoryHandleBindings } from './test-support/memory-handle-bindings.js';
@@ -58,6 +64,11 @@ function setup(overrides: Record<string, string> = {}) {
   };
 }
 
+/** This container's own view of task-1's platform directory (host-paths.ts). */
+function platformDir(localDataDir: string): string {
+  return join(localDataDir, 'workspaces', '.platform', 'tasks', 'task-1');
+}
+
 const spawnInput = {
   taskId: 'task-1',
   workerRunId: 'run-1',
@@ -78,37 +89,36 @@ describe('task-service spawn', () => {
     expect(docker.createCalls[0]?.name).toBe('nexttime-task-run-1');
   });
 
-  it('pre-creates .pi/agent under workspaces/tasks/<taskId> before asking Docker to create the container', async () => {
+  it('pre-creates the Task workspace and its platform directory before asking Docker to create the container', async () => {
     const { service, config } = setup();
     await service.spawn(spawnInput);
-    const stat = statSync(
-      join(config.localDataDir, 'workspaces', 'tasks', 'task-1', '.pi', 'agent'),
+    expect(statSync(join(config.localDataDir, 'workspaces', 'tasks', 'task-1')).isDirectory()).toBe(
+      true,
     );
-    expect(stat.isDirectory()).toBe(true);
+    expect(statSync(platformDir(config.localDataDir)).isDirectory()).toBe(true);
+    // Nothing pi loads is written into the workspace any more (STATUS leftover 422).
+    expect(existsSync(join(config.localDataDir, 'workspaces', 'tasks', 'task-1', '.pi'))).toBe(
+      false,
+    );
   });
 
-  it('writes systemPrompt to <workspace>/.nexttime/system-prompt.md before creating the container (P-A2)', async () => {
+  it('writes systemPrompt to the platform directory before creating the container (P-A2)', async () => {
     const { service, config, docker } = setup();
     await service.spawn({ ...spawnInput, systemPrompt: 'You are a one-shot Worker.' });
-    expect(
-      readFileSync(
-        join(config.localDataDir, 'workspaces', 'tasks', 'task-1', '.nexttime', 'system-prompt.md'),
-        'utf8',
-      ),
-    ).toBe('You are a one-shot Worker.');
+    expect(readFileSync(join(platformDir(config.localDataDir), 'system-prompt.md'), 'utf8')).toBe(
+      'You are a one-shot Worker.',
+    );
     // Written *before* Docker is asked to create the container, not after.
     expect(docker.createCalls).toHaveLength(1);
   });
 
-  it('spawns without a systemPrompt just as before (no .nexttime directory — entrypoint.sh’s static default applies)', async () => {
+  it('spawns without a systemPrompt just as before (no prompt file — entrypoint.sh’s static default applies)', async () => {
     const { service, config } = setup();
     await service.spawn(spawnInput);
-    expect(
-      existsSync(join(config.localDataDir, 'workspaces', 'tasks', 'task-1', '.nexttime')),
-    ).toBe(false);
+    expect(existsSync(join(platformDir(config.localDataDir), 'system-prompt.md'))).toBe(false);
   });
 
-  it('writes skillsInline files under <agentDir>/skills/<name>/ before creating the container', async () => {
+  it('writes skillsInline files under skills/<name>/ in the platform directory before creating the container', async () => {
     const { service, config, docker } = setup();
     await service.spawn({
       ...spawnInput,
@@ -122,35 +132,60 @@ describe('task-service spawn', () => {
         },
       ],
     });
-    const skillDir = join(
-      config.localDataDir,
-      'workspaces',
-      'tasks',
-      'task-1',
-      '.pi',
-      'agent',
-      'skills',
-      'diagnose-network',
-    );
+    const skillDir = join(platformDir(config.localDataDir), 'skills', 'diagnose-network');
     expect(readFileSync(join(skillDir, 'SKILL.md'), 'utf8')).toContain('diagnose-network');
     expect(readFileSync(join(skillDir, 'references', 'notes.md'), 'utf8')).toBe('extra notes');
     // The files are written *before* Docker is asked to create the container, not after.
     expect(docker.createCalls).toHaveLength(1);
   });
 
-  it('spawns without any skillsInline entries just as before (no directory created)', async () => {
+  it('spawns without any skillsInline entries just as before (no Skill directory)', async () => {
     const { service, config } = setup();
     await service.spawn(spawnInput);
-    const skillsDir = join(
-      config.localDataDir,
-      'workspaces',
-      'tasks',
-      'task-1',
-      '.pi',
-      'agent',
-      'skills',
-    );
-    expect(existsSync(skillsDir)).toBe(false);
+    expect(existsSync(join(platformDir(config.localDataDir), 'skills'))).toBe(false);
+  });
+
+  it('never carries an earlier WorkerRun’s prompt or Skills over to the next one of the same Task', async () => {
+    const { service, config } = setup();
+    await service.spawn({
+      ...spawnInput,
+      systemPrompt: 'first run',
+      skillsInline: [{ name: 'old-skill', files: { 'SKILL.md': '---\nname: old-skill\n---\n' } }],
+    });
+    await service.spawn({ ...spawnInput, workerRunId: 'run-2' });
+    expect(existsSync(join(platformDir(config.localDataDir), 'system-prompt.md'))).toBe(false);
+    expect(existsSync(join(platformDir(config.localDataDir), 'skills', 'old-skill'))).toBe(false);
+  });
+
+  it('refuses an image that does not speak this supervisor’s mount layout, before writing or creating anything', async () => {
+    const { service, config, docker } = setup();
+    docker.registerImage({
+      id: 'sha256:old',
+      tags: ['nexttime-ai-worker-runtime:before-422'],
+      created: '2026-10-01T00:00:00Z',
+      labels: { 'ai.nexttime.pi-version': '1.1.0' },
+    });
+    await expect(
+      service.spawn({
+        ...spawnInput,
+        image: 'nexttime-ai-worker-runtime:before-422',
+        systemPrompt: 'never written',
+      }),
+    ).rejects.toBeInstanceOf(RuntimeImageIncompatibleError);
+    expect(docker.createCalls).toHaveLength(0);
+    expect(existsSync(platformDir(config.localDataDir))).toBe(false);
+  });
+
+  it('starts an image carrying the current runtime contract label', async () => {
+    const { service, docker } = setup();
+    docker.registerImage({
+      id: 'sha256:new',
+      tags: ['nexttime-ai-worker-runtime:after-422'],
+      created: '2026-10-23T00:00:00Z',
+      labels: { [IMAGE_RUNTIME_CONTRACT_LABEL]: RUNTIME_CONTRACT_VERSION },
+    });
+    await service.spawn({ ...spawnInput, image: 'nexttime-ai-worker-runtime:after-422' });
+    expect(docker.createCalls).toHaveLength(1);
   });
 
   it('registers the spawned container IP in the egress source map as worker:<ws>:<workerRunId>', async () => {
@@ -548,6 +583,23 @@ describe('task-service sweepRetention', () => {
     expect(existsSync(recent)).toBe(true);
   });
 
+  it('a spawn marks both of the Task’s directories as used, even when it only rewrites what is there', async () => {
+    const { service, config } = setupRealClock({ TASK_WORKDIR_RETENTION_HOURS: '1' });
+    const workspace = taskDir(config, 'task-1');
+    const platform = join(config.localDataDir, 'workspaces', '.platform', 'tasks', 'task-1');
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(platform, { recursive: true });
+    writeFileSync(join(platform, 'system-prompt.md'), 'earlier run');
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    utimesSync(workspace, twoHoursAgo, twoHoursAgo);
+    utimesSync(platform, twoHoursAgo, twoHoursAgo);
+
+    await service.spawn({ ...spawnInput, systemPrompt: 'this run' });
+    const hourAgo = Date.now() - 60 * 60 * 1000;
+    expect(statSync(workspace).mtimeMs).toBeGreaterThan(hourAgo);
+    expect(statSync(platform).mtimeMs).toBeGreaterThan(hourAgo);
+  });
+
   it('never deletes the workdir of a Task the registry still marks running, even if old', async () => {
     const { service, config } = setupRealClock({ TASK_WORKDIR_RETENTION_HOURS: '1' });
     await service.spawn(spawnInput); // taskId: 'task-1', still running
@@ -557,6 +609,21 @@ describe('task-service sweepRetention', () => {
 
     await service.sweepRetention();
     expect(existsSync(dirPath)).toBe(true);
+  });
+
+  it('sweeps a Task’s platform directory by the same rule, never a running Task’s', async () => {
+    const { service, config } = setupRealClock({ TASK_WORKDIR_RETENTION_HOURS: '1' });
+    await service.spawn({ ...spawnInput, systemPrompt: 'running' }); // task-1, still running
+    const old = join(config.localDataDir, 'workspaces', '.platform', 'tasks', 'old-task');
+    mkdirSync(old, { recursive: true });
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    utimesSync(old, twoHoursAgo, twoHoursAgo);
+    const running = platformDir(config.localDataDir);
+    utimesSync(running, twoHoursAgo, twoHoursAgo);
+
+    await service.sweepRetention();
+    expect(existsSync(old)).toBe(false);
+    expect(existsSync(running)).toBe(true);
   });
 });
 

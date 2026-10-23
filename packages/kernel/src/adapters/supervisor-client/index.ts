@@ -61,6 +61,9 @@ export type TaskSupervisorErrorKind =
   | 'invalid_response'
   | 'image_not_allowed'
   | 'invalid_request'
+  /** 409 from worker-supervisor: the image was built before its mount layout (STATUS leftover 422,
+   *  `runtime-contract.ts` there). Recorded as the `worker_run.spawn_failed` audit reason. */
+  | 'runtime_image_incompatible'
   | 'http_error';
 
 export class TaskSupervisorError extends Error {
@@ -114,9 +117,9 @@ export interface TaskSpawnInput {
    *  WorkerDefinition's own egress deny list, never re-derived by this client. */
   readonly egressDeny?: readonly string[];
   /** P-A2: the Worker container's system prompt (the WorkerDefinition's own `systemPrompt` plus
-   *  the platform's `instanceInstructions`), written by worker-supervisor to
-   *  `/workspace/.nexttime/system-prompt.md` in the Task workspace before start. Omitted =
-   *  entrypoint.sh's static default (the pre-P-A2 behaviour). */
+   *  the platform's `instanceInstructions`), written by worker-supervisor into the Task's
+   *  platform directory outside its workspace (read-only `/opt/nexttime/platform/system-prompt.md`
+   *  in the container) before start. Omitted = the runtime image's default prompt. */
   readonly systemPrompt?: string;
 }
 
@@ -145,11 +148,17 @@ export interface RuntimeImageInfo {
  * `config.taskImageAllowlist` verbatim — the exact static allowlist its `/task/spawn` and
  * `/resident/spawn` already enforce (`isImageAllowed`). `application/platform/runtime.ts` reads
  * this to reject a `set_active_runtime_image`/`rollback_runtime_image` target that is not
- * allowlisted, instead of only discovering it once every future spawn starts 403ing. */
+ * allowlisted, instead of only discovering it once every future spawn starts 403ing.
+ *
+ * `runtimeContract` (STATUS leftover 422): the `ai.nexttime.runtime-contract` label value every
+ * image worker-supervisor starts must carry (its `runtime-contract.ts`; a mismatch 409s
+ * `runtime_image_incompatible` at spawn). `undefined` from a worker-supervisor that predates it —
+ * then nothing is known to be incompatible and nothing is refused on that ground. */
 export interface RuntimeImageInventory {
   readonly defaultImage: string;
   readonly images: RuntimeImageInfo[];
   readonly allowedImages: readonly string[];
+  readonly runtimeContract?: string;
 }
 
 /** S7-E: one resident entry container, as worker-supervisor's `GET /residents` reports it —
@@ -219,6 +228,17 @@ async function requestJson(
   } finally {
     clearTimeout(timeoutHandle);
   }
+}
+
+function errorMessageFromBody(body: unknown): string | undefined {
+  if (body && typeof body === 'object' && 'error' in body) {
+    const error = (body as { error?: unknown }).error;
+    if (error && typeof error === 'object' && 'message' in error) {
+      const message = (error as { message?: unknown }).message;
+      return typeof message === 'string' ? message : undefined;
+    }
+  }
+  return undefined;
 }
 
 function errorCodeFromBody(body: unknown): string | undefined {
@@ -338,10 +358,17 @@ export class TaskSupervisorClient implements TaskSupervisorClientPort {
         },
       );
     }
+    const code = errorCodeFromBody(body);
+    if (status === 409 && code === 'runtime_image_incompatible') {
+      // The supervisor's message names the image and the label it found.
+      throw new TaskSupervisorError(code, errorMessageFromBody(body) ?? code, { status });
+    }
     if (status !== 200) {
-      throw new TaskSupervisorError('http_error', `POST /task/spawn returned ${status}`, {
-        status,
-      });
+      throw new TaskSupervisorError(
+        'http_error',
+        `POST /task/spawn returned ${status}${code ? ` ${code}` : ''}`,
+        { status },
+      );
     }
     return body as TaskSpawnOutcome;
   }
@@ -395,7 +422,12 @@ export class TaskSupervisorClient implements TaskSupervisorClientPort {
     const parsed = body as RuntimeImageInventory;
     // P1-a hotfix: defend against an older worker-supervisor that does not yet send
     // `allowedImages` — default to "nothing allowed" (fail closed), never guessed open.
-    return { ...parsed, allowedImages: parsed.allowedImages ?? [] };
+    return {
+      ...parsed,
+      allowedImages: parsed.allowedImages ?? [],
+      runtimeContract:
+        typeof parsed.runtimeContract === 'string' ? parsed.runtimeContract : undefined,
+    };
   }
 
   async listResidents(): Promise<ResidentInventoryEntry[]> {

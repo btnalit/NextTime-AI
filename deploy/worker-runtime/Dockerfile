@@ -35,13 +35,13 @@
 #     flags. There is NO `--system-prompt-file` flag.
 #   - packages/coding-agent/src/core/resource-loader.ts `resolvePromptInput`: `--system-prompt`'s
 #     value is read as a *file's contents* when `existsSync(value)` is true, otherwise used as
-#     literal text — so `--system-prompt /workspace/.nexttime/system-prompt.md` (entrypoint.sh)
+#     literal text — so `--system-prompt /opt/nexttime/platform/system-prompt.md` (entrypoint.sh)
 #     does exactly what a `--system-prompt-file` flag would, without one existing.
 #   - packages/coding-agent/src/config.ts: the installed package's `piConfig.name` is unset, so
 #     `APP_NAME` defaults to `"pi"` and `ENV_AGENT_DIR` = `PI_CODING_AGENT_DIR`. `getAgentDir()`
-#     honors that env var, and `getModelsPath()` = `<agentDir>/models.json` — so bind-mounting
-#     `models.json` at `${PI_CODING_AGENT_DIR}/models.json` (worker-supervisor's spawn spec) is
-#     exactly the path pi itself reads.
+#     honors that env var, and `getModelsPath()` = `<agentDir>/models.json` — so entrypoint.sh's
+#     link from `${PI_CODING_AGENT_DIR}/models.json` to the read-only `/opt/nexttime/models.json`
+#     mount (worker-supervisor's spawn spec) is exactly the path pi itself reads.
 #   - packages/coding-agent/src/core/extensions/loader.ts: `-e <path>` loads via jiti, which
 #     serves `@earendil-works/pi-{coding-agent,ai,agent-core,tui}` and `typebox/{compile,value}`
 #     imports from pi's own copies, never the extension's own `node_modules` — so
@@ -166,6 +166,13 @@ RUN groupadd --system --gid 10001 nexttime \
 
 COPY --from=build --chown=nexttime:nexttime /out/platform-extension /opt/nexttime/platform-extension
 COPY --chmod=755 deploy/worker-runtime/entrypoint.sh /opt/nexttime/entrypoint.sh
+# Whitelist start (entrypoint.sh header, STATUS leftover 422): pi's settings and the default system
+# prompt are image content, root-owned and read-only like the rest of /opt/nexttime. The two
+# mount points worker-supervisor binds read-only (host-paths.ts) exist in the image, so neither
+# Docker nor gVisor has to create one on the read-only root filesystem: `platform/` (the
+# published system prompt and Skills) and `models.json`.
+COPY --chmod=644 deploy/worker-runtime/pi-settings.json deploy/worker-runtime/default-system-prompt.md /opt/nexttime/
+RUN mkdir -p /opt/nexttime/platform && touch /opt/nexttime/models.json
 
 # pip installs as the non-root user under the read-only root filesystem (design doc §7.3 "只读根
 # 文件系统只写工作目录与 /tmp"): PYTHONUSERBASE under /workspace, which is always writable (the
@@ -221,5 +228,12 @@ ARG BUILT_FROM=dev
 LABEL ai.nexttime.pi-version="${PI_VERSION}" \
       ai.nexttime.platform-extension-version="${PLATFORM_EXTENSION_VERSION}" \
       ai.nexttime.built-from="${BUILT_FROM}"
+
+# The mount layout this image's entrypoint.sh expects from worker-supervisor, which refuses to
+# start an image without the version it speaks (packages/worker-supervisor/src/runtime-contract.ts).
+# 2 = the whitelist start (STATUS leftover 422): platform directory and models.json under
+# /opt/nexttime, nothing of pi's under /workspace. A literal, not a build arg: it describes this
+# file's entrypoint, so every build from it carries it. Bump both together.
+LABEL ai.nexttime.runtime-contract="2"
 
 ENTRYPOINT ["/opt/nexttime/entrypoint.sh"]

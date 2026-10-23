@@ -30,16 +30,17 @@
  * package) — there is nothing left for the container spec or registry to do with the raw value.
  *
  * **`systemPrompt` (P-A2; design doc §6.6)**: same mechanism as `skillsInline` below — `spawn()`
- * writes it to `/workspace/.nexttime/system-prompt.md` inside this Task's own workspace before
- * `docker.createAndStart`, which is where `deploy/worker-runtime/entrypoint.sh` looks before
- * falling back to its own static default. Resident mode carries the identical field for entry
- * containers (`resident-service.ts`'s `writeSystemPromptIfChanged`).
+ * writes it to `system-prompt.md` in this Task's own platform directory (`host-paths.ts`, mounted
+ * read-only at `/opt/nexttime/platform`) before `docker.createAndStart`, which is where
+ * `deploy/worker-runtime/entrypoint.sh` looks before falling back to its own static default.
+ * Resident mode carries the identical field for entry containers (`resident-service.ts`'s
+ * `writeSystemPromptIfChanged`).
  *
  * **`skillsInline` (S2.14)**: carries Skill file *content*, not a host path — the kernel has no
  * writable data mount of its own to stage a host path from (I9-adjacent). `spawn()` below writes
- * every entry's files directly under this Task's own `<agentDir>/skills/<name>/` before calling
- * `docker.createAndStart` — no bind mount, the whole Task workspace directory is already mounted
- * at `/workspace`. Validated structurally by `config.ts`'s `TaskSkillInlineSchema` (safe
+ * every entry's files under `skills/<name>/` in this Task's own platform directory before calling
+ * `docker.createAndStart` — the directory the container mounts read-only, which the Worker can
+ * read but not edit. Validated structurally by `config.ts`'s `TaskSkillInlineSchema` (safe
  * names/paths, per-file and total size caps) before this function ever sees it. This is the only
  * way a spawn request can put a Skill into a Worker container — an earlier `skills[]` host-path
  * variant (a caller-supplied absolute path bind-mounted read-only) was removed (lane-6 review
@@ -47,7 +48,7 @@
  * nothing in this codebase ever sent it — see `config.ts`'s `TaskSkillInlineSchema` doc comment).
  */
 
-import { mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { posix as posixPath } from 'node:path';
 import { isValidCorrelationId } from '@nexttime/shared';
 import type { SupervisorConfig } from './config.js';
@@ -57,10 +58,13 @@ import { taskSourceId } from './egress-map.js';
 import type { EgressMapStore } from './egress-map.js';
 import { type HandleBindingStore, bindExclusive, containerAtAddress } from './handle-bindings.js';
 import {
+  localSkillsDir,
+  localTaskPlatformRootDir,
   localTaskWorkspacesRootDir,
   taskSystemPromptPath,
   taskWorkspacePaths,
 } from './host-paths.js';
+import { assertRuntimeContract } from './runtime-contract.js';
 import {
   TASK_CORRELATION_ID_LABEL,
   TASK_EGRESS_DENY_LABEL,
@@ -171,6 +175,10 @@ interface RegistryEntry {
 export interface TaskServiceDeps {
   readonly config: SupervisorConfig;
   readonly docker: DockerClient;
+  /** The read-only images connection (`resident-service.ts`'s `ResidentServiceDeps.imagesDocker`
+   *  has why it is a separate one) — read by the runtime contract check before every spawn
+   *  (`runtime-contract.ts`). Defaults to `docker`, as there. */
+  readonly imagesDocker?: DockerClient;
   readonly egressMap: EgressMapStore;
   /** Where the container's Handle is bound to its address (handle-bindings.ts) — never its env. */
   readonly handleBindings: HandleBindingStore;
@@ -215,6 +223,7 @@ export interface TaskService {
 
 export function createTaskService(deps: TaskServiceDeps): TaskService {
   const { config, docker, egressMap, handleBindings } = deps;
+  const imagesDocker = deps.imagesDocker ?? docker;
   const isAt = containerAtAddress(docker);
   const now = deps.now ?? (() => Date.now());
   const registry = new Map<string, RegistryEntry>();
@@ -362,6 +371,50 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
     await reconcileOne(workerRunId, entry);
   }
 
+  /** Removes every per-Task directory under `root` older than the retention cutoff whose Task
+   *  isn't running. A missing `root` is nothing to sweep (it appears with the first spawn). */
+  function sweepTaskDirs(
+    root: string,
+    runningTaskIds: ReadonlySet<string>,
+    cutoffMs: number,
+  ): void {
+    let taskDirs: string[];
+    try {
+      taskDirs = readdirSync(root, { withFileTypes: true })
+        .filter((d) => d.isDirectory())
+        .map((d) => d.name);
+    } catch {
+      return;
+    }
+    for (const taskId of taskDirs) {
+      if (runningTaskIds.has(taskId)) continue; // never delete a still-active Task's workdir
+      const dir = `${root}/${taskId}`;
+      let mtimeMs: number;
+      try {
+        mtimeMs = statSync(dir).mtimeMs;
+      } catch {
+        continue;
+      }
+      if (now() - mtimeMs <= cutoffMs) continue;
+      try {
+        rmSync(dir, { recursive: true, force: true });
+        console.log(
+          JSON.stringify({ level: 'info', msg: 'task workdir retention swept', taskId, dir }),
+        );
+      } catch (err) {
+        console.error(
+          JSON.stringify({
+            level: 'warn',
+            msg: 'task workdir retention sweep failed',
+            taskId,
+            dir,
+            error: String(err),
+          }),
+        );
+      }
+    }
+  }
+
   function toStatus(workerRunId: string, entry: RegistryEntry): TaskStatus {
     return {
       workerRunId,
@@ -392,39 +445,46 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
       } = input;
       const paths = taskWorkspacePaths(config, taskId);
 
-      // Same rationale as resident-service.ts's own pre-creation of localPiAgentDir: this process
-      // also runs as uid 10001, so a directory it creates here is already correctly owned,
-      // avoiding Docker auto-creating `.pi/` as root while preparing the models.json bind-mount
-      // (which would then block the non-root Worker container from creating sibling directories
-      // under it).
+      // Refused before anything is written (runtime-contract.ts).
+      await assertRuntimeContract(imagesDocker, image, { mode: 'task', taskId, workerRunId });
+
+      // This process also runs as uid 10001, so a directory it creates here is already correctly
+      // owned; both are bind sources, which Docker would otherwise create as root.
       mkdirSync(paths.localWorkspaceDir, { recursive: true });
-      mkdirSync(paths.localPiAgentDir, { recursive: true });
+      mkdirSync(paths.localPlatformDir, { recursive: true });
 
       // P-A2: the Task-mode counterpart of resident mode's `writeSystemPromptIfChanged` — put the
-      // caller's prompt at `/workspace/.nexttime/system-prompt.md` (host-paths.ts
-      // `taskSystemPromptPath`) *before* `docker.createAndStart` below, so `entrypoint.sh` reads
-      // it instead of writing its own static default. Written unconditionally, with no
-      // "did it change" comparison: unlike resident mode there is no reuse-a-running-container
-      // branch here to skip the write for — every spawn creates a container, and the prompt this
-      // call carries is the one it must start with.
+      // caller's prompt in this Task's platform directory (host-paths.ts `taskSystemPromptPath`)
+      // *before* `docker.createAndStart` below, so `entrypoint.sh` reads it instead of its own
+      // static default. Written unconditionally, with no "did it change" comparison: unlike
+      // resident mode there is no reuse-a-running-container branch here to skip the write for —
+      // every spawn creates a container, and the prompt this call carries is the one it must
+      // start with. For the same reason an earlier WorkerRun's prompt or Skills never carry over
+      // to this one: the file is removed when this call carries none, and `skills/` is cleared.
+      const promptPath = taskSystemPromptPath(paths);
       if (systemPrompt !== undefined) {
-        const promptPath = taskSystemPromptPath(paths);
-        mkdirSync(posixPath.dirname(promptPath), { recursive: true });
         writeFileSync(promptPath, systemPrompt, 'utf8');
+      } else {
+        rmSync(promptPath, { force: true });
       }
 
-      // S2.14: write every `skillsInline[]` entry's files under this container's own local view
-      // of `<agentDir>/skills/<name>/` — the whole Task workspace is already bind-mounted at
-      // `/workspace`, so no new bind mount is needed, only the write happening *before*
-      // `docker.createAndStart` below.
+      // S2.14: write every `skillsInline[]` entry's files under `skills/<name>/` in the same
+      // directory, *before* `docker.createAndStart` below.
+      const skillsDir = localSkillsDir(paths.localPlatformDir);
+      rmSync(skillsDir, { recursive: true, force: true });
       for (const skill of skillsInline ?? []) {
-        const skillDir = posixPath.join(paths.localPiAgentDir, 'skills', skill.name);
+        const skillDir = posixPath.join(skillsDir, skill.name);
         for (const [fileName, content] of Object.entries(skill.files)) {
           const filePath = posixPath.join(skillDir, fileName);
           mkdirSync(posixPath.dirname(filePath), { recursive: true });
           writeFileSync(filePath, content, 'utf8');
         }
       }
+      // Retention (`sweepRetention`) goes by each directory's own mtime, which rewriting a file
+      // already there doesn't move: mark both as used by this spawn.
+      const usedAt = new Date(now());
+      utimesSync(paths.localWorkspaceDir, usedAt, usedAt);
+      utimesSync(paths.localPlatformDir, usedAt, usedAt);
 
       const networkName = await resolveNetworkName();
       const spec = buildTaskSpawnSpec({
@@ -589,48 +649,14 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
     },
 
     async sweepRetention(): Promise<void> {
-      const root = localTaskWorkspacesRootDir(config);
-      let taskDirs: string[];
-      try {
-        taskDirs = readdirSync(root, { withFileTypes: true })
-          .filter((d) => d.isDirectory())
-          .map((d) => d.name);
-      } catch {
-        return; // nothing to sweep yet — the root doesn't exist until the first spawn
-      }
-
       const cutoffMs = config.taskWorkdirRetentionHours * 60 * 60 * 1000;
       const runningTaskIds = new Set(
         [...registry.values()].filter((e) => e.state === 'running').map((e) => e.taskId),
       );
-
-      for (const taskId of taskDirs) {
-        if (runningTaskIds.has(taskId)) continue; // never delete a still-active Task's workdir
-        const dir = `${root}/${taskId}`;
-        let mtimeMs: number;
-        try {
-          mtimeMs = statSync(dir).mtimeMs;
-        } catch {
-          continue;
-        }
-        if (now() - mtimeMs <= cutoffMs) continue;
-        try {
-          rmSync(dir, { recursive: true, force: true });
-          console.log(
-            JSON.stringify({ level: 'info', msg: 'task workdir retention swept', taskId, dir }),
-          );
-        } catch (err) {
-          console.error(
-            JSON.stringify({
-              level: 'warn',
-              msg: 'task workdir retention sweep failed',
-              taskId,
-              dir,
-              error: String(err),
-            }),
-          );
-        }
-      }
+      // A Task's platform directory (host-paths.ts) follows the same rule as its workspace,
+      // swept on its own mtime so one left behind without its workspace still goes.
+      sweepTaskDirs(localTaskWorkspacesRootDir(config), runningTaskIds, cutoffMs);
+      sweepTaskDirs(localTaskPlatformRootDir(config), runningTaskIds, cutoffMs);
     },
 
     async notifyContainerExited(containerId: string, action: string): Promise<boolean> {

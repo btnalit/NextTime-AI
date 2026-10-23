@@ -66,6 +66,10 @@ import {
 const IMAGE_PI_VERSION_LABEL = 'ai.nexttime.pi-version';
 const IMAGE_PLATFORM_EXTENSION_VERSION_LABEL = 'ai.nexttime.platform-extension-version';
 const IMAGE_BUILT_FROM_LABEL = 'ai.nexttime.built-from';
+/** STATUS leftover 422 (whitelist start): worker-supervisor's `IMAGE_RUNTIME_CONTRACT_LABEL`
+ *  (`runtime-contract.ts`). The value it requires is not copied — `GET /images` reports it
+ *  (`RuntimeImageInventory.runtimeContract`). */
+const IMAGE_RUNTIME_CONTRACT_LABEL = 'ai.nexttime.runtime-contract';
 
 /** Nil UUID — the same placeholder `platform-handlers.ts`'s `countGatekeepers` already uses for
  *  `setWorkspaceContext`'s `principalId` argument when no real acting Principal exists for the
@@ -105,19 +109,45 @@ async function tryListImages(): Promise<{
   defaultImage: string | undefined;
   images: RuntimeImageInfo[];
   allowedImages: readonly string[];
+  runtimeContract: string | undefined;
 }> {
+  const nothing = {
+    defaultImage: undefined,
+    images: [],
+    allowedImages: [],
+    runtimeContract: undefined,
+  };
   try {
     const client = getConfiguredTaskRuntime().supervisorClient;
-    if (!client.listImages) return { defaultImage: undefined, images: [], allowedImages: [] };
+    if (!client.listImages) return nothing;
     const inventory = await client.listImages();
     return {
       defaultImage: inventory.defaultImage,
       images: inventory.images,
       allowedImages: inventory.allowedImages,
+      runtimeContract: inventory.runtimeContract,
     };
   } catch {
-    return { defaultImage: undefined, images: [], allowedImages: [] };
+    return nothing;
   }
+}
+
+/** STATUS leftover 422: whether worker-supervisor would refuse to start a container from `image`
+ *  (409 `runtime_image_incompatible`, its `runtime-contract.ts`). `null` when it did not report
+ *  the contract it requires — unknown, never guessed. */
+function runtimeCompatibility(
+  image: RuntimeImageInfo,
+  runtimeContract: string | undefined,
+): boolean | null {
+  if (runtimeContract === undefined) return null;
+  return image.labels[IMAGE_RUNTIME_CONTRACT_LABEL] === runtimeContract;
+}
+
+function incompatibleImageError(image: string, verb: string): PlatformAdminError {
+  return new PlatformAdminError(
+    'runtime_image_incompatible',
+    `image "${image}" was built before the runtime's current mount layout (no matching ${IMAGE_RUNTIME_CONTRACT_LABEL} label) — worker-supervisor refuses to start any container from it, so it was not ${verb}; build the runtime image from this release (docs/runbooks/operations.md §13)`,
+  );
 }
 
 async function tryListResidents(): Promise<ResidentInventoryEntry[]> {
@@ -173,6 +203,7 @@ function resolveActiveImage(
 function toWireRuntimeImage(
   image: RuntimeImageInfo,
   allowedImages: ReadonlySet<string>,
+  runtimeContract: string | undefined,
 ): RuntimeImageWire {
   const activatableRef =
     image.tags.find((tag) => allowedImages.has(normalizeImageRef(tag))) ?? null;
@@ -186,6 +217,7 @@ function toWireRuntimeImage(
     labels: { ...image.labels },
     allowed: activatableRef !== null,
     activatableRef,
+    runtimeCompatible: runtimeCompatibility(image, runtimeContract),
   };
 }
 
@@ -245,8 +277,12 @@ export const runtimeInventoryHandler: CapabilityHandler = async (client) => {
   const result: RuntimeInventoryWire = {
     activeImage,
     activeImageSource,
-    activeImageInfo: activeImageInfo ? toWireRuntimeImage(activeImageInfo, allowedImages) : null,
-    images: imagesResult.images.map((image) => toWireRuntimeImage(image, allowedImages)),
+    activeImageInfo: activeImageInfo
+      ? toWireRuntimeImage(activeImageInfo, allowedImages, imagesResult.runtimeContract)
+      : null,
+    images: imagesResult.images.map((image) =>
+      toWireRuntimeImage(image, allowedImages, imagesResult.runtimeContract),
+    ),
     residentContainers,
     checkedAt: new Date().toISOString(),
   };
@@ -264,9 +300,13 @@ export const listRuntimeImagesHandler: CapabilityHandler = async () => {
       'application/platform/runtime: the configured supervisor client does not implement listImages (S7-E)',
     );
   }
-  const { images, allowedImages } = await supervisor.listImages();
+  const { images, allowedImages, runtimeContract } = await supervisor.listImages();
   const allowedSet = new Set(allowedImages.map(normalizeImageRef));
-  return { result: { items: images.map((image) => toWireRuntimeImage(image, allowedSet)) } };
+  return {
+    result: {
+      items: images.map((image) => toWireRuntimeImage(image, allowedSet, runtimeContract)),
+    },
+  };
 };
 
 // -------------------------------------------------------------------------------------------
@@ -288,15 +328,17 @@ export const setActiveRuntimeImageHandler: CapabilityHandler = async (
   }
   let images: RuntimeImageInfo[];
   let allowedImages: readonly string[];
+  let runtimeContract: string | undefined;
   try {
-    ({ images, allowedImages } = await supervisor.listImages());
+    ({ images, allowedImages, runtimeContract } = await supervisor.listImages());
   } catch (err) {
     throw new PlatformAdminError(
       'runtime_unreachable',
       `could not reach worker-supervisor to validate the image: ${String(err)}`,
     );
   }
-  if (!findImage(images, image)) {
+  const target = findImage(images, image);
+  if (!target) {
     throw new PlatformAdminError(
       'image_not_in_inventory',
       `image "${image}" is not in list_runtime_images — build it on the host/CI first (docs/runbooks/operations.md §13) before setting it active`,
@@ -321,6 +363,12 @@ export const setActiveRuntimeImageHandler: CapabilityHandler = async (
       'image_not_allowed',
       `image "${image}" is not in worker-supervisor's WORKER_IMAGE_ALLOWLIST — allowed: ${allowedImages.join(', ') || '(none)'}`,
     );
+  }
+  // STATUS leftover 422: built and allowlisted is still not startable — worker-supervisor refuses
+  // an image without its current runtime-contract label (409 at every spawn), so making one
+  // active would break every new entry conversation and Worker platform-wide.
+  if (runtimeCompatibility(target, runtimeContract) === false) {
+    throw incompatibleImageError(image, 'set active');
   }
   // Stored normalized (not the raw input) — the same value `resolveActiveRuntimeImage` later
   // forwards verbatim into a spawn request's own `image` field, so it always exactly matches
@@ -401,9 +449,11 @@ export const rollbackRuntimeImageHandler: CapabilityHandler = async (
         'application/platform/runtime: the configured supervisor client does not implement listImages (S7-E)',
       );
     }
+    let images: RuntimeImageInfo[];
     let allowedImages: readonly string[];
+    let runtimeContract: string | undefined;
     try {
-      ({ allowedImages } = await supervisor.listImages());
+      ({ images, allowedImages, runtimeContract } = await supervisor.listImages());
     } catch (err) {
       throw new PlatformAdminError(
         'runtime_unreachable',
@@ -417,6 +467,12 @@ export const rollbackRuntimeImageHandler: CapabilityHandler = async (
         'image_not_allowed',
         `previous image "${previousImage}" is no longer in worker-supervisor's WORKER_IMAGE_ALLOWLIST — allowed: ${allowedImages.join(', ') || '(none)'}`,
       );
+    }
+    // STATUS leftover 422: same as `set_active_runtime_image`. A pruned target (not in the
+    // inventory) still passes, per the inventory-existence skip above — its label is unknown.
+    const target = findImage(images, previousImage);
+    if (target && runtimeCompatibility(target, runtimeContract) === false) {
+      throw incompatibleImageError(previousImage, 'rolled back to');
     }
   }
 
@@ -505,6 +561,15 @@ export const rollEntryContainersHandler: CapabilityHandler = async (
     imagesResult.defaultImage,
   );
   const activeImageInfo = activeImage ? findImage(imagesResult.images, activeImage) : undefined;
+  // STATUS leftover 422: a stopped resident comes back from the active image at its next Turn —
+  // from an incompatible one it would not come back at all. Refuse before stopping anything.
+  if (
+    activeImage &&
+    activeImageInfo &&
+    runtimeCompatibility(activeImageInfo, imagesResult.runtimeContract) === false
+  ) {
+    throw incompatibleImageError(activeImage, 'used to roll entry containers');
+  }
   const byPrincipal = new Map(residents.map((resident) => [resident.principalId, resident]));
 
   const targetIds = principalIds ?? residents.map((resident) => resident.principalId);

@@ -568,7 +568,9 @@ cap runtime_inventory | jq '{activeImage, activeImageSource, images: [.images[]|
 **滚动重建不是"拒绝新 Turn"（决定 E2）**：入口容器在自己的**下一次** Turn 开始时，`spawn()` 发现请求的镜像
 和容器当前标签不一致就自然重建（跟 Handle 轮换、Skill 集合变化走同一条"规格漂移重建"逻辑）——正在进行的
 Turn 不受影响。**没有 draining 状态**，也不会拒绝新 Turn；只有测试证明存在缝（例如"待重建"的容器长期无人
-发言）才会加更强的机制，S7-E 尚未加。
+发言）才会加更强的机制，S7-E 尚未加。遗留 422（白名单启动）之前的 worker-supervisor 起的容器还是旧的挂载布局，
+容器上没有 `nexttime.runtime-contract` label：镜像名没变也在下一轮重建；活动镜像本身不兼容时（见下表
+`runtime_image_incompatible`）继续用这个旧容器，worker-supervisor 记一行 warn。
 
 **设为活动镜像 / 回滚**：
 
@@ -579,6 +581,13 @@ cap rollback_runtime_image                                                    # 
 
 设置本身立即生效于*之后*的 spawn（design §8）；已运行的入口容器按上一段"下一次 Turn 自然重建"收敛。控制台
 `#/platform/runtime` 页面对不在 allowlist 里的镜像直接置灰"设为活动"按钮（P1-a-page），不用等 409。
+
+遗留 422 之前构建的镜像（没有 `ai.nexttime.runtime-contract=2` label，`list_runtime_images` 里
+`runtimeCompatible: false`）起不了容器：`set_active_runtime_image`、`rollback_runtime_image` 以它为目标、
+`roll_entry_containers` 在它是活动镜像时，都返回 409 `runtime_image_incompatible`，不改设置、不停容器。运行层页
+把这类镜像标成「不兼容」并置灰「设为活动」；活动镜像本身不兼容时页面顶部提示该换哪个镜像，「现在重建」置灰。
+`runtimeCompatible: null` 是旧版 worker-supervisor 说不清，内核不拒绝。所以到下一次 pi 升级之前，**只回滚运行时
+镜像**这条路走不通，回滚只能整版做（代码、镜像、worker-supervisor 一起，`release.md`）。
 
 **`roll_entry_containers`（加速项，仅此而已）**：只停"待重建 **且** 内核自己的 Turn 台账（`activities`
 `kind='agent_turn' and status='running'`）里没有进行中 Turn"的容器；忙的容器永远跳过（`skipped_in_flight`），
@@ -620,6 +629,8 @@ cap platform_status | jq '{health, backup, llmUsage30d}'
 | `runtime_inventory` 里 `activeImageInfo` 是 `null` | 活动镜像的 tag/digest 不在 `list_runtime_images` 里（自定义镜像没打三个 label，或 worker-supervisor 连不上） | 检查镜像是否带 `ai.nexttime.*` label；`residentContainers[].needsRebuild` 此时恒为 `false`（不猜） |
 | `platform_status.health` 里 `llm-proxy` / `worker-supervisor` 是 `down` | 服务没起，或内核到不了 `KERNEL_LLM_URL` / `SUPERVISOR_URL` | `docker compose ps`；确认内核与这两个服务同在 `control` 网络 |
 | `roll_entry_containers` 全是 `skipped_in_flight` | 用户确实在用 | 符合预期——加速项不抢占正在进行的 Turn；等 Turn 结束，或等其自然下一次 spawn 收敛 |
+| 入口对话或 Worker 一启动就失败（遗留 422）：`docker compose logs worker-supervisor` 里有 `resident/spawn refused: runtime_image_incompatible`（或 `task/spawn …`，带 `image`、`found`）；agent-host 日志与被拒的那轮写的是 `POST /resident/spawn returned 409 runtime_image_incompatible`；Worker 的平台审计 `worker_run.spawn_failed` 的 `reason` 是 `runtime_image_incompatible` | 活动镜像是白名单启动之前构建的，没有 `ai.nexttime.runtime-contract=2` label，与本版 worker-supervisor 的挂载布局不兼容（`docs/runbooks/pi-upgrade.md` §2.6）；worker-supervisor 拒绝起容器，不动正在跑的 | `sh scripts/build-images.sh worker-runtime` 用本版重建，`set_active_runtime_image` 设为活动（运行层页「设为活动」）；运行层页把这类镜像标成「不兼容」，内核也拒绝把它设为活动；要回到 422 之前就整版回滚，worker-supervisor 一起 |
+| 入口容器一启动就退出，容器日志 `nexttime-selfcheck check=models_json result=fail reason=empty_mount`（遗留 422） | 起它的 worker-supervisor 比镜像旧，没有把 `models.json` 挂到 `/opt/nexttime/models.json`，镜像里那个位置只有空占位：发版应用时拉完镜像、还没重启服务的那段时间，或者只回滚了 worker-supervisor、没回滚镜像 | 把发版应用做完（`docker compose up -d`）；要回滚就整版回滚，镜像和 worker-supervisor 一起 |
 | `platform_status.backup.status` 是 `stale` | 超过 26 小时没有成功的备份 | `docker compose logs backup`；在检出目录跑 `sh scripts/check-backup-freshness.sh` 看是哪一项 FAIL（`backup-restore.md`） |
 | `platform_status.backup.status` 是 `unknown` | 看 `detail`：`no backup marker`（还没成功过一次，或内核容器是 D-28 之前建的、没有这个挂载）/ `not readable`（主机文件不是 0644）/ `is a directory`（文件不存在时内核先起来了，Docker 在那里建了目录）/ `no timestamp= line`（空标记：还没成功过一次） | 依次：等下一次 `BACKUP_TIME` 或手动跑一次备份；`docker compose up -d kernel` 重建内核；`backup-restore.md`「备份状态（控制台）」一节的修复步骤 |
 
