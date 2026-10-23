@@ -13,11 +13,15 @@ import type {
   GoalRunStatus,
   GoalRunWire,
   ObservationCheck,
+  OutputJsonValue,
+  OutputSchema,
+  OutputSchemaType,
   PlanHint,
   PlanStep,
   Predicate,
   PredicateJsonValue,
   StepAcceptanceState,
+  StepBinding,
   StepRemoval,
   StepRunFailureCategory,
   StepRunWaitingReason,
@@ -130,8 +134,8 @@ const FAILURE: Readonly<
   contract_violation: {
     short: ['结果不合约定', 'Result broke its contract'],
     detail: [
-      'Worker 的结果不符合约定的格式，或没有报告结果，需要人决定。',
-      'The Worker’s result did not match its schema, or none was reported; a person decides.',
+      'Worker 没有交回平台接受的结果：输出始终不符合这一步的输出约定，或没有报告结果。第一次平台会自动返工一次，并把被拒的原因告诉 Worker；返工后仍是这样，需要人决定。',
+      'The Worker never handed back a result the platform accepted: its output never met the step’s output contract, or it reported none. The first time, the platform redoes the step once and tells the Worker what was refused; if the rework ends the same way, a person decides.',
     ],
   },
   verification_failed: {
@@ -163,6 +167,134 @@ export function stepFailureText(
 ): { readonly short: string; readonly detail: string } {
   const entry = FAILURE[category];
   return { short: t(entry.short[0], entry.short[1]), detail: t(entry.detail[0], entry.detail[1]) };
+}
+
+// ---------------------------------------------------------------------------------------------
+// A step's output contract, and the inputs it takes from earlier steps (S11 GO5d-1)
+// ---------------------------------------------------------------------------------------------
+
+/** 「输入 host 来自步骤 scan 输出的 hosts[0]」 — one of a step's bindings, as a sentence. */
+export function bindingSentence(binding: StepBinding, t: Translate): string {
+  return t(
+    `输入 ${binding.to} 来自步骤 ${binding.from} 输出的 ${binding.path}`,
+    `Input ${binding.to} comes from ${binding.path} of step ${binding.from}’s output`,
+  );
+}
+
+const OUTPUT_TYPE: Readonly<Record<OutputSchemaType, readonly [string, string]>> = {
+  string: ['文本', 'text'],
+  integer: ['整数', 'integer'],
+  number: ['数字', 'number'],
+  boolean: ['是/否', 'yes/no'],
+  object: ['对象', 'object'],
+  array: ['列表', 'list'],
+  null: ['空值', 'null'],
+};
+
+const typeWord = (name: string, t: Translate): string => {
+  const pair = Object.hasOwn(OUTPUT_TYPE, name) ? OUTPUT_TYPE[name as OutputSchemaType] : undefined;
+  return pair ? t(pair[0], pair[1]) : name;
+};
+
+/** What `@nexttime/shared` `validateOutput` / `outputContractProblems` say of one place, each
+ *  message a fixed English template, put in Chinese. The English stays as sent — it is what the
+ *  Worker read — and a message no template matches is shown as sent in either language. */
+const OUTPUT_PROBLEM_ZH: readonly (readonly [
+  RegExp,
+  (match: RegExpExecArray, t: Translate) => string,
+])[] = [
+  [
+    /^expected (.+), got (\w+)$/,
+    (m, t) =>
+      `应为${(m[1] ?? '')
+        .split(' or ')
+        .map((type) => typeWord(type, t))
+        .join('或')}，实际是${typeWord(m[2] ?? '', t)}`,
+  ],
+  [/^must be one of (.+)$/s, (m) => `应为其中之一：${m[1]}`],
+  [/^must be (.+)$/s, (m) => `应为 ${m[1]}`],
+  [/^shorter than (\d+) characters$/, (m) => `少于 ${m[1]} 个字符`],
+  [/^longer than (\d+) characters$/, (m) => `多于 ${m[1]} 个字符`],
+  [/^less than (\S+)$/, (m) => `小于下限 ${m[1]}`],
+  [/^greater than (\S+)$/, (m) => `大于上限 ${m[1]}`],
+  [/^fewer than (\d+) items$/, (m) => `少于 ${m[1]} 项`],
+  [/^more than (\d+) items$/, (m) => `多于 ${m[1]} 项`],
+  [/^required, missing$/, () => '必填，但没有'],
+  [
+    /^not declared by the schema \(additionalProperties is false\)$/,
+    () => '约定里没有这个字段，且约定不允许多出的字段',
+  ],
+  [/^too large to check: more than (\d+) values$/, (m) => `太大，无法检查：超过 ${m[1]} 个值`],
+  [
+    /^missing: this step declares an output schema/,
+    () => '没有带 output：这一步声明了输出约定，结果要放在 output 里',
+  ],
+];
+
+/** One output-contract problem's message for the reader — see {@link OUTPUT_PROBLEM_ZH}. */
+export function outputProblemText(message: string, t: Translate): string {
+  for (const [pattern, zh] of OUTPUT_PROBLEM_ZH) {
+    const match = pattern.exec(message);
+    if (match) return t(zh(match, t), message);
+  }
+  return message;
+}
+
+/** How many of an `enum`'s values a field's kind spells out before 「等 N 个」. */
+const ENUM_SHOWN = 5;
+
+function enumValue(value: OutputJsonValue): string {
+  return clipMiddle(JSON.stringify(value) ?? 'null', 40);
+}
+
+/** What one node of an output schema asks for, in a few words: 「文本列表」, 「整数」,
+ *  「取值之一："fast"、"safe"」. Its bounds and nested fields are in the schema itself. */
+export function outputKindText(schema: OutputSchema, t: Translate): string {
+  if (schema.const !== undefined) {
+    return t(`固定为 ${enumValue(schema.const)}`, `always ${enumValue(schema.const)}`);
+  }
+  if (schema.enum !== undefined) {
+    const shown = schema.enum.slice(0, ENUM_SHOWN).map(enumValue);
+    const more = schema.enum.length - shown.length;
+    return more > 0
+      ? t(
+          `取值之一：${shown.join('、')} 等 ${schema.enum.length} 个`,
+          `one of ${shown.join(', ')} and ${more} more`,
+        )
+      : t(`取值之一：${shown.join('、')}`, `one of ${shown.join(', ')}`);
+  }
+  const types =
+    schema.type === undefined ? [] : Array.isArray(schema.type) ? schema.type : [schema.type];
+  if (types.length === 0) return t('任意值', 'any value');
+  return types
+    .map((type: OutputSchemaType) => {
+      if (type === 'array' && schema.items !== undefined) {
+        const inner = outputKindText(schema.items, t);
+        return t(`列表（每项：${inner}）`, `list of ${inner}`);
+      }
+      const [zh, en] = OUTPUT_TYPE[type];
+      return t(zh, en);
+    })
+    .join(t(' 或 ', ' or '));
+}
+
+export interface OutputField {
+  readonly name: string;
+  readonly kind: string;
+  readonly required: boolean;
+  readonly description: string | null;
+}
+
+/** The fields an output contract asks the step's Worker to hand back, in the schema's order — the
+ *  root is always an object (`StepOutputSchemaSchema`). */
+export function outputContractFields(schema: OutputSchema, t: Translate): readonly OutputField[] {
+  const required = new Set(schema.required ?? []);
+  return Object.entries(schema.properties ?? {}).map(([name, node]) => ({
+    name,
+    kind: outputKindText(node, t),
+    required: required.has(name),
+    description: node.description ?? null,
+  }));
 }
 
 const OUTCOME_BASIS: Readonly<Record<GoalOutcomeBasis, readonly [string, string]>> = {

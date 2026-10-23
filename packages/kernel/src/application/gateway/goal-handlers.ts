@@ -15,6 +15,7 @@ import {
   type GoalRunStatus,
   type GoalRunWire,
   type ObjectiveOutcome,
+  type OutputProblem,
   type PlanHint,
   type PlanRevisionSummaryWire,
   type PlanRevisionWire,
@@ -232,6 +233,14 @@ function toWireStepRun(view: GoalRunStepView): StepRunWire {
       taskId: attempt.taskId,
       status: attempt.status,
       createdAt: attempt.createdAt.toISOString(),
+      failureReason: attempt.failureReason,
+      rework: attempt.rework,
+      // S11 GO5d-1: an output's keys are the Worker's text, read as the Task's result is (legacy
+      // 420) — the places only, never the refused output itself (`get_task` shows it).
+      outputProblems: attempt.rejectedOutput
+        ? (shownFreeTextIn(attempt.rejectedOutput.problems) as OutputProblem[])
+        : null,
+      outputProblemCount: attempt.rejectedOutput?.problemCount ?? 0,
     })),
     actions: view.actions.map((action) => ({
       actionRequestId: action.id,
@@ -239,7 +248,15 @@ function toWireStepRun(view: GoalRunStepView): StepRunWire {
       failureKind: action.failureKind,
       reconciliation: action.reconciliation,
     })),
+    output: stepOutput(view),
   };
+}
+
+/** S11 GO5d-1: the output the step's current attempt reported with its accepted result, read as
+ *  the Task's result is (legacy 420) — what the steps bound to it read once it has succeeded. */
+function stepOutput(view: GoalRunStepView): Record<string, unknown> | null {
+  const current = view.attempts.find((attempt) => attempt.attempt === view.step.attemptCount);
+  return current?.output ? (shownFreeTextIn(current.output) as Record<string, unknown>) : null;
 }
 
 function toWireAcceptanceCheck(check: GoalAcceptanceCheckView): GoalAcceptanceCheckWire {

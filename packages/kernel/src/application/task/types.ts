@@ -1,4 +1,15 @@
-import { IllegalTransition, type TaskStatus, type WorkerRunStatus } from '@nexttime/shared';
+import {
+  IllegalTransition,
+  type OutputSchema,
+  type TaskStatus,
+  type WorkerRunStatus,
+} from '@nexttime/shared';
+import {
+  type RejectedOutput,
+  type ReworkOf,
+  parseRejectedOutput,
+  parseReworkOf,
+} from './output-contract.js';
 
 /**
  * application/task/types: `TaskRow`/`WorkerRunRow` — the shapes every other file in this module
@@ -27,6 +38,11 @@ export interface TaskRow {
    *  (migrations/task/0007 `step_attempt`), else `null` — a Task outside a goal, or a nested child
    *  Task of a step. An attempt Task never retries inside itself: a new attempt is the step's. */
   readonly stepAttempt: number | null;
+  /** S11 GO5d-1 (migrations/task/0008, `output-contract.ts`): the step's output schema an attempt
+   *  Task's result is held to, its last refused report, and the attempt it redoes. */
+  readonly outputSchema: OutputSchema | null;
+  readonly rejectedOutput: RejectedOutput | null;
+  readonly reworkOf: ReworkOf | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
   readonly completedAt: Date | null;
@@ -51,6 +67,9 @@ interface TaskDbRow {
   failure_reason: string | null;
   retry_count: number;
   step_attempt: number | null;
+  output_schema: unknown;
+  rejected_output: unknown;
+  rework_of: unknown;
   created_at: Date;
   updated_at: Date;
   completed_at: Date | null;
@@ -76,6 +95,12 @@ export function mapTaskRow(row: TaskDbRow): TaskRow {
     failureReason: row.failure_reason,
     retryCount: row.retry_count,
     stepAttempt: row.step_attempt,
+    outputSchema:
+      row.output_schema !== null && typeof row.output_schema === 'object'
+        ? (row.output_schema as OutputSchema)
+        : null,
+    rejectedOutput: parseRejectedOutput(row.rejected_output),
+    reworkOf: parseReworkOf(row.rework_of),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     completedAt: row.completed_at,
@@ -87,7 +112,8 @@ export function mapTaskRow(row: TaskDbRow): TaskRow {
 export const TASK_ROW_COLUMNS = `workspace_id, id, status, on_behalf_of, created_by_activity_id,
   worker_definition_id, worker_definition_version, input, result, token_budget,
   duration_limit_sec, tokens_used, budget_warned_at, failure_reason, retry_count, step_attempt,
-  created_at, updated_at, completed_at, failed_at, cancelled_at`;
+  output_schema, rejected_output, rework_of, created_at, updated_at, completed_at, failed_at,
+  cancelled_at`;
 
 export interface WorkerRunRow {
   readonly workspaceId: string;

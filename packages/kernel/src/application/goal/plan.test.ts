@@ -987,3 +987,162 @@ describe('reviewRevisedPlan (S11 GO5c: an entry sent back as read)', () => {
     expect(revised.steps).toEqual([stored.steps[0]]);
   });
 });
+
+describe('parsePlan — output schemas and input bindings (S11 GO5d-1)', () => {
+  const hosts = {
+    type: 'object',
+    properties: {
+      hosts: { type: 'array', items: { type: 'string' } },
+      target: { type: 'object', properties: { zone: { type: 'string' } } },
+      meta: { type: 'object' },
+    },
+    required: ['hosts'],
+    additionalProperties: false,
+  };
+  const scan = step('scan', { outputSchema: hosts });
+
+  it('accepts a binding from a step it depends on that declares its output', () => {
+    const plan = parsePlan({
+      steps: [
+        scan,
+        step('apply', {
+          dependsOn: ['scan'],
+          input: { mode: 'safe', target: { region: 'lab' } },
+          bindings: [
+            { to: 'host', from: 'scan', path: 'hosts[0]' },
+            { to: 'target.zone', from: 'scan', path: 'target.zone' },
+            { to: 'all', from: 'scan', path: '@' },
+            { to: 'count', from: 'scan', path: 'length(hosts)' },
+            { to: 'extra', from: 'scan', path: 'meta.anything.below' },
+          ],
+        }),
+      ],
+    });
+    expect(plan.steps[1]?.bindings).toHaveLength(5);
+  });
+
+  it('refuses a binding from a step not depended on, or one without an output schema', () => {
+    expect(
+      problemsOf({
+        steps: [
+          scan,
+          step('raw'),
+          step('apply', {
+            dependsOn: ['raw'],
+            bindings: [
+              { to: 'host', from: 'scan', path: 'hosts[0]' },
+              { to: 'note', from: 'raw', path: 'text' },
+            ],
+          }),
+        ],
+      }),
+    ).toEqual([
+      'step "apply": bindings[0]: takes from step "scan", which this step does not depend on — add it to dependsOn',
+      'step "apply": bindings[1]: step "raw" declares no outputSchema — a binding takes only from a declared output',
+    ]);
+  });
+
+  it('refuses a path that does not compile, reads nothing, goes through a reserved field, or that the schema rules out', () => {
+    const problems = problemsOf({
+      steps: [
+        scan,
+        step('apply', {
+          dependsOn: ['scan'],
+          bindings: [
+            { to: 'a', from: 'scan', path: 'hosts[' },
+            { to: 'b', from: 'scan', path: '`1`' },
+            { to: 'c', from: 'scan', path: 'hosts.__proto__' },
+            { to: 'd', from: 'scan', path: 'hostz[0]' },
+            { to: 'e', from: 'scan', path: 'hosts.name' },
+            { to: 'f', from: 'scan', path: 'target[0]' },
+          ],
+        }),
+      ],
+    });
+    expect(problems).toHaveLength(6);
+    expect(problems[0]).toMatch(
+      /^step "apply": bindings\[0\]: path "hosts\[" is not a JMESPath expression/,
+    );
+    expect(problems.slice(1)).toEqual([
+      'step "apply": bindings[1]: path "`1`" reads nothing from the output',
+      'step "apply": bindings[2]: path "hosts.__proto__" goes through __proto__',
+      'step "apply": bindings[3]: path "hostz[0]": the output schema does not declare "hostz" in the output of step "scan"',
+      'step "apply": bindings[4]: path "hosts.name": hosts is not an object in the output schema of step "scan"',
+      'step "apply": bindings[5]: path "target[0]": target is not a list in the output schema of step "scan"',
+    ]);
+  });
+
+  it('refuses bindings that put their values at the same field or inside each other, or over a written value', () => {
+    expect(
+      problemsOf({
+        steps: [
+          scan,
+          step('apply', {
+            dependsOn: ['scan'],
+            input: { host: 'fixed', target: 'lab' },
+            bindings: [
+              { to: 'node', from: 'scan', path: 'hosts[0]' },
+              { to: 'node.name', from: 'scan', path: 'hosts[1]' },
+              { to: 'node', from: 'scan', path: 'hosts[2]' },
+              { to: 'host', from: 'scan', path: 'hosts[3]' },
+              { to: 'target.zone', from: 'scan', path: 'target.zone' },
+            ],
+          }),
+        ],
+      }),
+    ).toEqual([
+      'step "apply": bindings[1]: puts its value at "node.name", where bindings[0] puts its own at "node"',
+      'step "apply": bindings[2]: puts its value at "node", where bindings[0] puts its own at "node"',
+      'step "apply": bindings[3]: the input already has a value at "host" — take it out of the input, or bind another field',
+      'step "apply": bindings[4]: the input already has a value at "target" — take it out of the input, or bind another field',
+    ]);
+    expect(
+      problemsOf({
+        steps: [
+          scan,
+          step('apply', {
+            dependsOn: ['scan'],
+            input: 'a sentence',
+            bindings: [{ to: 'host', from: 'scan', path: 'hosts[0]' }],
+          }),
+        ],
+      }),
+    ).toEqual([
+      'step "apply": the input must be an object when the step has bindings — a binding fills a field of it',
+    ]);
+  });
+
+  it('refuses an output schema the shared subset does not accept, at its place', () => {
+    expect(problemsOf({ steps: [step('scan', { outputSchema: { type: 'array' } })] })).toEqual([
+      "steps.0.outputSchema.type: a step's output is an object: the schema's root must be type 'object'",
+    ]);
+  });
+
+  it('a revision keeps a stored output schema and bindings sent back as read, and checks a changed one', () => {
+    const stored = planShape({
+      steps: [
+        step('scan', {
+          outputSchema: {
+            type: 'object',
+            properties: { 'zone\u200D': { type: 'string', description: 'the zone\u200D' } },
+          },
+        }),
+        step('apply', {
+          dependsOn: ['scan'],
+          bindings: [{ to: 'zone', from: 'scan', path: '"zone\u200D"' }],
+        }),
+      ],
+    });
+    const read = planAsRead(stored);
+    expect(JSON.stringify(read.steps[0]?.outputSchema)).toContain('\\u{200D}');
+    expect(reviewRevisedPlan(planShape(read), stored)).toEqual(stored);
+    // A changed schema is as sent.
+    const changed = {
+      ...read,
+      steps: [{ ...read.steps[0], outputSchema: { type: 'object' } }, read.steps[1]],
+    };
+    expect(reviewRevisedPlan(planShape(changed), stored).steps[0]?.outputSchema).toEqual({
+      type: 'object',
+    });
+  });
+});

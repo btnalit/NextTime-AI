@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { TaskStatusSchema, WorkerRunStatusSchema } from '../enums.js';
+import { OutputProblemSchema } from '../output-schema.js';
 import {
   ObjectiveOutcomeWireSchema,
   SkillLoadWireSchema,
@@ -30,6 +31,33 @@ export const WorkerRunWireSchema = z
   .strict();
 export type WorkerRunWire = z.infer<typeof WorkerRunWireSchema>;
 
+/** S11 GO5d-1: a report a goal step's attempt made that its output contract refused
+ *  (`report_task_result` 400) — the output as sent (`null` when the report carried none), where it
+ *  did not match (at most `MAX_OUTPUT_PROBLEMS`, `problemCount` exact) and when. The last one is
+ *  kept on the Task; an attempt that never reports an accepted result ends `no_result`. */
+export const RejectedOutputWireSchema = z
+  .object({
+    output: z.record(z.string(), z.unknown()).nullable(),
+    problems: z.array(OutputProblemSchema),
+    problemCount: z.number().int().nonnegative(),
+    at: z.string(),
+  })
+  .strict();
+export type RejectedOutputWire = z.infer<typeof RejectedOutputWireSchema>;
+
+/** S11 GO5d-1: the attempt of the same goal step this one redoes — one that ended without an
+ *  accepted result (`no_result`): its Task, its number and the last report its output contract
+ *  refused (`null` when it reported none). Recorded when the attempt starts, so the Worker reads
+ *  what to fix. */
+export const ReworkOfWireSchema = z
+  .object({
+    taskId: z.string(),
+    attempt: z.number().int().positive(),
+    rejectedOutput: RejectedOutputWireSchema.nullable(),
+  })
+  .strict();
+export type ReworkOfWire = z.infer<typeof ReworkOfWireSchema>;
+
 export const TaskWireSchema = z
   .object({
     id: z.string(),
@@ -59,6 +87,14 @@ export const TaskWireSchema = z
     /** S10 E1: the Task's own objective outcome, reported from a Procedure's `verify` step by the
      *  entry agent (`report_task_outcome`). `null` = unknown. */
     objectiveOutcome: ObjectiveOutcomeWireSchema.nullable(),
+    /** S11 GO5d-1: the output schema of the goal step this Task is an attempt of — what its
+     *  result's `output` is held to (`output-schema.ts`). `null` = none asked (not a step's attempt,
+     *  or a step that declares none). */
+    outputSchema: z.record(z.string(), z.unknown()).nullable(),
+    /** S11 GO5d-1: the last report of this Task its output contract refused, if any. */
+    rejectedOutput: RejectedOutputWireSchema.nullable(),
+    /** S11 GO5d-1: the earlier attempt of the step this one redoes, if it is a rework. */
+    reworkOf: ReworkOfWireSchema.nullable(),
   })
   .strict();
 export type TaskWire = z.infer<typeof TaskWireSchema>;

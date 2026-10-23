@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { FactCheckSchema, ObservationCheckSchema } from './predicate.js';
+import { StepOutputSchemaSchema } from './output-schema.js';
+import { FactCheckSchema, ObservationCheckSchema, PREDICATE_PATH_MAX } from './predicate.js';
 
 /**
  * goal-plan (S11 GO5a; plan §4.3, §4.5–§4.7): the shape of a GoalRun's plan, its budget and what a
@@ -34,6 +35,19 @@ export const MAX_GOAL_NOTE_CHARS = 2000;
 export const MAX_GOAL_STATEMENT_CHARS = 2000;
 /** S11 GO5c: the longest idempotency key `propose_goal` takes. */
 export const MAX_GOAL_IDEMPOTENCY_KEY_CHARS = 200;
+
+/** S11 GO5d-1: input bindings one step carries at most. */
+export const MAX_STEP_BINDINGS = 16;
+/** S11 GO5d-1: where a binding puts its value in the step's input — field names separated by
+ *  dots, at most 8 deep (`host`, `target.hosts`). Fields only, no array positions: a binding fills
+ *  a field, it does not splice a list. */
+export const BINDING_TARGET_PATTERN =
+  /^[A-Za-z_][A-Za-z0-9_-]{0,63}(?:\.[A-Za-z_][A-Za-z0-9_-]{0,63}){0,7}$/;
+const RESERVED_FIELD_NAMES: ReadonlySet<string> = new Set([
+  '__proto__',
+  'constructor',
+  'prototype',
+]);
 
 export const StepKeySchema = z.string().regex(STEP_KEY_PATTERN);
 
@@ -80,6 +94,27 @@ export const StepAcceptanceCheckSchema = z.discriminatedUnion('kind', [
 
 export type StepAcceptanceCheck = z.infer<typeof StepAcceptanceCheckSchema>;
 
+/**
+ * S11 GO5d-1 (plan §4.5): one input binding of a step — the value its attempt's input gets at `to`
+ * comes from step `from`'s output, read with the JMESPath `path` (the expressions predicates use).
+ * The advancer assembles the input when an attempt starts, from the output of `from`'s attempt that
+ * succeeded; what the kernel checks of a binding is `application/goal/plan.ts`'s.
+ */
+export const StepBindingSchema = z
+  .object({
+    to: z
+      .string()
+      .regex(BINDING_TARGET_PATTERN, 'must be field names separated by dots, e.g. target.host')
+      .refine((to) => !to.split('.').some((field) => RESERVED_FIELD_NAMES.has(field)), {
+        message: 'goes through __proto__, constructor or prototype',
+      }),
+    from: StepKeySchema,
+    path: z.string().trim().min(1).max(PREDICATE_PATH_MAX),
+  })
+  .strict();
+
+export type StepBinding = z.infer<typeof StepBindingSchema>;
+
 export const PlanStepSchema = z
   .object({
     key: StepKeySchema,
@@ -99,6 +134,10 @@ export const PlanStepSchema = z
       .min(1)
       .max(MAX_STEP_ACCEPTANCE_CHECKS)
       .optional(),
+    /** S11 GO5d-1: the structured output the step's Worker reports (`output-schema.ts`). */
+    outputSchema: StepOutputSchemaSchema.optional(),
+    /** S11 GO5d-1: inputs the step takes from earlier steps' outputs. */
+    bindings: z.array(StepBindingSchema).min(1).max(MAX_STEP_BINDINGS).optional(),
   })
   .strict();
 

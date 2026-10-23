@@ -119,6 +119,7 @@ import {
   ObjectiveOutcomeForbiddenError,
   QuotaExceededError,
   TaskNotFoundError,
+  TaskOutputRejectedError,
   TaskRuntimeNotConfiguredError,
   UnknownQuotaKeyError,
 } from '../../application/task/index.js';
@@ -779,6 +780,20 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // not exist.
   if (err instanceof WorkerResultValidationError) {
     return { status: 400, code: 'invalid_params', message: err.message };
+  }
+  // S11 GO5d-1: a goal step's report whose `output` breaks the step's output contract — the message
+  // names each place for the Worker's model; `details` carries them for a program (the places are
+  // the output's keys, never a value).
+  if (err instanceof TaskOutputRejectedError) {
+    return {
+      status: 400,
+      code: 'invalid_params',
+      message: err.message,
+      details: {
+        problems: err.problems.map((problem) => ({ ...problem })),
+        problemCount: err.problemCount,
+      },
+    };
   }
   return { status: 500, code: 'internal_error', message: 'internal error' };
 }

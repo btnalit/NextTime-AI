@@ -1,12 +1,17 @@
 import type { WorkerResultCapabilityParams, WorkerResultObjectRef } from '@nexttime/shared';
-import { UNSTORABLE_CHAR, storableValue } from '@nexttime/shared';
+import { UNSTORABLE_CHAR, outputContractProblems, storableValue } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import type {
   ContractPreRejections,
   RejectedResultFact,
   RejectedResultProposal,
 } from '../../application/task/index.js';
-import { findWorkerRunBySessionId, postWorkerResult } from '../../application/task/index.js';
+import {
+  TaskOutputRejectedError,
+  findWorkerRunBySessionId,
+  postWorkerResult,
+  readTaskOutputContract,
+} from '../../application/task/index.js';
 import {
   OperationIdentityConflictError,
   OperationNameInvalidError,
@@ -44,6 +49,10 @@ import {
  * external side effect a rolled-back transaction could leave dangling — the two-phase pattern
  * exists for effects that must survive past this call's own commit boundary (a gate `apply`, a
  * Handle another connection needs to see); a Task/Fact/Activity write has neither problem.
+ * One refusal leaves a record on purpose (S11 GO5d-1): a goal step's report whose `output` breaks
+ * the step's output contract is refused before any write (`TaskOutputRejectedError`, 400), and
+ * `dispatch.ts` records it on the Task in a transaction of its own once this one rolled back — what
+ * the step's next attempt is told to fix.
  *
  * **Identity, not the request body** (I13-style): the WorkerRun this call is reporting *for* is
  * resolved from the calling Handle's own `claims.sid` (`findWorkerRunBySessionId`), never from a
@@ -234,7 +243,8 @@ function withUnstorableNameRefusals(
 
 /**
  * The report half of a result contract — what the Worker says it did and found, written where
- * people read it (the Task's stored result and its chat card, Facts, evidence, artifacts) — with
+ * people read it (the Task's stored result and its chat card, Facts, evidence, artifacts, the
+ * structured `output` the steps after a goal step read) — with
  * secret-looking values scrubbed (governance/redaction: a Worker can print its own Handle as
  * easily as an entry agent). The proposal half is passed on as sent: a proposed Operation or
  * Skill is what runs once a person approves it, so a replaced value would change what runs, and
@@ -294,6 +304,28 @@ export const reportTaskResultHandler: CapabilityHandler = async (
   const unstorableNames = unstorableProposalNames(sent);
   const storable = storableValue(sent);
   const { contract, redactedValues } = scrubReport(storable.value);
+  // S11 GO5d-1 (plan §4.5): a goal step's attempt is held to the step's output contract — the
+  // output as it would be stored (scrubbed) must match the step's schema, and one is required when
+  // the step declares one. Refused before anything is written (400, each place named, so the
+  // Worker fixes it in its session); `dispatch.ts` then records the refused report on the Task. A
+  // Task that has already ended is left to `completeTaskWithResult`'s own 409.
+  const outputContract = await readTaskOutputContract(client, workspaceId, workerRun.taskId);
+  if (
+    outputContract &&
+    outputContract.status !== 'completed' &&
+    outputContract.status !== 'failed' &&
+    outputContract.status !== 'cancelled'
+  ) {
+    const check = outputContractProblems(outputContract.outputSchema, contract.output);
+    if (check.problemCount > 0) {
+      throw new TaskOutputRejectedError({
+        taskId: workerRun.taskId,
+        output: contract.output ?? null,
+        problems: check.problems,
+        problemCount: check.problemCount,
+      });
+    }
+  }
   // Proposed Operations are owned by `onBehalfOf` (application/task/result.ts), so that is whose
   // own draft a proposal may revise.
   const preRejected = withUnstorableNameRefusals(

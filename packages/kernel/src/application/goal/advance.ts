@@ -20,9 +20,11 @@ import { writeAudit } from '../../substrate/audit/index.js';
 import {
   type LiveGoalTask,
   type PreparedStepAttempt,
+  type ReworkOf,
   type RunConfigSnapshot,
   type StepAttemptRefusal,
   type TaskRuntimeDeps,
+  countStepAttemptsWithoutResult,
   createStepAttemptTask,
   listGoalRunLiveTaskSteps,
   listTaskWorkerRunTree,
@@ -41,6 +43,7 @@ import {
   readCurrentAcceptanceRound,
   readCurrentStepAcceptanceRound,
 } from './acceptance-checks.js';
+import { assembleStepInput } from './bindings.js';
 import { type CancellingOptions, advanceCancellingGoalRun } from './cancelling.js';
 import { type StepActionEffect, actionDisposition, stepActionEffect } from './disposition.js';
 import { type GoalMoveActor, moveGoalRun, moveStepRun } from './moves.js';
@@ -89,8 +92,9 @@ import type { GoalRunRow, PlanRevisionRow, StepRunRow } from './types.js';
  *      attempt — `disposition.ts`) and the requester resumes it: the advancer never lifts that
  *      pause itself (review #493 on #642 — a person's pause laid over it, or one left by a lifted
  *      hold, could not be told from it). Otherwise {@link judgeFinishedAttempt}:
- *      success, or a failure category — only `transient` is retried without a person; every
- *      other category pauses the GoalRun. A step
+ *      success, or a failure category — only `transient` is retried without a person, and the
+ *      step's first attempt that ended without an accepted result (`contract_violation`, S11
+ *      GO5d-1, §4.7, legacy 358) is reworked once; every other category pauses the GoalRun. A step
  *      no longer part of the current plan is not judged at all (I-G2: a late result is kept on
  *      its Task, it moves nothing) and the GoalRun pauses `needs_decision`.
  *      **A step's acceptance** (S11 GO4b, plan §4.5, §4.6): a successful attempt of a step that
@@ -108,12 +112,15 @@ import type { GoalRunRow, PlanRevisionRow, StepRunRow } from './types.js';
  *      (`moves.ts`): a paused run observes nothing, and resuming it opens a new round for each
  *      step whose round lost a check that way, or never opened (its attempt finished under the
  *      pause); a round settled in full before the pause stands, and the step goes by it.
- *   B. **Retry transient failures** (running only). Under the step's attempt limit (plan
- *      `maxAttempts`, default 3), once no request of the step — of any attempt — is still in flight
- *      and no Task of it still runs (I-G4: no new attempt beside an action that may still run),
- *      after an exponential backoff from the failure, and only if the step is still part of the
- *      current plan: `failed → ready`.
- *      Past the limit, the GoalRun pauses `needs_decision`.
+ *   B. **Retry transient failures, rework a contract violation once** (running only). Under the
+ *      step's attempt limit (plan `maxAttempts`, default 3), once no request of the step — of any
+ *      attempt — is still in flight and no Task of it still runs (I-G4: no new attempt beside an
+ *      action that may still run), after an exponential backoff from a transient failure (none
+ *      before a rework: nothing outside the Worker has to settle), and only if the step is still
+ *      part of the current plan: `failed → ready`. A rework is the step's next attempt, counted
+ *      against `maxAttempts` and the goal's step budget like any other; its Task carries what it
+ *      redoes (`rework_of`: the attempt and its last refused report), which the Worker reads
+ *      (`get_task`). Past the limit, the GoalRun pauses `needs_decision`.
  *   C. **Unblock** (running or paused). A `pending` step whose dependencies all succeeded becomes
  *      `ready` — after re-checking that its definition is still the current plan's entry (the
  *      database does not check this on `ready`). A skipped dependency counts as done.
@@ -127,8 +134,10 @@ import type { GoalRunRow, PlanRevisionRow, StepRunRow } from './types.js';
  *      `ready` step starts one attempt while the step budget allows, the attempts of one advance
  *      splitting the goal's token headroom (`readGoalRunTokenHeadroom`: the budget less what every
  *      Task of the run holds — a live Task its own budget), so the live Tasks' budgets together
- *      never exceed what is left of the goal's: `createStepAttemptTask` inserts
- *      the attempt's Task in this transaction and the step moves `ready → running` with
+ *      never exceed what is left of the goal's: `createStepAttemptTask` inserts the attempt's
+ *      Task in this transaction — with the step's `outputSchema` and the input its bindings make
+ *      (`bindings.ts`, S11 GO5d-1: a value not there, or one the credential review counts, pauses
+ *      `needs_decision` naming the binding) — and the step moves `ready → running` with
  *      `attempt_count + 1` (I-G1). No attempt starts while a request of any superseded step —
  *      whatever key the revision gave its work — has an unknown outcome: the run pauses
  *      `awaiting_reconcile` (review #493 on #633). A step whose key a revision redefined does not
@@ -139,8 +148,9 @@ import type { GoalRunRow, PlanRevisionRow, StepRunRow } from './types.js';
  *      authority pauses `authority_lost` (S9, I-G7); a pinned component no longer published
  *      pauses `needs_decision`.
  *   E. **Stuck** (running only; legacy 393). No live step is ready, running or waiting, none failed
- *      `transient` (phase B retries those or pauses), and one failed for a person — a category the
- *      advancer never retries: the run pauses `needs_decision` now instead of waiting for its wall
+ *      `transient` or due its rework (phase B starts those or pauses), and one failed for a
+ *      person — a category the advancer never retries (or a contract violation after its rework):
+ *      the run pauses `needs_decision` now instead of waiting for its wall
  *      clock (`next_tick_at` would be the deadline, then `budget_exhausted`). This is where a
  *      resume that names no failed step in `retrySteps` (`control.ts`) comes back to: what the run
  *      waits for is the requester retrying a failed step (one with an action found to have no
@@ -293,10 +303,10 @@ function failVerdict(category: StepRunFailureCategory): AttemptVerdict {
  *
  * | Task | requests | verdict |
  * |---|---|---|
- * | completed | clear | succeed (GO4 adds the step's acceptance, GO5 its output schema) |
+ * | completed | clear | succeed (then the step's acceptance, GO4b; `report_task_result` already held the output to the step's schema, GO5d-1) |
  * | completed | `fail(c)` | failed `c` — a refused request needs a person; a request that never reached its gate is transient |
  * | failed | `fail(action_refused)` or `fail(outcome_unknown)` | failed with that category — a person decides, whatever became of the Task (GO3c: an action found to have had no effect is never retried on its own) |
- * | failed `no_result` | otherwise | failed `contract_violation` — needs a person (§4.7 allows one rework; W1 asks instead, see the PR) |
+ * | failed `no_result` | otherwise | failed `contract_violation` — the step's first such attempt is reworked once (§4.7, legacy 358: phase B, no pause); after that, a person |
  * | failed `budget_exhausted` | otherwise | failed `transient`, GoalRun paused `budget_exhausted` — the attempt's budget is what was left of the goal's |
  * | failed, any other reason | otherwise | failed `transient` — spawn failed or lost, run lost, Worker crashed, timed out or terminated |
  * | cancelled | any | failed `transient`, GoalRun paused `needs_decision` — someone stopped the Task outside the goal |
@@ -304,6 +314,8 @@ function failVerdict(category: StepRunFailureCategory): AttemptVerdict {
 export function judgeFinishedAttempt(
   task: { readonly status: TaskStatus; readonly failureReason: string | null },
   effect: Exclude<StepActionEffect, { readonly kind: 'wait' }>,
+  /** How many earlier attempts of the step also ended `failed / no_result`. */
+  earlierWithoutResult = 0,
 ): AttemptVerdict {
   if (task.status === 'completed') {
     return effect.kind === 'fail' ? failVerdict(effect.failureCategory) : { kind: 'succeed' };
@@ -314,7 +326,11 @@ export function judgeFinishedAttempt(
   if (effect.kind === 'fail' && effect.failureCategory !== 'transient') {
     return failVerdict(effect.failureCategory);
   }
-  if (task.failureReason === 'no_result') return failVerdict('contract_violation');
+  if (task.failureReason === 'no_result') {
+    return earlierWithoutResult === 0
+      ? { kind: 'fail', category: 'contract_violation', pause: null }
+      : failVerdict('contract_violation');
+  }
   if (task.failureReason === 'budget_exhausted') {
     return { kind: 'fail', category: 'transient', pause: 'budget_exhausted' };
   }
@@ -482,9 +498,9 @@ class Advance {
       if (this.status === 'running') {
         for (const step of await this.lockSteps()) {
           if (this.status !== 'running') break;
-          if (step.status === 'failed' && step.failureCategory === 'transient') {
-            await this.retryStep(step);
-          }
+          if (step.status !== 'failed') continue;
+          if (step.failureCategory === 'transient') await this.retryStep(step, false);
+          else if (await this.reworkDue(step)) await this.retryStep(step, true);
         }
       }
       await this.unblockSteps(await this.lockSteps());
@@ -611,7 +627,13 @@ class Advance {
       }
       return;
     }
-    const verdict = judgeFinishedAttempt(task, effect);
+    const verdict = judgeFinishedAttempt(
+      task,
+      effect,
+      task.failureReason === 'no_result'
+        ? (await countStepAttemptsWithoutResult(this.client, this.ws, step.id)) - 1
+        : 0,
+    );
     const audit = {
       taskId: task.id,
       attempt: step.attemptCount,
@@ -633,11 +655,17 @@ class Advance {
       await this.moveStep(step, 'succeed', { audit });
       return;
     }
-    await this.moveStep(step, 'fail', { failureCategory: verdict.category, audit });
+    await this.moveStep(step, 'fail', {
+      failureCategory: verdict.category,
+      audit:
+        verdict.category === 'contract_violation' ? { ...audit, rework: !verdict.pause } : audit,
+    });
     if (verdict.pause) {
       await this.pause(
         verdict.pause,
-        `step ${step.stepKey}: attempt ${step.attemptCount} failed (${verdict.category})`,
+        verdict.category === 'contract_violation'
+          ? `step ${step.stepKey}: attempt ${step.attemptCount} ended without an accepted result again (contract_violation), after the step was reworked once — retry it (the Worker is told what was refused), revise the plan or cancel`
+          : `step ${step.stepKey}: attempt ${step.attemptCount} failed (${verdict.category})`,
       );
     }
   }
@@ -792,7 +820,16 @@ class Advance {
 
   // ----- B ------------------------------------------------------------------------------------
 
-  private async retryStep(step: StepRunRow): Promise<void> {
+  /** Whether a step that failed `contract_violation` is due its one rework (§4.7, legacy 358):
+   *  the attempt it failed by is the first of the step to end without an accepted result. */
+  private async reworkDue(step: StepRunRow): Promise<boolean> {
+    if (step.status !== 'failed' || step.failureCategory !== 'contract_violation') return false;
+    return (await countStepAttemptsWithoutResult(this.client, this.ws, step.id)) === 1;
+  }
+
+  /** A new attempt of a failed step — a transient failure's retry, or (`rework`) the one rework of
+   *  a contract violation. See the module comment, phase B. */
+  private async retryStep(step: StepRunRow, rework: boolean): Promise<void> {
     const entry = await this.entry(step);
     if (!entry) {
       await this.pause('needs_decision', `step ${step.stepKey}: its plan entry is unreadable`);
@@ -838,7 +875,7 @@ class Advance {
       return;
     }
     const due = step.updatedAt.getTime() + this.retryBackoffMs(step.attemptCount);
-    if (due > this.now.getTime()) {
+    if (!rework && due > this.now.getTime()) {
       this.timers.push(due);
       return;
     }
@@ -846,7 +883,9 @@ class Advance {
       await this.pause('needs_decision', `step ${step.stepKey}: no longer in the current plan`);
       return;
     }
-    await this.moveStep(step, 'retry', { audit: { attempts: step.attemptCount } });
+    await this.moveStep(step, 'retry', {
+      audit: { attempts: step.attemptCount, ...(rework ? { rework: true } : {}) },
+    });
   }
 
   // ----- C ------------------------------------------------------------------------------------
@@ -959,7 +998,7 @@ class Advance {
         this.timers.push(this.now.getTime() + this.blockedRetryRecheckMs);
         continue;
       }
-      if (!(await this.startAttempt(step, share))) return;
+      if (!(await this.startAttempt(step, share, steps))) return;
       attemptsSoFar += 1;
     }
   }
@@ -1021,14 +1060,21 @@ class Advance {
   }
 
   /** Starts one attempt of a `ready` step with at most `tokenCap` tokens; `false` when nothing more
-   *  starts in this advance. */
-  private async startAttempt(step: StepRunRow, tokenCap: number): Promise<boolean> {
+   *  starts in this advance. `steps`: the run's StepRuns, which the step's bindings take from. */
+  private async startAttempt(
+    step: StepRunRow,
+    tokenCap: number,
+    steps: readonly StepRunRow[],
+  ): Promise<boolean> {
     const entry = await this.entry(step);
     if (!entry || !(await this.inCurrentPlan(step))) {
       await this.pause('needs_decision', `step ${step.stepKey}: no longer in the current plan`);
       return false;
     }
     let previous: RunConfigSnapshot | null = null;
+    // GO5d-1: an attempt after one that ended without an accepted result redoes it — the Worker
+    // reads what was refused (`get_task`), whoever started the attempt (a rework, a person's retry).
+    let reworkOf: ReworkOf | null = null;
     if (step.attemptCount > 0) {
       const last = await readStepAttemptTask(this.client, this.ws, step.id, step.attemptCount);
       if (!last?.runConfig) {
@@ -1039,6 +1085,18 @@ class Advance {
         return false;
       }
       previous = last.runConfig;
+      if (last.status === 'failed' && last.failureReason === 'no_result') {
+        reworkOf = {
+          taskId: last.id,
+          attempt: step.attemptCount,
+          rejectedOutput: last.rejectedOutput,
+        };
+      }
+    }
+    const input = await assembleStepInput(this.client, this.ws, entry, steps);
+    if (input.kind === 'blocked') {
+      await this.pause('needs_decision', input.detail);
+      return false;
     }
     const currentRevision = this.goal.currentRevision;
     if (currentRevision === null)
@@ -1050,7 +1108,9 @@ class Advance {
       planRevision: currentRevision,
       stepAttempt: attempt,
       worker: entry.worker,
-      input: entry.input,
+      input: input.input,
+      outputSchema: entry.outputSchema ?? null,
+      reworkOf,
       nested: entry.nested ?? false,
       previous,
       tokenCap,
@@ -1066,7 +1126,12 @@ class Advance {
       return false;
     }
     await this.moveStep(step, 'start', {
-      audit: { taskId: result.attempt.task.id, attempt },
+      audit: {
+        taskId: result.attempt.task.id,
+        attempt,
+        ...(reworkOf ? { reworkOf: reworkOf.taskId } : {}),
+        ...((entry.bindings ?? []).length > 0 ? { bound: (entry.bindings ?? []).length } : {}),
+      },
     });
     this.started.push(result.attempt);
     return true;
@@ -1078,11 +1143,15 @@ class Advance {
    *  module comment, phase E. */
   private async pauseIfStuck(steps: readonly StepRunRow[]): Promise<void> {
     const live = steps.filter((step) => step.status !== 'superseded');
-    const moving = live.some(
+    let moving = live.some(
       (step) =>
         MOVING_STEP_STATUSES.has(step.status) ||
         (step.status === 'failed' && step.failureCategory === 'transient'),
     );
+    for (const step of live) {
+      if (moving) break;
+      moving = await this.reworkDue(step);
+    }
     // By key, so the same run always reads the same.
     const failed = live
       .filter((step) => step.status === 'failed')

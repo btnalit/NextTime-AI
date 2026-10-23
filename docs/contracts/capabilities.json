@@ -11653,6 +11653,35 @@
                         "minItems": 1,
                         "type": "array"
                       },
+                      "bindings": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "from": {
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                              "type": "string"
+                            },
+                            "path": {
+                              "maxLength": 512,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "to": {
+                              "pattern": "^[A-Za-z_][A-Za-z0-9_-]{0,63}(?:\\.[A-Za-z_][A-Za-z0-9_-]{0,63}){0,7}$",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "to",
+                            "from",
+                            "path"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 16,
+                        "minItems": 1,
+                        "type": "array"
+                      },
                       "dependsOn": {
                         "items": {
                           "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
@@ -11673,6 +11702,102 @@
                       },
                       "nested": {
                         "type": "boolean"
+                      },
+                      "outputSchema": {
+                        "allOf": [
+                          {},
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "additionalProperties": {
+                                "type": "boolean"
+                              },
+                              "const": {},
+                              "description": {
+                                "maxLength": 500,
+                                "type": "string"
+                              },
+                              "enum": {
+                                "items": {},
+                                "maxItems": 64,
+                                "minItems": 1,
+                                "type": "array"
+                              },
+                              "items": {},
+                              "maxItems": {
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "maxLength": {
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "maximum": {
+                                "type": "number"
+                              },
+                              "minItems": {
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "minLength": {
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "minimum": {
+                                "type": "number"
+                              },
+                              "properties": {
+                                "additionalProperties": {},
+                                "propertyNames": {
+                                  "maxLength": 128,
+                                  "minLength": 1
+                                },
+                                "type": "object"
+                              },
+                              "required": {
+                                "items": {
+                                  "type": "string"
+                                },
+                                "maxItems": 64,
+                                "type": "array"
+                              },
+                              "type": {
+                                "anyOf": [
+                                  {
+                                    "enum": [
+                                      "object",
+                                      "array",
+                                      "string",
+                                      "number",
+                                      "integer",
+                                      "boolean",
+                                      "null"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  {
+                                    "items": {
+                                      "enum": [
+                                        "object",
+                                        "array",
+                                        "string",
+                                        "number",
+                                        "integer",
+                                        "boolean",
+                                        "null"
+                                      ],
+                                      "type": "string"
+                                    },
+                                    "maxItems": 7,
+                                    "minItems": 1,
+                                    "type": "array"
+                                  }
+                                ]
+                              }
+                            },
+                            "type": "object"
+                          }
+                        ]
                       },
                       "reconcile": {
                         "items": {
@@ -12187,6 +12312,45 @@
                     "createdAt": {
                       "type": "string"
                     },
+                    "failureReason": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "outputProblemCount": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "outputProblems": {
+                      "anyOf": [
+                        {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "message": {
+                                "type": "string"
+                              },
+                              "path": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "path",
+                              "message"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "rework": {
+                      "type": "boolean"
+                    },
                     "status": {
                       "enum": [
                         "created",
@@ -12207,7 +12371,11 @@
                     "attempt",
                     "taskId",
                     "status",
-                    "createdAt"
+                    "createdAt",
+                    "failureReason",
+                    "rework",
+                    "outputProblems",
+                    "outputProblemCount"
                   ],
                   "type": "object"
                 },
@@ -12246,6 +12414,17 @@
               "introducedInRevision": {
                 "exclusiveMinimum": 0,
                 "type": "integer"
+              },
+              "output": {
+                "anyOf": [
+                  {
+                    "additionalProperties": {},
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "status": {
                 "enum": [
@@ -12309,7 +12488,8 @@
               "updatedAt",
               "endedAt",
               "attempts",
-              "actions"
+              "actions",
+              "output"
             ],
             "type": "object"
           },
@@ -13199,6 +13379,35 @@
                     "minItems": 1,
                     "type": "array"
                   },
+                  "bindings": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "from": {
+                          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                          "type": "string"
+                        },
+                        "path": {
+                          "maxLength": 512,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "to": {
+                          "pattern": "^[A-Za-z_][A-Za-z0-9_-]{0,63}(?:\\.[A-Za-z_][A-Za-z0-9_-]{0,63}){0,7}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "to",
+                        "from",
+                        "path"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 16,
+                    "minItems": 1,
+                    "type": "array"
+                  },
                   "dependsOn": {
                     "items": {
                       "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
@@ -13219,6 +13428,102 @@
                   },
                   "nested": {
                     "type": "boolean"
+                  },
+                  "outputSchema": {
+                    "allOf": [
+                      {},
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "additionalProperties": {
+                            "type": "boolean"
+                          },
+                          "const": {},
+                          "description": {
+                            "maxLength": 500,
+                            "type": "string"
+                          },
+                          "enum": {
+                            "items": {},
+                            "maxItems": 64,
+                            "minItems": 1,
+                            "type": "array"
+                          },
+                          "items": {},
+                          "maxItems": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "maxLength": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "maximum": {
+                            "type": "number"
+                          },
+                          "minItems": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "minLength": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "minimum": {
+                            "type": "number"
+                          },
+                          "properties": {
+                            "additionalProperties": {},
+                            "propertyNames": {
+                              "maxLength": 128,
+                              "minLength": 1
+                            },
+                            "type": "object"
+                          },
+                          "required": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "maxItems": 64,
+                            "type": "array"
+                          },
+                          "type": {
+                            "anyOf": [
+                              {
+                                "enum": [
+                                  "object",
+                                  "array",
+                                  "string",
+                                  "number",
+                                  "integer",
+                                  "boolean",
+                                  "null"
+                                ],
+                                "type": "string"
+                              },
+                              {
+                                "items": {
+                                  "enum": [
+                                    "object",
+                                    "array",
+                                    "string",
+                                    "number",
+                                    "integer",
+                                    "boolean",
+                                    "null"
+                                  ],
+                                  "type": "string"
+                                },
+                                "maxItems": 7,
+                                "minItems": 1,
+                                "type": "array"
+                              }
+                            ]
+                          }
+                        },
+                        "type": "object"
+                      }
+                    ]
                   },
                   "reconcile": {
                     "items": {
@@ -14007,7 +14312,155 @@
         "onBehalfOf": {
           "type": "string"
         },
+        "outputSchema": {
+          "anyOf": [
+            {
+              "additionalProperties": {},
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rejectedOutput": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "at": {
+                  "type": "string"
+                },
+                "output": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": {},
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "problemCount": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "problems": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "message": {
+                        "type": "string"
+                      },
+                      "path": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "path",
+                      "message"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "output",
+                "problems",
+                "problemCount",
+                "at"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "result": {},
+        "reworkOf": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "attempt": {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                "rejectedOutput": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "at": {
+                          "type": "string"
+                        },
+                        "output": {
+                          "anyOf": [
+                            {
+                              "additionalProperties": {},
+                              "type": "object"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "problemCount": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "problems": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "message": {
+                                "type": "string"
+                              },
+                              "path": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "path",
+                              "message"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "output",
+                        "problems",
+                        "problemCount",
+                        "at"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "taskId": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "taskId",
+                "attempt",
+                "rejectedOutput"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "status": {
           "enum": [
             "created",
@@ -14298,7 +14751,10 @@
         "workerRuns",
         "turnId",
         "turn",
-        "objectiveOutcome"
+        "objectiveOutcome",
+        "outputSchema",
+        "rejectedOutput",
+        "reworkOf"
       ],
       "type": "object"
     },
@@ -22718,7 +23174,155 @@
               "onBehalfOf": {
                 "type": "string"
               },
+              "outputSchema": {
+                "anyOf": [
+                  {
+                    "additionalProperties": {},
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "rejectedOutput": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "at": {
+                        "type": "string"
+                      },
+                      "output": {
+                        "anyOf": [
+                          {
+                            "additionalProperties": {},
+                            "type": "object"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "problemCount": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "problems": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "message": {
+                              "type": "string"
+                            },
+                            "path": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "path",
+                            "message"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "output",
+                      "problems",
+                      "problemCount",
+                      "at"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "result": {},
+              "reworkOf": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "attempt": {
+                        "exclusiveMinimum": 0,
+                        "type": "integer"
+                      },
+                      "rejectedOutput": {
+                        "anyOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "at": {
+                                "type": "string"
+                              },
+                              "output": {
+                                "anyOf": [
+                                  {
+                                    "additionalProperties": {},
+                                    "type": "object"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "problemCount": {
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "problems": {
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "message": {
+                                      "type": "string"
+                                    },
+                                    "path": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "path",
+                                    "message"
+                                  ],
+                                  "type": "object"
+                                },
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "output",
+                              "problems",
+                              "problemCount",
+                              "at"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "taskId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "taskId",
+                      "attempt",
+                      "rejectedOutput"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "status": {
                 "enum": [
                   "created",
@@ -23009,7 +23613,10 @@
               "workerRuns",
               "turnId",
               "turn",
-              "objectiveOutcome"
+              "objectiveOutcome",
+              "outputSchema",
+              "rejectedOutput",
+              "reworkOf"
             ],
             "type": "object"
           },
@@ -29413,6 +30020,35 @@
                     "minItems": 1,
                     "type": "array"
                   },
+                  "bindings": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "from": {
+                          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                          "type": "string"
+                        },
+                        "path": {
+                          "maxLength": 512,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "to": {
+                          "pattern": "^[A-Za-z_][A-Za-z0-9_-]{0,63}(?:\\.[A-Za-z_][A-Za-z0-9_-]{0,63}){0,7}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "to",
+                        "from",
+                        "path"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 16,
+                    "minItems": 1,
+                    "type": "array"
+                  },
                   "dependsOn": {
                     "items": {
                       "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
@@ -29433,6 +30069,102 @@
                   },
                   "nested": {
                     "type": "boolean"
+                  },
+                  "outputSchema": {
+                    "allOf": [
+                      {},
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "additionalProperties": {
+                            "type": "boolean"
+                          },
+                          "const": {},
+                          "description": {
+                            "maxLength": 500,
+                            "type": "string"
+                          },
+                          "enum": {
+                            "items": {},
+                            "maxItems": 64,
+                            "minItems": 1,
+                            "type": "array"
+                          },
+                          "items": {},
+                          "maxItems": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "maxLength": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "maximum": {
+                            "type": "number"
+                          },
+                          "minItems": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "minLength": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "minimum": {
+                            "type": "number"
+                          },
+                          "properties": {
+                            "additionalProperties": {},
+                            "propertyNames": {
+                              "maxLength": 128,
+                              "minLength": 1
+                            },
+                            "type": "object"
+                          },
+                          "required": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "maxItems": 64,
+                            "type": "array"
+                          },
+                          "type": {
+                            "anyOf": [
+                              {
+                                "enum": [
+                                  "object",
+                                  "array",
+                                  "string",
+                                  "number",
+                                  "integer",
+                                  "boolean",
+                                  "null"
+                                ],
+                                "type": "string"
+                              },
+                              {
+                                "items": {
+                                  "enum": [
+                                    "object",
+                                    "array",
+                                    "string",
+                                    "number",
+                                    "integer",
+                                    "boolean",
+                                    "null"
+                                  ],
+                                  "type": "string"
+                                },
+                                "maxItems": 7,
+                                "minItems": 1,
+                                "type": "array"
+                              }
+                            ]
+                          }
+                        },
+                        "type": "object"
+                      }
+                    ]
                   },
                   "reconcile": {
                     "items": {
@@ -33031,6 +33763,10 @@
           },
           "type": "array"
         },
+        "output": {
+          "additionalProperties": {},
+          "type": "object"
+        },
         "proposedOperations": {
           "items": {
             "additionalProperties": false,
@@ -35055,6 +35791,35 @@
                     "minItems": 1,
                     "type": "array"
                   },
+                  "bindings": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "from": {
+                          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                          "type": "string"
+                        },
+                        "path": {
+                          "maxLength": 512,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "to": {
+                          "pattern": "^[A-Za-z_][A-Za-z0-9_-]{0,63}(?:\\.[A-Za-z_][A-Za-z0-9_-]{0,63}){0,7}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "to",
+                        "from",
+                        "path"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 16,
+                    "minItems": 1,
+                    "type": "array"
+                  },
                   "dependsOn": {
                     "items": {
                       "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
@@ -35075,6 +35840,102 @@
                   },
                   "nested": {
                     "type": "boolean"
+                  },
+                  "outputSchema": {
+                    "allOf": [
+                      {},
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "additionalProperties": {
+                            "type": "boolean"
+                          },
+                          "const": {},
+                          "description": {
+                            "maxLength": 500,
+                            "type": "string"
+                          },
+                          "enum": {
+                            "items": {},
+                            "maxItems": 64,
+                            "minItems": 1,
+                            "type": "array"
+                          },
+                          "items": {},
+                          "maxItems": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "maxLength": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "maximum": {
+                            "type": "number"
+                          },
+                          "minItems": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "minLength": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "minimum": {
+                            "type": "number"
+                          },
+                          "properties": {
+                            "additionalProperties": {},
+                            "propertyNames": {
+                              "maxLength": 128,
+                              "minLength": 1
+                            },
+                            "type": "object"
+                          },
+                          "required": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "maxItems": 64,
+                            "type": "array"
+                          },
+                          "type": {
+                            "anyOf": [
+                              {
+                                "enum": [
+                                  "object",
+                                  "array",
+                                  "string",
+                                  "number",
+                                  "integer",
+                                  "boolean",
+                                  "null"
+                                ],
+                                "type": "string"
+                              },
+                              {
+                                "items": {
+                                  "enum": [
+                                    "object",
+                                    "array",
+                                    "string",
+                                    "number",
+                                    "integer",
+                                    "boolean",
+                                    "null"
+                                  ],
+                                  "type": "string"
+                                },
+                                "maxItems": 7,
+                                "minItems": 1,
+                                "type": "array"
+                              }
+                            ]
+                          }
+                        },
+                        "type": "object"
+                      }
+                    ]
                   },
                   "reconcile": {
                     "items": {

@@ -1,4 +1,9 @@
-import { type Predicate, type PredicateLeaf, predicateLeaves } from '@nexttime/shared';
+import {
+  type OutputSchema,
+  type Predicate,
+  type PredicateLeaf,
+  predicateLeaves,
+} from '@nexttime/shared';
 import jmespath from 'jmespath';
 
 /**
@@ -761,4 +766,138 @@ export function lintPredicate(
     }
   }
   return problems;
+}
+
+// ----- binding paths (S11 GO5d-1) -------------------------------------------------------------
+
+/**
+ * S11 GO5d-1 (plan §4.5): a binding's path — what of an upstream step's output a later step's
+ * input takes (`application/goal/bindings.ts`). The same JMESPath dialect and parser as a
+ * predicate's path, held to the lint's first rule only: it compiles, goes through no `__proto__` /
+ * `constructor` / `prototype`, and reads something of the output (not literals only). Anchoring and
+ * probes are rules for a proof; a binding proves nothing — it hands a value on, and the whole
+ * output (`@`) is a fair thing to hand on. `[]` when there is no problem.
+ */
+export function bindingPathProblems(path: string): readonly string[] {
+  let ast: unknown;
+  try {
+    ast = compilePath(path);
+  } catch (err) {
+    return [
+      `path "${path}" is not a JMESPath expression: ${err instanceof Error ? err.message : String(err)}`,
+    ];
+  }
+  if (!isPathNode(ast)) return [`path "${path}" reads nothing from the output`];
+  const reserved = [...fieldNames(ast, new Set())].filter((name) => RESERVED_FIELDS.has(name));
+  if (reserved.length > 0) return [`path "${path}" goes through ${reserved.join(', ')}`];
+  if (rootRead(ast) === 'none') return [`path "${path}" reads nothing from the output`];
+  return [];
+}
+
+/** A step of a plain path: a named field, or a position in a list. */
+type ChainStep = { readonly field: string } | { readonly index: number };
+
+/** `node` as plain steps (`hosts[0].name` → `hosts`, `0`, `name`; `@` → none), or `null` when it
+ *  is anything else (a projection, a filter, a function…). */
+function plainChain(node: PathNode): readonly ChainStep[] | null {
+  const children = childNodes(node);
+  switch (node.type) {
+    case 'Current':
+    case 'Identity':
+      return [];
+    case 'Field':
+      return typeof node.name === 'string' ? [{ field: node.name }] : null;
+    case 'Index':
+      return typeof node.value === 'number' ? [{ index: node.value }] : null;
+    case 'Subexpression':
+    case 'IndexExpression': {
+      if (children.length !== 2) return null;
+      const left = plainChain(children[0] as PathNode);
+      const right = plainChain(children[1] as PathNode);
+      return left && right ? [...left, ...right] : null;
+    }
+    default:
+      return null;
+  }
+}
+
+/** A plain path as JMESPath writes it: a name that is not a plain identifier quoted. */
+function chainText(steps: readonly ChainStep[]): string {
+  return steps
+    .map((step, i) => {
+      if ('index' in step) return `[${step.index}]`;
+      const name = /^[A-Za-z_][A-Za-z0-9_]*$/.test(step.field)
+        ? step.field
+        : JSON.stringify(step.field);
+      return `${i === 0 ? '' : '.'}${name}`;
+    })
+    .join('');
+}
+
+/**
+ * What `path` (one {@link bindingPathProblems} accepts) certainly cannot select of an output that
+ * meets `schema` (`@nexttime/shared` `OutputSchema`): a field the schema closes off
+ * (`additionalProperties: false` and not among `properties`), a field of what is not an object, a
+ * position in what is not a list. Only a plain path (fields and positions) is followed, and only
+ * as far as the schema says: past a part it leaves open, nothing is claimed — the advancer finds a
+ * missing value when it binds (`application/goal/bindings.ts`). `[]` when nothing is certain.
+ */
+export function bindingSchemaProblems(path: string, schema: OutputSchema): readonly string[] {
+  let ast: unknown;
+  try {
+    ast = compilePath(path);
+  } catch {
+    return [];
+  }
+  if (!isPathNode(ast)) return [];
+  const steps = plainChain(ast);
+  if (!steps) return [];
+  let at: OutputSchema | undefined = schema;
+  for (const [i, step] of steps.entries()) {
+    if (!at) return [];
+    const types = at.type === undefined ? null : Array.isArray(at.type) ? at.type : [at.type];
+    const where = i === 0 ? 'the output' : chainText(steps.slice(0, i));
+    if ('field' in step) {
+      if (types && !types.includes('object')) {
+        return [`path "${path}": ${where} is not an object in the output schema`];
+      }
+      const declared: OutputSchema | undefined = at.properties
+        ? Object.hasOwn(at.properties, step.field)
+          ? at.properties[step.field]
+          : undefined
+        : undefined;
+      if (!declared && at.additionalProperties === false) {
+        return [
+          `path "${path}": the output schema does not declare ${JSON.stringify(step.field)} in ${where}`,
+        ];
+      }
+      at = declared;
+    } else {
+      if (types && !types.includes('array')) {
+        return [`path "${path}": ${where} is not a list in the output schema`];
+      }
+      at = at.items;
+    }
+  }
+  return [];
+}
+
+/** What `path` selects of `data` — `found: false` when it selects nothing: JMESPath's `null` is
+ *  "nothing there", so a `null` in the output reads as no value — or the error a path failing on
+ *  this data raised (a function given the wrong type). */
+export function selectPath(
+  data: unknown,
+  path: string,
+):
+  | { readonly found: true; readonly value: unknown }
+  | { readonly found: false; readonly error: string | null } {
+  let value: unknown;
+  try {
+    value = jmespath.search(data as never, path);
+  } catch (err) {
+    return { found: false, error: err instanceof Error ? err.message : String(err) };
+  }
+  return value === null || value === undefined
+    ? { found: false, error: null }
+    : { found: true, value };
 }
