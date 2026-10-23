@@ -1,6 +1,6 @@
 import type { OutputProblem, OutputSchema } from '@nexttime/shared';
 import { prettyJsonVisible } from '../../lib/format.js';
-import { outputContractFields } from '../../lib/goals.js';
+import { outputContractFields, outputProblemText } from '../../lib/goals.js';
 import type { Translate } from '../../lib/i18n.js';
 
 /**
@@ -10,24 +10,34 @@ import type { Translate } from '../../lib/i18n.js';
  * places a refused report did not match. A place is named, never its value: the kernel's problems
  * carry none.
  */
+/** What an output contract is for, in a line — first under the contract's heading. */
+export function OutputContractExplanation({ t }: { readonly t: Translate }) {
+  return (
+    <span className="text-small text-3">
+      {t(
+        'Worker 交回结果时要带上符合这份约定的 output；不符合的报告会被拒绝，Worker 会被告知哪里不对。',
+        'The Worker’s result carries an output that meets this contract; a report that does not is refused, and the Worker is told where.',
+      )}
+    </span>
+  );
+}
+
+/** `explain: false` when the page already put {@link OutputContractExplanation} above. */
 export function OutputContractFields({
   schema,
   t,
   testId,
+  explain = true,
 }: {
   readonly schema: OutputSchema;
   readonly t: Translate;
   readonly testId?: string;
+  readonly explain?: boolean;
 }) {
   const fields = outputContractFields(schema, t);
   return (
     <div className="stack-s" data-testid={testId}>
-      <span className="text-small text-3">
-        {t(
-          'Worker 交回结果时要带上符合这份约定的 output；不符合的报告会被拒绝，Worker 会被告知哪里不对。',
-          'The Worker’s result carries an output that meets this contract; a report that does not is refused, and the Worker is told where.',
-        )}
-      </span>
+      {explain ? <OutputContractExplanation t={t} /> : null}
       {fields.length === 0 ? (
         <span className="text-small text-3">
           {t(
@@ -82,7 +92,7 @@ export function OutputProblemList({
           <span className="mono">{problem.path}</span>
           <span className="text-3">
             {t('：', ': ')}
-            {problem.message}
+            {outputProblemText(problem.message, t)}
           </span>
         </li>
       ))}

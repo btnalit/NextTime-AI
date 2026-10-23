@@ -400,11 +400,15 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
     expect(within(attempts[0] as HTMLElement).queryByTestId('goal-step-attempt-rework')).toBeNull();
     expect(attempts[0]?.textContent).toMatch(/最后一次被拒的报告有 3 处不符合输出约定/);
     const problems = within(attempts[0] as HTMLElement).getByTestId('goal-step-attempt-problems');
-    expect(problems.textContent).toContain('output.hosts：required, missing');
+    expect(problems.textContent).toContain('output.hosts：必填，但没有');
     expect(problems.textContent).toContain('还有 1 处');
     expect(
       within(attempts[1] as HTMLElement).getByTestId('goal-step-attempt-rework').textContent,
     ).toBe('自动返工');
+    // Why, in words anyone reads — not only a tooltip.
+    expect(
+      within(attempts[1] as HTMLElement).getByTestId('goal-step-attempt-rework-note').textContent,
+    ).toMatch(/平台自动重做了这一次/);
     expect(
       within(attempts[1] as HTMLElement).queryByTestId('goal-step-attempt-problems'),
     ).toBeNull();

@@ -350,14 +350,7 @@ function Attempts({
             />
             <StatusChip machine="task" status={attempt.status} size="s" />
             {attempt.rework ? (
-              <span
-                className="chip chip-info chip-s"
-                title={t(
-                  '上一次尝试没有交回平台接受的结果，平台自动重做了这一次，并把被拒的原因告诉了 Worker。',
-                  'The attempt before it handed back no result the platform accepted, so the platform redid the step once and told the Worker what was refused.',
-                )}
-                data-testid="goal-step-attempt-rework"
-              >
+              <span className="chip chip-info chip-s" data-testid="goal-step-attempt-rework">
                 {t('自动返工', 'Automatic rework')}
               </span>
             ) : null}
@@ -370,6 +363,14 @@ function Attempts({
               {formatRelative(attempt.createdAt)}
             </time>
           </span>
+          {attempt.rework ? (
+            <span className="text-small text-3" data-testid="goal-step-attempt-rework-note">
+              {t(
+                '上一次尝试没有交回平台接受的结果，平台自动重做了这一次，并把被拒的原因告诉了 Worker。',
+                'The attempt before it handed back no result the platform accepted, so the platform redid the step once and told the Worker what was refused.',
+              )}
+            </span>
+          ) : null}
           {attempt.outputProblems && attempt.outputProblemCount > 0 ? (
             <div className="stack-s goal-step-attempt-problems">
               <span className="text-small text-warn">

@@ -398,16 +398,22 @@ describe('TaskDetail', () => {
     expect(within(section).getByTestId('output-contract-field').textContent).toBe(
       'hosts列表（每项：文本）必填',
     );
+    // What the contract is for comes first, before which attempt this one redoes.
+    expect(section.textContent?.indexOf('Worker 交回结果时')).toBeLessThan(
+      section.textContent?.indexOf('这次尝试重做') ?? -1,
+    );
     const rework = within(section).getByTestId('task-rework-of');
     expect(rework.textContent).toMatch(/这次尝试重做第 1 次尝试/);
     expect(within(rework).getByTestId('task-rework-of-link')).toBeTruthy();
     expect(within(rework).getByTestId('task-rework-of-problems').textContent).toContain(
-      'output：required, missing',
+      'output：必填，但没有',
     );
     const rejected = within(section).getByTestId('task-rejected-output');
     expect(within(rejected).getByTestId('task-rejected-output-problems').textContent).toContain(
-      'output.hosts：expected array, got string',
+      'output.hosts：应为列表，实际是文本',
     );
+    expect(rejected.textContent).toMatch(/最后一次被拒的报告在 \S+ \S+/);
+    expect(rejected.textContent).not.toMatch(/（.*\(/);
     expect(rejected.textContent).toContain('web-1');
     expect(rejected.textContent).not.toContain('should-not-show');
     expect(within(rejected).getByTestId('task-rejected-output-redacted')).toBeTruthy();

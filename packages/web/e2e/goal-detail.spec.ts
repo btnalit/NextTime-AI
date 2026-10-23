@@ -414,7 +414,8 @@ test.describe('S11 GO6: a goal’s pages with content (stand-in reads)', () => {
       await expect(page.getByTestId('goal-step-attempt-rework')).toHaveCount(1);
       await expect(page.getByTestId('goal-step-attempt-problems')).toContainText('output.hosts');
       const contract = page.getByTestId('goal-step-output-contract');
-      await contract.locator('summary').click();
+      // Its own summary: the schema's disclosure nested inside has one too.
+      await contract.locator(':scope > summary').click();
       await expect(contract.getByTestId('output-contract-field')).toHaveCount(2);
       const output = page.getByTestId('goal-step-output');
       await output.locator('summary').click();

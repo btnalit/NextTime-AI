@@ -1,4 +1,10 @@
-import type { GoalPlan, UnresolvedGoalActionWire } from '@nexttime/shared';
+import {
+  type GoalPlan,
+  type OutputSchema,
+  type UnresolvedGoalActionWire,
+  outputContractProblems,
+  validateOutput,
+} from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
 import { goalRun } from '../components/goals/goal-fixtures.test-helpers.js';
 import {
@@ -10,6 +16,7 @@ import {
   goalStepProgress,
   isStepAuthorityHint,
   observationSentence,
+  outputProblemText,
   planDiff,
   planHintKey,
   planHintText,
@@ -271,5 +278,58 @@ describe('lib/goals', () => {
     expect(checkErrorLabel('predicate_unsatisfied', zh)).toBe('结果不符合期望');
     expect(checkErrorLabel('fact_not_observed', zh)).toMatch(/^没看到能作证据的事实/);
     expect(checkErrorLabel('gate_timeout', zh)).toBe('上次没成功（代码 gate_timeout）');
+  });
+});
+
+describe('outputProblemText (S11 GO5d-1)', () => {
+  const SCHEMA: OutputSchema = {
+    type: 'object',
+    properties: {
+      hosts: {
+        type: 'array',
+        items: { type: 'string', minLength: 2, maxLength: 3 },
+        minItems: 1,
+        maxItems: 1,
+      },
+      count: { type: 'integer', minimum: 0, maximum: 9 },
+      mode: { enum: ['fast', 'safe'] },
+      kind: { const: 'cert' },
+      flag: { type: ['boolean', 'null'] },
+    },
+    required: ['hosts', 'count'],
+    additionalProperties: false,
+  };
+
+  it('puts every message the kernel writes in Chinese, and leaves the English as sent', () => {
+    const messages = [
+      ...validateOutput(SCHEMA, {
+        hosts: ['a', 'abcd', 7],
+        mode: 'slow',
+        kind: 'key',
+        flag: 1,
+        extra: true,
+      }).problems,
+      ...validateOutput(SCHEMA, { hosts: [], count: -1 }).problems,
+      ...validateOutput(SCHEMA, { hosts: ['ab', 'cd'], count: 10 }).problems,
+      ...validateOutput(
+        { type: 'object', properties: { xs: { type: 'array', items: {} } } },
+        {
+          xs: Array.from({ length: 10_001 }, () => 0),
+        },
+      ).problems,
+      ...outputContractProblems(SCHEMA, undefined).problems,
+    ].map((problem) => problem.message);
+    expect(new Set(messages).size).toBeGreaterThanOrEqual(13);
+    for (const message of messages) {
+      const text = outputProblemText(message, zh);
+      expect(text, message).not.toBe(message);
+      expect(text, message).toMatch(/^[\u4e00-\u9fff]/);
+      expect(outputProblemText(message, en)).toBe(message);
+    }
+    expect(outputProblemText('expected boolean or null, got integer', zh)).toBe(
+      '应为是/否或空值，实际是整数',
+    );
+    expect(outputProblemText('required, missing', zh)).toBe('必填，但没有');
+    expect(outputProblemText('something new', zh)).toBe('something new');
   });
 });

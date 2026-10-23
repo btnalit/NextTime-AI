@@ -191,6 +191,55 @@ const OUTPUT_TYPE: Readonly<Record<OutputSchemaType, readonly [string, string]>>
   null: ['空值', 'null'],
 };
 
+const typeWord = (name: string, t: Translate): string => {
+  const pair = Object.hasOwn(OUTPUT_TYPE, name) ? OUTPUT_TYPE[name as OutputSchemaType] : undefined;
+  return pair ? t(pair[0], pair[1]) : name;
+};
+
+/** What `@nexttime/shared` `validateOutput` / `outputContractProblems` say of one place, each
+ *  message a fixed English template, put in Chinese. The English stays as sent — it is what the
+ *  Worker read — and a message no template matches is shown as sent in either language. */
+const OUTPUT_PROBLEM_ZH: readonly (readonly [
+  RegExp,
+  (match: RegExpExecArray, t: Translate) => string,
+])[] = [
+  [
+    /^expected (.+), got (\w+)$/,
+    (m, t) =>
+      `应为${(m[1] ?? '')
+        .split(' or ')
+        .map((type) => typeWord(type, t))
+        .join('或')}，实际是${typeWord(m[2] ?? '', t)}`,
+  ],
+  [/^must be one of (.+)$/s, (m) => `应为其中之一：${m[1]}`],
+  [/^must be (.+)$/s, (m) => `应为 ${m[1]}`],
+  [/^shorter than (\d+) characters$/, (m) => `少于 ${m[1]} 个字符`],
+  [/^longer than (\d+) characters$/, (m) => `多于 ${m[1]} 个字符`],
+  [/^less than (\S+)$/, (m) => `小于下限 ${m[1]}`],
+  [/^greater than (\S+)$/, (m) => `大于上限 ${m[1]}`],
+  [/^fewer than (\d+) items$/, (m) => `少于 ${m[1]} 项`],
+  [/^more than (\d+) items$/, (m) => `多于 ${m[1]} 项`],
+  [/^required, missing$/, () => '必填，但没有'],
+  [
+    /^not declared by the schema \(additionalProperties is false\)$/,
+    () => '约定里没有这个字段，且约定不允许多出的字段',
+  ],
+  [/^too large to check: more than (\d+) values$/, (m) => `太大，无法检查：超过 ${m[1]} 个值`],
+  [
+    /^missing: this step declares an output schema/,
+    () => '没有带 output：这一步声明了输出约定，结果要放在 output 里',
+  ],
+];
+
+/** One output-contract problem's message for the reader — see {@link OUTPUT_PROBLEM_ZH}. */
+export function outputProblemText(message: string, t: Translate): string {
+  for (const [pattern, zh] of OUTPUT_PROBLEM_ZH) {
+    const match = pattern.exec(message);
+    if (match) return t(zh(match, t), message);
+  }
+  return message;
+}
+
 /** How many of an `enum`'s values a field's kind spells out before 「等 N 个」. */
 const ENUM_SHOWN = 5;
 

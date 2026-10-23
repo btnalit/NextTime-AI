@@ -29,7 +29,11 @@ import {
 } from '../lib/tasks.js';
 import { LinkedApprovals } from './approvals/LinkedApprovals.js';
 import { nameOf } from './approvals/useDirectoryNames.js';
-import { OutputContractFields, OutputProblemList } from './goals/OutputContract.js';
+import {
+  OutputContractExplanation,
+  OutputContractFields,
+  OutputProblemList,
+} from './goals/OutputContract.js';
 import { Button } from './kit/button.js';
 import { Confirm } from './kit/confirm.js';
 import { KeyValue, type KeyValueItem } from './kit/key-value.js';
@@ -462,6 +466,7 @@ function OutputContractSection({
   return (
     <section className="stack-s" data-testid="task-output-contract">
       <span className="section-title">{t('输出约定', 'Output contract')}</span>
+      {schema ? <OutputContractExplanation t={t} /> : null}
       {reworkOf ? (
         <div className="stack-s" data-testid="task-rework-of">
           <span className="row-wrap text-small">
@@ -504,13 +509,15 @@ function OutputContractSection({
           )}
         </div>
       ) : null}
-      {schema ? <OutputContractFields schema={schema} t={t} testId="task-output-fields" /> : null}
+      {schema ? (
+        <OutputContractFields schema={schema} t={t} testId="task-output-fields" explain={false} />
+      ) : null}
       {rejected ? (
         <div className="stack-s" data-testid="task-rejected-output">
           <span className="text-small text-warn">
             {t(
-              `最后一次被拒的报告（${formatDateTime(rejected.at)}）有 ${rejected.problemCount} 处不符合约定：`,
-              `The last refused report (${formatDateTime(rejected.at)}) broke the contract in ${rejected.problemCount} place(s):`,
+              `最后一次被拒的报告在 ${formatDateTime(rejected.at)}，有 ${rejected.problemCount} 处不符合约定：`,
+              `The last refused report, at ${formatDateTime(rejected.at)}, broke the contract in ${rejected.problemCount} place(s):`,
             )}
           </span>
           <OutputProblemList
