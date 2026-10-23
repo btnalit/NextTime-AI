@@ -37,6 +37,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parse as parseYaml } from 'yaml';
+import { ignoreOverride, zodToJsonSchema } from 'zod-to-json-schema';
 
 const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 
@@ -169,7 +170,98 @@ async function loadModeToolSets() {
   const shared = await loadSharedRegistry();
   const resultContractKeys = new Set(Object.keys(shared.WorkerResultContractSchema.shape));
 
-  return { entryTools, workerTools, resultContractKeys };
+  const proposeGoal = shared.getCapability('propose_goal');
+  if (!proposeGoal) throw new Error('prompt-contract: propose_goal is missing from the registry');
+  const proposeGoalSchemaWords = jsonSchemaWords(
+    zodToJsonSchema(proposeGoal.paramsSchema, { $refStrategy: 'none', override: recursionAsAny }),
+  );
+
+  return {
+    entryTools,
+    workerTools,
+    resultContractKeys,
+    proposeGoal: { schemaWords: proposeGoalSchemaWords, description: proposeGoal.description },
+  };
+}
+
+/** A schema that contains itself (`z.lazy` — a predicate's `all` / `any` / `not`) is written as
+ *  `{}` the second time, without the library's warning per occurrence (same as
+ *  `contract-snapshot.mjs`). */
+function recursionAsAny(_def, refs, seen) {
+  return seen !== undefined &&
+    seen.path.length < refs.currentPath.length &&
+    seen.path.every((segment, index) => refs.currentPath[index] === segment)
+    ? {}
+    : ignoreOverride;
+}
+
+// -------------------------------------------------------------------------------------------
+// S11 GO5e: the entry prompt's "Goals" section names `propose_goal`'s own fields and check kinds and
+// the codes it refuses with. They are not tools, so instead of allow-listing them blind each is
+// checked against `propose_goal` itself (the built shared registry): a field or check kind must be a
+// property name or a `const` / `enum` value of its params schema, a refusal code must be named in
+// its description. A rename on that side fails here, not in a real-model run.
+// -------------------------------------------------------------------------------------------
+
+export const PROPOSE_GOAL_SCHEMA_WORDS = new Set([
+  'fromProcedure',
+  'key',
+  'input',
+  'dependsOn',
+  'bindings',
+  'outputSchema',
+  'observe_predicate',
+  'fact_predicate',
+  'requester_confirm',
+  'idempotencyKey',
+]);
+
+export const PROPOSE_GOAL_REFUSAL_CODES = new Set([
+  'invalid_params',
+  'credentials_in_text',
+  'proposed_goal_limit',
+]);
+
+/** Every property name, and every string `const` / `enum` value, anywhere in a JSON Schema. */
+export function jsonSchemaWords(schema, out = new Set()) {
+  if (Array.isArray(schema)) {
+    for (const item of schema) jsonSchemaWords(item, out);
+    return out;
+  }
+  if (schema === null || typeof schema !== 'object') return out;
+  if (typeof schema.const === 'string') out.add(schema.const);
+  if (Array.isArray(schema.enum)) {
+    for (const value of schema.enum) if (typeof value === 'string') out.add(value);
+  }
+  if (schema.properties && typeof schema.properties === 'object') {
+    for (const [name, child] of Object.entries(schema.properties)) {
+      out.add(name);
+      jsonSchemaWords(child, out);
+    }
+  }
+  for (const [key, value] of Object.entries(schema)) {
+    if (key !== 'properties' && value && typeof value === 'object') jsonSchemaWords(value, out);
+  }
+  return out;
+}
+
+/** Every `PROPOSE_GOAL_SCHEMA_WORDS` word is in `propose_goal`'s params schema, and every
+ *  `PROPOSE_GOAL_REFUSAL_CODES` code in its description. */
+export function checkProposeGoalWords(relativePath, schemaWords, description) {
+  const violations = [];
+  for (const word of PROPOSE_GOAL_SCHEMA_WORDS) {
+    if (schemaWords.has(word)) continue;
+    violations.push(
+      `${relativePath}: "${word}" is named as a propose_goal field or check kind, but propose_goal's params schema has no property or value of that name — fix the prompt and PROPOSE_GOAL_SCHEMA_WORDS in scripts/guards/prompt-contract.mjs`,
+    );
+  }
+  for (const code of PROPOSE_GOAL_REFUSAL_CODES) {
+    if (description.includes(code)) continue;
+    violations.push(
+      `${relativePath}: "${code}" is named as a code propose_goal refuses with, but propose_goal's description never mentions it — fix the prompt and PROPOSE_GOAL_REFUSAL_CODES in scripts/guards/prompt-contract.mjs`,
+    );
+  }
+  return violations;
 }
 
 // -------------------------------------------------------------------------------------------
@@ -268,12 +360,19 @@ const GRAPH_QUESTION_REQUIRED_PHRASES = [
 
 /** Checks one required-phrase list against `systemPrompt`, returning a violation naming every
  *  missing phrase (or `[]` when all are present). `ruleName` labels the violation so a failure
- *  names *which* of the three rules regressed, not just that "something" did. */
-function checkRequiredPhrases(relativePath, ruleName, systemPrompt, requiredPhrases) {
+ *  names *which* of the three rules regressed, not just that "something" did; `subject` names
+ *  the text checked (a tool description is not a systemPrompt). */
+function checkRequiredPhrases(
+  relativePath,
+  ruleName,
+  systemPrompt,
+  requiredPhrases,
+  subject = 'systemPrompt',
+) {
   const missing = requiredPhrases.filter((phrase) => !systemPrompt.includes(phrase));
   if (missing.length === 0) return [];
   return [
-    `${relativePath}: systemPrompt is missing the "${ruleName}" rule (S8 W2-K1) — expected phrase(s) not found: ${missing.map((p) => JSON.stringify(p)).join(', ')}`,
+    `${relativePath}: ${subject} is missing the "${ruleName}" rule (S8 W2-K1) — expected phrase(s) not found: ${missing.map((p) => JSON.stringify(p)).join(', ')}`,
   ];
 }
 
@@ -317,11 +416,56 @@ export function checkGraphQuestionGuidance(relativePath, systemPrompt) {
   );
 }
 
+/** Rule 5 (S11 GO5e, plan §7.2 item 6) — a chain of dependent delegated steps is a goal, one
+ *  delegated task is not (#728 review: a write that needs an approval, several gates or a long run
+ *  is still one `invoke_worker`); it is achieved on checks, not a Worker's word; the person
+ *  confirms it in the console (the agent cannot); a retry carries the same key. */
+const GOAL_GUIDANCE_REQUIRED_PHRASES = [
+  'propose_goal',
+  "a later step needs an earlier one's result",
+  'One delegated task is not a goal',
+  'confirms a goal in the console',
+  'never because a Worker says it is done',
+  'could come out false',
+  'idempotencyKey',
+  'you cannot do any of them',
+  'list_goals',
+];
+
+/** Rule 5 (S11 GO5e): when to propose a goal and how to write checks a person can confirm. */
+export function checkGoalGuidance(relativePath, systemPrompt) {
+  return checkRequiredPhrases(
+    relativePath,
+    'propose a goal for work that outlives the conversation, with checks the person confirms',
+    systemPrompt,
+    GOAL_GUIDANCE_REQUIRED_PHRASES,
+  );
+}
+
+/** Rule 5's half that reaches every workspace (S11 GO5e): `propose_goal`'s own description, sent
+ *  with the tool whatever the workspace's entry prompt says, keeps the same line between a goal and
+ *  one delegated task. */
+const PROPOSE_GOAL_DESCRIPTION_REQUIRED_PHRASES = [
+  "a later step needs an earlier one's result",
+  'One delegated task stays invoke_worker',
+];
+
+export function checkProposeGoalDescription(relativePath, description) {
+  return checkRequiredPhrases(
+    relativePath,
+    'propose_goal is for dependent steps, never for one delegated task',
+    description,
+    PROPOSE_GOAL_DESCRIPTION_REQUIRED_PHRASES,
+    'the description',
+  );
+}
+
 const ENTRY_PROMPT_CONTENT_CHECKS = [
   checkEmptyFindGuidance,
   checkConditionalOpsRunner,
   checkReplyLanguageDirective,
   checkGraphQuestionGuidance,
+  checkGoalGuidance,
 ];
 
 // -------------------------------------------------------------------------------------------
@@ -348,7 +492,7 @@ const PROMPT_FILES = [
 ];
 
 export async function main() {
-  const { entryTools, workerTools, resultContractKeys } = await loadModeToolSets();
+  const { entryTools, workerTools, resultContractKeys, proposeGoal } = await loadModeToolSets();
   const toolSetsByKey = { entryTools, workerTools };
   const violations = [];
 
@@ -364,19 +508,25 @@ export async function main() {
     const toolSet = file.includeResultContractKeys
       ? new Set([...baseToolSet, ...resultContractKeys])
       : baseToolSet;
-    violations.push(
-      ...checkPromptFile(
-        file.path,
-        systemPrompt,
-        toolSet,
-        ALLOWED_NON_TOOL_WORDS[file.path] ?? new Set(),
-      ),
-    );
+    const isEntry = file.path === 'ontology/entry-agent.yaml';
+    const allowed = new Set([
+      ...(ALLOWED_NON_TOOL_WORDS[file.path] ?? []),
+      // S11 GO5e: checked against propose_goal itself just below, not allowed blind.
+      ...(isEntry ? [...PROPOSE_GOAL_SCHEMA_WORDS, ...PROPOSE_GOAL_REFUSAL_CODES] : []),
+    ]);
+    violations.push(...checkPromptFile(file.path, systemPrompt, toolSet, allowed));
 
-    // S8 W2-K1 (leftover 72): the three entry-prompt content rules — entry-agent.yaml only, the
-    // one file these rules are about (ops-runner.yaml has no "every find_* empty"/"reply
-    // language" concept of its own).
-    if (file.path === 'ontology/entry-agent.yaml') {
+    // S8 W2-K1 (leftover 72): the entry-prompt content rules — entry-agent.yaml only, the one
+    // file these rules are about (ops-runner.yaml has no "every find_* empty"/"reply language"
+    // concept of its own).
+    if (isEntry) {
+      violations.push(
+        ...checkProposeGoalWords(file.path, proposeGoal.schemaWords, proposeGoal.description),
+        ...checkProposeGoalDescription(
+          'packages/shared/src/capabilities.ts (propose_goal description)',
+          proposeGoal.description,
+        ),
+      );
       for (const check of ENTRY_PROMPT_CONTENT_CHECKS) {
         violations.push(...check(file.path, systemPrompt));
       }

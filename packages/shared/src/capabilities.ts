@@ -4203,7 +4203,7 @@ const goalCapabilities = [
         }
       }),
     resultSchema: wire.ProposeGoalResultWireSchema,
-    description: `Propose a goal for you (on a Handle, the person you act for) to confirm: statement — what is wanted, in a sentence or two (at most ${MAX_GOAL_STATEMENT_CHARS} characters) — the plan, revision 1 — written out (plan: its steps, each a published Worker version, their dependencies, inputs and checks — a step may declare the output its Worker reports (outputSchema) and take input fields from earlier steps' outputs (bindings: to, from a step it depends on that declares an outputSchema, a JMESPath path) — and the acceptance checks of the goal) or made from a published Procedure (fromProcedure: procedureId, version — its latest published version when absent — and the parameters its parameters schema asks for: its worker steps become the plan's steps, each after the one before unless it says otherwise, its $params bindings filled in from the parameters, and its verify steps the goal's acceptance checks — the platform makes a check a verify step carries, and the requester confirms the others; a Procedure with an operation or approval step makes no plan), exactly one of the two — and the budget (tokens, step attempts, revisions, wall-clock seconds from confirmation). Nothing runs until the requester confirms it in the console (confirm_goal); the budget cannot be changed there — propose again to change it. The requester must be a person: a call for a service or agent Principal is refused (403). A requester has at most a deployment-set number of goals waiting to be confirmed or rejected (5 unless configured): one more is refused, nothing written (409 proposed_goal_limit with details.limit and details.proposed) — ask them to confirm or reject one first; a retry of a run already proposed is still answered. The plan is checked (400 invalid_params with details.problems — for fromProcedure, also an unknown or unpublished Procedure, parameters its schema refuses at fromProcedure.parameters.<field>, and a step it cannot make); a plan made from a Procedure is checked exactly like one written out, and the revision records the Procedure (fromProcedure on get_goal and get_goal_revision). The statement, the plan and the parameters must not carry credentials — refused, nothing written (400 credentials_in_text with details.field and, for the plan, details.suspectedSecretPaths: a gate authenticates with the credentials configured on it), nor the [redacted] mark a read shows where one stood (400 redacted_text_submitted with details.field and, for the plan, details.paths). Plan places read plan.steps.<i>.input.<field>, plan.acceptance.<i>.prompt and so on, i from 0. The result's hints say what the person confirming should know: a plan the platform checks nothing of, and any step the requester could not start now (a gate they cannot act on, a capability they do not hold, a Worker their profile excludes). idempotencyKey: the same key returns the run it first proposed, whatever its status (changed: false); without one, the same statement, plan (or fromProcedure) and budget from the same session return the run still proposed.`,
+    description: `Propose a goal for you (on a Handle, the person you act for) to confirm — for a chain of delegated steps that has to go on without this conversation: a later step needs an earlier one's result, or can start only once an earlier step (or the approval it waits on) has finished. One delegated task stays invoke_worker, even a write that needs an approval, one that spans several gates or one that runs long: the approval flow handles its approval and its result comes back in a later turn. Prefer acceptance checks the platform makes and the person can read — an observe_predicate (an observe Operation and a predicate on what it returns) or a fact_predicate (a Fact of the graph a gate or a collector records, observed again after the check starts — never one this goal's own steps produced), each able to come out false; a requester_confirm check is only the person's word. The proposal: statement — what is wanted, in a sentence or two (at most ${MAX_GOAL_STATEMENT_CHARS} characters) — the plan, revision 1 — written out (plan: its steps, each a published Worker version, their dependencies, inputs and checks — a step may declare the output its Worker reports (outputSchema) and take input fields from earlier steps' outputs (bindings: to, from a step it depends on that declares an outputSchema, a JMESPath path) — and the acceptance checks of the goal) or made from a published Procedure (fromProcedure: procedureId, version — its latest published version when absent — and the parameters its parameters schema asks for: its worker steps become the plan's steps, each after the one before unless it says otherwise, its $params bindings filled in from the parameters, and its verify steps the goal's acceptance checks — the platform makes a check a verify step carries, and the requester confirms the others; a Procedure with an operation or approval step makes no plan), exactly one of the two — and the budget (tokens, step attempts, revisions, wall-clock seconds from confirmation). Nothing runs until the requester confirms it in the console (confirm_goal); the budget cannot be changed there — propose again to change it. The requester must be a person: a call for a service or agent Principal is refused (403). A requester has at most a deployment-set number of goals waiting to be confirmed or rejected (5 unless configured): one more is refused, nothing written (409 proposed_goal_limit with details.limit and details.proposed) — ask them to confirm or reject one first; a retry of a run already proposed is still answered. The plan is checked (400 invalid_params with details.problems — for fromProcedure, also an unknown or unpublished Procedure, parameters its schema refuses at fromProcedure.parameters.<field>, and a step it cannot make); a plan made from a Procedure is checked exactly like one written out, and the revision records the Procedure (fromProcedure on get_goal and get_goal_revision). The statement, the plan and the parameters must not carry credentials — refused, nothing written (400 credentials_in_text with details.field and, for the plan, details.suspectedSecretPaths: a gate authenticates with the credentials configured on it), nor the [redacted] mark a read shows where one stood (400 redacted_text_submitted with details.field and, for the plan, details.paths). Plan places read plan.steps.<i>.input.<field>, plan.acceptance.<i>.prompt and so on, i from 0. The result's hints say what the person confirming should know: a plan the platform checks nothing of, and any step the requester could not start now (a gate they cannot act on, a capability they do not hold, a Worker their profile excludes). idempotencyKey: the same key returns the run it first proposed, whatever its status (changed: false); without one, the same statement, plan (or fromProcedure) and budget from the same session return the run still proposed.`,
   },
   {
     name: 'confirm_goal',
@@ -4345,34 +4345,58 @@ const goalCapabilities = [
   },
 ] as const satisfies readonly Capability[];
 
-/** The registry's entries with their literal names kept (`as const`), for `CapabilityName`. */
-const REGISTERED = [
-  ...chatCapabilities,
-  ...ontologyCapabilities,
-  ...graphCapabilities,
-  ...gateCapabilities,
-  ...connectionCapabilities,
-  ...metaCapabilities,
-  ...epistemicCapabilities,
-  ...governanceCapabilities,
-  ...taskCapabilities,
-  ...workerCapabilities,
-  ...ingestCapabilities,
-  ...auditCapabilities,
-  ...membersCapabilities,
-  ...agentProfileCapabilities,
-  ...platformCapabilities,
-  ...modulesCapabilities,
-  ...goalCapabilities,
-] as const;
+/**
+ * The registry's groups, each with its literal names kept (`as const`), for `CapabilityName`. The
+ * annotation names each group's type rather than letting the compiler infer the whole tuple: the
+ * inferred type — every entry's schema and description, as literals — is longer than the compiler
+ * writes into the declaration file (TS7056). A group in the value and not in the annotation (or in
+ * a different place) does not compile.
+ */
+const GROUPS: readonly [
+  typeof chatCapabilities,
+  typeof ontologyCapabilities,
+  typeof graphCapabilities,
+  typeof gateCapabilities,
+  typeof connectionCapabilities,
+  typeof metaCapabilities,
+  typeof epistemicCapabilities,
+  typeof governanceCapabilities,
+  typeof taskCapabilities,
+  typeof workerCapabilities,
+  typeof ingestCapabilities,
+  typeof auditCapabilities,
+  typeof membersCapabilities,
+  typeof agentProfileCapabilities,
+  typeof platformCapabilities,
+  typeof modulesCapabilities,
+  typeof goalCapabilities,
+] = [
+  chatCapabilities,
+  ontologyCapabilities,
+  graphCapabilities,
+  gateCapabilities,
+  connectionCapabilities,
+  metaCapabilities,
+  epistemicCapabilities,
+  governanceCapabilities,
+  taskCapabilities,
+  workerCapabilities,
+  ingestCapabilities,
+  auditCapabilities,
+  membersCapabilities,
+  agentProfileCapabilities,
+  platformCapabilities,
+  modulesCapabilities,
+  goalCapabilities,
+];
 
 /** The complete capability registry (design doc §9.3). */
-export const CAPABILITY_REGISTRY: readonly Capability[] = REGISTERED;
+export const CAPABILITY_REGISTRY: readonly Capability[] = GROUPS.flat();
 
 /** Every registered capability name, as a type: a hand-typed name that is not in the registry
  *  (a typo, a name that was never registered) fails at compile time wherever one is expected —
  *  the console's role checks and nav entries first of all (#541 review M1). */
-export type CapabilityName = (typeof REGISTERED)[number]['name'];
+export type CapabilityName = (typeof GROUPS)[number][number]['name'];
 
 /** Narrows a runtime string to `CapabilityName`. */
 export function isCapabilityName(name: string): name is CapabilityName {

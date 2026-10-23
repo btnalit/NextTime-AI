@@ -247,6 +247,20 @@ function toolMessageText(message) {
  *  entryRestartChatScenario/entryObserveChatScenario's own doc comments and
  *  docs/runbooks/host-accept-s2.md "已知偏离"). */
 function findToolResult(messages, toolName) {
+  const text = findToolResultText(messages, toolName);
+  if (text === undefined) return undefined;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
+/** The plain text of the most recent `toolName` call's result, JSON or not — for a step that has
+ *  to tell what came back even when it is pi's plain-text "tool not found" error (S11 GO5e-1's
+ *  `confirm_goal` attempt, `entryGoalChatScenario`). `undefined` when that tool has not been
+ *  called, or its result is not in the history yet. */
+function findToolResultText(messages, toolName) {
   if (!Array.isArray(messages)) return undefined;
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const message = messages[i];
@@ -254,14 +268,22 @@ function findToolResult(messages, toolName) {
     const call = message.tool_calls.find((c) => c?.function?.name === toolName);
     if (!call) continue;
     const resultMessage = messages.find((r) => r?.role === 'tool' && r.tool_call_id === call.id);
-    if (!resultMessage) return undefined;
-    try {
-      return JSON.parse(toolMessageText(resultMessage));
-    } catch {
-      return undefined;
-    }
+    return resultMessage ? toolMessageText(resultMessage) : undefined;
   }
   return undefined;
+}
+
+/** The serialized newest message carrying `marker` — where a chat scenario reads the markers of
+ *  the question it answers. The entry agent's pi session is resident, so the history may hold an
+ *  earlier asking of the same question with other marker values (`extractMarker` over the whole
+ *  blob would read the oldest). Falls back to the whole history. */
+function latestMessageWith(messages, marker) {
+  const list = Array.isArray(messages) ? messages : [];
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    const serialized = JSON.stringify(list[i]);
+    if (serialized.includes(marker)) return serialized;
+  }
+  return JSON.stringify(list);
 }
 
 /** S2.12 step 2 ("重启测试容器" → find_* → invoke_worker → 卡片 → 批准 → 执行 → explain): the
@@ -501,6 +523,129 @@ function entryDependencyChatScenario(messages) {
   ];
 }
 
+/** S11 GO5e-1 (scripts/accept_s2.sh `step9_goal_from_chat`): "发起验收目标 GOAL_NONCE=<n>" — the
+ *  entry agent proposes a goal in the conversation and cannot confirm it itself. Every argument
+ *  chains off a *real* tool result (`findToolResult`), never a value accept_s2.sh guessed:
+ *
+ *  Turn 1: `find_workers({need:'restart'})` — the ops-runner WorkerDefinition accept_s2.sh's
+ *  `ops_runner_step` publishes (same need as `entryRestartChatScenario`).
+ *
+ *  Turn 2: `find_operations({need:'stock'})` — the http gate's published observe Operation
+ *  `stock.get`; its Object's identity names the Gatekeeper (`identityKey.gatekeeperId`).
+ *
+ *  Turn 3: `propose_goal` — one step on that Worker (`goalStepScenario` below scripts it; one step
+ *  keeps the run short — when a goal is the right call is the entry prompt's business, guarded by
+ *  scripts/guards/prompt-contract.mjs, not this script's), the goal
+ *  accepted by a check the platform makes (an `observe_predicate` on `stock.get` returning the
+ *  fixture's symbol, never the Worker's word), a budget, and an `idempotencyKey` named after the
+ *  nonce: asking again in the same chat proposes nothing new (`changed: false`, the same run).
+ *  Neither the statement nor the step's input carries this scenario's marker — a step's Worker
+ *  sees its input, and a chat marker there would hand the Worker this script (see `SCENARIOS`).
+ *
+ *  Turn 4: `confirm_goal({goalRunId, revision: 1})` — the agent trying to confirm its own
+ *  proposal. Confirmation is the person's: the tool is not registered in entry mode (pi answers
+ *  with a plain-text "not found" error) and the kernel refuses the capability on any Handle
+ *  (human channel only). accept_s2.sh asserts the run is still `proposed` after the Turn.
+ *
+ *  Turn 5: a final text with `GOAL_ID=`, `GOAL_STATUS=`, `GOAL_CHANGED=` from turn 3's real result
+ *  and `CONFIRM_GOAL=` — `confirmed` only if turn 4 came back as a confirmation, `unavailable`
+ *  otherwise — for accept_s2.sh to read.
+ */
+function entryGoalChatScenario(messages) {
+  const asked = latestMessageWith(messages, '发起验收目标');
+  const nonce = extractMarker(asked, 'GOAL_NONCE') ?? 'none';
+  const foundWorkers = findToolResult(messages, 'find_workers');
+  const workerMatch = Array.isArray(foundWorkers?.items)
+    ? foundWorkers.items.find((w) => w && w.kind === 'worker')
+    : undefined;
+  const foundOperations = findToolResult(messages, 'find_operations');
+  const stockGet = Array.isArray(foundOperations?.items)
+    ? foundOperations.items.find(
+        (o) =>
+          o?.identityKey?.name === 'stock.get' && typeof o.identityKey.gatekeeperId === 'string',
+      )
+    : undefined;
+  const proposed = findToolResult(messages, 'propose_goal');
+  const goalRunId =
+    proposed && typeof proposed.goalRunId === 'string' ? proposed.goalRunId : undefined;
+  const confirmText = findToolResultText(messages, 'confirm_goal');
+  let confirmed = false;
+  try {
+    const parsed = JSON.parse(confirmText ?? '');
+    confirmed = parsed !== null && typeof parsed === 'object' && parsed.goalRunId === goalRunId;
+  } catch {
+    confirmed = false;
+  }
+
+  return [
+    { tool: { name: 'find_workers', args: { need: 'restart' } } },
+    workerMatch
+      ? { tool: { name: 'find_operations', args: { need: 'stock' } } }
+      : { text: 'echo: 发起验收目标 (find_workers did not resolve — see docs/runbooks/host-accept-s2.md)' },
+    workerMatch && stockGet
+      ? {
+          tool: {
+            name: 'propose_goal',
+            args: {
+              statement: `accept_s2 goal journey ${nonce}: one ops-runner step reports back, and the platform reads the test stock API to accept the goal.`,
+              plan: {
+                steps: [
+                  {
+                    key: 'report',
+                    worker: { definitionId: workerMatch.definitionId, version: workerMatch.version },
+                    input: `ACCEPT_S2_SCENARIO=goal_step GOAL_NONCE=${nonce}`,
+                  },
+                ],
+                acceptance: [
+                  {
+                    kind: 'observe_predicate',
+                    key: 'stock-visible',
+                    check: {
+                      gatekeeperId: stockGet.identityKey.gatekeeperId,
+                      operation: 'stock.get',
+                      params: {},
+                      expect: { path: 'symbol', op: 'eq', value: 'NXT' },
+                    },
+                  },
+                ],
+              },
+              budget: { maxTokens: 200000, maxSteps: 3, maxRevisions: 1, maxWallClockSeconds: 1800 },
+              idempotencyKey: `accept-s2-goal-${nonce}`,
+            },
+          },
+        }
+      : { text: 'echo: 发起验收目标 (find_operations did not resolve stock.get — see docs/runbooks/host-accept-s2.md)' },
+    goalRunId
+      ? { tool: { name: 'confirm_goal', args: { goalRunId, revision: 1 } } }
+      : { text: 'echo: 发起验收目标 (propose_goal did not resolve — see docs/runbooks/host-accept-s2.md)' },
+    {
+      text: `Proposed goal GOAL_ID=${goalRunId} GOAL_STATUS=${proposed?.status} GOAL_CHANGED=${proposed?.changed} CONFIRM_GOAL=${confirmed ? 'confirmed' : 'unavailable'} — please confirm it in the console under Goals; nothing runs until you do.`,
+    },
+  ];
+}
+
+/** S11 GO5e-1: the *Worker* half of `entryGoalChatScenario` — the goal's one step. Reports back
+ *  with no Fact: the goal is accepted on the platform's own observation of the stock API, which a
+ *  Worker's report could not stand in for. */
+function goalStepScenario(messages) {
+  const blob = JSON.stringify(messages);
+  const nonce = extractMarker(blob, 'GOAL_NONCE') ?? 'none';
+  return [
+    {
+      tool: {
+        name: 'report_result',
+        args: {
+          summary: `accept_s2: goal step ${nonce} done; the platform checks the stock API itself.`,
+          findings: [`goal step ${nonce} reported`],
+          factsToAssert: [],
+          evidence: [{ kind: 'accept_s2_worker_note', content: { nonce } }],
+          artifacts: [],
+        },
+      },
+    },
+  ];
+}
+
 // Order matters: the entry-chat scenarios must be tested first. Once the entry agent has called
 // `invoke_worker`, its own message history contains the Worker marker (inside the tool-call
 // arguments' `input`), so a Worker-marker-first table would hand the *entry* agent the Worker's
@@ -510,8 +655,10 @@ const SCENARIOS = [
   { marker: '重启测试容器', build: entryRestartChatScenario, chat: true },
   { marker: '测试 API 的 GET 返回什么', build: entryObserveChatScenario, chat: true },
   { marker: '哪个服务依赖哪个', build: entryDependencyChatScenario, chat: true },
+  { marker: '发起验收目标', build: entryGoalChatScenario, chat: true },
   { marker: 'ACCEPT_S2_SCENARIO=docker_restart', build: dockerRestartScenario, chat: false },
   { marker: 'ACCEPT_S2_SCENARIO=ssh_run', build: sshRunScenario, chat: false },
+  { marker: 'ACCEPT_S2_SCENARIO=goal_step', build: goalStepScenario, chat: false },
 ];
 
 /**
