@@ -164,6 +164,8 @@
 
 ### 页首更新记录（2026-10-04 精简时移出，原文照搬）
 
+上一版 2026-10-23（**S11 W1 GO5d-2「Procedure 成为计划模板」合入（#722，9d9aafc，goal 0009 + worker 0005，未发版；GO5d 完成，下一步 GO5e）**：`propose_goal` 可以用 `fromProcedure` 代替 `plan`，按已发布流程展开计划（Worker 步骤成为计划步骤，`$params` 绑定在展开时代入，带 `check` 的验证步骤成为平台检查，没带的合成请求人确认；门操作 / 审批步骤 W1 不能展开，400 指明第几步），展开出的计划和手写计划过同一套校验；`publish_procedure` 对写了模板字段的流程先试展开，不通过 400 并列出位置；计划第 1 版记下来源流程与版本。控制台流程详情按步骤写成句子、发布被拒就地列原因，目标页显示「由流程 … 生成」。新遗留 453–455，遗留 444 范围加上 `fromProcedure.parameters`。W1 下一步 GO5e（入口 agent 在对话里调 `propose_goal`）；W3 收紧 RAGFlow `document.parse`）。
+
 上一版 2026-10-23（**S11 W3 P1-F2「knowledge 能力包 v1 与能力包依赖」合入（#721，6760198，无迁移，未发版；P1-F 完成）**：能力包可以用 `requires.packs` 声明依赖别的能力包，依赖没满足时 `install_pack` 409 `pack_dependency_unmet`，核验新增「依赖的能力包都还装着且版本够新」；新增 knowledge v1（Skill `kb-retrieval` + 只读 Worker `knowledge-researcher`，依赖 ops-assets v2 与 RAGFlow）。控制台能力包详情可就地安装依赖。端到端验收测试从按预设接入 RAGFlow 到 Worker 检索走通。新遗留 452。W3 接着收紧 RAGFlow `document.parse`；W1 GO5d-2（#722）验收中；主机窗口仍暂缓）。
 
 上一版 2026-10-23（**控制台显示能力名和门名合入（#718，1412c78，web-only，未发版；遗留 439、440、441 关闭）**：账户页自签 Handle 的能力列表写中文名、原始名和说明，并按查询、提议、委派、汇报分组；「不限」写明入口智能体能用的全部 N 项能力；Worker 详情逐个列出可作用的门并链接到「系统与授权」。另有依赖安全升级 #719（8cfad75，间接依赖 hono 4.13.7 → 4.13.13，Dependabot #43）。W1 下一步 GO5d-2；W3 P1-F2（#721）验收中；主机窗口仍暂缓）。
