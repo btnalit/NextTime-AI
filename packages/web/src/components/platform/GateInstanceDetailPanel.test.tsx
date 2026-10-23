@@ -415,7 +415,7 @@ describe('GateInstanceDetailPanel', () => {
       const { onChanged } = renderPanel(http, gateInstance({ status: 'enabled', pendingManifest }));
       const block = screen.getByTestId('gate-instance-pending-manifest');
       expect(block.textContent).toContain('container_remove');
-      expect(block.textContent).toContain('container_restart: 影响级');
+      expect(block.textContent).toContain('container_restart：影响级');
       // Field names read as words, never the manifest's own key.
       expect(block.textContent).toContain('调用目标');
       expect(block.textContent).not.toContain('binding');

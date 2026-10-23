@@ -619,9 +619,14 @@ describe('RefreshOperationGovernanceConfirm', () => {
     fireEvent.click(screen.getByTestId('align-gk-1'));
     const confirm = await screen.findByTestId('align-gk-1-confirm');
     expect(confirmButtonIsDanger(confirm)).toBe(true);
-    // Old → new in the impact line, from the shared status labels.
-    expect(confirm.textContent).toContain('db.restart: 影响级');
-    expect(confirm.textContent).toMatch(/影响级 \S+ → \S+/);
+    // The impact line names what changes; the list under it gives old → new, from the shared
+    // status labels (UX acceptance of #710, P3-1: the line no longer repeats the values).
+    expect(within(confirm).getByTestId('confirm-impact').textContent).toContain(
+      'db.restart 的影响级',
+    );
+    expect(within(confirm).getByTestId('governance-diff-list').textContent).toContain(
+      '高影响→低影响',
+    );
     const warning = within(confirm).getByTestId('align-gk-1-loosens');
     expect(warning.textContent).toContain('不再是高影响');
     expect(warning.textContent).toContain('请求者可以批准自己的请求');
@@ -733,11 +738,50 @@ describe('RefreshOperationGovernanceConfirm', () => {
     expect(rows).toHaveLength(5);
     expect(rows.some((row) => /Container → Container、Host$/.test(row))).toBe(true);
     expect(rows.some((row) => /未声明 → 否$/.test(row))).toBe(true);
+    // UX acceptance of #710, P2-1: the classification did not change, so its three chip pairs are
+    // not shown, the heading says governance, not classification, and neither does the description.
+    const list = within(confirm).getByTestId('governance-diff-list');
+    expect(within(list).queryByTestId('governance-diff-list-classification')).toBeNull();
+    expect(list.textContent).toContain('1 个 Operation 的治理字段变化');
+    expect(list.textContent).not.toContain('分类');
+    expect(confirm.textContent).toContain('是否等审批结果、读写的资源、MCP 提示');
+    expect(within(confirm).getByTestId('confirm-impact').textContent).toContain(
+      'container.restart 的 5 个治理字段',
+    );
     const warning = within(confirm).getByTestId('align-gk-1-loosens');
     expect(warning.textContent).toContain('不再等审批结果');
     expect(warning.textContent).toMatch(/还会读取 Host/);
     expect(warning.textContent).toContain('不具破坏性且幂等');
     expect(warning.textContent).toContain('只读提示变了');
+  });
+
+  it('UX acceptance of #710, P3-3: a tightened await-decision says what changes for the caller, with no loosening warning', async () => {
+    const before = governanceFields({
+      mode: 'execute',
+      blastRadius: 'medium',
+      autoApprovable: false,
+      awaitDecision: false,
+    });
+    const http = scriptedHttp({
+      preview_gate_instance_enable: () =>
+        preview([
+          {
+            name: 'container.restart',
+            existing: { ...before, status: 'published' },
+            announced: { ...before, awaitDecision: true },
+            differs: true,
+            direction: 'tightened',
+          },
+        ]),
+    });
+    renderConfirm(http);
+
+    fireEvent.click(screen.getByTestId('align-gk-1'));
+    const confirm = await screen.findByTestId('align-gk-1-confirm');
+    expect(confirmButtonIsDanger(confirm)).toBe(false);
+    expect(within(confirm).queryByTestId('align-gk-1-loosens')).toBeNull();
+    const [row] = within(confirm).getAllByTestId('governance-diff-list-field');
+    expect(row?.textContent).toMatch(/否 → 是（调用方提交请求后要等审批结果才往下做）$/);
   });
 
   it('R-18: a manifest that changed after the preview is refused with its own copy', async () => {

@@ -52,6 +52,22 @@ interface FieldChange {
   readonly label: string;
   readonly before: string;
   readonly after: string;
+  /** What a change that is not a loosening (so has no consequence line) means for the caller —
+   *  said next to the field (UX acceptance of #710, P3-3). */
+  readonly note?: string;
+}
+
+/** Whether mode, blast radius or auto-approvable changed — the list shows those three as chips
+ *  only then (UX acceptance of #710, P2-1: three unchanged pairs hid the row that did change). */
+export function classificationChanged(
+  before: OperationClassificationWire,
+  after: OperationClassificationWire,
+): boolean {
+  return (
+    before.mode !== after.mode ||
+    before.blastRadius !== after.blastRadius ||
+    before.autoApprovable !== after.autoApprovable
+  );
 }
 
 /** Only the fields that actually differ — listing an unchanged one as "x → x" would misreport. */
@@ -126,6 +142,14 @@ function otherFieldChanges(
       label: operationFieldLabel(key, t),
       before: otherValueText(before[field], t),
       after: otherValueText(after[field], t),
+      ...(field === 'awaitDecision' && after.awaitDecision
+        ? {
+            note: t(
+              '调用方提交请求后要等审批结果才往下做',
+              'the caller waits for the decision after submitting a request before going on',
+            ),
+          }
+        : {}),
     }),
   );
 }
@@ -192,10 +216,28 @@ export function firstPublishConsequence(
       );
 }
 
-/** One impact line: `name: Mode A → B; Blast radius X → Y`. */
+/** One line with every changed field, old → new — 「stock.get：读取的资源 无 → Stock；…」 — for a
+ *  place that shows no `GovernanceChangeList` (a held manifest's summary on the integrations page). */
 export function governanceChangeSummary(item: GovernanceChangeItem, t: Translate): string {
   const changes = governanceFieldChanges(item.before, item.after, t);
-  return `${actionKindTagText(item.name)}: ${changes.map((c) => `${c.label} ${c.before} → ${c.after}`).join('; ')}`;
+  return `${actionKindTagText(item.name)}${t('：', ': ')}${changes
+    .map((c) => `${c.label} ${c.before} → ${c.after}`)
+    .join(t('；', '; '))}`;
+}
+
+/** One impact line naming what changes — 「stock.get 的 3 个治理字段」 — for a confirm whose
+ *  `GovernanceChangeList` gives the values right under it (UX acceptance of #710, P3-1: the line
+ *  repeated them). */
+export function governanceChangeHeadline(item: GovernanceChangeItem, t: Translate): string {
+  const changes = governanceFieldChanges(item.before, item.after, t);
+  const name = actionKindTagText(item.name);
+  const [only] = changes;
+  return changes.length === 1 && only !== undefined
+    ? t(`${name} 的${only.label}`, `${name}: ${only.label}`)
+    : t(
+        `${name} 的 ${changes.length} 个治理字段`,
+        `${changes.length} governance fields of ${name}`,
+      );
 }
 
 const BLAST_RANK: Readonly<Record<OperationGovernanceFieldsWire['blastRadius'], number>> = {
@@ -293,8 +335,8 @@ export function governanceConsequences(
   if (before.readOnlyHint !== after.readOnlyHint) {
     lines.push(
       t(
-        `${zhName}的只读提示变了：审批目前不看它，但这个改动没有被证明无害，所以按放宽确认`,
-        `${name}'s read-only hint changes: approval does not read it today, but the change is not proven harmless, so it is confirmed as a loosening`,
+        `${zhName}的只读提示变了：审批目前不看它，但这个改动没有被证明无害，所以当作放宽，需要你确认`,
+        `${name}'s read-only hint changes: approval does not read it today, but the change is not proven harmless, so it counts as a loosening and needs your confirmation`,
       ),
     );
   }
@@ -311,9 +353,10 @@ export function governanceConsequences(
   return lines;
 }
 
-/** Old → new chips per Operation (all three classification fields, so the reader sees the whole
- *  classification; then a line per other governance field that changed), tagged with the kernel's
- *  direction (`data-direction`). `single`: a confirm about one Operation
+/** Old → new per Operation, tagged with the kernel's direction (`data-direction`): the three
+ *  classification fields as chips when any of them changed (all three, so the reader sees the
+ *  whole classification), then a line per other governance field that changed. `single`: a confirm
+ *  about one Operation
  *  that already names it in its target — the heading drops the count and the item its name
  *  (legacy 400: the name and the change were each said twice in that confirm). */
 export function GovernanceChangeList({
@@ -330,10 +373,10 @@ export function GovernanceChangeList({
     <div className="stack-s" data-testid={testId}>
       <span className="text-12 font-medium text-text-2">
         {single
-          ? t('分类变化', 'Classification change')
+          ? t('治理字段的变化', 'Governance changes')
           : t(
-              `${items.length} 个 Operation 的分类变化`,
-              `Classification changes (${items.length})`,
+              `${items.length} 个 Operation 的治理字段变化`,
+              `Governance changes (${items.length} operations)`,
             )}
       </span>
       <ul className="stack-s" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
@@ -349,29 +392,33 @@ export function GovernanceChangeList({
                 {actionKindTagText(item.name)}
               </span>
             )}
-            <div className="row-wrap">
-              <StatusChip machine="operationMode" status={item.before.mode} size="s" />
-              <span aria-hidden="true">→</span>
-              <StatusChip machine="operationMode" status={item.after.mode} size="s" />
-            </div>
-            <div className="row-wrap">
-              <StatusChip machine="blastRadius" status={item.before.blastRadius} size="s" />
-              <span aria-hidden="true">→</span>
-              <StatusChip machine="blastRadius" status={item.after.blastRadius} size="s" />
-            </div>
-            <div className="row-wrap">
-              <StatusChip
-                machine="autoApprovable"
-                status={String(item.before.autoApprovable)}
-                size="s"
-              />
-              <span aria-hidden="true">→</span>
-              <StatusChip
-                machine="autoApprovable"
-                status={String(item.after.autoApprovable)}
-                size="s"
-              />
-            </div>
+            {classificationChanged(item.before, item.after) ? (
+              <>
+                <div className="row-wrap" data-testid={`${testId}-classification`}>
+                  <StatusChip machine="operationMode" status={item.before.mode} size="s" />
+                  <span aria-hidden="true">→</span>
+                  <StatusChip machine="operationMode" status={item.after.mode} size="s" />
+                </div>
+                <div className="row-wrap">
+                  <StatusChip machine="blastRadius" status={item.before.blastRadius} size="s" />
+                  <span aria-hidden="true">→</span>
+                  <StatusChip machine="blastRadius" status={item.after.blastRadius} size="s" />
+                </div>
+                <div className="row-wrap">
+                  <StatusChip
+                    machine="autoApprovable"
+                    status={String(item.before.autoApprovable)}
+                    size="s"
+                  />
+                  <span aria-hidden="true">→</span>
+                  <StatusChip
+                    machine="autoApprovable"
+                    status={String(item.after.autoApprovable)}
+                    size="s"
+                  />
+                </div>
+              </>
+            ) : null}
             {otherFieldChanges(item.before, item.after, t).map((change) => (
               <span
                 key={change.label}
@@ -379,6 +426,7 @@ export function GovernanceChangeList({
                 data-testid={`${testId}-field`}
               >
                 {`${change.label}${t('：', ': ')}${change.before} → ${change.after}`}
+                {change.note ? t(`（${change.note}）`, ` (${change.note})`) : null}
               </span>
             ))}
           </li>

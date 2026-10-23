@@ -70,7 +70,8 @@ export const ACTION_TYPE_FIELD_RULES: Readonly<Record<keyof ActionTypeDefinition
   name: NOT_WIDENING,
   // Prose an agent reads through `get_type` / `list_types`; it grants nothing and is not a prompt.
   description: NOT_WIDENING,
-  // `execute` needs review that `observe` skips (manifest.ts `MODE_STRICTNESS`).
+  // `execute` needs review that `observe` skips (the same rank as `OPERATION_FIELD_RULES.mode`,
+  // governance/gatekeepers/governance-fields.ts).
   mode: strictness(rankOf(['observe', 'execute'])),
   blastRadius: strictness(rankOf(['low', 'medium', 'high'])),
   // Absent means not declared auto-approvable, as strict as `false`.

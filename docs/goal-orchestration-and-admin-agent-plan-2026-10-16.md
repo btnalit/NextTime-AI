@@ -429,10 +429,11 @@ I-N1，列为待定（§5.5）。
   没有新的写路径，人点"应用"等于逐项替 agent 调了一遍已有能力，授权仍按那个人的角色判。
 - **应用绑定摘要**（I-A8）：人审阅时记下该段的内容摘要；应用时重跑干跑，摘要不同就拒绝（409，提示重新审阅）。
 - **授权扩大分类器是白名单**（I-A4）：对 ChangeItem 的**全部字段**逐字段比较，只有落在"已证明不扩大授权"集合里的变化才放行，其余一律
-  `authority_widening`。现有的 `operationGovernanceChangeDirection` / `classifyOperationGovernanceChange` 只是其中一部分：它只比较 `mode`、
-  `blast_radius`、`auto_approvable` 三个字段（`manifest.ts:1086-1121`，注释写明有意不含 `await_decision`、`reversibility` 与 MCP 提示），三者都
-  不变时返回 `neutral`（`:1185-1194`）——`neutral` 不证明任何事，`loosened` / `mixed` 算扩大。至少下列变化必须逐项确认：
-  - **Operation**：三个治理字段的放宽（execute → observe 即免审，`MODE_STRICTNESS`；`blast_radius` 降级；`auto_approvable`）；已有执行类 Operation
+  `authority_widening`。现有的 `operationGovernanceChangeDirection` / `classifyOperationGovernanceChange` 只是其中一部分：它比较 Operation 的
+  九个治理字段（`mode`、`blast_radius`、`auto_approvable`、`await_decision`、`reads` / `writes`、三个 MCP 提示；`governance/gatekeepers/
+  governance-fields.ts`），每个字段的方向取本分类器同一张规则表 `OPERATION_FIELD_RULES`（遗留 344，E2b），九个都不变时返回 `neutral`——
+  `neutral` 不证明任何事（`binding`、`params_schema`、`reversibility` 等不在其中），`loosened` / `mixed` 算扩大。至少下列变化必须逐项确认：
+  - **Operation**：治理字段的放宽（execute → observe 即免审；`blast_radius` 降级；`auto_approvable`；见 `OPERATION_FIELD_RULES`）；已有执行类 Operation
     的 `binding`（ssh 的命令模板 / 命令模式，http 的路径与方法）；`params_schema` 放宽；门侧固定参数（gate-owned params，遗留 J）；`reversibility`；
     `await_decision`；MCP 的 `destructive_hint` / `idempotent_hint`（MCP 执行动作能否免审正取决于这两个提示，`request-action-handler.ts:1405-1425`）；
     **新建执行类 Operation 的分类**本身（分类就是审批边界，且是 agent 起草的）。反例：一个 `auto_approvable`、低影响的 Operation，名字和三个治理
