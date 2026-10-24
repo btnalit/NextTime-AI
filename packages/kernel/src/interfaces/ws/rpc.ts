@@ -95,6 +95,8 @@ import {
 } from '../../application/task/index.js';
 import {
   DraftNotDiscardableError,
+  EntryTemplateChangedError,
+  EntryTemplateCurrentError,
   ProcedureNotFoundError,
   ProcedureStepReferenceError,
   ProcedureTemplateError,
@@ -429,6 +431,10 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   }
   // I-P1: mirrors HTTP 409 `ontology_namespace_conflict` (capability-route.ts).
   if (err instanceof OntologyNamespaceConflictError) {
+    return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
+  }
+  // Legacy 145: mirrors HTTP 409 `entry_template_current` / `entry_template_changed`.
+  if (err instanceof EntryTemplateCurrentError || err instanceof EntryTemplateChangedError) {
     return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
   }
   // S11 P1-D: mirrors HTTP 409 `skill_name_conflict` (capability-route.ts).

@@ -8647,6 +8647,93 @@
   },
   {
     "channel": "human",
+    "group": "worker",
+    "minRole": "builder",
+    "mode": "observe",
+    "name": "get_entry_template_status",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "current": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "definitionId": {
+                  "type": "string"
+                },
+                "digest": {
+                  "type": "string"
+                },
+                "version": {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "definitionId",
+                "version",
+                "digest"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "differs": {
+          "items": {
+            "enum": [
+              "systemPrompt",
+              "capabilities"
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "template": {
+          "additionalProperties": false,
+          "properties": {
+            "capabilities": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "digest": {
+              "type": "string"
+            },
+            "systemPrompt": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "digest",
+            "systemPrompt",
+            "capabilities"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "template",
+        "current",
+        "differs"
+      ],
+      "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
+    "channel": "human",
     "group": "platform",
     "mode": "observe",
     "name": "get_gate_instance",
@@ -30504,6 +30591,169 @@
       "type": "object"
     },
     "sideEffects": false
+  },
+  {
+    "channel": "human",
+    "group": "worker",
+    "minRole": "builder",
+    "mode": "propose",
+    "name": "propose_entry_template_upgrade",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "basedOn": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "definitionId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "version": {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "definitionId",
+                "version"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "templateDigest": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "templateDigest",
+        "basedOn"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "basedOn": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "definitionId": {
+                  "type": "string"
+                },
+                "version": {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "definitionId",
+                "version"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "created": {
+          "type": "boolean"
+        },
+        "differs": {
+          "items": {
+            "enum": [
+              "systemPrompt",
+              "capabilities"
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "draft": {
+          "additionalProperties": false,
+          "properties": {
+            "createdAt": {
+              "type": "string"
+            },
+            "definition": {
+              "additionalProperties": {},
+              "type": "object"
+            },
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "entry",
+                "worker"
+              ],
+              "type": "string"
+            },
+            "proposedBy": {
+              "type": "string"
+            },
+            "publishedAt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "publishedBy": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "enum": [
+                "draft",
+                "published",
+                "deprecated"
+              ],
+              "type": "string"
+            },
+            "version": {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "id",
+            "version",
+            "kind",
+            "status",
+            "definition",
+            "proposedBy",
+            "publishedBy",
+            "createdAt",
+            "publishedAt"
+          ],
+          "type": "object"
+        },
+        "templateDigest": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "draft",
+        "templateDigest",
+        "basedOn",
+        "differs",
+        "created"
+      ],
+      "type": "object"
+    },
+    "sideEffects": true
   },
   {
     "actsForPerson": true,

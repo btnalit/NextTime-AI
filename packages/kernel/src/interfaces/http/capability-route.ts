@@ -129,6 +129,8 @@ import {
 } from '../../application/task/index.js';
 import {
   DraftNotDiscardableError,
+  EntryTemplateChangedError,
+  EntryTemplateCurrentError,
   ProcedureNotFoundError,
   ProcedureStepReferenceError,
   ProcedureTemplateError,
@@ -498,6 +500,11 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // I-P1 (S10 P0): an ObjectType / ActionType name another published ontology family already
   // owns — `publish_ontology_version`, `install_module`, `upgrade_module`. Nothing was published.
   if (err instanceof OntologyNamespaceConflictError) {
+    return { status: 409, code: err.code, message: err.message };
+  }
+  // Legacy 145: `propose_entry_template_upgrade` — nothing to upgrade to, or the template / the
+  // published entry version is not the one the caller looked at. Nothing was proposed.
+  if (err instanceof EntryTemplateCurrentError || err instanceof EntryTemplateChangedError) {
     return { status: 409, code: err.code, message: err.message };
   }
   // S11 P1-D: a Skill name another Skill family has published — `publish_skill`,

@@ -175,11 +175,14 @@ const ENTRY_CEILING_GATE_OBSERVE_CAPABILITY_NAME = '<gate>.<op>';
  * whose name starts with `propose_` (spans the `ontology`/`meta`/`worker` groups), the
  * observe-class gate pattern, and the extra fixed names above. Never includes an execute-mode
  * capability, `request_action`, or the gate execute pattern (§5.3 item 11 "入口 agent 的 Handle 含
- * execute 能力" is one of the relationships that must never exist).
+ * execute 能力" is one of the relationships that must never exist), nor a human-channel one —
+ * `assertValidScope` refuses those in any Handle (legacy 145: `propose_entry_template_upgrade` is a
+ * person's request, made in the console).
  */
 function buildEntryCeilingCapabilityNames(): readonly string[] {
   const names = new Set<string>();
   for (const capability of CAPABILITY_REGISTRY) {
+    if (capability.channel !== 'handle') continue;
     if (capability.group === 'graph' || capability.name.startsWith('propose_')) {
       names.add(capability.name);
     }
@@ -246,6 +249,8 @@ const WORKER_CEILING_EXCLUDED_PROPOSE_NAMES: ReadonlySet<string> = new Set(['pro
 function buildWorkerCeilingCapabilityNames(): readonly string[] {
   const names = new Set<string>();
   for (const capability of CAPABILITY_REGISTRY) {
+    // Human-channel names never reach a Handle (`assertValidScope`; see the entry ceiling above).
+    if (capability.channel !== 'handle') continue;
     if (WORKER_CEILING_EXCLUDED_PROPOSE_NAMES.has(capability.name)) continue;
     if (capability.group === 'graph' || capability.name.startsWith('propose_')) {
       names.add(capability.name);

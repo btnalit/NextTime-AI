@@ -811,6 +811,20 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '起草一个 Worker 定义的私有草稿版本。',
     enHint: 'Drafts a private Worker definition version.',
   },
+  get_entry_template_status: {
+    zh: '查看入口模板差异',
+    en: 'Compare with the entry template',
+    zhHint: '看当前生效的入口定义与这个平台版本自带的入口模板是否一致。',
+    enHint:
+      'Shows whether the entry definition in use matches the entry template this platform release ships.',
+  },
+  propose_entry_template_upgrade: {
+    zh: '按入口模板生成草稿',
+    en: 'Propose a draft from the entry template',
+    zhHint: '按平台自带的入口模板生成入口定义的新版本草稿，由所有者发布后才生效。',
+    enHint:
+      'Drafts a new entry definition version from the platform’s entry template; it takes effect once the owner publishes it.',
+  },
   publish_worker_definition: {
     zh: '发布 Worker 定义',
     en: 'Publish Worker definition',
