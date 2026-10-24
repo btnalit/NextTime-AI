@@ -4255,6 +4255,14 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **自包含 schema**：谓词 `all` / `any` / `not` 与输出约定 `properties` 的内层出现写成 `{}`（调用仍按 Zod 校验），与 `$refStrategy: 'none'` 输出一致但不再打警告；`tool-schema.ts`、内核 MCP 投影、契约快照、词表守卫、提示词守卫同类一并修；提示词契约守卫规则 5 检查 Goals 一节关键句、反引号字段名都是 `propose_goal` 参数或拒绝码，描述里必须有判据与反例。
   - **验收**：fake-llm 新增 `entryGoalChatScenario`、`goalStepScenario`，自测用共享包 Zod schema 解析每次脚本化调用；`accept_s2.sh` fake 模式第 9 步六条断言；`accept_provider_up`（s1–s3 fake 模式）每次先按当前检出构建 fake-llm（fake-llm 不随发版、`build-images.sh` 不建 `test` profile、`up` 只在没有镜像时构建，此前 apply 阶段一直用最早那次构建），s2 / s3 runbook 删掉手动重建一步。
   - **不在本 PR**：对话里的目标卡片与里程碑消息（GO5e-2）；已有工作区入口提示词升级（遗留 145）；悬空旧 fake-llm 镜像（遗留 460）。
+- 实现说明（GO5e-2：目标在发起它的对话里，#737，2026-10-24 合入，4d533ab；linkage 0003；GO5e 完成，GO5 完成）：
+  - **事件**：shared `GoalRunChange` = 状态机事件加上不是状态迁移的变化（`propose`、`hold`、`release_hold`、`revise`、`cleanup_finished`）；`GoalRunUpdated.change` 可选（之前写进 outbox 的事件没有它）；审计动作 `goal_run.<change>` 由同一个值生成，`transition-log.ts` 改传 `change`。
+  - **聊天消息**：`system.goal_update` 带目标 id、变化、变化后的状态、暂停原因、是否被所有者锁定、结局与依据、是否还有遗留要清理、修订号；不带目标陈述，也不带任何自由文本。`system.task_update` 加可选 `goalRunId`、`stepKey`。
+  - **联动消费者**：两阶段读写、按 outbox id 去重；「提出」不进入口上下文；路由到发起那一轮的对话，否则默认对话，步骤 Task 跟着目标走；步骤 Task 不再写入口上下文条目，预算提醒也不写（`budget-consumer.ts` 先用 `readTaskGoalStep` 判断，与 `task-consumer.ts` 一致）。
+  - **迁移 linkage 0003**：`pending_context_items.kind` 的 CHECK 加上 `goal_update`；上一版读到这种行会放进 `tasks` 那一组，回滚不动数据。
+  - **入口模板**：里程碑一段列全 `change` 原词（`hold`、`verify`、`cleanup_finished`、`fail` 带短注），说明条目在 Running tasks 下、按时间先后，最后一条是「已告知的最新变化」、现状用 `get_goal`；步骤的审批仍在 Pending approvals 下、归属目标。提示词守卫 `checkGoalChangeWords` 从构建后的 shared 读 `GOAL_RUN_CHANGE_VALUES`（除 `propose`）。
+  - **验收与控制台**：accept_s2 `step9-goal-milestones`；控制台目标卡片、里程碑行（与目标页同一套结束说法与结果标签，所属目标的陈述单独一行、每个目标只读一次）、步骤标签，窄屏换行；浏览器旅程用 socket 替身。
+  - **不在本 PR**：kernel 新建对话的标题（遗留 467）；推送通道还没有目标的事件（目标页仍是打开时读取、操作后重读，对话里的里程碑行是实时推送的，未登记）。
 - 来自 GO4a（#664）的输入：`confirm_goal_acceptance` 和 `end_goal` 是请求人的成员能力，永远不进 Handle scope（membership-not-in-handle 守卫）；`createGoalRun` 和 `reviseGoalRun` 返回的 `hints` 原样带到能力结果里；如需 owner hold 期间也禁止请求人结束目标，在能力层加一道。
 - 来自 GO3a（#626）的输入：`pause_goal` / `resume_goal` / `cancel_goal` 直接调用 `control.ts`，权限按 GO3a 划分（owner 能停不能续）；角色必须由能力层从已认证主体取，不能从参数取（`lockControlledRun` 信任传入的 `role`）；`resume_goal` 的 `retrySteps` 必须逐个列出步骤，不提供不列步骤的「全部重试」；`proposed` 的目标走 `reject`。
 - 来自 GO3c（#642）的输入：`reconcile_goal_action` 调用 `reconcileActionRequest`，能力带 minRole 与 `channel: 'human'`，决定人取已认证主体；读接口 `list_goal_run_unresolved_actions`；Worker 提示词写明步骤内调用方的 `idempotencyKey` 被忽略、409 `action_in_doubt` 表示等人核对。
