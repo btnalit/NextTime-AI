@@ -123,6 +123,32 @@ describe('goal operations on the goal page (S11 GO6)', () => {
     );
   });
 
+  it('the confirmation card says what a plan made from a Procedure was started with, and which check comes back to the requester (legacy 454)', async () => {
+    const base = goalDetail();
+    const source = {
+      procedureId: 'proc-1',
+      version: 3,
+      name: '证书续期',
+      parameters: { site: 'main' },
+      confirmCheck: { key: 'looks-right', procedureSteps: [2] },
+    };
+    const [v1] = base.revisions;
+    const detail = goalDetail({
+      status: 'proposed',
+      currentRevision: null,
+      confirmedAt: null,
+      planRevision: { ...base.planRevision, status: 'proposed', fromProcedure: source },
+      revisions: [{ ...(v1 as (typeof base.revisions)[number]), fromProcedure: source }],
+    });
+    renderPage(scriptedHttp(handlers(detail, workspace('p-alice', 'member'))));
+    fireEvent.click(await screen.findByTestId('goal-op-confirm'));
+    const impact = within(await screen.findByTestId('goal-op-confirm-confirm')).getByTestId(
+      'confirm-impact',
+    ).textContent;
+    expect(impact).toMatch(/用这些启动参数从流程 证书续期 v3 生成：site = main/);
+    expect(impact).toMatch(/验收检查 looks-right 要你亲自确认，来自流程第 2 步/);
+  });
+
   it('someone else’s running goal: an owner’s pause is a hold, and says so', async () => {
     const http = scriptedHttp(
       handlers(goalDetail(), workspace('p-owner', 'owner'), {

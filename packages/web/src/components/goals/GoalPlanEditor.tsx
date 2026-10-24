@@ -38,7 +38,9 @@ import {
   workerChanged,
 } from '../../lib/goal-plan-draft.js';
 import {
+  confirmCheckOrigin,
   goalBudgetRows,
+  goalPlanSource,
   isStepAuthorityHint,
   planCheckSentence,
   planDiff,
@@ -383,6 +385,11 @@ export function GoalPlanEditor({
               key={check.uid}
               check={check}
               gateNames={gateNames}
+              origin={
+                check.original === null
+                  ? null
+                  : confirmCheckOrigin(goalPlanSource(goal.revisions), check.key, t)
+              }
               errorOf={errorOf}
               onChange={(patch) => changeCheck(check.uid, patch)}
               onRemove={() => {
@@ -1023,6 +1030,7 @@ function WorkerPicker({
 function CheckEditor({
   check,
   gateNames,
+  origin,
   errorOf,
   onChange,
   onRemove,
@@ -1030,6 +1038,8 @@ function CheckEditor({
 }: {
   readonly check: CheckDraft;
   readonly gateNames: ReadonlyMap<string, string>;
+  /** Legacy 454: the Procedure steps a requester's confirmation came from, when it did. */
+  readonly origin: string | null;
   readonly errorOf: (key: FieldKey) => string | null;
   readonly onChange: (patch: Partial<CheckDraft>) => void;
   readonly onRemove: () => void;
@@ -1066,7 +1076,15 @@ function CheckEditor({
       <div className="row-wrap">
         <span className="mono">{check.key}</span>
         {isConfirm ? (
-          <span className="text-3 text-small">{t('请求人确认', 'Requester confirms')}</span>
+          <span className="text-3 text-small">
+            {t('请求人确认', 'Requester confirms')}
+            {origin !== null ? (
+              <span data-testid="goal-plan-check-procedure-steps">
+                {t(' · ', ' · ')}
+                {origin}
+              </span>
+            ) : null}
+          </span>
         ) : check.original ? (
           <span className="text-small">{planCheckSentence(check.original, gateNames, t)}</span>
         ) : null}
