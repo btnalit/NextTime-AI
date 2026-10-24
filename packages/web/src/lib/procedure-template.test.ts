@@ -29,8 +29,17 @@ describe('procedureTemplateProblemText (UX acceptance of #722, P2-1)', () => {
       /^步骤 scan 的第 1 个绑定：取自启动参数，但这个流程没有声明启动参数$/,
     ],
     [
-      'the plan it makes: step "apply": bindings[1]: takes from step "missing", which this step does not depend on — add it to dependsOn',
-      /^步骤 apply 的第 2 个绑定：取自步骤 missing，但这一步不等它完成：要把它加进 dependsOn$/,
+      'the plan it makes: step "apply": bindings[1]: takes from step "scan", which this step does not depend on — add it to dependsOn',
+      /^步骤 apply 的第 2 个绑定：取自步骤 scan，但这一步不等它完成：要把它加进 dependsOn$/,
+    ],
+    // Legacy 455: a step the plan does not have, or the step itself, is said first.
+    [
+      'the plan it makes: step "apply": bindings[1]: takes from step "missing", which is not in the plan',
+      /^步骤 apply 的第 2 个绑定：取自步骤 missing，但计划里没有这个步骤$/,
+    ],
+    [
+      'the plan it makes: step "apply": bindings[0]: takes from this step itself — a binding takes from a step this one depends on',
+      /^步骤 apply 的第 1 个绑定：取自这一步自己，绑定只能取自它要等的步骤$/,
     ],
     [
       'the plan it makes: step "apply": bindings[0]: step "scan" declares no outputSchema — a binding takes only from a declared output',
@@ -120,6 +129,10 @@ describe('procedureBindingIssue (UX acceptance of #722, P3-1)', () => {
     expect(issue({ to: 'zone', from: '$params', path: 'zone' })).toMatch(/没有声明 zone/);
     expect(issue({ to: 'site', from: '$params', path: 'site' }, null)).toMatch(/没有声明启动参数/);
     expect(issue({ to: 'x', from: 'missing', path: 'x' })).toMatch(/没有叫 missing 的 Worker 步骤/);
+    // Legacy 455: from the step itself is said as that, not as "add it to dependsOn".
+    const self = issue({ to: 'x', from: 'apply', path: 'x' });
+    expect(self).toMatch(/取自它自己/);
+    expect(self).not.toMatch(/dependsOn/);
     // apply waits for the step before it (fetch) by default, not for scan.
     expect(issue({ to: 'x', from: 'scan', path: 'x' })).toMatch(/不等步骤 scan 完成/);
     const scanFirst = procedureBindingIssue(

@@ -1042,6 +1042,27 @@ describe('parsePlan — output schemas and input bindings (S11 GO5d-1)', () => {
     ]);
   });
 
+  it('legacy 455: says first that the step a binding takes from is not in the plan, or is the step itself', () => {
+    expect(
+      problemsOf({
+        steps: [
+          scan,
+          step('apply', {
+            dependsOn: ['scan'],
+            bindings: [
+              { to: 'host', from: 'scna', path: 'hosts[0]' },
+              { to: 'again', from: 'apply', path: 'hosts[0]' },
+              { to: 'ok', from: 'scan', path: 'hosts[0]' },
+            ],
+          }),
+        ],
+      }),
+    ).toEqual([
+      'step "apply": bindings[0]: takes from step "scna", which is not in the plan',
+      'step "apply": bindings[1]: takes from this step itself — a binding takes from a step this one depends on',
+    ]);
+  });
+
   it('refuses a path that does not compile, reads nothing, goes through a reserved field, or that the schema rules out', () => {
     const problems = problemsOf({
       steps: [

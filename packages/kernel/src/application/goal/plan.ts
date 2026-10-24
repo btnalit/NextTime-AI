@@ -333,8 +333,9 @@ export function roundAcceptance(
 }
 
 /**
- * S11 GO5d-1 (plan §4.5): a step's input bindings. Each takes from a step it depends on (so that
- * step has succeeded when an attempt starts) and that declares an `outputSchema` (a binding takes
+ * S11 GO5d-1 (plan §4.5): a step's input bindings. Each takes from another step of the plan
+ * (checked first, legacy 455), one it depends on (so that step has succeeded when an attempt
+ * starts) and that declares an `outputSchema` (a binding takes
  * only from what a Worker is held to report); its `path` compiles and reads something
  * (`bindingPathProblems`), and selects nothing the upstream schema rules out
  * (`bindingSchemaProblems`: a field it closes off, a field of what is not an object, a position in
@@ -356,11 +357,19 @@ function bindingProblems(step: PlanStep, steps: ReadonlyMap<string, PlanStep>): 
   bindings.forEach((binding, index) => {
     const where = `step "${step.key}": bindings[${index}]`;
     const upstream = steps.get(binding.from);
-    if (!dependsOn.has(binding.from)) {
+    // Whether the step it names exists comes first (legacy 455): "add it to dependsOn" cannot fix a
+    // binding from a step the plan does not have, or from the step itself.
+    if (binding.from === step.key) {
+      problems.push(
+        `${where}: takes from this step itself — a binding takes from a step this one depends on`,
+      );
+    } else if (!upstream) {
+      problems.push(`${where}: takes from step "${binding.from}", which is not in the plan`);
+    } else if (!dependsOn.has(binding.from)) {
       problems.push(
         `${where}: takes from step "${binding.from}", which this step does not depend on — add it to dependsOn`,
       );
-    } else if (upstream && !upstream.outputSchema) {
+    } else if (!upstream.outputSchema) {
       problems.push(
         `${where}: step "${binding.from}" declares no outputSchema — a binding takes only from a declared output`,
       );
@@ -545,6 +554,14 @@ export function planParamsAsRead(plan: GoalPlan): {
  */
 export function planAsRead(plan: GoalPlan): GoalPlan {
   return shownFreeTextIn(planParamsAsRead(plan).plan) as GoalPlan;
+}
+
+/** Legacy 454: a goal's Procedure start parameters as every read shows them — masked the way
+ *  {@link planAsRead} masks the step inputs they were merged into. */
+export function procedureParametersAsRead(
+  parameters: Readonly<Record<string, unknown>>,
+): Record<string, unknown> {
+  return shownFreeTextIn(paramsAsRead(parameters).value) as Record<string, unknown>;
 }
 
 /** A place in a document a refusal names, from the document's own name: dot-separated, array

@@ -202,6 +202,13 @@ function toWirePlanRevisionSummary(
             procedureId: source.procedureId,
             version: source.version,
             name: shownFreeText(source.name),
+            parameters: source.parameters,
+            confirmCheck: source.confirmCheck
+              ? {
+                  key: source.confirmCheck.key,
+                  procedureSteps: [...source.confirmCheck.procedureSteps],
+                }
+              : null,
           }
         : null,
   };
