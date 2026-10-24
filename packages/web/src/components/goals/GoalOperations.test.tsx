@@ -137,7 +137,18 @@ describe('goal operations on the goal page (S11 GO6)', () => {
       status: 'proposed',
       currentRevision: null,
       confirmedAt: null,
-      planRevision: { ...base.planRevision, status: 'proposed', fromProcedure: source },
+      planRevision: {
+        ...base.planRevision,
+        status: 'proposed',
+        fromProcedure: source,
+        plan: {
+          ...base.planRevision.plan,
+          acceptance: [
+            ...(base.planRevision.plan.acceptance ?? []),
+            { kind: 'requester_confirm', key: 'looks-right', prompt: '证书看起来对' },
+          ],
+        },
+      },
       revisions: [{ ...(v1 as (typeof base.revisions)[number]), fromProcedure: source }],
     });
     renderPage(scriptedHttp(handlers(detail, workspace('p-alice', 'member'))));
@@ -146,7 +157,7 @@ describe('goal operations on the goal page (S11 GO6)', () => {
       'confirm-impact',
     ).textContent;
     expect(impact).toMatch(/用这些启动参数从流程 证书续期 v3 生成：site = main/);
-    expect(impact).toMatch(/验收检查 looks-right 要你亲自确认，来自流程第 2 步/);
+    expect(impact).toMatch(/要你亲自确认「证书看起来对」（验收检查 looks-right），来自流程第 2 步/);
   });
 
   it('someone else’s running goal: an owner’s pause is a hold, and says so', async () => {

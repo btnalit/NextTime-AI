@@ -550,7 +550,7 @@ test.describe('S11 GO6: operations on a goal (stand-in reads and operations)', (
         '用这些启动参数从流程 证书续期 v3 生成：site = main',
       );
       await expect(confirm.getByTestId('confirm-impact')).toContainText(
-        '验收检查 looks-right 要你亲自确认，来自流程第 2 步',
+        '要你亲自确认「证书看起来对」（验收检查 looks-right），来自流程第 2 步',
       );
       await expect(page.getByTestId('goal-op-reject')).toBeVisible();
       await page.screenshot({
