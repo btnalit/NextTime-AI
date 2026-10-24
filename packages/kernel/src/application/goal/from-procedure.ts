@@ -334,10 +334,12 @@ export function refuseProcedureParameters(parameters: Record<string, unknown> | 
   throw new TextCarriesCredentialsError(paths[0] ?? 'fromProcedure.parameters', found.count, paths);
 }
 
-/** The Procedure version a plan is made from, as the revision records it. */
+/** The Procedure version a plan is made from, as the revision records it, and the start
+ *  parameters it was made with (legacy 454: `null` when none were given). */
 export interface PlanSource {
   readonly procedureId: string;
   readonly version: number;
+  readonly parameters: Readonly<Record<string, unknown>> | null;
 }
 
 /**
@@ -359,6 +361,26 @@ export async function planFromProcedure(
   }
   return {
     plan: expandProcedure(template, fromProcedure.parameters),
-    source: { procedureId: template.id, version: template.version },
+    source: {
+      procedureId: template.id,
+      version: template.version,
+      parameters: fromProcedure.parameters ?? null,
+    },
   };
+}
+
+/**
+ * Legacy 454: the acceptance check a Procedure version's `verify` steps without a check of their
+ * own make (key {@link PROCEDURE_CONFIRM_KEY}, what the requester confirms), and which of its steps
+ * (1-based, as the Procedure page numbers them) — or `null` when every `verify` step carries its
+ * own check. A fact of the version: its content never changes, and the plan made from it always has
+ * this check (`buildPlan`), so a goal's page names it from here, not from its key.
+ */
+export function procedureConfirmCheck(
+  steps: readonly ProcedureStep[],
+): { readonly key: string; readonly procedureSteps: readonly number[] } | null {
+  const procedureSteps = steps.flatMap((step, index) =>
+    step.kind === 'verify' && !step.check ? [index + 1] : [],
+  );
+  return procedureSteps.length > 0 ? { key: PROCEDURE_CONFIRM_KEY, procedureSteps } : null;
 }

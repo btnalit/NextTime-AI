@@ -99,12 +99,25 @@ export const GoalRunWireSchema = z
 export type GoalRunWire = z.infer<typeof GoalRunWireSchema>;
 
 /** S11 GO5d-2: the published Procedure a plan was made from (`propose_goal`'s `fromProcedure`) —
- *  revision 1 of a goal made from one; `name` as it reads now. */
+ *  revision 1 of a goal made from one; `name` as it reads now. Legacy 454: `parameters`, the start
+ *  parameters it was proposed with, masked like a step's input (`null`: none given, or proposed
+ *  before the platform kept them); `confirmCheck`, the acceptance check of the plan the
+ *  Procedure's `verify` steps without a check of their own became — its key in the plan and those
+ *  steps' numbers in the Procedure (1-based) — so a reader names it without reading its key
+ *  (`null`: every `verify` step carries its own check). */
 export const PlanSourceProcedureWireSchema = z
   .object({
     procedureId: z.string(),
     version: z.number().int().positive(),
     name: z.string(),
+    parameters: z.record(z.string(), z.unknown()).nullable(),
+    confirmCheck: z
+      .object({
+        key: z.string(),
+        procedureSteps: z.array(z.number().int().positive()).min(1),
+      })
+      .strict()
+      .nullable(),
   })
   .strict();
 export type PlanSourceProcedureWire = z.infer<typeof PlanSourceProcedureWireSchema>;

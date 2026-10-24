@@ -10940,8 +10940,47 @@
                 {
                   "additionalProperties": false,
                   "properties": {
+                    "confirmCheck": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "key": {
+                              "type": "string"
+                            },
+                            "procedureSteps": {
+                              "items": {
+                                "exclusiveMinimum": 0,
+                                "type": "integer"
+                              },
+                              "minItems": 1,
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "key",
+                            "procedureSteps"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "name": {
                       "type": "string"
+                    },
+                    "parameters": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": {},
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     },
                     "procedureId": {
                       "type": "string"
@@ -10954,7 +10993,9 @@
                   "required": [
                     "procedureId",
                     "version",
-                    "name"
+                    "name",
+                    "parameters",
+                    "confirmCheck"
                   ],
                   "type": "object"
                 },
@@ -12166,8 +12207,47 @@
                   {
                     "additionalProperties": false,
                     "properties": {
+                      "confirmCheck": {
+                        "anyOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "key": {
+                                "type": "string"
+                              },
+                              "procedureSteps": {
+                                "items": {
+                                  "exclusiveMinimum": 0,
+                                  "type": "integer"
+                                },
+                                "minItems": 1,
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "key",
+                              "procedureSteps"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
                       "name": {
                         "type": "string"
+                      },
+                      "parameters": {
+                        "anyOf": [
+                          {
+                            "additionalProperties": {},
+                            "type": "object"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
                       },
                       "procedureId": {
                         "type": "string"
@@ -12180,7 +12260,9 @@
                     "required": [
                       "procedureId",
                       "version",
-                      "name"
+                      "name",
+                      "parameters",
+                      "confirmCheck"
                     ],
                     "type": "object"
                   },
@@ -12724,8 +12806,47 @@
             {
               "additionalProperties": false,
               "properties": {
+                "confirmCheck": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "key": {
+                          "type": "string"
+                        },
+                        "procedureSteps": {
+                          "items": {
+                            "exclusiveMinimum": 0,
+                            "type": "integer"
+                          },
+                          "minItems": 1,
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "key",
+                        "procedureSteps"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "name": {
                   "type": "string"
+                },
+                "parameters": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": {},
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 },
                 "procedureId": {
                   "type": "string"
@@ -12738,7 +12859,9 @@
               "required": [
                 "procedureId",
                 "version",
-                "name"
+                "name",
+                "parameters",
+                "confirmCheck"
               ],
               "type": "object"
             },

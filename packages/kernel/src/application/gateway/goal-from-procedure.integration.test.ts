@@ -319,7 +319,15 @@ describe.runIf(DATABASE_URL !== undefined)(
             { kind: 'requester_confirm', key: 'verify', prompt: 'Every host answers on 443.' },
           ],
         });
-        const source = { procedureId: procedure.procedureId, version: 1, name: procedure.name };
+        // Legacy 454: the start parameters it was proposed with, and which check its verify step
+        // (Procedure step 2, no check of its own) became.
+        const source = {
+          procedureId: procedure.procedureId,
+          version: 1,
+          name: procedure.name,
+          parameters: { site: 'main' },
+          confirmCheck: { key: 'verify', procedureSteps: [2] },
+        };
         expect(card.fromProcedure).toEqual(source);
 
         const detail = GoalDetailWireSchema.parse(
@@ -328,12 +336,22 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(detail.planRevision.fromProcedure).toEqual(source);
         expect(detail.revisions.map((revision) => revision.fromProcedure)).toEqual([source]);
 
-        const [stored] = await raw<{ id: string | null; version: number | null }>(
-          `select source_procedure_id as id, source_procedure_version as version from plan_revisions
+        const [stored] = await raw<{
+          id: string | null;
+          version: number | null;
+          parameters: unknown;
+        }>(
+          `select source_procedure_id as id, source_procedure_version as version,
+                  source_procedure_parameters as parameters
+             from plan_revisions
             where workspace_id = $1 and goal_run_id = $2 and revision = 1`,
           [workspaceId, proposed.goalRunId],
         );
-        expect(stored).toEqual({ id: procedure.procedureId, version: 1 });
+        expect(stored).toEqual({
+          id: procedure.procedureId,
+          version: 1,
+          parameters: { site: 'main' },
+        });
         const [audit] = await raw<{ payload: Record<string, unknown> }>(
           `select payload from audit_records
             where workspace_id = $1 and resource_type = 'goal_run' and resource_id = $2
@@ -343,6 +361,10 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(audit?.payload).toMatchObject({
           fromProcedure: { procedureId: procedure.procedureId, version: 1 },
         });
+        // Which version only: the values are on the revision, read masked, not in the audit.
+        expect(
+          (audit?.payload.fromProcedure as Record<string, unknown> | undefined)?.parameters,
+        ).toBeUndefined();
 
         // A plan written out says it came from nothing.
         const written = await propose(agent, {
@@ -372,6 +394,8 @@ describe.runIf(DATABASE_URL !== undefined)(
         const latest = await propose(agent, proposalFrom({ procedureId: first.procedureId }));
         const latestCard = await readPlan(latest.goalRunId);
         expect(latestCard.fromProcedure?.version).toBe(2);
+        // Legacy 454: no parameters given, no verify step without a check.
+        expect(latestCard.fromProcedure).toMatchObject({ parameters: null, confirmCheck: null });
         expect(latestCard.plan.steps[0]?.input).toEqual({ round: 2 });
 
         const named = await propose(
@@ -715,6 +739,54 @@ describe.runIf(DATABASE_URL !== undefined)(
             [workspaceId, goalRunId],
           ),
         ).rejects.toThrow(/plan_revisions_source_procedure_pair/);
+        // Legacy 454 (goal/0010): the start parameters never change either, are an object, and
+        // only sit beside a source.
+        await expect(
+          admin((client) =>
+            client.query(
+              `update plan_revisions set source_procedure_parameters = '{"site":"other"}'::jsonb
+                where workspace_id = $1 and goal_run_id = $2`,
+              [workspaceId, goalRunId],
+            ),
+          ),
+        ).rejects.toThrow(/content never changes/);
+        await expect(
+          raw(
+            `update plan_revisions set source_procedure_parameters = '[]'::jsonb
+              where workspace_id = $1 and goal_run_id = $2`,
+            [workspaceId, goalRunId],
+          ),
+        ).rejects.toThrow(/plan_revisions_source_procedure_parameters/);
+        const written = await propose(entryAgent(requesterId), {
+          statement: 'by hand',
+          plan: { steps: [{ key: 'only', worker }] },
+          budget: BUDGET,
+        });
+        await expect(
+          raw(
+            `update plan_revisions set source_procedure_parameters = '{}'::jsonb
+              where workspace_id = $1 and goal_run_id = $2`,
+            [workspaceId, written.goalRunId],
+          ),
+        ).rejects.toThrow(/plan_revisions_source_procedure_parameters/);
+        // Whatever is stored reads masked, like the step inputs the values went into.
+        await raw(
+          `update plan_revisions set source_procedure_parameters = $3::jsonb
+            where workspace_id = $1 and goal_run_id = $2`,
+          [
+            workspaceId,
+            goalRunId,
+            JSON.stringify({ site: 'main', auth: { token: FAKE }, hidden: 'a\u200bb' }),
+          ],
+        );
+        const masked = PlanRevisionWireSchema.parse(
+          await call(entryAgent(requesterId), 'get_goal_revision', { goalRunId, revision: 1 }),
+        ).fromProcedure?.parameters;
+        expect(masked?.site).toBe('main');
+        expect(JSON.stringify(masked)).not.toContain(FAKE);
+        expect(masked?.auth).toEqual({ token: '[redacted]' });
+        expect(masked?.hidden).not.toContain('\u200b');
+        expect(masked?.hidden).toMatch(/^a\\u\{200b\}b$/i);
         const [fk] = await raw<{ target: string; columns: string }>(
           `select confrelid::regclass::text as target, pg_get_constraintdef(oid) as columns
              from pg_constraint where conname = 'plan_revisions_source_procedure_fk'`,

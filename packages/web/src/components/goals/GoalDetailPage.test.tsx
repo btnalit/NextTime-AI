@@ -298,7 +298,13 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
 
   it('a plan made from a Procedure says which version, linked to it — on the plan and on revision 1 (S11 GO5d-2)', async () => {
     const base = goalDetail();
-    const source = { procedureId: 'proc-1', version: 3, name: '证书续期' };
+    const source = {
+      procedureId: 'proc-1',
+      version: 3,
+      name: '证书续期',
+      parameters: { site: 'main' },
+      confirmCheck: null,
+    };
     const v2: PlanRevisionWire = {
       ...base.planRevision,
       id: 'rev-2',

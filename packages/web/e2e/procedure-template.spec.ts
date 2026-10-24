@@ -109,9 +109,32 @@ function answer(name: string, result: unknown) {
   return { json: { ok: true, result: contract.parse(result) } };
 }
 
-async function answerProcedureReads(page: Page): Promise<void> {
+/** Legacy 455: a draft whose bindings the page can already tell are wrong — one from the step
+ *  itself, one from a step the Procedure does not have. */
+const DRAFT_ROW = {
+  ...PROCEDURE_ROW,
+  version: 4,
+  status: 'draft',
+  steps: [
+    {
+      ...worker,
+      description: '列出即将过期的证书所在的主机',
+      key: 'fetch',
+      bindings: [{ to: 'target.site', from: 'fetch', path: 'site' }],
+      outputSchema: { type: 'object', properties: { site: { type: 'string' } } },
+    },
+    {
+      ...worker,
+      description: '在这些主机上换证书',
+      key: 'apply',
+      bindings: [{ to: 'target.hosts', from: 'scan', path: 'hosts' }],
+    },
+  ],
+};
+
+async function answerProcedureReads(page: Page, row: object = PROCEDURE_ROW): Promise<void> {
   await page.route('**/api/cap/list_procedures', (route) =>
-    route.fulfill(answer('list_procedures', { items: [PROCEDURE_ROW] })),
+    route.fulfill(answer('list_procedures', { items: [row] })),
   );
   await page.route('**/api/cap/list_gatekeepers', (route) =>
     route.fulfill(
@@ -280,6 +303,27 @@ test.describe('S11 GO5d-2: a Procedure as a goal plan template (stand-in reads)'
       await factStep.scrollIntoViewIfNeeded();
       await factStep.screenshot({
         path: testInfo.outputPath(`procedure-template-fact-${width}.png`),
+      });
+    });
+
+    test(`a draft's bindings the page can tell are wrong at ${width}`, async ({
+      page,
+    }, testInfo) => {
+      await page.setViewportSize({ width, height: 900 });
+      await answerProcedureReads(page, DRAFT_ROW);
+      await loginAsOwner(page);
+
+      await page.goto(`/#/govern/catalog/procedures/${PROCEDURE}`);
+      await expect(page.getByTestId('procedure-detail')).toBeVisible({ timeout: 15_000 });
+      const issues = page.getByTestId('procedure-template-binding-issue');
+      await expect(issues).toHaveCount(2);
+      // From the step itself is said as that, not as "add it to dependsOn" (legacy 455).
+      await expect(issues.nth(0)).toContainText('这一步取自它自己');
+      await expect(issues.nth(0)).not.toContainText('dependsOn');
+      await expect(issues.nth(1)).toContainText('这个流程没有叫 scan 的 Worker 步骤');
+      await page.screenshot({
+        path: testInfo.outputPath(`procedure-template-issues-${width}.png`),
+        fullPage: true,
       });
     });
   }

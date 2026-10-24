@@ -367,8 +367,8 @@ async function insertGoalRun(
   const revision = await client.query<{ id: string }>(
     `insert into plan_revisions (
        workspace_id, goal_run_id, revision, plan, proposed_by, validation, source_procedure_id,
-       source_procedure_version
-     ) values ($1, $2, 1, $3::jsonb, $4, $5::jsonb, $6, $7)
+       source_procedure_version, source_procedure_parameters
+     ) values ($1, $2, 1, $3::jsonb, $4, $5::jsonb, $6, $7, $8::jsonb)
      returning id`,
     [
       workspaceId,
@@ -378,6 +378,7 @@ async function insertGoalRun(
       JSON.stringify({ valid: true, steps: plan.steps.length, hints }),
       source?.procedureId ?? null,
       source?.version ?? null,
+      source?.parameters ? JSON.stringify(source.parameters) : null,
     ],
   );
   const planRevisionId = revision.rows[0]?.id;
@@ -392,7 +393,10 @@ async function insertGoalRun(
     extraAuditPayload: {
       requesterId: input.requesterId,
       steps: plan.steps.length,
-      ...(source !== null ? { fromProcedure: source } : {}),
+      // Which version only: the parameters are on the revision, read masked, not in the audit.
+      ...(source !== null
+        ? { fromProcedure: { procedureId: source.procedureId, version: source.version } }
+        : {}),
     },
   });
   return {

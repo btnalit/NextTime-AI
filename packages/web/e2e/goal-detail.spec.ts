@@ -141,7 +141,16 @@ function revision(n: 1 | 2) {
     removals: n === 1 ? {} : { notify: { mode: 'terminate' } },
     hints: [],
     // GO5d-2: revision 1 was made from a published Procedure; revision 2 is alice's own edit.
-    fromProcedure: n === 1 ? { procedureId: PROCEDURE, version: 3, name: '证书续期' } : null,
+    fromProcedure:
+      n === 1
+        ? {
+            procedureId: PROCEDURE,
+            version: 3,
+            name: '证书续期',
+            parameters: { site: 'main' },
+            confirmCheck: null,
+          }
+        : null,
   };
 }
 

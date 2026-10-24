@@ -9,6 +9,7 @@ import {
   PROCEDURE_CONFIRM_KEY,
   type ProcedureTemplate,
   expandProcedure,
+  procedureConfirmCheck,
   procedureTemplateProblems,
   refuseProcedureParameters,
 } from './from-procedure.js';
@@ -328,7 +329,7 @@ describe('procedureTemplateProblems (S11 GO5d-2)', () => {
       ),
     ).toEqual([
       'step "scan": bindings[1]: path "zone": the parameters schema does not declare "zone" in the parameters',
-      'the plan it makes: step "apply-20": bindings[3]: takes from step "missing", which this step does not depend on — add it to dependsOn',
+      'the plan it makes: step "apply-20": bindings[3]: takes from step "missing", which is not in the plan',
       'the plan it makes: step "apply-20": bindings[3]: puts its value at "hosts", where bindings[1] puts its own at "hosts"',
     ]);
     // No step at all: the making's problem alone, not the plan's restatement of it.
@@ -391,5 +392,39 @@ describe('refuseProcedureParameters (S11 GO5d-2)', () => {
       field: 'fromProcedure.parameters.hosts.1',
       paths: ['fromProcedure.parameters.hosts.1'],
     });
+  });
+});
+
+describe('procedureConfirmCheck (legacy 454)', () => {
+  it('names the check the verify steps without a check of their own make, by their numbers', () => {
+    expect(
+      procedureConfirmCheck([
+        { kind: 'verify', description: 'Every host answers on 443.' },
+        { kind: 'approval', description: 'An owner signs off.' },
+        {
+          kind: 'verify',
+          description: 'The platform sees it.',
+          check: {
+            kind: 'observe_predicate',
+            key: 'seen',
+            check: {
+              gatekeeperId: '00000000-0000-4000-8000-000000000001',
+              operation: 'site.get',
+              expect: { path: 'up', op: 'eq', value: true },
+            },
+          },
+        },
+        { kind: 'verify', description: 'The owner is happy.' },
+      ] as ProcedureStep[]),
+    ).toEqual({ key: PROCEDURE_CONFIRM_KEY, procedureSteps: [1, 4] });
+  });
+
+  it('is null when every verify step carries its own check, or there is none', () => {
+    expect(procedureConfirmCheck([])).toBeNull();
+    expect(
+      procedureConfirmCheck([
+        { kind: 'approval', description: 'An owner signs off.' },
+      ] as ProcedureStep[]),
+    ).toBeNull();
   });
 });
