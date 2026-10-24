@@ -7,11 +7,13 @@ import {
   newPredicateCondition,
   newPredicateGroup,
   predicateAddLimit,
+  predicateComparesText,
   predicateDraftAsForm,
   predicateDraftAsJson,
   predicateDraftFrom,
   predicateDraftProblems,
   predicateFormBlocker,
+  predicateFormBlockerText,
   predicateFromDraft,
   predicateValueKinds,
   predicateWithPaths,
@@ -65,6 +67,14 @@ describe('lib/predicate-draft (legacy 464)', () => {
     expect(predicateFromDraft(draft)).toEqual(doubleNot);
     expect(predicateFormBlocker(draft)).toEqual({ kind: 'double_not', at: 'all.0.not' });
     expect(predicateDraftAsForm(draft)).toBeNull();
+    // Where, in the form's words rather than the JSON path.
+    expect(predicateFormBlockerText({ kind: 'double_not', at: 'all.0.not' }, t)).toMatch(
+      /^第 1 项是/,
+    );
+    expect(predicateFormBlockerText({ kind: 'double_not', at: 'all.1.not.any.0.not' }, t)).toMatch(
+      /^第 2 项里的第 1 项是/,
+    );
+    expect(predicateFormBlockerText({ kind: 'double_not', at: 'not' }, t)).toMatch(/^整个条件是/);
     expect(
       predicateFormBlocker(predicateDraftFrom({ path: 'a', op: 'eq', value: 1, x: 1 })),
     ).toEqual({ kind: 'shape', at: '' });
@@ -115,6 +125,28 @@ describe('lib/predicate-draft (legacy 464)', () => {
     const ordered = withConditionChanged(draft, only.uid, { op: 'lt' });
     const [node] = ordered.root.children as unknown as [{ valueKind: string }];
     expect(node.valueKind).toBe('number');
+
+    // Turning to an ordering comparison: empty or numeric text is compared as a number (UX #743
+    // P2-1); other text stays text and says it is compared as text.
+    const text = form(predicateDraftFrom({ path: 'count', op: 'eq', value: '5' }));
+    const [count] = text.root.children as unknown as [{ uid: string }];
+    const [asNumber] = withConditionChanged(text, count.uid, { op: 'gt' }).root
+      .children as unknown as [Parameters<typeof predicateComparesText>[0]];
+    expect(asNumber.valueKind).toBe('number');
+    expect(predicateComparesText(asNumber)).toBe(false);
+    const date = form(predicateDraftFrom({ path: 'until', op: 'eq', value: '2026-01-01' }));
+    const [until] = date.root.children as unknown as [{ uid: string }];
+    const [asText] = withConditionChanged(date, until.uid, { op: 'lt' }).root
+      .children as unknown as [Parameters<typeof predicateComparesText>[0]];
+    expect(asText.valueKind).toBe('string');
+    expect(predicateComparesText(asText)).toBe(true);
+    // Choosing text by hand afterwards is kept.
+    const chosen = withConditionChanged(
+      withConditionChanged(text, count.uid, { op: 'gt' }),
+      count.uid,
+      { valueKind: 'string' },
+    );
+    expect((chosen.root.children[0] as { valueKind: string }).valueKind).toBe('string');
   });
 
   it('says at its place a number or JSON that does not parse', () => {

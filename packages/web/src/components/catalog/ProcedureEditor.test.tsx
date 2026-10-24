@@ -850,7 +850,9 @@ describe('ProcedureEditor (S6-A A2)', () => {
       'procedure-step-check-expect-value-kind',
     ) as HTMLSelectElement;
     expect([...kind.options].map((option) => option.value)).toEqual(['number', 'string']);
-    fireEvent.change(kind, { target: { value: 'number' } });
+    // An empty value turns to a number with the ordering comparison (UX #743 P2-1).
+    expect(kind.value).toBe('number');
+    expect(within(second).queryByTestId('procedure-step-check-expect-text-order')).toBeNull();
     fireEvent.change(within(second).getByTestId('procedure-step-check-expect-value'), {
       target: { value: '7' },
     });
@@ -935,7 +937,7 @@ describe('ProcedureEditor (S6-A A2)', () => {
       ),
     ).toEqual(expectValue);
     expect(screen.getByTestId('procedure-step-check-expect-json-only').textContent).toMatch(
-      /not 是「不满足」套「不满足」/,
+      /整个条件是「不满足」套「不满足」/,
     );
     expect(screen.queryByTestId('procedure-step-check-expect-as-form')).toBeNull();
   });

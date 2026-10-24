@@ -195,7 +195,9 @@ test.describe('S11 GO5d-2: a Procedure as a goal plan template (stand-in reads)'
       await expect(second.getByTestId('procedure-step-check-expect-path')).toBeFocused();
       await second.getByTestId('procedure-step-check-expect-path').fill('daysLeft');
       await second.getByTestId('procedure-step-check-expect-op').selectOption('gt');
-      await second.getByTestId('procedure-step-check-expect-value-kind').selectOption('number');
+      await expect(second.getByTestId('procedure-step-check-expect-value-kind')).toHaveValue(
+        'number',
+      );
       await second.getByTestId('procedure-step-check-expect-value').fill('7');
       await expectBox.getByTestId('procedure-step-check-expect-add-group').first().click();
       const group = expectBox.getByTestId('procedure-step-check-expect-group');

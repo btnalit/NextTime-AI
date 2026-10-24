@@ -243,24 +243,47 @@ export function predicateFormBlocker(draft: PredicateDraft): PredicateFormBlocke
   return isDraft(read) ? null : read;
 }
 
+/** An ordering comparison against text: compared as text (dates read fine, numbers do not). */
+export function predicateComparesText(node: PredicateConditionDraft): boolean {
+  return (
+    node.op !== 'exists' && PREDICATE_ORDER_OPS.includes(node.op) && node.valueKind === 'string'
+  );
+}
+
+/**
+ * Where in the predicate, in the words the form uses — 第 2 项里的第 1 项 — never its JSON path
+ * (`all.1.not.any.0`).
+ */
+function predicatePlaceText(at: string, t: Translate): string {
+  const items = at
+    .split('.')
+    .filter((segment) => /^\d+$/.test(segment))
+    .map((segment) => Number(segment) + 1);
+  if (items.length === 0) return t('整个条件', 'The whole predicate');
+  return t(
+    items.map((n) => `第 ${n} 项`).join('里的'),
+    items.map((n, i) => `${i === 0 ? 'Item' : 'item'} ${n}`).join(' › '),
+  );
+}
+
 export function predicateFormBlockerText(blocker: PredicateFormBlocker, t: Translate): string {
-  const where = (at: string) => (at === '' ? t('整个条件', 'the whole predicate') : at);
+  const where = (at: string) => predicatePlaceText(at, t);
   switch (blocker.kind) {
     case 'not_json':
       return t('还不是合法的 JSON。', 'It is not valid JSON yet.');
     case 'shape':
       return t(
-        `${where(blocker.at)} 不是条件（path / op / value）也不是 all / any / not。`,
+        `${where(blocker.at)}不是条件（path / op / value）也不是 all / any / not。`,
         `${where(blocker.at)} is neither a condition (path / op / value) nor all / any / not.`,
       );
     case 'double_not':
       return t(
-        `${where(blocker.at)} 是「不满足」套「不满足」，表单只能取反一次。`,
+        `${where(blocker.at)}是「不满足」套「不满足」，表单只能取反一次。`,
         `${where(blocker.at)} negates a negation; the form negates once.`,
       );
     case 'empty_group':
       return t(
-        `${where(blocker.at)} 是空的一组，至少要有一个条件。`,
+        `${where(blocker.at)}是空的一组，至少要有一个条件。`,
         `${where(blocker.at)} is an empty group; a group holds at least one condition.`,
       );
   }
@@ -444,9 +467,21 @@ export function withConditionChanged(
     const next = { ...node, ...patch };
     // A comparison that takes fewer kinds of value moves the value to one it takes.
     const kinds = predicateValueKinds(next.op);
-    return kinds.length === 0 || kinds.includes(next.valueKind)
-      ? next
-      : { ...next, valueKind: kinds[0] as PredicateValueKind };
+    if (kinds.length > 0 && !kinds.includes(next.valueKind)) {
+      return { ...next, valueKind: kinds[0] as PredicateValueKind };
+    }
+    // Turning to an ordering comparison: a value that is empty or a number is compared as one —
+    // `count 大于 "5"` as text is easy to miss and seldom meant.
+    if (
+      patch.op !== undefined &&
+      patch.op !== 'exists' &&
+      PREDICATE_ORDER_OPS.includes(patch.op) &&
+      next.valueKind === 'string' &&
+      (next.valueText.trim() === '' || Number.isFinite(Number(next.valueText.trim())))
+    ) {
+      return { ...next, valueKind: 'number' };
+    }
+    return next;
   });
 }
 

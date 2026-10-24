@@ -14,6 +14,7 @@ import {
   newPredicateCondition,
   newPredicateGroup,
   predicateAddLimit,
+  predicateComparesText,
   predicateDraftAsForm,
   predicateDraftAsJson,
   predicateFormBlocker,
@@ -116,6 +117,8 @@ export function PredicateEditor({
   }
 
   function adds(form: FormDraft, group: PredicateGroupDraft) {
+    // Nested groups end one after another; inside one the buttons say it is that group they add to.
+    const inGroup = group.uid !== form.root.uid;
     const conditionLimit = predicateAddLimit(form, group.uid, 'condition', t);
     const groupLimit = predicateAddLimit(form, group.uid, 'group', t);
     return (
@@ -134,7 +137,9 @@ export function PredicateEditor({
           data-add-condition={group.uid}
           data-testid={`${testId}-add-condition`}
         >
-          {t('加条件', 'Add a condition')}
+          {inGroup
+            ? t('在这一组里加条件', 'Add a condition to this group')
+            : t('加条件', 'Add a condition')}
         </Button>
         {/* ux-lint-allow-disabled: the hint beside it says which limit it reached. */}
         <Button
@@ -149,7 +154,9 @@ export function PredicateEditor({
           }}
           data-testid={`${testId}-add-group`}
         >
-          {t('加一组', 'Add a group')}
+          {inGroup
+            ? t('在这一组里加一组', 'Add a group inside this group')
+            : t('加一组', 'Add a group')}
         </Button>
         {(conditionLimit ?? groupLimit) ? (
           <span className="text-small text-3">{conditionLimit ?? groupLimit}</span>
@@ -505,6 +512,14 @@ function ConditionRow({
           {t('移除', 'Remove')}
         </Button>
       </div>
+      {kinds.length > 0 && predicateComparesText(node) ? (
+        <span className="text-small text-3" data-testid={`${testId}-text-order`}>
+          {t(
+            '按文字顺序比较（适合 2026-01-01 这样的日期）；要比数的大小，「值是」选数字。',
+            'Compared as text (fine for dates like 2026-01-01); to compare numbers, choose Number.',
+          )}
+        </span>
+      ) : null}
       <Problems errors={errors} t={t} />
     </div>
   );
