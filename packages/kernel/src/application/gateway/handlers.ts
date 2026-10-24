@@ -65,7 +65,10 @@ import {
 import {
   type WorkerDefinitionRow,
   deprecateWorkerDefinition,
+  entryTemplateStatus,
   listWorkerDefinitionsPage,
+  loadEntryTemplate,
+  proposeEntryTemplateUpgrade,
   proposeWorkerDefinition,
   publishWorkerDefinition,
 } from '../../application/worker/index.js';
@@ -1087,6 +1090,71 @@ const proposeWorkerDefinitionHandler: CapabilityHandler = async (client, workspa
     result: toWireWorkerDefinition(row),
     resourceType: 'worker_definition',
     resourceId: row.id,
+  };
+};
+
+// Legacy 145 (`application/worker/entry-template.ts`): the template is read from the image's
+// `ONTOLOGY_DIR` on each call — a person asks for it, rarely, and a new release's template shows
+// without a restart of anything that cached it.
+const getEntryTemplateStatusHandler: CapabilityHandler = async (client, workspaceId) => {
+  const status = await entryTemplateStatus(client, workspaceId, await loadEntryTemplate());
+  return {
+    result: {
+      template: {
+        digest: status.template.digest,
+        systemPrompt: status.template.systemPrompt,
+        capabilities: [...status.template.capabilities],
+      },
+      current:
+        status.current && status.currentDigest
+          ? {
+              definitionId: status.current.id,
+              version: status.current.version,
+              digest: status.currentDigest,
+            }
+          : null,
+      differs: [...status.differs],
+    },
+  };
+};
+
+// Legacy 145: a draft only — what runs changes when someone publishes it. The audit row carries
+// the template digest the draft was made from, so "is this workspace on the latest template" can
+// be answered from it later.
+const proposeEntryTemplateUpgradeHandler: CapabilityHandler = async (
+  client,
+  workspaceId,
+  params,
+) => {
+  const { templateDigest, basedOn } = params as {
+    templateDigest: string;
+    basedOn: { definitionId: string; version: number } | null;
+  };
+  const principalId = await currentPrincipalId(client);
+  const upgrade = await proposeEntryTemplateUpgrade(
+    client,
+    workspaceId,
+    principalId,
+    await loadEntryTemplate(),
+    { templateDigest, basedOn },
+  );
+  return {
+    result: {
+      draft: toWireWorkerDefinition(upgrade.draft),
+      templateDigest: upgrade.templateDigest,
+      basedOn: upgrade.basedOn,
+      differs: [...upgrade.differs],
+      created: upgrade.created,
+    },
+    resourceType: 'worker_definition',
+    resourceId: upgrade.draft.id,
+    auditPayload: {
+      templateDigest: upgrade.templateDigest,
+      basedOn: upgrade.basedOn,
+      draftVersion: upgrade.draft.version,
+      differs: [...upgrade.differs],
+      created: upgrade.created,
+    },
   };
 };
 
@@ -2328,6 +2396,8 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['publish_worker_definition', publishWorkerDefinitionHandler],
   ['deprecate_worker_definition', deprecateWorkerDefinitionHandler],
   ['list_worker_definitions', listWorkerDefinitionsHandler],
+  ['get_entry_template_status', getEntryTemplateStatusHandler],
+  ['propose_entry_template_upgrade', proposeEntryTemplateUpgradeHandler],
   // S8 W3 K2 (leftover 82) — discard-draft-handler.ts.
   ['discard_draft', discardDraftHandler],
   ['assert_fact', assertFactHandler],

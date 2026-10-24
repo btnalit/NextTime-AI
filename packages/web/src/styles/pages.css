@@ -1889,3 +1889,54 @@
   border-top: 1px solid var(--border);
   padding-top: var(--space-2);
 }
+
+/* Legacy 145 (components/catalog/EntryTemplateNotice): the entry prompt against the platform
+ * template, line by line. The `+` / `−` mark carries the meaning; the tint only helps scanning. */
+.text-diff {
+  padding: var(--space-2) 0;
+}
+
+.text-diff-line {
+  display: block;
+  padding: 0 var(--space-3);
+}
+
+.text-diff-line[data-change="added"] {
+  background: var(--ok-soft);
+}
+
+.text-diff-line[data-change="removed"] {
+  background: var(--danger-soft);
+}
+
+.text-diff-line[data-change="gap"] {
+  color: var(--text-3);
+}
+
+/* UX acceptance of #747 (P2-1): the capabilities an entry version change adds and takes out. The
+ * `+` / `−` mark and the group heading carry the meaning; the edge colour only helps scanning. */
+.capability-change-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.capability-change-list > li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding-left: var(--space-3);
+  border-left: 3px solid var(--border);
+}
+
+.capability-change-list > li[data-change="added"] {
+  border-left-color: var(--ok);
+}
+
+.capability-change-list > li[data-change="removed"] {
+  border-left-color: var(--danger);
+}

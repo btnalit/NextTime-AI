@@ -28,6 +28,21 @@ export {
   WorkerDefinitionNotPublishedError,
   WorkerDefinitionValidationError,
 } from './definitions.js';
+export {
+  EntryTemplateChangedError,
+  EntryTemplateCurrentError,
+  entryTemplateDigest,
+  entryTemplateStatus,
+  loadEntryTemplate,
+  loadWorkerDefinitionTemplate,
+  proposeEntryTemplateUpgrade,
+} from './entry-template.js';
+export type {
+  EntryTemplate,
+  EntryTemplateExpectation,
+  EntryTemplateStatus,
+  EntryTemplateUpgrade,
+} from './entry-template.js';
 export type {
   ListWorkerDefinitionsPageFilter,
   ProposeWorkerDefinitionInput,
