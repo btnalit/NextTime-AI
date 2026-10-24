@@ -182,6 +182,45 @@ describe('EntryTemplateNotice (legacy 145)', () => {
     expect(removed.querySelector('[data-capability="own_tool"]')?.textContent).toBe('− own_tool');
   });
 
+  it('opens a run of unchanged prompt lines in place (legacy 471)', () => {
+    const own = Array.from({ length: 9 }, (_, index) => `line ${index + 1}`);
+    const template = [...own.slice(0, 3), 'new line', ...own.slice(3)];
+    inPermissions(
+      <EntryTemplateNotice
+        http={caller('owner')}
+        status={ready(
+          statusOf({
+            template: { ...statusOf().template, systemPrompt: template.join('\n') },
+            differs: ['systemPrompt'],
+          }),
+        )}
+        row={{ ...row, definition: { ...row.definition, systemPrompt: own.join('\n') } }}
+        onProposed={vi.fn()}
+      />,
+    );
+    const diff = screen.getByTestId('entry-template-prompt-diff');
+    const sameLines = () =>
+      [...diff.querySelectorAll('[data-change="same"]')].map((el) => el.textContent);
+    expect(sameLines()).toEqual(['  line 2', '  line 3', '  line 4', '  line 5']);
+    const gaps = within(diff).getAllByTestId('entry-template-prompt-diff-open-gap');
+    expect(gaps.map((gap) => gap.textContent)).toEqual([
+      '… 1 行未变，点开查看 …',
+      '… 4 行未变，点开查看 …',
+    ]);
+    fireEvent.click(gaps[1] as HTMLElement);
+    expect(within(diff).getAllByTestId('entry-template-prompt-diff-open-gap')).toHaveLength(1);
+    expect(sameLines()).toEqual([
+      '  line 2',
+      '  line 3',
+      '  line 4',
+      '  line 5',
+      '  line 6',
+      '  line 7',
+      '  line 8',
+      '  line 9',
+    ]);
+  });
+
   it('reads the status again when what it showed moved, and says so where the button is', async () => {
     const status = ready(statusOf());
     const http = caller('owner', async () => {

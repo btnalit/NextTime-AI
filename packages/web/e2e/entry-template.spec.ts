@@ -141,6 +141,13 @@ test.describe('legacy 145: bringing the entry definition up to the platform temp
         `+ ${older.goalsHeading}`,
       );
       await expect(diff.locator('[data-change="gap"]').first()).toContainText('行未变');
+      // Legacy 471: a folded run of unchanged lines opens in place (before the full-page capture,
+      // whose resize can re-lay the page out and close the comparison).
+      const gaps = diff.getByTestId('entry-template-prompt-diff-open-gap');
+      const folded = await gaps.count();
+      await gaps.first().click();
+      await expect(gaps).toHaveCount(folded - 1);
+      await diff.screenshot({ path: testInfo.outputPath(`entry-template-diff-${width}.png`) });
       await capture(page, testInfo.outputPath(`entry-template-${width}.png`));
 
       await page.getByTestId('entry-template-propose').click();

@@ -75,6 +75,8 @@ export interface GoalPlanEditorProps {
   readonly goal: GoalDetailWire;
   readonly http: CapabilityCaller;
   readonly gateNames: ReadonlyMap<string, string>;
+  /** Legacy 470: the Objects the checks name by id, 「名字 · 类型」 (`useObjectLabels`). */
+  readonly objectNames?: ReadonlyMap<string, string>;
   /** Leaves the editor, nothing sent. */
   readonly onCancel: () => void;
   /** After the revision — or a refusal because the goal had moved on: the page says so, re-reads
@@ -104,6 +106,7 @@ export function GoalPlanEditor({
   goal: latest,
   http,
   gateNames,
+  objectNames,
   onCancel,
   onDone,
 }: GoalPlanEditorProps) {
@@ -385,6 +388,7 @@ export function GoalPlanEditor({
               key={check.uid}
               check={check}
               gateNames={gateNames}
+              objectNames={objectNames}
               origin={
                 check.original === null
                   ? null
@@ -1030,6 +1034,7 @@ function WorkerPicker({
 function CheckEditor({
   check,
   gateNames,
+  objectNames,
   origin,
   errorOf,
   onChange,
@@ -1038,6 +1043,7 @@ function CheckEditor({
 }: {
   readonly check: CheckDraft;
   readonly gateNames: ReadonlyMap<string, string>;
+  readonly objectNames: ReadonlyMap<string, string> | undefined;
   /** Legacy 454: the Procedure steps a requester's confirmation came from, when it did. */
   readonly origin: string | null;
   readonly errorOf: (key: FieldKey) => string | null;
@@ -1086,7 +1092,9 @@ function CheckEditor({
             ) : null}
           </span>
         ) : check.original ? (
-          <span className="text-small">{planCheckSentence(check.original, gateNames, t)}</span>
+          <span className="text-small">
+            {planCheckSentence(check.original, gateNames, t, objectNames)}
+          </span>
         ) : null}
         <Button variant="ghost" size="s" onClick={onRemove} data-testid="goal-plan-check-remove">
           {t('移除', 'Remove')}

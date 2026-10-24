@@ -48,6 +48,11 @@ import type { Translate } from './i18n.js';
  * apart; 请求人 is the principal the goal acts for.
  */
 
+/** Legacy 470: 「名字 · 类型」 by Object id (`useObjectLabels`). */
+export type ObjectNames = ReadonlyMap<string, string>;
+
+const NO_NAMES: ObjectNames = new Map();
+
 export type GoalFilter = 'all' | 'active' | 'done';
 
 const TERMINAL_GOAL_STATUSES: ReadonlySet<GoalRunStatus> = new Set([
@@ -432,15 +437,34 @@ export function goalPlanSource(
 }
 
 /** Legacy 454: the start parameters a plan was made with, as `name = value` rows (a value that is
- *  not text as JSON); none when none were kept. Values come masked from the read. */
+ *  not text as JSON); none when none were kept. Values come masked from the read. Legacy 474:
+ *  each with its `description` from the Procedure's parameters schema, when `descriptions` has
+ *  one (`useProcedureParameterDescriptions`). */
 export function planSourceParameters(
   source: PlanSourceProcedureWire | null,
-): readonly { readonly name: string; readonly value: string }[] {
+  descriptions: ReadonlyMap<string, string> = NO_NAMES,
+): readonly { readonly name: string; readonly value: string; readonly description?: string }[] {
   if (!source?.parameters) return [];
-  return Object.entries(source.parameters).map(([name, value]) => ({
-    name,
-    value: typeof value === 'string' ? value : JSON.stringify(value),
-  }));
+  return Object.entries(source.parameters).map(([name, value]) => {
+    const description = descriptions.get(name);
+    return {
+      name,
+      value: typeof value === 'string' ? value : JSON.stringify(value),
+      ...(description !== undefined ? { description } : {}),
+    };
+  });
+}
+
+/** A start parameter as one line of text: 「说明（name） = value」 when it has a description. */
+export function planSourceParameterText(
+  row: { readonly name: string; readonly value: string; readonly description?: string },
+  t: Translate,
+): string {
+  if (row.description === undefined) return `${row.name} = ${row.value}`;
+  return t(
+    `${row.description}（${row.name}） = ${row.value}`,
+    `${row.description} (${row.name}) = ${row.value}`,
+  );
 }
 
 /** Legacy 454: where the requester's confirmation check of a plan made from a Procedure came
@@ -811,19 +835,52 @@ export function checkErrorLabel(code: string, t: Translate): string {
   return t(`上次没成功（代码 ${shown}）`, `The last attempt did not succeed (code ${shown})`);
 }
 
-function objectRefText(ref: FactObjectRef, t: Translate): string {
-  if ('objectId' in ref)
+/** Legacy 470: an end given as an Object already in the graph reads as `objectNames`' 「名字 ·
+ *  类型」 for it (`useObjectLabels`), as the editor shows it; only one not read (yet) falls back to
+ *  its short id. */
+function objectRefText(ref: FactObjectRef, t: Translate, objectNames: ObjectNames): string {
+  if ('objectId' in ref) {
+    const name = objectNames.get(ref.objectId);
+    if (name !== undefined) return name;
     return t(`对象 ${shortId(ref.objectId)}`, `object ${shortId(ref.objectId)}`);
+  }
   const identity = Object.entries(ref.identity)
     .map(([key, value]) => `${key}=${jsonValue(value as PredicateJsonValue)}`)
     .join(', ');
   return `${ref.objectType}（${identity}）`;
 }
 
+/** The Objects a Fact check names by id, for `useObjectLabels`. */
+export function factCheckObjectIds(fact: FactCheck | null | undefined): string[] {
+  if (!fact) return [];
+  return [fact.source, fact.target].flatMap((ref) => ('objectId' in ref ? [ref.objectId] : []));
+}
+
+/** The Objects a goal's checks name by id — the plan's, every acceptance round's and every
+ *  step's — for `useObjectLabels`. */
+export function goalCheckObjectIds(detail: GoalDetailWire): string[] {
+  const ids = new Set<string>();
+  const add = (fact: FactCheck | null | undefined) => {
+    for (const id of factCheckObjectIds(fact)) ids.add(id);
+  };
+  for (const check of detail.planRevision.plan.acceptance ?? []) {
+    if (check.kind === 'fact_predicate') add(check.fact);
+  }
+  for (const round of detail.acceptance.rounds) for (const check of round.checks) add(check.fact);
+  for (const step of detail.planRevision.plan.steps) {
+    for (const check of step.acceptance ?? []) if (check.kind === 'fact_predicate') add(check.fact);
+  }
+  return [...ids];
+}
+
 /** A Fact check as a sentence. */
-export function factCheckSentence(fact: FactCheck, t: Translate): string {
-  const source = objectRefText(fact.source, t);
-  const target = objectRefText(fact.target, t);
+export function factCheckSentence(
+  fact: FactCheck,
+  t: Translate,
+  objectNames: ObjectNames = NO_NAMES,
+): string {
+  const source = objectRefText(fact.source, t, objectNames);
+  const target = objectRefText(fact.target, t, objectNames);
   if (fact.expect === undefined) {
     return t(
       `图谱里出现从 ${source} 到 ${target} 的「${fact.linkType}」事实`,
@@ -842,12 +899,13 @@ export function planCheckSentence(
   check: AcceptanceCheck,
   gateNames: ReadonlyMap<string, string>,
   t: Translate,
+  objectNames: ObjectNames = NO_NAMES,
 ): string {
   switch (check.kind) {
     case 'observe_predicate':
       return observationSentence(check.check, gateNames.get(check.check.gatekeeperId) ?? null, t);
     case 'fact_predicate':
-      return factCheckSentence(check.fact, t);
+      return factCheckSentence(check.fact, t, objectNames);
     case 'requester_confirm':
       return check.prompt;
   }
@@ -858,11 +916,12 @@ export function roundCheckSentence(
   check: GoalAcceptanceCheckWire,
   gateNames: ReadonlyMap<string, string>,
   t: Translate,
+  objectNames: ObjectNames = NO_NAMES,
 ): string {
   if (check.check) {
     return observationSentence(check.check, gateNames.get(check.check.gatekeeperId) ?? null, t);
   }
-  if (check.fact) return factCheckSentence(check.fact, t);
+  if (check.fact) return factCheckSentence(check.fact, t, objectNames);
   return check.prompt ?? '';
 }
 

@@ -103,7 +103,11 @@ function RevisionItem({
       {revision.fromProcedure ? (
         <span className="text-small">
           <PlanSource source={revision.fromProcedure} testId="goal-revision-from-procedure" />
-          <PlanSourceParameters source={revision.fromProcedure} testId="goal-revision-parameters" />
+          <PlanSourceParameters
+            http={http}
+            source={revision.fromProcedure}
+            testId="goal-revision-parameters"
+          />
         </span>
       ) : null}
       {revision.reason ? (

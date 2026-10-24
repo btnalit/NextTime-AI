@@ -1252,6 +1252,45 @@ describe('CatalogPage', () => {
     );
   });
 
+  it('Workers tab: an entry definition reads field by field, not only as JSON (legacy 472)', async () => {
+    const http = scriptedHttp({
+      list_worker_definitions: () => ({
+        items: [
+          {
+            id: 'wd-entry',
+            version: 2,
+            kind: 'entry',
+            status: 'published',
+            definition: {
+              systemPrompt: 'You are the entry agent.\nAnswer briefly.',
+              capabilities: ['propose_goal', 'own_tool'],
+              egressDeny: ['internal.example'],
+            },
+          },
+        ],
+      }),
+    });
+    renderPage(http, 'workers');
+    const [entry] = await screen.findAllByTestId('catalog-row');
+    const detail = await selectRow(entry as HTMLElement);
+    expect(within(detail).getByTestId('worker-detail-prompt').textContent).toMatch(
+      /^2 行，点开查看You are the entry agent\./,
+    );
+    expect(within(detail).getByTestId('worker-detail-model-default').textContent).toBe(
+      '没有指定，使用工作区默认模型',
+    );
+    const capabilities = within(detail).getByTestId('worker-detail-capabilities');
+    expect(capabilities.querySelector('[data-capability="propose_goal"]')?.textContent).toMatch(
+      /^提议目标 propose_goal$/,
+    );
+    // A name the console has no words for shows as itself, once.
+    expect(capabilities.querySelector('[data-capability="own_tool"]')?.textContent).toBe(
+      'own_tool',
+    );
+    expect(detail.textContent).toContain('能做的事（2）');
+    expect(within(detail).getByTestId('worker-detail-egress').textContent).toBe('internal.example');
+  });
+
   // S8 W1-A7 (audit S13): 弃用 Deprecate used to be a plain button with no confirmation at all —
   // now a medium `kit/confirm` anchored to itself; the capability fires only once confirmed.
   it('Operations: Deprecate opens a medium confirm next to the button; deprecate_operation fires only on confirm', async () => {
@@ -1632,8 +1671,8 @@ describe('CatalogPage', () => {
   });
 
   // P3-5 copy-guard regression: an entry definition with no name used to title its row with the
-  // raw UUID; it now reads 「未命名 · <short id>」.
-  it('Workers tab: an unnamed definition is labelled with a short id, never the raw UUID', async () => {
+  // raw UUID; legacy 472: it reads as 「入口 agent」, not 「未命名 · <short id>」.
+  it('Workers tab: an unnamed entry definition reads as the entry agent, never the raw UUID (legacy 472)', async () => {
     const uuid = 'f96d762e-6111-4a10-a699-66b8ae46c622';
     const http = scriptedHttp({
       list_worker_definitions: () => ({
@@ -1643,7 +1682,8 @@ describe('CatalogPage', () => {
     renderPage(http, 'workers');
     const entrySection = await screen.findByTestId('workers-entry-section');
     const row = within(entrySection).getByTestId('catalog-row');
-    expect(row.textContent).toMatch(/未命名/);
+    expect(row.textContent).toMatch(/入口 agent/);
+    expect(row.textContent).not.toMatch(/未命名/);
     expect(row.textContent).not.toContain(uuid);
   });
 

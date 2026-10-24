@@ -83,7 +83,8 @@ describe('workerDefinitionChoices (#541 acceptance: same-name Workers)', () => {
       kind: 'entry',
     };
     const [choice] = workerDefinitionChoices([unnamed], zh);
-    expect([choice?.label, choice?.distinguisher]).toEqual(['未命名 入口定义', 'dddddddd']);
+    expect(choice?.label).toMatch(/^入口 agent$/);
+    expect(choice?.distinguisher).toBe('dddddddd');
   });
 });
 

@@ -65,6 +65,15 @@ export function objectDisplayName(
   return parts.length > 0 ? parts.join(' / ') : undefined;
 }
 
+/** An Object as a person picks it: 「名字 · 类型」, the name by `objectDisplayName` (its short id
+ *  when it has none). */
+export function objectNameAndType(
+  object: Pick<ObjectWire, 'id' | 'objectType' | 'identityKey' | 'properties'>,
+  identityKeys?: readonly string[],
+): string {
+  return `${objectDisplayName(object, identityKeys) ?? object.id.slice(0, 8)} · ${object.objectType}`;
+}
+
 /** `list_types{kind:'object'}` → `typeName → identityKey[]`, for `objectDisplayName`. */
 export function identityKeysByType(
   types: readonly {

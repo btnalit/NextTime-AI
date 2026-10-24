@@ -25,7 +25,7 @@ import {
   factRowsForType,
   newFactIdentityRow,
 } from '../../lib/fact-check-draft.js';
-import { isUuidLike, objectDisplayName } from '../../lib/graph-view.js';
+import { isUuidLike, objectNameAndType } from '../../lib/graph-view.js';
 import { useT } from '../../lib/i18n.js';
 import {
   PREDICATE_VALUE_KINDS,
@@ -413,12 +413,10 @@ function FactEndFields({
       ? undefined
       : (byId.current.get(objectId) ?? (chosen?.id === objectId ? chosen.object : undefined));
   const objectLabel = (object: ObjectWire) =>
-    `${
-      objectDisplayName(
-        object,
-        objectTypes.find((type) => type.name === object.objectType)?.identityKey,
-      ) ?? object.id.slice(0, 8)
-    } · ${object.objectType}`;
+    objectNameAndType(
+      object,
+      objectTypes.find((type) => type.name === object.objectType)?.identityKey,
+    );
   // Only Objects this end takes are offered; the chosen one is always there, so it is named.
   const objectOptions = [
     ...found.items.filter((object) => allowed === null || allowed.includes(object.objectType)),

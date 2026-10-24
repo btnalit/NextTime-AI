@@ -5,7 +5,7 @@ import type {
   PlanRevisionSummaryWire,
   UnresolvedGoalActionWire,
 } from '@nexttime/shared';
-import { planCheckSentence, roundCheckSentence } from './goals.js';
+import { type ObjectNames, planCheckSentence, roundCheckSentence } from './goals.js';
 import type { Translate } from './i18n.js';
 
 /**
@@ -190,6 +190,7 @@ export function checksOverriddenByEnding(
   detail: GoalDetailWire,
   gateNames: ReadonlyMap<string, string>,
   t: Translate,
+  objectNames?: ObjectNames,
 ): OverriddenCheck[] {
   const rounds = detail.acceptance.rounds.filter(
     (round) => round.planRevision === detail.currentRevision,
@@ -198,11 +199,14 @@ export function checksOverriddenByEnding(
   if (round) {
     return round.checks
       .filter((check) => check.status !== 'passed')
-      .map((check) => ({ key: check.checkKey, sentence: roundCheckSentence(check, gateNames, t) }));
+      .map((check) => ({
+        key: check.checkKey,
+        sentence: roundCheckSentence(check, gateNames, t, objectNames),
+      }));
   }
   return (detail.planRevision.plan.acceptance ?? []).map((check) => ({
     key: check.key,
-    sentence: planCheckSentence(check, gateNames, t),
+    sentence: planCheckSentence(check, gateNames, t, objectNames),
   }));
 }
 

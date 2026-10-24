@@ -11,12 +11,12 @@ describe('lineDiff (legacy 145)', () => {
     const before = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'].join('\n');
     const after = ['a', 'b', 'c', 'd', 'new 1', 'new 2', 'e', 'f', 'g', 'h'].join('\n');
     expect(lineDiff(before, after, 1)).toEqual([
-      { change: 'gap', count: 3 },
+      { change: 'gap', lines: ['a', 'b', 'c'] },
       { change: 'same', text: 'd' },
       { change: 'added', text: 'new 1' },
       { change: 'added', text: 'new 2' },
       { change: 'same', text: 'e' },
-      { change: 'gap', count: 3 },
+      { change: 'gap', lines: ['f', 'g', 'h'] },
     ]);
   });
 
@@ -30,7 +30,9 @@ describe('lineDiff (legacy 145)', () => {
   });
 
   it('says nothing changed by folding everything', () => {
-    expect(lineDiff('a\nb\nc\nd\ne\nf', 'a\nb\nc\nd\ne\nf')).toEqual([{ change: 'gap', count: 6 }]);
+    expect(lineDiff('a\nb\nc\nd\ne\nf', 'a\nb\nc\nd\ne\nf')).toEqual([
+      { change: 'gap', lines: ['a', 'b', 'c', 'd', 'e', 'f'] },
+    ]);
   });
 });
 

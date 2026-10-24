@@ -186,14 +186,22 @@ const workerNameOf = (row: WorkerDefinitionSummary): string | undefined =>
     ? row.definition.name
     : undefined;
 
-/** Ids of the definitions whose name another listed definition (a different id) also has. */
+/** What an unnamed definition is called: an entry definition is the entry agent's (legacy 472,
+ *  not 「未命名」), any other reads as an unnamed one of its kind. */
+export function unnamedDefinitionLabel(kind: string, t: Translate): string {
+  return kind === 'entry'
+    ? t('入口 agent', 'Entry agent')
+    : `${t('未命名', 'Unnamed')} ${workerDefinitionKindLabel(kind, t)}`;
+}
+
+/** Ids of the definitions whose name another listed definition (a different id) also has —
+ *  unnamed ones sharing their kind's label (legacy 472) count as the same name. */
 export function sameNameDefinitionIds(
   definitions: readonly WorkerDefinitionSummary[],
 ): ReadonlySet<string> {
   const idsByLabel = new Map<string, Set<string>>();
   for (const row of definitions) {
-    const label = workerNameOf(row);
-    if (label === undefined) continue;
+    const label = workerNameOf(row) ?? `\u0000${row.kind}`;
     idsByLabel.set(label, (idsByLabel.get(label) ?? new Set()).add(row.id));
   }
   return new Set([...idsByLabel.values()].filter((ids) => ids.size > 1).flatMap((ids) => [...ids]));
@@ -211,7 +219,7 @@ export function workerDefinitionChoices(
     if (name === undefined) {
       return {
         id: row.id,
-        label: `${t('未命名', 'Unnamed')} ${workerDefinitionKindLabel(row.kind, t)}`,
+        label: unnamedDefinitionLabel(row.kind, t),
         version: `v${row.version}`,
         distinguisher: shortId(row.id),
       };
