@@ -679,6 +679,13 @@ const OPS: Readonly<Record<string, readonly [string, string]>> = {
   contains: ['包含', 'contains'],
 };
 
+/** A predicate's comparison as the sentences say it (`exists`: 有值). */
+export function predicateOpLabel(op: string, t: Translate): string {
+  if (op === 'exists') return t('有值', 'is present');
+  const [zh, en] = OPS[op] ?? [op, op];
+  return t(zh, en);
+}
+
 function jsonValue(value: PredicateJsonValue): string {
   return JSON.stringify(value);
 }

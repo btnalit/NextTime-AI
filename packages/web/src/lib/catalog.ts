@@ -11,6 +11,13 @@ import {
 import type { CapabilityNameRow } from './governance.js';
 import type { Translate } from './i18n.js';
 import {
+  type PredicateDraft,
+  emptyPredicateDraft,
+  predicateDraftFrom,
+  predicateDraftProblems,
+  predicateFromDraft,
+} from './predicate-draft.js';
+import {
   type SchemaDraft,
   schemaDraftFrom,
   schemaFromDraft,
@@ -288,7 +295,8 @@ export interface ProcedureStepForm {
   readonly checkOperation: string;
   /** JSON texts; `''`: absent. */
   readonly checkParamsText: string;
-  readonly checkExpectText: string;
+  /** Legacy 464: what the observed result must satisfy, as the predicate editor edits it. */
+  readonly checkExpect: PredicateDraft;
   readonly checkFactText: string;
   /** `checkKind: 'json'` only: the check as it came. */
   readonly checkJsonText: string;
@@ -326,7 +334,7 @@ export const EMPTY_STEP: ProcedureStepForm = {
   checkGatekeeperId: '',
   checkOperation: '',
   checkParamsText: '',
-  checkExpectText: '',
+  checkExpect: emptyPredicateDraft(),
   checkFactText: '',
   checkJsonText: '',
 };
@@ -512,7 +520,7 @@ function checkFormFrom(check: unknown): Partial<ProcedureStepForm> {
         checkGatekeeperId: typeof fields.gatekeeperId === 'string' ? fields.gatekeeperId : '',
         checkOperation: typeof fields.operation === 'string' ? fields.operation : '',
         checkParamsText: jsonText(fields.params),
-        checkExpectText: jsonText(fields.expect),
+        checkExpect: predicateDraftFrom(fields.expect),
       };
     }
     if (check.kind === 'fact_predicate' && shaped(['kind', 'key', 'fact'], check)) {
@@ -599,8 +607,8 @@ function checkToWire(step: ProcedureStepForm): Record<string, unknown> {
             ...(step.checkParamsText.trim() !== ''
               ? { params: parsedOr(step.checkParamsText) }
               : {}),
-            ...(step.checkExpectText.trim() !== ''
-              ? { expect: parsedOr(step.checkExpectText) }
+            ...(predicateFromDraft(step.checkExpect) !== undefined
+              ? { expect: predicateFromDraft(step.checkExpect) }
               : {}),
           },
         },
@@ -699,7 +707,10 @@ function formProblems(form: ProcedureForm, t: Translate): Record<string, string>
       if (step.checkKind === 'json') json(`${at}.check`, step.checkJsonText);
       if (step.checkKind === 'observe_predicate') {
         json(`${at}.check.check.params`, step.checkParamsText);
-        json(`${at}.check.check.expect`, step.checkExpectText);
+        for (const [path, problem] of predicateDraftProblems(step.checkExpect, t)) {
+          problems[path === '' ? `${at}.check.check.expect` : `${at}.check.check.expect.${path}`] =
+            problem;
+        }
       }
       if (step.checkKind === 'fact_predicate') json(`${at}.check.fact`, step.checkFactText);
     }
