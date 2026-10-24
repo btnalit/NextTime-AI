@@ -5546,7 +5546,11 @@ describe.runIf(DATABASE_URL !== undefined)(
 
         // Declared: kept as such, judged on nothing, so the check is not met and tries again.
         const declared = await verifyingGoal(await newPrincipal(), [lookup()]);
-        observeClient.answer = async () => ({ data: null, observedFacts: [], absent: { status: 404 } });
+        observeClient.answer = async () => ({
+          data: null,
+          observedFacts: [],
+          absent: { status: 404 },
+        });
         expect(await observeNow(declared.goalRunId, 'up', options)).toBe('retry');
         const [absentEvidence] = await evidenceOf(declared.goalRunId);
         expect(absentEvidence?.content).toMatchObject({

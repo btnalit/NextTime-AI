@@ -266,7 +266,9 @@ export function gateAbsenceOf(
   if (!parsed.success) return refuse('in a form the platform does not read');
   if (!isDeclaredAbsence(operation, parsed.data)) {
     const answer =
-      'status' in parsed.data ? `status ${parsed.data.status}` : `exit status ${parsed.data.exitCode}`;
+      'status' in parsed.data
+        ? `status ${parsed.data.status}`
+        : `exit status ${parsed.data.exitCode}`;
     return refuse(`by ${answer}, which its published definition does not declare means so`);
   }
   if (response.data !== null && response.data !== undefined) return refuse('and also sent data');

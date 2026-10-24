@@ -828,7 +828,11 @@ describe('gateAbsenceOf — what the kernel takes of a gate saying the target ha
   const show = {
     name: 'unit.show',
     mode: 'observe' as const,
-    binding: { kind: 'cli' as const, command_template: 'unitctl show {name}', absent_exit_codes: [4] },
+    binding: {
+      kind: 'cli' as const,
+      command_template: 'unitctl show {name}',
+      absent_exit_codes: [4],
+    },
   };
   const refused = (fn: () => unknown) => {
     try {
@@ -840,9 +844,9 @@ describe('gateAbsenceOf — what the kernel takes of a gate saying the target ha
   };
 
   it('takes an absence the published definition declares, from the envelope only', () => {
-    expect(gateAbsenceOf(lookup, { data: null, observedFacts: [], absent: { status: 404 } })).toEqual(
-      { status: 404 },
-    );
+    expect(
+      gateAbsenceOf(lookup, { data: null, observedFacts: [], absent: { status: 404 } }),
+    ).toEqual({ status: 404 });
     expect(gateAbsenceOf(show, { data: null, absent: { exitCode: 4 } })).toEqual({ exitCode: 4 });
     // No statement: no absence, whatever the data says.
     expect(gateAbsenceOf(lookup, { data: null })).toBeUndefined();
@@ -853,10 +857,18 @@ describe('gateAbsenceOf — what the kernel takes of a gate saying the target ha
 
   it('refuses one it does not declare, a malformed one, and one with data or Facts beside it', () => {
     const cases: Array<[Parameters<typeof gateAbsenceOf>[0], unknown, RegExp]> = [
-      [lookup, { data: null, absent: { status: 410 } }, /status 410, which its published definition does not declare/],
+      [
+        lookup,
+        { data: null, absent: { status: 410 } },
+        /status 410, which its published definition does not declare/,
+      ],
       [lookup, { data: null, absent: { exitCode: 404 } }, /exit status 404/],
       [show, { data: null, absent: { exitCode: 1 } }, /exit status 1/],
-      [{ ...lookup, mode: 'execute' as const }, { data: null, absent: { status: 404 } }, /does not declare/],
+      [
+        { ...lookup, mode: 'execute' as const },
+        { data: null, absent: { status: 404 } },
+        /does not declare/,
+      ],
       [
         { ...lookup, binding: { kind: 'http' as const, method: 'GET', path: '/records/{id}' } },
         { data: null, absent: { status: 404 } },

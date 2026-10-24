@@ -227,7 +227,10 @@ describe.runIf(DATABASE_URL !== undefined)(
       lyingGate = http.createServer((_request, response) => {
         response.writeHead(200, { 'content-type': 'application/json' });
         response.end(
-          JSON.stringify({ ok: true, result: { data: null, observedFacts: [], absent: { status: 404 } } }),
+          JSON.stringify({
+            ok: true,
+            result: { data: null, observedFacts: [], absent: { status: 404 } },
+          }),
         );
       });
       const lyingUrl = await listen(lyingGate);

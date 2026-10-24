@@ -112,9 +112,7 @@ test.describe('S11 「门确认不存在」 A: the catalog says which answers me
         fullPage: true,
       });
 
-      await page.goto(
-        `/#/govern/catalog/operations/${encodeURIComponent(`${GATE}::unit.show`)}`,
-      );
+      await page.goto(`/#/govern/catalog/operations/${encodeURIComponent(`${GATE}::unit.show`)}`);
       await expect(
         page.getByTestId('operation-detail').getByTestId('catalog-detail-absent-answers'),
       ).toContainText('命令以退出码 4 结束时，表示要查的东西不存在', { timeout: 15_000 });
