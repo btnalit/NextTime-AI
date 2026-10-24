@@ -1,3 +1,4 @@
+import { operationAbsentAnswers } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import {
   GatekeeperClientError,
@@ -158,6 +159,9 @@ function toWireOperationSummary(record: OperationRecord, revision?: RevisionChan
   // catalog says why a held draft cannot be published (and why a gate refuses an older published
   // row's param) before anyone clicks.
   const gateOwnedParams = gateOwnedParamsOfDefinition(record.operation);
+  // S11 「门确认不存在」 A: which of the target's answers this observe Operation declares mean
+  // "does not exist" — the catalog says so, since the gate then answers `absent`.
+  const absentAnswers = operationAbsentAnswers(record.operation);
   return {
     gatekeeperId: record.gatekeeperId,
     name: record.name,
@@ -196,6 +200,11 @@ function toWireOperationSummary(record: OperationRecord, revision?: RevisionChan
     ...(gateOwnedParams.length > 0
       ? { gateOwnedParams: gateOwnedParams.map(({ param, location }) => ({ param, location })) }
       : {}),
+    ...(absentAnswers === undefined
+      ? {}
+      : 'statuses' in absentAnswers
+        ? { absentAnswers: { statuses: [...absentAnswers.statuses] } }
+        : { absentAnswers: { exitCodes: [...absentAnswers.exitCodes] } }),
   };
 }
 

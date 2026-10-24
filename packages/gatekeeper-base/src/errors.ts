@@ -37,10 +37,21 @@ export class CredentialResolutionError extends Error {
   }
 }
 
+/** S11 「门确认不存在」: the target's own failing answer to a call — an http status, or the exit
+ *  status of the command — as a transport that knows it reports it on its `TransportInvokeError`.
+ *  `GatekeeperBase.observe` answers an observe call as absent when the Operation declares this
+ *  answer means so (`@nexttime/shared`'s `isDeclaredAbsence`); nothing else reads it. */
+export type TargetAnswer = { readonly status: number } | { readonly exitCode: number };
+
 export class TransportInvokeError extends Error {
-  constructor(message: string, options?: { cause?: unknown }) {
-    super(message, options);
+  /** The target's own answer, set only by a transport that got one (`kinds/http.ts`: a non-2xx
+   *  status; `kinds/cli.ts`, `kinds/ssh.ts`: the command's exit status). Never set on an
+   *  outcome-unknown failure, and never taken from what the target's answer says about itself. */
+  readonly targetAnswer?: TargetAnswer;
+  constructor(message: string, options?: { cause?: unknown; targetAnswer?: TargetAnswer }) {
+    super(message, options?.cause !== undefined ? { cause: options.cause } : undefined);
     this.name = 'TransportInvokeError';
+    if (options?.targetAnswer) this.targetAnswer = options.targetAnswer;
   }
 }
 

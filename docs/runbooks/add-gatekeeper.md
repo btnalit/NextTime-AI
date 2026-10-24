@@ -263,6 +263,14 @@ TLS/错误信封处理（README"RAGFlow 的 `{code, data}` 错误信封对协议
 | `reversibility` | 是否实现了 `/gate/revert`（门自己的 transport 是否提供 `revert`） |
 | `reads`/`writes` | 该 Operation 观察/影响哪些图 ObjectType——若这些类型还不存在，先走 `docs/runbooks/add-domain-pack.md` |
 | `binding` | 与门自己的 `GATE_TRANSPORT_KIND` 匹配：`http` → `{method,path}`；`mcp` → `{tool_name}`；`cli` → `{command_template}`；`ssh` → `{command_template}` 或 `{command_pattern}`。`http` 的 `path` 拼在 base URL 自己的路径之后（base URL 带前缀也保留）；`{param}` 路径参数只能是**一个路径段**——空值、`.`、`..`、含 `/` 或反斜杠（任何一层百分号编码后也算）一律在发请求前拒绝（R-22），所以模板不能被参数带到未发布的上级端点 |
+| `binding.absent_statuses` / `binding.absent_exit_codes`（可选，只对 `observe`） | 目标的哪些回答表示「要查的东西不存在」：`http` 只能写 `404`、`410`；`cli` / `ssh` 写退出码 1–125（最多 8 个；0、126、127、信号、ssh 自己的 255 都不行）；`mcp` 不能写。目标回答其中之一时，这次观察记为「不存在」（`absent`），不算调用失败；目标的响应体从不参与判断，没声明的回答照旧算失败。声明是 `binding` 的一部分，改了会改摘要，要重新审核发布。`execute` 的 Operation 不能写（清单会被拒绝）。控制台目录里的 Operation 详情会写出这些回答。**只能声明「在门用的凭据下，只有东西不存在时才会给」的回答**，见表后的说明 |
+
+**声明「不存在」的回答之前**：目标对「没权限看」「地址不对」「别的错误」也给同一个回答时，不能声明。否则这些情况会被记成「不存在」，依赖它的检查（比如「已经删掉了」的目标验收）就成了假证明。常见的不合格例子：
+
+- `ls`、`stat`、`test -e`：「没有这个文件」和「没有权限」退出码相同（1 或 2）；`kubectl get` 碰到任何错误都退出 1；`sudo -n` 要密码时退出 1。
+- 对调用方看不到的资源回 404、借此隐藏它是否存在的 API；base URL 或 path 配错时的 404；目标前面的反向代理不认这个 host 时回的 404。
+
+`cli` / `ssh` 请用能区分这两种情况的命令，或者写一个包装脚本，确认不存在时才用一个专门的退出码（比如 3）退出。`command_pattern` 绑定上的声明，必须对这个模式允许的每一条命令都成立。`http` 只在门的凭据看得到这个资源（只要它存在）的路径上声明 404 / 410。
 
 `importOpenApi(document)`/`importMcpTools(toolsListResponse)`（`@nexttime/gatekeeper-base`）能从一
 份 OpenAPI 3.x 文档或 MCP `tools/list` 响应**自动**推导出草稿清单（`GET`/`readOnlyHint` →

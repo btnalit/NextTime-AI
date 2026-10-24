@@ -1,3 +1,4 @@
+import type { GateAbsence } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { type PoolLike, withWorkspace } from '../../adapters/db/pool.js';
 import type { PredicateOutcome } from '../../substrate/epistemic/index.js';
@@ -263,6 +264,8 @@ type Settlement =
   | {
       readonly kind: 'observed';
       readonly data: unknown;
+      /** The gate answered that the target has no such thing (`PlatformObservationAnswer`). */
+      readonly absent?: GateAbsence;
       readonly operationDigest: string;
       readonly credentialReview: Record<string, unknown>;
     }
@@ -316,6 +319,7 @@ export async function runAcceptanceCheck(
     return settle(deps, due, claimed, {
       kind: 'observed',
       data: answer.data,
+      ...(answer.absent ? { absent: answer.absent } : {}),
       operationDigest: prepared.operationDigest,
       credentialReview: prepared.credentialReview,
     });
@@ -510,6 +514,7 @@ async function recordObservation(
       checkKey: check.checkKey,
     },
     data: settlement.data,
+    ...(settlement.absent ? { absent: settlement.absent } : {}),
     operationDigest: settlement.operationDigest,
     credentialReview: settlement.credentialReview,
   });

@@ -85,6 +85,15 @@ export const OperationDefinitionChangeWireSchema = z
   .strict();
 export type OperationDefinitionChangeWire = z.infer<typeof OperationDefinitionChangeWireSchema>;
 
+/** S11 「门确认不存在」 A: the target's answers an observe-class Operation declares mean "the thing
+ *  this call names does not exist" (`operationAbsentAnswers`, action-description.ts) — http
+ *  statuses, or exit statuses of a cli / ssh command. */
+export const OperationAbsentAnswersWireSchema = z.union([
+  z.object({ statuses: z.array(z.number().int()) }).strict(),
+  z.object({ exitCodes: z.array(z.number().int()) }).strict(),
+]);
+export type OperationAbsentAnswersWire = z.infer<typeof OperationAbsentAnswersWireSchema>;
+
 export const OperationSummaryWireSchema = z
   .object({
     gatekeeperId: z.string(),
@@ -127,6 +136,10 @@ export const OperationSummaryWireSchema = z
      *  `publish_operation` (legacy 300) require this back, and either refuses 409 `draft_changed`
      *  when the draft is no longer the one shown. Opaque to the console. */
     draftDigest: z.string().optional(),
+    /** S11 「门确认不存在」 A: on an observe-class Operation whose binding declares them, the
+     *  target's answers that mean "does not exist" — the gate answers such a call `absent` instead
+     *  of failing it. Absent when none is declared. */
+    absentAnswers: OperationAbsentAnswersWireSchema.optional(),
   })
   .strict();
 export type OperationSummaryWire = z.infer<typeof OperationSummaryWireSchema>;

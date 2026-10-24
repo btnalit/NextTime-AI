@@ -8,7 +8,7 @@ import type {
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import type { PoolLike } from '../../adapters/db/pool.js';
-import type { GatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
+import { type GatekeeperClient, gateAbsenceOf } from '../../adapters/gatekeeper-client/index.js';
 import {
   findWorkerRunBySessionId,
   lockGoalStepForNewWork,
@@ -355,7 +355,13 @@ async function recordWorkerGateObservationSafely(
  *  The Activity records which Task's Worker made the call — `triggeredByTaskId`, `null` for a
  *  caller that is not a WorkerRun (S11 GO4c): a goal's fact check takes the Facts this observation
  *  confirms as evidence only when the Task is not one of that goal's (goal/0007), and the record
- *  never changes once written (core/0046). */
+ *  never changes once written (core/0046).
+ *
+ *  S11 「门确认不存在」 A: a gate that answers the call as absent — the target answered with what
+ *  the published definition declares means "does not exist" — is taken at its word only when that
+ *  definition declares it (`gateAbsenceOf`; anything in `data` is never read as absence). The
+ *  result then says `absent` (the target's status or exit status), with `data: null` and no Facts
+ *  written, and the audit row and the WorkerRun's record of the call say so too. */
 async function runObserve(
   client: PoolClient,
   workspaceId: string,
@@ -385,6 +391,27 @@ async function runObserve(
       onBehalfOf,
       operationDigest,
     });
+    const absent = gateAbsenceOf(published.operation, observeResult);
+    if (absent) {
+      await endActivity(client, workspaceId, activity.id, 'completed');
+      await recordWorkerGateObservationSafely(
+        client,
+        workspaceId,
+        workerRun,
+        onBehalfOf,
+        gatekeeper,
+        operationName,
+        'observe',
+        'absent',
+        { absent },
+      );
+      return {
+        result: { status: 'ok', data: null, observedFactCount: 0, absent },
+        resourceType: 'gatekeeper',
+        resourceId: gatekeeper.gatekeeperId,
+        auditPayload: { ...credentialReview, absent },
+      };
+    }
     const written = await writeObservedFacts(
       client,
       workspaceId,

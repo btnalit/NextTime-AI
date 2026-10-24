@@ -48,10 +48,53 @@ export type ActionDescription = z.infer<typeof ActionDescriptionSchema>;
 export const JsonSchemaObjectSchema = z.record(z.string(), z.unknown());
 export type JsonSchemaObject = z.infer<typeof JsonSchemaObjectSchema>;
 
+/**
+ * S11 「门确认不存在」 (gate-confirmed absence, part A): the target's own answers an observe-class
+ * Operation declares mean "the thing this call names does not exist" — `absent_statuses` on an
+ * http binding, `absent_exit_codes` on a cli or ssh one (an mcp tool has no such answer). A gate
+ * that gets one of them back from the target answers the observe call as absent
+ * (`{ absent: { status } }` / `{ absent: { exitCode } }` on the protocol envelope, never inside
+ * `data`), instead of as a failed call; nothing else it gets back — an empty result, a refusal, a
+ * failure of the gate or of the transport — ever reads as absent.
+ *
+ * The declaration is part of the binding, so it is part of the definition the Operation's digest
+ * covers (`@nexttime/gatekeeper-base`'s `operation-digest.ts`): it is reviewed when the Operation
+ * is published, and a gate running a definition that says otherwise is refused. An Operation
+ * without one keeps its digest and behaves as before. Only an observe-class Operation's
+ * declaration counts ({@link operationAbsentAnswers}); an execute-class call that gets one of
+ * these answers back failed, as always.
+ *
+ * Which answers may be declared:
+ *   - http: 404 and 410 only. Any other status says something else (a refusal, a bad request, a
+ *     server that failed), not that the named thing is not there.
+ *   - cli / ssh: exit statuses 1–125. 0 is success; 126 and 127 are a shell that could not run the
+ *     command, above 128 a command killed by a signal, and ssh's own 255 is a connection that may
+ *     have failed after the command started — none of them is the command's answer.
+ */
+export const ABSENT_HTTP_STATUSES = [404, 410] as const;
+export const ABSENT_EXIT_CODE_MIN = 1;
+export const ABSENT_EXIT_CODE_MAX = 125;
+
+function distinct(values: readonly number[]): boolean {
+  return new Set(values).size === values.length;
+}
+
+const AbsentStatusesSchema = z
+  .array(z.union([z.literal(ABSENT_HTTP_STATUSES[0]), z.literal(ABSENT_HTTP_STATUSES[1])]))
+  .min(1)
+  .refine(distinct, { message: 'absent_statuses must not repeat a status' });
+
+const AbsentExitCodesSchema = z
+  .array(z.number().int().min(ABSENT_EXIT_CODE_MIN).max(ABSENT_EXIT_CODE_MAX))
+  .min(1)
+  .max(8)
+  .refine(distinct, { message: 'absent_exit_codes must not repeat a status' });
+
 const HttpBindingSchema = z.object({
   kind: z.literal('http'),
   method: z.string(),
   path: z.string(),
+  absent_statuses: AbsentStatusesSchema.optional(),
 });
 
 const McpBindingSchema = z.object({
@@ -62,6 +105,7 @@ const McpBindingSchema = z.object({
 const CliBindingSchema = z.object({
   kind: z.literal('cli'),
   command_template: z.string(),
+  absent_exit_codes: AbsentExitCodesSchema.optional(),
 });
 
 /**
@@ -76,6 +120,7 @@ const SshBindingSchema = z.object({
   kind: z.literal('ssh'),
   command_template: z.string().optional(),
   command_pattern: z.string().optional(),
+  absent_exit_codes: AbsentExitCodesSchema.optional(),
 });
 
 const OperationBindingUnion = z.discriminatedUnion('kind', [
@@ -131,7 +176,10 @@ export function operationNameProblem(name: string): OperationNameProblem | undef
   return undefined;
 }
 
-export const OperationSchema = z.object({
+/** The fields of an Operation, as an object schema — for picking fields
+ *  (`@nexttime/gatekeeper-base`'s digest) and listing them. Parse an Operation with
+ *  {@link OperationSchema}, which adds the rules between fields. */
+export const OperationFieldsSchema = z.object({
   name: z.string(),
   /** S8 W2-K1 (leftover 71/72, audit B3/CO1): human-readable, markdown-free description of what
    *  this Operation does — used by `find_operations`'s own keyword ranking
@@ -161,4 +209,70 @@ export const OperationSchema = z.object({
   destructive_hint: z.boolean().optional(),
   idempotent_hint: z.boolean().optional(),
 });
+
+/**
+ * An Operation. S11 「门确认不存在」 (review #501 on #753): only an observe-class Operation may
+ * declare which answers mean "does not exist" — on an execute-class one the declaration would be
+ * covered by the digest yet never act ({@link operationAbsentAnswers} reads observe only) nor be
+ * shown to whoever reviews the publish, a state that means nothing. Refused where a definition is
+ * parsed: a gate's manifest, an import, a proposal.
+ */
+export const OperationSchema = OperationFieldsSchema.superRefine((operation, ctx) => {
+  if (operation.mode === 'observe') return;
+  const binding = operation.binding;
+  const field =
+    binding.kind === 'http' && binding.absent_statuses !== undefined
+      ? 'absent_statuses'
+      : (binding.kind === 'cli' || binding.kind === 'ssh') &&
+          binding.absent_exit_codes !== undefined
+        ? 'absent_exit_codes'
+        : undefined;
+  if (field === undefined) return;
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    path: ['binding', field],
+    message: `${field} is declared on an observe-class Operation only: a ${operation.mode}-class call that gets such an answer failed`,
+  });
+});
 export type Operation = z.infer<typeof OperationSchema>;
+
+/** S11 「门确认不存在」: the target's answer a gate reports an observe call absent by — the http
+ *  status, or the exit status of the command — on the protocol envelope's `absent`. Only ever one
+ *  that the Operation declares ({@link isDeclaredAbsence}). */
+export const GateAbsenceSchema = z.union([
+  z.object({ status: z.number().int() }).strict(),
+  z.object({ exitCode: z.number().int() }).strict(),
+]);
+export type GateAbsence = z.infer<typeof GateAbsenceSchema>;
+
+/** The answers that mean absent for `operation`: its binding's declaration when it is an
+ *  observe-class Operation that has one, else `undefined` — the one reading of the declaration the
+ *  gate, the kernel and the console share. */
+export function operationAbsentAnswers(
+  operation: Pick<Operation, 'mode' | 'binding'>,
+):
+  | { readonly statuses: readonly number[] }
+  | { readonly exitCodes: readonly number[] }
+  | undefined {
+  if (operation.mode !== 'observe') return undefined;
+  const binding = operation.binding;
+  if (binding.kind === 'http' && binding.absent_statuses) {
+    return { statuses: binding.absent_statuses };
+  }
+  if ((binding.kind === 'cli' || binding.kind === 'ssh') && binding.absent_exit_codes) {
+    return { exitCodes: binding.absent_exit_codes };
+  }
+  return undefined;
+}
+
+/** Whether `answer` is one `operation` declares means absent ({@link operationAbsentAnswers}). */
+export function isDeclaredAbsence(
+  operation: Pick<Operation, 'mode' | 'binding'>,
+  answer: GateAbsence,
+): boolean {
+  const declared = operationAbsentAnswers(operation);
+  if (!declared) return false;
+  if ('statuses' in declared)
+    return 'status' in answer && declared.statuses.includes(answer.status);
+  return 'exitCode' in answer && declared.exitCodes.includes(answer.exitCode);
+}

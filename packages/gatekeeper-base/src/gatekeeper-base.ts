@@ -1,4 +1,4 @@
-import type { Operation } from '@nexttime/shared';
+import { type GateAbsence, type Operation, isDeclaredAbsence } from '@nexttime/shared';
 import type { CredentialResolver } from './credentials/index.js';
 import {
   ApplyNotReceivedError,
@@ -37,6 +37,26 @@ import { applyResultMapping } from './result-mapping.js';
 export interface ObserveResult {
   readonly data: unknown;
   readonly observedFacts: readonly ObservedFactCandidate[];
+  /** S11 「门确认不存在」: set when the target answered with what the Operation declares means
+   *  "does not exist" ({@link declaredAbsence}); `data` is then `null` and no Facts are observed. */
+  readonly absent?: GateAbsence;
+}
+
+/**
+ * S11 「门确认不存在」: the absence an observe call's failure proves, if it proves one — the
+ * target's own answer the transport reported (`TransportInvokeError.targetAnswer`), when `operation`
+ * declares that answer means "does not exist" (`@nexttime/shared`'s `isDeclaredAbsence`, which reads
+ * a declaration on an observe-class Operation only). A failure whose outcome is unknown, one with
+ * no answer from the target, an answer the Operation does not declare, and anything in a successful
+ * answer's data prove nothing: they stay what they were.
+ */
+export function declaredAbsence(operation: Operation, err: unknown): GateAbsence | undefined {
+  if (!(err instanceof TransportInvokeError) || err instanceof TransportOutcomeUnknownError) {
+    return undefined;
+  }
+  const answer = err.targetAnswer;
+  if (!answer || !isDeclaredAbsence(operation, answer)) return undefined;
+  return 'status' in answer ? { status: answer.status } : { exitCode: answer.exitCode };
 }
 
 export interface SimulateResult {
@@ -218,10 +238,17 @@ export class GatekeeperBase {
     }
     assertParamsValid(name, operation.params_schema, params);
     const credential = await this.resolveCredential(ctx.onBehalfOf);
-    const result = await this.options.transport.invoke(operation, params, {
-      onBehalfOf: ctx.onBehalfOf,
-      credential,
-    });
+    let result: TransportInvokeResult;
+    try {
+      result = await this.options.transport.invoke(operation, params, {
+        onBehalfOf: ctx.onBehalfOf,
+        credential,
+      });
+    } catch (err) {
+      const absent = declaredAbsence(operation, err);
+      if (absent) return { data: null, observedFacts: [], absent };
+      throw err;
+    }
     return { data: result.data, observedFacts: this.toObservedFacts(operation, result.data) };
   }
 

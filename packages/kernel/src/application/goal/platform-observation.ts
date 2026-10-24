@@ -1,10 +1,17 @@
-import { type ObservationCheck, type Role, getCapability } from '@nexttime/shared';
+import {
+  type GateAbsence,
+  type ObservationCheck,
+  type Operation,
+  type Role,
+  getCapability,
+} from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import {
   type GateTarget,
   type GatekeeperClient,
   GatekeeperClientError,
   GatekeeperTimeoutError,
+  gateAbsenceOf,
   gateFailureRetry,
 } from '../../adapters/gatekeeper-client/index.js';
 import { shownAuditReason } from '../../governance/approval/index.js';
@@ -55,15 +62,21 @@ import { predicateCredentialProblems } from './plan.js';
  *   2. {@link callPlatformObservation} — outside any transaction: the gate call, carrying the
  *      published definition's digest and the requester as `onBehalfOf`, like `observe_operation`'s.
  *      A failure is classed by `adapters/gatekeeper-client`'s `gateFailureRetry` alone: `transient`
- *      is no answer (the caller may try again), `deterministic` a refusal.
+ *      is no answer (the caller may try again), `deterministic` a refusal. S11 「门确认不存在」 A:
+ *      a gate that answers the call as absent is taken at its word only when the published
+ *      definition declares that answer means "does not exist" (`gateAbsenceOf`, else the answer is
+ *      refused as `invalid_response`); the answer is then `data: null` with its `absent`.
  *   3. {@link recordPlatformObservation} — in the caller's settling transaction: an Activity of the
  *      caller's kind and an Observation on the Gatekeeper's Source holding the call, the predicate,
  *      the outcome and the result (suspected secrets redacted, cut at
  *      {@link PLATFORM_OBSERVATION_RESULT_MAX_CHARS}), so the evidence answers "why does the
  *      platform believe this". The predicate is judged on that redacted result: what the platform
  *      keeps is what it proves from, and a stored result that is not cut gives the same outcome
- *      again. No graph Facts are written: the observation answers one question, and its result
- *      mapping is the gate's business.
+ *      again. An absent answer is recorded as such (`absent` in the content) and judged on `null`,
+ *      which no predicate that passes the lint is satisfied by (`PREDICATE_EMPTY_PROBES`): what a
+ *      check expects of a thing that is not there is not met, and the caller treats it as it treats
+ *      any other unmet outcome. No graph Facts are written: the observation answers one question,
+ *      and its result mapping is the gate's business.
  *
  * {@link platformObservationRetryDelayMs} is the one backoff rule both callers retry under: 30 s
  * doubling to {@link PLATFORM_OBSERVATION_MAX_BACKOFF_MS}, capped by attempts and by duration from
@@ -106,6 +119,9 @@ export type PreparedPlatformObservation =
   | {
       readonly kind: 'call';
       readonly gate: GateTarget;
+      /** The published definition — what the gate's answer is checked against
+       *  (`gateAbsenceOf`). */
+      readonly operation: Operation;
       readonly operationDigest: string;
       readonly credentialReview: Record<string, unknown>;
     }
@@ -163,6 +179,7 @@ export async function preparePlatformObservation(
   return {
     kind: 'call',
     gate: await resolveGateTarget(client, ws, gatekeeper),
+    operation: published.operation,
     operationDigest: operationRecordDigest(published),
     credentialReview,
   };
@@ -170,7 +187,9 @@ export async function preparePlatformObservation(
 
 /** What the gate answered. */
 export type PlatformObservationAnswer =
-  | { readonly kind: 'data'; readonly data: unknown }
+  /** `absent` set: the gate answered that the target has no such thing, as the published definition
+   *  declares (`data` is then `null`). */
+  | { readonly kind: 'data'; readonly data: unknown; readonly absent?: GateAbsence }
   /** Nothing a retry could change (`gateFailureRetry`: `deterministic`). */
   | { readonly kind: 'refused'; readonly code: string; readonly error: string | null }
   /** No answer (`gateFailureRetry`: `transient`). */
@@ -194,7 +213,8 @@ export async function callPlatformObservation(
       onBehalfOf: requesterId,
       operationDigest: prepared.operationDigest,
     });
-    return { kind: 'data', data: result.data };
+    const absent = gateAbsenceOf(prepared.operation, result);
+    return absent ? { kind: 'data', data: null, absent } : { kind: 'data', data: result.data };
   } catch (err) {
     const code =
       err instanceof GatekeeperClientError
@@ -236,6 +256,8 @@ export interface RecordPlatformObservationInput {
    *  evidence is about. */
   readonly about: { readonly purpose: string } & Record<string, unknown>;
   readonly data: unknown;
+  /** The gate answered that the target has no such thing (`PlatformObservationAnswer`). */
+  readonly absent?: GateAbsence;
   readonly operationDigest: string;
   readonly credentialReview: Record<string, unknown>;
 }
@@ -254,7 +276,9 @@ export async function recordPlatformObservation(
 ): Promise<RecordedPlatformObservation> {
   const ws = workspaceId;
   const call = input.check;
-  const redacted = redactSuspectedSecrets(input.data ?? null, { secretFields: true }).value;
+  const redacted = input.absent
+    ? null
+    : redactSuspectedSecrets(input.data ?? null, { secretFields: true }).value;
   const evaluation = evaluatePredicate(call.expect, redacted);
   const { result, truncated } = keptResult(redacted);
   const activity = await startActivity(client, ws, {
@@ -281,6 +305,7 @@ export async function recordPlatformObservation(
       expect: call.expect,
       outcome: evaluation.outcome,
       undetermined: evaluation.undetermined,
+      ...(input.absent ? { absent: input.absent } : {}),
       result,
       truncated,
     },

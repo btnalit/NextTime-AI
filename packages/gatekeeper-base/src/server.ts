@@ -298,7 +298,11 @@ export function registerGateRoutes(app: FastifyInstance, options: RegisterGateRo
         onBehalfOf: parsed.data.onBehalfOf,
         operationDigest: parsed.data.operationDigest ?? null,
       });
-      return ok(reply, { data: result.data, observedFacts: result.observedFacts });
+      return ok(reply, {
+        data: result.data,
+        observedFacts: result.observedFacts,
+        ...(result.absent ? { absent: result.absent } : {}),
+      });
     } catch (err) {
       return fail(reply, err);
     }

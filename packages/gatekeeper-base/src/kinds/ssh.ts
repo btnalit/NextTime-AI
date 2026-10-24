@@ -428,9 +428,18 @@ export class SshTransport implements Transport {
           { cause: err },
         );
       }
+      // The remote command's own exit status — never ssh's 255, which may be ssh's own failure —
+      // goes with the failure, so an observe Operation that declares it means "does not exist"
+      // answers as absent (`GatekeeperBase.observe`).
+      const failure = execFailureOf(err);
       throw new TransportInvokeError(
         `ssh transport: command failed for "${operation.name}": ${describeExecFailure(err)}`,
-        { cause: err },
+        {
+          cause: err,
+          ...(failure.kind === 'answered' && failure.exitCode !== SSH_CLIENT_FAILURE_EXIT
+            ? { targetAnswer: { exitCode: failure.exitCode } }
+            : {}),
+        },
       );
     }
   }

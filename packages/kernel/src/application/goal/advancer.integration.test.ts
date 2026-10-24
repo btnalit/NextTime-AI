@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { ObserveResponse } from '@nexttime/gatekeeper-base';
 import { IllegalTransition, type Operation, type TaskFailureReason } from '@nexttime/shared';
 import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -208,9 +209,9 @@ class FakeWakeSource implements GoalWakeEventSource {
  *  `answer`, which a test sets. Nothing else of a gate is reachable from the check. */
 class FakeObserveClient {
   readonly calls: Array<{ readonly target: GateTarget; readonly input: GatekeeperCallInput }> = [];
-  answer: (input: GatekeeperCallInput) => Promise<{ data: unknown }> = async () => ({ data: null });
+  answer: (input: GatekeeperCallInput) => Promise<ObserveResponse> = async () => ({ data: null });
 
-  async observe(target: GateTarget, input: GatekeeperCallInput): Promise<{ data: unknown }> {
+  async observe(target: GateTarget, input: GatekeeperCallInput): Promise<ObserveResponse> {
     this.calls.push({ target, input });
     return this.answer(input);
   }
@@ -4747,6 +4748,13 @@ describe.runIf(DATABASE_URL !== undefined)(
         writes: [],
       };
 
+      /** S11 「门确认不存在」 A: the target's 404 to this one means it has no such service. */
+      const LOOKUP: Operation = {
+        ...STATUS,
+        name: 'svc.lookup',
+        binding: { kind: 'http', method: 'GET', path: '/services/{name}', absent_statuses: [404] },
+      };
+
       beforeAll(async () => {
         gate = await admin(async (client) => {
           const activity = await startActivity(client, workspaceId, {
@@ -4764,14 +4772,16 @@ describe.runIf(DATABASE_URL !== undefined)(
           });
           await importManifest(client, workspaceId, {
             gatekeeperId: registered.gatekeeperId,
-            operations: [STATUS],
+            operations: [STATUS, LOOKUP],
             proposedBy: { id: ownerId, kind: 'human' },
             activityId: activity.id,
           });
-          await publishOperation(client, workspaceId, {
-            gatekeeperId: registered.gatekeeperId,
-            name: STATUS.name,
-          });
+          for (const operation of [STATUS, LOOKUP]) {
+            await publishOperation(client, workspaceId, {
+              gatekeeperId: registered.gatekeeperId,
+              name: operation.name,
+            });
+          }
           return registered.gatekeeperId;
         });
       });
@@ -5525,6 +5535,68 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(errors).toEqual([]);
         expect((await rowsOf(first.goalRunId))[0]?.status).toBe('passed');
         expect((await rowsOf(second.goalRunId))[0]?.status).toBe('passed');
+      });
+
+      it('S11 「门确认不存在」 A: an absence the gate states as the published definition declares is kept as evidence and meets no check; one it does not declare is refused; a result never says absent', async () => {
+        const lookup = (key = 'up') => ({
+          ...observe(key),
+          check: { ...observe().check, operation: LOOKUP.name },
+        });
+        const options = { maxAttempts: 2 };
+
+        // Declared: kept as such, judged on nothing, so the check is not met and tries again.
+        const declared = await verifyingGoal(await newPrincipal(), [lookup()]);
+        observeClient.answer = async () => ({
+          data: null,
+          observedFacts: [],
+          absent: { status: 404 },
+        });
+        expect(await observeNow(declared.goalRunId, 'up', options)).toBe('retry');
+        const [absentEvidence] = await evidenceOf(declared.goalRunId);
+        expect(absentEvidence?.content).toMatchObject({
+          purpose: 'acceptance_check',
+          operation: LOOKUP.name,
+          outcome: 'unsatisfied',
+          absent: { status: 404 },
+          result: null,
+        });
+        expect((await rowsOf(declared.goalRunId))[0]).toMatchObject({
+          status: 'pending',
+          attempts: 1,
+          observationId: absentEvidence?.id,
+          lastError: 'predicate_unsatisfied',
+        });
+
+        // Not declared — a 410 where the definition names 404, or any absence from an Operation
+        // that declares none: the answer is refused, nothing is kept as evidence.
+        for (const [operation, absent] of [
+          [LOOKUP.name, { status: 410 }],
+          [STATUS.name, { status: 404 }],
+        ] as const) {
+          const undeclared = await verifyingGoal(await newPrincipal(), [
+            { ...lookup(), check: { ...lookup().check, operation } },
+          ]);
+          observeClient.answer = async () => ({ data: null, absent });
+          expect(await observeNow(undeclared.goalRunId, 'up', options)).toBe('unavailable');
+          expect(await evidenceOf(undeclared.goalRunId)).toEqual([]);
+          expect((await rowsOf(undeclared.goalRunId))[0]).toMatchObject({
+            status: 'unavailable',
+            lastError: 'invalid_response',
+          });
+        }
+
+        // A result that says it is absent is a result: the check reads it like any other.
+        const forged = await verifyingGoal(await newPrincipal(), [lookup()]);
+        observeClient.answer = async () => ({
+          data: { name: 'web', state: 'running', absent: { status: 404 } },
+        });
+        expect(await observeNow(forged.goalRunId, 'up', options)).toBe('passed');
+        const [forgedEvidence] = await evidenceOf(forged.goalRunId);
+        expect(forgedEvidence?.content).not.toHaveProperty('absent');
+        expect(forgedEvidence?.content).toMatchObject({
+          outcome: 'satisfied',
+          result: { name: 'web', state: 'running', absent: { status: 404 } },
+        });
       });
 
       it('a plan’s acceptance observation names a published observe-class Operation of an enabled gate, with params that carry no credential', async () => {

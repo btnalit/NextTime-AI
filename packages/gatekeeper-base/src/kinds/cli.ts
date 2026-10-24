@@ -141,6 +141,9 @@ export class CliTransport implements Transport {
       }
       throw new TransportInvokeError(`cli transport: command failed for "${operation.name}"`, {
         cause: err,
+        // The exit status is the command's answer: an observe Operation that declares it means
+        // "does not exist" answers as absent (`GatekeeperBase.observe`).
+        ...(failure.kind === 'answered' ? { targetAnswer: { exitCode: failure.exitCode } } : {}),
       });
     }
   }
