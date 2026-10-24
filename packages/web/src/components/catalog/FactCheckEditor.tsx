@@ -5,7 +5,7 @@ import type {
   OntologyObjectTypeWire,
   OntologyTypeWire,
 } from '@nexttime/shared';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import { useDebounced } from '../../lib/audit-id-picker.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
@@ -153,14 +153,15 @@ export function FactCheckEditor({
             error={
               linkError.length > 0 ? linkError.map((e) => e.message).join(t('；', '; ')) : null
             }
-            hint={
+            hint={warning(
               linkUnknown
                 ? t(
                     `本体里没有关系类型 ${form?.linkType.trim()}：这条检查永远找不到事实。`,
                     `The ontology has no Link type ${form?.linkType.trim()}: the check never finds the Fact.`,
                   )
-                : undefined
-            }
+                : null,
+              `${testId}-link-warning`,
+            )}
           >
             <Combobox
               id={`${id}-link`}
@@ -306,6 +307,16 @@ export function FactCheckEditor({
         ) : null}
       </div>
     </fieldset>
+  );
+}
+
+/** A field hint that is a warning — the check as written never finds the Fact — set apart from
+ *  the grey explanations. */
+function warning(text: string | null, testId: string): ReactNode {
+  return text === null ? undefined : (
+    <span className="text-warn" data-testid={testId}>
+      {text}
+    </span>
   );
 }
 
@@ -470,7 +481,7 @@ function FactEndFields({
           label={t('对象', 'Object')}
           required
           error={idError}
-          hint={
+          hint={warning(
             chosenOutside !== null
               ? t(
                   `关系类型的这一端不接 ${chosenOutside}。`,
@@ -481,8 +492,9 @@ function FactEndFields({
                     '图谱里读不到这个对象：检查永远找不到这条事实。',
                     'This Object cannot be read from the graph: the check never finds the Fact.',
                   )
-                : undefined
-          }
+                : null,
+            `${testId}-object-warning`,
+          )}
         >
           <Combobox
             id={`${id}-object`}
@@ -493,8 +505,13 @@ function FactEndFields({
             // Picked, the field names the Object; a pasted id is taken as it is pasted.
             inputValue={typed}
             onInputValueChange={(text) => {
+              if (isUuidLike(text.trim())) {
+                // Taken as pasted; the field then names it like a picked one (name · type).
+                onChange({ by: 'id', objectId: text.trim() });
+                setTyped('');
+                return;
+              }
               setTyped(text);
-              if (isUuidLike(text.trim())) onChange({ by: 'id', objectId: text.trim() });
             }}
             loading={found.loading}
             disabled={busy}
@@ -518,7 +535,7 @@ function FactEndFields({
             label={t('对象类型', 'Object type')}
             required
             error={typeError}
-            hint={
+            hint={warning(
               typeOutside !== null
                 ? t(
                     `关系类型的这一端不接 ${typeOutside}。`,
@@ -529,8 +546,9 @@ function FactEndFields({
                       `本体里没有对象类型 ${objectType}。`,
                       `The ontology has no Object type ${objectType}.`,
                     )
-                  : undefined
-            }
+                  : null,
+              `${testId}-type-warning`,
+            )}
           >
             <Combobox
               id={`${id}-type`}

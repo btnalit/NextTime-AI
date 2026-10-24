@@ -1173,8 +1173,11 @@ describe('ProcedureEditor (S6-A A2)', () => {
             }
           : { items: [] },
       search: () => ({ items: [object(host, 'Host', 'h3'), object(service, 'Service', 'web')] }),
-      get_object: (params) =>
-        (params as { objectId: string }).objectId === host ? object(host, 'Host', 'h3') : null,
+      get_object: (params) => {
+        const { objectId } = params as { objectId: string };
+        if (objectId === host) return object(host, 'Host', 'h3');
+        return objectId === service ? object(service, 'Service', 'web') : null;
+      },
     });
     render(
       <ProcedureEditor
@@ -1207,10 +1210,18 @@ describe('ProcedureEditor (S6-A A2)', () => {
     ) as HTMLInputElement;
     // Reopened: named by name and type, not its id; and a Host is not what this end takes.
     await waitFor(() => expect(picked.value).toBe('h3 · Host'));
-    expect(within(source).getByText(/关系类型的这一端不接 Host/)).toBeTruthy();
+    expect(
+      within(source).getByTestId('procedure-step-check-fact-source-object-warning').textContent,
+    ).toMatch(/关系类型的这一端不接 Host/);
     // Offered: only the Objects of a type this end takes (Service or Job here).
     fireEvent.change(picked, { target: { value: 'e' } });
     await waitFor(() => expect(offered(picked)).toEqual(['web · Service']));
+    // A pasted id is taken and named like a picked one; this end takes a Service.
+    fireEvent.change(picked, { target: { value: service } });
+    await waitFor(() => expect(picked.value).toBe('web · Service'));
+    expect(
+      within(source).queryByTestId('procedure-step-check-fact-source-object-warning'),
+    ).toBeNull();
 
     // An end with no type chosen yet asks for the type first, and offers no identity field.
     const target = screen.getByTestId('procedure-step-check-fact-target');
