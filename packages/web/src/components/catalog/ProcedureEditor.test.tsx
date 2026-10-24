@@ -1216,8 +1216,11 @@ describe('ProcedureEditor (S6-A A2)', () => {
     // Offered: only the Objects of a type this end takes (Service or Job here).
     fireEvent.change(picked, { target: { value: 'e' } });
     await waitFor(() => expect(offered(picked)).toEqual(['web · Service']));
-    // A pasted id is taken and named like a picked one; this end takes a Service.
+    // An id typed whole is taken; Enter takes that Object, not the first row offered before
+    // (UX P2-3 on #746), and the field names it; this end takes a Service.
     fireEvent.change(picked, { target: { value: service } });
+    await waitFor(() => expect(offered(picked)).toEqual(['web · Service']));
+    fireEvent.keyDown(picked, { key: 'Enter' });
     await waitFor(() => expect(picked.value).toBe('web · Service'));
     expect(
       within(source).queryByTestId('procedure-step-check-fact-source-object-warning'),

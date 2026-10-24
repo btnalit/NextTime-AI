@@ -505,13 +505,14 @@ function FactEndFields({
             // Picked, the field names the Object; a pasted id is taken as it is pasted.
             inputValue={typed}
             onInputValueChange={(text) => {
-              if (isUuidLike(text.trim())) {
-                // Taken as pasted; the field then names it like a picked one (name · type).
-                onChange({ by: 'id', objectId: text.trim() });
-                setTyped('');
-                return;
-              }
               setTyped(text);
+              // A whole id is taken as it is; once read it is the one row offered, so a paste
+              // picks it and Enter takes it, and the field names it (name · type).
+              if (isUuidLike(text.trim())) onChange({ by: 'id', objectId: text.trim() });
+            }}
+            // Left with an id typed and not picked: it is already taken; show its name.
+            onBlur={() => {
+              if (isUuidLike(typed.trim())) setTyped('');
             }}
             loading={found.loading}
             disabled={busy}

@@ -146,6 +146,18 @@ export function Combobox({
     if (pasteMatch) pick(pasteMatch);
   });
 
+  // A controlled caller may take what was typed (a pasted id, a list of names) and show other
+  // text; the highlight was for the text typed, so it follows the text shown — Enter never takes a
+  // row of a list that is gone (UX P2-3 on #746).
+  const highlightedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!controlled || highlightedFor.current === null) return;
+    const shown = query ?? '';
+    if (highlightedFor.current === shown) return;
+    highlightedFor.current = shown;
+    setActive(shown === '' ? -1 : visible.findIndex((option) => !option.disabled));
+  });
+
   // Escape closes the list only: a capture listener on `window` runs before the one Radix's
   // Sheet / Dialog puts on `document`, so the surrounding sheet stays open.
   useEffect(() => {
@@ -271,6 +283,7 @@ export function Combobox({
     if (allowFreeEntry) onChange(text);
     setOpen(true);
     // Strict mode highlights the best match so Enter takes it; free entry keeps what was typed.
+    highlightedFor.current = text;
     if (allowFreeEntry || text.trim() === '') setActive(-1);
     else {
       const first = filterComboboxOptions(options, text).findIndex((option) => !option.disabled);
