@@ -186,27 +186,35 @@ describe('SystemStatusLineView', () => {
       />,
     );
     const goal = screen.getByTestId('system-status-goal');
-    expect(goal.textContent).toBe(`· ${statement}`);
+    expect(goal.textContent).toBe(statement);
     expect(goal.getAttribute('title')).toBe(statement);
+    // #737 UX P2-3: on a row of its own under what happened, never a column beside it.
+    expect(goal.parentElement?.className).toBe('system-status-main');
+    expect(goal.previousElementSibling?.className).toBe('system-status-head');
+    expect(screen.getByTestId('system-status-line').hasAttribute('data-goal')).toBe(true);
     expect(screen.queryByTestId('system-status-goal-outcome')).toBeNull();
     unmount();
     render(
       <SystemStatusLineView
         line={{
           variant: 'task_update',
-          text: 'Goal step "scan": task task-1 completed',
+          text: 'Goal step "scan": task task-1 failed',
           taskId: 'task-1',
-          status: 'completed',
-          failureReason: null,
+          status: 'failed',
+          failureReason: 'other',
           summary: null,
           goalStep: { goalRunId: 'goal-1', stepKey: 'scan' },
         }}
         goalLabel="一个读不到的目标"
       />,
     );
+    // The step and why it failed read on one row, then the goal under them.
     expect(screen.getByTestId('system-status-line').textContent).toMatch(
-      /目标步骤 scan· 一个读不到的目标/,
+      /^已失败目标步骤 scan\(其他原因\) 一个读不到的目标$/,
     );
+    const head = screen.getByTestId('system-status-goal-step').parentElement;
+    expect(head?.className).toBe('system-status-head');
+    expect(head?.nextElementSibling).toBe(screen.getByTestId('system-status-goal'));
   });
 
   it("S11 GO5e-2: a goal step's Task names its step in place of the kernel's line", () => {

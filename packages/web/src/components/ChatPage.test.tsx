@@ -1197,11 +1197,7 @@ describe('ChatPage goal card and milestones (S11 GO5e-2)', () => {
 
     await waitFor(() =>
       expect(screen.getAllByTestId('system-status-goal').map((label) => label.textContent)).toEqual(
-        [
-          `· ${proposed.statement}`,
-          '· 把二号仓的盘点 差异整理成报告。',
-          '· 把二号仓的盘点 差异整理成报告。',
-        ],
+        [proposed.statement, '把二号仓的盘点 差异整理成报告。', '把二号仓的盘点 差异整理成报告。'],
       ),
     );
     expect(

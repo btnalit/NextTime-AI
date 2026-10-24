@@ -1,5 +1,5 @@
 import { SystemMessageContentSchema, getCapability } from '@nexttime/shared';
-import { type Page, expect, test } from '@playwright/test';
+import { type Locator, type Page, expect, test } from '@playwright/test';
 import { OWNER_API_KEY, loginAsOwner, signedInOwner } from './lib/auth.js';
 
 /**
@@ -170,6 +170,26 @@ async function expectNoSidewaysScroll(page: Page): Promise<void> {
   );
 }
 
+/** #737 UX P2-3: a goal's line says which goal on a row of its own under what happened, as wide as
+ *  the line allows — never a column of a few characters beside the sentence — and what happened
+ *  reads in rows, not one character per row. */
+async function expectGoalRowUnder(line: Locator): Promise<void> {
+  const head = await line.locator('.system-status-head').boundingBox();
+  const main = await line.locator('.system-status-main').boundingBox();
+  const goalRow = line.getByTestId('system-status-goal');
+  const goal = await goalRow.boundingBox();
+  if (!head || !main || !goal) throw new Error('the goal line has no head, body or goal row');
+  expect(goal.y).toBeGreaterThanOrEqual(head.y + head.height - 1);
+  // Cut only once it has the line's whole width.
+  if (await goalRow.evaluate((el) => el.scrollWidth > el.clientWidth)) {
+    expect(goal.width).toBeGreaterThanOrEqual(main.width - 1);
+  }
+  for (const part of await line.locator('.system-status-head > *').all()) {
+    const box = await part.boundingBox();
+    if (box) expect(box.width).toBeGreaterThan(box.height);
+  }
+}
+
 /** Appends `extra(lastSequence)` to the last page of every chat history the page reads over the
  *  socket; every other frame passes through unchanged, both ways. */
 async function appendToChatHistory(
@@ -337,8 +357,9 @@ test.describe('S11 GO5e-2: a goal in its chat (stand-in messages)', () => {
       // #737 UX P2-2: every line, the step's Task included, says which goal it belongs to.
       for (const index of [0, 1, 2, 3]) {
         const goal = lines.nth(index).getByTestId('system-status-goal');
-        await expect(goal).toHaveText(`· ${STATEMENT}`);
+        await expect(goal).toHaveText(STATEMENT);
         await expect(goal).toHaveAttribute('title', STATEMENT);
+        await expectGoalRowUnder(lines.nth(index));
       }
       // A milestone is never cut, at either width: it wraps instead.
       for (const index of [0, 2, 3]) {
@@ -383,6 +404,16 @@ test.describe('S11 GO5e-2: a goal in its chat (stand-in messages)', () => {
           },
           SECOND,
         ),
+        systemMessage(last + 6, T2, {
+          kind: 'system.task_update',
+          text: `Goal step "collect": task ${TASK} failed`,
+          taskId: TASK,
+          status: 'failed',
+          summary: null,
+          failureReason: 'other',
+          goalRunId: GOAL,
+          stepKey: 'collect',
+        }),
       ]);
       await loginAsOwner(page);
       await openNewChat(page);
@@ -403,19 +434,22 @@ test.describe('S11 GO5e-2: a goal in its chat (stand-in messages)', () => {
       );
 
       const lines = page.getByTestId('system-status-line');
-      await expect(lines).toHaveCount(3);
-      await expect(lines.nth(0).getByTestId('system-status-goal')).toHaveText(`· ${STATEMENT}`);
-      await expect(lines.nth(1).getByTestId('system-status-goal')).toHaveText(
-        `· ${SECOND_STATEMENT}`,
-      );
+      await expect(lines).toHaveCount(4);
+      await expect(lines.nth(0).getByTestId('system-status-goal')).toHaveText(STATEMENT);
+      await expect(lines.nth(1).getByTestId('system-status-goal')).toHaveText(SECOND_STATEMENT);
       await expect(lines.nth(2)).toContainText('目标按未达成结束 · 依据请求人确认');
       await expect(lines.nth(2).getByTestId('system-status-goal-outcome')).toHaveAttribute(
         'data-status',
         'not_achieved',
       );
-      await expect(lines.nth(2).getByTestId('system-status-goal')).toHaveText(
-        `· ${SECOND_STATEMENT}`,
+      await expect(lines.nth(2).getByTestId('system-status-goal')).toHaveText(SECOND_STATEMENT);
+      // A failed step: the step, then why, then the goal under them.
+      await expect(lines.nth(3).getByTestId('system-status-goal-step')).toHaveText(
+        '目标步骤 collect',
       );
+      await expect(lines.nth(3).locator('.system-status-reason')).toHaveText('(其他原因)');
+      await expect(lines.nth(3).getByTestId('system-status-goal')).toHaveText(STATEMENT);
+      for (const index of [0, 1, 2, 3]) await expectGoalRowUnder(lines.nth(index));
       await expectNoSidewaysScroll(page);
       await page.screenshot({
         path: testInfo.outputPath(`chat-goal-two-goals-${width}.png`),

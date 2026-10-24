@@ -681,9 +681,10 @@
 }
 
 /* S11 GO5e-2: a goal's milestone is the console's own sentence (why it paused, who has to lift a
-   hold), not the kernel's tail — it wraps on a narrow screen instead of being cut. The radius keeps
-   a one-line milestone as round as every other line. */
-.system-status-line[data-variant="goal_update"] {
+   hold), not the kernel's tail — it wraps on a narrow screen instead of being cut. A goal's line
+   (a milestone, or a goal step's Task) runs to two rows, so its radius keeps it from reading as a
+   pill stretched out of shape. */
+.system-status-line[data-goal] {
   border-radius: 14px;
   text-align: left;
 }
@@ -692,12 +693,30 @@
   white-space: normal;
 }
 
-/* S11 GO5e-2 (#737 UX P2-2): which goal a milestone or a goal step's Task belongs to — its
-   statement on one line, cut first when the line is narrow (the whole of it is the title). */
+/* #737 UX P2-3: what happened (the step, the sentence, why a step failed — wrapping after one
+   another), and under it which goal, on a row with the line's whole width to itself. */
+.system-status-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.system-status-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: var(--space-2);
+  min-width: 0;
+}
+
+.system-status-reason {
+  white-space: nowrap;
+}
+
+/* S11 GO5e-2 (#737 UX P2-2): which goal — its statement on one line, cut when the line is narrower
+   (the whole of it is the title). */
 .system-status-goal {
-  flex: 0 4 auto;
-  min-width: 6em;
-  max-width: 28em;
+  max-width: 40em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

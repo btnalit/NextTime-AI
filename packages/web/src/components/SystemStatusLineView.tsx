@@ -57,8 +57,56 @@ export function SystemStatusLineView({ line, onOpen, goalLabel }: SystemStatusLi
       : line.variant === 'task_update' && line.goalStep
         ? null
         : line.text;
-  // S11 GO1: the failure kind right after the chip, never cut — the kernel's line after it may be.
-  const body = (
+  // S11 GO5e-2 (#737 UX P2-3): a goal's milestone or a goal step's Task says which goal on a row of
+  // its own under what happened, with the whole width to itself before it is cut — never squeezed
+  // into a column beside the sentence on a narrow screen.
+  const goalLine =
+    line.variant === 'goal_update' ||
+    (line.variant === 'task_update' && line.goalStep !== undefined);
+  const step =
+    line.variant === 'task_update' && line.goalStep ? (
+      <span
+        className="system-status-step text-3"
+        data-testid="system-status-goal-step"
+        title={t('这个任务是目标的一步', 'This Task is a step of a goal')}
+      >
+        {t(`目标步骤 ${line.goalStep.stepKey}`, `Goal step ${line.goalStep.stepKey}`)}
+      </span>
+    ) : null;
+  const textSpan = text !== null ? <span className="system-status-text">{text}</span> : null;
+  const failureReason =
+    line.variant === 'task_update' && line.failureReason ? (
+      <span
+        className="system-status-reason text-3"
+        title={taskFailureReasonText(line.failureReason, t).detail}
+      >
+        ({taskFailureReasonText(line.failureReason, t).short})
+      </span>
+    ) : null;
+  const chevron = onOpen ? <Icon name="chevron-right" size="s" className="text-3" /> : null;
+  const body = goalLine ? (
+    <>
+      {chip}
+      <span className="system-status-main">
+        <span className="system-status-head">
+          {step}
+          {textSpan}
+          {failureReason}
+        </span>{' '}
+        {goalLabel ? (
+          <span
+            className="system-status-goal text-3"
+            data-testid="system-status-goal"
+            title={goalLabel}
+          >
+            {goalLabel}
+          </span>
+        ) : null}
+      </span>
+      {chevron}
+    </>
+  ) : (
+    // S11 GO1: the failure kind right after the chip, never cut — the kernel's line after it may be.
     <>
       {chip}
       {failure ? (
@@ -71,32 +119,9 @@ export function SystemStatusLineView({ line, onOpen, goalLabel }: SystemStatusLi
           {failure.short}
         </span>
       ) : null}
-      {line.variant === 'task_update' && line.goalStep ? (
-        <span
-          className="system-status-step text-3"
-          data-testid="system-status-goal-step"
-          title={t('这个任务是目标的一步', 'This Task is a step of a goal')}
-        >
-          {t(`目标步骤 ${line.goalStep.stepKey}`, `Goal step ${line.goalStep.stepKey}`)}
-        </span>
-      ) : null}
-      {text !== null ? <span className="system-status-text">{text}</span> : null}
-      {goalLabel ? (
-        <span
-          className="system-status-goal text-3"
-          data-testid="system-status-goal"
-          title={goalLabel}
-        >
-          <span aria-hidden="true">· </span>
-          {goalLabel}
-        </span>
-      ) : null}
-      {line.variant === 'task_update' && line.failureReason ? (
-        <span className="text-3" title={taskFailureReasonText(line.failureReason, t).detail}>
-          ({taskFailureReasonText(line.failureReason, t).short})
-        </span>
-      ) : null}
-      {onOpen ? <Icon name="chevron-right" size="s" className="text-3" /> : null}
+      {textSpan}
+      {failureReason}
+      {chevron}
     </>
   );
 
@@ -108,6 +133,7 @@ export function SystemStatusLineView({ line, onOpen, goalLabel }: SystemStatusLi
         onClick={onOpen}
         data-testid="system-status-line"
         data-variant={line.variant}
+        data-goal={goalLine || undefined}
         title={t(OPEN_TITLE[line.variant][0], OPEN_TITLE[line.variant][1])}
       >
         {body}
@@ -119,6 +145,7 @@ export function SystemStatusLineView({ line, onOpen, goalLabel }: SystemStatusLi
       className="system-status-line"
       data-testid="system-status-line"
       data-variant={line.variant}
+      data-goal={goalLine || undefined}
     >
       {body}
     </div>
