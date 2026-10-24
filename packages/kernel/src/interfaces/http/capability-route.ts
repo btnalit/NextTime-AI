@@ -502,13 +502,13 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   if (err instanceof OntologyNamespaceConflictError) {
     return { status: 409, code: err.code, message: err.message };
   }
-  // S11 P1-D: a Skill name another Skill family has published — `publish_skill`,
-  // `preview_pack_install`, `install_pack` (a Worker mounts Skills by name). Nothing was published.
   // Legacy 145: `propose_entry_template_upgrade` — nothing to upgrade to, or the template / the
   // published entry version is not the one the caller looked at. Nothing was proposed.
   if (err instanceof EntryTemplateCurrentError || err instanceof EntryTemplateChangedError) {
     return { status: 409, code: err.code, message: err.message };
   }
+  // S11 P1-D: a Skill name another Skill family has published — `publish_skill`,
+  // `preview_pack_install`, `install_pack` (a Worker mounts Skills by name). Nothing was published.
   if (err instanceof SkillNameConflictError) {
     return {
       status: 409,
