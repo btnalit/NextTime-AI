@@ -24,6 +24,7 @@ import { writeAudit } from '../../substrate/audit/index.js';
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { shownObjectProperties } from '../../substrate/graph/index.js';
 import { currentPrincipalId } from '../chat/index.js';
+import { ForbiddenError } from './authorize.js';
 import { type CapabilityHandler, publishActorOf } from './capability-handler.js';
 
 /**
@@ -157,6 +158,18 @@ export const publishOperationHandler: CapabilityHandler = async (
       absentAnswersReviewed?: boolean;
       draftDigest: string;
     };
+  // S11 「门确认不存在」 B-a: only a person confirms the answers that mean "not there". The registry
+  // keeps this capability off every Handle; this closes the one remaining path — a *service*
+  // Principal's API key also authenticates on the human channel (resolve-caller.ts), and a service
+  // is not a person (the `attest_fact` rule).
+  if (
+    absentAnswersReviewed === true &&
+    (ctx?.channel !== 'human' || ctx.principal?.kind !== 'human')
+  ) {
+    throw new ForbiddenError(
+      'publish_operation: only a person (a human Principal on the human channel) can confirm the answers that mean "not there" (absentAnswersReviewed)',
+    );
+  }
   // D-24: the draft's proposer or the owner (checked on the row being published).
   const actor = { ...publishActorOf('publish_operation', ctx), credentialsReviewed };
   const record = await publishOperation(client, workspaceId, {

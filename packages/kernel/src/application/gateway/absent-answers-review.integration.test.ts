@@ -110,6 +110,32 @@ describe.runIf(DATABASE_URL !== undefined)(
       };
     }
 
+    let serviceId: string;
+
+    /** A `kind:'service'` owner's API key: it authenticates on the human channel too. */
+    function service(): ResolvedCaller {
+      return {
+        channel: 'human',
+        principal: {
+          workspaceId,
+          id: serviceId,
+          kind: 'service',
+          role: 'owner' satisfies Role,
+          displayName: 'aar-automation',
+        },
+        session: {
+          workspaceId,
+          id: randomUUID(),
+          principalId: serviceId,
+          kind: 'web',
+          onBehalfOf: serviceId,
+          status: 'active',
+          createdAt: new Date(),
+          expiresAt: null,
+        },
+      };
+    }
+
     /** An agent's Handle acting for the owner, with `capabilities` in its scope. */
     function handle(capabilities: readonly string[]): ResolvedCaller {
       const now = Math.floor(Date.now() / 1000);
@@ -204,6 +230,12 @@ describe.runIf(DATABASE_URL !== undefined)(
             `insert into principals (workspace_id, id, kind, role, display_name)
              values ($1, $2, 'human', 'owner', 'owner')`,
             [workspaceId, ownerId],
+          );
+          serviceId = randomUUID();
+          await client.query(
+            `insert into principals (workspace_id, id, kind, role, display_name)
+             values ($1, $2, 'service', 'owner', 'aar-automation')`,
+            [workspaceId, serviceId],
           );
         },
         { skipRoleSwitch: true },
@@ -329,6 +361,37 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect((await row(name))?.status).toBe('draft');
       const [stored] = await storedProperties(name);
       expect(stored).not.toHaveProperty('absentAnswersReviewedBy');
+    });
+
+    it('a service Principal’s API key on the human channel cannot confirm either: a service is not a person', async () => {
+      const name = `aar.service.${randomUUID().slice(0, 8)}`;
+      const { draftDigest } = await call<{ draftDigest: string }>('propose_operation', {
+        gatekeeperId,
+        operation: lookup(name, [404]),
+      });
+      await expect(
+        dispatchCapability({ pool }, service(), 'publish_operation', {
+          gatekeeperId,
+          name,
+          draftDigest,
+          absentAnswersReviewed: true,
+        }),
+      ).rejects.toThrow(/only a person/);
+      expect((await row(name))?.status).toBe('draft');
+      const [stored] = await storedProperties(name);
+      expect(stored).not.toHaveProperty('absentAnswersReviewedBy');
+      // The same service still publishes an Operation that asks for no confirmation.
+      const plain = `aar.service-plain.${randomUUID().slice(0, 8)}`;
+      const proposed = await call<{ draftDigest: string }>('propose_operation', {
+        gatekeeperId,
+        operation: lookup(plain),
+      });
+      const published = await dispatchCapability({ pool }, service(), 'publish_operation', {
+        gatekeeperId,
+        name: plain,
+        draftDigest: proposed.draftDigest,
+      });
+      expect(published).toMatchObject({ status: 'published', absentAnswersReview: null });
     });
 
     it('a proposal or a manifest cannot carry a confirmation in: the bookkeeping keys never reach a draft', async () => {
