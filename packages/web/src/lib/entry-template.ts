@@ -108,3 +108,13 @@ export function capabilityChanges(
     removed: current.filter((name) => !next.has(name)),
   };
 }
+
+/** An entry definition's system prompt, as the comparison reads it (`''` when it has none). */
+export function entryPromptOf(definition: Readonly<Record<string, unknown>>): string {
+  return typeof definition.systemPrompt === 'string' ? definition.systemPrompt : '';
+}
+
+/** An entry definition's capability names, as the comparison reads them. */
+export function entryCapabilitiesOf(definition: Readonly<Record<string, unknown>>): string[] {
+  return Array.isArray(definition.capabilities) ? definition.capabilities.map(String) : [];
+}

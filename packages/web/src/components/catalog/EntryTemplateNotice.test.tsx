@@ -7,7 +7,11 @@ import { PermissionsProvider } from '../../hooks/usePermissions.js';
 import type { Resource } from '../../hooks/useResource.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { HttpError } from '../../lib/http-client.js';
-import { EntryTemplateNotice, EntryTemplateSummary } from './EntryTemplateNotice.js';
+import {
+  EntryDraftChanges,
+  EntryTemplateNotice,
+  EntryTemplateSummary,
+} from './EntryTemplateNotice.js';
 
 afterEach(cleanup);
 
@@ -110,14 +114,32 @@ describe('EntryTemplateNotice (legacy 145)', () => {
     expect(notice.textContent).toMatch(
       /当前生效的 v2 与这个平台版本自带的入口模板不同：系统提示词、能力/,
     );
-    expect(notice.textContent).toMatch(/新草稿会用平台模板替换这些改动/);
-    const diff = screen.getByTestId('entry-template-prompt-diff');
-    const added = [...diff.querySelectorAll('[data-change="added"]')].map((el) => el.textContent);
-    expect(added).toEqual(['+ Goals: propose one when work must keep going.']);
-    expect(diff.querySelectorAll('[data-change="removed"]')).toHaveLength(0);
-    expect(screen.getByTestId('entry-template-capability-diff').textContent).toMatch(
-      /模板新增的能力：propose_goal/,
+    expect(notice.textContent).toMatch(
+      /如果在这里改过系统提示词、能力，新草稿会用平台模板替换这些改动/,
     );
+    // UX acceptance of #747 (P2-1): the capabilities first, outside the folded prompt difference,
+    // each by what it does with its registry name beside it.
+    const capabilities = screen.getByTestId('entry-template-capability-diff');
+    const promptDiff = screen.getByTestId('entry-template-diff');
+    expect(promptDiff.tagName).toBe('DETAILS');
+    expect(promptDiff.contains(capabilities)).toBe(false);
+    expect(
+      capabilities.compareDocumentPosition(promptDiff) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(capabilities.textContent).toMatch(/入口 agent 能做的事与 v2 相比/);
+    const added = within(capabilities).getByTestId('capability-changes-added');
+    expect(added.textContent).toMatch(/新增 1 项能力/);
+    const goal = added.querySelector('[data-capability="propose_goal"]');
+    expect(goal?.textContent).toMatch(/^\+ 提议目标 propose_goal/);
+    expect(goal?.textContent).toMatch(/你在控制台确认之前什么都不会执行/);
+    expect(within(capabilities).queryByTestId('capability-changes-removed')).toBeNull();
+    expect(within(promptDiff).getByText('查看系统提示词差异')).toBeTruthy();
+    const diff = screen.getByTestId('entry-template-prompt-diff');
+    const addedLines = [...diff.querySelectorAll('[data-change="added"]')].map(
+      (el) => el.textContent,
+    );
+    expect(addedLines).toEqual(['+ Goals: propose one when work must keep going.']);
+    expect(diff.querySelectorAll('[data-change="removed"]')).toHaveLength(0);
 
     fireEvent.click(await screen.findByTestId('entry-template-propose'));
     await waitFor(() => expect(onProposed).toHaveBeenCalledWith(upgrade(true)));
@@ -127,6 +149,37 @@ describe('EntryTemplateNotice (legacy 145)', () => {
         params: { templateDigest: DIGEST, basedOn: { definitionId: ENTRY, version: 2 } },
       },
     ]);
+  });
+
+  it('with only the capabilities different, lists them and folds no prompt difference', () => {
+    inPermissions(
+      <EntryTemplateNotice
+        http={caller('owner')}
+        status={ready(
+          statusOf({
+            template: { ...statusOf().template, systemPrompt: row.definition.systemPrompt },
+            differs: ['capabilities'],
+          }),
+        )}
+        row={{ ...row, definition: { ...row.definition, capabilities: ['search', 'own_tool'] } }}
+        onProposed={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('entry-template-notice').textContent).toMatch(
+      /如果在这里改过能力，新草稿/,
+    );
+    expect(screen.queryByTestId('entry-template-diff')).toBeNull();
+    const capabilities = screen.getByTestId('entry-template-capability-diff');
+    const added = within(capabilities).getByTestId('capability-changes-added');
+    expect(
+      [...added.querySelectorAll('[data-capability]')].map((el) =>
+        el.getAttribute('data-capability'),
+      ),
+    ).toEqual(['invoke_worker', 'propose_goal']);
+    // A name the console has no words for shows as itself, once.
+    const removed = within(capabilities).getByTestId('capability-changes-removed');
+    expect(removed.textContent).toMatch(/去掉 1 项能力/);
+    expect(removed.querySelector('[data-capability="own_tool"]')?.textContent).toBe('− own_tool');
   });
 
   it('reads the status again when what it showed moved, and says so where the button is', async () => {
@@ -198,5 +251,43 @@ describe('EntryTemplateSummary (legacy 145)', () => {
     cleanup();
     render(<EntryTemplateSummary status={ready(null)} onOpen={onOpen} />);
     expect(screen.queryByTestId('entry-template-summary')).toBeNull();
+  });
+});
+
+describe('EntryDraftChanges (UX acceptance of #747, P2-1)', () => {
+  const inUse = { version: 2, definition: row.definition };
+
+  it('says, next to Publish, which capabilities the draft adds and takes out, and that the prompt differs', () => {
+    render(
+      <EntryDraftChanges
+        draft={{
+          definition: {
+            ...row.definition,
+            systemPrompt: 'You are the entry agent.\nGoals: propose one.\nAnswer briefly.',
+            capabilities: ['search', 'propose_goal', 'list_goals'],
+          },
+        }}
+        inUse={inUse}
+      />,
+    );
+    const changes = screen.getByTestId('entry-draft-changes');
+    expect(changes.textContent).toMatch(/与当前生效的 v2 相比/);
+    const added = within(changes).getByTestId('capability-changes-added');
+    expect(added.textContent).toMatch(/新增 2 项能力/);
+    expect(added.textContent).toMatch(/提议目标 propose_goal/);
+    expect(added.textContent).toMatch(/查看目标列表 list_goals/);
+    const removed = within(changes).getByTestId('capability-changes-removed');
+    expect(removed.textContent).toMatch(/去掉 1 项能力/);
+    expect(removed.querySelector('[data-capability="invoke_worker"]')).not.toBeNull();
+    expect(within(changes).getByTestId('entry-draft-prompt-change').textContent).toMatch(
+      /系统提示词有改动/,
+    );
+  });
+
+  it('says when the capabilities and the prompt are the same', () => {
+    render(<EntryDraftChanges draft={{ definition: { ...row.definition } }} inUse={inUse} />);
+    expect(screen.getByTestId('entry-draft-capabilities-same').textContent).toBe('能力相同。');
+    expect(screen.getByTestId('entry-draft-prompt-change').textContent).toBe('系统提示词相同。');
+    expect(screen.queryByTestId('capability-changes-added')).toBeNull();
   });
 });

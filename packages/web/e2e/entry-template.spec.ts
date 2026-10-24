@@ -6,12 +6,14 @@ import { OWNER_API_KEY, loginAsOwner } from './lib/auth.js';
  * e2e/entry-template.spec.ts (legacy 145): a workspace whose entry definition predates what the
  * platform's entry template says now, brought up to it from the catalog — against the real stack,
  * no stand-ins. The CI workspace is created from today's template, so the test first publishes
- * the entry version such a workspace would have: the template without its goals section (what
- * workspaces created before S11 GO5e run with), plus one line of the workspace's own. Then, at
- * the widths UX checks (1440, 390): the Worker tab says the template differs, the entry version in
- * use shows the difference line by line, 「按平台模板生成新版本草稿」 proposes a draft, and once the
- * owner publishes it the version in use matches the template again — which also leaves the shared
- * workspace's entry where it started. Full-page captures land in `test-results/` for the UX
+ * the entry version such a workspace would have: the template without its goals section and
+ * without `propose_goal` (what workspaces created before S11 GO5 run with), plus one line of the
+ * workspace's own. Then, at the widths UX checks (1440, 390): the Worker tab says the template
+ * differs, the entry version in use lists the capability the template adds by what it does (UX
+ * acceptance of #747, P2-1) ahead of the prompt's line-by-line difference, 「按平台模板生成新版本草稿」
+ * proposes a draft that opens focused and says what publishing it changes against the version in
+ * use, and once the owner publishes it the version in use matches the template again — which also
+ * leaves the shared workspace's entry where it started. Full-page captures land in `test-results/` for the UX
  * acceptance to read; they are not a screenshot gate.
  */
 
@@ -62,11 +64,17 @@ async function publishOlderEntry(page: Page): Promise<{ goalsHeading: string; ve
   const next = paragraphs.findIndex((paragraph, index) => index > goals && /^## /.test(paragraph));
   const kept = [...paragraphs.slice(0, goals), ...paragraphs.slice(next === -1 ? undefined : next)];
   const older = `${kept.join('\n\n').trimEnd()}\n\n${OWN_LINE}`;
+  expect(status.template.capabilities, 'the entry template grants propose_goal').toContain(
+    'propose_goal',
+  );
+  const capabilities = (row.definition.capabilities as string[]).filter(
+    (name) => name !== 'propose_goal',
+  );
 
   const draft = await callCap<WorkerDefinitionWire>(page, 'propose_worker_definition', {
     definitionId: row.id,
     kind: 'entry',
-    definition: { ...row.definition, systemPrompt: older },
+    definition: { ...row.definition, systemPrompt: older, capabilities },
   });
   const published = await callCap<WorkerDefinitionWire>(page, 'publish_worker_definition', {
     definitionId: draft.id,
@@ -100,7 +108,7 @@ test.describe('legacy 145: bringing the entry definition up to the platform temp
       await page.goto('/#/govern/catalog/workers');
       const summary = page.getByTestId('entry-template-summary');
       await expect(summary).toContainText(
-        `当前生效的入口定义 v${older.version} 的系统提示词与这个平台版本自带的入口模板不同`,
+        `当前生效的入口定义 v${older.version} 的系统提示词、能力与这个平台版本自带的入口模板不同`,
         {
           timeout: 15_000,
         },
@@ -112,7 +120,15 @@ test.describe('legacy 145: bringing the entry definition up to the platform temp
       const notice = page.getByTestId('entry-template-notice');
       await expect(notice).toContainText('与平台自带的入口模板不同');
       await expect(notice).toContainText('新草稿会用平台模板替换这些改动');
-      await expect(page.getByTestId('entry-template-capability-diff')).toHaveCount(0);
+      // The capability the template adds, by what it does, before the folded prompt difference.
+      const capabilities = page.getByTestId('entry-template-capability-diff');
+      await expect(capabilities).toBeVisible();
+      await expect(
+        capabilities
+          .getByTestId('capability-changes-added')
+          .locator('[data-capability="propose_goal"]'),
+      ).toContainText('+ 提议目标 propose_goal');
+      await expect(capabilities.getByTestId('capability-changes-removed')).toHaveCount(0);
 
       await page.getByTestId('entry-template-diff').locator('summary').click();
       const diff = page.getByTestId('entry-template-prompt-diff');
@@ -135,6 +151,17 @@ test.describe('legacy 145: bringing the entry definition up to the platform temp
       await expect(detail.getByTestId('worker-detail-stepper')).toBeVisible();
       const draftKey = await detail.getAttribute('data-worker-key');
       expect(draftKey).not.toMatch(new RegExp(`@${older.version}$`));
+      // UX acceptance of #747: focus on the draft's title (P3-1); what publishing it changes
+      // against the version in use, next to Publish (P2-1).
+      await expect(detail.locator('.catalog-detail-title')).toBeFocused();
+      const changes = detail.getByTestId('entry-draft-changes');
+      await expect(changes).toContainText(`与当前生效的 v${older.version} 相比`);
+      await expect(
+        changes.getByTestId('capability-changes-added').locator('[data-capability="propose_goal"]'),
+      ).toContainText('提议目标');
+      await expect(changes.getByTestId('entry-draft-prompt-change')).toHaveText(
+        '系统提示词有改动，见下面的定义。',
+      );
       await capture(page, testInfo.outputPath(`entry-template-draft-${width}.png`));
 
       await detail.getByTestId('worker-draft-publish').click();

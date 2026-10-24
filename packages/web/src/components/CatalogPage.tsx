@@ -64,7 +64,11 @@ import { nameOf, useGatekeeperDirectory } from './approvals/useDirectoryNames.js
 import { DraftExpiryNote, type EditorState } from './catalog/CatalogShared.js';
 import { ChangesTab } from './catalog/ChangesTab.js';
 import { DiscardReasonField } from './catalog/DiscardReasonField.js';
-import { EntryTemplateNotice, EntryTemplateSummary } from './catalog/EntryTemplateNotice.js';
+import {
+  EntryDraftChanges,
+  EntryTemplateNotice,
+  EntryTemplateSummary,
+} from './catalog/EntryTemplateNotice.js';
 import { GateOwnedParamsNotice } from './catalog/GateOwnedParamsNotice.js';
 import { MarkdownPreview } from './catalog/MarkdownPreview.js';
 import { PackOrigin } from './catalog/PackOrigin.js';
@@ -2464,7 +2468,9 @@ function WorkerDetailView({
   canDiscard,
   busy,
   credentialReview,
-  entryTemplate,
+  entryNotice,
+  focusTitle,
+  onTitleFocused,
   onEditAsNewVersion,
   onPublish,
   onDeprecate,
@@ -2481,8 +2487,13 @@ function WorkerDetailView({
   readonly canDiscard: boolean;
   readonly busy: boolean;
   readonly credentialReview: PublishCredentialReview;
-  /** Legacy 145: on the entry version in use, how it stands against the platform's template. */
-  readonly entryTemplate: ReactNode;
+  /** Legacy 145: on the entry version in use, how it stands against the platform's template; on
+   *  an entry draft, what publishing it changes against the version in use. */
+  readonly entryNotice: ReactNode;
+  /** UX acceptance of #747 (P3-1): the draft just proposed from the entry template opens with focus
+   *  on its title, not left on the page; `onTitleFocused` clears the request. */
+  readonly focusTitle: boolean;
+  readonly onTitleFocused: () => void;
   readonly onEditAsNewVersion: () => void;
   readonly onPublish: () => Promise<void>;
   readonly onDeprecate: () => Promise<void>;
@@ -2490,6 +2501,13 @@ function WorkerDetailView({
 }) {
   const t = useT();
   const name = workerLabel(row, t);
+  const titleRef = useRef<HTMLElement>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only a new request moves focus.
+  useEffect(() => {
+    if (!focusTitle) return;
+    titleRef.current?.focus();
+    onTitleFocused();
+  }, [focusTitle]);
   // Legacy 441: the gates a Worker may act on, by name and linked to the gate — not only as ids in
   // the definition below.
   const gatekeeperNames = useGatekeeperDirectory(http).names;
@@ -2534,7 +2552,9 @@ function WorkerDetailView({
       <header className="stack-s">
         <div className="row-wrap">
           <StatusChip machine="publishable" status={row.status} size="s" />
-          <strong className="catalog-detail-title wrap-anywhere">{name}</strong>
+          <strong ref={titleRef} tabIndex={-1} className="catalog-detail-title wrap-anywhere">
+            {name}
+          </strong>
           <span className="text-3 text-small">v{row.version}</span>
           <span className="tag">{workerDefinitionKindLabel(row.kind, t)}</span>
         </div>
@@ -2548,7 +2568,7 @@ function WorkerDetailView({
         <PublishableStepper status={row.status} testId="worker-detail-stepper" />
       </header>
 
-      {entryTemplate}
+      {entryNotice}
 
       {items.length > 0 ? <KeyValue items={items} /> : null}
 
@@ -2662,6 +2682,8 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       : [];
   const [busy, setBusy] = useState<string | null>(null);
   const [editor, setEditor] = useState<WorkerEditorState>(null);
+  // UX acceptance of #747 (P3-1): the row whose detail title takes focus when it shows.
+  const [focusKey, setFocusKey] = useState<string | null>(null);
 
   function refresh(): void {
     invalidateCapability(http, 'list_worker_definitions');
@@ -2848,6 +2870,16 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   // Same-name definitions (a template instantiated twice) differ only by id: show it on those.
   const sameName = sameNameDefinitionIds(allRows);
   const selected = itemId ? allRows.find((row) => workerKey(row) === itemId) : undefined;
+  // UX acceptance of #747 (P2-1): the entry version the entry agent runs with — the one
+  // `get_entry_template_status` names — which an entry draft is compared against. Looked up in the
+  // rows already read (the own-drafts read brings every published row too); unknown otherwise.
+  const inUseEntryRef =
+    entryTemplate.state.status === 'ready' ? (entryTemplate.state.data?.current ?? null) : null;
+  const inUseEntry = inUseEntryRef
+    ? [...rows, ...(myDrafts.state.status === 'ready' ? myDrafts.state.data.items : [])].find(
+        (row) => row.id === inUseEntryRef.definitionId && row.version === inUseEntryRef.version,
+      )
+    : undefined;
   // D-24: Publish / Deprecate on a definition another principal proposed is the owner's — and
   // publishing a new version of a family supersedes its published version, so that version's
   // proposer counts too (legacy 315; kernel `assertFamilyPublishAuthority`: any published version
@@ -3081,8 +3113,12 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       canDiscard={canDiscard}
       busy={busy === workerKey(selected)}
       credentialReview={credentialReview}
-      entryTemplate={
-        selected.kind === 'entry' && selected.status === 'published' ? (
+      focusTitle={focusKey === workerKey(selected)}
+      onTitleFocused={() => setFocusKey(null)}
+      entryNotice={
+        selected.kind === 'entry' && selected.status === 'draft' && inUseEntry ? (
+          <EntryDraftChanges draft={selected} inUse={inUseEntry} />
+        ) : selected.kind === 'entry' && selected.status === 'published' ? (
           <EntryTemplateNotice
             http={http}
             status={entryTemplate}
@@ -3101,6 +3137,7 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
               }
               toast.push({ tone: 'ok', title });
               refresh();
+              setFocusKey(workerKey(upgrade.draft));
               selectRow(workerKey(upgrade.draft));
             }}
           />

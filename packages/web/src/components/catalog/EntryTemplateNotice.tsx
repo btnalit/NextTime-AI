@@ -7,8 +7,14 @@ import type {
 import { useState } from 'react';
 import type { Resource } from '../../hooks/useResource.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
+import { actionHint, actionLabel } from '../../lib/capability-labels.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
-import { capabilityChanges, lineDiff } from '../../lib/entry-template.js';
+import {
+  capabilityChanges,
+  entryCapabilitiesOf,
+  entryPromptOf,
+  lineDiff,
+} from '../../lib/entry-template.js';
 import { describeError } from '../../lib/errors.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { Button } from '../kit/button.js';
@@ -20,9 +26,11 @@ import { SkeletonRows } from '../kit/skeleton.js';
  * components/catalog/EntryTemplateNotice (legacy 145): on the catalog's entry definition, whether
  * the version the entry agent runs with has the prompt and capabilities of the entry template
  * this platform release ships (`get_entry_template_status`). When it does not: what differs, the
- * difference itself (the prompt line by line, the capabilities by name) so whoever adopts it sees
- * what it replaces, and 「按平台模板生成新版本草稿」 (`propose_entry_template_upgrade`) — a draft
- * only; the owner publishes it like any other entry version, and nothing changes until then.
+ * difference itself (the capabilities first, by what each does, then the prompt line by line) so
+ * whoever adopts it sees what it replaces, and 「按平台模板生成新版本草稿」
+ * (`propose_entry_template_upgrade`) — a draft only; the owner publishes it like any other entry
+ * version, and nothing changes until then. On an entry draft, `EntryDraftChanges` says what
+ * publishing it changes against the version in use.
  */
 
 export type EntryTemplateStatusResource = Resource<EntryTemplateStatusWire | null>;
@@ -141,11 +149,10 @@ export function EntryTemplateNotice({
     }
   }
 
-  const prompt = typeof row.definition.systemPrompt === 'string' ? row.definition.systemPrompt : '';
-  const capabilities = Array.isArray(row.definition.capabilities)
-    ? row.definition.capabilities.map(String)
-    : [];
-  const changes = capabilityChanges(capabilities, data.template.capabilities);
+  const changes = capabilityChanges(
+    entryCapabilitiesOf(row.definition),
+    data.template.capabilities,
+  );
 
   return (
     <div className="stack-s" data-testid="entry-template-notice">
@@ -163,27 +170,36 @@ export function EntryTemplateNotice({
         </p>
         <p>
           {t(
-            '如果改过入口说明，新草稿会用平台模板替换这些改动；发布前可以在草稿里再改。',
-            'If the entry prompt was edited here, the draft replaces those edits with the template; you can edit the draft again before publishing it.',
+            `如果在这里改过${fieldsText(data.differs, t)}，新草稿会用平台模板替换这些改动；发布前可以在草稿里再改。`,
+            `If you edited the ${fieldsText(data.differs, t)} here, the draft replaces those edits with the template; you can edit the draft again before publishing it.`,
           )}
         </p>
       </Notice>
-      <details className="disclosure" data-testid="entry-template-diff">
-        <summary>{t('查看差异', 'See the difference')}</summary>
-        <div className="disclosure-body">
-          {data.differs.includes('systemPrompt') ? (
-            <div className="stack-s">
-              <span className="text-small text-3">
-                {t(
-                  `系统提示词：− 是 v${current.version} 里有、模板里没有的行，+ 是模板新加的行`,
-                  `System prompt: − lines are in v${current.version} and not in the template, + lines are the template’s new ones`,
-                )}
-              </span>
-              <pre
-                className="code-block pre-wrap text-diff"
-                data-testid="entry-template-prompt-diff"
-              >
-                {lineDiff(prompt, data.template.systemPrompt).map((line, index) =>
+      {data.differs.includes('capabilities') ? (
+        <div className="stack-s" data-testid="entry-template-capability-diff">
+          <span className="section-title">{t('能力的变化', 'Capability changes')}</span>
+          <p className="text-small text-3">
+            {t(
+              `按模板生成的草稿发布后，入口 agent 能做的事与 v${current.version} 相比：`,
+              `Once a draft from the template is published, what the entry agent may do, against v${current.version}:`,
+            )}
+          </p>
+          <CapabilityChangeList added={changes.added} removed={changes.removed} />
+        </div>
+      ) : null}
+      {data.differs.includes('systemPrompt') ? (
+        <details className="disclosure" data-testid="entry-template-diff">
+          <summary>{t('查看系统提示词差异', 'See the system prompt’s difference')}</summary>
+          <div className="disclosure-body stack-s">
+            <span className="text-small text-3">
+              {t(
+                `− 是 v${current.version} 里有、模板里没有的行，+ 是模板新加的行`,
+                `− lines are in v${current.version} and not in the template, + lines are the template’s new ones`,
+              )}
+            </span>
+            <pre className="code-block pre-wrap text-diff" data-testid="entry-template-prompt-diff">
+              {lineDiff(entryPromptOf(row.definition), data.template.systemPrompt).map(
+                (line, index) =>
                   line.change === 'gap' ? (
                     // biome-ignore lint/suspicious/noArrayIndexKey: lines have no identity of their own
                     <span key={index} className="text-diff-line" data-change="gap">
@@ -200,28 +216,11 @@ export function EntryTemplateNotice({
                       {line.text}
                     </span>
                   ),
-                )}
-              </pre>
-            </div>
-          ) : null}
-          {data.differs.includes('capabilities') ? (
-            <ul className="stack-s text-small" data-testid="entry-template-capability-diff">
-              {changes.added.length > 0 ? (
-                <li>
-                  {t('模板新增的能力：', 'Capabilities the template adds: ')}
-                  <span className="mono">{changes.added.join(', ')}</span>
-                </li>
-              ) : null}
-              {changes.removed.length > 0 ? (
-                <li>
-                  {t('模板去掉的能力：', 'Capabilities the template takes out: ')}
-                  <span className="mono">{changes.removed.join(', ')}</span>
-                </li>
-              ) : null}
-            </ul>
-          ) : null}
-        </div>
-      </details>
+              )}
+            </pre>
+          </div>
+        </details>
+      ) : null}
       {canPropose ? (
         <div className="row-wrap">
           <Button
@@ -244,6 +243,109 @@ export function EntryTemplateNotice({
         </p>
       )}
       <InlineError error={error} testId="entry-template-propose-error" />
+    </div>
+  );
+}
+
+/**
+ * UX acceptance of #747 (P2-1): the capabilities a change adds and takes out — what the entry
+ * agent may newly do is the part of the change that grants something, so each reads as what it
+ * does first, with the registry name a builder recognizes from docs and errors as secondary text,
+ * then its one-line description.
+ */
+function CapabilityChangeList({
+  added,
+  removed,
+}: {
+  readonly added: readonly string[];
+  readonly removed: readonly string[];
+}) {
+  const t = useT();
+  const group = (names: readonly string[], change: 'added' | 'removed', heading: string) =>
+    names.length === 0 ? null : (
+      <div className="stack-s" data-testid={`capability-changes-${change}`}>
+        <strong className="text-small">{heading}</strong>
+        <ul className="capability-change-list">
+          {names.map((name) => {
+            const label = actionLabel(name, t);
+            const hint = actionHint(name, t);
+            return (
+              <li key={name} data-change={change} data-capability={name}>
+                <span className="wrap-anywhere">
+                  {change === 'added' ? '+ ' : '− '}
+                  {label}
+                  {label !== name ? (
+                    <>
+                      {' '}
+                      <span className="mono text-3 text-small">{name}</span>
+                    </>
+                  ) : null}
+                </span>
+                {hint !== null ? <span className="text-3 text-small">{hint}</span> : null}
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+    );
+  return (
+    <div className="stack-s">
+      {group(added, 'added', t(`新增 ${added.length} 项能力`, `${added.length} added`))}
+      {group(removed, 'removed', t(`去掉 ${removed.length} 项能力`, `${removed.length} taken out`))}
+    </div>
+  );
+}
+
+/**
+ * UX acceptance of #747 (P2-1): on an entry draft, next to Publish, what publishing it changes
+ * against `inUse` — the entry version the entry agent runs with now (the one
+ * `get_entry_template_status` names): the capabilities it adds and takes out, and whether the
+ * system prompt differs. Any entry draft, not only one made from the template: publishing one is
+ * how the entry agent gains or loses a capability.
+ */
+export function EntryDraftChanges({
+  draft,
+  inUse,
+}: {
+  readonly draft: Pick<WorkerDefinitionWire, 'definition'>;
+  readonly inUse: Pick<WorkerDefinitionWire, 'version' | 'definition'>;
+}) {
+  const t = useT();
+  const changes = capabilityChanges(
+    entryCapabilitiesOf(inUse.definition),
+    entryCapabilitiesOf(draft.definition),
+  );
+  const capabilitiesDiffer = changes.added.length + changes.removed.length > 0;
+  const promptDiffers = entryPromptOf(inUse.definition) !== entryPromptOf(draft.definition);
+  return (
+    <div className="stack-s" data-testid="entry-draft-changes">
+      {/* Not `.section-title`: its uppercase would print the version as “V2”. */}
+      <strong className="text-small">
+        {t(`与当前生效的 v${inUse.version} 相比`, `Against v${inUse.version}, the version in use`)}
+      </strong>
+      {capabilitiesDiffer ? (
+        <>
+          <p className="text-small text-3">
+            {t(
+              '发布后，入口 agent 能做的事会这样变：',
+              'Once published, what the entry agent may do changes like this:',
+            )}
+          </p>
+          <CapabilityChangeList added={changes.added} removed={changes.removed} />
+        </>
+      ) : (
+        <p className="text-small" data-testid="entry-draft-capabilities-same">
+          {t('能力相同。', 'Same capabilities.')}
+        </p>
+      )}
+      <p className="text-small" data-testid="entry-draft-prompt-change">
+        {promptDiffers
+          ? t(
+              '系统提示词有改动，见下面的定义。',
+              'The system prompt differs; see the definition below.',
+            )
+          : t('系统提示词相同。', 'Same system prompt.')}
+      </p>
     </div>
   );
 }

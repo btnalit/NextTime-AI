@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { capabilityChanges, lineDiff } from './entry-template.js';
+import {
+  capabilityChanges,
+  entryCapabilitiesOf,
+  entryPromptOf,
+  lineDiff,
+} from './entry-template.js';
 
 describe('lineDiff (legacy 145)', () => {
   it('shows a paragraph added in the middle as those lines, with a little context and the rest folded', () => {
@@ -40,5 +45,18 @@ describe('capabilityChanges (legacy 145)', () => {
       added: ['propose_goal', 'get_goal'],
       removed: ['old_tool'],
     });
+  });
+});
+
+describe('entry definition fields (UX acceptance of #747)', () => {
+  it('reads the prompt and the capability names, and nothing when they are missing or malformed', () => {
+    expect(entryPromptOf({ systemPrompt: 'hi' })).toBe('hi');
+    expect(entryPromptOf({ systemPrompt: 3 })).toBe('');
+    expect(entryCapabilitiesOf({ capabilities: ['search', 'propose_goal'] })).toEqual([
+      'search',
+      'propose_goal',
+    ]);
+    expect(entryCapabilitiesOf({ capabilities: 'search' })).toEqual([]);
+    expect(entryCapabilitiesOf({})).toEqual([]);
   });
 });
