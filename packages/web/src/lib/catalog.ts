@@ -8,6 +8,13 @@ import {
   type WorkerDefinitionKind,
   workerDefinitionContentSchemaFor,
 } from '@nexttime/shared';
+import {
+  type FactCheckDraft,
+  emptyFactCheckDraft,
+  factCheckDraftFrom,
+  factCheckDraftProblems,
+  factCheckFromDraft,
+} from './fact-check-draft.js';
 import type { CapabilityNameRow } from './governance.js';
 import type { Translate } from './i18n.js';
 import {
@@ -297,7 +304,8 @@ export interface ProcedureStepForm {
   readonly checkParamsText: string;
   /** Legacy 464: what the observed result must satisfy, as the predicate editor edits it. */
   readonly checkExpect: PredicateDraft;
-  readonly checkFactText: string;
+  /** Legacy 464: the Fact judged, as the Fact check editor edits it. */
+  readonly checkFact: FactCheckDraft;
   /** `checkKind: 'json'` only: the check as it came. */
   readonly checkJsonText: string;
 }
@@ -335,7 +343,7 @@ export const EMPTY_STEP: ProcedureStepForm = {
   checkOperation: '',
   checkParamsText: '',
   checkExpect: emptyPredicateDraft(),
-  checkFactText: '',
+  checkFact: emptyFactCheckDraft(),
   checkJsonText: '',
 };
 
@@ -524,7 +532,11 @@ function checkFormFrom(check: unknown): Partial<ProcedureStepForm> {
       };
     }
     if (check.kind === 'fact_predicate' && shaped(['kind', 'key', 'fact'], check)) {
-      return { checkKind: 'fact_predicate', checkKey: key, checkFactText: jsonText(check.fact) };
+      return {
+        checkKind: 'fact_predicate',
+        checkKey: key,
+        checkFact: factCheckDraftFrom(check.fact),
+      };
     }
   }
   return { checkKind: 'json', checkJsonText: jsonText(check) };
@@ -618,7 +630,9 @@ function checkToWire(step: ProcedureStepForm): Record<string, unknown> {
         check: {
           kind: 'fact_predicate',
           key,
-          ...(step.checkFactText.trim() !== '' ? { fact: parsedOr(step.checkFactText) } : {}),
+          ...(factCheckFromDraft(step.checkFact) !== undefined
+            ? { fact: factCheckFromDraft(step.checkFact) }
+            : {}),
         },
       };
   }
@@ -712,7 +726,11 @@ function formProblems(form: ProcedureForm, t: Translate): Record<string, string>
             problem;
         }
       }
-      if (step.checkKind === 'fact_predicate') json(`${at}.check.fact`, step.checkFactText);
+      if (step.checkKind === 'fact_predicate') {
+        for (const [path, problem] of factCheckDraftProblems(step.checkFact, t)) {
+          problems[path === '' ? `${at}.check.fact` : `${at}.check.fact.${path}`] = problem;
+        }
+      }
     }
   }
   schema('parameters', form.parameters);

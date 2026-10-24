@@ -186,6 +186,38 @@ describe('kit/Combobox', () => {
     expect(optionLabels()).toEqual(['docker.prune高影响', 'host.reboot高影响']);
   });
 
+  it('UX P2-3 on #746: a controlled caller that takes the typed text clears the highlight with it', () => {
+    const onChange = vi.fn();
+    // A caller that takes what was typed itself (a pasted id, a list of names) and empties it.
+    function Taking() {
+      const [value, setValue] = useState('');
+      const [typed, setTyped] = useState('');
+      return (
+        <>
+          <label htmlFor="cb">动作</label>
+          <Combobox
+            id="cb"
+            options={OPTIONS}
+            value={value}
+            onChange={(next) => {
+              setValue(next);
+              onChange(next);
+            }}
+            inputValue={typed}
+            onInputValueChange={(text) => setTyped(text === 'prune' ? '' : text)}
+          />
+        </>
+      );
+    }
+    render(<Taking />);
+    // 'prune' highlighted the first of its matches; taken, the text is gone and every row is back,
+    // so Enter must not take the first of those.
+    fireEvent.change(input(), { target: { value: 'prune' } });
+    expect(input().getAttribute('aria-activedescendant')).toBeNull();
+    fireEvent.keyDown(input(), { key: 'Enter' });
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it('arrow keys move the active option, skipping disabled rows', () => {
     const onChange = vi.fn();
     render(<Harness onChange={onChange} />);

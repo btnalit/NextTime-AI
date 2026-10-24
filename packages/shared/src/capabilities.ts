@@ -2525,6 +2525,42 @@ const workerCapabilities = [
       'Propose a private draft WorkerDefinition version (definitionId omitted starts a new family).',
   },
   {
+    // Legacy 145: the platform's entry template against the entry definition the workspace runs
+    // with — the read behind the console's "the platform's entry prompt has a new version" notice.
+    // Human channel: what the platform ships is the people's decision to adopt, not the agent's.
+    name: 'get_entry_template_status',
+    group: 'worker',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'builder',
+    paramsSchema: z.object({}).strict(),
+    resultSchema: wire.EntryTemplateStatusWireSchema,
+    description:
+      'Compare the entry definition this workspace runs with against the platform’s entry template: the template (its prompt, capabilities and digest), the published entry version, and which template fields it has otherwise.',
+  },
+  {
+    // Legacy 145: a draft, never a change to what runs — publishing it is
+    // publish_worker_definition's (the owner, with its credential review). `templateDigest` and
+    // `basedOn` are what the caller looked at: a template or entry version changed since is a 409.
+    name: 'propose_entry_template_upgrade',
+    group: 'worker',
+    mode: 'propose',
+    channel: 'human',
+    minRole: 'builder',
+    paramsSchema: z
+      .object({
+        templateDigest: z.string().min(1),
+        basedOn: z
+          .object({ definitionId: id, version: z.number().int().positive() })
+          .strict()
+          .nullable(),
+      })
+      .strict(),
+    resultSchema: wire.EntryTemplateUpgradeWireSchema,
+    description:
+      'Propose your private draft of the next entry definition version: the platform template’s prompt and capabilities over the published version’s own model, egressDeny, name and description. Returns your identical draft instead of a second one. 409 entry_template_current when nothing differs; 409 entry_template_changed when the template or the published entry version is not the one in templateDigest / basedOn.',
+  },
+  {
     // D-24 (review 2026-10-02) — see publish_operation (meta group) for the rule.
     name: 'publish_worker_definition',
     group: 'worker',
@@ -4440,6 +4476,9 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set<CapabilityName>
   'issue_handle',
   'publish_worker_definition',
   'deprecate_worker_definition',
+  // Legacy 145: adopting a platform template is the people's decision.
+  'get_entry_template_status',
+  'propose_entry_template_upgrade',
   'discard_draft',
   'audit_query',
   'reconstruct',

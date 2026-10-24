@@ -1,8 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { WorkerDefinitionKind } from '@nexttime/shared';
-import { parse as parseYaml } from 'yaml';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { withWorkspace } from '../../adapters/db/pool.js';
 import { setAgentPolicy } from '../../governance/agent-profile/index.js';
@@ -13,7 +10,11 @@ import { ChangeConfirmationRequiredError } from '../change-plan/index.js';
 import { generateApiKey, hashApiKey } from '../gateway/auth.js';
 import { ensureUserForHumanPrincipal } from '../identity/users.js';
 import { installOrUpgradeModule, loadModuleRegistry } from '../platform/modules.js';
-import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/index.js';
+import {
+  loadWorkerDefinitionTemplate,
+  proposeWorkerDefinition,
+  publishWorkerDefinition,
+} from '../worker/index.js';
 
 /**
  * application/workspace/create: creating a Workspace — one transaction that inserts the row and
@@ -112,15 +113,6 @@ export interface CreateWorkspaceOutcome {
    *  content widens authority (`ChangeConfirmationRequiredError` — it declares an ActionType), which
    *  only the workspace's owner can confirm, item by item. */
   readonly skippedDefaultModules: readonly string[];
-}
-
-async function loadWorkerDefinitionTemplate(
-  filePath: string,
-): Promise<{ kind: WorkerDefinitionKind; definition: Record<string, unknown> }> {
-  const text = await readFile(filePath, 'utf8');
-  const parsed = parseYaml(text) as Record<string, unknown>;
-  const { kind, ...definition } = parsed;
-  return { kind: kind as WorkerDefinitionKind, definition };
 }
 
 export async function createWorkspaceWithOwner(

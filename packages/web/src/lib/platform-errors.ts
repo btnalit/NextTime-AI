@@ -230,6 +230,15 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
     zh: '这个版本里有对象类型或动作类型与本工作区另一个已发布的本体族重名；本次没有发布任何内容。请改名，或改动拥有该类型的那个本体族',
     en: 'An object type or action type in this version is already declared by another published ontology family in this workspace — nothing was published. Rename it, or change the family that owns it',
   },
+  // Legacy 145: `propose_entry_template_upgrade`. Nothing was proposed in either.
+  entry_template_current: {
+    zh: '当前生效的入口定义已经和平台模板一致，没有可生成的草稿',
+    en: 'The entry definition in use already matches the platform template — there is no draft to propose',
+  },
+  entry_template_changed: {
+    zh: '在你查看之后，平台模板或当前生效的入口版本变了，本次没有生成草稿。已重新读取，请再看一遍差异',
+    en: 'The platform template or the entry version in use changed after you looked — no draft was proposed. It has been read again; look at the difference once more',
+  },
   // S11 P1-D: a Skill name another Skill already has published in this workspace (a Worker mounts
   // Skills by name, so a name has one Skill) — `publish_skill`, a pack's install review and
   // install. Nothing was published.

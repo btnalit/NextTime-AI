@@ -16,6 +16,7 @@ import {
   HandleIssuanceError,
   HandleRevoked,
   ScopeValidationError,
+  WORKER_CEILING_CAPABILITIES,
   attenuate,
   createDbRevocationCheck,
   entryScope,
@@ -689,6 +690,14 @@ describe('entryScope', () => {
     const withResources = entryScope({ resources: { gatekeeper: ['gk-1'] } });
     expect(withResources.resources).toEqual({ gatekeeper: ['gk-1'] });
     expect(withResources.capabilities).toEqual([...ENTRY_CEILING_CAPABILITIES]);
+  });
+
+  it('holds no human-channel capability, even one named propose_* (legacy 145)', () => {
+    const human = [...ENTRY_CEILING_CAPABILITIES, ...WORKER_CEILING_CAPABILITIES].filter(
+      (name) => getCapability(name)?.channel !== 'handle',
+    );
+    expect(human).toEqual([]);
+    expect(getCapability('propose_entry_template_upgrade')?.channel).toBe('human');
   });
 
   it('with no role, is identical to the full fixed ceiling (unchanged pre-W5.5 behavior)', () => {
