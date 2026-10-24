@@ -4254,6 +4254,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **绑定检查顺序**：`plan.ts` 先判断取自的步骤是不是自己（「takes from this step itself」）、在不在计划里（「which is not in the plan」），然后才是 dependsOn 与输出约定；控制台流程页把两条内核原因翻成中文，本地检查对「取自自己」不再让人加 dependsOn。
   - **测试**：`manifest.test.ts` 丢弃竞争的辅助函数在事务一开始就挂上 `allSettled`，避免全量负载下报未处理的 rejection。
   - **不在本 PR**：目标页显示启动参数与「请求人确认（流程第 N 步）」（控制台，遗留 454）；参数对象键名不扫凭据（遗留 444）；「取自没等的步骤」的说法（遗留 468）。
+  - **控制台一侧（#751，2026-10-24 合入，84969a4）**：`lib/goals` 的 `goalPlanSource`（第 1 版的 `fromProcedure`）、`planSourceParameters`、`confirmCheckOrigin`；目标信息与计划版本列出启动参数，验收、计划编辑器、确认卡片写出请求人确认来自流程第几步；来源固定取第 1 版（后续版本保留检查 key，key 被删时说明不再出现）。参数说明未显示（遗留 474）。
 - 实现说明（GO5e-1：入口 agent 在对话里发起目标，#728，2026-10-23 合入，5b4b7aa；无迁移；GO5e 拆两个 PR，GO5e-2 做对话里的目标卡片与里程碑消息）：
   - **工具注册**：入口与 interactive 模式各加 `propose_goal`、`get_goal`、`list_goals`、`get_goal_revision`、`list_goal_unresolved_actions`；入口 Handle 范围按角色算、本来就有这些能力，内核不改；`confirm_goal` 等目标操作不注册，内核对任何 Handle 也拒绝（真实 pi SDK 测试锁住：模型看不到 `confirm_goal`，硬调时 pi 返回工具错误、内核收不到）。
   - **描述与模板分工**：`propose_goal` 描述里的要点（判据、反例、优先平台检查）随工具下发、到达所有工作区；完整「Goals」一节只在 `ontology/entry-agent.yaml`，只写进新建工作区，已有工作区在遗留 145 之前只靠描述。
