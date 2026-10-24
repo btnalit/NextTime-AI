@@ -183,6 +183,63 @@ describe('CatalogPage', () => {
     );
   });
 
+  it('S11 「门确认不存在」 A: an observe Operation’s detail says which target answers mean the thing is not there; one with no declaration says nothing', async () => {
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [
+          {
+            gatekeeperId: 'gk-1',
+            name: 'record.get',
+            status: 'published',
+            mode: 'observe',
+            blastRadius: 'low',
+            autoApprovable: true,
+            absentAnswers: { statuses: [404, 410] },
+          },
+          {
+            gatekeeperId: 'gk-1',
+            name: 'unit.show',
+            status: 'draft',
+            mode: 'observe',
+            blastRadius: 'low',
+            autoApprovable: true,
+            absentAnswers: { exitCodes: [4] },
+            draftDigest: 'sha256:unit-show',
+          },
+          {
+            gatekeeperId: 'gk-1',
+            name: 'stock.list',
+            status: 'published',
+            mode: 'observe',
+            blastRadius: 'low',
+            autoApprovable: true,
+          },
+        ],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+    });
+    renderPage(http);
+    const rowNamed = async (name: string) => {
+      const row = (await screen.findAllByTestId('catalog-row')).find((candidate) =>
+        candidate.textContent?.includes(name),
+      );
+      if (!row) throw new Error(`${name} row missing`);
+      return row;
+    };
+    let detail = await selectRow(await rowNamed('record.get'));
+    expect(within(detail).getByTestId('catalog-detail-absent-answers').textContent).toBe(
+      '目标回答 404 或 410 时，表示要查的东西不存在：这次观察记为“不存在”，不算调用失败。',
+    );
+    expect(detail.textContent).toContain('表示不存在的回答');
+    detail = await selectRow(await rowNamed('unit.show'));
+    expect(within(detail).getByTestId('catalog-detail-absent-answers').textContent).toContain(
+      '命令以退出码 4 结束时',
+    );
+    detail = await selectRow(await rowNamed('stock.list'));
+    expect(within(detail).queryByTestId('catalog-detail-absent-answers')).toBeNull();
+    expect(detail.textContent).not.toContain('表示不存在的回答');
+  });
+
   it('legacy 349: the first version of a write or high-impact Operation is confirmed before it is published; a low-impact observe draft stays one click', async () => {
     const http = scriptedHttp({
       list_operations: () => ({

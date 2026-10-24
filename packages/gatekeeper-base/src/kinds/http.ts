@@ -499,11 +499,16 @@ export class HttpTransport implements Transport {
         // Legacy 287: only a proven "not sent" is a plain failure (`call-failure.ts`).
         throw failedBeforeAnswer(what, err);
       }
-      // The target's own answers — a redirect, a non-2xx status — are plain failures.
+      // The target's own answers — a redirect, a non-2xx status — are plain failures. The status
+      // goes with the failure, so an observe Operation that declares it means "does not exist"
+      // answers as absent (`GatekeeperBase.observe`); the body is never read, so nothing the
+      // target writes in it can say so.
       await refuseRedirect(what, response, url);
       if (!response.ok) {
         await response.body?.cancel().catch(() => {});
-        throw new TransportInvokeError(`${what} responded ${response.status}`);
+        throw new TransportInvokeError(`${what} responded ${response.status}`, {
+          targetAnswer: { status: response.status },
+        });
       }
       let text: string;
       try {

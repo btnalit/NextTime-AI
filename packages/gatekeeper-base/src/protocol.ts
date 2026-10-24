@@ -1,4 +1,4 @@
-import { OperationSchema } from '@nexttime/shared';
+import { GateAbsenceSchema, OperationSchema } from '@nexttime/shared';
 import { z } from 'zod';
 
 /**
@@ -55,6 +55,11 @@ export type ObserveRequest = z.infer<typeof ObserveRequestSchema>;
 export const ObserveResponseSchema = z.object({
   data: z.unknown(),
   observedFacts: z.array(ObservedFactCandidateSchema).optional(),
+  /** S11 「门确认不存在」: the target answered with what the Operation declares means "does not
+   *  exist" (`GatekeeperBase`'s `declaredAbsence`) — on the envelope only, never inside `data`;
+   *  `data` is then `null`. The kernel accepts it only when the published definition declares that
+   *  very answer. A gate built on an older `gatekeeper-base` never sends it. */
+  absent: GateAbsenceSchema.optional(),
 });
 export type ObserveResponse = z.infer<typeof ObserveResponseSchema>;
 

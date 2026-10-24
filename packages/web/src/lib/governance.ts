@@ -2,6 +2,7 @@ import {
   type GateOwnedParamWire,
   type GatekeeperDetailWire,
   type GrantStatus,
+  type OperationAbsentAnswersWire,
   type OperationDefinitionChangeWire,
   type OperationGovernanceChangeWire,
   type PrincipalKind,
@@ -207,6 +208,27 @@ export interface OperationCatalogRow {
   /** Review #493 on #583 (`OperationSummaryWire.draftDigest`): on a draft only — which content
    *  this row shows, handed back to discard / publish so a draft revised since is refused. */
   readonly draftDigest?: string;
+  /** S11 「门确认不存在」 A (`OperationSummaryWire.absentAnswers`): on an observe Operation that
+   *  declares them, the target's answers that mean "does not exist". */
+  readonly absentAnswers?: OperationAbsentAnswersWire;
+}
+
+/** S11 「门确认不存在」 A: what an observe Operation's declaration means, in a sentence — the
+ *  catalog's detail line for `OperationCatalogRow.absentAnswers`. */
+export function absentAnswersText(answers: OperationAbsentAnswersWire, t: Translate): string {
+  const or = t(' 或 ', ' or ');
+  if ('statuses' in answers) {
+    const statuses = answers.statuses.join(or);
+    return t(
+      `目标回答 ${statuses} 时，表示要查的东西不存在：这次观察记为“不存在”，不算调用失败。`,
+      `When the target answers ${statuses}, the thing looked up does not exist: the observation is recorded as “not there”, not as a failed call.`,
+    );
+  }
+  const codes = answers.exitCodes.join(or);
+  return t(
+    `命令以退出码 ${codes} 结束时，表示要查的东西不存在：这次观察记为“不存在”，不算调用失败。`,
+    `When the command exits with ${codes}, the thing looked up does not exist: the observation is recorded as “not there”, not as a failed call.`,
+  );
 }
 
 /** The stable identity of an Operation row — no dedicated id column exists (see

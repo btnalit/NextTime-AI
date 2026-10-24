@@ -13,7 +13,7 @@ An HTTP server (`createGatekeeperServer`, Fastify) exposes seven operations unde
 |---|---|---|---|
 | GET | `/gate/describe_operations` | — | Returns the whole manifest. |
 | GET | `/gate/health` | — | `{status: 'ok'\|'degraded'\|'down'}`. |
-| POST | `/gate/observe` | `{operation, params, onBehalfOf?, operationDigest}` | Only `mode: 'observe'` Operations. |
+| POST | `/gate/observe` | `{operation, params, onBehalfOf?, operationDigest}` | Only `mode: 'observe'` Operations. `result.absent` only for a declared "not there" answer (see "Manifest format"). |
 | POST | `/gate/simulate` | `{operation, params, onBehalfOf?, operationDigest}` | Dry-run description, never executes. |
 | POST | `/gate/apply` | `{operation, params, onBehalfOf?, actionRequestId, operationDigest}` | Only `mode: 'execute'`; idempotent by `actionRequestId`. |
 | POST | `/gate/apply_lookup` | `{operation, params, onBehalfOf?, actionRequestId}` | Legacy 287: what this gate holds for that `apply`, read from the idempotency store only — never the transport. See below. |
@@ -74,11 +74,33 @@ A manifest is an array of `Operation` (`@nexttime/shared`'s `OperationSchema`):
 await_decision, reads, writes, result_mapping?}`. `binding.kind` matches the gate's own transport
 kind:
 
-- `http`: `{kind:'http', method, path}` — `{name}` segments in `path` are substituted from `params`.
+- `http`: `{kind:'http', method, path, absent_statuses?}` — `{name}` segments in `path` are
+  substituted from `params`.
 - `mcp`: `{kind:'mcp', tool_name}`.
-- `cli`: `{kind:'cli', command_template}` — `{name}` tokens substituted, one argv element each.
-- `ssh`: `{kind:'ssh', command_template?, command_pattern?}` — a fixed template, or a regex class
-  matched against a literal `params.command` (see "Command policy table" below).
+- `cli`: `{kind:'cli', command_template, absent_exit_codes?}` — `{name}` tokens substituted, one
+  argv element each.
+- `ssh`: `{kind:'ssh', command_template?, command_pattern?, absent_exit_codes?}` — a fixed template,
+  or a regex class matched against a literal `params.command` (see "Command policy table" below).
+
+### Answers that mean "not there" (`absent_statuses` / `absent_exit_codes`)
+
+S11 「门确认不存在」: an `observe` Operation may declare which of the target's own answers mean
+"the thing this call names does not exist" — `absent_statuses` (only `404` and `410`) on an `http`
+binding, `absent_exit_codes` (1–125, at most 8) on a `cli` or `ssh` one. When the target answers
+one of them, `/gate/observe` returns `{ok: true, result: {data: null, observedFacts: [], absent:
+{status} | {exitCode}}}` instead of a failed call. That is the only way a gate says absent:
+
+- only on the envelope, never read from the target's body (an `http` body is not read at all for
+  such an answer, so a body that claims absence is just data on a 2xx and a failure otherwise);
+- only for a declared answer — an undeclared 404, a 403, a 500, exit 0/126/127, a signal, ssh's own
+  255, a timeout or a connection failure stay what they were;
+- only for `observe` — an `execute` call that gets a declared answer back still failed.
+
+The declaration is part of `binding`, so it changes the Operation's digest: it is reviewed when the
+Operation is published, and a gate whose definition says otherwise is refused (409
+`operation_definition_mismatch`). The kernel accepts `absent` only when the published definition
+declares that answer and the result carries no data and no Facts (`gateAbsenceOf`). An `mcp`
+binding cannot declare one; the `docker` gate's own transport never reports one.
 
 `importOpenApi(document)` and `importMcpTools(toolsListResponse)` produce a manifest **draft**
 from an OpenAPI 3.x document / an MCP `tools/list` response: `GET`/`readOnlyHint` → `observe`,

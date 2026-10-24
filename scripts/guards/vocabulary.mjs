@@ -245,6 +245,10 @@ export const OPERATION_MANIFEST_SNAKE_CASE_FIELDS = new Set([
   'read_only_hint',
   'destructive_hint',
   'idempotent_hint',
+  // S11 「门确认不存在」 A: the target answers an observe Operation's binding declares mean "not
+  // there" — binding fields, same manifest shape and convention.
+  'absent_statuses',
+  'absent_exit_codes',
 ]);
 
 export const SNAKE_CASE_PATTERN = /^[a-z][a-z0-9]*(_[a-z0-9]+)+$/;

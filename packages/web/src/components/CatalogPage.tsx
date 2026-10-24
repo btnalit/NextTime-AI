@@ -32,6 +32,7 @@ import {
   type OperationStatsRow,
   type ProcedureRow,
   type SkillRow,
+  absentAnswersText,
   operationKey,
   operationStatsKey,
   revisionDraftKey,
@@ -941,6 +942,19 @@ function OperationDetailView({
       key: 'blastRadius',
       label: t('影响范围', 'Blast radius'),
       value: <StatusChip machine="blastRadius" status={row.blastRadius} size="s" />,
+    });
+  }
+  // S11 「门确认不存在」 A: which of the target's answers mean "not there" — the gate then
+  // answers the observation as absent, so a reviewer sees it before publishing.
+  if (row.absentAnswers) {
+    items.push({
+      key: 'absentAnswers',
+      label: t('表示不存在的回答', 'Means “not there”'),
+      value: (
+        <span data-testid="catalog-detail-absent-answers">
+          {absentAnswersText(row.absentAnswers, t)}
+        </span>
+      ),
     });
   }
   items.push({

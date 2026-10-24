@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   ActionDescriptionSchema,
+  GateAbsenceSchema,
   OPERATION_NAME_MAX,
   OperationSchema,
+  isDeclaredAbsence,
+  operationAbsentAnswers,
   operationNameProblem,
 } from './action-description.js';
 import type { ActionDescription, Operation } from './action-description.js';
@@ -157,5 +160,112 @@ describe('operationNameProblem (legacy 232)', () => {
     ]) {
       expect(operationNameProblem(name)).toBe('invisible_or_control_characters');
     }
+  });
+});
+
+describe('absence declarations (S11 「门确认不存在」 A)', () => {
+  const observeHttp: Operation = {
+    name: 'record.get',
+    binding: { kind: 'http', method: 'GET', path: '/records/{id}', absent_statuses: [404] },
+    params_schema: { type: 'object' },
+    mode: 'observe',
+    blast_radius: 'low',
+    reversibility: true,
+    auto_approvable: true,
+    await_decision: false,
+    reads: ['Record'],
+    writes: [],
+  };
+  const observeCli: Operation = {
+    ...observeHttp,
+    name: 'unit.show',
+    binding: { kind: 'cli', command_template: 'unitctl show {{name}}', absent_exit_codes: [4] },
+  };
+  const observeSsh: Operation = {
+    ...observeHttp,
+    name: 'file.stat',
+    binding: { kind: 'ssh', command_template: 'stat {{path}}', absent_exit_codes: [1] },
+  };
+
+  it('parses a declaration on http, cli and ssh bindings and keeps it', () => {
+    expect(OperationSchema.parse(observeHttp).binding).toMatchObject({ absent_statuses: [404] });
+    expect(OperationSchema.parse(observeCli).binding).toMatchObject({ absent_exit_codes: [4] });
+    expect(OperationSchema.parse(observeSsh).binding).toMatchObject({ absent_exit_codes: [1] });
+    expect(
+      OperationSchema.parse({
+        ...observeHttp,
+        binding: { ...observeHttp.binding, absent_statuses: [404, 410] },
+      }).binding,
+    ).toMatchObject({ absent_statuses: [404, 410] });
+  });
+
+  it('refuses statuses other than 404 / 410, exit statuses outside 1–125, empty and repeated lists', () => {
+    for (const absent_statuses of [[200], [400], [403], [500], [], [404, 404]]) {
+      expect(() =>
+        OperationSchema.parse({
+          ...observeHttp,
+          binding: { kind: 'http', method: 'GET', path: '/x', absent_statuses },
+        }),
+      ).toThrow();
+    }
+    for (const absent_exit_codes of [[0], [126], [127], [130], [255], [-1], [1.5], [], [2, 2]]) {
+      expect(() =>
+        OperationSchema.parse({
+          ...observeCli,
+          binding: { kind: 'cli', command_template: 'x', absent_exit_codes },
+        }),
+      ).toThrow();
+      expect(() =>
+        OperationSchema.parse({
+          ...observeSsh,
+          binding: { kind: 'ssh', command_template: 'x', absent_exit_codes },
+        }),
+      ).toThrow();
+    }
+    expect(() =>
+      OperationSchema.parse({
+        ...observeCli,
+        binding: {
+          kind: 'cli',
+          command_template: 'x',
+          absent_exit_codes: [1, 2, 3, 4, 5, 6, 7, 8, 9],
+        },
+      }),
+    ).toThrow();
+  });
+
+  it('reads a declaration only on an observe-class Operation', () => {
+    expect(operationAbsentAnswers(observeHttp)).toEqual({ statuses: [404] });
+    expect(operationAbsentAnswers(observeCli)).toEqual({ exitCodes: [4] });
+    expect(operationAbsentAnswers(observeSsh)).toEqual({ exitCodes: [1] });
+    expect(operationAbsentAnswers({ ...observeHttp, mode: 'execute' })).toBeUndefined();
+    expect(
+      operationAbsentAnswers({
+        ...observeHttp,
+        binding: { kind: 'http', method: 'GET', path: '/x' },
+      }),
+    ).toBeUndefined();
+    expect(
+      operationAbsentAnswers({ ...observeHttp, binding: { kind: 'mcp', tool_name: 'get' } }),
+    ).toBeUndefined();
+  });
+
+  it('counts an answer as absent only when the Operation declares that very answer', () => {
+    expect(isDeclaredAbsence(observeHttp, { status: 404 })).toBe(true);
+    expect(isDeclaredAbsence(observeHttp, { status: 410 })).toBe(false);
+    expect(isDeclaredAbsence(observeHttp, { exitCode: 404 })).toBe(false);
+    expect(isDeclaredAbsence(observeCli, { exitCode: 4 })).toBe(true);
+    expect(isDeclaredAbsence(observeCli, { exitCode: 1 })).toBe(false);
+    expect(isDeclaredAbsence(observeCli, { status: 4 })).toBe(false);
+    expect(isDeclaredAbsence({ ...observeCli, mode: 'execute' }, { exitCode: 4 })).toBe(false);
+  });
+
+  it('GateAbsenceSchema takes exactly one of status / exitCode and nothing else', () => {
+    expect(GateAbsenceSchema.safeParse({ status: 404 }).success).toBe(true);
+    expect(GateAbsenceSchema.safeParse({ exitCode: 4 }).success).toBe(true);
+    expect(GateAbsenceSchema.safeParse({ status: 404, exitCode: 4 }).success).toBe(false);
+    expect(GateAbsenceSchema.safeParse({ status: '404' }).success).toBe(false);
+    expect(GateAbsenceSchema.safeParse({ status: 404, note: 'x' }).success).toBe(false);
+    expect(GateAbsenceSchema.safeParse({}).success).toBe(false);
   });
 });

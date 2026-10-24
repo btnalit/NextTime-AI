@@ -263,6 +263,7 @@ TLS/错误信封处理（README"RAGFlow 的 `{code, data}` 错误信封对协议
 | `reversibility` | 是否实现了 `/gate/revert`（门自己的 transport 是否提供 `revert`） |
 | `reads`/`writes` | 该 Operation 观察/影响哪些图 ObjectType——若这些类型还不存在，先走 `docs/runbooks/add-domain-pack.md` |
 | `binding` | 与门自己的 `GATE_TRANSPORT_KIND` 匹配：`http` → `{method,path}`；`mcp` → `{tool_name}`；`cli` → `{command_template}`；`ssh` → `{command_template}` 或 `{command_pattern}`。`http` 的 `path` 拼在 base URL 自己的路径之后（base URL 带前缀也保留）；`{param}` 路径参数只能是**一个路径段**——空值、`.`、`..`、含 `/` 或反斜杠（任何一层百分号编码后也算）一律在发请求前拒绝（R-22），所以模板不能被参数带到未发布的上级端点 |
+| `binding.absent_statuses` / `binding.absent_exit_codes`（可选，只对 `observe`） | 目标的哪些回答表示「要查的东西不存在」：`http` 只能写 `404`、`410`；`cli` / `ssh` 写退出码 1–125（最多 8 个；0、126、127、信号、ssh 自己的 255 都不行）；`mcp` 不能写。目标回答其中之一时，这次观察记为「不存在」（`absent`），不算调用失败；目标的响应体从不参与判断，没声明的回答照旧算失败。声明是 `binding` 的一部分，改了会改摘要，要重新审核发布。控制台目录里的 Operation 详情会写出这些回答 |
 
 `importOpenApi(document)`/`importMcpTools(toolsListResponse)`（`@nexttime/gatekeeper-base`）能从一
 份 OpenAPI 3.x 文档或 MCP `tools/list` 响应**自动**推导出草稿清单（`GET`/`readOnlyHint` →

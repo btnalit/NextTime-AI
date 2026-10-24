@@ -12,6 +12,7 @@ import {
   GatekeeperTimeoutError,
   HttpGatekeeperClient,
   deriveConnectionSecret,
+  gateAbsenceOf,
   gateFailureRetry,
   platformGateTarget,
 } from './index.js';
@@ -810,5 +811,79 @@ describe('gateFailureRetry — whether a failed call is worth making again (S11 
         jsonResponse({ ok: false, error: { code: 'invalid_params', message: 'no' } }, 400),
       ),
     ).toBe('deterministic');
+  });
+});
+
+describe('gateAbsenceOf — what the kernel takes of a gate saying the target has no such thing (S11 「门确认不存在」 A)', () => {
+  const lookup = {
+    name: 'record.get',
+    mode: 'observe' as const,
+    binding: {
+      kind: 'http' as const,
+      method: 'GET',
+      path: '/records/{id}',
+      absent_statuses: [404 as const],
+    },
+  };
+  const show = {
+    name: 'unit.show',
+    mode: 'observe' as const,
+    binding: { kind: 'cli' as const, command_template: 'unitctl show {name}', absent_exit_codes: [4] },
+  };
+  const refused = (fn: () => unknown) => {
+    try {
+      fn();
+    } catch (err) {
+      return err;
+    }
+    throw new Error('expected a refusal');
+  };
+
+  it('takes an absence the published definition declares, from the envelope only', () => {
+    expect(gateAbsenceOf(lookup, { data: null, observedFacts: [], absent: { status: 404 } })).toEqual(
+      { status: 404 },
+    );
+    expect(gateAbsenceOf(show, { data: null, absent: { exitCode: 4 } })).toEqual({ exitCode: 4 });
+    // No statement: no absence, whatever the data says.
+    expect(gateAbsenceOf(lookup, { data: null })).toBeUndefined();
+    expect(
+      gateAbsenceOf(lookup, { data: { absent: { status: 404 }, status: 404, found: false } }),
+    ).toBeUndefined();
+  });
+
+  it('refuses one it does not declare, a malformed one, and one with data or Facts beside it', () => {
+    const cases: Array<[Parameters<typeof gateAbsenceOf>[0], unknown, RegExp]> = [
+      [lookup, { data: null, absent: { status: 410 } }, /status 410, which its published definition does not declare/],
+      [lookup, { data: null, absent: { exitCode: 404 } }, /exit status 404/],
+      [show, { data: null, absent: { exitCode: 1 } }, /exit status 1/],
+      [{ ...lookup, mode: 'execute' as const }, { data: null, absent: { status: 404 } }, /does not declare/],
+      [
+        { ...lookup, binding: { kind: 'http' as const, method: 'GET', path: '/records/{id}' } },
+        { data: null, absent: { status: 404 } },
+        /does not declare/,
+      ],
+      [lookup, { data: null, absent: true }, /in a form the platform does not read/],
+      [lookup, { data: null, absent: null }, /in a form the platform does not read/],
+      [lookup, { data: null, absent: { status: '404' } }, /in a form the platform does not read/],
+      [lookup, { data: null, absent: { status: 404, exitCode: 4 } }, /in a form/],
+      [lookup, { data: { id: 'r1' }, absent: { status: 404 } }, /also sent data/],
+      [
+        lookup,
+        {
+          data: null,
+          absent: { status: 404 },
+          observedFacts: [{ objectType: 'Record', identity: { id: 'r1' } }],
+        },
+        /also sent observed Facts/,
+      ],
+    ];
+    for (const [operation, response, message] of cases) {
+      const err = refused(() => gateAbsenceOf(operation, response as never));
+      expect(err).toBeInstanceOf(GatekeeperClientError);
+      expect(err).toMatchObject({ code: 'invalid_response', status: 200 });
+      expect((err as Error).message).toMatch(message);
+      // The gate would answer the same again: nothing a retry changes.
+      expect(gateFailureRetry(err)).toBe('deterministic');
+    }
   });
 });

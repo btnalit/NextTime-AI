@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { GateAbsenceSchema } from './action-description.js';
 import {
   ConflictStatusSchema,
   ConnectionRequestStatusSchema,
@@ -221,12 +222,17 @@ export const ATTEST_FACT_LINK_MAX_LENGTH = 2048;
  *  `observe_operation`'s own result, and (fixed after this task's first CI run caught the
  *  mismatch — real Postgres, not reproducible locally) also one of `request_action`'s three
  *  possible result shapes, taken whenever the resolved Operation is `mode: 'observe'` (see that
- *  entry's own resultSchema doc comment below). Defined once, reused by both. */
+ *  entry's own resultSchema doc comment below). Defined once, reused by both.
+ *
+ *  S11 「门确认不存在」 A: `absent` is set when the gate answered that the target has no such
+ *  thing — the target's http status or exit status, one the published Operation declares means so
+ *  (`isDeclaredAbsence`); `data` is then `null` and no Facts were written. */
 const gateObserveResultSchema = z
   .object({
     status: z.literal('ok'),
     data: z.unknown(),
     observedFactCount: z.number().int().nonnegative(),
+    absent: GateAbsenceSchema.optional(),
   })
   .strict();
 

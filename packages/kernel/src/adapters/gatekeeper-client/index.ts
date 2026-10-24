@@ -14,7 +14,15 @@ import {
   normalizeGateToken,
   redirectRefusalMessage,
 } from '@nexttime/gatekeeper-base';
-import { correlationHeaders, storableText, storableValue } from '@nexttime/shared';
+import {
+  type GateAbsence,
+  GateAbsenceSchema,
+  type Operation,
+  correlationHeaders,
+  isDeclaredAbsence,
+  storableText,
+  storableValue,
+} from '@nexttime/shared';
 import { scrubSecretValues } from '../../governance/redaction/index.js';
 import { currentCorrelationId } from '../../substrate/correlation/index.js';
 import {
@@ -228,6 +236,42 @@ export class GatekeeperTimeoutError extends Error {
     this.name = 'GatekeeperTimeoutError';
     this.path = path;
   }
+}
+
+/**
+ * S11 「门确认不存在」 A: the absence a gate's `observe` answer states, if it states one, checked
+ * against the definition the kernel published. Absence is only ever the gate's own statement on the
+ * envelope (`ObserveResponse.absent`: the target's http status or exit status, which the gate's
+ * transport reported), and it counts only when `operation` — the published definition — declares
+ * that very answer means "does not exist" (`isDeclaredAbsence`: an observe-class Operation's
+ * binding). Nothing in `data` is ever read as absence, whatever it holds.
+ *
+ * An answer that states an absence the kernel does not take is refused as `invalid_response` (the
+ * gate would answer the same again): a malformed one, one the published definition does not
+ * declare, or one that comes with data or observed Facts.
+ */
+export function gateAbsenceOf(
+  operation: Pick<Operation, 'name' | 'mode' | 'binding'>,
+  response: ObserveResponse,
+): GateAbsence | undefined {
+  const claimed = (response as { readonly absent?: unknown }).absent;
+  if (claimed === undefined) return undefined;
+  const refuse = (why: string): never => {
+    throw new GatekeeperClientError(
+      `gatekeeper client: gate/observe for "${operation.name}" answered that the target has no such thing, ${why} — refused`,
+      { code: 'invalid_response', status: 200 },
+    );
+  };
+  const parsed = GateAbsenceSchema.safeParse(claimed);
+  if (!parsed.success) return refuse('in a form the platform does not read');
+  if (!isDeclaredAbsence(operation, parsed.data)) {
+    const answer =
+      'status' in parsed.data ? `status ${parsed.data.status}` : `exit status ${parsed.data.exitCode}`;
+    return refuse(`by ${answer}, which its published definition does not declare means so`);
+  }
+  if (response.data !== null && response.data !== undefined) return refuse('and also sent data');
+  if ((response.observedFacts ?? []).length > 0) return refuse('and also sent observed Facts');
+  return parsed.data;
 }
 
 /** What the kernel presents to a gate — see this module's doc comment. */

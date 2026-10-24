@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import {
   GatekeeperBase,
   InMemoryIdempotencyStore,
+  TransportInvokeError,
   createGatekeeperServer,
 } from '@nexttime/gatekeeper-base';
 import type { Transport, TransportInvokeResult } from '@nexttime/gatekeeper-base';
@@ -74,6 +75,11 @@ class RecordingTransport implements Transport {
     if (operation.name === 'observe.inventory.mapped') {
       return { data: { hosts: [{ name: 'h1' }, { name: 'h2' }] } };
     }
+    if (operation.name === 'observe.host') {
+      throw new TransportInvokeError('http transport: GET /hosts/h9 responded 404', {
+        targetAnswer: { status: 404 },
+      });
+    }
     return { data: { ok: true, operation: operation.name, params } };
   }
 }
@@ -115,6 +121,13 @@ const OBSERVE_MAPPED_OP: Operation = {
     object_type: 'test.Host',
     identity_keys: ['name'],
   },
+};
+
+/** S11 「门确认不存在」 A: the target's 404 to this one means it has no such host. */
+const OBSERVE_HOST_OP: Operation = {
+  ...OBSERVE_OP,
+  name: 'observe.host',
+  binding: { kind: 'http', method: 'GET', path: '/hosts/h9', absent_statuses: [404] },
 };
 
 const AUTO_OP: Operation = {
@@ -307,7 +320,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       ownerId = await adminInsertPrincipal('owner', 'owner');
 
       const gate = new GatekeeperBase({
-        manifest: [OBSERVE_OP, OBSERVE_MAPPED_OP, AUTO_OP],
+        manifest: [OBSERVE_OP, OBSERVE_MAPPED_OP, OBSERVE_HOST_OP, AUTO_OP],
         transport: new RecordingTransport(),
         credentialResolver: { resolve: async () => ({}) },
         idempotencyStore: new InMemoryIdempotencyStore(),
@@ -338,12 +351,13 @@ describe.runIf(DATABASE_URL !== undefined)(
 
         await importManifest(client, workspaceId, {
           gatekeeperId,
-          operations: [OBSERVE_OP, OBSERVE_MAPPED_OP, AUTO_OP],
+          operations: [OBSERVE_OP, OBSERVE_MAPPED_OP, OBSERVE_HOST_OP, AUTO_OP],
           proposedBy: { id: ownerId, kind: 'human' },
           activityId: activity.id,
         });
         await publishOperation(client, workspaceId, { gatekeeperId, name: OBSERVE_OP.name });
         await publishOperation(client, workspaceId, { gatekeeperId, name: OBSERVE_MAPPED_OP.name });
+        await publishOperation(client, workspaceId, { gatekeeperId, name: OBSERVE_HOST_OP.name });
         await publishOperation(client, workspaceId, { gatekeeperId, name: AUTO_OP.name });
       });
 
@@ -485,6 +499,27 @@ describe.runIf(DATABASE_URL !== undefined)(
         mode: 'observe',
         status: 'ok',
         payload: { hosts: ['h1', 'h2'] },
+      });
+
+      // S11 「门确认不存在」 A: an observation the gate answers absent — the target's 404, which
+      // the published definition declares — is recorded as absent, with the target's answer.
+      expect(
+        await dispatchCapability({ pool }, caller, 'observe_operation', {
+          gatekeeperId,
+          operation: OBSERVE_HOST_OP.name,
+          params: {},
+        }),
+      ).toEqual({ status: 'ok', data: null, observedFactCount: 0, absent: { status: 404 } });
+      const absentCall = (await gateCallActivities(workerRunId))[1];
+      expect(absentCall?.metadata).toMatchObject({
+        operation: OBSERVE_HOST_OP.name,
+        mode: 'observe',
+        status: 'absent',
+      });
+      expect((await observationForActivity(absentCall?.id ?? ''))[0]?.content).toMatchObject({
+        operation: OBSERVE_HOST_OP.name,
+        status: 'absent',
+        payload: { absent: { status: 404 } },
       });
     });
 

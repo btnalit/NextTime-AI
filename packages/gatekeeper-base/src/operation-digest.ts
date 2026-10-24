@@ -13,7 +13,8 @@ import type { z } from 'zod';
  * Both sides call this one function, so it is the one definition of "the same Operation".
  *
  * **Which fields.** Exactly the ones a gate acts on when it runs the Operation:
- *   - `name` and `binding` (where the call goes);
+ *   - `name` and `binding` (where the call goes, and — S11 「门确认不存在」 — which of the target's
+ *     answers to an observe call mean "does not exist": `absent_statuses` / `absent_exit_codes`);
  *   - `params_schema` (what is validated and, through `x-in`, where each param is sent);
  *   - `result_mapping` (which observed Facts it reports);
  *   - `mode` (which protocol call it answers);
