@@ -4279,6 +4279,12 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **Handle 上限**：入口与 worker 的 Handle 上限按「名字以 `propose_` 开头」收能力时，先排除 human channel 能力（`assertValidScope` 本来就不让它们进 Handle）；全注册表目前只有 `propose_entry_template_upgrade` 受影响。
   - **控制台**：目录 → Worker 入口定义列表下的不同提示、那一版详情里的说明、能力增减（按中文名、不折叠，放在提示词差异前面）、逐行提示词差异与「按平台模板生成新版本草稿」；任何入口草稿的详情都写「与当前生效的 vN 相比」的能力增减与提示词是否改动；只有构建者和所有者读这个状态。
   - **不在本 PR**：未变行展开（遗留 471）、入口定义名字与草稿说明（遗留 472）、创建工作区时记模板摘要（遗留 473）。
+- 实现说明（「门确认不存在」A：门的有类型不存在，#753，2026-10-24 合入，12a256c；无迁移）：
+  - **声明**：observe 类 Operation 的 `binding` 可声明 `absent_statuses`（http，只能 404、410）或 `absent_exit_codes`（cli / ssh，1–125，最多 8 个；0、126、127、128 以上与 ssh 的 255 都不是命令的回答）；mcp 不能声明；execute 类带声明在清单、导入、提议时拒收。声明是 `binding` 的一部分，算进 Operation 摘要。只能声明「在门用的凭据下只有东西不存在时才会给」的回答（`ls`、`stat`、`test -e`、`kubectl get`、`sudo -n` 的退出码、隐藏资源或配错地址的 404 都不合格；门基础库 README 与 `add-gatekeeper.md` §6）。`operationAbsentAnswers` / `isDeclaredAbsence` 是唯一读法。
+  - **门**：三种传输只在拿到目标自己的回答时记 `TransportInvokeError.targetAnswer`（http 非 2xx 状态码，不读响应体；cli / ssh 退出码），超时、连接失败、信号、ENOENT 从不带它；`GatekeeperBase.observe` 拿到声明过的回答回 `{data: null, observedFacts: [], absent: {status} | {exitCode}}`，`absent` 只在 `/gate/observe` 的信封上；execute 类同样的回答照旧算失败。
+  - **内核**：`gateAbsenceOf`（`adapters/gatekeeper-client`）是唯一入口，只接受发布的定义声明过、且没有数据和 Fact 的 absent，否则 `invalid_response`（确定性失败，不重试）；从不从 `data` 读「不存在」（门侧与端到端各一条测试证明目标响应体伪造不了）。`observe_operation` 返回 `{status: 'ok', data: null, observedFactCount: 0, absent}`，不写 Fact，审计与 WorkerRun 记下；平台观察记下 `absent`、谓词按 `null` 判定，`PREDICATE_EMPTY_PROBES` 保证结果为未满足。
+  - **混跑**：老门或老内核解析时丢掉这两个字段，摘要不一致，一律拒绝，不会被悄悄当成「不存在」。
+  - **不在本 PR**：发布时人确认（B-a）、按门确认不存在判定验收（B-b，goal 0011）、reconcile（B 之后的小 PR）；修订对比（遗留 475）；docker 门（遗留 476）；平台清单审核页显示声明（遗留 477）；「存在」类旧事实的取代（遗留 469）。
 - 来自 GO4a（#664）的输入：`confirm_goal_acceptance` 和 `end_goal` 是请求人的成员能力，永远不进 Handle scope（membership-not-in-handle 守卫）；`createGoalRun` 和 `reviseGoalRun` 返回的 `hints` 原样带到能力结果里；如需 owner hold 期间也禁止请求人结束目标，在能力层加一道。
 - 来自 GO3a（#626）的输入：`pause_goal` / `resume_goal` / `cancel_goal` 直接调用 `control.ts`，权限按 GO3a 划分（owner 能停不能续）；角色必须由能力层从已认证主体取，不能从参数取（`lockControlledRun` 信任传入的 `role`）；`resume_goal` 的 `retrySteps` 必须逐个列出步骤，不提供不列步骤的「全部重试」；`proposed` 的目标走 `reject`。
 - 来自 GO3c（#642）的输入：`reconcile_goal_action` 调用 `reconcileActionRequest`，能力带 minRole 与 `channel: 'human'`，决定人取已认证主体；读接口 `list_goal_run_unresolved_actions`；Worker 提示词写明步骤内调用方的 `idempotencyKey` 被忽略、409 `action_in_doubt` 表示等人核对。
