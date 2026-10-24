@@ -180,6 +180,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         // `PLATFORM_META_OBJECT_TYPES`).
         const metaObject = await store.upsertObject(client, workspaceId, {
           objectType: 'WorkerDefinition',
+          kernelAuthored: true,
           properties: { name: 'ops-runner' },
         });
         metaObjectId = metaObject.id;

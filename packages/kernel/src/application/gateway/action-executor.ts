@@ -360,6 +360,7 @@ export function createGatekeeperActionExecutor(
     actionRequest: ActionRequestRow,
     applyResult: Awaited<ReturnType<GatekeeperClient['apply']>>,
   ): Promise<ActionExecutorResult> {
+    let refusedMetaObjectTypes: readonly string[] = [];
     await deps.withTransaction(
       actionRequest.workspaceId,
       actionRequest.onBehalfOf,
@@ -372,20 +373,27 @@ export function createGatekeeperActionExecutor(
             gatekeeperId: actionRequest.gatekeeperId,
           },
         });
-        await writeObservedFacts(
+        ({ refusedMetaObjectTypes } = await writeObservedFacts(
           client,
           actionRequest.workspaceId,
           actionRequest.gatekeeperId,
           applyResult.observedFacts ?? [],
           activity.id,
-        );
+        ));
         await endActivity(client, actionRequest.workspaceId, activity.id, 'completed');
       },
     );
 
     return {
       ok: true,
-      resultMetadata: { data: applyResult.data, replayed: applyResult.replayed },
+      resultMetadata: {
+        data: applyResult.data,
+        replayed: applyResult.replayed,
+        // Review #493 F1: what the gate sent back that names a meta-ontology type (never written).
+        ...(refusedMetaObjectTypes.length > 0
+          ? { refusedObservedObjectTypes: refusedMetaObjectTypes }
+          : {}),
+      },
     };
   }
 

@@ -1,4 +1,4 @@
-import { storableValue } from '@nexttime/shared';
+import { isMetaOntologyObjectType, storableValue } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { writeAudit } from '../../substrate/audit/index.js';
 import {
@@ -15,6 +15,7 @@ import { getType } from '../../substrate/ontology/index.js';
 import { currentPrincipalId } from '../chat/index.js';
 import { ForbiddenError } from './authorize.js';
 import type { CapabilityHandler } from './capability-handler.js';
+import { MetaOntologyWriteForbiddenError } from './meta-ontology-guard.js';
 import { assertActivityStartedByCaller } from './provenance-anchor-guard.js';
 import { toWireSource } from './resource-wire.js';
 
@@ -282,6 +283,18 @@ async function resolveAndValidateIdentityKeys(
   observations: readonly IngestObservation[],
 ): Promise<void> {
   const objectTypeNames = collectObjectTypeNames(observations);
+  // Review #493 F1: an observation never writes a platform meta-ontology Object, on any channel —
+  // an Operation Object *is* the published definition, and the store merges properties into the
+  // row an identity names. Refused here, before anything is written, for an observation and for a
+  // link target alike (the store refuses it too: substrate/graph/meta-object-guard.ts).
+  for (const objectType of objectTypeNames) {
+    if (isMetaOntologyObjectType(objectType)) {
+      throw new MetaOntologyWriteForbiddenError(
+        objectType,
+        `submit_observations: meta-ontology ObjectType "${objectType}" is never written from observations — the platform writes these Objects only as part of a governed action (publish, import, a ChangePlan revision)`,
+      );
+    }
+  }
   const identityKeysByType = new Map<string, readonly string[] | undefined>();
   for (const objectType of objectTypeNames) {
     const entry = await getType(client, workspaceId, callerPrincipalId, objectType);

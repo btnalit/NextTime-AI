@@ -165,6 +165,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         const gatekeeperObjectId = await inTx(ownerId, async (client) => {
           const object = await graphStore.upsertObject(client, workspaceId, {
             objectType: 'Gatekeeper',
+            kernelAuthored: true,
             properties: { transportKind: 'ssh' },
           });
           return object.id;
@@ -246,6 +247,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         const gatekeeperObjectId = await inTx(ownerId, async (client) => {
           const object = await graphStore.upsertObject(client, workspaceId, {
             objectType: 'Gatekeeper',
+            kernelAuthored: true,
             properties: { transportKind: 'ssh' },
           });
           return object.id;

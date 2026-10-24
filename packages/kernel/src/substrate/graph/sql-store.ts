@@ -13,6 +13,7 @@ import {
 } from '../epistemic/index.js';
 import { enqueue } from '../outbox/index.js';
 import { scrubSecretValues } from '../redaction/index.js';
+import { assertObjectWriteAllowed } from './meta-object-guard.js';
 import { enforceOntologyOnLinkWrite } from './ontology-guard.js';
 import type { GraphReadViewer } from './operation-draft-visibility.js';
 import {
@@ -252,6 +253,8 @@ export class SqlGraphStore implements GraphStore {
     input: UpsertObjectInput,
   ): Promise<GraphObject> {
     const { kernelAuthored, ...rest } = input;
+    // Review #493 F1: a meta-ontology Object only as part of a governed action (meta-object-guard).
+    assertObjectWriteAllowed(rest.objectType, kernelAuthored === true);
     const query = buildUpsertObjectQuery(
       workspaceId,
       kernelAuthored === true ? rest : withScrubbedProperties(rest),

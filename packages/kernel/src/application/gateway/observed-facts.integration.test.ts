@@ -11,6 +11,13 @@ import { startActivity } from '../../substrate/epistemic/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
 import { writeObservedFacts } from './observed-facts.js';
 
+/** The written pairs only (most cases here send no meta-ontology candidate). */
+async function writtenOf(
+  ...args: Parameters<typeof writeObservedFacts>
+): Promise<Awaited<ReturnType<typeof writeObservedFacts>>['written']> {
+  return (await writeObservedFacts(...args)).written;
+}
+
 /**
  * application/gateway/observed-facts.integration.test: DB-gated (real Postgres; auto-skip without
  * DATABASE_URL) coverage of S5.2's "every gate observation names its Source" (I-S5-2; docs/
@@ -108,6 +115,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       gatekeeperObjectId = await inTx(async (client) => {
         const gate = await graphStore.upsertObject(client, workspaceId, {
           objectType: 'Gatekeeper',
+          kernelAuthored: true,
           identity: { gatekeeperId: randomUUID() },
           properties: { transportKind: 'http' },
         });
@@ -126,7 +134,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     it('first observation: one gatekeeper Source, one Observation on the Activity, Fact and Object carry it', async () => {
       const activityId = await newActivity();
       const written = await inTx((client) =>
-        writeObservedFacts(
+        writtenOf(
           client,
           workspaceId,
           gatekeeperObjectId,
@@ -165,7 +173,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       await new Promise((resolve) => setTimeout(resolve, 20));
       const activityId = await newActivity();
       const written = await inTx((client) =>
-        writeObservedFacts(
+        writtenOf(
           client,
           workspaceId,
           gatekeeperObjectId,
@@ -189,7 +197,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const fake = 'abcdefghijklmnopqrstuvwxyz0123';
       const activityId = await newActivity();
       const written = await inTx((client) =>
-        writeObservedFacts(
+        writtenOf(
           client,
           workspaceId,
           gatekeeperObjectId,
@@ -267,7 +275,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       // identical content is corroboration — the legacy row comes back unchanged and untouched.
       const activityId = await newActivity();
       const written = await inTx((client) =>
-        writeObservedFacts(
+        writtenOf(
           client,
           workspaceId,
           gatekeeperObjectId,
