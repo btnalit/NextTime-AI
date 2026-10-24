@@ -1,22 +1,29 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { ObserveResponse } from '@nexttime/gatekeeper-base';
 import type { Operation, Role } from '@nexttime/shared';
 import type { Pool, PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
+import type { GatekeeperClient } from '../../adapters/gatekeeper-client/index.js';
+import { ApprovalDrainer } from '../../governance/approval/index.js';
+import type { ActionRequestRow } from '../../governance/approval/index.js';
 import { getPublishedOperation, registerGatekeeper } from '../../governance/gatekeepers/index.js';
 import { mapCapabilityError } from '../../interfaces/http/capability-route.js';
+import { queryAudit } from '../../substrate/audit/index.js';
 import { startActivity } from '../../substrate/epistemic/index.js';
 import { MetaOntologyObjectWriteError, SqlGraphStore } from '../../substrate/graph/index.js';
 import {
   publishOntologyDomainPack,
   seedPlatformMetaOntology,
 } from '../../substrate/ontology/index.js';
+import { createAdminWithTransaction, createGatekeeperActionExecutor } from './action-executor.js';
 import { dispatchCapability } from './dispatch.js';
 import { MetaOntologyWriteForbiddenError } from './meta-ontology-guard.js';
 import { writeObservedFacts } from './observed-facts.js';
+import { setRequestActionDeps } from './request-action-handler.js';
 import type { ResolvedCaller } from './resolve-caller.js';
 
 /**
@@ -65,6 +72,27 @@ const FORGED = {
   absentAnswersReviewedBy: 'forged',
   absentAnswersReviewedAt: '2026-10-24T00:00:00.000Z',
 };
+
+type ObservedFactCandidates = NonNullable<ObserveResponse['observedFacts']>;
+
+/** A gate that sends back whatever `observedFacts` it is handed — its own code, not a manifest
+ *  (`OperationSchema` refuses a `result_mapping` that names a meta-ontology type). */
+function gateSending(observedFacts: ObservedFactCandidates): GatekeeperClient {
+  const unused = async (): Promise<never> => {
+    throw new Error('not called by this test');
+  };
+  return {
+    describeOperations: unused,
+    observe: async () => ({ data: { id: 'r-1' }, observedFacts }),
+    simulate: unused,
+    apply: async () => ({ data: { done: true }, observedFacts, replayed: false }),
+    lookupApply: unused,
+    revert: unused,
+    health: unused,
+    storeConnectedAccount: unused,
+    deleteConnectedAccount: unused,
+  };
+}
 
 describe.runIf(DATABASE_URL !== undefined)(
   'meta-ontology Objects are written only as part of a governed action (review #493 F1, integration)',
@@ -321,6 +349,106 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
       expect(outcome.refusedMetaObjectTypes).toEqual(['Operation', 'Gatekeeper']);
       expect(outcome.written.map((entry) => entry.object.objectType)).toEqual(['Host']);
+      expect(await published()).toEqual(before);
+    });
+
+    it('observe through the capability: the skipped types are on the audit row, the rest is written', async () => {
+      const adminWithTransaction = createAdminWithTransaction(pool);
+      const gatekeeperClient = gateSending([
+        {
+          objectType: 'Operation',
+          identity: { gatekeeperId, name: OPERATION_NAME, version: 1 },
+          properties: FORGED,
+        },
+        { objectType: 'Host', identity: { hostname: 'h-4' }, properties: { os: 'linux' } },
+      ]);
+      setRequestActionDeps({
+        gatekeeperClient,
+        drainer: new ApprovalDrainer({
+          executor: createGatekeeperActionExecutor({
+            gatekeeperClient,
+            withTransaction: adminWithTransaction,
+          }),
+          withTransaction: adminWithTransaction,
+        }),
+      });
+      const marker = `r-${randomUUID()}`;
+      const result = (await dispatchCapability({ pool }, owner(), 'request_action', {
+        gatekeeperId,
+        operation: OPERATION_NAME,
+        params: { id: marker },
+      })) as { status: string; observedFactCount: number };
+      expect(result).toMatchObject({ status: 'ok', observedFactCount: 1 });
+
+      const rows = await admin((client) =>
+        queryAudit(client, workspaceId, {
+          actorPrincipalId: ownerId,
+          action: 'request_action',
+          resourceType: 'gatekeeper',
+          resourceId: gatekeeperId,
+          limit: 100,
+        }),
+      );
+      const row = rows.find((r) => JSON.stringify(r.payload).includes(marker));
+      expect(row?.payload).toMatchObject({ refusedObservedObjectTypes: ['Operation'] });
+      expect(await published()).toEqual(before);
+    });
+
+    it('apply: the skipped types are in the result metadata the request records, the rest is written', async () => {
+      const executor = createGatekeeperActionExecutor({
+        gatekeeperClient: gateSending([
+          {
+            objectType: 'Operation',
+            identity: { gatekeeperId, name: OPERATION_NAME, version: 1 },
+            properties: FORGED,
+          },
+          { objectType: 'Host', identity: { hostname: 'h-5' }, properties: { os: 'linux' } },
+        ]),
+        withTransaction: createAdminWithTransaction(pool),
+      });
+      // Only what `execute` reads: a registered gate, an Operation the platform has not disabled,
+      // and the digest it was approved with.
+      const actionRequest: ActionRequestRow = {
+        workspaceId,
+        id: randomUUID(),
+        status: 'executing',
+        gatekeeperId,
+        actionKind: 'records.purge',
+        resourceScope: gatekeeperId,
+        blastRadius: 'low',
+        policyDecision: 'allow',
+        approvalDecisionId: null,
+        awaitDecision: false,
+        onBehalfOf: ownerId,
+        parentWorkerRunId: null,
+        actorRuntime: 'pi',
+        idempotencyKey: null,
+        requestedAt: new Date(),
+        executingAt: new Date(),
+        executedAt: null,
+        failedAt: null,
+        failureKind: null,
+        params: { id: 'r-5' },
+        requesterCanApprove: true,
+        operationDigest: 'sha256:approved-definition',
+        stepRunId: null,
+        reconciliation: null,
+        reconciliationDecisionId: null,
+        reexecuteDecisionId: null,
+      };
+      const outcome = await executor.execute(actionRequest);
+      expect(outcome).toMatchObject({
+        ok: true,
+        resultMetadata: { data: { done: true }, refusedObservedObjectTypes: ['Operation'] },
+      });
+      const hosts = await admin((client) =>
+        client.query(
+          `select 1 from objects where workspace_id = $1 and object_type = 'Host'
+              and identity_key ->> 'hostname' = 'h-5'`,
+          [workspaceId],
+        ),
+      );
+      expect(hosts.rowCount).toBe(1);
       expect(await published()).toEqual(before);
     });
 
