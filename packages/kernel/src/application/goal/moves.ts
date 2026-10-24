@@ -210,7 +210,7 @@ export async function moveGoalRun(
         : 0;
   await recordGoalRunTransition(client, goal.workspaceId, {
     actorPrincipalId: actor.principalId,
-    action: `goal_run.${event}`,
+    change: event,
     goalRunId: goal.id,
     resultingStatus: to,
     extraAuditPayload: {

@@ -1,4 +1,4 @@
-import type { GoalRunStatus, StepRunStatus } from '@nexttime/shared';
+import type { GoalRunChange, GoalRunStatus, StepRunStatus } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { enqueue } from '../../substrate/outbox/index.js';
@@ -17,7 +17,9 @@ import { enqueue } from '../../substrate/outbox/index.js';
 
 export interface RecordGoalRunTransitionParams {
   readonly actorPrincipalId: string;
-  readonly action: string;
+  /** What happened (`GoalRunChange`): the audit action is `goal_run.<change>`, and the event
+   *  carries it (S11 GO5e-2). */
+  readonly change: GoalRunChange;
   readonly goalRunId: string;
   readonly resultingStatus: GoalRunStatus;
   readonly extraAuditPayload?: Record<string, unknown>;
@@ -31,7 +33,7 @@ export async function recordGoalRunTransition(
   await writeAudit(client, {
     workspaceId,
     actorPrincipalId: params.actorPrincipalId,
-    action: params.action,
+    action: `goal_run.${params.change}`,
     resourceType: 'goal_run',
     resourceId: params.goalRunId,
     payload: { resultingStatus: params.resultingStatus, ...params.extraAuditPayload },
@@ -41,6 +43,7 @@ export async function recordGoalRunTransition(
     workspaceId,
     goalRunId: params.goalRunId,
     status: params.resultingStatus,
+    change: params.change,
   });
 }
 

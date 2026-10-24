@@ -1,7 +1,7 @@
 import { withWorkspace } from '../../adapters/db/pool.js';
 import type { DomainEvent } from '../../substrate/outbox/index.js';
 import type { OutboxDeliveryMeta } from '../outbox/index.js';
-import { readTask } from '../task/index.js';
+import { readTask, readTaskGoalStep } from '../task/index.js';
 import { resolveTaskChat } from './chat-targets.js';
 import type { LinkageDeps } from './deps.js';
 import { insertPendingContextItem } from './store.js';
@@ -56,6 +56,11 @@ export function registerBudgetWarningConsumer(
       deps.pool,
       { workspaceId: event.workspaceId, principalId: task.onBehalfOf },
       async (client) => {
+        // S11 GO5e-2: a goal step's Task spends the goal's budget, not the entry agent's — the
+        // goal's own limits stop it (`application/goal`), and the agent hears about the goal from
+        // its milestones (`goal-consumer.ts`), never about a Task it did not invoke
+        // (`task-consumer.ts` skips its context item the same way).
+        if (await readTaskGoalStep(client, event.workspaceId, taskId)) return;
         // R-57 (D-23): the warning belongs to the Task's Chat — the one whose Turn invoked it, the
         // same Chat its outcome message and context item go to (`task-consumer.ts`).
         const chat = await resolveTaskChat(client, event.workspaceId, task);

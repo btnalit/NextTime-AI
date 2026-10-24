@@ -8,6 +8,7 @@ import {
   TaskStatusSchema,
   WorkerRunStatusSchema,
 } from './enums.js';
+import { GOAL_RUN_CHANGE_VALUES } from './transitions.js';
 import { ActionRequestWireSchema } from './wire/governance.js';
 import { TaskWireSchema } from './wire/task.js';
 
@@ -178,14 +179,17 @@ const BudgetWarningEvent = z.object({
 });
 
 /** S11 GO2 (plan §4.2 item 5): every GoalRun transition — written by `application/goal` in the
- *  transaction that moves the row, with its audit record. Ids and the resulting status only: what a
- *  consumer (the console, a milestone message) shows is read back from the row under the reader's
- *  own RLS, never carried in the outbox. */
+ *  transaction that moves the row, with its audit record. Ids, the change and the resulting status
+ *  only: what a consumer (the console, a milestone message) shows is read back from the row under
+ *  the reader's own RLS, never carried in the outbox. `change` (S11 GO5e-2, `GoalRunChange`) says
+ *  which change it was — `status` alone does not tell a confirmation from a resume, or a hold from
+ *  the pause it took over; absent on an event written before it. */
 const GoalRunUpdatedEvent = z.object({
   type: z.literal('GoalRunUpdated'),
   workspaceId: z.string(),
   goalRunId: z.string(),
   status: GoalRunStatusSchema,
+  change: z.enum(GOAL_RUN_CHANGE_VALUES).optional(),
 });
 
 /** S11 GO2: every StepRun transition, same shape and rules as {@link GoalRunUpdatedEvent}. */

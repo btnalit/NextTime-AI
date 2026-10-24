@@ -23,6 +23,8 @@ import { newChat } from '../chat/index.js';
 import { completeTaskWithResult, invokeWorker, readTask } from '../task/index.js';
 import type { TaskRuntimeDeps } from '../task/index.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from '../worker/index.js';
+import { registerBudgetWarningConsumer } from './budget-consumer.js';
+import type { BudgetWarningSource } from './budget-consumer.js';
 import { acknowledgeTurnContextItems, leaseContextItemsToTurn } from './store.js';
 import { registerTaskUpdatedConsumer } from './task-consumer.js';
 import type { TaskUpdatedSource } from './task-consumer.js';
@@ -428,6 +430,67 @@ describe.runIf(DATABASE_URL !== undefined)(
         return Number(result.rows[0]?.count ?? 0);
       });
       expect(itemCount).toBe(1);
+    });
+
+    it("a budget warning on a Task the agent invoked lands in that Task's chat for its next Turn", async () => {
+      const chat = await inTx(ownerId, (client) => newChat(client, workspaceId, ownerId, {}));
+      const turn = await inTx(ownerId, (client) =>
+        startActivity(client, workspaceId, {
+          kind: 'agent_turn',
+          chatId: chat.id,
+          principalId: ownerId,
+        }),
+      );
+      const sessionId = await insertSession('entry', ownerId, ownerId);
+      const issued = await issueTestHandle(sessionId, entryScope());
+      const spawnResult = await invokeWorker(
+        workspaceId,
+        {
+          principalId: ownerId,
+          channel: 'handle',
+          claims: claimsFromIssued(issued),
+          turnId: turn.id,
+        },
+        { definitionId: workerDefinitionId, version: 1, input: {}, wait: false },
+        deps(new FakeTaskSupervisorClient()),
+      );
+
+      // The counterpart of goal-consumer.integration's goal step case: only a goal step's Task
+      // keeps its warning out of the agent's context.
+      let registered: Parameters<BudgetWarningSource['subscribe']>[1] | undefined;
+      registerBudgetWarningConsumer(
+        {
+          subscribe: (_eventType, consumer) => {
+            registered = consumer;
+            return () => {
+              registered = undefined;
+            };
+          },
+        },
+        { pool },
+      );
+      await registered?.(
+        {
+          type: 'BudgetWarning',
+          workspaceId,
+          scope: 'task',
+          taskId: spawnResult.taskId,
+          percent: 85,
+        },
+        // An outbox id no real row has (`outbox.id` is a bigint).
+        { outboxId: String(9_000_000_000 + Math.floor(Math.random() * 1_000_000)), workspaceId },
+      );
+
+      const items = await inTx(ownerId, async (client) => {
+        const result = await client.query<{ kind: string; chat_id: string | null }>(
+          `select kind, chat_id from pending_context_items
+           where workspace_id = $1 and principal_id = $2 and subject_id = $3`,
+          [workspaceId, ownerId, spawnResult.taskId],
+        );
+        return result.rows;
+      });
+      expect(items).toEqual([{ kind: 'budget_warning', chat_id: chat.id }]);
+      await inTx(ownerId, (client) => endActivity(client, workspaceId, turn.id, 'completed'));
     });
   },
 );

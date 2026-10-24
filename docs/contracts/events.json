@@ -397,6 +397,25 @@
     {
       "additionalProperties": false,
       "properties": {
+        "change": {
+          "enum": [
+            "confirm",
+            "reject",
+            "pause",
+            "resume",
+            "verify",
+            "complete",
+            "cancel",
+            "finish_cancel",
+            "fail",
+            "propose",
+            "hold",
+            "release_hold",
+            "revise",
+            "cleanup_finished"
+          ],
+          "type": "string"
+        },
         "goalRunId": {
           "type": "string"
         },

@@ -1,0 +1,163 @@
+import type { GoalDetailWire, GoalRunStatus, ObjectiveOutcome } from '@nexttime/shared';
+import { excerpt, formatTime } from '../../lib/format.js';
+import { goalBudgetRows, goalMilestoneText } from '../../lib/goals.js';
+import { useT } from '../../lib/i18n.js';
+import type { LatestGoalStatus } from '../../lib/system-status.js';
+import { Button } from '../kit/button.js';
+import { InlineError } from '../kit/inline-error.js';
+import { RedactedNote } from '../kit/redacted-note.js';
+import { Skeleton } from '../kit/skeleton.js';
+import { StatusChip } from '../kit/status-chip.js';
+import type { ChatGoalRead } from './useChatGoals.js';
+
+export interface GoalProposalCardProps {
+  readonly goalRunId: string;
+  /** The goal as this chat read it (`useChatGoals`: one `get_goal` however many lines name it). */
+  readonly read: ChatGoalRead | undefined;
+  /** The goal's status as the latest of its milestones in this chat says (`latestGoalStatuses`). */
+  readonly latestStatus: LatestGoalStatus | undefined;
+  /** The reader's own principal, when known: only the requester confirms. */
+  readonly viewerId: string | null;
+  readonly createdAt: string;
+  readonly onOpenGoal: (goalRunId: string) => void;
+}
+
+/**
+ * components/chat/GoalProposalCard (S11 GO5e-2; plan §4.14 "对话：发起目标的对话里，里程碑以系统消息
+ * 出现", §5.5 "请求者在控制台（或对话卡片）确认"): a goal proposed from this chat, as a card — what the
+ * goal is (its statement as `get_goal` reads it, masked like every read), how many steps and
+ * checks it has, its budget, and its status now. Confirming stays on the goal's page, where the
+ * confirmation card shows the plan, each check as a sentence and every hint (GO6): the button
+ * here goes there — 「查看并确认」 while the reader is the requester and the goal waits for them,
+ * 「查看目标」 otherwise. The goal's later milestones are status lines below it in the same chat.
+ *
+ * Unreadable (`get_goal` refused or the goal gone): the card still says a goal was proposed here,
+ * says why it cannot show it, and still opens its page, which explains the refusal.
+ */
+export function GoalProposalCard({
+  goalRunId,
+  read,
+  latestStatus,
+  viewerId,
+  createdAt,
+  onOpenGoal,
+}: GoalProposalCardProps) {
+  const t = useT();
+  const goal = read?.status === 'ready' ? read.goal : null;
+  // A later milestone in this chat is newer than the read made when the chat first named the goal.
+  const fromMilestone = latestStatus !== undefined && latestStatus.status !== 'proposed';
+  const status: GoalRunStatus = fromMilestone
+    ? latestStatus.status
+    : (goal?.status ?? latestStatus?.status ?? 'proposed');
+  // How it ended, beside 「已结束」: green alone would read "not achieved" as done (#737 UX P2-1).
+  const outcome: ObjectiveOutcome | null =
+    status !== 'completed' ? null : fromMilestone ? latestStatus.outcome : (goal?.outcome ?? null);
+  const awaitsViewer =
+    status === 'proposed' && goal !== null && viewerId !== null && goal.onBehalfOf === viewerId;
+
+  return (
+    <section
+      className="action-card goal-proposal-card"
+      data-testid="goal-proposal-card"
+      data-goal-run-id={goalRunId}
+      data-status={status}
+      aria-label={t('目标提议', 'Goal proposal')}
+    >
+      <header className="action-detail-header">
+        <div className="flex min-w-0 flex-col gap-1">
+          <span className="text-3 text-small">
+            {t('目标', 'Goal')} · <time>{formatTime(createdAt)}</time>
+          </span>
+          <span className="action-detail-title" data-testid="goal-proposal-statement">
+            {goal
+              ? (excerpt(goal.statement, 200) ?? t('（没有目标陈述）', '(no statement)'))
+              : read?.status === 'error'
+                ? t(
+                    '这里提出过一个目标，现在读不到它',
+                    'A goal was proposed here; it cannot be read now',
+                  )
+                : goalMilestoneText(
+                    {
+                      change: 'propose',
+                      status: 'proposed',
+                      pauseReason: null,
+                      heldByOwner: false,
+                      outcome: null,
+                      outcomeBasis: null,
+                      cleanupPending: false,
+                      revision: null,
+                    },
+                    t,
+                  )}
+          </span>
+          {goal ? <RedactedNote value={goal.statement} testId="goal-proposal-redacted" /> : null}
+        </div>
+        <span className="row-wrap">
+          <StatusChip machine="goalRun" status={status} size="s" />
+          {outcome ? (
+            <StatusChip
+              machine="objectiveOutcome"
+              status={outcome}
+              size="s"
+              testId="goal-proposal-outcome"
+            />
+          ) : null}
+        </span>
+      </header>
+
+      {read === undefined || read.status === 'loading' ? <Skeleton width="60%" /> : null}
+      {goal ? <GoalProposalSummary goal={goal} /> : null}
+      {read?.status === 'error' ? (
+        <InlineError
+          error={read.error}
+          testId="goal-proposal-error"
+          overrides={{
+            not_found: t(
+              '这个目标不在了，或你看不到它。目标页会说明原因。',
+              'This goal is gone, or you cannot see it. Its page says why.',
+            ),
+          }}
+        />
+      ) : null}
+      {awaitsViewer ? (
+        <p className="text-3 text-small" data-testid="goal-proposal-awaits">
+          {t(
+            '还没有开始。确认之前，请在目标页看一遍计划、验收检查和预算。',
+            'Nothing has run yet. Before confirming, look over its plan, checks and budget on its page.',
+          )}
+        </p>
+      ) : null}
+
+      <div className="action-detail-actions">
+        <Button
+          variant={awaitsViewer ? 'primary' : 'secondary'}
+          size="s"
+          onClick={() => onOpenGoal(goalRunId)}
+          data-testid="goal-proposal-open"
+        >
+          {awaitsViewer ? t('查看并确认', 'Review and confirm') : t('查看目标', 'Open goal')}
+        </Button>
+      </div>
+    </section>
+  );
+}
+
+function GoalProposalSummary({ goal }: { readonly goal: GoalDetailWire }) {
+  const t = useT();
+  const steps = goal.planRevision.plan.steps.length;
+  const checks = goal.planRevision.plan.acceptance?.length ?? 0;
+  const limits = goalBudgetRows(goal, t)
+    .map((row) => `${row.label} ≤ ${row.maxText}`)
+    .join(t('，', ', '));
+  return (
+    <p className="text-2 text-small" data-testid="goal-proposal-summary">
+      {t(`${steps} 个步骤`, steps === 1 ? '1 step' : `${steps} steps`)}
+      {' · '}
+      {checks === 0
+        ? t('没有验收检查', 'no acceptance check')
+        : t(`${checks} 条验收检查`, checks === 1 ? '1 check' : `${checks} checks`)}
+      {' · '}
+      {t(`预算：${limits}`, `Budget: ${limits}`)}
+    </p>
+  );
+}

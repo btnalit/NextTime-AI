@@ -386,7 +386,7 @@ async function insertGoalRun(
   }
   await recordGoalRunTransition(client, workspaceId, {
     actorPrincipalId: input.proposedBy,
-    action: 'goal_run.propose',
+    change: 'propose',
     goalRunId,
     resultingStatus: 'proposed',
     extraAuditPayload: {
@@ -501,7 +501,7 @@ export async function confirmGoalRun(
   );
   await recordGoalRunTransition(client, workspaceId, {
     actorPrincipalId: input.confirmedBy,
-    action: 'goal_run.confirm',
+    change: 'confirm',
     goalRunId: goal.id,
     resultingStatus: 'running',
     extraAuditPayload: { revision: 1 },

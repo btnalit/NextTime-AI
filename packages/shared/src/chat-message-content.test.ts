@@ -6,17 +6,18 @@ import {
 } from './chat-message-content.js';
 
 /**
- * chat-message-content.test: round-trip/rejection coverage for the three `SystemMessageContent`
+ * chat-message-content.test: round-trip/rejection coverage for the `SystemMessageContent`
  * variants `application/linkage` (kernel) writes into `chat_messages.content` — docs/development-
- * tasks.md S2.11 deliverable 1.
+ * tasks.md S2.11 deliverable 1, and S11 GO5e-2's `system.goal_update`.
  */
 
 describe('SYSTEM_MESSAGE_KIND_VALUES', () => {
-  it('lists exactly the three S2.11 chat message kinds', () => {
+  it('lists the three S2.11 chat message kinds and S11 GO5e-2 system.goal_update', () => {
     expect(SYSTEM_MESSAGE_KIND_VALUES).toEqual([
       'system.task_update',
       'system.action_pending',
       'system.action_update',
+      'system.goal_update',
     ]);
   });
 });
@@ -48,6 +49,42 @@ const SAMPLE_CONTENTS: SystemMessageContent[] = [
     status: 'approved',
     actionKindTag: 'docker.container_restart',
     isHolder: false,
+  },
+  // S11 GO5e-2: a goal step's Task names its goal and step.
+  {
+    kind: 'system.task_update',
+    text: 'Goal step "collect": task task2 completed',
+    taskId: 'task2',
+    status: 'completed',
+    failureReason: null,
+    summary: null,
+    goalRunId: 'goal1',
+    stepKey: 'collect',
+  },
+  {
+    kind: 'system.goal_update',
+    text: 'Goal goal1 is held by a workspace owner',
+    goalRunId: 'goal1',
+    change: 'hold',
+    status: 'paused',
+    pauseReason: 'requested',
+    heldByOwner: true,
+  },
+  {
+    kind: 'system.goal_update',
+    text: 'Goal goal1 completed: achieved',
+    goalRunId: 'goal1',
+    change: 'complete',
+    status: 'completed',
+    outcome: 'achieved',
+    outcomeBasis: 'verified_by_check',
+  },
+  // An event written before `change` existed.
+  {
+    kind: 'system.goal_update',
+    text: 'Goal goal1 is now "running"',
+    goalRunId: 'goal1',
+    status: 'running',
   },
 ];
 
@@ -84,6 +121,18 @@ describe('SystemMessageContentSchema', () => {
         actionKindTag: 'test.action',
         blastRadius: 'not_a_radius',
         isHolder: true,
+      }),
+    ).toThrow();
+  });
+
+  it('rejects system.goal_update with a change that is not a GoalRunChange', () => {
+    expect(() =>
+      SystemMessageContentSchema.parse({
+        kind: 'system.goal_update',
+        text: 'x',
+        goalRunId: 'goal1',
+        change: 'not_a_change',
+        status: 'running',
       }),
     ).toThrow();
   });

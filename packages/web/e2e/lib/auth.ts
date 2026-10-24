@@ -69,3 +69,22 @@ export async function loginAsAdmin(
 
   await expect(shell).toBeVisible({ timeout: 15_000 });
 }
+
+/**
+ * The signed-in owner's id, read off the real `get_workspace` as the page makes it. Wrapped in an
+ * object: an async function returning the bare promise would adopt it, and awaiting the route
+ * set-up would then wait for a request the page has not made yet.
+ */
+export async function signedInOwner(page: Page): Promise<{ id: Promise<string> }> {
+  let resolve: (id: string) => void = () => undefined;
+  const owner = new Promise<string>((done) => {
+    resolve = done;
+  });
+  await page.route('**/api/cap/get_workspace', async (route) => {
+    const response = await route.fetch();
+    const body = (await response.json()) as { result?: { caller?: { id?: string } } };
+    if (body.result?.caller?.id) resolve(body.result.caller.id);
+    await route.fulfill({ response });
+  });
+  return { id: owner };
+}

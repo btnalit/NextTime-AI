@@ -299,7 +299,7 @@ export async function reviseGoalRun(
   }
   await recordGoalRunTransition(client, workspaceId, {
     actorPrincipalId: input.actor.principalId,
-    action: 'goal_run.revise',
+    change: 'revise',
     goalRunId: goal.id,
     resultingStatus: 'paused',
     extraAuditPayload: {

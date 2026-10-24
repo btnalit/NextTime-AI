@@ -11,13 +11,15 @@ export const CONTEXT_ITEM_KIND_VALUES = [
   'task_waiting_approval',
   'budget_warning',
   'action_request_update',
+  // S11 GO5e-2 (linkage/0003): a GoalRun's milestone, for the chat the goal was proposed from.
+  'goal_update',
 ] as const;
 export type ContextItemKind = (typeof CONTEXT_ITEM_KIND_VALUES)[number];
 
 /** The two `get_entry_context` buckets a `ContextItemKind` maps into (`application/gateway/
  *  handlers.ts`'s `getEntryContextHandler`): `action_request_update` → `pendingApprovals`
  *  (requester-side: "is this user blocked on someone else's approval"), everything else → `tasks`
- *  (Task outcomes and budget warnings — S1's `EntryContextResult.tasks` bucket, `packages/
+ *  (Task outcomes, budget warnings and, S11 GO5e-2, goal milestones — S1's `EntryContextResult.tasks` bucket, `packages/
  *  platform-extension/src/modes/entry.ts`'s "Running tasks" section, reused rather than renamed:
  *  it already renders any JSON-shaped item generically). */
 export function contextItemBucket(kind: ContextItemKind): 'tasks' | 'pendingApprovals' {
