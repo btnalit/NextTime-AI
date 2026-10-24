@@ -1870,3 +1870,22 @@
 .predicate-negate {
   padding-bottom: var(--space-2);
 }
+
+/* Legacy 464: the Fact check editor — an identity field the type fixes reads as fixed, the value
+ * gets the room, and rows stay told apart when they wrap. */
+.fact-identity-key-fixed {
+  background: var(--surface-3);
+  border-style: dashed;
+  color: var(--text-2);
+}
+
+.fact-identity-row > .field:has(input[data-testid$="-value"]),
+.fact-identity-row > .field:has(textarea[data-testid$="-value"]) {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.fact-identity-row + .fact-identity-row {
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-2);
+}

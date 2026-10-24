@@ -1054,7 +1054,7 @@ describe('ProcedureEditor (S6-A A2)', () => {
         ),
       ).toBe(true),
     );
-    await waitFor(() => expect(offered(fill as HTMLInputElement)).toEqual(['h3']));
+    await waitFor(() => expect(offered(fill as HTMLInputElement)).toEqual(['h3 · Host']));
     fireEvent.click(within(listOf(fill)).getByRole('option'));
     const [hostId] = within(target).getAllByTestId(
       'procedure-step-check-fact-target-identity-value',
@@ -1142,6 +1142,84 @@ describe('ProcedureEditor (S6-A A2)', () => {
         within(source).getByTestId('procedure-step-check-fact-source-identity-extra'),
       ).toBeTruthy();
     });
+  });
+
+  it('an Object chosen by id is one this end takes, named by name and type, also when reopened (legacy 464)', async () => {
+    const host = '5f0c1a52-8a2e-4f3b-9c61-0d2b7e4a9f10';
+    const service = '5f0c1a52-8a2e-4f3b-9c61-0d2b7e4a9f11';
+    const object = (id: string, objectType: string, name: string) => ({
+      id,
+      objectType,
+      identityKey: { name },
+      properties: { name },
+      createdAt: '',
+      updatedAt: '',
+      lastObservedAt: null,
+    });
+    const { caller } = http({
+      list_types: (params) =>
+        (params as { kind?: string }).kind === 'link'
+          ? {
+              items: [
+                {
+                  kind: 'link',
+                  name: 'runs_on',
+                  signatures: [
+                    { domain: 'Service', range: 'Host', description: '' },
+                    { domain: 'Job', range: 'Host', description: '' },
+                  ],
+                },
+              ],
+            }
+          : { items: [] },
+      search: () => ({ items: [object(host, 'Host', 'h3'), object(service, 'Service', 'web')] }),
+      get_object: (params) =>
+        (params as { objectId: string }).objectId === host ? object(host, 'Host', 'h3') : null,
+    });
+    render(
+      <ProcedureEditor
+        http={caller}
+        copyOf={{
+          id: 'pr-1',
+          version: 1,
+          status: 'published',
+          name: 'On host',
+          description: 'Reopened',
+          steps: [
+            {
+              kind: 'verify',
+              description: 'Placed.',
+              check: {
+                kind: 'fact_predicate',
+                key: 'placed',
+                fact: { linkType: 'runs_on', source: { objectId: host }, target: {} },
+              },
+            },
+          ],
+        }}
+        onProposed={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    const source = screen.getByTestId('procedure-step-check-fact-source');
+    const picked = within(source).getByTestId(
+      'procedure-step-check-fact-source-object',
+    ) as HTMLInputElement;
+    // Reopened: named by name and type, not its id; and a Host is not what this end takes.
+    await waitFor(() => expect(picked.value).toBe('h3 · Host'));
+    expect(within(source).getByText(/关系类型的这一端不接 Host/)).toBeTruthy();
+    // Offered: only the Objects of a type this end takes (Service or Job here).
+    fireEvent.change(picked, { target: { value: 'e' } });
+    await waitFor(() => expect(offered(picked)).toEqual(['web · Service']));
+
+    // An end with no type chosen yet asks for the type first, and offers no identity field.
+    const target = screen.getByTestId('procedure-step-check-fact-target');
+    expect(
+      within(target).getByTestId('procedure-step-check-fact-target-identity-pick-type'),
+    ).toBeTruthy();
+    expect(
+      within(target).queryByTestId('procedure-step-check-fact-target-identity-add'),
+    ).toBeNull();
   });
 
   it('input that is not JSON is refused at its field, and nothing is sent (legacy 453)', async () => {

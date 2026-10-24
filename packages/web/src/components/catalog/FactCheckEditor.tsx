@@ -5,7 +5,7 @@ import type {
   OntologyObjectTypeWire,
   OntologyTypeWire,
 } from '@nexttime/shared';
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
 import { useDebounced } from '../../lib/audit-id-picker.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
@@ -25,7 +25,7 @@ import {
   factRowsForType,
   newFactIdentityRow,
 } from '../../lib/fact-check-draft.js';
-import { objectDisplayName } from '../../lib/graph-view.js';
+import { isUuidLike, objectDisplayName } from '../../lib/graph-view.js';
 import { useT } from '../../lib/i18n.js';
 import {
   PREDICATE_VALUE_KINDS,
@@ -131,6 +131,11 @@ export function FactCheckEditor({
         )
       : errors;
   const linkError = under(errors, 'linkType');
+  const linkUnknown =
+    form !== null &&
+    linkTypes.state.status === 'ready' &&
+    form.linkType.trim() !== '' &&
+    linkType === undefined;
 
   function edit(patch: Partial<FormDraft>): void {
     if (form) onChange({ ...form, ...patch });
@@ -147,6 +152,14 @@ export function FactCheckEditor({
             required
             error={
               linkError.length > 0 ? linkError.map((e) => e.message).join(t('；', '; ')) : null
+            }
+            hint={
+              linkUnknown
+                ? t(
+                    `本体里没有关系类型 ${form?.linkType.trim()}：这条检查永远找不到事实。`,
+                    `The ontology has no Link type ${form?.linkType.trim()}: the check never finds the Fact.`,
+                  )
+                : undefined
             }
           >
             <Combobox
@@ -188,6 +201,7 @@ export function FactCheckEditor({
               allowed={factEndTypes(linkType, end)}
               objectTypes={objects}
               typesLoading={objectTypes.state.status === 'loading'}
+              typesKnown={objectTypes.state.status === 'ready'}
               errors={under(errors, end)}
               busy={busy}
               onChange={(ref) => edit({ [end]: ref })}
@@ -326,6 +340,7 @@ function FactEndFields({
   allowed,
   objectTypes,
   typesLoading,
+  typesKnown,
   errors,
   busy,
   onChange,
@@ -339,6 +354,8 @@ function FactEndFields({
   readonly allowed: readonly string[] | null;
   readonly objectTypes: readonly OntologyObjectTypeWire[];
   readonly typesLoading: boolean;
+  /** The ontology's ObjectTypes were read, so a name not among them is not in it. */
+  readonly typesKnown: boolean;
   readonly errors: ErrorList;
   readonly busy: boolean;
   readonly onChange: (ref: FactRefDraft) => void;
@@ -360,17 +377,63 @@ function FactEndFields({
   );
   const byId = useRef(new Map<string, ObjectWire>());
   for (const object of found.items) byId.current.set(object.id, object);
-  const objectOptions = found.items.map((object) => ({
-    value: object.id,
-    label: objectDisplayName(object) ?? object.id,
-    secondary: object.objectType,
-  }));
+  // The chosen Object by id — picked here, pasted, or from a reopened draft — read once, so the
+  // field names it (name · type) and its type is checked against the end; `null`: not in the graph.
+  const objectId = value.by === 'id' ? value.objectId.trim() : '';
+  const [chosen, setChosen] = useState<{ id: string; object: ObjectWire | null } | null>(null);
+  useEffect(() => {
+    if (objectId === '' || byId.current.has(objectId) || chosen?.id === objectId) return;
+    let live = true;
+    http
+      .call<ObjectWire | null>('get_object', { objectId })
+      .then((object) => {
+        if (live) setChosen({ id: objectId, object });
+      })
+      .catch(() => {
+        // Unreadable (not an id, forbidden, network): named by its short id, no type check.
+        if (live) setChosen({ id: objectId, object: null });
+      });
+    return () => {
+      live = false;
+    };
+  }, [http, objectId, chosen?.id]);
+  const chosenObject =
+    objectId === ''
+      ? undefined
+      : (byId.current.get(objectId) ?? (chosen?.id === objectId ? chosen.object : undefined));
+  const objectLabel = (object: ObjectWire) =>
+    `${
+      objectDisplayName(
+        object,
+        objectTypes.find((type) => type.name === object.objectType)?.identityKey,
+      ) ?? object.id.slice(0, 8)
+    } · ${object.objectType}`;
+  // Only Objects this end takes are offered; the chosen one is always there, so it is named.
+  const objectOptions = [
+    ...found.items.filter((object) => allowed === null || allowed.includes(object.objectType)),
+    ...(chosenObject && !found.items.some((object) => object.id === chosenObject.id)
+      ? [chosenObject]
+      : []),
+  ].map((object) => ({ value: object.id, label: objectLabel(object), secondary: object.id }));
+  if (objectId !== '' && chosenObject === null) {
+    objectOptions.push({
+      value: objectId,
+      label: t(`对象 ${objectId.slice(0, 8)}`, `Object ${objectId.slice(0, 8)}`),
+      secondary: objectId,
+    });
+  }
+  const chosenOutside =
+    chosenObject && allowed !== null && !allowed.includes(chosenObject.objectType)
+      ? chosenObject.objectType
+      : null;
   const message = (list: ErrorList) =>
     list.length === 0 ? null : list.map((error) => error.message).join(t('；', '; '));
   const typeError = message(under(errors, 'objectType'));
   const idError = message(under(errors, 'objectId'));
   const typeOutside =
     objectType !== '' && allowed !== null && !allowed.includes(objectType) ? objectType : null;
+  const typeUnknown =
+    objectType !== '' && typesKnown && !objectTypes.some((type) => type.name === objectType);
 
   return (
     <fieldset className="stack-s fact-end" data-testid={testId}>
@@ -402,26 +465,49 @@ function FactEndFields({
         </label>
       </div>
       {value.by === 'id' ? (
-        <Field id={`${id}-object`} label={t('对象', 'Object')} required error={idError}>
+        <Field
+          id={`${id}-object`}
+          label={t('对象', 'Object')}
+          required
+          error={idError}
+          hint={
+            chosenOutside !== null
+              ? t(
+                  `关系类型的这一端不接 ${chosenOutside}。`,
+                  `The Link type does not take ${chosenOutside} at this end.`,
+                )
+              : objectId !== '' && chosen?.id === objectId && chosen.object === null
+                ? t(
+                    '图谱里读不到这个对象：检查永远找不到这条事实。',
+                    'This Object cannot be read from the graph: the check never finds the Fact.',
+                  )
+                : undefined
+          }
+        >
           <Combobox
             id={`${id}-object`}
             aria-label={t(`${legend}：对象`, `${legend}: the Object`)}
             options={objectOptions}
             value={value.objectId}
-            onChange={(next) => {
-              onChange({ by: 'id', objectId: next });
-              if (!byId.current.has(next)) setTyped(next);
+            onChange={(next) => onChange({ by: 'id', objectId: next })}
+            // Picked, the field names the Object; a pasted id is taken as it is pasted.
+            inputValue={typed}
+            onInputValueChange={(text) => {
+              setTyped(text);
+              if (isUuidLike(text.trim())) onChange({ by: 'id', objectId: text.trim() });
             }}
-            allowFreeEntry
-            mono
             loading={found.loading}
             disabled={busy}
             invalid={idError !== null}
             placeholder={t('输入关键字找对象，或粘贴 ID', 'Type to find an Object, or paste an id')}
-            emptyText={t(
-              '没有匹配的对象；将按输入的 ID 使用。',
-              'No Object matches; the typed id is used.',
-            )}
+            emptyText={
+              found.failed
+                ? t('对象读取失败：可以粘贴对象 ID。', 'Could not read the Objects: paste an id.')
+                : t(
+                    '没有这一端能接的匹配对象；也可以粘贴对象 ID。',
+                    'No Object this end takes matches; an id can be pasted.',
+                  )
+            }
             testId={`${testId}-object`}
           />
         </Field>
@@ -438,7 +524,12 @@ function FactEndFields({
                     `关系类型的这一端不接 ${typeOutside}。`,
                     `The Link type does not take ${typeOutside} at this end.`,
                   )
-                : undefined
+                : typeUnknown
+                  ? t(
+                      `本体里没有对象类型 ${objectType}。`,
+                      `The ontology has no Object type ${objectType}.`,
+                    )
+                  : undefined
             }
           >
             <Combobox
@@ -473,6 +564,7 @@ function FactEndFields({
             legend={legend}
             rows={value.rows}
             declared={declared}
+            typeChosen={objectType !== ''}
             errors={under(errors, 'identity')}
             busy={busy}
             onChange={(rows) => onChange({ ...value, rows })}
@@ -532,6 +624,7 @@ function IdentityRows({
   legend,
   rows,
   declared,
+  typeChosen,
   errors,
   busy,
   onChange,
@@ -542,6 +635,8 @@ function IdentityRows({
   readonly rows: readonly FactIdentityRow[];
   /** The ObjectType's identity fields; `undefined`: it declares none (or is not known here). */
   readonly declared: readonly string[] | undefined;
+  /** An ObjectType is named; until then its identity fields are not known, so none are offered. */
+  readonly typeChosen: boolean;
   readonly errors: ErrorList;
   readonly busy: boolean;
   readonly onChange: (rows: readonly FactIdentityRow[]) => void;
@@ -576,7 +671,14 @@ function IdentityRows({
   return (
     <fieldset className="stack-s fact-identity" data-testid={testId}>
       <legend className="text-small">{t('身份', 'Identity')}</legend>
-      {declared === undefined ? (
+      {!typeChosen && rows.length === 0 ? (
+        <span className="text-small text-3" data-testid={`${testId}-pick-type`}>
+          {t(
+            '先选对象类型：它声明的身份字段会自动列出。',
+            'Pick the Object type first: its identity fields are listed for you.',
+          )}
+        </span>
+      ) : declared === undefined && typeChosen ? (
         <span className="text-small text-3">
           {t(
             '这个类型没有声明身份字段：字段和值要和图谱里存的完全一致。',
@@ -593,7 +695,7 @@ function IdentityRows({
             <Field id={`${id}-${row.uid}-key`} label={t('字段', 'Field')}>
               <input
                 id={`${id}-${row.uid}-key`}
-                className="input input-mono"
+                className={fixed ? 'input input-mono fact-identity-key-fixed' : 'input input-mono'}
                 aria-label={t(`${legend}：第 ${n} 个身份字段`, `${legend}: identity field ${n}`)}
                 value={row.key}
                 readOnly={fixed}
@@ -673,8 +775,8 @@ function IdentityRows({
             {factIdentityLooksNumeric(row) ? (
               <span className="text-small text-warn" data-testid={`${testId}-numeric-text`}>
                 {t(
-                  `身份按值完全相等来找：文本 "${row.valueText.trim()}" 和数字 ${row.valueText.trim()} 不相等。图谱里存的是数字就把「值是」改成数字，拿不准就从上面找一个对象填入。`,
-                  `Identities match exactly: the text "${row.valueText.trim()}" is not the number ${row.valueText.trim()}. If the graph stores a number, choose Number; if unsure, fill from an Object above.`,
+                  `身份按值完全相等来找：文本 "${row.valueText.trim()}" 和数字 ${row.valueText.trim()} 不相等。图谱里存的是数字就把「值是」改成数字，拿不准就用下面的「从图谱里找一个对象填入身份」。`,
+                  `Identities match exactly: the text "${row.valueText.trim()}" is not the number ${row.valueText.trim()}. If the graph stores a number, choose Number; if unsure, fill from an Object below.`,
                 )}
               </span>
             ) : null}
@@ -707,7 +809,7 @@ function IdentityRows({
           {rest.map((error) => error.message).join(t('；', '; '))}
         </p>
       ) : null}
-      {declared === undefined ? (
+      {declared === undefined && (typeChosen || rows.length > 0) ? (
         <div>
           <Button
             variant="secondary"
