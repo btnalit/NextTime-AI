@@ -1807,3 +1807,43 @@
   flex: none;
   margin-top: 0.2em;
 }
+
+/* UX P3-6 on #738: bindings one under another are told apart, and the arrow wraps with the field
+ * it points to instead of hanging at the end of a line. */
+.procedure-binding + .procedure-binding {
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-2);
+}
+
+.procedure-binding-to {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+}
+
+/* UX P3-7 on #738: a field's description has a column head on wide screens; below 640 px, where
+ * it takes a line of its own, it shows its own label. */
+.schema-field-description {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.schema-field-description > .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.schema-field-description-label {
+  display: none;
+  color: var(--text-3);
+  font-size: var(--fs-12);
+  flex: none;
+}
+
+@media (max-width: 640px) {
+  .schema-field-description-label {
+    display: inline;
+  }
+}
