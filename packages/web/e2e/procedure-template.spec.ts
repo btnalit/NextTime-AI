@@ -209,6 +209,31 @@ test.describe('S11 GO5d-2: a Procedure as a goal plan template (stand-in reads)'
         path: testInfo.outputPath(`procedure-template-editor-${width}.png`),
         fullPage: true,
       });
+
+      // Legacy 464: what the observed result must satisfy, as conditions in the form.
+      const expectBox = editing.nth(3).getByTestId('procedure-step-check-expect');
+      await expect(expectBox.getByTestId('procedure-step-check-expect-path')).toHaveValue('state');
+      await expectBox.getByTestId('procedure-step-check-expect-add-condition').first().click();
+      const second = expectBox.getByTestId('procedure-step-check-expect-condition').nth(1);
+      await expect(second.getByTestId('procedure-step-check-expect-path')).toBeFocused();
+      await second.getByTestId('procedure-step-check-expect-path').fill('daysLeft');
+      await second.getByTestId('procedure-step-check-expect-op').selectOption('gt');
+      await expect(second.getByTestId('procedure-step-check-expect-value-kind')).toHaveValue(
+        'number',
+      );
+      await second.getByTestId('procedure-step-check-expect-value').fill('7');
+      await expectBox.getByTestId('procedure-step-check-expect-add-group').first().click();
+      const group = expectBox.getByTestId('procedure-step-check-expect-group');
+      await group.getByTestId('procedure-step-check-expect-path').fill('issuer');
+      await group.getByTestId('procedure-step-check-expect-value').fill('self');
+      await group.getByTestId('procedure-step-check-expect-group-negate').check();
+      await expect(editing.nth(3).getByTestId('procedure-step-check-sentence')).toContainText(
+        'daysLeft 大于 7',
+      );
+      await editing.nth(3).scrollIntoViewIfNeeded();
+      await editing.nth(3).screenshot({
+        path: testInfo.outputPath(`procedure-template-check-${width}.png`),
+      });
     });
 
     test(`a draft's bindings the page can tell are wrong at ${width}`, async ({

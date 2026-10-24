@@ -385,7 +385,7 @@ describe('ProcedureEditor (S6-A A2)', () => {
       within(verify).getByTestId('procedure-step-check-key').getAttribute('aria-invalid'),
     ).toBe('true');
     expect(
-      within(verify).getByTestId('procedure-step-check-expect').getAttribute('aria-invalid'),
+      within(verify).getByTestId('procedure-step-check-expect-path').getAttribute('aria-invalid'),
     ).toBe('true');
     // Parameters the field list cannot say stay JSON, with the schema's complaint under them.
     expect(screen.getByTestId('procedure-parameters-json-only')).toBeTruthy();
@@ -498,8 +498,12 @@ describe('ProcedureEditor (S6-A A2)', () => {
     fireEvent.change(within(verify).getByTestId('procedure-step-check-operation-input'), {
       target: { value: 'cert.status' },
     });
-    fireEvent.change(within(verify).getByTestId('procedure-step-check-expect'), {
-      target: { value: '{"path": "state", "op": "eq", "value": "valid"}' },
+    // What the result must satisfy, as a condition: where, how it compares, the value.
+    fireEvent.change(within(verify).getByTestId('procedure-step-check-expect-path'), {
+      target: { value: 'state' },
+    });
+    fireEvent.change(within(verify).getByTestId('procedure-step-check-expect-value'), {
+      target: { value: 'valid' },
     });
     expect(within(verify).getByTestId('procedure-step-check-sentence')).toBeTruthy();
 
@@ -781,6 +785,161 @@ describe('ProcedureEditor (S6-A A2)', () => {
     expect(focused()).toBe(within(step(0)).getByTestId('procedure-step-kind'));
     fireEvent.click(within(step(1)).getByRole('button', { name: '移除第 2 步' }));
     expect(focused().dataset.testid).toBe('procedure-add-step');
+  });
+
+  it('what the observed result must satisfy is built in the form: conditions, a group, a negation (legacy 464)', async () => {
+    const { caller, calls } = http({
+      propose_procedure: () => ({ id: 'pr-7', version: 1, status: 'draft', name: 'Check' }),
+    });
+    const gate = '5f0c1a52-8a2e-4f3b-9c61-0d2b7e4a9f10';
+    render(
+      <ProcedureEditor
+        http={caller}
+        copyOf={{
+          id: 'pr-1',
+          version: 1,
+          status: 'published',
+          name: 'Check',
+          description: 'Check a cert',
+          steps: [
+            {
+              kind: 'verify',
+              description: 'Valid.',
+              check: {
+                kind: 'observe_predicate',
+                key: 'valid',
+                check: {
+                  gatekeeperId: gate,
+                  operation: 'cert.status',
+                  expect: { path: 'state', op: 'eq', value: 'valid' },
+                },
+              },
+            },
+          ],
+        }}
+        onProposed={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    const expectBox = screen.getByTestId('procedure-step-check-expect');
+    // A lone condition: no 全部 / 任一 to choose yet.
+    expect(within(expectBox).getAllByTestId('procedure-step-check-expect-condition')).toHaveLength(
+      1,
+    );
+    expect(within(expectBox).queryByTestId('procedure-step-check-expect-mode')).toBeNull();
+
+    // A second condition: focus on its path; an ordering comparison offers numbers or text only.
+    fireEvent.click(
+      within(expectBox).getAllByTestId(
+        'procedure-step-check-expect-add-condition',
+      )[0] as HTMLElement,
+    );
+    const [, second] = within(expectBox).getAllByTestId(
+      'procedure-step-check-expect-condition',
+    ) as [HTMLElement, HTMLElement];
+    expect(document.activeElement).toBe(
+      within(second).getByTestId('procedure-step-check-expect-path'),
+    );
+    fireEvent.change(within(second).getByTestId('procedure-step-check-expect-path'), {
+      target: { value: 'daysLeft' },
+    });
+    fireEvent.change(within(second).getByTestId('procedure-step-check-expect-op'), {
+      target: { value: 'gt' },
+    });
+    const kind = within(second).getByTestId(
+      'procedure-step-check-expect-value-kind',
+    ) as HTMLSelectElement;
+    expect([...kind.options].map((option) => option.value)).toEqual(['number', 'string']);
+    // An empty value turns to a number with the ordering comparison (UX #743 P2-1).
+    expect(kind.value).toBe('number');
+    expect(within(second).queryByTestId('procedure-step-check-expect-text-order')).toBeNull();
+    fireEvent.change(within(second).getByTestId('procedure-step-check-expect-value'), {
+      target: { value: '7' },
+    });
+    expect(within(expectBox).getByTestId('procedure-step-check-expect-mode')).toBeTruthy();
+
+    // A group of which any holds, negated.
+    fireEvent.click(
+      within(expectBox).getAllByTestId('procedure-step-check-expect-add-group')[0] as HTMLElement,
+    );
+    const group = within(expectBox).getByTestId('procedure-step-check-expect-group');
+    fireEvent.change(within(group).getByTestId('procedure-step-check-expect-path'), {
+      target: { value: 'issuer' },
+    });
+    fireEvent.change(within(group).getByTestId('procedure-step-check-expect-value'), {
+      target: { value: 'self' },
+    });
+    fireEvent.click(within(group).getByTestId('procedure-step-check-expect-group-negate'));
+
+    // A number that is not one is said on its row.
+    fireEvent.change(within(second).getByTestId('procedure-step-check-expect-value'), {
+      target: { value: 'seven' },
+    });
+    fireEvent.click(screen.getByTestId('procedure-submit'));
+    expect(await within(second).findByText('要填一个数字')).toBeTruthy();
+    expect(calls).toHaveLength(0);
+    fireEvent.change(within(second).getByTestId('procedure-step-check-expect-value'), {
+      target: { value: '7' },
+    });
+    expect(screen.getByTestId('procedure-step-check-sentence').textContent).toMatch(
+      /daysLeft 大于 7/,
+    );
+
+    fireEvent.click(screen.getByTestId('procedure-submit'));
+    await screen.findByTestId('draft-proposed');
+    const sent = calls.find((call) => call.name === 'propose_procedure')?.params as {
+      procedure: { steps: { check: { check: { expect: unknown } } }[] };
+    };
+    expect(sent.procedure.steps[0]?.check.check.expect).toEqual({
+      all: [
+        { path: 'state', op: 'eq', value: 'valid' },
+        { path: 'daysLeft', op: 'gt', value: 7 },
+        { not: { any: [{ path: 'issuer', op: 'eq', value: 'self' }] } },
+      ],
+    });
+  });
+
+  it('a predicate the form cannot say stays JSON, and says where (legacy 464)', () => {
+    const { caller } = http({});
+    const expectValue = { not: { not: { path: 'a', op: 'exists' } } };
+    render(
+      <ProcedureEditor
+        http={caller}
+        copyOf={{
+          id: 'pr-1',
+          version: 1,
+          status: 'published',
+          name: 'Odd',
+          description: 'A double negation',
+          steps: [
+            {
+              kind: 'verify',
+              description: 'Odd.',
+              check: {
+                kind: 'observe_predicate',
+                key: 'odd',
+                check: {
+                  gatekeeperId: '5f0c1a52-8a2e-4f3b-9c61-0d2b7e4a9f10',
+                  operation: 'x',
+                  expect: expectValue,
+                },
+              },
+            },
+          ],
+        }}
+        onProposed={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    expect(
+      JSON.parse(
+        (screen.getByTestId('procedure-step-check-expect-json') as HTMLTextAreaElement).value,
+      ),
+    ).toEqual(expectValue);
+    expect(screen.getByTestId('procedure-step-check-expect-json-only').textContent).toMatch(
+      /整个条件是「不满足」套「不满足」/,
+    );
+    expect(screen.queryByTestId('procedure-step-check-expect-as-form')).toBeNull();
   });
 
   it('input that is not JSON is refused at its field, and nothing is sent (legacy 453)', async () => {

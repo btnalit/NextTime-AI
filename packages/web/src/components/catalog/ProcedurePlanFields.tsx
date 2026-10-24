@@ -37,6 +37,7 @@ import { Field, describedBy } from '../kit/field.js';
 import { Select } from '../kit/select.js';
 import { Textarea } from '../kit/textarea.js';
 import { OperationStepFields } from './OperationStepFields.js';
+import { PredicateEditor } from './PredicateEditor.js';
 import { SchemaFieldsEditor } from './SchemaFieldsEditor.js';
 
 /**
@@ -659,7 +660,6 @@ export function VerifyCheckFields({
   const gateNames = new Map((gatekeepers ?? []).map((row) => [row.id, row.name]));
   const keyError = messages(errors, `${prefix}.key`, t);
   const paramsError = messages(errors, `${prefix}.check.params`, t);
-  const expectError = messages(errors, `${prefix}.check.expect`, t);
   const factError = messages(errors, `${prefix}.fact`, t);
   // What no field below shows: the check's own (its JSON, or a whole-check problem).
   const shown = [
@@ -766,30 +766,15 @@ export function VerifyCheckFields({
               data-testid="procedure-step-check-params"
             />
           </Field>
-          <Field
+          <PredicateEditor
             id={`${id}-expect`}
-            label={t('结果要满足（JSON）', 'The result must satisfy (JSON)')}
-            required
-            hint={t(
-              '例如 {"path": "state", "op": "eq", "value": "valid"}；多个条件用 all / any / not 组合。',
-              'E.g. {"path": "state", "op": "eq", "value": "valid"}; combine several with all / any / not.',
-            )}
-            error={expectError}
-          >
-            <Textarea
-              className="input-mono"
-              id={`${id}-expect`}
-              aria-label={t('结果要满足', 'The result must satisfy')}
-              value={step.checkExpectText}
-              onChange={(event) => onChange({ checkExpectText: event.target.value })}
-              minRows={3}
-              spellCheck={false}
-              disabled={busy}
-              invalid={expectError !== null}
-              aria-describedby={describedBy(`${id}-expect`, true, expectError !== null)}
-              data-testid="procedure-step-check-expect"
-            />
-          </Field>
+            legend={t('结果要满足', 'The result must satisfy')}
+            draft={step.checkExpect}
+            errors={errorsUnder(errors, `${prefix}.check.expect`)}
+            busy={busy}
+            onChange={(checkExpect) => onChange({ checkExpect })}
+            testId="procedure-step-check-expect"
+          />
         </>
       ) : null}
       {step.checkKind === 'fact_predicate' ? (
