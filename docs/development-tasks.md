@@ -4254,6 +4254,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **绑定检查顺序**：`plan.ts` 先判断取自的步骤是不是自己（「takes from this step itself」）、在不在计划里（「which is not in the plan」），然后才是 dependsOn 与输出约定；控制台流程页把两条内核原因翻成中文，本地检查对「取自自己」不再让人加 dependsOn。
   - **测试**：`manifest.test.ts` 丢弃竞争的辅助函数在事务一开始就挂上 `allSettled`，避免全量负载下报未处理的 rejection。
   - **不在本 PR**：目标页显示启动参数与「请求人确认（流程第 N 步）」（控制台，遗留 454）；参数对象键名不扫凭据（遗留 444）；「取自没等的步骤」的说法（遗留 468）。
+  - **控制台一侧（#751，2026-10-24 合入，84969a4）**：`lib/goals` 的 `goalPlanSource`（第 1 版的 `fromProcedure`）、`planSourceParameters`、`confirmCheckOrigin`；目标信息与计划版本列出启动参数，验收、计划编辑器、确认卡片写出请求人确认来自流程第几步；来源固定取第 1 版（后续版本保留检查 key，key 被删时说明不再出现）。参数说明未显示（遗留 474）。
 - 实现说明（GO5e-1：入口 agent 在对话里发起目标，#728，2026-10-23 合入，5b4b7aa；无迁移；GO5e 拆两个 PR，GO5e-2 做对话里的目标卡片与里程碑消息）：
   - **工具注册**：入口与 interactive 模式各加 `propose_goal`、`get_goal`、`list_goals`、`get_goal_revision`、`list_goal_unresolved_actions`；入口 Handle 范围按角色算、本来就有这些能力，内核不改；`confirm_goal` 等目标操作不注册，内核对任何 Handle 也拒绝（真实 pi SDK 测试锁住：模型看不到 `confirm_goal`，硬调时 pi 返回工具错误、内核收不到）。
   - **描述与模板分工**：`propose_goal` 描述里的要点（判据、反例、优先平台检查）随工具下发、到达所有工作区；完整「Goals」一节只在 `ontology/entry-agent.yaml`，只写进新建工作区，已有工作区在遗留 145 之前只靠描述。
@@ -4271,6 +4272,13 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **不在本 PR**：kernel 新建对话的标题（遗留 467）；推送通道还没有目标的事件（目标页仍是打开时读取、操作后重读，对话里的里程碑行是实时推送的，未登记）。
 - 实现说明（遗留 464 第一步：平台观察检查的谓词编辑器，#743，2026-10-24 合入，3ed8278；只改 `packages/web`）：`PredicateEditor` 在流程编辑器（`ProcedurePlanFields`）里编辑平台检查的 `predicate`：条件一行一条（路径、比较、选定类型的值），放在全部或任一成立的分组里，每条可取反；值的类型随比较走（大小比较只能是数字或文本，`exists` 不带值）；表单说不了的（`not` 套 `not`、不认识的键）保持 JSON 原样，没动过的谓词读进表单再写回不变。草稿与谓词的互转在 `lib/predicate-draft.ts`，层数与条数上限取自 shared。事实检查（`fact`）的编辑器是第二步（#746）。
 - 实现说明（遗留 464 第二步：事实检查的表单编辑器，#746，2026-10-24 合入，4a76699；只改 `packages/web`；关闭 464）：`lib/fact-check-draft` 是事实检查在表单上的投影，`FactCheckEditor` 编辑它，`ProcedureStepForm.checkFactText` 换成 `checkFact: FactCheckDraft`；值的读写与校验从 `predicate-draft` 抽出共用。关系类型从本体选；两端可以「按类型和身份」（对象类型只列这个关系类型在这一端允许的类型，声明了身份字段时字段名只读列出，缺或多都就地提示，可以从图谱里找一个对象按原样填入身份）或「就是图谱里已有的这一个对象」（只列这一端能接的类型，显示「名字 · 类型」，重开草稿时按 ID 读出）；属性条件复用 `PredicateEditor` 并列出这类事实已有的属性名；身份值按文本填了数字时提示（身份按 jsonb 全等匹配，发布时校验身份字段与 identityKey 是遗留 466）。`kit/Combobox`：调用方接管输入文字后高亮跟着显示的文字走，新增 kit 单测。不在本 PR：检查句子里的对象写法（遗留 470）。
+- 实现说明（遗留 145：已有工作区的入口定义对齐平台模板，#747，2026-10-24 合入，a9d2e83；无迁移）：
+  - **能力**：`get_entry_template_status`（observe）返回镜像自带模板（`systemPrompt`、`capabilities`、`digest`）、当前生效的入口版本（`definitionId`、`version`、`digest`）与不同的字段（`differs`）；`propose_entry_template_upgrade`（propose）带 `templateDigest` 与 `basedOn`，生成入口家族下一版的私有草稿。两者都是 human channel、构建者起，入口 agent 与 worker 都拿不到。
+  - **摘要**：`sha256:` 加两字段规范 JSON 的哈希，能力按集合比；模板每次调用时从 `ONTOLOGY_DIR` 读，发版后不用重启。读模板的函数从 `workspace/create.ts` 挪到 `worker/entry-template.ts`，创建工作区与比对共用。
+  - **草稿**：模板的 `systemPrompt` 与 `capabilities` 覆盖上去，保留工作区自己的 `model`、`egressDeny`、`name`、`description`；模板或入口版本在调用方看过之后变了 409 `entry_template_changed`，已一致 409 `entry_template_current`，调用方已有一模一样的草稿时原样返回（`created: false`）；审计记模板摘要、`basedOn`、草稿版本、`differs`、`created`。发布仍走 `publish_worker_definition`（所有者，带疑似凭据核对）。
+  - **Handle 上限**：入口与 worker 的 Handle 上限按「名字以 `propose_` 开头」收能力时，先排除 human channel 能力（`assertValidScope` 本来就不让它们进 Handle）；全注册表目前只有 `propose_entry_template_upgrade` 受影响。
+  - **控制台**：目录 → Worker 入口定义列表下的不同提示、那一版详情里的说明、能力增减（按中文名、不折叠，放在提示词差异前面）、逐行提示词差异与「按平台模板生成新版本草稿」；任何入口草稿的详情都写「与当前生效的 vN 相比」的能力增减与提示词是否改动；只有构建者和所有者读这个状态。
+  - **不在本 PR**：未变行展开（遗留 471）、入口定义名字与草稿说明（遗留 472）、创建工作区时记模板摘要（遗留 473）。
 - 来自 GO4a（#664）的输入：`confirm_goal_acceptance` 和 `end_goal` 是请求人的成员能力，永远不进 Handle scope（membership-not-in-handle 守卫）；`createGoalRun` 和 `reviseGoalRun` 返回的 `hints` 原样带到能力结果里；如需 owner hold 期间也禁止请求人结束目标，在能力层加一道。
 - 来自 GO3a（#626）的输入：`pause_goal` / `resume_goal` / `cancel_goal` 直接调用 `control.ts`，权限按 GO3a 划分（owner 能停不能续）；角色必须由能力层从已认证主体取，不能从参数取（`lockControlledRun` 信任传入的 `role`）；`resume_goal` 的 `retrySteps` 必须逐个列出步骤，不提供不列步骤的「全部重试」；`proposed` 的目标走 `reject`。
 - 来自 GO3c（#642）的输入：`reconcile_goal_action` 调用 `reconcileActionRequest`，能力带 minRole 与 `channel: 'human'`，决定人取已认证主体；读接口 `list_goal_run_unresolved_actions`；Worker 提示词写明步骤内调用方的 `idempotencyKey` 被忽略、409 `action_in_doubt` 表示等人核对。

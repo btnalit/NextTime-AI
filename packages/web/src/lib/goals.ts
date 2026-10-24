@@ -19,6 +19,7 @@ import type {
   OutputSchema,
   OutputSchemaType,
   PlanHint,
+  PlanSourceProcedureWire,
   PlanStep,
   Predicate,
   PredicateJsonValue,
@@ -418,6 +419,46 @@ const CHECK_KIND: Readonly<Record<GoalAcceptanceCheckKind, readonly [string, str
   fact_predicate: ['事实判定', 'Fact check'],
   requester_confirm: ['请求人确认', 'Requester confirms'],
 };
+
+/** Legacy 454: the Procedure a goal's plan was made from — revision 1's, the only one that can be
+ *  (a later revision is the requester's own edit); `null` for a plan written as it is. */
+export function goalPlanSource(
+  revisions: readonly {
+    readonly revision: number;
+    readonly fromProcedure: PlanSourceProcedureWire | null;
+  }[],
+): PlanSourceProcedureWire | null {
+  return revisions.find((revision) => revision.revision === 1)?.fromProcedure ?? null;
+}
+
+/** Legacy 454: the start parameters a plan was made with, as `name = value` rows (a value that is
+ *  not text as JSON); none when none were kept. Values come masked from the read. */
+export function planSourceParameters(
+  source: PlanSourceProcedureWire | null,
+): readonly { readonly name: string; readonly value: string }[] {
+  if (!source?.parameters) return [];
+  return Object.entries(source.parameters).map(([name, value]) => ({
+    name,
+    value: typeof value === 'string' ? value : JSON.stringify(value),
+  }));
+}
+
+/** Legacy 454: where the requester's confirmation check of a plan made from a Procedure came
+ *  from — the Procedure's `verify` steps without a check of their own — or `null` for any other
+ *  check (or a plan not made from one). */
+export function confirmCheckOrigin(
+  source: PlanSourceProcedureWire | null,
+  checkKey: string,
+  t: Translate,
+): string | null {
+  const confirm = source?.confirmCheck;
+  if (!confirm || confirm.key !== checkKey) return null;
+  const steps = confirm.procedureSteps.join(t('、', ', '));
+  return t(
+    `来自流程第 ${steps} 步（没有自带检查的验证步骤）`,
+    `From Procedure step${confirm.procedureSteps.length > 1 ? 's' : ''} ${steps} (verify steps without a check of their own)`,
+  );
+}
 
 export function checkKindLabel(kind: GoalAcceptanceCheckKind, t: Translate): string {
   const [zh, en] = CHECK_KIND[kind];

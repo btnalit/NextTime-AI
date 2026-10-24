@@ -15,8 +15,10 @@ import { actionKindTagText, excerpt, formatDateTime, formatRelative } from '../.
 import {
   goalBudgetRows,
   goalPauseReasonLabel,
+  goalPlanSource,
   goalStateNote,
   outcomeBasisLabel,
+  planSourceParameters,
 } from '../../lib/goals.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { breadcrumbFor } from '../../lib/nav.js';
@@ -46,7 +48,7 @@ import { GoalReconcileControls } from './GoalReconcileControls.js';
 import { GoalRevisionsSection } from './GoalRevisionsSection.js';
 import { GoalStepsSection } from './GoalStepsSection.js';
 import { GoalUnresolvedSection } from './GoalUnresolvedSection.js';
-import { PlanSource } from './PlanSource.js';
+import { PlanSource, PlanSourceParameters } from './PlanSource.js';
 
 export interface GoalDetailPageProps {
   readonly http: CapabilityCaller;
@@ -403,7 +405,7 @@ function overviewItems(goal: GoalDetailWire, http: CapabilityCaller, t: Translat
     items.push({ key: 'endedAt', label: t('结束', 'Ended'), value: <When iso={goal.endedAt} /> });
   // S11 GO5d-2: a plan made from a Procedure says which version — revision 1's, the only one that
   // can be; a later revision is the requester's own edit of it.
-  const source = goal.revisions.find((revision) => revision.revision === 1)?.fromProcedure ?? null;
+  const source = goalPlanSource(goal.revisions);
   items.push({
     key: 'revision',
     label: t('计划', 'Plan'),
@@ -423,6 +425,14 @@ function overviewItems(goal: GoalDetailWire, http: CapabilityCaller, t: Translat
       </span>
     ),
   });
+  // Legacy 454: what the plan was made with — the Procedure's start parameters, as given.
+  if (planSourceParameters(source).length > 0) {
+    items.push({
+      key: 'parameters',
+      label: t('启动参数', 'Start parameters'),
+      value: <PlanSourceParameters source={source} testId="goal-plan-parameters" />,
+    });
+  }
   items.push({
     key: 'provenance',
     label: t('溯源', 'Provenance'),

@@ -340,6 +340,69 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
     ).toBeNull();
   });
 
+  it('a plan made from a Procedure shows its start parameters, and which steps the requester’s confirmation came from (legacy 454)', async () => {
+    const base = goalDetail();
+    const source = {
+      procedureId: 'proc-1',
+      version: 3,
+      name: '证书续期',
+      parameters: { site: 'main', port: 443 },
+      confirmCheck: { key: 'looks-right', procedureSteps: [2, 4] },
+    };
+    const planRevision: PlanRevisionWire = {
+      ...base.planRevision,
+      plan: {
+        ...base.planRevision.plan,
+        acceptance: [{ kind: 'requester_confirm', key: 'looks-right', prompt: '证书看起来对' }],
+      },
+      fromProcedure: source,
+    };
+    const [v1Summary] = base.revisions;
+    const detail = goalDetail({
+      planRevision,
+      revisions: [{ ...(v1Summary as (typeof base.revisions)[number]), fromProcedure: source }],
+    });
+    renderPage(scriptedHttp(baseHandlers(detail)));
+
+    const parameters = await screen.findByTestId('goal-plan-parameters');
+    expect(parameters.textContent).toBe('site = mainport = 443');
+    expect(screen.getByTestId('goal-revision-parameters').textContent).toBe(
+      'site = mainport = 443',
+    );
+    const check = screen.getByTestId('goal-plan-check');
+    expect(within(check).getByTestId('goal-check-procedure-steps').textContent).toMatch(
+      /^来自流程第 2、4 步/,
+    );
+  });
+
+  it('start parameters not kept show nothing, and a confirmation not from a Procedure says no step (legacy 454)', async () => {
+    const base = goalDetail();
+    const source = {
+      procedureId: 'proc-1',
+      version: 3,
+      name: '证书续期',
+      parameters: null,
+      confirmCheck: null,
+    };
+    const planRevision: PlanRevisionWire = {
+      ...base.planRevision,
+      plan: {
+        ...base.planRevision.plan,
+        acceptance: [{ kind: 'requester_confirm', key: 'looks-right', prompt: '证书看起来对' }],
+      },
+      fromProcedure: source,
+    };
+    const [v1Summary] = base.revisions;
+    const detail = goalDetail({
+      planRevision,
+      revisions: [{ ...(v1Summary as (typeof base.revisions)[number]), fromProcedure: source }],
+    });
+    renderPage(scriptedHttp(baseHandlers(detail)));
+    await screen.findByTestId('goal-plan-source');
+    expect(screen.queryByTestId('goal-plan-parameters')).toBeNull();
+    expect(screen.queryByTestId('goal-check-procedure-steps')).toBeNull();
+  });
+
   it('a plan written out says nothing of a Procedure', async () => {
     renderPage(scriptedHttp(baseHandlers(goalDetail())));
     await screen.findAllByTestId('goal-revision');
