@@ -2313,11 +2313,15 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
       });
       await lockedNow;
       let loserPid: number | undefined;
-      const losing = inTx(async (client) => {
-        const pid = await client.query<{ pid: number }>('select pg_backend_pid() as pid');
-        loserPid = pid.rows[0]?.pid;
-        return loser(client);
-      });
+      // Settled as soon as it starts: the loser can reject the moment the discard commits, before
+      // `await discarding` below resumes — a rejection with no handler yet is an unhandled one.
+      const losing = Promise.allSettled([
+        inTx(async (client) => {
+          const pid = await client.query<{ pid: number }>('select pg_backend_pid() as pid');
+          loserPid = pid.rows[0]?.pid;
+          return loser(client);
+        }),
+      ]);
       // Wait until the second transaction is blocked on the discard's row lock.
       for (let attempt = 0; attempt < 200; attempt += 1) {
         if (loserPid !== undefined) {
@@ -2331,7 +2335,7 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
       }
       release();
       await discarding;
-      const [settled] = await Promise.allSettled([losing]);
+      const [settled] = await losing;
       if (!settled) throw new Error('expected a settled result');
       return settled;
     }
