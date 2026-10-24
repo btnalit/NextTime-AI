@@ -1,7 +1,7 @@
 import type { ProcedureBinding, ProcedureStep, StepAcceptanceCheck } from '@nexttime/shared';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { actionKindTagText, prettyJsonVisible } from '../../lib/format.js';
-import { planCheckSentence } from '../../lib/goals.js';
+import { factCheckObjectIds, planCheckSentence } from '../../lib/goals.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import {
   type ProcedurePlanPlace,
@@ -16,6 +16,7 @@ import {
 } from '../../lib/procedure-template.js';
 import { useGatekeeperNames } from '../approvals/useDirectoryNames.js';
 import { OutputContractExplanation, OutputContractFields } from '../goals/OutputContract.js';
+import { useObjectLabels } from '../graph/useObjectLabels.js';
 import { Notice } from '../kit/notice.js';
 import { RefChip } from '../kit/ref-chip.js';
 
@@ -261,12 +262,16 @@ function VerifyCheckLine({
   readonly t: Translate;
 }) {
   const gateNames = useGatekeeperNames(http);
+  const objectNames = useObjectLabels(
+    http,
+    check.kind === 'fact_predicate' ? factCheckObjectIds(check.fact) : [],
+  );
   return (
     <span className="text-small" data-testid="procedure-template-check">
       <span className="text-3">
         {t('在目标里由平台检查：', 'In a goal, the platform checks: ')}
       </span>
-      {planCheckSentence(check, gateNames, t)}
+      {planCheckSentence(check, gateNames, t, objectNames)}
     </span>
   );
 }

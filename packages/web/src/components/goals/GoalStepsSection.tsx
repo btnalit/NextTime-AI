@@ -40,6 +40,8 @@ export interface GoalStepsSectionProps {
   readonly detail: GoalDetailWire;
   readonly http: CapabilityCaller;
   readonly gateNames: ReadonlyMap<string, string>;
+  /** Legacy 470: the Objects the checks name by id, 「名字 · 类型」 (`useObjectLabels`). */
+  readonly objectNames?: ReadonlyMap<string, string>;
 }
 
 /**
@@ -54,7 +56,7 @@ export interface GoalStepsSectionProps {
  * requester's authority would stop now (S11 GO5c hints) heads the card, and each step it names
  * carries a chip.
  */
-export function GoalStepsSection({ detail, http, gateNames }: GoalStepsSectionProps) {
+export function GoalStepsSection({ detail, http, gateNames, objectNames }: GoalStepsSectionProps) {
   const t = useT();
   const { current, superseded } = goalSteps(detail);
   const acceptanceByRun = new Map(detail.acceptance.steps.map((step) => [step.stepRunId, step]));
@@ -84,6 +86,7 @@ export function GoalStepsSection({ detail, http, gateNames }: GoalStepsSectionPr
             hints={hintsByStep.get(view.key) ?? []}
             http={http}
             gateNames={gateNames}
+            objectNames={objectNames}
             t={t}
           />
         ))}
@@ -106,6 +109,7 @@ export function GoalStepsSection({ detail, http, gateNames }: GoalStepsSectionPr
                   hints={[]}
                   http={http}
                   gateNames={gateNames}
+                  objectNames={objectNames}
                   t={t}
                 />
               ))}
@@ -124,10 +128,11 @@ interface StepItemProps {
   readonly hints: readonly PlanHint[];
   readonly http: CapabilityCaller;
   readonly gateNames: ReadonlyMap<string, string>;
+  readonly objectNames: ReadonlyMap<string, string> | undefined;
   readonly t: Translate;
 }
 
-function StepItem({ view, acceptance, hints, http, gateNames, t }: StepItemProps) {
+function StepItem({ view, acceptance, hints, http, gateNames, objectNames, t }: StepItemProps) {
   const { planStep, run } = view;
   const dependsOn = planStep?.dependsOn ?? [];
   const maxAttempts = planStep?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
@@ -264,7 +269,7 @@ function StepItem({ view, acceptance, hints, http, gateNames, t }: StepItemProps
                             gateNames.get(check.check.gatekeeperId) ?? null,
                             t,
                           )
-                        : factCheckSentence(check.fact, t)}
+                        : factCheckSentence(check.fact, t, objectNames)}
                     </span>
                   </li>
                 );

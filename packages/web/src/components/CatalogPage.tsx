@@ -10,6 +10,7 @@ import { usePermissions } from '../hooks/usePermissions.js';
 import { useResource } from '../hooks/useResource.js';
 import { useRoleCan } from '../hooks/useRoleCan.js';
 import { useWorkspaceIdentity } from '../hooks/useWorkspaceIdentity.js';
+import { actionLabel } from '../lib/capability-labels.js';
 import { opsRunnerTemplateForm, workerItemId } from '../lib/catalog.js';
 import type { CapabilityCaller } from '../lib/clients.js';
 import {
@@ -17,6 +18,7 @@ import {
   reviewFieldNames,
   usePublishCredentialReview,
 } from '../lib/credential-review.js';
+import { entryCapabilitiesOf, entryPromptOf } from '../lib/entry-template.js';
 import {
   errorToastText,
   isDraftChangedError,
@@ -60,6 +62,7 @@ import {
   type WorkerDefinitionSummary,
   definitionName,
   sameNameDefinitionIds,
+  unnamedDefinitionLabel,
 } from '../lib/tasks.js';
 import { nameOf, useGatekeeperDirectory } from './approvals/useDirectoryNames.js';
 import { DraftExpiryNote, type EditorState } from './catalog/CatalogShared.js';
@@ -2448,13 +2451,12 @@ function workerKey(row: Pick<WorkerDefinitionSummary, 'id' | 'version'>): string
   return workerItemId(row);
 }
 
-/** A Worker definition's display name: its own name, else 「未命名 · <short id>」. Rows are one
- *  `<button>` now, so the pre-P3-5 `RefChip` fallback (greyed short id) is gone — and a raw UUID
- *  in a title is exactly what the copy guard rejects (an unnamed entry definition tripped it). */
+/** A Worker definition's display name: its own name, else what its kind calls an unnamed one
+ *  (legacy 472: an entry definition is 「入口 agent」, not 「未命名 · <short id>」). Two unnamed of
+ *  one kind are told apart by the short id the list shows beside them (`sameNameDefinitionIds`).
+ *  Never a raw UUID in a title — the copy guard rejects one. */
 function workerLabel(row: WorkerDefinitionSummary, t: Translate): string {
-  return (
-    definitionName([row], row.id, row.version) ?? `${t('未命名', 'Unnamed')} · ${shortId(row.id)}`
-  );
+  return definitionName([row], row.id, row.version) ?? unnamedDefinitionLabel(row.kind, t);
 }
 
 /** Workers tab local editor state — a superset of the shared `EditorState<Row>` used by the
@@ -2470,6 +2472,93 @@ type WorkerEditorState =
   | { readonly kind: 'copy'; readonly row: WorkerDefinitionSummary }
   | { readonly kind: 'template' }
   | null;
+
+/**
+ * Legacy 472: what a definition says, field by field, above its JSON — the system prompt (folded),
+ * the model, what an entry agent may do and the hosts it may not reach — so a draft (one made from
+ * the entry template above all) reads without the JSON.
+ */
+function definitionItems(row: WorkerDefinitionSummary, t: Translate): KeyValueItem[] {
+  const items: KeyValueItem[] = [];
+  const prompt = entryPromptOf(row.definition);
+  const lines = prompt === '' ? 0 : prompt.split('\n').length;
+  items.push({
+    key: 'systemPrompt',
+    label: t('系统提示词', 'System prompt'),
+    value:
+      prompt === '' ? (
+        <span className="text-3">{t('没有', 'None')}</span>
+      ) : (
+        <details className="disclosure" data-testid="worker-detail-prompt">
+          <summary>{t(`${lines} 行，点开查看`, `${lines} line(s), open to read`)}</summary>
+          <pre className="code-block pre-wrap disclosure-body">{prompt}</pre>
+        </details>
+      ),
+  });
+  const model = row.definition.model;
+  items.push({
+    key: 'model',
+    label: t('模型', 'Model'),
+    value:
+      typeof model === 'string' && model !== '' ? (
+        <span className="mono">{model}</span>
+      ) : (
+        <span className="text-3" data-testid="worker-detail-model-default">
+          {t('没有指定，使用工作区默认模型', 'Not set: the workspace default model')}
+        </span>
+      ),
+  });
+  if (row.kind === 'entry') {
+    const capabilities = entryCapabilitiesOf(row.definition);
+    items.push({
+      key: 'capabilities',
+      label: t(`能做的事（${capabilities.length}）`, `What it may do (${capabilities.length})`),
+      value:
+        capabilities.length === 0 ? (
+          <span className="text-3">{t('什么都不能做', 'Nothing')}</span>
+        ) : (
+          <ul className="stack-s" data-testid="worker-detail-capabilities">
+            {capabilities.map((name) => {
+              const label = actionLabel(name, t);
+              return (
+                <li key={name} data-capability={name} className="wrap-anywhere">
+                  {label}
+                  {label !== name ? (
+                    <>
+                      {' '}
+                      <span className="mono text-3 text-small">{name}</span>
+                    </>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
+        ),
+    });
+  }
+  const egress = Array.isArray(row.definition.egressDeny)
+    ? row.definition.egressDeny.filter((host): host is string => typeof host === 'string')
+    : [];
+  items.push({
+    key: 'egressDeny',
+    label: t('出网拒绝', 'Egress denied'),
+    value:
+      egress.length === 0 ? (
+        <span className="text-3">
+          {t('没有额外拒绝的主机', 'No host denied beyond the platform’s own')}
+        </span>
+      ) : (
+        <span className="row-wrap" data-testid="worker-detail-egress">
+          {egress.map((host) => (
+            <span key={host} className="mono">
+              {host}
+            </span>
+          ))}
+        </span>
+      ),
+  });
+  return items;
+}
 
 function WorkerDetailView({
   http,
@@ -2561,6 +2650,7 @@ function WorkerDetailView({
         ),
     });
   }
+  items.push(...definitionItems(row, t));
   return (
     <div className="stack" data-testid="worker-detail" data-worker-key={workerKey(row)}>
       <header className="stack-s">

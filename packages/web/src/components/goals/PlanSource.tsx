@@ -1,8 +1,10 @@
 import type { PlanSourceProcedureWire } from '@nexttime/shared';
 import { useCanOpen } from '../../hooks/useCanOpen.js';
+import type { CapabilityCaller } from '../../lib/clients.js';
 import { planSourceParameters } from '../../lib/goals.js';
 import { useT } from '../../lib/i18n.js';
 import { hrefs } from '../../lib/router.js';
+import { useProcedureParameterDescriptions } from './useProcedureParameterDescriptions.js';
 
 /**
  * components/goals/PlanSource (S11 GO5d-2): 「由流程 X vN 生成」 — the published Procedure a goal's
@@ -44,22 +46,33 @@ export function PlanSource({
 /**
  * Legacy 454: the start parameters a plan made from a Procedure was proposed with, `name = value`
  * (masked as the read gives them) — nothing when none were kept: none were given, or the goal was
- * proposed before the platform kept them.
+ * proposed before the platform kept them. Legacy 474: a parameter the Procedure describes reads
+ * by its description first, its name beside it.
  */
 export function PlanSourceParameters({
+  http,
   source,
   testId,
 }: {
+  readonly http: CapabilityCaller;
   readonly source: PlanSourceProcedureWire | null;
   readonly testId?: string;
 }) {
-  const rows = planSourceParameters(source);
+  const descriptions = useProcedureParameterDescriptions(http, source);
+  const rows = planSourceParameters(source, descriptions);
   if (rows.length === 0) return null;
   return (
     <span className="row-wrap" data-testid={testId}>
       {rows.map((row) => (
-        <span key={row.name}>
-          <span className="mono">{row.name}</span>
+        <span key={row.name} data-parameter={row.name}>
+          {row.description !== undefined ? (
+            <>
+              <span>{row.description}</span>{' '}
+              <span className="mono text-3 text-small">{row.name}</span>
+            </>
+          ) : (
+            <span className="mono">{row.name}</span>
+          )}
           <span className="text-3"> = </span>
           <span className="mono">{row.value}</span>
         </span>

@@ -142,6 +142,11 @@ test.describe('legacy 145: bringing the entry definition up to the platform temp
       );
       await expect(diff.locator('[data-change="gap"]').first()).toContainText('行未变');
       await capture(page, testInfo.outputPath(`entry-template-${width}.png`));
+      // Legacy 471: a folded run of unchanged lines opens in place.
+      const gaps = diff.getByTestId('entry-template-prompt-diff-open-gap');
+      const folded = await gaps.count();
+      await gaps.first().click();
+      await expect(gaps).toHaveCount(folded - 1);
 
       await page.getByTestId('entry-template-propose').click();
       // A retried run finds the first attempt's identical draft and says so.

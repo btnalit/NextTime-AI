@@ -151,12 +151,37 @@ describe('goal operations on the goal page (S11 GO6)', () => {
       },
       revisions: [{ ...(v1 as (typeof base.revisions)[number]), fromProcedure: source }],
     });
-    renderPage(scriptedHttp(handlers(detail, workspace('p-alice', 'member'))));
+    renderPage(
+      scriptedHttp({
+        ...handlers(detail, workspace('p-alice', 'member')),
+        // Legacy 474: the parameter by what the Procedure says it is.
+        list_procedures: () => ({
+          items: [
+            {
+              id: 'proc-1',
+              version: 3,
+              status: 'published',
+              name: '证书续期',
+              description: '续期证书',
+              steps: [],
+              parameters: {
+                type: 'object',
+                properties: { site: { type: 'string', description: '要续期的站点' } },
+              },
+              proposedBy: 'p-alice',
+            },
+          ],
+        }),
+      }),
+    );
     fireEvent.click(await screen.findByTestId('goal-op-confirm'));
-    const impact = within(await screen.findByTestId('goal-op-confirm-confirm')).getByTestId(
-      'confirm-impact',
-    ).textContent;
-    expect(impact).toMatch(/用这些启动参数从流程 证书续期 v3 生成：site = main/);
+    const confirm = await screen.findByTestId('goal-op-confirm-confirm');
+    await waitFor(() =>
+      expect(within(confirm).getByTestId('confirm-impact').textContent).toMatch(
+        /用这些启动参数从流程 证书续期 v3 生成：要续期的站点（site） = main/,
+      ),
+    );
+    const impact = within(confirm).getByTestId('confirm-impact').textContent;
     expect(impact).toMatch(/要你亲自确认「证书看起来对」（验收检查 looks-right），来自流程第 2 步/);
   });
 
