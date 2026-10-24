@@ -4248,6 +4248,12 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **迁移**：goal 0009 `plan_revisions` 加两列（两列同有同无、只在第 1 版上，`plan_revisions_guard` 写入后不可改）；worker 0005 `procedures.parameters jsonb`（必须是对象，发布后不可改的触发器覆盖这一列），外键 `plan_revisions (workspace_id, source_procedure_id, source_procedure_version) → procedures` 与部分索引放在 worker 0005（goal 模块迁移先跑）。都不回填、可回退。
   - **控制台**：流程详情 `ProcedureTemplateView` 按步骤写句子（能否生成目标、等哪些步骤、每条绑定一句、验证步骤由平台检查还是请求人确认、「启动参数」字段表），页面能看出的绑定问题就地标出；发布被拒就地列出原因（role=alert、聚焦，固定句式译中文）；目标页「由流程 … 生成」并链接目录；编辑器原样保留模板字段并提示（表单编辑见遗留 453）。
   - **不在本 PR**：表单编辑模板字段（遗留 453）；目标页显示启动参数与 `verify` 键名（遗留 454）；绑定取自不存在步骤的报错（遗留 455）；对象键名凭据（遗留 444，范围已扩大）。
+- 实现说明（GO5d-2 后续：遗留 454/455，#745，2026-10-24 合入，59f30cd；goal 0010）：
+  - **迁移 goal 0010**：`plan_revisions.source_procedure_parameters jsonb`，只能和 `source_procedure_id` 同时出现（所以只在第 1 版上），必须是对象；`plan_revisions_guard` 让它写入后不可改；不回填，之前的修订版为 `null`。审计 `goal_run.propose` 的来源仍只带流程 id 与版本，不带参数值。
+  - **线上形状**：`get_goal`（`planRevision` 与 `revisions[]`）与 `get_goal_revision` 的 `fromProcedure` 加必有字段 `parameters`（过读面遮蔽；`null` 表示没填或 goal 0010 之前发起）与 `confirmCheck: { key, procedureSteps } | null`（合成的请求人确认验收的键与它来自流程的第几步，从 1 数；由流程版本内容算出，读不到流程版本时为 `null`）。
+  - **绑定检查顺序**：`plan.ts` 先判断取自的步骤是不是自己（「takes from this step itself」）、在不在计划里（「which is not in the plan」），然后才是 dependsOn 与输出约定；控制台流程页把两条内核原因翻成中文，本地检查对「取自自己」不再让人加 dependsOn。
+  - **测试**：`manifest.test.ts` 丢弃竞争的辅助函数在事务一开始就挂上 `allSettled`，避免全量负载下报未处理的 rejection。
+  - **不在本 PR**：目标页显示启动参数与「请求人确认（流程第 N 步）」（控制台，遗留 454）；参数对象键名不扫凭据（遗留 444）；「取自没等的步骤」的说法（遗留 468）。
 - 实现说明（GO5e-1：入口 agent 在对话里发起目标，#728，2026-10-23 合入，5b4b7aa；无迁移；GO5e 拆两个 PR，GO5e-2 做对话里的目标卡片与里程碑消息）：
   - **工具注册**：入口与 interactive 模式各加 `propose_goal`、`get_goal`、`list_goals`、`get_goal_revision`、`list_goal_unresolved_actions`；入口 Handle 范围按角色算、本来就有这些能力，内核不改；`confirm_goal` 等目标操作不注册，内核对任何 Handle 也拒绝（真实 pi SDK 测试锁住：模型看不到 `confirm_goal`，硬调时 pi 返回工具错误、内核收不到）。
   - **描述与模板分工**：`propose_goal` 描述里的要点（判据、反例、优先平台检查）随工具下发、到达所有工作区；完整「Goals」一节只在 `ontology/entry-agent.yaml`，只写进新建工作区，已有工作区在遗留 145 之前只靠描述。
@@ -4263,6 +4269,7 @@ S8**，下面两条线只记录规划，S8 之后专门讨论再定范围与排�
   - **入口模板**：里程碑一段列全 `change` 原词（`hold`、`verify`、`cleanup_finished`、`fail` 带短注），说明条目在 Running tasks 下、按时间先后，最后一条是「已告知的最新变化」、现状用 `get_goal`；步骤的审批仍在 Pending approvals 下、归属目标。提示词守卫 `checkGoalChangeWords` 从构建后的 shared 读 `GOAL_RUN_CHANGE_VALUES`（除 `propose`）。
   - **验收与控制台**：accept_s2 `step9-goal-milestones`；控制台目标卡片、里程碑行（与目标页同一套结束说法与结果标签，所属目标的陈述单独一行、每个目标只读一次）、步骤标签，窄屏换行；浏览器旅程用 socket 替身。
   - **不在本 PR**：kernel 新建对话的标题（遗留 467）；推送通道还没有目标的事件（目标页仍是打开时读取、操作后重读，对话里的里程碑行是实时推送的，未登记）。
+- 实现说明（遗留 464 第一步：平台观察检查的谓词编辑器，#743，2026-10-24 合入，3ed8278；只改 `packages/web`）：`PredicateEditor` 在流程编辑器（`ProcedurePlanFields`）里编辑平台检查的 `predicate`：条件一行一条（路径、比较、选定类型的值），放在全部或任一成立的分组里，每条可取反；值的类型随比较走（大小比较只能是数字或文本，`exists` 不带值）；表单说不了的（`not` 套 `not`、不认识的键）保持 JSON 原样，没动过的谓词读进表单再写回不变。草稿与谓词的互转在 `lib/predicate-draft.ts`，层数与条数上限取自 shared。事实检查（`fact`）的编辑器是第二步（PR-B），合入后关闭 464。
 - 来自 GO4a（#664）的输入：`confirm_goal_acceptance` 和 `end_goal` 是请求人的成员能力，永远不进 Handle scope（membership-not-in-handle 守卫）；`createGoalRun` 和 `reviseGoalRun` 返回的 `hints` 原样带到能力结果里；如需 owner hold 期间也禁止请求人结束目标，在能力层加一道。
 - 来自 GO3a（#626）的输入：`pause_goal` / `resume_goal` / `cancel_goal` 直接调用 `control.ts`，权限按 GO3a 划分（owner 能停不能续）；角色必须由能力层从已认证主体取，不能从参数取（`lockControlledRun` 信任传入的 `role`）；`resume_goal` 的 `retrySteps` 必须逐个列出步骤，不提供不列步骤的「全部重试」；`proposed` 的目标走 `reject`。
 - 来自 GO3c（#642）的输入：`reconcile_goal_action` 调用 `reconcileActionRequest`，能力带 minRole 与 `channel: 'human'`，决定人取已认证主体；读接口 `list_goal_run_unresolved_actions`；Worker 提示词写明步骤内调用方的 `idempotencyKey` 被忽略、409 `action_in_doubt` 表示等人核对。
