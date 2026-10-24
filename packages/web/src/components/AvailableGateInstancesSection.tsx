@@ -12,6 +12,7 @@ import type { CapabilityCaller } from '../lib/clients.js';
 import { isForbiddenError } from '../lib/errors.js';
 import { type Translate, sentenceGap, useT } from '../lib/i18n.js';
 import { hrefs } from '../lib/router.js';
+import { AbsentAnswerDraftsNotice } from './connect/AbsentAnswerDrafts.js';
 import { AskOwnerToEnable } from './connect/AskOwnerToEnable.js';
 import { EnableGateConfirm } from './connect/EnableGateConfirm.js';
 import { HeldDraftsNotice } from './connect/GateOwnedParams.js';
@@ -103,7 +104,9 @@ export function AvailableGateInstancesSection({
   ): void {
     setEnabledResults((previous) => new Map(previous).set(row.gateId, result));
     const skipped = result.skippedOperationNames.length;
-    const held = result.gateOwnedParamDrafts?.length ?? 0;
+    // S11 「门确认不存在」 B-a: drafts left for a person to confirm count as not published too.
+    const held =
+      (result.gateOwnedParamDrafts?.length ?? 0) + (result.absentAnswerDrafts?.length ?? 0);
     toast.push({
       tone: 'ok',
       title: result.linkedExisting
@@ -404,12 +407,19 @@ function AvailableGateWorkspaceCell({
         </Notice>
       ) : null}
       {enabledResult !== null ? (
-        <HeldDraftsNotice
-          drafts={enabledResult.gateOwnedParamDrafts}
-          gatekeeperId={enabledResult.gatekeeperId}
-          fix="align"
-          testId={`available-gate-held-${row.gateId}`}
-        />
+        <>
+          <HeldDraftsNotice
+            drafts={enabledResult.gateOwnedParamDrafts}
+            gatekeeperId={enabledResult.gatekeeperId}
+            fix="align"
+            testId={`available-gate-held-${row.gateId}`}
+          />
+          <AbsentAnswerDraftsNotice
+            drafts={enabledResult.absentAnswerDrafts}
+            gatekeeperId={enabledResult.gatekeeperId}
+            testId={`available-gate-absent-${row.gateId}`}
+          />
+        </>
       ) : null}
     </div>
   );

@@ -205,6 +205,10 @@ function toWireOperationSummary(record: OperationRecord, revision?: RevisionChan
       : 'statuses' in absentAnswers
         ? { absentAnswers: { statuses: [...absentAnswers.statuses] } }
         : { absentAnswers: { exitCodes: [...absentAnswers.exitCodes] } }),
+    // S11 「门确认不存在」 B-a: who confirmed those answers when this version was published.
+    ...(absentAnswers !== undefined && record.absentAnswersReview !== undefined
+      ? { absentAnswersReview: { ...record.absentAnswersReview } }
+      : {}),
   };
 }
 

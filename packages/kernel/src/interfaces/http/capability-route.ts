@@ -159,6 +159,7 @@ import {
   ConnectionRequestNotFoundError,
 } from '../../governance/connections/index.js';
 import {
+  AbsentAnswersReviewRequiredError,
   OperationDeclaresGateOwnedParamsError,
   OperationDraftChangedError,
   OperationIdentityConflictError,
@@ -452,6 +453,12 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
       message: err.message,
       details: { params: err.details.params.map((entry) => ({ ...entry })) },
     };
+  }
+  // S11 「门确认不存在」 B-a (governance/gatekeepers/absent-answers-review.ts): `publish_operation`
+  // on an observe Operation declaring answers that mean "does not exist", without
+  // `absentAnswersReviewed: true` — `details.absentAnswers` says which, for the console to ask.
+  if (err instanceof AbsentAnswersReviewRequiredError) {
+    return { status: 400, code: err.code, message: err.message, details: { ...err.details } };
   }
   // Legacy 232 (review #493): a new Operation name that is empty, too long, or carries an
   // invisible / reordering character — 400 with its own code and `details` (problem, maxLength).
