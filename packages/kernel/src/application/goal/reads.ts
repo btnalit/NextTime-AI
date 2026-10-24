@@ -61,6 +61,21 @@ export async function listStepRuns(
   return result.rows.map(mapStepRunRow);
 }
 
+/** One StepRun, unlocked (a read for display: `application/linkage` naming a step); `null` when
+ *  there is none. */
+export async function getStepRun(
+  client: PoolClient,
+  workspaceId: string,
+  stepRunId: string,
+): Promise<StepRunRow | null> {
+  const result = await client.query<StepRunDbRow>(
+    `select ${STEP_RUN_ROW_COLUMNS} from step_runs where workspace_id = $1 and id = $2`,
+    [workspaceId, stepRunId],
+  );
+  const row = result.rows[0];
+  return row ? mapStepRunRow(row) : null;
+}
+
 /** {@link listStepRuns}, each row locked `for no key update` — after the GoalRun's row (lock order:
  *  GoalRun, then its StepRuns, the order the guards take too). */
 export async function lockStepRuns(

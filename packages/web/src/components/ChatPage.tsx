@@ -6,6 +6,7 @@ import type { CapabilityCaller } from '../lib/clients.js';
 import { composerUnstorableTextStep, describeError } from '../lib/errors.js';
 import { useT } from '../lib/i18n.js';
 import { liveOutputPaused } from '../lib/live-stream.js';
+import { goalRunIdsIn, latestGoalStatuses } from '../lib/system-status.js';
 import { persistedToolCallIds, threadItems } from '../lib/tool-call-record.js';
 import type { WsClient } from '../lib/ws-client.js';
 import { ToolCallGroupView, ToolCallRowView } from './ToolCallRowView.js';
@@ -17,6 +18,7 @@ import { ChatModelHealthNotice, type RunningModelHealth } from './chat/ModelSwit
 import { TurnOutcomeControl } from './chat/TurnOutcomeControl.js';
 import { useActionCards } from './chat/useActionCards.js';
 import { useAutoFollow } from './chat/useAutoFollow.js';
+import { useChatGoals } from './chat/useChatGoals.js';
 import { useChatMessages } from './chat/useChatMessages.js';
 import { useChatSummary } from './chat/useChatSummary.js';
 import { useComposer } from './chat/useComposer.js';
@@ -41,6 +43,8 @@ export interface ChatPageProps {
   /** Absent when the reader cannot open an approval (`hooks/useCanOpen`): no entry leads there. */
   readonly onOpenApproval?: (actionRequestId: string) => void;
   readonly onOpenTask: (taskId: string) => void;
+  /** S11 GO5e-2: opens a goal's page from its card or a milestone line in this chat. */
+  readonly onOpenGoal: (goalRunId: string) => void;
 }
 
 /**
@@ -75,6 +79,7 @@ export function ChatPage({
   onSelectChat,
   onOpenApproval,
   onOpenTask,
+  onOpenGoal,
 }: ChatPageProps) {
   const t = useT();
   const permissions = usePermissions();
@@ -91,6 +96,9 @@ export function ChatPage({
   );
   const follow = useAutoFollow(messages, turn);
   const actionCards = useActionCards(client, http, messages, toast, t, permissions);
+  const latestGoalStatus = useMemo(() => latestGoalStatuses(messages), [messages]);
+  const goalRunIds = useMemo(() => goalRunIdsIn(messages), [messages]);
+  const goals = useChatGoals(http, goalRunIds);
   const composer = useComposer(
     client,
     chatId,
@@ -194,6 +202,9 @@ export function ChatPage({
                       onReject={actionCards.handleReject}
                       onOpenApproval={onOpenApproval}
                       onOpenTask={onOpenTask}
+                      latestGoalStatus={latestGoalStatus}
+                      goals={goals}
+                      onOpenGoal={onOpenGoal}
                     />
                     {turnAttribution ? (
                       <TurnOutcomeControl

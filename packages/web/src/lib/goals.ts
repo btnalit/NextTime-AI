@@ -9,9 +9,11 @@ import type {
   GoalDetailWire,
   GoalOutcomeBasis,
   GoalPlan,
+  GoalRunChange,
   GoalRunPauseReason,
   GoalRunStatus,
   GoalRunWire,
+  ObjectiveOutcome,
   ObservationCheck,
   OutputJsonValue,
   OutputSchema,
@@ -311,6 +313,104 @@ const OUTCOME_BASIS: Readonly<Record<GoalOutcomeBasis, readonly [string, string]
 export function outcomeBasisLabel(basis: GoalOutcomeBasis, t: Translate): string {
   const [zh, en] = OUTCOME_BASIS[basis];
   return t(zh, en);
+}
+
+// ---------------------------------------------------------------------------------------------
+// A goal's milestone in the chat it was proposed from (S11 GO5e-2)
+// ---------------------------------------------------------------------------------------------
+
+/** The fields of a `system.goal_update` message a milestone line reads (`lib/system-status`). */
+export interface GoalMilestone {
+  readonly change: GoalRunChange | null;
+  readonly status: GoalRunStatus;
+  readonly pauseReason: GoalRunPauseReason | null;
+  readonly heldByOwner: boolean;
+  readonly outcome: ObjectiveOutcome | null;
+  readonly outcomeBasis: GoalOutcomeBasis | null;
+  readonly cleanupPending: boolean;
+  readonly revision: number | null;
+}
+
+/**
+ * One goal milestone, in a sentence the chat's reader — the goal's requester, whose chat it is —
+ * reads beside the status chip. Built from the message's fields, never its kernel text (English)
+ * and never the goal's statement (free text, read masked with `get_goal`).
+ */
+export function goalMilestoneText(milestone: GoalMilestone, t: Translate): string {
+  const reason = milestone.pauseReason ? goalPauseReasonLabel(milestone.pauseReason, t) : null;
+  switch (milestone.change) {
+    case 'propose':
+      return t('目标已提出，等你确认后才开始', 'Goal proposed; it starts once you confirm it');
+    case 'confirm':
+      return t('目标已确认，开始执行', 'Goal confirmed; its steps are starting');
+    case 'reject':
+      return t('目标在开始前被拒绝', 'Goal rejected before it started');
+    case 'pause':
+      return reason
+        ? t(`目标已暂停：${reason}`, `Goal paused: ${reason}`)
+        : t('目标已暂停', 'Goal paused');
+    case 'hold':
+      return t(
+        '目标被工作区所有者锁定：所有者解除之后才能继续',
+        'A workspace owner holds the goal: it can resume only once an owner lifts the hold',
+      );
+    case 'release_hold':
+      // Lifting the hold leaves the pause it took over: say why it is still paused, so nobody
+      // resumes a goal that would stop again at once (#737 UX P3-1).
+      return reason
+        ? t(
+            `锁定已解除；目标仍暂停：${reason}`,
+            `The hold was lifted; the goal is still paused: ${reason}`,
+          )
+        : t('锁定已解除，你可以继续这个目标', 'The hold was lifted; you can resume the goal');
+    case 'resume':
+      return t('目标已继续', 'Goal resumed');
+    case 'revise':
+      return milestone.revision
+        ? t(
+            `目标计划已修订为第 ${milestone.revision} 版，继续之前仍是暂停`,
+            `Goal plan revised to revision ${milestone.revision}; it stays paused until resumed`,
+          )
+        : t('目标计划已修订，继续之前仍是暂停', 'Goal plan revised; it stays paused until resumed');
+    case 'verify':
+      return t('所有步骤都已完成，平台正在验收', 'Every step is done; the platform is checking it');
+    case 'complete': {
+      // Worded as the goal's page words it (`goalStateNote`): an end "not achieved" is never
+      // "completed" (#737 UX P2-1); the line's outcome chip carries the colour.
+      const basis = milestone.outcomeBasis ? outcomeBasisLabel(milestone.outcomeBasis, t) : null;
+      if (milestone.outcome === 'achieved') {
+        return basis
+          ? t(`目标已达成 · ${basis}`, `Goal achieved · ${basis}`)
+          : t('目标已达成', 'Goal achieved');
+      }
+      if (milestone.outcome === 'not_achieved') {
+        return basis
+          ? t(`目标按未达成结束 · ${basis}`, `Goal ended as not achieved · ${basis}`)
+          : t('目标按未达成结束', 'Goal ended as not achieved');
+      }
+      return t('目标已结束', 'Goal ended');
+    }
+    case 'cancel':
+      return t(
+        '目标正在取消：不再开始新步骤，正在停止运行中的步骤',
+        'Goal being cancelled: no new step starts, running ones are being stopped',
+      );
+    case 'finish_cancel':
+      return milestone.cleanupPending
+        ? t(
+            '目标已取消，还有遗留要清理',
+            'Goal cancelled; some of what it started is left to clean up',
+          )
+        : t('目标已取消', 'Goal cancelled');
+    case 'cleanup_finished':
+      return t('已取消目标的遗留已清理完', 'What the cancelled goal left behind is cleaned up');
+    case 'fail':
+      return t('目标因平台错误停止', 'Goal stopped on a platform error');
+    case null:
+      return reason
+        ? t(`目标状态有变化：${reason}`, `Goal status changed: ${reason}`)
+        : t('目标状态有变化', 'Goal status changed');
+  }
 }
 
 const CHECK_KIND: Readonly<Record<GoalAcceptanceCheckKind, readonly [string, string]>> = {

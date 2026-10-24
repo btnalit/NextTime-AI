@@ -1,3 +1,4 @@
+import type { PoolClient } from 'pg';
 import { withWorkspace } from '../../adapters/db/pool.js';
 import type { DomainEvent } from '../../substrate/outbox/index.js';
 import {
@@ -5,8 +6,9 @@ import {
   publishChatPushEvent,
   publishPrincipalPushEvent,
 } from '../chat/index.js';
+import { getStepRun } from '../goal/index.js';
 import type { OutboxDeliveryMeta } from '../outbox/index.js';
-import { readTask } from '../task/index.js';
+import { readTask, readTaskGoalStep } from '../task/index.js';
 import { resolveTaskChat } from './chat-targets.js';
 import { buildTaskUpdateContent } from './content.js';
 import type { LinkageDeps } from './deps.js';
@@ -73,6 +75,19 @@ function extractResultSummary(result: unknown): string | null {
   return typeof summary === 'string' ? summary : null;
 }
 
+/** The goal step a Task runs for (S11 GO5e-2): its GoalRun and the step's key, or `null` for a
+ *  Task outside a goal. */
+async function readGoalStepRef(
+  client: PoolClient,
+  workspaceId: string,
+  taskId: string,
+): Promise<{ readonly goalRunId: string; readonly stepKey: string } | null> {
+  const goalStep = await readTaskGoalStep(client, workspaceId, taskId);
+  if (!goalStep) return null;
+  const step = await getStepRun(client, workspaceId, goalStep.stepRunId);
+  return step ? { goalRunId: goalStep.goalRunId, stepKey: step.stepKey } : null;
+}
+
 /** Registers the `TaskUpdated` consumer on `dispatcher`. Returns an unsubscribe function. */
 export function registerTaskUpdatedConsumer(
   dispatcher: TaskUpdatedSource,
@@ -109,11 +124,13 @@ export function registerTaskUpdatedConsumer(
       { workspaceId: event.workspaceId, principalId: task.onBehalfOf },
       async (client) => {
         const chat = await resolveTaskChat(client, event.workspaceId, task);
+        const goalStep = await readGoalStepRef(client, event.workspaceId, event.taskId);
         const content = buildTaskUpdateContent({
           taskId: event.taskId,
           status: event.status,
           failureReason: task.failureReason,
           summary: extractResultSummary(task.result),
+          goalStep,
         });
 
         const message = await insertChatMessage(client, event.workspaceId, {
@@ -137,6 +154,11 @@ export function registerTaskUpdatedConsumer(
           },
         });
 
+        // S11 GO5e-2: a goal step's Task is the goal's business, not the entry agent's — the
+        // platform runs the next step, and the agent hears about the goal from its milestones
+        // (`goal-consumer.ts`). Its outcome as a Task of the agent's own would read as work to
+        // carry on.
+        if (goalStep) return;
         await insertPendingContextItem(client, event.workspaceId, {
           principalId: task.onBehalfOf,
           chatId: chat.id,

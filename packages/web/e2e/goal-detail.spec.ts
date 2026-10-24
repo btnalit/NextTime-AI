@@ -1,6 +1,6 @@
 import { getCapability } from '@nexttime/shared';
 import { type Page, expect, test } from '@playwright/test';
-import { OWNER_API_KEY, loginAsOwner } from './lib/auth.js';
+import { OWNER_API_KEY, loginAsOwner, signedInOwner } from './lib/auth.js';
 
 /**
  * e2e/goal-detail.spec.ts (S11 GO6): the 目标 list and one goal's page with real content, and the
@@ -448,25 +448,6 @@ test.describe('S11 GO6: a goal’s pages with content (stand-in reads)', () => {
     });
   }
 });
-
-/**
- * The signed-in owner's id, read off the real `get_workspace` as the page makes it. Wrapped in an
- * object: an async function returning the bare promise would adopt it, and awaiting the route
- * set-up would then wait for a request the page has not made yet.
- */
-async function signedInOwner(page: Page): Promise<{ id: Promise<string> }> {
-  let resolve: (id: string) => void = () => undefined;
-  const owner = new Promise<string>((done) => {
-    resolve = done;
-  });
-  await page.route('**/api/cap/get_workspace', async (route) => {
-    const response = await route.fetch();
-    const body = (await response.json()) as { result?: { caller?: { id?: string } } };
-    if (body.result?.caller?.id) resolve(body.result.caller.id);
-    await route.fulfill({ response });
-  });
-  return { id: owner };
-}
 
 test.describe('S11 GO6: operations on a goal (stand-in reads and operations)', () => {
   test.skip(!OWNER_API_KEY, 'set WEB_E2E_BASE_URL and WEB_E2E_API_KEY to run this suite');

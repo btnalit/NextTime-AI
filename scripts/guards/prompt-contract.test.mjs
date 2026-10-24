@@ -12,12 +12,15 @@ import { test } from 'node:test';
 import {
   ALLOWED_NON_TOOL_WORDS,
   GATE_PLACEHOLDER,
+  GOAL_UPDATE_FIELD_WORDS,
   PROPOSE_GOAL_REFUSAL_CODES,
   PROPOSE_GOAL_SCHEMA_WORDS,
   candidateIdentifier,
   checkConditionalOpsRunner,
   checkEmptyFindGuidance,
+  checkGoalChangeWords,
   checkGoalGuidance,
+  checkGoalUpdateWords,
   checkGraphQuestionGuidance,
   checkPromptFile,
   checkProposeGoalDescription,
@@ -26,6 +29,7 @@ import {
   extractBacktickSpans,
   extractCandidateIdentifiers,
   extractStringArrayLiteral,
+  goalChangeWordsInContext,
   jsonSchemaWords,
 } from './prompt-contract.mjs';
 
@@ -186,7 +190,8 @@ const GOOD_ENTRY_FIXTURE_PROMPT = [
   'task is not a goal. Once the user confirms a goal in the console the platform runs it.',
   'It is achieved on its checks, never because a Worker says it is done; write each so it could',
   'come out false. Pass an `idempotencyKey`. Confirming and pausing are theirs — you cannot do any',
-  'of them. Read progress with `list_goals`.',
+  'of them. Read progress with `list_goals`. Its milestones also reach you without asking.',
+  "The Tasks a goal's steps run do not reach you.",
 ].join(' ');
 
 test('checkEmptyFindGuidance', async (t) => {
@@ -270,6 +275,67 @@ test('checkGoalGuidance', async (t) => {
     const violations = checkGoalGuidance('fixture.yaml', badPrompt);
     assert.equal(violations.length, 1);
     assert.match(violations[0], /"One delegated task is not a goal"/);
+  });
+});
+
+test('checkGoalGuidance — milestones (S11 GO5e-2)', async (t) => {
+  await t.test("catches a prompt that has the agent follow a goal step's Task", () => {
+    const badPrompt = GOOD_ENTRY_FIXTURE_PROMPT.replace(
+      "The Tasks a goal's steps run do not reach you.",
+      "Follow up each goal step's Task as you would your own.",
+    );
+    const violations = checkGoalGuidance('fixture.yaml', badPrompt);
+    assert.equal(violations.length, 1);
+    assert.match(violations[0], /"The Tasks a goal's steps run do not reach you"/);
+  });
+});
+
+test('checkGoalUpdateWords', async (t) => {
+  const shape = [
+    'kind',
+    'text',
+    'goalRunId',
+    'change',
+    'status',
+    'pauseReason',
+    'heldByOwner',
+    'outcome',
+    'outcomeBasis',
+    'cleanupPending',
+    'revision',
+  ];
+
+  await t.test('no violations when every named field is in the content', () => {
+    assert.deepEqual(checkGoalUpdateWords('fixture.yaml', new Set(shape)), []);
+  });
+
+  await t.test('catches a field the content no longer has', () => {
+    const renamed = new Set(shape.filter((word) => word !== 'pauseReason'));
+    renamed.add('pausedBecause');
+    const violations = checkGoalUpdateWords('fixture.yaml', renamed);
+    assert.equal(violations.length, 1);
+    assert.match(violations[0], /"pauseReason"/);
+    assert.ok(GOAL_UPDATE_FIELD_WORDS.has('pauseReason'));
+  });
+});
+
+test('checkGoalChangeWords', async (t) => {
+  const changes = goalChangeWordsInContext(['confirm', 'pause', 'release_hold', 'fail', 'propose']);
+
+  await t.test('the proposal is no context item, so the prompt need not name it', () => {
+    assert.deepEqual([...changes], ['confirm', 'pause', 'release_hold', 'fail']);
+  });
+
+  await t.test('no violations when every change is named in backticks', () => {
+    const prompt = 'its `change` (`confirm`, `pause`, `release_hold`, `fail` — a platform error)';
+    assert.deepEqual(checkGoalChangeWords('fixture.yaml', prompt, changes), []);
+  });
+
+  await t.test('catches a change the prompt only glosses in words', () => {
+    const prompt = 'its `change` (`confirm`, `pause`, `release_hold`, stopped on a platform error)';
+    const violations = checkGoalChangeWords('fixture.yaml', prompt, changes);
+    assert.equal(violations.length, 1);
+    assert.match(violations[0], /"fail"/);
   });
 });
 

@@ -51,6 +51,7 @@ export {
 export {
   getGoalRun,
   getPlanRevision,
+  getStepRun,
   listStepRuns,
   lockStepRuns,
   readStepActionEffect,

@@ -12,6 +12,7 @@ import {
   type WsClient,
 } from '../lib/ws-client.js';
 import { ChatPage } from './ChatPage.js';
+import { goalDetail } from './goals/goal-fixtures.test-helpers.js';
 import { ToastProvider } from './ui/Toast.js';
 
 afterEach(cleanup);
@@ -114,7 +115,11 @@ function scriptedHttp(
   };
 }
 
-function renderChat(client: WsClient, http: CapabilityCaller) {
+function renderChat(
+  client: WsClient,
+  http: CapabilityCaller,
+  props: { readonly onOpenGoal?: (goalRunId: string) => void } = {},
+) {
   return render(
     <PermissionsProvider>
       <ToastProvider>
@@ -126,6 +131,7 @@ function renderChat(client: WsClient, http: CapabilityCaller) {
           onSelectChat={vi.fn()}
           onOpenApproval={vi.fn()}
           onOpenTask={vi.fn()}
+          onOpenGoal={props.onOpenGoal ?? vi.fn()}
         />
       </ToastProvider>
     </PermissionsProvider>,
@@ -1056,5 +1062,191 @@ describe('live output paused by the stream scrubber (#520)', () => {
       fake.stream('turn-1', { streamKind: 'textDelta', delta: 'the password: [redacted] ' }),
     );
     expect(screen.queryByTestId('chat-stream-paused')).toBeNull();
+  });
+});
+
+describe('ChatPage goal card and milestones (S11 GO5e-2)', () => {
+  function goalMessage(
+    sequence: number,
+    content: Record<string, unknown>,
+    goalRunId = 'goal-1',
+  ): ChatMessage {
+    return {
+      id: `m${sequence}`,
+      role: 'system',
+      text: `Goal ${goalRunId} …`,
+      createdAt: '2026-10-23T00:00:00.000Z',
+      sequence,
+      kind: 'system.goal_update',
+      content: { kind: 'system.goal_update', text: `Goal ${goalRunId} …`, goalRunId, ...content },
+    };
+  }
+
+  const proposed = goalDetail({
+    status: 'proposed',
+    onBehalfOf: 'p-me',
+    confirmedAt: null,
+    usage: { tokens: 0, steps: 0, revisions: 0 },
+  });
+
+  it('a proposal is a card the requester opens to confirm; the statement comes from get_goal', async () => {
+    const fake = fakeClient();
+    const http = scriptedHttp({
+      get_workspace: () => ({ name: 'ws', caller: { id: 'p-me', role: 'member' } }),
+      list_chat_turns: () => ({ items: [] }),
+      get_goal: () => proposed,
+    });
+    const onOpenGoal = vi.fn();
+    renderChat(fake.client, http, { onOpenGoal });
+    await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled());
+    act(() => {
+      fake.deliver(goalMessage(1, { change: 'propose', status: 'proposed' }));
+      fake.caughtUp();
+    });
+
+    const card = await screen.findByTestId('goal-proposal-card');
+    await waitFor(() =>
+      expect(within(card).getByTestId('goal-proposal-statement').textContent).toBe(
+        proposed.statement,
+      ),
+    );
+    expect(http.calls.filter((call) => call.name === 'get_goal')).toEqual([
+      { name: 'get_goal', params: { goalRunId: 'goal-1' } },
+    ]);
+    expect(within(card).getByTestId('goal-proposal-summary').textContent).toContain('2 个步骤');
+    expect(card.getAttribute('data-status')).toBe('proposed');
+    const open = within(card).getByTestId('goal-proposal-open');
+    await waitFor(() => expect(open.textContent).toBe('查看并确认'));
+    fireEvent.click(open);
+    expect(onOpenGoal).toHaveBeenCalledWith('goal-1');
+    // No milestone line for the proposal itself: the card is it.
+    expect(screen.queryByTestId('system-status-line')).toBeNull();
+  });
+
+  it('later milestones are lines that open the goal; the card shows where the goal is now', async () => {
+    const fake = fakeClient();
+    const http = scriptedHttp({
+      get_workspace: () => ({ name: 'ws', caller: { id: 'p-me', role: 'member' } }),
+      list_chat_turns: () => ({ items: [] }),
+      get_goal: () => proposed,
+    });
+    const onOpenGoal = vi.fn();
+    renderChat(fake.client, http, { onOpenGoal });
+    await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled());
+    act(() => {
+      fake.deliver(goalMessage(1, { change: 'propose', status: 'proposed' }));
+      fake.deliver(goalMessage(2, { change: 'confirm', status: 'running' }));
+      fake.deliver(
+        goalMessage(3, { change: 'pause', status: 'paused', pauseReason: 'budget_exhausted' }),
+      );
+      fake.caughtUp();
+    });
+
+    const card = await screen.findByTestId('goal-proposal-card');
+    expect(card.getAttribute('data-status')).toBe('paused');
+    await waitFor(() =>
+      expect(within(card).getByTestId('goal-proposal-open').textContent).toBe('查看目标'),
+    );
+    const lines = screen.getAllByTestId('system-status-line');
+    expect(lines.map((line) => line.textContent)).toEqual([
+      expect.stringContaining('目标已确认，开始执行'),
+      expect.stringContaining('目标已暂停：预算用完'),
+    ]);
+    expect(lines[1]?.getAttribute('data-variant')).toBe('goal_update');
+    fireEvent.click(lines[1] as HTMLElement);
+    expect(onOpenGoal).toHaveBeenCalledWith('goal-1');
+  });
+
+  it('#737 UX P2-2: two goals in one chat — each line names its own goal, each goal is read once, and an end not achieved says so', async () => {
+    const second = goalDetail({
+      id: 'goal-2',
+      statement: '把二号仓的盘点\n差异整理成报告。',
+      status: 'completed',
+      outcome: 'not_achieved',
+      outcomeBasis: 'requester',
+      onBehalfOf: 'p-me',
+    });
+    const fake = fakeClient();
+    const http = scriptedHttp({
+      get_workspace: () => ({ name: 'ws', caller: { id: 'p-me', role: 'member' } }),
+      list_chat_turns: () => ({ items: [] }),
+      get_goal: (params) =>
+        (params as { goalRunId: string }).goalRunId === 'goal-2' ? second : proposed,
+    });
+    renderChat(fake.client, http);
+    await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled());
+    act(() => {
+      fake.deliver(goalMessage(1, { change: 'propose', status: 'proposed' }));
+      fake.deliver(goalMessage(2, { change: 'propose', status: 'proposed' }, 'goal-2'));
+      fake.deliver(goalMessage(3, { change: 'confirm', status: 'running' }));
+      fake.deliver(goalMessage(4, { change: 'confirm', status: 'running' }, 'goal-2'));
+      fake.deliver(
+        goalMessage(
+          5,
+          {
+            change: 'complete',
+            status: 'completed',
+            outcome: 'not_achieved',
+            outcomeBasis: 'requester',
+          },
+          'goal-2',
+        ),
+      );
+      fake.caughtUp();
+    });
+
+    await waitFor(() =>
+      expect(screen.getAllByTestId('system-status-goal').map((label) => label.textContent)).toEqual(
+        [proposed.statement, '把二号仓的盘点 差异整理成报告。', '把二号仓的盘点 差异整理成报告。'],
+      ),
+    );
+    expect(
+      http.calls
+        .filter((call) => call.name === 'get_goal')
+        .map((call) => (call.params as { goalRunId: string }).goalRunId)
+        .sort(),
+    ).toEqual(['goal-1', 'goal-2']);
+
+    const lines = screen.getAllByTestId('system-status-line');
+    expect(lines[2]?.textContent).toMatch(/目标按未达成结束 · 依据请求人确认/);
+    expect(
+      within(lines[2] as HTMLElement)
+        .getByTestId('system-status-goal-outcome')
+        .getAttribute('data-status'),
+    ).toBe('not_achieved');
+    const cards = screen.getAllByTestId('goal-proposal-card');
+    expect(cards.map((card) => card.getAttribute('data-status'))).toEqual(['running', 'completed']);
+    expect(within(cards[0] as HTMLElement).queryByTestId('goal-proposal-outcome')).toBeNull();
+    expect(
+      within(cards[1] as HTMLElement)
+        .getByTestId('goal-proposal-outcome')
+        .getAttribute('data-status'),
+    ).toBe('not_achieved');
+  });
+
+  it('an unreadable goal still says a goal was proposed and still opens its page', async () => {
+    const fake = fakeClient();
+    const http = scriptedHttp({
+      get_workspace: () => ({ name: 'ws', caller: { id: 'p-me', role: 'member' } }),
+      list_chat_turns: () => ({ items: [] }),
+      get_goal: () => {
+        throw new HttpError('capability_error', 'goal run not found', 'not_found');
+      },
+    });
+    renderChat(fake.client, http);
+    await waitFor(() => expect(fake.client.subscribeChat).toHaveBeenCalled());
+    act(() => {
+      fake.deliver(goalMessage(1, { change: 'propose', status: 'proposed' }));
+      fake.caughtUp();
+    });
+    const card = await screen.findByTestId('goal-proposal-card');
+    await waitFor(() => expect(within(card).getByTestId('goal-proposal-error')).toBeTruthy());
+    expect(within(card).getByTestId('goal-proposal-statement').textContent).toBe(
+      '这里提出过一个目标，现在读不到它',
+    );
+    expect(within(card).getByTestId('goal-proposal-error').textContent).toContain(
+      '这个目标不在了，或你看不到它。目标页会说明原因。',
+    );
+    expect(within(card).getByTestId('goal-proposal-open').textContent).toBe('查看目标');
   });
 });

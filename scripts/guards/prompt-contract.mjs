@@ -176,11 +176,22 @@ async function loadModeToolSets() {
     zodToJsonSchema(proposeGoal.paramsSchema, { $refStrategy: 'none', override: recursionAsAny }),
   );
 
+  const goalUpdate = shared.SystemMessageContentSchema.optionsMap.get('system.goal_update');
+  if (!goalUpdate) {
+    throw new Error(
+      'prompt-contract: system.goal_update is missing from SystemMessageContentSchema',
+    );
+  }
+  const goalUpdateWords = new Set(Object.keys(goalUpdate.shape));
+  const goalChangeWords = goalChangeWordsInContext(shared.GOAL_RUN_CHANGE_VALUES);
+
   return {
     entryTools,
     workerTools,
     resultContractKeys,
     proposeGoal: { schemaWords: proposeGoalSchemaWords, description: proposeGoal.description },
+    goalUpdateWords,
+    goalChangeWords,
   };
 }
 
@@ -221,6 +232,50 @@ export const PROPOSE_GOAL_REFUSAL_CODES = new Set([
   'credentials_in_text',
   'proposed_goal_limit',
 ]);
+
+// S11 GO5e-2: the same section names the fields of a goal's milestone, the `system.goal_update`
+// item that reaches a later turn's entry context. Checked against that schema in the built shared
+// package (`SystemMessageContentSchema`'s `system.goal_update` variant) the same way.
+export const GOAL_UPDATE_FIELD_WORDS = new Set([
+  'goalRunId',
+  'change',
+  'status',
+  'pauseReason',
+  'heldByOwner',
+  'outcome',
+  'outcomeBasis',
+]);
+
+/** Every `change` a goal's milestone can carry into the entry context — every GoalRunChange but
+ *  its proposal, which is no context item (`application/linkage/goal-consumer.ts`) — is named in
+ *  the entry prompt in backticks, so the model reads each raw value it can see (#737 review). */
+export function checkGoalChangeWords(relativePath, systemPrompt, changeWords) {
+  const violations = [];
+  for (const word of changeWords) {
+    if (systemPrompt.includes(`\`${word}\``)) continue;
+    violations.push(
+      `${relativePath}: a goal's milestone can carry change "${word}" (GOAL_RUN_CHANGE_VALUES), but the prompt never names it — add it, in backticks, to the milestone paragraph's list of changes`,
+    );
+  }
+  return violations;
+}
+
+/** The GoalRunChange values a milestone in the entry context can carry. */
+export function goalChangeWordsInContext(changeValues) {
+  return new Set(changeValues.filter((value) => value !== 'propose'));
+}
+
+/** Every `GOAL_UPDATE_FIELD_WORDS` word is a property of the `system.goal_update` content. */
+export function checkGoalUpdateWords(relativePath, schemaWords) {
+  const violations = [];
+  for (const word of GOAL_UPDATE_FIELD_WORDS) {
+    if (schemaWords.has(word)) continue;
+    violations.push(
+      `${relativePath}: "${word}" is named as a field of a goal's milestone, but the system.goal_update content has no property of that name — fix the prompt and GOAL_UPDATE_FIELD_WORDS in scripts/guards/prompt-contract.mjs`,
+    );
+  }
+  return violations;
+}
 
 /** Every property name, and every string `const` / `enum` value, anywhere in a JSON Schema. */
 export function jsonSchemaWords(schema, out = new Set()) {
@@ -419,7 +474,8 @@ export function checkGraphQuestionGuidance(relativePath, systemPrompt) {
 /** Rule 5 (S11 GO5e, plan §7.2 item 6) — a chain of dependent delegated steps is a goal, one
  *  delegated task is not (#728 review: a write that needs an approval, several gates or a long run
  *  is still one `invoke_worker`); it is achieved on checks, not a Worker's word; the person
- *  confirms it in the console (the agent cannot); a retry carries the same key. */
+ *  confirms it in the console (the agent cannot); a retry carries the same key. GO5e-2: its
+ *  milestones reach a later turn by themselves, and its steps' Tasks do not reach the agent. */
 const GOAL_GUIDANCE_REQUIRED_PHRASES = [
   'propose_goal',
   "a later step needs an earlier one's result",
@@ -430,6 +486,9 @@ const GOAL_GUIDANCE_REQUIRED_PHRASES = [
   'idempotencyKey',
   'you cannot do any of them',
   'list_goals',
+  // S11 GO5e-2: milestones arrive on their own; a step's Task is the goal's, not the agent's.
+  'milestones also reach you without asking',
+  "The Tasks a goal's steps run do not reach you",
 ];
 
 /** Rule 5 (S11 GO5e): when to propose a goal and how to write checks a person can confirm. */
@@ -492,7 +551,14 @@ const PROMPT_FILES = [
 ];
 
 export async function main() {
-  const { entryTools, workerTools, resultContractKeys, proposeGoal } = await loadModeToolSets();
+  const {
+    entryTools,
+    workerTools,
+    resultContractKeys,
+    proposeGoal,
+    goalUpdateWords,
+    goalChangeWords,
+  } = await loadModeToolSets();
   const toolSetsByKey = { entryTools, workerTools };
   const violations = [];
 
@@ -511,8 +577,17 @@ export async function main() {
     const isEntry = file.path === 'ontology/entry-agent.yaml';
     const allowed = new Set([
       ...(ALLOWED_NON_TOOL_WORDS[file.path] ?? []),
-      // S11 GO5e: checked against propose_goal itself just below, not allowed blind.
-      ...(isEntry ? [...PROPOSE_GOAL_SCHEMA_WORDS, ...PROPOSE_GOAL_REFUSAL_CODES] : []),
+      // S11 GO5e: checked against propose_goal itself just below, not allowed blind; GO5e-2's
+      // milestone fields against the system.goal_update content, and its changes are the
+      // registry's own GoalRunChange values.
+      ...(isEntry
+        ? [
+            ...PROPOSE_GOAL_SCHEMA_WORDS,
+            ...PROPOSE_GOAL_REFUSAL_CODES,
+            ...GOAL_UPDATE_FIELD_WORDS,
+            ...goalChangeWords,
+          ]
+        : []),
     ]);
     violations.push(...checkPromptFile(file.path, systemPrompt, toolSet, allowed));
 
@@ -522,6 +597,8 @@ export async function main() {
     if (isEntry) {
       violations.push(
         ...checkProposeGoalWords(file.path, proposeGoal.schemaWords, proposeGoal.description),
+        ...checkGoalUpdateWords(file.path, goalUpdateWords),
+        ...checkGoalChangeWords(file.path, systemPrompt, goalChangeWords),
         ...checkProposeGoalDescription(
           'packages/shared/src/capabilities.ts (propose_goal description)',
           proposeGoal.description,

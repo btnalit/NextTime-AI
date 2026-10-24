@@ -10,12 +10,14 @@ import { messageRoleLabel } from '../../lib/chat-messages.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatTime } from '../../lib/format.js';
 import { useT } from '../../lib/i18n.js';
-import { systemStatusLineFromMessage } from '../../lib/system-status.js';
+import { type LatestGoalStatus, systemStatusLineFromMessage } from '../../lib/system-status.js';
 import type { ChatMessage } from '../../lib/ws-client.js';
 import { ActionRequestCard, type ActionRequestCardProps } from '../ActionRequestCard.js';
 import { SystemStatusLineView } from '../SystemStatusLineView.js';
+import { GoalProposalCard } from './GoalProposalCard.js';
 import { MessageBody } from './MessageBody.js';
 import { MessageReferences } from './MessageReferences.js';
+import { type ChatGoalRead, chatGoalLabel } from './useChatGoals.js';
 
 export interface ChatMessageRowProps {
   readonly message: ChatMessage;
@@ -35,13 +37,20 @@ export interface ChatMessageRowProps {
   /** Absent when the reader cannot open an approval (`hooks/useCanOpen`): no entry leads there. */
   readonly onOpenApproval?: (actionRequestId: string) => void;
   readonly onOpenTask: (taskId: string) => void;
+  /** S11 GO5e-2: each goal's latest status in this chat (`latestGoalStatuses`), for a proposal
+   *  card once its goal has moved on. */
+  readonly latestGoalStatus: ReadonlyMap<string, LatestGoalStatus>;
+  /** The goals this chat names, each read once (`useChatGoals`). */
+  readonly goals: ReadonlyMap<string, ChatGoalRead>;
+  readonly onOpenGoal: (goalRunId: string) => void;
 }
 
 /**
  * components/chat/ChatMessageRow: one row of `ChatPage`'s thread — an inline approval card
  * (`system.action_pending`, on the shared `ui/ApprovalCard` via `ActionRequestCard`), a compact
  * system notice (`system.action_update` / `system.task_update`, `SystemStatusLineView`) that opens
- * the matching Approvals/Tasks drawer, or an ordinary message body. Split out of `ChatPage` itself
+ * the matching Approvals/Tasks drawer, a goal's proposal (`GoalProposalCard`) or one of its later
+ * milestones (a status line opening the goal's page; S11 GO5e-2), or an ordinary message body. Split out of `ChatPage` itself
  * (console redesign P1) because, unlike the rest of that page's JSX, it imports nothing from
  * `components/ui/*` and can live in its own file under the guard `scripts/guards/
  * legacy-ui-importers.json` sets for new files.
@@ -59,6 +68,9 @@ export function ChatMessageRow({
   onReject,
   onOpenApproval,
   onOpenTask,
+  latestGoalStatus,
+  goals,
+  onOpenGoal,
 }: ChatMessageRowProps) {
   const t = useT();
   if (isPendingCardMessage(message) && message.content) {
@@ -84,9 +96,29 @@ export function ChatMessageRow({
     }
   }
   const statusLine = systemStatusLineFromMessage(message);
+  if (statusLine?.variant === 'goal_update' && statusLine.change === 'propose') {
+    return (
+      <GoalProposalCard
+        key={message.sequence}
+        goalRunId={statusLine.goalRunId}
+        read={goals.get(statusLine.goalRunId)}
+        latestStatus={latestGoalStatus.get(statusLine.goalRunId)}
+        viewerId={viewerId ?? null}
+        createdAt={message.createdAt}
+        onOpenGoal={onOpenGoal}
+      />
+    );
+  }
   if (statusLine) {
+    const goalRunId =
+      statusLine.variant === 'goal_update'
+        ? statusLine.goalRunId
+        : statusLine.variant === 'task_update'
+          ? statusLine.goalStep?.goalRunId
+          : undefined;
     return (
       <SystemStatusLineView
+        goalLabel={goalRunId ? chatGoalLabel(goals.get(goalRunId), t) : undefined}
         key={message.sequence}
         line={statusLine}
         onOpen={
@@ -94,7 +126,9 @@ export function ChatMessageRow({
             ? onOpenApproval
               ? () => onOpenApproval(statusLine.actionRequestId)
               : undefined
-            : () => onOpenTask(statusLine.taskId)
+            : statusLine.variant === 'goal_update'
+              ? () => onOpenGoal(statusLine.goalRunId)
+              : () => onOpenTask(statusLine.taskId)
         }
       />
     );

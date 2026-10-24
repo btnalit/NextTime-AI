@@ -4,7 +4,8 @@
  * development-tasks.md S2.11). Three things live here:
  *
  *   1. Outbox consumers that turn `TaskUpdated` / `ActionRequestPending` / `ActionRequestUpdated` /
- *      `BudgetWarning` domain events into persisted `chat_messages` system-message rows (via
+ *      `BudgetWarning` / `GoalRunUpdated` (S11 GO5e-2) domain events into persisted
+ *      `chat_messages` system-message rows (via
  *      `application/chat`'s public `insertChatMessage`) plus live pushes (`application/chat`'s
  *      `publishChatPushEvent` for the persisted message, `publishPrincipalPushEvent` for the S2.11
  *      wire frames `action.pending`/`action.updated`/`task.updated`).
@@ -12,8 +13,8 @@
  *      per-Chat delivery store `get_entry_context` (application/gateway/handlers.ts) leases to a
  *      Turn and `report_turn` acknowledges (`store.ts`, 2026-10-02 review R-57 / D-23).
  *   3. Nothing else — this module owns no Task/ActionRequest/Chat *state* of its own beyond that
- *      one delivery-tracking table; it is pure orchestration over three other modules' public
- *      surfaces.
+ *      one delivery-tracking table; it is pure orchestration over other modules' public surfaces
+ *      (chat, task, approval and, S11 GO5e-2, goal).
  *
  * **Why this is not `application/chat` itself**, even though the S2.11 task brief's own prose
  * describes it as "outbox consumers in application/chat": `.dependency-cruiser.cjs`'s
@@ -49,6 +50,9 @@ export type { ActionRequestEventSource } from './action-request-consumer.js';
 export { registerBudgetWarningConsumer } from './budget-consumer.js';
 export type { BudgetWarningSource } from './budget-consumer.js';
 
+export { registerGoalRunUpdatedConsumer } from './goal-consumer.js';
+export type { GoalRunUpdatedSource } from './goal-consumer.js';
+
 export {
   PEEK_CONTEXT_ITEM_LIMIT,
   acknowledgeTurnContextItems,
@@ -72,6 +76,7 @@ import type { OutboxDeliveryMeta } from '../outbox/index.js';
 import { registerActionRequestConsumers } from './action-request-consumer.js';
 import { registerBudgetWarningConsumer } from './budget-consumer.js';
 import type { LinkageDeps } from './deps.js';
+import { registerGoalRunUpdatedConsumer } from './goal-consumer.js';
 import { registerTaskUpdatedConsumer } from './task-consumer.js';
 
 /** The union of every event type this module's consumers subscribe to. */
@@ -79,7 +84,8 @@ type LinkageEventType =
   | 'TaskUpdated'
   | 'ActionRequestPending'
   | 'ActionRequestUpdated'
-  | 'BudgetWarning';
+  | 'BudgetWarning'
+  | 'GoalRunUpdated';
 
 /**
  * A single *generic* `subscribe<T>` method (not four separate non-generic overloads merged via
@@ -119,9 +125,11 @@ export function registerLinkageConsumers(
   const unsubscribeTask = registerTaskUpdatedConsumer(dispatcher, deps);
   const unsubscribeActionRequests = registerActionRequestConsumers(dispatcher, deps);
   const unsubscribeBudget = registerBudgetWarningConsumer(dispatcher, deps);
+  const unsubscribeGoal = registerGoalRunUpdatedConsumer(dispatcher, deps);
   return () => {
     unsubscribeTask();
     unsubscribeActionRequests();
     unsubscribeBudget();
+    unsubscribeGoal();
   };
 }
