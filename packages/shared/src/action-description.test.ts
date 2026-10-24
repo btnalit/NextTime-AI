@@ -118,6 +118,18 @@ describe('OperationSchema', () => {
     expect(OperationSchema.parse(operation)).toEqual(operation);
   });
 
+  it('rejects a result_mapping that names a platform meta-ontology type (review #493 F1)', () => {
+    for (const objectType of ['Operation', 'Gatekeeper', 'WorkerDefinition', 'Capability']) {
+      const result = OperationSchema.safeParse({
+        ...cliOperation,
+        result_mapping: { ...cliOperation.result_mapping, object_type: objectType },
+      });
+      expect(result.success).toBe(false);
+      expect(result.error?.issues[0]?.path).toEqual(['result_mapping', 'object_type']);
+    }
+    expect(OperationSchema.safeParse(cliOperation).success).toBe(true);
+  });
+
   it('rejects an unknown binding kind', () => {
     expect(() =>
       OperationSchema.parse({ ...httpOperation, binding: { kind: 'db', query: 'select 1' } }),

@@ -53,6 +53,7 @@ import {
   GatekeeperLandingRefusedError,
   GatekeeperNotFoundError,
   InvalidCapabilityParamsError,
+  MetaOntologyObjectWriteError,
   MetaOntologyWriteForbiddenError,
   ModelsCatalogUnavailableError,
   ObservationIdentityError,
@@ -350,7 +351,12 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // extends ForbiddenError (application/gateway/meta-ontology-guard.ts), so an `instanceof
   // ForbiddenError` check alone would always match first and this more specific, stable code
   // (docs/development-tasks.md S2.6: "403 with a stable error code") would never be reached.
-  if (err instanceof MetaOntologyWriteForbiddenError) {
+  // Review #493 F1: the graph store's own backstop (substrate/graph/meta-object-guard.ts) — same
+  // refusal, same code, for a write path whose handler did not refuse it first.
+  if (
+    err instanceof MetaOntologyWriteForbiddenError ||
+    err instanceof MetaOntologyObjectWriteError
+  ) {
     return { status: 403, code: 'meta_ontology_write_forbidden', message: err.message };
   }
   if (err instanceof ForbiddenError) {

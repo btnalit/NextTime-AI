@@ -105,6 +105,7 @@ describe.runIf(DATABASE_URL !== undefined)(
               // No identity key: always a fresh row, outside the one-published-per-identity rule.
               const object = await store.upsertObject(client, workspaceId, {
                 objectType: 'Operation',
+                kernelAuthored: true,
                 properties,
               });
               rows.push({ id: object.id, row: { status, proposedBy, proposedByKind: kind } });

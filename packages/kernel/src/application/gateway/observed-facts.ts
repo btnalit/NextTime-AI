@@ -1,3 +1,4 @@
+import { isMetaOntologyObjectType } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { getOrCreateGatekeeperServicePrincipal } from '../../governance/gatekeepers/index.js';
 import { recordSourceObservation, registerSource } from '../../substrate/epistemic/index.js';
@@ -102,17 +103,38 @@ export async function getOrCreateGatekeeperSource(
   return source.id;
 }
 
+export interface WrittenObservedFacts {
+  /** The created (Object, Fact) pairs, in the candidates' order. */
+  readonly written: readonly WrittenObservedFact[];
+  /** Review #493 F1: candidates naming a platform meta-ontology ObjectType, never written. */
+  readonly refusedMetaObjectTypes: readonly string[];
+}
+
 /** Writes every candidate; returns the created (Object, Fact) pairs in the same order. Empty
  *  `candidates` is a no-op (does not even resolve the service Principal or record an
- *  Observation). */
+ *  Observation).
+ *
+ *  Review #493 F1: a candidate naming a platform meta-ontology ObjectType (an `Operation`, a
+ *  `Gatekeeper`, …) is never written — an Operation Object *is* the published definition, and the
+ *  store merges properties into the row an identity names, so a gate's output would rewrite it past
+ *  every review. Such a candidate is skipped, not the whole result: on `apply` the action has
+ *  already run on the target, and its record must not be lost to what the gate sent back. The
+ *  caller audits the skipped types (`refusedMetaObjectTypes`); `OperationSchema` refuses a
+ *  `result_mapping` that names one, so only a gate's own code can send it. */
 export async function writeObservedFacts(
   client: PoolClient,
   workspaceId: string,
   gatekeeperObjectId: string,
-  candidates: readonly ObservedFactCandidateInput[],
+  allCandidates: readonly ObservedFactCandidateInput[],
   activityId: string,
-): Promise<readonly WrittenObservedFact[]> {
-  if (candidates.length === 0) return [];
+): Promise<WrittenObservedFacts> {
+  const refusedMetaObjectTypes = allCandidates
+    .filter((candidate) => isMetaOntologyObjectType(candidate.objectType))
+    .map((candidate) => candidate.objectType);
+  const candidates = allCandidates.filter(
+    (candidate) => !isMetaOntologyObjectType(candidate.objectType),
+  );
+  if (candidates.length === 0) return { written: [], refusedMetaObjectTypes };
 
   const servicePrincipalId = await getOrCreateGatekeeperServicePrincipal(client, workspaceId);
   const sourceId = await getOrCreateGatekeeperSource(
@@ -148,5 +170,5 @@ export async function writeObservedFacts(
     written.push({ object, fact });
   }
 
-  return written;
+  return { written, refusedMetaObjectTypes };
 }

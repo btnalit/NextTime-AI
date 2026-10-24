@@ -126,7 +126,8 @@ export interface UpsertObjectInput {
    *  `connectionSecretSalt`, an Operation's `status`) or a published definition's name and
    *  description, which the publish review already counted suspected credentials in — so they are
    *  stored as given. Absent: they came from outside the kernel (an agent, a Worker, a gate's
-   *  output, an ingest) and are scrubbed. */
+   *  output, an ingest) and are scrubbed. Review #493 F1: the only way to write a platform
+   *  meta-ontology ObjectType at all (`meta-object-guard.ts`). */
   readonly kernelAuthored?: true;
   /** Object identity: object_type (above) + these key/value pairs (design doc §16). Upserts by
    *  this key when non-empty; otherwise always inserts a new Object. */

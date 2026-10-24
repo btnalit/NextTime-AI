@@ -70,6 +70,7 @@ export type {
 } from './store.js';
 
 export { SqlGraphStore } from './sql-store.js';
+export { MetaOntologyObjectWriteError, assertObjectWriteAllowed } from './meta-object-guard.js';
 
 // S5.1 (docs/development-tasks.md §5b) — I2 at the write point; see ontology-guard.ts.
 export {
