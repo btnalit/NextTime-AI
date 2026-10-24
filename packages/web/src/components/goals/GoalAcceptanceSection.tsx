@@ -8,6 +8,8 @@ import { formatDateTime, formatRelative, shortId } from '../../lib/format.js';
 import {
   checkErrorLabel,
   checkKindLabel,
+  confirmCheckOrigin,
+  goalPlanSource,
   isStepAuthorityHint,
   planCheckSentence,
   planHintKey,
@@ -39,6 +41,9 @@ export function GoalAcceptanceSection({ detail, gateNames }: GoalAcceptanceSecti
   const rounds = [...detail.acceptance.rounds].reverse();
   const [latest, ...older] = rounds;
   const overridden = detail.acceptance.overriddenChecks;
+  // Legacy 454: the requester's confirmation made from a Procedure's verify steps says which.
+  const source = goalPlanSource(detail.revisions);
+  const origin = (key: string) => confirmCheckOrigin(source, key, t);
   return (
     <DashboardCard title={t('验收', 'Acceptance')} data-testid="goal-acceptance">
       <div className="stack">
@@ -92,6 +97,7 @@ export function GoalAcceptanceSection({ detail, gateNames }: GoalAcceptanceSecti
                   <span className="mono">{check.key}</span>
                   <span className="text-3 text-small">{checkKindLabel(check.kind, t)}</span>
                   <span>{planCheckSentence(check, gateNames, t)}</span>
+                  <CheckOrigin text={origin(check.key)} />
                 </li>
               ))}
             </ul>
@@ -99,7 +105,7 @@ export function GoalAcceptanceSection({ detail, gateNames }: GoalAcceptanceSecti
         </div>
 
         {latest ? (
-          <Round round={latest} gateNames={gateNames} t={t} />
+          <Round round={latest} gateNames={gateNames} origin={origin} t={t} />
         ) : (
           <span className="text-small text-3" data-testid="goal-acceptance-not-started">
             {t(
@@ -115,7 +121,13 @@ export function GoalAcceptanceSection({ detail, gateNames }: GoalAcceptanceSecti
             </summary>
             <div className="disclosure-body stack">
               {older.map((round) => (
-                <Round key={round.round} round={round} gateNames={gateNames} t={t} />
+                <Round
+                  key={round.round}
+                  round={round}
+                  gateNames={gateNames}
+                  origin={origin}
+                  t={t}
+                />
               ))}
             </div>
           </details>
@@ -144,10 +156,12 @@ function overriddenStatusText(
 function Round({
   round,
   gateNames,
+  origin,
   t,
 }: {
   readonly round: GoalAcceptanceRoundWire;
   readonly gateNames: ReadonlyMap<string, string>;
+  readonly origin: (checkKey: string) => string | null;
   readonly t: Translate;
 }) {
   return (
@@ -164,7 +178,13 @@ function Round({
       </span>
       <ul className="stack-s">
         {round.checks.map((check) => (
-          <CheckRow key={check.checkKey} check={check} gateNames={gateNames} t={t} />
+          <CheckRow
+            key={check.checkKey}
+            check={check}
+            gateNames={gateNames}
+            origin={origin(check.checkKey)}
+            t={t}
+          />
         ))}
       </ul>
     </div>
@@ -174,10 +194,12 @@ function Round({
 function CheckRow({
   check,
   gateNames,
+  origin,
   t,
 }: {
   readonly check: GoalAcceptanceCheckWire;
   readonly gateNames: ReadonlyMap<string, string>;
+  readonly origin: string | null;
   readonly t: Translate;
 }) {
   return (
@@ -186,6 +208,7 @@ function CheckRow({
         <StatusChip machine="goalCheck" status={check.status} size="s" />
         <span className="mono">{check.checkKey}</span>
         <span className="text-3 text-small">{checkKindLabel(check.kind, t)}</span>
+        <CheckOrigin text={origin} />
         {check.overridden ? (
           <span className="text-warn text-small">
             {t('被请求人推翻', 'Overridden by the requester')}
@@ -246,5 +269,15 @@ function CheckRow({
         <span className="text-small text-danger">{checkErrorLabel(check.lastError, t)}</span>
       ) : null}
     </li>
+  );
+}
+
+/** Legacy 454: which Procedure steps a requester's confirmation came from (`confirmCheckOrigin`). */
+function CheckOrigin({ text }: { readonly text: string | null }) {
+  if (text === null) return null;
+  return (
+    <span className="text-3 text-small" data-testid="goal-check-procedure-steps">
+      {text}
+    </span>
   );
 }

@@ -113,6 +113,7 @@ const PLAN_V1 = {
         expect: { path: 'expiring', op: 'eq', value: 0 },
       },
     },
+    { kind: 'requester_confirm', key: 'looks-right', prompt: '证书看起来对' },
   ],
 };
 
@@ -148,7 +149,8 @@ function revision(n: 1 | 2) {
             version: 3,
             name: '证书续期',
             parameters: { site: 'main' },
-            confirmCheck: null,
+            // Legacy 454: Procedure step 2 had no check of its own, so it became this one.
+            confirmCheck: { key: 'looks-right', procedureSteps: [2] },
           }
         : null,
   };
@@ -440,6 +442,13 @@ test.describe('S11 GO6: a goal’s pages with content (stand-in reads)', () => {
         `#/govern/catalog/procedures/${PROCEDURE}`,
       );
       await expect(page.getByTestId('goal-revision-from-procedure')).toHaveCount(1);
+      // Legacy 454: the start parameters it was made with, and where the requester's
+      // confirmation came from.
+      await expect(page.getByTestId('goal-plan-parameters')).toHaveText('site = main');
+      await expect(page.getByTestId('goal-revision-parameters')).toHaveText('site = main');
+      await expect(page.getByTestId('goal-check-procedure-steps').first()).toContainText(
+        '来自流程第 2 步',
+      );
       // The owner on alice's paused goal: hold it or cancel it, record what was found about the
       // action; resuming it is alice's alone.
       await expect(page.getByTestId('goal-op-hold')).toBeVisible();
@@ -537,6 +546,12 @@ test.describe('S11 GO6: operations on a goal (stand-in reads and operations)', (
       await page.getByTestId('goal-op-confirm').click({ timeout: 15_000 });
       const confirm = page.getByTestId('goal-op-confirm-confirm');
       await expect(confirm.getByTestId('confirm-impact')).toContainText('3 个步骤');
+      await expect(confirm.getByTestId('confirm-impact')).toContainText(
+        '用这些启动参数从流程 证书续期 v3 生成：site = main',
+      );
+      await expect(confirm.getByTestId('confirm-impact')).toContainText(
+        '要你亲自确认「证书看起来对」（验收检查 looks-right），来自流程第 2 步',
+      );
       await expect(page.getByTestId('goal-op-reject')).toBeVisible();
       await page.screenshot({
         path: testInfo.outputPath(`goal-confirm-${width}.png`),

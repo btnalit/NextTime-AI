@@ -20,7 +20,13 @@ import {
   retryableStepKeys,
   revisionsSince,
 } from '../../lib/goal-actions.js';
-import { goalBudgetRows, planHintText } from '../../lib/goals.js';
+import {
+  confirmCheckOrigin,
+  goalBudgetRows,
+  goalPlanSource,
+  planHintText,
+  planSourceParameters,
+} from '../../lib/goals.js';
 import { HttpError } from '../../lib/http-client.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { Button } from '../kit/button.js';
@@ -148,6 +154,21 @@ export function GoalOperationsBar({
 
   if (ops.confirm && can('confirm_goal') !== false) {
     const budget = goalBudgetRows(goal, t);
+    // Legacy 454: a plan made from a Procedure — what it was started with, and which acceptance
+    // check will come back to the requester and why.
+    const source = goalPlanSource(goal.revisions);
+    const parameters = planSourceParameters(source);
+    const confirmOrigin = source?.confirmCheck
+      ? confirmCheckOrigin(source, source.confirmCheck.key, t)
+      : null;
+    // Say what is confirmed in the check's own words; its key alone tells the requester nothing.
+    const confirmPrompt = (() => {
+      const key = source?.confirmCheck?.key;
+      const check = (goal.planRevision.plan.acceptance ?? []).find((item) => item.key === key);
+      return check?.kind === 'requester_confirm' && check.prompt.trim() !== ''
+        ? check.prompt
+        : null;
+    })();
     confirmFor('confirm', t('确认并开始', 'Confirm and start'), 'primary', null, (anchor) => (
       <Confirm
         tier="medium"
@@ -167,6 +188,27 @@ export function GoalOperationsBar({
             `预算上限：${budget.map((row) => `${row.label} ${row.maxText}`).join('，')}`,
             `Budget: ${budget.map((row) => `${row.label} ${row.maxText}`).join(', ')}`,
           ),
+          ...(source && parameters.length > 0
+            ? [
+                t(
+                  `用这些启动参数从流程 ${source.name} v${source.version} 生成：${parameters.map((row) => `${row.name} = ${row.value}`).join('，')}`,
+                  `Made from the Procedure ${source.name} v${source.version} with: ${parameters.map((row) => `${row.name} = ${row.value}`).join(', ')}`,
+                ),
+              ]
+            : []),
+          ...(source?.confirmCheck && confirmOrigin
+            ? [
+                confirmPrompt
+                  ? t(
+                      `所有步骤完成后，要你亲自确认「${confirmPrompt}」（验收检查 ${source.confirmCheck.key}），${confirmOrigin}`,
+                      `Once every step is done, you confirm “${confirmPrompt}” (acceptance check ${source.confirmCheck.key}), ${confirmOrigin}`,
+                    )
+                  : t(
+                      `所有步骤完成后，验收检查 ${source.confirmCheck.key} 要你亲自确认，${confirmOrigin}`,
+                      `Once every step is done, acceptance check ${source.confirmCheck.key} asks you to confirm: ${confirmOrigin}`,
+                    ),
+              ]
+            : []),
           // S11 GO5c: what the plan's checks leave to your word, and any step your authority
           // would not start now (the kernel works it out on every read of a proposal) — marked, so
           // they do not read like the lines above.
