@@ -279,7 +279,7 @@ describe('WorkerDefinitionEditor (S6-A A2, S8 W2 U2)', () => {
       />,
     );
     const notice = screen.getByTestId('worker-new-version-notice').textContent ?? '';
-    expect(notice).toMatch(/^为 wd-e 提议下一个版本/);
+    expect(notice).toMatch(/^为 未命名 Worker 定义 提议下一个版本/);
     expect(notice).not.toContain('Proposing');
     fireEvent.click(screen.getByTestId('worker-submit'));
     const done = await screen.findByTestId('draft-proposed');

@@ -358,6 +358,28 @@ async function answerGoalReads(page: Page): Promise<void> {
   await page.route('**/api/cap/list_goal_unresolved_actions', (route) =>
     route.fulfill(answer('list_goal_unresolved_actions', { items: UNRESOLVED })),
   );
+  // Legacy 474: the Procedure the plan was made from, for what its start parameter is.
+  await page.route('**/api/cap/list_procedures', (route) =>
+    route.fulfill(
+      answer('list_procedures', {
+        items: [
+          {
+            id: PROCEDURE,
+            version: 3,
+            status: 'published',
+            name: '证书续期',
+            description: '续期一个站点的证书',
+            steps: [],
+            parameters: {
+              type: 'object',
+              properties: { site: { type: 'string', description: '要续期的站点' } },
+            },
+            proposedBy: ALICE,
+          },
+        ],
+      }),
+    ),
+  );
   await page.route('**/api/cap/list_principals', (route) =>
     route.fulfill(
       answer('list_principals', { items: [member(ALICE, 'alice'), member(BOB, 'bob')] }),
@@ -444,8 +466,10 @@ test.describe('S11 GO6: a goal’s pages with content (stand-in reads)', () => {
       await expect(page.getByTestId('goal-revision-from-procedure')).toHaveCount(1);
       // Legacy 454: the start parameters it was made with, and where the requester's
       // confirmation came from.
-      await expect(page.getByTestId('goal-plan-parameters')).toHaveText('site = main');
-      await expect(page.getByTestId('goal-revision-parameters')).toHaveText('site = main');
+      await expect(page.getByTestId('goal-plan-parameters')).toHaveText('要续期的站点 site = main');
+      await expect(page.getByTestId('goal-revision-parameters')).toHaveText(
+        '要续期的站点 site = main',
+      );
       await expect(page.getByTestId('goal-check-procedure-steps').first()).toContainText(
         '来自流程第 2 步',
       );
@@ -547,7 +571,7 @@ test.describe('S11 GO6: operations on a goal (stand-in reads and operations)', (
       const confirm = page.getByTestId('goal-op-confirm-confirm');
       await expect(confirm.getByTestId('confirm-impact')).toContainText('3 个步骤');
       await expect(confirm.getByTestId('confirm-impact')).toContainText(
-        '用这些启动参数从流程 证书续期 v3 生成：site = main',
+        '用这些启动参数从流程 证书续期 v3 生成：要续期的站点（site） = main',
       );
       await expect(confirm.getByTestId('confirm-impact')).toContainText(
         '要你亲自确认「证书看起来对」（验收检查 looks-right），来自流程第 2 步',

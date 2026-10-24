@@ -22,7 +22,7 @@ import {
 } from '../../lib/catalog.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { DEFAULT_ATTEMPTS } from '../../lib/goal-plan-draft.js';
-import { planCheckSentence } from '../../lib/goals.js';
+import { factCheckObjectIds, planCheckSentence } from '../../lib/goals.js';
 import type { GatekeeperListRow } from '../../lib/governance.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import {
@@ -31,6 +31,7 @@ import {
   procedureWorkersByKey,
 } from '../../lib/procedure-template.js';
 import { type SchemaDraft, emptySchemaDraft, schemaFieldNames } from '../../lib/schema-fields.js';
+import { useObjectLabels } from '../graph/useObjectLabels.js';
 import { Button } from '../kit/button.js';
 import { Combobox } from '../kit/combobox.js';
 import { Field, describedBy } from '../kit/field.js';
@@ -659,6 +660,12 @@ export function VerifyCheckFields({
       : ['none', 'observe_predicate', 'fact_predicate'];
   const parsed = StepAcceptanceCheckSchema.safeParse(wire.check);
   const gateNames = new Map((gatekeepers ?? []).map((row) => [row.id, row.name]));
+  const objectNames = useObjectLabels(
+    http,
+    parsed.success && parsed.data.kind === 'fact_predicate'
+      ? factCheckObjectIds(parsed.data.fact)
+      : [],
+  );
   const keyError = messages(errors, `${prefix}.key`, t);
   const paramsError = messages(errors, `${prefix}.check.params`, t);
   // What no field below shows: the check's own (its JSON, or a whole-check problem).
@@ -804,7 +811,7 @@ export function VerifyCheckFields({
       {parsed.success ? (
         <span className="text-small" data-testid="procedure-step-check-sentence">
           {t('平台会检查：', 'The platform checks: ')}
-          {planCheckSentence(parsed.data, gateNames, t)}
+          {planCheckSentence(parsed.data, gateNames, t, objectNames)}
         </span>
       ) : null}
       {rest.length > 0 ? (

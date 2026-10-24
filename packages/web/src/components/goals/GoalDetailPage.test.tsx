@@ -375,6 +375,58 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
     );
   });
 
+  it('a start parameter the Procedure describes reads by its description, only from the version the plan was made from (legacy 474)', async () => {
+    const base = goalDetail();
+    const source = {
+      procedureId: 'proc-1',
+      version: 3,
+      name: '证书续期',
+      parameters: { site: 'main', port: 443 },
+      confirmCheck: null,
+    };
+    const [v1Summary] = base.revisions;
+    const detail = goalDetail({
+      planRevision: { ...base.planRevision, fromProcedure: source },
+      revisions: [{ ...(v1Summary as (typeof base.revisions)[number]), fromProcedure: source }],
+    });
+    const procedure = (version: number) => ({
+      id: 'proc-1',
+      version,
+      status: 'published',
+      name: '证书续期',
+      description: '续期一个站点的证书',
+      steps: [],
+      parameters: {
+        type: 'object',
+        properties: {
+          site: { type: 'string', description: '要续期的站点' },
+          port: { type: 'integer' },
+        },
+      },
+      proposedBy: 'p-alice',
+    });
+    renderPage(
+      scriptedHttp({
+        ...baseHandlers(detail),
+        list_procedures: () => ({ items: [procedure(3)] }),
+      }),
+    );
+    const parameters = await screen.findByTestId('goal-plan-parameters');
+    await waitFor(() => expect(parameters.textContent).toBe('要续期的站点 site = mainport = 443'));
+    cleanup();
+
+    // The latest version is another: its words may not be the plan's, so names alone.
+    renderPage(
+      scriptedHttp({
+        ...baseHandlers(detail),
+        list_procedures: () => ({ items: [procedure(4)] }),
+      }),
+    );
+    expect((await screen.findByTestId('goal-plan-parameters')).textContent).toBe(
+      'site = mainport = 443',
+    );
+  });
+
   it('start parameters not kept show nothing, and a confirmation not from a Procedure says no step (legacy 454)', async () => {
     const base = goalDetail();
     const source = {
@@ -401,6 +453,48 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
     await screen.findByTestId('goal-plan-source');
     expect(screen.queryByTestId('goal-plan-parameters')).toBeNull();
     expect(screen.queryByTestId('goal-check-procedure-steps')).toBeNull();
+  });
+
+  it('a Fact check names the Object it gives by id by name and type (legacy 470)', async () => {
+    const HOST = '33333333-3333-4333-8333-333333333333';
+    const base = goalDetail();
+    const detail = goalDetail({
+      planRevision: {
+        ...base.planRevision,
+        plan: {
+          ...base.planRevision.plan,
+          acceptance: [
+            {
+              kind: 'fact_predicate',
+              key: 'runs-on',
+              fact: {
+                linkType: 'runs_on',
+                source: { objectType: 'Service', identity: { name: 'web' } },
+                target: { objectId: HOST },
+              },
+            },
+          ],
+        },
+      },
+    });
+    const http = scriptedHttp({
+      ...baseHandlers(detail),
+      get_object: () => ({
+        id: HOST,
+        objectType: 'Host',
+        identityKey: { hostname: 'host-1' },
+        properties: {},
+      }),
+    });
+    renderPage(http);
+    const acceptance = await screen.findByTestId('goal-acceptance');
+    await waitFor(() =>
+      expect(acceptance.textContent).toContain('到 host-1 · Host 的「runs_on」事实'),
+    );
+    expect(acceptance.textContent).not.toContain('对象 33333333');
+    expect(http.calls.filter((call) => call.name === 'get_object')).toEqual([
+      { name: 'get_object', params: { objectId: HOST } },
+    ]);
   });
 
   it('a plan written out says nothing of a Procedure', async () => {

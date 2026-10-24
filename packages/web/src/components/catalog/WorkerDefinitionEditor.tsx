@@ -38,7 +38,7 @@ import { workerDefinitionKindLabel } from '../../lib/labels.js';
 import { hrefs } from '../../lib/router.js';
 import { sameNameIds } from '../../lib/same-name.js';
 import type { WorkerDefinitionSummary } from '../../lib/tasks.js';
-import { definitionName } from '../../lib/tasks.js';
+import { definitionName, unnamedDefinitionLabel } from '../../lib/tasks.js';
 import { ModelHealthNote, ModelOption } from '../kit/model-health.js';
 import { SameNameId } from '../kit/same-name-id.js';
 import { Button } from '../ui/Button.js';
@@ -497,7 +497,8 @@ export function WorkerDefinitionEditor({
   }
 
   const newVersionName = newVersionOf
-    ? (definitionName([newVersionOf], newVersionOf.id, newVersionOf.version) ?? newVersionOf.id)
+    ? (definitionName([newVersionOf], newVersionOf.id, newVersionOf.version) ??
+      unnamedDefinitionLabel(newVersionOf.kind, t))
     : null;
 
   return (

@@ -166,8 +166,8 @@ export function procedureBindingIssue(
   }
   if (!place.dependsOn.includes(binding.from)) {
     return t(
-      `这一步不等步骤 ${binding.from} 完成，拿不到它的输出：要把它加进 dependsOn。`,
-      `This step does not wait for ${binding.from}, so it cannot take its output: add it to dependsOn.`,
+      `这一步不等步骤 ${binding.from} 完成，拿不到它的输出：要把它加进「要等的步骤」（JSON 里的 dependsOn）。`,
+      `This step does not wait for ${binding.from}, so it cannot take its output: add it to the steps it waits for (dependsOn in the JSON).`,
     );
   }
   if (upstream.outputSchema === undefined) {
@@ -230,7 +230,10 @@ function bindingReasonText(reason: string, t: Translate, raw: string): string | 
       reason,
     );
   if (notWaited) {
-    return t(`取自步骤 ${notWaited[1]}，但这一步不等它完成：要把它加进 dependsOn`, raw);
+    return t(
+      `取自步骤 ${notWaited[1]}，但这一步不等它完成：要把它加进「要等的步骤」（JSON 里的 dependsOn）`,
+      raw,
+    );
   }
   const noContract =
     /^step "([^"]+)" declares no outputSchema — a binding takes only from a declared output$/.exec(

@@ -25,6 +25,7 @@ import {
   goalBudgetRows,
   goalPlanSource,
   planHintText,
+  planSourceParameterText,
   planSourceParameters,
 } from '../../lib/goals.js';
 import { HttpError } from '../../lib/http-client.js';
@@ -36,6 +37,7 @@ import { Notice } from '../kit/notice.js';
 import { Select } from '../kit/select.js';
 import { SkeletonRows } from '../kit/skeleton.js';
 import { Textarea } from '../kit/textarea.js';
+import { useProcedureParameterDescriptions } from './useProcedureParameterDescriptions.js';
 
 export interface GoalOperationsBarProps {
   readonly goal: GoalDetailWire;
@@ -43,6 +45,8 @@ export interface GoalOperationsBarProps {
   readonly http: CapabilityCaller;
   /** Gatekeeper names, for the checks an ending overrides. */
   readonly gateNames: ReadonlyMap<string, string>;
+  /** Legacy 470: the Objects the checks name by id, 「名字 · 类型」 (`useObjectLabels`). */
+  readonly objectNames?: ReadonlyMap<string, string>;
   /** Opens the plan editor (`revise_goal`); the button shows only when given. */
   readonly onRevise?: () => void;
   /** After an operation — or a refusal because the goal had already moved on — for the page to
@@ -110,11 +114,17 @@ export function GoalOperationsBar({
   viewer,
   http,
   gateNames,
+  objectNames,
   onRevise,
   onDone,
 }: GoalOperationsBarProps) {
   const t = useT();
   const can = useRoleCan(http);
+  // Legacy 474: the start parameters by what the Procedure says they are.
+  const parameterDescriptions = useProcedureParameterDescriptions(
+    http,
+    goalPlanSource(goal.revisions),
+  );
   const ops = goalOperations(goal, viewer, t);
   const [open, setOpen] = useState<OpenOp>(null);
   const errors = goalOperationErrors(t);
@@ -157,7 +167,7 @@ export function GoalOperationsBar({
     // Legacy 454: a plan made from a Procedure — what it was started with, and which acceptance
     // check will come back to the requester and why.
     const source = goalPlanSource(goal.revisions);
-    const parameters = planSourceParameters(source);
+    const parameters = planSourceParameters(source, parameterDescriptions);
     const confirmOrigin = source?.confirmCheck
       ? confirmCheckOrigin(source, source.confirmCheck.key, t)
       : null;
@@ -191,8 +201,8 @@ export function GoalOperationsBar({
           ...(source && parameters.length > 0
             ? [
                 t(
-                  `用这些启动参数从流程 ${source.name} v${source.version} 生成：${parameters.map((row) => `${row.name} = ${row.value}`).join('，')}`,
-                  `Made from the Procedure ${source.name} v${source.version} with: ${parameters.map((row) => `${row.name} = ${row.value}`).join(', ')}`,
+                  `用这些启动参数从流程 ${source.name} v${source.version} 生成：${parameters.map((row) => planSourceParameterText(row, t)).join('，')}`,
+                  `Made from the Procedure ${source.name} v${source.version} with: ${parameters.map((row) => planSourceParameterText(row, t)).join(', ')}`,
                 ),
               ]
             : []),
@@ -450,7 +460,7 @@ export function GoalOperationsBar({
         {...openProps('end')}
         anchor={anchor}
         achievedAllowed={endOp.achieved}
-        overridden={checksOverriddenByEnding(goal, gateNames, t)}
+        overridden={checksOverriddenByEnding(goal, gateNames, t, objectNames)}
         onEnd={(outcome, note) =>
           run(
             http.call<GoalOperationResultWire>('end_goal', { goalRunId, outcome, ...note }),
