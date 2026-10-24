@@ -1,4 +1,4 @@
-import { type Operation, OperationSchema } from '@nexttime/shared';
+import { type Operation, OperationFieldsSchema } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
 import {
   type ActionTypeDefinition,
@@ -338,7 +338,7 @@ describe('classifyOperationChange (P1-E) — the whole Operation, field by field
 
   it('every schema field has a rule', () => {
     expect(Object.keys(OPERATION_FIELD_RULES).sort()).toEqual(
-      Object.keys(OperationSchema.shape).sort(),
+      Object.keys(OperationFieldsSchema.shape).sort(),
     );
   });
 

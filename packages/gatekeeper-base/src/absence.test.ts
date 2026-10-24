@@ -147,7 +147,9 @@ describe('gate-confirmed absence over cli and ssh', () => {
   }
 
   it('answers a real command’s declared exit status as absent (ls of a path that is not there)', async () => {
-    // GNU ls exits 2 for a missing path, BSD ls 1.
+    // GNU ls exits 2 for a missing path, BSD ls 1. A test of the mechanism only: ls exits the same
+    // way for "permission denied", so a real manifest must not declare these (README, "Answers that
+    // mean \"not there\"").
     const op = showUnit({ kind: 'cli', command_template: 'ls {path}', absent_exit_codes: [1, 2] });
     const gate = cliGate(op);
     const result = await gate.observe(
@@ -209,6 +211,7 @@ describe('gate-confirmed absence over cli and ssh', () => {
   }
 
   it('answers the remote command’s declared exit status as absent, never ssh’s own 255', async () => {
+    // The mechanism only: stat exits 1 for "permission denied" too, so no real manifest declares it.
     const op = showUnit({ kind: 'ssh', command_template: 'stat {path}', absent_exit_codes: [1] });
     const absent = await sshGate(op, { code: 1 }).observe('unit.show', { path: '/x' }, digest(op));
     expect(absent).toEqual({ data: null, observedFacts: [], absent: { exitCode: 1 } });

@@ -94,7 +94,25 @@ one of them, `/gate/observe` returns `{ok: true, result: {data: null, observedFa
   such an answer, so a body that claims absence is just data on a 2xx and a failure otherwise);
 - only for a declared answer — an undeclared 404, a 403, a 500, exit 0/126/127, a signal, ssh's own
   255, a timeout or a connection failure stay what they were;
-- only for `observe` — an `execute` call that gets a declared answer back still failed.
+- only for `observe` — an `execute` call that gets a declared answer back still failed, and an
+  `execute` Operation cannot declare one (the manifest is refused).
+
+**Declare only an answer the target gives when, and only when, the thing does not exist** — under
+the credentials this gate uses. An answer it also gives for "you may not see it", "wrong place" or
+"something else failed" turns those into a recorded "not there", and a check that relies on it
+(a goal's acceptance that something was deleted) into a false proof. Common answers that do not
+qualify:
+
+- `ls`, `stat` and `test -e` exit with the same status (1 or 2) for "no such file" and "permission
+  denied"; `kubectl get` exits 1 on any error; `sudo -n` exits 1 when it needs a password;
+- an API that answers 404 for a resource the caller may not see (to hide that it exists); a 404
+  from a wrong base URL or path, or from a reverse proxy in front of the target that does not know
+  the host.
+
+For `cli` / `ssh`, use a command that tells the two apart, or a small wrapper that checks and exits
+with a dedicated status (say `3`) only when the thing is confirmed absent. On a `command_pattern`
+binding the declaration must hold for every command the pattern allows. For `http`, declare 404 /
+410 only on a path the gate's credentials can read whenever the resource exists.
 
 The declaration is part of `binding`, so it changes the Operation's digest: it is reviewed when the
 Operation is published, and a gate whose definition says otherwise is refused (409

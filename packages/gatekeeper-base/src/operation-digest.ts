@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { BlastRadiusSchema, OperationSchema } from '@nexttime/shared';
+import { BlastRadiusSchema, OperationFieldsSchema } from '@nexttime/shared';
 import type { z } from 'zod';
 
 /**
@@ -26,13 +26,13 @@ import type { z } from 'zod';
  * `description`, and `blast_radius` elsewhere) are left out. They change what the kernel decides,
  * not what the gate does, and the kernel revises them in place (`refresh_operation_governance`).
  *
- * **Canonical form.** The fields are parsed with the shared `OperationSchema` shapes, which drop
+ * **Canonical form.** The fields are parsed with the shared `OperationFieldsSchema` shapes, which drop
  * unknown keys. They are then serialized with sorted object keys, and `undefined` members are
  * left out. The kernel's copy comes back from jsonb with its keys reordered and its `undefined`s
  * gone, and still hashes the same as the gate's in-memory one.
  */
 
-const OperationDefinitionSchema = OperationSchema.pick({
+const OperationDefinitionSchema = OperationFieldsSchema.pick({
   name: true,
   binding: true,
   params_schema: true,

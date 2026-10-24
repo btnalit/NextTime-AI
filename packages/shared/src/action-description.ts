@@ -176,7 +176,10 @@ export function operationNameProblem(name: string): OperationNameProblem | undef
   return undefined;
 }
 
-export const OperationSchema = z.object({
+/** The fields of an Operation, as an object schema — for picking fields
+ *  (`@nexttime/gatekeeper-base`'s digest) and listing them. Parse an Operation with
+ *  {@link OperationSchema}, which adds the rules between fields. */
+export const OperationFieldsSchema = z.object({
   name: z.string(),
   /** S8 W2-K1 (leftover 71/72, audit B3/CO1): human-readable, markdown-free description of what
    *  this Operation does — used by `find_operations`'s own keyword ranking
@@ -205,6 +208,31 @@ export const OperationSchema = z.object({
   read_only_hint: z.boolean().optional(),
   destructive_hint: z.boolean().optional(),
   idempotent_hint: z.boolean().optional(),
+});
+
+/**
+ * An Operation. S11 「门确认不存在」 (review #501 on #753): only an observe-class Operation may
+ * declare which answers mean "does not exist" — on an execute-class one the declaration would be
+ * covered by the digest yet never act ({@link operationAbsentAnswers} reads observe only) nor be
+ * shown to whoever reviews the publish, a state that means nothing. Refused where a definition is
+ * parsed: a gate's manifest, an import, a proposal.
+ */
+export const OperationSchema = OperationFieldsSchema.superRefine((operation, ctx) => {
+  if (operation.mode === 'observe') return;
+  const binding = operation.binding;
+  const field =
+    binding.kind === 'http' && binding.absent_statuses !== undefined
+      ? 'absent_statuses'
+      : (binding.kind === 'cli' || binding.kind === 'ssh') &&
+          binding.absent_exit_codes !== undefined
+        ? 'absent_exit_codes'
+        : undefined;
+  if (field === undefined) return;
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    path: ['binding', field],
+    message: `${field} is declared on an observe-class Operation only: a ${operation.mode}-class call that gets such an answer failed`,
+  });
 });
 export type Operation = z.infer<typeof OperationSchema>;
 

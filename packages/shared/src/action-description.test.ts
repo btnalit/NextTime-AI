@@ -234,6 +234,25 @@ describe('absence declarations (S11 「门确认不存在」 A)', () => {
     ).toThrow();
   });
 
+  it('refuses a declaration on an execute-class Operation, where it would never act (review #501 on #753)', () => {
+    for (const declared of [observeHttp, observeCli, observeSsh]) {
+      const result = OperationSchema.safeParse({ ...declared, mode: 'execute' });
+      expect(result.success).toBe(false);
+      expect(result.error?.issues[0]?.path).toEqual([
+        'binding',
+        declared.binding.kind === 'http' ? 'absent_statuses' : 'absent_exit_codes',
+      ]);
+    }
+    // Without a declaration an execute-class Operation parses as before.
+    expect(
+      OperationSchema.safeParse({
+        ...observeHttp,
+        mode: 'execute',
+        binding: { kind: 'http', method: 'POST', path: '/records' },
+      }).success,
+    ).toBe(true);
+  });
+
   it('reads a declaration only on an observe-class Operation', () => {
     expect(operationAbsentAnswers(observeHttp)).toEqual({ statuses: [404] });
     expect(operationAbsentAnswers(observeCli)).toEqual({ exitCodes: [4] });
