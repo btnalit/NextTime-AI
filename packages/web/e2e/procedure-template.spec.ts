@@ -77,6 +77,31 @@ const NAMES: Record<string, { kind: string; name: string }> = {
   [PROPOSER]: { kind: 'principal', name: 'alice' },
 };
 
+const LINK_TYPES = {
+  items: [
+    {
+      kind: 'link',
+      name: 'serves_cert_on',
+      signatures: [{ domain: 'Site', range: 'Host', description: '站点的证书部署在这台主机上' }],
+    },
+  ],
+};
+const OBJECT_TYPES = {
+  items: [
+    { kind: 'object', name: 'Site', description: '站点', identityKey: ['domain'] },
+    { kind: 'object', name: 'Host', description: '主机', identityKey: ['hostId'] },
+  ],
+};
+const HOST_OBJECT = {
+  id: '67000000-0000-4000-8000-0000000000f1',
+  objectType: 'Host',
+  identityKey: { hostId: 3 },
+  properties: { name: 'web-3' },
+  createdAt: T0,
+  updatedAt: T0,
+  lastObservedAt: null,
+};
+
 /** A stand-in's answer, checked first against the capability's own result contract. */
 function answer(name: string, result: unknown) {
   const contract = getCapability(name)?.resultSchema;
@@ -120,6 +145,17 @@ async function answerProcedureReads(page: Page): Promise<void> {
         ],
       }),
     ),
+  );
+  // Legacy 464: the ontology and graph reads the Fact check editor offers its choices from.
+  await page.route('**/api/cap/list_types', async (route) => {
+    const body = route.request().postDataJSON() as { kind?: string } | null;
+    await route.fulfill(answer('list_types', body?.kind === 'link' ? LINK_TYPES : OBJECT_TYPES));
+  });
+  await page.route('**/api/cap/search', (route) =>
+    route.fulfill(answer('search', { items: [HOST_OBJECT] })),
+  );
+  await page.route('**/api/cap/list_facts', (route) =>
+    route.fulfill(answer('list_facts', { items: [], nodeDetails: [] })),
   );
   await page.route('**/api/cap/resolve_refs', async (route) => {
     const body = route.request().postDataJSON() as { ids?: string[] } | null;
@@ -210,6 +246,40 @@ test.describe('S11 GO5d-2: a Procedure as a goal plan template (stand-in reads)'
       await editing.nth(3).scrollIntoViewIfNeeded();
       await editing.nth(3).screenshot({
         path: testInfo.outputPath(`procedure-template-check-${width}.png`),
+      });
+
+      // Legacy 464: the Fact a check judges, chosen from the ontology and the graph.
+      const factStep = editing.nth(1);
+      await factStep.getByTestId('procedure-step-check-kind').selectOption('fact_predicate');
+      const fact = factStep.getByTestId('procedure-step-check-fact');
+      await fact.getByTestId('procedure-step-check-fact-link').fill('serves_cert_on');
+      const source = fact.getByTestId('procedure-step-check-fact-source');
+      await source.getByTestId('procedure-step-check-fact-source-type').fill('Site');
+      await expect(source.getByTestId('procedure-step-check-fact-source-identity-key')).toHaveValue(
+        'domain',
+      );
+      await source
+        .getByTestId('procedure-step-check-fact-source-identity-value')
+        .fill('example.test');
+      const target = fact.getByTestId('procedure-step-check-fact-target');
+      await target.getByTestId('procedure-step-check-fact-target-type').fill('Host');
+      // A number typed as text is called out: identities match exactly.
+      await target.getByTestId('procedure-step-check-fact-target-identity-value').fill('3');
+      await expect(
+        target.getByTestId('procedure-step-check-fact-target-identity-numeric-text'),
+      ).toBeVisible();
+      // Filled from the graph instead: the value as stored, a number.
+      await target.getByTestId('procedure-step-check-fact-target-fill').fill('web');
+      await page.getByRole('option', { name: /web-3/ }).click();
+      await expect(
+        target.getByTestId('procedure-step-check-fact-target-identity-kind'),
+      ).toHaveValue('number');
+      await expect(
+        target.getByTestId('procedure-step-check-fact-target-identity-numeric-text'),
+      ).toHaveCount(0);
+      await factStep.scrollIntoViewIfNeeded();
+      await factStep.screenshot({
+        path: testInfo.outputPath(`procedure-template-fact-${width}.png`),
       });
     });
   }

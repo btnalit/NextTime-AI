@@ -19,6 +19,7 @@ import {
   factEndTypes,
   factFormBlocker,
   factFormBlockerText,
+  factIdentityLooksNumeric,
   factIdentityMismatch,
   factIdentityRows,
   factRowsForType,
@@ -669,6 +670,14 @@ function IdentityRows({
                 {t('移除', 'Remove')}
               </Button>
             )}
+            {factIdentityLooksNumeric(row) ? (
+              <span className="text-small text-warn" data-testid={`${testId}-numeric-text`}>
+                {t(
+                  `身份按值完全相等来找：文本 "${row.valueText.trim()}" 和数字 ${row.valueText.trim()} 不相等。图谱里存的是数字就把「值是」改成数字，拿不准就从上面找一个对象填入。`,
+                  `Identities match exactly: the text "${row.valueText.trim()}" is not the number ${row.valueText.trim()}. If the graph stores a number, choose Number; if unsure, fill from an Object above.`,
+                )}
+              </span>
+            ) : null}
             {extras.includes(row) ? (
               <span className="text-small text-warn" data-testid={`${testId}-extra`}>
                 {t(

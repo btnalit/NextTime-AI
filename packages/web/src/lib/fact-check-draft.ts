@@ -155,12 +155,32 @@ export function factFormBlocker(draft: FactCheckDraft): FactFormBlocker | null {
 
 export function factFormBlockerText(blocker: FactFormBlocker, t: Translate): string {
   if (blocker.kind === 'not_json') return t('还不是合法的 JSON。', 'It is not valid JSON yet.');
-  return blocker.at === ''
-    ? t('它不是一个对象。', 'It is not an object.')
-    : t(
-        `${blocker.at} 的写法表单说不出（端点只能按 objectId，或按 objectType 加 identity）。`,
-        `The form cannot say ${blocker.at} (an end is an objectId, or an objectType with an identity).`,
+  // Said in the form's own words (从 / 到 / 关系类型), not by the JSON key.
+  switch (blocker.at) {
+    case '':
+      return t('它不是一个对象。', 'It is not an object.');
+    case 'linkType':
+      return t('关系类型要写成一段文字。', 'The Link type must be text.');
+    case 'source':
+    case 'target': {
+      const end = blocker.at === 'source' ? t('「从」', 'The From') : t('「到」', 'The To');
+      return t(
+        `${end}这一端的写法表单说不出：只能是图谱里的某个对象，或按对象类型加身份找。`,
+        `${end} end says what the form cannot: an Object in the graph, or an Object type with an identity.`,
       );
+    }
+    default:
+      return t(
+        `多写了 ${blocker.at}：表单只认关系类型、从、到和属性条件。`,
+        `It also says ${blocker.at}: the form knows the Link type, From, To and the property conditions.`,
+      );
+  }
+}
+
+/** Identities match by exact JSON equality: text that reads as a number is not that number. */
+export function factIdentityLooksNumeric(row: FactIdentityRow): boolean {
+  const text = row.valueText.trim();
+  return row.valueKind === 'string' && text !== '' && Number.isFinite(Number(text));
 }
 
 function refToWire(ref: FactRefDraft): unknown {

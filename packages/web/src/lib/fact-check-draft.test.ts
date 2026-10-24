@@ -8,6 +8,8 @@ import {
   factCheckFromDraft,
   factEndTypes,
   factFormBlocker,
+  factFormBlockerText,
+  factIdentityLooksNumeric,
   factIdentityMismatch,
   factIdentityRows,
   factRowsForType,
@@ -59,6 +61,19 @@ describe('lib/fact-check-draft (legacy 464)', () => {
       kind: 'shape',
       at: 'note',
     });
+    // Said in the form's words, not by the JSON key.
+    expect(factFormBlockerText({ kind: 'shape', at: 'source' }, t)).toMatch(/^「从」这一端/);
+    expect(factFormBlockerText({ kind: 'shape', at: 'target' }, t)).toMatch(/^「到」这一端/);
+    expect(factFormBlockerText({ kind: 'shape', at: 'linkType' }, t)).toMatch(/^关系类型/);
+  });
+
+  it('flags an identity value typed as text that reads as a number', () => {
+    const [row] = factIdentityRows({ port: '443' });
+    expect(row && factIdentityLooksNumeric(row)).toBe(true);
+    const [number] = factIdentityRows({ port: 443 });
+    expect(number && factIdentityLooksNumeric(number)).toBe(false);
+    const [name] = factIdentityRows({ name: 'web-1' });
+    expect(name && factIdentityLooksNumeric(name)).toBe(false);
   });
 
   it('says at its place a field with no name, one used twice, a value that does not parse', () => {

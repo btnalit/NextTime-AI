@@ -1026,7 +1026,15 @@ describe('ProcedureEditor (S6-A A2)', () => {
       'procedure-step-check-fact-source-identity-value',
     ) as [HTMLInputElement, HTMLInputElement];
     fireEvent.change(name, { target: { value: 'web' } });
+    // A number typed as text is called out: identities match exactly.
+    fireEvent.change(env, { target: { value: '42' } });
+    expect(
+      within(source).getByTestId('procedure-step-check-fact-source-identity-numeric-text'),
+    ).toBeTruthy();
     fireEvent.change(env, { target: { value: 'prod' } });
+    expect(
+      within(source).queryByTestId('procedure-step-check-fact-source-identity-numeric-text'),
+    ).toBeNull();
 
     // To: only the type the Link type allows there; the identity filled from a picked Object.
     const target = within(fact).getByTestId('procedure-step-check-fact-target');
