@@ -1,5 +1,14 @@
-import type { ConnectionRequestStatus, PublishableStatus } from '@nexttime/shared';
-import { PUBLISHABLE_STATUS_VALUES, SECRET_FIELD_MASK } from '@nexttime/shared';
+import type {
+  ConnectionRequestStatus,
+  OperationAbsentAnswersWire,
+  PublishableStatus,
+} from '@nexttime/shared';
+import {
+  OperationFieldsSchema,
+  PUBLISHABLE_STATUS_VALUES,
+  SECRET_FIELD_MASK,
+  operationAbsentAnswers,
+} from '@nexttime/shared';
 import type { ErrorOverrides } from './errors.js';
 import type { Translate } from './i18n.js';
 
@@ -158,6 +167,23 @@ export interface OperationDetailView {
   readonly raw: Readonly<Record<string, unknown>>;
 }
 
+const OperationModeAndBindingSchema = OperationFieldsSchema.pick({ mode: true, binding: true });
+
+/** S11 「门确认不存在」 B-a: the answers an Operation's raw properties declare mean "does not exist"
+ *  (`operationAbsentAnswers`) — `undefined` when it declares none, or when its mode and binding do
+ *  not parse. */
+export function operationAbsentAnswersOfRaw(
+  raw: Readonly<Record<string, unknown>>,
+): OperationAbsentAnswersWire | undefined {
+  const parsed = OperationModeAndBindingSchema.safeParse(raw);
+  if (!parsed.success) return undefined;
+  const answers = operationAbsentAnswers(parsed.data);
+  if (answers === undefined) return undefined;
+  return 'statuses' in answers
+    ? { statuses: [...answers.statuses] }
+    : { exitCodes: [...answers.exitCodes] };
+}
+
 export function operationDetailFromObject(object: GraphObjectRow): OperationDetailView | undefined {
   const identity = object.identityKey ?? {};
   const gatekeeperId = identity.gatekeeperId;
@@ -201,6 +227,10 @@ export function reclassifiedOperationPayload(
     origin: _origin,
     proposedBy: _proposedBy,
     proposedByKind: _proposedByKind,
+    // S11 「门确认不存在」 B-a: a publish's confirmation, never part of a proposal (the kernel drops
+    // it from any draft anyway).
+    absentAnswersReviewedBy: _absentAnswersReviewedBy,
+    absentAnswersReviewedAt: _absentAnswersReviewedAt,
     ...rest
   } = detail.raw;
   return {
@@ -295,11 +325,14 @@ export function draftsAsRead(
 /** What 「发布清单」 (`publish_manifest`) will do with one gate's drafts as read (review #501 on
  *  #592, P3): it publishes the gate's own (`import`) drafts, holds back one with params only the
  *  gate sets, and never sweeps up a proposal — an agent's or a person's draft, or a legacy row with
- *  no origin on file — which waits for its own review in the catalog (kernel `publishManifest`). */
+ *  no origin on file — which waits for its own review in the catalog (kernel `publishManifest`).
+ *  S11 「门确认不存在」 B-a: it also leaves a draft declaring answers that mean "does not exist"
+ *  (`absentAnswers`) for a person to publish confirming them. */
 export interface ManifestPublishPlan {
   readonly publishable: readonly string[];
   readonly proposals: readonly string[];
   readonly gateOwned: readonly string[];
+  readonly absentAnswers: readonly string[];
 }
 
 export function manifestPublishPlan(
@@ -309,19 +342,22 @@ export function manifestPublishPlan(
     readonly status: string;
     readonly origin?: string | undefined;
     readonly gateOwnedParams?: readonly unknown[] | undefined;
+    readonly absentAnswers?: unknown;
   }[],
   gatekeeperId: string,
 ): ManifestPublishPlan {
   const publishable: string[] = [];
   const proposals: string[] = [];
   const gateOwned: string[] = [];
+  const absentAnswers: string[] = [];
   for (const row of rows) {
     if (row.gatekeeperId !== gatekeeperId || row.status !== 'draft') continue;
     if (row.origin !== 'import') proposals.push(row.name);
     else if ((row.gateOwnedParams?.length ?? 0) > 0) gateOwned.push(row.name);
+    else if (row.absentAnswers !== undefined) absentAnswers.push(row.name);
     else publishable.push(row.name);
   }
-  return { publishable, proposals, gateOwned };
+  return { publishable, proposals, gateOwned, absentAnswers };
 }
 
 /** Legacy 247 ① / 412: a gate address as a person reads it. The kernel masks an address that

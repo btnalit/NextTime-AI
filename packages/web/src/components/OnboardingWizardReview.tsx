@@ -11,6 +11,7 @@ import type { CapabilityCaller } from '../lib/clients.js';
 import {
   type GraphObjectRow,
   type OperationDetailView,
+  operationAbsentAnswersOfRaw,
   operationDetailFromObject,
   reclassifiedOperationPayload,
   searchItems,
@@ -22,6 +23,7 @@ import { useT } from '../lib/i18n.js';
 import { capabilityHolders } from '../lib/role-holders.js';
 import { hrefs } from '../lib/router.js';
 import { BLAST_RADIUS_TONES, OPERATION_MODE_TONES, labelText } from '../lib/status-tone.js';
+import { AbsentAnswersReviewSlot, useAbsentAnswersReview } from './catalog/AbsentAnswersReview.js';
 import { GateOwnedParamsMark } from './connect/GateOwnedParams.js';
 import {
   GovernanceChangeList,
@@ -330,6 +332,14 @@ function OperationReviewRow({
   // goes out only while that draft is the one that was reviewed (same digest, same content) — a
   // gate re-import in between makes the kernel ask again instead.
   const reviewedDigestRef = useRef<string | null>(null);
+  // S11 「门确认不存在」 B-a: a reclassification keeps the definition, so an Operation declaring
+  // answers that mean "does not exist" publishes its draft only with the person's confirmation —
+  // asked up front (the definition says so), or once the kernel refuses without it.
+  const declaredAbsent = operationAbsentAnswersOfRaw(row.raw);
+  const absentReview = useAbsentAnswersReview(
+    `${row.gatekeeperId}:${row.name}`,
+    declaredAbsent !== undefined ? { status: 'draft', absentAnswers: declaredAbsent } : undefined,
+  );
 
   async function publish(): Promise<void> {
     // Only ever reached after this row's Submit proposed a draft (the confirm or the credential
@@ -341,12 +351,19 @@ function OperationReviewRow({
         gatekeeperId: row.gatekeeperId,
         name: row.name,
         ...(reviewedDigestRef.current === draftDigest ? credentialReview.params() : {}),
+        ...absentReview.params(),
         draftDigest,
       });
     } catch (err) {
       // The kernel's credential question: the draft stays; the row asks, then Submit again.
       if (credentialReview.capture(err)) {
         reviewedDigestRef.current = draftDigest;
+        setPendingChange(null);
+        setDraftKept(true);
+        return;
+      }
+      // Likewise its question about declared "not there" answers.
+      if (absentReview.capture(err)) {
         setPendingChange(null);
         setDraftKept(true);
         return;
@@ -513,6 +530,7 @@ function OperationReviewRow({
                 onChange={credentialReview.setChecked}
                 disabled={busy}
               />
+              <AbsentAnswersReviewSlot review={absentReview} busy={busy} />
               {draftKept ? (
                 <Notice testId="wizard-review-draft-kept">
                   {t(
@@ -531,7 +549,7 @@ function OperationReviewRow({
                       variant="primary"
                       size="s"
                       loading={busy}
-                      disabled={credentialReview.blocked}
+                      disabled={credentialReview.blocked || absentReview.blocked}
                       onClick={() => void submit()}
                     >
                       {t('提交', 'Submit')}

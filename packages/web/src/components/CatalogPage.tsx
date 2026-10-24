@@ -62,6 +62,12 @@ import {
   sameNameDefinitionIds,
 } from '../lib/tasks.js';
 import { nameOf, useGatekeeperDirectory } from './approvals/useDirectoryNames.js';
+import {
+  AbsentAnswersReviewSlot,
+  type AbsentAnswersReviewState,
+  AbsentAnswersReviewedLine,
+  useAbsentAnswersReview,
+} from './catalog/AbsentAnswersReview.js';
 import { DraftExpiryNote, type EditorState } from './catalog/CatalogShared.js';
 import { ChangesTab } from './catalog/ChangesTab.js';
 import { DiscardReasonField } from './catalog/DiscardReasonField.js';
@@ -859,6 +865,7 @@ function OperationDetailView({
   canEditDescription,
   busy,
   credentialReview,
+  absentReview,
   onPublish,
   onDeprecate,
   onDiscard,
@@ -881,6 +888,9 @@ function OperationDetailView({
   readonly canEditDescription: boolean;
   readonly busy: boolean;
   readonly credentialReview: PublishCredentialReview;
+  /** S11 「门确认不存在」 B-a: the confirmation a draft declaring answers that mean "does not
+   *  exist" needs before it is published. */
+  readonly absentReview: AbsentAnswersReviewState;
   readonly onPublish: () => Promise<void>;
   readonly onDeprecate: () => Promise<void>;
   readonly onDiscard: (reason: string | undefined) => Promise<void>;
@@ -905,6 +915,8 @@ function OperationDetailView({
     row.status === 'draft' &&
     row.version !== undefined &&
     row.draftDigest !== undefined;
+  // Publish waits on both questions: suspected credentials, and the answers meaning "not there".
+  const publishBlocked = credentialReview.blocked || absentReview.blocked;
   const items: KeyValueItem[] = [
     {
       key: 'gatekeeper',
@@ -961,8 +973,12 @@ function OperationDetailView({
       key: 'absentAnswers',
       label: t('表示不存在的回答', 'Means “not there”'),
       value: (
-        <span data-testid="catalog-detail-absent-answers">
-          {absentAnswersText(row.absentAnswers, t)}
+        <span className="stack-s">
+          <span data-testid="catalog-detail-absent-answers">
+            {absentAnswersText(row.absentAnswers, t)}
+          </span>
+          {/* S11 「门确认不存在」 B-a: who confirmed it when this version was published. */}
+          <AbsentAnswersReviewedLine http={http} row={row} />
         </span>
       ),
     });
@@ -1023,7 +1039,10 @@ function OperationDetailView({
         />
       ) : null}
       {canPublish && row.status === 'draft' && !heldBack ? (
-        <PublishCredentialSlot review={credentialReview} busy={busy} />
+        <>
+          <PublishCredentialSlot review={credentialReview} busy={busy} />
+          <AbsentAnswersReviewSlot review={absentReview} busy={busy} />
+        </>
       ) : null}
       <div className="row-wrap">
         {heldBack ? null : canPublish &&
@@ -1034,7 +1053,7 @@ function OperationDetailView({
             row={row}
             change={row.governanceChange}
             busy={busy}
-            blocked={credentialReview.blocked}
+            blocked={publishBlocked}
             onConfirm={onPublish}
             testId={`operation-publish-confirm-${key}`}
           />
@@ -1047,7 +1066,7 @@ function OperationDetailView({
             row={row}
             fields={firstPublishFields}
             busy={busy}
-            blocked={credentialReview.blocked}
+            blocked={publishBlocked}
             onConfirm={onPublish}
             testId={`operation-publish-first-confirm-${key}`}
           />
@@ -1055,7 +1074,7 @@ function OperationDetailView({
           <Button
             variant="primary"
             size="s"
-            disabled={busy || credentialReview.blocked}
+            disabled={busy || credentialReview.blocked || absentReview.blocked}
             aria-busy={busy || undefined}
             onClick={() => void onPublish()}
           >
@@ -1186,6 +1205,11 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   const credentialReview = usePublishCredentialReview(
     itemId ? `${itemId}@${selected?.draftDigest ?? ''}` : null,
   );
+  // S11 「门确认不存在」 B-a: same keying — a confirmation is for the draft content shown.
+  const absentReview = useAbsentAnswersReview(
+    itemId ? `${itemId}@${selected?.draftDigest ?? ''}` : null,
+    selected,
+  );
 
   function refresh(): void {
     invalidateCapability(http, 'list_operations');
@@ -1210,6 +1234,7 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
         gatekeeperId: row.gatekeeperId,
         name: row.name,
         ...(action === 'publish_operation' ? credentialReview.params() : {}),
+        ...(action === 'publish_operation' ? absentReview.params() : {}),
         // Review #493 on #583: the draft this detail shows, not whatever replaced it since.
         ...(action === 'publish_operation' && row.draftDigest !== undefined
           ? { draftDigest: row.draftDigest }
@@ -1234,6 +1259,8 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
     } catch (err) {
       // The kernel's credential question — answered next to Publish, not as a failure toast.
       if (action === 'publish_operation' && credentialReview.capture(err)) return;
+      // S11 「门确认不存在」 B-a: the kernel's question about declared "not there" answers, likewise.
+      if (action === 'publish_operation' && absentReview.capture(err)) return;
       if (isForbiddenError(err)) permissions.markDenied(action);
       // The toast says it was reloaded: show what is there now.
       if (isDraftChangedError(err)) refresh();
@@ -1437,6 +1464,7 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       }
       busy={busy === catalogOperationKey(selected)}
       credentialReview={credentialReview}
+      absentReview={absentReview}
       onPublish={() => act(selected, 'publish_operation')}
       onDeprecate={() => act(selected, 'deprecate_operation')}
       onDiscard={(reason) => discardOperation(selected, reason)}

@@ -7,8 +7,11 @@ import {
 } from '../enums.js';
 import { BlastRadiusSchema, PrincipalKindSchema } from '../enums.js';
 import {
+  AbsentAnswerDraftWireSchema,
   GateOwnedParamDraftWireSchema,
   GateOwnedParamWireSchema,
+  OperationAbsentAnswersReviewWireSchema,
+  OperationAbsentAnswersWireSchema,
   OperationGovernanceChangeWireSchema,
 } from './platform.js';
 
@@ -85,15 +88,6 @@ export const OperationDefinitionChangeWireSchema = z
   .strict();
 export type OperationDefinitionChangeWire = z.infer<typeof OperationDefinitionChangeWireSchema>;
 
-/** S11 「门确认不存在」 A: the target's answers an observe-class Operation declares mean "the thing
- *  this call names does not exist" (`operationAbsentAnswers`, action-description.ts) — http
- *  statuses, or exit statuses of a cli / ssh command. */
-export const OperationAbsentAnswersWireSchema = z.union([
-  z.object({ statuses: z.array(z.number().int()) }).strict(),
-  z.object({ exitCodes: z.array(z.number().int()) }).strict(),
-]);
-export type OperationAbsentAnswersWire = z.infer<typeof OperationAbsentAnswersWireSchema>;
-
 export const OperationSummaryWireSchema = z
   .object({
     gatekeeperId: z.string(),
@@ -140,6 +134,11 @@ export const OperationSummaryWireSchema = z
      *  target's answers that mean "does not exist" — the gate answers such a call `absent` instead
      *  of failing it. Absent when none is declared. */
     absentAnswers: OperationAbsentAnswersWireSchema.optional(),
+    /** S11 「门确认不存在」 B-a: on a published (or deprecated) version that declares
+     *  `absentAnswers`, who confirmed at publish that the gate's credentials can see what such a
+     *  call looks up — so the declared answers come only when it does not exist. Absent on a draft,
+     *  on a version that declares none, and on one published before the confirmation existed. */
+    absentAnswersReview: OperationAbsentAnswersReviewWireSchema.optional(),
   })
   .strict();
 export type OperationSummaryWire = z.infer<typeof OperationSummaryWireSchema>;
@@ -199,6 +198,9 @@ export const OperationPublishResultWireSchema = z
     proposedBy: z.object({ id: z.string(), kind: PrincipalKindSchema }).strict().nullable(),
     operation: OperationSchema,
     supersedes: z.string().nullable(),
+    /** S11 「门确认不存在」 B-a: the confirmation this publish recorded (or a ChangePlan revision
+     *  carried) for the version's `absentAnswers`; `null` when it declares none. */
+    absentAnswersReview: OperationAbsentAnswersReviewWireSchema.nullable(),
   })
   .strict();
 
@@ -240,6 +242,9 @@ export const PublishManifestResultWireSchema = z
     skippedDraftOperationNames: z.array(z.string()),
     /** Legacy J: the gate's own drafts left unpublished because they declare a gate-owned param. */
     gateOwnedParamDrafts: z.array(GateOwnedParamDraftWireSchema),
+    /** S11 「门确认不存在」 B-a: the gate's own drafts left unpublished because they declare answers
+     *  that mean "does not exist" — each needs a person's confirmation on `publish_operation`. */
+    absentAnswerDrafts: z.array(AbsentAnswerDraftWireSchema),
   })
   .strict();
 export type PublishManifestResultWire = z.infer<typeof PublishManifestResultWireSchema>;

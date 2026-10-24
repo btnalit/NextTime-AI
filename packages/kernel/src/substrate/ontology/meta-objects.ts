@@ -303,8 +303,15 @@ export async function registerOperationDraftObject(
   workspaceId: string,
   input: RegisterOperationDraftInput,
 ): Promise<OperationObjectResult | null> {
+  // S11 「门确认不存在」 B-a: a draft never carries a publish's confirmation, whatever the definition
+  // it was written from holds (`governance/gatekeepers/absent-answers-review.ts`).
+  const {
+    absentAnswersReviewedBy: _reviewedBy,
+    absentAnswersReviewedAt: _reviewedAt,
+    ...operation
+  } = input.operation as unknown as Record<string, unknown>;
   const properties: Record<string, unknown> = {
-    ...input.operation,
+    ...operation,
     status: 'draft',
     origin: input.origin,
     proposedBy: input.proposedBy.id,
@@ -431,6 +438,9 @@ export async function setOperationStatusObject(
   workspaceId: string,
   identity: OperationIdentity,
   status: OperationStatus,
+  /** Bookkeeping merged in with the status — a publish's confirmation of the version's declared
+   *  answers that mean "does not exist" (S11 「门确认不存在」 B-a). */
+  bookkeeping?: Readonly<Record<string, string>>,
 ): Promise<GraphObject> {
   return graphStore.upsertObject(client, workspaceId, {
     objectType: 'Operation',
@@ -440,7 +450,7 @@ export async function setOperationStatusObject(
       name: identity.name,
       version: identity.version,
     },
-    properties: { status },
+    properties: { ...bookkeeping, status },
   });
 }
 

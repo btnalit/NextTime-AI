@@ -1,6 +1,7 @@
 import { OperationSchema } from '@nexttime/shared';
 import { z } from 'zod';
 import {
+  absentAnswersOfDefinition,
   deprecateOperation,
   discardOperationDraft,
   getOperation,
@@ -148,12 +149,14 @@ export const publishOperationHandler: CapabilityHandler = async (
   params,
   ctx,
 ) => {
-  const { gatekeeperId, name, credentialsReviewed, draftDigest } = params as {
-    gatekeeperId: string;
-    name: string;
-    credentialsReviewed?: boolean;
-    draftDigest: string;
-  };
+  const { gatekeeperId, name, credentialsReviewed, absentAnswersReviewed, draftDigest } =
+    params as {
+      gatekeeperId: string;
+      name: string;
+      credentialsReviewed?: boolean;
+      absentAnswersReviewed?: boolean;
+      draftDigest: string;
+    };
   // D-24: the draft's proposer or the owner (checked on the row being published).
   const actor = { ...publishActorOf('publish_operation', ctx), credentialsReviewed };
   const record = await publishOperation(client, workspaceId, {
@@ -161,7 +164,11 @@ export const publishOperationHandler: CapabilityHandler = async (
     name,
     actor,
     draftDigest,
+    absentAnswersReviewed,
   });
+  // S11 「门确认不存在」 B-a: the audit row says which declared answers were confirmed, by whom
+  // (the row's actor) — only when the version declares some.
+  const absentAnswers = absentAnswersOfDefinition(record.operation);
 
   const activity = await startActivity(client, workspaceId, {
     kind: 'operation_publish',
@@ -185,10 +192,16 @@ export const publishOperationHandler: CapabilityHandler = async (
         record.operation as unknown as Record<string, unknown>,
       ) as unknown as typeof record.operation,
       supersedes: record.supersedes ?? null,
+      absentAnswersReview: record.absentAnswersReview ?? null,
     },
     resourceType: 'operation',
     resourceId: `${record.gatekeeperId}:${record.name}`,
-    auditPayload: credentialReviewAudit(countSuspectedSecrets(record.operation)),
+    auditPayload: {
+      ...credentialReviewAudit(countSuspectedSecrets(record.operation)),
+      ...(absentAnswers !== undefined
+        ? { absentAnswersReview: { absentAnswers, confirmed: true } }
+        : {}),
+    },
   };
 };
 
@@ -332,7 +345,9 @@ export const updateOperationDescriptionHandler: CapabilityHandler = async (
 /** `publish_manifest(gatekeeperId, drafts)` — publishes every `origin: 'import'` draft Operation of
  *  one Gatekeeper instance (`governance/gatekeepers`'s `publishManifest`), each only as the caller
  *  read it (`drafts`; 409 `draft_changed` otherwise); agent/human proposals stay
- *  drafts and are listed in `skippedDraftOperationNames`. Empty `publishedOperationNames` (no
+ *  drafts and are listed in `skippedDraftOperationNames`; the gate's own drafts declaring a
+ *  gate-owned param or answers that mean "does not exist" stay drafts too (`gateOwnedParamDrafts`,
+ *  `absentAnswerDrafts`). Empty `publishedOperationNames` (no
  *  import drafts to publish) is a successful, not an error, result — the same "nothing to do"
  *  tolerance `deprecateOperation`'s own transition table would otherwise reject one-at-a-time; a
  *  bulk call over zero rows is trivially a no-op. */
@@ -348,6 +363,7 @@ export const publishManifestHandler: CapabilityHandler = async (client, workspac
       publishedOperationNames: published.publishedOperationNames,
       skippedDraftOperationNames: published.skippedDraftOperationNames,
       gateOwnedParamDrafts: published.gateOwnedParamDrafts,
+      absentAnswerDrafts: published.absentAnswerDrafts,
     },
     resourceType: 'gatekeeper',
     resourceId: gatekeeperId,

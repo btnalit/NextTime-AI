@@ -284,3 +284,69 @@ describe('OnboardingWizardReview — credential confirmation', () => {
     );
   });
 });
+
+// S11 「门确认不存在」 B-a: a reclassification keeps the definition, so the draft of an Operation
+// declaring answers that mean "not there" publishes only with the person's confirmation — asked
+// before Submit, since the definition says so.
+describe('OnboardingWizardReview — confirming the answers that mean “not there”', () => {
+  it('asks before Submit, keeps it disabled until ticked, and the publish carries the confirmation', async () => {
+    const calls: { name: string; params: unknown }[] = [];
+    const declaring = operationObject('gk-1', 'record_get');
+    const http = {
+      call: vi.fn(async (name: string, p?: unknown) => {
+        if (name === 'search') {
+          return {
+            items: [
+              {
+                ...declaring,
+                properties: {
+                  ...declaring.properties,
+                  binding: {
+                    kind: 'http',
+                    method: 'GET',
+                    path: '/records/{id}',
+                    absent_statuses: [404],
+                  },
+                  // A stamp on the published version is never proposed again.
+                  absentAnswersReviewedBy: 'p-owner',
+                  absentAnswersReviewedAt: '2026-10-24T01:00:00Z',
+                },
+              },
+            ],
+          };
+        }
+        calls.push({ name, params: p });
+        if (name === 'propose_operation')
+          return { governanceChange: null, draftDigest: 'sha256:r1' };
+        if (name === 'publish_operation') return { status: 'published' };
+        throw new Error(`unscripted ${name}`);
+      }) as CapabilityCaller['call'],
+    } as CapabilityCaller;
+    render(<OnboardingWizardReview http={http} gatekeeperId="gk-1" onDone={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: /提议重分类/ }));
+    const form = await screen.findByTestId('wizard-review-reclassify-form');
+    expect(within(form).getByTestId('operation-absent-review').textContent).toContain(
+      '目标回答 404 时',
+    );
+    const submit = within(form).getByRole('button', { name: /提交/ }) as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+    fireEvent.click(within(form).getByTestId('operation-absent-review-confirm'));
+    expect(submit.disabled).toBe(false);
+    fireEvent.click(submit);
+    await waitFor(() =>
+      expect(calls.filter((c) => c.name === 'publish_operation').map((c) => c.params)).toEqual([
+        {
+          gatekeeperId: 'gk-1',
+          name: 'record_get',
+          absentAnswersReviewed: true,
+          draftDigest: 'sha256:r1',
+        },
+      ]),
+    );
+    const proposed = calls.find((c) => c.name === 'propose_operation')?.params as {
+      operation: Record<string, unknown>;
+    };
+    expect(proposed.operation).not.toHaveProperty('absentAnswersReviewedBy');
+    expect(proposed.operation).not.toHaveProperty('absentAnswersReviewedAt');
+  });
+});

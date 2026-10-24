@@ -40,6 +40,15 @@ import {
   shownFreeText,
 } from '../redaction/index.js';
 import {
+  ABSENT_ANSWERS_REVIEW_KEYS,
+  type AbsentAnswerDraft,
+  AbsentAnswersReviewRequiredError,
+  type OperationAbsentAnswersReview,
+  absentAnswersOfDefinition,
+  absentAnswersReviewOf,
+  absentAnswersReviewProperties,
+} from './absent-answers-review.js';
+import {
   operationContentDigest,
   operationDefinitionDiffers,
   operationDraftDigest,
@@ -162,6 +171,11 @@ export interface OperationRecord {
    *  call actually deprecated a prior published version — never persisted on any row, never
    *  present on any other read path's records (`getOperation`, `listOperations`, ...). */
   readonly supersedes?: string;
+  /** S11 「门确认不存在」 B-a: on a published (or since deprecated) version declaring answers that
+   *  mean "does not exist", who confirmed at publish that the gate's credentials can see what it
+   *  looks up (`absent-answers-review.ts`). Never on a draft; absent on a version published before
+   *  the confirmation existed, and on a ChangePlan revision of one. */
+  readonly absentAnswersReview?: OperationAbsentAnswersReview;
 }
 
 /** The bookkeeping keys `registerOperationDraftObject` stores alongside the manifest entry in
@@ -176,6 +190,8 @@ const OPERATION_BOOKKEEPING_KEYS = [
   'proposedByKind',
   'version',
   'draftOf',
+  // S11 「门确认不存在」 B-a: written by `publishOperation`, never by a draft's registration.
+  ...ABSENT_ANSWERS_REVIEW_KEYS,
 ] as const;
 
 function isOperationOrigin(value: unknown): value is OperationOrigin {
@@ -195,6 +211,7 @@ function toOperationRecord(
   const proposedByKind = properties.proposedByKind;
   const version = typeof properties.version === 'number' ? properties.version : 1;
   const draftOf = typeof properties.draftOf === 'string' ? properties.draftOf : undefined;
+  const absentAnswersReview = absentAnswersReviewOf(properties);
   return {
     id,
     gatekeeperId,
@@ -207,6 +224,7 @@ function toOperationRecord(
     ...(typeof proposedById === 'string' && typeof proposedByKind === 'string'
       ? { proposedBy: { id: proposedById, kind: proposedByKind as PrincipalKind } }
       : {}),
+    ...(absentAnswersReview !== undefined ? { absentAnswersReview } : {}),
   };
 }
 
@@ -1050,6 +1068,15 @@ export interface PublishOperationInput {
    *  in place since refuses `OperationDraftChangedError`. Internal callers publish what is there and
    *  omit it. */
   readonly draftDigest?: string;
+  /** S11 「门确认不存在」 B-a: `publish_operation`'s `absentAnswersReviewed` — the caller confirms
+   *  the draft's declared answers that mean "does not exist" (`absent-answers-review.ts`). Counts
+   *  only with `actor` (the person publishing, who is recorded as the confirmer); required when
+   *  the draft declares any, unless `carriedAbsentAnswersReview` is given. */
+  readonly absentAnswersReviewed?: boolean;
+  /** `publishOperationRevision` only: the live version's confirmation, carried to a revision that
+   *  keeps its definition — `null` when the live version has none (published before the
+   *  confirmation existed). No other caller passes it. */
+  readonly carriedAbsentAnswersReview?: OperationAbsentAnswersReview | null;
 }
 
 /**
@@ -1110,6 +1137,13 @@ export async function publishOperation(
     existing.operation,
     input.actor,
   );
+  // S11 「门确认不存在」 B-a: last of the content checks — the confirmation is worth asking for only
+  // of a draft that can be published.
+  const absentAnswersReview = absentAnswersReviewFor(
+    `${input.gatekeeperId}/${input.name}@${existing.version}`,
+    existing.operation,
+    input,
+  );
   // D-24: publishing a revision also deprecates the live row below, so the caller needs deprecate
   // authority over that row too — a builder may revise their own Operation, but replacing (and
   // reclassifying) a row someone else proposed, such as a gate's imported Operation, is the owner's.
@@ -1135,11 +1169,38 @@ export async function publishOperation(
     workspaceId,
     { gatekeeperId: input.gatekeeperId, name: input.name, version: existing.version },
     'published',
+    absentAnswersReview !== null ? absentAnswersReviewProperties(absentAnswersReview) : undefined,
   );
 
   // At most one row was live (migrations/core/0034's constraint), so at most one was superseded.
   const supersedes = superseded[0];
-  return { ...existing, status: 'published', ...(supersedes !== undefined ? { supersedes } : {}) };
+  return {
+    ...existing,
+    status: 'published',
+    ...(supersedes !== undefined ? { supersedes } : {}),
+    ...(absentAnswersReview !== null ? { absentAnswersReview } : {}),
+  };
+}
+
+/**
+ * S11 「门确认不存在」 B-a: the confirmation the version being published records for its declared
+ * answers that mean "does not exist" — `null` when it declares none, or when a revision carries a
+ * live version that has none. A draft declaring some needs the person publishing it to confirm
+ * (`absentAnswersReviewed` with an `actor`); without one, `AbsentAnswersReviewRequiredError`. The
+ * bulk paths never get here with such a draft: they leave it unpublished (`absentAnswerDrafts`).
+ */
+function absentAnswersReviewFor(
+  id: string,
+  operation: Operation,
+  input: PublishOperationInput,
+): OperationAbsentAnswersReview | null {
+  const absentAnswers = absentAnswersOfDefinition(operation);
+  if (absentAnswers === undefined) return null;
+  if (input.carriedAbsentAnswersReview !== undefined) return input.carriedAbsentAnswersReview;
+  if (input.actor === undefined || input.absentAnswersReviewed !== true) {
+    throw new AbsentAnswersReviewRequiredError(id, absentAnswers);
+  }
+  return { reviewedBy: input.actor.principalId, reviewedAt: new Date().toISOString() };
 }
 
 // -------------------------------------------------------------------------------------------
@@ -1254,7 +1315,13 @@ export async function publishOperationRevision(
     insertOnly: true,
   });
   if (!written) throw new OperationIdentityConflictError(gatekeeperId, name, 'draft');
-  const published = await publishOperation(client, workspaceId, { gatekeeperId, name });
+  // S11 「门确认不存在」 B-a: the revision keeps the live definition, its declared answers that mean
+  // "does not exist" included, so the live version's confirmation (or its lack) carries over.
+  const published = await publishOperation(client, workspaceId, {
+    gatekeeperId,
+    name,
+    carriedAbsentAnswersReview: live.absentAnswersReview ?? null,
+  });
   if (published.version !== version) {
     throw new Error(
       `publishOperationRevision: Operation ${quotedName(name)} on gatekeeper ${gatekeeperId} published v${published.version}, not the revision v${version}`,
@@ -1291,6 +1358,10 @@ export interface PublishManifestResult {
   /** Legacy J: the gate's own drafts left unpublished because they declare a param the gate sets
    *  itself (`gate-owned-params.ts`), with those params. */
   readonly gateOwnedParamDrafts: readonly GateOwnedParamDraft[];
+  /** S11 「门确认不存在」 B-a: the gate's own drafts left unpublished because they declare answers
+   *  that mean "does not exist" — a person publishes each, confirming them
+   *  (`absent-answers-review.ts`). */
+  readonly absentAnswerDrafts: readonly AbsentAnswerDraft[];
 }
 
 /**
@@ -1315,6 +1386,7 @@ export async function publishManifest(
   const toPublish: { readonly name: string; readonly draftDigest: string }[] = [];
   const skippedDraftOperationNames: string[] = [];
   const gateOwnedParamDrafts: GateOwnedParamDraft[] = [];
+  const absentAnswerDrafts: AbsentAnswerDraft[] = [];
   for (const draft of drafts) {
     if (draft.origin !== 'import') {
       skippedDraftOperationNames.push(draft.name);
@@ -1323,6 +1395,12 @@ export async function publishManifest(
     const params = gateOwnedParamsOfDefinition(draft.operation);
     if (params.length > 0) {
       gateOwnedParamDrafts.push({ name: draft.name, params });
+      continue;
+    }
+    // S11 「门确认不存在」 B-a: nobody here confirms the declared answers — a person publishes it.
+    const absentAnswers = absentAnswersOfDefinition(draft.operation);
+    if (absentAnswers !== undefined) {
+      absentAnswerDrafts.push({ name: draft.name, absentAnswers });
       continue;
     }
     // Checked for every draft before any is published: a refusal leaves the whole manifest as it was.
@@ -1347,6 +1425,7 @@ export async function publishManifest(
     publishedOperationNames,
     skippedDraftOperationNames,
     gateOwnedParamDrafts,
+    absentAnswerDrafts,
   };
 }
 
@@ -1354,7 +1433,8 @@ export async function publishManifest(
  * Publishes the `'import'`-origin drafts a gate's manifest was just imported as (`importManifest`'s
  * `imported`) — the landing's catalog origin (`enable_gate_instance`, application/gates/landing.ts). A draft
  * declaring a param the gate sets itself stays a draft and is reported (legacy J), like
- * `publishManifest`.
+ * `publishManifest`; so does one declaring answers that mean "does not exist" (S11 「门确认不存在」
+ * B-a), which a person publishes confirming them.
  */
 export async function publishImportedDrafts(
   client: PoolClient,
@@ -1364,19 +1444,26 @@ export async function publishImportedDrafts(
 ): Promise<{
   readonly publishedOperationNames: readonly string[];
   readonly gateOwnedParamDrafts: readonly GateOwnedParamDraft[];
+  readonly absentAnswerDrafts: readonly AbsentAnswerDraft[];
 }> {
   const publishedOperationNames: string[] = [];
   const gateOwnedParamDrafts: GateOwnedParamDraft[] = [];
+  const absentAnswerDrafts: AbsentAnswerDraft[] = [];
   for (const record of imported) {
     const params = gateOwnedParamsOfDefinition(record.operation);
     if (params.length > 0) {
       gateOwnedParamDrafts.push({ name: record.name, params });
       continue;
     }
+    const absentAnswers = absentAnswersOfDefinition(record.operation);
+    if (absentAnswers !== undefined) {
+      absentAnswerDrafts.push({ name: record.name, absentAnswers });
+      continue;
+    }
     await publishOperation(client, workspaceId, { gatekeeperId, name: record.name });
     publishedOperationNames.push(record.name);
   }
-  return { publishedOperationNames, gateOwnedParamDrafts };
+  return { publishedOperationNames, gateOwnedParamDrafts, absentAnswerDrafts };
 }
 
 export interface DeprecateOperationInput {
