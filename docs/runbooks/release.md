@@ -1209,7 +1209,7 @@ v0.47.0、v0.48.0 不单独上主机（#554 不在 v0.47.0 里，遗留 259 的�
 
 **回滚**（§5）：回滚目标是 v0.46.0，按 §3.25 与 §3.26 的回滚说明；不需要排空 Worker。
 
-窗口目标改到 v0.49.0 之后的发版时（维护者 2026-10-16 决定窗口暂缓，开窗口时目标改为当时最新的发版），本清单按新目标刷新，并加上之后各版的小节，至少 §3.28（#589 升钉：`postgres` 与 `backup` 重建、不执行 `ALTER EXTENSION`、应用后只读核对 `vector` 扩展版本）与 §3.29（#592：governance 0020，旧「始终允许」规则可能显示「已暂停 · 待确认版本」需 owner 重新确认，契约不向后兼容、旧控制台页要刷新）与 §3.30（#601：governance 0021，窗口前估算 `audit_records` 全表扫描的锁表时间并核对回收超时，窗口后历史失败行多显示「结果不明」）与 §3.31（#607：goal 0001 / task 0007 / governance 0022，窗口前估算建索引时间）与 §3.32（#615：core 0044，窗口前估算建索引期间审计写入的等待，必要时并发预建并确认索引有效）与 §3.33（#619：goal 0002，新增每秒认领与每分钟对账的后台负载）与 §3.34（#620：core 0045，窗口前三数预检、迁移期间不接新门、清洗改写类变成 4 个、回滚后自接门暂停失效；#637 再加两个改写类与一个只列类，见 §3.25）、§3.35（#626：goal 0003，只重建一个守卫函数，无主机步骤）、§3.36（#633：goal 0004，加列与重建一个守卫函数，无主机步骤）、§3.37（#642：governance 0023，`action_requests` 加列、约束与守卫触发器，窗口前看一眼该表行数，无主机步骤）、§3.38（#644：无迁移，窗口前打包门只读检查，内核与门宿主同版，回退代码前先处理挂在系统接入包上的实例）、§3.39（#649：governance 0024，新表与重建核对守卫，两个可选环境变量不设即默认，代码回退期间观察压缩报 degraded 可忽略）、§3.40（#650：governance 0025，只加新表，可选的窗口前本体族只读检查，模块升级可能新返回 400 `change_confirmation_required`）、§3.41（#664：goal 0005，新表与重建目标守卫，两个可选环境变量不设即默认，升级后 I-G5 指标应为 0，代码回退期间观察压缩报 degraded 可忽略）、§3.42（#670：goal 0006，步骤验收新表与新触发器，无新环境变量，代码回退期间观察压缩报 degraded 可忽略）、§3.43（#668：无迁移，能力包清单在镜像 `/app/packs`，`kernel.env` 不要设 `PACKS_DIR`）与 §3.44（#674：core 0046 + goal 0007，可逆，无新环境变量，升级后 I-G5 指标仍应为 0）与 §3.45（#679：governance 0026，可逆，窗口前只读查同名已发布 Skill，镜像新增 ops-base）与 §3.46（#690：governance 0027，可逆，镜像新增 ops-base v2，装或升级能力包后对门做一次健康探测）与 §3.47（#700：governance 0028，可逆，窗口前四条只读查询，迁移结束的 NOTICE 每类 `without` 应为 0，窗口后核对找不到主体的 Decision）与 §3.48（#698：无迁移，worker-runtime 与 worker-supervisor 同版、只能整版回滚，窗口前只读清点工作区里的 pi 资源文件，应用后在新建的容器上核对）与 §3.49（#705：无迁移，镜像新增 ops-base v3，包里的 Worker 安装时可绑门）与 §3.50（#704：goal 0008，可逆，可选环境变量 `GOAL_MAX_PROPOSED_PER_REQUESTER` 写错内核起不来）与 §3.51（#710：无迁移，门对齐时治理字段从三个扩到九个）与 §3.52（#715：无迁移，内核镜像带接入预设；有预设实例时回滚要先停 `gate-host`）与 §3.53（#716：task 0008，可逆，worker-runtime 与内核同版本）与 §3.54（#721：无迁移，镜像新增 knowledge v1 能力包）与 §3.55（#722：goal 0009 + worker 0005，可逆）与 §3.56（#726：无迁移，RAGFlow `document.parse` 收紧，需平台采用 + 各工作区对齐）与 §3.57（#730：task 0009 可逆，supervisor 加 `models/` 只读挂载，kernel 与 supervisor 同版本）与 §3.58（#728：无迁移，入口 agent 新增目标工具，验收脚本自建 fake-llm）与 §3.59（#737：linkage 0003 放宽 CHECK，可逆）与 §3.60（#745：goal 0010 加一列，不回填，可逆）与 §3.61（#747：无迁移，已有工作区可对齐入口模板，由所有者决定）与 §3.62（#753：无迁移，门可声明「不存在」的回答）。
+窗口目标改到 v0.49.0 之后的发版时（维护者 2026-10-16 决定窗口暂缓，开窗口时目标改为当时最新的发版），本清单按新目标刷新，并加上之后各版的小节，至少 §3.28（#589 升钉：`postgres` 与 `backup` 重建、不执行 `ALTER EXTENSION`、应用后只读核对 `vector` 扩展版本）与 §3.29（#592：governance 0020，旧「始终允许」规则可能显示「已暂停 · 待确认版本」需 owner 重新确认，契约不向后兼容、旧控制台页要刷新）与 §3.30（#601：governance 0021，窗口前估算 `audit_records` 全表扫描的锁表时间并核对回收超时，窗口后历史失败行多显示「结果不明」）与 §3.31（#607：goal 0001 / task 0007 / governance 0022，窗口前估算建索引时间）与 §3.32（#615：core 0044，窗口前估算建索引期间审计写入的等待，必要时并发预建并确认索引有效）与 §3.33（#619：goal 0002，新增每秒认领与每分钟对账的后台负载）与 §3.34（#620：core 0045，窗口前三数预检、迁移期间不接新门、清洗改写类变成 4 个、回滚后自接门暂停失效；#637 再加两个改写类与一个只列类，见 §3.25）、§3.35（#626：goal 0003，只重建一个守卫函数，无主机步骤）、§3.36（#633：goal 0004，加列与重建一个守卫函数，无主机步骤）、§3.37（#642：governance 0023，`action_requests` 加列、约束与守卫触发器，窗口前看一眼该表行数，无主机步骤）、§3.38（#644：无迁移，窗口前打包门只读检查，内核与门宿主同版，回退代码前先处理挂在系统接入包上的实例）、§3.39（#649：governance 0024，新表与重建核对守卫，两个可选环境变量不设即默认，代码回退期间观察压缩报 degraded 可忽略）、§3.40（#650：governance 0025，只加新表，可选的窗口前本体族只读检查，模块升级可能新返回 400 `change_confirmation_required`）、§3.41（#664：goal 0005，新表与重建目标守卫，两个可选环境变量不设即默认，升级后 I-G5 指标应为 0，代码回退期间观察压缩报 degraded 可忽略）、§3.42（#670：goal 0006，步骤验收新表与新触发器，无新环境变量，代码回退期间观察压缩报 degraded 可忽略）、§3.43（#668：无迁移，能力包清单在镜像 `/app/packs`，`kernel.env` 不要设 `PACKS_DIR`）与 §3.44（#674：core 0046 + goal 0007，可逆，无新环境变量，升级后 I-G5 指标仍应为 0）与 §3.45（#679：governance 0026，可逆，窗口前只读查同名已发布 Skill，镜像新增 ops-base）与 §3.46（#690：governance 0027，可逆，镜像新增 ops-base v2，装或升级能力包后对门做一次健康探测）与 §3.47（#700：governance 0028，可逆，窗口前四条只读查询，迁移结束的 NOTICE 每类 `without` 应为 0，窗口后核对找不到主体的 Decision）与 §3.48（#698：无迁移，worker-runtime 与 worker-supervisor 同版、只能整版回滚，窗口前只读清点工作区里的 pi 资源文件，应用后在新建的容器上核对）与 §3.49（#705：无迁移，镜像新增 ops-base v3，包里的 Worker 安装时可绑门）与 §3.50（#704：goal 0008，可逆，可选环境变量 `GOAL_MAX_PROPOSED_PER_REQUESTER` 写错内核起不来）与 §3.51（#710：无迁移，门对齐时治理字段从三个扩到九个）与 §3.52（#715：无迁移，内核镜像带接入预设；有预设实例时回滚要先停 `gate-host`）与 §3.53（#716：task 0008，可逆，worker-runtime 与内核同版本）与 §3.54（#721：无迁移，镜像新增 knowledge v1 能力包）与 §3.55（#722：goal 0009 + worker 0005，可逆）与 §3.56（#726：无迁移，RAGFlow `document.parse` 收紧，需平台采用 + 各工作区对齐）与 §3.57（#730：task 0009 可逆，supervisor 加 `models/` 只读挂载，kernel 与 supervisor 同版本）与 §3.58（#728：无迁移，入口 agent 新增目标工具，验收脚本自建 fake-llm）与 §3.59（#737：linkage 0003 放宽 CHECK，可逆）与 §3.60（#745：goal 0010 加一列，不回填，可逆）与 §3.61（#747：无迁移，已有工作区可对齐入口模板，由所有者决定）与 §3.62（#753：无迁移，门可声明「不存在」的回答）与 §3.63（#759：无迁移，安全修复，窗口前只读核查 A–E）。
 
 ### 3.28 第三方镜像升钉：pgvector、node、postgres（#589，v0.49.0 之后的下一版起）
 
@@ -1715,6 +1715,54 @@ rollback;" </dev/null
 - **生效条件**：有人在门清单里给 observe 类 Operation 加上声明并重新发布，才会生效；声明会改摘要，按既有流程审核发布。
 - **混跑**：门与内核必须同版本。老门或老内核遇到带声明的定义会因摘要不一致拒绝调用（409 `operation_definition_mismatch`），不会误判「不存在」；按 §3.27 单窗口一起升级即可。
 - **回滚**：回退代码即可。回退前先确认没有发布过带声明的 Operation；若有，老版本不认识这两个字段，先发布不带声明的版本再回退。
+
+### 3.63 观察型写入不能改写平台元本体对象（#759，安全修复，v0.49.0 之后的下一版起）
+
+无迁移；不改 compose、Dockerfile 或启动脚本。主机 v0.46.0 上两条路径（`submit_observations`、门回写的 observedFacts）都在且没有元本体检查，所以**窗口前**先在当前版本上跑下面的只读 SQL（只读事务，结果记 `docs/private/`；正常应全部 0 行，E 除外）：
+
+```sql
+-- A. 被观察型写入碰过的元本体对象：这两条路径会设 last_observed_at，平台自己的写入从不设
+select workspace_id, object_type, id, identity_key, created_at, updated_at, last_observed_at
+from objects
+where object_type in ('WorkerDefinition','Gatekeeper','Operation','Capability','Skill','Procedure')
+  and last_observed_at is not null
+order by last_observed_at;
+
+-- B. 门回写指向元本体对象的 observed Link（覆盖 core/0026 之前、还没有 last_observed_at 的写入）
+select l.workspace_id, l.id as link_id, l.created_at, t.object_type, t.id as object_id
+from links l
+join objects t on t.workspace_id = l.workspace_id and t.id = l.target_object_id
+where l.link_type = 'observed'
+  and t.object_type in ('WorkerDefinition','Gatekeeper','Operation','Capability','Skill','Procedure');
+
+-- C. 形状不是平台写出来的元本体对象（只有外部写入会造出这种行）
+select workspace_id, object_type, id, identity_key, created_at
+from objects
+where (object_type = 'Operation' and not coalesce(identity_key ?& array['gatekeeperId','name','version'], false))
+   or (object_type = 'WorkerDefinition' and not coalesce(identity_key ?& array['definitionId','version'], false))
+   or (object_type = 'Skill' and not coalesce(identity_key ?& array['skillId','version'], false))
+   or (object_type = 'Procedure' and not coalesce(identity_key ?& array['procedureId','version'], false))
+   or object_type = 'Capability';
+
+-- D. result_mapping 指向元本体类型的已存 Operation（升级后过不了新的 OperationSchema，读写都会失败）
+select workspace_id, id, identity_key from objects
+where object_type = 'Operation'
+  and properties->'result_mapping'->>'object_type' in
+      ('WorkerDefinition','Gatekeeper','Operation','Capability','Skill','Procedure');
+
+-- E. 已发布、可自动批准的 execute Operation（门摘要不覆盖这几个字段，遗留 482；由维护者逐条过目）
+select workspace_id, id, identity_key, properties->>'blast_radius' as blast_radius,
+       properties->>'await_decision' as await_decision, updated_at
+from objects
+where object_type = 'Operation' and properties->>'status' = 'published'
+  and properties->>'mode' = 'execute' and properties->>'auto_approvable' = 'true';
+```
+
+- **A 或 B 有行**：逐行对照这个对象最近的受治理写入（`audit_records`，`payload->>'resourceRef'` 对得上），看 `updated_at` 之后有没有对应的动作。能就地改动已发布 Operation 的受治理动作有：`publish_operation`、`publish_manifest`、`enable_gate_instance`、`update_operation_description`、`refresh_operation_governance`、`deprecate_operation`、ChangePlan apply，以及发布新版本时把旧版本翻成 deprecated。没有对应动作的就是被改写过，由维护者决定处理（废弃后重新发布）。
+- **盲区**：core/0026 之前、不带 link 的 `submit_observations` 写入从数据上追不出来；门会校验定义摘要，盲区里真正有风险的只剩摘要不覆盖的字段，所以 E 作为人工过目清单。
+- **C 的误报**：identity 为 null 的 Operation 可能是 core/0016 以前的遗留行，先对照 0016 的回填再下结论；Gatekeeper 不列（早期登记的门可能带 identity）。
+- **D 有行**：升级前先把这些 Operation 废弃或改正 `result_mapping` 再发布，否则升级后读写失败。
+- **回滚**：回退到旧内核即失去这道收口，问题回到修复前；新内核不会自动恢复已被改写的行，要靠上面的核查。
 
 ## 4. Hotfix 流程
 
