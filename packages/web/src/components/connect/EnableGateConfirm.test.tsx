@@ -379,7 +379,7 @@ describe('EnableGateConfirm', () => {
     expect(toPublish.textContent).not.toContain('stock.lookup');
     const absent = within(confirm).getByTestId('enable-preview-absent');
     expect(absent.textContent).toContain('1 个 Operation 只导入为草稿，不会发布');
-    expect(absent.textContent).toContain('stock.lookup：目标回答 404 或 410 时表示不存在');
+    expect(absent.textContent).toContain('stock.lookup：目标系统回答 404 或 410 时表示不存在');
     expect(absent.textContent).toContain('到能力目录逐个确认');
   });
 

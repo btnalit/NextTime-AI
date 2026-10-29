@@ -38,6 +38,7 @@ import {
 import {
   type AcceptanceCheckRow,
   FACT_NOT_OBSERVED,
+  TARGET_STILL_PRESENT,
   openAcceptanceRound,
   openStepAcceptanceRound,
   readCurrentAcceptanceRound,
@@ -192,10 +193,14 @@ import type { GoalRunRow, PlanRevisionRow, StepRunRow } from './types.js';
  * `step_runs.updated_at` never mixes two clocks.
  */
 
-/** What a `failed` acceptance check saw that did not satisfy its predicate — for a pause's detail
- *  (the evidence is on the row). */
+/** What a `failed` acceptance check saw, and why it was not met — for a pause's detail (the
+ *  evidence is on the row). An absence check (S11 「门确认不存在」 B) found the thing still there. */
 function unmetEvidence(check: AcceptanceCheckRow): string {
-  return check.kind === 'fact_predicate' ? 'the Fact it saw' : 'its observation';
+  if (check.kind === 'fact_predicate') return 'the Fact it saw did not satisfy the predicate';
+  if (check.kind === 'observe_absent') {
+    return `its observation found the thing still there (${TARGET_STILL_PRESENT}): the gate answered with it, not that it does not exist`;
+  }
+  return 'its observation did not satisfy the predicate';
 }
 
 /** A pause's detail for an `unavailable` fact check that saw no Fact it may rest on — told apart
@@ -780,7 +785,7 @@ class Advance {
     };
     const named = [...failed, ...unavailable].map((check) =>
       check.status === 'failed'
-        ? `acceptance check ${check.checkKey}: ${unmetEvidence(check)} did not satisfy the predicate`
+        ? `acceptance check ${check.checkKey}: ${unmetEvidence(check)}`
         : (noFactSeen(check) ??
           `acceptance check ${check.checkKey}: could not be made (${check.lastError ?? 'no reason recorded'})`),
     );
@@ -1193,7 +1198,7 @@ class Advance {
     if (unmet.length > 0) {
       const named = unmet.map((check) =>
         check.status === 'failed'
-          ? `acceptance check ${check.checkKey}: ${unmetEvidence(check)} did not satisfy the predicate`
+          ? `acceptance check ${check.checkKey}: ${unmetEvidence(check)}`
           : (noFactSeen(check) ??
             `acceptance check ${check.checkKey}: ${check.status} (${check.lastError ?? 'no reason recorded'})`),
       );

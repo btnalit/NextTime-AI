@@ -25,7 +25,11 @@ import {
   StepRemovalsSchema,
 } from '../goal-plan.js';
 import { OutputProblemSchema } from '../output-schema.js';
-import { FactCheckSchema, ObservationCheckSchema } from '../predicate.js';
+import {
+  FactCheckSchema,
+  ObservationAbsenceCheckSchema,
+  ObservationCheckSchema,
+} from '../predicate.js';
 
 /**
  * wire/goal (S11 GO5a; docs/wire-contract-conventions.md §5): the GoalRun as the `goal` capability
@@ -213,16 +217,18 @@ export const StepRunWireSchema = z
   .strict();
 export type StepRunWire = z.infer<typeof StepRunWireSchema>;
 
-/** One acceptance check of a verification round. The evidence: `observationId` (an observation's
- *  latest Observation), `factId` (the Fact a fact check saw), `decisionId` (the requester's
- *  confirmation). `nextAttemptAt` only while a check the platform makes is pending. `overridden`:
- *  the requester declared the goal achieved over this check, which had not passed. */
+/** One acceptance check of a verification round. `check`: the observation an `observe_predicate`
+ *  (with its predicate) or an `observe_absent` (without one, S11 「门确认不存在」 B) makes. The
+ *  evidence: `observationId` (an observation's latest Observation), `factId` (the Fact a fact check
+ *  saw), `decisionId` (the requester's confirmation). `nextAttemptAt` only while a check the
+ *  platform makes is pending. `overridden`: the requester declared the goal achieved over this
+ *  check, which had not passed. */
 export const GoalAcceptanceCheckWireSchema = z
   .object({
     checkKey: z.string(),
     kind: GoalAcceptanceCheckKindSchema,
     status: GoalAcceptanceCheckStatusSchema,
-    check: ObservationCheckSchema.nullable(),
+    check: z.union([ObservationCheckSchema, ObservationAbsenceCheckSchema]).nullable(),
     fact: FactCheckSchema.nullable(),
     prompt: z.string().nullable(),
     attempts: z.number().int().nonnegative(),

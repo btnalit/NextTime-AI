@@ -15,6 +15,7 @@ import {
   MAX_STEP_ACCEPTANCE_CHECKS,
   MAX_STEP_ATTEMPTS,
   MAX_STEP_RECONCILE_DECLARATIONS,
+  type ObservationAbsenceCheck,
   type ObservationCheck,
   type PlanHint,
   type PlanStep,
@@ -26,6 +27,7 @@ import {
   type StepBinding,
   type StepReconcile,
   StepReconcileSchema,
+  operationAbsentAnswers,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { getGatekeeper, getPublishedOperation } from '../../governance/gatekeepers/index.js';
@@ -81,11 +83,12 @@ import { getWorkerDefinition } from '../worker/index.js';
  *     on; anything else leaves the finding to a person (`reconcile-check.ts`). One declaration per
  *     action identity;
  *   - `acceptance` (S11 GO4b, plan §4.5, §4.6) — what has to hold once the step's work is done
- *     before the step succeeds and the steps after it may start: `observe_predicate` and
- *     `fact_predicate` checks (the goal's kinds, below; a step's acceptance never waits on a
- *     person), keys unique within the step. The platform makes them after each attempt whose work
- *     is done (`advance.ts` phase A, `acceptance-check.ts`). Changing them changes the step's
- *     entry, so a revision that does redefines the step (I-G2), like any other change to it;
+ *     before the step succeeds and the steps after it may start: `observe_predicate`,
+ *     `observe_absent` and `fact_predicate` checks (the goal's kinds, below; a step's acceptance
+ *     never waits on a person), keys unique within the step. The platform makes them after each
+ *     attempt whose work is done (`advance.ts` phase A, `acceptance-check.ts`). Changing them
+ *     changes the step's entry, so a revision that does redefines the step (I-G2), like any other
+ *     change to it;
  *   - `outputSchema` (S11 GO5d-1, plan §4.5) — what the step's Worker reports as its structured
  *     `output` (`@nexttime/shared` `output-schema.ts`, a bounded JSON Schema subset whose root is an
  *     object). `report_task_result` refuses a result that does not meet it, naming each place, and
@@ -106,6 +109,17 @@ import { getWorkerDefinition } from '../worker/index.js';
  *   - `observe_predicate` — `check` is an observe-class Operation, its params and a predicate over
  *     its result (`ObservationCheck`, the same shape and the same lint and credential review as a
  *     reconcile check's), observed by the platform for the requester;
+ *   - `observe_absent` (S11 「门确认不存在」 B) — `check` is an observe-class Operation and its
+ *     params, and no predicate (`ObservationAbsenceCheck`): met only when the gate answers the call
+ *     that the thing looked up does not exist, in an answer the Operation's published definition
+ *     declares means so (`binding.absent_statuses` / `absent_exit_codes`, part A; the kernel takes
+ *     the answer only through `gateAbsenceOf`). Nothing in a result can say a thing is not there,
+ *     so data back is never met: the thing is still there. For a goal or step that deletes or
+ *     removes something. The Operation must declare such answers, and its published version must
+ *     carry its publisher's confirmation that the gate's credentials can see what it looks up
+ *     (`absentAnswersReview`, B-a: a 404 for something those credentials cannot see proves
+ *     nothing), when the plan is validated, and still must when the check is made
+ *     (`platform-observation.ts`); the same params review as any observation's;
  *   - `fact_predicate` (S11 GO4c) — `fact` is a Fact of the graph, the Link of a type from one
  *     Object to another (each by id, or by ObjectType and identity), and optionally a predicate
  *     over its own properties (`FactCheck`; the same lint and credential review, and no identity
@@ -127,8 +141,10 @@ import { getWorkerDefinition } from '../worker/index.js';
  * (`substrate/epistemic`'s `lintPredicate`: one that would pass without the observation showing the
  * target is refused here, before any person is asked to confirm it) and whose literals carry no
  * suspected credential ({@link predicateCredentialProblems}); the last two are `parsePlan`'s. Every
- * acceptance observation — the goal's and the steps' — is held to what a reconcile check is; a fact
- * check's predicate to the same lint and review, and an Object it names by id must exist. A
+ * acceptance observation — the goal's and the steps' — is held to what a reconcile check is, and an
+ * absence check's Operation must declare which answers mean "does not exist", confirmed when it was
+ * published; a fact check's predicate to the same lint and review, and an Object it names by id
+ * must exist. A
  * version deprecated later is caught when an attempt would start (the advancer's snapshot check),
  * not here; an observation the requester can no longer make is caught when it runs.
  */
@@ -261,7 +277,13 @@ function acceptanceShapeProblems(
     if (check.kind === 'fact_predicate') {
       for (const problem of factSelectorProblems(check.fact)) problems.push(`${where}: ${problem}`);
     }
-    const expect = check.kind === 'fact_predicate' ? check.fact.expect : check.check.expect;
+    // An absence check has no predicate: the gate's answer is the check.
+    const expect =
+      check.kind === 'fact_predicate'
+        ? check.fact.expect
+        : check.kind === 'observe_predicate'
+          ? check.check.expect
+          : undefined;
     if (!expect) return;
     for (const problem of lintPredicate(expect, lintBudget)) {
       problems.push(`${where}: ${problem}`);
@@ -308,11 +330,12 @@ export function planHints(plan: GoalPlan): readonly PlanHint[] {
   ];
 }
 
-/** Whether an acceptance check of `kind` is one the platform makes — an observation or a Fact it
- *  judges — rather than a person's word (I-G5: a goal achieved by check rests on at least one;
- *  goal/0007's `goal_runs_status_guard` counts the same kinds). */
+/** Whether an acceptance check of `kind` is one the platform makes — an observation (an absence
+ *  the gate confirms among them) or a Fact it judges — rather than a person's word (I-G5: a goal
+ *  achieved by check rests on at least one; goal/0011's `goal_runs_status_guard` counts the same
+ *  kinds). */
 export function isPlatformAcceptanceCheck(kind: GoalAcceptanceCheckKind): boolean {
-  return kind === 'observe_predicate' || kind === 'fact_predicate';
+  return kind === 'observe_predicate' || kind === 'observe_absent' || kind === 'fact_predicate';
 }
 
 /** The key and prompt of the implicit `requester_confirm` of a plan without acceptance checks. */
@@ -494,7 +517,7 @@ function mapPlanParams(plan: GoalPlan, map: <T>(params: T, at: string) => T): Go
   ): V =>
     value.params === undefined ? value : { ...value, params: map(value.params, `${at}.params`) };
   const observation = <C extends AcceptanceCheck | StepAcceptanceCheck>(check: C, at: string): C =>
-    check.kind === 'observe_predicate'
+    check.kind === 'observe_predicate' || check.kind === 'observe_absent'
       ? { ...check, check: withParams(check.check, `${at}.check`) }
       : check;
   return {
@@ -847,16 +870,17 @@ export async function validatePlan(
 }
 
 /** What an acceptance check refers to, as of now: an observation's what
- *  {@link observationCheckProblems} accepts; a fact check's Objects named by id exist in the
- *  workspace (one named by identity may be created by the goal's own work; a link type is not
- *  checked against the ontology here). */
+ *  {@link observationCheckProblems} accepts — an absence check's Operation declaring, besides,
+ *  which answers mean "does not exist" (without, nothing it answers could meet the check); a fact
+ *  check's Objects named by id exist in the workspace (one named by identity may be created by the
+ *  goal's own work; a link type is not checked against the ontology here). */
 async function acceptanceReferenceProblems(
   client: PoolClient,
   workspaceId: string,
   check: AcceptanceCheck | StepAcceptanceCheck,
 ): Promise<readonly string[]> {
   if (check.kind === 'requester_confirm') return [];
-  if (check.kind === 'observe_predicate') {
+  if (check.kind === 'observe_predicate' || check.kind === 'observe_absent') {
     return (await observationCheckProblems(client, workspaceId, check.check)).map(
       (problem) => `check: ${problem}`,
     );
@@ -917,11 +941,13 @@ async function reconcileReferenceProblems(
  *  check — refers to, as of now: what `observe_operation` would let anyone in the workspace call
  *  (`observeRefusal` without a member's own exclusions — the requester's are applied when the
  *  observation is made, `platform-observation.ts`), with params the credential review lets
- *  through. */
+ *  through; for an absence check (no predicate), an Operation whose published definition declares
+ *  which answers mean "does not exist" (`operationAbsentAnswers`, part A) and whose publisher
+ *  confirmed the gate's credentials can see what it looks up (`absentAnswersReview`, B-a). */
 async function observationCheckProblems(
   client: PoolClient,
   workspaceId: string,
-  check: ObservationCheck,
+  check: ObservationCheck | ObservationAbsenceCheck,
 ): Promise<readonly string[]> {
   const gatekeeper = await getGatekeeper(client, workspaceId, check.gatekeeperId);
   const published = await getPublishedOperation(
@@ -938,6 +964,20 @@ async function observationCheckProblems(
     platformPolicy: await readGatekeeperPlatformPolicy(client, workspaceId, check.gatekeeperId),
   });
   if (refusal) return [`"${check.operation}" cannot be observed (${refusal.reason})`];
+  if (!('expect' in check) && published) {
+    if (!operationAbsentAnswers(published.operation)) {
+      return [
+        `"${check.operation}" declares no answer that means the thing looked up does not exist (binding absent_statuses / absent_exit_codes), so nothing it answers could meet an absence check`,
+      ];
+    }
+    // B-a: what such an answer proves rests on the publisher's confirmation that the gate's
+    // credentials can see what it looks up — a version published without one is not asked.
+    if (!published.absentAnswersReview) {
+      return [
+        `"${check.operation}" was published without a person confirming that the gate's credentials can see what it looks up, so its "not there" answer proves nothing — publish a version of it with that confirmation (publish_operation absentAnswersReviewed)`,
+      ];
+    }
+  }
   if (gatekeeper) {
     try {
       reviewObserveParams(gatekeeper.name, check.operation, check.params ?? {});

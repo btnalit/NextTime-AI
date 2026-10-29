@@ -78,7 +78,7 @@ describe('ManifestPublishResultNotice', () => {
     );
     const absent = screen.getByTestId('result-absent');
     expect(absent.textContent).toContain('1 个 Operation 留作草稿，等人确认后发布');
-    expect(absent.textContent).toContain('目标回答 404 时表示不存在');
+    expect(absent.textContent).toContain('目标系统回答 404 时表示不存在');
     expect(within(absent).getByText('stock.lookup').closest('a')?.getAttribute('href')).toBe(
       '#/govern/catalog/operations/gk-1%3A%3Astock.lookup',
     );

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { AcceptanceCheckSchema, StepAcceptanceCheckSchema } from './goal-plan.js';
 import {
   FactCheckSchema,
+  ObservationAbsenceCheckSchema,
   ObservationCheckSchema,
   PREDICATE_MAX_CHILDREN,
   PREDICATE_MAX_LEAVES,
@@ -86,6 +88,33 @@ describe('predicate (S11 GO3d)', () => {
       false,
     );
     expect(ObservationCheckSchema.safeParse({ ...check, mode: 'execute' }).success).toBe(false);
+  });
+
+  it('an absence check names an observe-class call and no predicate; an observe_absent check carries one (S11 「门确认不存在」 B)', () => {
+    const check = {
+      gatekeeperId: '00000000-0000-4000-8000-000000000001',
+      operation: 'record.get',
+      params: { id: 'r-1' },
+    };
+    expect(ObservationAbsenceCheckSchema.parse(check)).toEqual(check);
+    // Nothing in a result can say "not there": a predicate has no place on it.
+    expect(
+      ObservationAbsenceCheckSchema.safeParse({ ...check, expect: { path: 'id', op: 'exists' } })
+        .success,
+    ).toBe(false);
+    const absent = { kind: 'observe_absent', key: 'gone', check };
+    expect(AcceptanceCheckSchema.parse(absent)).toEqual(absent);
+    expect(StepAcceptanceCheckSchema.parse(absent)).toEqual(absent);
+    // An observe_predicate still needs its predicate, and an observe_absent takes none.
+    expect(AcceptanceCheckSchema.safeParse({ ...absent, kind: 'observe_predicate' }).success).toBe(
+      false,
+    );
+    expect(
+      AcceptanceCheckSchema.safeParse({
+        ...absent,
+        check: { ...check, expect: { path: 'id', op: 'exists' } },
+      }).success,
+    ).toBe(false);
   });
 
   it('a fact check names a Link by its type and its two ends — by id, or by ObjectType and identity — and an optional predicate, strictly (S11 GO4c)', () => {

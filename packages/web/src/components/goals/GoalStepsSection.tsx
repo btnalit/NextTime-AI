@@ -10,6 +10,7 @@ import {
 } from '../../lib/format.js';
 import {
   type StepView,
+  absenceOperationKey,
   actionFailureLabel,
   bindingSentence,
   checkKindLabel,
@@ -33,8 +34,10 @@ import { RedactedNote } from '../kit/redacted-note.js';
 import { RefChip } from '../kit/ref-chip.js';
 import { DashboardCard } from '../kit/section.js';
 import { StatusChip } from '../kit/status-chip.js';
+import { AbsenceBasis } from './AbsenceBasis.js';
 import { ActionChip } from './ActionChip.js';
 import { OutputContractFields, OutputProblemList } from './OutputContract.js';
+import type { AbsenceOperations } from './useAbsenceOperations.js';
 
 export interface GoalStepsSectionProps {
   readonly detail: GoalDetailWire;
@@ -42,6 +45,8 @@ export interface GoalStepsSectionProps {
   readonly gateNames: ReadonlyMap<string, string>;
   /** Legacy 470: the Objects the checks name by id, 「名字 · 类型」 (`useObjectLabels`). */
   readonly objectNames?: ReadonlyMap<string, string>;
+  /** S11 「门确认不存在」 B: what each absence check rests on (`useAbsenceOperations`). */
+  readonly absenceOperations?: AbsenceOperations;
 }
 
 /**
@@ -56,7 +61,13 @@ export interface GoalStepsSectionProps {
  * requester's authority would stop now (S11 GO5c hints) heads the card, and each step it names
  * carries a chip.
  */
-export function GoalStepsSection({ detail, http, gateNames, objectNames }: GoalStepsSectionProps) {
+export function GoalStepsSection({
+  detail,
+  http,
+  gateNames,
+  objectNames,
+  absenceOperations,
+}: GoalStepsSectionProps) {
   const t = useT();
   const { current, superseded } = goalSteps(detail);
   const acceptanceByRun = new Map(detail.acceptance.steps.map((step) => [step.stepRunId, step]));
@@ -87,6 +98,7 @@ export function GoalStepsSection({ detail, http, gateNames, objectNames }: GoalS
             http={http}
             gateNames={gateNames}
             objectNames={objectNames}
+            absenceOperations={absenceOperations}
             t={t}
           />
         ))}
@@ -129,10 +141,21 @@ interface StepItemProps {
   readonly http: CapabilityCaller;
   readonly gateNames: ReadonlyMap<string, string>;
   readonly objectNames: ReadonlyMap<string, string> | undefined;
+  /** What the plan in force's absence checks rest on; a superseded step's are not shown. */
+  readonly absenceOperations?: AbsenceOperations;
   readonly t: Translate;
 }
 
-function StepItem({ view, acceptance, hints, http, gateNames, objectNames, t }: StepItemProps) {
+function StepItem({
+  view,
+  acceptance,
+  hints,
+  http,
+  gateNames,
+  objectNames,
+  absenceOperations,
+  t,
+}: StepItemProps) {
   const { planStep, run } = view;
   const dependsOn = planStep?.dependsOn ?? [];
   const maxAttempts = planStep?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
@@ -263,14 +286,20 @@ function StepItem({ view, acceptance, hints, http, gateNames, objectNames, t }: 
                     ) : null}
                     <span className="text-3 text-small">{checkKindLabel(check.kind, t)}</span>
                     <span>
-                      {check.kind === 'observe_predicate'
-                        ? observationSentence(
+                      {check.kind === 'fact_predicate'
+                        ? factCheckSentence(check.fact, t, objectNames)
+                        : observationSentence(
                             check.check,
                             gateNames.get(check.check.gatekeeperId) ?? null,
                             t,
-                          )
-                        : factCheckSentence(check.fact, t, objectNames)}
+                          )}
                     </span>
+                    {check.kind === 'observe_absent' && absenceOperations ? (
+                      <AbsenceBasis
+                        http={http}
+                        operation={absenceOperations.get(absenceOperationKey(check.check))}
+                      />
+                    ) : null}
                   </li>
                 );
               })}

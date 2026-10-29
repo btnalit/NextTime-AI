@@ -10,7 +10,9 @@ import { describe, expect, it } from 'vitest';
 import { goalRun } from '../components/goals/goal-fixtures.test-helpers.js';
 import {
   type GoalMilestone,
+  absenceOperationKey,
   checkErrorLabel,
+  checkKindLabel,
   exhaustedBudget,
   factCheckSentence,
   goalBudgetRows,
@@ -20,6 +22,8 @@ import {
   isStepAuthorityHint,
   observationSentence,
   outputProblemText,
+  planAbsenceChecks,
+  planCheckSentence,
   planDiff,
   planHintKey,
   planHintText,
@@ -304,6 +308,62 @@ describe('lib/goals', () => {
     );
     expect(withParams).toMatch(/以参数 .*"host":"web-1"/);
     expect(withParams).not.toMatch(/not-a-real-value/);
+  });
+
+  it('an absence check reads as the gate answering “not there”, in both languages (S11 「门确认不存在」 B)', () => {
+    const check = { gatekeeperId: '66000000-0000-4000-8000-0000000000d1', operation: 'svc.lookup' };
+    expect(observationSentence(check, 'svc-gate', zh)).toBe(
+      '在门「svc-gate」上调用 svc.lookup，门回答“要查的东西不存在”才算通过',
+    );
+    expect(observationSentence({ ...check, params: { name: 'old-web' } }, 'svc-gate', en)).toBe(
+      'Call svc.lookup with {"name":"old-web"} on gate “svc-gate”; passes only when the gate answers that the thing looked up does not exist',
+    );
+    expect(
+      planCheckSentence(
+        { kind: 'observe_absent', key: 'gone', check },
+        new Map([[check.gatekeeperId, 'svc-gate']]),
+        zh,
+      ),
+    ).toMatch(/^在门「svc-gate」上调用 svc\.lookup，门回答/);
+    expect(checkKindLabel('observe_absent', zh)).toBe('平台确认不存在');
+    expect(checkKindLabel('observe_absent', en)).toBe('Platform confirms it is not there');
+    expect(checkErrorLabel('target_still_present', zh)).toBe(
+      '它还在：门返回了它，而不是回答它不存在',
+    );
+    expect(checkErrorLabel('absence_not_declared', zh)).toMatch(/没有声明哪些回答表示不存在/);
+    expect(checkErrorLabel('absence_not_reviewed', en)).toMatch(/^Nobody confirmed/);
+  });
+
+  it('lists the plan’s absence checks, the goal’s before each step’s, and keys them by gate and Operation', () => {
+    const gone = { gatekeeperId: '66000000-0000-4000-8000-0000000000d1', operation: 'svc.lookup' };
+    const plan: GoalPlan = {
+      steps: [
+        {
+          key: 'remove',
+          worker: { definitionId: '66000000-0000-4000-8000-0000000000e1', version: 1 },
+          input: {},
+          dependsOn: [],
+          acceptance: [
+            { kind: 'observe_absent', key: 'step-gone', check: { ...gone, operation: 'svc.find' } },
+            {
+              kind: 'observe_predicate',
+              key: 'seen',
+              check: { ...gone, expect: { path: 'n', op: 'eq', value: 0 } },
+            },
+          ],
+        },
+      ],
+      acceptance: [
+        { kind: 'requester_confirm', key: 'ok', prompt: 'Looks right?' },
+        { kind: 'observe_absent', key: 'gone', check: gone },
+      ],
+    };
+    expect(planAbsenceChecks(plan)).toEqual([
+      { key: 'gone', stepKey: null, check: gone },
+      { key: 'step-gone', stepKey: 'remove', check: { ...gone, operation: 'svc.find' } },
+    ]);
+    expect(absenceOperationKey(gone)).toBe('66000000-0000-4000-8000-0000000000d1::svc.lookup');
+    expect(planAbsenceChecks({ steps: [] })).toEqual([]);
   });
 
   it('a check’s last error reads in words where the code is known, as its code otherwise', () => {
