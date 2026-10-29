@@ -6133,7 +6133,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           pauseReason: 'needs_decision',
         });
         expect(await pauseDetail(goalRunId)).toBe(
-          "acceptance check gone: the platform first looked after the goal's steps had started (the plan changed the check) and the gate answered that the thing is not there (never_seen_present) — an earlier step may have removed it, or the params name something else; either way the check could never show this goal removed it; revise the check's params or the plan, resume to look again, or cancel",
+          "acceptance check gone: the platform first looked after the goal's steps had started (the plan changed the check) and the gate answered that the thing is not there (never_seen_present) — an earlier step may have removed it, or the params name something else; either way the check could never show this goal removed it; revise the check's params or the plan, resume to look again, end the run on the requester's word (end_goal), or cancel",
         );
       });
 

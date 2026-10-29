@@ -793,6 +793,7 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
     expect(never.getAttribute('data-baseline')).toBe('never_seen_present');
     expect(never.textContent).toContain('平台在目标的步骤开始之后才看（计划改了这条检查）');
     expect(never.textContent).toContain('可能是前面的步骤删掉了它，也可能参数没指向要删的东西');
+    expect(never.textContent).toContain('可以用「结束目标…」按你的判断结束');
     expect(never.textContent).not.toContain('开始前');
     expect(refused.textContent).toContain('平台没能看它在不在（');
     expect(refused.textContent).toContain('所以目标暂停，没有往下做');

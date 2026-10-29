@@ -219,8 +219,8 @@ export function AbsenceBaselineLine({
         >
           {afterWork
             ? t(
-                `平台在目标的步骤开始之后才看（计划改了这条检查），门回答它已经不在${take}：可能是前面的步骤删掉了它，也可能参数没指向要删的东西。这条检查证明不了是这个目标删掉的，所以目标暂停，没有往下做。核对参数后修订计划（比如去掉或改写这条检查）、继续运行再看一次，或者取消。`,
-                `The platform looked only after the goal’s steps had started (the plan changed this check), and the gate answered that it is not there${take}: an earlier step may have removed it, or the params name something else. This check could not show this goal removed it, so the goal paused and did not go on. Check the params, then revise the plan (dropping or rewriting this check, say), resume to look again, or cancel.`,
+                `平台在目标的步骤开始之后才看（计划改了这条检查），门回答它已经不在${take}：可能是前面的步骤删掉了它，也可能参数没指向要删的东西。这条检查证明不了是这个目标删掉的，所以目标暂停，没有往下做。核对参数后修订计划（比如去掉或改写这条检查）、继续运行再看一次；确认是前面的步骤删掉的，可以用「结束目标…」按你的判断结束；或者取消。`,
+                `The platform looked only after the goal’s steps had started (the plan changed this check), and the gate answered that it is not there${take}: an earlier step may have removed it, or the params name something else. This check could not show this goal removed it, so the goal paused and did not go on. Check the params, then revise the plan (dropping or rewriting this check, say) or resume to look again; if you know an earlier step removed it, “End goal…” settles it on your word; or cancel.`,
               )
             : t(
                 `开始前门就回答它不在${take}：这条检查证明不了是这个目标删掉的，所以目标暂停，步骤没有开始。核对参数是不是正好指向要删的东西，然后修订计划、继续运行再看一次，或者取消。`,

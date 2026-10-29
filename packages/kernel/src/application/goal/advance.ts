@@ -994,7 +994,7 @@ class Advance {
       const afterWork = steps.some((step) => step.attemptCount > 0);
       await this.pause(
         'needs_decision',
-        `${unseen.map(({ check, baseline }) => unseenBaseline(check, baseline, afterWork)).join('; ')}; revise the check's params or the plan, resume to look again, or cancel`,
+        `${unseen.map(({ check, baseline }) => unseenBaseline(check, baseline, afterWork)).join('; ')}; revise the check's params or the plan, resume to look again, ${afterWork ? "end the run on the requester's word (end_goal), " : ''}or cancel`,
       );
       return false;
     }
