@@ -253,6 +253,14 @@ export function OnboardingWizard({
                   )}
                 </p>
               ) : null}
+              {plan.absentAnswers.length > 0 ? (
+                <p className="field-hint" data-testid="wizard-publish-absent">
+                  {t(
+                    `另有 ${plan.absentAnswers.length} 个草稿暂不发布：${plan.absentAnswers.map(actionKindTagText).join('、')}。它们声明了哪些回答表示要查的东西不存在，要由人在能力目录里确认门用的凭据看得到要查的东西后逐个发布。`,
+                    `${plan.absentAnswers.length} draft(s) are held back: ${plan.absentAnswers.map(actionKindTagText).join(', ')}. They declare which answers mean the thing looked up does not exist; a person publishes each in the catalog after confirming the gate’s credentials can see what it looks up.`,
+                  )}
+                </p>
+              ) : null}
             </div>
           ) : null}
           {draftsError !== null ? (

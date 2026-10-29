@@ -1025,6 +1025,7 @@ describe('SystemsPage', () => {
         publishedOperationNames: ['stock.get', 'stock.adjust'],
         skippedDraftOperationNames: [],
         gateOwnedParamDrafts: [],
+        absentAnswerDrafts: [],
       }),
     });
     renderPage(http);

@@ -517,6 +517,33 @@ export const GateOwnedParamWireSchema = z
   .strict();
 export type GateOwnedParamWire = z.infer<typeof GateOwnedParamWireSchema>;
 
+/** S11 「门确认不存在」 A: the target's answers an observe-class Operation declares mean "the thing
+ *  this call names does not exist" (`operationAbsentAnswers`, action-description.ts) — http
+ *  statuses, or exit statuses of a cli / ssh command. */
+export const OperationAbsentAnswersWireSchema = z.union([
+  z.object({ statuses: z.array(z.number().int()) }).strict(),
+  z.object({ exitCodes: z.array(z.number().int()) }).strict(),
+]);
+export type OperationAbsentAnswersWire = z.infer<typeof OperationAbsentAnswersWireSchema>;
+
+/** S11 「门确认不存在」 B-a: who confirmed, publishing a version that declares `absentAnswers`, that
+ *  the gate's credentials can see what such a call looks up (a person on the human channel), and
+ *  when. A ChangePlan revision, which keeps the definition, carries its live version's. */
+export const OperationAbsentAnswersReviewWireSchema = z
+  .object({ reviewedBy: z.string(), reviewedAt: z.string() })
+  .strict();
+export type OperationAbsentAnswersReviewWire = z.infer<
+  typeof OperationAbsentAnswersReviewWireSchema
+>;
+
+/** S11 「门确认不存在」 B-a: a gate's imported draft a bulk publish left unpublished because it
+ *  declares answers that mean "does not exist" — a person publishes it with `publish_operation`,
+ *  confirming them. */
+export const AbsentAnswerDraftWireSchema = z
+  .object({ name: z.string(), absentAnswers: OperationAbsentAnswersWireSchema })
+  .strict();
+export type AbsentAnswerDraftWire = z.infer<typeof AbsentAnswerDraftWireSchema>;
+
 /** One announced Operation, as the gate described it (a subset of `OperationSchema`). */
 export const GateOperationSummaryWireSchema = z
   .object({
@@ -829,6 +856,9 @@ export const EnableGateInstanceResultWireSchema = z
     skippedOperationNames: z.array(z.string()),
     /** Legacy J: imported drafts left unpublished because they declare a gate-owned param. */
     gateOwnedParamDrafts: z.array(GateOwnedParamDraftWireSchema),
+    /** S11 「门确认不存在」 B-a: imported drafts left unpublished because they declare answers that
+     *  mean "does not exist" (`publish_operation` with the confirmation publishes each). */
+    absentAnswerDrafts: z.array(AbsentAnswerDraftWireSchema),
     /** S8 W2-K2: `true` only when this call linked a pre-existing Gatekeeper (found by endpoint,
      *  §"association key") instead of registering a new one — including the idempotent-relink
      *  case. `false` for a fresh registration, and for the pre-existing-`workspace_gate_links`-row
@@ -861,6 +891,10 @@ export const GateInstanceEnablePreviewOperationWireSchema = z
      *  Operation an unpublished draft, listed in `gateOwnedParamDrafts`, until the gate's manifest
      *  drops them. */
     gateOwnedParams: z.array(GateOwnedParamWireSchema).optional(),
+    /** S11 「门确认不存在」 B-a: the answers the announced definition declares mean "does not
+     *  exist". Present only when it declares some: enabling leaves this Operation an unpublished
+     *  draft, listed in `absentAnswerDrafts`, for a person to publish confirming them. */
+    absentAnswers: OperationAbsentAnswersWireSchema.optional(),
     /** Present when this workspace already holds an unpublished draft of this Operation for the
      *  linked Gatekeeper — e.g. one a bulk publish held back for a gate-owned param. `rewritable`
      *  is `true` when `refresh_operation_governance` would rewrite it to the announced entry: it is

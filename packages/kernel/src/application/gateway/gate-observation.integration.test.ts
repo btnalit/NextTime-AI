@@ -357,7 +357,13 @@ describe.runIf(DATABASE_URL !== undefined)(
         });
         await publishOperation(client, workspaceId, { gatekeeperId, name: OBSERVE_OP.name });
         await publishOperation(client, workspaceId, { gatekeeperId, name: OBSERVE_MAPPED_OP.name });
-        await publishOperation(client, workspaceId, { gatekeeperId, name: OBSERVE_HOST_OP.name });
+        // S11 「门确认不存在」 B-a: a person publishes it, confirming its declared 404.
+        await publishOperation(client, workspaceId, {
+          gatekeeperId,
+          name: OBSERVE_HOST_OP.name,
+          actor: { principalId: ownerId, role: 'owner' },
+          absentAnswersReviewed: true,
+        });
         await publishOperation(client, workspaceId, { gatekeeperId, name: AUTO_OP.name });
       });
 

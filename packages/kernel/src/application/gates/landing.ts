@@ -8,6 +8,7 @@ import {
   redactConnectionAddress,
 } from '../../governance/connections/index.js';
 import {
+  type AbsentAnswerDraft,
   type GateOwnedParamDraft,
   type GatekeeperByEndpointEntry,
   findGatekeepersByEndpoint,
@@ -112,6 +113,9 @@ export interface LandingResult {
   /** Catalog only (a self connection publishes nothing). */
   readonly publishedOperationNames: readonly string[];
   readonly gateOwnedParamDrafts: readonly GateOwnedParamDraft[];
+  /** Catalog only: imported drafts declaring answers that mean "does not exist", left for a person
+   *  to publish confirming them (S11 「门确认不存在」 B-a). */
+  readonly absentAnswerDrafts: readonly AbsentAnswerDraft[];
   /** Self: the resolved `request_connection` card, when one was given. */
   readonly connectionRequest: ConnectionRequestRow | null;
 }
@@ -261,7 +265,7 @@ export async function landGatekeeper(
   const published =
     source.kind === 'catalog'
       ? await publishImportedDrafts(client, workspaceId, gatekeeperId, imported.imported)
-      : { publishedOperationNames: [], gateOwnedParamDrafts: [] };
+      : { publishedOperationNames: [], gateOwnedParamDrafts: [], absentAnswerDrafts: [] };
 
   // The origin record — exactly one per Gatekeeper.
   let resolvedRequest: ConnectionRequestRow | null = null;
@@ -343,6 +347,7 @@ export async function landGatekeeper(
     skippedOperationNames: imported.skipped.map((entry) => entry.name),
     publishedOperationNames: published.publishedOperationNames,
     gateOwnedParamDrafts: published.gateOwnedParamDrafts,
+    absentAnswerDrafts: published.absentAnswerDrafts,
     connectionRequest: resolvedRequest,
   };
 }

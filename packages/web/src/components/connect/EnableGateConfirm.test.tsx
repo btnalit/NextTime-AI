@@ -345,4 +345,75 @@ describe('EnableGateConfirm', () => {
     );
     expect(held.textContent).toContain('与门公告对齐');
   });
+
+  it('S11 「门确认不存在」 B-a: an announced entry declaring answers that mean “not there” is imported as a draft, not counted as published, and named with its answers', async () => {
+    const http = scriptedHttp({
+      preview_gate_instance_enable: () =>
+        emptyPreview({
+          operationsToImport: [
+            { name: 'stock.get', mode: 'observe', blastRadius: 'low', autoApprovable: true },
+            {
+              name: 'stock.lookup',
+              mode: 'observe',
+              blastRadius: 'low',
+              autoApprovable: true,
+              absentAnswers: { statuses: [404, 410] },
+            },
+          ],
+        }),
+    });
+    render(
+      <EnableGateConfirm
+        http={http}
+        gateId="gate-1"
+        gateDisplayName="Stock"
+        onEnabled={vi.fn()}
+        testId="enable-gate-1"
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('enable-gate-1'));
+    const confirm = await screen.findByTestId('enable-gate-1-confirm');
+    const toPublish = within(confirm).getByTestId('enable-preview-import');
+    expect(toPublish.textContent).toContain('将发布 1 个');
+    expect(toPublish.textContent).not.toContain('stock.lookup');
+    const absent = within(confirm).getByTestId('enable-preview-absent');
+    expect(absent.textContent).toContain('1 个 Operation 只导入为草稿，不会发布');
+    expect(absent.textContent).toContain('stock.lookup：目标回答 404 或 410 时表示不存在');
+    expect(absent.textContent).toContain('到能力目录逐个确认');
+  });
+
+  it('S11 「门确认不存在」 B-a: a gate announcing only such entries is not “no Operations yet”', async () => {
+    const http = scriptedHttp({
+      preview_gate_instance_enable: () =>
+        emptyPreview({
+          operationsToImport: [
+            {
+              name: 'unit.show',
+              mode: 'observe',
+              blastRadius: 'low',
+              autoApprovable: true,
+              absentAnswers: { exitCodes: [4] },
+            },
+          ],
+        }),
+    });
+    render(
+      <EnableGateConfirm
+        http={http}
+        gateId="gate-1"
+        gateDisplayName="Units"
+        onEnabled={vi.fn()}
+        testId="enable-gate-1"
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('enable-gate-1'));
+    const confirm = await screen.findByTestId('enable-gate-1-confirm');
+    expect(within(confirm).queryByTestId('enable-preview-import')).toBeNull();
+    expect(within(confirm).queryByTestId('enable-preview-empty')).toBeNull();
+    expect(within(confirm).getByTestId('enable-preview-absent').textContent).toContain(
+      'unit.show：命令以退出码 4 结束时表示不存在',
+    );
+  });
 });

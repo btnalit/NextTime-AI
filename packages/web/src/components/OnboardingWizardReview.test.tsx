@@ -5,6 +5,7 @@ import type { CapabilityCaller } from '../lib/clients.js';
 import type { GraphObjectRow } from '../lib/connections.js';
 import { operationDetailFromObject } from '../lib/connections.js';
 import { HttpError } from '../lib/http-client.js';
+import { hrefs } from '../lib/router.js';
 import {
   OnboardingWizardReview,
   currentRevisions,
@@ -282,5 +283,178 @@ describe('OnboardingWizardReview — credential confirmation', () => {
         },
       ]),
     );
+  });
+});
+
+// S11 「门确认不存在」 B-a: a reclassification keeps the definition, so the draft of an Operation
+// declaring answers that mean "not there" publishes only with the person's confirmation — asked
+// before Submit, since the definition says so.
+describe('OnboardingWizardReview — confirming the answers that mean “not there”', () => {
+  it('asks before Submit, keeps it disabled until ticked, and the publish carries the confirmation', async () => {
+    const calls: { name: string; params: unknown }[] = [];
+    const declaring = operationObject('gk-1', 'record_get');
+    const http = {
+      call: vi.fn(async (name: string, p?: unknown) => {
+        if (name === 'search') {
+          return {
+            items: [
+              {
+                ...declaring,
+                properties: {
+                  ...declaring.properties,
+                  binding: {
+                    kind: 'http',
+                    method: 'GET',
+                    path: '/records/{id}',
+                    absent_statuses: [404],
+                  },
+                  // A stamp on the published version is never proposed again.
+                  absentAnswersReviewedBy: 'p-owner',
+                  absentAnswersReviewedAt: '2026-10-24T01:00:00Z',
+                },
+              },
+            ],
+          };
+        }
+        calls.push({ name, params: p });
+        if (name === 'propose_operation')
+          return { governanceChange: null, draftDigest: 'sha256:r1' };
+        if (name === 'publish_operation') return { status: 'published' };
+        throw new Error(`unscripted ${name}`);
+      }) as CapabilityCaller['call'],
+    } as CapabilityCaller;
+    render(<OnboardingWizardReview http={http} gatekeeperId="gk-1" onDone={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: /提议重分类/ }));
+    const form = await screen.findByTestId('wizard-review-reclassify-form');
+    expect(within(form).getByTestId('operation-absent-review').textContent).toContain(
+      '目标回答 404 时',
+    );
+    const submit = within(form).getByRole('button', { name: /提交/ }) as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+    fireEvent.click(within(form).getByTestId('operation-absent-review-confirm'));
+    expect(submit.disabled).toBe(false);
+    fireEvent.click(submit);
+    await waitFor(() =>
+      expect(calls.filter((c) => c.name === 'publish_operation').map((c) => c.params)).toEqual([
+        {
+          gatekeeperId: 'gk-1',
+          name: 'record_get',
+          absentAnswersReviewed: true,
+          draftDigest: 'sha256:r1',
+        },
+      ]),
+    );
+    const proposed = calls.find((c) => c.name === 'propose_operation')?.params as {
+      operation: Record<string, unknown>;
+    };
+    expect(proposed.operation).not.toHaveProperty('absentAnswersReviewedBy');
+    expect(proposed.operation).not.toHaveProperty('absentAnswersReviewedAt');
+  });
+
+  it('a draft step ③ left for a person is not offered a reclassification: it says it waits for the confirmation and opens in the catalog (UX acceptance of #757, P2-1)', async () => {
+    // The gate's import draft is nobody's own proposal: `propose_operation` refuses it (409) until
+    // it is published — in the catalog, with the confirmation.
+    const declaring = operationObject('gk-1', 'parts.lookup');
+    const http = {
+      call: vi.fn(async (name: string) => {
+        if (name === 'search') {
+          return {
+            items: [
+              {
+                ...declaring,
+                properties: {
+                  ...declaring.properties,
+                  status: 'draft',
+                  origin: 'import',
+                  binding: {
+                    kind: 'http',
+                    method: 'GET',
+                    path: '/parts/{id}',
+                    absent_statuses: [404],
+                  },
+                },
+              },
+            ],
+          };
+        }
+        throw new Error(`unscripted ${name}`);
+      }) as CapabilityCaller['call'],
+    } as CapabilityCaller;
+    render(<OnboardingWizardReview http={http} gatekeeperId="gk-1" onDone={vi.fn()} />);
+    const row = await screen.findByTestId('wizard-review-row');
+    expect(within(row).getByTestId('wizard-review-absent-draft').textContent).toBe(
+      '草稿，等确认后发布',
+    );
+    expect(within(row).queryByRole('button', { name: /提议重分类/ })).toBeNull();
+    const why = within(row).getByTestId('wizard-review-reclassify-absent');
+    expect(why.textContent).toContain('目标回答 404 时表示要查的东西不存在');
+    expect(within(why).getByTestId('wizard-review-absent-draft-link').getAttribute('href')).toBe(
+      hrefs.catalog('operations', 'gk-1::parts.lookup'),
+    );
+  });
+
+  it('a tick is for the answers it was given: when the row is read again declaring others, it is cleared', async () => {
+    // Review #501 on #757 (P3-2): the rows reload after any row publishes. If the gate re-imported
+    // in between and the definition now declares other answers, the tick must not carry over to
+    // answers the person never saw.
+    const calls: { name: string; params: unknown }[] = [];
+    let reimported = false;
+    const other = operationObject('gk-1', 'record_list');
+    const declaring = operationObject('gk-1', 'record_get');
+    const declaringWith = (statuses: number[]): GraphObjectRow => ({
+      ...declaring,
+      properties: {
+        ...declaring.properties,
+        binding: { kind: 'http', method: 'GET', path: '/records/{id}', absent_statuses: statuses },
+      },
+    });
+    const http = {
+      call: vi.fn(async (name: string, p?: unknown) => {
+        if (name === 'search') {
+          return { items: [other, declaringWith(reimported ? [404, 410] : [404])] };
+        }
+        calls.push({ name, params: p });
+        if (name === 'propose_operation')
+          return { governanceChange: null, draftDigest: 'sha256:r1' };
+        if (name === 'publish_operation') {
+          // The gate re-imported meanwhile: the next read of the rows sees the new declaration.
+          reimported = true;
+          return { status: 'published' };
+        }
+        throw new Error(`unscripted ${name}`);
+      }) as CapabilityCaller['call'],
+    } as CapabilityCaller;
+    render(<OnboardingWizardReview http={http} gatekeeperId="gk-1" onDone={vi.fn()} />);
+    const [otherOpen, declaringOpen] = await screen.findAllByRole('button', {
+      name: /提议重分类/,
+    });
+    fireEvent.click(declaringOpen as HTMLElement);
+    const declaringForm = await screen.findByTestId('wizard-review-reclassify-form');
+    fireEvent.click(within(declaringForm).getByTestId('operation-absent-review-confirm'));
+    expect(
+      (within(declaringForm).getByRole('button', { name: /提交/ }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+
+    // Another row publishes; the rows are read again, and this one now declares 404 or 410.
+    fireEvent.click(otherOpen as HTMLElement);
+    const forms = await screen.findAllByTestId('wizard-review-reclassify-form');
+    const otherForm = forms.find((form) => form !== declaringForm) as HTMLElement;
+    fireEvent.click(within(otherForm).getByRole('button', { name: /提交/ }));
+
+    const reread = await screen.findByTestId('wizard-review-reclassify-form');
+    await waitFor(() =>
+      expect(within(reread).getByTestId('operation-absent-review').textContent).toContain(
+        '404 或 410',
+      ),
+    );
+    expect(
+      (within(reread).getByTestId('operation-absent-review-confirm') as HTMLInputElement).checked,
+    ).toBe(false);
+    expect(
+      (within(reread).getByRole('button', { name: /提交/ }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(calls.filter((c) => c.name === 'publish_operation').map((c) => c.params)).toEqual([
+      { gatekeeperId: 'gk-1', name: 'record_list', draftDigest: 'sha256:r1' },
+    ]);
   });
 });
