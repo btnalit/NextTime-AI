@@ -3779,3 +3779,109 @@ describe('CatalogPage — reject a pending draft (E2-0b)', () => {
     expect(screen.queryByTestId('skill-reject-confirm-sk-1-trigger')).toBeNull();
   });
 });
+
+describe('legacy 493 and the deprecated Operation’s detail (UX acceptance of #776)', () => {
+  it('a Procedure publish refused for a step’s Worker says which step, which Worker and why, next to Publish', async () => {
+    const http = scriptedHttp({
+      get_workspace: () => ({
+        id: 'ws-1',
+        name: 'Acme',
+        createdAt: '2026-01-01T00:00:00Z',
+        principalCount: 1,
+        gatekeeperCount: 0,
+        caller: { id: 'p-owner', role: 'owner', displayName: 'Owner', kind: 'human' },
+      }),
+      list_procedures: () => ({
+        items: [
+          {
+            id: 'pr-9',
+            version: 1,
+            status: 'draft',
+            name: 'stock-check',
+            description: 'd',
+            draftDigest: 'sha256:d',
+            steps: [
+              { kind: 'approval', description: 'sign off' },
+              { kind: 'worker', definitionId: 'wd-1', version: 2 },
+            ],
+          },
+        ],
+      }),
+      resolve_refs: () => ({
+        items: [{ id: 'wd-1', kind: 'workerDefinition', name: 'Fixer', typeName: 'worker' }],
+      }),
+      publish_procedure: () => {
+        throw new HttpError(
+          'capability_error',
+          'Procedure step 1 does not resolve: WorkerDefinition wd-1@2 is not published: WorkerDefinition is deprecated',
+          'invalid_step_reference',
+        );
+      },
+    });
+    renderPage(http, 'procedures');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    fireEvent.click(within(detail).getByRole('button', { name: /^发布$/ }));
+    const problem = await within(detail).findByTestId('procedure-publish-step-reference');
+    await waitFor(() => expect(document.activeElement).toBe(problem));
+    expect(problem.textContent).toMatch(/有一步现在用不了，所以没有发布/);
+    expect(problem.textContent).toMatch(/第 2 步/);
+    expect(problem.textContent).toMatch(/v2 没有发布，或已弃用、已丢弃/);
+    await waitFor(() => expect(within(problem).getByText('Fixer')).toBeTruthy());
+    expect(screen.queryByTestId('toast')).toBeNull();
+  });
+
+  it('deprecating an Operation keeps its detail open on the deprecated version, focus on its title', async () => {
+    let deprecated = false;
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [
+          {
+            gatekeeperId: 'gk-1',
+            name: 'docker.restart',
+            status: deprecated ? 'deprecated' : 'published',
+            version: 1,
+          },
+        ],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+      deprecate_operation: () => {
+        deprecated = true;
+        return {};
+      },
+    });
+    renderPage(http);
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    const deprecate = within(detail).getByRole('button', { name: /弃用/ });
+    deprecate.focus();
+    fireEvent.click(deprecate);
+    const confirm = await screen.findByTestId('operation-deprecate-confirm-gk-1::docker.restart');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    await waitFor(() =>
+      expect(screen.getByTestId('operation-detail').getAttribute('data-operation-key')).toBe(
+        'gk-1::docker.restart@v1',
+      ),
+    );
+    expect(screen.queryByTestId('catalog-detail-missing')).toBeNull();
+    expect(screen.getAllByTestId('catalog-row')[0]?.getAttribute('aria-current')).toBe('true');
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByTestId('operation-detail').querySelector('.catalog-detail-title'),
+      ),
+    );
+  });
+
+  it('a link to an Operation whose status changed since still opens it', async () => {
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [{ gatekeeperId: 'gk-1', name: 'docker.restart', status: 'deprecated', version: 3 }],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+    });
+    renderPage(http, 'operations', 'gk-1::docker.restart');
+    const detail = await screen.findByTestId('operation-detail');
+    expect(detail.getAttribute('data-operation-key')).toBe('gk-1::docker.restart@v3');
+    expect(screen.queryByTestId('catalog-detail-missing')).toBeNull();
+    // The row shown is the row marked in the list.
+    expect(screen.getByTestId('catalog-row').getAttribute('aria-current')).toBe('true');
+  });
+});

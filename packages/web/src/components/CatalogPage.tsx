@@ -61,6 +61,12 @@ import type { CatalogTab } from '../lib/router.js';
 import { hrefs } from '../lib/router.js';
 import { labelText, statusChipStyle } from '../lib/status-tone.js';
 import {
+  type StepReferenceRefusal,
+  stepReferenceReasonText,
+  stepReferenceRefusalOf,
+  stepReferenceText,
+} from '../lib/step-reference.js';
+import {
   type WorkerDefinitionSummary,
   definitionName,
   inUseEntryVersion,
@@ -622,6 +628,58 @@ function PublishTemplateProblems({ problems }: { readonly problems: readonly str
   );
 }
 
+/** Legacy 493: why publishing this draft was refused — a step whose Operation or Worker does not
+ *  resolve — next to Publish, focused when it appears: the step by number, what it refers to (the
+ *  Worker by name), and why. */
+function PublishStepReferenceProblem({
+  http,
+  refusal,
+  step,
+}: {
+  readonly http: CapabilityCaller;
+  readonly refusal: StepReferenceRefusal;
+  readonly step: unknown;
+}) {
+  const t = useT();
+  const ref = useRef<HTMLDivElement>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: focus again on each new refusal.
+  useEffect(() => {
+    ref.current?.focus();
+  }, [refusal]);
+  const workerId =
+    step !== null &&
+    typeof step === 'object' &&
+    (step as { kind?: unknown }).kind === 'worker' &&
+    typeof (step as { definitionId?: unknown }).definitionId === 'string'
+      ? (step as { definitionId: string }).definitionId
+      : undefined;
+  return (
+    <div
+      ref={ref}
+      tabIndex={-1}
+      role="alert"
+      className="field-error stack-s"
+      data-testid="procedure-publish-step-reference"
+    >
+      <strong>
+        {t(
+          '这个流程有一步现在用不了，所以没有发布。',
+          'A step of this Procedure cannot run now, so it was not published.',
+        )}
+      </strong>
+      {workerId !== undefined && refusal.stepIndex !== null ? (
+        <span className="row-wrap">
+          <span>{t(`第 ${refusal.stepIndex + 1} 步：`, `Step ${refusal.stepIndex + 1}:`)}</span>
+          <RefChip kind="workerDefinition" id={workerId} http={http} size="s" />
+          <span>{stepReferenceReasonText(refusal, t)}</span>
+        </span>
+      ) : (
+        <span>{stepReferenceText(refusal, t)}</span>
+      )}
+    </div>
+  );
+}
+
 /** A catalog row's selection key: `operationKey`, except a draft that revises a published version
  *  (it carries `governanceChange`) — both rows share the identity, and the draft must stay
  *  selectable on its own to be published from here (R-19) — and a retired (`deprecated`) version,
@@ -656,6 +714,22 @@ function catalogOperationKey(row: OperationCatalogRow): string {
     return `${operationKey(row)}@v${row.version}`;
   }
   return operationKey(row);
+}
+
+/** UX acceptance of #776: an item key no row has any more — its status changed since the link was
+ *  made (a version deprecated, a revision draft published, possibly by someone else) — still opens
+ *  that Operation: the version in effect, else its draft, else its newest deprecated version. */
+function sameOperationAs(
+  rows: readonly OperationCatalogRow[],
+  itemId: string,
+): OperationCatalogRow | undefined {
+  const identity = itemId.replace(/@(draft|v\d+)$/, '');
+  const same = rows.filter((row) => operationKey(row) === identity);
+  return (
+    same.find((row) => row.status === 'published') ??
+    same.find((row) => row.status === 'draft') ??
+    [...same].sort((a, b) => (b.version ?? 0) - (a.version ?? 0))[0]
+  );
 }
 
 /** One param of a revision, as `+warehouse（query，可选）` reads it. Where it goes is named only
@@ -1348,7 +1422,9 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   const sharedNames = operationNamesOnSeveralGates(rows);
   const versioned = identitiesListedTwice(rows);
 
-  const selected = itemId ? rows.find((row) => catalogOperationKey(row) === itemId) : undefined;
+  const selected = itemId
+    ? (rows.find((row) => catalogOperationKey(row) === itemId) ?? sameOperationAs(rows, itemId))
+    : undefined;
   // Legacy 174: the question is about one draft's content — keyed by its digest too, so a gate
   // re-import that rewrites the draft in place drops the tick instead of confirming new content.
   const credentialReview = usePublishCredentialReview(
@@ -1403,6 +1479,11 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       // 「未找到」 after publishing) — follow it to the version now in effect.
       if (action === 'publish_operation' && key !== operationKey(row) && itemId === key) {
         onSelectItem(operationKey(row));
+      }
+      // Likewise a deprecated version is keyed by its version from now on (UX acceptance of #776:
+      // the detail read 「未找到」 after deprecating) — follow it there.
+      if (action === 'deprecate_operation' && itemId === key && row.version !== undefined) {
+        onSelectItem(`${operationKey(row)}@v${row.version}`);
       }
       refresh();
     } catch (err) {
@@ -1537,7 +1618,7 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
             <ListRow
               key={key}
               testId="catalog-row"
-              selected={key === itemId}
+              selected={row === selected}
               onSelect={() => onSelectItem(key)}
             >
               <span className="row-wrap" style={{ justifyContent: 'space-between', minWidth: 0 }}>
@@ -2502,6 +2583,7 @@ function ProcedureDetailView({
   busy,
   credentialReview,
   publishProblems,
+  publishStepReference,
   versionNote,
   inUseVersion,
   focusTitle,
@@ -2526,6 +2608,8 @@ function ProcedureDetailView({
   /** Why the kernel refused the last publish of this version, as a template (UX acceptance of
    *  #722), or `null`. */
   readonly publishProblems: readonly string[] | null;
+  /** Legacy 493: the step the kernel refused the last publish of this version for, or `null`. */
+  readonly publishStepReference: StepReferenceRefusal | null;
   /** As `SkillDetailView`'s. */
   readonly versionNote: ReactNode;
   /** On a draft, the family's version in use (UX acceptance of #764, P3-2: a template problem is
@@ -2600,6 +2684,17 @@ function ProcedureDetailView({
       {publishProblems && row.status === 'draft' ? (
         <PublishTemplateProblems problems={publishProblems} />
       ) : null}
+      {publishStepReference && row.status === 'draft' ? (
+        <PublishStepReferenceProblem
+          http={http}
+          refusal={publishStepReference}
+          step={
+            publishStepReference.stepIndex === null
+              ? undefined
+              : row.steps?.[publishStepReference.stepIndex]
+          }
+        />
+      ) : null}
       <div className="row-wrap">
         {/* S11 W1a E2-0: as the Skill detail's — same id, next version; a draft only copies. */}
         {canPropose && row.status === 'published' ? (
@@ -2673,9 +2768,11 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   const [inUseOf, setInUseOf] = useState<string | null>(null);
   const [focusFamily, setFocusFamily] = useState<string | null>(null);
   // UX acceptance of #722 (P2-1): the last publish refusal as a template, by `id@version`.
+  // Legacy 493: or a step whose Operation or Worker does not resolve (`invalid_step_reference`).
   const [publishRefusal, setPublishRefusal] = useState<{
     readonly version: string;
     readonly problems: readonly string[];
+    readonly stepReference?: StepReferenceRefusal;
   } | null>(null);
 
   const rows = procedures.state.status === 'ready' ? procedures.state.data.items : [];
@@ -2688,10 +2785,11 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   const shown = selected?.inUse && inUseOf === selected.id ? selected.inUse : selected;
   const selectedVersion = selected ? `${selected.id}@${selected.version}` : null;
   const credentialReview = usePublishCredentialReview(selectedVersion);
+  const refusalShown =
+    publishRefusal !== null && publishRefusal.version === selectedVersion ? publishRefusal : null;
   const publishProblems =
-    publishRefusal !== null && publishRefusal.version === selectedVersion
-      ? publishRefusal.problems
-      : null;
+    refusalShown !== null && refusalShown.problems.length > 0 ? refusalShown.problems : null;
+  const publishStepReference = refusalShown?.stepReference ?? null;
   const showEditor = editor !== null && itemId === NEW_ITEM_ID;
 
   function refresh(): void {
@@ -2755,6 +2853,13 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       const problems = action === 'publish_procedure' ? procedureTemplateProblemsOf(err) : null;
       if (problems && problems.length > 0) {
         setPublishRefusal({ version: `${row.id}@${row.version}`, problems });
+        return;
+      }
+      // Legacy 493: a step whose Operation or Worker does not resolve — said next to Publish, the
+      // step and why, not as one sentence for every case.
+      const stepReference = action === 'publish_procedure' ? stepReferenceRefusalOf(err) : null;
+      if (stepReference !== null && stepReference.reason !== 'unresolved') {
+        setPublishRefusal({ version: `${row.id}@${row.version}`, problems: [], stepReference });
         return;
       }
       if (isForbiddenError(err)) permissions.markDenied(action);
@@ -2974,6 +3079,7 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       busy={false}
       credentialReview={credentialReview}
       publishProblems={null}
+      publishStepReference={null}
       versionNote={
         <FamilyVersionNote
           kind="procedure"
@@ -3007,6 +3113,7 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       busy={busy === selected.id}
       credentialReview={credentialReview}
       publishProblems={publishProblems}
+      publishStepReference={publishStepReference}
       versionNote={
         selected.inUse ? (
           <FamilyVersionNote

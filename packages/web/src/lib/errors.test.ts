@@ -6,6 +6,7 @@ import {
   errorMessage,
   isForbiddenError,
   localizedErrorTitle,
+  presentError,
 } from './errors.js';
 import { HttpError } from './http-client.js';
 import { RpcError, TurnAlreadyRunningError } from './ws-client.js';
@@ -115,5 +116,29 @@ describe('localizedErrorTitle', () => {
     const described = describeError(new HttpError('capability_error', 'x', 'some_new_code'));
     expect(localizedErrorTitle(described, zh)).toBe('出错了');
     expect(localizedErrorTitle(described, en)).toBe('Some new code');
+  });
+});
+
+describe('legacy 493: invalid_step_reference', () => {
+  const zh = <T>(text: T) => text;
+  it('names the step and why when the kernel says, the kernel text kept under the fold', () => {
+    const message =
+      'Procedure step 0 does not resolve: Operation "orders.lookup" on Gatekeeper gk-1 is not published (or does not exist)';
+    const shown = presentError(
+      new HttpError('capability_error', message, 'invalid_step_reference'),
+      zh,
+    );
+    expect(shown.message).toMatch(
+      /^第 1 步（Operation「orders\.lookup」）：这个 Operation 没有发布/,
+    );
+    expect(shown.raw).toBe(message);
+  });
+
+  it('otherwise says what a step refers to cannot be used, not that a step refers to a step', () => {
+    const shown = presentError(
+      new HttpError('capability_error', 'something else', 'invalid_step_reference'),
+      zh,
+    );
+    expect(shown.message).toMatch(/有一步引用的 Operation 或 Worker 现在用不了/);
   });
 });

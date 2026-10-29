@@ -30,6 +30,11 @@ import {
 } from '../../lib/procedure-template.js';
 import { hrefs } from '../../lib/router.js';
 import { emptySchemaDraft } from '../../lib/schema-fields.js';
+import {
+  type StepReferenceRefusal,
+  stepReferenceReasonText,
+  stepReferenceRefusalOf,
+} from '../../lib/step-reference.js';
 import type { WorkerDefinitionSummary } from '../../lib/tasks.js';
 import {
   definitionVersions,
@@ -230,6 +235,17 @@ export function ProcedureEditor({
       onProposed(result);
     } catch (err) {
       if (isForbiddenError(err)) permissions.markDenied('propose_procedure');
+      // Legacy 493: a step whose Operation or Worker does not resolve is said on that step's
+      // field, focused, rather than as one sentence above the form.
+      const refusal = stepReferenceRefusalOf(err);
+      const field = refusal ? stepReferenceField(refusal) : null;
+      if (refusal !== null && field !== null) {
+        setErrors({ [field.error]: stepReferenceReasonText(refusal, t) });
+        focusAfterRender(() =>
+          formRef.current?.querySelector<HTMLElement>(`[id="${field.control}"]`),
+        );
+        return;
+      }
       setError(err);
     } finally {
       setBusy(false);
@@ -779,4 +795,20 @@ function entryStepText(t: Translate): string {
     '入口定义不能作为流程步骤：流程的步骤只能交给 Worker 执行，请换一个 Worker 定义。',
     'An entry definition cannot be a step: a Procedure step runs on a Worker. Choose a Worker definition.',
   );
+}
+
+/** Legacy 493: the field a step-reference refusal is about — its error path and its control's id —
+ *  or `null` when the refusal names no step this form shows a field for. */
+function stepReferenceField(
+  refusal: StepReferenceRefusal,
+): { readonly error: string; readonly control: string } | null {
+  if (refusal.stepIndex === null || refusal.reason === 'unresolved') return null;
+  const prefix = `steps.${refusal.stepIndex}`;
+  const field =
+    refusal.reason === 'operation_not_published'
+      ? { name: 'operationName', control: 'operation' }
+      : refusal.reason === 'worker_not_published'
+        ? { name: 'version', control: 'version' }
+        : { name: 'definitionId', control: 'definition' };
+  return { error: `${prefix}.${field.name}`, control: `${prefix}-${field.control}` };
 }
