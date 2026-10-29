@@ -164,6 +164,8 @@
 
 ### 页首更新记录（2026-10-04 精简时移出，原文照搬）
 
+上一版 2026-10-29（**S11 W1「门确认不存在」B-a 合入（#757，3086f49，无迁移，未发版）**：发布声明了「不存在」回答的 Operation 时，`publish_operation` 要带 `absentAnswersReviewed: true`（只认人的通道上的人，服务账号 403），记下确认人与时间（簿记字段，不进摘要，发布后由 core 0047 守着）；草稿永远不带确认，整批发布（`publish_manifest`、`enable_gate_instance`）把它们留作草稿（`absentAnswerDrafts`）。控制台在发布前给确认框，按声明种类说反例。另：**控制台遗留 485 合入（#770，287bd9f，只改控制台）**：流程编辑器的步骤只给 Worker，审计筛选与引用标签按种类称呼未命名的定义。新遗留 488–490。W1 下一步：遗留 486（`propose_procedure` 校验步骤种类）→ B-b（`observe_absent` + goal 0011）→ reconcile 小 PR → GO7）。
+
 上一版 2026-10-29（**S11 W1a E2-0「编辑已发布的 Skill / 流程 = 同族下一版本」合入（#764，1317f47，无迁移，未发版，关闭遗留 48 ②）**：`propose_skill{skillId}` / `propose_procedure{procedureId}` 提议该族下一版本，族有待发布草稿时 409 `draft_pending`，Skill 换名 409 `skill_name_changed`；`publish_skill` / `publish_procedure` 必填 `draftDigest`（线上契约不向后兼容），内容变了 409 `draft_changed`；目录里待审草稿旁显示在用的已发布版本。另：**控制台遗留 483 合入（#767，ccf1dd8，只改控制台）**：跨断点时有浮层开着就先保持宽屏，浮层关掉再切窄屏；窗口窄到放不下宽屏时不保持、关掉锚定弹出框。新遗留 485。W1a 下一步 E2-0b（审核侧拒绝待审草稿，#493 F2 协调线程选 b）→ E2-1（`get_skill_stats` 与 Skill 详情「使用情况」）；W1 下一步 #757 B-a）。
 
 上一版 2026-10-29（**已发布 Operation 由数据库守护（#765，c7710cb，core 0047，可逆，未发版，关闭 P2 遗留 482）**：离开草稿的版本除 status、description 与治理字段外不能改，状态只按 draft → published / discarded、published → deprecated 走，治理字段只能随同事务的 `operation.governance_refreshed` 审计改；门的定义摘要不变（协调线程 2026-10-29 选「数据库守护」，「门做下限」会改授权模型，待维护者定）。新遗留 484。W1 下一步 #757 B-a 合 main 后 #493 看增量再合 → B-b（goal 0011）→ reconcile 小 PR → GO7；W1a E2-0 #764 审查中）。
