@@ -23,3 +23,4 @@ export * from './llm-admin.js';
 export * from './readiness.js';
 export * from './change-plan.js';
 export * from './packs.js';
+export * from './skill-stats.js';

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useFocusWhenKeyLost } from '../../hooks/useFocusWhenLost.js';
 import { usePublishCredentialReview } from '../../lib/credential-review.js';
 import { errorToastText } from '../../lib/errors.js';
 import { actionKindTagText, actionKindTagToastText } from '../../lib/format.js';
@@ -80,6 +81,9 @@ export function DraftProposed({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
   const publishRef = useRef<HTMLButtonElement>(null);
+  const doneRef = useRef<HTMLButtonElement>(null);
+  // Legacy 488: Publish goes away once it worked — focus goes to 完成, not to <body>.
+  useFocusWhenKeyLost(status, () => doneRef.current);
   const credentialReview = usePublishCredentialReview(`${draft.id}@${draft.version}`);
   // Legacy 232: a name written before the name rule may carry a hidden character; a toast
   // carries the short form (`format.ts`).
@@ -188,7 +192,13 @@ export function DraftProposed({
             {t('发布', 'Publish')}
           </Button>
         ) : null}
-        <Button variant="ghost" onClick={onDone} disabled={busy} data-testid="draft-done">
+        <Button
+          ref={doneRef}
+          variant="ghost"
+          onClick={onDone}
+          disabled={busy}
+          data-testid="draft-done"
+        >
           {t('完成', 'Done')}
         </Button>
       </div>

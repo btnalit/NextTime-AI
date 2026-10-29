@@ -1176,8 +1176,18 @@
  * scroll. The first cell is the card title; every other cell shows its column name from its own
  * `data-label`. A cell without one (an actions cell, an expanded row's single wide cell) takes the
  * card's full width. Kept as plain tables rather than `DataTable` because these rows expand in
- * place (a second `<tr>` under the row), which `DataTable` does not model. */
-@media (max-width: 768px) {
+ * place (a second `<tr>` under the row), which `DataTable` does not model.
+ *
+ * Legacy 489: the width that counts is the table's own box, not the window's — a drawer or a
+ * detail pane is narrow on a wide screen too (the onboarding wizard's 448px drawer at 1440 held a
+ * 608px table, its Submit and its confirmation a sideways scroll apart). So the `.table-scroll`
+ * around such a table is the size container, and the cards follow its width; a narrow window
+ * makes every one of them narrow as before. */
+.table-scroll:has(> .data-table-cards) {
+  container-type: inline-size;
+}
+
+@container (max-width: 768px) {
   .table-scroll > .data-table.data-table-cards {
     min-width: 0;
   }

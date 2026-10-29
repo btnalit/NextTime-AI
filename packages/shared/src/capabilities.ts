@@ -1488,6 +1488,21 @@ const metaCapabilities = [
       'id or version, or a draft the caller may not see.',
   },
   {
+    // S11 W1a E2-1 (S10 §5.4; coordinator decisions 2026-10-29): a Skill family's statistics,
+    // aggregated when read — see `wire/skill-stats.ts` for every counting rule. Human channel, builder
+    // floor (fork 7 = a): the numbers span every conversation and goal in the workspace, so they go
+    // to the people who maintain Skills, as numbers only.
+    name: 'get_skill_stats',
+    group: 'meta',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'builder',
+    paramsSchema: z.object({ skillId: id }).strict(),
+    resultSchema: wire.SkillStatsWireSchema.nullable(),
+    description:
+      'How each version of a Skill family has done: WorkerRuns that loaded it; Tasks completed / failed / cancelled / in progress under the version their last run loaded; the attainment rate (requester and verified_by_check outcomes) with proxy outcomes (agent_reported, reviewer_assessed) apart; the same per run environment (environmentDigest, null = unknown), each segment marked reviewSuggested when its latest reviewStreak primary outcomes were all not achieved; and failed Tasks grouped by WorkerDefinition version × failure category × what refused them. Numbers only. Builder floor; null for an unknown skillId.',
+  },
+  {
     name: 'list_procedures',
     group: 'meta',
     mode: 'observe',
@@ -4556,6 +4571,8 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set<CapabilityName>
   'get_gatekeeper',
   'list_operations',
   'get_operation_stats',
+  // S11 W1a E2-1: workspace-wide numbers for the people who maintain Skills.
+  'get_skill_stats',
   'get_workspace',
   'list_models',
   // S3.13 (docs/development-tasks.md "每用户智能体配置") — AgentProfile/AgentPolicy management and

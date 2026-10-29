@@ -312,3 +312,10 @@ export function auditPayloadShown(payload: unknown): unknown {
     ]),
   );
 }
+
+/** A digest as the console shows it: the algorithm prefix kept, 12 hex characters of the rest
+ *  (`sha256:0123456789ab`, `v1:0123456789ab`). */
+export function shortDigest(digest: string): string {
+  const colon = digest.indexOf(':');
+  return colon < 0 ? digest.slice(0, 12) : digest.slice(0, colon + 13);
+}

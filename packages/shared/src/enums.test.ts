@@ -60,10 +60,14 @@ import {
   StepRunFailureCategorySchema,
   StepRunStatusSchema,
   StepRunWaitingReasonSchema,
+  TASK_FAILURE_CATEGORY_VALUES,
   TASK_FAILURE_REASON_VALUES,
+  TASK_REFUSAL_VALUES,
   TASK_STATUS_VALUES,
   TURN_STATUS_VALUES,
+  TaskFailureCategorySchema,
   TaskFailureReasonSchema,
+  TaskRefusalSchema,
   TaskStatusSchema,
   TurnStatusSchema,
   WORKER_DEFINITION_KIND_VALUES,
@@ -168,6 +172,18 @@ const enumsUnderTest = [
       'budget_exhausted',
       'terminated',
     ],
+  ],
+  [
+    'TaskFailureCategory',
+    TASK_FAILURE_CATEGORY_VALUES,
+    TaskFailureCategorySchema,
+    ['no_result', 'worker_error', 'limit_reached', 'platform', 'other'],
+  ],
+  [
+    'TaskRefusal',
+    TASK_REFUSAL_VALUES,
+    TaskRefusalSchema,
+    ['output_rejected', 'rejected', 'expired', 'denied', 'refused', 'none'],
   ],
   [
     'WorkerRunStatus',
@@ -318,8 +334,8 @@ const enumsUnderTest = [
 ] as const;
 
 describe('enums', () => {
-  it('covers all 35 domain enums required by R4 + S2.2 + S2.6 + R-55 (TurnStatus) + legacy 278 (OperationStatus) + S11 GO1 (ActionRequestFailureKind and the GoalRun / PlanRevision / StepRun vocabulary) + legacy 324 (TaskFailureReason) + the member-management refusal reasons (PrincipalRefusalReason) + S11 GO3b (GoalRunPauseAuthority) + S11 GO4a (GoalAcceptanceCheckKind / Status)', () => {
-    expect(enumsUnderTest).toHaveLength(35);
+  it('covers all 37 domain enums required by R4 + S2.2 + S2.6 + R-55 (TurnStatus) + legacy 278 (OperationStatus) + S11 GO1 (ActionRequestFailureKind and the GoalRun / PlanRevision / StepRun vocabulary) + legacy 324 (TaskFailureReason) + the member-management refusal reasons (PrincipalRefusalReason) + S11 GO3b (GoalRunPauseAuthority) + S11 GO4a (GoalAcceptanceCheckKind / Status) + S11 W1a E2-1 (TaskFailureCategory / TaskRefusal)', () => {
+    expect(enumsUnderTest).toHaveLength(37);
   });
 
   for (const [name, values, schema, expected] of enumsUnderTest) {
