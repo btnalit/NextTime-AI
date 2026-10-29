@@ -380,6 +380,67 @@ describe.runIf(DATABASE_URL !== undefined)(
       expect(excludedWithWhitelist.some((m) => m.procedureId === draft.id)).toBe(false);
     });
 
+    it('legacy 486: excludes a Procedure published before publish checked a worker step’s kind, whose step names an entry definition — for every caller', async () => {
+      const definitionOf = async (kind: 'worker' | 'entry') => {
+        const proposed = await inTx((client) =>
+          proposeWorkerDefinition(client, workspaceId, ownerId, {
+            kind,
+            definition: {
+              systemPrompt: `A ${kind} definition.`,
+              ...(kind === 'entry' ? { capabilities: ['get_object'] } : {}),
+            },
+          }),
+        );
+        return inTx((client) =>
+          publishWorkerDefinition(client, workspaceId, ownerId, {
+            definitionId: proposed.id,
+            version: proposed.version,
+          }),
+        );
+      };
+      const worker = await definitionOf('worker');
+      const entry = await definitionOf('entry');
+      const unique = uniqueNeed('entry-step-legacy');
+      const draft = await inTx((client) =>
+        proposeProcedure(client, workspaceId, ownerId, {
+          name: unique,
+          description: 'Published with a Worker step, then made to name the entry definition.',
+          steps: [{ kind: 'worker', definitionId: worker.id, version: worker.version }],
+        }),
+      );
+      await inTx((client) => publishProcedure(client, workspaceId, ownerId, draft.id));
+      const found = () =>
+        inTx((client) =>
+          findProcedures(client, workspaceId, { parentAuthority: 'unconstrained' }, unique),
+        );
+      expect((await found()).some((m) => m.procedureId === draft.id)).toBe(true);
+
+      // What a Procedure published before the check could hold: the same step on an entry
+      // definition. Written past the I12 immutability trigger, as such a row was written by the
+      // publish of its day.
+      await withWorkspace(
+        pool,
+        { workspaceId, principalId: ownerId },
+        async (client) => {
+          await client.query('set local session_replication_role = replica');
+          await client.query(
+            'update procedures set steps = $3::jsonb where workspace_id = $1 and id = $2',
+            [
+              workspaceId,
+              draft.id,
+              JSON.stringify([{ kind: 'worker', definitionId: entry.id, version: entry.version }]),
+            ],
+          );
+        },
+        { skipRoleSwitch: true },
+      );
+      expect((await found()).some((m) => m.procedureId === draft.id)).toBe(false);
+      const forHandle = await inTx((client) =>
+        findProcedures(client, workspaceId, { parentAuthority: entryScope() }, unique),
+      );
+      expect(forHandle.some((m) => m.procedureId === draft.id)).toBe(false);
+    });
+
     it('is unconstrained (includes everything usable) for an "unconstrained" caller (owner, human channel)', async () => {
       const opName = await publishedOperation('execute');
       const unique = uniqueNeed('unconstrained');

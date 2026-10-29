@@ -748,7 +748,11 @@ async function stepUsableByCaller(
       definitionId: step.definitionId,
       version: step.version,
     });
-    if (!definition || definition.status !== 'published') return false;
+    // Legacy 486: only a worker-kind definition runs as a step (a Procedure published before
+    // `publish_procedure` checked the kind may still name an entry definition).
+    if (!definition || definition.kind !== 'worker' || definition.status !== 'published') {
+      return false;
+    }
     const content = definition.definition as { capabilities?: string[]; gates?: string[] };
     try {
       // Same dry-run `findWorkers` already performs against a WorkerDefinition candidate's own
