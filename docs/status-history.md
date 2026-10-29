@@ -164,6 +164,8 @@
 
 ### 页首更新记录（2026-10-04 精简时移出，原文照搬）
 
+上一版 2026-10-29（**遗留 486 合入（#774，a079a84，无迁移，未发版）**：流程的 Worker 步骤只能指向 worker 种类的定义，`propose_procedure` 与 `publish_procedure` 都以 400 `invalid_step_reference` 拒绝指向入口定义的步骤（提议时按提议人看得到的定义族判定，不借报错透露别人的私有草稿），`find_procedures` 不再推荐修复前发布的这类流程。新遗留 492、493。另：**控制台遗留 488、489 合入（#776，03a985b，只改控制台）**：目录发布、弃用、丢弃、拒绝后，若焦点落在 body 就移到详情标题，详情已关闭时移到当前标签；卡片表格按自身宽度切换，抽屉里的接入向导第④步在宽屏下也是卡片。新遗留 494。W1 下一步 B-b（`observe_absent` + goal 0011）→ reconcile 小 PR → GO7；W1a 下一步 E2-1）。
+
 上一版 2026-10-29（**S11 W1a E2-0b「拒绝待审草稿」合入（#772，0f3e6d2，无迁移，未发版；#493 对 #764 的 F2 关闭）**：新能力 `reject_draft{kind, id, version, draftDigest, reason}`（人的通道，builder 起），工作区所有者或该族在用版本的提议人可拒绝别人的待审 Skill / 流程草稿，原因必填并进审计；拒绝 = 删草稿行 + 审计（与丢弃、30 天清理一致，不加持久状态），族的 `draft_pending` 随之解除。新遗留 491。W1a 下一步 E2-1（`get_skill_stats` 读时聚合 + Skill 详情「使用情况」）；W1 下一步遗留 486（#774 审查中）→ B-b）。
 
 上一版 2026-10-29（**S11 W1「门确认不存在」B-a 合入（#757，3086f49，无迁移，未发版）**：发布声明了「不存在」回答的 Operation 时，`publish_operation` 要带 `absentAnswersReviewed: true`（只认人的通道上的人，服务账号 403），记下确认人与时间（簿记字段，不进摘要，发布后由 core 0047 守着）；草稿永远不带确认，整批发布（`publish_manifest`、`enable_gate_instance`）把它们留作草稿（`absentAnswerDrafts`）。控制台在发布前给确认框，按声明种类说反例。另：**控制台遗留 485 合入（#770，287bd9f，只改控制台）**：流程编辑器的步骤只给 Worker，审计筛选与引用标签按种类称呼未命名的定义。新遗留 488–490。W1 下一步：遗留 486（`propose_procedure` 校验步骤种类）→ B-b（`observe_absent` + goal 0011）→ reconcile 小 PR → GO7）。
