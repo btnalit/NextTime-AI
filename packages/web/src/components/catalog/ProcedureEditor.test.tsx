@@ -1483,7 +1483,10 @@ describe('ProcedureEditor (S6-A A2)', () => {
       expect(select.value).toBe('en-1');
       expect(select.selectedOptions[0]?.textContent).toBe('入口 agent（不能作为流程步骤）');
       expect(optionTexts(select).filter((text) => text.startsWith('入口'))).toHaveLength(1);
-      expect(within(step).getByText(/入口定义不能作为流程步骤/)).toBeTruthy();
+      const reason = within(step).getByText(/入口定义不能作为流程步骤/);
+      // UX P3 on #770: the select says it is invalid and points at the reason.
+      expect(select.getAttribute('aria-invalid')).toBe('true');
+      expect(select.getAttribute('aria-describedby')).toBe(reason.id);
 
       fireEvent.click(screen.getByTestId('procedure-submit'));
       await waitFor(() => expect(document.activeElement).toBe(select));
@@ -1493,6 +1496,8 @@ describe('ProcedureEditor (S6-A A2)', () => {
       fireEvent.change(select, { target: { value: 'wd-1' } });
       expect(within(step).queryByText(/入口定义不能作为流程步骤/)).toBeNull();
       expect(optionTexts(select).some((text) => text.includes('入口'))).toBe(false);
+      expect(select.getAttribute('aria-invalid')).toBeNull();
+      expect(select.getAttribute('aria-describedby')).toBeNull();
     });
   });
 });

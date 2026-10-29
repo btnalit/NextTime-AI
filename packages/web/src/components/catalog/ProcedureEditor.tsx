@@ -390,6 +390,13 @@ export function ProcedureEditor({
             {form.steps.map((step, index) => {
               const prefix = `steps.${index}`;
               const fieldError = (name: string) => errors[`${prefix}.${name}`] || null;
+              // Legacy 485: the entry-step message is live, so it clears once a Worker is picked.
+              const definitionError =
+                fieldError('definitionId') ??
+                (step.kind === 'worker' && kindOf(step.definitionId) === 'entry'
+                  ? entryStepText(t)
+                  : null);
+              const versionError = fieldError('version');
               return (
                 <div
                   className="card card-padded stack-s"
@@ -485,14 +492,17 @@ export function ProcedureEditor({
                         id={`${prefix}-definition`}
                         label={t('Worker 定义', 'definitionId')}
                         required
-                        error={
-                          fieldError('definitionId') ??
-                          (kindOf(step.definitionId) === 'entry' ? entryStepText(t) : null)
-                        }
+                        error={definitionError}
                       >
                         {workerDefinitions && workerDefinitions.length > 0 ? (
                           <Select
                             id={`${prefix}-definition`}
+                            invalid={definitionError !== null}
+                            aria-describedby={describedBy(
+                              `${prefix}-definition`,
+                              false,
+                              definitionError !== null,
+                            )}
                             value={step.definitionId}
                             onChange={(event) => {
                               const picked = definitionVersions(
@@ -536,6 +546,12 @@ export function ProcedureEditor({
                         ) : (
                           <Input
                             id={`${prefix}-definition`}
+                            invalid={definitionError !== null}
+                            aria-describedby={describedBy(
+                              `${prefix}-definition`,
+                              false,
+                              definitionError !== null,
+                            )}
                             value={step.definitionId}
                             onChange={(event) =>
                               updateStep(index, { definitionId: event.target.value })
@@ -549,7 +565,7 @@ export function ProcedureEditor({
                         id={`${prefix}-version`}
                         label={t('版本', 'version')}
                         required
-                        error={fieldError('version')}
+                        error={versionError}
                       >
                         {/* field-inventory #26: the published versions of the picked definition
                          *  are already loaded, so the version is chosen, not typed. A typed
@@ -557,6 +573,12 @@ export function ProcedureEditor({
                         {workerDefinitions && workerDefinitions.length > 0 ? (
                           <Select
                             id={`${prefix}-version`}
+                            invalid={versionError !== null}
+                            aria-describedby={describedBy(
+                              `${prefix}-version`,
+                              false,
+                              versionError !== null,
+                            )}
                             value={step.version}
                             onChange={(event) => updateStep(index, { version: event.target.value })}
                             disabled={busy}
@@ -590,6 +612,12 @@ export function ProcedureEditor({
                         ) : (
                           <Input
                             id={`${prefix}-version`}
+                            invalid={versionError !== null}
+                            aria-describedby={describedBy(
+                              `${prefix}-version`,
+                              false,
+                              versionError !== null,
+                            )}
                             type="number"
                             min={1}
                             value={step.version}
