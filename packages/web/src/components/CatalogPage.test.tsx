@@ -2590,7 +2590,7 @@ describe('CatalogPage editors (S6-A A2)', () => {
     fireEvent.click(within(drawer).getByTestId('skill-submit'));
     const banner = await within(drawer).findByTestId('skill-editor-error');
     expect(banner.getAttribute('data-error-code')).toBe('draft_pending');
-    expect(banner.textContent).toContain('先发布或丢弃那份草稿');
+    expect(banner.textContent).toContain('先发布那份草稿，或由它的提议者丢弃');
     fireEvent.click(within(banner).getByTestId('skill-show-pending-draft'));
     await waitFor(() =>
       expect(within(screen.getByTestId('skill-detail')).getByText('v4')).toBeTruthy(),
@@ -3247,5 +3247,236 @@ describe('CatalogPage — proposer-only Publish / Deprecate (D-24)', () => {
     await screen.findByTestId('toast');
     const other = await selectRow(screen.getAllByTestId('catalog-row')[1] as HTMLElement);
     await waitFor(() => expect(within(other).getByRole('button', { name: /^发布$/ })).toBeTruthy());
+  });
+});
+
+// E2-0b (review #493 on #764, F2): a reviewer rejects someone else's pending Skill / Procedure
+// draft with a reason (`reject_draft`) — the owner, or the proposer of the version in use.
+describe('CatalogPage — reject a pending draft (E2-0b)', () => {
+  function workspaceAs(role: string, callerId = 'p-me') {
+    return () => ({
+      id: 'ws-1',
+      name: 'Acme',
+      createdAt: '2026-01-01T00:00:00Z',
+      principalCount: 3,
+      gatekeeperCount: 1,
+      caller: { id: callerId, role, displayName: 'Me', kind: 'human' },
+    });
+  }
+  const inUseSkill = {
+    id: 'sk-1',
+    version: 1,
+    status: 'published',
+    name: 'restart-web',
+    description: 'Restart web',
+    proposedBy: 'p-me',
+  };
+  const draftSkill = {
+    ...inUseSkill,
+    version: 2,
+    status: 'draft',
+    proposedBy: 'p-other',
+    draftDigest: 'sha256:v2',
+    inUse: inUseSkill,
+  };
+
+  it('Skills: the proposer of the version in use rejects another builder’s draft with a required reason; the family shows v1 again', async () => {
+    let rejected = false;
+    const http = scriptedHttp({
+      get_workspace: workspaceAs('builder'),
+      list_skills: () => ({ items: [rejected ? inUseSkill : draftSkill] }),
+      get_skill: () => null,
+      reject_draft: () => {
+        rejected = true;
+        return { kind: 'skill', id: 'sk-1', version: 2 };
+      },
+    });
+    renderPage(http, 'skills');
+    await waitFor(() => expect(http.calls.some((c) => c.name === 'get_workspace')).toBe(true));
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    // Its own proposer discards it; this caller only rejects.
+    expect(within(detail).queryByTestId('skill-discard-confirm-sk-1-trigger')).toBeNull();
+    fireEvent.click(await within(detail).findByTestId('skill-reject-confirm-sk-1-trigger'));
+
+    const confirm = await screen.findByTestId('skill-reject-confirm-sk-1');
+    expect(confirm.getAttribute('data-tier')).toBe('medium');
+    expect(within(confirm).getByTestId('confirm-target').textContent).toBe('restart-web v2');
+    expect(within(confirm).getByTestId('confirm-impact').textContent).toMatch(
+      /已发布的 v1 照常在用，不受影响.*之后可以再为这个Skill提议下一版本/,
+    );
+    const button = within(confirm).getByTestId('confirm-button') as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    fireEvent.change(within(confirm).getByTestId('skill-reject-confirm-sk-1-reason'), {
+      target: { value: '   ' },
+    });
+    expect(button.disabled).toBe(true);
+    fireEvent.change(within(confirm).getByTestId('skill-reject-confirm-sk-1-reason'), {
+      target: { value: '  Step two repeats step one.  ' },
+    });
+    expect(button.disabled).toBe(false);
+    fireEvent.click(button);
+
+    await waitFor(() =>
+      expect(http.calls.find((c) => c.name === 'reject_draft')?.params).toEqual({
+        kind: 'skill',
+        id: 'sk-1',
+        version: 2,
+        draftDigest: 'sha256:v2',
+        reason: 'Step two repeats step one.',
+      }),
+    );
+    expect((await screen.findByTestId('toast')).textContent).toMatch(/已拒绝 restart-web v2/);
+    // The family's row is its version in use again, still open.
+    const after = await screen.findByTestId('skill-detail');
+    await waitFor(() => expect(within(after).getByText('v1')).toBeTruthy());
+    expect(within(after).queryByTestId('skill-reject-confirm-sk-1-trigger')).toBeNull();
+  });
+
+  it.each([
+    ['the owner, on another principal’s draft', true, 'owner', 'p-other', 'p-other'],
+    ['the owner, on a draft of a family with no version in use', true, 'owner', 'p-other', null],
+    ['the proposer of the version in use', true, 'builder', 'p-other', 'p-me'],
+    ['a builder who proposed neither', false, 'builder', 'p-other', 'p-other'],
+    ['a builder, on a family with no version in use', false, 'builder', 'p-other', null],
+    ['the draft’s own proposer (who discards it instead)', false, 'builder', 'p-me', 'p-me'],
+  ] as const)(
+    'Skills: Reject for %s → offered: %s',
+    async (_label, offered, role, draftBy, inUseBy) => {
+      const draft = {
+        ...draftSkill,
+        proposedBy: draftBy,
+        ...(inUseBy === null
+          ? { version: 1, inUse: undefined }
+          : { inUse: { ...inUseSkill, proposedBy: inUseBy } }),
+      };
+      const http = scriptedHttp({
+        get_workspace: workspaceAs(role),
+        list_skills: () => ({ items: [draft] }),
+        get_skill: () => null,
+      });
+      renderPage(http, 'skills');
+      await waitFor(() => expect(http.calls.some((c) => c.name === 'get_workspace')).toBe(true));
+      const detail = await selectRow(await screen.findByTestId('catalog-row'));
+      await waitFor(() =>
+        expect(within(detail).queryByTestId('skill-reject-confirm-sk-1-trigger') !== null).toBe(
+          offered,
+        ),
+      );
+    },
+  );
+
+  it('the owner rejecting a family’s only draft says the family leaves the catalog', async () => {
+    const http = scriptedHttp({
+      get_workspace: workspaceAs('owner'),
+      list_skills: () => ({ items: [{ ...draftSkill, version: 1, inUse: undefined }] }),
+      get_skill: () => null,
+    });
+    renderPage(http, 'skills');
+    await waitFor(() => expect(http.calls.some((c) => c.name === 'get_workspace')).toBe(true));
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    fireEvent.click(await within(detail).findByTestId('skill-reject-confirm-sk-1-trigger'));
+    const confirm = await screen.findByTestId('skill-reject-confirm-sk-1');
+    expect(within(confirm).getByTestId('confirm-impact').textContent).toBe(
+      '这个Skill还没有发布过的版本，拒绝后它会从目录里消失',
+    );
+  });
+
+  it('a refusal shows in the confirm and keeps the reason; a draft swapped since it was read is read again', async () => {
+    let refusal = 'not_proposer';
+    const http = scriptedHttp({
+      get_workspace: workspaceAs('builder'),
+      list_skills: () => ({ items: [draftSkill] }),
+      get_skill: () => null,
+      reject_draft: () => Promise.reject(new HttpError('capability_error', 'refused', refusal)),
+    });
+    renderPage(http, 'skills');
+    await waitFor(() => expect(http.calls.some((c) => c.name === 'get_workspace')).toBe(true));
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    fireEvent.click(await within(detail).findByTestId('skill-reject-confirm-sk-1-trigger'));
+    const confirm = await screen.findByTestId('skill-reject-confirm-sk-1');
+    const reason = within(confirm).getByTestId(
+      'skill-reject-confirm-sk-1-reason',
+    ) as HTMLTextAreaElement;
+    fireEvent.change(reason, { target: { value: 'Not needed.' } });
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+
+    const error = await within(confirm).findByTestId('confirm-error');
+    expect(error.textContent).toMatch(/只有工作区所有者或在用版本的提议人能拒绝这份草稿/);
+    expect(reason.value).toBe('Not needed.');
+    // A per-row refusal, not a role denial: Reject stays offered.
+    expect(within(detail).getByTestId('skill-reject-confirm-sk-1-trigger')).toBeTruthy();
+
+    refusal = 'draft_changed';
+    const listsBefore = http.calls.filter((c) => c.name === 'list_skills').length;
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    expect((await screen.findByTestId('toast')).textContent).toContain(
+      '这份草稿在你查看之后被修改过',
+    );
+    await waitFor(() =>
+      expect(http.calls.filter((c) => c.name === 'list_skills').length).toBeGreaterThan(
+        listsBefore,
+      ),
+    );
+  });
+
+  it('Procedures: the owner rejects a pending draft; reject_draft{kind: procedure} names the draft reviewed', async () => {
+    const inUse = {
+      id: 'pr-1',
+      version: 2,
+      status: 'published',
+      name: 'Deploy',
+      description: 'Deploy web',
+      proposedBy: 'p-other',
+      steps: [{ kind: 'approval', description: 'A human approves.' }],
+    };
+    const draft = {
+      ...inUse,
+      version: 3,
+      status: 'draft',
+      proposedBy: 'p-other',
+      draftDigest: 'sha256:pr-v3',
+      inUse,
+    };
+    const http = scriptedHttp({
+      get_workspace: workspaceAs('owner'),
+      list_procedures: () => ({ items: [draft] }),
+      reject_draft: () => ({ kind: 'procedure', id: 'pr-1', version: 3 }),
+    });
+    renderPage(http, 'procedures');
+    await waitFor(() => expect(http.calls.some((c) => c.name === 'get_workspace')).toBe(true));
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    fireEvent.click(await within(detail).findByTestId('procedure-reject-confirm-pr-1-trigger'));
+    const confirm = await screen.findByTestId('procedure-reject-confirm-pr-1');
+    expect(within(confirm).getByTestId('confirm-impact').textContent).toMatch(
+      /已发布的 v2 照常在用.*之后可以再为这个流程提议下一版本/,
+    );
+    fireEvent.change(within(confirm).getByTestId('procedure-reject-confirm-pr-1-reason'), {
+      target: { value: 'Verify step is missing a check.' },
+    });
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    await waitFor(() =>
+      expect(http.calls.find((c) => c.name === 'reject_draft')?.params).toEqual({
+        kind: 'procedure',
+        id: 'pr-1',
+        version: 3,
+        draftDigest: 'sha256:pr-v3',
+        reason: 'Verify step is missing a check.',
+      }),
+    );
+  });
+
+  it('the version in use, opened read-only beside the draft, offers no Reject', async () => {
+    const http = scriptedHttp({
+      get_workspace: workspaceAs('owner'),
+      list_skills: () => ({ items: [draftSkill] }),
+      get_skill: () => null,
+    });
+    renderPage(http, 'skills');
+    await waitFor(() => expect(http.calls.some((c) => c.name === 'get_workspace')).toBe(true));
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    await within(detail).findByTestId('skill-reject-confirm-sk-1-trigger');
+    fireEvent.click(within(detail).getByTestId('skill-detail-open-in-use'));
+    await screen.findByTestId('skill-detail-pending-draft-note');
+    expect(screen.queryByTestId('skill-reject-confirm-sk-1-trigger')).toBeNull();
   });
 });

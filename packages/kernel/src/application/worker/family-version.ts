@@ -27,7 +27,7 @@ import type { PoolClient } from 'pg';
 
 export type FamilyKind = 'skill' | 'procedure';
 
-/** The family's latest version is a draft: publish or discard it before proposing another. */
+/** The family's latest version is a draft: publish, discard or reject it before proposing another. */
 export class FamilyDraftPendingError extends Error {
   readonly code = 'draft_pending' as const;
   readonly kind: FamilyKind;
@@ -37,7 +37,7 @@ export class FamilyDraftPendingError extends Error {
     const label = kind === 'skill' ? 'Skill' : 'Procedure';
     const named = draftName === undefined ? '' : ` "${draftName}"`;
     super(
-      `${label}${named} ${familyId}@${draftVersion} is a draft that has not been published or discarded — publishing takes a family's latest version, so another draft would take its place. Publish or discard it, then propose the next version. Nothing was proposed`,
+      `${label}${named} ${familyId}@${draftVersion} is a draft that has not been published or discarded — publishing takes a family's latest version, so another draft would take its place. Publish it, or have it discarded by its proposer or rejected (reject_draft) by the workspace owner or the proposer of the version in use, then propose the next version. Nothing was proposed`,
     );
     this.name = 'FamilyDraftPendingError';
     this.kind = kind;

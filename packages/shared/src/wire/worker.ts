@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { DraftKindSchema, PublishableStatusSchema, WorkerDefinitionKindSchema } from '../enums.js';
+import {
+  DraftKindSchema,
+  PublishableStatusSchema,
+  RejectableDraftKindSchema,
+  WorkerDefinitionKindSchema,
+} from '../enums.js';
 import { ProcedureStepSchema } from '../procedure.js';
 import { SkillApplicableSchema } from '../skill.js';
 
@@ -175,3 +180,14 @@ export const DiscardDraftResultWireSchema = z
   })
   .strict();
 export type DiscardDraftResultWire = z.infer<typeof DiscardDraftResultWireSchema>;
+
+/** `reject_draft`'s result (E2-0b): echoes back the draft taken off its family — as
+ *  `discard_draft`'s, never a `status` (the row is deleted). */
+export const RejectDraftResultWireSchema = z
+  .object({
+    kind: RejectableDraftKindSchema,
+    id: z.string(),
+    version: z.number().int().positive(),
+  })
+  .strict();
+export type RejectDraftResultWire = z.infer<typeof RejectDraftResultWireSchema>;

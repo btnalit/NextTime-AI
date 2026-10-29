@@ -57,6 +57,7 @@ import {
 import { PackNotFoundError } from '../../application/packs/index.js';
 import { TaskRuntimeNotConfiguredError } from '../../application/task/index.js';
 import {
+  DraftNotRejectableError,
   FamilyDraftPendingError,
   ProcedureStepReferenceError,
   SkillFamilyNameChangedError,
@@ -69,6 +70,7 @@ import { ApprovalReasonRequiredError } from '../../governance/approval/index.js'
 import {
   HANDLE_SIGNING_ALG,
   HandleIssuanceError,
+  NotProposerError,
   ReviewedDraftChangedError,
   ScopeValidationError,
   issueHandle,
@@ -692,6 +694,17 @@ describe('mapCapabilityError — application/chat domain errors (unit)', () => {
       new ReviewedDraftChangedError('publish_skill', 'Skill skill-1@2'),
     );
     expect(mapped).toMatchObject({ status: 409, code: 'draft_changed' });
+  });
+
+  it('reject_draft (E2-0b): a version that is not a draft → 409 not_a_draft; a caller who may not reject → 403 not_proposer', () => {
+    expect(
+      mapCapabilityError(new DraftNotRejectableError('skill', 'skill-1', 1, 'published')),
+    ).toMatchObject({ status: 409, code: 'not_a_draft' });
+    expect(
+      mapCapabilityError(
+        new NotProposerError('reject_draft', 'Skill skill-1@2', 'only the workspace owner …'),
+      ),
+    ).toMatchObject({ status: 403, code: 'not_proposer' });
   });
 
   it('ConflictNotFoundError (resolve_conflict/list_conflicts) → 404 not_found, not 500', () => {

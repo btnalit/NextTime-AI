@@ -169,6 +169,19 @@ export interface ProposeProcedureInput {
   readonly parameters?: OutputSchema;
 }
 
+/** The Procedure family's own advisory lock (transaction-scoped): what proposing its next version
+ *  (`nextVersion`) and rejecting its pending draft (`draft-lifecycle.ts`'s `rejectDraft`) take
+ *  first, as `lockWorkerRegistry` is for Skills. */
+export async function lockProcedureFamily(
+  client: PoolClient,
+  workspaceId: string,
+  procedureId: string,
+): Promise<void> {
+  await client.query('select pg_advisory_xact_lock(hashtext($1::text))', [
+    `procedure_family:${workspaceId}:${procedureId}`,
+  ]);
+}
+
 /** The version a proposal gets: 1 for a new family; for an existing one, the next after its latest,
  *  which must exist and not be a draft (`family-version.ts`). Two locks, then the latest version is
  *  read again. The family's own advisory lock serializes proposals of it (review #493 on #764,
@@ -183,9 +196,7 @@ async function nextVersion(
   procedureId: string | undefined,
 ): Promise<number> {
   if (!procedureId) return 1;
-  await client.query('select pg_advisory_xact_lock(hashtext($1::text))', [
-    `procedure_family:${workspaceId}:${procedureId}`,
-  ]);
+  await lockProcedureFamily(client, workspaceId, procedureId);
   await client.query(
     `select version from procedures
      where workspace_id = $1 and id = $2

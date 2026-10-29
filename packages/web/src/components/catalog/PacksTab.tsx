@@ -870,8 +870,8 @@ type WorkerGateChoice = Readonly<Record<string, readonly string[]>>;
  *  unpublishable. The technical details name the Skill. */
 function packDraftPendingText(t: Translate): string {
   return t(
-    '这个能力包要升级的一个 Skill，有人正在为它提议新版本，那份草稿还没有发布或丢弃；安装会把它挤到旧版本后面、再也发布不了，所以现在装不上，什么也没有改。「技术细节」里写着是哪个 Skill；在「Skill」页找到它，等那份草稿发布或丢弃后再来安装。',
-    'Someone is proposing a new version of a Skill this pack upgrades, and that draft has been neither published nor discarded; installing would push it behind and leave it unpublishable, so it cannot be installed now and nothing changed. The technical details name the Skill; find it on the Skills tab and install again once that draft is published or discarded.',
+    '这个能力包要升级的一个 Skill，有人正在为它提议新版本，那份草稿还没有发布、丢弃或被拒绝；安装会把它挤到旧版本后面、再也发布不了，所以现在装不上，什么也没有改。「技术细节」里写着是哪个 Skill；在「Skill」页找到它，等那份草稿发布、丢弃或被拒绝后再来安装。',
+    'Someone is proposing a new version of a Skill this pack upgrades, and that draft has been neither published, discarded nor rejected; installing would push it behind and leave it unpublishable, so it cannot be installed now and nothing changed. The technical details name the Skill; find it on the Skills tab and install again once that draft is published, discarded or rejected.',
   );
 }
 

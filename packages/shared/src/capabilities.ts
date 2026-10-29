@@ -4,6 +4,7 @@ import {
   ConflictStatusSchema,
   ConnectionRequestStatusSchema,
   DraftKindSchema,
+  RejectableDraftKindSchema,
   RoleSchema,
   WorkerDefinitionKindSchema,
 } from './enums.js';
@@ -1338,8 +1339,8 @@ const metaCapabilities = [
       'Propose a private draft Skill, typically at the end of a successful WorkerRun. skillId ' +
       'makes it the next version of that Skill (omitted: a new Skill); the new version keeps the ' +
       'Skill’s name (409 skill_name_changed — a different name is a new Skill), and is refused ' +
-      'while the Skill’s latest version is still a draft (409 draft_pending: publish or discard ' +
-      'that draft first). An unknown skillId is not found.',
+      'while the Skill’s latest version is still a draft (409 draft_pending: that draft is ' +
+      'published, discarded or rejected first). An unknown skillId is not found.',
   },
   {
     name: 'propose_procedure',
@@ -1361,7 +1362,7 @@ const metaCapabilities = [
       'check the platform makes), and parameters is the schema of those parameters — the same ' +
       'bounded JSON Schema subset as an outputSchema. procedureId makes it the next version of ' +
       'that Procedure (omitted: a new Procedure); refused while the Procedure’s latest version ' +
-      'is still a draft (409 draft_pending: publish or discard that draft first). An unknown ' +
+      'is still a draft (409 draft_pending: that draft is published, discarded or rejected first). An unknown ' +
       'procedureId is not found.',
   },
   {
@@ -2641,6 +2642,30 @@ const workerCapabilities = [
     resultSchema: wire.DiscardDraftResultWireSchema,
     description:
       'Discard one of your own private draft WorkerDefinition/Skill/Procedure/OntologyVersion versions (I16), with an optional reason (kept in the audit record). Only the draft’s own proposer may discard it; a published or deprecated version is never deletable through this.',
+  },
+  {
+    // E2-0b (review #493 on #764, F2): the reviewer's transition beside `discard_draft` — a pending
+    // Skill / Procedure draft blocks its family's next version (409 `draft_pending`), and only its
+    // proposer may discard it. Rejecting takes it off the family (the row is deleted, like discard
+    // and expiry) with a reason the AuditRecord keeps. Human channel only: an agent cannot reject.
+    // `draftDigest` names the draft reviewed, as publish_skill / publish_procedure do.
+    name: 'reject_draft',
+    group: 'worker',
+    mode: 'execute',
+    channel: 'human',
+    minRole: 'builder',
+    paramsSchema: z
+      .object({
+        kind: RejectableDraftKindSchema,
+        id: id,
+        version: z.number().int().positive(),
+        draftDigest: z.string().min(1),
+        reason: z.string().trim().min(1).max(500),
+      })
+      .strict(),
+    resultSchema: wire.RejectDraftResultWireSchema,
+    description:
+      'Reject a pending draft Skill / Procedure version (kind skill or procedure) so the family’s next version can be proposed again: the draft is deleted and the reason (required, kept in the audit record) says why. Only the workspace owner or the proposer of the family’s version in use (its latest published version) may reject — anyone else is 403 not_proposer, and a family with no published version is the owner’s; the draft’s own proposer discards it instead (discard_draft). draftDigest is the draftDigest list_skills / get_skill / list_procedures gave for that draft: another draft under the same version since is 409 draft_changed. A version that is not a draft is 409 not_a_draft. Nothing is written when refused.',
   },
   {
     name: 'list_worker_definitions',

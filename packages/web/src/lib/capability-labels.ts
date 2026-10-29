@@ -843,6 +843,13 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '丢弃你自己的一份私有草稿，不可恢复。',
     enHint: 'Discards one of your own private drafts for good.',
   },
+  reject_draft: {
+    zh: '拒绝待审草稿',
+    en: 'Reject pending draft',
+    zhHint: '拒绝别人提议的一份 Skill 或流程草稿并写明原因，草稿被删除，在用版本不变。',
+    enHint:
+      'Rejects someone else’s Skill or Procedure draft with a reason; the draft is deleted and the version in use stays.',
+  },
   list_worker_definitions: {
     zh: '查看 Worker 定义',
     en: 'List Worker definitions',

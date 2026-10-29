@@ -2,11 +2,23 @@ import type { DraftKind } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { withWorkspace } from '../../adapters/db/pool.js';
+import {
+  type PublishActor,
+  assertReviewedDraft,
+  seesEveryDraft,
+} from '../../governance/capability/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { OntologyDraftNotFoundError } from '../../substrate/ontology/index.js';
 import { WorkerDefinitionNotFoundError } from './definitions.js';
-import { ProcedureNotFoundError } from './procedures.js';
-import { SkillNotFoundError } from './skills.js';
+import {
+  ProcedureNotFoundError,
+  getProcedure,
+  lockProcedureFamily,
+  procedureDraftDigest,
+} from './procedures.js';
+import { assertFamilyRejectAuthority } from './publish-family.js';
+import { lockWorkerRegistry } from './registry-lock.js';
+import { SkillNotFoundError, loadSkillVersion, skillDraftDigest } from './skills.js';
 
 /**
  * application/worker/draft-lifecycle: the S8 W3 K2 (leftover 82) draft terminal states —
@@ -29,10 +41,19 @@ import { SkillNotFoundError } from './skills.js';
  * I16 read-privacy for the manual path (`discardDraft`): a caller naming a draft they did not
  * propose gets the exact same `*NotFoundError` a caller naming an id that does not exist at all
  * gets — never a 403 — reusing `getSkill`/`listSkills`'s own "not visible = not found" convention
- * (skills.ts's own doc comment) rather than confirming a draft's existence to a non-owner. Do not
- * add an owner/admin override here: discarding stays the proposer's own act. The owner and builders
- * may *see* Skill / Procedure drafts (D-26 reviewer rule, ./draft-visibility.ts) so they can
- * review and publish them — seeing a draft is neither publishing nor discarding it.
+ * (skills.ts's own doc comment) rather than confirming a draft's existence to a non-owner.
+ * Discarding stays the proposer's own act — no owner or admin override is added to it. The owner
+ * and builders may *see* Skill / Procedure drafts (D-26 reviewer rule, ./draft-visibility.ts) so
+ * they can review and publish them — seeing a draft is neither publishing nor discarding it.
+ *
+ * Rejecting is a separate transition, the reviewer's (E2-0b; review #493 on #764, F2): `draft ->
+ * rejected` (`reject_draft`, human channel, a reason required) takes a pending Skill / Procedure
+ * draft off its family, so the family's next version can be proposed again (`draft_pending` no
+ * longer holds). Who may: the workspace owner or the proposer of the family's version in use
+ * (`publish-family.ts`'s `assertFamilyRejectAuthority`) — not the draft's proposer, who discards.
+ * It names the draft reviewed by its `draftDigest`, as `publish_*` does. Like the other two
+ * terminal states it deletes the row, and the call's AuditRecord (dispatch.ts, I11) keeps who
+ * rejected what — the reason, the draft's proposer and digest — in the same transaction.
  */
 
 // -------------------------------------------------------------------------------------------
@@ -204,6 +225,111 @@ export async function discardDraft(
   }
   await deleteDraftRow(client, workspaceId, ref);
   return { kind: ref.kind, id: ref.id, version: ref.version, name: row.name };
+}
+
+// -------------------------------------------------------------------------------------------
+// reject_draft (E2-0b: the reviewer's transition, a pending Skill / Procedure draft)
+// -------------------------------------------------------------------------------------------
+
+/** The kinds `reject_draft` takes: the two families whose next version waits on a pending draft
+ *  (S11 W1a E2-0's `draft_pending`). */
+export type RejectableDraftKind = Extract<DraftKind, 'skill' | 'procedure'>;
+
+export interface RejectableDraftRef {
+  readonly kind: RejectableDraftKind;
+  readonly id: string;
+  readonly version: number;
+}
+
+export interface RejectedDraft {
+  readonly kind: RejectableDraftKind;
+  readonly id: string;
+  readonly version: number;
+  /** Who proposed the rejected draft — kept in the AuditRecord. */
+  readonly proposedBy: string;
+  /** The family's version in use, which stays in use; `null` when it has none. */
+  readonly inUseVersion: number | null;
+}
+
+/** `reject_draft` named a row that is not a draft (published, or deprecated). Same 409
+ *  `not_a_draft` as `discard_draft`'s, which this extends. */
+export class DraftNotRejectableError extends DraftNotDiscardableError {
+  constructor(kind: RejectableDraftKind, id: string, version: number, status: string) {
+    super(kind, id, version, status);
+    this.message = `${kind} ${id}@${version} is not a draft (status: ${status}) — only a pending draft can be rejected`;
+    this.name = 'DraftNotRejectableError';
+  }
+}
+
+/**
+ * Rejects `ref` on behalf of `actor` (see this module's doc comment). Under the family's lock —
+ * `lockWorkerRegistry` for Skills, `lockProcedureFamily` for Procedures, what proposing its next
+ * version takes — then the row itself `for update`. In order: the row exists and the actor may see
+ * it (a reviewer sees every Skill / Procedure draft, D-26; anyone else gets the same not-found as
+ * for no row), it is a draft (`DraftNotRejectableError`), the actor may reject it (403
+ * `not_proposer`), and it is the draft reviewed (`reviewedDraftDigest`, 409 `draft_changed`).
+ * Nothing is written before all four hold.
+ */
+export async function rejectDraft(
+  client: PoolClient,
+  workspaceId: string,
+  actor: PublishActor,
+  ref: RejectableDraftRef,
+  reviewedDraftDigest: string,
+): Promise<RejectedDraft> {
+  if (ref.kind === 'skill') await lockWorkerRegistry(client, workspaceId);
+  else await lockProcedureFamily(client, workspaceId, ref.id);
+  const row = await lookupDraftForUpdate(client, workspaceId, ref);
+  if (
+    !row ||
+    (row.status === 'draft' && !seesEveryDraft(actor.role) && row.proposed_by !== actor.principalId)
+  ) {
+    throw notFoundErrorFor(ref, workspaceId);
+  }
+  if (row.status !== 'draft') {
+    throw new DraftNotRejectableError(ref.kind, ref.id, ref.version, row.status);
+  }
+  const subject = `${ref.kind === 'skill' ? 'Skill' : 'Procedure'} ${ref.id}@${ref.version}`;
+  const inUseVersion = await assertFamilyRejectAuthority(client, workspaceId, {
+    table: ref.kind === 'skill' ? 'skills' : 'procedures',
+    familyId: ref.id,
+    subject,
+    actor,
+  });
+  assertReviewedDraft(
+    'reject_draft',
+    subject,
+    reviewedDraftDigest,
+    await draftDigestOf(client, workspaceId, ref),
+  );
+  await deleteDraftRow(client, workspaceId, ref);
+  return {
+    kind: ref.kind,
+    id: ref.id,
+    version: ref.version,
+    proposedBy: row.proposed_by,
+    inUseVersion,
+  };
+}
+
+/** The locked draft's `draftDigest` (`skillDraftDigest` / `procedureDraftDigest`), the one its
+ *  summary row carried to the reviewer. */
+async function draftDigestOf(
+  client: PoolClient,
+  workspaceId: string,
+  ref: RejectableDraftRef,
+): Promise<string> {
+  if (ref.kind === 'skill') {
+    const skill = await loadSkillVersion(client, workspaceId, ref.id, ref.version);
+    if (!skill) throw notFoundErrorFor(ref, workspaceId);
+    return skillDraftDigest(skill);
+  }
+  const procedure = await getProcedure(client, workspaceId, {
+    procedureId: ref.id,
+    version: ref.version,
+  });
+  if (!procedure) throw notFoundErrorFor(ref, workspaceId);
+  return procedureDraftDigest(procedure);
 }
 
 // -------------------------------------------------------------------------------------------
