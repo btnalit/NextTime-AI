@@ -1,5 +1,5 @@
 import type { ConflictWire, FactWire } from '@nexttime/shared';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import type { FactDirection, FactGroup } from '../../lib/graph-view.js';
 import { useT } from '../../lib/i18n.js';
@@ -54,6 +54,17 @@ export function NeighbourList({
 }: NeighbourListProps) {
   const t = useT();
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
+  // Legacy 479 (same class): 「显示全部」 goes away as the rows show, so focus moves to the first row
+  // it showed, not back to the page.
+  const [justExpanded, setJustExpanded] = useState<string | null>(null);
+  const lists = useRef(new Map<string, HTMLUListElement>());
+  useEffect(() => {
+    if (justExpanded === null) return;
+    const first = lists.current.get(justExpanded)?.children[GROUP_PREVIEW_ROWS];
+    if (!(first instanceof HTMLElement)) return;
+    if (!first.hasAttribute('tabindex')) first.tabIndex = -1;
+    first.focus();
+  }, [justExpanded]);
   return (
     <div className="stack graph-groups" data-testid="graph-neighbour-list">
       {groups.map((group) => {
@@ -82,7 +93,14 @@ export function NeighbourList({
                 {group.facts.length}
               </span>
             </header>
-            <ul className="data-list" aria-label={`${group.linkType} ${group.direction}`}>
+            <ul
+              className="data-list"
+              aria-label={`${group.linkType} ${group.direction}`}
+              ref={(list) => {
+                if (list === null) lists.current.delete(group.key);
+                else lists.current.set(group.key, list);
+              }}
+            >
               {rows.map((fact) => (
                 <FactRow
                   key={fact.id}
@@ -102,7 +120,10 @@ export function NeighbourList({
                 <Button
                   variant="ghost"
                   size="s"
-                  onClick={() => setExpanded((prev) => new Set(prev).add(group.key))}
+                  onClick={() => {
+                    setExpanded((prev) => new Set(prev).add(group.key));
+                    setJustExpanded(group.key);
+                  }}
                   data-testid="graph-group-show-all"
                 >
                   {t('显示全部', 'Show all')} ({group.facts.length})

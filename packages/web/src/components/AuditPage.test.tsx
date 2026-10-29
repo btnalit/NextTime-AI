@@ -392,6 +392,10 @@ describe('AuditPage entry points', () => {
     fireEvent.click(within(empty).getByRole('button', { name: /显示读操作|Show reads/ }));
     await waitFor(() => expect(screen.getAllByTestId('audit-row')).toHaveLength(1));
     expect(screen.queryByTestId('audit-empty')).toBeNull();
+    // Legacy 479 (same class): the button went away; focus is on the toggle that now says so.
+    const toggle = screen.getByTestId('audit-show-reads-toggle').querySelector('input');
+    expect(document.activeElement).toBe(toggle);
+    expect(toggle?.checked).toBe(true);
   });
 
   it('reads the entry from the hash when the route table does not pass one', async () => {
