@@ -1,7 +1,9 @@
+import * as PopoverPrimitive from '@radix-ui/react-popover';
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { Dialog, DialogContent, DialogTitle } from './dialog.js';
 import { MasterDetail } from './master-detail.js';
 
 afterEach(() => {
@@ -161,5 +163,171 @@ describe('kit/MasterDetail', () => {
     expect(screen.getByTestId('md-detail').className).toContain('md-detail-pane');
     expect(screen.getByTestId('count').textContent).toBe('1');
     expect((screen.getByTestId('disclosure') as HTMLDetailsElement).open).toBe(true);
+  });
+
+  it('stays wide while a dialog open at the crossing is still open (legacy 483)', async () => {
+    let narrow = false;
+    const listeners = new Set<(event: { matches: boolean }) => void>();
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn(() => ({
+        get matches() {
+          return narrow;
+        },
+        media: '',
+        addEventListener: (_: string, listener: (event: { matches: boolean }) => void) =>
+          listeners.add(listener),
+        removeEventListener: (_: string, listener: (event: { matches: boolean }) => void) =>
+          listeners.delete(listener),
+      })),
+    );
+    function Page() {
+      const [editing, setEditing] = useState(true);
+      return (
+        <>
+          <MasterDetail
+            list={<div>list</div>}
+            detail={<div data-testid="the-detail">detail</div>}
+            open={true}
+            onClose={vi.fn()}
+            sheetTitle="Detail"
+            detailTestId="md-detail"
+          />
+          <Dialog open={editing} onOpenChange={setEditing}>
+            <DialogContent data-testid="edit-dialog">
+              <DialogTitle>Edit</DialogTitle>
+              <input data-testid="edit-input" />
+            </DialogContent>
+          </Dialog>
+        </>
+      );
+    }
+    render(<Page />);
+    const input = await screen.findByTestId('edit-input');
+    input.focus();
+    act(() => {
+      narrow = true;
+      for (const listener of listeners) listener({ matches: true });
+    });
+    // No sheet over the dialog: the layout stays wide, and the dialog keeps its focus.
+    expect(screen.getByTestId('md-detail').className).toContain('md-detail-pane');
+    expect(screen.queryAllByRole('dialog')).toHaveLength(1);
+    expect(document.activeElement).toBe(input);
+
+    fireEvent.keyDown(screen.getByTestId('edit-dialog'), { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByTestId('edit-dialog')).toBeNull());
+    // Once the dialog is gone the detail opens in the sheet.
+    const sheet = await screen.findByTestId('md-detail');
+    expect(sheet.getAttribute('role')).toBe('dialog');
+    expect(screen.getByTestId('the-detail')).toBeTruthy();
+  });
+
+  it('closes an anchored confirmation open at the crossing, then opens the sheet (legacy 483)', async () => {
+    let narrow = false;
+    const listeners = new Set<(event: { matches: boolean }) => void>();
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn(() => ({
+        get matches() {
+          return narrow;
+        },
+        media: '',
+        addEventListener: (_: string, listener: (event: { matches: boolean }) => void) =>
+          listeners.add(listener),
+        removeEventListener: (_: string, listener: (event: { matches: boolean }) => void) =>
+          listeners.delete(listener),
+      })),
+    );
+    function Detail() {
+      const [confirming, setConfirming] = useState(true);
+      return (
+        <PopoverPrimitive.Root open={confirming} onOpenChange={setConfirming}>
+          <PopoverPrimitive.Anchor asChild>
+            <button type="button">Discard</button>
+          </PopoverPrimitive.Anchor>
+          <PopoverPrimitive.Portal>
+            <PopoverPrimitive.Content data-testid="confirm">
+              <input data-testid="reason" />
+            </PopoverPrimitive.Content>
+          </PopoverPrimitive.Portal>
+        </PopoverPrimitive.Root>
+      );
+    }
+    render(
+      <MasterDetail
+        list={<div>list</div>}
+        detail={<Detail />}
+        open={true}
+        onClose={vi.fn()}
+        sheetTitle="Detail"
+        detailTestId="md-detail"
+      />,
+    );
+    const reason = (await screen.findByTestId('reason')) as HTMLInputElement;
+    reason.focus();
+    fireEvent.change(reason, { target: { value: 'half a reason' } });
+    act(() => {
+      narrow = true;
+      for (const listener of listeners) listener({ matches: true });
+    });
+    // The layout change moves its anchor and it is not placed again (#767 P3-3): it closes, and
+    // the detail opens in the sheet rather than over it.
+    await waitFor(() => expect(screen.queryByTestId('confirm')).toBeNull());
+    const sheet = await screen.findByTestId('md-detail');
+    await waitFor(() => expect(sheet.getAttribute('role')).toBe('dialog'));
+  });
+
+  it('on a window too narrow for the wide layout, closes an anchored confirmation and opens the sheet (#767 P3-2)', async () => {
+    vi.stubGlobal('innerWidth', 390);
+    let narrow = false;
+    const listeners = new Set<(event: { matches: boolean }) => void>();
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn(() => ({
+        get matches() {
+          return narrow;
+        },
+        media: '',
+        addEventListener: (_: string, listener: (event: { matches: boolean }) => void) =>
+          listeners.add(listener),
+        removeEventListener: (_: string, listener: (event: { matches: boolean }) => void) =>
+          listeners.delete(listener),
+      })),
+    );
+    function Detail() {
+      const [confirming, setConfirming] = useState(true);
+      return (
+        <PopoverPrimitive.Root open={confirming} onOpenChange={setConfirming}>
+          <PopoverPrimitive.Anchor asChild>
+            <button type="button">Discard</button>
+          </PopoverPrimitive.Anchor>
+          <PopoverPrimitive.Portal>
+            <PopoverPrimitive.Content data-testid="confirm">
+              <input data-testid="reason" />
+            </PopoverPrimitive.Content>
+          </PopoverPrimitive.Portal>
+        </PopoverPrimitive.Root>
+      );
+    }
+    render(
+      <MasterDetail
+        list={<div>list</div>}
+        detail={<Detail />}
+        open={true}
+        onClose={vi.fn()}
+        sheetTitle="Detail"
+        detailTestId="md-detail"
+      />,
+    );
+    (await screen.findByTestId('reason')).focus();
+    act(() => {
+      narrow = true;
+      for (const listener of listeners) listener({ matches: true });
+    });
+    // No 2px-wide detail pane holding an anchor off the screen: the confirmation closes, and the
+    // detail opens in the sheet.
+    await waitFor(() => expect(screen.queryByTestId('confirm')).toBeNull());
+    const sheet = await screen.findByTestId('md-detail');
+    await waitFor(() => expect(sheet.getAttribute('role')).toBe('dialog'));
   });
 });
