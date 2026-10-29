@@ -4,6 +4,8 @@ import {
   deprecateProcedure,
   deprecateSkill,
   getSkill,
+  latestPublishedProcedures,
+  latestPublishedSkills,
   listProcedures,
   listSkills,
   procedureDraftDigest,
@@ -103,6 +105,23 @@ const deprecateSkillHandler: CapabilityHandler = async (client, workspaceId, par
   };
 };
 
+/** The ids of a page's draft rows — whose family's published version, if any, is `inUse`. */
+function draftIdsOf(rows: readonly { readonly id: string; readonly status: string }[]): string[] {
+  return rows.filter((row) => row.status === 'draft').map((row) => row.id);
+}
+
+/** UX acceptance of #764 (P2-1): a draft row with its family's latest published version, the one in
+ *  use until the draft is published; a published row, or a family with none, as it is. */
+function withInUse<Row extends { readonly id: string; readonly status: string }, Wire>(
+  wire: Wire,
+  row: Row,
+  inUse: ReadonlyMap<string, Row>,
+  toWire: (row: Row) => Wire,
+): Wire | (Wire & { readonly inUse: Wire }) {
+  const published = row.status === 'draft' ? inUse.get(row.id) : undefined;
+  return published ? { ...wire, inUse: toWire(published) } : wire;
+}
+
 /** Review #493 on #764 (F1): a draft carries the digest `publish_skill` takes back. */
 function toWireSkillSummary(row: SkillRow) {
   return {
@@ -124,9 +143,13 @@ const listSkillsHandler: CapabilityHandler = async (client, workspaceId, params,
   const { limit, cursor } = params as { limit?: number; cursor?: string };
   const viewer = await draftViewerOf(client, workspaceId, ctx);
   const page = await listSkills(client, workspaceId, viewer, { limit, cursor });
+  // UX acceptance of #764 (P2-1): a draft row names the version in use beside it.
+  const inUse = await latestPublishedSkills(client, workspaceId, draftIdsOf(page.items));
   return {
     result: {
-      items: page.items.map(toWireSkillSummary),
+      items: page.items.map((row) =>
+        withInUse(toWireSkillSummary(row), row, inUse, toWireSkillSummary),
+      ),
       ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
       ...(page.truncated !== undefined ? { truncated: page.truncated } : {}),
     },
@@ -135,9 +158,9 @@ const listSkillsHandler: CapabilityHandler = async (client, workspaceId, params,
 
 // S8 W1-C (leftover 48 "无 get_skill"): the full-body counterpart to `listSkillsHandler` above.
 const getSkillHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
-  const { skillId } = params as { skillId: string };
+  const { skillId, version } = params as { skillId: string; version?: number };
   const viewer = await draftViewerOf(client, workspaceId, ctx);
-  const row = await getSkill(client, workspaceId, viewer, skillId);
+  const row = await getSkill(client, workspaceId, viewer, skillId, version);
   if (!row) return { result: null, resourceType: 'skill', resourceId: skillId };
   return {
     result: {
@@ -248,9 +271,12 @@ const listProceduresHandler: CapabilityHandler = async (client, workspaceId, par
   const { limit, cursor } = params as { limit?: number; cursor?: string };
   const viewer = await draftViewerOf(client, workspaceId, ctx);
   const page = await listProcedures(client, workspaceId, viewer, { limit, cursor });
+  const inUse = await latestPublishedProcedures(client, workspaceId, draftIdsOf(page.items));
   return {
     result: {
-      items: page.items.map(toWireProcedureSummary),
+      items: page.items.map((row) =>
+        withInUse(toWireProcedureSummary(row), row, inUse, toWireProcedureSummary),
+      ),
       ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
       ...(page.truncated !== undefined ? { truncated: page.truncated } : {}),
     },

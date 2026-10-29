@@ -587,6 +587,25 @@ export interface ProceduresPage {
   readonly truncated?: true;
 }
 
+/** As `skills.ts`'s `latestPublishedSkills` (UX acceptance of #764, P2-1): each of
+ *  `procedureIds`' latest published version — the one a goal made from it uses
+ *  (`getPublishedProcedure` without a version) — keyed by id; `list_procedures` attaches it to a
+ *  draft row as `inUse`. */
+export async function latestPublishedProcedures(
+  client: PoolClient,
+  workspaceId: string,
+  procedureIds: readonly string[],
+): Promise<ReadonlyMap<string, ProcedureRow>> {
+  if (procedureIds.length === 0) return new Map();
+  const result = await client.query<ProcedureDbRow>(
+    `select distinct on (id) ${SELECT_COLUMNS} from procedures
+     where workspace_id = $1 and id = any($2::uuid[]) and status = 'published'
+     order by id, version desc`,
+    [workspaceId, procedureIds],
+  );
+  return new Map(result.rows.map((row) => [row.id, mapRow(row)]));
+}
+
 /** `list_procedures` — same "published, or a draft the viewer may see" predicate as `skills.ts`'s
  *  `listSkills` (I16 read-privacy with D-26's reviewer rule, `draftVisibleTo`; see that function's
  *  own doc comment), and the same keyset-page shape. */

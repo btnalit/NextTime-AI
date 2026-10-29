@@ -73,7 +73,7 @@ export type EntryTemplateUpgradeWire = z.infer<typeof EntryTemplateUpgradeWireSc
  *  subset of `SkillRow`: no `markdown`/`createdAt`/`publishedAt`/`publishedBy`). `proposedBy` (the
  *  proposer's principal id) lets the owner and builders, who see every draft (D-26 rule,
  *  application/worker/draft-visibility.ts), tell whose draft they are reviewing. */
-export const SkillSummaryWireSchema = z
+const SkillSummaryBaseWireSchema = z
   .object({
     id: z.string(),
     version: z.number().int().positive(),
@@ -90,6 +90,14 @@ export const SkillSummaryWireSchema = z
     draftDigest: z.string().optional(),
   })
   .strict();
+
+/** UX acceptance of #764 (P2-1): a `list_skills` row is the latest version the reader sees, so to
+ *  the owner and builders a family with a pending draft lists as that draft. `inUse` is then the
+ *  family's latest published version — the one Workers mount until the draft is published; absent
+ *  when the row is itself published, or nothing earlier is. */
+export const SkillSummaryWireSchema = SkillSummaryBaseWireSchema.extend({
+  inUse: SkillSummaryBaseWireSchema.optional(),
+}).strict();
 export type SkillSummaryWire = z.infer<typeof SkillSummaryWireSchema>;
 
 /** `get_skill`'s result (S8 W1-C, leftover 48 "无 get_skill" — Skill "编辑" needs the full body to
@@ -120,7 +128,7 @@ export const SkillPublishResultWireSchema = SkillSummaryWireSchema.pick({
 
 /** `list_procedures` item shape (skill-procedure-handlers.ts's `listProceduresHandler`).
  *  `proposedBy`: as on `SkillSummaryWireSchema`. */
-export const ProcedureSummaryWireSchema = z
+const ProcedureSummaryBaseWireSchema = z
   .object({
     id: z.string(),
     version: z.number().int().positive(),
@@ -135,6 +143,12 @@ export const ProcedureSummaryWireSchema = z
     draftDigest: z.string().optional(),
   })
   .strict();
+
+/** As `SkillSummaryWire.inUse`: on a draft row, the family's latest published version — the one a
+ *  goal made from this Procedure uses until the draft is published. */
+export const ProcedureSummaryWireSchema = ProcedureSummaryBaseWireSchema.extend({
+  inUse: ProcedureSummaryBaseWireSchema.optional(),
+}).strict();
 export type ProcedureSummaryWire = z.infer<typeof ProcedureSummaryWireSchema>;
 
 export const ProcedureProposeResultWireSchema = ProcedureSummaryWireSchema.pick({

@@ -286,6 +286,9 @@ export interface SkillRow {
    *  discarded and proposed again under the same version since is refused (409 `draft_changed`),
    *  not published in place of the one reviewed. Absent on a published / deprecated row. */
   readonly draftDigest?: string;
+  /** UX acceptance of #764 (P2-1): on a draft row, the family's latest published version — the one
+   *  Workers mount until the draft is published. */
+  readonly inUse?: Omit<SkillRow, 'inUse'>;
 }
 
 /** `list_procedures` (same handler file, `listProceduresHandler`) — verified. */
@@ -303,6 +306,8 @@ export interface ProcedureRow {
   readonly proposedBy?: string;
   /** As `SkillRow.draftDigest`, for `publish_procedure`. */
   readonly draftDigest?: string;
+  /** As `SkillRow.inUse`: the version a goal made from it uses until the draft is published. */
+  readonly inUse?: Omit<ProcedureRow, 'inUse'>;
 }
 
 // -------------------------------------------------------------------------------------------

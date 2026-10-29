@@ -341,6 +341,94 @@ describe.runIf(DATABASE_URL !== undefined)(
         });
       });
 
+      it('UX acceptance of #764 (P2-1): the draft row names the version in use (inUse); get_skill{version} reads it; a member sees the published row', async () => {
+        const skill = {
+          name: `in-use-skill-${randomUUID().slice(0, 8)}`,
+          description: 'Version one, in use.',
+          markdown: '# One',
+        };
+        const v1 = await call<{ id: string; draftDigest: string }>(
+          builderId,
+          'builder',
+          'propose_skill',
+          { skill },
+        );
+        await call(builderId, 'builder', 'publish_skill', {
+          skillId: v1.id,
+          version: 1,
+          draftDigest: v1.draftDigest,
+        });
+        // A published row names no other version.
+        expect(await listedSkill(ownerId, 'owner', v1.id)).not.toHaveProperty('inUse');
+        await call(builderId, 'builder', 'propose_skill', {
+          skill: { ...skill, description: 'Version two, pending.', markdown: '# Two' },
+          skillId: v1.id,
+        });
+
+        for (const [principalId, role] of [
+          [ownerId, 'owner'],
+          [otherBuilderId, 'builder'],
+        ] as const) {
+          expect(await listedSkill(principalId, role, v1.id)).toMatchObject({
+            version: 2,
+            status: 'draft',
+            inUse: {
+              id: v1.id,
+              version: 1,
+              status: 'published',
+              description: 'Version one, in use.',
+            },
+          });
+        }
+        const inUse = await call<{ version: number; status: string; markdown: string } | null>(
+          ownerId,
+          'owner',
+          'get_skill',
+          { skillId: v1.id, version: 1 },
+        );
+        expect(inUse).toMatchObject({ version: 1, status: 'published', markdown: '# One' });
+        expect(
+          await call(ownerId, 'owner', 'get_skill', { skillId: v1.id, version: 3 }),
+        ).toBeNull();
+
+        const asMember = await listedSkill(memberId, 'member', v1.id);
+        expect(asMember).toMatchObject({ version: 1, status: 'published' });
+        expect(asMember).not.toHaveProperty('inUse');
+        // A member may not read the draft by its version either.
+        expect(
+          await call(memberId, 'member', 'get_skill', { skillId: v1.id, version: 2 }),
+        ).toBeNull();
+      });
+
+      it('UX acceptance of #764 (P2-1): a Procedure draft row names the version in use', async () => {
+        const procedure = {
+          name: `in-use-procedure-${randomUUID().slice(0, 8)}`,
+          description: 'v1',
+          steps: [{ kind: 'approval', description: 'A human approves the change.' }],
+        };
+        const v1 = await call<{ id: string; draftDigest: string }>(
+          builderId,
+          'builder',
+          'propose_procedure',
+          { procedure },
+        );
+        await call(builderId, 'builder', 'publish_procedure', {
+          procedureId: v1.id,
+          version: 1,
+          draftDigest: v1.draftDigest,
+        });
+        await call(builderId, 'builder', 'propose_procedure', {
+          procedure: { ...procedure, description: 'v2' },
+          procedureId: v1.id,
+        });
+        expect(await listedProcedure(ownerId, 'owner', v1.id)).toMatchObject({
+          version: 2,
+          status: 'draft',
+          inUse: { version: 1, status: 'published', description: 'v1', steps: procedure.steps },
+        });
+        expect(await listedProcedure(memberId, 'member', v1.id)).not.toHaveProperty('inUse');
+      });
+
       it('a member’s Worker-proposed draft blocks a builder’s next version too — the builder sees that draft', async () => {
         const skillId = await workerProposedSkillOfMember();
         const detail = await call<{ name: string }>(builderId, 'builder', 'get_skill', { skillId });

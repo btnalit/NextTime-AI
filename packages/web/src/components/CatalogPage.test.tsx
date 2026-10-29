@@ -2592,9 +2592,157 @@ describe('CatalogPage editors (S6-A A2)', () => {
     expect(banner.getAttribute('data-error-code')).toBe('draft_pending');
     expect(banner.textContent).toContain('先发布或丢弃那份草稿');
     fireEvent.click(within(banner).getByTestId('skill-show-pending-draft'));
-    const shown = await screen.findByTestId('skill-detail');
-    await waitFor(() => expect(within(shown).getByText('v4')).toBeTruthy());
+    await waitFor(() =>
+      expect(within(screen.getByTestId('skill-detail')).getByText('v4')).toBeTruthy(),
+    );
+    const shown = screen.getByTestId('skill-detail');
     expect(within(shown).queryByTestId('catalog-edit-as-draft')).toBeNull();
+    // UX acceptance of #764 (P3-1): focus lands on the draft's title.
+    await waitFor(() =>
+      expect(document.activeElement).toBe(shown.querySelector('.catalog-detail-title')),
+    );
+  });
+
+  // UX acceptance of #764 (P2-1): a family with a pending draft lists as that draft, so the
+  // published version still in use is named beside it and opens read-only from it.
+  const ownerWorkspace = () => ({
+    id: 'ws-1',
+    name: 'Acme',
+    createdAt: '2026-01-01T00:00:00Z',
+    principalCount: 1,
+    gatekeeperCount: 0,
+    caller: { id: 'p-1', role: 'owner', displayName: 'Owner', kind: 'human' },
+  });
+
+  it('Skills (UX acceptance of #764, P2-1): a draft names the version in use, which opens read-only and leads back', async () => {
+    const draft = {
+      ...publishedSkill,
+      version: 4,
+      status: 'draft',
+      proposedBy: 'p-1',
+      draftDigest: 'sha256:v4',
+      inUse: { ...publishedSkill, proposedBy: 'p-1' },
+    };
+    const http = scriptedHttp({
+      get_workspace: ownerWorkspace,
+      list_skills: () => ({ items: [draft] }),
+      get_skill: (params) =>
+        (params as { version?: number }).version === 3
+          ? skillDetail(publishedSkill)
+          : {
+              ...skillDetail(publishedSkill),
+              version: 4,
+              status: 'draft',
+              markdown: '# Steps\n\n1. restart\n2. check',
+            },
+    });
+    renderPage(http, 'skills');
+    const row = await screen.findByTestId('catalog-row');
+    expect(within(row).getByTestId('catalog-row-in-use').textContent).toBe(
+      'v3 已发布（在用）· v4 草稿待发布',
+    );
+    await selectRow(row);
+
+    const draftDetail = await screen.findByTestId('skill-detail');
+    expect(within(draftDetail).getByTestId('skill-detail-in-use-note').textContent).toMatch(
+      /已发布的 v3 仍在用：Worker 挂载的是它，这份草稿 v4 发布后才改用新版本/,
+    );
+    await waitFor(() =>
+      expect(within(draftDetail).getByRole('button', { name: /^发布$/ })).toBeTruthy(),
+    );
+    await waitFor(() =>
+      expect(within(draftDetail).getByTestId('skill-detail-body').textContent).toMatch(/check/),
+    );
+
+    fireEvent.click(within(draftDetail).getByTestId('skill-detail-open-in-use'));
+    const inUseDetail = await screen.findByTestId('skill-detail-pending-draft-note');
+    expect(inUseDetail.textContent).toMatch(
+      /这是在用的 v3（只读）。这个 Skill 还有一份待发布的草稿 v4/,
+    );
+    const v3 = screen.getByTestId('skill-detail');
+    expect(within(v3).getByText('v3')).toBeTruthy();
+    await waitFor(() =>
+      expect(within(v3).getByTestId('skill-detail-body').textContent).not.toMatch(/check/),
+    );
+    expect(http.calls.filter((c) => c.name === 'get_skill').map((c) => c.params)).toEqual(
+      expect.arrayContaining([
+        { skillId: 'sk-1', version: 4 },
+        { skillId: 'sk-1', version: 3 },
+      ]),
+    );
+    // Read-only: the draft is what is acted on.
+    expect(within(v3).queryByRole('button', { name: /^发布$/ })).toBeNull();
+    expect(within(v3).queryByTestId('skill-discard-confirm-sk-1')).toBeNull();
+    expect(within(v3).queryByTestId('skill-deprecate-confirm-sk-1')).toBeNull();
+    expect(within(v3).queryByTestId('catalog-edit-as-draft')).toBeNull();
+    expect(within(v3).queryByTestId('catalog-save-as-new')).toBeNull();
+    // UX acceptance of #764 (P3-1): the version opened takes focus on its title.
+    expect(document.activeElement).toBe(v3.querySelector('.catalog-detail-title'));
+
+    fireEvent.click(within(v3).getByTestId('skill-detail-open-draft'));
+    const back = await screen.findByTestId('skill-detail-in-use-note');
+    const v4 = screen.getByTestId('skill-detail');
+    expect(v4.contains(back)).toBe(true);
+    expect(within(v4).getByText('v4')).toBeTruthy();
+    expect(within(v4).getByRole('button', { name: /^发布$/ })).toBeTruthy();
+    expect(document.activeElement).toBe(v4.querySelector('.catalog-detail-title'));
+  });
+
+  it('Procedures (UX acceptance of #764, P2-1): a draft names the version in use, which opens read-only and leads back', async () => {
+    const inUse = {
+      id: 'pr-1',
+      version: 2,
+      status: 'published',
+      name: 'Deploy',
+      description: 'Deploy web',
+      proposedBy: 'p-1',
+      steps: [{ kind: 'approval', description: 'A human approves.' }],
+    };
+    const draft = {
+      ...inUse,
+      version: 3,
+      status: 'draft',
+      description: 'Deploy web, then verify',
+      draftDigest: 'sha256:v3',
+      steps: [...inUse.steps, { kind: 'verify', description: 'The site answers.' }],
+      inUse,
+    };
+    const http = scriptedHttp({
+      get_workspace: ownerWorkspace,
+      list_procedures: () => ({ items: [draft] }),
+    });
+    renderPage(http, 'procedures');
+    const row = await screen.findByTestId('catalog-row');
+    expect(within(row).getByTestId('catalog-row-in-use').textContent).toBe(
+      'v2 已发布（在用）· v3 草稿待发布',
+    );
+    await selectRow(row);
+
+    const draftDetail = await screen.findByTestId('procedure-detail');
+    expect(within(draftDetail).getByTestId('procedure-detail-in-use-note').textContent).toMatch(
+      /已发布的 v2 仍在用：从这个流程发起的目标用的是它，这份草稿 v3 发布后才改用新版本/,
+    );
+    expect(within(draftDetail).getByText('Deploy web, then verify')).toBeTruthy();
+
+    fireEvent.click(within(draftDetail).getByTestId('procedure-detail-open-in-use'));
+    const note = await screen.findByTestId('procedure-detail-pending-draft-note');
+    expect(note.textContent).toMatch(/这是在用的 v2（只读）。这个流程还有一份待发布的草稿 v3/);
+    const v2 = screen.getByTestId('procedure-detail');
+    expect(within(v2).getByText('v2')).toBeTruthy();
+    expect(within(v2).getByText('Deploy web')).toBeTruthy();
+    expect(within(v2).queryByText('The site answers.')).toBeNull();
+    expect(within(v2).queryByRole('button', { name: /^发布$/ })).toBeNull();
+    expect(within(v2).queryByTestId('procedure-discard-confirm-pr-1')).toBeNull();
+    expect(within(v2).queryByTestId('procedure-deprecate-confirm-pr-1')).toBeNull();
+    expect(within(v2).queryByTestId('catalog-edit-as-draft')).toBeNull();
+    expect(within(v2).queryByTestId('catalog-save-as-new')).toBeNull();
+    expect(document.activeElement).toBe(v2.querySelector('.catalog-detail-title'));
+
+    fireEvent.click(within(v2).getByTestId('procedure-detail-open-draft'));
+    const v3 = await screen.findByTestId('procedure-detail');
+    await waitFor(() => expect(within(v3).getByText('v3')).toBeTruthy());
+    expect(within(v3).getByTestId('procedure-detail-in-use-note')).toBeTruthy();
+    expect(document.activeElement).toBe(v3.querySelector('.catalog-detail-title'));
   });
 
   it('Procedures: "Edit as new draft version" proposes under the same procedureId; the name may change', async () => {

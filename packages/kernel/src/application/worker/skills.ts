@@ -735,28 +735,51 @@ export async function listSkills(
  *  body included — same read predicate as `listSkills` (published, or a draft `viewer` may see:
  *  their own, or any for the owner and builders — `draftVisibleTo`); `null` for an unknown id or
  *  a draft the viewer may not see (never distinguished — same "not found" convention
- *  `listSkills`'s own doc comment already established for this predicate). */
+ *  `listSkills`'s own doc comment already established for this predicate). `version` (UX
+ *  acceptance of #764, P2-1) reads that version instead — the published one a draft row's
+ *  `inUse` names — under the same predicate. */
 export async function getSkill(
   client: PoolClient,
   workspaceId: string,
   viewer: DraftViewer,
   skillId: string,
+  version?: number,
 ): Promise<SkillRow | null> {
   const visibility = draftVisibilityBinds(viewer);
   const result = await client.query<SkillDbRow>(
     `select ${SELECT_COLUMNS} from skills
      where workspace_id = $1
        and id = $2
+       and ($5::int is null or version = $5)
        and (
          status = 'published'
          or (status = 'draft' and ($4::boolean or proposed_by = $3))
        )
      order by version desc
      limit 1`,
-    [workspaceId, skillId, visibility.principalId, visibility.seesEveryDraft],
+    [workspaceId, skillId, visibility.principalId, visibility.seesEveryDraft, version ?? null],
   );
   const row = result.rows[0];
   return row ? mapRow(row) : null;
+}
+
+/** UX acceptance of #764 (P2-1): each of `skillIds`' latest published version — what Workers mount
+ *  (`resolvePublishedSkills`) — keyed by id; an id with none is absent. `list_skills` attaches it to
+ *  a draft row as `inUse`, so a family with a pending draft still shows the version in use.
+ *  Published rows are every reader's, so no draft predicate applies. */
+export async function latestPublishedSkills(
+  client: PoolClient,
+  workspaceId: string,
+  skillIds: readonly string[],
+): Promise<ReadonlyMap<string, SkillRow>> {
+  if (skillIds.length === 0) return new Map();
+  const result = await client.query<SkillDbRow>(
+    `select distinct on (id) ${SELECT_COLUMNS} from skills
+     where workspace_id = $1 and id = any($2::uuid[]) and status = 'published'
+     order by id, version desc`,
+    [workspaceId, skillIds],
+  );
+  return new Map(result.rows.map((row) => [row.id, mapRow(row)]));
 }
 
 /** Every currently-published Skill's own `id` (workspace-wide, no draft mixing — unlike

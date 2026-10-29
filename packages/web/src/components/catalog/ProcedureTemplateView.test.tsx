@@ -182,6 +182,21 @@ describe('ProcedureTemplateView (S11 GO5d-2)', () => {
     ]);
   });
 
+  it('UX acceptance of #764 (P3-2): a next-version draft with a binding problem is fixed on the version in use, not copied into a new Procedure', () => {
+    render(
+      <ProcedureTemplateView
+        http={http()}
+        status="draft"
+        steps={[{ ...worker, bindings: [{ to: 'skus', from: 'missing', path: 'skus' }] }]}
+        parameters={null}
+        inUseVersion={2}
+      />,
+    );
+    const issues = screen.getByTestId('procedure-template-issues').textContent ?? '';
+    expect(issues).toMatch(/请丢弃这份草稿，再在已发布的 v2 上用「编辑（新版本草稿）」/);
+    expect(issues).not.toMatch(/另存为新的流程/);
+  });
+
   it('a step it cannot read is shown as it is', () => {
     render(
       <ProcedureTemplateView

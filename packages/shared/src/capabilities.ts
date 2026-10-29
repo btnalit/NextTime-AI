@@ -1457,7 +1457,9 @@ const metaCapabilities = [
     description:
       'List published Skills plus the draft Skills the caller may see — their own, or every ' +
       'draft for the owner and builders (D-26 rule, I16) — latest version per id, newest first, ' +
-      'each with its proposedBy; keyset-paginated (limit, cursor → nextCursor).',
+      'each with its proposedBy; a draft row also carries inUse, the family’s latest published ' +
+      'version (the one Workers mount until the draft is published), when there is one; ' +
+      'keyset-paginated (limit, cursor → nextCursor).',
   },
   {
     // S8 W1-C (leftover 48 "list_skills 无 markdown / 无 get_skill" — Skill "编辑" needs the full
@@ -1468,12 +1470,16 @@ const metaCapabilities = [
     mode: 'observe',
     channel: 'handle',
     minRole: 'member',
-    paramsSchema: z.object({ skillId: id }).strict(),
+    // UX acceptance of #764 (P2-1): `version` reads that version — the published one a draft row's
+    // `inUse` names — instead of the latest; same read rule.
+    paramsSchema: z
+      .object({ skillId: id, version: z.number().int().positive().optional() })
+      .strict(),
     resultSchema: wire.SkillDetailWireSchema.nullable(),
     description:
-      'Read one Skill (latest version) with its full markdown body — same read rule as ' +
-      'list_skills (published, or a draft the caller may see); null for an unknown id or a ' +
-      'draft the caller may not see.',
+      'Read one Skill (latest version, or the version named) with its full markdown body — same ' +
+      'read rule as list_skills (published, or a draft the caller may see); null for an unknown ' +
+      'id or version, or a draft the caller may not see.',
   },
   {
     name: 'list_procedures',
@@ -1489,8 +1495,10 @@ const metaCapabilities = [
     description:
       'List published Procedures plus the draft Procedures the caller may see — their own, or ' +
       'every draft for the owner and builders (D-26 rule, I16) — latest version per id, newest ' +
-      'first, each with its proposedBy and its parameters schema (null: it takes none); ' +
-      'keyset-paginated (limit, cursor → nextCursor).',
+      'first, each with its proposedBy and its parameters schema (null: it takes none); a draft ' +
+      'row also carries inUse, the family’s latest published version (the one a goal made from ' +
+      'it uses until the draft is published), when there is one; keyset-paginated (limit, ' +
+      'cursor → nextCursor).',
   },
   {
     // S3.3: real handler (`application/gateway/fact-handlers.ts`'s `assertFactHandler`), replacing

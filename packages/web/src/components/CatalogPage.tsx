@@ -1635,6 +1635,89 @@ function ProposerOnlyHint({ action }: { readonly action: ProposerOnlyAction }) {
   );
 }
 
+/**
+ * UX acceptance of #764 (P2-1): a family with a pending draft lists as that draft (the latest
+ * version the owner and builders see), so the published version still in use is named beside it:
+ * on the draft, which version stays in use until it is published, with a way to open it; on that
+ * version (opened from the draft, read-only), the draft waiting beside it, with the way back.
+ */
+function FamilyVersionNote({
+  kind,
+  draftVersion,
+  inUseVersion,
+  showing,
+  onOpen,
+}: {
+  readonly kind: 'skill' | 'procedure';
+  readonly draftVersion: number;
+  readonly inUseVersion: number;
+  /** Which of the two this detail shows. */
+  readonly showing: 'draft' | 'inUse';
+  readonly onOpen: () => void;
+}) {
+  const t = useT();
+  if (showing === 'draft') {
+    return (
+      <Notice testId={`${kind}-detail-in-use-note`}>
+        <p>
+          {kind === 'skill'
+            ? t(
+                `已发布的 v${inUseVersion} 仍在用：Worker 挂载的是它，这份草稿 v${draftVersion} 发布后才改用新版本。`,
+                `Published v${inUseVersion} is still in use: Workers mount it until this draft, v${draftVersion}, is published.`,
+              )
+            : t(
+                `已发布的 v${inUseVersion} 仍在用：从这个流程发起的目标用的是它，这份草稿 v${draftVersion} 发布后才改用新版本。`,
+                `Published v${inUseVersion} is still in use: goals made from this Procedure use it until this draft, v${draftVersion}, is published.`,
+              )}
+        </p>
+        <Button
+          variant="ghost"
+          size="s"
+          onClick={onOpen}
+          data-testid={`${kind}-detail-open-in-use`}
+        >
+          {t(`查看在用的 v${inUseVersion}`, `See v${inUseVersion}, the one in use`)}
+        </Button>
+      </Notice>
+    );
+  }
+  return (
+    <Notice testId={`${kind}-detail-pending-draft-note`}>
+      <p>
+        {kind === 'skill'
+          ? t(
+              `这是在用的 v${inUseVersion}（只读）。这个 Skill 还有一份待发布的草稿 v${draftVersion}。`,
+              `This is v${inUseVersion}, the one in use (read-only). This Skill also has a draft, v${draftVersion}, waiting to be published.`,
+            )
+          : t(
+              `这是在用的 v${inUseVersion}（只读）。这个流程还有一份待发布的草稿 v${draftVersion}。`,
+              `This is v${inUseVersion}, the one in use (read-only). This Procedure also has a draft, v${draftVersion}, waiting to be published.`,
+            )}
+      </p>
+      <Button variant="ghost" size="s" onClick={onOpen} data-testid={`${kind}-detail-open-draft`}>
+        {t(`回到草稿 v${draftVersion}`, `Back to draft v${draftVersion}`)}
+      </Button>
+    </Notice>
+  );
+}
+
+/** UX acceptance of #764 (P2-1): a list row's version line — the draft and the version in use
+ *  beside it when there is one. */
+function familyVersionLine(
+  row: { readonly version: number; readonly inUse?: { readonly version: number } },
+  t: Translate,
+): ReactNode {
+  if (!row.inUse) return `v${row.version}`;
+  return (
+    <span data-testid="catalog-row-in-use">
+      {t(
+        `v${row.inUse.version} 已发布（在用）· v${row.version} 草稿待发布`,
+        `v${row.inUse.version} published (in use) · v${row.version} draft pending`,
+      )}
+    </span>
+  );
+}
+
 function SkillDetailView({
   http,
   row,
@@ -1645,6 +1728,9 @@ function SkillDetailView({
   canDiscard,
   busy,
   credentialReview,
+  versionNote,
+  focusTitle,
+  onTitleFocused,
   onEditAsNewVersion,
   onSaveAsNew,
   onPublish,
@@ -1652,7 +1738,7 @@ function SkillDetailView({
   onDiscard,
 }: {
   readonly http: CapabilityCaller;
-  readonly row: SkillRow;
+  readonly row: Omit<SkillRow, 'inUse'>;
   readonly canPropose: boolean;
   readonly canPublish: boolean;
   readonly canDeprecate: boolean;
@@ -1661,6 +1747,12 @@ function SkillDetailView({
   readonly canDiscard: boolean;
   readonly busy: boolean;
   readonly credentialReview: PublishCredentialReview;
+  /** UX acceptance of #764 (P2-1): `FamilyVersionNote`, or nothing. */
+  readonly versionNote: ReactNode;
+  /** UX acceptance of #764 (P3-1): the detail opened from 「查看那份草稿」 or a version note takes
+   *  focus on its title; `onTitleFocused` clears the request. */
+  readonly focusTitle: boolean;
+  readonly onTitleFocused: () => void;
   /** 「编辑（新版本草稿）」: the next version of this Skill (published rows only). */
   readonly onEditAsNewVersion: () => void;
   /** 「另存为新的 Skill」: a copy proposed as a new Skill. */
@@ -1674,7 +1766,19 @@ function SkillDetailView({
   // rather than blocking the rest of the detail (same convention `get_operation_stats` uses on the
   // Operations tab above). `get_skill` already exists and is already called from this same file
   // for the copy-prefill flow (`SkillEditor.tsx`); this is a second, read-only call site of it.
-  const skillDetail = useCapability<SkillDetailWire | null>(http, 'get_skill', { skillId: row.id });
+  // UX acceptance of #764 (P2-1): the version this detail shows — the published one in use, opened
+  // beside a pending draft, is not the latest.
+  const skillDetail = useCapability<SkillDetailWire | null>(http, 'get_skill', {
+    skillId: row.id,
+    version: row.version,
+  });
+  const titleRef = useRef<HTMLElement>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only a new request moves focus.
+  useEffect(() => {
+    if (!focusTitle) return;
+    titleRef.current?.focus();
+    onTitleFocused();
+  }, [focusTitle]);
   const items: KeyValueItem[] = [
     { key: 'description', label: t('描述', 'Description'), value: row.description },
   ];
@@ -1705,7 +1809,9 @@ function SkillDetailView({
       <header className="stack-s">
         <div className="row-wrap">
           <StatusChip machine="publishable" status={row.status} size="s" />
-          <strong className="catalog-detail-title wrap-anywhere">{row.name}</strong>
+          <strong ref={titleRef} tabIndex={-1} className="catalog-detail-title wrap-anywhere">
+            {row.name}
+          </strong>
           <span className="text-3 text-small">v{row.version}</span>
         </div>
         {row.status === 'published' ? (
@@ -1717,6 +1823,8 @@ function SkillDetailView({
         ) : null}
         <PublishableStepper status={row.status} testId="skill-detail-stepper" />
       </header>
+
+      {versionNote}
 
       <KeyValue items={items} />
 
@@ -1798,9 +1906,14 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   const { role, principalId } = useWorkspaceIdentity(http);
   const [busy, setBusy] = useState<string | null>(null);
   const [editor, setEditor] = useState<EditorState<SkillRow>>(null);
+  // UX acceptance of #764 (P2-1): the family whose version in use is open instead of its draft.
+  const [inUseOf, setInUseOf] = useState<string | null>(null);
+  // UX acceptance of #764 (P3-1): the family whose detail title takes focus when it shows.
+  const [focusFamily, setFocusFamily] = useState<string | null>(null);
 
   const rows = skills.state.status === 'ready' ? skills.state.data.items : [];
   const selected = itemId ? rows.find((row) => row.id === itemId) : undefined;
+  const shown = selected?.inUse && inUseOf === selected.id ? selected.inUse : selected;
   const credentialReview = usePublishCredentialReview(
     selected ? `${selected.id}@${selected.version}` : null,
   );
@@ -1821,6 +1934,7 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
 
   function selectRow(id: string | null): void {
     setEditor(null);
+    setInUseOf(null);
     onSelectItem(id);
   }
 
@@ -1831,10 +1945,17 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
 
   /** S11 W1a E2-0: a next version was refused because the family's latest version is still a
    *  draft (409 draft_pending) — reload the list (that draft may be newer than it) and show the
-   *  family, whose row is now that draft. */
+   *  family, whose row is now that draft, with focus on its title (UX acceptance of #764, P3-1). */
   function showFamily(id: string): void {
+    setFocusFamily(id);
     selectRow(id);
     refresh();
+  }
+
+  /** UX acceptance of #764 (P2-1): between a pending draft and the version in use beside it. */
+  function showInUse(id: string, inUse: boolean): void {
+    setFocusFamily(id);
+    setInUseOf(inUse ? id : null);
   }
 
   async function act(row: SkillRow, action: 'publish_skill' | 'deprecate_skill') {
@@ -1982,7 +2103,7 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
                   <StatusChip machine="publishable" status={row.status} size="s" />
                 </span>
                 <span className="truncate text-3">
-                  v{row.version} · {row.description}
+                  {familyVersionLine(row, t)} · {row.description}
                 </span>
               </ListRow>
             ))}
@@ -2020,6 +2141,37 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
 
   const detailContent = showEditor ? (
     editorPane
+  ) : selected && shown && shown !== selected ? (
+    // UX acceptance of #764 (P2-1): the version in use, opened from its family's draft — read-only;
+    // the draft is what is acted on.
+    <SkillDetailView
+      key={`${shown.id}@${shown.version}`}
+      http={http}
+      row={shown}
+      canPropose={false}
+      canPublish={false}
+      canDeprecate={false}
+      proposerOnly={null}
+      canDiscard={false}
+      busy={false}
+      credentialReview={credentialReview}
+      versionNote={
+        <FamilyVersionNote
+          kind="skill"
+          draftVersion={selected.version}
+          inUseVersion={shown.version}
+          showing="inUse"
+          onOpen={() => showInUse(selected.id, false)}
+        />
+      }
+      focusTitle={focusFamily === selected.id}
+      onTitleFocused={() => setFocusFamily(null)}
+      onEditAsNewVersion={() => undefined}
+      onSaveAsNew={() => undefined}
+      onPublish={async () => undefined}
+      onDeprecate={async () => undefined}
+      onDiscard={async () => undefined}
+    />
   ) : selected ? (
     <SkillDetailView
       // Review #493 on #764 (F1): another draft under the same version is another detail — its
@@ -2035,6 +2187,19 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       canDiscard={canDiscard && isOwnDraftOrUnknown(selected, principalId)}
       busy={busy === selected.id}
       credentialReview={credentialReview}
+      versionNote={
+        selected.inUse ? (
+          <FamilyVersionNote
+            kind="skill"
+            draftVersion={selected.version}
+            inUseVersion={selected.inUse.version}
+            showing="draft"
+            onOpen={() => showInUse(selected.id, true)}
+          />
+        ) : null
+      }
+      focusTitle={focusFamily === selected.id}
+      onTitleFocused={() => setFocusFamily(null)}
       onEditAsNewVersion={() => openEditor({ kind: 'version', row: selected })}
       onSaveAsNew={() => openEditor({ kind: 'copy', row: selected })}
       onPublish={() => act(selected, 'publish_skill')}
@@ -2083,6 +2248,10 @@ function ProcedureDetailView({
   busy,
   credentialReview,
   publishProblems,
+  versionNote,
+  inUseVersion,
+  focusTitle,
+  onTitleFocused,
   onEditAsNewVersion,
   onSaveAsNew,
   onPublish,
@@ -2090,7 +2259,7 @@ function ProcedureDetailView({
   onDiscard,
 }: {
   readonly http: CapabilityCaller;
-  readonly row: ProcedureRow;
+  readonly row: Omit<ProcedureRow, 'inUse'>;
   readonly canPropose: boolean;
   readonly canPublish: boolean;
   readonly canDeprecate: boolean;
@@ -2102,6 +2271,13 @@ function ProcedureDetailView({
   /** Why the kernel refused the last publish of this version, as a template (UX acceptance of
    *  #722), or `null`. */
   readonly publishProblems: readonly string[] | null;
+  /** As `SkillDetailView`'s. */
+  readonly versionNote: ReactNode;
+  /** On a draft, the family's version in use (UX acceptance of #764, P3-2: a template problem is
+   *  fixed on it, not by copying the draft into a new Procedure). */
+  readonly inUseVersion: number | undefined;
+  readonly focusTitle: boolean;
+  readonly onTitleFocused: () => void;
   /** 「编辑（新版本草稿）」: the next version of this Procedure (published rows only). */
   readonly onEditAsNewVersion: () => void;
   /** 「另存为新的流程」: a copy proposed as a new Procedure. */
@@ -2111,12 +2287,21 @@ function ProcedureDetailView({
   readonly onDiscard: (reason: string | undefined) => Promise<void>;
 }) {
   const t = useT();
+  const titleRef = useRef<HTMLElement>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only a new request moves focus.
+  useEffect(() => {
+    if (!focusTitle) return;
+    titleRef.current?.focus();
+    onTitleFocused();
+  }, [focusTitle]);
   return (
     <div className="stack" data-testid="procedure-detail" data-procedure-id={row.id}>
       <header className="stack-s">
         <div className="row-wrap">
           <StatusChip machine="publishable" status={row.status} size="s" />
-          <strong className="catalog-detail-title wrap-anywhere">{row.name}</strong>
+          <strong ref={titleRef} tabIndex={-1} className="catalog-detail-title wrap-anywhere">
+            {row.name}
+          </strong>
           <span className="text-3 text-small">v{row.version}</span>
           {row.steps ? (
             <span className="tag">
@@ -2126,6 +2311,8 @@ function ProcedureDetailView({
         </div>
         <PublishableStepper status={row.status} testId="procedure-detail-stepper" />
       </header>
+
+      {versionNote}
 
       <KeyValue
         items={[
@@ -2142,6 +2329,7 @@ function ProcedureDetailView({
         status={row.status}
         steps={row.steps ?? []}
         parameters={row.parameters}
+        inUseVersion={inUseVersion}
       />
 
       {canPublish && row.status === 'draft' ? (
@@ -2213,6 +2401,9 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   const { role, principalId } = useWorkspaceIdentity(http);
   const [busy, setBusy] = useState<string | null>(null);
   const [editor, setEditor] = useState<EditorState<ProcedureRow>>(null);
+  // UX acceptance of #764 (P2-1, P3-1): as the Skills tab's.
+  const [inUseOf, setInUseOf] = useState<string | null>(null);
+  const [focusFamily, setFocusFamily] = useState<string | null>(null);
   // UX acceptance of #722 (P2-1): the last publish refusal as a template, by `id@version`.
   const [publishRefusal, setPublishRefusal] = useState<{
     readonly version: string;
@@ -2221,6 +2412,7 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
 
   const rows = procedures.state.status === 'ready' ? procedures.state.data.items : [];
   const selected = itemId ? rows.find((row) => row.id === itemId) : undefined;
+  const shown = selected?.inUse && inUseOf === selected.id ? selected.inUse : selected;
   const selectedVersion = selected ? `${selected.id}@${selected.version}` : null;
   const credentialReview = usePublishCredentialReview(selectedVersion);
   const publishProblems =
@@ -2241,6 +2433,7 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
 
   function selectRow(id: string | null): void {
     setEditor(null);
+    setInUseOf(null);
     onSelectItem(id);
   }
 
@@ -2251,10 +2444,17 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
 
   /** S11 W1a E2-0: a next version was refused because the family's latest version is still a
    *  draft (409 draft_pending) — reload the list (that draft may be newer than it) and show the
-   *  family, whose row is now that draft. */
+   *  family, whose row is now that draft, with focus on its title (UX acceptance of #764, P3-1). */
   function showFamily(id: string): void {
+    setFocusFamily(id);
     selectRow(id);
     refresh();
+  }
+
+  /** UX acceptance of #764 (P2-1): between a pending draft and the version in use beside it. */
+  function showInUse(id: string, inUse: boolean): void {
+    setFocusFamily(id);
+    setInUseOf(inUse ? id : null);
   }
 
   async function act(row: ProcedureRow, action: 'publish_procedure' | 'deprecate_procedure') {
@@ -2416,7 +2616,7 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
                   <StatusChip machine="publishable" status={row.status} size="s" />
                 </span>
                 <span className="truncate text-3">
-                  v{row.version} · {row.description}
+                  {familyVersionLine(row, t)} · {row.description}
                 </span>
               </ListRow>
             ))}
@@ -2454,8 +2654,41 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
 
   const detailContent = showEditor ? (
     editorPane
+  ) : selected && shown && shown !== selected ? (
+    // UX acceptance of #764 (P2-1): as the Skills tab's — the version in use, read-only.
+    <ProcedureDetailView
+      key={`${shown.id}@${shown.version}`}
+      http={http}
+      row={shown}
+      canPropose={false}
+      canPublish={false}
+      canDeprecate={false}
+      proposerOnly={null}
+      canDiscard={false}
+      busy={false}
+      credentialReview={credentialReview}
+      publishProblems={null}
+      versionNote={
+        <FamilyVersionNote
+          kind="procedure"
+          draftVersion={selected.version}
+          inUseVersion={shown.version}
+          showing="inUse"
+          onOpen={() => showInUse(selected.id, false)}
+        />
+      }
+      inUseVersion={undefined}
+      focusTitle={focusFamily === selected.id}
+      onTitleFocused={() => setFocusFamily(null)}
+      onEditAsNewVersion={() => undefined}
+      onSaveAsNew={() => undefined}
+      onPublish={async () => undefined}
+      onDeprecate={async () => undefined}
+      onDiscard={async () => undefined}
+    />
   ) : selected ? (
     <ProcedureDetailView
+      key={`${selected.id}@${selected.version}`}
       http={http}
       row={selected}
       canPropose={canPropose}
@@ -2466,6 +2699,20 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       busy={busy === selected.id}
       credentialReview={credentialReview}
       publishProblems={publishProblems}
+      versionNote={
+        selected.inUse ? (
+          <FamilyVersionNote
+            kind="procedure"
+            draftVersion={selected.version}
+            inUseVersion={selected.inUse.version}
+            showing="draft"
+            onOpen={() => showInUse(selected.id, true)}
+          />
+        ) : null
+      }
+      inUseVersion={selected.inUse?.version}
+      focusTitle={focusFamily === selected.id}
+      onTitleFocused={() => setFocusFamily(null)}
       onEditAsNewVersion={() => openEditor({ kind: 'version', row: selected })}
       onSaveAsNew={() => openEditor({ kind: 'copy', row: selected })}
       onPublish={() => act(selected, 'publish_procedure')}
