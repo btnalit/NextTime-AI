@@ -1426,4 +1426,73 @@ describe('ProcedureEditor (S6-A A2)', () => {
     expect(input.value).toBe('restart');
     expect(screen.queryByTestId('procedure-step-unknown-operation')).toBeNull();
   });
+
+  describe('a step runs on a Worker, never on an entry definition (legacy 485)', () => {
+    const DEFINITIONS = [
+      {
+        id: 'wd-1',
+        version: 1,
+        kind: 'worker',
+        status: 'published',
+        definition: { name: 'Fixer' },
+      },
+      { id: 'en-1', version: 1, kind: 'entry', status: 'published', definition: {} },
+    ];
+    const copyNaming = (definitionId: string) => ({
+      id: 'pr-1',
+      version: 1,
+      status: 'published',
+      name: 'One',
+      description: 'One step',
+      steps: [{ kind: 'worker', definitionId, version: 1, key: 'only', input: {} }],
+    });
+    const optionTexts = (select: HTMLElement) =>
+      [...(select as HTMLSelectElement).options].map((option) => option.textContent ?? '');
+
+    it('offers only Worker definitions', () => {
+      const { caller } = http({});
+      render(
+        <ProcedureEditor
+          http={caller}
+          copyOf={copyNaming('wd-1')}
+          workerDefinitions={DEFINITIONS}
+          onProposed={vi.fn()}
+          onDone={vi.fn()}
+        />,
+      );
+      const step = screen.getByTestId('procedure-step');
+      const options = optionTexts(within(step).getByLabelText(/Worker 定义/));
+      expect(options).toEqual(['选择一个 Worker 定义…', 'Fixer']);
+      expect(options.some((text) => text.includes('入口'))).toBe(false);
+      expect(within(step).queryByText(/入口定义不能作为流程步骤/)).toBeNull();
+    });
+
+    it('a step that already names one says so on the field and is not proposed', async () => {
+      const { caller, calls } = http({});
+      render(
+        <ProcedureEditor
+          http={caller}
+          copyOf={copyNaming('en-1')}
+          workerDefinitions={DEFINITIONS}
+          onProposed={vi.fn()}
+          onDone={vi.fn()}
+        />,
+      );
+      const step = screen.getByTestId('procedure-step');
+      const select = within(step).getByLabelText(/Worker 定义/) as HTMLSelectElement;
+      expect(select.value).toBe('en-1');
+      expect(select.selectedOptions[0]?.textContent).toBe('入口 agent（不能作为流程步骤）');
+      expect(optionTexts(select).filter((text) => text.startsWith('入口'))).toHaveLength(1);
+      expect(within(step).getByText(/入口定义不能作为流程步骤/)).toBeTruthy();
+
+      fireEvent.click(screen.getByTestId('procedure-submit'));
+      await waitFor(() => expect(document.activeElement).toBe(select));
+      expect(within(step).getAllByText(/入口定义不能作为流程步骤/)).toHaveLength(1);
+      expect(calls.some((call) => call.name === 'propose_procedure')).toBe(false);
+
+      fireEvent.change(select, { target: { value: 'wd-1' } });
+      expect(within(step).queryByText(/入口定义不能作为流程步骤/)).toBeNull();
+      expect(optionTexts(select).some((text) => text.includes('入口'))).toBe(false);
+    });
+  });
 });

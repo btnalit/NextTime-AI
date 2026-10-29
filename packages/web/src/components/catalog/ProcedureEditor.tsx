@@ -22,7 +22,7 @@ import type { CapabilityCaller } from '../../lib/clients.js';
 import { reviewFieldNames } from '../../lib/credential-review.js';
 import { describeError, isForbiddenError } from '../../lib/errors.js';
 import type { GatekeeperListRow, ProcedureRow } from '../../lib/governance.js';
-import { useT } from '../../lib/i18n.js';
+import { type Translate, useT } from '../../lib/i18n.js';
 import {
   parsedProcedureParameters,
   parsedProcedureSteps,
@@ -34,6 +34,7 @@ import type { WorkerDefinitionSummary } from '../../lib/tasks.js';
 import {
   definitionVersions,
   latestPerDefinition,
+  unnamedDefinitionLabel,
   versionOptionText,
   workerDefinitionChoices,
 } from '../../lib/tasks.js';
@@ -117,6 +118,15 @@ export function ProcedureEditor({
   const [error, setError] = useState<unknown | null>(null);
   const [proposed, setProposed] = useState<ProposedDraft | null>(null);
   const content = useMemo(() => procedureContentFromForm(form), [form]);
+  // Legacy 485: a step can only run a `kind='worker'` definition (the kernel's `invoke.ts` and
+  // `step-attempt.ts` refuse an entry one), so only Workers are offered; the entry definitions
+  // stay in `workerDefinitions` so a step that already names one says what it is.
+  const workerRows = useMemo(
+    () => workerDefinitions?.filter((row) => row.kind === 'worker'),
+    [workerDefinitions],
+  );
+  const kindOf = (definitionId: string) =>
+    workerDefinitions?.find((row) => row.id === definitionId)?.kind;
   // Legacy 453: the Procedure as the plan it would make — what a binding can already be told.
   const context = useMemo<ProcedurePlanContext>(() => {
     const parsed = parsedProcedureSteps(content.steps as readonly unknown[]);
@@ -193,9 +203,19 @@ export function ProcedureEditor({
     event.preventDefault();
     if (busy) return;
     const validated = validateProcedure(form, t);
-    if (!validated.ok) {
-      setErrors(validated.errors);
+    // Legacy 485: a step naming an entry definition is refused here, not when it runs; its field
+    // already says why (live, so it clears once another definition is picked).
+    const entryStep = form.steps.findIndex(
+      (step) => step.kind === 'worker' && kindOf(step.definitionId) === 'entry',
+    );
+    if (!validated.ok || entryStep !== -1) {
+      setErrors(validated.ok ? {} : validated.errors);
       setView('form');
+      if (entryStep !== -1) {
+        focusAfterRender(() =>
+          formRef.current?.querySelector<HTMLElement>(`[id="steps.${entryStep}-definition"]`),
+        );
+      }
       return;
     }
     setErrors({});
@@ -465,7 +485,10 @@ export function ProcedureEditor({
                         id={`${prefix}-definition`}
                         label={t('Worker 定义', 'definitionId')}
                         required
-                        error={fieldError('definitionId')}
+                        error={
+                          fieldError('definitionId') ??
+                          (kindOf(step.definitionId) === 'entry' ? entryStepText(t) : null)
+                        }
                       >
                         {workerDefinitions && workerDefinitions.length > 0 ? (
                           <Select
@@ -486,7 +509,21 @@ export function ProcedureEditor({
                             <option value="">
                               {t('选择一个 Worker 定义…', 'Choose a Worker definition…')}
                             </option>
-                            {workerDefinitionChoices(latestPerDefinition(workerDefinitions), t).map(
+                            {step.definitionId !== '' &&
+                            !workerRows?.some((row) => row.id === step.definitionId) ? (
+                              <option value={step.definitionId}>
+                                {kindOf(step.definitionId) === 'entry'
+                                  ? t(
+                                      `${unnamedDefinitionLabel('entry', t)}（不能作为流程步骤）`,
+                                      `${unnamedDefinitionLabel('entry', t)} (cannot be a step)`,
+                                    )
+                                  : t(
+                                      '当前的 Worker 定义（不在已发布列表里）',
+                                      'The current Worker definition (not among the published)',
+                                    )}
+                              </option>
+                            ) : null}
+                            {workerDefinitionChoices(latestPerDefinition(workerRows ?? []), t).map(
                               (choice) => (
                                 <option key={choice.id} value={choice.id}>
                                   {[choice.label, choice.distinguisher]
@@ -705,5 +742,13 @@ export function ProcedureEditor({
         </Button>
       </div>
     </form>
+  );
+}
+
+/** Legacy 485: why a step cannot name an entry definition. */
+function entryStepText(t: Translate): string {
+  return t(
+    '入口定义不能作为流程步骤：流程的步骤只能交给 Worker 执行，请换一个 Worker 定义。',
+    'An entry definition cannot be a step: a Procedure step runs on a Worker. Choose a Worker definition.',
   );
 }
