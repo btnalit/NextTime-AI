@@ -139,6 +139,7 @@ const PURGE_COUNT_LABELS = {
   changeItems: { zh: '安装记录里的改动项', en: 'Install record changes' },
   changeSegments: { zh: '安装记录', en: 'Install records' },
   connectionRequests: { zh: '连接申请', en: 'Connection requests' },
+  draftRejections: { zh: '草稿被拒绝的记录', en: 'Draft rejections' },
   gatekeeperPolicies: { zh: '按门的审批策略', en: 'Per-gate approval policies' },
   llmUsage: { zh: '模型用量记录', en: 'Model usage records' },
   ontologyVersions: { zh: '本体版本', en: 'Ontology versions' },

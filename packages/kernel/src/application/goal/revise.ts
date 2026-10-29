@@ -169,7 +169,7 @@ export async function reviseGoalRun(
     );
   }
   const revision = counts.next;
-  const plan = await validatePlan(client, workspaceId, submitted);
+  const plan = await validatePlan(client, workspaceId, submitted, goal.onBehalfOf);
 
   const steps = await lockStepRuns(client, workspaceId, goal.id);
   const { superseded, kept } = await splitSteps(client, workspaceId, goal.id, steps, plan);

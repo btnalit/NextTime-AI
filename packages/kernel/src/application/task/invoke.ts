@@ -503,10 +503,12 @@ export async function invokeWorkerCreate(
     deps.pool,
     { workspaceId, principalId: caller.principalId },
     (client) =>
-      requirePublishedWorkerDefinition(client, workspaceId, {
-        definitionId: input.definitionId,
-        version: input.version,
-      }),
+      requirePublishedWorkerDefinition(
+        client,
+        workspaceId,
+        { definitionId: input.definitionId, version: input.version },
+        caller.principalId,
+      ),
   );
 
   if (definition.kind !== 'worker') {

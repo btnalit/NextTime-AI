@@ -291,6 +291,47 @@ describe.runIf(DATABASE_URL !== undefined)('resolve_refs (integration, real Post
     expect(result.items).toHaveLength(4);
   });
 
+  it('legacy 492: a WorkerDefinition draft resolves only for its proposer', async () => {
+    const { familyId, draftOnlyId } = await withWorkspace(
+      pool,
+      { workspaceId, principalId: ownerId },
+      async (client) => {
+        const v1 = await proposeWorkerDefinition(client, workspaceId, ownerId, {
+          kind: 'worker',
+          definition: { systemPrompt: 'Do the thing.', name: 'published-name' },
+        });
+        await publishWorkerDefinition(client, workspaceId, ownerId, {
+          definitionId: v1.id,
+          version: v1.version,
+        });
+        await proposeWorkerDefinition(client, workspaceId, ownerId, {
+          definitionId: v1.id,
+          kind: 'worker',
+          definition: { systemPrompt: 'Do it better.', name: 'draft-name' },
+        });
+        const draftOnly = await proposeWorkerDefinition(client, workspaceId, ownerId, {
+          kind: 'worker',
+          definition: { systemPrompt: 'Not yet.', name: 'private-draft' },
+        });
+        return { familyId: v1.id, draftOnlyId: draftOnly.id };
+      },
+    );
+    const namesFor = async (caller: ResolvedCaller) => {
+      const result = (await dispatchCapability({ pool }, caller, 'resolve_refs', {
+        ids: [familyId, draftOnlyId],
+      })) as { items: readonly ResolvedRefRow[] };
+      return Object.fromEntries(result.items.map((item) => [item.id, item.name]));
+    };
+
+    expect(await namesFor(humanCaller(workspaceId, ownerId, 'owner'))).toEqual({
+      [familyId]: 'draft-name',
+      [draftOnlyId]: 'private-draft',
+    });
+    expect(await namesFor(humanCaller(workspaceId, memberId, 'member'))).toEqual({
+      [familyId]: 'published-name',
+    });
+  });
+
   it('actionRequest: I14-visible to a principal holding a matching grant, invisible to one that does not', async () => {
     const gatekeeperId = await adminRegisterGatekeeper('gate-i14');
     const actionRequestId = await adminInsertActionRequest(gatekeeperId, 'test.i14_action');

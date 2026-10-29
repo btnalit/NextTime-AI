@@ -7,9 +7,11 @@ import {
   assertReviewedDraft,
   seesEveryDraft,
 } from '../../governance/capability/index.js';
+import { redactedForAudit } from '../../governance/redaction/index.js';
 import { writeAudit } from '../../substrate/audit/index.js';
 import { OntologyDraftNotFoundError } from '../../substrate/ontology/index.js';
 import { WorkerDefinitionNotFoundError } from './definitions.js';
+import { recordDraftRejection } from './draft-rejections.js';
 import {
   ProcedureNotFoundError,
   getProcedure,
@@ -268,7 +270,9 @@ export class DraftNotRejectableError extends DraftNotDiscardableError {
  * it (a reviewer sees every Skill / Procedure draft, D-26; anyone else gets the same not-found as
  * for no row), it is a draft (`DraftNotRejectableError`), the actor may reject it (403
  * `not_proposer`), and it is the draft reviewed (`reviewedDraftDigest`, 409 `draft_changed`).
- * Nothing is written before all four hold.
+ * Nothing is written before all four hold. Then the row is deleted and, in the same transaction,
+ * the rejection recorded for the draft's proposer (legacy 491, `draft-rejections.ts`): its name,
+ * and `reason` as the AuditRecord keeps it (`redactedForAudit`).
  */
 export async function rejectDraft(
   client: PoolClient,
@@ -276,6 +280,7 @@ export async function rejectDraft(
   actor: PublishActor,
   ref: RejectableDraftRef,
   reviewedDraftDigest: string,
+  reason: string,
 ): Promise<RejectedDraft> {
   if (ref.kind === 'skill') await lockWorkerRegistry(client, workspaceId);
   else await lockProcedureFamily(client, workspaceId, ref.id);
@@ -296,13 +301,19 @@ export async function rejectDraft(
     subject,
     actor,
   });
-  assertReviewedDraft(
-    'reject_draft',
-    subject,
-    reviewedDraftDigest,
-    await draftDigestOf(client, workspaceId, ref),
-  );
+  const draftDigest = await draftDigestOf(client, workspaceId, ref);
+  assertReviewedDraft('reject_draft', subject, reviewedDraftDigest, draftDigest);
   await deleteDraftRow(client, workspaceId, ref);
+  await recordDraftRejection(client, workspaceId, {
+    kind: ref.kind,
+    familyId: ref.id,
+    version: ref.version,
+    name: row.name,
+    proposedBy: row.proposed_by,
+    rejectedBy: actor.principalId,
+    reason: String(redactedForAudit({ reason }).reason),
+    draftDigest,
+  });
   return {
     kind: ref.kind,
     id: ref.id,

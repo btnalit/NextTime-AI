@@ -774,5 +774,138 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(again.version).toBe(2);
       });
     });
+
+    describe('list_draft_rejections (legacy 491): the reason reaches the draft’s proposer', () => {
+      /** Synthetic — `.gitleaks.toml` allows fixtures spelled out from the alphabet. */
+      const FAKE = 'abcdefghijklmnopqrstuvwxyz0123';
+
+      type Rejection = {
+        kind: string;
+        id: string;
+        version: number;
+        name: string | null;
+        reason: string;
+        rejectedBy: string;
+        rejectedAt: string;
+      };
+      const rejectionsOf = async (
+        principalId: string,
+        role: Role,
+        id: string,
+        kind?: 'skill' | 'procedure',
+      ) => {
+        const listed = await call<{ items: Rejection[] }>(
+          principalId,
+          role,
+          'list_draft_rejections',
+          kind !== undefined ? { kind } : {},
+        );
+        return listed.items.filter((item) => item.id === id);
+      };
+
+      it('the proposer of a rejected next version reads which, who, when and why; nobody else does', async () => {
+        const skill = {
+          name: `rejected-${randomUUID().slice(0, 8)}`,
+          description: 'One.',
+          markdown: '# One',
+        };
+        const v1 = await call<{ id: string; draftDigest: string }>(
+          builderId,
+          'builder',
+          'propose_skill',
+          { skill },
+        );
+        await call(builderId, 'builder', 'publish_skill', {
+          skillId: v1.id,
+          version: 1,
+          draftDigest: v1.draftDigest,
+        });
+        const v2 = await call<{ draftDigest: string }>(otherBuilderId, 'builder', 'propose_skill', {
+          skill: { ...skill, markdown: '# Two' },
+          skillId: v1.id,
+        });
+        const before = Date.now();
+        await call(builderId, 'builder', 'reject_draft', {
+          kind: 'skill',
+          id: v1.id,
+          version: 2,
+          draftDigest: v2.draftDigest,
+          reason: `Step two repeats step one; and drop PGPASSWORD=${FAKE} from it.`,
+        });
+
+        const [rejection, ...more] = await rejectionsOf(otherBuilderId, 'builder', v1.id);
+        expect(more).toEqual([]);
+        expect(rejection).toMatchObject({
+          kind: 'skill',
+          id: v1.id,
+          version: 2,
+          name: skill.name,
+          rejectedBy: builderId,
+        });
+        expect(rejection?.reason).toMatch(/^Step two repeats step one; and drop PGPASSWORD=/);
+        expect(rejection?.reason).not.toContain(FAKE);
+        expect(Date.parse(rejection?.rejectedAt ?? '')).toBeGreaterThanOrEqual(before - 1000);
+        // Neither the reviewer nor the owner proposed it.
+        expect(await rejectionsOf(builderId, 'builder', v1.id)).toEqual([]);
+        expect(await rejectionsOf(ownerId, 'owner', v1.id)).toEqual([]);
+        // The stored copy is the audit's: the secret never lands in the table.
+        const stored = await withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerId },
+          async (client) =>
+            (
+              await client.query<{ reason: string; draft_digest: string }>(
+                'select reason, draft_digest from draft_rejections where workspace_id = $1 and family_id = $2',
+                [workspaceId, v1.id],
+              )
+            ).rows,
+        );
+        expect(stored).toHaveLength(1);
+        expect(stored[0]?.reason).not.toContain(FAKE);
+        expect(stored[0]?.draft_digest).toBe(v2.draftDigest);
+      });
+
+      it('a member reads the rejection of a Skill their Worker proposed; kind narrows; an agent cannot read it', async () => {
+        const skillId = await workerProposedSkillOfMember();
+        const draftDigest = await reviewedSkillDigest(ownerId, 'owner', skillId);
+        await call(ownerId, 'owner', 'reject_draft', {
+          kind: 'skill',
+          id: skillId,
+          version: 1,
+          draftDigest,
+          reason: 'We already have one.',
+        });
+
+        expect(await rejectionsOf(memberId, 'member', skillId)).toEqual([
+          expect.objectContaining({
+            kind: 'skill',
+            version: 1,
+            reason: 'We already have one.',
+            rejectedBy: ownerId,
+          }),
+        ]);
+        expect(await rejectionsOf(memberId, 'member', skillId, 'skill')).toHaveLength(1);
+        expect(await rejectionsOf(memberId, 'member', skillId, 'procedure')).toEqual([]);
+        expect(await rejectionsOf(otherMemberId, 'member', skillId)).toEqual([]);
+        await expect(
+          dispatchCapability({ pool }, handleCaller(memberId), 'list_draft_rejections', {}),
+        ).rejects.toBeInstanceOf(ForbiddenError);
+      });
+
+      it('a refused rejection records nothing', async () => {
+        const skillId = await workerProposedSkillOfMember();
+        const draftDigest = await reviewedSkillDigest(ownerId, 'owner', skillId);
+        await expect(
+          call(builderId, 'builder', 'reject_draft', {
+            kind: 'skill',
+            id: skillId,
+            version: 1,
+            draftDigest,
+            reason: 'No.',
+          }),
+        ).rejects.toThrow(NotProposerError);
+        expect(await rejectionsOf(memberId, 'member', skillId)).toEqual([]);
+      });
+    });
   },
 );

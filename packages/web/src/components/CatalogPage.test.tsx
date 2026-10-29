@@ -15,6 +15,8 @@ afterEach(cleanup);
 const EDITOR_SUGGESTION_READS: Record<string, unknown> = {
   list_available_gate_instances: { items: [] },
   list_types: { items: [] },
+  // Legacy 491: 「被拒绝的草稿」 under the Skills / Procedures list — none unless a test says so.
+  list_draft_rejections: { items: [] },
 };
 
 function scriptedHttp(
@@ -2001,6 +2003,70 @@ describe('CatalogPage', () => {
     fireEvent.click(within(drawer).getByTestId('worker-submit'));
     await within(drawer).findByTestId('draft-proposed');
     expect(http.calls.some((c) => c.name === 'propose_worker_definition')).toBe(true);
+  });
+
+  it('legacy 491: my rejected drafts show under the Skills and Procedures lists, even an empty one; 刷新 reads them again', async () => {
+    let skillRejections: unknown[] = [];
+    const http = scriptedHttp({
+      // The read is held until the role is known (a member here).
+      get_workspace: () => ({
+        id: 'ws-1',
+        name: 'Acme',
+        createdAt: '2026-01-01T00:00:00Z',
+        principalCount: 2,
+        gatekeeperCount: 0,
+        caller: { id: 'p-member', role: 'member', displayName: 'Member', kind: 'human' },
+      }),
+      list_skills: () => ({ items: [] }),
+      list_procedures: () => ({ items: [] }),
+      list_draft_rejections: (params) =>
+        (params as { kind: string }).kind === 'skill'
+          ? { items: skillRejections }
+          : {
+              items: [
+                {
+                  kind: 'procedure',
+                  id: 'pr-9',
+                  version: 1,
+                  name: 'rotate-logs',
+                  reason: 'Duplicates the nightly job.',
+                  rejectedBy: 'p-owner',
+                  rejectedAt: new Date().toISOString(),
+                },
+              ],
+            },
+      resolve_refs: () => ({ items: [{ kind: 'principal', id: 'p-owner', name: 'Owner' }] }),
+    });
+    renderPage(http, 'skills');
+    await screen.findByTestId('catalog-empty');
+    await waitFor(() =>
+      expect(http.calls.some((c) => c.name === 'list_draft_rejections')).toBe(true),
+    );
+    expect(screen.queryByTestId('skill-rejected-drafts')).toBeNull();
+
+    skillRejections = [
+      {
+        kind: 'skill',
+        id: 'sk-9',
+        version: 2,
+        name: 'diagnose-net',
+        reason: 'Step two repeats step one.',
+        rejectedBy: 'p-owner',
+        rejectedAt: new Date().toISOString(),
+      },
+    ];
+    fireEvent.click(screen.getByRole('button', { name: '刷新' }));
+    const item = await screen.findByTestId('skill-rejected-drafts-item');
+    expect(item.textContent).toContain('diagnose-net');
+    expect(item.textContent).toContain('原因：');
+    expect(item.textContent).toContain('Step two repeats step one.');
+
+    fireEvent.click(screen.getByRole('tab', { name: /流程/ }));
+    const procedure = await screen.findByTestId('procedure-rejected-drafts-item');
+    expect(procedure.textContent).toContain('rotate-logs');
+    expect(
+      http.calls.filter((c) => c.name === 'list_draft_rejections').map((c) => c.params),
+    ).toEqual([{ kind: 'skill' }, { kind: 'skill' }, { kind: 'procedure' }]);
   });
 
   // S8 W3 K2 (leftover 82): the Skills/Procedures tabs get the same "丢弃" action inline on a

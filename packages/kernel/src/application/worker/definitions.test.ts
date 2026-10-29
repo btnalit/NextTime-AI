@@ -192,7 +192,21 @@ describe.runIf(DATABASE_URL !== undefined)(
             definition: VALID_WORKER_DEFINITION,
           }),
         );
-        const second = await inTx(otherBuilderId, (client) =>
+        // The proposer's own draft family, then a published one anyone may extend.
+        const own = await inTx(builderId, (client) =>
+          proposeWorkerDefinition(client, workspaceId, builderId, {
+            definitionId: first.id,
+            kind: 'worker',
+            definition: VALID_WORKER_DEFINITION,
+          }),
+        );
+        await inTx(ownerId, (client) =>
+          publishWorkerDefinition(client, workspaceId, ownerId, {
+            definitionId: first.id,
+            version: 1,
+          }),
+        );
+        const third = await inTx(otherBuilderId, (client) =>
           proposeWorkerDefinition(client, workspaceId, otherBuilderId, {
             definitionId: first.id,
             kind: 'worker',
@@ -200,9 +214,68 @@ describe.runIf(DATABASE_URL !== undefined)(
           }),
         );
 
-        expect(second.id).toBe(first.id);
-        expect(second.version).toBe(2);
-        expect(second.proposedBy).toBe(otherBuilderId);
+        expect(own).toMatchObject({ id: first.id, version: 2, proposedBy: builderId });
+        expect(third).toMatchObject({ id: first.id, version: 3, proposedBy: otherBuilderId });
+      });
+
+      it('legacy 492: a family only someone else has drafted is not found, as an id nothing has', async () => {
+        const theirs = await inTx(builderId, (client) =>
+          proposeWorkerDefinition(client, workspaceId, builderId, {
+            kind: 'entry',
+            definition: VALID_ENTRY_DEFINITION,
+          }),
+        );
+        const attempts = [
+          { definitionId: theirs.id, kind: 'entry' as const }, // same kind: no version added to it
+          { definitionId: theirs.id, kind: 'worker' as const }, // other kind: its kind not named
+          { definitionId: randomUUID(), kind: 'worker' as const }, // no family under a chosen id
+        ];
+        const messages: string[] = [];
+        for (const attempt of attempts) {
+          const err = await inTx(otherBuilderId, (client) =>
+            proposeWorkerDefinition(client, workspaceId, otherBuilderId, {
+              ...attempt,
+              definition: VALID_WORKER_DEFINITION,
+            }),
+          ).catch((caught: unknown) => caught);
+          expect(err).toBeInstanceOf(WorkerDefinitionNotFoundError);
+          messages.push((err as Error).message.replace(attempt.definitionId, '<id>'));
+        }
+        expect(new Set(messages).size).toBe(1);
+        expect(messages[0]).not.toMatch(/entry|worker"/);
+
+        const versions = await inTx(ownerId, async (client) => {
+          const result = await client.query<{ id: string; version: number }>(
+            'select id, version from worker_definitions where workspace_id = $1 and id = any($2)',
+            [workspaceId, [theirs.id, attempts[2]?.definitionId]],
+          );
+          return result.rows;
+        });
+        expect(versions).toEqual([{ id: theirs.id, version: 1 }]);
+      });
+
+      it("legacy 492: a pack's install starts its own family, and extends it by every version", async () => {
+        const derived = randomUUID();
+        const started = await inTx(ownerId, (client) =>
+          proposeWorkerDefinition(client, workspaceId, ownerId, {
+            definitionId: derived,
+            onMissingFamily: 'start',
+            kind: 'worker',
+            definition: VALID_WORKER_DEFINITION,
+          }),
+        );
+        expect(started).toMatchObject({ id: derived, version: 1 });
+        // The draft is the owner's own; the install judges the family by every version all the same.
+        await expect(
+          inTx(builderId, (client) =>
+            proposeWorkerDefinition(client, workspaceId, builderId, {
+              definitionId: derived,
+              onMissingFamily: 'start',
+              kind: 'entry',
+              definition: VALID_ENTRY_DEFINITION,
+            }),
+          ),
+        ).rejects.toThrow(WorkerDefinitionKindMismatchError);
       });
 
       it('rejects a kind mismatch against an existing definitionId', async () => {
@@ -349,6 +422,27 @@ describe.runIf(DATABASE_URL !== undefined)(
               definitionId: draft.id,
               version: draft.version,
             }),
+          ),
+        ).rejects.toThrow(WorkerDefinitionNotPublishedError);
+      });
+
+      it('legacy 492: for whom the answer is, a draft not theirs is not found; their own is not published', async () => {
+        const draft = await inTx(builderId, (client) =>
+          proposeWorkerDefinition(client, workspaceId, builderId, {
+            kind: 'worker',
+            definition: VALID_WORKER_DEFINITION,
+          }),
+        );
+        const ref = { definitionId: draft.id, version: draft.version };
+
+        await expect(
+          inTx(otherBuilderId, (client) =>
+            requirePublishedWorkerDefinition(client, workspaceId, ref, otherBuilderId),
+          ),
+        ).rejects.toThrow(WorkerDefinitionNotFoundError);
+        await expect(
+          inTx(builderId, (client) =>
+            requirePublishedWorkerDefinition(client, workspaceId, ref, builderId),
           ),
         ).rejects.toThrow(WorkerDefinitionNotPublishedError);
       });

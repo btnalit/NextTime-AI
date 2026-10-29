@@ -99,8 +99,13 @@ const SELECT_COLUMNS = `workspace_id, id, version, kind, status, definition, pro
 // -------------------------------------------------------------------------------------------
 
 export class WorkerDefinitionNotFoundError extends Error {
-  constructor(workspaceId: string, id: string, version: number) {
-    super(`WorkerDefinition not found: workspace ${workspaceId}, id ${id}, version ${version}`);
+  /** Without `version`: no version of the family `id` is there for the caller (legacy 492). */
+  constructor(workspaceId: string, id: string, version?: number) {
+    super(
+      version === undefined
+        ? `WorkerDefinition not found: workspace ${workspaceId}, id ${id}`
+        : `WorkerDefinition not found: workspace ${workspaceId}, id ${id}, version ${version}`,
+    );
     this.name = 'WorkerDefinitionNotFoundError';
   }
 }
@@ -183,6 +188,14 @@ export interface ProposeWorkerDefinitionInput {
   /** Omit to start a new WorkerDefinition family (a fresh `id`, version 1); given, proposes the
    *  next version under that existing `id`. */
   readonly definitionId?: string;
+  /** What a `definitionId` the proposer sees no version of means (legacy 492). `'not_found'`, the
+   *  default and what the capability handler builds: `WorkerDefinitionNotFoundError`, whether no
+   *  version exists or only another principal's drafts do (I16) — never a fresh family under a
+   *  caller's chosen id, as `propose_skill` / `propose_procedure` (`family-version.ts`).
+   *  `'start'`: version 1 under that id when the family has no version at all; only a pack's
+   *  install passes it (`application/change-plan/family-item.ts` — the pack derives the id), and
+   *  it judges the family by every version, the platform installing rather than a person. */
+  readonly onMissingFamily?: 'not_found' | 'start';
   readonly kind: WorkerDefinitionKind;
   readonly definition: Record<string, unknown>;
 }
@@ -205,8 +218,8 @@ async function nextVersion(
  *  any of its versions — a Procedure's `worker` step (legacy 486) — can be judged by it before that
  *  version is published. `visibleTo` reads the family as that principal sees it (I16: another
  *  principal's draft is not there — a family only drafted by someone else reads `null`, exactly as
- *  an id nothing has); without it, every version counts (`proposeWorkerDefinition` keeps a family's
- *  kind one across proposers). */
+ *  an id nothing has; `proposeWorkerDefinition` reads it so, legacy 492); without it, every version
+ *  counts (a pack's install starting or extending its own family). */
 export async function workerDefinitionFamilyKind(
   client: PoolClient,
   workspaceId: string,
@@ -225,7 +238,13 @@ export async function workerDefinitionFamilyKind(
 
 /** Creates a new `draft` WorkerDefinition version, owned by `proposerPrincipalId` (I16: ownership
  *  is the calling principal by construction — see this module's doc comment). No content
- *  validation happens here — see `publishWorkerDefinition`. */
+ *  validation happens here — see `publishWorkerDefinition`.
+ *
+ *  Legacy 492: a next version goes only under a family the proposer can see — one with a
+ *  published or deprecated version, or a draft of their own. A family only another principal has
+ *  drafted is not there for them (I16), so it answers exactly as an id nothing has: not found, its
+ *  kind never named and no version added to it. A family's kind stays one across proposers: a
+ *  family someone sees has a version they see, and every version of it has its kind. */
 export async function proposeWorkerDefinition(
   client: PoolClient,
   workspaceId: string,
@@ -233,7 +252,16 @@ export async function proposeWorkerDefinition(
   input: ProposeWorkerDefinitionInput,
 ): Promise<WorkerDefinitionRow> {
   if (input.definitionId) {
-    const priorKind = await workerDefinitionFamilyKind(client, workspaceId, input.definitionId);
+    const starts = input.onMissingFamily === 'start';
+    const priorKind = await workerDefinitionFamilyKind(
+      client,
+      workspaceId,
+      input.definitionId,
+      starts ? undefined : proposerPrincipalId,
+    );
+    if (priorKind === null && !starts) {
+      throw new WorkerDefinitionNotFoundError(workspaceId, input.definitionId);
+    }
     if (priorKind && priorKind !== input.kind) {
       throw new WorkerDefinitionKindMismatchError(input.definitionId, priorKind, input.kind);
     }
@@ -462,14 +490,21 @@ export async function getWorkerDefinition(
  *  resolves to a `published` version — the "a Task/Handle may only reference a published version"
  *  rule (docs/development-tasks.md S2.6 acceptance: "引用 draft 被拒"). Exposed for S2.7's
  *  `invoke_worker` (and any other future caller that pins a `(definitionId, version)`) to call
- *  before acting on it. */
+ *  before acting on it.
+ *
+ *  `visibleTo` (legacy 492, the same rule as `proposeWorkerDefinition`): the principal the answer
+ *  is for. Another principal's draft is not there for them (I16), so it is not found, as a version
+ *  nothing has — never `not_published` naming a draft they cannot see. */
 export async function requirePublishedWorkerDefinition(
   client: PoolClient,
   workspaceId: string,
   ref: WorkerDefinitionVersionRef,
+  visibleTo?: string,
 ): Promise<WorkerDefinitionRow> {
   const row = await getWorkerDefinition(client, workspaceId, ref);
-  if (!row) throw new WorkerDefinitionNotFoundError(workspaceId, ref.definitionId, ref.version);
+  if (!row || (visibleTo !== undefined && row.status === 'draft' && row.proposedBy !== visibleTo)) {
+    throw new WorkerDefinitionNotFoundError(workspaceId, ref.definitionId, ref.version);
+  }
   if (row.status !== 'published') {
     throw new WorkerDefinitionNotPublishedError(
       workspaceId,

@@ -322,11 +322,13 @@ function notWorkerKind(
  *  Operation/worker-kind WorkerDefinition (I17: draft/unknown Operation is unclassified, never
  *  usable; legacy 486: no step path runs another kind).
  *  `approval`/`verify` steps produce no target (filtered out of the returned list — see this
- *  module's doc comment). */
+ *  module's doc comment). `publisher` (legacy 492): a WorkerDefinition draft that is not theirs
+ *  reads as not found. */
 async function resolveStepTargets(
   client: PoolClient,
   workspaceId: string,
   steps: readonly ProcedureStep[],
+  publisher: string | undefined,
 ): Promise<readonly ResolvedStepTarget[]> {
   const targets: ResolvedStepTarget[] = [];
   for (const [stepIndex, step] of steps.entries()) {
@@ -354,10 +356,12 @@ async function resolveStepTargets(
     if (step.kind === 'worker') {
       let definition: Awaited<ReturnType<typeof requirePublishedWorkerDefinition>>;
       try {
-        definition = await requirePublishedWorkerDefinition(client, workspaceId, {
-          definitionId: step.definitionId,
-          version: step.version,
-        });
+        definition = await requirePublishedWorkerDefinition(
+          client,
+          workspaceId,
+          { definitionId: step.definitionId, version: step.version },
+          publisher,
+        );
       } catch (err) {
         throw new ProcedureStepReferenceError(
           stepIndex,
@@ -472,7 +476,7 @@ export async function publishProcedure(
     actor,
     { secretFields: true },
   );
-  const targets = await resolveStepTargets(client, workspaceId, row.steps);
+  const targets = await resolveStepTargets(client, workspaceId, row.steps, actor?.principalId);
   if (options.templateProblems && usesPlanTemplateFields(row)) {
     const problems = options.templateProblems(row);
     if (problems.length > 0) {
