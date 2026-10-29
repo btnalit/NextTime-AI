@@ -725,6 +725,16 @@ export const DRAFT_KIND_VALUES = [
 export type DraftKind = (typeof DRAFT_KIND_VALUES)[number];
 export const DraftKindSchema = asEnum(DRAFT_KIND_VALUES);
 
+/**
+ * E2-0b (review #493 on #764, F2): the draft kinds `reject_draft` takes — the two families whose
+ * next version waits on a pending draft (`draft_pending`, S11 W1a E2-0). Rejecting deletes the row
+ * like discard and expiry (no fourth `PublishableStatus` value), by the reviewer rather than the
+ * proposer.
+ */
+export const REJECTABLE_DRAFT_KIND_VALUES = ['skill', 'procedure'] as const;
+export type RejectableDraftKind = (typeof REJECTABLE_DRAFT_KIND_VALUES)[number];
+export const RejectableDraftKindSchema = asEnum(REJECTABLE_DRAFT_KIND_VALUES);
+
 // ---------------------------------------------------------------------------------------------
 // §5.5 CapabilityGrant
 // ---------------------------------------------------------------------------------------------

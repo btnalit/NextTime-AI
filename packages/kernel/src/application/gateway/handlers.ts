@@ -335,6 +335,8 @@ import {
 // S8 W4-C (journey ⑤ 清理验收残留) — same one-capability-per-file convention as
 // graph-freshness-handler.ts above.
 import { platformDraftResidueHandler } from './platform-residue-handler.js';
+// E2-0b (review #493 on #764, F2) — reject_draft, the reviewer's transition beside discard_draft.
+import { rejectDraftHandler } from './reject-draft-handler.js';
 import { observeOperationHandler, requestActionHandler } from './request-action-handler.js';
 import { resolveRefsHandler } from './resolve-refs-handler.js';
 import {
@@ -2400,6 +2402,7 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['propose_entry_template_upgrade', proposeEntryTemplateUpgradeHandler],
   // S8 W3 K2 (leftover 82) — discard-draft-handler.ts.
   ['discard_draft', discardDraftHandler],
+  ['reject_draft', rejectDraftHandler],
   ['assert_fact', assertFactHandler],
   ['supersede_fact', supersedeFactHandler],
   ['invalidate_fact', invalidateFactHandler],

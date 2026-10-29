@@ -21,6 +21,25 @@ export function provenNotProposer(
   return row.proposedBy !== callerPrincipalId;
 }
 
+/**
+ * E2-0b (review #493 on #764, F2): the console's mirror of who may reject a pending Skill /
+ * Procedure draft (`reject_draft`, kernel `application/worker/publish-family.ts`
+ * `assertFamilyRejectAuthority`): the workspace owner, or the proposer of the family's version in
+ * use (the draft row's `inUse`); a family with no version in use is the owner's alone. Proven
+ * only, as `provenNotProposer`: an unknown role, caller, or in-use proposer keeps the control.
+ */
+export function provenNotDraftReviewer(
+  row: { readonly inUse?: { readonly proposedBy?: string | null } },
+  role: WorkspaceRole,
+  callerPrincipalId: string | null,
+): boolean {
+  if (role.kind !== 'known' || role.role === 'owner') return false;
+  if (callerPrincipalId === null) return false;
+  if (row.inUse === undefined) return true;
+  if (typeof row.inUse.proposedBy !== 'string') return false;
+  return row.inUse.proposedBy !== callerPrincipalId;
+}
+
 /** Which withheld action a hint explains. `replace`: an Operation revision draft whose publish
  *  would also deprecate a live version someone else proposed (kernel `publishOperation`). */
 export type ProposerOnlyAction = 'publish' | 'deprecate' | 'replace';

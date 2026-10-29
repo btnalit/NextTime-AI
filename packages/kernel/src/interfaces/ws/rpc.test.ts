@@ -32,6 +32,7 @@ import {
 import { PackNotFoundError } from '../../application/packs/index.js';
 import { TaskRuntimeNotConfiguredError } from '../../application/task/index.js';
 import {
+  DraftNotRejectableError,
   FamilyDraftPendingError,
   SkillFamilyNameChangedError,
   SkillNameConflictError,
@@ -302,6 +303,12 @@ describe('mapDispatchError — error-mapping followup: previously-unmapped S3.1/
   it('ReviewedDraftChangedError (review #493 on #764 F1) maps to ILLEGAL_TRANSITION, like HTTP 409 draft_changed', () => {
     expect(
       mapDispatchError(new ReviewedDraftChangedError('publish_procedure', 'Procedure p-1@2')).code,
+    ).toBe(WS_ERROR_CODES.ILLEGAL_TRANSITION);
+  });
+
+  it('DraftNotRejectableError (reject_draft, E2-0b) maps to ILLEGAL_TRANSITION, like HTTP 409 not_a_draft', () => {
+    expect(
+      mapDispatchError(new DraftNotRejectableError('procedure', 'p-1', 1, 'deprecated')).code,
     ).toBe(WS_ERROR_CODES.ILLEGAL_TRANSITION);
   });
 

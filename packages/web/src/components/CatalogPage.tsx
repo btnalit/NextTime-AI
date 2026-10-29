@@ -53,6 +53,7 @@ import { procedureTemplateProblemText } from '../lib/procedure-template.js';
 import {
   type ProposerOnlyAction,
   proposerOnlyText,
+  provenNotDraftReviewer,
   provenNotProposer,
 } from '../lib/publish-authority.js';
 import { type WorkspaceRole, isProvenMember } from '../lib/role.js';
@@ -811,6 +812,115 @@ function DiscardDraftConfirm({
       testId={testId}
     >
       <DiscardReasonField id={reasonId} value={reason} onChange={setReason} />
+    </Confirm>
+  );
+}
+
+/** E2-0b (review #493 on #764, F2): a reviewer's 「拒绝」 on someone else's pending Skill /
+ *  Procedure draft (`reject_draft`) — the workspace owner, or the proposer of the family's version
+ *  in use, which the draft would supersede. The draft's own proposer discards it instead. Same
+ *  `medium` popover and `danger` styling as `DiscardDraftConfirm` (the row is deleted), but the
+ *  reason is required: it is what the audit keeps of why the draft was turned down. A refusal
+ *  shows in place (`onConfirm` throws), so the reason typed is not lost. */
+function RejectDraftConfirm({
+  kind,
+  busy,
+  target,
+  inUseVersion,
+  onConfirm,
+  testId,
+}: {
+  readonly kind: 'skill' | 'procedure';
+  readonly busy: boolean;
+  readonly target: string;
+  /** The family's version in use, which stays in use; `undefined`: none. */
+  readonly inUseVersion: number | undefined;
+  readonly onConfirm: (reason: string) => Promise<void>;
+  readonly testId: string;
+}) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState('');
+  const reasonId = `${testId}-reason`;
+  const trimmed = reason.trim();
+  // UX acceptance of #772 (P3-1): 「这个 Skill 提议」 — a Latin noun keeps its spaces in Chinese.
+  const noun = kind === 'skill' ? { zh: ' Skill ', en: 'Skill' } : { zh: '流程', en: 'Procedure' };
+  return (
+    <Confirm
+      tier="medium"
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) setReason('');
+      }}
+      anchor={
+        <Button
+          variant="ghost"
+          size="s"
+          disabled={busy}
+          onClick={() => setOpen(true)}
+          data-testid={`${testId}-trigger`}
+        >
+          {t('拒绝', 'Reject')}
+        </Button>
+      }
+      title={t(`拒绝 ${target}`, `Reject ${target}`)}
+      description={t(
+        '这份草稿将被删除，无法恢复；拒绝原因记入审计。',
+        'This draft will be deleted and cannot be recovered; the reason is kept in the audit trail.',
+      )}
+      target={target}
+      impact={
+        inUseVersion !== undefined
+          ? [
+              t(
+                `已发布的 v${inUseVersion} 照常在用，不受影响`,
+                `Published v${inUseVersion} stays in use, unchanged`,
+              ),
+              t(
+                `之后可以再为这个${noun.zh}提议下一版本`,
+                `The next version of this ${noun.en} can be proposed again afterwards`,
+              ),
+            ]
+          : [
+              t(
+                `这个${noun.zh}还没有发布过的版本，拒绝后它会从目录里消失`,
+                `This ${noun.en} has no published version, so it leaves the catalog`,
+              ),
+            ]
+      }
+      confirmLabel={t('拒绝', 'Reject')}
+      danger
+      confirmDisabled={trimmed === ''}
+      onConfirm={() => onConfirm(trimmed)}
+      errorOverrides={{
+        not_proposer: t(
+          '只有工作区所有者或在用版本的提议人能拒绝这份草稿；没有在用版本时只有所有者能拒绝。请他们来操作，或请草稿的提议人自己丢弃它。',
+          'Only the workspace owner or the proposer of the version in use can reject this draft (with no version in use, only the owner). Ask them, or ask the draft’s proposer to discard it.',
+        ),
+      }}
+      testId={testId}
+    >
+      <Field
+        id={reasonId}
+        label={t('拒绝原因', 'Reason')}
+        hint={t(
+          '必填，记入审计：为什么不采用这份草稿',
+          'Required — kept in the audit trail: why this draft is not taken',
+        )}
+        required
+      >
+        <Textarea
+          id={reasonId}
+          value={reason}
+          maxLength={500}
+          onChange={(event) => setReason(event.target.value)}
+          aria-label={t('拒绝原因', 'Reject reason')}
+          aria-required
+          aria-describedby={describedBy(reasonId, true, false)}
+          data-testid={reasonId}
+        />
+      </Field>
     </Confirm>
   );
 }
@@ -1659,6 +1769,24 @@ function isOwnDraftOrUnknown(
   );
 }
 
+/** E2-0b (review #493 on #764, F2): 「拒绝」 is offered on a pending Skill / Procedure draft
+ *  someone else proposed — its own proposer discards it — unless the caller is proven not to be
+ *  one of its reviewers (`provenNotDraftReviewer`: the owner, or the proposer of the version in
+ *  use). The role floor is `can('reject_draft')`'s. */
+function offersReject(
+  row: {
+    readonly status: string;
+    readonly proposedBy?: string;
+    readonly inUse?: { readonly proposedBy?: string };
+  },
+  role: WorkspaceRole,
+  callerPrincipalId: string | null,
+): boolean {
+  if (row.status !== 'draft') return false;
+  if (callerPrincipalId !== null && row.proposedBy === callerPrincipalId) return false;
+  return !provenNotDraftReviewer(row, role, callerPrincipalId);
+}
+
 /**
  * D-24 (kernel `publish-authority.ts`): which of Publish / Deprecate this row withholds because
  * the caller is proven neither its proposer nor the owner (`provenNotProposer`) — the kernel
@@ -1788,6 +1916,8 @@ function SkillDetailView({
   canDeprecate,
   proposerOnly,
   canDiscard,
+  canReject,
+  inUseVersion,
   busy,
   credentialReview,
   versionNote,
@@ -1798,6 +1928,7 @@ function SkillDetailView({
   onPublish,
   onDeprecate,
   onDiscard,
+  onReject,
 }: {
   readonly http: CapabilityCaller;
   readonly row: Omit<SkillRow, 'inUse'>;
@@ -1822,6 +1953,11 @@ function SkillDetailView({
   readonly onPublish: () => Promise<void>;
   readonly onDeprecate: () => Promise<void>;
   readonly onDiscard: (reason: string | undefined) => Promise<void>;
+  /** E2-0b: 「拒绝」 on this pending draft (`offersReject`). */
+  readonly canReject: boolean;
+  /** On a draft, the family's version in use (`undefined`: none) — what rejecting leaves in use. */
+  readonly inUseVersion: number | undefined;
+  readonly onReject: (reason: string) => Promise<void>;
 }) {
   const t = useT();
   // Best-effort read of the current version's full body — degrades to "—" on error/while loading
@@ -1952,6 +2088,16 @@ function SkillDetailView({
             target={row.name}
             onConfirm={onDiscard}
             testId={`skill-discard-confirm-${row.id}`}
+          />
+        ) : null}
+        {canReject && row.status === 'draft' ? (
+          <RejectDraftConfirm
+            kind="skill"
+            busy={busy}
+            target={`${row.name} v${row.version}`}
+            inUseVersion={inUseVersion}
+            onConfirm={onReject}
+            testId={`skill-reject-confirm-${row.id}`}
           />
         ) : null}
       </div>
@@ -2087,10 +2233,46 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
     }
   }
 
+  // E2-0b (review #493 on #764, F2): `reject_draft{kind, id, version, draftDigest, reason}` — the
+  // reviewer's transition. A refusal is thrown, so `RejectDraftConfirm` shows it in place with the
+  // reason kept; a draft swapped since it was read (`draft_changed`) is read again instead (the
+  // detail is another one then, and the confirm closes with it).
+  async function rejectSkillDraft(row: SkillRow, reason: string): Promise<void> {
+    setBusy(row.id);
+    try {
+      await http.call('reject_draft', {
+        kind: 'skill',
+        id: row.id,
+        version: row.version,
+        draftDigest: row.draftDigest,
+        reason,
+      });
+      toast.push({
+        tone: 'ok',
+        title: t(`已拒绝 ${row.name} v${row.version}`, `Rejected ${row.name} v${row.version}`),
+      });
+      // With a version in use the family's row is that version now; without one it is gone.
+      if (row.inUse === undefined) selectRow(null);
+      refresh();
+    } catch (err) {
+      if (isForbiddenError(err)) permissions.markDenied('reject_draft');
+      if (!isDraftChangedError(err)) throw err;
+      refresh();
+      toast.push({
+        tone: 'danger',
+        title: t(`无法拒绝 ${row.name}`, `Could not reject ${row.name}`),
+        description: errorToastText(err, t),
+      });
+    } finally {
+      setBusy(null);
+    }
+  }
+
   const canPropose = can('propose_skill') !== false;
   const canPublish = can('publish_skill') !== false;
   const canDeprecate = can('deprecate_skill') !== false;
   const canDiscard = can('discard_draft') !== false;
+  const canReject = can('reject_draft') !== false;
   // D-24: Publish / Deprecate on a row another principal proposed is the owner's.
   const selectedProposerOnly = selected
     ? proposerOnlyFor(selected, role, principalId, {
@@ -2218,6 +2400,8 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       canDeprecate={false}
       proposerOnly={null}
       canDiscard={false}
+      canReject={false}
+      inUseVersion={undefined}
       busy={false}
       credentialReview={credentialReview}
       versionNote={
@@ -2236,6 +2420,7 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       onPublish={async () => undefined}
       onDeprecate={async () => undefined}
       onDiscard={async () => undefined}
+      onReject={async () => undefined}
     />
   ) : selected ? (
     <SkillDetailView
@@ -2250,6 +2435,8 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       canDeprecate={canDeprecate && selectedProposerOnly === null}
       proposerOnly={selectedProposerOnly}
       canDiscard={canDiscard && isOwnDraftOrUnknown(selected, principalId)}
+      canReject={canReject && offersReject(selected, role, principalId)}
+      inUseVersion={selected.inUse?.version}
       busy={busy === selected.id}
       credentialReview={credentialReview}
       versionNote={
@@ -2270,6 +2457,7 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       onPublish={() => act(selected, 'publish_skill')}
       onDeprecate={() => act(selected, 'deprecate_skill')}
       onDiscard={(reason) => discardSkillDraft(selected, reason)}
+      onReject={(reason) => rejectSkillDraft(selected, reason)}
     />
   ) : (
     <SelectionPlaceholder
@@ -2310,6 +2498,7 @@ function ProcedureDetailView({
   canDeprecate,
   proposerOnly,
   canDiscard,
+  canReject,
   busy,
   credentialReview,
   publishProblems,
@@ -2322,6 +2511,7 @@ function ProcedureDetailView({
   onPublish,
   onDeprecate,
   onDiscard,
+  onReject,
 }: {
   readonly http: CapabilityCaller;
   readonly row: Omit<ProcedureRow, 'inUse'>;
@@ -2350,6 +2540,9 @@ function ProcedureDetailView({
   readonly onPublish: () => Promise<void>;
   readonly onDeprecate: () => Promise<void>;
   readonly onDiscard: (reason: string | undefined) => Promise<void>;
+  /** As `SkillDetailView`'s. */
+  readonly canReject: boolean;
+  readonly onReject: (reason: string) => Promise<void>;
 }) {
   const t = useT();
   const titleRef = useRef<HTMLElement>(null);
@@ -2450,6 +2643,16 @@ function ProcedureDetailView({
             target={row.name}
             onConfirm={onDiscard}
             testId={`procedure-discard-confirm-${row.id}`}
+          />
+        ) : null}
+        {canReject && row.status === 'draft' ? (
+          <RejectDraftConfirm
+            kind="procedure"
+            busy={busy}
+            target={`${row.name} v${row.version}`}
+            inUseVersion={inUseVersion}
+            onConfirm={onReject}
+            testId={`procedure-reject-confirm-${row.id}`}
           />
         ) : null}
       </div>
@@ -2598,10 +2801,42 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
     }
   }
 
+  // E2-0b: as the Skills tab's `rejectSkillDraft`.
+  async function rejectProcedureDraft(row: ProcedureRow, reason: string): Promise<void> {
+    setBusy(row.id);
+    try {
+      await http.call('reject_draft', {
+        kind: 'procedure',
+        id: row.id,
+        version: row.version,
+        draftDigest: row.draftDigest,
+        reason,
+      });
+      toast.push({
+        tone: 'ok',
+        title: t(`已拒绝 ${row.name} v${row.version}`, `Rejected ${row.name} v${row.version}`),
+      });
+      if (row.inUse === undefined) selectRow(null);
+      refresh();
+    } catch (err) {
+      if (isForbiddenError(err)) permissions.markDenied('reject_draft');
+      if (!isDraftChangedError(err)) throw err;
+      refresh();
+      toast.push({
+        tone: 'danger',
+        title: t(`无法拒绝 ${row.name}`, `Could not reject ${row.name}`),
+        description: errorToastText(err, t),
+      });
+    } finally {
+      setBusy(null);
+    }
+  }
+
   const canPropose = can('propose_procedure') !== false;
   const canPublish = can('publish_procedure') !== false;
   const canDeprecate = can('deprecate_procedure') !== false;
   const canDiscard = can('discard_draft') !== false;
+  const canReject = can('reject_draft') !== false;
   // D-24: Publish / Deprecate on a row another principal proposed is the owner's.
   const selectedProposerOnly = selected
     ? proposerOnlyFor(selected, role, principalId, {
@@ -2735,6 +2970,7 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       canDeprecate={false}
       proposerOnly={null}
       canDiscard={false}
+      canReject={false}
       busy={false}
       credentialReview={credentialReview}
       publishProblems={null}
@@ -2755,6 +2991,7 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       onPublish={async () => undefined}
       onDeprecate={async () => undefined}
       onDiscard={async () => undefined}
+      onReject={async () => undefined}
     />
   ) : selected ? (
     <ProcedureDetailView
@@ -2766,6 +3003,7 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       canDeprecate={canDeprecate && selectedProposerOnly === null}
       proposerOnly={selectedProposerOnly}
       canDiscard={canDiscard && isOwnDraftOrUnknown(selected, principalId)}
+      canReject={canReject && offersReject(selected, role, principalId)}
       busy={busy === selected.id}
       credentialReview={credentialReview}
       publishProblems={publishProblems}
@@ -2788,6 +3026,7 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       onPublish={() => act(selected, 'publish_procedure')}
       onDeprecate={() => act(selected, 'deprecate_procedure')}
       onDiscard={(reason) => discardProcedureDraft(selected, reason)}
+      onReject={(reason) => rejectProcedureDraft(selected, reason)}
     />
   ) : (
     <SelectionPlaceholder

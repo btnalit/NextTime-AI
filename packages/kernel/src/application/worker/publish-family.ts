@@ -48,3 +48,41 @@ export async function assertFamilyPublishAuthority(
     );
   }
 }
+
+/**
+ * E2-0b (review #493 on #764, F2): who may reject a pending Skill / Procedure draft
+ * (`reject_draft`) — the people who decide what the family's next version is. The workspace owner,
+ * or the proposer of the family's version in use (its latest published version, what Workers mount
+ * or goals are made from), whose version the draft would supersede. A family with no published
+ * version has no such proposer, so only the owner rejects its draft (its own proposer discards it).
+ * Unlike publishing, the draft's proposer gets no say: rejecting is the reviewer's act, discarding
+ * is the proposer's. Returns the version in use (`null`: none). The caller holds the family's lock.
+ */
+export async function assertFamilyRejectAuthority(
+  client: PoolClient,
+  workspaceId: string,
+  input: {
+    readonly table: 'skills' | 'procedures';
+    readonly familyId: string;
+    readonly subject: string;
+    readonly actor: PublishActor;
+  },
+): Promise<number | null> {
+  const result = await client.query<{ version: number; proposed_by: string }>(
+    `select version, proposed_by from ${input.table}
+     where workspace_id = $1 and id = $2 and status = 'published'
+     order by version desc
+     limit 1`,
+    [workspaceId, input.familyId],
+  );
+  const inUse = result.rows[0];
+  if (input.actor.role === 'owner') return inUse?.version ?? null;
+  if (inUse && inUse.proposed_by === input.actor.principalId) return inUse.version;
+  throw new NotProposerError(
+    'reject_draft',
+    input.subject,
+    inUse
+      ? `only the workspace owner or the proposer of the family's version in use (v${inUse.version}) may reject it`
+      : 'the family has no published version, so only the workspace owner may reject it (its proposer may discard it)',
+  );
+}
