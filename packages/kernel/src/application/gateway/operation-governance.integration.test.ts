@@ -293,7 +293,11 @@ describe.runIf(DATABASE_URL !== undefined)(
         // `resource_id` is the Operation Object's own uuid (`audit_records.resource_id` is `uuid`
         // — see gate-instance-handlers.ts's `refreshOperationGovernanceHandler`), not the
         // `{gatekeeperId, name}` identity pair — that pair lives in the payload instead.
-        const row = audit.find((r) => r.resourceId === persisted?.id);
+        const rows = audit.filter((r) => r.resourceId === persisted?.id);
+        // Legacy 482: one record, written by the domain function with the write (core 0047 needs
+        // it in the same transaction) — the handler no longer writes its own.
+        expect(rows).toHaveLength(1);
+        const row = rows[0];
         expect(row).toBeDefined();
         expect(row?.actorPrincipalId).toBe(ownerId);
         expect(row?.payload).toMatchObject({

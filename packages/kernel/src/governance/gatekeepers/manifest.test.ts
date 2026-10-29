@@ -1399,6 +1399,64 @@ describe.runIf(DATABASE_URL !== undefined)('governance/gatekeepers/manifest (int
   });
 
   describe('S8 W3-K1 (leftover 79): refreshOperationGovernance', () => {
+    it('legacy 482: each in-place write comes with one operation.governance_refreshed record stating it, in the same transaction — the record core 0047 requires', async () => {
+      const operation = testOperation({
+        name: `gov.audited.${randomUUID()}`,
+        mode: 'observe',
+        blast_radius: 'low',
+        auto_approvable: true,
+      });
+      const act = await newActivity();
+      await inTx((client) =>
+        importManifest(client, workspaceId, {
+          gatekeeperId,
+          operations: [operation],
+          proposedBy: { id: ownerId, kind: 'human' },
+          activityId: act,
+        }),
+      );
+      const published = await inTx((client) =>
+        publishOperation(client, workspaceId, { gatekeeperId, name: operation.name }),
+      );
+      const tightened = { ...operation, auto_approvable: false, destructive_hint: true };
+
+      const records = await inTx(async (client) => {
+        await refreshOperationGovernance(client, workspaceId, {
+          gatekeeperId,
+          proposedBy: { id: ownerId, kind: 'human' },
+          activityId: await newActivity(),
+          announcedOperations: [tightened],
+        });
+        return client.query<{
+          actor_principal_id: string;
+          payload: Record<string, unknown>;
+          same_transaction: boolean;
+        }>(
+          `select actor_principal_id, payload, created_at = now() as same_transaction
+           from audit_records
+           where workspace_id = $1 and resource_id = $2 and action = 'operation.governance_refreshed'`,
+          [workspaceId, published.id],
+        );
+      });
+
+      expect(records.rows).toHaveLength(1);
+      expect(records.rows[0]).toMatchObject({
+        actor_principal_id: ownerId,
+        same_transaction: true,
+        payload: {
+          gatekeeperId,
+          name: operation.name,
+          direction: 'tightened',
+          before: { autoApprovable: true, destructiveHint: null },
+          after: { autoApprovable: false, destructiveHint: true },
+        },
+      });
+      const stored = await inTx((client) =>
+        getPublishedOperation(client, workspaceId, gatekeeperId, operation.name),
+      );
+      expect(stored?.operation).toMatchObject({ auto_approvable: false, destructive_hint: true });
+    });
+
     it('applies the announced fields in place to a differing published Operation, classifies the change, and leaves a matching one unchanged', async () => {
       const drifted = testOperation({
         name: `gov.drift.${randomUUID()}`,
