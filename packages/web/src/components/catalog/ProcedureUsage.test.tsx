@@ -209,7 +209,8 @@ describe('ProcedureUsageSection (S11 W1a E2-2)', () => {
     expect(both.textContent).toContain('2 个运行环境');
     const unknown = within(v2).getByTestId('procedure-usage-version-2-segment-unknown');
     expect(unknown.textContent).toContain('环境未知');
-    expect(unknown.textContent).toContain('models.json');
+    expect(unknown.textContent).toContain('平台没读到模型配置');
+    expect(unknown.textContent).not.toContain('models.json');
   });
 
   it('goals not achieved grouped by where they went wrong and the step’s failure category', async () => {

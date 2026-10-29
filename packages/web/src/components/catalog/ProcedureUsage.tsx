@@ -238,8 +238,8 @@ function SegmentBlock({
           <strong className="text-small">{t('环境未知', 'Environment unknown')}</strong>
           <span className="text-3 text-small">
             {t(
-              '有运行没有上报环境，或用了默认模型而 models.json 没有读到。',
-              'A run reported nothing, or used the default model and models.json could not be read.',
+              '有运行没有上报环境，或用了默认模型、平台没读到模型配置。',
+              'A run reported nothing, or used the default model and the platform could not read its model configuration.',
             )}
           </span>
         </div>

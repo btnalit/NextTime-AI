@@ -220,8 +220,8 @@ function SegmentBlock({
         ) : (
           <span
             title={t(
-              '运行时没有上报，或用了默认模型而 models.json 没有读到',
-              'The runtime reported nothing, or the run used the default model and models.json could not be read',
+              '运行时没有上报，或用了默认模型、平台没读到模型配置',
+              'The runtime reported nothing, or the run used the default model and the platform could not read its model configuration',
             )}
           >
             {t('环境未知', 'Environment unknown')}
