@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MasterDetail } from './master-detail.js';
 
@@ -98,5 +99,67 @@ describe('kit/MasterDetail', () => {
     );
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(screen.queryByTestId('the-detail')).toBeNull();
+  });
+
+  it('keeps the detail as it is when the width crosses the breakpoint (legacy 480)', () => {
+    // A matchMedia whose state the test flips, telling the subscribed listener.
+    let narrow = false;
+    const listeners = new Set<(event: { matches: boolean }) => void>();
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn(() => ({
+        get matches() {
+          return narrow;
+        },
+        media: '',
+        addEventListener: (_: string, listener: (event: { matches: boolean }) => void) =>
+          listeners.add(listener),
+        removeEventListener: (_: string, listener: (event: { matches: boolean }) => void) =>
+          listeners.delete(listener),
+      })),
+    );
+    const setNarrow = (next: boolean) =>
+      act(() => {
+        narrow = next;
+        for (const listener of listeners) listener({ matches: next });
+      });
+    function Counter() {
+      const [count, setCount] = useState(0);
+      return (
+        <div>
+          <button type="button" onClick={() => setCount((value) => value + 1)}>
+            more
+          </button>
+          <span data-testid="count">{count}</span>
+          <details data-testid="disclosure">
+            <summary>open</summary>
+            body
+          </details>
+        </div>
+      );
+    }
+    render(
+      <MasterDetail
+        list={<div>list</div>}
+        detail={<Counter />}
+        open={true}
+        onClose={vi.fn()}
+        sheetTitle="Detail"
+        detailTestId="md-detail"
+      />,
+    );
+    fireEvent.click(screen.getByText('more'));
+    (screen.getByTestId('disclosure') as HTMLDetailsElement).open = true;
+    expect(screen.getByTestId('md-detail').className).toContain('md-detail-pane');
+
+    setNarrow(true);
+    expect(screen.getByTestId('md-detail').getAttribute('role')).toBe('dialog');
+    expect(screen.getByTestId('count').textContent).toBe('1');
+    expect((screen.getByTestId('disclosure') as HTMLDetailsElement).open).toBe(true);
+
+    setNarrow(false);
+    expect(screen.getByTestId('md-detail').className).toContain('md-detail-pane');
+    expect(screen.getByTestId('count').textContent).toBe('1');
+    expect((screen.getByTestId('disclosure') as HTMLDetailsElement).open).toBe(true);
   });
 });

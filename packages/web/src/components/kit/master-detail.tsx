@@ -1,4 +1,5 @@
-import type { ReactNode } from 'react';
+import { type ReactNode, useCallback, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useMediaQuery } from '../../hooks/useMediaQuery.js';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from './sheet.js';
 
@@ -59,6 +60,10 @@ export interface MasterDetailProps {
  * shell: a two-pane grid at ≥1180px (list card | detail card, each scrolling on its own via
  * `.md-pane-body`'s own `overflow-y`), or the list alone with the detail in a `kit/sheet` below
  * that width.
+ *
+ * Legacy 480: the detail renders once, into one host element that moves between the wide pane and
+ * the sheet — crossing the breakpoint moves what is open (a disclosure, the lines unfolded in a
+ * comparison, a half-filled form) instead of mounting the detail afresh in the other place.
  */
 export function MasterDetail({
   list,
@@ -70,6 +75,15 @@ export function MasterDetail({
   detailTestId,
 }: MasterDetailProps) {
   const isNarrow = useMediaQuery(NARROW_MASTER_DETAIL_QUERY);
+  const [host] = useState(createDetailHost);
+  // A slot takes the host when it mounts; the slot left behind needs nothing (the host has moved).
+  const attachHost = useCallback(
+    (slot: HTMLElement | null) => {
+      if (slot !== null && host !== null && host.parentNode !== slot) slot.appendChild(host);
+    },
+    [host],
+  );
+  const showDetail = isNarrow ? open : detail !== null;
 
   return (
     <>
@@ -81,7 +95,7 @@ export function MasterDetail({
 
         {!isNarrow && detail !== null ? (
           <div className="md-pane md-detail-pane" data-testid={detailTestId}>
-            <div className="md-pane-body">{detail}</div>
+            <div className="md-pane-body" ref={attachHost} />
           </div>
         ) : null}
       </div>
@@ -97,10 +111,21 @@ export function MasterDetail({
             <SheetHeader>
               <SheetTitle>{sheetTitle}</SheetTitle>
             </SheetHeader>
-            {detail}
+            <div className="contents" ref={attachHost} />
           </SheetContent>
         </Sheet>
       ) : null}
+
+      {showDetail && host !== null ? createPortal(detail, host) : null}
     </>
   );
+}
+
+/** The detail's host: layout-transparent (`display: contents`), so the detail lays out as a direct
+ *  child of whichever slot holds it, as it did before it had a host. */
+function createDetailHost(): HTMLDivElement | null {
+  if (typeof document === 'undefined') return null;
+  const host = document.createElement('div');
+  host.style.display = 'contents';
+  return host;
 }

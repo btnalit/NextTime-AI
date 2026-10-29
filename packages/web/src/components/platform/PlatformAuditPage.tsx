@@ -66,6 +66,7 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
   const [actorUserIdInput, setActorUserIdInput] = useState('');
   const [applied, setApplied] = useState<AppliedFilters>({});
   const [showReads, setShowReads] = useState(false);
+  const showReadsToggle = useRef<HTMLInputElement>(null);
 
   const params = useMemo(() => ({ limit: PAGE_SIZE, ...applied }), [applied]);
   const audit = useCapabilityList<PlatformAuditRecordWire>(http, 'platform_audit_query', params);
@@ -231,6 +232,7 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
         <label className="row-wrap text-small" data-testid="platform-audit-show-reads-toggle">
           <input
             type="checkbox"
+            ref={showReadsToggle}
             checked={showReads}
             onChange={(event) => setShowReads(event.target.checked)}
           />
@@ -270,7 +272,16 @@ export function PlatformAuditPage({ http }: PlatformAuditPageProps) {
             `${hiddenReadCount} hidden — check "Show reads" above to see them.`,
           )}
           action={
-            <Button variant="secondary" size="s" onClick={() => setShowReads(true)}>
+            <Button
+              variant="secondary"
+              size="s"
+              onClick={() => {
+                setShowReads(true);
+                // Legacy 479 (same class): this button goes away as the reads show; focus lands
+                // on the toggle that now says they are shown.
+                showReadsToggle.current?.focus();
+              }}
+            >
               {t('显示读操作', 'Show reads')}
             </Button>
           }

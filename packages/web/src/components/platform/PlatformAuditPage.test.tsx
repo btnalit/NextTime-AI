@@ -205,6 +205,10 @@ describe('PlatformAuditPage', () => {
     fireEvent.click(within(empty).getByRole('button', { name: /显示读操作|Show reads/ }));
     await waitFor(() => expect(screen.getAllByTestId('platform-audit-row')).toHaveLength(1));
     expect(screen.queryByTestId('platform-audit-empty')).toBeNull();
+    // Legacy 479 (same class): the button went away; focus is on the toggle that now says so.
+    const toggle = screen.getByTestId('platform-audit-show-reads-toggle').querySelector('input');
+    expect(document.activeElement).toBe(toggle);
+    expect(toggle?.checked).toBe(true);
   });
 
   it('renders an unattributed-actor row (遗留 54: an operator-CLI purge with no resolvable administrator) with a clear label, never blank or "null"', async () => {

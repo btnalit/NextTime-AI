@@ -147,7 +147,11 @@ describe('ProcedureEditor (S6-A A2)', () => {
     expect([...definitionSelect.options].filter((o) => o.value === 'wd-1')).toHaveLength(1);
     const versionSelect = within(second).getByLabelText(/版本/) as HTMLSelectElement;
     expect(versionSelect.tagName).toBe('SELECT');
-    expect([...versionSelect.options].map((o) => o.textContent)).toEqual(['v2', 'v1']);
+    // Legacy 481: the newest of several versions says so.
+    const versionTexts = [...versionSelect.options].map((o) => o.textContent);
+    expect(versionTexts).toHaveLength(2);
+    expect(versionTexts[0]).toMatch(/^v2（最新）$/);
+    expect(versionTexts[1]).toBe('v1');
     expect(versionSelect.value).toBe('2');
 
     fireEvent.change(within(third).getByLabelText(/说明/), {

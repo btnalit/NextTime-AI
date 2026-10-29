@@ -34,6 +34,7 @@ import type { WorkerDefinitionSummary } from '../../lib/tasks.js';
 import {
   definitionVersions,
   latestPerDefinition,
+  versionOptionText,
   workerDefinitionChoices,
 } from '../../lib/tasks.js';
 import { Button } from '../ui/Button.js';
@@ -509,11 +510,13 @@ export function ProcedureEditor({
                                 )}
                               </option>
                             ) : null}
-                            {definitionVersions(workerDefinitions, step.definitionId).map((row) => (
-                              <option key={row.version} value={String(row.version)}>
-                                {`v${row.version}`}
-                              </option>
-                            ))}
+                            {definitionVersions(workerDefinitions, step.definitionId).map(
+                              (row, _index, versions) => (
+                                <option key={row.version} value={String(row.version)}>
+                                  {versionOptionText(row, versions, t)}
+                                </option>
+                              ),
+                            )}
                           </Select>
                         ) : (
                           <Input

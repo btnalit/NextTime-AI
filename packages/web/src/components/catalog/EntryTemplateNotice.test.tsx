@@ -219,6 +219,9 @@ describe('EntryTemplateNotice (legacy 145)', () => {
       '  line 8',
       '  line 9',
     ]);
+    // Legacy 479: the button went away; focus is on the first line it opened, not the page.
+    expect(document.activeElement?.textContent).toBe('  line 6');
+    expect(document.activeElement?.getAttribute('data-opened')).toBe('');
   });
 
   it('reads the status again when what it showed moved, and says so where the button is', async () => {

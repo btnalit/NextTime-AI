@@ -4,7 +4,7 @@ import type {
   EntryTemplateUpgradeWire,
   WorkerDefinitionWire,
 } from '@nexttime/shared';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Resource } from '../../hooks/useResource.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
 import { actionHint, actionLabel } from '../../lib/capability-labels.js';
@@ -233,7 +233,8 @@ export function EntryTemplateNotice({
 
 /**
  * A line-by-line comparison. Legacy 471: a run of unchanged lines folded away opens in place, so
- * the context around a change can be read without leaving the comparison.
+ * the context around a change can be read without leaving the comparison. Legacy 479: the button
+ * goes away as the lines open, so focus moves to the first line it opened, not back to the page.
  */
 function TextDiff({
   lines,
@@ -244,6 +245,12 @@ function TextDiff({
 }) {
   const t = useT();
   const [opened, setOpened] = useState<ReadonlySet<number>>(() => new Set());
+  const [justOpened, setJustOpened] = useState<number | null>(null);
+  const firstOpenedLine = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (justOpened === null) return;
+    firstOpenedLine.current?.focus();
+  }, [justOpened]);
   return (
     <pre className="code-block pre-wrap text-diff" data-testid={testId}>
       {lines.map((line, index) => {
@@ -265,6 +272,8 @@ function TextDiff({
             <span
               // biome-ignore lint/suspicious/noArrayIndexKey: lines have no identity of their own
               key={`${index}-${offset}`}
+              ref={index === justOpened && offset === 0 ? firstOpenedLine : undefined}
+              tabIndex={index === justOpened && offset === 0 ? -1 : undefined}
               className="text-diff-line"
               data-change="same"
               data-opened=""
@@ -280,7 +289,10 @@ function TextDiff({
             <Button
               variant="ghost"
               size="s"
-              onClick={() => setOpened((prev) => new Set(prev).add(index))}
+              onClick={() => {
+                setOpened((prev) => new Set(prev).add(index));
+                setJustOpened(index);
+              }}
               data-testid={`${testId}-open-gap`}
             >
               {t(
