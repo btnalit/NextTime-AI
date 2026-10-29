@@ -3487,7 +3487,7 @@ describe('CatalogPage — reject a pending draft (E2-0b)', () => {
     expect(confirm.getAttribute('data-tier')).toBe('medium');
     expect(within(confirm).getByTestId('confirm-target').textContent).toBe('restart-web v2');
     expect(within(confirm).getByTestId('confirm-impact').textContent).toMatch(
-      /已发布的 v1 照常在用，不受影响.*之后可以再为这个Skill提议下一版本/,
+      /已发布的 v1 照常在用，不受影响.*之后可以再为这个 Skill 提议下一版本/,
     );
     const button = within(confirm).getByTestId('confirm-button') as HTMLButtonElement;
     expect(button.disabled).toBe(true);
@@ -3562,7 +3562,7 @@ describe('CatalogPage — reject a pending draft (E2-0b)', () => {
     fireEvent.click(await within(detail).findByTestId('skill-reject-confirm-sk-1-trigger'));
     const confirm = await screen.findByTestId('skill-reject-confirm-sk-1');
     expect(within(confirm).getByTestId('confirm-impact').textContent).toBe(
-      '这个Skill还没有发布过的版本，拒绝后它会从目录里消失',
+      '这个 Skill 还没有发布过的版本，拒绝后它会从目录里消失',
     );
   });
 

@@ -813,7 +813,8 @@ function RejectDraftConfirm({
   const [reason, setReason] = useState('');
   const reasonId = `${testId}-reason`;
   const trimmed = reason.trim();
-  const noun = kind === 'skill' ? 'Skill' : t('流程', 'Procedure');
+  // UX acceptance of #772 (P3-1): 「这个 Skill 提议」 — a Latin noun keeps its spaces in Chinese.
+  const noun = kind === 'skill' ? { zh: ' Skill ', en: 'Skill' } : { zh: '流程', en: 'Procedure' };
   return (
     <Confirm
       tier="medium"
@@ -847,14 +848,14 @@ function RejectDraftConfirm({
                 `Published v${inUseVersion} stays in use, unchanged`,
               ),
               t(
-                `之后可以再为这个${noun}提议下一版本`,
-                `The next version of this ${noun} can be proposed again afterwards`,
+                `之后可以再为这个${noun.zh}提议下一版本`,
+                `The next version of this ${noun.en} can be proposed again afterwards`,
               ),
             ]
           : [
               t(
-                `这个${noun}还没有发布过的版本，拒绝后它会从目录里消失`,
-                `This ${noun} has no published version, so it leaves the catalog`,
+                `这个${noun.zh}还没有发布过的版本，拒绝后它会从目录里消失`,
+                `This ${noun.en} has no published version, so it leaves the catalog`,
               ),
             ]
       }
