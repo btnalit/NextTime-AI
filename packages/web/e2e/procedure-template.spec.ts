@@ -355,7 +355,7 @@ test.describe('S11 GO5d-2: a Procedure as a goal plan template (stand-in reads)'
       await step.getByTestId('procedure-step-check-params').fill('{"serial": "old-2025"}');
       const basis = step.getByTestId('goal-absence-basis');
       await expect(basis).toHaveAttribute('data-basis', 'confirmed');
-      await expect(basis).toContainText('目标回答 404 时，门回答“不存在”。');
+      await expect(basis).toContainText('目标系统回答 404 时，门回答“不存在”。');
       await expect(basis).toContainText('alice');
       await expect(step.getByTestId('procedure-step-check-sentence')).toContainText(
         '门回答“要查的东西不存在”才算通过',

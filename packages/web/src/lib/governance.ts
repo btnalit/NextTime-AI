@@ -225,7 +225,7 @@ export function absentAnswersText(answers: OperationAbsentAnswersWire, t: Transl
   if ('statuses' in answers) {
     const statuses = answers.statuses.join(or);
     return t(
-      `目标回答 ${statuses} 时，表示要查的东西不存在：这次观察记为“不存在”，不算调用失败。`,
+      `目标系统回答 ${statuses} 时，表示要查的东西不存在：这次观察记为“不存在”，不算调用失败。`,
       `When the target answers ${statuses}, the thing looked up does not exist: the observation is recorded as “not there”, not as a failed call.`,
     );
   }
@@ -237,19 +237,19 @@ export function absentAnswersText(answers: OperationAbsentAnswersWire, t: Transl
 }
 
 /** S11 「门确认不存在」 B-a: when the target gives one of the declared answers, as a clause —
- *  「目标回答 404 或 410 时」, 「命令以退出码 4 结束时」 — the same wording as `absentAnswersText`. */
+ *  「目标系统回答 404 或 410 时」, 「命令以退出码 4 结束时」 — the same wording as `absentAnswersText`. */
 export function absentAnswersWhenText(answers: OperationAbsentAnswersWire, t: Translate): string {
   const or = t(' 或 ', ' or ');
   if ('statuses' in answers) {
     const statuses = answers.statuses.join(or);
-    return t(`目标回答 ${statuses} 时`, `when the target answers ${statuses}`);
+    return t(`目标系统回答 ${statuses} 时`, `when the target answers ${statuses}`);
   }
   const codes = answers.exitCodes.join(or);
   return t(`命令以退出码 ${codes} 结束时`, `when the command exits with ${codes}`);
 }
 
 /** The publisher's side of it: the target gives those answers only when the thing is not there —
- *  「只有它不存在时，目标才会回答 404」, 「只有它不存在时，命令才会以退出码 4 结束」. */
+ *  「只有它不存在时，目标系统才会回答 404」, 「只有它不存在时，命令才会以退出码 4 结束」. */
 export function absentAnswersOnlyWhenText(
   answers: OperationAbsentAnswersWire,
   t: Translate,
@@ -258,7 +258,7 @@ export function absentAnswersOnlyWhenText(
   if ('statuses' in answers) {
     const statuses = answers.statuses.join(or);
     return t(
-      `只有它不存在时，目标才会回答 ${statuses}`,
+      `只有它不存在时，目标系统才会回答 ${statuses}`,
       `the target answers ${statuses} only when it is not there`,
     );
   }

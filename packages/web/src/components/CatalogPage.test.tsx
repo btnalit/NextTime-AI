@@ -228,7 +228,7 @@ describe('CatalogPage', () => {
     };
     let detail = await selectRow(await rowNamed('record.get'));
     expect(within(detail).getByTestId('catalog-detail-absent-answers').textContent).toBe(
-      '目标回答 404 或 410 时，表示要查的东西不存在：这次观察记为“不存在”，不算调用失败。',
+      '目标系统回答 404 或 410 时，表示要查的东西不存在：这次观察记为“不存在”，不算调用失败。',
     );
     expect(detail.textContent).toContain('表示不存在的回答');
     detail = await selectRow(await rowNamed('unit.show'));
@@ -3037,7 +3037,9 @@ describe('CatalogPage — confirming the answers that mean “not there” on Pu
     renderPage(http);
     const detail = await selectRow(await screen.findByTestId('catalog-row'));
     const review = within(detail).getByTestId('operation-absent-review');
-    expect(review.textContent).toContain('发布前确认：目标回答 404 时，记为“要查的东西不存在”。');
+    expect(review.textContent).toContain(
+      '发布前确认：目标系统回答 404 时，记为“要查的东西不存在”。',
+    );
     // What else gives a 404 (review #501 on #757: the caveat follows what the binding declares).
     expect(review.textContent).toContain('没有权限（为隐藏资源回 404）、地址或代理配错');
     expect(review.textContent).toContain('没权限、地址或代理配错时不会这样回答');

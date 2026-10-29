@@ -327,7 +327,7 @@ describe('OnboardingWizardReview — confirming the answers that mean “not the
     fireEvent.click(await screen.findByRole('button', { name: /提议重分类/ }));
     const form = await screen.findByTestId('wizard-review-reclassify-form');
     expect(within(form).getByTestId('operation-absent-review').textContent).toContain(
-      '目标回答 404 时',
+      '目标系统回答 404 时',
     );
     const submit = within(form).getByRole('button', { name: /提交/ }) as HTMLButtonElement;
     expect(submit.disabled).toBe(true);
@@ -387,7 +387,7 @@ describe('OnboardingWizardReview — confirming the answers that mean “not the
     );
     expect(within(row).queryByRole('button', { name: /提议重分类/ })).toBeNull();
     const why = within(row).getByTestId('wizard-review-reclassify-absent');
-    expect(why.textContent).toContain('目标回答 404 时表示要查的东西不存在');
+    expect(why.textContent).toContain('目标系统回答 404 时表示要查的东西不存在');
     expect(within(why).getByTestId('wizard-review-absent-draft-link').getAttribute('href')).toBe(
       hrefs.catalog('operations', 'gk-1::parts.lookup'),
     );

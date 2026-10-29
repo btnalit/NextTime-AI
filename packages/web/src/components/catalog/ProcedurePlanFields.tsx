@@ -779,6 +779,16 @@ export function VerifyCheckFields({
           <Field
             id={`${id}-params`}
             label={t('Operation 参数（JSON，可空）', 'Operation params (JSON, optional)')}
+            // #780 UX P3-2: what the confirm card tells the requester, told first to whoever
+            // writes the params.
+            hint={
+              step.checkKind === 'observe_absent'
+                ? t(
+                    '参数要正好指向目标要删掉的那个东西。写错、指向一个本来就没有的东西，门同样回答“不存在”，检查第一次就会通过。',
+                    'The params must name exactly the thing the goal removes. Params that name something that was never there get the same “not there”, and the check passes on its first try.',
+                  )
+                : undefined
+            }
             error={paramsError}
           >
             <Textarea

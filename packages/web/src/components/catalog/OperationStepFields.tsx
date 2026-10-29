@@ -94,6 +94,10 @@ export function OperationStepFields({
     name !== '' &&
     !choices.some((choice) => choice.name === name);
   const manual = !hasDirectory || manualChosen || listUnavailable || notOnList;
+  // #780 UX P3-3: an absence check on a gate that offers no Operation able to confirm "not there"
+  // — any name typed would fail at publish, so nothing is typed; the note below says what to do.
+  const noAbsenceChoice =
+    absence && gate !== undefined && operations.state.status === 'ready' && choices.length === 0;
 
   return (
     <div className="stack-s">
@@ -143,7 +147,7 @@ export function OperationStepFields({
           required
           error={operationError}
           hint={
-            manual
+            manual && !noAbsenceChoice
               ? t(
                   '手动输入：与门发布的 Operation 名完全一致（区分大小写）。',
                   'Manual entry: the Operation name exactly as the gate publishes it (case-sensitive).',
@@ -158,7 +162,7 @@ export function OperationStepFields({
               value={operationName}
               onChange={(event) => onChange({ operationName: event.target.value })}
               onBlur={() => onChange({ operationName: operationName.trim() })}
-              disabled={busy}
+              disabled={busy || noAbsenceChoice}
               aria-invalid={!!operationError || notOnList || undefined}
               data-testid={`${testPrefix}-operation-input`}
             />

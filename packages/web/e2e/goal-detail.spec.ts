@@ -738,7 +738,7 @@ test.describe('S11 「门确认不存在」 B: absence checks on a goal (stand-i
       const acceptance = page.getByTestId('goal-acceptance');
       const goalBasis = acceptance.getByTestId('goal-absence-basis');
       await expect(goalBasis).toHaveAttribute('data-basis', 'confirmed', { timeout: 15_000 });
-      await expect(goalBasis).toContainText('目标回答 404 时，门回答“不存在”。');
+      await expect(goalBasis).toContainText('目标系统回答 404 时，门回答“不存在”。');
       await expect(goalBasis).toContainText('owner');
       await expect(acceptance).toContainText(
         '以参数 {"serial":"old-2025"} 调用 cert.get，门回答“要查的东西不存在”才算通过',

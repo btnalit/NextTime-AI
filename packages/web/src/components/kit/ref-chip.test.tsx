@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import type { ResolvedRefWire } from '@nexttime/shared';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { useLayoutEffect } from 'react';
+import { createRoot } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { RefChip, useResolveRefs } from './ref-chip.js';
@@ -157,5 +159,82 @@ describe('kit/useResolveRefs', () => {
     }
     render(<Probe />);
     expect(screen.getByTestId('probe').textContent).toBe('undefined');
+  });
+
+  /** A caller whose `resolve_refs` answers only when the test says so. */
+  function deferredCaller() {
+    const answers: Array<() => void> = [];
+    const calls: (readonly string[])[] = [];
+    const caller: CapabilityCaller = {
+      call: (async (_name: string, params?: unknown) => {
+        const { ids } = params as { ids: readonly string[] };
+        calls.push(ids);
+        await new Promise<void>((resolve) => answers.push(resolve));
+        return { items: ids.map((id) => ({ id, kind: 'principal' as const, name: `name-${id}` })) };
+      }) as CapabilityCaller['call'],
+    };
+    const answerAll = () => {
+      for (const answer of answers.splice(0)) answer();
+    };
+    return { caller, calls, answerAll };
+  }
+  function Probe({ caller, testId }: { caller: CapabilityCaller; testId: string }) {
+    const { get } = useResolveRefs(caller, ['p-1']);
+    return <span data-testid={testId}>{get('p-1')?.name ?? 'pending'}</span>;
+  }
+
+  it('a hook mounted while its id is being looked up waits for that answer and renders it, asking nothing more (#780 UX P2-1)', async () => {
+    const { caller, calls, answerAll } = deferredCaller();
+    const { rerender } = render(<Probe caller={caller} testId="first" />);
+    await waitFor(() => expect(calls).toHaveLength(1));
+    rerender(
+      <>
+        <Probe caller={caller} testId="first" />
+        <Probe caller={caller} testId="late" />
+      </>,
+    );
+    await act(async () => {
+      answerAll();
+    });
+    await waitFor(() => expect(screen.getByTestId('late').textContent).toBe('name-p-1'));
+    expect(screen.getByTestId('first').textContent).toBe('name-p-1');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(calls).toHaveLength(1);
+  });
+
+  it('a hook whose id was answered between its render and its effect renders the answer (#780 UX P2-1)', async () => {
+    const { caller, calls, answerAll } = deferredCaller();
+    render(<Probe caller={caller} testId="first" />);
+    await waitFor(() => expect(calls).toHaveLength(1));
+
+    // Outside act, React runs the late Probe's effect in a task of its own after the commit; the
+    // answer lands in between (released from a layout effect of the same commit).
+    const actEnvironment = (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean })
+      .IS_REACT_ACT_ENVIRONMENT;
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = false;
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+    function Release() {
+      useLayoutEffect(() => answerAll(), []);
+      return null;
+    }
+    try {
+      root.render(
+        <>
+          <Probe caller={caller} testId="late" />
+          <Release />
+        </>,
+      );
+      await waitFor(() =>
+        expect(container.querySelector('[data-testid="late"]')?.textContent).toBe('name-p-1'),
+      );
+      expect(calls).toHaveLength(1);
+    } finally {
+      root.unmount();
+      container.remove();
+      (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
+        actEnvironment;
+    }
   });
 });

@@ -576,7 +576,7 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
       HTMLElement,
     ];
     expect(lookup.getAttribute('data-basis')).toBe('confirmed');
-    expect(lookup.textContent).toContain('目标回答 404 或 410 时，门回答“不存在”。');
+    expect(lookup.textContent).toContain('目标系统回答 404 或 410 时，门回答“不存在”。');
     await waitFor(() => expect(lookup.textContent).toContain('Owner'));
     expect(lookup.textContent).toContain('确认于');
     expect(status.getAttribute('data-basis')).toBe('none');

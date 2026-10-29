@@ -1580,6 +1580,12 @@ describe('ProcedureEditor (S6-A A2)', () => {
     const none = await within(step).findByTestId('procedure-step-check-operations-empty');
     expect(none.textContent).toMatch(/没有能确认“不存在”的 Operation/);
     expect(within(none).getByRole('link').getAttribute('href')).toBe(hrefs.catalog('operations'));
+    // #780 UX P3-3: any name typed there would fail at publish — nothing can be typed.
+    expect(
+      (within(step).getByTestId('procedure-step-check-operation-input') as HTMLInputElement)
+        .disabled,
+    ).toBe(true);
+    expect(step.textContent).not.toContain('手动输入：与门发布的 Operation 名完全一致');
 
     // Only the declared and confirmed Operation is offered — not the unconfirmed one, nor one that
     // declares nothing.
@@ -1596,12 +1602,14 @@ describe('ProcedureEditor (S6-A A2)', () => {
     // What its "not there" rests on: the declared answer, and who confirmed it.
     const basis = await within(step).findByTestId('goal-absence-basis');
     expect(basis.getAttribute('data-basis')).toBe('confirmed');
-    expect(basis.textContent).toContain('目标回答 404 时');
+    expect(basis.textContent).toContain('目标系统回答 404 时');
     await waitFor(() => expect(basis.textContent).toContain('Owner'));
     expect(within(step).getByTestId('procedure-step-check-sentence').textContent).toBe(
       '平台会检查：在门「svc-gate」上调用 svc.lookup，门回答“要查的东西不存在”才算通过',
     );
 
+    // #780 UX P3-2: whoever writes the params is told what the confirm card tells the requester.
+    expect(step.textContent).toContain('参数要正好指向目标要删掉的那个东西');
     fireEvent.change(within(step).getByTestId('procedure-step-check-params'), {
       target: { value: '{"name": "old-web"}' },
     });

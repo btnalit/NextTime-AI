@@ -149,7 +149,7 @@ test.describe('S11 「门确认不存在」 A, B-a: the catalog says which answe
       const detail = page.getByTestId('operation-detail');
       await expect(detail).toBeVisible({ timeout: 15_000 });
       await expect(detail.getByTestId('catalog-detail-absent-answers')).toHaveText(
-        '目标回答 404 或 410 时，表示要查的东西不存在：这次观察记为“不存在”，不算调用失败。',
+        '目标系统回答 404 或 410 时，表示要查的东西不存在：这次观察记为“不存在”，不算调用失败。',
       );
       const reviewed = detail.getByTestId('catalog-detail-absent-reviewed');
       await expect(reviewed).toContainText('运维负责人');
