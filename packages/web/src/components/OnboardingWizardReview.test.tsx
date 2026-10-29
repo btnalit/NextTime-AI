@@ -5,6 +5,7 @@ import type { CapabilityCaller } from '../lib/clients.js';
 import type { GraphObjectRow } from '../lib/connections.js';
 import { operationDetailFromObject } from '../lib/connections.js';
 import { HttpError } from '../lib/http-client.js';
+import { hrefs } from '../lib/router.js';
 import {
   OnboardingWizardReview,
   currentRevisions,
@@ -348,6 +349,48 @@ describe('OnboardingWizardReview — confirming the answers that mean “not the
     };
     expect(proposed.operation).not.toHaveProperty('absentAnswersReviewedBy');
     expect(proposed.operation).not.toHaveProperty('absentAnswersReviewedAt');
+  });
+
+  it('a draft step ③ left for a person is not offered a reclassification: it says it waits for the confirmation and opens in the catalog (UX acceptance of #757, P2-1)', async () => {
+    // The gate's import draft is nobody's own proposal: `propose_operation` refuses it (409) until
+    // it is published — in the catalog, with the confirmation.
+    const declaring = operationObject('gk-1', 'parts.lookup');
+    const http = {
+      call: vi.fn(async (name: string) => {
+        if (name === 'search') {
+          return {
+            items: [
+              {
+                ...declaring,
+                properties: {
+                  ...declaring.properties,
+                  status: 'draft',
+                  origin: 'import',
+                  binding: {
+                    kind: 'http',
+                    method: 'GET',
+                    path: '/parts/{id}',
+                    absent_statuses: [404],
+                  },
+                },
+              },
+            ],
+          };
+        }
+        throw new Error(`unscripted ${name}`);
+      }) as CapabilityCaller['call'],
+    } as CapabilityCaller;
+    render(<OnboardingWizardReview http={http} gatekeeperId="gk-1" onDone={vi.fn()} />);
+    const row = await screen.findByTestId('wizard-review-row');
+    expect(within(row).getByTestId('wizard-review-absent-draft').textContent).toBe(
+      '草稿，等确认后发布',
+    );
+    expect(within(row).queryByRole('button', { name: /提议重分类/ })).toBeNull();
+    const why = within(row).getByTestId('wizard-review-reclassify-absent');
+    expect(why.textContent).toContain('目标回答 404 时表示要查的东西不存在');
+    expect(within(why).getByTestId('wizard-review-absent-draft-link').getAttribute('href')).toBe(
+      hrefs.catalog('operations', 'gk-1::parts.lookup'),
+    );
   });
 
   it('a tick is for the answers it was given: when the row is read again declaring others, it is cleared', async () => {
