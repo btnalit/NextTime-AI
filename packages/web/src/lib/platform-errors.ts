@@ -251,8 +251,8 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
   // latest version is still a draft, or a Skill's next version under another name. Nothing was
   // proposed.
   draft_pending: {
-    zh: '它的最新版本还是一份没有发布、也没有丢弃的草稿；发布总是取最新版本，再提议一份会顶替那份草稿，所以这次没有提议。先发布或丢弃那份草稿（只有它的提议者能丢弃），再提议新版本',
-    en: 'Its latest version is still a draft that has been neither published nor discarded; publishing always takes the latest version, so another draft would take its place — nothing was proposed. Publish or discard that draft first (only its proposer can discard it), then propose the new version',
+    zh: '它的最新版本还是一份没有发布、也没有丢弃的草稿；发布总是取最新版本，再提议一份会顶替那份草稿，所以这次没有提议。先发布那份草稿，或由它的提议者丢弃、由工作区所有者或在用版本的提议人拒绝，再提议新版本',
+    en: 'Its latest version is still a draft that has been neither published nor discarded; publishing always takes the latest version, so another draft would take its place — nothing was proposed. Publish that draft first, or have its proposer discard it, or the workspace owner or the proposer of the version in use reject it, then propose the new version',
   },
   skill_name_changed: {
     zh: '新版本要沿用这个 Skill 的名称：Worker 按名称挂载 Skill，旧版本也仍是已发布的，换了名称挂载它的 Worker 就会停在旧版本，所以这次没有提议。要用别的名称，就另存为一个新的 Skill 再提议',

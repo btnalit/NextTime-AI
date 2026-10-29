@@ -110,12 +110,17 @@ export { lockWorkerRegistry } from './registry-lock.js';
 export {
   DEFAULT_DRAFT_EXPIRY_DAYS,
   DraftNotDiscardableError,
+  DraftNotRejectableError,
   discardDraft,
   expireDraftsOnce,
+  rejectDraft,
 } from './draft-lifecycle.js';
 export type {
   DiscardedDraft,
   DraftRef,
   ExpireDraftsOnceOptions,
   ExpireDraftsOnceResult,
+  RejectableDraftKind,
+  RejectableDraftRef,
+  RejectedDraft,
 } from './draft-lifecycle.js';

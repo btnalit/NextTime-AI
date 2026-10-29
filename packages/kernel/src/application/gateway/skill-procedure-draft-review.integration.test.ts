@@ -6,10 +6,14 @@ import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
-import { FamilyDraftPendingError, proposeSkill } from '../../application/worker/index.js';
-import { NotProposerError } from '../../governance/capability/index.js';
+import {
+  DraftNotRejectableError,
+  FamilyDraftPendingError,
+  proposeSkill,
+} from '../../application/worker/index.js';
+import { NotProposerError, ReviewedDraftChangedError } from '../../governance/capability/index.js';
 import { ForbiddenError } from './authorize.js';
-import { dispatchCapability } from './dispatch.js';
+import { InvalidCapabilityParamsError, dispatchCapability } from './dispatch.js';
 import type { ResolvedCaller } from './resolve-caller.js';
 
 /**
@@ -540,6 +544,234 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(await listedProcedure(builderId, 'builder', procedureId)).toMatchObject({
           status: 'draft',
         });
+      });
+    });
+
+    // E2-0b (review #493 on #764, F2): the reviewer's transition beside discard_draft.
+    describe('reject_draft: the owner or the proposer of the version in use takes a pending draft off its family', () => {
+      /** v1 published by `builderId`, then v2 proposed by `otherBuilderId` — the pending draft. */
+      async function skillWithPendingDraft(): Promise<{
+        skillId: string;
+        name: string;
+        draftDigest: string;
+      }> {
+        const skill = {
+          name: `reject-skill-${randomUUID().slice(0, 8)}`,
+          description: 'Version one.',
+          markdown: '# One',
+        };
+        const v1 = await call<{ id: string; draftDigest: string }>(
+          builderId,
+          'builder',
+          'propose_skill',
+          { skill },
+        );
+        await call(builderId, 'builder', 'publish_skill', {
+          skillId: v1.id,
+          version: 1,
+          draftDigest: v1.draftDigest,
+        });
+        const v2 = await call<{ version: number; draftDigest: string }>(
+          otherBuilderId,
+          'builder',
+          'propose_skill',
+          { skill: { ...skill, markdown: '# Two' }, skillId: v1.id },
+        );
+        expect(v2.version).toBe(2);
+        return { skillId: v1.id, name: skill.name, draftDigest: v2.draftDigest };
+      }
+
+      async function rejectAudits(id: string) {
+        return withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
+          const audit = await client.query<{
+            actor_principal_id: string;
+            resource_type: string;
+            payload: {
+              channel: string;
+              params: { kind: string; version: number; draftDigest: string; reason: string };
+              rejectedDraft: { proposedBy: string; inUseVersion: number | null };
+            };
+          }>(
+            `select actor_principal_id, resource_type, payload from audit_records
+             where workspace_id = $1 and action = 'reject_draft' and resource_id = $2`,
+            [workspaceId, id],
+          );
+          return audit.rows;
+        });
+      }
+
+      it('the proposer of the version in use rejects it with a reason: the draft is gone, v1 stays in use, the audit keeps who and why, and the next version can be proposed again', async () => {
+        const { skillId, name, draftDigest } = await skillWithPendingDraft();
+
+        const rejected = await call(builderId, 'builder', 'reject_draft', {
+          kind: 'skill',
+          id: skillId,
+          version: 2,
+          draftDigest,
+          reason: 'Step two repeats step one.',
+        });
+        expect(rejected).toEqual({ kind: 'skill', id: skillId, version: 2 });
+        const listed = await listedSkill(ownerId, 'owner', skillId);
+        expect(listed).toMatchObject({ version: 1, status: 'published' });
+        expect(listed).not.toHaveProperty('inUse');
+
+        const audits = await rejectAudits(skillId);
+        expect(audits).toHaveLength(1);
+        expect(audits[0]).toMatchObject({
+          actor_principal_id: builderId,
+          resource_type: 'skill',
+          payload: {
+            channel: 'human',
+            params: {
+              kind: 'skill',
+              version: 2,
+              draftDigest,
+              reason: 'Step two repeats step one.',
+            },
+            rejectedDraft: { proposedBy: otherBuilderId, inUseVersion: 1 },
+          },
+        });
+
+        // draft_pending no longer holds.
+        const again = await call<{ version: number }>(otherBuilderId, 'builder', 'propose_skill', {
+          skill: {
+            name,
+            description: 'Version two again.',
+            markdown: '# Two, fixed',
+          },
+          skillId,
+        });
+        expect(again.version).toBe(2);
+      });
+
+      it('the owner rejects it too', async () => {
+        const { skillId, draftDigest } = await skillWithPendingDraft();
+        await call(ownerId, 'owner', 'reject_draft', {
+          kind: 'skill',
+          id: skillId,
+          version: 2,
+          draftDigest,
+          reason: 'Not wanted.',
+        });
+        expect(await listedSkill(ownerId, 'owner', skillId)).toMatchObject({ version: 1 });
+      });
+
+      it('the draft’s own proposer (who proposed no version in use), a member and an agent cannot reject it; nothing changes', async () => {
+        const { skillId, draftDigest } = await skillWithPendingDraft();
+        const params = { kind: 'skill', id: skillId, version: 2, draftDigest, reason: 'No.' };
+
+        // The draft's proposer discards it instead (discard_draft).
+        await expect(call(otherBuilderId, 'builder', 'reject_draft', params)).rejects.toThrow(
+          /only the workspace owner or the proposer of the family's version in use \(v1\)/,
+        );
+        await expect(
+          call(otherBuilderId, 'builder', 'reject_draft', params),
+        ).rejects.toBeInstanceOf(NotProposerError);
+        await expect(call(memberId, 'member', 'reject_draft', params)).rejects.toBeInstanceOf(
+          ForbiddenError,
+        );
+        await expect(
+          dispatchCapability({ pool }, handleCaller(ownerId), 'reject_draft', params),
+        ).rejects.toBeInstanceOf(ForbiddenError);
+
+        expect(await listedSkill(ownerId, 'owner', skillId)).toMatchObject({
+          version: 2,
+          status: 'draft',
+          draftDigest,
+        });
+        expect(await rejectAudits(skillId)).toHaveLength(0);
+      });
+
+      it('a reason is required; the draft reviewed is named by its digest; only a draft is rejected', async () => {
+        const { skillId, draftDigest } = await skillWithPendingDraft();
+        const params = { kind: 'skill', id: skillId, version: 2, draftDigest };
+
+        await expect(call(builderId, 'builder', 'reject_draft', params)).rejects.toBeInstanceOf(
+          InvalidCapabilityParamsError,
+        );
+        await expect(
+          call(builderId, 'builder', 'reject_draft', { ...params, reason: '   ' }),
+        ).rejects.toBeInstanceOf(InvalidCapabilityParamsError);
+        await expect(
+          call(builderId, 'builder', 'reject_draft', {
+            ...params,
+            draftDigest: 'sha256:another',
+            reason: 'No.',
+          }),
+        ).rejects.toBeInstanceOf(ReviewedDraftChangedError);
+        expect(await listedSkill(ownerId, 'owner', skillId)).toMatchObject({ version: 2 });
+
+        await expect(
+          call(builderId, 'builder', 'reject_draft', { ...params, version: 1, reason: 'No.' }),
+        ).rejects.toBeInstanceOf(DraftNotRejectableError);
+        await expect(
+          call(builderId, 'builder', 'reject_draft', { ...params, version: 3, reason: 'No.' }),
+        ).rejects.toThrow(/not found/i);
+      });
+
+      it('a family with no published version: the owner rejects its draft, a builder may not', async () => {
+        const skillId = await workerProposedSkillOfMember();
+        const draftDigest = await reviewedSkillDigest(ownerId, 'owner', skillId);
+        const params = { kind: 'skill', id: skillId, version: 1, draftDigest, reason: 'No.' };
+
+        await expect(call(builderId, 'builder', 'reject_draft', params)).rejects.toThrow(
+          /no published version, so only the workspace owner may reject it/,
+        );
+        await call(ownerId, 'owner', 'reject_draft', params);
+        expect(await listedSkill(ownerId, 'owner', skillId)).toBeUndefined();
+        expect((await rejectAudits(skillId))[0]?.payload.rejectedDraft).toMatchObject({
+          proposedBy: memberId,
+          inUseVersion: null,
+        });
+      });
+
+      it('a Procedure: the proposer of the version in use rejects another builder’s next version, which can then be proposed again', async () => {
+        const procedure = {
+          name: `reject-procedure-${randomUUID().slice(0, 8)}`,
+          description: 'v1',
+          steps: [{ kind: 'approval', description: 'A human approves the change.' }],
+        };
+        const v1 = await call<{ id: string; draftDigest: string }>(
+          builderId,
+          'builder',
+          'propose_procedure',
+          { procedure },
+        );
+        await call(builderId, 'builder', 'publish_procedure', {
+          procedureId: v1.id,
+          version: 1,
+          draftDigest: v1.draftDigest,
+        });
+        const v2 = await call<{ draftDigest: string }>(
+          otherBuilderId,
+          'builder',
+          'propose_procedure',
+          { procedure: { ...procedure, description: 'v2' }, procedureId: v1.id },
+        );
+        await expect(
+          call(otherBuilderId, 'builder', 'propose_procedure', {
+            procedure: { ...procedure, description: 'v2 again' },
+            procedureId: v1.id,
+          }),
+        ).rejects.toBeInstanceOf(FamilyDraftPendingError);
+
+        await call(builderId, 'builder', 'reject_draft', {
+          kind: 'procedure',
+          id: v1.id,
+          version: 2,
+          draftDigest: v2.draftDigest,
+          reason: 'v1 already covers it.',
+        });
+        expect(await listedProcedure(ownerId, 'owner', v1.id)).toMatchObject({
+          status: 'published',
+        });
+        const again = await call<{ version: number }>(
+          otherBuilderId,
+          'builder',
+          'propose_procedure',
+          { procedure: { ...procedure, description: 'v2 again' }, procedureId: v1.id },
+        );
+        expect(again.version).toBe(2);
       });
     });
   },
