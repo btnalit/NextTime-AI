@@ -1,9 +1,21 @@
-import type { GoalPlan, OperationSummaryWire } from '@nexttime/shared';
+import type {
+  GoalAbsenceBaselineWire,
+  GoalPlan,
+  GoalRunStatus,
+  OperationSummaryWire,
+} from '@nexttime/shared';
 import type { CapabilityCaller } from '../../lib/clients.js';
-import { absenceOperationKey, observationSentence, planAbsenceChecks } from '../../lib/goals.js';
+import { formatDateTime, formatRelative, shortId } from '../../lib/format.js';
+import {
+  absenceOperationKey,
+  checkErrorLabel,
+  observationSentence,
+  planAbsenceChecks,
+} from '../../lib/goals.js';
 import { absentAnswersWhenText } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
 import { AbsentAnswersReviewedLine } from '../catalog/AbsentAnswersReview.js';
+import { CopyButton } from '../kit/copy-button.js';
 import {
   ABSENCE_OPERATION_UNREADABLE,
   type AbsenceOperation,
@@ -84,6 +96,140 @@ export function AbsenceBasis({
   );
 }
 
+/**
+ * components/goals/AbsenceBaselineLine (S11 「门确认不存在」 B-c): beside an absence check of the
+ * plan in force, the platform's look with the same call before the goal's work — the check can pass
+ * only after a look that saw the thing there, so params that name something never there pause the
+ * run instead of passing with nothing removed. `baseline` is get_goal's latest look of the check
+ * whose call the plan in force makes (`absenceBaselines`); none yet: what will happen, while the run
+ * has not ended. A look that did not see the thing says what the requester can do.
+ */
+export function AbsenceBaselineLine({
+  baseline,
+  goalStatus,
+}: {
+  readonly baseline: GoalAbsenceBaselineWire | undefined;
+  readonly goalStatus: GoalRunStatus;
+}) {
+  const t = useT();
+  const take =
+    baseline !== undefined && baseline.take > 1
+      ? t(`（第 ${baseline.take} 次看）`, ` (look ${baseline.take})`)
+      : '';
+  if (baseline === undefined) {
+    if (goalStatus !== 'proposed' && goalStatus !== 'running' && goalStatus !== 'paused') {
+      return null;
+    }
+    return (
+      <span
+        className="w-full text-small text-3"
+        data-testid="goal-absence-baseline"
+        data-baseline="none"
+      >
+        {goalStatus === 'proposed'
+          ? t(
+              '确认后、第一步开始前，平台会用同样的参数先看一次：看到它在，这条检查以后才可能通过。',
+              'Once confirmed, before the first step starts, the platform makes the same call first: only if it sees the thing there can this check pass later.',
+            )
+          : t(
+              '第一步开始前平台会先看一次它在不在，还没看。',
+              'Before the first step starts the platform looks once whether it is there; it has not looked yet.',
+            )}
+      </span>
+    );
+  }
+  switch (baseline.status) {
+    case 'pending':
+      return (
+        <span
+          className="w-full text-small text-3"
+          data-testid="goal-absence-baseline"
+          data-baseline="pending"
+        >
+          {t(
+            `平台正在先看它在不在${take}：看到它在之后，步骤才开始。`,
+            `The platform is looking whether it is there first${take}; the steps start once it has seen it.`,
+          )}
+          {baseline.lastError
+            ? t(
+                ` 上次没看成：${checkErrorLabel(baseline.lastError, t)}，稍后再试。`,
+                ` The last try did not get an answer: ${checkErrorLabel(baseline.lastError, t)}; it tries again shortly.`,
+              )
+            : null}
+        </span>
+      );
+    case 'seen_present':
+      return (
+        <span
+          className="w-full row-wrap text-small text-3"
+          data-testid="goal-absence-baseline"
+          data-baseline="seen_present"
+        >
+          <span>
+            {t(
+              `开始前平台看到它在${take}，所以它不在了才说明是这个目标删掉的。`,
+              `Before the work the platform saw it there${take}, so its absence later shows this goal removed it.`,
+            )}
+          </span>
+          {baseline.settledAt ? (
+            <time title={formatDateTime(baseline.settledAt)}>
+              {formatRelative(baseline.settledAt)}
+            </time>
+          ) : null}
+          {baseline.observationId ? (
+            <span className="row-wrap">
+              {t('观察', 'Observation')}
+              <span className="mono">{shortId(baseline.observationId)}</span>
+              <CopyButton
+                value={baseline.observationId}
+                label={t('复制观察 ID', 'Copy observation id')}
+              />
+            </span>
+          ) : null}
+        </span>
+      );
+    case 'never_seen_present':
+      return (
+        <span
+          className="w-full text-small text-warn"
+          data-testid="goal-absence-baseline"
+          data-baseline="never_seen_present"
+        >
+          {t(
+            `开始前门就回答它不在${take}：这条检查证明不了是这个目标删掉的，所以目标暂停，步骤没有开始。核对参数是不是正好指向要删的东西，然后修订计划、继续运行再看一次，或者取消。`,
+            `Before the work the gate already answered that it is not there${take}: this check could not show this goal removed it, so the goal paused before any step. Check that the params name exactly what the goal removes, then revise the plan, resume to look again, or cancel.`,
+          )}
+        </span>
+      );
+    case 'unavailable':
+      return (
+        <span
+          className="w-full text-small text-warn"
+          data-testid="goal-absence-baseline"
+          data-baseline="unavailable"
+        >
+          {t(
+            `开始前平台没能看它在不在${take}（${baseline.lastError ? checkErrorLabel(baseline.lastError, t) : '没有记下原因'}），所以目标暂停，步骤没有开始。继续运行会再看一次。`,
+            `Before the work the platform could not look whether it is there${take} (${baseline.lastError ? checkErrorLabel(baseline.lastError, t) : 'no reason recorded'}), so the goal paused before any step. Resuming looks again.`,
+          )}
+        </span>
+      );
+    case 'superseded':
+      return (
+        <span
+          className="w-full text-small text-3"
+          data-testid="goal-absence-baseline"
+          data-baseline="superseded"
+        >
+          {t(
+            '目标停下时平台还没看完它在不在；继续运行后会再看。',
+            'The goal stopped before the platform finished looking whether it is there; it looks again once resumed.',
+          )}
+        </span>
+      );
+  }
+}
+
 /** The goal's confirm card (S11 「门确认不存在」 B): each absence check of the plan — the goal's
  *  and its steps' — in a sentence, with what its "not there" rests on, so the requester sees what
  *  the goal will be judged by before it starts. Nothing when the plan has none. */
@@ -111,8 +257,8 @@ export function AbsenceChecksBasis({
       </span>
       <span className="text-warn" data-testid="goal-confirm-absence-params">
         {t(
-          '确认前核对每条检查的参数：要正好指向这个目标要删掉的那个东西。参数写错、指向一个本来就没有的东西，门同样回答“不存在”，检查第一次就会通过。',
-          'Before confirming, check each one’s params: they must name exactly the thing this goal removes. Params that name something that was never there get the same “not there”, and the check passes on its first try.',
+          '确认前核对每条检查的参数：要正好指向这个目标要删掉的那个东西。第一步开始前，平台会用同样的参数先看一次；门说它本来就不在时，目标会暂停等你处理，不会让检查在什么都没删的情况下通过。',
+          'Before confirming, check each one’s params: they must name exactly the thing this goal removes. Before the first step starts the platform makes the same call; if the gate says it is not there already, the goal pauses for you rather than letting the check pass with nothing removed.',
         )}
       </span>
       <ul className="stack-s">

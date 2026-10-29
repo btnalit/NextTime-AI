@@ -111,6 +111,7 @@ describe('lib/goal-actions', () => {
             },
           ],
           steps: [],
+          absenceBaselines: [],
           overriddenChecks: [],
         },
       });

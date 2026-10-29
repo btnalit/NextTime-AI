@@ -646,6 +646,127 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
     expect(retired.textContent).toContain('没有已发布版本，平台做不了这条检查');
   });
 
+  it('under each absence check, how the platform’s look before the goal’s work went: seen there, already not there, could not look, or not yet (S11 「门确认不存在」 B-c)', async () => {
+    const base = goalDetail();
+    const [fetch, apply] = base.planRevision.plan.steps as [
+      (typeof base.planRevision.plan.steps)[number],
+      (typeof base.planRevision.plan.steps)[number],
+    ];
+    const absence = (key: string) => ({
+      kind: 'observe_absent' as const,
+      key,
+      check: { gatekeeperId: GATE_ID, operation: 'svc.lookup', params: { name: key } },
+    });
+    const look = (stepKey: string | null, checkKey: string, extra: Record<string, unknown>) => ({
+      stepKey,
+      checkKey,
+      take: 1,
+      status: 'pending' as const,
+      attempts: 0,
+      lastError: null,
+      observationId: null,
+      createdAt: '2026-10-29T00:00:00.000Z',
+      settledAt: null,
+      ...extra,
+    });
+    const detail = goalDetail({
+      status: 'paused',
+      planRevision: {
+        ...base.planRevision,
+        plan: {
+          steps: [fetch, { ...apply, acceptance: [absence('step-gone')] }],
+          acceptance: [absence('seen'), absence('never'), absence('later')],
+        },
+      },
+      acceptance: {
+        ...base.acceptance,
+        absenceBaselines: [
+          look(null, 'seen', {
+            status: 'seen_present',
+            attempts: 1,
+            observationId: 'obs-seen-0001',
+            settledAt: '2026-10-29T00:01:00.000Z',
+          }),
+          look(null, 'never', {
+            take: 2,
+            status: 'never_seen_present',
+            attempts: 1,
+            observationId: 'obs-never-0001',
+            settledAt: '2026-10-29T00:02:00.000Z',
+          }),
+          look('apply', 'step-gone', {
+            status: 'unavailable',
+            attempts: 1,
+            lastError: 'operation_refused',
+            settledAt: '2026-10-29T00:03:00.000Z',
+          }),
+        ],
+      },
+    });
+    renderPage(scriptedHttp({ ...baseHandlers(detail), list_operations: () => ({ items: [] }) }));
+
+    const acceptance = await screen.findByTestId('goal-acceptance');
+    const lines = within(acceptance).getAllByTestId('goal-absence-baseline') as [
+      HTMLElement,
+      HTMLElement,
+      HTMLElement,
+    ];
+    expect(lines.map((line) => line.getAttribute('data-baseline'))).toEqual([
+      'seen_present',
+      'never_seen_present',
+      'none',
+    ]);
+    const [seen, never, later] = lines;
+    expect(seen.textContent).toContain('开始前平台看到它在，所以它不在了才说明是这个目标删掉的。');
+    expect(seen.textContent).toContain('obs-seen');
+    expect(never.textContent).toContain('开始前门就回答它不在（第 2 次看）');
+    expect(never.textContent).toContain('修订计划、继续运行再看一次，或者取消');
+    expect(later.textContent).toContain('第一步开始前平台会先看一次它在不在，还没看。');
+
+    const step = (await screen.findAllByTestId('goal-step'))[1] as HTMLElement;
+    const stepLine = within(step).getByTestId('goal-absence-baseline');
+    expect(stepLine.getAttribute('data-baseline')).toBe('unavailable');
+    expect(stepLine.textContent).toContain('开始前平台没能看它在不在');
+    expect(stepLine.textContent).toContain('继续运行会再看一次');
+  });
+
+  it('a goal not yet confirmed says the platform will look first; an ended one without a look says nothing (S11 「门确认不存在」 B-c)', async () => {
+    const base = goalDetail();
+    const plan = {
+      ...base.planRevision.plan,
+      acceptance: [
+        {
+          kind: 'observe_absent' as const,
+          key: 'gone',
+          check: { gatekeeperId: GATE_ID, operation: 'svc.lookup' },
+        },
+      ],
+    };
+    const proposed = goalDetail({
+      status: 'proposed',
+      planRevision: { ...base.planRevision, plan },
+    });
+    const first = renderPage(
+      scriptedHttp({ ...baseHandlers(proposed), list_operations: () => ({ items: [] }) }),
+    );
+    const line = await within(await screen.findByTestId('goal-acceptance')).findByTestId(
+      'goal-absence-baseline',
+    );
+    expect(line.getAttribute('data-baseline')).toBe('none');
+    expect(line.textContent).toContain('确认后、第一步开始前，平台会用同样的参数先看一次');
+    first.unmount();
+
+    const cancelled = goalDetail({
+      status: 'cancelled',
+      planRevision: { ...base.planRevision, plan },
+    });
+    renderPage(
+      scriptedHttp({ ...baseHandlers(cancelled), list_operations: () => ({ items: [] }) }),
+    );
+    await screen.findByTestId('goal-acceptance');
+    expect(screen.queryByTestId('goal-absence-baseline')).toBeNull();
+  });
+
   it('a plan written out says nothing of a Procedure', async () => {
     renderPage(scriptedHttp(baseHandlers(goalDetail())));
     await screen.findAllByTestId('goal-revision');

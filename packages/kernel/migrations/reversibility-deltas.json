@@ -105,6 +105,34 @@
       "rationale": "docs/runbooks/release.md §6, goal 0006: 0006 adds a foreign key from step_acceptance_checks.observation_id into observations, the same kind of change as governance 0024 and goal 0005 (declared separately so it stays declared whichever release ships first). The previous release's observation compaction refuses to run when the catalog shows a foreign key into observations it does not check (its fail-closed guard), so after a code-only rollback scripts/apply-release.sh reports the observations-compaction step degraded until the release carrying 0006 is applied again. Nothing is deleted, and the rest of the previous release's suite passes on the new schema. HEAD's compaction knows the key, and condition (a) keeps the Observation a step's acceptance check rests on."
     },
     {
+      "migration": "goal/0012_absence_baselines.sql",
+      "baseTests": [
+        {
+          "file": "src/application/platform/compact-observations.integration.test.ts",
+          "fullName": "compactObservations (integration, real Postgres) — leftover 103 a dry run deletes nothing, writes no audit row, and classifies every old row"
+        },
+        {
+          "file": "src/application/platform/compact-observations.integration.test.ts",
+          "fullName": "compactObservations (integration, real Postgres) — leftover 103 the executing run deletes exactly what the dry run predicted, and only redundant ingest rows"
+        },
+        {
+          "file": "src/application/platform/compact-observations.integration.test.ts",
+          "fullName": "compactObservations (integration, real Postgres) — leftover 103 writes one unattributed cli.observations_compacted audit row with the parameters and per-workspace counts"
+        },
+        {
+          "file": "src/application/platform/compact-observations.integration.test.ts",
+          "fullName": "compactObservations (integration, real Postgres) — leftover 103 a second run deletes nothing (idempotent) and, given an operator, writes an attributed audit row"
+        }
+      ],
+      "replacedBy": [
+        {
+          "file": "src/application/platform/compact-observations.integration.test.ts",
+          "fullName": "compactObservations and an absence baseline (integration, real Postgres) — S11 「门确认不存在」 B-c runs on a schema where an absence baseline references an Observation, and never deletes the one the baseline rests on"
+        }
+      ],
+      "rationale": "docs/runbooks/release.md §6, goal 0012: 0012 adds a foreign key from goal_absence_baselines.observation_id into observations, the same kind of change as governance 0024, goal 0005 and goal 0006 (declared separately so it stays declared whichever release ships first). The previous release's observation compaction refuses to run when the catalog shows a foreign key into observations it does not check (its fail-closed guard), so after a code-only rollback scripts/apply-release.sh reports the observations-compaction step degraded until the release carrying 0012 is applied again. Nothing is deleted, and the rest of the previous release's suite passes on the new schema. HEAD's compaction knows the key, and condition (a) keeps the Observation an absence check's baseline rests on."
+    },
+    {
       "migration": "core/0047_operation_version_guard.sql",
       "baseTests": [
         {

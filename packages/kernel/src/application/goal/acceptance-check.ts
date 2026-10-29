@@ -3,6 +3,7 @@ import type { PoolClient } from 'pg';
 import { type PoolLike, withWorkspace } from '../../adapters/db/pool.js';
 import type { OperationAbsentAnswersReview } from '../../governance/gatekeepers/index.js';
 import type { PredicateOutcome } from '../../substrate/epistemic/index.js';
+import { NEVER_SEEN_PRESENT, absenceSeenBefore } from './absence-baselines.js';
 import {
   type AcceptanceCheckRow,
   FACT_NOT_OBSERVED,
@@ -57,6 +58,11 @@ import { lockGoalRun } from './service.js';
  *     that gate, the gate or Operation is gone, an absence check's Operation no longer declares
  *     which answers mean "does not exist", the params carry a credential, or the gate refused the
  *     call — an answer of absence its published definition does not declare among them.
+ *   - **never seen there** (S11 「门确认不存在」 B-c, I-AB1) — an absence check whose run has no
+ *     baseline of its call that saw the thing (`absence-baselines.ts`) is `unavailable`
+ *     (`never_seen_present`) without a call: its absence now could not show this goal removed it.
+ *     The advance takes the baselines before any step starts, so this is the backstop the database
+ *     holds the check to anyway.
  *
  * **When.** Only while the run is `verifying` and the row is in its latest round: a move out of
  * `verifying` supersedes the round's pending rows in that transaction (`moves.ts`), so a paused,
@@ -314,6 +320,21 @@ export async function runAcceptanceCheck(
 
   if (!claimed.observationCheck) return settle(deps, due, claimed, { kind: 'fact' });
   const check = claimed.observationCheck;
+  // S11 「门确认不存在」 B-c (I-AB1): an absence the run never saw the thing before proves nothing
+  // this goal did — not asked.
+  if (expectsAbsence(check)) {
+    const seen = await withWorkspace(deps.pool, context, (client) =>
+      absenceSeenBefore(client, due.workspaceId, {
+        goalRunId: due.goalRunId,
+        stepRunId: due.stepRunId,
+        checkKey: claimed.checkKey,
+        call: check,
+      }),
+    );
+    if (!seen) {
+      return settle(deps, due, claimed, { kind: 'unavailable', code: NEVER_SEEN_PRESENT });
+    }
+  }
   const prepared = await withWorkspace(deps.pool, context, (client) =>
     preparePlatformObservation(client, due.workspaceId, due.requesterId, check),
   );

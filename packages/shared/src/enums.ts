@@ -490,6 +490,31 @@ export type GoalAcceptanceCheckStatus = (typeof GOAL_ACCEPTANCE_CHECK_STATUS_VAL
 export const GoalAcceptanceCheckStatusSchema = asEnum(GOAL_ACCEPTANCE_CHECK_STATUS_VALUES);
 
 /**
+ * S11 「门确认不存在」 B-c (goal/0012): where the baseline of an absence check (`observe_absent`)
+ * stands — the platform's look, with the check's call, before the goal's work starts, so that the
+ * thing's absence afterwards can show the goal removed it (I-AB1: an absence check passes only on a
+ * baseline that saw it):
+ *   - `pending` (还没看): not looked at yet, or tried again;
+ *   - `seen_present` (看到过): the gate answered with the thing — it was there;
+ *   - `never_seen_present` (一开始就不在): the gate confirmed it was not there already — the check
+ *     on that call can never pass;
+ *   - `unavailable` (没看成): the look was refused, or not answered by the last try;
+ *   - `superseded` (已作废): the run stopped running before it settled, or the plan in force no
+ *     longer makes that call.
+ * Only `pending` moves, once, to one of the others; the requester's resume takes a new baseline of
+ * a check whose latest one did not see the thing.
+ */
+export const GOAL_ABSENCE_BASELINE_STATUS_VALUES = [
+  'pending',
+  'seen_present',
+  'never_seen_present',
+  'unavailable',
+  'superseded',
+] as const;
+export type GoalAbsenceBaselineStatus = (typeof GOAL_ABSENCE_BASELINE_STATUS_VALUES)[number];
+export const GoalAbsenceBaselineStatusSchema = asEnum(GOAL_ABSENCE_BASELINE_STATUS_VALUES);
+
+/**
  * PlanRevision status: `proposed → accepted | rejected`. A revision's content never changes; which
  * accepted revision is in force is the GoalRun's `current_revision`, so "superseded" is derived
  * (an accepted revision older than the current one), not a status. Accepting requires the revision

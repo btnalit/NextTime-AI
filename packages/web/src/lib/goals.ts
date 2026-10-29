@@ -4,6 +4,7 @@ import type {
   ActionRequestReconciliation,
   FactCheck,
   FactObjectRef,
+  GoalAbsenceBaselineWire,
   GoalAcceptanceCheckKind,
   GoalAcceptanceCheckWire,
   GoalDetailWire,
@@ -852,6 +853,11 @@ const CHECK_ERROR: Readonly<Record<string, readonly [string, string]>> = {
     '这个 Operation 现在的版本发布时没有人确认门用的凭据看得到要查的东西，它的“不存在”证明不了什么，检查不做',
     'Nobody confirmed, when the Operation’s version in force was published, that the gate’s credentials can see what it looks up; its “not there” proves nothing, so the check is not made',
   ],
+  // S11 「门确认不存在」 B-c.
+  never_seen_present: [
+    '开始前平台没看到过它在：现在它不在，证明不了是这个目标删掉的，检查不做',
+    'The platform never saw it there before the goal’s work: its absence now does not show this goal removed it, so the check is not made',
+  ],
 };
 
 /** What went wrong at a check's last attempt (`lastError`, a short code the kernel keeps): the
@@ -966,6 +972,19 @@ export function planAbsenceChecks(plan: GoalPlan): AbsenceCheckRef[] {
   return found;
 }
 
+/** S11 「门确认不存在」 B-c: the platform's latest look before the goal's work for the absence
+ *  check `checkKey` of the goal (`stepKey` null) or of step `stepKey` — get_goal lists only looks
+ *  with the call the plan in force makes. */
+export function absenceBaselineOf(
+  detail: Pick<GoalDetailWire, 'acceptance'>,
+  stepKey: string | null,
+  checkKey: string,
+): GoalAbsenceBaselineWire | undefined {
+  return detail.acceptance.absenceBaselines.find(
+    (baseline) => baseline.stepKey === stepKey && baseline.checkKey === checkKey,
+  );
+}
+
 /** The key the Operation an absence check calls is read under (`useAbsenceOperations`). */
 export function absenceOperationKey(
   check: Pick<ObservationAbsenceCheck, 'gatekeeperId' | 'operation'>,
@@ -1070,10 +1089,12 @@ export interface GoalStateNote {
 /**
  * What the goal is doing or waiting on, for the top of its page. `unresolved` is
  * `list_goal_unresolved_actions` when it was read (`undefined` while loading or refused): with it,
- * a goal paused for a check whose findings are all recorded says it can go on.
+ * a goal paused for a check whose findings are all recorded says it can go on. With the run's
+ * `acceptance` (get_goal), a goal paused because the platform's look before its work did not see
+ * what an absence check removes says so (S11 「门确认不存在」 B-c).
  */
 export function goalStateNote(
-  goal: GoalRunWire,
+  goal: GoalRunWire & Partial<Pick<GoalDetailWire, 'acceptance' | 'steps'>>,
   unresolved: readonly UnresolvedGoalActionWire[] | undefined,
   budget: readonly BudgetRow[],
   t: Translate,
@@ -1131,7 +1152,7 @@ export function goalStateNote(
 }
 
 function pausedNote(
-  goal: GoalRunWire,
+  goal: GoalRunWire & Partial<Pick<GoalDetailWire, 'acceptance' | 'steps'>>,
   unresolved: readonly UnresolvedGoalActionWire[] | undefined,
   budget: readonly BudgetRow[],
   t: Translate,
@@ -1187,6 +1208,36 @@ function pausedNote(
         ),
       };
     case 'needs_decision':
+      if (
+        goal.acceptance?.absenceBaselines.some(
+          (baseline) =>
+            baseline.status === 'never_seen_present' || baseline.status === 'unavailable',
+        )
+      ) {
+        return {
+          tone: 'warn',
+          text: t(
+            '需要人决定：开工前平台没看到某条“不存在”检查要删的东西在（或者没能看），步骤没有开始。见下面验收和步骤里标出的检查。',
+            'A person must decide: before the work the platform did not see what an absence check removes (or could not look), so no step started. See the checks marked under Acceptance and Steps.',
+          ),
+        };
+      }
+      // #780 UX P3-5: the goal's own checks did not pass, and no step failed — nothing is marked
+      // among the steps; what is marked is under Acceptance.
+      if (
+        goal.acceptance?.rounds
+          .at(-1)
+          ?.checks.some((check) => check.status === 'failed' || check.status === 'unavailable') &&
+        !goal.steps?.some((step) => step.status === 'failed')
+      ) {
+        return {
+          tone: 'warn',
+          text: t(
+            '需要人决定：目标的验收检查没通过，或者做不了。见下面「验收」里标出的检查。',
+            'A person must decide: the goal’s acceptance checks did not pass, or could not be made. See the checks marked under Acceptance.',
+          ),
+        };
+      }
       return {
         tone: 'warn',
         text: t(

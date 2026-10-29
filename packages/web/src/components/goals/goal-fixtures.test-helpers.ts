@@ -139,7 +139,7 @@ export function goalDetail(overrides: Partial<GoalDetailWire> = {}): GoalDetailW
         attempts: [],
       }),
     ],
-    acceptance: { rounds: [], steps: [], overriddenChecks: [] },
+    acceptance: { rounds: [], steps: [], absenceBaselines: [], overriddenChecks: [] },
     leftovers: null,
     ...overrides,
   };

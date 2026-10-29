@@ -1719,6 +1719,14 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     enHint:
       'The platform tried one of a step’s acceptance checks, recording its result or the next try.',
   },
+  'goal_run.absence_baseline': {
+    zh: '先看要删的东西在不在',
+    en: 'Absence baseline looked at',
+    zhHint:
+      '目标开始做之前，平台用“确认不存在”检查的同一调用先看一次，记下它当时在、已经不在，或者没看成。',
+    enHint:
+      'Before the goal’s work, the platform looked with an absence check’s call, recording that the thing was there, was already not there, or could not be looked at.',
+  },
   'step_run.create': {
     zh: '目标步骤已建立',
     en: 'Goal step created',

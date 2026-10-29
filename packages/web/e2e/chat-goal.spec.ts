@@ -98,7 +98,7 @@ function proposedGoal(requester: string) {
     },
     revisions: [],
     steps: [],
-    acceptance: { rounds: [], steps: [], overriddenChecks: [] },
+    acceptance: { rounds: [], steps: [], absenceBaselines: [], overriddenChecks: [] },
     leftovers: null,
   };
 }

@@ -205,6 +205,7 @@ export const AUDIT_LIFECYCLE_ACTIONS = [
   'goal_run.acceptance_check',
   'goal_run.step_acceptance_round',
   'goal_run.step_acceptance_check',
+  'goal_run.absence_baseline',
   'step_run.create',
   'step_run.unblock',
   'step_run.start',

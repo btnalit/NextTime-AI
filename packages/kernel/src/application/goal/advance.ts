@@ -36,6 +36,13 @@ import {
   terminateTaskWith,
 } from '../task/index.js';
 import {
+  type AbsenceBaselineCheck,
+  type AbsenceBaselineRow,
+  NEVER_SEEN_PRESENT,
+  ensureAbsenceBaselines,
+  requiredAbsenceChecks,
+} from './absence-baselines.js';
+import {
   type AcceptanceCheckRow,
   FACT_NOT_OBSERVED,
   TARGET_STILL_PRESENT,
@@ -125,6 +132,18 @@ import type { GoalRunRow, PlanRevisionRow, StepRunRow } from './types.js';
  *   C. **Unblock** (running or paused). A `pending` step whose dependencies all succeeded becomes
  *      `ready` — after re-checking that its definition is still the current plan's entry (the
  *      database does not check this on `ready`). A skipped dependency counts as done.
+ *   Before D, **absence baselines** (running only; S11 「门确认不存在」 B-c, I-AB1). Every absence
+ *      check (`observe_absent`) the plan in force declares — the goal's, and those of its steps that
+ *      have not ended — gets a baseline before anything else starts (`absence-baselines.ts`: a
+ *      `pending` take where its latest is missing, superseded or of another call; a revision that
+ *      keeps the call keeps the baseline), and the platform looks with the check's call
+ *      (`absence-baseline.ts`, outside this transaction; a settled take sets the run due). While one
+ *      is pending, phase D does nothing — no attempt starts and the run does not verify; attempts
+ *      already running go on. One that did not see the thing — the gate answered "not there"
+ *      already (`never_seen_present`), or the look could not be made (`unavailable`) — pauses the
+ *      run `needs_decision` naming it: an absence check on that call could never show this goal
+ *      removed the thing. The requester revises the check's params, or resumes, which looks again
+ *      (`control.ts`). Every one that saw the thing → phase D.
  *   D. **Start** (running only). Every live step succeeded → `verifying`, a verification round
  *      opened and phase V run at once — once nothing of the run is left running: no Task of it (a
  *      step let finish after a revision) and no request of a superseded step still in flight (one
@@ -201,6 +220,23 @@ function unmetEvidence(check: AcceptanceCheckRow): string {
     return `its observation found the thing still there (${TARGET_STILL_PRESENT}): the gate answered with it, not that it does not exist`;
   }
   return 'its observation did not satisfy the predicate';
+}
+
+/** A pause's detail for an `unavailable` absence check that had no baseline seeing the thing (S11
+ *  「门确认不存在」 B-c, I-AB1) — not a check the gate refused. `null` for any other check. */
+function neverSeenPresent(check: AcceptanceCheckRow): string | null {
+  return check.kind === 'observe_absent' && check.lastError === NEVER_SEEN_PRESENT
+    ? `acceptance check ${check.checkKey}: the platform never saw the thing there before the goal's work (${NEVER_SEEN_PRESENT}), so its absence now does not show this goal removed it`
+    : null;
+}
+
+/** A pause's detail for an absence check whose baseline did not see the thing (S11 「门确认不存在」
+ *  B-c, before phase D). */
+function unseenBaseline(check: AbsenceBaselineCheck, baseline: AbsenceBaselineRow): string {
+  const named = `acceptance check ${check.checkKey}${check.stepKey !== null ? ` of step ${check.stepKey}` : ''}`;
+  return baseline.status === 'never_seen_present'
+    ? `${named}: before the goal's work the gate already answered that the thing is not there (${NEVER_SEEN_PRESENT}), so the check could never show this goal removed it`
+    : `${named}: the platform could not look before the goal's work (${baseline.lastError ?? 'no reason recorded'})`;
 }
 
 /** A pause's detail for an `unavailable` fact check that saw no Fact it may rest on — told apart
@@ -509,7 +545,9 @@ class Advance {
         }
       }
       await this.unblockSteps(await this.lockSteps());
-      if (this.status === 'running') await this.startSteps(await this.lockSteps());
+      if (this.status === 'running' && (await this.absenceBaselinesSeen(await this.lockSteps()))) {
+        await this.startSteps(await this.lockSteps());
+      }
       if (this.status === 'running') await this.pauseIfStuck(await this.lockSteps());
     }
 
@@ -787,6 +825,7 @@ class Advance {
       check.status === 'failed'
         ? `acceptance check ${check.checkKey}: ${unmetEvidence(check)}`
         : (noFactSeen(check) ??
+          neverSeenPresent(check) ??
           `acceptance check ${check.checkKey}: could not be made (${check.lastError ?? 'no reason recorded'})`),
     );
     if (failed.length > 0) {
@@ -914,6 +953,40 @@ class Advance {
       }
       await this.moveStep(step, 'unblock', {});
     }
+  }
+
+  // ----- before D -----------------------------------------------------------------------------
+
+  /** S11 「门确认不存在」 B-c — see the module comment, before phase D. Whether every absence check
+   *  that needs a baseline has one that saw the thing; one still pending makes the run wait (its
+   *  settlement sets the run due), one that did not see it pauses the run for the requester. */
+  private async absenceBaselinesSeen(steps: readonly StepRunRow[]): Promise<boolean> {
+    const current = this.goal.currentRevision;
+    if (current === null) throw new Error('advanceGoalRun: a running goal run has no revision');
+    const checks = requiredAbsenceChecks(await this.plan(current), steps);
+    if (!checks) {
+      await this.pause('needs_decision', `revision ${current}: its plan is unreadable`);
+      return false;
+    }
+    if (checks.length === 0) return true;
+    const baselines = await ensureAbsenceBaselines(this.client, this.ws, {
+      goalRunId: this.goal.id,
+      checks,
+      retake: false,
+      actorPrincipalId: this.requester,
+    });
+    const unseen = baselines.filter(
+      ({ baseline }) =>
+        baseline.status === 'never_seen_present' || baseline.status === 'unavailable',
+    );
+    if (unseen.length > 0) {
+      await this.pause(
+        'needs_decision',
+        `${unseen.map(({ check, baseline }) => unseenBaseline(check, baseline)).join('; ')}; revise the check's params or the plan, resume to look again, or cancel`,
+      );
+      return false;
+    }
+    return baselines.every(({ baseline }) => baseline.status === 'seen_present');
   }
 
   // ----- D ------------------------------------------------------------------------------------
@@ -1200,6 +1273,7 @@ class Advance {
         check.status === 'failed'
           ? `acceptance check ${check.checkKey}: ${unmetEvidence(check)}`
           : (noFactSeen(check) ??
+            neverSeenPresent(check) ??
             `acceptance check ${check.checkKey}: ${check.status} (${check.lastError ?? 'no reason recorded'})`),
       );
       await this.pause(

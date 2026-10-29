@@ -7,6 +7,7 @@ import { auditHref } from '../../lib/audit.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatDateTime, formatRelative, shortId } from '../../lib/format.js';
 import {
+  absenceBaselineOf,
   absenceOperationKey,
   checkErrorLabel,
   checkKindLabel,
@@ -24,7 +25,7 @@ import { Notice } from '../kit/notice.js';
 import { RouteLink } from '../kit/route-link.js';
 import { DashboardCard } from '../kit/section.js';
 import { StatusChip } from '../kit/status-chip.js';
-import { AbsenceBasis } from './AbsenceBasis.js';
+import { AbsenceBaselineLine, AbsenceBasis } from './AbsenceBasis.js';
 import type { AbsenceOperations } from './useAbsenceOperations.js';
 
 export interface GoalAcceptanceSectionProps {
@@ -44,7 +45,8 @@ export interface GoalAcceptanceSectionProps {
  * (hints), every verification round with each check's status and evidence (a Fact or a Decision
  * opens its provenance; an Observation shows its id), and — when the requester declared the goal
  * achieved over checks that had not passed — those checks. Under an absence check of the plan, what
- * its "not there" rests on (`AbsenceBasis`).
+ * its "not there" rests on (`AbsenceBasis`) and the platform's look before the goal's work
+ * (`AbsenceBaselineLine`, S11 「门确认不存在」 B-c).
  */
 export function GoalAcceptanceSection({
   detail,
@@ -119,6 +121,12 @@ export function GoalAcceptanceSection({
                     <AbsenceBasis
                       http={http}
                       operation={absenceOperations?.get(absenceOperationKey(check.check))}
+                    />
+                  ) : null}
+                  {check.kind === 'observe_absent' ? (
+                    <AbsenceBaselineLine
+                      baseline={absenceBaselineOf(detail, null, check.key)}
+                      goalStatus={detail.status}
                     />
                   ) : null}
                 </li>
