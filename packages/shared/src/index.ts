@@ -29,6 +29,7 @@ export * from './procedure.js';
 export * from './predicate.js';
 export * from './output-schema.js';
 export * from './outcome-basis.js';
+export * from './skill-stats.js';
 export * from './goal-plan.js';
 export * from './ontology-definition.js';
 export * from './worker-result.js';

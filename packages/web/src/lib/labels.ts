@@ -6,7 +6,9 @@ import type {
   GateTransportKindWire,
   OutcomeBasis,
   PrincipalKind,
+  TaskFailureCategory,
   TaskFailureReason,
+  TaskRefusal,
   TurnStatus,
   WorkerDefinitionKind,
 } from '@nexttime/shared';
@@ -612,4 +614,43 @@ export function proxyOutcomeNote(
       'Attainment counts only the requester’s word and the platform’s checks',
     ),
   };
+}
+
+// -------------------------------------------------------------------------------------------
+// S11 W1a E2-1: a Skill's failure groups (`get_skill_stats`) — the closed category of a failed
+// Task's reason and what refused its work (`TASK_FAILURE_CATEGORY_VALUES` / `TASK_REFUSAL_VALUES`).
+// -------------------------------------------------------------------------------------------
+
+const TASK_FAILURE_CATEGORY_LABELS: Readonly<Record<TaskFailureCategory, BilingualLabel>> = {
+  no_result: { zh: '没有交回结果', en: 'No result handed back' },
+  worker_error: { zh: 'Worker 运行出错', en: 'The Worker’s run failed' },
+  limit_reached: { zh: '超出时长或 token 预算', en: 'Ran past its duration or token budget' },
+  platform: {
+    zh: '平台原因：没能启动、运行丢失或被终止',
+    en: 'Platform side: never started, lost, or ended by the runtime',
+  },
+  other: { zh: '其他原因', en: 'Another reason' },
+};
+
+export function taskFailureCategoryLabel(category: TaskFailureCategory, t: Translate): string {
+  return lookup(TASK_FAILURE_CATEGORY_LABELS, category, t);
+}
+
+const TASK_REFUSAL_LABELS: Readonly<Record<TaskRefusal, BilingualLabel>> = {
+  output_rejected: {
+    zh: '结果不符合目标步骤的输出约定',
+    en: 'Its result did not meet the goal step’s output contract',
+  },
+  rejected: { zh: '有操作被审批人拒绝', en: 'A person rejected one of its actions' },
+  expired: { zh: '有操作等审批直到过期', en: 'One of its actions expired awaiting approval' },
+  denied: { zh: '有操作被策略拒绝', en: 'Policy denied one of its actions' },
+  refused: {
+    zh: '有操作在执行前被平台或门拒绝',
+    en: 'The platform or a gate refused one of its actions before it ran',
+  },
+  none: { zh: '没有被拒绝的操作', en: 'Nothing refused it' },
+};
+
+export function taskRefusalLabel(refusal: TaskRefusal, t: Translate): string {
+  return lookup(TASK_REFUSAL_LABELS, refusal, t);
 }
