@@ -1291,6 +1291,87 @@ describe('CatalogPage', () => {
     expect(within(detail).getByTestId('worker-detail-egress').textContent).toBe('internal.example');
   });
 
+  it("Workers tab: the entry version in use and a Worker's newest version read apart (legacy 481)", async () => {
+    const entry = (version: number, publishedAt: string) => ({
+      id: 'wd-entry',
+      version,
+      kind: 'entry',
+      status: 'published',
+      publishedAt,
+      definition: { systemPrompt: `v${version}` },
+    });
+    const worker = (id: string, version: number) => ({
+      id,
+      version,
+      kind: 'worker',
+      status: 'published',
+      publishedAt: '2026-10-01T00:00:00.000Z',
+      definition: { name: id },
+    });
+    const http = scriptedHttp({
+      list_worker_definitions: () => ({
+        items: [
+          entry(1, '2026-10-01T00:00:00.000Z'),
+          entry(3, '2026-10-03T00:00:00.000Z'),
+          entry(2, '2026-10-02T00:00:00.000Z'),
+          worker('wd-w', 1),
+          worker('wd-w', 2),
+          worker('wd-x', 1),
+        ],
+      }),
+    });
+    renderPage(http, 'workers');
+    const entryList = await screen.findByTestId('workers-entry-list');
+    const entryRows = within(entryList).getAllByTestId('catalog-row');
+    const byVersion = (version: number) =>
+      entryRows.find((row) => row.textContent?.includes(`v${version}`)) as HTMLElement;
+    // Only the most recently published entry version is in use.
+    expect(within(byVersion(3)).getByTestId('worker-in-use').textContent).toBe('生效中');
+    expect(within(entryList).getAllByTestId('worker-in-use')).toHaveLength(1);
+    for (const version of [1, 2]) {
+      expect(within(byVersion(version)).getByTestId('worker-not-in-use').textContent).toBe(
+        ' · 未生效',
+      );
+    }
+    const old = await selectRow(byVersion(1));
+    expect(within(old).getByTestId('worker-detail-not-in-use').textContent).toMatch(
+      /入口 agent 用的是最近发布的 v3/,
+    );
+    fireEvent.click(within(old).getByTestId('worker-detail-open-in-use'));
+    const inUse = await screen.findByTestId('worker-detail-in-use');
+    const opened = inUse.closest('[data-worker-key]') as HTMLElement;
+    expect(opened.getAttribute('data-worker-key')).toBe('wd-entry@3');
+    // UX acceptance of #763 (P2-1): focus on the opened version's title, not the page.
+    await waitFor(() =>
+      expect(document.activeElement).toBe(opened.querySelector('.catalog-detail-title')),
+    );
+
+    const workerList = screen.getByTestId('catalog-list');
+    const marks = within(workerList)
+      .getAllByTestId('catalog-row')
+      .map((row) => [
+        row.textContent?.match(/wd-[wx]/)?.[0],
+        row.querySelector('[data-testid="worker-family-version"]')?.textContent ?? null,
+      ]);
+    expect(marks).toEqual([
+      ['wd-w', ' · 较早版本'],
+      ['wd-w', ' · 最新版'],
+      ['wd-x', null],
+    ]);
+    const earlier = await selectRow(
+      within(workerList).getAllByTestId('catalog-row')[0] as HTMLElement,
+    );
+    expect(within(earlier).getByTestId('worker-detail-earlier-version').textContent).toMatch(
+      /更新的已发布版本 v2/,
+    );
+    fireEvent.click(within(earlier).getByTestId('worker-detail-open-latest'));
+    await waitFor(() => {
+      const title = document.activeElement as HTMLElement;
+      expect(title.classList.contains('catalog-detail-title')).toBe(true);
+      expect(title.closest('[data-worker-key]')?.getAttribute('data-worker-key')).toBe('wd-w@2');
+    });
+  });
+
   // S8 W1-A7 (audit S13): 弃用 Deprecate used to be a plain button with no confirmation at all —
   // now a medium `kit/confirm` anchored to itself; the capability fires only once confirmed.
   it('Operations: Deprecate opens a medium confirm next to the button; deprecate_operation fires only on confirm', async () => {

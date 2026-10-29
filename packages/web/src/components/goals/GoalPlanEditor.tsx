@@ -54,6 +54,7 @@ import {
   definitionVersions,
   distinctDefinitionName,
   latestPerDefinition,
+  versionOptionText,
   workerDefinitionChoices,
 } from '../../lib/tasks.js';
 import { Button } from '../kit/button.js';
@@ -1022,7 +1023,7 @@ function WorkerPicker({
           ) : null}
           {versions.map((row) => (
             <option key={row.version} value={String(row.version)}>
-              {`v${row.version}`}
+              {versionOptionText(row, versions, t)}
             </option>
           ))}
         </Select>

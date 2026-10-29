@@ -56,6 +56,10 @@ describe('NeighbourList / FactRow', () => {
     fireEvent.click(more);
     expect(screen.getAllByTestId('graph-fact-row')).toHaveLength(GROUP_PREVIEW_ROWS + 3);
     expect(screen.queryByTestId('graph-group-show-all')).toBeNull();
+    // Legacy 479 (same class): focus is on the first row it showed, not back on the page.
+    expect(document.activeElement).toBe(
+      screen.getAllByTestId('graph-fact-row')[GROUP_PREVIEW_ROWS],
+    );
   });
 
   it('shows a self-link without an Expand button', () => {
