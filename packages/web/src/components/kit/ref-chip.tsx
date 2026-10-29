@@ -4,6 +4,8 @@ import type { CapabilityCaller } from '../../lib/clients.js';
 import { cn } from '../../lib/cn.js';
 import { shortId } from '../../lib/format.js';
 import { useT } from '../../lib/i18n.js';
+import { WORKER_DEFINITION_KIND_LABELS } from '../../lib/labels.js';
+import { unnamedDefinitionLabel } from '../../lib/tasks.js';
 
 /**
  * components/kit/ref-chip (S8 W1-A6, audit S10 "id 永不裸露", docs/console-completion-plan.md §5.9
@@ -60,6 +62,9 @@ function kindLabel(
   ) {
     return PRINCIPAL_KIND_LABEL[typeName] ?? KIND_LABEL.principal;
   }
+  // Legacy 485: an entry definition is not a Worker — it reads as what it is.
+  if (kind === 'workerDefinition' && typeName === 'entry')
+    return WORKER_DEFINITION_KIND_LABELS.entry;
   return KIND_LABEL[kind];
 }
 
@@ -93,13 +98,22 @@ export function RefChip({
   const needsResolve = (name === undefined || name === null || name === '') && http !== undefined;
   const { get } = useResolveRefs(needsResolve ? http : undefined, needsResolve ? [id] : EMPTY_IDS);
   const resolved = needsResolve ? get(id) : undefined;
-  const effectiveName = name ?? resolved?.name;
   const effectiveTypeName = typeName ?? resolved?.typeName;
+  // Legacy 485: a definition the kernel found but nobody named (an entry definition above all)
+  // reads as what its kind calls an unnamed one, not as 「未知 / 已删除」.
+  const effectiveName =
+    name ??
+    resolved?.name ??
+    (kind === 'workerDefinition' && resolved
+      ? unnamedDefinitionLabel(effectiveTypeName ?? 'worker', t)
+      : undefined);
   const bare = effectiveName === undefined || effectiveName === null || effectiveName === '';
   const copy = kindLabel(kind, effectiveTypeName);
   const label = t(copy.zh, copy.en);
-  // A Principal's kind is its label, not a type name after it.
-  const shownTypeName = kind === 'principal' ? undefined : effectiveTypeName;
+  // A Principal's kind is its label, not a type name after it; so is a definition's (legacy 485:
+  // its `worker` / `entry` kind is no word to show).
+  const shownTypeName =
+    kind === 'principal' || kind === 'workerDefinition' ? undefined : effectiveTypeName;
 
   return (
     <span

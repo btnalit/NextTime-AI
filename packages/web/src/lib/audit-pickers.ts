@@ -35,6 +35,7 @@ import {
 import { ownEntry } from './own.js';
 import { sameNameIds, withSameNameId } from './same-name.js';
 import { type StatusMachine, labelText, statusChipStyle } from './status-tone.js';
+import { unnamedDefinitionLabel } from './tasks.js';
 
 /**
  * lib/audit-pickers: where the audit pages' id / name filters get their candidates from, so a
@@ -402,7 +403,12 @@ const RESOURCE_SOURCES: Readonly<Record<string, SourceFactory>> = {
       const name = definition.definition.name;
       return {
         id: definition.id,
-        label: typeof name === 'string' && name !== '' ? name : definition.id.slice(0, 8),
+        // Legacy 485: an unnamed one reads as its kind (an entry definition is the entry agent's,
+        // legacy 472), never a bare id prefix; two alike carry their short id (`withSameNameIds`).
+        label:
+          typeof name === 'string' && name !== ''
+            ? name
+            : unnamedDefinitionLabel(definition.kind, t),
         detail: workerDefinitionKindLabel(definition.kind, t),
       };
     },
