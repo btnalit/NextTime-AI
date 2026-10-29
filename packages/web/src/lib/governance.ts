@@ -276,7 +276,7 @@ export function absentAnswersOnlyWhenText(
 export function absentAnswersCaveatText(answers: OperationAbsentAnswersWire, t: Translate): string {
   if ('statuses' in answers) {
     return t(
-      '有的目标在没有权限（为隐藏资源回 404）、地址或代理配错时也会这样回答，那时它证明不了任何东西。',
+      '有的目标系统在没有权限（为隐藏资源回 404）、地址或代理配错时也会这样回答，那时它证明不了任何东西。',
       'Some targets answer the same way for no permission (a 404 that hides the resource), a wrong address or a misconfigured proxy, and then it proves nothing.',
     );
   }
