@@ -136,9 +136,12 @@ describe.runIf(DATABASE_URL !== undefined)(
           activityId: activity.id,
         });
         for (const operation of operations) {
+          // S11 「门确认不存在」 B-a: a person publishes them, confirming the declared answers.
           await publishOperation(client, workspaceId, {
             gatekeeperId: registered.gatekeeperId,
             name: operation.name,
+            actor: { principalId: ownerId, role: 'owner' },
+            absentAnswersReviewed: true,
           });
         }
         return registered.gatekeeperId;

@@ -25,6 +25,7 @@ test('needsReason: a gate on the form’s content needs a visible reason', () =>
 test('needsReason: pass-through and self-explained gates', () => {
   assert.equal(needsReason('disabled'), false);
   assert.equal(needsReason('busy || credentialReview.blocked'), false);
+  assert.equal(needsReason('busy || credentialReview.blocked || absentReview.blocked'), false);
 });
 
 const form = (between) => `
@@ -41,10 +42,7 @@ test('findViolations: flags a content-gated button with nothing next to it', () 
 
 test('findViolations: a nearby StillNeeded, a title or an allow comment satisfies it', () => {
   assert.deepEqual(findViolations(form('  <StillNeeded items={missing} />')), []);
-  assert.deepEqual(
-    findViolations('<Button disabled={!ready} title={why}>Save</Button>'),
-    [],
-  );
+  assert.deepEqual(findViolations('<Button disabled={!ready} title={why}>Save</Button>'), []);
   assert.deepEqual(
     findViolations(
       '{/* ux-lint-allow-disabled: the first step cannot move up. */}\n<Button disabled={index === 0}>Up</Button>',

@@ -2,8 +2,10 @@ import type { Operation, PublishableStatus } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import {
   type AnnouncedManifestSource,
+  type OperationAbsentAnswers,
   type OperationGovernanceFields,
   type OperationRecord,
+  absentAnswersOfDefinition,
   diffOperationGovernanceFields,
   gateOwnedParamsOfDefinition,
   getOperation,
@@ -37,6 +39,7 @@ export interface AnnouncedOperationToImport {
   autoApprovable: boolean;
   description?: string;
   gateOwnedParams?: { param: string; location: string }[];
+  absentAnswers?: OperationAbsentAnswers;
   pendingDraft?: { rewritable: boolean; fromGate: boolean };
 }
 
@@ -62,6 +65,17 @@ function gateOwnedParamsWire(operation: Operation) {
   return params.length > 0
     ? { gateOwnedParams: params.map(({ param, location }) => ({ param, location })) }
     : {};
+}
+
+function absentAnswersWire(operation: Operation) {
+  const absentAnswers = absentAnswersOfDefinition(operation);
+  if (absentAnswers === undefined) return {};
+  return {
+    absentAnswers:
+      'statuses' in absentAnswers
+        ? { statuses: [...absentAnswers.statuses] }
+        : { exitCodes: [...absentAnswers.exitCodes] },
+  };
 }
 
 /** `droppedFromGate`: an Operation the gate itself no longer runs (a platform gate's held
@@ -98,6 +112,9 @@ export async function compareAnnouncedOperations(
           ? { description: shownFreeText(operation.description) }
           : {}),
         ...gateOwnedParamsWire(operation),
+        // S11 「门确认不存在」 B-a: the bulk publish leaves such an entry a draft too, for a person
+        // to publish confirming the answers it declares mean "does not exist".
+        ...absentAnswersWire(operation),
         ...(existingRecord !== null
           ? {
               pendingDraft: {

@@ -14,6 +14,7 @@ import { Notice } from '../kit/notice.js';
 import { RefChip } from '../kit/ref-chip.js';
 import { StatusChip } from '../kit/status-chip.js';
 import { announceReadinessChange } from '../readiness/useExecutionReadiness.js';
+import { AbsentAnswersHeldPreview } from './AbsentAnswerDrafts.js';
 import { AwaitingAdoptionNotice } from './DefinitionDrift.js';
 import { gateOwnedParamsNextStep, gateOwnedParamsText } from './GateOwnedParams.js';
 
@@ -196,15 +197,24 @@ function EnablePreviewBody({
   const t = useT();
   // Console G4 (legacy 219): an announced entry declaring a param only the gate sets stays a draft —
   // said here, before the click, not counted among what will be published.
-  const toPublish = preview.operationsToImport.filter(
-    (operation) => (operation.gateOwnedParams?.length ?? 0) === 0,
-  );
   const heldBack = preview.operationsToImport.filter(
     (operation) => (operation.gateOwnedParams?.length ?? 0) > 0,
   );
+  // S11 「门确认不存在」 B-a: so does one declaring answers that mean "does not exist" — a person
+  // publishes it in the catalog, confirming them.
+  const absentHeld = preview.operationsToImport.flatMap((operation) =>
+    (operation.gateOwnedParams?.length ?? 0) === 0 && operation.absentAnswers !== undefined
+      ? [{ name: operation.name, absentAnswers: operation.absentAnswers }]
+      : [],
+  );
+  const toPublish = preview.operationsToImport.filter(
+    (operation) =>
+      (operation.gateOwnedParams?.length ?? 0) === 0 && operation.absentAnswers === undefined,
+  );
   const toImportCount = toPublish.length;
   const presentCount = preview.operationsAlreadyPresent.length;
-  const noOperations = toImportCount === 0 && presentCount === 0;
+  // Held entries are announced Operations too: only an empty announcement is "none yet".
+  const noOperations = preview.operationsToImport.length === 0 && presentCount === 0;
   // Read as absent when a kernel without it answers — never as "awaiting".
   const awaiting = preview.awaitingPlatformAdoption ?? null;
   return (
@@ -278,6 +288,7 @@ function EnablePreviewBody({
           </span>
         </Notice>
       ) : null}
+      <AbsentAnswersHeldPreview operations={absentHeld} testId="enable-preview-absent" />
       {preview.operationsAlreadyPresent.length > 0 ? (
         <div className="stack-s" data-testid="enable-preview-present">
           <span className="text-12 font-medium text-text-2">

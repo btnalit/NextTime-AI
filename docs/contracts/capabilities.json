@@ -4760,6 +4760,56 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "absentAnswerDrafts": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "absentAnswers": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "statuses": {
+                        "items": {
+                          "type": "integer"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "statuses"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "exitCodes": {
+                        "items": {
+                          "type": "integer"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "exitCodes"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "absentAnswers"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
         "drift": {
           "additionalProperties": false,
           "properties": {
@@ -4883,6 +4933,7 @@
         "publishedOperationNames",
         "skippedOperationNames",
         "gateOwnedParamDrafts",
+        "absentAnswerDrafts",
         "linkedExisting"
       ],
       "type": "object"
@@ -9478,6 +9529,22 @@
                     "type": "object"
                   }
                 ]
+              },
+              "absentAnswersReview": {
+                "additionalProperties": false,
+                "properties": {
+                  "reviewedAt": {
+                    "type": "string"
+                  },
+                  "reviewedBy": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "reviewedBy",
+                  "reviewedAt"
+                ],
+                "type": "object"
               },
               "autoApprovable": {
                 "type": "boolean"
@@ -21466,6 +21533,22 @@
                   }
                 ]
               },
+              "absentAnswersReview": {
+                "additionalProperties": false,
+                "properties": {
+                  "reviewedAt": {
+                    "type": "string"
+                  },
+                  "reviewedBy": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "reviewedBy",
+                  "reviewedAt"
+                ],
+                "type": "object"
+              },
               "autoApprovable": {
                 "type": "boolean"
               },
@@ -28577,6 +28660,40 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "absentAnswers": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "statuses": {
+                        "items": {
+                          "type": "integer"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "statuses"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "exitCodes": {
+                        "items": {
+                          "type": "integer"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "exitCodes"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
               "autoApprovable": {
                 "type": "boolean"
               },
@@ -28989,6 +29106,40 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "absentAnswers": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "statuses": {
+                        "items": {
+                          "type": "integer"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "statuses"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "exitCodes": {
+                        "items": {
+                          "type": "integer"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "exitCodes"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
               "autoApprovable": {
                 "type": "boolean"
               },
@@ -33512,6 +33663,56 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "absentAnswerDrafts": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "absentAnswers": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "statuses": {
+                        "items": {
+                          "type": "integer"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "statuses"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "exitCodes": {
+                        "items": {
+                          "type": "integer"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "exitCodes"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "absentAnswers"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
         "gateOwnedParamDrafts": {
           "items": {
             "additionalProperties": false,
@@ -33573,7 +33774,8 @@
         "gatekeeperId",
         "publishedOperationNames",
         "skippedDraftOperationNames",
-        "gateOwnedParamDrafts"
+        "gateOwnedParamDrafts",
+        "absentAnswerDrafts"
       ],
       "type": "object"
     },
@@ -33657,6 +33859,9 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "absentAnswersReviewed": {
+          "type": "boolean"
+        },
         "credentialsReviewed": {
           "type": "boolean"
         },
@@ -33684,6 +33889,29 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "properties": {
+        "absentAnswersReview": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "reviewedAt": {
+                  "type": "string"
+                },
+                "reviewedBy": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "reviewedBy",
+                "reviewedAt"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "gatekeeperId": {
           "type": "string"
         },
@@ -33971,7 +34199,8 @@
         "origin",
         "proposedBy",
         "operation",
-        "supersedes"
+        "supersedes",
+        "absentAnswersReview"
       ],
       "type": "object"
     },

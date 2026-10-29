@@ -3009,6 +3009,191 @@ describe('CatalogPage — credential confirmation on Publish', () => {
   });
 });
 
+// S11 「门确认不存在」 B-a: an observe draft that declares answers meaning "does not exist" publishes
+// only with the person's confirmation that the gate's credentials can see what it looks up. The
+// row says the draft declares some, so the question is in front of Publish before the first click.
+describe('CatalogPage — confirming the answers that mean “not there” on Publish', () => {
+  const declaringDraft = (digest: string) => ({
+    gatekeeperId: 'gk-1',
+    name: 'record.get',
+    status: 'draft',
+    mode: 'observe',
+    blastRadius: 'low',
+    autoApprovable: true,
+    absentAnswers: { statuses: [404] },
+    draftDigest: digest,
+  });
+
+  it('asks before the click, keeps Publish disabled until it is ticked, and sends absentAnswersReviewed', async () => {
+    const seen: unknown[] = [];
+    const http = scriptedHttp({
+      list_operations: () => ({ items: [declaringDraft('sha256:r1')] }),
+      get_operation_stats: () => ({ items: [] }),
+      publish_operation: (params) => {
+        seen.push(params);
+        return {};
+      },
+    });
+    renderPage(http);
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    const review = within(detail).getByTestId('operation-absent-review');
+    expect(review.textContent).toContain('发布前确认：目标回答 404 时，记为“要查的东西不存在”。');
+    // What else gives a 404 (review #501 on #757: the caveat follows what the binding declares).
+    expect(review.textContent).toContain('没有权限（为隐藏资源回 404）、地址或代理配错');
+    expect(review.textContent).toContain('没权限、地址或代理配错时不会这样回答');
+    const publish = within(detail).getByRole('button', { name: /^发布$/ }) as HTMLButtonElement;
+    expect(publish.disabled).toBe(true);
+    // Nothing is recorded on a draft: the confirmation belongs to the published version.
+    expect(within(detail).queryByTestId('catalog-detail-absent-reviewed')).toBeNull();
+    expect(within(detail).queryByTestId('catalog-detail-absent-unreviewed')).toBeNull();
+
+    fireEvent.click(within(detail).getByTestId('operation-absent-review-confirm'));
+    expect(publish.disabled).toBe(false);
+    fireEvent.click(publish);
+    await waitFor(() => expect(seen).toHaveLength(1));
+    expect(seen[0]).toEqual({
+      gatekeeperId: 'gk-1',
+      name: 'record.get',
+      absentAnswersReviewed: true,
+      draftDigest: 'sha256:r1',
+    });
+  });
+
+  it('a refusal the row did not predict (an older read) opens the same question, and the retry carries the tick', async () => {
+    const seen: unknown[] = [];
+    const http = scriptedHttp({
+      // The row read before the gate added the declaration: it says nothing about one.
+      list_operations: () => ({
+        items: [
+          { gatekeeperId: 'gk-1', name: 'record.get', status: 'draft', draftDigest: 'sha256:r1' },
+        ],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+      publish_operation: (params) => {
+        seen.push(params);
+        if (seen.length === 1) {
+          return Promise.reject(
+            new HttpError(
+              'capability_error',
+              'confirm the answers that mean "does not exist"',
+              'absent_answers_review_required',
+              { absentAnswers: { exitCodes: [4] } },
+            ),
+          );
+        }
+        return {};
+      },
+    });
+    renderPage(http);
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    expect(within(detail).queryByTestId('operation-absent-review')).toBeNull();
+    fireEvent.click(within(detail).getByRole('button', { name: /^发布$/ }));
+    const review = await within(detail).findByTestId('operation-absent-review');
+    expect(review.textContent).toContain('命令以退出码 4 结束时，记为“要查的东西不存在”');
+    // An exit code is misread differently from a 404: no permission, or any other failure the
+    // command reports the same way — never an address or a proxy.
+    expect(review.textContent).toContain('有的命令没有权限时也以同样的退出码结束（比如 ls、stat）');
+    expect(review.textContent).toContain('kubectl 出错都退出 1');
+    expect(review.textContent).toContain('没权限或命令出别的错时不会用这个退出码');
+    expect(review.textContent).not.toContain('代理');
+    expect(screen.queryByTestId('toast')).toBeNull();
+    const publish = within(detail).getByRole('button', { name: /^发布$/ }) as HTMLButtonElement;
+    expect(publish.disabled).toBe(true);
+    fireEvent.click(within(detail).getByTestId('operation-absent-review-confirm'));
+    fireEvent.click(publish);
+    await waitFor(() => expect(seen).toHaveLength(2));
+    expect(seen).toEqual([
+      { gatekeeperId: 'gk-1', name: 'record.get', draftDigest: 'sha256:r1' },
+      {
+        gatekeeperId: 'gk-1',
+        name: 'record.get',
+        absentAnswersReviewed: true,
+        draftDigest: 'sha256:r1',
+      },
+    ]);
+  });
+
+  it('a gate re-import that rewrites the draft drops the tick given for the old one', async () => {
+    let digest = 'sha256:r1';
+    const http = scriptedHttp({
+      list_operations: () => ({ items: [declaringDraft(digest)] }),
+      get_operation_stats: () => ({ items: [] }),
+      publish_operation: () => {
+        digest = 'sha256:r2';
+        return Promise.reject(
+          new HttpError('capability_error', 'changed after it was read', 'draft_changed'),
+        );
+      },
+    });
+    renderPage(http);
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    const confirm = () =>
+      within(detail).getByTestId('operation-absent-review-confirm') as HTMLInputElement;
+    fireEvent.click(confirm());
+    expect(confirm().checked).toBe(true);
+    fireEvent.click(within(detail).getByRole('button', { name: /^发布$/ }));
+    await waitFor(() =>
+      expect(http.calls.filter((c) => c.name === 'list_operations')).toHaveLength(2),
+    );
+    await waitFor(() => expect(confirm().checked).toBe(false));
+    expect(
+      (within(detail).getByRole('button', { name: /^发布$/ }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  it('a published version says who confirmed its answers and when, or that nobody did', async () => {
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [
+          {
+            gatekeeperId: 'gk-1',
+            name: 'record.get',
+            status: 'published',
+            mode: 'observe',
+            blastRadius: 'low',
+            autoApprovable: true,
+            absentAnswers: { statuses: [404] },
+            absentAnswersReview: { reviewedBy: 'p-owner', reviewedAt: '2026-10-24T01:00:00Z' },
+          },
+          {
+            gatekeeperId: 'gk-1',
+            name: 'unit.show',
+            status: 'published',
+            mode: 'observe',
+            blastRadius: 'low',
+            autoApprovable: true,
+            absentAnswers: { exitCodes: [4] },
+          },
+        ],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+      resolve_refs: () => ({ items: [{ id: 'p-owner', kind: 'principal', name: 'Owner' }] }),
+    });
+    renderPage(http);
+    const rowNamed = async (name: string) => {
+      const row = (await screen.findAllByTestId('catalog-row')).find((candidate) =>
+        candidate.textContent?.includes(name),
+      );
+      if (!row) throw new Error(`${name} row missing`);
+      return row;
+    };
+    let detail = await selectRow(await rowNamed('record.get'));
+    const reviewed = within(detail).getByTestId('catalog-detail-absent-reviewed');
+    await waitFor(() => expect(reviewed.textContent).toContain('Owner'));
+    // "Confirmed", not "confirmed when publishing": a revision carries the confirmation it replaces.
+    expect(reviewed.textContent).toContain('确认于');
+    expect(reviewed.textContent).not.toContain('发布时确认');
+    expect(reviewed.textContent).toContain('门用的凭据看得到要查的东西');
+    expect(within(detail).queryByTestId('operation-absent-review')).toBeNull();
+
+    detail = await selectRow(await rowNamed('unit.show'));
+    expect(within(detail).getByTestId('catalog-detail-absent-unreviewed').textContent).toContain(
+      '发布于需要确认之前',
+    );
+    expect(within(detail).queryByTestId('catalog-detail-absent-reviewed')).toBeNull();
+  });
+});
+
 // D-24 (kernel governance/capability/publish-authority.ts): publish_* / deprecate_* on a row
 // another principal proposed is refused 403 not_proposer unless the caller is the owner — the
 // catalog does not offer it to a builder there, and says why in its place.
