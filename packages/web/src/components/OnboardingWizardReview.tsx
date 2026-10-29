@@ -263,33 +263,35 @@ function OnboardingWizardReviewBody({
           title={t('这个门没有导入任何 Operation', 'No operations imported for this gate')}
         />
       ) : (
-        <table className="data-table data-table-cards" data-testid="wizard-review-table">
-          <thead>
-            <tr>
-              <th>{t('名称', 'Name')}</th>
-              <th>{t('模式', 'Mode')}</th>
-              <th>{t('影响范围', 'Blast radius')}</th>
-              <th>{t('可自动批准', 'Auto-approvable')}</th>
-              <th>{t('参数 schema', 'Params schema')}</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {operations.state.data.rows.map((row) => (
-              <OperationReviewRow
-                key={row.objectId}
-                http={http}
-                row={row}
-                gateOwnedParams={
-                  operations.state.status === 'ready'
-                    ? operations.state.data.held.get(heldKey(row))
-                    : undefined
-                }
-                onChanged={() => void operations.reload()}
-              />
-            ))}
-          </tbody>
-        </table>
+        <div className="table-scroll">
+          <table className="data-table data-table-cards" data-testid="wizard-review-table">
+            <thead>
+              <tr>
+                <th>{t('名称', 'Name')}</th>
+                <th>{t('模式', 'Mode')}</th>
+                <th>{t('影响范围', 'Blast radius')}</th>
+                <th>{t('可自动批准', 'Auto-approvable')}</th>
+                <th>{t('参数 schema', 'Params schema')}</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {operations.state.data.rows.map((row) => (
+                <OperationReviewRow
+                  key={row.objectId}
+                  http={http}
+                  row={row}
+                  gateOwnedParams={
+                    operations.state.status === 'ready'
+                      ? operations.state.data.held.get(heldKey(row))
+                      : undefined
+                  }
+                  onChanged={() => void operations.reload()}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
 
       {showDone ? (
