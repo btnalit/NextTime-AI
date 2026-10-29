@@ -87,6 +87,68 @@ describe('kit/MasterDetail', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  describe('closeFocusFallback (UX acceptance of #782, R-1)', () => {
+    function Harness({ keepRow }: { readonly keepRow: boolean }) {
+      const [open, setOpen] = useState(false);
+      const [listed, setListed] = useState(true);
+      return (
+        <>
+          <button type="button" data-testid="fallback">
+            tab
+          </button>
+          <MasterDetail
+            list={
+              listed ? (
+                <button type="button" data-testid="row" onClick={() => setOpen(true)}>
+                  row
+                </button>
+              ) : null
+            }
+            detail={
+              <button
+                type="button"
+                data-testid="retire"
+                onClick={() => {
+                  if (!keepRow) setListed(false);
+                  setOpen(false);
+                }}
+              >
+                retire
+              </button>
+            }
+            open={open}
+            onClose={() => setOpen(false)}
+            sheetTitle="Detail"
+            detailTestId="md-detail"
+            closeFocusFallback={() => screen.queryByTestId('fallback')}
+          />
+        </>
+      );
+    }
+
+    it('takes focus when the row the sheet was opened from left the list', async () => {
+      mockMatchMedia(true);
+      render(<Harness keepRow={false} />);
+      const row = screen.getByTestId('row');
+      row.focus();
+      fireEvent.click(row);
+      fireEvent.click(await screen.findByTestId('retire'));
+      await waitFor(() => expect(screen.queryByTestId('md-detail')).toBeNull());
+      await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId('fallback')));
+    });
+
+    it('leaves focus to the row the sheet was opened from while it is still listed', async () => {
+      mockMatchMedia(true);
+      render(<Harness keepRow />);
+      const row = screen.getByTestId('row');
+      row.focus();
+      fireEvent.click(row);
+      fireEvent.click(await screen.findByTestId('retire'));
+      await waitFor(() => expect(screen.queryByTestId('md-detail')).toBeNull());
+      await waitFor(() => expect(document.activeElement).toBe(row));
+    });
+  });
+
   it('closed at a narrow width mounts no sheet at all', () => {
     mockMatchMedia(true);
     render(

@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CapabilityCaller } from '../../lib/clients.js';
+import { HttpError } from '../../lib/http-client.js';
 import { hrefs } from '../../lib/router.js';
 import { ProcedureEditor } from './ProcedureEditor.js';
 
@@ -1652,5 +1653,89 @@ describe('ProcedureEditor (S6-A A2)', () => {
     expect(
       JSON.parse((screen.getByTestId('procedure-step-check-params') as HTMLTextAreaElement).value),
     ).toEqual({ name: 'old-web' });
+  });
+
+  it('legacy 493: a step whose Worker version is not published is said on that step’s version, focused', async () => {
+    const { caller } = http({
+      propose_procedure: () =>
+        Promise.reject(
+          new HttpError(
+            'capability_error',
+            'Procedure step 0 does not resolve: WorkerDefinition wd-1@2 is not published: WorkerDefinition is deprecated',
+            'invalid_step_reference',
+          ),
+        ),
+    });
+    render(
+      <ProcedureEditor
+        http={caller}
+        copyOf={{
+          id: 'pr-1',
+          version: 1,
+          status: 'published',
+          name: 'One',
+          description: 'One step',
+          steps: [{ kind: 'worker', definitionId: 'wd-1', version: 2, key: 'only', input: {} }],
+        }}
+        workerDefinitions={[
+          {
+            id: 'wd-1',
+            version: 2,
+            kind: 'worker',
+            status: 'published',
+            definition: { name: 'Fixer' },
+          },
+        ]}
+        onProposed={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('procedure-submit'));
+    const step = screen.getByTestId('procedure-step');
+    const version = within(step).getByTestId('steps.0-version');
+    await waitFor(() => expect(document.activeElement).toBe(version));
+    expect(within(step).getByText(/这个 Worker 定义的 v2 没有发布，或已弃用、已丢弃/)).toBeTruthy();
+    expect(version.getAttribute('aria-invalid')).toBe('true');
+    // Said on the field, not again as a banner over the form.
+    expect(screen.queryByText(/流程有一步引用的 Operation 或 Worker/)).toBeNull();
+  });
+
+  it('legacy 493: a step whose Operation is not published is said on its Operation name, which points at it (UX acceptance of #782)', async () => {
+    const { caller } = http({
+      list_operations: () => {
+        throw new Error('boom');
+      },
+      propose_procedure: () =>
+        Promise.reject(
+          new HttpError(
+            'capability_error',
+            'Procedure step 0 does not resolve: Operation "restart" on Gatekeeper gk-1 is not published (or does not exist)',
+            'invalid_step_reference',
+          ),
+        ),
+    });
+    render(
+      <ProcedureEditor
+        http={caller}
+        gatekeepers={GATES}
+        copyOf={{
+          id: 'pr-1',
+          version: 1,
+          status: 'published',
+          name: 'One',
+          description: 'One step',
+          steps: [{ kind: 'operation', gatekeeperId: 'gk-1', operationName: 'restart' }],
+        }}
+        onProposed={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    const step = screen.getByTestId('procedure-step');
+    const input = await within(step).findByTestId('procedure-step-operation-input');
+    fireEvent.click(screen.getByTestId('procedure-submit'));
+    await waitFor(() => expect(document.activeElement).toBe(input));
+    const reason = within(step).getByText(/这个 Operation 没有发布，或已不存在/);
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+    expect(input.getAttribute('aria-describedby')?.split(' ')).toContain(reason.id);
   });
 });
