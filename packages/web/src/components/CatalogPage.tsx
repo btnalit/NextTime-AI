@@ -89,6 +89,7 @@ import { PacksTab } from './catalog/PacksTab.js';
 import { ProcedureEditorHost } from './catalog/ProcedureEditorHost.js';
 import { ProcedureTemplateView } from './catalog/ProcedureTemplateView.js';
 import { SkillEditor } from './catalog/SkillEditor.js';
+import { SkillUsageSection } from './catalog/SkillUsage.js';
 import { WorkerEditorHost } from './catalog/WorkerEditorHost.js';
 import { gateOwnedParamsText } from './connect/GateOwnedParams.js';
 import {
@@ -2002,6 +2003,9 @@ function SkillDetailView({
           <span className="text-3">—</span>
         )}
       </div>
+
+      {/* S11 W1a E2-1: the family's statistics — builders and up only (the section decides). */}
+      <SkillUsageSection http={http} skillId={row.id} />
 
       {canPublish && row.status === 'draft' ? (
         <PublishCredentialSlot

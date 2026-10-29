@@ -211,3 +211,6 @@ export {
   RunSpecSchema,
   environmentDigest,
 } from './run-fingerprint.js';
+
+// S11 W1a E2-1 — `get_skill_stats`, read-time aggregation over the records the work left.
+export { readSkillStats } from './skill-stats.js';

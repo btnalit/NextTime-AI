@@ -17,6 +17,7 @@ import {
   formatRelative,
   prettyJsonVisible,
   redactSensitive,
+  shortDigest,
   shortId,
 } from '../lib/format.js';
 import { useT } from '../lib/i18n.js';
@@ -701,12 +702,6 @@ function SkillLoads({
       ))}
     </span>
   );
-}
-
-/** A digest as the console shows it: the algorithm prefix kept, 12 hex characters of the rest. */
-function shortDigest(digest: string): string {
-  const colon = digest.indexOf(':');
-  return colon < 0 ? digest.slice(0, 12) : digest.slice(0, colon + 13);
 }
 
 /** 运行环境 — see the component comment. One block per run; a crash retry is a second run that may
