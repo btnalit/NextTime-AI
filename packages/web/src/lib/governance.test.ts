@@ -22,9 +22,11 @@ describe('absentAnswersText (S11 gate-confirmed absence, part A)', () => {
 
   it('says which http statuses or exit statuses mean the thing is not there', () => {
     expect(absentAnswersText({ statuses: [404] }, zhT)).toBe(
-      '目标回答 404 时，表示要查的东西不存在：这次观察记为“不存在”，不算调用失败。',
+      '目标系统回答 404 时，表示要查的东西不存在：这次观察记为“不存在”，不算调用失败。',
     );
-    expect(absentAnswersText({ statuses: [404, 410] }, zhT)).toContain('目标回答 404 或 410 时');
+    expect(absentAnswersText({ statuses: [404, 410] }, zhT)).toContain(
+      '目标系统回答 404 或 410 时',
+    );
     expect(absentAnswersText({ exitCodes: [1, 4] }, zhT)).toContain('命令以退出码 1 或 4 结束时');
     expect(absentAnswersText({ exitCodes: [2] }, enT)).toBe(
       'When the command exits with 2, the thing looked up does not exist: the observation is recorded as “not there”, not as a failed call.',

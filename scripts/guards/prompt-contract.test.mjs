@@ -385,6 +385,7 @@ test('checkProposeGoalWords', async (t) => {
             items: {
               anyOf: [
                 { properties: { kind: { const: 'observe_predicate' } } },
+                { properties: { kind: { const: 'observe_absent' } } },
                 { properties: { kind: { const: 'fact_predicate' } } },
                 { properties: { kind: { type: 'string', enum: ['requester_confirm'] } } },
               ],

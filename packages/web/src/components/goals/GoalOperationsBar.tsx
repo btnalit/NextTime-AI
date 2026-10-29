@@ -37,6 +37,8 @@ import { Notice } from '../kit/notice.js';
 import { Select } from '../kit/select.js';
 import { SkeletonRows } from '../kit/skeleton.js';
 import { Textarea } from '../kit/textarea.js';
+import { AbsenceChecksBasis } from './AbsenceBasis.js';
+import type { AbsenceOperations } from './useAbsenceOperations.js';
 import { useProcedureParameterDescriptions } from './useProcedureParameterDescriptions.js';
 
 export interface GoalOperationsBarProps {
@@ -47,6 +49,9 @@ export interface GoalOperationsBarProps {
   readonly gateNames: ReadonlyMap<string, string>;
   /** Legacy 470: the Objects the checks name by id, 「名字 · 类型」 (`useObjectLabels`). */
   readonly objectNames?: ReadonlyMap<string, string>;
+  /** S11 「门确认不存在」 B: what the plan's absence checks rest on (`useAbsenceOperations`) —
+   *  listed on the confirm card. */
+  readonly absenceOperations?: AbsenceOperations;
   /** Opens the plan editor (`revise_goal`); the button shows only when given. */
   readonly onRevise?: () => void;
   /** After an operation — or a refusal because the goal had already moved on — for the page to
@@ -115,6 +120,7 @@ export function GoalOperationsBar({
   http,
   gateNames,
   objectNames,
+  absenceOperations,
   onRevise,
   onDone,
 }: GoalOperationsBarProps) {
@@ -227,6 +233,18 @@ export function GoalOperationsBar({
           ),
         ]}
         confirmLabel={t('确认并开始', 'Confirm and start')}
+        {...(absenceOperations
+          ? {
+              children: (
+                <AbsenceChecksBasis
+                  http={http}
+                  plan={goal.planRevision.plan}
+                  gateNames={gateNames}
+                  absenceOperations={absenceOperations}
+                />
+              ),
+            }
+          : {})}
         errorOverrides={{
           ...errors,
           invalid_params: t(
