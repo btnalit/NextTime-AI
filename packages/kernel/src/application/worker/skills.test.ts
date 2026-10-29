@@ -8,7 +8,10 @@ import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from './definitions.js';
+import { discardDraft } from './draft-lifecycle.js';
+import { FamilyDraftPendingError } from './family-version.js';
 import {
+  SkillFamilyNameChangedError,
   SkillNotFoundError,
   SkillValidationError,
   deprecateSkill,
@@ -295,6 +298,169 @@ describe.runIf(DATABASE_URL !== undefined)(
           }),
         );
         expect(neighbors.some((n) => n.linkType === 'uses')).toBe(true);
+      });
+    });
+
+    describe('next version of a family (propose_skill{skillId}, S11 W1a E2-0)', () => {
+      async function publishedV1(name: string) {
+        const draft = await inTx(proposerId, (client) =>
+          proposeSkill(client, workspaceId, proposerId, { ...VALID_SKILL, name }),
+        );
+        await inTx(ownerId, (client) => publishSkill(client, workspaceId, ownerId, draft.id));
+        return draft;
+      }
+
+      it('proposes version 2 under the same id; once published it is the version a Worker mounts', async () => {
+        const name = `family-next-${randomUUID()}`;
+        const v1 = await publishedV1(name);
+        const v2 = await inTx(proposerId, (client) =>
+          proposeSkill(client, workspaceId, proposerId, {
+            ...VALID_SKILL,
+            name,
+            markdown: 'Version two of the steps.',
+            skillId: v1.id,
+          }),
+        );
+        expect(v2).toMatchObject({ id: v1.id, version: 2, status: 'draft', name });
+
+        await inTx(ownerId, (client) => publishSkill(client, workspaceId, ownerId, v1.id));
+        const mounted = await inTx(ownerId, (client) =>
+          resolvePublishedSkills(client, workspaceId, [name]),
+        );
+        expect(mounted.map((s) => [s.id, s.version, s.markdown])).toEqual([
+          [v1.id, 2, 'Version two of the steps.'],
+        ]);
+      });
+
+      it('without skillId the same name still starts a new family (unchanged behavior)', async () => {
+        const name = `family-new-${randomUUID()}`;
+        const v1 = await publishedV1(name);
+        const other = await inTx(proposerId, (client) =>
+          proposeSkill(client, workspaceId, proposerId, { ...VALID_SKILL, name }),
+        );
+        expect(other.id).not.toBe(v1.id);
+        expect(other.version).toBe(1);
+      });
+
+      it('an unknown skillId is not found — never a fresh family under a chosen id', async () => {
+        await expect(
+          inTx(proposerId, (client) =>
+            proposeSkill(client, workspaceId, proposerId, {
+              ...VALID_SKILL,
+              name: `family-unknown-${randomUUID()}`,
+              skillId: randomUUID(),
+            }),
+          ),
+        ).rejects.toThrow(SkillNotFoundError);
+      });
+
+      it('refuses while the latest version is a draft (draft_pending), and allows it again once that draft is published or discarded', async () => {
+        const name = `family-pending-${randomUUID()}`;
+        const v1Draft = await inTx(proposerId, (client) =>
+          proposeSkill(client, workspaceId, proposerId, { ...VALID_SKILL, name }),
+        );
+        const onDraftV1 = inTx(proposerId, (client) =>
+          proposeSkill(client, workspaceId, proposerId, {
+            ...VALID_SKILL,
+            name,
+            skillId: v1Draft.id,
+          }),
+        );
+        await expect(onDraftV1).rejects.toThrow(FamilyDraftPendingError);
+        await expect(onDraftV1).rejects.toMatchObject({
+          code: 'draft_pending',
+          familyId: v1Draft.id,
+          draftVersion: 1,
+        });
+
+        await inTx(ownerId, (client) => publishSkill(client, workspaceId, ownerId, v1Draft.id));
+        const v2 = await inTx(proposerId, (client) =>
+          proposeSkill(client, workspaceId, proposerId, {
+            ...VALID_SKILL,
+            name,
+            skillId: v1Draft.id,
+          }),
+        );
+        expect(v2.version).toBe(2);
+        await expect(
+          inTx(proposerId, (client) =>
+            proposeSkill(client, workspaceId, proposerId, {
+              ...VALID_SKILL,
+              name,
+              skillId: v1Draft.id,
+            }),
+          ),
+        ).rejects.toMatchObject({ code: 'draft_pending', draftVersion: 2 });
+
+        await inTx(proposerId, (client) =>
+          discardDraft(client, workspaceId, proposerId, {
+            kind: 'skill',
+            id: v1Draft.id,
+            version: 2,
+          }),
+        );
+        const again = await inTx(proposerId, (client) =>
+          proposeSkill(client, workspaceId, proposerId, {
+            ...VALID_SKILL,
+            name,
+            skillId: v1Draft.id,
+          }),
+        );
+        expect(again.version).toBe(2);
+      });
+
+      it('refuses a new version under another name (skill_name_changed); nothing is proposed', async () => {
+        const name = `family-rename-${randomUUID()}`;
+        const v1 = await publishedV1(name);
+        await expect(
+          inTx(proposerId, (client) =>
+            proposeSkill(client, workspaceId, proposerId, {
+              ...VALID_SKILL,
+              name: `${name}-renamed`,
+              skillId: v1.id,
+            }),
+          ),
+        ).rejects.toThrow(SkillFamilyNameChangedError);
+        const versions = await inTx(ownerId, (client) =>
+          client.query('select version from skills where workspace_id = $1 and id = $2', [
+            workspaceId,
+            v1.id,
+          ]),
+        );
+        expect(versions.rows.map((r) => r.version)).toEqual([1]);
+      });
+
+      it('a deprecated family may get a new version', async () => {
+        const name = `family-deprecated-${randomUUID()}`;
+        const v1 = await publishedV1(name);
+        await inTx(ownerId, (client) => deprecateSkill(client, workspaceId, v1.id));
+        const v2 = await inTx(proposerId, (client) =>
+          proposeSkill(client, workspaceId, proposerId, { ...VALID_SKILL, name, skillId: v1.id }),
+        );
+        expect(v2.version).toBe(2);
+      });
+
+      it('two concurrent next-version proposals: one draft, the other draft_pending', async () => {
+        const name = `family-race-${randomUUID()}`;
+        const v1 = await publishedV1(name);
+        const results = await Promise.allSettled(
+          [0, 1].map(() =>
+            inTx(proposerId, (client) =>
+              proposeSkill(client, workspaceId, proposerId, {
+                ...VALID_SKILL,
+                name,
+                skillId: v1.id,
+              }),
+            ),
+          ),
+        );
+        const fulfilled = results.filter((r) => r.status === 'fulfilled');
+        const rejected = results.filter((r) => r.status === 'rejected');
+        expect(fulfilled).toHaveLength(1);
+        expect(rejected).toHaveLength(1);
+        expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(
+          FamilyDraftPendingError,
+        );
       });
     });
 

@@ -11,6 +11,7 @@ import type { PoolClient } from 'pg';
 import {
   type PublishActor,
   assertPublishAuthority,
+  assertReviewedDraft,
   assertReviewedVersion,
 } from '../../governance/capability/index.js';
 import { getPublishedOperation } from '../../governance/gatekeepers/index.js';
@@ -20,6 +21,7 @@ import { SqlGraphStore } from '../../substrate/graph/index.js';
 import { projectProcedureObject } from '../../substrate/ontology/index.js';
 import { requirePublishedWorkerDefinition } from './definitions.js';
 import { type DraftViewer, draftVisibilityBinds, draftVisibleTo } from './draft-visibility.js';
+import { assertNoPendingDraft, familyVersionDigest, readFamilyHead } from './family-version.js';
 import { assertFamilyPublishAuthority } from './publish-family.js';
 
 /**
@@ -86,6 +88,25 @@ export interface ProcedureRow {
   readonly publishedAt: Date | null;
 }
 
+/** Review #493 on #764 (F1): the digest a reviewer hands back to `publish_procedure`
+ *  (`familyVersionDigest`) — everything the version says, and who proposed it. */
+export function procedureDraftDigest(
+  row: Pick<
+    ProcedureRow,
+    'id' | 'version' | 'name' | 'description' | 'steps' | 'parameters' | 'proposedBy'
+  >,
+): string {
+  return familyVersionDigest('procedure', {
+    id: row.id,
+    version: row.version,
+    name: row.name,
+    description: row.description,
+    steps: row.steps,
+    parameters: row.parameters,
+    proposedBy: row.proposedBy,
+  });
+}
+
 function mapRow(row: ProcedureDbRow): ProcedureRow {
   return {
     workspaceId: row.workspace_id,
@@ -136,9 +157,10 @@ export class ProcedureStepReferenceError extends Error {
 // -------------------------------------------------------------------------------------------
 
 export interface ProposeProcedureInput {
-  /** Omit to start a new Procedure family; given, proposes the next version under that existing
-   *  `id` — see `skills.ts`'s `ProposeSkillInput.skillId` doc comment for the identical rationale
-   *  (no currently-registered capability passes this either). */
+  /** Omit to start a new Procedure family; given (`propose_procedure{procedureId}`, S11 W1a E2-0),
+   *  proposes the next version of that existing family under the rules of `family-version.ts`. A
+   *  Procedure is addressed by id (`find_procedures`, `propose_goal`'s `fromProcedure`), so unlike a
+   *  Skill a new version may change its name. */
   readonly procedureId?: string;
   readonly name: string;
   readonly description: string;
@@ -147,17 +169,35 @@ export interface ProposeProcedureInput {
   readonly parameters?: OutputSchema;
 }
 
+/** The version a proposal gets: 1 for a new family; for an existing one, the next after its latest,
+ *  which must exist and not be a draft (`family-version.ts`). Two locks, then the latest version is
+ *  read again. The family's own advisory lock serializes proposals of it (review #493 on #764,
+ *  P3-2): when the row a proposal waits on is a draft being discarded, the row lock alone only
+ *  holds because Postgres then locks the next row (`LockRows` runs under `Limit`) — executor
+ *  behaviour, where this lock states the rule, as `lockWorkerRegistry` does for Skills. The latest
+ *  row `for update` is the lock `publishProcedure` / `deprecateProcedure` take. A second proposal
+ *  waiting on either sees the first one's draft. */
 async function nextVersion(
   client: PoolClient,
   workspaceId: string,
   procedureId: string | undefined,
 ): Promise<number> {
   if (!procedureId) return 1;
-  const result = await client.query<{ max: number | null }>(
-    'select max(version) as max from procedures where workspace_id = $1 and id = $2',
+  await client.query('select pg_advisory_xact_lock(hashtext($1::text))', [
+    `procedure_family:${workspaceId}:${procedureId}`,
+  ]);
+  await client.query(
+    `select version from procedures
+     where workspace_id = $1 and id = $2
+     order by version desc
+     limit 1
+     for update`,
     [workspaceId, procedureId],
   );
-  return (result.rows[0]?.max ?? 0) + 1;
+  const head = await readFamilyHead(client, 'procedures', workspaceId, procedureId);
+  if (!head) throw new ProcedureNotFoundError(workspaceId, procedureId);
+  assertNoPendingDraft('procedure', procedureId, head);
+  return head.version + 1;
 }
 
 /** Creates a new `draft` Procedure version, owned by `proposerPrincipalId` (I16). No step
@@ -362,6 +402,13 @@ export async function publishProcedure(
     actor?.reviewedVersion,
     row.version,
   );
+  // Review #493 on #764 (F1): and the content of that version — see `publishSkill`.
+  assertReviewedDraft(
+    'publish_procedure',
+    `Procedure ${row.id}@${row.version}`,
+    actor?.reviewedDraftDigest,
+    procedureDraftDigest(row),
+  );
   transition(PUBLISHABLE_TRANSITIONS, row.status, 'publish');
   await assertFamilyPublishAuthority(client, workspaceId, {
     table: 'procedures',
@@ -538,6 +585,25 @@ export interface ProceduresPage {
   readonly items: readonly ProcedureRow[];
   readonly nextCursor?: string;
   readonly truncated?: true;
+}
+
+/** As `skills.ts`'s `latestPublishedSkills` (UX acceptance of #764, P2-1): each of
+ *  `procedureIds`' latest published version — the one a goal made from it uses
+ *  (`getPublishedProcedure` without a version) — keyed by id; `list_procedures` attaches it to a
+ *  draft row as `inUse`. */
+export async function latestPublishedProcedures(
+  client: PoolClient,
+  workspaceId: string,
+  procedureIds: readonly string[],
+): Promise<ReadonlyMap<string, ProcedureRow>> {
+  if (procedureIds.length === 0) return new Map();
+  const result = await client.query<ProcedureDbRow>(
+    `select distinct on (id) ${SELECT_COLUMNS} from procedures
+     where workspace_id = $1 and id = any($2::uuid[]) and status = 'published'
+     order by id, version desc`,
+    [workspaceId, procedureIds],
+  );
+  return new Map(result.rows.map((row) => [row.id, mapRow(row)]));
 }
 
 /** `list_procedures` — same "published, or a draft the viewer may see" predicate as `skills.ts`'s

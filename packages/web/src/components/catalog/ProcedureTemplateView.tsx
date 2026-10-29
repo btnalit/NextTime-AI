@@ -44,12 +44,17 @@ export function ProcedureTemplateView({
   status,
   steps: rawSteps,
   parameters: rawParameters,
+  inUseVersion,
 }: {
   readonly http: CapabilityCaller;
   /** The version's status: a draft is only checked as a template when it is published. */
   readonly status: string;
   readonly steps: readonly unknown[];
   readonly parameters: unknown;
+  /** On a draft, the family's published version in use, if any (UX acceptance of #764, P3-2): a
+   *  draft binding problem is then fixed as that version's next one, not by copying the draft into
+   *  a new Procedure. */
+  readonly inUseVersion?: number;
 }) {
   const t = useT();
   const steps = parsedProcedureSteps(rawSteps);
@@ -97,15 +102,20 @@ export function ProcedureTemplateView({
       )}
       {hasIssue ? (
         <Notice tone="warn" testId="procedure-template-issues">
-          {draft
+          {draft && inUseVersion !== undefined
             ? t(
-                '下面标出的绑定有问题，这个草稿发布时会被拒：请「编辑为新草稿」，在 JSON 视图里改。',
-                'The bindings marked below have problems, so publishing this draft is refused: use “Edit as new draft” and fix them in the JSON view.',
+                `下面标出的绑定有问题，这个草稿发布时会被拒：请丢弃这份草稿，再在已发布的 v${inUseVersion} 上用「编辑（新版本草稿）」，在 JSON 视图里改好。`,
+                `The bindings marked below have problems, so publishing this draft is refused: discard this draft, then use “Edit as new draft version” on published v${inUseVersion} and fix them in the JSON view.`,
               )
-            : t(
-                '下面标出的绑定有问题，用这个流程生成目标会被拒。',
-                'The bindings marked below have problems, so making a goal from this Procedure is refused.',
-              )}
+            : draft
+              ? t(
+                  '下面标出的绑定有问题，这个草稿发布时会被拒：请「另存为新的流程」，在 JSON 视图里改好，再丢弃这份草稿。',
+                  'The bindings marked below have problems, so publishing this draft is refused: use “Save as a new Procedure”, fix them in the JSON view, then discard this draft.',
+                )
+              : t(
+                  '下面标出的绑定有问题，用这个流程生成目标会被拒。',
+                  'The bindings marked below have problems, so making a goal from this Procedure is refused.',
+                )}
         </Notice>
       ) : null}
       <ol className="stack-s">

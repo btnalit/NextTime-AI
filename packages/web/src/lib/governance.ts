@@ -282,6 +282,13 @@ export interface SkillRow {
   /** The proposer's principal id. The owner and builders see every draft (D-26 rule), so the
    *  catalog shows whose draft it is; optional only so older fixtures still type-check. */
   readonly proposedBy?: string;
+  /** A draft's content digest (review #493 on #764, F1): `publish_skill` names it, so a draft
+   *  discarded and proposed again under the same version since is refused (409 `draft_changed`),
+   *  not published in place of the one reviewed. Absent on a published / deprecated row. */
+  readonly draftDigest?: string;
+  /** UX acceptance of #764 (P2-1): on a draft row, the family's latest published version — the one
+   *  Workers mount until the draft is published. */
+  readonly inUse?: Omit<SkillRow, 'inUse'>;
 }
 
 /** `list_procedures` (same handler file, `listProceduresHandler`) — verified. */
@@ -297,6 +304,10 @@ export interface ProcedureRow {
   readonly parameters?: Readonly<Record<string, unknown>> | null;
   /** As `SkillRow.proposedBy`. */
   readonly proposedBy?: string;
+  /** As `SkillRow.draftDigest`, for `publish_procedure`. */
+  readonly draftDigest?: string;
+  /** As `SkillRow.inUse`: the version a goal made from it uses until the draft is published. */
+  readonly inUse?: Omit<ProcedureRow, 'inUse'>;
 }
 
 // -------------------------------------------------------------------------------------------

@@ -1,16 +1,20 @@
 import { ProposeProcedureContentSchema, ProposeSkillContentSchema } from '@nexttime/shared';
-import type { SkillRow } from '../../application/worker/index.js';
+import type { ProcedureRow, SkillRow } from '../../application/worker/index.js';
 import {
   deprecateProcedure,
   deprecateSkill,
   getSkill,
+  latestPublishedProcedures,
+  latestPublishedSkills,
   listProcedures,
   listSkills,
+  procedureDraftDigest,
   procedureReviewContent,
   proposeProcedure,
   proposeSkill,
   publishProcedure,
   publishSkill,
+  skillDraftDigest,
   skillReviewContent,
 } from '../../application/worker/index.js';
 import { countSuspectedSecrets, credentialReviewAudit } from '../../governance/redaction/index.js';
@@ -39,18 +43,24 @@ import { draftViewerOf } from './draft-viewer.js';
  * `draftVisibleTo`): a caller's own drafts, or every draft for the owner and builders.
  */
 
+// S11 W1a E2-0 (legacy 48 ②): `skillId` proposes the next version of that family; without it, a
+// new family as before (application/worker/family-version.ts).
 const proposeSkillHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
-  const { skill: rawSkill } = params as { skill: unknown };
+  const { skill: rawSkill, skillId } = params as { skill: unknown; skillId?: string };
   const content = ProposeSkillContentSchema.parse(rawSkill);
   const principalId = ctx?.principalId ?? (await currentPrincipalId(client));
 
-  const record = await proposeSkill(client, workspaceId, principalId, content);
+  const record = await proposeSkill(client, workspaceId, principalId, {
+    ...content,
+    ...(skillId !== undefined ? { skillId } : {}),
+  });
   return {
     result: {
       id: record.id,
       version: record.version,
       status: record.status,
       name: record.name,
+      draftDigest: skillDraftDigest(record),
     },
     resourceType: 'skill',
     resourceId: record.id,
@@ -58,15 +68,17 @@ const proposeSkillHandler: CapabilityHandler = async (client, workspaceId, param
 };
 
 const publishSkillHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
-  const { skillId, version, credentialsReviewed } = params as {
+  const { skillId, version, draftDigest, credentialsReviewed } = params as {
     skillId: string;
     version: number;
+    draftDigest: string;
     credentialsReviewed?: boolean;
   };
   const actor = {
     ...publishActorOf('publish_skill', ctx),
     credentialsReviewed,
     reviewedVersion: version,
+    reviewedDraftDigest: draftDigest,
   };
   const record = await publishSkill(client, workspaceId, actor.principalId, skillId, actor);
   return {
@@ -93,6 +105,24 @@ const deprecateSkillHandler: CapabilityHandler = async (client, workspaceId, par
   };
 };
 
+/** The ids of a page's draft rows — whose family's published version, if any, is `inUse`. */
+function draftIdsOf(rows: readonly { readonly id: string; readonly status: string }[]): string[] {
+  return rows.filter((row) => row.status === 'draft').map((row) => row.id);
+}
+
+/** UX acceptance of #764 (P2-1): a draft row with its family's latest published version, the one in
+ *  use until the draft is published; a published row, or a family with none, as it is. */
+function withInUse<Row extends { readonly id: string; readonly status: string }, Wire>(
+  wire: Wire,
+  row: Row,
+  inUse: ReadonlyMap<string, Row>,
+  toWire: (row: Row) => Wire,
+): Wire | (Wire & { readonly inUse: Wire }) {
+  const published = row.status === 'draft' ? inUse.get(row.id) : undefined;
+  return published ? { ...wire, inUse: toWire(published) } : wire;
+}
+
+/** Review #493 on #764 (F1): a draft carries the digest `publish_skill` takes back. */
 function toWireSkillSummary(row: SkillRow) {
   return {
     id: row.id,
@@ -102,6 +132,7 @@ function toWireSkillSummary(row: SkillRow) {
     description: row.description,
     applicable: row.applicable,
     proposedBy: row.proposedBy,
+    ...(row.status === 'draft' ? { draftDigest: skillDraftDigest(row) } : {}),
   };
 }
 
@@ -112,9 +143,13 @@ const listSkillsHandler: CapabilityHandler = async (client, workspaceId, params,
   const { limit, cursor } = params as { limit?: number; cursor?: string };
   const viewer = await draftViewerOf(client, workspaceId, ctx);
   const page = await listSkills(client, workspaceId, viewer, { limit, cursor });
+  // UX acceptance of #764 (P2-1): a draft row names the version in use beside it.
+  const inUse = await latestPublishedSkills(client, workspaceId, draftIdsOf(page.items));
   return {
     result: {
-      items: page.items.map(toWireSkillSummary),
+      items: page.items.map((row) =>
+        withInUse(toWireSkillSummary(row), row, inUse, toWireSkillSummary),
+      ),
       ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
       ...(page.truncated !== undefined ? { truncated: page.truncated } : {}),
     },
@@ -123,9 +158,9 @@ const listSkillsHandler: CapabilityHandler = async (client, workspaceId, params,
 
 // S8 W1-C (leftover 48 "无 get_skill"): the full-body counterpart to `listSkillsHandler` above.
 const getSkillHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
-  const { skillId } = params as { skillId: string };
+  const { skillId, version } = params as { skillId: string; version?: number };
   const viewer = await draftViewerOf(client, workspaceId, ctx);
-  const row = await getSkill(client, workspaceId, viewer, skillId);
+  const row = await getSkill(client, workspaceId, viewer, skillId, version);
   if (!row) return { result: null, resourceType: 'skill', resourceId: skillId };
   return {
     result: {
@@ -140,18 +175,26 @@ const getSkillHandler: CapabilityHandler = async (client, workspaceId, params, c
   };
 };
 
+// S11 W1a E2-0: `procedureId` proposes the next version of that family, as `skillId` above.
 const proposeProcedureHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
-  const { procedure: rawProcedure } = params as { procedure: unknown };
+  const { procedure: rawProcedure, procedureId } = params as {
+    procedure: unknown;
+    procedureId?: string;
+  };
   const content = ProposeProcedureContentSchema.parse(rawProcedure);
   const principalId = ctx?.principalId ?? (await currentPrincipalId(client));
 
-  const record = await proposeProcedure(client, workspaceId, principalId, content);
+  const record = await proposeProcedure(client, workspaceId, principalId, {
+    ...content,
+    ...(procedureId !== undefined ? { procedureId } : {}),
+  });
   return {
     result: {
       id: record.id,
       version: record.version,
       status: record.status,
       name: record.name,
+      draftDigest: procedureDraftDigest(record),
     },
     resourceType: 'procedure',
     resourceId: record.id,
@@ -159,15 +202,17 @@ const proposeProcedureHandler: CapabilityHandler = async (client, workspaceId, p
 };
 
 const publishProcedureHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
-  const { procedureId, version, credentialsReviewed } = params as {
+  const { procedureId, version, draftDigest, credentialsReviewed } = params as {
     procedureId: string;
     version: number;
+    draftDigest: string;
     credentialsReviewed?: boolean;
   };
   const actor = {
     ...publishActorOf('publish_procedure', ctx),
     credentialsReviewed,
     reviewedVersion: version,
+    reviewedDraftDigest: draftDigest,
   };
   // S11 GO5d-2: a Procedure that says how a goal's plan is made from it is published only when
   // that plan passes.
@@ -206,23 +251,32 @@ const deprecateProcedureHandler: CapabilityHandler = async (client, workspaceId,
   };
 };
 
+/** Review #493 on #764 (F1): as `toWireSkillSummary`. */
+function toWireProcedureSummary(row: ProcedureRow) {
+  return {
+    id: row.id,
+    version: row.version,
+    status: row.status,
+    name: row.name,
+    description: row.description,
+    steps: row.steps,
+    parameters: row.parameters as Record<string, unknown> | null,
+    proposedBy: row.proposedBy,
+    ...(row.status === 'draft' ? { draftDigest: procedureDraftDigest(row) } : {}),
+  };
+}
+
 // S8 W1-C (leftover 48 pagination list): same shape as `listSkillsHandler` above.
 const listProceduresHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
   const { limit, cursor } = params as { limit?: number; cursor?: string };
   const viewer = await draftViewerOf(client, workspaceId, ctx);
   const page = await listProcedures(client, workspaceId, viewer, { limit, cursor });
+  const inUse = await latestPublishedProcedures(client, workspaceId, draftIdsOf(page.items));
   return {
     result: {
-      items: page.items.map((row) => ({
-        id: row.id,
-        version: row.version,
-        status: row.status,
-        name: row.name,
-        description: row.description,
-        steps: row.steps,
-        parameters: row.parameters as Record<string, unknown> | null,
-        proposedBy: row.proposedBy,
-      })),
+      items: page.items.map((row) =>
+        withInUse(toWireProcedureSummary(row), row, inUse, toWireProcedureSummary),
+      ),
       ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
       ...(page.truncated !== undefined ? { truncated: page.truncated } : {}),
     },

@@ -42,6 +42,13 @@ export interface PublishActor {
    *  the family's latest version, and refuse `ReviewedVersionChangedError` when that is another
    *  one. Internal callers omit the actor, and so the check. */
   readonly reviewedVersion?: number;
+  /** Review #493 on #764 (F1): the digest of the draft the caller reviewed
+   *  (`SkillSummaryWire.draftDigest` / `ProcedureSummaryWire.draftDigest`). A discarded draft's
+   *  row is deleted, so the next proposal under the family takes the same version again — the
+   *  version alone no longer names the content. `publish_skill` / `publish_procedure` refuse
+   *  `ReviewedDraftChangedError` when the latest version's digest is another one. Internal callers
+   *  omit the actor, and so the check. */
+  readonly reviewedDraftDigest?: string;
 }
 
 /**
@@ -106,9 +113,10 @@ export class NotProposerError extends Error {
  * person reviewed, and the version it would publish now is a different one — a newer draft under
  * the same Skill / Procedure family, a newer indexed module version. Raised after the row (or the
  * module's install lock) is held, before anything is written; the caller reloads and decides on
- * what is there now. Rows are immutable per version (only `status` changes), so the version alone
- * binds the content reviewed; an Operation draft is revised in place and binds by `draftDigest`
- * instead (`OperationDraftChangedError`).
+ * what is there now. A row never changes once written (only `status` does), but a discarded draft
+ * is deleted and its version taken again by the next proposal, so a Skill / Procedure publish also
+ * binds the content by `draftDigest` (`ReviewedDraftChangedError`, review #493 on #764); an
+ * Operation draft is revised in place and binds by `draftDigest` alone (`OperationDraftChangedError`).
  */
 export class ReviewedVersionChangedError extends Error {
   readonly code = 'version_changed' as const;
@@ -132,6 +140,35 @@ export class ReviewedVersionChangedError extends Error {
     this.name = 'ReviewedVersionChangedError';
     this.reviewedVersion = reviewedVersion;
     this.currentVersion = currentVersion;
+  }
+}
+
+/**
+ * Review #493 on #764 (F1): the version a publish names is the one reviewed, but its content is not
+ * — that draft was discarded and another one proposed under the same version since (a discard
+ * deletes the row). Raised after the row is held, before anything is written; the caller reloads.
+ * Same code as an Operation draft revised in place (`OperationDraftChangedError`).
+ */
+export class ReviewedDraftChangedError extends Error {
+  readonly code = 'draft_changed' as const;
+  constructor(action: string, subject: string) {
+    super(
+      `${action}: ${subject} is not the draft that was reviewed — it was discarded and another one proposed under the same version since (draftDigest differs). Nothing was written; reload it and look again`,
+    );
+    this.name = 'ReviewedDraftChangedError';
+  }
+}
+
+/** Refuses with `ReviewedDraftChangedError` unless `reviewed` is the digest of the draft about to
+ *  be published. */
+export function assertReviewedDraft(
+  action: string,
+  subject: string,
+  reviewed: string | undefined,
+  current: string,
+): void {
+  if (reviewed !== undefined && reviewed !== current) {
+    throw new ReviewedDraftChangedError(action, subject);
   }
 }
 

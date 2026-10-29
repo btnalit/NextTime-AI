@@ -2081,6 +2081,7 @@ describe('CatalogPage', () => {
             name: 'worker-found-trick',
             description: 'd',
             proposedBy: 'p-member',
+            draftDigest: 'sha256:reviewed',
           },
         ],
       }),
@@ -2102,6 +2103,7 @@ describe('CatalogPage', () => {
       expect(http.calls.find((c) => c.name === 'publish_skill')?.params).toEqual({
         skillId: 'sk-9',
         version: 1,
+        draftDigest: 'sha256:reviewed',
       }),
     );
   });
@@ -2134,11 +2136,85 @@ describe('CatalogPage', () => {
     await waitFor(() => expect(listed).toBe(2));
   });
 
-  it('legacy 300: Publish names the Procedure version shown', async () => {
+  it('review #493 on #764 (F1): Publish names the Skill draft shown; one discarded and proposed again under that version since is not published — the list and the body reload', async () => {
+    const reviewed = { digest: 'sha256:reviewed', markdown: '# REVIEWED' };
+    const swapped = { digest: 'sha256:swapped', markdown: '# SWAPPED' };
+    let current = reviewed;
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_skills: () => ({
+        items: [
+          {
+            id: 'sk-9',
+            version: 2,
+            status: 'draft',
+            name: 'rotate',
+            description: 'd',
+            draftDigest: current.digest,
+          },
+        ],
+      }),
+      get_skill: () => ({
+        id: 'sk-9',
+        version: 2,
+        status: 'draft',
+        name: 'rotate',
+        description: 'd',
+        markdown: current.markdown,
+        draftDigest: current.digest,
+      }),
+      publish_skill: (params) => {
+        if ((params as { draftDigest?: string }).draftDigest !== current.digest) {
+          return Promise.reject(
+            new HttpError('capability_error', 'not the draft reviewed', 'draft_changed'),
+          );
+        }
+        return { id: 'sk-9', version: 2, status: 'published' };
+      },
+    });
+    renderPage(http, 'skills');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    expect((await within(detail).findByTestId('skill-detail-body')).textContent).toContain(
+      'REVIEWED',
+    );
+
+    // Discarded and proposed again under v2 while the reviewer looks at it.
+    current = swapped;
+    fireEvent.click(within(detail).getByRole('button', { name: /^发布$/ }));
+    const toast = await screen.findByTestId('toast');
+    expect(toast.textContent).toContain('这份草稿在你查看之后被修改过，本次没有写入任何内容');
+    expect(http.calls.find((c) => c.name === 'publish_skill')?.params).toMatchObject({
+      version: 2,
+      draftDigest: 'sha256:reviewed',
+    });
+    // The reloaded row is another draft: its body is read again, and Publish now names it.
+    const reloaded = await screen.findByTestId('skill-detail');
+    await waitFor(() =>
+      expect(within(reloaded).getByTestId('skill-detail-body').textContent).toContain('SWAPPED'),
+    );
+    fireEvent.click(within(reloaded).getByRole('button', { name: /^发布$/ }));
+    await waitFor(() =>
+      expect(http.calls.filter((c) => c.name === 'publish_skill').at(-1)?.params).toMatchObject({
+        version: 2,
+        draftDigest: 'sha256:swapped',
+      }),
+    );
+  });
+
+  it('legacy 300: Publish names the Procedure version and draft shown', async () => {
     const http = scriptedHttp({
       get_workspace: () => OWNER_WORKSPACE,
       list_procedures: () => ({
-        items: [{ id: 'pr-9', version: 4, status: 'draft', name: 'deploy', description: 'd' }],
+        items: [
+          {
+            id: 'pr-9',
+            version: 4,
+            status: 'draft',
+            name: 'deploy',
+            description: 'd',
+            draftDigest: 'sha256:reviewed',
+          },
+        ],
       }),
       get_procedure: () => null,
       publish_procedure: () => ({ id: 'pr-9', version: 4, status: 'published' }),
@@ -2150,6 +2226,7 @@ describe('CatalogPage', () => {
       expect(http.calls.find((c) => c.name === 'publish_procedure')?.params).toEqual({
         procedureId: 'pr-9',
         version: 4,
+        draftDigest: 'sha256:reviewed',
       }),
     );
   });
@@ -2366,7 +2443,7 @@ describe('CatalogPage editors (S6-A A2)', () => {
     await waitFor(() => expect(screen.queryByTestId('skill-editor-drawer')).toBeNull());
   });
 
-  it('Skills: "Edit as new draft" pre-fills the row and the current version’s body (get_skill), and says the result is a new Skill', async () => {
+  it('Skills: "Save as a new Skill" pre-fills the row and the current version’s body (get_skill), and says the result is a new Skill', async () => {
     const http = scriptedHttp({
       list_skills: () => ({
         items: [
@@ -2400,9 +2477,11 @@ describe('CatalogPage editors (S6-A A2)', () => {
     renderPage(http, 'skills');
     const row = await screen.findByTestId('catalog-row');
     const detail = await selectRow(row);
-    fireEvent.click(within(detail).getByTestId('catalog-edit-as-draft'));
+    fireEvent.click(within(detail).getByTestId('catalog-save-as-new'));
     const drawer = await screen.findByTestId('skill-editor-drawer');
     expect(within(drawer).getByTestId('skill-copy-notice').textContent).toContain('新的');
+    // A copy of a published Skill under the same name would be refused at publish.
+    expect(within(drawer).getByText(/和「restart-web」同名/)).toBeTruthy();
     expect((within(drawer).getByLabelText(/^名称/) as HTMLInputElement).value).toBe('restart-web');
     expect((within(drawer).getByLabelText('HTTP') as HTMLInputElement).checked).toBe(true);
     expect((within(drawer).getByLabelText('MCP') as HTMLInputElement).checked).toBe(false);
@@ -2411,6 +2490,293 @@ describe('CatalogPage editors (S6-A A2)', () => {
         '# Steps\n\n1. restart',
       ),
     );
+  });
+
+  // S11 W1a E2-0 (legacy 48 ②): the next version of the same Skill / Procedure family.
+  const publishedSkill = {
+    id: 'sk-1',
+    version: 3,
+    status: 'published',
+    name: 'restart-web',
+    description: 'Restart web',
+    applicable: { gateKinds: ['http'] },
+  };
+  const skillDetail = (row: typeof publishedSkill) => ({
+    ...row,
+    markdown: '# Steps\n\n1. restart',
+    proposedBy: 'p-1',
+    publishedBy: 'p-1',
+    createdAt: '2026-01-01T00:00:00Z',
+    publishedAt: '2026-01-01T00:00:00Z',
+  });
+
+  it('Skills: "Edit as new draft version" proposes under the same skillId with the name kept', async () => {
+    const http = scriptedHttp({
+      list_skills: () => ({ items: [publishedSkill] }),
+      get_skill: () => skillDetail(publishedSkill),
+      propose_skill: () => ({ id: 'sk-1', version: 4, status: 'draft', name: 'restart-web' }),
+    });
+    renderPage(http, 'skills');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    expect(within(detail).getByTestId('catalog-save-as-new')).toBeTruthy();
+    fireEvent.click(within(detail).getByTestId('catalog-edit-as-draft'));
+    const drawer = await screen.findByTestId('skill-editor-drawer');
+    expect(within(drawer).getByRole('heading', { name: '提议新版本' })).toBeTruthy();
+    expect(within(drawer).getByTestId('skill-new-version-notice').textContent).toMatch(/当前 v3/);
+    const name = within(drawer).getByLabelText(/^名称/) as HTMLInputElement;
+    expect(name.value).toBe('restart-web');
+    expect(name.readOnly).toBe(true);
+    await waitFor(() =>
+      expect((within(drawer).getByLabelText(/SKILL.md 正文/) as HTMLTextAreaElement).value).toBe(
+        '# Steps\n\n1. restart',
+      ),
+    );
+    fireEvent.change(within(drawer).getByLabelText(/SKILL.md 正文/), {
+      target: { value: '# Steps\n\n1. restart\n2. check' },
+    });
+    fireEvent.click(within(drawer).getByTestId('skill-submit'));
+    await within(drawer).findByTestId('draft-proposed');
+    expect(http.calls.find((c) => c.name === 'propose_skill')?.params).toEqual({
+      skill: {
+        name: 'restart-web',
+        description: 'Restart web',
+        markdown: '# Steps\n\n1. restart\n2. check',
+        applicable: { gateKinds: ['http'] },
+      },
+      skillId: 'sk-1',
+    });
+  });
+
+  it('Skills: a draft row offers only "Save as a new Skill" — its next version waits for it', async () => {
+    const draft = { ...publishedSkill, status: 'draft' };
+    const http = scriptedHttp({
+      list_skills: () => ({ items: [draft] }),
+      get_skill: () => skillDetail(draft),
+    });
+    renderPage(http, 'skills');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    expect(within(detail).getByTestId('catalog-save-as-new')).toBeTruthy();
+    expect(within(detail).queryByTestId('catalog-edit-as-draft')).toBeNull();
+  });
+
+  it('Skills: a 409 draft_pending refusal offers the pending draft, and showing it reloads the list', async () => {
+    let pending = false;
+    const http = scriptedHttp({
+      list_skills: () => ({
+        items: [pending ? { ...publishedSkill, version: 4, status: 'draft' } : publishedSkill],
+      }),
+      get_skill: () => skillDetail(publishedSkill),
+      propose_skill: () => {
+        pending = true;
+        return Promise.reject(
+          new HttpError(
+            'capability_error',
+            'Skill sk-1@4 is a draft that has not been published or discarded',
+            'draft_pending',
+            { familyId: 'sk-1', draftVersion: 4 },
+          ),
+        );
+      },
+    });
+    renderPage(http, 'skills');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    fireEvent.click(within(detail).getByTestId('catalog-edit-as-draft'));
+    const drawer = await screen.findByTestId('skill-editor-drawer');
+    await waitFor(() =>
+      expect((within(drawer).getByLabelText(/SKILL.md 正文/) as HTMLTextAreaElement).value).toBe(
+        '# Steps\n\n1. restart',
+      ),
+    );
+    fireEvent.click(within(drawer).getByTestId('skill-submit'));
+    const banner = await within(drawer).findByTestId('skill-editor-error');
+    expect(banner.getAttribute('data-error-code')).toBe('draft_pending');
+    expect(banner.textContent).toContain('先发布或丢弃那份草稿');
+    fireEvent.click(within(banner).getByTestId('skill-show-pending-draft'));
+    await waitFor(() =>
+      expect(within(screen.getByTestId('skill-detail')).getByText('v4')).toBeTruthy(),
+    );
+    const shown = screen.getByTestId('skill-detail');
+    expect(within(shown).queryByTestId('catalog-edit-as-draft')).toBeNull();
+    // UX acceptance of #764 (P3-1): focus lands on the draft's title.
+    await waitFor(() =>
+      expect(document.activeElement).toBe(shown.querySelector('.catalog-detail-title')),
+    );
+  });
+
+  // UX acceptance of #764 (P2-1): a family with a pending draft lists as that draft, so the
+  // published version still in use is named beside it and opens read-only from it.
+  const ownerWorkspace = () => ({
+    id: 'ws-1',
+    name: 'Acme',
+    createdAt: '2026-01-01T00:00:00Z',
+    principalCount: 1,
+    gatekeeperCount: 0,
+    caller: { id: 'p-1', role: 'owner', displayName: 'Owner', kind: 'human' },
+  });
+
+  it('Skills (UX acceptance of #764, P2-1): a draft names the version in use, which opens read-only and leads back', async () => {
+    const draft = {
+      ...publishedSkill,
+      version: 4,
+      status: 'draft',
+      proposedBy: 'p-1',
+      draftDigest: 'sha256:v4',
+      inUse: { ...publishedSkill, proposedBy: 'p-1' },
+    };
+    const http = scriptedHttp({
+      get_workspace: ownerWorkspace,
+      list_skills: () => ({ items: [draft] }),
+      get_skill: (params) =>
+        (params as { version?: number }).version === 3
+          ? skillDetail(publishedSkill)
+          : {
+              ...skillDetail(publishedSkill),
+              version: 4,
+              status: 'draft',
+              markdown: '# Steps\n\n1. restart\n2. check',
+            },
+    });
+    renderPage(http, 'skills');
+    const row = await screen.findByTestId('catalog-row');
+    expect(within(row).getByTestId('catalog-row-in-use').textContent).toBe(
+      'v3 已发布（在用）· v4 草稿待发布',
+    );
+    await selectRow(row);
+
+    const draftDetail = await screen.findByTestId('skill-detail');
+    expect(within(draftDetail).getByTestId('skill-detail-in-use-note').textContent).toMatch(
+      /已发布的 v3 仍在用：Worker 挂载的是它，这份草稿 v4 发布后才改用新版本/,
+    );
+    await waitFor(() =>
+      expect(within(draftDetail).getByRole('button', { name: /^发布$/ })).toBeTruthy(),
+    );
+    await waitFor(() =>
+      expect(within(draftDetail).getByTestId('skill-detail-body').textContent).toMatch(/check/),
+    );
+
+    fireEvent.click(within(draftDetail).getByTestId('skill-detail-open-in-use'));
+    const inUseDetail = await screen.findByTestId('skill-detail-pending-draft-note');
+    expect(inUseDetail.textContent).toMatch(
+      /这是在用的 v3（只读）。这个 Skill 还有一份待发布的草稿 v4/,
+    );
+    const v3 = screen.getByTestId('skill-detail');
+    expect(within(v3).getByText('v3')).toBeTruthy();
+    await waitFor(() =>
+      expect(within(v3).getByTestId('skill-detail-body').textContent).not.toMatch(/check/),
+    );
+    expect(http.calls.filter((c) => c.name === 'get_skill').map((c) => c.params)).toEqual(
+      expect.arrayContaining([
+        { skillId: 'sk-1', version: 4 },
+        { skillId: 'sk-1', version: 3 },
+      ]),
+    );
+    // Read-only: the draft is what is acted on.
+    expect(within(v3).queryByRole('button', { name: /^发布$/ })).toBeNull();
+    expect(within(v3).queryByTestId('skill-discard-confirm-sk-1')).toBeNull();
+    expect(within(v3).queryByTestId('skill-deprecate-confirm-sk-1')).toBeNull();
+    expect(within(v3).queryByTestId('catalog-edit-as-draft')).toBeNull();
+    expect(within(v3).queryByTestId('catalog-save-as-new')).toBeNull();
+    // UX acceptance of #764 (P3-1): the version opened takes focus on its title.
+    expect(document.activeElement).toBe(v3.querySelector('.catalog-detail-title'));
+
+    fireEvent.click(within(v3).getByTestId('skill-detail-open-draft'));
+    const back = await screen.findByTestId('skill-detail-in-use-note');
+    const v4 = screen.getByTestId('skill-detail');
+    expect(v4.contains(back)).toBe(true);
+    expect(within(v4).getByText('v4')).toBeTruthy();
+    expect(within(v4).getByRole('button', { name: /^发布$/ })).toBeTruthy();
+    expect(document.activeElement).toBe(v4.querySelector('.catalog-detail-title'));
+  });
+
+  it('Procedures (UX acceptance of #764, P2-1): a draft names the version in use, which opens read-only and leads back', async () => {
+    const inUse = {
+      id: 'pr-1',
+      version: 2,
+      status: 'published',
+      name: 'Deploy',
+      description: 'Deploy web',
+      proposedBy: 'p-1',
+      steps: [{ kind: 'approval', description: 'A human approves.' }],
+    };
+    const draft = {
+      ...inUse,
+      version: 3,
+      status: 'draft',
+      description: 'Deploy web, then verify',
+      draftDigest: 'sha256:v3',
+      steps: [...inUse.steps, { kind: 'verify', description: 'The site answers.' }],
+      inUse,
+    };
+    const http = scriptedHttp({
+      get_workspace: ownerWorkspace,
+      list_procedures: () => ({ items: [draft] }),
+    });
+    renderPage(http, 'procedures');
+    const row = await screen.findByTestId('catalog-row');
+    expect(within(row).getByTestId('catalog-row-in-use').textContent).toBe(
+      'v2 已发布（在用）· v3 草稿待发布',
+    );
+    await selectRow(row);
+
+    const draftDetail = await screen.findByTestId('procedure-detail');
+    expect(within(draftDetail).getByTestId('procedure-detail-in-use-note').textContent).toMatch(
+      /已发布的 v2 仍在用：从这个流程发起的目标用的是它，这份草稿 v3 发布后才改用新版本/,
+    );
+    expect(within(draftDetail).getByText('Deploy web, then verify')).toBeTruthy();
+
+    fireEvent.click(within(draftDetail).getByTestId('procedure-detail-open-in-use'));
+    const note = await screen.findByTestId('procedure-detail-pending-draft-note');
+    expect(note.textContent).toMatch(/这是在用的 v2（只读）。这个流程还有一份待发布的草稿 v3/);
+    const v2 = screen.getByTestId('procedure-detail');
+    expect(within(v2).getByText('v2')).toBeTruthy();
+    expect(within(v2).getByText('Deploy web')).toBeTruthy();
+    expect(within(v2).queryByText('The site answers.')).toBeNull();
+    expect(within(v2).queryByRole('button', { name: /^发布$/ })).toBeNull();
+    expect(within(v2).queryByTestId('procedure-discard-confirm-pr-1')).toBeNull();
+    expect(within(v2).queryByTestId('procedure-deprecate-confirm-pr-1')).toBeNull();
+    expect(within(v2).queryByTestId('catalog-edit-as-draft')).toBeNull();
+    expect(within(v2).queryByTestId('catalog-save-as-new')).toBeNull();
+    expect(document.activeElement).toBe(v2.querySelector('.catalog-detail-title'));
+
+    fireEvent.click(within(v2).getByTestId('procedure-detail-open-draft'));
+    const v3 = await screen.findByTestId('procedure-detail');
+    await waitFor(() => expect(within(v3).getByText('v3')).toBeTruthy());
+    expect(within(v3).getByTestId('procedure-detail-in-use-note')).toBeTruthy();
+    expect(document.activeElement).toBe(v3.querySelector('.catalog-detail-title'));
+  });
+
+  it('Procedures: "Edit as new draft version" proposes under the same procedureId; the name may change', async () => {
+    const procedure = {
+      id: 'pr-1',
+      version: 2,
+      status: 'published',
+      name: 'Deploy',
+      description: 'Deploy web',
+      steps: [{ kind: 'approval', description: 'A human approves.' }],
+    };
+    const http = scriptedHttp({
+      list_procedures: () => ({ items: [procedure] }),
+      propose_procedure: () => ({ id: 'pr-1', version: 3, status: 'draft', name: 'Deploy web' }),
+    });
+    renderPage(http, 'procedures');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    expect(within(detail).getByTestId('catalog-save-as-new').textContent).toBe('另存为新的流程');
+    fireEvent.click(within(detail).getByTestId('catalog-edit-as-draft'));
+    const drawer = await screen.findByTestId('procedure-editor-drawer');
+    expect(within(drawer).getByTestId('procedure-new-version-notice').textContent).toMatch(
+      /同一个 ID/,
+    );
+    const name = within(drawer).getByLabelText(/^名称/) as HTMLInputElement;
+    expect(name.readOnly).toBe(false);
+    fireEvent.change(name, { target: { value: 'Deploy web' } });
+    fireEvent.click(within(drawer).getByTestId('procedure-submit'));
+    await within(drawer).findByTestId('draft-proposed');
+    const params = http.calls.find((c) => c.name === 'propose_procedure')?.params as {
+      procedure: { name: string };
+      procedureId: string;
+    };
+    expect(params.procedureId).toBe('pr-1');
+    expect(params.procedure.name).toBe('Deploy web');
   });
 
   it('Workers: "Edit as new draft version" proposes under the same definitionId with the kind locked', async () => {

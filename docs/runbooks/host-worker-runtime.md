@@ -779,7 +779,7 @@ fetch('http://localhost:8080/api/cap/explain', {
 ```bash
 OWNER_KEY=<owner-api-key>   # §12.1 已经有
 
-SKILL_ID=$(docker compose exec -T kernel node -e "
+read -r SKILL_ID SKILL_DRAFT_DIGEST < <(docker compose exec -T kernel node -e "
 fetch('http://localhost:8080/api/cap/propose_skill', {
   method: 'POST',
   headers: {'content-type': 'application/json', authorization: 'Bearer ${OWNER_KEY}'},
@@ -790,20 +790,21 @@ fetch('http://localhost:8080/api/cap/propose_skill', {
       markdown: 'When asked, say hello.',
     },
   }),
-}).then(r => r.json()).then(b => console.log(b.result.id))
+}).then(r => r.json()).then(b => console.log(b.result.id, b.result.draftDigest))
 ")
 docker compose exec -T kernel node -e "
 fetch('http://localhost:8080/api/cap/publish_skill', {
   method: 'POST',
   headers: {'content-type': 'application/json', authorization: 'Bearer ${OWNER_KEY}'},
-  body: JSON.stringify({ skillId: '${SKILL_ID}', version: 1 }),
+  body: JSON.stringify({ skillId: '${SKILL_ID}', version: 1, draftDigest: '${SKILL_DRAFT_DIGEST}' }),
 }).then(r => r.json()).then(b => console.log(JSON.stringify(b)))
 "
 ```
 
 期望：第二条调用返回 `{"ok":true, "result":{"status":"published", ...}}`。`version` 是所审的版本
 （新提议的 Skill 总是 v1）：同一 Skill 下之后又有了更新的版本时，发布返回 409 `version_changed`，
-什么都不发布（遗留 300）。
+什么都不发布（遗留 300）。`draftDigest` 是所审内容的摘要，提议的结果里带着：这一版草稿被丢弃、
+又在同一版本号下提议了另一份时，发布返回 409 `draft_changed`，同样什么都不发布。
 
 ### 14.2 发布一个引用该 Skill 的 WorkerDefinition
 

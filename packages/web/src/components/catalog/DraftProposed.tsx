@@ -16,6 +16,9 @@ export interface ProposedDraft {
   readonly version: number;
   readonly status: string;
   readonly name?: string;
+  /** `propose_skill` / `propose_procedure`'s: the content just proposed, which their publish names
+   *  (review #493 on #764, F1). */
+  readonly draftDigest?: string;
 }
 
 export interface DraftProposedProps {

@@ -132,9 +132,11 @@ import {
   DraftNotDiscardableError,
   EntryTemplateChangedError,
   EntryTemplateCurrentError,
+  FamilyDraftPendingError,
   ProcedureNotFoundError,
   ProcedureStepReferenceError,
   ProcedureTemplateError,
+  SkillFamilyNameChangedError,
   SkillNameConflictError,
   SkillNotFoundError,
   SkillValidationError,
@@ -152,6 +154,7 @@ import {
   GrantNotFoundError,
   HandleIssuanceError,
   NotProposerError,
+  ReviewedDraftChangedError,
   ReviewedVersionChangedError,
   ScopeValidationError,
 } from '../../governance/capability/index.js';
@@ -513,6 +516,25 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   if (err instanceof EntryTemplateCurrentError || err instanceof EntryTemplateChangedError) {
     return { status: 409, code: err.code, message: err.message };
   }
+  // S11 W1a E2-0 (legacy 48 ②): `propose_skill{skillId}` / `propose_procedure{procedureId}` on a
+  // family whose latest version is still a draft, or a Skill version under another name. Nothing
+  // was proposed.
+  if (err instanceof FamilyDraftPendingError) {
+    return {
+      status: 409,
+      code: err.code,
+      message: err.message,
+      details: { familyId: err.familyId, draftVersion: err.draftVersion },
+    };
+  }
+  if (err instanceof SkillFamilyNameChangedError) {
+    return {
+      status: 409,
+      code: err.code,
+      message: err.message,
+      details: { skillName: err.skillName },
+    };
+  }
   // S11 P1-D: a Skill name another Skill family has published — `publish_skill`,
   // `preview_pack_install`, `install_pack` (a Worker mounts Skills by name). Nothing was published.
   if (err instanceof SkillNameConflictError) {
@@ -538,6 +560,11 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // Legacy 300: `publish_skill` / `publish_procedure` / `install_module` / `upgrade_module` would
   // write a version other than the one the caller reviewed. Nothing was written.
   if (err instanceof ReviewedVersionChangedError) {
+    return { status: 409, code: err.code, message: err.message };
+  }
+  // Review #493 on #764 (F1): `publish_skill` / `publish_procedure` named the version reviewed, but
+  // that draft was discarded and another proposed under the same version (`draftDigest`).
+  if (err instanceof ReviewedDraftChangedError) {
     return { status: 409, code: err.code, message: err.message };
   }
   // S5.3 `register_source` (ingest-handlers.ts): the (kind, name) is another owner's Source, has
