@@ -1,16 +1,22 @@
 import { useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { actionKindTagText } from '../../lib/format.js';
-import { type OperationChoice, useGateOperations } from '../../lib/gate-operations.js';
+import {
+  type OperationChoice,
+  confirmsAbsence,
+  useGateOperations,
+} from '../../lib/gate-operations.js';
 import type { GatekeeperListRow } from '../../lib/governance.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import { transportKindLabel } from '../../lib/labels.js';
+import { hrefs } from '../../lib/router.js';
 import { sameNameIds, withSameNameId } from '../../lib/same-name.js';
 import { BLAST_RADIUS_TONES } from '../../lib/status-tone.js';
 import { Button } from '../kit/button.js';
 import { Combobox } from '../kit/combobox.js';
 import { Field, describedBy } from '../kit/field.js';
 import { Notice } from '../kit/notice.js';
+import { RouteLink } from '../kit/route-link.js';
 import { Select } from '../kit/select.js';
 
 /** The note beside an Operation in the picker: its declared blast radius. */
@@ -39,6 +45,7 @@ export function OperationStepFields({
   busy,
   gateError,
   operationError,
+  absence = false,
   onChange,
 }: {
   readonly http: CapabilityCaller;
@@ -52,6 +59,10 @@ export function OperationStepFields({
   readonly busy: boolean;
   readonly gateError: string | null;
   readonly operationError: string | null;
+  /** S11 「门确认不存在」 B: an absence check's Operation — only the gate's Operations that declare
+   *  which answers mean "does not exist", confirmed when published ({@link confirmsAbsence}), are
+   *  offered. */
+  readonly absence?: boolean;
   readonly onChange: (patch: {
     readonly gatekeeperId?: string;
     readonly operationName?: string;
@@ -67,7 +78,11 @@ export function OperationStepFields({
   );
   const gate = gatekeepers?.find((row) => row.id === gatekeeperId);
   // Only a gate from the directory is queried — a half-typed id would be a 400 per keystroke.
-  const operations = useGateOperations(http, gate ? { gatekeeperId: gate.id } : null);
+  const operations = useGateOperations(
+    http,
+    gate ? { gatekeeperId: gate.id } : null,
+    absence ? confirmsAbsence : undefined,
+  );
   const choices: readonly OperationChoice[] =
     operations.state.status === 'ready' ? operations.state.choices : [];
   const name = operationName.trim();
@@ -79,6 +94,10 @@ export function OperationStepFields({
     name !== '' &&
     !choices.some((choice) => choice.name === name);
   const manual = !hasDirectory || manualChosen || listUnavailable || notOnList;
+  // #780 UX P3-3: an absence check on a gate that offers no Operation able to confirm "not there"
+  // — any name typed would fail at publish, so nothing is typed; the note below says what to do.
+  const noAbsenceChoice =
+    absence && gate !== undefined && operations.state.status === 'ready' && choices.length === 0;
 
   return (
     <div className="stack-s">
@@ -132,7 +151,7 @@ export function OperationStepFields({
           required
           error={operationError}
           hint={
-            manual
+            manual && !noAbsenceChoice
               ? t(
                   '手动输入：与门发布的 Operation 名完全一致（区分大小写）。',
                   'Manual entry: the Operation name exactly as the gate publishes it (case-sensitive).',
@@ -147,9 +166,13 @@ export function OperationStepFields({
               value={operationName}
               onChange={(event) => onChange({ operationName: event.target.value })}
               onBlur={() => onChange({ operationName: operationName.trim() })}
-              disabled={busy}
+              disabled={busy || noAbsenceChoice}
               aria-invalid={!!operationError || notOnList || undefined}
-              aria-describedby={describedBy(`${prefix}-operation`, true, !!operationError)}
+              aria-describedby={describedBy(
+                `${prefix}-operation`,
+                !noAbsenceChoice,
+                !!operationError,
+              )}
               data-testid={`${testPrefix}-operation-input`}
             />
           ) : (
@@ -193,19 +216,36 @@ export function OperationStepFields({
         </Notice>
       ) : null}
       {gate && operations.state.status === 'ready' && choices.length === 0 ? (
-        <span className="text-3 text-small" data-testid={`${testPrefix}-operations-empty`}>
-          {t(
-            `门「${gate.name}」还没有已发布的 Operation，请手动输入名称。`,
-            `Gate “${gate.name}” has no published Operation yet — type the name manually.`,
-          )}
-        </span>
+        absence ? (
+          <span className="text-3 text-small" data-testid={`${testPrefix}-operations-empty`}>
+            {t(
+              `门「${gate.name}」上没有能确认“不存在”的 Operation：要用的 Operation 得声明哪些回答表示要查的东西不存在，并在发布时有人确认过门用的凭据看得到要查的东西。`,
+              `Gate “${gate.name}” has no Operation that can confirm something is not there: the Operation must declare which answers mean the thing looked up does not exist, and someone must have confirmed at publish that the gate’s credentials can see what it looks up.`,
+            )}{' '}
+            <RouteLink href={hrefs.catalog('operations')}>
+              {t('到能力目录声明并确认', 'Declare and confirm it in the catalog')}
+            </RouteLink>
+          </span>
+        ) : (
+          <span className="text-3 text-small" data-testid={`${testPrefix}-operations-empty`}>
+            {t(
+              `门「${gate.name}」还没有已发布的 Operation，请手动输入名称。`,
+              `Gate “${gate.name}” has no published Operation yet — type the name manually.`,
+            )}
+          </span>
+        )
       ) : null}
-      {gate && notOnList && choices.length > 0 ? (
+      {gate && notOnList && (absence || choices.length > 0) ? (
         <Notice tone="warn" testId={`${testPrefix}-unknown-operation`}>
-          {t(
-            `门「${gate.name}」上没有已发布的「${actionKindTagText(name)}」；发布这个流程时会失败。请从列表选择，或检查拼写。`,
-            `Gate “${gate.name}” publishes no “${actionKindTagText(name)}”; publishing this Procedure would fail. Choose from the list or check the spelling.`,
-          )}
+          {absence
+            ? t(
+                `门「${gate.name}」上的「${actionKindTagText(name)}」没有发布、没有声明哪些回答表示不存在，或者发布时没人确认过；发布这个流程时会失败。`,
+                `On gate “${gate.name}”, “${actionKindTagText(name)}” is not published, declares no answer that means "not there", or nobody confirmed it at publish; publishing this Procedure would fail.`,
+              )
+            : t(
+                `门「${gate.name}」上没有已发布的「${actionKindTagText(name)}」；发布这个流程时会失败。请从列表选择，或检查拼写。`,
+                `Gate “${gate.name}” publishes no “${actionKindTagText(name)}”; publishing this Procedure would fail. Choose from the list or check the spelling.`,
+              )}
         </Notice>
       ) : null}
       {gate && choices.length > 0 ? (

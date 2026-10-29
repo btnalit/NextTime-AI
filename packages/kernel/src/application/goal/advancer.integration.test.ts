@@ -39,6 +39,7 @@ import { generateEphemeralHandleKeyPair } from '../../governance/capability/inde
 import {
   SYSTEM_ACTOR_PLACEHOLDER,
   importManifest,
+  proposeOperation,
   publishOperation,
   registerGatekeeper,
 } from '../../governance/gatekeepers/index.js';
@@ -4754,6 +4755,15 @@ describe.runIf(DATABASE_URL !== undefined)(
         name: 'svc.lookup',
         binding: { kind: 'http', method: 'GET', path: '/services/{name}', absent_statuses: [404] },
       };
+      /** S11 「门确认不存在」 B: LOOKUP's like, republished by the test that names it. */
+      const FIND: Operation = { ...LOOKUP, name: 'svc.find' };
+      /** S11 「门确认不存在」 B: declares a 410, in a version published before anyone was asked to
+       *  confirm it (as one published before B-a was). */
+      const LEGACY: Operation = {
+        ...STATUS,
+        name: 'svc.legacy',
+        binding: { kind: 'http', method: 'GET', path: '/legacy/{name}', absent_statuses: [410] },
+      };
 
       beforeAll(async () => {
         gate = await admin(async (client) => {
@@ -4772,11 +4782,11 @@ describe.runIf(DATABASE_URL !== undefined)(
           });
           await importManifest(client, workspaceId, {
             gatekeeperId: registered.gatekeeperId,
-            operations: [STATUS, LOOKUP],
+            operations: [STATUS, LOOKUP, FIND, LEGACY],
             proposedBy: { id: ownerId, kind: 'human' },
             activityId: activity.id,
           });
-          for (const operation of [STATUS, LOOKUP]) {
+          for (const operation of [STATUS, LOOKUP, FIND]) {
             // S11 「门确认不存在」 B-a: a person publishes LOOKUP, confirming its declared 404.
             await publishOperation(client, workspaceId, {
               gatekeeperId: registered.gatekeeperId,
@@ -4787,7 +4797,19 @@ describe.runIf(DATABASE_URL !== undefined)(
           }
           return registered.gatekeeperId;
         });
+        await publishUnconfirmed(LEGACY.name);
       });
+
+      /** Flips `name`'s draft to published with no confirmation — what no publish path writes
+       *  since B-a, and every version published before it is. */
+      const publishUnconfirmed = (name: string) =>
+        raw(
+          `update objects set properties = properties || '{"status":"published"}'::jsonb
+            where workspace_id = $1 and object_type = 'Operation'
+              and identity_key ->> 'gatekeeperId' = $2 and identity_key ->> 'name' = $3
+              and properties ->> 'status' = 'draft'`,
+          [workspaceId, gate, name],
+        );
 
       const by = (principalId: string, role: 'member' | 'owner' = 'member') => ({
         principalId,
@@ -5602,6 +5624,188 @@ describe.runIf(DATABASE_URL !== undefined)(
         });
       });
 
+      /** S11 「门确认不存在」 B: a check met only by the gate saying the thing looked up is gone. */
+      const absence = (key = 'gone', operation = LOOKUP.name) => ({
+        kind: 'observe_absent' as const,
+        key,
+        check: { gatekeeperId: gate, operation, params: { name: 'web' } },
+      });
+      const NOT_THERE = async () => ({ data: null, observedFacts: [], absent: { status: 404 } });
+
+      it('S11 「门确认不存在」 B: an absence check passes only on the gate confirming the thing is not there, recorded with who confirmed the version’s answers; while it is still there the check is tried again, then the run pauses with that evidence', async () => {
+        const requester = await newPrincipal();
+        const { goalRunId, created, entered } = await verifyingGoal(requester, [absence()]);
+        expect(created.hints).toEqual([]);
+        expect(entered).toMatchObject({ status: 'verifying', nextTickAt: null });
+        expect((await acceptanceOf(goalRunId))?.rounds).toMatchObject([
+          {
+            round: 1,
+            checks: [
+              {
+                checkKey: 'gone',
+                kind: 'observe_absent',
+                status: 'pending',
+                check: absence().check,
+              },
+            ],
+          },
+        ]);
+        const options = { maxAttempts: 2, backoffMs: () => 60_000 };
+
+        // Still there: the gate answered with it. Seen, and not met — tried again.
+        observeClient.answer = RUNNING;
+        expect(await observeNow(goalRunId, 'gone', options)).toBe('retry');
+        const [present] = await evidenceOf(goalRunId, 'gone');
+        expect(present?.content).toMatchObject({
+          purpose: 'acceptance_check',
+          operation: LOOKUP.name,
+          outcome: 'unsatisfied',
+          result: { name: 'web', state: 'running' },
+        });
+        expect(present?.content).not.toHaveProperty('expect');
+        expect(present?.content).not.toHaveProperty('absent');
+        expect((await rowsOf(goalRunId))[0]).toMatchObject({
+          kind: 'observe_absent',
+          status: 'pending',
+          attempts: 1,
+          observationId: present?.id,
+          lastError: 'target_still_present',
+        });
+
+        // Gone: the gate says so, in an answer the published definition declares.
+        observeClient.answer = NOT_THERE;
+        const calls = observeClient.calls.length;
+        expect(await observeNow(goalRunId, 'gone', options)).toBe('passed');
+        expect(observeClient.calls.slice(calls)).toEqual([
+          {
+            target: expect.anything(),
+            input: {
+              operation: LOOKUP.name,
+              params: { name: 'web' },
+              onBehalfOf: requester,
+              operationDigest: expect.any(String),
+            },
+          },
+        ]);
+        const gone = (await evidenceOf(goalRunId, 'gone'))[1];
+        expect(gone?.content).toMatchObject({
+          outcome: 'satisfied',
+          absent: { status: 404 },
+          absentAnswersReview: { reviewedBy: ownerId, reviewedAt: expect.any(String) },
+          result: null,
+        });
+        expect(gone?.content).not.toHaveProperty('expect');
+        expect((await rowsOf(goalRunId))[0]).toMatchObject({
+          status: 'passed',
+          attempts: 2,
+          observationId: gone?.id,
+        });
+        expect(await advance(goalRunId, requester)).toMatchObject({ status: 'completed' });
+        expect(await goalOf(goalRunId)).toMatchObject({
+          status: 'completed',
+          outcome: 'achieved',
+          outcomeBasis: 'verified_by_check',
+        });
+
+        // Never gone: at the last attempt the check fails on the answer that showed it, and the
+        // run pauses for a person — never achieved.
+        const stays = await verifyingGoal(requester, [absence()]);
+        observeClient.answer = RUNNING;
+        expect(await observeNow(stays.goalRunId, 'gone', options)).toBe('retry');
+        expect(await observeNow(stays.goalRunId, 'gone', options)).toBe('failed');
+        const evidence = await evidenceOf(stays.goalRunId, 'gone');
+        expect((await rowsOf(stays.goalRunId))[0]).toMatchObject({
+          status: 'failed',
+          attempts: 2,
+          observationId: evidence[1]?.id,
+          lastError: 'target_still_present',
+        });
+        await advance(stays.goalRunId, requester);
+        expect(await goalOf(stays.goalRunId)).toMatchObject({
+          status: 'paused',
+          pauseReason: 'needs_decision',
+          outcome: null,
+        });
+        expect(await pauseDetail(stays.goalRunId)).toBe(
+          'round 1: acceptance check gone: its observation found the thing still there (target_still_present): the gate answered with it, not that it does not exist; end the goal as not achieved (or as achieved, on your word), revise the plan, resume to verify again, or cancel',
+        );
+      });
+
+      it('S11 「门确认不存在」 B: an absence check’s Operation declares which answers mean "not there", in a version a person confirmed when it was published — when the plan is checked, and again when the check is made', async () => {
+        let problems: readonly string[] = [];
+        try {
+          await proposeWith(await newPrincipal(), [
+            absence('b1', STATUS.name),
+            absence('b2', LEGACY.name),
+          ]);
+        } catch (err) {
+          expect(err).toBeInstanceOf(GoalPlanValidationError);
+          problems = (err as GoalPlanValidationError).problems;
+        }
+        expect(problems).toEqual([
+          expect.stringMatching(
+            /^acceptance\[0\] "b1": check: "svc\.status" declares no answer that means the thing looked up does not exist/,
+          ),
+          expect.stringMatching(
+            /^acceptance\[1\] "b2": check: "svc\.legacy" was published without a person confirming that the gate's credentials can see what it looks up/,
+          ),
+        ]);
+
+        // Both held when the plans were confirmed; what is published changes before the checks.
+        const undeclared = await verifyingGoal(await newPrincipal(), [absence('gone', FIND.name)]);
+        const unconfirmed = await verifyingGoal(await newPrincipal(), [absence('gone', FIND.name)]);
+        const calls = observeClient.calls.length;
+        const revise = (operation: Operation) =>
+          admin(async (client) => {
+            const activity = await startActivity(client, workspaceId, {
+              kind: 'test.revise',
+              principalId: ownerId,
+            });
+            await proposeOperation(client, workspaceId, {
+              gatekeeperId: gate,
+              operation,
+              proposedBy: { id: ownerId, kind: 'human' },
+              activityId: activity.id,
+            });
+          });
+
+        // Republished without the declaration: nothing it answers could meet the check.
+        await revise({ ...FIND, binding: STATUS.binding });
+        await admin((client) =>
+          publishOperation(client, workspaceId, {
+            gatekeeperId: gate,
+            name: FIND.name,
+            actor: { principalId: ownerId, role: 'owner' },
+          }),
+        );
+        expect(await observeNow(undeclared.goalRunId, 'gone')).toBe('unavailable');
+        expect((await rowsOf(undeclared.goalRunId))[0]).toMatchObject({
+          status: 'unavailable',
+          lastError: 'absence_not_declared',
+        });
+
+        // Declared again, in a version nobody confirmed.
+        await revise(FIND);
+        await raw(
+          `update objects set properties = properties || '{"status":"deprecated"}'::jsonb
+            where workspace_id = $1 and object_type = 'Operation'
+              and identity_key ->> 'gatekeeperId' = $2 and identity_key ->> 'name' = $3
+              and properties ->> 'status' = 'published'`,
+          [workspaceId, gate, FIND.name],
+        );
+        await publishUnconfirmed(FIND.name);
+        expect(await observeNow(unconfirmed.goalRunId, 'gone')).toBe('unavailable');
+        expect((await rowsOf(unconfirmed.goalRunId))[0]).toMatchObject({
+          status: 'unavailable',
+          lastError: 'absence_not_reviewed',
+        });
+
+        // Refused before the gate is called: nothing was asked, nothing kept as evidence.
+        expect(observeClient.calls.slice(calls)).toEqual([]);
+        expect(await evidenceOf(undeclared.goalRunId, 'gone')).toEqual([]);
+        expect(await evidenceOf(unconfirmed.goalRunId, 'gone')).toEqual([]);
+      });
+
       it('a plan’s acceptance observation names a published observe-class Operation of an enabled gate, with params that carry no credential', async () => {
         const requester = await newPrincipal();
         const unknownGate = randomUUID();
@@ -5652,6 +5856,12 @@ describe.runIf(DATABASE_URL !== undefined)(
         reads: [],
         writes: [],
       };
+      /** S11 「门确认不存在」 B: the target's 404 to this one means it has no such service. */
+      const LOOKUP: Operation = {
+        ...STATUS,
+        name: 'svc.lookup',
+        binding: { kind: 'http', method: 'GET', path: '/services/{name}', absent_statuses: [404] },
+      };
 
       beforeAll(async () => {
         gate = await admin(async (client) => {
@@ -5670,13 +5880,20 @@ describe.runIf(DATABASE_URL !== undefined)(
           });
           await importManifest(client, workspaceId, {
             gatekeeperId: registered.gatekeeperId,
-            operations: [STATUS],
+            operations: [STATUS, LOOKUP],
             proposedBy: { id: ownerId, kind: 'human' },
             activityId: activity.id,
           });
           await publishOperation(client, workspaceId, {
             gatekeeperId: registered.gatekeeperId,
             name: STATUS.name,
+          });
+          // S11 「门确认不存在」 B-a: a person publishes LOOKUP, confirming its declared 404.
+          await publishOperation(client, workspaceId, {
+            gatekeeperId: registered.gatekeeperId,
+            name: LOOKUP.name,
+            actor: { principalId: ownerId, role: 'owner' },
+            absentAnswersReviewed: true,
           });
           return registered.gatekeeperId;
         });
@@ -5701,7 +5918,10 @@ describe.runIf(DATABASE_URL !== undefined)(
       const EXITED = async () => ({ data: { name: 'web', state: 'exited' } });
 
       /** A running goal: step `a` declares `acceptance`, `b` follows it; `a`'s attempt 1 runs. */
-      async function verifyingStep(requester: string, acceptance = [observe()]) {
+      async function verifyingStep(
+        requester: string,
+        acceptance: readonly unknown[] = [observe()],
+      ) {
         const goalRunId = await startGoal(requester, [
           { key: 'a', acceptance },
           { key: 'b', dependsOn: ['a'] },
@@ -5861,6 +6081,50 @@ describe.runIf(DATABASE_URL !== undefined)(
             (row) => row.resource_id === a.id && row.action === 'step_run.succeed',
           )?.payload,
         ).toMatchObject({ round: 1, attempt: 1, checks: ['up'] });
+      });
+
+      it('S11 「门确认不存在」 B: a step’s absence check holds the step while the thing it removes is still there; it succeeds, and the next step starts, only once the gate confirms it is gone', async () => {
+        const requester = await newPrincipal();
+        const gone = {
+          kind: 'observe_absent' as const,
+          key: 'gone',
+          check: { gatekeeperId: gate, operation: LOOKUP.name, params: { name: 'web' } },
+        };
+        const { goalRunId, a } = await verifyingStep(requester, [gone]);
+        await completeStep(a.id, requester);
+        await advance(goalRunId, requester);
+        expect((await acceptanceOf(goalRunId))?.[0]?.rounds).toMatchObject([
+          { checks: [{ checkKey: 'gone', kind: 'observe_absent', status: 'pending' }] },
+        ]);
+
+        observeClient.answer = RUNNING;
+        const options = { maxAttempts: 3, backoffMs: () => 60_000 };
+        expect(await observeNow(goalRunId, 'gone', options)).toBe('retry');
+        expect(await advance(goalRunId, requester)).toMatchObject({ status: 'running' });
+        let steps = await stepsOf(goalRunId);
+        expect(steps.a).toMatchObject({ status: 'waiting', waitingReason: 'acceptance' });
+        expect(steps.b?.status).toBe('pending');
+        expect(await rowsOf(goalRunId)).toMatchObject([
+          { status: 'pending', attempts: 1, lastError: 'target_still_present' },
+        ]);
+
+        observeClient.answer = async () => ({ data: null, absent: { status: 404 } });
+        expect(await observeNow(goalRunId, 'gone', options)).toBe('passed');
+        const evidence = await evidenceOf(goalRunId);
+        expect(evidence[1]?.content).toMatchObject({
+          purpose: 'step_acceptance_check',
+          stepRunId: a.id,
+          checkKey: 'gone',
+          outcome: 'satisfied',
+          absent: { status: 404 },
+          absentAnswersReview: { reviewedBy: ownerId, reviewedAt: expect.any(String) },
+        });
+        expect(evidence[1]?.content).not.toHaveProperty('expect');
+
+        await advance(goalRunId, requester);
+        steps = await stepsOf(goalRunId);
+        expect(steps.a).toMatchObject({ status: 'succeeded' });
+        expect(steps.b?.status).toBe('running');
       });
 
       it('a check that saw its predicate false fails the step verification_failed: the run pauses for a person, and only their retry does the step’s work again', async () => {

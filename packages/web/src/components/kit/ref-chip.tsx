@@ -226,6 +226,9 @@ const MAX_BATCH_SIZE = 200;
 
 interface PendingBatch {
   readonly ids: Set<string>;
+  /** Ids a `resolve_refs` call has gone out for and not yet answered — a hook that asks for one
+   *  of them waits for that answer instead of asking again. */
+  readonly inFlight: Set<string>;
   readonly listeners: Map<string, Set<() => void>>;
   timer: ReturnType<typeof setTimeout> | null;
 }
@@ -249,7 +252,7 @@ function getCache(caller: CapabilityCaller): Map<string, ResolvedRefWire | null>
 function getBatch(caller: CapabilityCaller): PendingBatch {
   let batch = batchByCaller.get(caller);
   if (!batch) {
-    batch = { ids: new Set(), listeners: new Map(), timer: null };
+    batch = { ids: new Set(), inFlight: new Set(), listeners: new Map(), timer: null };
     batchByCaller.set(caller, batch);
   }
   return batch;
@@ -267,7 +270,10 @@ async function flush(caller: CapabilityCaller): Promise<void> {
   batch.timer = null;
   if (batch.ids.size === 0) return;
   const ids = [...batch.ids].slice(0, MAX_BATCH_SIZE);
-  for (const id of ids) batch.ids.delete(id);
+  for (const id of ids) {
+    batch.ids.delete(id);
+    batch.inFlight.add(id);
+  }
   const cache = getCache(caller);
   try {
     const result = await caller.call<{ items: readonly ResolvedRefWire[] }>('resolve_refs', {
@@ -280,7 +286,10 @@ async function flush(caller: CapabilityCaller): Promise<void> {
     // request for the same id (a remount, a retry) tries `resolve_refs` again instead of being
     // stuck permanently on the degrade state for the rest of the session.
   }
-  for (const id of ids) notify(batch, id);
+  for (const id of ids) {
+    batch.inFlight.delete(id);
+    notify(batch, id);
+  }
   if (batch.ids.size > 0) scheduleFlush(caller);
 }
 
@@ -316,6 +325,11 @@ export function useResolveRefs(
   ids: readonly string[],
 ): UseResolveRefsResult {
   const idsKey = ids.join(',');
+  // What this render could not show yet (#780 UX P2-1): another hook's lookup may answer between
+  // this render and the effect below, and then nothing would render the answer here.
+  const missingKey = caller
+    ? ids.filter((id) => id !== '' && !getCache(caller).has(id)).join(',')
+    : '';
   const mounted = useRef(true);
   const [, forceRender] = useState(0);
 
@@ -335,12 +349,16 @@ export function useResolveRefs(
     // re-run on every render (a fresh array literal, same content) instead of only when the
     // batch of ids actually changes.
     const uniqueIds = [...new Set(idsKey.split(','))].filter((id) => id !== '' && !cache.has(id));
-    if (uniqueIds.length === 0) return;
     const rerender = () => {
       if (mounted.current) forceRender((n) => n + 1);
     };
+    // Answered since this render (by a lookup another hook asked for): no listener will fire for
+    // it here, so render again now.
+    if (missingKey.split(',').some((id) => id !== '' && cache.has(id))) rerender();
+    if (uniqueIds.length === 0) return;
     for (const id of uniqueIds) {
-      batch.ids.add(id);
+      // One already asked for waits for that answer; only the others go into the next batch.
+      if (!batch.inFlight.has(id)) batch.ids.add(id);
       let listeners = batch.listeners.get(id);
       if (!listeners) {
         listeners = new Set();
@@ -348,11 +366,11 @@ export function useResolveRefs(
       }
       listeners.add(rerender);
     }
-    scheduleFlush(caller);
+    if (batch.ids.size > 0) scheduleFlush(caller);
     return () => {
       for (const id of uniqueIds) batch.listeners.get(id)?.delete(rerender);
     };
-  }, [caller, idsKey]);
+  }, [caller, idsKey, missingKey]);
 
   return {
     get: (id: string) => (caller ? getCache(caller).get(id) : undefined),

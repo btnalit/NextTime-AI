@@ -22,7 +22,7 @@ import {
 } from '../../lib/catalog.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { DEFAULT_ATTEMPTS } from '../../lib/goal-plan-draft.js';
-import { factCheckObjectIds, planCheckSentence } from '../../lib/goals.js';
+import { absenceOperationKey, factCheckObjectIds, planCheckSentence } from '../../lib/goals.js';
 import type { GatekeeperListRow } from '../../lib/governance.js';
 import { type Translate, useT } from '../../lib/i18n.js';
 import {
@@ -31,6 +31,8 @@ import {
   procedureWorkersByKey,
 } from '../../lib/procedure-template.js';
 import { type SchemaDraft, emptySchemaDraft, schemaFieldNames } from '../../lib/schema-fields.js';
+import { AbsenceBasis } from '../goals/AbsenceBasis.js';
+import { useAbsenceOperations } from '../goals/useAbsenceOperations.js';
 import { useObjectLabels } from '../graph/useObjectLabels.js';
 import { Button } from '../kit/button.js';
 import { Combobox } from '../kit/combobox.js';
@@ -49,7 +51,9 @@ import { SchemaFieldsEditor } from './SchemaFieldsEditor.js';
  * the steps it waits for (chosen from the Procedure's own `worker` steps), its attempts, input,
  * input bindings (the source chosen from the parameters or the steps; the path offered from the
  * fields they declare) and output contract. A `verify` step: who checks it — the requester on its
- * description, or the platform (the gate and Operation it observes chosen, the expectation as JSON).
+ * description, or the platform (the gate and Operation it observes chosen, the expectation as JSON;
+ * for a check that something is not there, only an Operation that can confirm it is offered, with what
+ * its "not there" rests on).
  *
  * What is wrong shows on the field it is about: the form's own checks, the schema's, and — for a
  * binding — what `lib/procedure-template` can already tell before publishing does.
@@ -627,6 +631,10 @@ const CHECK_KIND_LABEL: Readonly<Record<ProcedureCheckKind, readonly [string, st
     '平台观察一个门 Operation 的结果',
     'The platform observes a gate’s Operation',
   ],
+  observe_absent: [
+    '平台在门上确认要查的东西不存在',
+    'The platform confirms on a gate that the thing is not there',
+  ],
   fact_predicate: ['平台判定图里的一条事实', 'The platform judges a Fact of the graph'],
   json: ['表单认不出的检查（JSON）', 'A check the form cannot read (JSON)'],
 };
@@ -656,8 +664,8 @@ export function VerifyCheckFields({
   const id = `procedure-step-${step.key}-check`;
   const kinds: readonly ProcedureCheckKind[] =
     step.checkKind === 'json'
-      ? ['none', 'observe_predicate', 'fact_predicate', 'json']
-      : ['none', 'observe_predicate', 'fact_predicate'];
+      ? ['none', 'observe_predicate', 'observe_absent', 'fact_predicate', 'json']
+      : ['none', 'observe_predicate', 'observe_absent', 'fact_predicate'];
   const parsed = StepAcceptanceCheckSchema.safeParse(wire.check);
   const gateNames = new Map((gatekeepers ?? []).map((row) => [row.id, row.name]));
   const objectNames = useObjectLabels(
@@ -666,6 +674,16 @@ export function VerifyCheckFields({
       ? factCheckObjectIds(parsed.data.fact)
       : [],
   );
+  // S11 「门确认不存在」 B: what the chosen Operation's "not there" rests on — its declared
+  // answers and who confirmed them. Only for a gate from the directory: a half-typed id would be a
+  // 400 per keystroke.
+  const absenceCheck =
+    step.checkKind === 'observe_absent' &&
+    gateNames.has(step.checkGatekeeperId.trim()) &&
+    step.checkOperation.trim() !== ''
+      ? { gatekeeperId: step.checkGatekeeperId.trim(), operation: step.checkOperation.trim() }
+      : null;
+  const absenceOperations = useAbsenceOperations(http, absenceCheck ? [absenceCheck] : []);
   const keyError = messages(errors, `${prefix}.key`, t);
   const paramsError = messages(errors, `${prefix}.check.params`, t);
   // What no field below shows: the check's own (its JSON, or a whole-check problem).
@@ -712,7 +730,9 @@ export function VerifyCheckFields({
           ))}
         </Select>
       </Field>
-      {step.checkKind === 'observe_predicate' || step.checkKind === 'fact_predicate' ? (
+      {step.checkKind === 'observe_predicate' ||
+      step.checkKind === 'observe_absent' ||
+      step.checkKind === 'fact_predicate' ? (
         <Field
           id={`${id}-key`}
           label={t('检查名', 'Check key')}
@@ -731,7 +751,7 @@ export function VerifyCheckFields({
           />
         </Field>
       ) : null}
-      {step.checkKind === 'observe_predicate' ? (
+      {step.checkKind === 'observe_predicate' || step.checkKind === 'observe_absent' ? (
         <>
           <OperationStepFields
             http={http}
@@ -744,6 +764,7 @@ export function VerifyCheckFields({
             busy={busy}
             gateError={messages(errors, `${prefix}.check.gatekeeperId`, t)}
             operationError={messages(errors, `${prefix}.check.operation`, t)}
+            absence={step.checkKind === 'observe_absent'}
             onChange={(patch) =>
               onChange({
                 ...(patch.gatekeeperId !== undefined
@@ -758,6 +779,16 @@ export function VerifyCheckFields({
           <Field
             id={`${id}-params`}
             label={t('Operation 参数（JSON，可空）', 'Operation params (JSON, optional)')}
+            // #780 UX P3-2: what the confirm card tells the requester, told first to whoever
+            // writes the params.
+            hint={
+              step.checkKind === 'observe_absent'
+                ? t(
+                    '参数要正好指向目标要删掉的那个东西。写错、指向一个本来就没有的东西，门同样回答“不存在”，检查第一次就会通过。',
+                    'The params must name exactly the thing the goal removes. Params that name something that was never there get the same “not there”, and the check passes on its first try.',
+                  )
+                : undefined
+            }
             error={paramsError}
           >
             <Textarea
@@ -773,15 +804,22 @@ export function VerifyCheckFields({
               data-testid="procedure-step-check-params"
             />
           </Field>
-          <PredicateEditor
-            id={`${id}-expect`}
-            legend={t('结果要满足', 'The result must satisfy')}
-            draft={step.checkExpect}
-            errors={errorsUnder(errors, `${prefix}.check.expect`)}
-            busy={busy}
-            onChange={(checkExpect) => onChange({ checkExpect })}
-            testId="procedure-step-check-expect"
-          />
+          {step.checkKind === 'observe_predicate' ? (
+            <PredicateEditor
+              id={`${id}-expect`}
+              legend={t('结果要满足', 'The result must satisfy')}
+              draft={step.checkExpect}
+              errors={errorsUnder(errors, `${prefix}.check.expect`)}
+              busy={busy}
+              onChange={(checkExpect) => onChange({ checkExpect })}
+              testId="procedure-step-check-expect"
+            />
+          ) : absenceCheck ? (
+            <AbsenceBasis
+              http={http}
+              operation={absenceOperations.get(absenceOperationKey(absenceCheck))}
+            />
+          ) : null}
         </>
       ) : null}
       {step.checkKind === 'fact_predicate' ? (

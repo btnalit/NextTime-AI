@@ -282,7 +282,7 @@ const enumsUnderTest = [
     'GoalAcceptanceCheckKind',
     GOAL_ACCEPTANCE_CHECK_KIND_VALUES,
     GoalAcceptanceCheckKindSchema,
-    ['observe_predicate', 'fact_predicate', 'requester_confirm'],
+    ['observe_predicate', 'observe_absent', 'fact_predicate', 'requester_confirm'],
   ],
   [
     'GoalAcceptanceCheckStatus',

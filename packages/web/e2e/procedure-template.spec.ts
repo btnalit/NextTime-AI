@@ -165,6 +165,29 @@ async function answerProcedureReads(page: Page, row: object = PROCEDURE_ROW): Pr
             version: 1,
             status: 'published',
           },
+          // S11 「门确认不存在」 B: one that can confirm a certificate is gone, and one that declares
+          // its "not there" answers but that nobody confirmed.
+          {
+            gatekeeperId: GATE,
+            name: 'cert.get',
+            mode: 'observe',
+            blastRadius: 'low',
+            autoApprovable: true,
+            version: 1,
+            status: 'published',
+            absentAnswers: { statuses: [404] },
+            absentAnswersReview: { reviewedBy: PROPOSER, reviewedAt: T0 },
+          },
+          {
+            gatekeeperId: GATE,
+            name: 'cert.find',
+            mode: 'observe',
+            blastRadius: 'low',
+            autoApprovable: true,
+            version: 1,
+            status: 'published',
+            absentAnswers: { statuses: [404] },
+          },
         ],
       }),
     ),
@@ -303,6 +326,43 @@ test.describe('S11 GO5d-2: a Procedure as a goal plan template (stand-in reads)'
       await factStep.scrollIntoViewIfNeeded();
       await factStep.screenshot({
         path: testInfo.outputPath(`procedure-template-fact-${width}.png`),
+      });
+    });
+
+    test(`an absence check in the editor at ${width}`, async ({ page }, testInfo) => {
+      await page.setViewportSize({ width, height: 900 });
+      await answerProcedureReads(page);
+      await loginAsOwner(page);
+
+      await page.goto(`/#/govern/catalog/procedures/${PROCEDURE}`);
+      await expect(page.getByTestId('procedure-detail')).toBeVisible({ timeout: 15_000 });
+      await page.getByTestId('catalog-edit-as-draft').click();
+      const editor = page.getByTestId('procedure-editor');
+      await expect(editor).toBeVisible({ timeout: 15_000 });
+      // S11 「门确认不存在」 B: the verify step after the certificates are replaced, checked by the
+      // gate answering that the old one is not there.
+      const step = editor.getByTestId('procedure-step').nth(1);
+      await step.getByTestId('procedure-step-check-kind').selectOption('observe_absent');
+      await expect(step.getByTestId('procedure-step-check-expect')).toHaveCount(0);
+      await step.getByLabel('观察哪个门').selectOption(GATE);
+      const operation = step.getByTestId('procedure-step-check-operation');
+      await operation.click();
+      // Only the Operation that can confirm it: not cert.status (declares nothing), not cert.find
+      // (nobody confirmed it).
+      const offered = page.locator(`[id="${await operation.getAttribute('aria-controls')}"]`);
+      await expect(offered.getByRole('option')).toHaveCount(1);
+      await offered.getByRole('option', { name: /cert\.get/ }).click();
+      await step.getByTestId('procedure-step-check-params').fill('{"serial": "old-2025"}');
+      const basis = step.getByTestId('goal-absence-basis');
+      await expect(basis).toHaveAttribute('data-basis', 'confirmed');
+      await expect(basis).toContainText('目标系统回答 404 时，门回答“不存在”。');
+      await expect(basis).toContainText('alice');
+      await expect(step.getByTestId('procedure-step-check-sentence')).toContainText(
+        '门回答“要查的东西不存在”才算通过',
+      );
+      await step.scrollIntoViewIfNeeded();
+      await step.screenshot({
+        path: testInfo.outputPath(`procedure-template-absence-${width}.png`),
       });
     });
 

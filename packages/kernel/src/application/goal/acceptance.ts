@@ -7,6 +7,7 @@ import {
   type GoalRunStatus,
   MAX_GOAL_NOTE_CHARS,
   type ObjectiveOutcome,
+  type ObservationAbsenceCheck,
   type ObservationCheck,
   type StepAcceptanceState,
   transition,
@@ -365,8 +366,9 @@ export interface GoalAcceptanceCheckView {
   readonly checkKey: string;
   readonly kind: GoalAcceptanceCheckKind;
   readonly status: GoalAcceptanceCheckStatus;
-  /** An observation's: what is observed. */
-  readonly check: ObservationCheck | null;
+  /** An observation's: what is observed — with its predicate, or (an absence check, S11
+   *  「门确认不存在」 B) none. */
+  readonly check: ObservationCheck | ObservationAbsenceCheck | null;
   /** A fact check's (S11 GO4c): the Fact judged. */
   readonly fact: FactCheck | null;
   readonly prompt: string | null;

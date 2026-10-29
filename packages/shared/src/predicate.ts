@@ -171,6 +171,22 @@ export const ObservationCheckSchema = z
   .strict();
 export type ObservationCheck = z.infer<typeof ObservationCheckSchema>;
 
+/**
+ * S11 「门确认不存在」 B: an observe-class Operation on a Gatekeeper and its params, asked to
+ * confirm that what they name does not exist. Met only when the gate answers the call as absent —
+ * the target gave an answer the published Operation declares means "does not exist"
+ * (`operationAbsentAnswers`, `action-description.ts`) — never by anything in a result: there is no
+ * predicate, because no result can say "not there".
+ */
+export const ObservationAbsenceCheckSchema = z
+  .object({
+    gatekeeperId: z.string().uuid(),
+    operation: OperationNameSchema,
+    params: z.record(z.unknown()).optional(),
+  })
+  .strict();
+export type ObservationAbsenceCheck = z.infer<typeof ObservationAbsenceCheckSchema>;
+
 /** A graph Object a {@link FactCheck} names: by id, or by its ObjectType and identity — the Object
  *  may not exist yet when the plan is written (the goal's work may be what creates it). */
 export const FactObjectRefSchema = z.union([

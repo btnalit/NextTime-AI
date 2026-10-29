@@ -275,6 +275,9 @@ describe.runIf(DATABASE_URL !== undefined)(
             goalRunId,
             round,
             checkKey,
+            gatekeeperId: OBSERVE.gatekeeperId,
+            operation: OBSERVE.operation,
+            expect: OBSERVE.expect,
             outcome: 'satisfied',
             ...content,
           }),
@@ -1203,6 +1206,9 @@ describe.runIf(DATABASE_URL !== undefined)(
           { round: 2 },
           { goalRunId: randomUUID() },
           { purpose: 'reconcile_check' },
+          // goal/0011: a predicate's check is judged on its predicate, never on a gate's absence.
+          { expect: undefined },
+          { absent: { status: 404 } },
         ]) {
           await expect(
             passOn(await acceptanceObservation(goalRunId, 1, 'up', content)),
@@ -1419,6 +1425,9 @@ describe.runIf(DATABASE_URL !== undefined)(
               stepAttempt: 1,
               round,
               checkKey,
+              gatekeeperId: OBSERVE.gatekeeperId,
+              operation: OBSERVE.operation,
+              expect: OBSERVE.expect,
               outcome: 'satisfied',
               ...content,
             }),
@@ -1521,6 +1530,9 @@ describe.runIf(DATABASE_URL !== undefined)(
           { goalRunId: randomUUID() },
           // The goal's own acceptance check is another check.
           { purpose: 'acceptance_check' },
+          // goal/0011: a predicate's check is judged on its predicate, never on a gate's absence.
+          { expect: undefined },
+          { absent: { exitCode: 4 } },
         ]) {
           await expect(
             passOn(await stepObservation(goalRunId, a, 1, 'up', content)),
@@ -2315,6 +2327,292 @@ describe.runIf(DATABASE_URL !== undefined)(
           JSON.stringify({ note: 'x' }),
         ]);
         await update(applied, "status = 'completed', ended_at = now()");
+      });
+    });
+
+    describe('goal/0011: acceptance checks met by the gate confirming something is not there (S11 「门确认不存在」 B)', () => {
+      /** The guard's body, its comments dropped and its whitespace collapsed. */
+      const guardOf = (file: string) => {
+        const text = readFileSync(path.join(MIGRATIONS_DIR, 'goal', file), 'utf8');
+        const start = text.indexOf('create or replace function goal_runs_status_guard()');
+        expect(start, file).toBeGreaterThanOrEqual(0);
+        const end = text.indexOf('\n$$;', start);
+        expect(end, file).toBeGreaterThan(start);
+        return text
+          .slice(start, end)
+          .replace(/--[^\n]*/g, '')
+          .replace(/\s+/g, ' ');
+      };
+
+      it('is goal/0007’s goal_runs_status_guard, comments aside, with an absence the platform observed counting as a check it made — and nothing else changed', () => {
+        const MADE = "c.kind in ('observe_predicate', 'fact_predicate')) then";
+        const before = guardOf('0007_fact_acceptance.sql');
+        expect(before.split(MADE), MADE).toHaveLength(2);
+        expect(guardOf('0011_absence_acceptance.sql')).toBe(
+          before.replace(
+            MADE,
+            "c.kind in ('observe_predicate', 'observe_absent', 'fact_predicate')) then",
+          ),
+        );
+      });
+
+      /** The call an absence check makes: no predicate (nothing in a result can say "not there"). */
+      const ABSENT = {
+        gatekeeperId: OBSERVE.gatekeeperId,
+        operation: 'svc.get',
+        params: { name: 'web' },
+      };
+      const absentCheck = (key: string): DeclaredCheck => ({
+        kind: 'observe_absent',
+        key,
+        check: ABSENT,
+      });
+      /** Who confirmed the published version's answers, as `platform-observation.ts` records it. */
+      const REVIEW = { reviewedBy: randomUUID(), reviewedAt: new Date().toISOString() };
+      /** The content `acceptance-check.ts` records for an absence check the gate confirmed: the
+       *  call, its `absent`, no predicate, and the version's confirmation. */
+      const CONFIRMED = {
+        operation: ABSENT.operation,
+        expect: undefined,
+        absent: { status: 404 },
+        absentAnswersReview: REVIEW,
+      };
+      const SETTLED = 'attempts = 1, first_attempt_at = now(), settled_at = now()';
+
+      const insertAbsent = (
+        goalRunId: string,
+        round: number,
+        key: string,
+        check: unknown = ABSENT,
+        kind = 'observe_absent',
+      ) =>
+        sql(
+          `insert into goal_acceptance_checks
+             (workspace_id, goal_run_id, round, check_key, plan_revision, kind, observation_check)
+           values ($1, $2, $3, $4, 1, $5, $6::jsonb)`,
+          [workspaceId, goalRunId, round, key, kind, JSON.stringify(check)],
+        );
+
+      /** Content variants that never pass an absence check: each misses what it rests on. */
+      const NOT_EVIDENCE = (purpose: Record<string, unknown>) => [
+        { ...CONFIRMED, ...purpose, outcome: 'unsatisfied' },
+        { ...CONFIRMED, ...purpose, absent: undefined },
+        { ...CONFIRMED, ...purpose, expect: OBSERVE.expect },
+        { ...CONFIRMED, ...purpose, gatekeeperId: randomUUID() },
+        { ...CONFIRMED, ...purpose, operation: 'svc.other' },
+        { ...CONFIRMED, ...purpose, absentAnswersReview: undefined },
+        { ...CONFIRMED, ...purpose, absentAnswersReview: 'confirmed' },
+        { ...CONFIRMED, ...purpose, absentAnswersReview: { reviewedAt: REVIEW.reviewedAt } },
+        { ...CONFIRMED, ...purpose, absentAnswersReview: { reviewedBy: REVIEW.reviewedBy } },
+        { ...CONFIRMED, ...purpose, absentAnswersReview: { ...REVIEW, reviewedBy: '' } },
+        { ...CONFIRMED, ...purpose, absentAnswersReview: { ...REVIEW, reviewedAt: 1 } },
+        { ...CONFIRMED, ...purpose, checkKey: 'up' },
+        { ...CONFIRMED, ...purpose, round: 2 },
+      ];
+
+      it('an absence check carries its call and no predicate, and an observation’s carries one; neither a Fact nor a prompt', async () => {
+        const SHAPE = /goal_acceptance_checks_shape/;
+        const { expect: _predicate, ...noPredicate } = OBSERVE;
+        // A plan written straight to the table may declare what its schema refuses; the guard
+        // matches such a row to its declaration, and the CHECK still refuses it.
+        const goalRunId = await runningGoal(
+          ['A', 'B'],
+          [
+            observeCheck('up'),
+            absentCheck('gone'),
+            { kind: 'observe_absent', key: 'judged', check: OBSERVE },
+            { kind: 'observe_predicate', key: 'unjudged', check: noPredicate },
+          ],
+        );
+        await setGoal(goalRunId, "status = 'verifying'");
+        await expect(insertAbsent(goalRunId, 1, 'judged', OBSERVE)).rejects.toThrow(SHAPE);
+        await expect(
+          insertAbsent(goalRunId, 1, 'unjudged', noPredicate, 'observe_predicate'),
+        ).rejects.toThrow(SHAPE);
+        await expect(
+          sql(
+            `insert into goal_acceptance_checks
+               (workspace_id, goal_run_id, round, check_key, plan_revision, kind, observation_check,
+                prompt)
+             values ($1, $2, 1, 'gone', 1, 'observe_absent', $3::jsonb, 'Is it gone?')`,
+            [workspaceId, goalRunId, JSON.stringify(ABSENT)],
+          ),
+        ).rejects.toThrow(SHAPE);
+        // The declaration binds the call: another Operation, or the same call as a predicate's, is
+        // not the check the plan declares.
+        const NOT_DECLARED = /a check is one of the acceptance checks its plan declares/;
+        await expect(
+          insertAbsent(goalRunId, 1, 'gone', { ...ABSENT, operation: 'svc.other' }),
+        ).rejects.toThrow(NOT_DECLARED);
+        await expect(insertAbsent(goalRunId, 1, 'up', ABSENT)).rejects.toThrow(NOT_DECLARED);
+        await insertAbsent(goalRunId, 1, 'gone');
+        await insertCheck(goalRunId, 1, 'up');
+      });
+
+      it('passes only on an Observation of that very check in which the gate confirmed absence of the call it names, under a version a person confirmed', async () => {
+        const goalRunId = await runningGoal(['A', 'B'], [absentCheck('gone'), observeCheck('up')]);
+        await setGoal(goalRunId, "status = 'verifying'");
+        await insertAbsent(goalRunId, 1, 'gone');
+        await insertCheck(goalRunId, 1, 'up');
+        const passOn = (observationId: string) =>
+          setCheck(goalRunId, 1, 'gone', `status = 'passed', observation_id = $5, ${SETTLED}`, [
+            observationId,
+          ]);
+        const NOT_PASSED =
+          /an absence check passes only on an Observation of this check in which the gate confirmed the thing is not there, under an Operation version whose answers a person confirmed/;
+        for (const content of [
+          ...NOT_EVIDENCE({}),
+          { ...CONFIRMED, purpose: 'step_acceptance_check' },
+          { ...CONFIRMED, goalRunId: randomUUID() },
+        ]) {
+          await expect(
+            passOn(await acceptanceObservation(goalRunId, 1, 'gone', content)),
+            JSON.stringify(content),
+          ).rejects.toThrow(NOT_PASSED);
+        }
+        await expect(
+          setCheck(goalRunId, 1, 'gone', `status = 'passed', ${SETTLED}`),
+        ).rejects.toThrow(NOT_PASSED);
+        // The thing still there: the check fails on the Observation that saw it.
+        const stillThere = await acceptanceObservation(goalRunId, 1, 'gone', {
+          ...CONFIRMED,
+          absent: undefined,
+          outcome: 'unsatisfied',
+        });
+        await passOn(await acceptanceObservation(goalRunId, 1, 'gone', CONFIRMED));
+        await expect(
+          setCheck(goalRunId, 1, 'gone', `status = 'failed', observation_id = $5`, [stillThere]),
+        ).rejects.toThrow(/a settled check is not changed/);
+        // A predicate's check never passes on an absence, as before.
+        await expect(
+          setCheck(goalRunId, 1, 'up', `status = 'passed', observation_id = $5, ${SETTLED}`, [
+            await acceptanceObservation(goalRunId, 1, 'up', { ...CONFIRMED, checkKey: 'up' }),
+          ]),
+        ).rejects.toThrow(
+          /an observation passes only on an Observation of this check that satisfied its predicate/,
+        );
+      });
+
+      it('achieves a run by check on a round whose only check the platform made is an absence the gate confirmed (I-G5)', async () => {
+        const goalRunId = await runningGoal(['A', 'B'], [absentCheck('gone'), confirmCheck('ok')]);
+        await setGoal(goalRunId, "status = 'verifying'");
+        await insertAbsent(goalRunId, 1, 'gone');
+        await insertCheck(goalRunId, 1, 'ok', 'requester_confirm');
+        await setCheck(goalRunId, 1, 'gone', `status = 'passed', observation_id = $5, ${SETTLED}`, [
+          await acceptanceObservation(goalRunId, 1, 'gone', CONFIRMED),
+        ]);
+        const byCheck = () =>
+          setGoal(
+            goalRunId,
+            "status = 'completed', outcome = 'achieved', outcome_basis = 'verified_by_check', ended_at = now()",
+          );
+        await expect(byCheck()).rejects.toThrow(/achieved by check needs every acceptance check/);
+        await setCheck(
+          goalRunId,
+          1,
+          'ok',
+          "status = 'passed', decision_id = $5, settled_at = now()",
+          [
+            await decision({
+              decision: 'goal_outcome',
+              outcome: 'achieved',
+              goalRunId,
+              round: 1,
+              checkKey: 'ok',
+            }),
+          ],
+        );
+        await byCheck();
+        expect(await asApp((client) => getGoalRun(client, workspaceId, goalRunId))).toMatchObject({
+          status: 'completed',
+          outcome: 'achieved',
+          outcomeBasis: 'verified_by_check',
+        });
+      });
+
+      it('a step’s absence check is one it declares, as declared, and passes only as the goal’s does', async () => {
+        const STEP_ABSENT = { kind: 'observe_absent', key: 'gone', check: ABSENT };
+        const goal = await sql(
+          `insert into goal_runs (workspace_id, on_behalf_of, statement, ${BUDGET_COLUMNS})
+           values ($1, $2, 'remove the web service', 100000, 10, 3, 3600) returning id`,
+          [workspaceId, ownerId],
+        );
+        const goalRunId = goal.rows[0]?.id as string;
+        // `judged` is what the plan's schema refuses (an absence check with a predicate), written
+        // straight to the table: the guard matches it to its declaration, the CHECK refuses it.
+        await proposeRevision(goalRunId, 1, null, [
+          {
+            key: 'A',
+            acceptance: [STEP_ABSENT, { kind: 'observe_absent', key: 'judged', check: OBSERVE }],
+          },
+          'B',
+        ]);
+        await confirmGoal(goalRunId, ['A', 'B']);
+        const a = await stepId(goalRunId, 'A');
+        await setStep(a, "status = 'ready'");
+        await setStep(a, "status = 'running', attempt_count = 1");
+        await setStep(a, "status = 'waiting', waiting_reason = 'acceptance'");
+
+        const insertStepAbsent = (check: unknown, key = 'gone') =>
+          sql(
+            `insert into step_acceptance_checks
+               (workspace_id, goal_run_id, step_run_id, step_attempt, round, check_key,
+                plan_revision, kind, observation_check)
+             values ($1, $2, $3, 1, 1, $4, 1, 'observe_absent', $5::jsonb)`,
+            [workspaceId, goalRunId, a, key, JSON.stringify(check)],
+          );
+        await expect(insertStepAbsent(OBSERVE, 'judged')).rejects.toThrow(
+          /step_acceptance_checks_shape/,
+        );
+        await expect(insertStepAbsent({ ...ABSENT, operation: 'svc.other' })).rejects.toThrow(
+          /a check is one of its step's declared acceptance checks, as declared/,
+        );
+        await insertStepAbsent(ABSENT);
+
+        const stepObservation = async (content: Record<string, unknown>) => {
+          const { activityId, sourceId } = await refs();
+          const result = await sql(
+            `insert into observations (workspace_id, source_id, activity_id, content)
+             values ($1, $2, $3, $4::jsonb) returning id`,
+            [
+              workspaceId,
+              sourceId,
+              activityId,
+              JSON.stringify({
+                purpose: 'step_acceptance_check',
+                goalRunId,
+                stepRunId: a,
+                stepAttempt: 1,
+                round: 1,
+                checkKey: 'gone',
+                gatekeeperId: ABSENT.gatekeeperId,
+                outcome: 'satisfied',
+                ...content,
+              }),
+            ],
+          );
+          return result.rows[0]?.id as string;
+        };
+        const passOn = (observationId: string) =>
+          sql(
+            `update step_acceptance_checks
+                set status = 'passed', observation_id = $3, ${SETTLED}
+              where workspace_id = $1 and step_run_id = $2 and check_key = 'gone'`,
+            [workspaceId, a, observationId],
+          );
+        const NOT_PASSED =
+          /step_acceptance_checks: an absence check passes only on an Observation of this check in which the gate confirmed the thing is not there, under an Operation version whose answers a person confirmed/;
+        for (const content of [
+          ...NOT_EVIDENCE({}),
+          { ...CONFIRMED, purpose: 'acceptance_check' },
+          { ...CONFIRMED, stepRunId: randomUUID() },
+        ]) {
+          await expect(
+            passOn(await stepObservation(content)),
+            JSON.stringify(content),
+          ).rejects.toThrow(NOT_PASSED);
+        }
+        await passOn(await stepObservation(CONFIRMED));
       });
     });
 

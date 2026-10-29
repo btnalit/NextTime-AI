@@ -1,6 +1,11 @@
 import { z } from 'zod';
 import { StepOutputSchemaSchema } from './output-schema.js';
-import { FactCheckSchema, ObservationCheckSchema, PREDICATE_PATH_MAX } from './predicate.js';
+import {
+  FactCheckSchema,
+  ObservationAbsenceCheckSchema,
+  ObservationCheckSchema,
+  PREDICATE_PATH_MAX,
+} from './predicate.js';
 
 /**
  * goal-plan (S11 GO5a; plan §4.3, §4.5–§4.7): the shape of a GoalRun's plan, its budget and what a
@@ -76,6 +81,16 @@ const ObservePredicateCheckSchema = z
   })
   .strict();
 
+/** An acceptance check the platform observes to confirm something is not there: the goal's and a
+ *  step's (S11 「门确认不存在」 B). */
+const ObserveAbsentCheckSchema = z
+  .object({
+    kind: z.literal('observe_absent'),
+    key: StepKeySchema,
+    check: ObservationAbsenceCheckSchema,
+  })
+  .strict();
+
 /** An acceptance check the platform judges on a Fact of the graph: the goal's and a step's (S11
  *  GO4c). */
 const FactPredicateCheckSchema = z
@@ -89,6 +104,7 @@ const FactPredicateCheckSchema = z
 /** S11 GO4b: one acceptance check of a step — never one that waits on a person. */
 export const StepAcceptanceCheckSchema = z.discriminatedUnion('kind', [
   ObservePredicateCheckSchema,
+  ObserveAbsentCheckSchema,
   FactPredicateCheckSchema,
 ]);
 
@@ -146,6 +162,7 @@ export type PlanStep = z.infer<typeof PlanStepSchema>;
 /** S11 GO4a: one acceptance check of the plan. */
 export const AcceptanceCheckSchema = z.discriminatedUnion('kind', [
   ObservePredicateCheckSchema,
+  ObserveAbsentCheckSchema,
   FactPredicateCheckSchema,
   z
     .object({

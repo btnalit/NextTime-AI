@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { HttpError } from '../../lib/http-client.js';
+import { hrefs } from '../../lib/router.js';
 import { ProcedureEditor } from './ProcedureEditor.js';
 
 afterEach(cleanup);
@@ -1500,6 +1501,158 @@ describe('ProcedureEditor (S6-A A2)', () => {
       expect(select.getAttribute('aria-invalid')).toBeNull();
       expect(select.getAttribute('aria-describedby')).toBeNull();
     });
+  });
+
+  it('an absence check offers only the gate’s Operations that can confirm “not there”, says what it rests on, and goes back and forth (S11 「门确认不存在」 B)', async () => {
+    const gate = '5f0c1a52-8a2e-4f3b-9c61-0d2b7e4a9f10';
+    const empty = '5f0c1a52-8a2e-4f3b-9c61-0d2b7e4a9f11';
+    const absent = (name: string, reviewed: boolean) => ({
+      gatekeeperId: gate,
+      name,
+      mode: 'observe',
+      blastRadius: 'low',
+      autoApprovable: true,
+      version: 1,
+      status: 'published',
+      absentAnswers: { statuses: [404] },
+      ...(reviewed
+        ? { absentAnswersReview: { reviewedBy: 'p-owner', reviewedAt: '2026-10-29T00:00:00.000Z' } }
+        : {}),
+    });
+    const operations = [
+      absent('svc.lookup', true),
+      absent('svc.find', false),
+      { ...absent('svc.status', false), absentAnswers: undefined },
+    ];
+    const { caller, calls } = http({
+      list_operations: (params) => {
+        const { gatekeeperId, q } = params as { gatekeeperId: string; q?: string };
+        if (gatekeeperId !== gate) return { items: [] };
+        return { items: q ? operations.filter((row) => row.name.includes(q)) : operations };
+      },
+      resolve_refs: () => ({ items: [{ id: 'p-owner', kind: 'principal', name: 'Owner' }] }),
+      propose_procedure: () => ({ id: 'pr-9', version: 1, status: 'draft', name: 'Remove' }),
+    });
+    render(
+      <ProcedureEditor
+        http={caller}
+        gatekeepers={[
+          {
+            id: gate,
+            name: 'svc-gate',
+            kind: 'http',
+            status: 'active',
+            operationCount: 3,
+            createdAt: '',
+          },
+          {
+            id: empty,
+            name: 'bare-gate',
+            kind: 'http',
+            status: 'active',
+            operationCount: 0,
+            createdAt: '',
+          },
+        ]}
+        onProposed={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText(/^名称/), { target: { value: 'Remove' } });
+    fireEvent.change(screen.getByLabelText(/^描述/), { target: { value: 'Remove a service' } });
+    fireEvent.click(screen.getByTestId('procedure-add-step'));
+    const step = screen.getByTestId('procedure-step');
+    fireEvent.change(within(step).getByTestId('procedure-step-kind'), {
+      target: { value: 'verify' },
+    });
+    fireEvent.change(within(step).getByLabelText(/^说明/), { target: { value: 'Gone.' } });
+    fireEvent.change(within(step).getByTestId('procedure-step-check-kind'), {
+      target: { value: 'observe_absent' },
+    });
+    expect((within(step).getByTestId('procedure-step-check-key') as HTMLInputElement).value).toBe(
+      'check-1',
+    );
+    // No predicate: the gate's answer is the check.
+    expect(within(step).queryByTestId('procedure-step-check-expect')).toBeNull();
+
+    // A gate with no Operation that can confirm it says what one needs, and where to get it.
+    const gateSelect = within(step).getByLabelText(/观察哪个门/) as HTMLSelectElement;
+    fireEvent.change(gateSelect, { target: { value: empty } });
+    const none = await within(step).findByTestId('procedure-step-check-operations-empty');
+    expect(none.textContent).toMatch(/没有能确认“不存在”的 Operation/);
+    expect(within(none).getByRole('link').getAttribute('href')).toBe(hrefs.catalog('operations'));
+    // #780 UX P3-3: any name typed there would fail at publish — nothing can be typed.
+    expect(
+      (within(step).getByTestId('procedure-step-check-operation-input') as HTMLInputElement)
+        .disabled,
+    ).toBe(true);
+    expect(step.textContent).not.toContain('手动输入：与门发布的 Operation 名完全一致');
+
+    // Only the declared and confirmed Operation is offered — not the unconfirmed one, nor one that
+    // declares nothing.
+    fireEvent.change(gateSelect, { target: { value: gate } });
+    const operationInput = within(step).getByTestId(
+      'procedure-step-check-operation',
+    ) as HTMLInputElement;
+    await waitFor(() => expect(operationInput.getAttribute('aria-busy')).toBeNull());
+    expect(offered(operationInput)).toEqual(['svc.lookup']);
+    fireEvent.click(
+      within(screen.getByRole('listbox')).getByRole('option', { name: /svc\.lookup/ }),
+    );
+
+    // What its "not there" rests on: the declared answer, and who confirmed it.
+    const basis = await within(step).findByTestId('goal-absence-basis');
+    expect(basis.getAttribute('data-basis')).toBe('confirmed');
+    expect(basis.textContent).toContain('目标系统回答 404 时');
+    await waitFor(() => expect(basis.textContent).toContain('Owner'));
+    expect(within(step).getByTestId('procedure-step-check-sentence').textContent).toBe(
+      '平台会检查：在门「svc-gate」上调用 svc.lookup，门回答“要查的东西不存在”才算通过',
+    );
+
+    // #780 UX P3-2: whoever writes the params is told what the confirm card tells the requester.
+    expect(step.textContent).toContain('参数要正好指向目标要删掉的那个东西');
+    fireEvent.change(within(step).getByTestId('procedure-step-check-params'), {
+      target: { value: '{"name": "old-web"}' },
+    });
+    fireEvent.click(screen.getByTestId('procedure-submit'));
+    await screen.findByTestId('draft-proposed');
+    const check = {
+      kind: 'observe_absent',
+      key: 'check-1',
+      check: { gatekeeperId: gate, operation: 'svc.lookup', params: { name: 'old-web' } },
+    };
+    expect(calls.find((call) => call.name === 'propose_procedure')?.params).toEqual({
+      procedure: {
+        name: 'Remove',
+        description: 'Remove a service',
+        steps: [{ kind: 'verify', description: 'Gone.', check }],
+      },
+    });
+
+    // A copy reads it back as an absence check, not as JSON.
+    cleanup();
+    render(
+      <ProcedureEditor
+        http={caller}
+        copyOf={{
+          id: 'pr-9',
+          version: 1,
+          status: 'published',
+          name: 'Remove',
+          description: 'Remove a service',
+          steps: [{ kind: 'verify', description: 'Gone.', check }],
+        }}
+        onProposed={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    expect((screen.getByTestId('procedure-step-check-kind') as HTMLSelectElement).value).toBe(
+      'observe_absent',
+    );
+    expect(screen.queryByTestId('procedure-step-check-json')).toBeNull();
+    expect(
+      JSON.parse((screen.getByTestId('procedure-step-check-params') as HTMLTextAreaElement).value),
+    ).toEqual({ name: 'old-web' });
   });
 
   it('legacy 493: a step whose Worker version is not published is said on that step’s version, focused', async () => {

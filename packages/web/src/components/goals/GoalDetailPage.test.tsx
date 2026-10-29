@@ -497,6 +497,155 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
     ]);
   });
 
+  it('an absence check says what its “not there” rests on: the declared answer and who confirmed it, or that nobody did (S11 「门确认不存在」 B)', async () => {
+    const base = goalDetail();
+    const [fetch, apply] = base.planRevision.plan.steps as [
+      (typeof base.planRevision.plan.steps)[number],
+      (typeof base.planRevision.plan.steps)[number],
+    ];
+    const detail = goalDetail({
+      planRevision: {
+        ...base.planRevision,
+        plan: {
+          steps: [
+            fetch,
+            {
+              ...apply,
+              acceptance: [
+                {
+                  kind: 'observe_absent',
+                  key: 'step-gone',
+                  check: { gatekeeperId: GATE_ID, operation: 'svc.find' },
+                },
+              ],
+            },
+          ],
+          acceptance: [
+            {
+              kind: 'observe_absent',
+              key: 'gone',
+              check: {
+                gatekeeperId: GATE_ID,
+                operation: 'svc.lookup',
+                params: { name: 'old-web' },
+              },
+            },
+            {
+              kind: 'observe_absent',
+              key: 'gone-too',
+              check: { gatekeeperId: GATE_ID, operation: 'svc.status' },
+            },
+          ],
+        },
+      },
+    });
+    const row = (name: string, extra: Record<string, unknown>) => ({
+      gatekeeperId: GATE_ID,
+      name,
+      mode: 'observe',
+      blastRadius: 'low',
+      autoApprovable: true,
+      version: 2,
+      status: 'published',
+      ...extra,
+    });
+    const operations = [
+      row('svc.lookup', {
+        absentAnswers: { statuses: [404, 410] },
+        absentAnswersReview: { reviewedBy: 'p-owner', reviewedAt: '2026-10-28T00:00:00.000Z' },
+      }),
+      row('svc.find', { absentAnswers: { statuses: [404] } }),
+      row('svc.status', {}),
+    ];
+    const http = scriptedHttp({
+      ...baseHandlers(detail),
+      list_operations: (params) => {
+        const { q } = params as { q: string };
+        return { items: operations.filter((candidate) => candidate.name.includes(q)) };
+      },
+      resolve_refs: () => ({ items: [{ id: 'p-owner', kind: 'principal', name: 'Owner' }] }),
+    });
+    renderPage(http);
+
+    const acceptance = await screen.findByTestId('goal-acceptance');
+    await waitFor(() =>
+      expect(within(acceptance).getAllByTestId('goal-absence-basis')).toHaveLength(2),
+    );
+    const [lookup, status] = within(acceptance).getAllByTestId('goal-absence-basis') as [
+      HTMLElement,
+      HTMLElement,
+    ];
+    expect(lookup.getAttribute('data-basis')).toBe('confirmed');
+    expect(lookup.textContent).toContain('目标系统回答 404 或 410 时，门回答“不存在”。');
+    await waitFor(() => expect(lookup.textContent).toContain('Owner'));
+    expect(lookup.textContent).toContain('确认于');
+    expect(status.getAttribute('data-basis')).toBe('none');
+    expect(status.textContent).toContain('没有声明哪些回答表示不存在');
+    expect(acceptance.textContent).toContain(
+      '在门「cert-gate」上以参数 {"name":"old-web"} 调用 svc.lookup，门回答“要查的东西不存在”才算通过',
+    );
+
+    const step = (await screen.findAllByTestId('goal-step'))[1] as HTMLElement;
+    const stepBasis = await within(step).findByTestId('goal-absence-basis');
+    expect(stepBasis.getAttribute('data-basis')).toBe('unconfirmed');
+    expect(stepBasis.textContent).toContain('所以平台不做这条检查。');
+    expect(within(step).getByTestId('goal-step-check').textContent).toContain('平台确认不存在');
+    // One read per Operation, by gate and name.
+    expect(
+      http.calls
+        .filter((call) => call.name === 'list_operations')
+        .map((call) => (call.params as { q: string }).q)
+        .sort(),
+    ).toEqual(['svc.find', 'svc.lookup', 'svc.status']);
+  });
+
+  it('an Operation that could not be read says so, apart from one with no published version (review #501 on #780)', async () => {
+    const base = goalDetail();
+    const detail = goalDetail({
+      planRevision: {
+        ...base.planRevision,
+        plan: {
+          ...base.planRevision.plan,
+          acceptance: [
+            {
+              kind: 'observe_absent',
+              key: 'gone',
+              check: { gatekeeperId: GATE_ID, operation: 'svc.lookup' },
+            },
+            {
+              kind: 'observe_absent',
+              key: 'gone-too',
+              check: { gatekeeperId: GATE_ID, operation: 'svc.retired' },
+            },
+          ],
+        },
+      },
+    });
+    const http = scriptedHttp({
+      ...baseHandlers(detail),
+      list_operations: (params) => {
+        const { q } = params as { q: string };
+        if (q === 'svc.lookup') throw new HttpError('network', 'try again later');
+        return { items: [] };
+      },
+    });
+    renderPage(http);
+
+    const acceptance = await screen.findByTestId('goal-acceptance');
+    await waitFor(() =>
+      expect(within(acceptance).getAllByTestId('goal-absence-basis')).toHaveLength(2),
+    );
+    const [lookup, retired] = within(acceptance).getAllByTestId('goal-absence-basis') as [
+      HTMLElement,
+      HTMLElement,
+    ];
+    expect(lookup.getAttribute('data-basis')).toBe('unreadable');
+    expect(lookup.textContent).toContain('这个 Operation 没读出来');
+    expect(lookup.textContent).not.toContain('平台做不了这条检查');
+    expect(retired.getAttribute('data-basis')).toBe('none');
+    expect(retired.textContent).toContain('没有已发布版本，平台做不了这条检查');
+  });
+
   it('a plan written out says nothing of a Procedure', async () => {
     renderPage(scriptedHttp(baseHandlers(goalDetail())));
     await screen.findAllByTestId('goal-revision');
