@@ -1,4 +1,4 @@
-import { type ReactNode, useCallback, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useMediaQuery } from '../../hooks/useMediaQuery.js';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from './sheet.js';
@@ -64,6 +64,15 @@ export interface MasterDetailProps {
  * Legacy 480: the detail renders once, into one host element that moves between the wide pane and
  * the sheet — crossing the breakpoint moves what is open (a disclosure, the lines unfolded in a
  * comparison, a half-filled form) instead of mounting the detail afresh in the other place.
+ *
+ * Legacy 483: narrowing the window past the breakpoint opens the sheet without anyone asking for
+ * it. When a modal (a dialog, an irreversible confirmation, another drawer) is already open at
+ * that moment, the sheet would land on top of it and take its focus. The layout stays wide
+ * instead until no modal is left, then switches, so what the modal was opened from keeps its
+ * place. Where the window is too narrow for the wide layout (below `MIN_HELD_WIDE_PX`), the
+ * layout switches but the sheet waits, closed, until no modal is left. An anchored overlay (a
+ * medium confirmation, a menu) closes at the crossing (Escape): the layout change moves its
+ * anchor, and it is not placed again (#767 UX acceptance P3-2, P3-3).
  */
 export function MasterDetail({
   list,
@@ -74,7 +83,33 @@ export function MasterDetail({
   sheetTitle,
   detailTestId,
 }: MasterDetailProps) {
-  const isNarrow = useMediaQuery(NARROW_MASTER_DETAIL_QUERY);
+  const isNarrowViewport = useMediaQuery(NARROW_MASTER_DETAIL_QUERY);
+  // Decided while rendering the crossing, so the sheet never mounts over the overlay first.
+  const [layout, setLayout] = useState<{ narrow: boolean; held: 'wide' | 'sheet' | null }>(() => ({
+    narrow: isNarrowViewport,
+    held: null,
+  }));
+  if (layout.narrow !== isNarrowViewport) {
+    setLayout({ narrow: isNarrowViewport, held: isNarrowViewport ? holdAtCrossing() : null });
+  }
+  const held = isNarrowViewport ? layout.held : null;
+  const isNarrow = isNarrowViewport && held !== 'wide';
+  useEffect(() => {
+    if (held === null) return;
+    closeAnchoredOverlays();
+    const release = () => {
+      if (!anOverlayIsOpen()) setLayout((prev) => ({ ...prev, held: null }));
+    };
+    const observer = new MutationObserver(release);
+    observer.observe(document.body, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ['data-state', 'aria-modal'],
+    });
+    release();
+    return () => observer.disconnect();
+  }, [held]);
   const [host] = useState(createDetailHost);
   // A slot takes the host when it mounts; the slot left behind needs nothing (the host has moved).
   const attachHost = useCallback(
@@ -102,7 +137,7 @@ export function MasterDetail({
 
       {isNarrow ? (
         <Sheet
-          open={open}
+          open={open && held === null}
           onOpenChange={(next) => {
             if (!next) onClose();
           }}
@@ -119,6 +154,37 @@ export function MasterDetail({
       {showDetail && host !== null ? createPortal(detail, host) : null}
     </>
   );
+}
+
+/** Below this window width the wide layout has no room left for the detail pane (the list pane
+ *  alone takes 340px), so it is not held there (#767 UX acceptance P3-2). */
+const MIN_HELD_WIDE_PX = 768;
+
+const MODAL_OVERLAYS =
+  '[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"], [role="dialog"][aria-modal="true"]';
+const ANCHORED_OVERLAYS = '[data-radix-popper-content-wrapper] [data-state="open"]';
+
+/** Whether an overlay is open: a Radix dialog, alert dialog or anchored popover (a medium
+ *  `kit/confirm`, a menu), or a hand-rolled `aria-modal` drawer (`ui/Drawer`). */
+function anOverlayIsOpen(): boolean {
+  if (typeof document === 'undefined') return false;
+  return document.querySelector(`${MODAL_OVERLAYS}, ${ANCHORED_OVERLAYS}`) !== null;
+}
+
+/** What crossing into the narrow layout holds: nothing with no overlay open; the wide layout for a
+ *  modal where the window still has room for it; otherwise the sheet, until the anchored overlays
+ *  this closes and any modal are gone. */
+function holdAtCrossing(): 'wide' | 'sheet' | null {
+  if (!anOverlayIsOpen()) return null;
+  const modal = document.querySelector(MODAL_OVERLAYS) !== null;
+  return modal && window.innerWidth >= MIN_HELD_WIDE_PX ? 'wide' : 'sheet';
+}
+
+/** Closes the open anchored overlays, topmost first — each closes on Escape, as if pressed. */
+function closeAnchoredOverlays(): void {
+  for (let left = document.querySelectorAll(ANCHORED_OVERLAYS).length; left > 0; left -= 1) {
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  }
 }
 
 /** The detail's host: layout-transparent (`display: contents`), so the detail lays out as a direct

@@ -83,6 +83,15 @@ export {
   gateOwnedParamsOfDefinition,
 } from './gate-owned-params.js';
 export type { GateOwnedParam, GateOwnedParamDraft } from './gate-owned-params.js';
+export {
+  AbsentAnswersReviewRequiredError,
+  absentAnswersOfDefinition,
+} from './absent-answers-review.js';
+export type {
+  AbsentAnswerDraft,
+  OperationAbsentAnswers,
+  OperationAbsentAnswersReview,
+} from './absent-answers-review.js';
 export type {
   OperationRecord,
   OperationViewer,

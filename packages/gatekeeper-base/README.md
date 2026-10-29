@@ -120,6 +120,18 @@ Operation is published, and a gate whose definition says otherwise is refused (4
 declares that answer and the result carries no data and no Facts (`gateAbsenceOf`). An `mcp`
 binding cannot declare one; the `docker` gate's own transport never reports one.
 
+**A person confirms it when publishing** (S11 「门确认不存在」 B-a). An Operation declaring such
+answers is published only with `publish_operation`'s `absentAnswersReviewed: true` — the person
+confirming that the gate's credentials can see what it looks up, so the target gives those answers
+only when the thing is not there (400 `absent_answers_review_required`, `details.absentAnswers`,
+otherwise; the console catalog asks with a checkbox in front of Publish). `publish_operation` is a
+human-channel capability, and the published version records who confirmed and when
+(`absentAnswersReview` on the result and on `list_operations`). The bulk paths
+(`publish_manifest`, `enable_gate_instance`) leave such drafts unpublished and list them as
+`absentAnswerDrafts`. A manifest or a proposal never carries a confirmation (the kernel drops it),
+so a proposed revision is confirmed again when it is published; a ChangePlan's Operation revision
+keeps its live version's definition and so its confirmation, or none.
+
 `importOpenApi(document)` and `importMcpTools(toolsListResponse)` produce a manifest **draft**
 from an OpenAPI 3.x document / an MCP `tools/list` response: `GET`/`readOnlyHint` → `observe`,
 everything else → `execute`; every imported `execute` Operation is `auto_approvable: false,

@@ -10,6 +10,7 @@ import { type Translate, useT } from '../../lib/i18n.js';
 import { hrefs } from '../../lib/router.js';
 import { Notice } from '../kit/notice.js';
 import { RouteLink } from '../kit/route-link.js';
+import { AbsentAnswerDraftsNotice } from './AbsentAnswerDrafts.js';
 
 /**
  * components/connect/GateOwnedParams (console G4, legacy 219): what a reader sees about an
@@ -190,6 +191,11 @@ export function ManifestPublishResultNotice({
         gatekeeperId={result.gatekeeperId}
         fix={fix}
         testId={testId ? `${testId}-held` : undefined}
+      />
+      <AbsentAnswerDraftsNotice
+        drafts={result.absentAnswerDrafts}
+        gatekeeperId={result.gatekeeperId}
+        testId={testId ? `${testId}-absent` : undefined}
       />
       {skipped.length > 0 ? (
         <Notice testId={testId ? `${testId}-proposals` : undefined}>

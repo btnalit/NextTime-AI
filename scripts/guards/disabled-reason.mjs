@@ -40,8 +40,14 @@ const BUSY_SEGMENT =
 const BUSY_STATUS = /===\s*['"](?:loading|running|pending|submitting)['"]/;
 
 /** Gates whose reason is rendered by the component that owns them, right above the button:
- *  `credentialReview.blocked` is the 「已核对凭据」 checkbox (`kit/credential-review`). */
-const SELF_EXPLAINED = new Set(['credentialReview.blocked', 'approveBlocked']);
+ *  `credentialReview.blocked` is the 「已核对凭据」 checkbox (`kit/credential-review`);
+ *  `absentReview.blocked` is the checkbox confirming the answers that mean "not there"
+ *  (`catalog/AbsentAnswersReview`). */
+const SELF_EXPLAINED = new Set([
+  'credentialReview.blocked',
+  'absentReview.blocked',
+  'approveBlocked',
+]);
 
 const ALLOW = /ux-lint-allow-disabled:\s*[^\s*/}]/;
 
@@ -75,7 +81,12 @@ function splitTopLevel(expression, operator) {
     }
   }
   parts.push(expression.slice(last));
-  return parts.map((part) => part.trim().replace(/^\((.*)\)$/s, '$1').trim());
+  return parts.map((part) =>
+    part
+      .trim()
+      .replace(/^\((.*)\)$/s, '$1')
+      .trim(),
+  );
 }
 
 function names(atom) {

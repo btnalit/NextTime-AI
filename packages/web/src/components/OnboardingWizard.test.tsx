@@ -105,6 +105,12 @@ describe('OnboardingWizard', () => {
             name: 'accept_s2_mcp_\u200Bowned',
             gateOwnedParams: [{ path: 'tenant', reason: 'gate_sets' }],
           },
+          // S11 「门确认不存在」 B-a: declares answers that mean "not there" — a person publishes it.
+          {
+            ...IMPORTED_DRAFTS[0],
+            name: 'accept_s2_mcp_lookup',
+            absentAnswers: { statuses: [404] },
+          },
         ],
       }),
     });
@@ -135,6 +141,10 @@ describe('OnboardingWizard', () => {
     expect(within(publishStep).getByTestId('wizard-publish-gate-owned').textContent).toContain(
       'accept_s2_mcp_\\u{200B}owned',
     );
+    const absent = within(publishStep).getByTestId('wizard-publish-absent');
+    expect(absent.textContent).toContain('另有 1 个草稿暂不发布');
+    expect(absent.textContent).toContain('accept_s2_mcp_lookup');
+    expect(absent.textContent).toContain('确认门用的凭据看得到要查的东西');
   });
 
   it('walks kind → connect → publish → review → done, calling create_connection/publish_manifest', async () => {

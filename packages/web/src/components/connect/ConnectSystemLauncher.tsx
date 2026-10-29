@@ -55,6 +55,7 @@ import { RefChip } from '../ui/RefChip.js';
 import { SkeletonRows } from '../ui/Skeleton.js';
 import { StatusChip } from '../ui/StatusChip.js';
 import { useToast } from '../ui/Toast.js';
+import { AbsentAnswerDraftsNotice } from './AbsentAnswerDrafts.js';
 import { AskOwnerToEnable } from './AskOwnerToEnable.js';
 import { EnableGateConfirm } from './EnableGateConfirm.js';
 import { GateOwnedParamsMark, HeldDraftsNotice } from './GateOwnedParams.js';
@@ -349,7 +350,9 @@ export function ConnectSystemLauncher({
   function handleEnabled(result: EnableGateInstanceResultWire): void {
     setEnabled(result);
     const skipped = result.skippedOperationNames.length;
-    const held = result.gateOwnedParamDrafts?.length ?? 0;
+    // S11 「门确认不存在」 B-a: drafts left for a person to confirm count as not published too.
+    const held =
+      (result.gateOwnedParamDrafts?.length ?? 0) + (result.absentAnswerDrafts?.length ?? 0);
     toast.push({
       tone: 'ok',
       title: result.linkedExisting
@@ -1274,12 +1277,19 @@ function WorkspaceEnableSection({
         </div>
       )}
       {enabled ? (
-        <HeldDraftsNotice
-          drafts={enabled.gateOwnedParamDrafts}
-          gatekeeperId={enabled.gatekeeperId}
-          fix="align"
-          testId="launcher-held-drafts"
-        />
+        <>
+          <HeldDraftsNotice
+            drafts={enabled.gateOwnedParamDrafts}
+            gatekeeperId={enabled.gatekeeperId}
+            fix="align"
+            testId="launcher-held-drafts"
+          />
+          <AbsentAnswerDraftsNotice
+            drafts={enabled.absentAnswerDrafts}
+            gatekeeperId={enabled.gatekeeperId}
+            testId="launcher-absent-drafts"
+          />
+        </>
       ) : null}
 
       {linkedGatekeeperId !== null ? (

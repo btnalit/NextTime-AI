@@ -63,6 +63,7 @@ describe('ManifestPublishResultNotice', () => {
           publishedOperationNames: ['stock.get'],
           skippedDraftOperationNames: ['stock.export'],
           gateOwnedParamDrafts: HELD,
+          absentAnswerDrafts: [{ name: 'stock.lookup', absentAnswers: { statuses: [404] } }],
         }}
         fix="resync"
         testId="result"
@@ -74,6 +75,12 @@ describe('ManifestPublishResultNotice', () => {
     expect(proposals.textContent).toContain('1 份草稿是 agent 或成员提出的');
     expect(within(proposals).getByText('stock.export').closest('a')?.getAttribute('href')).toBe(
       '#/govern/catalog/operations/gk-1%3A%3Astock.export',
+    );
+    const absent = screen.getByTestId('result-absent');
+    expect(absent.textContent).toContain('1 个 Operation 留作草稿，等人确认后发布');
+    expect(absent.textContent).toContain('目标回答 404 时表示不存在');
+    expect(within(absent).getByText('stock.lookup').closest('a')?.getAttribute('href')).toBe(
+      '#/govern/catalog/operations/gk-1%3A%3Astock.lookup',
     );
   });
 });

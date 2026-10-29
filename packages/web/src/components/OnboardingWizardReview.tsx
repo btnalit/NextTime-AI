@@ -11,17 +11,24 @@ import type { CapabilityCaller } from '../lib/clients.js';
 import {
   type GraphObjectRow,
   type OperationDetailView,
+  operationAbsentAnswersOfRaw,
   operationDetailFromObject,
   reclassifiedOperationPayload,
   searchItems,
 } from '../lib/connections.js';
 import { usePublishCredentialReview } from '../lib/credential-review.js';
 import { actionKindTagText, prettyJsonVisible } from '../lib/format.js';
-import type { OperationCatalogRow } from '../lib/governance.js';
+import {
+  type OperationCatalogRow,
+  absentAnswersWhenText,
+  operationKey,
+  revisionDraftKey,
+} from '../lib/governance.js';
 import { useT } from '../lib/i18n.js';
 import { capabilityHolders } from '../lib/role-holders.js';
 import { hrefs } from '../lib/router.js';
 import { BLAST_RADIUS_TONES, OPERATION_MODE_TONES, labelText } from '../lib/status-tone.js';
+import { AbsentAnswersReviewSlot, useAbsentAnswersReview } from './catalog/AbsentAnswersReview.js';
 import { GateOwnedParamsMark } from './connect/GateOwnedParams.js';
 import {
   GovernanceChangeList,
@@ -30,6 +37,7 @@ import {
 } from './connect/GovernanceChange.js';
 import { Confirm } from './kit/confirm.js';
 import { CredentialReview } from './kit/credential-review.js';
+import { RouteLink } from './kit/route-link.js';
 import { announceReadinessChange } from './readiness/useExecutionReadiness.js';
 import { Button } from './ui/Button.js';
 import { EmptyState } from './ui/EmptyState.js';
@@ -330,6 +338,16 @@ function OperationReviewRow({
   // goes out only while that draft is the one that was reviewed (same digest, same content) — a
   // gate re-import in between makes the kernel ask again instead.
   const reviewedDigestRef = useRef<string | null>(null);
+  // S11 「门确认不存在」 B-a: a reclassification keeps the definition, so an Operation declaring
+  // answers that mean "does not exist" publishes its draft only with the person's confirmation —
+  // asked up front (the definition says so), or once the kernel refuses without it. The tick is
+  // for the answers shown: keyed by them, so a re-read of the row that declares others (a gate
+  // re-import, picked up when any row's publish reloads the list) clears it.
+  const declaredAbsent = operationAbsentAnswersOfRaw(row.raw);
+  const absentReview = useAbsentAnswersReview(
+    `${row.gatekeeperId}:${row.name}:${JSON.stringify(declaredAbsent ?? null)}`,
+    declaredAbsent !== undefined ? { status: 'draft', absentAnswers: declaredAbsent } : undefined,
+  );
 
   async function publish(): Promise<void> {
     // Only ever reached after this row's Submit proposed a draft (the confirm or the credential
@@ -341,12 +359,19 @@ function OperationReviewRow({
         gatekeeperId: row.gatekeeperId,
         name: row.name,
         ...(reviewedDigestRef.current === draftDigest ? credentialReview.params() : {}),
+        ...absentReview.params(),
         draftDigest,
       });
     } catch (err) {
       // The kernel's credential question: the draft stays; the row asks, then Submit again.
       if (credentialReview.capture(err)) {
         reviewedDigestRef.current = draftDigest;
+        setPendingChange(null);
+        setDraftKept(true);
+        return;
+      }
+      // Likewise its question about declared "not there" answers.
+      if (absentReview.capture(err)) {
         setPendingChange(null);
         setDraftKept(true);
         return;
@@ -393,6 +418,11 @@ function OperationReviewRow({
   }
 
   const held = gateOwnedParams !== undefined && gateOwnedParams.length > 0;
+  // UX acceptance of #757 (P2-1): a draft that declares answers meaning "does not exist" — step ③
+  // leaves the gate's for a person — is published in the catalog with that confirmation, not
+  // reclassified here: the gate's import draft is nobody's own proposal, so `propose_operation`
+  // refuses it (409) until it is published. Same rule as review N1 of #567 (`held`).
+  const awaitsAbsentReview = !held && row.status === 'draft' && declaredAbsent !== undefined;
   const changeItem = pendingChange ? { name: row.name, ...pendingChange } : null;
   const consequences = changeItem ? governanceConsequences(changeItem, t, false) : [];
 
@@ -402,6 +432,15 @@ function OperationReviewRow({
         <td>
           <span className="mono">{actionKindTagText(row.name)}</span>
           <GateOwnedParamsMark params={gateOwnedParams} testId="wizard-review-held" />
+          {awaitsAbsentReview ? (
+            <span className="stack-s" data-testid="wizard-review-absent-draft">
+              <span>
+                <span className="chip chip-s">
+                  {t('草稿，等确认后发布', 'Draft, published once confirmed')}
+                </span>
+              </span>
+            </span>
+          ) : null}
         </td>
         <td data-label={t('模式', 'Mode')}>
           <StatusChip machine="operationMode" status={row.mode} size="s" />
@@ -426,6 +465,24 @@ function OperationReviewRow({
                 'Cannot be reclassified or published until the gate’s manifest drops these params',
               )}
             </span>
+          ) : awaitsAbsentReview ? (
+            <span className="stack-s text-small" data-testid="wizard-review-reclassify-absent">
+              <span className="text-3">
+                {t(
+                  `${absentAnswersWhenText(declaredAbsent, t)}表示要查的东西不存在。先到能力目录确认门用的凭据看得到要查的东西并发布，之后才能重分类。`,
+                  `It declares that ${absentAnswersWhenText(declaredAbsent, t)}, the thing looked up does not exist. Confirm in the catalog that the gate’s credentials can see what it looks up and publish it first; it can be reclassified after that.`,
+                )}
+              </span>
+              <RouteLink
+                href={hrefs.catalog(
+                  'operations',
+                  typeof row.raw.draftOf === 'string' ? revisionDraftKey(row) : operationKey(row),
+                )}
+                testId="wizard-review-absent-draft-link"
+              >
+                {t('到目录里的这个草稿', 'Open this draft in the catalog')}
+              </RouteLink>
+            </span>
           ) : (
             <Button variant="ghost" size="s" onClick={() => setEditing((v) => !v)}>
               {editing ? t('取消', 'Cancel') : t('提议重分类', 'Propose reclassification')}
@@ -433,7 +490,7 @@ function OperationReviewRow({
           )}
         </td>
       </tr>
-      {editing && !held ? (
+      {editing && !held && !awaitsAbsentReview ? (
         <tr data-expanded-detail="">
           <td colSpan={6}>
             <div className="stack-s" data-testid="wizard-review-reclassify-form">
@@ -513,6 +570,7 @@ function OperationReviewRow({
                 onChange={credentialReview.setChecked}
                 disabled={busy}
               />
+              <AbsentAnswersReviewSlot review={absentReview} busy={busy} />
               {draftKept ? (
                 <Notice testId="wizard-review-draft-kept">
                   {t(
@@ -531,7 +589,7 @@ function OperationReviewRow({
                       variant="primary"
                       size="s"
                       loading={busy}
-                      disabled={credentialReview.blocked}
+                      disabled={credentialReview.blocked || absentReview.blocked}
                       onClick={() => void submit()}
                     >
                       {t('提交', 'Submit')}
