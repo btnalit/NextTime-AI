@@ -220,11 +220,13 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
     }
 
+    /** The stats read only a check's round and status; its observation carries an `expect` because
+     *  an `observe_predicate` row must (goal/0011). */
     async function acceptanceCheck(goalRunId: string, round: number, status: string) {
       await raw(
         `insert into goal_acceptance_checks (workspace_id, goal_run_id, round, check_key,
            plan_revision, kind, observation_check, status, observation_id, settled_at)
-         values ($1, $2, $3, 'c', 1, 'observe_predicate', '{}', $4, $5, $6)`,
+         values ($1, $2, $3, 'c', 1, 'observe_predicate', '{"expect":{}}', $4, $5, $6)`,
         [
           workspaceId,
           goalRunId,
