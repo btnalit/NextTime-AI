@@ -3905,6 +3905,53 @@ describe('legacy 493 and the deprecated Operation’s detail (UX acceptance of #
     expect(document.activeElement?.getAttribute('role')).toBe('tab');
   });
 
+  it('at a narrow width, deprecating a Skill no longer listed closes the sheet with focus on the Skills tab (UX acceptance of #782, R-1)', async () => {
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn(() => ({
+        matches: true,
+        media: '',
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    try {
+      let deprecated = false;
+      const http = scriptedHttp({
+        list_skills: () => ({
+          items: deprecated
+            ? []
+            : [
+                {
+                  id: 'sk-1',
+                  version: 2,
+                  status: 'published',
+                  name: 'diagnose-net',
+                  description: 'd',
+                },
+              ],
+        }),
+        deprecate_skill: () => {
+          deprecated = true;
+          return {};
+        },
+      });
+      renderPage(http, 'skills');
+      const row = await screen.findByTestId('catalog-row');
+      row.focus();
+      const detail = await selectRow(row);
+      expect(detail.getAttribute('role')).toBe('dialog');
+      fireEvent.click(within(detail).getByRole('button', { name: /弃用/ }));
+      const confirm = await screen.findByTestId('skill-deprecate-confirm-sk-1');
+      fireEvent.click(within(confirm).getByTestId('confirm-button'));
+      await waitFor(() => expect(screen.queryByTestId('catalog-detail')).toBeNull());
+      await waitFor(() => expect(document.activeElement?.getAttribute('role')).toBe('tab'));
+      expect(document.activeElement?.getAttribute('aria-selected')).toBe('true');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('deprecating a Procedure whose earlier published version is still listed keeps that detail open', async () => {
     let deprecated = false;
     const http = scriptedHttp({

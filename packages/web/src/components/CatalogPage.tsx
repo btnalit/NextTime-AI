@@ -275,10 +275,15 @@ function useCatalogTabFocusFallback(key: string | null): void {
     () =>
       document.querySelector<HTMLElement>(
         '[data-testid="catalog-detail"] .catalog-detail-title[tabindex="-1"]',
-      ) ??
-      document.querySelector<HTMLElement>(
-        '[role="tablist"][aria-label="Catalog section"] [role="tab"][aria-selected="true"]',
-      ),
+      ) ?? catalogSectionTab(),
+  );
+}
+
+/** This section's tab — where focus goes when a narrow detail sheet closes after its row left
+ *  the list (`MasterDetail`'s `closeFocusFallback`, UX acceptance of #782 R-1). */
+function catalogSectionTab(): HTMLElement | null {
+  return document.querySelector<HTMLElement>(
+    '[role="tablist"][aria-label="Catalog section"] [role="tab"][aria-selected="true"]',
   );
 }
 
@@ -1761,6 +1766,7 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
         onClose={() => onSelectItem(null)}
         sheetTitle={t('Operation 详情', 'Operation detail')}
         detailTestId="catalog-detail"
+        closeFocusFallback={catalogSectionTab}
       />
       <Dialog
         open={editingRow !== null}
@@ -2603,6 +2609,7 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       onClose={closeEditor}
       sheetTitle={t('Skill 详情', 'Skill detail')}
       detailTestId={showEditor ? 'skill-editor-drawer' : 'catalog-detail'}
+      closeFocusFallback={catalogSectionTab}
     />
   );
 }
@@ -3206,6 +3213,7 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       onClose={closeEditor}
       sheetTitle={t('流程详情', 'Procedure detail')}
       detailTestId={showEditor ? 'procedure-editor-drawer' : 'catalog-detail'}
+      closeFocusFallback={catalogSectionTab}
     />
   );
 }
@@ -4168,6 +4176,7 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       onClose={closeEditor}
       sheetTitle={t('Worker 详情', 'Worker detail')}
       detailTestId={showEditor ? 'worker-editor-drawer' : 'catalog-detail'}
+      closeFocusFallback={catalogSectionTab}
     />
   );
 }
