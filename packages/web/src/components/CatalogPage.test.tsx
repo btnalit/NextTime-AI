@@ -3894,6 +3894,8 @@ describe('legacy 493 and the deprecated Operation’s detail (UX acceptance of #
     deprecate.focus();
     fireEvent.click(deprecate);
     const confirm = await screen.findByTestId('operation-deprecate-confirm-gk-1::docker.restart');
+    expect(confirm.textContent).toMatch(/弃用不能撤销：以后要再用，需要重新提议并发布/);
+    expect(confirm.textContent).not.toMatch(/随时可以重新发布恢复/);
     fireEvent.click(within(confirm).getByTestId('confirm-button'));
     await waitFor(() =>
       expect(screen.getByTestId('operation-detail').getAttribute('data-operation-key')).toBe(
@@ -3902,6 +3904,8 @@ describe('legacy 493 and the deprecated Operation’s detail (UX acceptance of #
     );
     expect(screen.queryByTestId('catalog-detail-missing')).toBeNull();
     expect(screen.getAllByTestId('catalog-row')[0]?.getAttribute('aria-current')).toBe('true');
+    // Legacy 501: no way back is offered, and the detail says what brings it back.
+    expect(screen.getByTestId('operation-deprecated-note').textContent).toMatch(/弃用不能撤销/);
     await waitFor(() =>
       expect(document.activeElement).toBe(
         screen.getByTestId('operation-detail').querySelector('.catalog-detail-title'),
