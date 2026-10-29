@@ -7,6 +7,7 @@ import type {
   RotateConnectionSecretResultWire,
 } from '@nexttime/shared';
 import { useState } from 'react';
+import { useFocusWhenLost } from '../../hooks/useFocusWhenLost.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import type { DraftAsRead } from '../../lib/connections.js';
 import { isDraftChangedError } from '../../lib/errors.js';
@@ -330,6 +331,9 @@ export function SystemAccessCard({
   const draftCount = publishableCount ?? drafts.length;
   const [publishing, setPublishing] = useState(false);
   const [publishError, setPublishError] = useState<unknown | null>(null);
+  // Legacy 500: the submit button is disabled while it runs, so a refusal left focus on <body>
+  // and its banner, above the pinned action row, below the fold — focus goes to the banner.
+  const submitErrorRef = useFocusWhenLost<HTMLDivElement>(publishError);
   const [publishResult, setPublishResult] = useState<PublishManifestResultWire | null>(null);
   // R-01 (D-01): a gate the workspace connected itself (not a catalog instance) authenticates the
   // kernel with its own connection secret; the owner can issue a new one here — also how a gate
@@ -550,10 +554,12 @@ export function SystemAccessCard({
         />
       ) : null}
       {publishError !== null ? (
-        <ErrorBanner
-          error={publishError}
-          title={t('无法发布清单', 'Could not publish the manifest')}
-        />
+        <div ref={submitErrorRef} tabIndex={-1}>
+          <ErrorBanner
+            error={publishError}
+            title={t('无法发布清单', 'Could not publish the manifest')}
+          />
+        </div>
       ) : null}
       {publishResult !== null ? (
         <ManifestPublishResultNotice

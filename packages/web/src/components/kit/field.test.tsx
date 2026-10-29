@@ -62,7 +62,7 @@ describe('kit/Field', () => {
       render(
         <>
           <Field id="s1" label="门" hint="选一个门" error="必填">
-            <Select id="s1">
+            <Select id="s1" aria-label="门">
               <option value="">-</option>
             </Select>
           </Field>
@@ -84,7 +84,7 @@ describe('kit/Field', () => {
     it('keeps a description the form gives itself, and leaves other controls in the Field alone', () => {
       render(
         <Field id="e1" label="定义" hint="Worker">
-          <Select id="e1" aria-describedby="elsewhere">
+          <Select id="e1" aria-label="定义" aria-describedby="elsewhere">
             <option value="">-</option>
           </Select>
           <Select id="e1-version" aria-label="版本">

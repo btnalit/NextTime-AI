@@ -2587,9 +2587,12 @@ describe('CatalogPage editors (S6-A A2)', () => {
         '# Steps\n\n1. restart',
       ),
     );
+    (document.activeElement as HTMLElement | null)?.blur();
     fireEvent.click(within(drawer).getByTestId('skill-submit'));
     const banner = await within(drawer).findByTestId('skill-editor-error');
     expect(banner.getAttribute('data-error-code')).toBe('draft_pending');
+    // Legacy 500: focus goes to the refusal, not left on <body>.
+    await waitFor(() => expect(document.activeElement).toBe(banner.parentElement));
     expect(banner.textContent).toContain('先发布那份草稿，或由它的提议者丢弃');
     fireEvent.click(within(banner).getByTestId('skill-show-pending-draft'));
     await waitFor(() =>
@@ -2855,9 +2858,13 @@ describe('CatalogPage editors (S6-A A2)', () => {
     fireEvent.change(within(drawer).getByLabelText(/^描述/), {
       target: { value: 'Deploy web' },
     });
+    // Legacy 500: the submit button, disabled while it runs, drops focus to <body> in a browser.
+    (document.activeElement as HTMLElement | null)?.blur();
     fireEvent.click(within(drawer).getByTestId('procedure-submit'));
     const banner = await within(drawer).findByTestId('procedure-editor-error');
     expect(banner.getAttribute('data-error-code')).toBe('forbidden');
+    // Focus goes to the refusal, not left on <body>.
+    await waitFor(() => expect(document.activeElement).toBe(banner.parentElement));
     fireEvent.click(within(drawer).getByRole('button', { name: /取消/ }));
     await waitFor(() => expect(screen.queryByTestId('procedures-new-draft')).toBeNull());
   });

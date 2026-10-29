@@ -1,6 +1,7 @@
 import type { OperationSummaryWire } from '@nexttime/shared';
 import { useRef, useState } from 'react';
 import { useCapabilityList } from '../../hooks/useCapability.js';
+import { useFocusWhenLost } from '../../hooks/useFocusWhenLost.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { actionKindTagText } from '../../lib/format.js';
@@ -164,6 +165,9 @@ function GrantGateFormBody({
   // ---- Submit -------------------------------------------------------------------------------
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
+  // Legacy 500: the submit button is disabled while it runs, so a refusal left focus on <body>
+  // and its banner, above the pinned action row, below the fold — focus goes to the banner.
+  const submitErrorRef = useFocusWhenLost<HTMLDivElement>(error);
   const [failedGate, setFailedGate] = useState<string | null>(null);
   /** What was granted in this drawer session, for the summary: who got which gates (`null` = every
    *  gate). Kept as display data so the summary survives the form resetting for the next grant. */
@@ -519,15 +523,17 @@ function GrantGateFormBody({
       ) : null}
 
       {error !== null ? (
-        <ErrorBanner
-          error={error}
-          title={
-            failedGate === null
-              ? t('无法授予', 'Could not grant')
-              : t(`无法授予“${failedGate}”`, `Could not grant “${failedGate}”`)
-          }
-          testId="ggf-error"
-        />
+        <div ref={submitErrorRef} tabIndex={-1}>
+          <ErrorBanner
+            error={error}
+            title={
+              failedGate === null
+                ? t('无法授予', 'Could not grant')
+                : t(`无法授予“${failedGate}”`, `Could not grant “${failedGate}”`)
+            }
+            testId="ggf-error"
+          />
+        </div>
       ) : null}
 
       <div className="row overlay-actions" style={{ justifyContent: 'flex-end' }}>
