@@ -19,7 +19,7 @@ import { assertDraftCredentialsReviewed, quotedName } from '../../governance/red
 import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
 import { projectProcedureObject } from '../../substrate/ontology/index.js';
-import { requirePublishedWorkerDefinition } from './definitions.js';
+import { requirePublishedWorkerDefinition, workerDefinitionFamilyKind } from './definitions.js';
 import { type DraftViewer, draftVisibilityBinds, draftVisibleTo } from './draft-visibility.js';
 import { assertNoPendingDraft, familyVersionDigest, readFamilyHead } from './family-version.js';
 import { assertFamilyPublishAuthority } from './publish-family.js';
@@ -38,9 +38,13 @@ import { assertFamilyPublishAuthority } from './publish-family.js';
  * "Procedure 的步骤引用不存在的 Operation 时发布被拒"): every `operation`/`worker` step must resolve
  * to a currently-**published** Operation (`getPublishedOperation`, governance/gatekeepers — I17:
  * draft/unknown is indistinguishable from "not classified yet") or WorkerDefinition
- * (`requirePublishedWorkerDefinition`, this module's own `definitions.ts`); a step that does not
+ * (`requirePublishedWorkerDefinition`, this module's own `definitions.ts`) of `kind='worker'` — the
+ * only kind any step path runs (`invoke_worker`, a goal plan's steps; legacy 486: an entry
+ * definition used to be accepted here and fail only when the step ran); a step that does not
  * resolve rejects the whole publish with `ProcedureStepReferenceError` (a stable, one-shape error
- * naming the offending step index and reference) — never a partial publish. `approval`/`verify`
+ * naming the offending step index and reference) — never a partial publish. A `worker` step naming
+ * a family that is not worker-kind is refused already when proposed: a family's kind never
+ * changes, so such a step could never resolve. `approval`/`verify`
  * steps carry no external reference and are never checked against the graph; they are procedural
  * markers a future Workflow runner (P5) must honor, not something this task executes.
  *
@@ -139,7 +143,8 @@ export class ProcedureNotFoundError extends Error {
 }
 
 /** Thrown by `publishProcedure` when `steps` is empty, or any `operation`/`worker` step fails to
- *  resolve to a currently-published Operation/WorkerDefinition — this task's own acceptance bar
+ *  resolve to a currently-published Operation/worker-kind WorkerDefinition (and by
+ *  `proposeProcedure` for a `worker` step naming a family of another kind, legacy 486) — this task's own acceptance bar
  *  ("Procedure 的步骤引用不存在的 Operation 时发布被拒"), and a stable error shape a caller (or a
  *  test) can match on regardless of which step failed or why. */
 export class ProcedureStepReferenceError extends Error {
@@ -201,13 +206,23 @@ async function nextVersion(
 }
 
 /** Creates a new `draft` Procedure version, owned by `proposerPrincipalId` (I16). No step
- *  resolution happens here — see `publishProcedure`. */
+ *  resolution happens here — see `publishProcedure` — except that a `worker` step naming a
+ *  WorkerDefinition family of another kind than `worker` (an entry definition) is refused (legacy
+ *  486): a family's kind never changes, so that step could never run. A family not visible yet is
+ *  left to publish. */
 export async function proposeProcedure(
   client: PoolClient,
   workspaceId: string,
   proposerPrincipalId: string,
   input: ProposeProcedureInput,
 ): Promise<ProcedureRow> {
+  for (const [stepIndex, step] of input.steps.entries()) {
+    if (step.kind !== 'worker') continue;
+    const kind = await workerDefinitionFamilyKind(client, workspaceId, step.definitionId);
+    if (kind !== null && kind !== 'worker') {
+      throw new ProcedureStepReferenceError(stepIndex, notWorkerKind(step, kind));
+    }
+  }
   const version = await nextVersion(client, workspaceId, input.procedureId);
   const result = await client.query<ProcedureDbRow>(
     `insert into procedures
@@ -278,9 +293,18 @@ interface ResolvedStepTarget {
   readonly targetObjectId: string;
 }
 
+/** Why a `worker` step naming a WorkerDefinition of `kind` cannot run (legacy 486). */
+function notWorkerKind(
+  step: { readonly definitionId: string; readonly version: number },
+  kind: string,
+): string {
+  return `WorkerDefinition ${step.definitionId}@${step.version} is ${kind}-kind: a step runs only a worker-kind WorkerDefinition`;
+}
+
 /** Resolves every `operation`/`worker` step to its graph Object id, throwing
  *  `ProcedureStepReferenceError` on the first step that does not resolve to a currently-published
- *  Operation/WorkerDefinition (I17: draft/unknown Operation is unclassified, never usable).
+ *  Operation/worker-kind WorkerDefinition (I17: draft/unknown Operation is unclassified, never
+ *  usable; legacy 486: no step path runs another kind).
  *  `approval`/`verify` steps produce no target (filtered out of the returned list — see this
  *  module's doc comment). */
 async function resolveStepTargets(
@@ -312,8 +336,9 @@ async function resolveStepTargets(
     }
 
     if (step.kind === 'worker') {
+      let definition: Awaited<ReturnType<typeof requirePublishedWorkerDefinition>>;
       try {
-        await requirePublishedWorkerDefinition(client, workspaceId, {
+        definition = await requirePublishedWorkerDefinition(client, workspaceId, {
           definitionId: step.definitionId,
           version: step.version,
         });
@@ -322,6 +347,9 @@ async function resolveStepTargets(
           stepIndex,
           `WorkerDefinition ${step.definitionId}@${step.version} is not published: ${err instanceof Error ? err.message : String(err)}`,
         );
+      }
+      if (definition.kind !== 'worker') {
+        throw new ProcedureStepReferenceError(stepIndex, notWorkerKind(step, definition.kind));
       }
       const workerDefObject = await graphStore.getObjectByIdentity(
         client,

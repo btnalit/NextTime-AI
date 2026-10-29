@@ -63,6 +63,8 @@ describe.runIf(DATABASE_URL !== undefined)(
     let publishedOperationName: string;
     let publishedWorkerDefinitionId: string;
     let publishedWorkerDefinitionVersion: number;
+    let entryDefinitionId: string;
+    let entryDefinitionVersion: number;
 
     async function adminInsertWorkspace(name: string): Promise<string> {
       const id = randomUUID();
@@ -162,7 +164,42 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       publishedWorkerDefinitionId = workerDef.id;
       publishedWorkerDefinitionVersion = workerDef.version;
+
+      // Legacy 486: an entry definition, published — never a step.
+      const entryDraft = await inTx(ownerId, (client) =>
+        proposeWorkerDefinition(client, workspaceId, ownerId, {
+          kind: 'entry',
+          definition: { systemPrompt: 'You are the entry agent.', capabilities: ['get_object'] },
+        }),
+      );
+      const entryDef = await inTx(ownerId, (client) =>
+        publishWorkerDefinition(client, workspaceId, ownerId, {
+          definitionId: entryDraft.id,
+          version: entryDraft.version,
+        }),
+      );
+      entryDefinitionId = entryDef.id;
+      entryDefinitionVersion = entryDef.version;
     });
+
+    /** Legacy 486: a draft written as the kernel wrote it before propose checked a worker step's
+     *  kind. */
+    async function legacyDraft(steps: readonly unknown[]): Promise<string> {
+      const id = randomUUID();
+      await withWorkspace(
+        pool,
+        { workspaceId, principalId: proposerId },
+        async (client) => {
+          await client.query(
+            `insert into procedures (workspace_id, id, version, status, name, description, steps, proposed_by)
+             values ($1, $2, 1, 'draft', $3, 'Written before propose checked the kind.', $4::jsonb, $5)`,
+            [workspaceId, id, `proc-legacy-${id}`, JSON.stringify(steps), proposerId],
+          );
+        },
+        { skipRoleSwitch: true },
+      );
+      return id;
+    }
 
     afterAll(async () => {
       await pool.end();
@@ -208,6 +245,86 @@ describe.runIf(DATABASE_URL !== undefined)(
           }),
         );
         expect(row.status).toBe('draft');
+      });
+    });
+
+    describe('a worker step names a worker-kind definition (legacy 486)', () => {
+      it('propose refuses a worker step naming an entry definition, and writes nothing', async () => {
+        const name = `proc-entry-step-${randomUUID()}`;
+        const refused = inTx(proposerId, (client) =>
+          proposeProcedure(client, workspaceId, proposerId, {
+            name,
+            description: 'Runs the entry agent as a step.',
+            steps: [
+              { kind: 'approval', description: 'A human approves.' },
+              { kind: 'worker', definitionId: entryDefinitionId, version: entryDefinitionVersion },
+            ],
+          }),
+        );
+        await expect(refused).rejects.toThrow(ProcedureStepReferenceError);
+        await expect(refused).rejects.toMatchObject({
+          stepIndex: 1,
+          message: expect.stringMatching(
+            /is entry-kind: a step runs only a worker-kind WorkerDefinition/,
+          ),
+        });
+        // Any version of an entry family: its kind never changes.
+        await expect(
+          inTx(proposerId, (client) =>
+            proposeProcedure(client, workspaceId, proposerId, {
+              name,
+              description: 'Names a version the entry family does not have yet.',
+              steps: [{ kind: 'worker', definitionId: entryDefinitionId, version: 99 }],
+            }),
+          ),
+        ).rejects.toThrow(/is entry-kind/);
+        const written = await withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerId },
+          (client) =>
+            client.query('select 1 from procedures where workspace_id = $1 and name = $2', [
+              workspaceId,
+              name,
+            ]),
+          { skipRoleSwitch: true },
+        );
+        expect(written.rowCount).toBe(0);
+      });
+
+      it('propose still takes a worker step naming a definition not visible yet (publish decides)', async () => {
+        const row = await inTx(proposerId, (client) =>
+          proposeProcedure(client, workspaceId, proposerId, {
+            name: `proc-unknown-worker-${randomUUID()}`,
+            description: 'Names a WorkerDefinition that does not exist yet.',
+            steps: [{ kind: 'worker', definitionId: randomUUID(), version: 1 }],
+          }),
+        );
+        expect(row.status).toBe('draft');
+      });
+
+      it('publish refuses a draft written before propose checked the kind, and leaves it a draft', async () => {
+        const id = await legacyDraft([
+          { kind: 'worker', definitionId: entryDefinitionId, version: entryDefinitionVersion },
+        ]);
+        const refused = inTx(ownerId, (client) =>
+          publishProcedure(client, workspaceId, ownerId, id),
+        );
+        await expect(refused).rejects.toThrow(ProcedureStepReferenceError);
+        await expect(refused).rejects.toMatchObject({
+          stepIndex: 0,
+          message: expect.stringMatching(/is entry-kind/),
+        });
+        const status = await withWorkspace(
+          pool,
+          { workspaceId, principalId: ownerId },
+          (client) =>
+            client.query<{ status: string }>(
+              'select status from procedures where workspace_id = $1 and id = $2',
+              [workspaceId, id],
+            ),
+          { skipRoleSwitch: true },
+        );
+        expect(status.rows[0]?.status).toBe('draft');
       });
     });
 

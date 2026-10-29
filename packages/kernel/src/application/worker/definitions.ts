@@ -200,7 +200,11 @@ async function nextVersion(
   return (result.rows[0]?.max ?? 0) + 1;
 }
 
-async function existingKind(
+/** The `kind` of the WorkerDefinition family `definitionId`, or `null` when no version of it is
+ *  visible. A family's kind never changes (`WorkerDefinitionKindMismatchError`), so a reference to
+ *  any of its versions — a Procedure's `worker` step (legacy 486) — can be judged by it before that
+ *  version is published. */
+export async function workerDefinitionFamilyKind(
   client: PoolClient,
   workspaceId: string,
   definitionId: string,
@@ -222,7 +226,7 @@ export async function proposeWorkerDefinition(
   input: ProposeWorkerDefinitionInput,
 ): Promise<WorkerDefinitionRow> {
   if (input.definitionId) {
-    const priorKind = await existingKind(client, workspaceId, input.definitionId);
+    const priorKind = await workerDefinitionFamilyKind(client, workspaceId, input.definitionId);
     if (priorKind && priorKind !== input.kind) {
       throw new WorkerDefinitionKindMismatchError(input.definitionId, priorKind, input.kind);
     }

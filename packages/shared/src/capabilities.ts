@@ -1357,6 +1357,8 @@ const metaCapabilities = [
     description:
       'Propose a private draft Procedure distilled from a successful Task: procedure is {name, ' +
       'description, steps — operation, worker, approval or verify — and optionally parameters}. ' +
+      'A worker step names a worker-kind WorkerDefinition version; one naming another kind (an ' +
+      'entry definition) is refused (400 invalid_step_reference). ' +
       'A published Procedure is also a template a goal’s plan is made from (propose_goal’s ' +
       'fromProcedure): a worker step may carry what a plan step does (key, dependsOn, input, ' +
       'outputSchema, maxAttempts, and bindings — from an earlier step it depends on, or from ' +
@@ -1412,7 +1414,7 @@ const metaCapabilities = [
       .strict(),
     resultSchema: wire.ProcedurePublishResultWireSchema,
     description:
-      'Publish your draft Procedure (I16) — the latest version under procedureId, which must be the version given (the one reviewed): a newer version under procedureId since is 409 version_changed and nothing is published. draftDigest is the draftDigest list_procedures / propose_procedure gave for that draft: a draft discarded and proposed again under the same version since is 409 draft_changed and nothing is published. Builder floor; the workspace owner may publish anyone’s draft; another builder’s draft is 403 not_proposer. When the draft carries suspected credentials, credentialsReviewed: true is required — 400 credentials_review_required (details: subject, suspectedSecretValues) otherwise. A Procedure that says how a goal’s plan is made from it (parameters, a worker step’s plan fields, a verify step’s check) is published only when the plan it makes passes everything a written plan is held to — its $params bindings checked against parameters, no credential or [redacted] mark — 400 invalid_params with details.problems otherwise; one with an operation or approval step is still published, for following by hand, but makes no goal.',
+      'Publish your draft Procedure (I16) — the latest version under procedureId, which must be the version given (the one reviewed): a newer version under procedureId since is 409 version_changed and nothing is published. draftDigest is the draftDigest list_procedures / propose_procedure gave for that draft: a draft discarded and proposed again under the same version since is 409 draft_changed and nothing is published. Builder floor; the workspace owner may publish anyone’s draft; another builder’s draft is 403 not_proposer. When the draft carries suspected credentials, credentialsReviewed: true is required — 400 credentials_review_required (details: subject, suspectedSecretValues) otherwise. Every operation step must name a published Operation and every worker step a published worker-kind WorkerDefinition version — 400 invalid_step_reference naming the step otherwise. A Procedure that says how a goal’s plan is made from it (parameters, a worker step’s plan fields, a verify step’s check) is published only when the plan it makes passes everything a written plan is held to — its $params bindings checked against parameters, no credential or [redacted] mark — 400 invalid_params with details.problems otherwise; one with an operation or approval step is still published, for following by hand, but makes no goal.',
   },
   {
     name: 'deprecate_skill',
