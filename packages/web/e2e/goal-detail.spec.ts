@@ -867,7 +867,7 @@ test.describe('S11 GO6: revising the plan (stand-in reads, refusals and revision
             {
               code: 'step_gate_not_held',
               message: 'step: gate not held',
-              stepKey: PLAN_V2.steps[1].key,
+              stepKey: 'apply',
               gatekeeperIds: [GATE],
             },
           ],
