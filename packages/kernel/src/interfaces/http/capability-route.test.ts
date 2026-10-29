@@ -69,6 +69,7 @@ import { ApprovalReasonRequiredError } from '../../governance/approval/index.js'
 import {
   HANDLE_SIGNING_ALG,
   HandleIssuanceError,
+  ReviewedDraftChangedError,
   ScopeValidationError,
   issueHandle,
 } from '../../governance/capability/index.js';
@@ -686,6 +687,13 @@ describe('mapCapabilityError — application/chat domain errors (unit)', () => {
     });
   });
 
+  it('ReviewedDraftChangedError (publish_skill / publish_procedure, review #493 on #764 F1) → 409 draft_changed', () => {
+    const mapped = mapCapabilityError(
+      new ReviewedDraftChangedError('publish_skill', 'Skill skill-1@2'),
+    );
+    expect(mapped).toMatchObject({ status: 409, code: 'draft_changed' });
+  });
+
   it('ConflictNotFoundError (resolve_conflict/list_conflicts) → 404 not_found, not 500', () => {
     const mapped = mapCapabilityError(new ConflictNotFoundError('ws-1', 'conflict-1'));
     expect(mapped.status).toBe(404);
@@ -970,19 +978,22 @@ describe.runIf(DATABASE_URL !== undefined)(
         },
       });
       expect(proposed.statusCode).toBe(200);
-      const procedureId = proposed.json().result.id as string;
+      const { id: procedureId, draftDigest } = proposed.json().result as {
+        id: string;
+        draftDigest: string;
+      };
 
       const published = await app.inject({
         method: 'POST',
         url: '/api/cap/publish_procedure',
         headers: { authorization: `Bearer ${ownerApiKey}` },
-        payload: { procedureId, version: 1 },
+        payload: { procedureId, version: 1, draftDigest },
       });
       expect(published.statusCode).toBe(400);
       expect(published.json().error.code).toBe('invalid_step_reference');
     });
 
-    it('legacy 300: publish_skill names the version reviewed — another one is 409 version_changed, none is 400', async () => {
+    it('legacy 300: publish_skill names the version and draft reviewed — another version is 409 version_changed, another draft 409 draft_changed, none is 400', async () => {
       const app = createServer({ pool });
       const proposed = await app.inject({
         method: 'POST',
@@ -993,7 +1004,11 @@ describe.runIf(DATABASE_URL !== undefined)(
         },
       });
       expect(proposed.statusCode).toBe(200);
-      const skillId = proposed.json().result.id as string;
+      const { id: skillId, draftDigest } = proposed.json().result as {
+        id: string;
+        draftDigest: string;
+      };
+      expect(draftDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
       const publish = (payload: Record<string, unknown>) =>
         app.inject({
           method: 'POST',
@@ -1004,10 +1019,18 @@ describe.runIf(DATABASE_URL !== undefined)(
 
       const unbound = await publish({ skillId });
       expect(unbound.statusCode).toBe(400);
-      const other = await publish({ skillId, version: 2 });
+      expect((await publish({ skillId, version: 1 })).statusCode).toBe(400);
+      const other = await publish({ skillId, version: 2, draftDigest });
       expect(other.statusCode).toBe(409);
       expect(other.json().error.code).toBe('version_changed');
-      const bound = await publish({ skillId, version: 1 });
+      const changed = await publish({
+        skillId,
+        version: 1,
+        draftDigest: `sha256:${'0'.repeat(64)}`,
+      });
+      expect(changed.statusCode).toBe(409);
+      expect(changed.json().error.code).toBe('draft_changed');
+      const bound = await publish({ skillId, version: 1, draftDigest });
       expect(bound.statusCode).toBe(200);
       expect(bound.json().result).toMatchObject({ status: 'published', version: 1 });
     });

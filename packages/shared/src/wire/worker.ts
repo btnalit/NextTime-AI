@@ -82,6 +82,12 @@ export const SkillSummaryWireSchema = z
     description: z.string(),
     applicable: SkillApplicableSchema,
     proposedBy: z.string(),
+    /** Review #493 on #764 (F1): on a `draft` only — the digest of everything this version says
+     *  and who proposed it. A discarded draft is deleted and the family's next proposal takes its
+     *  version again, so the version alone does not name what the reader looked at:
+     *  `publish_skill` requires this back and refuses 409 `draft_changed` when the draft is no
+     *  longer the one shown. Opaque to the console. */
+    draftDigest: z.string().optional(),
   })
   .strict();
 export type SkillSummaryWire = z.infer<typeof SkillSummaryWireSchema>;
@@ -97,13 +103,13 @@ export const SkillDetailWireSchema = SkillSummaryWireSchema.extend({
 });
 export type SkillDetailWire = z.infer<typeof SkillDetailWireSchema>;
 
-/** `propose_skill`'s result. */
+/** `propose_skill`'s result — with the new draft's `draftDigest`, for publishing it as proposed. */
 export const SkillProposeResultWireSchema = SkillSummaryWireSchema.pick({
   id: true,
   version: true,
   status: true,
   name: true,
-});
+}).extend({ draftDigest: z.string() });
 
 /** `publish_skill`/`deprecate_skill`'s result. */
 export const SkillPublishResultWireSchema = SkillSummaryWireSchema.pick({
@@ -125,6 +131,8 @@ export const ProcedureSummaryWireSchema = z
     /** S11 GO5d-2: the parameters schema a goal made from it is proposed with; `null` = none. */
     parameters: z.record(z.string(), z.unknown()).nullable(),
     proposedBy: z.string(),
+    /** Review #493 on #764 (F1): as `SkillSummaryWire.draftDigest`, for `publish_procedure`. */
+    draftDigest: z.string().optional(),
   })
   .strict();
 export type ProcedureSummaryWire = z.infer<typeof ProcedureSummaryWireSchema>;
@@ -134,7 +142,7 @@ export const ProcedureProposeResultWireSchema = ProcedureSummaryWireSchema.pick(
   version: true,
   status: true,
   name: true,
-});
+}).extend({ draftDigest: z.string() });
 
 export const ProcedurePublishResultWireSchema = ProcedureSummaryWireSchema.pick({
   id: true,

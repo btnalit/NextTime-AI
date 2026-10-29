@@ -11,6 +11,7 @@ import type { PoolClient } from 'pg';
 import {
   type PublishActor,
   assertPublishAuthority,
+  assertReviewedDraft,
   assertReviewedVersion,
 } from '../../governance/capability/index.js';
 import { getPublishedOperation } from '../../governance/gatekeepers/index.js';
@@ -20,7 +21,7 @@ import { SqlGraphStore } from '../../substrate/graph/index.js';
 import { projectProcedureObject } from '../../substrate/ontology/index.js';
 import { requirePublishedWorkerDefinition } from './definitions.js';
 import { type DraftViewer, draftVisibilityBinds, draftVisibleTo } from './draft-visibility.js';
-import { assertNoPendingDraft, readFamilyHead } from './family-version.js';
+import { assertNoPendingDraft, familyVersionDigest, readFamilyHead } from './family-version.js';
 import { assertFamilyPublishAuthority } from './publish-family.js';
 
 /**
@@ -87,6 +88,25 @@ export interface ProcedureRow {
   readonly publishedAt: Date | null;
 }
 
+/** Review #493 on #764 (F1): the digest a reviewer hands back to `publish_procedure`
+ *  (`familyVersionDigest`) — everything the version says, and who proposed it. */
+export function procedureDraftDigest(
+  row: Pick<
+    ProcedureRow,
+    'id' | 'version' | 'name' | 'description' | 'steps' | 'parameters' | 'proposedBy'
+  >,
+): string {
+  return familyVersionDigest('procedure', {
+    id: row.id,
+    version: row.version,
+    name: row.name,
+    description: row.description,
+    steps: row.steps,
+    parameters: row.parameters,
+    proposedBy: row.proposedBy,
+  });
+}
+
 function mapRow(row: ProcedureDbRow): ProcedureRow {
   return {
     workspaceId: row.workspace_id,
@@ -150,15 +170,22 @@ export interface ProposeProcedureInput {
 }
 
 /** The version a proposal gets: 1 for a new family; for an existing one, the next after its latest,
- *  which must exist and not be a draft (`family-version.ts`). The latest row is locked first — the
- *  lock `publishProcedure` / `deprecateProcedure` take — and read again after the lock is held, so
- *  a second proposal waiting on it sees the first one's draft. */
+ *  which must exist and not be a draft (`family-version.ts`). Two locks, then the latest version is
+ *  read again. The family's own advisory lock serializes proposals of it (review #493 on #764,
+ *  P3-2): when the row a proposal waits on is a draft being discarded, the row lock alone only
+ *  holds because Postgres then locks the next row (`LockRows` runs under `Limit`) — executor
+ *  behaviour, where this lock states the rule, as `lockWorkerRegistry` does for Skills. The latest
+ *  row `for update` is the lock `publishProcedure` / `deprecateProcedure` take. A second proposal
+ *  waiting on either sees the first one's draft. */
 async function nextVersion(
   client: PoolClient,
   workspaceId: string,
   procedureId: string | undefined,
 ): Promise<number> {
   if (!procedureId) return 1;
+  await client.query('select pg_advisory_xact_lock(hashtext($1::text))', [
+    `procedure_family:${workspaceId}:${procedureId}`,
+  ]);
   await client.query(
     `select version from procedures
      where workspace_id = $1 and id = $2
@@ -374,6 +401,13 @@ export async function publishProcedure(
     `Procedure ${row.id}`,
     actor?.reviewedVersion,
     row.version,
+  );
+  // Review #493 on #764 (F1): and the content of that version — see `publishSkill`.
+  assertReviewedDraft(
+    'publish_procedure',
+    `Procedure ${row.id}@${row.version}`,
+    actor?.reviewedDraftDigest,
+    procedureDraftDigest(row),
   );
   transition(PUBLISHABLE_TRANSITIONS, row.status, 'publish');
   await assertFamilyPublishAuthority(client, workspaceId, {

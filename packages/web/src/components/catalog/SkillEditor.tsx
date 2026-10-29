@@ -216,10 +216,12 @@ export function SkillEditor({
           can('publish_skill') === false
             ? undefined
             : (review) =>
-                // Legacy 300: publishes exactly the version this screen proposed.
+                // Legacy 300 and review #493 on #764 (F1): publishes exactly the version and
+                // content this screen proposed.
                 http.call<{ status: string }>('publish_skill', {
                   skillId: proposed.id,
                   version: proposed.version,
+                  draftDigest: proposed.draftDigest,
                   ...review,
                 })
         }

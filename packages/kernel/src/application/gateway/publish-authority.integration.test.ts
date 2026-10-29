@@ -108,15 +108,20 @@ describe.runIf(DATABASE_URL !== undefined)(
       return id;
     }
 
-    async function proposeSkill(): Promise<string> {
-      const proposed = await call<{ id: string }>(builderId, 'builder', 'propose_skill', {
-        skill: {
-          name: `d24-skill-${randomUUID().slice(0, 8)}`,
-          description: 'A skill used by the D-24 authority test.',
-          markdown: '# Steps\n\nDo the thing.',
+    async function proposeSkill(): Promise<{ skillId: string; draftDigest: string }> {
+      const proposed = await call<{ id: string; draftDigest: string }>(
+        builderId,
+        'builder',
+        'propose_skill',
+        {
+          skill: {
+            name: `d24-skill-${randomUUID().slice(0, 8)}`,
+            description: 'A skill used by the D-24 authority test.',
+            markdown: '# Steps\n\nDo the thing.',
+          },
         },
-      });
-      return proposed.id;
+      );
+      return { skillId: proposed.id, draftDigest: proposed.draftDigest };
     }
 
     /** An Operation `builderId` proposed and published (its own draft — allowed). */
@@ -177,16 +182,16 @@ describe.runIf(DATABASE_URL !== undefined)(
 
     describe('publish_skill', () => {
       it('member: refused by the builder floor (403 forbidden)', async () => {
-        const skillId = await proposeSkill();
+        const { skillId, draftDigest } = await proposeSkill();
         await expect(
-          call(memberId, 'member', 'publish_skill', { skillId, version: 1 }),
+          call(memberId, 'member', 'publish_skill', { skillId, version: 1, draftDigest }),
         ).rejects.toBeInstanceOf(ForbiddenError);
       });
 
       it('another builder: sees the draft (D-26 reviewer rule) but it is not theirs — 403 not_proposer', async () => {
-        const skillId = await proposeSkill();
+        const { skillId, draftDigest } = await proposeSkill();
         await expect(
-          call(otherBuilderId, 'builder', 'publish_skill', { skillId, version: 1 }),
+          call(otherBuilderId, 'builder', 'publish_skill', { skillId, version: 1, draftDigest }),
         ).rejects.toBeInstanceOf(NotProposerError);
         // Nothing was published by the refused call.
         const asProposer = await call<{ status: string } | null>(
@@ -201,19 +206,21 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
 
       it('the proposer publishes their own draft', async () => {
-        const skillId = await proposeSkill();
+        const { skillId, draftDigest } = await proposeSkill();
         const published = await call<{ status: string }>(builderId, 'builder', 'publish_skill', {
           skillId,
           version: 1,
+          draftDigest,
         });
         expect(published.status).toBe('published');
       });
 
       it('the owner publishes a builder’s draft', async () => {
-        const skillId = await proposeSkill();
+        const { skillId, draftDigest } = await proposeSkill();
         const published = await call<{ status: string }>(ownerId, 'owner', 'publish_skill', {
           skillId,
           version: 1,
+          draftDigest,
         });
         expect(published.status).toBe('published');
       });
@@ -446,34 +453,47 @@ describe.runIf(DATABASE_URL !== undefined)(
       // `propose_procedure{procedureId}`, which keeps a Skill's name and waits for a pending draft.
       async function publishedSkillOfBuilder(): Promise<{ skillId: string; name: string }> {
         const name = `d24-skill-${randomUUID().slice(0, 8)}`;
-        const v1 = await call<{ id: string }>(builderId, 'builder', 'propose_skill', {
-          skill: { name, description: 'v1 by the family’s proposer.', markdown: '# v1' },
+        const v1 = await call<{ id: string; draftDigest: string }>(
+          builderId,
+          'builder',
+          'propose_skill',
+          { skill: { name, description: 'v1 by the family’s proposer.', markdown: '# v1' } },
+        );
+        await call(builderId, 'builder', 'publish_skill', {
+          skillId: v1.id,
+          version: 1,
+          draftDigest: v1.draftDigest,
         });
-        await call(builderId, 'builder', 'publish_skill', { skillId: v1.id, version: 1 });
         return { skillId: v1.id, name };
       }
 
       it('Skill: another builder may propose a version, may not publish it; the owner may', async () => {
         const { skillId, name } = await publishedSkillOfBuilder();
 
-        const v2 = await call<{ version: number }>(otherBuilderId, 'builder', 'propose_skill', {
-          skill: {
-            name,
-            description: 'Another builder’s version.',
-            markdown: '# Do it differently',
+        const v2 = await call<{ version: number; draftDigest: string }>(
+          otherBuilderId,
+          'builder',
+          'propose_skill',
+          {
+            skill: {
+              name,
+              description: 'Another builder’s version.',
+              markdown: '# Do it differently',
+            },
+            skillId,
           },
-          skillId,
-        });
+        );
         expect(v2.version).toBe(2);
+        const { draftDigest } = v2;
         await expect(
-          call(otherBuilderId, 'builder', 'publish_skill', { skillId, version: 2 }),
+          call(otherBuilderId, 'builder', 'publish_skill', { skillId, version: 2, draftDigest }),
         ).rejects.toBeInstanceOf(NotProposerError);
 
         const published = await call<{ status: string; version: number }>(
           ownerId,
           'owner',
           'publish_skill',
-          { skillId, version: 2 },
+          { skillId, version: 2, draftDigest },
         );
         expect(published).toMatchObject({ status: 'published', version: 2 });
       });
@@ -481,22 +501,32 @@ describe.runIf(DATABASE_URL !== undefined)(
       it('legacy 300: Skill — the owner reviewed v2; published and followed by a v3 draft since, v3 is not published in its place (409 version_changed)', async () => {
         const { skillId, name } = await publishedSkillOfBuilder();
         const proposeVersion = (markdown: string) =>
-          call<{ version: number }>(builderId, 'builder', 'propose_skill', {
+          call<{ version: number; draftDigest: string }>(builderId, 'builder', 'propose_skill', {
             skill: { name, description: 'The family’s next version.', markdown },
             skillId,
           });
-        expect((await proposeVersion('# v2\n\nWhat the owner reviewed.')).version).toBe(2);
+        const v2 = await proposeVersion('# v2\n\nWhat the owner reviewed.');
+        expect(v2.version).toBe(2);
         // While v2 is a draft no other version can be proposed on top of it.
         await expect(proposeVersion('# v3\n\nToo early.')).rejects.toMatchObject({
           code: 'draft_pending',
           draftVersion: 2,
         });
         // Its proposer publishes v2 and proposes v3 while the owner still looks at v2.
-        await call(builderId, 'builder', 'publish_skill', { skillId, version: 2 });
-        expect((await proposeVersion('# v3\n\nNobody reviewed this.')).version).toBe(3);
+        await call(builderId, 'builder', 'publish_skill', {
+          skillId,
+          version: 2,
+          draftDigest: v2.draftDigest,
+        });
+        const v3 = await proposeVersion('# v3\n\nNobody reviewed this.');
+        expect(v3.version).toBe(3);
 
         await expect(
-          call(ownerId, 'owner', 'publish_skill', { skillId, version: 2 }),
+          call(ownerId, 'owner', 'publish_skill', {
+            skillId,
+            version: 2,
+            draftDigest: v2.draftDigest,
+          }),
         ).rejects.toMatchObject({ code: 'version_changed', reviewedVersion: 2, currentVersion: 3 });
         // Nothing was published: the family's latest is still the v3 draft.
         const latest = await call<{ status: string; version: number } | null>(
@@ -511,9 +541,61 @@ describe.runIf(DATABASE_URL !== undefined)(
           ownerId,
           'owner',
           'publish_skill',
-          { skillId, version: 3 },
+          { skillId, version: 3, draftDigest: v3.draftDigest },
         );
         expect(published).toMatchObject({ status: 'published', version: 3 });
+      });
+
+      it('review #493 on #764 (F1): Skill — the owner reviewed v2; discarded and proposed again as v2 since, the new content is not published in its place (409 draft_changed)', async () => {
+        const { skillId, name } = await publishedSkillOfBuilder();
+        const proposeVersion = (markdown: string) =>
+          call<{ version: number; draftDigest: string }>(builderId, 'builder', 'propose_skill', {
+            skill: { name, description: 'The family’s next version.', markdown },
+            skillId,
+          });
+        const reviewed = await proposeVersion('# REVIEWED');
+        const shown = await call<{ markdown: string; draftDigest: string }>(
+          ownerId,
+          'owner',
+          'get_skill',
+          { skillId },
+        );
+        expect(shown).toMatchObject({ markdown: '# REVIEWED', draftDigest: reviewed.draftDigest });
+
+        // The proposer discards v2 and proposes another v2 while the owner still looks at the first.
+        await call(builderId, 'builder', 'discard_draft', {
+          kind: 'skill',
+          id: skillId,
+          version: 2,
+        });
+        const swapped = await proposeVersion('# SWAPPED');
+        expect(swapped.version).toBe(2);
+        expect(swapped.draftDigest).not.toBe(reviewed.draftDigest);
+
+        await expect(
+          call(ownerId, 'owner', 'publish_skill', {
+            skillId,
+            version: 2,
+            draftDigest: reviewed.draftDigest,
+          }),
+        ).rejects.toMatchObject({ code: 'draft_changed' });
+        // Nothing was published: v2 is still the swapped draft.
+        const latest = await call<{ status: string; version: number; markdown: string } | null>(
+          ownerId,
+          'owner',
+          'get_skill',
+          { skillId },
+        );
+        expect(latest).toMatchObject({ status: 'draft', version: 2, markdown: '# SWAPPED' });
+
+        // Reviewed as it is now, it publishes.
+        const published = await call<{ status: string; version: number }>(
+          ownerId,
+          'owner',
+          'publish_skill',
+          { skillId, version: 2, draftDigest: swapped.draftDigest },
+        );
+        expect(published).toMatchObject({ status: 'published', version: 2 });
       });
 
       it('legacy 300: Procedure — the same binding on publish_procedure', async () => {
@@ -522,26 +604,105 @@ describe.runIf(DATABASE_URL !== undefined)(
           description,
           steps: [{ kind: 'approval', description: 'A human approves.' }],
         });
-        const v1 = await call<{ id: string; version: number }>(
+        const v1 = await call<{ id: string; version: number; draftDigest: string }>(
           builderId,
           'builder',
           'propose_procedure',
           { procedure: procedure('v1') },
         );
-        await call(builderId, 'builder', 'publish_procedure', { procedureId: v1.id, version: 1 });
+        await call(builderId, 'builder', 'publish_procedure', {
+          procedureId: v1.id,
+          version: 1,
+          draftDigest: v1.draftDigest,
+        });
         const proposeVersion = (description: string) =>
-          call<{ version: number }>(builderId, 'builder', 'propose_procedure', {
-            procedure: procedure(description),
-            procedureId: v1.id,
-          });
-        expect((await proposeVersion('v2 — what the owner reviewed')).version).toBe(2);
-        await call(builderId, 'builder', 'publish_procedure', { procedureId: v1.id, version: 2 });
+          call<{ version: number; draftDigest: string }>(
+            builderId,
+            'builder',
+            'propose_procedure',
+            {
+              procedure: procedure(description),
+              procedureId: v1.id,
+            },
+          );
+        const v2 = await proposeVersion('v2 — what the owner reviewed');
+        expect(v2.version).toBe(2);
+        await call(builderId, 'builder', 'publish_procedure', {
+          procedureId: v1.id,
+          version: 2,
+          draftDigest: v2.draftDigest,
+        });
         expect((await proposeVersion('v3 — proposed after the owner looked at v2')).version).toBe(
           3,
         );
         await expect(
-          call(ownerId, 'owner', 'publish_procedure', { procedureId: v1.id, version: 2 }),
+          call(ownerId, 'owner', 'publish_procedure', {
+            procedureId: v1.id,
+            version: 2,
+            draftDigest: v2.draftDigest,
+          }),
         ).rejects.toMatchObject({ code: 'version_changed', reviewedVersion: 2, currentVersion: 3 });
+      });
+
+      it('review #493 on #764 (F1): Procedure — a draft discarded and proposed again under the same version is not published for the one reviewed (409 draft_changed)', async () => {
+        const procedure = (description: string) => ({
+          name: 'd24-proc',
+          description,
+          steps: [{ kind: 'approval', description: 'A human approves.' }],
+        });
+        const v1 = await call<{ id: string; draftDigest: string }>(
+          builderId,
+          'builder',
+          'propose_procedure',
+          { procedure: procedure('v1') },
+        );
+        await call(builderId, 'builder', 'publish_procedure', {
+          procedureId: v1.id,
+          version: 1,
+          draftDigest: v1.draftDigest,
+        });
+        const proposeVersion = (description: string) =>
+          call<{ version: number; draftDigest: string }>(
+            builderId,
+            'builder',
+            'propose_procedure',
+            {
+              procedure: procedure(description),
+              procedureId: v1.id,
+            },
+          );
+        const reviewed = await proposeVersion('REVIEWED');
+        const listed = await call<{
+          items: readonly { id: string; version: number; draftDigest?: string }[];
+        }>(ownerId, 'owner', 'list_procedures', {});
+        expect(listed.items.find((item) => item.id === v1.id)).toMatchObject({
+          version: 2,
+          draftDigest: reviewed.draftDigest,
+        });
+        await call(builderId, 'builder', 'discard_draft', {
+          kind: 'procedure',
+          id: v1.id,
+          version: 2,
+        });
+        const swapped = await proposeVersion('SWAPPED');
+        expect(swapped.version).toBe(2);
+
+        await expect(
+          call(ownerId, 'owner', 'publish_procedure', {
+            procedureId: v1.id,
+            version: 2,
+            draftDigest: reviewed.draftDigest,
+          }),
+        ).rejects.toMatchObject({ code: 'draft_changed' });
+        const [row] = (
+          await call<{ items: readonly { id: string; status: string; description: string }[] }>(
+            ownerId,
+            'owner',
+            'list_procedures',
+            {},
+          )
+        ).items.filter((item) => item.id === v1.id);
+        expect(row).toMatchObject({ status: 'draft', description: 'SWAPPED' });
       });
 
       it('WorkerDefinition: propose_worker_definition{definitionId} is allowed, publishing it is not; the owner may', async () => {

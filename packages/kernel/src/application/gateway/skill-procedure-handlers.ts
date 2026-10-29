@@ -1,16 +1,18 @@
 import { ProposeProcedureContentSchema, ProposeSkillContentSchema } from '@nexttime/shared';
-import type { SkillRow } from '../../application/worker/index.js';
+import type { ProcedureRow, SkillRow } from '../../application/worker/index.js';
 import {
   deprecateProcedure,
   deprecateSkill,
   getSkill,
   listProcedures,
   listSkills,
+  procedureDraftDigest,
   procedureReviewContent,
   proposeProcedure,
   proposeSkill,
   publishProcedure,
   publishSkill,
+  skillDraftDigest,
   skillReviewContent,
 } from '../../application/worker/index.js';
 import { countSuspectedSecrets, credentialReviewAudit } from '../../governance/redaction/index.js';
@@ -56,6 +58,7 @@ const proposeSkillHandler: CapabilityHandler = async (client, workspaceId, param
       version: record.version,
       status: record.status,
       name: record.name,
+      draftDigest: skillDraftDigest(record),
     },
     resourceType: 'skill',
     resourceId: record.id,
@@ -63,15 +66,17 @@ const proposeSkillHandler: CapabilityHandler = async (client, workspaceId, param
 };
 
 const publishSkillHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
-  const { skillId, version, credentialsReviewed } = params as {
+  const { skillId, version, draftDigest, credentialsReviewed } = params as {
     skillId: string;
     version: number;
+    draftDigest: string;
     credentialsReviewed?: boolean;
   };
   const actor = {
     ...publishActorOf('publish_skill', ctx),
     credentialsReviewed,
     reviewedVersion: version,
+    reviewedDraftDigest: draftDigest,
   };
   const record = await publishSkill(client, workspaceId, actor.principalId, skillId, actor);
   return {
@@ -98,6 +103,7 @@ const deprecateSkillHandler: CapabilityHandler = async (client, workspaceId, par
   };
 };
 
+/** Review #493 on #764 (F1): a draft carries the digest `publish_skill` takes back. */
 function toWireSkillSummary(row: SkillRow) {
   return {
     id: row.id,
@@ -107,6 +113,7 @@ function toWireSkillSummary(row: SkillRow) {
     description: row.description,
     applicable: row.applicable,
     proposedBy: row.proposedBy,
+    ...(row.status === 'draft' ? { draftDigest: skillDraftDigest(row) } : {}),
   };
 }
 
@@ -164,6 +171,7 @@ const proposeProcedureHandler: CapabilityHandler = async (client, workspaceId, p
       version: record.version,
       status: record.status,
       name: record.name,
+      draftDigest: procedureDraftDigest(record),
     },
     resourceType: 'procedure',
     resourceId: record.id,
@@ -171,15 +179,17 @@ const proposeProcedureHandler: CapabilityHandler = async (client, workspaceId, p
 };
 
 const publishProcedureHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
-  const { procedureId, version, credentialsReviewed } = params as {
+  const { procedureId, version, draftDigest, credentialsReviewed } = params as {
     procedureId: string;
     version: number;
+    draftDigest: string;
     credentialsReviewed?: boolean;
   };
   const actor = {
     ...publishActorOf('publish_procedure', ctx),
     credentialsReviewed,
     reviewedVersion: version,
+    reviewedDraftDigest: draftDigest,
   };
   // S11 GO5d-2: a Procedure that says how a goal's plan is made from it is published only when
   // that plan passes.
@@ -218,6 +228,21 @@ const deprecateProcedureHandler: CapabilityHandler = async (client, workspaceId,
   };
 };
 
+/** Review #493 on #764 (F1): as `toWireSkillSummary`. */
+function toWireProcedureSummary(row: ProcedureRow) {
+  return {
+    id: row.id,
+    version: row.version,
+    status: row.status,
+    name: row.name,
+    description: row.description,
+    steps: row.steps,
+    parameters: row.parameters as Record<string, unknown> | null,
+    proposedBy: row.proposedBy,
+    ...(row.status === 'draft' ? { draftDigest: procedureDraftDigest(row) } : {}),
+  };
+}
+
 // S8 W1-C (leftover 48 pagination list): same shape as `listSkillsHandler` above.
 const listProceduresHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
   const { limit, cursor } = params as { limit?: number; cursor?: string };
@@ -225,16 +250,7 @@ const listProceduresHandler: CapabilityHandler = async (client, workspaceId, par
   const page = await listProcedures(client, workspaceId, viewer, { limit, cursor });
   return {
     result: {
-      items: page.items.map((row) => ({
-        id: row.id,
-        version: row.version,
-        status: row.status,
-        name: row.name,
-        description: row.description,
-        steps: row.steps,
-        parameters: row.parameters as Record<string, unknown> | null,
-        proposedBy: row.proposedBy,
-      })),
+      items: page.items.map(toWireProcedureSummary),
       ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
       ...(page.truncated !== undefined ? { truncated: page.truncated } : {}),
     },

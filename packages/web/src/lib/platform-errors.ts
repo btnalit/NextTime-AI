@@ -200,7 +200,8 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
   },
   // Review #493 on #583: an Operation draft was revised in place (its proposer re-proposing, a gate
   // re-import) after it was read — discarding or publishing it would have acted on content the
-  // reader never saw. Nothing was written; the catalog reloads it.
+  // reader never saw. Review #493 on #764 (F1): the same for a Skill / Procedure draft discarded
+  // and proposed again under the version reviewed. Nothing was written; the catalog reloads it.
   draft_changed: {
     zh: '这份草稿在你查看之后被修改过，本次没有写入任何内容。请先看它现在的内容，再决定是否操作',
     en: 'This draft was changed after you looked at it — nothing was written. Look at what it says now before acting on it',

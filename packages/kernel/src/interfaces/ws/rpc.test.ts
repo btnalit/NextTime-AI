@@ -37,7 +37,11 @@ import {
   SkillNameConflictError,
 } from '../../application/worker/index.js';
 import { ApprovalReasonRequiredError } from '../../governance/approval/index.js';
-import { HandleIssuanceError, ScopeValidationError } from '../../governance/capability/index.js';
+import {
+  HandleIssuanceError,
+  ReviewedDraftChangedError,
+  ScopeValidationError,
+} from '../../governance/capability/index.js';
 import { ConnectionParamsCarryCredentialsError } from '../../governance/connections/index.js';
 import { OperationNameInvalidError } from '../../governance/gatekeepers/index.js';
 import {
@@ -292,6 +296,12 @@ describe('mapDispatchError — error-mapping followup: previously-unmapped S3.1/
     );
     expect(
       mapDispatchError(new SkillFamilyNameChangedError('skill-1', 'fix-it', 'fix-it-2')).code,
+    ).toBe(WS_ERROR_CODES.ILLEGAL_TRANSITION);
+  });
+
+  it('ReviewedDraftChangedError (review #493 on #764 F1) maps to ILLEGAL_TRANSITION, like HTTP 409 draft_changed', () => {
+    expect(
+      mapDispatchError(new ReviewedDraftChangedError('publish_procedure', 'Procedure p-1@2')).code,
     ).toBe(WS_ERROR_CODES.ILLEGAL_TRANSITION);
   });
 

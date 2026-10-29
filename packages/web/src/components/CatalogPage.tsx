@@ -1841,8 +1841,11 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       await http.call(action, {
         skillId: row.id,
         ...(action === 'publish_skill' ? credentialReview.params() : {}),
-        // Legacy 300: the version this detail shows, not a newer one proposed since.
-        ...(action === 'publish_skill' ? { version: row.version } : {}),
+        // Legacy 300: the version this detail shows, not a newer one proposed since — and
+        // (review #493 on #764, F1) its content, not another draft proposed under that version.
+        ...(action === 'publish_skill'
+          ? { version: row.version, draftDigest: row.draftDigest }
+          : {}),
       });
       toast.push({
         tone: 'ok',
@@ -1854,7 +1857,7 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       if (action === 'publish_skill' && credentialReview.capture(err)) return;
       if (isForbiddenError(err)) permissions.markDenied(action);
       // The toast says it was reloaded: show what is there now.
-      if (isVersionChangedError(err)) refresh();
+      if (isVersionChangedError(err) || isDraftChangedError(err)) refresh();
       // C14: carry the kernel's own text — the generic title alone dropped the actual reason.
       toast.push({
         tone: 'danger',
@@ -2017,6 +2020,10 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
     editorPane
   ) : selected ? (
     <SkillDetailView
+      // Review #493 on #764 (F1): another draft under the same version is another detail — its
+      // body (`get_skill`) is read again however the list was reloaded, so Publish binds the
+      // content shown.
+      key={`${selected.id}@${selected.version}:${selected.draftDigest ?? ''}`}
       http={http}
       row={selected}
       canPropose={canPropose}
@@ -2254,8 +2261,11 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       await http.call(action, {
         procedureId: row.id,
         ...(action === 'publish_procedure' ? credentialReview.params() : {}),
-        // Legacy 300: the version this detail shows, not a newer one proposed since.
-        ...(action === 'publish_procedure' ? { version: row.version } : {}),
+        // Legacy 300: the version this detail shows, not a newer one proposed since — and
+        // (review #493 on #764, F1) its content, not another draft proposed under that version.
+        ...(action === 'publish_procedure'
+          ? { version: row.version, draftDigest: row.draftDigest }
+          : {}),
       });
       toast.push({
         tone: 'ok',
@@ -2274,7 +2284,7 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       }
       if (isForbiddenError(err)) permissions.markDenied(action);
       // The toast says it was reloaded: show what is there now.
-      if (isVersionChangedError(err)) refresh();
+      if (isVersionChangedError(err) || isDraftChangedError(err)) refresh();
       // C14: carry the kernel's own text — the generic title alone dropped the actual reason.
       toast.push({
         tone: 'danger',

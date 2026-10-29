@@ -1376,18 +1376,21 @@ const metaCapabilities = [
     minRole: 'builder',
     // Legacy 300: `version` is the version the caller reviewed (`SkillSummaryWire.version`, or the
     // propose result's). The kernel publishes the family's latest version, and refuses 409
-    // `version_changed` when that is another one — nothing is written. A version row is immutable
-    // (only its `status` changes), so the version alone binds the content reviewed.
+    // `version_changed` when that is another one — nothing is written. Review #493 on #764 (F1):
+    // a discarded draft is deleted and its version taken again by the next proposal, so the
+    // version alone does not bind the content reviewed — `draftDigest` (`SkillSummaryWire.
+    // draftDigest`, or the propose result's) does, refused 409 `draft_changed` when it differs.
     paramsSchema: z
       .object({
         skillId: id,
         version: z.number().int().positive(),
+        draftDigest: z.string().min(1),
         credentialsReviewed: z.boolean().optional(),
       })
       .strict(),
     resultSchema: wire.SkillPublishResultWireSchema,
     description:
-      'Publish your draft Skill (I16) — the latest version under skillId, which must be the version given (the one reviewed): a newer version under skillId since is 409 version_changed and nothing is published. Builder floor; the workspace owner may publish anyone’s draft (e.g. one a member’s Worker proposed); another builder’s draft is 403 not_proposer. When the draft carries suspected credentials, credentialsReviewed: true is required — 400 credentials_review_required (details: subject, suspectedSecretValues) otherwise. A name another Skill family already has published refuses 409 skill_name_conflict (a Worker mounts Skills by name, so one name has one Skill) — deprecate that one or rename the draft.',
+      'Publish your draft Skill (I16) — the latest version under skillId, which must be the version given (the one reviewed): a newer version under skillId since is 409 version_changed and nothing is published. draftDigest is the draftDigest list_skills / get_skill / propose_skill gave for that draft: a draft discarded and proposed again under the same version since is 409 draft_changed and nothing is published. Builder floor; the workspace owner may publish anyone’s draft (e.g. one a member’s Worker proposed); another builder’s draft is 403 not_proposer. When the draft carries suspected credentials, credentialsReviewed: true is required — 400 credentials_review_required (details: subject, suspectedSecretValues) otherwise. A name another Skill family already has published refuses 409 skill_name_conflict (a Worker mounts Skills by name, so one name has one Skill) — deprecate that one or rename the draft.',
   },
   {
     name: 'publish_procedure',
@@ -1398,14 +1401,15 @@ const metaCapabilities = [
     paramsSchema: z
       .object({
         procedureId: id,
-        // Legacy 300 — see publish_skill.
+        // Legacy 300 and review #493 on #764 (F1) — see publish_skill.
         version: z.number().int().positive(),
+        draftDigest: z.string().min(1),
         credentialsReviewed: z.boolean().optional(),
       })
       .strict(),
     resultSchema: wire.ProcedurePublishResultWireSchema,
     description:
-      'Publish your draft Procedure (I16) — the latest version under procedureId, which must be the version given (the one reviewed): a newer version under procedureId since is 409 version_changed and nothing is published. Builder floor; the workspace owner may publish anyone’s draft; another builder’s draft is 403 not_proposer. When the draft carries suspected credentials, credentialsReviewed: true is required — 400 credentials_review_required (details: subject, suspectedSecretValues) otherwise. A Procedure that says how a goal’s plan is made from it (parameters, a worker step’s plan fields, a verify step’s check) is published only when the plan it makes passes everything a written plan is held to — its $params bindings checked against parameters, no credential or [redacted] mark — 400 invalid_params with details.problems otherwise; one with an operation or approval step is still published, for following by hand, but makes no goal.',
+      'Publish your draft Procedure (I16) — the latest version under procedureId, which must be the version given (the one reviewed): a newer version under procedureId since is 409 version_changed and nothing is published. draftDigest is the draftDigest list_procedures / propose_procedure gave for that draft: a draft discarded and proposed again under the same version since is 409 draft_changed and nothing is published. Builder floor; the workspace owner may publish anyone’s draft; another builder’s draft is 403 not_proposer. When the draft carries suspected credentials, credentialsReviewed: true is required — 400 credentials_review_required (details: subject, suspectedSecretValues) otherwise. A Procedure that says how a goal’s plan is made from it (parameters, a worker step’s plan fields, a verify step’s check) is published only when the plan it makes passes everything a written plan is held to — its $params bindings checked against parameters, no credential or [redacted] mark — 400 invalid_params with details.problems otherwise; one with an operation or approval step is still published, for following by hand, but makes no goal.',
   },
   {
     name: 'deprecate_skill',

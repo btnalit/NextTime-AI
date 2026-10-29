@@ -19,6 +19,7 @@ import { entryScope } from '../../governance/capability/index.js';
 import { mapCapabilityError } from '../../interfaces/http/capability-route.js';
 import {
   deprecateProcedure,
+  procedureDraftDigest,
   proposeProcedure,
   proposeWorkerDefinition,
   publishWorkerDefinition,
@@ -168,7 +169,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       steps: readonly ProcedureStep[],
       parameters?: OutputSchema,
       procedureId?: string,
-    ): Promise<{ procedureId: string; version: number; name: string }> {
+    ): Promise<{ procedureId: string; version: number; name: string; draftDigest: string }> {
       const name = `renew-${randomUUID().slice(0, 8)}`;
       const row = await as(ownerId, (client) =>
         proposeProcedure(client, workspaceId, ownerId, {
@@ -179,7 +180,12 @@ describe.runIf(DATABASE_URL !== undefined)(
           ...(parameters !== undefined ? { parameters } : {}),
         }),
       );
-      return { procedureId: row.id, version: row.version, name };
+      return {
+        procedureId: row.id,
+        version: row.version,
+        name,
+        draftDigest: procedureDraftDigest(row),
+      };
     }
 
     /** Published through `publish_procedure`, as the console does — the template's checks run. */
@@ -192,6 +198,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       await call(owner(), 'publish_procedure', {
         procedureId: draft.procedureId,
         version: draft.version,
+        draftDigest: draft.draftDigest,
         credentialsReviewed: true,
       });
       return draft;
@@ -621,6 +628,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           dispatchCapability({ pool }, owner(), 'publish_procedure', {
             procedureId: draft.procedureId,
             version: draft.version,
+            draftDigest: draft.draftDigest,
             credentialsReviewed: true,
           }),
         );

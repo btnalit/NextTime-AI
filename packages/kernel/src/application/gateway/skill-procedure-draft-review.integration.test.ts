@@ -35,12 +35,15 @@ interface SkillItem {
   readonly id: string;
   readonly status: string;
   readonly proposedBy: string;
+  /** A draft's, which a publish names (review #493 on #764, F1). */
+  readonly draftDigest?: string;
 }
 
 interface ProcedureItem {
   readonly id: string;
   readonly status: string;
   readonly proposedBy: string;
+  readonly draftDigest?: string;
 }
 
 describe.runIf(DATABASE_URL !== undefined)(
@@ -127,6 +130,29 @@ describe.runIf(DATABASE_URL !== undefined)(
       return page.items.find((item) => item.id === procedureId);
     }
 
+    /** The draft digest a reviewer sees on the listed draft — what a publish then names. */
+    async function reviewedSkillDigest(
+      principalId: string,
+      role: Role,
+      skillId: string,
+    ): Promise<string> {
+      const digest = (await listedSkill(principalId, role, skillId))?.draftDigest;
+      if (digest === undefined) throw new Error(`fixture: ${skillId} is not a draft ${role} sees`);
+      return digest;
+    }
+
+    async function reviewedProcedureDigest(
+      principalId: string,
+      role: Role,
+      procedureId: string,
+    ): Promise<string> {
+      const digest = (await listedProcedure(principalId, role, procedureId))?.draftDigest;
+      if (digest === undefined) {
+        throw new Error(`fixture: ${procedureId} is not a draft ${role} sees`);
+      }
+      return digest;
+    }
+
     async function insertPrincipal(role: Role, name: string): Promise<string> {
       const id = randomUUID();
       await withWorkspace(
@@ -205,6 +231,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         const published = await call<{ status: string }>(ownerId, 'owner', 'publish_skill', {
           skillId,
           version: 1,
+          draftDigest: await reviewedSkillDigest(ownerId, 'owner', skillId),
         });
         expect(published.status).toBe('published');
         expect(await listedSkill(otherMemberId, 'member', skillId)).toMatchObject({
@@ -224,8 +251,9 @@ describe.runIf(DATABASE_URL !== undefined)(
         const skillId = await workerProposedSkillOfMember();
 
         expect(await listedSkill(memberId, 'member', skillId)).toMatchObject({ status: 'draft' });
+        const draftDigest = await reviewedSkillDigest(memberId, 'member', skillId);
         await expect(
-          call(memberId, 'member', 'publish_skill', { skillId, version: 1 }),
+          call(memberId, 'member', 'publish_skill', { skillId, version: 1, draftDigest }),
         ).rejects.toBeInstanceOf(ForbiddenError);
       });
 
@@ -236,7 +264,11 @@ describe.runIf(DATABASE_URL !== undefined)(
           status: 'draft',
           proposedBy: memberId,
         });
-        const refusal = call(builderId, 'builder', 'publish_skill', { skillId, version: 1 });
+        const refusal = call(builderId, 'builder', 'publish_skill', {
+          skillId,
+          version: 1,
+          draftDigest: await reviewedSkillDigest(builderId, 'builder', skillId),
+        });
         await expect(refusal).rejects.toBeInstanceOf(NotProposerError);
         await expect(refusal).rejects.toMatchObject({ code: 'not_proposer' });
         expect(await listedSkill(ownerId, 'owner', skillId)).toMatchObject({ status: 'draft' });
@@ -275,7 +307,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           description: 'A Skill that gets a second version.',
           markdown: '# Steps\n\nVersion one.',
         };
-        const v1 = await call<{ id: string; version: number }>(
+        const v1 = await call<{ id: string; version: number; draftDigest: string }>(
           builderId,
           'builder',
           'propose_skill',
@@ -283,7 +315,11 @@ describe.runIf(DATABASE_URL !== undefined)(
             skill,
           },
         );
-        await call(builderId, 'builder', 'publish_skill', { skillId: v1.id, version: 1 });
+        await call(builderId, 'builder', 'publish_skill', {
+          skillId: v1.id,
+          version: 1,
+          draftDigest: v1.draftDigest,
+        });
 
         const v2 = await call<{ id: string; version: number; status: string }>(
           builderId,
@@ -325,12 +361,16 @@ describe.runIf(DATABASE_URL !== undefined)(
             { kind: 'verify', description: 'Check the result.' },
           ],
         };
-        const v1 = await call<{ id: string }>(builderId, 'builder', 'propose_procedure', {
-          procedure,
-        });
+        const v1 = await call<{ id: string; draftDigest: string }>(
+          builderId,
+          'builder',
+          'propose_procedure',
+          { procedure },
+        );
         await call(builderId, 'builder', 'publish_procedure', {
           procedureId: v1.id,
           version: 1,
+          draftDigest: v1.draftDigest,
         });
         const v2 = await call<{ id: string; version: number }>(
           builderId,
@@ -373,6 +413,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         const published = await call<{ status: string }>(ownerId, 'owner', 'publish_procedure', {
           procedureId,
           version: 1,
+          draftDigest: await reviewedProcedureDigest(ownerId, 'owner', procedureId),
         });
         expect(published.status).toBe('published');
         expect(await listedProcedure(memberId, 'member', procedureId)).toMatchObject({
@@ -400,8 +441,13 @@ describe.runIf(DATABASE_URL !== undefined)(
           status: 'draft',
           proposedBy: builderId,
         });
+        const draftDigest = await reviewedProcedureDigest(otherBuilderId, 'builder', procedureId);
         await expect(
-          call(otherBuilderId, 'builder', 'publish_procedure', { procedureId, version: 1 }),
+          call(otherBuilderId, 'builder', 'publish_procedure', {
+            procedureId,
+            version: 1,
+            draftDigest,
+          }),
         ).rejects.toBeInstanceOf(NotProposerError);
         expect(await listedProcedure(builderId, 'builder', procedureId)).toMatchObject({
           status: 'draft',

@@ -12,6 +12,7 @@ import { stringify as stringifyYaml } from 'yaml';
 import {
   type PublishActor,
   assertPublishAuthority,
+  assertReviewedDraft,
   assertReviewedVersion,
 } from '../../governance/capability/index.js';
 import { assertDraftCredentialsReviewed } from '../../governance/redaction/index.js';
@@ -19,7 +20,7 @@ import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
 import { projectSkillObject } from '../../substrate/ontology/index.js';
 import { type DraftViewer, draftVisibilityBinds, draftVisibleTo } from './draft-visibility.js';
-import { assertNoPendingDraft, readFamilyHead } from './family-version.js';
+import { assertNoPendingDraft, familyVersionDigest, readFamilyHead } from './family-version.js';
 import { assertFamilyPublishAuthority } from './publish-family.js';
 import { lockWorkerRegistry } from './registry-lock.js';
 
@@ -99,6 +100,25 @@ function mapRow(row: SkillDbRow): SkillRow {
     createdAt: row.created_at,
     publishedAt: row.published_at,
   };
+}
+
+/** Review #493 on #764 (F1): the digest a reviewer hands back to `publish_skill`
+ *  (`familyVersionDigest`) — everything the version says, and who proposed it. */
+export function skillDraftDigest(
+  row: Pick<
+    SkillRow,
+    'id' | 'version' | 'name' | 'description' | 'markdown' | 'applicable' | 'proposedBy'
+  >,
+): string {
+  return familyVersionDigest('skill', {
+    id: row.id,
+    version: row.version,
+    name: row.name,
+    description: row.description,
+    markdown: row.markdown,
+    applicable: row.applicable,
+    proposedBy: row.proposedBy,
+  });
 }
 
 const SELECT_COLUMNS = `workspace_id, id, version, status, name, description, markdown, applicable,
@@ -389,6 +409,14 @@ export async function publishSkill(
   requireSkillAuthority('publish_skill', actor, row);
   // Legacy 300: publish what the person reviewed — a newer version under this id since refuses.
   assertReviewedVersion('publish_skill', `Skill ${row.id}`, actor?.reviewedVersion, row.version);
+  // Review #493 on #764 (F1): and the content of that version — a discarded draft's version is
+  // taken again by the next proposal.
+  assertReviewedDraft(
+    'publish_skill',
+    `Skill ${row.id}@${row.version}`,
+    actor?.reviewedDraftDigest,
+    skillDraftDigest(row),
+  );
   transition(PUBLISHABLE_TRANSITIONS, row.status, 'publish');
   await assertFamilyPublishAuthority(client, workspaceId, {
     table: 'skills',

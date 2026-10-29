@@ -2000,6 +2000,7 @@ describe('CatalogPage', () => {
             name: 'worker-found-trick',
             description: 'd',
             proposedBy: 'p-member',
+            draftDigest: 'sha256:reviewed',
           },
         ],
       }),
@@ -2021,6 +2022,7 @@ describe('CatalogPage', () => {
       expect(http.calls.find((c) => c.name === 'publish_skill')?.params).toEqual({
         skillId: 'sk-9',
         version: 1,
+        draftDigest: 'sha256:reviewed',
       }),
     );
   });
@@ -2053,11 +2055,85 @@ describe('CatalogPage', () => {
     await waitFor(() => expect(listed).toBe(2));
   });
 
-  it('legacy 300: Publish names the Procedure version shown', async () => {
+  it('review #493 on #764 (F1): Publish names the Skill draft shown; one discarded and proposed again under that version since is not published — the list and the body reload', async () => {
+    const reviewed = { digest: 'sha256:reviewed', markdown: '# REVIEWED' };
+    const swapped = { digest: 'sha256:swapped', markdown: '# SWAPPED' };
+    let current = reviewed;
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_skills: () => ({
+        items: [
+          {
+            id: 'sk-9',
+            version: 2,
+            status: 'draft',
+            name: 'rotate',
+            description: 'd',
+            draftDigest: current.digest,
+          },
+        ],
+      }),
+      get_skill: () => ({
+        id: 'sk-9',
+        version: 2,
+        status: 'draft',
+        name: 'rotate',
+        description: 'd',
+        markdown: current.markdown,
+        draftDigest: current.digest,
+      }),
+      publish_skill: (params) => {
+        if ((params as { draftDigest?: string }).draftDigest !== current.digest) {
+          return Promise.reject(
+            new HttpError('capability_error', 'not the draft reviewed', 'draft_changed'),
+          );
+        }
+        return { id: 'sk-9', version: 2, status: 'published' };
+      },
+    });
+    renderPage(http, 'skills');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    expect((await within(detail).findByTestId('skill-detail-body')).textContent).toContain(
+      'REVIEWED',
+    );
+
+    // Discarded and proposed again under v2 while the reviewer looks at it.
+    current = swapped;
+    fireEvent.click(within(detail).getByRole('button', { name: /^发布$/ }));
+    const toast = await screen.findByTestId('toast');
+    expect(toast.textContent).toContain('这份草稿在你查看之后被修改过，本次没有写入任何内容');
+    expect(http.calls.find((c) => c.name === 'publish_skill')?.params).toMatchObject({
+      version: 2,
+      draftDigest: 'sha256:reviewed',
+    });
+    // The reloaded row is another draft: its body is read again, and Publish now names it.
+    const reloaded = await screen.findByTestId('skill-detail');
+    await waitFor(() =>
+      expect(within(reloaded).getByTestId('skill-detail-body').textContent).toContain('SWAPPED'),
+    );
+    fireEvent.click(within(reloaded).getByRole('button', { name: /^发布$/ }));
+    await waitFor(() =>
+      expect(http.calls.filter((c) => c.name === 'publish_skill').at(-1)?.params).toMatchObject({
+        version: 2,
+        draftDigest: 'sha256:swapped',
+      }),
+    );
+  });
+
+  it('legacy 300: Publish names the Procedure version and draft shown', async () => {
     const http = scriptedHttp({
       get_workspace: () => OWNER_WORKSPACE,
       list_procedures: () => ({
-        items: [{ id: 'pr-9', version: 4, status: 'draft', name: 'deploy', description: 'd' }],
+        items: [
+          {
+            id: 'pr-9',
+            version: 4,
+            status: 'draft',
+            name: 'deploy',
+            description: 'd',
+            draftDigest: 'sha256:reviewed',
+          },
+        ],
       }),
       get_procedure: () => null,
       publish_procedure: () => ({ id: 'pr-9', version: 4, status: 'published' }),
@@ -2069,6 +2145,7 @@ describe('CatalogPage', () => {
       expect(http.calls.find((c) => c.name === 'publish_procedure')?.params).toEqual({
         procedureId: 'pr-9',
         version: 4,
+        draftDigest: 'sha256:reviewed',
       }),
     );
   });

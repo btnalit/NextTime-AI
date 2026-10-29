@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { canonicalJson } from '@nexttime/gatekeeper-base';
 import type { PoolClient } from 'pg';
 
 /**
@@ -73,4 +75,22 @@ export function assertNoPendingDraft(kind: FamilyKind, familyId: string, head: F
   if (head.status === 'draft') {
     throw new FamilyDraftPendingError(kind, familyId, head.version, head.name);
   }
+}
+
+/**
+ * Review #493 on #764 (F1): which draft a reviewer looked at, as one comparable string — `sha256:`
+ * of the canonical JSON of the version's content and who proposed it. A discarded draft's row is
+ * deleted (worker/0003), so the family's next proposal takes the same version again; the version
+ * alone does not name the content a person reviewed. `publish_skill` / `publish_procedure` take it
+ * back (`draftDigest`) and refuse 409 `draft_changed` when the latest version's differs. Opaque to
+ * the console. The same content proposed again by the same principal has the same digest: what is
+ * published is then exactly what was reviewed.
+ */
+export function familyVersionDigest(
+  kind: FamilyKind,
+  content: Readonly<Record<string, unknown>>,
+): string {
+  return `sha256:${createHash('sha256')
+    .update(canonicalJson({ kind, ...content }), 'utf8')
+    .digest('hex')}`;
 }
