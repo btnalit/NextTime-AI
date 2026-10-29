@@ -3782,6 +3782,231 @@ describe('CatalogPage — reject a pending draft (E2-0b)', () => {
   });
 });
 
+describe('legacy 493 and the deprecated Operation’s detail (UX acceptance of #776)', () => {
+  it('a Procedure publish refused for a step’s Worker says which step, which Worker and why, next to Publish', async () => {
+    const http = scriptedHttp({
+      get_workspace: () => ({
+        id: 'ws-1',
+        name: 'Acme',
+        createdAt: '2026-01-01T00:00:00Z',
+        principalCount: 1,
+        gatekeeperCount: 0,
+        caller: { id: 'p-owner', role: 'owner', displayName: 'Owner', kind: 'human' },
+      }),
+      list_procedures: () => ({
+        items: [
+          {
+            id: 'pr-9',
+            version: 1,
+            status: 'draft',
+            name: 'stock-check',
+            description: 'd',
+            draftDigest: 'sha256:d',
+            steps: [
+              { kind: 'approval', description: 'sign off' },
+              { kind: 'worker', definitionId: 'wd-1', version: 2 },
+            ],
+          },
+        ],
+      }),
+      resolve_refs: () => ({
+        items: [{ id: 'wd-1', kind: 'workerDefinition', name: 'Fixer', typeName: 'worker' }],
+      }),
+      publish_procedure: () => {
+        throw new HttpError(
+          'capability_error',
+          'Procedure step 1 does not resolve: WorkerDefinition wd-1@2 is not published: WorkerDefinition is deprecated',
+          'invalid_step_reference',
+        );
+      },
+    });
+    renderPage(http, 'procedures');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    fireEvent.click(within(detail).getByRole('button', { name: /^发布$/ }));
+    const problem = await within(detail).findByTestId('procedure-publish-step-reference');
+    await waitFor(() => expect(document.activeElement).toBe(problem));
+    expect(problem.textContent).toMatch(/有一步现在用不了，所以没有发布/);
+    expect(problem.textContent).toMatch(/第 2 步/);
+    expect(problem.textContent).toMatch(/v2 没有发布，或已弃用、已丢弃/);
+    await waitFor(() => expect(within(problem).getByText('Fixer')).toBeTruthy());
+    expect(screen.queryByTestId('toast')).toBeNull();
+  });
+
+  it('deprecating an Operation keeps its detail open on the deprecated version, focus on its title', async () => {
+    let deprecated = false;
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [
+          {
+            gatekeeperId: 'gk-1',
+            name: 'docker.restart',
+            status: deprecated ? 'deprecated' : 'published',
+            version: 1,
+          },
+        ],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+      deprecate_operation: () => {
+        deprecated = true;
+        return {};
+      },
+    });
+    renderPage(http);
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    const deprecate = within(detail).getByRole('button', { name: /弃用/ });
+    deprecate.focus();
+    fireEvent.click(deprecate);
+    const confirm = await screen.findByTestId('operation-deprecate-confirm-gk-1::docker.restart');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    await waitFor(() =>
+      expect(screen.getByTestId('operation-detail').getAttribute('data-operation-key')).toBe(
+        'gk-1::docker.restart@v1',
+      ),
+    );
+    expect(screen.queryByTestId('catalog-detail-missing')).toBeNull();
+    expect(screen.getAllByTestId('catalog-row')[0]?.getAttribute('aria-current')).toBe('true');
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByTestId('operation-detail').querySelector('.catalog-detail-title'),
+      ),
+    );
+  });
+
+  it('deprecating a Skill no longer listed closes its detail, focus on the Skills tab', async () => {
+    let deprecated = false;
+    const http = scriptedHttp({
+      list_skills: () => ({
+        items: deprecated
+          ? []
+          : [
+              {
+                id: 'sk-1',
+                version: 2,
+                status: 'published',
+                name: 'diagnose-net',
+                description: 'd',
+              },
+            ],
+      }),
+      deprecate_skill: () => {
+        deprecated = true;
+        return {};
+      },
+    });
+    renderPage(http, 'skills');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    const deprecate = within(detail).getByRole('button', { name: /弃用/ });
+    deprecate.focus();
+    fireEvent.click(deprecate);
+    const confirm = await screen.findByTestId('skill-deprecate-confirm-sk-1');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    await waitFor(() => expect(screen.queryByTestId('catalog-row')).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId('catalog-detail')).toBeNull());
+    expect(screen.queryByTestId('catalog-detail-missing')).toBeNull();
+    await waitFor(() => expect(document.activeElement?.getAttribute('aria-selected')).toBe('true'));
+    expect(document.activeElement?.getAttribute('role')).toBe('tab');
+  });
+
+  it('at a narrow width, deprecating a Skill no longer listed closes the sheet with focus on the Skills tab (UX acceptance of #782, R-1)', async () => {
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn(() => ({
+        matches: true,
+        media: '',
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    try {
+      let deprecated = false;
+      const http = scriptedHttp({
+        list_skills: () => ({
+          items: deprecated
+            ? []
+            : [
+                {
+                  id: 'sk-1',
+                  version: 2,
+                  status: 'published',
+                  name: 'diagnose-net',
+                  description: 'd',
+                },
+              ],
+        }),
+        deprecate_skill: () => {
+          deprecated = true;
+          return {};
+        },
+      });
+      renderPage(http, 'skills');
+      const row = await screen.findByTestId('catalog-row');
+      row.focus();
+      const detail = await selectRow(row);
+      expect(detail.getAttribute('role')).toBe('dialog');
+      fireEvent.click(within(detail).getByRole('button', { name: /弃用/ }));
+      const confirm = await screen.findByTestId('skill-deprecate-confirm-sk-1');
+      fireEvent.click(within(confirm).getByTestId('confirm-button'));
+      await waitFor(() => expect(screen.queryByTestId('catalog-detail')).toBeNull());
+      await waitFor(() => expect(document.activeElement?.getAttribute('role')).toBe('tab'));
+      expect(document.activeElement?.getAttribute('aria-selected')).toBe('true');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('deprecating a Procedure whose earlier published version is still listed keeps that detail open', async () => {
+    let deprecated = false;
+    const http = scriptedHttp({
+      list_procedures: () => ({
+        items: [
+          {
+            id: 'pr-1',
+            version: deprecated ? 1 : 2,
+            status: 'published',
+            name: 'restart-verify',
+            description: 'd',
+          },
+        ],
+      }),
+      deprecate_procedure: () => {
+        deprecated = true;
+        return {};
+      },
+    });
+    renderPage(http, 'procedures');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    fireEvent.click(within(detail).getByRole('button', { name: /弃用/ }));
+    const confirm = await screen.findByTestId('procedure-deprecate-confirm-pr-1');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    await waitFor(() =>
+      expect(http.calls.some((c) => c.name === 'deprecate_procedure')).toBe(true),
+    );
+    await waitFor(() =>
+      expect(http.calls.filter((c) => c.name === 'list_procedures').length).toBeGreaterThan(1),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('catalog-row').getAttribute('aria-current')).toBe('true'),
+    );
+    expect(screen.getByTestId('catalog-detail')).toBeTruthy();
+    expect(screen.queryByTestId('catalog-detail-missing')).toBeNull();
+  });
+
+  it('a link to an Operation whose status changed since still opens it', async () => {
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [{ gatekeeperId: 'gk-1', name: 'docker.restart', status: 'deprecated', version: 3 }],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+    });
+    renderPage(http, 'operations', 'gk-1::docker.restart');
+    const detail = await screen.findByTestId('operation-detail');
+    expect(detail.getAttribute('data-operation-key')).toBe('gk-1::docker.restart@v3');
+    expect(screen.queryByTestId('catalog-detail-missing')).toBeNull();
+    // The row shown is the row marked in the list.
+    expect(screen.getByTestId('catalog-row').getAttribute('aria-current')).toBe('true');
+  });
+});
+
 describe('CatalogPage — Skill usage (S11 W1a E2-1)', () => {
   function workspaceAs(role: string) {
     return {

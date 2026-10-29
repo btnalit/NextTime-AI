@@ -5,6 +5,7 @@ import { LlmAdminError, llmAdminErrorMessage } from './llm-admin.js';
 import { LocalizedError } from './localized-error.js';
 import { ownEntry } from './own.js';
 import { platformErrorMessage } from './platform-errors.js';
+import { stepReferenceRefusalOf, stepReferenceText } from './step-reference.js';
 import { RpcError, TurnAlreadyRunningError } from './ws-client.js';
 
 /** Renders any thrown value as a user-facing string. `WsClient`'s `RpcError`/`TurnAlreadyRunningError`
@@ -514,9 +515,11 @@ export const ERROR_NEXT_STEPS: Readonly<
     en: 'Only the proposer or a workspace owner can do this: this item, or the live version it would replace, was proposed by someone else. Ask that proposer or a workspace owner.',
   },
   not_published: { zh: '先发布，再做这一步。', en: 'Publish it first.' },
+  // Legacy 493: what a step refers to (an Operation, a Worker) is what does not resolve, not another
+  // step; `stepReferenceText` names the step and why when the kernel's message says.
   invalid_step_reference: {
-    zh: '有步骤引用了不存在的步骤。检查后再保存。',
-    en: 'A step refers to a step that does not exist. Check and save again.',
+    zh: '流程有一步引用的 Operation 或 Worker 现在用不了：没有发布、已不存在，或不是 Worker。逐步检查各步引用的 Operation 和 Worker 定义。',
+    en: 'An Operation or Worker a step of this Procedure refers to cannot be used now: it is not published, no longer exists, or is not a Worker. Check what each step refers to.',
   },
   unknown_quota_key: {
     zh: '这个配额项不存在。刷新页面后重新选择。',
@@ -649,6 +652,7 @@ export function presentError(
     platformErrorMessage(err, t) ??
     llmAdminErrorMessage(err, t) ??
     transportErrorMessage(err, t) ??
+    stepReferenceMessage(err, t) ??
     (described.code === 'unstorable_text'
       ? unstorableTextNextStep(described.message, t)
       : step
@@ -669,6 +673,12 @@ export function presentError(
     raw: raw.length > 0 && raw !== message && raw !== described.title ? raw : null,
     curated: curated !== null,
   };
+}
+
+/** Legacy 493: an `invalid_step_reference` whose step and reason the kernel's message says. */
+function stepReferenceMessage(err: unknown, t: Translate): string | null {
+  const refusal = stepReferenceRefusalOf(err);
+  return refusal === null || refusal.reason === 'unresolved' ? null : stepReferenceText(refusal, t);
 }
 
 /** One line for a toast, which has no room for the 「技术细节」 disclosure: the readable body,
