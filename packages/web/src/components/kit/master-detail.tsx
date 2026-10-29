@@ -69,7 +69,10 @@ export interface MasterDetailProps {
  * it. When an overlay (a dialog, a confirmation with or without its own box, another drawer, an
  * open menu) is already open at that moment, the sheet would land on top of it and take its
  * focus. The layout stays wide instead until no overlay is left, then switches: what the overlay
- * was opened from keeps its place, so an anchored confirmation stays where it was.
+ * was opened from keeps its place, so an anchored confirmation stays where it was. Where the
+ * window is too narrow for the wide layout (below `MIN_HELD_WIDE_PX`), the layout switches but the
+ * sheet waits, closed, until no overlay is left — and an anchored one closes (Escape), since its
+ * anchor is no longer on the page.
  */
 export function MasterDetail({
   list,
@@ -82,16 +85,20 @@ export function MasterDetail({
 }: MasterDetailProps) {
   const isNarrowViewport = useMediaQuery(NARROW_MASTER_DETAIL_QUERY);
   // Decided while rendering the crossing, so the sheet never mounts over the overlay first.
-  const [layout, setLayout] = useState(() => ({ narrow: isNarrowViewport, held: false }));
+  const [layout, setLayout] = useState<{ narrow: boolean; held: 'wide' | 'sheet' | null }>(() => ({
+    narrow: isNarrowViewport,
+    held: null,
+  }));
   if (layout.narrow !== isNarrowViewport) {
-    setLayout({ narrow: isNarrowViewport, held: isNarrowViewport && anOverlayIsOpen() });
+    setLayout({ narrow: isNarrowViewport, held: isNarrowViewport ? holdAtCrossing() : null });
   }
-  const held = layout.held && isNarrowViewport;
-  const isNarrow = isNarrowViewport && !held;
+  const held = isNarrowViewport ? layout.held : null;
+  const isNarrow = isNarrowViewport && held !== 'wide';
   useEffect(() => {
-    if (!held) return;
+    if (held === null) return;
+    if (held === 'sheet') closeAnchoredOverlays();
     const release = () => {
-      if (!anOverlayIsOpen()) setLayout((prev) => ({ ...prev, held: false }));
+      if (!anOverlayIsOpen()) setLayout((prev) => ({ ...prev, held: null }));
     };
     const observer = new MutationObserver(release);
     observer.observe(document.body, {
@@ -130,7 +137,7 @@ export function MasterDetail({
 
       {isNarrow ? (
         <Sheet
-          open={open}
+          open={open && held === null}
           onOpenChange={(next) => {
             if (!next) onClose();
           }}
@@ -149,15 +156,33 @@ export function MasterDetail({
   );
 }
 
+/** Below this window width the wide layout has no room left for the detail pane (the list pane
+ *  alone takes 340px), so it is not held there (#767 UX acceptance P3-2). */
+const MIN_HELD_WIDE_PX = 768;
+
+const MODAL_OVERLAYS =
+  '[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"], [role="dialog"][aria-modal="true"]';
+const ANCHORED_OVERLAYS = '[data-radix-popper-content-wrapper] [data-state="open"]';
+
 /** Whether an overlay is open: a Radix dialog, alert dialog or anchored popover (a medium
  *  `kit/confirm`, a menu), or a hand-rolled `aria-modal` drawer (`ui/Drawer`). */
 function anOverlayIsOpen(): boolean {
   if (typeof document === 'undefined') return false;
-  return (
-    document.querySelector(
-      '[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"], [role="dialog"][aria-modal="true"], [data-radix-popper-content-wrapper] [data-state="open"]',
-    ) !== null
-  );
+  return document.querySelector(`${MODAL_OVERLAYS}, ${ANCHORED_OVERLAYS}`) !== null;
+}
+
+/** What crossing into the narrow layout holds: nothing with no overlay open; the wide layout where
+ *  the window still has room for it; otherwise the sheet. */
+function holdAtCrossing(): 'wide' | 'sheet' | null {
+  if (!anOverlayIsOpen()) return null;
+  return window.innerWidth >= MIN_HELD_WIDE_PX ? 'wide' : 'sheet';
+}
+
+/** Closes the open anchored overlays, topmost first — each closes on Escape, as if pressed. */
+function closeAnchoredOverlays(): void {
+  for (let left = document.querySelectorAll(ANCHORED_OVERLAYS).length; left > 0; left -= 1) {
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  }
 }
 
 /** The detail's host: layout-transparent (`display: contents`), so the detail lays out as a direct

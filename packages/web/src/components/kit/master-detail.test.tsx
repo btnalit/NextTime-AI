@@ -280,4 +280,58 @@ describe('kit/MasterDetail', () => {
     const sheet = await screen.findByTestId('md-detail');
     await waitFor(() => expect(sheet.getAttribute('role')).toBe('dialog'));
   });
+
+  it('on a window too narrow for the wide layout, closes an anchored confirmation and opens the sheet (#767 P3-2)', async () => {
+    vi.stubGlobal('innerWidth', 390);
+    let narrow = false;
+    const listeners = new Set<(event: { matches: boolean }) => void>();
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn(() => ({
+        get matches() {
+          return narrow;
+        },
+        media: '',
+        addEventListener: (_: string, listener: (event: { matches: boolean }) => void) =>
+          listeners.add(listener),
+        removeEventListener: (_: string, listener: (event: { matches: boolean }) => void) =>
+          listeners.delete(listener),
+      })),
+    );
+    function Detail() {
+      const [confirming, setConfirming] = useState(true);
+      return (
+        <PopoverPrimitive.Root open={confirming} onOpenChange={setConfirming}>
+          <PopoverPrimitive.Anchor asChild>
+            <button type="button">Discard</button>
+          </PopoverPrimitive.Anchor>
+          <PopoverPrimitive.Portal>
+            <PopoverPrimitive.Content data-testid="confirm">
+              <input data-testid="reason" />
+            </PopoverPrimitive.Content>
+          </PopoverPrimitive.Portal>
+        </PopoverPrimitive.Root>
+      );
+    }
+    render(
+      <MasterDetail
+        list={<div>list</div>}
+        detail={<Detail />}
+        open={true}
+        onClose={vi.fn()}
+        sheetTitle="Detail"
+        detailTestId="md-detail"
+      />,
+    );
+    (await screen.findByTestId('reason')).focus();
+    act(() => {
+      narrow = true;
+      for (const listener of listeners) listener({ matches: true });
+    });
+    // No 2px-wide detail pane holding an anchor off the screen: the confirmation closes, and the
+    // detail opens in the sheet.
+    await waitFor(() => expect(screen.queryByTestId('confirm')).toBeNull());
+    const sheet = await screen.findByTestId('md-detail');
+    await waitFor(() => expect(sheet.getAttribute('role')).toBe('dialog'));
+  });
 });
