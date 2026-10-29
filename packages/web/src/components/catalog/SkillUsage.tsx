@@ -76,7 +76,11 @@ export function SkillUsageSection({
 
 function UsageBody({ stats, t }: { readonly stats: SkillStatsWire; readonly t: Translate }) {
   const loaded = stats.versions.filter((version) => version.usage.runs > 0);
-  const neverLoaded = stats.versions.filter((version) => version.usage.runs === 0);
+  // A draft is never loaded (only a published version is mounted), so it is not listed as unused
+  // (UX acceptance of #781, P3-1).
+  const neverLoaded = stats.versions.filter(
+    (version) => version.usage.runs === 0 && version.status !== 'draft',
+  );
   if (loaded.length === 0) {
     return (
       <span className="text-3" data-testid="skill-usage-empty">
@@ -106,8 +110,8 @@ function UsageBody({ stats, t }: { readonly stats: SkillStatsWire; readonly t: T
       {neverLoaded.length > 0 ? (
         <span className="text-3 text-small" data-testid="skill-usage-never-loaded">
           {t(
-            `${versionList(neverLoaded)} 还没有被运行加载过。`,
-            `${versionList(neverLoaded)}: not loaded by any run yet.`,
+            `${versionList(neverLoaded, '、')} 还没有被运行加载过。`,
+            `${versionList(neverLoaded, ', ')}: not loaded by any run yet.`,
           )}
         </span>
       ) : null}
@@ -116,8 +120,8 @@ function UsageBody({ stats, t }: { readonly stats: SkillStatsWire; readonly t: T
   );
 }
 
-function versionList(versions: readonly SkillVersionStatsWire[]): string {
-  return versions.map((version) => `v${version.version}`).join(', ');
+function versionList(versions: readonly SkillVersionStatsWire[], separator: string): string {
+  return versions.map((version) => `v${version.version}`).join(separator);
 }
 
 function ReviewSuggested({

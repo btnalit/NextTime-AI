@@ -181,10 +181,36 @@ describe('SkillUsageSection (S11 W1a E2-1)', () => {
     expect(screen.getByTestId('skill-usage-attribution').textContent).toContain(
       '所在的对话轮、目标步骤或目标被判达成，不是这个 Skill 让它达成',
     );
-    // A version no run loaded gets no block, only a line.
+    // A version no run loaded gets no block; a draft (never mounted) is not listed as unused.
     expect(screen.queryByTestId('skill-usage-version-3')).toBeNull();
-    expect(screen.getByTestId('skill-usage-never-loaded').textContent).toMatch(/^v3 /);
+    expect(screen.queryByTestId('skill-usage-never-loaded')).toBeNull();
     expect(screen.getByTestId('skill-usage-version-1')).toBeTruthy();
+  });
+
+  it('published versions no run loaded share one line, listed the Chinese way', async () => {
+    const unused = (version: number, status: 'published' | 'deprecated') => ({
+      version,
+      status,
+      usage: usage(),
+      outcomes: tally([0, 0]),
+      reviewSuggested: false,
+      segments: [],
+    });
+    const base = stats();
+    show(
+      scriptedHttp('builder', () =>
+        stats({
+          versions: [
+            unused(4, 'published'),
+            ...base.versions.filter((version) => version.version === 2),
+            unused(1, 'deprecated'),
+          ],
+        }),
+      ),
+    );
+    expect((await screen.findByTestId('skill-usage-never-loaded')).textContent).toBe(
+      'v4、v1 还没有被运行加载过。',
+    );
   });
 
   it('「建议复核」 shows on the version and on the environment it comes from; unknown is its own segment', async () => {
