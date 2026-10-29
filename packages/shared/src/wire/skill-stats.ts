@@ -22,7 +22,9 @@ import { ObjectiveOutcomeBasisSchema } from './attribution.js';
  *   - Outcomes: each outcome subject — a Turn, a Task, a goal step's acceptance, a GoalRun — counts
  *     at most once per version (and once per segment), over the Tasks it covers. A Turn covers
  *     every Task started in it, nested ones too; a goal step's Task uses the step's acceptance
- *     checks when the step declares some, otherwise the goal's outcome. Tallied by
+ *     checks when the step declares some, otherwise the goal's outcome — only for the step's
+ *     current attempt (and its nested Tasks), never for an attempt it replaced or a superseded
+ *     step. Tallied by
  *     `tallyOutcomesByBasis`: `primary` is the attainment rate, `proxy` is shown beside it, never
  *     added. A Turn's or a goal's outcome is joint: "the Turn it ran in was judged achieved", not
  *     "this Skill achieved it".

@@ -72,6 +72,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       readonly failedAt?: Date;
       readonly turnId?: string;
       readonly goal?: { readonly goalRunId: string; readonly stepRunId: string };
+      /** With `goal`: the step attempt this Task is (default 1); `null` for a Task nested in one. */
+      readonly stepAttempt?: number | null;
       readonly outputRejected?: boolean;
       readonly agentOutcome?: { readonly outcome: string; readonly at: Date };
     }
@@ -79,6 +81,11 @@ describe.runIf(DATABASE_URL !== undefined)(
     async function task(fixture: TaskFixture): Promise<string> {
       const id = randomUUID();
       const goal = fixture.goal;
+      const stepAttempt = goal
+        ? fixture.stepAttempt === undefined
+          ? 1
+          : fixture.stepAttempt
+        : null;
       await raw(
         `insert into tasks (workspace_id, id, status, on_behalf_of, worker_definition_id,
            worker_definition_version, failure_reason, failed_at, created_by_activity_id,
@@ -99,8 +106,8 @@ describe.runIf(DATABASE_URL !== undefined)(
           goal?.goalRunId ?? null,
           goal?.stepRunId ?? null,
           goal ? 1 : null,
-          goal ? 1 : null,
-          goal ? '{}' : null,
+          stepAttempt,
+          stepAttempt !== null ? '{}' : null,
           fixture.outputRejected ? '{}' : null,
           fixture.outputRejected ? '{}' : null,
           fixture.agentOutcome?.outcome ?? null,
@@ -169,6 +176,8 @@ describe.runIf(DATABASE_URL !== undefined)(
       readonly stepStatus: string;
       readonly failureCategory?: string;
       readonly stepEndedAt?: Date;
+      /** Attempts started on the step (default 1); the current one is the last. */
+      readonly attemptCount?: number;
     }): Promise<{ goalRunId: string; stepRunId: string }> {
       const ended = ['completed', 'cancelled', 'failed'].includes(input.goalStatus);
       const [goal] = await raw<{ id: string }>(
@@ -197,14 +206,18 @@ describe.runIf(DATABASE_URL !== undefined)(
       );
       const [stepRun] = await raw<{ id: string }>(
         `insert into step_runs (workspace_id, goal_run_id, step_key, introduced_in_revision,
-           status, failure_category, attempt_count, ended_at, updated_at)
-         values ($1, $2, 's', 1, $3, $4, 1, $5, $6) returning id`,
+           superseded_in_revision, status, failure_category, attempt_count, ended_at, updated_at)
+         values ($1, $2, 's', 1, $3, $4, $5, $6, $7, $8) returning id`,
         [
           workspaceId,
           goalRunId,
+          input.stepStatus === 'superseded' ? 2 : null,
           input.stepStatus,
           input.failureCategory ?? null,
-          input.stepStatus === 'succeeded' ? (input.stepEndedAt ?? new Date()) : null,
+          input.attemptCount ?? 1,
+          ['succeeded', 'superseded'].includes(input.stepStatus)
+            ? (input.stepEndedAt ?? new Date())
+            : null,
           input.stepEndedAt ?? new Date(),
         ],
       );
@@ -516,6 +529,145 @@ describe.runIf(DATABASE_URL !== undefined)(
       }
       expect(text).not.toContain(failedCheck.goalRunId);
       expect(text).not.toContain(achievedGoal.goalRunId);
+    });
+
+    it('a step’s or goal’s verdict judges only the step’s current attempt — not an attempt it replaced, nor a superseded step (review #493 on #781, N1)', async () => {
+      const skillId = await skillFamily(['deprecated', 'published']);
+
+      // Attempt 1 ran v1 (with a nested Task, also v1) and failed; attempt 2 ran v2 (with a nested
+      // Task on v2) and the step's checks passed.
+      const checked = await goalStep({
+        goalStatus: 'completed',
+        goalOutcome: { outcome: 'achieved', basis: 'verified_by_check' },
+        endedAt: at('15:00'),
+        acceptance: true,
+        stepStatus: 'succeeded',
+        stepEndedAt: at('14:50'),
+        attemptCount: 2,
+      });
+      const first = await task({
+        status: 'failed',
+        failureReason: 'worker_failed',
+        failedAt: at('14:10'),
+        goal: checked,
+        stepAttempt: 1,
+      });
+      const firstRun = await run({
+        taskId: first,
+        startedAt: at('14:00'),
+        environment: ENV_A,
+        loaded: [[skillId, 1]],
+      });
+      const firstChild = await task({ status: 'completed', goal: checked, stepAttempt: null });
+      await run({
+        taskId: firstChild,
+        startedAt: at('14:05'),
+        environment: ENV_A,
+        loaded: [[skillId, 1]],
+        parentRunId: firstRun,
+      });
+      const second = await task({ status: 'completed', goal: checked, stepAttempt: 2 });
+      const secondRun = await run({
+        taskId: second,
+        startedAt: at('14:20'),
+        environment: ENV_A,
+        loaded: [[skillId, 2]],
+      });
+      const secondChild = await task({ status: 'completed', goal: checked, stepAttempt: null });
+      await run({
+        taskId: secondChild,
+        startedAt: at('14:25'),
+        environment: ENV_A,
+        loaded: [[skillId, 2]],
+        parentRunId: secondRun,
+      });
+
+      // A step with no checks, reworked the same way: the goal's outcome judges attempt 2 only.
+      const unchecked = await goalStep({
+        goalStatus: 'completed',
+        goalOutcome: { outcome: 'achieved', basis: 'requester' },
+        endedAt: at('16:00'),
+        acceptance: false,
+        stepStatus: 'succeeded',
+        stepEndedAt: at('15:50'),
+        attemptCount: 2,
+      });
+      const reworked = await task({ status: 'completed', goal: unchecked, stepAttempt: 1 });
+      await run({
+        taskId: reworked,
+        startedAt: at('15:00'),
+        environment: ENV_A,
+        loaded: [[skillId, 1]],
+      });
+      const rework = await task({ status: 'completed', goal: unchecked, stepAttempt: 2 });
+      await run({
+        taskId: rework,
+        startedAt: at('15:30'),
+        environment: ENV_A,
+        loaded: [[skillId, 2]],
+      });
+
+      // A step whose attempt loaded another Skill, and only its nested Task loaded v2: the nested
+      // Task is judged with its attempt.
+      const otherSkillId = await skillFamily(['published']);
+      const nestedOnly = await goalStep({
+        goalStatus: 'running',
+        acceptance: true,
+        stepStatus: 'succeeded',
+        stepEndedAt: at('16:20'),
+      });
+      const parent = await task({ status: 'completed', goal: nestedOnly, stepAttempt: 1 });
+      const parentRun = await run({
+        taskId: parent,
+        startedAt: at('16:00'),
+        environment: ENV_A,
+        loaded: [[otherSkillId, 1]],
+      });
+      const nested = await task({ status: 'completed', goal: nestedOnly, stepAttempt: null });
+      await run({
+        taskId: nested,
+        startedAt: at('16:05'),
+        environment: ENV_A,
+        loaded: [[skillId, 2]],
+        parentRunId: parentRun,
+      });
+
+      // A step a later plan revision replaced: the goal's outcome judged the plan without it.
+      const replaced = await goalStep({
+        goalStatus: 'completed',
+        goalOutcome: { outcome: 'not_achieved', basis: 'requester' },
+        endedAt: at('17:00'),
+        acceptance: false,
+        stepStatus: 'superseded',
+        stepEndedAt: at('16:30'),
+      });
+      const superseded = await task({ status: 'completed', goal: replaced });
+      await run({
+        taskId: superseded,
+        startedAt: at('16:10'),
+        environment: ENV_A,
+        loaded: [[skillId, 1]],
+      });
+
+      const [v2, v1] = (await stats(skillId))?.versions ?? [];
+      // v1: its failed attempt, its nested Task, the reworked attempt and the superseded step's
+      // Task — none judged.
+      expect(v1?.usage.tasks).toEqual({ completed: 3, failed: 1, cancelled: 0, inProgress: 0 });
+      expect(v1?.outcomes.primary.total).toBe(0);
+      // v2: the first step's checks once (the attempt and its nested Task are one subject), the
+      // goal of the reworked step, and the step judged through its nested Task.
+      expect(v2?.outcomes.primary).toEqual({
+        achieved: 3,
+        notAchieved: 0,
+        total: 3,
+        attainment: 1,
+      });
+      expect(v2?.outcomes.byBasis).toEqual([
+        { basis: 'verified_by_check', achieved: 2, notAchieved: 0 },
+        { basis: 'requester', achieved: 1, notAchieved: 0 },
+        { basis: 'reviewer_assessed', achieved: 0, notAchieved: 0 },
+        { basis: 'agent_reported', achieved: 0, notAchieved: 0 },
+      ]);
     });
 
     it('suggests a review per environment: the latest three primary outcomes there all not achieved', async () => {

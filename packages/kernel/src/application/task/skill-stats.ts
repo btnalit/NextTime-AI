@@ -243,6 +243,9 @@ function subjectsOf(
  *   - a goal step's Task (`step_run_id`, the attempt's and its nested Tasks): the step's
  *     acceptance when the step declares checks — succeeded is achieved, failed
  *     `verification_failed` not achieved, by `verified_by_check` — otherwise the GoalRun's outcome.
+ *     Only the step's current attempt is judged by either (review #493 on #781, N1): an earlier
+ *     attempt's Tasks, and a superseded step's, were replaced before the verdict, so a Skill version
+ *     that failed one attempt does not take the credit of the version that passed the next.
  * An outcome not on record is unknown and counts nowhere.
  */
 async function readSubjectOutcomes(
@@ -250,6 +253,7 @@ async function readSubjectOutcomes(
   workspaceId: string,
   tasks: readonly TaskRow[],
 ): Promise<Map<string, Map<string, SubjectOutcome>>> {
+  const judged = await readJudgedStepTasks(client, workspaceId, tasks);
   const turnIds = unique(tasks.map((task) => task.created_by_activity_id));
   const stepIds = unique(tasks.map((task) => task.step_run_id));
   const goalIds = unique(tasks.map((task) => task.goal_run_id));
@@ -336,16 +340,54 @@ async function readSubjectOutcomes(
         at: task.outcome_given_at,
       });
     }
-    if (task.step_run_id && steps.has(task.step_run_id)) {
-      const step = steps.get(task.step_run_id);
-      if (step) subjects.set(`step:${task.step_run_id}`, step);
-    } else if (task.goal_run_id) {
-      const goal = goals.get(task.goal_run_id);
-      if (goal) subjects.set(`goal:${task.goal_run_id}`, goal);
+    if (task.step_run_id && judged.has(task.id)) {
+      if (steps.has(task.step_run_id)) {
+        const step = steps.get(task.step_run_id);
+        if (step) subjects.set(`step:${task.step_run_id}`, step);
+      } else if (task.goal_run_id) {
+        const goal = goals.get(task.goal_run_id);
+        if (goal) subjects.set(`goal:${task.goal_run_id}`, goal);
+      }
     }
     byTask.set(task.id, subjects);
   }
   return byTask;
+}
+
+/**
+ * The goal step Tasks a step's or goal's verdict judged: those of the step's current attempt
+ * (`step_attempt = attempt_count`, the goal module's own test for it), the attempt's nested Tasks
+ * included — a nested Task carries the step's `step_run_id` but no `step_attempt`, so its attempt
+ * is its ancestor's, found up the WorkerRun tree — and not of a superseded step.
+ */
+async function readJudgedStepTasks(
+  client: PoolClient,
+  workspaceId: string,
+  tasks: readonly TaskRow[],
+): Promise<ReadonlySet<string>> {
+  const stepTasks = tasks.filter((task) => task.step_run_id !== null).map((task) => task.id);
+  if (stepTasks.length === 0) return new Set();
+  const result = await client.query<{ task_id: string }>(
+    `with recursive up as (
+       select t.id as task_id, t.id as at_task, t.step_attempt, 0 as depth
+         from tasks t
+        where t.workspace_id = $1 and t.id = any($2::uuid[])
+       union
+       select up.task_id, p.task_id, pt.step_attempt, up.depth + 1
+         from up
+         join worker_runs r on r.workspace_id = $1 and r.task_id = up.at_task
+         join worker_runs p on p.workspace_id = $1 and p.id = r.parent_worker_run_id
+         join tasks pt on pt.workspace_id = $1 and pt.id = p.task_id
+        where up.step_attempt is null and up.depth < 4
+     )
+     select distinct up.task_id
+       from up
+       join tasks t on t.workspace_id = $1 and t.id = up.task_id
+       join step_runs s on s.workspace_id = $1 and s.id = t.step_run_id
+      where up.step_attempt = s.attempt_count and s.status <> 'superseded'`,
+    [workspaceId, stepTasks],
+  );
+  return new Set(result.rows.map((row) => row.task_id));
 }
 
 /**
