@@ -22,8 +22,9 @@ import { OUTPUT_MAX_CHARS, StepOutputSchemaSchema, isOutputJsonValue } from './o
  *   - `operation` — a Gatekeeper Operation, addressed by its `{gatekeeperId, name}` identity
  *     (`governance/gatekeepers/manifest.ts`'s own `OperationIdentity` — same two fields, same
  *     names, reused rather than re-derived).
- *   - `worker` — a WorkerDefinition, addressed by its `{definitionId, version}` identity
- *     (`application/worker/definitions.ts`'s `WorkerDefinitionVersionRef`).
+ *   - `worker` — a worker-kind WorkerDefinition, addressed by its `{definitionId, version}`
+ *     identity (`application/worker/definitions.ts`'s `WorkerDefinitionVersionRef`); an entry
+ *     definition is never a step (legacy 486).
  *   - `approval` — a human-decision checkpoint the Procedure's own runner must honor (P5:
  *     "Workflow 引擎持久执行" territory; S2.14 only distills and validates the shape).
  *   - `verify` — a post-condition check the Procedure's own runner must honor.

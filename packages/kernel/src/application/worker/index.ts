@@ -23,6 +23,7 @@ export {
   publishWorkerDefinition,
   requirePublishedWorkerDefinition,
   validateWorkerDefinitionContent,
+  workerDefinitionFamilyKind,
   WorkerDefinitionKindMismatchError,
   WorkerDefinitionNotFoundError,
   WorkerDefinitionNotPublishedError,
