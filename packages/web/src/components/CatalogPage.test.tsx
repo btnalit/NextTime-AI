@@ -2285,7 +2285,7 @@ describe('CatalogPage editors (S6-A A2)', () => {
     await waitFor(() => expect(screen.queryByTestId('skill-editor-drawer')).toBeNull());
   });
 
-  it('Skills: "Edit as new draft" pre-fills the row and the current version’s body (get_skill), and says the result is a new Skill', async () => {
+  it('Skills: "Save as a new Skill" pre-fills the row and the current version’s body (get_skill), and says the result is a new Skill', async () => {
     const http = scriptedHttp({
       list_skills: () => ({
         items: [
@@ -2319,9 +2319,11 @@ describe('CatalogPage editors (S6-A A2)', () => {
     renderPage(http, 'skills');
     const row = await screen.findByTestId('catalog-row');
     const detail = await selectRow(row);
-    fireEvent.click(within(detail).getByTestId('catalog-edit-as-draft'));
+    fireEvent.click(within(detail).getByTestId('catalog-save-as-new'));
     const drawer = await screen.findByTestId('skill-editor-drawer');
     expect(within(drawer).getByTestId('skill-copy-notice').textContent).toContain('新的');
+    // A copy of a published Skill under the same name would be refused at publish.
+    expect(within(drawer).getByText(/和「restart-web」同名/)).toBeTruthy();
     expect((within(drawer).getByLabelText(/^名称/) as HTMLInputElement).value).toBe('restart-web');
     expect((within(drawer).getByLabelText('HTTP') as HTMLInputElement).checked).toBe(true);
     expect((within(drawer).getByLabelText('MCP') as HTMLInputElement).checked).toBe(false);
@@ -2330,6 +2332,145 @@ describe('CatalogPage editors (S6-A A2)', () => {
         '# Steps\n\n1. restart',
       ),
     );
+  });
+
+  // S11 W1a E2-0 (legacy 48 ②): the next version of the same Skill / Procedure family.
+  const publishedSkill = {
+    id: 'sk-1',
+    version: 3,
+    status: 'published',
+    name: 'restart-web',
+    description: 'Restart web',
+    applicable: { gateKinds: ['http'] },
+  };
+  const skillDetail = (row: typeof publishedSkill) => ({
+    ...row,
+    markdown: '# Steps\n\n1. restart',
+    proposedBy: 'p-1',
+    publishedBy: 'p-1',
+    createdAt: '2026-01-01T00:00:00Z',
+    publishedAt: '2026-01-01T00:00:00Z',
+  });
+
+  it('Skills: "Edit as new draft version" proposes under the same skillId with the name kept', async () => {
+    const http = scriptedHttp({
+      list_skills: () => ({ items: [publishedSkill] }),
+      get_skill: () => skillDetail(publishedSkill),
+      propose_skill: () => ({ id: 'sk-1', version: 4, status: 'draft', name: 'restart-web' }),
+    });
+    renderPage(http, 'skills');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    expect(within(detail).getByTestId('catalog-save-as-new')).toBeTruthy();
+    fireEvent.click(within(detail).getByTestId('catalog-edit-as-draft'));
+    const drawer = await screen.findByTestId('skill-editor-drawer');
+    expect(within(drawer).getByRole('heading', { name: '提议新版本' })).toBeTruthy();
+    expect(within(drawer).getByTestId('skill-new-version-notice').textContent).toMatch(/当前 v3/);
+    const name = within(drawer).getByLabelText(/^名称/) as HTMLInputElement;
+    expect(name.value).toBe('restart-web');
+    expect(name.readOnly).toBe(true);
+    await waitFor(() =>
+      expect((within(drawer).getByLabelText(/SKILL.md 正文/) as HTMLTextAreaElement).value).toBe(
+        '# Steps\n\n1. restart',
+      ),
+    );
+    fireEvent.change(within(drawer).getByLabelText(/SKILL.md 正文/), {
+      target: { value: '# Steps\n\n1. restart\n2. check' },
+    });
+    fireEvent.click(within(drawer).getByTestId('skill-submit'));
+    await within(drawer).findByTestId('draft-proposed');
+    expect(http.calls.find((c) => c.name === 'propose_skill')?.params).toEqual({
+      skill: {
+        name: 'restart-web',
+        description: 'Restart web',
+        markdown: '# Steps\n\n1. restart\n2. check',
+        applicable: { gateKinds: ['http'] },
+      },
+      skillId: 'sk-1',
+    });
+  });
+
+  it('Skills: a draft row offers only "Save as a new Skill" — its next version waits for it', async () => {
+    const draft = { ...publishedSkill, status: 'draft' };
+    const http = scriptedHttp({
+      list_skills: () => ({ items: [draft] }),
+      get_skill: () => skillDetail(draft),
+    });
+    renderPage(http, 'skills');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    expect(within(detail).getByTestId('catalog-save-as-new')).toBeTruthy();
+    expect(within(detail).queryByTestId('catalog-edit-as-draft')).toBeNull();
+  });
+
+  it('Skills: a 409 draft_pending refusal offers the pending draft, and showing it reloads the list', async () => {
+    let pending = false;
+    const http = scriptedHttp({
+      list_skills: () => ({
+        items: [pending ? { ...publishedSkill, version: 4, status: 'draft' } : publishedSkill],
+      }),
+      get_skill: () => skillDetail(publishedSkill),
+      propose_skill: () => {
+        pending = true;
+        return Promise.reject(
+          new HttpError(
+            'capability_error',
+            'Skill sk-1@4 is a draft that has not been published or discarded',
+            'draft_pending',
+            { familyId: 'sk-1', draftVersion: 4 },
+          ),
+        );
+      },
+    });
+    renderPage(http, 'skills');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    fireEvent.click(within(detail).getByTestId('catalog-edit-as-draft'));
+    const drawer = await screen.findByTestId('skill-editor-drawer');
+    await waitFor(() =>
+      expect((within(drawer).getByLabelText(/SKILL.md 正文/) as HTMLTextAreaElement).value).toBe(
+        '# Steps\n\n1. restart',
+      ),
+    );
+    fireEvent.click(within(drawer).getByTestId('skill-submit'));
+    const banner = await within(drawer).findByTestId('skill-editor-error');
+    expect(banner.getAttribute('data-error-code')).toBe('draft_pending');
+    expect(banner.textContent).toContain('先发布或丢弃那份草稿');
+    fireEvent.click(within(banner).getByTestId('skill-show-pending-draft'));
+    const shown = await screen.findByTestId('skill-detail');
+    await waitFor(() => expect(within(shown).getByText('v4')).toBeTruthy());
+    expect(within(shown).queryByTestId('catalog-edit-as-draft')).toBeNull();
+  });
+
+  it('Procedures: "Edit as new draft version" proposes under the same procedureId; the name may change', async () => {
+    const procedure = {
+      id: 'pr-1',
+      version: 2,
+      status: 'published',
+      name: 'Deploy',
+      description: 'Deploy web',
+      steps: [{ kind: 'approval', description: 'A human approves.' }],
+    };
+    const http = scriptedHttp({
+      list_procedures: () => ({ items: [procedure] }),
+      propose_procedure: () => ({ id: 'pr-1', version: 3, status: 'draft', name: 'Deploy web' }),
+    });
+    renderPage(http, 'procedures');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    expect(within(detail).getByTestId('catalog-save-as-new').textContent).toBe('另存为新的流程');
+    fireEvent.click(within(detail).getByTestId('catalog-edit-as-draft'));
+    const drawer = await screen.findByTestId('procedure-editor-drawer');
+    expect(within(drawer).getByTestId('procedure-new-version-notice').textContent).toMatch(
+      /同一个 ID/,
+    );
+    const name = within(drawer).getByLabelText(/^名称/) as HTMLInputElement;
+    expect(name.readOnly).toBe(false);
+    fireEvent.change(name, { target: { value: 'Deploy web' } });
+    fireEvent.click(within(drawer).getByTestId('procedure-submit'));
+    await within(drawer).findByTestId('draft-proposed');
+    const params = http.calls.find((c) => c.name === 'propose_procedure')?.params as {
+      procedure: { name: string };
+      procedureId: string;
+    };
+    expect(params.procedureId).toBe('pr-1');
+    expect(params.procedure.name).toBe('Deploy web');
   });
 
   it('Workers: "Edit as new draft version" proposes under the same definitionId with the kind locked', async () => {

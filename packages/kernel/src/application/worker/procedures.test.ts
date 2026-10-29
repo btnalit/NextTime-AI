@@ -11,6 +11,8 @@ import { importManifest, publishOperation } from '../../governance/gatekeepers/m
 import { registerGatekeeper } from '../../governance/gatekeepers/registry.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from './definitions.js';
+import { discardDraft } from './draft-lifecycle.js';
+import { FamilyDraftPendingError } from './family-version.js';
 import {
   ProcedureNotFoundError,
   ProcedureStepReferenceError,
@@ -392,6 +394,97 @@ describe.runIf(DATABASE_URL !== undefined)(
         await expect(
           inTx(ownerId, (client) => publishProcedure(client, workspaceId, ownerId, draft.id)),
         ).rejects.toThrow(ProcedureStepReferenceError);
+      });
+    });
+
+    describe('next version of a family (propose_procedure{procedureId}, S11 W1a E2-0)', () => {
+      it('proposes version 2 under the same id, and may change the name (a Procedure is addressed by id)', async () => {
+        const name = `proc-family-${randomUUID()}`;
+        const v1 = await inTx(proposerId, (client) =>
+          proposeProcedure(client, workspaceId, proposerId, operationStepProcedure(name)),
+        );
+        await inTx(ownerId, (client) => publishProcedure(client, workspaceId, ownerId, v1.id));
+        const v2 = await inTx(proposerId, (client) =>
+          proposeProcedure(client, workspaceId, proposerId, {
+            ...operationStepProcedure(`${name}-renamed`),
+            procedureId: v1.id,
+          }),
+        );
+        expect(v2).toMatchObject({
+          id: v1.id,
+          version: 2,
+          status: 'draft',
+          name: `${name}-renamed`,
+        });
+      });
+
+      it('an unknown procedureId is not found', async () => {
+        await expect(
+          inTx(proposerId, (client) =>
+            proposeProcedure(client, workspaceId, proposerId, {
+              ...operationStepProcedure(`proc-unknown-${randomUUID()}`),
+              procedureId: randomUUID(),
+            }),
+          ),
+        ).rejects.toThrow(ProcedureNotFoundError);
+      });
+
+      it('refuses while the latest version is a draft (draft_pending) until it is published or discarded; a deprecated family may get a new version', async () => {
+        const name = `proc-pending-${randomUUID()}`;
+        const v1 = await inTx(proposerId, (client) =>
+          proposeProcedure(client, workspaceId, proposerId, operationStepProcedure(name)),
+        );
+        const next = () =>
+          inTx(proposerId, (client) =>
+            proposeProcedure(client, workspaceId, proposerId, {
+              ...operationStepProcedure(name),
+              procedureId: v1.id,
+            }),
+          );
+        await expect(next()).rejects.toMatchObject({
+          code: 'draft_pending',
+          kind: 'procedure',
+          familyId: v1.id,
+          draftVersion: 1,
+        });
+
+        await inTx(ownerId, (client) => publishProcedure(client, workspaceId, ownerId, v1.id));
+        expect((await next()).version).toBe(2);
+        await expect(next()).rejects.toThrow(FamilyDraftPendingError);
+
+        await inTx(proposerId, (client) =>
+          discardDraft(client, workspaceId, proposerId, {
+            kind: 'procedure',
+            id: v1.id,
+            version: 2,
+          }),
+        );
+        await inTx(ownerId, (client) => deprecateProcedure(client, workspaceId, v1.id));
+        expect((await next()).version).toBe(2);
+      });
+
+      it('two concurrent next-version proposals: one draft, the other draft_pending', async () => {
+        const name = `proc-race-${randomUUID()}`;
+        const v1 = await inTx(proposerId, (client) =>
+          proposeProcedure(client, workspaceId, proposerId, operationStepProcedure(name)),
+        );
+        await inTx(ownerId, (client) => publishProcedure(client, workspaceId, ownerId, v1.id));
+        const results = await Promise.allSettled(
+          [0, 1].map(() =>
+            inTx(proposerId, (client) =>
+              proposeProcedure(client, workspaceId, proposerId, {
+                ...operationStepProcedure(name),
+                procedureId: v1.id,
+              }),
+            ),
+          ),
+        );
+        expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+        const rejected = results.filter((r) => r.status === 'rejected');
+        expect(rejected).toHaveLength(1);
+        expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(
+          FamilyDraftPendingError,
+        );
       });
     });
 

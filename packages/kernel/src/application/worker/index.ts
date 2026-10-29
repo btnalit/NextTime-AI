@@ -52,6 +52,7 @@ export type {
 } from './definitions.js';
 
 export {
+  assertNoPendingSkillDraft,
   assertSkillNameAvailable,
   deprecatePublishedSkillVersion,
   deprecateSkill,
@@ -67,6 +68,7 @@ export {
   skillReviewContent,
   resolvePublishedSkills,
   validateSkillContent,
+  SkillFamilyNameChangedError,
   SkillNameConflictError,
   SkillNotFoundError,
   SkillValidationError,
@@ -94,6 +96,9 @@ export type {
 } from './procedures.js';
 
 export type { DraftViewer } from './draft-visibility.js';
+
+export { FamilyDraftPendingError } from './family-version.js';
+export type { FamilyKind } from './family-version.js';
 
 export { lockWorkerRegistry } from './registry-lock.js';
 

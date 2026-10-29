@@ -99,8 +99,8 @@ export function ProcedureTemplateView({
         <Notice tone="warn" testId="procedure-template-issues">
           {draft
             ? t(
-                '下面标出的绑定有问题，这个草稿发布时会被拒：请「编辑为新草稿」，在 JSON 视图里改。',
-                'The bindings marked below have problems, so publishing this draft is refused: use “Edit as new draft” and fix them in the JSON view.',
+                '下面标出的绑定有问题，这个草稿发布时会被拒：请「另存为新的流程」，在 JSON 视图里改好，再丢弃这份草稿。',
+                'The bindings marked below have problems, so publishing this draft is refused: use “Save as a new Procedure”, fix them in the JSON view, then discard this draft.',
               )
             : t(
                 '下面标出的绑定有问题，用这个流程生成目标会被拒。',

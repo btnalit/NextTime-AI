@@ -246,6 +246,17 @@ const PLATFORM_ERROR_MESSAGES: Readonly<
     zh: '工作区里已经有另一个同名的 Skill 在用；Worker 按名字挂载 Skill，同名会让它挂错，所以本次没有发布任何内容。请改名，或先停用另一个',
     en: 'Another Skill of this name is already in use in this workspace; a Worker mounts Skills by name, so two of one name would mix them up — nothing was published. Rename it, or deprecate the other one first',
   },
+  // S11 W1a E2-0: `propose_skill{skillId}` / `propose_procedure{procedureId}` — the family's
+  // latest version is still a draft, or a Skill's next version under another name. Nothing was
+  // proposed.
+  draft_pending: {
+    zh: '它的最新版本还是一份没有发布、也没有丢弃的草稿；发布总是取最新版本，再提议一份会顶替那份草稿，所以这次没有提议。先发布或丢弃那份草稿（只有它的提议者能丢弃），再提议新版本',
+    en: 'Its latest version is still a draft that has been neither published nor discarded; publishing always takes the latest version, so another draft would take its place — nothing was proposed. Publish or discard that draft first (only its proposer can discard it), then propose the new version',
+  },
+  skill_name_changed: {
+    zh: '新版本要沿用这个 Skill 的名称：Worker 按名称挂载 Skill，旧版本也仍是已发布的，换了名称挂载它的 Worker 就会停在旧版本，所以这次没有提议。要用别的名称，就另存为一个新的 Skill 再提议',
+    en: 'A new version keeps this Skill’s name: a Worker mounts Skills by name and the earlier version stays published, so under another name the Workers that mount it would stay on the old version — nothing was proposed. To use another name, save it as a new Skill',
+  },
   // S11 P1 (`application/change-plan`): the module install path's two refusals, and P1-B's install
   // record rollback. Nothing was written in any of them.
   change_confirmation_required: {

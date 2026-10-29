@@ -98,9 +98,11 @@ import {
   DraftNotDiscardableError,
   EntryTemplateChangedError,
   EntryTemplateCurrentError,
+  FamilyDraftPendingError,
   ProcedureNotFoundError,
   ProcedureStepReferenceError,
   ProcedureTemplateError,
+  SkillFamilyNameChangedError,
   SkillNameConflictError,
   SkillNotFoundError,
   SkillValidationError,
@@ -441,6 +443,10 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   }
   // Legacy 145: mirrors HTTP 409 `entry_template_current` / `entry_template_changed`.
   if (err instanceof EntryTemplateCurrentError || err instanceof EntryTemplateChangedError) {
+    return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
+  }
+  // S11 W1a E2-0: mirrors HTTP 409 `draft_pending` / `skill_name_changed` (capability-route.ts).
+  if (err instanceof FamilyDraftPendingError || err instanceof SkillFamilyNameChangedError) {
     return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
   }
   // S11 P1-D: mirrors HTTP 409 `skill_name_conflict` (capability-route.ts).

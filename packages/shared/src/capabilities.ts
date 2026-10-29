@@ -1330,9 +1330,16 @@ const metaCapabilities = [
     mode: 'propose',
     channel: 'handle',
     minRole: 'builder',
-    paramsSchema: z.object({ skill: jsonRecord }).strict(),
+    // S11 W1a E2-0 (legacy 48 ②, S10 decision 10): `skillId` makes the draft the next version of
+    // that Skill family; omitted, a new family as before (application/worker/family-version.ts).
+    paramsSchema: z.object({ skill: jsonRecord, skillId: id.optional() }).strict(),
     resultSchema: wire.SkillProposeResultWireSchema,
-    description: 'Propose a private draft Skill, typically at the end of a successful WorkerRun.',
+    description:
+      'Propose a private draft Skill, typically at the end of a successful WorkerRun. skillId ' +
+      'makes it the next version of that Skill (omitted: a new Skill); the new version keeps the ' +
+      'Skill’s name (409 skill_name_changed — a different name is a new Skill), and is refused ' +
+      'while the Skill’s latest version is still a draft (409 draft_pending: publish or discard ' +
+      'that draft first). An unknown skillId is not found.',
   },
   {
     name: 'propose_procedure',
@@ -1340,7 +1347,9 @@ const metaCapabilities = [
     mode: 'propose',
     channel: 'handle',
     minRole: 'builder',
-    paramsSchema: z.object({ procedure: jsonRecord }).strict(),
+    // S11 W1a E2-0: `procedureId` makes the draft the next version of that family, as
+    // propose_skill's `skillId`.
+    paramsSchema: z.object({ procedure: jsonRecord, procedureId: id.optional() }).strict(),
     resultSchema: wire.ProcedureProposeResultWireSchema,
     description:
       'Propose a private draft Procedure distilled from a successful Task: procedure is {name, ' +
@@ -1350,7 +1359,10 @@ const metaCapabilities = [
       'outputSchema, maxAttempts, and bindings — from an earlier step it depends on, or from ' +
       '$params, the parameters the goal is proposed with), a verify step a check (an acceptance ' +
       'check the platform makes), and parameters is the schema of those parameters — the same ' +
-      'bounded JSON Schema subset as an outputSchema.',
+      'bounded JSON Schema subset as an outputSchema. procedureId makes it the next version of ' +
+      'that Procedure (omitted: a new Procedure); refused while the Procedure’s latest version ' +
+      'is still a draft (409 draft_pending: publish or discard that draft first). An unknown ' +
+      'procedureId is not found.',
   },
   {
     // D-24 — see publish_operation. The owner and builders see every draft (D-26 rule,

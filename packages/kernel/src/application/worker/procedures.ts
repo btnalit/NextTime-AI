@@ -20,6 +20,7 @@ import { SqlGraphStore } from '../../substrate/graph/index.js';
 import { projectProcedureObject } from '../../substrate/ontology/index.js';
 import { requirePublishedWorkerDefinition } from './definitions.js';
 import { type DraftViewer, draftVisibilityBinds, draftVisibleTo } from './draft-visibility.js';
+import { assertNoPendingDraft, readFamilyHead } from './family-version.js';
 import { assertFamilyPublishAuthority } from './publish-family.js';
 
 /**
@@ -136,9 +137,10 @@ export class ProcedureStepReferenceError extends Error {
 // -------------------------------------------------------------------------------------------
 
 export interface ProposeProcedureInput {
-  /** Omit to start a new Procedure family; given, proposes the next version under that existing
-   *  `id` — see `skills.ts`'s `ProposeSkillInput.skillId` doc comment for the identical rationale
-   *  (no currently-registered capability passes this either). */
+  /** Omit to start a new Procedure family; given (`propose_procedure{procedureId}`, S11 W1a E2-0),
+   *  proposes the next version of that existing family under the rules of `family-version.ts`. A
+   *  Procedure is addressed by id (`find_procedures`, `propose_goal`'s `fromProcedure`), so unlike a
+   *  Skill a new version may change its name. */
   readonly procedureId?: string;
   readonly name: string;
   readonly description: string;
@@ -147,17 +149,28 @@ export interface ProposeProcedureInput {
   readonly parameters?: OutputSchema;
 }
 
+/** The version a proposal gets: 1 for a new family; for an existing one, the next after its latest,
+ *  which must exist and not be a draft (`family-version.ts`). The latest row is locked first — the
+ *  lock `publishProcedure` / `deprecateProcedure` take — and read again after the lock is held, so
+ *  a second proposal waiting on it sees the first one's draft. */
 async function nextVersion(
   client: PoolClient,
   workspaceId: string,
   procedureId: string | undefined,
 ): Promise<number> {
   if (!procedureId) return 1;
-  const result = await client.query<{ max: number | null }>(
-    'select max(version) as max from procedures where workspace_id = $1 and id = $2',
+  await client.query(
+    `select version from procedures
+     where workspace_id = $1 and id = $2
+     order by version desc
+     limit 1
+     for update`,
     [workspaceId, procedureId],
   );
-  return (result.rows[0]?.max ?? 0) + 1;
+  const head = await readFamilyHead(client, 'procedures', workspaceId, procedureId);
+  if (!head) throw new ProcedureNotFoundError(workspaceId, procedureId);
+  assertNoPendingDraft('procedure', procedureId, head);
+  return head.version + 1;
 }
 
 /** Creates a new `draft` Procedure version, owned by `proposerPrincipalId` (I16). No step

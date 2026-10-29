@@ -6,10 +6,6 @@ import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
-import {
-  proposeProcedure as proposeProcedureVersion,
-  proposeSkill as proposeSkillVersion,
-} from '../../application/worker/index.js';
 import { NotProposerError } from '../../governance/capability/index.js';
 import { registerGatekeeper } from '../../governance/gatekeepers/index.js';
 import { queryAudit } from '../../substrate/audit/index.js';
@@ -446,21 +442,28 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     describe('a new version in someone else’s family', () => {
-      it('Skill: another builder may propose a version, may not publish it; the owner may', async () => {
-        const skillId = await proposeSkill();
-        await call(builderId, 'builder', 'publish_skill', { skillId, version: 1 });
+      // S11 W1a E2-0: the next version goes through `propose_skill{skillId}` /
+      // `propose_procedure{procedureId}`, which keeps a Skill's name and waits for a pending draft.
+      async function publishedSkillOfBuilder(): Promise<{ skillId: string; name: string }> {
+        const name = `d24-skill-${randomUUID().slice(0, 8)}`;
+        const v1 = await call<{ id: string }>(builderId, 'builder', 'propose_skill', {
+          skill: { name, description: 'v1 by the family’s proposer.', markdown: '# v1' },
+        });
+        await call(builderId, 'builder', 'publish_skill', { skillId: v1.id, version: 1 });
+        return { skillId: v1.id, name };
+      }
 
-        const v2 = await withWorkspace(
-          pool,
-          { workspaceId, principalId: otherBuilderId },
-          (client) =>
-            proposeSkillVersion(client, workspaceId, otherBuilderId, {
-              skillId,
-              name: `d24-skill-${randomUUID().slice(0, 8)}`,
-              description: 'Another builder’s version of the family.',
-              markdown: '# Steps\n\nDo it differently.',
-            }),
-        );
+      it('Skill: another builder may propose a version, may not publish it; the owner may', async () => {
+        const { skillId, name } = await publishedSkillOfBuilder();
+
+        const v2 = await call<{ version: number }>(otherBuilderId, 'builder', 'propose_skill', {
+          skill: {
+            name,
+            description: 'Another builder’s version.',
+            markdown: '# Do it differently',
+          },
+          skillId,
+        });
         expect(v2.version).toBe(2);
         await expect(
           call(otherBuilderId, 'builder', 'publish_skill', { skillId, version: 2 }),
@@ -475,24 +478,27 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(published).toMatchObject({ status: 'published', version: 2 });
       });
 
-      it('legacy 300: Skill — the owner reviewed v2; a v3 proposed under the same id since is not published in its place (409 version_changed)', async () => {
-        const skillId = await proposeSkill();
+      it('legacy 300: Skill — the owner reviewed v2; published and followed by a v3 draft since, v3 is not published in its place (409 version_changed)', async () => {
+        const { skillId, name } = await publishedSkillOfBuilder();
         const proposeVersion = (markdown: string) =>
-          withWorkspace(pool, { workspaceId, principalId: otherBuilderId }, (client) =>
-            proposeSkillVersion(client, workspaceId, otherBuilderId, {
-              skillId,
-              name: `d24-skill-${randomUUID().slice(0, 8)}`,
-              description: 'Another builder’s version of the family.',
-              markdown,
-            }),
-          );
+          call<{ version: number }>(builderId, 'builder', 'propose_skill', {
+            skill: { name, description: 'The family’s next version.', markdown },
+            skillId,
+          });
         expect((await proposeVersion('# v2\n\nWhat the owner reviewed.')).version).toBe(2);
+        // While v2 is a draft no other version can be proposed on top of it.
+        await expect(proposeVersion('# v3\n\nToo early.')).rejects.toMatchObject({
+          code: 'draft_pending',
+          draftVersion: 2,
+        });
+        // Its proposer publishes v2 and proposes v3 while the owner still looks at v2.
+        await call(builderId, 'builder', 'publish_skill', { skillId, version: 2 });
         expect((await proposeVersion('# v3\n\nNobody reviewed this.')).version).toBe(3);
 
         await expect(
           call(ownerId, 'owner', 'publish_skill', { skillId, version: 2 }),
         ).rejects.toMatchObject({ code: 'version_changed', reviewedVersion: 2, currentVersion: 3 });
-        // Nothing was published: the family's latest is still the v3 draft, and nothing is live.
+        // Nothing was published: the family's latest is still the v3 draft.
         const latest = await call<{ status: string; version: number } | null>(
           ownerId,
           'owner',
@@ -500,14 +506,6 @@ describe.runIf(DATABASE_URL !== undefined)(
           { skillId },
         );
         expect(latest).toMatchObject({ status: 'draft', version: 3 });
-        const live = await withWorkspace(pool, { workspaceId, principalId: ownerId }, (client) =>
-          client.query<{ n: string }>(
-            `select count(*) as n from skills
-             where workspace_id = $1 and id = $2 and status = 'published'`,
-            [workspaceId, skillId],
-          ),
-        );
-        expect(live.rows[0]?.n).toBe('0');
 
         const published = await call<{ status: string; version: number }>(
           ownerId,
@@ -519,24 +517,31 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
 
       it('legacy 300: Procedure — the same binding on publish_procedure', async () => {
+        const procedure = (description: string) => ({
+          name: 'd24-proc',
+          description,
+          steps: [{ kind: 'approval', description: 'A human approves.' }],
+        });
         const v1 = await call<{ id: string; version: number }>(
           builderId,
           'builder',
           'propose_procedure',
-          { procedure: { name: 'd24-proc', description: 'v1', steps: [] } },
+          { procedure: procedure('v1') },
         );
-        const v2 = await withWorkspace(pool, { workspaceId, principalId: builderId }, (client) =>
-          proposeProcedureVersion(client, workspaceId, builderId, {
+        await call(builderId, 'builder', 'publish_procedure', { procedureId: v1.id, version: 1 });
+        const proposeVersion = (description: string) =>
+          call<{ version: number }>(builderId, 'builder', 'propose_procedure', {
+            procedure: procedure(description),
             procedureId: v1.id,
-            name: 'd24-proc',
-            description: 'v2 — proposed after the owner looked at v1',
-            steps: [],
-          }),
+          });
+        expect((await proposeVersion('v2 — what the owner reviewed')).version).toBe(2);
+        await call(builderId, 'builder', 'publish_procedure', { procedureId: v1.id, version: 2 });
+        expect((await proposeVersion('v3 — proposed after the owner looked at v2')).version).toBe(
+          3,
         );
-        expect(v2.version).toBe(2);
         await expect(
-          call(ownerId, 'owner', 'publish_procedure', { procedureId: v1.id, version: 1 }),
-        ).rejects.toMatchObject({ code: 'version_changed', reviewedVersion: 1, currentVersion: 2 });
+          call(ownerId, 'owner', 'publish_procedure', { procedureId: v1.id, version: 2 }),
+        ).rejects.toMatchObject({ code: 'version_changed', reviewedVersion: 2, currentVersion: 3 });
       });
 
       it('WorkerDefinition: propose_worker_definition{definitionId} is allowed, publishing it is not; the owner may', async () => {

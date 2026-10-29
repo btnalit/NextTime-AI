@@ -19,7 +19,7 @@ import {
 } from '../../lib/catalog.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { reviewFieldNames } from '../../lib/credential-review.js';
-import { isForbiddenError } from '../../lib/errors.js';
+import { describeError, isForbiddenError } from '../../lib/errors.js';
 import type { SkillRow } from '../../lib/governance.js';
 import { objectTypeOptions } from '../../lib/graph-view.js';
 import { useT } from '../../lib/i18n.js';
@@ -36,11 +36,18 @@ import { MarkdownPreview } from './MarkdownPreview.js';
 
 export interface SkillEditorProps {
   readonly http: CapabilityCaller;
-  /** "编辑（生成新草稿版本）": the row to copy from. `propose_skill` addresses no family, so the
-   *  result is a *new* Skill (new id, v1), not a new version of this one — S8 W4 (leftover 48
-   *  "无 get_skill") only fixes the *prefill*: `get_skill{skillId}` now exists, so the body no
-   *  longer has to be re-typed from scratch. */
+  /** 「另存为新的 Skill」: the row to copy from. Proposed without `skillId`, so the result is a
+   *  *new* Skill (new id, v1); the body is prefilled from `get_skill{skillId}` (S8 W4, leftover
+   *  48 "无 get_skill"). */
   readonly copyOf?: SkillRow;
+  /** 「编辑（新版本草稿）」 (S11 W1a E2-0, legacy 48 ②): the published row whose family gets the next
+   *  version — `propose_skill{skill, skillId}`, prefilled the same way. The name stays the
+   *  family's: a Worker mounts Skills by name and the earlier version stays published, so the
+   *  kernel refuses another one (409 `skill_name_changed`). Takes precedence over `copyOf`. */
+  readonly nextVersionOf?: SkillRow;
+  /** With `nextVersionOf`: when the kernel refuses because the family's latest version is still a
+   *  draft (409 `draft_pending`), the error offers to show that draft. */
+  readonly onShowPendingDraft?: () => void;
   readonly onProposed: (draft: ProposedDraft) => void;
   readonly onDone: () => void;
   /** After a publish from the success screen (`DraftProposed`'s `onPublished`). */
@@ -61,18 +68,28 @@ const GATE_KINDS: readonly string[] = GateTransportKindWireSchema.options;
  * `propose_skill` handler parses) and calls `propose_skill{skill}`; the pi publish-time name
  * rule is shown as a warning while drafting. The success state offers `publish_skill`.
  */
-export function SkillEditor({ http, copyOf, onProposed, onDone, onPublished }: SkillEditorProps) {
+export function SkillEditor({
+  http,
+  copyOf,
+  nextVersionOf,
+  onShowPendingDraft,
+  onProposed,
+  onDone,
+  onPublished,
+}: SkillEditorProps) {
   const t = useT();
   const permissions = usePermissions();
   const can = useRoleCan(http);
+  /** The row the form is prefilled from — the family's current version or the copied Skill. */
+  const source = nextVersionOf ?? copyOf;
   const [form, setForm] = useState<SkillForm>(() =>
-    copyOf
+    source
       ? {
           ...EMPTY_SKILL_FORM,
-          name: copyOf.name,
-          description: copyOf.description,
-          gateKinds: joinList(copyOf.applicable?.gateKinds as readonly string[] | undefined),
-          objectTypes: joinList(copyOf.applicable?.objectTypes as readonly string[] | undefined),
+          name: source.name,
+          description: source.description,
+          gateKinds: joinList(source.applicable?.gateKinds as readonly string[] | undefined),
+          objectTypes: joinList(source.applicable?.objectTypes as readonly string[] | undefined),
         }
       : EMPTY_SKILL_FORM,
   );
@@ -85,15 +102,15 @@ export function SkillEditor({ http, copyOf, onProposed, onDone, onPublished }: S
   const [nameAdjusted, setNameAdjusted] = useState(false);
 
   // S8 W4 (leftover 48 "无 get_skill"): fetches the current version's full body to prefill the
-  // Markdown field, which `list_skills`/`copyOf` never carries. Skipped entirely (no network
-  // call) when this is a fresh draft (`copyOf` undefined) via the `load` override, the same
+  // Markdown field, which `list_skills`/`source` never carries. Skipped entirely (no network
+  // call) when this is a fresh draft (`source` undefined) via the `load` override, the same
   // pattern `access/GrantGateForm.tsx` uses to skip `list_operations` while no single gate is
   // targeted.
   const skillDetail = useCapability<SkillDetailWire | null>(
     http,
     'get_skill',
-    copyOf ? { skillId: copyOf.id } : undefined,
-    { load: copyOf ? undefined : async () => null },
+    source ? { skillId: source.id } : undefined,
+    { load: source ? undefined : async () => null },
   );
   // Applies the fetched body to the form exactly once — a ref, not a `useEffect` dependency on
   // `form`/`update`, so typing in the Markdown field before the read resolves is never clobbered
@@ -117,6 +134,7 @@ export function SkillEditor({ http, copyOf, onProposed, onDone, onPublished }: S
    *  draft saved fine and then failed at publish. Skipped mid-IME-composition (rewriting the
    *  pinyin buffer would break the input method); `onCompositionEnd` applies it then. */
   function typeName(raw: string, composing: boolean): void {
+    if (nextVersionOf) return;
     if (composing) {
       update('name', raw);
       return;
@@ -150,7 +168,8 @@ export function SkillEditor({ http, copyOf, onProposed, onDone, onPublished }: S
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     if (busy) return;
-    const name = finalizeSkillName(form.name);
+    // A next version is proposed under the family's own name (the field is read-only).
+    const name = nextVersionOf ? nextVersionOf.name : finalizeSkillName(form.name);
     const submitted: SkillForm = { ...form, name };
     if (name !== form.name) setForm(submitted);
     const validated = validateSkill(submitted, t);
@@ -172,7 +191,10 @@ export function SkillEditor({ http, copyOf, onProposed, onDone, onPublished }: S
     setBusy(true);
     setError(null);
     try {
-      const result = await http.call<ProposedDraft>('propose_skill', { skill: validated.value });
+      const result = await http.call<ProposedDraft>('propose_skill', {
+        skill: validated.value,
+        ...(nextVersionOf ? { skillId: nextVersionOf.id } : {}),
+      });
       setProposed(result);
       onProposed(result);
     } catch (err) {
@@ -209,26 +231,35 @@ export function SkillEditor({ http, copyOf, onProposed, onDone, onPublished }: S
   }
 
   const finalName = finalizeSkillName(form.name);
-  const nameHint =
-    form.name.trim() !== '' && finalName === ''
+  const nameHint = nextVersionOf
+    ? t(
+        '新版本沿用这个 Skill 的名称：Worker 按名称挂载 Skill。要换名称，用「另存为新的 Skill」。',
+        'A new version keeps this Skill’s name: a Worker mounts Skills by name. To use another name, use “Save as a new Skill”.',
+      )
+    : copyOf?.status === 'published' && finalName === copyOf.name
       ? t(
-          '名称至少要有一个英文字母或数字（中文会被去掉），例如 restart-web。',
-          'The name needs at least one letter or digit (other characters are dropped), e.g. restart-web.',
+          `和「${copyOf.name}」同名：它已发布，Worker 按名称挂载 Skill，所以新的 Skill 发布时会因同名被拒。请换一个名称；要改「${copyOf.name}」本身，用「编辑（新版本草稿）」。`,
+          `Same name as “${copyOf.name}”, which is published: a Worker mounts Skills by name, so publishing the new Skill would be refused. Pick another name; to change “${copyOf.name}” itself, use “Edit as new draft version”.`,
         )
-      : skillNamePublishWarning(form.name, t) !== undefined
+      : form.name.trim() !== '' && finalName === ''
         ? t(
-            `保存时将改为 ${finalName}（发布要求：小写字母、数字，单个连字符分隔）。`,
-            `Will be saved as ${finalName} (publishing requires lowercase letters and digits with single hyphens).`,
+            '名称至少要有一个英文字母或数字（中文会被去掉），例如 restart-web。',
+            'The name needs at least one letter or digit (other characters are dropped), e.g. restart-web.',
           )
-        : nameAdjusted
+        : skillNamePublishWarning(form.name, t) !== undefined
           ? t(
-              '已自动改为发布要求的格式：小写字母、数字，单个连字符分隔。',
-              'Adjusted automatically to the publish format: lowercase letters and digits with single hyphens.',
+              `保存时将改为 ${finalName}（发布要求：小写字母、数字，单个连字符分隔）。`,
+              `Will be saved as ${finalName} (publishing requires lowercase letters and digits with single hyphens).`,
             )
-          : t(
-              '将成为 SKILL.md 的 name 与挂载目录名；只能用小写字母、数字和连字符，输入时会自动转换（例如 Restart Web → restart-web）。',
-              'Becomes the SKILL.md name and the mount directory; lowercase letters, digits and hyphens only — converted as you type (e.g. Restart Web → restart-web).',
-            );
+          : nameAdjusted
+            ? t(
+                '已自动改为发布要求的格式：小写字母、数字，单个连字符分隔。',
+                'Adjusted automatically to the publish format: lowercase letters and digits with single hyphens.',
+              )
+            : t(
+                '将成为 SKILL.md 的 name 与挂载目录名；只能用小写字母、数字和连字符，输入时会自动转换（例如 Restart Web → restart-web）。',
+                'Becomes the SKILL.md name and the mount directory; lowercase letters, digits and hyphens only — converted as you type (e.g. Restart Web → restart-web).',
+              );
   const selectedGateKinds = splitList(form.gateKinds);
   const selectedObjectTypes = splitList(form.objectTypes);
   const objectTypeRows =
@@ -259,18 +290,34 @@ export function SkillEditor({ http, copyOf, onProposed, onDone, onPublished }: S
       onSubmit={(event) => void handleSubmit(event)}
       data-testid="skill-editor"
     >
-      {copyOf ? (
+      {nextVersionOf ? (
+        <Notice testId="skill-new-version-notice">
+          {t(
+            <>
+              为 <strong>{nextVersionOf.name}</strong> 提议新版本（当前 v{nextVersionOf.version}
+              ，已预填它的内容）：仍是同一个 Skill，名称不变；发布后，挂载它的 Worker
+              用的就是新版本。发布前草稿只有你、工作区所有者和构建者可见。
+            </>,
+            <>
+              Proposing a new version of <strong>{nextVersionOf.name}</strong> (current v
+              {nextVersionOf.version}, its content pre-filled): the same Skill under the same name;
+              once published, Workers that mount it use the new version. Until then the draft is
+              visible only to you, the workspace owner and builders.
+            </>,
+          )}
+        </Notice>
+      ) : copyOf ? (
         <Notice tone="warn" testId="skill-copy-notice">
           {t(
             <>
               从 <strong>{copyOf.name}</strong> v{copyOf.version}{' '}
-              复制（已预填当前版本的正文）：提交会创建一个<strong>新的</strong> Skill（从 v1
-              开始），不是这个 Skill 的新版本。
+              复制（已预填当前版本的正文）：保存后是一个<strong>新的</strong> Skill（从 v1
+              开始），原来的 Skill 不变。
             </>,
             <>
               Copied from {copyOf.name} v{copyOf.version} (the current version’s body is
-              pre-filled): submitting creates a <strong>new</strong> Skill (starting at v1), not a
-              new version of this one.
+              pre-filled): saving creates a <strong>new</strong> Skill (starting at v1); the
+              original stays as it is.
             </>,
           )}
         </Notice>
@@ -298,9 +345,10 @@ export function SkillEditor({ http, copyOf, onProposed, onDone, onPublished }: S
           }
           onCompositionEnd={(event) => typeName(event.currentTarget.value, false)}
           onBlur={() => {
-            if (finalName !== form.name) update('name', finalName);
+            if (!nextVersionOf && finalName !== form.name) update('name', finalName);
           }}
           disabled={busy}
+          readOnly={nextVersionOf !== undefined}
           mono
           invalid={!!errors.name}
           placeholder="restart-web"
@@ -471,7 +519,7 @@ export function SkillEditor({ http, copyOf, onProposed, onDone, onPublished }: S
             required
             error={errors.markdown || null}
             hint={
-              copyOf && skillDetail.state.status === 'loading'
+              source && skillDetail.state.status === 'loading'
                 ? t('正在加载当前版本的正文…', 'Loading the current version’s body…')
                 : t(
                     '这段正文会替换 fields 生成的 frontmatter 以外的内容。',
@@ -485,7 +533,7 @@ export function SkillEditor({ http, copyOf, onProposed, onDone, onPublished }: S
               onChange={(event) => update('markdown', event.target.value)}
               rows={14}
               mono
-              disabled={busy || (copyOf !== undefined && skillDetail.state.status === 'loading')}
+              disabled={busy || (source !== undefined && skillDetail.state.status === 'loading')}
               invalid={!!errors.markdown}
               spellCheck={false}
               aria-describedby={describedBy('skill-markdown', true, !!errors.markdown)}
@@ -500,6 +548,18 @@ export function SkillEditor({ http, copyOf, onProposed, onDone, onPublished }: S
         <ErrorBanner
           error={error}
           title={t('无法创建草稿', 'Could not propose the draft')}
+          action={
+            nextVersionOf && onShowPendingDraft && describeError(error).code === 'draft_pending' ? (
+              <Button
+                variant="secondary"
+                size="s"
+                onClick={onShowPendingDraft}
+                data-testid="skill-show-pending-draft"
+              >
+                {t('查看那份草稿', 'Show that draft')}
+              </Button>
+            ) : undefined
+          }
           testId="skill-editor-error"
         />
       ) : null}

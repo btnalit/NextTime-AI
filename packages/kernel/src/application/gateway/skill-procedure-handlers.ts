@@ -39,12 +39,17 @@ import { draftViewerOf } from './draft-viewer.js';
  * `draftVisibleTo`): a caller's own drafts, or every draft for the owner and builders.
  */
 
+// S11 W1a E2-0 (legacy 48 ②): `skillId` proposes the next version of that family; without it, a
+// new family as before (application/worker/family-version.ts).
 const proposeSkillHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
-  const { skill: rawSkill } = params as { skill: unknown };
+  const { skill: rawSkill, skillId } = params as { skill: unknown; skillId?: string };
   const content = ProposeSkillContentSchema.parse(rawSkill);
   const principalId = ctx?.principalId ?? (await currentPrincipalId(client));
 
-  const record = await proposeSkill(client, workspaceId, principalId, content);
+  const record = await proposeSkill(client, workspaceId, principalId, {
+    ...content,
+    ...(skillId !== undefined ? { skillId } : {}),
+  });
   return {
     result: {
       id: record.id,
@@ -140,12 +145,19 @@ const getSkillHandler: CapabilityHandler = async (client, workspaceId, params, c
   };
 };
 
+// S11 W1a E2-0: `procedureId` proposes the next version of that family, as `skillId` above.
 const proposeProcedureHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
-  const { procedure: rawProcedure } = params as { procedure: unknown };
+  const { procedure: rawProcedure, procedureId } = params as {
+    procedure: unknown;
+    procedureId?: string;
+  };
   const content = ProposeProcedureContentSchema.parse(rawProcedure);
   const principalId = ctx?.principalId ?? (await currentPrincipalId(client));
 
-  const record = await proposeProcedure(client, workspaceId, principalId, content);
+  const record = await proposeProcedure(client, workspaceId, principalId, {
+    ...content,
+    ...(procedureId !== undefined ? { procedureId } : {}),
+  });
   return {
     result: {
       id: record.id,

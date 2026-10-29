@@ -11,12 +11,16 @@ import { ProcedureEditor } from './ProcedureEditor.js';
 export function ProcedureEditorHost({
   http,
   copyOf,
+  nextVersionOf,
+  onShowPendingDraft,
   onProposed,
   onDone,
   onPublished,
 }: {
   readonly http: CapabilityCaller;
   readonly copyOf?: ProcedureRow;
+  readonly nextVersionOf?: ProcedureRow;
+  readonly onShowPendingDraft?: () => void;
   readonly onProposed: () => void;
   readonly onDone: () => void;
   readonly onPublished?: () => void;
@@ -36,6 +40,8 @@ export function ProcedureEditorHost({
     <ProcedureEditor
       http={http}
       copyOf={copyOf}
+      nextVersionOf={nextVersionOf}
+      onShowPendingDraft={onShowPendingDraft}
       gatekeepers={gatekeepers.rows}
       workerDefinitions={
         definitions.state.status === 'ready' ? definitions.state.data.items : undefined

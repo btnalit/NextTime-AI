@@ -6,7 +6,7 @@ import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
-import { proposeSkill } from '../../application/worker/index.js';
+import { FamilyDraftPendingError, proposeSkill } from '../../application/worker/index.js';
 import { NotProposerError } from '../../governance/capability/index.js';
 import { ForbiddenError } from './authorize.js';
 import { dispatchCapability } from './dispatch.js';
@@ -265,6 +265,80 @@ describe.runIf(DATABASE_URL !== undefined)(
             skillId,
           }),
         ).toBeNull();
+      });
+    });
+
+    describe('the next version of a family (propose_skill{skillId} / propose_procedure{procedureId}, S11 W1a E2-0)', () => {
+      it('a builder proposes version 2 of a published Skill; while it is a draft another builder gets 409 draft_pending', async () => {
+        const skill = {
+          name: `family-skill-${randomUUID().slice(0, 8)}`,
+          description: 'A Skill that gets a second version.',
+          markdown: '# Steps\n\nVersion one.',
+        };
+        const v1 = await call<{ id: string; version: number }>(
+          builderId,
+          'builder',
+          'propose_skill',
+          {
+            skill,
+          },
+        );
+        await call(builderId, 'builder', 'publish_skill', { skillId: v1.id, version: 1 });
+
+        const v2 = await call<{ id: string; version: number; status: string }>(
+          builderId,
+          'builder',
+          'propose_skill',
+          { skill: { ...skill, markdown: '# Steps\n\nVersion two.' }, skillId: v1.id },
+        );
+        expect(v2).toMatchObject({ id: v1.id, version: 2, status: 'draft' });
+
+        const refusal = call(otherBuilderId, 'builder', 'propose_skill', {
+          skill,
+          skillId: v1.id,
+        });
+        await expect(refusal).rejects.toBeInstanceOf(FamilyDraftPendingError);
+        await expect(refusal).rejects.toMatchObject({
+          code: 'draft_pending',
+          familyId: v1.id,
+          draftVersion: 2,
+        });
+      });
+
+      it('a member’s Worker-proposed draft blocks a builder’s next version too — the builder sees that draft', async () => {
+        const skillId = await workerProposedSkillOfMember();
+        const detail = await call<{ name: string }>(builderId, 'builder', 'get_skill', { skillId });
+        await expect(
+          call(builderId, 'builder', 'propose_skill', {
+            skill: { name: detail.name, description: 'Next.', markdown: 'Next.' },
+            skillId,
+          }),
+        ).rejects.toMatchObject({ code: 'draft_pending', draftVersion: 1 });
+      });
+
+      it('a builder proposes version 2 of a published Procedure under procedureId', async () => {
+        const procedure = {
+          name: `family-procedure-${randomUUID().slice(0, 8)}`,
+          description: 'Approve, then verify.',
+          steps: [
+            { kind: 'approval', description: 'A human approves the change.' },
+            { kind: 'verify', description: 'Check the result.' },
+          ],
+        };
+        const v1 = await call<{ id: string }>(builderId, 'builder', 'propose_procedure', {
+          procedure,
+        });
+        await call(builderId, 'builder', 'publish_procedure', {
+          procedureId: v1.id,
+          version: 1,
+        });
+        const v2 = await call<{ id: string; version: number }>(
+          builderId,
+          'builder',
+          'propose_procedure',
+          { procedure, procedureId: v1.id },
+        );
+        expect(v2).toMatchObject({ id: v1.id, version: 2 });
       });
     });
 

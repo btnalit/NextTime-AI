@@ -132,9 +132,11 @@ import {
   DraftNotDiscardableError,
   EntryTemplateChangedError,
   EntryTemplateCurrentError,
+  FamilyDraftPendingError,
   ProcedureNotFoundError,
   ProcedureStepReferenceError,
   ProcedureTemplateError,
+  SkillFamilyNameChangedError,
   SkillNameConflictError,
   SkillNotFoundError,
   SkillValidationError,
@@ -512,6 +514,25 @@ export function mapCapabilityError(err: unknown): ErrorMapping {
   // published entry version is not the one the caller looked at. Nothing was proposed.
   if (err instanceof EntryTemplateCurrentError || err instanceof EntryTemplateChangedError) {
     return { status: 409, code: err.code, message: err.message };
+  }
+  // S11 W1a E2-0 (legacy 48 ②): `propose_skill{skillId}` / `propose_procedure{procedureId}` on a
+  // family whose latest version is still a draft, or a Skill version under another name. Nothing
+  // was proposed.
+  if (err instanceof FamilyDraftPendingError) {
+    return {
+      status: 409,
+      code: err.code,
+      message: err.message,
+      details: { familyId: err.familyId, draftVersion: err.draftVersion },
+    };
+  }
+  if (err instanceof SkillFamilyNameChangedError) {
+    return {
+      status: 409,
+      code: err.code,
+      message: err.message,
+      details: { skillName: err.skillName },
+    };
   }
   // S11 P1-D: a Skill name another Skill family has published — `publish_skill`,
   // `preview_pack_install`, `install_pack` (a Worker mounts Skills by name). Nothing was published.

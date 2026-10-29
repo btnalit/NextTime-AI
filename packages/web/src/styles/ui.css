@@ -594,6 +594,14 @@
   background: var(--surface-2);
 }
 
+/* A value the form shows but does not let you change (a Skill's name on its next version): still
+ * readable and focusable, unlike a disabled field. */
+.input[readonly] {
+  background: var(--surface-3);
+  border-style: dashed;
+  color: var(--text-2);
+}
+
 .textarea {
   resize: vertical;
   min-height: 72px;

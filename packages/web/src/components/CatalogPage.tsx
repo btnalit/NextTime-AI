@@ -1643,7 +1643,8 @@ function SkillDetailView({
   canDiscard,
   busy,
   credentialReview,
-  onEditAsDraft,
+  onEditAsNewVersion,
+  onSaveAsNew,
   onPublish,
   onDeprecate,
   onDiscard,
@@ -1658,7 +1659,10 @@ function SkillDetailView({
   readonly canDiscard: boolean;
   readonly busy: boolean;
   readonly credentialReview: PublishCredentialReview;
-  readonly onEditAsDraft: () => void;
+  /** 「编辑（新版本草稿）」: the next version of this Skill (published rows only). */
+  readonly onEditAsNewVersion: () => void;
+  /** 「另存为新的 Skill」: a copy proposed as a new Skill. */
+  readonly onSaveAsNew: () => void;
   readonly onPublish: () => Promise<void>;
   readonly onDeprecate: () => Promise<void>;
   readonly onDiscard: (reason: string | undefined) => Promise<void>;
@@ -1733,14 +1737,21 @@ function SkillDetailView({
         />
       ) : null}
       <div className="row-wrap">
-        {canPropose ? (
+        {/* S11 W1a E2-0: a published Skill's next version keeps its id and name; a draft is
+            published or discarded first (409 draft_pending), so only the copy is offered on one. */}
+        {canPropose && row.status === 'published' ? (
           <Button
             variant="ghost"
             size="s"
-            onClick={onEditAsDraft}
+            onClick={onEditAsNewVersion}
             data-testid="catalog-edit-as-draft"
           >
-            {t('编辑为新草稿', 'Edit as new draft')}
+            {t('编辑（新版本草稿）', 'Edit as new draft version')}
+          </Button>
+        ) : null}
+        {canPropose ? (
+          <Button variant="ghost" size="s" onClick={onSaveAsNew} data-testid="catalog-save-as-new">
+            {t('另存为新的 Skill', 'Save as a new Skill')}
           </Button>
         ) : null}
         {canPublish && row.status === 'draft' ? (
@@ -1814,6 +1825,14 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   function closeEditor(): void {
     setEditor(null);
     onSelectItem(null);
+  }
+
+  /** S11 W1a E2-0: a next version was refused because the family's latest version is still a
+   *  draft (409 draft_pending) — reload the list (that draft may be newer than it) and show the
+   *  family, whose row is now that draft. */
+  function showFamily(id: string): void {
+    selectRow(id);
+    refresh();
   }
 
   async function act(row: SkillRow, action: 'publish_skill' | 'deprecate_skill') {
@@ -1892,17 +1911,21 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   const editorPane = editor ? (
     <div className="stack">
       <h2 className="catalog-detail-title">
-        {editor.kind === 'copy'
-          ? t('编辑为新草稿', 'Edit as new draft')
-          : t('新建 Skill 草稿', 'New Skill draft')}
+        {editor.kind === 'version'
+          ? t('提议新版本', 'Propose a new version')
+          : editor.kind === 'copy'
+            ? t('另存为新的 Skill', 'Save as a new Skill')
+            : t('新建 Skill 草稿', 'New Skill draft')}
       </h2>
       <p className="text-3 text-small">
         {t('SKILL.md：frontmatter 字段 + Markdown 正文', 'frontmatter fields + Markdown body')}
       </p>
       <SkillEditor
-        key={editor.kind === 'copy' ? editor.row.id : 'new'}
+        key={editor.kind === 'new' ? 'new' : `${editor.kind}:${editor.row.id}`}
         http={http}
         copyOf={editor.kind === 'copy' ? editor.row : undefined}
+        nextVersionOf={editor.kind === 'version' ? editor.row : undefined}
+        onShowPendingDraft={editor.kind === 'version' ? () => showFamily(editor.row.id) : undefined}
         onProposed={() => void skills.reload()}
         onDone={() => {
           closeEditor();
@@ -2003,7 +2026,8 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       canDiscard={canDiscard && isOwnDraftOrUnknown(selected, principalId)}
       busy={busy === selected.id}
       credentialReview={credentialReview}
-      onEditAsDraft={() => openEditor({ kind: 'copy', row: selected })}
+      onEditAsNewVersion={() => openEditor({ kind: 'version', row: selected })}
+      onSaveAsNew={() => openEditor({ kind: 'copy', row: selected })}
       onPublish={() => act(selected, 'publish_skill')}
       onDeprecate={() => act(selected, 'deprecate_skill')}
       onDiscard={(reason) => discardSkillDraft(selected, reason)}
@@ -2050,7 +2074,8 @@ function ProcedureDetailView({
   busy,
   credentialReview,
   publishProblems,
-  onEditAsDraft,
+  onEditAsNewVersion,
+  onSaveAsNew,
   onPublish,
   onDeprecate,
   onDiscard,
@@ -2068,7 +2093,10 @@ function ProcedureDetailView({
   /** Why the kernel refused the last publish of this version, as a template (UX acceptance of
    *  #722), or `null`. */
   readonly publishProblems: readonly string[] | null;
-  readonly onEditAsDraft: () => void;
+  /** 「编辑（新版本草稿）」: the next version of this Procedure (published rows only). */
+  readonly onEditAsNewVersion: () => void;
+  /** 「另存为新的流程」: a copy proposed as a new Procedure. */
+  readonly onSaveAsNew: () => void;
   readonly onPublish: () => Promise<void>;
   readonly onDeprecate: () => Promise<void>;
   readonly onDiscard: (reason: string | undefined) => Promise<void>;
@@ -2118,14 +2146,20 @@ function ProcedureDetailView({
         <PublishTemplateProblems problems={publishProblems} />
       ) : null}
       <div className="row-wrap">
-        {canPropose ? (
+        {/* S11 W1a E2-0: as the Skill detail's — same id, next version; a draft only copies. */}
+        {canPropose && row.status === 'published' ? (
           <Button
             variant="ghost"
             size="s"
-            onClick={onEditAsDraft}
+            onClick={onEditAsNewVersion}
             data-testid="catalog-edit-as-draft"
           >
-            {t('编辑为新草稿', 'Edit as new draft')}
+            {t('编辑（新版本草稿）', 'Edit as new draft version')}
+          </Button>
+        ) : null}
+        {canPropose ? (
+          <Button variant="ghost" size="s" onClick={onSaveAsNew} data-testid="catalog-save-as-new">
+            {t('另存为新的流程', 'Save as a new Procedure')}
           </Button>
         ) : null}
         {canPublish && row.status === 'draft' ? (
@@ -2204,6 +2238,14 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   function closeEditor(): void {
     setEditor(null);
     onSelectItem(null);
+  }
+
+  /** S11 W1a E2-0: a next version was refused because the family's latest version is still a
+   *  draft (409 draft_pending) — reload the list (that draft may be newer than it) and show the
+   *  family, whose row is now that draft. */
+  function showFamily(id: string): void {
+    selectRow(id);
+    refresh();
   }
 
   async function act(row: ProcedureRow, action: 'publish_procedure' | 'deprecate_procedure') {
@@ -2289,17 +2331,21 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   const editorPane = editor ? (
     <div className="stack">
       <h2 className="catalog-detail-title">
-        {editor.kind === 'copy'
-          ? t('编辑为新草稿', 'Edit as new draft')
-          : t('新建流程草稿', 'New Procedure draft')}
+        {editor.kind === 'version'
+          ? t('提议新版本', 'Propose a new version')
+          : editor.kind === 'copy'
+            ? t('另存为新的流程', 'Save as a new Procedure')
+            : t('新建流程草稿', 'New Procedure draft')}
       </h2>
       <p className="text-3 text-small">
         {t('名称、描述与有序步骤', 'name, description and ordered steps')}
       </p>
       <ProcedureEditorHost
-        key={editor.kind === 'copy' ? editor.row.id : 'new'}
+        key={editor.kind === 'new' ? 'new' : `${editor.kind}:${editor.row.id}`}
         http={http}
         copyOf={editor.kind === 'copy' ? editor.row : undefined}
+        nextVersionOf={editor.kind === 'version' ? editor.row : undefined}
+        onShowPendingDraft={editor.kind === 'version' ? () => showFamily(editor.row.id) : undefined}
         onProposed={() => void procedures.reload()}
         onDone={() => {
           closeEditor();
@@ -2408,7 +2454,8 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
       busy={busy === selected.id}
       credentialReview={credentialReview}
       publishProblems={publishProblems}
-      onEditAsDraft={() => openEditor({ kind: 'copy', row: selected })}
+      onEditAsNewVersion={() => openEditor({ kind: 'version', row: selected })}
+      onSaveAsNew={() => openEditor({ kind: 'copy', row: selected })}
       onPublish={() => act(selected, 'publish_procedure')}
       onDeprecate={() => act(selected, 'deprecate_procedure')}
       onDiscard={(reason) => discardProcedureDraft(selected, reason)}

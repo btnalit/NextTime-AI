@@ -32485,6 +32485,10 @@
         "procedure": {
           "additionalProperties": {},
           "type": "object"
+        },
+        "procedureId": {
+          "minLength": 1,
+          "type": "string"
         }
       },
       "required": [
@@ -32538,6 +32542,10 @@
         "skill": {
           "additionalProperties": {},
           "type": "object"
+        },
+        "skillId": {
+          "minLength": 1,
+          "type": "string"
         }
       },
       "required": [

@@ -57,7 +57,9 @@ import {
 import { PackNotFoundError } from '../../application/packs/index.js';
 import { TaskRuntimeNotConfiguredError } from '../../application/task/index.js';
 import {
+  FamilyDraftPendingError,
   ProcedureStepReferenceError,
+  SkillFamilyNameChangedError,
   SkillNameConflictError,
   SkillValidationError,
   WorkerDefinitionNotFoundError,
@@ -658,6 +660,28 @@ describe('mapCapabilityError — application/chat domain errors (unit)', () => {
     expect(mapped).toMatchObject({
       status: 409,
       code: 'skill_name_conflict',
+      details: { skillName: 'fix-it' },
+    });
+  });
+
+  it('FamilyDraftPendingError (propose_skill{skillId} / propose_procedure{procedureId}, S11 W1a E2-0) → 409 draft_pending with the family and the draft version', () => {
+    for (const kind of ['skill', 'procedure'] as const) {
+      const mapped = mapCapabilityError(new FamilyDraftPendingError(kind, 'family-1', 3));
+      expect(mapped).toMatchObject({
+        status: 409,
+        code: 'draft_pending',
+        details: { familyId: 'family-1', draftVersion: 3 },
+      });
+    }
+  });
+
+  it('SkillFamilyNameChangedError (propose_skill{skillId}, S11 W1a E2-0) → 409 skill_name_changed with the family name', () => {
+    const mapped = mapCapabilityError(
+      new SkillFamilyNameChangedError('skill-1', 'fix-it', 'fix-it-better'),
+    );
+    expect(mapped).toMatchObject({
+      status: 409,
+      code: 'skill_name_changed',
       details: { skillName: 'fix-it' },
     });
   });
