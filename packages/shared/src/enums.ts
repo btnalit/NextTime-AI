@@ -266,6 +266,55 @@ export type TaskFailureReason = (typeof TASK_FAILURE_REASON_VALUES)[number];
 export const TaskFailureReasonSchema = asEnum(TASK_FAILURE_REASON_VALUES);
 
 /**
+ * S11 W1a E2 (S10 §5.4 "确定性失败分组"; victor 2026-10-23): the kind of failure a failed Task's
+ * reason names, for a Skill's failure grouping (`get_skill_stats`). Closed: the free-text
+ * `tasks.failure_reason` column never reaches a statistic — `taskFailureCategory` (`skill-stats.ts`)
+ * maps every {@link TASK_FAILURE_REASON_VALUES} value, and anything else (a value an earlier release
+ * wrote, or none) to `other`.
+ *   - `no_result`: the run ended without handing back a result (`no_result`);
+ *   - `worker_error`: the run failed, and its retry was used up or could not start
+ *     (`worker_failed`);
+ *   - `limit_reached`: the run outlived its duration limit or ran out of token budget (`timeout`,
+ *     `budget_exhausted`);
+ *   - `platform`: the run never started, was lost, or the runtime ended it (`spawn_failed`,
+ *     `spawn_lost`, `run_lost`, `terminated`) — the platform's side, not what the Worker did;
+ *   - `other`.
+ */
+export const TASK_FAILURE_CATEGORY_VALUES = [
+  'no_result',
+  'worker_error',
+  'limit_reached',
+  'platform',
+  'other',
+] as const;
+export type TaskFailureCategory = (typeof TASK_FAILURE_CATEGORY_VALUES)[number];
+export const TaskFailureCategorySchema = asEnum(TASK_FAILURE_CATEGORY_VALUES);
+
+/**
+ * S11 W1a E2 (same grouping): what refused a failed Task's work — one per Task:
+ *   - `output_rejected`: its result did not meet its goal step's output contract
+ *     (`tasks.rejected_output`, S11 GO5d-1);
+ *   - `rejected`: a person rejected one of its ActionRequests;
+ *   - `expired`: one of its ActionRequests waited for a decision until it expired;
+ *   - `denied`: policy denied one of its ActionRequests;
+ *   - `refused`: the platform or the gate refused one before it ran (`failure_kind = refused`);
+ *   - `none`: nothing refused it.
+ * When more than one applies, the output contract's refusal wins (it ends the Task's run), then the
+ * most recently requested refused ActionRequest. Refusals that leave no row (an observation of an
+ * excluded gate, `excluded_by_policy`) are not seen here.
+ */
+export const TASK_REFUSAL_VALUES = [
+  'output_rejected',
+  'rejected',
+  'expired',
+  'denied',
+  'refused',
+  'none',
+] as const;
+export type TaskRefusal = (typeof TASK_REFUSAL_VALUES)[number];
+export const TaskRefusalSchema = asEnum(TASK_REFUSAL_VALUES);
+
+/**
  * Why a member-management capability refused a well-formed request (`PrincipalOperationRefusedError`,
  * sent as 409 `conflict` with `details.reason`): `last_owner` (it would leave the workspace with no
  * active human owner), `self_disable` (disabling yourself), `platform_managed` (an agent or a

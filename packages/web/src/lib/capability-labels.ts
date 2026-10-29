@@ -431,6 +431,12 @@ export const ACTION_COPY: Readonly<Record<string, ActionCopy>> = {
     zhHint: '读取一个 Skill 最新版本的完整正文。',
     enHint: "Reads a skill's latest version in full.",
   },
+  get_skill_stats: {
+    zh: 'Skill 使用情况',
+    en: 'Skill usage',
+    zhHint: '统计一个 Skill 各版本的运行次数、Task 结果、达成率和失败分组。',
+    enHint: "Counts a skill's runs, Task results, attainment and failure groups per version.",
+  },
   list_procedures: {
     zh: '查看流程列表',
     en: 'List procedures',

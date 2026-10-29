@@ -20,6 +20,7 @@ import {
 import { countSuspectedSecrets, credentialReviewAudit } from '../../governance/redaction/index.js';
 import { currentPrincipalId } from '../chat/index.js';
 import { procedureTemplateProblems } from '../goal/index.js';
+import { readSkillStats } from '../task/index.js';
 import { type CapabilityHandler, publishActorOf } from './capability-handler.js';
 import { draftViewerOf } from './draft-viewer.js';
 
@@ -37,6 +38,9 @@ import { draftViewerOf } from './draft-viewer.js';
  * cannot express a nested Zod object per capability without duplicating `@nexttime/shared`'s own
  * content schemas into the registry file) — these handlers are where that opaque payload is
  * actually parsed against `ProposeSkillContentSchema`/`ProposeProcedureContentSchema`.
+ *
+ * `get_skill_stats` (S11 W1a E2-1) counts a family's use and outcomes; its builder floor sees every
+ * draft already, so it does not narrow.
  *
  * The three reads (`list_skills` / `get_skill` / `list_procedures`) narrow drafts for one
  * `DraftViewer` (`draftViewerOf`, draft-viewer.ts; the rule is application/worker/draft-visibility.ts's
@@ -175,6 +179,15 @@ const getSkillHandler: CapabilityHandler = async (client, workspaceId, params, c
   };
 };
 
+// S11 W1a E2-1: a Skill family's statistics, counted when read (application/task/skill-stats.ts).
+// No draft narrowing: the capability's builder floor already sees every draft (D-26), and a
+// draft-only family has no runs to count.
+const getSkillStatsHandler: CapabilityHandler = async (client, workspaceId, params) => {
+  const { skillId } = params as { skillId: string };
+  const stats = await readSkillStats(client, workspaceId, skillId);
+  return { result: stats, resourceType: 'skill', resourceId: skillId };
+};
+
 // S11 W1a E2-0: `procedureId` proposes the next version of that family, as `skillId` above.
 const proposeProcedureHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
   const { procedure: rawProcedure, procedureId } = params as {
@@ -289,6 +302,7 @@ export {
   deprecateSkillHandler,
   listSkillsHandler,
   getSkillHandler,
+  getSkillStatsHandler,
   proposeProcedureHandler,
   publishProcedureHandler,
   deprecateProcedureHandler,

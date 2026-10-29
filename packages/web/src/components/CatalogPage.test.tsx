@@ -3779,3 +3779,85 @@ describe('CatalogPage — reject a pending draft (E2-0b)', () => {
     expect(screen.queryByTestId('skill-reject-confirm-sk-1-trigger')).toBeNull();
   });
 });
+
+describe('CatalogPage — Skill usage (S11 W1a E2-1)', () => {
+  function workspaceAs(role: string) {
+    return {
+      id: 'ws-1',
+      name: 'Acme',
+      createdAt: '2026-01-01T00:00:00Z',
+      principalCount: 1,
+      gatekeeperCount: 0,
+      caller: { id: 'p-me', role, displayName: 'Me', kind: 'human' },
+    };
+  }
+
+  function catalog(role: string) {
+    return scriptedHttp({
+      get_workspace: () => workspaceAs(role),
+      list_skills: () => ({
+        items: [
+          { id: 'sk-1', version: 1, status: 'published', name: 'restart-web', description: 'd' },
+        ],
+      }),
+      get_skill: () => ({
+        id: 'sk-1',
+        version: 1,
+        status: 'published',
+        name: 'restart-web',
+        description: 'd',
+        markdown: '# body',
+      }),
+      get_skill_stats: () => ({
+        skillId: 'sk-1',
+        name: 'restart-web',
+        reviewStreak: 3,
+        versions: [
+          {
+            version: 1,
+            status: 'published',
+            usage: {
+              runs: 4,
+              tasks: { completed: 3, failed: 1, cancelled: 0, inProgress: 0 },
+              lastUsedAt: new Date().toISOString(),
+            },
+            outcomes: {
+              primary: { achieved: 2, notAchieved: 1, total: 3, attainment: 2 / 3 },
+              proxy: { achieved: 0, notAchieved: 0, total: 0, attainment: null },
+              byBasis: [
+                { basis: 'verified_by_check', achieved: 0, notAchieved: 0 },
+                { basis: 'requester', achieved: 2, notAchieved: 1 },
+                { basis: 'reviewer_assessed', achieved: 0, notAchieved: 0 },
+                { basis: 'agent_reported', achieved: 0, notAchieved: 0 },
+              ],
+            },
+            reviewSuggested: false,
+            segments: [],
+          },
+        ],
+        failureGroups: [],
+      }),
+    });
+  }
+
+  it('a builder sees the family’s usage on the Skill’s detail', async () => {
+    const http = catalog('builder');
+    renderPage(http, 'skills');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    const usage = await within(detail).findByTestId('skill-usage-version-1');
+    expect(usage.textContent).toContain('完成 3 · 失败 1');
+    expect(within(usage).getByTestId('skill-usage-attainment').textContent).toBe('67%（2 / 3）');
+    expect(http.calls.find((call) => call.name === 'get_skill_stats')?.params).toEqual({
+      skillId: 'sk-1',
+    });
+  });
+
+  it('a member’s Skill detail has no usage and asks for none', async () => {
+    const http = catalog('member');
+    renderPage(http, 'skills');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    await within(detail).findByTestId('skill-detail-body');
+    expect(within(detail).queryByTestId('skill-usage')).toBeNull();
+    expect(http.calls.some((call) => call.name === 'get_skill_stats')).toBe(false);
+  });
+});
