@@ -56,6 +56,65 @@ test.describe('catalog editors', () => {
     await expect(skillsField.getByRole('checkbox', { name })).toBeChecked();
   });
 
+  // UX acceptance of #764 (P2-1, P3-1): a published Skill's next version waits as a draft beside
+  // the version in use. The list names both; the draft's detail opens the one in use, read-only.
+  test('skills: a next-version draft names the version in use, which opens read-only', async ({
+    page,
+  }) => {
+    await login(page, API_KEY as string);
+    const name = `e2e-skill-next-${Date.now()}`;
+
+    await page.goto('/#/govern/catalog/skills');
+    await page.getByTestId('skills-new-draft').click();
+    const drawer = page.getByTestId('skill-editor-drawer');
+    await expect(drawer).toBeVisible({ timeout: 15_000 });
+    await drawer.locator('#skill-name').fill(name);
+    await drawer.locator('#skill-description').fill('Created by catalog.spec.ts');
+    await drawer.locator('#skill-markdown').fill('# Steps\n\n1. Nothing to do.');
+    await drawer.getByTestId('skill-submit').click();
+    await expect(drawer.getByTestId('draft-proposed')).toBeVisible({ timeout: 15_000 });
+    await drawer.getByTestId('draft-publish').click();
+    await expect(drawer.getByTestId('draft-publish')).toBeHidden({ timeout: 15_000 });
+    await drawer.getByTestId('draft-done').click();
+
+    const row = page.getByTestId('catalog-row').filter({ hasText: name });
+    await expect(row.locator('[data-status="published"]')).toBeVisible({ timeout: 15_000 });
+    await row.click();
+    const detail = page.getByTestId('skill-detail');
+    await detail.getByTestId('catalog-edit-as-draft').click();
+    const next = page.getByTestId('skill-editor-drawer');
+    const body = next.locator('#skill-markdown');
+    await expect(body).toHaveValue('# Steps\n\n1. Nothing to do.', { timeout: 15_000 });
+    await body.fill('# Steps\n\n1. Nothing to do.\n2. Still nothing.');
+    await next.getByTestId('skill-submit').click();
+    await expect(next.getByTestId('draft-proposed')).toBeVisible({ timeout: 15_000 });
+    await next.getByTestId('draft-done').click();
+
+    await expect(row.getByTestId('catalog-row-in-use')).toHaveText(
+      'v1 已发布（在用）· v2 草稿待发布',
+      { timeout: 15_000 },
+    );
+    await row.click();
+    await expect(detail.getByTestId('skill-detail-in-use-note')).toContainText(
+      '已发布的 v1 仍在用',
+    );
+    await expect(detail.getByTestId('skill-detail-body')).toContainText('Still nothing');
+
+    await detail.getByTestId('skill-detail-open-in-use').click();
+    await expect(detail.getByTestId('skill-detail-pending-draft-note')).toContainText(
+      '这是在用的 v1（只读）',
+    );
+    await expect(detail.locator('.catalog-detail-title')).toBeFocused();
+    await expect(detail.getByTestId('skill-detail-body')).toContainText('Nothing to do');
+    await expect(detail.getByTestId('skill-detail-body')).not.toContainText('Still nothing');
+    await expect(detail.getByRole('button', { name: '发布', exact: true })).toHaveCount(0);
+    await expect(detail.getByTestId('catalog-edit-as-draft')).toHaveCount(0);
+
+    await detail.getByTestId('skill-detail-open-draft').click();
+    await expect(detail.getByTestId('skill-detail-in-use-note')).toBeVisible();
+    await expect(detail.getByRole('button', { name: '发布', exact: true })).toBeVisible();
+  });
+
   test('procedures / workers: the editors open with their form and JSON views', async ({
     page,
   }) => {

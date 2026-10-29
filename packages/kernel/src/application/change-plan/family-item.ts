@@ -6,6 +6,7 @@ import { getGatekeeper } from '../../governance/gatekeepers/index.js';
 import {
   type SkillRow,
   type WorkerDefinitionRow,
+  assertNoPendingSkillDraft,
   assertSkillNameAvailable,
   deprecatePublishedSkillVersion,
   deprecatePublishedWorkerDefinitionVersion,
@@ -274,7 +275,9 @@ function validatedWorkerDefinitionName(intent: WorkerDefinitionVersionIntent): s
 
 /** The item's dry run: validates the content, reads the family's head, classifies the change, and
  *  — for a Skill — checks no other family has its name published (`SkillNameConflictError` here,
- *  at review, rather than only at apply). Writes nothing. */
+ *  at review, rather than only at apply) and that nobody's draft of the family's next version is
+ *  pending (`FamilyDraftPendingError`, S11 W1a E2-0: publishing takes the latest version, so the
+ *  install would leave that draft unpublishable). Writes nothing. */
 export async function planFamilyItem(
   client: PoolClient,
   workspaceId: string,
@@ -302,6 +305,7 @@ export async function planFamilyItem(
   if (intent.kind === 'skill_version') {
     const skill = validatedSkillContent(intent);
     if (!unchanged) {
+      await assertNoPendingSkillDraft(client, workspaceId, familyId);
       await assertSkillNameAvailable(
         client,
         workspaceId,
@@ -357,8 +361,10 @@ export async function applyFamilyItem(
   let version: number;
   if (planned.kind === 'skill_version') {
     const { skillId } = planned.target;
+    // The pack derives the family id, so its first install starts the family under that id.
     const draft = await proposeSkill(client, workspaceId, appliedBy, {
       skillId,
+      onMissingFamily: 'start',
       name: planned.content.name,
       description: planned.content.description,
       markdown: planned.content.markdown,

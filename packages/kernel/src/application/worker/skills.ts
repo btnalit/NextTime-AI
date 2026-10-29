@@ -12,6 +12,7 @@ import { stringify as stringifyYaml } from 'yaml';
 import {
   type PublishActor,
   assertPublishAuthority,
+  assertReviewedDraft,
   assertReviewedVersion,
 } from '../../governance/capability/index.js';
 import { assertDraftCredentialsReviewed } from '../../governance/redaction/index.js';
@@ -19,6 +20,7 @@ import { endActivity, startActivity } from '../../substrate/epistemic/index.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
 import { projectSkillObject } from '../../substrate/ontology/index.js';
 import { type DraftViewer, draftVisibilityBinds, draftVisibleTo } from './draft-visibility.js';
+import { assertNoPendingDraft, familyVersionDigest, readFamilyHead } from './family-version.js';
 import { assertFamilyPublishAuthority } from './publish-family.js';
 import { lockWorkerRegistry } from './registry-lock.js';
 
@@ -100,6 +102,25 @@ function mapRow(row: SkillDbRow): SkillRow {
   };
 }
 
+/** Review #493 on #764 (F1): the digest a reviewer hands back to `publish_skill`
+ *  (`familyVersionDigest`) — everything the version says, and who proposed it. */
+export function skillDraftDigest(
+  row: Pick<
+    SkillRow,
+    'id' | 'version' | 'name' | 'description' | 'markdown' | 'applicable' | 'proposedBy'
+  >,
+): string {
+  return familyVersionDigest('skill', {
+    id: row.id,
+    version: row.version,
+    name: row.name,
+    description: row.description,
+    markdown: row.markdown,
+    applicable: row.applicable,
+    proposedBy: row.proposedBy,
+  });
+}
+
 const SELECT_COLUMNS = `workspace_id, id, version, status, name, description, markdown, applicable,
   proposed_by, published_by, created_at, published_at`;
 
@@ -144,6 +165,30 @@ export class SkillNameConflictError extends Error {
     this.name = 'SkillNameConflictError';
     this.skillName = skillName;
     this.ownerSkillId = ownerSkillId;
+  }
+}
+
+/**
+ * S11 W1a E2-0: a new version of a Skill keeps the family's name. A Worker mounts Skills by id or by
+ * name (`resolvePublishedSkills`, newest published version per family among the rows that match),
+ * and publishing a version does not deprecate the one before it — so a renamed version would leave
+ * every Worker that names the Skill on the old version. A different name is a different Skill:
+ * propose it without `skillId`. Mapped to 409 `skill_name_changed`; nothing was proposed.
+ */
+export class SkillFamilyNameChangedError extends Error {
+  readonly code = 'skill_name_changed' as const;
+  readonly skillId: string;
+  /** The name the family's latest version carries. */
+  readonly skillName: string;
+  readonly proposedName: string;
+  constructor(skillId: string, skillName: string, proposedName: string) {
+    super(
+      `Skill ${skillId} is named "${skillName}"; a new version keeps its name (a Worker mounts Skills by name, and the earlier version stays published), so "${proposedName}" would be a different Skill — propose it as a new Skill instead. Nothing was proposed`,
+    );
+    this.name = 'SkillFamilyNameChangedError';
+    this.skillId = skillId;
+    this.skillName = skillName;
+    this.proposedName = proposedName;
   }
 }
 
@@ -201,30 +246,57 @@ export function validateSkillContent(skill: {
 // -------------------------------------------------------------------------------------------
 
 export interface ProposeSkillInput {
-  /** Omit to start a new Skill family (a fresh `id`, version 1); given, proposes the next version
-   *  under that existing `id` — mirrors `definitions.ts`'s `ProposeWorkerDefinitionInput`. No
-   *  currently-registered capability passes this (`propose_skill`'s own `paramsSchema` has no id
-   *  field, packages/shared/src/capabilities.ts) — kept for the same reason `definitions.ts` keeps
-   *  it: the relational shape (a versioned family) already supports it, and a future capability
-   *  extending `propose_skill` should not need a schema migration to use it. */
+  /** Omit to start a new Skill family (a fresh `id`, version 1); given (`propose_skill{skillId}`,
+   *  S11 W1a E2-0), proposes the next version of that existing family — under the rules of
+   *  `family-version.ts`, and keeping the family's name ({@link SkillFamilyNameChangedError}). */
   readonly skillId?: string;
+  /** With `skillId` naming an id that has no version yet: `'not_found'` (the default — a person's
+   *  `propose_skill{skillId}` never starts a family under an id of their choosing), or `'start'`:
+   *  version 1 under that id. Only a pack's install passes `'start'`
+   *  (`application/change-plan/family-item.ts` — the pack derives the family id from its own name
+   *  and the Skill's); the capability handler builds its input without it. */
+  readonly onMissingFamily?: 'not_found' | 'start';
   readonly name: string;
   readonly description: string;
   readonly markdown: string;
   readonly applicable?: SkillApplicable;
 }
 
+/** The version a proposal gets: 1 for a new family; for an existing one, the next after its latest,
+ *  which must exist (unless `onMissingFamily: 'start'`), not be a draft (`family-version.ts`) and
+ *  carry the same name. Under `lockWorkerRegistry`, so two proposals to one family cannot both read
+ *  the same latest. */
 async function nextVersion(
   client: PoolClient,
   workspaceId: string,
-  skillId: string | undefined,
+  input: ProposeSkillInput,
 ): Promise<number> {
+  const { skillId } = input;
   if (!skillId) return 1;
-  const result = await client.query<{ max: number | null }>(
-    'select max(version) as max from skills where workspace_id = $1 and id = $2',
-    [workspaceId, skillId],
-  );
-  return (result.rows[0]?.max ?? 0) + 1;
+  await lockWorkerRegistry(client, workspaceId);
+  const head = await readFamilyHead(client, 'skills', workspaceId, skillId);
+  if (!head) {
+    if (input.onMissingFamily === 'start') return 1;
+    throw new SkillNotFoundError(workspaceId, skillId);
+  }
+  assertNoPendingDraft('skill', skillId, head);
+  if (head.name !== input.name)
+    throw new SkillFamilyNameChangedError(skillId, head.name, input.name);
+  return head.version + 1;
+}
+
+/** Refuses (`FamilyDraftPendingError`) while the Skill family's latest version is a draft — what
+ *  proposing its next version requires, checked ahead of time: a pack's install review
+ *  (`application/change-plan/family-item.ts`'s `planFamilyItem`) says so before anyone confirms,
+ *  rather than the install failing at apply. The caller holds `lockWorkerRegistry`. A family with
+ *  no version passes. */
+export async function assertNoPendingSkillDraft(
+  client: PoolClient,
+  workspaceId: string,
+  skillId: string,
+): Promise<void> {
+  const head = await readFamilyHead(client, 'skills', workspaceId, skillId);
+  if (head) assertNoPendingDraft('skill', skillId, head);
 }
 
 /** Creates a new `draft` Skill version, owned by `proposerPrincipalId` (I16: ownership is the
@@ -235,7 +307,7 @@ export async function proposeSkill(
   proposerPrincipalId: string,
   input: ProposeSkillInput,
 ): Promise<SkillRow> {
-  const version = await nextVersion(client, workspaceId, input.skillId);
+  const version = await nextVersion(client, workspaceId, input);
   const result = await client.query<SkillDbRow>(
     `insert into skills
        (workspace_id, id, version, status, name, description, markdown, applicable, proposed_by)
@@ -337,6 +409,14 @@ export async function publishSkill(
   requireSkillAuthority('publish_skill', actor, row);
   // Legacy 300: publish what the person reviewed — a newer version under this id since refuses.
   assertReviewedVersion('publish_skill', `Skill ${row.id}`, actor?.reviewedVersion, row.version);
+  // Review #493 on #764 (F1): and the content of that version — a discarded draft's version is
+  // taken again by the next proposal.
+  assertReviewedDraft(
+    'publish_skill',
+    `Skill ${row.id}@${row.version}`,
+    actor?.reviewedDraftDigest,
+    skillDraftDigest(row),
+  );
   transition(PUBLISHABLE_TRANSITIONS, row.status, 'publish');
   await assertFamilyPublishAuthority(client, workspaceId, {
     table: 'skills',
@@ -655,28 +735,51 @@ export async function listSkills(
  *  body included — same read predicate as `listSkills` (published, or a draft `viewer` may see:
  *  their own, or any for the owner and builders — `draftVisibleTo`); `null` for an unknown id or
  *  a draft the viewer may not see (never distinguished — same "not found" convention
- *  `listSkills`'s own doc comment already established for this predicate). */
+ *  `listSkills`'s own doc comment already established for this predicate). `version` (UX
+ *  acceptance of #764, P2-1) reads that version instead — the published one a draft row's
+ *  `inUse` names — under the same predicate. */
 export async function getSkill(
   client: PoolClient,
   workspaceId: string,
   viewer: DraftViewer,
   skillId: string,
+  version?: number,
 ): Promise<SkillRow | null> {
   const visibility = draftVisibilityBinds(viewer);
   const result = await client.query<SkillDbRow>(
     `select ${SELECT_COLUMNS} from skills
      where workspace_id = $1
        and id = $2
+       and ($5::int is null or version = $5)
        and (
          status = 'published'
          or (status = 'draft' and ($4::boolean or proposed_by = $3))
        )
      order by version desc
      limit 1`,
-    [workspaceId, skillId, visibility.principalId, visibility.seesEveryDraft],
+    [workspaceId, skillId, visibility.principalId, visibility.seesEveryDraft, version ?? null],
   );
   const row = result.rows[0];
   return row ? mapRow(row) : null;
+}
+
+/** UX acceptance of #764 (P2-1): each of `skillIds`' latest published version — what Workers mount
+ *  (`resolvePublishedSkills`) — keyed by id; an id with none is absent. `list_skills` attaches it to
+ *  a draft row as `inUse`, so a family with a pending draft still shows the version in use.
+ *  Published rows are every reader's, so no draft predicate applies. */
+export async function latestPublishedSkills(
+  client: PoolClient,
+  workspaceId: string,
+  skillIds: readonly string[],
+): Promise<ReadonlyMap<string, SkillRow>> {
+  if (skillIds.length === 0) return new Map();
+  const result = await client.query<SkillDbRow>(
+    `select distinct on (id) ${SELECT_COLUMNS} from skills
+     where workspace_id = $1 and id = any($2::uuid[]) and status = 'published'
+     order by id, version desc`,
+    [workspaceId, skillIds],
+  );
+  return new Map(result.rows.map((row) => [row.id, mapRow(row)]));
 }
 
 /** Every currently-published Skill's own `id` (workspace-wide, no draft mixing — unlike

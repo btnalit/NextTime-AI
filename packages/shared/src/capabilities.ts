@@ -1330,9 +1330,16 @@ const metaCapabilities = [
     mode: 'propose',
     channel: 'handle',
     minRole: 'builder',
-    paramsSchema: z.object({ skill: jsonRecord }).strict(),
+    // S11 W1a E2-0 (legacy 48 ②, S10 decision 10): `skillId` makes the draft the next version of
+    // that Skill family; omitted, a new family as before (application/worker/family-version.ts).
+    paramsSchema: z.object({ skill: jsonRecord, skillId: id.optional() }).strict(),
     resultSchema: wire.SkillProposeResultWireSchema,
-    description: 'Propose a private draft Skill, typically at the end of a successful WorkerRun.',
+    description:
+      'Propose a private draft Skill, typically at the end of a successful WorkerRun. skillId ' +
+      'makes it the next version of that Skill (omitted: a new Skill); the new version keeps the ' +
+      'Skill’s name (409 skill_name_changed — a different name is a new Skill), and is refused ' +
+      'while the Skill’s latest version is still a draft (409 draft_pending: publish or discard ' +
+      'that draft first). An unknown skillId is not found.',
   },
   {
     name: 'propose_procedure',
@@ -1340,7 +1347,9 @@ const metaCapabilities = [
     mode: 'propose',
     channel: 'handle',
     minRole: 'builder',
-    paramsSchema: z.object({ procedure: jsonRecord }).strict(),
+    // S11 W1a E2-0: `procedureId` makes the draft the next version of that family, as
+    // propose_skill's `skillId`.
+    paramsSchema: z.object({ procedure: jsonRecord, procedureId: id.optional() }).strict(),
     resultSchema: wire.ProcedureProposeResultWireSchema,
     description:
       'Propose a private draft Procedure distilled from a successful Task: procedure is {name, ' +
@@ -1350,7 +1359,10 @@ const metaCapabilities = [
       'outputSchema, maxAttempts, and bindings — from an earlier step it depends on, or from ' +
       '$params, the parameters the goal is proposed with), a verify step a check (an acceptance ' +
       'check the platform makes), and parameters is the schema of those parameters — the same ' +
-      'bounded JSON Schema subset as an outputSchema.',
+      'bounded JSON Schema subset as an outputSchema. procedureId makes it the next version of ' +
+      'that Procedure (omitted: a new Procedure); refused while the Procedure’s latest version ' +
+      'is still a draft (409 draft_pending: publish or discard that draft first). An unknown ' +
+      'procedureId is not found.',
   },
   {
     // D-24 — see publish_operation. The owner and builders see every draft (D-26 rule,
@@ -1364,18 +1376,21 @@ const metaCapabilities = [
     minRole: 'builder',
     // Legacy 300: `version` is the version the caller reviewed (`SkillSummaryWire.version`, or the
     // propose result's). The kernel publishes the family's latest version, and refuses 409
-    // `version_changed` when that is another one — nothing is written. A version row is immutable
-    // (only its `status` changes), so the version alone binds the content reviewed.
+    // `version_changed` when that is another one — nothing is written. Review #493 on #764 (F1):
+    // a discarded draft is deleted and its version taken again by the next proposal, so the
+    // version alone does not bind the content reviewed — `draftDigest` (`SkillSummaryWire.
+    // draftDigest`, or the propose result's) does, refused 409 `draft_changed` when it differs.
     paramsSchema: z
       .object({
         skillId: id,
         version: z.number().int().positive(),
+        draftDigest: z.string().min(1),
         credentialsReviewed: z.boolean().optional(),
       })
       .strict(),
     resultSchema: wire.SkillPublishResultWireSchema,
     description:
-      'Publish your draft Skill (I16) — the latest version under skillId, which must be the version given (the one reviewed): a newer version under skillId since is 409 version_changed and nothing is published. Builder floor; the workspace owner may publish anyone’s draft (e.g. one a member’s Worker proposed); another builder’s draft is 403 not_proposer. When the draft carries suspected credentials, credentialsReviewed: true is required — 400 credentials_review_required (details: subject, suspectedSecretValues) otherwise. A name another Skill family already has published refuses 409 skill_name_conflict (a Worker mounts Skills by name, so one name has one Skill) — deprecate that one or rename the draft.',
+      'Publish your draft Skill (I16) — the latest version under skillId, which must be the version given (the one reviewed): a newer version under skillId since is 409 version_changed and nothing is published. draftDigest is the draftDigest list_skills / get_skill / propose_skill gave for that draft: a draft discarded and proposed again under the same version since is 409 draft_changed and nothing is published. Builder floor; the workspace owner may publish anyone’s draft (e.g. one a member’s Worker proposed); another builder’s draft is 403 not_proposer. When the draft carries suspected credentials, credentialsReviewed: true is required — 400 credentials_review_required (details: subject, suspectedSecretValues) otherwise. A name another Skill family already has published refuses 409 skill_name_conflict (a Worker mounts Skills by name, so one name has one Skill) — deprecate that one or rename the draft.',
   },
   {
     name: 'publish_procedure',
@@ -1386,14 +1401,15 @@ const metaCapabilities = [
     paramsSchema: z
       .object({
         procedureId: id,
-        // Legacy 300 — see publish_skill.
+        // Legacy 300 and review #493 on #764 (F1) — see publish_skill.
         version: z.number().int().positive(),
+        draftDigest: z.string().min(1),
         credentialsReviewed: z.boolean().optional(),
       })
       .strict(),
     resultSchema: wire.ProcedurePublishResultWireSchema,
     description:
-      'Publish your draft Procedure (I16) — the latest version under procedureId, which must be the version given (the one reviewed): a newer version under procedureId since is 409 version_changed and nothing is published. Builder floor; the workspace owner may publish anyone’s draft; another builder’s draft is 403 not_proposer. When the draft carries suspected credentials, credentialsReviewed: true is required — 400 credentials_review_required (details: subject, suspectedSecretValues) otherwise. A Procedure that says how a goal’s plan is made from it (parameters, a worker step’s plan fields, a verify step’s check) is published only when the plan it makes passes everything a written plan is held to — its $params bindings checked against parameters, no credential or [redacted] mark — 400 invalid_params with details.problems otherwise; one with an operation or approval step is still published, for following by hand, but makes no goal.',
+      'Publish your draft Procedure (I16) — the latest version under procedureId, which must be the version given (the one reviewed): a newer version under procedureId since is 409 version_changed and nothing is published. draftDigest is the draftDigest list_procedures / propose_procedure gave for that draft: a draft discarded and proposed again under the same version since is 409 draft_changed and nothing is published. Builder floor; the workspace owner may publish anyone’s draft; another builder’s draft is 403 not_proposer. When the draft carries suspected credentials, credentialsReviewed: true is required — 400 credentials_review_required (details: subject, suspectedSecretValues) otherwise. A Procedure that says how a goal’s plan is made from it (parameters, a worker step’s plan fields, a verify step’s check) is published only when the plan it makes passes everything a written plan is held to — its $params bindings checked against parameters, no credential or [redacted] mark — 400 invalid_params with details.problems otherwise; one with an operation or approval step is still published, for following by hand, but makes no goal.',
   },
   {
     name: 'deprecate_skill',
@@ -1441,7 +1457,9 @@ const metaCapabilities = [
     description:
       'List published Skills plus the draft Skills the caller may see — their own, or every ' +
       'draft for the owner and builders (D-26 rule, I16) — latest version per id, newest first, ' +
-      'each with its proposedBy; keyset-paginated (limit, cursor → nextCursor).',
+      'each with its proposedBy; a draft row also carries inUse, the family’s latest published ' +
+      'version (the one Workers mount until the draft is published), when there is one; ' +
+      'keyset-paginated (limit, cursor → nextCursor).',
   },
   {
     // S8 W1-C (leftover 48 "list_skills 无 markdown / 无 get_skill" — Skill "编辑" needs the full
@@ -1452,12 +1470,16 @@ const metaCapabilities = [
     mode: 'observe',
     channel: 'handle',
     minRole: 'member',
-    paramsSchema: z.object({ skillId: id }).strict(),
+    // UX acceptance of #764 (P2-1): `version` reads that version — the published one a draft row's
+    // `inUse` names — instead of the latest; same read rule.
+    paramsSchema: z
+      .object({ skillId: id, version: z.number().int().positive().optional() })
+      .strict(),
     resultSchema: wire.SkillDetailWireSchema.nullable(),
     description:
-      'Read one Skill (latest version) with its full markdown body — same read rule as ' +
-      'list_skills (published, or a draft the caller may see); null for an unknown id or a ' +
-      'draft the caller may not see.',
+      'Read one Skill (latest version, or the version named) with its full markdown body — same ' +
+      'read rule as list_skills (published, or a draft the caller may see); null for an unknown ' +
+      'id or version, or a draft the caller may not see.',
   },
   {
     name: 'list_procedures',
@@ -1473,8 +1495,10 @@ const metaCapabilities = [
     description:
       'List published Procedures plus the draft Procedures the caller may see — their own, or ' +
       'every draft for the owner and builders (D-26 rule, I16) — latest version per id, newest ' +
-      'first, each with its proposedBy and its parameters schema (null: it takes none); ' +
-      'keyset-paginated (limit, cursor → nextCursor).',
+      'first, each with its proposedBy and its parameters schema (null: it takes none); a draft ' +
+      'row also carries inUse, the family’s latest published version (the one a goal made from ' +
+      'it uses until the draft is published), when there is one; keyset-paginated (limit, ' +
+      'cursor → nextCursor).',
   },
   {
     // S3.3: real handler (`application/gateway/fact-handlers.ts`'s `assertFactHandler`), replacing

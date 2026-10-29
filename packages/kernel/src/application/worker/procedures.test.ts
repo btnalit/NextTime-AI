@@ -11,6 +11,8 @@ import { importManifest, publishOperation } from '../../governance/gatekeepers/m
 import { registerGatekeeper } from '../../governance/gatekeepers/registry.js';
 import { SqlGraphStore } from '../../substrate/graph/index.js';
 import { proposeWorkerDefinition, publishWorkerDefinition } from './definitions.js';
+import { discardDraft } from './draft-lifecycle.js';
+import { FamilyDraftPendingError } from './family-version.js';
 import {
   ProcedureNotFoundError,
   ProcedureStepReferenceError,
@@ -392,6 +394,164 @@ describe.runIf(DATABASE_URL !== undefined)(
         await expect(
           inTx(ownerId, (client) => publishProcedure(client, workspaceId, ownerId, draft.id)),
         ).rejects.toThrow(ProcedureStepReferenceError);
+      });
+    });
+
+    describe('next version of a family (propose_procedure{procedureId}, S11 W1a E2-0)', () => {
+      it('proposes version 2 under the same id, and may change the name (a Procedure is addressed by id)', async () => {
+        const name = `proc-family-${randomUUID()}`;
+        const v1 = await inTx(proposerId, (client) =>
+          proposeProcedure(client, workspaceId, proposerId, operationStepProcedure(name)),
+        );
+        await inTx(ownerId, (client) => publishProcedure(client, workspaceId, ownerId, v1.id));
+        const v2 = await inTx(proposerId, (client) =>
+          proposeProcedure(client, workspaceId, proposerId, {
+            ...operationStepProcedure(`${name}-renamed`),
+            procedureId: v1.id,
+          }),
+        );
+        expect(v2).toMatchObject({
+          id: v1.id,
+          version: 2,
+          status: 'draft',
+          name: `${name}-renamed`,
+        });
+      });
+
+      it('an unknown procedureId is not found', async () => {
+        await expect(
+          inTx(proposerId, (client) =>
+            proposeProcedure(client, workspaceId, proposerId, {
+              ...operationStepProcedure(`proc-unknown-${randomUUID()}`),
+              procedureId: randomUUID(),
+            }),
+          ),
+        ).rejects.toThrow(ProcedureNotFoundError);
+      });
+
+      it('refuses while the latest version is a draft (draft_pending) until it is published or discarded; a deprecated family may get a new version', async () => {
+        const name = `proc-pending-${randomUUID()}`;
+        const v1 = await inTx(proposerId, (client) =>
+          proposeProcedure(client, workspaceId, proposerId, operationStepProcedure(name)),
+        );
+        const next = () =>
+          inTx(proposerId, (client) =>
+            proposeProcedure(client, workspaceId, proposerId, {
+              ...operationStepProcedure(name),
+              procedureId: v1.id,
+            }),
+          );
+        await expect(next()).rejects.toMatchObject({
+          code: 'draft_pending',
+          kind: 'procedure',
+          familyId: v1.id,
+          draftVersion: 1,
+        });
+
+        await inTx(ownerId, (client) => publishProcedure(client, workspaceId, ownerId, v1.id));
+        expect((await next()).version).toBe(2);
+        await expect(next()).rejects.toThrow(FamilyDraftPendingError);
+
+        await inTx(proposerId, (client) =>
+          discardDraft(client, workspaceId, proposerId, {
+            kind: 'procedure',
+            id: v1.id,
+            version: 2,
+          }),
+        );
+        await inTx(ownerId, (client) => deprecateProcedure(client, workspaceId, v1.id));
+        expect((await next()).version).toBe(2);
+      });
+
+      it('two concurrent next-version proposals: one draft, the other draft_pending', async () => {
+        const name = `proc-race-${randomUUID()}`;
+        const v1 = await inTx(proposerId, (client) =>
+          proposeProcedure(client, workspaceId, proposerId, operationStepProcedure(name)),
+        );
+        await inTx(ownerId, (client) => publishProcedure(client, workspaceId, ownerId, v1.id));
+        const results = await Promise.allSettled(
+          [0, 1].map(() =>
+            inTx(proposerId, (client) =>
+              proposeProcedure(client, workspaceId, proposerId, {
+                ...operationStepProcedure(name),
+                procedureId: v1.id,
+              }),
+            ),
+          ),
+        );
+        expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+        const rejected = results.filter((r) => r.status === 'rejected');
+        expect(rejected).toHaveLength(1);
+        expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(
+          FamilyDraftPendingError,
+        );
+      });
+    });
+
+    describe('next version while the latest draft is being discarded (review #493 on #764, P3-2)', () => {
+      it('two proposals waiting on the discard: one draft, the other draft_pending — never a primary-key error', async () => {
+        // Holds with the row lock alone too (Postgres moves the lock to v1 once v2 is deleted); the
+        // family's advisory lock keeps it from depending on that.
+        const name = `proc-discard-race-${randomUUID()}`;
+        const v1 = await inTx(proposerId, (client) =>
+          proposeProcedure(client, workspaceId, proposerId, operationStepProcedure(name)),
+        );
+        await inTx(ownerId, (client) => publishProcedure(client, workspaceId, ownerId, v1.id));
+        await inTx(proposerId, (client) =>
+          proposeProcedure(client, workspaceId, proposerId, {
+            ...operationStepProcedure(name),
+            procedureId: v1.id,
+          }),
+        );
+
+        // The discard deletes v2 and holds its transaction open while two proposals queue up.
+        let deleted!: () => void;
+        const whenDeleted = new Promise<void>((resolve) => {
+          deleted = resolve;
+        });
+        let release!: () => void;
+        const released = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const discard = inTx(proposerId, async (client) => {
+          await discardDraft(client, workspaceId, proposerId, {
+            kind: 'procedure',
+            id: v1.id,
+            version: 2,
+          });
+          deleted();
+          await released;
+        });
+        await whenDeleted;
+        const proposals = [0, 1].map(() =>
+          inTx(proposerId, (client) =>
+            proposeProcedure(client, workspaceId, proposerId, {
+              ...operationStepProcedure(name),
+              procedureId: v1.id,
+            }),
+          ),
+        );
+        // Both are waiting on a lock before the discard commits.
+        for (let waited = 0; waited < 100; waited += 1) {
+          const waiting = await pool.query<{ n: number }>(
+            `select count(*)::int as n from pg_stat_activity
+             where wait_event_type = 'Lock' and datname = current_database()`,
+          );
+          if ((waiting.rows[0]?.n ?? 0) >= 2) break;
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        release();
+        await discard;
+
+        const results = await Promise.allSettled(proposals);
+        const fulfilled = results.filter((r) => r.status === 'fulfilled');
+        expect(fulfilled).toHaveLength(1);
+        expect((fulfilled[0] as PromiseFulfilledResult<{ version: number }>).value.version).toBe(2);
+        const rejected = results.filter((r) => r.status === 'rejected');
+        expect(rejected).toHaveLength(1);
+        expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(
+          FamilyDraftPendingError,
+        );
       });
     });
 

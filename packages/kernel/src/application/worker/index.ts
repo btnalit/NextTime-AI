@@ -52,10 +52,12 @@ export type {
 } from './definitions.js';
 
 export {
+  assertNoPendingSkillDraft,
   assertSkillNameAvailable,
   deprecatePublishedSkillVersion,
   deprecateSkill,
   getSkill,
+  latestPublishedSkills,
   listPublishedSkillIds,
   listSkills,
   loadPublishedSkillHead,
@@ -64,9 +66,11 @@ export {
   publishSkill,
   readSkillVersions,
   renderSkillMarkdownFile,
+  skillDraftDigest,
   skillReviewContent,
   resolvePublishedSkills,
   validateSkillContent,
+  SkillFamilyNameChangedError,
   SkillNameConflictError,
   SkillNotFoundError,
   SkillValidationError,
@@ -77,7 +81,9 @@ export {
   deprecateProcedure,
   getProcedure,
   getPublishedProcedure,
+  latestPublishedProcedures,
   listProcedures,
+  procedureDraftDigest,
   procedureReviewContent,
   proposeProcedure,
   publishProcedure,
@@ -94,6 +100,9 @@ export type {
 } from './procedures.js';
 
 export type { DraftViewer } from './draft-visibility.js';
+
+export { FamilyDraftPendingError } from './family-version.js';
+export type { FamilyKind } from './family-version.js';
 
 export { lockWorkerRegistry } from './registry-lock.js';
 

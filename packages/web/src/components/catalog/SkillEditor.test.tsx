@@ -46,9 +46,15 @@ async function pickObjectType(name: string) {
 }
 
 describe('SkillEditor (S6-A A2)', () => {
-  it('submits propose_skill{skill} in the ProposeSkillContentSchema shape, then publishes via publish_skill{skillId, version}', async () => {
+  it('submits propose_skill{skill} in the ProposeSkillContentSchema shape, then publishes via publish_skill{skillId, version, draftDigest}', async () => {
     const { caller, calls } = http({
-      propose_skill: () => ({ id: 'sk-1', version: 1, status: 'draft', name: 'restart-web' }),
+      propose_skill: () => ({
+        id: 'sk-1',
+        version: 1,
+        status: 'draft',
+        name: 'restart-web',
+        draftDigest: 'sha256:proposed',
+      }),
       publish_skill: () => ({ id: 'sk-1', version: 1, status: 'published' }),
     });
     const onProposed = vi.fn();
@@ -83,7 +89,7 @@ describe('SkillEditor (S6-A A2)', () => {
     await waitFor(() =>
       expect(calls[1]).toEqual({
         name: 'publish_skill',
-        params: { skillId: 'sk-1', version: 1 },
+        params: { skillId: 'sk-1', version: 1, draftDigest: 'sha256:proposed' },
       }),
     );
     await waitFor(() => expect(screen.queryByTestId('draft-publish')).toBeNull());

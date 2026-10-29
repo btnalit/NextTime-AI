@@ -207,7 +207,9 @@ function scanFile(path: string, text: string, gatedBuilders: GatedBuilders): Fil
   /** Whether `expr` being truthy (`want`), or falsy, implies `isCheck` returned true — so the
    *  direction counts: `!canOpen(href) && <a href={href}>` is no check (review of #559, L1/L2).
    *  `x === true` / `x !== false` read as `x`; `x === false` / `x !== true` as `!x`; a variable
-   *  reads as its initializer. */
+   *  reads as its initializer. A literal `true` / `false` is never the other value, so it implies
+   *  anything there: `canPublish={false}` never offers the action it gates (a private detail
+   *  rendered read-only, UX acceptance of #764). */
   const implies = (
     expr: ts.Node | undefined,
     want: boolean,
@@ -215,6 +217,9 @@ function scanFile(path: string, text: string, gatedBuilders: GatedBuilders): Fil
     depth = 0,
   ): boolean => {
     if (expr === undefined || depth > 6) return false;
+    if (expr.kind === ts.SyntaxKind.TrueKeyword || expr.kind === ts.SyntaxKind.FalseKeyword) {
+      return (expr.kind === ts.SyntaxKind.TrueKeyword) !== want;
+    }
     if (
       ts.isParenthesizedExpression(expr) ||
       ts.isAsExpression(expr) ||
@@ -1446,6 +1451,28 @@ describe('role gating guard catches the probed bypasses (review of #554)', () =>
     expect(
       unheld(
         `${held}\nexport function C({ http }) { return Row({ http, allowed: true }); }\n${row}`,
+      ),
+    ).toEqual(['set_quota']);
+  });
+
+  it('a private component rendered with its gate a literal `false` offers nothing there; `true` holds nothing (UX acceptance of #764)', () => {
+    const row =
+      "function Row({ http, allowed }) { return allowed ? <button onClick={() => http.call('set_quota')} /> : null; }";
+    const held = inComponent("  return <Row http={http} allowed={can('set_quota') !== false} />;");
+    expect(
+      unheld(
+        `${held}\nexport function B({ http }) { return <Row http={http} allowed={false} />; }\n${row}`,
+      ),
+    ).toEqual([]);
+    expect(
+      unheld(
+        `${held}\nexport function B({ http }) { return <Row http={http} allowed={true} />; }\n${row}`,
+      ),
+    ).toEqual(['set_quota']);
+    // The other direction: a control whose `disabled` is a literal `false` is never held by it.
+    expect(
+      unheld(
+        inComponent("  return <button disabled={false} onClick={() => http.call('set_quota')} />;"),
       ),
     ).toEqual(['set_quota']);
   });

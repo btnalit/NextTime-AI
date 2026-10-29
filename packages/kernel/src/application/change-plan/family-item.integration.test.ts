@@ -6,7 +6,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
 import {
+  FamilyDraftPendingError,
   SkillNameConflictError,
+  discardDraft,
   proposeSkill,
   proposeWorkerDefinition,
   publishSkill,
@@ -375,6 +377,46 @@ describe.runIf(DATABASE_URL !== undefined)(
       });
       await expect(refused).rejects.toBeInstanceOf(SkillNameConflictError);
     });
+    it('a person’s pending draft of an installed Skill’s next version (S11 W1a E2-0): the upgrade is refused at review, nothing written; once the draft is gone it goes ahead', async () => {
+      const ws = await newWorkspace();
+      const skillId = randomUUID();
+      await apply(ws, skillSegment(skillId, skill('# Fix it\n\nStep one.')));
+      const draft = await inWorkspace(ws, (client) =>
+        proposeSkill(client, ws.workspaceId, ws.ownerId, {
+          skillId,
+          name: 'fix-it',
+          description: 'Fix the thing, my way.',
+          markdown: '# Fix it\n\nMy step.',
+        }),
+      );
+      expect(draft.version).toBe(2);
+
+      const upgrade = skillSegment(skillId, skill('# Fix it\n\nStep one, then two.'));
+      // Publishing takes the latest version, so installing over the draft would strand it.
+      await expect(plan(ws, upgrade)).rejects.toBeInstanceOf(FamilyDraftPendingError);
+      await expect(apply(ws, upgrade)).rejects.toMatchObject({
+        code: 'draft_pending',
+        draftVersion: 2,
+      });
+      expect(await skillVersions(ws, skillId)).toMatchObject([
+        { version: 1, status: 'published' },
+        { version: 2, status: 'draft' },
+      ]);
+
+      await inWorkspace(ws, (client) =>
+        discardDraft(client, ws.workspaceId, ws.ownerId, {
+          kind: 'skill',
+          id: skillId,
+          version: 2,
+        }),
+      );
+      await apply(ws, upgrade);
+      expect(await skillVersions(ws, skillId)).toMatchObject([
+        { version: 1, status: 'published' },
+        { version: 2, status: 'published' },
+      ]);
+    });
+
     it('a segment with an ontology item and a Skill item locks the ontology first, applying and rolling back alike', async () => {
       const ws = await newWorkspace();
       const content = skill('# Lock order\n\nOne step.', 'lock-order');

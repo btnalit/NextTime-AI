@@ -275,7 +275,7 @@ describe.runIf(DATABASE_URL !== undefined)(
     });
 
     it('publish_skill: a draft with a suspected credential publishes only once confirmed, and the audit row says so', async () => {
-      const proposed = await call<{ id: string }>('propose_skill', {
+      const proposed = await call<{ id: string; draftDigest: string }>('propose_skill', {
         skill: {
           name: `cr-skill-${randomUUID().slice(0, 8)}`,
           description: 'Rotates the staging password.',
@@ -283,7 +283,11 @@ describe.runIf(DATABASE_URL !== undefined)(
         },
       });
       await expect(
-        call('publish_skill', { skillId: proposed.id, version: 1 }),
+        call('publish_skill', {
+          skillId: proposed.id,
+          version: 1,
+          draftDigest: proposed.draftDigest,
+        }),
       ).rejects.toMatchObject({
         code: 'credentials_review_required',
         details: { subject: 'skill', suspectedSecretValues: 1, suspectedSecretPaths: ['markdown'] },
@@ -291,6 +295,7 @@ describe.runIf(DATABASE_URL !== undefined)(
       const published = await call<{ status: string }>('publish_skill', {
         skillId: proposed.id,
         version: 1,
+        draftDigest: proposed.draftDigest,
         credentialsReviewed: true,
       });
       expect(published.status).toBe('published');

@@ -1,11 +1,14 @@
 import { useT } from '../../lib/i18n.js';
 
-/** Local editor-drawer state shared by the Skills and Procedures tabs: either a blank new draft,
- *  or a copy-as-new-draft seeded from an existing row. The Workers tab uses its own superset
- *  (`WorkerEditorState`, adds `'template'`) rather than this generic. */
+/** Local editor-drawer state shared by the Skills and Procedures tabs: a blank new draft, a copy
+ *  saved as a new Skill / Procedure (「另存为新的」, a new family), or the next version of the row's
+ *  own family (「编辑（新版本草稿）」, S11 W1a E2-0 — `propose_skill{skillId}` /
+ *  `propose_procedure{procedureId}`). The Workers tab uses its own state (`WorkerEditorState`,
+ *  adds `'template'`) rather than this generic. */
 export type EditorState<Row> =
   | { readonly kind: 'new' }
   | { readonly kind: 'copy'; readonly row: Row }
+  | { readonly kind: 'version'; readonly row: Row }
   | null;
 
 /** S8 W3 K2 (leftover 82): the periodic kernel sweep's own staleness threshold, in days — the
