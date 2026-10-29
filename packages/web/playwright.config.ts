@@ -75,7 +75,9 @@ export default defineConfig({
     ignoreHTTPSErrors: true,
     // S8 W1-B determinism (e2e/lib/determinism.ts): applies to every spec, not just 00-gates/ —
     // harmless for the other 16 (none of them assert on animation/locale/scale-factor behaviour).
-    reducedMotion: 'reduce',
+    // Legacy 487: a context option, so it goes under `contextOptions` — as a bare `use` key (no
+    // such test option) it was never applied, which only the e2e typecheck could tell.
+    contextOptions: { reducedMotion: 'reduce' },
     deviceScaleFactor: 1,
     locale: 'zh-CN',
     timezoneId: 'Asia/Shanghai',
