@@ -269,6 +269,38 @@ export function absentAnswersOnlyWhenText(
   );
 }
 
+/** Why such an answer can prove nothing, by what the binding declares (review #501 on #757): an
+ *  http target may answer 404 for no permission (hiding the resource), a wrong address or a
+ *  misconfigured proxy; a command may exit the same way for no permission (`ls`, `stat`) or for any
+ *  other failure (`kubectl` exits 1 on every error). */
+export function absentAnswersCaveatText(answers: OperationAbsentAnswersWire, t: Translate): string {
+  if ('statuses' in answers) {
+    return t(
+      '有的目标在没有权限（为隐藏资源回 404）、地址或代理配错时也会这样回答，那时它证明不了任何东西。',
+      'Some targets answer the same way for no permission (a 404 that hides the resource), a wrong address or a misconfigured proxy, and then it proves nothing.',
+    );
+  }
+  return t(
+    '有的命令没有权限时也以同样的退出码结束（比如 ls、stat），有的出任何错都这样结束（比如 kubectl 出错都退出 1），那时它证明不了任何东西。',
+    'Some commands exit the same way without permission (ls, stat, for example), and some on any error (kubectl exits 1 on every error), and then it proves nothing.',
+  );
+}
+
+/** The publisher's side of the same caveat: what does not give the answer —
+ *  「没权限、地址或代理配错时不会这样回答」, 「没权限或命令出别的错时不会用这个退出码」. */
+export function absentAnswersNotForText(answers: OperationAbsentAnswersWire, t: Translate): string {
+  if ('statuses' in answers) {
+    return t(
+      '没权限、地址或代理配错时不会这样回答',
+      'never for no permission, a wrong address or a misconfigured proxy',
+    );
+  }
+  return t(
+    '没权限或命令出别的错时不会用这个退出码',
+    'never for no permission or any other failure of the command',
+  );
+}
+
 /** The stable identity of an Operation row — no dedicated id column exists (see
  *  `OperationCatalogRow`'s own doc comment), so every list/lookup in the UI keys off this pair
  *  instead of a fabricated `id`. */

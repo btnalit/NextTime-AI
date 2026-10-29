@@ -275,7 +275,7 @@ TLS/错误信封处理（README"RAGFlow 的 `{code, data}` 错误信封对协议
 **发布时由人确认**（S11「门确认不存在」B-a）：带这种声明的 Operation，只有人在发布时确认「门用的凭据看得到要查的东西，目标只在它不存在时才这样回答」才能发布：
 
 - `publish_operation` 要带 `absentAnswersReviewed: true`，否则 400 `absent_answers_review_required`（`details.absentAnswers` 写着要确认的回答）。控制台目录里，这种草稿的「发布」按钮上方有一个勾选框，勾上才能点。`publish_operation` 只开放给人的通道（任何 agent Handle 的范围里都没有它），记下的确认人就是调用它的人。
-- 发布出的版本记下确认人和时间，目录的 Operation 详情里显示「发布时确认」；需要确认之前发布的版本显示没有人确认过。
+- 发布出的版本记下确认人和时间，目录的 Operation 详情里显示确认人和「确认于 N 前」；需要确认之前发布的版本显示没有人确认过。
 - 整批发布（`publish_manifest`、`enable_gate_instance`）不发布这种草稿，把它们留作草稿，结果里的 `absentAnswerDrafts` 列出名字和回答，控制台给出逐个去目录发布的链接。
 - 清单、`propose_operation` 写进定义里的确认字段一律丢掉：确认只能由发布时的人给出。所以提议出的修订草稿（比如接入向导里的重分类）发布时要重新确认。变更计划（ChangePlan）里的 Operation 修订不改定义，沿用当前版本的确认；当前版本没有确认时，修订出的版本也没有。
 

@@ -349,4 +349,69 @@ describe('OnboardingWizardReview — confirming the answers that mean “not the
     expect(proposed.operation).not.toHaveProperty('absentAnswersReviewedBy');
     expect(proposed.operation).not.toHaveProperty('absentAnswersReviewedAt');
   });
+
+  it('a tick is for the answers it was given: when the row is read again declaring others, it is cleared', async () => {
+    // Review #501 on #757 (P3-2): the rows reload after any row publishes. If the gate re-imported
+    // in between and the definition now declares other answers, the tick must not carry over to
+    // answers the person never saw.
+    const calls: { name: string; params: unknown }[] = [];
+    let reimported = false;
+    const other = operationObject('gk-1', 'record_list');
+    const declaring = operationObject('gk-1', 'record_get');
+    const declaringWith = (statuses: number[]): GraphObjectRow => ({
+      ...declaring,
+      properties: {
+        ...declaring.properties,
+        binding: { kind: 'http', method: 'GET', path: '/records/{id}', absent_statuses: statuses },
+      },
+    });
+    const http = {
+      call: vi.fn(async (name: string, p?: unknown) => {
+        if (name === 'search') {
+          return { items: [other, declaringWith(reimported ? [404, 410] : [404])] };
+        }
+        calls.push({ name, params: p });
+        if (name === 'propose_operation')
+          return { governanceChange: null, draftDigest: 'sha256:r1' };
+        if (name === 'publish_operation') {
+          // The gate re-imported meanwhile: the next read of the rows sees the new declaration.
+          reimported = true;
+          return { status: 'published' };
+        }
+        throw new Error(`unscripted ${name}`);
+      }) as CapabilityCaller['call'],
+    } as CapabilityCaller;
+    render(<OnboardingWizardReview http={http} gatekeeperId="gk-1" onDone={vi.fn()} />);
+    const [otherOpen, declaringOpen] = await screen.findAllByRole('button', {
+      name: /提议重分类/,
+    });
+    fireEvent.click(declaringOpen as HTMLElement);
+    const declaringForm = await screen.findByTestId('wizard-review-reclassify-form');
+    fireEvent.click(within(declaringForm).getByTestId('operation-absent-review-confirm'));
+    expect(
+      (within(declaringForm).getByRole('button', { name: /提交/ }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+
+    // Another row publishes; the rows are read again, and this one now declares 404 or 410.
+    fireEvent.click(otherOpen as HTMLElement);
+    const forms = await screen.findAllByTestId('wizard-review-reclassify-form');
+    const otherForm = forms.find((form) => form !== declaringForm) as HTMLElement;
+    fireEvent.click(within(otherForm).getByRole('button', { name: /提交/ }));
+
+    const reread = await screen.findByTestId('wizard-review-reclassify-form');
+    await waitFor(() =>
+      expect(within(reread).getByTestId('operation-absent-review').textContent).toContain(
+        '404 或 410',
+      ),
+    );
+    expect(
+      (within(reread).getByTestId('operation-absent-review-confirm') as HTMLInputElement).checked,
+    ).toBe(false);
+    expect(
+      (within(reread).getByRole('button', { name: /提交/ }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(calls.filter((c) => c.name === 'publish_operation').map((c) => c.params)).toEqual([
+      { gatekeeperId: 'gk-1', name: 'record_list', draftDigest: 'sha256:r1' },
+    ]);
+  });
 });

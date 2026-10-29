@@ -2672,7 +2672,9 @@ describe('CatalogPage — confirming the answers that mean “not there” on Pu
     const detail = await selectRow(await screen.findByTestId('catalog-row'));
     const review = within(detail).getByTestId('operation-absent-review');
     expect(review.textContent).toContain('发布前确认：目标回答 404 时，记为“要查的东西不存在”。');
-    expect(review.textContent).toContain('没有权限、地址或代理配错');
+    // What else gives a 404 (review #501 on #757: the caveat follows what the binding declares).
+    expect(review.textContent).toContain('没有权限（为隐藏资源回 404）、地址或代理配错');
+    expect(review.textContent).toContain('没权限、地址或代理配错时不会这样回答');
     const publish = within(detail).getByRole('button', { name: /^发布$/ }) as HTMLButtonElement;
     expect(publish.disabled).toBe(true);
     // Nothing is recorded on a draft: the confirmation belongs to the published version.
@@ -2722,6 +2724,12 @@ describe('CatalogPage — confirming the answers that mean “not there” on Pu
     fireEvent.click(within(detail).getByRole('button', { name: /^发布$/ }));
     const review = await within(detail).findByTestId('operation-absent-review');
     expect(review.textContent).toContain('命令以退出码 4 结束时，记为“要查的东西不存在”');
+    // An exit code is misread differently from a 404: no permission, or any other failure the
+    // command reports the same way — never an address or a proxy.
+    expect(review.textContent).toContain('有的命令没有权限时也以同样的退出码结束（比如 ls、stat）');
+    expect(review.textContent).toContain('kubectl 出错都退出 1');
+    expect(review.textContent).toContain('没权限或命令出别的错时不会用这个退出码');
+    expect(review.textContent).not.toContain('代理');
     expect(screen.queryByTestId('toast')).toBeNull();
     const publish = within(detail).getByRole('button', { name: /^发布$/ }) as HTMLButtonElement;
     expect(publish.disabled).toBe(true);
@@ -2806,7 +2814,9 @@ describe('CatalogPage — confirming the answers that mean “not there” on Pu
     let detail = await selectRow(await rowNamed('record.get'));
     const reviewed = within(detail).getByTestId('catalog-detail-absent-reviewed');
     await waitFor(() => expect(reviewed.textContent).toContain('Owner'));
-    expect(reviewed.textContent).toContain('发布时确认');
+    // "Confirmed", not "confirmed when publishing": a revision carries the confirmation it replaces.
+    expect(reviewed.textContent).toContain('确认于');
+    expect(reviewed.textContent).not.toContain('发布时确认');
     expect(reviewed.textContent).toContain('门用的凭据看得到要查的东西');
     expect(within(detail).queryByTestId('operation-absent-review')).toBeNull();
 

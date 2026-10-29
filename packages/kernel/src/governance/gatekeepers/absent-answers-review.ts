@@ -5,9 +5,11 @@ import { type Operation, operationAbsentAnswers } from '@nexttime/shared';
  * observe Operation declaring answers that mean "does not exist" (`absent_statuses` /
  * `absent_exit_codes`, `operationAbsentAnswers`) is published, that the gate's credentials can see
  * what such a call looks up — so the target gives those answers only when the thing is not there,
- * never for "no permission", a wrong address or a misconfigured proxy. Goal acceptance takes a gate's
- * `absent` answer as evidence that something was removed (B-b), and that evidence is worth only what
- * this confirmation says: a 404 for a hidden resource would "prove" a deletion that never happened.
+ * never for "no permission", a wrong address or a misconfigured proxy (a 404), nor for another
+ * failure the command reports with the same exit code (`ls`, `stat`, `kubectl`). Goal acceptance
+ * takes a gate's `absent` answer as evidence that something was removed (B-b), and that evidence
+ * is worth only what this confirmation says: a 404 for a hidden resource would "prove" a deletion
+ * that never happened.
  *
  * **Who confirms.** `publish_operation` is a human-channel capability (never in any Handle's
  * scope: `@nexttime/shared`'s `HUMAN_ONLY_CAPABILITY_NAMES`), and its `absentAnswersReviewed`
@@ -48,7 +50,7 @@ export class AbsentAnswersReviewRequiredError extends Error {
         ? `status(es) ${absentAnswers.statuses.join(', ')}`
         : `exit status(es) ${absentAnswers.exitCodes.join(', ')}`;
     super(
-      `Operation ${id} declares that the target's ${answers} mean "does not exist" — confirm with absentAnswersReviewed: true that the gate's credentials can see what it looks up, so it gives those answers only when the thing is not there (not for no permission, a wrong address or a misconfigured proxy)`,
+      `Operation ${id} declares that the target's ${answers} mean "does not exist" — confirm with absentAnswersReviewed: true that the gate's credentials can see what it looks up, so it gives those answers only when the thing is not there (not for no permission, a wrong address, or any other failure that gives the same answer)`,
     );
     this.name = 'AbsentAnswersReviewRequiredError';
     this.details = { absentAnswers };

@@ -153,7 +153,7 @@ test.describe('S11 「门确认不存在」 A, B-a: the catalog says which answe
       );
       const reviewed = detail.getByTestId('catalog-detail-absent-reviewed');
       await expect(reviewed).toContainText('运维负责人');
-      await expect(reviewed).toContainText('发布时确认');
+      await expect(reviewed).toContainText('确认于');
       await page.screenshot({
         path: testInfo.outputPath(`gate-absence-${width}.png`),
         fullPage: true,

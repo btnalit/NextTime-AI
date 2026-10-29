@@ -77,8 +77,8 @@ export function AbsentAnswerDraftsNotice({
         <HeldList entries={drafts} gatekeeperId={gatekeeperId} testId={testId} />
         <span className="text-3">
           {t(
-            '逐个打开，确认门用的凭据看得到要查的东西（不是没权限、地址或代理配错时也这样回答），勾选后发布。',
-            'Open each one, confirm the gate’s credentials can see what it looks up (and that the target does not answer this way for no permission, a wrong address or a misconfigured proxy), tick it and publish.',
+            '逐个打开，确认门用的凭据看得到要查的东西，目标不会因为没权限、地址配错或别的错误给出同样的回答，勾选后发布。',
+            'Open each one, confirm the gate’s credentials can see what it looks up and that the target does not give the same answer for no permission, a wrong address or any other failure, tick it and publish.',
           )}
         </span>
       </span>

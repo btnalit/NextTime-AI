@@ -499,10 +499,10 @@ describe.runIf(DATABASE_URL !== undefined)(
         absentAnswersReviewed: true,
       });
 
-      const revise = (blastRadius: Operation['blast_radius']) =>
+      const revise = (revised: string, blastRadius: Operation['blast_radius']) =>
         admin(async (client) => {
           await lockOperationRevision(client, workspaceId);
-          const live = await getPublishedOperation(client, workspaceId, gatekeeperId, name);
+          const live = await getPublishedOperation(client, workspaceId, gatekeeperId, revised);
           if (!live) throw new Error('no live version');
           const activity = await startActivity(client, workspaceId, {
             kind: 'test.change_plan_apply',
@@ -510,7 +510,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           });
           return publishOperationRevision(client, workspaceId, {
             gatekeeperId,
-            name,
+            name: revised,
             replaces: {
               version: live.version,
               contentDigest: operationContentDigest(live.operation),
@@ -520,28 +520,42 @@ describe.runIf(DATABASE_URL !== undefined)(
             activityId: activity.id,
           });
         });
+      /** Rewrites `operation`'s row in `status` as published with no confirmation, in one statement. */
+      const publishUnconfirmed = (operation: string, status: 'draft' | 'published') =>
+        admin((client) =>
+          client.query(
+            `update objects
+             set properties = (properties || '{"status":"published"}'::jsonb)
+                              - 'absentAnswersReviewedBy' - 'absentAnswersReviewedAt'
+             where workspace_id = $1 and object_type = 'Operation'
+               and identity_key ->> 'gatekeeperId' = $2 and identity_key ->> 'name' = $3
+               and properties ->> 'status' = $4`,
+            [workspaceId, gatekeeperId, operation, status],
+          ),
+        );
 
-      const second = await revise('medium');
+      const second = await revise(name, 'medium');
       expect(second.version).toBe(first.version + 1);
       expect(second.absentAnswersReview).toEqual(first.absentAnswersReview);
       expect((await row(name))?.absentAnswersReview).toEqual(first.absentAnswersReview);
 
-      // A live version published before the confirmation existed has none to carry: the revision
-      // goes ahead (its definition is unchanged) and records none.
-      await admin((client) =>
-        client.query(
-          `update objects
-           set properties = properties - 'absentAnswersReviewedBy' - 'absentAnswersReviewedAt'
-           where workspace_id = $1 and object_type = 'Operation'
-             and identity_key ->> 'gatekeeperId' = $2 and identity_key ->> 'name' = $3
-             and properties ->> 'status' = 'published'`,
-          [workspaceId, gatekeeperId, name],
-        ),
+      // The confirmation belongs to the version it was given for: once published, removing it is
+      // refused like any other rewrite of the version (core 0047).
+      await expect(publishUnconfirmed(name, 'published')).rejects.toThrow(
+        /is published and its definition never changes/,
       );
-      const third = await revise('low');
+      expect((await row(name))?.absentAnswersReview).toEqual(first.absentAnswersReview);
+
+      // A live version published before the confirmation existed has none to carry: the revision
+      // goes ahead (its definition is unchanged) and records none. Such a version is a draft the
+      // older code flipped to published without a stamp, in one statement.
+      const older = `aar.rev.${randomUUID().slice(0, 8)}`;
+      await call('propose_operation', { gatekeeperId, operation: lookup(older, [404]) });
+      await publishUnconfirmed(older, 'draft');
+      const third = await revise(older, 'low');
       expect(third.status).toBe('published');
       expect(third).not.toHaveProperty('absentAnswersReview');
-      expect(await row(name)).not.toHaveProperty('absentAnswersReview');
+      expect(await row(older)).not.toHaveProperty('absentAnswersReview');
     });
   },
 );

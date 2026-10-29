@@ -334,10 +334,12 @@ function OperationReviewRow({
   const reviewedDigestRef = useRef<string | null>(null);
   // S11 「门确认不存在」 B-a: a reclassification keeps the definition, so an Operation declaring
   // answers that mean "does not exist" publishes its draft only with the person's confirmation —
-  // asked up front (the definition says so), or once the kernel refuses without it.
+  // asked up front (the definition says so), or once the kernel refuses without it. The tick is
+  // for the answers shown: keyed by them, so a re-read of the row that declares others (a gate
+  // re-import, picked up when any row's publish reloads the list) clears it.
   const declaredAbsent = operationAbsentAnswersOfRaw(row.raw);
   const absentReview = useAbsentAnswersReview(
-    `${row.gatekeeperId}:${row.name}`,
+    `${row.gatekeeperId}:${row.name}:${JSON.stringify(declaredAbsent ?? null)}`,
     declaredAbsent !== undefined ? { status: 'draft', absentAnswers: declaredAbsent } : undefined,
   );
 

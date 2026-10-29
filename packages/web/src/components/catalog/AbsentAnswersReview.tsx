@@ -4,6 +4,8 @@ import type { CapabilityCaller } from '../../lib/clients.js';
 import { formatRelative } from '../../lib/format.js';
 import {
   type OperationCatalogRow,
+  absentAnswersCaveatText,
+  absentAnswersNotForText,
   absentAnswersOnlyWhenText,
   absentAnswersWhenText,
 } from '../../lib/governance.js';
@@ -19,7 +21,8 @@ import { RefChip } from '../kit/ref-chip.js';
  * Goal acceptance takes such an answer as evidence that something was removed, so it is worth only
  * what the publisher confirms: the gate's credentials can see what the call looks up, and the
  * target gives these answers only when it is not there — not for "no permission", a wrong address
- * or a misconfigured proxy. The catalog asks before the click (the row says the draft declares
+ * or a misconfigured proxy (http), not for "no permission" or another failure of the command (an
+ * exit code; `absentAnswersCaveatText`). The catalog asks before the click (the row says the draft declares
  * some), keeps Publish disabled until it is ticked and sends `absentAnswersReviewed: true`. The
  * kernel enforces the same rule (400 `absent_answers_review_required`); a refusal the row did not
  * predict (an older read of the row) opens the same question. The tick is for one draft's content:
@@ -98,6 +101,7 @@ export function AbsentAnswersReviewSlot({
   if (review.answers === null) return null;
   const when = absentAnswersWhenText(review.answers, t);
   const onlyWhen = absentAnswersOnlyWhenText(review.answers, t);
+  const notFor = absentAnswersNotForText(review.answers, t);
   return (
     <fieldset
       className="notice notice-warn m-0 min-w-0 flex-col items-stretch"
@@ -113,9 +117,11 @@ export function AbsentAnswersReviewSlot({
         </strong>
         {sentenceGap(t)}
         {t(
-          '目标验收会把这个回答当作“已经删掉”的证据。有的目标在没有权限、地址或代理配错时也会这样回答，那时它证明不了任何东西。',
-          'Goal acceptance takes this answer as evidence that something was removed. Some targets answer the same way for no permission, a wrong address or a misconfigured proxy, and then it proves nothing.',
+          '目标验收会把这个回答当作“已经删掉”的证据。',
+          'Goal acceptance takes this answer as evidence that something was removed.',
         )}
+        {sentenceGap(t)}
+        {absentAnswersCaveatText(review.answers, t)}
       </p>
       <label className="flex items-start gap-2 text-13 text-text">
         <input
@@ -128,8 +134,8 @@ export function AbsentAnswersReviewSlot({
         />
         <span>
           {t(
-            `门用的凭据看得到要查的东西；${onlyWhen}（不是没权限、地址或代理配错）。确认后记下是你确认的。`,
-            `The gate’s credentials can see what this looks up; ${onlyWhen} (not for no permission, a wrong address or a misconfigured proxy). Your confirmation is recorded.`,
+            `门用的凭据看得到要查的东西；${onlyWhen}，${notFor}。确认后记下是你确认的。`,
+            `The gate’s credentials can see what this looks up; ${onlyWhen}, ${notFor}. Your confirmation is recorded.`,
           )}
         </span>
       </label>
@@ -138,7 +144,9 @@ export function AbsentAnswersReviewSlot({
 }
 
 /** On a published (or deprecated) version that declares such answers: who confirmed them, when —
- *  or that nobody did, for a version published before the confirmation existed. */
+ *  or that nobody did, for a version published before the confirmation existed. "Confirmed", not
+ *  "confirmed when publishing it": a ChangePlan revision carries the confirmation of the version it
+ *  replaces (review #501 on #757), so the person and the time may be that version's. */
 export function AbsentAnswersReviewedLine({
   http,
   row,
@@ -164,8 +172,8 @@ export function AbsentAnswersReviewedLine({
       <RefChip kind="principal" id={review.reviewedBy} http={http} size="s" />
       <span title={review.reviewedAt}>
         {t(
-          `发布时确认（${formatRelative(review.reviewedAt)}）：门用的凭据看得到要查的东西，只有它不存在时目标才这样回答。`,
-          `confirmed when publishing it (${formatRelative(review.reviewedAt)}): the gate’s credentials can see what it looks up, and the target answers this way only when it is not there.`,
+          `确认于 ${formatRelative(review.reviewedAt)}：门用的凭据看得到要查的东西，只有它不存在时目标才这样回答。`,
+          `confirmed ${formatRelative(review.reviewedAt)}: the gate’s credentials can see what it looks up, and the target answers this way only when it is not there.`,
         )}
       </span>
     </span>
