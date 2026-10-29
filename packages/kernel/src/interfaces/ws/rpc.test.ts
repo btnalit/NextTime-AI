@@ -31,9 +31,17 @@ import {
 } from '../../application/goal/index.js';
 import { PackNotFoundError } from '../../application/packs/index.js';
 import { TaskRuntimeNotConfiguredError } from '../../application/task/index.js';
-import { SkillNameConflictError } from '../../application/worker/index.js';
+import {
+  FamilyDraftPendingError,
+  SkillFamilyNameChangedError,
+  SkillNameConflictError,
+} from '../../application/worker/index.js';
 import { ApprovalReasonRequiredError } from '../../governance/approval/index.js';
-import { HandleIssuanceError, ScopeValidationError } from '../../governance/capability/index.js';
+import {
+  HandleIssuanceError,
+  ReviewedDraftChangedError,
+  ScopeValidationError,
+} from '../../governance/capability/index.js';
 import { ConnectionParamsCarryCredentialsError } from '../../governance/connections/index.js';
 import { OperationNameInvalidError } from '../../governance/gatekeepers/index.js';
 import {
@@ -280,6 +288,21 @@ describe('mapDispatchError — error-mapping followup: previously-unmapped S3.1/
   it('SkillNameConflictError (S11 P1-D) maps to ILLEGAL_TRANSITION, like HTTP 409', () => {
     const mapped = mapDispatchError(new SkillNameConflictError('fix-it', 'skill-1', 'install'));
     expect(mapped.code).toBe(WS_ERROR_CODES.ILLEGAL_TRANSITION);
+  });
+
+  it('FamilyDraftPendingError / SkillFamilyNameChangedError (S11 W1a E2-0) map to ILLEGAL_TRANSITION, like HTTP 409', () => {
+    expect(mapDispatchError(new FamilyDraftPendingError('skill', 'skill-1', 2)).code).toBe(
+      WS_ERROR_CODES.ILLEGAL_TRANSITION,
+    );
+    expect(
+      mapDispatchError(new SkillFamilyNameChangedError('skill-1', 'fix-it', 'fix-it-2')).code,
+    ).toBe(WS_ERROR_CODES.ILLEGAL_TRANSITION);
+  });
+
+  it('ReviewedDraftChangedError (review #493 on #764 F1) maps to ILLEGAL_TRANSITION, like HTTP 409 draft_changed', () => {
+    expect(
+      mapDispatchError(new ReviewedDraftChangedError('publish_procedure', 'Procedure p-1@2')).code,
+    ).toBe(WS_ERROR_CODES.ILLEGAL_TRANSITION);
   });
 
   it('ConflictNotFoundError (resolve_conflict/list_conflicts) maps to NOT_FOUND (-32004), not INTERNAL_ERROR', () => {

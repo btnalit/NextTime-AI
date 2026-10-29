@@ -6,7 +6,7 @@ import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../adapters/db/migrate.js';
 import { createPool, withWorkspace } from '../../adapters/db/pool.js';
-import { proposeSkill } from '../../application/worker/index.js';
+import { FamilyDraftPendingError, proposeSkill } from '../../application/worker/index.js';
 import { NotProposerError } from '../../governance/capability/index.js';
 import { ForbiddenError } from './authorize.js';
 import { dispatchCapability } from './dispatch.js';
@@ -35,12 +35,15 @@ interface SkillItem {
   readonly id: string;
   readonly status: string;
   readonly proposedBy: string;
+  /** A draft's, which a publish names (review #493 on #764, F1). */
+  readonly draftDigest?: string;
 }
 
 interface ProcedureItem {
   readonly id: string;
   readonly status: string;
   readonly proposedBy: string;
+  readonly draftDigest?: string;
 }
 
 describe.runIf(DATABASE_URL !== undefined)(
@@ -127,6 +130,29 @@ describe.runIf(DATABASE_URL !== undefined)(
       return page.items.find((item) => item.id === procedureId);
     }
 
+    /** The draft digest a reviewer sees on the listed draft — what a publish then names. */
+    async function reviewedSkillDigest(
+      principalId: string,
+      role: Role,
+      skillId: string,
+    ): Promise<string> {
+      const digest = (await listedSkill(principalId, role, skillId))?.draftDigest;
+      if (digest === undefined) throw new Error(`fixture: ${skillId} is not a draft ${role} sees`);
+      return digest;
+    }
+
+    async function reviewedProcedureDigest(
+      principalId: string,
+      role: Role,
+      procedureId: string,
+    ): Promise<string> {
+      const digest = (await listedProcedure(principalId, role, procedureId))?.draftDigest;
+      if (digest === undefined) {
+        throw new Error(`fixture: ${procedureId} is not a draft ${role} sees`);
+      }
+      return digest;
+    }
+
     async function insertPrincipal(role: Role, name: string): Promise<string> {
       const id = randomUUID();
       await withWorkspace(
@@ -205,6 +231,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         const published = await call<{ status: string }>(ownerId, 'owner', 'publish_skill', {
           skillId,
           version: 1,
+          draftDigest: await reviewedSkillDigest(ownerId, 'owner', skillId),
         });
         expect(published.status).toBe('published');
         expect(await listedSkill(otherMemberId, 'member', skillId)).toMatchObject({
@@ -224,8 +251,9 @@ describe.runIf(DATABASE_URL !== undefined)(
         const skillId = await workerProposedSkillOfMember();
 
         expect(await listedSkill(memberId, 'member', skillId)).toMatchObject({ status: 'draft' });
+        const draftDigest = await reviewedSkillDigest(memberId, 'member', skillId);
         await expect(
-          call(memberId, 'member', 'publish_skill', { skillId, version: 1 }),
+          call(memberId, 'member', 'publish_skill', { skillId, version: 1, draftDigest }),
         ).rejects.toBeInstanceOf(ForbiddenError);
       });
 
@@ -236,7 +264,11 @@ describe.runIf(DATABASE_URL !== undefined)(
           status: 'draft',
           proposedBy: memberId,
         });
-        const refusal = call(builderId, 'builder', 'publish_skill', { skillId, version: 1 });
+        const refusal = call(builderId, 'builder', 'publish_skill', {
+          skillId,
+          version: 1,
+          draftDigest: await reviewedSkillDigest(builderId, 'builder', skillId),
+        });
         await expect(refusal).rejects.toBeInstanceOf(NotProposerError);
         await expect(refusal).rejects.toMatchObject({ code: 'not_proposer' });
         expect(await listedSkill(ownerId, 'owner', skillId)).toMatchObject({ status: 'draft' });
@@ -265,6 +297,176 @@ describe.runIf(DATABASE_URL !== undefined)(
             skillId,
           }),
         ).toBeNull();
+      });
+    });
+
+    describe('the next version of a family (propose_skill{skillId} / propose_procedure{procedureId}, S11 W1a E2-0)', () => {
+      it('a builder proposes version 2 of a published Skill; while it is a draft another builder gets 409 draft_pending', async () => {
+        const skill = {
+          name: `family-skill-${randomUUID().slice(0, 8)}`,
+          description: 'A Skill that gets a second version.',
+          markdown: '# Steps\n\nVersion one.',
+        };
+        const v1 = await call<{ id: string; version: number; draftDigest: string }>(
+          builderId,
+          'builder',
+          'propose_skill',
+          {
+            skill,
+          },
+        );
+        await call(builderId, 'builder', 'publish_skill', {
+          skillId: v1.id,
+          version: 1,
+          draftDigest: v1.draftDigest,
+        });
+
+        const v2 = await call<{ id: string; version: number; status: string }>(
+          builderId,
+          'builder',
+          'propose_skill',
+          { skill: { ...skill, markdown: '# Steps\n\nVersion two.' }, skillId: v1.id },
+        );
+        expect(v2).toMatchObject({ id: v1.id, version: 2, status: 'draft' });
+
+        const refusal = call(otherBuilderId, 'builder', 'propose_skill', {
+          skill,
+          skillId: v1.id,
+        });
+        await expect(refusal).rejects.toBeInstanceOf(FamilyDraftPendingError);
+        await expect(refusal).rejects.toMatchObject({
+          code: 'draft_pending',
+          familyId: v1.id,
+          draftVersion: 2,
+        });
+      });
+
+      it('UX acceptance of #764 (P2-1): the draft row names the version in use (inUse); get_skill{version} reads it; a member sees the published row', async () => {
+        const skill = {
+          name: `in-use-skill-${randomUUID().slice(0, 8)}`,
+          description: 'Version one, in use.',
+          markdown: '# One',
+        };
+        const v1 = await call<{ id: string; draftDigest: string }>(
+          builderId,
+          'builder',
+          'propose_skill',
+          { skill },
+        );
+        await call(builderId, 'builder', 'publish_skill', {
+          skillId: v1.id,
+          version: 1,
+          draftDigest: v1.draftDigest,
+        });
+        // A published row names no other version.
+        expect(await listedSkill(ownerId, 'owner', v1.id)).not.toHaveProperty('inUse');
+        await call(builderId, 'builder', 'propose_skill', {
+          skill: { ...skill, description: 'Version two, pending.', markdown: '# Two' },
+          skillId: v1.id,
+        });
+
+        for (const [principalId, role] of [
+          [ownerId, 'owner'],
+          [otherBuilderId, 'builder'],
+        ] as const) {
+          expect(await listedSkill(principalId, role, v1.id)).toMatchObject({
+            version: 2,
+            status: 'draft',
+            inUse: {
+              id: v1.id,
+              version: 1,
+              status: 'published',
+              description: 'Version one, in use.',
+            },
+          });
+        }
+        const inUse = await call<{ version: number; status: string; markdown: string } | null>(
+          ownerId,
+          'owner',
+          'get_skill',
+          { skillId: v1.id, version: 1 },
+        );
+        expect(inUse).toMatchObject({ version: 1, status: 'published', markdown: '# One' });
+        expect(
+          await call(ownerId, 'owner', 'get_skill', { skillId: v1.id, version: 3 }),
+        ).toBeNull();
+
+        const asMember = await listedSkill(memberId, 'member', v1.id);
+        expect(asMember).toMatchObject({ version: 1, status: 'published' });
+        expect(asMember).not.toHaveProperty('inUse');
+        // A member may not read the draft by its version either.
+        expect(
+          await call(memberId, 'member', 'get_skill', { skillId: v1.id, version: 2 }),
+        ).toBeNull();
+      });
+
+      it('UX acceptance of #764 (P2-1): a Procedure draft row names the version in use', async () => {
+        const procedure = {
+          name: `in-use-procedure-${randomUUID().slice(0, 8)}`,
+          description: 'v1',
+          steps: [{ kind: 'approval', description: 'A human approves the change.' }],
+        };
+        const v1 = await call<{ id: string; draftDigest: string }>(
+          builderId,
+          'builder',
+          'propose_procedure',
+          { procedure },
+        );
+        await call(builderId, 'builder', 'publish_procedure', {
+          procedureId: v1.id,
+          version: 1,
+          draftDigest: v1.draftDigest,
+        });
+        await call(builderId, 'builder', 'propose_procedure', {
+          procedure: { ...procedure, description: 'v2' },
+          procedureId: v1.id,
+        });
+        expect(await listedProcedure(ownerId, 'owner', v1.id)).toMatchObject({
+          version: 2,
+          status: 'draft',
+          inUse: { version: 1, status: 'published', description: 'v1', steps: procedure.steps },
+        });
+        expect(await listedProcedure(memberId, 'member', v1.id)).not.toHaveProperty('inUse');
+      });
+
+      it('a member’s Worker-proposed draft blocks a builder’s next version too — the builder sees that draft', async () => {
+        const skillId = await workerProposedSkillOfMember();
+        const detail = await call<{ name: string }>(builderId, 'builder', 'get_skill', { skillId });
+        await expect(
+          call(builderId, 'builder', 'propose_skill', {
+            skill: { name: detail.name, description: 'Next.', markdown: 'Next.' },
+            skillId,
+          }),
+        ).rejects.toMatchObject({ code: 'draft_pending', draftVersion: 1 });
+      });
+
+      it('a builder proposes version 2 of a published Procedure under procedureId', async () => {
+        const procedure = {
+          name: `family-procedure-${randomUUID().slice(0, 8)}`,
+          description: 'Approve, then verify.',
+          steps: [
+            { kind: 'approval', description: 'A human approves the change.' },
+            { kind: 'verify', description: 'Check the result.' },
+          ],
+        };
+        const v1 = await call<{ id: string; draftDigest: string }>(
+          builderId,
+          'builder',
+          'propose_procedure',
+          { procedure },
+        );
+        await call(builderId, 'builder', 'publish_procedure', {
+          procedureId: v1.id,
+          version: 1,
+          draftDigest: v1.draftDigest,
+        });
+        const v2 = await call<{ id: string; version: number }>(
+          builderId,
+          'builder',
+          'propose_procedure',
+          { procedure, procedureId: v1.id },
+        );
+        expect(v2).toMatchObject({ id: v1.id, version: 2 });
       });
     });
 
@@ -299,6 +501,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         const published = await call<{ status: string }>(ownerId, 'owner', 'publish_procedure', {
           procedureId,
           version: 1,
+          draftDigest: await reviewedProcedureDigest(ownerId, 'owner', procedureId),
         });
         expect(published.status).toBe('published');
         expect(await listedProcedure(memberId, 'member', procedureId)).toMatchObject({
@@ -326,8 +529,13 @@ describe.runIf(DATABASE_URL !== undefined)(
           status: 'draft',
           proposedBy: builderId,
         });
+        const draftDigest = await reviewedProcedureDigest(otherBuilderId, 'builder', procedureId);
         await expect(
-          call(otherBuilderId, 'builder', 'publish_procedure', { procedureId, version: 1 }),
+          call(otherBuilderId, 'builder', 'publish_procedure', {
+            procedureId,
+            version: 1,
+            draftDigest,
+          }),
         ).rejects.toBeInstanceOf(NotProposerError);
         expect(await listedProcedure(builderId, 'builder', procedureId)).toMatchObject({
           status: 'draft',

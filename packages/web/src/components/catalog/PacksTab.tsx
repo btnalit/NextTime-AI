@@ -865,6 +865,16 @@ const STALE_CODES = new Set(['version_changed', 'change_plan_changed', 'pack_dep
 /** `workerGates`: by Worker name, the gates the person kept for a Worker the install connects. */
 type WorkerGateChoice = Readonly<Record<string, readonly string[]>>;
 
+/** S11 W1a E2-0: someone's draft of the next version of a Skill this pack upgrades is pending —
+ *  publishing takes a family's latest version, so installing over it would leave that draft
+ *  unpublishable. The technical details name the Skill. */
+function packDraftPendingText(t: Translate): string {
+  return t(
+    '这个能力包要升级的一个 Skill，有人正在为它提议新版本，那份草稿还没有发布或丢弃；安装会把它挤到旧版本后面、再也发布不了，所以现在装不上，什么也没有改。「技术细节」里写着是哪个 Skill；在「Skill」页找到它，等那份草稿发布或丢弃后再来安装。',
+    'Someone is proposing a new version of a Skill this pack upgrades, and that draft has been neither published nor discarded; installing would push it behind and leave it unpublishable, so it cannot be installed now and nothing changed. The technical details name the Skill; find it on the Skills tab and install again once that draft is published or discarded.',
+  );
+}
+
 function InstallPack({
   http,
   pack,
@@ -1040,6 +1050,7 @@ function InstallPack({
             '在你查看之后，它依赖的能力包有了变化（被撤销或换了版本），现在不满足要求，所以什么也没有安装。上面已经换成现在的样子。',
             'A pack it builds on changed after you looked (rolled back, or another version), so it no longer meets what this pack needs and nothing was installed. The review above now shows how things are.',
           ),
+          draft_pending: packDraftPendingText(t),
         }}
         testId="catalog-pack-install-confirm"
       >
@@ -1054,6 +1065,7 @@ function InstallPack({
                 '这个能力包里有对象类型或动作类型的名字已经被工作区里另一个本体用了，装上会让两个本体重名，所以现在装不上，什么也没有改。「技术细节」里写着是哪个类型；占用它的本体是从能力包装上的话，可以在「安装历史」里撤销那条记录，否则请平台管理员处理。',
                 'A type name in this pack is already used by another ontology in the workspace; installing it would give the name two owners, so it cannot be installed now and nothing changed. The technical details name the type. If the ontology holding it came from a pack, roll that record back under Install history; otherwise ask a platform administrator.',
               ),
+              draft_pending: packDraftPendingText(t),
               skill_name_conflict: t(
                 '这个能力包里有一个 Skill 和工作区里另一个已发布的 Skill 同名；Worker 按名字挂载 Skill，同名会让它挂错，所以现在装不上，什么也没有改。「技术细节」里写着是哪个名字；可以在「Skill」页停用那个 Skill 后再来安装。',
                 'A Skill in this pack has the same name as another published Skill in the workspace; a Worker mounts Skills by name, so two of one name would mix them up. It cannot be installed now and nothing changed. The technical details name it; deprecate that Skill on the Skills tab, then install again.',

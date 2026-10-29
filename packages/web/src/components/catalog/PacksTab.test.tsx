@@ -426,6 +426,29 @@ describe('PacksTab (能力目录 · 能力包, S11 P1-C)', () => {
     expect((screen.getByRole('button', { name: '安装' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it('someone’s pending draft of a Skill the pack upgrades reads as its own sentence in the review (S11 W1a E2-0)', async () => {
+    const http = scriptedHttp({
+      get_workspace: () => OWNER_WORKSPACE,
+      list_packs: () => ({ items: [pack({ status: 'not_installed', installedVersion: null })] }),
+      preview_pack_install: () =>
+        Promise.reject(
+          new HttpError(
+            'capability_error',
+            'Skill "fix-it" sk-1@2 is a draft that has not been published or discarded',
+            'draft_pending',
+            { familyId: 'sk-1', draftVersion: 2 },
+          ),
+        ),
+    });
+    renderTab(http, 'ops-assets');
+
+    fireEvent.click(await screen.findByTestId('catalog-pack-install-trigger'));
+    const banner = await screen.findByTestId('catalog-pack-preview-error');
+    expect(banner.textContent).toMatch(/有人正在为它提议新版本/);
+    expect(banner.textContent).toContain('fix-it');
+    expect((screen.getByRole('button', { name: '安装' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it('a member reads packs but is never offered the review, and no preview is read', async () => {
     const http = scriptedHttp({
       get_workspace: () => ({

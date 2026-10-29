@@ -20,7 +20,7 @@ import {
 } from '../../lib/catalog.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { reviewFieldNames } from '../../lib/credential-review.js';
-import { isForbiddenError } from '../../lib/errors.js';
+import { describeError, isForbiddenError } from '../../lib/errors.js';
 import type { GatekeeperListRow, ProcedureRow } from '../../lib/governance.js';
 import { useT } from '../../lib/i18n.js';
 import {
@@ -54,9 +54,16 @@ import { SchemaFieldsEditor } from './SchemaFieldsEditor.js';
 
 export interface ProcedureEditorProps {
   readonly http: CapabilityCaller;
-  /** "编辑（生成新草稿版本）": pre-filled from the row; `propose_procedure` addresses no family,
-   *  so the result is a *new* Procedure (new id, v1). */
+  /** 「另存为新的流程」: pre-filled from the row and proposed without `procedureId`, so the result is
+   *  a *new* Procedure (new id, v1). */
   readonly copyOf?: ProcedureRow;
+  /** 「编辑（新版本草稿）」 (S11 W1a E2-0, legacy 48 ②): the published row whose family gets the next
+   *  version — `propose_procedure{procedure, procedureId}`, pre-filled the same way. A Procedure
+   *  is addressed by id, so the name may change. Takes precedence over `copyOf`. */
+  readonly nextVersionOf?: ProcedureRow;
+  /** With `nextVersionOf`: when the kernel refuses because the family's latest version is still a
+   *  draft (409 `draft_pending`), the error offers to show that draft. */
+  readonly onShowPendingDraft?: () => void;
   /** Directories for the operation / worker step pickers (optional — ids typed otherwise). */
   readonly gatekeepers?: readonly GatekeeperListRow[];
   readonly workerDefinitions?: readonly WorkerDefinitionSummary[];
@@ -87,6 +94,8 @@ const STEP_KIND_LABEL: Readonly<
 export function ProcedureEditor({
   http,
   copyOf,
+  nextVersionOf,
+  onShowPendingDraft,
   gatekeepers,
   workerDefinitions,
   onProposed,
@@ -96,9 +105,11 @@ export function ProcedureEditor({
   const t = useT();
   const permissions = usePermissions();
   const can = useRoleCan(http);
+  /** The row the form is prefilled from — the family's current version or the copied one. */
+  const source = nextVersionOf ?? copyOf;
   // S11 GO5d-2: a copy keeps what its steps say of a goal's plan, and its parameters.
   const [form, setForm] = useState<ProcedureForm>(() =>
-    copyOf ? procedureFormFrom(copyOf) : EMPTY_PROCEDURE_FORM,
+    source ? procedureFormFrom(source) : EMPTY_PROCEDURE_FORM,
   );
   const [view, setView] = useState<View>('form');
   const [errors, setErrors] = useState<FieldErrors>({});
@@ -193,6 +204,7 @@ export function ProcedureEditor({
     try {
       const result = await http.call<ProposedDraft>('propose_procedure', {
         procedure: validated.value,
+        ...(nextVersionOf ? { procedureId: nextVersionOf.id } : {}),
       });
       setProposed(result);
       onProposed(result);
@@ -215,10 +227,12 @@ export function ProcedureEditor({
           can('publish_procedure') === false
             ? undefined
             : (review) =>
-                // Legacy 300: publishes exactly the version this screen proposed.
+                // Legacy 300 and review #493 on #764 (F1): publishes exactly the version and
+                // content this screen proposed.
                 http.call<{ status: string }>('publish_procedure', {
                   procedureId: proposed.id,
                   version: proposed.version,
+                  draftDigest: proposed.draftDigest,
                   ...review,
                 })
         }
@@ -236,16 +250,34 @@ export function ProcedureEditor({
       onSubmit={(event) => void handleSubmit(event)}
       data-testid="procedure-editor"
     >
-      {copyOf ? (
+      {nextVersionOf ? (
+        <Notice testId="procedure-new-version-notice">
+          {t(
+            <>
+              为 <strong>{nextVersionOf.name}</strong> 提议新版本（当前 v{nextVersionOf.version}
+              ，已预填它的内容）：仍是同一个流程（同一个
+              ID），名称可以改；发布后，从这个流程发起的目标默认用新版本。发布前草稿只有你、工作区所有者和构建者可见；发布时每个
+              Operation / Worker 步骤引用的对象必须已发布。
+            </>,
+            <>
+              Proposing a new version of <strong>{nextVersionOf.name}</strong> (current v
+              {nextVersionOf.version}, its content pre-filled): the same Procedure (same id), the
+              name may change; once published, goals started from it use the new version by default.
+              Until then the draft is visible only to you, the workspace owner and builders;
+              publishing resolves every Operation / Worker step against published objects.
+            </>,
+          )}
+        </Notice>
+      ) : copyOf ? (
         <Notice tone="warn" testId="procedure-copy-notice">
           {t(
             <>
-              从 <strong>{copyOf.name}</strong> v{copyOf.version} 复制：提交会创建一个
-              <strong>新的</strong>流程（新 ID、v1），不是同一流程的新版本。
+              从 <strong>{copyOf.name}</strong> v{copyOf.version} 复制：保存后是一个
+              <strong>新的</strong>流程（新 ID、v1），原来的流程不变。
             </>,
             <>
-              Copied from <strong>{copyOf.name}</strong> v{copyOf.version}: submitting creates a{' '}
-              <strong>new</strong> Procedure (new id, v1), not a new version of this one.
+              Copied from <strong>{copyOf.name}</strong> v{copyOf.version}: saving creates a{' '}
+              <strong>new</strong> Procedure (new id, v1); the original stays as it is.
             </>,
           )}
         </Notice>
@@ -648,6 +680,18 @@ export function ProcedureEditor({
         <ErrorBanner
           error={error}
           title={t('无法创建草稿', 'Could not propose the draft')}
+          action={
+            nextVersionOf && onShowPendingDraft && describeError(error).code === 'draft_pending' ? (
+              <Button
+                variant="secondary"
+                size="s"
+                onClick={onShowPendingDraft}
+                data-testid="procedure-show-pending-draft"
+              >
+                {t('查看那份草稿', 'Show that draft')}
+              </Button>
+            ) : undefined
+          }
           testId="procedure-editor-error"
         />
       ) : null}

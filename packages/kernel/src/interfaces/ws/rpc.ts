@@ -98,9 +98,11 @@ import {
   DraftNotDiscardableError,
   EntryTemplateChangedError,
   EntryTemplateCurrentError,
+  FamilyDraftPendingError,
   ProcedureNotFoundError,
   ProcedureStepReferenceError,
   ProcedureTemplateError,
+  SkillFamilyNameChangedError,
   SkillNameConflictError,
   SkillNotFoundError,
   SkillValidationError,
@@ -118,6 +120,7 @@ import {
   GrantNotFoundError,
   HandleIssuanceError,
   NotProposerError,
+  ReviewedDraftChangedError,
   ReviewedVersionChangedError,
   ScopeValidationError,
 } from '../../governance/capability/index.js';
@@ -436,6 +439,10 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   if (err instanceof ReviewedVersionChangedError) {
     return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
   }
+  // Review #493 on #764 (F1): mirrors HTTP 409 `draft_changed` (capability-route.ts).
+  if (err instanceof ReviewedDraftChangedError) {
+    return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
+  }
   // R-60 `publish_ontology_version`: mirrors HTTP 409 `ontology_base_moved` (capability-route.ts).
   if (err instanceof OntologyBaseMovedError) {
     return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
@@ -446,6 +453,10 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
   }
   // Legacy 145: mirrors HTTP 409 `entry_template_current` / `entry_template_changed`.
   if (err instanceof EntryTemplateCurrentError || err instanceof EntryTemplateChangedError) {
+    return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
+  }
+  // S11 W1a E2-0: mirrors HTTP 409 `draft_pending` / `skill_name_changed` (capability-route.ts).
+  if (err instanceof FamilyDraftPendingError || err instanceof SkillFamilyNameChangedError) {
     return { code: WS_ERROR_CODES.ILLEGAL_TRANSITION, message: err.message };
   }
   // S11 P1-D: mirrors HTTP 409 `skill_name_conflict` (capability-route.ts).

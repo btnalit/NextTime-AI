@@ -67,7 +67,13 @@ function offered(input: HTMLInputElement): string[] {
 describe('ProcedureEditor (S6-A A2)', () => {
   it('builds typed steps and submits propose_procedure{procedure} in the ProposeProcedureContentSchema shape', async () => {
     const { caller, calls } = http({
-      propose_procedure: () => ({ id: 'pr-1', version: 1, status: 'draft', name: 'Deploy' }),
+      propose_procedure: () => ({
+        id: 'pr-1',
+        version: 1,
+        status: 'draft',
+        name: 'Deploy',
+        draftDigest: 'sha256:proposed',
+      }),
       publish_procedure: () => ({ id: 'pr-1', version: 1, status: 'published' }),
       list_operations: () => ({ items: OPERATIONS }),
     });
@@ -179,7 +185,7 @@ describe('ProcedureEditor (S6-A A2)', () => {
     await waitFor(() =>
       expect(calls.at(-1)).toEqual({
         name: 'publish_procedure',
-        params: { procedureId: 'pr-1', version: 1 },
+        params: { procedureId: 'pr-1', version: 1, draftDigest: 'sha256:proposed' },
       }),
     );
   });
