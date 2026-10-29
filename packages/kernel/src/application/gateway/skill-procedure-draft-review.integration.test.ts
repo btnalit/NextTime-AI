@@ -656,7 +656,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(await listedSkill(ownerId, 'owner', skillId)).toMatchObject({ version: 1 });
       });
 
-      it('the draft’s own proposer, a builder of no version in use, a member and an agent cannot reject it; nothing changes', async () => {
+      it('the draft’s own proposer (who proposed no version in use), a member and an agent cannot reject it; nothing changes', async () => {
         const { skillId, draftDigest } = await skillWithPendingDraft();
         const params = { kind: 'skill', id: skillId, version: 2, draftDigest, reason: 'No.' };
 
