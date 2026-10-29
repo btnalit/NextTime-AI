@@ -66,13 +66,13 @@ export interface MasterDetailProps {
  * comparison, a half-filled form) instead of mounting the detail afresh in the other place.
  *
  * Legacy 483: narrowing the window past the breakpoint opens the sheet without anyone asking for
- * it. When an overlay (a dialog, a confirmation with or without its own box, another drawer, an
- * open menu) is already open at that moment, the sheet would land on top of it and take its
- * focus. The layout stays wide instead until no overlay is left, then switches: what the overlay
- * was opened from keeps its place, so an anchored confirmation stays where it was. Where the
- * window is too narrow for the wide layout (below `MIN_HELD_WIDE_PX`), the layout switches but the
- * sheet waits, closed, until no overlay is left — and an anchored one closes (Escape), since its
- * anchor is no longer on the page.
+ * it. When a modal (a dialog, an irreversible confirmation, another drawer) is already open at
+ * that moment, the sheet would land on top of it and take its focus. The layout stays wide
+ * instead until no modal is left, then switches, so what the modal was opened from keeps its
+ * place. Where the window is too narrow for the wide layout (below `MIN_HELD_WIDE_PX`), the
+ * layout switches but the sheet waits, closed, until no modal is left. An anchored overlay (a
+ * medium confirmation, a menu) closes at the crossing (Escape): the layout change moves its
+ * anchor, and it is not placed again (#767 UX acceptance P3-2, P3-3).
  */
 export function MasterDetail({
   list,
@@ -96,7 +96,7 @@ export function MasterDetail({
   const isNarrow = isNarrowViewport && held !== 'wide';
   useEffect(() => {
     if (held === null) return;
-    if (held === 'sheet') closeAnchoredOverlays();
+    closeAnchoredOverlays();
     const release = () => {
       if (!anOverlayIsOpen()) setLayout((prev) => ({ ...prev, held: null }));
     };
@@ -171,11 +171,13 @@ function anOverlayIsOpen(): boolean {
   return document.querySelector(`${MODAL_OVERLAYS}, ${ANCHORED_OVERLAYS}`) !== null;
 }
 
-/** What crossing into the narrow layout holds: nothing with no overlay open; the wide layout where
- *  the window still has room for it; otherwise the sheet. */
+/** What crossing into the narrow layout holds: nothing with no overlay open; the wide layout for a
+ *  modal where the window still has room for it; otherwise the sheet, until the anchored overlays
+ *  this closes and any modal are gone. */
 function holdAtCrossing(): 'wide' | 'sheet' | null {
   if (!anOverlayIsOpen()) return null;
-  return window.innerWidth >= MIN_HELD_WIDE_PX ? 'wide' : 'sheet';
+  const modal = document.querySelector(MODAL_OVERLAYS) !== null;
+  return modal && window.innerWidth >= MIN_HELD_WIDE_PX ? 'wide' : 'sheet';
 }
 
 /** Closes the open anchored overlays, topmost first — each closes on Escape, as if pressed. */

@@ -222,7 +222,7 @@ describe('kit/MasterDetail', () => {
     expect(screen.getByTestId('the-detail')).toBeTruthy();
   });
 
-  it('stays wide while an anchored confirmation open at the crossing is still open (legacy 483)', async () => {
+  it('closes an anchored confirmation open at the crossing, then opens the sheet (legacy 483)', async () => {
     let narrow = false;
     const listeners = new Set<(event: { matches: boolean }) => void>();
     vi.stubGlobal(
@@ -270,12 +270,8 @@ describe('kit/MasterDetail', () => {
       narrow = true;
       for (const listener of listeners) listener({ matches: true });
     });
-    // The confirmation stays open with what was typed; its anchor keeps its place in the pane.
-    expect(screen.getByTestId('md-detail').className).toContain('md-detail-pane');
-    expect(document.activeElement).toBe(reason);
-    expect(reason.value).toBe('half a reason');
-
-    fireEvent.keyDown(reason, { key: 'Escape' });
+    // The layout change moves its anchor and it is not placed again (#767 P3-3): it closes, and
+    // the detail opens in the sheet rather than over it.
     await waitFor(() => expect(screen.queryByTestId('confirm')).toBeNull());
     const sheet = await screen.findByTestId('md-detail');
     await waitFor(() => expect(sheet.getAttribute('role')).toBe('dialog'));
