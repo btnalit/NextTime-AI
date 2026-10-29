@@ -1,10 +1,8 @@
 import {
-  OUTCOME_BASIS_VALUES,
   type ObjectiveOutcome,
   type OutcomeBasis,
-  type OutcomeTallyWire,
   type PublishableStatus,
-  SKILL_REVIEW_STREAK,
+  REVIEW_STREAK,
   type SkillFailureGroupWire,
   type SkillStatsSegmentWire,
   type SkillStatsWire,
@@ -14,10 +12,15 @@ import {
   type TaskStatus,
   outcomeBasisTier,
   suggestsReview,
-  tallyOutcomesByBasis,
   taskFailureCategory,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
+import {
+  type SubjectOutcome,
+  outcomeTallyWire,
+  readJudgedStepTasks,
+  unique,
+} from './stats-read.js';
 
 /**
  * application/task/skill-stats (S11 W1a E2-1; S10 §5.4, docs/global-roadmap-2026-10-16.md W1a E2):
@@ -69,13 +72,6 @@ interface TaskRow {
   readonly step_run_id: string | null;
   readonly objective_outcome: ObjectiveOutcome | null;
   readonly outcome_given_at: Date | null;
-}
-
-/** One outcome subject's record: whose judgement (`basis`), what, and when it was given. */
-interface SubjectOutcome {
-  readonly basis: OutcomeBasis;
-  readonly outcome: ObjectiveOutcome;
-  readonly at: Date;
 }
 
 /** Skill family `skillId`'s statistics, or `null` when the workspace has no such Skill. */
@@ -177,19 +173,9 @@ export async function readSkillStats(
   return {
     skillId,
     name: latest.name,
-    reviewStreak: SKILL_REVIEW_STREAK,
+    reviewStreak: REVIEW_STREAK,
     versions: versionStats,
     failureGroups: failureGroupsOf(tasks.rows, refusalByTask, definitionNames),
-  };
-}
-
-/** `tallyOutcomesByBasis`, as sent: `byBasis` an array in `OUTCOME_BASIS_VALUES` order. */
-function outcomeTallyWire(subjects: Iterable<SubjectOutcome>): OutcomeTallyWire {
-  const tally = tallyOutcomesByBasis(subjects);
-  return {
-    primary: tally.primary,
-    proxy: tally.proxy,
-    byBasis: OUTCOME_BASIS_VALUES.map((basis) => ({ basis, ...tally.byBasis[basis] })),
   };
 }
 
@@ -253,7 +239,11 @@ async function readSubjectOutcomes(
   workspaceId: string,
   tasks: readonly TaskRow[],
 ): Promise<Map<string, Map<string, SubjectOutcome>>> {
-  const judged = await readJudgedStepTasks(client, workspaceId, tasks);
+  const judged = await readJudgedStepTasks(
+    client,
+    workspaceId,
+    tasks.filter((task) => task.step_run_id !== null).map((task) => task.id),
+  );
   const turnIds = unique(tasks.map((task) => task.created_by_activity_id));
   const stepIds = unique(tasks.map((task) => task.step_run_id));
   const goalIds = unique(tasks.map((task) => task.goal_run_id));
@@ -352,42 +342,6 @@ async function readSubjectOutcomes(
     byTask.set(task.id, subjects);
   }
   return byTask;
-}
-
-/**
- * The goal step Tasks a step's or goal's verdict judged: those of the step's current attempt
- * (`step_attempt = attempt_count`, the goal module's own test for it), the attempt's nested Tasks
- * included — a nested Task carries the step's `step_run_id` but no `step_attempt`, so its attempt
- * is its ancestor's, found up the WorkerRun tree — and not of a superseded step.
- */
-async function readJudgedStepTasks(
-  client: PoolClient,
-  workspaceId: string,
-  tasks: readonly TaskRow[],
-): Promise<ReadonlySet<string>> {
-  const stepTasks = tasks.filter((task) => task.step_run_id !== null).map((task) => task.id);
-  if (stepTasks.length === 0) return new Set();
-  const result = await client.query<{ task_id: string }>(
-    `with recursive up as (
-       select t.id as task_id, t.id as at_task, t.step_attempt, 0 as depth
-         from tasks t
-        where t.workspace_id = $1 and t.id = any($2::uuid[])
-       union
-       select up.task_id, p.task_id, pt.step_attempt, up.depth + 1
-         from up
-         join worker_runs r on r.workspace_id = $1 and r.task_id = up.at_task
-         join worker_runs p on p.workspace_id = $1 and p.id = r.parent_worker_run_id
-         join tasks pt on pt.workspace_id = $1 and pt.id = p.task_id
-        where up.step_attempt is null and up.depth < 4
-     )
-     select distinct up.task_id
-       from up
-       join tasks t on t.workspace_id = $1 and t.id = up.task_id
-       join step_runs s on s.workspace_id = $1 and s.id = t.step_run_id
-      where up.step_attempt = s.attempt_count and s.status <> 'superseded'`,
-    [workspaceId, stepTasks],
-  );
-  return new Set(result.rows.map((row) => row.task_id));
 }
 
 /**
@@ -499,8 +453,4 @@ function failureGroupsOf(
       (b.lastFailedAt === null ? 0 : Date.parse(b.lastFailedAt)) -
         (a.lastFailedAt === null ? 0 : Date.parse(a.lastFailedAt)),
   );
-}
-
-function unique(ids: readonly (string | null)[]): string[] {
-  return [...new Set(ids.filter((id): id is string => id !== null))];
 }

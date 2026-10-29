@@ -95,6 +95,7 @@ import { PackOrigin } from './catalog/PackOrigin.js';
 import { PacksTab } from './catalog/PacksTab.js';
 import { ProcedureEditorHost } from './catalog/ProcedureEditorHost.js';
 import { ProcedureTemplateView } from './catalog/ProcedureTemplateView.js';
+import { ProcedureUsageSection } from './catalog/ProcedureUsage.js';
 import { SkillEditor } from './catalog/SkillEditor.js';
 import { SkillUsageSection } from './catalog/SkillUsage.js';
 import { WorkerEditorHost } from './catalog/WorkerEditorHost.js';
@@ -2720,6 +2721,9 @@ function ProcedureDetailView({
         parameters={row.parameters}
         inUseVersion={inUseVersion}
       />
+
+      {/* S11 W1a E2-2: the family's statistics — builders and up only (the section decides). */}
+      <ProcedureUsageSection http={http} procedureId={row.id} />
 
       {canPublish && row.status === 'draft' ? (
         <PublishCredentialSlot

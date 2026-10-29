@@ -20,7 +20,7 @@ import {
 import { countSuspectedSecrets, credentialReviewAudit } from '../../governance/redaction/index.js';
 import { currentPrincipalId } from '../chat/index.js';
 import { procedureTemplateProblems } from '../goal/index.js';
-import { readSkillStats } from '../task/index.js';
+import { readProcedureStats, readSkillStats } from '../task/index.js';
 import { type CapabilityHandler, publishActorOf } from './capability-handler.js';
 import { draftViewerOf } from './draft-viewer.js';
 
@@ -188,6 +188,14 @@ const getSkillStatsHandler: CapabilityHandler = async (client, workspaceId, para
   return { result: stats, resourceType: 'skill', resourceId: skillId };
 };
 
+// S11 W1a E2-2: a Procedure family's statistics, counted when read
+// (application/task/procedure-stats.ts) — the same audience and reasoning as `get_skill_stats`.
+const getProcedureStatsHandler: CapabilityHandler = async (client, workspaceId, params) => {
+  const { procedureId } = params as { procedureId: string };
+  const stats = await readProcedureStats(client, workspaceId, procedureId);
+  return { result: stats, resourceType: 'procedure', resourceId: procedureId };
+};
+
 // S11 W1a E2-0: `procedureId` proposes the next version of that family, as `skillId` above.
 const proposeProcedureHandler: CapabilityHandler = async (client, workspaceId, params, ctx) => {
   const { procedure: rawProcedure, procedureId } = params as {
@@ -307,4 +315,5 @@ export {
   publishProcedureHandler,
   deprecateProcedureHandler,
   listProceduresHandler,
+  getProcedureStatsHandler,
 };
