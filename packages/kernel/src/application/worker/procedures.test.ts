@@ -302,6 +302,32 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(row.status).toBe('draft');
       });
 
+      it('propose reads the family as its proposer sees it: another principal’s entry draft reads as an id nothing has (I16, review #493 N1)', async () => {
+        const othersDraft = await inTx(otherPrincipalId, (client) =>
+          proposeWorkerDefinition(client, workspaceId, otherPrincipalId, {
+            kind: 'entry',
+            definition: { systemPrompt: 'A private entry draft.', capabilities: ['get_object'] },
+          }),
+        );
+        const propose = (principalId: string, definitionId: string, version: number) =>
+          inTx(principalId, (client) =>
+            proposeProcedure(client, workspaceId, principalId, {
+              name: `proc-draft-family-${randomUUID()}`,
+              description: 'Names a WorkerDefinition family that has only a draft.',
+              steps: [{ kind: 'worker', definitionId, version }],
+            }),
+          );
+        // Someone else's draft family and an id nothing has are answered alike: publish decides.
+        expect((await propose(proposerId, othersDraft.id, othersDraft.version)).status).toBe(
+          'draft',
+        );
+        expect((await propose(proposerId, randomUUID(), othersDraft.version)).status).toBe('draft');
+        // Its own proposer sees the draft, and its kind.
+        await expect(
+          propose(otherPrincipalId, othersDraft.id, othersDraft.version),
+        ).rejects.toThrow(/is entry-kind/);
+      });
+
       it('publish refuses a draft written before propose checked the kind, and leaves it a draft', async () => {
         const id = await legacyDraft([
           { kind: 'worker', definitionId: entryDefinitionId, version: entryDefinitionVersion },

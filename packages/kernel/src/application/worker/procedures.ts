@@ -208,8 +208,8 @@ async function nextVersion(
 /** Creates a new `draft` Procedure version, owned by `proposerPrincipalId` (I16). No step
  *  resolution happens here — see `publishProcedure` — except that a `worker` step naming a
  *  WorkerDefinition family of another kind than `worker` (an entry definition) is refused (legacy
- *  486): a family's kind never changes, so that step could never run. A family not visible yet is
- *  left to publish. */
+ *  486): a family's kind never changes, so that step could never run. A family the proposer cannot
+ *  see yet (nothing published, and no draft of their own) is left to publish, whoever drafted it. */
 export async function proposeProcedure(
   client: PoolClient,
   workspaceId: string,
@@ -218,7 +218,12 @@ export async function proposeProcedure(
 ): Promise<ProcedureRow> {
   for (const [stepIndex, step] of input.steps.entries()) {
     if (step.kind !== 'worker') continue;
-    const kind = await workerDefinitionFamilyKind(client, workspaceId, step.definitionId);
+    const kind = await workerDefinitionFamilyKind(
+      client,
+      workspaceId,
+      step.definitionId,
+      proposerPrincipalId,
+    );
     if (kind !== null && kind !== 'worker') {
       throw new ProcedureStepReferenceError(stepIndex, notWorkerKind(step, kind));
     }

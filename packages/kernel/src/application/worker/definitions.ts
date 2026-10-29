@@ -203,15 +203,22 @@ async function nextVersion(
 /** The `kind` of the WorkerDefinition family `definitionId`, or `null` when no version of it is
  *  visible. A family's kind never changes (`WorkerDefinitionKindMismatchError`), so a reference to
  *  any of its versions — a Procedure's `worker` step (legacy 486) — can be judged by it before that
- *  version is published. */
+ *  version is published. `visibleTo` reads the family as that principal sees it (I16: another
+ *  principal's draft is not there — a family only drafted by someone else reads `null`, exactly as
+ *  an id nothing has); without it, every version counts (`proposeWorkerDefinition` keeps a family's
+ *  kind one across proposers). */
 export async function workerDefinitionFamilyKind(
   client: PoolClient,
   workspaceId: string,
   definitionId: string,
+  visibleTo?: string,
 ): Promise<WorkerDefinitionKind | null> {
   const result = await client.query<{ kind: WorkerDefinitionKind }>(
-    'select kind from worker_definitions where workspace_id = $1 and id = $2 limit 1',
-    [workspaceId, definitionId],
+    `select kind from worker_definitions
+      where workspace_id = $1 and id = $2
+        and ($3::uuid is null or status <> 'draft' or proposed_by = $3::uuid)
+      limit 1`,
+    [workspaceId, definitionId, visibleTo ?? null],
   );
   return result.rows[0]?.kind ?? null;
 }
