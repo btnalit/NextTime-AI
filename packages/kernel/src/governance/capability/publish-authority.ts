@@ -94,15 +94,18 @@ export class NotProposerError extends Error {
   readonly code = 'not_proposer' as const;
 
   /** `action` is the capability name (`publish_skill`, `deprecate_operation`,
-   *  `discard_operation_draft`, ...). */
-  constructor(action: string, subject: string) {
+   *  `discard_operation_draft`, ...). `rule` replaces the proposer-or-owner sentence where the rule
+   *  is another one (`reject_draft`: the owner or the proposer of the version in use). */
+  constructor(action: string, subject: string, rule?: string) {
     const verb = action.startsWith('deprecate_')
       ? 'deprecate'
       : action.startsWith('discard_')
         ? 'discard'
         : 'publish';
     super(
-      `${action}: ${subject} was proposed by another principal — only its proposer or the workspace owner may ${verb} it`,
+      rule === undefined
+        ? `${action}: ${subject} was proposed by another principal — only its proposer or the workspace owner may ${verb} it`
+        : `${action}: ${subject} — ${rule}`,
     );
     this.name = 'NotProposerError';
   }
