@@ -1339,7 +1339,12 @@ describe('CatalogPage', () => {
     );
     fireEvent.click(within(old).getByTestId('worker-detail-open-in-use'));
     const inUse = await screen.findByTestId('worker-detail-in-use');
-    expect(inUse.closest('[data-worker-key]')?.getAttribute('data-worker-key')).toBe('wd-entry@3');
+    const opened = inUse.closest('[data-worker-key]') as HTMLElement;
+    expect(opened.getAttribute('data-worker-key')).toBe('wd-entry@3');
+    // UX acceptance of #763 (P2-1): focus on the opened version's title, not the page.
+    await waitFor(() =>
+      expect(document.activeElement).toBe(opened.querySelector('.catalog-detail-title')),
+    );
 
     const workerList = screen.getByTestId('catalog-list');
     const marks = within(workerList)
@@ -1359,6 +1364,12 @@ describe('CatalogPage', () => {
     expect(within(earlier).getByTestId('worker-detail-earlier-version').textContent).toMatch(
       /更新的已发布版本 v2/,
     );
+    fireEvent.click(within(earlier).getByTestId('worker-detail-open-latest'));
+    await waitFor(() => {
+      const title = document.activeElement as HTMLElement;
+      expect(title.classList.contains('catalog-detail-title')).toBe(true);
+      expect(title.closest('[data-worker-key]')?.getAttribute('data-worker-key')).toBe('wd-w@2');
+    });
   });
 
   // S8 W1-A7 (audit S13): 弃用 Deprecate used to be a plain button with no confirmation at all —

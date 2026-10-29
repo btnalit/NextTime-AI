@@ -3335,7 +3335,12 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
           row={selected}
           inUseEntry={inUseEntryRef}
           familyHead={familyHeads.get(selected.id)}
-          onOpen={(ref) => selectRow(workerKey(ref))}
+          onOpen={(ref) => {
+            // UX acceptance of #763 (P2-1): the button goes away with the detail it is on; focus
+            // moves to the title of the version it opens.
+            setFocusKey(workerKey(ref));
+            selectRow(workerKey(ref));
+          }}
         />
       }
       entryNotice={
