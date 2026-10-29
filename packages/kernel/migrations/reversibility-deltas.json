@@ -103,6 +103,38 @@
         }
       ],
       "rationale": "docs/runbooks/release.md §6, goal 0006: 0006 adds a foreign key from step_acceptance_checks.observation_id into observations, the same kind of change as governance 0024 and goal 0005 (declared separately so it stays declared whichever release ships first). The previous release's observation compaction refuses to run when the catalog shows a foreign key into observations it does not check (its fail-closed guard), so after a code-only rollback scripts/apply-release.sh reports the observations-compaction step degraded until the release carrying 0006 is applied again. Nothing is deleted, and the rest of the previous release's suite passes on the new schema. HEAD's compaction knows the key, and condition (a) keeps the Observation a step's acceptance check rests on."
+    },
+    {
+      "migration": "core/0047_operation_version_guard.sql",
+      "baseTests": [
+        {
+          "file": "src/governance/gatekeepers/manifest.test.ts",
+          "fullName": "governance/gatekeepers/manifest (integration) S8 W3-K1 (leftover 79): refreshOperationGovernance applies the announced fields in place to a differing published Operation, classifies the change, and leaves a matching one unchanged"
+        },
+        {
+          "file": "src/governance/gatekeepers/manifest.test.ts",
+          "fullName": "governance/gatekeepers/manifest (integration) S8 W3-K1 (leftover 79): refreshOperationGovernance legacy K: a published Operation whose announced definition changed gets an import revision draft carrying it; the live version is untouched until it is published"
+        },
+        {
+          "file": "src/governance/gatekeepers/manifest.test.ts",
+          "fullName": "governance/gatekeepers/manifest (integration) S8 W3-K1 (leftover 79): refreshOperationGovernance operationNames narrows the selection — only the named Operations are touched, the rest are silently absent"
+        }
+      ],
+      "replacedBy": [
+        {
+          "file": "src/governance/gatekeepers/manifest.test.ts",
+          "fullName": "governance/gatekeepers/manifest (integration) S8 W3-K1 (leftover 79): refreshOperationGovernance legacy 482: each in-place write comes with one operation.governance_refreshed record stating it, in the same transaction — the record core 0047 requires"
+        },
+        {
+          "file": "src/application/gateway/operation-version-guard.integration.test.ts",
+          "fullName": "legacy 482: a published Operation version changes only through its governed transitions (integration, real Postgres) governance fields of a published version the change goes through with the AuditRecord stating it, written after it in the same transaction — what refresh_operation_governance does"
+        },
+        {
+          "file": "src/application/gateway/operation-version-guard.integration.test.ts",
+          "fullName": "legacy 482: a published Operation version changes only through its governed transitions (integration, real Postgres) governance fields of a published version a raw write of auto_approvable with no AuditRecord is refused at commit, as either role"
+        }
+      ],
+      "rationale": "docs/runbooks/release.md §6, core 0047 row: 0047 lets a governance field of a published Operation change only together with the operation.governance_refreshed AuditRecord stating the new values, in the same transaction. The previous release's product path writes that record: its refresh_operation_governance handler writes it after refreshOperationGovernance's in-place write, in the same transaction, so a code-only rollback keeps working. These three tests call refreshOperationGovernance directly, without the handler, so the previous release writes no record and the commit is refused by design. HEAD's refreshOperationGovernance writes the record itself, and the same tests pass in HEAD; the replacements assert the record and the refusal."
     }
   ]
 }

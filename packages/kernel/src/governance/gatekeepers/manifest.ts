@@ -18,6 +18,7 @@ import {
   transition,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
+import { writeAudit } from '../../substrate/audit/index.js';
 import {
   type GraphReadViewer,
   operationDraftHiddenSql,
@@ -1696,10 +1697,11 @@ export function governanceChangeNeedsRevision(
 
 export interface RefreshedOperationGovernance {
   /** The Operation Object's own id (`OperationRecord.id`) — a real uuid, unlike the
-   *  `{gatekeeperId, name}` identity pair. The handler (`refreshOperationGovernanceHandler`,
-   *  gate-instance-handlers.ts) uses this as its per-Operation AuditRecord's `resource_id`
-   *  (`audit_records.resource_id` is `uuid`) and strips it back out of the wire result, which has
-   *  no `id` field — this is kernel-internal, not part of the capability's public result shape. */
+   *  `{gatekeeperId, name}` identity pair, and the `resource_id` of the per-Operation AuditRecord
+   *  `refreshOperationGovernance` writes (`audit_records.resource_id` is `uuid`). The handler
+   *  (`refreshOperationGovernanceHandler`, gate-instance-handlers.ts) strips it back out of the
+   *  wire result, which has no `id` field — this is kernel-internal, not part of the capability's
+   *  public result shape. */
   readonly id: string;
   readonly name: string;
   readonly before: OperationGovernanceFields;
@@ -1761,8 +1763,10 @@ export interface RefreshOperationGovernanceResult {
  *   - otherwise `diffOperationGovernanceFields` (the exact function `preview_gate_instance_enable`
  *     uses) decides whether it differs; no difference → `unchanged`; a difference → the announced
  *     fields are written **in place** (no new `version` — this module's own doc comment on why)
- *     and the entry is classified (`classifyOperationGovernanceChange`) and returned in
- *     `refreshed` — except a change that loosens anything under `source: 'gate'` (review #493 on
+ *     with their `operation.governance_refreshed` AuditRecord (`input.proposedBy` as the actor;
+ *     legacy 482: the database refuses the write without it, core 0047), and the entry is
+ *     classified (`classifyOperationGovernanceChange`) and returned in `refreshed` — except a
+ *     change that loosens anything under `source: 'gate'` (review #493 on
  *     #612, `governanceChangeNeedsRevision`): the published row is left as it is and the change
  *     goes into an `'import'` revision draft below, which an owner publishes in the catalog.
  *
@@ -1927,6 +1931,24 @@ export async function refreshOperationGovernance(
         { gatekeeperId: input.gatekeeperId, name: operation.name, version: existingRecord.version },
         operationGovernanceProperties(after),
       );
+      // Legacy 482 (core 0047): the database takes an in-place change of a published version's
+      // governance only with this record, written in the same transaction and stating the values.
+      await writeAudit(client, {
+        workspaceId,
+        actorPrincipalId: input.proposedBy.id,
+        action: 'operation.governance_refreshed',
+        resourceType: 'operation',
+        // `audit_records.resource_id` is `uuid`: the Operation's own Object id. The composite
+        // `{gatekeeperId, name}` reference goes in the payload, where any string is fine.
+        resourceId: existingRecord.id,
+        payload: {
+          gatekeeperId: input.gatekeeperId,
+          name: operation.name,
+          before,
+          after,
+          direction,
+        },
+      });
       refreshed.push({
         id: existingRecord.id,
         name: operation.name,
