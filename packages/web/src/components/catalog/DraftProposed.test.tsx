@@ -103,4 +103,20 @@ describe('DraftProposed — the page refreshes on publish (#541 acceptance must-
     fireEvent.click(screen.getByTestId('draft-publish'));
     await waitFor(() => expect(onPublished).toHaveBeenCalledTimes(1));
   });
+
+  it('legacy 488: once published, Publish is gone and focus is on 完成, not <body>', async () => {
+    render(
+      <DraftProposed
+        kindLabel="Worker"
+        draft={{ id: 'wd-1', version: 1, status: 'draft', name: 'ops-runner' }}
+        onPublish={vi.fn().mockResolvedValue({ status: 'published' })}
+        onDone={vi.fn()}
+      />,
+    );
+    const publish = screen.getByTestId('draft-publish');
+    publish.focus();
+    fireEvent.click(publish);
+    await waitFor(() => expect(screen.queryByTestId('draft-publish')).toBeNull());
+    expect(document.activeElement).toBe(screen.getByTestId('draft-done'));
+  });
 });

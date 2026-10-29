@@ -16,3 +16,30 @@ export function useFocusWhenLost<T extends HTMLElement>(outcome: unknown): RefOb
   }, [outcome]);
   return ref;
 }
+
+/**
+ * Legacy 488: the same for a control that a change of `key` takes away (Publish once published,
+ * Deprecate once deprecated, a closed detail's own buttons): when `key` changes — not on mount —
+ * and focus is nowhere, it moves to what `find` returns. Focus the person moved elsewhere is left
+ * where it is. A `null` key is a state still settling (a list reloading): it is skipped, so the
+ * change is judged once what replaces the control has rendered.
+ */
+export function useFocusWhenKeyLost(
+  key: string | null,
+  find: () => HTMLElement | null | undefined,
+): void {
+  const last = useRef(key);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only a new `key` moves focus.
+  useEffect(() => {
+    if (key === null) return;
+    if (last.current === null) {
+      last.current = key;
+      return;
+    }
+    if (last.current === key) return;
+    last.current = key;
+    const active = document.activeElement;
+    if (active !== null && active !== document.body) return;
+    find()?.focus();
+  }, [key]);
+}

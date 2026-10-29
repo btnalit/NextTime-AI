@@ -3434,3 +3434,113 @@ describe('CatalogPage — proposer-only Publish / Deprecate (D-24)', () => {
     await waitFor(() => expect(within(other).getByRole('button', { name: /^发布$/ })).toBeTruthy());
   });
 });
+
+describe('legacy 488: a button its own action takes away hands focus on, not to <body>', () => {
+  const activeTab = () =>
+    document.querySelector('[role="tablist"] [role="tab"][aria-selected="true"]');
+
+  it('publishing an Operation draft focuses its title once Publish is gone', async () => {
+    let published = false;
+    const http = scriptedHttp({
+      list_operations: () => ({
+        items: [
+          {
+            gatekeeperId: 'gk-1',
+            name: 'orders.lookup',
+            status: published ? 'published' : 'draft',
+            version: 1,
+            mode: 'observe',
+            blastRadius: 'low',
+            autoApprovable: true,
+          },
+        ],
+      }),
+      get_operation_stats: () => ({ items: [] }),
+      publish_operation: () => {
+        published = true;
+        return {};
+      },
+    });
+    renderPage(http, 'operations');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    const publish = within(detail).getByRole('button', { name: /^发布$/ });
+    publish.focus();
+    fireEvent.click(publish);
+    await waitFor(() =>
+      expect(within(detail).queryByRole('button', { name: /^发布$/ })).toBeNull(),
+    );
+    await waitFor(() =>
+      expect(document.activeElement).toBe(detail.querySelector('.catalog-detail-title')),
+    );
+  });
+
+  it('publishing a Skill draft focuses its title', async () => {
+    let published = false;
+    const http = scriptedHttp({
+      get_workspace: () => ({
+        id: 'ws-1',
+        name: 'Acme',
+        createdAt: '2026-01-01T00:00:00Z',
+        principalCount: 1,
+        gatekeeperCount: 0,
+        caller: { id: 'p-owner', role: 'owner', displayName: 'Owner', kind: 'human' },
+      }),
+      list_skills: () => ({
+        items: [
+          {
+            id: 'sk-9',
+            version: 1,
+            status: published ? 'published' : 'draft',
+            name: 'rotate',
+            description: 'd',
+            draftDigest: 'sha256:d',
+          },
+        ],
+      }),
+      get_skill: () => null,
+      publish_skill: () => {
+        published = true;
+        return { status: 'published' };
+      },
+    });
+    renderPage(http, 'skills');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    const publish = within(detail).getByRole('button', { name: /^发布$/ });
+    publish.focus();
+    fireEvent.click(publish);
+    await waitFor(() =>
+      expect(document.activeElement).toBe(detail.querySelector('.catalog-detail-title')),
+    );
+  });
+
+  it('discarding a draft closes its detail and focuses the section’s tab', async () => {
+    let discarded = false;
+    const http = scriptedHttp({
+      list_worker_definitions: (params) => {
+        const { includeOwnDrafts } = (params ?? {}) as { includeOwnDrafts?: boolean };
+        if (discarded) return { items: [] };
+        const row = {
+          id: 'wd-3',
+          version: 1,
+          kind: 'worker',
+          status: 'draft',
+          definition: { name: 'Throwaway' },
+        };
+        return { items: includeOwnDrafts ? [row] : [] };
+      },
+      discard_draft: () => {
+        discarded = true;
+        return { kind: 'worker_definition', id: 'wd-3', version: 1 };
+      },
+    });
+    renderPage(http, 'workers');
+    const section = await screen.findByTestId('workers-my-drafts-section');
+    const detail = await selectRow(within(section).getByTestId('workers-my-draft-row'));
+    fireEvent.click(within(detail).getByRole('button', { name: /丢弃/ }));
+    const confirm = await screen.findByTestId('worker-draft-discard-wd-3@1');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    await waitFor(() => expect(screen.queryByTestId('workers-my-drafts-section')).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(activeTab()));
+    expect(activeTab()?.getAttribute('data-value')).toBe('workers');
+  });
+});
