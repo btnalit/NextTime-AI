@@ -1,3 +1,4 @@
+import * as PopoverPrimitive from '@radix-ui/react-popover';
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
@@ -164,7 +165,7 @@ describe('kit/MasterDetail', () => {
     expect((screen.getByTestId('disclosure') as HTMLDetailsElement).open).toBe(true);
   });
 
-  it('holds the sheet closed while a modal open at the crossing is still open (legacy 483)', async () => {
+  it('stays wide while a dialog open at the crossing is still open (legacy 483)', async () => {
     let narrow = false;
     const listeners = new Set<(event: { matches: boolean }) => void>();
     vi.stubGlobal(
@@ -208,8 +209,9 @@ describe('kit/MasterDetail', () => {
       narrow = true;
       for (const listener of listeners) listener({ matches: true });
     });
-    // No sheet over the dialog, and the dialog keeps its focus.
-    expect(screen.queryByTestId('md-detail')).toBeNull();
+    // No sheet over the dialog: the layout stays wide, and the dialog keeps its focus.
+    expect(screen.getByTestId('md-detail').className).toContain('md-detail-pane');
+    expect(screen.queryAllByRole('dialog')).toHaveLength(1);
     expect(document.activeElement).toBe(input);
 
     fireEvent.keyDown(screen.getByTestId('edit-dialog'), { key: 'Escape' });
@@ -218,5 +220,64 @@ describe('kit/MasterDetail', () => {
     const sheet = await screen.findByTestId('md-detail');
     expect(sheet.getAttribute('role')).toBe('dialog');
     expect(screen.getByTestId('the-detail')).toBeTruthy();
+  });
+
+  it('stays wide while an anchored confirmation open at the crossing is still open (legacy 483)', async () => {
+    let narrow = false;
+    const listeners = new Set<(event: { matches: boolean }) => void>();
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn(() => ({
+        get matches() {
+          return narrow;
+        },
+        media: '',
+        addEventListener: (_: string, listener: (event: { matches: boolean }) => void) =>
+          listeners.add(listener),
+        removeEventListener: (_: string, listener: (event: { matches: boolean }) => void) =>
+          listeners.delete(listener),
+      })),
+    );
+    function Detail() {
+      const [confirming, setConfirming] = useState(true);
+      return (
+        <PopoverPrimitive.Root open={confirming} onOpenChange={setConfirming}>
+          <PopoverPrimitive.Anchor asChild>
+            <button type="button">Discard</button>
+          </PopoverPrimitive.Anchor>
+          <PopoverPrimitive.Portal>
+            <PopoverPrimitive.Content data-testid="confirm">
+              <input data-testid="reason" />
+            </PopoverPrimitive.Content>
+          </PopoverPrimitive.Portal>
+        </PopoverPrimitive.Root>
+      );
+    }
+    render(
+      <MasterDetail
+        list={<div>list</div>}
+        detail={<Detail />}
+        open={true}
+        onClose={vi.fn()}
+        sheetTitle="Detail"
+        detailTestId="md-detail"
+      />,
+    );
+    const reason = (await screen.findByTestId('reason')) as HTMLInputElement;
+    reason.focus();
+    fireEvent.change(reason, { target: { value: 'half a reason' } });
+    act(() => {
+      narrow = true;
+      for (const listener of listeners) listener({ matches: true });
+    });
+    // The confirmation stays open with what was typed; its anchor keeps its place in the pane.
+    expect(screen.getByTestId('md-detail').className).toContain('md-detail-pane');
+    expect(document.activeElement).toBe(reason);
+    expect(reason.value).toBe('half a reason');
+
+    fireEvent.keyDown(reason, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByTestId('confirm')).toBeNull());
+    const sheet = await screen.findByTestId('md-detail');
+    await waitFor(() => expect(sheet.getAttribute('role')).toBe('dialog'));
   });
 });

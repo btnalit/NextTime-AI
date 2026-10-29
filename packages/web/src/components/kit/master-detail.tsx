@@ -66,9 +66,10 @@ export interface MasterDetailProps {
  * comparison, a half-filled form) instead of mounting the detail afresh in the other place.
  *
  * Legacy 483: narrowing the window past the breakpoint opens the sheet without anyone asking for
- * it. When a modal (a dialog, a confirmation, another drawer) is already open at that moment, the
- * sheet would land on top of it and take its focus; it waits instead, closed, and opens once no
- * modal is left. The detail stays mounted meanwhile, so what the modal was opened from is intact.
+ * it. When an overlay (a dialog, a confirmation with or without its own box, another drawer, an
+ * open menu) is already open at that moment, the sheet would land on top of it and take its
+ * focus. The layout stays wide instead until no overlay is left, then switches: what the overlay
+ * was opened from keeps its place, so an anchored confirmation stays where it was.
  */
 export function MasterDetail({
   list,
@@ -79,28 +80,18 @@ export function MasterDetail({
   sheetTitle,
   detailTestId,
 }: MasterDetailProps) {
-  const isNarrow = useMediaQuery(NARROW_MASTER_DETAIL_QUERY);
-  const [host] = useState(createDetailHost);
-  // A slot takes the host when it mounts; the slot left behind needs nothing (the host has moved).
-  const attachHost = useCallback(
-    (slot: HTMLElement | null) => {
-      if (slot !== null && host !== null && host.parentNode !== slot) slot.appendChild(host);
-    },
-    [host],
-  );
-  const showDetail = isNarrow ? open : detail !== null;
-  // Decided while rendering the crossing, so the sheet never mounts open over the modal first.
-  const [layout, setLayout] = useState(() => ({ narrow: isNarrow, held: false }));
-  if (layout.narrow !== isNarrow) {
-    setLayout({ narrow: isNarrow, held: isNarrow && open && aModalIsOpen() });
-  } else if (layout.held && !open) {
-    setLayout({ narrow: isNarrow, held: false });
+  const isNarrowViewport = useMediaQuery(NARROW_MASTER_DETAIL_QUERY);
+  // Decided while rendering the crossing, so the sheet never mounts over the overlay first.
+  const [layout, setLayout] = useState(() => ({ narrow: isNarrowViewport, held: false }));
+  if (layout.narrow !== isNarrowViewport) {
+    setLayout({ narrow: isNarrowViewport, held: isNarrowViewport && anOverlayIsOpen() });
   }
-  const held = layout.held && isNarrow && open;
+  const held = layout.held && isNarrowViewport;
+  const isNarrow = isNarrowViewport && !held;
   useEffect(() => {
     if (!held) return;
     const release = () => {
-      if (!aModalIsOpen()) setLayout((prev) => ({ ...prev, held: false }));
+      if (!anOverlayIsOpen()) setLayout((prev) => ({ ...prev, held: false }));
     };
     const observer = new MutationObserver(release);
     observer.observe(document.body, {
@@ -112,6 +103,15 @@ export function MasterDetail({
     release();
     return () => observer.disconnect();
   }, [held]);
+  const [host] = useState(createDetailHost);
+  // A slot takes the host when it mounts; the slot left behind needs nothing (the host has moved).
+  const attachHost = useCallback(
+    (slot: HTMLElement | null) => {
+      if (slot !== null && host !== null && host.parentNode !== slot) slot.appendChild(host);
+    },
+    [host],
+  );
+  const showDetail = isNarrow ? open : detail !== null;
 
   return (
     <>
@@ -130,7 +130,7 @@ export function MasterDetail({
 
       {isNarrow ? (
         <Sheet
-          open={open && !held}
+          open={open}
           onOpenChange={(next) => {
             if (!next) onClose();
           }}
@@ -149,15 +149,14 @@ export function MasterDetail({
   );
 }
 
-/** Whether a modal is open: a Radix dialog or alert dialog, or a hand-rolled `aria-modal` drawer
- *  (`ui/Drawer`). A popover (a medium `kit/confirm`) is not one: it closes when focus leaves it. */
-function aModalIsOpen(): boolean {
+/** Whether an overlay is open: a Radix dialog, alert dialog or anchored popover (a medium
+ *  `kit/confirm`, a menu), or a hand-rolled `aria-modal` drawer (`ui/Drawer`). */
+function anOverlayIsOpen(): boolean {
   if (typeof document === 'undefined') return false;
-  const candidates = document.querySelectorAll(
-    '[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"], [role="dialog"][aria-modal="true"]',
-  );
-  return [...candidates].some(
-    (element) => element.closest('[data-radix-popper-content-wrapper]') === null,
+  return (
+    document.querySelector(
+      '[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"], [role="dialog"][aria-modal="true"], [data-radix-popper-content-wrapper] [data-state="open"]',
+    ) !== null
   );
 }
 
