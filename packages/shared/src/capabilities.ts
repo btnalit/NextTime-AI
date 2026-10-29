@@ -4532,6 +4532,8 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set<CapabilityName>
   'get_entry_template_status',
   'propose_entry_template_upgrade',
   'discard_draft',
+  // S11 W1a E2-0b (review #493 on #772, N1): a reviewer's transition — never an agent's.
+  'reject_draft',
   'audit_query',
   'reconstruct',
   'export_prov',
