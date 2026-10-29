@@ -247,6 +247,36 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect((await propertiesOf(id)).auto_approvable).toBe(false);
       });
 
+      it('an AuditRecord whose `after` is not an object, or is missing, states nothing', async () => {
+        const { id } = await seedOperation(testOperation(), { publish: true });
+        // Removing a hint compares a missing value; a payload that names the field in an array, or
+        // has no `after` at all, must not read as stating that removal.
+        for (const payload of [
+          { before: {}, after: ['destructiveHint'], direction: 'tightened' },
+          { before: {}, direction: 'tightened' },
+          { before: {}, after: null, direction: 'tightened' },
+        ]) {
+          await expect(
+            inTx(async (client) => {
+              await client.query(
+                `update objects set properties = properties - 'destructive_hint'
+                 where workspace_id = $1 and id = $2`,
+                [workspaceId, id],
+              );
+              await writeAudit(client, {
+                workspaceId,
+                actorPrincipalId: ownerId,
+                action: 'operation.governance_refreshed',
+                resourceType: 'operation',
+                resourceId: id,
+                payload,
+              });
+            }),
+          ).rejects.toThrow(/governance \(destructive_hint\) changes only with/);
+        }
+        expect((await propertiesOf(id)).destructive_hint).toBe(true);
+      });
+
       it('an AuditRecord from an earlier transaction does not count', async () => {
         const { id } = await seedOperation(testOperation(), { publish: true });
         await inTx((client) => governanceAudit(client, id, { autoApprovable: true }));
@@ -354,6 +384,40 @@ describe.runIf(DATABASE_URL !== undefined)(
             ),
           ),
         ).rejects.toThrow(/is published and keeps its identity/);
+        // A key it no longer has is a change too, not an unknown one.
+        await expect(
+          inTx((client) =>
+            client.query(
+              'update objects set identity_key = null where workspace_id = $1 and id = $2',
+              [workspaceId, id],
+            ),
+          ),
+        ).rejects.toThrow(/is published and keeps its identity/);
+        // Nor does it become another row, or another workspace's (the login role is not held by
+        // the workspace policy, so only the guard stands here).
+        await expect(
+          asLoginRole((client) =>
+            client.query(
+              'update objects set id = gen_random_uuid() where workspace_id = $1 and id = $2',
+              [workspaceId, id],
+            ),
+          ),
+        ).rejects.toThrow(/is published and keeps its identity/);
+        await expect(
+          asLoginRole((client) =>
+            client.query(
+              'update objects set workspace_id = $3 where workspace_id = $1 and id = $2',
+              [workspaceId, id, randomUUID()],
+            ),
+          ),
+        ).rejects.toThrow(/is published and keeps its identity/);
+        const kept = await asLoginRole((client) =>
+          client.query('select 1 from objects where workspace_id = $1 and id = $2', [
+            workspaceId,
+            id,
+          ]),
+        );
+        expect(kept.rowCount).toBe(1);
       });
 
       it('an Operation row stays one, and no other row becomes one', async () => {
@@ -405,15 +469,61 @@ describe.runIf(DATABASE_URL !== undefined)(
         await expect(
           inTx((client) => mergeProperties(client, draft.id, { status: 'draft' })),
         ).rejects.toThrow(/cannot move from discarded to draft/);
+      });
 
+      it('a row with no status is a draft: removing the status of a version that left draft moves it back, and is refused', async () => {
+        const operation = testOperation();
+        const { id } = await seedOperation(operation, { publish: true });
+        const removeStatus = (client: PoolClient) =>
+          client.query(
+            `update objects set properties = properties - 'status' where workspace_id = $1 and id = $2`,
+            [workspaceId, id],
+          );
+
+        for (const run of [inTx, asLoginRole]) {
+          await expect(run(removeStatus)).rejects.toThrow(/cannot move from published to draft/);
+          await expect(
+            run((client) => mergeProperties(client, id, { status: null })),
+          ).rejects.toThrow(/cannot move from published to draft/);
+        }
+        // The two-step rewrite this closes: drop the status, then rewrite the definition and
+        // governance and put `published` back. The first step already fails.
         await expect(
-          inTx((client) =>
-            client.query(
-              `update objects set properties = properties - 'status' where workspace_id = $1 and id = $2`,
-              [workspaceId, published.id],
-            ),
+          asLoginRole(async (client) => {
+            await removeStatus(client);
+            await mergeProperties(client, id, {
+              mode: 'execute',
+              auto_approvable: true,
+              binding: { kind: 'http', method: 'DELETE', path: '/records' },
+              status: 'published',
+            });
+          }),
+        ).rejects.toThrow(/cannot move from published to draft/);
+        expect(await propertiesOf(id)).toMatchObject({
+          status: 'published',
+          auto_approvable: false,
+          binding: { kind: 'http', method: 'POST', path: '/records/purge' },
+        });
+
+        await inTx((client) => mergeProperties(client, id, { status: 'deprecated' }));
+        await expect(inTx(removeStatus)).rejects.toThrow(/cannot move from deprecated to draft/);
+      });
+
+      it('a draft with no status is a draft: it is rewritten freely and published along the lifecycle', async () => {
+        const { id } = await seedOperation(testOperation(), { publish: false });
+
+        await inTx((client) =>
+          client.query(
+            `update objects set properties = properties - 'status' where workspace_id = $1 and id = $2`,
+            [workspaceId, id],
           ),
-        ).rejects.toThrow(/cannot move from deprecated to no status/);
+        );
+        await inTx((client) => mergeProperties(client, id, { auto_approvable: true }));
+        await inTx((client) => mergeProperties(client, id, { status: 'published' }));
+        expect(await propertiesOf(id)).toMatchObject({
+          status: 'published',
+          auto_approvable: true,
+        });
       });
 
       it('a publish may stamp bookkeeping in the statement that flips the draft', async () => {
