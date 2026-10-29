@@ -315,6 +315,27 @@ export type TaskRefusal = (typeof TASK_REFUSAL_VALUES)[number];
 export const TaskRefusalSchema = asEnum(TASK_REFUSAL_VALUES);
 
 /**
+ * S11 W1a E2-2 (S10 §5.4 "确定性失败分组"; coordinator decision 2026-10-29, fork 3 = a): where a goal
+ * made from a Procedure version went wrong, for a goal that ended without being achieved — the
+ * requester ended it not achieved, cancelled it after confirming it, or it failed:
+ *   - `procedure_step`: a step the Procedure made (revision 1's) failed, with its failure category;
+ *   - `revised_step`: a step a later plan revision added failed — its key is the requester's own
+ *     text, so it is not named;
+ *   - `acceptance_check`: no step failed, but a check of the goal's latest acceptance round failed
+ *     or could not be evaluated;
+ *   - `requester`: nothing failed — the requester ended or cancelled it.
+ * A goal with more than one failed step is in each such step's group.
+ */
+export const PROCEDURE_FAILURE_PLACE_VALUES = [
+  'procedure_step',
+  'revised_step',
+  'acceptance_check',
+  'requester',
+] as const;
+export type ProcedureFailurePlace = (typeof PROCEDURE_FAILURE_PLACE_VALUES)[number];
+export const ProcedureFailurePlaceSchema = asEnum(PROCEDURE_FAILURE_PLACE_VALUES);
+
+/**
  * Why a member-management capability refused a well-formed request (`PrincipalOperationRefusedError`,
  * sent as 409 `conflict` with `details.reason`): `last_owner` (it would leave the workspace with no
  * active human owner), `self_disable` (disabling yourself), `platform_managed` (an agent or a

@@ -54,6 +54,7 @@ import {
   invokeWorkerCreate,
   listQuotas,
   listTasksForPrincipal,
+  readProcedureOutcomeHints,
   readTaskAttributions,
   resolveParentAuthority,
   resolveWaitTimeoutMs,
@@ -354,6 +355,7 @@ import { shownForSearch } from './shown-search.js';
 import {
   deprecateProcedureHandler,
   deprecateSkillHandler,
+  getProcedureStatsHandler,
   getSkillHandler,
   getSkillStatsHandler,
   listProceduresHandler,
@@ -2225,7 +2227,17 @@ const findProceduresHandler: CapabilityHandler = async (client, workspaceId, par
     { parentAuthority, ...(observeExclusions ? { observeExclusions } : {}) },
     need,
   );
-  return { result: { items: result } };
+  // S11 W1a E2-2 (fork 4 = a): each result's outcome hint — a hint for the caller, never the order
+  // (S10 §5.4), so the results stay as `findProcedures` ranked them.
+  const hints = await readProcedureOutcomeHints(client, workspaceId, result);
+  return {
+    result: {
+      items: result.map((match) => ({
+        ...match,
+        outcomes: hints.get(`${match.procedureId}@${match.version}`) ?? { achieved: 0, total: 0 },
+      })),
+    },
+  };
 };
 
 /** `cancel_task` — not in S2.7's own explicit "handlers wired" list, but wired anyway: it is a
@@ -2446,6 +2458,8 @@ export const CAPABILITY_HANDLERS: ReadonlyMap<string, CapabilityHandler> = new M
   ['publish_procedure', publishProcedureHandler],
   ['deprecate_procedure', deprecateProcedureHandler],
   ['list_procedures', listProceduresHandler],
+  // S11 W1a E2-2 — read-time Procedure statistics (application/task/procedure-stats.ts).
+  ['get_procedure_stats', getProcedureStatsHandler],
   ['invoke_worker', invokeWorkerHandler],
   ['get_task', getTaskHandler],
   ['list_tasks', listTasksHandler],
