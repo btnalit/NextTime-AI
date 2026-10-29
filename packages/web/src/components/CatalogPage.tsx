@@ -6,6 +6,7 @@ import type {
 import { visibleText } from '@nexttime/shared';
 import { type ReactNode, useCallback, useEffect, useId, useRef, useState } from 'react';
 import { invalidateCapability, useCapability, useCapabilityList } from '../hooks/useCapability.js';
+import { useFocusWhenKeyLost } from '../hooks/useFocusWhenLost.js';
 import { usePermissions } from '../hooks/usePermissions.js';
 import { useResource } from '../hooks/useResource.js';
 import { useRoleCan } from '../hooks/useRoleCan.js';
@@ -253,6 +254,35 @@ export function CatalogPage({
         <ChangesTab http={http} itemId={itemId} onSelectItem={onSelectItem} />
       )}
     </div>
+  );
+}
+
+/** Legacy 488: what a tab lists changed (a draft published, deprecated or discarded, a revision
+ *  followed to the version now in effect) and took the focused control with it — Publish once
+ *  published, a closed detail's own buttons. Focus goes to the open detail's title, or to this
+ *  section's tab when no detail is open, never to <body>. `key` is the open item and the rows
+ *  listed, each with its status and version. */
+function useCatalogTabFocusFallback(key: string | null): void {
+  useFocusWhenKeyLost(
+    key,
+    () =>
+      document.querySelector<HTMLElement>(
+        '[data-testid="catalog-detail"] .catalog-detail-title[tabindex="-1"]',
+      ) ??
+      document.querySelector<HTMLElement>(
+        '[role="tablist"][aria-label="Catalog section"] [role="tab"][aria-selected="true"]',
+      ),
+  );
+}
+
+/** The `useCatalogTabFocusFallback` key: the open item, and each row with its status and version. */
+function listedKey<R extends { readonly status?: string; readonly version?: number }>(
+  itemId: string | undefined,
+  rows: readonly R[],
+  rowKey: (row: R) => string,
+): string {
+  return [itemId ?? '', ...rows.map((row) => `${rowKey(row)}:${row.status}@${row.version}`)].join(
+    '|',
   );
 }
 
@@ -1123,6 +1153,7 @@ function OperationDetailView({
         <div className="row-wrap">
           <StatusChip machine="publishable" status={row.status} size="s" />
           <strong
+            tabIndex={-1}
             className="catalog-detail-title mono wrap-anywhere"
             title={actionKindRaw(row.name)}
           >
@@ -1309,6 +1340,9 @@ function OperationsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   const descriptionBoxRef = useRef<HTMLTextAreaElement>(null);
 
   const rows = operations.state.status === 'ready' ? operations.state.data.items : [];
+  useCatalogTabFocusFallback(
+    operations.state.status === 'ready' ? listedKey(itemId, rows, catalogOperationKey) : null,
+  );
   // UX acceptance of #567 P3 (#561's same-name class, on Operations): one name on two gates read
   // as two identical rows — those rows name their gate.
   const sharedNames = operationNamesOnSeveralGates(rows);
@@ -2086,6 +2120,9 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   const [focusFamily, setFocusFamily] = useState<string | null>(null);
 
   const rows = skills.state.status === 'ready' ? skills.state.data.items : [];
+  useCatalogTabFocusFallback(
+    skills.state.status === 'ready' ? listedKey(itemId, rows, (row: SkillRow) => row.id) : null,
+  );
   const selected = itemId ? rows.find((row) => row.id === itemId) : undefined;
   const shown = selected?.inUse && inUseOf === selected.id ? selected.inUse : selected;
   const credentialReview = usePublishCredentialReview(
@@ -2642,6 +2679,11 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
   } | null>(null);
 
   const rows = procedures.state.status === 'ready' ? procedures.state.data.items : [];
+  useCatalogTabFocusFallback(
+    procedures.state.status === 'ready'
+      ? listedKey(itemId, rows, (row: ProcedureRow) => row.id)
+      : null,
+  );
   const selected = itemId ? rows.find((row) => row.id === itemId) : undefined;
   const shown = selected?.inUse && inUseOf === selected.id ? selected.inUse : selected;
   const selectedVersion = selected ? `${selected.id}@${selected.version}` : null;
@@ -3592,6 +3634,11 @@ function WorkersTab({ http, itemId, onSelectItem }: CatalogTabProps) {
     </div>
   ) : null;
 
+  useCatalogTabFocusFallback(
+    workers.state.status === 'ready' && myDrafts.state.status === 'ready'
+      ? listedKey(itemId, [...workers.state.data.items, ...myDrafts.state.data.items], workerKey)
+      : null,
+  );
   if (workers.state.status !== 'ready') {
     return (
       <MasterDetail
