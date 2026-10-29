@@ -77,10 +77,12 @@ describe.runIf(DATABASE_URL !== undefined)('find-means (integration, real Postgr
     await withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
       const a = await store.upsertObject(client, workspaceId, {
         objectType: 'WorkerDefinition',
+        kernelAuthored: true,
         properties: { name: 'blank-a', kind: 'worker' },
       });
       const b = await store.upsertObject(client, workspaceId, {
         objectType: 'WorkerDefinition',
+        kernelAuthored: true,
         properties: { name: 'blank-b', kind: 'worker' },
       });
       const candidates = await findWorkerDefinitionCandidates(client, workspaceId, { need: '' });
@@ -93,6 +95,7 @@ describe.runIf(DATABASE_URL !== undefined)('find-means (integration, real Postgr
     await withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
       await store.upsertObject(client, workspaceId, {
         objectType: 'WorkerDefinition',
+        kernelAuthored: true,
         properties: { name: 'ops-runner', description: 'general purpose worker' },
       });
       const candidates = await findWorkerDefinitionCandidates(client, workspaceId, {
@@ -106,6 +109,7 @@ describe.runIf(DATABASE_URL !== undefined)('find-means (integration, real Postgr
     await withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
       const wd = await store.upsertObject(client, workspaceId, {
         objectType: 'WorkerDefinition',
+        kernelAuthored: true,
         properties: { name: 'backup-runner', description: 'restarts a container on demand' },
       });
       const candidates = await findWorkerDefinitionCandidates(client, workspaceId, {
@@ -119,6 +123,7 @@ describe.runIf(DATABASE_URL !== undefined)('find-means (integration, real Postgr
     await withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
       const wd = await store.upsertObject(client, workspaceId, {
         objectType: 'WorkerDefinition',
+        kernelAuthored: true,
         properties: { name: 'container-ops', description: '重启一个已注册的容器' },
       });
       // "重启容器" never appears verbatim in the description above — only via the "重启"/"容器"
@@ -134,6 +139,7 @@ describe.runIf(DATABASE_URL !== undefined)('find-means (integration, real Postgr
     await withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
       const wd = await store.upsertObject(client, workspaceId, {
         objectType: 'WorkerDefinition',
+        kernelAuthored: true,
         properties: { name: 'docker-container', description: '管理容器' },
       });
       const candidates = await findWorkerDefinitionCandidates(client, workspaceId, {
@@ -147,10 +153,12 @@ describe.runIf(DATABASE_URL !== undefined)('find-means (integration, real Postgr
     await withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
       const both = await store.upsertObject(client, workspaceId, {
         objectType: 'WorkerDefinition',
+        kernelAuthored: true,
         properties: { name: 'restart-container-runner', description: 'restart a container' },
       });
       const one = await store.upsertObject(client, workspaceId, {
         objectType: 'WorkerDefinition',
+        kernelAuthored: true,
         properties: { name: 'restart-only-runner', description: 'restart something' },
       });
       const candidates = await findWorkerDefinitionCandidates(client, workspaceId, {
@@ -168,10 +176,12 @@ describe.runIf(DATABASE_URL !== undefined)('find-means (integration, real Postgr
     await withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
       const gk = await store.upsertObject(client, workspaceId, {
         objectType: 'Gatekeeper',
+        kernelAuthored: true,
         properties: { name: 'docker', transportKind: 'cli', target: 'docker', endpoint: 'local' },
       });
       const op = await store.upsertObject(client, workspaceId, {
         objectType: 'Operation',
+        kernelAuthored: true,
         identity: { gatekeeperId: gk.id, name: 'container.restart', version: 1 },
         properties: {
           name: 'container.restart',
@@ -192,6 +202,7 @@ describe.runIf(DATABASE_URL !== undefined)('find-means (integration, real Postgr
     await withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
       const gk = await store.upsertObject(client, workspaceId, {
         objectType: 'Gatekeeper',
+        kernelAuthored: true,
         properties: {
           name: 'https://probe-user:probe-pass@gate.example',
           transportKind: 'http',
@@ -201,6 +212,7 @@ describe.runIf(DATABASE_URL !== undefined)('find-means (integration, real Postgr
       });
       const op = await store.upsertObject(client, workspaceId, {
         objectType: 'Operation',
+        kernelAuthored: true,
         identity: { gatekeeperId: gk.id, name: 'ticket.close', version: 1 },
         properties: {
           name: 'ticket.close',
@@ -224,10 +236,12 @@ describe.runIf(DATABASE_URL !== undefined)('find-means (integration, real Postgr
     await withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
       const gk = await store.upsertObject(client, workspaceId, {
         objectType: 'Gatekeeper',
+        kernelAuthored: true,
         properties: { name: 'draft-gate', transportKind: 'cli', target: 'x', endpoint: 'local' },
       });
       const op = await store.upsertObject(client, workspaceId, {
         objectType: 'Operation',
+        kernelAuthored: true,
         identity: { gatekeeperId: gk.id, name: 'draft.op', version: 1 },
         properties: { name: 'draft.op', description: 'a draft operation', status: 'draft' },
       });
@@ -243,6 +257,7 @@ describe.runIf(DATABASE_URL !== undefined)('find-means (integration, real Postgr
     await withWorkspace(pool, { workspaceId, principalId: ownerId }, async (client) => {
       const proc = await store.upsertObject(client, workspaceId, {
         objectType: 'Procedure',
+        kernelAuthored: true,
         identity: { procedureId: randomUUID(), version: 1 },
         properties: { name: 'nightly-backup', description: '每晚备份数据库' },
       });

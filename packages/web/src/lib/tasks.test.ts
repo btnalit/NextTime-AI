@@ -4,8 +4,11 @@ import {
   type WorkerDefinitionSummary,
   definitionVersions,
   distinctDefinitionName,
+  inUseEntryVersion,
   latestPerDefinition,
+  publishedFamilyHeads,
   taskNeed,
+  versionOptionText,
   workerDefinitionChoices,
 } from './tasks.js';
 
@@ -83,7 +86,8 @@ describe('workerDefinitionChoices (#541 acceptance: same-name Workers)', () => {
       kind: 'entry',
     };
     const [choice] = workerDefinitionChoices([unnamed], zh);
-    expect([choice?.label, choice?.distinguisher]).toEqual(['未命名 入口定义', 'dddddddd']);
+    expect(choice?.label).toMatch(/^入口 agent$/);
+    expect(choice?.distinguisher).toBe('dddddddd');
   });
 });
 
@@ -118,5 +122,58 @@ describe('per-definition versions and same-name names (#554 acceptance, field-in
   it('names a same-name definition with its short id, a unique one plainly', () => {
     expect(distinctDefinitionName(rows, 'aaaaaaaa-1111', 3)).toBe('ops-runner · aaaaaaaa');
     expect(distinctDefinitionName(rows, 'cccccccc-3333', 2)).toBe('collector');
+  });
+});
+
+describe('which published version matters (legacy 481)', () => {
+  const row = (
+    id: string,
+    version: number,
+    kind: string,
+    status: string,
+    publishedAt: string | null,
+  ): WorkerDefinitionSummary => ({ id, version, kind, status, publishedAt, definition: {} });
+
+  it('the entry version in use is the most recently published one, ties broken by id then version', () => {
+    expect(
+      inUseEntryVersion([
+        row('e-a', 1, 'entry', 'published', '2026-10-01T00:00:00.000Z'),
+        row('e-a', 2, 'entry', 'published', '2026-10-03T00:00:00.000Z'),
+        row('e-a', 3, 'entry', 'draft', null),
+        row('w-1', 9, 'worker', 'published', '2026-10-09T00:00:00.000Z'),
+      ]),
+    ).toEqual({ definitionId: 'e-a', version: 2 });
+    expect(
+      inUseEntryVersion([
+        row('e-a', 1, 'entry', 'published', '2026-10-01T00:00:00.000Z'),
+        row('e-b', 1, 'entry', 'published', '2026-10-01T00:00:00.000Z'),
+      ]),
+    ).toEqual({ definitionId: 'e-b', version: 1 });
+    // No publish time to go by (a deprecated or draft row only): unknown, never a guess.
+    expect(inUseEntryVersion([row('e-a', 1, 'entry', 'deprecated', null)])).toBeNull();
+  });
+
+  it('a family head only where a Worker has several published versions', () => {
+    const heads = publishedFamilyHeads([
+      row('w-1', 1, 'worker', 'published', null),
+      row('w-1', 3, 'worker', 'published', null),
+      row('w-1', 4, 'worker', 'draft', null),
+      row('w-2', 1, 'worker', 'published', null),
+    ]);
+    expect([...heads]).toEqual([['w-1', 3]]);
+  });
+
+  it('a version picker marks the newest of several', () => {
+    const versions = [
+      row('w-1', 2, 'worker', 'published', null),
+      row('w-1', 1, 'worker', 'published', null),
+    ];
+    expect(versionOptionText(versions[0] as WorkerDefinitionSummary, versions, zh)).toMatch(
+      /^v2（最新）$/,
+    );
+    expect(versionOptionText(versions[1] as WorkerDefinitionSummary, versions, zh)).toBe('v1');
+    expect(versionOptionText(versions[1] as WorkerDefinitionSummary, versions.slice(1), zh)).toBe(
+      'v1',
+    );
   });
 });

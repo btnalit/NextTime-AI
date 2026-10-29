@@ -500,10 +500,12 @@ export const previewGateInstanceEnableHandler: CapabilityHandler = async (
  * is the preview's digest; a different manifest in effect refuses `manifest_changed` before any
  * write, and the values applied come from the same read the digest was checked against.
  *
- * One AuditRecord per refreshed Operation, in the same transaction as its write — complementary to
- * `application/gateway/dispatch.ts`'s own per-call audit row (which only carries `params`, not the
- * before/after this domain transition needs), the same "two rows, not duplicates" split
- * `governance/approval/transition-log.ts`'s `recordTransition` documents for its own module.
+ * One AuditRecord per refreshed Operation, in the same transaction as its write —
+ * `refreshOperationGovernance` writes it with the write itself (legacy 482: the database refuses
+ * the write without it, core 0047). Complementary to `application/gateway/dispatch.ts`'s own
+ * per-call audit row (which only carries `params`, not the before/after this domain transition
+ * needs), the same "two rows, not duplicates" split `governance/approval/transition-log.ts`'s
+ * `recordTransition` documents for its own module.
  */
 export const refreshOperationGovernanceHandler: CapabilityHandler = async (
   client,
@@ -578,27 +580,6 @@ export const refreshOperationGovernanceHandler: CapabilityHandler = async (
   });
   await endActivity(client, workspaceId, activity.id, 'completed');
 
-  for (const entry of outcome.refreshed) {
-    await writeAudit(client, {
-      workspaceId,
-      actorPrincipalId: ctx.principal.id,
-      action: 'operation.governance_refreshed',
-      resourceType: 'operation',
-      // `audit_records.resource_id` is `uuid` — the Operation's own Object id (a real uuid,
-      // unlike the `{gatekeeperId, name}` identity pair), same convention `publish_operation`/
-      // `deprecate_operation` would use if they had one in scope. The composite reference still
-      // goes in the payload, where any string is fine.
-      resourceId: entry.id,
-      payload: {
-        gatekeeperId,
-        name: entry.name,
-        before: entry.before,
-        after: entry.after,
-        direction: entry.direction,
-      },
-    });
-  }
-
   for (const draft of outcome.revisionDrafts) {
     await writeAudit(client, {
       workspaceId,
@@ -632,8 +613,8 @@ export const refreshOperationGovernanceHandler: CapabilityHandler = async (
   return {
     result: {
       gatekeeperId,
-      // `entry.id` is kernel-internal bookkeeping for the AuditRecord above, not part of this
-      // capability's wire result shape (`RefreshOperationGovernanceResultWireSchema` has no `id`).
+      // `entry.id` is kernel-internal bookkeeping for the domain function's AuditRecord, not part of
+      // this capability's wire result shape (`RefreshOperationGovernanceResultWireSchema` has no `id`).
       refreshed: outcome.refreshed.map(({ id: _id, ...rest }) => rest),
       revisionDrafts: outcome.revisionDrafts.map(({ name, version }) => ({ name, version })),
       unchanged: outcome.unchanged,

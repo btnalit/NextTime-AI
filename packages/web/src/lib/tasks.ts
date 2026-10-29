@@ -74,6 +74,8 @@ export interface WorkerDefinitionSummary {
   readonly kind: string;
   readonly status: string;
   readonly definition: Readonly<Record<string, unknown>>;
+  /** When it was published (ISO); `null` for a draft. Absent where a caller built the row itself. */
+  readonly publishedAt?: string | null;
 }
 
 /** A Task can be cancelled iff `TASK_TRANSITIONS` has a `cancel` edge out of its status. The
@@ -186,14 +188,22 @@ const workerNameOf = (row: WorkerDefinitionSummary): string | undefined =>
     ? row.definition.name
     : undefined;
 
-/** Ids of the definitions whose name another listed definition (a different id) also has. */
+/** What an unnamed definition is called: an entry definition is the entry agent's (legacy 472,
+ *  not 「未命名」), any other reads as an unnamed one of its kind. */
+export function unnamedDefinitionLabel(kind: string, t: Translate): string {
+  return kind === 'entry'
+    ? t('入口 agent', 'Entry agent')
+    : `${t('未命名', 'Unnamed')} ${workerDefinitionKindLabel(kind, t)}`;
+}
+
+/** Ids of the definitions whose name another listed definition (a different id) also has —
+ *  unnamed ones sharing their kind's label (legacy 472) count as the same name. */
 export function sameNameDefinitionIds(
   definitions: readonly WorkerDefinitionSummary[],
 ): ReadonlySet<string> {
   const idsByLabel = new Map<string, Set<string>>();
   for (const row of definitions) {
-    const label = workerNameOf(row);
-    if (label === undefined) continue;
+    const label = workerNameOf(row) ?? `\u0000${row.kind}`;
     idsByLabel.set(label, (idsByLabel.get(label) ?? new Set()).add(row.id));
   }
   return new Set([...idsByLabel.values()].filter((ids) => ids.size > 1).flatMap((ids) => [...ids]));
@@ -211,7 +221,7 @@ export function workerDefinitionChoices(
     if (name === undefined) {
       return {
         id: row.id,
-        label: `${t('未命名', 'Unnamed')} ${workerDefinitionKindLabel(row.kind, t)}`,
+        label: unnamedDefinitionLabel(row.kind, t),
         version: `v${row.version}`,
         distinguisher: shortId(row.id),
       };
@@ -232,6 +242,65 @@ export function definitionVersions(
   id: string,
 ): WorkerDefinitionSummary[] {
   return definitions.filter((row) => row.id === id).sort((a, b) => b.version - a.version);
+}
+
+/** A version picker's option text: the newest of several listed versions says so (legacy 481), so
+ *  same-looking `v1`…`v4` read apart without opening each. `versions` is `definitionVersions`'
+ *  newest-first list. */
+export function versionOptionText(
+  row: WorkerDefinitionSummary,
+  versions: readonly WorkerDefinitionSummary[],
+  t: Translate,
+): string {
+  return versions.length > 1 && versions[0]?.version === row.version
+    ? t(`v${row.version}（最新）`, `v${row.version} (latest)`)
+    : `v${row.version}`;
+}
+
+/** Legacy 481: the published entry version the entry agent runs with — the kernel's
+ *  `getPublishedEntryDefinition` order (the most recently published entry row, then id, then
+ *  version, each descending) over `rows`. Every published entry row stays `published` when a later
+ *  one is published, so the status alone does not say which one is in use. `null` when no
+ *  published entry row carries its publish time. */
+export function inUseEntryVersion(
+  rows: readonly WorkerDefinitionSummary[],
+): { readonly definitionId: string; readonly version: number } | null {
+  let best: WorkerDefinitionSummary | undefined;
+  let bestAt = Number.NEGATIVE_INFINITY;
+  for (const row of rows) {
+    if (row.kind !== 'entry' || row.status !== 'published' || !row.publishedAt) continue;
+    const at = Date.parse(row.publishedAt);
+    if (Number.isNaN(at)) continue;
+    const later =
+      best === undefined ||
+      at > bestAt ||
+      (at === bestAt && (row.id > best.id || (row.id === best.id && row.version > best.version)));
+    if (later) {
+      best = row;
+      bestAt = at;
+    }
+  }
+  return best ? { definitionId: best.id, version: best.version } : null;
+}
+
+/** Legacy 481: for each Worker definition with more than one published version listed, its newest
+ *  published version (the kernel's family head, `loadPublishedWorkerDefinitionHead`). Earlier
+ *  published versions stay invocable by their own version; this only tells them apart. */
+export function publishedFamilyHeads(
+  rows: readonly WorkerDefinitionSummary[],
+): ReadonlyMap<string, number> {
+  const published = new Map<string, number[]>();
+  for (const row of rows) {
+    if (row.status !== 'published') continue;
+    const versions = published.get(row.id) ?? [];
+    if (!versions.includes(row.version)) versions.push(row.version);
+    published.set(row.id, versions);
+  }
+  const heads = new Map<string, number>();
+  for (const [id, versions] of published) {
+    if (versions.length > 1) heads.set(id, Math.max(...versions));
+  }
+  return heads;
 }
 
 /** One row per definition id — its newest listed version — so a picker offers each Worker once

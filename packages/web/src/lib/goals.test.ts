@@ -159,6 +159,19 @@ describe('lib/goals', () => {
     expect(sentence).not.toContain('33333333-3333');
   });
 
+  it('names an Object given by id by its name and type once it is read (legacy 470)', () => {
+    const sentence = factCheckSentence(
+      {
+        linkType: 'runs_on',
+        source: { objectType: 'Service', identity: { name: 'web' } },
+        target: { objectId: '33333333-3333-4333-8333-333333333333' },
+      },
+      zh,
+      new Map([['33333333-3333-4333-8333-333333333333', 'host-1 · Host']]),
+    );
+    expect(sentence).toBe('图谱里出现从 Service（name="web"） 到 host-1 · Host 的「runs_on」事实');
+  });
+
   it('diffs two plans by step key, and says whether the acceptance changed', () => {
     const worker = { definitionId: 'wd', version: 1 };
     const before: GoalPlan = {

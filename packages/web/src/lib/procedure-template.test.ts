@@ -30,7 +30,7 @@ describe('procedureTemplateProblemText (UX acceptance of #722, P2-1)', () => {
     ],
     [
       'the plan it makes: step "apply": bindings[1]: takes from step "scan", which this step does not depend on — add it to dependsOn',
-      /^步骤 apply 的第 2 个绑定：取自步骤 scan，但这一步不等它完成：要把它加进 dependsOn$/,
+      /^步骤 apply 的第 2 个绑定：取自步骤 scan，但这一步不等它完成：要把它加进「要等的步骤」（JSON 里的 dependsOn）$/,
     ],
     // Legacy 455: a step the plan does not have, or the step itself, is said first.
     [

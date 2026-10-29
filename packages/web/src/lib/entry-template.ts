@@ -4,10 +4,11 @@
  * notice on the catalog's entry definition shows before anyone asks for an upgrade draft.
  */
 
-/** One line of a line-by-line comparison; `gap` stands for `count` unchanged lines left out. */
+/** One line of a line-by-line comparison; `gap` stands for the unchanged `lines` left out, kept so
+ *  a reader can open them (legacy 471). */
 export type TextDiffLine =
   | { readonly change: 'same' | 'added' | 'removed'; readonly text: string }
-  | { readonly change: 'gap'; readonly count: number };
+  | { readonly change: 'gap'; readonly lines: readonly string[] };
 
 /** Lines past which the comparison gives up on aligning them and shows the whole of both sides
  *  (an entry prompt is a few hundred lines; the table is `before × after` cells). */
@@ -82,17 +83,17 @@ function foldUnchanged(
     return false;
   };
   const out: TextDiffLine[] = [];
-  let folded = 0;
+  let folded: string[] = [];
   lines.forEach((line, index) => {
     if (line.change === 'same' && !near(index)) {
-      folded++;
+      folded.push(line.text);
       return;
     }
-    if (folded > 0) out.push({ change: 'gap', count: folded });
-    folded = 0;
+    if (folded.length > 0) out.push({ change: 'gap', lines: folded });
+    folded = [];
     out.push(line);
   });
-  if (folded > 0) out.push({ change: 'gap', count: folded });
+  if (folded.length > 0) out.push({ change: 'gap', lines: folded });
   return out;
 }
 

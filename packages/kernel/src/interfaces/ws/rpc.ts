@@ -45,6 +45,7 @@ import {
   GatekeeperLandingRefusedError,
   GatekeeperNotFoundError,
   InvalidCapabilityParamsError,
+  MetaOntologyObjectWriteError,
   ModelsCatalogUnavailableError,
   ObservationIdentityError,
   OntologyBaseMovedError,
@@ -277,6 +278,11 @@ export function mapDispatchError(err: unknown): { code: number; message: string 
     return { code: WS_ERROR_CODES.UNAUTHORIZED, message: 'unauthorized' };
   }
   if (err instanceof ForbiddenError) {
+    return { code: WS_ERROR_CODES.FORBIDDEN, message: err.message };
+  }
+  // Review #493 F1: the graph store's backstop (substrate/graph/meta-object-guard.ts) — HTTP's
+  // 403 `meta_ontology_write_forbidden`, the same as `MetaOntologyWriteForbiddenError` above.
+  if (err instanceof MetaOntologyObjectWriteError) {
     return { code: WS_ERROR_CODES.FORBIDDEN, message: err.message };
   }
   // D-24: HTTP's 403 `not_proposer` (capability-route.ts). WS has no string code; the message

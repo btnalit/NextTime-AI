@@ -30,9 +30,10 @@ import { ForbiddenError } from './authorize.js';
 export class MetaOntologyWriteForbiddenError extends ForbiddenError {
   readonly objectType: string;
 
-  constructor(objectType: string) {
+  constructor(objectType: string, message?: string) {
     super(
-      `meta-ontology ObjectType "${objectType}" cannot be written from the Handle channel (I16) — these Objects are only ever written as a side effect of an already-governed action`,
+      message ??
+        `meta-ontology ObjectType "${objectType}" cannot be written from the Handle channel (I16) — these Objects are only ever written as a side effect of an already-governed action`,
     );
     this.name = 'MetaOntologyWriteForbiddenError';
     this.objectType = objectType;

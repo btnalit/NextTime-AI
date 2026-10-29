@@ -412,7 +412,7 @@ async function runObserve(
         auditPayload: { ...credentialReview, absent },
       };
     }
-    const written = await writeObservedFacts(
+    const { written, refusedMetaObjectTypes } = await writeObservedFacts(
       client,
       workspaceId,
       gatekeeper.gatekeeperId,
@@ -438,7 +438,11 @@ async function runObserve(
       result: { status: 'ok', data: observeResult.data, observedFactCount: written.length },
       resourceType: 'gatekeeper',
       resourceId: gatekeeper.gatekeeperId,
-      auditPayload: credentialReview,
+      // Review #493 F1: what the gate sent back that names a meta-ontology type (never written).
+      auditPayload:
+        refusedMetaObjectTypes.length > 0
+          ? { ...credentialReview, refusedObservedObjectTypes: refusedMetaObjectTypes }
+          : credentialReview,
     };
   } catch (err) {
     await endActivity(client, workspaceId, activity.id, 'failed');

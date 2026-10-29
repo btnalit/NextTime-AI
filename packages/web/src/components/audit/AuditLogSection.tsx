@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useMemo, useState } from 'react';
+import { type FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { useAskForAccess } from '../../hooks/useAskForAccess.js';
 import { useCanOpen } from '../../hooks/useCanOpen.js';
 import { useCapabilityList } from '../../hooks/useCapability.js';
@@ -86,6 +86,7 @@ export function AuditLogSection({
   // action (`?action=`) or comes from an approval/explain context is almost always about a
   // write/decision already, but shows reads anyway once the reader explicitly asked for a
   // specific action, so a read-mode `?action=list_grants` deep link is never hidden from itself.
+  const showReadsToggle = useRef<HTMLInputElement>(null);
   const [showReads, setShowReads] = useState(
     () => requestedFilter?.action !== undefined && isReadAuditAction(requestedFilter.action),
   );
@@ -163,6 +164,7 @@ export function AuditLogSection({
         <label className="row-wrap text-small" data-testid="audit-show-reads-toggle">
           <input
             type="checkbox"
+            ref={showReadsToggle}
             checked={showReads}
             onChange={(event) => setShowReads(event.target.checked)}
           />
@@ -319,7 +321,16 @@ export function AuditLogSection({
                 `${hiddenReadCount} hidden — check "Show reads" to see them.`,
               )}
               action={
-                <Button variant="secondary" size="s" onClick={() => setShowReads(true)}>
+                <Button
+                  variant="secondary"
+                  size="s"
+                  onClick={() => {
+                    setShowReads(true);
+                    // Legacy 479 (same class): this button goes away as the reads show; focus lands
+                    // on the toggle that now says they are shown.
+                    showReadsToggle.current?.focus();
+                  }}
+                >
                   {t('显示读操作', 'Show reads')}
                 </Button>
               }

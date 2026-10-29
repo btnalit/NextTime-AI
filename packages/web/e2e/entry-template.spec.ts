@@ -117,6 +117,11 @@ test.describe('legacy 145: bringing the entry definition up to the platform temp
 
       const detail = page.getByTestId('worker-detail');
       await expect(detail).toHaveAttribute('data-worker-key', new RegExp(`@${older.version}$`));
+      // Legacy 481: the version in use says so, in the detail and once in the list.
+      await expect(detail.getByTestId('worker-detail-in-use')).toBeVisible();
+      await expect(page.getByTestId('workers-entry-list').getByTestId('worker-in-use')).toHaveCount(
+        1,
+      );
       const notice = page.getByTestId('entry-template-notice');
       await expect(notice).toContainText('与平台自带的入口模板不同');
       await expect(notice).toContainText('新草稿会用平台模板替换这些改动');
@@ -141,6 +146,22 @@ test.describe('legacy 145: bringing the entry definition up to the platform temp
         `+ ${older.goalsHeading}`,
       );
       await expect(diff.locator('[data-change="gap"]').first()).toContainText('行未变');
+      // Legacy 471: a folded run of unchanged lines opens in place (before the full-page capture,
+      // whose resize can re-lay the page out and close the comparison).
+      const gaps = diff.getByTestId('entry-template-prompt-diff-open-gap');
+      const folded = await gaps.count();
+      await gaps.first().click();
+      await expect(gaps).toHaveCount(folded - 1);
+      // Legacy 479: focus moves to the first line it opened, not back to the page.
+      await expect(diff.locator('[data-opened]').first()).toBeFocused();
+      // Legacy 480: crossing the list/detail breakpoint keeps the comparison and the opened lines.
+      const crossed = width === 1440 ? 1000 : 1440;
+      for (const next of [crossed, width]) {
+        await page.setViewportSize({ width: next, height: 900 });
+        await expect(page.getByTestId('entry-template-prompt-diff')).toBeVisible();
+        await expect(gaps).toHaveCount(folded - 1);
+      }
+      await diff.screenshot({ path: testInfo.outputPath(`entry-template-diff-${width}.png`) });
       await capture(page, testInfo.outputPath(`entry-template-${width}.png`));
 
       await page.getByTestId('entry-template-propose').click();
@@ -167,6 +188,10 @@ test.describe('legacy 145: bringing the entry definition up to the platform temp
       await detail.getByTestId('worker-draft-publish').click();
       await expect(page.getByTestId('entry-template-current')).toBeVisible({ timeout: 15_000 });
       await expect(page.getByTestId('entry-template-notice')).toHaveCount(0);
+      await expect(detail.getByTestId('worker-detail-in-use')).toBeVisible();
+      await expect(page.getByTestId('workers-entry-list').getByTestId('worker-in-use')).toHaveCount(
+        1,
+      );
 
       const after = await callCap<EntryTemplateStatusWire>(page, 'get_entry_template_status', {});
       expect(after.differs).toEqual([]);

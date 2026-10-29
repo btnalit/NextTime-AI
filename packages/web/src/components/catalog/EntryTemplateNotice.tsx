@@ -4,12 +4,13 @@ import type {
   EntryTemplateUpgradeWire,
   WorkerDefinitionWire,
 } from '@nexttime/shared';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Resource } from '../../hooks/useResource.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
 import { actionHint, actionLabel } from '../../lib/capability-labels.js';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import {
+  type TextDiffLine,
   capabilityChanges,
   entryCapabilitiesOf,
   entryPromptOf,
@@ -197,27 +198,10 @@ export function EntryTemplateNotice({
                 `− lines are in v${current.version} and not in the template, + lines are the template’s new ones`,
               )}
             </span>
-            <pre className="code-block pre-wrap text-diff" data-testid="entry-template-prompt-diff">
-              {lineDiff(entryPromptOf(row.definition), data.template.systemPrompt).map(
-                (line, index) =>
-                  line.change === 'gap' ? (
-                    // biome-ignore lint/suspicious/noArrayIndexKey: lines have no identity of their own
-                    <span key={index} className="text-diff-line" data-change="gap">
-                      {t(`… ${line.count} 行未变 …`, `… ${line.count} unchanged lines …`)}
-                    </span>
-                  ) : (
-                    <span
-                      // biome-ignore lint/suspicious/noArrayIndexKey: lines have no identity of their own
-                      key={index}
-                      className="text-diff-line"
-                      data-change={line.change}
-                    >
-                      {line.change === 'added' ? '+ ' : line.change === 'removed' ? '− ' : '  '}
-                      {line.text}
-                    </span>
-                  ),
-              )}
-            </pre>
+            <TextDiff
+              lines={lineDiff(entryPromptOf(row.definition), data.template.systemPrompt)}
+              testId="entry-template-prompt-diff"
+            />
           </div>
         </details>
       ) : null}
@@ -244,6 +228,82 @@ export function EntryTemplateNotice({
       )}
       <InlineError error={error} testId="entry-template-propose-error" />
     </div>
+  );
+}
+
+/**
+ * A line-by-line comparison. Legacy 471: a run of unchanged lines folded away opens in place, so
+ * the context around a change can be read without leaving the comparison. Legacy 479: the button
+ * goes away as the lines open, so focus moves to the first line it opened, not back to the page.
+ */
+function TextDiff({
+  lines,
+  testId,
+}: {
+  readonly lines: readonly TextDiffLine[];
+  readonly testId: string;
+}) {
+  const t = useT();
+  const [opened, setOpened] = useState<ReadonlySet<number>>(() => new Set());
+  const [justOpened, setJustOpened] = useState<number | null>(null);
+  const firstOpenedLine = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (justOpened === null) return;
+    firstOpenedLine.current?.focus();
+  }, [justOpened]);
+  return (
+    <pre className="code-block pre-wrap text-diff" data-testid={testId}>
+      {lines.map((line, index) => {
+        if (line.change !== 'gap') {
+          return (
+            <span
+              // biome-ignore lint/suspicious/noArrayIndexKey: lines have no identity of their own
+              key={index}
+              className="text-diff-line"
+              data-change={line.change}
+            >
+              {line.change === 'added' ? '+ ' : line.change === 'removed' ? '− ' : '  '}
+              {line.text}
+            </span>
+          );
+        }
+        if (opened.has(index)) {
+          return line.lines.map((text, offset) => (
+            <span
+              // biome-ignore lint/suspicious/noArrayIndexKey: lines have no identity of their own
+              key={`${index}-${offset}`}
+              ref={index === justOpened && offset === 0 ? firstOpenedLine : undefined}
+              tabIndex={index === justOpened && offset === 0 ? -1 : undefined}
+              className="text-diff-line"
+              data-change="same"
+              data-opened=""
+            >
+              {'  '}
+              {text}
+            </span>
+          ));
+        }
+        return (
+          // biome-ignore lint/suspicious/noArrayIndexKey: lines have no identity of their own
+          <span key={index} className="text-diff-line" data-change="gap">
+            <Button
+              variant="ghost"
+              size="s"
+              onClick={() => {
+                setOpened((prev) => new Set(prev).add(index));
+                setJustOpened(index);
+              }}
+              data-testid={`${testId}-open-gap`}
+            >
+              {t(
+                `… ${line.lines.length} 行未变，点开查看 …`,
+                `… ${line.lines.length} unchanged lines, open to read …`,
+              )}
+            </Button>
+          </span>
+        );
+      })}
+    </pre>
   );
 }
 

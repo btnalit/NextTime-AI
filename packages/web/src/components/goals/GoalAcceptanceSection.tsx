@@ -26,6 +26,8 @@ import { StatusChip } from '../kit/status-chip.js';
 export interface GoalAcceptanceSectionProps {
   readonly detail: GoalDetailWire;
   readonly gateNames: ReadonlyMap<string, string>;
+  /** Legacy 470: the Objects the checks name by id, 「名字 · 类型」 (`useObjectLabels`). */
+  readonly objectNames?: ReadonlyMap<string, string>;
 }
 
 /**
@@ -35,7 +37,11 @@ export interface GoalAcceptanceSectionProps {
  * opens its provenance; an Observation shows its id), and — when the requester declared the goal
  * achieved over checks that had not passed — those checks.
  */
-export function GoalAcceptanceSection({ detail, gateNames }: GoalAcceptanceSectionProps) {
+export function GoalAcceptanceSection({
+  detail,
+  gateNames,
+  objectNames,
+}: GoalAcceptanceSectionProps) {
   const t = useT();
   const planChecks = detail.planRevision.plan.acceptance ?? [];
   const rounds = [...detail.acceptance.rounds].reverse();
@@ -96,7 +102,7 @@ export function GoalAcceptanceSection({ detail, gateNames }: GoalAcceptanceSecti
                 <li key={check.key} className="row-wrap" data-testid="goal-plan-check">
                   <span className="mono">{check.key}</span>
                   <span className="text-3 text-small">{checkKindLabel(check.kind, t)}</span>
-                  <span>{planCheckSentence(check, gateNames, t)}</span>
+                  <span>{planCheckSentence(check, gateNames, t, objectNames)}</span>
                   <CheckOrigin text={origin(check.key)} />
                 </li>
               ))}
@@ -105,7 +111,13 @@ export function GoalAcceptanceSection({ detail, gateNames }: GoalAcceptanceSecti
         </div>
 
         {latest ? (
-          <Round round={latest} gateNames={gateNames} origin={origin} t={t} />
+          <Round
+            round={latest}
+            gateNames={gateNames}
+            objectNames={objectNames}
+            origin={origin}
+            t={t}
+          />
         ) : (
           <span className="text-small text-3" data-testid="goal-acceptance-not-started">
             {t(
@@ -125,6 +137,7 @@ export function GoalAcceptanceSection({ detail, gateNames }: GoalAcceptanceSecti
                   key={round.round}
                   round={round}
                   gateNames={gateNames}
+                  objectNames={objectNames}
                   origin={origin}
                   t={t}
                 />
@@ -156,11 +169,13 @@ function overriddenStatusText(
 function Round({
   round,
   gateNames,
+  objectNames,
   origin,
   t,
 }: {
   readonly round: GoalAcceptanceRoundWire;
   readonly gateNames: ReadonlyMap<string, string>;
+  readonly objectNames: ReadonlyMap<string, string> | undefined;
   readonly origin: (checkKey: string) => string | null;
   readonly t: Translate;
 }) {
@@ -182,6 +197,7 @@ function Round({
             key={check.checkKey}
             check={check}
             gateNames={gateNames}
+            objectNames={objectNames}
             origin={origin(check.checkKey)}
             t={t}
           />
@@ -194,11 +210,13 @@ function Round({
 function CheckRow({
   check,
   gateNames,
+  objectNames,
   origin,
   t,
 }: {
   readonly check: GoalAcceptanceCheckWire;
   readonly gateNames: ReadonlyMap<string, string>;
+  readonly objectNames: ReadonlyMap<string, string> | undefined;
   readonly origin: string | null;
   readonly t: Translate;
 }) {
@@ -215,7 +233,7 @@ function CheckRow({
           </span>
         ) : null}
       </span>
-      <span>{roundCheckSentence(check, gateNames, t)}</span>
+      <span>{roundCheckSentence(check, gateNames, t, objectNames)}</span>
       <span className="row-wrap text-small text-3">
         {check.kind !== 'requester_confirm' ? (
           <span className="tabular">

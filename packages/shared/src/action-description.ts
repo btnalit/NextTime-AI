@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { BlastRadiusSchema, OperationModeSchema } from './enums.js';
+import { BlastRadiusSchema, OperationModeSchema, isMetaOntologyObjectType } from './enums.js';
 
 /**
  * ActionDescription (design doc §3.2, ported from cloudflare-os) and Operation (§5.1.4, the
@@ -142,10 +142,17 @@ export type OperationBinding = z.infer<typeof OperationBindingSchema>;
 /**
  * A JMESPath result mapping (§5.1.4, §7.5): turns a Gatekeeper's raw response into an object
  * identity key and a set of properties, so the kernel can write it as an `observed` Fact.
+ *
+ * Review #493 F1: `object_type` never names a platform meta-ontology type (`Operation`,
+ * `Gatekeeper`, …) — a gate's answer must not become a published definition. The kernel skips such
+ * an observed candidate whatever sends it; refusing the mapping tells the manifest's author early.
  */
 export const ResultMappingSchema = z.object({
   jmes_path: z.string(),
-  object_type: z.string(),
+  object_type: z.string().refine((objectType) => !isMetaOntologyObjectType(objectType), {
+    message:
+      'result_mapping.object_type must not name a platform meta-ontology type (WorkerDefinition, Gatekeeper, Operation, Capability, Skill, Procedure) — a gate observes the connected system, never the platform',
+  }),
   identity_keys: z.array(z.string()),
   attributes: z.record(z.string(), z.string()).optional(),
 });

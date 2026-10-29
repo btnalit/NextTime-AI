@@ -14,6 +14,7 @@ import { describeError } from '../../lib/errors.js';
 import { actionKindTagText, excerpt, formatDateTime, formatRelative } from '../../lib/format.js';
 import {
   goalBudgetRows,
+  goalCheckObjectIds,
   goalPauseReasonLabel,
   goalPlanSource,
   goalStateNote,
@@ -26,6 +27,7 @@ import { hrefs } from '../../lib/router.js';
 import { labelText, statusChipStyle } from '../../lib/status-tone.js';
 import { ProxyOutcomeNote } from '../ProxyOutcomeNote.js';
 import { useGatekeeperNames } from '../approvals/useDirectoryNames.js';
+import { useObjectLabels } from '../graph/useObjectLabels.js';
 import { Button } from '../kit/button.js';
 import { EmptyState } from '../kit/empty-state.js';
 import { ErrorBanner } from '../kit/error-banner.js';
@@ -125,6 +127,8 @@ export function GoalDetailPage({ http, pushes, goalRunId }: GoalDetailPageProps)
   });
 
   const data = detail.state.status === 'ready' ? detail.state.data : undefined;
+  // Legacy 470: the Objects the goal's checks name by id, by name and type.
+  const objectNames = useObjectLabels(http, data ? goalCheckObjectIds(data) : []);
   // The Tasks and actions this goal ran, read when a push arrives rather than captured by the
   // subscription: subscribed once, a push landing between a read and the next subscription is
   // still matched against the goal as last read.
@@ -227,6 +231,7 @@ export function GoalDetailPage({ http, pushes, goalRunId }: GoalDetailPageProps)
           goal={goal}
           http={http}
           gateNames={gateNames}
+          objectNames={objectNames}
           onCancel={() => setRevising(false)}
           onDone={onRevised}
         />
@@ -264,6 +269,7 @@ export function GoalDetailPage({ http, pushes, goalRunId }: GoalDetailPageProps)
         viewer={viewer}
         http={http}
         gateNames={gateNames}
+        objectNames={objectNames}
         onRevise={() => {
           setDone(null);
           setRevising(true);
@@ -339,8 +345,8 @@ export function GoalDetailPage({ http, pushes, goalRunId }: GoalDetailPageProps)
 
       {goal.leftovers ? <Leftovers leftovers={goal.leftovers} http={http} t={t} /> : null}
 
-      <GoalStepsSection detail={goal} http={http} gateNames={gateNames} />
-      <GoalAcceptanceSection detail={goal} gateNames={gateNames} />
+      <GoalStepsSection detail={goal} http={http} gateNames={gateNames} objectNames={objectNames} />
+      <GoalAcceptanceSection detail={goal} gateNames={gateNames} objectNames={objectNames} />
       <GoalRevisionsSection detail={goal} http={http} />
     </div>
   );
@@ -430,7 +436,7 @@ function overviewItems(goal: GoalDetailWire, http: CapabilityCaller, t: Translat
     items.push({
       key: 'parameters',
       label: t('启动参数', 'Start parameters'),
-      value: <PlanSourceParameters source={source} testId="goal-plan-parameters" />,
+      value: <PlanSourceParameters http={http} source={source} testId="goal-plan-parameters" />,
     });
   }
   items.push({
