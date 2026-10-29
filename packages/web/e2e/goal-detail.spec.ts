@@ -633,6 +633,152 @@ test.describe('S11 GO6: operations on a goal (stand-in reads and operations)', (
 });
 
 /**
+ * S11 「门确认不存在」 B: a goal that removes the old certificates, judged by absence checks — the
+ * goal's (the old certificate is gone) and remove-old's own (its host binding is gone). Beside each,
+ * and on the confirm card, what its "not there" rests on: the answers the Operation declares mean
+ * so and who confirmed, publishing it, that the gate's credentials can see what it looks up — or,
+ * for an Operation nobody confirmed, that the platform does not make the check. `list_operations`
+ * is a stand-in like the goal reads.
+ */
+test.describe('S11 「门确认不存在」 B: absence checks on a goal (stand-in reads)', () => {
+  test.skip(!OWNER_API_KEY, 'set WEB_E2E_BASE_URL and WEB_E2E_API_KEY to run this suite');
+
+  const OLD_CERT = { gatekeeperId: GATE, operation: 'cert.get', params: { serial: 'old-2025' } };
+  const PLAN_ABSENT = {
+    steps: [
+      PLAN_V2.steps[0],
+      PLAN_V2.steps[1],
+      {
+        ...PLAN_V2.steps[2],
+        acceptance: [
+          {
+            kind: 'observe_absent',
+            key: 'binding-gone',
+            check: { gatekeeperId: GATE, operation: 'binding.get', params: { host: 'web-1' } },
+          },
+        ],
+      },
+    ],
+    acceptance: [
+      { kind: 'observe_absent', key: 'old-cert-gone', check: OLD_CERT },
+      ...PLAN_V1.acceptance,
+    ],
+  };
+  const operation = (name: string, extra: Record<string, unknown>) => ({
+    gatekeeperId: GATE,
+    name,
+    mode: 'observe',
+    blastRadius: 'low',
+    autoApprovable: true,
+    version: 2,
+    status: 'published',
+    ...extra,
+  });
+
+  for (const width of [1440, 390] as const) {
+    test(`the goal page and its confirm card at ${width}`, async ({ page }, testInfo) => {
+      await page.setViewportSize({ width, height: 900 });
+      await answerGoalReads(page);
+      const owner = (await signedInOwner(page)).id;
+      let proposed = false;
+      await page.route('**/api/cap/get_goal', async (route) => {
+        const ownerId = await owner;
+        NAMES[ownerId] = { kind: 'principal', name: 'owner' };
+        const planRevision = { ...revision(2), plan: PLAN_ABSENT };
+        await route.fulfill(
+          answer(
+            'get_goal',
+            proposed
+              ? {
+                  ...DETAIL,
+                  ...run({
+                    status: 'proposed',
+                    pauseReason: null,
+                    currentRevision: null,
+                    confirmedAt: null,
+                  }),
+                  onBehalfOf: ownerId,
+                  planRevision: {
+                    ...planRevision,
+                    revision: 1,
+                    basedOnRevision: null,
+                    status: 'proposed',
+                    decidedBy: null,
+                    decidedAt: null,
+                    removals: {},
+                    fromProcedure: null,
+                  },
+                  revisions: [
+                    { ...summary(1), status: 'proposed', decidedBy: null, decidedAt: null },
+                  ],
+                  steps: [],
+                  usage: { tokens: 0, steps: 0, revisions: 0 },
+                }
+              : { ...DETAIL, planRevision },
+          ),
+        );
+      });
+      await page.route('**/api/cap/list_operations', async (route) => {
+        const ownerId = await owner;
+        const body = route.request().postDataJSON() as { q?: string } | null;
+        const items = [
+          operation('cert.get', {
+            absentAnswers: { statuses: [404] },
+            absentAnswersReview: { reviewedBy: ownerId, reviewedAt: T0 },
+          }),
+          // Imported before a person had to confirm it: declared, nobody confirmed.
+          operation('binding.get', { absentAnswers: { statuses: [404, 410] } }),
+        ].filter((row) => !body?.q || row.name.includes(body.q));
+        await route.fulfill(answer('list_operations', { items }));
+      });
+      await loginAsOwner(page);
+
+      // 1. A goal running on the plan: each absence check with what it rests on.
+      await page.goto(`/#/work/goals/${GOAL}`);
+      const acceptance = page.getByTestId('goal-acceptance');
+      const goalBasis = acceptance.getByTestId('goal-absence-basis');
+      await expect(goalBasis).toHaveAttribute('data-basis', 'confirmed', { timeout: 15_000 });
+      await expect(goalBasis).toContainText('目标回答 404 时，门回答“不存在”。');
+      await expect(goalBasis).toContainText('owner');
+      await expect(acceptance).toContainText(
+        '以参数 {"serial":"old-2025"} 调用 cert.get，门回答“要查的东西不存在”才算通过',
+      );
+      const removeOld = page.locator('[data-testid="goal-step"][data-step-key="remove-old"]');
+      await removeOld.getByText(/这一步的验收检查/).click();
+      const stepBasis = removeOld.getByTestId('goal-absence-basis');
+      await expect(stepBasis).toHaveAttribute('data-basis', 'unconfirmed');
+      await expect(stepBasis).toContainText('所以平台不做这条检查。');
+      await page.screenshot({
+        path: testInfo.outputPath(`goal-absence-${width}.png`),
+        fullPage: true,
+      });
+
+      // 2. The same plan proposed: the confirm card lists both checks before anything starts.
+      proposed = true;
+      await page.reload();
+      await page.getByTestId('goal-op-confirm').click({ timeout: 15_000 });
+      const listed = page
+        .getByTestId('goal-op-confirm-confirm')
+        .getByTestId('goal-confirm-absence');
+      await expect(listed.getByTestId('goal-confirm-absence-check')).toHaveCount(2);
+      await expect(listed.getByTestId('goal-confirm-absence-check').nth(0)).toContainText(
+        '验收检查 old-cert-gone',
+      );
+      await expect(listed.getByTestId('goal-confirm-absence-check').nth(1)).toContainText(
+        '步骤 remove-old 的检查 binding-gone',
+      );
+      await expect(
+        listed.locator('[data-testid="goal-absence-basis"][data-basis="unconfirmed"]'),
+      ).toHaveCount(1);
+      await page.screenshot({
+        path: testInfo.outputPath(`goal-confirm-absence-${width}.png`),
+        fullPage: true,
+      });
+    });
+  }
+});
+
+/**
  * The plan editor (`revise_goal`) on the owner's own paused goal. `revise_goal` refuses a text
  * holding a credential (400 `credentials_in_text`) or the `[redacted]` mark a read put in its place
  * (400 `redacted_text_submitted`) only once GO5c lands, so both refusals — and the revision that

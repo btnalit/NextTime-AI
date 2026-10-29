@@ -390,6 +390,11 @@ export const GoalOutcomeBasisSchema = asEnum(GOAL_OUTCOME_BASIS_VALUES);
  * check — what the platform verifies, or the requester confirms, before a GoalRun is achieved:
  *   - `observe_predicate` (平台观察): an observe-class Operation, its params and a predicate over its
  *     result (`ObservationCheck`), observed by the platform for the requester;
+ *   - `observe_absent` (平台确认不存在, S11 「门确认不存在」 B, goal/0011): an observe-class
+ *     Operation that declares which of the target's answers mean "does not exist", and its params
+ *     (`ObservationAbsenceCheck`), observed by the platform for the requester; met only when the
+ *     gate answers the call as absent — what a goal that deletes or removes something is checked
+ *     by;
  *   - `fact_predicate` (事实判定, S11 GO4c, goal/0007): a Fact of the graph between two Objects
  *     and a predicate over its properties (`FactCheck`), judged by the platform on a Fact observed
  *     since the round opened, and not by the goal's own doing;
@@ -397,11 +402,12 @@ export const GoalOutcomeBasisSchema = asEnum(GOAL_OUTCOME_BASIS_VALUES);
  *     check the platform makes in the round passed. A plan with no acceptance check has one
  *     implicitly.
  * A step's own acceptance (S11 GO4b, `step_acceptance_checks`, goal/0006) has the platform's kinds
- * only (`observe_predicate`, `fact_predicate`): a step's acceptance never waits on a person. W4
- * adds `review`.
+ * only (`observe_predicate`, `observe_absent`, `fact_predicate`): a step's acceptance never waits
+ * on a person. W4 adds `review`.
  */
 export const GOAL_ACCEPTANCE_CHECK_KIND_VALUES = [
   'observe_predicate',
+  'observe_absent',
   'fact_predicate',
   'requester_confirm',
 ] as const;

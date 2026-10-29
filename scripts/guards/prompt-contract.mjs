@@ -222,6 +222,7 @@ export const PROPOSE_GOAL_SCHEMA_WORDS = new Set([
   'bindings',
   'outputSchema',
   'observe_predicate',
+  'observe_absent',
   'fact_predicate',
   'requester_confirm',
   'idempotencyKey',

@@ -266,9 +266,15 @@ export interface ProcedureBindingForm {
 }
 
 /** What checks a `verify` step in a goal made from the Procedure (legacy 453): the requester, on
- *  its description (`none`); the platform observing a gate's Operation; the platform judging a
- *  Fact of the graph; or a check the form cannot read, kept as JSON. */
-export type ProcedureCheckKind = 'none' | 'observe_predicate' | 'fact_predicate' | 'json';
+ *  its description (`none`); the platform observing a gate's Operation; the platform confirming on
+ *  a gate that something is not there (S11 「门确认不存在」 B); the platform judging a Fact of the
+ *  graph; or a check the form cannot read, kept as JSON. */
+export type ProcedureCheckKind =
+  | 'none'
+  | 'observe_predicate'
+  | 'observe_absent'
+  | 'fact_predicate'
+  | 'json';
 
 /** One step as the form edits it — every field a string so a half-typed step is representable;
  *  `procedureStepToWire` turns it into the wire shape. A step keeps the fields of every kind while
@@ -531,6 +537,24 @@ function checkFormFrom(check: unknown): Partial<ProcedureStepForm> {
         checkExpect: predicateDraftFrom(fields.expect),
       };
     }
+    if (
+      check.kind === 'observe_absent' &&
+      shaped(['kind', 'key', 'check'], check) &&
+      (observed === undefined ||
+        (isRecord(observed) &&
+          shaped(['gatekeeperId', 'operation', 'params'], observed) &&
+          (observed.gatekeeperId === undefined || typeof observed.gatekeeperId === 'string') &&
+          (observed.operation === undefined || typeof observed.operation === 'string')))
+    ) {
+      const fields = isRecord(observed) ? observed : {};
+      return {
+        checkKind: 'observe_absent',
+        checkKey: key,
+        checkGatekeeperId: typeof fields.gatekeeperId === 'string' ? fields.gatekeeperId : '',
+        checkOperation: typeof fields.operation === 'string' ? fields.operation : '',
+        checkParamsText: jsonText(fields.params),
+      };
+    }
     if (check.kind === 'fact_predicate' && shaped(['kind', 'key', 'fact'], check)) {
       return {
         checkKind: 'fact_predicate',
@@ -621,6 +645,20 @@ function checkToWire(step: ProcedureStepForm): Record<string, unknown> {
               : {}),
             ...(predicateFromDraft(step.checkExpect) !== undefined
               ? { expect: predicateFromDraft(step.checkExpect) }
+              : {}),
+          },
+        },
+      };
+    case 'observe_absent':
+      return {
+        check: {
+          kind: 'observe_absent',
+          key,
+          check: {
+            gatekeeperId: step.checkGatekeeperId.trim(),
+            operation: step.checkOperation.trim(),
+            ...(step.checkParamsText.trim() !== ''
+              ? { params: parsedOr(step.checkParamsText) }
               : {}),
           },
         },
@@ -725,6 +763,9 @@ function formProblems(form: ProcedureForm, t: Translate): Record<string, string>
           problems[path === '' ? `${at}.check.check.expect` : `${at}.check.check.expect.${path}`] =
             problem;
         }
+      }
+      if (step.checkKind === 'observe_absent') {
+        json(`${at}.check.check.params`, step.checkParamsText);
       }
       if (step.checkKind === 'fact_predicate') {
         for (const [path, problem] of factCheckDraftProblems(step.checkFact, t)) {

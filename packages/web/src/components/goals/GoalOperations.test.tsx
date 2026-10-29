@@ -94,6 +94,64 @@ describe('goal operations on the goal page (S11 GO6)', () => {
     expect((await screen.findByTestId('goal-op-done')).textContent).toBe('目标已确认，开始执行');
   });
 
+  it('the confirmation card lists each absence check with what its “not there” rests on (S11 「门确认不存在」 B)', async () => {
+    const base = goalDetail();
+    const detail = goalDetail({
+      status: 'proposed',
+      currentRevision: null,
+      confirmedAt: null,
+      planRevision: {
+        ...base.planRevision,
+        status: 'proposed',
+        plan: {
+          ...base.planRevision.plan,
+          acceptance: [
+            {
+              kind: 'observe_absent',
+              key: 'gone',
+              check: { gatekeeperId: GATE_ID, operation: 'svc.lookup' },
+            },
+          ],
+        },
+      },
+    });
+    renderPage(
+      scriptedHttp(
+        handlers(detail, workspace('p-alice', 'member'), {
+          list_operations: () => ({
+            items: [
+              {
+                gatekeeperId: GATE_ID,
+                name: 'svc.lookup',
+                mode: 'observe',
+                blastRadius: 'low',
+                autoApprovable: true,
+                version: 1,
+                status: 'published',
+                absentAnswers: { statuses: [404] },
+                absentAnswersReview: {
+                  reviewedBy: 'p-owner',
+                  reviewedAt: '2026-10-28T00:00:00.000Z',
+                },
+              },
+            ],
+          }),
+          resolve_refs: () => ({ items: [{ id: 'p-owner', kind: 'principal', name: 'Owner' }] }),
+        }),
+      ),
+    );
+    fireEvent.click(await screen.findByTestId('goal-op-confirm'));
+    const confirm = await screen.findByTestId('goal-op-confirm-confirm');
+    const listed = within(confirm).getByTestId('goal-confirm-absence');
+    expect(within(listed).getAllByTestId('goal-confirm-absence-check')).toHaveLength(1);
+    expect(listed.textContent).toContain(
+      '验收检查 gone：在门「cert-gate」上调用 svc.lookup，门回答“要查的东西不存在”才算通过',
+    );
+    const basis = await within(listed).findByTestId('goal-absence-basis');
+    expect(basis.getAttribute('data-basis')).toBe('confirmed');
+    await waitFor(() => expect(basis.textContent).toContain('Owner'));
+  });
+
   it('the confirmation card says which step the requester could not start now', async () => {
     const base = goalDetail();
     const detail = goalDetail({

@@ -83,9 +83,19 @@ export type GateOperationsScope = { readonly gatekeeperId: string } | 'all' | nu
 
 const NO_GATE_PARAMS = { gatekeeperId: '__none__' } as const;
 
+/** S11 「门确认不存在」 B: the Operations an absence check (`observe_absent`) can use — published
+ *  ones whose definition declares which answers mean "does not exist", in a version whose publisher
+ *  confirmed the gate's credentials can see what it looks up. The kernel refuses a plan with any
+ *  other (`application/goal/plan.ts`). */
+export function confirmsAbsence(row: OperationSummaryWire): boolean {
+  return row.absentAnswers !== undefined && row.absentAnswersReview !== undefined;
+}
+
+/** `keep`: only the rows it accepts are offered (an absence check's {@link confirmsAbsence}). */
 export function useGateOperations(
   http: CapabilityCaller,
   scope: GateOperationsScope,
+  keep?: (row: OperationSummaryWire) => boolean,
 ): GateOperations {
   const params =
     scope === null ? NO_GATE_PARAMS : scope === 'all' ? {} : { gatekeeperId: scope.gatekeeperId };
@@ -98,5 +108,6 @@ export function useGateOperations(
   const { state } = list;
   if (state.status === 'loading') return { state: { status: 'loading' }, reload };
   if (state.status === 'error') return { state: { status: 'error', error: state.error }, reload };
-  return { state: { status: 'ready', choices: operationChoices(state.data.items) }, reload };
+  const items = keep ? state.data.items.filter(keep) : state.data.items;
+  return { state: { status: 'ready', choices: operationChoices(items) }, reload };
 }

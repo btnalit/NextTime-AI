@@ -343,14 +343,29 @@ function factIsNamed(c: string): string {
        and ${endpoint('tgt', `${c}.fact_check -> 'target'`)})`;
 }
 
+/** Whether Observation `o` records what an absence check `c` (S11 「门确认不存在」 B,
+ *  `observe_absent`) passes on, as goal/0011's guards require it: the gate's `absent` and no
+ *  predicate, of the Gatekeeper and Operation `c` calls, under a version whose answers a person
+ *  confirmed (`absentAnswersReview`: who and when, B-a). */
+function absenceConfirmed(o: string, c: string): string {
+  return `(${o}.content ? 'absent' and not (${o}.content ? 'expect')
+          and ${o}.content ->> 'gatekeeperId' = ${c}.observation_check ->> 'gatekeeperId'
+          and ${o}.content ->> 'operation' = ${c}.observation_check ->> 'operation'
+          and jsonb_typeof(${o}.content #> '{absentAnswersReview,reviewedBy}') = 'string'
+          and jsonb_typeof(${o}.content #> '{absentAnswersReview,reviewedAt}') = 'string'
+          and ${o}.content #>> '{absentAnswersReview,reviewedBy}' <> ''
+          and ${o}.content #>> '{absentAnswersReview,reviewedAt}' <> '')`;
+}
+
 /** Whether acceptance check row `c` is the declared check `d` (an element of a plan's
- *  `acceptance`), as the goal tables' guards bind them (goal/0006, goal/0007): the same key and
- *  kind, and the same check, Fact or — a goal's confirmation (`withPrompt`; a step has none) —
- *  prompt. */
+ *  `acceptance`), as the goal tables' guards bind them (goal/0006, goal/0007, goal/0011): the same
+ *  key and kind, and the same check (an observation, an absence among them), Fact or — a goal's
+ *  confirmation (`withPrompt`; a step has none) — prompt. */
 function isDeclaredAs(c: string, d: string, withPrompt: boolean): string {
   return `(${d} ->> 'key' = ${c}.check_key and ${d} ->> 'kind' = ${c}.kind
           and case ${c}.kind
                 when 'observe_predicate' then ${d} -> 'check' = ${c}.observation_check
+                when 'observe_absent' then ${d} -> 'check' = ${c}.observation_check
                 when 'fact_predicate' then ${d} -> 'fact' = ${c}.fact_check
                 else ${withPrompt ? `${d} ->> 'prompt' = ${c}.prompt` : 'false'}
               end)`;
@@ -407,7 +422,8 @@ export async function checkIG5(
                        count(c.check_key)
                          filter (where c.plan_revision is distinct from b.current_revision) as off_plan,
                        count(c.check_key)
-                         filter (where c.kind in ('observe_predicate', 'fact_predicate')) as made
+                         filter (where c.kind in ('observe_predicate', 'observe_absent',
+                                                  'fact_predicate')) as made
                   from by_check b
                   left join goal_acceptance_checks c
                     on c.workspace_id = b.workspace_id and c.goal_run_id = b.id and c.round = b.round
@@ -494,7 +510,18 @@ export async function checkIG5(
                             and o.content ->> 'goalRunId' = c.goal_run_id::text
                             and o.content ->> 'round' = c.round::text
                             and o.content ->> 'checkKey' = c.check_key
-                            and o.content ->> 'outcome' = 'satisfied')
+                            and o.content ->> 'outcome' = 'satisfied'
+                            and o.content ? 'expect' and not (o.content ? 'absent'))
+                       -- S11 「门确认不存在」 B (goal/0011): the gate's confirmed absence, no predicate.
+                       when 'observe_absent' then not exists (
+                         select 1 from observations o
+                          where o.workspace_id = c.workspace_id and o.id = c.observation_id
+                            and o.content ->> 'purpose' = 'acceptance_check'
+                            and o.content ->> 'goalRunId' = c.goal_run_id::text
+                            and o.content ->> 'round' = c.round::text
+                            and o.content ->> 'checkKey' = c.check_key
+                            and o.content ->> 'outcome' = 'satisfied'
+                            and ${absenceConfirmed('o', 'c')})
                        when 'requester_confirm' then not exists (
                          select 1 from decisions d
                           where d.workspace_id = c.workspace_id and d.id = c.decision_id
@@ -602,7 +629,18 @@ export async function checkIG5(
                             and o.content ->> 'stepRunId' = c.step_run_id::text
                             and o.content ->> 'round' = c.round::text
                             and o.content ->> 'checkKey' = c.check_key
-                            and o.content ->> 'outcome' = 'satisfied')
+                            and o.content ->> 'outcome' = 'satisfied'
+                            and o.content ? 'expect' and not (o.content ? 'absent'))
+                       when 'observe_absent' then not exists (
+                         select 1 from observations o
+                          where o.workspace_id = c.workspace_id and o.id = c.observation_id
+                            and o.content ->> 'purpose' = 'step_acceptance_check'
+                            and o.content ->> 'goalRunId' = c.goal_run_id::text
+                            and o.content ->> 'stepRunId' = c.step_run_id::text
+                            and o.content ->> 'round' = c.round::text
+                            and o.content ->> 'checkKey' = c.check_key
+                            and o.content ->> 'outcome' = 'satisfied'
+                            and ${absenceConfirmed('o', 'c')})
                        when 'fact_predicate' then not ${factIsNamed('c')}
                        -- A kind this check does not know how to vouch for counts until it does.
                        else true

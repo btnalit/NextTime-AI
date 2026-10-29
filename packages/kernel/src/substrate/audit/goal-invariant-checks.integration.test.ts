@@ -311,7 +311,14 @@ describe.runIf(DATABASE_URL !== undefined)(
           workspaceId,
           randomUUID(),
           randomUUID(),
-          JSON.stringify({ purpose: 'acceptance_check', goalRunId, round, checkKey, outcome }),
+          JSON.stringify({
+            purpose: 'acceptance_check',
+            goalRunId,
+            round,
+            checkKey,
+            expect: CHECK.expect,
+            outcome,
+          }),
         ],
       );
       return rows[0]?.id as string;
@@ -331,7 +338,10 @@ describe.runIf(DATABASE_URL !== undefined)(
 
     /** What `acceptance` and `stepAcceptance` record by default — and a plan declares with
      *  `observed` / `confirmation` (goal/0007 binds a goal's checks to its plan). */
-    const CHECK = { operation: 'svc.status' };
+    const CHECK = {
+      operation: 'svc.status',
+      expect: { path: 'state', op: 'eq', value: 'running' },
+    };
     const PROMPT = 'Is it done?';
     const observed = (key: string, check: Record<string, unknown> = CHECK) => ({
       kind: 'observe_predicate',
@@ -420,6 +430,7 @@ describe.runIf(DATABASE_URL !== undefined)(
             stepRunId,
             round,
             checkKey,
+            expect: CHECK.expect,
             outcome: 'satisfied',
             ...content,
           }),
@@ -870,8 +881,8 @@ describe.runIf(DATABASE_URL !== undefined)(
         const checked = (key: string) => ({
           key,
           acceptance: [
-            { kind: 'observe_predicate', key: 'up', check: { operation: 'svc.status' } },
-            { kind: 'observe_predicate', key: 'down', check: { operation: 'svc.status' } },
+            { kind: 'observe_predicate', key: 'up', check: CHECK },
+            { kind: 'observe_predicate', key: 'down', check: CHECK },
           ],
         });
         const keys = ['healthy', 'retried', 'noRound', 'notPassed', 'oldAttempt', 'missing'];
@@ -948,6 +959,110 @@ describe.runIf(DATABASE_URL !== undefined)(
         for (const id of breaches) {
           expect(result.sample, id).toContain(
             `step-passed-without-evidence ${workspaceId}:${id} (round 1 check up (observe_predicate) passed without its evidence)`,
+          );
+        }
+      });
+
+      it('counts a passed absence check without the gate’s absence of its own call, recorded under a version a person confirmed — on the goal and on a step (S11 「门确认不存在」 B)', async () => {
+        const CALL = { gatekeeperId: randomUUID(), operation: 'svc.get', params: { name: 'web' } };
+        const REVIEW = { reviewedBy: randomUUID(), reviewedAt: new Date().toISOString() };
+        /** What `acceptance-check.ts` records when the gate confirmed the thing is not there. */
+        const CONFIRMED = {
+          gatekeeperId: CALL.gatekeeperId,
+          operation: CALL.operation,
+          absent: { status: 404 },
+          absentAnswersReview: REVIEW,
+          outcome: 'satisfied',
+        };
+        const BREACHES: readonly Record<string, unknown>[] = [
+          { absent: undefined },
+          { expect: CHECK.expect },
+          { gatekeeperId: randomUUID() },
+          { operation: 'svc.other' },
+          { absentAnswersReview: undefined },
+          { absentAnswersReview: { reviewedAt: REVIEW.reviewedAt } },
+          { absentAnswersReview: { ...REVIEW, reviewedBy: '' } },
+          { outcome: 'unsatisfied' },
+        ];
+        const observation = async (content: Record<string, unknown>) => {
+          const rows = await raw<{ id: string }>(
+            `insert into observations (workspace_id, source_id, activity_id, content)
+             values ($1, $2, $3, $4::jsonb) returning id`,
+            [workspaceId, randomUUID(), randomUUID(), JSON.stringify(content)],
+          );
+          return rows[0]?.id as string;
+        };
+
+        /** A verifying run whose plan declares the absence check `gone`, passed on an Observation
+         *  of it with `content` over what the gate's confirmed absence records. */
+        const onGoal = async (content: Record<string, unknown>) => {
+          const id = await goal({ status: 'verifying' });
+          await declare(id, [{ kind: 'observe_absent', key: 'gone', check: CALL }]);
+          const observationId = await observation({
+            purpose: 'acceptance_check',
+            goalRunId: id,
+            round: 1,
+            checkKey: 'gone',
+            ...CONFIRMED,
+            ...content,
+          });
+          await raw(
+            `insert into goal_acceptance_checks (workspace_id, goal_run_id, round, check_key,
+               plan_revision, kind, observation_check, status, attempts, first_attempt_at,
+               observation_id, settled_at)
+             values ($1, $2, 1, 'gone', 1, 'observe_absent', $3::jsonb, 'passed', 1, now(), $4,
+                     now())`,
+            [workspaceId, id, JSON.stringify(CALL), observationId],
+          );
+          return id;
+        };
+        const stepsOf = await goal();
+        await revision(stepsOf, 1, ['s']);
+        /** A waiting step of `stepsOf` whose absence check `gone` passed on such an Observation. */
+        const onStep = async (content: Record<string, unknown>) => {
+          const stepRunId = await step(stepsOf, `a${randomUUID().slice(0, 8)}`, {
+            status: 'waiting',
+          });
+          const observationId = await observation({
+            purpose: 'step_acceptance_check',
+            goalRunId: stepsOf,
+            stepRunId,
+            round: 1,
+            checkKey: 'gone',
+            ...CONFIRMED,
+            ...content,
+          });
+          await raw(
+            `insert into step_acceptance_checks (workspace_id, goal_run_id, step_run_id,
+               step_attempt, round, check_key, plan_revision, kind, observation_check, status,
+               attempts, first_attempt_at, observation_id, settled_at)
+             values ($1, $2, $3, 1, 1, 'gone', 1, 'observe_absent', $4::jsonb, 'passed', 1, now(),
+                     $5, now())`,
+            [workspaceId, stepsOf, stepRunId, JSON.stringify(CALL), observationId],
+          );
+          return stepRunId;
+        };
+
+        const healthyGoal = await onGoal({});
+        const healthyStep = await onStep({});
+        const goalBreaches: string[] = [];
+        const stepBreaches: string[] = [];
+        for (const content of BREACHES) {
+          goalBreaches.push(await onGoal(content));
+          stepBreaches.push(await onStep(content));
+        }
+
+        const result = await check((client) => checkIG5(client, ALL));
+        expect(mentioned(result, healthyGoal)).toBe(false);
+        expect(mentioned(result, healthyStep)).toBe(false);
+        for (const id of goalBreaches) {
+          expect(result.sample, id).toContain(
+            `passed-without-evidence ${workspaceId}:${id} (round 1 check gone (observe_absent) passed without its evidence)`,
+          );
+        }
+        for (const id of stepBreaches) {
+          expect(result.sample, id).toContain(
+            `step-passed-without-evidence ${workspaceId}:${id} (round 1 check gone (observe_absent) passed without its evidence)`,
           );
         }
       });
@@ -1047,7 +1162,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           'round 1: 1 not as the plan in force declares them, 0 declared checks missing',
         );
         const otherCheck = await byCheck([observed('up')]);
-        await acceptance(otherCheck, 'up', { check: { operation: 'svc.other' } });
+        await acceptance(otherCheck, 'up', { check: { ...CHECK, operation: 'svc.other' } });
         breach(
           otherCheck,
           'round 1: 1 not as the plan in force declares them, 0 declared checks missing',
@@ -1088,7 +1203,9 @@ describe.runIf(DATABASE_URL !== undefined)(
         const goodStep = await step(stepsOf, 'good', { status: 'succeeded' });
         await stepAcceptance(stepsOf, goodStep, 'up');
         const badStep = await step(stepsOf, 'bad', { status: 'succeeded' });
-        await stepAcceptance(stepsOf, badStep, 'up', { check: { operation: 'svc.other' } });
+        await stepAcceptance(stepsOf, badStep, 'up', {
+          check: { ...CHECK, operation: 'svc.other' },
+        });
         const extraStep = await step(stepsOf, 'extra', { status: 'succeeded' });
         await stepAcceptance(stepsOf, extraStep, 'up');
         await stepAcceptance(stepsOf, extraStep, 'down');

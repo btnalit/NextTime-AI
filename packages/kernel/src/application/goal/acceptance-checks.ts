@@ -2,11 +2,11 @@ import type {
   FactCheck,
   GoalAcceptanceCheckKind,
   GoalAcceptanceCheckStatus,
-  ObservationCheck,
 } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { writeAudit } from '../../substrate/audit/index.js';
 import type { AcceptanceCheck, StepAcceptanceCheck } from './plan.js';
+import type { PlatformObservationCall } from './platform-observation.js';
 
 /**
  * application/goal/acceptance-checks (S11 GO4a, plan §4.6, I-G5): the rows of a GoalRun's
@@ -29,9 +29,10 @@ import type { AcceptanceCheck, StepAcceptanceCheck } from './plan.js';
  * Every end of an attempt and every settlement is audited (`goal_run.acceptance_check`, on the
  * GoalRun, with the round and the check's key) — the goal's timeline. The database guard holds the
  * rest: created pending in the run's latest round while it is verifying on the plan the row names;
- * settled once; `passed` only on an Observation of this check that satisfied its predicate, on a
- * Fact the database takes as its evidence (a fact check, S11 GO4c, goal/0007), or on the
- * requester's own Decision.
+ * settled once; `passed` only on an Observation of this check that satisfied its predicate — or,
+ * for an absence check (S11 「门确认不存在」 B, `observe_absent`, goal/0011), one in which the gate
+ * confirmed the thing is not there — on a Fact the database takes as its evidence (a fact check,
+ * S11 GO4c, goal/0007), or on the requester's own Decision.
  *
  * **A step's checks** (S11 GO4b, `step_acceptance_checks`, goal/0006) are rows of the same shape,
  * the platform's checks only (observations, Facts), in rounds of their StepRun:
@@ -49,10 +50,23 @@ import type { AcceptanceCheck, StepAcceptanceCheck } from './plan.js';
  * where an observation's `observation_id` is its Observation.
  */
 
+/** The `observation_check` a check's row carries: the call of an observation (`observe_predicate`,
+ *  `observe_absent`), as JSON; `null` for any other kind. */
+function observationCallOf(check: AcceptanceCheck | StepAcceptanceCheck): string | null {
+  return check.kind === 'observe_predicate' || check.kind === 'observe_absent'
+    ? JSON.stringify(check.check)
+    : null;
+}
+
 /** The `last_error` of a fact check's attempt that found no Fact that may serve as evidence — kept
  *  apart from a check that could not be made (a refusal) and from one that saw a Fact that did not
  *  satisfy its predicate (`failed`), in the rows, the audit and a pause's detail. */
 export const FACT_NOT_OBSERVED = 'fact_not_observed';
+
+/** The `last_error` of an absence check's attempt (S11 「门确认不存在」 B, `observe_absent`) in
+ *  which the gate answered with data: the thing looked up is still there — seen, and not so, as a
+ *  predicate that is not met; never a check that could not be made. */
+export const TARGET_STILL_PRESENT = 'target_still_present';
 
 export interface AcceptanceCheckRow {
   readonly workspaceId: string;
@@ -65,8 +79,9 @@ export interface AcceptanceCheckRow {
   readonly checkKey: string;
   readonly planRevision: number;
   readonly kind: GoalAcceptanceCheckKind;
-  /** `observe_predicate`: what is observed; `null` otherwise. */
-  readonly observationCheck: ObservationCheck | null;
+  /** `observe_predicate` / `observe_absent`: what is observed — with its predicate, or (an
+   *  absence check) none; `null` otherwise. */
+  readonly observationCheck: PlatformObservationCall | null;
   /** `fact_predicate` (S11 GO4c): the Fact judged; `null` otherwise. */
   readonly factCheck: FactCheck | null;
   /** `requester_confirm`: what the requester is asked; `null` for an observation. */
@@ -96,7 +111,7 @@ interface AcceptanceCheckDbRow {
   check_key: string;
   plan_revision: number;
   kind: GoalAcceptanceCheckKind;
-  observation_check: ObservationCheck | null;
+  observation_check: PlatformObservationCall | null;
   fact_check: FactCheck | null;
   prompt: string | null;
   status: GoalAcceptanceCheckStatus;
@@ -298,7 +313,7 @@ export async function openAcceptanceRound(
         check.key,
         input.planRevision,
         check.kind,
-        check.kind === 'observe_predicate' ? JSON.stringify(check.check) : null,
+        observationCallOf(check),
         check.kind === 'fact_predicate' ? JSON.stringify(check.fact) : null,
         check.kind === 'requester_confirm' ? check.prompt : null,
       ],
@@ -378,7 +393,8 @@ export async function claimAcceptanceCheck(
             first_attempt_at = coalesce(first_attempt_at, now()),
             lease_until = now() + make_interval(secs => $5::double precision)
       where ${row.where}
-        and kind in ('observe_predicate', 'fact_predicate') and status = 'pending'
+        and kind in ('observe_predicate', 'observe_absent', 'fact_predicate')
+        and status = 'pending'
         and next_attempt_at <= now()
         and (lease_until is null or lease_until <= now())
       returning ${row.columns}`,
@@ -589,7 +605,7 @@ export async function openStepAcceptanceRound(
         check.key,
         input.planRevision,
         check.kind,
-        check.kind === 'observe_predicate' ? JSON.stringify(check.check) : null,
+        observationCallOf(check),
         check.kind === 'fact_predicate' ? JSON.stringify(check.fact) : null,
       ],
     );

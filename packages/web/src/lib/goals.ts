@@ -14,6 +14,7 @@ import type {
   GoalRunStatus,
   GoalRunWire,
   ObjectiveOutcome,
+  ObservationAbsenceCheck,
   ObservationCheck,
   OutputJsonValue,
   OutputSchema,
@@ -421,6 +422,7 @@ export function goalMilestoneText(milestone: GoalMilestone, t: Translate): strin
 
 const CHECK_KIND: Readonly<Record<GoalAcceptanceCheckKind, readonly [string, string]>> = {
   observe_predicate: ['平台观察', 'Platform observation'],
+  observe_absent: ['平台确认已不存在', 'Platform confirms it is gone'],
   fact_predicate: ['事实判定', 'Fact check'],
   requester_confirm: ['请求人确认', 'Requester confirms'],
 };
@@ -781,20 +783,33 @@ export function predicateSentence(predicate: Predicate, t: Translate): string {
   );
 }
 
-/** An observation check as a sentence; `gateName` is the gatekeeper's name when known. */
+/** An observation check as a sentence; `gateName` is the gatekeeper's name when known. An absence
+ *  check (S11 「门确认不存在」 B, no predicate) passes only when the gate answers that the thing
+ *  looked up does not exist — which answers mean that is the Operation's (`AbsenceBasis`). */
 export function observationSentence(
-  check: ObservationCheck,
+  check: ObservationCheck | ObservationAbsenceCheck,
   gateName: string | null,
   t: Translate,
 ): string {
   const gate = gateName ?? shortId(check.gatekeeperId);
-  const expect = predicateSentence(check.expect, t);
   // Two checks of one operation differ only in their params, so the sentence names them —
   // secret-named fields masked, though the kernel has masked them already.
   const params =
     check.params && Object.keys(check.params).length > 0
       ? visibleText(clipMiddle(JSON.stringify(redactSensitive(check.params)), OBSERVE_PARAMS_MAX))
       : null;
+  if (!('expect' in check)) {
+    return params === null
+      ? t(
+          `在门「${gate}」上调用 ${check.operation}，门回答“要查的东西不存在”才算通过`,
+          `Call ${check.operation} on gate “${gate}”; passes only when the gate answers that the thing looked up does not exist`,
+        )
+      : t(
+          `在门「${gate}」上以参数 ${params} 调用 ${check.operation}，门回答“要查的东西不存在”才算通过`,
+          `Call ${check.operation} with ${params} on gate “${gate}”; passes only when the gate answers that the thing looked up does not exist`,
+        );
+  }
+  const expect = predicateSentence(check.expect, t);
   return params === null
     ? t(
         `在门「${gate}」上观察 ${check.operation}，期望 ${expect}`,
@@ -823,6 +838,19 @@ const CHECK_ERROR: Readonly<Record<string, readonly [string, string]>> = {
   requester_may_not_read_facts: [
     '请求人读不到图谱里的事实',
     'The requester cannot read facts in the graph',
+  ],
+  // S11 「门确认不存在」 B: an absence check's.
+  target_still_present: [
+    '它还在：门返回了它，而不是回答它不存在',
+    'It is still there: the gate returned it rather than answering that it does not exist',
+  ],
+  absence_not_declared: [
+    '这个 Operation 现在的版本没有声明哪些回答表示不存在，检查做不了',
+    'The Operation’s version in force declares no answer that means “not there”, so the check cannot be made',
+  ],
+  absence_not_reviewed: [
+    '这个 Operation 现在的版本发布时没有人确认门用的凭据看得到要查的东西，它的“不存在”证明不了什么，检查不做',
+    'Nobody confirmed, when the Operation’s version in force was published, that the gate’s credentials can see what it looks up; its “not there” proves nothing, so the check is not made',
   ],
 };
 
@@ -903,12 +931,46 @@ export function planCheckSentence(
 ): string {
   switch (check.kind) {
     case 'observe_predicate':
+    case 'observe_absent':
       return observationSentence(check.check, gateNames.get(check.check.gatekeeperId) ?? null, t);
     case 'fact_predicate':
       return factCheckSentence(check.fact, t, objectNames);
     case 'requester_confirm':
       return check.prompt;
   }
+}
+
+/** An absence check of the plan in force (S11 「门确认不存在」 B) — the goal's (`stepKey` null) or
+ *  a step's. */
+export interface AbsenceCheckRef {
+  readonly key: string;
+  readonly stepKey: string | null;
+  readonly check: ObservationAbsenceCheck;
+}
+
+/** The plan's absence checks, the goal's first and then each step's in plan order. */
+export function planAbsenceChecks(plan: GoalPlan): AbsenceCheckRef[] {
+  const found: AbsenceCheckRef[] = [];
+  for (const check of plan.acceptance ?? []) {
+    if (check.kind === 'observe_absent') {
+      found.push({ key: check.key, stepKey: null, check: check.check });
+    }
+  }
+  for (const step of plan.steps) {
+    for (const check of step.acceptance ?? []) {
+      if (check.kind === 'observe_absent') {
+        found.push({ key: check.key, stepKey: step.key, check: check.check });
+      }
+    }
+  }
+  return found;
+}
+
+/** The key the Operation an absence check calls is read under (`useAbsenceOperations`). */
+export function absenceOperationKey(
+  check: Pick<ObservationAbsenceCheck, 'gatekeeperId' | 'operation'>,
+): string {
+  return `${check.gatekeeperId}::${check.operation}`;
 }
 
 /** A check of an acceptance round as a sentence. */

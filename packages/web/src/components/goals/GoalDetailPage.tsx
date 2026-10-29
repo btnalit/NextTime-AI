@@ -19,6 +19,7 @@ import {
   goalPlanSource,
   goalStateNote,
   outcomeBasisLabel,
+  planAbsenceChecks,
   planSourceParameters,
 } from '../../lib/goals.js';
 import { type Translate, useT } from '../../lib/i18n.js';
@@ -51,6 +52,7 @@ import { GoalRevisionsSection } from './GoalRevisionsSection.js';
 import { GoalStepsSection } from './GoalStepsSection.js';
 import { GoalUnresolvedSection } from './GoalUnresolvedSection.js';
 import { PlanSource, PlanSourceParameters } from './PlanSource.js';
+import { useAbsenceOperations } from './useAbsenceOperations.js';
 
 export interface GoalDetailPageProps {
   readonly http: CapabilityCaller;
@@ -129,6 +131,12 @@ export function GoalDetailPage({ http, pushes, goalRunId }: GoalDetailPageProps)
   const data = detail.state.status === 'ready' ? detail.state.data : undefined;
   // Legacy 470: the Objects the goal's checks name by id, by name and type.
   const objectNames = useObjectLabels(http, data ? goalCheckObjectIds(data) : []);
+  // S11 「门确认不存在」 B: what each absence check's "not there" rests on, beside it and on the
+  // confirm card.
+  const absenceOperations = useAbsenceOperations(
+    http,
+    data ? planAbsenceChecks(data.planRevision.plan).map((ref) => ref.check) : [],
+  );
   // The Tasks and actions this goal ran, read when a push arrives rather than captured by the
   // subscription: subscribed once, a push landing between a read and the next subscription is
   // still matched against the goal as last read.
@@ -270,6 +278,7 @@ export function GoalDetailPage({ http, pushes, goalRunId }: GoalDetailPageProps)
         http={http}
         gateNames={gateNames}
         objectNames={objectNames}
+        absenceOperations={absenceOperations}
         onRevise={() => {
           setDone(null);
           setRevising(true);
@@ -345,8 +354,20 @@ export function GoalDetailPage({ http, pushes, goalRunId }: GoalDetailPageProps)
 
       {goal.leftovers ? <Leftovers leftovers={goal.leftovers} http={http} t={t} /> : null}
 
-      <GoalStepsSection detail={goal} http={http} gateNames={gateNames} objectNames={objectNames} />
-      <GoalAcceptanceSection detail={goal} gateNames={gateNames} objectNames={objectNames} />
+      <GoalStepsSection
+        detail={goal}
+        http={http}
+        gateNames={gateNames}
+        objectNames={objectNames}
+        absenceOperations={absenceOperations}
+      />
+      <GoalAcceptanceSection
+        detail={goal}
+        http={http}
+        gateNames={gateNames}
+        objectNames={objectNames}
+        absenceOperations={absenceOperations}
+      />
       <GoalRevisionsSection detail={goal} http={http} />
     </div>
   );

@@ -1,10 +1,12 @@
 import type { GateAbsence } from '@nexttime/shared';
 import type { PoolClient } from 'pg';
 import { type PoolLike, withWorkspace } from '../../adapters/db/pool.js';
+import type { OperationAbsentAnswersReview } from '../../governance/gatekeepers/index.js';
 import type { PredicateOutcome } from '../../substrate/epistemic/index.js';
 import {
   type AcceptanceCheckRow,
   FACT_NOT_OBSERVED,
+  TARGET_STILL_PRESENT,
   claimAcceptanceCheck,
   deferAcceptanceCheck,
   lockAcceptanceCheck,
@@ -17,6 +19,7 @@ import { judgeFact, prepareFactCheck, readFactEvidence } from './fact-check.js';
 import {
   type PlatformObservationAnswer,
   callPlatformObservation,
+  expectsAbsence,
   platformObservationRetryDelayMs,
   preparePlatformObservation,
   recordPlatformObservation,
@@ -29,7 +32,12 @@ import { lockGoalRun } from './service.js';
  * acceptance observations. Every step of a GoalRun is done, the run is `verifying` and its round has
  * an `observe_predicate` row pending (`advance.ts` phase V, `acceptance-checks.ts`). This module
  * makes the observation — the steps every observation the platform makes for a requester takes,
- * `platform-observation.ts`, as the reconcile check does — and records what it showed:
+ * `platform-observation.ts`, as the reconcile check does — and records what it showed. An absence
+ * check (S11 「门确认不存在」 B, `observe_absent`) is made the same way and is satisfied only when the
+ * gate confirmed the thing is not there, in an answer the published Operation declares means so;
+ * data back is unsatisfied ({@link TARGET_STILL_PRESENT}: it may still be removed, so it is tried
+ * again like any unmet check), and its Operation no longer declaring such answers is a refusal
+ * (`absence_not_declared`):
  *
  *   - **satisfied** — the row settles `passed` on the Observation; the run is set due, and the
  *     advance completes it once every check of the round passed (or asks the requester, when the
@@ -46,8 +54,9 @@ import { lockGoalRun } from './service.js';
  *     last, `failed` on the latest Observation if an earlier attempt made one, else `unavailable`.
  *   - **refused** — nothing a retry could change, so `unavailable` at once: the predicate no
  *     longer passes the lint or the credential review, the requester may no longer observe through
- *     that gate, the gate or Operation is gone, the params carry a credential, or the gate refused
- *     the call.
+ *     that gate, the gate or Operation is gone, an absence check's Operation no longer declares
+ *     which answers mean "does not exist", the params carry a credential, or the gate refused the
+ *     call — an answer of absence its published definition does not declare among them.
  *
  * **When.** Only while the run is `verifying` and the row is in its latest round: a move out of
  * `verifying` supersedes the round's pending rows in that transaction (`moves.ts`), so a paused,
@@ -66,7 +75,8 @@ import { lockGoalRun } from './service.js';
  * that lost its claim writes nothing. The settle records the Observation (an Activity
  * `goal_acceptance_check` on the Gatekeeper's Source, `purpose: 'acceptance_check'` with the run,
  * the round and the check's key — the database lets a row pass only on such an Observation that
- * satisfied its predicate), settles or defers the row and, on a settlement, sets the run due.
+ * satisfied its predicate, or for an absence check one that records the gate's `absent` and no
+ * predicate, goal/0011), settles or defers the row and, on a settlement, sets the run due.
  *
  * **A step's checks** (S11 GO4b, `step_acceptance_checks`) run the same way, while the step waits
  * on its acceptance (`waiting(acceptance)`) at the attempt the row verifies and the run is
@@ -189,7 +199,7 @@ export async function listDueAcceptanceChecks(
            join goal_runs g on g.workspace_id = c.workspace_id and g.id = c.goal_run_id
           where c.status = 'pending'
             and (g.status <> 'verifying'
-                 or (c.kind in ('observe_predicate', 'fact_predicate')
+                 or (c.kind in ('observe_predicate', 'observe_absent', 'fact_predicate')
                      and c.next_attempt_at <= now()
                      and (c.lease_until is null or c.lease_until <= now())
                      and c.round = (select max(m.round) from goal_acceptance_checks m
@@ -268,6 +278,8 @@ type Settlement =
       readonly absent?: GateAbsence;
       readonly operationDigest: string;
       readonly credentialReview: Record<string, unknown>;
+      /** An absence check's: who confirmed the published version's answers (B-a). */
+      readonly absentAnswersReview?: OperationAbsentAnswersReview;
     }
   /** Nothing a retry could change. */
   | { readonly kind: 'unavailable'; readonly code: string; readonly error?: string | null }
@@ -322,6 +334,9 @@ export async function runAcceptanceCheck(
       ...(answer.absent ? { absent: answer.absent } : {}),
       operationDigest: prepared.operationDigest,
       credentialReview: prepared.credentialReview,
+      ...(prepared.absentAnswersReview
+        ? { absentAnswersReview: prepared.absentAnswersReview }
+        : {}),
     });
   }
   return settle(deps, due, claimed, {
@@ -517,6 +532,9 @@ async function recordObservation(
     ...(settlement.absent ? { absent: settlement.absent } : {}),
     operationDigest: settlement.operationDigest,
     credentialReview: settlement.credentialReview,
+    ...(settlement.absentAnswersReview
+      ? { absentAnswersReview: settlement.absentAnswersReview }
+      : {}),
   });
 
   if (evaluation.outcome === 'satisfied') {
@@ -529,12 +547,15 @@ async function recordObservation(
     );
     return 'passed';
   }
+  const lastError = expectsAbsence(observationCheck)
+    ? TARGET_STILL_PRESENT
+    : unmetCode(evaluation.outcome);
   if (retryDelayMs !== null) {
     await deferAcceptanceCheck(
       client,
       ws,
       check,
-      { delayMs: retryDelayMs, lastError: unmetCode(evaluation.outcome), observationId },
+      { delayMs: retryDelayMs, lastError, observationId },
       due.requesterId,
     );
     return 'retry';
@@ -543,7 +564,7 @@ async function recordObservation(
     client,
     ws,
     check,
-    { status: 'failed', observationId, lastError: unmetCode(evaluation.outcome) },
+    { status: 'failed', observationId, lastError },
     due.requesterId,
   );
   return 'failed';
