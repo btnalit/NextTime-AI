@@ -518,8 +518,8 @@ export const ERROR_NEXT_STEPS: Readonly<
   // Legacy 493: what a step refers to (an Operation, a Worker) is what does not resolve, not another
   // step; `stepReferenceText` names the step and why when the kernel's message says.
   invalid_step_reference: {
-    zh: '流程有一步引用的 Operation 或 Worker 现在用不了：没有发布、已不存在，或不是 Worker。原因见下方「技术细节」。',
-    en: 'An Operation or Worker a step of this Procedure refers to cannot be used now: it is not published, no longer exists, or is not a Worker. See the technical details below.',
+    zh: '流程有一步引用的 Operation 或 Worker 现在用不了：没有发布、已不存在，或不是 Worker。逐步检查各步引用的 Operation 和 Worker 定义。',
+    en: 'An Operation or Worker a step of this Procedure refers to cannot be used now: it is not published, no longer exists, or is not a Worker. Check what each step refers to.',
   },
   unknown_quota_key: {
     zh: '这个配额项不存在。刷新页面后重新选择。',

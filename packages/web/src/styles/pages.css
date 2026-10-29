@@ -1444,6 +1444,18 @@
   padding-bottom: var(--space-4);
 }
 
+/* UX acceptance of #782 (P3-1): a field focused by the form (the step a refusal names) or tabbed
+ * to could stop under that pinned row, its error line off screen: the browser counts the window
+ * as visible down to its bottom edge. The scroller's bottom padding leaves the row out — the
+ * window when the row sticks to it, else the pane or drawer body it sticks to. Room for the row
+ * and a field's error line under the control. */
+html:has(.md-layout--wide .md-detail-pane .overlay-actions),
+.md-pane-body:has(.overlay-actions),
+.drawer-body:has(.overlay-actions) {
+  /* The row (its padding, a button, the inset under it) plus one error line. */
+  scroll-padding-bottom: 112px;
+}
+
 .md-layout--narrow {
   grid-template-columns: minmax(0, 1fr);
 }

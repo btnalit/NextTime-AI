@@ -9,7 +9,7 @@ import { sameNameIds, withSameNameId } from '../../lib/same-name.js';
 import { BLAST_RADIUS_TONES } from '../../lib/status-tone.js';
 import { Button } from '../kit/button.js';
 import { Combobox } from '../kit/combobox.js';
-import { Field } from '../kit/field.js';
+import { Field, describedBy } from '../kit/field.js';
 import { Notice } from '../kit/notice.js';
 import { Select } from '../kit/select.js';
 
@@ -93,6 +93,8 @@ export function OperationStepFields({
             <Select
               id={`${prefix}-gatekeeper`}
               aria-label={gateLabel ?? t('门', 'Gate')}
+              invalid={!!gateError}
+              aria-describedby={describedBy(`${prefix}-gatekeeper`, false, !!gateError)}
               value={gatekeeperId}
               onChange={(event) =>
                 // A name picked from the previous gate's list may not exist on the new one; a
@@ -115,6 +117,8 @@ export function OperationStepFields({
             <input
               className="input input-mono"
               id={`${prefix}-gatekeeper`}
+              aria-invalid={!!gateError || undefined}
+              aria-describedby={describedBy(`${prefix}-gatekeeper`, false, !!gateError)}
               value={gatekeeperId}
               onChange={(event) => onChange({ gatekeeperId: event.target.value })}
               onBlur={() => onChange({ gatekeeperId: gatekeeperId.trim() })}
@@ -145,6 +149,7 @@ export function OperationStepFields({
               onBlur={() => onChange({ operationName: operationName.trim() })}
               disabled={busy}
               aria-invalid={!!operationError || notOnList || undefined}
+              aria-describedby={describedBy(`${prefix}-operation`, true, !!operationError)}
               data-testid={`${testPrefix}-operation-input`}
             />
           ) : (
@@ -162,6 +167,7 @@ export function OperationStepFields({
               loading={operations.state.status === 'loading'}
               disabled={busy || operations.state.status === 'idle'}
               invalid={!!operationError}
+              aria-describedby={describedBy(`${prefix}-operation`, false, !!operationError)}
               mono
               placeholder={
                 operations.state.status === 'idle'

@@ -3870,6 +3870,78 @@ describe('legacy 493 and the deprecated Operation’s detail (UX acceptance of #
     );
   });
 
+  it('deprecating a Skill no longer listed closes its detail, focus on the Skills tab', async () => {
+    let deprecated = false;
+    const http = scriptedHttp({
+      list_skills: () => ({
+        items: deprecated
+          ? []
+          : [
+              {
+                id: 'sk-1',
+                version: 2,
+                status: 'published',
+                name: 'diagnose-net',
+                description: 'd',
+              },
+            ],
+      }),
+      deprecate_skill: () => {
+        deprecated = true;
+        return {};
+      },
+    });
+    renderPage(http, 'skills');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    const deprecate = within(detail).getByRole('button', { name: /弃用/ });
+    deprecate.focus();
+    fireEvent.click(deprecate);
+    const confirm = await screen.findByTestId('skill-deprecate-confirm-sk-1');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    await waitFor(() => expect(screen.queryByTestId('catalog-row')).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId('catalog-detail')).toBeNull());
+    expect(screen.queryByTestId('catalog-detail-missing')).toBeNull();
+    await waitFor(() => expect(document.activeElement?.getAttribute('aria-selected')).toBe('true'));
+    expect(document.activeElement?.getAttribute('role')).toBe('tab');
+  });
+
+  it('deprecating a Procedure whose earlier published version is still listed keeps that detail open', async () => {
+    let deprecated = false;
+    const http = scriptedHttp({
+      list_procedures: () => ({
+        items: [
+          {
+            id: 'pr-1',
+            version: deprecated ? 1 : 2,
+            status: 'published',
+            name: 'restart-verify',
+            description: 'd',
+          },
+        ],
+      }),
+      deprecate_procedure: () => {
+        deprecated = true;
+        return {};
+      },
+    });
+    renderPage(http, 'procedures');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    fireEvent.click(within(detail).getByRole('button', { name: /弃用/ }));
+    const confirm = await screen.findByTestId('procedure-deprecate-confirm-pr-1');
+    fireEvent.click(within(confirm).getByTestId('confirm-button'));
+    await waitFor(() =>
+      expect(http.calls.some((c) => c.name === 'deprecate_procedure')).toBe(true),
+    );
+    await waitFor(() =>
+      expect(http.calls.filter((c) => c.name === 'list_procedures').length).toBeGreaterThan(1),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('catalog-row').getAttribute('aria-current')).toBe('true'),
+    );
+    expect(screen.getByTestId('catalog-detail')).toBeTruthy();
+    expect(screen.queryByTestId('catalog-detail-missing')).toBeNull();
+  });
+
   it('a link to an Operation whose status changed since still opens it', async () => {
     const http = scriptedHttp({
       list_operations: () => ({

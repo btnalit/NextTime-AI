@@ -281,6 +281,34 @@ function useCatalogTabFocusFallback(key: string | null): void {
   );
 }
 
+/** Legacy 494 (UX acceptance of #782, P2-1): the Skills and Procedures lists show a family's
+ *  published and draft versions only, so a family whose last published version was just deprecated
+ *  leaves the list — unless an earlier published version still stands in for it — and its detail
+ *  read 「未找到」. Once the list has been read again (`settled` false, then true) without the
+ *  family still open, the detail closes as after a discard; `useCatalogTabFocusFallback` hands
+ *  focus to the tab, and the toast already said it was deprecated. Returns what `act` calls. */
+function useCloseRetiredFamily(
+  itemId: string | undefined,
+  settled: boolean,
+  listed: (id: string) => boolean,
+  close: () => void,
+): (id: string) => void {
+  const [retired, setRetired] = useState<{ readonly id: string; readonly reread: boolean } | null>(
+    null,
+  );
+  useEffect(() => {
+    if (retired === null) return;
+    if (!settled) {
+      if (!retired.reread) setRetired({ id: retired.id, reread: true });
+      return;
+    }
+    if (!retired.reread) return;
+    setRetired(null);
+    if (itemId === retired.id && !listed(retired.id)) close();
+  });
+  return useCallback((id: string) => setRetired({ id, reread: false }), []);
+}
+
 /** The `useCatalogTabFocusFallback` key: the open item, and each row with its status and version. */
 function listedKey<R extends { readonly status?: string; readonly version?: number }>(
   itemId: string | undefined,
@@ -2230,6 +2258,13 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
     onSelectItem(id);
   }
 
+  const closeIfRetired = useCloseRetiredFamily(
+    itemId,
+    skills.state.status === 'ready' && !skills.state.refreshing,
+    (id) => rows.some((row) => row.id === id),
+    () => selectRow(null),
+  );
+
   function closeEditor(): void {
     setEditor(null);
     onSelectItem(null);
@@ -2266,6 +2301,7 @@ function SkillsTab({ http, itemId, onSelectItem }: CatalogTabProps) {
         tone: 'ok',
         title: `${row.name} ${action === 'publish_skill' ? t('已发布', 'published') : t('已弃用', 'deprecated')}`,
       });
+      if (action === 'deprecate_skill') closeIfRetired(row.id);
       refresh();
     } catch (err) {
       // The kernel's credential question — answered next to Publish, not as a failure toast.
@@ -2808,6 +2844,13 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
     onSelectItem(id);
   }
 
+  const closeIfRetired = useCloseRetiredFamily(
+    itemId,
+    procedures.state.status === 'ready' && !procedures.state.refreshing,
+    (id) => rows.some((row) => row.id === id),
+    () => selectRow(null),
+  );
+
   function closeEditor(): void {
     setEditor(null);
     onSelectItem(null);
@@ -2844,6 +2887,7 @@ function ProceduresTab({ http, itemId, onSelectItem }: CatalogTabProps) {
         tone: 'ok',
         title: `${row.name} ${action === 'publish_procedure' ? t('已发布', 'published') : t('已弃用', 'deprecated')}`,
       });
+      if (action === 'deprecate_procedure') closeIfRetired(row.id);
       setPublishRefusal(null);
       refresh();
     } catch (err) {

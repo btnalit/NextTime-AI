@@ -1546,4 +1546,43 @@ describe('ProcedureEditor (S6-A A2)', () => {
     // Said on the field, not again as a banner over the form.
     expect(screen.queryByText(/流程有一步引用的 Operation 或 Worker/)).toBeNull();
   });
+
+  it('legacy 493: a step whose Operation is not published is said on its Operation name, which points at it (UX acceptance of #782)', async () => {
+    const { caller } = http({
+      list_operations: () => {
+        throw new Error('boom');
+      },
+      propose_procedure: () =>
+        Promise.reject(
+          new HttpError(
+            'capability_error',
+            'Procedure step 0 does not resolve: Operation "restart" on Gatekeeper gk-1 is not published (or does not exist)',
+            'invalid_step_reference',
+          ),
+        ),
+    });
+    render(
+      <ProcedureEditor
+        http={caller}
+        gatekeepers={GATES}
+        copyOf={{
+          id: 'pr-1',
+          version: 1,
+          status: 'published',
+          name: 'One',
+          description: 'One step',
+          steps: [{ kind: 'operation', gatekeeperId: 'gk-1', operationName: 'restart' }],
+        }}
+        onProposed={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    const step = screen.getByTestId('procedure-step');
+    const input = await within(step).findByTestId('procedure-step-operation-input');
+    fireEvent.click(screen.getByTestId('procedure-submit'));
+    await waitFor(() => expect(document.activeElement).toBe(input));
+    const reason = within(step).getByText(/这个 Operation 没有发布，或已不存在/);
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+    expect(input.getAttribute('aria-describedby')?.split(' ')).toContain(reason.id);
+  });
 });
