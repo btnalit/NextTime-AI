@@ -1,4 +1,4 @@
-import { type ReactNode, useCallback, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useMediaQuery } from '../../hooks/useMediaQuery.js';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from './sheet.js';
@@ -64,6 +64,11 @@ export interface MasterDetailProps {
  * Legacy 480: the detail renders once, into one host element that moves between the wide pane and
  * the sheet — crossing the breakpoint moves what is open (a disclosure, the lines unfolded in a
  * comparison, a half-filled form) instead of mounting the detail afresh in the other place.
+ *
+ * Legacy 483: narrowing the window past the breakpoint opens the sheet without anyone asking for
+ * it. When a modal (a dialog, a confirmation, another drawer) is already open at that moment, the
+ * sheet would land on top of it and take its focus; it waits instead, closed, and opens once no
+ * modal is left. The detail stays mounted meanwhile, so what the modal was opened from is intact.
  */
 export function MasterDetail({
   list,
@@ -84,6 +89,29 @@ export function MasterDetail({
     [host],
   );
   const showDetail = isNarrow ? open : detail !== null;
+  // Decided while rendering the crossing, so the sheet never mounts open over the modal first.
+  const [layout, setLayout] = useState(() => ({ narrow: isNarrow, held: false }));
+  if (layout.narrow !== isNarrow) {
+    setLayout({ narrow: isNarrow, held: isNarrow && open && aModalIsOpen() });
+  } else if (layout.held && !open) {
+    setLayout({ narrow: isNarrow, held: false });
+  }
+  const held = layout.held && isNarrow && open;
+  useEffect(() => {
+    if (!held) return;
+    const release = () => {
+      if (!aModalIsOpen()) setLayout((prev) => ({ ...prev, held: false }));
+    };
+    const observer = new MutationObserver(release);
+    observer.observe(document.body, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ['data-state', 'aria-modal'],
+    });
+    release();
+    return () => observer.disconnect();
+  }, [held]);
 
   return (
     <>
@@ -102,7 +130,7 @@ export function MasterDetail({
 
       {isNarrow ? (
         <Sheet
-          open={open}
+          open={open && !held}
           onOpenChange={(next) => {
             if (!next) onClose();
           }}
@@ -118,6 +146,18 @@ export function MasterDetail({
 
       {showDetail && host !== null ? createPortal(detail, host) : null}
     </>
+  );
+}
+
+/** Whether a modal is open: a Radix dialog or alert dialog, or a hand-rolled `aria-modal` drawer
+ *  (`ui/Drawer`). A popover (a medium `kit/confirm`) is not one: it closes when focus leaves it. */
+function aModalIsOpen(): boolean {
+  if (typeof document === 'undefined') return false;
+  const candidates = document.querySelectorAll(
+    '[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"], [role="dialog"][aria-modal="true"]',
+  );
+  return [...candidates].some(
+    (element) => element.closest('[data-radix-popper-content-wrapper]') === null,
   );
 }
 

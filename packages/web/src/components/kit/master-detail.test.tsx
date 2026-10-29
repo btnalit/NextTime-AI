@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { Dialog, DialogContent, DialogTitle } from './dialog.js';
 import { MasterDetail } from './master-detail.js';
 
 afterEach(() => {
@@ -161,5 +162,61 @@ describe('kit/MasterDetail', () => {
     expect(screen.getByTestId('md-detail').className).toContain('md-detail-pane');
     expect(screen.getByTestId('count').textContent).toBe('1');
     expect((screen.getByTestId('disclosure') as HTMLDetailsElement).open).toBe(true);
+  });
+
+  it('holds the sheet closed while a modal open at the crossing is still open (legacy 483)', async () => {
+    let narrow = false;
+    const listeners = new Set<(event: { matches: boolean }) => void>();
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn(() => ({
+        get matches() {
+          return narrow;
+        },
+        media: '',
+        addEventListener: (_: string, listener: (event: { matches: boolean }) => void) =>
+          listeners.add(listener),
+        removeEventListener: (_: string, listener: (event: { matches: boolean }) => void) =>
+          listeners.delete(listener),
+      })),
+    );
+    function Page() {
+      const [editing, setEditing] = useState(true);
+      return (
+        <>
+          <MasterDetail
+            list={<div>list</div>}
+            detail={<div data-testid="the-detail">detail</div>}
+            open={true}
+            onClose={vi.fn()}
+            sheetTitle="Detail"
+            detailTestId="md-detail"
+          />
+          <Dialog open={editing} onOpenChange={setEditing}>
+            <DialogContent data-testid="edit-dialog">
+              <DialogTitle>Edit</DialogTitle>
+              <input data-testid="edit-input" />
+            </DialogContent>
+          </Dialog>
+        </>
+      );
+    }
+    render(<Page />);
+    const input = await screen.findByTestId('edit-input');
+    input.focus();
+    act(() => {
+      narrow = true;
+      for (const listener of listeners) listener({ matches: true });
+    });
+    // No sheet over the dialog, and the dialog keeps its focus.
+    expect(screen.queryByTestId('md-detail')).toBeNull();
+    expect(document.activeElement).toBe(input);
+
+    fireEvent.keyDown(screen.getByTestId('edit-dialog'), { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByTestId('edit-dialog')).toBeNull());
+    // Once the dialog is gone the detail opens in the sheet.
+    const sheet = await screen.findByTestId('md-detail');
+    expect(sheet.getAttribute('role')).toBe('dialog');
+    expect(screen.getByTestId('the-detail')).toBeTruthy();
   });
 });
