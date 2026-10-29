@@ -9,6 +9,7 @@ import {
 } from 'react';
 import { cn } from '../../lib/cn.js';
 import { useT } from '../../lib/i18n.js';
+import { useFieldDescribedBy } from './field-description.js';
 
 /** One pickable row: `value` is what `onChange` receives, `label` what is shown (and matched),
  *  `secondary` a muted note on the right (a blast radius, a group, a kind) that is matched too. */
@@ -109,6 +110,7 @@ export function Combobox({
   onBlur,
   testId,
 }: ComboboxProps) {
+  const described = useFieldDescribedBy(id, ariaDescribedBy);
   const t = useT();
   const listId = `${id}-listbox`;
   const optionId = (index: number) => `${id}-option-${index}`;
@@ -321,7 +323,7 @@ export function Combobox({
         role="combobox"
         className={cn('input', mono && 'input-mono', 'combobox-input')}
         aria-label={ariaLabel}
-        aria-describedby={ariaDescribedBy}
+        aria-describedby={described}
         aria-autocomplete="list"
         aria-expanded={open}
         aria-controls={listId}

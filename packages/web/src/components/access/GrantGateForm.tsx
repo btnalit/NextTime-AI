@@ -17,7 +17,7 @@ import { useGatekeeperDirectory } from '../approvals/useDirectoryNames.js';
 import { Button } from '../kit/button.js';
 import { Confirm } from '../kit/confirm.js';
 import { ErrorBanner } from '../kit/error-banner.js';
-import { Field } from '../kit/field.js';
+import { Field, describedBy } from '../kit/field.js';
 import { Notice } from '../kit/notice.js';
 import { RefChip } from '../kit/ref-chip.js';
 import { SameNameId } from '../kit/same-name-id.js';
@@ -286,6 +286,7 @@ function GrantGateFormBody({
           onChange={(event) => setMemberQuery(event.target.value)}
           placeholder={t('搜索成员…', 'Search members…')}
           disabled={submitting}
+          aria-describedby={describedBy('ggf-member-query', true, false)}
         />
       </Field>
       <select
@@ -372,6 +373,7 @@ function GrantGateFormBody({
               onChange={(event) => setGateQuery(event.target.value)}
               placeholder={t('搜索门…', 'Search gates…')}
               disabled={submitting || allGates}
+              aria-describedby={describedBy('ggf-gate-query', true, false)}
             />
           </Field>
           <div className="stack-s" data-testid="ggf-gate-list">

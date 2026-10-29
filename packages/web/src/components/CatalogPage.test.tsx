@@ -2811,6 +2811,36 @@ describe('CatalogPage editors (S6-A A2)', () => {
     });
   });
 
+  it('at a narrow width, Escape leaves a half-filled Procedure editor open (legacy 497)', async () => {
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn(() => ({
+        matches: true,
+        media: '',
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    try {
+      const http = scriptedHttp({ list_procedures: () => ({ items: [] }) });
+      renderPage(http, 'procedures');
+      await screen.findByTestId('catalog-empty');
+      fireEvent.click(screen.getByTestId('procedures-new-draft'));
+      const drawer = await screen.findByTestId('procedure-editor-drawer');
+      expect(drawer.getAttribute('role')).toBe('dialog');
+      const name = within(drawer).getByLabelText(/^名称/) as HTMLInputElement;
+      fireEvent.change(name, { target: { value: 'Deploy' } });
+      fireEvent.keyDown(name, { key: 'Escape' });
+      expect(screen.getByTestId('procedure-editor-drawer')).toBe(drawer);
+      expect(name.value).toBe('Deploy');
+      // Its own 取消 still closes it.
+      fireEvent.click(within(drawer).getByRole('button', { name: /^取消$/ }));
+      await waitFor(() => expect(screen.queryByTestId('procedure-editor-drawer')).toBeNull());
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('hides "New draft" once propose_* has been refused for the session', async () => {
     const http = scriptedHttp({
       list_procedures: () => ({ items: [] }),

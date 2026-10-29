@@ -16,7 +16,7 @@ import { platformErrorMessage } from '../lib/platform-errors.js';
 import { useUserDirectoryTap } from '../lib/users-directory.js';
 import { Button } from './kit/button.js';
 import { ErrorBanner } from './kit/error-banner.js';
-import { Field } from './kit/field.js';
+import { Field, describedBy } from './kit/field.js';
 import { Select } from './kit/select.js';
 import { StillNeeded } from './kit/still-needed.js';
 import { UserPicker } from './platform/UserPicker.js';
@@ -231,6 +231,11 @@ export function AddMemberForm({
               onBlur={() => setLogin(normalizeLoginInput(login))}
               disabled={submitting}
               aria-invalid={typedLoginError !== null || undefined}
+              aria-describedby={describedBy(
+                'am-login',
+                typedHint !== undefined,
+                typedLoginError !== null,
+              )}
               autoComplete="off"
               spellCheck={false}
             />

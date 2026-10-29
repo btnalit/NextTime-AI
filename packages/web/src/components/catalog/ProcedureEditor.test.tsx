@@ -1582,10 +1582,12 @@ describe('ProcedureEditor (S6-A A2)', () => {
     expect(none.textContent).toMatch(/没有能确认“不存在”的 Operation/);
     expect(within(none).getByRole('link').getAttribute('href')).toBe(hrefs.catalog('operations'));
     // #780 UX P3-3: any name typed there would fail at publish — nothing can be typed.
-    expect(
-      (within(step).getByTestId('procedure-step-check-operation-input') as HTMLInputElement)
-        .disabled,
-    ).toBe(true);
+    const disabledInput = within(step).getByTestId(
+      'procedure-step-check-operation-input',
+    ) as HTMLInputElement;
+    expect(disabledInput.disabled).toBe(true);
+    // Legacy 498: and whoever focuses it hears why, and where to go.
+    expect(disabledInput.getAttribute('aria-describedby')?.split(' ')).toContain(none.id);
     expect(step.textContent).not.toContain('手动输入：与门发布的 Operation 名完全一致');
 
     // Only the declared and confirmed Operation is offered — not the unconfirmed one, nor one that
@@ -1611,6 +1613,11 @@ describe('ProcedureEditor (S6-A A2)', () => {
 
     // #780 UX P3-2: whoever writes the params is told what the confirm card tells the requester.
     expect(step.textContent).toContain('参数要正好指向目标要删掉的那个东西');
+    // Legacy 498: said to whoever focuses the params, too.
+    const paramsHint = within(step).getByText(/参数要正好指向目标要删掉的那个东西/);
+    expect(
+      within(step).getByTestId('procedure-step-check-params').getAttribute('aria-describedby'),
+    ).toBe(paramsHint.id);
     fireEvent.change(within(step).getByTestId('procedure-step-check-params'), {
       target: { value: '{"name": "old-web"}' },
     });
