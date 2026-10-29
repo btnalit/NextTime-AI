@@ -131,7 +131,7 @@ export const SkillStatsWireSchema = z
     skillId: z.string(),
     /** The family's latest version's name. */
     name: z.string(),
-    /** `SKILL_REVIEW_STREAK`: how many not-achieved primary outcomes in a row suggest a review. */
+    /** `REVIEW_STREAK`: how many not-achieved primary outcomes in a row suggest a review. */
     reviewStreak: z.number().int().positive(),
     /** Every version of the family, newest first. */
     versions: z.array(SkillVersionStatsWireSchema),

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { TASK_FAILURE_REASON_VALUES } from './enums.js';
-import { SKILL_REVIEW_STREAK, suggestsReview, taskFailureCategory } from './skill-stats.js';
+import { REVIEW_STREAK, suggestsReview, taskFailureCategory } from './skill-stats.js';
 
 describe('taskFailureCategory', () => {
   it('maps every reason the kernel writes', () => {
@@ -29,7 +29,7 @@ describe('taskFailureCategory', () => {
 
 describe('suggestsReview', () => {
   it('needs the latest three primary outcomes all not achieved', () => {
-    expect(SKILL_REVIEW_STREAK).toBe(3);
+    expect(REVIEW_STREAK).toBe(3);
     expect(suggestsReview(['not_achieved', 'not_achieved', 'not_achieved'])).toBe(true);
     expect(
       suggestsReview(['not_achieved', 'not_achieved', 'not_achieved', 'achieved', 'achieved']),

@@ -28,20 +28,21 @@ export function taskFailureCategory(reason: string | null | undefined): TaskFail
     : 'other';
 }
 
-/** How many primary outcomes in a row, all not achieved, mark a Skill version's segment
- *  「建议复核」 (coordinator decision 2026-10-29, fork 5 = a). */
-export const SKILL_REVIEW_STREAK = 3;
+/** How many primary outcomes in a row, all not achieved, mark a Skill or Procedure version's
+ *  segment 「建议复核」 (coordinator decisions 2026-10-29: E2 fork 5 = a, E2-2 fork 2 = a). */
+export const REVIEW_STREAK = 3;
 
 /**
  * Whether a segment's most recent primary outcomes suggest a review: the latest
- * {@link SKILL_REVIEW_STREAK} of them, newest first, are all `not_achieved`. Only primary outcomes
- * of one segment (one Skill version in one run environment) are passed in — a proxy outcome never
- * suggests a review, and outcomes of another environment are never compared. A hint for a person
- * (a builder decides whether to deprecate); nothing acts on it.
+ * {@link REVIEW_STREAK} of them, newest first, are all `not_achieved`. Only primary outcomes of one
+ * segment are passed in — one Skill version in one run environment, or one Procedure version's
+ * goals that ran in one set of environments — so a proxy outcome never suggests a review, and
+ * outcomes of another environment are never compared. A hint for a person (a builder decides
+ * whether to deprecate); nothing acts on it.
  */
 export function suggestsReview(primaryOutcomesNewestFirst: readonly ObjectiveOutcome[]): boolean {
-  if (primaryOutcomesNewestFirst.length < SKILL_REVIEW_STREAK) return false;
+  if (primaryOutcomesNewestFirst.length < REVIEW_STREAK) return false;
   return primaryOutcomesNewestFirst
-    .slice(0, SKILL_REVIEW_STREAK)
+    .slice(0, REVIEW_STREAK)
     .every((outcome) => outcome === 'not_achieved');
 }

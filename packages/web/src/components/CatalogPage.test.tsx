@@ -4088,3 +4088,90 @@ describe('CatalogPage — Skill usage (S11 W1a E2-1)', () => {
     expect(http.calls.some((call) => call.name === 'get_skill_stats')).toBe(false);
   });
 });
+
+describe('CatalogPage — Procedure usage (S11 W1a E2-2)', () => {
+  function workspaceAs(role: string) {
+    return {
+      id: 'ws-1',
+      name: 'Acme',
+      createdAt: '2026-01-01T00:00:00Z',
+      principalCount: 1,
+      gatekeeperCount: 0,
+      caller: { id: 'p-me', role, displayName: 'Me', kind: 'human' },
+    };
+  }
+
+  function catalog(role: string) {
+    return scriptedHttp({
+      get_workspace: () => workspaceAs(role),
+      list_procedures: () => ({
+        items: [
+          {
+            id: 'pr-1',
+            version: 1,
+            status: 'published',
+            name: 'restart-verify',
+            description: 'd',
+            steps: [{ kind: 'approval', description: 'A person agrees.' }],
+          },
+        ],
+      }),
+      get_procedure_stats: () => ({
+        procedureId: 'pr-1',
+        name: 'restart-verify',
+        reviewStreak: 3,
+        versions: [
+          {
+            version: 1,
+            status: 'published',
+            usage: {
+              goals: 4,
+              byStatus: { proposed: 0, inProgress: 1, completed: 3, cancelled: 0, failed: 0 },
+              lastUsedAt: new Date().toISOString(),
+            },
+            outcomes: {
+              primary: { achieved: 2, notAchieved: 1, total: 3, attainment: 2 / 3 },
+              proxy: { achieved: 0, notAchieved: 0, total: 0, attainment: null },
+              byBasis: [
+                { basis: 'verified_by_check', achieved: 1, notAchieved: 0 },
+                { basis: 'requester', achieved: 1, notAchieved: 1 },
+                { basis: 'reviewer_assessed', achieved: 0, notAchieved: 0 },
+                { basis: 'agent_reported', achieved: 0, notAchieved: 0 },
+              ],
+            },
+            claims: { turns: 0, achieved: 0, notAchieved: 0, lastClaimedAt: null },
+            reviewSuggested: false,
+            segments: [],
+          },
+        ],
+        failureGroups: [],
+      }),
+    });
+  }
+
+  it('a builder sees the family’s usage on the Procedure’s detail', async () => {
+    const http = catalog('builder');
+    renderPage(http, 'procedures');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    const usage = await within(detail).findByTestId('procedure-usage-version-1');
+    expect(usage.textContent).toContain('进行中 1 · 已结束 3');
+    expect(within(usage).getByTestId('procedure-usage-attainment').textContent).toBe(
+      '67%（2 / 3）',
+    );
+    expect(http.calls.find((call) => call.name === 'get_procedure_stats')?.params).toEqual({
+      procedureId: 'pr-1',
+    });
+  });
+
+  it('a member’s Procedure detail has no usage and asks for none', async () => {
+    const http = catalog('member');
+    renderPage(http, 'procedures');
+    const detail = await selectRow(await screen.findByTestId('catalog-row'));
+    await within(detail).findByTestId('procedure-detail');
+    await waitFor(() =>
+      expect(http.calls.some((call) => call.name === 'get_workspace')).toBe(true),
+    );
+    expect(within(detail).queryByTestId('procedure-usage')).toBeNull();
+    expect(http.calls.some((call) => call.name === 'get_procedure_stats')).toBe(false);
+  });
+});

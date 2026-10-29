@@ -749,12 +749,17 @@ const graphCapabilities = [
           version: z.number().int().positive(),
           name: z.string().optional(),
           description: z.string().optional(),
+          // S11 W1a E2-2 (fork 4 = a): a hint, never the order.
+          outcomes: wire.ProcedureOutcomeHintWireSchema,
         })
         .strict(),
     ),
     description:
       'Find published Procedures whose name/description matches any keyword in `need` (space/' +
-      'punctuation-separated; a blank need lists every candidate).',
+      'punctuation-separated; a blank need lists every candidate). Each result carries outcomes ' +
+      '{achieved, total}: platform statistics over only the goals made from that version and ' +
+      'judged by the requester or a platform check. A small total says little about the ' +
+      'Procedure’s quality, and results are not ordered by it.',
   },
 ] as const satisfies readonly Capability[];
 
@@ -1520,6 +1525,20 @@ const metaCapabilities = [
       'row also carries inUse, the family’s latest published version (the one a goal made from ' +
       'it uses until the draft is published), when there is one; keyset-paginated (limit, ' +
       'cursor → nextCursor).',
+  },
+  {
+    // S11 W1a E2-2 (S10 §5.4; coordinator decisions 2026-10-29): a Procedure family's statistics,
+    // aggregated when read — see `wire/procedure-stats.ts` for every counting rule. Same audience as
+    // `get_skill_stats` (human channel, builder floor, numbers only).
+    name: 'get_procedure_stats',
+    group: 'meta',
+    mode: 'observe',
+    channel: 'human',
+    minRole: 'builder',
+    paramsSchema: z.object({ procedureId: id }).strict(),
+    resultSchema: wire.ProcedureStatsWireSchema.nullable(),
+    description:
+      'How each version of a Procedure family has done: the goals made from it by status (proposed / in progress / completed / cancelled / failed); the attainment rate over their outcomes (requester and verified_by_check) with reviewer_assessed apart; the Turns whose entry agent said it followed the version and the requester’s outcomes of them (claims: agent-reported, never in the rate); the same per set of run environments the goals ran in (environmentDigests, null = unknown), each segment marked reviewSuggested when its latest reviewStreak primary outcomes were all not achieved; and the goals that ended without being achieved, grouped by where they went wrong (a Procedure step by key, a step a later revision added, the acceptance checks, or the requester) × the step’s failure category. Numbers only. Builder floor; null for an unknown procedureId.',
   },
   {
     // S3.3: real handler (`application/gateway/fact-handlers.ts`'s `assertFactHandler`), replacing
@@ -4571,8 +4590,9 @@ const HUMAN_ONLY_CAPABILITY_NAMES: ReadonlySet<string> = new Set<CapabilityName>
   'get_gatekeeper',
   'list_operations',
   'get_operation_stats',
-  // S11 W1a E2-1: workspace-wide numbers for the people who maintain Skills.
+  // S11 W1a E2-1 / E2-2: workspace-wide numbers for the people who maintain Skills and Procedures.
   'get_skill_stats',
+  'get_procedure_stats',
   'get_workspace',
   'list_models',
   // S3.13 (docs/development-tasks.md "每用户智能体配置") — AgentProfile/AgentPolicy management and

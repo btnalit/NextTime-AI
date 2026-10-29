@@ -6462,6 +6462,24 @@
               "name": {
                 "type": "string"
               },
+              "outcomes": {
+                "additionalProperties": false,
+                "properties": {
+                  "achieved": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "total": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "achieved",
+                  "total"
+                ],
+                "type": "object"
+              },
               "procedureId": {
                 "minLength": 1,
                 "type": "string"
@@ -6473,7 +6491,8 @@
             },
             "required": [
               "procedureId",
-              "version"
+              "version",
+              "outcomes"
             ],
             "type": "object"
           },
@@ -14745,6 +14764,553 @@
         "updatedAt"
       ],
       "type": "object"
+    },
+    "sideEffects": false
+  },
+  {
+    "channel": "human",
+    "group": "meta",
+    "minRole": "builder",
+    "mode": "observe",
+    "name": "get_procedure_stats",
+    "params": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "procedureId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "procedureId"
+      ],
+      "type": "object"
+    },
+    "result": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "failureGroups": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "category": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "transient",
+                          "authority_lost",
+                          "contract_violation",
+                          "verification_failed",
+                          "outcome_unknown",
+                          "action_refused"
+                        ],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "goals": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  },
+                  "lastEndedAt": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "place": {
+                    "enum": [
+                      "procedure_step",
+                      "revised_step",
+                      "acceptance_check",
+                      "requester"
+                    ],
+                    "type": "string"
+                  },
+                  "procedureVersion": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  },
+                  "stepKey": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "procedureVersion",
+                  "place",
+                  "stepKey",
+                  "category",
+                  "goals",
+                  "lastEndedAt"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "name": {
+              "type": "string"
+            },
+            "procedureId": {
+              "type": "string"
+            },
+            "reviewStreak": {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            "versions": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "claims": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "achieved": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "lastClaimedAt": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "notAchieved": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "turns": {
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "turns",
+                      "achieved",
+                      "notAchieved",
+                      "lastClaimedAt"
+                    ],
+                    "type": "object"
+                  },
+                  "outcomes": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "byBasis": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "achieved": {
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "basis": {
+                              "enum": [
+                                "requester",
+                                "agent_reported",
+                                "verified_by_check",
+                                "reviewer_assessed"
+                              ],
+                              "type": "string"
+                            },
+                            "notAchieved": {
+                              "minimum": 0,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "basis",
+                            "achieved",
+                            "notAchieved"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "primary": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "achieved": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "attainment": {
+                            "anyOf": [
+                              {
+                                "maximum": 1,
+                                "minimum": 0,
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "notAchieved": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "total": {
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "achieved",
+                          "notAchieved",
+                          "total",
+                          "attainment"
+                        ],
+                        "type": "object"
+                      },
+                      "proxy": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "achieved": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "attainment": {
+                            "anyOf": [
+                              {
+                                "maximum": 1,
+                                "minimum": 0,
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "notAchieved": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "total": {
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "achieved",
+                          "notAchieved",
+                          "total",
+                          "attainment"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "primary",
+                      "proxy",
+                      "byBasis"
+                    ],
+                    "type": "object"
+                  },
+                  "reviewSuggested": {
+                    "type": "boolean"
+                  },
+                  "segments": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "environmentDigests": {
+                          "anyOf": [
+                            {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "outcomes": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "byBasis": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "achieved": {
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  },
+                                  "basis": {
+                                    "enum": [
+                                      "requester",
+                                      "agent_reported",
+                                      "verified_by_check",
+                                      "reviewer_assessed"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "notAchieved": {
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  }
+                                },
+                                "required": [
+                                  "basis",
+                                  "achieved",
+                                  "notAchieved"
+                                ],
+                                "type": "object"
+                              },
+                              "type": "array"
+                            },
+                            "primary": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "achieved": {
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "attainment": {
+                                  "anyOf": [
+                                    {
+                                      "maximum": 1,
+                                      "minimum": 0,
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "notAchieved": {
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "total": {
+                                  "minimum": 0,
+                                  "type": "integer"
+                                }
+                              },
+                              "required": [
+                                "achieved",
+                                "notAchieved",
+                                "total",
+                                "attainment"
+                              ],
+                              "type": "object"
+                            },
+                            "proxy": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "achieved": {
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "attainment": {
+                                  "anyOf": [
+                                    {
+                                      "maximum": 1,
+                                      "minimum": 0,
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "notAchieved": {
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "total": {
+                                  "minimum": 0,
+                                  "type": "integer"
+                                }
+                              },
+                              "required": [
+                                "achieved",
+                                "notAchieved",
+                                "total",
+                                "attainment"
+                              ],
+                              "type": "object"
+                            }
+                          },
+                          "required": [
+                            "primary",
+                            "proxy",
+                            "byBasis"
+                          ],
+                          "type": "object"
+                        },
+                        "reviewSuggested": {
+                          "type": "boolean"
+                        },
+                        "usage": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "byStatus": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "cancelled": {
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "completed": {
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "failed": {
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "inProgress": {
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "proposed": {
+                                  "minimum": 0,
+                                  "type": "integer"
+                                }
+                              },
+                              "required": [
+                                "proposed",
+                                "inProgress",
+                                "completed",
+                                "cancelled",
+                                "failed"
+                              ],
+                              "type": "object"
+                            },
+                            "goals": {
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "lastUsedAt": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "goals",
+                            "byStatus",
+                            "lastUsedAt"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "environmentDigests",
+                        "usage",
+                        "outcomes",
+                        "reviewSuggested"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "status": {
+                    "enum": [
+                      "draft",
+                      "published",
+                      "deprecated"
+                    ],
+                    "type": "string"
+                  },
+                  "usage": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "byStatus": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "cancelled": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "completed": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "failed": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "inProgress": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "proposed": {
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "proposed",
+                          "inProgress",
+                          "completed",
+                          "cancelled",
+                          "failed"
+                        ],
+                        "type": "object"
+                      },
+                      "goals": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "lastUsedAt": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "goals",
+                      "byStatus",
+                      "lastUsedAt"
+                    ],
+                    "type": "object"
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "version",
+                  "status",
+                  "usage",
+                  "outcomes",
+                  "claims",
+                  "reviewSuggested",
+                  "segments"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "procedureId",
+            "name",
+            "reviewStreak",
+            "versions",
+            "failureGroups"
+          ],
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "sideEffects": false
   },
