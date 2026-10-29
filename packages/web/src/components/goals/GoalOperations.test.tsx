@@ -147,6 +147,10 @@ describe('goal operations on the goal page (S11 GO6)', () => {
     expect(listed.textContent).toContain(
       '验收检查 gone：在门「cert-gate」上调用 svc.lookup，门回答“要查的东西不存在”才算通过',
     );
+    // A "not there" for params naming something that never existed passes too (review #501).
+    expect(within(listed).getByTestId('goal-confirm-absence-params').textContent).toContain(
+      '要正好指向这个目标要删掉的那个东西',
+    );
     const basis = await within(listed).findByTestId('goal-absence-basis');
     expect(basis.getAttribute('data-basis')).toBe('confirmed');
     await waitFor(() => expect(basis.textContent).toContain('Owner'));

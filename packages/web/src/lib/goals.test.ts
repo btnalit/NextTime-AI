@@ -325,8 +325,8 @@ describe('lib/goals', () => {
         zh,
       ),
     ).toMatch(/^在门「svc-gate」上调用 svc\.lookup，门回答/);
-    expect(checkKindLabel('observe_absent', zh)).toBe('平台确认已不存在');
-    expect(checkKindLabel('observe_absent', en)).toBe('Platform confirms it is gone');
+    expect(checkKindLabel('observe_absent', zh)).toBe('平台确认不存在');
+    expect(checkKindLabel('observe_absent', en)).toBe('Platform confirms it is not there');
     expect(checkErrorLabel('target_still_present', zh)).toBe(
       '它还在：门返回了它，而不是回答它不存在',
     );

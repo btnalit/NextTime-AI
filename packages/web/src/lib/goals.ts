@@ -422,7 +422,7 @@ export function goalMilestoneText(milestone: GoalMilestone, t: Translate): strin
 
 const CHECK_KIND: Readonly<Record<GoalAcceptanceCheckKind, readonly [string, string]>> = {
   observe_predicate: ['平台观察', 'Platform observation'],
-  observe_absent: ['平台确认已不存在', 'Platform confirms it is gone'],
+  observe_absent: ['平台确认不存在', 'Platform confirms it is not there'],
   fact_predicate: ['事实判定', 'Fact check'],
   requester_confirm: ['请求人确认', 'Requester confirms'],
 };

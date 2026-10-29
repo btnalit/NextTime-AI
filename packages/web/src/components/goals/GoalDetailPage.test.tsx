@@ -589,7 +589,7 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
     const stepBasis = await within(step).findByTestId('goal-absence-basis');
     expect(stepBasis.getAttribute('data-basis')).toBe('unconfirmed');
     expect(stepBasis.textContent).toContain('所以平台不做这条检查。');
-    expect(within(step).getByTestId('goal-step-check').textContent).toContain('平台确认已不存在');
+    expect(within(step).getByTestId('goal-step-check').textContent).toContain('平台确认不存在');
     // One read per Operation, by gate and name.
     expect(
       http.calls
@@ -597,6 +597,53 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
         .map((call) => (call.params as { q: string }).q)
         .sort(),
     ).toEqual(['svc.find', 'svc.lookup', 'svc.status']);
+  });
+
+  it('an Operation that could not be read says so, apart from one with no published version (review #501 on #780)', async () => {
+    const base = goalDetail();
+    const detail = goalDetail({
+      planRevision: {
+        ...base.planRevision,
+        plan: {
+          ...base.planRevision.plan,
+          acceptance: [
+            {
+              kind: 'observe_absent',
+              key: 'gone',
+              check: { gatekeeperId: GATE_ID, operation: 'svc.lookup' },
+            },
+            {
+              kind: 'observe_absent',
+              key: 'gone-too',
+              check: { gatekeeperId: GATE_ID, operation: 'svc.retired' },
+            },
+          ],
+        },
+      },
+    });
+    const http = scriptedHttp({
+      ...baseHandlers(detail),
+      list_operations: (params) => {
+        const { q } = params as { q: string };
+        if (q === 'svc.lookup') throw new HttpError('network', 'try again later');
+        return { items: [] };
+      },
+    });
+    renderPage(http);
+
+    const acceptance = await screen.findByTestId('goal-acceptance');
+    await waitFor(() =>
+      expect(within(acceptance).getAllByTestId('goal-absence-basis')).toHaveLength(2),
+    );
+    const [lookup, retired] = within(acceptance).getAllByTestId('goal-absence-basis') as [
+      HTMLElement,
+      HTMLElement,
+    ];
+    expect(lookup.getAttribute('data-basis')).toBe('unreadable');
+    expect(lookup.textContent).toContain('这个 Operation 没读出来');
+    expect(lookup.textContent).not.toContain('平台做不了这条检查');
+    expect(retired.getAttribute('data-basis')).toBe('none');
+    expect(retired.textContent).toContain('没有已发布版本，平台做不了这条检查');
   });
 
   it('a plan written out says nothing of a Procedure', async () => {

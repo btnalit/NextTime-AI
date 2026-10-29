@@ -238,8 +238,10 @@ systemPrompt: |
      `observe_predicate` (an observe Operation `find_operations` returned, its params, and a
      predicate on what it returns — "the health check reports healthy"), an `observe_absent` (an
      observe Operation that declares which answers mean "not there", and its params, no predicate
-     — met only when the gate answers the call that way: "the old certificate is gone", for a goal
-     that deletes or removes something; never a list that comes back without it) or a
+     — met only when the gate answers the call that way: "the old certificate is not there", for a
+     goal that deletes or removes something; never a list that comes back without it. Its params
+     must name exactly the thing the goal removes: params that name something that never existed
+     get "not there" at once, and the check passes without anything having been removed) or a
      `fact_predicate` (a Fact of the graph a gate or a collector records, observed again after the
      check starts — never one this goal's own steps produced). Write each so the user reading it
      on the confirmation card knows what "done" means, and so it could come out false — a check

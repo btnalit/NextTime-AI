@@ -52,7 +52,7 @@ import { SchemaFieldsEditor } from './SchemaFieldsEditor.js';
  * input bindings (the source chosen from the parameters or the steps; the path offered from the
  * fields they declare) and output contract. A `verify` step: who checks it — the requester on its
  * description, or the platform (the gate and Operation it observes chosen, the expectation as JSON;
- * for a check that something is gone, only an Operation that can confirm it is offered, with what
+ * for a check that something is not there, only an Operation that can confirm it is offered, with what
  * its "not there" rests on).
  *
  * What is wrong shows on the field it is about: the form's own checks, the schema's, and — for a
@@ -632,8 +632,8 @@ const CHECK_KIND_LABEL: Readonly<Record<ProcedureCheckKind, readonly [string, st
     'The platform observes a gate’s Operation',
   ],
   observe_absent: [
-    '平台在门上确认要查的东西已不存在',
-    'The platform confirms on a gate that the thing is gone',
+    '平台在门上确认要查的东西不存在',
+    'The platform confirms on a gate that the thing is not there',
   ],
   fact_predicate: ['平台判定图里的一条事实', 'The platform judges a Fact of the graph'],
   json: ['表单认不出的检查（JSON）', 'A check the form cannot read (JSON)'],

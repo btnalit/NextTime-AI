@@ -3,9 +3,16 @@ import { useEffect, useState } from 'react';
 import type { CapabilityCaller } from '../../lib/clients.js';
 import { absenceOperationKey } from '../../lib/goals.js';
 
-/** By `absenceOperationKey`: the published version of the Operation an absence check calls, or
- *  `null` when it has none (or it could not be read). A key not in the map is still being read. */
-export type AbsenceOperations = ReadonlyMap<string, OperationSummaryWire | null>;
+/** An Operation whose read failed (review #501 on #780) — told apart from one that has no
+ *  published version, which the platform cannot make the check on. */
+export const ABSENCE_OPERATION_UNREADABLE = 'unreadable';
+
+/** What is known of the Operation an absence check calls: its published version, `null` when it
+ *  has none, or {@link ABSENCE_OPERATION_UNREADABLE}. */
+export type AbsenceOperation = OperationSummaryWire | null | typeof ABSENCE_OPERATION_UNREADABLE;
+
+/** By `absenceOperationKey`; a key not in the map is still being read. */
+export type AbsenceOperations = ReadonlyMap<string, AbsenceOperation>;
 
 const NONE: AbsenceOperations = new Map();
 
@@ -27,7 +34,7 @@ export function useAbsenceOperations(
     if (key === '') return;
     let live = true;
     void Promise.all(
-      key.split('\n').map(async (name) => {
+      key.split('\n').map(async (name): Promise<readonly [string, AbsenceOperation]> => {
         // A gatekeeper id is a UUID: the first `::` ends it.
         const at = name.indexOf('::');
         const gatekeeperId = name.slice(0, at);
@@ -50,10 +57,11 @@ export function useAbsenceOperations(
             if (published) return [name, published] as const;
             cursor = page.nextCursor === cursor ? undefined : page.nextCursor;
           } while (cursor !== undefined);
+          return [name, null] as const;
         } catch {
-          // Read as "none": the check's line says it could not be read.
+          // Not "none": the check's line says the read failed, not that the check cannot be made.
+          return [name, ABSENCE_OPERATION_UNREADABLE] as const;
         }
-        return [name, null] as const;
       }),
     ).then((rows) => {
       if (live) setOperations(new Map(rows));
