@@ -55,6 +55,29 @@ describe('kit/RefChip', () => {
     expect(http.call).toHaveBeenCalledTimes(1);
   });
 
+  it('a definition found but unnamed reads as its kind, never 未知 / 已删除 (legacy 485)', async () => {
+    const http = scriptedCaller((ids) =>
+      ids.map((id) => ({
+        id,
+        kind: 'workerDefinition' as const,
+        typeName: id === 'en-1' ? 'entry' : 'worker',
+        ...(id === 'wd-2' ? { name: 'ops-runner' } : {}),
+      })),
+    );
+    render(
+      <>
+        <RefChip kind="workerDefinition" id="en-1" http={http} testId="entry" />
+        <RefChip kind="workerDefinition" id="wd-1" http={http} testId="unnamed" />
+        <RefChip kind="workerDefinition" id="wd-2" http={http} testId="named" />
+      </>,
+    );
+    await waitFor(() => expect(screen.getByTestId('named').textContent).toContain('ops-runner'));
+    expect(screen.getByTestId('entry').textContent).toMatch(/^入口定义入口\sagent/);
+    expect(screen.getByTestId('unnamed').textContent).toContain('Worker未命名 Worker 定义');
+    expect(screen.getByTestId('named').textContent).not.toContain('(worker)');
+    expect(screen.queryByText(/未知 \/ 已删除/)).toBeNull();
+  });
+
   it('renders the fallback when resolve_refs returns no match for the id (unknown/invisible)', async () => {
     const http = scriptedCaller(() => []);
     render(<RefChip kind="task" id="t-missing" http={http} testId="chip" />);

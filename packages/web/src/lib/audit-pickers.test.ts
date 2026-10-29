@@ -63,6 +63,22 @@ describe('resourceIdSource', () => {
     ]);
   });
 
+  it('names an unnamed definition by its kind, never by an id prefix (legacy 485)', async () => {
+    const http = caller({
+      list_worker_definitions: () => ({
+        items: [
+          { id: 'eeeeeeee-1111', version: 2, kind: 'entry', definition: {} },
+          { id: 'ffffffff-2222', version: 1, kind: 'worker', definition: { name: '' } },
+        ],
+      }),
+    });
+    const options = await resourceIdSource('worker_definition', t)?.load(http, '');
+    const shown = options?.map((option) => `${option.label} / ${option.detail}`) ?? [];
+    expect(shown).toHaveLength(2);
+    expect(shown[0]).toMatch(/^入口\sagent \/ 入口定义$/);
+    expect(shown[1]).toBe('未命名 Worker 定义 / Worker 定义');
+  });
+
   it('maps an Operation to the `${gatekeeperId}:${name}` id the kernel audits it under, named by its gate', async () => {
     const http = caller({
       list_operations: (params) => {
