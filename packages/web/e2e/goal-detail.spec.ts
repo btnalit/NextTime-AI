@@ -728,7 +728,8 @@ test.describe('S11 「门确认不存在」 B: absence checks on a goal (stand-i
                   ...run({ pauseReason: 'needs_decision' }),
                   planRevision,
                   // B-c: the platform saw the old certificate before the work; revision 2 added
-                  // remove-old's check, whose Operation nobody confirmed, so its look was refused.
+                  // remove-old's check once the steps had started (its look comes after their
+                  // attempts), and its Operation nobody confirmed, so that look was refused.
                   acceptance: {
                     ...DETAIL.acceptance,
                     absenceBaselines: [
@@ -746,7 +747,8 @@ test.describe('S11 「门确认不存在」 B: absence checks on a goal (stand-i
                         checkKey: 'binding-gone',
                         status: 'unavailable',
                         lastError: 'absence_not_reviewed',
-                        settledAt: T0,
+                        createdAt: T3,
+                        settledAt: T3,
                       },
                     ],
                   },
@@ -783,6 +785,9 @@ test.describe('S11 「门确认不存在」 B: absence checks on a goal (stand-i
         'data-baseline',
         'seen_present',
       );
+      await expect(acceptance.getByTestId('goal-absence-baseline')).toContainText(
+        '说明是在目标运行期间被删掉的',
+      );
       const removeOld = page.locator('[data-testid="goal-step"][data-step-key="remove-old"]');
       await removeOld.getByText(/这一步的验收检查/).click();
       const stepBasis = removeOld.getByTestId('goal-absence-basis');
@@ -790,7 +795,10 @@ test.describe('S11 「门确认不存在」 B: absence checks on a goal (stand-i
       await expect(stepBasis).toContainText('所以平台不做这条检查。');
       const stepLook = removeOld.getByTestId('goal-absence-baseline');
       await expect(stepLook).toHaveAttribute('data-baseline', 'unavailable');
-      await expect(stepLook).toContainText('开始前平台没能看它在不在');
+      // #786 review #501: a look made after the work began does not say "before the work".
+      await expect(stepLook).toContainText('平台没能看它在不在（');
+      await expect(stepLook).toContainText('所以目标暂停，没有往下做');
+      await expect(stepLook).not.toContainText('开始前');
       await page.screenshot({
         path: testInfo.outputPath(`goal-absence-${width}.png`),
         fullPage: true,

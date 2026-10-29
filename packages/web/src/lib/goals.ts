@@ -855,8 +855,8 @@ const CHECK_ERROR: Readonly<Record<string, readonly [string, string]>> = {
   ],
   // S11 「门确认不存在」 B-c.
   never_seen_present: [
-    '开始前平台没看到过它在：现在它不在，证明不了是这个目标删掉的，检查不做',
-    'The platform never saw it there before the goal’s work: its absence now does not show this goal removed it, so the check is not made',
+    '平台用同样的调用没有一次看到过它在：现在它不在，证明不了是这个目标删掉的，检查不做',
+    'No look of the platform’s with the same call ever saw it there: its absence now does not show this goal removed it, so the check is not made',
   ],
 };
 
@@ -972,7 +972,7 @@ export function planAbsenceChecks(plan: GoalPlan): AbsenceCheckRef[] {
   return found;
 }
 
-/** S11 「门确认不存在」 B-c: the platform's latest look before the goal's work for the absence
+/** S11 「门确认不存在」 B-c: the platform's latest look, before the work it judges, for the absence
  *  check `checkKey` of the goal (`stepKey` null) or of step `stepKey` — get_goal lists only looks
  *  with the call the plan in force makes. */
 export function absenceBaselineOf(
@@ -983,6 +983,21 @@ export function absenceBaselineOf(
   return detail.acceptance.absenceBaselines.find(
     (baseline) => baseline.stepKey === stepKey && baseline.checkKey === checkKey,
   );
+}
+
+/** S11 「门确认不存在」 B-c (#786 review #501): when the run's first attempt started — of any step,
+ *  superseded ones too — or `null` while none has. A look made after it came once the work had
+ *  begun (a revision changed the check), so a thing it did not see may be an earlier step's doing. */
+export function goalFirstAttemptAt(detail: Pick<GoalDetailWire, 'steps'>): string | null {
+  let first: string | null = null;
+  for (const step of detail.steps) {
+    for (const attempt of step.attempts) {
+      if (first === null || Date.parse(attempt.createdAt) < Date.parse(first)) {
+        first = attempt.createdAt;
+      }
+    }
+  }
+  return first;
 }
 
 /** The key the Operation an absence check calls is read under (`useAbsenceOperations`). */
@@ -1217,8 +1232,8 @@ function pausedNote(
         return {
           tone: 'warn',
           text: t(
-            '需要人决定：开工前平台没看到某条“不存在”检查要删的东西在（或者没能看），步骤没有开始。见下面验收和步骤里标出的检查。',
-            'A person must decide: before the work the platform did not see what an absence check removes (or could not look), so no step started. See the checks marked under Acceptance and Steps.',
+            '需要人决定：平台事先看某条“不存在”检查要删的东西时，没看到它在（或者没能看），所以目标没有往下做。见下面验收和步骤里标出的检查。',
+            'A person must decide: when the platform looked first for what an absence check removes, it did not see it there (or could not look), so the goal did not go on. See the checks marked under Acceptance and Steps.',
           ),
         };
       }

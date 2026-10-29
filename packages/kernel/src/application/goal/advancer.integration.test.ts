@@ -6023,7 +6023,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           pauseReason: 'needs_decision',
         });
         expect(await pauseDetail(goalRunId)).toBe(
-          "acceptance check gone: the platform could not look before the goal's work (operation_refused); revise the check's params or the plan, resume to look again, or cancel",
+          "acceptance check gone: the platform could not look before the goal's work started (operation_refused); revise the check's params or the plan, resume to look again, or cancel",
         );
 
         // No answer: tried again with backoff, then unavailable.
@@ -6045,7 +6045,7 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(await lookBefore(goalRunId, silent, options)).toEqual(['unavailable']);
         await advance(goalRunId, requester);
         expect(await pauseDetail(goalRunId)).toBe(
-          "acceptance check gone: the platform could not look before the goal's work (gate_unreachable); revise the check's params or the plan, resume to look again, or cancel",
+          "acceptance check gone: the platform could not look before the goal's work started (gate_unreachable); revise the check's params or the plan, resume to look again, or cancel",
         );
 
         // Seen at last, on a fourth take: the step starts.
@@ -6119,6 +6119,22 @@ describe.runIf(DATABASE_URL !== undefined)(
         expect(observeClient.calls.slice(calls)).toMatchObject([
           { input: { params: { name: 'api' } } },
         ]);
+
+        // Revision 4 re-calls the check after step a started: a "not there" now may be step a's
+        // doing, so the pause says the look came after the work began rather than before it.
+        const late = { ...absence(), check: { ...absence().check, params: { name: 'old-api' } } };
+        await pauseAs(goalRunId, requester);
+        await revise(3, [late]);
+        await resumeAs(goalRunId, requester);
+        expect(await lookBefore(goalRunId, NOT_THERE)).toEqual(['never_seen_present']);
+        await advance(goalRunId, requester);
+        expect(await goalOf(goalRunId)).toMatchObject({
+          status: 'paused',
+          pauseReason: 'needs_decision',
+        });
+        expect(await pauseDetail(goalRunId)).toBe(
+          "acceptance check gone: the platform first looked after the goal's steps had started (the plan changed the check) and the gate answered that the thing is not there (never_seen_present) — an earlier step may have removed it, or the params name something else; either way the check could never show this goal removed it; revise the check's params or the plan, resume to look again, or cancel",
+        );
       });
 
       it('S11 「门确认不存在」 B-c: an absence check with no look that saw the thing is unavailable without the gate being asked, and the run pauses naming it', async () => {
@@ -6146,7 +6162,7 @@ describe.runIf(DATABASE_URL !== undefined)(
           outcome: null,
         });
         expect(await pauseDetail(goalRunId)).toContain(
-          "acceptance check gone: the platform never saw the thing there before the goal's work (never_seen_present), so its absence now does not show this goal removed it",
+          'acceptance check gone: the platform has no look with this call that saw the thing there (never_seen_present), so its absence now does not show this goal removed it',
         );
       });
 

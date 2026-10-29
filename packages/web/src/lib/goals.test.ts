@@ -3,12 +3,13 @@ import {
   type GoalDetailWire,
   type GoalPlan,
   type OutputSchema,
+  type StepAttemptWire,
   type UnresolvedGoalActionWire,
   outputContractProblems,
   validateOutput,
 } from '@nexttime/shared';
 import { describe, expect, it } from 'vitest';
-import { goalRun } from '../components/goals/goal-fixtures.test-helpers.js';
+import { goalRun, stepRun } from '../components/goals/goal-fixtures.test-helpers.js';
 import {
   type GoalMilestone,
   absenceOperationKey,
@@ -17,6 +18,7 @@ import {
   exhaustedBudget,
   factCheckSentence,
   goalBudgetRows,
+  goalFirstAttemptAt,
   goalMilestoneText,
   goalStateNote,
   goalStepProgress,
@@ -273,11 +275,29 @@ describe('lib/goals', () => {
     for (const status of ['never_seen_present', 'unavailable'] as const) {
       expect(
         goalStateNote({ ...goal, acceptance: acceptance(status) }, undefined, budget, zh)?.text,
-      ).toMatch(/^需要人决定：开工前平台没看到某条“不存在”检查要删的东西在/);
+      ).toMatch(/^需要人决定：平台事先看某条“不存在”检查要删的东西时，没看到它在/);
     }
     for (const read of [goal, { ...goal, acceptance: acceptance('seen_present') }]) {
       expect(goalStateNote(read, undefined, budget, zh)?.text).toMatch(/^需要人决定：验收没通过/);
     }
+  });
+
+  it('when the run’s first attempt started — of any step, superseded ones too — or null before any (#786 review #501)', () => {
+    const [first] = stepRun().attempts;
+    const attempt = (createdAt: string) => ({ ...(first as StepAttemptWire), createdAt });
+    expect(goalFirstAttemptAt({ steps: [] })).toBeNull();
+    expect(goalFirstAttemptAt({ steps: [stepRun({ attempts: [] })] })).toBeNull();
+    expect(
+      goalFirstAttemptAt({
+        steps: [
+          stepRun({ attempts: [attempt('2026-10-20T00:05:00.000Z')] }),
+          stepRun({
+            supersededInRevision: 2,
+            attempts: [attempt('2026-10-20T00:09:00.000Z'), attempt('2026-10-20T00:02:00.000Z')],
+          }),
+        ],
+      }),
+    ).toBe('2026-10-20T00:02:00.000Z');
   });
 
   it('a decision pause on the goal’s own checks points at Acceptance, not at steps none of which is marked (#780 UX P3-5)', () => {

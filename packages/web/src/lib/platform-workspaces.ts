@@ -116,8 +116,8 @@ const PURGE_COUNT_LABELS = {
   goalAcceptanceChecks: { zh: '目标验收检查', en: 'Goal acceptance checks' },
   stepAcceptanceChecks: { zh: '步骤验收检查', en: 'Step acceptance checks' },
   goalAbsenceBaselines: {
-    zh: '不存在检查的开工前查看',
-    en: 'Absence checks’ looks before the work',
+    zh: '不存在检查的事先查看',
+    en: 'Absence checks’ looks beforehand',
   },
   chats: { zh: '对话', en: 'Chats' },
   chatMessages: { zh: '消息', en: 'Messages' },

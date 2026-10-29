@@ -491,13 +491,15 @@ export const GoalAcceptanceCheckStatusSchema = asEnum(GOAL_ACCEPTANCE_CHECK_STAT
 
 /**
  * S11 「门确认不存在」 B-c (goal/0012): where the baseline of an absence check (`observe_absent`)
- * stands — the platform's look, with the check's call, before the goal's work starts, so that the
- * thing's absence afterwards can show the goal removed it (I-AB1: an absence check passes only on a
- * baseline that saw it):
+ * stands — the platform's look, with the check's call, before the goal's work starts (for a check
+ * a revision adds or re-calls once steps have started, before the run goes on), so that the thing's
+ * absence afterwards can show it was removed while the goal ran (I-AB1: an absence check passes
+ * only on a baseline that saw it):
  *   - `pending` (还没看): not looked at yet, or tried again;
  *   - `seen_present` (看到过): the gate answered with the thing — it was there;
  *   - `never_seen_present` (一开始就不在): the gate confirmed it was not there already — the check
- *     on that call can never pass;
+ *     on that call can never pass (a look made after steps had started may find an earlier step's
+ *     work);
  *   - `unavailable` (没看成): the look was refused, or not answered by the last try;
  *   - `superseded` (已作废): the run stopped running before it settled, or the plan in force no
  *     longer makes that call.

@@ -142,6 +142,8 @@ import type { GoalRunRow, PlanRevisionRow, StepRunRow } from './types.js';
  *      already running go on. One that did not see the thing — the gate answered "not there"
  *      already (`never_seen_present`), or the look could not be made (`unavailable`) — pauses the
  *      run `needs_decision` naming it: an absence check on that call could never show this goal
+ *      removed the thing. A check a revision adds or re-calls once steps have started is looked at
+ *      before the run goes on, not before its work — the pause then says an earlier step may have
  *      removed the thing. The requester revises the check's params, or resumes, which looks again
  *      (`control.ts`). Every one that saw the thing → phase D.
  *   D. **Start** (running only). Every live step succeeded → `verifying`, a verification round
@@ -226,17 +228,25 @@ function unmetEvidence(check: AcceptanceCheckRow): string {
  *  「门确认不存在」 B-c, I-AB1) — not a check the gate refused. `null` for any other check. */
 function neverSeenPresent(check: AcceptanceCheckRow): string | null {
   return check.kind === 'observe_absent' && check.lastError === NEVER_SEEN_PRESENT
-    ? `acceptance check ${check.checkKey}: the platform never saw the thing there before the goal's work (${NEVER_SEEN_PRESENT}), so its absence now does not show this goal removed it`
+    ? `acceptance check ${check.checkKey}: the platform has no look with this call that saw the thing there (${NEVER_SEEN_PRESENT}), so its absence now does not show this goal removed it`
     : null;
 }
 
 /** A pause's detail for an absence check whose baseline did not see the thing (S11 「门确认不存在」
- *  B-c, before phase D). */
-function unseenBaseline(check: AbsenceBaselineCheck, baseline: AbsenceBaselineRow): string {
+ *  B-c, before phase D). `afterWork`: a step of the run had started before this look — the plan
+ *  changed the check after the work began — so an earlier step may have removed the thing. */
+function unseenBaseline(
+  check: AbsenceBaselineCheck,
+  baseline: AbsenceBaselineRow,
+  afterWork: boolean,
+): string {
   const named = `acceptance check ${check.checkKey}${check.stepKey !== null ? ` of step ${check.stepKey}` : ''}`;
-  return baseline.status === 'never_seen_present'
-    ? `${named}: before the goal's work the gate already answered that the thing is not there (${NEVER_SEEN_PRESENT}), so the check could never show this goal removed it`
-    : `${named}: the platform could not look before the goal's work (${baseline.lastError ?? 'no reason recorded'})`;
+  if (baseline.status === 'never_seen_present') {
+    return afterWork
+      ? `${named}: the platform first looked after the goal's steps had started (the plan changed the check) and the gate answered that the thing is not there (${NEVER_SEEN_PRESENT}) — an earlier step may have removed it, or the params name something else; either way the check could never show this goal removed it`
+      : `${named}: before the goal's work the gate already answered that the thing is not there (${NEVER_SEEN_PRESENT}), so the check could never show this goal removed it`;
+  }
+  return `${named}: the platform could not look before the goal's work ${afterWork ? 'went on' : 'started'} (${baseline.lastError ?? 'no reason recorded'})`;
 }
 
 /** A pause's detail for an `unavailable` fact check that saw no Fact it may rest on — told apart
@@ -980,9 +990,11 @@ class Advance {
         baseline.status === 'never_seen_present' || baseline.status === 'unavailable',
     );
     if (unseen.length > 0) {
+      // No attempt starts while a look is pending, so one started at all started before this look.
+      const afterWork = steps.some((step) => step.attemptCount > 0);
       await this.pause(
         'needs_decision',
-        `${unseen.map(({ check, baseline }) => unseenBaseline(check, baseline)).join('; ')}; revise the check's params or the plan, resume to look again, or cancel`,
+        `${unseen.map(({ check, baseline }) => unseenBaseline(check, baseline, afterWork)).join('; ')}; revise the check's params or the plan, resume to look again, or cancel`,
       );
       return false;
     }

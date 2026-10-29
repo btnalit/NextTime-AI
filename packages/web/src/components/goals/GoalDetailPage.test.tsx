@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import type { GoalDetailWire, PlanRevisionWire } from '@nexttime/shared';
+import type { GoalAbsenceBaselineWire, GoalDetailWire, PlanRevisionWire } from '@nexttime/shared';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsProvider } from '../../hooks/usePermissions.js';
@@ -678,6 +678,8 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
           acceptance: [absence('seen'), absence('never'), absence('later')],
         },
       },
+      // No step has started: every look came before the goal's work.
+      steps: base.steps.map((step) => ({ ...step, attemptCount: 0, attempts: [] })),
       acceptance: {
         ...base.acceptance,
         absenceBaselines: [
@@ -717,7 +719,9 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
       'none',
     ]);
     const [seen, never, later] = lines;
-    expect(seen.textContent).toContain('开始前平台看到它在，所以它不在了才说明是这个目标删掉的。');
+    expect(seen.textContent).toContain(
+      '开始前平台看到它在，所以它后来不在了，说明是在目标运行期间被删掉的。',
+    );
     expect(seen.textContent).toContain('obs-seen');
     expect(never.textContent).toContain('开始前门就回答它不在（第 2 次看）');
     expect(never.textContent).toContain('修订计划、继续运行再看一次，或者取消');
@@ -728,6 +732,74 @@ describe('GoalDetailPage (S11 GO6, read-only)', () => {
     expect(stepLine.getAttribute('data-baseline')).toBe('unavailable');
     expect(stepLine.textContent).toContain('开始前平台没能看它在不在');
     expect(stepLine.textContent).toContain('继续运行会再看一次');
+  });
+
+  it('a look made once the goal’s steps had started — a revision changed the check — says so, and that a thing not there may be an earlier step’s doing (#786 review #501)', async () => {
+    const base = goalDetail();
+    const absence = (key: string) => ({
+      kind: 'observe_absent' as const,
+      key,
+      check: { gatekeeperId: GATE_ID, operation: 'svc.lookup', params: { name: key } },
+    });
+    // Step fetch's attempt started 2026-10-20T00:01; these looks came after it.
+    const look = (
+      checkKey: string,
+      extra: Pick<GoalAbsenceBaselineWire, 'status'> & Partial<GoalAbsenceBaselineWire>,
+    ): GoalAbsenceBaselineWire => ({
+      stepKey: null,
+      checkKey,
+      take: 1,
+      attempts: 1,
+      lastError: null,
+      observationId: null,
+      createdAt: '2026-10-29T00:00:00.000Z',
+      settledAt: '2026-10-29T00:01:00.000Z',
+      ...extra,
+    });
+    const detail = goalDetail({
+      status: 'paused',
+      planRevision: {
+        ...base.planRevision,
+        plan: {
+          ...base.planRevision.plan,
+          acceptance: [
+            absence('seen'),
+            absence('never'),
+            absence('refused'),
+            absence('pending'),
+            absence('later'),
+          ],
+        },
+      },
+      acceptance: {
+        ...base.acceptance,
+        absenceBaselines: [
+          look('seen', { status: 'seen_present', observationId: 'obs-seen-0001' }),
+          look('never', { status: 'never_seen_present', observationId: 'obs-never-0001' }),
+          look('refused', { status: 'unavailable', lastError: 'operation_refused' }),
+          look('pending', { status: 'pending', attempts: 0, settledAt: null }),
+        ],
+      },
+    });
+    renderPage(scriptedHttp({ ...baseHandlers(detail), list_operations: () => ({ items: [] }) }));
+
+    const acceptance = await screen.findByTestId('goal-acceptance');
+    const [seen, never, refused, pending, later] = within(acceptance).getAllByTestId(
+      'goal-absence-baseline',
+    ) as [HTMLElement, HTMLElement, HTMLElement, HTMLElement, HTMLElement];
+    expect(seen.textContent).toContain(
+      '目标的步骤开始之后（计划改了这条检查）平台看到它在，所以它后来不在了，说明是在这之后被删掉的。',
+    );
+    expect(never.getAttribute('data-baseline')).toBe('never_seen_present');
+    expect(never.textContent).toContain('平台在目标的步骤开始之后才看（计划改了这条检查）');
+    expect(never.textContent).toContain('可能是前面的步骤删掉了它，也可能参数没指向要删的东西');
+    expect(never.textContent).not.toContain('开始前');
+    expect(refused.textContent).toContain('平台没能看它在不在（');
+    expect(refused.textContent).toContain('所以目标暂停，没有往下做');
+    expect(refused.textContent).not.toContain('开始前');
+    expect(pending.textContent).toContain('看到它在之后，目标才往下做。');
+    expect(later.getAttribute('data-baseline')).toBe('none');
+    expect(later.textContent).toContain('目标往下做之前，平台会先看一次它在不在，还没看。');
   });
 
   it('a goal not yet confirmed says the platform will look first; an ended one without a look says nothing (S11 「门确认不存在」 B-c)', async () => {

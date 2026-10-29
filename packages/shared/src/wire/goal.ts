@@ -301,7 +301,9 @@ export const OverriddenAcceptanceCheckWireSchema = z
 export type OverriddenAcceptanceCheckWire = z.infer<typeof OverriddenAcceptanceCheckWireSchema>;
 
 /** S11 「门确认不存在」 B-c (goal/0012): the baseline an absence check (`observe_absent`) goes by —
- *  the platform's look, with the check's call, before the goal's work started. The goal's own check
+ *  the platform's look, with the check's call, before the goal's work started (for a check a
+ *  revision added or re-called once steps had started, before the run went on — a look whose
+ *  `createdAt` is after an attempt's came after the work began). The goal's own check
  *  has `stepKey` `null`. Only a baseline of the call the plan in force makes is listed (its latest
  *  take); a check with none listed has not been looked at since the run last started running or its
  *  call changed. `lastError`: why it is `unavailable`, or why it was tried again. */

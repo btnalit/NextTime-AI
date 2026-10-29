@@ -16,6 +16,7 @@ import {
   bindingSentence,
   checkKindLabel,
   factCheckSentence,
+  goalFirstAttemptAt,
   goalSteps,
   isStepAuthorityHint,
   observationSentence,
@@ -310,6 +311,7 @@ function StepItem({
                       <AbsenceBaselineLine
                         baseline={absenceBaselineOf(detail, view.key, check.key)}
                         goalStatus={detail.status}
+                        firstAttemptAt={goalFirstAttemptAt(detail)}
                       />
                     ) : null}
                   </li>

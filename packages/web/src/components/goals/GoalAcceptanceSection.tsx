@@ -12,6 +12,7 @@ import {
   checkErrorLabel,
   checkKindLabel,
   confirmCheckOrigin,
+  goalFirstAttemptAt,
   goalPlanSource,
   isStepAuthorityHint,
   planCheckSentence,
@@ -127,6 +128,7 @@ export function GoalAcceptanceSection({
                     <AbsenceBaselineLine
                       baseline={absenceBaselineOf(detail, null, check.key)}
                       goalStatus={detail.status}
+                      firstAttemptAt={goalFirstAttemptAt(detail)}
                     />
                   ) : null}
                 </li>
