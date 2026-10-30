@@ -1,6 +1,7 @@
 import {
   type EvalCaseWire,
   type EvalFixtureGateWire,
+  PREDICATE_PATH_MAX,
   evalCallCountPath,
   evalOutputFieldPath,
 } from '@nexttime/shared';
@@ -245,6 +246,21 @@ describe('lib/eval-cases (S10 E3-1b)', () => {
     );
     // A marked problem is not also "missing".
     expect(check.missing).toEqual([]);
+  });
+
+  it('says an output field the schema refuses in the console words, not the Zod message', () => {
+    const tooLong = {
+      ...emptyAssertion('output_equals'),
+      field: 'f'.repeat(PREDICATE_PATH_MAX),
+      valueText: '1',
+    };
+    const check = checkCaseDraft(
+      { ...emptyCaseDraft(), title: 't', partition: 'full', split: 'dev', assertions: [tooLong] },
+      GATES,
+      false,
+      en,
+    );
+    expect(check.errors[`${tooLong.uid}.value`]).toMatch(/^At most \d+ characters$/);
   });
 
   it('writes the templates as the shared paths, and reads anything else back as a custom condition', () => {

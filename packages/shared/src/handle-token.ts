@@ -37,7 +37,7 @@ export const CapabilityScopeSchema = z
   .strict();
 export type CapabilityScope = z.infer<typeof CapabilityScopeSchema>;
 
-const uuidClaim = z.string().uuid();
+const uuidClaim = z.guid();
 
 /**
  * Who holds a Handle, and therefore how a verifier may receive it (handle-binding.ts):

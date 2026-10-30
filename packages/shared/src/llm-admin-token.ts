@@ -33,7 +33,7 @@ export const LlmAdminTokenClaimsSchema = z
   .object({
     aud: z.literal(LLM_ADMIN_TOKEN_AUD),
     sub: z.string().min(1),
-    jti: z.string().uuid(),
+    jti: z.guid(),
     iat: z.number(),
     exp: z.number(),
   })

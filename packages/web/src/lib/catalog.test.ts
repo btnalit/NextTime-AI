@@ -348,9 +348,9 @@ describe('issueMessage', () => {
       issueMessage(
         {
           path: ['x'],
-          message: 'String must contain at most 64 character(s)',
+          message: 'Too big: expected string to have <=64 characters',
           code: 'too_big',
-          type: 'string',
+          origin: 'string',
           maximum: 64,
         },
         zhT,
@@ -358,7 +358,11 @@ describe('issueMessage', () => {
     ).toBe('最多 64 个字符');
     expect(
       issueMessage(
-        { path: ['x'], message: 'Required', code: 'invalid_type', received: 'undefined' },
+        {
+          path: ['x'],
+          message: 'Invalid input: expected string, received undefined',
+          code: 'invalid_type',
+        },
         zhT,
       ),
     ).toBe('必填');
@@ -366,9 +370,9 @@ describe('issueMessage', () => {
       issueMessage(
         {
           path: ['x'],
-          message: 'Invalid enum value',
-          code: 'invalid_enum_value',
-          options: ['只读', '读写'],
+          message: 'Invalid option: expected one of "只读"|"读写"',
+          code: 'invalid_value',
+          values: ['只读', '读写'],
         },
         zhT,
       ),

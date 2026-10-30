@@ -493,8 +493,8 @@ describe('parsePlan — a step’s acceptance checks (S11 GO4b)', () => {
         steps: [step('a', { acceptance: [{ ...observe('up'), kind: 'fact_predicate' }] })],
       }),
     ).toEqual([
-      'steps.0.acceptance.0.fact: Required',
-      "steps.0.acceptance.0: Unrecognized key(s) in object: 'check'",
+      'steps.0.acceptance.0.fact: Invalid input: expected object, received undefined',
+      'steps.0.acceptance.0: Unrecognized key: "check"',
     ]);
     expect(problemsOf({ steps: [step('a', { acceptance: [] })] })).toHaveLength(1);
     expect(

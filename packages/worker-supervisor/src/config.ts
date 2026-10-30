@@ -275,7 +275,7 @@ export function isImageAllowed(config: SupervisorConfig, image: string): boolean
 /** Every identifier in this codebase (`workspaceId`/`principalId`/`taskId`/`workerRunId`/...) is a
  *  Postgres `gen_random_uuid()` / Node `randomUUID()` value — see
  *  `packages/shared/src/handle-token.ts` `uuidClaim`, `packages/kernel/src/governance/llm-usage/
- *  service.ts`'s own `z.string().uuid()` fields, and `application/host-bridge/
+ *  service.ts`'s own `z.guid()` fields, and `application/host-bridge/
  *  egress-observations.ts`'s `ENTRY_SOURCE_ID_PATTERN` doc comment ("both halves are UUIDs...a
  *  plain UUID-shaped check is enough to reject garbage"). Reused here, not invented for this
  *  package. Applied to both request families below because several of these ids become host
@@ -284,7 +284,7 @@ export function isImageAllowed(config: SupervisorConfig, image: string): boolean
  *  `nexttime-task-<workerRunId>`) — an unvalidated `../../pgdata` would mount an arbitrary host
  *  directory into an agent container. Exported so `server.ts` can apply the same rule to
  *  `:principalId` route params. */
-export const IdClaimSchema = z.string().uuid();
+export const IdClaimSchema = z.guid();
 
 /** A single skill mounted by *content*, not a host path (S2.14; docs/development-tasks.md S2.14
  *  deliverable 4: "extend the supervisor Task spawn API additively with `skillsInline?: [{name,

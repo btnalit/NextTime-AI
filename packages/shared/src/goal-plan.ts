@@ -64,9 +64,9 @@ export const StepReconcileSchema = z
   .object({
     action: z
       .object({
-        gatekeeperId: z.string().uuid(),
+        gatekeeperId: z.guid(),
         operation: z.string().min(1).max(200),
-        params: z.record(z.unknown()).optional(),
+        params: z.record(z.string(), z.unknown()).optional(),
       })
       .strict(),
     check: z.union([ObservationCheckSchema, ObservationAbsenceCheckSchema]),
@@ -139,7 +139,7 @@ export const PlanStepSchema = z
     key: StepKeySchema,
     worker: z
       .object({
-        definitionId: z.string().uuid(),
+        definitionId: z.guid(),
         version: z.number().int().positive(),
       })
       .strict(),
@@ -227,7 +227,7 @@ export const PlanHintSchema = z
     stepKey: StepKeySchema.optional(),
     /** The gates a `step_gate_not_held` step declares and the requester cannot act on; for
      *  `step_account_not_connected`, those on which the requester has not connected an account. */
-    gatekeeperIds: z.array(z.string().uuid()).optional(),
+    gatekeeperIds: z.array(z.guid()).optional(),
     /** The execute-class capabilities a `step_capability_not_held` step declares and the
      *  requester does not hold. */
     capabilityNames: z.array(z.string()).optional(),
@@ -254,7 +254,7 @@ export type GoalBudget = z.infer<typeof GoalBudgetSchema>;
 export const StepRemovalSchema = z
   .object({
     mode: z.enum(['terminate', 'let_finish']),
-    release: z.array(z.string().uuid()).min(1).max(100).optional(),
+    release: z.array(z.guid()).min(1).max(100).optional(),
   })
   .strict();
 
