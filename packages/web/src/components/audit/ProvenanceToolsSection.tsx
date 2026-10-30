@@ -24,7 +24,7 @@ import { capabilityHolders } from '../../lib/role-holders.js';
 import { hrefs } from '../../lib/router.js';
 import { Button } from '../kit/button.js';
 import { ErrorBanner } from '../kit/error-banner.js';
-import { Field } from '../kit/field.js';
+import { Field, describedBy } from '../kit/field.js';
 import { RedactedNote } from '../kit/redacted-note.js';
 import { RefChip } from '../kit/ref-chip.js';
 import { RouteLink } from '../kit/route-link.js';
@@ -355,6 +355,7 @@ function PrecedentsTool({ http }: { readonly http: CapabilityCaller }) {
             value={since}
             onChange={(event) => setSince(event.target.value)}
             disabled={state.busy}
+            aria-describedby={describedBy('precedents-since', true, false)}
             data-testid="precedents-since"
           />
           <div className="row-wrap">

@@ -54,6 +54,10 @@ export interface MasterDetailProps {
    *  it was opened from left the list (deprecated, discarded) while it was open. Focus otherwise
    *  goes back to what opened the sheet, never to <body> (UX acceptance of #782, R-1). */
   readonly closeFocusFallback?: () => HTMLElement | null | undefined;
+  /** Narrow layout: Escape and a click outside leave the sheet open — while it holds an editor,
+   *  whose half-filled form closes only through its own 取消 or by submitting, as in the wide
+   *  layout, where the editor is a pane nothing dismisses (legacy 497). */
+  readonly holdOpen?: boolean;
 }
 
 /**
@@ -87,6 +91,7 @@ export function MasterDetail({
   sheetTitle,
   detailTestId,
   closeFocusFallback,
+  holdOpen = false,
 }: MasterDetailProps) {
   const isNarrowViewport = useMediaQuery(NARROW_MASTER_DETAIL_QUERY);
   // Decided while rendering the crossing, so the sheet never mounts over the overlay first.
@@ -151,6 +156,12 @@ export function MasterDetail({
         >
           <SheetContent
             data-testid={detailTestId}
+            onEscapeKeyDown={(event) => {
+              if (holdOpen) event.preventDefault();
+            }}
+            onInteractOutside={(event) => {
+              if (holdOpen) event.preventDefault();
+            }}
             onOpenAutoFocus={() => {
               opener.current = document.activeElement;
             }}

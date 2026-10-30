@@ -5,6 +5,7 @@ import {
 } from '@nexttime/shared';
 import { type FormEvent, useEffect, useRef, useState } from 'react';
 import { useCapability, useCapabilityList } from '../../hooks/useCapability.js';
+import { useFocusWhenLost } from '../../hooks/useFocusWhenLost.js';
 import { usePermissions } from '../../hooks/usePermissions.js';
 import { useRoleCan } from '../../hooks/useRoleCan.js';
 import { finalizeSkillName, slugifySkillNameDraft } from '../../lib/catalog-input.js';
@@ -97,6 +98,9 @@ export function SkillEditor({
   const [errors, setErrors] = useState<FieldErrors>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
+  // Legacy 500: the submit button is disabled while it runs, so a refusal left focus on <body>
+  // and its banner, above the pinned action row, below the fold — focus goes to the banner.
+  const submitErrorRef = useFocusWhenLost<HTMLDivElement>(error);
   const [proposed, setProposed] = useState<ProposedDraft | null>(null);
   /** The last keystroke was rewritten toward the publish name rule (shown as a hint). */
   const [nameAdjusted, setNameAdjusted] = useState(false);
@@ -547,23 +551,27 @@ export function SkillEditor({
       </div>
 
       {error !== null ? (
-        <ErrorBanner
-          error={error}
-          title={t('无法创建草稿', 'Could not propose the draft')}
-          action={
-            nextVersionOf && onShowPendingDraft && describeError(error).code === 'draft_pending' ? (
-              <Button
-                variant="secondary"
-                size="s"
-                onClick={onShowPendingDraft}
-                data-testid="skill-show-pending-draft"
-              >
-                {t('查看那份草稿', 'Show that draft')}
-              </Button>
-            ) : undefined
-          }
-          testId="skill-editor-error"
-        />
+        <div ref={submitErrorRef} tabIndex={-1}>
+          <ErrorBanner
+            error={error}
+            title={t('无法创建草稿', 'Could not propose the draft')}
+            action={
+              nextVersionOf &&
+              onShowPendingDraft &&
+              describeError(error).code === 'draft_pending' ? (
+                <Button
+                  variant="secondary"
+                  size="s"
+                  onClick={onShowPendingDraft}
+                  data-testid="skill-show-pending-draft"
+                >
+                  {t('查看那份草稿', 'Show that draft')}
+                </Button>
+              ) : undefined
+            }
+            testId="skill-editor-error"
+          />
+        </div>
       ) : null}
 
       <div className="row overlay-actions">

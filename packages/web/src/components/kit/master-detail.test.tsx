@@ -149,6 +149,39 @@ describe('kit/MasterDetail', () => {
     });
   });
 
+  it('holdOpen keeps the narrow sheet open on Escape and an outside click (legacy 497)', () => {
+    mockMatchMedia(true);
+    const onClose = vi.fn();
+    const { rerender } = render(
+      <MasterDetail
+        list={<div>list</div>}
+        detail={<input aria-label="name" />}
+        open={true}
+        onClose={onClose}
+        sheetTitle="Detail"
+        detailTestId="md-detail"
+        holdOpen
+      />,
+    );
+    const sheet = screen.getByTestId('md-detail');
+    fireEvent.keyDown(sheet, { key: 'Escape' });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId('md-detail')).toBeTruthy();
+
+    rerender(
+      <MasterDetail
+        list={<div>list</div>}
+        detail={<input aria-label="name" />}
+        open={true}
+        onClose={onClose}
+        sheetTitle="Detail"
+        detailTestId="md-detail"
+      />,
+    );
+    fireEvent.keyDown(screen.getByTestId('md-detail'), { key: 'Escape' });
+    expect(onClose).toHaveBeenCalled();
+  });
+
   it('closed at a narrow width mounts no sheet at all', () => {
     mockMatchMedia(true);
     render(

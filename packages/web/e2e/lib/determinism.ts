@@ -13,7 +13,7 @@ import type { Page } from '@playwright/test';
  *    to "1m ago" between page load and screenshot capture). Every `<time>` element is masked
  *    regardless (see `MASK_SELECTORS`) — that is what actually absorbs the real per-run
  *    variation.
- * 2. CSS animation/transition/caret — `reducedMotion: 'reduce'` (playwright.config.ts's `use`)
+ * 2. CSS animation/transition/caret — `reducedMotion: 'reduce'` (playwright.config.ts's `use.contextOptions`)
  *    covers everything that already respects `@media (prefers-reduced-motion: reduce)`
  *    (styles/base.css has exactly one such block); `injectMotionKillSwitch` below is the
  *    belt-and-suspenders override for anything that does not.

@@ -98,6 +98,19 @@ export function OperationStepFields({
   // — any name typed would fail at publish, so nothing is typed; the note below says what to do.
   const noAbsenceChoice =
     absence && gate !== undefined && operations.state.status === 'ready' && choices.length === 0;
+  // Legacy 498: the notes under the Operation field are about it — said to whoever focuses it
+  // (a disabled field's note says why it is disabled and where to go instead).
+  const listError = operations.state.status === 'error';
+  const listEmpty =
+    gate !== undefined && operations.state.status === 'ready' && choices.length === 0;
+  const unknownShown = gate !== undefined && notOnList && (absence || choices.length > 0);
+  const operationNotes = [
+    describedBy(`${prefix}-operation`, manual && !noAbsenceChoice, !!operationError),
+    listError ? `${prefix}-operations-error` : undefined,
+    listEmpty ? `${prefix}-operations-empty` : undefined,
+    unknownShown ? `${prefix}-unknown-operation` : undefined,
+  ].filter((part): part is string => part !== undefined);
+  const operationDescribedBy = operationNotes.length > 0 ? operationNotes.join(' ') : undefined;
 
   return (
     <div className="stack-s">
@@ -168,11 +181,7 @@ export function OperationStepFields({
               onBlur={() => onChange({ operationName: operationName.trim() })}
               disabled={busy || noAbsenceChoice}
               aria-invalid={!!operationError || notOnList || undefined}
-              aria-describedby={describedBy(
-                `${prefix}-operation`,
-                !noAbsenceChoice,
-                !!operationError,
-              )}
+              aria-describedby={operationDescribedBy}
               data-testid={`${testPrefix}-operation-input`}
             />
           ) : (
@@ -190,7 +199,7 @@ export function OperationStepFields({
               loading={operations.state.status === 'loading'}
               disabled={busy || operations.state.status === 'idle'}
               invalid={!!operationError}
-              aria-describedby={describedBy(`${prefix}-operation`, false, !!operationError)}
+              aria-describedby={operationDescribedBy}
               mono
               placeholder={
                 operations.state.status === 'idle'
@@ -204,8 +213,12 @@ export function OperationStepFields({
           )}
         </Field>
       </div>
-      {operations.state.status === 'error' ? (
-        <Notice tone="warn" testId={`${testPrefix}-operations-error`}>
+      {listError ? (
+        <Notice
+          tone="warn"
+          id={`${prefix}-operations-error`}
+          testId={`${testPrefix}-operations-error`}
+        >
           {t(
             '无法加载这个门的 Operation 列表，已切换为手动输入。',
             'Could not load this gate’s Operations — switched to manual entry.',
@@ -215,9 +228,13 @@ export function OperationStepFields({
           </Button>
         </Notice>
       ) : null}
-      {gate && operations.state.status === 'ready' && choices.length === 0 ? (
+      {gate && listEmpty ? (
         absence ? (
-          <span className="text-3 text-small" data-testid={`${testPrefix}-operations-empty`}>
+          <span
+            className="text-3 text-small"
+            id={`${prefix}-operations-empty`}
+            data-testid={`${testPrefix}-operations-empty`}
+          >
             {t(
               `门「${gate.name}」上没有能确认“不存在”的 Operation：要用的 Operation 得声明哪些回答表示要查的东西不存在，并在发布时有人确认过门用的凭据看得到要查的东西。`,
               `Gate “${gate.name}” has no Operation that can confirm something is not there: the Operation must declare which answers mean the thing looked up does not exist, and someone must have confirmed at publish that the gate’s credentials can see what it looks up.`,
@@ -227,7 +244,11 @@ export function OperationStepFields({
             </RouteLink>
           </span>
         ) : (
-          <span className="text-3 text-small" data-testid={`${testPrefix}-operations-empty`}>
+          <span
+            className="text-3 text-small"
+            id={`${prefix}-operations-empty`}
+            data-testid={`${testPrefix}-operations-empty`}
+          >
             {t(
               `门「${gate.name}」还没有已发布的 Operation，请手动输入名称。`,
               `Gate “${gate.name}” has no published Operation yet — type the name manually.`,
@@ -235,8 +256,12 @@ export function OperationStepFields({
           </span>
         )
       ) : null}
-      {gate && notOnList && (absence || choices.length > 0) ? (
-        <Notice tone="warn" testId={`${testPrefix}-unknown-operation`}>
+      {gate && unknownShown ? (
+        <Notice
+          tone="warn"
+          id={`${prefix}-unknown-operation`}
+          testId={`${testPrefix}-unknown-operation`}
+        >
           {absence
             ? t(
                 `门「${gate.name}」上的「${actionKindTagText(name)}」没有发布、没有声明哪些回答表示不存在，或者发布时没人确认过；发布这个流程时会失败。`,

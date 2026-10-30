@@ -11,6 +11,8 @@ export interface NoticeProps {
    *  today — same visual output as the local `ui/Notice` replicas they replace. */
   readonly icon?: ReactNode;
   readonly testId?: string;
+  /** For a control that names this note in its `aria-describedby` (legacy 498). */
+  readonly id?: string;
 }
 
 /**
@@ -20,9 +22,10 @@ export interface NoticeProps {
  * legacy component or a local replica renders pixel-identical. Not for errors — those are
  * `kit/error-banner`.
  */
-export function Notice({ tone = 'info', children, icon, testId }: NoticeProps) {
+export function Notice({ tone = 'info', children, icon, testId, id }: NoticeProps) {
   return (
     <div
+      id={id}
       className={`notice${tone === 'warn' ? ' notice-warn' : tone === 'danger' ? ' notice-danger' : ''}`}
       data-testid={testId}
       data-tone={tone}

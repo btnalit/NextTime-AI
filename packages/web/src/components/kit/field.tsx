@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { FieldDescriptionContext } from './field-description.js';
 
 export interface FieldProps {
   /** The control's `id`; the label points at it and hint/error ids derive from it. */
@@ -37,7 +38,11 @@ export function Field({ id, label, hint, error, required = false, children }: Fi
           </span>
         ) : null}
       </label>
-      {children}
+      <FieldDescriptionContext.Provider
+        value={{ controlId: id, describedBy: describedBy(id, hint !== undefined, !!error) }}
+      >
+        {children}
+      </FieldDescriptionContext.Provider>
       {hint !== undefined ? (
         <p className="field-hint" id={`${id}-hint`}>
           {hint}

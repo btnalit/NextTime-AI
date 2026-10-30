@@ -1,7 +1,10 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
+import { Combobox } from './combobox.js';
 import { Field, describedBy } from './field.js';
+import { Select } from './select.js';
+import { Textarea } from './textarea.js';
 
 afterEach(cleanup);
 
@@ -52,5 +55,45 @@ describe('kit/Field', () => {
     expect(describedBy('x', true, false)).toBe('x-hint');
     expect(describedBy('x', false, true)).toBe('x-error');
     expect(describedBy('x', false, false)).toBeUndefined();
+  });
+
+  describe('legacy 498: a control inside a Field is described by its hint and error', () => {
+    it('kit Select, Textarea and Combobox point at the hint and the error while shown', () => {
+      render(
+        <>
+          <Field id="s1" label="门" hint="选一个门" error="必填">
+            <Select id="s1" aria-label="门">
+              <option value="">-</option>
+            </Select>
+          </Field>
+          <Field id="t1" label="参数" hint="JSON">
+            <Textarea id="t1" aria-label="参数" value="" onChange={() => {}} />
+          </Field>
+          <Field id="c1" label="Operation" error="不存在">
+            <Combobox id="c1" options={[]} value="" onChange={() => {}} />
+          </Field>
+        </>,
+      );
+      expect(document.getElementById('s1')?.getAttribute('aria-describedby')).toBe(
+        's1-hint s1-error',
+      );
+      expect(document.getElementById('t1')?.getAttribute('aria-describedby')).toBe('t1-hint');
+      expect(document.getElementById('c1')?.getAttribute('aria-describedby')).toBe('c1-error');
+    });
+
+    it('keeps a description the form gives itself, and leaves other controls in the Field alone', () => {
+      render(
+        <Field id="e1" label="定义" hint="Worker">
+          <Select id="e1" aria-label="定义" aria-describedby="elsewhere">
+            <option value="">-</option>
+          </Select>
+          <Select id="e1-version" aria-label="版本">
+            <option value="">-</option>
+          </Select>
+        </Field>,
+      );
+      expect(document.getElementById('e1')?.getAttribute('aria-describedby')).toBe('elsewhere');
+      expect(document.getElementById('e1-version')?.hasAttribute('aria-describedby')).toBe(false);
+    });
   });
 });
