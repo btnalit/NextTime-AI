@@ -1,7 +1,6 @@
 import type { CapabilityScope, HandleClaims } from '@nexttime/shared';
-import { listByChannel } from '@nexttime/shared';
-import type { ZodTypeAny } from 'zod';
-import { type Options, ignoreOverride, zodToJsonSchema } from 'zod-to-json-schema';
+import { listByChannel, toJsonSchema } from '@nexttime/shared';
+import type { ZodType } from 'zod';
 import type { PoolLike } from '../../adapters/db/pool.js';
 import { dispatchCapability } from '../../application/gateway/index.js';
 import { quotedName } from '../../governance/redaction/index.js';
@@ -115,31 +114,14 @@ function gateToolDescription(op: AllowedOperationWire, name: string): string {
 
 const EMPTY_INPUT_SCHEMA: JsonSchemaObject = { type: 'object', properties: {} };
 
-/**
- * S11 GO5e: a schema that contains itself — a predicate's `all` / `any` / `not` and an output
- * schema's `properties` / `items` (`z.lazy` in `@nexttime/shared`, reached through
- * `propose_goal`'s plan) — has no finite inline JSON Schema. Its inner occurrence becomes `{}` (any
- * value; the call is still checked against the Zod schema), which is what the library does with
- * `$refStrategy: 'none'` too, except that it also logs a warning for every occurrence on every
- * `tools/list`. Same test the library makes: the schema is already open on the path being written.
- * (`platform-extension`'s `tool-schema.ts` does the same for pi tools.)
- */
-const recursionAsAny: NonNullable<Options['override']> = (_def, refs, seen) =>
-  seen !== undefined &&
-  seen.path.length < refs.currentPath.length &&
-  seen.path.every((segment, index) => refs.currentPath[index] === segment)
-    ? {}
-    : ignoreOverride;
-
-function toInputSchema(paramsSchema: ZodTypeAny): JsonSchemaObject {
-  const jsonSchema = zodToJsonSchema(paramsSchema, {
-    $refStrategy: 'none',
-    override: recursionAsAny,
-  }) as Record<string, unknown>;
-  jsonSchema.$schema = undefined;
+/** `toJsonSchema` (@nexttime/shared) is the conversion pi tools and the contract snapshot use
+ *  too; a schema that contains itself is `{}` where it recurs (the call is still checked against
+ *  the Zod schema). */
+function toInputSchema(paramsSchema: ZodType): JsonSchemaObject {
+  const jsonSchema = toJsonSchema(paramsSchema);
   if (jsonSchema.type !== 'object') {
     // Every capability's paramsSchema in packages/shared/src/capabilities.ts is a z.object(...)
-    // (possibly z.record for the handful of jsonRecord placeholders, which zod-to-json-schema
+    // (possibly z.record for the handful of jsonRecord placeholders, which the conversion
     // renders as `{type:'object', additionalProperties:true}` — still an object) — this branch is
     // a defensive fallback, not an expected path.
     return EMPTY_INPUT_SCHEMA;

@@ -163,9 +163,9 @@ const OperationNameSchema = z.string().min(1).max(200);
 /** An observe-class Operation on a Gatekeeper, its params, and what its result must satisfy. */
 export const ObservationCheckSchema = z
   .object({
-    gatekeeperId: z.string().uuid(),
+    gatekeeperId: z.guid(),
     operation: OperationNameSchema,
-    params: z.record(z.unknown()).optional(),
+    params: z.record(z.string(), z.unknown()).optional(),
     expect: PredicateSchema,
   })
   .strict();
@@ -180,9 +180,9 @@ export type ObservationCheck = z.infer<typeof ObservationCheckSchema>;
  */
 export const ObservationAbsenceCheckSchema = z
   .object({
-    gatekeeperId: z.string().uuid(),
+    gatekeeperId: z.guid(),
     operation: OperationNameSchema,
-    params: z.record(z.unknown()).optional(),
+    params: z.record(z.string(), z.unknown()).optional(),
   })
   .strict();
 export type ObservationAbsenceCheck = z.infer<typeof ObservationAbsenceCheckSchema>;
@@ -190,12 +190,12 @@ export type ObservationAbsenceCheck = z.infer<typeof ObservationAbsenceCheckSche
 /** A graph Object a {@link FactCheck} names: by id, or by its ObjectType and identity — the Object
  *  may not exist yet when the plan is written (the goal's work may be what creates it). */
 export const FactObjectRefSchema = z.union([
-  z.object({ objectId: z.string().uuid() }).strict(),
+  z.object({ objectId: z.guid() }).strict(),
   z
     .object({
       objectType: z.string().min(1).max(200),
       identity: z
-        .record(PredicateValueSchema)
+        .record(z.string(), PredicateValueSchema)
         .refine((identity) => Object.keys(identity).length > 0, {
           message: 'an identity names at least one field',
         }),

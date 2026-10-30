@@ -30,6 +30,7 @@ import {
 } from '../task/index.js';
 import { ForbiddenError, assertActsForPerson, authorizeCapabilityCall } from './authorize.js';
 import { CAPABILITY_HANDLERS } from './handlers.js';
+import { MAX_PARAMS_VALUES, exceedsValueBudget } from './params-budget.js';
 import { UnknownOperationError } from './request-action-handler.js';
 import type { ResolvedCaller } from './resolve-caller.js';
 
@@ -632,6 +633,17 @@ export async function dispatchCapability(
 
   authorizeCapabilityCall(caller, capability);
 
+  // Before Zod: an oversized collection would cost one issue per element (params-budget.ts).
+  if (exceedsValueBudget(rawParams)) {
+    throw new InvalidCapabilityParamsError(name, [
+      {
+        code: 'too_big',
+        path: [],
+        maximum: MAX_PARAMS_VALUES,
+        message: `params hold more than ${MAX_PARAMS_VALUES} values`,
+      },
+    ]);
+  }
   const parsed = capability.paramsSchema.safeParse(rawParams ?? {});
   if (!parsed.success) throw new InvalidCapabilityParamsError(name, parsed.error.issues);
   if (!HANDLERS_SETTLING_UNSTORABLE_TEXT.has(name)) {

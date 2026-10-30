@@ -220,7 +220,7 @@ export type EvalCaseSummaryWire = z.infer<typeof EvalCaseSummaryWireSchema>;
  *  shows free text. */
 export const EvalCaseWireSchema = EvalCaseSummaryWireSchema.extend({
   suiteId: z.string(),
-  input: z.unknown(),
+  input: z.unknown().optional(),
   fixtures: z.array(EvalFixtureRuleSchema),
   assertions: z.array(EvalAssertionSchema),
   /** `sha256:` over the case's content and fixed fields — the same in every read of the row. */

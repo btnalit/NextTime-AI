@@ -32,7 +32,7 @@ import type { McpToolCatalog } from './tool-projection.js';
  * **Why the low-level `Server` class, not `McpServer`:** `McpServer.registerTool`'s `inputSchema`
  * wants a Zod raw shape (`Record<string, ZodTypeAny>`) or a `AnySchema`, not an arbitrary JSON
  * Schema object — but this module's tools are a heterogeneous mix (capability `paramsSchema`
- * Zod objects converted via `zod-to-json-schema`, hand-authored reference-tool-alias JSON Schemas,
+ * Zod objects converted via `toJsonSchema` (@nexttime/shared), hand-authored reference-tool-alias JSON Schemas,
  * and a Gatekeeper Operation's own already-JSON-Schema `params_schema`, `tool-projection.ts`).
  * Normalizing all three into one JSON-Schema shape and implementing `tools/list`/`tools/call`
  * directly (`ListToolsRequestSchema`/`CallToolRequestSchema`) is the same approach

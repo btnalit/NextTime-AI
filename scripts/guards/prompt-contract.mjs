@@ -37,7 +37,6 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parse as parseYaml } from 'yaml';
-import { ignoreOverride, zodToJsonSchema } from 'zod-to-json-schema';
 
 const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 
@@ -172,11 +171,11 @@ async function loadModeToolSets() {
 
   const proposeGoal = shared.getCapability('propose_goal');
   if (!proposeGoal) throw new Error('prompt-contract: propose_goal is missing from the registry');
-  const proposeGoalSchemaWords = jsonSchemaWords(
-    zodToJsonSchema(proposeGoal.paramsSchema, { $refStrategy: 'none', override: recursionAsAny }),
-  );
+  const proposeGoalSchemaWords = jsonSchemaWords(shared.toJsonSchema(proposeGoal.paramsSchema));
 
-  const goalUpdate = shared.SystemMessageContentSchema.optionsMap.get('system.goal_update');
+  const goalUpdate = shared.SystemMessageContentSchema.options.find(
+    (option) => option.shape.kind.value === 'system.goal_update',
+  );
   if (!goalUpdate) {
     throw new Error(
       'prompt-contract: system.goal_update is missing from SystemMessageContentSchema',
@@ -193,17 +192,6 @@ async function loadModeToolSets() {
     goalUpdateWords,
     goalChangeWords,
   };
-}
-
-/** A schema that contains itself (`z.lazy` — a predicate's `all` / `any` / `not`) is written as
- *  `{}` the second time, without the library's warning per occurrence (same as
- *  `contract-snapshot.mjs`). */
-function recursionAsAny(_def, refs, seen) {
-  return seen !== undefined &&
-    seen.path.length < refs.currentPath.length &&
-    seen.path.every((segment, index) => refs.currentPath[index] === segment)
-    ? {}
-    : ignoreOverride;
 }
 
 // -------------------------------------------------------------------------------------------

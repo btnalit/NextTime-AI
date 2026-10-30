@@ -75,7 +75,7 @@ describe('buildToolCatalog — native projection', () => {
       expect(propose?.inputSchema.type).toBe('object');
       expect(warn).not.toHaveBeenCalled();
       const text = JSON.stringify(propose?.inputSchema);
-      expect(text).toContain('"all":{"type":"array","items":{}');
+      expect(text).toMatch(/"all":\{[^{}]*"type":"array"[^{}]*"items":\{\}/);
     } finally {
       warn.mockRestore();
     }
